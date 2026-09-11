@@ -45,14 +45,16 @@
 // miscompile — the trampoline moves the result through R8 and the args through the GPR arg registers, so
 // a float (XMM) or a managed pointer would need a channel B1a does not build. Managed async is B1c.
 //
-// ⭐ RELOCATING MORESTACK. Each GT gets a tiny `osAllocPages` seed stack
-// (`gtSeedStackBytes`); every guarded function's prologue projects its frame against `gt.stackGuard`
-// (X64GtRuntime's `emitGtStackGuard`) and, when it would overflow, calls the hand-assembled `__gt_morestack`,
-// which doubles the size until the requesting frame fits (up to `GtMaxStackBytes`), COPIES the old stack onto
-// the new one, walks the saved-rbp chain fixing every interior pointer by the relocation offset, and continues on
-// the larger stack. So deep recursion inside an `async` body just works; the seed is a floor, not a ceiling. The
-// GT record comes from the scheduler's record arena and its stack from `osAllocPages`, both INVISIBLE to the
-// `__mm_alloc_count` leak gate (`GtLiveCountLabel` is the gate for them), and a finished GT's grown stack is
+// ⭐ RELOCATING STACKS. Each GT gets an `osAllocPages` seed stack of `__gt_seed_bytes`, which follows the stacks
+// recent threads finished with (`__gt_seed_adapt`, Go's `startingStackSize`); every guarded function's prologue
+// projects its frame against `gt.stackGuard` (X64GtRuntime's `emitGtStackGuard`) and, when it would overflow,
+// calls the hand-assembled `__gt_morestack`, which doubles the size until the requesting frame fits (up to
+// `GtMaxStackBytes`) and moves the thread onto the larger stack (`__gt_stack_relocate`: copy the live region, walk
+// the saved frame-pointer chain fixing every interior pointer by the relocation offset). A parked thread using
+// under a quarter of its stack is moved onto one half the size (`__gt_stack_shrink`, Go's `shrinkstack`). So deep
+// recursion inside an `async` body just works, and a thread that once recursed deep does not keep that stack for
+// life. The GT record comes from the scheduler's record arena and its stack from `osAllocPages`, both INVISIBLE to
+// the `__mm_alloc_count` leak gate (`GtLiveCountLabel` is the gate for them), and a finished GT's stack is
 // RELEASED on completion (`__gt_runner_done` → `osFreePages`).
 
 // --- GreenThread struct offsets ---
@@ -67,8 +69,8 @@ export let GtOffFp = 0x08  // saved frame pointer (rbp) at the context-switch po
 export let GtOffStatus = 0x10  // GtStatus* below
 export let GtOffStackBase = 0x18  // low address of the osAllocPages'd stack (0 for an M's scheduler context and a reply cell)
 
-// EXPORTED because the relocating morestack (P1.5-B1a′, X64GtRuntime) reads the CURRENT stack size to compute
-// the doubled size and the memcpy count, and writes the new size back here after growing.
+// EXPORTED because the hand-assembled grower reads the CURRENT stack size to compute the doubled size, and
+// `__gt_stack_relocate` reads it for the old stack's top and writes the new size back.
 export let GtOffStackSize = 0x20
 export let GtOffResult = 0x28  // the R8 return value, captured by the trampoline when the GT completes
 
@@ -86,14 +88,13 @@ export let GtOffNext = 0x38
 export let GtOffFuncPtr = 0x40  // the async function's address
 export let GtOffArgBuf = 0x48  // a self-pointer to this struct's inline argument region (`GtOffArgInline`)
 
-// The green-thread stack GUARD (P1.5-B1a′): the low-water address a function's PROLOGUE compares its projected
-// rsp against — `projectedRsp < stackGuard` means the frame would overflow, so the prologue calls `__gt_morestack`
-// to grow+relocate the stack first. `__gt_spawn` seeds it to `stackBase + GtStackGuardMargin`; `__gt_morestack`
-// updates it to `newBase + GtStackGuardMargin` after a grow; an M's inline scheduler context keeps the slab zero,
-// so its guard compare (`projectedRsp >= 0` unsigned) always passes — it runs on the OS thread's own stack and
-// never grows. EXPORTED because
-// the hand-assembled prologue guard (X64GtRuntime) reads it and `__gt_morestack` writes it. Offset 0x50 is the FREE
-// word between `argBuf@0x48` and `threw@0x58`, so it fills the reserved gap without moving any field.
+// The green-thread stack GUARD: the low-water address a function's PROLOGUE compares its projected rsp against —
+// `projectedRsp < stackGuard` means the frame would overflow, so the prologue calls `__gt_morestack` to
+// grow+relocate the stack first. `__gt_spawn` seeds it to `stackBase + gtStackGuardHeight`; `__gt_stack_relocate`
+// moves it to `newBase + gtStackGuardHeight` after a grow or a shrink; an M's inline scheduler context keeps the
+// slab zero, so its guard compare (`projectedRsp >= 0` unsigned) always passes — it runs on the OS thread's own
+// stack and never grows. EXPORTED because the hand-assembled prologue guard reads it and `__gt_stack_relocate`
+// writes it. Offset 0x50 is the FREE word between `argBuf@0x48` and `threw@0x58`.
 export let GtOffStackGuard = 0x50
 
 // The dual-register ERROR FLAG the trampoline captures from R10 when a THROWING async thunk returns
@@ -397,6 +398,23 @@ let SelectReadied = 1 as ParsedInt
 // one link.
 let GtOffRunqNext = GtOffSelectDone + PointerFieldBytes
 
+// ⭐⭐ **THE TWO STACK MARKS (`GtStackMarkResized`, `GtStackMarkGrew`)** — what a spawn and a grow can afford to
+// record, one store and no clock read. The park door turns `resized` into `GtOffStackResizedAt`; the finish reads
+// `grew` to choose the adaptive seed's sample. Touched only by the thread itself and by the machine running its
+// strand, one at a time, so it takes no atomic. EXPORTED because both morestack chunks store it.
+export let GtOffStackMarks = GtOffRunqNext + PointerFieldBytes
+
+// When this thread's stack size was last chosen, in `__gt_now_ns` nanoseconds: stamped by the park that found
+// `GtStackMarkResized`, and by a shrink. `__gt_stack_shrink` halves only a stack whose size has stood for
+// `GtStackResizeWindowNs`, which is what keeps a deep/shallow alternation from copying the stack at every park.
+let GtOffStackResizedAt = GtOffStackMarks + PointerFieldBytes
+
+// ⭐ **THE DEEPEST `top - sp` A PARK DOOR HAS SEEN ON THIS THREAD** — the only depth the runtime observes on a
+// thread that never grew, since the prologue guard reports only an overflow. Recorded by `__gt_stack_shrink`, so a
+// thread that has only ever been at the floor leaves it 0; read by the finish as the sample of a thread that never
+// needed to grow.
+let GtOffStackHighWater = GtOffStackResizedAt + PointerFieldBytes
+
 // The GT struct's size: the 0xC8 header, the inline argument region, then every field above. Must be a
 // multiple of 8.
 //
@@ -406,7 +424,7 @@ let GtOffRunqNext = GtOffSelectDone + PointerFieldBytes
 // correctly and no number is restated anywhere.
 //
 // EXPORTED because `SchedRuntime`'s M struct embeds a whole GT inline as its scheduler context.
-export let GtStructSize = GtOffRunqNext + PointerFieldBytes
+export let GtStructSize = GtOffStackHighWater + PointerFieldBytes
 
 // ⭐⭐ **THE PARK KINDS — what the strand runner dispatches on after the switch.** Each of the first six names
 // the STORE `__gt_register_park` puts the thread on; a yield registers nothing and is placed back on its
@@ -474,9 +492,10 @@ export let GtStatusWaiting = 3
 // syscall shim moves every kernel call off this stack onto the M's system stack, which is what lets it be tiny.
 let GtMinStackBytes = 0x800 as ParsedInt
 
-// ⭐⭐ **THE SEED `__gt_spawn` COMMITS — Go's `fixedStack`: `GtMinStackBytes` plus the OS's own reservation,
-// rounded up to a power of two.** A seed no taller than `gtStackGuardHeight` would grow on the first guarded
-// frame of every spawn; this one gives the OS its reservation and Maxon its floor.
+// ⭐⭐ **THE SMALLEST SEED — Go's `fixedStack`: `GtMinStackBytes` plus the OS's own reservation, rounded up to a
+// power of two.** A seed no taller than `gtStackGuardHeight` would grow on the first guarded frame of every
+// spawn; this one gives the OS its reservation and Maxon its floor. It is what `__gt_spawn` commits until the
+// first adaptive-seed window closes (`GtSeedBytesLabel`), and no shrink goes below it.
 function gtSeedStackBytes(target Target) returns ParsedInt
 	let wanted = GtMinStackBytes + gtStackSystemBytes(target)
 	var seed = GtMinStackBytes
@@ -494,6 +513,34 @@ end 'gtSeedStackBytes'
 // failing somewhere unrelated. Go's limit is decimal (10⁹) because it reads better in its message; stacks are
 // powers of two, so this binary gigabyte admits exactly the stacks Go's does, plus the one gigabyte-sized stack.
 export let GtMaxStackBytes = 0x40000000
+
+// ⭐⭐ **HOW LONG A STACK's SIZE MUST STAND BEFORE A PARK MAY HALVE IT.** Go shrinks once per garbage collection
+// (`shrinkstack`); this runtime has no collector, so a second of wall time is the cycle. It bounds a thread's
+// shrink copies to one a second whatever its parks do.
+let GtStackResizeWindowNs = 1000000000 as ParsedInt
+
+// ⭐⭐ **HOW MANY FINISHED STACKS ONE ADAPTIVE-SEED WINDOW AVERAGES.** Go recomputes `startingStackSize` once per
+// garbage collection, over the stacks that cycle scanned; here a window closes at the finish that makes the count
+// a multiple of this, so the seed follows finished threads whether or not the program ever arms a timer, and
+// `__sched_lock` is taken for it once per window rather than once per finish. A power of two, so the test is a
+// mask.
+let GtSeedWindowShift = 6 as ParsedInt
+let GtSeedWindowMask = (1 shl GtSeedWindowShift) - 1
+
+// ⭐ **THE LARGEST SEED THE ADAPTIVE START MAY CHOOSE.** Go caps `startingStackSize` only at `maxstacksize`, because
+// its stacks come from a cache; every seed here is an `osAllocPages` commit paid at the spawn, before the thread
+// has used a byte. 64 KiB spares the average deep thread its first growths while ten thousand concurrent threads
+// commit 640 MB at most.
+let GtSeedMaxBytes = 0x10000 as ParsedInt
+
+// `GtOffStackMarks`' two bits. `resized`: the size was chosen since the thread last parked — set by the spawn and by
+// every grow, cleared by the park that stamps the time. `grew`: `__gt_morestack` has run for this thread — set by
+// every grow and never cleared.
+let GtStackMarkResized = 1 as ParsedInt
+let GtStackMarkGrew = 2 as ParsedInt
+
+// What a grow stores: both marks. EXPORTED for the morestack chunks.
+export let GtStackMarksOfAGrow = GtStackMarkResized or GtStackMarkGrew
 
 // ⭐⭐ **WHERE THE OS WRITES A HARDWARE FAULT'S FRAME WHEN A GREEN THREAD FAULTS.** A fault's frame is not a
 // Maxon frame, so no guard ever projects it; each lane answers once here, and the two consequences read it:
@@ -551,8 +598,8 @@ let GtWindowsExceptionDispatchBytes = 0x1000 as ParsedInt
 
 // ⭐⭐ **HOW FAR ABOVE A GREEN THREAD's STACK BASE ITS GUARD WORD SITS — Go's `stackGuard`.** Maxon's margin
 // for the frames that free-ride between checkpoints, plus the OS's reservation below them. `__gt_spawn` and
-// `__gt_morestack` place the guard word here, and the grower sizes a new stack so the frame that asked still
-// clears it; the three must read one height, so it is spelled once.
+// `__gt_stack_relocate` place the guard word here, the grower sizes a new stack so the frame that asked still
+// clears it, and a shrink leaves room for it; they must read one height, so it is spelled once.
 export function gtStackGuardHeight(target Target) returns ParsedInt
 	return gtStackGuardMargin(target) + gtStackSystemBytes(target)
 end 'gtStackGuardHeight'
@@ -805,6 +852,19 @@ export let GtTrampolineName = b"__gt_trampoline"
 // function — it manipulates rsp and walks the saved-rbp chain, unrepresentable in Std. EXPORTED because the
 // prologue guard's `call __gt_morestack` (X64Backend) and the chunk's own name must agree — one spelling.
 export let GtMorestackName = b"__gt_morestack"
+
+// ⭐⭐⭐ **`__gt_stack_relocate(gt, newBase, newSize)` — MOVE A STOPPED THREAD's STACK, IN EITHER DIRECTION.** The
+// one routine a grow and a shrink share: it copies the live region `[gt.sp, top)` to the top of the new stack,
+// rebases `gt.sp`, `gt.fp` and every saved frame-pointer link into the old stack, republishes the stack's bounds
+// on the GT and frees the old pages. A hand-assembled chunk on both ISAs, for `__gt_morestack`'s reason; EXPORTED
+// because `__gt_morestack` calls it by name and so does `__gt_stack_shrink` (Std).
+export let GtStackRelocateName = b"__gt_stack_relocate"
+
+// ⭐⭐ **`__gt_stack_shrink(gt)` — Go's `shrinkstack`, at a park.** See `buildGtStackShrink`.
+let GtStackShrinkName = b"__gt_stack_shrink"
+
+// ⭐⭐ **`__gt_seed_adapt()` — Go's `gcComputeStartingStackSize`, once a window.** See `buildGtSeedAdapt`.
+let GtSeedAdaptName = b"__gt_seed_adapt"
 let GtInitName = b"__gt_init"
 export let GtSpawnName = b"__gt_spawn"
 
@@ -1349,12 +1409,12 @@ let GtRunQueueTailLabel = b"__gt_run_queue_tail"
 // turn, so C1 moved the region to the M that is EXECUTING. `SchedRuntime.MOffSystemStackSP` carries the
 // argument in full; `GtSystemStackSize` below is unchanged and is now the size of EACH M's region.
 
-// ⭐ **A STACK IS ALLOCATED FRESH ON SPAWN AND FREED ON COMPLETION, NEVER RECYCLED.** The morestack makes
-// stacks VARIABLE-SIZED (a seed, doubled on demand), so a stack free list would hand a seed-believing
-// `__gt_spawn` a grown stack (or the reverse) — a size the spawner records as the seed while the reservation
-// is something else, which the guard then mis-projects against and morestack mis-copies. So `__gt_spawn`
-// commits a fresh `gtSeedStackBytes` seed, `__gt_morestack` releases the OLD stack when it grows, and
-// `__gt_runner_done` releases the finished thread's (possibly grown) stack via `osFreePages`.
+// ⭐ **A STACK IS ALLOCATED FRESH ON SPAWN AND FREED ON COMPLETION, NEVER RECYCLED.** Stacks are VARIABLE-SIZED
+// (a seed, doubled on demand, halved at a park), so a stack free list would hand `__gt_spawn` a stack of some
+// size other than the one it records, which the guard then mis-projects against and the relocation mis-copies.
+// So `__gt_spawn` commits a fresh seed of `__gt_seed_bytes`, `__gt_stack_relocate` releases the OLD stack when a
+// grow or a shrink moves the thread, and `__gt_runner_done` releases the finished thread's stack via
+// `osFreePages`.
 //
 // ⭐⭐ **THE RECORD IS THE OPPOSITE: TYPE-STABLE, RECYCLED THROUGH FREE LISTS AND NEVER FREED.** It is carved
 // from the scheduler's record arena, `__gt_reclaim` hands it to `__gt_free_put` and `__gt_spawn` takes one from
@@ -1377,6 +1437,25 @@ let GtRunQueueTailLabel = b"__gt_run_queue_tail"
 // over-reclaim). EXPORTED because that gate lives in `MmRuntime` and reads this slot directly. Its zero
 // image is the initial state — no GT spawned yet.
 export let GtLiveCountLabel = b"__gt_live_count"
+
+// ⭐⭐ **THE ADAPTIVE SEED — Go's `startingStackSize`.** What `__gt_spawn` commits for a new thread's stack: the
+// smallest power of two in [`gtSeedStackBytes`, `GtSeedMaxBytes`] that holds the average stack the threads that
+// finished in the last window needed (`__gt_seed_adapt`, `GtSeedWindowShift`). Starting at the average
+// costs at most twice the space an oracle would, and a thread that needs more still grows.
+// `MultiMSharing.lastWriterWins`: the adapt writes it under `__sched_lock` and a spawn reads it without, and every
+// value a spawn can read is a seed some window chose.
+let GtSeedBytesLabel = b"__gt_seed_bytes"
+
+// The stack every finished thread needed (`__gt_runner_done`'s sample), and how many there were, since the process
+// began. `__gt_runner_done` steps both as it frees a stack, on any machine, so both are atomic counters;
+// `__gt_seed_adapt` takes a window's share as the difference from what it saw last, so no sample is lost to a
+// reset racing an add.
+let GtStackBytesSumLabel = b"__gt_stack_bytes_sum"
+let GtStackBytesCountLabel = b"__gt_stack_bytes_count"
+
+// The two counters as the last recompute read them. `__sched_lock`'s, which `__gt_seed_adapt`'s caller holds.
+let GtSeedSumSeenLabel = b"__gt_seed_sum_seen"
+let GtSeedCountSeenLabel = b"__gt_seed_count_seen"
 
 // The timer store: the live entry COUNT and the base address of the `__slab_alloc`'d heap region (both 0
 // until `__gt_init` allocates the region and seeds the base). The count is read under the lock, by the store's
@@ -1934,7 +2013,7 @@ end 'requireQuotableSharedSpellings'
 
 // The GT runtime's `.data` slots, appended to the user's globals before `layOut` orders them — ordinary
 // i64 slots in every respect, exactly like MmRuntime's `runtimeGlobals()`.
-export function gtRuntimeGlobals() returns DataSectionEntryArray
+export function gtRuntimeGlobals(target Target) returns DataSectionEntryArray
 	var out = DataSectionEntryArray.create()
 	pushRuntimeGlobal(out, label: GtRunQueueHeadLabel, sharing: MultiMSharing.underSchedLock)
 	pushRuntimeGlobal(out, label: GtRunQueueTailLabel, sharing: MultiMSharing.underSchedLock)
@@ -1959,6 +2038,14 @@ export function gtRuntimeGlobals() returns DataSectionEntryArray
 	// The green-thread live count (spawn++, await/drop reclaim--), asserted zero at exit. It counts GREEN
 	// THREADS, which the `__mm` gate cannot see whatever happens to their memory.
 	pushRuntimeGlobal(out, label: GtLiveCountLabel, sharing: MultiMSharing.atomicStep)
+
+	// The adaptive seed starts at the floor, so the first spawn commits what every spawn committed before any
+	// thread has finished.
+	pushRuntimeGlobal(out, label: GtSeedBytesLabel, sharing: MultiMSharing.lastWriterWins, seed: gtSeedStackBytes(target))
+	pushRuntimeGlobal(out, label: GtStackBytesSumLabel, sharing: MultiMSharing.atomicStep)
+	pushRuntimeGlobal(out, label: GtStackBytesCountLabel, sharing: MultiMSharing.atomicStep)
+	pushRuntimeGlobal(out, label: GtSeedSumSeenLabel, sharing: MultiMSharing.underSchedLock)
+	pushRuntimeGlobal(out, label: GtSeedCountSeenLabel, sharing: MultiMSharing.underSchedLock)
 	return out
 end 'gtRuntimeGlobals'
 
@@ -2053,7 +2140,9 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtCoroDequeue(module)
 	buildGtStrandNext(module)
 	buildGtCoroSweepDropped(module)
-	buildGtRunStrand(module)
+	buildGtRunStrand(module, target: target)
+	buildGtStackShrink(module, target: target)
+	buildGtSeedAdapt(module, target: target)
 	buildGtPark(module)
 	buildGtNowNs(module)
 	buildGtTimerAdd(module, rawFree: rawFree)
@@ -2068,7 +2157,7 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 
 	// The three halves of the teardown rendezvous, beside the drop and the two awaits that step it.
 	// `__gt_reclaim` last, because it is what the other two call. See `GtOffTeardown` for the protocol.
-	buildGtRunnerDone(module)
+	buildGtRunnerDone(module, target: target)
 	buildGtOwnerDone(module)
 	buildGtReclaim(module)
 
@@ -2273,27 +2362,29 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, asyncTrace bool, tags 
 			greenThread then break 'markMain'
 	end 'markMain'
 
-	// ⭐ COMMIT A FRESH SEED STACK (P1.5-B1a′). The STACK is variable-sized (the relocating morestack grows it),
-	// so it is NOT recycled with the struct — a completed GT's stack is RELEASED (`__gt_runner_done`) and a
-	// fresh seed is committed here every spawn (`MEM_COMMIT`, demand-paged so untouched pages cost nothing).
-	let stackSizeVal = ids.mint()
-	module.appendOp(initBlock, op: StdOp.const(stackSizeVal, value: gtSeedStackBytes(target), valueType: StdType.i64))
+	// ⭐ COMMIT A FRESH SEED STACK, of the size the adaptive seed chose (`GtSeedBytesLabel`). The STACK is
+	// variable-sized, so it is NOT recycled with the struct — a completed GT's stack is RELEASED
+	// (`__gt_runner_done`) and a fresh seed is committed here every spawn (`MEM_COMMIT`, demand-paged so untouched
+	// pages cost nothing).
+	let stackSizeVal = emitLoadGlobalWord(module, block: initBlock, label: GtSeedBytesLabel, ids: ids)
 	let stackBase = ids.mint()
 	module.appendOp(initBlock, op: StdOp.osAllocPages(stackBase, sizeId: stackSizeVal))
 
 	// ⛔ **A REFUSED SEED IS AN ABORT, BECAUSE THE NEXT STORE IS THROUGH IT.** `emitGtSeedInitialFrame` writes
-	// the first switch-in's frame at `stackBase + size`. The test is the sign, for `__slab_assert_os_alloc`'s
-	// reason: `VirtualAlloc` refuses with NULL and a raw `mmap` with a negative errno.
+	// the first switch-in's frame at `stackBase + size`.
 	var seeded = module.addBlock(func, label: b"seeded", heat: BlockHeat.normal)
 	var seedRefused = module.addBlock(func, label: b"seedrefused", heat: BlockHeat.normal)
-	let lowestRefusal = emitConst(module, block: initBlock, value: 0, ids: ids)
-	let refused = emitCmp(module, block: initBlock, a: stackBase, b: lowestRefusal, pred: StdCmpPred.le, ids: ids)
+	let refused = emitGtStackRefused(module, block: initBlock, stackBase: stackBase, ids: ids)
 	module.setTerminator(initBlock, op: StdOp.condBranch(refused, thenBlockId: seedRefused.id, elseBlockId: seeded.id))
 	emitRuntimeAbort(module, func: func, block: seedRefused, abort: RuntimeAbort.greenThreadStackAllocationFailed, ids: ids)
 
 	module.appendOp(seeded, op: StdOp.storeIndirect(gt, offset: GtOffStackBase, valueId: stackBase, valueType: StdType.i64))
 	module.appendOp(seeded, op: StdOp.storeIndirect(gt, offset: GtOffStackSize, valueId: stackSizeVal, valueType: StdType.i64))
 	module.appendOp(seeded, op: StdOp.storeIndirect(gt, offset: GtOffFuncPtr, valueId: funcPtr, valueType: StdType.i64))
+
+	// A seed above the floor is a size chosen now, and its first park must not halve it before the thread has had
+	// a window to use it (`GtStackMarkResized`).
+	emitStoreField(module, block: seeded, record: gt, offset: GtOffStackMarks, value: emitConst(module, block: seeded, value: GtStackMarkResized, ids: ids))
 
 	let stackTop = ids.mint()
 	module.appendOp(seeded, op: StdOp.binOp(stackTop, lhs: stackBase, rhs: stackSizeVal, opcode: StdBinOpcode.add, operandType: StdType.i64))
@@ -2320,6 +2411,13 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, asyncTrace bool, tags 
 
 	module.functions.push(func)
 end 'buildGtSpawn'
+
+// 1 when the `osAllocPages` answer `stackBase` is a refusal, for a spawn's seed and a shrink's smaller stack
+// alike. The test is the sign, for `__slab_assert_os_alloc`'s reason: `VirtualAlloc` refuses with NULL and a raw
+// `mmap` with a negative errno.
+function emitGtStackRefused(module StdModule, block IrBlock, stackBase ValueId, ids ValueMinter) returns ValueId
+	return emitCmp(module, block: block, a: stackBase, b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.le, ids: ids)
+end 'emitGtStackRefused'
 
 // A promise-bearing spawn's two numbers: one green thread onto the live count, which `__gt_owner_done` lowers
 // by one per promise so a clean exit balances it to zero; and the trace id, pre-incremented off the dispenser
@@ -2377,7 +2475,7 @@ let Arm64GtSeedLinkRegisterOffset = StackWordBytes as ByteOffset
 
 // x64's half of the seed: the trampoline address in the frame's TOP word, plus the NT_TIB bounds this GT's
 // stack occupies. `tibStackBase = stackTop` (high address), `tibStackLimit = stackBase` (low);
-// `__gt_morestack` moves both when it grows the stack.
+// `__gt_stack_relocate` moves both when a grow or a shrink moves the stack.
 function emitGtSeedX64ReturnWord(module StdModule, block IrBlock, gt ValueId, stackBase ValueId, stackTop ValueId, trampAddr ValueId, ids ValueMinter)
 	emitStoreField(module, block: block, record: gt, offset: GtOffTibStackBase, value: stackTop)
 	emitStoreField(module, block: block, record: gt, offset: GtOffTibStackLimit, value: stackBase)
@@ -4868,7 +4966,7 @@ end 'emitGtIoCancelArm'
 // completion drops the reference it holds on its owner once its own arrival is made.
 //
 // ⚠ **IT DOES NOT TOUCH `__gt_live_count`.** That count is stepped once per PROMISE, by `__gt_owner_done`.
-function buildGtRunnerDone(module StdModule)
+function buildGtRunnerDone(module StdModule, target Target)
 	var func = IrFunction.createFromStd(GtRunnerDoneName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
@@ -4882,6 +4980,10 @@ function buildGtRunnerDone(module StdModule)
 	var wake = module.addBlock(func, label: b"runnerwake", heat: BlockHeat.normal)
 	var stackCheck = module.addBlock(func, label: b"runnerstackcheck", heat: BlockHeat.normal)
 	var releaseStack = module.addBlock(func, label: b"runnerreleasestack", heat: BlockHeat.normal)
+	var sampleDepth = module.addBlock(func, label: b"runnersampledepth", heat: BlockHeat.normal)
+	var sampled = module.addBlock(func, label: b"runnersampled", heat: BlockHeat.normal)
+	var closeSeedWindow = module.addBlock(func, label: b"runnerseedwindow", heat: BlockHeat.normal)
+	var freeStack = module.addBlock(func, label: b"runnerfreestack", heat: BlockHeat.normal)
 	var afterStack = module.addBlock(func, label: b"runnerafterstack", heat: BlockHeat.normal)
 	var greenDone = module.addBlock(func, label: b"runnergreendone", heat: BlockHeat.normal)
 	var mainDone = module.addBlock(func, label: b"runnermaindone", heat: BlockHeat.normal)
@@ -4937,9 +5039,43 @@ function buildGtRunnerDone(module StdModule)
 	// ⚠ The null guard is not defensive: a reply cell never had a stack and carries `stackBase == 0`.
 	module.setTerminator(stackCheck, op: StdOp.condBranch(noStack, thenBlockId: afterStack.id, elseBlockId: releaseStack.id))
 
+	// ⭐⭐ **THE ADAPTIVE SEED's SAMPLE IS THE STACK THIS THREAD NEEDED, NOT THE ONE IT WAS GIVEN** — Go averages the
+	// stack a goroutine is USING. A thread that grew needed its final size. One that never grew needed AT LEAST its
+	// deepest observed park plus the guard height (`GtOffStackHighWater`, 0 for a thread that never reached the
+	// door), and that least is its sample. Completion observes nothing, its stack being empty by then. Sampling the
+	// seed it was handed would let one burst of deep threads hold every later spawn at that seed, since a
+	// short-lived thread never shrinks. Adding the prologue's margin, as the shrink rule does, would count the park's
+	// own frames twice, since they ride in that margin, and on a lane whose floor leaves little above the guard it
+	// would lift every thread that parks off the floor.
 	let stackSize = emitLoadField(module, block: releaseStack, record: gt, offset: GtOffStackSize, ids: ids)
-	module.appendOp(releaseStack, op: StdOp.osFreePages(stackBase, sizeId: stackSize))
-	module.setTerminator(releaseStack, op: StdOp.branch(afterStack.id))
+	let grew = emitGtHasStackMark(module, block: releaseStack, marks: emitLoadField(module, block: releaseStack, record: gt, offset: GtOffStackMarks, ids: ids), mark: GtStackMarkGrew, ids: ids)
+	module.setTerminator(releaseStack, op: StdOp.condBranch(grew, thenBlockId: sampled.id, elseBlockId: sampleDepth.id))
+	releaseStack.branchEdges.push(BranchEdge.create(sampled.id, argIds: argsOf(stackSize)))
+
+	let highWater = emitLoadField(module, block: sampleDepth, record: gt, offset: GtOffStackHighWater, ids: ids)
+	let depthNeeded = emitBin(module, block: sampleDepth, a: highWater, b: emitConst(module, block: sampleDepth, value: gtStackGuardHeight(target), ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(sampleDepth, op: StdOp.branch(sampled.id))
+	sampleDepth.branchEdges.push(BranchEdge.create(sampled.id, argIds: argsOf(depthNeeded)))
+
+	// The finish that makes the count a multiple of the window closes it (`GtSeedWindowShift`). The count's atomic
+	// step answers each finisher a distinct prior value, so exactly one finisher closes each window.
+	let sample = ids.mint()
+	sampled.blockArgs.push(IrBlockArg.create(sample, argType: StdType.i64))
+	let oneStack = emitConst(module, block: sampled, value: OneMore, ids: ids)
+	_ = emitGlobalAccumulate(module, block: sampled, label: GtStackBytesSumLabel, delta: sample, multiM: true, ids: ids)
+	let finishedBefore = emitGlobalAccumulate(module, block: sampled, label: GtStackBytesCountLabel, delta: oneStack, multiM: true, ids: ids)
+	let finished = emitBin(module, block: sampled, a: finishedBefore, b: oneStack, opcode: StdBinOpcode.add, ids: ids)
+	let intoWindow = emitBin(module, block: sampled, a: finished, b: emitConst(module, block: sampled, value: GtSeedWindowMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	let windowOpen = emitCmp(module, block: sampled, a: intoWindow, b: zero, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(sampled, op: StdOp.condBranch(windowOpen, thenBlockId: freeStack.id, elseBlockId: closeSeedWindow.id))
+
+	emitSchedLockEnter(module, block: closeSeedWindow, ids: ids)
+	module.appendOp(closeSeedWindow, op: StdOp.call(ids.mint(), callee: GtSeedAdaptName, args: ValueIdArray.create()))
+	emitSchedLockLeave(module, block: closeSeedWindow, ids: ids)
+	module.setTerminator(closeSeedWindow, op: StdOp.branch(freeStack.id))
+
+	module.appendOp(freeStack, op: StdOp.osFreePages(stackBase, sizeId: stackSize))
+	module.setTerminator(freeStack, op: StdOp.branch(afterStack.id))
 
 	module.setTerminator(afterStack, op: StdOp.condBranch(isGreen, thenBlockId: greenDone.id, elseBlockId: coroDone.id))
 
@@ -5594,7 +5730,7 @@ end 'emitGtPollStores'
 // the GLOBAL queue's tail — Go's `Gosched` — still held, so the machine that pops the token picks it up
 // (`sched-runqueue.a-yield-goes-behind-the-global-queue`). Due timers and exited children are fired first
 // whenever either store holds anything, so a spin-wait on either makes progress.
-function buildGtRunStrand(module StdModule)
+function buildGtRunStrand(module StdModule, target Target)
 	var func = IrFunction.createFromStd(GtRunStrandName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
@@ -5603,6 +5739,8 @@ function buildGtRunStrand(module StdModule)
 	var run = module.addBlock(func, label: b"strandrun", heat: BlockHeat.normal)
 	var finished = module.addBlock(func, label: b"strandcompleted", heat: BlockHeat.normal)
 	var parked = module.addBlock(func, label: b"strandparked", heat: BlockHeat.normal)
+	var shrink = module.addBlock(func, label: b"strandshrink", heat: BlockHeat.normal)
+	var dispatch = module.addBlock(func, label: b"stranddispatch", heat: BlockHeat.normal)
 	var register = module.addBlock(func, label: b"strandregister", heat: BlockHeat.normal)
 	var yielded = module.addBlock(func, label: b"strandyield", heat: BlockHeat.normal)
 	var pollStores = module.addBlock(func, label: b"strandpoll", heat: BlockHeat.normal)
@@ -5638,9 +5776,20 @@ function buildGtRunStrand(module StdModule)
 	module.appendOp(finished, op: StdOp.call(ids.mint(), callee: GtRunnerDoneName, args: argsOf(member)))
 	module.setTerminator(finished, op: StdOp.branch(next.id))
 
-	let kind = emitLoadField(module, block: parked, record: member, offset: GtOffParkKind, ids: ids)
-	let isYield = emitCmp(module, block: parked, a: kind, b: emitConst(module, block: parked, value: GtParkKindYield, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(parked, op: StdOp.condBranch(isYield, thenBlockId: yielded.id, elseBlockId: register.id))
+	// ⭐⭐ **THE ONE DOOR EVERY PARK PASSES WHILE THE THREAD IS STOPPED AND REACHABLE BY NOBODY ELSE** — its
+	// registers are saved and it is on no store and no queue yet — so it is where a stack may move
+	// (`__gt_stack_shrink`). A stack at the floor has nothing to give back, and that load and compare is all a
+	// park of one pays.
+	let size = emitLoadField(module, block: parked, record: member, offset: GtOffStackSize, ids: ids)
+	let aboveFloor = emitCmp(module, block: parked, a: size, b: emitConst(module, block: parked, value: gtSeedStackBytes(target), ids: ids), pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(parked, op: StdOp.condBranch(aboveFloor, thenBlockId: shrink.id, elseBlockId: dispatch.id))
+
+	module.appendOp(shrink, op: StdOp.call(ids.mint(), callee: GtStackShrinkName, args: argsOf(member)))
+	module.setTerminator(shrink, op: StdOp.branch(dispatch.id))
+
+	let kind = emitLoadField(module, block: dispatch, record: member, offset: GtOffParkKind, ids: ids)
+	let isYield = emitCmp(module, block: dispatch, a: kind, b: emitConst(module, block: dispatch, value: GtParkKindYield, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(dispatch, op: StdOp.condBranch(isYield, thenBlockId: yielded.id, elseBlockId: register.id))
 
 	module.appendOp(register, op: StdOp.call(ids.mint(), callee: GtRegisterParkName, args: argsOf(member)))
 	module.setTerminator(register, op: StdOp.branch(next.id))
@@ -5666,6 +5815,163 @@ function buildGtRunStrand(module StdModule)
 
 	module.functions.push(func)
 end 'buildGtRunStrand'
+
+// ⭐⭐⭐ **`__gt_stack_shrink(gt)` — Go's `shrinkstack`: HALVE A PARKED THREAD's STACK WHEN LESS THAN A QUARTER OF IT
+// IS IN USE.** Its one caller is the strand runner's park door, for a stack above the floor, on the machine's
+// scheduler context: the thread is stopped, its registers are saved on its own stack, and it is on no store and
+// no queue yet, so nothing but this machine can reach it until the park is registered. Every visit also records
+// the depth it finds (`GtOffStackHighWater`).
+//
+// ⭐⭐ **GO's `isShrinkStackSafe` REFUSALS HAVE NO SUBJECT HERE.** A park never happens inside a kernel call — the
+// syscall shim runs the call on the machine's system stack and comes back to the thread before anything can
+// switch it out — so there is no `syscallsp`. Nothing outside a thread holds a pointer into its stack: every
+// wake store names the GT record, and the IOCP OVERLAPPED and a read's buffer live in the record and the heap,
+// so there is no `sudog` and no `parkingOnChan` window. Inside it, the only stack-to-stack pointers are the ones
+// `__gt_stack_relocate` rebases — `X64GtRuntime`'s relocation header argues that set is complete.
+//
+// ⭐⭐ **A STACK WHOSE SIZE WAS CHOSEN THIS WINDOW IS KEPT.** A grow or a spawn only marks the thread
+// (`GtStackMarkResized`); the first park after it stamps the time instead of shrinking, and a later park shrinks
+// only once `GtStackResizeWindowNs` has passed since the stamp. Go gets the same damping from its GC cadence.
+//
+// ⭐ **THE RULE IS GO's.** Halve iff what is in use, plus the guard height and one margin for the frames that ride
+// free between guard checks, is under a quarter of the stack — so the halved stack is at most half full, and
+// since every size is a power of two above the floor, never below it.
+//
+// ⭐⭐ **THE TESTS RUN CHEAPEST FIRST, AND THE CLOCK IS READ ONLY WHEN ITS ANSWER DECIDES SOMETHING** — at the park
+// that stamps a fresh size, and for a stack the quarter rule would halve. A park that does neither costs the
+// door's compare, this call, five loads and three tests. `__gt_now_ns` is a kernel call on some lanes; a thread
+// the quarter rule would halve pays it at each park only until the window lets the halving happen, and that ends
+// at the floor.
+//
+// ⚠ **A REFUSED ALLOCATION KEEPS THE STACK THE THREAD HAS**, which is still whole: a shrink only gives memory back.
+function buildGtStackShrink(module StdModule, target Target)
+	var func = IrFunction.createFromStd(GtStackShrinkName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var deeper = module.addBlock(func, label: b"shrinkdeeper", heat: BlockHeat.normal)
+	var marks = module.addBlock(func, label: b"shrinkmarks", heat: BlockHeat.normal)
+	var stamp = module.addBlock(func, label: b"shrinkstamp", heat: BlockHeat.normal)
+	var measure = module.addBlock(func, label: b"shrinkmeasure", heat: BlockHeat.normal)
+	var window = module.addBlock(func, label: b"shrinkwindow", heat: BlockHeat.normal)
+	var halve = module.addBlock(func, label: b"shrinkhalve", heat: BlockHeat.normal)
+	var relocate = module.addBlock(func, label: b"shrinkrelocate", heat: BlockHeat.normal)
+	var keep = module.addBlock(func, label: b"shrinkkeep", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let gt = 0 as ValueId
+
+	let size = emitLoadField(module, block: entry, record: gt, offset: GtOffStackSize, ids: ids)
+	let top = emitBin(module, block: entry, a: emitLoadField(module, block: entry, record: gt, offset: GtOffStackBase, ids: ids), b: size, opcode: StdBinOpcode.add, ids: ids)
+	let used = emitBin(module, block: entry, a: top, b: emitLoadField(module, block: entry, record: gt, offset: GtOffSp, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	let isDeeper = emitCmp(module, block: entry, a: used, b: emitLoadField(module, block: entry, record: gt, offset: GtOffStackHighWater, ids: ids), pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(isDeeper, thenBlockId: deeper.id, elseBlockId: marks.id))
+
+	emitStoreField(module, block: deeper, record: gt, offset: GtOffStackHighWater, value: used)
+	module.setTerminator(deeper, op: StdOp.branch(marks.id))
+
+	let stackMarks = emitLoadField(module, block: marks, record: gt, offset: GtOffStackMarks, ids: ids)
+	let resized = emitGtHasStackMark(module, block: marks, marks: stackMarks, mark: GtStackMarkResized, ids: ids)
+	module.setTerminator(marks, op: StdOp.condBranch(resized, thenBlockId: stamp.id, elseBlockId: measure.id))
+
+	// `grew` outlives the park: the finish reads it.
+	emitStoreField(module, block: stamp, record: gt, offset: GtOffStackResizedAt, value: emitGtNowNs(module, block: stamp, ids: ids))
+	emitStoreField(module, block: stamp, record: gt, offset: GtOffStackMarks, value: emitBin(module, block: stamp, a: stackMarks, b: emitConst(module, block: stamp, value: GtStackMarkGrew, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids))
+	module.setTerminator(stamp, op: StdOp.retVoid)
+
+	let slack = emitConst(module, block: measure, value: gtStackGuardHeight(target) + gtStackGuardMargin(target), ids: ids)
+	let needed = emitBin(module, block: measure, a: used, b: slack, opcode: StdBinOpcode.add, ids: ids)
+	let quarter = emitBin(module, block: measure, a: size, b: emitConst(module, block: measure, value: GtStackQuarterShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
+	let tooFull = emitCmp(module, block: measure, a: needed, b: quarter, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(measure, op: StdOp.condBranch(tooFull, thenBlockId: keep.id, elseBlockId: window.id))
+
+	let now = emitGtNowNs(module, block: window, ids: ids)
+	let age = emitBin(module, block: window, a: now, b: emitLoadField(module, block: window, record: gt, offset: GtOffStackResizedAt, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	let tooSoon = emitCmp(module, block: window, a: age, b: emitConst(module, block: window, value: GtStackResizeWindowNs, ids: ids), pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(window, op: StdOp.condBranch(tooSoon, thenBlockId: keep.id, elseBlockId: halve.id))
+
+	let half = emitBin(module, block: halve, a: size, b: emitConst(module, block: halve, value: GtStackHalfShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
+	let newBase = ids.mint()
+	module.appendOp(halve, op: StdOp.osAllocPages(newBase, sizeId: half))
+	let refused = emitGtStackRefused(module, block: halve, stackBase: newBase, ids: ids)
+	module.setTerminator(halve, op: StdOp.condBranch(refused, thenBlockId: keep.id, elseBlockId: relocate.id))
+
+	module.appendOp(relocate, op: StdOp.call(ids.mint(), callee: GtStackRelocateName, args: threeArgs(gt, second: newBase, third: half)))
+	emitStoreField(module, block: relocate, record: gt, offset: GtOffStackResizedAt, value: now)
+	module.setTerminator(relocate, op: StdOp.retVoid)
+
+	module.setTerminator(keep, op: StdOp.retVoid)
+	module.functions.push(func)
+end 'buildGtStackShrink'
+
+// 1 when `marks`, a `GtOffStackMarks` word, carries `mark`.
+function emitGtHasStackMark(module StdModule, block IrBlock, marks ValueId, mark ParsedInt, ids ValueMinter) returns ValueId
+	let bit = emitBin(module, block: block, a: marks, b: emitConst(module, block: block, value: mark, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	return emitCmp(module, block: block, a: bit, b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+end 'emitGtHasStackMark'
+
+// `size shr 2` and `size shr 1` — a quarter and a half of a power-of-two stack.
+let GtStackQuarterShift = 2 as ParsedInt
+let GtStackHalfShift = 1 as ParsedInt
+
+// ⭐⭐⭐ **`__gt_seed_adapt()` — Go's `gcComputeStartingStackSize`: ONCE A WINDOW, THE SEED BECOMES THE AVERAGE
+// STACK THAT THE THREADS WHICH FINISHED IN IT NEEDED.** Its one caller is `__gt_runner_done`, at the finish that
+// closes a window (`GtSeedWindowShift`), holding `__sched_lock`.
+//
+// The seed is the smallest power of two in [`gtSeedStackBytes`, `GtSeedMaxBytes`] whose product with the
+// window's count covers the window's sum — `round2(sum / count)`, clamped, with no division.
+//
+// ⚠ **THE TWO COUNTERS ARE READ AS TWO WORDS**, and a finisher on another machine may have stepped one and not yet
+// the other, so one window can carry a sample's size and the next its count. And two closing finishers may reach
+// the lock in either order, so the later window's closer can arrive to find every sample taken: it keeps the seed
+// the other chose rather than dividing by nothing.
+function buildGtSeedAdapt(module StdModule, target Target)
+	if GtSeedMaxBytes < gtSeedStackBytes(target) 'ceilingBelowFloor'
+		panic("buildGtSeedAdapt: GtSeedMaxBytes ({GtSeedMaxBytes}) is below this target's seed floor ({gtSeedStackBytes(target)}) — the adaptive seed would have no size to choose")
+	end 'ceilingBelowFloor'
+
+	var func = IrFunction.createFromStd(GtSeedAdaptName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var grow = module.addBlock(func, label: b"seedgrow", heat: BlockHeat.normal)
+	var fits = module.addBlock(func, label: b"seedfits", heat: BlockHeat.normal)
+	var publish = module.addBlock(func, label: b"seedpublish", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"seeddone", heat: BlockHeat.normal)
+
+	let sum = emitLoadGlobalWord(module, block: entry, label: GtStackBytesSumLabel, ids: ids)
+	let count = emitLoadGlobalWord(module, block: entry, label: GtStackBytesCountLabel, ids: ids)
+	let windowSum = emitBin(module, block: entry, a: sum, b: emitLoadGlobalWord(module, block: entry, label: GtSeedSumSeenLabel, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	let windowCount = emitBin(module, block: entry, a: count, b: emitLoadGlobalWord(module, block: entry, label: GtSeedCountSeenLabel, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	emitStoreGlobalWord(module, block: entry, label: GtSeedSumSeenLabel, value: sum, ids: ids)
+	emitStoreGlobalWord(module, block: entry, label: GtSeedCountSeenLabel, value: count, ids: ids)
+	let floorSeed = emitConst(module, block: entry, value: gtSeedStackBytes(target), ids: ids)
+	let noSample = emitCmp(module, block: entry, a: windowCount, b: emitConst(module, block: entry, value: 0, ids: ids), pred: StdCmpPred.le, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(noSample, thenBlockId: doneBlock.id, elseBlockId: grow.id))
+	entry.branchEdges.push(BranchEdge.create(grow.id, argIds: argsOf(floorSeed)))
+
+	// grow(seed): stop at the ceiling, or at the first size that holds the window's average.
+	let seed = ids.mint()
+	grow.blockArgs.push(IrBlockArg.create(seed, argType: StdType.i64))
+	let atCeiling = emitCmp(module, block: grow, a: seed, b: emitConst(module, block: grow, value: GtSeedMaxBytes, ids: ids), pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(grow, op: StdOp.condBranch(atCeiling, thenBlockId: publish.id, elseBlockId: fits.id))
+	grow.branchEdges.push(BranchEdge.create(publish.id, argIds: argsOf(seed)))
+
+	let covered = emitBin(module, block: fits, a: seed, b: windowCount, opcode: StdBinOpcode.mul, ids: ids)
+	let holdsAverage = emitCmp(module, block: fits, a: covered, b: windowSum, pred: StdCmpPred.ge, ids: ids)
+	let doubled = emitBin(module, block: fits, a: seed, b: seed, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(fits, op: StdOp.condBranch(holdsAverage, thenBlockId: publish.id, elseBlockId: grow.id))
+	fits.branchEdges.push(BranchEdge.create(publish.id, argIds: argsOf(seed)))
+	fits.branchEdges.push(BranchEdge.create(grow.id, argIds: argsOf(doubled)))
+
+	let chosen = ids.mint()
+	publish.blockArgs.push(IrBlockArg.create(chosen, argType: StdType.i64))
+	emitStoreGlobalWord(module, block: publish, label: GtSeedBytesLabel, value: chosen, ids: ids)
+	module.setTerminator(publish, op: StdOp.retVoid)
+
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
+	module.functions.push(func)
+end 'buildGtSeedAdapt'
 
 // `__gt_trace_emit(tagRecord, value, suffixRecord)` — print one async-trace line to stderr:
 // `<tag><value><suffix?>\n`. `tagRecord`/`suffixRecord` are immortal `.rdata` String records (see

@@ -242,7 +242,7 @@ export enum MultiMSharing
 	// ONE aligned machine word, written whole and read whole, whose contract does not say WHICH writer's
 	// value a reader gets. No tearing is possible on any lane the compiler emits, so every observable value is
 	// a value somebody really wrote; what multi-M costs is precision, not safety. Each member argues its own
-	// site: `__subp_last_error`, `__sched_shutdown_flag` and `__sched_needspinning`.
+	// site: `__subp_last_error`, `__sched_shutdown_flag`, `__sched_needspinning` and `__gt_seed_bytes`.
 	lastWriterWins
 
 	// ⛔ **THE ANSWER `pushRuntimeGlobal` REFUSES, and the reason it is a member rather than an omission is
@@ -259,7 +259,8 @@ end 'MultiMSharing'
 // seed wrong and, until this rung, thirty slots whose sharing nobody had to state.
 //
 // `seed` defaults to 0 because the zero image IS the initial state for almost every slot (see
-// `gtRuntimeGlobals`); the two worker counters and `__gt_timer_when` are the exceptions and say so by passing one.
+// `gtRuntimeGlobals`); the two worker counters, `__gt_timer_when` and `__gt_seed_bytes` are the exceptions and
+// say so by passing one.
 //
 // `valueType` defaults to a machine word because almost every runtime slot holds one — a pointer, a count,
 // a lock word. A slot that holds LESS says so, and the width is not cosmetic: `GlobalDataTable.layOut`
@@ -1593,6 +1594,11 @@ export let SchedGtRecordsCarvedName = b"__sched_gt_records_carved"
 // belongs to a machine, and a parked machine holds no processor.
 export let SchedParkWakeCountName = b"__sched_park_wake_count"
 
+// ⭐ `__sched_gt_stack_bytes() -> i64` — the running green thread's `GtOffStackSize`, and the floor of
+// `__Builtins.gtStackBytes()`. Every caller is a green thread (`main` is one), so `M->currentGt` is never the
+// scheduler context here.
+export let SchedGtStackBytesName = b"__sched_gt_stack_bytes"
+
 // ⭐⭐⭐ **`__gt_free_put(gt)` — Go's `gfput`: a reclaimed GT record goes onto a free list and is never freed.**
 // Its only caller is `__gt_reclaim`. A record's memory is a GT record for the life of the process
 // (TYPE-STABLE, as Go's `g` records are), so a read through a handle whose thread is gone — `awaitAny` or
@@ -1657,8 +1663,9 @@ function isSchedPerProcSumCallee(callee ByteArray) returns bool
 end 'isSchedPerProcSumCallee'
 
 // ⭐⭐ **THE QUERIES ANSWERED FROM THE SCHEDULER'S OWN STATE — the roster that says "asking this question IS
-// asking for the scheduler".** The per-P sums, the idle-processor count, the per-machine wake count and the
-// record-carve count. Two facts follow, and BOTH are asked through here so the membership is written down once:
+// asking for the scheduler".** The per-P sums, the idle-processor count, the per-machine wake count, the
+// record-carve count and the running thread's stack size. Two facts follow, and BOTH are asked through here so
+// the membership is written down once:
 //
 //   • `RuntimeUsage.recordCallUsage` routes them to `recordGtUsage` — the state they read exists only once
 //     `__sched_init_procs` has built it, so the question installs the machinery it is about.
@@ -1666,7 +1673,7 @@ end 'isSchedPerProcSumCallee'
 //     the green-thread floor, so a lane without it must REFUSE the call at its own span (E3104) rather than
 //     reach an install that has no TLS slot to emit.
 export function isSchedSubstrateQueryCallee(callee ByteArray) returns bool
-	return isSchedPerProcSumCallee(callee) or callee.equals(SchedIdleProcessorCountName) or callee.equals(SchedParkWakeCountName) or callee.equals(SchedGtRecordsCarvedName)
+	return isSchedPerProcSumCallee(callee) or callee.equals(SchedIdleProcessorCountName) or callee.equals(SchedParkWakeCountName) or callee.equals(SchedGtRecordsCarvedName) or callee.equals(SchedGtStackBytesName)
 end 'isSchedSubstrateQueryCallee'
 
 // ⭐⭐⭐ **`__sched_handoffp(p)` — "THIS PROCESSOR HAS BEEN TAKEN FROM A BLOCKED MACHINE; GIVE IT TO SOMEBODY
@@ -2117,6 +2124,7 @@ export function installSchedRuntime(module StdModule, target Target, usesComplet
 	buildSchedLockedCountQuery(module, name: SchedIdleProcessorCountName, label: SchedNpidleLabel)
 	buildSchedLockedCountQuery(module, name: SchedGtRecordsCarvedName, label: GtRecordsCarvedLabel)
 	buildSchedParkWakeCount(module)
+	buildSchedGtStackBytes(module)
 	buildSchedCheckdead(module, usesCompletionPort: usesCompletionPort)
 
 	// Every machine's loop, from one body: the workers' and the main machine's.
@@ -4051,6 +4059,18 @@ function buildSchedLockedCountQuery(module StdModule, name ByteArray, label Byte
 
 	module.functions.push(func)
 end 'buildSchedLockedCountQuery'
+
+// `__sched_gt_stack_bytes() -> i64` — see `SchedGtStackBytesName`.
+function buildSchedGtStackBytes(module StdModule)
+	var func = IrFunction.createFromStd(SchedGtStackBytesName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let running = emitLoadCurrentGt(module, block: entry, ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(emitLoadField(module, block: entry, record: running, offset: GtOffStackSize, ids: ids)))
+
+	module.functions.push(func)
+end 'buildSchedGtStackBytes'
 
 // `__sched_park_wake_count() -> i64` — see `SchedParkWakeCountName`. The walk is unlocked, for
 // `SchedAllMLabel`'s reason, and each read is one aligned word some machine really stored, for

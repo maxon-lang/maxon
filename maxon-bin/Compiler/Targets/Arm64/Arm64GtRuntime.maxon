@@ -1,13 +1,14 @@
-// Arm64GtRuntime — the hand-assembled GREEN-THREAD backend code for AArch64 (MAC3), the arm64 twin of
+// Arm64GtRuntime — the hand-assembled GREEN-THREAD backend code for AArch64, the arm64 twin of
 // `Targets/X64/X64GtRuntime`. Everything else in the scheduler is builder-built `StdModule`
-// (`Runtime/GtRuntime.maxon`, `Runtime/SchedRuntime.maxon`); these five pieces cannot be, because each
+// (`Runtime/GtRuntime.maxon`, `Runtime/SchedRuntime.maxon`); these six pieces cannot be, because each
 // names SP, a register PAIR fixed by an ABI list, or a frame no prologue built:
 //
 //   • `__gt_context_switch` — moves SP between two green threads' stacks and saves the physical
 //     callee-saved file by hand.
 //   • `__gt_trampoline` — entered by a `ret` into a frame nothing established.
-//   • `__gt_morestack` — runs on the M's system stack, which it switches to itself, and REWRITES the
-//     saved-x29 chain of the stack it has just copied.
+//   • `__gt_morestack` — runs on the M's system stack, which it switches to itself.
+//   • `__gt_stack_relocate` — moves a stopped green thread's stack, for a grow or a shrink, and REWRITES the
+//     saved-x29 chain of the copy.
 //   • `mrt_darwin_libc_call` — the door every libSystem call takes onto the M's system stack.
 //   • the prologue STACK GUARD — emitted INLINE into ordinary compiled functions, below the `TargetOp`
 //     tier, exactly as its x64 twin is.
@@ -381,22 +382,22 @@ function emitArm64LoadCurrentMOrBail(asm Arm64RuntimeAsm, dest Arm64Register, sc
 end 'emitArm64LoadCurrentMOrBail'
 
 // ==========================================================================
-// `__gt_morestack` — the relocating stack grower
+// `__gt_morestack` — the stack grower — and `__gt_stack_relocate`, which it shares with a shrink
 // ==========================================================================
 //
 // ⭐ THE HIGHEST-RISK PIECE IN THE LADDER: a chain-walk bug is a silent stack-corruption use-after-free.
-// The SOUNDNESS argument is `X64GtRuntime.buildGtMorestackChunk`'s and is not re-derived here. In one
-// line: The compiler has no addressable stack slots, so the only stack→stack pointers are the saved-x29 chain
-// links and `gt.sp`/`gt.fp`, and return addresses point into `.text`, which does not move. Relocation is
-// therefore copy + rebase the live x29 + walk the chain adding the offset to each interior link. Frame
-// pointers on EVERY function (`Arm64PrologueEpilogue`'s first paragraph, leaves included) is what pays
-// for that.
+// The SOUNDNESS argument is `X64GtRuntime`'s and is not re-derived here. In one line: no frame address is live
+// where a stack moves, so the only stack→stack pointers are the saved-x29 chain links and `gt.sp`/`gt.fp`, and
+// return addresses point into `.text`, which does not move. Relocation is therefore copy + rebase the live x29 +
+// walk the chain adding the offset to each interior link. Frame pointers on EVERY function
+// (`Arm64PrologueEpilogue`'s first paragraph, leaves included) is what pays for that.
 //
-// ⭐⭐ **IT RELOCATES `gt.sp`/`gt.fp`, WHICH x64 DELIBERATELY DOES NOT.** x64 leaves them stale on the
-// argument that the next context switch overwrites both before anything reads them — true there and true
-// here. It is done anyway, because on this lane the two words are the ONLY place a pointer into the freed
-// old stack could still be read from (there are no TIB bounds beside them to notice first), the cost is
-// four instructions on a path that has just called `mmap`.
+// ⭐⭐ **THE ONE ISA DIFFERENCE IN THE RELOCATION: A PARKED THREAD's x29 IS ALSO ON ITS STACK.** x64's switch keeps
+// rbp only in `gt.fp`. This lane's switch pushes the x29/x30 record LAST, so `[gt.sp]` holds the x29 the
+// switch-in restores, beside the copy in `gt.fp`; `__gt_stack_relocate` rebases that word as well as `gt.fp`,
+// then walks the chain from `gt.fp`. At a grow the same word is the guard's saved x30 — a `.text` address, which
+// the old-stack range test leaves alone — so the one routine is right in both directions without being told
+// which it is serving.
 //
 // ENTRY CONTRACT (from the prologue guard): x11 = the current GT, x12 = this M's system-stack top, x14 = the
 // guard's PROJECTED SP, SP = the GT stack pointing at the guard's saved-x30 cell, x30 = the return into the
@@ -406,18 +407,11 @@ end 'emitArm64LoadCurrentMOrBail'
 // x64's `buildGtMorestackChunk` carries why, and the arithmetic is the same: the new stack must hold everything
 // above the projected SP plus the guard height below it.
 //
-// ⛔ **THIS LINE SAID "this P's" AND THE GUARD THAT FILLS x12 SAYS "this M's" — one contract, written twice,
-// disagreeing.** The producer is right: `emitArm64GtStackGuard`'s cold path loads `MOffSystemStackSP` out of
-// the current **M**, and the region moved from the P to the M at W213-C1. ⚠ The two spellings were the SAME
-// PARTITION only while an M held one P for its whole life; `handoffp` ended that, so a comment that says "P"
-// where the field says "M" now names a different thing rather than a synonym.
-// `X64GtRuntime.buildGtMorestackChunk`'s shim paragraph carries the same correction on the other lane.
-//
 // ⭐ WHAT IT PRESERVES, AND WHY THAT SET. The guard runs at offset 0 of the entry block, BEFORE the prologue
 // and before the `param` captures, so the guarded function has established nothing: every incoming argument
 // is still in x0..x7 / d0..d7 and every callee-saved register still holds its CALLER's value. What must be
 // saved is (live at a function entry) ∩ (destroyed by this chunk or its callees):
-//   • x0..x7 — the integer arguments, which are also `mmap`/`munmap`'s argument registers.
+//   • x0..x7 — the integer arguments, which are also `mmap`'s and `__gt_stack_relocate`'s argument registers.
 //   • x19..x28 — this chunk's own working registers, holding the caller's values.
 //   • x29 — the chain link, which this chunk REBASES in its saved slot so the restore below hands back the
 //     relocated pointer (x64 does exactly this with rbp).
@@ -430,30 +424,26 @@ let Arm64MorestackEntryGtReg = Arm64Register.x11
 let Arm64MorestackEntrySysTopReg = Arm64Register.x12
 
 // The projected SP rides a caller-saved non-argument register, so nothing is live in it at a function entry and
-// the register block need not save it. It is `Arm64MoreLinkReg` below under a second name: the growth sizing
-// consumes it before the copy loop first writes that register.
+// the register block need not save it. It is consumed by the growth sizing before anything else writes it.
 let Arm64MorestackEntryProjectedSpReg = Arm64Register.x14
 
-// The chunk's persistent body registers — all callee-saved, so `mmap`/`munmap` preserve them, and all
-// inside the block saved above.
+// The chunk's persistent body registers — all callee-saved, so `mmap` and `__gt_stack_relocate` preserve them,
+// and all inside the block saved above.
 let Arm64MoreGtReg = Arm64Register.x19
 let Arm64MoreOldBaseReg = Arm64Register.x20
 let Arm64MoreOldSizeReg = Arm64Register.x21
 let Arm64MoreNewSizeReg = Arm64Register.x22
 let Arm64MoreNewBaseReg = Arm64Register.x23
-let Arm64MoreOffsetReg = Arm64Register.x24
 
-// The caller-saved temporaries the growth sizing, the copy loop, the walk and the frame arithmetic run in. None
-// is live across a call in this chunk, and none is an argument register at the point it is used.
+// The caller-saved temporaries the growth sizing and the frame arithmetic run in. None is live across a call in
+// this chunk, and none is an argument register at the point it is used. `Arm64MoreSpReg` carries the ferried SP
+// in and the relocated SP out, across the register restores, which do not touch it.
 let Arm64MoreTempA = Arm64Register.x9
 let Arm64MoreTempB = Arm64Register.x10
-let Arm64MoreWalkReg = Arm64Register.x13
-let Arm64MoreLinkReg = Arm64Register.x14
-let Arm64MoreOldTopReg = Arm64Register.x15
+let Arm64MoreSpReg = Arm64Register.x13
 
 // The system-stack frame. Slot 0 is the ferried GT stack pointer; the saved register block follows it. The
-// two are separated so the ferried word can be read back AFTER the register restores (it must survive them)
-// without addressing off a register the restores are about to overwrite.
+// two are separated so the ferried word can be read without addressing off a register the restores overwrite.
 let Arm64MorestackEntrySpSlot = 0 as MachineWord
 let Arm64MorestackSaveBase = 16 as MachineWord
 
@@ -463,9 +453,9 @@ let arm64MorestackSavedGprs = [Arm64Register.x0, Arm64Register.x1, Arm64Register
 // The saved SIMD registers: the eight float ARGUMENT registers, and only those — see the ENTRY CONTRACT.
 let arm64MorestackSavedFps = [Arm64Register.d0, Arm64Register.d1, Arm64Register.d2, Arm64Register.d3, Arm64Register.d4, Arm64Register.d5, Arm64Register.d6, Arm64Register.d7]
 
-// The slot the LIVE x29 is saved in — read back by this chunk to write the REBASED value there, so the
-// restore hands the guarded function a frame pointer into the new stack. Derived from the register list's
-// own position rather than written as a number, exactly as x64's `savedRbpDisp` is.
+// The slot the LIVE x29 is saved in — written by this chunk with the REBASED value, so the restore hands the
+// guarded function a frame pointer into the new stack. Derived from the register list's own position rather
+// than written as a number, exactly as x64's `savedRbpDisp` is.
 function arm64MorestackFrameSlot(index RegCount) returns MachineWord
 	return Arm64MorestackSaveBase + (index as MachineWord) * SpillSlotBytes
 end 'arm64MorestackFrameSlot'
@@ -491,10 +481,10 @@ function buildArm64GtMorestackChunk(target Target) returns FunctionCodeChunk
 	let refused = asm.newLabel()
 
 	// Step 1: ferry the GT stack pointer and switch to the system stack.
-	arm64EmitMovFromSp(asm.code, dest: arm64RuntimeReg(Arm64MoreWalkReg))
+	arm64EmitMovFromSp(asm.code, dest: arm64RuntimeReg(Arm64MoreSpReg))
 	arm64EmitMovToSp(asm.code, src: arm64RuntimeReg(Arm64MorestackEntrySysTopReg))
 	arm64EmitStackAlloc(asm.code, amount: frameBytes)
-	arm64GtStoreSp(asm, src: Arm64MoreWalkReg, byteOffset: Arm64MorestackEntrySpSlot)
+	arm64GtStoreSp(asm, src: Arm64MoreSpReg, byteOffset: Arm64MorestackEntrySpSlot)
 
 	// Step 2: save everything the ENTRY CONTRACT names, then take the GT into a body register.
 	emitArm64MorestackRegisterBlock(asm, direction: Arm64GtBlockDirection.push)
@@ -531,42 +521,30 @@ function buildArm64GtMorestackChunk(target Target) returns FunctionCodeChunk
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.le, label: refused)
 	arm64EmitMovRuntimeReg(asm, dest: Arm64MoreNewBaseReg, src: Arm64IntReturnReg)
 
-	// Step 5: copy the old stack to the TOP of the new one, so every address moves by ONE offset.
-	emitArm64MorestackCopy(asm)
+	// Step 5: present the thread where it stands — `gt.sp` = the ferried SP, `gt.fp` = the live x29, which this
+	// chunk never writes — and move it. Writing the two words of a RUNNING thread is harmless: nothing reads them
+	// until its next switch-out overwrites both.
+	arm64GtLoadSp(asm, dest: Arm64MoreTempA, byteOffset: Arm64MorestackEntrySpSlot)
+	arm64EmitStoreWord64At(asm, src: Arm64MoreTempA, base: Arm64MoreGtReg, byteOffset: GtOffSp)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x29, base: Arm64MoreGtReg, byteOffset: GtOffFp)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64RelocGtReg, src: Arm64MoreGtReg)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64RelocNewBaseReg, src: Arm64MoreNewBaseReg)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64RelocNewSizeReg, src: Arm64MoreNewSizeReg)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: GtStackRelocateName)
 
-	// Step 6: offset = new_top - old_top, and old_top, which the three range tests below all read.
-	arm64EmitAddRuntimeReg(asm, dest: Arm64MoreOffsetReg, lhs: Arm64MoreNewBaseReg, rhs: Arm64MoreNewSizeReg)
-	arm64EmitSubRuntimeReg(asm, dest: Arm64MoreOffsetReg, lhs: Arm64MoreOffsetReg, rhs: Arm64MoreOldSizeReg)
-	arm64EmitSubRuntimeReg(asm, dest: Arm64MoreOffsetReg, lhs: Arm64MoreOffsetReg, rhs: Arm64MoreOldBaseReg)
-	arm64EmitAddRuntimeReg(asm, dest: Arm64MoreOldTopReg, lhs: Arm64MoreOldBaseReg, rhs: Arm64MoreOldSizeReg)
+	// Step 6: both stack marks (`GtStackMarksOfAGrow`) — the size was chosen now, and the thread has grown — and
+	// the rebased live x29 goes to its saved slot so the restore below hands it back.
+	arm64EmitMovRuntimeImm(asm, dest: Arm64MoreTempA, value: GtStackMarksOfAGrow as MachineWord)
+	arm64EmitStoreWord64At(asm, src: Arm64MoreTempA, base: Arm64MoreGtReg, byteOffset: GtOffStackMarks)
+	arm64EmitLoadWord64At(asm, dest: Arm64MoreTempA, base: Arm64MoreGtReg, byteOffset: GtOffFp)
+	arm64GtStoreSp(asm, src: Arm64MoreTempA, byteOffset: arm64MorestackFrameSlot(arm64MorestackLiveFpIndex()))
 
-	// Step 7: rebase the LIVE x29 in its saved slot, then walk the chain from it.
-	arm64GtLoadSp(asm, dest: Arm64MoreWalkReg, byteOffset: arm64MorestackFrameSlot(arm64MorestackLiveFpIndex()))
-	emitArm64MorestackRebase(asm, reg: Arm64MoreWalkReg)
-	arm64GtStoreSp(asm, src: Arm64MoreWalkReg, byteOffset: arm64MorestackFrameSlot(arm64MorestackLiveFpIndex()))
-	emitArm64MorestackChainWalk(asm)
-
-	// Step 8: republish the GT's own view of its stack.
-	arm64EmitStoreWord64At(asm, src: Arm64MoreNewBaseReg, base: Arm64MoreGtReg, byteOffset: GtOffStackBase)
-	arm64EmitStoreWord64At(asm, src: Arm64MoreNewSizeReg, base: Arm64MoreGtReg, byteOffset: GtOffStackSize)
-	arm64EmitAddRuntimeImm(asm, dest: Arm64MoreTempA, base: Arm64MoreNewBaseReg, imm: gtStackGuardHeight(target) as Imm32)
-	arm64EmitStoreWord64At(asm, src: Arm64MoreTempA, base: Arm64MoreGtReg, byteOffset: GtOffStackGuard)
-	emitArm64MorestackRebaseField(asm, byteOffset: GtOffSp)
-	emitArm64MorestackRebaseField(asm, byteOffset: GtOffFp)
-
-	// Step 9: release the old stack. SP is still on the system stack and every pointer into the old one has
-	// been rewritten, so nothing survives this that could read it.
-	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x0, src: Arm64MoreOldBaseReg)
-	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x1, src: Arm64MoreOldSizeReg)
-	arm64EmitOsPrimitive(asm, os: target.os, importSlot: OsImportSlot.munmap, syscallNumber: Arm64LinuxSyscallMunmap)
-
-	// Step 10: tear down and return onto the RELOCATED stack. The ferried SP is read and adjusted BEFORE the
-	// register restores, because the offset lives in x24 — one of the registers those restores overwrite.
-	arm64GtLoadSp(asm, dest: Arm64MoreWalkReg, byteOffset: Arm64MorestackEntrySpSlot)
-	arm64EmitAddRuntimeReg(asm, dest: Arm64MoreWalkReg, lhs: Arm64MoreWalkReg, rhs: Arm64MoreOffsetReg)
+	// Step 7: tear down and return onto the RELOCATED stack, at the rebased `gt.sp`, read BEFORE the register
+	// restores because the GT's register is one of the registers those restores overwrite.
+	arm64EmitLoadWord64At(asm, dest: Arm64MoreSpReg, base: Arm64MoreGtReg, byteOffset: GtOffSp)
 	emitArm64MorestackRegisterBlock(asm, direction: Arm64GtBlockDirection.pop)
 	arm64EmitStackFree(asm.code, amount: frameBytes)
-	arm64EmitMovToSp(asm.code, src: arm64RuntimeReg(Arm64MoreWalkReg))
+	arm64EmitMovToSp(asm.code, src: arm64RuntimeReg(Arm64MoreSpReg))
 	arm64EmitRet(asm.code)
 
 	// The two refusals, on the system stack with SP 16-aligned by `arm64MorestackFrameBytes`.
@@ -629,92 +607,133 @@ function emitArm64MorestackRegisterBlock(asm Arm64RuntimeAsm, direction Arm64GtB
 	end 'fps'
 end 'emitArm64MorestackRegisterBlock'
 
-// Copy the old stack to the TOP of the new one, eight bytes at a time. A green thread's stack is always a
-// whole number of pages (`osAllocPages`), so the count is a multiple of the word and the loop needs no tail.
+// The registers `__gt_stack_relocate` works in: its three AAPCS64 arguments, then caller-saved scratch. It makes
+// no call until its last step, the release, after which none of them is read, so nothing is saved but its frame
+// record.
+let Arm64RelocGtReg = Arm64Register.x0
+let Arm64RelocNewBaseReg = Arm64Register.x1
+let Arm64RelocNewSizeReg = Arm64Register.x2
+let Arm64RelocOldBaseReg = Arm64Register.x3
+let Arm64RelocOldSizeReg = Arm64Register.x4
+let Arm64RelocOldTopReg = Arm64Register.x5
+let Arm64RelocOffsetReg = Arm64Register.x6  // new_top - old_top
+let Arm64RelocNewLowReg = Arm64Register.x7  // the relocated `gt.sp`: the lowest live word on the new stack
+let Arm64RelocNewHighReg = Arm64Register.x11  // new_top
+let Arm64RelocWalkReg = Arm64Register.x12
+let Arm64RelocLinkReg = Arm64Register.x13
+let Arm64RelocSrcReg = Arm64Register.x14
+let Arm64RelocDstReg = Arm64Register.x15
+
+// ⭐⭐⭐ `__gt_stack_relocate(x0 = gt, x1 = newBase, x2 = newSize)` — see `GtRuntime.GtStackRelocateName`. Called
+// from `__gt_morestack` on the system stack and from `__gt_stack_shrink` on a machine's scheduler context, so its
+// release never runs on the stack it releases. It copies only `[gt.sp, old_top)`, which is what lets the same
+// routine move a thread onto a SMALLER stack; the caller has established that it fits.
 //
-// ⚠ A WORD loop rather than x64's `rep movsb`: AArch64 has no string instruction, and a byte loop would be
-// eight times the iterations for a region measured in kilobytes.
-function emitArm64MorestackCopy(asm Arm64RuntimeAsm)
+// It is FRAMED, unlike the grower, which keeps x30 in its register block: the release is a call, and the frame
+// record is where this chunk's own return address survives it.
+function buildArm64GtStackRelocateChunk(target Target) returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(NoRelocateSlots)
 	let copyLoop = asm.newLabel()
 	let copyDone = asm.newLabel()
 
-	// dst = new_base + new_size - old_size (the top of the new region), src = old_base, remaining = old_size.
-	arm64EmitAddRuntimeReg(asm, dest: Arm64MoreTempA, lhs: Arm64MoreNewBaseReg, rhs: Arm64MoreNewSizeReg)
-	arm64EmitSubRuntimeReg(asm, dest: Arm64MoreTempA, lhs: Arm64MoreTempA, rhs: Arm64MoreOldSizeReg)
-	arm64EmitMovRuntimeReg(asm, dest: Arm64MoreTempB, src: Arm64MoreOldBaseReg)
-	arm64EmitMovRuntimeReg(asm, dest: Arm64MoreWalkReg, src: Arm64MoreOldSizeReg)
+	arm64EmitLoadWord64At(asm, dest: Arm64RelocOldBaseReg, base: Arm64RelocGtReg, byteOffset: GtOffStackBase)
+	arm64EmitLoadWord64At(asm, dest: Arm64RelocOldSizeReg, base: Arm64RelocGtReg, byteOffset: GtOffStackSize)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64RelocOldTopReg, lhs: Arm64RelocOldBaseReg, rhs: Arm64RelocOldSizeReg)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64RelocNewHighReg, lhs: Arm64RelocNewBaseReg, rhs: Arm64RelocNewSizeReg)
+
+	// offset = new_top - old_top: every address in the live region moves by that one amount, because the region
+	// is copied to the TOP of the new stack.
+	arm64EmitSubRuntimeReg(asm, dest: Arm64RelocOffsetReg, lhs: Arm64RelocNewHighReg, rhs: Arm64RelocOldTopReg)
+
+	// Copy `[gt.sp, old_top)` word by word — `gt.sp` is 16-aligned and the top a page boundary, so the region is a
+	// whole number of words. AArch64 has no string instruction.
+	arm64EmitLoadWord64At(asm, dest: Arm64RelocSrcReg, base: Arm64RelocGtReg, byteOffset: GtOffSp)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64RelocNewLowReg, lhs: Arm64RelocSrcReg, rhs: Arm64RelocOffsetReg)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64RelocDstReg, src: Arm64RelocNewLowReg)
 
 	asm.placeLabel(copyLoop)
-	arm64EmitCbzTo(asm, reg: Arm64MoreWalkReg, label: copyDone)
-	arm64EmitLoadWord64At(asm, dest: Arm64MoreLinkReg, base: Arm64MoreTempB, byteOffset: 0)
-	arm64EmitStoreWord64At(asm, src: Arm64MoreLinkReg, base: Arm64MoreTempA, byteOffset: 0)
-	arm64EmitAddRuntimeImm(asm, dest: Arm64MoreTempA, base: Arm64MoreTempA, imm: SpillSlotBytes as Imm32)
-	arm64EmitAddRuntimeImm(asm, dest: Arm64MoreTempB, base: Arm64MoreTempB, imm: SpillSlotBytes as Imm32)
-	arm64EmitAddRuntimeImm(asm, dest: Arm64MoreWalkReg, base: Arm64MoreWalkReg, imm: -SpillSlotBytes as Imm32)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64RelocSrcReg, rhs: Arm64RelocOldTopReg)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.hs, label: copyDone)
+	arm64EmitLoadWord64At(asm, dest: Arm64RelocLinkReg, base: Arm64RelocSrcReg, byteOffset: 0)
+	arm64EmitStoreWord64At(asm, src: Arm64RelocLinkReg, base: Arm64RelocDstReg, byteOffset: 0)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64RelocSrcReg, base: Arm64RelocSrcReg, imm: SpillSlotBytes as Imm32)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64RelocDstReg, base: Arm64RelocDstReg, imm: SpillSlotBytes as Imm32)
 	arm64EmitBranchTo(asm, label: copyLoop)
-
 	asm.placeLabel(copyDone)
-end 'emitArm64MorestackCopy'
+	arm64EmitStoreWord64At(asm, src: Arm64RelocNewLowReg, base: Arm64RelocGtReg, byteOffset: GtOffSp)
 
-// `reg += offset` IFF `reg` points inside the OLD stack `[old_base, old_top)`. The one statement of that
-// test, used by the live-frame-pointer rebase, by each interior chain link and by both GT struct words — a
-// second copy is where one of the four would come to test a bound the others do not.
+	// `[gt.sp]`: a parked thread's x29 as its switch record holds it, or at a grow the guard's saved x30 — see this
+	// section's header for why one range test serves both.
+	emitArm64RelocateRebaseWord(asm, reg: Arm64RelocLinkReg, base: Arm64RelocNewLowReg, byteOffset: 0)
+
+	// `gt.fp` rebased in place, then the chain from it.
+	emitArm64RelocateRebaseWord(asm, reg: Arm64RelocWalkReg, base: Arm64RelocGtReg, byteOffset: GtOffFp)
+	emitArm64RelocateChainWalk(asm)
+
+	// The GT's own view of its stack. There is no TIB pair on this lane (this file's header, item 1).
+	arm64EmitStoreWord64At(asm, src: Arm64RelocNewBaseReg, base: Arm64RelocGtReg, byteOffset: GtOffStackBase)
+	arm64EmitStoreWord64At(asm, src: Arm64RelocNewSizeReg, base: Arm64RelocGtReg, byteOffset: GtOffStackSize)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64RelocLinkReg, base: Arm64RelocNewBaseReg, imm: gtStackGuardHeight(target) as Imm32)
+	arm64EmitStoreWord64At(asm, src: Arm64RelocLinkReg, base: Arm64RelocGtReg, byteOffset: GtOffStackGuard)
+
+	// Give the old stack back. Every pointer into it has been rewritten, so nothing that survives this can read it.
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x0, src: Arm64RelocOldBaseReg)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x1, src: Arm64RelocOldSizeReg)
+	arm64EmitOsPrimitive(asm, os: target.os, importSlot: OsImportSlot.munmap, syscallNumber: Arm64LinuxSyscallMunmap)
+
+	return asm.finishFunction(GtStackRelocateName)
+end 'buildArm64GtStackRelocateChunk'
+
+// `__gt_stack_relocate` keeps nothing in its frame but the record.
+let NoRelocateSlots = 0 as StackSize
+
+// `reg += offset` IFF `reg` points inside the OLD stack `[old_base, old_top)`. The one statement of that test, for
+// the switch record's word, `gt.fp` and each interior chain link — a second copy is where one of them would come
+// to test a bound the others do not.
 //
 // ⚠ **UNSIGNED COMPARES.** These are addresses; a signed `lt` would read a stack near the top of the
 // address space as negative and skip every rebase, which is a use-after-free rather than a crash.
-function emitArm64MorestackRebase(asm Arm64RuntimeAsm, reg Arm64Register)
+function emitArm64RelocateRebase(asm Arm64RuntimeAsm, reg Arm64Register)
 	let skip = asm.newLabel()
 
-	arm64EmitCmpRuntimeReg(asm, lhs: reg, rhs: Arm64MoreOldBaseReg)
+	arm64EmitCmpRuntimeReg(asm, lhs: reg, rhs: Arm64RelocOldBaseReg)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lo, label: skip)
-	arm64EmitCmpRuntimeReg(asm, lhs: reg, rhs: Arm64MoreOldTopReg)
+	arm64EmitCmpRuntimeReg(asm, lhs: reg, rhs: Arm64RelocOldTopReg)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.hs, label: skip)
-	arm64EmitAddRuntimeReg(asm, dest: reg, lhs: reg, rhs: Arm64MoreOffsetReg)
+	arm64EmitAddRuntimeReg(asm, dest: reg, lhs: reg, rhs: Arm64RelocOffsetReg)
 
 	asm.placeLabel(skip)
-end 'emitArm64MorestackRebase'
+end 'emitArm64RelocateRebase'
 
-// One GT struct word rebased in place — `gt.sp` and `gt.fp`, the two the header explains this lane fixes
-// and x64 leaves stale.
-function emitArm64MorestackRebaseField(asm Arm64RuntimeAsm, byteOffset MachineWord)
-	arm64EmitLoadWord64At(asm, dest: Arm64MoreTempA, base: Arm64MoreGtReg, byteOffset: byteOffset)
-	emitArm64MorestackRebase(asm, reg: Arm64MoreTempA)
-	arm64EmitStoreWord64At(asm, src: Arm64MoreTempA, base: Arm64MoreGtReg, byteOffset: byteOffset)
-end 'emitArm64MorestackRebaseField'
+// The word at `[base + byteOffset]` rebased in place, left in `reg` for a caller that follows it.
+function emitArm64RelocateRebaseWord(asm Arm64RuntimeAsm, reg Arm64Register, base Arm64Register, byteOffset MachineWord)
+	arm64EmitLoadWord64At(asm, dest: reg, base: base, byteOffset: byteOffset)
+	emitArm64RelocateRebase(asm, reg: reg)
+	arm64EmitStoreWord64At(asm, src: reg, base: base, byteOffset: byteOffset)
+end 'emitArm64RelocateRebaseWord'
 
-// The saved-x29 chain walk — the correctness crux. Entered with the walker (the already-rebased live x29)
-// in `Arm64MoreWalkReg`. For each frame record whose link points into the OLD stack it adds the relocation
-// offset, then follows the now-adjusted link. It terminates when the walker leaves the NEW stack's bounds
-// or hits a null link — a green thread's outermost frame is the trampoline's, whose x29 is the seed zero.
-function emitArm64MorestackChainWalk(asm Arm64RuntimeAsm)
+// The saved-x29 chain walk — the correctness crux. Entered with the walker (the rebased `gt.fp`) in
+// `Arm64RelocWalkReg`. For each frame record whose link points into the OLD stack it adds the relocation offset,
+// then follows the now-adjusted link. It ends when the walker leaves the relocated region `[new_low, new_high)`,
+// which a null link does too: a green thread's outermost frame is the trampoline's, whose x29 is the seed zero.
+function emitArm64RelocateChainWalk(asm Arm64RuntimeAsm)
 	let head = asm.newLabel()
 	let done = asm.newLabel()
 
-	// new_low = new_base + new_size - old_size, new_high = new_base + new_size — the copied region's bounds.
-	arm64EmitAddRuntimeReg(asm, dest: Arm64MoreTempB, lhs: Arm64MoreNewBaseReg, rhs: Arm64MoreNewSizeReg)
-	arm64EmitSubRuntimeReg(asm, dest: Arm64MoreTempA, lhs: Arm64MoreTempB, rhs: Arm64MoreOldSizeReg)
-
 	asm.placeLabel(head)
-	arm64EmitCbzTo(asm, reg: Arm64MoreWalkReg, label: done)
-	arm64EmitCmpRuntimeReg(asm, lhs: Arm64MoreWalkReg, rhs: Arm64MoreTempA)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64RelocWalkReg, rhs: Arm64RelocNewLowReg)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lo, label: done)
-	arm64EmitCmpRuntimeReg(asm, lhs: Arm64MoreWalkReg, rhs: Arm64MoreTempB)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64RelocWalkReg, rhs: Arm64RelocNewHighReg)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.hs, label: done)
 
-	// [walker] is the caller's saved x29 — the arm64 frame record's first word (`[x29+8]` is the return
-	// address, which points into `.text` and does not move).
-	arm64EmitLoadWord64At(asm, dest: Arm64MoreLinkReg, base: Arm64MoreWalkReg, byteOffset: 0)
-	emitArm64MorestackRebase(asm, reg: Arm64MoreLinkReg)
-	arm64EmitStoreWord64At(asm, src: Arm64MoreLinkReg, base: Arm64MoreWalkReg, byteOffset: 0)
-
-	// Follow the (possibly adjusted) link to the next frame. x64's walk needs an `L_next` label here because
-	// its rebase is open-coded with two skip branches; ours is `emitArm64MorestackRebase`, whose own `skip`
-	// lands on this line, so there is nothing left to branch to.
-	arm64EmitMovRuntimeReg(asm, dest: Arm64MoreWalkReg, src: Arm64MoreLinkReg)
+	// [walker] is the caller's saved x29 — the frame record's first word (`[x29+8]` is the return address, which
+	// points into `.text` and does not move).
+	emitArm64RelocateRebaseWord(asm, reg: Arm64RelocLinkReg, base: Arm64RelocWalkReg, byteOffset: 0)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64RelocWalkReg, src: Arm64RelocLinkReg)
 	arm64EmitBranchTo(asm, label: head)
 
 	asm.placeLabel(done)
-end 'emitArm64MorestackChainWalk'
+end 'emitArm64RelocateChainWalk'
 
 // ==========================================================================
 // The prologue stack GUARD
@@ -939,7 +958,7 @@ end 'arm64AppendResolvedFragment'
 // Assembly
 // ==========================================================================
 
-// Append the three hand-assembled green-thread chunks — called by `buildArm64Backend` when the module
+// Append the hand-assembled green-thread chunks — called by `buildArm64Backend` when the module
 // carries the scheduler, on the same `usesGt` bit `installGtRuntime` was gated on rather than a probe of
 // the module. They lay out above user code like every other runtime chunk, so `mrt_start` keeps `.text`
 // offset 0.
@@ -947,4 +966,5 @@ export function appendArm64GtRuntimeChunks(chunks FunctionCodeChunkArray, target
 	chunks.push(buildArm64GtContextSwitchChunk(target))
 	chunks.push(buildArm64GtTrampolineChunk())
 	chunks.push(buildArm64GtMorestackChunk(target))
+	chunks.push(buildArm64GtStackRelocateChunk(target))
 end 'appendArm64GtRuntimeChunks'

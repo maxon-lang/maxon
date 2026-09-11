@@ -1,0 +1,194 @@
+// Test: a-slice-between-two-stores-forces-the-second-to-detach
+typealias Word = int(i64.min to i64.max)
+typealias WordArray = Array with Word
+
+function main() returns ExitCode
+	var a = WordArray.create()
+	a.push(1)
+	a.push(2)
+	a.push(3)
+	try a.set(1, value: 10) otherwise panic("main: a holds three elements")
+	let view = try a.slice(0, endIndex: 2) otherwise panic("main: 0..2 is within a")
+	try a.set(1, value: 20) otherwise panic("main: a holds three elements")
+	if (try view.get(1) otherwise 0) != 10 'viewKeepsTheFirstWrite'
+		return 1
+	end 'viewKeepsTheFirstWrite'
+	if (try a.get(1) otherwise 0) != 20 'aTakesTheSecond'
+		return 2
+	end 'aTakesTheSecond'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 3
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 1
+    arm64.movImm x2, 10
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.cmp x0, 0
+    arm64.b.lt __im_slow#18
+  __im_bounds#19:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 1
+    arm64.b.ls __im_slow#18
+  __im_buffer#20:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.cmp x0, 0
+    arm64.b.eq __im_slow#18
+  __im_viewed#21:
+    arm64.sub x3, x0, 24
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
+    arm64.cmp x3, 0
+    arm64.b.ne __im_slow#18
+  __im_store#22:
+    arm64.add x0, x0, 8
+    arm64.storeBaseDispReg.word64 [x0 + 0], x2
+  tryok#1:
+    arm64.movImm x1, 0
+    arm64.movImm x2, 2
+    arm64.leaRdata x3, __layout_Array_Word
+    arm64.movRegReg x0, x19
+    arm64.bl Array.slice
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#4
+  tryok#3:
+    arm64.movImm x1, 1
+    arm64.movImm x2, 20
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 16]
+    arm64.cmp x3, 0
+    arm64.b.lt __im_slow#24
+  __im_bounds#25:
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 8]
+    arm64.cmp x3, 1
+    arm64.b.ls __im_slow#24
+  __im_buffer#26:
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 0]
+    arm64.cmp x3, 0
+    arm64.b.eq __im_slow#24
+  __im_viewed#27:
+    arm64.sub x4, x3, 24
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 16]
+    arm64.cmp x4, 0
+    arm64.b.ne __im_slow#24
+  __im_store#28:
+    arm64.add x1, x3, 8
+    arm64.storeBaseDispReg.word64 [x1 + 0], x2
+  tryok#5:
+    arm64.movImm x1, 1
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x2, 1
+    arm64.b.ls __im_slow#30
+  __im_load#31:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x1, x1, 8
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+  tryok#7:
+    arm64.cmp x1, 10
+    arm64.b.eq __im_load#34
+  viewKeepsTheFirstWrite:
+    arm64.movImm x20, 1
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __im_load#34:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+    arm64.add x1, x1, 8
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+  tryok#12:
+    arm64.cmp x1, 20
+    arm64.b.eq ifcont
+  aTakesTheSecond:
+    arm64.movImm x20, 2
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont:
+    arm64.movImm x20, 0
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __im_slow#18:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_set
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#1
+  tryerr#2:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-slice-between-two-stores-forces-the-second-to-detach.test:10: main: a holds three elements\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryerr#4:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-slice-between-two-stores-forces-the-second-to-detach.test:11: main: 0..2 is within a\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __im_slow#24:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_set
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#5
+  tryerr#6:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at a-slice-between-two-stores-forces-the-second-to-detach.test:12: main: a holds three elements\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __im_slow#30:
+    arm64.storeSlotReg slot0, x0
+    arm64.bl __managed_get
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.cmp x9, 0
+    arm64.b.ne viewKeepsTheFirstWrite
+    arm64.b tryok#7
+}

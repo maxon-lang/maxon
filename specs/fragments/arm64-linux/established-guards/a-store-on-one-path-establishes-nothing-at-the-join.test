@@ -1,0 +1,204 @@
+// Test: a-store-on-one-path-establishes-nothing-at-the-join
+typealias Word = int(i64.min to i64.max)
+typealias WordArray = Array with Word
+
+function rewrite(a WordArray, n Word)
+	if n > 100 'never'
+		try a.set(0, value: 1) otherwise panic("rewrite: a holds two elements")
+	end 'never'
+	try a.set(1, value: 7) otherwise panic("rewrite: a holds two elements")
+end 'rewrite'
+
+function main() returns ExitCode
+	var a = WordArray.create()
+	a.push(1)
+	a.push(2)
+	let b = a.clone()
+	rewrite(a, n: 3)
+	if (try b.get(1) otherwise 0) != 2 'bUntouched'
+		return 1
+	end 'bUntouched'
+	if (try a.get(1) otherwise 0) != 7 'aRewritten'
+		return 2
+	end 'aRewritten'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @rewrite {
+  entry:
+    arm64.prologue 32
+    arm64.cmp x1, 100
+    arm64.b.le ifcont
+  never:
+    arm64.movImm x1, 0
+    arm64.movImm x2, 1
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 16]
+    arm64.cmp x3, 0
+    arm64.b.lt __im_slow#8
+  __im_bounds#9:
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
+    arm64.cmp x3, 0
+    arm64.b.ls __im_slow#8
+  __im_buffer#10:
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
+    arm64.cmp x3, 0
+    arm64.b.eq __im_slow#8
+  __im_viewed#11:
+    arm64.sub x4, x3, 24
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 16]
+    arm64.cmp x4, 0
+    arm64.b.ne __im_slow#8
+  __im_store#12:
+    arm64.storeBaseDispReg.word64 [x3 + 0], x2
+  ifcont:
+    arm64.movImm x1, 1
+    arm64.movImm x2, 7
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 16]
+    arm64.cmp x3, 0
+    arm64.b.lt __im_slow#14
+  __im_bounds#15:
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
+    arm64.cmp x3, 1
+    arm64.b.ls __im_slow#14
+  __im_buffer#16:
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
+    arm64.cmp x3, 0
+    arm64.b.eq __im_slow#14
+  __im_viewed#17:
+    arm64.sub x4, x3, 24
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 16]
+    arm64.cmp x4, 0
+    arm64.b.ne __im_slow#14
+  __im_store#18:
+    arm64.add x0, x3, 8
+    arm64.storeBaseDispReg.word64 [x0 + 0], x2
+  tryok:
+    arm64.epilogue 32
+    arm64.ret
+  __im_slow#8:
+    arm64.storeSlotReg slot0, x0
+    arm64.bl __managed_set
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.cmp x9, 0
+    arm64.b.eq ifcont
+  tryerr#3:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-store-on-one-path-establishes-nothing-at-the-join.test:7: rewrite: a holds two elements\x0a"
+    arm64.bl mrt_panic
+    arm64.epilogue 32
+    arm64.ret
+  __im_slow#14:
+    arm64.bl __managed_set
+    arm64.cmp x9, 0
+    arm64.b.eq tryok
+  tryerr#6:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-store-on-one-path-establishes-nothing-at-the-join.test:9: rewrite: a holds two elements\x0a"
+    arm64.bl mrt_panic
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.leaRdata x1, __layout_Array_Word
+    arm64.movRegReg x0, x19
+    arm64.bl Array.clone
+    arm64.movRegReg x20, x0
+    arm64.movImm x1, 3
+    arm64.movRegReg x0, x19
+    arm64.bl rewrite
+    arm64.movImm x1, 1
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x0, 1
+    arm64.b.ls __im_slow#12
+  __im_load#13:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.add x0, x0, 8
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+  tryok#1:
+    arm64.cmp x0, 2
+    arm64.b.eq ifcont#5
+  bUntouched:
+    arm64.movImm x21, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#5:
+    arm64.movImm x1, 1
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 1
+    arm64.b.ls __im_slow#15
+  __im_load#16:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.add x0, x0, 8
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+  tryok#6:
+    arm64.cmp x0, 7
+    arm64.b.eq ifcont#10
+  aRewritten:
+    arm64.movImm x21, 2
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#10:
+    arm64.movImm x21, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __im_slow#12:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.ne bUntouched
+    arm64.b tryok#1
+  __im_slow#15:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.ne aRewritten
+    arm64.b tryok#6
+}

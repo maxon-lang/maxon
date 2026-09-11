@@ -1269,3 +1269,281 @@ depth=2000000
 ```exitcode
 0
 ```
+
+<!-- test: async-stack-growth.a-stack-grown-by-deep-recursion-shrinks-once-idle -->
+<!-- procs: 1 -->
+**A STACK THAT GREW FOR ONE DEEP CALL IS GIVEN BACK ONCE THE THREAD HAS BEEN IDLE.** Go halves a goroutine's
+stack when less than a quarter of it is in use (`vendor/go/src/runtime/stack.go`, `shrinkstack`). A coroutine
+recurses twenty thousand deep, returns, and parks twice: the first park follows the growth too closely to
+shrink, the second comes after the shrink window and halves the stack. `__Builtins.gtStackBytes()` is the
+calling green thread's current stack size. The same recursion then runs again on the shrunk stack, which must
+grow back correctly.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function down(n Integer) returns Integer
+	if n == 0 'bottom'
+		return 0
+	end 'bottom'
+	return 1 + down(n - 1)
+end 'down'
+
+function deepThenIdle() returns Integer
+	let depth = down(20000)
+	let grown = __Builtins.gtStackBytes()
+	sleep(1100)
+	sleep(1)
+	let after = __Builtins.gtStackBytes()
+	let again = down(20000)
+	print("depth={depth} shrunk={after < grown} again={again}\n")
+	return 0
+end 'deepThenIdle'
+
+function main() returns ExitCode
+	let p = async deepThenIdle()
+	let r = await p
+	return r as ExitCode
+end 'main'
+```
+```stdout
+depth=20000 shrunk=true again=20000
+```
+```exitcode
+0
+```
+
+<!-- test: async-stack-growth.a-stack-grown-in-the-current-window-is-not-shrunk -->
+<!-- procs: 1 -->
+**A STACK THAT GREW A MOMENT AGO IS KEPT.** The same recursion, then a park straight away: a thread that
+just needed the stack is likely to need it again, so a shrink waits for the window to pass rather than copying
+the stack down and back up.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function down(n Integer) returns Integer
+	if n == 0 'bottom'
+		return 0
+	end 'bottom'
+	return 1 + down(n - 1)
+end 'down'
+
+function deepThenPark() returns Integer
+	let depth = down(20000)
+	let grown = __Builtins.gtStackBytes()
+	sleep(1)
+	let after = __Builtins.gtStackBytes()
+	print("depth={depth} shrunk={after < grown}\n")
+	return 0
+end 'deepThenPark'
+
+function main() returns ExitCode
+	let p = async deepThenPark()
+	let r = await p
+	return r as ExitCode
+end 'main'
+```
+```stdout
+depth=20000 shrunk=false
+```
+```exitcode
+0
+```
+
+<!-- test: async-stack-growth.the-starting-stack-follows-the-stacks-threads-needed -->
+<!-- procs: 1 -->
+**A NEW GREEN THREAD STARTS WITH THE STACK ITS PREDECESSORS NEEDED.** Go sizes a new goroutine's first stack
+from the average of the stacks it has seen (`stack.go`, `startingStackSize`), so a program whose threads all
+recurse does not pay the same growth on every one. Sixty-four coroutines each recurse four thousand deep and
+finish, which closes a recompute window; a fresh coroutine then starts larger than the first one did. The
+program arms no timer: the seed follows finished threads whether or not a timer ever fires.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function down(n Integer) returns Integer
+	if n == 0 'bottom'
+		return 0
+	end 'bottom'
+	return 1 + down(n - 1)
+end 'down'
+
+function seedBytes() returns Integer
+	Runtime.yield()
+	return __Builtins.gtStackBytes()
+end 'seedBytes'
+
+function deep(n Integer) returns Integer
+	Runtime.yield()
+	return down(n)
+end 'deep'
+
+function main() returns ExitCode
+	let first = async seedBytes()
+	let before = await first
+	var ps = IntPromiseArray.create()
+	var i = 0
+	while i < 64 'deepEach'
+		ps.push(async deep(4000))
+		i = i + 1
+	end 'deepEach'
+	var total = 0
+	var k = 0
+	while k < 64 'awaitEach'
+		let p = try ps.get(k) otherwise panic("ps.get OOB at {k} — bounded by the pushes above")
+		total = total + await p
+		k = k + 1
+	end 'awaitEach'
+	let later = async seedBytes()
+	let after = await later
+	print("total={total} larger={after > before}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+total=256000 larger=true
+```
+```exitcode
+0
+```
+
+<!-- test: async-stack-growth.a-panic-after-a-shrink-prints-the-whole-backtrace -->
+<!-- procs: 1 -->
+**A SHRUNK STACK STILL READS AS ONE CHAIN OF FRAMES.** Moving a stack to a smaller one rewrites every saved frame
+pointer that pointed into the old one; the panic backtrace is what reads that chain. A coroutine recurses deep,
+parks twice so its stack is halved, then calls three named frames that panic: the trace names every frame from
+the panicking one down to the coroutine's entry.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function down(n Integer) returns Integer
+	if n == 0 'bottom'
+		return 0
+	end 'bottom'
+	return 1 + down(n - 1)
+end 'down'
+
+function third(n Integer) returns Integer
+	if n > 0 'positive'
+		panic("after the shrink")
+	end 'positive'
+	return n
+end 'third'
+
+function second(n Integer) returns Integer
+	return third(n) + 1
+end 'second'
+
+function first(n Integer) returns Integer
+	return second(n) + 1
+end 'first'
+
+function deepThenIdle() returns Integer
+	let depth = down(20000)
+	let grown = __Builtins.gtStackBytes()
+	sleep(1100)
+	sleep(1)
+	let after = __Builtins.gtStackBytes()
+	print("depth={depth} shrunk={after < grown}\n")
+	return first(depth)
+end 'deepThenIdle'
+
+function main() returns ExitCode
+	let p = async deepThenIdle()
+	let r = await p
+	return r as ExitCode
+end 'main'
+```
+```stdout
+depth=20000 shrunk=true
+```
+```stderr
+panic at async-stack-growth.a-panic-after-a-shrink-prints-the-whole-backtrace.test:13: after the shrink
+Stack trace:
+  in third
+  in second
+  in first
+  in deepThenIdle
+  in __gt_trampoline
+```
+```exitcode
+1
+```
+
+<!-- test: async-stack-growth.the-starting-stack-comes-back-down-when-threads-need-less -->
+<!-- procs: 1 -->
+**THE STARTING STACK FALLS AGAIN WHEN THE THREADS STOP NEEDING IT.** The average is of what each finished thread
+NEEDED — its final size if it had to grow, else the depth it was seen at — not of the stack it was handed, so a
+seed raised by one burst of deep threads cannot hold every later thread at that size. Sixty-four deep coroutines
+raise the seed, as in the case above; then a hundred and twenty-eight shallow ones, each started on that raised
+seed and never needing it, close two more windows, and a fresh coroutine starts where the first one did.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function down(n Integer) returns Integer
+	if n == 0 'bottom'
+		return 0
+	end 'bottom'
+	return 1 + down(n - 1)
+end 'down'
+
+function seedBytes() returns Integer
+	Runtime.yield()
+	return __Builtins.gtStackBytes()
+end 'seedBytes'
+
+function deep(n Integer) returns Integer
+	Runtime.yield()
+	return down(n)
+end 'deep'
+
+function shallow(n Integer) returns Integer
+	Runtime.yield()
+	return n
+end 'shallow'
+
+function main() returns ExitCode
+	let first = async seedBytes()
+	let before = await first
+	var deeps = IntPromiseArray.create()
+	var i = 0
+	while i < 64 'deepEach'
+		deeps.push(async deep(4000))
+		i = i + 1
+	end 'deepEach'
+	var deepTotal = 0
+	var k = 0
+	while k < 64 'awaitDeep'
+		let p = try deeps.get(k) otherwise panic("deeps.get OOB at {k} — bounded by the pushes above")
+		deepTotal = deepTotal + await p
+		k = k + 1
+	end 'awaitDeep'
+	let mid = async seedBytes()
+	let raised = await mid
+	var shallows = IntPromiseArray.create()
+	var j = 0
+	while j < 128 'shallowEach'
+		shallows.push(async shallow(1))
+		j = j + 1
+	end 'shallowEach'
+	var shallowTotal = 0
+	var m = 0
+	while m < 128 'awaitShallow'
+		let p = try shallows.get(m) otherwise panic("shallows.get OOB at {m} — bounded by the pushes above")
+		shallowTotal = shallowTotal + await p
+		m = m + 1
+	end 'awaitShallow'
+	let later = async seedBytes()
+	let after = await later
+	print("deep={deepTotal} shallow={shallowTotal} raised={raised > before} restored={after == before}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+deep=256000 shallow=128 raised=true restored=true
+```
+```exitcode
+0
+```

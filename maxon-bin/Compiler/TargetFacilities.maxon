@@ -570,13 +570,11 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// (`CpuParallelRuntime.buildCpuCount`), so this lane supplies only the read.
 			cpuCount gives true
 
-			// ⭐⭐ **MAC3 — THE GREEN-THREAD FLOOR AND EVERYTHING STANDING ON IT.** This row used to read
-			// *"`__gt_context_switch`, `__gt_trampoline` and `__gt_morestack` are hand-assembled x64 chunks with
-			// no AAPCS64 twin, so a `true` here would promise a scheduler that does not exist"*. They have one
-			// now: `Arm64GtRuntime.appendArm64GtRuntimeChunks` builds all three, the prologue stack guard and
-			// the import-call stack shim are emitted inline beside them, and the P/M tier's own host objects —
-			// the per-thread slot, the run-queue lock, each P's wake event, a worker M's birth and join — are
-			// libSystem sequences in `Arm64DarwinRuntime`.
+			// ⭐⭐ **THE GREEN-THREAD FLOOR AND EVERYTHING STANDING ON IT.** The hand-assembled chunks have their
+			// AAPCS64 twins in `Arm64GtRuntime.appendArm64GtRuntimeChunks`, the prologue stack guard and the
+			// import-call stack shim are emitted inline beside them, and the P/M tier's own host objects — the
+			// per-thread slot, the run-queue lock, each P's wake event, a worker M's birth and join — are libSystem
+			// sequences in `Arm64DarwinRuntime`.
 			//
 			// ⚠ It is `true` for arm64-macOS ALONE and not for arm64 generally, which is the whole reason this
 			// table is keyed on a TARGET rather than on a CPU: every one of those host objects is a pthread
