@@ -270,8 +270,8 @@ honour it — `fmt`'s and the compiler's own `collectMaxonSources`.
 ⚠ **THE FORMATTER SELF-TEST RIDES `spec-test`** (`requireFormatterPreservesItsCorpus`, called from
 `SpecWorkerPool`) and REDDENS THE SUITE if formatting loses a comment, duplicates one, writes a
 lexer-error sentinel into a file, or stops being idempotent. There is no `fmt-selftest` command.
-It carries 8 comment shapes + 4 unlexable sources, every one sabotage-proved, with `UrlInPlainString` and
-`NoMultilineLiteral` as controls that must stay GREEN under the sabotage. Three separate silent
+It carries 8 comment shapes + 4 unlexable sources, with `UrlInPlainString` and `NoMultilineLiteral`
+as controls that must stay GREEN. Three separate silent
 source-corrupting defects reached the tree before it existed; a preservation check phrased as
 *presence* passes duplication, so it asserts **multiplicity**.
 

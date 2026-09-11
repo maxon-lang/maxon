@@ -52,10 +52,12 @@ A candidate that names no shape is not a candidate.
 
 `/land <the change>`, with these substitutions for an optimization:
 
-- The red set is the SOUNDNESS half: wrong-answer controls that print a wrong number or exit 101 when
-  the rule is sabotaged. Run each sabotage and record the observed failure in the case text. Goldens
-  are reference, not a gate: review the minted diff under `--update-required` with a filter, line by
-  line, and keep every moved fragment.
+- The red set is the rule FIRING: a case whose pinned output shows the new shape, red before the
+  change as `/land` requires. Beside it go the SOUNDNESS controls — one case per boundary the
+  soundness argument names, whose answer a wrong rule would change. They are cases, and nothing else:
+  ⛔ **no sabotage** — no breaking the rule or the compiler to watch a control fail (`/land`'s NO
+  MANUAL TESTS). A boundary worth guarding is a case; one that is not is not run. Goldens are
+  reference, not a gate, and their drift is committed as it lies.
 - Every target the change touches gets the equivalent change (x64, arm64, wasm) or a stated reason.
 - ⛔ **During the round, never run the entire spec suite** (user ruling). Every spec run — yours, an
   implementer's, a reviewer's — is `spec-test --filter=<spec>` over the spec files the change
@@ -67,10 +69,6 @@ A candidate that names no shape is not a candidate.
   runs it at n=10 (73196 / 38, exit 38); a panic or a wrong answer there is a red gate, and the
   function it died in becomes a spec case. Round 5 shipped a filtered-green compiler that could not
   compile the example.
-- ⛔ **A sabotaged compiler must never build the revert.** After a sabotage measurement, rebuild from
-  `.bootstrap/maxon.exe` (`build maxon-bin -o maxon-bin/.maxon/maxon`), then self-compile, then the
-  example gate. Round 5 let a sabotaged compiler build the reverted source and got a spec-green
-  compiler that panicked in its own CSE.
 - Run §5 and §6 below between `/land`'s battery and its commit, so the round is ONE commit carrying
   the compiler change, its spec, the README row, the log rows and the roadmap row. A push rejected
   by a newer `origin/main` re-runs the battery only if the new commits touch `maxon-bin/`, `specs/`
