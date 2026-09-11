@@ -1853,6 +1853,32 @@ with itself, n=11 ×5: 2,398 → 2,336 ms (−2.6%, beyond both arms' spread of 
 ops 2517 → 2085, mgd-call 69 → 57, call-direct 159 → 142 — the folded guards, their loads and the slow
 loop copies that lost their last way in.
 
+**`EC32` · Spill weight in the live-range splitter — the lightest value goes to memory.** ⛔ **DECLINED
+2026-09-11, MEASURED (round 10 of the fannkuch loop). The shape moved exactly as predicted and the time
+did not move at all.** At a call-confined peak `chooseVictim` picks by a strict tier order and then
+Belady's farthest next use: the eviction-point split of a value not yet in memory (tier 2) always
+outranks the forced bracket of one whose every use must reload (tier 4), so in `main`'s permutation
+loop the loop-carried `index` and `checksum` were spilled — a store at the header and a reload per use
+block, every permutation — while the invariants `temp`, `count` and `limit`, with one, one and two
+hot uses, held r15, r13 and r12: 13 slot ops per permutation where 5 would do. The change gave
+`UseIndex` a per-value hot weight (`10^depth` per def and per use record, 0 off the hot path, in place
+of the `touchesHotLoop` boolean) and made tiers 2 and 4 one tournament ranked lightest first, then
+tier, then Belady. Two things the design did not survive: the weight is the VALUE's, so a depth-0
+confined peak no longer makes Belady's choice when a candidate has hot uses elsewhere; and beneath a
+FULL-pool overflow the cheapest victims at the call block left a call-free block of the same loop over
+the pool — a false E5001 on `SignatureIndex.foldFile` compiling the tree — so the fallback had to rank
+by breadth (next use) before weight there. The A/B (n=11, 5 runs interleaved, control rebuilt with
+itself): `main`'s loop 13 → 5 slot ops per permutation, census ops 2085 → 2076, mov 226 → 220, and the
+medians **2,327 → 2,327 ms**; the self-compile 37,383 → 36,887 ms (−1.3%, under the 2% bar). The
+slot moves sit off the loop's serial chain and behind two calls, and the out-of-order core hides them
+entirely — `EC14` again, one door over, and the per-instruction profile's 8% on those moves was skid
+from the call returns. The one thing the round landed is the miscompile its self-compile exposed
+(`sweepEstablishedRegisters`, below). The declined diff is described by `bench/fannkuch/README.md`
+row 13; a reload cheaper than memory (an idle callee-saved XMM as the slot) and, above it, an
+interprocedural clobber analysis or inlining the two callees are the rows that remove or shrink the
+cost this one only redistributed.
+
+
 **`A3` · `retainBorrowedPayload` — the rest of `EC2`.** ⛔ **DECLINED 2026-08-30, MEASURED. The
 acquire is load-bearing, the prize is under 1%, and the rule `EC2` used is a WRONG ANSWER here.** The row
 asked whether the `__mm_incref` around a managed payload bound out of a borrowed union in a `match` arm
