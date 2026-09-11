@@ -64,11 +64,11 @@ A candidate that names no shape is not a candidate.
   touches, one filter per file, on x64 and again with `--target=wasm32-wasi`. The full suite runs
   exactly once, in `/land`'s battery (§7 there), after the rebase; the self-compile is the E3092 gate
   and is not a spec run.
-- ⛔ **A filtered-green compiler is not a working compiler.** After EVERY rebuild the implementer
-  builds `examples/fannkuch-redux.maxon` into a scratch directory (`--emit-ir --log=ir:debug`) and
-  runs it at n=10 (73196 / 38, exit 38); a panic or a wrong answer there is a red gate, and the
-  function it died in becomes a spec case. Round 5 shipped a filtered-green compiler that could not
-  compile the example.
+- ⛔ **A filtered-green compiler is not a working compiler.** After EVERY rebuild the implementer runs
+  the examples corpus, `maxon test tests/examples`, which builds every program in `examples/` and
+  checks fannkuch-redux's n=10 answer (73196 / 38) among the others. A red case there is a red gate,
+  and the function it died in becomes a spec case. Round 5 shipped a filtered-green compiler that
+  could not compile the example.
 - Run §5 and §6 below between `/land`'s battery and its commit, so the round is ONE commit carrying
   the compiler change, its spec, the README row, the log rows and the roadmap row. A push rejected
   by a newer `origin/main` re-runs the battery only if the new commits touch `maxon-bin/`, `specs/`

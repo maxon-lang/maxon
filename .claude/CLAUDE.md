@@ -244,6 +244,9 @@ facts worth knowing before you get there:
   tests/fmt/generate-expectations.py` runs the compiler and records its real answers, so a corpus
   pins what the tool DOES rather than what its author expected. Re-run the generator after changing
   any input, and read the diff: a generated expectation cannot tell you an answer is wrong.
+  **`tests/examples/` is the one exception**: it checks the example programs against answers that
+  exist outside this compiler (the Benchmarks Game's published output, an example's documented
+  result), because there a generated expectation would only record whatever the compiler said.
 - ⛔ **NOTHING STORED THERE IS A LIVE `.maxon` OR A REAL `.git`** unless its corpus's row says so.
   Names are `<x>.fixture` and `dot-git/`, mapped back at staging time — git refuses to commit a path
   with a `.git` component, and a real `.maxon` under `tests/` is walked by `maxon fmt`, which is the

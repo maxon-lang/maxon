@@ -1,0 +1,189 @@
+// ExamplesHarness.maxon — the shared half every case under `tests/examples/` reaches for: building one
+// program from `examples/` with the compiler under test, and running what it built.
+//
+// ⭐ **EVERY EXPECTATION IS EXTERNAL**: a reference output someone else published, or the behaviour the
+// example's own source documents. An answer captured from this compiler would agree with whatever it does.
+//
+// ⛔ **THE EXAMPLES ARE BUILT WHERE THEY SIT, NEVER COPIED**, because the gate is about the files a reader
+// runs. Only the OUTPUT is staged, into a directory named for the example under `temp/examples/`: `maxon
+// test` runs files concurrently, and `-o` is what keeps a build out of the tree lock.
+//
+// ⛔ **EVERY FREE FUNCTION IN A DIRECTORY SHARES ONE NAMESPACE** (E3006), so a case file declares only what
+// that case alone uses.
+//
+// ⛔ **WHAT WOULD STOP A CASE RUNNING AT ALL PANICS**: a missing compiler or example, an unspellable path, a
+// spawn that never happened. A build that fails is asserted, because that is what this corpus gates.
+//
+// ⛔ **PATHS ARE RELATIVE TO THE CHECKOUT ROOT**, the working directory `maxon test` gives a test binary.
+// Everything handed to a child is made absolute first, because a relative path resolves against the child's
+// directory on POSIX and the parent's on Windows.
+
+// The compiler under test, relative to the checkout root and without its host suffix.
+let TestedCompilerStem = "maxon-bin/.maxon/maxon"
+
+let ExamplesDirName = "examples"
+let StagingRootDirName = "temp/examples"
+
+let BuildCommandName = "build"
+let OutputOption = "-o"
+
+let MaxonSourceSuffix = ".maxon"
+let PathSeparator = "/"
+let CarriageReturn = "\r"
+
+// What a built example exits with, as the runner reports it.
+typealias ExampleExitCode = int(i64.min to i64.max)
+
+// One run of a built example, stdout folded so a Windows console's line endings do not decide what it says.
+type ExampleRun
+	export let commandLine as String
+	export let exitCode as ExampleExitCode
+	export let stdout as String
+	export let stderr as String
+
+	static function create(commandLine String, exitCode ExampleExitCode, stdout String, stderr String) returns ExampleRun
+		return Self{commandLine: commandLine, exitCode: exitCode, stdout: stdout, stderr: stderr}
+	end 'create'
+end 'ExampleRun'
+
+// Build `examples/<example>` — a file or a project directory — with the compiler under test. The previous
+// run's files go first, so an executable a failed build left behind cannot answer for this one.
+export function requireExampleBuild(example String) throws TestFailure
+	let source = examplePath(example)
+	let staged = stagingDir(example)
+	clearStagedFiles(staged)
+
+	let output = builtExecutable(example)
+
+	var arguments = StringArray.create()
+	arguments.push(BuildCommandName)
+	arguments.push(source.toString())
+	arguments.push(OutputOption)
+	arguments.push(output.toString())
+
+	var config = Configuration.create(Executable.path(testedCompilerPath()))
+	config.arguments = arguments
+	config.workingDirectory = staged
+
+	let build = try config.run() otherwise (e) 'spawnFailed'
+		panic("examples tests: the gate could not run — could not spawn the compiler to build {source.toString()} ({e.displayReason()}).")
+	end 'spawnFailed'
+
+	let command = "{BuildCommandName} {exampleSpelling(example)}"
+	try Expect.equal(build.exitCode() as AssertedInt, expected: 0, message: "`{command}` exited {build.exitCode()}. The compiler said: {withoutCarriageReturns(build.stderr)}")
+	try Expect.isTrue(File.exists(output), message: "`{command}` exited 0 and wrote no executable to {output.toString()}.")
+end 'requireExampleBuild'
+
+// Run what `requireExampleBuild` produced, with `arguments` as its command line.
+export function runBuiltExample(example String, arguments StringArray = StringArray.create()) returns ExampleRun
+	let executable = builtExecutable(example)
+
+	var config = Configuration.create(Executable.path(executable))
+	config.arguments = arguments
+	config.workingDirectory = stagingDir(example)
+
+	let run = try config.run() otherwise (e) 'spawnFailed'
+		panic("examples tests: the gate could not run — could not spawn {executable.toString()} ({e.displayReason()}).")
+	end 'spawnFailed'
+
+	var commandLine = exampleSpelling(example)
+
+	for argument in arguments 'eachArgument'
+		commandLine.append(" {argument}")
+	end 'eachArgument'
+
+	return ExampleRun.create(commandLine, exitCode: run.exitCode() as ExampleExitCode, stdout: withoutCarriageReturns(run.stdout), stderr: withoutCarriageReturns(run.stderr))
+end 'runBuiltExample'
+
+// Build an example and run it once.
+export function runExample(example String, arguments StringArray = StringArray.create()) returns ExampleRun throws TestFailure
+	try requireExampleBuild(example)
+
+	return runBuiltExample(example, arguments: arguments)
+end 'runExample'
+
+// Hold a run to the answer a case cites.
+export function requireAnswer(run ExampleRun, stdout String, exitCode ExampleExitCode) throws TestFailure
+	try Expect.equal(run.stdout, expected: stdout, message: "`{run.commandLine}` did not print its known answer. It exited {run.exitCode} and wrote to stderr: {run.stderr}")
+	try Expect.equal(run.exitCode as AssertedInt, expected: exitCode as AssertedInt, message: "`{run.commandLine}` printed its known answer and exited {run.exitCode}. It wrote to stderr: {run.stderr}")
+end 'requireAnswer'
+
+// `examples/<example>`, which is also how every report names it.
+function exampleSpelling(example String) returns String
+	return "{ExamplesDirName}{PathSeparator}{example}"
+end 'exampleSpelling'
+
+// The example's source, absolute because it is handed to a child.
+function examplePath(example String) returns FilePath
+	let spelled = exampleSpelling(example)
+	let path = try FilePath.from(spelled) otherwise panic("examples tests: the gate could not run — '{spelled}' is not a spellable path")
+
+	if not File.exists(path) and not Directory.isDirectory(path) 'notThere'
+		panic("examples tests: the gate could not run — there is no example at '{spelled}'. Every path in this corpus is relative to the CHECKOUT ROOT; a run started anywhere else finds nothing, and a renamed example needs its case renamed with it.")
+	end 'notThere'
+
+	return path.resolve(Directory.currentPath())
+end 'examplePath'
+
+// An example's name without its source suffix, which names both its staging directory and its executable.
+function exampleStem(example String) returns String
+	return example.replace(MaxonSourceSuffix, with: "")
+end 'exampleStem'
+
+function builtExecutable(example String) returns FilePath
+	return stagingDir(example).join("{exampleStem(example)}{executableSuffix()}")
+end 'builtExecutable'
+
+// The example's own staging directory, created with its missing ancestors so a fresh checkout without
+// `temp/` is not a failure.
+function stagingDir(example String) returns FilePath
+	let spelled = "{StagingRootDirName}{PathSeparator}{exampleStem(example)}"
+	let path = try FilePath.from(spelled) otherwise panic("examples tests: the gate could not run — '{spelled}' is not a spellable path")
+
+	if not Directory.create(path) 'couldNotCreate'
+		panic("examples tests: the gate could not run — could not create '{spelled}', which is where this example is built.")
+	end 'couldNotCreate'
+
+	return path.resolve(Directory.currentPath())
+end 'stagingDir'
+
+function testedCompilerPath() returns FilePath
+	let spelled = "{TestedCompilerStem}{executableSuffix()}"
+	let relative = try FilePath.from(spelled) otherwise panic("examples tests: the gate could not run — '{spelled}' is not a spellable path")
+	let binary = relative.resolve(Directory.currentPath())
+
+	if not File.exists(binary) 'noBinary'
+		panic("examples tests: the gate could not run — there is no compiler at {binary.toString()}. This corpus's paths are relative to the CHECKOUT ROOT; run it from there, and build `{TestedCompilerStem}` first.")
+	end 'noBinary'
+
+	return binary
+end 'testedCompilerPath'
+
+function executableSuffix() returns String
+	#if os(Windows)
+		let suffix = ".exe"
+	#else
+		let suffix = ""
+	#endif
+
+	return suffix
+end 'executableSuffix'
+
+// Delete every file under a staging directory, leaving the directories: the standard library cannot remove
+// a directory.
+function clearStagedFiles(dir FilePath)
+	let entries = try Directory.list(dir) otherwise panic("examples tests: the gate could not run — could not list {dir.toString()}")
+
+	for entry in entries 'eachEntry'
+		if Directory.isDirectory(entry) 'aDirectory'
+			clearStagedFiles(entry)
+			continue
+		end 'aDirectory'
+
+		try File.delete(entry) otherwise panic("examples tests: the gate could not run — could not clear {entry.toString()} from a previous run's staging.")
+	end 'eachEntry'
+end 'clearStagedFiles'
+
+function withoutCarriageReturns(raw String) returns String
+	return raw.replace(CarriageReturn, with: "")
+end 'withoutCarriageReturns'

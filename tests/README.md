@@ -6,7 +6,7 @@ reach `stdlib/` and nothing else. **A DRIVER COMMAND is not that** (user ruling,
 a fixture project and asserting what it reports. This directory is where those
 fixtures live.
 
-Fifteen corpora live here, one directory each, every path into one spelled from the CHECKOUT
+Sixteen corpora live here, one directory each, every path into one spelled from the CHECKOUT
 ROOT — the working directory every driver inherits, and the contract
 `SpecTestRunner.maxon:1649` states, along with why it is deliberately not `specDir.parent()`.
 
@@ -33,6 +33,7 @@ SERVER its tests spawn.
 | `profile/` | `maxon test`, under the compiler | `TestedCompilerStem` in `ProfileHarness.maxon` — the binary it spawns: the compiler under test, which is also the PROFILER under test and what every fixture here is built with |
 | `run/` | `maxon test`, under the compiler | `TestedCompilerStem` in `RunHarness.maxon` — the binary it spawns: the compiler under test, which is also the `run` DRIVER under test and what every cached build is made by |
 | `console-write/` | `maxon test`, under the compiler | `TestedCompilerStem` in `console-write-imports.test.maxon` — the binary it spawns: the compiler under test, which is also what EMITS the image the case reads |
+| `examples/` | `maxon test`, under the compiler | `TestedCompilerStem` in `ExamplesHarness.maxon` — the binary it spawns: the compiler under test, which builds every program in the checkout's `examples/` (reached through `ExamplesDirName`) |
 
 ⚠ **`ladders/` is cited from outside the code that reads it.** Roughly twenty
 measurement-provenance comments across the compiler and
@@ -41,7 +42,7 @@ names the former path in every row minted before 2026-09-02 — a dated record, 
 rows stay as written.
 
 ⚠ **The six rules below are the `fmt/` corpus's**, and each is written against the
-command `fmt` is. They are not automatically true of the other fourteen: `test-fixtures/`
+command `fmt` is. They are not automatically true of the other fifteen: `test-fixtures/`
 deliberately stores LIVE `*.test.maxon` sources, because the command under test compiles
 them, and `lsp/` stores a live `LspClient.maxon` the tests import.
 
@@ -72,6 +73,14 @@ tests/
     parallel.test.maxon          the shared half: the spawn, the staging, the counts
     <contract>.test.maxon        ONE contract per file - see its README section
     fixtures/<program>/main.maxon.fixture   stored name only - see rule 1
+  define/
+    DefineHarness.maxon                     the shared half: the spawn, the tree staging, the built program's run
+    override.test.maxon                     a define replaces the default, and without one the default stands
+    value-with-separator.test.maxon         a value may contain `=`; the split is at the first one
+    unknown-name-refused.test.maxon         a define naming nothing is an error
+    non-literal-refused.test.maxon          only a written-out string literal may be replaced
+    ambiguous-name-refused.test.maxon       one name reaching two declarations is refused, naming both
+    fixtures/<program>/...                  stored names only - see rule 1
   debug/
     DebugHarness.maxon                      the shared half: the spawn, the staging, the folds
     sidecar-dump.test.maxon                 the sidecar says something TRUE about the binary beside it
@@ -116,6 +125,7 @@ tests/
     compile-error.test.maxon                refused, nothing run, and no build left in the slot
     cache-hit.test.maxon                    an unchanged program is not compiled a second time
     cache-miss-edit.test.maxon              an edited one is, and the new answer runs
+    concurrent.test.maxon                   simultaneous cold runs of one program each behave like the only one
     directory.test.maxon                    a directory is compiled as ONE project
     wordless.test.maxon                     a `.maxon` first argument IS `run` - the shebang door
     missing-path.test.maxon                 a path naming nothing is refused at both doors
@@ -123,6 +133,14 @@ tests/
   console-write/
     console-write-imports.test.maxon        which console API an emitted x64-windows image imports
     fixtures/hello/main.maxon.fixture       stored name only - see rule 1
+  examples/
+    ExamplesHarness.maxon                   the shared half: build one example into temp/examples/<name>/, run it, check its answer
+    basic.test.maxon                        exits 42, the value its `main` returns
+    hello.test.maxon                        prints `Hello, world!` and exits 0
+    fannkuch-redux.test.maxon               the published n=7 answer and the documented n=10 one, flip count as exit code
+    multifile.test.maxon                    the directory builds as one project and exits 5
+    nbody.test.maxon                        builds - see the section below for why it is not run
+    spectral-norm.test.maxon                builds - see the section below for why it is not run
 ```
 
 ## The six rules, and the hazard each one answers
@@ -148,11 +166,12 @@ Two independent reasons, and the second is the one that bites:
 ⚠ **This rule is `fmt/`'s, and the live `.maxon` under `tests/` are no longer only the
 drivers.** `lsp/LspClient.maxon` is an ordinary source — a 1,200-line JSON-RPC client the
 `lsp/` tests import — and `debug/DebugHarness.maxon`, `coverage/CoverageHarness.maxon`,
-`profile/ProfileHarness.maxon` and `run/RunHarness.maxon` are each their corpus's shared half, named so
-the runner does not take them for test files. That is fine and is not an exception being smuggled
-in: the hazard above is `fmt` rewriting an ORACLE, and none of these corpora keeps one on disk —
-`lsp/`'s are `b"…"` byte literals inside its test files, and the other four assert properties. A
-helper that `fmt` reformats stays a correct helper.
+`profile/ProfileHarness.maxon`, `run/RunHarness.maxon`, `cli/CliHarness.maxon`,
+`define/DefineHarness.maxon` and `examples/ExamplesHarness.maxon` are each their corpus's shared half,
+named so the runner does not take them for test files. That is fine and is not an exception being
+smuggled in: the hazard above is `fmt` rewriting an ORACLE, and none of these corpora keeps one on disk —
+`lsp/`'s are `b"…"` byte literals inside its test files, `examples/`'s are string constants inside its
+case files, and the rest assert properties. A helper that `fmt` reformats stays a correct helper.
 ⇒ The rule to carry forward is **"nothing `fmt` rewrites may be a stored expectation"**,
 not "no live `.maxon`". `fmt/` states it the strong way because every one of ITS fixtures
 is a stored expectation.
@@ -457,3 +476,26 @@ works in both directions: a name that IS imported is found, and one that is not 
 
 It applies rule 1's `.fixture` half only (no `dot-` names) and rule 4 (the child runs in a staging
 directory under `temp/console-write/`), and it keeps rule 5: one spawning `test`, one file, one compile.
+
+## `examples/` — every program in `examples/` still builds, and still computes its known answer
+
+One case per example: build it with the compiler under test and, where its answer is known, run it and
+compare. The shared half — the compiler stem, the build, the run and the answer check — lives in
+`ExamplesHarness.maxon`; see the note under `debug/`.
+
+⭐⭐ **THESE EXPECTATIONS ARE HAND-WRITTEN, AND THAT INVERTS RULE 6 ON PURPOSE.** An answer generated by
+running this compiler would agree with whatever the compiler does; the point here is an answer that
+does not come from it. Every expected value is EXTERNAL — the Benchmarks Game's published reference
+output, or the behaviour the example's own source documents — and each case cites its source in a
+comment beside the value.
+
+⚠ **`nbody` AND `spectral-norm` ARE BUILT, NOT RUN.** Neither takes an argument: each always runs its
+benchmark's full size (50,000,000 steps; n=5500), which does not fit a file's 5,000 ms deadline, and
+neither prints in the published reference format (nbody prints its energies' shortest round-trip
+spelling rather than 9 fixed decimals; spectral-norm prints nothing and answers through its exit code).
+Running them against a published answer needs the example to take a size and print that format.
+
+⛔ **THE EXAMPLES ARE BUILT WHERE THEY SIT, NEVER COPIED** — the gate is about the files a reader runs.
+Only the output is staged, into `temp/examples/<example>/`; `maxon test` runs files concurrently, and
+`-o` keeps each build out of the tree lock. It keeps rule 5: one `test` per file, and no case compiles
+more than once. It runs at the default deadline.
