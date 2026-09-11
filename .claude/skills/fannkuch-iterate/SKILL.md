@@ -9,15 +9,17 @@ description: One round of the fannkuch-redux Maxon-vs-C loop — build the tree'
 `scripts/bench-fannkuch.py`; the ranking is `bench/fannkuch/README.md`; the history is
 `docs/fannkuch-benchmark-log.md`. Read the README's traps before the first round.
 
-> ## ⛔ THIS WORK LIVES ON THE LOCAL BRANCH `fannkuch-loop` AND IS NEVER PUSHED
+> ## ⭐ ONE ROUND IS ONE SESSION, ON `main`, LANDED BY `/land`'s OWN TAIL
 >
-> Refuse to run on `main`. Every commit goes on `fannkuch-loop`; there is no rebase and no
-> `git push` — the branch is merged to `main` by the user when the loop is finished. `/land`'s
-> git tail is replaced by exactly one commit on this branch.
+> Rounds 1–6 were built on a local branch and merged on 2026-09-10; from round 7 the loop runs on
+> `main` like any other change: `/land`'s rebase on `origin/main`, its battery ONCE, one commit, one
+> push. Start each round in a fresh session — a round's context is the README ranking, the log and
+> this file, not the previous session's transcript.
 
 ## 1. Orient
 
-- `git branch --show-current` is `fannkuch-loop`; `git status` is clean. `PRE=$(git rev-parse --short HEAD)`.
+- `git branch --show-current` is `main`; `git status` is clean; `git fetch` shows nothing behind
+  `origin/main`. `PRE=$(git rev-parse --short HEAD)`.
 - Build the compiler from the tree: `./maxon-bin/.maxon/maxon.exe build maxon-bin` (from
   `.bootstrap/maxon.exe build maxon-bin` if the slot is empty). One self-compile is enough for the
   PROGRAMS it emits; the two-build rule applies only when the compiler itself is the program under
@@ -55,16 +57,24 @@ A candidate that names no shape is not a candidate.
   are reference, not a gate: review the minted diff under `--update-required` with a filter, line by
   line, and keep every moved fragment.
 - Every target the change touches gets the equivalent change (x64, arm64, wasm) or a stated reason.
-- ⛔ **Never run the entire spec suite** (user ruling). Every spec run — yours, an implementer's, a
-  reviewer's, and `/land`'s battery — is `spec-test --filter=<spec>` over the spec files the change
-  touches, one filter per file, on x64 and again with `--target=wasm32-wasi`. The self-compile stays
-  (it is the E3092 gate, not a spec run).
+- ⛔ **During the round, never run the entire spec suite** (user ruling). Every spec run — yours, an
+  implementer's, a reviewer's — is `spec-test --filter=<spec>` over the spec files the change
+  touches, one filter per file, on x64 and again with `--target=wasm32-wasi`. The full suite runs
+  exactly once, in `/land`'s battery (§7 there), after the rebase; the self-compile is the E3092 gate
+  and is not a spec run.
 - ⛔ **A filtered-green compiler is not a working compiler.** After EVERY rebuild the implementer
   builds `examples/fannkuch-redux.maxon` into a scratch directory (`--emit-ir --log=ir:debug`) and
   runs it at n=10 (73196 / 38, exit 38); a panic or a wrong answer there is a red gate, and the
   function it died in becomes a spec case. Round 5 shipped a filtered-green compiler that could not
   compile the example.
-- The git tail is one commit on `fannkuch-loop`. No rebase. No push.
+- ⛔ **A sabotaged compiler must never build the revert.** After a sabotage measurement, rebuild from
+  `.bootstrap/maxon.exe` (`build maxon-bin -o maxon-bin/.maxon/maxon`), then self-compile, then the
+  example gate. Round 5 let a sabotaged compiler build the reverted source and got a spec-green
+  compiler that panicked in its own CSE.
+- Run §5 and §6 below between `/land`'s battery and its commit, so the round is ONE commit carrying
+  the compiler change, its spec, the README row, the log rows and the roadmap row. A push rejected
+  by a newer `origin/main` re-runs the battery only if the new commits touch `maxon-bin/`, `specs/`
+  or `stdlib/` (`/land`'s rule: never repeat a run whose inputs have not changed).
 
 ## 5. A/B
 
@@ -99,7 +109,7 @@ python scripts/bench-fannkuch.py --n 12 --runs 1 --warmup 0 --ref $PRE --note "<
 - `bench/fannkuch/README.md`: mark the candidate closed with its measured delta (or DECLINED with the
   measurement), and re-rank the rest from the NEW profile.
 - `docs/emitted-code-roadmap.md`: a row in the workstream's format when the change is a codegen change.
-- Commit README + log + roadmap on `fannkuch-loop`.
+- README + log + roadmap go into the round's one commit (§4), which `/land` pushes.
 
 ## 8. Stop condition
 
@@ -117,3 +127,6 @@ The final row's note begins `HEADLINE`.
 - **Never touch the instrument to make a number look better.** Write no row you did not measure.
 - **A change under `Compiler/Runtime/` shows in the programs the compiler builds after ONE build**, and
   in the compiler's own behaviour only after two.
+- **Goldens drift for reasons that are not yours.** The full battery reports thousands of drifted
+  fragments (main's console-probe data block); drift is committed as it lies and is not a gate. Read
+  only the drift in the specs the round touches, under `--update-required` with a filter.
