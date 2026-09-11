@@ -19,7 +19,13 @@ saying why the two cannot be one).
 CLAUDE.md is explicit that you do not care whether an issue predates the change.
 
 **Do not chase green.** Your job is **QUALITY and LATENT BUGS**, not re-running the suite — iterate on
-`--filter` while you probe.
+`--filter` while you work.
+
+> ### ⛔ NO MANUAL TESTS (user directive)
+> **No sabotage** — no editing code, a test, a fixture or a file to watch a check fail — **and no
+> hand-run probes, scratch programs or one-off scripts** to confirm a finding. A check worth running is
+> worth keeping: write it as a case (in `specs/`, or a driver command's `tests/` corpus) and run that.
+> A check not worth a case is not run; report the finding from reading, and say that it is.
 
 ## First: who is running you
 

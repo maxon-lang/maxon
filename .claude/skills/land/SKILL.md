@@ -158,7 +158,7 @@ feeding a gate that is going to run anyway beats a run nobody can attribute.
 > - **A red you did not cause is re-run by FILTER** — the failing cases alone — never by re-running the
 >   whole suite.
 
-### Every brief carries these six things
+### Every brief carries these eight things
 
 1. **The change in one line**, and **the cases that must go green** — the acceptance, not a topic.
 2. **"This is a `/land` change"**: main checkout, no worktree, no branch, **one commit at the end, which
@@ -170,7 +170,9 @@ feeding a gate that is going to run anyway beats a run nobody can attribute.
    prevent.
 5. **Its STOP RULE**: stop when your filter is green; the full suite is the coordinator's.
 6. **The gate table above**, in one line: which runs are yours, which are not.
-7. **"Write every build and run to a file under `temp/`, and report each one's path and exit code"** —
+7. **"No manual tests"** — no sabotage, no hand-run probe or scratch program to confirm anything. A
+   check worth running goes into the set as a case; anything else is not run (the box below).
+8. **"Write every build and run to a file under `temp/`, and report each one's path and exit code"** —
    including your LAST build, and whether you edited a compiled-in source after it. That report is what
    lets the coordinator read your work instead of repeating it.
 
@@ -179,6 +181,16 @@ prove each parses", "confirm no other spec regressed", "check nothing was left d
 battery and §1's count check already do all three, better, one step later. ⚠ **A specific instruction in
 your brief OUTRANKS the agent's own stop rule**: you cannot brief thoroughness in without briefing the
 stop out.
+
+> ### ⛔ NO MANUAL TESTS. A CHECK WORTH RUNNING IS A CASE; ONE THAT IS NOT IS NOT RUN (user directive)
+> Verification lives in cases and nowhere else — a case in `specs/`, or for a driver command its
+> `tests/` corpus. **No agent sabotages code, a test, a fixture or a file to watch a check fail, and
+> nobody verifies by a hand-run probe, a scratch program or a one-off script.** A check worth running
+> is worth keeping: write it as a case, in the set, where the battery and the wasm lane run it every
+> time and a reader can see it. A check not worth a case is not worth running at all.
+> - **§1's red IS the sabotage every case needs**: it watched the case fail before the fix existed.
+> - **Diagnosis is not verification.** Running a reproduction to find a cause is part of §2; the
+>   moment it shows a wrong answer, it becomes a case in the set — never evidence in a report.
 
 ### Verify the claims, do not re-derive the work
 
@@ -223,7 +235,8 @@ large, that is the set telling you the size of the work, and the answer is §2, 
 
 ### The scout finds the material; YOU pick the set; an author writes it
 
-**Send a read-only survey agent first** (`Explore`, or `general-purpose` when it needs to run a probe).
+**Send a read-only survey agent first** (`Explore`). It reads; it does not run probes — what the
+compiler does today is what §1's red run of the chosen cases shows.
 Ask it for **FACTS, not a recommendation**: which `specs` files own this behaviour, every existing
 case that touches it with file + line, every `disabled-test:` in range, whether `/specs` pins it and the
 **verbatim text** of the case that does, and what the neighbouring cases in that file look like.
@@ -281,7 +294,7 @@ run_spec_test filter=<pattern>
 
 ## 2. Write the code — a `general-purpose` implementer agent
 
-**Hand the implementation to a `general-purpose` agent.** The brief is §1's red set, the six things
+**Hand the implementation to a `general-purpose` agent.** The brief is §1's red set, the eight things
 every brief carries, and above all **the diagnosis you already did while reading the red** — that is
 the most valuable thing in it.
 
@@ -326,9 +339,9 @@ missing or something changed after it.
 - ⛔ **Never turn a case green by narrowing what it tests** — not the spec text, not the filter, not a
   marker. A green suite that tests nothing is the most expensive lie a test runner can tell.
 - **A defect ANYONE finds on the way is FIXED, not filed** — a wrong answer as much as a leak, whether or
-  not the suite is green over it. **And the probe that found it becomes a case in the set.** "I verified
-  it by hand" is discovery, never evidence: it is unrepeatable, unreviewable, and invisible to the wasm
-  lane a spec case reaches for free.
+  not the suite is green over it. **And the reproduction that found it becomes a case in the set.** A
+  hand-run check is never evidence — it is unrepeatable, unreviewable, and invisible to the wasm lane a
+  spec case reaches for free — so none is run to verify anything (the NO MANUAL TESTS box).
 - **When the set is green, re-run §1's count check yourself**, then stop editing for correctness. An
   agent reporting "all green" and a filtered run you read are not the same evidence.
 
@@ -373,7 +386,9 @@ situation:
   here.
 - ⛔ **Do NOT ask it to run the full suite, prove coverage, or establish correctness.** Your battery runs
   minutes later on the identical tree, and the suite is a far better false-reject detector than anything
-  it can probe by hand. Its `--filter`ed runs are its own. ⚠ A specific instruction in your brief
+  it can probe by hand — and it runs no sabotage and no hand probes at all: a finding that needs a run
+  to show it is a case it adds to the set, or a reading-only finding in its report. Its `--filter`ed
+  runs are its own. ⚠ A specific instruction in your brief
   OUTRANKS its standing stop rule — you cannot brief thoroughness in without briefing the stop out.
 - **The bounds questions are YOURS**, and take seconds off `git status --short` and `git diff --stat`:
   did anything land outside this change? Is the diff as small as the fix warranted? **Did any spec
