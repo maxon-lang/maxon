@@ -29,6 +29,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @pick {
@@ -37,7 +40,18 @@ func @pick {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.cmpRegImm32 rdx, 0
-    x64.jcc greaterEqual, __rc_ok
+    x64.jcc less, __rc_panic
+  __rc_ok:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegReg rdx, rax
+    x64.jcc aboveEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseIndexScale.word64 r8, [rax + rdx*8 + 0]
+  tryok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-known-flag-skips-the-test.test:6: Range check failed: value outside typealias 'Idx'\x0a"
     x64.callDirect mrt_panic
@@ -45,10 +59,6 @@ func @pick {
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
-    x64.cmpRegReg rdx, rax
-    x64.jcc below, __im_load
   __im_slow:
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
@@ -57,13 +67,6 @@ func @pick {
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-known-flag-skips-the-test.test:7: pick: index out of range\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __im_load:
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.loadRegBaseIndexScale.word64 r8, [rax + rdx*8 + 0]
-  tryok:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -82,22 +85,20 @@ func @main {
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 r12, 0
-  forhdr#1:
-    x64.cmpRegImm32 r12, 6
-    x64.jcc greaterEqual, forexit#4
+    x64.jmp forhdr#1
   seed:
     x64.imulRegRegImm32 rdx, r12, 2
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
   forstep#3:
     x64.leaRegRegImm32 r12, r12, 1
-    x64.jmp forhdr#1
+  forhdr#1:
+    x64.cmpRegImm32 r12, 6
+    x64.jcc less, seed
   forexit#4:
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
-  forhdr#5:
-    x64.cmpRegImm32 r13, 6
-    x64.jcc greaterEqual, forexit#8
+    x64.jmp forhdr#5
   sum:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
@@ -105,7 +106,9 @@ func @main {
     x64.leaRegRegReg r12, r12, r8
   forstep#7:
     x64.leaRegRegImm32 r13, r13, 1
-    x64.jmp forhdr#5
+  forhdr#5:
+    x64.cmpRegImm32 r13, 6
+    x64.jcc less, sum
   forexit#8:
     x64.cmpRegImm32 r12, 30
     x64.jcc equal, ifcont

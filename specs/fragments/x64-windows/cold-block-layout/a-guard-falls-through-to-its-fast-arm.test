@@ -58,15 +58,7 @@ func @copyTail {
     x64.loadRegBaseDisp.word64 r10, [r10 + 16]
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, forhdr#1
-  __us_test#41:
-    x64.loadRegBaseDisp.word64 r10, [rcx + 0]
-    x64.loadRegBaseDisp.word64 r11, [rdx + 40]
-    x64.movRegImm32 rbx, 0
-    x64.cmpRegReg r11, rbx
-    x64.jcc equal, forhdr#22
-  forhdr#1:
-    x64.cmpRegReg rsi, rax
-    x64.jcc greaterEqual, forexit
+    x64.jmp __us_test#41
   __rc_ok#9:
     x64.loadRegBaseDisp.word64 rdi, [rcx + 8]
     x64.cmpRegReg rsi, rdi
@@ -96,10 +88,13 @@ func @copyTail {
     x64.storeBaseIndexScaleReg.word64 [rdi + rsi*8 + 0], r8
   forstep#3:
     x64.leaRegRegImm32 rsi, rsi, 1
-    x64.jmp forhdr#1
-  forhdr#22:
+  forhdr#1:
     x64.cmpRegReg rsi, rax
-    x64.jcc greaterEqual, forexit
+    x64.jcc less, __rc_ok#9
+    x64.jmp forexit
+  __us_test#41:
+    x64.loadRegBaseDisp.word64 r10, [rcx + 0]
+    x64.jmp forhdr#22
   __rc_ok#36:
     x64.cmpRegReg rsi, rdi
     x64.jcc aboveEqual, __im_slow#34
@@ -112,7 +107,9 @@ func @copyTail {
     x64.storeBaseIndexScaleReg.word64 [r9 + rsi*8 + 0], r11
   forstep#23:
     x64.leaRegRegImm32 rsi, rsi, 1
-    x64.jmp forhdr#22
+  forhdr#22:
+    x64.cmpRegReg rsi, rax
+    x64.jcc less, __rc_ok#36
   forexit:
     x64.epilogue 104
     x64.popReg rbx
@@ -229,9 +226,7 @@ func @main {
     x64.callDirect __managed_create
     x64.movRegReg r12, r8
     x64.movRegImm32 r13, 0
-  forhdr#1:
-    x64.cmpRegImm32 r13, 6
-    x64.jcc greaterEqual, forexit#4
+    x64.jmp forhdr#1
   seed:
     x64.imulRegRegImm32 rdx, r13, 3
     x64.movRegReg rcx, rbx
@@ -241,7 +236,9 @@ func @main {
     x64.callDirect __managed_push
   forstep#3:
     x64.leaRegRegImm32 r13, r13, 1
-    x64.jmp forhdr#1
+  forhdr#1:
+    x64.cmpRegImm32 r13, 6
+    x64.jcc less, seed
   forexit#4:
     x64.movRegImm32 rax, 6
     x64.movRegReg rcx, rbx
@@ -251,16 +248,16 @@ func @main {
     x64.movRegImm32 rax, 0
     x64.loadRegBaseDisp.word64 rcx, [r12 + 8]
     x64.loadRegBaseDisp.word64 rdx, [r12 + 0]
-  forhdr#5:
-    x64.cmpRegReg rax, rcx
-    x64.jcc greaterEqual, forexit#8
+    x64.jmp forhdr#5
   sum:
     x64.loadRegBaseIndexScale.word64 rsi, [rdx + rax*8 + 0]
   __im_cont:
     x64.leaRegRegReg r13, r13, rsi
   forstep#7:
     x64.leaRegRegImm32 rax, rax, 1
-    x64.jmp forhdr#5
+  forhdr#5:
+    x64.cmpRegReg rax, rcx
+    x64.jcc less, sum
   forexit#8:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref

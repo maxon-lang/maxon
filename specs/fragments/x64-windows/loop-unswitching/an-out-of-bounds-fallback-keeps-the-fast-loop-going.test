@@ -36,6 +36,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @walk {
@@ -59,31 +62,12 @@ func @walk {
     x64.loadRegBaseDisp.word64 r9, [r9 + 16]
     x64.cmpRegImm32 r9, 0
     x64.jcc notEqual, forhdr#1
-  __us_test#47:
-    x64.loadRegBaseDisp.word64 r9, [rcx + 40]
-    x64.movRegImm32 r10, 0
-    x64.cmpRegReg r9, r10
-    x64.jcc equal, forhdr#24
-  forhdr#1:
-    x64.cmpRegReg rsi, rdx
-    x64.jcc greaterEqual, critsplit#49
+    x64.jmp forhdr#24
   __rc_ok#11:
     x64.loadRegBaseDisp.word64 rdi, [rcx + 8]
     x64.cmpRegReg rsi, rdi
-    x64.jcc below, __im_load#17
-  __im_slow#16:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rcx
-    x64.storeSlotReg slot2, rdx
-    x64.storeSlotReg slot3, rsi
-    x64.movRegReg rdx, rsi
-    x64.callDirect __managed_get
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rcx, slot1
-    x64.loadRegSlot rdx, slot2
-    x64.loadRegSlot rsi, slot3
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
+    x64.jcc aboveEqual, __im_slow#16
+    x64.jmp __im_load#17
   tryerr#6:
     x64.movRegImm32 rdi, 99
     x64.jmp trycont#7
@@ -112,7 +96,59 @@ func @walk {
     x64.leaRegRegImm32 r9, r8, -24
     x64.loadRegBaseDisp.word64 r9, [r9 + 16]
     x64.cmpRegImm32 r9, 0
-    x64.jcc equal, __im_store#23
+    x64.jcc notEqual, __im_slow#19
+  __im_store#23:
+    x64.storeBaseIndexScaleReg.word64 [r8 + rsi*8 + 0], rdi
+  forstep#3:
+    x64.leaRegRegImm32 rsi, rsi, 1
+  forhdr#1:
+    x64.cmpRegReg rsi, rdx
+    x64.jcc less, __rc_ok#11
+  critsplit#48:
+    x64.movRegReg r8, rax
+    x64.jmp forexit
+  __rc_ok#38:
+    x64.cmpRegReg rsi, rdi
+    x64.jcc aboveEqual, __im_slow#37
+    x64.jmp __im_load#41
+  tryerr#36:
+    x64.movRegImm32 r9, 99
+    x64.jmp trycont#34
+  __im_load#41:
+    x64.loadRegBaseIndexScale.word64 r9, [r8 + rsi*8 + 0]
+  trycont#34:
+    x64.leaRegRegReg rax, rax, r9
+    x64.imulRegRegImm32 r9, rsi, 2
+  __im_bounds#31:
+    x64.cmpRegReg rsi, rdi
+    x64.jcc aboveEqual, __im_slow#29
+  __im_store#43:
+    x64.storeBaseIndexScaleReg.word64 [r8 + rsi*8 + 0], r9
+  forstep#25:
+    x64.leaRegRegImm32 rsi, rsi, 1
+  forhdr#24:
+    x64.cmpRegReg rsi, rdx
+    x64.jcc less, __rc_ok#38
+  critsplit#51:
+    x64.movRegReg r8, rax
+  forexit:
+    x64.epilogue 80
+    x64.popReg rbp
+    x64.ret
+  __im_slow#16:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.storeSlotReg slot3, rsi
+    x64.movRegReg rdx, rsi
+    x64.callDirect __managed_get
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
+    x64.loadRegSlot rsi, slot3
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#6
+    x64.jmp tryok
   __im_slow#19:
     x64.storeSlotReg slot0, rax
     x64.storeSlotReg slot1, rcx
@@ -128,20 +164,6 @@ func @walk {
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, forstep#3
     x64.jmp forstep#3
-  __im_store#23:
-    x64.storeBaseIndexScaleReg.word64 [r8 + rsi*8 + 0], rdi
-  forstep#3:
-    x64.leaRegRegImm32 rsi, rsi, 1
-    x64.jmp forhdr#1
-  critsplit#49:
-    x64.movRegReg r8, rax
-    x64.jmp forexit
-  forhdr#24:
-    x64.cmpRegReg rsi, rdx
-    x64.jcc greaterEqual, critsplit#52
-  __rc_ok#38:
-    x64.cmpRegReg rsi, rdi
-    x64.jcc below, __im_load#41
   __im_slow#37:
     x64.storeSlotReg slot0, rax
     x64.storeSlotReg slot1, rcx
@@ -159,18 +181,8 @@ func @walk {
     x64.loadRegSlot rdi, slot4
     x64.loadRegSlot r8, slot5
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, trycont#34
-  tryerr#36:
-    x64.movRegImm32 r9, 99
+    x64.jcc notEqual, tryerr#36
     x64.jmp trycont#34
-  __im_load#41:
-    x64.loadRegBaseIndexScale.word64 r9, [r8 + rsi*8 + 0]
-  trycont#34:
-    x64.leaRegRegReg rax, rax, r9
-    x64.imulRegRegImm32 r9, rsi, 2
-  __im_bounds#31:
-    x64.cmpRegReg rsi, rdi
-    x64.jcc below, __im_store#43
   __im_slow#29:
     x64.storeSlotReg slot0, rax
     x64.storeSlotReg slot1, rcx
@@ -191,17 +203,6 @@ func @walk {
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, forstep#25
     x64.jmp forstep#25
-  __im_store#43:
-    x64.storeBaseIndexScaleReg.word64 [r8 + rsi*8 + 0], r9
-  forstep#25:
-    x64.leaRegRegImm32 rsi, rsi, 1
-    x64.jmp forhdr#24
-  critsplit#52:
-    x64.movRegReg r8, rax
-  forexit:
-    x64.epilogue 80
-    x64.popReg rbp
-    x64.ret
 }
 
 func @main {
@@ -216,16 +217,16 @@ func @main {
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 r12, 0
-  forhdr#1:
-    x64.cmpRegImm32 r12, 5
-    x64.jcc greaterEqual, forexit#4
+    x64.jmp forhdr#1
   seed:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.callDirect __managed_push
   forstep#3:
     x64.leaRegRegImm32 r12, r12, 1
-    x64.jmp forhdr#1
+  forhdr#1:
+    x64.cmpRegImm32 r12, 5
+    x64.jcc less, seed
   forexit#4:
     x64.movRegImm32 rdx, 9
     x64.movRegReg rcx, rbx
@@ -247,16 +248,16 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.loadRegBaseDisp.word64 rdx, [rbx + 8]
     x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
-  forhdr#7:
-    x64.cmpRegReg rcx, rdx
-    x64.jcc greaterEqual, forexit#10
+    x64.jmp forhdr#7
   check:
     x64.loadRegBaseIndexScale.word64 rdi, [rsi + rcx*8 + 0]
   __im_cont:
     x64.leaRegRegReg rax, rax, rdi
   forstep#9:
     x64.leaRegRegImm32 rcx, rcx, 1
-    x64.jmp forhdr#7
+  forhdr#7:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc less, check
   forexit#10:
     x64.cmpRegImm32 rax, 20
     x64.jcc equal, ifcont#12

@@ -30,6 +30,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @nextSum {
@@ -42,14 +45,27 @@ func @nextSum {
     x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
   __us_test:
     x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
-  forhdr:
-    x64.cmpRegReg rax, rdx
-    x64.jcc greaterEqual, forexit
+    x64.jmp forhdr
   each:
     x64.leaRegRegImm32 rax, rax, 1
   __rc_ok:
     x64.cmpRegReg rax, rdx
-    x64.jcc below, __im_load
+    x64.jcc aboveEqual, __im_slow
+    x64.jmp __im_load
+  tryerr:
+    x64.movRegImm32 rdi, 1000
+    x64.jmp trycont
+  __im_load:
+    x64.loadRegBaseIndexScale.word64 rdi, [rsi + rax*8 + 0]
+  trycont:
+    x64.leaRegRegReg r8, r8, rdi
+  forhdr:
+    x64.cmpRegReg rax, rdx
+    x64.jcc less, each
+  forexit:
+    x64.epilogue 80
+    x64.popReg rbp
+    x64.ret
   __im_slow:
     x64.storeSlotReg slot0, rax
     x64.storeSlotReg slot1, rcx
@@ -65,19 +81,8 @@ func @nextSum {
     x64.loadRegSlot rsi, slot3
     x64.loadRegSlot r8, slot4
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, trycont
-  tryerr:
-    x64.movRegImm32 rdi, 1000
+    x64.jcc notEqual, tryerr
     x64.jmp trycont
-  __im_load:
-    x64.loadRegBaseIndexScale.word64 rdi, [rsi + rax*8 + 0]
-  trycont:
-    x64.leaRegRegReg r8, r8, rdi
-    x64.jmp forhdr
-  forexit:
-    x64.epilogue 80
-    x64.popReg rbp
-    x64.ret
 }
 
 func @main {

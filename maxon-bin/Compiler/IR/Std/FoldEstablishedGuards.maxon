@@ -1,0 +1,810 @@
+// FoldEstablishedGuards — a Std→Std pass that folds a guard `InlineManagedPrimitives` asks before an
+// element access when an earlier guard chain, or an earlier accessor's success, has already proved its
+// predicate for that record and nothing between the two can have changed the answer.
+//
+// THE FACTS, per record value: the four SHAPE predicates a store asks — the buffer is this record's
+// (`capacity@16 >= 0`), it exists (`buffer@0 != 0`), nobody views it (its refcount word is 0), the
+// element owes no destructor (`element_destroy@40 == 0`) — and a LENGTH FLOOR `length@8 >u K`. The
+// proceed arm of a shape guard establishes its predicate; the proceed arm of a constant-index bound
+// guard establishes its floor; the success edge of a bounded accessor at a constant index establishes
+// that floor (`managedCalleeSucceedsOnlyInBounds`), and the success edge of `__managed_set` the three
+// predicates its copy-on-write detach decides (`managedCalleeSuccessProvesShape`) — both stated by the
+// runtime beside the bodies. Success never proves the destructor predicate: a managed element's `set`
+// succeeds through its destructor.
+//
+// WHAT KEEPS A FACT is the runtime's to state too: a callee whose header effect is `writesNothing` or
+// `detachesUnlessOwnedUnshared` (a detach only makes a record owned and unshared), and an element store
+// (`elementStoreCannotAliasARecordField`) at a constant slot, or at a variable one dominated by the
+// bound guard on its index. Every other call and every other store clears every fact of every record: a
+// clone or a slice shares the buffer through a name this pass may not track, and a store it cannot
+// place may reach a header.
+//
+// THE FLOW is forward over the CFG to a fixpoint; a join keeps only what every edge in carries, so a
+// store under one arm of an `if` proves nothing below the join.
+//
+// THE FOLD: a branch on a shape guard whose predicate is established, or on a constant-index length
+// bound whose floor is at or above the index, is decided against the refusal — the compare becomes
+// `const 0`, the branch folds as a branch on a `const` folds, the dropped arm goes with every block only
+// it reached, and the loads and arithmetic the compare read and nothing reads now are retired. A compare
+// is decided only when the branch is its sole reader: the fact is one about the branch's site, and the
+// rewrite is of the compare's definition.
+
+typealias ShapeFactBits = int(0 to 15)
+typealias ShapeFacts = Array with ShapeFactBits
+
+let NoShapeFact = 0 as ShapeFactBits
+let BufferOwnedFact = 1 as ShapeFactBits
+let BufferAllocatedFact = 2 as ShapeFactBits
+let BufferUnsharedFact = 4 as ShapeFactBits
+let ElementTrivialFact = 8 as ShapeFactBits
+
+// What a bounded writer's success proves (`managedCalleeSuccessProvesShape`).
+let WriterSuccessFacts = (BufferOwnedFact or BufferAllocatedFact or BufferUnsharedFact) as ShapeFactBits
+
+// `length@8 >u K` proved for the record; `NoLengthFloor` is nothing proved.
+typealias LengthFloor = int(-1 to i64.max)
+typealias LengthFloors = Array with LengthFloor
+
+let NoLengthFloor = -1 as LengthFloor
+
+typealias RecordSlot = int(0 to u64.max)
+typealias RecordSlotColumn = Array with RecordSlot
+typealias FoldedGuardCount = int(0 to u64.max)
+typealias FactRound = int(0 to u64.max)
+
+// A position in the fact arena `EstablishedState` keeps every block's run in.
+typealias FactIndex = int(0 to u64.max)
+typealias FactIndexColumn = Array with FactIndex
+
+// One past the ordinal of a variable-index bound guard, so a column's own zero is `NoBound`.
+typealias BoundLink = int(0 to u64.max)
+typealias BoundLinkColumn = Array with BoundLink
+
+let NoBound = 0 as BoundLink
+
+// Fold every established guard of every function, in place.
+export function foldEstablishedGuards(module StdModule)
+	var scratch = EstablishedScratch.create()
+	var visited = 0 as FuncCount
+	var rewritten = 0 as FuncCount
+
+	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
+	// recorded as writing that same storage — canonical note at
+	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+	for fnIndex in 0 upto module.functions.count() 'eachFunc'
+		visited = visited + 1
+
+		if foldInFunc(module, func: try module.functions.get(fnIndex) otherwise panic("foldEstablishedGuards: fnIndex {fnIndex} is below module.functions.count()"), scratch: scratch) 'rewrote'
+			rewritten = rewritten + 1
+		end 'rewrote'
+	end 'eachFunc'
+
+	let visitedTotal = visited
+	let rewrittenTotal = rewritten
+	logDebug(LogCategory.ir, message: function() gives "foldEstablishedGuards: folded {scratch.foldedTotal} guard(s) — {scratch.folded.summary(ManagedGuardKind.allCaseNames)} — in {rewrittenTotal} of the {visitedTotal} function(s) visited")
+end 'foldEstablishedGuards'
+
+// ══════════════════════════════════════════════════════════════════════════
+// Per-function driver
+// ══════════════════════════════════════════════════════════════════════════
+
+// Analyse and rewrite one function. Answers whether a guard folded.
+function foldInFunc(module StdModule, func IrFunction, scratch EstablishedScratch) returns bool
+	if func.blockRefs.count() < 2 or not holdsAManagedCallee(module, func: func, call: scratch.call) 'nothingToFold'
+		return false
+	end 'nothingToFold'
+
+	let analysis = EstablishedFunction.build(module, func: func, scratch: scratch)
+
+	if analysis.records.count == 0 'noRecordNamed'
+		return false
+	end 'noRecordNamed'
+
+	scratch.state.begin(analysis.tree.blockCount, recordCount: analysis.records.count)
+	var rounds = 0 as FactRound
+	var changed = true
+
+	while changed 'untilStable'
+		rounds = rounds + 1
+		changed = false
+
+		for position in analysis.tree.reverseOrder 'eachBlock'
+			if transferBlock(module, func: func, analysis: analysis, position: position, scratch: scratch) 'moved'
+				changed = true
+			end 'moved'
+		end 'eachBlock'
+	end 'untilStable'
+
+	scratch.decisions.clear()
+	scratch.seeds.clear()
+	scratch.readers.clear()
+	collectFunctionValueUses(module, func: func, referenced: scratch.readers)
+
+	for position in analysis.tree.reverseOrder 'eachBlock'
+		decideAtBlock(module, func: func, analysis: analysis, position: position, scratch: scratch)
+	end 'eachBlock'
+
+	if scratch.decisions.count() == 0 'nothingDecided'
+		return false
+	end 'nothingDecided'
+
+	let decided = scratch.decisions.count()
+	let roundsTaken = rounds
+	logTrace(LogCategory.ir, message: function() gives "foldEstablishedGuards: '{String.from(func.name)}' decided {decided} guard(s) after {roundsTaken} round(s)")
+	_ = applyCompareDecisions(module, func: func, decisions: scratch.decisions, branch: scratch.branch, def: scratch.def)
+	retireGuardOperands(module, func: func, reader: analysis.reader, scratch: scratch)
+
+	return true
+end 'foldInFunc'
+
+// The per-function facts: the tree and O(1) dominance over it, the shape reader, the block index, the
+// tracked records and the bound guards a variable-index store is checked against.
+type EstablishedFunction
+	export var tree as StdDominatorTree
+	export var stamps as DominatorStamps
+	export var reader as StdShapeReader
+	export var byId as BlockIndexById
+	export var records as RecordIndex
+
+	// The variable-index bound guards, chained per index value: `boundHead` is dense over the value ids
+	// and names the first bound on that index, `boundNext` the next on the same index.
+	var boundHead as BoundLinkColumn
+	var boundNext as BoundLinkColumn
+	var boundRecord as ValueIdArray
+	var boundElsePosition as BlockPositionColumn
+
+	static function build(module StdModule, func IrFunction, scratch EstablishedScratch) returns EstablishedFunction
+		let tree = StdDominatorTree.build(module, func: func)
+		let reader = StdShapeReader.create(module, func: func)
+		var boundHead = BoundLinkColumn.create()
+		boundHead.resize(reader.defs.valueBound())
+		var analysis = Self{tree: tree, stamps: DominatorStamps.build(tree), reader: reader, byId: module.blockIndexById(func), records: RecordIndex.sized(reader.defs.valueBound()), boundHead: boundHead, boundNext: BoundLinkColumn.create(), boundRecord: ValueIdArray.create(), boundElsePosition: BlockPositionColumn.create()}
+		analysis.gather(module, func: func, scratch: scratch)
+		return analysis
+	end 'build'
+
+	// Every record a guard tests or a callee with a stated effect names, and every variable-index bound.
+	// An INDEX loop: a `for … in` element over the tree is a borrow of `self` while the body writes
+	// the record index and the bound columns.
+	function gather(module StdModule, func IrFunction, scratch EstablishedScratch)
+		for orderIndex in 0 upto self.tree.reverseOrder.count() 'eachBlock'
+			let position = try self.tree.reverseOrder.get(orderIndex) otherwise panic("foldEstablishedGuards: reverseOrder.get OOB at {orderIndex}")
+			let block = module.blockAtPosition(func, position: position)
+
+			for opIdx in block.opRefs 'eachOp'
+				let op = module.getOp(opIdx)
+
+				if not op.rawValue.isCall 'notACall'
+					continue
+				end 'notACall'
+
+				classifyCallOperands(op, call: scratch.call)
+
+				if scratch.call.namesACallee() and scratch.call.argCount != 0 and managedCalleeHeaderEffect(scratch.call.callee) != ManagedHeaderEffect.unknown 'aStatedCallee'
+					self.records.admit(scratch.call.firstArg)
+				end 'aStatedCallee'
+			end 'eachOp'
+
+			if not closingGuardOf(module, block: block, reader: self.reader, scratch: scratch) 'noGuardCloses'
+				continue
+			end 'noGuardCloses'
+
+			self.records.admit(scratch.guard.record)
+
+			if scratch.guard.kind == ManagedGuardKind.indexOutOfRange and scratch.guard.indexIsVariable 'aVariableBound'
+				self.recordBound(scratch.guard.record, index: scratch.guard.index, elsePosition: self.positionOf(scratch.branch.elseBlockId))
+			end 'aVariableBound'
+		end 'eachBlock'
+	end 'gather'
+
+	function recordBound(record ValueId, index ValueId, elsePosition BlockRefIndex)
+		self.boundRecord.push(record)
+		self.boundElsePosition.push(elsePosition)
+		self.boundNext.push(self.firstBoundOn(index))
+		try self.boundHead.set(index, value: self.boundRecord.count()) otherwise panic("foldEstablishedGuards: index {index} is outside the column sized by valueBound")
+	end 'recordBound'
+
+	function firstBoundOn(index ValueId) returns BoundLink
+		return try self.boundHead.get(index) otherwise panic("foldEstablishedGuards: index {index} is outside the column sized by valueBound")
+	end 'firstBoundOn'
+
+	function positionOf(blockId BlockId) returns BlockRefIndex
+		return try self.byId.get(blockId) otherwise panic("foldEstablishedGuards: block {blockId} is a branch target of this function but is not in its blockRefs")
+	end 'positionOf'
+
+	// Whether the element store at `position` on `record` at the variable `index` lies on the proceed arm
+	// of a bound guard on that record and index: an arm that dominates the store and is entered from
+	// nowhere else, so every path to the store passes the test.
+	function storeIsBounded(position BlockRefIndex, record ValueId, index ValueId) returns bool
+		var link = self.firstBoundOn(index)
+
+		while link != NoBound 'eachBoundOnTheIndex'
+			let ordinal = link - 1
+
+			if self.boundProceedArmAdmits(ordinal, record: record, position: position) 'found'
+				return true
+			end 'found'
+
+			link = try self.boundNext.get(ordinal) otherwise panic("foldEstablishedGuards: boundNext.get OOB at {ordinal}")
+		end 'eachBoundOnTheIndex'
+
+		return false
+	end 'storeIsBounded'
+
+	function boundProceedArmAdmits(ordinal BoundLink, record ValueId, position BlockRefIndex) returns bool
+		if (try self.boundRecord.get(ordinal) otherwise panic("foldEstablishedGuards: boundRecord.get OOB at {ordinal}")) != record 'anotherRecord'
+			return false
+		end 'anotherRecord'
+
+		let arm = try self.boundElsePosition.get(ordinal) otherwise panic("foldEstablishedGuards: boundElsePosition.get OOB at {ordinal}")
+		return self.tree.pred.degree(arm as CsrIndex) == 1 and self.stamps.dominates(arm, b: position)
+	end 'boundProceedArmAdmits'
+end 'EstablishedFunction'
+
+// The tracked record values, numbered densely. ValueId 0 is a real id, so membership is its own column.
+type RecordIndex
+	var slotOf as RecordSlotColumn
+	var tracked as BoolArray
+	export var count as RecordSlot = 0
+
+	static function sized(valueBound ValueId) returns RecordIndex
+		var slotOf = RecordSlotColumn.create()
+		slotOf.resize(valueBound)
+		var tracked = BoolArray.create()
+		tracked.resize(valueBound)
+		return Self{slotOf: slotOf, tracked: tracked}
+	end 'sized'
+
+	function admit(record ValueId)
+		if self.isTracked(record) 'alreadyNumbered'
+			return
+		end 'alreadyNumbered'
+
+		try self.slotOf.set(record, value: self.count) otherwise panic("foldEstablishedGuards: record {record} is outside the column sized by valueBound")
+		try self.tracked.set(record, value: true) otherwise panic("foldEstablishedGuards: record {record} is outside the column sized by valueBound")
+		self.count = self.count + 1
+	end 'admit'
+
+	function isTracked(record ValueId) returns bool
+		return try self.tracked.get(record) otherwise panic("foldEstablishedGuards: record {record} is outside the column sized by valueBound")
+	end 'isTracked'
+
+	function slot(record ValueId) returns RecordSlot
+		if not self.isTracked(record) 'untracked'
+			panic("foldEstablishedGuards: record {record} was named by no guard and no stated callee, so it has no slot — every record the transfer asks about was admitted by `gather`")
+		end 'untracked'
+
+		return try self.slotOf.get(record) otherwise panic("foldEstablishedGuards: slotOf.get OOB at {record}")
+	end 'slot'
+end 'RecordIndex'
+
+// ══════════════════════════════════════════════════════════════════════════
+// The transfer
+// ══════════════════════════════════════════════════════════════════════════
+
+// Push the facts at `position`'s exit to its successors. Answers whether a successor's in-state moved.
+function transferBlock(module StdModule, func IrFunction, analysis EstablishedFunction, position BlockRefIndex, scratch EstablishedScratch) returns bool
+	let block = module.blockAtPosition(func, position: position)
+	runBlockOps(module, block: block, position: position, analysis: analysis, scratch: scratch)
+
+	if not closingCompareOf(module, block: block, branch: scratch.branch, reader: analysis.reader) 'noTwoWayTest'
+		var moved = false
+
+		for k in 0 upto analysis.tree.succ.degree(position as CsrIndex) 'eachSuccessor'
+			if scratch.state.meet(analysis.tree.succ.neighbour(position as CsrIndex, k: k) as BlockRefIndex, edge: scratch.plainEdge) 'changed'
+				moved = true
+			end 'changed'
+		end 'eachSuccessor'
+
+		return moved
+	end 'noTwoWayTest'
+
+	let thenPosition = analysis.positionOf(scratch.branch.thenBlockId)
+	let elsePosition = analysis.positionOf(scratch.branch.elseBlockId)
+	classifyEstablishingEdge(analysis, scratch: scratch)
+
+	// The refusal of a guard, and the error arm of a flag test, learn nothing.
+	let thenEdge = scratch.edge if scratch.edge.establishesOnThen else scratch.plainEdge
+	let elseEdge = scratch.plainEdge if scratch.edge.establishesOnThen else scratch.edge
+	let thenMoved = scratch.state.meet(thenPosition, edge: thenEdge)
+	let elseMoved = scratch.state.meet(elsePosition, edge: elseEdge)
+	return thenMoved or elseMoved
+end 'transferBlock'
+
+// Load the block's in-state into the row and run its ops over it, leaving the row at the terminator and
+// `scratch.success` naming the bounded accessor whose flag the terminator may test.
+function runBlockOps(module StdModule, block IrBlock, position BlockRefIndex, analysis EstablishedFunction, scratch EstablishedScratch)
+	scratch.state.loadRow(position)
+	scratch.success.forget()
+
+	for opIdx in block.opRefs 'eachOp'
+		let op = module.getOp(opIdx)
+
+		if op.rawValue.isCall 'aCall'
+			transferCall(module, op: op, analysis: analysis, scratch: scratch)
+			continue
+		end 'aCall'
+
+		if op.rawValue.isStore and not storeKeepsEveryFact(op, position: position, analysis: analysis, scratch: scratch) 'aWriteThatMayReachAHeader'
+			scratch.state.clearRow()
+			scratch.success.forget()
+		end 'aWriteThatMayReachAHeader'
+	end 'eachOp'
+end 'runBlockOps'
+
+// A callee with a stated effect keeps every fact; a `tryCall` to one is remembered for the flag test
+// that may close the block. Any other call clears every fact of every record.
+function transferCall(module StdModule, op StdOp, analysis EstablishedFunction, scratch EstablishedScratch)
+	classifyCallOperands(op, call: scratch.call)
+
+	if not scratch.call.namesACallee() or scratch.call.argCount == 0 or managedCalleeHeaderEffect(scratch.call.callee) == ManagedHeaderEffect.unknown 'noStatedEffect'
+		scratch.state.clearRow()
+		scratch.success.forget()
+		return
+	end 'noStatedEffect'
+
+	if scratch.call.throwsToAFlag() 'mayFail'
+		scratch.success.remember(scratch.call, at: analysis.records.slot(scratch.call.firstArg), above: constantIndexFloor(module, reader: analysis.reader, call: scratch.call, scratch: scratch))
+	end 'mayFail'
+end 'transferCall'
+
+// The floor a bounded accessor's success proves: its constant index, when it has one, else nothing.
+function constantIndexFloor(module StdModule, reader StdShapeReader, call StdCallOperands, scratch EstablishedScratch) returns LengthFloor
+	if not managedCalleeSucceedsOnlyInBounds(call.callee) or call.argCount < 2 or not reader.defs.isDefinedByAnOp(call.secondArg) 'noConstantIndex'
+		return NoLengthFloor
+	end 'noConstantIndex'
+
+	classifyFoldableDef(module.getOp(reader.defs.definingOp(call.secondArg)), def: scratch.def)
+
+	if not scratch.def.isConstDef() or not wordTyped(scratch.def.constType) or scratch.def.constant < 0 'notANonNegativeWord'
+		return NoLengthFloor
+	end 'notANonNegativeWord'
+
+	return scratch.def.constant as LengthFloor
+end 'constantIndexFloor'
+
+// Whether a storing op is a plain element store that lands inside a buffer: a constant slot, or a
+// variable one whose index a dominating bound guard admitted. Every other storing op may reach a header.
+function storeKeepsEveryFact(op StdOp, position BlockRefIndex, analysis EstablishedFunction, scratch EstablishedScratch) returns bool
+	classifyStoreOperands(op, store: scratch.store)
+
+	if not scratch.store.isStore() or not elementStoreCannotAliasARecordField(analysis.reader, addrId: scratch.store.addrId, out: scratch.slot) 'notAnElementSlot'
+		return false
+	end 'notAnElementSlot'
+
+	return not scratch.slot.indexIsVariable or analysis.storeIsBounded(position, record: scratch.slot.record, index: scratch.slot.index)
+end 'storeKeepsEveryFact'
+
+// What the block's closing test establishes, into `scratch.edge`: a shape guard's proceed arm its
+// predicate, a constant-index length bound's proceed arm its floor, and the success arm of a flag test
+// on the bounded accessor `runBlockOps` remembered what that accessor's success proves. Any other test
+// establishes nothing on either arm. `scratch.branch` holds the terminator and `reader.arith` its compare.
+function classifyEstablishingEdge(analysis EstablishedFunction, scratch EstablishedScratch)
+	let reader = analysis.reader
+	let condId = scratch.branch.condId
+
+	if classifyManagedGuard(reader, condId: condId, out: scratch.guard) 'aGuard'
+		let slot = analysis.records.slot(scratch.guard.record)
+
+		if scratch.guard.kind != ManagedGuardKind.indexOutOfRange 'aShapeGuard'
+			scratch.edge.establish(slot, proving: shapeFactOf(scratch.guard.kind), above: NoLengthFloor, onThen: false)
+		end 'aShapeGuard' else if constantLengthBound(scratch.guard) 'aConstantLengthBound'
+			scratch.edge.establish(slot, proving: NoShapeFact, above: scratch.guard.constantIndex as LengthFloor, onThen: false)
+		end 'aConstantLengthBound' else 'aBoundThatProvesNoFloor'
+			scratch.edge.establishNothing()
+		end 'aBoundThatProvesNoFloor'
+
+		return
+	end 'aGuard'
+
+	if not scratch.success.remembered or not reader.arithDefining(condId) 'noRememberedAccessor'
+		scratch.edge.establishNothing()
+		return
+	end 'noRememberedAccessor'
+
+	let arm = errorFlagTestArm(reader)
+
+	if arm == ErrorFlagTestArm.notAFlagTest or reader.arith.lhs != scratch.success.flag 'notTheRememberedFlagTest'
+		scratch.edge.establishNothing()
+		return
+	end 'notTheRememberedFlagTest'
+
+	scratch.edge.establish(scratch.success.slot, proving: scratch.success.bits, above: scratch.success.floor, onThen: arm == ErrorFlagTestArm.successOnThen)
+end 'classifyEstablishingEdge'
+
+// Whether `guard` is `length@8 <=u K` for a non-negative constant `K` — the one bound whose proceed
+// arm proves a floor, and the one a floor decides.
+function constantLengthBound(guard ManagedGuardOperands) returns bool
+	return guard.kind == ManagedGuardKind.indexOutOfRange and not guard.indexIsVariable and guard.limitOffset == ManagedRecordLengthOffset and guard.constantIndex >= 0
+end 'constantLengthBound'
+
+// Whether the row already holds what `guard` asks of its record: its shape predicate, or a floor at or
+// above its constant index.
+function guardIsEstablished(guard ManagedGuardOperands, slot RecordSlot, state EstablishedState) returns bool
+	if guard.kind != ManagedGuardKind.indexOutOfRange 'aShapeGuard'
+		return state.rowHasFact(slot, bit: shapeFactOf(guard.kind))
+	end 'aShapeGuard'
+
+	return constantLengthBound(guard) and state.rowFloorOf(slot) >= guard.constantIndex as LengthFloor
+end 'guardIsEstablished'
+
+function shapeFactOf(kind ManagedGuardKind) returns ShapeFactBits
+	return match kind 'k'
+		bufferNotOwned gives BufferOwnedFact
+		bufferUnallocated gives BufferAllocatedFact
+		bufferShared gives BufferUnsharedFact
+		elementManaged gives ElementTrivialFact
+		indexOutOfRange panic("foldEstablishedGuards: a bound guard is not a shape predicate — the caller asks the kind first")
+	end 'k'
+end 'shapeFactOf'
+
+// ══════════════════════════════════════════════════════════════════════════
+// The decisions
+// ══════════════════════════════════════════════════════════════════════════
+
+// Decide the guard closing `position` against the facts at its terminator.
+function decideAtBlock(module StdModule, func IrFunction, analysis EstablishedFunction, position BlockRefIndex, scratch EstablishedScratch)
+	let block = module.blockAtPosition(func, position: position)
+	runBlockOps(module, block: block, position: position, analysis: analysis, scratch: scratch)
+
+	if not closingGuardOf(module, block: block, reader: analysis.reader, scratch: scratch) 'noGuardCloses'
+		return
+	end 'noGuardCloses'
+
+	let condId = scratch.branch.condId
+
+	if scratch.readers.containsRepeat(condId) 'anotherReader'
+		return
+	end 'anotherReader'
+
+	if not guardIsEstablished(scratch.guard, slot: analysis.records.slot(scratch.guard.record), state: scratch.state) 'notEstablished'
+		return
+	end 'notEstablished'
+
+	let compareOpIdx = analysis.reader.defs.definingOp(condId)
+	collectStdOpUses(module.getOp(compareOpIdx), referenced: scratch.seeds)
+	scratch.decisions.push(CompareDecision.create(compareOpIdx, resultId: condId, holds: false))
+	scratch.folded.add(scratch.guard.kind.ordinal, count: 1)
+	scratch.foldedTotal = scratch.foldedTotal + 1
+end 'decideAtBlock'
+
+// Whether `block` closes on a recognised guard, filling `scratch.branch` and `scratch.guard`.
+function closingGuardOf(module StdModule, block IrBlock, reader StdShapeReader, scratch EstablishedScratch) returns bool
+	return closingCompareOf(module, block: block, branch: scratch.branch, reader: reader) and classifyManagedGuard(reader, condId: scratch.branch.condId, out: scratch.guard)
+end 'closingGuardOf'
+
+// Retire what the folded compares read and nothing reads now — the field loads, the refcount-box
+// address and the refcount load through it — transitively, until a round dooms nothing. A pure op is
+// retired outright; an unread load is too: executing it changes nothing, and the dialect marks a load
+// impure so that it is never deduplicated or moved across a store, not because dropping one has an
+// effect. `reader.defs` is asked only about ids no round has removed: an op index it holds for a removed
+// id names an orphan.
+function retireGuardOperands(module StdModule, func IrFunction, reader StdShapeReader, scratch EstablishedScratch)
+	var doomedEver = StdValueUseSet.create()
+	var frontier = StdValueUseSet.createRecordingIds()
+	var next = StdValueUseSet.createRecordingIds()
+
+	for i in 0 upto scratch.seeds.insertedIdCount() 'eachSeed'
+		frontier.insert(scratch.seeds.insertedIdAt(i))
+	end 'eachSeed'
+
+	while frontier.insertedIdCount() != 0 'eachRound'
+		var referenced = StdValueUseSet.create()
+		collectFunctionValueUses(module, func: func, referenced: referenced)
+		var doomed = StdValueUseSet.create()
+		next.clear()
+
+		for i in 0 upto frontier.insertedIdCount() 'eachCandidate'
+			let valueId = frontier.insertedIdAt(i)
+
+			if doomedEver.contains(valueId) or referenced.contains(valueId) or not reader.defs.isDefinedByAnOp(valueId) 'stillReadOrNotAnOp'
+				continue
+			end 'stillReadOrNotAnOp'
+
+			let op = module.getOp(reader.defs.definingOp(valueId))
+
+			if not op.rawValue.isPure and not reader.loadDefining(valueId) 'anEffect'
+				continue
+			end 'anEffect'
+
+			doomed.insert(valueId)
+			doomedEver.insert(valueId)
+			collectStdOpUses(op, referenced: next)
+		end 'eachCandidate'
+
+		if doomed.isEmpty() 'nothingRetired'
+			return
+		end 'nothingRetired'
+
+		removeOpsDefining(module, func: func, doomed: doomed)
+		frontier.clear()
+
+		for i in 0 upto next.insertedIdCount() 'eachOperand'
+			frontier.insert(next.insertedIdAt(i))
+		end 'eachOperand'
+	end 'eachRound'
+end 'retireGuardOperands'
+
+// ══════════════════════════════════════════════════════════════════════════
+// The state
+// ══════════════════════════════════════════════════════════════════════════
+
+// What an edge establishes for one record on top of the row: bits and a floor for `slot`, on the then
+// arm or the else arm. `establishNothing` is the plain edge.
+type EdgeFacts
+	export var slot as RecordSlot = 0
+	export var bits as ShapeFactBits = NoShapeFact
+	export var floor as LengthFloor = NoLengthFloor
+	export var establishesOnThen = false
+	export var establishes = false
+
+	static function create() returns EdgeFacts
+		return Self{}
+	end 'create'
+
+	function establish(at RecordSlot, proving ShapeFactBits, above LengthFloor, onThen bool)
+		self.establishes = true
+		self.slot = at
+		self.bits = proving
+		self.floor = above
+		self.establishesOnThen = onThen
+	end 'establish'
+
+	function establishNothing()
+		self.establishes = false
+		self.establishesOnThen = false
+	end 'establishNothing'
+
+	function establishesFor(at RecordSlot) returns bool
+		return self.establishes and self.slot == at
+	end 'establishesFor'
+end 'EdgeFacts'
+
+// The `tryCall` to a bounded accessor the block ran last among its effects: its flag, its record and
+// what its success proves.
+type RememberedSuccess
+	export var remembered = false
+	export var flag as ValueId = 0
+	export var slot as RecordSlot = 0
+	export var bits as ShapeFactBits = NoShapeFact
+	export var floor as LengthFloor = NoLengthFloor
+
+	static function create() returns RememberedSuccess
+		return Self{}
+	end 'create'
+
+	function remember(call StdCallOperands, at RecordSlot, above LengthFloor)
+		self.remembered = true
+		self.flag = call.errorFlagId
+		self.slot = at
+		self.bits = WriterSuccessFacts if managedCalleeSuccessProvesShape(call.callee) else NoShapeFact
+		self.floor = above
+	end 'remember'
+
+	function forget()
+		self.remembered = false
+	end 'forget'
+end 'RememberedSuccess'
+
+// The in-state of every block — its facts per record, holding only the records that have one — and
+// the working row of the block being transferred. Optimistic: a block no edge has reached knows
+// everything, the entry nothing, and a meet only ever takes facts away, so a block's facts are written
+// once, on the first edge in, and afterwards only narrowed or dropped in place. The row is dense over
+// the record slots so a slot's fact is one subscript, and `rowLive` names the slots holding one so a
+// load or a clear touches only those.
+type EstablishedState
+	// Per block: whether an edge has reached it, and the run of `factSlot`/`factBits`/`factFloor`
+	// holding its facts.
+	var reached as BoolArray
+	var runStart as FactIndexColumn
+	var runCount as FactIndexColumn
+	var factSlot as RecordSlotColumn
+	var factBits as ShapeFacts
+	var factFloor as LengthFloors
+
+	var rowShape as ShapeFacts
+	var rowFloor as LengthFloors
+	var rowLive as RecordSlotColumn
+
+	static function create() returns EstablishedState
+		return Self{reached: BoolArray.create(), runStart: FactIndexColumn.create(), runCount: FactIndexColumn.create(), factSlot: RecordSlotColumn.create(), factBits: ShapeFacts.create(), factFloor: LengthFloors.create(), rowShape: ShapeFacts.create(), rowFloor: LengthFloors.create(), rowLive: RecordSlotColumn.create()}
+	end 'create'
+
+	function begin(blockCount BlockRefIndex, recordCount RecordSlot)
+		self.reached.refill(blockCount as ElementIndex, value: false)
+		self.runStart.refill(blockCount as ElementIndex, value: 0)
+		self.runCount.refill(blockCount as ElementIndex, value: 0)
+		self.factSlot.clear()
+		self.factBits.clear()
+		self.factFloor.clear()
+		self.rowShape.refill(recordCount as ElementIndex, value: NoShapeFact)
+		self.rowFloor.refill(recordCount as ElementIndex, value: NoLengthFloor)
+		self.rowLive.clear()
+
+		// The entry is reached with no facts.
+		try self.reached.set(StdEntryBlockPosition, value: true) otherwise panic("foldEstablishedGuards: reached.set OOB at the entry block")
+	end 'begin'
+
+	function isReached(position BlockRefIndex) returns bool
+		return try self.reached.get(position) otherwise panic("foldEstablishedGuards: reached.get OOB at {position}")
+	end 'isReached'
+
+	function runStartOf(position BlockRefIndex) returns FactIndex
+		return try self.runStart.get(position) otherwise panic("foldEstablishedGuards: runStart.get OOB at {position}")
+	end 'runStartOf'
+
+	function runEndOf(position BlockRefIndex) returns FactIndex
+		return self.runStartOf(position) + (try self.runCount.get(position) otherwise panic("foldEstablishedGuards: runCount.get OOB at {position}"))
+	end 'runEndOf'
+
+	function factSlotAt(at FactIndex) returns RecordSlot
+		return try self.factSlot.get(at) otherwise panic("foldEstablishedGuards: factSlot.get OOB at {at}")
+	end 'factSlotAt'
+
+	function factBitsAt(at FactIndex) returns ShapeFactBits
+		return try self.factBits.get(at) otherwise panic("foldEstablishedGuards: factBits.get OOB at {at}")
+	end 'factBitsAt'
+
+	function factFloorAt(at FactIndex) returns LengthFloor
+		return try self.factFloor.get(at) otherwise panic("foldEstablishedGuards: factFloor.get OOB at {at}")
+	end 'factFloorAt'
+
+	function writeFact(at FactIndex, slot RecordSlot, bits ShapeFactBits, floor LengthFloor)
+		try self.factSlot.set(at, value: slot) otherwise panic("foldEstablishedGuards: factSlot.set OOB at {at}")
+		try self.factBits.set(at, value: bits) otherwise panic("foldEstablishedGuards: factBits.set OOB at {at}")
+		try self.factFloor.set(at, value: floor) otherwise panic("foldEstablishedGuards: factFloor.set OOB at {at}")
+	end 'writeFact'
+
+	function pushFact(slot RecordSlot, bits ShapeFactBits, floor LengthFloor)
+		self.factSlot.push(slot)
+		self.factBits.push(bits)
+		self.factFloor.push(floor)
+	end 'pushFact'
+
+	// A block is loaded only after an edge reached it: a reverse-postorder walk transfers a
+	// predecessor of every block but the entry before the block itself.
+	function loadRow(position BlockRefIndex)
+		self.clearRow()
+
+		if not self.isReached(position) 'unreached'
+			panic("foldEstablishedGuards: block {position} is loaded before any edge reached it")
+		end 'unreached'
+
+		for at in self.runStartOf(position) upto self.runEndOf(position) 'eachFact'
+			let slot = self.factSlotAt(at)
+			self.writeRow(slot, bits: self.factBitsAt(at), floor: self.factFloorAt(at))
+			self.rowLive.push(slot)
+		end 'eachFact'
+	end 'loadRow'
+
+	function clearRow()
+		for i in 0 upto self.rowLive.count() 'eachLive'
+			self.writeRow(self.rowLiveAt(i), bits: NoShapeFact, floor: NoLengthFloor)
+		end 'eachLive'
+
+		self.rowLive.clear()
+	end 'clearRow'
+
+	function rowLiveAt(i ElementIndex) returns RecordSlot
+		return try self.rowLive.get(i) otherwise panic("foldEstablishedGuards: rowLive.get OOB at {i}")
+	end 'rowLiveAt'
+
+	function writeRow(slot RecordSlot, bits ShapeFactBits, floor LengthFloor)
+		try self.rowShape.set(slot, value: bits) otherwise panic("foldEstablishedGuards: rowShape.set OOB at {slot}")
+		try self.rowFloor.set(slot, value: floor) otherwise panic("foldEstablishedGuards: rowFloor.set OOB at {slot}")
+	end 'writeRow'
+
+	function rowShapeOf(slot RecordSlot) returns ShapeFactBits
+		return try self.rowShape.get(slot) otherwise panic("foldEstablishedGuards: rowShape.get OOB at {slot}")
+	end 'rowShapeOf'
+
+	function rowFloorOf(slot RecordSlot) returns LengthFloor
+		return try self.rowFloor.get(slot) otherwise panic("foldEstablishedGuards: rowFloor.get OOB at {slot}")
+	end 'rowFloorOf'
+
+	function rowHasFact(slot RecordSlot, bit ShapeFactBits) returns bool
+		return (self.rowShapeOf(slot) and bit) != NoShapeFact
+	end 'rowHasFact'
+
+	// The row's facts for `slot` with what `edge` establishes for it on top.
+	function rowBitsUnder(slot RecordSlot, edge EdgeFacts) returns ShapeFactBits
+		let bits = self.rowShapeOf(slot)
+		return (bits or edge.bits) as ShapeFactBits if edge.establishesFor(slot) else bits
+	end 'rowBitsUnder'
+
+	function rowFloorUnder(slot RecordSlot, edge EdgeFacts) returns LengthFloor
+		let floor = self.rowFloorOf(slot)
+		return edge.floor if edge.establishesFor(slot) and edge.floor > floor else floor
+	end 'rowFloorUnder'
+
+	// Meet the row, plus what `edge` establishes, into `into`'s in-state. Answers whether it moved.
+	function meet(into BlockRefIndex, edge EdgeFacts) returns bool
+		if not self.isReached(into) 'firstEdgeIn'
+			self.arrive(into, edge: edge)
+			return true
+		end 'firstEdgeIn'
+
+		let start = self.runStartOf(into)
+		var kept = start
+		var moved = false
+
+		for at in start upto self.runEndOf(into) 'eachFact'
+			let slot = self.factSlotAt(at)
+			let hadBits = self.factBitsAt(at)
+			let hadFloor = self.factFloorAt(at)
+			let metBits = hadBits and self.rowBitsUnder(slot, edge: edge)
+			let floor = self.rowFloorUnder(slot, edge: edge)
+			let metFloor = floor if floor < hadFloor else hadFloor
+
+			if metBits != hadBits or metFloor != hadFloor 'narrowed'
+				moved = true
+			end 'narrowed'
+
+			if factIsEmpty(metBits, floor: metFloor) 'dropped'
+				continue
+			end 'dropped'
+
+			self.writeFact(kept, slot: slot, bits: metBits, floor: metFloor)
+			kept = kept + 1
+		end 'eachFact'
+
+		try self.runCount.set(into, value: kept - start) otherwise panic("foldEstablishedGuards: runCount.set OOB at {into}")
+		return moved
+	end 'meet'
+
+	// The first edge into `into` writes its run: the row's facts, each with what `edge` establishes for
+	// its slot on top, and the edge's fact alone where the row holds none for that slot.
+	function arrive(into BlockRefIndex, edge EdgeFacts)
+		let start = self.factSlot.count() as FactIndex
+		var edgeSlotIsLive = false
+
+		for i in 0 upto self.rowLive.count() 'eachLive'
+			let slot = self.rowLiveAt(i)
+			edgeSlotIsLive = edgeSlotIsLive or edge.establishesFor(slot)
+			self.pushFact(slot, bits: self.rowBitsUnder(slot, edge: edge), floor: self.rowFloorUnder(slot, edge: edge))
+		end 'eachLive'
+
+		if edge.establishes and not edgeSlotIsLive and not factIsEmpty(edge.bits, floor: edge.floor) 'theEdgeAlone'
+			self.pushFact(edge.slot, bits: edge.bits, floor: edge.floor)
+		end 'theEdgeAlone'
+
+		try self.reached.set(into, value: true) otherwise panic("foldEstablishedGuards: reached.set OOB at {into}")
+		try self.runStart.set(into, value: start) otherwise panic("foldEstablishedGuards: runStart.set OOB at {into}")
+		try self.runCount.set(into, value: (self.factSlot.count() as FactIndex) - start) otherwise panic("foldEstablishedGuards: runCount.set OOB at {into}")
+	end 'arrive'
+end 'EstablishedState'
+
+function factIsEmpty(bits ShapeFactBits, floor LengthFloor) returns bool
+	return bits == NoShapeFact and floor == NoLengthFloor
+end 'factIsEmpty'
+
+// ══════════════════════════════════════════════════════════════════════════
+// Scratch
+// ══════════════════════════════════════════════════════════════════════════
+
+// The mutable state one run of the pass carries, created once per module: the flow state, the
+// classification records refilled per op, the decisions and the folded compares' operands.
+type EstablishedScratch
+	export var state as EstablishedState
+	export var edge as EdgeFacts
+	export var plainEdge as EdgeFacts
+	export var success as RememberedSuccess
+	export var call as StdCallOperands
+	export var store as StdStoreOperands
+	export var slot as ElementSlotOperands
+	export var branch as StdBranchOperands
+	export var guard as ManagedGuardOperands
+	export var def as StdFoldableDef
+	export var decisions as CompareDecisionArray
+
+	// Every value the function reads, counting readers, so a compare with a reader besides its branch is
+	// left alone; and the operands of the folded compares, the retirement's seeds.
+	export var readers as StdValueUseSet
+	export var seeds as StdValueUseSet
+	export var folded as OrdinalTally
+	export var foldedTotal as FoldedGuardCount = 0
+
+	static function create() returns EstablishedScratch
+		return Self{state: EstablishedState.create(), edge: EdgeFacts.create(), plainEdge: EdgeFacts.create(), success: RememberedSuccess.create(), call: StdCallOperands.create(), store: StdStoreOperands.create(), slot: ElementSlotOperands.create(), branch: StdBranchOperands.create(), guard: ManagedGuardOperands.create(), def: StdFoldableDef.create(), decisions: CompareDecisionArray.create(), readers: StdValueUseSet.createTrackingRepeats(), seeds: StdValueUseSet.createRecordingIds(), folded: OrdinalTally.create(ManagedGuardKind.allCases.count())}
+	end 'create'
+end 'EstablishedScratch'

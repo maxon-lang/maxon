@@ -107,6 +107,7 @@ Pipeline: `maxon-bin/Compiler/IR/PassPipeline.maxon:395-413`.
 | **Jump threading through constant phi inputs** | ✅ `ThreadConstantBranches` (EC24) — Std tier, join kept, no SSA rebuild |
 | **Value-range analysis / bounds-check elimination** | ✅ `RefineValueRanges` (EC25, EC27) — intervals, branch refinement, widening, symbolic upper bounds against a hoisted length, the guarded-access join |
 | **Loop unswitching** | ✅ `UnswitchInvariantGuards` (EC26) — the managed shape guards versioned, header loads hoisted under two runtime-stated facts; pressure-aware since EC28 |
+| **Redundant guard elimination by established facts** | ✅ `FoldEstablishedGuards` (EC31) — a forward dataflow per function over the managed shape predicates and a constant-index length floor; a guard already proved for its record folds |
 | **Cold-call spilling** | ✅ `IrBlock.heat` + `ColdBlockRuns` (EC28) — a call in a cold block does not confine the hot path; save/reload around the cold run |
 | **Strength reduction** (magic div, shift div) | ✅ `StrengthReduceDivision` (EC18) — x64 only; the `mul`→`shl` half is moot since EC16 |
 | **Scaled-index addressing** (`[base+idx*8]`) | ✅ `loadRegBaseIndexScale` etc. (EC16) — x64 full, arm64 the `ADD` half |
@@ -1804,6 +1805,53 @@ golden `copyTail`'s versioned copy loop is `forstep#23: lea` falling into
 `forhdr#22: cmp; jcc less, __rc_ok#36` with `forexit` next; the pre-rotation layout is inferred from
 the same golden's slow-loop entry and `EC29`'s description (`jmp` latch behind a not-taken `jcc`), no
 golden holding it. Interleaved A/B against a control built from c7e0ed04, n=11 ×5: 2,519 → 2,408 ms (−4.4%, beyond both arms' spread); n=12 32,993 → 31,883 ms (ratio to C 1.59 → 1.53); the compiler's self-compile 44,566 → 38,602 ms (−13.4%); census ops 2518 → 2517 and jmp 42 → 41, since each elided back-edge `jmp` is offset by the entry `jmp` the unswitched sibling loop now needs. Scale ladder against a control built by the slot from the same commit: `branchCleanup` 444,571 → 509,343 allocations at rung 5 (×1.91 → ×1.89 per doubling; the second topology build and the rotation tables per looped function), `loopInvariantCodeMotion` 52,803 → 61,729 allocations and 31.5 → 29.1 MB (the bucketed seed).
+
+**`EC31` · Established-guard folding — a guard asked once per record, not once per access.** — ✅
+**CLOSED 2026-09-11 (round 9 of the fannkuch loop).** A per-instruction sample profile of the round-8
+binary (2,376 samples at n=11) put the README's next candidate, the reload of `temp[firstValue]`, at 39
+samples of branch skid, and the largest bounded bucket in `advancePermutation`: its six fixed-index
+accesses each re-ran the three shape guards and the bound check on a record the previous access had
+just proved, and the carry loop's unswitch chain then re-tested the same predicates on both records —
+about 240 samples, a tenth of the run. `FoldEstablishedGuards` is a Std pass scheduled after
+`unswitchInvariantGuards` and before the second value-range run: per function that holds a managed
+callee it runs a forward dataflow, keyed by managed record VALUE, over the four shape predicates of
+`ManagedGuardKind` and a length floor `length > K`. A shape guard's proceed arm establishes its
+predicate; a constant-index bound's proceed arm establishes the floor; the success edge of
+`__managed_set` establishes owned, allocated and unshared — a new runtime-stated fact,
+`managedCalleeSuccessProvesShape`, beside `managedCalleeSucceedsOnlyInBounds`: `buildManagedSet`
+checks its bound first and its error path writes nothing, and `emitCowDetach` returns without a store
+exactly when the three hold and otherwise makes the record owned and unshared — never the destructor
+predicate, which a managed element's `set` succeeds through; a bounded accessor's success at a `const K`
+establishes the floor `K`. Facts survive `writesNothing` and `detachesUnlessOwnedUnshared` callees and
+element stores (a constant slot, or a variable one whose bound guard dominates it — `DominatorStamps`,
+no cap); every other call and every other store clears every record's facts, so two names for one record
+cannot keep a fact through a clone under the other name. The state is optimistic, iterated in RPO to a
+fixpoint with intersection at every join — a `set` under one arm of an `if` proves nothing below it,
+and a versioned loop's exit proves nothing because its slow copy may run zero iterations. A guard whose
+predicate is established becomes `const 0` through the same rewrite `refineValueRanges` uses
+(`applyCompareDecisions`, factored out of it), its dropped arm goes with every block only it reached,
+and the loads and arithmetic that fed it and now feed nothing are retired by a bounded worklist (the
+one place an unread `loadIndirect` is deleted: nobody reads its value, and the dialect's `isPure: false`
+on a load is about moving one across a store, not about executing one). The unswitch chain's own
+`element_destroy@40` test for a writer with no such guard went with this row: `emitStoreArm` omits that
+guard exactly where the lowering stamped the element trivial (`Project.stdOpTrivialElementSites`, the
+record's static instance), so the test was vacuous, and it was the one chain test in `carry`'s shape the
+facts could never fold. The first implementation held the in-state as dense blocks × records columns
+and bent the scale ladder (bytes ×1.8 → ×3.2 per doubling, CPU ×2.2 → ×3.7); the state is now one
+arena of per-block runs of live (record, facts) entries written once on a block's first arrival and only
+narrowed after, and the phase reads ×2.0 in both columns (rung 5: 62.3 MB → 16.8 MB, CPU −92%).
+Pinned by `specs/established-guards.md`: two shape cases whose fragments are the evidence
+(`swapFirstTwo`'s second `set` is a buffer load and the store, its `get(0)` and both sets carry no
+bound check; `carry`'s chain tests nothing and its slow loop copy is gone) and seven controls that put a
+fact the rule must not hold under a value the program reads back — a `clone` and a `slice` between two
+sets, an undescribed user call, a failed set on a shared record, a set under one arm of an `if`, a clone
+through another name for the record, and a `String` element whose destructor guard a `set`'s success
+must not prove (a skipped release is exit 101). 47 guards fold in fannkuch (13 of each shape predicate,
+8 constant bounds, in 4 functions). Interleaved A/B against a control built from a5eef593 and rebuilt
+with itself, n=11 ×5: 2,398 → 2,336 ms (−2.6%, beyond both arms' spread of 16 ms); n=12 31,818 →
+30,952 ms (ratio to C 1.55 → 1.51); self-compile 37,315 → 37,753 ms (+1.2%, inside the band); census
+ops 2517 → 2085, mgd-call 69 → 57, call-direct 159 → 142 — the folded guards, their loads and the slow
+loop copies that lost their last way in.
 
 **`A3` · `retainBorrowedPayload` — the rest of `EC2`.** ⛔ **DECLINED 2026-08-30, MEASURED. The
 acquire is load-bearing, the prize is under 1%, and the rule `EC2` used is a WRONG ANSWER here.** The row

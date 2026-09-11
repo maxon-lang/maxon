@@ -29,6 +29,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @twice {
@@ -37,22 +40,11 @@ func @twice {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.cmpRegImm32 rdx, 0
-    x64.jcc greaterEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-rethrowing-try-propagates-the-error.test:6: Range check failed: value outside typealias 'Idx'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.movRegImm32 r10, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
+    x64.jcc less, __rc_panic
   __rc_ok:
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegReg rdx, rax
-    x64.jcc below, __im_load
-  __im_slow:
-    x64.callDirect __managed_get
-    x64.jmp __im_cont
+    x64.jcc aboveEqual, __im_slow
   __im_load:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
@@ -72,6 +64,17 @@ func @twice {
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-rethrowing-try-propagates-the-error.test:6: Range check failed: value outside typealias 'Idx'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __im_slow:
+    x64.callDirect __managed_get
+    x64.jmp __im_cont
 }
 
 func @main {

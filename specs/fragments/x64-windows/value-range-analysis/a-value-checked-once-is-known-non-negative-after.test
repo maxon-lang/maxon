@@ -27,6 +27,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @bump {
@@ -35,33 +38,11 @@ func @bump {
     x64.movRegReg rbp, rsp
     x64.prologue 48
     x64.cmpRegImm32 rdx, 0
-    x64.jcc greaterEqual, __rc_ok#7
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-value-checked-once-is-known-non-negative-after.test:6: Range check failed: value outside typealias 'ElementIndex'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 48
-    x64.popReg rbp
-    x64.ret
+    x64.jcc less, __rc_panic
   __rc_ok#7:
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegReg rdx, rax
-    x64.jcc below, __im_load#15
-  __im_slow#14:
-    x64.storeSlotReg slot0, rcx
-    x64.storeSlotReg slot1, rdx
-    x64.callDirect __managed_get
-    x64.loadRegSlot rcx, slot0
-    x64.loadRegSlot rdx, slot1
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#1
-  tryerr#2:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-value-checked-once-is-known-non-negative-after.test:6: bump: i is in range\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 48
-    x64.popReg rbp
-    x64.ret
+    x64.jcc aboveEqual, __im_slow#14
   __im_load#15:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
@@ -84,7 +65,42 @@ func @bump {
     x64.leaRegRegImm32 rdi, rsi, -24
     x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
     x64.cmpRegImm32 rdi, 0
-    x64.jcc equal, __im_store
+    x64.jcc notEqual, __im_slow#17
+  __im_store:
+    x64.storeBaseIndexScaleReg.word64 [rsi + rdx*8 + 0], rax
+  __rc_ok#11:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegReg rdx, rax
+    x64.jcc aboveEqual, __im_slow#23
+  __im_load#24:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseIndexScale.word64 r8, [rax + rdx*8 + 0]
+  tryok#5:
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-value-checked-once-is-known-non-negative-after.test:6: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+  __im_slow#14:
+    x64.storeSlotReg slot0, rcx
+    x64.storeSlotReg slot1, rdx
+    x64.callDirect __managed_get
+    x64.loadRegSlot rcx, slot0
+    x64.loadRegSlot rdx, slot1
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-value-checked-once-is-known-non-negative-after.test:6: bump: i is in range\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
   __im_slow#17:
     x64.storeSlotReg slot0, rcx
     x64.storeSlotReg slot1, rdx
@@ -100,12 +116,6 @@ func @bump {
     x64.epilogue 48
     x64.popReg rbp
     x64.ret
-  __im_store:
-    x64.storeBaseIndexScaleReg.word64 [rsi + rdx*8 + 0], rax
-  __rc_ok#11:
-    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
-    x64.cmpRegReg rdx, rax
-    x64.jcc below, __im_load#24
   __im_slow#23:
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
@@ -114,13 +124,6 @@ func @bump {
     x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-value-checked-once-is-known-non-negative-after.test:8: bump: i is in range\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 48
-    x64.popReg rbp
-    x64.ret
-  __im_load#24:
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.loadRegBaseIndexScale.word64 r8, [rax + rdx*8 + 0]
-  tryok#5:
     x64.epilogue 48
     x64.popReg rbp
     x64.ret

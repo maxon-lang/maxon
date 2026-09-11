@@ -2959,6 +2959,24 @@ export function managedCalleeSucceedsOnlyInBounds(callee ByteArray) returns bool
 	end 'role'
 end 'managedCalleeSucceedsOnlyInBounds'
 
+// The shape column of the roster: which entries RETURN WITHOUT AN ERROR only with the record owned,
+// allocated and unshared. `buildManagedSet` checks its bound first and returns an error without writing,
+// then `emitCowDetach` runs, which returns without a store exactly when `capacity@16 >= 0`, `buffer@0 != 0`
+// and the buffer's refcount word is 0, and otherwise makes the record owned and unshared with a fresh
+// buffer — so a success leaves all three true. The in-place writers bound against the capacity and
+// detach before that bound (`emitBufferAccessGuard`), so their success does not prove `buffer@0 != 0` by
+// this argument and they answer false. Success proves nothing about `element_destroy@40`: a managed
+// element's `set` succeeds through its destructor. Read by `foldEstablishedGuards`.
+export function managedCalleeSuccessProvesShape(callee ByteArray) returns bool
+	return match managedCalleeRole(callee) 'role'
+		boundedWriter gives true
+		boundedRead or
+			pureRead or
+			inPlaceWriter or
+			other gives false
+	end 'role'
+end 'managedCalleeSuccessProvesShape'
+
 // The guards `InlineManagedPrimitives` asks before an inlined element access, and the bound every
 // checked access asks, each read back off a `condBranch`'s condition. Every kind puts its REFUSAL on
 // the THEN arm — that is how each emitter spells it — so the else arm is the one the access proceeds on.
@@ -2987,14 +3005,16 @@ export type ManagedGuardOperands
 	// The record every kind tests a field of.
 	export var record as ValueId
 
-	// `indexOutOfRange` only: whether the index is a value, and which — a constant index is not a value —
-	// and the field the limit was loaded from, `length@8` or `capacity@16`.
+	// `indexOutOfRange` only: whether the index is a value, and which — a constant index is not a value,
+	// and is `constantIndex` instead — and the field the limit was loaded from, `length@8` or
+	// `capacity@16`.
 	export var indexIsVariable as bool
 	export var index as ValueId
+	export var constantIndex as ParsedInt
 	export var limitOffset as ByteOffset
 
 	export static function create() returns ManagedGuardOperands
-		return Self{kind: ManagedGuardKind.bufferNotOwned, record: 0, indexIsVariable: false, index: 0, limitOffset: ManagedRecordLengthOffset}
+		return Self{kind: ManagedGuardKind.bufferNotOwned, record: 0, indexIsVariable: false, index: 0, constantIndex: 0, limitOffset: ManagedRecordLengthOffset}
 	end 'create'
 
 	function recordShape(shape ManagedGuardKind, tested ValueId)
@@ -3010,10 +3030,11 @@ export type ManagedGuardOperands
 		self.limitOffset = limit
 	end 'recordVariableBound'
 
-	function recordConstantBound(tested ValueId, limit ByteOffset)
+	function recordConstantBound(tested ValueId, at ParsedInt, limit ByteOffset)
 		self.kind = ManagedGuardKind.indexOutOfRange
 		self.record = tested
 		self.indexIsVariable = false
+		self.constantIndex = at
 		self.limitOffset = limit
 	end 'recordConstantBound'
 end 'ManagedGuardOperands'
@@ -3071,8 +3092,9 @@ function classifyIndexOutOfRange(reader StdShapeReader, condId ValueId, out Mana
 	end 'variableIndex'
 
 	if reader.arith.isComparisonImm() and reader.arith.pred == StdCmpPred.le 'constantIndex'
+		let index = reader.arith.imm as ParsedInt
 		let record = try limitFieldRecord(reader, limit: reader.arith.lhs) otherwise return false
-		out.recordConstantBound(record, limit: reader.load.offset)
+		out.recordConstantBound(record, at: index, limit: reader.load.offset)
 		return true
 	end 'constantIndex'
 

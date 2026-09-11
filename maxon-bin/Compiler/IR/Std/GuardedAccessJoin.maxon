@@ -95,16 +95,13 @@ export type GuardedAccessJoinReader
 			return false
 		end 'noTestCloses'
 
-		if not reader.arith.isComparisonImm() or reader.arith.imm as ParsedInt != ConditionIsFalse 'notAFlagTest'
+		let arm = errorFlagTestArm(reader)
+
+		if arm == ErrorFlagTestArm.notAFlagTest 'notAFlagTest'
 			return false
 		end 'notAFlagTest'
 
-		if reader.arith.pred != StdCmpPred.eq and reader.arith.pred != StdCmpPred.ne 'notAnEqualityTest'
-			return false
-		end 'notAnEqualityTest'
-
-		// `flag == 0` succeeds on the then arm, `flag != 0` on the else arm.
-		let successArm = self.slowBranch.thenBlockId if reader.arith.pred == StdCmpPred.eq else self.slowBranch.elseBlockId
+		let successArm = self.slowBranch.thenBlockId if arm == ErrorFlagTestArm.successOnThen else self.slowBranch.elseBlockId
 
 		if successArm != module.blockAtPosition(func, position: position).id 'joinIsNotTheSuccess'
 			return false
@@ -133,6 +130,31 @@ export type GuardedAccessJoinReader
 		return false
 	end 'accessorCallDefines'
 end 'GuardedAccessJoinReader'
+
+// Which arm of a block's closing test a `tryCall`'s success takes, when that test is its error flag
+// against `NoErrorFlag`. `reader.arith` holds the compare (`closingCompareOf`), and on either success
+// answer `reader.arith.lhs` is the flag. Shared by every reader of a success edge.
+export enum ErrorFlagTestArm
+	notAFlagTest
+	successOnThen
+	successOnElse
+end 'ErrorFlagTestArm'
+
+export function errorFlagTestArm(reader StdShapeReader) returns ErrorFlagTestArm
+	if not reader.arith.isComparisonImm() or reader.arith.imm as ParsedInt != NoErrorFlag 'notAgainstNoError'
+		return ErrorFlagTestArm.notAFlagTest
+	end 'notAgainstNoError'
+
+	// `flag == 0` succeeds on the then arm, `flag != 0` on the else arm.
+	return match reader.arith.pred 'pred'
+		eq gives ErrorFlagTestArm.successOnThen
+		ne gives ErrorFlagTestArm.successOnElse
+		lt or
+			gt or
+			le or
+			ge gives ErrorFlagTestArm.notAFlagTest
+	end 'pred'
+end 'errorFlagTestArm'
 
 // The compare a block's exit branches on: whether `block` ends in a `condBranch` between two distinct
 // arms whose condition an arithmetic compare defines, filling `branch` with the terminator and

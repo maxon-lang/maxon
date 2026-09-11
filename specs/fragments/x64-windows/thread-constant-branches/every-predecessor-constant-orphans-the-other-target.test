@@ -27,15 +27,19 @@ end 'main'
 ---
 ExitCode: 0
 ---
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+}
+
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.movRegImm32 rax, 0
     x64.movRegImm32 rcx, 0
-  forhdr:
-    x64.cmpRegImm32 rcx, 4
-    x64.jcc greaterEqual, forexit
+    x64.jmp forhdr
   each:
     x64.movRegReg rdx, rcx
     x64.sarRegImm8 rdx, rcx, 63
@@ -56,7 +60,9 @@ func @main {
     x64.leaRegRegReg rax, rax, rdx
   forstep:
     x64.leaRegRegImm32 rcx, rcx, 1
-    x64.jmp forhdr
+  forhdr:
+    x64.cmpRegImm32 rcx, 4
+    x64.jcc less, each
   forexit:
     x64.cmpRegImm32 rax, 8
     x64.jcc equal, ifcont#6

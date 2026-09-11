@@ -25,6 +25,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @weigh {
@@ -36,16 +39,16 @@ func @weigh {
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 rcx, 100
-    x64.jcc lessEqual, __rc_ok
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.imulRegRegImm32 r8, rcx, 2
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-two-sided-alias-keeps-its-upper-check-under-a-runtime-bound.test:6: Range check failed: value outside typealias 'Small'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.imulRegRegImm32 r8, rcx, 2
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -68,12 +71,8 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 0
-    x64.jcc above, __im_load
-  __im_slow:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
+    x64.jcc belowEqual, __im_slow
+    x64.jmp __im_load
   tryerr:
     x64.movRegImm32 rax, 0
     x64.jmp trycont
@@ -87,21 +86,10 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.movRegImm32 rdx, 0
     x64.xchgRegReg rcx, rdx
-  forhdr:
-    x64.cmpRegReg rcx, rax
-    x64.jcc greaterEqual, forexit
+    x64.jmp forhdr
   __rc_chk#20:
     x64.cmpRegImm32 rcx, 100
-    x64.jcc lessEqual, __rc_ok#19
-  __il_slow:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rcx
-    x64.storeSlotReg slot2, rdx
-    x64.callDirect weigh
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rcx, slot1
-    x64.loadRegSlot rdx, slot2
-    x64.jmp __il_cont
+    x64.jcc greater, __il_slow
   __rc_ok#19:
     x64.imulRegRegImm32 rsi, rcx, 2
     x64.movRegReg r8, rsi
@@ -109,7 +97,9 @@ func @main {
     x64.leaRegRegReg rdx, rdx, r8
   forstep:
     x64.leaRegRegImm32 rcx, rcx, 1
-    x64.jmp forhdr
+  forhdr:
+    x64.cmpRegReg rcx, rax
+    x64.jcc less, __rc_chk#20
   forexit:
     x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, ternaryfalse
@@ -124,18 +114,33 @@ func @main {
   __rc_chk#13:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r12, rax
-    x64.jcc lessEqual, __rc_ok#11
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-two-sided-alias-keeps-its-upper-check-under-a-runtime-bound.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.jcc greater, __rc_panic
+  __rc_ok#11:
+    x64.movRegReg r8, r12
     x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok#11:
-    x64.movRegReg r8, r12
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  __il_slow:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.callDirect weigh
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
+    x64.jmp __il_cont
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-two-sided-alias-keeps-its-upper-check-under-a-runtime-bound.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx

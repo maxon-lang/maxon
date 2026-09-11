@@ -538,7 +538,7 @@ let FoldedArithType = StdType.i64
 
 // A comparison's result is the i1 the `cmp` it replaces declared, which is what keeps its wasm local an
 // i32 (`recordDefValtype` types every `cmp` result i32, and `wasmValTypeOf(i1)` is i32).
-module let FoldedComparisonType = StdType.i1
+let FoldedComparisonType = StdType.i1
 
 // ⭐⭐ **THE FLOAT MEMBER OF THE SAME RULE — "the RESULT's domain at its machine word" — AND THE ONE
 // PLACE THE `f64`-ONLY-NESS OF THIS PASS'S FLOAT PATH IS WRITTEN DOWN.** Read it in both directions:
@@ -627,7 +627,7 @@ end 'evaluateIntBinOp'
 // the time the code is encoded.
 //
 // Answers how many branches folded — `refineValueRanges` reports the count it made this fold.
-module function foldConstantBranches(module StdModule, func IrFunction, constMap ConstValueMap, branch StdBranchOperands) returns TallyCount
+function foldConstantBranches(module StdModule, func IrFunction, constMap ConstValueMap, branch StdBranchOperands) returns TallyCount
 	var folded = 0 as TallyCount
 
 	for position in 0 upto func.blockRefs.count() 'eachBlock'
@@ -681,6 +681,44 @@ function foldCondBranch(module StdModule, block IrBlock, termIdx OpIndex, condId
 
 	return true
 end 'foldCondBranch'
+
+// One compare a pass decided, and what it decided.
+module type CompareDecision
+	export var opIdx as OpIndex
+	export var resultId as ValueId
+	export var holds as bool
+
+	module static function create(opIdx OpIndex, resultId ValueId, holds bool) returns CompareDecision
+		return Self{opIdx: opIdx, resultId: resultId, holds: holds}
+	end 'create'
+end 'CompareDecision'
+
+module typealias CompareDecisionArray = Array with CompareDecision
+
+// The rewrite every deciding pass shares: each decided compare becomes the `const` it evaluates to, at
+// its own index and keeping its result id, so every reader — the branch, a second branch, a stored bool
+// — reads the constant; the branches on those constants fold as `foldConstantBranches` folds them; the
+// arm a fold dropped goes with everything only it reached; the constants nothing reads any more are
+// retired. Answers how many branches folded.
+module function applyCompareDecisions(module StdModule, func IrFunction, decisions CompareDecisionArray, branch StdBranchOperands, def StdFoldableDef) returns TallyCount
+	var constMap = ConstValueMap.create()
+
+	for decision in decisions 'eachDecision'
+		let payload = boolPayload(decision.holds)
+		try module.ops.set(decision.opIdx, value: StdOp.const(decision.resultId, value: payload, valueType: FoldedComparisonType)) otherwise panic("applyCompareDecisions: ops.set OOB at {decision.opIdx}")
+		constMap.upsert(decision.resultId, value: payload)
+	end 'eachDecision'
+
+	let folded = foldConstantBranches(module, func: func, constMap: constMap, branch: branch)
+
+	if folded > 0 'branchesFolded'
+		dropUnreachableBlocks(module, func: func)
+	end 'branchesFolded'
+
+	dceRetiredDefs(module, func: func, opIndices: module.liveOpIndices(func), def: def)
+
+	return folded
+end 'applyCompareDecisions'
 
 // The i1 payload a FALSE condition carries. Named because it is a fact about the bool encoding
 // (`TypeRules.boolPayload`) rather than a number that happens to appear here. `threadConstantBranches`

@@ -95,7 +95,7 @@
 //     unsigned one whose two operands both lie within `[0, i64.max]` (`compareIsOrderable`); a symbolic
 //     bound is attached only by a source that sees the value non-negative (`boundBelow`, `carrySym`) and
 //     decides only a compare against its own base (`decideSymbolically`);
-//   • a decided compare is rewritten only at its own definition (`applyDecisions`).
+//   • a decided compare is rewritten only at its own definition (`applyCompareDecisions`).
 
 typealias FixpointRound = int(0 to u64.max)
 typealias TrailMark = int(0 to u64.max)
@@ -142,7 +142,7 @@ enum UnboundedReason
 	forcedByRoundCap
 end 'UnboundedReason'
 
-function wordTyped(t StdType) returns bool
+module function wordTyped(t StdType) returns bool
 	return t == StdType.i64 or t == StdType.u64
 end 'wordTyped'
 
@@ -316,19 +316,6 @@ function mulWraps(a ParsedInt, b ParsedInt) returns bool
 	let recovered = try (product / b) otherwise panic("refineValueRanges: the divisor is neither 0 nor -1")
 	return recovered != a
 end 'mulWraps'
-
-// One compare the last round decided, and what it decided.
-type CompareDecision
-	export var opIdx as OpIndex
-	export var resultId as ValueId
-	export var holds as bool
-
-	static function create(opIdx OpIndex, resultId ValueId, holds bool) returns CompareDecision
-		return Self{opIdx: opIdx, resultId: resultId, holds: holds}
-	end 'create'
-end 'CompareDecision'
-
-typealias CompareDecisionArray = Array with CompareDecision
 
 // The per-function facts the walk reads: the dominator tree, O(1) dominance for the block-arg bound
 // rule, and the shape reader the guarded-access join asks about a guard and a call.
@@ -670,7 +657,8 @@ function refineValueRangesInFunc(module StdModule, func IrFunction, scratch Rang
 
 	logTrace(LogCategory.ir, message: function() gives "refineValueRanges: '{String.from(func.name)}' decided {scratch.decisions.count()} compare(s) after {round} round(s)")
 
-	return applyDecisions(module, func: func, scratch: scratch)
+	// The fourth guardrail: a decided compare is rewritten only at its own definition.
+	return applyCompareDecisions(module, func: func, decisions: scratch.decisions, branch: scratch.branch, def: scratch.def)
 end 'refineValueRangesInFunc'
 
 function beginRound(scratch RangeScratch)
@@ -1430,27 +1418,3 @@ function verdictOf(holds bool, fails bool) returns CompareVerdict
 
 	return CompareVerdict.undecided
 end 'verdictOf'
-
-// The fourth guardrail and the rewrite: each decided compare becomes the `const` it evaluates to, at its
-// own index; the branches on those constants fold as `foldConstants` folds them; the arm a fold dropped
-// goes with everything only it reached; the constants nothing reads any more are retired. Answers how
-// many branches folded.
-function applyDecisions(module StdModule, func IrFunction, scratch RangeScratch) returns TallyCount
-	var constMap = ConstValueMap.create()
-
-	for decision in scratch.decisions 'eachDecision'
-		let payload = boolPayload(decision.holds)
-		try module.ops.set(decision.opIdx, value: StdOp.const(decision.resultId, value: payload, valueType: FoldedComparisonType)) otherwise panic("refineValueRanges: ops.set OOB at {decision.opIdx}")
-		constMap.upsert(decision.resultId, value: payload)
-	end 'eachDecision'
-
-	let folded = foldConstantBranches(module, func: func, constMap: constMap, branch: scratch.branch)
-
-	if folded > 0 'branchesFolded'
-		dropUnreachableBlocks(module, func: func)
-	end 'branchesFolded'
-
-	dceRetiredDefs(module, func: func, opIndices: module.liveOpIndices(func), def: scratch.def)
-
-	return folded
-end 'applyDecisions'

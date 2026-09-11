@@ -1,0 +1,218 @@
+// Test: a-store-on-one-path-establishes-nothing-at-the-join
+typealias Word = int(i64.min to i64.max)
+typealias WordArray = Array with Word
+
+function rewrite(a WordArray, n Word)
+	if n > 100 'never'
+		try a.set(0, value: 1) otherwise panic("rewrite: a holds two elements")
+	end 'never'
+	try a.set(1, value: 7) otherwise panic("rewrite: a holds two elements")
+end 'rewrite'
+
+function main() returns ExitCode
+	var a = WordArray.create()
+	a.push(1)
+	a.push(2)
+	let b = a.clone()
+	rewrite(a, n: 3)
+	if (try b.get(1) otherwise 0) != 2 'bUntouched'
+		return 1
+	end 'bUntouched'
+	if (try a.get(1) otherwise 0) != 7 'aRewritten'
+		return 2
+	end 'aRewritten'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
+}
+
+func @rewrite {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 48
+    x64.cmpRegImm32 rdx, 100
+    x64.jcc lessEqual, ifcont
+  never:
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 1
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc less, __im_slow#8
+  __im_bounds#9:
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc belowEqual, __im_slow#8
+  __im_buffer#10:
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, __im_slow#8
+  __im_viewed#11:
+    x64.leaRegRegImm32 rdi, rsi, -24
+    x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc notEqual, __im_slow#8
+  __im_store#12:
+    x64.storeBaseDispReg.word64 [rsi + 0], rax
+  ifcont:
+    x64.movRegImm32 rdx, 1
+    x64.movRegImm32 rax, 7
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc less, __im_slow#14
+  __im_bounds#15:
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
+    x64.cmpRegImm32 rsi, 1
+    x64.jcc belowEqual, __im_slow#14
+  __im_buffer#16:
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, __im_slow#14
+  __im_viewed#17:
+    x64.leaRegRegImm32 rdi, rsi, -24
+    x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc notEqual, __im_slow#14
+  __im_store#18:
+    x64.leaRegRegImm32 rcx, rsi, 8
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+  tryok:
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+  __im_slow#8:
+    x64.storeSlotReg slot0, rcx
+    x64.callDirect __managed_set
+    x64.loadRegSlot rcx, slot0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, ifcont
+  tryerr#3:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-store-on-one-path-establishes-nothing-at-the-join.test:7: rewrite: a holds two elements\x0a"
+    x64.callDirect mrt_panic
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+  __im_slow#14:
+    x64.callDirect __managed_set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-store-on-one-path-establishes-nothing-at-the-join.test:9: rewrite: a holds two elements\x0a"
+    x64.callDirect mrt_panic
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.leaRegRdata rdx, [rip + __layout_Array_Word]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Array.clone
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rdx, 3
+    x64.movRegReg rcx, rbx
+    x64.callDirect rewrite
+    x64.movRegImm32 rdx, 1
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegImm32 rax, 1
+    x64.jcc belowEqual, __im_slow#12
+  __im_load#13:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.leaRegRegImm32 rax, rax, 8
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegReg r8, rax
+  tryok#1:
+    x64.cmpRegImm32 r8, 2
+    x64.jcc equal, ifcont#5
+  bUntouched:
+    x64.movRegImm32 r13, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#5:
+    x64.movRegImm32 rdx, 1
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 1
+    x64.jcc belowEqual, __im_slow#15
+  __im_load#16:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.leaRegRegImm32 rax, rax, 8
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegReg r8, rax
+  tryok#6:
+    x64.cmpRegImm32 r8, 7
+    x64.jcc equal, ifcont#10
+  aRewritten:
+    x64.movRegImm32 r13, 2
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#10:
+    x64.movRegImm32 r13, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#12:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, bUntouched
+    x64.jmp tryok#1
+  __im_slow#15:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, aRewritten
+    x64.jmp tryok#6
+}

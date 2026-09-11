@@ -27,6 +27,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @crossWrite {
@@ -54,14 +57,7 @@ func @crossWrite {
     x64.loadRegBaseDisp.word64 rbx, [rbx + 16]
     x64.cmpRegImm32 rbx, 0
     x64.jcc notEqual, forhdr#1
-  __us_test#41:
-    x64.loadRegBaseDisp.word64 rbx, [rcx + 40]
-    x64.movRegImm32 r12, 0
-    x64.cmpRegReg rbx, r12
-    x64.jcc equal, forhdr#22
-  forhdr#1:
-    x64.cmpRegReg rdi, rax
-    x64.jcc greaterEqual, critsplit#43
+    x64.jmp forhdr#22
   each#2:
     x64.leaRegRegImm32 r8, rdi, 10
   __rc_ok#9:
@@ -80,7 +76,53 @@ func @crossWrite {
     x64.leaRegRegImm32 r10, r9, -24
     x64.loadRegBaseDisp.word64 r10, [r10 + 16]
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, __im_store#18
+    x64.jcc notEqual, __im_slow#14
+  __im_store#18:
+    x64.storeBaseIndexScaleReg.word64 [r9 + rdi*8 + 0], r8
+  __rc_ok#11:
+    x64.loadRegBaseDisp.word64 r8, [rdx + 8]
+    x64.cmpRegReg rdi, r8
+    x64.jcc aboveEqual, __im_slow#20
+  __im_load#21:
+    x64.loadRegBaseDisp.word64 r8, [rdx + 0]
+    x64.loadRegBaseIndexScale.word64 r8, [r8 + rdi*8 + 0]
+  tryok#7:
+    x64.leaRegRegReg rsi, rsi, r8
+  forstep#3:
+    x64.leaRegRegImm32 rdi, rdi, 1
+  forhdr#1:
+    x64.cmpRegReg rdi, rax
+    x64.jcc less, each#2
+  critsplit#42:
+    x64.movRegReg r8, rsi
+    x64.jmp forexit
+  each#37:
+    x64.leaRegRegImm32 rbx, rdi, 10
+  __im_bounds#35:
+    x64.cmpRegReg rdi, r10
+    x64.jcc aboveEqual, __im_slow#31
+  __im_store#32:
+    x64.storeBaseIndexScaleReg.word64 [r11 + rdi*8 + 0], rbx
+  __rc_ok#28:
+    x64.cmpRegReg rdi, r8
+    x64.jcc aboveEqual, __im_slow#26
+  __im_load#27:
+    x64.loadRegBaseIndexScale.word64 rbx, [r9 + rdi*8 + 0]
+  tryok#24:
+    x64.leaRegRegReg rsi, rsi, rbx
+  forstep#23:
+    x64.leaRegRegImm32 rdi, rdi, 1
+  forhdr#22:
+    x64.cmpRegReg rdi, rax
+    x64.jcc less, each#37
+  critsplit#45:
+    x64.movRegReg r8, rsi
+  forexit:
+    x64.epilogue 112
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   __im_slow#14:
     x64.storeSlotReg slot0, rax
     x64.storeSlotReg slot1, rcx
@@ -98,12 +140,6 @@ func @crossWrite {
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#6
     x64.jmp __rc_ok#11
-  __im_store#18:
-    x64.storeBaseIndexScaleReg.word64 [r9 + rdi*8 + 0], r8
-  __rc_ok#11:
-    x64.loadRegBaseDisp.word64 r8, [rdx + 8]
-    x64.cmpRegReg rdi, r8
-    x64.jcc below, __im_load#21
   __im_slow#20:
     x64.storeSlotReg slot0, rax
     x64.storeSlotReg slot1, rcx
@@ -121,25 +157,6 @@ func @crossWrite {
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#8
     x64.jmp tryok#7
-  __im_load#21:
-    x64.loadRegBaseDisp.word64 r8, [rdx + 0]
-    x64.loadRegBaseIndexScale.word64 r8, [r8 + rdi*8 + 0]
-  tryok#7:
-    x64.leaRegRegReg rsi, rsi, r8
-  forstep#3:
-    x64.leaRegRegImm32 rdi, rdi, 1
-    x64.jmp forhdr#1
-  critsplit#43:
-    x64.movRegReg r8, rsi
-    x64.jmp forexit
-  forhdr#22:
-    x64.cmpRegReg rdi, rax
-    x64.jcc greaterEqual, critsplit#46
-  each#37:
-    x64.leaRegRegImm32 rbx, rdi, 10
-  __im_bounds#35:
-    x64.cmpRegReg rdi, r10
-    x64.jcc below, __im_store#32
   __im_slow#31:
     x64.storeSlotReg slot0, rax
     x64.storeSlotReg slot1, rcx
@@ -175,11 +192,6 @@ func @crossWrite {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_store#32:
-    x64.storeBaseIndexScaleReg.word64 [r11 + rdi*8 + 0], rbx
-  __rc_ok#28:
-    x64.cmpRegReg rdi, r8
-    x64.jcc below, __im_load#27
   __im_slow#26:
     x64.storeSlotReg slot0, rax
     x64.storeSlotReg slot1, rcx
@@ -210,21 +222,6 @@ func @crossWrite {
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at two-names-for-one-record.test:9: crossWrite: i < n\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 112
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __im_load#27:
-    x64.loadRegBaseIndexScale.word64 rbx, [r9 + rdi*8 + 0]
-  tryok#24:
-    x64.leaRegRegReg rsi, rsi, rbx
-  forstep#23:
-    x64.leaRegRegImm32 rdi, rdi, 1
-    x64.jmp forhdr#22
-  critsplit#46:
-    x64.movRegReg r8, rsi
-  forexit:
     x64.epilogue 112
     x64.popReg r12
     x64.popReg rbx

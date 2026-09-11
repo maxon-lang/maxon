@@ -30,6 +30,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @walk {
@@ -43,15 +46,31 @@ func @walk {
   __us_test:
     x64.loadRegBaseDisp.word64 rdi, [rcx + 8]
     x64.loadRegBaseDisp.word64 r9, [rcx + 0]
-  forhdr:
-    x64.cmpRegReg rsi, rdx
-    x64.jcc greaterEqual, forexit
+    x64.jmp forhdr
   each:
     x64.imulRegRegImm32 rax, rax, 3
     x64.leaRegRegReg rax, rax, rsi
   __rc_ok:
     x64.cmpRegReg rsi, rdi
-    x64.jcc below, __im_load
+    x64.jcc aboveEqual, __im_slow
+    x64.jmp __im_load
+  tryerr:
+    x64.movRegImm32 r10, 99
+    x64.jmp trycont
+  __im_load:
+    x64.loadRegBaseIndexScale.word64 r10, [r9 + rsi*8 + 0]
+  trycont:
+    x64.leaRegRegReg r8, r8, r10
+    x64.leaRegRegReg r8, r8, rax
+  forstep:
+    x64.leaRegRegImm32 rsi, rsi, 1
+  forhdr:
+    x64.cmpRegReg rsi, rdx
+    x64.jcc less, each
+  forexit:
+    x64.epilogue 96
+    x64.popReg rbp
+    x64.ret
   __im_slow:
     x64.storeSlotReg slot0, rax
     x64.storeSlotReg slot1, rcx
@@ -72,22 +91,8 @@ func @walk {
     x64.loadRegSlot r8, slot5
     x64.loadRegSlot r9, slot6
     x64.cmpRegImm32 r11, 0
-    x64.jcc equal, trycont
-  tryerr:
-    x64.movRegImm32 r10, 99
+    x64.jcc notEqual, tryerr
     x64.jmp trycont
-  __im_load:
-    x64.loadRegBaseIndexScale.word64 r10, [r9 + rsi*8 + 0]
-  trycont:
-    x64.leaRegRegReg r8, r8, r10
-    x64.leaRegRegReg r8, r8, rax
-  forstep:
-    x64.leaRegRegImm32 rsi, rsi, 1
-    x64.jmp forhdr
-  forexit:
-    x64.epilogue 96
-    x64.popReg rbp
-    x64.ret
 }
 
 func @main {
@@ -102,16 +107,16 @@ func @main {
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 r12, 0
-  forhdr:
-    x64.cmpRegImm32 r12, 5
-    x64.jcc greaterEqual, forexit
+    x64.jmp forhdr
   seed:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.callDirect __managed_push
   forstep:
     x64.leaRegRegImm32 r12, r12, 1
-    x64.jmp forhdr
+  forhdr:
+    x64.cmpRegImm32 r12, 5
+    x64.jcc less, seed
   forexit:
     x64.movRegImm32 rdx, 9
     x64.movRegReg rcx, rbx

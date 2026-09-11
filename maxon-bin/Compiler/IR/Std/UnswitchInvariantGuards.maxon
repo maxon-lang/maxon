@@ -38,8 +38,11 @@
 //   • for each writer's record, L's guards include all three shape predicates. That is the induction:
 //     the detach fires exactly when one of them fails; the copy is entered with all three true, nothing
 //     in the copy writes the header, so they hold on every iteration and the detach never fires. A
-//     writer runs a destructor only on a managed element, so the copy is entered only when
-//     `element_destroy@40 == 0` — the loop's own guard where it has one, a test emitted here otherwise;
+//     writer runs a destructor only on a managed element, and the copy never runs one: the three guards
+//     are `emitStoreArm`'s alone, and that arm asks `element_destroy@40` at run time exactly where the
+//     lowering could not answer it — the loop's own guard, folded like the other three — and omits it
+//     where the lowering proved the element trivial, a stamp that is the record's own
+//     (`Project.stdOpTrivialElementSites`), so no path reaches such a store with a destructor to run;
 //   • every loop-defined value read after L is a block arg of a member, read only under ONE exit block
 //     whose predecessors are all members — the block that takes one phi per such value.
 //
@@ -232,7 +235,7 @@ end 'unswitchInvariantGuards'
 function unswitchInFunc(module StdModule, func IrFunction, funcIndex FuncIndex, origins ValueOriginTable, budget HoistPressureBudget, scratch UnswitchScratch) returns RewrittenLoopCount
 	let blockCount = func.blockRefs.count()
 
-	if blockCount < 2 or not holdsAManagedCallee(module, func: func, scratch: scratch) 'nothingToVersion'
+	if blockCount < 2 or not holdsAManagedCallee(module, func: func, call: scratch.call) 'nothingToVersion'
 		return 0
 	end 'nothingToVersion'
 
@@ -287,8 +290,9 @@ function unswitchInFunc(module StdModule, func IrFunction, funcIndex FuncIndex, 
 end 'unswitchInFunc'
 
 // Whether any live op of `func` calls a runtime entry with a stated effect — the one op read most
-// functions pay, before the successor graph and the tree are built for a loop nothing here can serve.
-function holdsAManagedCallee(module StdModule, func IrFunction, scratch UnswitchScratch) returns bool
+// functions pay, before a tree is built for a function nothing here or in `foldEstablishedGuards` can
+// serve. `call` is the caller's classification record, refilled per call.
+module function holdsAManagedCallee(module StdModule, func IrFunction, call StdCallOperands) returns bool
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = module.getBlock(blockRef)
 
@@ -299,9 +303,9 @@ function holdsAManagedCallee(module StdModule, func IrFunction, scratch Unswitch
 				continue
 			end 'notACall'
 
-			classifyCallOperands(op, call: scratch.call)
+			classifyCallOperands(op, call: call)
 
-			if scratch.call.namesACallee() and managedCalleeHeaderEffect(scratch.call.callee) != ManagedHeaderEffect.unknown 'stated'
+			if call.namesACallee() and managedCalleeHeaderEffect(call.callee) != ManagedHeaderEffect.unknown 'stated'
 				return true
 			end 'stated'
 		end 'eachOp'
@@ -1565,8 +1569,7 @@ end 'TestChain'
 
 // The chain of test blocks between the preheader and the two headers: the hoisted ops in walk order,
 // each admitted guard's compare closing a block whose refusal goes to `__us_slow` (which enters the
-// original) and whose pass goes on to the next test, the last pass entering the copy. A writer's
-// record without an `elementManaged` guard gets that test emitted here, after the guards.
+// original) and whose pass goes on to the next test, the last pass entering the copy.
 function emitTestChain(module StdModule, func IrFunction, plan UnswitchPlan, analysis UnswitchFunction, scratch UnswitchScratch, columns RewriteColumns, minter ValueMinter)
 	var chain = TestChain.create()
 	var guardCursor = 0 as GuardCount
@@ -1621,7 +1624,6 @@ function emitTestChain(module StdModule, func IrFunction, plan UnswitchPlan, ana
 		panic("unswitchInvariantGuards: {plan.hoistedWalk.count() - hoistCursor} numbered hoisted op(s) were not met by the chain walk — the two walks disagree on the members")
 	end 'aHoistedOpWasNotInTheWalk'
 
-	emitDestructorTests(module, func: func, plan: plan, chain: chain, minter: minter)
 	wireTestChain(module, func: func, plan: plan, chain: chain, columns: columns)
 end 'emitTestChain'
 
@@ -1682,22 +1684,6 @@ function calleeWritesNoHeader(op StdOp, scratch UnswitchScratch) returns bool
 	classifyCallOperands(op, call: scratch.call)
 	return scratch.call.namesACallee() and managedCalleeHeaderEffect(scratch.call.callee) == ManagedHeaderEffect.writesNothing
 end 'calleeWritesNoHeader'
-
-// `element_destroy@40 == 0` for each writer's record the loop does not already test — the runtime's
-// own spelling of the question, so the fast copy is entered only for elements that owe no drop.
-function emitDestructorTests(module StdModule, func IrFunction, plan UnswitchPlan, chain TestChain, minter ValueMinter)
-	for record in plan.writerRecords 'eachWriter'
-		if plan.hasGuard(ManagedGuardKind.elementManaged, record: record) 'theLoopTestsIt'
-			continue
-		end 'theLoopTestsIt'
-
-		let first = try plan.guards.get(0) otherwise panic("unswitchInvariantGuards: a plan with a writer has at least three guards")
-		module.spans.current = module.spans.at(first.compareOpIdx)
-		let destroy = emitLoadField(module, block: chain.block(module, func: func), record: record, offset: ManagedRecordElementDestroyOffset, ids: minter)
-		let managed = emitElementIsManaged(module, block: chain.block(module, func: func), destroy: destroy, ids: minter)
-		chain.closeTest(managed)
-	end 'eachWriter'
-end 'emitDestructorTests'
 
 // Terminate every chain block, mint `__us_slow` where a test can refuse, and turn the preheader's
 // exit onto the chain. In the hoist-only mode there is no test and no copy: the one chain block

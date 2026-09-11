@@ -41,9 +41,7 @@ func @walkDown {
   __us_test:
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.loadRegBaseDisp.word64 rsi, [rcx + 0]
-  whilehdr:
-    x64.cmpRegImm32 rdx, -2
-    x64.jcc lessEqual, whileexit
+    x64.jmp whilehdr
   down:
     x64.cmpRegImm32 rdx, 0
     x64.jcc less, __rc_panic
@@ -59,7 +57,9 @@ func @walkDown {
   trycont:
     x64.leaRegRegReg r8, r8, rdi
     x64.leaRegRegImm32 rdx, rdx, -1
-    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 rdx, -2
+    x64.jcc greater, down
   whileexit:
     x64.epilogue 80
     x64.popReg rbp
@@ -101,16 +101,16 @@ func @main {
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 r12, 1
-  forhdr:
-    x64.cmpRegImm32 r12, 3
-    x64.jcc greater, forexit
+    x64.jmp forhdr
   seed:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.callDirect __managed_push
   forstep:
     x64.leaRegRegImm32 r12, r12, 1
-    x64.jmp forhdr
+  forhdr:
+    x64.cmpRegImm32 r12, 3
+    x64.jcc lessEqual, seed
   forexit:
     x64.movRegImm32 rdx, 2
     x64.movRegReg rcx, rbx

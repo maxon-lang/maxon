@@ -37,6 +37,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @put {
@@ -45,14 +48,7 @@ func @put {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.cmpRegImm32 rdx, 0
-    x64.jcc greaterEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-write-in-a-loop-keeps-its-slow-arm.test:6: Range check failed: value outside typealias 'Idx'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
+    x64.jcc less, __rc_panic
   __rc_ok:
     x64.loadRegBaseDisp.word64 rsi, [rcx + 16]
     x64.cmpRegImm32 rsi, 0
@@ -69,11 +65,8 @@ func @put {
     x64.leaRegRegImm32 rdi, rsi, -24
     x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
     x64.cmpRegImm32 rdi, 0
-    x64.jcc equal, __im_store
-  __im_slow:
-    x64.callDirect __managed_set
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
+    x64.jcc notEqual, __im_slow
+    x64.jmp __im_store
   tryerr:
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -86,6 +79,18 @@ func @put {
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-write-in-a-loop-keeps-its-slow-arm.test:6: Range check failed: value outside typealias 'Idx'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __im_slow:
+    x64.callDirect __managed_set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
 }
 
 func @main {
@@ -105,9 +110,7 @@ func @main {
     x64.callDirect __managed_resize
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
-  forhdr#1:
-    x64.cmpRegImm32 r13, 5
-    x64.jcc greaterEqual, forexit#4
+    x64.jmp forhdr#1
   each:
     x64.imulRegRegImm32 rax, r13, 10
     x64.movRegReg rcx, rbx
@@ -123,7 +126,9 @@ func @main {
   forstep#3:
     x64.leaRegRegImm32 r13, r13, 1
     x64.movRegReg r12, rax
-    x64.jmp forhdr#1
+  forhdr#1:
+    x64.cmpRegImm32 r13, 5
+    x64.jcc less, each
   forexit#4:
     x64.cmpRegImm32 r12, 4
     x64.jcc equal, ifcont#8
@@ -143,16 +148,16 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.loadRegBaseDisp.word64 rdx, [rbx + 8]
     x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
-  forhdr#9:
-    x64.cmpRegReg rcx, rdx
-    x64.jcc greaterEqual, forexit#12
+    x64.jmp forhdr#9
   check:
     x64.loadRegBaseIndexScale.word64 rdi, [rsi + rcx*8 + 0]
   __im_cont:
     x64.leaRegRegReg rax, rax, rdi
   forstep#11:
     x64.leaRegRegImm32 rcx, rcx, 1
-    x64.jmp forhdr#9
+  forhdr#9:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc less, check
   forexit#12:
     x64.cmpRegImm32 rax, 60
     x64.jcc equal, ifcont#14

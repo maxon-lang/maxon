@@ -210,6 +210,14 @@ union PassKind
 	// that pass's own reason: it must see the final shape.
 	unswitchInvariantGuards
 
+	// `foldEstablishedGuards` folds a guard an inlined element access asks when an earlier guard chain,
+	// or an earlier accessor's success, has already proved its predicate for the record — the second of
+	// two stores on one record asks nothing, and the test chain `unswitchInvariantGuards` put before a
+	// loop folds where a store before the loop proved what it tests. It runs AFTER that pass, whose chain
+	// is one of the shapes it folds, and BEFORE `refineVersionedRanges`, which then reads a function the
+	// fold has already simplified.
+	foldEstablishedGuards
+
 	// `refineValueRanges` a SECOND time, over the shape the versioning made: inside a copied loop the
 	// array length is one hoisted value every bound check compares against, and a symbolic bound on an
 	// index — `i ≤ length − 1` below `for i in 0 upto a.count()`, `high ≤ length − 2` for
@@ -303,6 +311,10 @@ function classifyPass(pass PassKind) returns PassClassification
 		// Intra-function by construction: a loop, its copy and its exit phis are one function's CFG, and
 		// a callee's effect is read from a table rather than from the callee's body.
 		unswitchInvariantGuards gives PassClassification.perFunction
+
+		// Intra-function by construction: the facts flow over one function's CFG, and a callee's effect is
+		// read from a table rather than from the callee's body.
+		foldEstablishedGuards gives PassClassification.perFunction
 		refineVersionedRanges gives PassClassification.perFunction
 
 		// The whole-module Std passes: a constructor table, a parameter-escape summary and a return
@@ -337,6 +349,7 @@ function compilePhaseOfPass(pass PassKind) returns CompilePhase
 		commonSubexpressionElimination gives CompilePhase.commonSubexpressionElimination
 		loopInvariantCodeMotion gives CompilePhase.loopInvariantCodeMotion
 		unswitchInvariantGuards gives CompilePhase.unswitchInvariantGuards
+		foldEstablishedGuards gives CompilePhase.foldEstablishedGuards
 		refineVersionedRanges gives CompilePhase.refineVersionedRanges
 		promoteStackRecords gives CompilePhase.promoteStackRecords
 		valueTupleReturn gives CompilePhase.valueTupleReturn
@@ -363,6 +376,7 @@ function passKindToString(pass PassKind) returns String
 		commonSubexpressionElimination gives "commonSubexpressionElimination"
 		loopInvariantCodeMotion gives "loopInvariantCodeMotion"
 		unswitchInvariantGuards gives "unswitchInvariantGuards"
+		foldEstablishedGuards gives "foldEstablishedGuards"
 		refineVersionedRanges gives "refineVersionedRanges"
 		promoteStackRecords gives "promoteStackRecords"
 		valueTupleReturn gives "valueTupleReturn"
@@ -417,6 +431,7 @@ export function buildLoweringPasses() returns PassKindArray
 	passes.push(PassKind.commonSubexpressionElimination)
 	passes.push(PassKind.loopInvariantCodeMotion)
 	passes.push(PassKind.unswitchInvariantGuards)
+	passes.push(PassKind.foldEstablishedGuards)
 	passes.push(PassKind.refineVersionedRanges)
 	passes.push(PassKind.promoteStackRecords)
 	passes.push(PassKind.valueTupleReturn)
@@ -606,6 +621,7 @@ export type PassPipeline
 			commonSubexpressionElimination then eliminateCommonSubexpressions(self.stdModule)
 			loopInvariantCodeMotion then hoistLoopInvariants(self.stdModule)
 			unswitchInvariantGuards then self.unswitchRewrote = unswitchInvariantGuards(self.project, module: self.stdModule)
+			foldEstablishedGuards then foldEstablishedGuards(self.stdModule)
 			refineVersionedRanges then refineValueRanges(self.stdModule, scope: RangeRunScope.rewrittenBy(self.unswitchRewrote))
 			promoteStackRecords then promoteStackRecords(self.project, module: self.stdModule, usesGreenThreads: self.usesGreenThreads)
 			valueTupleReturn then applyValueTupleReturn(self.project, module: self.stdModule)
