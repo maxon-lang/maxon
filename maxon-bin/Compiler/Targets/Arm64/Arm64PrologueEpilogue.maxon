@@ -24,11 +24,9 @@
 //
 // ⭐ STACK ARGUMENTS MOVE THE FRAME RECORD, AND NOTHING ELSE. AAPCS64 fixes where a callee finds its
 // first stack argument — at its OWN entry SP — so this frame's outgoing region must occupy
-// `[SP + 0 .. outgoingArgSize)`, which is where the record used to sit. `recordOffset` is therefore
-// `func.outgoingArgSize`, the record moves up by exactly that, and `add x29, sp, #recordOffset` keeps
-// x29 pointing AT the record — so `[x29 + 16 + slot*8]` slot addressing is identical either way, and a
-// function whose calls all fit the eight register slots of each file (recordOffset 0) emits the
-// byte-identical prologue it always did.
+// `[SP + 0 .. outgoingArgSize)`, below the record. `recordOffset` is therefore `func.outgoingArgSize`, the
+// record sits that far above SP, and `add x29, sp, #recordOffset` keeps x29 pointing AT the record — so
+// `[x29 + 16 + slot*8]` slot addressing is identical whatever the offset.
 //
 // This pass also RESOLVES the isel's `arm64LoadIncomingArg`s (`resolveArm64IncomingArgs`): an incoming
 // stack argument is at `[x29 + frameSize - outgoingArgSize + slot*8]`, and this is the only pass that
@@ -79,9 +77,9 @@ function insertArm64FrameForFunction(module TargetModule, func IrFunction)
 	// record, because AAPCS64 fixes where it must be: a callee reads its first stack argument at its OWN
 	// entry SP, which is this frame's SP. So the record moves UP by exactly `outgoingArgSize` and x29
 	// follows it, which leaves `arm64SlotDisplacement`'s `[x29 + 16 + slot*8]` spill addressing untouched.
-	// `outgoingArgSize` is already 16-aligned (a whole number of 8-byte slots, and `alignUp` below covers
-	// the frame as a whole), and it is 0 for every function whose calls fit the eight register slots of
-	// each file — for which the encoder emits exactly the frame it always did.
+	// `outgoingArgSize` is a whole number of 8-byte slots, so x29 is word-aligned but NOT always 16-aligned
+	// (`BacktraceFormat.FrameRecordAlignment`); `alignUp` below keeps the frame as a whole, and so SP,
+	// 16-aligned. It is 0 for every function whose calls fit the eight register slots of each file.
 	let recordOffset = func.outgoingArgSize
 	let frameSize = alignUpStack(recordOffset + Arm64FrameRecordBytes + func.stackSize + calleeBytes, alignment: StackFrameAlignment)
 

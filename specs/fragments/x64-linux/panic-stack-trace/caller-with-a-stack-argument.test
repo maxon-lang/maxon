@@ -1,0 +1,100 @@
+// Test: caller-with-a-stack-argument
+typealias Integer = int(i64.min to i64.max)
+typealias SmallInt = int(0 to 100)
+
+function total(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer, g Integer, h Integer, i Integer) returns SmallInt
+	return (a + b + c + d + e + f + g + h + i) as SmallInt
+end 'total'
+
+function spread(n Integer) returns SmallInt
+	return total(n, b: n, c: n, d: n, e: n, f: n, g: n, h: n, i: n)
+end 'spread'
+
+function main() returns ExitCode
+	return spread(20)
+end 'main'
+---
+ExitCode: 1
+---
+func @total {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 r8, [rbp + 48]
+    x64.loadRegBaseDisp.word64 r10, [rbp + 56]
+    x64.loadRegBaseDisp.word64 r11, [rbp + 64]
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rcx, rax
+    x64.leaRegRegReg rax, rax, r9
+    x64.leaRegRegReg rax, rax, rsi
+    x64.leaRegRegReg rax, rax, rdi
+    x64.leaRegRegReg rax, rax, r8
+    x64.leaRegRegReg rax, rax, r10
+    x64.leaRegRegReg r8, rax, r11
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 100
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at caller-with-a-stack-argument.test:6: Range check failed: value outside typealias 'SmallInt'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @spread {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 64
+    x64.movRegReg rdi, rcx
+  __il_body:
+    x64.leaRegRegReg rax, rdi, rdi
+    x64.leaRegRegReg rax, rax, rdi
+    x64.leaRegRegReg rax, rax, rdi
+    x64.leaRegRegReg rax, rax, rdi
+    x64.leaRegRegReg rax, rax, rdi
+    x64.leaRegRegReg rax, rax, rdi
+    x64.leaRegRegReg rax, rax, rdi
+    x64.leaRegRegReg r8, rax, rdi
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __il_slow
+  __rc_chk:
+    x64.cmpRegImm32 r8, 100
+    x64.jcc greater, __il_slow
+  __il_cont:
+    x64.epilogue 64
+    x64.popReg rbp
+    x64.ret
+  __il_slow:
+    x64.storeBaseDispReg.word64 [rsp + 32], rdi
+    x64.storeBaseDispReg.word64 [rsp + 40], rdi
+    x64.storeBaseDispReg.word64 [rsp + 48], rdi
+    x64.movRegReg rcx, rdi
+    x64.movRegReg rdx, rdi
+    x64.movRegReg rax, rdi
+    x64.movRegReg r9, rdi
+    x64.movRegReg rsi, rdi
+    x64.callDirect total
+    x64.jmp __il_cont
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 20
+    x64.callDirect spread
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

@@ -23,7 +23,7 @@
 //
 // ⚠ **TWO OF THE FOUR CHUNKS ARE OS-NEUTRAL AND TWO ARE DARWIN'S — THE HANDLER IS DARWIN'S.**
 // `mrt_fault_backtrace` and `mrt_write_hex64` name no OS and an arm64-Linux lane reuses them verbatim,
-// as it does `Arm64PanicRuntime`'s walker arm. `mrt_runtime_init` AND `mrt_fault_handler` are Darwin's
+// as it does `Arm64PanicRuntime`'s walker. `mrt_runtime_init` AND `mrt_fault_handler` are Darwin's
 // three times over: the install is a libSystem call where Linux needs `svc`, the handler's terminal
 // `exit` is the same GOT call, and its `DarwinUcontextOff*` reads are a layout Linux numbers
 // differently. A Linux lane owes its own two, and `appendArm64FaultRuntimeChunks` refuses rather than
@@ -100,8 +100,8 @@ end 'buildArm64WriteHexChunk'
 //
 // ⚠ **FRAME 0 IS SYMBOLIZED FROM `fault_pc` WITH NO BIAS.** A fault PC already points AT the trapping
 // instruction, where a RETURN address points past its call and needs `ReturnAddrSymbolBias` — which is
-// why this cannot simply seed the walker one frame lower. Frames 1..N come from the walker's FAULT arm,
-// bounded to `[fault_sp, fault_sp + StackWindowBytes)`.
+// why this cannot simply seed the walker one frame lower. Frames 1..N come from the walker, seeded from
+// `fault_fp` with `fault_sp` as the lowest address it believes.
 //
 // Slots: 0 = fault_pc, 1 = fault_fp, 2 = fault_sp, 3 = text_base, 4 = symtable.
 function buildArm64FaultBacktraceChunk(globalData GlobalDataTable) returns FunctionCodeChunk
@@ -139,8 +139,6 @@ function buildArm64FaultBacktraceChunk(globalData GlobalDataTable) returns Funct
 	asm.placeLabel(walk)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotFaultFp)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotFaultSp)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: StackWindowBytes)
-	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x2, lhs: Arm64Register.x1, rhs: Arm64Register.x2)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: WalkFramesName)
 
 	return asm.finishFunction(FaultBacktraceName)

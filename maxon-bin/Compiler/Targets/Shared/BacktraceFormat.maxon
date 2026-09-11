@@ -2,19 +2,15 @@
 // wire format, the frame-record layout the walk follows, the words a trace prints, and the names its
 // runtime functions answer to.
 //
-// ⭐ **IT EXISTS BECAUSE THERE ARE NOW TWO WALKERS.** Every constant here was declared inside
-// `Targets/X64/` while x64 was the only backend that could symbolize a frame. The arm64 panic runtime
-// (`Targets/Arm64/Arm64PanicRuntime`) reads the SAME table, prints the SAME words and answers to the
-// SAME `mrt_` names — so leaving them in the x64 files would have meant either an arm64 file reaching
-// into `Targets/X64/` for a format, or (far worse, and this project's signature bug) a second copy of
-// the layout that agrees today and is free to drift tomorrow. A backtrace format that two backends
-// spell separately is a backtrace that lies on one of them.
+// ⭐ **THERE ARE TWO WALKERS AND ONE FORMAT.** x64's runtime and the arm64 panic runtime
+// (`Targets/Arm64/Arm64PanicRuntime`) read the SAME table, print the SAME words, answer to the SAME `mrt_`
+// names and believe a frame by the SAME rules. A backtrace format that two backends spell separately is a
+// backtrace that lies on one of them.
 //
-// What stays behind is what is genuinely one ISA's or one OS's: the VEH thunk and its
-// `EXCEPTION_POINTERS` offsets, each `ucontext` layout, and each hex writer's instructions. What a
-// FAULT DIAGNOSTIC SAYS is not one of those, so the fault vocabulary lives here beside the backtrace
-// vocabulary — both lanes classify a fault, both print the same words, both bound the walk to the same
-// window, and both format an address as the same 16 hex digits.
+// What lives in the backends is what is genuinely one ISA's or one OS's: the VEH thunk and its
+// `EXCEPTION_POINTERS` offsets, each `ucontext` layout, where a walk finds its stack's top, and each hex
+// writer's instructions. What a fault diagnostic SAYS is not one of those, so the fault vocabulary lives here
+// beside the backtrace's.
 
 // --- `__symtable`: the backtrace's function-name table ---
 //
@@ -48,10 +44,7 @@ let SymbolTableEntryColumns = 2  // an entry is { codeOffset, nameOffset }
 let SymbolTableCountBytes = SymbolTableColumnBytes
 let SymbolTableEntryBytes = SymbolTableColumnBytes * SymbolTableEntryColumns
 
-// `__symtable`'s alignment within `.text`. x64 tolerates unaligned DWORD loads and AArch64's
-// `ldr w` does too for this table's naturally-aligned columns, so this is not a correctness
-// requirement of either reader — it matches the C# emitter's contract
-// (`DefineSymdata("__symtable", table, 4)`) so the tables stay byte-comparable.
+// `__symtable`'s alignment within `.text`: the natural alignment of its u32 columns.
 export let SymbolTableAlignment = 4
 
 // --- The READER's view of the same table ---
@@ -83,9 +76,10 @@ end 'assertSymtabStride'
 
 // --- Frame walking ---
 //
-// Cap on printed frames: a backtrace is a diagnostic, not a transcript, and the cap is
-// also what stops a chain that survives every validity check from looping forever.
-export let MaxBacktraceFrames = 32
+// The most frames one walk prints (a fault's frame 0, read from the faulting instruction, comes before
+// them). A backtrace is a diagnostic, not a transcript: a trace deeper than this is a recursion whose
+// innermost frames are the ones worth reading.
+export let MaxBacktraceFrames = 100
 
 // A frame record's two words: the CALLER's saved frame pointer at +0 and the return address at
 // +8. x64 builds it with `push rbp; mov rbp, rsp` and AArch64 with `stp x29, x30, [sp, #-N]!;
@@ -94,6 +88,22 @@ export let MaxBacktraceFrames = 32
 // not a chain).
 export let FrameOffSavedFramePointer = 0
 export let FrameOffReturnAddr = 8
+
+// The bytes a walker reads at a frame pointer. A frame is believed only if all of them lie inside the
+// stack being walked, so the highest frame pointer a stack admits is its top less this.
+export let FrameRecordBytes = FrameOffReturnAddr + StackWordBytes
+
+// The alignment a walker demands of a frame pointer: one word, the most EITHER lane guarantees. An x64
+// hand-assembled chunk may push an odd number of words before its own record, and arm64 places a record
+// above its outgoing stack-argument region, which is any whole number of words (`record@8` in a golden).
+export let FrameRecordAlignment = StackWordBytes
+
+// ⭐ **HOW HIGH A WALK BELIEVES A STACK REACHES WHEN ITS TOP IS NOT KNOWN.** A green thread's stack has an
+// exact top the walker reads from the thread, and on Windows so does every stack; any other walk — an OS
+// thread's own stack on a POSIX lane — is bounded to this window above its lowest address: 64 MiB, larger
+// than any thread stack either OS hands out by default. A link past it ends the trace rather than being
+// read; a corrupt one below it but above the real top is still a read the diagnostic can fault on.
+export let StackWindowBytes = 0x4000000
 
 // A return address points at the instruction AFTER the call, so when that call is a
 // function's LAST instruction the raw address lands at the start of the NEXT function.
@@ -110,6 +120,10 @@ export let BacktraceHeader = b"Stack trace:\n"
 export let FrameLinePrefix = b"  in "
 export let UnknownFrameName = b"<unknown>"
 export let FrameLineTerminator = b"\n"
+
+// The last line of a trace the cap cut short, printed only when another frame would have been — so a
+// trace without it is the whole chain the walker could believe.
+export let ElidedFramesLine = b"  ...additional frames elided...\n"
 
 // --- The FAULT diagnostic: what a HARDWARE trap prints ---
 //
@@ -155,11 +169,6 @@ export function faultPanicLinePrefix(kind HardwareFaultKind) returns ByteArray
 	line.append(FaultRipTag)
 	return line
 end 'faultPanicLinePrefix'
-
-// The window above the faulting stack pointer a frame pointer must lie in to be believed: 64 MiB,
-// larger than any thread stack either OS hands out. A fault that corrupted the frame pointer then
-// yields a SHORT trace instead of a wild read that faults again inside the diagnostic.
-export let StackWindowBytes = 0x4000000
 
 // --- The fault line's hex fields ---
 //

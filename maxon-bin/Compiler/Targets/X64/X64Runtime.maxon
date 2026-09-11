@@ -19,13 +19,8 @@
 //
 // WHY HAND-ASSEMBLED BYTES, NOT IR. Everything below is a `FunctionCodeChunk` built by
 // calling X64Backend's encoders directly, rather than a Maxon or Std function the normal
-// pipeline lowers. The Std tier at this milestone has only `arith` and `call` — it cannot
-// load from an address, cannot store to one, and cannot name a machine register — so
-// there is no Std spelling of "read CONTEXT.Rip" or "walk a saved-RBP chain". Growing the
-// Std tier a memory/system band to express six runtime functions is a decision that
-// belongs to R1 (P1.2), where the stdlib cone needs it for its own reasons; making it
-// here, as a side effect of a fault handler, would pre-empt that with the narrowest
-// possible evidence.
+// pipeline lowers: the Std tier cannot name a machine register or a segment, so there is no
+// Std spelling of "walk the saved-RBP chain from here" or "read the TIB's stack bounds".
 //
 // These chunks are appended AFTER the module's own functions, so they are laid out after
 // user code and before `__symtable` (which concat appends last). They are ordinary chunks
@@ -37,18 +32,17 @@
 //   - No CONTEXT REDIRECT. Rewriting the faulting thread's Rip/Rsp/Rbp to resume at a
 //     separate diagnostic function and returning EXCEPTION_CONTINUE_EXECUTION is what a
 //     STACK OVERFLOW needs, because there the faulting stack cannot be used to print
-//     anything. Only `#DE` is converted, whose stack is intact, so the handler prints on
-//     the spot and exits.
+//     anything. The faults this handler converts — `#DE` and an access violation — leave
+//     the stack usable, so it prints on the spot and exits.
 //   - No FAULT GLOBALS. Printing in place means Rip/Rbp/Rsp stay in this frame and travel
 //     as ORDINARY ARGUMENTS — which is also why `mrt_fault_backtrace` takes three
 //     parameters and reads no global. There is no writable-data-section pipeline here, so
 //     this deletes a dependency rather than dodging one.
-//   - No RE-ENTRANCY GUARD. A fault raised inside the diagnostic could only be an access
-//     violation, which this handler declines (ContinueSearch), so it cannot recurse into
-//     itself. The diagnostic divides nothing, so neither converted code can arise inside
-//     it either.
-//   - No GREEN-THREAD COUPLING. There is no scheduler until P1.5 and no `recover()`, so
-//     there is no `gt` to find and nowhere to resume TO. The handler exits the process.
+//   - No RE-ENTRANCY GUARD. A fault inside the diagnostic would re-enter this handler as an
+//     access violation, so the diagnostic must not fault: it divides nothing, and the one
+//     reader of memory it did not lay out — the frame walker — believes only frames inside
+//     the stack the TIB describes (`emitWalkStackBounds`).
+//   - No `recover()`. A converted fault is terminal, so the handler exits the process.
 //
 // CALLING CONVENTION. Every function here uses the Win64 ABI (args in RCX/RDX/R8/R9),
 // including for its own internal calls — they interleave with kernel32 calls, and one
@@ -459,9 +453,9 @@ end 'emitLeaTextBase'
 // length and the emitted program links no CRT, so this walk is the only way to it.
 //
 // Shared by the WINDOWS writer (which hands the length to `WriteFile`) and the LINUX one (which hands
-// it to `write(2)`), because how long a string is is not an OS question. It had been open-coded in
-// both, instruction for instruction: nothing made the two agree, and an off-by-one corrected in one
-// of them is a truncated or over-long diagnostic from the other, not a compile error.
+// it to `write(2)`), because how long a string is is not an OS question — and with two copies, an
+// off-by-one corrected in one of them is a truncated or over-long diagnostic from the other, not a
+// compile error.
 //
 // Clobbers rdx (the byte under test).
 //
@@ -515,28 +509,30 @@ function emitFaultAddressesAndBacktrace(asm X64RuntimeAsm, ripSlot StackSize, rb
 end 'emitFaultAddressesAndBacktrace'
 
 // Terminate the process with `exitCode` — the LAST instruction of every terminal path a hand-assembled
-// chunk takes: the three panic diagnostics here (`PanicExitCode`) and `__gt_morestack`'s two refusals (a
-// `RuntimeAbort` code). `route` is `x64OsCallKind`'s own answer, derived once by whoever holds the target
-// and threaded down, so no chunk grows a second opinion about which OSes the x64 backend serves. The two
-// fault chunks name their own route as a literal instead, and that is not a second opinion:
-// `buildFaultThunkChunk` is a VEH callback and `buildLinuxFaultHandlerChunk` answers a `rt_sigaction`
-// signal — each is one OS by its own content, not by a decision made elsewhere.
+// chunk takes: `mrt_panic` (`PanicExitCode`) and `__gt_morestack`'s two refusals (a `RuntimeAbort` code).
+// `route` is `x64OsCallKind`'s own answer, derived once by whoever holds the target and threaded down, so no
+// chunk grows a second opinion about which OSes the x64 backend serves. The two fault chunks call their own
+// OS's door instead, and that is not a second opinion: `buildFaultThunkChunk` is a VEH callback and
+// `buildLinuxFaultHandlerChunk` answers a `rt_sigaction` signal — each is one OS by its own content.
 //
 // ⚠ THE ARGUMENT REGISTER IS PART OF THE DOOR, NOT A DETAIL BESIDE IT. Win64 passes `ExitProcess`'s
 // code in ECX; the Linux syscall ABI passes `exit_group`'s in EDI. That is why the immediate load sits
 // inside each arm rather than above the match — exactly the split `lowerOsExit` makes, and for the
 // same reason.
-export function encodeX64ProcessExit(code ByteArray, iatRelocs RelocationArray, route X64OsCallKind, exitCode MachineWord)
+export function encodeX64ProcessExit(code ByteArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, callFixups CallFixupArray, route X64OsCallKind, exitCode MachineWord, usesGt bool)
 	match route 'route'
-		importCall then encodeWin64ProcessExit(code, iatRelocs: iatRelocs, exitCode: exitCode)
+		importCall then encodeWin64ProcessExit(code, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, callFixups: callFixups, exitCode: exitCode, usesGt: usesGt)
 		syscall then encodeLinuxProcessExit(code, exitCode: exitCode)
 	end 'route'
 end 'encodeX64ProcessExit'
 
-// Windows: `ExitProcess(exitCode)` through the IAT. Never returns, so nothing follows it.
-function encodeWin64ProcessExit(code ByteArray, iatRelocs RelocationArray, exitCode MachineWord)
+// Windows: `ExitProcess(exitCode)` through the IAT, behind the green-thread shim in a program that has one. A
+// diagnostic raised on a green thread runs on that thread's few-kilobyte stack — below the vectored handler's
+// dispatch frames when it is a fault — and `ExitProcess` outruns what is left of it, faulting again inside
+// the exit. Never returns, so nothing follows it.
+function encodeWin64ProcessExit(code ByteArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, callFixups CallFixupArray, exitCode MachineWord, usesGt bool)
 	encodeMovRegImm32(code, dest: X64Register.rcx, value: exitCode)
-	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.ExitProcess))
+	emitGtGatedIatCall(code, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, callFixups: callFixups, slotIndex: iatSlotIndex(IatSlot.ExitProcess), usesGt: usesGt)
 end 'encodeWin64ProcessExit'
 
 // Linux: `exit_group(exitCode)` via a raw syscall. `exit_group` and not `exit` for the reason
@@ -628,15 +624,15 @@ end 'writeStreamWideSlots'
 let ChunkEntryWordsBytes = 2 * StackWordBytes
 
 // ⭐⭐ **WHAT THE REST OF THE UN-GUARDED CHAIN ALREADY SPENDS.** The deepest chain of un-guarded frames on
-// this lane is the fault diagnostic — `mrt_fault_thunk` → `mrt_fault_backtrace` → `mrt_walk_frames` →
-// `mrt_print_frame` → `mrt_write_hex64` → `mrt_write_cstr_stderr` → `mrt_write_stream` — and each frame
-// costs `beginFunction`'s reservation plus `ChunkEntryWordsBytes`: 96 + 96 + 112 + 96 + 96 + 48 = 544.
+// this lane is the fault diagnostic — `mrt_fault_thunk` → `mrt_fault_backtrace` → `mrt_panic_walk_frames` →
+// `mrt_panic_print_frame` → `mrt_write_hex64` → `mrt_write_cstr_stderr` → `mrt_write_stream` — and each frame
+// costs `beginFunction`'s reservation plus `ChunkEntryWordsBytes`: 96 + 96 + 96 + 96 + 96 + 48 = 528.
 // The green-thread syscall shim adds at most 56 more on the GT stack across a call (the pushed r10 and
 // `emitGtExitSyscall`'s slow frame), which no chunk's own frame accounts for.
 //
 // ⚠ **IT IS MEASURED FROM THOSE BUILDERS AND NOTHING RE-DERIVES IT**, so widening any un-guarded chunk's
 // frame leaves this number stale in the OPTIMISTIC direction. Re-measure it at the builder that grew.
-let UnguardedDiagnosticChainBytes = 544 + 56
+let UnguardedDiagnosticChainBytes = 528 + 56
 
 // ⛔⛔ **THE CEILING ON `ConsoleWideBufferUnits`, AND IT IS THE GREEN-THREAD STACK RATHER THAN THE GUARD
 // PAGE.** This chunk is emitted with no stack-guard check, so it spends the margin the guard leaves below
@@ -1106,42 +1102,39 @@ function buildPrintFrameChunk() returns FunctionCodeChunk
 end 'buildPrintFrameChunk'
 
 // ==========================================================================
-// mrt_panic_walk_frames(rcx = start_frame, rdx = stack_low, r8 = stack_high)
+// mrt_panic_walk_frames(rcx = start_frame, rdx = stack_low)
 // ==========================================================================
 
-// Walk the saved-RBP chain from `start_frame`, printing up to 32 symbolized frames.
+// Walk the saved-RBP chain from `start_frame`, printing up to `MaxBacktraceFrames` symbolized frames and
+// `ElidedFramesLine` if the chain goes on past them.
 //
-// ONE walker, two callers, distinguished by `stack_high`, and the reason it is one function and
-// not two: `stack_high == 0` trusts the chain (a SOFTWARE panic, whose frames it built itself),
-// while a non-zero `stack_high` additionally requires every frame pointer to lie in
-// [stack_low, stack_high) and to STRICTLY ASCEND — so a hardware fault that corrupted RBP degrades
-// to a short trace rather than a second fault inside the diagnostic.
+// ⭐ **IT TERMINATES ON ANY CHAIN, BECAUSE IT RUNS ON THE CORRUPTION IT REPORTS.** A frame is believed only if
+// its whole record lies inside the stack being walked and it is `FrameRecordAlignment`-aligned, and a link
+// is followed only if it ASCENDS — the stack grows down, so a caller's frame is always at a higher address. A
+// chain that breaks any of the three ends the trace there, short, rather than faulting again inside the
+// diagnostic; the cap ends one that breaks none of them.
 //
-// ⭐ BOTH ARMS ARE LIVE, on BOTH x64 lanes. The software arm prints EVERY range-check backtrace the
-// compiler emits, through `mrt_panic`, and it does NO bounds validation — measured safe because every
-// frame it walks is a compiled prologue this backend built (including a green thread's, whose chain
-// terminates on the zeroed saved-rbp `__gt_trampoline` inherits from a fresh GT stack).
+// ⭐⭐ **THE STACK IS THE ONE `stack_low` LIES ON, UP TO ITS TOP WHERE THAT IS KNOWN** (`emitWalkStackBounds`)
+// — which is what stops a link into a stack a green thread has since been moved off. `mrt_panic` passes its
+// own frame as `stack_low`, a fault its faulting RSP.
 //
-// Slots: 0 = frame, 1 = stack_low, 2 = stack_high, 3 = counter, 4 = text_base,
-//        5 = symtable, 6 = next frame.
-function buildWalkFramesChunk() returns FunctionCodeChunk
+// Slots: 0 = frame, 1 = stack_low, 2 = frame_ceiling (the highest frame the stack admits), 3 = counter,
+//        4 = text_base, 5 = symtable.
+function buildWalkFramesChunk(usesGt bool, os Os) returns FunctionCodeChunk
 	let SlotFrame = 0
 	let SlotStackLow = 1
-	let SlotStackHigh = 2
+	let SlotFrameCeiling = 2
 	let SlotCounter = 3
 	let SlotTextBase = 4
 	let SlotSymtable = 5
-	let SlotNextFrame = 6
-	var asm = X64RuntimeAsm.beginFunction(7)
+	var asm = X64RuntimeAsm.beginFunction(6)
 
 	let loop = asm.newLabel()
-	let getReturnAddr = asm.newLabel()
-	let advance = asm.newLabel()
+	let elided = asm.newLabel()
 	let done = asm.newLabel()
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFrame), srcReg: X64Register.rcx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStackLow), srcReg: X64Register.rdx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStackHigh), srcReg: X64Register.r8)
+	emitWalkStackBounds(asm, usesGt: usesGt, os: os, lowSlot: SlotStackLow, ceilingSlot: SlotFrameCeiling)
 
 	emitLeaTextBase(asm, dest: X64Register.rax)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTextBase), srcReg: X64Register.rax)
@@ -1151,83 +1144,103 @@ function buildWalkFramesChunk() returns FunctionCodeChunk
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: MaxBacktraceFrames)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCounter), srcReg: X64Register.rax)
 
+	// UNSIGNED compares: a frame pointer is an address, and a corrupt one with bit 63 set must read as far
+	// above the stack rather than below it. The low bound is never zero, so it also ends the chain at a
+	// null link, which is how a green thread's outermost frame ends it.
 	asm.placeLabel(loop)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotCounter), wide: true)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: done)
-	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: -1)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCounter), srcReg: X64Register.rax)
-
-	// A null frame pointer ends the chain — `mrt_start`'s saved rbp is whatever the loader
-	// left, which on the initial thread is zero.
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotFrame), wide: true)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: done)
+	encodeCmpRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotStackLow))
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.below, targetBlockId: done)
+	encodeCmpRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotFrameCeiling))
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.above, targetBlockId: done)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.rax, wide: true)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAnd, reg: X64Register.rdx, imm: FrameRecordAlignment - 1)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: done)
 
-	// stack_high == 0 disables range validation (the software-panic caller).
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotStackHigh), wide: true)
-	emitCmpRegImm(asm, reg: X64Register.rdx, imm: 0)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: getReturnAddr)
-
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotStackLow), wide: true)
-	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: done)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotStackHigh), wide: true)
-	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: done)
-
-	asm.placeLabel(getReturnAddr)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotFrame), wide: true)
+	// text_offset = (return_addr - 1) - text_base. The text guard also ends the walk at the entry stub,
+	// whose caller is the loader.
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rax, disp: FrameOffReturnAddr, wide: true)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: done)
-
-	// text_offset = (return_addr - 1) - text_base
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: -ReturnAddrSymbolBias)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotTextBase), wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
 	emitTextBoundsGuard(asm, offsetReg: X64Register.rax, scratchA: X64Register.rdx, scratchB: X64Register.r8, textBaseSlot: SlotTextBase, symtableSlot: SlotSymtable, rejectLabel: done)
 
+	// A frame that would be printed past the cap is what the elision line reports.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotCounter), wide: true)
+	emitCmpRegImm(asm, reg: X64Register.rdx, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: elided)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rdx, disp: -1)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCounter), srcReg: X64Register.rdx)
+
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: X64Register.rax, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), wide: true)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: PrintFrameName)
 
-	// next = [frame]
+	// next = [frame], followed only if it ascends.
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotFrame), wide: true)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rax, disp: FrameOffSavedFramePointer, wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotNextFrame), srcReg: X64Register.rax)
-
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotStackHigh), wide: true)
-	emitCmpRegImm(asm, reg: X64Register.rdx, imm: 0)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: advance)
-
-	// Require next > frame. The stack grows down, so a caller's frame is always at a HIGHER
-	// address; a link that does not ascend is a corrupt chain, and following it would be the
-	// wild read this walk exists to avoid.
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotFrame), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rax, disp: FrameOffSavedFramePointer, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rdx, src: X64Register.rax, wide: true)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: done)
-
-	asm.placeLabel(advance)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotNextFrame), wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFrame), srcReg: X64Register.rax)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.belowEqual, targetBlockId: done)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFrame), srcReg: X64Register.rdx)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: loop)
+
+	asm.placeLabel(elided)
+	emitPrintString(asm, bytes: ElidedFramesLine)
 
 	asm.placeLabel(done)
 	return asm.finishFunction(WalkFramesName)
 end 'buildWalkFramesChunk'
 
+// The stack the walk believes, from `stack_low` in rdx: everything from it up to the TOP of the stack it lies
+// on, into `lowSlot` and `ceilingSlot` (the highest frame pointer that stack admits). Only the top is looked
+// up — `stack_low` is a live address the caller vouches for, so it names the stack and bounds it from below.
+//
+// ⭐ **WHERE THE TOP COMES FROM IS AN OS FACT.** On Windows the TIB holds the running stack's bounds for EVERY
+// stack a thread runs on — its own, a green thread's, the system stack under a shimmed call — because the
+// kernel probes them and this runtime keeps them current (`x64OsProbesStackBounds`). Linux has no such pair,
+// so there only a green thread's own record bounds the walk, read through the loads the prologue guard makes.
+// Both are cheap and safe inside a fault handler: plain loads that take no lock, allocate nothing and read
+// only what the running thread keeps alive. A `stack_low` on neither — or a thread that is no M, or an M
+// between threads — gets the `StackWindowBytes` window.
+function emitWalkStackBounds(asm X64RuntimeAsm, usesGt bool, os Os, lowSlot StackSize, ceilingSlot StackSize)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(lowSlot), srcReg: X64Register.rdx)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rdx, disp: StackWindowBytes - FrameRecordBytes)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(ceilingSlot), srcReg: X64Register.rax)
+
+	let windowed = asm.newLabel()
+
+	// Each arm leaves the stack's top in r8, or branches to `windowed`.
+	if x64OsProbesStackBounds(os) 'threadBounds'
+		encodeMovRegGsAbs(asm.code, dest: X64Register.r8, disp: TibStackLimitDisp)
+		encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rdx, src: X64Register.r8, wide: true)
+		encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.below, targetBlockId: windowed)
+		encodeMovRegGsAbs(asm.code, dest: X64Register.r8, disp: TibStackBaseDisp)
+		encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rdx, src: X64Register.r8, wide: true)
+		encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.aboveEqual, targetBlockId: windowed)
+	end 'threadBounds' else if usesGt 'greenThreadBounds'
+		emitLoadCurrentGtOrBail(asm.code, rdataRelocs: asm.rdataRelocs, fixups: asm.rel32Fixups, mDest: X64Register.rax, gtDest: X64Register.rax, bail: windowed, os: os)
+		emitGtBailUnlessOnItsOwnStack(asm.code, fixups: asm.rel32Fixups, gt: X64Register.rax, scratch: X64Register.r8, addr: X64Register.rdx, bail: windowed)
+	end 'greenThreadBounds' else 'windowOnly'
+		return
+	end 'windowOnly'
+
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.r8, base: X64Register.r8, disp: -FrameRecordBytes)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(ceilingSlot), srcReg: X64Register.r8)
+
+	asm.placeLabel(windowed)
+end 'emitWalkStackBounds'
+
 // ==========================================================================
 // mrt_fault_backtrace(rcx = fault_rip, rdx = fault_rbp, r8 = fault_rsp)
 // ==========================================================================
 
-// Print `Stack trace:` and a symbolized backtrace for a hardware fault. There is no `gt` lookup —
-// the context arrives as three arguments.
+// Print `Stack trace:` and a symbolized backtrace for a hardware fault, whose context arrives as three
+// arguments.
 //
 // Frame 0 is the faulting instruction, symbolized from `fault_rip` with NO bias: a fault
 // RIP already points AT the instruction that trapped, whereas a return address points past
 // its call and needs the -1 (see ReturnAddrSymbolBias). Frames 1..N come from walking the
-// saved-RBP chain, bounded to [fault_rsp, fault_rsp + 64 MiB).
+// saved-RBP chain from `fault_rbp`, with `fault_rsp` as the lowest address the walk believes.
 //
 // Slots: 0 = fault_rip, 1 = fault_rbp, 2 = fault_rsp, 3 = text_base, 4 = symtable.
 function buildFaultBacktraceChunk() returns FunctionCodeChunk
@@ -1265,9 +1278,6 @@ function buildFaultBacktraceChunk() returns FunctionCodeChunk
 	asm.placeLabel(walk)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRbp), wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRsp), wide: true)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRsp), wide: true)
-	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: StackWindowBytes)
-	encodeLeaRegBaseIndexScale(asm.code, dest: X64Register.r8, base: X64Register.r8, index: X64Register.rax, scale: MemoryIndexScale.byOne)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WalkFramesName)
 
 	return asm.finishFunction(FaultBacktraceName)
@@ -1314,7 +1324,7 @@ end 'emitFaultCodeArm'
 // code no spec case could reach on purpose. `FaultProbeRuntime` is that door.
 //
 // Slots: 0 = EXCEPTION_POINTERS*, 1 = fault_rip, 2 = fault_rbp, 3 = fault_rsp, 4 = panic prefix.
-function buildFaultThunkChunk() returns FunctionCodeChunk
+function buildFaultThunkChunk(usesGt bool) returns FunctionCodeChunk
 	let SlotExcPtrs = 0
 	let SlotFaultRip = 1
 	let SlotFaultRbp = 2
@@ -1357,9 +1367,8 @@ function buildFaultThunkChunk() returns FunctionCodeChunk
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteStderrName)
 	emitFaultAddressesAndBacktrace(asm, ripSlot: SlotFaultRip, rbpSlot: SlotFaultRbp, rspSlot: SlotFaultRsp)
 
-	// ExitProcess(1) — never returns. There is no `recover()` and no scheduler to resume
-	// onto, so a converted fault is terminal.
-	encodeX64ProcessExit(asm.code, iatRelocs: asm.iatRelocs, route: X64OsCallKind.importCall, exitCode: PanicExitCode)
+	// ExitProcess(1) — never returns. There is no `recover()`, so a converted fault is terminal.
+	encodeWin64ProcessExit(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, exitCode: PanicExitCode, usesGt: usesGt)
 
 	// Falls through: unreachable after ExitProcess, and the single `ret` every other code
 	// reaches directly.
@@ -1401,22 +1410,17 @@ end 'buildRuntimeInitChunk'
 // fault-path primitives — it does not reimplement any of them:
 //   (1) `mrt_write_cstr_stderr` prints the cstr in RCX (the pass bakes the whole `panic at …\n` line);
 //   (2) the same writer prints the `Stack trace:` header;
-//   (3) `mrt_panic_walk_frames`'s SOFTWARE arm (`stack_high == 0`, which trusts the saved-rbp chain the
-//       compiled frames build rather than range-validating it) walks from THIS frame — so `[rbp+8]`,
-//       the return address into the function whose guard fired, is the first symbolized frame and
-//       `mrt_panic` never appears in the trace;
+//   (3) `mrt_panic_walk_frames` walks from THIS frame — so `[rbp+8]`, the return address into the
+//       function whose guard fired, is the first symbolized frame and `mrt_panic` never appears in the
+//       trace;
 //   (4) under `--coverage` only, `__cov_dump(ABORTED)` publishes the counters this run did reach;
 //   (5) `exit(PanicExitCode)` through `exitRoute`'s OS door.
 //
-// This is the reader the walker's software arm was written for and had been waiting on (X64Runtime's
-// header noted the arm was unreached until P1.2's `panic()`; the range guard reaches it first).
-//
-// ⭐ THE ONLY OS-PARAMETRIC CHUNK IN THIS FILE, and steps (1)–(3) are why: every primitive it calls is
-// either OS-NEUTRAL (the walker, the frame printer, `__symtable` — one chunk each, appended to BOTH
-// lanes) or reached BY NAME through a writer each lane appends its own copy of under the same
-// `mrt_write_cstr_stderr` label. So the assembly above is identical on Windows and Linux, and only
-// step (4) — the process exit — has an OS in it. `exitRoute` carries exactly that and nothing more.
-// Every other chunk here is either shared outright or named for its one OS (`buildLinux…`).
+// ⭐ Steps (1)–(3) are the same bytes on Windows and Linux save the thread-pointer segment a green-thread
+// program's stack guard reads through: every primitive they call is reached BY NAME — the walker, the frame
+// printer and `__symtable` from the shared appender, and a writer each lane appends its own copy of under the
+// same `mrt_write_cstr_stderr` label. Step (5) is the one with an OS door in it, and `exitRoute` carries
+// exactly that.
 //
 // ⚠ RBP MUST SURVIVE STEPS (1) AND (2), because step (3) loads it as the walk's seed — and a walk over
 // a clobbered frame pointer prints plausible nonsense, which on a fault path is strictly worse than
@@ -1439,18 +1443,16 @@ function buildPanicChunk(exitRoute X64OsCallKind, dumpCoverage bool, usesGt bool
 	// (2) The `Stack trace:` header.
 	emitPrintString(asm, bytes: BacktraceHeader)
 
-	// (3) Walk from this frame with the software arm: rcx = current rbp, rdx = stack_low (unused when
-	// stack_high == 0), r8 = stack_high = 0.
+	// (3) Walk from this frame, which is also the lowest address the walk believes: rcx = rdx = rbp.
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: X64Register.rbp, wide: true)
-	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rdx, src: X64Register.rdx, wide: true)
-	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.r8, src: X64Register.r8, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.rbp, wide: true)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WalkFramesName)
 
 	// (4) The counters, on an instrumented build only.
 	emitCoverageAbortDump(asm, dumpCoverage: dumpCoverage)
 
 	// (5) exit(PanicExitCode) — the one step with an OS in it.
-	encodeX64ProcessExit(asm.code, iatRelocs: asm.iatRelocs, route: exitRoute, exitCode: PanicExitCode)
+	encodeX64ProcessExit(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, route: exitRoute, exitCode: PanicExitCode, usesGt: usesGt)
 
 	return asm.finishFunction(PanicName)
 end 'buildPanicChunk'
@@ -1506,14 +1508,15 @@ end 'emitCoverageAbortDump'
 // ==========================================================================
 //
 // THE LINUX TWIN OF THE WINDOWS FAULT RUNTIME, and it reuses most of it. `mrt_fault_backtrace`,
-// `mrt_panic_walk_frames`, `mrt_panic_print_frame` and `mrt_write_hex64` are OS-NEUTRAL — they call each
-// other and `mrt_write_cstr_stderr` BY NAME and touch no IAT — so the Linux runtime appends them
-// unchanged. Only THREE chunks differ from Windows, all because Linux reaches the OS through raw syscalls
-// rather than kernel32 imports: the stderr writer (`write` vs a call into `mrt_write_stream`), the fault ENTRY (a
-// SIGFPE handler reading the ucontext vs a VEH callback reading EXCEPTION_POINTERS), and `runtime_init`
-// (rt_sigaction vs AddVectoredExceptionHandler). The first and last carry the SAME names as their Windows
-// twins (`mrt_write_cstr_stderr`, `mrt_runtime_init`), so the reused chunks and `mrt_start` resolve to
-// whichever the OS build appended — never both in one binary.
+// `mrt_panic_walk_frames`, `mrt_panic_print_frame` and `mrt_write_hex64` call each other and
+// `mrt_write_cstr_stderr` BY NAME and touch no IAT, so the Linux runtime appends the same builders — the
+// walker's one OS fact is where it finds its stack's top (`emitWalkStackBounds`). Only THREE chunks differ
+// from Windows, all because Linux reaches the OS through raw syscalls rather than kernel32 imports: the
+// stderr writer (`write` vs a call into `mrt_write_stream`), the fault ENTRY (a SIGFPE handler reading the
+// ucontext vs a VEH callback reading EXCEPTION_POINTERS), and `runtime_init` (rt_sigaction vs
+// AddVectoredExceptionHandler). The first and last carry the SAME names as their Windows twins
+// (`mrt_write_cstr_stderr`, `mrt_runtime_init`), so the reused chunks and `mrt_start` resolve to whichever
+// the OS build appended — never both in one binary.
 
 // mrt_rt_sigreturn — the `sa_restorer` trampoline. Raw `mov eax, 15; syscall`, with NO prologue: the
 // kernel enters a restorer with the signal frame already on the stack, so a push/frame would corrupt it.
@@ -1593,8 +1596,8 @@ function buildLinuxFaultHandlerChunk() returns FunctionCodeChunk
 	emitPrintString(asm, bytes: faultPanicLinePrefix(HardwareFaultKind.divideByZero))
 	emitFaultAddressesAndBacktrace(asm, ripSlot: SlotRip, rbpSlot: SlotRbp, rspSlot: SlotRsp)
 
-	// exit_group(1) — never returns. A converted fault is terminal (no recover(), no scheduler).
-	encodeX64ProcessExit(asm.code, iatRelocs: asm.iatRelocs, route: X64OsCallKind.syscall, exitCode: PanicExitCode)
+	// exit_group(1) — never returns. A converted fault is terminal: there is no `recover()`.
+	encodeLinuxProcessExit(asm.code, exitCode: PanicExitCode)
 
 	return asm.finishFunction(FaultHandlerName)
 end 'buildLinuxFaultHandlerChunk'
@@ -1700,19 +1703,18 @@ end 'appendX64RuntimeChunks'
 // under a green suite. Written once, a shared chunk cannot be present on one lane and absent from the
 // other, which closes the failure mode rather than one instance of it.
 //
-// `exitRoute` is the ONE OS fact any of these five contains (`mrt_panic`'s step (4)), besides the thread
-// pointer `mrt_panic`'s green-thread guard reads through; every other byte they assemble is identical on both
-// lanes, either because the chunk is OS-neutral outright or because it reaches the OS BY NAME through
+// `exitRoute` (`mrt_panic`'s step (5)) and the walker's stack top (`emitWalkStackBounds`) are the OS facts
+// these five contain, besides the thread pointer `mrt_panic`'s green-thread guard reads through; every other
+// byte they assemble is identical on both lanes, because the rest reaches the OS BY NAME through
 // `mrt_write_cstr_stderr`, which each lane appends its own writer under.
 //
 // ⚠ ORDER AMONG RUNTIME CHUNKS IS INERT and this function relies on it: they all lay out inside
 // `[mrt_start, __symtable)`, which is the only range `emitTextBoundsGuard` tests, and every reference
-// between them is a name resolved by the intra-`.text` call fixup rather than a distance. Verified by
-// running both suites and the panic probes across the reordering this function introduced.
+// between them is a name resolved by the intra-`.text` call fixup rather than a distance.
 function appendX64SharedRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X64OsCallKind, dumpCoverage bool, usesGt bool, target Target)
 	chunks.push(buildPanicChunk(exitRoute, dumpCoverage: dumpCoverage, usesGt: usesGt, target: target))
 	chunks.push(buildFaultBacktraceChunk())
-	chunks.push(buildWalkFramesChunk())
+	chunks.push(buildWalkFramesChunk(usesGt, os: target.os))
 	chunks.push(buildPrintFrameChunk())
 	chunks.push(buildWriteHexChunk())
 end 'appendX64SharedRuntimeChunks'
@@ -1721,12 +1723,12 @@ end 'appendX64SharedRuntimeChunks'
 // writer every producer in the program reaches and the C-string front end the diagnostics call it through.
 // Everything else it needs comes from the shared appender above.
 //
-// ⚠ `usesGt` travels this far because `mrt_write_stream` calls the IAT by hand, and a hand-assembled call
-// is not routed through the green-thread shim by `emitFunctionChunk` the way a compiled function's is — and
-// because `mrt_panic` guards its own stack on a green thread.
+// ⚠ `usesGt` travels this far because `mrt_write_stream` and both diagnostics' `ExitProcess` call the IAT by
+// hand, and a hand-assembled call is not routed through the green-thread shim by `emitFunctionChunk` the way a
+// compiled function's is — and because `mrt_panic` guards its own stack on a green thread.
 function appendX64WindowsRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X64OsCallKind, dumpCoverage bool, usesGt bool, target Target)
 	chunks.push(buildRuntimeInitChunk())
-	chunks.push(buildFaultThunkChunk())
+	chunks.push(buildFaultThunkChunk(usesGt))
 	chunks.push(buildWriteStreamChunk(usesGt, target: target))
 	chunks.push(buildWriteStderrChunk())
 	appendX64SharedRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage, usesGt: usesGt, target: target)

@@ -3909,14 +3909,16 @@ function processValue(x Amount) returns Amount
 end 'processValue'
 ```
 
-Output when called with a negative value:
+Output when `main` calls it with `-3`:
 ```text
-panic at example.maxon:3: processValue: negative input not allowed
+panic at example.maxon:5: processValue: negative input, got -3
 Stack trace:
-  in example.processValue
-  in example.main
-  in _start
+  in processValue
+  in main
+  in mrt_start
 ```
+
+The trace lists the call chain innermost first, at most 100 frames of it; a deeper chain ends with an `  ...additional frames elided...` line.
 
 Use `panic` for invariant violations and unreachable code paths. For expected error conditions (invalid user input, missing files, etc.), use `throw`/`try`/`otherwise` instead.
 

@@ -5200,7 +5200,7 @@ end 'observedRun'
 // ⭐ **EXACTLY ONE FRAME IS DROPPED — FRAME 0 — AND ONLY WHEN IT IS `mrt_panic`.** That is not an
 // elision LIST and deliberately not one: it is the same rule the native runtimes implement in the
 // runtime itself. x64's walk seeds from `mrt_panic`'s OWN frame and starts printing at `[rbp+8]`, so
-// *"`mrt_panic` never appears in the trace"* (`X64Runtime.maxon:950-968`); arm64's does the same. The
+// *"`mrt_panic` never appears in the trace"* (`X64Runtime.buildPanicChunk`); arm64's does the same. The
 // panic runtime is not part of the program's call stack in any target's report, so removing it here
 // removes a frame **no other target shows either** — which is the whole test a normalization has to
 // pass. Nothing else is touched: `main` and `mrt_start` are printed exactly as wasmtime reported them,
@@ -5235,7 +5235,7 @@ function wasmPanicReport(run ProcessCapture) returns ProcessCapture
 	report.append(run.stderr.slice(run.stderr.startIndex(), endIndex: programEnd))
 	report.append(String.from(BacktraceHeader))
 
-	// Frames PRINTED are capped exactly as the native walkers cap theirs (`MaxBacktraceFrames`) — one
+	// Frames PRINTED are capped and elided exactly as the native walkers do (`MaxBacktraceFrames`) — one
 	// diagnostic format means one length rule too. The cap counts printed frames, so it is offset by
 	// the one runtime frame dropped ahead of them.
 	//
@@ -5243,10 +5243,10 @@ function wasmPanicReport(run ProcessCapture) returns ProcessCapture
 	// MEASURED on wasmtime 44.0.0 with a 41-deep panic: it reports exactly **20** frames, emits no
 	// "frames omitted" note, and offers no CLI flag or environment variable to raise it (`--help`,
 	// `WASMTIME_BACKTRACE_DETAILS`, `RUST_BACKTRACE=full` — all 20). 20 is below `MaxBacktraceFrames`
-	// (32), so this cap is unreachable while that holds. ⇒ **A panic more than ~19 program frames deep
+	// (100), so this cap is unreachable while that holds. ⇒ **A panic more than ~19 program frames deep
 	// prints a SHORTER trace on wasm than on the native lanes.** That is a real cross-target divergence,
-	// it is the ENGINE's and not this harness's, and no case in the corpus is nearly deep enough to meet
-	// it. The cap stays because the LENGTH RULE is ours to state and the host's limit is not a promise:
+	// it is the ENGINE's and not this harness's, and no case that runs on wasm is deep enough to meet it.
+	// The cap stays because the LENGTH RULE is ours to state and the host's limit is not a promise:
 	// if a later wasmtime reports more, this keeps the two lanes agreeing without anyone noticing it had
 	// to be re-decided.
 	var lastFrame = frames.count()
@@ -5261,6 +5261,10 @@ function wasmPanicReport(run ProcessCapture) returns ProcessCapture
 		report.append(frame)
 		report.append(String.from(FrameLineTerminator))
 	end 'eachFrame'
+
+	if lastFrame < frames.count() 'elided'
+		report.append(String.from(ElidedFramesLine))
+	end 'elided'
 
 	return ProcessCapture.create(PanicExitCode as ExitCodeValue, stdout: run.stdout, stderr: report.build())
 end 'wasmPanicReport'

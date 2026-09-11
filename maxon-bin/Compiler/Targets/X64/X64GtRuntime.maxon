@@ -13,8 +13,8 @@
 // (`gs:[0x08]`/`gs:[0x10]`, and the `to`/`from` GTs' saved-bounds fields via their rdx/rcx pointers) — a SEGMENT
 // and register-pointer accesses, still no rdata relocation, so both chunks stay pure register/stack/segment
 // code exactly like the panic runtime. The INLINE shim, by contrast, DOES reference the
-// `__sched_tls_teb_offset` `.data` word — and, through the P it finds there, `currentGt` and `systemStackSP` — through the ordinary `encodeLeaRegGlobal` rdata-relocation path the
-// backend already resolves, so no new relocation machinery is added for it.
+// `__sched_tls_teb_offset` `.data` word — and, through the M it finds there, `currentGt` and `systemStackSP` —
+// through the ordinary `encodeLeaRegGlobal` rdata-relocation path the backend already resolves.
 //
 // CALLING CONVENTION — Maxon's internal ABI (StdToX64Conversion): integer arguments in
 // [rcx, rdx, rax, r9, rsi, rdi], primary return in R8; callee-saved registers are the GPRs rbx, r12-r15
@@ -27,7 +27,7 @@
 // function keeps it by construction (its prologue preserves what its coloring used); this chunk has no
 // prologue and no coloring, and — unlike any ordinary callee — it runs ANOTHER green thread's arbitrary
 // code before control returns. So every register the colorer believes survives a call must be saved here
-// EXPLICITLY, and that set is exactly the two ordered lists below. Wave 2 grew it by ten XMMs.
+// EXPLICITLY, and that set is exactly the two ordered lists below.
 
 // The callee-saved registers the context switch saves and restores: the GPRs in push order (pop order is the
 // exact reverse), then the XMMs into a `sub rsp` area written with `movsd` — the SAME `calleeSavedOrder` and
@@ -41,9 +41,8 @@
 // ⚠ ONE `XmmSaveSlotBytes` WORD PER XMM — the SAME constant the prologue's slots stride by, not a second 8
 // that happens to agree. The low 64 bits ARE the value in the compiler (no type is wider, and nothing reads bits
 // 64-127); the full argument and the condition that would invalidate it live once in `X64PrologueEpilogue`'s
-// header, beside that constant. Widen it there and `assertGtFrameConsistent` — which now DERIVES from it,
-// where it used to derive from `GtArgSlotBytes` (the async argument-buffer stride, a different fact that
-// happens to be 8) and so could never have seen the prologue widen — panics on the next async compile.
+// header, beside that constant. Widen it there and `assertGtFrameConsistent`, which derives from it, panics on
+// the next async compile.
 
 // The register the context switch reads `from` (arg 0) and `to` (arg 1) from — the ABI's first two integer
 // argument registers. `to` rides through UNMODIFIED so a fresh GT's trampoline reads its GT from rdx.
@@ -55,10 +54,11 @@ let GtSwitchToReg = X64Register.rdx
 let GtSwitchTibScratchReg = X64Register.rax
 
 // NT_TIB stack-bound fields in the GS segment (Win64). A kernel call probes these and faults when RSP is
-// outside `[StackLimit, StackBase)`. Both the syscall shim (repoint at the system stack for a call) and the
-// context switch (repoint at the resumed GT's stack) write them, so they are named once here.
-let TibStackBaseDisp = 0x08 as Imm32  // NT_TIB.StackBase  — gs:[0x08]
-let TibStackLimitDisp = 0x10 as Imm32  // NT_TIB.StackLimit — gs:[0x10]
+// outside `[StackLimit, StackBase)`. The syscall shim (repoint at the system stack for a call) and the context
+// switch (repoint at the resumed GT's stack) write them and the backtrace walker reads them, so they are named
+// once here.
+module let TibStackBaseDisp = 0x08 as Imm32  // NT_TIB.StackBase  — gs:[0x08]
+module let TibStackLimitDisp = 0x10 as Imm32  // NT_TIB.StackLimit — gs:[0x10]
 
 // The NT_TIB stack bounds are a PAIR (base, limit); these two helpers spell that two-word structure ONCE for
 // the three sites that move it — the context switch's save + load, and the shim's after-call restore (which is
@@ -81,13 +81,14 @@ end 'emitLoadTibFromGt'
 // ⭐⭐⭐ **DOES THIS OS PROBE A PER-THREAD STACK-BOUNDS PAIR ON A KERNEL CALL?** Windows does: `NT_TIB`'s
 // `StackBase`/`StackLimit` are read by the kernel on entry and a call made with RSP outside them FAULTS, which
 // is the whole reason this file moves a pair of words on every context switch, every syscall shim and every
-// stack grow. Linux does not — the kernel reads the pointer it is given and nothing else — so on that lane
-// every one of those three sites emits NOTHING here, and the GT struct's two bounds fields are never read.
+// stack grow — and why the backtrace walker can read the running stack's bounds there whatever stack it is.
+// Linux does not — the kernel reads the pointer it is given and nothing else — so on that lane every one of
+// those sites emits NOTHING here, and the GT struct's two bounds fields are never read.
 //
 // ⚠ **IT IS THE OS's QUESTION AND NOT THE ROUTE'S, WHICH IS WHY IT IS NOT `x64OsCallKind`.** That one asks how
 // this backend reaches the kernel (an import or a `syscall`); this one asks what the kernel demands of the
 // stack once it is there, and the two are independent facts that happen to split the same two OSes today.
-function x64OsProbesStackBounds(os Os) returns bool
+module function x64OsProbesStackBounds(os Os) returns bool
 	return match os 'os'
 		windows gives true
 		linux gives false
@@ -175,20 +176,15 @@ end 'gtXmmSaveAreaBytes'
 // register plus one return-address word. If a register is added to or removed from EITHER callee-saved list
 // without moving `GtInitialFrameBytes` in lockstep, the first switch-in pops the wrong number of bytes and
 // `ret`s into a WILD address. This turns that silent cross-tier drift into a compile-time panic on every
-// async compile — a CHECK where the two sides were previously tied only by a comment (feedback: DERIVE >
-// CHECK > COMMENT).
+// async compile.
 //
-// ⚠⚠ IT IS DERIVED FROM **BOTH** LISTS, AND THAT IS THE WHOLE POINT AT WAVE 2. The GPRs are pushed words; the
-// XMMs are `movsd` words in a `sub rsp` area, because x86-64 has no `push xmm`. Leaving this deriving from
-// `calleeSavedOrder` ALONE would have kept it passing while covering only half the frame — and the GT hazard
-// would have gone silent exactly as the callee-saved set grew. An assert that covers only the half that did
-// not change is worse than none: it reads as protection.
+// ⚠⚠ IT IS DERIVED FROM **BOTH** LISTS. The GPRs are pushed words; the XMMs are `movsd` words in a `sub rsp`
+// area, because x86-64 has no `push xmm`. An assert over `calleeSavedOrder` alone would keep passing while
+// covering only half the frame.
 //
-// ⚠⚠ AND IT IS DERIVED FROM THE PROLOGUE'S OWN STRIDE (`XmmSaveSlotBytes`, via `gtXmmSaveAreaBytes`), which
-// is the second half of the same lesson. It used to compute the XMM half from `GtArgSlotBytes` — 8 for an
-// unrelated reason — so widening the prologue's slots to 16 would have left THIS still passing while the
-// context switch saved 8 of every 16 bytes: the upper halves of xmm6-15 destroyed across every `await`,
-// under a comment promising this assert would catch exactly that.
+// ⚠⚠ AND FROM THE PROLOGUE'S OWN STRIDE (`XmmSaveSlotBytes`, via `gtXmmSaveAreaBytes`), not from any other
+// constant that happens to be 8: widening the prologue's slots to 16 must fail here, or the context switch
+// would save 8 of every 16 bytes and destroy the upper halves of xmm6-15 across every `await`.
 function assertGtFrameConsistent(target Target)
 	let gprBytes = calleeSavedOrder.count() * StackWordBytes
 	let framedBytes = gprBytes + gtXmmSaveAreaBytes() + StackWordBytes
@@ -212,17 +208,16 @@ function buildGtContextSwitchChunk(target Target) returns FunctionCodeChunk
 		encodePushReg(code, reg: reg)
 	end 'push'
 
-	// ⭐⭐ AND THE CALLEE-SAVED XMMs (Wave 2) — `sub rsp` + `movsd`, because there is no `push xmm`.
+	// ⭐⭐ AND THE CALLEE-SAVED XMMs — `sub rsp` + `movsd`, because there is no `push xmm`.
 	//
 	// THIS IS NOT OPTIONAL AND IT IS NOT SYMMETRY FOR ITS OWN SAKE. Ordinary user code reaches this chunk
 	// through a normal `call` (`__gt_await` → `__gt_context_switch`), so the colorer treats it as a call
-	// clobbering exactly `callerSavedMask()` — which, since Wave 2, EXCLUDES xmm6-15. The colorer therefore
-	// believes a float in xmm6 survives this call. But this chunk does not return to its caller: it switches
-	// to a DIFFERENT green thread's stack, that thread runs arbitrary user code, and control comes back here
-	// only later. Without these saves the other thread's float work lands in xmm6-15 and the suspended
-	// thread resumes reading it — a silent wrong answer with no crash to find it by. Every other register the
-	// colorer believes survives a call is already saved above, for exactly this reason; Wave 2 added ten more
-	// to that set and this is where they are honoured.
+	// clobbering exactly `callerSavedMask()` — which EXCLUDES xmm6-15. The colorer therefore believes a float
+	// in xmm6 survives this call. But this chunk does not return to its caller: it switches to a DIFFERENT
+	// green thread's stack, that thread runs arbitrary user code, and control comes back here only later.
+	// Without these saves the other thread's float work lands in xmm6-15 and the suspended thread resumes
+	// reading it — a silent wrong answer with no crash to find it by.
+	//
 	// One slot per callee-saved XMM — bounded by that list, two orders of magnitude below the guard
 	// page, so this reservation never walks and needs no scratch (see `encodePrologue`).
 	encodePrologue(code, stackSize: gtXmmSaveAreaBytes(), probeScratchIsFree: false)
@@ -367,16 +362,10 @@ end 'buildGtTrampolineChunk'
 //
 // ⚠ ONE REGION PER MACHINE, AND THE SAFETY IS PER OS THREAD — NOT PER PROCESSOR, AND NOT "ONE AT A TIME".
 // The shim switches to THIS M's FIXED `systemStackSP` (`SchedRuntime.MOffSystemStackSP`, reset every entry,
-// not a bump pointer). Two Ms in the kernel at once are fine BY CONSTRUCTION: they are different regions.
-// What must never happen is one OS THREAD re-entering its own region while a frame is live in it.
-//
-// ⛔⛔ **THIS COMMENT USED TO SAY "THIS P's" AND "single-M runs one thing at a time", AND BOTH HAVE EXPIRED.**
-// The region moved from the P to the M at W213-C1, and the default is now the machine's processor count, so
-// several Ms are routinely inside shimmed calls simultaneously. ⚠ The two spellings were the SAME PARTITION
-// only while an M held one P for its whole life — and W213's `handoffp` ended that, so a comment that says
-// "P" where the field says "M" now names a different thing rather than a synonym.
-// `multicore-stress/syscall-stack-torture.maxon` is what pins the surviving property: sabotaged to share ONE region it
-// segfaults 9 of 9 at `MAXON_MAX_PROCS` 2/7/12 and is clean 3 of 3 at 1.
+// not a bump pointer). Several Ms are routinely inside shimmed calls at once, and that is fine BY
+// CONSTRUCTION: they are different regions. What must never happen is one OS THREAD re-entering its own
+// region while a frame is live in it. The region is the M's and not the P's because `handoffp` can take an
+// M's P while it is inside a kernel call. `multicore-stress/syscall-stack-torture.maxon` pins it.
 //
 // ⭐ RE-ENTRY DOES HAPPEN NOW, AND IT IS SAFE FOR A STATED REASON RATHER THAN BY ABSENCE. A kernel call is a
 // LEAF that never re-enters guarded Maxon code, so the call itself cannot nest — but `exitsyscall`'s slow
@@ -405,14 +394,13 @@ let ShimDirectLabel = 0 as BlockId
 let ShimDoneLabel = 1 as BlockId
 
 // ⭐⭐ **`mDest` = THE M THIS OS THREAD IS, BRANCHING TO `bail` IF THERE ISN'T ONE — the hand-assembled twin
-// of `SchedRuntime.emitLoadCurrentM`, and the ONE spelling both Target-tier readers share.** The syscall shim
-// and the prologue stack guard each need the running green thread, and since W213-C1 that is `M->currentGt`
-// rather than `P->currentGt` (and, before G1, a `.data` word); writing the sequence twice is exactly how the
-// two would come to disagree about which of its null cases to test.
+// of `SchedRuntime.emitLoadCurrentM`, and the ONE spelling every Target-tier reader shares.** The syscall
+// shim, the prologue stack guard and the backtrace walker (`X64Runtime.emitWalkStackBounds`) each need the
+// running green thread, `M->currentGt`; writing the sequence twice is exactly how two of them would come to
+// disagree about which of its null cases to test.
 //
-// ⭐ **NEITHER READER WANTS THE P AT ALL, WHICH IS THE POINT OF THE SPLIT AND ITS WHOLE PERFORMANCE STORY.**
-// Both want `currentGt` and the syscall stack, and both of those are the M's — so this sequence is the same
-// three loads and three tests it was when TLS held a P, and no hot path grew an indirection.
+// ⭐ **NO READER WANTS THE P**: `currentGt` and the syscall stack are both the M's, so the hot path is three
+// loads and three tests with no indirection through a P.
 //
 // **THE TWO NULLS ARE DIFFERENT QUESTIONS AND BOTH MUST BE ASKED:**
 //   * a ZERO TEB OFFSET means `__sched_init_procs` has not run — the scheduler does not exist yet, and
@@ -424,25 +412,25 @@ let ShimDoneLabel = 1 as BlockId
 //     `__gt_enqueue` — whose lock take is a shimmed `iatCall`.
 //
 // **THE THIRD IS THE GREEN THREAD ITSELF**, and it is inside this helper rather than at each caller for the
-// same reason the other two are: both callers ask it, both bail on it, and the version where one of them
+// same reason the other two are: every caller asks it and bails on it, and the version where one of them
 // forgot would be a load through a zeroed `currentGt`.
 //
 // ⚠ **THERE IS DELIBERATELY NO `P == 0` TEST HERE, AND ITS ABSENCE IS AN ARGUMENT RATHER THAN AN OVERSIGHT.**
-// An M with no P is the state W213 exists to create, but neither of these two readers ever asks for a P —
-// so the arm has nothing to guard here. The Std-tier readers that DO want one test it (`__sched_runq_put`,
-// `emitLoadCurrentGtAndProcIdOrZero`, `emitSlabCurrentP`).
+// An M may hold no P, but no reader here ever asks for one — so the arm has nothing to guard. The Std-tier
+// readers that DO want one test it (`__sched_runq_put`, `emitLoadCurrentGtAndProcIdOrZero`,
+// `emitSlabCurrentP`).
 //
 // `mDest` keeps the M — the shim reads its syscall stack out of it after the branch, so the two registers are
-// separate; the guard passes the same register for both, which is exactly what "the M is dead after this"
-// looks like. All three bails go to the caller's own label, which in each caller means "take the un-scheduled
-// path".
+// separate; the guard and the walker pass the same register for both, which is exactly what "the M is dead
+// after this" looks like. All three bails go to the caller's own label, which in each caller means "not on
+// a green thread".
 //
 // ⚠ **THE rbp/r13 ENCODING TRAP IS CLOSED BY THE ENCODER, NOT BY A REGISTER CHOICE HERE.** `[rbp]`/`[r13]`
 // with mod=00 means RIP-RELATIVE, so a hand-assembled ModR/M would read a constant out of the code stream
 // instead of the thread's slot. `encodeMovRegSegBase` routes through the shared
 // `encodeModRmBaseDisp`, which emits the zero-`disp8` form for exactly those two bases, so either
 // register may be anything.
-function emitLoadCurrentGtOrBail(code ByteArray, rdataRelocs RdataRelocationArray, fixups ChunkRel32FixupArray, mDest X64Register, gtDest X64Register, bail BlockId, os Os)
+module function emitLoadCurrentGtOrBail(code ByteArray, rdataRelocs RdataRelocationArray, fixups ChunkRel32FixupArray, mDest X64Register, gtDest X64Register, bail BlockId, os Os)
 	emitLoadCurrentMOrBail(code, rdataRelocs: rdataRelocs, fixups: fixups, dest: mDest, bail: bail, os: os)
 	encodeLoadRegBaseDisp(code, destReg: gtDest, base: mDest, disp: MOffCurrentGt as Imm32, wide: true)
 	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: gtDest, src: gtDest, wide: true)
@@ -487,10 +475,8 @@ end 'emitLoadCurrentMOrBail'
 // ⚠ **IT IS NOT A WEAKER VERSION OF THE ONE ABOVE, IT IS A DIFFERENT PRECONDITION, AND EACH OF ITS TWO
 // CALLERS STATES ITS OWN PROOF.** The shim's post-call TIB restore and the prologue guard's cold path both run
 // only after the guarded read above has already answered non-null, and neither can have stopped being an M
-// since: a thread becomes an M once (`emitSchedBecomeM`) and never unbecomes one. ⭐ **That proof is STRICTLY
-// STRONGER than the one it replaced at W213-C1**, which had to argue that no P had been released in between —
-// a claim a handoff would have falsified, on the very path (a thread inside a kernel call) a handoff targets.
-// A test here would need a branch target that has no correct destination.
+// since: a thread becomes an M once (`emitSchedBecomeM`) and never unbecomes one. A test here would need a
+// branch target that has no correct destination.
 function emitLoadCurrentMOrBailless(code ByteArray, rdataRelocs RdataRelocationArray, dest X64Register, os Os)
 	encodeLeaRegGlobal(code, rdataRelocs: rdataRelocs, dest: dest, label: SchedTlsTebOffsetLabel)
 	encodeLoadRegBaseDisp(code, destReg: dest, base: dest, disp: 0, wide: true)
@@ -503,21 +489,14 @@ end 'emitLoadCurrentMOrBailless'
 // layout it must match, never a second copy that could drift into a silent CreateProcessA/WriteFile miscompile
 // (too few words copied ⇒ the kernel reads garbage stack args). A ≤4-arg (register-only) import passes nothing
 // on the stack and copies nothing.
-// ⭐⭐ **THE SHIM'S PER-IMPORT COPY COUNT — TOTAL OVER `IatSlot`, SO AN OMISSION IS A COMPILE ERROR (7a).**
+// ⭐⭐ **THE SHIM'S PER-IMPORT COPY COUNT — TOTAL OVER `IatSlot`, SO AN OMISSION IS A COMPILE ERROR.**
 //
-// This was an int-keyed `if`-chain ending in a bare `return 0`: a table that must be COMPLETE, whose
-// incompleteness was SILENT and whose silent answer was the dangerous one. It has already cost a wrong
-// answer once — R4.1 added `CreateFileA` beside `CreateFileW` and did not add it here, so a
-// `__ManagedFile.open*` reached from a SPAWNED green thread copied ZERO words onto the system stack and
-// `dwCreationDisposition`, `dwFlagsAndAttributes` and `hTemplateFile` were whatever happened to be in that
-// memory. Reachable only OFF the main thread, which is why a green suite never saw it (the corpus combines
-// no `async` with file IO), and it is the project's own "no silent unhandled cases" rule broken in a table
-// where the default is indistinguishable from a correct answer.
-//
-// ⇒ **The `match` below is EXHAUSTIVE over the enum, so adding an `IatSlot` does not compile until its
-// count is stated.** That is the whole point of the rung: the next `CreateFileA` cannot be forgotten,
-// because forgetting it is no longer expressible. There is no `default` arm and there must never be one —
-// a `default gives 0` would restore the exact defect, wearing a `match`'s clothes.
+// The table must be COMPLETE, and a missing entry's answer — zero words copied — is indistinguishable from a
+// correct one: a `__ManagedFile.open*` reached from a SPAWNED green thread would hand the kernel whatever
+// happened to be on the system stack for `CreateFileA`'s last three arguments, and only off the main thread,
+// where a green suite does not look. So the `match` below is EXHAUSTIVE over the enum, and adding an
+// `IatSlot` does not compile until its count is stated. There is no `default` arm and there must never be
+// one — a `default gives 0` would be that defect wearing a `match`'s clothes.
 //
 // ⚠ **A `0` HERE IS A CLAIM, NOT A BLANK.** It says the import passes four or fewer arguments, so Win64
 // puts every one in rcx/rdx/r8/r9 and there is nothing on the stack to copy. Each such arm carries its
@@ -527,10 +506,8 @@ end 'emitLoadCurrentMOrBailless'
 // `StdToX64Conversion.stdOpOutgoingArgBytes` reserves the GT frame with, so the copy and the reservation
 // cannot disagree about how many words the kernel reads — the property those constants' own headers exist
 // to hold. This function maps slots to them; it does not restate them.
-// ⚠ **THE SCAN IS DONE ONCE PER SHIM AND ITS ANSWER FEEDS BOTH TABLES.** It used to BE
-// `gtShimStackArgWords`, walking the enum to reach one `match`; W213-C3 added a second per-slot question (the
-// syscall classification below) and a second copy of this walk beside it would be one loop written twice —
-// and, worse, two chances for the two tables to be asked about different slots.
+// ⚠ **THE SCAN IS DONE ONCE PER SHIM AND ITS ANSWER FEEDS BOTH TABLES** — the copy count and the syscall
+// classification below — so the two can never be asked about different slots.
 function iatSlotOfIndex(slotIndex RelocSlotIndex) returns IatSlot
 	for slot in IatSlot.allCases 'each'
 		if iatSlotIndex(slot) == slotIndex 'found'
@@ -551,7 +528,7 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		CreateFileW gives CreateFileStackArgWords
 
 		// The `A` variant takes the SAME seven arguments as its `W` sibling, so it derives from the same
-		// constant. This is the entry R4.1 omitted and R4.2 restored — the defect this rung makes unrepeatable.
+		// constant.
 		CreateFileA gives CreateFileStackArgWords
 		CreateThread gives CreateThreadStackArgWords
 		ReadFile gives ReadFileStackArgWords
@@ -979,17 +956,17 @@ end 'exitSyscallSlowFrameBytes'
 // callee may not touch.
 let ExitSyscallSavedResultDisp = ShadowSpaceBytes as Imm32
 
-// Branch to `bail` unless RSP lies inside `gt`'s own stack, `[stackBase, stackBase + stackSize)`; a `stackBase`
-// of 0 bails too. Clobbers `gt` and `scratch`.
-function emitGtBailUnlessOnItsOwnStack(code ByteArray, fixups ChunkRel32FixupArray, gt X64Register, scratch X64Register, bail BlockId)
+// Branch to `bail` unless `addr` lies inside `gt`'s own stack, `[stackBase, stackBase + stackSize)`; a `stackBase`
+// of 0 bails too. Past both bails `scratch` holds the stack's top and `gt` its size.
+module function emitGtBailUnlessOnItsOwnStack(code ByteArray, fixups ChunkRel32FixupArray, gt X64Register, scratch X64Register, addr X64Register, bail BlockId)
 	encodeLoadRegBaseDisp(code, destReg: scratch, base: gt, disp: GtOffStackBase as Imm32, wide: true)
 	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: scratch, src: scratch, wide: true)
 	encodeJcc(code, rel32Fixups: fixups, cond: X64CondCode.equal, targetBlockId: bail)
-	encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: X64Register.rsp, src: scratch, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: addr, src: scratch, wide: true)
 	encodeJcc(code, rel32Fixups: fixups, cond: X64CondCode.below, targetBlockId: bail)
 	encodeLoadRegBaseDisp(code, destReg: gt, base: gt, disp: GtOffStackSize as Imm32, wide: true)
 	encodeRmRegDirect(code, opcode: OpcodeAddRmReg, dest: scratch, src: gt, wide: true)
-	encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: X64Register.rsp, src: scratch, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: addr, src: scratch, wide: true)
 	encodeJcc(code, rel32Fixups: fixups, cond: X64CondCode.aboveEqual, targetBlockId: bail)
 end 'emitGtBailUnlessOnItsOwnStack'
 
@@ -1033,17 +1010,12 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 	// the two pushes.
 	// ⚠ THE STRIDE IS `SpillSlotBytes` — the SAME constant `win64OutgoingArgDisp` places the ISEL's arg stores
 	// with (StdToX64Conversion). The copy below must read and write the exact addresses that rule computed, so
-	// the two ends are ONE number. It used to be `GtArgSlotBytes`, the async ARGUMENT-BUFFER stride, which is a
-	// different fact that merely happens to be 8 — the confusion `StackWordBytes`/`XmmSaveSlotBytes` were split
-	// out to end (GtRuntime.maxon, X64PrologueEpilogue.maxon), surviving here because the shim was not swept.
-	// Widen the outgoing-arg grid and the shim now follows it; under the old spelling it silently would not,
-	// copying from and to slots the isel never wrote and handing the kernel garbage stack arguments.
+	// the two ends are ONE number — not another constant that happens to be 8, which would leave the shim
+	// copying from and to slots the isel never wrote the day the outgoing-arg grid widened.
 	// ⚠ **DELIBERATELY NOT `win64OutgoingArgDisp(stackArgWords)`, THOUGH THE ARITHMETIC IS IDENTICAL.** This is
 	// a frame SIZE — how many bytes the shim must reserve — and that function answers a DISPLACEMENT, where one
-	// named slot begins. They coincide today because the frame ends exactly where the next slot would start, and
-	// folding them would make a size and an address one expression on the strength of a coincidence. That is the
-	// error 7a's review found one function away, where `GtArgSlotBytes` and `SpillSlotBytes` were two facts
-	// sharing the number 8 — and it is the error this rung exists to remove, not to commit in reverse. Both
+	// named slot begins. They coincide because the frame ends exactly where the next slot would start, and
+	// folding them would make a size and an address one expression on the strength of a coincidence. Both
 	// derive from the same two constants, which is the part that has to be true.
 	let frameSize = alignUpStack(ShadowSpaceBytes + (stackArgWords * SpillSlotBytes), alignment: StackFrameAlignment)
 	let reserve = frameSize + ShimPushedWordBytes
@@ -1060,12 +1032,11 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 	// rax is caller-saved and the coming call clobbers it anyway; it carries the M out of the guard, where the
 	// system-stack top is read out of it after the two pushes below.
 	emitLoadCurrentGtOrBail(code, rdataRelocs: rdataRelocs, fixups: shimFixups, mDest: X64Register.rax, gtDest: ShimGtReg, bail: ShimDirectLabel, os: Os.windows)
-	emitGtBailUnlessOnItsOwnStack(code, fixups: shimFixups, gt: ShimGtReg, scratch: X64Register.rax, bail: ShimDirectLabel)
+	emitGtBailUnlessOnItsOwnStack(code, fixups: shimFixups, gt: ShimGtReg, scratch: X64Register.rax, addr: X64Register.rsp, bail: ShimDirectLabel)
 	emitLoadCurrentMOrBailless(code, rdataRelocs: rdataRelocs, dest: X64Register.rax, os: Os.windows)
 
-	// Switch RSP to THIS M's OWN system stack (G1 made it per-P, W213-C1 per-M;
-	// `SchedRuntime.MOffSystemStackSP` carries the silent interleaved corruption each move removes). r10 =
-	// the GT rsp anchor (points at the pushed caller-r10 word); rax holds the system-stack top through the
+	// Switch RSP to THIS M's OWN system stack (`SchedRuntime.MOffSystemStackSP` carries why it is the M's). r10
+	// = the GT rsp anchor (points at the pushed caller-r10 word); rax holds the system-stack top through the
 	// copy and the TIB repoint below.
 	encodePushReg(code, reg: ShimGtRspReg)
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: ShimGtRspReg, src: X64Register.rsp, wide: true)
@@ -1074,10 +1045,8 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 	encodePushReg(code, reg: ShimGtRspReg)
 
 	// sub rsp, reserve — the outgoing-arg frame on the system stack. Shadow space plus one import's
-	// stack-argument words (`gtShimStackArgWordsOf`, SIX at the widest — `CreateProcessStackArgWords`;
-	// the "seven" this line used to say is `CreateFileA`/`W`'s ARGUMENT count, of which three land on
-	// the stack, and the two are not the same number), so it is well inside one
-	// page; r11 is LIVE across it (currentGt, reloaded from below after the call), hence no
+	// stack-argument words (`gtShimStackArgWordsOf`, SIX at the widest — `CreateProcessStackArgWords`), so it
+	// is well inside one page; r11 is LIVE across it (currentGt, reloaded from below after the call), hence no
 	// certificate — a shim whose reservation ever reached a page would panic rather than eat it.
 	encodePrologue(code, stackSize: reserve, probeScratchIsFree: false)
 
@@ -1279,6 +1248,7 @@ let OpcodeMovsb = 0xA4
 function buildGtMorestackChunk(target Target) returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var iatRelocs = RelocationArray.create()
+	var rdataRelocs = RdataRelocationArray.create()
 	var callFixups = CallFixupArray.create()
 
 	// Two frame slots are read or written by fixed displacement, both DERIVED from the saved-register count and
@@ -1418,14 +1388,15 @@ function buildGtMorestackChunk(target Target) returns FunctionCodeChunk
 	code.push(OpcodeRet)  // ret into the copied return address, now on the new stack
 
 	// The two refusals. rsp is on the system stack, 16-aligned, with the TIB describing it (step 3) — every
-	// precondition the exit door has.
+	// precondition the exit door has, and why it needs no shim: off a green thread's own stack the shim takes
+	// its direct road anyway.
 	growLabels.place(GrowExhaustedLabel, value: code.count())
-	encodeX64ProcessExit(code, iatRelocs: iatRelocs, route: x64OsCallKind(target.os), exitCode: RuntimeAbort.greenThreadStackExhausted.rawValue as MachineWord)
+	encodeX64ProcessExit(code, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, callFixups: callFixups, route: x64OsCallKind(target.os), exitCode: RuntimeAbort.greenThreadStackExhausted.rawValue as MachineWord, usesGt: false)
 	growLabels.place(GrowRefusedLabel, value: code.count())
-	encodeX64ProcessExit(code, iatRelocs: iatRelocs, route: x64OsCallKind(target.os), exitCode: RuntimeAbort.greenThreadStackAllocationFailed.rawValue as MachineWord)
+	encodeX64ProcessExit(code, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, callFixups: callFixups, route: x64OsCallKind(target.os), exitCode: RuntimeAbort.greenThreadStackAllocationFailed.rawValue as MachineWord, usesGt: false)
 	resolveChunkRel32Fixups(code, labelOffsets: growLabels, rel32Fixups: growFixups)
 
-	return FunctionCodeChunk.createWith(GtMorestackName, code: code, callFixups: callFixups, rdataRelocs: RdataRelocationArray.create(), iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())
+	return FunctionCodeChunk.createWith(GtMorestackName, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())
 end 'buildGtMorestackChunk'
 
 // The registers `__gt_stack_relocate` works in. The five persistent ones are callee-saved in the internal ABI, which
@@ -1615,11 +1586,8 @@ end 'emitGtStackGuard'
 // --- The IOCP completion-drain thread (P1.5 slice 1a-ii) ---
 //
 // ⭐ A HAND-ASSEMBLED chunk, NOT builder-built Std — like `__gt_context_switch`/`__gt_trampoline`/`__gt_morestack`,
-// and for the same reason: it runs OUTSIDE the GT model, on its OWN OS-thread stack,
-// so its kernel calls must be DIRECT — and since G1 they are so BY CONSTRUCTION rather than by care: this thread
-// never adopts a P, so the shim's own null-P test sends every one of its calls down the direct path. (Before the
-// P, the shim read a GLOBAL current-GT word and would have raced the one shared system stack.) A builder-built
-// version would still be shimmed and stack-guarded — both wrong here.
+// and for the same reason: it runs OUTSIDE the GT model, on its OWN OS-thread stack, so its kernel calls must be
+// DIRECT. A builder-built version would be shimmed and stack-guarded — both wrong here.
 //
 // `__io_completion_loop(rcx = lpParameter, ignored)` — the Win64 ThreadProc `__io_init` starts with CreateThread.
 // It loops: `GetQueuedCompletionStatus` blocks until an overlapped read completes; the completing packet's
@@ -1701,10 +1669,8 @@ function buildIoCompletionLoopChunk() returns FunctionCodeChunk
 
 	// `GetQueuedCompletionStatus`'s 5th argument (dwMilliseconds) goes in outgoing stack SLOT 0 of this loop's
 	// own frame, so the displacement is `win64OutgoingArgDisp(0)` — the SAME rule the ISEL and the GT shim place
-	// their stack arguments by — and not the bare `0x20` it used to be. Asked HERE rather than bound to a global
-	// `let`, which may hold no function call. This is also the site that makes 7a's
-	// `GetQueuedCompletionStatusStackArgWords` load-bearing: that constant says this import has ONE stack
-	// argument, and this is the one place that writes it.
+	// their stack arguments by. Asked HERE rather than bound to a global `let`, which may hold no function call.
+	// This is the one place that writes the stack argument `GetQueuedCompletionStatusStackArgWords` counts.
 	encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: win64OutgoingArgDisp(0), srcReg: X64Register.rax)
 	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.GetQueuedCompletionStatus))
 

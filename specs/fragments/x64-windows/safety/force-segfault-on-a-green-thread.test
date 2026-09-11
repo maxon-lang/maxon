@@ -1,0 +1,114 @@
+// Test: force-segfault-on-a-green-thread
+function faultOnAGreenThread() returns ExitCode
+	__Builtins.forceSegfault()
+	return 0
+end 'faultOnAGreenThread'
+
+function main() returns ExitCode
+	let p = async faultOnAGreenThread()
+	let r = await p
+	return r
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_timer_count@24 = i64 0
+  __gt_timer_heap_base@32 = i64 0
+  __gt_timer_capacity@40 = i64 0
+  __gt_timer_seq@48 = i64 0
+  __gt_timer_when@56 = i64 9223372036854775807
+  __gt_trace_counter@64 = i64 0
+  __gt_proc_count@72 = i64 0
+  __gt_proc_handles_base@80 = i64 0
+  __gt_proc_gts_base@88 = i64 0
+  __gt_live_count@96 = i64 0
+  __gt_seed_bytes@104 = i64 8192
+  __gt_stack_bytes_sum@112 = i64 0
+  __gt_stack_bytes_count@120 = i64 0
+  __gt_seed_sum_seen@128 = i64 0
+  __gt_seed_count_seen@136 = i64 0
+  __sched_active_workers@144 = i64 1
+  __sched_max_active_workers@152 = i64 1
+  __sched_tls_index@160 = i64 0
+  __sched_tls_teb_offset@168 = i64 0
+  __sched_procs@176 = i64 0
+  __sched_allm@184 = i64 0
+  __sched_midle@192 = i64 0
+  __sched_pidle@200 = i64 0
+  __gt_gfree_head@208 = i64 0
+  __gt_record_cursor@216 = i64 0
+  __gt_record_limit@224 = i64 0
+  __gt_records_carved@232 = i64 0
+  __sched_npidle@240 = i64 0
+  __sched_runq_size@248 = i64 0
+  __sched_mcount@256 = i64 0
+  __sched_nmidle@264 = i64 0
+  __sched_main_m@272 = i64 0
+  __sched_phase@280 = i64 0
+  __sched_lastpoll@288 = i64 0
+  __sched_poll_until@296 = i64 0
+  __sched_regain_head@304 = i64 0
+  __np_poller@312 = i64 0
+  __np_break@320 = i64 0
+  __np_wake_sig@328 = i64 0
+  __sched_num_procs@336 = i64 0
+  __sched_shutdown_flag@344 = i64 0
+  __sched_lock@352 = i64 0
+  __sched_nmspinning@360 = i64 0
+  __sched_needspinning@368 = i64 0
+  __sched_sysmon_started@376 = i64 0
+  __sched_sysmon_event@384 = i64 0
+  __sched_sysmon_wait@392 = i64 0
+  __slab_arena_list@400 = i64 0
+  __slab_arena_map_l1@408 = i64 0
+  __slab_state@416 = i64 0
+  __mrt_console_probe_stdin@424 = i8 0
+  __mrt_console_probe_stdout@425 = i8 0
+  __mrt_console_probe_stderr@426 = i8 0
+}
+
+func @faultOnAGreenThread {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect maxon_force_segfault
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.leaRegFunc rcx, [rip + faultOnAGreenThread]
+    x64.callDirect __gt_spawn
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __gt_ready
+    x64.movRegReg rcx, rbx
+    x64.callDirect __gt_await
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @maxon_force_segfault {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
+    x64.storeBaseDispReg.word64 [rax + 0], rcx
+    x64.popReg rbp
+    x64.ret
+}

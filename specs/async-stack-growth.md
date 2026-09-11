@@ -1470,6 +1470,142 @@ Stack trace:
 1
 ```
 
+<!-- test: async-stack-growth.a-trace-deeper-than-the-cap-ends-with-an-elision-line -->
+<!-- procs: 1 -->
+**A BACKTRACE STOPS AT 100 FRAMES AND SAYS SO.** A coroutine parks once, then recurses 150 deep — growing its
+stack several times on the way — and panics at the bottom. The walk follows the relocated chain frame by frame
+inside the thread's own stack, prints the innermost 100, and ends with a line saying more frames were left out; a
+trace without that line is the whole chain.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function descend(n Integer) returns Integer
+	if n == 0 'bottom'
+		panic("at the bottom")
+	end 'bottom'
+	return 1 + descend(n - 1)
+end 'descend'
+
+function parkThenDescend() returns Integer
+	sleep(1)
+	return descend(150)
+end 'parkThenDescend'
+
+function main() returns ExitCode
+	let p = async parkThenDescend()
+	let r = await p
+	return r as ExitCode
+end 'main'
+```
+```stderr
+panic at async-stack-growth.a-trace-deeper-than-the-cap-ends-with-an-elision-line.test:6: at the bottom
+Stack trace:
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  ...additional frames elided...
+```
+```exitcode
+1
+```
+
 <!-- test: async-stack-growth.the-starting-stack-comes-back-down-when-threads-need-less -->
 <!-- procs: 1 -->
 **THE STARTING STACK FALLS AGAIN WHEN THE THREADS STOP NEEDING IT.** The average is of what each finished thread

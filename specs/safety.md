@@ -1181,3 +1181,33 @@ Stack trace:
   in main
   in mrt_start
 ```
+
+<!-- test: force-segfault-on-a-green-thread -->
+<!-- unsupported-targets: x64-linux, arm64-linux -->
+### A fault on a green thread walks that thread's own stack
+The fault happens on a coroutine's stack while the handler runs elsewhere — Windows's vectored handler below
+the fault on that same stack, with the TIB describing it; Darwin's on the signal stack — and the walk is bounded
+by the green thread's own stack, ending at its trampoline. The two Linux lanes install no handler for an access
+violation, so there the fault ends the process unconverted.
+```maxon
+function faultOnAGreenThread() returns ExitCode
+	__Builtins.forceSegfault()
+	return 0
+end 'faultOnAGreenThread'
+
+function main() returns ExitCode
+	let p = async faultOnAGreenThread()
+	let r = await p
+	return r
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic: nil pointer or invalid memory access
+Stack trace:
+  in maxon_force_segfault
+  in faultOnAGreenThread
+  in __gt_trampoline
+```

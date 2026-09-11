@@ -318,10 +318,10 @@ end 'buildArm64GtTrampolineChunk'
 // ==========================================================================
 
 // ⭐⭐ **`gtDest` = THE GREEN THREAD THIS OS THREAD IS RUNNING, BRANCHING TO `bail` IF THERE ISN'T ONE.**
-// Both hand-assembled readers — the prologue stack guard and the system-stack door — need it, and it is
-// `M->currentGt`. Writing the sequence twice is exactly how the two would come to disagree about which of its
-// nulls to test; the x64 file states the same argument for its guard and shim, and the two lanes must not
-// drift on which struct the field lives in.
+// Every hand-assembled reader — the prologue stack guard, the system-stack door and the backtrace walker
+// (`Arm64PanicRuntime.emitArm64WalkStackBounds`) — needs it, and it is `M->currentGt`. Writing the sequence
+// twice is exactly how two of them would come to disagree about which of its nulls to test; the x64 file
+// states the same argument, and the two lanes must not drift on which struct the field lives in.
 //
 // **THE THREE NULLS, AND ALL THREE MUST BE ASKED:**
 //   * a ZERO SLOT OFFSET means `__sched_init_procs` has not run. On Windows the unchecked read would hand
@@ -336,13 +336,28 @@ end 'buildArm64GtTrampolineChunk'
 // array is at the masked thread pointer and `pthread_getspecific(key)` is `tsd[key]`; measured on this host,
 // `tsd[key] == (TPIDRRO_EL0 & ~7) + key*8`. `StdToArm64Conversion.lowerTlsSlotLoad` carries the measurement
 // and the assertion that keeps it honest — this is the same read, one tier down.
-function emitArm64LoadCurrentGtOrBail(asm Arm64RuntimeAsm, mDest Arm64Register, gtDest Arm64Register, scratch Arm64Register, bail BlockId, os Os)
+module function emitArm64LoadCurrentGtOrBail(asm Arm64RuntimeAsm, mDest Arm64Register, gtDest Arm64Register, scratch Arm64Register, bail BlockId, os Os)
 	emitArm64LoadCurrentMOrBail(asm, dest: mDest, scratch: scratch, bail: bail, os: os)
 	arm64EmitLoadWord64At(asm, dest: gtDest, base: mDest, byteOffset: MOffCurrentGt)
 	arm64EmitCbzTo(asm, reg: gtDest, label: bail)
 end 'emitArm64LoadCurrentGtOrBail'
 
-// ⭐⭐ **A FOURTH NULL, AND IT EXISTS ON ONE LANE ONLY (L4).** On Darwin the thread pointer is written by the
+// Branch to `bail` unless `addr` lies inside `gt`'s own stack, `[stackBase, stackBase + stackSize)`; a
+// `stackBase` of 0 — an M's scheduler context, on a real OS-thread stack — bails too. Past both bails `scratch`
+// holds the stack's top and `gt` its size. UNSIGNED compares: these are addresses. The twin of
+// `X64GtRuntime.emitGtBailUnlessOnItsOwnStack`.
+module function emitArm64GtBailUnlessOnItsOwnStack(asm Arm64RuntimeAsm, gt Arm64Register, scratch Arm64Register, addr Arm64Register, bail BlockId)
+	arm64EmitLoadWord64At(asm, dest: scratch, base: gt, byteOffset: GtOffStackBase)
+	arm64EmitCbzTo(asm, reg: scratch, label: bail)
+	arm64EmitCmpRuntimeReg(asm, lhs: addr, rhs: scratch)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lo, label: bail)
+	arm64EmitLoadWord64At(asm, dest: gt, base: gt, byteOffset: GtOffStackSize)
+	arm64EmitAddRuntimeReg(asm, dest: scratch, lhs: scratch, rhs: gt)
+	arm64EmitCmpRuntimeReg(asm, lhs: addr, rhs: scratch)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.hs, label: bail)
+end 'emitArm64GtBailUnlessOnItsOwnStack'
+
+// ⭐⭐ **A FOURTH NULL, AND IT EXISTS ON ONE LANE ONLY.** On Darwin the thread pointer is written by the
 // kernel for every thread that has ever existed, so it cannot be zero and no test is emitted — which is why
 // this is not folded into the sequence above unconditionally: an extra `cbz` in the PROLOGUE GUARD is paid by
 // every guarded function on the hot path, and it would move every arm64-macOS golden for a test that can
@@ -354,11 +369,9 @@ end 'emitArm64LoadCurrentGtOrBail'
 // thread's own pointer is still 0. Without this the indexed load below is `[0 + key*8]` — a wild load a page
 // into the null page rather than a diagnosable answer.
 //
-// ⚠ **SUCH A THREAD IS NOW REACHABLE, AND THIS TEST IS WHY THAT IS SAFE RATHER THAN WHY IT CANNOT HAPPEN.**
-// It used to read *"no such thread exists today, because `osThreadCreate` is a runtime abort on this lane"*;
-// `mrt_host_thread_create` is a real `clone` there now. A worker M gets its block through `CLONE_SETTLS`
-// before it runs an instruction, so it never takes this bail — but a thread that reached Maxon code without
-// one still would, and one instruction is what turns that from a wild load into a diagnosable answer.
+// ⚠ **THIS TEST IS WHY SUCH A THREAD IS SAFE, NOT A CLAIM THAT IT CANNOT EXIST.** A worker M gets its block
+// through `CLONE_SETTLS` before it runs an instruction, so it never takes this bail — but a thread that reached
+// Maxon code without one would, and one instruction turns that from a wild load into a diagnosable answer.
 function arm64LinuxEmitBailOnNullThreadPointer(asm Arm64RuntimeAsm, reg Arm64Register, bail BlockId, os Os)
 	match os 'os'
 		macos then break 'os'
@@ -801,9 +814,8 @@ end 'emitArm64GtStackGuard'
 // ⭐ The M alone, where the caller has already PROVEN it exists and therefore has no branch to take. Not a
 // weaker version of `emitArm64LoadCurrentMOrBail` but a different PRECONDITION, and its one caller states
 // the proof: the guard's cold path runs only after the guarded read above answered non-null, and a thread
-// becomes an M once and never unbecomes one. ⭐ **That proof is STRICTLY STRONGER than the one it replaced at
-// W213-C1**, which had to argue that no P had been released in between — a claim a handoff would falsify.
-// A test here would need a branch target with no correct destination.
+// becomes an M once and never unbecomes one. A test here would need a branch target with no correct
+// destination.
 function emitArm64LoadCurrentMOrBailless(asm Arm64RuntimeAsm, dest Arm64Register, scratch Arm64Register, os Os)
 	arm64EmitAdrpAddPair(asm.code, rdataRelocs: asm.rdataRelocs, dest: arm64RuntimeReg(scratch), label: SchedTlsTebOffsetLabel, adrpKind: RdataRelocKind.dataSectionArm64Adrp, pageOffKind: RdataRelocKind.dataSectionArm64PageOff)
 	arm64EmitLoadWord64At(asm, dest: scratch, base: scratch, byteOffset: 0)
@@ -853,15 +865,8 @@ export function buildArm64DarwinLibcCallChunk(greenThreads bool) returns Functio
 
 	if greenThreads 'mayRunOnAGreenThread'
 		emitArm64LoadCurrentGtOrBail(asm, mDest: Arm64DoorMReg, gtDest: Arm64DoorGtReg, scratch: Arm64DoorSpReg, bail: direct, os: Os.macos)
-		arm64EmitLoadWord64At(asm, dest: Arm64DoorLowReg, base: Arm64DoorGtReg, byteOffset: GtOffStackBase)
-		arm64EmitCbzTo(asm, reg: Arm64DoorLowReg, label: direct)
 		arm64EmitMovFromSp(asm.code, dest: arm64RuntimeReg(Arm64DoorSpReg))
-		arm64EmitCmpRuntimeReg(asm, lhs: Arm64DoorSpReg, rhs: Arm64DoorLowReg)
-		arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lo, label: direct)
-		arm64EmitLoadWord64At(asm, dest: Arm64DoorHighReg, base: Arm64DoorGtReg, byteOffset: GtOffStackSize)
-		arm64EmitAddRuntimeReg(asm, dest: Arm64DoorLowReg, lhs: Arm64DoorLowReg, rhs: Arm64DoorHighReg)
-		arm64EmitCmpRuntimeReg(asm, lhs: Arm64DoorSpReg, rhs: Arm64DoorLowReg)
-		arm64EmitCondBranchTo(asm, cond: Arm64CondCode.hs, label: direct)
+		emitArm64GtBailUnlessOnItsOwnStack(asm, gt: Arm64DoorGtReg, scratch: Arm64DoorLowReg, addr: Arm64DoorSpReg, bail: direct)
 
 		// The green thread's SP goes in the system stack's top pair — twice, because a pair is what keeps SP
 		// 16-aligned — and the frame record under it.
