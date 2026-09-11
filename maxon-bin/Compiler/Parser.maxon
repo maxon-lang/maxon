@@ -5935,11 +5935,11 @@ let BuiltinsSchedRetakeCountName = b"__Builtins.schedRetakeCount"
 // It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
 let SchedRetakeCountArity = 0 as ParamCount
 
-// ⭐⭐ **`__Builtins.schedGtRecycleCount()` — how many green-thread structs the free list served instead of the
-// allocator.** It answers the sum of every processor's recycle counter, so a program can observe that a
-// reclaimed GT struct really came back to the next spawn rather than going to the slab. The surface is
+// ⭐⭐ **`__Builtins.schedGtRecycleCount()` — how many green-thread records a free list served instead of the
+// record arena.** It answers the sum of every processor's recycle counter, so a program can observe that a
+// reclaimed GT record really came back to a later spawn rather than a fresh one being carved. The surface is
 // invented here on the argumentless-integer shape the family already has; `SchedRuntime.GtFreePutName`
-// owns why the structs are recycled and `SchedRuntime.SchedGtRecycleCountName` what the count costs.
+// owns why the records are recycled and `SchedRuntime.SchedGtRecycleCountName` what the count costs.
 let BuiltinsSchedGtRecycleCountName = b"__Builtins.schedGtRecycleCount"
 
 // It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
@@ -5954,6 +5954,16 @@ let BuiltinsSchedIdleProcessorCountName = b"__Builtins.schedIdleProcessorCount"
 
 // It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
 let SchedIdleProcessorCountArity = 0 as ParamCount
+
+// ⭐⭐ **`__Builtins.schedGtRecordsCarved()` — how many green-thread records the scheduler's record arena has
+// ever carved.** A program that reclaims every thread it finishes with keeps it bounded however many rounds it
+// runs, so it is the reading that sees a record stranded after its consumer has left. The surface is invented
+// here on the argumentless-integer shape the family already has; `SchedRuntime.GtRecordsCarvedLabel` owns
+// what it counts and what bounds it.
+let BuiltinsSchedGtRecordsCarvedName = b"__Builtins.schedGtRecordsCarved"
+
+// It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
+let SchedGtRecordsCarvedArity = 0 as ParamCount
 
 // ⭐⭐ **`__Builtins.schedParkWakeCount()` — how many times a machine's blocking wait has returned, for any
 // reason.** An idle program keeps it near zero: a machine with nothing to do blocks until there is something,
@@ -83029,7 +83039,7 @@ export type Parser
 				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSchedRetakeCountName, runtimeName: SchedRetakeCountName, arity: SchedRetakeCountArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'schedRetakeCount'
 
-			// The GT-struct recycle count: the steal count's shape exactly — an `int` answer, no arguments,
+			// The GT-record recycle count: the steal count's shape exactly — an `int` answer, no arguments,
 			// nothing to own — and it sets `usesGt` for the same reason. See `SchedRuntime.SchedGtRecycleCountName`.
 			if callee.equals(BuiltinsSchedGtRecycleCountName) 'schedGtRecycleCount'
 				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSchedGtRecycleCountName, runtimeName: SchedGtRecycleCountName, arity: SchedGtRecycleCountArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
@@ -83040,6 +83050,12 @@ export type Parser
 			if callee.equals(BuiltinsSchedIdleProcessorCountName) 'schedIdleProcessorCount'
 				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSchedIdleProcessorCountName, runtimeName: SchedIdleProcessorCountName, arity: SchedIdleProcessorCountArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'schedIdleProcessorCount'
+
+			// The record-carve count: the same shape, and it sets `usesGt` for the same reason. See
+			// `SchedRuntime.GtRecordsCarvedLabel`.
+			if callee.equals(BuiltinsSchedGtRecordsCarvedName) 'schedGtRecordsCarved'
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSchedGtRecordsCarvedName, runtimeName: SchedGtRecordsCarvedName, arity: SchedGtRecordsCarvedArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
+			end 'schedGtRecordsCarved'
 
 			// The machines' wake count: the same shape, and it sets `usesGt` for the same reason. See
 			// `SchedRuntime.SchedParkWakeCountName`.
@@ -84025,26 +84041,24 @@ export type Parser
 		return self.emitRuntimeCall(runtimeName, args: ValueIdArray.create(), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
 	end 'emitVoidZeroArgIntrinsic'
 
-	// ⭐⭐ **THE RULE EVERY ARGUMENTLESS *INTEGER* INTRINSIC IS CHECKED AGAINST, IN ONE PLACE** — the exact
-	// twin of `emitVoidZeroArgIntrinsic` above, and landed for its stated reason at twice the count: FOUR
-	// doors (`__Builtins.commandLineCount` ⇒ `__cl_count`, `currentProcessId` ⇒ `__proc_pid`, `cpuCount` ⇒
-	// `__cpu_count`, `schedMaxActiveWorkers` ⇒ `__sched_max_active_workers`) ask the IDENTICAL question of
-	// the identical argument shape — *were any arguments written?* — and answer with a machine word the
-	// caller reads and drops. Two of them had verbatim copies of the answer before the CPU-parallel queries
-	// arrived; four would have been four places for one rule to drift.
+	// ⭐⭐ **THE RULE EVERY ARGUMENTLESS VALUE-ANSWERING INTRINSIC IS CHECKED AGAINST, IN ONE PLACE** — the
+	// twin of `emitVoidZeroArgIntrinsic` above. Every caller asks the identical question of the identical
+	// argument shape — *were any arguments written?* — and answers with a machine word the caller reads and
+	// drops, so the rule lives here once rather than once per intrinsic.
 	//
 	// ⚠ **IT DIFFERS FROM THE VOID TWIN IN EXACTLY ONE THING BEYOND THE RESULT TAG: there is no
 	// `resultUsed` gate.** A void intrinsic must refuse a value position because there is no value; these
-	// four ANSWER one, so reading it is the point and ignoring it is legal.
+	// ANSWER one, so reading it is the point and ignoring it is legal.
 	//
 	// ⚠ There is nothing to own, nothing to enrol as a temporary and no buffer surface to mark, which is
 	// what separates this door from `emitOwnedManagedMemoryResult`'s: that one hands back a
 	// `__ManagedMemory` the caller frees, and using it here would enrol a drop against an integer.
 	//
-	// ⚠ **THE ARITY IS A PARAMETER THOUGH ALL FOUR CALLERS PASS 0**, exactly as `emitVoidZeroArgIntrinsic`'s
-	// is: the constant is what says what a given intrinsic IS, and collapsing four documented constants into
+	// ⚠ **THE ARITY IS A PARAMETER THOUGH EVERY CALLER PASSES 0**, exactly as `emitVoidZeroArgIntrinsic`'s
+	// is: the constant is what says what a given intrinsic IS, and collapsing the documented constants into
 	// a literal here would put that fact in the wrong file.
-	// ⚠ **THE RESULT TAG IS A PARAMETER THOUGH FOUR OF THE FIVE CALLERS PASS `integer`.** What an intrinsic
+	//
+	// ⚠ **THE RESULT TAG IS A PARAMETER THOUGH NEARLY EVERY CALLER PASSES `integer`.** What an intrinsic
 	// ANSWERS is a fact about its own contract, and `stdoutWantsAnsiColor` answers a PREDICATE: a second
 	// copy of this door differing only in that tag would be the duplication this file's other shared doors
 	// exist to prevent, and a `boolean` intrinsic forced through an `integer` one would reach its caller

@@ -1,0 +1,161 @@
+// Test: nested-loops-each-rotate
+typealias Word = int(i64.min to i64.max)
+typealias WordArray = Array with Word
+
+function grid(a WordArray, rows Word, width Word) returns Word
+	var t = 0
+	for r in 0 upto rows 'row'
+		var line = 0
+		for c in 0 upto width 'col'
+			line = line + (try a.get(r * width + c) otherwise panic("grid: r * width + c < rows * width = a.count()"))
+		end 'col'
+		t = t + line * (r + 1)
+	end 'row'
+	return t
+end 'grid'
+
+function main() returns ExitCode
+	var a = WordArray.create()
+	for i in 0 upto 9 'seed'
+		a.push(i)
+	end 'seed'
+	return grid(a, rows: 3, width: 3)
+end 'main'
+---
+ExitCode: 90
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @grid {
+  entry:
+    arm64.prologue 96
+    arm64.movImm x3, 0
+    arm64.movImm x4, 0
+  __us_test:
+    arm64.loadRegBaseDisp.word64 x5, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x6, [x0 + 0]
+    arm64.b forhdr#1
+  row:
+    arm64.movImm x7, 0
+    arm64.movImm x8, 0
+    arm64.b forhdr#5
+  col:
+    arm64.mul x9, x4, x2
+    arm64.add x9, x9, x8
+    arm64.cmp x9, 0
+    arm64.b.lt __rc_panic
+  __rc_ok:
+    arm64.cmp x9, x5
+    arm64.b.hs __im_slow
+  __im_load:
+    arm64.loadRegBaseIndexScale.word64 x9, [x6 + x9*8 + 0]
+  tryok:
+    arm64.add x7, x7, x9
+  forstep:
+    arm64.add x8, x8, 1
+  forhdr#5:
+    arm64.cmp x8, x2
+    arm64.b.lt col
+  forexit#8:
+    arm64.add x4, x4, 1
+    arm64.mul x7, x7, x4
+    arm64.add x3, x3, x7
+  forhdr#1:
+    arm64.cmp x4, x1
+    arm64.b.lt row
+  forexit#4:
+    arm64.movRegReg x0, x3
+    arm64.epilogue 96
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at nested-loops-each-rotate.test:10: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 96
+    arm64.ret
+  __im_slow:
+    arm64.storeSlotReg slot0, x0
+    arm64.storeSlotReg slot1, x1
+    arm64.storeSlotReg slot2, x2
+    arm64.storeSlotReg slot3, x3
+    arm64.storeSlotReg slot4, x4
+    arm64.storeSlotReg slot5, x5
+    arm64.storeSlotReg slot6, x6
+    arm64.storeSlotReg slot7, x7
+    arm64.storeSlotReg slot8, x8
+    arm64.movRegReg x1, x9
+    arm64.bl __managed_get
+    arm64.movRegReg x10, x9
+    arm64.movRegReg x9, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.loadRegSlot x1, slot1
+    arm64.loadRegSlot x2, slot2
+    arm64.loadRegSlot x3, slot3
+    arm64.loadRegSlot x4, slot4
+    arm64.loadRegSlot x5, slot5
+    arm64.loadRegSlot x6, slot6
+    arm64.loadRegSlot x7, slot7
+    arm64.loadRegSlot x8, slot8
+    arm64.cmp x10, 0
+    arm64.b.eq tryok
+  tryerr:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at nested-loops-each-rotate.test:10: grid: r * width + c < rows * width = a.count()\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 96
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 0
+    arm64.b forhdr
+  seed:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __managed_push
+  forstep:
+    arm64.add x20, x20, 1
+  forhdr:
+    arm64.cmp x20, 9
+    arm64.b.lt seed
+  forexit:
+    arm64.movImm x1, 3
+    arm64.movImm x2, 3
+    arm64.movRegReg x0, x19
+    arm64.bl grid
+    arm64.movRegReg x20, x0
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at nested-loops-each-rotate.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

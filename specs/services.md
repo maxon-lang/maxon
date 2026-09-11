@@ -5297,60 +5297,106 @@ names a thread true
 
 <!-- test: a-service-shut-down-with-async-work-in-flight -->
 <!-- procs: 4 -->
-⭐⭐ **W226's SHAPE, COMMITTED — AND IT IS THE PROOF THAT THE LEAK IT PREDICTED IS NOT THERE.** No case in
-this file had a handler use `async` at all, and the `SV1` review that opened `W226` could not measure whether
-a coroutine owned by a service green thread is STRANDED when its owner is reclaimed: a coroutine runs only on
-its owner's strand, so the prediction was that if `<T>.__loop` exits with a coroutine still on its strand
-queue, nothing runs it and nothing frees it — and a stranded slab allocation never reaches the exit gate,
-which is why the row says the shape *"is invisible to every gate the suite has"*. What prevents it is the
-strand's reference count (`GtOffStrandRefs`): the owner's struct outlives its return until every coroutine
-it created has finished, and a dropped coroutine still runs out its body on the owner's strand.
+⭐⭐ **W226's SHAPE, COMMITTED — A SERVICE SHUT DOWN WHILE A COROUTINE ITS HANDLER STARTED IS PARKED, AND THE
+PROOF THAT THE LEAK W226 PREDICTED IS NOT THERE.** The `SV1` review that opened `W226` could not measure
+whether a coroutine owned by a service green thread is STRANDED when its owner is reclaimed: a coroutine runs
+only on its owner's strand, so the prediction was that if `<T>.__loop` exits with one still in flight, nothing
+runs it and nothing reclaims it — and a stranded record never reaches the exit gate, which is why the row says
+the shape *"is invisible to every gate the suite has"*.
 
-⭐ **SO IT WAS MEASURED AGAINST `__Builtins.mmRawAllocLive()` RATHER THAN THE EXIT CODE, AND THE ANSWER IS
-NO.** 100 rounds of *spawn a service, send one message whose handler `async`s a 30 ms sleep and NEVER awaits
-it, drop the handle* grows the live-allocation count by **400 at `MAXON_MAX_PROCS=1`, 247 at 4 and 204 at
-8** — and the CONTROL, the same program whose handler `await`s that coroutine so nothing can be stranded,
-grows by **400 at 1 and 491 at 4**. **The two are the same number.** What the counter is reading is a
-service's own teardown lagging its handle drop until the exit drain, not a coroutine anybody lost; the
-un-awaited coroutine costs nothing the awaited one does not. The exit gate is clean at every processor count,
-which is the second half of the same answer.
+`fire` builds the shape in three steps, and each one is load-bearing:
+
+- **`Runtime.yield()` after the `async`** hands the strand to the coroutine, which runs until its `sleep` parks
+  it on a timer. The handler then reads `probe.started` and a peek of `0`, so `parked=8` says every one of the
+  eight coroutines had started and not finished when its handler returned.
+- **The promise is kept in the service's state**, so the one thing that drops it is the shutdown's state drop
+  in `<T>.__loop`'s teardown, with the coroutine still parked: its ten-second timer is far longer than the
+  program runs, so the coroutine cannot finish before the shutdown reaches it.
+- **The coroutine carries a managed argument**, the `Probe`, which only the coroutine's reclaim releases.
+
+⛔ **A PROMISE DISCARDED AT ITS OWN STATEMENT BUILDS NONE OF THIS.** `let p = async slowWork(v)` followed by
+`_ = p` renounces the coroutine before it ever runs (`async-promise-drop.parked-timer-drop-cancel`'s ⚠), so
+the drop takes the queued arm and the shutdown finds nothing in flight. MEASURED with a `Probe` in that
+shape: `started=0` at one processor and at four, with `main` sleeping 50 ms before asking — and that shape
+stays GREEN under the sabotage below.
+
+✅ **SABOTAGE-VERIFIED, AND THE `Probe` IS WHAT LETS THIS CASE SEE IT.** With the runner's half removed from
+`__gt_promise_drop`'s parked arm, the coroutine is never reclaimed and neither is its service's green thread,
+whose strand reference it still holds; this case exits **101** at one, four and sixteen processors, because the
+`Probe` is released only by that reclaim. The exit gate proper cannot see the loss — the drop's consumer half
+has already debited `__gt_live_count` — so the same program without the `Probe` argument exits 42 under the
+sabotage, with 18 records carved at one processor where a sound runtime carves 5.
+
+⭐ **SO `W226` WAS MEASURED AGAINST THE SCHEDULER'S RECORD-CARVE COUNT, AND THE ANSWER IS NO.**
+`scripts/multicore-stress/service-async-strand-torture.maxon` runs this shape in batches of twenty services.
+A runtime that reclaims every record carves no more than two batches' records plus fewer than 64 on each
+other processor's free list, however many rounds run, and the torture runs until one record lost per round
+would carry `__Builtins.schedGtRecordsCarved()` to twice that bound. Every round reaches the shape (`parked=`
+equals the rounds) and the count stays under the bound, three runs each: **61 records carved over 260 rounds
+against a bound of 121 at `MAXON_MAX_PROCS=1`, 208–214 over 620 against 310 at 4, and 621–731 over 2,140
+against 1,066 at 16** — where the sabotaged runtime above carves 621, 1,475 and 4,838 and exits 101. The
+CONTROL, the same batches with the handler `await`ing its coroutine so nothing is in flight at the shutdown,
+stays under the bound too.
+
+What reclaims the coroutine is the drop, not a sweep of the strand: the shutdown's state drop reaches the
+parked coroutine's promise, `__gt_promise_drop` takes it out of the timer store and performs both halves of
+its teardown. That runner half is also what releases the coroutine's strand reference (`GtOffStrandRefs`);
+without it the owner's record outlives `<T>.__loop` for ever, which is the second record the sabotage loses
+per round.
 
 ⇒ **the case stays as the proof.** It pins that a service may be shut down with `async` work in flight and
 the process still terminates cleanly — no 101, no 75, no hang — which is the property `W226` was really
-asking about, and it is the case that will go red if a later rung gives the loop's exit block a coroutine
-sweep it gets wrong.
+asking about.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
 
-function slowWork(n Integer) returns Integer
-	sleep(30)
+// Far longer than the program runs: the shutdown's drop cancels the timer, so nothing ever waits it out.
+let WorkSleepMs = 10000
+
+type Probe
+	export var started as bool
+
+	export static function create() returns Self
+		return Self{started: false}
+	end 'create'
+end 'Probe'
+
+function slowWork(n Integer, probe Probe) returns Integer
+	probe.started = true
+	sleep(WorkSleepMs)
 	return n * 2
 end 'slowWork'
 
 type Worker
-	var n as Integer
+	var pending as IntPromiseArray
+	var probe as Probe
 
 	static function create() returns Self
-		return Self{n: 0}
+		return Self{pending: IntPromiseArray.create(), probe: Probe.create()}
 	end 'create'
 
-	// Starts a coroutine on the SERVICE's own green thread and never awaits it. The promise dies at handler
-	// scope exit, and the service is shut down by the handle drop below while the sleep is still in flight.
+	// The yield hands the strand to the coroutine, which runs until its sleep parks it. The promise then lives
+	// in the service's state, so the shutdown's state drop is the one thing that can reach it.
 	export function fire(v Integer) returns Integer
-		let p = async slowWork(v)
-		_ = p
-		self.n = self.n + 1
-		return self.n
+		let p = async slowWork(v, probe: self.probe)
+		Runtime.yield()
+		let parked = self.probe.started and __Builtins.gtIsComplete(p.inner) == 0
+		self.pending.push(p)
+		return 1 if parked else 0
 	end 'fire'
 end 'Worker'
 
 function main() returns ExitCode
+	var parked = 0
+
 	for round in 1 to 8 'rounds'
 		let w = spawn Worker.create()
-		w.fire(round)
+		parked = parked + (try await w.fire(round) otherwise 0)
 	end 'rounds'
 
-	print("survived\n")
+	print("parked={parked}\n")
 	return 42 as ExitCode
 end 'main'
 ```
@@ -5358,7 +5404,7 @@ end 'main'
 42
 ```
 ```stdout
-survived
+parked=8
 ```
 
 <!-- test: a-service-that-keeps-a-coroutine-across-a-reply -->

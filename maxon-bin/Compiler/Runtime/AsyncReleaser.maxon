@@ -1,5 +1,5 @@
 // Runtime/AsyncReleaser.maxon — the `__gt_release_<callee>` helpers that discharge a green thread's
-// ownership of its managed ARGUMENTS and of its managed RESULT-or-ERROR (P1.5-B1c A2).
+// ownership of its managed ARGUMENTS and of its managed RESULT-or-ERROR.
 //
 // ⭐⭐ **WHY A PER-CALLEE FUNCTION AND NOT A BITMASK IN THE GT STRUCT.** A mask that said "slot 0 and slot 2
 // are managed" would have to be released by ONE runtime entry, and there is no such entry: a release in the compiler
@@ -11,11 +11,10 @@
 // A mask can name one callee; a spawn's slots can want three.
 //
 // ⭐ **AND WHY THE RELEASE CANNOT SIMPLY BE EMITTED AT THE AWAIT.** The parser does know the types — but
-// `__gt_await` RECYCLES the GT struct onto the free list before returning (`emitGtStructReclaim`), and
-// `buildGtSpawn`'s header records what a recycled struct still carries: *"its previous tenant's
-// status/result/waiter/io_*/threw/tib"*. Reading argument slots after the awaiter has returned reads a
-// struct that may already have been re-let. So the release happens INSIDE the runtime, while the GT is still
-// this promise's, and the only thing the spawn has to leave behind is the address of the code that knows how.
+// once `__gt_await` returns, the GT record may already be on a free list (`GtRuntime.GtReclaimName`) and a
+// later spawn may already have zeroed and reused it, so an argument slot read after the await reads a record
+// that may belong to another thread. So the release happens INSIDE the runtime, while the GT is still this
+// promise's, and the only thing the spawn has to leave behind is the address of the code that knows how.
 //
 // ⭐ **DEDUP IS BY CALLEE, AND THE ARGUMENT TYPES ARE THE CALLEE'S SIGNATURE.** Two spawns of `joinArgs` pass
 // the same parameter types by definition, so there is exactly one release plan per async callee and the whole
@@ -643,9 +642,9 @@ end 'synthesizeReleaser'
 // exit was, so on a throw it holds whatever the throwing path left there — releasing it would be a wild free.
 // That is why the success release sits under `threw == 0` rather than beside the error release.
 //
-// A GT that never RAN has both words zero (the fresh slab zeroes, and `__gt_spawn`'s whole-struct memzero
-// zeroes a recycled one), so every guard below falls through to `done` for it — which is the correct answer
-// and the reason no `status` test is needed here.
+// A GT that never RAN has both words zero (`__gt_free_get` hands out a zeroed record on both of its arms), so
+// every guard below falls through to `done` for it — which is the correct answer and the reason no `status`
+// test is needed here.
 function emitResultOrErrorRelease(module StdModule, func IrFunction, ids ValueMinter, start IrBlock, done IrBlock, gt ValueId, plan AsyncReleasePlan)
 	if not plan.calleeThrows 'nonThrowing'
 		module.setTerminator(emitSlotReleases(module, func: func, ids: ids, cur: start, gt: gt, slots: plan.resultSlots), op: StdOp.branch(done.id))

@@ -122,7 +122,9 @@ for N in $PROCS_LIST; do
 		i=$((i+1))
 	done
 	gated="-"
-	case " $GATED_PROCS " in *" $N "*) gated="gate";; esac
+	if list_has "$GATED_PROCS" "$N"; then
+		gated="gate"
+	fi
 	printf '%6s %7s %7s %11s %10s %9s %6s\n' "$N" "$clean" "$late" "$wrong" "$worst" "$other" "$gated"
 	if [ "$gated" = "gate" ] && [ "$((late + wrong + other))" -ne 0 ]; then
 		status=1

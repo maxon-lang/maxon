@@ -25,7 +25,9 @@
 #      on top of another.
 #   2. The exit code is identical at every N, and is never 101 (the runtime's leak
 #      gate) or 139 (a segfault).
-#   3. `leaked=0` from drop-running-torture at every N.
+#   3. `leaked=0` from every program in `LEAK_READING_PROGRAMS` at every N — and a
+#      row of one that prints no `leaked=` at all FAILS, because it died before its
+#      reading and an exit code it shares with every other row asserts nothing.
 #   4. ⭐ THE PIN ITSELF, AND IT IS NOW PER FAMILY (SV1). A COROUTINE-ONLY
 #      program reads `workers=1` and `steals=0` at every N. A SPAWN-DRIVEN one —
 #      the `SPAWNING_PROGRAMS` list, which is where the fact is written down once —
@@ -320,6 +322,9 @@ effective_count() {
 }
 PROGRAMS="${PROGRAMS:-steal-torture drop-running-torture park-torture alloc-torture remote-free-torture refcount-torture service-torture service-fanin-torture syscall-stack-torture}"
 
+# The programs whose `leaked=` is their assertion (3).
+LEAK_READING_PROGRAMS="${LEAK_READING_PROGRAMS:-drop-running-torture}"
+
 # ⭐⭐ PROGRAMS THAT MUST NOT COMPILE, AND THE CODE EACH MUST BE REFUSED WITH.
 # `refcount-torture.maxon` hands ONE heap `String` to twelve tasks — the shape its
 # own header's 96-run table is about — and the same program written with SERVICES is
@@ -428,7 +433,10 @@ for prog in $PROGRAMS; do
 
 		# 3: the drop-while-running reading.
 		if [ "$lk" != "-" ] && [ "$lk" != 0 ]; then
-			bad "$prog procs=$p leaked=$lk (a dropped coroutine's struct was stranded)"
+			bad "$prog procs=$p leaked=$lk (a dropped coroutine's record was stranded)"
+		fi
+		if [ "$lk" = "-" ] && list_has "$LEAK_READING_PROGRAMS" "$prog"; then
+			bad "$prog procs=$p printed no leaked= reading (exit $rc) — see $WORK/$prog.$p.err"
 		fi
 
 		# 4: THE PIN, per family — see the header. A program that prints neither

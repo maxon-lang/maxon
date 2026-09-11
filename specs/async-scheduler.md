@@ -543,12 +543,13 @@ sum=2646700 recycled=199
 <!-- test: async-scheduler.gt-recycle-a-hundred-returned-records-serve-the-next-hundred-spawns -->
 **EVERY RECORD GIVEN BACK IS THERE FOR THE NEXT SPAWN.** A hundred threads are all outstanding before any is
 awaited, so no spawn in the first wave can reuse anything, and all hundred records are given back together.
-The free list is ONE list under the scheduler lock rather than Go's one per processor: a record stays where
-it was put, and the green thread that spawns moves between processors at every await, so per-processor
-lists would decide by thread timing whether a spawn reuses a record or cuts a fresh one — and the
-compiler's own memory, measured bit-for-bit by `scale-test`, would stop being reproducible. Every one of the
-second wave's hundred spawns is served from the list, so a record lost or freed on the way back reads below
-100.
+The free lists are Go's: one per processor, which sheds to one global list when it reaches 64 records and
+refills from it 32 at a time, so the second wave finds the records that `main`'s processor kept and the ones
+it shed.
+Whether a given spawn reuses a record or carves a fresh one can depend on which processor it runs on, and
+that no longer reaches the compiler's own memory, which `scale-test` measures bit-for-bit: records come from
+the scheduler's own arena, outside the counted allocator. Every one of the second wave's hundred spawns is
+served from a list, so a record lost or freed on the way back reads below 100.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer

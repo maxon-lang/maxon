@@ -296,8 +296,8 @@ let MmRawAllocBytesLabel = b"__mm_raw_alloc_bytes"
 // ⭐⭐ **TWO SLOTS, BECAUSE A COUNTED CALLER FREES.** The green-thread runtime's per-call scratch — a
 // `STARTUPINFOA`, a mutable command line, an overlapped read buffer — comes from the counted `__slab_alloc`
 // and goes back through `__mm_raw_free`, so the credited population shrinks and a live count over it is not
-// the cumulative count. (A GT struct is credited once and never freed: it is recycled through the scheduler's
-// free list — `SchedRuntime.GtFreePutName`.)
+// the cumulative count. (A GT record is never credited: it comes from the scheduler's record arena, outside
+// the slab — `SchedRuntime.GtFreeGetName`.)
 //
 // `MmRawAllocCountLabel` is CUMULATIVE and only ever rises; `MmRawLiveCountLabel` rises with it and falls
 // on every counted free.
@@ -4665,9 +4665,9 @@ end 'emitManagedElementsFieldSole'
 // a load, a compare, and two returns. It notably does NOT need to call `ExitProcess` — returning
 // the code to `mrt_start`, which already makes that call, keeps the one OS-exit path in one place.
 //
-// ⭐ P1.5-B2 #88 — UNDER `usesGt` IT ALSO GATES `__gt_live_count`. A green-thread program's spawned-but-
-// unreclaimed GT structs + seed stacks are slab/OS allocations invisible to `__mm_alloc_count`, so the GT
-// runtime keeps its own spawn/reclaim counter; this single OS-exit gate is the one home for every "must be
+// ⭐ UNDER `usesGt` IT ALSO GATES `__gt_live_count`. A green thread's record and seed stack come from the
+// scheduler's record arena and `osAllocPages`, invisible to `__mm_alloc_count`, so the GT runtime keeps its
+// own spawn/reclaim counter; this single OS-exit gate is the one home for every "must be
 // reclaimed before a clean exit" check, so a clean HEAP count falls through to a SECOND, INDEPENDENT `!= 0`
 // test on it. The two are never summed/OR'd into one count — a GT over-reclaim driving `__gt_live_count`
 // negative must not cancel a heap under-release — and a GT leak reports a DISTINCT code

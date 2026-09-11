@@ -10,9 +10,11 @@ category: system
 ## Documentation
 
 The green-thread scheduler, the one-shot read probe and the subprocess runner all need small
-regions the language cannot name: a GT struct, a mutable command line, a `STARTUPINFOA`, a
-`PROCESS_INFORMATION`, an overlapped read buffer. They take them from `__slab_alloc` directly —
-they carry no box header and no refcount, so `__mm_alloc_count` cannot see them.
+regions the language cannot name: a GT record, a mutable command line, a `STARTUPINFOA`, a
+`PROCESS_INFORMATION`, an overlapped read buffer. They carry no box header and no refcount, so
+`__mm_alloc_count` cannot see them. The per-call scratch comes from `__slab_alloc` directly; a GT record
+comes from the scheduler's own record arena, carved from `osAllocPages` chunks like a green thread's
+stack, so it moves no raw column either.
 
 ⭐⭐ **THE PER-CALL SCRATCH GOES BACK TO THE ALLOCATOR; THE GT STRUCT DOES NOT.** The subprocess
 runner's command line, `STARTUPINFOA` and `PROCESS_INFORMATION`, and the read probe's ~4.2 KB, each
@@ -35,8 +37,9 @@ Both halves are needed. `live` alone would pass against a runtime that allocated
 window (the pre-S3 subprocess path, whose scratch was allocated once at init), and `total` alone
 would pass against the pre-S3 read probe, which allocated freely and released nothing.
 
-The GT-struct case asks the recycling runtime's pair instead: the window took nothing from the
-allocator at all, and left nothing live.
+The GT-record case asks the recycling runtime's count instead: every spawn in the window was served
+from a free list rather than carving a fresh record, and the window took nothing from the allocator
+and left nothing live.
 
 ⚠ **EACH CASE WARMS THE SCHEDULER FIRST.** `__gt_init` and `__io_init` run before `main` does, so the timer
 store, the process store and the completion port are in place before any window opens; what a first call
@@ -138,22 +141,24 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: runtime-scratch-reclaim.spawn-await-loop-is-bounded -->
-**THE GT STRUCT ITSELF, AND IT IS RECYCLED RATHER THAN RETURNED.** `__gt_reclaim` puts a finished
-thread's struct on the scheduler's free list (Go's `gfput`), and `__gt_spawn` takes the next one
-from there, zeroed, before it asks the allocator (Go's `gfget`). The records are TYPE-STABLE, as Go's
-`g` records are: a read through a handle whose thread is gone — `awaitAny` over a promise already
-awaited (`await-any.md`) — lands in a GT record rather than in whatever the slab gave that memory to
-next.
+**THE GT RECORD ITSELF, AND IT IS RECYCLED RATHER THAN RETURNED.** `__gt_reclaim` puts a finished
+thread's record on its processor's free list (Go's `gfput`), and `__gt_spawn` takes the next one from
+there, zeroed, before it carves a fresh one from the scheduler's record arena (Go's `gfget`). The records
+are TYPE-STABLE, as Go's `g` records are: a read through a handle whose thread is gone — `awaitAny` over
+a promise already awaited (`await-any.md`) — lands in a GT record rather than in memory that has been
+given to something else.
 
-⭐ **THE MEMORY IS STILL BOUNDED.** Every struct on the list was live at some moment, and a fresh one
-is cut only when the list is empty, so the list holds at most the program's peak concurrent
-population — Go's bound for its `gFree` lists. A loop that spawns and awaits one thread at a time
-cycles ONE struct.
+⭐ **THE MEMORY IS STILL BOUNDED.** Every record on a list was live at some moment, and a fresh one is
+carved only when the spawning processor's list and the global list are both empty. So the records a
+program ever carves number at most its peak concurrent population plus what other processors' lists
+hold, and a processor's list holds fewer than 64 — Go's bound for its `gFree` lists. A loop that spawns
+and awaits one thread at a time cycles ONE record.
 
 Eight spawn/await pairs after a warm-up whose struct is already on the list: every spawn is served
 by the free list (`schedGtRecycleCount()` grows by exactly 8), none asks the allocator
-(`mmRawAllocTotal` does not move — a green thread's stack is `osAllocPages`, which the raw columns do
-not count), and nothing is left live (`mmRawAllocLive` does not move).
+(`mmRawAllocTotal` does not move — a green thread's record comes from the scheduler's arena and its
+stack from `osAllocPages`, and the raw columns count neither), and nothing is left live
+(`mmRawAllocLive` does not move).
 ```maxon
 function work(n Integer) returns Integer
 	__Builtins.parallelBoundary()

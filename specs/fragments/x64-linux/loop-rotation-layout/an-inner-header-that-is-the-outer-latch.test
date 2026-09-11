@@ -1,0 +1,65 @@
+// Test: an-inner-header-that-is-the-outer-latch
+typealias Word = int(i64.min to i64.max)
+
+function staircase(n Word) returns Word
+	var i = 0
+	var j = 0
+	var t = 0
+	while i < n 'outer'
+		i = i + 1
+		while j < i 'inner'
+			t = t + j
+			j = j + 1
+		end 'inner'
+	end 'outer'
+	return t + 30
+end 'staircase'
+
+function main() returns ExitCode
+	return staircase(5)
+end 'main'
+---
+ExitCode: 40
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  __il_body:
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
+    x64.movRegImm32 rdx, 0
+    x64.jmp whilehdr#6
+  outer:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp whilehdr#9
+  inner:
+    x64.leaRegRegReg rdx, rdx, rcx
+    x64.leaRegRegImm32 rcx, rcx, 1
+  whilehdr#9:
+    x64.cmpRegReg rcx, rax
+    x64.jcc less, inner
+  whilehdr#6:
+    x64.cmpRegImm32 rax, 5
+    x64.jcc less, outer
+  whileexit:
+    x64.leaRegRegImm32 r8, rdx, 30
+  __il_cont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at an-inner-header-that-is-the-outer-latch.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

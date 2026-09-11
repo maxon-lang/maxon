@@ -1,72 +1,53 @@
-// DROPPED-WHILE-RUNNING torture program (W212 follow-up) — the ONE shape
-// no spec case can reach.
+// DROPPED-WHILE-RUNNING torture program — a promise renounced while its thread executes
+// on another M.
 //
-// Why this exists: `__gt_promise_drop` has to settle what a dropped promise's
-// thread still owes, and a thread may be EXECUTING on another M at the instant the
-// promise is renounced. A spec case cannot reach that state — `MAXON_MAX_PROCS` is
-// read once at scheduler start and a case gets `Args:` and no environment, so every
-// spec runs on a single P where the dropper IS the only thread running and nothing
-// can be executing underneath it. `specs/sched-runqueue.md` says the same
-// thing about work stealing, and for the same reason.
-//
-// ⚠ SINCE EC10 THE ENVIRONMENT VARIABLE NO LONGER REACHES IT EITHER — see the
-// note below, which is this program's current standing and not a caveat.
+// `__gt_promise_drop` has to settle what a dropped promise's thread still owes, and a
+// thread may be EXECUTING on another M at the instant the promise is renounced. No spec
+// case reaches that state, and today neither does this program — see the ⛔ note below.
 //
 // ⭐ **MAIN BURNS CPU BETWEEN THE SPAWN AND THE DROP, AND THAT IS THE WHOLE
 // DIFFERENCE BETWEEN MEASURING THE PATH AND MISSING IT.** A promise spawned and
 // renounced back-to-back is normally still QUEUED when the drop reaches it — the
-// drop's own front-of-ring sweep then reclaims it before any worker M can take it.
-// Here the promise stays alive until the END of the loop body, and the body spends
-// `mainDelayWork` iterations before that point: long enough for a worker M to steal
-// the thread out of main's ring and START it, short enough that the thread — which
-// spins for `dropWork`, three times longer — is still mid-body when the drop lands.
-// That is the state under test.
+// drop's own front sweep then reclaims it before any other M can take it. Here
+// `spawnDelayDrop` holds every promise of a round until it returns, and spends
+// `mainDelayWork` iterations before that point: long enough for another M to take the
+// thread and START it, short enough that the thread — which spins for `dropWork`, three
+// times longer — is still mid-body when the drop lands. That is the state under test.
 //
-// The reading: `__Builtins.mmRawAllocLive()` is taken twice, at two QUIESCENT points
-// whose live set is otherwise identical (see `drain`). `leaked` is their difference
-// and MUST be 0 at every processor count. A dropped thread's GT struct that nobody
-// reclaims shows up here and NOWHERE ELSE: the exit leak gate reads
-// `__gt_live_count`, which the drop has already debited, so a struct stranded this
-// way exits 0 while still being lost.
+// The reading: `__Builtins.schedGtRecordsCarved()`, the records the scheduler's arena
+// has ever carved, against the most a sound runtime can carve here — `peakLive`
+// records live at once, plus fewer than 64 waiting on each other processor's free
+// list. `leaked` is how far the count runs past that bound, and MUST be 0 at every
+// processor count. A dropped thread's record that nobody reclaims shows up here and
+// NOWHERE ELSE: the exit leak gate reads `__gt_live_count`, which the drop has
+// already debited, so a record stranded this way exits 0 while still being lost. The
+// measured rounds run on until ONE record stranded per round would carry the count to
+// twice the bound: only the drops that land on a thread mid-body are exposed, so a
+// defect here strands some of each round's `spawnsPerRound`, not necessarily all.
 //
-// ⛔⛔ **SINCE EC10 THE SUBJECT IS UNREACHABLE AND THE PROGRAM READS ITS CONTROL ROW
-// AT EVERY PROCESSOR COUNT — `started=0 steals=0 workers=1 leaked=0`.** A promise
-// dropped while its thread EXECUTES needs a second M to be executing it, and an
-// `async` frame is now a COROUTINE of the green thread that spawned it: published
-// only to that green thread's queue, driven only by its chain of drivers, never
-// handed to a worker M. `main` never yields, so nothing is ever scheduled and every
-// drop finds its coroutine queued and never-run — which is what the N=1 row always
-// showed and is now what every row shows.
+// ⛔⛔ **THE SUBJECT IS UNREACHABLE, AND THE PROGRAM READS ITS CONTROL ROW AT EVERY
+// PROCESSOR COUNT — `started=0 steals=0 workers=1 leaked=0`.** An `async` frame is a
+// COROUTINE of the green thread that spawned it: published only to that green thread's
+// queue, driven only by its chain of drivers, never handed to another M. `main` never
+// yields, so every drop finds its coroutine queued and never-run. `spawn` does not
+// produce the shape either: it yields a handle, not a `Promise`, and a service's green
+// thread is torn down by its own loop exiting, never by `__gt_promise_drop`. The one
+// promise today whose work runs on another M is a service REPLY, and this program
+// makes none — so a green row here must not be read as covering its title.
 //
-// The parent-commit reading, same box: `steals=0` at N=1, `6` at N=2, `35` at N=7
-// and `51` at N=12, with `leaked=0` throughout.
-//
-// ⚠ **IT IS NOT DELETED, AND MUST NOT BE.** The teardown rendezvous it gates is
-// what makes a dropped-while-running thread safe, and it is W218's gate.
-//
-// ⛔⛔ **BUT `spawn` IS *NOT* ITS PRODUCER, AND THIS NOTE SAID IT WAS (corrected SV1
-// wave 4).** It read *"`spawn` re-creates exactly that shape for real green threads.
-// This is that rung's gate"*. `spawn` LANDED, and it does not: the shape needs a green
-// thread whose PROMISE is renounced while another M is executing it, and a `spawn`
-// yields a **handle**, not a `Promise`. A service's green thread is torn down by its
-// mailbox closing and its own loop exiting; nothing on the service path calls
-// `__gt_promise_drop` at all (VERIFIED — its only callers are the parser's scope-exit
-// drop machinery and `.cancel()`). ⇒ this program's multi-M subject STILL has no
-// producer, and the reason is a ⚖ RULING rather than an unbuilt rung: there is no bare
-// green-thread spawn, so there is no green thread anybody holds a promise to.
-//
-// ⇒ **THE SHAPE ARRIVES WITH `SV2`'s REPLY**, which is the first construct that gives a
-// caller something awaitable — and droppable un-awaited — over work running on another
-// green thread. Until then this is a program run for the leak reading it still gives,
-// and a green row here must not be read as covering its title.
+// ⚠ **IT IS NOT DELETED, AND MUST NOT BE.** The teardown rendezvous it gates is what
+// makes a dropped-while-running thread safe, and this program is that gate the day an
+// `async` frame can run on another M.
 
 typealias Integer = int(i64.min to i64.max)
+typealias TaskPromise = Promise with Integer
+typealias HeldTasks = Array with TaskPromise
 
-// How many spawn-delay-drop rounds are MEASURED, and how many run before the
-// baseline is taken. The warm-up rounds are not decoration: a worker M is CREATED on
-// demand by `__sched_wake_or_spawn` and needs on the order of a thread creation to
-// reach its first `__sched_find_runnable`, so on an idle box the first rounds race an
-// M that does not exist yet.
+// The fewest spawn-delay-drop rounds that are MEASURED, and how many run before them.
+// The warm-up rounds are not decoration: a worker M is CREATED on demand by
+// `__sched_wake_or_spawn` and needs on the order of a thread creation to reach its
+// first `__sched_find_runnable`, so on an idle box the first rounds race an M that does
+// not exist yet.
 let measuredRounds = 40
 let warmRounds = 10
 
@@ -78,9 +59,10 @@ let warmRounds = 10
 // coverage is decided by what else the machine is doing. Publishing a burst makes the
 // backlog real, so the Ms are created and the steals happen on any box.
 //
-// They are written out rather than looped because the promise must survive to THIS
-// body's scope exit: an inner loop would give each spawn a scope of its own and drop
-// it one statement later, which is the shape this program exists not to measure.
+// They are pushed into an array that `spawnDelayDrop` holds across its spin: `_ = async
+// f()` renounces its promise at its own statement, and a binding inside the spawning loop
+// at that loop's scope exit — both before the spin, which is the shape this program
+// exists not to measure.
 let spawnsPerRound = 8
 
 // Each dropped task's spin. THREE TIMES `mainDelayWork`, so a task a worker M started
@@ -99,6 +81,12 @@ let mainDelayWork = 300000
 // begins as the last drop lands.
 let settleRounds = 10
 let settleWork = 500000
+
+// Live at once: `main`, one round's drops, and `drain`'s settle.
+let peakLive = spawnsPerRound + 2
+
+// A processor's free list holds fewer than 64 records.
+let listSlack = 63
 
 let mixModulus = 7
 
@@ -135,14 +123,23 @@ function settle(work Integer) returns Integer
 	return spin(work, seed: 0)
 end 'settle'
 
+// One round: spawn `spawnsPerRound` tasks, spin for `mainDelayWork` while holding every
+// promise, and renounce them all at the return — a burst of threads other Ms have had the
+// whole spin to take and start.
+function spawnDelayDrop(round Integer) returns Integer
+	var held = HeldTasks.create()
+	var k = 0
+
+	while k < spawnsPerRound 'spawnEach'
+		held.push(async dropped(round + k))
+		k = k + 1
+	end 'spawnEach'
+
+	return spin(mainDelayWork, seed: round)
+end 'spawnDelayDrop'
+
 // Await enough work that every started task has completed. Each await DRIVES the
-// scheduler, so the queued tombstones are reclaimed here too. ONE spelling, used
-// before the baseline and after the measured window: the two readings are only
-// comparable if the same operation quiesced the system before each of them.
-//
-// ⚠ Without the FIRST of those two calls, `leaked` reads -1 on some runs — the
-// baseline is taken while a warm-up thread is still in flight, so it counts an
-// allocation the measured window then releases.
+// scheduler, so the queued tombstones are reclaimed here too.
 function drain() returns Integer
 	var acc = 0
 	var round = 0
@@ -156,51 +153,30 @@ function drain() returns Integer
 end 'drain'
 
 function main() returns ExitCode
-	// Warm-up: `warmRounds` spawn-delay-drop rounds, so every one-time runtime
-	// allocation (the timer store, the process store, the first span of each size
-	// class) is outstanding at the baseline AND every worker M this box will use has
-	// been created and has reached its loop.
+	// Warm-up: `warmRounds` spawn-delay-drop rounds, so every worker M this box will use
+	// has been created and has reached its loop before the measured rounds.
 	var sink = 0
 	var w = 0
 
 	while w < warmRounds 'warm'
-		_ = async dropped(w)
-		_ = async dropped(w + 1)
-		_ = async dropped(w + 2)
-		_ = async dropped(w + 3)
-		_ = async dropped(w + 4)
-		_ = async dropped(w + 5)
-		_ = async dropped(w + 6)
-		_ = async dropped(w + 7)
-		sink = sink + spin(mainDelayWork, seed: w)
+		sink = sink + spawnDelayDrop(w)
 		w = w + 1
 	end 'warm'
 
 	sink = sink + drain()
 
-	let baseline = __Builtins.mmRawAllocLive()
+	let bound = peakLive + listSlack * (__Builtins.schedProcessorCount() - 1)
 	var i = 0
 
-	// ⭐ All `spawnsPerRound` promises are renounced at THIS BODY'S SCOPE EXIT, which is
-	// after the spin — see the header. Each iteration therefore drops a burst of threads
-	// the worker Ms have had `mainDelayWork` iterations to steal and start.
-	while i < measuredRounds 'spawnDelayDrop'
-		_ = async dropped(i)
-		_ = async dropped(i + 1)
-		_ = async dropped(i + 2)
-		_ = async dropped(i + 3)
-		_ = async dropped(i + 4)
-		_ = async dropped(i + 5)
-		_ = async dropped(i + 6)
-		_ = async dropped(i + 7)
-		sink = sink + spin(mainDelayWork, seed: i)
+	while i < measuredRounds or i < 2 * bound 'measured'
+		sink = sink + spawnDelayDrop(i)
 		i = i + 1
-	end 'spawnDelayDrop'
+	end 'measured'
 
 	sink = sink + drain()
 
-	let after = __Builtins.mmRawAllocLive()
-	let leaked = after - baseline
+	let carved = __Builtins.schedGtRecordsCarved()
+	let leaked = carved - bound if carved > bound else 0
 	let ranCount = started
 	let steals = __Builtins.schedStealCount()
 	let workers = __Builtins.schedMaxActiveWorkers()
@@ -213,7 +189,7 @@ function main() returns ExitCode
 	// exact. `started` is the same question asked approximately; `workers` proves more
 	// than one M went live; `cpucount` gives the driver ncpu.
 	print("leaked={leaked}\n")
-	print("baseline={baseline} after={after} sink={sink}\n")
+	print("carved={carved} bound={bound} rounds={i} sink={sink}\n")
 	print("started={ranCount}\n")
 	print("steals={steals}\n")
 	print("workers={workers}\n")

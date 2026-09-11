@@ -1,35 +1,53 @@
 // Test: a-service-shut-down-with-async-work-in-flight
 typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
 
-function slowWork(n Integer) returns Integer
-	sleep(30)
+// Far longer than the program runs: the shutdown's drop cancels the timer, so nothing ever waits it out.
+let WorkSleepMs = 10000
+
+type Probe
+	export var started as bool
+
+	export static function create() returns Self
+		return Self{started: false}
+	end 'create'
+end 'Probe'
+
+function slowWork(n Integer, probe Probe) returns Integer
+	probe.started = true
+	sleep(WorkSleepMs)
 	return n * 2
 end 'slowWork'
 
 type Worker
-	var n as Integer
+	var pending as IntPromiseArray
+	var probe as Probe
 
 	static function create() returns Self
-		return Self{n: 0}
+		return Self{pending: IntPromiseArray.create(), probe: Probe.create()}
 	end 'create'
 
-	// Starts a coroutine on the SERVICE's own green thread and never awaits it. The promise dies at handler
-	// scope exit, and the service is shut down by the handle drop below while the sleep is still in flight.
+	// The yield hands the strand to the coroutine, which runs until its sleep parks it. The promise then lives
+	// in the service's state, so the shutdown's state drop is the one thing that can reach it.
 	export function fire(v Integer) returns Integer
-		let p = async slowWork(v)
-		_ = p
-		self.n = self.n + 1
-		return self.n
+		let p = async slowWork(v, probe: self.probe)
+		Runtime.yield()
+		let parked = self.probe.started and __Builtins.gtIsComplete(p.inner) == 0
+		self.pending.push(p)
+		return 1 if parked else 0
 	end 'fire'
 end 'Worker'
 
 function main() returns ExitCode
+	var parked = 0
+
 	for round in 1 to 8 'rounds'
 		let w = spawn Worker.create()
-		w.fire(round)
+		parked = parked + (try await w.fire(round) otherwise 0)
 	end 'rounds'
 
-	print("survived\n")
+	print("parked={parked}\n")
 	return 42 as ExitCode
 end 'main'
 ---
@@ -39,40 +57,72 @@ data {
   __mm_alloc_count@0 = i64 0
   __gt_run_queue_head@8 = i64 0
   __gt_run_queue_tail@16 = i64 0
-  __gt_init_done@24 = i64 0
-  __gt_timer_count@32 = i64 0
-  __gt_timer_heap_base@40 = i64 0
-  __gt_timer_capacity@48 = i64 0
-  __gt_timer_seq@56 = i64 0
+  __gt_timer_count@24 = i64 0
+  __gt_timer_heap_base@32 = i64 0
+  __gt_timer_capacity@40 = i64 0
+  __gt_timer_seq@48 = i64 0
+  __gt_timer_when@56 = i64 9223372036854775807
   __gt_trace_counter@64 = i64 0
   __gt_proc_count@72 = i64 0
   __gt_proc_handles_base@80 = i64 0
   __gt_proc_gts_base@88 = i64 0
-  __gt_proc_wait_snapshot@96 = i64 0
-  __gt_proc_poller@104 = i64 0
-  __gt_live_count@112 = i64 0
-  __sched_progress@120 = i64 0
-  __sched_active_workers@128 = i64 1
-  __sched_max_active_workers@136 = i64 1
-  __sched_tls_index@144 = i64 0
-  __sched_tls_teb_offset@152 = i64 0
-  __sched_procs@160 = i64 0
-  __sched_allm@168 = i64 0
-  __sched_midle@176 = i64 0
-  __sched_pidle@184 = i64 0
-  __sched_num_procs@192 = i64 0
-  __sched_shutdown_flag@200 = i64 0
-  __sched_lock@208 = i64 0
-  __sched_nmspinning@216 = i64 0
-  __sched_parked_drivers@224 = i64 0
-  __sched_sysmon_started@232 = i64 0
-  __mrt_envp@240 = i64 0
-  __mrt_tls_next_key@248 = i64 0
-  __mrt_errno@256 = i64 0
-  __mrt_tls_ready@264 = i64 0
-  __slab_arena_list@272 = i64 0
-  __slab_arena_map_l1@280 = i64 0
-  __slab_state@288 = i64 0
+  __gt_live_count@96 = i64 0
+  __sched_active_workers@104 = i64 1
+  __sched_max_active_workers@112 = i64 1
+  __sched_tls_index@120 = i64 0
+  __sched_tls_teb_offset@128 = i64 0
+  __sched_procs@136 = i64 0
+  __sched_allm@144 = i64 0
+  __sched_midle@152 = i64 0
+  __sched_pidle@160 = i64 0
+  __gt_gfree_head@168 = i64 0
+  __gt_record_cursor@176 = i64 0
+  __gt_record_limit@184 = i64 0
+  __gt_records_carved@192 = i64 0
+  __sched_npidle@200 = i64 0
+  __sched_runq_size@208 = i64 0
+  __sched_mcount@216 = i64 0
+  __sched_nmidle@224 = i64 0
+  __sched_main_m@232 = i64 0
+  __sched_phase@240 = i64 0
+  __sched_lastpoll@248 = i64 0
+  __sched_poll_until@256 = i64 0
+  __sched_regain_head@264 = i64 0
+  __np_poller@272 = i64 0
+  __np_break@280 = i64 0
+  __np_wake_sig@288 = i64 0
+  __sched_num_procs@296 = i64 0
+  __sched_shutdown_flag@304 = i64 0
+  __sched_lock@312 = i64 0
+  __sched_nmspinning@320 = i64 0
+  __sched_needspinning@328 = i64 0
+  __sched_sysmon_started@336 = i64 0
+  __sched_sysmon_event@344 = i64 0
+  __sched_sysmon_wait@352 = i64 0
+  __mrt_envp@360 = i64 0
+  __mrt_tls_next_key@368 = i64 0
+  __mrt_errno@376 = i64 0
+  __mrt_tls_ready@384 = i64 0
+  __slab_arena_list@392 = i64 0
+  __slab_arena_map_l1@400 = i64 0
+  __slab_state@408 = i64 0
+}
+
+func @Probe.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.byte [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
 }
 
 func @slowWork {
@@ -82,7 +132,9 @@ func @slowWork {
     x64.pushReg rbx
     x64.prologue 40
     x64.movRegReg rbx, rcx
-    x64.movRegImm32 rcx, 30
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.byte [rdx + 0], rax
+    x64.movRegImm32 rcx, 10000
     x64.callDirect sleep
     x64.imulRegRegImm32 r8, rbx, 2
     x64.epilogue 40
@@ -96,13 +148,21 @@ func @Worker.create {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegImm32 rbx, 0
+    x64.pushReg r12
+    x64.prologue 32
     x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __gt_promise_drop]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.callDirect Probe.create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.epilogue 40
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -115,23 +175,47 @@ func @Worker.fire {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 32
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.callDirect __mm_own
+    x64.movRegReg r13, r8
     x64.leaRegFunc rcx, [rip + slowWork]
     x64.callDirect __gt_spawn
-    x64.movRegReg r13, r8
-    x64.storeBaseDispReg.word64 [r13 + 200], r12
-    x64.movRegReg rcx, r13
+    x64.movRegReg r14, r8
+    x64.storeBaseDispReg.word64 [r14 + 200], r12
+    x64.storeBaseDispReg.word64 [r14 + 208], r13
+    x64.leaRegFunc rax, [rip + __gt_release_slowWork]
+    x64.storeBaseDispReg.word64 [r14 + 176], rax
+    x64.movRegReg rcx, r14
     x64.callDirect __gt_ready
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.storeBaseDispReg.word64 [rbx + 0], rax
-    x64.loadRegBaseDisp.word64 rbx, [rbx + 0]
-    x64.movRegReg rcx, r13
-    x64.callDirect __gt_promise_drop
-    x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.callDirect Runtime.yield
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.movRegImm32 r12, 0
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, scmerge
+  andrhs:
+    x64.movRegReg rcx, r14
+    x64.callDirect __gt_is_complete
+    x64.cmpRegImm32 r8, 0
+    x64.setccReg equal, r12
+  scmerge:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.movRegReg rdx, r14
+    x64.callDirect __managed_push
+    x64.cmpRegImm32 r12, 0
+    x64.jcc equal, ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 r8, 1
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegImm32 r8, 0
+  matchcont:
+    x64.epilogue 32
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -146,48 +230,117 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
-    x64.movRegImm32 rbx, 1
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 72
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 1
   forhdr:
-    x64.cmpRegImm32 rbx, 8
+    x64.cmpRegImm32 r12, 8
     x64.jcc greater, forexit
   rounds:
     x64.callDirect Worker.create
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __sole_Worker
     x64.leaRegFunc rcx, [rip + Worker.__loop]
     x64.leaRegFunc rax, [rip + Worker.__abandon]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r13
     x64.callDirect __svc_spawn
-    x64.movRegReg r12, r8
+    x64.movRegReg r13, r8
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.movRegReg r13, r8
-    x64.storeBaseDispReg.word64 [r13 + 0], r12
+    x64.movRegReg r14, r8
+    x64.storeBaseDispReg.word64 [r14 + 0], r13
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
-    x64.movRegReg r12, r8
+    x64.movRegReg r13, r8
     x64.movRegImm32 rcx, 24
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r12
-    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.loadRegBaseDisp.word64 rcx, [r14 + 0]
     x64.movRegReg rdx, r8
     x64.callDirect __mbox_send
-    x64.movRegReg rcx, r12
-    x64.callDirect __gt_promise_drop
     x64.movRegReg rcx, r13
+    x64.callDirect __gt_try_await
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 rax, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rax, r8
+  trycont:
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.movRegReg rcx, r14
     x64.callDirect __mbox_handle_drop_box
   forstep:
-    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.leaRegRegImm32 r12, r12, 1
     x64.jmp forhdr
   forexit:
-    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "survived\x0a"
+    x64.leaRegRdata rax, [rip + __str_rec_2]  ; "parked="
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callDirect __int_to_string
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_3]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot3, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot2, rax
+    x64.leaRegRegReg rcx, r13, rbx
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot0, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot1, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r15, r13
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r12, rbx
+    x64.loadRegSlot rax, slot2
+    x64.loadRegSlot rdx, slot3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot2
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rbx, slot1
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot0
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
     x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
     x64.movRegImm32 r8, 42
-    x64.epilogue 40
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -215,7 +368,7 @@ func @Worker.__loop {
     x64.jcc equal, stopping
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=fire] @__jumptable_3
+    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=fire] @__jumptable_5
   __shutdown:
     x64.loadRegBaseDisp.word64 rax, [r13 + 8]
     x64.storeBaseDispReg.word64 [r12 + 56], rax
@@ -231,7 +384,7 @@ func @Worker.__loop {
     x64.jcc notEqual, abandon
   finished:
     x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
+    x64.callDirect __destruct_Worker
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_service_exit
     x64.epilogue 40
@@ -270,7 +423,7 @@ func @Worker.__abandon {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=fire] @__jumptable_4
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=fire] @__jumptable_6
   __shutdown:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 0

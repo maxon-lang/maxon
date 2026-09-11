@@ -339,11 +339,13 @@ ran=0
 <!-- test: sched-runqueue.a-spawn-drop-loop-stays-bounded -->
 **THE SWEEP'S HALF.** Five thousand coroutines are spawned and dropped while `main` never parks, so the
 strand runner never reaches them, nothing would pop them and the mark alone would leave five thousand
-structs alive. Each
-drop instead sweeps the tombstones off the FRONT of the dropped coroutine's own owner's queue, where the
-one it just marked is sitting, so the live raw-allocation count stays at its steady state rather than
-growing with the loop. `__Builtins.mmRawAllocLive()` counts exactly the population a GT struct belongs
-to.
+records alive. Each drop instead sweeps the tombstones off the FRONT of the dropped coroutine's own owner's
+queue, where the one it just marked is sitting, and reclaims it — so the next spawn takes that same record
+back off the free list. The first spawn has nothing to reuse and each of the other 4,999 reuses the one
+before it, which `__Builtins.schedGtRecycleCount()` counts.
+
+✅ **SABOTAGE-VERIFIED.** With the drop's front sweep removed, this case reads `recycled=0`; the other two
+drop cases below stay GREEN under that sabotage, so the count is this case's road and nobody else's.
 ```maxon
 var ran = 0
 
@@ -360,18 +362,13 @@ function main() returns ExitCode
 		i = i + 1
 	end 'loop'
 
-	if __Builtins.mmRawAllocLive() < 100 'bounded'
-		print("ran={ran} live=bounded")
-	end 'bounded' else 'grew'
-		print("ran={ran} live=grew")
-	end 'grew'
-
+	print("ran={ran} recycled={__Builtins.schedGtRecycleCount()}")
 	return 0 as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```stdout
-ran=0 live=bounded
+ran=0 recycled=4999
 ```
 ```exitcode
 0
@@ -382,10 +379,14 @@ ran=0 live=bounded
 runs `p` too, so `p` runs to completion and the strand runner's `__gt_runner_done` adds the RUNNER ticket
 while the promise is still live —
 the struct survives, because it still holds a result an un-awaited promise owns. The loop body's scope exit
-then drops `p`, and that dropper is the SECOND arrival: it finds the runner's ticket and reclaims. Three
-iterations, and `mmRawAllocLive()` is identical before and after, so every struct came back.
-`gtIsComplete` is what proves the case reached the order it names — a `p` that had NOT completed would be
-the tombstone order the two cases above cover instead.
+then drops `p`, and that dropper is the SECOND arrival: it finds the runner's ticket and reclaims. After a
+warm-up round has put both of its records back, each of the three rounds spawns twice and both spawns are
+served from the free list — `schedGtRecycleCount()` grows by exactly 6 — so every record came back. A
+dropper that failed to reclaim `p` would leave each round one record short, and its second spawn would carve
+a fresh one. `gtIsComplete` is what proves the case reached the order it names — a `p` that had NOT
+completed would be the tombstone order the two cases above cover instead.
+
+✅ **SABOTAGE-VERIFIED.** With the drop's consumer half removed, this case reads `recycled=3` and exits 75.
 ```maxon
 function done() returns Integer
 	Runtime.yield()
@@ -405,7 +406,7 @@ function main() returns ExitCode
 		i = i + 1
 	end 'warm'
 
-	let liveBefore = __Builtins.mmRawAllocLive()
+	let recycledBefore = __Builtins.schedGtRecycleCount()
 	var j = 0
 
 	while j < 3 'completedThenDropped'
@@ -416,14 +417,14 @@ function main() returns ExitCode
 		j = j + 1
 	end 'completedThenDropped'
 
-	let liveGrew = __Builtins.mmRawAllocLive() - liveBefore
-	print("total={total} finished={finished} liveGrew={liveGrew}")
+	let recycled = __Builtins.schedGtRecycleCount() - recycledBefore
+	print("total={total} finished={finished} recycled={recycled}")
 	return 0 as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```stdout
-total=4 finished=4 liveGrew=0
+total=4 finished=4 recycled=6
 ```
 ```exitcode
 0
@@ -435,7 +436,13 @@ before it fires, so the loop body's scope exit drops a thread that is registered
 that no runner will ever come back for. The drop takes it out of the store under `__sched_lock` — and,
 having done so, is the only holder left, so it performs the RUNNER's half (the stack the parked thread is
 suspended on) and then the consumer's, which reclaims. Three iterations with no hang, because nothing ever
-waits on the 200 ms deadline, and `mmRawAllocLive()` returns to its baseline.
+waits on the 200 ms deadline, and after a warm-up round both spawns of every round are served from the free
+list — `schedGtRecycleCount()` grows by exactly 6.
+
+✅ **SABOTAGE-VERIFIED, AND THE COUNT IS THE ONLY THING THAT SEES IT.** With the runner's half removed from
+this arm, the parked record is never reclaimed and this case reads `recycled=3` — but it still exits 0,
+because the consumer's half has already debited `__gt_live_count` and the exit gate reads clean. The two
+cases above stay GREEN under that sabotage.
 ```maxon
 function done() returns Integer
 	Runtime.yield()
@@ -460,7 +467,7 @@ function main() returns ExitCode
 		i = i + 1
 	end 'warm'
 
-	let liveBefore = __Builtins.mmRawAllocLive()
+	let recycledBefore = __Builtins.schedGtRecycleCount()
 	var j = 0
 
 	while j < 3 'parkedThenDropped'
@@ -471,14 +478,80 @@ function main() returns ExitCode
 		j = j + 1
 	end 'parkedThenDropped'
 
-	let liveGrew = __Builtins.mmRawAllocLive() - liveBefore
-	print("total={total} stillParked={stillParked} liveGrew={liveGrew}")
+	let recycled = __Builtins.schedGtRecycleCount() - recycledBefore
+	print("total={total} stillParked={stillParked} recycled={recycled}")
 	return 0 as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```stdout
-total=4 stillParked=4 liveGrew=0
+total=4 stillParked=4 recycled=6
+```
+```exitcode
+0
+```
+
+<!-- test: sched-runqueue.a-thousand-parked-drops-carve-a-bounded-population -->
+<!-- procs: 4 -->
+**THE PARKED DROP'S RECLAIM, READ AS A POPULATION.** The case above counts reuse, which is exact only while
+every spawn and every reclaim share one processor's free list. A coroutine-only program keeps that at any
+processor count, because only `main`'s machine ever runs; a program whose green threads spread across
+machines does not, since a reclaimed record may wait on another processor's list while a spawn carves a
+fresh one — so there a reuse count can come up short with nothing lost, and a record lost every round can
+hide in that slack. `__Builtins.schedGtRecordsCarved()` is the reading that holds either way: how many
+records the scheduler's arena has ever carved. A spawn carves only when its processor's list and the global
+one are both empty, so a runtime that reclaims every dropped sleeper carves no more than the records live at
+once — `main`, this round's sleeper and its finisher — plus fewer than 64 waiting on each other processor's
+list, however many rounds run. A thousand rounds is more than five times that bound at four processors, so a
+record stranded every round cannot stay under it. The bound is taken from `schedProcessorCount()` rather than
+written as a number, for `sched-processor.md`'s reason: `procs: 4` is clamped to the host.
+
+✅ **SABOTAGE-VERIFIED, AND THE EXIT GATE CANNOT SEE IT.** With the runner's half removed from the parked-drop
+arm, this case reads `bounded=false` — 1,002 records carved at four processors against a bound of 192 — and
+still exits 0, because the consumer's half has already debited `__gt_live_count`. A runtime whose reclaim never
+returns a record to a free list reads `bounded=false` too, with 2,001 carved.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+let rounds = 1000
+
+// Live at once: `main`, this round's sleeper and this round's finisher.
+let peakLive = 3
+
+// A processor's free list holds fewer than 64 records.
+let listSlack = 63
+
+function done() returns Integer
+	Runtime.yield()
+	return 1
+end 'done'
+
+function sleeper() returns Integer
+	sleep(200)
+	return 9
+end 'sleeper'
+
+function main() returns ExitCode
+	var total = 0
+	var stillParked = 0
+	var i = 0
+
+	while i < rounds 'parkedThenDropped'
+		let s = async sleeper()
+		let f = async done()
+		total = total + await f
+		stillParked = stillParked + (1 - __Builtins.gtIsComplete(s.inner))
+		i = i + 1
+	end 'parkedThenDropped'
+
+	let bound = peakLive + listSlack * (__Builtins.schedProcessorCount() - 1)
+	let carved = __Builtins.schedGtRecordsCarved()
+	print("total={total} stillParked={stillParked} bounded={carved <= bound}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+total=1000 stillParked=1000 bounded=true
 ```
 ```exitcode
 0

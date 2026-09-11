@@ -74,8 +74,8 @@ export enum RuntimeAbort
 	arrayElementSizeZero = 74
 
 	// `__mm_leak_check` (the ONE OS-exit gate): a green thread was spawned but neither AWAITED nor DROPPED —
-	// `__gt_live_count` was non-zero at exit (or, negative, an over-reclaim). A GT struct + its seed stack are
-	// `__slab_alloc`/`osAllocPages` allocations INVISIBLE to `__mm_alloc_count`, so this leak is its own class
+	// `__gt_live_count` was non-zero at exit (or, negative, an over-reclaim). A GT record and its seed stack come
+	// from the record arena and `osAllocPages`, INVISIBLE to `__mm_alloc_count`, so this leak is its own class
 	// and its own code — DISTINCT from `leakDetected` (101, the heap gate) so a debugger reading the exit code
 	// goes to the green-thread counter, not the heap one (this file's founding rule: an abort must not report
 	// another abort's number). Pinned by `async-promise-drop`'s never-ran/completed/parked cases.
@@ -143,11 +143,11 @@ export enum RuntimeAbort
 	// as `mov %reg, (<garbage>)`: an opaque access violation, in the one failure a user is most likely to hit
 	// for a reason outside their own program.
 	//
-	// ⚠ It guards THREE calls, not one — `osAllocPages` (the OS-direct tier), and F1c's `osReservePages` and
-	// `osCommitPages` (the arena) — and its test is `ptr <= 0` rather than `ptr == 0`, because a raw POSIX
-	// `mmap` reports failure as a small NEGATIVE errno where `VirtualAlloc` reports NULL. See the guard itself
-	// in `SlabArena.maxon` for why the sign catches both and no lane can answer a page base that is not
-	// positive.
+	// ⚠ It guards FOUR calls, not one — `osAllocPages` for the OS-direct tier and for a GT-record chunk, and
+	// `osReservePages` and `osCommitPages` for the slab arena — and its test is `ptr <= 0` rather than
+	// `ptr == 0`, because a raw POSIX `mmap` reports failure as a small NEGATIVE errno where `VirtualAlloc`
+	// reports NULL. See the guard itself in `SlabArena.maxon` for why the sign catches both and no lane can
+	// answer a page base that is not positive.
 	slabOsAllocFailed = 82
 
 	// `__slab_arena_alloc_chunks`: a chunk-run request no arena can EVER satisfy — a count of 0 or less, or

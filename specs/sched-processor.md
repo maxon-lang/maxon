@@ -407,3 +407,27 @@ end 'main'
 ```maxoncstderr
 error E3104: <fragment>:3:20: this construct lowers to the runtime entry '__sched_idle_processor_count', which has no wasm32-wasi implementation
 ```
+
+<!-- test: sched-processor.error.gt-records-carved-arity-checked -->
+The record-carve count takes no argument, like every member of its family.
+```maxon
+function main() returns ExitCode
+	return __Builtins.schedGtRecordsCarved(1) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3036: <fragment>:3:20: '__Builtins.schedGtRecordsCarved' takes exactly 0 argument, but 1 were given
+```
+
+<!-- test: sched-processor.error.gt-records-carved-is-refused-on-wasm -->
+<!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+The count is a fact about the scheduler's record arena, and a WASI component has no green threads to carve
+records for, so the query is refused where the green-thread substrate is: at the call's own span, with E3104.
+```maxon
+function main() returns ExitCode
+	return __Builtins.schedGtRecordsCarved() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:3:20: this construct lowers to the runtime entry '__sched_gt_records_carved', which has no wasm32-wasi implementation
+```

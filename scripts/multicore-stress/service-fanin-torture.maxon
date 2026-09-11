@@ -26,9 +26,11 @@
 // happened to collide.
 //
 // ⚠ LEAK-FREEDOM IS THE EXIT CODE HERE, NOT A `leaked=` FIELD. `drop-running-torture`
-// can print one because it takes `mmRawAllocLive()` at two QUIESCENT points it can
-// name; this program has no such point it can observe from — `main` cannot see the
-// senders finish. What covers it is the runtime's own exit leak gate: 48,000 heap
+// can print one because what it could lose is a green-thread record, and the
+// scheduler's record-carve count has a bound it can state; what this program could
+// lose is a heap box, and a raw reading of those needs a QUIESCENT point it cannot
+// observe from — `main` cannot see the senders finish. What covers it is the
+// runtime's own exit leak gate: 48,000 heap
 // `String`s are built by twelve green threads and dropped by a thirteenth, and a
 // single lost decref is exit 101. `pin-matrix.sh` asserts the exit code is identical
 // at every processor count AND never 101, which is the same fact read off the door

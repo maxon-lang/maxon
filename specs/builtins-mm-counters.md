@@ -63,10 +63,12 @@ can say whether a header-free BUFFER leaked:
 - **TRACKED.** An element buffer here is an ordinary `__mm_alloc` box with a header and a
   destructor, so this layer covers the header-carrying records (a struct, a String record, an
   array's outer handle) and the header-free buffers behind them alike.
-- **RAW.** Beneath the boxes sits `__slab_alloc`, whose direct callers are the green-thread structs
-  and tables, the service mailboxes and their message envelopes, the subprocess scratch buffers and the
-  DebugStream ring. A green thread's STACK is not among them: it comes from `osAllocPages`. Those are genuinely
-  header-free and no `__mm_alloc` counter can see them, so they are what the RAW columns report.
+- **RAW.** Beneath the boxes sits `__slab_alloc`, whose direct callers are the scheduler's tables (its
+  machines, processors, lock and park stores), the service mailboxes and their message envelopes, the
+  subprocess scratch buffers and the DebugStream ring. A green thread is not among them: its STACK comes
+  from `osAllocPages`, and its RECORD from the scheduler's own record arena, which is carved from
+  `osAllocPages` chunks — scaffolding like the stack, invisible to both layers. The slab's callers are
+  genuinely header-free and no `__mm_alloc` counter can see them, so they are what the RAW columns report.
 
 ⇒ **A case that reads ONE layer is reading a runtime-internal fact; a case that reads the SUM is
 reading the contract.** `bytes-scale-with-the-request` below is written on the sum for exactly this
@@ -88,8 +90,9 @@ They read two `.data` words. `mmRawAllocTotal` is cumulative and only ever rises
 rises with each credited allocation and FALLS when a counted `__slab_alloc` caller hands its region
 back through the counted free door, `__mm_raw_free`. Several callers do: the subprocess runner's and
 the read probe's per-call scratch, and a service's mailbox envelopes, each freed the moment its
-message is delivered. A GT struct is credited once and never handed back — the scheduler recycles it
-through its own free lists (`runtime-scratch-reclaim.md`'s `spawn-await-loop-is-bounded`).
+message is delivered. A green-thread record is never credited at all: it comes from the scheduler's
+record arena, not the slab, and is recycled through the scheduler's own free lists
+(`runtime-scratch-reclaim.md`'s `spawn-await-loop-is-bounded`).
 `__mm_alloc`'s boxes move neither column: they come from the UNCOUNTED twin `__slab_alloc_box` and
 are reported by the tracked layer instead, because the two layers must stay disjoint (see *The
 layers must be DISJOINT* above). `raw-live-falls-below-raw-total` below pins the two-number shape.
@@ -302,37 +305,53 @@ end 'main'
 
 <!-- test: builtins-mm-counters.raw-columns-count-the-scheduler-scaffolding -->
 **THE CASE THAT SAYS THE RAW COLUMNS ARE MAINTAINED AT ALL**, which is the hazard a column reading
-a plausible `0` hides. the compiler's header-free layer is reached by the green-thread runtime: `__gt_init`
-and `__gt_spawn` take the scheduler's tables and GT structs from `__slab_alloc`. `main` itself runs on a
-green thread, so by its first line the columns already count that scaffolding and are not 0; the `async`
-spawn then takes another GT struct, so they rise. The third assertion separates the byte column from the
-count column: a GT struct alone is hundreds of BYTES, so the two deltas cannot be equal unless one of the
-two intrinsics is wired to the other's slot.
+a plausible `0` hides. `__gt_init` takes the scheduler's tables from `__slab_alloc` before `main` runs, and
+`main` itself runs on a green thread, so by its first line the columns already count that scaffolding and
+are not 0. The window then spawns a service and awaits one message: `__svc_spawn` takes the service's
+MAILBOX (64 bytes) and `__mbox_send` takes the message's ENVELOPE (16 bytes), both from the counted
+`__slab_alloc` (`MailboxRuntime.maxon`), so the columns rise. The third assertion separates the byte column
+from the count column: every region the window takes is many bytes wide, so the two deltas cannot be equal
+unless one of the two intrinsics is wired to the other's slot.
 
-✅ **SABOTAGE-VERIFIED.** With the raw columns' maintenance removed from `__slab_alloc`, both delta
-halves of this case go RED, and so does `raw-live-falls-below-raw-total` (exit **6** against 7), while
-every tracked-layer case stays GREEN. The first half fails under that sabotage too: a column nothing
-maintains reads 0 at `main`'s first line.
+⚠ **THE WITNESS IS A SERVICE AND NOT AN `async` SPAWN**, because a green thread moves neither column: its
+record comes from the scheduler's record arena and its stack from `osAllocPages` (see *The two LAYERS*
+above). An `async` spawn and await in this window would read `after == before`.
+
+✅ **SABOTAGE-VERIFIED.** With the raw columns' process-wide maintenance removed from `__slab_alloc`, this
+case exits **2** against 8 — both delta halves go RED, and so does the first, because a column nothing
+maintains reads 0 at `main`'s first line — and `raw-live-falls-below-raw-total` exits **6** against 7,
+while every tracked-layer case stays GREEN.
 ```maxon
-function work(n ExitCode) returns ExitCode
-	__Builtins.parallelBoundary()
-	return n + 1
-end 'work'
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	var calls as Integer
+
+	static function create() returns Self
+		return Self{calls: 0}
+	end 'create'
+
+	export function next(n Integer) returns Integer
+		self.calls = self.calls + 1
+
+		return n + 1
+	end 'next'
+end 'Counter'
 
 function main() returns ExitCode
 	let before = __Builtins.mmRawAllocTotal()
 	let bytesBefore = __Builtins.mmRawAllocBytes()
-	let p = async work(1)
-	let a = await p
+	let c = spawn Counter.create()
+	let a = try await c.next(1) otherwise 0
 	let after = __Builtins.mmRawAllocTotal()
 	let bytesAfter = __Builtins.mmRawAllocBytes()
 	var score = a
 	if before > 0 'theSchedulerIsInstalledBeforeMain'
 		score = score + 1
 	end 'theSchedulerIsInstalledBeforeMain'
-	if after > before 'theSchedulerAllocatedRaw'
+	if after > before 'theServiceAllocatedRaw'
 		score = score + 2
-	end 'theSchedulerAllocatedRaw'
+	end 'theServiceAllocatedRaw'
 	if bytesAfter - bytesBefore > after - before 'bytesAreBytesNotACount'
 		score = score + 3
 	end 'bytesAreBytesNotACount'
@@ -349,7 +368,7 @@ end 'main'
 counted `__slab_alloc`, and `__mbox_recv` hands it back through `__mm_raw_free` the moment it pops the
 message, before the handler runs — so once the reply has been awaited, the one envelope this program
 sent is credited to `total` and debited from `live`. Every other raw region the program touches — the
-scheduler's tables, the P and M structs, the GT structs, the mailbox itself — is still held when the
+scheduler's tables, the P and M structs, the mailbox itself — is still held when the
 counters are read, so the envelope is the only debit, and a runtime whose envelope did not come back
 through the counted door would read `live == total`. Mailboxes run on every lane with green threads,
 so the case needs no Windows-only scratch.

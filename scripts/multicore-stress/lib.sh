@@ -12,6 +12,14 @@ MULTICORE_REPO="$(cd "$MULTICORE_HERE/../.." && pwd)"
 # reading is taken. The binary must sit inside a checkout: it locates `stdlib/` relative to itself.
 MAXON="${MAXON:-$(maxon_compiler_path "$MULTICORE_REPO")}"
 
+# Whether the space-separated list $1 holds the word $2.
+list_has() {
+	case " $1 " in
+		*" $2 "*) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
 # ⭐⭐ WHICH PROGRAMS CREATE REAL GREEN THREADS — a `spawn` publishes to a P ring, an `async` to its
 # caller's own coroutine queue. TWO things key off this one list: the worker-arrival prelude a program
 # is compiled with, and the family `pin-matrix.sh` asserts for it. Kept here so a program added to the
@@ -19,10 +27,7 @@ MAXON="${MAXON:-$(maxon_compiler_path "$MULTICORE_REPO")}"
 SPAWNING_PROGRAMS="${SPAWNING_PROGRAMS:-service-torture service-fanin-torture syscall-stack-torture}"
 
 spawns_green_threads() {
-	case " $SPAWNING_PROGRAMS " in
-		*" $1 "*) return 0 ;;
-		*) return 1 ;;
-	esac
+	list_has "$SPAWNING_PROGRAMS" "$1"
 }
 
 # ⚠ THE PRELUDE GOES ONLY TO PROGRAMS THAT CALL IT. `RuntimeUsage.scanRuntimeUsage` filters only

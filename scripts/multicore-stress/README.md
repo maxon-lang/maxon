@@ -109,11 +109,16 @@ family a program is in decides what its rows mean**, so it is the first column h
   ⛔ **ITS HEADER FILES TWO LIVE COMPILER DEFECTS** it works around rather than fixes: binding a
   `spawn` to a local before pushing it double-frees, and `.withIterator()` over
   `Array with <T>.handle` panics the compiler.
-- **`service-async-strand-torture.maxon`** — a service HANDLER that starts a coroutine and is shut
-  down with that work still in flight. A strand is invisible to the exit gate, because the promise
-  drop already debited the live count, so raw allocation live-count is the only instrument — and the
-  control is built in: one arm never awaits, one does, and a strand is the DIFFERENCE between them,
-  never the absolute size of either. ⚠ **NO DRIVER RUNS IT.**
+- **`service-async-strand-torture.maxon`** — services shut down while a coroutine their handler
+  started is PARKED: the handler yields after its `async` so the coroutine runs to its `sleep`, and
+  keeps the promise in the service's state so the shutdown is what drops it. `parked=` witnesses that
+  shape and must equal `rounds=` — a promise discarded at its own statement is renounced before it
+  runs and builds nothing. A strand is invisible to the exit gate, because the drop already debited
+  the live count, so the scheduler's record-carve count is the instrument: `leaked=` is how far it runs
+  past the most a runtime that reclaims every record can carve, and the rounds grow with the processor
+  count until one record lost per round would reach twice that bound. The coroutine's `Probe` argument
+  makes the heap gate a second witness: a lost reclaim is also a 101. The control is built in: one arm
+  awaits its coroutine. ⚠ **NO DRIVER RUNS IT.**
 - **`runnext-starvation-probe.maxon`** — ⭐⭐ **UNDRIVEN ON PURPOSE.** Every program a driver runs
   asserts something about the SHIPPED compiler; this one goes red only against a compiler with
   `runnext` BUILT, which no tree here produces, so a driver would assert nothing for ever. It is
@@ -141,7 +146,9 @@ COVERS A CROSS-P FREE**, and none should be read as doing so.
   of the stealing rounds. It reads 0 at every processor count, and that IS the pin.
 - **`drop-running-torture.maxon`** — a promise dropped while its thread executes on another M, the
   one shape the teardown rendezvous was built for and the one no spec case can reach. `leaked=` is
-  its assertion.
+  its assertion: how far the scheduler's record-carve count runs past the most a runtime that
+  reclaims every dropped record can carve, over enough rounds that one record stranded per round
+  would reach twice that bound. A row that prints no `leaked=` is a failure, not a pass.
 - **`refcount-torture.maxon`** — twelve tasks all handed the SAME heap `String`, each pushing it into
   a local container in a loop: one round is N increfs and N decrefs of ONE word. ⚠ **THE EXIT CODE IS
   THE ONLY DISCRIMINATOR** — the aggregate is byte-identical in passing and crashing runs, and

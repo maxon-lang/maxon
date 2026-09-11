@@ -706,9 +706,9 @@ end 'slabArenaAllocatableChunks'
 // ⭐ **WHY IT EXISTS AT ALL.** Every caller in this file stores INTO the pointer it just got back, so a
 // failure that is not caught here arrives as `mov %reg, (<garbage>)`: an opaque access violation with no
 // attribution, in the one condition a user is most likely to hit for a reason outside their own program.
-// It guards all three page calls this file makes — the
-// reservation, the commit, and (through `SlabRuntime`) an OS-direct allocation — which is why its answer is
-// its argument: a guard that hands the value on cannot be forgotten at a call site.
+// It guards the reservation and the commit this file makes, an OS-direct allocation (`SlabRuntime`) and a
+// GT-record chunk (`SchedRuntime.emitGtRecordCarveLocked`) — which is why its answer is its argument: a guard
+// that hands the value on cannot be forgotten at a call site.
 //
 // ⛔⛔ **THE TEST IS `ptr <= 0`, AND `ptr == 0` WAS A WINDOWS-ONLY TEST WEARING A PORTABLE ONE'S CLOTHES.**
 // `VirtualAlloc` answers NULL on failure, so 0 is right there. A RAW POSIX SYSCALL DOES NOT: `mmap` answers

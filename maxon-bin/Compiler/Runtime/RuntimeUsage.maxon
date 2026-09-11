@@ -86,9 +86,10 @@ export type RuntimeUsage
 	export var usesHeap as bool
 
 	// The program spawns a green thread (`async`/`await`). Drives `installGtRuntime` + the GT `.data`
-	// globals + the two hand-assembled backend chunks. Set alongside `usesHeap` (spawn `__slab_alloc`s the
-	// GT struct + arg buffer), from the `asyncCall`/`await` Maxon ops rather than a callee name — the async
-	// ops are their own op kind, and their `__gt_*` calls do not exist until lowering.
+	// globals + the two hand-assembled backend chunks. Set alongside `usesHeap` (the scheduler's machines,
+	// processors, lock and park stores are `__slab_alloc`'d), from the `asyncCall`/`await` Maxon ops rather
+	// than a callee name — the async ops are their own op kind, and their `__gt_*` calls do not exist until
+	// lowering.
 	export var usesGt as bool
 
 	// The program issues a YIELDING overlapped pipe read (`__gt_io_read`, the `spawnReadLine` probe, P1.5 slice
@@ -695,9 +696,8 @@ function classifyRuntimeCall(op MaxonOp, usage RuntimeUsage, funcSignatures Func
 		functionRef(_, funcName) then recordFunctionRefUsage(funcName, usage: usage, funcSignatures: funcSignatures)
 		indirectCall then break 'op'
 
-		// P1.5-B1a/B2b: `async`/`await`/`try await` carry the green-thread scheduler. Detected by OP KIND
-		// (their `__gt_*` calls do not exist until lowering), and imply the HEAP too — `__gt_spawn`
-		// `__slab_alloc`s the GT struct and the argument buffer.
+		// `async`/`await`/`try await` carry the green-thread scheduler. Detected by OP KIND (their `__gt_*`
+		// calls do not exist until lowering), and imply the HEAP too — see `recordGtUsage`.
 		asyncCall or
 			await or
 			tryAwait then recordGtUsage(usage)
@@ -765,7 +765,7 @@ function recordIoParkUsage(usage RuntimeUsage)
 end 'recordIoParkUsage'
 
 // An `async`/`await` op turns on both scheduler and heap: the scheduler runs the green threads, and the
-// heap floor supplies the `__slab_alloc` that `__gt_spawn` and the async arg-buffer spill need.
+// heap floor supplies the `__slab_alloc` its machines, processors, lock and park stores come from.
 function recordGtUsage(usage RuntimeUsage)
 	usage.usesGt = true
 	usage.usesHeap = true
