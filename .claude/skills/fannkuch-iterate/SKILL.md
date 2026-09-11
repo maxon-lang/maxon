@@ -94,6 +94,30 @@ source change is not an A/B (roadmap, EC19). The note carries the WHY; the tool 
 > the compiler's own build time is a budget the user owns, and a benchmark win does not spend it.
 > Between +2% and +5%, say so in the note and carry on.
 
+> ## ⛔ THE BENEFIT GATE — a round lands only if it measured a real win
+>
+> The change lands when EITHER holds:
+>
+> - **fannkuch**: the experiment's n=11 median beats the control's by at least 2% AND by more than
+>   the wider of the two arms' min-to-max spread; or
+> - **the compiler itself**: `--self-compile` shows the experiment at least 2% faster than the
+>   control (the compiler is a large real program, and a general pass that helps it has proven
+>   itself even where this loop's inner loops did not move).
+>
+> Below both bars, READ the census and the profile from the same run before deciding, because the
+> three ways to miss have three different answers:
+>
+> | What the run shows | Meaning | Do |
+> |---|---|---|
+> | the census column predicted in §3 did not move; the IR still holds the shape | the pass missed its shape — an implementation miss, not a wrong idea | ONE bounded fix, then ONE more A/B; a second miss declines |
+> | the census moved as predicted, the medians did not | the premise "this shape costs time" was wrong (EC14) | decline — no improvement to the pass can repair a wrong premise |
+> | the census and the time moved, but under the bar | the shape is not hot enough; the ranking was wrong | decline; re-rank from the profile |
+>
+> **Declining** means: the compiler change and its spec do NOT land. Revert them, and commit only the
+> README row marked DECLINED with the two medians, the census movement and the mechanism, so the
+> next session does not rebuild it. A decline is a measurement, not a failure; the roadmap's
+> DECLINED rows are its most-cited ones.
+
 ## 6. Headline
 
 Whenever n=11 moved by more than the arms' spread. One run is enough while the ratio is far
@@ -106,8 +130,9 @@ python scripts/bench-fannkuch.py --n 12 --runs 1 --warmup 0 --ref $PRE --note "<
 
 ## 7. Record
 
-- `bench/fannkuch/README.md`: mark the candidate closed with its measured delta (or DECLINED with the
-  measurement), and re-rank the rest from the NEW profile.
+- `bench/fannkuch/README.md`: mark the candidate closed with its measured delta (or DECLINED under
+  §5's gate, with the measurement and which of the three misses it was), and re-rank the rest from
+  the NEW profile.
 - `docs/emitted-code-roadmap.md`: a row in the workstream's format when the change is a codegen change.
 - README + log + roadmap go into the round's one commit (§4), which `/land` pushes.
 
