@@ -1,0 +1,148 @@
+// PreemptionDepth — the compile-time certificate that honouring a preemption request cannot run a green thread
+// off its stack.
+//
+// ⭐⭐ **WHY IT HAS TO BE ADDED UP AND CANNOT BE TRUSTED.** A request is honoured at a prologue guard, BEFORE
+// the guarded function has a frame (`GtRuntime.GtStackGuardPreempt`), and its whole call tree —
+// `__gt_guard_tripped`'s preempt arm, `__gt_preempt` and everything the park reaches down to the context switch —
+// runs on the thread's own stack with no guard of its own, riding the margin every guarded prologue projects
+// (`GtRuntime.gtStackGuardMargin`). Those frames are the register allocator's to size, so the only honest
+// answer is the one read off the frames this backend laid out, after the prologue pass.
+//
+// ⚠ **A CALL IT CANNOT SIZE IS REFUSED, NEVER GUESSED.** An indirect call, a callee that is neither a laid-out
+// function nor a chunk whose depth is known here, and a tree deeper than any the runtime has are each a build
+// failure naming what reached it, so a change that grows the tree has to state what it costs.
+
+// One step down from a frame in the tree: a named callee whose own tree is added up, `below` bytes beneath its
+// caller's frame; or a call whose whole depth on the thread's stack is known where it is emitted.
+export union UnguardedCallStep
+	callee(name ByteArray, below StackSize)
+	fixed(bytes StackSize)
+end 'UnguardedCallStep'
+
+// How many more frames the walk may descend. Its bound is deeper than the preemption's tree has any reason to be —
+// it is a handful of frames down to the context switch — and ends the walk on a recursive runtime function.
+typealias UnguardedTreeFrames = int(0 to 16)
+
+let MaxUnguardedTreeFrames = 16 as UnguardedTreeFrames
+
+// Refuse the build when the preemption's whole tree is deeper than the guard margin. Called by both native
+// backends of a green-thread program, after the prologue pass has fixed every frame.
+export function requirePreemptionFitsTheGuardMargin(module TargetModule, funcNames FunctionNameIndex, target Target)
+	let arm = preemptArmStackBytes(target)
+	let tree = unguardedTreeBytes(module, funcNames: funcNames, name: GtPreemptName, target: target, framesLeft: MaxUnguardedTreeFrames)
+	let margin = gtStackGuardMargin(target)
+	logDebug(LogCategory.codegen, message: function() gives "preemption depth ({targetToString(target)}): arm {arm} + tree {tree} = {arm + tree} of a {margin}-byte guard margin")
+
+	if (arm + tree) as ParsedInt > margin 'overflowsTheMargin'
+		panic("requirePreemptionFitsTheGuardMargin: honouring a preemption request takes {arm} bytes for `{String.from(GtGuardTrippedName)}`'s preempt arm and {tree} for `{String.from(GtPreemptName)}`'s call tree on {targetToString(target)}, {arm + tree} in all, but it runs below a guarded function's entry inside the {margin}-byte guard margin — a thread preempted near its guard word would write past its stack. Shrink the tree, or raise GtRuntime.GtStackGuardMarginBytes and measure the self-compile")
+	end 'overflowsTheMargin'
+end 'requirePreemptionFitsTheGuardMargin'
+
+function preemptArmStackBytes(target Target) returns StackSize
+	return match target.cpu 'cpu'
+		x64 gives x64GtPreemptArmStackBytes()
+		arm64 gives arm64GtPreemptArmStackBytes()
+		wasm32 panic("preemptArmStackBytes: wasm32-wasi has no green-thread stack to preempt on — `targetProvidesFacility` denies `greenThreads` there")
+	end 'cpu'
+end 'preemptArmStackBytes'
+
+// The deepest the tree under `name` reaches below its caller's frame: `name`'s own frame plus its deepest call.
+function unguardedTreeBytes(module TargetModule, funcNames FunctionNameIndex, name ByteArray, target Target, framesLeft UnguardedTreeFrames) returns StackSize
+	if framesLeft == 0 'tooDeep'
+		panic("requirePreemptionFitsTheGuardMargin: the tree under `{String.from(GtPreemptName)}` is more than {MaxUnguardedTreeFrames} frames deep at `{String.from(name)}` — a recursive runtime function has no bound this certificate can state")
+	end 'tooDeep'
+
+	if name.equals(GtContextSwitchName) 'theSwitch'
+		return gtInitialFrameBytes(target) as StackSize
+	end 'theSwitch'
+
+	if name.equals(HostThreadCpuName) 'theThreadClock'
+		return hostThreadCpuStackBytes(target)
+	end 'theThreadClock'
+
+	let index = try funcNames.byName.get(name) otherwise panic("requirePreemptionFitsTheGuardMargin: `{String.from(name)}`, in the tree under `{String.from(GtPreemptName)}`, is neither a function this module laid out nor a chunk whose stack this certificate knows — state its depth here")
+	let func = try module.functions.get(index) otherwise panic("requirePreemptionFitsTheGuardMargin: `{String.from(name)}` is function {index} of the name index, past the {module.functions.count()} the target module holds")
+
+	if not func.name.equals(name) 'indexDrifted'
+		panic("requirePreemptionFitsTheGuardMargin: the name index places `{String.from(name)}` at function {index}, which the target module holds as `{String.from(func.name)}`")
+	end 'indexDrifted'
+
+	let framesBelow = framesLeft - 1
+	var deepest = 0 as StackSize
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("requirePreemptionFitsTheGuardMargin: blockRef from func.blockRefs not in module.blocks")
+
+		for opIdx in block.opRefs 'eachOp'
+			deepest = deeperOf(deepest, other: unguardedCallBytes(module, funcNames: funcNames, opIdx: opIdx, target: target, framesLeft: framesBelow))
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'terminator'
+			deepest = deeperOf(deepest, other: unguardedCallBytes(module, funcNames: funcNames, opIdx: block.terminatorIndex(), target: target, framesLeft: framesBelow))
+		end 'terminator'
+	end 'eachBlock'
+
+	return callStackBytes(module, func: func, target: target) + deepest
+end 'unguardedTreeBytes'
+
+// What the op at `opIdx` adds below its function's frame: nothing unless it is a call.
+function unguardedCallBytes(module TargetModule, funcNames FunctionNameIndex, opIdx OpIndex, target Target, framesLeft UnguardedTreeFrames) returns StackSize
+	let op = try module.ops.get(opIdx) otherwise panic("requirePreemptionFitsTheGuardMargin: opIdx {opIdx} not in module.ops")
+
+	if not op.rawValue.isCall 'notACall'
+		return 0
+	end 'notACall'
+
+	return match callStepOf(op) 'step'
+		callee(name, below) gives below + unguardedTreeBytes(module, funcNames: funcNames, name: name, target: target, framesLeft: framesLeft)
+		fixed(bytes) gives bytes
+	end 'step'
+end 'unguardedCallBytes'
+
+// The step a call op takes, for every call op either native backend emits.
+function callStepOf(op TargetOp) returns UnguardedCallStep
+	return match op 'call'
+		callDirect(targetName) gives UnguardedCallStep.callee(targetName, below: 0)
+		arm64BranchLink(targetName) gives UnguardedCallStep.callee(targetName, below: 0)
+		iatCall(slotIndex) gives x64ShimmedImportStep(slotIndex)
+		arm64ImportCall gives UnguardedCallStep.fixed(Arm64ImportCallGtStackBytes)
+		x64Syscall or
+			arm64Syscall gives UnguardedCallStep.fixed(0)
+		callReg or
+			callMem or
+			arm64BranchLinkReg panic("requirePreemptionFitsTheGuardMargin: an indirect call in the tree under `{String.from(GtPreemptName)}` names no callee whose frame could be added up")
+		default panic("requirePreemptionFitsTheGuardMargin: a call op this certificate does not know is in the tree under `{String.from(GtPreemptName)}` — state what it costs the thread's stack here")
+	end 'call'
+end 'callStepOf'
+
+// `mrt_host_thread_cpu`'s whole depth on the thread's stack, on the lanes whose thread clock is a chunk — the
+// park's clock read reaches it. x64-windows reads the clock through an import instead.
+function hostThreadCpuStackBytes(target Target) returns StackSize
+	return match target.os 'os'
+		linux gives linuxThreadCpuStackBytes(target)
+		macos gives arm64DarwinThreadCpuStackBytes()
+		windows panic("hostThreadCpuStackBytes: {targetToString(target)} reads the thread clock through an import, so `{String.from(HostThreadCpuName)}` is not a chunk there")
+		wasi panic("hostThreadCpuStackBytes: wasm32-wasi lays out no native frames")
+	end 'os'
+end 'hostThreadCpuStackBytes'
+
+function linuxThreadCpuStackBytes(target Target) returns StackSize
+	return match target.cpu 'cpu'
+		x64 gives x64LinuxThreadCpuStackBytes()
+		arm64 gives arm64LinuxThreadCpuStackBytes()
+		wasm32 panic("linuxThreadCpuStackBytes: there is no wasm32-linux lane")
+	end 'cpu'
+end 'linuxThreadCpuStackBytes'
+
+// Everything one call of `func` puts on the stack below its caller's frame.
+function callStackBytes(module TargetModule, func IrFunction, target Target) returns StackSize
+	return match target.cpu 'cpu'
+		x64 gives x64CallStackBytes(module, func: func)
+		arm64 gives arm64FunctionFrameBytes(module, func: func)
+		wasm32 panic("callStackBytes: wasm32-wasi lays out no native frames")
+	end 'cpu'
+end 'callStackBytes'
+
+function deeperOf(a StackSize, other StackSize) returns StackSize
+	return a if a >= other else other
+end 'deeperOf'

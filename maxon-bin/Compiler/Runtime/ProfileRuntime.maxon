@@ -102,7 +102,6 @@ let ModuleSnapshotFlags = SnapModule or SnapModule32
 
 // `sizeof(MEMORY_BASIC_INFORMATION)` on x64: BaseAddress, AllocationBase, AllocationProtect + PartitionId,
 // RegionSize, and the State/Protect/Type triple with its tail padding.
-let MemoryBasicInformationBytes = 48
 
 // `CONTEXT.ContextFlags`, and the two families `GetThreadContext` is asked to fill: CONTEXT_CONTROL supplies
 // RIP and RSP, CONTEXT_INTEGER supplies RBP.
@@ -122,7 +121,7 @@ let Win32False = 0
 let RegionQueryFailed = 0
 
 // The `MEMORY_BASIC_INFORMATION` displacements only this file touches; the allocation base, which the
-// profiler reads back, is `ProfileRegionAllocationBaseOffset`.
+// profiler reads back, is `ProfileRegionAllocationBaseOffset`, and the record's size `ProfileRegionRecordBytes`.
 let MbiBaseAddressOffset = 0
 let MbiRegionSizeOffset = 24
 
@@ -236,15 +235,14 @@ function buildProfileThreadId(module StdModule)
 end 'buildProfileThreadId'
 
 // ⭐⭐ **`__prof_thread_cycles(threadHandle) -> ticks` — WHAT MAKES THIS A CPU PROFILER RATHER THAN A
-// WALL-CLOCK ONE.** An idle scheduler worker is parked in a timed wait and burns no cycles; sampling it
-// anyway would attribute a share of the profile to a thread that did not run, and on a mostly-idle program
-// that share is most of the profile. A thread whose count has not moved is skipped ENTIRELY — never even
-// suspended, so measuring an idle worker does not perturb it.
+// WALL-CLOCK ONE.** The sampler charges a thread one sample per tick's worth of the cycles this counts, so an
+// idle scheduler worker, parked in a timed wait and burning none, is charged nothing and never suspended —
+// measuring it does not perturb it.
 //
 // ⚠ **THE OUT-PARAM IS SEEDED WITH ZERO, WHICH IS ALSO THE ANSWER FOR A THREAD THAT HAS GONE.** The BOOL
-// `QueryThreadCycleTime` returns is not this op's to hand back, and it does not need to be: a stale reading
-// and a zero both compare EQUAL to the previous tick's, which is the "it did not run" branch — and a thread
-// that really has exited is dropped at the next `__prof_sample`, whose suspend refuses.
+// `QueryThreadCycleTime` returns is not this op's to hand back, and it does not need to be: a zero is BELOW
+// every baseline, so it charges nothing, and a thread that really has exited stays uncharged until the next
+// refresh of the thread table drops it.
 function buildProfileThreadCycles(module StdModule)
 	var func = IrFunction.createFromStd(ProfileThreadCyclesName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -287,6 +285,11 @@ end 'buildProfileThreadCycles'
 // ⚠ **`mbiPtr`'s ALLOCATION BASE IS CLEARED BEFORE THE QUERY**, so a miss reads back as 0 rather than as
 // whatever the previous sample left there — a stack identity taken from a stale word would merge two
 // unrelated threads' samples into one row.
+//
+// ⭐ **THE THREAD's CYCLE COUNT IS READ WHILE IT IS STILL SUSPENDED**, in the resume block every suspended edge
+// reaches, into the word `ProfileRegionSuspendedCyclesOffset` names: the sampler's next charge is measured from
+// it, so neither the suspend's own kernel cycles nor what the thread runs while the sampler walks its copied
+// stack fall on the wrong side of the baseline.
 function buildProfileSample(module StdModule)
 	var func = IrFunction.createFromStd(ProfileSampleName, returnType: StdReturnType.value(StdType.i64), paramCount: 6, paramTypes: sixI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(6)
@@ -341,7 +344,7 @@ function buildProfileSample(module StdModule)
 	// The registers ARE read from here on, so the answer becomes a byte count — zero until a copy succeeds.
 	emitStoreField(module, block: queryRegion, record: resultPtr, offset: 0, value: zero)
 	let stackPointer = emitLoadField(module, block: queryRegion, record: ctxPtr, offset: ProfileContextRspOffset, ids: ids)
-	let mbiBytes = emitConst(module, block: queryRegion, value: MemoryBasicInformationBytes, ids: ids)
+	let mbiBytes = emitConst(module, block: queryRegion, value: ProfileRegionRecordBytes, ids: ids)
 	let queried = emitHostSample(module, block: queryRegion, service: ProfileHostCall.queryRegion, a0: proc, a1: stackPointer, a2: mbiPtr, a3: mbiBytes, a4: zero, a5: zero, ids: ids)
 	let queryMiss = emitConst(module, block: queryRegion, value: RegionQueryFailed, ids: ids)
 	let regionMissing = emitCmp(module, block: queryRegion, a: queried, b: queryMiss, pred: StdCmpPred.eq, ids: ids)
@@ -378,6 +381,8 @@ function buildProfileSample(module StdModule)
 	module.setTerminator(partialCopy, op: StdOp.branch(resume.id))
 
 	// ⭐ THE RESUME. Unconditional, and reached from every edge out of the suspended region.
+	let cyclesPtr = emitBin(module, block: resume, a: mbiPtr, b: emitConst(module, block: resume, value: ProfileRegionSuspendedCyclesOffset, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	module.appendOp(resume, op: StdOp.osThreadCpuTicks(thread, outPtrId: cyclesPtr))
 	let resumeZero = emitConst(module, block: resume, value: 0, ids: ids)
 	_ = emitHostSample(module, block: resume, service: ProfileHostCall.resumeThread, a0: thread, a1: resumeZero, a2: resumeZero, a3: resumeZero, a4: resumeZero, a5: resumeZero, ids: ids)
 	module.setTerminator(resume, op: StdOp.branch(answer.id))

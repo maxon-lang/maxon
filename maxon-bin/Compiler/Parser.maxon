@@ -5945,6 +5945,26 @@ let BuiltinsSchedGtRecycleCountName = b"__Builtins.schedGtRecycleCount"
 // It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
 let SchedGtRecycleCountArity = 0 as ParamCount
 
+// ⭐⭐ **`__Builtins.schedPreemptCount()` — how many preemption requests green threads have honoured.** It answers
+// the sum of every processor's preemption counter, so a program can observe that a thread which ran too long
+// really gave its processor up rather than that its output merely came out in a better order. The surface is
+// invented here on the argumentless-integer shape the family already has; `SchedRuntime.SchedPreemptCountName`
+// owns what the count costs.
+let BuiltinsSchedPreemptCountName = b"__Builtins.schedPreemptCount"
+
+// It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
+let SchedPreemptCountArity = 0 as ParamCount
+
+// ⭐⭐ **`__Builtins.schedTimerStartCount()` — how many machines the system monitor has started for an overdue
+// timer.** With `schedPreemptCount()` and `schedRetakeCount()` it is everything the monitor does that can put a
+// machine to work, which is what an `async`-only program's one-worker reading is conditional on. The surface is
+// invented here on the argumentless-integer shape the family already has; `SchedRuntime.SchedTimerStartsLabel`
+// owns what it counts.
+let BuiltinsSchedTimerStartCountName = b"__Builtins.schedTimerStartCount"
+
+// It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
+let SchedTimerStartCountArity = 0 as ParamCount
+
 // ⭐⭐ **`__Builtins.schedIdleProcessorCount()` — how many processors sit idle with no machine, Go's
 // `sched.npidle`.** A live count rather than an outcome: it is what the spinner cap reads, and a program reads
 // it to observe that its workers really gave their processors back. The surface is invented here on the
@@ -83053,6 +83073,18 @@ export type Parser
 			if callee.equals(BuiltinsSchedGtRecycleCountName) 'schedGtRecycleCount'
 				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSchedGtRecycleCountName, runtimeName: SchedGtRecycleCountName, arity: SchedGtRecycleCountArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'schedGtRecycleCount'
+
+			// The preemption count: the same shape, and it sets `usesGt` for the same reason. See
+			// `SchedRuntime.SchedPreemptCountName`.
+			if callee.equals(BuiltinsSchedPreemptCountName) 'schedPreemptCount'
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSchedPreemptCountName, runtimeName: SchedPreemptCountName, arity: SchedPreemptCountArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
+			end 'schedPreemptCount'
+
+			// The monitor's timer-start count: the same shape, and it sets `usesGt` for the same reason. See
+			// `SchedRuntime.SchedTimerStartsLabel`.
+			if callee.equals(BuiltinsSchedTimerStartCountName) 'schedTimerStartCount'
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSchedTimerStartCountName, runtimeName: SchedTimerStartCountName, arity: SchedTimerStartCountArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
+			end 'schedTimerStartCount'
 
 			// The idle-processor count: the same shape, and it sets `usesGt` for the same reason. See
 			// `SchedRuntime.SchedIdleProcessorCountName`.

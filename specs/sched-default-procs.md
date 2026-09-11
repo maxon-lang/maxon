@@ -111,8 +111,8 @@ once, inside `__sched_init_procs`, before a single green thread runs and without
 How many worker Ms get built out of those Ps is a consequence of the WORK — the scheduler's business, not
 the marker's promise. `schedMaxActiveWorkers()` is unchanged and still honest about what it is, a
 measurement of an outcome; it belongs in cases that can tolerate one, like
-`builtins-cpu-parallel.md`'s `sched-max-active-workers-is-one-under-async`, whose subject is a program that
-provably builds no second M at all.
+`builtins-cpu-parallel.md`'s `sched-max-active-workers-is-one-under-async`, whose program builds no second M
+unless the system monitor starts one, and reads the monitor's counters to say which.
 
 ### What the four cases below share, and why they can share it
 

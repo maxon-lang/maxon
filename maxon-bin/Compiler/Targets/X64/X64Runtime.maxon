@@ -331,6 +331,12 @@ export type X64RuntimeAsm
 		}
 	end 'beginFunction'
 
+	// Everything one call of this chunk puts on its caller's stack: the return address and the pushed rbp, which
+	// `ChunkEntryWordsBytes` counts, and the frame.
+	export function stackBytesPerCall() returns StackSize
+		return (ChunkEntryWordsBytes as StackSize) + self.frameBytes
+	end 'stackBytesPerCall'
+
 	// Close a function: the epilogue (the exact mirror of the prologue — `add rsp` undoes
 	// the `sub`, `pop rbp` the `push`, so rsp comes home by balanced arithmetic), the `ret`,
 	// then the string pool, then resolve every chunk-local rel32 now that all of it is
@@ -642,8 +648,8 @@ let UnguardedDiagnosticChainBytes = 528 + 56
 //
 // The frame is read back from `beginFunction` rather than recomputed, so this certificate cannot come to
 // disagree with the frame it certifies.
-function requireWriteStreamFitsGreenThreadStack(frameBytes StackSize, target Target)
-	let footprint = (frameBytes as ParsedInt) + ChunkEntryWordsBytes
+function requireWriteStreamFitsGreenThreadStack(asm X64RuntimeAsm, target Target)
+	let footprint = asm.stackBytesPerCall() as ParsedInt
 	let budget = gtStackGuardMargin(target) - UnguardedDiagnosticChainBytes
 
 	if footprint > budget 'overflowsGreenThreadStack'
@@ -709,7 +715,7 @@ function buildWriteStreamChunk(usesGt bool, target Target) returns FunctionCodeC
 
 	let wideSlots = writeStreamWideSlots()
 	var asm = X64RuntimeAsm.beginFunction(((WriteStreamSlotWide + wideSlots) as StackSize), outgoingStackArgBytes: ((writeStreamOutgoingArgWords() * SpillSlotBytes) as StackSize))
-	requireWriteStreamFitsGreenThreadStack(asm.frameBytes, target: target)
+	requireWriteStreamFitsGreenThreadStack(asm, target: target)
 
 	// The buffer grows UPWARD in memory from the LAST of the slots it occupies, because slots grow downward
 	// from rbp — `mrt_write_hex64`'s idiom.
@@ -1464,14 +1470,14 @@ end 'buildPanicChunk'
 // runs, projecting one margin as its frame — `requireWriteStreamFitsGreenThreadStack` certifies that the
 // deepest un-guarded chain, x64-Windows' through `mrt_write_stream`, fits in one — and the grower relocates
 // the stack before a byte is printed. It sits after the prologue, which the guard allows: the grower rebases
-// the live rbp and every link above it, and this frame holds no stack address. Only a green-thread program has
-// the scheduler words the guard reads.
+// the live rbp and every link above it, and this frame holds no stack address. It never parks
+// (`GtGuardSite.mrtPanic`). Only a green-thread program has the scheduler words the guard reads.
 function emitPanicStackGuard(asm X64RuntimeAsm, usesGt bool, target Target)
 	if not usesGt 'noGreenThreads'
 		return
 	end 'noGreenThreads'
 
-	emitGtStackGuard(asm.code, callFixups: asm.callFixups, rdataRelocs: asm.rdataRelocs, frameBytes: gtStackGuardMargin(target) as StackSize, margin: gtStackGuardMargin(target), os: target.os)
+	emitGtStackGuard(asm.code, callFixups: asm.callFixups, rdataRelocs: asm.rdataRelocs, frameBytes: gtStackGuardMargin(target) as StackSize, margin: gtStackGuardMargin(target), site: GtGuardSite.mrtPanic, target: target)
 end 'emitPanicStackGuard'
 
 // ⭐⭐ **PUBLISH THE COUNTERS AN ABORTING RUN DID REACH, MARKED `ABORTED`.** The entry stub's dump is the

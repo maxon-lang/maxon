@@ -2194,6 +2194,12 @@ export function arm64EmitBranchLink(code ByteArray, callFixups CallFixupArray, t
 	emitArm64Insn(code, insn: Arm64OpBl)
 end 'arm64EmitBranchLink'
 
+// `b` to a named function — a tail call, its imm26 resolved by name as `arm64EmitBranchLink`'s is.
+module function arm64EmitTailBranch(code ByteArray, callFixups CallFixupArray, targetName ByteArray)
+	callFixups.push(CallFixup.create(code.count(), targetName: targetName))
+	emitArm64Insn(code, insn: Arm64OpB)
+end 'arm64EmitTailBranch'
+
 // A GOT-indirect import call — the macOS twin of x64's `iatCall`: the import's address into x16
 // (`arm64EmitLoadImportAddress`), then `blr x16`. x16 is the IP scratch, free to clobber; the import reads
 // its arguments from x0.. as usual.
@@ -2574,7 +2580,7 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThrea
 		// carries the measurement (a `__`-name test handed the guard to a user function declared in
 		// `stdlib/Builtins.maxon` and segfaulted a green thread) and the split from `isRuntimeFunction`.
 		if isFirstBlock and guarded 'guard'
-			emitArm64GtStackGuard(code, callFixups: callFixups, rdataRelocs: rdataRelocs, frameBytes: arm64PrologueFrameBytes(module, block: block), margin: gtStackGuardMargin(target), os: target.os)
+			emitArm64GtStackGuard(code, callFixups: callFixups, rdataRelocs: rdataRelocs, frameBytes: arm64PrologueFrameBytes(module, block: block), margin: gtStackGuardMargin(target), site: GtGuardSite.functionEntry, target: target)
 		end 'guard'
 
 		isFirstBlock = false
@@ -2622,17 +2628,18 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThrea
 	return chunk
 end 'emitArm64FunctionChunk'
 
-// The frame the sidecar reports for `func`, read off the same prologue op the stack guard projects —
-// so the two cannot come to disagree about one function's frame.
-function arm64FunctionFrameBytes(module TargetModule, func IrFunction) returns StackSize
-	let entryRef = try func.blockRefs.get(0) otherwise return 0
-	let entry = try module.blocks.get(entryRef) otherwise return 0
+// `func`'s whole frame — everything one call of it puts on the stack, since `bl` pushes nothing — read off the
+// same prologue op the stack guard projects, so the two cannot come to disagree about one function's frame. The
+// sidecar reports it, and `PreemptionDepth.requirePreemptionFitsTheGuardMargin` adds a call tree up from it.
+export function arm64FunctionFrameBytes(module TargetModule, func IrFunction) returns StackSize
+	let entryRef = try func.blockRefs.get(0) otherwise panic("arm64FunctionFrameBytes: '{String.from(func.name)}' has no blocks — every lowered function has an entry block, which the frame pass opens")
+	let entry = try module.blocks.get(entryRef) otherwise panic("arm64FunctionFrameBytes: blockRef from func.blockRefs not in module.blocks")
 
 	return arm64PrologueFrameBytes(module, block: entry)
 end 'arm64FunctionFrameBytes'
 
 // ⭐ **THE FRAME THE GUARD PROJECTS, READ OFF THE PROLOGUE OP RATHER THAN RE-DERIVED.** x64's guard
-// recomputes the number with `computeGuardFrameBytes`, because its prologue is a `push`/`sub` sequence with
+// recomputes the number with `x64PrologueFrameOf`, because its prologue is a `push`/`sub` sequence with
 // no single op carrying the total. arm64's IS one op — `insertArm64PrologueAtEntry` prepends
 // `arm64Prologue(frameSize, recordOffset)` at index 0 of the entry block — so the guard reads the very word
 // the prologue will reserve. That is DERIVE rather than CHECK: the two cannot come to disagree, where two
@@ -2937,6 +2944,11 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	let prologueProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.prologueEpilogue)
 	insertArm64PrologueEpilogue(targetModule, target: target)
 	recordPhase(project, phase: CompilePhase.prologueEpilogue, probe: prologueProbe)
+
+	// A preemption request is honoured below a guarded function's entry, in frames sized only now.
+	if usage.usesGt 'preemptionDepth'
+		requirePreemptionFitsTheGuardMargin(targetModule, funcNames: funcNames, target: target)
+	end 'preemptionDepth'
 
 	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
 	var chunks = FunctionCodeChunkArray.create()

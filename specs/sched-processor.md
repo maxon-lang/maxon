@@ -67,7 +67,8 @@ the scheduler's own per-schedule walks.
 of the green thread that called it, which joins that green thread's strand and runs only on the machine
 holding the strand — `sched-runqueue.md` is where that is stated in full. **A coroutine is never a token on
 a run queue**, so an `async`-only program publishes one token, `main`'s, and a program whose only green
-thread is `main` keeps one M at every `MAXON_MAX_PROCS` (`SchedRuntime.maxon`'s header says why).
+thread is `main` needs a second M only when the system monitor steps in — a preemption, a retake from a
+kernel call, or an overdue timer (`builtins-cpu-parallel.md` pins that exactly).
 
 ⛔ **THAT IS NOW A STATEMENT ABOUT `async`, NOT ABOUT THE PROCESS, AND THE SENTENCE HERE USED TO CONFLATE
 THE TWO.** It said `DefaultMaxProcs` was 1 so an ordinary program built exactly one P and the rest sat

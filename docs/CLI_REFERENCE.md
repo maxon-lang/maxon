@@ -732,7 +732,7 @@ maxon profile run <exe> [--json|--folded] [--rate=<hz>] [--min-percent=<share>] 
 |--------|-------------|
 | `--json` | Emit the full report as JSON instead of a summary |
 | `--folded` | Emit collapsed stacks (`root;child;leaf <count>`) — the format flamegraph.pl, inferno and speedscope all read. `--json` and `--folded` are two different machine formats; asking for both is refused. |
-| `--rate=N` | Samples per second per running thread (default 1000, max 10000). A rate is **refused rather than clamped**; the report also states the rate it ACHIEVED beside the one requested, since the real ceiling is the OS timer's granularity. |
+| `--rate=N` | Samples per CPU-second a thread consumes (default 1000, min 1, max 10000): a thread is charged one sample per `1/N` s of CPU it actually used, so one that wakes for microseconds is charged almost nothing. A rate is **refused rather than clamped**; the report also states the rate it ACHIEVED beside the one requested, since the real ceiling is the OS timer's granularity, and how many stacks were captured beside how many samples they carry. |
 | `--min-percent=N` | Hide rows below this share of the run from the printed tables (default 1). How many were hidden is always reported. |
 | `--timeout=S` | Stop the program and report a PARTIAL profile after S seconds (default 600). Unlike coverage's deadline, reaching it is not fatal to the measurement — the samples taken so far are still a profile. |
 | `--target-env=N=V` | Set a variable in the PROFILED program's environment (repeatable). `MAXON_MAX_PROCS=N` pins the scheduler's worker count, which is what makes a green-thread profile reproducible rather than machine-dependent. |

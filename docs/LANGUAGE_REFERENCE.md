@@ -4664,17 +4664,18 @@ end 'join'
 
 ### Key Properties
 
-- **One owner** -- an `async` coroutine belongs to the green thread that created it, is driven only by that green thread, and never migrates to another OS thread
-- **Cooperative scheduling** -- context switches at `await` points, `sleep` calls, and I/O operations
+- **One owner** -- an `async` coroutine belongs to the green thread that created it and is driven only by that green thread; it never leaves that green thread, and moves between OS threads only with it
+- **Coroutines switch only where they wait** -- a coroutine hands over to its siblings at `await` points, `sleep` calls, `Runtime.yield()` and I/O operations, never in between
+- **Green threads are preempted** -- a green thread (`main`'s included) that has held its processor for 10 ms is stopped at its next function entry and put behind every other runnable green thread, and may resume on another OS thread
 - **Growable stacks** -- every green thread, `main` included, starts on a 2KB stack (8KB on x64-Windows, which reserves 4KB of it for the OS's exception dispatch) that doubles until the frame asking fits, up to 1GB; past that the program aborts with exit 98
 - **Plain reference counting** -- because one green thread owns everything its coroutines touch, a retain or release has no second party and needs no atomic. Shared state that genuinely crosses OS threads (the runtime's own counters and queues) is a different question and is protected accordingly.
 - **Fire-and-forget safe** -- unawaited coroutines are drained at program exit
 
-These properties are the same on every target. `wasm32-wasi` differs only in the *mechanism* of suspension -- having no native stack switching, it implements it with Binaryen Asyncify, unwinding a live call stack into linear memory at an `await` and rewinding it on resume -- and not in the semantics. There is no multi-threaded carve-out to exclude it from: `async` reaches no worker thread and no work stealing on any target.
+`wasm32-wasi` has one OS thread and no preemption: a green thread there runs until it waits. It also differs in the *mechanism* of suspension -- having no native stack switching, it implements it with Binaryen Asyncify, unwinding a live call stack into linear memory at an `await` and rewinding it on resume -- and not in the semantics of where a coroutine switches.
 
-A **service** is where those six read differently, and it is the only place they do: a `spawn`ed green thread is scheduled by the P/M substrate, so it may run on another OS thread, may be stolen from one processor to another, and is what makes the ring, the work stealing and the worker loop reachable at all. The single-owner guarantee is unchanged and is what a send being a MOVE buys — the box crosses, and only one green thread ever holds it.
+A **service** is where these read differently: a `spawn`ed green thread is published to the P/M substrate from its first instruction, so it may run on another OS thread from the start, may be stolen from one processor to another, and is what fills the ring and keeps the worker loop busy. The single-owner guarantee is unchanged and is what a send being a MOVE buys — the box crosses, and only one green thread ever holds it.
 
-**How many processors a program gets: all of them**, by default — the scheduler builds one processor per logical CPU the OS reports. `MAXON_MAX_PROCS=N` in the environment sets that count exactly, clamped to the range `1 … cpuCount`, so it lowers as well as raises; a value that is not a processor count (unset, non-numeric, or below one) leaves the default alone and is never an error. It is `GOMAXPROCS` under another name. An `async`-only program is unaffected either way — its coroutines never leave the green thread that made them, whatever the count.
+**How many processors a program gets: all of them**, by default — the scheduler builds one processor per logical CPU the OS reports. `MAXON_MAX_PROCS=N` in the environment sets that count exactly, clamped to the range `1 … cpuCount`, so it lowers as well as raises; a value that is not a processor count (unset, non-numeric, or below one) leaves the default alone and is never an error. It is `GOMAXPROCS` under another name. An `async`-only program's coroutines never leave the green thread that made them, whatever the count; above one processor, that green thread may resume on another OS thread after it is preempted.
 
 ---
 

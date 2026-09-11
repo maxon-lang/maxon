@@ -1,6 +1,6 @@
-// Test: async-subprocess.store-overflow-caught
+// Test: async-subprocess.posix-store-overflow-caught
 function child() returns Integer
-	return try __Builtins.runProcess("cmd /c exit 1") otherwise 88
+	return try __Builtins.runProcess("sleep 2") otherwise 88
 end 'child'
 
 function main() returns ExitCode
@@ -144,40 +144,60 @@ data {
   __mm_alloc_count@0 = i64 0
   __gt_run_queue_head@8 = i64 0
   __gt_run_queue_tail@16 = i64 0
-  __gt_init_done@24 = i64 0
-  __gt_timer_count@32 = i64 0
-  __gt_timer_heap_base@40 = i64 0
-  __gt_timer_capacity@48 = i64 0
-  __gt_timer_seq@56 = i64 0
+  __gt_timer_count@24 = i64 0
+  __gt_timer_heap_base@32 = i64 0
+  __gt_timer_capacity@40 = i64 0
+  __gt_timer_seq@48 = i64 0
+  __gt_timer_when@56 = i64 9223372036854775807
   __gt_trace_counter@64 = i64 0
   __gt_proc_count@72 = i64 0
   __gt_proc_handles_base@80 = i64 0
   __gt_proc_gts_base@88 = i64 0
-  __gt_proc_wait_snapshot@96 = i64 0
-  __gt_proc_poller@104 = i64 0
-  __gt_live_count@112 = i64 0
-  __sched_progress@120 = i64 0
-  __sched_active_workers@128 = i64 1
-  __sched_max_active_workers@136 = i64 1
-  __sched_tls_index@144 = i64 0
-  __sched_tls_teb_offset@152 = i64 0
-  __sched_procs@160 = i64 0
-  __sched_allm@168 = i64 0
-  __sched_midle@176 = i64 0
-  __sched_pidle@184 = i64 0
-  __sched_num_procs@192 = i64 0
-  __sched_shutdown_flag@200 = i64 0
-  __sched_lock@208 = i64 0
-  __sched_nmspinning@216 = i64 0
-  __sched_parked_drivers@224 = i64 0
-  __sched_sysmon_started@232 = i64 0
-  __mrt_envp@240 = i64 0
-  __mrt_tls_next_key@248 = i64 0
-  __mrt_errno@256 = i64 0
-  __mrt_tls_ready@264 = i64 0
-  __slab_arena_list@272 = i64 0
-  __slab_arena_map_l1@280 = i64 0
-  __slab_state@288 = i64 0
+  __gt_live_count@96 = i64 0
+  __gt_seed_bytes@104 = i64 2048
+  __gt_stack_bytes_sum@112 = i64 0
+  __gt_stack_bytes_count@120 = i64 0
+  __gt_seed_sum_seen@128 = i64 0
+  __gt_seed_count_seen@136 = i64 0
+  __sched_active_workers@144 = i64 1
+  __sched_max_active_workers@152 = i64 1
+  __sched_tls_index@160 = i64 0
+  __sched_tls_teb_offset@168 = i64 0
+  __sched_procs@176 = i64 0
+  __sched_allm@184 = i64 0
+  __sched_midle@192 = i64 0
+  __sched_pidle@200 = i64 0
+  __gt_gfree_head@208 = i64 0
+  __gt_record_cursor@216 = i64 0
+  __gt_record_limit@224 = i64 0
+  __gt_records_carved@232 = i64 0
+  __sched_npidle@240 = i64 0
+  __sched_runq_size@248 = i64 0
+  __sched_mcount@256 = i64 0
+  __sched_nmidle@264 = i64 0
+  __sched_main_m@272 = i64 0
+  __sched_phase@280 = i64 0
+  __sched_lastpoll@288 = i64 0
+  __sched_poll_until@296 = i64 0
+  __sched_regain_head@304 = i64 0
+  __np_poller@312 = i64 0
+  __np_break@320 = i64 0
+  __np_wake_sig@328 = i64 0
+  __sched_num_procs@336 = i64 0
+  __sched_shutdown_flag@344 = i64 0
+  __sched_lock@352 = i64 0
+  __sched_nmspinning@360 = i64 0
+  __sched_needspinning@368 = i64 0
+  __sched_sysmon_started@376 = i64 0
+  __sched_sysmon_event@384 = i64 0
+  __sched_sysmon_wait@392 = i64 0
+  __mrt_envp@400 = i64 0
+  __mrt_tls_next_key@408 = i64 0
+  __mrt_errno@416 = i64 0
+  __mrt_tls_ready@424 = i64 0
+  __slab_arena_list@432 = i64 0
+  __slab_arena_map_l1@440 = i64 0
+  __slab_state@448 = i64 0
 }
 
 func @child {
@@ -185,7 +205,7 @@ func @child {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "cmd /c exit 1"
+    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "sleep 2"
     x64.callDirect __gt_process_run
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, trycont
@@ -667,11 +687,9 @@ func @main {
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 r15, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at async-subprocess.store-overflow-caught.test:137: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg r8, r15
     x64.epilogue 520
     x64.popReg r15
     x64.popReg r14
@@ -680,8 +698,10 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg r8, r15
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at async-subprocess.posix-store-overflow-caught.test:137: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 520
     x64.popReg r15
     x64.popReg r14

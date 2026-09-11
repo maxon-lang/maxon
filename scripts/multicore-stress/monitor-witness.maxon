@@ -1,0 +1,12 @@
+// "A coroutine-only program runs on one worker M and steals nothing" holds exactly unless the system monitor
+// stepped in: a preemption, a retake, or a machine started for an overdue timer can each put a second machine
+// to work that the program never asked for, and a second machine can steal a green thread readied onto a ring.
+// Their three counters are that exception, read off the runtime rather than inferred from timing, so a
+// coroutine program prints their sum AFTER its `workers=` and `steals=` readings — every counter is stepped
+// before the machine it may start — and `pin-matrix.sh` asserts the pin only where it reads 0.
+
+typealias MonitorActionCount = int(0 to u64.max)
+
+export function monitorActions() returns MonitorActionCount
+	return __Builtins.schedPreemptCount() + __Builtins.schedRetakeCount() + __Builtins.schedTimerStartCount()
+end 'monitorActions'

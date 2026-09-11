@@ -30,7 +30,11 @@ spawns_green_threads() {
 	list_has "$SPAWNING_PROGRAMS" "$1"
 }
 
-# ⚠ THE PRELUDE GOES ONLY TO PROGRAMS THAT CALL IT. `RuntimeUsage.scanRuntimeUsage` filters only
+# ⭐ WHICH COROUTINE PROGRAMS PRINT `monitor=` — the system monitor's three counters, which their one-worker,
+# no-steal pin is conditional on (`monitor-witness.maxon`). Each calls the prelude, so each is compiled with it.
+MONITOR_WITNESS_PROGRAMS="${MONITOR_WITNESS_PROGRAMS:-steal-torture drop-running-torture park-torture alloc-torture remote-free-torture refcount-torture}"
+
+# ⚠ A PRELUDE GOES ONLY TO PROGRAMS THAT CALL IT. `RuntimeUsage.scanRuntimeUsage` filters only
 # unreachable STDLIB functions, so an uncalled prelude would still install the scheduler queries into
 # every binary here — changing programs whose readings are dated.
 #
@@ -41,6 +45,8 @@ build_program() {
 
 	if spawns_green_threads "$prog"; then
 		"$MAXON" build "$@" "$MULTICORE_HERE/$prog.maxon" "$MULTICORE_HERE/worker-arrival.maxon" -o "$out"
+	elif list_has "$MONITOR_WITNESS_PROGRAMS" "$prog"; then
+		"$MAXON" build "$@" "$MULTICORE_HERE/$prog.maxon" "$MULTICORE_HERE/monitor-witness.maxon" -o "$out"
 	else
 		"$MAXON" build "$@" "$MULTICORE_HERE/$prog.maxon" -o "$out"
 	fi

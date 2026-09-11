@@ -95,6 +95,9 @@
 // the magic value that makes an alignment bug invisible.
 let FramePointerPushCount = 1 as RegCount
 
+// The return address a `call` pushes below its caller's frame.
+let CallReturnAddressWords = 1 as RegCount
+
 // Win64 requires a caller to reserve 32 bytes of SHADOW SPACE below its outgoing args
 // — scratch the callee may use for its first four register parameters. Every function
 // that makes a call reserves it, `mrt_start`'s hand-built 0x20 frame included.
@@ -136,7 +139,7 @@ export let calleeSavedXmmOrder = [X64Register.xmm6, X64Register.xmm7, X64Registe
 // panics, which is what that comment always claimed.
 export let XmmSaveSlotBytes = SpillSlotBytes
 
-typealias X64RegisterArray = Array with X64Register
+module typealias X64RegisterArray = Array with X64Register
 
 // Insert prologue/epilogue ops for every function in the module.
 export function insertPrologueEpilogue(module TargetModule, target Target)
@@ -166,7 +169,7 @@ function insertFrameForFunction(module TargetModule, func IrFunction)
 	let usedXmm = usedRegsFrom(calleeSavedXmmOrder, coloured: coloured)
 	let makesCall = functionMakesCall(module, func: func)
 
-	// The SAME `computeFrameBytes` the GT stack guard reaches through `computeGuardFrameBytes` — one formula, two
+	// The SAME `computeFrameBytes` the GT stack guard reaches through `x64PrologueFrameOf` — one formula, two
 	// callers, so the guard's projected rsp and this `sub rsp, N` can never disagree.
 	let frameBytes = computeFrameBytes(func, makesCall: makesCall, pushCount: usedCallee.count(), xmmSaveCount: usedXmm.count())
 
@@ -190,17 +193,36 @@ function insertFrameForFunction(module TargetModule, func IrFunction)
 	end 'eachBlock'
 end 'insertFrameForFunction'
 
-// The frame this function's prologue reserves with `sub rsp, N` — the SINGLE source of that number, so the
-// prologue pass and the GT stack guard (X64Backend's `emitFunctionChunk`, which projects rsp by exactly this
-// much) cannot derive two different frame sizes for one function. It is the `computeFrameBytes` expression
-// `insertFrameForFunction` used inline, lifted here and exported because the guard needs the same answer.
-export function computeGuardFrameBytes(module TargetModule, func IrFunction) returns StackSize
+// What a function's prologue lays below `push rbp`: the callee-saved GPRs its coloring used, and the frame
+// `sub rsp, N` reserves under them.
+module type X64PrologueFrame
+	export var pushCount as RegCount
+	export var frameBytes as StackSize
+
+	export static function create(pushCount RegCount, frameBytes StackSize) returns X64PrologueFrame
+		return Self{pushCount: pushCount, frameBytes: frameBytes}
+	end 'create'
+end 'X64PrologueFrame'
+
+// ⭐ **THE PROLOGUE's SHAPE, READ OFF THE COLORING ONCE** — the `computeFrameBytes` expression
+// `insertFrameForFunction` uses inline, so the GT stack guard (X64Backend's `emitFunctionChunk`, which projects rsp
+// by `frameBytes`) and the preemption certificate (`x64CallStackBytes`) cannot size one function two ways.
+module function x64PrologueFrameOf(module TargetModule, func IrFunction) returns X64PrologueFrame
 	let makesCall = functionMakesCall(module, func: func)
 	let coloured = colouredPhysicalRegs(module, func: func)
 	let pushCount = usedRegsFrom(calleeSavedOrder, coloured: coloured).count()
 	let xmmSaveCount = usedRegsFrom(calleeSavedXmmOrder, coloured: coloured).count()
-	return computeFrameBytes(func, makesCall: makesCall, pushCount: pushCount, xmmSaveCount: xmmSaveCount)
-end 'computeGuardFrameBytes'
+	return X64PrologueFrame.create(pushCount, frameBytes: computeFrameBytes(func, makesCall: makesCall, pushCount: pushCount, xmmSaveCount: xmmSaveCount))
+end 'x64PrologueFrameOf'
+
+// Everything one call of `func` puts on the stack below its caller's frame: the return address, the frame pointer
+// and callee-saved pushes, and the frame reserved under them. EXPORTED for
+// `PreemptionDepth.requirePreemptionFitsTheGuardMargin`, which adds a call tree up from these.
+export function x64CallStackBytes(module TargetModule, func IrFunction) returns StackSize
+	let frame = x64PrologueFrameOf(module, func: func)
+	let wordsBelowTheCall = CallReturnAddressWords + FramePointerPushCount + frame.pushCount
+	return (wordsBelowTheCall * StackWordBytes) as StackSize + frame.frameBytes
+end 'x64CallStackBytes'
 
 // The bytes to reserve with `sub rsp, N`.
 //   • A CALLER must leave rsp 16-byte aligned AT the call. Entry rsp ≡ 8 (mod 16) — the

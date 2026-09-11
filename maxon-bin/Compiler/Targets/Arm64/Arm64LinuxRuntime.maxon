@@ -335,7 +335,7 @@ end 'arm64LinuxStatLayout'
 //
 // ⚠ **THE INDICES ARE FIXED HERE, NOT PER CHUNK, BECAUSE `arm64LinuxReadClockTimespec` ADDRESSES THEM.**
 // Both clock chunks hold their out-param pointer in slot 0 and reserve these two above it
-// (`beginFunction(1 + LinuxTimespecSlots)`), so the fragment can form the address without being told where.
+// (`beginFunction(LinuxClockChunkSlots)`), so the fragment can form the address without being told where.
 // A chunk that reserved fewer would not be subtly wrong: `Arm64RuntimeAsm.slotOffset` PANICS on a slot
 // outside the frame it opened.
 let Arm64LinuxTimespecSecSlot = 1 as StackSize
@@ -487,7 +487,7 @@ end 'arm64LinuxReadClockTimespec'
 // 64-bit word some five centuries sooner than the FILETIME it is on its way to.
 function buildArm64LinuxWallClockChunk() returns FunctionCodeChunk
 	let SlotOutPtr = 0 as StackSize
-	var asm = Arm64RuntimeAsm.beginFunction(1 + LinuxTimespecSlots)
+	var asm = Arm64RuntimeAsm.beginFunction(LinuxClockChunkSlots)
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotOutPtr)
 	arm64LinuxReadClockTimespec(asm, clockId: LinuxClockRealtime)
@@ -522,7 +522,7 @@ end 'buildArm64LinuxWallClockChunk'
 // becomes `sec * 1e9 + nsec`, which is exactly the `uint64_t` Darwin's call hands over ready-made.
 function buildArm64LinuxThreadCpuChunk() returns FunctionCodeChunk
 	let SlotOutPtr = 0 as StackSize
-	var asm = Arm64RuntimeAsm.beginFunction(1 + LinuxTimespecSlots)
+	var asm = Arm64RuntimeAsm.beginFunction(LinuxClockChunkSlots)
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotOutPtr)
 	arm64LinuxReadClockTimespec(asm, clockId: LinuxClockThreadCpuTime)
@@ -533,6 +533,13 @@ function buildArm64LinuxThreadCpuChunk() returns FunctionCodeChunk
 
 	return asm.finishFunction(HostThreadCpuName)
 end 'buildArm64LinuxThreadCpuChunk'
+
+// What one call of `mrt_host_thread_cpu` costs a green thread's stack: its frame, and nothing below it, because
+// its clock read is a raw `svc`. EXPORTED for `PreemptionDepth.requirePreemptionFitsTheGuardMargin`, which
+// reaches it from a park's clock read.
+export function arm64LinuxThreadCpuStackBytes() returns StackSize
+	return Arm64RuntimeAsm.beginFunction(LinuxClockChunkSlots).stackBytesPerCall()
+end 'arm64LinuxThreadCpuStackBytes'
 
 // ==========================================================================
 // mrt_host_exe_path(x0 = bufPtr, x1 = bufLen) -> x0 = bytes written

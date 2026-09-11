@@ -208,6 +208,7 @@ let OpcodeCallIndirect = 0xFF  // group-5; with ModR/M /2 = call r/m64
 // coverage counter reading as an indirect call at the one site that greps for it would be the worse bug.
 let OpcodeGroup5 = 0xFF
 let OpcodeJmpRel32 = 0xE9  // jmp rel32 (unconditional near jump)
+let OpcodeJmpRel8 = 0xEB  // jmp rel8 (unconditional short jump)
 let OpcodePushBase = 0x50  // push r64 (50+r) — 64-bit operand size by default in long mode
 let OpcodePopBase = 0x58  // pop r64  (58+r) — the mirror of push
 
@@ -637,6 +638,15 @@ function encodeModRmExtDirect(code ByteArray, opcode MachineWord, ext MachineWor
 	emitModRmExt(code, ext: ext, rmField: rmField)
 end 'encodeModRmExtDirect'
 
+// The `[base + disp]` twin of `encodeModRmExtDirect`: prefix, opcode and a memory ModR/M whose reg field is the
+// opcode EXTENSION, so it needs no REX.R and names `rax` there. `wide` is REX.W, which a near call ignores and a
+// group-1 ALU form needs; callers append any trailing immediate.
+function encodeModRmExtBaseDisp(code ByteArray, opcode MachineWord, ext MachineWord, base X64Register, disp Imm32, wide bool)
+	emitRex(code, wide: wide, regField: X64Register.rax, rmField: base)
+	code.push(opcode)
+	emitBaseDispModRmBits(code, regFieldBits: ext, base: base, disp: disp)
+end 'encodeModRmExtBaseDisp'
+
 // Emit a `[base + disp]` MEMORY-operand instruction from its parts: the REX prefix (with
 // W/R/B), an optional two-byte-opcode escape, the opcode byte, and the ModR/M (+ SIB +
 // displacement) `emitBaseDispModRm` assembles. The memory-operand twin of
@@ -721,6 +731,14 @@ export function encodeGrp1RegImm32(code ByteArray, ext MachineWord, reg X64Regis
 	encodeModRmExtDirect(code, opcode: OpcodeGrp1Imm32, ext: ext, rmField: reg)
 	writeImm32Signed(code, value: imm)
 end 'encodeGrp1RegImm32'
+
+// The same GROUP-1 immediate forms on a 64-bit MEMORY operand — `REX.W 81 /ext [base + disp], id`. The GT stack
+// guard's cold path compares its guard word against the preemption request with it, which leaves every register
+// the guard does not already clobber untouched.
+export function encodeGrp1BaseDispImm32(code ByteArray, ext MachineWord, base X64Register, disp Imm32, imm Imm32)
+	encodeModRmExtBaseDisp(code, opcode: OpcodeGrp1Imm32, ext: ext, base: base, disp: disp, wide: true)
+	writeImm32Signed(code, value: imm)
+end 'encodeGrp1BaseDispImm32'
 
 // The GROUP-2 SHIFT forms, by a CONSTANT count (`REX.W C1 /ext ib`): `shl` (/4) and
 // `sar` (/7). The trailing byte is a COUNT, not a signed immediate — it is never
@@ -1303,6 +1321,11 @@ function encodeJmpPlaceholder(code ByteArray) returns CodeOffset
 	return dispOffset
 end 'encodeJmpPlaceholder'
 
+// `jmp rel32` to a named function — a tail call, its displacement resolved by name as `encodeCallDirect`'s is.
+module function encodeJmpDirect(code ByteArray, callFixups CallFixupArray, targetName ByteArray)
+	callFixups.push(CallFixup.create(encodeJmpPlaceholder(code), targetName: targetName))
+end 'encodeJmpDirect'
+
 // `jmp rel32` to a block. The displacement is left zero and a fixup records its offset;
 // `resolveChunkRel32Fixups` patches it once the target's chunk offset is known.
 export function encodeJmp(code ByteArray, rel32Fixups ChunkRel32FixupArray, targetBlockId BlockId)
@@ -1322,6 +1345,23 @@ end 'encodeJcc'
 function encodeJccBackward(code ByteArray, cond X64CondCode, targetOffset CodeOffset, what PatchSite)
 	patchChunkRel32(code, codeOffset: encodeJccPlaceholder(code, cond: cond), targetOffset: targetOffset, what: what)
 end 'encodeJccBackward'
+
+// `jmp rel8` BACKWARD to a byte offset already emitted into this buffer — two bytes where `encodeJmp` takes five,
+// for a loop an emitter lays down whole and knows is short. A target a signed byte cannot reach is an emitter that
+// grew past that promise, so it panics rather than quietly widening.
+export function encodeJmpBackwardShort(code ByteArray, targetOffset CodeOffset)
+	let rel = (targetOffset as ParsedInt) - ((code.count() + JmpRel8Bytes) as ParsedInt)
+
+	if rel < i8.min 'outOfReach'
+		panic("encodeJmpBackwardShort: the target at chunk offset {targetOffset} is {0 - rel} bytes back from the end of this jump, past a rel8's {0 - i8.min} — the loop that asked for a short jump is longer than it promised")
+	end 'outOfReach'
+
+	code.push(OpcodeJmpRel8)
+	code.push(imm32Bits(rel as Imm32) and 0xFF)
+end 'encodeJmpBackwardShort'
+
+// The bytes a `jmp rel8` occupies: the opcode and its displacement, which counts from their end.
+let JmpRel8Bytes = 2
 
 // Point a forward branch recorded by a placeholder emitter at the CURRENT end of `code` — the FORWARD twin
 // of `encodeJccBackward`, and the other half of what a macro-op containing a size dispatch needs.
@@ -1893,18 +1933,6 @@ export function encodeCallReg(code ByteArray, reg X64Register)
 	encodeModRmExtDirect(code, opcode: OpcodeCallIndirect, ext: Grp5ExtCall, rmField: reg)
 end 'encodeCallReg'
 
-// `call qword [base + disp]` through a memory operand — group-5 `/2`, mod=01/10 (P1.7a slice 2a). The
-// memory twin of `encodeCallReg`, and the whole point of the fused witness call: the callee pointer is read
-// from `[witnessAddr + slotOffset]` BY THE CALL and never occupies a register. REX.W is ignored for a near
-// call, so `wide: false` keeps the prefix minimal (only a REX.B for an r8-r15 base); the `/2` extension
-// rides the ModR/M reg field via `emitBaseDispModRmBits`, and `regField: rax` gives REX.R = 0 (an opcode
-// extension needs none), so a base in rax..rdi emits no REX at all (`call [rax+8]` = `FF 50 08`).
-function encodeCallMem(code ByteArray, base X64Register, disp Imm32)
-	emitRex(code, wide: false, regField: X64Register.rax, rmField: base)
-	code.push(OpcodeCallIndirect)
-	emitBaseDispModRmBits(code, regFieldBits: Grp5ExtCall, base: base, disp: disp)
-end 'encodeCallMem'
-
 // call [rip+disp32] through an IAT slot. The disp32 is left zero and an IAT
 // Relocation records its offset + slot; the PE writer patches it to the IAT
 // entry's RVA once section layout is fixed.
@@ -2308,9 +2336,10 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 		// were pre-moved into rdi/rsi/rdx/r10/r8/r9 by the OS-primitive lowering, exactly as a call's are.
 		x64Syscall(number) then encodeX64Syscall(code, number: number)
 
-		// P1.7a slice 2a: the fused witness call's memory-indirect `call qword [baseReg + disp]` — the callee
-		// pointer read from the witness table by the call itself, never virtualized.
-		callMem(baseReg, disp) then encodeCallMem(code, base: resolveGpr(baseReg), disp: disp)
+		// The fused witness call's `call qword [baseReg + disp]` — group-5 `/2` — which reads the callee pointer out
+		// of the witness table itself, so it never occupies a register. REX.W is ignored by a near call, so the
+		// prefix carries at most a REX.B (`call [rax+8]` = `FF 50 08`).
+		callMem(baseReg, disp) then encodeModRmExtBaseDisp(code, opcode: OpcodeCallIndirect, ext: Grp5ExtCall, base: resolveGpr(baseReg), disp: disp, wide: false)
 
 		// x64 places its own stack arguments through `storeBaseDispReg`/`loadRegBaseDisp` with an rsp/rbp base
 		// (see the dialect header for why arm64 cannot), so neither arm64 stack-argument op is ever produced
@@ -2428,16 +2457,16 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 	// and NEEDS the guard — see that predicate, which states why provenance and stack behaviour are
 	// different questions. Emitted here at the
 	// byte level (not as a TargetOp), exactly like the syscall shim — so it is invisible to the Target-IR goldens
-	// and verified by the RUN + disassembly instead. `computeGuardFrameBytes` is the SAME frame the prologue
+	// and verified by the RUN + disassembly instead. `x64PrologueFrameOf` answers the SAME frame the prologue
 	// reserves, so the guard projects rsp by exactly what the function consumes.
-	// Only a GT module's non-runtime functions can be guarded, so `computeGuardFrameBytes` (which allocates a
+	// Only a GT module's non-runtime functions can be guarded, so `x64PrologueFrameOf` (which allocates a
 	// callee-saved scan) is called ONLY for those — a non-GT module (the common case, and the whole scale corpus)
 	// pays nothing here.
 	let mightGuard = usesGt and not skipsGreenThreadStackGuard(func)
 	var guardFrameBytes = 0 as StackSize
 
 	if mightGuard 'guardFrame'
-		guardFrameBytes = computeGuardFrameBytes(module, func: func)
+		guardFrameBytes = x64PrologueFrameOf(module, func: func).frameBytes
 	end 'guardFrame'
 
 	let emitGuard = mightGuard and guardFrameBytes > 0
@@ -2460,7 +2489,7 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 		chunkLabelOffsets.place(block.id, value: code.count())
 
 		if isFirstBlock and emitGuard 'guard'
-			emitGtStackGuard(code, callFixups: callFixups, rdataRelocs: rdataRelocs, frameBytes: guardFrameBytes, margin: gtStackGuardMargin(target), os: target.os)
+			emitGtStackGuard(code, callFixups: callFixups, rdataRelocs: rdataRelocs, frameBytes: guardFrameBytes, margin: gtStackGuardMargin(target), site: GtGuardSite.functionEntry, target: target)
 		end 'guard'
 
 		isFirstBlock = false
@@ -2505,7 +2534,7 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 end 'emitFunctionChunk'
 
 // ⭐ **THE FRAME THIS FUNCTION RESERVES, READ OFF THE PROLOGUE OP RATHER THAN DERIVED A SECOND TIME.**
-// `computeGuardFrameBytes` arrives at the same number by recomputing it; two derivations of one fact can
+// `x64PrologueFrameOf` arrives at the same number by recomputing it; two derivations of one fact can
 // come to disagree, and this one is only ever reported, never acted on.
 //
 // ⚠ **IT SCANS THE ENTRY BLOCK RATHER THAN READING INDEX 0** — x64's prologue is PREPENDED in reverse,

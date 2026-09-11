@@ -111,7 +111,8 @@ at any processor count, so the `async` answers below are the answers everywhere.
 CAS under contention and the Dekker
 fence on the ring publish are still out of reach from a case pinned to one P**; the multi-processor gate is
 `scripts/multicore-stress/pin-matrix.sh`, which drives the `multicore-stress` programs across
-`MAXON_MAX_PROCS ∈ {1, 2, 7, 12}` and asserts `workers=1 steals=0` of every COROUTINE-only program and
+`MAXON_MAX_PROCS ∈ {1, 2, 7, 12}` and asserts `workers=1 steals=0` of every COROUTINE-only program whose
+`monitor=` reading is 0 — a second M comes to such a program only from the system monitor — and
 `workers >= 2, steals > 0` at N ≥ 2 of every SPAWN-driven one.
 
 ⛔ **AND THE DROPPED-WHILE-EXECUTING SHAPE IS UNREACHABLE FOR A COROUTINE ALTOGETHER, WHATEVER ELSE THE
@@ -562,9 +563,10 @@ total=1000 stillParked=1000 bounded=true
 `__sched_procs` and sums every processor's steal counter, so it is the only way a Maxon program can
 observe that work stealing happened at all. A coroutine is never a token on a run queue — it waits on its
 green thread's strand queue, which only the machine holding the strand reads — so **no coroutine is ever
-stolen at any processor count**. The one token this program publishes is `main`'s, and a program whose only
-green thread is `main` keeps one M (`SchedRuntime.maxon`'s header says why), so nothing is there to steal
-it either: this reads 0 everywhere, not just at the one processor a spec case gets.
+stolen at any processor count**. The one token this program publishes to a ring is `main`'s, at bring-up,
+before the system monitor could have started a second machine; after that `main` never parks, and a
+preemption puts it on the global queue, which a machine takes from without stealing. So this reads 0
+everywhere, not just at the one processor a spec case gets.
 
 ⚠ **WHAT THE CASE PINS IS THE QUERY.** The builtin, the `__sched_steal_count` walk it roots and the per-P
 counter it reads are all emitted and all answer. `multicore-stress/pin-matrix.sh`, which can raise

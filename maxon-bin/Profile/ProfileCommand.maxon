@@ -42,10 +42,14 @@
 	let VerbArgument = 0
 	let FirstOptionArgument = 1
 
-	// ⭐ **THE DEFAULT RATE.** A kilohertz gives a thousand readings per second of runtime, so even a
-	// one-second program clears the trustworthy-sample floor by an order of magnitude, while costing the
-	// target one suspend/resume pair per millisecond per RUNNING thread.
+	// ⭐ **THE DEFAULT RATE.** A kilohertz charges a sample per millisecond of CPU a thread consumes, so even a
+	// program that keeps one core busy for a second clears the trustworthy-capture floor by an order of
+	// magnitude, while costing the target at most one suspend/resume pair per millisecond per busy thread.
 	let DefaultRateHz = 1000.0 as ProfileRate
+
+	// ⭐ **THE SLOWEST RATE THIS ACCEPTS.** A tick's worth of cycles is the counter's rate divided by this one,
+	// and a rate near zero would make that quotient overflow a machine word.
+	let MinProfileRateHz = 1.0 as ProfileRate
 
 	// ⭐ **THE FASTEST RATE THIS ACCEPTS, REFUSED RATHER THAN CLAMPED** — a rate reported back as though it
 	// were in force is a measurement setting that silently is not.
@@ -202,9 +206,9 @@
 			return "'{RateFlag}' needs a number, got '{raw}'"
 		end 'notANumber'
 
-		if not (rate > 0.0) 'notPositive'
-			return "'{RateFlag}' needs a positive number of samples per second, got '{raw}'"
-		end 'notPositive'
+		if not (rate >= MinProfileRateHz) 'tooSlow'
+			return "'{RateFlag}' needs at least {reportWholeNumberText(MinProfileRateHz as ReportNumber)} sample per CPU-second, got '{raw}'"
+		end 'tooSlow'
 
 		if rate > MaxRateHz 'pastTheCeiling'
 			return "'{RateFlag}' cannot exceed {reportWholeNumberText(MaxRateHz as ReportNumber)} samples per second. Note that asking for anything near it is already an over-ask: the loop ticks on an OS waitable timer whose granularity caps it near 1750 Hz on a typical host, and the report states the rate it ACHIEVED beside the one requested so you can see what you got, got '{raw}'"
@@ -345,17 +349,24 @@
 	function launchAndSample(request ProfileRequest, placement ProfilePlacement, sidecar MxdbgReader) returns ExitCode
 		let target = try FilePath.from(request.exePath) otherwise return refuseProfile("'{request.exePath}' is not a spellable path")
 
+		return match measureProfileCyclesPerTick(request.rateHz) 'calibration'
+			counterStood gives refuseProfile("this host's per-thread cycle counter did not advance while the sampler's own thread spun, so no thread's CPU can be measured here — a virtual machine or emulator that does not virtualize it")
+			measured(cyclesPerTick) gives launchAndSampleCalibrated(request, target: target, placement: placement, sidecar: sidecar, cyclesPerTick: cyclesPerTick)
+		end 'calibration'
+	end 'launchAndSample'
+
+	function launchAndSampleCalibrated(request ProfileRequest, target FilePath, placement ProfilePlacement, sidecar MxdbgReader, cyclesPerTick ProfileCyclesPerTick) returns ExitCode
 		// ⚠ ROOTED, because a spawn resolves a bare program name against PATH rather than against the working
 		// directory — so `dir/prog.exe` would be reported missing by the OS moments after this file found it.
 		var child = try StreamingSubprocess.spawnWithEnvironment(Executable.path(target.resolve(Directory.currentPath())), arguments: request.targetArgs, workingDirectory: inheritedWorkingDir(), environment: profileChildEnvironment(request)) otherwise (e) 'didNotStart'
 			return refuseProfile("could not run {reportPathDisplay(request.exePath)}: {e.displayReason()}")
 		end 'didNotStart'
 
-		let outcome = sampleUntilItEnds(request, placement: placement, sidecar: sidecar, child: child)
+		let outcome = sampleUntilItEnds(request, placement: placement, sidecar: sidecar, child: child, cyclesPerTick: cyclesPerTick)
 		child.release()
 
 		return outcome
-	end 'launchAndSample'
+	end 'launchAndSampleCalibrated'
 
 	// `--target-env` applied over the INHERITED environment, the same meaning `maxon debug --target-env=` has.
 	// A repeated NAME takes the LAST value, matching a shell assignment and the fact that an environment block
@@ -387,7 +398,7 @@
 	//
 	// ⚠ The session is built into a LOCAL `var` rather than handed back inside a union: it is written on
 	// every tick, and a value bound by a `match` arm is immutable (E3063).
-	function sampleUntilItEnds(request ProfileRequest, placement ProfilePlacement, sidecar MxdbgReader, child StreamingSubprocess) returns ExitCode
+	function sampleUntilItEnds(request ProfileRequest, placement ProfilePlacement, sidecar MxdbgReader, child StreamingSubprocess, cyclesPerTick ProfileCyclesPerTick) returns ExitCode
 		let pid = __Builtins.subprocessGetPid(child.handle) as ProfileWord
 
 		let process = __Builtins.profileOpenTarget(pid)
@@ -403,7 +414,7 @@
 		// ⚠ The session is built BEFORE the three are tested, so whatever was taken is released down the one
 		// path that releases anything — `release` skips the slots that came back empty. Testing first would
 		// need a second close sequence here, and two of them disagree the moment a fourth resource appears.
-		var session = ProfileSession.create(process, timer: timer, scratch: scratch, window: window)
+		var session = ProfileSession.create(process, timer: timer, scratch: scratch, window: window, cyclesPerTick: cyclesPerTick)
 
 		if timer == 0 or scratch == 0 or window == 0 'noSampler'
 			session.release()
@@ -421,8 +432,8 @@
 	end 'sampleUntilItEnds'
 
 	// ⭐⭐ **THE TICK LOOP, ON THE THREAD THAT CALLED IT.** Per tick, in this order: refresh the thread table
-	// if it is due, sample every thread that has run, drain what the child has said without blocking, check
-	// whether it is still alive, then step the ABSOLUTE deadline and wait for it.
+	// if it is due, charge every thread the CPU it has consumed, drain what the child has said without
+	// blocking, check whether it is still alive, then step the ABSOLUTE deadline and wait for it.
 	function runProfileTicks(request ProfileRequest, child StreamingSubprocess, session ProfileSession, image ProfileImage) returns ExitCode
 		var accumulator = ProfileAccumulator.create()
 		var frames = ProfileStringArray.create()
@@ -597,7 +608,7 @@
 		printError("  {JsonFlag}    emit the full report as JSON instead of a summary.\n")
 		printError("  {FoldedFlag}  emit collapsed stacks (`root;child;leaf <count>`), the format\n")
 		printError("            flamegraph.pl, inferno and speedscope all read.\n")
-		printError("  {RateFlag}N   samples per second per running thread (default {reportWholeNumberText(DefaultRateHz as ReportNumber)}, max {reportWholeNumberText(MaxRateHz as ReportNumber)}).\n")
+		printError("  {RateFlag}N   samples per CPU-second a thread consumes (default {reportWholeNumberText(DefaultRateHz as ReportNumber)}, min {reportWholeNumberText(MinProfileRateHz as ReportNumber)}, max {reportWholeNumberText(MaxRateHz as ReportNumber)}).\n")
 		printError("  {MinPercentFlag}N\n")
 		printError("            hide rows below this share of the run from the printed tables\n")
 		printError("            (default {reportWholeNumberText(DefaultMinPercent as ReportNumber)}); how many were hidden is always reported.\n")

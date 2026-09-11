@@ -164,8 +164,9 @@ So a provider stays **alive** correctly regardless of how many green threads bor
 ### The real hazard, and the rule
 
 > ⚖ **WHERE THE HAZARD ACTUALLY LIVES (EC10, 2026-08-27).** An `async` call creates a **coroutine of the
-> calling green thread**, which never migrates and never reaches a P ring, so the "stolen onto another P"
-> hazard below does not arise for `async`. It arises for **`spawn`** (reserved, `SERVICES_DESIGN.md`),
+> calling green thread**, which never leaves that green thread and never reaches a P ring. The green thread
+> itself may be preempted and resume on another OS thread, but it takes its coroutines with it and runs on
+> one OS thread at a time, so the "stolen onto another P" hazard below does not arise for `async`. It arises for **`spawn`** (reserved, `SERVICES_DESIGN.md`),
 > which is what W212's stealing tier was built for. ⇒ per-green-thread remains the only sound granularity
 > and ruling 7 stands; re-read this before extending the feature, because the hazard has moved to a
 > primitive that does not exist yet — not because it went away.

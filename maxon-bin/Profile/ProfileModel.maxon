@@ -27,6 +27,9 @@
 	// How many samples something was given, and how many ticks the loop took.
 	module typealias ProfileTally = int(0 to i64.max)
 
+	// How many samples one capture carries: every tick's worth of CPU its thread was charged when it was taken.
+	module typealias ProfileCharges = int(1 to i64.max)
+
 	// A share of the run, as the reporting floor and as a rendered percentage.
 	module typealias ProfileShare = float(0.0 to f64.max)
 
@@ -69,10 +72,11 @@
 	// A stack that could not be read at all, so not even a leaf survives.
 	module let ProfileUnreadableStackFrame = "[unreadable stack]"
 
-	// ⭐ **BELOW THIS, A BREAKDOWN IS ARITHMETIC RATHER THAN MEASUREMENT.** At forty samples a row shown as
-	// "5.0%" is two readings and one more would have made it 7.5%, so the report says so instead of presenting
-	// a confident table built on nothing.
-	let ProfileMinimumTrustworthySamples = 100 as ProfileTally
+	// ⭐ **BELOW THIS MANY CAPTURES, A BREAKDOWN IS ARITHMETIC RATHER THAN MEASUREMENT.** At forty captures a row
+	// shown as "5.0%" rests on two stacks and one more would have made it 7.5%, so the report says so instead of
+	// presenting a confident table built on nothing. Counted in CAPTURES, not samples: one capture may carry
+	// many samples after a stall or an over-asked rate, and it is still one reading.
+	let ProfileMinimumTrustworthyCaptures = 100 as ProfileTally
 
 	// The internal key separator — see this file's header for why it is not the `;` the folded face prints.
 	let ProfilePathSeparator = "\x01"
@@ -164,8 +168,9 @@
 
 	// What a sampling run measured — the ONE model all three faces render.
 	//
-	// ⭐ The honesty fields are not decoration. `samples` beside `achievedRateHz` and `durationSeconds` is the
-	// difference between 3 readings and 30,000, which look identical once divided; `samplesUnsymbolized` says
+	// ⭐ The honesty fields are not decoration. `captures` beside `samples` is the difference between 3 readings
+	// and 30,000, which look identical once divided, because one capture carries every sample its thread was
+	// charged at that tick; `samplesUnsymbolized` says
 	// how much of the profile landed in code this binary's sidecar cannot name, and therefore how much of the
 	// rest to trust; `stacksTruncated` matters more than its size suggests, because a walk runs leaf-to-ROOT
 	// and a truncated stack has lost its outermost frames.
@@ -177,6 +182,7 @@
 		export var ticks as ProfileTally
 		export var durationSeconds as ProfileSeconds
 		export var samples as ProfileTally
+		export var captures as ProfileTally
 		export var samplesUnsymbolized as ProfileTally
 		export var stacksUnreadable as ProfileTally
 		export var stacksTruncated as ProfileTally
@@ -185,23 +191,23 @@
 		export var nodes as ProfileNodeArray
 		export var stacks as ProfileStackArray
 
-		export static function create(exePath String, targetStatus ProfileTargetStatus, runCompleted bool, requestedRateHz ProfileRate, ticks ProfileTally, durationSeconds ProfileSeconds, samples ProfileTally, samplesUnsymbolized ProfileTally, stacksUnreadable ProfileTally, stacksTruncated ProfileTally, minPercent ProfileShare, functions ProfileFunctionArray, nodes ProfileNodeArray, stacks ProfileStackArray) returns ProfileReport
-			return Self{exePath: exePath, targetStatus: targetStatus, runCompleted: runCompleted, requestedRateHz: requestedRateHz, ticks: ticks, durationSeconds: durationSeconds, samples: samples, samplesUnsymbolized: samplesUnsymbolized, stacksUnreadable: stacksUnreadable, stacksTruncated: stacksTruncated, minPercent: minPercent, functions: functions, nodes: nodes, stacks: stacks}
+		export static function create(exePath String, targetStatus ProfileTargetStatus, runCompleted bool, requestedRateHz ProfileRate, ticks ProfileTally, durationSeconds ProfileSeconds, samples ProfileTally, captures ProfileTally, samplesUnsymbolized ProfileTally, stacksUnreadable ProfileTally, stacksTruncated ProfileTally, minPercent ProfileShare, functions ProfileFunctionArray, nodes ProfileNodeArray, stacks ProfileStackArray) returns ProfileReport
+			return Self{exePath: exePath, targetStatus: targetStatus, runCompleted: runCompleted, requestedRateHz: requestedRateHz, ticks: ticks, durationSeconds: durationSeconds, samples: samples, captures: captures, samplesUnsymbolized: samplesUnsymbolized, stacksUnreadable: stacksUnreadable, stacksTruncated: stacksTruncated, minPercent: minPercent, functions: functions, nodes: nodes, stacks: stacks}
 		end 'create'
 
-		// A handful of readings can be ranked in any order at all, so the report says so rather than
-		// presenting confident shares over them.
+		// A handful of captured stacks can be ranked in any order at all, however many samples they carry, so
+		// the report says so rather than presenting confident shares over them.
 		export function sparse() returns bool
-			return self.samples < ProfileMinimumTrustworthySamples
+			return self.captures < ProfileMinimumTrustworthyCaptures
 		end 'sparse'
 
 		// ⭐ **THE RATE THE SAMPLER ACTUALLY TICKED AT, WHICH IS WHAT THE REPORT MEANS.** A sampling
 		// profiler's rate is the denominator every percentage was computed against, so printing one the run
 		// did not achieve states a wrong answer about every row at once.
 		//
-		// ⚠ Derived from TICKS rather than from samples on purpose. One tick samples every thread that has
-		// RUN since the last one, so samples-per-second drifts from the tick rate in BOTH directions by a
-		// program-dependent amount — up when threads run concurrently, down when none has. Both are real
+		// ⚠ Derived from TICKS rather than from samples on purpose. One tick charges every thread a sample per
+		// tick's worth of CPU it consumed, so samples-per-second drifts from the tick rate in BOTH directions
+		// by a program-dependent amount — up when threads run concurrently, down when none has. Both are real
 		// quantities; only this one answers the question `--rate` asks.
 		export function achievedRateHz() returns ProfileRate
 			if self.durationSeconds <= 0.0 'noWindow'
@@ -216,7 +222,7 @@
 	// THE ACCUMULATOR
 	// ========================================================================================
 
-	// Turns captured stacks into the tables above, one call per sample from the tick loop.
+	// Turns captured stacks into the tables above, one call per capture from the tick loop.
 	module type ProfileAccumulator
 		var selfByName as ProfileTallyMap
 		var totalByName as ProfileTallyMap
@@ -224,19 +230,24 @@
 		var pathSelf as ProfileTallyMap
 		var stackTotal as ProfileTallyMap
 		var samples as ProfileTally
+		var captures as ProfileTally
 		var unsymbolized as ProfileTally
 		var unreadable as ProfileTally
 		var truncated as ProfileTally
 
 		export static function create() returns ProfileAccumulator
-			return Self{selfByName: ProfileTallyMap.create(), totalByName: ProfileTallyMap.create(), pathTotal: ProfileTallyMap.create(), pathSelf: ProfileTallyMap.create(), stackTotal: ProfileTallyMap.create(), samples: 0, unsymbolized: 0, unreadable: 0, truncated: 0}
+			return Self{selfByName: ProfileTallyMap.create(), totalByName: ProfileTallyMap.create(), pathTotal: ProfileTallyMap.create(), pathSelf: ProfileTallyMap.create(), stackTotal: ProfileTallyMap.create(), samples: 0, captures: 0, unsymbolized: 0, unreadable: 0, truncated: 0}
 		end 'create'
 
-		// ⭐ Accept ONE captured stack. `frames` is LEAF-FIRST, as the walk produced it, and every
-		// aggregation below is derived from that one list — so the hot-function table, the tree and the stack
-		// list cannot disagree about what was sampled.
-		export function accept(frames ProfileStringArray, allocationBase ProfileStackBase, lostItsRoot bool, hadNoChain bool)
-			self.samples = self.samples + 1
+		// ⭐ Accept ONE captured stack, carrying `charged` samples — the ticks of CPU its thread was charged when
+		// it was captured. `frames` is LEAF-FIRST, as the walk produced it, and every aggregation below is
+		// derived from that one list — so the hot-function table, the tree and the stack list cannot disagree
+		// about what was sampled. The tables are weighted by `charged`; the capture counts and the truncated and
+		// unreadable STACK counts are not, because each is a count of stacks read.
+		export function accept(frames ProfileStringArray, charged ProfileCharges, allocationBase ProfileStackBase, lostItsRoot bool, hadNoChain bool)
+			let weight = charged as ProfileTally
+			self.samples = self.samples + weight
+			self.captures = self.captures + 1
 			self.truncated = self.truncated + (1 if lostItsRoot else 0)
 			self.unreadable = self.unreadable + (1 if hadNoChain else 0)
 
@@ -245,10 +256,10 @@
 			let leaf = try frames.get(0) otherwise ProfileUnreadableStackFrame
 
 			if profileFrameIsSynthetic(leaf) 'couldNotName'
-				self.unsymbolized = self.unsymbolized + 1
+				self.unsymbolized = self.unsymbolized + weight
 			end 'couldNotName'
 
-			bumpProfileTally(self.selfByName, key: leaf)
+			bumpProfileTally(self.selfByName, key: leaf, by: weight)
 
 			// Counted once per STACK: a recursive function appears many times in one chain, and adding it
 			// each time would report a function as sampled more often than the profiler sampled at all.
@@ -257,7 +268,7 @@
 			for frame in frames 'eachFrame'
 				if not seen.contains(frame) 'firstSighting'
 					seen.upsert(frame, value: 1)
-					bumpProfileTally(self.totalByName, key: frame)
+					bumpProfileTally(self.totalByName, key: frame, by: weight)
 				end 'firstSighting'
 			end 'eachFrame'
 
@@ -269,15 +280,15 @@
 				remaining = remaining - 1
 				let frame = try frames.get(remaining) otherwise panic("ProfileAccumulator.accept: index {remaining} came from this very list of {frames.count()} frames")
 				path = frame if path.isEmpty() else "{path}{ProfilePathSeparator}{frame}"
-				bumpProfileTally(self.pathTotal, key: path)
+				bumpProfileTally(self.pathTotal, key: path, by: weight)
 			end 'eachPrefix'
 
-			bumpProfileTally(self.pathSelf, key: path)
-			bumpProfileTally(self.stackTotal, key: "{allocationBase}{ProfilePathSeparator}{profileOutermostNamedFrame(frames)}")
+			bumpProfileTally(self.pathSelf, key: path, by: weight)
+			bumpProfileTally(self.stackTotal, key: "{allocationBase}{ProfilePathSeparator}{profileOutermostNamedFrame(frames)}", by: weight)
 		end 'accept'
 
 		export function finish(exePath String, targetStatus ProfileTargetStatus, runCompleted bool, requestedRateHz ProfileRate, ticks ProfileTally, durationSeconds ProfileSeconds, minPercent ProfileShare) returns ProfileReport
-			return ProfileReport.create(exePath, targetStatus: targetStatus, runCompleted: runCompleted, requestedRateHz: requestedRateHz, ticks: ticks, durationSeconds: durationSeconds, samples: self.samples, samplesUnsymbolized: self.unsymbolized, stacksUnreadable: self.unreadable, stacksTruncated: self.truncated, minPercent: minPercent, functions: rankedProfileFunctions(self.selfByName, totals: self.totalByName), nodes: rankedProfileNodes(self.pathTotal, leaves: self.pathSelf), stacks: rankedProfileStacks(self.stackTotal))
+			return ProfileReport.create(exePath, targetStatus: targetStatus, runCompleted: runCompleted, requestedRateHz: requestedRateHz, ticks: ticks, durationSeconds: durationSeconds, samples: self.samples, captures: self.captures, samplesUnsymbolized: self.unsymbolized, stacksUnreadable: self.unreadable, stacksTruncated: self.truncated, minPercent: minPercent, functions: rankedProfileFunctions(self.selfByName, totals: self.totalByName), nodes: rankedProfileNodes(self.pathTotal, leaves: self.pathSelf), stacks: rankedProfileStacks(self.stackTotal))
 		end 'finish'
 	end 'ProfileAccumulator'
 
@@ -307,8 +318,8 @@
 		return try frames.get(0) otherwise ProfileUnreadableStackFrame
 	end 'profileOutermostNamedFrame'
 
-	function bumpProfileTally(tally ProfileTallyMap, key String)
-		tally.upsert(key, value: (try tally.get(key) otherwise 0) + 1)
+	function bumpProfileTally(tally ProfileTallyMap, key String, by ProfileTally)
+		tally.upsert(key, value: (try tally.get(key) otherwise 0) + by)
 	end 'bumpProfileTally'
 
 	// ========================================================================================
@@ -395,14 +406,14 @@
 		// achieved rate is what every percentage below was computed against while the requested rate is only
 		// what somebody typed. Both are ALWAYS printed: whether they agree is itself a measured quantity, so
 		// a report whose shape depended on it would change shape run to run.
-		out.append("samples: {report.samples} at {profileRateText(report.achievedRateHz())} Hz over {reportWholeNumberText(report.durationSeconds as ReportNumber)}s (requested {reportWholeNumberText(report.requestedRateHz as ReportNumber)} Hz){ProfileLineFeed}")
+		out.append("samples: {report.samples} from {report.captures} captures at {profileRateText(report.achievedRateHz())} Hz over {reportWholeNumberText(report.durationSeconds as ReportNumber)}s (requested {reportWholeNumberText(report.requestedRateHz as ReportNumber)} Hz){ProfileLineFeed}")
 
 		if not report.runCompleted 'stoppedEarly'
 			out.append("PARTIAL: the program was still running when sampling stopped — this profile describes the part that ran{ProfileLineFeed}")
 		end 'stoppedEarly'
 
 		if report.sparse() 'tooFew'
-			out.append("TOO FEW SAMPLES: under {ProfileMinimumTrustworthySamples}, so the shares below are arithmetic on a handful of readings rather than a measurement. Profile a longer run, or raise the rate{ProfileLineFeed}")
+			out.append("TOO FEW SAMPLES: under {ProfileMinimumTrustworthyCaptures} captures, so the shares below are arithmetic on a handful of readings rather than a measurement. Profile a longer run, or raise the rate{ProfileLineFeed}")
 		end 'tooFew'
 
 		// ⭐ ALWAYS STATED, INCLUDING AS ZERO. "How much of this could not be named" is the number that says
@@ -617,7 +628,7 @@
 		out.append("\"runCompleted\":{report.runCompleted},")
 		out.append("\"achievedRateHz\":{reportWholeNumberText(report.achievedRateHz() as ReportNumber)},\"requestedRateHz\":{reportWholeNumberText(report.requestedRateHz as ReportNumber)},")
 		out.append("\"ticks\":{report.ticks},\"durationSeconds\":{reportWholeNumberText(report.durationSeconds as ReportNumber)},")
-		out.append("\"samples\":{report.samples},\"samplesUnsymbolized\":{report.samplesUnsymbolized},")
+		out.append("\"samples\":{report.samples},\"captures\":{report.captures},\"samplesUnsymbolized\":{report.samplesUnsymbolized},")
 		out.append("\"stacksUnreadable\":{report.stacksUnreadable},\"stacksTruncated\":{report.stacksTruncated},")
 
 		// Written only where it is TRUE, so it states a fact rather than being a field that reads false on

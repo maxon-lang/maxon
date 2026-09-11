@@ -78,14 +78,12 @@ subjects this lane can express carry `posix-…` siblings marked `arm64-macos`, 
 what "run this command line" means under POSIX and the same interpreter `system()` names, so
 `"exit 3"` is the whole program where the Windows sibling writes `cmd /c exit 3`.
 
-⛔ **TWO SUBJECTS HAVE NO SIBLING, EACH FOR A REASON IN THE PLATFORM RATHER THAN IN THE PORT.**
+⛔ **ONE SUBJECT HAS NO SIBLING, FOR A REASON IN THE PLATFORM RATHER THAN IN THE PORT.**
 `spawn-failure-caught` and `spawn-failure-recover-continue` turn on `CreateProcessA` REFUSING a
 command that names no runnable executable; under the shell shape the spawn of `/bin/sh` always
 succeeds and a missing command is the SHELL's exit **127**, so no command line on this lane can
 reach the spawn-failure throw those cases exist to catch (measured: a bad name answers 127, not the
-`otherwise` handler). `store-overflow-caught` pins the 64-slot bound that is
-`WaitForMultipleObjects`'s `MAXIMUM_WAIT_OBJECTS`; this lane sweeps the store with `waitpid` and has
-no such ceiling to overflow. Both would need a different program asserting a different fact, which
+`otherwise` handler). That subject would need a different program asserting a different fact, which
 is a rung and not a marker.
 
 ## Tests
@@ -410,19 +408,170 @@ end 'main'
 ```
 
 <!-- test: async-subprocess.store-overflow-caught -->
-Parking more than the store's capacity (64, `WaitForMultipleObjects`'s `MAXIMUM_WAIT_OBJECTS`) children
-concurrently must NOT write past the 64-slot parallel arrays. Sixty-five children are spawned as LIVE promises
-before any await (since P1.5-B2 #88 a DISCARDED promise is dropped-cancelled, so the children must be kept alive by
-distinct bindings). While `main` is parked on `await p64` its strand runs them in spawn order: the first sixty-four (`p00`..`p63`) each park on the
-process store (slots 0..63), and the sixty-fifth park (`p64`) finds the store full — so `__gt_process_run` THROWS
-its store-overflow error (P1.5 #93) rather than aborting with exit 70. `p64`'s `child` catches it via
-`otherwise 88` and completes with 88, which `await p64` returns — proving the 64-slot bound is now a RECOVERABLE
-error, not a fatal abort. The other sixty-four promises are still parked at scope exit and are dropped-cancelled
-(#88), so the live count balances. This is heavier than the other cases (~64 real child spawns before the overflow)
-because it is the regression test for a memory-safety guard.
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
+Parking more children at once than the process store holds (64, `WaitForMultipleObjects`'s
+`MAXIMUM_WAIT_OBJECTS`) must not write past its 64-slot arrays. Sixty-five children are started as live
+promises before any await (a discarded promise is drop-cancelled, so each needs its own binding): the first
+sixty-four park on slots 0..63, and the sixty-fifth finds the store full, so `__gt_process_run` THROWS its
+store-overflow error rather than aborting. `child` catches it with `otherwise 88`, and `await p64` returns
+88 — the bound is a recoverable error.
+
+⚠ **EVERY CHILD OUTLIVES THE BURST OF SIXTY-FIVE SPAWNS.** A spawn is a kernel call, and while one runs
+the scheduler may hand the processor to another machine, whose idle poll reaps every child that has
+already exited and frees its slot. A child that lives five seconds is still running when the sixty-fifth
+parks, so the store is full however the spawns interleave with that machine.
 ```maxon
 function child() returns Integer
-	return try __Builtins.runProcess("cmd /c exit 1") otherwise 88
+	return try __Builtins.runProcess("cmd /c ping -n 6 127.0.0.1 >nul") otherwise 88
+end 'child'
+
+function main() returns ExitCode
+	let p00 = async child()
+	let p01 = async child()
+	let p02 = async child()
+	let p03 = async child()
+	let p04 = async child()
+	let p05 = async child()
+	let p06 = async child()
+	let p07 = async child()
+	let p08 = async child()
+	let p09 = async child()
+	let p10 = async child()
+	let p11 = async child()
+	let p12 = async child()
+	let p13 = async child()
+	let p14 = async child()
+	let p15 = async child()
+	let p16 = async child()
+	let p17 = async child()
+	let p18 = async child()
+	let p19 = async child()
+	let p20 = async child()
+	let p21 = async child()
+	let p22 = async child()
+	let p23 = async child()
+	let p24 = async child()
+	let p25 = async child()
+	let p26 = async child()
+	let p27 = async child()
+	let p28 = async child()
+	let p29 = async child()
+	let p30 = async child()
+	let p31 = async child()
+	let p32 = async child()
+	let p33 = async child()
+	let p34 = async child()
+	let p35 = async child()
+	let p36 = async child()
+	let p37 = async child()
+	let p38 = async child()
+	let p39 = async child()
+	let p40 = async child()
+	let p41 = async child()
+	let p42 = async child()
+	let p43 = async child()
+	let p44 = async child()
+	let p45 = async child()
+	let p46 = async child()
+	let p47 = async child()
+	let p48 = async child()
+	let p49 = async child()
+	let p50 = async child()
+	let p51 = async child()
+	let p52 = async child()
+	let p53 = async child()
+	let p54 = async child()
+	let p55 = async child()
+	let p56 = async child()
+	let p57 = async child()
+	let p58 = async child()
+	let p59 = async child()
+	let p60 = async child()
+	let p61 = async child()
+	let p62 = async child()
+	let p63 = async child()
+	let p64 = async child()
+	let r = await p64
+	_ = await p00
+	_ = await p01
+	_ = await p02
+	_ = await p03
+	_ = await p04
+	_ = await p05
+	_ = await p06
+	_ = await p07
+	_ = await p08
+	_ = await p09
+	_ = await p10
+	_ = await p11
+	_ = await p12
+	_ = await p13
+	_ = await p14
+	_ = await p15
+	_ = await p16
+	_ = await p17
+	_ = await p18
+	_ = await p19
+	_ = await p20
+	_ = await p21
+	_ = await p22
+	_ = await p23
+	_ = await p24
+	_ = await p25
+	_ = await p26
+	_ = await p27
+	_ = await p28
+	_ = await p29
+	_ = await p30
+	_ = await p31
+	_ = await p32
+	_ = await p33
+	_ = await p34
+	_ = await p35
+	_ = await p36
+	_ = await p37
+	_ = await p38
+	_ = await p39
+	_ = await p40
+	_ = await p41
+	_ = await p42
+	_ = await p43
+	_ = await p44
+	_ = await p45
+	_ = await p46
+	_ = await p47
+	_ = await p48
+	_ = await p49
+	_ = await p50
+	_ = await p51
+	_ = await p52
+	_ = await p53
+	_ = await p54
+	_ = await p55
+	_ = await p56
+	_ = await p57
+	_ = await p58
+	_ = await p59
+	_ = await p60
+	_ = await p61
+	_ = await p62
+	_ = await p63
+	return r as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+88
+```
+
+<!-- test: async-subprocess.posix-store-overflow-caught -->
+<!-- unsupported-targets: x64-windows -->
+`store-overflow-caught`'s subject on the POSIX lanes, whose process store has the same sixty-four slots:
+the sixty-fifth concurrent child finds it full and `await p64` returns the caught 88. `sleep 2` outlives
+the burst for the same reason as the Windows sibling's two-second child.
+```maxon
+function child() returns Integer
+	return try __Builtins.runProcess("sleep 2") otherwise 88
 end 'child'
 
 function main() returns ExitCode

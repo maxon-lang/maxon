@@ -129,13 +129,25 @@ export type Arm64RuntimeAsm
 		}
 	end 'beginRawFunction'
 
+	// Everything one call of this chunk puts on its caller's stack: its frame, which holds the frame record, since
+	// `bl` pushes nothing.
+	export function stackBytesPerCall() returns StackSize
+		return self.frameBytes
+	end 'stackBytesPerCall'
+
 	// Close a RETURNING function: the epilogue (the exact mirror of the prologue, so sp comes home by
 	// balanced arithmetic and x30 is restored) and the `ret`.
 	export function finishFunction(name ByteArray) returns FunctionCodeChunk
-		arm64EmitEpilogue(self.code, frameSize: self.frameBytes, recordOffset: self.outgoingArgBytes)
-		arm64EmitRet(self.code)
+		self.closeFrame()
 		return self.finishChunk(name)
 	end 'finishFunction'
+
+	// The epilogue and the `ret` alone — `finishFunction`'s return, for a framed FRAGMENT another chunk splices in
+	// (`arm64AppendResolvedFragment`) rather than a chunk of its own.
+	export function closeFrame()
+		arm64EmitEpilogue(self.code, frameSize: self.frameBytes, recordOffset: self.outgoingArgBytes)
+		arm64EmitRet(self.code)
+	end 'closeFrame'
 
 	// Resolve the branches and seal the chunk — the tail `finishFunction` runs after its epilogue, and
 	// ALSO the whole closer for a DIVERGING function, one that ends in a process exit and a `brk`. Such a

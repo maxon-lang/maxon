@@ -320,13 +320,14 @@ end 'buildArm64PanicChunk'
 // ⭐⭐ **A PANIC CAN BE RAISED FROM ANY DEPTH OF UN-GUARDED RUNTIME FRAMES, SO IT MAKES ITS OWN ROOM** —
 // x64's `emitPanicStackGuard` carries the argument: the same prologue guard every guarded function runs,
 // projecting one margin for the diagnostic chain under `mrt_panic`, placed after the frame record, which the
-// grower rebases with every link above it. Only a green-thread program has the scheduler words it reads.
+// grower rebases with every link above it. It never parks (`GtGuardSite.mrtPanic`). Only a green-thread program
+// has the scheduler words it reads.
 function arm64EmitPanicStackGuard(asm Arm64RuntimeAsm, greenThreads bool, target Target)
 	if not greenThreads 'noGreenThreads'
 		return
 	end 'noGreenThreads'
 
-	emitArm64GtStackGuard(asm.code, callFixups: asm.callFixups, rdataRelocs: asm.rdataRelocs, frameBytes: gtStackGuardMargin(target) as StackSize, margin: gtStackGuardMargin(target), os: target.os)
+	emitArm64GtStackGuard(asm.code, callFixups: asm.callFixups, rdataRelocs: asm.rdataRelocs, frameBytes: gtStackGuardMargin(target) as StackSize, margin: gtStackGuardMargin(target), site: GtGuardSite.mrtPanic, target: target)
 end 'arm64EmitPanicStackGuard'
 
 // ⭐⭐ **PUBLISH THE COUNTERS AN ABORTING RUN DID REACH, MARKED `ABORTED`** — x64's

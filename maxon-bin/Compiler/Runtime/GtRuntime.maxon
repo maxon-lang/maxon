@@ -48,7 +48,7 @@
 // ⭐ RELOCATING STACKS. Each GT gets an `osAllocPages` seed stack of `__gt_seed_bytes`, which follows the stacks
 // recent threads finished with (`__gt_seed_adapt`, Go's `startingStackSize`); every guarded function's prologue
 // projects its frame against `gt.stackGuard` (X64GtRuntime's `emitGtStackGuard`) and, when it would overflow,
-// calls the hand-assembled `__gt_morestack`, which doubles the size until the requesting frame fits (up to
+// reaches the hand-assembled `__gt_morestack`, which doubles the size until the requesting frame fits (up to
 // `GtMaxStackBytes`) and moves the thread onto the larger stack (`__gt_stack_relocate`: copy the live region, walk
 // the saved frame-pointer chain fixing every interior pointer by the relocation offset). A parked thread using
 // under a quarter of its stack is moved onto one half the size (`__gt_stack_shrink`, Go's `shrinkstack`). So deep
@@ -89,13 +89,21 @@ export let GtOffFuncPtr = 0x40  // the async function's address
 export let GtOffArgBuf = 0x48  // a self-pointer to this struct's inline argument region (`GtOffArgInline`)
 
 // The green-thread stack GUARD: the low-water address a function's PROLOGUE compares its projected rsp against —
-// `projectedRsp < stackGuard` means the frame would overflow, so the prologue calls `__gt_morestack` to
+// `projectedRsp < stackGuard` means the frame would overflow, so the prologue's cold path reaches `__gt_morestack` to
 // grow+relocate the stack first. `__gt_spawn` seeds it to `stackBase + gtStackGuardHeight`; `__gt_stack_relocate`
 // moves it to `newBase + gtStackGuardHeight` after a grow or a shrink; an M's inline scheduler context keeps the
 // slab zero, so its guard compare (`projectedRsp >= 0` unsigned) always passes — it runs on the OS thread's own
 // stack and never grows. EXPORTED because the hand-assembled prologue guard reads it and `__gt_stack_relocate`
 // writes it. Offset 0x50 is the FREE word between `argBuf@0x48` and `threw@0x58`.
 export let GtOffStackGuard = 0x50
+
+// ⭐⭐ **A PREEMPTION REQUEST — Go's `stackPreempt`.** `__sysmon` stores it into the guard word of a thread that
+// has held its processor too long (`SchedRuntime.__sched_preemptone`). Read unsigned it is above every stack
+// pointer, so the prologue guard's one compare fails into its cold path and calls `__gt_guard_tripped`, which
+// tells the request from an overflow by this exact value and yields (`__gt_preempt`). There is no request field
+// beside it: the guard word IS the request. `mrt_panic`'s guard withdraws it instead (`GtGuardSite.mrtPanic`).
+// EXPORTED for both lanes' guards and `__gt_guard_tripped`, and for the monitor.
+export let GtStackGuardPreempt = -1314 as ParsedInt
 
 // The dual-register ERROR FLAG the trampoline captures from R10 when a THROWING async thunk returns
 // (P1.5-B2b): 0 = success, non-zero = threw (a scalar error's `ordinal + ErrorFlagOrdinalBias`, or a boxed
@@ -415,6 +423,14 @@ let GtOffStackResizedAt = GtOffStackMarks + PointerFieldBytes
 // needed to grow.
 let GtOffStackHighWater = GtOffStackResizedAt + PointerFieldBytes
 
+// ⭐⭐ **ON A STRAND's OWNER: THE MEMBER A PREEMPTION STOPPED, WHICH THE STRAND RUNS NEXT — OR 0.** A coroutine
+// gives up its green thread only where it waits (`async` is a coroutine, not a thread), so a preemption may take
+// the member's processor but never its turn: `__gt_strand_next` answers this slot before the owner or any
+// sibling in the queue, whatever was readied meanwhile. Written by the strand runner's preempt arm and taken by
+// `__gt_strand_next`, both under `__sched_lock` and on the machine holding the strand; it is empty whenever a
+// member runs, because the taking is what starts one.
+let GtOffStrandResume = GtOffStackHighWater + PointerFieldBytes
+
 // The GT struct's size: the 0xC8 header, the inline argument region, then every field above. Must be a
 // multiple of 8.
 //
@@ -424,11 +440,11 @@ let GtOffStackHighWater = GtOffStackResizedAt + PointerFieldBytes
 // correctly and no number is restated anywhere.
 //
 // EXPORTED because `SchedRuntime`'s M struct embeds a whole GT inline as its scheduler context.
-export let GtStructSize = GtOffStackHighWater + PointerFieldBytes
+export let GtStructSize = GtOffStrandResume + PointerFieldBytes
 
 // ⭐⭐ **THE PARK KINDS — what the strand runner dispatches on after the switch.** Each of the first six names
-// the STORE `__gt_register_park` puts the thread on; a yield registers nothing and is placed back on its
-// strand (`__gt_run_strand`).
+// the STORE `__gt_register_park` puts the thread on; a yield and a preemption register nothing and are placed
+// back on the thread's strand (`__gt_run_strand`).
 //
 // ⚠ Zero is not a kind: it is the slab's, i.e. "this GT has never parked", which is why the numbering starts
 // at one.
@@ -449,8 +465,11 @@ let GtParkKindAwaitAny = 6 as ParsedInt
 // `__gt_resched`: a yield, which the strand runner places rather than registers.
 let GtParkKindYield = 7 as ParsedInt
 
-// The `arg` a park that needs none carries — an IO park (its handshake is two stores on the GT itself) and a
-// yield — so the site says so rather than passing whatever happened to be in a register.
+// `__gt_preempt`: a thread that honoured a preemption request, which the strand runner also places.
+let GtParkKindPreempt = 9 as ParsedInt
+
+// The `arg` a park that needs none carries — an IO park (its handshake is two stores on the GT itself), a
+// yield and a preemption — so the site says so rather than passing whatever happened to be in a register.
 let GtParkArgUnused = 0 as ParsedInt
 
 // ⭐ **THE LOW BIT OF `GtOffAwaiter` MARKS AN awaitAny WAITER.** GT structs are word-aligned, so the bit is free.
@@ -848,10 +867,27 @@ let NanosPerMilli = 1000000
 export let GtContextSwitchName = b"__gt_context_switch"
 export let GtTrampolineName = b"__gt_trampoline"
 
-// The relocating stack-grower (P1.5-B1a′). A hand-assembled chunk (X64GtRuntime), NOT a builder-built Std
-// function — it manipulates rsp and walks the saved-rbp chain, unrepresentable in Std. EXPORTED because the
-// prologue guard's `call __gt_morestack` (X64Backend) and the chunk's own name must agree — one spelling.
+// The relocating stack-grower. A hand-assembled chunk on each lane, NOT a builder-built Std function — it switches
+// stacks and walks the frame-pointer chain, which Std cannot express. EXPORTED so every caller and the chunk spell
+// it once.
 export let GtMorestackName = b"__gt_morestack"
+
+// ⭐ **WHERE A FUNCTION-ENTRY GUARD's COLD PATH GOES**: it honours a preemption request (`GtStackGuardPreempt`)
+// on the thread's own stack and returns to the guard, and otherwise jumps to `__gt_morestack`. A hand-assembled
+// chunk on each lane, split from the grower because `mrt_panic`'s guard must reach the grower without it
+// (`GtGuardSite`).
+export let GtGuardTrippedName = b"__gt_guard_tripped"
+
+// ⭐⭐ **WHERE A PROLOGUE STACK GUARD RUNS, WHICH DECIDES WHETHER ITS COLD PATH MAY PARK.**
+export enum GtGuardSite
+	// A guarded function's entry. The function is user-shaped code, which the runtime never enters while it holds
+	// `__sched_lock`, so the guard may honour a preemption request.
+	functionEntry
+
+	// `mrt_panic`, which runtime code reaches too — code that may hold `__sched_lock`, where a park would never
+	// end. Its guard withdraws a request before its compare and only ever grows.
+	mrtPanic
+end 'GtGuardSite'
 
 // ⭐⭐⭐ **`__gt_stack_relocate(gt, newBase, newSize)` — MOVE A STOPPED THREAD's STACK, IN EITHER DIRECTION.** The
 // one routine a grow and a shrink share: it copies the live region `[gt.sp, top)` to the top of the new stack,
@@ -862,6 +898,12 @@ export let GtStackRelocateName = b"__gt_stack_relocate"
 
 // ⭐⭐ **`__gt_stack_shrink(gt)` — Go's `shrinkstack`, at a park.** See `buildGtStackShrink`.
 let GtStackShrinkName = b"__gt_stack_shrink"
+
+// ⭐⭐ **`__gt_preempt(gt)` — HONOUR A PREEMPTION REQUEST: Go's `newstack` preempt arm and `gopreempt_m`.** See
+// `buildGtPreempt`. Called by `__gt_guard_tripped`'s preempt arm, a hand-assembled chunk on both ISAs, so EXPORTED
+// for the root that keeps it alive (`DeadFunctionElimination.seedRoots`), for both arms and for the backends,
+// which certify the depth of its call tree against the guard margin.
+export let GtPreemptName = b"__gt_preempt"
 
 // ⭐⭐ **`__gt_seed_adapt()` — Go's `gcComputeStartingStackSize`, once a window.** See `buildGtSeedAdapt`.
 let GtSeedAdaptName = b"__gt_seed_adapt"
@@ -942,9 +984,9 @@ let GtCoroSweepDroppedName = b"__gt_coro_sweep_dropped"
 // ⭐⭐⭐ **`__gt_run_strand(m, owner)` — RUN A STRAND ON THIS MACHINE UNTIL IT HAS NOTHING RUNNABLE, OR HANDS
 // ITSELF TO THE GLOBAL QUEUE.** Go's `execute` plus `park_m`/`goexit0`/`goyield_m`, looped over the strand
 // queue: switch into the next member, and on the way back dispatch on what it did — completed (the runner's
-// half of its teardown), parked (register it on its store), or yielded (place it). Called by the scheduler
-// loop (`SchedRuntime.buildSchedLoop`) on the machine that popped `owner`'s token, which owns the strand for
-// the whole call.
+// half of its teardown), parked (register it on its store), or yielded or preempted (place it). Called by the
+// scheduler loop (`SchedRuntime.buildSchedLoop`) on the machine that popped `owner`'s token, which owns the
+// strand for the whole call.
 export let GtRunStrandName = b"__gt_run_strand"
 
 export let GtAwaitName = b"__gt_await"
@@ -2150,7 +2192,7 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtAnyCompleted(module)
 	buildGtAwaitAny(module)
 	buildGtDrainAtExit(module)
-	buildGtRunMain(module)
+	buildGtRunMain(module, target: target)
 	buildGtAwait(module, name: GtAwaitName, throwing: false, asyncTrace: asyncTrace, tags: tags)
 	buildGtAwait(module, name: GtTryAwaitName, throwing: true, asyncTrace: asyncTrace, tags: tags)
 	buildGtPromiseDrop(module, usesCompletionPort: usesCompletionPort, rawFree: rawFree)
@@ -2176,6 +2218,7 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtProcCount(module)
 	buildGtProcCheck(module)
 	buildGtResched(module)
+	buildGtPreempt(module, target: target)
 	buildGtIoPark(module)
 	buildGtProcessRun(module, rawFree: rawFree, commandShape: subprocessCommandShape(target))
 
@@ -2389,13 +2432,7 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, asyncTrace bool, tags 
 	let stackTop = ids.mint()
 	module.appendOp(seeded, op: StdOp.binOp(stackTop, lhs: stackBase, rhs: stackSizeVal, opcode: StdBinOpcode.add, operandType: StdType.i64))
 
-	// gt.stackGuard = stackBase + the guard height — the low-water mark the guarded function's prologue compares
-	// its projected stack pointer against. Below it, the prologue calls `__gt_morestack` to grow + relocate first.
-	let guardHeightConst = ids.mint()
-	module.appendOp(seeded, op: StdOp.const(guardHeightConst, value: gtStackGuardHeight(target), valueType: StdType.i64))
-	let stackGuard = ids.mint()
-	module.appendOp(seeded, op: StdOp.binOp(stackGuard, lhs: stackBase, rhs: guardHeightConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.appendOp(seeded, op: StdOp.storeIndirect(gt, offset: GtOffStackGuard, valueId: stackGuard, valueType: StdType.i64))
+	emitGtRestoreStackGuard(module, block: seeded, gt: gt, target: target, ids: ids)
 	emitGtSeedInitialFrame(module, block: seeded, gt: gt, stackBase: stackBase, stackTop: stackTop, target: target, ids: ids)
 
 	match kind 'countedAndNamed'
@@ -2411,6 +2448,15 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, asyncTrace bool, tags 
 
 	module.functions.push(func)
 end 'buildGtSpawn'
+
+// `gt.stackGuard = gt.stackBase + gtStackGuardHeight` — the low-water mark a guarded prologue compares its
+// projected stack pointer against, and what clears a preemption request. The spawn seeds it, a switch-in and
+// `__gt_preempt` restore it; `__gt_stack_relocate` spells the same sum in its own hand-assembly.
+function emitGtRestoreStackGuard(module StdModule, block IrBlock, gt ValueId, target Target, ids ValueMinter)
+	let stackBase = emitLoadField(module, block: block, record: gt, offset: GtOffStackBase, ids: ids)
+	let guard = emitBin(module, block: block, a: stackBase, b: emitConst(module, block: block, value: gtStackGuardHeight(target), ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: block, record: gt, offset: GtOffStackGuard, value: guard)
+end 'emitGtRestoreStackGuard'
 
 // 1 when the `osAllocPages` answer `stackBase` is a refusal, for a spawn's seed and a shrink's smaller stack
 // alike. The test is the sign, for `__slab_assert_os_alloc`'s reason: `VirtualAlloc` refuses with NULL and a raw
@@ -2846,8 +2892,8 @@ function buildGtCoroDequeue(module StdModule)
 end 'buildGtCoroDequeue'
 
 // ⭐⭐⭐ **`__gt_strand_next(owner) -> gt | 0` — WHAT THIS STRAND RUNS NEXT, OR 0 HAVING GIVEN THE STRAND UP.**
-// The strand runner's consume door: the lock, the pop, and the tombstone refusal `emitGtTombstoneHandback`
-// shares with `__sched_find_runnable`.
+// The strand runner's consume door: the lock, the member a preemption stopped (`GtOffStrandResume`) or else the
+// pop, and the tombstone refusal `emitGtTombstoneHandback` shares with `__sched_find_runnable`.
 //
 // ⭐⭐⭐ **AN EMPTY QUEUE RELEASES THE STRAND IN THE SAME CRITICAL SECTION THAT FOUND IT EMPTY** — the other
 // half of `GtOffStrandHolder`'s argument: a member readied before this section is in the queue it just
@@ -2860,6 +2906,8 @@ function buildGtStrandNext(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var pop = module.addBlock(func, label: b"snpop", heat: BlockHeat.normal)
+	var resume = module.addBlock(func, label: b"snresume", heat: BlockHeat.normal)
+	var dequeue = module.addBlock(func, label: b"sndequeue", heat: BlockHeat.normal)
 	var release = module.addBlock(func, label: b"snrelease", heat: BlockHeat.normal)
 	var gotOne = module.addBlock(func, label: b"sngot", heat: BlockHeat.normal)
 	var candidate = module.addBlock(func, label: b"sncandidate", heat: BlockHeat.normal)
@@ -2873,11 +2921,21 @@ function buildGtStrandNext(module StdModule)
 	let found = ids.mint()
 	candidate.blockArgs.push(IrBlockArg.create(found, argType: StdType.i64))
 
+	// A member a preemption stopped goes first, ahead of the queue (`GtOffStrandResume`).
 	emitSchedLockEnter(module, block: pop, ids: ids)
+	let resumed = emitLoadField(module, block: pop, record: owner, offset: GtOffStrandResume, ids: ids)
+	let noResume = emitCmp(module, block: pop, a: resumed, b: emitConst(module, block: pop, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(pop, op: StdOp.condBranch(noResume, thenBlockId: dequeue.id, elseBlockId: resume.id))
+
+	emitStoreField(module, block: resume, record: owner, offset: GtOffStrandResume, value: emitConst(module, block: resume, value: 0, ids: ids))
+	emitSchedLockLeave(module, block: resume, ids: ids)
+	module.setTerminator(resume, op: StdOp.branch(candidate.id))
+	resume.branchEdges.push(BranchEdge.create(candidate.id, argIds: argsOf(resumed)))
+
 	let popped = ids.mint()
-	module.appendOp(pop, op: StdOp.call(popped, callee: GtCoroDequeueName, args: argsOf(owner)))
-	let queueEmpty = emitCmp(module, block: pop, a: popped, b: emitConst(module, block: pop, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(pop, op: StdOp.condBranch(queueEmpty, thenBlockId: release.id, elseBlockId: gotOne.id))
+	module.appendOp(dequeue, op: StdOp.call(popped, callee: GtCoroDequeueName, args: argsOf(owner)))
+	let queueEmpty = emitCmp(module, block: dequeue, a: popped, b: emitConst(module, block: dequeue, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(dequeue, op: StdOp.condBranch(queueEmpty, thenBlockId: release.id, elseBlockId: gotOne.id))
 
 	emitStoreField(module, block: release, record: owner, offset: GtOffStrandHolder, value: emitConst(module, block: release, value: StrandFree, ids: ids))
 	emitSchedLockLeave(module, block: release, ids: ids)
@@ -3677,19 +3735,20 @@ function buildGtDrainAtExit(module StdModule)
 end 'buildGtDrainAtExit'
 
 // `__gt_run_main(entry) -> ExitCode` — see `GtRunMainName`. In order: bring the scheduler up; create `main`'s
-// green thread and ready it onto this machine's ring; run the scheduler loop until `main` has completed; take
-// its ExitCode; and arrive as its consumer.
+// green thread and ready it onto this machine's ring; start the system monitor; run the scheduler loop until
+// `main` has completed; take its ExitCode; and arrive as its consumer.
 //
 // ⚠ **THE READY OWES A WAKE THAT IS NOT PAID**: the machine about to search is this one, and a wake would start
 // a worker for a token this machine takes at once.
 //
 // ⚠ **THE RESULT IS READ BEFORE THE ARRIVAL.** The second of the two parties puts the struct on a free list,
 // where the next spawn may zero it (`emitGtTeardownArrive`).
-function buildGtRunMain(module StdModule)
+function buildGtRunMain(module StdModule, target Target)
 	var func = IrFunction.createFromStd(GtRunMainName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var running = module.addBlock(func, label: b"mainrunning", heat: BlockHeat.normal)
 	var finished = module.addBlock(func, label: b"mainfinished", heat: BlockHeat.normal)
 	var unfinished = module.addBlock(func, label: b"mainunfinished", heat: BlockHeat.normal)
 
@@ -3702,13 +3761,14 @@ function buildGtRunMain(module StdModule)
 	emitSchedLockEnter(module, block: entry, ids: ids)
 	_ = emitGtReadyLocked(module, block: entry, gt: mainGt, ids: ids)
 	emitSchedLockLeave(module, block: entry, ids: ids)
-	emitSchedMainLoop(module, block: entry, until: SchedMainLoopUntil.mainCompleted, ids: ids)
+	emitSchedSysmonStart(module, func: func, cur: entry, cont: running, target: target, ids: ids)
+	emitSchedMainLoop(module, block: running, until: SchedMainLoopUntil.mainCompleted, ids: ids)
 
 	// ⛔ The loop leaves only once `main`'s completion has moved the phase on; anything else would hand the exit
 	// path an ExitCode nobody wrote.
-	let status = emitGtLoadPublishedStatus(module, block: entry, gt: mainGt, ids: ids)
-	let completed = emitGtStatusEquals(module, block: entry, status: status, want: GtStatusCompleted, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(completed, thenBlockId: finished.id, elseBlockId: unfinished.id))
+	let status = emitGtLoadPublishedStatus(module, block: running, gt: mainGt, ids: ids)
+	let completed = emitGtStatusEquals(module, block: running, status: status, want: GtStatusCompleted, ids: ids)
+	module.setTerminator(running, op: StdOp.condBranch(completed, thenBlockId: finished.id, elseBlockId: unfinished.id))
 	emitRuntimeAbort(module, func: func, block: unfinished, abort: RuntimeAbort.mainThreadSwitchedBackUnfinished, ids: ids)
 
 	let code = emitLoadField(module, block: finished, record: mainGt, offset: GtOffResult, ids: ids)
@@ -5671,7 +5731,11 @@ end 'buildGtProcCount'
 // back to, make `g` the machine's running GT, switch, and restore the context on the way back. ⚠ It takes the
 // M and not the P: *"which green thread is running"* is a fact about the OS thread executing it
 // (`SchedRuntime.MOffCurrentGt`), and the processor may change hands while `g` is in a kernel call.
-function emitGtExecute(module StdModule, block IrBlock, g ValueId, schedulerContext ValueId, m ValueId, ids ValueMinter)
+//
+// The guard word is restored first, as Go's `execute` does, so a preemption request that reached `g` after it
+// had already stopped for another reason cannot make it yield as soon as it resumes.
+function emitGtExecute(module StdModule, block IrBlock, g ValueId, schedulerContext ValueId, m ValueId, target Target, ids ValueMinter)
+	emitGtRestoreStackGuard(module, block: block, gt: g, target: target, ids: ids)
 	emitStoreField(module, block: block, record: g, offset: GtOffWaiter, value: schedulerContext)
 	emitStoreField(module, block: block, record: m, offset: MOffCurrentGt, value: g)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: GtContextSwitchName, args: twoArgs(schedulerContext, second: g)))
@@ -5730,6 +5794,12 @@ end 'emitGtPollStores'
 // the GLOBAL queue's tail — Go's `Gosched` — still held, so the machine that pops the token picks it up
 // (`sched-runqueue.a-yield-goes-behind-the-global-queue`). Due timers and exited children are fired first
 // whenever either store holds anything, so a spin-wait on either makes progress.
+//
+// ⭐⭐ **A PREEMPTION TAKES THE PROCESSOR, NEVER THE TURN.** The preempted member becomes the next member its
+// strand runs, ahead of the owner and every sibling (`GtOffStrandResume`), and the strand goes behind everyone
+// on the global queue, always — Go's `gopreempt_m`. Placed as a yield is, a strand with a runnable sibling would
+// keep this processor, so one service's coroutines could hold it for ever. The machine returns to its scheduler
+// loop, which fires what is due before it searches.
 function buildGtRunStrand(module StdModule, target Target)
 	var func = IrFunction.createFromStd(GtRunStrandName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
@@ -5742,7 +5812,9 @@ function buildGtRunStrand(module StdModule, target Target)
 	var shrink = module.addBlock(func, label: b"strandshrink", heat: BlockHeat.normal)
 	var dispatch = module.addBlock(func, label: b"stranddispatch", heat: BlockHeat.normal)
 	var register = module.addBlock(func, label: b"strandregister", heat: BlockHeat.normal)
+	var notYield = module.addBlock(func, label: b"strandnotyield", heat: BlockHeat.normal)
 	var yielded = module.addBlock(func, label: b"strandyield", heat: BlockHeat.normal)
+	var preempted = module.addBlock(func, label: b"strandpreempted", heat: BlockHeat.normal)
 	var pollStores = module.addBlock(func, label: b"strandpoll", heat: BlockHeat.normal)
 	var pollWake = module.addBlock(func, label: b"strandpollwake", heat: BlockHeat.normal)
 	var place = module.addBlock(func, label: b"strandplace", heat: BlockHeat.normal)
@@ -5764,7 +5836,7 @@ function buildGtRunStrand(module StdModule, target Target)
 	module.setTerminator(next, op: StdOp.condBranch(strandEmpty, thenBlockId: released.id, elseBlockId: run.id))
 	module.setTerminator(released, op: StdOp.retVoid)
 
-	emitGtExecute(module, block: run, g: member, schedulerContext: schedulerContext, m: m, ids: ids)
+	emitGtExecute(module, block: run, g: member, schedulerContext: schedulerContext, m: m, target: target, ids: ids)
 
 	// ⚠ ACQUIRE, THOUGH THIS READ IS SAME-THREAD: the trampoline wrote `completed` on THIS M just before the
 	// switch that landed here. It comes through the ordered door anyway rather than be the carve-out a later
@@ -5789,7 +5861,10 @@ function buildGtRunStrand(module StdModule, target Target)
 
 	let kind = emitLoadField(module, block: dispatch, record: member, offset: GtOffParkKind, ids: ids)
 	let isYield = emitCmp(module, block: dispatch, a: kind, b: emitConst(module, block: dispatch, value: GtParkKindYield, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(dispatch, op: StdOp.condBranch(isYield, thenBlockId: yielded.id, elseBlockId: register.id))
+	module.setTerminator(dispatch, op: StdOp.condBranch(isYield, thenBlockId: yielded.id, elseBlockId: notYield.id))
+
+	let isPreempt = emitCmp(module, block: notYield, a: kind, b: emitConst(module, block: notYield, value: GtParkKindPreempt, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(notYield, op: StdOp.condBranch(isPreempt, thenBlockId: preempted.id, elseBlockId: register.id))
 
 	module.appendOp(register, op: StdOp.call(ids.mint(), callee: GtRegisterParkName, args: argsOf(member)))
 	module.setTerminator(register, op: StdOp.branch(next.id))
@@ -5809,8 +5884,15 @@ function buildGtRunStrand(module StdModule, target Target)
 	emitSchedLockLeave(module, block: behindSiblings, ids: ids)
 	module.setTerminator(behindSiblings, op: StdOp.branch(next.id))
 
+	emitSchedLockEnter(module, block: preempted, ids: ids)
+	emitStoreField(module, block: preempted, record: owner, offset: GtOffStrandResume, value: member)
+	module.setTerminator(preempted, op: StdOp.branch(behindEveryone.id))
+
+	// A token put on the global queue owes a wake once the lock is released, as Go's `goschedImpl` wakes a machine
+	// after its global put: this machine searches next, but another may be idle with nobody to tell it.
 	module.appendOp(behindEveryone, op: StdOp.call(ids.mint(), callee: GtEnqueueName, args: argsOf(owner)))
 	emitSchedLockLeave(module, block: behindEveryone, ids: ids)
+	emitSchedWakeAnIdleM(module, block: behindEveryone, ids: ids)
 	module.setTerminator(behindEveryone, op: StdOp.retVoid)
 
 	module.functions.push(func)
@@ -6255,6 +6337,38 @@ function buildGtResched(module StdModule)
 
 	module.functions.push(func)
 end 'buildGtResched'
+
+// `__gt_preempt(gt)` — see `GtPreemptName`. `gt` is the running thread, stopped at a prologue guard that found
+// `GtStackGuardPreempt` in its guard word.
+//
+// ⭐⭐ **IT RUNS ON THE THREAD's OWN STACK, BELOW A FRAME THAT DOES NOT EXIST YET**, so its whole call tree —
+// `__gt_guard_tripped`'s preempt arm, this function and the park's switch — rides the guard margin the way every
+// un-guarded runtime frame does. Each native backend adds that tree up from the frames it laid out and refuses
+// the build if it outgrows the margin (`PreemptionDepth.requirePreemptionFitsTheGuardMargin`).
+//
+// ⭐ **ONLY A FUNCTION-ENTRY GUARD REACHES IT** (`GtGuardSite.functionEntry`). A guarded function is user-shaped
+// code, which the runtime never enters while it holds `__sched_lock` (`MailboxRuntime.buildMboxSend` states the
+// rule at a cascade), so no lock is held here — the question Go's `newstack` asks of `m.locks` has no subject.
+//
+// The guard word is restored before anything else, so the request is answered once; the count is stepped on
+// the processor this thread is leaving.
+function buildGtPreempt(module StdModule, target Target)
+	var func = IrFunction.createFromStd(GtPreemptName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var resumed = module.addBlock(func, label: b"preemptresumed", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let gt = 0 as ValueId
+
+	emitGtRestoreStackGuard(module, block: entry, gt: gt, target: target, ids: ids)
+	emitSchedCountPreemption(module, block: entry, ids: ids)
+	emitGtPark(module, ids: ids, cur: entry, kind: GtParkKindPreempt, arg: emitConst(module, block: entry, value: GtParkArgUnused, ids: ids), cont: resumed)
+	module.setTerminator(resumed, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildGtPreempt'
 
 // `__gt_proc_check() -> wakeDebt` — poll every parked child; ready the GTs whose child has EXITED. For each
 // entry: `osWaitHandle(handle, 0) == WAIT_OBJECT_0` means the child exited → ready its GT and remove the entry

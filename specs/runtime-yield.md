@@ -55,9 +55,11 @@ timer store, which matters precisely when many green threads are yielding at onc
 
 ### It is safe outside any async context
 
-Calling it from a program that has never spawned anything is well defined and inert: the scheduler is up
-before `main` runs, `main` is its only green thread, and a yield with nothing else runnable comes straight
-back. This is what lets library code yield without first asking whether its caller happens to be concurrent.
+Calling it from a program that has never spawned anything is well defined: the scheduler is up before `main`
+runs, `main` is its only green thread, and a yield with nothing else runnable comes straight back. It goes
+behind nothing on the global queue and pays the wake any global put does (Go's `goschedImpl`), so above one
+processor that wake may start an idle machine and `main` may resume on another OS thread. This is what lets
+library code yield without first asking whether its caller happens to be concurrent.
 
 ### It counts as yielding
 

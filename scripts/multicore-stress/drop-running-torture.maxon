@@ -180,6 +180,7 @@ function main() returns ExitCode
 	let ranCount = started
 	let steals = __Builtins.schedStealCount()
 	let workers = __Builtins.schedMaxActiveWorkers()
+	let monitor = monitorActions()
 	let cpus = __Builtins.cpuCount()
 
 	// The driver parses these. `leaked` is the ASSERTION. `steals` is the exact
@@ -187,12 +188,14 @@ function main() returns ExitCode
 	// while main is still in its spawn-delay-drop loop, which is the only road to the
 	// state under test, and each P's counter is written by its own M so the sum is
 	// exact. `started` is the same question asked approximately; `workers` proves more
-	// than one M went live; `cpucount` gives the driver ncpu.
+	// than one M went live; `monitor` is what the pin on `steals` and `workers` is
+	// conditional on (`monitor-witness.maxon`); `cpucount` gives the driver ncpu.
 	print("leaked={leaked}\n")
 	print("carved={carved} bound={bound} rounds={i} sink={sink}\n")
 	print("started={ranCount}\n")
 	print("steals={steals}\n")
 	print("workers={workers}\n")
+	print("monitor={monitor}\n")
 	print("cpucount={cpus}\n")
 
 	// Fixed success ExitCode, as every track-0 program uses: deterministic across

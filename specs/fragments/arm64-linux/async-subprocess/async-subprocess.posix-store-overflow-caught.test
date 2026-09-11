@@ -1,6 +1,6 @@
-// Test: async-subprocess.store-overflow-caught
+// Test: async-subprocess.posix-store-overflow-caught
 function child() returns Integer
-	return try __Builtins.runProcess("cmd /c exit 1") otherwise 88
+	return try __Builtins.runProcess("sleep 2") otherwise 88
 end 'child'
 
 function main() returns ExitCode
@@ -144,42 +144,65 @@ data {
   __mm_alloc_count@0 = i64 0
   __gt_run_queue_head@8 = i64 0
   __gt_run_queue_tail@16 = i64 0
-  __gt_init_done@24 = i64 0
-  __gt_timer_count@32 = i64 0
-  __gt_timer_heap_base@40 = i64 0
-  __gt_timer_capacity@48 = i64 0
-  __gt_timer_seq@56 = i64 0
+  __gt_timer_count@24 = i64 0
+  __gt_timer_heap_base@32 = i64 0
+  __gt_timer_capacity@40 = i64 0
+  __gt_timer_seq@48 = i64 0
+  __gt_timer_when@56 = i64 9223372036854775807
   __gt_trace_counter@64 = i64 0
   __gt_proc_count@72 = i64 0
   __gt_proc_handles_base@80 = i64 0
   __gt_proc_gts_base@88 = i64 0
-  __gt_proc_wait_snapshot@96 = i64 0
-  __gt_proc_poller@104 = i64 0
-  __gt_live_count@112 = i64 0
-  __sched_progress@120 = i64 0
-  __sched_active_workers@128 = i64 1
-  __sched_max_active_workers@136 = i64 1
-  __sched_tls_index@144 = i64 0
-  __sched_tls_teb_offset@152 = i64 0
-  __sched_procs@160 = i64 0
-  __sched_allm@168 = i64 0
-  __sched_midle@176 = i64 0
-  __sched_pidle@184 = i64 0
-  __sched_num_procs@192 = i64 0
-  __sched_shutdown_flag@200 = i64 0
-  __sched_lock@208 = i64 0
-  __sched_nmspinning@216 = i64 0
-  __sched_parked_drivers@224 = i64 0
-  __sched_sysmon_started@232 = i64 0
-  __slab_arena_list@240 = i64 0
-  __slab_arena_map_l1@248 = i64 0
-  __slab_state@256 = i64 0
+  __gt_live_count@96 = i64 0
+  __gt_seed_bytes@104 = i64 2048
+  __gt_stack_bytes_sum@112 = i64 0
+  __gt_stack_bytes_count@120 = i64 0
+  __gt_seed_sum_seen@128 = i64 0
+  __gt_seed_count_seen@136 = i64 0
+  __sched_active_workers@144 = i64 1
+  __sched_max_active_workers@152 = i64 1
+  __sched_tls_index@160 = i64 0
+  __sched_tls_teb_offset@168 = i64 0
+  __sched_procs@176 = i64 0
+  __sched_allm@184 = i64 0
+  __sched_midle@192 = i64 0
+  __sched_pidle@200 = i64 0
+  __gt_gfree_head@208 = i64 0
+  __sched_arena_cursor@216 = i64 0
+  __sched_arena_limit@224 = i64 0
+  __gt_records_carved@232 = i64 0
+  __sched_npidle@240 = i64 0
+  __sched_runq_size@248 = i64 0
+  __sched_mcount@256 = i64 0
+  __sched_nmidle@264 = i64 0
+  __sched_main_m@272 = i64 0
+  __sched_phase@280 = i64 0
+  __sched_lastpoll@288 = i64 0
+  __sched_poll_until@296 = i64 0
+  __sched_regain_head@304 = i64 0
+  __np_poller@312 = i64 0
+  __np_break@320 = i64 0
+  __np_wake_sig@328 = i64 0
+  __sched_num_procs@336 = i64 0
+  __sched_shutdown_flag@344 = i64 0
+  __sched_lock@352 = i64 0
+  __sched_nmspinning@360 = i64 0
+  __sched_needspinning@368 = i64 0
+  __sched_sysmon_event@376 = i64 0
+  __sched_sysmon_wait@384 = i64 0
+  __sched_timer_starts@392 = i64 0
+  __mrt_errno@400 = i64 0
+  __mrt_envp@408 = i64 0
+  __mrt_tls_next_key@416 = i64 0
+  __slab_arena_list@424 = i64 0
+  __slab_arena_map_l1@432 = i64 0
+  __slab_state@440 = i64 0
 }
 
 func @child {
   entry:
     arm64.prologue 16
-    arm64.leaRdata x0, __str_rec_1  ; "cmd /c exit 1"
+    arm64.leaRdata x0, __str_rec_1  ; "sleep 2"
     arm64.bl __gt_process_run
     arm64.cmp x9, 0
     arm64.b.eq trycont
@@ -608,11 +631,9 @@ func @main {
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x28, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at async-subprocess.store-overflow-caught.test:137: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x28
     arm64.loadRegSlot x19, slot55
     arm64.loadRegSlot x20, slot56
     arm64.loadRegSlot x21, slot57
@@ -625,8 +646,10 @@ func @main {
     arm64.loadRegSlot x28, slot64
     arm64.epilogue 544
     arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x28
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at async-subprocess.posix-store-overflow-caught.test:137: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot55
     arm64.loadRegSlot x20, slot56
     arm64.loadRegSlot x21, slot57

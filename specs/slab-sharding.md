@@ -404,9 +404,10 @@ atomic forced off, which is the positive control this case cannot be.
 
 ⛔ **THAT MEASUREMENT STANDS AS HISTORY AND CANNOT BE RE-TAKEN ON THIS TREE (EC10).** `alloc-torture`
 reached a second M by spawning `async` tasks the scheduler handed to worker Ms; since `async` became a
-coroutine of its calling green thread there is no worker M to hand them to, so the program runs entirely
-on one M and `workers=1` at every `MAXON_MAX_PROCS`. It still proves determinism and leak-freedom; it no
-longer discriminates the `lock` prefix. ⚠ **This does NOT mean the counters went plain** — `emitGlobalAccumulate`
+coroutine of its calling green thread its tasks never leave that one green thread, which runs on one M at a
+time — a preemption can move it to another, but never runs it on two — and a run as short as this one's
+reads `workers=1` at every `MAXON_MAX_PROCS`. It still proves determinism and leak-freedom; it no longer
+discriminates the `lock` prefix, because no column is ever credited by two machines at once. ⚠ **This does NOT mean the counters went plain** — `emitGlobalAccumulate`
 keeps its `multiM` arm, and a `.data` word is reachable from the IOCP completion thread whatever `async`
 does. It means the ORACLE for that arm is waiting on `spawn`, which is where a second M comes back.
 

@@ -117,13 +117,16 @@ function main() returns ExitCode
 
 	let steals = __Builtins.schedStealCount()
 	let workers = __Builtins.schedMaxActiveWorkers()
+	let monitor = monitorActions()
 
-	// The driver parses these three. `aggregate` is the assertion; `workers` and
-	// `steals` are the pin's own reading, and are 1 and 0 for a coroutine-only
-	// program at every processor count.
+	// The driver parses these. `aggregate` is the assertion; `workers` and `steals`
+	// are the pin's own reading, and are 1 and 0 for a coroutine-only program at
+	// every processor count unless `monitor` says the system monitor stepped in
+	// (`monitor-witness.maxon`).
 	print("aggregate={total}\n")
 	print("steals={steals}\n")
 	print("workers={workers}\n")
+	print("monitor={monitor}\n")
 
 	// Fixed success ExitCode, as every track-0 program uses: deterministic across
 	// runs and never 101 (the leak-check gate value).

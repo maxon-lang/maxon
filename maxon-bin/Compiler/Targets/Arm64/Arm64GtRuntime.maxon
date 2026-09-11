@@ -1,11 +1,13 @@
 // Arm64GtRuntime — the hand-assembled GREEN-THREAD backend code for AArch64, the arm64 twin of
 // `Targets/X64/X64GtRuntime`. Everything else in the scheduler is builder-built `StdModule`
-// (`Runtime/GtRuntime.maxon`, `Runtime/SchedRuntime.maxon`); these six pieces cannot be, because each
+// (`Runtime/GtRuntime.maxon`, `Runtime/SchedRuntime.maxon`); these seven pieces cannot be, because each
 // names SP, a register PAIR fixed by an ABI list, or a frame no prologue built:
 //
 //   • `__gt_context_switch` — moves SP between two green threads' stacks and saves the physical
 //     callee-saved file by hand.
 //   • `__gt_trampoline` — entered by a `ret` into a frame nothing established.
+//   • `__gt_guard_tripped` — honours a preemption request on the thread's own stack, below a frame that does
+//     not exist yet.
 //   • `__gt_morestack` — runs on the M's system stack, which it switches to itself.
 //   • `__gt_stack_relocate` — moves a stopped green thread's stack, for a grow or a shrink, and REWRITES the
 //     saved-x29 chain of the copy.
@@ -412,24 +414,25 @@ end 'emitArm64LoadCurrentMOrBail'
 // the old-stack range test leaves alone — so the one routine is right in both directions without being told
 // which it is serving.
 //
-// ENTRY CONTRACT (from the prologue guard): x11 = the current GT, x12 = this M's system-stack top, x14 = the
-// guard's PROJECTED SP, SP = the GT stack pointing at the guard's saved-x30 cell, x30 = the return into the
-// guard. Everything it saves goes on the SYSTEM stack, so the near-overflow GT stack never holds this frame.
+// ENTRY CONTRACT (from a prologue guard, directly or through `__gt_guard_tripped`'s branch): x11 = the current
+// GT, x12 = this M's system-stack top, x14 = the guard's PROJECTED SP, SP = the GT stack pointing at the guard's
+// saved-x30 cell, x30 = the return into the guard. Everything it saves goes on the SYSTEM stack, so the
+// near-overflow GT stack never holds this frame.
 //
 // ⭐⭐ **IT GROWS UNTIL THE FRAME THAT ASKED FITS, AND REFUSES PAST `GtMaxStackBytes` OR A REFUSED `mmap`** —
 // x64's `buildGtMorestackChunk` carries why, and the arithmetic is the same: the new stack must hold everything
 // above the projected SP plus the guard height below it.
 //
-// ⭐ WHAT IT PRESERVES, AND WHY THAT SET. The guard runs at offset 0 of the entry block, BEFORE the prologue
-// and before the `param` captures, so the guarded function has established nothing: every incoming argument
-// is still in x0..x7 / d0..d7 and every callee-saved register still holds its CALLER's value. What must be
-// saved is (live at a function entry) ∩ (destroyed by this chunk or its callees):
-//   • x0..x7 — the integer arguments, which are also `mmap`'s and `__gt_stack_relocate`'s argument registers.
-//   • x19..x28 — this chunk's own working registers, holding the caller's values.
+// ⭐ WHAT IT PRESERVES, AND WHY THAT SET (`arm64MorestackSavedGprs`). A function-entry guard runs at offset 0 of
+// the entry block, BEFORE the prologue and before the `param` captures, so the guarded function has established
+// nothing: every incoming argument is still in x0..x7 / d0..d7 and every callee-saved register still holds its
+// CALLER's value. What must be saved is (live at a function entry) ∩ (destroyed by this chunk or its callees):
+//   • `arm64ArgRegisters` — the integer arguments, which are also `mmap`'s and `__gt_stack_relocate`'s.
+//   • x19..x28 — the callee-saved file, this chunk's working registers among it, holding the caller's values.
 //   • x29 — the chain link, which this chunk REBASES in its saved slot so the restore below hands back the
 //     relocated pointer (x64 does exactly this with rbp).
 //   • x30 — the return into the guard. AAPCS64 obliges nothing here: the `bl mmap` destroys it.
-//   • d0..d7 — the float arguments. This chunk emits no SIMD instruction at all, but `mmap`/`munmap` are
+//   • `arm64FpArgRegisters` — the float arguments. This chunk emits no SIMD instruction at all, but `mmap`/`munmap` are
 //     ordinary AAPCS64 callees and d0..d7 are call-clobbered, so they come back destroyed. d8..d15 need no
 //     save for the mirror-image reason: the ABI obliges libSystem to preserve them.
 
@@ -460,35 +463,36 @@ let Arm64MoreSpReg = Arm64Register.x13
 let Arm64MorestackEntrySpSlot = 0 as MachineWord
 let Arm64MorestackSaveBase = 16 as MachineWord
 
-// The saved GPRs, in slot order: the eight argument registers, the ten callee-saved, then x29 and x30.
-let arm64MorestackSavedGprs = [Arm64Register.x0, Arm64Register.x1, Arm64Register.x2, Arm64Register.x3, Arm64Register.x4, Arm64Register.x5, Arm64Register.x6, Arm64Register.x7, Arm64Register.x19, Arm64Register.x20, Arm64Register.x21, Arm64Register.x22, Arm64Register.x23, Arm64Register.x24, Arm64Register.x25, Arm64Register.x26, Arm64Register.x27, Arm64Register.x28, Arm64Register.x29, Arm64Register.x30]
+typealias Arm64RegisterArray = Array with Arm64Register
 
-// The saved SIMD registers: the eight float ARGUMENT registers, and only those — see the ENTRY CONTRACT.
-let arm64MorestackSavedFps = [Arm64Register.d0, Arm64Register.d1, Arm64Register.d2, Arm64Register.d3, Arm64Register.d4, Arm64Register.d5, Arm64Register.d6, Arm64Register.d7]
+// The GPRs `__gt_morestack` saves, in slot order: the argument registers, the callee-saved file, then x29 and x30.
+function arm64MorestackSavedGprs() returns Arm64RegisterArray
+	var gprs = Arm64RegisterArray.create()
 
-// The slot the LIVE x29 is saved in — written by this chunk with the REBASED value, so the restore hands the
-// guarded function a frame pointer into the new stack. Derived from the register list's own position rather
-// than written as a number, exactly as x64's `savedRbpDisp` is.
-function arm64MorestackFrameSlot(index RegCount) returns MachineWord
-	return Arm64MorestackSaveBase + (index as MachineWord) * SpillSlotBytes
-end 'arm64MorestackFrameSlot'
+	for reg in arm64ArgRegisters 'arguments'
+		gprs.push(reg)
+	end 'arguments'
 
-function arm64MorestackFpSlot(index RegCount) returns MachineWord
-	return arm64MorestackFrameSlot(arm64MorestackSavedGprs.count()) + (index as MachineWord) * SpillSlotBytes
-end 'arm64MorestackFpSlot'
+	for num in Arm64CalleeSavedGprLow upto Arm64CalleeSavedGprEnd 'calleeSaved'
+		gprs.push(try Arm64Register.fromRawValue(num) otherwise panic("arm64MorestackSavedGprs: callee-saved register number {num} names no arm64 register"))
+	end 'calleeSaved'
+
+	gprs.push(Arm64Register.x29)
+	gprs.push(Arm64Register.x30)
+	return gprs
+end 'arm64MorestackSavedGprs'
 
 // The whole frame, 16-aligned. SP at the `bl mmap` is `systemStackTop - frameBytes`, and the system stack's
 // top is page-aligned (`__sched_init_procs` takes it from `osAllocPages`), so a 16-aligned frame lands SP
-// on AAPCS64's required residue. Asserted rather than assumed, because a misaligned SP on AArch64 is an
-// alignment FAULT at the first frame access inside libSystem and names nothing that caused it.
-function arm64MorestackFrameBytes() returns StackSize
-	let raw = arm64MorestackFpSlot(arm64MorestackSavedFps.count()) as StackSize
-	return alignUpStack(raw, alignment: StackFrameAlignment)
+// on AAPCS64's required residue.
+function arm64MorestackFrameBytes(savedGprs Arm64RegisterArray) returns StackSize
+	return alignUpStack(Arm64MorestackSaveBase as StackSize + arm64RegisterBlockBytes(savedGprs), alignment: StackFrameAlignment)
 end 'arm64MorestackFrameBytes'
 
 function buildArm64GtMorestackChunk(target Target) returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginRawFunction()
-	let frameBytes = arm64MorestackFrameBytes()
+	let savedGprs = arm64MorestackSavedGprs()
+	let frameBytes = arm64MorestackFrameBytes(savedGprs)
 	let doubling = asm.newLabel()
 	let exhausted = asm.newLabel()
 	let refused = asm.newLabel()
@@ -500,7 +504,7 @@ function buildArm64GtMorestackChunk(target Target) returns FunctionCodeChunk
 	arm64GtStoreSp(asm, src: Arm64MoreSpReg, byteOffset: Arm64MorestackEntrySpSlot)
 
 	// Step 2: save everything the ENTRY CONTRACT names, then take the GT into a body register.
-	emitArm64MorestackRegisterBlock(asm, direction: Arm64GtBlockDirection.push)
+	emitArm64RegisterBlock(asm, gprs: savedGprs, base: Arm64MorestackSaveBase, direction: Arm64GtBlockDirection.push)
 	arm64EmitMovRuntimeReg(asm, dest: Arm64MoreGtReg, src: Arm64MorestackEntryGtReg)
 
 	// Step 3: old_base, old_size; TempB = need = old_top - projected + guard height; TempA = the ceiling;
@@ -550,12 +554,12 @@ function buildArm64GtMorestackChunk(target Target) returns FunctionCodeChunk
 	arm64EmitMovRuntimeImm(asm, dest: Arm64MoreTempA, value: GtStackMarksOfAGrow as MachineWord)
 	arm64EmitStoreWord64At(asm, src: Arm64MoreTempA, base: Arm64MoreGtReg, byteOffset: GtOffStackMarks)
 	arm64EmitLoadWord64At(asm, dest: Arm64MoreTempA, base: Arm64MoreGtReg, byteOffset: GtOffFp)
-	arm64GtStoreSp(asm, src: Arm64MoreTempA, byteOffset: arm64MorestackFrameSlot(arm64MorestackLiveFpIndex()))
+	arm64GtStoreSp(asm, src: Arm64MoreTempA, byteOffset: arm64RegisterBlockSlot(Arm64MorestackSaveBase, index: arm64MorestackLiveFpIndex(savedGprs)))
 
 	// Step 7: tear down and return onto the RELOCATED stack, at the rebased `gt.sp`, read BEFORE the register
 	// restores because the GT's register is one of the registers those restores overwrite.
 	arm64EmitLoadWord64At(asm, dest: Arm64MoreSpReg, base: Arm64MoreGtReg, byteOffset: GtOffSp)
-	emitArm64MorestackRegisterBlock(asm, direction: Arm64GtBlockDirection.pop)
+	emitArm64RegisterBlock(asm, gprs: savedGprs, base: Arm64MorestackSaveBase, direction: Arm64GtBlockDirection.pop)
 	arm64EmitStackFree(asm.code, amount: frameBytes)
 	arm64EmitMovToSp(asm.code, src: arm64RuntimeReg(Arm64MoreSpReg))
 	arm64EmitRet(asm.code)
@@ -569,11 +573,11 @@ function buildArm64GtMorestackChunk(target Target) returns FunctionCodeChunk
 	return asm.finishChunk(GtMorestackName)
 end 'buildArm64GtMorestackChunk'
 
-// The index of x29 within `arm64MorestackSavedGprs` — found rather than written down, so moving the list
-// cannot leave the live-frame-pointer rebase writing into some other register's slot.
-function arm64MorestackLiveFpIndex() returns RegCount
-	for k in 0 upto arm64MorestackSavedGprs.count() 'find'
-		let reg = try arm64MorestackSavedGprs.get(k) otherwise panic("arm64MorestackLiveFpIndex: index derived from count is in range")
+// The index of x29 within `savedGprs` — found rather than written down, so moving the list cannot leave the
+// live-frame-pointer rebase writing into some other register's slot.
+function arm64MorestackLiveFpIndex(savedGprs Arm64RegisterArray) returns RegCount
+	for k in 0 upto savedGprs.count() 'find'
+		let reg = try savedGprs.get(k) otherwise panic("arm64MorestackLiveFpIndex: index derived from count is in range")
 
 		if reg == Arm64Register.x29 'found'
 			return k
@@ -595,13 +599,24 @@ function arm64GtLoadSp(asm Arm64RuntimeAsm, dest Arm64Register, byteOffset Machi
 	arm64EmitLoadWord64Sp(asm.code, dest: arm64RuntimeReg(dest), byteOffset: byteOffset)
 end 'arm64GtLoadSp'
 
-// Save or restore morestack's whole register block, from ONE list walk in both directions — the reason
-// `emitArm64GtSavedBlock` gives, in a chunk where the consequence of a mismatch is a caller's argument
-// silently replaced by a kernel return value.
-function emitArm64MorestackRegisterBlock(asm Arm64RuntimeAsm, direction Arm64GtBlockDirection)
-	for k in 0 upto arm64MorestackSavedGprs.count() 'gprs'
-		let reg = try arm64MorestackSavedGprs.get(k) otherwise panic("emitArm64MorestackRegisterBlock: index derived from count is in range")
-		let slot = arm64MorestackFrameSlot(k)
+// The SP offset of slot `index` of a register block laid from `base`: `gprs` first, then the float argument
+// registers.
+function arm64RegisterBlockSlot(base MachineWord, index RegCount) returns MachineWord
+	return base + (index as MachineWord) * SpillSlotBytes
+end 'arm64RegisterBlockSlot'
+
+// The bytes a register block of `gprs` spans.
+function arm64RegisterBlockBytes(gprs Arm64RegisterArray) returns StackSize
+	return ((gprs.count() + arm64FpArgRegisters.count()) * SpillSlotBytes) as StackSize
+end 'arm64RegisterBlockBytes'
+
+// ⭐ **SAVE OR RESTORE `gprs` AND EVERY FLOAT ARGUMENT REGISTER AT CONSECUTIVE SP SLOTS FROM `base`, FROM ONE WALK
+// IN BOTH DIRECTIONS** — the reason `emitArm64GtSavedBlock` gives, in the two chunks where a mismatch is a
+// caller's argument silently replaced by a kernel return value or by `__gt_preempt`'s.
+function emitArm64RegisterBlock(asm Arm64RuntimeAsm, gprs Arm64RegisterArray, base MachineWord, direction Arm64GtBlockDirection)
+	for k in 0 upto gprs.count() 'gprs'
+		let reg = try gprs.get(k) otherwise panic("emitArm64RegisterBlock: index derived from count is in range")
+		let slot = arm64RegisterBlockSlot(base, index: k as RegCount)
 
 		match direction 'dir'
 			push then arm64GtStoreSp(asm, src: reg, byteOffset: slot)
@@ -609,16 +624,16 @@ function emitArm64MorestackRegisterBlock(asm Arm64RuntimeAsm, direction Arm64GtB
 		end 'dir'
 	end 'gprs'
 
-	for k in 0 upto arm64MorestackSavedFps.count() 'fps'
-		let reg = try arm64MorestackSavedFps.get(k) otherwise panic("emitArm64MorestackRegisterBlock: index derived from count is in range")
-		let slot = arm64MorestackFpSlot(k)
+	for k in 0 upto arm64FpArgRegisters.count() 'fps'
+		let reg = try arm64FpArgRegisters.get(k) otherwise panic("emitArm64RegisterBlock: index derived from count is in range")
+		let slot = arm64RegisterBlockSlot(base, index: (gprs.count() + k) as RegCount)
 
 		match direction 'dir'
 			push then arm64EmitStoreFpSp(asm.code, src: arm64RuntimeFpReg(reg), byteOffset: slot)
 			pop then arm64EmitLoadFpSp(asm.code, dest: arm64RuntimeFpReg(reg), byteOffset: slot)
 		end 'dir'
 	end 'fps'
-end 'emitArm64MorestackRegisterBlock'
+end 'emitArm64RegisterBlock'
 
 // The registers `__gt_stack_relocate` works in: its three AAPCS64 arguments, then caller-saved scratch. It makes
 // no call until its last step, the release, after which none of them is read, so nothing is saved but its frame
@@ -686,8 +701,10 @@ function buildArm64GtStackRelocateChunk(target Target) returns FunctionCodeChunk
 	// The GT's own view of its stack. There is no TIB pair on this lane (this file's header, item 1).
 	arm64EmitStoreWord64At(asm, src: Arm64RelocNewBaseReg, base: Arm64RelocGtReg, byteOffset: GtOffStackBase)
 	arm64EmitStoreWord64At(asm, src: Arm64RelocNewSizeReg, base: Arm64RelocGtReg, byteOffset: GtOffStackSize)
-	arm64EmitAddRuntimeImm(asm, dest: Arm64RelocLinkReg, base: Arm64RelocNewBaseReg, imm: gtStackGuardHeight(target) as Imm32)
-	arm64EmitStoreWord64At(asm, src: Arm64RelocLinkReg, base: Arm64RelocGtReg, byteOffset: GtOffStackGuard)
+
+	// ⚠ A preemption request `__sysmon` stored into the guard word meanwhile is overwritten here and lost; x64's
+	// twin carries why that is accepted.
+	emitArm64GtGuardWordRestore(asm, gt: Arm64RelocGtReg, scratch: Arm64RelocLinkReg, target: target)
 
 	// Give the old stack back. Every pointer into it has been rewritten, so nothing that survives this can read it.
 	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x0, src: Arm64RelocOldBaseReg)
@@ -696,6 +713,14 @@ function buildArm64GtStackRelocateChunk(target Target) returns FunctionCodeChunk
 
 	return asm.finishFunction(GtStackRelocateName)
 end 'buildArm64GtStackRelocateChunk'
+
+// The guard word of the GT in `gt` set to its stack's base plus the guard height — where every stack the thread
+// runs on starts it.
+function emitArm64GtGuardWordRestore(asm Arm64RuntimeAsm, gt Arm64Register, scratch Arm64Register, target Target)
+	arm64EmitLoadWord64At(asm, dest: scratch, base: gt, byteOffset: GtOffStackBase)
+	arm64EmitAddRuntimeImm(asm, dest: scratch, base: scratch, imm: gtStackGuardHeight(target) as Imm32)
+	arm64EmitStoreWord64At(asm, src: scratch, base: gt, byteOffset: GtOffStackGuard)
+end 'emitArm64GtGuardWordRestore'
 
 // `__gt_stack_relocate` keeps nothing in its frame but the record.
 let NoRelocateSlots = 0 as StackSize
@@ -769,20 +794,31 @@ let Arm64GuardScratchReg = Arm64Register.x13
 
 // ⭐ Emit the guard at the very START of a guarded function's entry block — BEFORE the prologue — for a
 // USER function of a green-thread module that reserves a frame. When the running green thread's projected
-// SP would dip below its stack guard, it grows and relocates the stack first; otherwise it is a handful of
-// instructions that fall through. A no-op for a P's inline scheduler GT (`stackGuard` is the slab zero, so
-// the `hs` is always taken) and off a green thread entirely (the three null tests bail). `mrt_panic` runs it
-// too, after its frame record (`Arm64PanicRuntime.arm64EmitPanicStackGuard`).
+// SP would dip below its stack guard the cold path runs; otherwise it is a handful of instructions that fall
+// through. A no-op for a P's inline scheduler GT (`stackGuard` is the slab zero, so the `hs` is always taken)
+// and off a green thread entirely (the three null tests bail). At a function entry the cold path calls
+// `__gt_guard_tripped` and runs the whole guard again; `mrt_panic`'s withdraws a preemption request and only
+// grows (`Arm64PanicRuntime.arm64EmitPanicStackGuard`). x64's twin carries why both shapes are sound.
 //
 // ⚠ **IT PRESERVES x30 ITSELF**, which is the whole shape difference from x64's — see this file's header.
 //
 // It emits into the function's own byte stream with a GUARD-LOCAL branch table, exactly as the x64 twin
 // does, so it is invisible to the Target-IR goldens and is verified by the RUN plus a disassembly instead.
-export function emitArm64GtStackGuard(code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, frameBytes StackSize, margin ParsedInt, os Os)
+export function emitArm64GtStackGuard(code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, frameBytes StackSize, margin ParsedInt, site GtGuardSite, target Target)
 	var asm = Arm64RuntimeAsm.beginRawFunction()
+	let top = asm.newLabel()
 	let skip = asm.newLabel()
+	let mayPark = site == GtGuardSite.functionEntry
 
-	emitArm64LoadCurrentGtOrBail(asm, mDest: Arm64MorestackEntryGtReg, gtDest: Arm64MorestackEntryGtReg, scratch: Arm64GuardScratchReg, bail: skip, os: os)
+	asm.placeLabel(top)
+	emitArm64LoadCurrentGtOrBail(asm, mDest: Arm64MorestackEntryGtReg, gtDest: Arm64MorestackEntryGtReg, scratch: Arm64GuardScratchReg, bail: skip, os: target.os)
+
+	if not mayPark 'withdrawARequest'
+		let compare = asm.newLabel()
+		emitArm64BranchUnlessPreemptRequest(asm, scratch: Arm64GuardScratchReg, unlessRequested: compare)
+		emitArm64GtGuardWordRestore(asm, gt: Arm64MorestackEntryGtReg, scratch: Arm64GuardScratchReg, target: target)
+		asm.placeLabel(compare)
+	end 'withdrawARequest'
 
 	// projected = SP - (frameBytes + margin + the cold path's own cell); enough room (>= gt.stackGuard) → skip.
 	arm64EmitMovFromSp(asm.code, dest: arm64RuntimeReg(Arm64MorestackEntrySysTopReg))
@@ -797,19 +833,90 @@ export function emitArm64GtStackGuard(code ByteArray, callFixups CallFixupArray,
 	arm64EmitStackAlloc(asm.code, amount: Arm64GuardSaveBytes)
 	arm64GtStoreSp(asm, src: Arm64Register.x30, byteOffset: 0)
 
-	// x14 = the projected SP and x12 = this M's system-stack top, which IS `__gt_morestack`'s entry contract.
+	// x14 = the projected SP and x12 = this M's system-stack top, which with x11 IS the callees' entry contract.
 	// The M is re-read rather than kept from the test above, because that register now holds the current GT —
 	// the OTHER part of the contract — and the hot path must not spend a register to save a load on the cold one.
 	arm64EmitMovRuntimeReg(asm, dest: Arm64MorestackEntryProjectedSpReg, src: Arm64MorestackEntrySysTopReg)
-	emitArm64LoadCurrentMOrBailless(asm, dest: Arm64MorestackEntrySysTopReg, scratch: Arm64GuardScratchReg, os: os)
+	emitArm64LoadCurrentMOrBailless(asm, dest: Arm64MorestackEntrySysTopReg, scratch: Arm64GuardScratchReg, os: target.os)
 	arm64EmitLoadWord64At(asm, dest: Arm64MorestackEntrySysTopReg, base: Arm64MorestackEntrySysTopReg, byteOffset: MOffSystemStackSP)
-	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: GtMorestackName)
+
+	if mayPark 'mayPark'
+		arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: GtGuardTrippedName)
+	end 'mayPark' else 'mustNotPark'
+		arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: GtMorestackName)
+	end 'mustNotPark'
+
 	arm64GtLoadSp(asm, dest: Arm64Register.x30, byteOffset: 0)
 	arm64EmitStackFree(asm.code, amount: Arm64GuardSaveBytes)
+
+	if mayPark 'reRun'
+		arm64EmitBranchTo(asm, label: top)
+	end 'reRun'
 
 	asm.placeLabel(skip)
 	arm64AppendResolvedFragment(asm, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs)
 end 'emitArm64GtStackGuard'
+
+// Branch to `unlessRequested` when the guard word of the GT in x11 holds anything but a preemption request.
+function emitArm64BranchUnlessPreemptRequest(asm Arm64RuntimeAsm, scratch Arm64Register, unlessRequested BlockId)
+	arm64EmitLoadWord64At(asm, dest: scratch, base: Arm64MorestackEntryGtReg, byteOffset: GtOffStackGuard)
+	arm64EmitCmpRuntimeImm(asm, reg: scratch, imm: GtStackGuardPreempt as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: unlessRequested)
+end 'emitArm64BranchUnlessPreemptRequest'
+
+// ==========================================================================
+// `__gt_guard_tripped` and its preempt arm
+// ==========================================================================
+//
+// ⭐⭐ **A PREEMPTION REQUEST IS HONOURED ON THE GREEN THREAD's OWN STACK** — x64's `emitGtPreemptArm` carries
+// why. `__gt_guard_tripped` is entered with `__gt_morestack`'s ENTRY CONTRACT from a function-entry guard only:
+// x11 = the current GT, SP = the green thread's own stack, 16-aligned, with the guard's x30 cell just above it,
+// and x30 = the return into the guard. The guarded function has established nothing, so its arguments are still
+// in x0..x7 / d0..d7 and every callee-saved register holds its caller's value: the arm saves the argument
+// registers — `arm64ArgRegisters` and `arm64FpArgRegisters`, the backend's own tables — in a frame of its own,
+// and `__gt_preempt`, an ordinary callee, preserves the rest. x9..x15 are the guard's to clobber. The frame record
+// keeps the x29 chain whole, so a stack moved while the thread is parked rebases this frame's link like any other.
+// With no request in the guard word the chunk branches to `__gt_morestack` with the contract untouched.
+function buildArm64GtGuardTrippedChunk() returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginRawFunction()
+	let grow = asm.newLabel()
+
+	emitArm64BranchUnlessPreemptRequest(asm, scratch: Arm64MoreTempA, unlessRequested: grow)
+	arm64AppendResolvedFragment(buildArm64GtPreemptArm(), code: asm.code, callFixups: asm.callFixups, rdataRelocs: asm.rdataRelocs)
+
+	asm.placeLabel(grow)
+	arm64EmitTailBranch(asm.code, callFixups: asm.callFixups, targetName: GtMorestackName)
+	return asm.finishChunk(GtGuardTrippedName)
+end 'buildArm64GtGuardTrippedChunk'
+
+// One local per argument register, integer first.
+function arm64GtPreemptArmSlots() returns StackSize
+	return (arm64ArgRegisters.count() + arm64FpArgRegisters.count()) as StackSize
+end 'arm64GtPreemptArmSlots'
+
+// ⭐ **WHAT A HONOURED PREEMPTION REQUEST COSTS THE GREEN THREAD's STACK BELOW THE GUARD, BEFORE `__gt_preempt`
+// RUNS**: the guard's x30 cell and the frame the arm opens. `requirePreemptionFitsTheGuardMargin` adds
+// `__gt_preempt`'s tree to it.
+export function arm64GtPreemptArmStackBytes() returns StackSize
+	return Arm64GuardSaveBytes + buildArm64GtPreemptArm().stackBytesPerCall()
+end 'arm64GtPreemptArmStackBytes'
+
+// The arm as a framed fragment, closed with its own `ret`, for `__gt_guard_tripped` to splice in. The frame
+// record sits at SP, so the locals' SP displacements are their x29 ones.
+function buildArm64GtPreemptArm() returns Arm64RuntimeAsm
+	var arm = Arm64RuntimeAsm.beginFunction(arm64GtPreemptArmSlots())
+	let locals = arm.slotOffset(0)
+	emitArm64RegisterBlock(arm, gprs: arm64ArgRegisters, base: locals, direction: Arm64GtBlockDirection.push)
+	arm64EmitMovRuntimeReg(arm, dest: arm64ArgRegisterAt(0), src: Arm64MorestackEntryGtReg)
+	arm64EmitBranchLink(arm.code, callFixups: arm.callFixups, targetName: GtPreemptName)
+	emitArm64RegisterBlock(arm, gprs: arm64ArgRegisters, base: locals, direction: Arm64GtBlockDirection.pop)
+	arm.closeFrame()
+	return arm
+end 'buildArm64GtPreemptArm'
+
+// A libSystem call on a green thread leaves the thread's own stack untouched: the door moves SP to the machine's
+// system stack before it stores anything (`buildArm64DarwinLibcCallChunk`).
+export let Arm64ImportCallGtStackBytes = 0 as StackSize
 
 // ⭐ The M alone, where the caller has already PROVEN it exists and therefore has no branch to take. Not a
 // weaker version of `emitArm64LoadCurrentMOrBail` but a different PRECONDITION, and its one caller states
@@ -970,6 +1077,7 @@ end 'arm64AppendResolvedFragment'
 export function appendArm64GtRuntimeChunks(chunks FunctionCodeChunkArray, target Target)
 	chunks.push(buildArm64GtContextSwitchChunk(target))
 	chunks.push(buildArm64GtTrampolineChunk())
+	chunks.push(buildArm64GtGuardTrippedChunk())
 	chunks.push(buildArm64GtMorestackChunk(target))
 	chunks.push(buildArm64GtStackRelocateChunk(target))
 end 'appendArm64GtRuntimeChunks'

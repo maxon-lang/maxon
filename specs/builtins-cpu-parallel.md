@@ -29,35 +29,52 @@ documents them together:
 - `schedMaxActiveWorkers` asks this compiler's own SCHEDULER how parallel a run WAS. It is a
   property of the emitted runtime and reaches no OS.
 
-### `schedMaxActiveWorkers` is exactly 1 FOR AN `async` PROGRAM, and that is BY CONSTRUCTION rather than by a default
+### `schedMaxActiveWorkers` for an `async` program is 1 UNTIL ITS GREEN THREAD REACHES THE SCHEDULER
 
 The compiler HAS a worker M — `SchedRuntime.buildSchedWorkerLoop` — and a high-water counter that loop
-raises on every entry, which is what this intrinsic reads. What an `async` program does not have is a REASON
-to start one, and the reason it does not have is a stronger statement than a constant. ⚖ **An `async` call
-creates a COROUTINE of the calling green thread** (user ruling, 2026-08-27), published only to its
-owner's queue; a worker M schedules GREEN THREADS. So an `async`-only program calls
-`__sched_wake_or_spawn` never, and creates no worker OS thread **at any `MAXON_MAX_PROCS`** — which is why
-this holds now that the default is the machine's processor count and not 1.
+raises on every entry, which is what this intrinsic reads. ⚖ **An `async` call creates a COROUTINE of the
+calling green thread** (user ruling, 2026-08-27), published only to its owner's queue, so a coroutine never
+gives a worker M anything to take. A second machine comes from the system monitor, or from the program's own
+green thread — `main`'s, in an `async`-only program — asking to be put behind everyone:
 
-⛔ **IT IS NO LONGER 1 IN EVERY PROGRAM, AND THIS SECTION USED TO SAY IT WAS.** The old sentence — *"the
+- **Preemption.** The monitor preempts a green thread that has held its processor for 10 ms, at its next
+  function prologue, and puts it on the global queue behind every other runnable green thread
+  (`sched-preempt.md`). It may resume on another OS thread. `__Builtins.schedPreemptCount()` counts these.
+- **A retake.** A kernel call long enough for the monitor to retake its processor hands that processor to a
+  new M when no processor is idle and no M is looking for work (Go's `handoffp`, `sched-syscall-handoff.md`).
+  `__Builtins.schedRetakeCount()` counts these.
+- **An overdue timer.** The monitor starts a machine on an idle processor for a timer no running machine will
+  fire in time. `__Builtins.schedTimerStartCount()` counts these.
+- **A `Runtime.yield()` with no sibling coroutine to run** puts the green thread on the global queue the way a
+  preemption does (`runtime-yield.md`).
+
+Each global put pays a wake — Go's `wakep` — and a wake starts a worker M when a processor is idle. MEASURED
+on this tree: an `async` program whose one coroutine spins for 100 ms reads `workers=1` at
+`MAXON_MAX_PROCS=1` and `workers=2` at 2, at 12 and at the default, with six preemptions in each run.
+⇒ **An `async`-only program that never yields alone reads 1 exactly when the monitor's three counters read 0**,
+and that conditional — not a bare `workers == 1` a descheduled run can break — is what the case below
+asserts.
+
+⛔ **IT IS NOT 1 IN EVERY PROGRAM, AND THIS SECTION USED TO SAY IT WAS.** The old sentence — *"the
 high-water mark of a population that never exceeds one is 1, in every program"* — rested on there being no
 producer of a green thread "until a `spawn` primitive lands". `spawn` has landed. A program that spawns
 services publishes real green threads to a P ring, wakes worker Ms and reads this intrinsic above 1;
 `multicore-stress/pin-matrix.sh` asserts exactly that, per family. The cases below are `async` programs and their
 subject is the `async` half.
 
-⚠ **`__Builtins.schedStealCount()` answers 0 for the same reason and not for a different one**: a steal
-takes a green thread out of another P's ring, and no `async` frame ever enters a ring. `sched-runqueue.md`
-carries that half.
+⚠ **`__Builtins.schedStealCount()` needs a second M for the same reason**: a steal takes a green thread out of
+another P's ring, and no `async` frame ever enters a ring — only a green thread readied onto one can be
+stolen, and only by a worker M, which a run that never reaches the scheduler does not start.
+`sched-runqueue.md` carries that half.
 
 ⚠ **THAT IS A READING, NOT A PLACEHOLDER — AND IT USED TO BE A `ret 1`.** The body was a constant
 return for as long as the runtime had no worker loop to raise anything; it is now a `.data` load, and
 the slot is SEEDED TO 1 rather than written by an initializer, so a program that never installs the
 scheduler still reads the truth (one M: its own) with no code at all. ⚠ **The `workers=2, 7, 11-12`
 this used to report under `MAXON_MAX_PROCS ∈ {2, 7, 12}` was measured before EC10 pinned `async`, when
-a spawn published a green thread to the scheduler.** On this tree an `async` program's sweep reads **1 at
-every value and at the default** — `multicore-stress/pin-matrix.sh` asserts that for the coroutine family and asserts
-`workers >= 2` for the spawn family, which is the same gate seen from both sides.
+a spawn published a green thread to the scheduler.** `multicore-stress/pin-matrix.sh` asserts `workers=1` for
+its coroutine family and `workers >= 2` for the spawn family; the coroutine half is asserted only for a row whose
+`monitor=` reading — the three counters' sum — is 0.
 
 ⚠ **THE IOCP COMPLETION THREAD IS STILL NOT A WORKER M, AND IT IS THE ONE THING THAT COULD MAKE THIS
 LOOK WRONG.** The OS thread `__io_init` creates drains completions and re-readies parked green
@@ -72,7 +89,8 @@ The `aggregate=` row is the harness's own determinism signal.
 ⛔ **`workers=1` IS NOT A CONSEQUENCE OF THE PROCESSOR COUNT.** The compiler defaults to the machine's count,
 so this program builds 12 Ps. **The `workers=` row is 1 anyway**, because this program's work is
 `async` and an `async` frame is a coroutine of its caller — the P count is not what decides whether a
-worker M starts, the WORK is.
+worker M starts, the WORK is — and because its run is too short for the monitor to preempt its green thread.
+MEASURED on this tree: `workers=1` at `MAXON_MAX_PROCS ∈ {1, 2, 12}`, each run about 40 ms.
 
 ⛔ **THE NOTE HERE WAS STALE TWICE OVER AND BOTH CORRECTIONS ARE MEASURED.** It said
 *"`MAXON_MAX_PROCS>1` really does give the compiler worker Ms"* and that this program *"dies with exit 86
@@ -368,15 +386,18 @@ end 'main'
 ```
 
 <!-- test: builtins-cpu-parallel.sched-max-active-workers-is-one-under-async -->
-**THE CASE THAT SAYS THE COUNTER IS MAINTAINED AND STILL READS 1.** A program that spawns two
-coroutines, runs them and awaits them observes one worker M — since EC10 because a coroutine is never
-published where a worker M could take it, so nothing calls `__sched_wake_or_spawn` at all. It goes red
-the day `spawn` gives that call site a producer, and not the day a worker loop exists, because one does.
+**THE CASE THAT SAYS THE COUNTER IS MAINTAINED, AND READS 1 UNLESS THE MONITOR ACTED.** A program that
+spawns two coroutines, runs them and awaits them observes one worker M, or the system monitor stepped in: a
+coroutine is never published where a worker M could take it, and this program never yields, so the only roads
+to a second machine are the monitor's three and each has a counter. The case therefore asserts `workers == 1`
+OR one of them counted, and cannot go red because the OS descheduled the process long enough for a
+preemption. What turns it red is a second worker M with all three at 0 — a coroutine that reached the
+scheduler. The workers are read first: every counter is stepped before the machine it may start.
 ⚠ It is a DEFAULT-`MAXON_MAX_PROCS` reading, and that is now a CHOICE rather than a limitation. ⛔ This
 sentence used to give the reason as *"a spec case cannot set that variable"*, which stopped being true when
 the per-case processor marker landed — `specs/sched-default-procs.md` owns it, and three other files
 already retracted this same claim. The case stays unpinned deliberately: its subject is that an `async`-only
-program reaches no worker M **at whatever count the machine happens to have**, so pinning one would narrow
+program reaches no worker M the monitor did not start **at whatever count the machine happens to have**, so pinning one would narrow
 it to a count nobody runs. The sweep over `{1, 2, 7, 12}` is still `multicore-stress/pin-matrix.sh`'s, because
 comparing counts is what that instrument is for and a spec case runs at exactly one.
 
@@ -397,10 +418,11 @@ function main() returns ExitCode
 	let a = await first
 	let b = await second
 	let workers = __Builtins.schedMaxActiveWorkers()
+	let monitorActions = __Builtins.schedPreemptCount() + __Builtins.schedRetakeCount() + __Builtins.schedTimerStartCount()
 	var score = a + b
-	if workers == 1 'stillSingleM'
+	if workers == 1 or monitorActions > 0 'singleMUnlessTheMonitorActed'
 		score = score + 2
-	end 'stillSingleM'
+	end 'singleMUnlessTheMonitorActed'
 	return score as ExitCode
 end 'main'
 ```
@@ -456,9 +478,10 @@ lands on the call's own span. ⚠ **They are named individually and NOT by prefi
 `__slab_` entry, and `schedMaxActiveWorkers`/`schedProcessorCount` set no `usesGt` and **must keep working
 here**, which the sibling case `sched-max-active-workers-runs-on-wasm` in this file is what proves.
 
-⚠ **ONE PROGRAM NAMES ALL THREE ON PURPOSE.** The band is a roster in the compiler, so the thing worth
-pinning is that every member of it is on the roster; a per-builtin case would pass while a sibling was
-quietly dropped from the list.
+⚠ **ONE PROGRAM NAMES EVERY MEMBER ON PURPOSE.** The band is a roster in the compiler
+(`SchedRuntime.isSchedSubstrateQueryCallee`), so the thing worth pinning is that every scheduler-state query
+is on it; a per-builtin case would pass while a sibling was quietly dropped from the list. A query added to
+the roster is added here too.
 
 ⛔ **A SECOND DEFECT RODE WITH THE FIRST, AND IT REACHED x64-windows.** All three set `usage.usesGt` BY HAND
 instead of calling `recordGtUsage`, so `usesHeap` stayed off and the scheduler linked against a
@@ -478,15 +501,29 @@ now. `async-sleep.md`'s surviving wasm case states the convention this follows.
 
 ```maxon
 function main() returns ExitCode
-	let steals = __Builtins.schedStealCount()
-	let retakes = __Builtins.schedRetakeCount()
-	let remote = __Builtins.slabRemoteFreeCount()
+	let c0 = __Builtins.schedStealCount()
+	let c1 = __Builtins.schedRetakeCount()
+	let c2 = __Builtins.slabRemoteFreeCount()
+	let c3 = __Builtins.schedGtRecycleCount()
+	let c4 = __Builtins.schedPreemptCount()
+	let c5 = __Builtins.schedTimerStartCount()
+	let c6 = __Builtins.schedIdleProcessorCount()
+	let c7 = __Builtins.schedGtRecordsCarved()
+	let c8 = __Builtins.schedParkWakeCount()
+	let c9 = __Builtins.gtStackBytes()
 
-	return (steals + retakes + remote) as ExitCode
+	return (c0 + c1 + c2 + c3 + c4 + c5 + c6 + c7 + c8 + c9) as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:26: this construct lowers to the runtime entry '__sched_steal_count', which has no wasm32-wasi implementation
-error E3104: <fragment>:4:27: this construct lowers to the runtime entry '__sched_retake_count', which has no wasm32-wasi implementation
-error E3104: <fragment>:5:26: this construct lowers to the runtime entry '__slab_remote_free_count', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:22: this construct lowers to the runtime entry '__sched_steal_count', which has no wasm32-wasi implementation
+error E3104: <fragment>:4:22: this construct lowers to the runtime entry '__sched_retake_count', which has no wasm32-wasi implementation
+error E3104: <fragment>:5:22: this construct lowers to the runtime entry '__slab_remote_free_count', which has no wasm32-wasi implementation
+error E3104: <fragment>:6:22: this construct lowers to the runtime entry '__sched_gt_recycle_count', which has no wasm32-wasi implementation
+error E3104: <fragment>:7:22: this construct lowers to the runtime entry '__sched_preempt_count', which has no wasm32-wasi implementation
+error E3104: <fragment>:8:22: this construct lowers to the runtime entry '__sched_timer_start_count', which has no wasm32-wasi implementation
+error E3104: <fragment>:9:22: this construct lowers to the runtime entry '__sched_idle_processor_count', which has no wasm32-wasi implementation
+error E3104: <fragment>:10:22: this construct lowers to the runtime entry '__sched_gt_records_carved', which has no wasm32-wasi implementation
+error E3104: <fragment>:11:22: this construct lowers to the runtime entry '__sched_park_wake_count', which has no wasm32-wasi implementation
+error E3104: <fragment>:12:22: this construct lowers to the runtime entry '__sched_gt_stack_bytes', which has no wasm32-wasi implementation
 ```

@@ -723,7 +723,7 @@ end 'x64LinuxEmitTimespecToNanos'
 // 64-bit word some five centuries sooner than the FILETIME it is on its way to.
 function buildX64LinuxWallClockChunk() returns FunctionCodeChunk
 	let SlotOutPtr = 0 as StackSize
-	var asm = X64RuntimeAsm.beginFunction(1 + LinuxTimespecSlots)
+	var asm = X64RuntimeAsm.beginFunction(LinuxClockChunkSlots)
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), srcReg: X64Register.rcx)
 	x64LinuxReadClockTimespec(asm, clockId: LinuxClockRealtime)
@@ -756,7 +756,7 @@ end 'buildX64LinuxWallClockChunk'
 // SUBTRACTED, and scaling here to look like Windows would be a guess wearing a unit's name.
 function buildX64LinuxThreadCpuChunk() returns FunctionCodeChunk
 	let SlotOutPtr = 0 as StackSize
-	var asm = X64RuntimeAsm.beginFunction(1 + LinuxTimespecSlots)
+	var asm = X64RuntimeAsm.beginFunction(LinuxClockChunkSlots)
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), srcReg: X64Register.rcx)
 	x64LinuxReadClockTimespec(asm, clockId: LinuxClockThreadCpuTime)
@@ -767,6 +767,13 @@ function buildX64LinuxThreadCpuChunk() returns FunctionCodeChunk
 
 	return asm.finishFunction(HostThreadCpuName)
 end 'buildX64LinuxThreadCpuChunk'
+
+// What one call of `mrt_host_thread_cpu` costs a green thread's stack: its frame and entry words, and nothing
+// below them, because its clock read is a raw `syscall`. EXPORTED for
+// `PreemptionDepth.requirePreemptionFitsTheGuardMargin`, which reaches it from a park's clock read.
+export function x64LinuxThreadCpuStackBytes() returns StackSize
+	return X64RuntimeAsm.beginFunction(LinuxClockChunkSlots).stackBytesPerCall()
+end 'x64LinuxThreadCpuStackBytes'
 
 // ==========================================================================
 // mrt_host_exe_path(rcx = bufPtr, rdx = bufLen) -> rax = bytes written

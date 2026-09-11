@@ -467,24 +467,82 @@
 	end 'walkProfileFrames'
 
 	// ========================================================================================
+	// ONE TICK OF CPU
+	// ========================================================================================
+
+	// ⭐⭐ **ONE TICK'S WORTH OF CPU IN THE CYCLE COUNTER's UNIT, MEASURED RATHER THAN ASSUMED.**
+	// `QueryThreadCycleTime` counts at the processor's reference rate, which no API reports and which is not the
+	// nominal clock, so the sampler spins its own thread through a few windows timed by the performance counter
+	// and divides. The cycle reads sit INSIDE the clock reads, so a window counts cycles over no more than the
+	// time it divides by and can only read low — most of all when the OS descheduled the spinning thread — and
+	// the FASTEST window is kept. Taken before the target starts, so no part of its run goes unsampled.
+	let ProfileCalibrationWindows = 5
+	let ProfileCalibrationWindowNanos = 2000000
+
+	// One tick's worth of cycles — never zero, or no amount of CPU would ever be charged a sample.
+	module typealias ProfileCyclesPerTick = int(1 to i64.max)
+
+	// A calibration window's two measured spans — its cycles and its nanoseconds — as the division reads them,
+	// and their quotient: cycle-counter units per nanosecond, a fraction near the reference clock in gigahertz
+	// that an integer quotient would truncate.
+	typealias ProfileCalibrationSpan = float(0.0 to f64.max)
+	typealias ProfileCyclesPerNano = float(0.0 to f64.max)
+
+	// What calibration found: a tick's worth of cycles, or a counter that did not move — a host (a VM or an
+	// emulator) whose threads cannot be charged by CPU at all.
+	module union ProfileCalibration
+		measured(cyclesPerTick ProfileCyclesPerTick)
+		counterStood
+	end 'ProfileCalibration'
+
+	module function measureProfileCyclesPerTick(rateHz ProfileRate) returns ProfileCalibration
+		var fastest = 0.0 as ProfileCyclesPerNano
+
+		for _ in 0 upto ProfileCalibrationWindows 'eachWindow'
+			let started = Clock.nowNanos()
+			let startCycles = __Builtins.threadCpuTicks()
+			var spinning = Clock.elapsedNanos(started)
+
+			while spinning < ProfileCalibrationWindowNanos 'spin'
+				spinning = Clock.elapsedNanos(started)
+			end 'spin'
+
+			let spentCycles = __Builtins.threadCpuTicks() - startCycles
+			let spun = Clock.elapsedNanos(started)
+			let cyclesPerNano = try ((spentCycles as ProfileCalibrationSpan) / (spun as ProfileCalibrationSpan)) otherwise panic("measureProfileCyclesPerTick: the window ended only once {spun} ns had passed, which is not zero")
+			fastest = max(fastest, cyclesPerNano as ProfileCyclesPerNano)
+		end 'eachWindow'
+
+		let cyclesPerTick = trunc(try (fastest * ProfileNanosPerSecond / rateHz) otherwise panic("measureProfileCyclesPerTick: `--rate` is refused unless it is at least one sample per CPU-second"))
+
+		if cyclesPerTick < 1 'counterStood'
+			return ProfileCalibration.counterStood
+		end 'counterStood'
+
+		return ProfileCalibration.measured(cyclesPerTick as ProfileCyclesPerTick)
+	end 'measureProfileCyclesPerTick'
+
+	// ========================================================================================
 	// THE SESSION
 	// ========================================================================================
 
-	// The handles, scratch and thread table one profiling run holds. The thread table is three PARALLEL
+	// The handles, scratch and thread table one profiling run holds. The thread table is four PARALLEL
 	// arrays of machine words rather than one array of records, because a record reached through `get` is a
-	// BORROW and the cycle baseline is written on every tick (E3070).
+	// BORROW and the cycle baseline and the uncharged credit are written on every tick (E3070).
 	module type ProfileSession
 		var process as ProfileWord
 		var timer as ProfileWord
 		var scratch as ProfileWord
 		var window as ProfileWord
+		var cyclesPerTick as ProfileCyclesPerTick
 		var threadHandles as ProfileWordArray
 		var threadIds as ProfileWordArray
 		var threadCycles as ProfileWordArray
+		var threadCredit as ProfileWordArray
 		export var ticks as ProfileTally
 
-		export static function create(process ProfileWord, timer ProfileWord, scratch ProfileWord, window ProfileWord) returns ProfileSession
-			return Self{process: process, timer: timer, scratch: scratch, window: window, threadHandles: ProfileWordArray.create(), threadIds: ProfileWordArray.create(), threadCycles: ProfileWordArray.create(), ticks: 0}
+		export static function create(process ProfileWord, timer ProfileWord, scratch ProfileWord, window ProfileWord, cyclesPerTick ProfileCyclesPerTick) returns ProfileSession
+			return Self{process: process, timer: timer, scratch: scratch, window: window, cyclesPerTick: cyclesPerTick, threadHandles: ProfileWordArray.create(), threadIds: ProfileWordArray.create(), threadCycles: ProfileWordArray.create(), threadCredit: ProfileWordArray.create(), ticks: 0}
 		end 'create'
 
 		export function contextPtr() returns ProfileWord
@@ -499,12 +557,11 @@
 			return self.scratch + ProfileModuleEntrySlot
 		end 'moduleEntryPtr'
 
-		// ⭐ Re-enumerate the target's threads, keeping a handle for each NEW one and seeding its cycle
-		// baseline immediately — a thread whose baseline were left at zero would read as having run on its
-		// first tick, which is exactly the wrong answer for a worker that has been parked since it started.
+		// ⭐ Re-enumerate the target's threads, keeping a handle for each NEW one.
 		//
-		// ⛔ A thread the walk no longer lists has exited and its handle is closed here; one that exits
-		// between two refreshes is dropped sooner, by the suspend that refuses.
+		// ⛔ A thread the walk no longer lists has exited and its handle is closed here. One that exits between
+		// two refreshes is charged nothing meanwhile — its count reads zero, below its baseline — unless a charge
+		// was already due, in which case the suspend that refuses drops it sooner.
 		export function refreshThreads()
 			var seen = ProfileWordArray.create()
 
@@ -540,9 +597,10 @@
 				self.threadHandles.push(handle)
 				self.threadIds.push(id)
 
-				// ⭐ Seeded the instant it is discovered: a baseline left at zero would read as having RUN on
-				// the very next tick, which is the wrong answer for a worker parked since it started.
+				// ⭐ The baseline is seeded the instant the thread is discovered: one left at zero would charge
+				// the thread's whole prior CPU on the next tick, as a burst against whichever stack it is on.
 				self.threadCycles.push(__Builtins.profileThreadCycles(handle))
+				self.threadCredit.push(0)
 			end 'eachThread'
 
 			if spare != 0 'theLastOne'
@@ -558,7 +616,7 @@
 			while index > 0 'eachTracked'
 				index = index - 1
 
-				if profileWordArrayContains(seen, wanted: try self.threadIds.get(index) otherwise 0) 'stillThere'
+				if profileWordArrayContains(seen, wanted: try self.threadIds.get(index) otherwise panic("dropDepartedThreads: index {index} is below the table's count")) 'stillThere'
 					continue
 				end 'stillThere'
 
@@ -567,45 +625,60 @@
 		end 'dropDepartedThreads'
 
 		function forgetThread(index ElementIndex)
-			__Builtins.profileClose(try self.threadHandles.remove(index) otherwise 0)
-			_ = try self.threadIds.remove(index) otherwise 0
-			_ = try self.threadCycles.remove(index) otherwise 0
+			__Builtins.profileClose(try self.threadHandles.remove(index) otherwise panic("forgetThread: index {index} is outside the handle column"))
+			_ = try self.threadIds.remove(index) otherwise panic("forgetThread: index {index} is outside the id column")
+			_ = try self.threadCycles.remove(index) otherwise panic("forgetThread: index {index} is outside the baseline column")
+			_ = try self.threadCredit.remove(index) otherwise panic("forgetThread: index {index} is outside the credit column")
 		end 'forgetThread'
 
-		// ⭐⭐ ONE TICK: every known thread that has actually CONSUMED CPU since the last one.
+		// ⭐⭐ ONE TICK: every known thread is charged one sample per tick's worth of CPU it has CONSUMED. The COUNT
+		// is Go's (`setThreadCPUProfiler`: one SIGPROF per period of a thread's own CPU); a thread that wakes for
+		// microseconds owes a fraction of a sample, carried in its credit until the fractions add up to one, where
+		// charging it a whole sample for any tick it merely woke in overcounts it by orders of magnitude. WHERE the
+		// stack is captured is not Go's: SIGPROF interrupts the thread the instant its period expires, while this
+		// captures once, at the tick the charge falls due, and that one capture carries every sample charged there.
 		export function sampleOnce(accumulator ProfileAccumulator, image ProfileImage, frames ProfileStringArray)
+			let tickOfCpu = self.cyclesPerTick as ProfileWord
 			var index = self.threadHandles.count()
 
 			while index > 0 'eachThread'
 				index = index - 1
-				let handle = try self.threadHandles.get(index) otherwise 0
+				let handle = try self.threadHandles.get(index) otherwise panic("sampleOnce: index {index} is below the handle column's count")
 				let cycles = __Builtins.profileThreadCycles(handle)
-				let ran = cycles != (try self.threadCycles.get(index) otherwise cycles)
-				try self.threadCycles.set(index, value: cycles) otherwise ignore
+				let baseline = try self.threadCycles.get(index) otherwise panic("sampleOnce: index {index} is outside the baseline column")
+				var credit = (try self.threadCredit.get(index) otherwise panic("sampleOnce: index {index} is outside the credit column")) + cycles - baseline
+				try self.threadCycles.set(index, value: cycles) otherwise panic("sampleOnce: index {index} is outside the baseline column")
+				var charges = 0 as ProfileTally
 
-				if not ran 'idle'
+				while credit >= tickOfCpu 'eachTickOfCpu'
+					credit = credit - tickOfCpu
+					charges = charges + 1
+				end 'eachTickOfCpu'
+
+				try self.threadCredit.set(index, value: credit) otherwise panic("sampleOnce: index {index} is outside the credit column")
+
+				if charges == 0 'owesNoSample'
 					continue
-				end 'idle'
+				end 'owesNoSample'
 
-				if not self.sampleThread(handle, accumulator: accumulator, image: image, frames: frames) 'threadHasGone'
+				if not self.sampleThread(handle, charges: charges as ProfileCharges, accumulator: accumulator, image: image, frames: frames) 'threadHasGone'
 					self.forgetThread(index)
 					continue
 				end 'threadHasGone'
 
-				// ⭐⭐ **RE-BASELINE AFTER SAMPLING, OR THE SAMPLER MEASURES ITSELF.** Suspending and resuming
-				// a thread costs that thread kernel cycles, and the counter counts them — so baselining only
-				// beforehand closes a feedback loop: sample a thread once for any reason and the sampling
-				// itself advances its counter, so the next tick sees "it ran" and samples it again, forever,
-				// whether or not the thread ever executes an instruction of its own. Measured on the
-				// reference: a parked worker reported as 52% of a run that consumed exactly one core.
-				try self.threadCycles.set(index, value: __Builtins.profileThreadCycles(handle)) otherwise ignore
+				// ⭐⭐ **THE BASELINE IS THE COUNT READ WHILE THE THREAD WAS SUSPENDED** (`__prof_sample`). Suspending
+				// a thread costs it kernel cycles and the counter counts them, so a baseline read before the
+				// suspend would charge a sampled thread for its own sampling; one read after the walk would drop
+				// what the thread ran, resumed, while the sampler walked and aggregated its copied stack — most for
+				// the busiest, deepest threads. Only the resume's own cost reaches the next charge.
+				try self.threadCycles.set(index, value: __Builtins.profileReadWord(self.regionPtr(), ProfileRegionSuspendedCyclesOffset)) otherwise panic("sampleOnce: index {index} is outside the baseline column")
 			end 'eachThread'
 
 			self.ticks = self.ticks + 1
 		end 'sampleOnce'
 
-		// One captured stack. FALSE means the thread is gone and should be dropped.
-		function sampleThread(handle ProfileWord, accumulator ProfileAccumulator, image ProfileImage, frames ProfileStringArray) returns bool
+		// One captured stack, carrying `charges` samples. FALSE means the thread is gone and should be dropped.
+		function sampleThread(handle ProfileWord, charges ProfileCharges, accumulator ProfileAccumulator, image ProfileImage, frames ProfileStringArray) returns bool
 			let windowBytes = __Builtins.profileSample(self.process, handle, self.contextPtr(), self.regionPtr(), self.window, ProfileStackWindowBytes)
 
 			if windowBytes == ProfileSampleThreadGone 'exited'
@@ -617,7 +690,7 @@
 			if windowBytes == ProfileSampleNoRegisters 'nothingToRead'
 				frames.clear()
 				frames.push(ProfileUnreadableStackFrame)
-				accumulator.accept(frames, allocationBase: allocationBase, lostItsRoot: false, hadNoChain: true)
+				accumulator.accept(frames, charged: charges, allocationBase: allocationBase, lostItsRoot: false, hadNoChain: true)
 				return true
 			end 'nothingToRead'
 
@@ -628,13 +701,15 @@
 			let framePointer = __Builtins.profileReadWord(self.contextPtr(), ProfileContextRbpOffset)
 			let stackPointer = __Builtins.profileReadWord(self.contextPtr(), ProfileContextRspOffset)
 			let lostItsRoot = walkProfileFrames(frames, image: image, leafPc: programCounter, framePointer: framePointer, stackPointer: stackPointer, windowPtr: self.window, windowBytes: windowBytes as ProfileWord)
-			accumulator.accept(frames, allocationBase: allocationBase, lostItsRoot: lostItsRoot, hadNoChain: windowBytes == 0)
+			accumulator.accept(frames, charged: charges, allocationBase: allocationBase, lostItsRoot: lostItsRoot, hadNoChain: windowBytes == 0)
 
 			return true
 		end 'sampleThread'
 
-		// Arm an ABSOLUTE deadline and wait for it. ⛔ A RELATIVE one repays a stall as a BURST, and fifty
-		// readings twenty microseconds apart are one reading wearing fifty numbers.
+		// Arm an ABSOLUTE deadline and wait for it, so the ticks keep their rate however long one tick's work
+		// took — a RELATIVE wait would drift late by every tick's cost. The price is that a stall is repaid as a
+		// burst of back-to-back ticks, which charges nothing extra: each tick charges only the CPU consumed
+		// since the one before.
 		export function waitUntil(deadline ProfileWord)
 			__Builtins.profileTimerWait(self.timer, deadline)
 		end 'waitUntil'
@@ -651,6 +726,7 @@
 			self.threadHandles.clear()
 			self.threadIds.clear()
 			self.threadCycles.clear()
+			self.threadCredit.clear()
 
 			__Builtins.profileClose(self.process)
 

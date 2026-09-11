@@ -20,7 +20,7 @@
 //
 // ⭐ **THE LAST CLAUSE IS MEASURED, NOT ASSERTED, AND IT HAD TO BE — the plain refcount rests on it.** An
 // emitted program creates an OS thread at **three** `osThreadCreate` sites: `buildIoInit`'s completion
-// thread, `__sched_startm`'s worker M, and `emitSchedSysmonLazyStart`'s syscall monitor. The monitor holds
+// thread, `__sched_startm`'s worker M, and `emitSchedSysmonStart`'s system monitor. The monitor holds
 // no processor and runs no green thread, so it never dereferences a box. A worker M RUNS strands, so every
 // refcount it touches belongs to the strand it is running — which is the invariant, not an exception to it.
 // The completion thread owns no green thread at all, and its whole Maxon call graph is
@@ -36,11 +36,12 @@
 // ⛔⛔ **THE PROCESS RUNS ON AS MANY Ms AS IT HAS STRANDS TO RUN.** `__sched_init_procs` builds one P per
 // processor the machine reports (`emitResolveMaxProcs`), and `MAXON_MAX_PROCS` sets that count exactly.
 //
-// ⭐ **BUT THE COUNT IS NOT WHAT STARTS AN M; THE WORK IS.** The only thing that starts one is
-// `__sched_wake_or_spawn`, reached when a strand's token is published to a run queue — a `spawn`, or a strand
-// readied while no machine held it — and the machine that fired a timer or reaped a child for a strand takes
-// that token itself rather than waking another. So a program whose only green thread is `main` keeps one M at
-// every `MAXON_MAX_PROCS`, while a program that spawns services really does run on several.
+// ⭐ **BUT THE COUNT IS NOT WHAT STARTS AN M; THE WORK IS.** `__sched_wake_or_spawn` starts one for a strand
+// token published to a run queue — a `spawn`, a strand readied while no machine held it, a strand the monitor
+// preempted or one that yielded with no sibling to run — and `__sysmon` starts one for a processor it retook or
+// a timer it found overdue; the machine that fired a timer or reaped a child for a strand takes that token
+// itself rather than waking another. So a program whose only green thread is `main` keeps one M until the
+// monitor steps in or it yields alone, while a program that spawns services really does run on several.
 //
 // ⭐ **WHAT THE FLIP CHANGED IS WHETHER ANY OF IT RUNS BY DEFAULT.** G1 built the whole P/M substrate — the
 // CAS claim, the Dekker park, the wake, the per-thread system stack — and W212 built the run-queue hierarchy on
@@ -194,27 +195,29 @@ export enum MultiMSharing
 	// `emitSchedAnyRunnable`'s global-tier peek (reached from `buildSchedLoop`'s `widlefire`, which chooses between
 	// searching again and parking, and from `__sched_handoffp` and `__sched_retake`, which choose whether a
 	// processor is worth handing on); `__sched_find_runnable`'s 61-schedule fairness peek (`frfairpeek`); its
-	// global-batch peek (`frglobalpeek`); and `__sched_any_work`. One reads `__sched_npidle`:
+	// global-batch peek (`frglobalpeek`); and `__sched_any_work`. Three read `__sched_npidle`:
 	// `__sched_find_runnable`'s spinner cap (`frspincap`), which chooses whether this machine may join the search —
 	// a stale answer costs one spinner too many or one search left to the spinners the cap counted, which is Go's
-	// own reading of the same word (`sched.npidle.Load()`). One reads `__sched_midle`'s head:
+	// own reading of the same word (`sched.npidle.Load()`) — and, beside `__sched_nmspinning`, `__sched_retake`'s
+	// retake rule (`rtrule`) and `__sched_handoffp`'s spinning arm (`hopspin`), each of which chooses between two
+	// arms that are both correct, as Go's reading of the same pair does. One reads `__sched_midle`'s head:
 	// `__sched_wake_poller`'s peek (`wppeek`), which chooses whether to take the lock and look for a parked
 	// machine, and whose stale "empty" that function argues. The published earliest deadline (`__gt_timer_when`) is
 	// read through the one door `GtRuntime.emitGtLoadTimerWhen` by every due test — `buildSchedLoop`'s
 	// `wchecktimers`, the polls `GtRuntime.emitGtPollStores` makes for `widlepoll`, `wpolled` and the strand
-	// runner's yield — and, with the parked-child count (`__gt_proc_count`), by the owed-poller test
-	// (`emitSchedPollerOwed`) and the children's poll. A stale answer costs one needless look or one look deferred
-	// to the next, and the locked walks behind them decide what fires; `GtTimerWhenLabel` argues why a deferred
-	// fire is not a lost one. The poller's claim and deadline (`__sched_lastpoll`, `__sched_poll_until`) are read
-	// by `__sched_wake_netpoller`, by the owed-poller test and by `__sysmon`'s stale-poll peek, each of which
-	// argues its two arms at its own site. One reads `__sched_phase`: the main machine's loop-top exit test
-	// (`emitSchedLoopExitTest`), whose stale answer costs one more lap before the locked test at `wstoptest` sees
-	// it. `GtRuntime.__gt_owner_done` reads it too, but that read is half of a Dekker pair and carries its own
-	// argument.
+	// runner's yield, and `__sysmon`'s overdue-timer peek (`smontimer`) — and, with the parked-child count
+	// (`__gt_proc_count`), by the owed-poller test (`emitSchedPollerOwed`) and the children's poll. A stale answer
+	// costs one needless look or one look deferred to the next, and the locked walks behind them decide what fires;
+	// `GtTimerWhenLabel` argues why a deferred fire is not a lost one. The poller's claim and deadline
+	// (`__sched_lastpoll`, `__sched_poll_until`) are read by `__sched_wake_netpoller`, by the owed-poller test and
+	// by `__sysmon`'s stale-poll peek, each of which argues its two arms at its own site. One reads
+	// `__sched_phase`: the main machine's loop-top exit test (`emitSchedLoopExitTest`), whose stale answer costs
+	// one more lap before the locked test at `wstoptest` sees it. `GtRuntime.__gt_owner_done` reads it too, but
+	// that read is half of a Dekker pair and carries its own argument.
 	//
-	// ⭐ **TWO MORE READ A WORD TO REPORT IT RATHER THAN TO PICK AN ARM**: `__sched_idle_processor_count`
-	// answers `__sched_npidle`, and `__sched_gt_records_carved` answers `__gt_records_carved`. One aligned word
-	// each, so every answer is a count some locked writer really stored; a caller that wants the idle count
+	// ⭐ **THREE MORE READ A WORD TO REPORT IT RATHER THAN TO PICK AN ARM**: `__sched_idle_processor_count`
+	// answers `__sched_npidle`, `__sched_gt_records_carved` answers `__gt_records_carved`, and
+	// `__sched_timer_start_count` answers `__sched_timer_starts`. One aligned word each, so every answer is a count some locked writer really stored; a caller that wants the idle count
 	// settled polls it, as `specs/sched-processor.md` does.
 	//
 	// ⭐⭐ **AND TWO WALK `__sched_allm` UNLOCKED, WHOSE ARGUMENT IS A DIFFERENT ONE**: `__sched_stop_workers`'s join
@@ -364,7 +367,7 @@ export let MOffSystemStackSP = 0x10 as ByteOffset
 // Inline because it is created with the M, lives exactly as long, and a pointer would be a second allocation
 // and a second lifetime for a struct that has neither.
 //
-// Its `stackBase` is 0 (the slab's zero), which is load-bearing two ways: the syscall shim's guard reads it
+// Its `stackBase` is 0 (the arena's zero), which is load-bearing two ways: the syscall shim's guard reads it
 // as *"this is a real OS thread stack, call directly"*, and the prologue stack guard reads it as *"nothing to
 // grow"*. It runs the machine's scheduler loop and, on the main machine, the exit path — no user code, and
 // nothing that parks. Its TIB bounds are captured by the first `__gt_context_switch` AWAY from it — and those
@@ -595,7 +598,7 @@ export let MSyscallInCall = 1 as ParsedInt
 export let MSyscallStolen = 2 as ParsedInt
 
 // The two state bits together. A word whose state bits are ALL ZERO is a machine running ordinary Maxon code,
-// which is the slab's zero and therefore already right for a machine before its first shimmed call.
+// which is the arena's zero and therefore already right for a machine before its first shimmed call.
 let MSyscallStateMask = 3 as ParsedInt
 
 // One generation — the first bit above the state bits, so adding it steps the generation and leaves the state
@@ -627,11 +630,11 @@ export let MSyscallEnterDelta = MSyscallGenStep + MSyscallInCall
 //
 // ⚠ **NEITHER NEEDS ANY SYNCHRONISATION AND NEITHER OWES A `MultiMSharing` CLASS**, because there is exactly
 // one sysmon thread and it is the only reader and the only writer of both. They live on the M rather than in a
-// parallel array so a machine created after sysmon started arrives with its notes zeroed by the same slab
+// parallel array so a machine created after sysmon started arrives with its notes zeroed by the same arena
 // allocation that zeroes everything else on it — an array indexed by machine would be a structure whose growth
 // has to be synchronised against `__sched_startm`.
 //
-// ⚠ **A ZERO NOTE CANNOT BE MISTAKEN FOR AN OBSERVATION**, which is what makes the slab's zero safe here: a
+// ⚠ **A ZERO NOTE CANNOT BE MISTAKEN FOR AN OBSERVATION**, which is what makes the arena's zero safe here: a
 // machine sysmon can act on has the in-call bit set and a generation of at least one, so its word is at least
 // `MSyscallEnterDelta` and never compares equal to an unwritten note.
 let MOffSysmonWord = MOffSyscallState + (PointerSlotBytes as ByteOffset)
@@ -780,55 +783,15 @@ let PStatusActive = 1 as ParsedInt
 // Reserved: part of the portable header, and nothing reads or writes it.
 let POffReservedPendingWaiter = 0x50 as ByteOffset
 
-// Go's `runnext` — the one green thread a P runs before consulting its local ring.
+// Go's `runnext` — the one green thread a P runs before consulting its local ring. RESERVED AND NOT BUILT: it
+// waits for a program that measures a gain from it.
 //
-// ⛔⛔ **RESERVED AND DELIBERATELY NOT BUILT, AND THE REASON IS NO LONGER A QUOTATION — IT IS A MEASUREMENT
-// ON THIS TREE (MC1), RE-TAKEN AT W213-C3 AND UNCHANGED.** `proc.go:7530-7541` refuses `runnext` outright
-// when the runtime has no `sysmon`: *"A runnext goroutine shares the same time slice as the current
-// goroutine … To prevent a ping-pong pair of goroutines from starving all others, we depend on sysmon to
-// preempt long-running goroutines … If there is no sysmon, we must avoid runnext entirely or risk
-// starvation."*
-//
-// ⛔⛔⛔ **THIS SLOT USED TO SAY IT WAS WAITING FOR *"W213's ARRIVAL"*, AND W213 HAS ARRIVED AND CHANGED
-// NOTHING — WHICH IS THE WHOLE POINT AND IS WHY THE STALE DEPENDENCY IS REPLACED HERE RATHER THAN TICKED
-// OFF.** The compiler now HAS a `__sysmon` (W213-C3): it retakes a processor from a machine stuck in a blocking
-// kernel call. **Read Go's sentence again and the mechanism it names is `preemptone` — PREEMPTION — not
-// `sysmon` as such.** the compiler's monitor cannot preempt a green thread that is RUNNING Maxon code, because the compiler
-// is cooperative by construction, so the safety mechanism `runqput`'s guard is asking for still does not
-// exist.
-//
-// ⭐⭐ **MEASURED, NOT INFERRED — `scripts/multicore-stress/runnext-starvation-probe.maxon`, ONE PROGRAM, TWO
-// COMPILERS, `MAXON_MAX_PROCS=1`, THREE RUNS EACH, ON A TREE WHOSE `__sysmon` IS LIVE:**
-//
-//   • **shipped (no `runnext`):** `bystander-ran` then `pingpong-done`, **3 of 3**.
-//   • **with an experimental slot** — Go's own two sites, `__sched_runq_put` taking `p.runnext` when it is
-//     free and `__sched_runq_get` consulting it ahead of the ring, and nothing else: `pingpong-done` then
-//     `bystander-ran`, **3 of 3**, the bystander waiting out all 4,000 bounces.
-//
-// ⇒ **the readings are IDENTICAL to MC1's, taken before any monitor existed.** A monitor that can only
-// retake a processor from a SYSCALL has nothing to say about two green threads that never make one, which is
-// exactly the population Go's guard is about. The experimental build was reverted; the probe is what is left
-// of it, and re-running it is how the next rung re-asks this question.
-//
-// ⇒ **the slot stays reserved, and it now waits for PREEMPTION rather than for W213.** That is a
-// substantially larger rung — a cooperative runtime has no signal to deliver and no safe point to deliver it
-// at — and it is the honest name of the dependency.
-//
-// ⭐⭐ **AND THE QUESTION "DOES THE COMPILER'S COOPERATIVE MODEL MAKE GO'S OBJECTION INAPPLICABLE?" WAS ASKED
-// PROPERLY AND ANSWERED NO.** `scripts/multicore-stress/runnext-starvation-probe.maxon` is two services that ready
-// each other and a third that must still get a turn. **MEASURED at `MAXON_MAX_PROCS=1`, one program, two
-// compilers: on the shipped one the bystander runs FIRST on 3 of 3 runs; with a runnext slot published by
-// `__sched_runq_put` and consulted by `__sched_runq_get` — Go's own two sites — the bystander runs LAST on
-// 3 of 3, after all 4,000 bounces.**
-//
-// ⛔ **THE 61-SCHEDULE FAIRNESS CHECK DOES NOT RESCUE IT, AND THAT IS THE PART THAT LOOKS LIKE IT SHOULD.**
-// `GtFairnessInterval` consults the GLOBAL QUEUE; a starved thread that reached a P's LOCAL RING is never
-// in it, and nothing but a ring overflow ever puts one there. So the one mechanism the compiler has that Go's
-// argument does not account for is aimed at a different queue from the one that starves.
-//
-// ⇒ **and it stays reserved for a SAFETY MECHANISM rather than for a producer.** The throughput case for it
-// is real (a just-readied thread staying on the M that readied it is the direct cure for cross-M stealing),
-// which is exactly why it may not be taken on the throughput case alone.
+// ⚠ **BUILDING IT MEANS INHERITING THE TIME SLICE, AS GO DOES** (`proc.go:7530`, `inheritTime`): a thread run
+// from the slot must not step `POffSchedTick`, so `__sysmon` sees a ping-pong pair as the one slice it shares and
+// preempts it; a pair that stepped the tick at every hand-off would never look overdue and would starve every
+// other thread on the processor. The 61-schedule fairness check does not rescue it: that consults the GLOBAL
+// queue, and a starved thread waits on the LOCAL ring. `scripts/multicore-stress/runnext-starvation-probe.maxon`
+// is the program that measures the starvation, at `MAXON_MAX_PROCS=1`.
 let POffRunnext = 0x58 as ByteOffset
 
 // ⭐ **THIS P's GT-RECORD FREE LIST — Go's `p.gFree`, a LIFO threaded through `GtRuntime.GtOffNext`.**
@@ -863,10 +826,9 @@ let POffReservedSystemStackSP = 0x70 as ByteOffset
 // cross-thread state at all, which is exactly the premise P migration must NOT be built on.
 export let POffRemoteFreeHead = 0x78 as ByteOffset
 
-// ⭐ **THIS P's SCHEDULE COUNTER — Go's `schedtick`, and the ONLY thing the fairness check reads.** One up
-// per green thread `__sched_find_runnable` hands back, and every 61st of them consults the GLOBAL queue
-// before the local ring. Written by the owner alone, so a plain load/add/store: a thief has no reason to
-// know how often its victim has scheduled.
+// ⭐ **THIS P's SCHEDULE COUNTER — Go's `schedtick`.** One up per call of `__sched_find_runnable`, and every
+// 61st consults the GLOBAL queue before the local ring. Written by the owner alone, so a plain load/add/store;
+// `__sysmon` reads it unlocked to see whether one strand has held the processor too long (`POffSysmonTick`).
 //
 // ⭐ **IT IS WHERE THE SHARED HEADER ENDS, AT 0x80.** Everything from here on is this file's own tail, which
 // grafts onto nothing.
@@ -982,6 +944,19 @@ let POffOldM = POffGtRecycleCount + (PointerSlotBytes as ByteOffset)
 // and reads it unlocked: that function's header argues why a stale answer is only a candidate.
 let POffM = POffOldM + (PointerSlotBytes as ByteOffset)
 
+// ⭐⭐ **`__sysmon`'s NOTE ON THIS PROCESSOR's SCHEDULE COUNTER — Go's `sysmontick.schedtick`/`schedwhen`.** The
+// `POffSchedTick` it last saw and the time it first saw it. An unchanged tick means one strand has held the
+// processor since then, and `SchedForcePreemptNs` of that is a preemption request (`__sched_retake`). On the
+// processor, as Go keeps it, because the tick is the processor's. sysmon is the only reader and writer of both,
+// so neither is synchronised; a zero note cannot match a processor running a strand, whose tick is at least one.
+let POffSysmonTick = POffM + (PointerSlotBytes as ByteOffset)
+let POffSysmonWhen = POffSysmonTick + (PointerSlotBytes as ByteOffset)
+
+// ⭐ **HOW MANY PREEMPTION REQUESTS THREADS ON THIS PROCESSOR HAVE HONOURED — the reading
+// `__Builtins.schedPreemptCount()` sums.** Stepped by `__gt_preempt` on the machine holding the processor, which
+// is its only writer, and a per-P word for `POffStealCount`'s reason.
+let POffPreemptCount = POffSysmonWhen + (PointerSlotBytes as ByteOffset)
+
 // ⭐⭐ **THE RING'S 256 SLOTS, AT THE P's TAIL.** Go's `runq [256]guintptr` (`runtime2.go:807`). FIXED
 // rather than grown: the overflow has somewhere to go (the global queue), so a full ring is a routing
 // decision and never an error, and a growable ring would need a lock on the one path this whole design
@@ -1002,7 +977,7 @@ let RunqIndexMask = RunqSlots - 1
 // would be the same fact converted four times.
 let RunqHalfSlots = RunqSlots shr 1
 
-let POffRunqBase = POffM + (PointerSlotBytes as ByteOffset)
+let POffRunqBase = POffPreemptCount + (PointerSlotBytes as ByteOffset)
 
 // The portable header, the inline GT, the tail scalars and the ring. See the layout header.
 //
@@ -1047,10 +1022,9 @@ let GlobalBatchMax = RunqHalfSlots
 let GtFreeLocalHigh = 64 as ParsedInt
 let GtFreeLocalLow = 32 as ParsedInt
 
-// ⭐ **ONE RECORD-ARENA CHUNK: 64 KiB, Windows' allocation granularity**, so no reservation strands address
-// space, and a whole multiple of every lane's page. It holds `GtRecordChunkBytes / GtStructSize` records; the
-// tail too short for one more is never carved.
-let GtRecordChunkBytes = 65536 as ParsedInt
+// ⭐ **ONE SCHEDULER-ARENA CHUNK: 64 KiB, Windows' allocation granularity**, so no reservation strands address
+// space, and a whole multiple of every lane's page. A tail too short for the next carve is never carved.
+let SchedArenaChunkBytes = 65536 as ParsedInt
 
 // ==========================================================================
 // The `.data` slots
@@ -1159,11 +1133,11 @@ export let SchedRunqSizeLabel = b"__sched_runq_size"
 // thread puts and gets, and what an empty local list refills from.
 let SchedGtFreeHeadLabel = b"__gt_gfree_head"
 
-// ⭐⭐ **THE GT-RECORD ARENA's CARVE CURSOR AND THE END OF ITS CURRENT CHUNK** (`emitGtRecordCarveLocked`).
-// Both 0 until the first carve, which finds no room and maps the first chunk. `underSchedLock`: the carve is
-// their only reader and writer, and it runs under the lock.
-let GtRecordCursorLabel = b"__gt_record_cursor"
-let GtRecordLimitLabel = b"__gt_record_limit"
+// ⭐⭐ **THE SCHEDULER ARENA's CARVE CURSOR AND THE END OF ITS CURRENT CHUNK** (`__sched_arena_carve`). Both 0
+// until the first carve, which finds no room and maps the first chunk. `underSchedLock`: the carve is their only
+// reader and writer, and its callers hold the lock.
+let SchedArenaCursorLabel = b"__sched_arena_cursor"
+let SchedArenaLimitLabel = b"__sched_arena_limit"
 
 // ⭐⭐ **HOW MANY RECORDS THE ARENA HAS EVER CARVED — what `__Builtins.schedGtRecordsCarved()` answers.**
 // Stepped by the carve alone, under `__sched_lock`. A program that reclaims every record it finishes with
@@ -1288,35 +1262,17 @@ let SchedNeedSpinningLabel = b"__sched_needspinning"
 // and a reader that gets the stale 0 parks once more, and the teardown's signal ends that park.
 let SchedShutdownFlagLabel = b"__sched_shutdown_flag"
 
-// ⭐⭐⭐ **HAS THE SYSTEM MONITOR THREAD BEEN STARTED? — the one-shot that keeps a program which never
-// schedules a GREEN THREAD from carrying an extra OS thread (W213-C3).**
-//
-// ⛔ **THE TRIGGER IS `__sched_wake_or_spawn` AND NOT `__sched_init_procs`, AND IT IS NOT `__sched_startm`'s
-// SPAWN ARM EITHER — BOTH ALTERNATIVES WERE TRIED AND BOTH ARE WRONG.** `__sched_init_procs` runs for every
-// `async`-only program too, and an `async` frame is a COROUTINE that no worker M can ever run (see this file's
-// header), so that placement would start a monitor for a process that can never have a second machine to
-// monitor. The spawn arm is the opposite error: at `MAXON_MAX_PROCS=1` there is never an idle processor to
-// spawn onto, so `__sched_startm` places nobody and the monitor would never start **on exactly the
-// configuration that needs it most** — which is `specs/sched-syscall-handoff.md`'s `procs: 1` case.
-//
-// ⇒ **the honest trigger is *"this program has published a strand token"***, and that is precisely what
-// reaching `__sched_wake_or_spawn` means: a wake is owed only when `GtRuntime.__gt_ready_locked` published one.
-//
-// ⚠ **THE READ BEFORE THE CAS IS NOT AN OPTIMISATION OF THE CAS — IT IS WHAT KEEPS THE PUBLISH PATH FREE OF A
-// `lock` PREFIX.** `__sched_wake_or_spawn` runs once per publish, which `service-torture` measures in the
-// hundreds of thousands; a `lock cmpxchg` there to re-answer a question that is settled after the first
-// microsecond of the process is the shape `SchedSpinningLabel`'s gate exists to avoid. A stale 0 read costs a
-// lost CAS and nothing else.
-//
-// `atomicStep`: the only mutation is the `atomicCas` at that gate.
-let SchedSysmonStartedLabel = b"__sched_sysmon_started"
-
 // ⭐ **HOW LONG A MACHINE MUST HAVE BEEN INSIDE ONE KERNEL CALL BEFORE ITS PROCESSOR IS TAKEN — Go's 10 ms
 // (`proc.go`'s `retake`), carried unchanged because the quantity it trades off is the same one.** Below it the
 // handoff costs more than the stall it removes (a machine started, a search run and a park paid for a call
 // that was about to return); above it a genuinely blocked machine holds a processor for longer than it needs
 // to. It is compared against `__gt_now_ns`, which is why it is written in nanoseconds.
 let SysmonRetakeAfterNs = 10 * 1000 * 1000 as ParsedInt
+
+// ⭐ **HOW LONG ONE STRAND MAY HOLD A PROCESSOR BEFORE IT IS ASKED TO GIVE IT UP — Go's `forcePreemptNS`.** Long
+// enough that a strand doing useful work pays one switch per interval, short enough that a thread waiting behind
+// it — `main` among them — is not held up past it by more than a sysmon lap.
+let SchedForcePreemptNs = 10 * 1000 * 1000 as ParsedInt
 
 // ⭐⭐ **THE MONITOR'S SLEEP BETWEEN LAPS — Go's ladder (`proc.go`'s `sysmon`): 20 µs, doubling once fifty laps
 // in a row have retaken nothing, capped at 10 ms.** A short first interval notices a blocking call soon after
@@ -1342,6 +1298,12 @@ let SysmonPollStaleNs = 10 * 1000 * 1000 as ParsedInt
 // asleep on it. Both are `underSchedLock`: set, cleared and read inside the lock `pidleget` runs under.
 let SchedSysmonEventLabel = b"__sched_sysmon_event"
 let SchedSysmonWaitLabel = b"__sched_sysmon_wait"
+
+// ⭐ **HOW MANY MACHINES `__sysmon`'s OVERDUE-TIMER ARM HAS STARTED — the reading
+// `__Builtins.schedTimerStartCount()` answers.** With the preemption and retake counts it covers everything the
+// monitor does that can put a machine to work, so an `async`-only program that reads a second worker M can say
+// which of the three did it. `underSchedLock`: stepped inside the hold the arm decides in.
+let SchedTimerStartsLabel = b"__sched_timer_starts"
 
 // ⭐⭐⭐ **WHEN THE POLLER LAST RETURNED, OR 0 WHILE A MACHINE IS BLOCKED IN IT — Go's `sched.lastpoll`.** The
 // idle tail claims the poller by finding this non-zero and storing 0; the machine that claimed it stores the
@@ -1383,8 +1345,8 @@ let PollerMaxWaitMs = 1000 * 1000 * 1000 as ParsedInt
 // walk the processors and structurally cannot find anything**.
 //
 // ⇒ **the monitor and the bracket are gated together, and the gate is asked at FOUR sites that must agree**:
-// `installSchedRuntime` (build the handoff tier at all), `buildSchedWakeOrSpawn` (the lazy start),
-// `schedRuntimeGlobals` (the `.data` word the start CASes) and `DeadFunctionElimination.seedRoots` (the
+// `installSchedRuntime` (build the handoff tier at all), `emitSchedSysmonStart` (the start, at bring-up),
+// `schedRuntimeGlobals` (the monitor's `.data` words) and `DeadFunctionElimination.seedRoots` (the
 // functions no Std caller reaches). A start without a global is a word nothing writes; a global without an
 // install is a call to a function that was never built; an unrooted callee is a call fixup with nothing to
 // resolve. ⚠ WHERE the bracket's two steps are emitted is a second, narrower question — see
@@ -1398,8 +1360,8 @@ let PollerMaxWaitMs = 1000 * 1000 * 1000 as ParsedInt
 // lane wrong in the one direction that matters — `windows` would answer `true` before that lane had a P/M
 // substrate to hand a processor to.
 //
-// ⭐ **IT ALSO KEEPS A LANE WITHOUT THE SUBSTRATE FREE OF THE MONITOR'S `.data` WORD.**
-// `__sched_sysmon_started` would otherwise put a line in the `data {` block of every green-thread golden.
+// ⭐ **IT ALSO KEEPS A LANE WITHOUT THE SUBSTRATE FREE OF THE MONITOR'S `.data` WORDS**, which would otherwise
+// put lines in the `data {` block of every green-thread golden.
 export function targetBracketsBlockingSyscalls(target Target) returns bool
 	return targetProvidesFacility(target, facility: HostFacility.greenThreads)
 end 'targetBracketsBlockingSyscalls'
@@ -1483,11 +1445,11 @@ let SchedStartMName = b"__sched_startm"
 // given back that nobody took would leave the count below the truth, and a count that reads non-zero with
 // nobody searching makes every later publish skip its wake.
 enum SchedStartMCredit
-	// `wakep`, which took one unit at its gate.
+	// `wakep` and `handoffp`'s spinning arm, each of which took one unit at its gate.
 	reserved = 1
 
-	// `handoffp`, which took none: its machine starts as an ordinary searcher and earns a credit at
-	// `__sched_find_runnable`'s spinner cap like any other.
+	// `handoffp`'s other arms, which took none: their machine starts as an ordinary searcher and earns a credit
+	// at `__sched_find_runnable`'s spinner cap like any other.
 	unreserved = 0
 end 'SchedStartMCredit'
 
@@ -1580,6 +1542,11 @@ export let SchedRetakeCountName = b"__sched_retake_count"
 // `buildSchedPerProcSum` body, for `__sched_retake_count`'s reason.
 export let SchedGtRecycleCountName = b"__sched_gt_recycle_count"
 
+// ⭐ `__sched_preempt_count() -> i64` — the sum of every P's `POffPreemptCount`, and the floor of
+// `__Builtins.schedPreemptCount()`: how many preemption requests green threads have honoured. A
+// `buildSchedPerProcSum` body, for `__sched_retake_count`'s reason.
+export let SchedPreemptCountName = b"__sched_preempt_count"
+
 // ⭐ `__sched_idle_processor_count() -> i64` — `__sched_npidle`, and the floor of
 // `__Builtins.schedIdleProcessorCount()`. A program that has spawned nothing reads the idle count a live
 // scheduler really has — every processor but the one `main` is running on.
@@ -1588,6 +1555,10 @@ export let SchedIdleProcessorCountName = b"__sched_idle_processor_count"
 // ⭐ `__sched_gt_records_carved() -> i64` — `__gt_records_carved`, and the floor of
 // `__Builtins.schedGtRecordsCarved()`. `main`'s own record is the first carve, so a program reads at least 1.
 export let SchedGtRecordsCarvedName = b"__sched_gt_records_carved"
+
+// ⭐ `__sched_timer_start_count() -> i64` — `__sched_timer_starts`, and the floor of
+// `__Builtins.schedTimerStartCount()`. Built with the monitor that steps it.
+export let SchedTimerStartCountName = b"__sched_timer_start_count"
 
 // ⭐ `__sched_park_wake_count() -> i64` — the sum of every machine's `MOffParkWakes`, and the floor of
 // `__Builtins.schedParkWakeCount()`. It walks `__sched_allm` rather than `__sched_procs`, because the count
@@ -1623,14 +1594,9 @@ export let GtFreePutName = b"__gt_free_put"
 // ⭐⭐⭐ **`__gt_free_get() -> gt` — Go's `gfget` plus `malg`'s allocation: the ONE door a GT record is taken
 // through**, by `__gt_spawn` and `__gt_cell_alloc` alike. It pops the current P's list, refilling up to
 // `GtFreeLocalLow` from the global list when the local one is empty; a thread holding no P pops the global
-// list. When every list it may consult is empty it carves a fresh record from the record arena
-// (`emitGtRecordCarveLocked`) inside the same hold of `__sched_lock`.
-//
-// ⭐⭐ **THE ARENA IS SCHEDULER SCAFFOLDING, LIKE THE STACKS, AND IS NEVER THE COUNTED SLAB.** Its chunks come
-// from `osAllocPages` and are never returned, so no record allocation and no reuse moves the allocator's raw
-// columns. Whether a spawn reuses a record or carves one depends on which processor it runs on and on how
-// reclaims on other machines interleave with it; outside the slab, that timing cannot reach the allocation
-// counts `scale-test` requires to be identical between two compiles of one program.
+// list. When every list it may consult is empty it carves a fresh record from the scheduler's arena
+// (`__sched_arena_carve`) inside the same hold of `__sched_lock`, which is why no record allocation and no reuse
+// moves the allocator's raw columns: whether a spawn reuses a record or carves one depends on timing.
 //
 // ⭐ **ONE CARVE CURSOR UNDER THE LOCK, NOT A CHUNK PER P.** A carve happens only when the record population
 // grows, so carves are bounded by `GtFreePutName`'s bound and a spawn from a warm list takes no lock at all; Go's
@@ -1651,6 +1617,10 @@ export let GtFreePutName = b"__gt_free_put"
 // previous tenant's words would release that tenant's arguments and answer that tenant's questions.
 export let GtFreeGetName = b"__gt_free_get"
 
+// ⭐⭐ `__sched_arena_carve(bytes) -> address` — the scheduler's uncounted arena, which GT records and machines are
+// carved from. See `buildSchedArenaCarve`.
+let SchedArenaCarveName = b"__sched_arena_carve"
+
 // ⭐⭐ **THE PER-P COUNTER SUMS — `buildSchedPerProcSum`'s names:** one body, one walk of `__sched_procs`,
 // one field offset each. That builder refuses a name that is not here, and `isSchedSubstrateQueryCallee`
 // below takes every member.
@@ -1659,12 +1629,12 @@ export let GtFreeGetName = b"__gt_free_get"
 // never writes (`isSchedRuntimeCallee`), and one member is a `__slab_` name, because the number it reports is
 // the ALLOCATOR's (see `SlabRuntime.SlabRemoteFreeCountName`).
 function isSchedPerProcSumCallee(callee ByteArray) returns bool
-	return callee.equals(SchedStealCountName) or callee.equals(SchedRetakeCountName) or callee.equals(SlabRemoteFreeCountName) or callee.equals(SchedGtRecycleCountName)
+	return callee.equals(SchedStealCountName) or callee.equals(SchedRetakeCountName) or callee.equals(SlabRemoteFreeCountName) or callee.equals(SchedGtRecycleCountName) or callee.equals(SchedPreemptCountName)
 end 'isSchedPerProcSumCallee'
 
 // ⭐⭐ **THE QUERIES ANSWERED FROM THE SCHEDULER'S OWN STATE — the roster that says "asking this question IS
 // asking for the scheduler".** The per-P sums, the idle-processor count, the per-machine wake count, the
-// record-carve count and the running thread's stack size. Two facts follow, and BOTH are asked through here so
+// record-carve count, the monitor's timer-start count and the running thread's stack size. Two facts follow, and BOTH are asked through here so
 // the membership is written down once:
 //
 //   • `RuntimeUsage.recordCallUsage` routes them to `recordGtUsage` — the state they read exists only once
@@ -1673,7 +1643,7 @@ end 'isSchedPerProcSumCallee'
 //     the green-thread floor, so a lane without it must REFUSE the call at its own span (E3104) rather than
 //     reach an install that has no TLS slot to emit.
 export function isSchedSubstrateQueryCallee(callee ByteArray) returns bool
-	return isSchedPerProcSumCallee(callee) or callee.equals(SchedIdleProcessorCountName) or callee.equals(SchedParkWakeCountName) or callee.equals(SchedGtRecordsCarvedName) or callee.equals(SchedGtStackBytesName)
+	return isSchedPerProcSumCallee(callee) or callee.equals(SchedIdleProcessorCountName) or callee.equals(SchedParkWakeCountName) or callee.equals(SchedGtRecordsCarvedName) or callee.equals(SchedTimerStartCountName) or callee.equals(SchedGtStackBytesName)
 end 'isSchedSubstrateQueryCallee'
 
 // ⭐⭐⭐ **`__sched_handoffp(p)` — "THIS PROCESSOR HAS BEEN TAKEN FROM A BLOCKED MACHINE; GIVE IT TO SOMEBODY
@@ -1688,14 +1658,18 @@ end 'isSchedSubstrateQueryCallee'
 // take `__sched_lock` freely and why it must not touch TLS.
 let SchedHandoffPName = b"__sched_handoffp"
 
-// ⭐⭐ `__sched_retake(now) -> how many processors this pass took` — Go's `retake` (`proc.go:6682`), minus
-// PREEMPTION. Go also preempts a long-RUNNING goroutine here; The compiler is cooperative by construction and has no
-// preemption at all, so that arm is deliberately absent and `POffRunnext`'s reservation note carries what its
-// absence costs.
+// ⭐⭐ `__sched_retake(now) -> how many processors this pass took` — Go's `retake` (`proc.go:6682`): ask a strand
+// that has held its processor for `SchedForcePreemptNs` to yield (`__sched_preemptone`), and take a processor
+// from a machine inside a bracketed kernel call.
 let SchedRetakeName = b"__sched_retake"
 
+// ⭐⭐ `__sched_preemptone(m)` — Go's `preemptone` (`proc.go:6918`): ask the green thread machine `m` is running to
+// give up its processor at its next guarded prologue, by storing `GtRuntime.GtStackGuardPreempt` into its guard
+// word. See `buildSchedPreemptOne`.
+let SchedPreemptOneName = b"__sched_preemptone"
+
 // ⭐⭐ `__sysmon(arg) -> 0` — the monitor thread's whole life. **No processor, no M, allocation-free after
-// start, and it never runs Maxon user code.** Started once, lazily; see `SchedSysmonStartedLabel`.
+// start, and it never runs Maxon user code.** Started once, at bring-up; see `emitSchedSysmonStart`.
 let SchedSysmonName = b"__sysmon"
 
 // ⭐⭐⭐ `__sched_syscall_regain()` — **"sysmon took my processor while I was in the kernel; get me another
@@ -2029,8 +2003,8 @@ export function schedRuntimeGlobals(usage RuntimeUsage, target Target) returns D
 
 		// A fourth intrusive head, for the same reason, and the record arena's three words beside it.
 		pushRuntimeGlobal(out, label: SchedGtFreeHeadLabel, sharing: MultiMSharing.underSchedLock)
-		pushRuntimeGlobal(out, label: GtRecordCursorLabel, sharing: MultiMSharing.underSchedLock)
-		pushRuntimeGlobal(out, label: GtRecordLimitLabel, sharing: MultiMSharing.underSchedLock)
+		pushRuntimeGlobal(out, label: SchedArenaCursorLabel, sharing: MultiMSharing.underSchedLock)
+		pushRuntimeGlobal(out, label: SchedArenaLimitLabel, sharing: MultiMSharing.underSchedLock)
 		pushRuntimeGlobal(out, label: GtRecordsCarvedLabel, sharing: MultiMSharing.underSchedLock)
 
 		// The three counts kept beside those structures, each stepped only inside the doors that mutate its
@@ -2081,15 +2055,13 @@ export function schedRuntimeGlobals(usage RuntimeUsage, target Target) returns D
 		pushRuntimeGlobal(out, label: SchedSpinningLabel, sharing: MultiMSharing.atomicStep)
 		pushRuntimeGlobal(out, label: SchedNeedSpinningLabel, sharing: MultiMSharing.lastWriterWins)
 
-		// ⛔ **GATE SITE 3 OF 4 — see `targetBracketsBlockingSyscalls`.** The monitor's one-shot; its only
-		// mutation is the `atomicCas` at `__sched_wake_or_spawn`'s gate, and on a lane with no bracket that gate
-		// is not emitted, so this word would be a `.data` slot nothing writes — a line in the `data {` block of
-		// every green-thread golden on a lane with no monitor to start. See `SchedSysmonStartedLabel` for why
-		// the read in front of that CAS is not a second writer.
+		// ⛔ **GATE SITE 3 OF 4 — see `targetBracketsBlockingSyscalls`.** The monitor's event, its asleep flag and
+		// its timer-start count; a lane with no bracket builds no monitor, so there they would be `.data` slots
+		// nothing writes — lines in the `data {` block of every green-thread golden on a lane with no monitor.
 		if targetBracketsBlockingSyscalls(target) 'theMonitorExists'
-			pushRuntimeGlobal(out, label: SchedSysmonStartedLabel, sharing: MultiMSharing.atomicStep)
 			pushRuntimeGlobal(out, label: SchedSysmonEventLabel, sharing: MultiMSharing.underSchedLock)
 			pushRuntimeGlobal(out, label: SchedSysmonWaitLabel, sharing: MultiMSharing.underSchedLock)
+			pushRuntimeGlobal(out, label: SchedTimerStartsLabel, sharing: MultiMSharing.underSchedLock)
 		end 'theMonitorExists'
 	end 'procsTeardown'
 
@@ -2110,6 +2082,7 @@ export function installSchedRuntime(module StdModule, target Target, usesComplet
 	// The GT-record doors: every record is taken through the one and given back through the other.
 	buildGtFreePut(module)
 	buildGtFreeGet(module)
+	buildSchedArenaCarve(module)
 
 	// The per-P sums, from ONE body: they differ in the name they answer to and the field they read, and in
 	// nothing else. See `buildSchedPerProcSum`.
@@ -2121,6 +2094,7 @@ export function installSchedRuntime(module StdModule, target Target, usesComplet
 	buildSchedPerProcSum(module, name: SchedRetakeCountName, offset: POffRetakeCount)
 	buildSchedPerProcSum(module, name: SlabRemoteFreeCountName, offset: POffRemoteFreeCount)
 	buildSchedPerProcSum(module, name: SchedGtRecycleCountName, offset: POffGtRecycleCount)
+	buildSchedPerProcSum(module, name: SchedPreemptCountName, offset: POffPreemptCount)
 	buildSchedLockedCountQuery(module, name: SchedIdleProcessorCountName, label: SchedNpidleLabel)
 	buildSchedLockedCountQuery(module, name: SchedGtRecordsCarvedName, label: GtRecordsCarvedLabel)
 	buildSchedParkWakeCount(module)
@@ -2131,16 +2105,16 @@ export function installSchedRuntime(module StdModule, target Target, usesComplet
 	buildSchedLoop(module, role: SchedLoopRole.worker, target: target)
 	buildSchedLoop(module, role: SchedLoopRole.mainMachine, target: target)
 	buildSchedStartM(module, target: target)
-	buildSchedWakeOrSpawn(module, target: target)
+	buildSchedWakeOrSpawn(module)
 
 	// The poller the idle tail blocks in, and the door a newly earliest deadline wakes it through.
 	installNetpollRuntime(module, target: target)
 	buildSchedWakeNetpoller(module)
 	buildSchedWakePoller(module)
 
-	// ⛔ **GATE SITE 1 OF 4 — see `targetBracketsBlockingSyscalls` for the fork.** All four are reachable ONLY
-	// from the bracket: `__sched_syscall_regain` from the bracket's exit step, `__sysmon` from the lazy start
-	// (gate site 2), and the other two from `__sysmon`. `__sched_syscall_regain` is dead code that SURVIVES
+	// ⛔ **GATE SITE 1 OF 4 — see `targetBracketsBlockingSyscalls` for the fork.** None is reachable without the
+	// monitor: `__sched_syscall_regain` from the bracket's exit step, `__sysmon` from its start (gate site 2),
+	// and the other three from `__sysmon`. `__sched_syscall_regain` is dead code that SURVIVES
 	// the prune wherever the exit step is INLINE, because the x64 shim calls it from hand-assembly and no Std
 	// caller reaches it, so it is a `DeadFunctionElimination` root (gate site 4) under this same answer.
 	//
@@ -2156,11 +2130,13 @@ export function installSchedRuntime(module StdModule, target Target, usesComplet
 	// refused with E3104 at its own span (`specs/builtins-cpu-parallel.md`,
 	// `error.the-per-processor-counters-are-refused-off-their-substrate`).
 	if targetBracketsBlockingSyscalls(target) 'theSyscallHandoff'
-		// `__sched_handoffp` is `__sched_retake`'s only caller of `__sched_startm`, `__sysmon` is
-		// `__sched_retake`'s only caller, and `__sched_syscall_regain` is the bracket's road back.
+		// `__sched_handoffp` and `__sched_preemptone` are `__sched_retake`'s, `__sysmon` is `__sched_retake`'s only
+		// caller, and `__sched_syscall_regain` is the bracket's road back.
 		buildSchedHandoffP(module)
+		buildSchedPreemptOne(module)
 		buildSchedRetake(module)
 		buildSysmon(module, target: target)
+		buildSchedLockedCountQuery(module, name: SchedTimerStartCountName, label: SchedTimerStartsLabel)
 		buildSchedSyscallRegain(module)
 	end 'theSyscallHandoff'
 
@@ -2271,9 +2247,9 @@ function emitSchedListTakeHead(module StdModule, cur IrBlock, got IrBlock, none 
 end 'emitSchedListTakeHead'
 
 // ⭐⭐ **STEP A COUNT KEPT BESIDE A LOCKED STRUCTURE — `__sched_npidle`, `__sched_mcount`, `__sched_runq_size`
-// and `__gt_records_carved`.** A plain load/add/store, because every writer holds `__sched_lock`; each count
-// is stepped only inside the doors that mutate its structure, so the two cannot drift apart. The prior value
-// has no reader.
+// and `__gt_records_carved` — or a locked decision, `__sched_timer_starts`.** A plain load/add/store, because
+// every writer holds `__sched_lock`; each count is stepped only inside the doors that mutate its structure or
+// make its decision, so the two cannot drift apart. The prior value has no reader.
 export function emitSchedStepLockedCount(module StdModule, block IrBlock, label ByteArray, delta ParsedInt, ids ValueMinter)
 	_ = emitGlobalAccumulate(module, block: block, label: label, delta: emitConst(module, block: block, value: delta, ids: ids), multiM: false, ids: ids)
 end 'emitSchedStepLockedCount'
@@ -2306,9 +2282,7 @@ function emitSchedPidlePutLocked(module StdModule, func IrFunction, cur IrBlock,
 	var idleIt = module.addBlock(func, label: b"pidleputidle", heat: BlockHeat.normal)
 	let placed = module.addBlock(func, label: b"pidleputplaced", heat: BlockHeat.normal)
 
-	let head = emitLoadField(module, block: cur, record: p, offset: POffRunqHead, ids: ids)
-	let tail = emitLoadField(module, block: cur, record: p, offset: POffRunqTail, ids: ids)
-	let stillHasWork = emitCmp(module, block: cur, a: head, b: tail, pred: StdCmpPred.ne, ids: ids)
+	let stillHasWork = emitSchedRingIs(module, block: cur, p: p, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(stillHasWork, thenBlockId: holdsWork.id, elseBlockId: ringEmpty.id))
 
 	emitRuntimeAbort(module, func: func, block: holdsWork, abort: RuntimeAbort.schedulerIdledAProcessorHoldingWork, ids: ids)
@@ -2508,7 +2482,9 @@ function emitSchedEnqueueLocked(module StdModule, block IrBlock, gt ValueId, ids
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: GtEnqueueName, args: argsOf(gt)))
 end 'emitSchedEnqueueLocked'
 
-function emitSchedWakeAnIdleM(module StdModule, block IrBlock, ids ValueMinter)
+// Pay a wake — `__sched_wake_or_spawn`, the door every wake debt is paid through. `__sched_lock` released.
+// EXPORTED for the strand runner, whose global puts owe one unconditionally.
+export function emitSchedWakeAnIdleM(module StdModule, block IrBlock, ids ValueMinter)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SchedWakeOrSpawnName, args: ValueIdArray.create()))
 end 'emitSchedWakeAnIdleM'
 
@@ -2738,7 +2714,7 @@ end 'buildSchedInitProcs'
 function emitSchedAllocM(module StdModule, block IrBlock, nextP ValueId, ids ValueMinter) returns ValueId
 	let structBytes = emitConst(module, block: block, value: MStructSize, ids: ids)
 	let m = ids.mint()
-	module.appendOp(block, op: StdOp.call(m, callee: SlabAllocName, args: argsOf(structBytes)))
+	module.appendOp(block, op: StdOp.call(m, callee: SchedArenaCarveName, args: argsOf(structBytes)))
 
 	// The park. AUTO-reset, so a `__sched_startm` that signals between this machine's lock release and its
 	// `osWaitHandle` leaves the event signalled and the wait returns at once — see `MOffParkEvent`, which is
@@ -2748,7 +2724,7 @@ function emitSchedAllocM(module StdModule, block IrBlock, nextP ValueId, ids Val
 	emitStoreField(module, block: block, record: m, offset: MOffParkEvent, value: parkEvent)
 	emitStoreField(module, block: block, record: m, offset: MOffNextP, value: nextP)
 
-	// Every other tail field is correct at the slab's zero: no handle yet (the caller stores it if there is
+	// Every other tail field is correct at the arena's zero: no handle yet (the caller stores it if there is
 	// one), no spinning credit held, no confirmations, both links null, and a syscall word of 0 — *"not in a
 	// bracketed call, generation zero"*, which is why a machine created while `__sysmon` is already running
 	// cannot be mistaken for one it has been watching (`MOffSysmonWord`).
@@ -2764,7 +2740,7 @@ end 'emitSchedAllocM'
 // commit** — the top is then 16-aligned, which the shim relies on to land RSP 16-aligned at the `call`. Every
 // home this region has had (a `.data` global, then the P, now the M) carried the same requirement.
 //
-// The inline GT arrives zeroed from the slab, and almost every one of those zeros is correct: `stackBase ==
+// The inline GT arrives zeroed from the arena, and almost every one of those zeros is correct: `stackBase ==
 // 0` is what tells the syscall shim and the prologue guard that this context runs on a real OS-thread stack,
 // and both coroutine-queue ends are *"empty"*. Its TIB bounds are captured by the first `__gt_context_switch` away from it — and they are THIS
 // OS thread's bounds, which is why the struct is the M's and could not stay on a P a handoff can move.
@@ -2997,6 +2973,15 @@ function emitSchedGlobalQueueIs(module StdModule, block IrBlock, pred StdCmpPred
 	return emitCmp(module, block: block, a: globalHead, b: noGlobalHead, pred: pred, ids: ids)
 end 'emitSchedGlobalQueueIs'
 
+// `1` when this processor's ring's two counters compare by `pred` — `ne` asks *"does it hold a token?"* and `eq`
+// *"is it empty?"*, `emitSchedGlobalQueueIs`'s shape for the ring. `POffRunqHead` carries why the counters
+// alone answer it.
+function emitSchedRingIs(module StdModule, block IrBlock, p ValueId, pred StdCmpPred, ids ValueMinter) returns ValueId
+	let head = emitLoadField(module, block: block, record: p, offset: POffRunqHead, ids: ids)
+	let tail = emitLoadField(module, block: block, record: p, offset: POffRunqTail, ids: ids)
+	return emitCmp(module, block: block, a: head, b: tail, pred: pred, ids: ids)
+end 'emitSchedRingIs'
+
 // ⭐⭐ **DOES THIS PROCESSOR'S RING OR THE GLOBAL QUEUE HOLD A TOKEN RIGHT NOW?** Asked by a machine whose own
 // poll may have readied something (`widlefire`, choosing between searching again and parking), and by
 // `__sched_handoffp` and `__sched_retake`, choosing whether a processor is worth handing on.
@@ -3011,9 +2996,7 @@ end 'emitSchedGlobalQueueIs'
 // spinner is caught. Both loads are unlocked: they choose an ARM, and both arms are correct whatever they
 // answer.
 function emitSchedAnyRunnable(module StdModule, block IrBlock, p ValueId, ids ValueMinter) returns ValueId
-	let head = emitLoadField(module, block: block, record: p, offset: POffRunqHead, ids: ids)
-	let tail = emitLoadField(module, block: block, record: p, offset: POffRunqTail, ids: ids)
-	let ringHasWork = emitCmp(module, block: block, a: head, b: tail, pred: StdCmpPred.ne, ids: ids)
+	let ringHasWork = emitSchedRingIs(module, block: block, p: p, pred: StdCmpPred.ne, ids: ids)
 	let globalHasWork = emitSchedGlobalQueueIs(module, block: block, pred: StdCmpPred.ne, ids: ids)
 
 	// Both operands are `cmp` results, so they are 0 or 1 and a bitwise OR is the logical one — the argument
@@ -3673,9 +3656,7 @@ function buildSchedAnyWork(module StdModule)
 	let idle = emitCmp(module, block: loopBody, a: status, b: emitConst(module, block: loopBody, value: PStatusActive, ids: ids), pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(loopBody, op: StdOp.condBranch(idle, thenBlockId: loopNext.id, elseBlockId: ringTest.id))
 
-	let head = emitLoadField(module, block: ringTest, record: p, offset: POffRunqHead, ids: ids)
-	let tail = emitLoadField(module, block: ringTest, record: p, offset: POffRunqTail, ids: ids)
-	let ringHasWork = emitCmp(module, block: ringTest, a: head, b: tail, pred: StdCmpPred.ne, ids: ids)
+	let ringHasWork = emitSchedRingIs(module, block: ringTest, p: p, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(ringTest, op: StdOp.condBranch(ringHasWork, thenBlockId: found.id, elseBlockId: loopNext.id))
 
 	let nextIndex = emitBin(module, block: loopNext, a: index, b: emitConst(module, block: loopNext, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids)
@@ -3937,51 +3918,67 @@ function buildGtFreeGet(module StdModule)
 	module.appendOp(recycle, op: StdOp.memFill(record, byteCountId: recordBytes, value: 0))
 	module.setTerminator(recycle, op: StdOp.ret(record))
 
-	emitGtRecordCarveLocked(module, func: func, cur: carve, ids: ids)
+	// A fresh record: carved under the hold every list above was consulted in.
+	let carved = ids.mint()
+	module.appendOp(carve, op: StdOp.call(carved, callee: SchedArenaCarveName, args: argsOf(emitConst(module, block: carve, value: GtStructSize, ids: ids))))
+	emitSchedStepLockedCount(module, block: carve, label: GtRecordsCarvedLabel, delta: OneMore, ids: ids)
+	emitSchedLockLeave(module, block: carve, ids: ids)
+	module.setTerminator(carve, op: StdOp.ret(carved))
 
 	module.functions.push(func)
 end 'buildGtFreeGet'
 
-// ⭐⭐ **CARVE A FRESH GT RECORD FROM THE RECORD ARENA, RELEASE `__sched_lock`, AND RETURN IT.** `cur` holds the
-// lock. The record is the `GtStructSize` bytes at `__gt_record_cursor`; when the current chunk has no room for
-// one, a new chunk of `GtRecordChunkBytes` is mapped and the old one's tail is abandoned. A chunk's pages
-// arrive zeroed and each record is carved once, so a fresh record needs no `memFill`.
+// ⭐⭐ **`__sched_arena_carve(bytes) -> address` — CARVE `bytes` FROM THE SCHEDULER's ARENA.** The caller holds
+// `__sched_lock`. The carve is the `bytes` at `__sched_arena_cursor`; when the current chunk has no room for them,
+// a new chunk of `SchedArenaChunkBytes` is mapped and the old one's tail is abandoned. A chunk's pages arrive
+// zeroed and nothing is carved twice or ever returned, so a carve needs no `memFill` and is never freed.
+//
+// ⭐⭐ **THE ARENA IS SCHEDULER SCAFFOLDING, LIKE THE STACKS, AND IS NEVER THE COUNTED SLAB.** It holds the GT
+// records (`__gt_free_get`) and the machines (`emitSchedAllocM`), whose creation both depend on timing — which
+// processor a spawn runs on, when `__sysmon` retakes a processor or finds a timer overdue — and outside the slab
+// that timing cannot reach the allocation counts `scale-test` requires to be identical between two compiles of
+// one program.
 //
 // ⚠ **THE COMPARE IS SIGNED, WHICH IS SOUND**: no lane maps a page base that is zero or negative
 // (`__slab_assert_os_alloc`'s argument), and 0 against 0 — the state before the first carve — fails the test
 // and maps the first chunk.
-function emitGtRecordCarveLocked(module StdModule, func IrFunction, cur IrBlock, ids ValueMinter)
-	var newChunk = module.addBlock(func, label: b"gfgnewchunk", heat: BlockHeat.normal)
-	var carved = module.addBlock(func, label: b"gfgcarved", heat: BlockHeat.normal)
+function buildSchedArenaCarve(module StdModule)
+	var func = IrFunction.createFromStd(SchedArenaCarveName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
 
-	let cursor = emitLoadGlobalWord(module, block: cur, label: GtRecordCursorLabel, ids: ids)
-	let limit = emitLoadGlobalWord(module, block: cur, label: GtRecordLimitLabel, ids: ids)
-	let recordBytes = emitConst(module, block: cur, value: GtStructSize, ids: ids)
-	let pastRecord = emitBin(module, block: cur, a: cursor, b: recordBytes, opcode: StdBinOpcode.add, ids: ids)
-	let fits = emitCmp(module, block: cur, a: pastRecord, b: limit, pred: StdCmpPred.le, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(fits, thenBlockId: carved.id, elseBlockId: newChunk.id))
-	cur.branchEdges.push(BranchEdge.create(carved.id, argIds: twoArgs(cursor, second: pastRecord)))
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var newChunk = module.addBlock(func, label: b"arenanewchunk", heat: BlockHeat.normal)
+	var carved = module.addBlock(func, label: b"arenacarved", heat: BlockHeat.normal)
 
-	let chunkBytes = emitConst(module, block: newChunk, value: GtRecordChunkBytes, ids: ids)
+	emitParams(module, block: entry, count: 1)
+	let bytes = 0 as ValueId
+
+	let cursor = emitLoadGlobalWord(module, block: entry, label: SchedArenaCursorLabel, ids: ids)
+	let limit = emitLoadGlobalWord(module, block: entry, label: SchedArenaLimitLabel, ids: ids)
+	let pastCarve = emitBin(module, block: entry, a: cursor, b: bytes, opcode: StdBinOpcode.add, ids: ids)
+	let fits = emitCmp(module, block: entry, a: pastCarve, b: limit, pred: StdCmpPred.le, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(fits, thenBlockId: carved.id, elseBlockId: newChunk.id))
+	entry.branchEdges.push(BranchEdge.create(carved.id, argIds: twoArgs(cursor, second: pastCarve)))
+
+	let chunkBytes = emitConst(module, block: newChunk, value: SchedArenaChunkBytes, ids: ids)
 	let raw = ids.mint()
 	module.appendOp(newChunk, op: StdOp.osAllocPages(raw, sizeId: chunkBytes))
 	let base = ids.mint()
 	module.appendOp(newChunk, op: StdOp.call(base, callee: SlabAssertOsAllocName, args: argsOf(raw)))
-	emitStoreGlobalWord(module, block: newChunk, label: GtRecordLimitLabel, value: emitBin(module, block: newChunk, a: base, b: chunkBytes, opcode: StdBinOpcode.add, ids: ids), ids: ids)
-	let firstRecordBytes = emitConst(module, block: newChunk, value: GtStructSize, ids: ids)
-	let pastFirst = emitBin(module, block: newChunk, a: base, b: firstRecordBytes, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreGlobalWord(module, block: newChunk, label: SchedArenaLimitLabel, value: emitBin(module, block: newChunk, a: base, b: chunkBytes, opcode: StdBinOpcode.add, ids: ids), ids: ids)
+	let pastFirst = emitBin(module, block: newChunk, a: base, b: bytes, opcode: StdBinOpcode.add, ids: ids)
 	module.setTerminator(newChunk, op: StdOp.branch(carved.id))
 	newChunk.branchEdges.push(BranchEdge.create(carved.id, argIds: twoArgs(base, second: pastFirst)))
 
-	let record = ids.mint()
+	let address = ids.mint()
 	let nextCursor = ids.mint()
-	carved.blockArgs.push(IrBlockArg.create(record, argType: StdType.i64))
+	carved.blockArgs.push(IrBlockArg.create(address, argType: StdType.i64))
 	carved.blockArgs.push(IrBlockArg.create(nextCursor, argType: StdType.i64))
-	emitStoreGlobalWord(module, block: carved, label: GtRecordCursorLabel, value: nextCursor, ids: ids)
-	emitSchedStepLockedCount(module, block: carved, label: GtRecordsCarvedLabel, delta: OneMore, ids: ids)
-	emitSchedLockLeave(module, block: carved, ids: ids)
-	module.setTerminator(carved, op: StdOp.ret(record))
-end 'emitGtRecordCarveLocked'
+	emitStoreGlobalWord(module, block: carved, label: SchedArenaCursorLabel, value: nextCursor, ids: ids)
+	module.setTerminator(carved, op: StdOp.ret(address))
+
+	module.functions.push(func)
+end 'buildSchedArenaCarve'
 
 // ==========================================================================
 // The per-P counter sums
@@ -4046,9 +4043,17 @@ function buildSchedPerProcSum(module StdModule, name ByteArray, offset ByteOffse
 	module.functions.push(func)
 end 'buildSchedPerProcSum'
 
-// A query that answers one `underSchedLock` count with a plain load and no lock — `__sched_idle_processor_count`
-// (`SchedIdleProcessorCountName`) and `__sched_gt_records_carved` (`SchedGtRecordsCarvedName`), both named among
-// `MultiMSharing.underSchedLock`'s unlocked reads. `__gt_run_main` brings the scheduler up before `main`, so
+// Step the current processor's `POffPreemptCount` — `__gt_preempt`'s count, from a green thread, whose machine
+// always holds a processor outside a bracketed call. EXPORTED because its one caller is in `GtRuntime` and the
+// processor's layout is this file's.
+export function emitSchedCountPreemption(module StdModule, block IrBlock, ids ValueMinter)
+	let p = emitLoadCurrentP(module, block: block, ids: ids)
+	_ = emitFieldAccumulate(module, block: block, record: p, offset: POffPreemptCount, delta: emitConst(module, block: block, value: OneMore, ids: ids), multiM: false, ids: ids)
+end 'emitSchedCountPreemption'
+
+// A query that answers one `underSchedLock` count with a plain load and no lock — `__sched_idle_processor_count`,
+// `__sched_gt_records_carved` and `__sched_timer_start_count`, all named among `MultiMSharing.underSchedLock`'s
+// unlocked reads. `__gt_run_main` brings the scheduler up before `main`, so
 // each word has been counted before any program code can read it.
 function buildSchedLockedCountQuery(module StdModule, name ByteArray, label ByteArray)
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
@@ -5265,51 +5270,11 @@ end 'emitSchedRaiseHighWater'
 // critical section (`buildSchedLoop`) — so there is no fence to preserve by staying outside a lock, and
 // the O(1) list is now the cheaper option as well as the only one that can find a P-less machine. The gate
 // above still runs lock-free, so a publish that wakes nobody costs one load exactly as it did.
-// ⭐⭐⭐ **THE SYSTEM MONITOR'S ONE-SHOT START (W213-C3), AND THIS IS THE ONE SITE** — see
-// `SchedSysmonStartedLabel` for why it is here and not at `__sched_init_procs` or at `__sched_startm`'s spawn
-// arm. Reaching `cur` means a GREEN THREAD has been published, which is the whole precondition for a second
-// machine ever to exist and therefore for a processor ever to be worth retaking.
-//
-// ⚠ It is a function of its own rather than three blocks inline because its CALLER is now conditional (gate
-// site 2 of `targetBracketsBlockingSyscalls`), and a caller that branches around half of a block sequence is
-// how a lane comes to emit a terminator twice. It terminates `cur` and lands on `cont` from every arm.
-function emitSchedSysmonLazyStart(module StdModule, func IrFunction, cur IrBlock, cont IrBlock, ids ValueMinter)
-	var monitorClaim = module.addBlock(func, label: b"sysmonclaim", heat: BlockHeat.normal)
-	var monitorStart = module.addBlock(func, label: b"sysmonstart", heat: BlockHeat.normal)
-
-	let sysmonStarted = emitLoadGlobalWord(module, block: cur, label: SchedSysmonStartedLabel, ids: ids)
-	let sysmonUnstarted = emitConst(module, block: cur, value: 0, ids: ids)
-	let mayNeedMonitor = emitCmp(module, block: cur, a: sysmonStarted, b: sysmonUnstarted, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(mayNeedMonitor, thenBlockId: monitorClaim.id, elseBlockId: cont.id))
-
-	// The CAS is what makes the start happen once; the plain load above is what keeps its `lock` prefix off the
-	// publish path after that. A machine that loses this CAS simply carries on — another publisher started it.
-	let monitorAddr = ids.mint()
-	module.appendOp(monitorClaim, op: StdOp.globalAddr(monitorAddr, label: SchedSysmonStartedLabel))
-	let monitorExpected = emitConst(module, block: monitorClaim, value: 0, ids: ids)
-	let monitorReplacement = emitConst(module, block: monitorClaim, value: 1, ids: ids)
-	let wonMonitor = ids.mint()
-	module.appendOp(monitorClaim, op: StdOp.atomicCas(wonMonitor, addrId: monitorAddr, expectedId: monitorExpected, replacementId: monitorReplacement))
-	let lostMonitor = emitCasLost(module, block: monitorClaim, result: wonMonitor, ids: ids)
-	module.setTerminator(monitorClaim, op: StdOp.condBranch(lostMonitor, thenBlockId: cont.id, elseBlockId: monitorStart.id))
-
-	// ⚠ **A `CreateThread` THAT FAILS IS NOT AN ERROR HERE AND THE HANDLE IS DISCARDED.** Without a monitor a
-	// blocking kernel call costs its processor for the duration, which is exactly the behaviour every build
-	// before this rung had; refusing to run at all because a diagnostic thread could not be created would turn
-	// a degradation into a failure. Nothing ever joins it, so nothing needs the handle either.
-	let monitorEntry = ids.mint()
-	module.appendOp(monitorStart, op: StdOp.funcAddr(monitorEntry, funcName: SchedSysmonName))
-	let monitorArg = emitConst(module, block: monitorStart, value: 0, ids: ids)
-	module.appendOp(monitorStart, op: StdOp.osThreadCreate(ids.mint(), entryPtrId: monitorEntry, argId: monitorArg))
-	module.setTerminator(monitorStart, op: StdOp.branch(cont.id))
-end 'emitSchedSysmonLazyStart'
-
-function buildSchedWakeOrSpawn(module StdModule, target Target)
+function buildSchedWakeOrSpawn(module StdModule)
 	var func = IrFunction.createFromStd(SchedWakeOrSpawnName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var spinCheck = module.addBlock(func, label: b"spincheck", heat: BlockHeat.normal)
 	var spinTest = module.addBlock(func, label: b"spintest", heat: BlockHeat.normal)
 	var spinClaim = module.addBlock(func, label: b"spinclaim", heat: BlockHeat.normal)
 	var startIt = module.addBlock(func, label: b"wakestart", heat: BlockHeat.normal)
@@ -5319,16 +5284,7 @@ function buildSchedWakeOrSpawn(module StdModule, target Target)
 	// authoritative one: `__sched_startm` reads the flag again inside `__sched_lock`, which is the same
 	// critical section `__sched_stop_workers` sets it in, and that is what makes *"no machine is created
 	// after the flag is set"* a fact rather than a window this early read leaves open.
-	emitSchedBranchOnShutdown(module, cur: entry, stopping: doneBlock, live: spinCheck, ids: ids)
-
-	// ⛔ **GATE SITE 2 OF 4 — THE MONITOR'S LAZY START. See `targetBracketsBlockingSyscalls`.** On a lane
-	// with no bracket the monitor is not built at all (gate site 1), so there is nothing to start and no
-	// `.data` word to CAS (gate site 3); `spincheck` then falls straight through to the spinning gate.
-	if targetBracketsBlockingSyscalls(target) 'theMonitorCanRetake'
-		emitSchedSysmonLazyStart(module, func: func, cur: spinCheck, cont: spinTest, ids: ids)
-	end 'theMonitorCanRetake' else 'noMonitorOnThisLane'
-		module.setTerminator(spinCheck, op: StdOp.branch(spinTest.id))
-	end 'noMonitorOnThisLane'
+	emitSchedBranchOnShutdown(module, cur: entry, stopping: doneBlock, live: spinTest, ids: ids)
 
 	// ⭐ **THE RESERVATION IS A LOAN, NOT A COUNT OF THIS THREAD.** `__sched_startm` settles it: the machine it
 	// wakes takes it over through `MOffSpinning`, and every other road gives it back inside that call.
@@ -5339,20 +5295,12 @@ function buildSchedWakeOrSpawn(module StdModule, target Target)
 	// visible, while an acquire may not. A stale count read EARLY is a wake skipped for a spinner that has
 	// already re-checked: work stranded. x86's `lock` prefix orders the plain load already, and the acquire
 	// costs it nothing.
-	let spinCountAddr = ids.mint()
-	module.appendOp(spinTest, op: StdOp.globalAddr(spinCountAddr, label: SchedSpinningLabel))
-	let spinning = ids.mint()
-	module.appendOp(spinTest, op: StdOp.loadAcquire(spinning, addrId: spinCountAddr, offset: 0, valueType: StdType.i64))
+	let spinning = emitSchedLoadSpinning(module, block: spinTest, ids: ids)
 	let spinZero = emitConst(module, block: spinTest, value: 0, ids: ids)
 	let alreadyLooking = emitCmp(module, block: spinTest, a: spinning, b: spinZero, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(spinTest, op: StdOp.condBranch(alreadyLooking, thenBlockId: doneBlock.id, elseBlockId: spinClaim.id))
 
-	let claimExpected = emitConst(module, block: spinClaim, value: 0, ids: ids)
-	let claimReplacement = emitConst(module, block: spinClaim, value: 1, ids: ids)
-	let reserved = ids.mint()
-	module.appendOp(spinClaim, op: StdOp.atomicCas(reserved, addrId: spinCountAddr, expectedId: claimExpected, replacementId: claimReplacement))
-	let lostReservation = emitCasLost(module, block: spinClaim, result: reserved, ids: ids)
-	module.setTerminator(spinClaim, op: StdOp.condBranch(lostReservation, thenBlockId: doneBlock.id, elseBlockId: startIt.id))
+	emitSchedReserveSpinner(module, cur: spinClaim, won: startIt, lost: doneBlock, ids: ids)
 
 	// ⭐ **PASSING NO PROCESSOR IS "PICK ONE", AND THE CREDIT IS THE ONE RESERVED ABOVE.** A publish has no
 	// processor in mind; `handoffp` has exactly one and no credit.
@@ -5363,6 +5311,33 @@ function buildSchedWakeOrSpawn(module StdModule, target Target)
 
 	module.functions.push(func)
 end 'buildSchedWakeOrSpawn'
+
+// Reserve the unit of `__sched_nmspinning` a machine about to be started spinning takes over — the 0 → 1
+// compare-and-swap `wakep` and `handoffp`'s spinning arm each win before they start one, so at most one such start
+// is in flight. It terminates `cur`: to `won` holding the unit, else to `lost`.
+function emitSchedReserveSpinner(module StdModule, cur IrBlock, won IrBlock, lost IrBlock, ids ValueMinter)
+	let spinningAddr = ids.mint()
+	module.appendOp(cur, op: StdOp.globalAddr(spinningAddr, label: SchedSpinningLabel))
+	let reserved = ids.mint()
+	module.appendOp(cur, op: StdOp.atomicCas(reserved, addrId: spinningAddr, expectedId: emitConst(module, block: cur, value: 0, ids: ids), replacementId: emitConst(module, block: cur, value: 1, ids: ids)))
+	module.setTerminator(cur, op: StdOp.condBranch(emitCasLost(module, block: cur, result: reserved, ids: ids), thenBlockId: lost.id, elseBlockId: won.id))
+end 'emitSchedReserveSpinner'
+
+// `__sched_nmspinning`, read with ACQUIRE — the ordering `__sched_wake_or_spawn`'s gate argues, and the one every
+// unlocked reader of the count takes.
+function emitSchedLoadSpinning(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+	let addr = ids.mint()
+	module.appendOp(block, op: StdOp.globalAddr(addr, label: SchedSpinningLabel))
+	let spinning = ids.mint()
+	module.appendOp(block, op: StdOp.loadAcquire(spinning, addrId: addr, offset: 0, valueType: StdType.i64))
+	return spinning
+end 'emitSchedLoadSpinning'
+
+// Go's `sched.nmspinning.Load() + sched.npidle.Load()` — how many machines are searching or processors are free
+// to take up published work. Both reads are unlocked hints; each caller argues why either answer is correct.
+function emitSchedSpinningPlusIdle(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+	return emitBin(module, block: block, a: emitSchedLoadSpinning(module, block: block, ids: ids), b: emitLoadGlobalWord(module, block: block, label: SchedNpidleLabel, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+end 'emitSchedSpinningPlusIdle'
 
 // `__sched_wake_netpoller(when)` — see `SchedWakeNetpollerName`.
 //
@@ -5466,10 +5441,9 @@ end 'buildSchedWakePoller'
 // named by no machine — the state `__sched_retake`'s second CAS leaves it in — so nothing else in the runtime
 // can reach it and every arm below has it exclusively.
 //
-// ⭐⭐ **GO'S FIVE ARMS ARE FOUR HERE.** Go's *"no spinning M and no idle P ⇒ start one spinning"* would be
-// unreachable, so it is not built: `__sched_retake`'s `rtworth` hands a processor over only when its ring or the
-// global queue holds a green thread, and arm 1 starts a machine for every such processor before the spinning arm
-// would be asked. The arm and a retake that also hands over idle processors belong together, and neither is here.
+// ⭐⭐ **GO's FIVE ARMS, IN GO's ORDER** (`proc.go:3147`): local or global work; no spinning machine and no idle
+// processor, so start one spinning; the global queue under the lock; the last running processor with nobody in
+// the poller; and park the processor.
 //
 // ⚠ **THE DEFAULT ARM'S `pidleput` ASSERTS AN EMPTY RING, AND ARM 1 IS WHAT MAKES THAT TRUE.** Once
 // `M->currentP` has been zeroed no machine can PUSH to this ring — `__sched_runq_put` pushes to the ring of
@@ -5485,6 +5459,9 @@ function buildSchedHandoffP(module StdModule)
 	var lockedStart = module.addBlock(func, label: b"hoplockedstart", heat: BlockHeat.normal)
 	var idleIt = module.addBlock(func, label: b"hopidle", heat: BlockHeat.normal)
 	var lastProc = module.addBlock(func, label: b"hoplastp", heat: BlockHeat.normal)
+	var spinArm = module.addBlock(func, label: b"hopspin", heat: BlockHeat.normal)
+	var spinClaim = module.addBlock(func, label: b"hopspinclaim", heat: BlockHeat.normal)
+	var spinStart = module.addBlock(func, label: b"hopspinstart", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let p = 0 as ValueId
@@ -5496,7 +5473,7 @@ function buildSchedHandoffP(module StdModule)
 	let runnable = emitSchedAnyRunnable(module, block: entry, p: p, ids: ids)
 	let entryZero = emitConst(module, block: entry, value: 0, ids: ids)
 	let nothingToRun = emitCmp(module, block: entry, a: runnable, b: entryZero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(nothingToRun, thenBlockId: recheck.id, elseBlockId: startIt.id))
+	module.setTerminator(entry, op: StdOp.condBranch(nothingToRun, thenBlockId: spinArm.id, elseBlockId: startIt.id))
 
 	// ⚠ **`__sched_startm` MAY PLACE NOTHING, AND THAT NEEDS NO ARM HERE.** A failed `osThreadCreate` moves the
 	// ring to the global queue and puts the processor back on `__sched_pidle` itself. The shutdown road, which
@@ -5510,8 +5487,21 @@ function buildSchedHandoffP(module StdModule)
 	emitSchedStartM(module, block: startIt, p: p, credit: SchedStartMCredit.unreserved, ids: ids)
 	module.setTerminator(startIt, op: StdOp.retVoid)
 
-	// Go's spinning arm sits between arm 1 and this one; see this function's header for why it is not built.
-	//
+	// Arm 2 — no machine is spinning and no processor is idle, so nobody would take up work published on another
+	// processor: start this one's machine spinning, with a credit reserved as `wakep` reserves one. Both counts
+	// are read unlocked, as Go reads them; the compare-and-swap is what decides.
+	let helpers = emitSchedSpinningPlusIdle(module, block: spinArm, ids: ids)
+	let nobodyFree = emitCmp(module, block: spinArm, a: helpers, b: emitConst(module, block: spinArm, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(spinArm, op: StdOp.condBranch(nobodyFree, thenBlockId: spinClaim.id, elseBlockId: recheck.id))
+
+	emitSchedReserveSpinner(module, cur: spinClaim, won: spinStart, lost: recheck, ids: ids)
+
+	// The new spinner re-checks every queue before it stops, so it answers for whatever was raised, as Go's
+	// `handoffp` clears `needspinning` here.
+	emitStoreGlobalWord(module, block: spinStart, label: SchedNeedSpinningLabel, value: emitConst(module, block: spinStart, value: 0, ids: ids), ids: ids)
+	emitSchedStartM(module, block: spinStart, p: p, credit: SchedStartMCredit.reserved, ids: ids)
+	module.setTerminator(spinStart, op: StdOp.retVoid)
+
 	// Arm 3 — Go's *"recheck the global queue under sched.lock"*. Arm 1's read was unsynchronized, and the
 	// global queue is the one tier a party holding no processor can both see and fill (`buildSchedLoop`'s
 	// final look states the same set from the other side).
@@ -5544,32 +5534,26 @@ function buildSchedHandoffP(module StdModule)
 	module.functions.push(func)
 end 'buildSchedHandoffP'
 
-// The walk `SchedRetakeName` describes: over the processors, take each one away from the machine holding it when
-// that machine has been inside ONE bracketed kernel call for longer than `SysmonRetakeAfterNs` and the processor
-// has work waiting. Answers how many it took.
+// The walk `SchedRetakeName` describes, over the processors — Go's `allp` — so a lap costs the processor count,
+// not the machine count. Answers how many processors it took.
 //
-// ⭐⭐⭐ **IT ONLY STEALS WHERE THERE IS WORK TO RUN, AND THAT IS A DIVERGENCE FROM GO THAT MAKES THIS
-// SCHEDULER SAFER RATHER THAN LAZIER.** Go's third arm skips a retake when the P's ring is empty AND a
-// spinning M or an idle P exists AND the block is younger than 10 ms — three terms, two of which need
-// `sched.npidle`. The compiler asks the ONE question those three approximate: **would anything actually run on this
-// processor if it were handed over?** If not, the handoff is pure cost — a machine started, a search run, a
-// park paid — and, worse, it forces the blocked machine through `__sched_syscall_regain` on its way out for
-// no benefit at all. A blocking read on an otherwise idle scheduler therefore costs nothing whatever, which is
-// the common case and is exactly what the old runtime already did correctly.
-//
-// ⛔ **GO ALSO PREEMPTS A LONG-*RUNNING* GOROUTINE HERE AND THE COMPILER DOES NOT.** The compiler is cooperative by
-// construction; there is no `preemptone` to port and no signal to deliver. `POffRunnext` carries what the
-// absence still costs — it is why a `runnext` slot cannot be taken on the throughput case alone.
-//
-// ⭐⭐ **IT WALKS THE PROCESSORS — Go's `allp` — SO A LAP COSTS THE PROCESSOR COUNT, NOT THE MACHINE COUNT.** A
-// machine with no processor has nothing to retake, and every machine that holds one is named by it (`POffM`).
+// ⭐⭐ **TWO QUESTIONS PER PROCESSOR, IN GO's ORDER.** First: has one strand held it since the note was taken for
+// `SchedForcePreemptNs`? Then its thread is asked to yield (`__sched_preemptone`), and, since a thread inside a
+// kernel call cannot answer, the second question is asked without waiting for a second look at the call.
+// Second: is its machine inside a bracketed kernel call? Then the processor is taken once the call has been seen
+// on two laps, when its ring holds work or no machine is spinning or idle to take work up; otherwise once the
+// call is `SysmonRetakeAfterNs` old, so a blocked machine never holds a processor sysmon's deep sleep waits on.
 //
 // ⚠ **THE PROCESSOR-TO-MACHINE READ IS UNLOCKED AND NAMES ONLY A CANDIDATE.** A stale `POffM` names a machine
-// that has since released this processor and may hold another. The pass reads that machine's state word, then
-// its `MOffCurrentP`, and goes on unless the second is this processor; the compare-and-swap at `rtclaim` then
-// proves the machine never left the call its word names, and inside a call `MOffCurrentP` has no writer. So a
-// win proves the machine held this processor for the whole of that call, whatever `POffM` said — and the
+// that has since released this processor and may hold another. A request sent to it lands on whatever thread
+// that machine now runs, which yields once for nothing. For a retake the pass reads that machine's state word,
+// then its `MOffCurrentP`, and goes on unless the second is this processor; the compare-and-swap at `rtclaim`
+// then proves the machine never left the call its word names, and inside a call `MOffCurrentP` has no writer.
+// So a win proves the machine held this processor for the whole of that call, whatever `POffM` said — and the
 // machine a stale read hid is reached through the processor it does hold, on this lap or the next.
+//
+// ⚠ **THE SPINNING AND IDLE COUNTS ARE READ UNLOCKED**, as Go reads them: each only chooses between retaking now
+// and at `SysmonRetakeAfterNs`, and both answers are correct.
 //
 // ⚠ **THERE IS NO DEADLOCK-CHECK BRACKET HERE, WHERE GO BRACKETS THIS BODY IN `incidlelocked(±1)`.** Go's
 // `checkdead` counts IDLE LOCKED Ms, so a victim leaving its syscall and parking mid-handoff makes the count
@@ -5584,11 +5568,14 @@ function buildSchedRetake(module StdModule)
 	var loopHdr = module.addBlock(func, label: b"rthdr", heat: BlockHeat.normal)
 	var askProc = module.addBlock(func, label: b"rtask", heat: BlockHeat.normal)
 	var haveMachine = module.addBlock(func, label: b"rtmachine", heat: BlockHeat.normal)
+	var noteTick = module.addBlock(func, label: b"rtnotetick", heat: BlockHeat.normal)
+	var sameStrand = module.addBlock(func, label: b"rtsamestrand", heat: BlockHeat.normal)
+	var preempt = module.addBlock(func, label: b"rtpreempt", heat: BlockHeat.normal)
+	var syscallArm = module.addBlock(func, label: b"rtsyscallarm", heat: BlockHeat.normal)
 	var inSyscall = module.addBlock(func, label: b"rtsyscall", heat: BlockHeat.normal)
-	var noteIt = module.addBlock(func, label: b"rtnote", heat: BlockHeat.normal)
 	var recordIt = module.addBlock(func, label: b"rtrecord", heat: BlockHeat.normal)
+	var ruleIt = module.addBlock(func, label: b"rtrule", heat: BlockHeat.normal)
 	var oldEnough = module.addBlock(func, label: b"rtold", heat: BlockHeat.normal)
-	var worthIt = module.addBlock(func, label: b"rtworth", heat: BlockHeat.normal)
 	var claimIt = module.addBlock(func, label: b"rtclaim", heat: BlockHeat.normal)
 	var tookIt = module.addBlock(func, label: b"rttook", heat: BlockHeat.normal)
 	var nextProc = module.addBlock(func, label: b"rtnext", heat: BlockHeat.normal)
@@ -5598,8 +5585,8 @@ function buildSchedRetake(module StdModule)
 	let now = 0 as ValueId
 
 	// ⚠ Both words are read unlocked, which `sealedBeforeWorkers` allows only because the monitor cannot start
-	// during bring-up: `__sched_init_procs` publishes the count before it builds the array, and the monitor is
-	// started by the first publish (`emitSchedSysmonLazyStart`), after bring-up has returned.
+	// during bring-up: `__sched_init_procs` publishes the count and builds the array inside `__gt_init`, and
+	// `__gt_run_main` starts the monitor after that has returned (`emitSchedSysmonStart`).
 	let numProcs = emitLoadGlobalWord(module, block: entry, label: SchedNumProcsLabel, ids: ids)
 	let index = ids.mint()
 	let taken = ids.mint()
@@ -5625,35 +5612,66 @@ function buildSchedRetake(module StdModule)
 	module.setTerminator(askProc, op: StdOp.condBranch(unheld, thenBlockId: nextProc.id, elseBlockId: haveMachine.id))
 	askProc.branchEdges.push(BranchEdge.create(nextProc.id, argIds: argsOf(taken)))
 
+	// ⭐ **THE SCHEDULE COUNTER'S NOTE — Go's `sysmontick.schedtick`.** Owner-written and read unlocked here: a stale
+	// tick is one this processor really had, so it can only delay a request by a lap.
+	let tick = emitLoadField(module, block: haveMachine, record: proc, offset: POffSchedTick, ids: ids)
+	let tickSeen = emitLoadField(module, block: haveMachine, record: proc, offset: POffSysmonTick, ids: ids)
+	let tickMoved = emitCmp(module, block: haveMachine, a: tick, b: tickSeen, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(haveMachine, op: StdOp.condBranch(tickMoved, thenBlockId: noteTick.id, elseBlockId: sameStrand.id))
+
+	// The syscall arm's one block argument: 1 when this pass has just asked the processor's thread to yield.
+	let sysRetake = ids.mint()
+	syscallArm.blockArgs.push(IrBlockArg.create(sysRetake, argType: StdType.i64))
+	let noRequest = emitConst(module, block: noteTick, value: 0, ids: ids)
+	emitStoreField(module, block: noteTick, record: proc, offset: POffSysmonTick, value: tick)
+	emitStoreField(module, block: noteTick, record: proc, offset: POffSysmonWhen, value: now)
+	module.setTerminator(noteTick, op: StdOp.branch(syscallArm.id))
+	noteTick.branchEdges.push(BranchEdge.create(syscallArm.id, argIds: argsOf(noRequest)))
+
+	// ⚠ The note is NOT refreshed when a request is sent, as Go's is not: a request lost to a writer of the guard
+	// word is sent again at the next lap for as long as the strand keeps the processor.
+	let held = emitBin(module, block: sameStrand, a: now, b: emitLoadField(module, block: sameStrand, record: proc, offset: POffSysmonWhen, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	let heldTooLong = emitCmp(module, block: sameStrand, a: held, b: emitConst(module, block: sameStrand, value: SchedForcePreemptNs, ids: ids), pred: StdCmpPred.ge, ids: ids)
+	let notYet = emitConst(module, block: sameStrand, value: 0, ids: ids)
+	module.setTerminator(sameStrand, op: StdOp.condBranch(heldTooLong, thenBlockId: preempt.id, elseBlockId: syscallArm.id))
+	sameStrand.branchEdges.push(BranchEdge.create(syscallArm.id, argIds: argsOf(notYet)))
+
+	module.appendOp(preempt, op: StdOp.call(ids.mint(), callee: SchedPreemptOneName, args: argsOf(machine)))
+	let requested = emitConst(module, block: preempt, value: 1, ids: ids)
+	module.setTerminator(preempt, op: StdOp.branch(syscallArm.id))
+	preempt.branchEdges.push(BranchEdge.create(syscallArm.id, argIds: argsOf(requested)))
+
 	// ⭐⭐⭐ **THE WORD IS READ FIRST, AND THE PROCESSOR IS READ AFTER IT — THE OTHER ORDER IS THE ABA.** Every
 	// test below is a HINT until the compare-and-swap at `rtclaim`; what makes the hints usable is that the CAS
 	// re-presents the EXACT word this block read, so a machine that has moved on since cannot match it. Reading
 	// the word first is what makes the processor read below a fact about THIS call rather than about whatever
-	// the machine happened to hold a moment earlier. `MOffSyscallState`'s header carries the interleaving that
-	// the two-word version of this got wrong.
+	// the machine happened to hold a moment earlier. `MOffSyscallState`'s header carries the interleaving a
+	// two-word version of this would get wrong.
 	//
 	// ⚠ **THE READ IS AN ACQUIRE, BECAUSE THE ORDER HAS TO BE THE HARDWARE'S AS WELL AS THE PROGRAM'S.** Two
 	// plain loads may be satisfied out of order on arm64, and a `MOffCurrentP` older than the word would name
 	// the processor the machine held BEFORE this call. Pairing with the release in `entersyscall`'s step is
 	// what makes the processor read below see the value the machine entered the call with.
-	let stateNow = emitLoadAcquireField(module, block: haveMachine, record: machine, offset: MOffSyscallState, ids: ids)
-	let stateMask = emitConst(module, block: haveMachine, value: MSyscallStateMask, ids: ids)
-	let inCallOnly = emitConst(module, block: haveMachine, value: MSyscallInCall, ids: ids)
-	let stateBits = emitBin(module, block: haveMachine, a: stateNow, b: stateMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let stateNow = emitLoadAcquireField(module, block: syscallArm, record: machine, offset: MOffSyscallState, ids: ids)
+	let stateMask = emitConst(module, block: syscallArm, value: MSyscallStateMask, ids: ids)
+	let inCallOnly = emitConst(module, block: syscallArm, value: MSyscallInCall, ids: ids)
+	let stateBits = emitBin(module, block: syscallArm, a: stateNow, b: stateMask, opcode: StdBinOpcode.bitAnd, ids: ids)
 
 	// EXACTLY `MSyscallInCall` — a machine whose stolen bit is also set has already had its processor taken and
 	// is inside `__sched_syscall_regain` waiting for another, which is the one state this pass must leave alone.
-	let notInCall = emitCmp(module, block: haveMachine, a: stateBits, b: inCallOnly, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(haveMachine, op: StdOp.condBranch(notInCall, thenBlockId: nextProc.id, elseBlockId: inSyscall.id))
-	haveMachine.branchEdges.push(BranchEdge.create(nextProc.id, argIds: argsOf(taken)))
+	let notInCall = emitCmp(module, block: syscallArm, a: stateBits, b: inCallOnly, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(syscallArm, op: StdOp.condBranch(notInCall, thenBlockId: nextProc.id, elseBlockId: inSyscall.id))
+	syscallArm.branchEdges.push(BranchEdge.create(nextProc.id, argIds: argsOf(taken)))
 
 	// ⭐⭐ **THE GENERATION TEST IS A COMPARISON OF THE WHOLE WORD**, because the generation lives in it — see
 	// `MOffSysmonWord`. A word that has moved means a DIFFERENT call, so the clock starts again; a word that has
 	// not means this machine has been inside ONE call since the previous poll, which is the only reading that
-	// tells a one-second read from a thousand `print`s.
+	// tells a one-second read from a thousand `print`s. A strand just asked to yield skips the wait for a second
+	// look, as Go's `sysretake` does.
 	let wordSeen = emitLoadField(module, block: inSyscall, record: machine, offset: MOffSysmonWord, ids: ids)
 	let sameCall = emitCmp(module, block: inSyscall, a: stateNow, b: wordSeen, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(inSyscall, op: StdOp.condBranch(sameCall, thenBlockId: noteIt.id, elseBlockId: recordIt.id))
+	let decideNow = emitBin(module, block: inSyscall, a: sameCall, b: sysRetake, opcode: StdBinOpcode.bitOr, ids: ids)
+	module.setTerminator(inSyscall, op: StdOp.condBranch(decideNow, thenBlockId: ruleIt.id, elseBlockId: recordIt.id))
 
 	// ⛔ **THE NOTE IS WRITTEN ONLY ON THE ARM THAT DECLINES, AND A BLOCK OF ITS OWN IS WHAT MAKES THAT
 	// POSSIBLE.** Writing `MOffSysmonWhen` unconditionally would restart the clock on every pass, so the
@@ -5664,11 +5682,15 @@ function buildSchedRetake(module StdModule)
 	module.setTerminator(recordIt, op: StdOp.branch(nextProc.id))
 	recordIt.branchEdges.push(BranchEdge.create(nextProc.id, argIds: argsOf(taken)))
 
-	let since = emitBin(module, block: noteIt, a: now, b: emitLoadField(module, block: noteIt, record: machine, offset: MOffSysmonWhen, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
-	let threshold = emitConst(module, block: noteIt, value: SysmonRetakeAfterNs, ids: ids)
-	let tooYoung = emitCmp(module, block: noteIt, a: since, b: threshold, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(noteIt, op: StdOp.condBranch(tooYoung, thenBlockId: nextProc.id, elseBlockId: oldEnough.id))
-	noteIt.branchEdges.push(BranchEdge.create(nextProc.id, argIds: argsOf(taken)))
+	// Go's rule: leave the processor with its machine only while the call is younger than `SysmonRetakeAfterNs`,
+	// its ring is empty, and a spinning machine or an idle processor can take up whatever else is published.
+	let callAge = emitBin(module, block: ruleIt, a: now, b: emitLoadField(module, block: ruleIt, record: machine, offset: MOffSysmonWhen, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	let young = emitCmp(module, block: ruleIt, a: callAge, b: emitConst(module, block: ruleIt, value: SysmonRetakeAfterNs, ids: ids), pred: StdCmpPred.lt, ids: ids)
+	let ringEmpty = emitSchedRingIs(module, block: ruleIt, p: proc, pred: StdCmpPred.eq, ids: ids)
+	let someoneFree = emitCmp(module, block: ruleIt, a: emitSchedSpinningPlusIdle(module, block: ruleIt, ids: ids), b: emitConst(module, block: ruleIt, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	let leaveIt = emitBin(module, block: ruleIt, a: emitBin(module, block: ruleIt, a: young, b: ringEmpty, opcode: StdBinOpcode.bitAnd, ids: ids), b: someoneFree, opcode: StdBinOpcode.bitAnd, ids: ids)
+	module.setTerminator(ruleIt, op: StdOp.condBranch(leaveIt, thenBlockId: nextProc.id, elseBlockId: oldEnough.id))
+	ruleIt.branchEdges.push(BranchEdge.create(nextProc.id, argIds: argsOf(taken)))
 
 	// ⭐ **THE MACHINE'S OWN PROCESSOR, READ AFTER THE WORD, MUST BE THIS ONE.** The read is unlocked, and what
 	// makes it trustworthy is the CAS below, which proves the machine never left the call this word names — and a
@@ -5676,15 +5698,8 @@ function buildSchedRetake(module StdModule)
 	// `emitSchedReleaseProcLocked`), both of which run outside one.
 	let heldProc = emitLoadField(module, block: oldEnough, record: machine, offset: MOffCurrentP, ids: ids)
 	let elsewhere = emitCmp(module, block: oldEnough, a: heldProc, b: proc, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(oldEnough, op: StdOp.condBranch(elsewhere, thenBlockId: nextProc.id, elseBlockId: worthIt.id))
+	module.setTerminator(oldEnough, op: StdOp.condBranch(elsewhere, thenBlockId: nextProc.id, elseBlockId: claimIt.id))
 	oldEnough.branchEdges.push(BranchEdge.create(nextProc.id, argIds: argsOf(taken)))
-
-	// ⭐ The divergence this function's header argues: a processor with nothing to run is not worth taking.
-	let wouldRun = emitSchedAnyRunnable(module, block: worthIt, p: proc, ids: ids)
-	let worthZero = emitConst(module, block: worthIt, value: 0, ids: ids)
-	let nothingWaiting = emitCmp(module, block: worthIt, a: wouldRun, b: worthZero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(worthIt, op: StdOp.condBranch(nothingWaiting, thenBlockId: nextProc.id, elseBlockId: claimIt.id))
-	worthIt.branchEdges.push(BranchEdge.create(nextProc.id, argIds: argsOf(taken)))
 
 	// ⭐⭐⭐ **THE LINEARIZATION POINT, AND IT CAS-es THE EXACT WORD THIS PASS MEASURED.** `stateNow` carries
 	// the call's GENERATION as well as its state bits, so the value below is one **no later call can present**:
@@ -5692,10 +5707,10 @@ function buildSchedRetake(module StdModule)
 	// none of them lowers it). A machine that has left the call — or left it and entered another, on another
 	// processor — therefore fails this CAS and the pass declines.
 	//
-	// ⛔⛔ **AN EARLIER CUT COMPARED A BARE `Active` HERE AND THAT WAS AN ABA.** `Active` recurs on every
-	// subsequent bracketed call, so the CAS could not tell *"the call I measured"* from *"a later one that looks
-	// the same"* — and the handoff below would then start a machine on a processor a DIFFERENT machine was
-	// already running. The generation is what makes success a PROOF of ownership rather than a likelihood.
+	// ⛔⛔ **A BARE `Active` HERE WOULD BE AN ABA.** `Active` recurs on every subsequent bracketed call, so the CAS
+	// could not tell *"the call I measured"* from *"a later one that looks the same"* — and the handoff below would
+	// then start a machine on a processor a DIFFERENT machine was already running. The generation is what makes
+	// success a PROOF of ownership rather than a likelihood.
 	//
 	// ⚠ **THERE IS NO ROAD BACK FROM A WIN**, which is why every decision is taken above this line: see
 	// `MOffSyscallState` for why the protocol has no release arm and why it needs none.
@@ -5723,9 +5738,9 @@ function buildSchedRetake(module StdModule)
 	_ = emitFieldAccumulate(module, block: tookIt, record: proc, offset: POffRetakeCount, delta: oneRetake, multiM: false, ids: ids)
 
 	// The note is refreshed to the word this CAS just wrote, and the clock restarts. Neither is strictly
-	// required — the stolen bit alone keeps the next pass off this machine, because `rtmachine` demands the state
-	// bits be EXACTLY `MSyscallInCall` — but leaving a note that names a word no longer in memory is the kind
-	// of stale fact the next reader has to re-derive.
+	// required — the stolen bit alone keeps the next pass off this machine, because `rtsyscallarm` demands the
+	// state bits be EXACTLY `MSyscallInCall` — but leaving a note that names a word no longer in memory is the
+	// kind of stale fact the next reader has to re-derive.
 	emitStoreField(module, block: tookIt, record: machine, offset: MOffSysmonWord, value: toStolen)
 	emitStoreField(module, block: tookIt, record: machine, offset: MOffSysmonWhen, value: now)
 	module.appendOp(tookIt, op: StdOp.call(ids.mint(), callee: SchedHandoffPName, args: argsOf(proc)))
@@ -5742,9 +5757,79 @@ function buildSchedRetake(module StdModule)
 	module.functions.push(func)
 end 'buildSchedRetake'
 
+// `__sched_preemptone(m)` — see `SchedPreemptOneName`. It declines for a machine inside or leaving a bracketed
+// call, whose thread runs no prologue until the call returns, and for a machine on its scheduler context
+// (`stackBase` 0), which covers one blocked in the poller; neither can answer a request.
+//
+// ⚠ **THE STORE IS PLAIN AND RACES THE THREAD, AS GO's DOES.** By the time it lands the machine may have switched
+// to another thread, which then yields once for nothing, or to its scheduler context, whose next switch-in
+// restores the word (`GtRuntime.emitGtExecute`). Records are never freed, so the store always lands in one.
+function buildSchedPreemptOne(module StdModule)
+	var func = IrFunction.createFromStd(SchedPreemptOneName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var running = module.addBlock(func, label: b"porunning", heat: BlockHeat.normal)
+	var onThread = module.addBlock(func, label: b"pothread", heat: BlockHeat.normal)
+	var request = module.addBlock(func, label: b"porequest", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"podone", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let m = 0 as ValueId
+
+	let stateBits = emitBin(module, block: entry, a: emitLoadField(module, block: entry, record: m, offset: MOffSyscallState, ids: ids), b: emitConst(module, block: entry, value: MSyscallStateMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	let inCall = emitCmp(module, block: entry, a: stateBits, b: emitConst(module, block: entry, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(inCall, thenBlockId: doneBlock.id, elseBlockId: running.id))
+
+	let gt = emitLoadField(module, block: running, record: m, offset: MOffCurrentGt, ids: ids)
+	let noThread = emitCmp(module, block: running, a: gt, b: emitConst(module, block: running, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(running, op: StdOp.condBranch(noThread, thenBlockId: doneBlock.id, elseBlockId: onThread.id))
+
+	let stackBase = emitLoadField(module, block: onThread, record: gt, offset: GtOffStackBase, ids: ids)
+	let schedulerContext = emitCmp(module, block: onThread, a: stackBase, b: emitConst(module, block: onThread, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(onThread, op: StdOp.condBranch(schedulerContext, thenBlockId: doneBlock.id, elseBlockId: request.id))
+
+	emitStoreField(module, block: request, record: gt, offset: GtOffStackGuard, value: emitConst(module, block: request, value: GtStackGuardPreempt, ids: ids))
+	module.setTerminator(request, op: StdOp.branch(doneBlock.id))
+
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildSchedPreemptOne'
+
+// ⭐⭐⭐ **START THE SYSTEM MONITOR — Go's `runtime.main` starting `sysmon`.** Its one caller is `__gt_run_main`, at
+// bring-up, before `main` runs. It terminates `cur` and lands on `cont`.
+//
+// ⛔⛔ **THE MONITOR IS LOAD-BEARING, SO A FAILED START IS FATAL** (`RuntimeAbort.schedulerMonitorUnstarted`), as
+// Go's `newm` failure is. It is what preempts a strand that holds a processor: without it a CPU-bound green
+// thread starves `main` itself at one processor, and a machine blocked in a kernel call keeps its processor for
+// the length of the call. From `main`'s first instruction a strand can hold the only processor — an
+// `async`-only program's coroutines included — so there is no later event that would make the monitor worth
+// starting, and no earlier one where it could run. Nothing ever joins it, so the handle is only tested.
+//
+// ⛔ **GATE SITE 2 OF 4 — see `targetBracketsBlockingSyscalls`.** On a lane with no bracket the monitor is not
+// built at all (gate site 1), so there is nothing to start: `cur` falls straight through to `cont`.
+export function emitSchedSysmonStart(module StdModule, func IrFunction, cur IrBlock, cont IrBlock, target Target, ids ValueMinter)
+	if not targetBracketsBlockingSyscalls(target) 'noMonitorOnThisLane'
+		module.setTerminator(cur, op: StdOp.branch(cont.id))
+		return
+	end 'noMonitorOnThisLane'
+
+	var unstarted = module.addBlock(func, label: b"sysmonunstarted", heat: BlockHeat.normal)
+
+	let monitorEntry = ids.mint()
+	module.appendOp(cur, op: StdOp.funcAddr(monitorEntry, funcName: SchedSysmonName))
+	let monitorHandle = ids.mint()
+	module.appendOp(cur, op: StdOp.osThreadCreate(monitorHandle, entryPtrId: monitorEntry, argId: emitConst(module, block: cur, value: 0, ids: ids)))
+	let refused = emitCmp(module, block: cur, a: monitorHandle, b: emitConst(module, block: cur, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(refused, thenBlockId: unstarted.id, elseBlockId: cont.id))
+
+	emitRuntimeAbort(module, func: func, block: unstarted, abort: RuntimeAbort.schedulerMonitorUnstarted, ids: ids)
+end 'emitSchedSysmonStart'
+
 // The loop `SchedSysmonName` describes — Go's `sysmon`: sleep a lap (`SysmonMinSleepUs`'s ladder), sleep deeply
 // while every processor is idle (`SchedSysmonWaitLabel`), take a non-blocking look at the poller when nobody has
-// for `SysmonPollStaleNs`, and retake.
+// for `SysmonPollStaleNs`, start a machine for an overdue timer nobody is placed to fire, and retake.
 //
 // ⭐ **IT IS NOT AN M AND MUST NOT BECOME ONE.** It never calls `emitSchedBecomeM`, so its TLS slot stays 0
 // for its whole life — which is what makes the syscall shim take its DIRECT arm on every kernel call this
@@ -5774,6 +5859,10 @@ function buildSysmon(module StdModule, target Target)
 	var claimPoll = module.addBlock(func, label: b"smonclaimpoll", heat: BlockHeat.normal)
 	var stalePoll = module.addBlock(func, label: b"smonpoll", heat: BlockHeat.normal)
 	var notStale = module.addBlock(func, label: b"smonpolltaken", heat: BlockHeat.normal)
+	var timerArm = module.addBlock(func, label: b"smontimer", heat: BlockHeat.normal)
+	var timerOverdue = module.addBlock(func, label: b"smontimeroverdue", heat: BlockHeat.normal)
+	var timerStart = module.addBlock(func, label: b"smontimerstart", heat: BlockHeat.normal)
+	var timerNoStart = module.addBlock(func, label: b"smontimernostart", heat: BlockHeat.normal)
 	var retakeBlock = module.addBlock(func, label: b"smonretake", heat: BlockHeat.normal)
 	var retook = module.addBlock(func, label: b"smonretook", heat: BlockHeat.normal)
 	var idled = module.addBlock(func, label: b"smonidle", heat: BlockHeat.normal)
@@ -5833,7 +5922,7 @@ function buildSysmon(module StdModule, target Target)
 	// is never looked past. The look is non-blocking, so it takes nothing that belongs to a blocking poller.
 	let now = emitGtNowNs(module, block: afterNap, ids: ids)
 	let peeked = emitLoadAcquireGlobalWord(module, block: afterNap, label: SchedLastPollLabel, ids: ids)
-	module.setTerminator(afterNap, op: StdOp.condBranch(emitSchedPollIsStale(module, block: afterNap, lastPoll: peeked, now: now, ids: ids), thenBlockId: claimPoll.id, elseBlockId: retakeBlock.id))
+	module.setTerminator(afterNap, op: StdOp.condBranch(emitSchedPollIsStale(module, block: afterNap, lastPoll: peeked, now: now, ids: ids), thenBlockId: claimPoll.id, elseBlockId: timerArm.id))
 
 	emitSchedLockEnter(module, block: claimPoll, ids: ids)
 	let lastPoll = emitLoadGlobalWord(module, block: claimPoll, label: SchedLastPollLabel, ids: ids)
@@ -5842,10 +5931,30 @@ function buildSysmon(module StdModule, target Target)
 	emitStoreGlobalWord(module, block: stalePoll, label: SchedLastPollLabel, value: now, ids: ids)
 	emitSchedLockLeave(module, block: stalePoll, ids: ids)
 	module.appendOp(stalePoll, op: StdOp.call(ids.mint(), callee: NetpollPollName, args: argsOf(emitConst(module, block: stalePoll, value: 0, ids: ids))))
-	module.setTerminator(stalePoll, op: StdOp.branch(retakeBlock.id))
+	module.setTerminator(stalePoll, op: StdOp.branch(timerArm.id))
 
 	emitSchedLockLeave(module, block: notStale, ids: ids)
-	module.setTerminator(notStale, op: StdOp.branch(retakeBlock.id))
+	module.setTerminator(notStale, op: StdOp.branch(timerArm.id))
+
+	// ⭐ **AN OVERDUE TIMER WITH AN IDLE PROCESSOR AND NOBODY IN THE POLLER — Go's `startm` for `timeSleepUntil() <
+	// now`.** Every machine is running, so none will fire the timer before its next schedule; a machine started on
+	// the idle processor fires it at once. The due test is every schedule's (`GtRuntime.emitGtBranchOnTimerDue`);
+	// the idle count and the poller's claim are read, and a start counted (`SchedTimerStartsLabel`), under the lock
+	// their writers hold, and the start takes the lock itself, after the release.
+	_ = emitGtBranchOnTimerDue(module, func: func, cur: timerArm, due: timerOverdue, notDue: retakeBlock, notDueArgs: ValueIdArray.create(), ids: ids)
+
+	emitSchedLockEnter(module, block: timerOverdue, ids: ids)
+	let anyIdle = emitCmp(module, block: timerOverdue, a: emitLoadGlobalWord(module, block: timerOverdue, label: SchedNpidleLabel, ids: ids), b: emitConst(module, block: timerOverdue, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	let nobodyPolls = emitCmp(module, block: timerOverdue, a: emitLoadGlobalWord(module, block: timerOverdue, label: SchedLastPollLabel, ids: ids), b: emitConst(module, block: timerOverdue, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(timerOverdue, op: StdOp.condBranch(emitBin(module, block: timerOverdue, a: anyIdle, b: nobodyPolls, opcode: StdBinOpcode.bitAnd, ids: ids), thenBlockId: timerStart.id, elseBlockId: timerNoStart.id))
+
+	emitSchedStepLockedCount(module, block: timerStart, label: SchedTimerStartsLabel, delta: OneMore, ids: ids)
+	emitSchedLockLeave(module, block: timerStart, ids: ids)
+	emitSchedStartM(module, block: timerStart, p: emitConst(module, block: timerStart, value: 0, ids: ids), credit: SchedStartMCredit.unreserved, ids: ids)
+	module.setTerminator(timerStart, op: StdOp.branch(retakeBlock.id))
+
+	emitSchedLockLeave(module, block: timerNoStart, ids: ids)
+	module.setTerminator(timerNoStart, op: StdOp.branch(retakeBlock.id))
 
 	let retakes = ids.mint()
 	module.appendOp(retakeBlock, op: StdOp.call(retakes, callee: SchedRetakeName, args: argsOf(now)))

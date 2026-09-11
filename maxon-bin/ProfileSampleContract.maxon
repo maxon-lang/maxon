@@ -19,6 +19,14 @@ module let ProfileContextRspOffset = 0x98
 // the only one the profiler reads back, as the identity of a stack.
 module let ProfileRegionAllocationBaseOffset = 8
 
+// The `MEMORY_BASIC_INFORMATION` record's size, which the region query is told.
+module let ProfileRegionRecordBytes = 48
+
+// ⭐ **THE WORD JUST PAST THE REGION RECORD RECEIVES THE THREAD's CYCLE COUNT, READ WHILE IT IS STILL
+// SUSPENDED.** The caller's region slot is far larger than the record, so the reading rides there rather than
+// widening `__prof_sample`'s signature; the profiler measures the thread's next charge from it.
+module let ProfileRegionSuspendedCyclesOffset = ProfileRegionRecordBytes
+
 // ⭐ **THE TWO NEGATIVE ANSWERS `__prof_sample` GIVES, AND THEY MEAN DIFFERENT THINGS TO THE CALLER.**
 // `SuspendThread`'s own documented failure says the THREAD IS GONE — nothing was suspended, so the caller
 // drops it and records no sample at all. A context read that fails says the thread is alive and this

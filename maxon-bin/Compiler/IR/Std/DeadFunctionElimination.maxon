@@ -286,6 +286,10 @@ function seedRoots(globalData GlobalDataTable, project Project, index FunctionNa
 	// through a thread entry that joins at the Target tier.
 	try markCompilerOwnedRoot(GtRunMainName, project: project, index: index, reached: reached, worklist: worklist)
 
+	// ⭐ **THE PREEMPTION's Std HALF** — `__gt_preempt`, called only from the hand-assembled `__gt_guard_tripped`'s
+	// preempt arm, so no Std caller reaches it. Rooted for the IOCP loop's callees' reason.
+	try markCompilerOwnedRoot(GtPreemptName, project: project, index: index, reached: reached, worklist: worklist)
+
 	// ⭐ **THE DEBUGSTREAM PRODUCER'S TWO ENTRY-STUB CALLEES (O3).** `__ds_init` and `__ds_shutdown` are
 	// called from `mrt_start` and from nowhere else — exactly `__mm_leak_check`'s position — so nothing in
 	// the Std module reaches them and the prune would drop both, leaving the stub calling functions that

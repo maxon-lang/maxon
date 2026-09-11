@@ -195,7 +195,7 @@ end 'buildArm64DarwinMonotonicClockChunk'
 // SUBTRACTED. Scaling here to look like Windows would be a guess wearing a unit's name.
 function buildArm64DarwinThreadCpuChunk() returns FunctionCodeChunk
 	let SlotOutPtr = 0 as StackSize
-	var asm = Arm64RuntimeAsm.beginFunction(1)
+	var asm = Arm64RuntimeAsm.beginFunction(DarwinThreadCpuSlots)
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotOutPtr)
 
@@ -206,6 +206,16 @@ function buildArm64DarwinThreadCpuChunk() returns FunctionCodeChunk
 
 	return asm.finishFunction(HostThreadCpuName)
 end 'buildArm64DarwinThreadCpuChunk'
+
+// The chunk's one local: the out-pointer across the clock call.
+let DarwinThreadCpuSlots = 1 as StackSize
+
+// What one call of `mrt_host_thread_cpu` costs a green thread's stack: its frame, and nothing below it, because
+// its libSystem call goes through the system-stack door. EXPORTED for
+// `PreemptionDepth.requirePreemptionFitsTheGuardMargin`, which reaches it from a park's clock read.
+export function arm64DarwinThreadCpuStackBytes() returns StackSize
+	return Arm64RuntimeAsm.beginFunction(DarwinThreadCpuSlots).stackBytesPerCall()
+end 'arm64DarwinThreadCpuStackBytes'
 
 // ==========================================================================
 // mrt_host_sleep_ms(x0 = milliseconds), mrt_host_netpoll_sleep(x0 = microseconds)

@@ -51,8 +51,8 @@ bad()  { echo "  FAIL: $1"; FAILED=1; }
 hdr()  { echo; echo "== $1 =="; }
 
 # ----------------------------------------------------------------------------
-# Compile. The service programs pick up the worker-arrival prelude through
-# `build_program`; `alloc-torture` does not call it and does not get it.
+# Compile. Each program picks up the prelude it calls through `build_program`: the
+# service programs the worker-arrival one, `alloc-torture` the monitor witness.
 # ----------------------------------------------------------------------------
 mkdir -p "$WORK"
 rm -f "$WORK"/*torture"$MAXON_EXE_EXT" "$WORK"/*-ds"$MAXON_EXE_EXT" "$WORK"/*.mxdbg

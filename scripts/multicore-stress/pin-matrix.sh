@@ -29,7 +29,11 @@
 #      row of one that prints no `leaked=` at all FAILS, because it died before its
 #      reading and an exit code it shares with every other row asserts nothing.
 #   4. ⭐ THE PIN ITSELF, AND IT IS NOW PER FAMILY (SV1). A COROUTINE-ONLY
-#      program reads `workers=1` and `steals=0` at every N. A SPAWN-DRIVEN one —
+#      program reads `workers=1` and `steals=0` at every N unless its `monitor=`
+#      reading says the system monitor stepped in (`monitor-witness.maxon`): a
+#      preemption, a retake or a machine started for an overdue timer can each put a
+#      second M to work, which can then steal a green thread readied onto a ring. A
+#      row with `monitor` above 0 is reported and not judged. A SPAWN-DRIVEN one —
 #      the `SPAWNING_PROGRAMS` list, which is where the fact is written down once —
 #      reads `1/0` at N=1 and `workers >= 2`, `steals > 0` at every N >= 2, which
 #      is this script's own prediction below, cashed.
@@ -43,9 +47,10 @@
 # drop-running-torture 1/0, 2/6, 7/35 and 11/51.
 # After the pin an `async` frame is a coroutine of the green thread that
 # called it: it is published only to that green thread's coroutine queue, never to
-# a P ring or the global queue, so nothing calls `__sched_wake_or_spawn` and no
-# worker M is ever created. `workers=1 steals=0` at every N IS the pin, read
-# directly off the runtime's own counters rather than inferred from timing.
+# a P ring or the global queue, so no coroutine ever wakes a worker M. A second M
+# comes only from the system monitor — a preemption, a retake, or a machine started
+# for an overdue timer — so `workers=1 steals=0` at every N where `monitor=0` IS the
+# pin, read directly off the runtime's own counters rather than inferred from timing.
 #
 # ⭐ AND THE PIN IS WHAT PRODUCES THOSE NUMBERS, WHICH IS A SEPARATE MEASUREMENT.
 # Sabotaged — `__gt_spawn`'s owner stamp changed to `gt` itself on the FINISHED
@@ -203,8 +208,8 @@
 #
 # ⚠ AND THAT IS ALSO WHAT alloc-torture AND remote-free-torture STILL COST. Both
 # exist to drive the sharded allocator's CROSS-P paths, and both do it by getting
-# worker Ms to run their tasks. Their own rows still read `workers=1` at every N,
-# because their work is `async` and an `async` frame is a coroutine — so they still
+# worker Ms to run their tasks. Their own rows read `workers=1` at every N unless the
+# monitor stepped in, because their work is `async` and an `async` frame is a coroutine — so they still
 # prove determinism and leak-freedom on ONE M, and no row of theirs below should be
 # read as covering a cross-P free.
 #
@@ -394,8 +399,8 @@ done
 echo "refused: $REFUSED_PROGRAMS"
 echo
 
-printf '%-24s %7s %14s %9s %9s %6s %8s %10s\n' program procs aggregate workers steals exit leaked workerwait
-printf '%-24s %7s %14s %9s %9s %6s %8s %10s\n' ------- ------- --------- ------- ------ ---- ------ ----------
+printf '%-24s %7s %14s %9s %9s %8s %6s %8s %10s\n' program procs aggregate workers steals monitor exit leaked workerwait
+printf '%-24s %7s %14s %9s %9s %8s %6s %8s %10s\n' ------- ------- --------- ------- ------ ------- ---- ------ ----------
 
 for prog in $PROGRAMS; do
 	REF_AGG=""
@@ -416,9 +421,10 @@ for prog in $PROGRAMS; do
 		agg="$(number_field "$WORK/$prog.$p.out" aggregate)"
 		wk="$(number_field "$WORK/$prog.$p.out" workers)"
 		st="$(number_field "$WORK/$prog.$p.out" steals)"
+		mon="$(number_field "$WORK/$prog.$p.out" monitor)"
 		lk="$(number_field "$WORK/$prog.$p.out" leaked)"
 		wait="$(word_field "$WORK/$prog.$p.out" workerwait)"
-		printf '%-24s %7s %14s %9s %9s %6s %8s %10s\n' "$prog" "$p" "$agg" "$wk" "$st" "$rc" "$lk" "$wait"
+		printf '%-24s %7s %14s %9s %9s %8s %6s %8s %10s\n' "$prog" "$p" "$agg" "$wk" "$st" "$mon" "$rc" "$lk" "$wait"
 
 		# 1 + 2: determinism against the N=1 row.
 		if [ -z "$REF_AGG" ]; then
@@ -468,12 +474,18 @@ for prog in $PROGRAMS; do
 					bad "$prog procs=$p steals=$st — a spawned green thread was never stolen, so the ring's work never crossed an M"
 				fi
 			fi
-		else
-			if [ "$wk" != "-" ] && [ "$wk" != 1 ]; then
-				bad "$prog procs=$p workers=$wk — a worker M ran, so something published a coroutine to the scheduler"
-			fi
-			if [ "$st" != "-" ] && [ "$st" != 0 ]; then
-				bad "$prog procs=$p steals=$st — a coroutine was stolen, so it reached a P ring"
+		elif [ "$wk" != "-" ] || [ "$st" != "-" ]; then
+			# The pin holds exactly while the monitor never stepped in, so a row without its
+			# reading cannot be judged, and a row where it acted is reported, not failed.
+			if [ "$mon" = "-" ]; then
+				bad "$prog procs=$p prints workers/steals but no monitor= reading — the pin is conditional on it (monitor-witness.maxon)"
+			elif [ "$mon" = 0 ]; then
+				if [ "$wk" != "-" ] && [ "$wk" != 1 ]; then
+					bad "$prog procs=$p workers=$wk with monitor=0 — a worker M ran though the monitor never stepped in, so something published a coroutine to the scheduler"
+				fi
+				if [ "$st" != "-" ] && [ "$st" != 0 ]; then
+					bad "$prog procs=$p steals=$st with monitor=0 — a steal needs a second M, and the monitor started none"
+				fi
 			fi
 		fi
 	done

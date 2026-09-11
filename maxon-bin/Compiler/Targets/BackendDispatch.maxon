@@ -169,6 +169,12 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	insertPrologueEpilogue(targetModule, target: target)
 	recordPhase(project, phase: CompilePhase.prologueEpilogue, probe: prologueProbe)
 
+	// A preemption request is honoured below a guarded function's entry, in frames sized only now — and before
+	// the runtime augmentation adds functions the name index does not cover.
+	if usage.usesGt 'preemptionDepth'
+		requirePreemptionFitsTheGuardMargin(targetModule, funcNames: funcNames, target: target)
+	end 'preemptionDepth'
+
 	let runtimeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.runtimeAugment)
 
 	// The stub's two producer calls ride the module's own armed flag (`buildCarriesDebugStream`, set at the
