@@ -25,7 +25,7 @@ The first published release, alongside Maxon 0.1.0.
 
 - Diagnostics, hover, go-to-definition, completion, rename, document symbols, semantic tokens and
   formatting, from the language server the compiler itself provides (`maxon lsp-server`).
-- Syntax highlighting, an icon theme, and a Spec Test explorer.
+- Syntax highlighting and a Spec Test explorer.
 
 ### Finding the compiler
 
