@@ -103,7 +103,7 @@ Pipeline: `maxon-bin/Compiler/IR/PassPipeline.maxon:395-413`.
 | **CSE / GVN** | ✅ `CommonSubexpressionElimination` (EC13) — dominator-scoped, arith band, call-barriered |
 | **LICM** | ✅ `LoopInvariantCodeMotion` (EC14) — pure ops AND invariant loads, two stated speculation rules |
 | **General DCE (dead pure values)** | ❌ *(2 op kinds only, by design)* |
-| **Block merging / branch simplification** | ◑ `BranchCleanup` (EC11) — elision, inversion, threading, unreachable, on x64 AND arm64; **no reordering** |
+| **Block merging / branch simplification** | ✅ `BranchCleanup` (EC11, EC29) — elision, inversion, threading, unreachable, cold-block sinking, on x64 AND arm64; loop rotation is the open remainder |
 | **Jump threading through constant phi inputs** | ✅ `ThreadConstantBranches` (EC24) — Std tier, join kept, no SSA rebuild |
 | **Value-range analysis / bounds-check elimination** | ✅ `RefineValueRanges` (EC25, EC27) — intervals, branch refinement, widening, symbolic upper bounds against a hoisted length, the guarded-access join |
 | **Loop unswitching** | ✅ `UnswitchInvariantGuards` (EC26) — the managed shape guards versioned, header loads hoisted under two runtime-stated facts; pressure-aware since EC28 |
@@ -1738,6 +1738,32 @@ arm), `mov` 213 → 248; the compiler's binary +11% for the same reason; self-co
 40,313 ms**. The flip loop's fast path is now within a few instructions of clang's; what remains
 is the loop overhead itself (rotation), the phi copies, and `advancePermutation`'s outer structure.
 
+**`EC29` · Cold-block sinking — a cold block is laid out after every hot one.** — ✅ **CLOSED
+2026-09-10 (round 7 of the fannkuch loop): fannkuch −7.8% at n=11 (2,735 → 2,521 ms, interleaved
+A/B against the round-6 commit), n=12 36,834 → 32,928 ms (ratio to C 1.78 → 1.59), and the compiler's
+own self-compile −9.6% (40,589 → 36,680 ms) — with a byte-identical census.** The census could not
+see the shape because it was LAYOUT: after round 6 every inlined access's slow arm, its `tryerr` panic
+block and every range check's `__rc_panic` sat physically between the guard and its fast continuation
+(the RPO reorder before allocation places the else-successor next), so the guard's `jcc` was TAKEN on
+the hot path — `flipCount`'s copy loop took three taken branches in ten instructions per iteration,
+and the program held 66 such hot→cold boundaries. `BranchCleanup` gained transform 5,
+`sinkColdBlocks`: a stable partition of `func.blockRefs` by `IrBlock.heat`, scheduled between
+`dropUnreachableBlocks` and `elideFallthroughBranches` — the one window where every else-edge is still
+a terminator op, so the order of blocks that carry one is semantically free — with a block that has no
+terminator op glued to its physical successor as one unit (cold only when every block in it is) and the
+entry's unit pinned first. The existing conditional inversion (transform 2) then does the rest: the
+continuation is next, so the guard becomes the complemented `jcc` aimed at the arm and a fall-through.
+Boundaries 66 → 9 (one per function's cold region); the copy loop takes one taken branch per iteration,
+the back edge. Shared by x64 and arm64 through the one pass; wasm never reaches this tier. Sabotage
+(`specs/cold-block-layout.md`, 5 cases): the sink run AFTER the elision stays green, because an elided
+terminator is `Terminator.fallthrough`, which names no op, and the unit rule glues it — the unit rule is
+load-bearing in both orders; with the unit rule removed as well, the two panic controls print their
+sums (6 and 15) and never panic. Scale ladder against a control compiler built from the pre-change
+commit: `branchCleanup` allocations +0.5% at every rung (two `BlockRefArray`s per function), ×1.9 per
+doubling on both. Open beside it: loop rotation (the back edge's `jmp`, now the only taken branch per
+iteration in every fannkuch loop) and a redundant reload of `temp[firstValue]` one block after the
+first load.
+
 **`A3` · `retainBorrowedPayload` — the rest of `EC2`.** ⛔ **DECLINED 2026-08-30, MEASURED. The
 acquire is load-bearing, the prize is under 1%, and the rule `EC2` used is a WRONG ANSWER here.** The row
 asked whether the `__mm_incref` around a managed payload bound out of a borrowed union in a `match` arm
@@ -1801,9 +1827,12 @@ live payload must then survive in (measurement 2's frame loses two `push`/`pop` 
 slow one. **Inlining the refcount primitives buys every one of these sites with no ownership change at
 all**, which is the half of this row that was never in question.
 
-**`B1` · Block reordering.** `EC11` collected the fall-throughs that already existed and explicitly
-did not create new ones. `EC15` then showed what reordering is worth by accident — deleting one block
-made a continuation physically next and `EC11`'s elision took its jump for free.
+**`B1` · Block reordering.** ✅ **CLOSED 2026-09-10 as `EC29`** (round 7 of the fannkuch loop): the
+heat-driven half — every cold block sunk after the function's last hot block. `EC11` collected the
+fall-throughs that already existed; `EC29` creates them where a cold arm sat between a guard and its
+continuation. A hot-successor-first chain layout beyond that is not filed: with the arms sunk, the
+front end's order already puts each loop's body in line, and the remaining taken branch per iteration
+is the back edge, which is loop rotation's.
 
 **`B2` · `critsplit` edge copies** — 5,752 in the self-compile, 72 in fannkuch, 108 in nbody. `EC19`:
 the phi is biased to the register the *slow* arm's call returns in, so both *fast* arms pay.

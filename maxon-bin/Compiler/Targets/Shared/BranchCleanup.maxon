@@ -2,7 +2,7 @@
 // Shared by every backend that allocates registers (x64 and arm64); wasm consumes Std directly and
 // never reaches this tier.
 //
-// Four transforms, all of them local to one function's block layout:
+// Five transforms, all of them local to one function's block layout:
 //
 //   1. JUMP ELISION       — a block whose terminator is the ISA's unconditional branch to the block
 //                           laid down immediately after it loses that branch. Control reaches the
@@ -14,6 +14,9 @@
 //                           branch that named it is re-pointed at its target.
 //   4. UNREACHABLE-BLOCK ELIMINATION — the blocks the threading (or the parser's `dead`
 //                           continuations) left with no path from the entry are dropped.
+//   5. COLD-BLOCK SINKING  — every cold block moves to the end of its function, so a guard's cold
+//                           arm no longer sits between the guard and its hot continuation, and
+//                           transform 2 then makes that continuation the fall-through.
 //
 // ⭐⭐ WHY IT RUNS WHERE IT DOES — AFTER `applyAllocation`, AND NOT ONE PASS EARLIER. THIS IS THE
 // WHOLE CORRECTNESS ARGUMENT FOR TRANSFORM 3.
@@ -30,11 +33,10 @@
 // every block's `blockArgs` and `branchEdges` are already EMPTY here. There is no phi metadata for
 // this pass to keep consistent — the ops are the only remaining statement of the CFG.
 //
-// ⛔ AND IT DOES NOT REORDER BLOCKS. It only DELETES — a branch, or a block nothing can reach — so
-// every surviving block keeps its position relative to every other. That matters because a block
-// with no terminator op (a parser `dead` continuation) reaches the backend relying on physically
-// falling into its neighbour, and the ops-derived CFG cannot see that edge. See
-// `dropUnreachableBlocks`, which is the one place that hole is closed.
+// ⚠ THE ONE LAYOUT CONSTRAINT: a block with no terminator op (a parser `dead` continuation) reaches
+// the backend relying on physically falling into its neighbour, and the ops-derived CFG cannot see
+// that edge. Transform 4 keeps such a neighbour alive on that edge (`dropUnreachableBlocks`) and
+// transform 5 moves the two as one unit (`sinkColdBlocks`); no other transform moves a block.
 //
 // ISA-neutrality is not an accident of the transforms: every question this pass asks is answered by
 // a shared roster. `unconditionalBranchTargetOf` classifies both ISAs' terminators, `retargetControlOp`
@@ -58,13 +60,15 @@ export function cleanUpBranches(module TargetModule, project Project)
 	recordPhase(project, phase: CompilePhase.branchCleanup, probe: probe)
 end 'cleanUpBranches'
 
-// ⭐ THE ORDER OF THE FOUR IS LOAD-BEARING, and it splits at one line.
+// ⭐ THE ORDER OF THE FIVE IS LOAD-BEARING, in three steps.
 //
 // Threading and reachability both need a CFG, and the CFG is derived FROM THE OPS — a block's second
 // successor is its conditional branch's target and its first is its terminator's. Transforms 1 and 2
 // DELETE that terminator, which makes the else-edge unreadable from the ops (it becomes a layout fact
-// instead). So every question that needs the CFG is asked first, and the elision is last — after
-// which nothing in the compiler builds a CFG for this function again.
+// instead). So every question that needs the CFG is asked first, the sinking reorders while every
+// else-edge is still an op (a block that has lost its terminator falls into its neighbour and could
+// not move), and the elision is last — after which nothing in the compiler builds a CFG for this
+// function again.
 function cleanUpFunctionBranches(module TargetModule, func IrFunction)
 	// The skeleton read off the ops, exactly as the allocator builds it — this pass derives no CFG of
 	// its own. Locals are LAYOUT positions (`buildFuncTopology` numbers them in `func.blockRefs`
@@ -78,6 +82,7 @@ function cleanUpFunctionBranches(module TargetModule, func IrFunction)
 	let resolved = resolveJumpChains(module, topo: topo)
 	threadResolvedEdges(module, topo: topo, resolved: resolved)
 	dropUnreachableBlocks(module, func: func, topo: topo, resolved: resolved)
+	sinkColdBlocks(module, func: func)
 	elideFallthroughBranches(module, func: func)
 end 'cleanUpFunctionBranches'
 
@@ -253,11 +258,10 @@ end 'threadResolvedEdges'
 //
 // ⚠⚠ A BLOCK WITH NO TERMINATOR OP FALLS THROUGH PHYSICALLY, AND THE OPS-DERIVED CFG CANNOT SEE
 // THAT EDGE. `Terminator.dead` / `Terminator.unset` name no op, so `collectBlockSuccessorIds` gives
-// such a block NO successors — its real successor is whatever is laid down next. That hole never
-// mattered while nothing removed blocks; it matters now, because dropping the block a live one falls
-// into would silently re-point it at whatever survived further down. So the walk adds the physical
-// edge, and it is added WITHOUT going through `resolved`: a fall-through is not a branch, threading
-// never moved it, and the block it names must survive verbatim.
+// such a block NO successors — its real successor is whatever is laid down next, and dropping that
+// block would silently re-point the live one at whatever survived further down. So the walk adds the
+// physical edge, and it is added WITHOUT going through `resolved`: a fall-through is not a branch,
+// threading never moved it, and the block it names must survive verbatim.
 function dropUnreachableBlocks(module TargetModule, func IrFunction, topo FuncTopology, resolved CfgIndexArray)
 	var reachable = BoolArray.create()
 	reachable.resize(topo.numBlocks)
@@ -305,6 +309,60 @@ function markReachable(reachable BoolArray, stack CfgIndexArray, local CfgIndex)
 	try reachable.set(local, value: true) otherwise panic("markReachable: reachable.set OOB at {local}")
 	stack.push(local)
 end 'markReachable'
+
+// ==========================================================================
+// Transform 5 — cold-block sinking
+// ==========================================================================
+
+// Move every cold block to the end of the function, keeping the relative order on each side. A
+// guard's conditional branch names its cold arm and its terminator names the hot continuation, so
+// once the arm is out of the way the continuation is the physically next block and transform 2
+// trades the taken branch for a fall-through. Sound because it runs while every else-edge is still
+// a terminator op: the order of blocks that carry one is a layout choice and nothing more.
+//
+// A block with no terminator op is the exception — it falls into whatever is laid down next — so it
+// and its physical successor move as ONE UNIT, cold only when every block in it is. The entry's unit
+// stays first: the prologue goes there.
+//
+// A sunk arm's branch spans the hot blocks that now sit between it and its guard. On arm64 that is
+// the 19-bit `b.cond` / `cbz` field, and a function carrying more than ±1 MiB of code between the
+// two is refused loudly by `arm64PatchBranch19` rather than mis-encoded.
+function sinkColdBlocks(module TargetModule, func IrFunction)
+	var hot = BlockRefArray.create()
+	var cold = BlockRefArray.create()
+	let blockCount = func.blockRefs.count()
+	var unitStart = 0 as CfgIndex
+	var unitIsCold = true
+
+	for i in 0 upto blockCount 'eachBlock'
+		let block = try module.blocks.get(try func.blockRefs.get(i) otherwise panic("sinkColdBlocks: blockRefs.get OOB at {i}")) otherwise panic("sinkColdBlocks: blockRef at {i} not in module.blocks")
+		unitIsCold = unitIsCold and block.heat == BlockHeat.cold
+
+		if block.hasTerminatorOp() or i + 1 == blockCount 'unitEnds'
+			if unitIsCold and unitStart > 0 'coldUnit'
+				pushBlockRange(func, from: unitStart, through: i, into: cold)
+			end 'coldUnit' else 'hotUnit'
+				pushBlockRange(func, from: unitStart, through: i, into: hot)
+			end 'hotUnit'
+
+			unitStart = i + 1
+			unitIsCold = true
+		end 'unitEnds'
+	end 'eachBlock'
+
+	for blockRef in cold 'appendCold'
+		hot.push(blockRef)
+	end 'appendCold'
+
+	func.blockRefs = hot
+end 'sinkColdBlocks'
+
+// Append the block refs at positions `from` through `through` of `func`'s current list to `into`.
+function pushBlockRange(func IrFunction, from CfgIndex, through CfgIndex, into BlockRefArray)
+	for i in from to through 'eachRef'
+		into.push(try func.blockRefs.get(i) otherwise panic("pushBlockRange: blockRefs.get OOB at {i}"))
+	end 'eachRef'
+end 'pushBlockRange'
 
 // ==========================================================================
 // Transforms 1 and 2 — jump elision and conditional inversion
