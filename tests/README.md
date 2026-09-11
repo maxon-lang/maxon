@@ -139,8 +139,8 @@ tests/
     hello.test.maxon                        prints `Hello, world!` and exits 0
     fannkuch-redux.test.maxon               the published n=7 answer and the documented n=10 one, flip count as exit code
     multifile.test.maxon                    the directory builds as one project and exits 5
-    nbody.test.maxon                        builds - see the section below for why it is not run
-    spectral-norm.test.maxon                builds - see the section below for why it is not run
+    nbody.test.maxon                        the published n=1000 energies, exit 0
+    spectral-norm.test.maxon                the published n=100 norm, exit 0
 ```
 
 ## The six rules, and the hazard each one answers
@@ -489,11 +489,10 @@ does not come from it. Every expected value is EXTERNAL — the Benchmarks Game'
 output, or the behaviour the example's own source documents — and each case cites its source in a
 comment beside the value.
 
-⚠ **`nbody` AND `spectral-norm` ARE BUILT, NOT RUN.** Neither takes an argument: each always runs its
-benchmark's full size (50,000,000 steps; n=5500), which does not fit a file's 5,000 ms deadline, and
-neither prints in the published reference format (nbody prints its energies' shortest round-trip
-spelling rather than 9 fixed decimals; spectral-norm prints nothing and answers through its exit code).
-Running them against a published answer needs the example to take a size and print that format.
+⚠ **THE BENCHMARKS RUN AT THE PUBLISHED SIZE, NEVER THEIR DEFAULT.** Each benchmark example takes its
+size as argv[1] and without one runs the benchmark's full size (fannkuch-redux n=11; nbody 50,000,000
+steps; spectral-norm n=5500), which does not fit a file's 5,000 ms deadline. Each case passes the size
+the Benchmarks Game's reference output was produced at, and expects that output byte for byte.
 
 ⛔ **THE EXAMPLES ARE BUILT WHERE THEY SIT, NEVER COPIED** — the gate is about the files a reader runs.
 Only the output is staged, into `temp/examples/<example>/`; `maxon test` runs files concurrently, and

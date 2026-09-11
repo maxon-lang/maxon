@@ -1,14 +1,23 @@
-// Spectral-norm benchmark from Computer Language Benchmarks Game
-// Calculate eigenvalue using the power method
-// For n = 5500, result should be approximately 1.274224153
+// Spectral-norm benchmark from the Computer Language Benchmarks Game
+// https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/spectralnorm.html#spectralnorm
+//
+// The spectral norm of an infinite matrix, truncated to n x n, by the power method, printed to 9
+// decimal places as the benchmark's reference output is. n is argv[1]; without one it runs n=5500,
+// the benchmark's size.
+//
+// Expected output for n=100:
+// 1.274219991
+//
+// Expected output for n=5500 (the default):
+// 1.274224153
 
 typealias VectorIndex = int(0 to 5500)
 typealias Iteration = int(0 to 10)
 typealias VectorComponent = float(0.0 to f64.max)
 
 // evalA works in floats so that its reciprocal has a float divisor: an int divisor
-// cannot carry the non-zero proof for a float divide. Every value below 2^53 is
-// exact in a double, so this is the same arithmetic the integer form performed.
+// cannot carry the non-zero proof for a float divide. Every value involved is below
+// 2^53, so each is exact in a double and none rounds.
 typealias MatrixIndex = float(0.0 to 5500.0)
 
 // evalA's divisor, (s(s+1))/2 + row + 1 for s = row + col. It is at least 1 for any
@@ -25,8 +34,33 @@ typealias RayleighDenominator = float(2.2250738585072014e-308 to f64.max)
 // never instantiated.
 typealias ComponentVector = Array with VectorComponent
 
-let problemSize = 5500 as VectorIndex
 let powerIterations = 10 as Iteration
+
+let defaultN = 5500
+
+// An empty vector has no norm, and VectorIndex caps n at the benchmark's own size.
+let smallestN = 1
+let largestN = 5500
+let usageExit = 2
+
+// argv[1], or defaultN when there is none. A malformed or out-of-range argument is refused so a
+// typo cannot read as a norm.
+function requestedSize() returns VectorIndex throws ParseError
+	let args = CommandLine.args()
+
+	if args.count() < 2 'noArgument'
+		return defaultN
+	end 'noArgument'
+
+	let raw = try args.get(1) otherwise panic("requestedSize: count() >= 2, so index 1 is live")
+	let n = try int.fromString(raw)
+
+	if n < smallestN or n > largestN 'outOfRange'
+		throw ParseError.invalidFormat
+	end 'outOfRange'
+
+	return n
+end 'requestedSize'
 
 function evalA(row MatrixIndex, col MatrixIndex) returns VectorComponent
 	let indexSum = row + col
@@ -67,6 +101,11 @@ function applyAtA(resultVector ComponentVector, inputVector ComponentVector, wor
 end 'applyAtA'
 
 function main() returns ExitCode
+	let problemSize = try requestedSize() otherwise 'badArgument'
+		printError("usage: spectral-norm [n]  with {smallestN} <= n <= {largestN}\n")
+		return usageExit
+	end 'badArgument'
+
 	var eigenvector = ComponentVector.create()
 	eigenvector.resize(problemSize)
 	var previousVector = ComponentVector.create()
@@ -103,5 +142,7 @@ function main() returns ExitCode
 	let squaredNorm = denominator as RayleighDenominator
 	let spectralNorm = sqrt(numerator / squaredNorm)
 
-	return trunc(spectralNorm * 1000000000.0)
+	print("{spectralNorm:.9}\n")
+
+	return 0
 end 'main'

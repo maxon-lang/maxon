@@ -1,12 +1,14 @@
-// nbody.test.maxon — `examples/nbody.maxon` builds.
-//
-// ⚠ BUILD ONLY. The example takes no argument and always runs the benchmark's full 50,000,000 steps, which
-// does not fit a test file's deadline, and it prints each energy's shortest round-trip spelling where the
-// Benchmarks Game's published output (`nbody-output.txt`, n=1000) prints 9 fixed decimals, so no published
-// answer applies to it as written.
+// nbody.test.maxon — `examples/nbody.maxon` builds and computes the benchmark's energies before and after
+// n steps.
 
 let NbodyExample = "nbody.maxon"
 
-test 'nbody builds'
-	try requireExampleBuild(NbodyExample)
-end 'nbody builds'
+// The Benchmarks Game's published reference output, `nbody-output.txt`, which is for n=1000.
+let NbodyPublishedSteps = "1000"
+let NbodyPublishedStdout = "-0.169075164\n-0.169087605\n"
+let NbodyExitCode = 0
+
+test 'nbody computes the published energies'
+	let run = try runExample(NbodyExample, arguments: [NbodyPublishedSteps])
+	try requireAnswer(run, stdout: NbodyPublishedStdout, exitCode: NbodyExitCode)
+end 'nbody computes the published energies'

@@ -1,11 +1,16 @@
-// N-Body simulation from Computer Language Benchmarks Game
+// N-Body simulation from the Computer Language Benchmarks Game
 // https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/nbody-rust-1.html
 //
-// Reference energies, before and after the 50,000,000 steps, to 9 decimal places:
+// Prints the system's energy before and after n steps, to 9 decimal places as the benchmark's
+// reference output does. n is argv[1]; without one it runs n=50,000,000, the benchmark's size.
+//
+// Expected output for n=1000:
+// -0.169075164
+// -0.169087605
+//
+// Expected output for n=50,000,000 (the default):
 // -0.169075164
 // -0.169059907
-// Interpolating a float renders 6 decimal places, so the two lines print as
-// -0.169075 and -0.16906.
 
 typealias Integer = int(i64.min to i64.max)
 typealias Real = float(f64.min to f64.max)
@@ -21,6 +26,29 @@ typealias PositiveDivisor = float(2.2250738585072014e-308 to f64.max)
 let bodyCount = 5
 let solarMass = 39.478417604357432 as PositiveDivisor  // 4.0 * PI * PI
 let daysPerYear = 365.24
+
+let defaultSteps = 50000000
+let fewestSteps = 0
+let usageExit = 2
+
+// argv[1], or defaultSteps when there is none. A malformed or negative argument is refused so a
+// typo cannot read as an energy.
+function requestedSteps() returns Integer throws ParseError
+	let args = CommandLine.args()
+
+	if args.count() < 2 'noArgument'
+		return defaultSteps
+	end 'noArgument'
+
+	let raw = try args.get(1) otherwise panic("requestedSteps: count() >= 2, so index 1 is live")
+	let n = try int.fromString(raw)
+
+	if n < fewestSteps 'negative'
+		throw ParseError.invalidFormat
+	end 'negative'
+
+	return n
+end 'requestedSteps'
 
 type Planet
 	export var x as Real
@@ -148,7 +176,11 @@ function advance(bodies PlanetArray, n Integer, dt Real)
 end 'advance'
 
 function main() returns ExitCode
-	let steps = 50000000
+	let steps = try requestedSteps() otherwise 'badArgument'
+		printError("usage: nbody [n]  with n >= {fewestSteps}\n")
+		return usageExit
+	end 'badArgument'
+
 	let timeStep = 0.01
 
 	var bodies = PlanetArray.create()
@@ -158,9 +190,8 @@ function main() returns ExitCode
 	initBodies(bodies)
 	offsetMomentum(bodies, n: bodyCount)
 
-	// Print initial energy
 	let e1 = energy(bodies, n: bodyCount)
-	print("{e1}\n")
+	print("{e1:.9}\n")
 
 	var step = 0
 
@@ -169,9 +200,8 @@ function main() returns ExitCode
 		step = step + 1
 	end 'simulation'
 
-	// Print final energy
 	let e2 = energy(bodies, n: bodyCount)
-	print("{e2}\n")
+	print("{e2:.9}\n")
 
 	return 0
 end 'main'
