@@ -1,0 +1,40 @@
+// Test: a-user-phi-whose-constants-disagree-is-left-alone
+typealias Word = int(i64.min to i64.max)
+
+function pick(p bool) returns Word
+	var tag = 0
+	if p 'yes'
+		tag = 1
+	end 'yes' else 'no'
+		tag = 0
+	end 'no'
+	if tag != 0 'tagged'
+		return 10
+	end 'tagged'
+	return 20
+end 'pick'
+
+function main() returns ExitCode
+	if pick(true) != 10 'a'
+		return 1
+	end 'a'
+	if pick(false) != 20 'b'
+		return 2
+	end 'b'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  tagged:
+    arm64.movImm x0, 10
+  ifcont#18:
+    arm64.movImm x0, 20
+  ifcont#4:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

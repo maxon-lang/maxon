@@ -711,7 +711,6 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		callIndirect(_, _, resultType, argFloatMask, args) then internIndirectCallType(map, builder: builder, resultType: resultType, argFloatMask: argFloatMask, argCount: args.count(), isThrowing: false)
 		osPanic or
 			osReadClock or
-			osSleepMs or
 			osProcessSpawn or
 			osProcessExitCode or
 			osWaitHandles or
@@ -835,7 +834,8 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
-			osHostSample then break 'k'
+			osHostSample or
+			osNetpoll then break 'k'
 	end 'k'
 end 'internIndirectCallTypeFor'
 
@@ -1407,7 +1407,6 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		callIndirect(resultId, _, resultType, _, _) then recordIndirectCallDefValtype(valtypes, resultId: resultId, resultType: resultType)
 		osPanic or
 			osReadClock or
-			osSleepMs or
 			osProcessSpawn or
 			osProcessExitCode or
 			osWaitHandles or
@@ -1548,7 +1547,8 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint then break 'def'
-		osHostSample then break 'def'
+		osHostSample or
+			osNetpoll then break 'def'
 	end 'def'
 end 'recordDefValtype'
 
@@ -1778,7 +1778,6 @@ type WasmFuncEmitter
 			callIndirect then panic("emitStraightLineTerminator: a `callIndirect` is a value-producing body op, never a terminator")
 			osPanic or
 				osReadClock or
-				osSleepMs or
 				osProcessSpawn or
 				osProcessExitCode or
 				osWaitHandles or
@@ -1865,6 +1864,7 @@ type WasmFuncEmitter
 				osUnpublishNamedSegment then panic("emitStraightLineTerminator: a named-section create or unmap is a body op, never a terminator")
 			covPoint then panic("emitStraightLineTerminator: a coverage counter is a body op, never a terminator")
 			osHostSample then panic("emitStraightLineTerminator: a host sample call is a body op, never a terminator")
+			osNetpoll then panic("emitStraightLineTerminator: a poller call is a body op, never a terminator")
 		end 'term'
 	end 'emitStraightLineTerminator'
 
@@ -1952,7 +1952,6 @@ type WasmFuncEmitter
 			callIndirect then panic("emitDispatcherTerminator: a `callIndirect` is a value-producing body op, never a terminator")
 			osPanic or
 				osReadClock or
-				osSleepMs or
 				osProcessSpawn or
 				osProcessExitCode or
 				osWaitHandles or
@@ -2035,6 +2034,7 @@ type WasmFuncEmitter
 				osUnpublishNamedSegment then panic("emitDispatcherTerminator: a named-section create or unmap is a body op, never a terminator")
 			covPoint then panic("emitDispatcherTerminator: a coverage counter is a body op, never a terminator")
 			osHostSample then panic("emitDispatcherTerminator: a host sample call is a body op, never a terminator")
+			osNetpoll then panic("emitDispatcherTerminator: a poller call is a body op, never a terminator")
 		end 'term'
 	end 'emitDispatcherTerminator'
 
@@ -2097,10 +2097,9 @@ type WasmFuncEmitter
 			callIndirect(resultId, calleeReg, resultType, argFloatMask, args) then self.emitCallIndirect(resultId, calleeReg: calleeReg, args: args, resultType: resultType, argFloatMask: argFloatMask)
 			osPanic(label) then self.emitPanicLabel(label)
 
-			// The green-thread sleep substrate (`osReadClock`/`osSleepMs`) has no wasm lowering, and E3104
-			// refuses a program that reaches one at the call's own span, so neither op arrives here.
+			// The green-thread sleep substrate's clock (`osReadClock`) has no wasm lowering, and E3104 refuses a
+			// program that reaches it at the call's own span, so it never arrives here.
 			osReadClock then panic("emitBodyOp: `osReadClock` has no wasm32-wasi lowering — the green-thread sleep substrate is refused at the call's own span (E3104)")
-			osSleepMs then panic("emitBodyOp: `osSleepMs` has no wasm32-wasi lowering — the green-thread sleep substrate is refused at the call's own span (E3104)")
 
 			// WASI has no process-spawn primitive, so the spawn/wait band has nothing to lower to.
 			osProcessSpawn or
@@ -2297,6 +2296,7 @@ type WasmFuncEmitter
 			// ⛔ WASI has no other thread to suspend and no register file to read — the sandbox exposes
 			// neither — so this is a permanent absence rather than an unwritten lowering.
 			osHostSample then panic("emitBodyOp: `osHostSample` has no wasm32-wasi spelling — process sampling is `HostFacility.processSampling`, which this lane does not provide, so SemanticCheck refuses such a program at its own source span (E3104) and this is the backstop for a compiler bug that got one past that gate")
+			osNetpoll then panic("emitBodyOp: `osNetpoll` has no wasm32-wasi spelling — a WASI component has one thread, so there is no second party to interrupt a wait and no poller to block in; the scheduler that emits it is `HostFacility.greenThreads`, which SemanticCheck refuses on this lane at its own source span (E3104), and this is the backstop for a compiler bug that got one past that gate")
 		end 'body'
 	end 'emitBodyOp'
 
@@ -3736,7 +3736,6 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		callIndirect then panic("decideDispatcher: a `callIndirect` is a value-producing body op, never a terminator")
 		osPanic or
 			osReadClock or
-			osSleepMs or
 			osProcessSpawn or
 			osProcessExitCode or
 			osWaitHandles or
@@ -3827,6 +3826,7 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 			osUnpublishNamedSegment then panic("decideDispatcher: a named-section create or unmap is a body op, never a terminator")
 		covPoint then panic("decideDispatcher: a coverage counter is a body op, never a terminator")
 		osHostSample then panic("decideDispatcher: a host sample call is a body op, never a terminator")
+		osNetpoll then panic("decideDispatcher: a poller call is a body op, never a terminator")
 	end 'k'
 
 	return false

@@ -540,13 +540,15 @@ sum=2646700 recycled=199
 0
 ```
 
-<!-- test: async-scheduler.gt-recycle-a-batch-overflows-to-the-global-list-and-comes-back -->
-**THE PER-PROCESSOR LIST HOLDS FEWER THAN 64, AND WHAT IT SHEDS IS NOT LOST.** A hundred threads are all
-outstanding before any is awaited, so no spawn in the first wave can reuse anything, and all hundred records
-are given back together. Each time the processor's own list reaches 64 it moves half of itself to the global
-list (Go's `gfput`); the second wave then drains the local list and refills from the global one (Go's
-`gfget`). Every one of its hundred spawns is served from a list, so a record stranded on the global list, or
-one freed at the overflow instead of moved, reads below 100.
+<!-- test: async-scheduler.gt-recycle-a-hundred-returned-records-serve-the-next-hundred-spawns -->
+**EVERY RECORD GIVEN BACK IS THERE FOR THE NEXT SPAWN.** A hundred threads are all outstanding before any is
+awaited, so no spawn in the first wave can reuse anything, and all hundred records are given back together.
+The free list is ONE list under the scheduler lock rather than Go's one per processor: a record stays where
+it was put, and the green thread that spawns moves between processors at every await, so per-processor
+lists would decide by thread timing whether a spawn reuses a record or cuts a fresh one — and the
+compiler's own memory, measured bit-for-bit by `scale-test`, would stop being reproducible. Every one of the
+second wave's hundred spawns is served from the list, so a record lost or freed on the way back reads below
+100.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer

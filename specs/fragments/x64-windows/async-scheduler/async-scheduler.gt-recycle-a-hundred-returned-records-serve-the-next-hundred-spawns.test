@@ -1,4 +1,4 @@
-// Test: async-scheduler.gt-recycle-a-batch-overflows-to-the-global-list-and-comes-back
+// Test: async-scheduler.gt-recycle-a-hundred-returned-records-serve-the-next-hundred-spawns
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
 typealias IntPromiseArray = Array with IntPromise
@@ -40,40 +40,51 @@ data {
   __mm_alloc_count@0 = i64 0
   __gt_run_queue_head@8 = i64 0
   __gt_run_queue_tail@16 = i64 0
-  __gt_init_done@24 = i64 0
-  __gt_timer_count@32 = i64 0
-  __gt_timer_heap_base@40 = i64 0
-  __gt_timer_capacity@48 = i64 0
-  __gt_timer_seq@56 = i64 0
+  __gt_timer_count@24 = i64 0
+  __gt_timer_heap_base@32 = i64 0
+  __gt_timer_capacity@40 = i64 0
+  __gt_timer_seq@48 = i64 0
+  __gt_timer_when@56 = i64 9223372036854775807
   __gt_trace_counter@64 = i64 0
   __gt_proc_count@72 = i64 0
   __gt_proc_handles_base@80 = i64 0
   __gt_proc_gts_base@88 = i64 0
-  __gt_proc_wait_snapshot@96 = i64 0
-  __gt_proc_poller@104 = i64 0
-  __gt_live_count@112 = i64 0
-  __sched_progress@120 = i64 0
-  __sched_active_workers@128 = i64 1
-  __sched_max_active_workers@136 = i64 1
-  __sched_tls_index@144 = i64 0
-  __sched_tls_teb_offset@152 = i64 0
-  __sched_procs@160 = i64 0
-  __sched_allm@168 = i64 0
-  __sched_midle@176 = i64 0
-  __sched_pidle@184 = i64 0
-  __gt_gfree_head@192 = i64 0
-  __sched_num_procs@200 = i64 0
-  __sched_shutdown_flag@208 = i64 0
-  __sched_lock@216 = i64 0
-  __sched_nmspinning@224 = i64 0
-  __sched_parked_drivers@232 = i64 0
-  __sched_sysmon_started@240 = i64 0
-  __slab_arena_list@248 = i64 0
-  __slab_arena_map_l1@256 = i64 0
-  __slab_state@264 = i64 0
-  __mrt_console_probe_stdin@272 = i8 0
-  __mrt_console_probe_stdout@273 = i8 0
-  __mrt_console_probe_stderr@274 = i8 0
+  __gt_live_count@96 = i64 0
+  __sched_active_workers@104 = i64 1
+  __sched_max_active_workers@112 = i64 1
+  __sched_tls_index@120 = i64 0
+  __sched_tls_teb_offset@128 = i64 0
+  __sched_procs@136 = i64 0
+  __sched_allm@144 = i64 0
+  __sched_midle@152 = i64 0
+  __sched_pidle@160 = i64 0
+  __gt_gfree_head@168 = i64 0
+  __sched_npidle@176 = i64 0
+  __sched_runq_size@184 = i64 0
+  __sched_mcount@192 = i64 0
+  __sched_nmidle@200 = i64 0
+  __sched_main_m@208 = i64 0
+  __sched_phase@216 = i64 0
+  __sched_lastpoll@224 = i64 0
+  __sched_poll_until@232 = i64 0
+  __sched_regain_head@240 = i64 0
+  __np_poller@248 = i64 0
+  __np_break@256 = i64 0
+  __np_wake_sig@264 = i64 0
+  __sched_num_procs@272 = i64 0
+  __sched_shutdown_flag@280 = i64 0
+  __sched_lock@288 = i64 0
+  __sched_nmspinning@296 = i64 0
+  __sched_needspinning@304 = i64 0
+  __sched_sysmon_started@312 = i64 0
+  __sched_sysmon_event@320 = i64 0
+  __sched_sysmon_wait@328 = i64 0
+  __slab_arena_list@336 = i64 0
+  __slab_arena_map_l1@344 = i64 0
+  __slab_state@352 = i64 0
+  __mrt_console_probe_stdin@360 = i8 0
+  __mrt_console_probe_stdout@361 = i8 0
+  __mrt_console_probe_stderr@362 = i8 0
 }
 
 func @twice {
@@ -133,7 +144,7 @@ func @wave {
     x64.cmpRegImm32 r13, 0
     x64.jcc greaterEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_16]  ; "panic at async-scheduler.gt-recycle-a-batch-overflows-to-the-global-list-and-comes-back.test:21: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_16]  ; "panic at async-scheduler.gt-recycle-a-hundred-returned-records-serve-the-next-hundred-spawns.test:21: Range check failed: value outside typealias 'ElementIndex'"...
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -173,7 +184,7 @@ func @wave {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
   tryerr:
-    x64.leaRegRdata rax, [rip + __str_rec_8]  ; "panic at async-scheduler.gt-recycle-a-batch-overflows-to-the-global-list-and-comes-back.test:21: "
+    x64.leaRegRdata rax, [rip + __str_rec_8]  ; "panic at async-scheduler.gt-recycle-a-hundred-returned-records-serve-the-next-hundred-spawns.test:21: "
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
     x64.leaRegRdata rax, [rip + __str_rec_9]  ; "ps.get OOB at "

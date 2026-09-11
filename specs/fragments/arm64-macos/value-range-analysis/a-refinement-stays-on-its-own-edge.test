@@ -1,0 +1,78 @@
+// Test: a-refinement-stays-on-its-own-edge
+typealias Word = int(i64.min to i64.max)
+typealias WordArray = Array with Word
+
+function main() returns ExitCode
+	var a = WordArray.create()
+	a.push(-1)
+	a.push(7)
+	let v = try a.get(0) otherwise 0
+	if v >= 0 'nonNegative'
+		return 2
+	end 'nonNegative'
+	let w = try a.get(v) otherwise 5
+	return 3 if w == 5 else 4
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 18446744073709551615
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 7
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.b.ls __im_slow
+    arm64.b __im_load
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.b trycont
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+  trycont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  nonNegative:
+    arm64.movImm x20, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __im_slow:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr
+    arm64.b trycont
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-refinement-stays-on-its-own-edge.test:13: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

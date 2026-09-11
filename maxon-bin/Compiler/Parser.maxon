@@ -5935,7 +5935,7 @@ let BuiltinsSchedRetakeCountName = b"__Builtins.schedRetakeCount"
 // It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
 let SchedRetakeCountArity = 0 as ParamCount
 
-// ⭐⭐ **`__Builtins.schedGtRecycleCount()` — how many green-thread structs a free list served instead of the
+// ⭐⭐ **`__Builtins.schedGtRecycleCount()` — how many green-thread structs the free list served instead of the
 // allocator.** It answers the sum of every processor's recycle counter, so a program can observe that a
 // reclaimed GT struct really came back to the next spawn rather than going to the slab. The surface is
 // invented here on the argumentless-integer shape the family already has; `SchedRuntime.GtFreePutName`
@@ -5954,6 +5954,15 @@ let BuiltinsSchedIdleProcessorCountName = b"__Builtins.schedIdleProcessorCount"
 
 // It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
 let SchedIdleProcessorCountArity = 0 as ParamCount
+
+// ⭐⭐ **`__Builtins.schedParkWakeCount()` — how many times a machine's blocking wait has returned, for any
+// reason.** An idle program keeps it near zero: a machine with nothing to do blocks until there is something,
+// rather than waking to look. The surface is invented here on the argumentless-integer shape the family already
+// has; `SchedRuntime.SchedParkWakeCountName` owns what it counts.
+let BuiltinsSchedParkWakeCountName = b"__Builtins.schedParkWakeCount"
+
+// It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
+let SchedParkWakeCountArity = 0 as ParamCount
 
 // ⭐⭐ **`__Builtins.slabRemoteFreeCount()` — THE ALLOCATOR'S ONE OUTCOME QUERY, and the only way a program
 // can observe that a box was freed on a machine other than the one that allocated it.** It answers the sum of
@@ -83031,6 +83040,12 @@ export type Parser
 			if callee.equals(BuiltinsSchedIdleProcessorCountName) 'schedIdleProcessorCount'
 				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSchedIdleProcessorCountName, runtimeName: SchedIdleProcessorCountName, arity: SchedIdleProcessorCountArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'schedIdleProcessorCount'
+
+			// The machines' wake count: the same shape, and it sets `usesGt` for the same reason. See
+			// `SchedRuntime.SchedParkWakeCountName`.
+			if callee.equals(BuiltinsSchedParkWakeCountName) 'schedParkWakeCount'
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSchedParkWakeCountName, runtimeName: SchedParkWakeCountName, arity: SchedParkWakeCountArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
+			end 'schedParkWakeCount'
 
 			// ⭐ **THE ALLOCATOR'S OUTCOME QUERY**, whose shape is the two scheduler counts' exactly: an `int`
 			// answer, no arguments, nothing to own, and — like both of them — it sets `usesGt`, because the

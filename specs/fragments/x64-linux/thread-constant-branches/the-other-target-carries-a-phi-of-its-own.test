@@ -1,0 +1,61 @@
+// Test: the-other-target-carries-a-phi-of-its-own
+typealias Word = int(i64.min to i64.max)
+
+function bump(p bool, n Word) returns Word
+	var flag = 0
+	var acc = 5
+	if p 'yes'
+		flag = 1
+		acc = n
+	end 'yes' else 'no'
+		flag = n
+		acc = 7
+	end 'no'
+	if flag != 0 'nz'
+		acc = acc + 1
+	end 'nz'
+	return acc
+end 'bump'
+
+function main() returns ExitCode
+	if bump(true, n: 9) != 10 'a'
+		return 1
+	end 'a'
+	if bump(true, n: 0) != 1 'b'
+		return 2
+	end 'b'
+	if bump(false, n: 9) != 8 'c'
+		return 3
+	end 'c'
+	if bump(false, n: 0) != 7 'd'
+		return 4
+	end 'd'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  yes#11:
+    x64.movRegImm32 rax, 9
+  nz#14:
+    x64.leaRegRegImm32 rax, rax, 1
+  yes#18:
+    x64.movRegImm32 rax, 0
+  nz#21:
+    x64.leaRegRegImm32 rax, rax, 1
+  ifelse#26:
+    x64.movRegImm32 rax, 7
+  nz#28:
+    x64.leaRegRegImm32 rax, rax, 1
+  ifelse#33:
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 7
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

@@ -183,7 +183,6 @@ function leafOpRole(op StdOp) returns LeafOpRole
 		callIndirect then return LeafOpRole.calling
 		osPanic then return LeafOpRole.panicking
 		osReadClock or
-			osSleepMs or
 			osProcessSpawn or
 			osProcessExitCode or
 			osWaitHandles or
@@ -271,7 +270,8 @@ function leafOpRole(op StdOp) returns LeafOpRole
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
-			osHostSample then break 'kind'
+			osHostSample or
+			osNetpoll then break 'kind'
 	end 'kind'
 
 	return LeafOpRole.refusing if op.rawValue.isUnsupportedInInlineBody else LeafOpRole.body
@@ -967,7 +967,6 @@ type LeafInliner
 					callIndirect or
 					osPanic or
 					osReadClock or
-					osSleepMs or
 					osProcessSpawn or
 					osProcessExitCode or
 					osWaitHandles or
@@ -1050,7 +1049,8 @@ type LeafInliner
 					osUnmapNamedSegment or
 					osUnpublishNamedSegment or
 					covPoint or
-					osHostSample then break 'kind'
+					osHostSample or
+					osNetpoll then break 'kind'
 			end 'kind'
 		end 'eachOp'
 
@@ -1134,7 +1134,6 @@ type LeafInliner
 				callIndirect or
 				osPanic or
 				osReadClock or
-				osSleepMs or
 				osProcessSpawn or
 				osProcessExitCode or
 				osWaitHandles or
@@ -1217,7 +1216,8 @@ type LeafInliner
 				osUnmapNamedSegment or
 				osUnpublishNamedSegment or
 				covPoint or
-				osHostSample then self.refuseNotTheSplitCall()
+				osHostSample or
+				osNetpoll then self.refuseNotTheSplitCall()
 		end 'site'
 
 		var pred = self.blockAt(predRef)
@@ -1635,7 +1635,6 @@ type LeafInliner
 				callIndirect or
 				osPanic or
 				osReadClock or
-				osSleepMs or
 				osProcessSpawn or
 				osProcessExitCode or
 				osWaitHandles or
@@ -1718,7 +1717,8 @@ type LeafInliner
 				osUnmapNamedSegment or
 				osUnpublishNamedSegment or
 				covPoint or
-				osHostSample then refuseNotATerminator(calleeFunc)
+				osHostSample or
+				osNetpoll then refuseNotATerminator(calleeFunc)
 		end 'exit'
 	end 'copyBlockExit'
 
@@ -1858,7 +1858,6 @@ function assertParamOpMatchesConvention(op StdOp, calleeFunc IrFunction)
 			callIndirect or
 			osPanic or
 			osReadClock or
-			osSleepMs or
 			osProcessSpawn or
 			osProcessExitCode or
 			osWaitHandles or
@@ -1941,7 +1940,8 @@ function assertParamOpMatchesConvention(op StdOp, calleeFunc IrFunction)
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
-			osHostSample then refuseNotAParamOp()
+			osHostSample or
+			osNetpoll then refuseNotAParamOp()
 	end 'p'
 end 'assertParamOpMatchesConvention'
 

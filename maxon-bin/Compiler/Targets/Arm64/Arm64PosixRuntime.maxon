@@ -100,8 +100,9 @@ end 'arm64PosixEmitEnvValueCopy'
 // A relative timeout, in the shape every POSIX call that takes one wants
 // ==========================================================================
 
-// ⭐ **MILLISECONDS INTO A `struct timespec` IN TWO ADJACENT FRAME SLOTS.** `secs = ms / 1000` and
-// `nanos = (ms - secs*1000) * 1e6` — `msub` takes the remainder from the quotient with no second divide,
+// ⭐ **A RELATIVE TIME INTO A `struct timespec` IN TWO ADJACENT FRAME SLOTS.** In milliseconds, `secs = ms /
+// 1000` and `nanos = (ms - secs*1000) * 1e6` (`PosixTimeUnit` names the other unit's two numbers) — `msub` takes
+// the remainder from the quotient with no second divide,
 // the same fold `StdToArm64Conversion.lowerDivMod` makes. The two slots must be CONSECUTIVE, because a
 // `timespec` is `{tv_sec, tv_nsec}` and `&slot(sec)` is what the callee reads it through — two 64-bit words
 // on BOTH lanes, which is why this is shared rather than per-lane.
@@ -128,17 +129,17 @@ end 'arm64PosixEmitEnvValueCopy'
 // (`mov x2, x2` when a caller does pass x2 is a self-move the encoder emits and the CPU discards.)
 //
 // ⚠ It CLOBBERS x1..x4. Every caller places its own arguments after it, never before.
-export function arm64PosixMillisToTimespec(asm Arm64RuntimeAsm, ms Arm64Register, secSlot StackSize, nsecSlot StackSize)
-	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x2, src: ms)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixMillisPerSecond)
+export function arm64PosixToTimespec(asm Arm64RuntimeAsm, amount Arm64Register, unit PosixTimeUnit, secSlot StackSize, nsecSlot StackSize)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x2, src: amount)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: posixUnitsPerSecond(unit))
 	arm64EmitRuntimeRrr(asm, opcode: Arm64OpUdiv, dest: Arm64Register.x3, lhs: Arm64Register.x2, rhs: Arm64Register.x1)
 	arm64EmitMsub(asm.code, rd: arm64RuntimeReg(Arm64Register.x2), rn: arm64RuntimeReg(Arm64Register.x3), rm: arm64RuntimeReg(Arm64Register.x1), ra: arm64RuntimeReg(Arm64Register.x2))
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: PosixNanosPerMilli)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: posixNanosPerUnit(unit))
 	arm64EmitRuntimeRrr(asm, opcode: Arm64OpMul, dest: Arm64Register.x2, lhs: Arm64Register.x2, rhs: Arm64Register.x4)
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x3, slot: secSlot)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: nsecSlot)
-end 'arm64PosixMillisToTimespec'
+end 'arm64PosixToTimespec'
 
 // ⭐⭐ **ZERO `slotCount` CONSECUTIVE FRAME SLOTS, STARTING AT `firstSlot`.** Three chunks across the two
 // lanes need a kernel-facing buffer to start empty, and each had been writing the same six-instruction loop
@@ -505,6 +506,13 @@ function arm64PosixEmitHostCallStatus(asm Arm64RuntimeAsm, call PosixHostCall)
 	end 'route'
 end 'arm64PosixEmitHostCallStatus'
 
+// A C `int` result widened to the 64-bit value it names — `lsl #32` then `asr #32`, which is `sxtw` — for a
+// chunk that answers the `int` itself rather than only testing it.
+export function arm64PosixWidenIntResult(asm Arm64RuntimeAsm, reg Arm64Register)
+	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(reg), rn: arm64RuntimeReg(reg), sh: Arm64NarrowResultShift as ShiftCount)
+	arm64EmitAsrImm(asm.code, rd: arm64RuntimeReg(reg), rn: arm64RuntimeReg(reg), sh: Arm64NarrowResultShift as ShiftCount)
+end 'arm64PosixWidenIntResult'
+
 // Discard the unspecified upper half of a register holding a C `int` return, leaving the low 32 bits where a
 // following `cbz`/`cbnz`/`cmp` tests them — `mrt_host_exe_path`'s trap, and the same shift.
 export function arm64PosixNarrowIntStatus(asm Arm64RuntimeAsm, reg Arm64Register)
@@ -693,7 +701,7 @@ function arm64PosixEmitPollImport(asm Arm64RuntimeAsm, slot OsImportSlot, pollfd
 end 'arm64PosixEmitPollImport'
 
 // The zeroed `timespec` goes in the caller's two frame slots, which must be CONSECUTIVE for the same reason
-// `arm64PosixMillisToTimespec`'s are: `&slot(sec)` is what the kernel reads the pair through.
+// `arm64PosixToTimespec`'s are: `&slot(sec)` is what the kernel reads the pair through.
 function arm64PosixEmitPpoll(asm Arm64RuntimeAsm, number MachineWord, sigsetBytes MachineWord, pollfdSlot StackSize, secSlot StackSize, nsecSlot StackSize)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: secSlot)

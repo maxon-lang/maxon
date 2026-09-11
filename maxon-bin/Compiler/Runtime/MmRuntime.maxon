@@ -297,7 +297,7 @@ let MmRawAllocBytesLabel = b"__mm_raw_alloc_bytes"
 // `STARTUPINFOA`, a mutable command line, an overlapped read buffer — comes from the counted `__slab_alloc`
 // and goes back through `__mm_raw_free`, so the credited population shrinks and a live count over it is not
 // the cumulative count. (A GT struct is credited once and never freed: it is recycled through the scheduler's
-// free lists — `SchedRuntime.GtFreePutName`.)
+// free list — `SchedRuntime.GtFreePutName`.)
 //
 // `MmRawAllocCountLabel` is CUMULATIVE and only ever rises; `MmRawLiveCountLabel` rises with it and falls
 // on every counted free.
@@ -1246,6 +1246,21 @@ export function emitLoadGlobalWord(module StdModule, block IrBlock, label ByteAr
 	module.appendOp(block, op: StdOp.globalAddr(addr, label: label))
 	return emitLoadField(module, block: block, record: addr, offset: 0, ids: ids)
 end 'emitLoadGlobalWord'
+
+// `emitLoadField` with ACQUIRE ordering, for a word read without the lock that guards its writers — each
+// such reader states at its own site why a stale answer is safe, and what the reads after it rely on seeing.
+export function emitLoadAcquireField(module StdModule, block IrBlock, record ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
+	let v = ids.mint()
+	module.appendOp(block, op: StdOp.loadAcquire(v, addrId: record, offset: offset, valueType: StdType.i64))
+	return v
+end 'emitLoadAcquireField'
+
+// `emitLoadGlobalWord` with ACQUIRE ordering — see `emitLoadAcquireField`.
+export function emitLoadAcquireGlobalWord(module StdModule, block IrBlock, label ByteArray, ids ValueMinter) returns ValueId
+	let addr = ids.mint()
+	module.appendOp(block, op: StdOp.globalAddr(addr, label: label))
+	return emitLoadAcquireField(module, block: block, record: addr, offset: 0, ids: ids)
+end 'emitLoadAcquireGlobalWord'
 
 export function emitStoreGlobalWord(module StdModule, block IrBlock, label ByteArray, value ValueId, ids ValueMinter)
 	let addr = ids.mint()

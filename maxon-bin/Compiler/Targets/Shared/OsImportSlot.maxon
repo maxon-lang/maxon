@@ -54,7 +54,7 @@ export enum OsImportSlot
 	//
 	// `clock_gettime_nsec_np` answers a Darwin clock in nanoseconds directly in x0 — the calendar, the
 	// monotonic counter and this thread's CPU time are one import asked with three different `clockid_t`s,
-	// which is why three facilities cost one slot. `nanosleep` is the timed park.
+	// which is why three facilities cost one slot. `nanosleep` is the thread sleep.
 	clockGettimeNsecNp
 	nanosleep
 
@@ -316,6 +316,12 @@ export enum OsImportSlot
 	// for the x86-64 shape of it).
 	sigaction
 	sigaltstack
+
+	// ⭐ **THE SCHEDULER'S POLLER (`StdOp.osNetpoll`).** `kqueue` creates it, and `kevent` is every other verb:
+	// registering the `EVFILT_USER` break, triggering it, and the wait. Linux's twin is `epoll`, three raw
+	// system calls that need no slot.
+	kqueue
+	kevent
 end 'OsImportSlot'
 
 // The import slot index a call site records and the writer patches against. One accessor

@@ -139,18 +139,16 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: runtime-scratch-reclaim.spawn-await-loop-is-bounded -->
 **THE GT STRUCT ITSELF, AND IT IS RECYCLED RATHER THAN RETURNED.** `__gt_reclaim` puts a finished
-thread's struct on its processor's free list (Go's `gfput`), and `__gt_spawn` takes the next one
+thread's struct on the scheduler's free list (Go's `gfput`), and `__gt_spawn` takes the next one
 from there, zeroed, before it asks the allocator (Go's `gfget`). The records are TYPE-STABLE, as Go's
 `g` records are: a read through a handle whose thread is gone — `awaitAny` over a promise already
 awaited (`await-any.md`) — lands in a GT record rather than in whatever the slab gave that memory to
 next.
 
-⭐ **THE MEMORY IS STILL BOUNDED.** A processor's list holds fewer than 64: a put that reaches 64
-moves the surplus to one global list until 32 remain, and an empty list refills from the global one
-before a spawn cuts a fresh struct. Every struct on a list was live at some moment, and a fresh one
-is cut only when the spawning processor's list and the global list are both empty, so the lists hold
-at most the program's peak concurrent population plus fewer than 64 per processor — Go's bound for
-its `gFree` lists. A loop that spawns and awaits one thread at a time cycles ONE struct.
+⭐ **THE MEMORY IS STILL BOUNDED.** Every struct on the list was live at some moment, and a fresh one
+is cut only when the list is empty, so the list holds at most the program's peak concurrent
+population — Go's bound for its `gFree` lists. A loop that spawns and awaits one thread at a time
+cycles ONE struct.
 
 Eight spawn/await pairs after a warm-up whose struct is already on the list: every spawn is served
 by the free list (`schedGtRecycleCount()` grows by exactly 8), none asks the allocator

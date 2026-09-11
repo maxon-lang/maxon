@@ -76,14 +76,16 @@ let ThreadSampleAccess = ThreadSuspendResume or ThreadGetContext or ThreadQueryI
 // failure and running out of threads are one answer to the caller.
 let NtStatusSuccess = 0
 
-// `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION` and the access a timer is created with.
+// `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION`, the ordinary timer's empty flags, and the access a timer is created
+// with — the scheduler's monitor creates its sleep timer from the same three (`NetpollRuntime.emitNetpollOpenTimer`).
 //
 // ⛔⛔ **THE HIGH-RESOLUTION FLAG IS MANDATORY AND A SLEEP LOOP CANNOT REPLACE IT.** `SchedRuntime`'s poll
 // measured a nominal one-millisecond `Sleep` returning on the scheduler's tick at ~35 ms; a sampler driven
 // that way collects a few dozen readings a second while reporting a kilohertz, which is the lying instrument
 // this whole feature refuses to be.
-let CreateWaitableTimerHighResolution = 0x00000002
-let TimerAllAccess = 0x1F0003
+export let CreateWaitableTimerHighResolution = 0x00000002
+export let CreateWaitableTimerOrdinary = 0x00000000
+export let TimerAllAccess = 0x1F0003
 
 // `TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32` — the module list of ONE process. Unlike the thread flag, this
 // pair honours the process id it is handed, so the walk costs the target's ~10 modules rather than the box's.
@@ -404,7 +406,7 @@ function buildProfileTimerCreate(module StdModule)
 	let noTimer = emitCmp(module, block: entry, a: fine, b: zero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(noTimer, thenBlockId: coarse.id, elseBlockId: made.id))
 
-	let plain = emitHostSample(module, block: coarse, service: ProfileHostCall.createHighResTimer, a0: zero, a1: zero, a2: zero, a3: access, a4: zero, a5: zero, ids: ids)
+	let plain = emitHostSample(module, block: coarse, service: ProfileHostCall.createHighResTimer, a0: zero, a1: zero, a2: emitConst(module, block: coarse, value: CreateWaitableTimerOrdinary, ids: ids), a3: access, a4: zero, a5: zero, ids: ids)
 	module.setTerminator(coarse, op: StdOp.ret(plain))
 
 	module.setTerminator(made, op: StdOp.ret(fine))

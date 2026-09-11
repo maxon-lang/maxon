@@ -1,0 +1,58 @@
+// Test: a-user-phi-of-constants-agreeing-on-one-target
+typealias Word = int(i64.min to i64.max)
+
+function classify(p bool, q bool, n Word) returns Word
+	var flag = 0
+	if p 'first'
+		flag = 0
+	end 'first' else if q 'second'
+		flag = n - 5
+	end 'second' else 'third'
+		flag = 0
+	end 'third'
+	if flag != 0 'nonzero'
+		return 1
+	end 'nonzero'
+	return 2
+end 'classify'
+
+function main() returns ExitCode
+	if classify(true, q: true, n: 9) != 2 'a'
+		return 1
+	end 'a'
+	if classify(false, q: true, n: 9) != 1 'b'
+		return 2
+	end 'b'
+	if classify(false, q: true, n: 5) != 2 'c'
+		return 3
+	end 'c'
+	if classify(false, q: false, n: 9) != 2 'd'
+		return 4
+	end 'd'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  ifcont#18:
+    arm64.movImm x0, 2
+  second#23:
+    arm64.movImm x0, 4
+  nonzero:
+    arm64.movImm x0, 1
+  second#33:
+    arm64.movImm x0, 0
+  ifcont#38:
+    arm64.movImm x0, 2
+  ifelse:
+    arm64.movImm x0, 0
+  ifcont#48:
+    arm64.movImm x0, 2
+  ifcont#8:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

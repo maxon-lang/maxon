@@ -663,14 +663,12 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 		// The subprocess wait result is a GPR i64 (the `WaitForSingleObject` return code `proc_check` reads).
 		osWaitHandle(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 
-		// `osPanic` defines no value (P1.9) — it aborts. `osReadClock`/`osSleepMs` (P1.5 mid-body-yield)
-		// define no value either: the clock read writes its results to caller-provided out-param buffers, and
-		// the OS sleep returns nothing. The four result-less P1.5 subprocess ops (`osProcessSpawn`,
+		// `osPanic` defines no value (P1.9) — it aborts. `osReadClock` defines none either: the clock read
+		// writes its results to caller-provided out-param buffers. The four result-less P1.5 subprocess ops (`osProcessSpawn`,
 		// `osProcessExitCode`, `osWaitHandles`, `osCloseHandle`) join the range — they consume their `BOOL` via
 		// memory or ignore it, so none defines a value (`osWaitHandle`, which does, is named just above).
 		osPanic or
 			osReadClock or
-			osSleepMs or
 			osProcessSpawn or
 			osProcessExitCode or
 			osWaitHandles or
@@ -843,6 +841,7 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 
 		// The host call's raw answer is a machine integer, so a GPR.
 		osHostSample(resultId, _, _, _, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osNetpoll(resultId, _, _, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 	end 'result'
 end 'recordOpResultClass'
 
@@ -1276,7 +1275,6 @@ export type ScaledIndexFolds
 				callIndirect or
 				osPanic or
 				osReadClock or
-				osSleepMs or
 				osProcessSpawn or
 				osProcessExitCode or
 				osWaitHandles or
@@ -1363,7 +1361,8 @@ export type ScaledIndexFolds
 				osUnmapNamedSegment or
 				osUnpublishNamedSegment or
 				covPoint or
-				osHostSample then break 'mem'
+				osHostSample or
+				osNetpoll then break 'mem'
 		end 'mem'
 	end 'recordMemoryFold'
 
@@ -1729,7 +1728,6 @@ export type CompareFusionCensus
 					callIndirect or
 					osPanic or
 					osReadClock or
-					osSleepMs or
 					osProcessSpawn or
 					osProcessExitCode or
 					osWaitHandles or
@@ -1843,7 +1841,8 @@ export type CompareFusionCensus
 					osUnmapNamedSegment or
 					osUnpublishNamedSegment or
 					covPoint or
-					osHostSample then break 'term'
+					osHostSample or
+					osNetpoll then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -1952,3 +1951,19 @@ export type CompareFusionCensus
 		collectStdOpUses(term, referenced: readAsValue)
 	end 'collectTerminatorValueUses'
 end 'CompareFusionCensus'
+
+// Operand `index` of an `osNetpoll`, as the isels carry them: the op's five in order.
+export function netpollOperand(operands ValueIdArray, index ParamCount) returns ValueId
+	return try operands.get(index) otherwise panic("netpollOperand: `osNetpoll` carries five operands and {index} is not one of them")
+end 'netpollOperand'
+
+// The operands a POSIX lane's `osNetpoll` chunk is called with — the prefix `posixNetpollOperandCount` names.
+export function posixNetpollChunkArgs(verb NetpollVerb, operands ValueIdArray) returns ValueIdArray
+	var args = ValueIdArray.create()
+
+	for index in 0 upto posixNetpollOperandCount(verb) 'eachRead'
+		args.push(netpollOperand(operands, index: index))
+	end 'eachRead'
+
+	return args
+end 'posixNetpollChunkArgs'

@@ -1,0 +1,270 @@
+// Test: a-view-detaches-on-its-first-write
+typealias Word = int(i64.min to i64.max)
+typealias WordArray = Array with Word
+
+function overwrite(b WordArray, n Word)
+	for i in 0 upto n 'each'
+		try b.set(i, value: 100 + i) otherwise panic("overwrite: i < n = b.count()")
+	end 'each'
+end 'overwrite'
+
+function main() returns ExitCode
+	var a = WordArray.create()
+	for i in 0 upto 4 'seed'
+		a.push(i)
+	end 'seed'
+	var b = try a.slice(0, endIndex: 4) otherwise panic("main: 0..4 is within a")
+	overwrite(b, n: 4)
+	var sumA = 0
+	for v in a 'readA'
+		sumA = sumA + v
+	end 'readA'
+	var sumB = 0
+	for v in b 'readB'
+		sumB = sumB + v
+	end 'readB'
+	if sumA != 6 'aUntouched'
+		return 1
+	end 'aUntouched'
+	if sumB != 406 'bRewritten'
+		return 2
+	end 'bRewritten'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @overwrite {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 80
+    x64.movRegImm32 rax, 0
+  __us_test#26:
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc less, forhdr#1
+  __us_test#27:
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 0]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc equal, forhdr#1
+  __us_test#28:
+    x64.leaRegRegImm32 r8, rdi, -24
+    x64.loadRegBaseDisp.word64 r8, [r8 + 16]
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, forhdr#1
+  __us_test#29:
+    x64.loadRegBaseDisp.word64 r8, [rcx + 40]
+    x64.movRegImm32 r9, 0
+    x64.cmpRegReg r8, r9
+    x64.jcc equal, forhdr#15
+  forhdr#1:
+    x64.cmpRegReg rax, rdx
+    x64.jcc greaterEqual, forexit
+  each#2:
+    x64.leaRegRegImm32 rsi, rax, 100
+  __rc_ok:
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 16]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc less, __im_slow#10
+  __im_bounds#11:
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 8]
+    x64.cmpRegReg rax, rdi
+    x64.jcc aboveEqual, __im_slow#10
+  __im_buffer:
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 0]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc equal, __im_slow#10
+  __im_viewed:
+    x64.leaRegRegImm32 r8, rdi, -24
+    x64.loadRegBaseDisp.word64 r8, [r8 + 16]
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, __im_slow#10
+  __im_store#14:
+    x64.storeBaseIndexScaleReg.word64 [rdi + rax*8 + 0], rsi
+  forstep#3:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp forhdr#1
+  forhdr#15:
+    x64.cmpRegReg rax, rdx
+    x64.jcc greaterEqual, forexit
+  each#25:
+    x64.leaRegRegImm32 r8, rax, 100
+  __im_bounds#23:
+    x64.cmpRegReg rax, rsi
+    x64.jcc aboveEqual, __im_slow#19
+  __im_store#20:
+    x64.storeBaseIndexScaleReg.word64 [rdi + rax*8 + 0], r8
+  forstep#16:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp forhdr#15
+  forexit:
+    x64.epilogue 80
+    x64.popReg rbp
+    x64.ret
+  __im_slow#10:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.movRegReg rdx, rax
+    x64.movRegReg rax, rsi
+    x64.callDirect __managed_set
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp forstep#3
+  __im_slow#19:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.storeSlotReg slot3, rsi
+    x64.storeSlotReg slot4, rdi
+    x64.movRegReg rdx, rax
+    x64.movRegReg rax, r8
+    x64.callDirect __managed_set
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
+    x64.loadRegSlot rsi, slot3
+    x64.loadRegSlot rdi, slot4
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, forstep#16
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-view-detaches-on-its-first-write.test:7: overwrite: i < n = b.count()\x0a"
+    x64.callDirect mrt_panic
+    x64.epilogue 80
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 0
+  forhdr#1:
+    x64.cmpRegImm32 r12, 4
+    x64.jcc greaterEqual, forexit#4
+  seed:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_push
+  forstep#3:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.jmp forhdr#1
+  forexit#4:
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 4
+    x64.leaRegRdata r9, [rip + __layout_Array_Word]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Array.slice
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+  tryok:
+    x64.movRegImm32 rdx, 4
+    x64.movRegReg rcx, r12
+    x64.callDirect overwrite
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
+  forhdr#7:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc greaterEqual, forexit#10
+  readA:
+    x64.loadRegBaseIndexScale.word64 rdi, [rsi + rcx*8 + 0]
+  __im_cont#19:
+    x64.leaRegRegReg rax, rax, rdi
+  forstep#9:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.jmp forhdr#7
+  forexit#10:
+    x64.movRegImm32 rcx, 0
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rsi, [r12 + 8]
+    x64.loadRegBaseDisp.word64 rdi, [r12 + 0]
+  forhdr#11:
+    x64.cmpRegReg rdx, rsi
+    x64.jcc greaterEqual, forexit#14
+  readB:
+    x64.loadRegBaseIndexScale.word64 r8, [rdi + rdx*8 + 0]
+  __im_cont#20:
+    x64.leaRegRegReg rcx, rcx, r8
+  forstep#13:
+    x64.leaRegRegImm32 rdx, rdx, 1
+    x64.jmp forhdr#11
+  forexit#14:
+    x64.cmpRegImm32 rax, 6
+    x64.jcc equal, ifcont#16
+  aUntouched:
+    x64.movRegImm32 r13, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#16:
+    x64.cmpRegImm32 rcx, 406
+    x64.jcc equal, ifcont#18
+  bRewritten:
+    x64.movRegImm32 r13, 2
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#18:
+    x64.movRegImm32 r13, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-view-detaches-on-its-first-write.test:16: main: 0..4 is within a\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -141,22 +141,15 @@ let ImportThunkPasses = 2  // the IAT and the ILT hold identical thunks
 // the Std tier asks for PAGES, and only this file — the Windows PE writer — knows that pages come
 // from `VirtualAlloc` through an import table. A `mmap`/`memory.grow` backend names its own, here.
 //
-// `QueryPerformanceCounter`/`QueryPerformanceFrequency`/`Sleep` (P1.5 mid-body-yield) are the green-thread
-// SLEEP substrate's clock and netpoll wait: `__gt_now_ns` reads the monotonic high-resolution counter
-// (QPC ticks scaled by the QPF frequency — NOT `GetTickCount64`, whose ~15.6 ms coarseness makes a
-// tick-derived deadline expire early), and the scheduler's netpoll waits on the earliest timer deadline
-// with a real `Sleep(ms)` rather than busy-spinning. They lower from the Std `osReadClock`/`osSleepMs` ops.
-// APPENDED AFTER `VirtualAlloc` so every existing slot INDEX (and hence every existing `iatCall`
-// relocation) is unchanged — a reorder would silently repoint every prior import.
+// `QueryPerformanceCounter`/`QueryPerformanceFrequency` are the green-thread clock: `__gt_now_ns` reads the
+// monotonic high-resolution counter (QPC ticks scaled by the QPF frequency — NOT `GetTickCount64`, whose
+// ~15.6 ms coarseness makes a tick-derived deadline expire early). They lower from the Std `osReadClock` op.
 //
-// `CreateProcessA`/`GetExitCodeProcess`/`WaitForSingleObject`/`WaitForMultipleObjects`/`CloseHandle` (P1.5
-// subprocess seed) are the green-thread SUBPROCESS substrate's spawn + yielding-wait + reap: `__gt_process_run`
-// spawns a child with CreateProcessA and parks the GT; the scheduler's netpoll blocks the M that holds the
-// single-poller claim (`GtRuntime.GtProcPollerLabel`) on
-// WaitForMultipleObjects (or per-handle WaitForSingleObject polls) and, once a child exits, reads its code with
-// GetExitCodeProcess and closes both handles. They lower from the Std `osProcessSpawn`/`osProcessExitCode`/
-// `osWaitHandles`/`osWaitHandle`/`osCloseHandle` ops. APPENDED AFTER `Sleep` so every existing slot INDEX (and
-// hence every existing `iatCall` relocation) is unchanged — a reorder would silently repoint every prior import.
+// `CreateProcessA`/`GetExitCodeProcess`/`WaitForSingleObject`/`WaitForMultipleObjects`/`CloseHandle` are the
+// green-thread SUBPROCESS substrate's spawn, wait and reap: `__gt_process_run` spawns a child with
+// CreateProcessA and parks the GT, the reap polls each parked handle with WaitForSingleObject and, once a child
+// has exited, reads its code with GetExitCodeProcess and closes both handles. They lower from the Std
+// `osProcessSpawn`/`osProcessExitCode`/`osWaitHandles`/`osWaitHandle`/`osCloseHandle` ops.
 //
 // `VirtualFree` (P1.5-B1a′) is the page-FREE twin of `VirtualAlloc` — the relocating morestack releases a GT's
 // OLD stack after copying to the doubled one, and `__gt_runner_done` releases a completed GT's (possibly grown)
@@ -204,7 +197,6 @@ export enum IatSlot
 	VirtualAlloc = IatSlotMeta{dll: ImportDll.kernel32}
 	QueryPerformanceCounter = IatSlotMeta{dll: ImportDll.kernel32}
 	QueryPerformanceFrequency = IatSlotMeta{dll: ImportDll.kernel32}
-	Sleep = IatSlotMeta{dll: ImportDll.kernel32}
 	CreateProcessA = IatSlotMeta{dll: ImportDll.kernel32}
 	GetExitCodeProcess = IatSlotMeta{dll: ImportDll.kernel32}
 	WaitForSingleObject = IatSlotMeta{dll: ImportDll.kernel32}
@@ -332,7 +324,7 @@ export enum IatSlot
 	// emitted `mrt_write_stream`, which `print`, `printError` and the panic writer all reach. A program that
 	// never prints still panics, and a panic writes to stderr.
 	//
-	// ⚠ **SO THEY SIT ABOVE `GetEnvironmentVariableA`, NOT PAST `Module32NextW`.** The optional band must
+	// ⚠ **SO THEY SIT ABOVE `GetEnvironmentVariableA`, NOT AT THE END OF THE kernel32 RUN.** The optional band must
 	// stay the TRAILING run of kernel32's slots — that is the property `isOptionalTrailingImport`'s header
 	// states and the one that keeps omitting the band from repointing anything.
 	GetConsoleMode = IatSlotMeta{dll: ImportDll.kernel32}
@@ -548,6 +540,13 @@ export enum IatSlot
 	Module32FirstW = IatSlotMeta{dll: ImportDll.kernel32}
 	Module32NextW = IatSlotMeta{dll: ImportDll.kernel32}
 
+	// ⭐ **THE SCHEDULER'S POLLER (`StdOp.osNetpoll`).** Its own completion port is created with the
+	// `CreateIoCompletionPort` above; a machine with nothing to run blocks in `GetQueuedCompletionStatusEx` until
+	// the earliest deadline, and `PostQueuedCompletionStatus` is the break that ends that wait early. In the
+	// optional band because only a green-thread program has a scheduler to poll with.
+	GetQueuedCompletionStatusEx = IatSlotMeta{dll: ImportDll.kernel32}
+	PostQueuedCompletionStatus = IatSlotMeta{dll: ImportDll.kernel32}
+
 	// ⭐⭐ **THE EIGHT `ws2_32.dll` SOCKET IMPORTS — THE FIRST NON-kernel32 IMPORTS THIS WRITER HAS EMITTED.**
 	// `stdlib/TcpClient.maxon` reaches all four `__ManagedSocket` methods and they bottom out here:
 	// `WSAStartup` (Winsock demands it once per process before any other call), `getaddrinfo`/`freeaddrinfo`
@@ -668,7 +667,7 @@ end 'iatSlotIndex'
 // import table — the trade is not close.
 //
 // ⚠ **THE BAND'S MEMBERSHIP IS THE RUN BELOW, NOT THIS PROSE.** Read it off the `true` arm, which spans
-// `GetEnvironmentVariableA` through `Module32NextW`; a producer added later must extend that arm (or fail
+// `GetEnvironmentVariableA` through `PostQueuedCompletionStatus`; a producer added later must extend that arm (or fail
 // this total match) and this comment with it.
 function isOptionalTrailingImport(slot IatSlot) returns bool
 	return match slot 'band'
@@ -700,7 +699,9 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 			SetWaitableTimer or
 			CreateToolhelp32Snapshot or
 			Module32FirstW or
-			Module32NextW gives true
+			Module32NextW or
+			GetQueuedCompletionStatusEx or
+			PostQueuedCompletionStatus gives true
 		ExitProcess or
 			GetStdHandle or
 			WriteFile or
@@ -708,7 +709,6 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 			VirtualAlloc or
 			QueryPerformanceCounter or
 			QueryPerformanceFrequency or
-			Sleep or
 			CreateProcessA or
 			GetExitCodeProcess or
 			WaitForSingleObject or

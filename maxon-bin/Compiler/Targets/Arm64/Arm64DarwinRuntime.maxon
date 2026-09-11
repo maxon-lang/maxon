@@ -208,38 +208,34 @@ function buildArm64DarwinThreadCpuChunk() returns FunctionCodeChunk
 end 'buildArm64DarwinThreadCpuChunk'
 
 // ==========================================================================
-// mrt_host_sleep_ms(x0 = milliseconds)
+// mrt_host_sleep_ms(x0 = milliseconds), mrt_host_netpoll_sleep(x0 = microseconds)
 // ==========================================================================
 
-// Suspend the calling OS THREAD for `ms` milliseconds — Windows's `Sleep(ms)`.
+// Suspend the calling OS THREAD — one body in two units: the bounded child wait's millisecond step and the
+// monitor's microsecond lap.
 //
-// ⚠ **THIS IS THE OS PRIMITIVE, NOT `sleep(ms)` THE LANGUAGE FEATURE.** `__gt_sleep` parks a GREEN THREAD
-// on the scheduler's timer heap and only bottoms out here when there is nothing else to run
-// (`GtRuntime.buildGtSleep`), so this chunk being present says nothing about whether that scheduler exists
-// on this lane — see `TargetFacilities.targetProvidesFacility`, where `sleep` and `greenThreads` are
-// separate rows for exactly this reason.
+// ⚠ **THIS IS THE OS PRIMITIVE, NOT `sleep(ms)` THE LANGUAGE FEATURE.** `__gt_sleep` parks a green thread on
+// the scheduler's timer store and never reaches this chunk; an idle process waits in the poller.
 //
 // `nanosleep` rather than `usleep`: `usleep` takes a 32-bit `useconds_t`, so a sleep of more than ~71
 // minutes would silently wrap into a short one. The `timespec` is two adjacent frame slots — see
 // `DarwinTimespecSecSlot` — so the request is `&slot0` with no packing step.
 //
-// ⚠ **A SIGNAL CAN CUT A `nanosleep` SHORT (EINTR) AND THIS DOES NOT RESTART IT.** That matches Windows's
-// `Sleep`, which is likewise not a guarantee of a minimum elapsed time in the presence of an APC, and it
-// matches what the one consumer needs: the scheduler re-checks its deadline after every park rather than
-// trusting the sleep to have slept (`emitGtParkOnDeadline`). A restart loop here would be a second, weaker
-// copy of a check that already exists one tier up.
-function buildArm64DarwinSleepMsChunk() returns FunctionCodeChunk
+// ⚠ **A SIGNAL CAN CUT A `nanosleep` SHORT (EINTR) AND THIS DOES NOT RESTART IT.** Both callers re-test their
+// own condition after every step, so a short sleep costs one extra lap; a restart loop here would be a
+// second, weaker copy of that test.
+function buildArm64DarwinSleepChunk(name ByteArray, unit PosixTimeUnit) returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(2)
 
-	arm64PosixMillisToTimespec(asm, ms: Arm64Register.x0, secSlot: DarwinTimespecSecSlot, nsecSlot: DarwinTimespecNsecSlot)
+	arm64PosixToTimespec(asm, amount: Arm64Register.x0, unit: unit, secSlot: DarwinTimespecSecSlot, nsecSlot: DarwinTimespecNsecSlot)
 
 	// &ts — the frame slots are `[x29 + slotOffset]`, and the SECONDS slot's offset is the base of the pair.
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: DarwinTimespecSecSlot)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: 0)
 	arm64DarwinCallImport(asm, slot: OsImportSlot.nanosleep)
 
-	return asm.finishFunction(HostSleepMsName)
-end 'buildArm64DarwinSleepMsChunk'
+	return asm.finishFunction(name)
+end 'buildArm64DarwinSleepChunk'
 
 // ==========================================================================
 // mrt_darwin_exe_path(x0 = bufPtr, x1 = bufLen) -> x0 = bytes written
@@ -692,7 +688,7 @@ function buildArm64DarwinWaitOneChunk(globalData GlobalDataTable) returns Functi
 
 	// waitTimed: ONE bounded wait, then a single re-test — see this chunk's header for why it does not re-arm.
 	asm.placeLabel(waitTimed)
-	arm64PosixMillisToTimespec(asm, ms: Arm64Register.x1, secSlot: SlotTsSec, nsecSlot: SlotTsNsec)
+	arm64PosixToTimespec(asm, amount: Arm64Register.x1, unit: PosixTimeUnit.milliseconds, secSlot: SlotTsSec, nsecSlot: SlotTsNsec)
 	arm64DarwinCondArgs(asm, objSlot: SlotObj)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x2, slot: SlotTsSec)
 	arm64DarwinCallImport(asm, slot: OsImportSlot.pthreadCondTimedwaitRelativeNp)
@@ -2104,12 +2100,16 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 		chunks.push(buildArm64DarwinLockInitChunk())
 	end 'hostObjects'
 
-	// The monotonic clock and the timed park both ride `usesGt`: `__gt_now_ns` and `__gt_sleep` are
-	// scheduler functions, installed together by `installGtRuntime`, so a program that has either has the
-	// whole band. Splitting them here would be a second reachability analysis that could disagree with the
-	// real one — `installGtRuntime`'s own stated reason for installing its members unconditionally.
+	// The thread sleep and the poller ride `usesGt`: the bounded child wait steps on the sleep and
+	// `__sched_init_procs` opens the poller, both installed unconditionally by `installGtRuntime`. Splitting
+	// them here would be a second reachability analysis that could disagree with the real one.
 	if usage.usesGt 'schedulerClocks'
-		chunks.push(buildArm64DarwinSleepMsChunk())
+		chunks.push(buildArm64DarwinSleepChunk(HostSleepMsName, unit: PosixTimeUnit.milliseconds))
+		chunks.push(buildArm64DarwinNetpollOpenChunk())
+		chunks.push(buildArm64DarwinNetpollUserEventChunk(HostNetpollOpenBreakName, flags: DarwinEvAdd + DarwinEvClear, fflags: 0, queue: Arm64Register.x0, answersQueue: true))
+		chunks.push(buildArm64DarwinNetpollWaitChunk())
+		chunks.push(buildArm64DarwinNetpollUserEventChunk(HostNetpollRaiseBreakName, flags: 0, fflags: DarwinNoteTrigger, queue: Arm64Register.x1, answersQueue: false))
+		chunks.push(buildArm64DarwinSleepChunk(HostNetpollSleepName, unit: PosixTimeUnit.microseconds))
 
 		// MAC3's host objects, on the same bit and for the same reason: `installSchedRuntime` builds the P/M
 		// tier whenever `installGtRuntime` runs, and every one of these chunks is the target-side body of an op
@@ -2240,3 +2240,123 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 	// load — builder-built Std that every backend lowers. What is target-specific is only WHO FILLS the two
 	// `.data` words, and that is the entry stub (`Arm64Runtime.buildArm64EntryStubChunk`).
 end 'appendArm64DarwinRuntimeChunks'
+
+// ==========================================================================
+// The scheduler's poller — `StdOp.osNetpoll` on this lane
+// ==========================================================================
+
+// `mrt_host_netpoll_open() -> x0 = the kqueue, or negative`. A child never inherits it: every spawn on this lane
+// runs under `POSIX_SPAWN_CLOEXEC_DEFAULT`.
+function buildArm64DarwinNetpollOpenChunk() returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(0)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.kqueue)
+	arm64PosixWidenIntResult(asm, reg: Arm64Register.x0)
+	return asm.finishFunction(HostNetpollOpenName)
+end 'buildArm64DarwinNetpollOpenChunk'
+
+// ⭐ **THE BREAK IS ONE `EVFILT_USER` EVENT, AND BOTH OF ITS CHANGES ARE ONE `kevent` OF ONE RECORD.**
+// `mrt_host_netpoll_open_break(x0 = kq) -> x0 = kq, or negative` registers it `EV_ADD | EV_CLEAR`, so receiving
+// it consumes it; `mrt_host_netpoll_raise_break(x0 = kq, x1 = the break source, which is kq) -> x0 = 0, or
+// negative` fires it with `NOTE_TRIGGER`. `queue` names the register the kqueue arrives in.
+function buildArm64DarwinNetpollUserEventChunk(name ByteArray, flags MachineWord, fflags MachineWord, queue Arm64Register, answersQueue bool) returns FunctionCodeChunk
+	let SlotQueue = 0 as StackSize
+	let SlotEvent = 1 as StackSize
+	let eventSlots = runtimeFrameSlots(DarwinKeventBytes)
+	var asm = Arm64RuntimeAsm.beginFunction(1 + eventSlots)
+
+	let failed = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: queue, slot: SlotQueue)
+	arm64EmitZeroSlots(asm, firstSlot: SlotEvent, slotCount: eventSlots)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotEvent)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: NetpollBreakToken as MachineWord)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x2, base: Arm64Register.x1, byteOffset: DarwinKeventIdentOffset)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: darwinKeventFilterWord(DarwinEvfiltUser, flags: flags, fflags: fflags))
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x2, base: Arm64Register.x1, byteOffset: DarwinKeventFilterOffset)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotQueue)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: DarwinOneChange)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x5, value: 0)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.kevent)
+	arm64PosixWidenIntResult(asm, reg: Arm64Register.x0)
+
+	if answersQueue 'queueOnSuccess'
+		arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+		arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: failed)
+		arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotQueue)
+	end 'queueOnSuccess'
+
+	asm.placeLabel(failed)
+	return asm.finishFunction(name)
+end 'buildArm64DarwinNetpollUserEventChunk'
+
+// `kevent`'s changelist length for one record.
+let DarwinOneChange = 1
+
+// The kevent's second quadword — the 16-bit `filter`, the 16-bit `flags` and the 32-bit `fflags`, little-endian —
+// as the one value stored at `DarwinKeventFilterOffset`.
+function darwinKeventFilterWord(filter ParsedInt, flags MachineWord, fflags MachineWord) returns MachineWord
+	let filterBits = (filter and DarwinKeventHalfMask) as MachineWord
+	return filterBits or (flags shl DarwinKeventFlagsShift) or (fflags shl DarwinKeventFflagsShift)
+end 'darwinKeventFilterWord'
+
+// `filter` is a 16-bit field, so the negative `EVFILT_USER` is kept to its low half before the other two are
+// placed above it.
+let DarwinKeventHalfMask = 0xFFFF
+
+// `mrt_host_netpoll_wait(x0 = kq, x1 = entries, x2 = capacity, x3 = timeoutMs) -> x0 = count, 0 when
+// interrupted, or negative` — `kevent(kq, NULL, 0, entries, capacity, timeout)`, whose `timeout` is a NULL
+// `timespec` for `WaitInfinite`.
+function buildArm64DarwinNetpollWaitChunk() returns FunctionCodeChunk
+	let SlotQueue = 0 as StackSize
+	let SlotEntries = 1 as StackSize
+	let SlotCapacity = 2 as StackSize
+	let SlotTsSec = 3 as StackSize
+	let SlotTsNsec = 4 as StackSize
+	let SlotTimeoutPtr = 5 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(6)
+
+	let callKevent = asm.newLabel()
+	let answered = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotQueue)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotEntries)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotCapacity)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x9, value: 0)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x9, slot: SlotTimeoutPtr)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x9, value: WaitInfinite as MachineWord)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x3, rhs: Arm64Register.x9)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: callKevent)
+
+	arm64PosixToTimespec(asm, amount: Arm64Register.x3, unit: PosixTimeUnit.milliseconds, secSlot: SlotTsSec, nsecSlot: SlotTsNsec)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x9, slot: SlotTsSec)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x9, slot: SlotTimeoutPtr)
+
+	asm.placeLabel(callKevent)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotQueue)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x3, slot: SlotEntries)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: SlotCapacity)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x5, slot: SlotTimeoutPtr)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.kevent)
+	arm64PosixWidenIntResult(asm, reg: Arm64Register.x0)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: answered)
+
+	// Failed: an interrupted wait is no entries; anything else stays the negative answer.
+	arm64DarwinCallImport(asm, slot: OsImportSlot.errnoLocation)
+	arm64EmitLoadWord32At(asm, dest: Arm64Register.x1, base: Arm64Register.x0, byteOffset: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: DarwinKeventFailed)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x1, imm: PosixErrnoInterrupted as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: answered)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostNetpollWaitName)
+end 'buildArm64DarwinNetpollWaitChunk'
+
+// What a failed `kevent` answers, restored after `__error()` has used the return register.
+let DarwinKeventFailed = 0xFFFFFFFFFFFFFFFF

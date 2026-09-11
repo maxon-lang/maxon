@@ -1,0 +1,99 @@
+// Test: a-candidate-inside-an-orphaned-region
+typealias Word = int(i64.min to i64.max)
+
+function f(p bool, q bool, n Word) returns Word
+	var flag = 0
+	if p 'a'
+		flag = 0
+	end 'a' else 'b'
+		flag = 0
+	end 'b'
+	if flag != 0 'nz'
+		var g = 0
+		if q 'c'
+			g = 0
+		end 'c' else 'd'
+			g = n
+		end 'd'
+		if g != 0 'gz'
+			return 1
+		end 'gz'
+		return 3
+	end 'nz'
+	return 2
+end 'f'
+
+function main() returns ExitCode
+	var t = 0
+	for i in 0 upto 4 'each'
+		t = t + f(i mod 2 == 0, q: i > 1, n: i)
+	end 'each'
+	if t != 8 'total'
+		return 1
+	end 'total'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @f {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, ifcont
+  ifcont:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
+  forhdr:
+    x64.cmpRegImm32 r12, 4
+    x64.jcc greaterEqual, forexit
+  each:
+    x64.movRegReg rax, r12
+    x64.sarRegImm8 rax, r12, 63
+    x64.shrRegImm8 rax, rax, 63
+    x64.leaRegRegReg rax, r12, rax
+    x64.sarRegImm8 rax, rax, 1
+    x64.imulRegRegImm32 rax, rax, 2
+    x64.movRegReg rcx, r12
+    x64.subRegReg rcx, r12, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg equal, rcx
+    x64.cmpRegImm32 r12, 1
+    x64.setccReg greater, rdx
+    x64.movRegReg rax, r12
+    x64.callDirect f
+    x64.leaRegRegReg rbx, rbx, r8
+  forstep:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.jmp forhdr
+  forexit:
+    x64.cmpRegImm32 rbx, 8
+    x64.jcc equal, ifcont
+  total:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

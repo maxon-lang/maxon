@@ -428,7 +428,6 @@ function markCalleeOf(op StdOp, byName FuncIndexByName, reached BoolArray, workl
 		callIndirect or
 			osPanic or
 			osReadClock or
-			osSleepMs or
 			osProcessSpawn or
 			osProcessExitCode or
 			osWaitHandles or
@@ -558,8 +557,9 @@ function markCalleeOf(op StdOp, byName FuncIndexByName, reached BoolArray, workl
 		// A coverage counter names a `.data` slot, not a callee.
 		covPoint then break 'op'
 
-		// Every sampling service bottoms out in an import, never in a Maxon function.
-		osHostSample then break 'op'
+		// Every sampling service and poller verb bottoms out in a host call, never in a Maxon function.
+		osHostSample or
+			osNetpoll then break 'op'
 	end 'op'
 end 'markCalleeOf'
 

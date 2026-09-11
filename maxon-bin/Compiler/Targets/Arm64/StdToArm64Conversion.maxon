@@ -656,7 +656,6 @@ type StdToArm64Lowering
 			callIndirect(_, _, _, argFloatMask, args) gives self.callOutgoingArgBytes(argFloatMask, argCount: args.count())
 			osPanic or
 				osReadClock or
-				osSleepMs or
 				osProcessSpawn or
 				osProcessExitCode or
 				osWaitHandles or
@@ -812,6 +811,9 @@ type StdToArm64Lowering
 			// here and reserves nothing. Stated rather than left to a range arm: the answer must stop being 0
 			// the day the lane grows a sampling mechanism, and a named arm is what makes that a visible edit.
 			osHostSample gives 0
+
+			// Every poller chunk takes at most four arguments, all inside x0..x7.
+			osNetpoll gives 0
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -945,11 +947,7 @@ type StdToArm64Lowering
 			callIndirect(resultId, calleeReg, resultType, argFloatMask, args) then self.lowerCallIndirect(resultId, calleeReg: calleeReg, args: args, resultType: resultType, argFloatMask: argFloatMask, dstRef: dstRef)
 			osPanic(label) then self.lowerPanic(label, dstRef: dstRef)
 
-			// P1.5 mid-body-yield: the green-thread sleep substrate (`osReadClock`/`osSleepMs`) is x64-windows
-			// only at this rung — its QueryPerformanceCounter clock and Windows `Sleep` have no arm64 primitive
-			// yet, and a `sleep` program is spec-gated to x64-windows, so neither op ever reaches arm64 lowering.
 			osReadClock(ticksPtrId, freqPtrId) then self.lowerOsReadClock(ticksPtrId, freqPtrId: freqPtrId, dstRef: dstRef)
-			osSleepMs(msId) then self.lowerOsSleepMs(msId, dstRef: dstRef)
 
 			// ⭐⭐ **MAC8: THE TWO OPS THAT SPAWN AND REAP A CHILD LOWER HERE.** Both go through
 			// `Arm64DarwinRuntime` chunks, for the structural reason every out-param op in this file does: the
@@ -1160,6 +1158,7 @@ type StdToArm64Lowering
 			// RIP/RSP/RBP displacements name three unrelated words on AArch64. A stub here would symbolize
 			// garbage into a confident profile — see that facility's row for the whole argument.
 			osHostSample then panic("lowerStdToArm64: `osHostSample` has no arm64 lowering — process sampling is `HostFacility.processSampling`, which no arm64 lane provides, so SemanticCheck refuses such a program at its own source span (E3104) and this is the backstop for a compiler bug that got one past that gate")
+			osNetpoll(resultId, verb, a0Id, a1Id, a2Id, a3Id, a4Id) then self.lowerOsNetpoll(resultId, verb: verb, operands: fiveArgs(a0Id, second: a1Id, third: a2Id, fourth: a3Id, fifth: a4Id), dstRef: dstRef)
 
 			// One op, no operand, no register: the encoder reaches the counter through the reserved x16/x17
 			// scratch pair, which is outside the allocatable pool.
@@ -1308,7 +1307,6 @@ type StdToArm64Lowering
 			witnessTryCall then panic("lowerStdToArm64: a `witnessTryCall` op appeared as a block terminator (lowering bug — a throwing witness call is a value-producing body op)")
 			osPanic then panic("lowerStdToArm64: an `osPanic` op appeared as a block terminator (lowering bug — a range panic is a body op followed by a dead return)")
 			osReadClock then panic("lowerStdToArm64: an `osReadClock` op appeared as a block terminator (lowering bug — a clock read is a value-consuming body op)")
-			osSleepMs then panic("lowerStdToArm64: an `osSleepMs` op appeared as a block terminator (lowering bug — an OS sleep is a body op)")
 			osProcessSpawn or
 				osProcessExitCode or
 				osWaitHandles or
@@ -1404,6 +1402,7 @@ type StdToArm64Lowering
 				osUnpublishNamedSegment then panic("lowerStdToArm64: a named-section create or unmap appeared as a block terminator (lowering bug — one produces a value and the other is a void side effect, and neither terminates)")
 			covPoint then panic("lowerStdToArm64: a `covPoint` appeared as a block terminator (lowering bug — a coverage counter is emitted at a block HEAD, ahead of the code it counts)")
 			osHostSample then panic("lowerStdToArm64: an `osHostSample` appeared as a block terminator (lowering bug — a host sample call produces a value and does not terminate)")
+			osNetpoll then panic("lowerStdToArm64: an `osNetpoll` appeared as a block terminator (lowering bug — a poller call produces a value and does not terminate)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -2549,7 +2548,7 @@ type StdToArm64Lowering
 	// filesystem ops take this shape and differ only in their arity, in whether there is an answer, and (for
 	// the working directory) in the ORDER the op names its operands versus the order C does. Written once,
 	// because thirteen hand-written argument sequences are thirteen chances to transpose a buffer and a
-	// length — which `Arm64DarwinRuntime`'s `arm64PosixMillisToTimespec` makes the same argument about.
+	// length — which `Arm64PosixRuntime`'s `arm64PosixToTimespec` makes the same argument about.
 	//
 	// ⚠ The symbol it branches to is one of the SHARED `mrt_host_*` names (`Arm64PosixRuntime`), so this is
 	// not a Darwin lowering wearing a neutral name: the arm64-Linux surface builds a chunk under each of them
@@ -2838,14 +2837,6 @@ type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.arm64Sub(TargetVReg.virtual(resultId), lhs: base, rhs: TargetVReg.virtual(whichId)))
 	end 'lowerOsStdHandle'
 
-	// The one member of this band that is NOT out-param shaped — it takes a value and returns nothing — so
-	// it could have been inline. It is a chunk anyway, because the millisecond→`timespec` split needs two
-	// frame words to hand `nanosleep` a `struct timespec *`, and a frame is exactly what a chunk has.
-	function lowerOsSleepMs(msId ValueId, dstRef BlockRef)
-		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(msId)))
-		self.emit(dstRef, op: TargetOp.arm64BranchLink(HostSleepMsName))
-	end 'lowerOsSleepMs'
-
 	// Lower `osFreePages(addr, size)` to POSIX `munmap(addr, size)` — the free counterpart of `lowerOsAllocPages`
 	// directly above, and the shape x64's `lowerOsFreePagesLinux` takes, generalized to both OSes this backend
 	// serves. Two register arguments in x0/x1 on BOTH (AAPCS64 passes a libSystem call's there, and Linux's `svc`
@@ -3109,6 +3100,20 @@ type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.arm64BranchLink(HostWaitOneName))
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
 	end 'lowerOsWaitHandle'
+
+	// `osNetpoll(result, verb, a0…a4)` ⇒ the lane's `mrt_host_netpoll_*` chunk with the operands that verb reads —
+	// epoll on arm64-Linux and kqueue on macOS, one chunk name each. `openTimer` needs no object on either lane.
+	function lowerOsNetpoll(resultId ValueId, verb NetpollVerb, operands ValueIdArray, dstRef BlockRef)
+		match verb 'v'
+			openTimer then self.emit(dstRef, op: TargetOp.arm64MovImm(TargetVReg.virtual(resultId), value: PosixNoTimerObject as MachineWord))
+			openPoller or
+				openBreak or
+				wait or
+				raiseBreak or
+				drainBreak or
+				sleepOnTimer then self.lowerHostChunkValue(resultId, args: posixNetpollChunkArgs(verb, operands: operands), chunk: posixNetpollChunk(verb), dstRef: dstRef)
+		end 'v'
+	end 'lowerOsNetpoll'
 
 	// `osCloseHandle(handle)` ⇒ destroy a wait object's primitives and release it.
 	function lowerOsCloseHandle(handleId ValueId, dstRef BlockRef)

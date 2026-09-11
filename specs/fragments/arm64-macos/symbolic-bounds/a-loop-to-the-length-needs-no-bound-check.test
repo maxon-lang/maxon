@@ -1,0 +1,130 @@
+// Test: a-loop-to-the-length-needs-no-bound-check
+typealias Word = int(i64.min to i64.max)
+typealias WordArray = Array with Word
+
+function total(a WordArray) returns Word
+	var t = 0
+	for i in 0 upto a.count() 'sum'
+		t = t + (try a.get(i) otherwise panic("total: i < a.count()"))
+	end 'sum'
+	return t
+end 'total'
+
+function main() returns ExitCode
+	var a = WordArray.create()
+	for i in 0 upto 6 'seed'
+		a.push(i * i)
+	end 'seed'
+	if total(a) != 55 'sum'
+		return 1
+	end 'sum'
+	var empty = WordArray.create()
+	if total(empty) != 0 'none'
+		return 2
+	end 'none'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @total {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x1, 0
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
+  __us_test:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+  forhdr:
+    arm64.cmp x2, x3
+    arm64.b.ge forexit
+  __im_load:
+    arm64.loadRegBaseIndexScale.word64 x4, [x0 + x2*8 + 0]
+  tryok:
+    arm64.add x1, x1, x4
+  forstep:
+    arm64.add x2, x2, 1
+    arm64.b forhdr
+  forexit:
+    arm64.movRegReg x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 0
+  forhdr:
+    arm64.cmp x20, 6
+    arm64.b.ge forexit
+  seed:
+    arm64.mul x1, x20, x20
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+  forstep:
+    arm64.add x20, x20, 1
+    arm64.b forhdr
+  forexit:
+    arm64.movRegReg x0, x19
+    arm64.bl total
+    arm64.cmp x0, 55
+    arm64.b.eq ifcont#6
+  sum:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#6:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl total
+    arm64.cmp x0, 0
+    arm64.b.eq ifcont#8
+  none:
+    arm64.movImm x21, 2
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#8:
+    arm64.movImm x21, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

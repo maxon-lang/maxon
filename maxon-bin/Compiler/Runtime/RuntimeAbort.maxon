@@ -48,7 +48,7 @@
 //     nothing has referenced the case since. It is retired here rather than left, because this file
 //     defines a case nothing emits as rot and a registry that tolerates one instance of its own defect
 //     cannot be cited about the next.
-// ⇒ **THE NEXT ENTRY TAKES THE NEXT FREE NUMBER ABOVE 70, WHICH IS 103.** 76 and 80 are vacant and stay so:
+// ⇒ **THE NEXT ENTRY TAKES THE NEXT FREE NUMBER ABOVE 70, WHICH IS 106.** 76 and 80 are vacant and stay so:
 // reserving a vacated number would be this space defending against a claimant that no longer exists — the
 // very thing the paragraph above rejects.
 export enum RuntimeAbort
@@ -361,6 +361,22 @@ export enum RuntimeAbort
 	// `schedulerDeadlock` (92), this registry's founding rule: a waiter nobody will wake because the runtime
 	// lost it and one nobody can wake because the program is stuck are two different faults.
 	schedulerPromiseAwaitedTwice = 102
+
+	// `NetpollRuntime`: a host call of the scheduler's poller failed — the poller, its break source or its
+	// timer could not be created, a wait failed other than by timing out or being interrupted, or a break
+	// could not be raised — or a blocking poll received a break no raise accounts for. Every idle machine's
+	// sleep ends through the poller, so a scheduler whose poller is broken cannot keep a deadline and must not
+	// pretend to.
+	netpollFailed = 103
+
+	// `NetpollRuntime`: a wait answered an entry from a source the poller never registered. Its identity is
+	// all this runtime could act on, so an unknown one is a lost event, not one to skip.
+	netpollUnknownSource = 104
+
+	// `__sched_syscall_regain`: a machine leaving the regain waiters at shutdown was not on the list. It joined
+	// under `__sched_lock` and only a delivered processor takes it off, so a miss means a hand-over the runtime
+	// lost — and with it a processor.
+	schedulerRegainWaiterLost = 105
 end 'RuntimeAbort'
 
 // ⭐ **THE PANIC LINE ITSELF — `panic at <file>:<line>: <text>\n` — WRITTEN ONCE.**

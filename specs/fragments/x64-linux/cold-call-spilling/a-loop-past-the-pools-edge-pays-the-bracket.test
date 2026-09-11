@@ -1,0 +1,324 @@
+// Test: a-loop-past-the-pools-edge-pays-the-bracket
+typealias Word = int(i64.min to i64.max)
+typealias WordArray = Array with Word
+
+function viaArray(a WordArray, n Word) returns Word
+	var a0 = 1
+	var a1 = 2
+	var a2 = 3
+	var a3 = 4
+	var a4 = 5
+	var a5 = 6
+	var a6 = 7
+	var a7 = 8
+	var a8 = 9
+	var a9 = 10
+	var t = 0
+	for i in 0 upto n 'each'
+		a0 = a0 + i
+		a1 = a1 xor a0
+		a2 = a2 + a1
+		a3 = a3 xor a2
+		a4 = a4 + a3
+		a5 = a5 xor a4
+		a6 = a6 + a5
+		a7 = a7 xor a6
+		a8 = a8 + a7
+		a9 = a9 xor a8
+		let e = try a.get(i) otherwise 99
+		t = t + e + a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9
+	end 'each'
+	return t
+end 'viaArray'
+
+function reference(n Word) returns Word
+	var a0 = 1
+	var a1 = 2
+	var a2 = 3
+	var a3 = 4
+	var a4 = 5
+	var a5 = 6
+	var a6 = 7
+	var a7 = 8
+	var a8 = 9
+	var a9 = 10
+	var t = 0
+	for i in 0 upto n 'each'
+		a0 = a0 + i
+		a1 = a1 xor a0
+		a2 = a2 + a1
+		a3 = a3 xor a2
+		a4 = a4 + a3
+		a5 = a5 xor a4
+		a6 = a6 + a5
+		a7 = a7 xor a6
+		a8 = a8 + a7
+		a9 = a9 xor a8
+		let e = i if i < 6 else 99
+		t = t + e + a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9
+	end 'each'
+	return t
+end 'reference'
+
+function main() returns ExitCode
+	var a = WordArray.create()
+	for i in 0 upto 6 'seed'
+		a.push(i)
+	end 'seed'
+	return 0 if viaArray(a, n: 12) == reference(12) else 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @viaArray {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 120
+    x64.movRegImm32 rax, 1
+    x64.movRegImm32 rsi, 2
+    x64.movRegImm32 rdi, 3
+    x64.movRegImm32 r8, 4
+    x64.movRegImm32 r9, 5
+    x64.movRegImm32 r10, 6
+    x64.movRegImm32 r11, 7
+    x64.movRegImm32 rbx, 8
+    x64.movRegImm32 r12, 9
+    x64.movRegImm32 r13, 10
+    x64.movRegImm32 r14, 0
+    x64.movRegImm32 r15, 0
+    x64.xchgRegReg rax, r15
+    x64.xchgRegReg rsi, r15
+    x64.xchgRegReg rdi, r15
+    x64.xchgRegReg r8, r15
+    x64.xchgRegReg r9, r15
+    x64.xchgRegReg r10, r15
+    x64.xchgRegReg r11, r15
+    x64.xchgRegReg rbx, r15
+    x64.xchgRegReg r12, r15
+    x64.xchgRegReg r13, r15
+    x64.xchgRegReg r14, r15
+  forhdr:
+    x64.storeSlotReg slot1, rax
+    x64.cmpRegReg rax, rdx
+    x64.jcc greaterEqual, forexit
+  each:
+    x64.leaRegRegReg rsi, rsi, rax
+    x64.xorRegReg rdi, rdi, rsi
+    x64.leaRegRegReg r8, r8, rdi
+    x64.xorRegReg r9, r9, r8
+    x64.leaRegRegReg r10, r10, r9
+    x64.xorRegReg r11, r11, r10
+    x64.leaRegRegReg rbx, rbx, r11
+    x64.xorRegReg r12, r12, rbx
+    x64.leaRegRegReg r13, r13, r12
+    x64.xorRegReg r14, r14, r13
+    x64.storeSlotReg slot2, r14
+  __rc_ok:
+    x64.loadRegBaseDisp.word64 r14, [rcx + 8]
+    x64.cmpRegReg rax, r14
+    x64.jcc aboveEqual, __im_slow
+    x64.jmp __im_load
+  tryerr:
+    x64.movRegImm32 rax, 99
+    x64.jmp trycont
+  __im_load:
+    x64.loadRegBaseDisp.word64 r14, [rcx + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [r14 + rax*8 + 0]
+  trycont:
+    x64.leaRegRegReg rax, r15, rax
+    x64.leaRegRegReg rax, rax, rsi
+    x64.leaRegRegReg rax, rax, rdi
+    x64.leaRegRegReg rax, rax, r8
+    x64.leaRegRegReg rax, rax, r9
+    x64.leaRegRegReg rax, rax, r10
+    x64.leaRegRegReg rax, rax, r11
+    x64.leaRegRegReg rax, rax, rbx
+    x64.leaRegRegReg rax, rax, r12
+    x64.leaRegRegReg rax, rax, r13
+    x64.loadRegSlot r14, slot2
+    x64.leaRegRegReg rax, rax, r14
+  forstep:
+    x64.loadRegSlot r14, slot1
+    x64.leaRegRegImm32 r14, r14, 1
+    x64.loadRegSlot r15, slot2
+    x64.xchgRegReg rax, r14
+    x64.xchgRegReg r14, r15
+    x64.jmp forhdr
+  forexit:
+    x64.movRegReg r8, r15
+    x64.epilogue 120
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow:
+    x64.storeSlotReg slot3, rcx
+    x64.storeSlotReg slot4, rdx
+    x64.storeSlotReg slot5, rsi
+    x64.storeSlotReg slot6, rdi
+    x64.storeSlotReg slot7, r8
+    x64.storeSlotReg slot8, r9
+    x64.storeSlotReg slot9, r10
+    x64.storeSlotReg slot10, r11
+    x64.movRegReg rdx, rax
+    x64.callDirect __managed_get
+    x64.movRegReg rax, r8
+    x64.storeSlotReg slot0, rax
+    x64.movRegReg rax, r10
+    x64.loadRegSlot rcx, slot3
+    x64.loadRegSlot rdx, slot4
+    x64.loadRegSlot rsi, slot5
+    x64.loadRegSlot rdi, slot6
+    x64.loadRegSlot r8, slot7
+    x64.loadRegSlot r9, slot8
+    x64.loadRegSlot r10, slot9
+    x64.loadRegSlot r11, slot10
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, tryerr
+  critsplit:
+    x64.loadRegSlot rax, slot0
+    x64.jmp trycont
+}
+
+func @reference {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.movRegImm32 rax, 1
+    x64.movRegImm32 rdx, 2
+    x64.movRegImm32 rsi, 3
+    x64.movRegImm32 rdi, 4
+    x64.movRegImm32 r8, 5
+    x64.movRegImm32 r9, 6
+    x64.movRegImm32 r10, 7
+    x64.movRegImm32 r11, 8
+    x64.movRegImm32 rbx, 9
+    x64.movRegImm32 r12, 10
+    x64.movRegImm32 r13, 0
+    x64.movRegImm32 r14, 0
+    x64.xchgRegReg rax, r14
+    x64.xchgRegReg rdx, r14
+    x64.xchgRegReg rsi, r14
+    x64.xchgRegReg rdi, r14
+    x64.xchgRegReg r8, r14
+    x64.xchgRegReg r9, r14
+    x64.xchgRegReg r10, r14
+    x64.xchgRegReg r11, r14
+    x64.xchgRegReg rbx, r14
+    x64.xchgRegReg r12, r14
+    x64.xchgRegReg r13, r14
+  forhdr:
+    x64.cmpRegReg rax, rcx
+    x64.jcc greaterEqual, forexit
+  each:
+    x64.leaRegRegReg rdx, rdx, rax
+    x64.xorRegReg rsi, rsi, rdx
+    x64.leaRegRegReg rdi, rdi, rsi
+    x64.xorRegReg r8, r8, rdi
+    x64.leaRegRegReg r9, r9, r8
+    x64.xorRegReg r10, r10, r9
+    x64.leaRegRegReg r11, r11, r10
+    x64.xorRegReg rbx, rbx, r11
+    x64.leaRegRegReg r12, r12, rbx
+    x64.xorRegReg r13, r13, r12
+    x64.cmpRegImm32 rax, 6
+    x64.jcc greaterEqual, ternaryfalse
+  ternarytrue:
+    x64.movRegReg r15, rax
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegImm32 r15, 99
+  matchcont:
+    x64.leaRegRegReg r14, r14, r15
+    x64.leaRegRegReg r14, r14, rdx
+    x64.leaRegRegReg r14, r14, rsi
+    x64.leaRegRegReg r14, r14, rdi
+    x64.leaRegRegReg r14, r14, r8
+    x64.leaRegRegReg r14, r14, r9
+    x64.leaRegRegReg r14, r14, r10
+    x64.leaRegRegReg r14, r14, r11
+    x64.leaRegRegReg r14, r14, rbx
+    x64.leaRegRegReg r14, r14, r12
+    x64.leaRegRegReg r14, r14, r13
+  forstep:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp forhdr
+  forexit:
+    x64.movRegReg r8, r14
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 0
+  forhdr:
+    x64.cmpRegImm32 r12, 6
+    x64.jcc greaterEqual, forexit
+  seed:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_push
+  forstep:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.jmp forhdr
+  forexit:
+    x64.movRegImm32 rdx, 12
+    x64.movRegReg rcx, rbx
+    x64.callDirect viaArray
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rcx, 12
+    x64.callDirect reference
+    x64.cmpRegReg r12, r8
+    x64.jcc notEqual, ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 r12, 0
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegImm32 r12, 1
+  matchcont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+  __rc_ok:
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

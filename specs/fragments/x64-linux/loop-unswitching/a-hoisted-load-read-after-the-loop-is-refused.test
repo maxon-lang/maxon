@@ -1,0 +1,142 @@
+// Test: a-hoisted-load-read-after-the-loop-is-refused
+typealias Word = int(i64.min to i64.max)
+typealias WordArray = Array with Word
+
+function tally(a WordArray) returns Word
+	var t = 0
+	var last = 0
+	var i = 0
+	while true 'l'
+		t = t + (try a.get(i) otherwise 0)
+		last = a.count()
+		if i >= 2 'stop'
+			break
+		end 'stop'
+		i = i + 1
+	end 'l'
+	return last * 100 + t
+end 'tally'
+
+function main() returns ExitCode
+	var a = WordArray.create()
+	a.push(1)
+	a.push(2)
+	a.push(3)
+	a.push(4)
+	a.push(5)
+	if tally(a) != 506 'sum'
+		return 1
+	end 'sum'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @tally {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 64
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rsi, 0
+  __rc_ok:
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
+    x64.cmpRegReg rsi, rdx
+    x64.jcc aboveEqual, __im_slow
+    x64.jmp __im_load
+  tryerr:
+    x64.movRegImm32 rdx, 0
+    x64.jmp trycont
+  __im_load:
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.loadRegBaseIndexScale.word64 rdx, [rdx + rsi*8 + 0]
+    x64.movRegReg r8, rdx
+  tryok:
+    x64.movRegReg rdx, r8
+  trycont:
+    x64.leaRegRegReg rax, rax, rdx
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
+    x64.cmpRegImm32 rsi, 2
+    x64.jcc less, ifcont
+  whileexit:
+    x64.imulRegRegImm32 rcx, rdx, 100
+    x64.leaRegRegReg r8, rcx, rax
+    x64.epilogue 64
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRegImm32 rsi, rsi, 1
+    x64.jmp __rc_ok
+  __im_slow:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rsi
+    x64.movRegReg rdx, rsi
+    x64.callDirect __managed_get
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rsi, slot2
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 4
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 5
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegReg rcx, rbx
+    x64.callDirect tally
+    x64.cmpRegImm32 r8, 506
+    x64.jcc equal, ifcont
+  sum:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

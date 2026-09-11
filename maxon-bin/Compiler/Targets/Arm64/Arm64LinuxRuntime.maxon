@@ -158,6 +158,12 @@ let Arm64LinuxSyscallFsync = 82
 // lays a PROT_NONE guard page under each worker M's stack.
 let Arm64LinuxSyscallFutex = 98
 let Arm64LinuxSyscallClockNanosleep = 115
+
+// The scheduler's poller. AArch64 has no `epoll_wait`, only `epoll_pwait` with a null signal mask.
+let Arm64LinuxSyscallEpollCreate1 = 20
+let Arm64LinuxSyscallEventfd2 = 19
+let Arm64LinuxSyscallEpollCtl = 21
+let Arm64LinuxSyscallEpollPwait = 22
 let Arm64LinuxSyscallMprotect = 226
 export let Arm64LinuxSyscallSetPriority = 140
 export let Arm64LinuxSyscallGetPriority = 141
@@ -1523,15 +1529,14 @@ function buildArm64LinuxMonotonicClockChunk() returns FunctionCodeChunk
 end 'buildArm64LinuxMonotonicClockChunk'
 
 // ==========================================================================
-// mrt_host_sleep_ms(x0 = milliseconds)
+// mrt_host_sleep_ms(x0 = milliseconds), mrt_host_netpoll_sleep(x0 = microseconds)
 // ==========================================================================
 
-// Suspend the calling OS THREAD — Windows's `Sleep(ms)`.
+// Suspend the calling OS THREAD — one body in two units: the bounded child wait's millisecond step and the
+// monitor's microsecond lap.
 //
-// ⚠ **THIS IS THE OS PRIMITIVE, NOT `sleep(ms)` THE LANGUAGE FEATURE.** `__gt_sleep` parks a GREEN THREAD on
-// the scheduler's timer heap and only bottoms out here when there is nothing else to run
-// (`GtRuntime.buildGtSleep`), which is why `sleep` and `greenThreads` are separate rows in
-// `targetProvidesFacility`.
+// ⚠ **THIS IS THE OS PRIMITIVE, NOT `sleep(ms)` THE LANGUAGE FEATURE.** `__gt_sleep` parks a green thread on
+// the scheduler's timer store and never reaches this chunk; an idle process waits in the poller.
 //
 // ⭐ **`clock_nanosleep` ON THE SAME CLOCK THE DEADLINES ARE COMPUTED FROM, RATHER THAN `nanosleep`.** The
 // two are the same call for a RELATIVE request, except that `nanosleep` is defined against `CLOCK_REALTIME`
@@ -1539,16 +1544,15 @@ end 'buildArm64LinuxMonotonicClockChunk'
 // `CLOCK_MONOTONIC`. Naming the clock costs one register and removes that disagreement; the Darwin lane has
 // no such choice to make, because its `nanosleep` is already on an unsteppable clock.
 //
-// ⚠ **A SIGNAL CAN CUT IT SHORT (EINTR) AND THIS DOES NOT RESTART IT** — matching Windows's `Sleep`, and
-// matching what the one consumer needs: the scheduler re-checks its deadline after every park rather than
-// trusting the sleep to have slept (`emitGtParkOnDeadline`). A restart loop here would be a second, weaker
-// copy of a check that already exists one tier up.
-function buildArm64LinuxSleepMsChunk() returns FunctionCodeChunk
+// ⚠ **A SIGNAL CAN CUT IT SHORT (EINTR) AND THIS DOES NOT RESTART IT.** Both callers re-test their own
+// condition after every step, so a short sleep costs one extra lap; a restart loop here would be a second,
+// weaker copy of that test.
+function buildArm64LinuxSleepChunk(name ByteArray, unit PosixTimeUnit) returns FunctionCodeChunk
 	let SlotTsSec = 0 as StackSize
 	let SlotTsNsec = 1 as StackSize
 	var asm = Arm64RuntimeAsm.beginFunction(2)
 
-	arm64PosixMillisToTimespec(asm, ms: Arm64Register.x0, secSlot: SlotTsSec, nsecSlot: SlotTsNsec)
+	arm64PosixToTimespec(asm, amount: Arm64Register.x0, unit: unit, secSlot: SlotTsSec, nsecSlot: SlotTsNsec)
 
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: LinuxClockMonotonic)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: LinuxSleepIsRelative)
@@ -1556,8 +1560,8 @@ function buildArm64LinuxSleepMsChunk() returns FunctionCodeChunk
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: LinuxSleepDiscardsRemainder)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallClockNanosleep)
 
-	return asm.finishFunction(HostSleepMsName)
-end 'buildArm64LinuxSleepMsChunk'
+	return asm.finishFunction(name)
+end 'buildArm64LinuxSleepChunk'
 
 // ==========================================================================
 // mrt_host_wait_new(x0 = kind) -> x0 = the tagged object handle
@@ -1934,7 +1938,7 @@ function buildArm64LinuxWaitOneChunk(globalData GlobalDataTable) returns Functio
 	// waitTimed: ONE bounded wait, then a single re-test — the Darwin twin's shape, and for its reason: the
 	// caller owns the deadline and re-arming here would silently double a timeout that expired spuriously.
 	asm.placeLabel(waitTimed)
-	arm64PosixMillisToTimespec(asm, ms: Arm64Register.x1, secSlot: SlotTsSec, nsecSlot: SlotTsNsec)
+	arm64PosixToTimespec(asm, amount: Arm64Register.x1, unit: PosixTimeUnit.milliseconds, secSlot: SlotTsSec, nsecSlot: SlotTsNsec)
 	arm64LinuxEmitFutex(asm, addrSlot: SlotSignal, operation: LinuxFutexWaitPrivate, value: PosixWaitNotSignalled, timeoutSlot: SlotTsSec, hasTimeout: true)
 	arm64LinuxEmitCasImm(asm, dest: Arm64Register.x3, addrSlot: SlotSignal, expected: PosixWaitSignalled, replacement: PosixWaitNotSignalled)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x3, label: finish)
@@ -2787,7 +2791,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 	// `MAXON_MAX_PROCS` read are all reached from `__sched_init_procs` and `__gt_init`, which a green-thread
 	// program always installs together.
 	if usage.usesGt 'greenThreadFloor'
-		chunks.push(buildArm64LinuxSleepMsChunk())
+		chunks.push(buildArm64LinuxSleepChunk(HostSleepMsName, unit: PosixTimeUnit.milliseconds))
 		chunks.push(buildArm64LinuxWaitNewChunk(globalData))
 		chunks.push(buildArm64LinuxEventSetChunk())
 		chunks.push(buildArm64LinuxWaitOneChunk(globalData))
@@ -2804,6 +2808,14 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		chunks.push(buildArm64PosixWaitAnyChunk())
 		chunks.push(buildArm64LinuxSpawnChunk())
 		chunks.push(buildArm64PosixProcExitCodeChunk())
+
+		// The scheduler's poller: `__sched_init_procs` creates it in every green-thread program.
+		chunks.push(buildArm64LinuxNetpollOpenChunk())
+		chunks.push(buildArm64LinuxNetpollOpenBreakChunk())
+		chunks.push(buildArm64LinuxNetpollWaitChunk())
+		chunks.push(buildArm64LinuxNetpollCounterChunk(HostNetpollRaiseBreakName, syscallNumber: Arm64LinuxSyscallWrite, descriptor: Arm64Register.x1))
+		chunks.push(buildArm64LinuxNetpollCounterChunk(HostNetpollDrainBreakName, syscallNumber: Arm64LinuxSyscallRead, descriptor: Arm64Register.x0))
+		chunks.push(buildArm64LinuxSleepChunk(HostNetpollSleepName, unit: PosixTimeUnit.microseconds))
 	end 'greenThreadFloor'
 
 	// ⭐ **THE PIPE SURFACE, WHICH REALLY IS NARROWER.** `usesIocp` is the bit `installGtRuntime` builds the
@@ -2902,3 +2914,87 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		chunks.push(buildArm64LinuxFileAttributesChunk())
 	end 'fileAttributes'
 end 'appendArm64LinuxRuntimeChunks'
+
+// ==========================================================================
+// The scheduler's poller — `StdOp.osNetpoll` on this lane
+// ==========================================================================
+
+// `mrt_host_netpoll_open() -> x0 = the epoll descriptor, or -errno`.
+function buildArm64LinuxNetpollOpenChunk() returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: LinuxEpollCloexec)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallEpollCreate1)
+	return asm.finishFunction(HostNetpollOpenName)
+end 'buildArm64LinuxNetpollOpenChunk'
+
+// `mrt_host_netpoll_open_break(x0 = epfd) -> x0 = the eventfd, or -errno` — a non-blocking eventfd added to the
+// set level-triggered, its `epoll_data` the break token. AArch64's `struct epoll_event` is naturally aligned:
+// the 32-bit `events` in the first slot and the 64-bit `data` in the second.
+function buildArm64LinuxNetpollOpenBreakChunk() returns FunctionCodeChunk
+	let SlotPoller = 0 as StackSize
+	let SlotEventfd = 1 as StackSize
+	let SlotEvents = 2 as StackSize
+	let SlotData = 3 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(4)
+
+	let failed = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotPoller)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: LinuxEpollCloexec + LinuxEventfdNonblock)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallEventfd2)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: failed)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotEventfd)
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: LinuxEpollIn)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotEvents)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: NetpollBreakToken as MachineWord)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotData)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotPoller)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: LinuxEpollCtlAdd)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotEventfd)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x3, slot: SlotEvents)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallEpollCtl)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: failed)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotEventfd)
+
+	asm.placeLabel(failed)
+	return asm.finishFunction(HostNetpollOpenBreakName)
+end 'buildArm64LinuxNetpollOpenBreakChunk'
+
+// `mrt_host_netpoll_wait(x0 = epfd, x1 = entries, x2 = capacity, x3 = timeoutMs) -> x0 = count, 0 when
+// interrupted, or -errno`. `WaitInfinite` needs no translation, for the x86-64 lane's reason: the timeout is an
+// `int`, and Win32's `INFINITE` reads as epoll's -1 there.
+function buildArm64LinuxNetpollWaitChunk() returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(0)
+	let answered = asm.newLabel()
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: PosixPollNoSignalMask)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x5, value: LinuxSigsetBytes)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallEpollPwait)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: (0 - PosixErrnoInterrupted) as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: answered)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostNetpollWaitName)
+end 'buildArm64LinuxNetpollWaitChunk'
+
+// The eventfd's two transfers of its 8-byte counter, from one body: `mrt_host_netpoll_raise_break(x0 = epfd,
+// x1 = eventfd)` writes one, and `mrt_host_netpoll_drain_break(x0 = eventfd)` reads the counter back to zero.
+// `descriptor` names the argument register the eventfd arrives in. Each answers the syscall's own result.
+function buildArm64LinuxNetpollCounterChunk(name ByteArray, syscallNumber MachineWord, descriptor Arm64Register) returns FunctionCodeChunk
+	let SlotCounter = 0 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(1)
+
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x0, src: descriptor)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: LinuxEventfdRaise)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotCounter)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotCounter)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: LinuxEventfdCounterBytes)
+	arm64EmitSyscall(asm.code, number: syscallNumber)
+	return asm.finishFunction(name)
+end 'buildArm64LinuxNetpollCounterChunk'

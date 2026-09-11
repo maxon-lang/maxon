@@ -1,0 +1,235 @@
+// Test: a-loop-defined-value-is-still-live-after-the-loop
+typealias Word = int(i64.min to i64.max)
+typealias WordArray = Array with Word
+
+function lastDoubled(a WordArray, n Word) returns Word
+	var last = -1
+	for i in 0 upto n 'each'
+		let v = try a.get(i) otherwise panic("lastDoubled: i < n = a.count()")
+		try a.set(i, value: v * 2) otherwise panic("lastDoubled: i < n = a.count()")
+		last = v * 2
+	end 'each'
+	return last
+end 'lastDoubled'
+
+function main() returns ExitCode
+	var a = WordArray.create()
+	for i in 0 upto 4 'seed'
+		a.push(i + 1)
+	end 'seed'
+	if lastDoubled(a, n: 4) != 8 'last'
+		return 1
+	end 'last'
+	if lastDoubled(a, n: 0) != -1 'untouched'
+		return 2
+	end 'untouched'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @lastDoubled {
+  entry:
+    arm64.prologue 64
+    arm64.movImm x2, 18446744073709551615
+    arm64.movImm x3, 0
+  __us_test#38:
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x5, [x0 + 16]
+    arm64.cmp x5, 0
+    arm64.b.lt forhdr#1
+  __us_test#39:
+    arm64.loadRegBaseDisp.word64 x5, [x0 + 0]
+    arm64.cmp x5, 0
+    arm64.b.eq forhdr#1
+  __us_test#40:
+    arm64.sub x6, x5, 24
+    arm64.loadRegBaseDisp.word64 x6, [x6 + 16]
+    arm64.cmp x6, 0
+    arm64.b.ne forhdr#1
+  __us_test#41:
+    arm64.loadRegBaseDisp.word64 x6, [x0 + 40]
+    arm64.movImm x7, 0
+    arm64.cmp x6, x7
+    arm64.b.eq forhdr#22
+  forhdr#1:
+    arm64.cmp x3, x1
+    arm64.b.ge critsplit#43
+  __rc_ok#9:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x3, x2
+    arm64.b.hs __im_slow#14
+  __im_load#15:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseIndexScale.word64 x2, [x2 + x3*8 + 0]
+  tryok#5:
+    arm64.lsl x2, x2, 1
+  __rc_ok#11:
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 16]
+    arm64.cmp x4, 0
+    arm64.b.lt __im_slow#17
+  __im_bounds:
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 8]
+    arm64.cmp x3, x4
+    arm64.b.hs __im_slow#17
+  __im_buffer:
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 0]
+    arm64.cmp x4, 0
+    arm64.b.eq __im_slow#17
+  __im_viewed:
+    arm64.sub x5, x4, 24
+    arm64.loadRegBaseDisp.word64 x5, [x5 + 16]
+    arm64.cmp x5, 0
+    arm64.b.ne __im_slow#17
+  __im_store#21:
+    arm64.storeBaseIndexScaleReg.word64 [x4 + x3*8 + 0], x2
+  forstep#3:
+    arm64.add x3, x3, 1
+    arm64.b forhdr#1
+  critsplit#43:
+    arm64.movRegReg x0, x2
+    arm64.b forexit
+  forhdr#22:
+    arm64.cmp x3, x1
+    arm64.b.ge critsplit#46
+  __rc_ok#36:
+    arm64.cmp x3, x4
+    arm64.b.hs __im_slow#34
+  __im_load#35:
+    arm64.loadRegBaseIndexScale.word64 x2, [x5 + x3*8 + 0]
+  tryok#32:
+    arm64.lsl x2, x2, 1
+  __im_store#27:
+    arm64.storeBaseIndexScaleReg.word64 [x5 + x3*8 + 0], x2
+  forstep#23:
+    arm64.add x3, x3, 1
+    arm64.b forhdr#22
+  critsplit#46:
+    arm64.movRegReg x0, x2
+  forexit:
+    arm64.epilogue 64
+    arm64.ret
+  __im_slow#14:
+    arm64.storeSlotReg slot0, x0
+    arm64.storeSlotReg slot1, x1
+    arm64.storeSlotReg slot2, x3
+    arm64.movRegReg x1, x3
+    arm64.bl __managed_get
+    arm64.movRegReg x2, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.loadRegSlot x1, slot1
+    arm64.loadRegSlot x3, slot2
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#6
+    arm64.b tryok#5
+  __im_slow#17:
+    arm64.storeSlotReg slot0, x0
+    arm64.storeSlotReg slot1, x1
+    arm64.storeSlotReg slot3, x2
+    arm64.storeSlotReg slot2, x3
+    arm64.movRegReg x1, x3
+    arm64.bl __managed_set
+    arm64.movRegReg x4, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.loadRegSlot x1, slot1
+    arm64.loadRegSlot x2, slot3
+    arm64.loadRegSlot x3, slot2
+    arm64.cmp x9, 0
+    arm64.b.eq forstep#3
+  tryerr#8:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-loop-defined-value-is-still-live-after-the-loop.test:9: lastDoubled: i < n = a.count()\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 64
+    arm64.ret
+  __im_slow#34:
+    arm64.storeSlotReg slot0, x0
+    arm64.storeSlotReg slot1, x1
+    arm64.storeSlotReg slot2, x3
+    arm64.storeSlotReg slot4, x4
+    arm64.storeSlotReg slot5, x5
+    arm64.movRegReg x1, x3
+    arm64.bl __managed_get
+    arm64.movRegReg x2, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.loadRegSlot x1, slot1
+    arm64.loadRegSlot x3, slot2
+    arm64.loadRegSlot x4, slot4
+    arm64.loadRegSlot x5, slot5
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#32
+  tryerr#6:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-loop-defined-value-is-still-live-after-the-loop.test:8: lastDoubled: i < n = a.count()\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 64
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 0
+  forhdr:
+    arm64.cmp x20, 4
+    arm64.b.ge forexit
+  seed:
+    arm64.add x1, x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+  forstep:
+    arm64.add x20, x20, 1
+    arm64.b forhdr
+  forexit:
+    arm64.movImm x1, 4
+    arm64.movRegReg x0, x19
+    arm64.bl lastDoubled
+    arm64.cmp x0, 8
+    arm64.b.eq ifcont#6
+  last:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#6:
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x19
+    arm64.bl lastDoubled
+    arm64.cmp x0, -1
+    arm64.b.eq ifcont#8
+  untouched:
+    arm64.movImm x20, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#8:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

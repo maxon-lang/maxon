@@ -209,14 +209,10 @@ let SlabMaxShards = 256
 //     thread cannot learn its own joinable handle) and so comes from that machine's shard, while the main
 //     thread's bring-up still lands here. Every green-thread program in the suite drives it, and it is the
 //     arm that keeps the ROW itself honest.
-//   * **AN M HOLDING NO P IS EXERCISED AS OF W213-C2, AND THIS BULLET USED TO SAY IT NEVER WAS.** It read
-//     *"unexercised, and will be until `handoffp` lands — every M takes a P at birth and holds it until it
-//     dies"*. That stopped being true one rung earlier than expected: a worker that finds nothing to run now
-//     RELEASES its processor onto `__sched_pidle` and parks on its own event with `M->currentP == 0`, and on
-//     each park timeout it runs `__gt_timer_check` and `__gt_proc_check` — **allocating, through this arm,
-//     with no processor to key a shard by.** Every green-thread program whose workers go idle drives it. The
-//     predicate below still ABSORBS it by construction, which is why nothing had to change here to make it
-//     correct; what changed is that it is now measured rather than reserved.
+//   * **AN M HOLDING NO P IS EXERCISED.** The poller releases its processor before it waits and, back from
+//     the wait with `M->currentP == 0`, runs `__gt_timer_check` and `__gt_proc_check` — **allocating, through
+//     this arm, with no processor to key a shard by.** Every green-thread program with a timer or a child
+//     drives it, and the predicate below absorbs it by construction.
 //
 // ⚠ **THE MECHANISM COSTS NOTHING NEW, WHICH IS WHY THE SECOND HALF IS TRUE BY CONSTRUCTION RATHER THAN BY
 // TEST.** `emitSlabShardRow` maps every `myP <= MspanOwningPNone` to this row, and `emitSlabCurrentP`

@@ -418,10 +418,35 @@ export let PosixEnvUnset = 0
 
 export let PosixMillisPerSecond = 1000
 
-// The other direction of the same fact, and the unit each lane's millisecond-to-`timespec` split
-// (`arm64PosixMillisToTimespec`, `x64LinuxEmitMillisToTimespec`) turns a remainder into. ⚠ `mrt_host_tick_ms` does NOT use it: that chunk derives its divisor from the FREQUENCY
-// `mrt_host_monotonic_clock` reports, so a lane that ever answered raw counter ticks would still be right.
-export let PosixNanosPerMilli = 1000000
+// The other direction of the same fact, and the unit each lane's `timespec` split (`posixNanosPerUnit`) turns a
+// millisecond remainder into. ⚠ `mrt_host_tick_ms` does NOT use it: that chunk derives its divisor from the
+// FREQUENCY `mrt_host_monotonic_clock` reports, so a lane that ever answered raw counter ticks would still be
+// right.
+let PosixNanosPerMilli = 1000000
+
+// ⭐ **THE TWO UNITS A RELATIVE TIME REACHES A POSIX CALL IN** — a wait's timeout in milliseconds, the
+// monitor's sleep in microseconds — and what each lane's `timespec` split divides and multiplies by.
+export enum PosixTimeUnit
+	milliseconds
+	microseconds
+end 'PosixTimeUnit'
+
+let PosixMicrosPerSecond = 1000000
+let PosixNanosPerMicro = 1000
+
+export function posixUnitsPerSecond(unit PosixTimeUnit) returns MachineWord
+	return match unit 'u'
+		milliseconds gives PosixMillisPerSecond as MachineWord
+		microseconds gives PosixMicrosPerSecond as MachineWord
+	end 'u'
+end 'posixUnitsPerSecond'
+
+export function posixNanosPerUnit(unit PosixTimeUnit) returns MachineWord
+	return match unit 'u'
+		milliseconds gives PosixNanosPerMilli as MachineWord
+		microseconds gives PosixNanosPerMicro as MachineWord
+	end 'u'
+end 'posixNanosPerUnit'
 
 // What a POSIX call that reports only success or failure answers on success.
 export let PosixCallSucceeded = 0
@@ -598,3 +623,81 @@ export let PosixPollNoSignalMask = 0
 
 // `wait4`'s `struct rusage *` out-param, which NULL discards — and the register `waitpid` never reads.
 export let PosixReapDiscardsRusage = 0
+
+// ==========================================================================
+// The scheduler's poller (`StdOp.osNetpoll`)
+// ==========================================================================
+
+// ⭐ **ONE CHUNK PER VERB ON EVERY POSIX LANE** — epoll on both Linux lanes, kqueue on macOS; the verbs and the
+// operands each reads are the op's, and only the bodies differ. `openTimer` has none: a POSIX sleep needs no
+// object, so the isel answers `PosixNoTimerObject` inline.
+export let HostNetpollOpenName = b"mrt_host_netpoll_open"
+export let HostNetpollOpenBreakName = b"mrt_host_netpoll_open_break"
+export let HostNetpollWaitName = b"mrt_host_netpoll_wait"
+export let HostNetpollRaiseBreakName = b"mrt_host_netpoll_raise_break"
+export let HostNetpollDrainBreakName = b"mrt_host_netpoll_drain_break"
+export let HostNetpollSleepName = b"mrt_host_netpoll_sleep"
+
+// What `openTimer` answers where a sleep needs no object; `sleepOnTimer` never reads it on these lanes.
+export let PosixNoTimerObject = 0
+
+// `epoll_create1`'s and `eventfd2`'s close-on-exec flag, and the eventfd's non-blocking one: a child must not
+// inherit the scheduler's descriptors, and a drain must never block the one machine polling.
+export let LinuxEpollCloexec = 0x80000
+export let LinuxEventfdNonblock = 0x800
+
+// `epoll_ctl`'s `EPOLL_CTL_ADD`, and `EPOLLIN`: the break is level-triggered, so a poll that does not drain it
+// leaves it for the one that does.
+export let LinuxEpollCtlAdd = 1
+export let LinuxEpollIn = 1
+
+// An eventfd is read and written in 8-byte counters; a raise adds one.
+export let LinuxEventfdCounterBytes = 8
+export let LinuxEventfdRaise = 1
+
+// The two answers a wait may give that are not failures: `EINTR` (the kernel's `-4`), which `wait` reports as
+// no entries, and every non-negative count.
+export let PosixErrnoInterrupted = 4
+
+// `kqueue`'s user event: `EVFILT_USER`, registered `EV_ADD | EV_CLEAR` so a receive consumes it, and fired
+// with `NOTE_TRIGGER`.
+export let DarwinEvfiltUser = -10
+export let DarwinEvAdd = 0x0001
+export let DarwinEvClear = 0x0020
+export let DarwinNoteTrigger = 0x01000000
+
+// `struct kevent` on a 64-bit Darwin: ident, then the 16-bit filter and flags, the 32-bit fflags, data, udata.
+export let DarwinKeventBytes = 32
+export let DarwinKeventIdentOffset = 0
+export let DarwinKeventFilterOffset = 8
+
+// Where `flags` and `fflags` sit in the quadword that starts at `filter`, as bit positions of a little-endian load.
+export let DarwinKeventFlagsShift = 16
+export let DarwinKeventFflagsShift = 32
+
+// The chunk `verb` lowers to on a POSIX lane.
+export function posixNetpollChunk(verb NetpollVerb) returns ByteArray
+	return match verb 'v'
+		openPoller gives HostNetpollOpenName
+		openBreak gives HostNetpollOpenBreakName
+		wait gives HostNetpollWaitName
+		raiseBreak gives HostNetpollRaiseBreakName
+		drainBreak gives HostNetpollDrainBreakName
+		sleepOnTimer gives HostNetpollSleepName
+		openTimer panic("posixNetpollChunk: `openTimer` has no chunk on a POSIX lane — a sleep needs no object there, so the isel answers `PosixNoTimerObject` inline")
+	end 'v'
+end 'posixNetpollChunk'
+
+// How many of the op's operands `verb`'s chunk reads — always a prefix, which is why the op orders them so.
+// `wait`'s fifth (the Windows count out-param) and `sleepOnTimer`'s second (the Windows timer) are unread here.
+export function posixNetpollOperandCount(verb NetpollVerb) returns ParamCount
+	return match verb 'v'
+		openPoller gives 0
+		openBreak gives 1
+		wait gives 4
+		raiseBreak gives 2
+		drainBreak gives 1
+		sleepOnTimer gives 1
+		openTimer panic("posixNetpollOperandCount: `openTimer` has no chunk on a POSIX lane — see `posixNetpollChunk`")
+	end 'v'
+end 'posixNetpollOperandCount'

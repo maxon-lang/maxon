@@ -1,0 +1,399 @@
+// Runtime/NetpollRuntime.maxon — the scheduler's POLLER: Go's netpoll (`vendor/go/src/runtime/netpoll_*.go`),
+// the one blocking wait an idle process makes.
+//
+// ⭐⭐ **ONE MACHINE BLOCKS HERE, AND ONLY WHEN SOMETHING IS PENDING.** A machine with nothing to run that finds a
+// timer (or a parked child) pending and no other machine already polling waits in `__np_poll` until the earliest
+// deadline; every other idle machine parks on its own event with no timeout (`SchedRuntime.buildSchedLoop`'s
+// idle tail). A deadline armed earlier than the one the poller waits for ends its wait through a BREAK
+// (`__np_break`), which is the whole cost of waking on time.
+//
+// ⭐ **IN THIS FILE THE POLLER CARRIES ONLY ITS BREAK SOURCE.** A wait answers entries, and every entry must be a
+// break; one from any other source aborts (`RuntimeAbort.netpollUnknownSource`). Sockets and children join the
+// poller as sources of their own, each with its own arm in `buildNetpollPoll`'s decode.
+
+// ⭐⭐ **HOW THIS TARGET'S POLLER REPORTS AN EVENT — the fact the decode keys on, as `IoCompletionShape` is for a
+// read.** Each shape is one OS mechanism, and each reports a break its own way:
+enum NetpollShape
+	// Windows: a completion port. A break is a posted packet, consumed by receiving it; the wait answers a BOOL
+	// and writes its entry count through the scratch word.
+	completionPort
+
+	// Linux: an epoll set holding a level-triggered eventfd. A break stays readable until a blocking poll reads
+	// the eventfd's counter (`NetpollVerb.drainBreak`); the wait answers a count or a negative errno.
+	epoll
+
+	// macOS: a kqueue holding an `EVFILT_USER` event registered `EV_CLEAR`. A break is consumed by receiving it;
+	// the wait answers a count or a negative errno.
+	kqueue
+end 'NetpollShape'
+
+// Keyed on the OS: the mechanism is the platform's, and only the entry LAYOUT also depends on the CPU.
+function netpollShape(target Target) returns NetpollShape
+	return match target.os 'os'
+		windows gives NetpollShape.completionPort
+		linux gives NetpollShape.epoll
+		macos gives NetpollShape.kqueue
+		wasi panic("netpollShape: wasm32-wasi has no scheduler to poll with — `targetProvidesFacility` denies `greenThreads` there, and reaching here means a scheduler install got past that gate")
+	end 'os'
+end 'netpollShape'
+
+// ⭐ **ONE ENTRY OF THE BATCH A WAIT FILLS, AND THE WORD IN IT THAT NAMES ITS SOURCE** — the completion key, the
+// `epoll_data`, the kevent's ident. x86-64's `struct epoll_event` is PACKED (12 bytes, data at 4) where
+// AArch64's is naturally aligned (16, data at 8), which is the one place the CPU enters this file.
+type NetpollEntryLayout
+	export let entryBytes as ByteOffset
+	export let sourceOffset as ByteOffset
+
+	export static function create(entryBytes ByteOffset, sourceOffset ByteOffset) returns NetpollEntryLayout
+		return Self{entryBytes: entryBytes, sourceOffset: sourceOffset}
+	end 'create'
+end 'NetpollEntryLayout'
+
+// `OVERLAPPED_ENTRY` is `lpCompletionKey, lpOverlapped, Internal, dwNumberOfBytesTransferred` (32 bytes).
+let CompletionEntryBytes = 32 as ByteOffset
+let CompletionEntryKeyOffset = 0 as ByteOffset
+let EpollPackedEntryBytes = 12 as ByteOffset
+let EpollPackedDataOffset = 4 as ByteOffset
+let EpollAlignedEntryBytes = 16 as ByteOffset
+let EpollAlignedDataOffset = 8 as ByteOffset
+
+function netpollEntryLayout(target Target) returns NetpollEntryLayout
+	return match netpollShape(target) 'shape'
+		completionPort gives NetpollEntryLayout.create(CompletionEntryBytes, sourceOffset: CompletionEntryKeyOffset)
+		epoll gives epollEntryLayout(target.cpu)
+		kqueue gives NetpollEntryLayout.create(DarwinKeventBytes as ByteOffset, sourceOffset: DarwinKeventIdentOffset as ByteOffset)
+	end 'shape'
+end 'netpollEntryLayout'
+
+function epollEntryLayout(cpu CpuArch) returns NetpollEntryLayout
+	return match cpu 'cpu'
+		x64 gives NetpollEntryLayout.create(EpollPackedEntryBytes, sourceOffset: EpollPackedDataOffset)
+		arm64 gives NetpollEntryLayout.create(EpollAlignedEntryBytes, sourceOffset: EpollAlignedDataOffset)
+		wasm32 panic("epollEntryLayout: wasm32 has no epoll — `netpollShape` refuses wasi before this is asked")
+	end 'cpu'
+end 'epollEntryLayout'
+
+// How many entries one wait may answer — Go's batch on Windows and kqueue.
+let NetpollBatchEntries = 64 as ParsedInt
+
+// `__np_poll`'s frame: the scratch word (the Windows entry count, the epoll drain buffer) in slot 0, then the
+// batch. It lives on the polling machine's OS-thread stack, which has room for it; no green thread polls.
+let NetpollScratchSlot = 0 as SpillSlot
+let NetpollEntriesSlot = 1 as SpillSlot
+
+function netpollFrameBytes(layout NetpollEntryLayout) returns StackSize
+	let batchSlots = runtimeFrameSlots(NetpollBatchEntries * (layout.entryBytes as ParsedInt))
+	return ((NetpollEntriesSlot as StackSize) + batchSlots) * SpillSlotBytes
+end 'netpollFrameBytes'
+
+// ==========================================================================
+// The `.data` words
+// ==========================================================================
+
+// The poller and its break source, created by `__np_init` in `__sched_init_procs` before any worker exists and
+// never written again.
+let NetpollPollerLabel = b"__np_poller"
+let NetpollBreakLabel = b"__np_break"
+
+// ⭐⭐ **"A BREAK IS IN FLIGHT" — Go's `netpollWakeSig`.** A raise wins it 0 → 1 before sending, so however many
+// parties want the poller awake at once, one break is outstanding; the blocking poll that consumes that break
+// takes it 1 → 0. A non-blocking poll that receives it re-sends it for the blocking one and leaves the word at
+// 1, so the invariant is exact: the word is 1 exactly while one break is unconsumed.
+let NetpollWakeSigLabel = b"__np_wake_sig"
+
+export function netpollRuntimeGlobals() returns DataSectionEntryArray
+	var out = DataSectionEntryArray.create()
+	pushRuntimeGlobal(out, label: NetpollPollerLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+	pushRuntimeGlobal(out, label: NetpollBreakLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+	pushRuntimeGlobal(out, label: NetpollWakeSigLabel, sharing: MultiMSharing.atomicStep)
+	return out
+end 'netpollRuntimeGlobals'
+
+let WakeSigClear = 0 as ParsedInt
+let WakeSigRaised = 1 as ParsedInt
+
+// ==========================================================================
+// Entry points
+// ==========================================================================
+
+// `__np_init()` — create the poller and its break source. Called by `__sched_init_procs`.
+export let NetpollInitName = b"__np_init"
+
+// `__np_poll(timeoutMs)` — wait until an event or `timeoutMs` (`WaitInfinite` for ever, 0 for a look), and
+// consume what the wait answered. A wait with a timeout of 0 is Go's non-blocking poll: it takes nothing that
+// belongs to the blocking poller. Called with no processor, by the one polling machine or by `__sysmon`.
+export let NetpollPollName = b"__np_poll"
+
+// `__np_break()` — Go's `netpollBreak`: end the blocking poller's wait early, once however many ask.
+export let NetpollBreakName = b"__np_break"
+
+export function installNetpollRuntime(module StdModule, target Target)
+	buildNetpollInit(module, target: target)
+	buildNetpollPoll(module, target: target)
+	buildNetpollBreak(module, target: target)
+end 'installNetpollRuntime'
+
+// Emit one `osNetpoll`, padding the operands `verb` does not read with a zero, and answer its raw result.
+export function emitNetpoll(module StdModule, block IrBlock, verb NetpollVerb, operands ValueIdArray, ids ValueMinter) returns ValueId
+	var padded = operands.clone()
+	let unused = emitConst(module, block: block, value: 0, ids: ids)
+
+	while padded.count() < NetpollOperandCount 'pad'
+		padded.push(unused)
+	end 'pad'
+
+	let answer = ids.mint()
+	module.appendOp(block, op: StdOp.osNetpoll(answer, verb: verb, a0Id: netpollOperand(padded, index: 0), a1Id: netpollOperand(padded, index: 1), a2Id: netpollOperand(padded, index: 2), a3Id: netpollOperand(padded, index: 3), a4Id: netpollOperand(padded, index: 4)))
+	return answer
+end 'emitNetpoll'
+
+// `StdOp.osNetpoll`'s operand count.
+let NetpollOperandCount = 5
+
+// 1 when `answer` — every verb's but `wait`'s — reports a failure in this shape's vocabulary, else 0: a Win32
+// handle or BOOL of 0, or a POSIX negative errno. `openTimer`'s POSIX answer is 0 by contract and never fails.
+function emitNetpollFailed(module StdModule, block IrBlock, shape NetpollShape, answer ValueId, ids ValueMinter) returns ValueId
+	let zero = emitConst(module, block: block, value: 0, ids: ids)
+	return match shape 'failure'
+		completionPort gives emitCmp(module, block: block, a: answer, b: zero, pred: StdCmpPred.eq, ids: ids)
+		epoll or
+			kqueue gives emitCmp(module, block: block, a: answer, b: zero, pred: StdCmpPred.lt, ids: ids)
+	end 'failure'
+end 'emitNetpollFailed'
+
+// Terminate `cur`: to an abort with `netpollFailed` when `answer` failed, else to `cont`.
+function emitNetpollRequire(module StdModule, func IrFunction, cur IrBlock, shape NetpollShape, answer ValueId, cont IrBlock, ids ValueMinter)
+	var failed = module.addBlock(func, label: b"npfailed", heat: BlockHeat.normal)
+	module.setTerminator(cur, op: StdOp.condBranch(emitNetpollFailed(module, block: cur, shape: shape, answer: answer, ids: ids), thenBlockId: failed.id, elseBlockId: cont.id))
+	emitRuntimeAbort(module, func: func, block: failed, abort: RuntimeAbort.netpollFailed, ids: ids)
+end 'emitNetpollRequire'
+
+// ⭐ **THE MONITOR'S SLEEP TIMER: HIGH RESOLUTION, OR THE ORDINARY ONE ON A HOST THAT PREDATES THE FLAG** —
+// `ProfileRuntime.buildProfileTimerCreate`'s fallback, for its reason: the ordinary timer still sleeps, at the
+// scheduler tick. Terminates `cur` and reaches `cont` with the timer as its one block argument, or aborts with
+// `netpollFailed` when neither can be created. A POSIX lane's answer is never a failure.
+export function emitNetpollOpenTimer(module StdModule, func IrFunction, cur IrBlock, target Target, cont IrBlock, ids ValueMinter)
+	let shape = netpollShape(target)
+	var coarse = module.addBlock(func, label: b"nptimercoarse", heat: BlockHeat.normal)
+
+	let fine = emitNetpoll(module, block: cur, verb: NetpollVerb.openTimer, operands: argsOf(emitConst(module, block: cur, value: CreateWaitableTimerHighResolution, ids: ids)), ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(emitNetpollFailed(module, block: cur, shape: shape, answer: fine, ids: ids), thenBlockId: coarse.id, elseBlockId: cont.id))
+	cur.branchEdges.push(BranchEdge.create(cont.id, argIds: argsOf(fine)))
+
+	let plain = emitNetpoll(module, block: coarse, verb: NetpollVerb.openTimer, operands: argsOf(emitConst(module, block: coarse, value: CreateWaitableTimerOrdinary, ids: ids)), ids: ids)
+	emitNetpollRequire(module, func: func, cur: coarse, shape: shape, answer: plain, cont: cont, ids: ids)
+	coarse.branchEdges.push(BranchEdge.create(cont.id, argIds: argsOf(plain)))
+end 'emitNetpollOpenTimer'
+
+// `__np_init()` — see `NetpollInitName`.
+function buildNetpollInit(module StdModule, target Target)
+	let shape = netpollShape(target)
+	var func = IrFunction.createFromStd(NetpollInitName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var opened = module.addBlock(func, label: b"npopened", heat: BlockHeat.normal)
+	var armed = module.addBlock(func, label: b"nparmed", heat: BlockHeat.normal)
+
+	let poller = emitNetpoll(module, block: entry, verb: NetpollVerb.openPoller, operands: ValueIdArray.create(), ids: ids)
+	emitNetpollRequire(module, func: func, cur: entry, shape: shape, answer: poller, cont: opened, ids: ids)
+
+	emitStoreGlobalWord(module, block: opened, label: NetpollPollerLabel, value: poller, ids: ids)
+	let breakSource = emitNetpoll(module, block: opened, verb: NetpollVerb.openBreak, operands: argsOf(poller), ids: ids)
+	emitNetpollRequire(module, func: func, cur: opened, shape: shape, answer: breakSource, cont: armed, ids: ids)
+
+	emitStoreGlobalWord(module, block: armed, label: NetpollBreakLabel, value: breakSource, ids: ids)
+	module.setTerminator(armed, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildNetpollInit'
+
+// `__np_break()` — see `NetpollBreakName`.
+function buildNetpollBreak(module StdModule, target Target)
+	var func = IrFunction.createFromStd(NetpollBreakName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var raise = module.addBlock(func, label: b"npraise", heat: BlockHeat.normal)
+	var raised = module.addBlock(func, label: b"npraised", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"npdone", heat: BlockHeat.normal)
+
+	let won = emitNetpollClaimWakeSig(module, block: entry, expected: WakeSigClear, replacement: WakeSigRaised, ids: ids)
+	let inFlight = emitCasLostFlag(module, block: entry, result: won, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(inFlight, thenBlockId: doneBlock.id, elseBlockId: raise.id))
+
+	emitNetpollRaise(module, func: func, cur: raise, shape: netpollShape(target), cont: raised, ids: ids)
+	module.setTerminator(raised, op: StdOp.branch(doneBlock.id))
+
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
+	module.functions.push(func)
+end 'buildNetpollBreak'
+
+// CAS `__np_wake_sig` from `expected` to `replacement`, answering the CAS's success boolean.
+function emitNetpollClaimWakeSig(module StdModule, block IrBlock, expected ParsedInt, replacement ParsedInt, ids ValueMinter) returns ValueId
+	let addr = ids.mint()
+	module.appendOp(block, op: StdOp.globalAddr(addr, label: NetpollWakeSigLabel))
+	let won = ids.mint()
+	module.appendOp(block, op: StdOp.atomicCas(won, addrId: addr, expectedId: emitConst(module, block: block, value: expected, ids: ids), replacementId: emitConst(module, block: block, value: replacement, ids: ids)))
+	return won
+end 'emitNetpollClaimWakeSig'
+
+// 1 when a CAS answered `AtomicCasFailed`.
+function emitCasLostFlag(module StdModule, block IrBlock, result ValueId, ids ValueMinter) returns ValueId
+	return emitCmp(module, block: block, a: result, b: emitConst(module, block: block, value: AtomicCasFailed, ids: ids), pred: StdCmpPred.eq, ids: ids)
+end 'emitCasLostFlag'
+
+// Send one break to the poller, whatever `__np_wake_sig` says — the caller has settled that. Terminates `cur`
+// and continues at `cont`.
+function emitNetpollRaise(module StdModule, func IrFunction, cur IrBlock, shape NetpollShape, cont IrBlock, ids ValueMinter)
+	let poller = emitLoadGlobalWord(module, block: cur, label: NetpollPollerLabel, ids: ids)
+	let breakSource = emitLoadGlobalWord(module, block: cur, label: NetpollBreakLabel, ids: ids)
+	let answer = emitNetpoll(module, block: cur, verb: NetpollVerb.raiseBreak, operands: twoArgs(poller, second: breakSource), ids: ids)
+	emitNetpollRequire(module, func: func, cur: cur, shape: shape, answer: answer, cont: cont, ids: ids)
+end 'emitNetpollRaise'
+
+// ⭐⭐⭐ **`__np_poll(timeoutMs)` — THE WAIT, AND THE ONE DECODE OF WHAT IT ANSWERED.**
+//
+// ⚠ **A BREAK BELONGS TO THE BLOCKING POLLER** (Go's `delay != 0`). A non-blocking poll that receives one — only
+// `__sysmon`'s stale poll makes those — leaves it for the blocking one: the epoll shape simply does not read the
+// eventfd, which stays readable, and the two shapes whose receive consumes the break send it again. Only the
+// blocking poll clears `__np_wake_sig`, so a later raise is never swallowed by the coalescing.
+function buildNetpollPoll(module StdModule, target Target)
+	let shape = netpollShape(target)
+	let layout = netpollEntryLayout(target)
+	var func = IrFunction.createFromStd(NetpollPollName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+	func.stackSize = netpollFrameBytes(layout)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var counted = module.addBlock(func, label: b"npcounted", heat: BlockHeat.normal)
+	var entryBody = module.addBlock(func, label: b"npentry", heat: BlockHeat.normal)
+	var consume = module.addBlock(func, label: b"npbreak", heat: BlockHeat.normal)
+	var nextEntry = module.addBlock(func, label: b"npnext", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"npdone", heat: BlockHeat.normal)
+	var failedWait = module.addBlock(func, label: b"npwaitfailed", heat: BlockHeat.normal)
+	var unknownSource = module.addBlock(func, label: b"npunknown", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let timeoutMs = 0 as ValueId
+
+	// The scratch word starts at zero: `GetQueuedCompletionStatusEx` writes a 32-bit count into its low half.
+	let scratch = ids.mint()
+	module.appendOp(entry, op: StdOp.stackRecordAddr(scratch, slot: NetpollScratchSlot))
+	emitStoreField(module, block: entry, record: scratch, offset: 0, value: emitConst(module, block: entry, value: 0, ids: ids))
+	let entries = ids.mint()
+	module.appendOp(entry, op: StdOp.stackRecordAddr(entries, slot: NetpollEntriesSlot))
+	let poller = emitLoadGlobalWord(module, block: entry, label: NetpollPollerLabel, ids: ids)
+	let capacity = emitConst(module, block: entry, value: NetpollBatchEntries, ids: ids)
+	let answer = emitNetpoll(module, block: entry, verb: NetpollVerb.wait, operands: fiveArgs(poller, second: entries, third: capacity, fourth: timeoutMs, fifth: scratch), ids: ids)
+
+	let count = ids.mint()
+	counted.blockArgs.push(IrBlockArg.create(count, argType: StdType.i64))
+	emitNetpollWaitCount(module, func: func, cur: entry, shape: shape, answer: answer, scratch: scratch, counted: counted, failed: failedWait, ids: ids)
+
+	// The walk over the batch: `index` from 0 to `count`.
+	let index = ids.mint()
+	var entryHdr = module.addBlock(func, label: b"nphdr", heat: BlockHeat.normal)
+	entryHdr.blockArgs.push(IrBlockArg.create(index, argType: StdType.i64))
+	let firstIndex = emitConst(module, block: counted, value: 0, ids: ids)
+	module.setTerminator(counted, op: StdOp.branch(entryHdr.id))
+	counted.branchEdges.push(BranchEdge.create(entryHdr.id, argIds: argsOf(firstIndex)))
+
+	let walked = emitCmp(module, block: entryHdr, a: index, b: count, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(entryHdr, op: StdOp.condBranch(walked, thenBlockId: doneBlock.id, elseBlockId: entryBody.id))
+
+	let stride = emitConst(module, block: entryBody, value: layout.entryBytes as ParsedInt, ids: ids)
+	let entryAddr = emitBin(module, block: entryBody, a: entries, b: emitBin(module, block: entryBody, a: index, b: stride, opcode: StdBinOpcode.mul, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let source = emitLoadField(module, block: entryBody, record: entryAddr, offset: layout.sourceOffset, ids: ids)
+	let isBreak = emitCmp(module, block: entryBody, a: source, b: emitConst(module, block: entryBody, value: NetpollBreakToken, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entryBody, op: StdOp.condBranch(isBreak, thenBlockId: consume.id, elseBlockId: unknownSource.id))
+
+	emitNetpollConsumeBreak(module, func: func, cur: consume, shape: shape, timeoutMs: timeoutMs, cont: nextEntry, ids: ids)
+
+	let nextIndex = emitBin(module, block: nextEntry, a: index, b: emitConst(module, block: nextEntry, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(nextEntry, op: StdOp.branch(entryHdr.id))
+	nextEntry.branchEdges.push(BranchEdge.create(entryHdr.id, argIds: argsOf(nextIndex)))
+
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
+	emitRuntimeAbort(module, func: func, block: failedWait, abort: RuntimeAbort.netpollFailed, ids: ids)
+	emitRuntimeAbort(module, func: func, block: unknownSource, abort: RuntimeAbort.netpollUnknownSource, ids: ids)
+
+	module.functions.push(func)
+end 'buildNetpollPoll'
+
+// ⭐ **HOW MANY ENTRIES THE WAIT FILLED, IN THIS SHAPE'S VOCABULARY.** Terminates `cur`: to `counted` with the
+// count as its argument, or to `failed`. The POSIX chunks already answer an interrupted wait as 0 entries, so a
+// negative answer there is a real failure. `GetQueuedCompletionStatusEx` answers FALSE for a timeout as well as
+// for a failure, and `GetLastError` tells the two apart.
+function emitNetpollWaitCount(module StdModule, func IrFunction, cur IrBlock, shape NetpollShape, answer ValueId, scratch ValueId, counted IrBlock, failed IrBlock, ids ValueMinter)
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+
+	match shape 'decode'
+		completionPort then emitNetpollCompletionCount(module, func: func, cur: cur, answer: answer, scratch: scratch, counted: counted, failed: failed, ids: ids)
+		epoll or
+			kqueue then emitBranchOnWaitFailure(module, cur: cur, failedTest: emitCmp(module, block: cur, a: answer, b: zero, pred: StdCmpPred.lt, ids: ids), failed: failed, counted: counted, count: answer)
+	end 'decode'
+end 'emitNetpollWaitCount'
+
+function emitBranchOnWaitFailure(module StdModule, cur IrBlock, failedTest ValueId, failed IrBlock, counted IrBlock, count ValueId)
+	module.setTerminator(cur, op: StdOp.condBranch(failedTest, thenBlockId: failed.id, elseBlockId: counted.id))
+	cur.branchEdges.push(BranchEdge.create(counted.id, argIds: argsOf(count)))
+end 'emitBranchOnWaitFailure'
+
+function emitNetpollCompletionCount(module StdModule, func IrFunction, cur IrBlock, answer ValueId, scratch ValueId, counted IrBlock, failed IrBlock, ids ValueMinter)
+	var dequeued = module.addBlock(func, label: b"npdequeued", heat: BlockHeat.normal)
+	var empty = module.addBlock(func, label: b"npempty", heat: BlockHeat.normal)
+
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	let returnedFalse = emitCmp(module, block: cur, a: answer, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(returnedFalse, thenBlockId: empty.id, elseBlockId: dequeued.id))
+
+	let removed = emitLoadField(module, block: dequeued, record: scratch, offset: 0, ids: ids)
+	module.setTerminator(dequeued, op: StdOp.branch(counted.id))
+	dequeued.branchEdges.push(BranchEdge.create(counted.id, argIds: argsOf(removed)))
+
+	let lastError = ids.mint()
+	module.appendOp(empty, op: StdOp.osLastError(lastError))
+	let timedOut = emitCmp(module, block: empty, a: lastError, b: emitConst(module, block: empty, value: WaitTimeout, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let noEntries = emitConst(module, block: empty, value: 0, ids: ids)
+	module.setTerminator(empty, op: StdOp.condBranch(timedOut, thenBlockId: counted.id, elseBlockId: failed.id))
+	empty.branchEdges.push(BranchEdge.create(counted.id, argIds: argsOf(noEntries)))
+end 'emitNetpollCompletionCount'
+
+// ⭐ **ONE BREAK RECEIVED.** Terminates `cur` and continues at `cont`. See `buildNetpollPoll` for whose break it
+// is; a blocking poll's clear of `__np_wake_sig` that finds the word already clear is a break no raise sent,
+// which is `netpollFailed`'s case too — the coalescing has lost count and a later raise could be swallowed.
+function emitNetpollConsumeBreak(module StdModule, func IrFunction, cur IrBlock, shape NetpollShape, timeoutMs ValueId, cont IrBlock, ids ValueMinter)
+	var blocking = module.addBlock(func, label: b"npbreakblocking", heat: BlockHeat.normal)
+	var passing = module.addBlock(func, label: b"npbreakpassing", heat: BlockHeat.normal)
+	var cleared = module.addBlock(func, label: b"npbreakclear", heat: BlockHeat.normal)
+	var lostCount = module.addBlock(func, label: b"npbreakunsent", heat: BlockHeat.normal)
+
+	let isBlocking = emitCmp(module, block: cur, a: timeoutMs, b: emitConst(module, block: cur, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(isBlocking, thenBlockId: blocking.id, elseBlockId: passing.id))
+
+	// The blocking poll takes the break: the epoll shape reads the counter back to zero, then the word clears.
+	match shape 'take'
+		epoll then emitNetpollDrain(module, func: func, cur: blocking, cont: cleared, ids: ids)
+		completionPort or
+			kqueue then module.setTerminator(blocking, op: StdOp.branch(cleared.id))
+	end 'take'
+
+	let won = emitNetpollClaimWakeSig(module, block: cleared, expected: WakeSigRaised, replacement: WakeSigClear, ids: ids)
+	module.setTerminator(cleared, op: StdOp.condBranch(emitCasLostFlag(module, block: cleared, result: won, ids: ids), thenBlockId: lostCount.id, elseBlockId: cont.id))
+	emitRuntimeAbort(module, func: func, block: lostCount, abort: RuntimeAbort.netpollFailed, ids: ids)
+
+	// A non-blocking poll passes the break on.
+	match shape 'pass'
+		epoll then module.setTerminator(passing, op: StdOp.branch(cont.id))
+		completionPort or
+			kqueue then emitNetpollRaise(module, func: func, cur: passing, shape: shape, cont: cont, ids: ids)
+	end 'pass'
+end 'emitNetpollConsumeBreak'
+
+// Read the eventfd's counter back to zero. Terminates `cur` and continues at `cont`.
+function emitNetpollDrain(module StdModule, func IrFunction, cur IrBlock, cont IrBlock, ids ValueMinter)
+	let breakSource = emitLoadGlobalWord(module, block: cur, label: NetpollBreakLabel, ids: ids)
+	let answer = emitNetpoll(module, block: cur, verb: NetpollVerb.drainBreak, operands: argsOf(breakSource), ids: ids)
+	emitNetpollRequire(module, func: func, cur: cur, shape: NetpollShape.epoll, answer: answer, cont: cont, ids: ids)
+end 'emitNetpollDrain'

@@ -573,7 +573,6 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		VirtualAlloc gives 0  // 4: lpAddress, dwSize, flAllocationType, flProtect
 		QueryPerformanceCounter gives 0  // 1: lpPerformanceCount
 		QueryPerformanceFrequency gives 0  // 1: lpFrequency
-		Sleep gives 0  // 1: dwMilliseconds
 		GetExitCodeProcess gives 0  // 2: hProcess, lpExitCode
 		WaitForSingleObject gives 0  // 2: hHandle, dwMilliseconds
 		WaitForMultipleObjects gives 0  // 4: nCount, lpHandles, bWaitAll, dwMilliseconds
@@ -687,6 +686,10 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		CreateToolhelp32Snapshot gives 0  // 2: dwFlags, th32ProcessID
 		Module32FirstW gives 0  // 2: hSnapshot, lpme
 		Module32NextW gives 0  // 2: hSnapshot, lpme
+
+		// The poller's pair. The wait takes six, so two on the stack; the break four.
+		GetQueuedCompletionStatusEx gives GetQueuedCompletionStatusExStackArgWords  // 6: CompletionPort, lpCompletionPortEntries, ulCount, ulNumEntriesRemoved, dwMilliseconds, fAlertable
+		PostQueuedCompletionStatus gives 0  // 4: CompletionPort, dwNumberOfBytesTransferred, dwCompletionKey, lpOverlapped
 	end 'k'
 end 'gtShimStackArgWordsOf'
 
@@ -783,13 +786,11 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 		LeaveCriticalSection gives SyscallClass.schedulerBound
 		InitializeCriticalSection gives SyscallClass.schedulerBound
 
-		// ⛔⛔ **THE THREE WAITS ARE THE SCHEDULER WAITING FOR ITS OWN WORK.** A machine's park and
-		// `__sched_syscall_regain`'s poll wait through them holding no processor, so there is none for
-		// `__sysmon` to take, and the park's wait is already bounded by `__gt_timer_when` and by the park
-		// timeouts.
+		// ⛔⛔ **THE WAITS ARE THE SCHEDULER WAITING FOR ITS OWN WORK.** An idle machine's park and
+		// `__sched_syscall_regain`'s wait go through them holding no processor, so there is none for `__sysmon`
+		// to take.
 		WaitForSingleObject gives SyscallClass.schedulerBound
 		WaitForMultipleObjects gives SyscallClass.schedulerBound
-		Sleep gives SyscallClass.schedulerBound
 
 		// ⚠ **THIS ARM IS INERT AND SAYS SO RATHER THAN BEING LEFT TO LOOK LIVE**, exactly as the same slot's
 		// stack-arg arm does one function up: the completion loop is hand-assembled and calls
@@ -879,6 +880,11 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 		NtGetNextThread gives SyscallClass.schedulerBound
 		CreateWaitableTimerExW gives SyscallClass.schedulerBound
 		SetWaitableTimer gives SyscallClass.schedulerBound
+
+		// The scheduler's poller — `StdDialect.stdOpSyscallClassOf`'s `osNetpoll` arm carries why its wait is
+		// the scheduler waiting for its own work.
+		GetQueuedCompletionStatusEx gives SyscallClass.schedulerBound
+		PostQueuedCompletionStatus gives SyscallClass.schedulerBound
 	end 'k'
 end 'gtShimSyscallClassOf'
 

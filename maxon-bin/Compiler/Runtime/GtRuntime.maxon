@@ -79,8 +79,8 @@ export let GtOffResult = 0x28  // the R8 return value, captured by the trampolin
 // first, which is what `emitGtIsDropped` reads it for.
 export let GtOffWaiter = 0x30
 
-// The chain of whichever one list this GT is on: its owner's strand queue or — once reclaimed — a GT-struct
-// free list. (The global run queue has its own link, `GtOffRunqNext`.) EXPORTED because the free lists are
+// The chain of whichever one list this GT is on: its owner's strand queue or — once reclaimed — the GT-struct
+// free list. (The global run queue has its own link, `GtOffRunqNext`.) EXPORTED because the free list is
 // `SchedRuntime`'s.
 export let GtOffNext = 0x38
 export let GtOffFuncPtr = 0x40  // the async function's address
@@ -684,8 +684,8 @@ let TimerOffSeq = 16
 let TimerHeapBytes = TimerHeapCapacity * TimerEntrySize
 
 // What `__gt_timer_when` holds while the store is empty: a deadline no clock reading reaches, so *"is the
-// earliest deadline past?"* is one compare that answers no. EXPORTED for the scheduler loop's park timeout
-// (`SchedRuntime.emitSchedParkTimeout`), which parks for its idle bound instead.
+// earliest deadline past?"* is one compare that answers no. EXPORTED for the scheduler's owed-poller test
+// (`SchedRuntime.emitSchedPollerOwed`), which asks whether any timer is pending.
 export let TimerWhenEmpty = 0x7FFFFFFFFFFFFFFF as ParsedInt
 
 // --- Process store (P1.5 subprocess seed) ---
@@ -1360,7 +1360,7 @@ let GtRunQueueTailLabel = b"__gt_run_queue_tail"
 // commits a fresh `gtSeedStackBytes` seed, `__gt_morestack` releases the OLD stack when it grows, and
 // `__gt_runner_done` releases the finished thread's (possibly grown) stack via `osFreePages`.
 //
-// ⭐⭐ **THE STRUCT IS THE OPPOSITE: TYPE-STABLE, RECYCLED THROUGH FREE LISTS AND NEVER GIVEN BACK TO THE
+// ⭐⭐ **THE STRUCT IS THE OPPOSITE: TYPE-STABLE, RECYCLED THROUGH A FREE LIST AND NEVER GIVEN BACK TO THE
 // SLAB.** `__gt_reclaim` hands it to `__gt_free_put` and `__gt_spawn` takes one from `__gt_free_get`
 // (`SchedRuntime.GtFreePutName` carries why), which zeroes a recycled struct over its whole `GtStructSize`
 // before handing it out.
@@ -3180,20 +3180,16 @@ function emitGtPublishTimerWhen(module StdModule, func IrFunction, cur IrBlock, 
 end 'emitGtPublishTimerWhen'
 
 // `__gt_timer_when`, read UNLOCKED with acquire — see `GtTimerWhenLabel` for why that is sound. EXPORTED for
-// the scheduler loop's park timeout (`SchedRuntime.emitSchedParkTimeout`).
+// the scheduler's poller deadline and its owed-poller test (`SchedRuntime`).
 export function emitGtLoadTimerWhen(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
-	let whenAddr = ids.mint()
-	module.appendOp(block, op: StdOp.globalAddr(whenAddr, label: GtTimerWhenLabel))
-	let when = ids.mint()
-	module.appendOp(block, op: StdOp.loadAcquire(when, addrId: whenAddr, offset: 0, valueType: StdType.i64))
-	return when
+	return emitLoadAcquireGlobalWord(module, block: block, label: GtTimerWhenLabel, ids: ids)
 end 'emitGtLoadTimerWhen'
 
 // ⭐⭐ **IS A TIMER DUE? — the one due test, and it takes no lock.** It terminates `cur`: to `due` when the
 // earliest deadline (`__gt_timer_when`) is at or before the clock, else to `notDue`, handing `notDueArgs` on
 // both edges into it. The clock is read only when a timer is pending, and the answer is that reading: it is
-// minted in a block that dominates `due`, for the fire that follows. EXPORTED for the scheduler loop's top and
-// its timed-out park (`SchedRuntime.buildSchedLoop`).
+// minted in a block that dominates `due`, for the fire that follows. EXPORTED for the scheduler loop's top
+// (`SchedRuntime.buildSchedLoop`).
 export function emitGtBranchOnTimerDue(module StdModule, func IrFunction, cur IrBlock, due IrBlock, notDue IrBlock, notDueArgs ValueIdArray, ids ValueMinter) returns ValueId
 	var ask = module.addBlock(func, label: b"timerdueask", heat: BlockHeat.normal)
 
@@ -3242,7 +3238,7 @@ end 'emitProcSwapDown'
 // store's header carries the measurement and the spec case that pins it.
 //
 // ⭐ **IT ANSWERS THE WAKE DEBT RATHER THAN PAYING IT.** Every caller is a machine about to look for work
-// itself — the scheduler loop's top, its idle fire, the park's timed-out arm, the yield placement — so the
+// itself — the scheduler loop's top, its idle fire, the poller back from its wait, the yield placement — so the
 // token a fire published is normally taken by the machine that fired it; the caller decides whether anyone
 // else needs waking.
 function buildGtTimerCheck(module StdModule)
@@ -3323,10 +3319,10 @@ function buildGtTimerCheck(module StdModule)
 	module.functions.push(func)
 end 'buildGtTimerCheck'
 
-// Emit `ceil((earliest - now) / 1e6)` into `block` and return the deltaMs id — the millisecond delta a
-// scheduler loop's park uses as its TIMEOUT. Every caller has established `earliest > now`, and rounding UP
-// then guarantees ≥1 ms, so a sub-millisecond remainder cannot busy-spin. EXPORTED for the scheduler loop
-// (`SchedRuntime.emitSchedParkTimeout`), beside the nanosecond constants it divides by.
+// Emit `ceil((earliest - now) / 1e6)` into `block` and return the deltaMs id — the millisecond delta the
+// poller waits for. Every caller has established `earliest > now`, and rounding UP then guarantees ≥1 ms, so a
+// sub-millisecond remainder cannot busy-spin. EXPORTED for the scheduler loop's idle tail
+// (`SchedRuntime.buildSchedLoop`), beside the nanosecond constants it divides by.
 export function emitCeilMs(module StdModule, block IrBlock, ids ValueMinter, earliest ValueId, now ValueId) returns ValueId
 	let delta = ids.mint()
 	module.appendOp(block, op: StdOp.binOp(delta, lhs: earliest, rhs: now, opcode: StdBinOpcode.sub, operandType: StdType.i64))
@@ -4042,9 +4038,7 @@ end 'emitGtPublishCompleted'
 // the `ready`/`waiting` transitions, which are published under `__sched_lock` and are a different question
 // — see the `completed` note above for why the two are not one rule.
 function emitGtLoadPublishedStatus(module StdModule, block IrBlock, gt ValueId, ids ValueMinter) returns ValueId
-	let status = ids.mint()
-	module.appendOp(block, op: StdOp.loadAcquire(status, addrId: gt, offset: GtOffStatus, valueType: StdType.i64))
-	return status
+	return emitLoadAcquireField(module, block: block, record: gt, offset: GtOffStatus, ids: ids)
 end 'emitGtLoadPublishedStatus'
 
 // ⭐⭐⭐ **THE CHECK — because "publish `completed` with a release" must not be a CONVENTION FOUR CALL SITES
@@ -4142,7 +4136,6 @@ function collectCompletedWordDefs(op StdOp, completedConsts ValueIdArray, plainS
 			callIndirect or
 			osPanic or
 			osReadClock or
-			osSleepMs or
 			osProcessSpawn or
 			osProcessExitCode or
 			osWaitHandles or
@@ -4228,7 +4221,8 @@ function collectCompletedWordDefs(op StdOp, completedConsts ValueIdArray, plainS
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
-			osHostSample then break 'k'
+			osHostSample or
+			osNetpoll then break 'k'
 	end 'k'
 end 'collectCompletedWordDefs'
 
@@ -4274,7 +4268,6 @@ function requireOrderedCompletedAccess(op StdOp, func IrFunction, completedConst
 			callIndirect or
 			osPanic or
 			osReadClock or
-			osSleepMs or
 			osProcessSpawn or
 			osProcessExitCode or
 			osWaitHandles or
@@ -4360,7 +4353,8 @@ function requireOrderedCompletedAccess(op StdOp, func IrFunction, completedConst
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
-			osHostSample then break 'k'
+			osHostSample or
+			osNetpoll then break 'k'
 	end 'k'
 end 'requireOrderedCompletedAccess'
 
@@ -5258,11 +5252,12 @@ end 'emitLoadCurrentGtCpuOffset'
 //     another M's `__gt_timer_check` can fire the entry and ready the thread BETWEEN them, after which this
 //     store leaves `waiting` on a thread that is already queued — and `__gt_promise_drop`'s re-read of the
 //     status under the lock then reads that as *"still parked, I am its sole owner"* and frees a queued
-//     thread. `__gt_timer_add` takes the lock itself, recursively.
+//     thread. `__gt_timer_add` takes the lock itself, recursively. A deadline earlier than every other now
+//     pending owes the poller a look (`SchedRuntime.__sched_wake_netpoller`), after the release.
 //   • **proc** — the same shape through `__gt_proc_add_locked`, which sets `waiting` and `io_handle` itself
-//     under this lock. Its overflow is CROSS-M (another M took the last slot after the site's check), so it
-//     un-parks the thread instead: close the child's handle, clear `io_handle` as the signal, ready the
-//     thread, and let its resumption throw.
+//     under this lock, and owes the poller the child-poll cap the same way. Its overflow is CROSS-M (another
+//     M took the last slot after the site's check), so it un-parks the thread instead: close the child's
+//     handle, clear `io_handle` as the signal, ready the thread, and let its resumption throw.
 //   • **io** — two PLAIN stores, `waiting` then `ioParked`, and no lock: the IOCP completion thread waits for
 //     `ioParked` to turn non-zero before it takes the lock and readies the thread, so its ready always lands
 //     after the `waiting` store rather than under it.
@@ -5273,13 +5268,15 @@ end 'emitLoadCurrentGtCpuOffset'
 //   • **awaitAny** — the same over every slot: re-scan under the lock and ready at once if any slot has
 //     completed, else register on every slot with `GtOffSelectDone` cleared.
 //
-// Every arm that takes the lock leaves through `unlockAndPay`, carrying the wake debt its ready answered or none.
+// The timer arm and a parked child leave by their own release, because each may owe the poller a look; every
+// other arm that takes the lock leaves through `unlockAndPay`, carrying the wake debt its ready answered or none.
 function buildGtRegisterPark(module StdModule)
 	var func = IrFunction.createFromStd(GtRegisterParkName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var timerArm = module.addBlock(func, label: b"parktimer", heat: BlockHeat.normal)
+	var timerWake = module.addBlock(func, label: b"parktimerwake", heat: BlockHeat.normal)
 	var notTimer = module.addBlock(func, label: b"notparktimer", heat: BlockHeat.normal)
 	var procArm = module.addBlock(func, label: b"parkproc", heat: BlockHeat.normal)
 	var procParked = module.addBlock(func, label: b"parkprocok", heat: BlockHeat.normal)
@@ -5316,10 +5313,16 @@ function buildGtRegisterPark(module StdModule)
 	let isTimer = emitCmp(module, block: entry, a: kind, b: timerKind, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(isTimer, thenBlockId: timerArm.id, elseBlockId: notTimer.id))
 
+	// Go's `maybeAdd`: `when < wakeTime`, read against the root before the add, is what makes this the deadline
+	// the scheduler waits for next. An empty store publishes `TimerWhenEmpty`, which every deadline precedes.
 	emitSchedLockEnter(module, block: timerArm, ids: ids)
 	emitStoreField(module, block: timerArm, record: gt, offset: GtOffStatus, value: waitingConst)
+	let rootBefore = emitGtLoadTimerWhen(module, block: timerArm, ids: ids)
 	module.appendOp(timerArm, op: StdOp.call(ids.mint(), callee: GtTimerAddName, args: twoArgs(gt, second: arg)))
-	emitBranchWithDebt(module, from: timerArm, to: unlockAndPay, debt: noDebt)
+	emitSchedLockLeave(module, block: timerArm, ids: ids)
+	let becameRoot = emitCmp(module, block: timerArm, a: arg, b: rootBefore, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(timerArm, op: StdOp.condBranch(becameRoot, thenBlockId: timerWake.id, elseBlockId: doneBlock.id))
+	emitGtWakeNetpoller(module, block: timerWake, when: arg, cont: doneBlock, ids: ids)
 
 	let procKind = emitConst(module, block: notTimer, value: GtParkKindProc, ids: ids)
 	let isProc = emitCmp(module, block: notTimer, a: kind, b: procKind, pred: StdCmpPred.eq, ids: ids)
@@ -5332,7 +5335,10 @@ function buildGtRegisterPark(module StdModule)
 	let addFailed = emitCmp(module, block: procArm, a: addFlag, b: noAddError, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(procArm, op: StdOp.condBranch(addFailed, thenBlockId: procOverflow.id, elseBlockId: procParked.id))
 
-	emitBranchWithDebt(module, from: procParked, to: unlockAndPay, debt: noDebt)
+	// The poller caps its wait at `ChildPollNs` while a child is parked; a poller already waiting longer is owed
+	// a look now.
+	emitSchedLockLeave(module, block: procParked, ids: ids)
+	emitGtWakeNetpoller(module, block: procParked, when: emitSchedChildPollDeadline(module, block: procParked, ids: ids), cont: doneBlock, ids: ids)
 
 	// ⭐ **THE STORE FILLED UP BETWEEN THE SITE'S CHECK AND THIS APPEND.** Abandon the WAIT (never the child)
 	// and clear `io_handle`, which is the signal `buildGtProcessRun`'s `reap` reads: it reloads the field, sees
@@ -5405,6 +5411,12 @@ function buildGtRegisterPark(module StdModule)
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
 	module.functions.push(func)
 end 'buildGtRegisterPark'
+
+// Call `__sched_wake_netpoller(when)` in `block` — `__sched_lock` released — and continue at `cont`.
+function emitGtWakeNetpoller(module StdModule, block IrBlock, when ValueId, cont IrBlock, ids ValueMinter)
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SchedWakeNetpollerName, args: argsOf(when)))
+	module.setTerminator(block, op: StdOp.branch(cont.id))
+end 'emitGtWakeNetpoller'
 
 // Terminate `from` into `to`, handing it `debt` as its one block argument — a wake debt travelling to the
 // release that pays it. EXPORTED for `MailboxRuntime.emitMboxRegisterPark`, whose roads reach this file's.
@@ -5535,7 +5547,8 @@ function emitGtExecute(module StdModule, block IrBlock, g ValueId, schedulerCont
 end 'emitGtExecute'
 
 // 1 when the timer store or the process store holds anything, else 0. `__sched_lock` held. EXPORTED for
-// `SchedRuntime.__sched_checkdead`, for which a pending entry is a wakeup source.
+// `SchedRuntime`: the idle tail claims the poller on it, and `__sched_checkdead` counts a pending entry as a
+// wakeup source.
 export function emitGtStoresPending(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	let children = ids.mint()
 	module.appendOp(block, op: StdOp.call(children, callee: GtProcCountName, args: ValueIdArray.create()))

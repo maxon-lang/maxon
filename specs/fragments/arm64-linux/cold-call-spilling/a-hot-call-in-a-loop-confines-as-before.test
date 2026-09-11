@@ -1,0 +1,170 @@
+// Test: a-hot-call-in-a-loop-confines-as-before
+typealias Word = int(i64.min to i64.max)
+typealias WordArray = Array with Word
+
+function weigh(a WordArray, i Word) returns Word
+	let v = try a.get(i) otherwise 0
+	if v > 2 'heavy'
+		print("")
+	end 'heavy'
+	return v * 2
+end 'weigh'
+
+function total(a WordArray, n Word) returns Word
+	var t = 0
+	var w = 5
+	for i in 0 upto n 'each'
+		w = w + i
+		t = t + weigh(a, i: i) + w
+	end 'each'
+	return t
+end 'total'
+
+function main() returns ExitCode
+	var a = WordArray.create()
+	for i in 0 upto 5 'seed'
+		a.push(i)
+	end 'seed'
+	if total(a, n: 5) != 65 'sum'
+		return 1
+	end 'sum'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @weigh {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic
+  __rc_ok:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x1, x2
+    arm64.b.hs __im_slow
+    arm64.b __im_load
+  tryerr:
+    arm64.movImm x19, 0
+    arm64.b trycont
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
+  tryok:
+    arm64.movRegReg x19, x0
+  trycont:
+    arm64.cmp x19, 2
+    arm64.b.le ifcont
+  heavy:
+    arm64.leaRdata x0, __str_rec_1  ; ""
+    arm64.bl print
+  ifcont:
+    arm64.lsl x0, x19, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at a-hot-call-in-a-loop-confines-as-before.test:6: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __im_slow:
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr
+    arm64.b tryok
+}
+
+func @total {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movImm x21, 0
+    arm64.movImm x0, 5
+    arm64.movImm x22, 0
+  forhdr:
+    arm64.cmp x22, x20
+    arm64.b.ge forexit
+  each:
+    arm64.add x23, x0, x22
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.bl weigh
+    arm64.add x0, x21, x0
+    arm64.add x0, x0, x23
+  forstep:
+    arm64.add x22, x22, 1
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x23
+    arm64.b forhdr
+  forexit:
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 0
+  forhdr:
+    arm64.cmp x20, 5
+    arm64.b.ge forexit
+  seed:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __managed_push
+  forstep:
+    arm64.add x20, x20, 1
+    arm64.b forhdr
+  forexit:
+    arm64.movImm x1, 5
+    arm64.movRegReg x0, x19
+    arm64.bl total
+    arm64.cmp x0, 65
+    arm64.b.eq ifcont
+  sum:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

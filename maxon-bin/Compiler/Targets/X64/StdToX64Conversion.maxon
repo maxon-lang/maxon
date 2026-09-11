@@ -398,6 +398,35 @@ export let GetQueuedCompletionStatusStackArgWords = 1 as MachineWord  // arg 5: 
 export let HostSampleStackArgWords = 2 as MachineWord  // args 5-6 of the six-argument services
 export let ReadProcessMemoryStackArgWords = 1 as MachineWord  // arg 5: lpNumberOfBytesRead
 
+// The poller's one import past the register file, stated in this band for its reason. EXPORTED for the shim.
+export let GetQueuedCompletionStatusExStackArgWords = 2 as MachineWord  // args 5-6: dwMilliseconds, fAlertable
+
+// `osNetpoll`'s outgoing slots: the two stack arguments of its widest calls (`GetQueuedCompletionStatusEx`,
+// `SetWaitableTimer`), then the relative due time `SetWaitableTimer` reads through a pointer — a word the
+// frame owns for the length of the call, so it needs no operand to carry it.
+let NetpollArg5Slot = 0
+let NetpollArg6Slot = 1
+let NetpollDueTimeSlot = 2
+let NetpollOutgoingSlots = (NetpollDueTimeSlot + 1) as MachineWord
+
+// `GetQueuedCompletionStatusEx`'s `fAlertable`: no APC is ever queued to a machine, so none may end its wait.
+let NetpollWaitNotAlertable = 0
+
+// ⛔ **THE SCHEDULER PORT'S `NumberOfConcurrentThreads` IS UNBOUNDED — Go's `_DWORD_MAX`.** Every machine that
+// has ever polled stays associated with the port and counts against the limit whenever it runs, so a limit of
+// one holds a break packet back from the blocked poller for as long as any former poller runs a strand.
+let NetpollPortUnboundedConcurrency = 0xFFFFFFFF
+
+// A break packet transfers no bytes.
+let NetpollBreakBytes = 0
+
+// `SetWaitableTimer` reads a NEGATIVE due time as relative, in 100 ns ticks: ten per microsecond.
+let WaitableTimerRelativeTicksPerMicro = -10
+
+// `lPeriod` 0 fires once; `fResume` FALSE does not wake a sleeping machine.
+let WaitableTimerOneShot = 0
+let WaitableTimerNoResume = 0
+
 // ⭐⭐⭐ **THE MAP FROM A SAMPLING SERVICE TO THE IMPORT THAT SERVES IT — the ONE place Win32 spellings meet
 // `ProfileHostCall`, and it is in the x64 isel because that is where every other import name in this
 // compiler lives.** TOTAL over the enum with no `default`, so a service added to the roster fails to compile
@@ -1077,8 +1106,7 @@ type StdToX64Lowering
 			// up by), and overflow through the identical shared rule.
 			callIndirect(_, _, _, argFloatMask, args) gives callOutgoingArgBytes(argFloatMask, argCount: args.count())
 			osPanic or
-				osReadClock or
-				osSleepMs gives 0
+				osReadClock gives 0
 
 			// The four ≤4-argument subprocess ops (spawn is named above) reserve no outgoing stack space.
 			// `osFreePages`'s `VirtualFree(addr, 0, MEM_RELEASE)` is three register args, so it reserves none either.
@@ -1186,6 +1214,7 @@ type StdToX64Lowering
 			// does carry — but the frame is folded to a per-function MAX anyway, so the wider reservation is
 			// what a function containing any two services would get regardless.
 			osHostSample gives win64OutgoingArgBytes(HostSampleStackArgWords)
+			osNetpoll gives win64OutgoingArgBytes(NetpollOutgoingSlots)
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -1370,7 +1399,6 @@ type StdToX64Lowering
 
 			// P1.5 mid-body-yield: the green-thread sleep substrate's clock read and OS wait.
 			osReadClock(ticksPtrId, freqPtrId) then self.lowerOsReadClock(ticksPtrId, freqPtrId: freqPtrId, dstBlock: dstBlock)
-			osSleepMs(msId) then self.lowerOsSleepMs(msId, dstBlock: dstBlock)
 
 			// P1.5 subprocess seed: the green-thread SUBPROCESS substrate's spawn/wait/exit-code/close.
 			osProcessSpawn(cmdlinePtrId, cwdPtrId, creationFlagsId, startupPtrId, procInfoPtrId, envPtrId) then self.lowerOsProcessSpawn(cmdlinePtrId, cwdPtrId: cwdPtrId, creationFlagsId: creationFlagsId, startupPtrId: startupPtrId, procInfoPtrId: procInfoPtrId, envPtrId: envPtrId, inheritHandles: false, dstBlock: dstBlock)
@@ -1391,6 +1419,7 @@ type StdToX64Lowering
 			// One instruction, no operand, no register: the counter's address is a link-time constant.
 			covPoint(pointId) then self.targetModule.appendOp(dstBlock, op: TargetOp.covInc(pointId))
 			osHostSample(resultId, service, a0Id, a1Id, a2Id, a3Id, a4Id, a5Id) then self.lowerOsHostSample(resultId, service: service, a0Id: a0Id, a1Id: a1Id, a2Id: a2Id, a3Id: a3Id, a4Id: a4Id, a5Id: a5Id, dstBlock: dstBlock)
+			osNetpoll(resultId, verb, a0Id, a1Id, a2Id, a3Id, a4Id) then self.lowerOsNetpoll(resultId, verb: verb, operands: fiveArgs(a0Id, second: a1Id, third: a2Id, fourth: a3Id, fifth: a4Id), dstBlock: dstBlock)
 			osProcessTerminate(handleId, exitCodeId) then self.lowerOsProcessTerminate(handleId, exitCodeId: exitCodeId, dstBlock: dstBlock)
 			osSocketStartup(resultId, wsaDataPtrId) then self.lowerOsSocketStartup(resultId, wsaDataPtrId: wsaDataPtrId, dstBlock: dstBlock)
 			osSocketResolve(resultId, hostPtrId, hintsPtrId, outPtrId) then self.lowerOsSocketResolve(resultId, hostPtrId: hostPtrId, hintsPtrId: hintsPtrId, outPtrId: outPtrId, dstBlock: dstBlock)
@@ -1558,7 +1587,6 @@ type StdToX64Lowering
 			callIndirect then panic("lowerStdToX64: a `callIndirect` op appeared as a block terminator (lowering bug — an indirect call is a value-producing body op)")
 			osPanic then panic("lowerStdToX64: an `osPanic` op appeared as a block terminator (lowering bug — a range panic is a body op followed by a dead return)")
 			osReadClock then panic("lowerStdToX64: an `osReadClock` op appeared as a block terminator (lowering bug — a clock read is a value-consuming body op)")
-			osSleepMs then panic("lowerStdToX64: an `osSleepMs` op appeared as a block terminator (lowering bug — an OS sleep is a body op)")
 			osProcessSpawn or
 				osProcessExitCode or
 				osWaitHandles or
@@ -1649,6 +1677,7 @@ type StdToX64Lowering
 				osUnpublishNamedSegment then panic("lowerStdToX64: a named-section create or unmap appeared as a block terminator (lowering bug — one produces a value and the other is a void side effect, and neither terminates)")
 			covPoint then panic("lowerStdToX64: a `covPoint` appeared as a block terminator (lowering bug — a coverage counter is emitted at a block HEAD, ahead of the code it counts)")
 			osHostSample then panic("lowerStdToX64: an `osHostSample` op appeared as a block terminator (lowering bug — a host sample call produces a value and does not terminate)")
+			osNetpoll then panic("lowerStdToX64: an `osNetpoll` op appeared as a block terminator (lowering bug — a poller call produces a value and does not terminate)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -2705,22 +2734,6 @@ type StdToX64Lowering
 			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostWallClockName, args: argsOf(ftPtrId))
 		end 'route'
 	end 'lowerOsReadWallClock'
-
-	// Lower `osSleepMs(ms)` to Windows `Sleep(ms)` through the IAT — the netpoller's real wait on the earliest
-	// timer deadline (never a busy-spin). `ms` moves into rcx (Win64's first argument register); Sleep is void.
-	function lowerOsSleepMs(msId ValueId, dstBlock IrBlock)
-		match x64OsCallKind(self.target.os) 'route'
-			importCall then self.lowerOsSleepMsWin64(msId, dstBlock: dstBlock)
-
-			// `clock_nanosleep` takes a `struct timespec *`, and the millisecond→`timespec` split needs two
-			// frame words to form one — which a chunk has and an isel lowering does not.
-			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostSleepMsName, args: argsOf(msId))
-		end 'route'
-	end 'lowerOsSleepMs'
-
-	function lowerOsSleepMsWin64(msId ValueId, dstBlock IrBlock)
-		self.lowerOsWin64Call1(IatSlot.Sleep, arg0: msId, dstBlock: dstBlock)
-	end 'lowerOsSleepMsWin64'
 
 	// Lower `osProcessSpawn(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr, envPtr)` to
 	// `CreateProcessA(NULL, cmdlinePtr, NULL, NULL, FALSE, creationFlags, envPtr, cwdPtr, startupPtr,
@@ -3791,6 +3804,103 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(profileHostCallSlot(service))))
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsHostSampleWin64'
+
+	// ⭐⭐ **`osNetpoll(result, verb, a0…a4)`** — the Windows route marshals each verb's import inline; the syscall
+	// route calls the lane's `mrt_host_netpoll_*` chunk with the operands that verb reads.
+	function lowerOsNetpoll(resultId ValueId, verb NetpollVerb, operands ValueIdArray, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsNetpollWin64(resultId, verb: verb, operands: operands, dstBlock: dstBlock)
+			syscall then self.lowerOsNetpollLinux(resultId, verb: verb, operands: operands, dstBlock: dstBlock)
+		end 'route'
+	end 'lowerOsNetpoll'
+
+	function lowerOsNetpollLinux(resultId ValueId, verb NetpollVerb, operands ValueIdArray, dstBlock IrBlock)
+		match verb 'v'
+			openTimer then self.targetModule.appendOp(dstBlock, op: constMaterializationOp(TargetVReg.virtual(resultId), value: PosixNoTimerObject))
+			openPoller or
+				openBreak or
+				wait or
+				raiseBreak or
+				drainBreak or
+				sleepOnTimer then self.lowerLinuxHostChunkValue(resultId, args: posixNetpollChunkArgs(verb, operands: operands), chunk: posixNetpollChunk(verb), dstBlock: dstBlock)
+		end 'v'
+	end 'lowerOsNetpollLinux'
+
+	function lowerOsNetpollWin64(resultId ValueId, verb NetpollVerb, operands ValueIdArray, dstBlock IrBlock)
+		match verb 'v'
+			openPoller then self.lowerNetpollOpenPortWin64(resultId, dstBlock: dstBlock)
+
+			// The port carries its own break packet, so the break source IS the port.
+			openBreak then self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: TargetVReg.virtual(netpollOperand(operands, index: 0))))
+			wait then self.lowerNetpollWaitWin64(resultId, operands: operands, dstBlock: dstBlock)
+			raiseBreak then self.lowerNetpollRaiseBreakWin64(resultId, port: netpollOperand(operands, index: 0), dstBlock: dstBlock)
+			drainBreak then panic("lowerOsNetpollWin64: `drainBreak` is the epoll shape's read of its eventfd, and x64-windows is `NetpollShape.completionPort`, whose break is consumed by receiving its packet — `NetpollRuntime` emits this verb only under `NetpollShape.epoll`")
+			openTimer then self.lowerNetpollOpenTimerWin64(resultId, flags: netpollOperand(operands, index: 0), dstBlock: dstBlock)
+			sleepOnTimer then self.lowerNetpollSleepWin64(resultId, microseconds: netpollOperand(operands, index: 0), timer: netpollOperand(operands, index: 1), dstBlock: dstBlock)
+		end 'v'
+	end 'lowerOsNetpollWin64'
+
+	// `CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, DWORD_MAX)` — a port of the scheduler's own.
+	function lowerNetpollOpenPortWin64(resultId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm(x64PhysReg(X64Register.rcx), value: InvalidHandleValue))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: IocpNoCompletionKey))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: NetpollPortUnboundedConcurrency))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateIoCompletionPort)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerNetpollOpenPortWin64'
+
+	// `GetQueuedCompletionStatusEx(port, entries, capacity, &removed, timeoutMs, FALSE)`, `removed` being the
+	// scratch word. The two stack words go down first, while every argument register is still free.
+	function lowerNetpollWaitWin64(resultId ValueId, operands ValueIdArray, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(NetpollArg5Slot), src: TargetVReg.virtual(netpollOperand(operands, index: 3)), width: X64AccessWidth.word64))
+		self.emitWin64StackArgImm(dstBlock, slot: NetpollArg6Slot, value: NetpollWaitNotAlertable)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(netpollOperand(operands, index: 0))))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(netpollOperand(operands, index: 1))))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(netpollOperand(operands, index: 2))))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r9), srcReg: TargetVReg.virtual(netpollOperand(operands, index: 4))))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.GetQueuedCompletionStatusEx)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerNetpollWaitWin64'
+
+	// `PostQueuedCompletionStatus(port, 0, NetpollBreakToken, NULL)` — a packet no overlapped operation sent.
+	function lowerNetpollRaiseBreakWin64(resultId ValueId, port ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(port)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: NetpollBreakBytes))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm(x64PhysReg(X64Register.r8), value: NetpollBreakToken as MachineWord))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.PostQueuedCompletionStatus)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerNetpollRaiseBreakWin64'
+
+	// `CreateWaitableTimerExW(NULL, NULL, flags, TIMER_ALL_ACCESS)`.
+	function lowerNetpollOpenTimerWin64(resultId ValueId, flags ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(flags)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: TimerAllAccess))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateWaitableTimerExW)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerNetpollOpenTimerWin64'
+
+	// `SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE)` then `WaitForSingleObject(timer, INFINITE)`. A
+	// NEGATIVE due time is relative, in 100 ns units, and lives in the frame's own outgoing slot.
+	function lowerNetpollSleepWin64(resultId ValueId, microseconds ValueId, timer ValueId, dstBlock IrBlock)
+		let dueDisp = win64OutgoingArgDisp(NetpollDueTimeSlot)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.imulRegRegImm32(x64PhysReg(X64Register.rax), src: TargetVReg.virtual(microseconds), imm: WaitableTimerRelativeTicksPerMicro))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: dueDisp, src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
+		self.emitWin64StackArgImm(dstBlock, slot: NetpollArg5Slot, value: NullPointer)
+		self.emitWin64StackArgImm(dstBlock, slot: NetpollArg6Slot, value: WaitableTimerNoResume)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(timer)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRegImm32(x64PhysReg(X64Register.rdx), base: x64PhysReg(X64Register.rsp), disp: dueDisp))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: WaitableTimerOneShot))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.SetWaitableTimer)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(timer)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: WaitInfinite))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.WaitForSingleObject)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerNetpollSleepWin64'
 
 	// ⭐⭐ **A WRITE AND THEN A READ ON BOTH ROUTES** — `SetPriorityClass`/`GetPriorityClass` through the IAT
 	// on Windows, `setpriority`/`getpriority` as raw syscalls on Linux — and the second call is the answer.
@@ -4883,7 +4993,6 @@ type StdToX64Lowering
 				callIndirect or
 				osPanic or
 				osReadClock or
-				osSleepMs or
 				osProcessSpawn or
 				osProcessExitCode or
 				osWaitHandles or
@@ -4996,7 +5105,8 @@ type StdToX64Lowering
 				osUnmapNamedSegment or
 				osUnpublishNamedSegment or
 				covPoint or
-				osHostSample gives false
+				osHostSample or
+				osNetpoll gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -5161,7 +5271,6 @@ type StdToX64Lowering
 				callIndirect or
 				osPanic or
 				osReadClock or
-				osSleepMs or
 				osProcessSpawn or
 				osProcessExitCode or
 				osWaitHandles or
@@ -5245,6 +5354,7 @@ type StdToX64Lowering
 				osUnpublishNamedSegment panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a named-section create or unmap, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			covPoint panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a coverage counter, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osHostSample panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osHostSample`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			osNetpoll panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osNetpoll`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 

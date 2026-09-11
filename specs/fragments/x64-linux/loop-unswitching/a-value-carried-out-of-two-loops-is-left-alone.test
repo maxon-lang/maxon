@@ -1,0 +1,281 @@
+// Test: a-value-carried-out-of-two-loops-is-left-alone
+typealias Word = int(i64.min to i64.max)
+typealias WordArray = Array with Word
+
+function firstBigRow(rows WordArray, width Word, limit Word) returns Word
+	var found = -1
+	var r = 0
+	while r < limit 'outer'
+		rows.push(r * 10)
+		for c in 0 upto width 'inner'
+			let v = try rows.get(c) otherwise panic("firstBigRow: c < width <= rows.count()")
+			try rows.set(c, value: v + 1) otherwise panic("firstBigRow: c < width <= rows.count()")
+			if v > 25 'hit'
+				found = r * 100 + c
+				break 'outer'
+			end 'hit'
+		end 'inner'
+		r = r + 1
+	end 'outer'
+	return found
+end 'firstBigRow'
+
+function main() returns ExitCode
+	var rows = WordArray.create()
+	for _ in 0 upto 3 'seed'
+		rows.push(20)
+	end 'seed'
+	if firstBigRow(rows, width: 3, limit: 10) != 600 'row'
+		return 1
+	end 'row'
+	if rows.count() != 10 'grown'
+		return 2
+	end 'grown'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @firstBigRow {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 72
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg r13, rax
+    x64.movRegImm r14, 18446744073709551615
+    x64.movRegImm32 r15, 0
+  whilehdr:
+    x64.cmpRegReg r15, r13
+    x64.jcc greaterEqual, critsplit
+  outer:
+    x64.imulRegRegImm32 rdx, r15, 10
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 0
+  __us_test#44:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, forhdr#4
+  __us_test#45:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, forhdr#4
+  __us_test#46:
+    x64.leaRegRegImm32 rsi, rcx, -24
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, forhdr#4
+  __us_test#47:
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
+    x64.movRegImm32 rdi, 0
+    x64.cmpRegReg rsi, rdi
+    x64.jcc equal, forhdr#27
+  forhdr#4:
+    x64.cmpRegReg rdx, r12
+    x64.jcc greaterEqual, forexit
+  __rc_ok#14:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg rdx, rax
+    x64.jcc aboveEqual, __im_slow#19
+  __im_load#20:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
+    x64.movRegReg r8, rax
+  tryok#8:
+    x64.leaRegRegImm32 rax, r8, 1
+  __rc_ok#16:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __im_slow#22
+  __im_bounds:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.cmpRegReg rdx, rcx
+    x64.jcc aboveEqual, __im_slow#22
+  __im_buffer:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_slow#22
+  __im_viewed:
+    x64.leaRegRegImm32 rsi, rcx, -24
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __im_slow#22
+  __im_store#26:
+    x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], rax
+  tryok#10:
+    x64.cmpRegImm32 r8, 25
+    x64.jcc greater, hit
+  forstep#6:
+    x64.leaRegRegImm32 rdx, rdx, 1
+    x64.jmp forhdr#4
+  forhdr#27:
+    x64.cmpRegReg rdx, r12
+    x64.jcc greaterEqual, forexit
+  __rc_ok#42:
+    x64.cmpRegReg rdx, rax
+    x64.jcc aboveEqual, __im_slow#40
+  __im_load#41:
+    x64.loadRegBaseIndexScale.word64 rsi, [rcx + rdx*8 + 0]
+    x64.movRegReg r8, rsi
+  tryok#38:
+    x64.leaRegRegImm32 rsi, r8, 1
+  __im_store#33:
+    x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], rsi
+  tryok#30:
+    x64.cmpRegImm32 r8, 25
+    x64.jcc lessEqual, forstep#28
+  hit:
+    x64.imulRegRegImm32 rax, r15, 100
+    x64.leaRegRegReg r8, rax, rdx
+    x64.jmp whileexit
+  forstep#28:
+    x64.leaRegRegImm32 rdx, rdx, 1
+    x64.jmp forhdr#27
+  forexit:
+    x64.leaRegRegImm32 r15, r15, 1
+    x64.jmp whilehdr
+  critsplit:
+    x64.movRegReg r8, r14
+  whileexit:
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#19:
+    x64.storeSlotReg slot0, rdx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.loadRegSlot rdx, slot0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#9
+    x64.jmp tryok#8
+  __im_slow#22:
+    x64.storeSlotReg slot0, rdx
+    x64.storeSlotReg slot1, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_set
+    x64.movRegReg rax, r8
+    x64.loadRegSlot rdx, slot0
+    x64.loadRegSlot r8, slot1
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#10
+  tryerr#11:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-value-carried-out-of-two-loops-is-left-alone.test:12: firstBigRow: c < width <= rows.count()\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#40:
+    x64.storeSlotReg slot2, rax
+    x64.storeSlotReg slot3, rcx
+    x64.storeSlotReg slot0, rdx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.loadRegSlot rax, slot2
+    x64.loadRegSlot rcx, slot3
+    x64.loadRegSlot rdx, slot0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#38
+  tryerr#9:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-value-carried-out-of-two-loops-is-left-alone.test:11: firstBigRow: c < width <= rows.count()\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 0
+  forhdr:
+    x64.cmpRegImm32 r12, 3
+    x64.jcc greaterEqual, forexit
+  seed:
+    x64.movRegImm32 rdx, 20
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+  forstep:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.jmp forhdr
+  forexit:
+    x64.movRegImm32 rdx, 3
+    x64.movRegImm32 rax, 10
+    x64.movRegReg rcx, rbx
+    x64.callDirect firstBigRow
+    x64.cmpRegImm32 r8, 600
+    x64.jcc equal, ifcont#6
+  row:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#6:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 10
+    x64.jcc equal, ifcont#8
+  grown:
+    x64.movRegImm32 r12, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#8:
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

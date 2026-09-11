@@ -1,0 +1,262 @@
+// Test: a-view-detaches-on-its-first-write
+typealias Word = int(i64.min to i64.max)
+typealias WordArray = Array with Word
+
+function overwrite(b WordArray, n Word)
+	for i in 0 upto n 'each'
+		try b.set(i, value: 100 + i) otherwise panic("overwrite: i < n = b.count()")
+	end 'each'
+end 'overwrite'
+
+function main() returns ExitCode
+	var a = WordArray.create()
+	for i in 0 upto 4 'seed'
+		a.push(i)
+	end 'seed'
+	var b = try a.slice(0, endIndex: 4) otherwise panic("main: 0..4 is within a")
+	overwrite(b, n: 4)
+	var sumA = 0
+	for v in a 'readA'
+		sumA = sumA + v
+	end 'readA'
+	var sumB = 0
+	for v in b 'readB'
+		sumB = sumB + v
+	end 'readB'
+	if sumA != 6 'aUntouched'
+		return 1
+	end 'aUntouched'
+	if sumB != 406 'bRewritten'
+		return 2
+	end 'bRewritten'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @overwrite {
+  entry:
+    arm64.prologue 64
+    arm64.movImm x2, 0
+  __us_test#26:
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 16]
+    arm64.cmp x3, 0
+    arm64.b.lt forhdr#1
+  __us_test#27:
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 0]
+    arm64.cmp x4, 0
+    arm64.b.eq forhdr#1
+  __us_test#28:
+    arm64.sub x5, x4, 24
+    arm64.loadRegBaseDisp.word64 x5, [x5 + 16]
+    arm64.cmp x5, 0
+    arm64.b.ne forhdr#1
+  __us_test#29:
+    arm64.loadRegBaseDisp.word64 x5, [x0 + 40]
+    arm64.movImm x6, 0
+    arm64.cmp x5, x6
+    arm64.b.eq forhdr#15
+  forhdr#1:
+    arm64.cmp x2, x1
+    arm64.b.ge forexit
+  each#2:
+    arm64.add x3, x2, 100
+  __rc_ok:
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 16]
+    arm64.cmp x4, 0
+    arm64.b.lt __im_slow#10
+  __im_bounds#11:
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 8]
+    arm64.cmp x2, x4
+    arm64.b.hs __im_slow#10
+  __im_buffer:
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 0]
+    arm64.cmp x4, 0
+    arm64.b.eq __im_slow#10
+  __im_viewed:
+    arm64.sub x5, x4, 24
+    arm64.loadRegBaseDisp.word64 x5, [x5 + 16]
+    arm64.cmp x5, 0
+    arm64.b.ne __im_slow#10
+  __im_store#14:
+    arm64.storeBaseIndexScaleReg.word64 [x4 + x2*8 + 0], x3
+  forstep#3:
+    arm64.add x2, x2, 1
+    arm64.b forhdr#1
+  forhdr#15:
+    arm64.cmp x2, x1
+    arm64.b.ge forexit
+  each#25:
+    arm64.add x5, x2, 100
+  __im_bounds#23:
+    arm64.cmp x2, x3
+    arm64.b.hs __im_slow#19
+  __im_store#20:
+    arm64.storeBaseIndexScaleReg.word64 [x4 + x2*8 + 0], x5
+  forstep#16:
+    arm64.add x2, x2, 1
+    arm64.b forhdr#15
+  forexit:
+    arm64.epilogue 64
+    arm64.ret
+  __im_slow#10:
+    arm64.storeSlotReg slot0, x0
+    arm64.storeSlotReg slot1, x1
+    arm64.storeSlotReg slot2, x2
+    arm64.movRegReg x1, x2
+    arm64.movRegReg x2, x3
+    arm64.bl __managed_set
+    arm64.movRegReg x3, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.loadRegSlot x1, slot1
+    arm64.loadRegSlot x2, slot2
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr
+    arm64.b forstep#3
+  __im_slow#19:
+    arm64.storeSlotReg slot0, x0
+    arm64.storeSlotReg slot1, x1
+    arm64.storeSlotReg slot2, x2
+    arm64.storeSlotReg slot3, x3
+    arm64.storeSlotReg slot4, x4
+    arm64.movRegReg x1, x2
+    arm64.movRegReg x2, x5
+    arm64.bl __managed_set
+    arm64.movRegReg x5, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.loadRegSlot x1, slot1
+    arm64.loadRegSlot x2, slot2
+    arm64.loadRegSlot x3, slot3
+    arm64.loadRegSlot x4, slot4
+    arm64.cmp x9, 0
+    arm64.b.eq forstep#16
+  tryerr:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-view-detaches-on-its-first-write.test:7: overwrite: i < n = b.count()\x0a"
+    arm64.bl mrt_panic
+    arm64.epilogue 64
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 0
+  forhdr#1:
+    arm64.cmp x20, 4
+    arm64.b.ge forexit#4
+  seed:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __managed_push
+  forstep#3:
+    arm64.add x20, x20, 1
+    arm64.b forhdr#1
+  forexit#4:
+    arm64.movImm x1, 0
+    arm64.movImm x2, 4
+    arm64.leaRdata x3, __layout_Array_Word
+    arm64.movRegReg x0, x19
+    arm64.bl Array.slice
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr
+  tryok:
+    arm64.movImm x1, 4
+    arm64.movRegReg x0, x20
+    arm64.bl overwrite
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 0]
+  forhdr#7:
+    arm64.cmp x1, x2
+    arm64.b.ge forexit#10
+  readA:
+    arm64.loadRegBaseIndexScale.word64 x4, [x3 + x1*8 + 0]
+  __im_cont#19:
+    arm64.add x0, x0, x4
+  forstep#9:
+    arm64.add x1, x1, 1
+    arm64.b forhdr#7
+  forexit#10:
+    arm64.movImm x1, 0
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x20 + 8]
+    arm64.loadRegBaseDisp.word64 x4, [x20 + 0]
+  forhdr#11:
+    arm64.cmp x2, x3
+    arm64.b.ge forexit#14
+  readB:
+    arm64.loadRegBaseIndexScale.word64 x5, [x4 + x2*8 + 0]
+  __im_cont#20:
+    arm64.add x1, x1, x5
+  forstep#13:
+    arm64.add x2, x2, 1
+    arm64.b forhdr#11
+  forexit#14:
+    arm64.cmp x0, 6
+    arm64.b.eq ifcont#16
+  aUntouched:
+    arm64.movImm x21, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#16:
+    arm64.cmp x1, 406
+    arm64.b.eq ifcont#18
+  bRewritten:
+    arm64.movImm x21, 2
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#18:
+    arm64.movImm x21, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryerr:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-view-detaches-on-its-first-write.test:16: main: 0..4 is within a\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

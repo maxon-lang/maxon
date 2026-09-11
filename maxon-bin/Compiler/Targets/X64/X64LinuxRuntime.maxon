@@ -194,6 +194,12 @@ let X64LinuxSyscallPpoll = 271
 // directory for a non-NULL `lpCurrentDirectory`. Both are 157 and 49 on AArch64, which is why they carry the
 // arch prefix like every number above.
 let X64LinuxSyscallSetsid = 112
+
+// The scheduler's poller — `epoll` and the `eventfd` it breaks a wait through.
+let X64LinuxSyscallEpollCreate1 = 291
+let X64LinuxSyscallEventfd2 = 290
+let X64LinuxSyscallEpollCtl = 233
+let X64LinuxSyscallEpollWait = 232
 let X64LinuxSyscallChdir = 80
 
 // --- Linux mmap parameters ---
@@ -2132,24 +2138,24 @@ function buildX64LinuxMonotonicClockChunk() returns FunctionCodeChunk
 end 'buildX64LinuxMonotonicClockChunk'
 
 // ==========================================================================
-// mrt_host_sleep_ms(rcx = milliseconds)
+// mrt_host_sleep_ms(rcx = milliseconds), mrt_host_netpoll_sleep(rcx = microseconds)
 // ==========================================================================
 
-// Suspend the calling OS THREAD — Windows's `Sleep(ms)`.
+// Suspend the calling OS THREAD — one body in two units: the bounded child wait's millisecond step and the
+// monitor's microsecond lap.
 //
-// ⚠ **THIS IS THE OS PRIMITIVE, NOT `sleep(ms)` THE LANGUAGE FEATURE.** `__gt_sleep` parks a GREEN THREAD on
-// the scheduler's timer heap and only bottoms out here when there is nothing else to run, which is why
-// `sleep` and `greenThreads` are separate rows in `targetProvidesFacility`.
+// ⚠ **THIS IS THE OS PRIMITIVE, NOT `sleep(ms)` THE LANGUAGE FEATURE.** `__gt_sleep` parks a green thread on
+// the scheduler's timer store and never reaches this chunk; an idle process waits in the poller.
 //
 // ⭐ `clock_nanosleep` on the SAME clock the deadlines are computed from — see `X64LinuxSyscallClockNanosleep`.
 //
-// ⚠ **A SIGNAL CAN CUT IT SHORT (EINTR) AND THIS DOES NOT RESTART IT** — matching Windows's `Sleep`, and
-// matching what the one consumer needs: the scheduler re-checks its deadline after every park.
-function buildX64LinuxSleepMsChunk() returns FunctionCodeChunk
+// ⚠ **A SIGNAL CAN CUT IT SHORT (EINTR) AND THIS DOES NOT RESTART IT.** Both callers re-test their own
+// condition after every step, so a short sleep costs one extra lap.
+function buildX64LinuxSleepChunk(name ByteArray, unit PosixTimeUnit) returns FunctionCodeChunk
 	let SlotTimespec = 0 as StackSize
 	var asm = X64RuntimeAsm.beginFunction(LinuxTimespecSlots)
 
-	x64LinuxEmitMillisToTimespec(asm, ms: X64Register.rcx, firstSlot: SlotTimespec)
+	x64LinuxEmitToTimespec(asm, amount: X64Register.rcx, unit: unit, firstSlot: SlotTimespec)
 
 	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: LinuxClockMonotonic)
 	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: LinuxSleepIsRelative)
@@ -2157,32 +2163,33 @@ function buildX64LinuxSleepMsChunk() returns FunctionCodeChunk
 	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: LinuxSleepDiscardsRemainder)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallClockNanosleep)
 
-	return asm.finishFunction(HostSleepMsName)
-end 'buildX64LinuxSleepMsChunk'
+	return asm.finishFunction(name)
+end 'buildX64LinuxSleepChunk'
 
-// ⭐ **MILLISECONDS INTO A `struct timespec` IN TWO CONSECUTIVE FRAME SLOTS.** `sec = ms / 1000` and
-// `nsec = (ms - sec*1000) * 1e6`, which x86-64's `div` answers in one step: the quotient lands in rax and the
-// remainder in rdx, so the multiply-and-subtract the other lane spells as an `msub` is free here.
+// ⭐ **A RELATIVE TIME INTO A `struct timespec` IN TWO CONSECUTIVE FRAME SLOTS.** In milliseconds, `sec = ms /
+// 1000` and `nsec = (ms - sec*1000) * 1e6` (`PosixTimeUnit` names the other unit's two numbers), which x86-64's
+// `div` answers in one step: the quotient lands in rax and the remainder in rdx, so the multiply-and-subtract
+// the other lane spells as an `msub` is free here.
 //
-// ⛔ **IT TAKES AN OWNED COPY OF `ms` IN ITS FIRST INSTRUCTION, AND THAT IS NOT TIDINESS.** `div` destroys
+// ⛔ **IT TAKES AN OWNED COPY OF `amount` IN ITS FIRST INSTRUCTION, AND THAT IS NOT TIDINESS.** `div` destroys
 // rax and rdx and needs its divisor in a third register, so a caller passing any of the three would have its
 // timeout overwritten before it was read — which on the other lane was MEASURED as every bounded wait on
 // both POSIX lanes sleeping for exactly 1.000 s whatever it asked for.
 //
 // ⚠ It clobbers rax, rcx, rdx and r8.
-function x64LinuxEmitMillisToTimespec(asm X64RuntimeAsm, ms X64Register, firstSlot StackSize)
-	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r8, src: ms, wide: true)
+function x64LinuxEmitToTimespec(asm X64RuntimeAsm, amount X64Register, unit PosixTimeUnit, firstSlot StackSize)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r8, src: amount, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: X64Register.r8, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rdx, src: X64Register.rdx, wide: true)
-	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: PosixMillisPerSecond)
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: posixUnitsPerSecond(unit))
 	encodeGrp3Reg(asm.code, ext: Grp3ExtDiv, reg: X64Register.rcx)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: x64LinuxTimespecFieldDisp(asm, firstSlot: firstSlot, byteOffset: X64LinuxTimespecSecOffset), srcReg: X64Register.rax)
 
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
-	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: PosixNanosPerMilli)
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: posixNanosPerUnit(unit))
 	encodeImulRegReg(asm.code, dest: X64Register.rax, src: X64Register.rcx)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: x64LinuxTimespecFieldDisp(asm, firstSlot: firstSlot, byteOffset: X64LinuxTimespecNsecOffset), srcReg: X64Register.rax)
-end 'x64LinuxEmitMillisToTimespec'
+end 'x64LinuxEmitToTimespec'
 
 // ==========================================================================
 // mrt_host_wait_new(rcx = kind) -> rax = the tagged object handle
@@ -2506,7 +2513,7 @@ function buildX64LinuxWaitOneChunk() returns FunctionCodeChunk
 	// waitTimed: ONE bounded wait, then a single re-test — the caller owns the deadline, and re-arming here
 	// would silently double a timeout that expired spuriously.
 	asm.placeLabel(waitTimed)
-	x64LinuxEmitMillisToTimespec(asm, ms: X64Register.rax, firstSlot: SlotTimespec)
+	x64LinuxEmitToTimespec(asm, amount: X64Register.rax, unit: PosixTimeUnit.milliseconds, firstSlot: SlotTimespec)
 	x64LinuxEmitFutex(asm, addrSlot: SlotSignal, operation: LinuxFutexWaitPrivate, value: PosixWaitNotSignalled, timespecFirstSlot: SlotTimespec, hasTimeout: true)
 	x64LinuxEmitCasImm(asm, addrSlot: SlotSignal, expected: PosixWaitSignalled, replacement: PosixWaitNotSignalled)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: finish)
@@ -3795,7 +3802,7 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 	// read are all reached from `__sched_init_procs` and `__gt_init`, which a green-thread program always
 	// installs together.
 	if usage.usesGt 'greenThreadFloor'
-		chunks.push(buildX64LinuxSleepMsChunk())
+		chunks.push(buildX64LinuxSleepChunk(HostSleepMsName, unit: PosixTimeUnit.milliseconds))
 		chunks.push(buildX64LinuxWaitNewChunk())
 		chunks.push(buildX64LinuxEventSetChunk())
 		chunks.push(buildX64LinuxWaitOneChunk())
@@ -3812,6 +3819,14 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 		chunks.push(buildX64LinuxWaitAnyChunk())
 		chunks.push(buildX64LinuxSpawnChunk())
 		chunks.push(buildX64LinuxProcExitCodeChunk())
+
+		// The scheduler's poller: `__sched_init_procs` creates it in every green-thread program.
+		chunks.push(buildX64LinuxNetpollOpenChunk())
+		chunks.push(buildX64LinuxNetpollOpenBreakChunk())
+		chunks.push(buildX64LinuxNetpollWaitChunk())
+		chunks.push(buildX64LinuxNetpollCounterChunk(HostNetpollRaiseBreakName, syscallNumber: X64LinuxSyscallWrite, descriptor: X64Register.rdx))
+		chunks.push(buildX64LinuxNetpollCounterChunk(HostNetpollDrainBreakName, syscallNumber: X64LinuxSyscallRead, descriptor: X64Register.rcx))
+		chunks.push(buildX64LinuxSleepChunk(HostNetpollSleepName, unit: PosixTimeUnit.microseconds))
 	end 'greenThreadFloor'
 
 	// ⭐ **THE PIPE SURFACE, WHICH REALLY IS NARROWER.** `usesIocp` is the bit `installGtRuntime` builds the
@@ -3901,3 +3916,97 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 		chunks.push(buildX64LinuxFileAttributesChunk())
 	end 'fileAttributes'
 end 'appendX64LinuxHostSurfaceChunks'
+
+// ==========================================================================
+// The scheduler's poller — `StdOp.osNetpoll` on this lane
+// ==========================================================================
+
+// `mrt_host_netpoll_open() -> rax = the epoll descriptor, or -errno`.
+function buildX64LinuxNetpollOpenChunk() returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(0)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: LinuxEpollCloexec)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallEpollCreate1)
+	return asm.finishFunction(HostNetpollOpenName)
+end 'buildX64LinuxNetpollOpenChunk'
+
+// `mrt_host_netpoll_open_break(rcx = epfd) -> rax = the eventfd, or -errno` — Go's `netpollinit`'s second half:
+// a non-blocking eventfd added to the set level-triggered, its `epoll_data` the break token.
+//
+// ⚠ **x86-64's `struct epoll_event` IS PACKED** — a 32-bit `events` then the 64-bit `data` at byte 4 — so the
+// record is two quadword stores, the second overlapping the first's upper half.
+function buildX64LinuxNetpollOpenBreakChunk() returns FunctionCodeChunk
+	let SlotPoller = 0 as StackSize
+	let SlotEventfd = 1 as StackSize
+	let SlotEvent = 2 as StackSize
+	let eventSlots = 2 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(2 + eventSlots)
+
+	let failed = asm.newLabel()
+	let eventDisp = x64LinuxBufferDisp(asm, firstSlot: SlotEvent, slotCount: eventSlots)
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotPoller), srcReg: X64Register.rcx)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rdi, src: X64Register.rdi, wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: LinuxEpollCloexec + LinuxEventfdNonblock)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallEventfd2)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: failed)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotEventfd), srcReg: X64Register.rax)
+
+	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: LinuxEpollIn)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: eventDisp, srcReg: X64Register.r8)
+	encodeMovRegImm64(asm.code, dest: X64Register.r8, value: NetpollBreakToken as MachineWord)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: eventDisp + (LinuxEpollPackedDataOffset as Imm32), srcReg: X64Register.r8)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotPoller), wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: LinuxEpollCtlAdd)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotEventfd), wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.r10, base: X64Register.rbp, disp: eventDisp)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallEpollCtl)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: failed)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotEventfd), wide: true)
+
+	asm.placeLabel(failed)
+	return asm.finishFunction(HostNetpollOpenBreakName)
+end 'buildX64LinuxNetpollOpenBreakChunk'
+
+// `epoll_event.data`'s byte offset in x86-64's packed layout.
+let LinuxEpollPackedDataOffset = 4
+
+// `mrt_host_netpoll_wait(rcx = epfd, rdx = entries, r8 = capacity, r9 = timeoutMs) -> rax = count, 0 when
+// interrupted, or -errno`.
+//
+// ⭐ **`WaitInfinite` NEEDS NO TRANSLATION HERE**: `epoll_wait` takes its timeout as an `int`, and the Win32
+// `INFINITE` the op carries reads as -1 there — epoll's own "for ever".
+function buildX64LinuxNetpollWaitChunk() returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(0)
+	let answered = asm.newLabel()
+
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rcx, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: X64Register.rdx, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.r8, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r10, src: X64Register.r9, wide: true)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallEpollWait)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: (0 - PosixErrnoInterrupted) as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: answered)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostNetpollWaitName)
+end 'buildX64LinuxNetpollWaitChunk'
+
+// The eventfd's two transfers of its 8-byte counter, from one body: `mrt_host_netpoll_raise_break(rcx = epfd,
+// rdx = eventfd)` writes one, and `mrt_host_netpoll_drain_break(rcx = eventfd)` reads the counter back to zero.
+// `descriptor` names the argument register the eventfd arrives in. Each answers the syscall's own result.
+function buildX64LinuxNetpollCounterChunk(name ByteArray, syscallNumber MachineWord, descriptor X64Register) returns FunctionCodeChunk
+	let SlotCounter = 0 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(1)
+
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: descriptor, wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: LinuxEventfdRaise)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCounter), srcReg: X64Register.r8)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotCounter))
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: LinuxEventfdCounterBytes)
+	encodeX64Syscall(asm.code, number: syscallNumber)
+	return asm.finishFunction(name)
+end 'buildX64LinuxNetpollCounterChunk'
