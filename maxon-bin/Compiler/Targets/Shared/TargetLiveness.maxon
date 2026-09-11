@@ -634,10 +634,12 @@ export type LivenessResult
 	export var live as LiveSets
 	export var forbidden as RegMaskColumn
 
-	// ⛔⛔ THE PHYSICAL REGISTERS ALREADY ESTABLISHED, AND NOT YET DESTROYED, AT EACH VALUE'S DEF —
-	// the ONE register fact that is not "what did this value's live range cross?", and the reason it
-	// needs a column of its own rather than riding `forbidden` alone: `clearForbidden` zeroes that
-	// mask on every victim and every fresh id, and this fact does not change when a live range is cut.
+	// ⛔⛔ THE PHYSICAL REGISTERS THE BLOCK STILL HOLDS SOMETHING IN AT EACH VALUE'S DEF — written by
+	// name and not yet destroyed, or read by name later before being written (`sweepEstablishedRegisters`
+	// names the two windows) — the ONE register fact that is not "what did this value's live range
+	// cross?", and the reason it needs a column of its own rather than riding `forbidden` alone:
+	// `clearForbidden` zeroes that mask on every victim and every fresh id, and this fact does not
+	// change when a live range is cut.
 	//
 	// A call's arguments are placed by a run of plain physical pre-moves (`mov argReg[0], v0; mov
 	// argReg[1], v1; …; call`) with no parallel-copy sequencer, and NOTHING marks an argument register
@@ -3451,8 +3453,12 @@ export type PressureSweepScratch
 	// The cold block being swept, when the block is one (`ColdRunSweep`).
 	export var coldRun as ColdRunSweep
 
+	// Per op position of the block being swept: the physical registers live AFTER the op
+	// (`sweepEstablishedRegisters`).
+	export var physLiveAfter as RegMaskColumn
+
 	export static function create() returns PressureSweepScratch
-		return Self{liveRow: BitWordArray.create(), buf: OperandList.create(), liveBuf: ValueIdArray.create(), ordered: OpIndexArray.create(), liveByClass: zeroClassRow(), opPressure: zeroClassRow(), blockMax: zeroClassRow(), coldRun: ColdRunSweep.create()}
+		return Self{liveRow: BitWordArray.create(), buf: OperandList.create(), liveBuf: ValueIdArray.create(), ordered: OpIndexArray.create(), liveByClass: zeroClassRow(), opPressure: zeroClassRow(), blockMax: zeroClassRow(), coldRun: ColdRunSweep.create(), physLiveAfter: RegMaskColumn.create()}
 	end 'create'
 
 	// Widen the working rows to `wordsPerRow`, ZEROING only the words the growth added — the rest of
@@ -3463,26 +3469,35 @@ export type PressureSweepScratch
 	end 'widenRow'
 end 'PressureSweepScratch'
 
-// ONE block's FORWARD per-op sweep, filling `establishedAtDef` for every value the block defines: the
-// physical registers written by name ahead of that def and not yet destroyed. See the field for the
-// defect this exists to close and for why the cure is a forbid rather than a different splice point.
+// ONE block's per-op sweep, filling `establishedAtDef` for every value the block defines: the physical
+// registers a value defined there must not take because the block still holds something in them. Two
+// windows, and a def inside either is forbidden the register:
 //
-// A register enters the pending set at the op that WRITES IT BY NAME (`physicalDefMask`) and leaves it
-// at the first op that DESTROYS it — its `implicitDefs`, which is the caller-saved half at a call and
-// `RAX|RDX` at an `idiv`. That is the exact lifetime and it needs no list of which ops are "argument
-// placement": a call's clobber mask covers every argument register by construction (the pool's
-// caller-saved half IS `callDirect`'s `implicitDefs`, held so by `assertCallClobberConsistent`), so an
-// argument register is pending from its pre-move to the call it was placed for and no further. It is
-// deliberately NOT ended by an op that merely READS the register (`implicitUses`): `cqo` reads RAX
-// between the dividend move and the `idiv` that consumes it, and ending the window there would leave a
-// value defined in between free to take RAX.
+//  • PENDING — written BY NAME (`physicalOperandMask`) and not yet destroyed by an op's `implicitDefs`
+//    (the caller-saved half at a call, `RAX|RDX` at an `idiv`). That is the exact lifetime of an
+//    argument register: pending from its pre-move to the call it was placed for and no further, since a
+//    call's clobber mask covers every argument register by construction (the pool's caller-saved half
+//    IS `callDirect`'s `implicitDefs`, held so by `assertCallClobberConsistent`). It is deliberately NOT
+//    ended by an op that merely READS the register (`implicitUses`): `cqo` reads RAX between the
+//    dividend move and the `idiv` that consumes it, and ending the window there would leave a value
+//    defined in between free to take RAX. The live window cannot stand in for it: a call's
+//    `implicitUses` is 0, so nothing the backward pass sees reads an argument register.
+//  • PHYSICALLY LIVE — read by name (or implicitly) by a LATER op of the block before any op writes it
+//    (`physLiveAfter`, a backward pass over the block). This is the window the pending set cannot see:
+//    a register a CALL leaves its result in is written by the clobber mask, never by name, and an
+//    `osPipeCreate*` lowering stores that result from RAX by name several ops later — so a reload the
+//    splitter anchors between the call and that store is defined with RAX live and, unforbidden, is
+//    colored into it, turning the store into `[rax + 0] ← rax`.
 //
-// ⚠⚠ **A BLOCK STARTS WITH NOTHING PENDING, AND THAT IS AN ASSUMPTION ABOUT THE LOWERING, NOT A
-// DERIVATION.** `pending` is seeded to 0 at every block rather than joined over the predecessors,
-// which is correct only while no window ever crosses a block boundary — i.e. while every call's
-// pre-moves sit in the same block as the call they place, which is how both `emitArgMovesByFloatMask`
-// twins (x64's and arm64's) emit a run today, and while a split only ever anchors a reload in the
-// block of the use it serves. Neither is checked here.
+// ⚠⚠ **A BLOCK STARTS WITH NOTHING PENDING AND ENDS WITH NOTHING LIVE, AND THAT IS AN ASSUMPTION ABOUT
+// THE LOWERING, NOT A DERIVATION.** `pending` is seeded to 0 at every block entry and `live` at every
+// block exit rather than joined over the neighbours, which is correct only while no window ever
+// crosses a block boundary — i.e. while every call's pre-moves sit in the same block as the call they
+// place, which is how both `emitArgMovesByFloatMask` twins (x64's and arm64's) emit a run today; while
+// every by-name or implicit read of a physical register sits in the block of the write that feeds it (a
+// result capture follows its call, `ret` follows its return move, a scratch is consumed where it is
+// materialised), which is how every lowering in both `StdTo*Conversion` files emits one today; and
+// while a split only ever anchors a reload in the block of the use it serves. None is checked here.
 //
 // ⛔ **IF THAT EVER STOPS BEING TRUE, THIS UNDER-FORBIDS — WHICH IS THE ORIGINAL DEFECT, RETURNING
 // SILENTLY.** A joined answer is the sound one, and it is deliberately not paid for: a forward join
@@ -3492,10 +3507,11 @@ end 'PressureSweepScratch'
 // a failing build.
 //
 // ⚠ IT IS ASSIGNED, NOT OR-ED, so re-running it on a block a split dirtied RESTATES that block's
-// answers instead of accumulating stale ones. Nothing a split inserts or removes is a physical def or
-// carries an `implicitDefs` mask (`storeSlotReg` / `loadRegSlot` / a constant materialization all read
-// 0), so the pending set at every PRE-EXISTING def is invariant under a split and only the fresh ids
-// get a new entry — but the sweep does not depend on that being true, because it rewrites the block.
+// answers instead of accumulating stale ones. Nothing a split inserts or removes names a physical
+// register or carries an implicit mask (`storeSlotReg` / `loadRegSlot` / a constant materialization
+// all read 0), so both windows at every PRE-EXISTING def are invariant under a split and only the
+// fresh ids get a new entry — but the sweep does not depend on that being true, because it rewrites
+// the block.
 export function sweepEstablishedRegisters(module TargetModule, topo FuncTopology, blockLocal CfgIndex, establishedAtDef RegMaskColumn, scratch PressureSweepScratch, opFacts OpVariantFacts)
 	let block = blockAt(module, topo: topo, local: blockLocal)
 	var buf = scratch.buf
@@ -3503,22 +3519,41 @@ export function sweepEstablishedRegisters(module TargetModule, topo FuncTopology
 
 	ordered.clear()
 	collectBlockOps(block, out: ordered)
+	let opCount = ordered.count()
+	var physLiveAfter = scratch.physLiveAfter
+	physLiveAfter.growFilled(opCount, value: 0)
+
+	// Backward first: a register is live after an op iff a later op reads it before one writes it, and
+	// the block's exit holds none (the block-boundary assumption above).
+	var live = 0 as RegMask
+	var pos = opCount
+
+	while pos > 0 'eachOpBackward'
+		pos = pos - 1
+		try physLiveAfter.set(pos, value: live) otherwise panic("sweepEstablishedRegisters: physLiveAfter.set OOB at position {pos} — the column was just grown to {opCount}")
+		let op = try module.ops.get(try ordered.get(pos) otherwise panic("sweepEstablishedRegisters: ordered.get OOB at position {pos}")) otherwise panic("sweepEstablishedRegisters: an op of block {blockLocal} is not in module.ops")
+		targetOpOperands(op, buf: buf)
+		live = (live and not rawClobberMask(op, buf: buf, opFacts: opFacts)) or physicalOperandMask(buf, defs: false) or opFacts.implicitUsesOf(op)
+	end 'eachOpBackward'
+
 	var pending = 0 as RegMask
 
-	for opIdx in ordered 'eachOp'
+	for forwardPos in 0 upto opCount 'eachOp'
+		let opIdx = try ordered.get(forwardPos) otherwise panic("sweepEstablishedRegisters: ordered.get OOB at position {forwardPos}")
 		let op = try module.ops.get(opIdx) otherwise panic("sweepEstablishedRegisters: op {opIdx} of block {blockLocal} is not in module.ops")
 		targetOpOperands(op, buf: buf)
+		let liveAfterThisOp = try physLiveAfter.get(forwardPos) otherwise panic("sweepEstablishedRegisters: physLiveAfter.get OOB at position {forwardPos}")
 
 		for o in buf 'eachOperand'
 			if operandIsDef(o) and operandIsVirtual(o) 'virtualDef'
-				try establishedAtDef.set(operandValueId(o), value: pending) otherwise panic("sweepEstablishedRegisters: establishedAtDef.set OOB for value {operandValueId(o)}")
+				try establishedAtDef.set(operandValueId(o), value: pending or liveAfterThisOp) otherwise panic("sweepEstablishedRegisters: establishedAtDef.set OOB for value {operandValueId(o)}")
 			end 'virtualDef'
 		end 'eachOperand'
 
 		// This op's own physical defs join the pending set AFTER its defs are stated: a value defined by
 		// the very op that establishes a register is not clobbered by it (nothing else writes it in
 		// between), and today no op does both.
-		pending = (pending and not opFacts.implicitDefsOf(op)) or physicalDefMask(buf)
+		pending = (pending and not opFacts.implicitDefsOf(op)) or physicalOperandMask(buf, defs: true)
 	end 'eachOp'
 end 'sweepEstablishedRegisters'
 
@@ -4048,7 +4083,7 @@ end 'opClobberMask'
 // operands — whatever the heat: the fact a bracket saves against, where `opClobberMask` is the fact a
 // colouring is confined by. `buf` must already hold `op`'s operands.
 export function rawClobberMask(op TargetOp, buf OperandList, opFacts OpVariantFacts) returns RegMask
-	return opFacts.implicitDefsOf(op) or physicalDefMask(buf)
+	return opFacts.implicitDefsOf(op) or physicalOperandMask(buf, defs: true)
 end 'rawClobberMask'
 
 // The implicit defs of `op` that CONFINE a value live across it — its `implicitDefs`, except for a run
@@ -4420,8 +4455,9 @@ export type ColdRunSweep
 	end 'confineRunOp'
 end 'ColdRunSweep'
 
-// The registers `buf`'s operands write BY NAME rather than by allocation — every PHYSICAL def (a
-// call's `mov argReg[k], v` pre-move, the return move, an `idiv`'s `mov rax, dividend`). It is the
+// The registers `buf`'s PHYSICAL operands name — with `defs`, the ones written BY NAME rather than by
+// allocation (a call's `mov argReg[k], v` pre-move, the return move, an `idiv`'s `mov rax, dividend`);
+// without it, the ones READ by name (a store of a call's result straight from RAX). The def half is the
 // operand half of `opClobberMask`, split out because `sweepEstablishedRegisters` asks for it ALONE:
 // that sweep OPENS a pending window at a named write and CLOSES it at an implicit def, so the two
 // halves of a clobber mask arrive at opposite ends of the window and cannot be handed over as one
@@ -4431,22 +4467,21 @@ end 'ColdRunSweep'
 // ⚠ IT DOES NOT FILL `buf`; `opClobberMask` does, and every other caller must (`targetOpOperands`).
 // The split is what makes that asymmetry possible, so it is stated rather than left to be discovered.
 //
-// A physical DEF's register number is a target-neutral `RegNum`, NOT an `X64Register`: this SHARED
-// census sees arm64 SIMD arg registers (d1..d7 = 32..38) a multi-float-argument call emits, which
-// the x64 `operandRegister`/`X64Register.fromRawValue` door range-check-panicked on. `regMaskAdd`
-// forms the same clobber bit from the `RegNum` directly — bit-identical for the x64 registers this
-// already handled (an `X64Register.rawValue` IS its `RegNum`).
-function physicalDefMask(buf OperandList) returns RegMask
+// A physical operand's register number is a target-neutral `RegNum`, NOT an `X64Register`: this SHARED
+// census sees arm64 SIMD arg registers (d1..d7 = 32..38) a multi-float-argument call emits, which lie
+// outside the x64 `operandRegister`/`X64Register.fromRawValue` door's range. `regMaskAdd` forms the
+// clobber bit from the `RegNum` directly (an `X64Register.rawValue` IS its `RegNum`).
+function physicalOperandMask(buf OperandList, defs bool) returns RegMask
 	var mask = 0 as RegMask
 
-	for o in buf 'physDefs'
-		if operandIsDef(o) and not operandIsVirtual(o) 'physDef'
+	for o in buf 'physOperands'
+		if operandIsDef(o) == defs and not operandIsVirtual(o) 'physOperand'
 			mask = regMaskAdd(mask, regNum: operandPhysicalRegNum(o))
-		end 'physDef'
-	end 'physDefs'
+		end 'physOperand'
+	end 'physOperands'
 
 	return mask
-end 'physicalDefMask'
+end 'physicalOperandMask'
 
 // Add this op's TRANSIENT register demand to `pressureOut`, in the FILE the register belongs to: the
 // registers the colorer holds AT the op that are in NO live set, and which the op-boundary popcounts

@@ -2133,15 +2133,11 @@ type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.arm64BranchLinkReg(callee))
 	end 'emitWitnessCallSequence'
 
-	// ⭐ **LOWER THE THROWING FUSED `witnessTryCall` (P1.7a slice 2b-iv-C)** — `lowerWitnessCall` plus the one
-	// thing `lowerTryCall` adds to `lowerCall`: the error flag captured from **x9** (`Arm64FlagReturnReg`).
-	// The two capture moves are a PARALLEL COPY and are resequenced by the same target-agnostic machinery
-	// `lowerTryCall`'s pair is (`colorAndDropSelfMoves`), which keys on a call op followed by two
-	// virtual-dest/physical-src moves — `arm64BranchLinkReg` is a call, so the fused witness call satisfies
-	// that test as `arm64BranchLink` does, and a result/flag colouring cycle is broken rather than collapsed.
+	// ⭐ **LOWER THE THROWING FUSED `witnessTryCall`** — `lowerWitnessCall` plus the one
+	// thing `lowerTryCall` adds to `lowerCall`: the error flag captured from **x9** (`Arm64FlagReturnReg`), in
+	// the same two-move shape (see `lowerTryCall` for why the pair cannot clobber itself).
 	//
-	// A VOID throwing method captures nothing for its primary, leaving the flag capture alone after the call —
-	// a single move, with no cycle to break, which is correct: one move cannot overwrite its own source.
+	// A VOID throwing method captures nothing for its primary, leaving the flag capture alone after the call.
 	function lowerWitnessTryCall(resultId ValueId, errorFlagId ValueId, witnessAddr ValueId, methodIndex WitnessMethodIndex, args ValueIdArray, resultType StdReturnType, argFloatMask ArgFloatMask, dstRef BlockRef)
 		self.emitWitnessCallSequence(witnessAddr, methodIndex: methodIndex, args: args, argFloatMask: argFloatMask, dstRef: dstRef)
 		self.captureIndirectResult(resultId, resultType: resultType, dstRef: dstRef)
@@ -2193,16 +2189,13 @@ type StdToArm64Lowering
 		end 'eachRegisterArg'
 	end 'emitArgMovesByFloatMask'
 
-	// The arm64 twin of x64's `lowerTryCall` (P1.4b): args + `bl` as `lowerCall`, then capture BOTH return
+	// The arm64 twin of x64's `lowerTryCall`: args + `bl` as `lowerCall`, then capture BOTH return
 	// registers — the primary value from `callResultRegister(callee)` (**d0** for a float-returning callee,
 	// else **x0**) and the SECOND WORD from **x9**. That word is the error flag for a THROWING callee and the
-	// WITNESS half for an interface-returning one (P1.7a slice 2); the ABI is the same either way, and
+	// WITNESS half for an interface-returning one; the ABI is the same either way, and
 	// `functionUsesSecondaryReturnSlot` is the one predicate that decides a callee writes it. The two capture
-	// moves are resequenced through the
-	// parallel-copy sequencer (`colorAndDropSelfMoves`), exactly as x64's are — the resequencer is
-	// target-agnostic (it reads whatever physical sources the captures name). Emitted consecutively right
-	// after the call so its "call followed by two virtual-dest/physical-src moves" test identifies the pair.
-	// A float primary (d0) and the GPR flag (x9) are in different files, so the pair has no cross-file cycle.
+	// moves are emitted consecutively right after the call, in source order, exactly as x64's are; why
+	// neither can overwrite the other's source is `colorAndDropSelfMoves`'s (SsaDestruction).
 	function lowerTryCall(resultId ValueId, errorFlagId ValueId, callee ByteArray, args ValueIdArray, dstRef BlockRef)
 		self.emitCallArgMoves(callee, args: args, dstRef: dstRef)
 		self.emit(dstRef, op: TargetOp.arm64BranchLink(callee))

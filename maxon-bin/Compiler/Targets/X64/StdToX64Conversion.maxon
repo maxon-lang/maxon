@@ -2389,16 +2389,12 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.callMem(TargetVReg.virtual(witnessAddr), disp: witnessMethodSlotOffset(methodIndex) as Imm32))
 	end 'emitWitnessCallSequence'
 
-	// ⭐ **LOWER THE THROWING FUSED `witnessTryCall` (P1.7a slice 2b-v)** — `lowerWitnessCall` plus the one
-	// thing `lowerTryCall` adds to `lowerCall`: the error flag captured from **R10**. The two capture moves are
-	// a PARALLEL COPY, and they are resequenced by exactly the machinery `lowerTryCall`'s pair is
-	// (`colorAndDropSelfMoves`), which keys on "a call op followed by two virtual-dest/physical-src moves" —
-	// `callMem` declares `isCall: true`, so the fused witness call satisfies that test as `callDirect` does,
-	// and a result/flag colouring cycle is broken with `xchg` rather than collapsing the two into one register.
+	// ⭐ **LOWER THE THROWING FUSED `witnessTryCall`** — `lowerWitnessCall` plus the one
+	// thing `lowerTryCall` adds to `lowerCall`: the error flag captured from **R10**, in the same two-move
+	// shape (see `lowerTryCall` for why the pair cannot clobber itself).
 	//
 	// A VOID throwing method captures nothing for its primary (`captureIndirectResult` emits no move), leaving
-	// the flag capture alone after the call — a single move, with no cycle to break and nothing for the
-	// resequencer to pair, which is correct: one move can never overwrite its own source.
+	// the flag capture alone after the call.
 	function lowerWitnessTryCall(resultId ValueId, errorFlagId ValueId, witnessAddr ValueId, methodIndex WitnessMethodIndex, args ValueIdArray, resultType StdReturnType, argFloatMask ArgFloatMask, dstBlock IrBlock)
 		self.emitWitnessCallSequence(witnessAddr, methodIndex: methodIndex, args: args, argFloatMask: argFloatMask, dstBlock: dstBlock)
 		self.captureIndirectResult(resultId, resultType: resultType, dstBlock: dstBlock)
@@ -2479,16 +2475,10 @@ type StdToX64Lowering
 	// decides a callee writes it. The arguments and `callDirect` exactly as `lowerCall` (via the shared
 	// `emitCallArgMoves`), then capture BOTH return registers — the primary value from
 	// `callResultRegister(callee)` (**XMM0** for a float-returning callee, else **R8**) and the second word
-	// from **R10**. The two capture moves are a PARALLEL COPY that SSA destruction resequences through
-	// `sequenceParallelCopy` (see `colorAndDropSelfMoves`): a naive `mov;mov` collapses a value/flag swap
-	// when the allocator colors them cyclically. R10 is caller-saved, not an argument register, and
-	// allocatable — mirroring R8's own "no return/argument register conflict" — so it is unconditionally
-	// free to carry the flag out. The capture moves are emitted CONSECUTIVELY and right after the call, so
-	// the resequencer's "a call followed by two virtual-dest/physical-src moves" test identifies the pair.
-	//
-	// ⚠ A FLOAT primary and the flag are in DIFFERENT register files (XMM0 value, GPR R10 flag), so they can
-	// never colour to one physical register and the pair has no cross-file cycle — the resequencer is a
-	// correct no-op for it, exactly as it is for the all-GPR (int result) pair it already handled.
+	// from **R10**. R10 is caller-saved, not an argument register, and allocatable — mirroring R8's own "no
+	// return/argument register conflict" — so it is unconditionally free to carry the flag out. The two
+	// capture moves are emitted CONSECUTIVELY and right after the call, in source order; why neither can
+	// overwrite the other's source is `colorAndDropSelfMoves`'s (SsaDestruction).
 	function lowerTryCall(resultId ValueId, errorFlagId ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
 		self.emitCallArgMoves(callee, args: args, dstBlock: dstBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.callDirect(callee))

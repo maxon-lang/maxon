@@ -27,11 +27,11 @@
 // MISSING one is a miscompile), and this pass is what makes that trade cost nothing. The
 // paragraphs below are why it must not simply be tolerated instead:
 //
-// a phi is precisely what the cold-spill splitter may NOT spill:
-// `isColdSpillable` requires a value that is not a phi and not edge-passed, because a cold store
-// goes in the PREHEADER and a phi's def is the header itself. So those values are pinned in
-// registers across a loop that never touches them, and once they outnumber the pool the compiler
-// raises E5001 against a program that fits the machine.
+// a loop-header phi is precisely what the cold-spill splitter may NOT spill:
+// `isColdSpillable` requires the def and every use off the hot path, and a header phi's def IS the
+// header, inside the loop. So those values are pinned in registers across a loop that never touches
+// them, and once they outnumber the pool the compiler raises E5001 against a program that fits the
+// machine.
 //
 // The tell is that `let` and `var` compiled DIFFERENTLY. Fifteen idle `let`s across a loop are
 // ordinary values: the splitter spills them around it for free and the program builds. The same

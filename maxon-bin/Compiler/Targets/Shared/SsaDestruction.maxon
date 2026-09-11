@@ -309,47 +309,17 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 
 		var newRefs = OpIndexArray.create()
 
-		// ⭐ **THE TWO-RESULT CAPTURE OF A `tryCall`** — a call op followed by TWO virtual-dest /
-		// physical-src moves (`result ← R8/x0`, `flag ← R10/x9`). A single-result call is followed by
-		// ONE; parameter moves have the same shape but are at function entry, never after a call — so
-		// the `prevWasCall` gate discriminates them. The two moves form a PARALLEL COPY: coloring them
-		// onto each other's source registers (result→R10, flag→R8) makes a naive `mov;mov` collapse
-		// value and flag into one register. `sequenceParallelCopy` orders
-		// them safely, breaking a cycle with `xchg` (no scratch), exactly as the phi-edge copies do.
-		var prevWasCall = false
-		var skipNext = false
-
+		// A `tryCall`'s two capture moves (`result ← R8/x0`, `flag ← R10/x9`) are emitted in source order
+		// like any other op: the result capture's def has the flag's register physically live after it
+		// (`sweepEstablishedRegisters`), so the colorer never seats the result there, and the flag cannot
+		// take the result's register while the result is live — neither move can overwrite the other's
+		// source.
 		for pos in 0 upto bodyCount 'eachOp'
 			let opIdx = try block.opRefs.get(pos) otherwise panic("colorAndDropSelfMoves: opRefs.get OOB")
-
-			if skipNext 'flagCaptureHandled'
-				skipNext = false
-				continue
-			end 'flagCaptureHandled'
-
 			let atSeq = seq + pos
-
-			// ⚠⚠ **THE PAIR IS SETTLED AND EMITTED BEFORE THE OP IS BOUND, AND THE ORDER IS THE WHOLE POINT.**
-			// An op read out of `module.ops` is a BORROW of `module` (E3070), the sequencer PUSHES its moves
-			// onto that same array, and a borrow's liveness is its last use in SOURCE order — so a single
-			// `uncolored` binding serving both the pair test and the coloring below would still be live
-			// across the push however the arguments were computed. Both halves therefore read the ops
-			// themselves, each releasing its borrow before it writes.
-			//
-			// A `tryCall` capture pair is resequenced through the parallel-copy sequencer, using the
-			// UNCOLORED ops (their dests are still virtual, so their ids can be looked up in `alloc`).
-			if prevWasCall and pos + 1 < bodyCount and isCaptureMovePairAt(module, block: block, pos: pos) 'isPair'
-				emitResequencedCaptureAt(module, block: block, pos: pos, alloc: alloc, newRefs: newRefs)
-				skipNext = true
-				prevWasCall = false
-				owesReloads = spliceBracketReloadsAfter(module, block: block, brackets: brackets, lastSeq: atSeq + 1, lastPos: pos + 1, owesReloads: owesReloads, newRefs: newRefs)
-				continue
-			end 'isPair'
-
 			let uncolored = try module.ops.get(opIdx) otherwise panic("colorAndDropSelfMoves: opIdx not in module.ops")
 			let colored = colorTargetOp(uncolored, alloc: alloc)
 			try module.ops.set(opIdx, value: colored) otherwise panic("colorAndDropSelfMoves: ops.set OOB")
-			prevWasCall = colored.rawValue.isCall
 
 			// A run's saves go before its first op whether or not that op is emitted: a dropped self-move
 			// (`mov rdx, rdx` for an argument already in place) still opens the run it begins.
@@ -360,7 +330,7 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 				newRefs.push(opIdx)
 			end 'emitted'
 
-			owesReloads = spliceBracketReloadsAfter(module, block: block, brackets: brackets, lastSeq: atSeq, lastPos: pos, owesReloads: owesReloads, newRefs: newRefs)
+			owesReloads = spliceBracketReloadsAfter(module, block: block, brackets: brackets, seq: atSeq, pos: pos, owesReloads: owesReloads, newRefs: newRefs)
 		end 'eachOp'
 
 		// A run is a stretch of ONE block's body, so its reload point is met before the body ends.
@@ -397,21 +367,21 @@ function spliceBracketSavesBefore(module TargetModule, brackets ColdCallBracketP
 	return true
 end 'spliceBracketSavesBefore'
 
-// The reloads owed by the open run, spliced right after the op just emitted when that op is the run's
-// last (`ColdCallBracketPlan.openReloadSeq`; `lastSeq` is the last sequence the caller has emitted
-// through — a resequenced capture pair covers two). Whether reloads are still owed afterwards.
+// The reloads owed by the open run, spliced right after the op just emitted (at layout sequence `seq`,
+// body position `pos`) when that op is the run's last (`ColdCallBracketPlan.openReloadSeq`). Whether
+// reloads are still owed afterwards.
 //
 // THE PREMISE THE PLACEMENT RESTS ON: the run's last op is the last capture of its call or the spill
 // store of what it captured, so every read of the call's answer precedes the reloads and nothing after
 // them reads a register they restore. A capture right after the reload point would read a restored
 // register in place of the answer, so the splice refuses one.
-function spliceBracketReloadsAfter(module TargetModule, block IrBlock, brackets ColdCallBracketPlan, lastSeq OpSeq, lastPos ElementIndex, owesReloads bool, newRefs OpIndexArray) returns bool
-	if not owesReloads or brackets.openReloadSeq() > lastSeq 'notTheRunsEnd'
+function spliceBracketReloadsAfter(module TargetModule, block IrBlock, brackets ColdCallBracketPlan, seq OpSeq, pos ElementIndex, owesReloads bool, newRefs OpIndexArray) returns bool
+	if not owesReloads or brackets.openReloadSeq() > seq 'notTheRunsEnd'
 		return owesReloads
 	end 'notTheRunsEnd'
 
-	if lastPos + 1 < block.opRefs.count() and isCaptureMoveAt(module, block: block, pos: lastPos + 1) 'aCaptureFollows'
-		panic("spliceBracketReloadsAfter: in cold block '{String.from(block.label)}' a capture move follows the run's reload point at sequence {lastSeq} — it would read a register the reloads restore in place of the call's answer, so the colorer's run end and the captures have come apart")
+	if pos + 1 < block.opRefs.count() and isCaptureMoveAt(module, block: block, pos: pos + 1) 'aCaptureFollows'
+		panic("spliceBracketReloadsAfter: in cold block '{String.from(block.label)}' a capture move follows the run's reload point at sequence {seq} — it would read a register the reloads restore in place of the call's answer, so the colorer's run end and the captures have come apart")
 	end 'aCaptureFollows'
 
 	appendBracketHalf(module, brackets: brackets, half: BracketHalf.reload, newRefs: newRefs)
@@ -632,94 +602,12 @@ function vregIsPhysical(vreg TargetVReg) returns bool
 	end 'v'
 end 'vregIsPhysical'
 
-// Resequence a `tryCall`'s two capture moves as a parallel copy and splice the ordered result into
-// `newRefs`. The two DESTS are colored via `alloc`; the two SRCS are the physical return registers the
-// lowering already fixed. `sequenceParallelCopy` drops a self-move (a hint-satisfied capture emits
-// nothing) and breaks a value/flag swap with `xchg` — the whole point of routing through it.
-// Are the ops at `pos` and `pos + 1` of `block` BOTH capture moves? The caller has already established that
-// the previous op was a call and that `pos + 1` is in range; this reads the two ops and answers, holding
-// neither — see the caller for why that matters.
-function isCaptureMovePairAt(module TargetModule, block IrBlock, pos ElementIndex) returns bool
-	return isCaptureMoveAt(module, block: block, pos: pos) and isCaptureMoveAt(module, block: block, pos: pos + 1)
-end 'isCaptureMovePairAt'
-
-// Read on the op's UNCOLORED form; the op's borrow is released on return, and the callers push onto
-// `module.ops` next.
+// Read on the op's UNCOLORED form: a capture's dest is only virtual before the rewrite reaches it.
 function isCaptureMoveAt(module TargetModule, block IrBlock, pos ElementIndex) returns bool
 	let opIdx = try block.opRefs.get(pos) otherwise panic("isCaptureMoveAt: opRefs.get OOB at {pos}")
 	let op = try module.ops.get(opIdx) otherwise panic("isCaptureMoveAt: opIdx {opIdx} not in module.ops")
 	return isCaptureMove(op)
 end 'isCaptureMoveAt'
-
-// The pair at `pos`, resequenced. The FOUR NUMBERS are read out first and the ops released, because the
-// sequencer below pushes onto the very array they were borrowed from — and four numbers is all a capture
-// move ever contributed: one destination register and one source register each.
-function emitResequencedCaptureAt(module TargetModule, block IrBlock, pos ElementIndex, alloc Allocation, newRefs OpIndexArray)
-	let opIdx = try block.opRefs.get(pos) otherwise panic("emitResequencedCaptureAt: opRefs.get OOB at {pos}")
-	let op = try module.ops.get(opIdx) otherwise panic("emitResequencedCaptureAt: opIdx {opIdx} not in module.ops")
-	let resultDst = alloc.regNumOf(captureMoveDestId(op))
-	let resultSrc = captureMoveSrcReg(op)
-
-	let nextIdx = try block.opRefs.get(pos + 1) otherwise panic("emitResequencedCaptureAt: opRefs.get OOB at {pos + 1}")
-	let nextOp = try module.ops.get(nextIdx) otherwise panic("emitResequencedCaptureAt: opIdx {nextIdx} not in module.ops")
-	let flagDst = alloc.regNumOf(captureMoveDestId(nextOp))
-	let flagSrc = captureMoveSrcReg(nextOp)
-
-	emitResequencedCapture(module, resultDst: resultDst, resultSrc: resultSrc, flagDst: flagDst, flagSrc: flagSrc, newRefs: newRefs)
-end 'emitResequencedCaptureAt'
-
-function emitResequencedCapture(module TargetModule, resultDst RegNum, resultSrc RegNum, flagDst RegNum, flagSrc RegNum, newRefs OpIndexArray)
-	var dsts = RegNumColumn.create()
-	var srcs = RegNumColumn.create()
-	dsts.push(resultDst)
-	srcs.push(resultSrc)
-	dsts.push(flagDst)
-	srcs.push(flagSrc)
-
-	let moves = sequenceParallelCopy(dsts, srcs: srcs)
-
-	for i in 0 upto moves.count() 'eachMove'
-		let dst = TargetVReg.physical(try moves.dsts.get(i) otherwise panic("emitResequencedCapture: dsts.get OOB"))
-		let src = TargetVReg.physical(try moves.srcs.get(i) otherwise panic("emitResequencedCapture: srcs.get OOB"))
-		let swap = try moves.isSwap.get(i) otherwise panic("emitResequencedCapture: isSwap.get OOB")
-		let opIdx = module.ops.count()
-		module.ops.push(TargetOp.xchgRegReg(dst, b: src) if swap else TargetOp.movRegReg(dst, srcReg: src))
-
-		// A parallel-copy move is the ALLOCATOR's op, not the author's.
-		module.spans.pushNone(opIdx)
-		newRefs.push(opIdx)
-	end 'eachMove'
-end 'emitResequencedCapture'
-
-// The virtual DEST id of a capture move (guarded by `isCaptureMove`, so the dest is always virtual).
-function captureMoveDestId(op TargetOp) returns ValueId
-	match op 'm'
-		movRegReg(dst, _) then return virtualIdOf(dst)
-		default panic("captureMoveDestId: not a movRegReg")
-	end 'm'
-end 'captureMoveDestId'
-
-// The physical SRC register-number of a capture move (guarded by `isCaptureMove`, so the src is physical).
-function captureMoveSrcReg(op TargetOp) returns RegNum
-	match op 'm'
-		movRegReg(_, src) then return physicalRegOf(src)
-		default panic("captureMoveSrcReg: not a movRegReg")
-	end 'm'
-end 'captureMoveSrcReg'
-
-function virtualIdOf(vreg TargetVReg) returns ValueId
-	match vreg 'v'
-		virtual(id) then return id
-		physical then panic("virtualIdOf: expected a virtual register")
-	end 'v'
-end 'virtualIdOf'
-
-function physicalRegOf(vreg TargetVReg) returns RegNum
-	match vreg 'v'
-		physical(reg) then return reg
-		virtual then panic("physicalRegOf: expected a physical register")
-	end 'v'
-end 'physicalRegOf'
 
 // If the op at layout sequence `seq` is a reuse def whose input outlived it, splice the physical
 // `mov dest, input` the allocator recorded into `newRefs` BEFORE the op's own index —

@@ -59,6 +59,9 @@ func @walk {
     x64.jmp trycont
   __im_load:
     x64.loadRegBaseIndexScale.word64 r10, [r9 + rsi*8 + 0]
+    x64.movRegReg r11, r10
+  tryok:
+    x64.movRegReg r10, r11
   trycont:
     x64.leaRegRegReg r8, r8, r10
     x64.leaRegRegReg r8, r8, rax
@@ -81,8 +84,7 @@ func @walk {
     x64.storeSlotReg slot6, r9
     x64.movRegReg rdx, rsi
     x64.callDirect __managed_get
-    x64.movRegReg r11, r10
-    x64.movRegReg r10, r8
+    x64.movRegReg r11, r8
     x64.loadRegSlot rax, slot0
     x64.loadRegSlot rcx, slot1
     x64.loadRegSlot rdx, slot2
@@ -90,9 +92,9 @@ func @walk {
     x64.loadRegSlot rdi, slot4
     x64.loadRegSlot r8, slot5
     x64.loadRegSlot r9, slot6
-    x64.cmpRegImm32 r11, 0
+    x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
-    x64.jmp trycont
+    x64.jmp tryok
 }
 
 func @main {
