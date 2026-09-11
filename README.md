@@ -16,9 +16,11 @@ you want when a model is generating the code.
 **[maxon.dev](https://maxon.dev)**&nbsp;&nbsp;·&nbsp;&nbsp;[Documentation](https://maxon.dev/docs)&nbsp;&nbsp;·&nbsp;&nbsp;[Examples](https://maxon.dev/examples)&nbsp;&nbsp;·&nbsp;&nbsp;[Discussions](https://github.com/maxon-lang/maxon/discussions)
 
 ```maxon
+typealias Port = int(0 to 65535)
+
 function main() returns ExitCode
-    let port = Port{8080}
-    print("listening on {port}")
+    let port = 8080 as Port
+    print("listening on {port}\n")
     return 0
 end 'main'
 ```
@@ -30,7 +32,7 @@ so an agent can't silently construct an invalid value.
 
 ```maxon
 typealias Port = int(0 to 65535)
-let port = Port{8080}      // Port{70000} is a compile error
+let port = 8080 as Port      // 70000 as Port is a compile error
 ```
 
 **No null to forget.** Fallible reads must be resolved explicitly with `try … otherwise`.

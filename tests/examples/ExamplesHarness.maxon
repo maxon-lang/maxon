@@ -1,18 +1,26 @@
 // ExamplesHarness.maxon — the shared half every case under `tests/examples/` reaches for: building one
-// program from `examples/` with the compiler under test, and running what it built.
+// program from `examples/`, or one complete program a document shows, with the compiler under test, and
+// running what it built.
 //
 // ⭐ **EVERY EXPECTATION IS EXTERNAL**: a reference output someone else published, or the behaviour the
-// example's own source documents. An answer captured from this compiler would agree with whatever it does.
+// program's own source documents. An answer captured from this compiler would agree with whatever it does.
 //
 // ⛔ **THE EXAMPLES ARE BUILT WHERE THEY SIT, NEVER COPIED**, because the gate is about the files a reader
 // runs. Only the OUTPUT is staged, into a directory named for the example under `temp/examples/`: `maxon
-// test` runs files concurrently, and `-o` is what keeps a build out of the tree lock.
+// test` runs files concurrently, and `-o` is what keeps a build out of the tree lock. A document's program
+// has no file of its own, so it is cut out of the document as it stands and written into its staging
+// directory, and built there.
+//
+// ⛔ **A DOCUMENT PROGRAM IS NAMED BY A MARKER, AND A MARKER MUST SELECT EXACTLY ONE BLOCK** — the gate
+// could not run otherwise. A marker that quietly selected nothing, or the first of two, would let an edit
+// to the document take its program out of the gate without a word.
 //
 // ⛔ **EVERY FREE FUNCTION IN A DIRECTORY SHARES ONE NAMESPACE** (E3006), so a case file declares only what
 // that case alone uses.
 //
-// ⛔ **WHAT WOULD STOP A CASE RUNNING AT ALL PANICS**: a missing compiler or example, an unspellable path, a
-// spawn that never happened. A build that fails is asserted, because that is what this corpus gates.
+// ⛔ **WHAT WOULD STOP A CASE RUNNING AT ALL PANICS**: a missing compiler, example or document, an
+// unspellable path, a spawn that never happened. A build that fails is asserted, because that is what this
+// corpus gates.
 //
 // ⛔ **PATHS ARE RELATIVE TO THE CHECKOUT ROOT**, the working directory `maxon test` gives a test binary.
 // Everything handed to a child is made absolute first, because a relative path resolves against the child's
@@ -30,11 +38,27 @@ let OutputOption = "-o"
 let MaxonSourceSuffix = ".maxon"
 let PathSeparator = "/"
 let CarriageReturn = "\r"
+let LineFeed = "\n"
 
-// What a built example exits with, as the runner reports it.
+// A Markdown document's programs are its ```maxon fences.
+let MarkdownSuffix = ".md"
+let MaxonFenceOpen = "```maxon"
+let FenceClose = "```"
+
+// An Astro page's programs are the template literals its frontmatter binds with `const`.
+let AstroSuffix = ".astro"
+let ConstDeclaration = "const "
+let TemplateLiteralOpen = " = `"
+let TemplateLiteralClose = "`;"
+
+// A template literal spells a backslash `\\`, so a program that prints `\n` holds `\\n` in the page.
+let EscapedBackslash = "\\\\"
+let Backslash = "\\"
+
+// What a built program exits with, as the runner reports it.
 typealias ExampleExitCode = int(i64.min to i64.max)
 
-// One run of a built example, stdout folded so a Windows console's line endings do not decide what it says.
+// One run of a built program, stdout folded so a Windows console's line endings do not decide what it says.
 type ExampleRun
 	export let commandLine as String
 	export let exitCode as ExampleExitCode
@@ -50,10 +74,44 @@ end 'ExampleRun'
 // run's files go first, so an executable a failed build left behind cannot answer for this one.
 export function requireExampleBuild(example String) throws TestFailure
 	let source = examplePath(example)
-	let staged = stagingDir(example)
+	let stem = exampleStem(example)
+	clearStagedFiles(stagingDir(stem))
+
+	try requireBuild(source, stem: stem, spelling: exampleSpelling(example))
+end 'requireExampleBuild'
+
+// Run what `requireExampleBuild` produced, with `arguments` as its command line.
+export function runBuiltExample(example String, arguments StringArray = StringArray.create()) returns ExampleRun
+	return runBuilt(exampleStem(example), spelling: exampleSpelling(example), arguments: arguments)
+end 'runBuiltExample'
+
+// Build an example and run it once.
+export function runExample(example String, arguments StringArray = StringArray.create()) returns ExampleRun throws TestFailure
+	try requireExampleBuild(example)
+
+	return runBuiltExample(example, arguments: arguments)
+end 'runExample'
+
+// Build the one program in `document` that contains `marker`, staged as `<name>.maxon` in its own directory
+// under `temp/examples/`, and run it once.
+export function runDocumentProgram(document String, marker String, name String) returns ExampleRun throws TestFailure
+	let program = documentProgram(document, marker: marker)
+
+	let staged = stagingDir(name)
 	clearStagedFiles(staged)
 
-	let output = builtExecutable(example)
+	let source = staged.join("{name}{MaxonSourceSuffix}")
+	try File.writeText(source, content: program) otherwise panic("examples tests: the gate could not run — could not stage {document}'s program at {source.toString()}.")
+
+	let spelling = "{document} ({name})"
+	try requireBuild(source, stem: name, spelling: spelling)
+
+	return runBuilt(name, spelling: spelling, arguments: StringArray.create())
+end 'runDocumentProgram'
+
+// Build `source` into `stem`'s staging directory; `spelling` is how every report names the program.
+function requireBuild(source FilePath, stem String, spelling String) throws TestFailure
+	let output = builtExecutable(stem)
 
 	var arguments = StringArray.create()
 	arguments.push(BuildCommandName)
@@ -63,44 +121,140 @@ export function requireExampleBuild(example String) throws TestFailure
 
 	var config = Configuration.create(Executable.path(testedCompilerPath()))
 	config.arguments = arguments
-	config.workingDirectory = staged
+	config.workingDirectory = stagingDir(stem)
 
 	let build = try config.run() otherwise (e) 'spawnFailed'
 		panic("examples tests: the gate could not run — could not spawn the compiler to build {source.toString()} ({e.displayReason()}).")
 	end 'spawnFailed'
 
-	let command = "{BuildCommandName} {exampleSpelling(example)}"
+	let command = "{BuildCommandName} {spelling}"
 	try Expect.equal(build.exitCode() as AssertedInt, expected: 0, message: "`{command}` exited {build.exitCode()}. The compiler said: {withoutCarriageReturns(build.stderr)}")
 	try Expect.isTrue(File.exists(output), message: "`{command}` exited 0 and wrote no executable to {output.toString()}.")
-end 'requireExampleBuild'
+end 'requireBuild'
 
-// Run what `requireExampleBuild` produced, with `arguments` as its command line.
-export function runBuiltExample(example String, arguments StringArray = StringArray.create()) returns ExampleRun
-	let executable = builtExecutable(example)
+// Run what `requireBuild` produced for `stem`, with `arguments` as its command line.
+function runBuilt(stem String, spelling String, arguments StringArray) returns ExampleRun
+	let executable = builtExecutable(stem)
 
 	var config = Configuration.create(Executable.path(executable))
 	config.arguments = arguments
-	config.workingDirectory = stagingDir(example)
+	config.workingDirectory = stagingDir(stem)
 
 	let run = try config.run() otherwise (e) 'spawnFailed'
 		panic("examples tests: the gate could not run — could not spawn {executable.toString()} ({e.displayReason()}).")
 	end 'spawnFailed'
 
-	var commandLine = exampleSpelling(example)
+	var commandLine = spelling.clone()
 
 	for argument in arguments 'eachArgument'
 		commandLine.append(" {argument}")
 	end 'eachArgument'
 
 	return ExampleRun.create(commandLine, exitCode: run.exitCode() as ExampleExitCode, stdout: withoutCarriageReturns(run.stdout), stderr: withoutCarriageReturns(run.stderr))
-end 'runBuiltExample'
+end 'runBuilt'
 
-// Build an example and run it once.
-export function runExample(example String, arguments StringArray = StringArray.create()) returns ExampleRun throws TestFailure
-	try requireExampleBuild(example)
+// The one program block in `document` that contains `marker`.
+function documentProgram(document String, marker String) returns String
+	let path = try FilePath.from(document) otherwise panic("examples tests: the gate could not run — '{document}' is not a spellable path")
+	let text = try File.readText(path) otherwise panic("examples tests: the gate could not run — could not read '{document}'. Every path in this corpus is relative to the CHECKOUT ROOT; a run started anywhere else finds nothing, and a moved document needs its case moved with it.")
+	let lines = withoutCarriageReturns(text).split(LineFeed)
 
-	return runBuiltExample(example, arguments: arguments)
-end 'runExample'
+	var marked = StringArray.create()
+
+	for block in programBlocks(document, lines: lines) 'eachBlock'
+		if block.contains(marker) 'hasMarker'
+			marked.push(block)
+		end 'hasMarker'
+	end 'eachBlock'
+
+	if marked.count() != 1 'notExactlyOne'
+		panic("examples tests: the gate could not run — {marked.count()} program blocks in '{document}' contain the marker `{marker}`, and a case builds exactly one. A document edit that drops, rewords or duplicates a program has to be carried into its case.")
+	end 'notExactlyOne'
+
+	return try marked.get(0) otherwise panic("examples tests: exactly one marked block was just counted")
+end 'documentProgram'
+
+function programBlocks(document String, lines StringArray) returns StringArray
+	if document.endsWith(MarkdownSuffix) 'markdown'
+		return markdownFences(lines)
+	end 'markdown'
+
+	if not document.endsWith(AstroSuffix) 'unreadable'
+		panic("examples tests: the gate could not run — '{document}' is neither Markdown nor an Astro page, the two kinds of document this harness reads programs out of.")
+	end 'unreadable'
+
+	return templateLiterals(lines)
+end 'programBlocks'
+
+// The text of every ```maxon fence, one line per source line.
+function markdownFences(lines StringArray) returns StringArray
+	var blocks = StringArray.create()
+	var inFence = false
+	var block = ""
+
+	for line in lines 'eachLine'
+		let fence = line.trim()
+
+		if not inFence 'outside'
+			inFence = fence == MaxonFenceOpen
+			continue
+		end 'outside'
+
+		if fence == FenceClose 'closes'
+			blocks.push(block)
+			block = ""
+			inFence = false
+			continue
+		end 'closes'
+
+		block.append("{line}{LineFeed}")
+	end 'eachLine'
+
+	return blocks
+end 'markdownFences'
+
+// The text of every `const` template literal, its escaped backslashes undone. The opening line carries the
+// literal's first line after the backtick, and the closing line its last before the `` `; ``.
+function templateLiterals(lines StringArray) returns StringArray
+	var blocks = StringArray.create()
+	var inLiteral = false
+	var block = ""
+
+	for line in lines 'eachLine'
+		let opens = not inLiteral and line.trimStart().startsWith(ConstDeclaration) and line.contains(TemplateLiteralOpen)
+
+		if not inLiteral and not opens 'outside'
+			continue
+		end 'outside'
+
+		let body = templateLiteralFirstLine(line) if opens else line
+		inLiteral = true
+
+		if not body.endsWith(TemplateLiteralClose) 'continues'
+			block.append("{body}{LineFeed}")
+			continue
+		end 'continues'
+
+		let closing = try body.findLast(TemplateLiteralClose) otherwise panic("examples tests: a line that ends with the literal's close contains it")
+		block.append("{body.slice(body.startIndex(), endIndex: closing)}{LineFeed}")
+		blocks.push(block.replace(EscapedBackslash, with: Backslash))
+		block = ""
+		inLiteral = false
+	end 'eachLine'
+
+	return blocks
+end 'templateLiterals'
+
+// What follows the opening backtick on the line that declares a template literal.
+function templateLiteralFirstLine(line String) returns String
+	let halves = line.split(TemplateLiteralOpen)
+
+	if halves.count() != 2 'ambiguous'
+		panic("examples tests: the gate could not run — cannot tell where the template literal opens on `{line}`.")
+	end 'ambiguous'
+
+	return try halves.get(1) otherwise panic("examples tests: a two-way split has a second half")
+end 'templateLiteralFirstLine'
 
 // Hold a run to the answer a case cites.
 export function requireAnswer(run ExampleRun, stdout String, exitCode ExampleExitCode) throws TestFailure
@@ -130,18 +284,18 @@ function exampleStem(example String) returns String
 	return example.replace(MaxonSourceSuffix, with: "")
 end 'exampleStem'
 
-function builtExecutable(example String) returns FilePath
-	return stagingDir(example).join("{exampleStem(example)}{executableSuffix()}")
+function builtExecutable(stem String) returns FilePath
+	return stagingDir(stem).join("{stem}{executableSuffix()}")
 end 'builtExecutable'
 
-// The example's own staging directory, created with its missing ancestors so a fresh checkout without
+// A program's own staging directory, created with its missing ancestors so a fresh checkout without
 // `temp/` is not a failure.
-function stagingDir(example String) returns FilePath
-	let spelled = "{StagingRootDirName}{PathSeparator}{exampleStem(example)}"
+function stagingDir(stem String) returns FilePath
+	let spelled = "{StagingRootDirName}{PathSeparator}{stem}"
 	let path = try FilePath.from(spelled) otherwise panic("examples tests: the gate could not run — '{spelled}' is not a spellable path")
 
 	if not Directory.create(path) 'couldNotCreate'
-		panic("examples tests: the gate could not run — could not create '{spelled}', which is where this example is built.")
+		panic("examples tests: the gate could not run — could not create '{spelled}', which is where this program is built.")
 	end 'couldNotCreate'
 
 	return path.resolve(Directory.currentPath())

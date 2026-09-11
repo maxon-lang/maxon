@@ -161,7 +161,7 @@ Assigning one ranged integer variable to another initially creates an alias — 
 
 ```maxon
 typealias Pos = int(0 to i64.max)
-var startPos = Pos{10}
+var startPos = 10 as Pos
 var pos = startPos      // pos and startPos initially share the same value
 
 pos = pos + 1           // rebinds pos to a new value (11) -- startPos is unaffected

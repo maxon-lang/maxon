@@ -35,34 +35,43 @@ their range. The bound is enforced by the compiler:
 typealias Port = int(0 to 65535)
 
 function main() returns ExitCode
-	let port = Port{8080}
-	print("listening on {port}")
+	let port = 8080 as Port
+	print("listening on {port}\n")
 	return 0
 end 'main'
 ```
 
-`Port{8080}` is fine; `Port{70000}` is a compile error. The constraint lives in the type, so a
+`8080 as Port` is fine; `70000 as Port` is a compile error. The constraint lives in the type, so a
 function that takes a `Port` can never receive an invalid one.
 
 ## Fallible operations: `try … otherwise`
 
 There is no null in Maxon. Operations that can fail — like reading an element that might be out
-of bounds — must be resolved explicitly. The most common form supplies a fallback:
+of bounds — must be resolved explicitly: every call that can fail is written with `try`, and
+leaving it off is a compile error. The most common form supplies a fallback:
 
 ```maxon
-typealias Index = int(0 to 5500)
-typealias Value = float(0.0 to f64.max)
-typealias Vector = Array with Value
+typealias Guests = Array with String
+typealias Seat = int(0 to 9)
 
-function sumInto(out Vector, source Vector, count Index)
-	for i in 0 upto count 'accumulate'
-		let v = try source.get(i) otherwise 0.0
-		out.set(i, value: v)
-	end 'accumulate'
-end 'sumInto'
+function guestAt(guests Guests, seat Seat) returns String
+	return try guests.get(seat) otherwise "empty"
+end 'guestAt'
+
+function main() returns ExitCode
+	var guests = Guests.create()
+	guests.push("Ada")
+	guests.push("Grace")
+
+	print("seat 1: {guestAt(guests, seat: 1)}\n")
+	print("seat 5: {guestAt(guests, seat: 5)}\n")
+	return 0
+end 'main'
 ```
 
-Because the fallible result has no "null" to leak, there is no missed-null-check bug to write.
+Seat 5 is past the end of the list, so the read fails and `otherwise` supplies `"empty"`: the
+program prints `seat 1: Grace`, then `seat 5: empty`. Because the fallible result has no "null" to
+leak, there is no missed-null-check bug to write.
 
 ## Labeled blocks
 
@@ -70,13 +79,13 @@ Every block in Maxon names what it opens and closes. Loops, `if`, and other cons
 quoted label, and the matching `end` repeats it:
 
 ```maxon
-typealias Count = int(0 to 10)
+typealias Iteration = int(0 to 10)
 
 function main() returns ExitCode
-	var iteration = Count{0}
+	var iteration = 0 as Iteration
 	while iteration < 10 'iterate'
-		print("iteration {iteration}")
-		iteration = Count{iteration + 1}
+		print("iteration {iteration}\n")
+		iteration = (iteration + 1) as Iteration
 	end 'iterate'
 	return 0
 end 'main'

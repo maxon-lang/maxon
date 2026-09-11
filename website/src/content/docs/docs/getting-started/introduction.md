@@ -45,8 +45,8 @@ The features that make Maxon legible to a model also make it pleasant for a huma
 typealias Port = int(0 to 65535)
 
 function main() returns ExitCode
-	let port = Port{8080}
-	print("listening on {port}")
+	let port = 8080 as Port
+	print("listening on {port}\n")
 	return 0
 end 'main'
 ```

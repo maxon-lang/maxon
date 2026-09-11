@@ -1017,7 +1017,7 @@ Operators: `and`, `or`, `not`, plus parentheses for grouping.
 - Structs: assigned by reference (alias). Use `.clone()` for independent copy
 - Reference counting: automatic scope cleanup
 - Borrow checking: CANNOT mutate a collection while a `.get()` borrow is live (E3070)
-- `@heap var p = Point{x: 0, y: 0}` forces heap allocation
+- `@heap var p = Point.create(0.0, y: 0.0)` forces heap allocation
 
 ---
 

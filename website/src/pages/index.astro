@@ -4,12 +4,16 @@ import MaxonCode from '../components/MaxonCode.astro';
 import PlatformTabs from '../components/PlatformTabs.astro';
 import { INSTALL_POWERSHELL, INSTALL_SCRIPT } from '../install';
 
-// All snippets below are real Maxon, drawn from / faithful to the example
-// programs in the compiler repo (examples/hello.maxon, spectral-norm.maxon).
+// The hero is a complete program: tests/examples/homepage-hero.test.maxon builds
+// it and runs it, so it must compile as written and print what it claims. The
+// three pillar snippets below are fragments in the style of
+// examples/spectral-norm.maxon, and nothing compiles them.
 
-const heroSnippet = `function main() returns ExitCode
-	let port = Port{8080}
-	print("listening on {port}")
+const heroSnippet = `typealias Port = int(0 to 65535)
+
+function main() returns ExitCode
+	let port = 8080 as Port
+	print("listening on {port}\\n")
 	return 0
 end 'main'`;
 
@@ -17,14 +21,14 @@ end 'main'`;
 // makes Maxon easy for an LLM to write correctly on the first try.
 const rangedTypesSnippet = `// Domain constraints live in the type
 // system, not in comments.
-typealias Port    = int(0 to 65535)
-typealias Percent = float(0.0 to 100.0)
-typealias Index   = int(0 to 5500)
+typealias Port        = int(0 to 65535)
+typealias Percent     = float(0.0 to 100.0)
+typealias VectorIndex = int(0 to 5500)
 
 // Constructing an out-of-range value is
 // a compile error, so an agent can't
 // silently produce an invalid one.
-let port = Port{8080}`;
+let port = 8080 as Port`;
 
 const noNullSnippet = `// No null. Fallible reads must be
 // resolved explicitly with try ...
@@ -41,7 +45,7 @@ const labeledBlocksSnippet = `// Every block names what it closes.
 // back — for a human or a model.
 while iteration < 10 'iterate'
 	applyAtA(previous, inputVector: current)
-	iteration = Iteration{iteration + 1}
+	iteration = (iteration + 1) as Iteration
 end 'iterate'`;
 
 // Quickstart shown in the install CTA, per platform. The visitor's platform is

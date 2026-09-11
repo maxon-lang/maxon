@@ -41,7 +41,7 @@ entity reading it benefits. Maxon spends keystrokes deliberately:
 
   ```maxon
   typealias Port = int(0 to 65535)
-  let port = Port{8080}
+  let port = 8080 as Port
   ```
 
 - **Every block names what it closes.** No counting braces to find where a loop ends. The
@@ -49,7 +49,7 @@ entity reading it benefits. Maxon spends keystrokes deliberately:
 
   ```maxon
   while iteration < 10 'iterate'
-      iteration = Iteration{iteration + 1}
+      iteration = (iteration + 1) as Iteration
   end 'iterate'
   ```
 

@@ -33,7 +33,7 @@ SERVER its tests spawn.
 | `profile/` | `maxon test`, under the compiler | `TestedCompilerStem` in `ProfileHarness.maxon` — the binary it spawns: the compiler under test, which is also the PROFILER under test and what every fixture here is built with |
 | `run/` | `maxon test`, under the compiler | `TestedCompilerStem` in `RunHarness.maxon` — the binary it spawns: the compiler under test, which is also the `run` DRIVER under test and what every cached build is made by |
 | `console-write/` | `maxon test`, under the compiler | `TestedCompilerStem` in `console-write-imports.test.maxon` — the binary it spawns: the compiler under test, which is also what EMITS the image the case reads |
-| `examples/` | `maxon test`, under the compiler | `TestedCompilerStem` in `ExamplesHarness.maxon` — the binary it spawns: the compiler under test, which builds every program in the checkout's `examples/` (reached through `ExamplesDirName`) |
+| `examples/` | `maxon test`, under the compiler | `TestedCompilerStem` in `ExamplesHarness.maxon` — the binary it spawns: the compiler under test, which builds every program in the checkout's `examples/` (reached through `ExamplesDirName`) and every complete program a document shows a reader |
 
 ⚠ **`ladders/` is cited from outside the code that reads it.** Roughly twenty
 measurement-provenance comments across the compiler and
@@ -134,13 +134,20 @@ tests/
     console-write-imports.test.maxon        which console API an emitted x64-windows image imports
     fixtures/hello/main.maxon.fixture       stored name only - see rule 1
   examples/
-    ExamplesHarness.maxon                   the shared half: build one example into temp/examples/<name>/, run it, check its answer
+    ExamplesHarness.maxon                   the shared half: build one example, or one document's program, into temp/examples/<name>/, run it, check its answer
     basic.test.maxon                        exits 42, the value its `main` returns
     hello.test.maxon                        prints `Hello, world!` and exits 0
     fannkuch-redux.test.maxon               the published n=7 answer and the documented n=10 one, flip count as exit code
     multifile.test.maxon                    the directory builds as one project and exits 5
     nbody.test.maxon                        the published n=1000 energies, exit 0
     spectral-norm.test.maxon                the published n=100 norm, exit 0
+    homepage-hero.test.maxon                website/src/pages/index.astro's hero prints `listening on 8080`, exit 0
+    readme-hero.test.maxon                  README.md's first program prints `listening on 8080`, exit 0
+    introduction-first-taste.test.maxon     the docs introduction's "A first taste" prints `listening on 8080`, exit 0
+    first-program-hello.test.maxon          the first-program page's "Hello, exit code" prints nothing, exit 0
+    first-program-ranged-type.test.maxon    its "Adding a ranged type" prints `listening on 8080`, exit 0
+    first-program-labeled-blocks.test.maxon its "Labeled blocks" prints `iteration 0` to `iteration 9`, exit 0
+    first-program-try-otherwise.test.maxon  its "Fallible operations" prints `seat 1: Grace` then the fallback `seat 5: empty`, exit 0
 ```
 
 ## The six rules, and the hazard each one answers
@@ -477,11 +484,19 @@ works in both directions: a name that IS imported is found, and one that is not 
 It applies rule 1's `.fixture` half only (no `dot-` names) and rule 4 (the child runs in a staging
 directory under `temp/console-write/`), and it keeps rule 5: one spawning `test`, one file, one compile.
 
-## `examples/` — every program in `examples/` still builds, and still computes its known answer
+## `examples/` — every program in `examples/`, and every complete program the docs show, still builds and still computes its known answer
 
-One case per example: build it with the compiler under test and, where its answer is known, run it and
+One case per program: build it with the compiler under test and, where its answer is known, run it and
 compare. The shared half — the compiler stem, the build, the run and the answer check — lives in
 `ExamplesHarness.maxon`; see the note under `debug/`.
+
+A complete program a document shows a reader — one with a `main`: the README and homepage heroes, the
+docs' introduction and first-program walk-through — is gated the same way, because nothing else compiles
+it and a visitor copies it as written. Fragments with no `main` are not. `runDocumentProgram` reads the
+document, takes the ONE program block containing the case's marker (a ```` ```maxon ```` fence in
+Markdown; a `` const <name> = `…`; `` template literal in an Astro page, its `\\` escapes undone), and builds
+and runs it. ⛔ A marker matching no block, or more than one, PANICS naming the document and the marker,
+so an edit to a document cannot quietly drop its program out of the gate.
 
 ⭐⭐ **THESE EXPECTATIONS ARE HAND-WRITTEN, AND THAT INVERTS RULE 6 ON PURPOSE.** An answer generated by
 running this compiler would agree with whatever the compiler does; the point here is an answer that
@@ -496,5 +511,6 @@ the Benchmarks Game's reference output was produced at, and expects that output 
 
 ⛔ **THE EXAMPLES ARE BUILT WHERE THEY SIT, NEVER COPIED** — the gate is about the files a reader runs.
 Only the output is staged, into `temp/examples/<example>/`; `maxon test` runs files concurrently, and
-`-o` keeps each build out of the tree lock. It keeps rule 5: one `test` per file, and no case compiles
+`-o` keeps each build out of the tree lock. A document's program has no file of its own, so it is cut
+out of the document as it stands and written into `temp/examples/<name>/`, and built there. It keeps rule 5: one `test` per file, and no case compiles
 more than once. It runs at the default deadline.

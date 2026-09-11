@@ -45,10 +45,10 @@ Stack-promoted structs are freed automatically when the stack frame is reclaimed
 The `@heap` annotation forces a struct to be heap-allocated, bypassing stack promotion:
 
 ```maxon
-@heap var p = Point{x: 1, y: 2}  // always heap-allocated
+@heap var p = Point.create(1, y: 2)  // always heap-allocated
 ```
 
-`@heap` is only valid on `var` or `let` declarations with struct literal initializers.
+`@heap` is only valid on `var` or `let` declarations whose initializer produces a struct.
 
 ### Explicit Cloning
 
