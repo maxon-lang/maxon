@@ -4948,8 +4948,9 @@ end 'insertUseCalleeAndArgs'
 // not on the op, so rewriting them is `substituteValuesInFunc`'s job — and the reason this is
 // file-private where `remappedValue` beside it is not: a pass that reached the op rewrite directly
 // could perform half the substitution, which is the failure that function's header names. Its two
-// callers are both in THIS file — `substituteValuesInFunc` below, and `remapStdOpForClone`, which
-// composes it with the DEF and BLOCK-TARGET halves a clone additionally needs. Exhaustive over StdOp
+// callers are both in THIS file — `substituteValuesInFunc` below, and, arm for arm, `cloneStdOp`, which
+// makes the same rewrite in one construction with the DEF and BLOCK-TARGET halves a clone additionally
+// needs. Exhaustive over StdOp
 // with no bare `default`, for the same reason its twin is: a new variant must be a COMPILE ERROR here
 // rather than a silently-missed rewrite at every call site.
 //
@@ -5250,151 +5251,105 @@ module function remappedArgs(args ValueIdArray, subst ValueIdArray) returns Valu
 	return out
 end 'remappedArgs'
 
-// ⭐⭐ **ONE COPIED OP, REWRITTEN INTO ANOTHER FUNCTION'S COORDINATES — uses, DEFS and BLOCK TARGETS.**
-// `inlineLeaves` copies a callee's body into a caller, where every one of those three is a different
-// number: a use and a def name the callee's `ValueId`s and a terminator names the callee's `BlockId`s,
-// and all three have to move at once or the copy names a mixture of two functions' value spaces.
+// ⭐⭐ **ONE COPIED OP, REWRITTEN INTO ANOTHER FUNCTION'S COORDINATES — uses, DEFS and BLOCK TARGETS — IN
+// ONE CONSTRUCTION.** `inlineLeaves` copies a callee's body into a caller and `unswitchInvariantGuards`
+// copies a loop's members beside the loop, where every one of those three is a different number: a use
+// and a def name the source's `ValueId`s and a terminator names its `BlockId`s, and all three have to move
+// at once or the copy names a mixture of two coordinate spaces.
 //
-// ⭐ **IT COMPOSES `remapStdOpUses` RATHER THAN RESTATING IT**, so the use half stays where the
-// `collectStdOpUses` mirror lives and a new variant is still a compile error in exactly one place. What
-// is added here is only what a clone needs beyond a substitution: the DEF fields (which `remapStdOpUses`
-// deliberately leaves alone — a def is not a use) and the branch targets.
+// ⭐ **ONE MATCH BUILDS THE CLONE, so a copied op is one box** — the one `module.ops` keeps. Its use half
+// is the same rewrite `remapStdOpUses` makes, LENIENT through `remappedValue`: a value outside the column
+// is one the copy shares with its source (a loop-invariant value defined before the loop, for the
+// unswitcher; for a splice the column is total over the callee, so nothing is outside it). Its def half
+// is STRICT through `clonedValue`: a def is always the copy's own. An op that reads nothing, defines
+// nothing and names no block — `retVoid`, `osPanic` — is handed back itself, and the two slots of
+// `module.ops` then share one immutable box, exactly as `substituteValuesInBlock` leaves an unchanged op
+// in place.
 //
-// ⭐ **IT COVERS THE OPS AN INLINABLE BODY MAY HOLD, AND PANICS ON EVERY OTHER — which is not a gap but
-// the admission rule's backstop.** `InlineLeaves.inlineOpRole` refuses a callee holding any other
-// `isUnsupportedInInlineBody` op, so the set that can reach here is closed: the arith band, the two
-// branches, `switch`, the two returns, the address ops, the indirect accesses, every call kind and the
-// two panic ops. Writing arms for the other seventy would be unreachable generality — and a `panic`
-// naming the op is what a disagreement between the two rules looks like, instead of a silently
-// mis-cloned body. Every non-clonable variant is covered by a RANGE arm ending at the union's last
-// member, so a variant appended past it fails to compile here until it is consciously placed.
-module function remapStdOpForClone(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray, def StdDefinedValues) returns StdOp
-	let cloned = remapClonedDefsAndTargets(remapStdOpUses(op, subst: valueSubst), valueSubst: valueSubst, blockSubst: blockSubst)
-	requireClonedDefAgreesWithTheDefEnumerator(op, cloned: cloned, valueSubst: valueSubst, def: def)
-	return cloned
-end 'remapStdOpForClone'
-
-// ⛔⛔ **THE CHECK BETWEEN TWO PER-VARIANT DEF WALKS — because this file now holds two, and nothing
-// else makes them agree.** `stdOpDefinedValue` says WHICH value a variant defines;
-// `remapClonedDefsAndTargets` rewrites it. They are exhaustive matches over the same union, so a variant
-// APPENDED to `StdOp` is a compile error in both — but an EXISTING arm silently moving to the
-// hand-it-back-unchanged side is not: the clone would keep the CALLEE's ValueId, the caller would hold two
-// definitions of one value, and the result is a wrong operand rather than a diagnostic. (That is not
-// hypothetical for this union: `osWriteStdout` and `osWriteStderr` each GAINED a def in W35, and
-// `stdOpDefinedValue`'s own header records `osStdHandle` answering `none` as a defect that "would not fail
-// to compile".)
+// ⭐ **IT COVERS THE OPS A COPIED BODY MAY HOLD, AND PANICS ON EVERY OTHER — which is not a gap but the
+// admission rule's backstop.** `InlineLeaves.inlineOpRole` refuses a callee holding any other
+// `isUnsupportedInInlineBody` op and the unswitcher refuses a loop holding one, so the set that can reach
+// here is closed: the arith band, the two branches, `switch`, the two returns, the address ops, the
+// indirect accesses, every call kind and the two panic ops. Writing rewrites for the other seventy would
+// be unreachable generality — and a `panic` naming the op is what a disagreement between the two rules
+// looks like, instead of a silently mis-cloned body. Exhaustive with no bare `default`, so a variant
+// appended to `StdOp` fails to compile here until it is consciously placed.
 //
-// So the def half is verified against the enumerator on every cloned op: whatever `stdOpDefinedValue`
-// reports of the original must come back as its image under the column. Two extra jump-table matches per
-// copied op, against a splice budget of 24 ops — the price of the two walks not being able to drift apart
-// unnoticed.
-function requireClonedDefAgreesWithTheDefEnumerator(op StdOp, cloned StdOp, valueSubst ValueIdArray, def StdDefinedValues)
-	stdOpDefinedValue(op, def: def)
+// ⛔⛔ **THE DEF HALF IS CHECKED AGAINST `stdOpDefinedValue`, ONCE PER VARIANT** — because this file holds
+// two per-variant def walks and nothing else makes them agree. A variant APPENDED to `StdOp` is a compile
+// error in both, but an EXISTING arm silently moving to the hand-it-back side is not: the clone would keep
+// the source's `ValueId`, the copy's function would hold two definitions of one value, and the result is a
+// wrong operand rather than a diagnostic — a variant whose arm hands it back unchanged compiles whether or
+// not it defines a value. Whether an arm rewrites its def is a property of the ARM, so the first clone of each
+// variant is checked and the rest of that variant's clones are not — two jump-table matches per variant
+// per cloner rather than per copied op.
+module type StdOpCloner
+	var def as StdDefinedValues
+	var verified as BoolArray
 
-	// A `tryCall` defines a pair, and a loop copy clones one; both halves must come back remapped.
-	if def.definesPair() 'twoDefs'
-		requireClonedDefinesPair(cloned, wantFirst: clonedValue(def.first, subst: valueSubst), wantSecond: clonedValue(def.second, subst: valueSubst), def: def)
-		return
-	end 'twoDefs'
+	module static function create() returns StdOpCloner
+		return Self{def: StdDefinedValues.create(), verified: BoolArray.create()}
+	end 'create'
 
-	if def.definesNothing() 'noDef'
-		requireClonedDefinesNothing(cloned, def: def)
-		return
-	end 'noDef'
+	module function clone(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray) returns StdOp
+		let cloned = cloneStdOp(op, valueSubst: valueSubst, blockSubst: blockSubst)
+		let variant = op.ordinal as ElementIndex
+		self.verified.growFilled(variant + 1, value: false)
+		let checked = try self.verified.get(variant) otherwise panic("StdOpCloner.clone: verified.get OOB at {variant} after growing to hold it")
 
-	requireClonedDefIs(cloned, want: clonedValue(def.first, subst: valueSubst), def: def)
-end 'requireClonedDefAgreesWithTheDefEnumerator'
+		if not checked 'firstOfItsVariant'
+			requireClonedDefAgreesWithTheDefEnumerator(op, cloned: cloned, valueSubst: valueSubst, def: self.def)
+			try self.verified.set(variant, value: true) otherwise panic("StdOpCloner.clone: verified.set OOB at {variant}")
+		end 'firstOfItsVariant'
 
-function requireClonedDefinesPair(cloned StdOp, wantFirst ValueId, wantSecond ValueId, def StdDefinedValues)
-	stdOpDefinedValue(cloned, def: def)
+		return cloned
+	end 'clone'
+end 'StdOpCloner'
 
-	if not def.definesPair() 'pairLost'
-		panic("remapStdOpForClone: `{stdOpCloneRefusalName(cloned)}` defines a pair by `stdOpDefinedValue` yet its clone does not — the two def walks in this file disagree")
-	end 'pairLost'
-
-	if def.first != wantFirst or def.second != wantSecond 'pairNotRemapped'
-		panic("remapStdOpForClone: `{stdOpCloneRefusalName(cloned)}` came back defining {def.first}/{def.second} where the column maps the original's pair to {wantFirst}/{wantSecond} — the def rewrite and `stdOpDefinedValue` name different fields")
-	end 'pairNotRemapped'
-end 'requireClonedDefinesPair'
-
-function requireClonedDefinesNothing(cloned StdOp, def StdDefinedValues)
-	stdOpDefinedValue(cloned, def: def)
-	requireClonedIsNotAPair(cloned, def: def)
-
-	if not def.definesNothing() 'cloneDefines'
-		panic("remapStdOpForClone: `{stdOpCloneRefusalName(cloned)}` defines nothing by `stdOpDefinedValue` yet the clone defines value {def.first} — the two def walks in this file disagree")
-	end 'cloneDefines'
-end 'requireClonedDefinesNothing'
-
-function requireClonedDefIs(cloned StdOp, want ValueId, def StdDefinedValues)
-	stdOpDefinedValue(cloned, def: def)
-	requireClonedIsNotAPair(cloned, def: def)
-
-	if def.definesNothing() 'noDefRewritten'
-		panic("remapStdOpForClone: `{stdOpCloneRefusalName(cloned)}` DEFINES value {want} by `stdOpDefinedValue` but `remapClonedDefsAndTargets` handed it back with no def rewritten — the clone would keep the callee's id and the caller would hold two definitions of one value")
-	end 'noDefRewritten'
-
-	if def.first != want 'defNotRemapped'
-		panic("remapStdOpForClone: `{stdOpCloneRefusalName(cloned)}` came back defining value {def.first} where the splice's column maps the original's def to {want} — the def rewrite and `stdOpDefinedValue` name different fields")
-	end 'defNotRemapped'
-end 'requireClonedDefIs'
-
-function requireClonedIsNotAPair(cloned StdOp, def StdDefinedValues)
-	if def.definesPair() 'twoDefs'
-		panic("remapStdOpForClone: cloning produced a two-def op from one that is not — the two def walks in this file disagree about `{stdOpCloneRefusalName(cloned)}`")
-	end 'twoDefs'
-end 'requireClonedIsNotAPair'
-
-// The half `remapStdOpUses` does not do: the result ids an op DEFINES, and the block ids a terminator
-// names. Its operand fields arrive already rewritten, so they are bound and handed straight back.
-function remapClonedDefsAndTargets(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray) returns StdOp
-	match op 'r'
-		const(resultId, value, valueType) then return StdOp.const(clonedValue(resultId, subst: valueSubst), value: value, valueType: valueType)
-		binOp(resultId, lhs, rhs, opcode, operandType) then return StdOp.binOp(clonedValue(resultId, subst: valueSubst), lhs: lhs, rhs: rhs, opcode: opcode, operandType: operandType)
-		unaryOp(resultId, operand, opcode, operandType) then return StdOp.unaryOp(clonedValue(resultId, subst: valueSubst), operand: operand, opcode: opcode, operandType: operandType)
-		cmp(resultId, lhs, rhs, pred, operandType) then return StdOp.cmp(clonedValue(resultId, subst: valueSubst), lhs: lhs, rhs: rhs, pred: pred, operandType: operandType)
-		binOpImm(resultId, lhs, imm, opcode, operandType) then return StdOp.binOpImm(clonedValue(resultId, subst: valueSubst), lhs: lhs, imm: imm, opcode: opcode, operandType: operandType)
-		cmpImm(resultId, lhs, imm, pred, operandType) then return StdOp.cmpImm(clonedValue(resultId, subst: valueSubst), lhs: lhs, imm: imm, pred: pred, operandType: operandType)
-		div(resultId, lhs, rhs, signedness) then return StdOp.div(clonedValue(resultId, subst: valueSubst), lhs: lhs, rhs: rhs, signedness: signedness)
-		mod(resultId, lhs, rhs, signedness) then return StdOp.mod(clonedValue(resultId, subst: valueSubst), lhs: lhs, rhs: rhs, signedness: signedness)
-		condBranch(condId, thenBlockId, elseBlockId) then return StdOp.condBranch(condId, thenBlockId: clonedBlock(thenBlockId, subst: blockSubst), elseBlockId: clonedBlock(elseBlockId, subst: blockSubst))
-		branch(targetBlockId) then return StdOp.branch(clonedBlock(targetBlockId, subst: blockSubst))
-
-		// A return DEFINES nothing and names no block: the splice replaces it with a branch to the
-		// continuation rather than cloning it, and it reaches here only through a body op scan.
-		ret then return op
-
-		// A `param` is never copied: a splice maps a parameter to its argument, and a loop copy never
-		// holds the entry block.
-		param then panic("remapStdOpForClone: a `param` op reached the cloner — a splice maps a parameter to its argument instead of copying it, and a loop copy never holds the entry block")
-
-		call(resultId, callee, args) then return StdOp.call(clonedValue(resultId, subst: valueSubst), callee: callee, args: args)
-		retVoid then return op
-		globalAddr(resultId, label) then return StdOp.globalAddr(clonedValue(resultId, subst: valueSubst), label: label)
-		loadIndirect(resultId, addrId, offset, valueType) then return StdOp.loadIndirect(clonedValue(resultId, subst: valueSubst), addrId: addrId, offset: offset, valueType: valueType)
-		storeIndirect then return op
+// ⚠ **AN EXPRESSION MATCH, LIKE `remapStdOpUses`, AND THAT IS LOAD-BEARING.** Five variants carry their
+// `args` in the TAIL slot, and binding a tail-slot `Array` in an arm of a large STATEMENT match corrupts
+// the scrutinee's decref (`LowerMaxonToStd.lowerIndirectCall` documents the miscompile; here it surfaces as
+// a nil function name in the next pass's name index). The `gives` form with these arm bodies is the shape
+// `remapStdOpUses` has run in for every substitution pass, so the clone keeps to it; a refused variant
+// answers through a function that panics, since an arm of this form cannot panic itself.
+function cloneStdOp(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray) returns StdOp
+	return match op 'r'
+		const(resultId, value, valueType) gives StdOp.const(clonedValue(resultId, subst: valueSubst), value: value, valueType: valueType)
+		binOp(resultId, lhs, rhs, opcode, operandType) gives StdOp.binOp(clonedValue(resultId, subst: valueSubst), lhs: remappedValue(lhs, subst: valueSubst), rhs: remappedValue(rhs, subst: valueSubst), opcode: opcode, operandType: operandType)
+		unaryOp(resultId, operand, opcode, operandType) gives StdOp.unaryOp(clonedValue(resultId, subst: valueSubst), operand: remappedValue(operand, subst: valueSubst), opcode: opcode, operandType: operandType)
+		cmp(resultId, lhs, rhs, pred, operandType) gives StdOp.cmp(clonedValue(resultId, subst: valueSubst), lhs: remappedValue(lhs, subst: valueSubst), rhs: remappedValue(rhs, subst: valueSubst), pred: pred, operandType: operandType)
+		binOpImm(resultId, lhs, imm, opcode, operandType) gives StdOp.binOpImm(clonedValue(resultId, subst: valueSubst), lhs: remappedValue(lhs, subst: valueSubst), imm: imm, opcode: opcode, operandType: operandType)
+		cmpImm(resultId, lhs, imm, pred, operandType) gives StdOp.cmpImm(clonedValue(resultId, subst: valueSubst), lhs: remappedValue(lhs, subst: valueSubst), imm: imm, pred: pred, operandType: operandType)
+		div(resultId, lhs, rhs, signedness) gives StdOp.div(clonedValue(resultId, subst: valueSubst), lhs: remappedValue(lhs, subst: valueSubst), rhs: remappedValue(rhs, subst: valueSubst), signedness: signedness)
+		mod(resultId, lhs, rhs, signedness) gives StdOp.mod(clonedValue(resultId, subst: valueSubst), lhs: remappedValue(lhs, subst: valueSubst), rhs: remappedValue(rhs, subst: valueSubst), signedness: signedness)
+		condBranch(condId, thenBlockId, elseBlockId) gives StdOp.condBranch(remappedValue(condId, subst: valueSubst), thenBlockId: clonedBlock(thenBlockId, subst: blockSubst), elseBlockId: clonedBlock(elseBlockId, subst: blockSubst))
+		branch(targetBlockId) gives StdOp.branch(clonedBlock(targetBlockId, subst: blockSubst))
+		ret(retValId) gives StdOp.ret(remappedValue(retValId, subst: valueSubst))
+		param gives refuseParamClone()
+		call(resultId, callee, args) gives StdOp.call(clonedValue(resultId, subst: valueSubst), callee: callee, args: remappedArgs(args, subst: valueSubst))
+		retVoid gives op
+		globalAddr(resultId, label) gives StdOp.globalAddr(clonedValue(resultId, subst: valueSubst), label: label)
+		loadIndirect(resultId, addrId, offset, valueType) gives StdOp.loadIndirect(clonedValue(resultId, subst: valueSubst), addrId: remappedValue(addrId, subst: valueSubst), offset: offset, valueType: valueType)
+		storeIndirect(addrId, offset, valueId, valueType) gives StdOp.storeIndirect(remappedValue(addrId, subst: valueSubst), offset: offset, valueId: remappedValue(valueId, subst: valueSubst), valueType: valueType)
 		osAllocPages or
-			osWriteStdout then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is marked `isUnsupportedInInlineBody`, which `inlineOpRole` refuses a callee for")
-		rdataAddr(resultId, label) then return StdOp.rdataAddr(clonedValue(resultId, subst: valueSubst), label: label)
-		tryCall(resultId, errorFlagId, callee, args) then return StdOp.tryCall(clonedValue(resultId, subst: valueSubst), errorFlagId: clonedValue(errorFlagId, subst: valueSubst), callee: callee, args: args)
+			osWriteStdout gives refuseUnclonable(op)
+		rdataAddr(resultId, label) gives StdOp.rdataAddr(clonedValue(resultId, subst: valueSubst), label: label)
+		tryCall(resultId, errorFlagId, callee, args) gives StdOp.tryCall(clonedValue(resultId, subst: valueSubst), errorFlagId: clonedValue(errorFlagId, subst: valueSubst), callee: callee, args: remappedArgs(args, subst: valueSubst))
 		errorReturn or
-			osExit then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is a dual-register return or a process exit — each refused by `inlineOpRole`, and neither can sit inside a loop")
-		funcAddr(resultId, funcName) then return StdOp.funcAddr(clonedValue(resultId, subst: valueSubst), funcName: funcName)
-		callIndirect(resultId, calleeReg, resultType, argFloatMask, args) then return StdOp.callIndirect(clonedValue(resultId, subst: valueSubst), calleeReg: calleeReg, resultType: resultType, argFloatMask: argFloatMask, args: args)
-
-		// A panic defines nothing and names no block: its message travels as an `.rdata` label or an
-		// already-remapped pointer, so the copy is the op itself.
-		osPanic or
-			osPanicValue then return op
+			osExit gives refuseUnclonable(op)
+		funcAddr(resultId, funcName) gives StdOp.funcAddr(clonedValue(resultId, subst: valueSubst), funcName: funcName)
+		callIndirect(resultId, calleeReg, resultType, argFloatMask, args) gives StdOp.callIndirect(clonedValue(resultId, subst: valueSubst), calleeReg: remappedValue(calleeReg, subst: valueSubst), resultType: resultType, argFloatMask: argFloatMask, args: remappedArgs(args, subst: valueSubst))
+		osPanic gives op
+		osPanicValue(messagePtr) gives StdOp.osPanicValue(remappedValue(messagePtr, subst: valueSubst))
 		osReadClock or
 			osProcessSpawn or
 			osProcessExitCode or
 			osWaitHandles or
 			osCloseHandle or
 			osWaitHandle or
-			osFreePages then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` system primitive, which `inlineOpRole` refuses a callee for")
-		switch(subjectId, denseTargetBlockIds, defaultBlockId) then return StdOp.switch(subjectId, denseTargetBlockIds: clonedBlocks(denseTargetBlockIds, subst: blockSubst), defaultBlockId: clonedBlock(defaultBlockId, subst: blockSubst))
-		witnessCall(resultId, witnessAddr, methodIndex, resultType, argFloatMask, args) then return StdOp.witnessCall(clonedValue(resultId, subst: valueSubst), witnessAddr: witnessAddr, methodIndex: methodIndex, resultType: resultType, argFloatMask: argFloatMask, args: args)
+			osFreePages gives refuseUnclonable(op)
+		switch(subjectId, denseTargetBlockIds, defaultBlockId) gives StdOp.switch(remappedValue(subjectId, subst: valueSubst), denseTargetBlockIds: clonedBlocks(denseTargetBlockIds, subst: blockSubst), defaultBlockId: clonedBlock(defaultBlockId, subst: blockSubst))
+		witnessCall(resultId, witnessAddr, methodIndex, resultType, argFloatMask, args) gives StdOp.witnessCall(clonedValue(resultId, subst: valueSubst), witnessAddr: remappedValue(witnessAddr, subst: valueSubst), methodIndex: methodIndex, resultType: resultType, argFloatMask: argFloatMask, args: remappedArgs(args, subst: valueSubst))
 		osPipeCreate or
 			osIocpCreate or
 			osEventCreate or
@@ -5409,8 +5364,8 @@ function remapClonedDefsAndTargets(op StdOp, valueSubst ValueIdArray, blockSubst
 			osGetPid or
 			osPipeCreateOutbound or
 			osWriteFile or
-			osReadWallClock then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` system primitive, which `inlineOpRole` refuses a callee for")
-		witnessTryCall(resultId, errorFlagId, witnessAddr, methodIndex, resultType, argFloatMask, args) then return StdOp.witnessTryCall(clonedValue(resultId, subst: valueSubst), errorFlagId: clonedValue(errorFlagId, subst: valueSubst), witnessAddr: witnessAddr, methodIndex: methodIndex, resultType: resultType, argFloatMask: argFloatMask, args: args)
+			osReadWallClock gives refuseUnclonable(op)
+		witnessTryCall(resultId, errorFlagId, witnessAddr, methodIndex, resultType, argFloatMask, args) gives StdOp.witnessTryCall(clonedValue(resultId, subst: valueSubst), errorFlagId: clonedValue(errorFlagId, subst: valueSubst), witnessAddr: remappedValue(witnessAddr, subst: valueSubst), methodIndex: methodIndex, resultType: resultType, argFloatMask: argFloatMask, args: remappedArgs(args, subst: valueSubst))
 		osFileOpenRead or
 			osFileClose or
 			osReadFile or
@@ -5445,40 +5400,99 @@ function remapClonedDefsAndTargets(op StdOp, valueSubst ValueIdArray, blockSubst
 			osSocketRecv or
 			osSocketClose or
 			osCpuCount or
-			osThreadCpuTicks then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` system primitive, which `inlineOpRole` refuses a callee for")
-
-		// The appended page/fill/atomic band (F1, F2) and the thread/TLS band (G1), placed consciously: the
-		// three `inlineOpRole` ADMITS are cloned like any body op — a fill defines nothing, the two atomics
-		// define their result — and the rest are `isUnsupportedInInlineBody` import calls it refuses.
-		osDecommitPages then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` page primitive, which `inlineOpRole` refuses a callee for")
-		memFill then return op
+			osThreadCpuTicks gives refuseUnclonable(op)
+		osDecommitPages gives refuseUnclonable(op)
+		memFill(dest, byteCount, value) gives StdOp.memFill(remappedValue(dest, subst: valueSubst), byteCountId: remappedValue(byteCount, subst: valueSubst), value: value)
 		osCommitPages or
-			osReservePages then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` page primitive, which `inlineOpRole` refuses a callee for")
-		atomicCas(resultId, addrId, expectedId, replacementId) then return StdOp.atomicCas(clonedValue(resultId, subst: valueSubst), addrId: addrId, expectedId: expectedId, replacementId: replacementId)
-		atomicRmw(resultId, addrId, operandId, opcode) then return StdOp.atomicRmw(clonedValue(resultId, subst: valueSubst), addrId: addrId, operandId: operandId, opcode: opcode)
+			osReservePages gives refuseUnclonable(op)
+		atomicCas(resultId, addr, expected, replacement) gives StdOp.atomicCas(clonedValue(resultId, subst: valueSubst), addrId: remappedValue(addr, subst: valueSubst), expectedId: remappedValue(expected, subst: valueSubst), replacementId: remappedValue(replacement, subst: valueSubst))
+		atomicRmw(resultId, addr, operand, opcode) gives StdOp.atomicRmw(clonedValue(resultId, subst: valueSubst), addrId: remappedValue(addr, subst: valueSubst), operandId: remappedValue(operand, subst: valueSubst), opcode: opcode)
 		currentThreadToken or
 			tlsAlloc or
 			tlsSetValue or
 			tlsSlotLoad or
 			osSetEvent or
-			osEnterBackgroundPriority then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` system primitive, which `inlineOpRole` refuses a callee for")
-		osFileOpenWriteExecutable then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` system primitive, which `inlineOpRole` refuses a callee for")
+			osEnterBackgroundPriority gives refuseUnclonable(op)
+		osFileOpenWriteExecutable gives refuseUnclonable(op)
 		osEnvBlock or
-			osEnvBlockFree then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` system primitive, which `inlineOpRole` refuses a callee for")
-
-		// G3: cloned like their plain twins — an ordered load defines its result, an ordered store defines
-		// nothing. Inlining copies the op unchanged, which preserves its ordering with it.
-		loadAcquire(resultId, addrId, offset, valueType) then return StdOp.loadAcquire(clonedValue(resultId, subst: valueSubst), addrId: addrId, offset: offset, valueType: valueType)
-		storeRelease then return op
-		osHandleFileType then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` system primitive, which `inlineOpRole` refuses a callee for")
+			osEnvBlockFree gives refuseUnclonable(op)
+		loadAcquire(resultId, addrId, offset, valueType) gives StdOp.loadAcquire(clonedValue(resultId, subst: valueSubst), addrId: remappedValue(addrId, subst: valueSubst), offset: offset, valueType: valueType)
+		storeRelease(addrId, offset, valueId, valueType) gives StdOp.storeRelease(remappedValue(addrId, subst: valueSubst), offset: offset, valueId: remappedValue(valueId, subst: valueSubst), valueType: valueType)
+		osHandleFileType gives refuseUnclonable(op)
 		osCreateNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
 			osHostSample or
-			osNetpoll then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` system primitive, which `inlineOpRole` refuses a callee for")
+			osNetpoll gives refuseUnclonable(op)
 	end 'r'
-end 'remapClonedDefsAndTargets'
+end 'cloneStdOp'
+
+// The backstops of `cloneStdOp`'s refusing arms — functions rather than messages, for the reason above.
+function refuseParamClone() returns StdOp
+	panic("cloneStdOp: a `param` op reached the cloner — a splice maps a parameter to its argument instead of copying it, and a loop copy never holds the entry block")
+end 'refuseParamClone'
+
+function refuseUnclonable(op StdOp) returns StdOp
+	panic("cloneStdOp: `{stdOpCloneRefusalName(op)}` cannot be copied into another function — `inlineOpRole` refuses a callee holding it and the unswitcher a loop holding it, so its reaching the cloner is a disagreement between an admission rule and this file")
+end 'refuseUnclonable'
+
+function requireClonedDefAgreesWithTheDefEnumerator(op StdOp, cloned StdOp, valueSubst ValueIdArray, def StdDefinedValues)
+	stdOpDefinedValue(op, def: def)
+
+	// A `tryCall` defines a pair, and a loop copy clones one; both halves must come back remapped.
+	if def.definesPair() 'twoDefs'
+		requireClonedDefinesPair(cloned, wantFirst: clonedValue(def.first, subst: valueSubst), wantSecond: clonedValue(def.second, subst: valueSubst), def: def)
+		return
+	end 'twoDefs'
+
+	if def.definesNothing() 'noDef'
+		requireClonedDefinesNothing(cloned, def: def)
+		return
+	end 'noDef'
+
+	requireClonedDefIs(cloned, want: clonedValue(def.first, subst: valueSubst), def: def)
+end 'requireClonedDefAgreesWithTheDefEnumerator'
+
+function requireClonedDefinesPair(cloned StdOp, wantFirst ValueId, wantSecond ValueId, def StdDefinedValues)
+	stdOpDefinedValue(cloned, def: def)
+
+	if not def.definesPair() 'pairLost'
+		panic("cloneStdOp: `{stdOpCloneRefusalName(cloned)}` defines a pair by `stdOpDefinedValue` yet its clone does not — the two def walks in this file disagree")
+	end 'pairLost'
+
+	if def.first != wantFirst or def.second != wantSecond 'pairNotRemapped'
+		panic("cloneStdOp: `{stdOpCloneRefusalName(cloned)}` came back defining {def.first}/{def.second} where the column maps the original's pair to {wantFirst}/{wantSecond} — the def rewrite and `stdOpDefinedValue` name different fields")
+	end 'pairNotRemapped'
+end 'requireClonedDefinesPair'
+
+function requireClonedDefinesNothing(cloned StdOp, def StdDefinedValues)
+	stdOpDefinedValue(cloned, def: def)
+	requireClonedIsNotAPair(cloned, def: def)
+
+	if not def.definesNothing() 'cloneDefines'
+		panic("cloneStdOp: `{stdOpCloneRefusalName(cloned)}` defines nothing by `stdOpDefinedValue` yet the clone defines value {def.first} — the two def walks in this file disagree")
+	end 'cloneDefines'
+end 'requireClonedDefinesNothing'
+
+function requireClonedDefIs(cloned StdOp, want ValueId, def StdDefinedValues)
+	stdOpDefinedValue(cloned, def: def)
+	requireClonedIsNotAPair(cloned, def: def)
+
+	if def.definesNothing() 'noDefRewritten'
+		panic("cloneStdOp: `{stdOpCloneRefusalName(cloned)}` DEFINES value {want} by `stdOpDefinedValue` but `cloneStdOp` handed it back with no def rewritten — the clone would keep the source's id and the copy's function would hold two definitions of one value")
+	end 'noDefRewritten'
+
+	if def.first != want 'defNotRemapped'
+		panic("cloneStdOp: `{stdOpCloneRefusalName(cloned)}` came back defining value {def.first} where the column maps the original's def to {want} — the def rewrite and `stdOpDefinedValue` name different fields")
+	end 'defNotRemapped'
+end 'requireClonedDefIs'
+
+function requireClonedIsNotAPair(cloned StdOp, def StdDefinedValues)
+	if def.definesPair() 'twoDefs'
+		panic("cloneStdOp: cloning produced a two-def op from one that is not — the two def walks in this file disagree about `{stdOpCloneRefusalName(cloned)}`")
+	end 'twoDefs'
+end 'requireClonedIsNotAPair'
 
 // The refused op's own name, for the panics above — one place, so a message cannot go on naming a
 // variant that moved. It reports the two facts that decide admission (`isCall` is not one of them:
@@ -5497,16 +5511,15 @@ end 'stdOpCloneRefusalName'
 //
 // ⚠ **`module`-VISIBLE BECAUSE THE SPLICE ITSELF ASKS IT TOO**, of the values no op carries — a copied
 // block's phis and its outgoing edge args live on the `IrBlock`, not on any op, so `InlineLeaves` reaches
-// them past the cloner. It briefly had its own byte-identical copy under another name, which is one
-// column-bounds rule written twice.
+// them past the cloner, through this one spelling of the column-bounds rule.
 module function clonedValue(v ValueId, subst ValueIdArray) returns ValueId
-	return try subst.get(v) otherwise panic("remapStdOpForClone: callee value {v} is outside the {subst.count()}-entry value column this splice built — the column is sized by the callee's own `nextFreeValueId`, so an id past it means the op belongs to another function")
+	return try subst.get(v) otherwise panic("cloneStdOp: callee value {v} is outside the {subst.count()}-entry value column this splice built — the column is sized by the callee's own `nextFreeValueId`, so an id past it means the op belongs to another function")
 end 'clonedValue'
 
 // A cloned terminator's block target, through the splice's dense block column: every copied callee
 // block maps to its fresh caller block.
 module function clonedBlock(id BlockId, subst BlockIdArray) returns BlockId
-	return try subst.get(id) otherwise panic("remapStdOpForClone: callee block id {id} is outside the {subst.count()}-entry block column this splice built — the column is sized by the callee's own `nextBlockId`")
+	return try subst.get(id) otherwise panic("cloneStdOp: callee block id {id} is outside the {subst.count()}-entry block column this splice built — the column is sized by the callee's own `nextBlockId`")
 end 'clonedBlock'
 
 // A dense `switch` table's whole target list, mapped. A jump table names MANY blocks and one default,

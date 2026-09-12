@@ -1603,7 +1603,7 @@ function emitTestChain(module StdModule, func IrFunction, plan UnswitchPlan, ana
 
 			columns.mapCopy(scratch.def.first, minter: minter)
 			module.spans.current = module.spans.at(opIdx)
-			module.appendOp(chain.block(module, func: func), op: remapStdOpForClone(module.getOp(opIdx), valueSubst: columns.valueSubst, blockSubst: columns.blockSubst, def: scratch.def))
+			module.appendOp(chain.block(module, func: func), op: scratch.cloner.clone(module.getOp(opIdx), valueSubst: columns.valueSubst, blockSubst: columns.blockSubst))
 		end 'eachOp'
 
 		if guardCursor < plan.guards.count() and (try plan.guards.get(guardCursor) otherwise panic("unswitchInvariantGuards: guards.get OOB at {guardCursor}")).position == position 'aGuardCloses'
@@ -1790,7 +1790,7 @@ function copyMember(module StdModule, func IrFunction, plan UnswitchPlan, positi
 		end 'hoisted'
 
 		module.spans.current = module.spans.at(opIdx)
-		module.appendOp(copy, op: remapStdOpForClone(module.getOp(opIdx), valueSubst: columns.valueSubst, blockSubst: columns.blockSubst, def: scratch.def))
+		module.appendOp(copy, op: scratch.cloner.clone(module.getOp(opIdx), valueSubst: columns.valueSubst, blockSubst: columns.blockSubst))
 	end 'eachOp'
 
 	let terminatorIdx = original.terminatorIndex()
@@ -1804,7 +1804,7 @@ function copyMember(module StdModule, func IrFunction, plan UnswitchPlan, positi
 		keptTargetId = (try plan.guards.get(guardPlusOne - 1) otherwise panic("unswitchInvariantGuards: guards.get OOB at {guardPlusOne - 1}")).elseBlockId
 		module.setTerminator(copy, op: StdOp.branch(clonedBlock(keptTargetId, subst: columns.blockSubst)))
 	end 'foldTheGuard' else 'cloneTheExit'
-		module.setTerminator(copy, op: remapStdOpForClone(module.getOp(terminatorIdx), valueSubst: columns.valueSubst, blockSubst: columns.blockSubst, def: scratch.def))
+		module.setTerminator(copy, op: scratch.cloner.clone(module.getOp(terminatorIdx), valueSubst: columns.valueSubst, blockSubst: columns.blockSubst))
 	end 'cloneTheExit'
 
 	copy.branchEdges = copiedEdges(original, folded: folded, keptTargetId: keptTargetId, columns: columns)
@@ -1970,6 +1970,10 @@ type UnswitchScratch
 	export var call as StdCallOperands
 	export var branch as StdBranchOperands
 	export var def as StdDefinedValues
+
+	// The op cloner every versioned loop's copies go through, so its per-variant def check runs once per
+	// pass rather than once per loop.
+	export var cloner as StdOpCloner
 	export var guard as ManagedGuardOperands
 	export var slot as ElementSlotOperands
 	export var refusals as OrdinalTally
@@ -1985,7 +1989,7 @@ type UnswitchScratch
 	export var preheaderDef as StdDefinedValues
 
 	static function create() returns UnswitchScratch
-		return Self{members: LoopMembership.create(), definedInLoop: LoopValueStamps.create(), liveAcross: LoopValueStamps.create(), invariant: LoopValueStamps.create(), hoistableLoads: LoopValueStamps.create(), known: LoopValueStamps.create(), writers: LoopValueStamps.create(), canonical: CanonicalMap.create(0), reads: StdValueUseSet.createRecordingIds(), readHoisted: StdValueUseSet.createRecordingIds(), escapingUses: BlockPositionColumn.create(), load: StdLoadOperands.create(), store: StdStoreOperands.create(), call: StdCallOperands.create(), branch: StdBranchOperands.create(), def: StdDefinedValues.create(), guard: ManagedGuardOperands.create(), slot: ElementSlotOperands.create(), preheaderDef: StdDefinedValues.create(), refusals: OrdinalTally.create(UnswitchRefusal.allCases.count())}
+		return Self{members: LoopMembership.create(), definedInLoop: LoopValueStamps.create(), liveAcross: LoopValueStamps.create(), invariant: LoopValueStamps.create(), hoistableLoads: LoopValueStamps.create(), known: LoopValueStamps.create(), writers: LoopValueStamps.create(), canonical: CanonicalMap.create(0), reads: StdValueUseSet.createRecordingIds(), readHoisted: StdValueUseSet.createRecordingIds(), escapingUses: BlockPositionColumn.create(), load: StdLoadOperands.create(), store: StdStoreOperands.create(), call: StdCallOperands.create(), branch: StdBranchOperands.create(), def: StdDefinedValues.create(), cloner: StdOpCloner.create(), guard: ManagedGuardOperands.create(), slot: ElementSlotOperands.create(), preheaderDef: StdDefinedValues.create(), refusals: OrdinalTally.create(UnswitchRefusal.allCases.count())}
 	end 'create'
 
 	function beginLoop()

@@ -77,14 +77,15 @@ typealias SiteCountArray = Array with SiteCount
 typealias GuardCount = int(0 to u64.max)
 
 // The shared empties a `SiteSplicer` starts with and NEVER writes to — `seedSiteBuffers` replaces them
-// with real arrays at the first site, and `valueIds` replaces the minter at the first splice. This pass
-// constructs one inliner per FUNCTION in the module and the overwhelming majority of functions hold no
-// inlinable site at all, so three `create()`s in the constructor would be three heap objects per
+// with real arrays at the first site, and `valueIds` replaces the minter at the first splice. The leaf
+// rule constructs one inliner per FUNCTION in the module and the overwhelming majority of functions hold
+// no inlinable site at all, so four `create()`s in the constructor would be four heap objects per
 // function for nothing. Same shape, and the same measured reason, as
 // `InlineManagedPrimitives.sharedUnseededMinter` and `InsertRangeChecks`' chain columns; safe for the
 // same reason — the one operation that would write to each is the one that replaces it.
 let sharedEmptySitePositions = BlockOpPosArray.create()
 let sharedEmptySiteCallees = FuncIndexArray.create()
+let sharedEmptyContPositions = BlockPositionColumn.create()
 let sharedUnseededLeafMinter = ValueMinter.create(0)
 
 // ⭐ The two columns a splice that declines NOTHING never writes to — which is nearly every splice in the
@@ -116,6 +117,55 @@ enum InlineOpRole
 	refusing
 end 'InlineOpRole'
 
+// ⭐⭐ **THE TWO METADATA BITS THIS PASS ASKS PER OP, MEMOIZED PER VARIANT.** `rawValue` constructs a
+// variant's backing struct by one compare per VARIANT of the union — ninety-odd for `StdOp` — so read per
+// op it costs several times the jump-table `match` it sits behind; `ordinal` is the discriminant itself.
+// Each variant's metadata is read from `rawValue` the first time the variant is met and answered from a
+// column after, so the dialect's table stays the one source and the walk pays one probe per op.
+typealias OpRoleColumn = Array with OpRole
+
+type StdOpMetaMemo
+	var known as BoolArray
+	var roles as OpRoleColumn
+	var unsupported as BoolArray
+
+	static function create() returns StdOpMetaMemo
+		return Self{known: BoolArray.create(), roles: OpRoleColumn.create(), unsupported: BoolArray.create()}
+	end 'create'
+
+	function hasRole(op StdOp, role OpRole) returns bool
+		let variant = self.learned(op)
+		return (try self.roles.get(variant) otherwise panic("StdOpMetaMemo.hasRole: roles.get OOB at {variant} after learning it")) == role
+	end 'hasRole'
+
+	function isUnsupportedInInlineBody(op StdOp) returns bool
+		let variant = self.learned(op)
+		return try self.unsupported.get(variant) otherwise panic("StdOpMetaMemo.isUnsupportedInInlineBody: unsupported.get OOB at {variant} after learning it")
+	end 'isUnsupportedInInlineBody'
+
+	// The op's variant ordinal, its metadata filled in on the first meeting.
+	function learned(op StdOp) returns ElementIndex
+		let variant = op.ordinal as ElementIndex
+		self.known.growFilled(variant + 1, value: false)
+
+		let met = try self.known.get(variant) otherwise panic("StdOpMetaMemo.learned: known.get OOB at {variant} after growing to hold it")
+
+		if met 'alreadyLearned'
+			return variant
+		end 'alreadyLearned'
+
+		// `growFilled` writes every slot it adds, which is what gives an enum column storage (`resize` on
+		// one sets the length alone — `CompileTimings.create` records the trap). The backing record is read
+		// one field at a time, which is the only way the compiler serves it.
+		self.roles.growFilled(variant + 1, value: OpRole.plain)
+		self.unsupported.growFilled(variant + 1, value: false)
+		try self.roles.set(variant, value: op.rawValue.role) otherwise panic("StdOpMetaMemo.learned: roles.set OOB at {variant}")
+		try self.unsupported.set(variant, value: op.rawValue.isUnsupportedInInlineBody) otherwise panic("StdOpMetaMemo.learned: unsupported.set OOB at {variant}")
+		try self.known.set(variant, value: true) otherwise panic("StdOpMetaMemo.learned: known.set OOB at {variant}")
+		return variant
+	end 'learned'
+end 'StdOpMetaMemo'
+
 // ⭐ **THE ROLE OF ONE OP — one exhaustive `match`, and the TAIL of it reads the dialect's own flag.**
 // The variants named explicitly are the ones whose role is NOT derivable from
 // `isUnsupportedInInlineBody`: the five calls and `param` all carry `false` for it (a call is perfectly
@@ -130,7 +180,7 @@ end 'InlineOpRole'
 //
 // ⚠ Every other variant is NAMED, so a variant added later fails to compile here until it is
 // consciously placed.
-function inlineOpRole(op StdOp) returns InlineOpRole
+function inlineOpRole(op StdOp, meta StdOpMetaMemo) returns InlineOpRole
 	match op 'kind'
 		const or
 			binOp or
@@ -250,7 +300,7 @@ function inlineOpRole(op StdOp) returns InlineOpRole
 			osNetpoll then break 'kind'
 	end 'kind'
 
-	return InlineOpRole.refusing if op.rawValue.isUnsupportedInInlineBody else InlineOpRole.body
+	return InlineOpRole.refusing if meta.isUnsupportedInInlineBody(op) else InlineOpRole.body
 end 'inlineOpRole'
 
 // --- the per-callee verdict ---
@@ -294,9 +344,10 @@ type LeafPlan
 	var verdicts as LeafVerdictArray
 
 	// One past the highest ValueId each ELIGIBLE callee's body uses — the width of the value column a
-	// splice builds. Zero for every other function; `nextFreeValueId` materializes a live-op index array,
-	// so it is asked only where an answer will be spent.
+	// splice builds — and the block count it was admitted with. Zero for every other function;
+	// `nextFreeValueId` walks the body, so it is asked only where an answer will be spent.
 	var valueBounds as ValueIdArray
+	var blockCounts as BlockPositionColumn
 
 	// The same membership as `verdicts == eligible`, in the shape `ValueOriginTable.indexRowsOfFunctions`
 	// takes. Built in the same walk rather than derived later, so the two cannot disagree about which
@@ -313,6 +364,8 @@ type LeafPlan
 	static function create(funcCount FuncIndex) returns LeafPlan
 		var valueBounds = ValueIdArray.create()
 		valueBounds.resize(funcCount)
+		var blockCounts = BlockPositionColumn.create()
+		blockCounts.resize(funcCount)
 		var eligibleFuncs = BoolArray.create()
 		eligibleFuncs.resize(funcCount)
 		var withinLargerBudget = BoolArray.create()
@@ -320,6 +373,7 @@ type LeafPlan
 		return Self{
 			verdicts: LeafVerdictArray.create(),
 			valueBounds: valueBounds,
+			blockCounts: blockCounts,
 			eligibleFuncs: eligibleFuncs,
 			withinLargerBudget: withinLargerBudget,
 			eligibleCount: 0,
@@ -349,6 +403,7 @@ type LeafPlan
 		self.eligibleCount = self.eligibleCount + 1
 		try self.eligibleFuncs.set(funcIndex, value: true) otherwise panic("LeafPlan.recordEligible: eligibleFuncs.set OOB at {funcIndex}")
 		try self.valueBounds.set(funcIndex, value: nextFreeValueId(module, func: func)) otherwise panic("LeafPlan.recordEligible: valueBounds.set OOB at {funcIndex}")
+		try self.blockCounts.set(funcIndex, value: func.blockRefs.count()) otherwise panic("LeafPlan.recordEligible: blockCounts.set OOB at {funcIndex}")
 	end 'recordEligible'
 
 	function recordTooManyOps(funcIndex FuncIndex, opCount OpCount)
@@ -373,23 +428,27 @@ type LeafPlan
 	export function valueBoundOf(funcIndex FuncIndex) returns ValueId
 		return try self.valueBounds.get(funcIndex) otherwise panic("LeafPlan.valueBoundOf: function index {funcIndex} is outside the {self.valueBounds.count()}-function module this plan was built over")
 	end 'valueBoundOf'
+
+	export function blockCountOf(funcIndex FuncIndex) returns BlockRefIndex
+		return try self.blockCounts.get(funcIndex) otherwise panic("LeafPlan.blockCountOf: function index {funcIndex} is outside the {self.blockCounts.count()}-function module this plan was built over")
+	end 'blockCountOf'
 end 'LeafPlan'
 
-function buildLeafPlan(module StdModule, framesAreRecorded bool, namedByGolden BoolArray) returns LeafPlan
+function buildLeafPlan(module StdModule, framesAreRecorded bool, namedByGolden BoolArray, meta StdOpMetaMemo) returns LeafPlan
 	var plan = LeafPlan.create(module.funcCount() as FuncIndex)
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		let func = module.getFunc(funcIndex)
 
 		// Splicing every site of a golden-named leaf would drop the body the golden asks the printer for.
-		let scan = LeafBodyScan.create(LeafVerdict.notALeaf, opCount: 0) if isGoldenNamed(namedByGolden, funcIndex: funcIndex) else scanLeafBody(module, func: func, framesAreRecorded: framesAreRecorded)
+		let scan = LeafBodyScan.create(LeafVerdict.notALeaf, opCount: 0) if isGoldenNamed(namedByGolden, funcIndex: funcIndex) else scanLeafBody(module, func: func, framesAreRecorded: framesAreRecorded, meta: meta)
 		plan.record(funcIndex, scan: scan, module: module, func: func)
 	end 'eachFunc'
 
 	return plan
 end 'buildLeafPlan'
 
-// One candidate body's whole verdict, from one walk: the shape both rules refuse, then the leaf rule's
+// One candidate body's whole verdict, from ONE walk: the shape both rules refuse, then the leaf rule's
 // own — a call of any kind, a `framed` op where the target records no inline frames, and the op budget.
 //
 // ⚠ **IT WALKS `blockRefs` → `opRefs` + terminator DIRECTLY rather than `IrModule.liveOpIndices`, and
@@ -398,23 +457,31 @@ end 'buildLeafPlan'
 // op. `InlineManagedPrimitives.expandChainFrom` walks the same halves for the same reason. A terminator
 // is never a `param`, but it IS counted and it CAN be an `errorReturn`, so the half this walk would
 // otherwise omit is exactly where a throwing body is caught.
-function scanLeafBody(module StdModule, func IrFunction, framesAreRecorded bool) returns LeafBodyScan
-	match scanSpliceableShape(module, func: func) 'shape'
+//
+// ⭐ **THE SHAPE RULES ARE ASKED IN THE SAME WALK AS THE LEAF RULE, so a body is read once**; the shape
+// helpers below are shared with `scanSpliceableShape`, which asks them of a called-once candidate and
+// nothing else. A leaf scan RETURNS at the first call — the commonest op there is — where the shape scan
+// has to read the whole body for its refusal reason.
+function scanLeafBody(module StdModule, func IrFunction, framesAreRecorded bool, meta StdOpMetaMemo) returns LeafBodyScan
+	match functionShape(func) 'shape'
 		spliceable then break 'shape'
 		refused then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: 0)
 	end 'shape'
 
 	var ops = 0 as OpCount
 
-	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("scanLeafBody: blockRef {blockRef} of '{String.from(func.name)}' is not in module.blocks")
+	for blockIndex in 0 upto func.blockRefs.count() 'eachBlock'
+		let block = module.blockAtPosition(func, position: blockIndex)
+
+		match blockShape(block, blockIndex: blockIndex) 'blockShape'
+			spliceable then break 'blockShape'
+			refused then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: ops)
+		end 'blockShape'
 
 		for opIdx in block.opRefs 'eachOp'
-			let op = try module.ops.get(opIdx) otherwise panic("scanLeafBody: op index {opIdx} named by a block of '{String.from(func.name)}' is not in module.ops")
-
 			// Bound ONCE: this runs on every op of every function in the module, and the role is a `match`
 			// over a union with ninety variants.
-			let role = inlineOpRole(op)
+			let role = inlineOpRole(module.getOp(opIdx), meta: meta)
 
 			// A framed op is copyable only where the target records the frame it names.
 			if role == InlineOpRole.framed and not framesAreRecorded 'frameWouldBeLost'
@@ -430,21 +497,22 @@ function scanLeafBody(module StdModule, func IrFunction, framesAreRecorded bool)
 				// ⭐ **RETURNED FROM, NOT FLAGGED — a call is the commonest op there is, and this scan runs
 				// over the whole module.** Bailing at the first one is what keeps a 5,000-op function from
 				// being walked to the end to learn something its second op already said.
-				calling then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: ops)
-				refusing then panic("scanLeafBody: '{String.from(func.name)}' holds an unsupported op past a shape scan that admitted it")
+				calling or
+					refusing then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: ops)
 			end 'role'
 
 			ops = ops + countedBodyOps(role)
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'terminated'
-			let term = try module.ops.get(block.terminatorIndex()) otherwise panic("scanLeafBody: terminator op index of a block of '{String.from(func.name)}' is not in module.ops")
 			ops = ops + 1
 
 			// A `tailCall`-shaped terminator refuses the leaf rule as any call does.
-			if inlineOpRole(term) == InlineOpRole.calling 'callsAtTheExit'
-				return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: ops)
-			end 'callsAtTheExit'
+			match terminatorRole(module.getOp(block.terminatorIndex()), func: func, meta: meta) 'termRole'
+				body then break 'termRole'
+				calling or
+					refusing then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: ops)
+			end 'termRole'
 		end 'terminated'
 	end 'eachBlock'
 
@@ -469,11 +537,47 @@ union SpliceableShape
 	refused(reason CalledOnceRefusal)
 end 'SpliceableShape'
 
-// The shape both rules ask of a body before their own criterion. Function-level facts first — a
-// by-reference parameter is an ADDRESS whose aliasing the copy cannot keep, and a body that carries the
-// green-thread stack guard has a load-bearing FRAME that inlining into an exempt caller erases
-// (`IrFunction.needsGreenThreadStackGuard`) — then one walk of the blocks.
-function scanSpliceableShape(module StdModule, func IrFunction) returns SpliceableShape
+// The shape both rules ask of a body before their own criterion — the function-level facts, then one
+// walk of the blocks. The called-once rule asks it of every candidate; the leaf rule asks the same
+// helpers inside its own walk (`scanLeafBody`).
+function scanSpliceableShape(module StdModule, func IrFunction, meta StdOpMetaMemo) returns SpliceableShape
+	match functionShape(func) 'shape'
+		spliceable then break 'shape'
+		refused(reason) then return SpliceableShape.refused(reason)
+	end 'shape'
+
+	for blockIndex in 0 upto func.blockRefs.count() 'eachBlock'
+		let block = module.blockAtPosition(func, position: blockIndex)
+
+		match blockShape(block, blockIndex: blockIndex) 'blockShape'
+			spliceable then break 'blockShape'
+			refused(reason) then return SpliceableShape.refused(reason)
+		end 'blockShape'
+
+		for opIdx in block.opRefs 'eachOp'
+			if inlineOpRole(module.getOp(opIdx), meta: meta) == InlineOpRole.refusing 'unsupported'
+				return SpliceableShape.refused(CalledOnceRefusal.unsupportedOp)
+			end 'unsupported'
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'terminated'
+			let term = module.getOp(block.terminatorIndex())
+
+			match terminatorRole(term, func: func, meta: meta) 'termRole'
+				body or
+					calling then break 'termRole'
+				refusing then return SpliceableShape.refused(terminatorRefusal(term, meta: meta))
+			end 'termRole'
+		end 'terminated'
+	end 'eachBlock'
+
+	return SpliceableShape.spliceable
+end 'scanSpliceableShape'
+
+// The function-level shape facts: a by-reference parameter is an ADDRESS whose aliasing the copy cannot
+// keep, and a body that carries the green-thread stack guard has a load-bearing FRAME that inlining into
+// an exempt caller erases (`IrFunction.needsGreenThreadStackGuard`).
+function functionShape(func IrFunction) returns SpliceableShape
 	if func.blockRefs.count() == 0 'noBody'
 		return SpliceableShape.refused(CalledOnceRefusal.unloweredBody)
 	end 'noBody'
@@ -486,60 +590,61 @@ function scanSpliceableShape(module StdModule, func IrFunction) returns Spliceab
 		return SpliceableShape.refused(CalledOnceRefusal.greenThreadStackGuard)
 	end 'guardedFrame'
 
-	for blockIndex in 0 upto func.blockRefs.count() 'eachBlock'
-		let blockRef = try func.blockRefs.get(blockIndex) otherwise panic("scanSpliceableShape: blockRefs.get OOB at {blockIndex} inside its own count")
-		let block = try module.blocks.get(blockRef) otherwise panic("scanSpliceableShape: blockRef {blockRef} of '{String.from(func.name)}' is not in module.blocks")
+	return SpliceableShape.spliceable
+end 'functionShape'
 
-		// The ENTRY block's phis would have to be fed by the caller's branch into the copy, and there is
-		// nothing to feed them with — a function's entry takes its inputs as `param` ops. The parser mints
-		// no entry phi, so this is a stated invariant rather than a case; a body that broke it would
-		// otherwise be spliced with its entry args unbound.
-		if blockIndex == 0 and block.blockArgs.count() != 0 'entryCarriesPhis'
-			return SpliceableShape.refused(CalledOnceRefusal.entryCarriesPhis)
-		end 'entryCarriesPhis'
+// The block-level shape facts, asked of the block at `blockIndex` of `func.blockRefs`.
+function blockShape(block IrBlock, blockIndex BlockRefIndex) returns SpliceableShape
+	// The ENTRY block's phis would have to be fed by the caller's branch into the copy, and there is
+	// nothing to feed them with — a function's entry takes its inputs as `param` ops. The parser mints
+	// no entry phi, so this is a stated invariant rather than a case; a body that broke it would
+	// otherwise be spliced with its entry args unbound.
+	if blockIndex == 0 and block.blockArgs.count() != 0 'entryCarriesPhis'
+		return SpliceableShape.refused(CalledOnceRefusal.entryCarriesPhis)
+	end 'entryCarriesPhis'
 
-		// ⛔⛔ **A BLOCK STILL IN `Terminator.unset` MEANS THE BODY WAS NEVER LOWERED, AND THERE IS
-		// NOTHING TO COPY.** `LowerMaxonToStd` RELOCATES every function's blocks and then SKIPS the
-		// bodies of the stdlib functions no path from `main` reaches — the function is still pushed
-		// (`FunctionNameIndex` counts it for E4015) but not one of its ops, not even its `param` ops, is
-		// emitted. What is left looks exactly like a zero-op leaf: no call, no store, no panic, inside
-		// any budget — `String.byteLength` would reach `carryOplessExit` with an `unset` entry block, and
-		// `Array.clone` would reach `buildValueColumn` with a 2-parameter signature over a 1-wide value
-		// space.
-		//
-		// The test is `isTerminated`, not `hasTerminatorOp`: a `dead` block is legitimately op-less and
-		// IS copied (see `carryOplessExit`), and `unset` is the one state that says "unwritten".
-		if not block.isTerminated() 'bodyWasNeverLowered'
-			return SpliceableShape.refused(CalledOnceRefusal.unloweredBody)
-		end 'bodyWasNeverLowered'
-
-		for opIdx in block.opRefs 'eachOp'
-			let op = try module.ops.get(opIdx) otherwise panic("scanSpliceableShape: op index {opIdx} named by a block of '{String.from(func.name)}' is not in module.ops")
-
-			if inlineOpRole(op) == InlineOpRole.refusing 'unsupported'
-				return SpliceableShape.refused(CalledOnceRefusal.unsupportedOp)
-			end 'unsupported'
-		end 'eachOp'
-
-		if block.hasTerminatorOp() 'terminated'
-			let term = try module.ops.get(block.terminatorIndex()) otherwise panic("scanSpliceableShape: terminator op index of a block of '{String.from(func.name)}' is not in module.ops")
-
-			match inlineOpRole(term) 'termRole'
-				// A terminator is never a parameter and never framed; either would be a malformed block, and
-				// saying so here is cheaper than a rule elsewhere that has to remember it.
-				parameter then panic("scanSpliceableShape: '{String.from(func.name)}' has a `param` op in a TERMINATOR slot")
-				framed then panic("scanSpliceableShape: '{String.from(func.name)}' has a panic or a divide in a TERMINATOR slot")
-				body or
-					calling then break 'termRole'
-
-				// An `errorReturn` — a THROWING body's exit — and the terminator is exactly where it is caught.
-				refusing then return SpliceableShape.refused(CalledOnceRefusal.throwing if term.rawValue.role == OpRole.errorReturn else CalledOnceRefusal.unsupportedOp)
-			end 'termRole'
-		end 'terminated'
-	end 'eachBlock'
+	// ⛔⛔ **A BLOCK STILL IN `Terminator.unset` MEANS THE BODY WAS NEVER LOWERED, AND THERE IS
+	// NOTHING TO COPY.** `LowerMaxonToStd` RELOCATES every function's blocks and then SKIPS the
+	// bodies of the stdlib functions no path from `main` reaches — the function is still pushed
+	// (`FunctionNameIndex` counts it for E4015) but not one of its ops, not even its `param` ops, is
+	// emitted. What is left looks exactly like a zero-op leaf: no call, no store, no panic, inside
+	// any budget — `String.byteLength` would reach `carryOplessExit` with an `unset` entry block, and
+	// `Array.clone` would reach `buildValueColumn` with a 2-parameter signature over a 1-wide value
+	// space.
+	//
+	// The test is `isTerminated`, not `hasTerminatorOp`: a `dead` block is legitimately op-less and
+	// IS copied (see `carryOplessExit`), and `unset` is the one state that says "unwritten".
+	if not block.isTerminated() 'bodyWasNeverLowered'
+		return SpliceableShape.refused(CalledOnceRefusal.unloweredBody)
+	end 'bodyWasNeverLowered'
 
 	return SpliceableShape.spliceable
-end 'scanSpliceableShape'
+end 'blockShape'
+
+// What a terminator slot can hold, for the two scans: a body terminator, a call-shaped one, or one the
+// splice cannot copy.
+enum TerminatorRole
+	body
+	calling
+	refusing
+end 'TerminatorRole'
+
+// The role of the op in a terminator slot. A terminator is never a parameter and never framed; either
+// would be a malformed block, and saying so here is cheaper than a rule elsewhere that has to remember it.
+function terminatorRole(term StdOp, func IrFunction, meta StdOpMetaMemo) returns TerminatorRole
+	match inlineOpRole(term, meta: meta) 'termRole'
+		parameter then panic("terminatorRole: '{String.from(func.name)}' has a `param` op in a TERMINATOR slot")
+		framed then panic("terminatorRole: '{String.from(func.name)}' has a panic or a divide in a TERMINATOR slot")
+		body then return TerminatorRole.body
+		calling then return TerminatorRole.calling
+		refusing then return TerminatorRole.refusing
+	end 'termRole'
+end 'terminatorRole'
+
+// Why a refusing terminator refuses: an `errorReturn` — a THROWING body's exit — is caught exactly here.
+function terminatorRefusal(term StdOp, meta StdOpMetaMemo) returns CalledOnceRefusal
+	return CalledOnceRefusal.throwing if meta.hasRole(term, role: OpRole.errorReturn) else CalledOnceRefusal.unsupportedOp
+end 'terminatorRefusal'
 
 // The site census, accumulated across every caller — the pass's report. Site counts, not callee counts:
 // the plan already carries the callee tallies, and a callee refused at 16 ops that nothing calls costs
@@ -762,9 +867,11 @@ end 'inlineLeaves'
 
 function inlineWithNameIndex(project Project, module StdModule, byName FunctionNameIndex)
 	var def = StdDefinedValues.create()
+	var cloner = StdOpCloner.create()
+	var meta = StdOpMetaMemo.create()
 	let namedByGolden = goldenRequestedFunctions(project, module: module, byName: byName)
-	spliceCalledOnceCallees(project, module: module, byName: byName, def: def, namedByGolden: namedByGolden)
-	spliceLeaves(project, module: module, byName: byName, def: def, namedByGolden: namedByGolden)
+	spliceCalledOnceCallees(project, module: module, byName: byName, def: def, cloner: cloner, meta: meta, namedByGolden: namedByGolden)
+	spliceLeaves(project, module: module, byName: byName, def: def, cloner: cloner, meta: meta, namedByGolden: namedByGolden)
 end 'inlineWithNameIndex'
 
 // ⭐ **A BODY A GOLDEN REQUEST NAMES IS A REFERENCE NEITHER RULE MAY SPLICE AWAY.** `--emit-ir-runtime=`
@@ -787,8 +894,8 @@ end 'goldenRequestedFunctions'
 // The leaf rule
 // ══════════════════════════════════════════════════════════════════════════
 
-function spliceLeaves(project Project, module StdModule, byName FunctionNameIndex, def StdDefinedValues, namedByGolden BoolArray)
-	let plan = buildLeafPlan(module, framesAreRecorded: targetEmitsInlineFrameRecords(project.target), namedByGolden: namedByGolden)
+function spliceLeaves(project Project, module StdModule, byName FunctionNameIndex, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, namedByGolden BoolArray)
+	let plan = buildLeafPlan(module, framesAreRecorded: targetEmitsInlineFrameRecords(project.target), namedByGolden: namedByGolden, meta: meta)
 
 	if plan.eligibleCount == 0 'nothingToInline'
 		logDebug(LogCategory.ir, message: function() gives "inlineLeaves: 0 site(s) inlined, 0 callee(s) eligible")
@@ -813,7 +920,7 @@ function spliceLeaves(project Project, module StdModule, byName FunctionNameInde
 			continue
 		end 'notInTheProgram'
 
-		var splicer = SiteSplicer.create(project, module: module, func: func, funcIndex: funcIndex, byName: byName, admission: admission, origins: origins, stats: stats, def: def)
+		var splicer = SiteSplicer.create(project, module: module, func: func, funcIndex: funcIndex, byName: byName, admission: admission, origins: origins, stats: stats, def: def, cloner: cloner, meta: meta, ids: sharedUnseededLeafMinter, seeded: false)
 		splicer.run()
 	end 'eachFunc'
 
@@ -876,12 +983,22 @@ function calledOnceRefusalText(reason CalledOnceRefusal) returns String
 end 'calledOnceRefusalText'
 
 // The one-walk site census over every function's live ops: how many direct `call` ops name each
-// function, which function holds the one site of a function called once, and which functions something
-// other than a direct call reaches.
+// function, which function holds the one site of a function called once and WHERE in it, and which
+// functions something other than a direct call reaches.
+//
+// ⭐ **THE SITE'S COORDINATES ARE TAKEN HERE, where the walk already stands on the op** — the block
+// position and the op's position in it — so a caller's sites are never searched for again. They stay
+// true until the caller is first spliced into: nothing but a splice moves an op of a live function, and a
+// caller's facts (`CallerSiteFacts`) are taken before its first.
 type CalledOnceCensus
 	var siteCounts as SiteCountArray
 	var callerOf as FuncIndexArray
+	var sitePositions as BlockPositionColumn
+	var siteOpPositions as BlockOpPosArray
 	var referencedElsewhere as BoolArray
+
+	// The enumerator's sink, refilled per op of the walk.
+	var reference as StdFunctionReference
 
 	static function take(project Project, module StdModule, byName FunctionNameIndex) returns CalledOnceCensus
 		let funcCount = module.funcCount() as FuncIndex
@@ -889,17 +1006,32 @@ type CalledOnceCensus
 		siteCounts.resize(funcCount)
 		var callerOf = FuncIndexArray.create()
 		callerOf.resize(funcCount)
+		var sitePositions = BlockPositionColumn.create()
+		sitePositions.resize(funcCount)
+		var siteOpPositions = BlockOpPosArray.create()
+		siteOpPositions.resize(funcCount)
 		var referencedElsewhere = BoolArray.create()
 		referencedElsewhere.resize(funcCount)
-		var census = Self{siteCounts: siteCounts, callerOf: callerOf, referencedElsewhere: referencedElsewhere}
+		var census = Self{siteCounts: siteCounts, callerOf: callerOf, sitePositions: sitePositions, siteOpPositions: siteOpPositions, referencedElsewhere: referencedElsewhere, reference: StdFunctionReference.create()}
 		census.markRoots(project, byName: byName)
 
+		// The blocks are walked directly rather than through `IrModule.liveOpIndices`, which materializes an
+		// index array per function of the program to say the same thing.
 		for funcIndex in 0 upto funcCount 'eachFunc'
 			let func = module.getFunc(funcIndex)
 
-			for opIdx in module.liveOpIndices(func) 'eachOp'
-				census.noteReferences(module.getOp(opIdx), from: funcIndex, byName: byName)
-			end 'eachOp'
+			for position in 0 upto func.blockRefs.count() 'eachBlock'
+				let block = module.blockAtPosition(func, position: position)
+
+				for opPos in 0 upto block.opRefs.count() 'eachOp'
+					let opIdx = try block.opRefs.get(opPos) otherwise panic("CalledOnceCensus.take: opRefs.get OOB at {opPos} inside its own count")
+					census.noteReferences(module.getOp(opIdx), from: funcIndex, position: position, opPos: opPos, byName: byName)
+				end 'eachOp'
+
+				if block.hasTerminatorOp() 'terminated'
+					census.noteTerminatorReferences(module.getOp(block.terminatorIndex()), func: func, byName: byName)
+				end 'terminated'
+			end 'eachBlock'
 		end 'eachFunc'
 
 		return census
@@ -920,12 +1052,27 @@ type CalledOnceCensus
 
 	// The function holding a called-once callee's one site.
 	function callerOfCallee(calleeIndex FuncIndex) returns FuncIndex
-		if not self.isCalledOnce(calleeIndex) 'notCalledOnce'
-			panic("CalledOnceCensus.callerOfCallee: function {calleeIndex} has {self.siteCountOf(calleeIndex)} site(s) — the caller is a fact about a function called exactly once")
-		end 'notCalledOnce'
-
+		self.requireCalledOnce(calleeIndex)
 		return try self.callerOf.get(calleeIndex) otherwise panic("CalledOnceCensus.callerOfCallee: function index {calleeIndex} is outside the {self.callerOf.count()}-function module")
 	end 'callerOfCallee'
+
+	// Where in its caller a called-once callee's one site stands: the block's position in the caller's
+	// `blockRefs`, and the call's position in that block.
+	function sitePositionOf(calleeIndex FuncIndex) returns BlockRefIndex
+		self.requireCalledOnce(calleeIndex)
+		return try self.sitePositions.get(calleeIndex) otherwise panic("CalledOnceCensus.sitePositionOf: function index {calleeIndex} is outside the {self.sitePositions.count()}-function module")
+	end 'sitePositionOf'
+
+	function siteOpPositionOf(calleeIndex FuncIndex) returns BlockOpPos
+		self.requireCalledOnce(calleeIndex)
+		return try self.siteOpPositions.get(calleeIndex) otherwise panic("CalledOnceCensus.siteOpPositionOf: function index {calleeIndex} is outside the {self.siteOpPositions.count()}-function module")
+	end 'siteOpPositionOf'
+
+	function requireCalledOnce(calleeIndex FuncIndex)
+		if not self.isCalledOnce(calleeIndex) 'notCalledOnce'
+			panic("CalledOnceCensus: function {calleeIndex} has {self.siteCountOf(calleeIndex)} site(s) — the caller and the site are facts about a function called exactly once")
+		end 'notCalledOnce'
+	end 'requireCalledOnce'
 
 	// ⭐ **THE REFERENCES NO `call` OP SPELLS — `DeadFunctionElimination.seedRoots`' three kinds, asked here
 	// as "reached by more than its call".** The entry and every test body are called from code built after
@@ -960,44 +1107,67 @@ type CalledOnceCensus
 	// A name the module does not define is a hand-assembled chunk or an uninstalled runtime: nothing to mark.
 	function markReferenced(name ByteArray, byName FunctionNameIndex)
 		let funcIndex = try byName.byName.get(name) otherwise return
-		try self.referencedElsewhere.set(funcIndex, value: true) otherwise panic("CalledOnceCensus.markReferenced: function index {funcIndex} is outside the {self.referencedElsewhere.count()}-function module")
+		self.markReferencedIndex(funcIndex)
 	end 'markReferenced'
 
-	function noteCall(callee ByteArray, from FuncIndex, byName FunctionNameIndex)
-		let calleeIndex = try byName.byName.get(callee) otherwise return
+	function markReferencedIndex(funcIndex FuncIndex)
+		try self.referencedElsewhere.set(funcIndex, value: true) otherwise panic("CalledOnceCensus.markReferenced: function index {funcIndex} is outside the {self.referencedElsewhere.count()}-function module")
+	end 'markReferencedIndex'
+
+	function noteCall(calleeIndex FuncIndex, from FuncIndex, position BlockRefIndex, opPos BlockOpPos)
 		try self.siteCounts.set(calleeIndex, value: self.siteCountOf(calleeIndex) + 1) otherwise panic("CalledOnceCensus.noteCall: function index {calleeIndex} is outside the {self.siteCounts.count()}-function module")
 		try self.callerOf.set(calleeIndex, value: from) otherwise panic("CalledOnceCensus.noteCall: function index {calleeIndex} is outside the {self.callerOf.count()}-function module")
+		try self.sitePositions.set(calleeIndex, value: position) otherwise panic("CalledOnceCensus.noteCall: function index {calleeIndex} is outside the {self.sitePositions.count()}-function module")
+		try self.siteOpPositions.set(calleeIndex, value: opPos) otherwise panic("CalledOnceCensus.noteCall: function index {calleeIndex} is outside the {self.siteOpPositions.count()}-function module")
 	end 'noteCall'
 
 	// The references are `DeadFunctionElimination`'s own enumeration (`stdFunctionReferenceOf`), so the
 	// set this census counts and the set that walk keeps alive cannot drift apart: a callee spliced and
 	// emptied here must be one nothing but its call reaches there.
-	function noteReferences(op StdOp, from FuncIndex, byName FunctionNameIndex)
-		match stdFunctionReferenceOf(op) 'reference'
+	function noteReferences(op StdOp, from FuncIndex, position BlockRefIndex, opPos BlockOpPos, byName FunctionNameIndex)
+		stdFunctionReferenceOf(op, byName: byName.byName, into: self.reference)
+
+		match self.reference.kind 'reference'
 			none then break 'reference'
-			directCall(callee) then self.noteCall(callee, from: from, byName: byName)
-			otherReference(callee) then self.markReferenced(callee, byName: byName)
+			directCall then self.noteCall(self.reference.funcIndex, from: from, position: position, opPos: opPos)
+			otherReference then self.markReferencedIndex(self.reference.funcIndex)
 		end 'reference'
 	end 'noteReferences'
+
+	// A terminator slot never holds a direct call — every call the Std lowering emits is a body op — so
+	// a site there would be one the splice could not find, and it is refused rather than counted.
+	function noteTerminatorReferences(op StdOp, func IrFunction, byName FunctionNameIndex)
+		stdFunctionReferenceOf(op, byName: byName.byName, into: self.reference)
+
+		match self.reference.kind 'reference'
+			none then break 'reference'
+			directCall then panic("CalledOnceCensus: '{String.from(func.name)}' holds a direct call of function {self.reference.funcIndex} in a TERMINATOR slot — every call is a body op, and the splice cuts a block immediately past the call it replaces")
+			otherReference then self.markReferencedIndex(self.reference.funcIndex)
+		end 'reference'
+	end 'noteTerminatorReferences'
 end 'CalledOnceCensus'
 
 // The called-once callees one wave admits — those whose every called-once callee is already spliced — and
-// the value-space width each copy needs.
+// the value-space width and block count each copy was admitted at.
 type CalledOnceWave
 	var admitted as BoolArray
 	var valueBounds as ValueIdArray
+	var blockCounts as BlockPositionColumn
 
 	static function create(funcCount FuncIndex) returns CalledOnceWave
 		var admitted = BoolArray.create()
 		admitted.resize(funcCount)
 		var valueBounds = ValueIdArray.create()
 		valueBounds.resize(funcCount)
-		return Self{admitted: admitted, valueBounds: valueBounds}
+		var blockCounts = BlockPositionColumn.create()
+		blockCounts.resize(funcCount)
+		return Self{admitted: admitted, valueBounds: valueBounds, blockCounts: blockCounts}
 	end 'create'
 
-	function admit(calleeIndex FuncIndex, valueBound ValueId)
+	function admit(calleeIndex FuncIndex, valueBound ValueId, blockCount BlockRefIndex)
 		try self.admitted.set(calleeIndex, value: true) otherwise panic("CalledOnceWave.admit: function index {calleeIndex} is outside the {self.admitted.count()}-function module")
 		try self.valueBounds.set(calleeIndex, value: valueBound) otherwise panic("CalledOnceWave.admit: function index {calleeIndex} is outside the {self.valueBounds.count()}-function module")
+		try self.blockCounts.set(calleeIndex, value: blockCount) otherwise panic("CalledOnceWave.admit: function index {calleeIndex} is outside the {self.blockCounts.count()}-function module")
 	end 'admit'
 
 	function admits(calleeIndex FuncIndex) returns bool
@@ -1013,115 +1183,122 @@ type CalledOnceWave
 	function valueBoundOf(calleeIndex FuncIndex) returns ValueId
 		return try self.valueBounds.get(calleeIndex) otherwise panic("CalledOnceWave.valueBoundOf: function index {calleeIndex} is outside the {self.valueBounds.count()}-function module")
 	end 'valueBoundOf'
+
+	function blockCountOf(calleeIndex FuncIndex) returns BlockRefIndex
+		return try self.blockCounts.get(calleeIndex) otherwise panic("CalledOnceWave.blockCountOf: function index {calleeIndex} is outside the {self.blockCounts.count()}-function module")
+	end 'blockCountOf'
 end 'CalledOnceWave'
 
-// ⭐ **EVERYTHING THE PRESSURE CHECKS ASK ABOUT ONE CALLER, COMPUTED ONCE PER CALLER**: its liveness and its
-// loops, read once at every candidate site it holds — the values live across the site that the loop around
-// it reads (`spliceFitsRegisters`' caller half) — and kept as those per-site lists for every wave that asks.
-// The lists survive the waves between: a splice elsewhere in the caller moves no value's def or use past
-// another site, defines nothing another site's loop reads that the call it replaced did not, and adds no
-// block outside the region the call held, so a site's list is what it was when the caller was first met.
-// A liveness per (caller, wave) cost `main` — a caller in every wave one of its callees becomes ready in —
-// the whole program each time.
+// ⭐ **EVERYTHING THE SPLICES INTO ONE CALLER ASK ABOUT IT, COMPUTED ONCE PER CALLER**: every candidate
+// site in it — where it stands, what it passes, and the values live across it that the loop around it
+// reads (`spliceFitsRegisters`' caller half) — plus the caller's fresh-id counter. Read at every wave the
+// caller is spliced in; a liveness per (caller, wave) cost `main` — a caller in every wave one of its
+// callees becomes ready in — the whole program each time.
 //
-// The sites are located in ONE walk of the caller, over every candidate rather than one wave's ready
-// callees: a candidate's site is in the caller's own text (a body copied in holds no candidate, every
-// called-once callee of it having been spliced or refused before it was), so a later wave's site is there.
+// The sites come from the census's coordinates, taken before anything moved: a candidate's site is in the
+// caller's own text (a body copied in holds no candidate, every called-once callee of it having been
+// spliced or refused before it was), and a splice into this caller moves only the ops behind the site it
+// replaces, which `SiteSplicer.spliceCalledOnceSites` re-coordinates as it goes. So a site's live-across
+// list is what it was when the caller was first met — a splice elsewhere in the caller moves no value's
+// def or use past another site, defines nothing another site's loop reads that the call it replaced did
+// not, and adds no block outside the region the call held.
 type CallerSiteFacts
-	var sites as SiteAcrossMap
+	// Every candidate site of the caller, in the order the census's caller grouping lists the callees. A
+	// handful per caller, so a callee's site is found by a scan of them.
+	export var sites as SiteAcrossArray
 
-	static function of(module StdModule, func IrFunction, byName FunctionNameIndex, candidate BoolArray) returns CallerSiteFacts
+	// The caller's fresh-`ValueId` counter. Seeded past every id the caller uses before its first splice;
+	// after each wave `SiteSplicer` re-seeds it to one past the highest id a copy DEFINED, since the copy of
+	// a callee's value space mints an id for every index and a trailing gap in that space would otherwise
+	// hold the counter above where a fresh seed from the function's ops would put it.
+	export var ids as ValueMinter
+
+	static function of(module StdModule, func IrFunction, callerIndex FuncIndex, census CalledOnceCensus, calleesOfCallers CsrGraph, byName FunctionNameIndex, liveness StdLiveness, across StdValueUseSet) returns CallerSiteFacts
 		let valueBound = nextFreeValueId(module, func: func)
-		var liveness = StdLiveness.compute(module, func: func, valueBound: valueBound)
-		var loops = FunctionLoops.of(module, func: func)
-		var sites = SiteAcrossMap.create()
-		var across = StdValueUseSet.createRecordingIds()
+		liveness.recompute(module, func: func, valueBound: valueBound)
+		var loops = FunctionLoops.of(func, succ: liveness.succ, pred: liveness.pred)
+		var sites = SiteAcrossArray.create()
 
-		for (calleeIndex, site) in locateSites(module, caller: func, byName: byName, wanted: candidate) 'eachSite'
+		for k in 0 upto calleesOfCallers.degree(callerIndex as CsrIndex) 'eachSite'
+			let calleeIndex = calleesOfCallers.neighbour(callerIndex as CsrIndex, k: k) as FuncIndex
+			let position = census.sitePositionOf(calleeIndex)
+			let opPos = census.siteOpPositionOf(calleeIndex)
+			let args = siteArgsOf(module, caller: func, position: position, opPos: opPos, calleeIndex: calleeIndex, byName: byName)
 			across.clear()
-			liveness.collectLiveAcrossOp(module, func: func, position: site.position, opPos: site.opPos, into: across)
-			loops.keepReadsAround(module, func: func, position: site.position, valueBound: valueBound, across: across)
-			sites.upsert(calleeIndex, value: SiteAcross.create(site.args, across: across))
+			liveness.collectLiveAcrossOp(module, func: func, position: position, opPos: opPos, into: across)
+			loops.keepReadsAround(module, func: func, position: position, valueBound: valueBound, across: across)
+			sites.push(SiteAcross.create(calleeIndex, position: position, opPos: opPos, args: args, across: across))
 		end 'eachSite'
 
-		return Self{sites: sites}
+		return Self{sites: sites, ids: ValueMinter.resuming(valueBound)}
 	end 'of'
 
 	function siteOf(calleeIndex FuncIndex, callee IrFunction) returns SiteAcross
-		return try self.sites.get(calleeIndex) otherwise panic("CallerSiteFacts.siteOf: the caller holds no call of '{String.from(callee.name)}', whose one site the census placed there")
+		for site in self.sites 'eachSite'
+			if site.calleeIndex == calleeIndex 'theSite'
+				return site
+			end 'theSite'
+		end 'eachSite'
+
+		panic("CallerSiteFacts.siteOf: the caller holds no call of '{String.from(callee.name)}', whose one site the census placed there")
 	end 'siteOf'
 end 'CallerSiteFacts'
 
 // Caller -> its site facts, filled the first wave the caller is spliced into.
 typealias CallerSiteFactsMap = Map with (FuncIndex, CallerSiteFacts)
 
-// One candidate site of a caller: what the call passes, and the values live across it that the loop
-// around it reads, in the order the liveness listed them.
+// One candidate site of a caller: where its call stands, what the call passes, and the values live across
+// it that the loop around it reads, in the order the liveness listed them. The coordinates FOLLOW the call
+// as splices ahead of it in the block move it into a continuation, so they name the op until it is spliced.
 type SiteAcross
+	export var calleeIndex as FuncIndex
+	export var position as BlockRefIndex
+	export var opPos as BlockOpPos
 	export var args as ValueIdArray
 	export var across as ValueIdArray
+	export var spliced as bool
 
-	static function create(args ValueIdArray, across StdValueUseSet) returns SiteAcross
+	static function create(calleeIndex FuncIndex, position BlockRefIndex, opPos BlockOpPos, args ValueIdArray, across StdValueUseSet) returns SiteAcross
 		var ids = ValueIdArray.create()
 
 		for i in 0 upto across.insertedIdCount() 'eachAcross'
 			ids.push(across.insertedIdAt(i))
 		end 'eachAcross'
 
-		return Self{args: args, across: ids}
+		return Self{calleeIndex: calleeIndex, position: position, opPos: opPos, args: args, across: ids, spliced: false}
 	end 'create'
 end 'SiteAcross'
 
-typealias SiteAcrossMap = Map with (FuncIndex, SiteAcross)
-typealias CalleeSiteMap = Map with (FuncIndex, CalleeSite)
+typealias SiteAcrossArray = Array with SiteAcross
 
-// Where in `caller` the one `call` of a callee stands, and what it passes.
-type CalleeSite
-	export var position as BlockRefIndex
-	export var opPos as BlockOpPos
-	export var args as ValueIdArray
+// The argument list of the call at the census's coordinates for `calleeIndex` — checked to BE a direct
+// call of that callee, since a coordinate that drifted would otherwise splice a body over some other op.
+function siteArgsOf(module StdModule, caller IrFunction, position BlockRefIndex, opPos BlockOpPos, calleeIndex FuncIndex, byName FunctionNameIndex) returns ValueIdArray
+	let block = module.blockAtPosition(caller, position: position)
+	let opIdx = try block.opRefs.get(opPos) otherwise panic("siteArgsOf: block {position} of '{String.from(caller.name)}' has no op at position {opPos}, where the census placed a call")
 
-	export static function create(position BlockRefIndex, opPos BlockOpPos, args ValueIdArray) returns CalleeSite
-		return Self{position: position, opPos: opPos, args: args}
-	end 'create'
-end 'CalleeSite'
-
-// The sites of every `wanted` callee in `caller`, from one walk. A `tryCall` of a callee would have kept
-// it out of the rule, so a direct call naming a wanted callee is its site.
-function locateSites(module StdModule, caller IrFunction, byName FunctionNameIndex, wanted BoolArray) returns CalleeSiteMap
-	var sites = CalleeSiteMap.create()
-	var call = StdCallOperands.create()
-
-	for position in 0 upto caller.blockRefs.count() 'eachBlock'
-		let block = module.blockAtPosition(caller, position: position)
-
-		for (iter, opIdx) in block.opRefs.withIterator() 'eachOp'
-			let op = module.getOp(opIdx)
-			classifyCallOperands(op, call: call)
-
-			if not call.namesACallee() or call.throwsToAFlag() 'notADirectCall'
-				continue
-			end 'notADirectCall'
-
-			let calleeIndex = try byName.byName.get(call.callee) otherwise continue
-			let isWanted = try wanted.get(calleeIndex) otherwise panic("locateSites: function index {calleeIndex} is outside the wanted column")
-
-			if isWanted 'aSite'
-				sites.upsert(calleeIndex, value: CalleeSite.create(position, opPos: iter.index() as BlockOpPos, args: callArgsOf(op)))
-			end 'aSite'
-		end 'eachOp'
-	end 'eachBlock'
-
-	return sites
-end 'locateSites'
-
-// The argument list of an op `locateSites` has already classified as a direct call.
-function callArgsOf(op StdOp) returns ValueIdArray
-	match op 'kind'
-		call(_, _, args) then return args
-		default panic("callArgsOf: asked of an op `locateSites` did not classify as a direct call")
+	match module.getOp(opIdx) 'kind'
+		call(_, callee, args) then return argsOfCensusedCall(callee, args: args, calleeIndex: calleeIndex, caller: caller, byName: byName)
+		default panic("siteArgsOf: the op at position {opPos} of block {position} of '{String.from(caller.name)}' is not a direct call, where the census placed one")
 	end 'kind'
-end 'callArgsOf'
+end 'siteArgsOf'
+
+function argsOfCensusedCall(callee ByteArray, args ValueIdArray, calleeIndex FuncIndex, caller IrFunction, byName FunctionNameIndex) returns ValueIdArray
+	requireCallNamesCallee(callee, calleeIndex: calleeIndex, caller: caller, byName: byName)
+	return args
+end 'argsOfCensusedCall'
+
+// ⛔ **A SITE'S CALLEE IS A CLAIM, CHECKED WHERE IT IS SPENT.** The called-once rule reaches a site by
+// coordinates the census took and every wave's splits move, so the op found there must NAME the callee whose
+// body is about to be copied over it — an arity match would let a drifted coordinate splice one function's
+// body over a call of another, silently. Asked at the site's first reading and again at the splice.
+function requireCallNamesCallee(callee ByteArray, calleeIndex FuncIndex, caller IrFunction, byName FunctionNameIndex)
+	let named = try byName.byName.get(callee) otherwise panic("inlineLeaves: a recorded site in '{String.from(caller.name)}' calls '{String.from(callee)}', which the name index does not know")
+
+	if named != calleeIndex 'anotherCallee'
+		panic("inlineLeaves: a recorded site in '{String.from(caller.name)}' calls '{String.from(callee)}' (function {named}), not function {calleeIndex} whose site it is recorded as — a site coordinate moved between the census and this read")
+	end 'anotherCallee'
+end 'requireCallNamesCallee'
 
 // A loop's place in a preorder walk of the nest: a loop's nest is exactly the loops numbered
 // `[pre, post]`, so "does this nest hold that loop" is two compares.
@@ -1153,10 +1330,10 @@ type FunctionLoops
 	var readTours as CsrGraph
 	var toursGathered as bool
 
-	static function of(module StdModule, func IrFunction) returns FunctionLoops
+	// Over the CFG the caller's liveness already built, in both directions.
+	static function of(func IrFunction, succ CsrGraph, pred CsrGraph) returns FunctionLoops
 		let blockCount = func.blockRefs.count()
-		let succ = buildStdSuccessorGraph(module, func: func, blockCount: blockCount)
-		var loops = Self{blockCount: blockCount, pred: reversedGraph(succ), loops: NaturalLoops.find(succ, nodeCount: blockCount as CsrIndex), innermostHeaderOf: filledPositions(blockCount, value: blockCount), parentHeaderOf: filledPositions(blockCount, value: blockCount), preOf: NestTourColumn.create(), postOf: NestTourColumn.create(), readTours: CsrGraph.create(CsrColumn.create(), list: CsrColumn.create()), toursGathered: false}
+		var loops = Self{blockCount: blockCount, pred: pred, loops: NaturalLoops.find(succ, nodeCount: blockCount as CsrIndex), innermostHeaderOf: filledPositions(blockCount, value: blockCount), parentHeaderOf: filledPositions(blockCount, value: blockCount), preOf: NestTourColumn.create(), postOf: NestTourColumn.create(), readTours: CsrGraph.create(CsrColumn.create(), list: CsrColumn.create()), toursGathered: false}
 		loops.assignInnermostHeaders()
 		return loops
 	end 'of'
@@ -1438,7 +1615,7 @@ end 'collectBlockReads'
 // none left unprocessed is ready, and the ready candidates of one wave are spliced caller by caller in one
 // walk of each caller. A candidate never ready when the ready list drains lies on a cycle of candidates,
 // or calls into one: the cycle's members are refused and their callers counted down, and the waves go on.
-function spliceCalledOnceCallees(project Project, module StdModule, byName FunctionNameIndex, def StdDefinedValues, namedByGolden BoolArray)
+function spliceCalledOnceCallees(project Project, module StdModule, byName FunctionNameIndex, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, namedByGolden BoolArray)
 	let funcCount = module.funcCount() as FuncIndex
 	let census = CalledOnceCensus.take(project, module: module, byName: byName)
 	var refusals = OrdinalTally.create(CalledOnceRefusal.allCaseNames.count())
@@ -1474,7 +1651,7 @@ function spliceCalledOnceCallees(project Project, module StdModule, byName Funct
 			continue
 		end 'callsItself'
 
-		match scanSpliceableShape(module, func: func) 'shape'
+		match scanSpliceableShape(module, func: func, meta: meta) 'shape'
 			refused(reason) then noteCalledOnceRefusal(refusals, reason: reason, func: func)
 			spliceable then admitCandidate(funcIndex, census: census, candidate: candidate, pendingCallees: pendingCallees, candidateCount: candidateCount)
 		end 'shape'
@@ -1498,8 +1675,13 @@ function spliceCalledOnceCallees(project Project, module StdModule, byName Funct
 	// Built ONCE over every candidate — see `ValueOriginTable.indexRowsOfFunctions` for the cost of the
 	// alternative — and kept honest across the waves by `copyRows`, which notes the rows each splice appends.
 	var origins = project.valueOrigins.indexRowsOfFunctions(candidate, funcCount: funcCount)
+	let calleesOfCallers = groupCandidatesByCaller(census, candidate: candidate, funcCount: funcCount)
 	var wave = CalledOnceWave.create(funcCount)
 	var callerFacts = CallerSiteFactsMap.create()
+
+	// The liveness workspace and the scratch set every caller's facts and every callee's measurement
+	// refill — one of each for the whole pass rather than one per function measured.
+	var liveness = StdLiveness.create()
 	var across = StdValueUseSet.createRecordingIds()
 
 	while remaining > 0 'eachWave'
@@ -1508,13 +1690,29 @@ function spliceCalledOnceCallees(project Project, module StdModule, byName Funct
 			continue
 		end 'onlyCyclesLeft'
 
-		remaining = remaining - spliceWave(project, module: module, byName: byName, census: census, budget: budget, candidate: candidate, processed: processed, pendingCallees: pendingCallees, ready: ready, refusals: refusals, stats: stats, def: def, origins: origins, wave: wave, callerFacts: callerFacts, across: across)
+		remaining = remaining - spliceWave(project, module: module, byName: byName, census: census, calleesOfCallers: calleesOfCallers, budget: budget, candidate: candidate, processed: processed, pendingCallees: pendingCallees, ready: ready, refusals: refusals, stats: stats, def: def, cloner: cloner, meta: meta, origins: origins, wave: wave, callerFacts: callerFacts, liveness: liveness, across: across)
 	end 'eachWave'
 
 	let spliced = stats.inlinedSites
 	let declinedGuards = stats.declinedParamGuards
 	logDebug(LogCategory.ir, message: function() gives "inlineLeaves: {spliced} called-once callee(s) spliced, {declinedGuards} spliced parameter cascade(s) declined as provably dead; left as calls: {refusals.summary(CalledOnceRefusal.allCaseNames)}")
 end 'spliceCalledOnceCallees'
+
+// Caller -> the candidates whose one site it holds, so a caller's facts are taken from the census's
+// coordinates rather than by searching the caller for its sites.
+function groupCandidatesByCaller(census CalledOnceCensus, candidate BoolArray, funcCount FuncIndex) returns CsrGraph
+	var callerCol = CsrColumn.create()
+	var calleeCol = CsrColumn.create()
+
+	for calleeIndex in 0 upto funcCount 'eachFunc'
+		if isCandidate(candidate, funcIndex: calleeIndex) 'aCandidate'
+			callerCol.push(census.callerOfCallee(calleeIndex) as CsrIndex)
+			calleeCol.push(calleeIndex as CsrIndex)
+		end 'aCandidate'
+	end 'eachFunc'
+
+	return buildCsr(callerCol, to: calleeCol, nodeCount: funcCount as CsrIndex)
+end 'groupCandidatesByCaller'
 
 // Count `calleeIndex` as a candidate, and as one more callee its caller waits for. `candidateCount` is
 // the caller's running total, advanced by reference.
@@ -1655,7 +1853,7 @@ end 'isProcessed'
 
 // One wave: every ready candidate is checked against the pressure budget at its site, the admitted ones
 // are spliced caller by caller, and all of them are retired. Answers how many candidates it retired.
-function spliceWave(project Project, module StdModule, byName FunctionNameIndex, census CalledOnceCensus, budget HoistPressureBudget, candidate BoolArray, processed BoolArray, pendingCallees SiteCountArray, ready FuncIndexArray, refusals OrdinalTally, stats InlineLeafStats, def StdDefinedValues, origins ValueOriginRowIndex, wave CalledOnceWave, callerFacts CallerSiteFactsMap, across StdValueUseSet) returns FuncIndex
+function spliceWave(project Project, module StdModule, byName FunctionNameIndex, census CalledOnceCensus, calleesOfCallers CsrGraph, budget HoistPressureBudget, candidate BoolArray, processed BoolArray, pendingCallees SiteCountArray, ready FuncIndexArray, refusals OrdinalTally, stats InlineLeafStats, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, origins ValueOriginRowIndex, wave CalledOnceWave, callerFacts CallerSiteFactsMap, liveness StdLiveness, across StdValueUseSet) returns FuncIndex
 	var retiring = FuncIndexArray.create()
 	var calleesByCaller = CalleesByCallerMap.create()
 
@@ -1671,15 +1869,15 @@ function spliceWave(project Project, module StdModule, byName FunctionNameIndex,
 
 	for (callerIndex, callees) in calleesByCaller 'eachCaller'
 		let caller = module.getFunc(callerIndex)
-		let facts = siteFactsOf(callerFacts, module: module, caller: caller, callerIndex: callerIndex, byName: byName, candidate: candidate)
+		let facts = siteFactsOf(callerFacts, module: module, caller: caller, callerIndex: callerIndex, census: census, calleesOfCallers: calleesOfCallers, byName: byName, liveness: liveness, across: across)
 		var admittedAny = false
 
 		for calleeIndex in callees 'eachCandidate'
 			let callee = module.getFunc(calleeIndex)
-			let valueBound = nextFreeValueId(module, func: callee)
+			let valueBound = calleeValueBound(callerFacts, module: module, callee: callee, calleeIndex: calleeIndex)
 
-			if fitsSpliceBudget(module, budget: budget, facts: facts, caller: caller, callee: callee, calleeIndex: calleeIndex, calleeValueBound: valueBound, across: across) 'admitted'
-				wave.admit(calleeIndex, valueBound: valueBound)
+			if fitsSpliceBudget(module, budget: budget, facts: facts, caller: caller, callee: callee, calleeIndex: calleeIndex, calleeValueBound: valueBound, across: across, liveness: liveness) 'admitted'
+				wave.admit(calleeIndex, valueBound: valueBound, blockCount: callee.blockRefs.count())
 				admittedAny = true
 			end 'admitted' else 'overBudget'
 				noteCalledOnceRefusal(refusals, reason: CalledOnceRefusal.pressureBudgetExceeded, func: callee)
@@ -1705,8 +1903,9 @@ function spliceWave(project Project, module StdModule, byName FunctionNameIndex,
 			panic("spliceWave: '{String.from(module.getFunc(callerIndex).name)}' receives a splice in the wave that also splices it away — a callee must be processed before its caller is ready, and this one was made ready while still pending")
 		end 'bothSidesOfOneWave'
 
-		var splicer = SiteSplicer.create(project, module: module, func: module.getFunc(callerIndex), funcIndex: callerIndex, byName: byName, admission: admission, origins: origins, stats: stats, def: def)
-		splicer.run()
+		let facts = try callerFacts.get(callerIndex) otherwise panic("spliceWave: no site facts for a caller whose callees this wave admitted — the admission loop above takes them first")
+		var splicer = SiteSplicer.create(project, module: module, func: module.getFunc(callerIndex), funcIndex: callerIndex, byName: byName, admission: admission, origins: origins, stats: stats, def: def, cloner: cloner, meta: meta, ids: facts.ids, seeded: true)
+		splicer.spliceCalledOnceSites(facts, wave: wave)
 	end 'eachSplicingCaller'
 
 	for calleeIndex in retiring 'eachRetired'
@@ -1754,45 +1953,99 @@ end 'groupByCaller'
 // counts. A parameter live at the body's busiest point IS the caller's argument after the splice, so it
 // is counted on the caller's side when that argument already counts there and on the body's side
 // otherwise.
-function fitsSpliceBudget(module StdModule, budget HoistPressureBudget, facts CallerSiteFacts, caller IrFunction, callee IrFunction, calleeIndex FuncIndex, calleeValueBound ValueId, across StdValueUseSet) returns bool
+function fitsSpliceBudget(module StdModule, budget HoistPressureBudget, facts CallerSiteFacts, caller IrFunction, callee IrFunction, calleeIndex FuncIndex, calleeValueBound ValueId, across StdValueUseSet, liveness StdLiveness) returns bool
 	match budget 'b'
 		unbounded then return true
-		registers(count) then return spliceFitsRegisters(module, facts: facts, caller: caller, callee: callee, calleeIndex: calleeIndex, calleeValueBound: calleeValueBound, budget: count, across: across)
+		registers(count) then return spliceFitsRegisters(module, facts: facts, caller: caller, callee: callee, calleeIndex: calleeIndex, calleeValueBound: calleeValueBound, budget: count, across: across, liveness: liveness)
 	end 'b'
 end 'fitsSpliceBudget'
 
 // `across` is the caller's scratch set, refilled per site from the list the caller's facts hold.
-function spliceFitsRegisters(module StdModule, facts CallerSiteFacts, caller IrFunction, callee IrFunction, calleeIndex FuncIndex, calleeValueBound ValueId, budget RegCount, across StdValueUseSet) returns bool
+//
+// ⭐ **THE BODY IS MEASURED ONLY WHERE THE ANSWER TURNS ON IT.** Its count is never negative, so a site
+// already over the budget refuses before the body is read; and it is bounded by the body's own value count,
+// so a body too small to reach the budget from the site's count admits before it is read. Both answer
+// exactly what the full measurement would, and between them a liveness over a copied body is asked only of
+// the callees whose answer is not already known.
+function spliceFitsRegisters(module StdModule, facts CallerSiteFacts, caller IrFunction, callee IrFunction, calleeIndex FuncIndex, calleeValueBound ValueId, budget RegCount, across StdValueUseSet, liveness StdLiveness) returns bool
 	let site = facts.siteOf(calleeIndex, callee: callee)
+	let acrossCount = site.across.count() as RegCount
+
+	if acrossCount > budget 'overBeforeTheBody'
+		logTrace(LogCategory.ir, message: function() gives "inlineLeaves: splicing '{String.from(callee.name)}' into '{String.from(caller.name)}' holds {acrossCount} value(s) across the site that its loop reads, over the budget of {budget} before the body is counted")
+		return false
+	end 'overBeforeTheBody'
+
 	across.clear()
 
 	for valueId in site.across 'eachAcross'
 		across.insert(valueId)
 	end 'eachAcross'
 
-	let acrossCount = site.across.count() as RegCount
-	let calleeLiveness = StdLiveness.compute(module, func: callee, valueBound: calleeValueBound)
-	let bodyCount = largestBodyLiveIn(module, func: callee, liveness: calleeLiveness, args: site.args, across: across)
+	let bodyBound = bodyLiveInBound(callee, valueBound: calleeValueBound, args: site.args, across: across)
+
+	if acrossCount + bodyBound <= budget 'fitsWhateverTheBodyHolds'
+		logTrace(LogCategory.ir, message: function() gives "inlineLeaves: splicing '{String.from(callee.name)}' into '{String.from(caller.name)}' holds {acrossCount} value(s) across the site that its loop reads and at most {bodyBound} more anywhere in the body, against a budget of {budget}")
+		return true
+	end 'fitsWhateverTheBodyHolds'
+
+	let bodyCount = largestBodyLiveIn(module, func: callee, valueBound: calleeValueBound, args: site.args, across: across, liveness: liveness)
 	logTrace(LogCategory.ir, message: function() gives "inlineLeaves: splicing '{String.from(callee.name)}' into '{String.from(caller.name)}' holds {acrossCount} value(s) across the site that its loop reads and {bodyCount} more at the body's busiest point, against a budget of {budget}")
 	return acrossCount + bodyCount <= budget
 end 'spliceFitsRegisters'
 
+// One past the highest id a callee's body uses — the width of the column its copy needs and the value
+// space its liveness is solved over. A callee that was itself spliced into holds the answer in its own
+// facts: its minter is re-seeded to one past the highest id its last wave's copies defined, which is
+// exactly what a walk of its ops would find. Every other callee is walked.
+function calleeValueBound(callerFacts CallerSiteFactsMap, module StdModule, callee IrFunction, calleeIndex FuncIndex) returns ValueId
+	if let facts = try callerFacts.get(calleeIndex) 'wasACaller'
+		return facts.ids.nextId()
+	end 'wasACaller'
+
+	return nextFreeValueId(module, func: callee)
+end 'calleeValueBound'
+
 // The caller's site facts, computed the first wave it is spliced into and kept for the rest.
-function siteFactsOf(callerFacts CallerSiteFactsMap, module StdModule, caller IrFunction, callerIndex FuncIndex, byName FunctionNameIndex, candidate BoolArray) returns CallerSiteFacts
+function siteFactsOf(callerFacts CallerSiteFactsMap, module StdModule, caller IrFunction, callerIndex FuncIndex, census CalledOnceCensus, calleesOfCallers CsrGraph, byName FunctionNameIndex, liveness StdLiveness, across StdValueUseSet) returns CallerSiteFacts
 	if let known = try callerFacts.get(callerIndex) 'known'
 		return known
 	end 'known'
 
-	let facts = CallerSiteFacts.of(module, func: caller, byName: byName, candidate: candidate)
+	let facts = CallerSiteFacts.of(module, func: caller, callerIndex: callerIndex, census: census, calleesOfCallers: calleesOfCallers, byName: byName, liveness: liveness, across: across)
 	callerFacts.upsert(callerIndex, value: facts)
 	return facts
 end 'siteFactsOf'
 
+// An upper bound on `largestBodyLiveIn`'s answer that costs no liveness: a block's live-in set holds
+// distinct values, every one of which is a body value or a parameter, so no block can hold more than the
+// body's whole value space less the parameters the caller already holds across the site.
+function bodyLiveInBound(func IrFunction, valueBound ValueId, args ValueIdArray, across StdValueUseSet) returns RegCount
+	var count = (valueBound - valueIdAtParamPosition(func.paramCount)) as RegCount
+
+	for arg in args 'eachArg'
+		if not across.contains(arg) 'diesAtTheCall'
+			count = count + 1
+		end 'diesAtTheCall'
+	end 'eachArg'
+
+	return count
+end 'bodyLiveInBound'
+
 // The body's busiest point: its largest loop-header live-in set, or its largest block live-in when it
 // holds no loop — less the parameters whose argument the caller already holds across the site.
-function largestBodyLiveIn(module StdModule, func IrFunction, liveness StdLiveness, args ValueIdArray, across StdValueUseSet) returns RegCount
+//
+// A one-block body is answered without a liveness: every value it holds is defined in that block, so
+// nothing is live into it, loop header or not.
+function largestBodyLiveIn(module StdModule, func IrFunction, valueBound ValueId, args ValueIdArray, across StdValueUseSet, liveness StdLiveness) returns RegCount
 	let blockCount = func.blockRefs.count()
-	let loops = NaturalLoops.find(buildStdSuccessorGraph(module, func: func, blockCount: blockCount), nodeCount: blockCount as CsrIndex)
+
+	if blockCount == 1 'everyValueDefinedInTheOneBlock'
+		return 0
+	end 'everyValueDefinedInTheOneBlock'
+
+	liveness.recompute(module, func: func, valueBound: valueBound)
+	let loops = NaturalLoops.find(liveness.succ, nodeCount: blockCount as CsrIndex)
 	var liveIn = ValueIdArray.create()
 	var largest = 0 as RegCount
 
@@ -1859,23 +2112,35 @@ type SiteSplicer
 	var origins as ValueOriginRowIndex
 	var stats as InlineLeafStats
 
-	// ⚠ SEEDED LAZILY, and that is a cost decision — `nextFreeValueId` walks every block arg and every
-	// live op of the function and MATERIALIZES the live-op index array to do it, while this type is
-	// constructed for every function in the module. `InlineManagedPrimitives.ids` carries the same shape
-	// and the same measurement.
+	// The function's fresh-`ValueId` counter. The called-once rule hands in the caller's own, kept across
+	// waves (`CallerSiteFacts.ids`); the leaf rule hands in the shared unseeded one, SEEDED LAZILY as a
+	// cost decision — `nextFreeValueId` walks every block arg and every live op of the function, while that
+	// rule constructs one of these per function in the module. `InlineManagedPrimitives.ids` carries the
+	// same shape and the same measurement.
 	var ids as ValueMinter
 	var seeded as bool
 
-	// The current block's sites, in ascending position. Reused across the function's blocks (truncated,
-	// not reallocated) and shared-empty until the first site — see `sharedEmptySitePositions`.
+	// The highest id some op or phi of the function DEFINES, kept as the copies mint: the minter hands
+	// out an id for every index of a callee's value space, and an index no copied op defines — a value in
+	// a declined cascade, or an op after an aborting one — leaves a gap the next wave's seed must not sit
+	// above, since a seed taken from the function's ops would not. Read only by the called-once rule.
+	var highestDefined as ValueId
+
+	// The current block's sites, in ascending position, and the continuation each split minted, in the
+	// same order. Reused across the function's blocks (truncated, not reallocated) and shared-empty until
+	// the first site — see `sharedEmptySitePositions`.
 	var sitePositions as BlockOpPosArray
 	var siteCallees as FuncIndexArray
+	var contPositions as BlockPositionColumn
 	var siteBuffersSeeded as bool
 
-	// The clone check's sink, shared by every function's splices: this type is constructed per function.
+	// The def enumerator's sink, the op cloner and the variant memo, shared by every function's splices:
+	// this type is constructed per function.
 	var def as StdDefinedValues
+	var cloner as StdOpCloner
+	var meta as StdOpMetaMemo
 
-	static function create(project Project, module StdModule, func IrFunction, funcIndex FuncIndex, byName FunctionNameIndex, admission SpliceAdmission, origins ValueOriginRowIndex, stats InlineLeafStats, def StdDefinedValues) returns SiteSplicer
+	static function create(project Project, module StdModule, func IrFunction, funcIndex FuncIndex, byName FunctionNameIndex, admission SpliceAdmission, origins ValueOriginRowIndex, stats InlineLeafStats, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, ids ValueMinter, seeded bool) returns SiteSplicer
 		return Self{
 			project: project,
 			module: module,
@@ -1885,12 +2150,16 @@ type SiteSplicer
 			admission: admission,
 			origins: origins,
 			stats: stats,
-			ids: sharedUnseededLeafMinter,
-			seeded: false,
+			ids: ids,
+			seeded: seeded,
+			highestDefined: 0,
 			sitePositions: sharedEmptySitePositions,
 			siteCallees: sharedEmptySiteCallees,
+			contPositions: sharedEmptyContPositions,
 			siteBuffersSeeded: false,
-			def: def
+			def: def,
+			cloner: cloner,
+			meta: meta
 		}
 	end 'create'
 
@@ -1912,8 +2181,16 @@ type SiteSplicer
 
 		self.sitePositions = BlockOpPosArray.create()
 		self.siteCallees = FuncIndexArray.create()
+		self.contPositions = BlockPositionColumn.create()
 		self.siteBuffersSeeded = true
 	end 'seedSiteBuffers'
+
+	function clearSiteBuffers()
+		self.seedSiteBuffers()
+		self.sitePositions.truncate(0)
+		self.siteCallees.truncate(0)
+		self.contPositions.truncate(0)
+	end 'clearSiteBuffers'
 
 	// ⭐ **THE BOUND IS SNAPSHOTTED, AND THAT IS WHAT KEEPS THIS LOOP OFF ITS OWN OUTPUT — and, unlike
 	// `InlineManagedPrimitives`, nothing is revisited at all.** A splice appends two kinds of block and
@@ -1942,13 +2219,88 @@ type SiteSplicer
 	// args, and every later split takes the `unset` that one left behind — which is exactly the
 	// un-terminated state each intermediate continuation should be in when its own splice terminates it.
 	function inlineSitesIn(blockRef BlockRef)
-		let siteCount = self.collectSites(blockRef)
-
-		if siteCount == 0 'noSite'
+		if self.collectSites(blockRef) == 0 'noSite'
 			return
 		end 'noSite'
 
-		// ⛔⛔ **THE MINTER IS SEEDED HERE, BEFORE THE FIRST SPLIT (EC1 review's ordering lesson).**
+		self.spliceRecordedSites(blockRef)
+	end 'inlineSitesIn'
+
+	// ⭐ **THE CALLED-ONCE RULE'S WALK IS THE CALLER'S SITE TABLE, NOT ITS BLOCKS.** Every candidate site
+	// of the caller was located once (`CallerSiteFacts`), so a wave splices the sites this wave admits —
+	// in block order, ascending within a block, exactly the order a walk would meet them — and moves the
+	// coordinates of the sites it leaves for a later wave. `main` is a caller in many waves, and a walk
+	// of it per wave is the whole program per wave.
+	function spliceCalledOnceSites(facts CallerSiteFacts, wave CalledOnceWave)
+		self.highestDefined = self.valueIds().nextId() - 1
+		var plan = SiteAcrossArray.create()
+
+		for site in facts.sites 'eachSite'
+			if wave.admits(site.calleeIndex) 'admittedThisWave'
+				insertByCoordinates(plan, site: site)
+			end 'admittedThisWave'
+		end 'eachSite'
+
+		var first = 0 as SiteCount
+
+		while first < plan.count() 'eachBlock'
+			let position = plannedSiteAt(plan, index: first).position
+			self.clearSiteBuffers()
+			var next = first
+
+			while next < plan.count() and plannedSiteAt(plan, index: next).position == position 'eachSiteOfTheBlock'
+				var site = plannedSiteAt(plan, index: next)
+
+				if site.spliced 'twice'
+					panic("SiteSplicer.spliceCalledOnceSites: the site of function {site.calleeIndex} in '{String.from(self.func.name)}' is spliced a second time — a callee is admitted in one wave and forgotten after it")
+				end 'twice'
+
+				site.spliced = true
+				self.sitePositions.push(site.opPos)
+				self.siteCallees.push(site.calleeIndex)
+				next = next + 1
+			end 'eachSiteOfTheBlock'
+
+			let blockRef = try self.func.blockRefs.get(position) otherwise panic("SiteSplicer.spliceCalledOnceSites: block position {position} is outside '{String.from(self.func.name)}', which holds {self.func.blockRefs.count()} block(s)")
+			self.spliceRecordedSites(blockRef)
+			self.recoordinatePendingSites(facts, position: position)
+			first = next
+		end 'eachBlock'
+
+		facts.ids = ValueMinter.resuming(self.highestDefined + 1)
+	end 'spliceCalledOnceSites'
+
+	// The block at `position` was just split behind every site this wave spliced in it: a site left for a
+	// later wave now stands in the continuation of the nearest spliced site before it, at its distance
+	// past that site's call; a site ahead of every spliced one has not moved.
+	function recoordinatePendingSites(facts CallerSiteFacts, position BlockRefIndex)
+		for i in 0 upto facts.sites.count() 'eachSite'
+			var site = plannedSiteAt(facts.sites, index: i)
+
+			if site.spliced or site.position != position 'notLeftInThisBlock'
+				continue
+			end 'notLeftInThisBlock'
+
+			var k = self.sitePositions.count()
+
+			while k > 0 'eachSplicedSiteBackwards'
+				k = k - 1
+				let splicedAt = try self.sitePositions.get(k) otherwise panic("SiteSplicer.recoordinatePendingSites: sitePositions.get OOB at {k}")
+
+				if splicedAt < site.opPos 'theNearestSplicedSiteBefore'
+					site.position = try self.contPositions.get(k) otherwise panic("SiteSplicer.recoordinatePendingSites: contPositions.get OOB at {k} — one continuation is recorded per spliced site")
+					site.opPos = site.opPos - splicedAt - 1
+					break
+				end 'theNearestSplicedSiteBefore'
+			end 'eachSplicedSiteBackwards'
+		end 'eachSite'
+	end 'recoordinatePendingSites'
+
+	// The recorded sites of `blockRef` (`sitePositions`/`siteCallees`, ascending), spliced.
+	function spliceRecordedSites(blockRef BlockRef)
+		let siteCount = self.sitePositions.count()
+
+		// ⛔⛔ **THE MINTER IS SEEDED HERE, BEFORE THE FIRST SPLIT.**
 		// `nextFreeValueId` derives its floor from the function's LIVE ops, and every splice below drops
 		// a call op out of `opRefs` — so between the drop and the moment the continuation takes that
 		// call's result id as a block arg, the function's live set does not contain it. Seeded inside
@@ -1963,23 +2315,31 @@ type SiteSplicer
 
 		while k > 0 'eachSiteBackwards'
 			k = k - 1
-			let at = try self.sitePositions.get(k) otherwise panic("SiteSplicer.inlineSitesIn: sitePositions.get OOB at {k}")
+			let at = try self.sitePositions.get(k) otherwise panic("SiteSplicer.spliceRecordedSites: sitePositions.get OOB at {k}")
 
 			// Split immediately PAST the call, so the call stays the last op of the block on the left and
 			// its continuation begins at the op that followed it.
 			let cont = splitBlockInPlace(self.module, func: self.func, head: self.blockAt(blockRef), position: at + 1, label: InlineContLabel)
-			try contRefs.set(k, value: registeredBlockRef(self.module, func: self.func, block: cont)) otherwise panic("SiteSplicer.inlineSitesIn: contRefs.set OOB at {k}")
+			try contRefs.set(k, value: registeredBlockRef(self.module, func: self.func, block: cont)) otherwise panic("SiteSplicer.spliceRecordedSites: contRefs.set OOB at {k}")
 		end 'eachSiteBackwards'
+
+		// The continuations were registered last-site-first, so the i-th site's is the i-th block from the
+		// end.
+		let blockCount = self.func.blockRefs.count()
+
+		for i in 0 upto siteCount 'eachContinuation'
+			self.contPositions.push(blockCount - 1 - i)
+		end 'eachContinuation'
 
 		var pred = blockRef
 
 		for i in 0 upto siteCount 'eachSite'
-			let contRef = try contRefs.get(i) otherwise panic("SiteSplicer.inlineSitesIn: contRefs.get OOB at {i}")
-			let calleeIndex = try self.siteCallees.get(i) otherwise panic("SiteSplicer.inlineSitesIn: siteCallees.get OOB at {i}")
+			let contRef = try contRefs.get(i) otherwise panic("SiteSplicer.spliceRecordedSites: contRefs.get OOB at {i}")
+			let calleeIndex = try self.siteCallees.get(i) otherwise panic("SiteSplicer.spliceRecordedSites: siteCallees.get OOB at {i}")
 			self.spliceCallAtTailOf(pred, contRef: contRef, calleeIndex: calleeIndex)
 			pred = contRef
 		end 'eachSite'
-	end 'inlineSitesIn'
+	end 'spliceRecordedSites'
 
 	// One forward walk of the block, recording every inlinable site and CENSUSING every other direct
 	// call. It allocates nothing for a block with no site — which is nearly every block in the module —
@@ -1990,14 +2350,13 @@ type SiteSplicer
 	// so the half this walk omits holds no site.
 	function collectSites(blockRef BlockRef) returns SiteCount
 		if self.siteBuffersSeeded 'reuse'
-			self.sitePositions.truncate(0)
-			self.siteCallees.truncate(0)
+			self.clearSiteBuffers()
 		end 'reuse'
 
-		let opCount = self.blockAt(blockRef).opRefs.count()
+		let block = self.blockAt(blockRef)
 
-		for pos in 0 upto opCount 'eachOp'
-			match self.opAt(blockRef, pos: pos) 'kind'
+		for pos in 0 upto block.opRefs.count() 'eachOp'
+			match self.module.getOp(try block.opRefs.get(pos) otherwise panic("SiteSplicer.collectSites: opRefs.get OOB at {pos} inside its own count")) 'kind'
 				const or
 					binOp or
 					unaryOp or
@@ -2154,13 +2513,20 @@ type SiteSplicer
 		end 'admitted'
 	end 'considerCalledOnceSite'
 
-	// The value-space width the admitting rule measured for `calleeIndex`.
+	// The value-space width the admitting rule measured for `calleeIndex`, and the block count it saw.
 	function valueBoundOf(calleeIndex FuncIndex) returns ValueId
 		return match self.admission 'rule'
 			leaves(plan) gives plan.valueBoundOf(calleeIndex)
 			calledOnce(wave) gives wave.valueBoundOf(calleeIndex)
 		end 'rule'
 	end 'valueBoundOf'
+
+	function blockCountOf(calleeIndex FuncIndex) returns BlockRefIndex
+		return match self.admission 'rule'
+			leaves(plan) gives plan.blockCountOf(calleeIndex)
+			calledOnce(wave) gives wave.blockCountOf(calleeIndex)
+		end 'rule'
+	end 'blockCountOf'
 
 	function recordSite(pos BlockOpPos, calleeIndex FuncIndex)
 		self.seedSiteBuffers()
@@ -2315,6 +2681,7 @@ type SiteSplicer
 	// ⭐⭐ **THE SPLICE.** `predRef` ends in the call (about to be dropped); `contRef` holds everything
 	// that followed it, and — if this is the block's last site — the block's whole exit.
 	function splice(predRef BlockRef, contRef BlockRef, calleeIndex FuncIndex, callee ByteArray, args ValueIdArray, resultId ValueId, siteSpan SpanId)
+		requireCallNamesCallee(callee, calleeIndex: calleeIndex, caller: self.func, byName: self.byName)
 		let calleeFunc = self.module.getFunc(calleeIndex)
 
 		if args.count() != calleeFunc.paramCount 'arity'
@@ -2346,7 +2713,7 @@ type SiteSplicer
 	//
 	// ⭐⭐ **IT MINTS FOR EVERY NON-PARAMETER INDEX, NOT ONLY FOR THE VALUES SOME OP DEFINES, AND THAT IS
 	// WHAT MAKES IT TOTAL RATHER THAN NEARLY TOTAL.** There is no unbound id to read, so
-	// `remapStdOpForClone` can look every value up STRICTLY and a column built against the wrong function
+	// `cloneStdOp` can look every value up STRICTLY and a column built against the wrong function
 	// is a panic instead of a silently wrong operand. The price is the handful of ids that go to values
 	// in a declined cascade, or to a gap an earlier pass's orphaned op left in the numbering — a couple
 	// per splice, against a caller value space the register allocator sizes its columns by.
@@ -2355,12 +2722,13 @@ type SiteSplicer
 	// this is a range rather than a scan for `param` ops. `copyBlockOps` CHECKS each `param` op against
 	// it as it skips the op, so the convention is verified where it is spent rather than assumed here.
 	function buildValueColumn(calleeFunc IrFunction, calleeIndex FuncIndex, args ValueIdArray) returns ValueIdArray
-		let bound = nextFreeValueId(self.module, func: calleeFunc)
+		let bound = self.valueBoundOf(calleeIndex)
 
 		// The admission measured pressure over this body and sized its column by it; a body that grew since
-		// is not the one that was admitted.
-		if bound != self.valueBoundOf(calleeIndex) 'theBodyGrewSinceAdmission'
-			panic("SiteSplicer.buildValueColumn: '{String.from(calleeFunc.name)}' holds {bound} value(s) but was admitted at {self.valueBoundOf(calleeIndex)} — something spliced into it between its admission and this copy")
+		// is not the one that was admitted. Every splice adds blocks, so the block count is the tripwire —
+		// asked in O(1) where a fresh `nextFreeValueId` would walk the body a second time per copy.
+		if calleeFunc.blockRefs.count() != self.blockCountOf(calleeIndex) 'theBodyGrewSinceAdmission'
+			panic("SiteSplicer.buildValueColumn: '{String.from(calleeFunc.name)}' holds {calleeFunc.blockRefs.count()} block(s) but was admitted with {self.blockCountOf(calleeIndex)} — something spliced into it between its admission and this copy")
 		end 'theBodyGrewSinceAdmission'
 
 		var subst = ValueIdArray.create()
@@ -2503,7 +2871,7 @@ type SiteSplicer
 
 	// ⭐⭐ **EVERY EDGE INTO A DECLINED CASCADE'S HEAD LANDS ON THE BLOCK THAT CASCADE WOULD HAVE PASSED
 	// CONTROL TO, and it is spelled as a `blockSubst` entry rather than as a rewrite of the edges.** The
-	// substitution column is what `remapStdOpForClone` reads for every terminator it clones AND what
+	// substitution column is what `cloneStdOp` reads for every terminator it clones AND what
 	// `targetOf` answers the splice's own entry branch from — so writing the redirect there redirects both,
 	// and there is no list of edge kinds to keep in step.
 	//
@@ -2582,6 +2950,9 @@ type SiteSplicer
 			// has ended, since the append mutates the module.
 			if self.copyBody(calleeBlockRef, freshRef: freshRef, contRef: contRef, subst: subst, blocks: blocks, calleeFunc: calleeFunc) 'aborts'
 				appendDeadReturn(self.module, func: self.func, block: self.blockAt(freshRef), ids: self.valueIds())
+
+				// The dead return's constants are the last ids minted, and every one of them is defined.
+				self.highestDefined = self.valueIds().nextId() - 1
 			end 'aborts'
 		end 'eachBlock'
 	end 'copyBodies'
@@ -2610,17 +2981,27 @@ type SiteSplicer
 		var blockArgs = IrBlockArgArray.create()
 
 		for arg in calleeBlock.blockArgs 'each'
-			blockArgs.push(IrBlockArg.create(clonedValue(arg.valueId, subst: subst), argType: arg.argType))
+			let cloned = clonedValue(arg.valueId, subst: subst)
+			self.noteDefined(cloned)
+			blockArgs.push(IrBlockArg.create(cloned, argType: arg.argType))
 		end 'each'
 
 		var fresh = self.blockAt(freshRef)
 		fresh.blockArgs = blockArgs
 	end 'copyBlockArgs'
 
+	function noteDefined(valueId ValueId)
+		if valueId > self.highestDefined 'higher'
+			self.highestDefined = valueId
+		end 'higher'
+	end 'noteDefined'
+
 	// Answers whether the block ABORTS: the copy stops at an op control never comes back from, since what
 	// follows one — the callee's own dead return, present for the callee's arity — never runs and is
 	// replaced by the caller's (`copyBodies`).
 	function copyBlockOps(calleeBlock IrBlock, freshRef BlockRef, subst ValueIdArray, blocks SpliceBlocks, calleeFunc IrFunction) returns bool
+		let fresh = self.blockAt(freshRef)
+
 		for opIdx in calleeBlock.opRefs 'eachOp'
 			// ⚠ **THE OP IS READ THROUGH `getOp` AND THE CLONE IS BOUND BEFORE THE APPEND, AND BOTH ARE
 			// E3070's DOING.** `self.module.ops.get(...)` inline here BORROWS `module`, and `appendOp`
@@ -2628,7 +3009,9 @@ type SiteSplicer
 			// is borrowed`).
 			let op = self.module.getOp(opIdx)
 
-			if inlineOpRole(op) == InlineOpRole.parameter 'parameterOp'
+			// The dialect's own role names the `param` variant and nothing else, so it answers what
+			// `inlineOpRole`'s ninety-arm match would, for every copied op of every spliced body.
+			if self.meta.hasRole(op, role: OpRole.param) 'parameterOp'
 				assertParamOpMatchesConvention(op, calleeFunc: calleeFunc)
 				continue
 			end 'parameterOp'
@@ -2637,10 +3020,11 @@ type SiteSplicer
 			// A span carried per-FUNCTION would report the caller's file for every inlined body, so a
 			// debugger could never step into one. Read before the append, for the borrow reason above.
 			let calleeSpan = self.module.spans.at(opIdx)
-			let aborts = op.rawValue.role == OpRole.diverging
-			let cloned = remapStdOpForClone(op, valueSubst: subst, blockSubst: blocks.blockSubst, def: self.def)
+			let aborts = self.meta.hasRole(op, role: OpRole.diverging)
+			let cloned = self.cloner.clone(op, valueSubst: subst, blockSubst: blocks.blockSubst)
+			self.noteClonedDefs(cloned)
 			self.module.spans.current = calleeSpan
-			self.module.appendOp(self.blockAt(freshRef), op: cloned)
+			self.module.appendOp(fresh, op: cloned)
 
 			if aborts 'nothingAfterItRuns'
 				return true
@@ -2649,6 +3033,11 @@ type SiteSplicer
 
 		return false
 	end 'copyBlockOps'
+
+	function noteClonedDefs(cloned StdOp)
+		stdOpDefinedValue(cloned, def: self.def)
+		self.highestDefined = self.def.maxDefinedId(self.highestDefined)
+	end 'noteClonedDefs'
 
 	// ⭐ **A `ret` BECOMES A BRANCH TO THE CONTINUATION carrying what it was returning; every other
 	// terminator is cloned with its block targets remapped.** A callee with two returns therefore gives
@@ -2809,7 +3198,7 @@ type SiteSplicer
 	// the parse memo, so an in-place write corrupts every later compile of the project with nothing
 	// downstream that re-reads it to notice.
 	function cloneExit(calleeBlock IrBlock, freshRef BlockRef, term StdOp, subst ValueIdArray, blocks SpliceBlocks)
-		let cloned = remapStdOpForClone(term, valueSubst: subst, blockSubst: blocks.blockSubst, def: self.def)
+		let cloned = self.cloner.clone(term, valueSubst: subst, blockSubst: blocks.blockSubst)
 		self.module.setTerminator(self.blockAt(freshRef), op: cloned)
 
 		var edges = BranchEdgeArray.create()
@@ -2858,6 +3247,26 @@ type SiteSplicer
 		try self.module.blockSourceInfo.set(to, value: sourceInfo) otherwise panic("SiteSplicer.carryBlockSourceInfo: blockSourceInfo.set OOB at {to}")
 	end 'carryBlockSourceInfo'
 end 'SiteSplicer'
+
+// `site` into `plan` at its place in (block position, op position) order — a handful of sites per caller
+// per wave, so an insertion is the whole sort.
+function insertByCoordinates(plan SiteAcrossArray, site SiteAcross)
+	var at = plan.count()
+
+	while at > 0 and precedesSite(site, other: plannedSiteAt(plan, index: at - 1)) 'findThePlace'
+		at = at - 1
+	end 'findThePlace'
+
+	plan.insert(at, value: site)
+end 'insertByCoordinates'
+
+function precedesSite(site SiteAcross, other SiteAcross) returns bool
+	return site.position < other.position or (site.position == other.position and site.opPos < other.opPos)
+end 'precedesSite'
+
+function plannedSiteAt(plan SiteAcrossArray, index SiteCount) returns SiteAcross
+	return try plan.get(index) otherwise panic("plannedSiteAt: plan.get OOB at {index} against {plan.count()} planned site(s)")
+end 'plannedSiteAt'
 
 // ⭐ **THE STD-ABI CONVENTION, CHECKED WHERE IT IS SPENT.** `buildValueColumn` maps ids
 // `0..paramCount-1` straight onto the call's arguments instead of scanning for `param` ops, which is

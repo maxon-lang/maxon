@@ -8,59 +8,72 @@
 // the register allocator's own solver (`TargetLiveness.solveLivenessSsa`) declines to pay for the same
 // reason: a nest as deep as the program is long makes the sweep quadratic.
 //
-// Asked by the inliner's register-pressure estimate and by nothing else, so it is computed for the few
-// functions a called-once splice touches rather than kept beside the module.
+// ⭐ **ONE WORKSPACE, RECOMPUTED PER FUNCTION.** Asked by the inliner's register-pressure estimate of
+// every called-once callee and of every caller, thousands of times per compile, so the columns are kept
+// and refilled: `recompute` allocates only the CSR graphs of the function in hand, never a column per
+// value or a list per block.
 
-typealias ValueIdLists = Array with ValueIdArray
-
-// One stamp per block, so a value's walk marks each block once without a set per value.
+// One stamp per block, so a value's walk marks each block once without a set per value. The stamp
+// counts up across every function the workspace serves, so a column that keeps stale entries from a
+// larger function never reads one as marked.
 typealias WalkStamp = int(0 to u64.max)
 typealias WalkStampColumn = Array with WalkStamp
 
 module type StdLiveness
 	var blockCount as BlockRefIndex
-	var succ as CsrGraph
-	var pred as CsrGraph
+
+	// The CFG of the function last computed, in both directions — kept readable so the loop nest and
+	// the natural-loop finder are built over the same graph rather than a second copy of it.
+	module var succ as CsrGraph
+	module var pred as CsrGraph
 
 	// Value id -> the block position defining it; `blockCount` — one past every position, so it collides
 	// with none — for a value no block of the function defines.
 	var definedIn as BlockPositionColumn
 
-	// Per block: the values live on entry.
-	var liveIn as ValueIdLists
+	// Block position -> the values live on entry, ascending by id. Built from the (block, value) pairs
+	// the range walk pushes, so a block costs no list of its own.
+	var liveIn as CsrGraph
+	var liveInBlock as CsrColumn
+	var liveInValue as CsrColumn
+
+	// The (value, block) pairs of every cross-block read, the use graph's edge list.
+	var useValue as CsrColumn
+	var useBlock as CsrColumn
 
 	// A membership stamp over the value space, for the sets the readers build.
 	var seen as LoopValueStamps
 	var reads as StdValueUseSet
 	var def as StdDefinedValues
+	var marked as WalkStampColumn
+	var stamp as WalkStamp
+	var stack as BlockPositionColumn
 
-	module static function compute(module StdModule, func IrFunction, valueBound ValueId) returns StdLiveness
-		let blockCount = func.blockRefs.count()
-		var definedIn = BlockPositionColumn.create()
-		definedIn.resize(valueBound)
+	module static function create() returns StdLiveness
+		let empty = CsrGraph.create(CsrColumn.create(), list: CsrColumn.create())
+		return Self{blockCount: 0, succ: empty, pred: empty, definedIn: BlockPositionColumn.create(), liveIn: empty, liveInBlock: CsrColumn.create(), liveInValue: CsrColumn.create(), useValue: CsrColumn.create(), useBlock: CsrColumn.create(), seen: LoopValueStamps.create(), reads: StdValueUseSet.createRecordingIds(), def: StdDefinedValues.create(), marked: WalkStampColumn.create(), stamp: 0, stack: BlockPositionColumn.create()}
+	end 'create'
+
+	// The liveness of `func`, over a value space of `valueBound`, replacing whatever the workspace held.
+	module function recompute(module StdModule, func IrFunction, valueBound ValueId)
+		self.blockCount = func.blockRefs.count()
+		self.definedIn.resize(valueBound)
 
 		for v in 0 upto valueBound 'eachValue'
-			try definedIn.set(v, value: blockCount) otherwise panic("StdLiveness.compute: definedIn.set OOB at {v}")
+			try self.definedIn.set(v, value: self.blockCount) otherwise panic("StdLiveness.recompute: definedIn.set OOB at {v}")
 		end 'eachValue'
 
-		let succ = buildStdSuccessorGraph(module, func: func, blockCount: blockCount)
-		var liveness = Self{blockCount: blockCount, succ: succ, pred: reversedGraph(succ), definedIn: definedIn, liveIn: ValueIdLists.create(), seen: LoopValueStamps.create(), reads: StdValueUseSet.createRecordingIds(), def: StdDefinedValues.create()}
-
-		for _ in 0 upto blockCount 'eachBlock'
-			liveness.liveIn.push(ValueIdArray.create())
-		end 'eachBlock'
-
-		liveness.recordDefs(module, func: func)
-		liveness.markLiveRanges(liveness.collectUses(module, func: func), valueBound: valueBound)
-		return liveness
-	end 'compute'
+		self.succ = buildStdSuccessorGraph(module, func: func, blockCount: self.blockCount)
+		self.pred = reversedGraph(self.succ)
+		self.markLiveRanges(self.collectDefsAndUses(module, func: func), valueBound: valueBound)
+	end 'recompute'
 
 	// The values live on entry to the block at `position`, into `out`.
 	module function collectLiveIn(position BlockRefIndex, out ValueIdArray)
 		out.clear()
 
-		for valueId in self.liveInOf(position) 'eachLive'
-			out.push(valueId)
+		for k in 0 upto self.liveIn.degree(position as CsrIndex) 'eachLive'
+			out.push(self.liveInAt(position, k: k))
 		end 'eachLive'
 	end 'collectLiveIn'
 
@@ -92,15 +105,17 @@ module type StdLiveness
 		end 'eachEdge'
 
 		for k in 0 upto self.succ.degree(position as CsrIndex) 'eachSuccessor'
-			for valueId in self.liveInOf(self.succ.neighbour(position as CsrIndex, k: k) as BlockRefIndex) 'eachLive'
-				self.insertUnlessMarked(valueId, into: into)
+			let successor = self.succ.neighbour(position as CsrIndex, k: k) as BlockRefIndex
+
+			for j in 0 upto self.liveIn.degree(successor as CsrIndex) 'eachLive'
+				self.insertUnlessMarked(self.liveInAt(successor, k: j), into: into)
 			end 'eachLive'
 		end 'eachSuccessor'
 	end 'collectLiveAcrossOp'
 
-	function liveInOf(position BlockRefIndex) returns ValueIdArray
-		return try self.liveIn.get(position) otherwise panic("StdLiveness: block position {position} is outside the {self.blockCount}-block function this liveness was computed over")
-	end 'liveInOf'
+	function liveInAt(position BlockRefIndex, k CsrIndex) returns ValueId
+		return self.liveIn.neighbour(position as CsrIndex, k: k) as ValueId
+	end 'liveInAt'
 
 	function opRefAt(block IrBlock, pos BlockOpPos) returns OpIndex
 		return try block.opRefs.get(pos) otherwise panic("StdLiveness: block '{String.from(block.label)}' has no op at position {pos}")
@@ -109,25 +124,6 @@ module type StdLiveness
 	function definingBlockOf(valueId ValueId) returns BlockRefIndex
 		return try self.definedIn.get(valueId) otherwise panic("StdLiveness: value {valueId} is outside the {self.definedIn.count()}-value space this liveness was computed over")
 	end 'definingBlockOf'
-
-	// Every def's block: a block's phis, then its ops and terminator.
-	function recordDefs(module StdModule, func IrFunction)
-		for position in 0 upto self.blockCount 'eachBlock'
-			let block = module.blockAtPosition(func, position: position)
-
-			for arg in block.blockArgs 'eachPhi'
-				self.recordDef(arg.valueId, position: position)
-			end 'eachPhi'
-
-			for opIdx in block.opRefs 'eachOp'
-				self.recordOpDefs(module.getOp(opIdx), position: position)
-			end 'eachOp'
-
-			if block.hasTerminatorOp() 'terminated'
-				self.recordOpDefs(module.getOp(block.terminatorIndex()), position: position)
-			end 'terminated'
-		end 'eachBlock'
-	end 'recordDefs'
 
 	function recordOpDefs(op StdOp, position BlockRefIndex)
 		stdOpDefinedValue(op, def: self.def)
@@ -147,96 +143,101 @@ module type StdLiveness
 		try self.definedIn.set(valueId, value: position) otherwise panic("StdLiveness.recordDef: value {valueId} is outside the {self.definedIn.count()}-value space this liveness was computed over")
 	end 'recordDef'
 
-	// Value id -> the blocks reading it without defining it, as a CSR over the value space. A read of a
-	// value defined in the block itself follows its def in SSA, so "defined elsewhere" is the whole test;
-	// an edge's args are reads at the block's end.
-	function collectUses(module StdModule, func IrFunction) returns CsrGraph
-		var useValue = CsrColumn.create()
-		var useBlock = CsrColumn.create()
+	// Every def's block — a block's phis, then its ops and terminator — and value id -> the blocks reading
+	// it without defining it, as a CSR over the value space, from ONE walk of the ops. A read of a value
+	// defined in the block itself follows its def in SSA, so "defined elsewhere" is the whole test, and the
+	// block's own defs are all recorded by the time its reads are filtered; a def in another block is
+	// "elsewhere" whether or not the walk has reached it yet. An edge's args are reads at the block's
+	// end. The recording set gathers one block's reads whole, so a value read several times by one block
+	// is listed once and the set is emptied once per block.
+	function collectDefsAndUses(module StdModule, func IrFunction) returns CsrGraph
+		self.useValue.clear()
+		self.useBlock.clear()
 
 		for position in 0 upto self.blockCount 'eachBlock'
 			let block = module.blockAtPosition(func, position: position)
-			self.seen.beginLoop()
+			self.reads.clear()
+
+			for arg in block.blockArgs 'eachPhi'
+				self.recordDef(arg.valueId, position: position)
+			end 'eachPhi'
 
 			for opIdx in block.opRefs 'eachOp'
-				self.collectOpUses(module.getOp(opIdx), position: position, useValue: useValue, useBlock: useBlock)
+				self.recordOpDefsAndUses(module.getOp(opIdx), position: position)
 			end 'eachOp'
 
 			if block.hasTerminatorOp() 'terminated'
-				self.collectOpUses(module.getOp(block.terminatorIndex()), position: position, useValue: useValue, useBlock: useBlock)
+				self.recordOpDefsAndUses(module.getOp(block.terminatorIndex()), position: position)
 			end 'terminated'
 
 			for edge in block.branchEdges 'eachEdge'
 				for argId in edge.argIds 'eachArg'
-					self.collectUse(argId, position: position, useValue: useValue, useBlock: useBlock)
+					self.reads.insert(argId)
 				end 'eachArg'
 			end 'eachEdge'
+
+			for i in 0 upto self.reads.insertedIdCount() 'eachRead'
+				let valueId = self.reads.insertedIdAt(i)
+
+				if self.definingBlockOf(valueId) != position 'definedElsewhere'
+					self.useValue.push(valueId)
+					self.useBlock.push(position)
+				end 'definedElsewhere'
+			end 'eachRead'
 		end 'eachBlock'
 
-		return buildCsr(useValue, to: useBlock, nodeCount: self.definedIn.count() as CsrIndex)
-	end 'collectUses'
+		return buildCsr(self.useValue, to: self.useBlock, nodeCount: self.definedIn.count() as CsrIndex)
+	end 'collectDefsAndUses'
 
-	function collectOpUses(op StdOp, position BlockRefIndex, useValue CsrColumn, useBlock CsrColumn)
-		self.reads.clear()
+	function recordOpDefsAndUses(op StdOp, position BlockRefIndex)
+		self.recordOpDefs(op, position: position)
 		collectStdOpUses(op, referenced: self.reads)
-
-		for i in 0 upto self.reads.insertedIdCount() 'eachRead'
-			self.collectUse(self.reads.insertedIdAt(i), position: position, useValue: useValue, useBlock: useBlock)
-		end 'eachRead'
-	end 'collectOpUses'
-
-	// One (value, block) pair per block, however many times the block reads the value.
-	function collectUse(valueId ValueId, position BlockRefIndex, useValue CsrColumn, useBlock CsrColumn)
-		if self.definingBlockOf(valueId) == position or self.seen.contains(valueId) 'ownDefOrAlreadyListed'
-			return
-		end 'ownDefOrAlreadyListed'
-
-		self.seen.insert(valueId)
-		useValue.push(valueId)
-		useBlock.push(position)
-	end 'collectUse'
+	end 'recordOpDefsAndUses'
 
 	// Each value's live range: from every block reading it, backwards through the predecessors, stopping
 	// at the block that defines it (the value is live OUT of that block, never IN) and at a block the
-	// value's own walk already marked.
+	// value's own walk already marked. Values are walked in id order, so every block's list comes out
+	// ascending.
 	function markLiveRanges(uses CsrGraph, valueBound ValueId)
-		var marked = WalkStampColumn.create()
-		marked.resize(self.blockCount)
-		var stamp = 0 as WalkStamp
-		var stack = BlockPositionColumn.create()
+		self.marked.resize(self.blockCount)
+		self.liveInBlock.clear()
+		self.liveInValue.clear()
 
 		for valueId in 0 upto valueBound 'eachValue'
 			if uses.degree(valueId as CsrIndex) == 0 'neverRead'
 				continue
 			end 'neverRead'
 
-			stamp = stamp + 1
+			self.stamp = self.stamp + 1
 			let defBlock = self.definingBlockOf(valueId)
 
 			for k in 0 upto uses.degree(valueId as CsrIndex) 'eachReadingBlock'
-				stack.push(uses.neighbour(valueId as CsrIndex, k: k) as BlockRefIndex)
+				self.stack.push(uses.neighbour(valueId as CsrIndex, k: k) as BlockRefIndex)
 			end 'eachReadingBlock'
 
-			while stack.count() != 0 'walk'
-				let position = try stack.pop() otherwise panic("StdLiveness.markLiveRanges: pop from a non-empty stack")
-				let markedAt = try marked.get(position) otherwise panic("StdLiveness.markLiveRanges: marked.get OOB at {position}")
+			while self.stack.count() != 0 'walk'
+				let position = try self.stack.pop() otherwise panic("StdLiveness.markLiveRanges: pop from a non-empty stack")
+				let markedAt = try self.marked.get(position) otherwise panic("StdLiveness.markLiveRanges: marked.get OOB at {position}")
 
-				if markedAt == stamp 'alreadyLiveHere'
+				if markedAt == self.stamp 'alreadyLiveHere'
 					continue
 				end 'alreadyLiveHere'
 
-				try marked.set(position, value: stamp) otherwise panic("StdLiveness.markLiveRanges: marked.set OOB at {position}")
-				self.liveInOf(position).push(valueId)
+				try self.marked.set(position, value: self.stamp) otherwise panic("StdLiveness.markLiveRanges: marked.set OOB at {position}")
+				self.liveInBlock.push(position)
+				self.liveInValue.push(valueId)
 
 				for k in 0 upto self.pred.degree(position as CsrIndex) 'eachPredecessor'
 					let predecessor = self.pred.neighbour(position as CsrIndex, k: k) as BlockRefIndex
 
 					if predecessor != defBlock 'notTheDefiningBlock'
-						stack.push(predecessor)
+						self.stack.push(predecessor)
 					end 'notTheDefiningBlock'
 				end 'eachPredecessor'
 			end 'walk'
 		end 'eachValue'
+
+		self.liveIn = buildCsr(self.liveInBlock, to: self.liveInValue, nodeCount: self.blockCount as CsrIndex)
 	end 'markLiveRanges'
 
 	function markDefs(op StdOp)
@@ -270,7 +271,7 @@ module type StdLiveness
 end 'StdLiveness'
 
 // The predecessor relation of `succ`: the same edges, read the other way round.
-module function reversedGraph(succ CsrGraph) returns CsrGraph
+function reversedGraph(succ CsrGraph) returns CsrGraph
 	var edgeFrom = CsrColumn.create()
 	var edgeTo = CsrColumn.create()
 
