@@ -12,8 +12,27 @@
 // that drifted apart would leave every return address garbage, every walk truncated to its leaf, and a
 // profile with correct leaves and no callers — which reads as a plausible answer rather than as a failure.
 
-// The x64 `CONTEXT` displacement of RSP: the runtime reads it to bound the copy, the profiler to place it.
-module let ProfileContextRspOffset = 0x98
+// --- The Win64 `CONTEXT` record ---
+//
+// ⭐⭐ **THREE MECHANISMS READ THIS ONE RECORD, AND ONLY ONE OF THEM IS A PROFILER.** The sampler reads a
+// FOREIGN process's registers through it; `maxon-bin/Profile/` places the stack copy it bounded; and the
+// scheduler's monitor reads and REWRITES this process's own (`X64GtRuntime.buildPreemptMachineChunk`),
+// which is what asynchronous preemption is. They compile on different sets of lanes, which is why the
+// displacements live at the root — see this file's header.
+
+// The displacement of RSP, and of RIP: what an instant of execution IS, and the two words a stop rewrites.
+module let Win64ContextRspOffset = 0x98
+module let Win64ContextRipOffset = 0xF8
+
+// `CONTEXT.ContextFlags` — the record's ONE input field — and the two families asked for. CONTEXT_CONTROL
+// supplies RSP and RIP, CONTEXT_INTEGER the general registers the sampler's walk needs.
+//
+// ⚠ **THE FLAGS ARE WRITTEN AS A WHOLE 64-BIT WORD, WHICH ALSO ZEROES `MxCsr` AT 0x34 — and that is correct
+// rather than tolerated:** `MxCsr` is CONTEXT_FLOATING_POINT's, and neither reader asks for that family, so
+// it is neither read on the way in nor written back on the way out.
+module let Win64ContextFlagsOffset = 0x30
+module let Win64ContextControl = 0x00100001
+module let Win64ContextInteger = 0x00100002
 
 // A `MEMORY_BASIC_INFORMATION`'s allocation base — the field the runtime clears before the region query and
 // the only one the profiler reads back, as the identity of a stack.

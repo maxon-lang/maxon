@@ -2813,6 +2813,7 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 	end 'guardFrame'
 
 	let emitGuard = mightGuard and guardFrameBytes > 0
+	var unsafePrefixBytes = 0 as CodeOffset
 	var isFirstBlock = true
 
 	// ⭐ **THE DEBUG-INFO PATH IS ONE BOOL TEST PER OP AND NOTHING ELSE WHEN IT IS OFF.** Hoisted out of
@@ -2841,6 +2842,11 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 
 		if isFirstBlock and emitGuard 'guard'
 			emitGtStackGuard(code, callFixups: callFixups, rdataRelocs: rdataRelocs, frameBytes: guardFrameBytes, margin: gtStackGuardMargin(target), site: GtGuardSite.functionEntry, target: target)
+
+			// Everything the guard emitted is where an asynchronous stop may NOT land — see
+			// `FunctionCodeChunk.asyncUnsafePrefixBytes`. Read off the buffer rather than re-derived from the
+			// guard's shape, so a guard that grows an instruction moves this with it.
+			unsafePrefixBytes = code.count()
 		end 'guard'
 
 		isFirstBlock = false
@@ -2883,6 +2889,19 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 	// M3 (floats) / M10 (strings).
 	var chunk = FunctionCodeChunk.createWith(func.name, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())
 	chunk.jumpTableRelocs = resolveJumpTableRelocs(jumpTables, blockOffsets: chunkLabelOffsets)
+
+	// ⭐⭐ **A FUNCTION MAY BE STOPPED WHERE IT STANDS EXACTLY WHEN IT IS CODE A GREEN THREAD RUNS AND NOT THE
+	// COMPILER'S OWN SCAFFOLDING** — `mightGuard`, which is `skipsGreenThreadStackGuard` asked of the
+	// function's provenance. The scheduler core, the memory manager and the cascades' machinery are what a
+	// stop must never land in; everything else is ordinary code with a coherent register file at every
+	// instruction.
+	//
+	// ⛔ **NOT `emitGuard`, AND THE DIFFERENCE IS THE WHOLE POINT OF THIS MECHANISM.** A call-free loop that
+	// spills nothing RESERVES NO FRAME, so it carries no guard — and that is precisely the function
+	// asynchronous preemption exists to stop. The room the trampoline needs is not the guard's to promise
+	// here: the safe-point predicate tests the stack pointer against `GtRuntime.gtAsyncPreemptMargin` itself.
+	chunk.asyncPreemptible = mightGuard
+	chunk.asyncUnsafePrefixBytes = unsafePrefixBytes
 
 	// Gated on `--coverage` rather than on debug info: the two are independent channels, and this one is
 	// empty for an ordinary build because no `covInc` was emitted to fill it.
@@ -3172,8 +3191,8 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 	labelsLaid = labelsLaid + 1
 	code.append(buildSymbolTableBytes(debugSymbols))
 
-	// The inline frame tables follow `__symtable`'s names under their own label (`BacktraceFormat`), past the
-	// `[mrt_start, __symtable)` window the walkers symbolize in.
+	// The inline frame tables follow the whole of `__symtable` — names and flag run both — under their own
+	// label (`BacktraceFormat`), past the `[mrt_start, __symtable)` window the walkers symbolize in.
 	padTo(code, size: alignUp(code.count(), alignment: SymbolTableAlignment))
 	try recordChunkLabel(labelOffsets, name: InlineFrameTableName, offset: code.count(), laidOut: labelsLaid, project: project, funcNames: funcNames)
 	code.append(buildInlineFrameTableBytes(inlineFrames))

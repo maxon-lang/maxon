@@ -1,0 +1,248 @@
+// Test: a-throwing-called-once-function-stays-a-call
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+enum FillError
+	tooShort
+end 'FillError'
+
+function fillChecked(a IntArray, n Integer) returns Integer throws FillError
+	if a.count() < n 'short'
+		throw FillError.tooShort
+	end 'short'
+
+	var total = 0
+
+	for i in 0 upto n 'each'
+		try a.set(i, value: i * 3) otherwise panic("fillChecked: i < n <= a.count()")
+		total = total + i * 3
+	end 'each'
+
+	return total
+end 'fillChecked'
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.resize(5)
+	let total = try fillChecked(a, n: 5) otherwise 0
+	let last = try a.get(4) otherwise panic("main: a.count() = 5")
+	return (total + last) as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @fillChecked {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 96
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegReg rax, rdx
+    x64.jcc greaterEqual, ifcont
+  short:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 96
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rsi, 0
+  __us_test#28:
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 16]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc less, forhdr#3
+  __us_test#29:
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 8]
+    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, forhdr#3
+  __us_test#30:
+    x64.leaRegRegImm32 r9, r8, -24
+    x64.loadRegBaseDisp.word64 r9, [r9 + 16]
+    x64.cmpRegImm32 r9, 0
+    x64.jcc notEqual, forhdr#3
+    x64.jmp forhdr#17
+  each#4:
+    x64.imulRegRegImm32 rdi, rsi, 3
+  __rc_ok:
+    x64.loadRegBaseDisp.word64 r8, [rcx + 16]
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __im_slow#12
+  __im_bounds#13:
+    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
+    x64.cmpRegReg rsi, r8
+    x64.jcc aboveEqual, __im_slow#12
+  __im_buffer:
+    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, __im_slow#12
+  __im_viewed:
+    x64.leaRegRegImm32 r9, r8, -24
+    x64.loadRegBaseDisp.word64 r9, [r9 + 16]
+    x64.cmpRegImm32 r9, 0
+    x64.jcc notEqual, __im_slow#12
+  __im_store#16:
+    x64.storeBaseIndexScaleReg.word64 [r8 + rsi*8 + 0], rdi
+  tryok#7:
+    x64.leaRegRegReg rax, rax, rdi
+  forstep#5:
+    x64.leaRegRegImm32 rsi, rsi, 1
+  forhdr#3:
+    x64.cmpRegReg rsi, rdx
+    x64.jcc less, each#4
+  critsplit#32:
+    x64.movRegReg r8, rax
+    x64.jmp forexit
+  each#27:
+    x64.imulRegRegImm32 r9, rsi, 3
+  __im_bounds#25:
+    x64.cmpRegReg rsi, rdi
+    x64.jcc aboveEqual, __im_slow#21
+  __im_store#22:
+    x64.storeBaseIndexScaleReg.word64 [r8 + rsi*8 + 0], r9
+  tryok#19:
+    x64.leaRegRegReg rax, rax, r9
+  forstep#18:
+    x64.leaRegRegImm32 rsi, rsi, 1
+  forhdr#17:
+    x64.cmpRegReg rsi, rdx
+    x64.jcc less, each#27
+  critsplit#34:
+    x64.movRegReg r8, rax
+  forexit:
+    x64.movRegImm32 r10, 0
+    x64.epilogue 96
+    x64.popReg rbp
+    x64.ret
+  __im_slow#12:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.storeSlotReg slot3, rsi
+    x64.storeSlotReg slot4, rdi
+    x64.movRegReg rdx, rsi
+    x64.movRegReg rax, rdi
+    x64.callDirect __managed_set
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
+    x64.loadRegSlot rsi, slot3
+    x64.loadRegSlot rdi, slot4
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok#7
+  __im_slow#21:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.storeSlotReg slot3, rsi
+    x64.storeSlotReg slot4, rdi
+    x64.storeSlotReg slot5, r8
+    x64.storeSlotReg slot6, r9
+    x64.movRegReg rdx, rsi
+    x64.movRegReg rax, r9
+    x64.callDirect __managed_set
+    x64.movRegReg r11, r8
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
+    x64.loadRegSlot rsi, slot3
+    x64.loadRegSlot rdi, slot4
+    x64.loadRegSlot r8, slot5
+    x64.loadRegSlot r9, slot6
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#19
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-throwing-called-once-function-stays-a-call.test:17: fillChecked: i < n <= a.count()\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 96
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 48
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 5
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_resize
+    x64.movRegImm32 rdx, 5
+    x64.movRegReg rcx, rbx
+    x64.callDirect fillChecked
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.movRegImm32 rax, 0
+    x64.jmp trycont
+  tryok#1:
+    x64.movRegReg rax, r8
+  trycont:
+    x64.movRegImm32 rdx, 4
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.cmpRegImm32 rcx, 4
+    x64.jcc belowEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.leaRegRegImm32 rcx, rcx, 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.movRegReg r8, rcx
+  tryok#4:
+    x64.leaRegRegReg r12, rax, r8
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 48
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow:
+    x64.storeSlotReg slot0, rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.loadRegSlot rax, slot0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#4
+  tryerr#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-throwing-called-once-function-stays-a-call.test:28: main: a.count() = 5\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 48
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-throwing-called-once-function-stays-a-call.test:29: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 48
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

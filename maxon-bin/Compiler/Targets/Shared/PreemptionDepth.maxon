@@ -11,6 +11,12 @@
 // ⚠ **A CALL IT CANNOT SIZE IS REFUSED, NEVER GUESSED.** An indirect call, a callee that is neither a laid-out
 // function nor a chunk whose depth is known here, and a tree deeper than any the runtime has are each a build
 // failure naming what reached it, so a change that grows the tree has to state what it costs.
+//
+// ⭐⭐ **THERE ARE TWO ROOTS AND TWO MARGINS, AND THE SECOND IS THE ASYNCHRONOUS STOP'S.** A request honoured
+// at a prologue rides the guard margin; a thread STOPPED WHERE IT STANDS has had nothing projected on its
+// behalf at all, so the safe-point predicate demands `GtRuntime.gtAsyncPreemptMargin` outright and this file
+// proves the trampoline's register block plus its park's tree fit inside it. One walk serves both — only the
+// root and the margin differ.
 
 // One step down from a frame in the tree: a named callee whose own tree is added up, `below` bytes beneath its
 // caller's frame; or a call whose whole depth on the thread's stack is known where it is emitted.
@@ -29,7 +35,7 @@ let MaxUnguardedTreeFrames = 16 as UnguardedTreeFrames
 // backends of a green-thread program, after the prologue pass has fixed every frame.
 export function requirePreemptionFitsTheGuardMargin(module TargetModule, funcNames FunctionNameIndex, target Target)
 	let arm = preemptArmStackBytes(target)
-	let tree = unguardedTreeBytes(module, funcNames: funcNames, name: GtPreemptName, target: target, framesLeft: MaxUnguardedTreeFrames)
+	let tree = unguardedTreeBytes(module, funcNames: funcNames, name: GtPreemptName, root: GtPreemptName, target: target, framesLeft: MaxUnguardedTreeFrames)
 	let margin = gtStackGuardMargin(target)
 	logDebug(LogCategory.codegen, message: function() gives "preemption depth ({targetToString(target)}): arm {arm} + tree {tree} = {arm + tree} of a {margin}-byte guard margin")
 
@@ -37,6 +43,28 @@ export function requirePreemptionFitsTheGuardMargin(module TargetModule, funcNam
 		panic("requirePreemptionFitsTheGuardMargin: honouring a preemption request takes {arm} bytes for `{String.from(GtGuardTrippedName)}`'s preempt arm and {tree} for `{String.from(GtPreemptName)}`'s call tree on {targetToString(target)}, {arm + tree} in all, but it runs below a guarded function's entry inside the {margin}-byte guard margin — a thread preempted near its guard word would write past its stack. Shrink the tree, or raise GtRuntime.GtStackGuardMarginBytes and measure the self-compile")
 	end 'overflowsTheMargin'
 end 'requirePreemptionFitsTheGuardMargin'
+
+// Refuse the build when an asynchronous stop's whole cost — the trampoline's own frame and everything
+// `__gt_async_preempt_park` reaches — outgrows the room the safe-point predicate insisted on. Called by the
+// backend of a green-thread program on a lane that stops threads, after the prologue pass.
+export function requireAsyncPreemptionFitsItsMargin(module TargetModule, funcNames FunctionNameIndex, target Target)
+	let trampoline = asyncPreemptTrampolineStackBytes(target)
+	let tree = unguardedTreeBytes(module, funcNames: funcNames, name: AsyncPreemptParkName, root: AsyncPreemptParkName, target: target, framesLeft: MaxUnguardedTreeFrames)
+	let margin = gtAsyncPreemptMargin(target)
+	logDebug(LogCategory.codegen, message: function() gives "async preemption depth ({targetToString(target)}): trampoline {trampoline} + tree {tree} = {trampoline + tree} of a {margin}-byte stop margin")
+
+	if (trampoline + tree) as ParsedInt > margin 'overflowsTheMargin'
+		panic("requireAsyncPreemptionFitsItsMargin: stopping a thread where it stands takes {trampoline} bytes for `{String.from(AsyncPreemptName)}`'s register block and {tree} for `{String.from(AsyncPreemptParkName)}`'s call tree on {targetToString(target)}, {trampoline + tree} in all, but the safe-point predicate only refuses a stack pointer nearer its base than {margin} bytes — a thread stopped just above that floor would write past its stack. Shrink the tree, or raise GtRuntime.GtAsyncPreemptMarginBytes and measure the self-compile")
+	end 'overflowsTheMargin'
+end 'requireAsyncPreemptionFitsItsMargin'
+
+function asyncPreemptTrampolineStackBytes(target Target) returns StackSize
+	return match target.cpu 'cpu'
+		x64 gives x64GtAsyncPreemptStackBytes()
+		arm64 gives arm64GtAsyncPreemptStackBytes()
+		wasm32 panic("asyncPreemptTrampolineStackBytes: wasm32-wasi has no green-thread stack to stop a thread on — `targetProvidesFacility` denies `greenThreads` there")
+	end 'cpu'
+end 'asyncPreemptTrampolineStackBytes'
 
 function preemptArmStackBytes(target Target) returns StackSize
 	return match target.cpu 'cpu'
@@ -47,9 +75,9 @@ function preemptArmStackBytes(target Target) returns StackSize
 end 'preemptArmStackBytes'
 
 // The deepest the tree under `name` reaches below its caller's frame: `name`'s own frame plus its deepest call.
-function unguardedTreeBytes(module TargetModule, funcNames FunctionNameIndex, name ByteArray, target Target, framesLeft UnguardedTreeFrames) returns StackSize
+function unguardedTreeBytes(module TargetModule, funcNames FunctionNameIndex, name ByteArray, root ByteArray, target Target, framesLeft UnguardedTreeFrames) returns StackSize
 	if framesLeft == 0 'tooDeep'
-		panic("requirePreemptionFitsTheGuardMargin: the tree under `{String.from(GtPreemptName)}` is more than {MaxUnguardedTreeFrames} frames deep at `{String.from(name)}` — a recursive runtime function has no bound this certificate can state")
+		panic("PreemptionDepth: the tree under `{String.from(root)}` is more than {MaxUnguardedTreeFrames} frames deep at `{String.from(name)}` — a recursive runtime function has no bound this certificate can state")
 	end 'tooDeep'
 
 	if name.equals(GtContextSwitchName) 'theSwitch'
@@ -60,11 +88,11 @@ function unguardedTreeBytes(module TargetModule, funcNames FunctionNameIndex, na
 		return hostThreadCpuStackBytes(target)
 	end 'theThreadClock'
 
-	let index = try funcNames.byName.get(name) otherwise panic("requirePreemptionFitsTheGuardMargin: `{String.from(name)}`, in the tree under `{String.from(GtPreemptName)}`, is neither a function this module laid out nor a chunk whose stack this certificate knows — state its depth here")
-	let func = try module.functions.get(index) otherwise panic("requirePreemptionFitsTheGuardMargin: `{String.from(name)}` is function {index} of the name index, past the {module.functions.count()} the target module holds")
+	let index = try funcNames.byName.get(name) otherwise panic("PreemptionDepth: `{String.from(name)}`, in the tree under `{String.from(root)}`, is neither a function this module laid out nor a chunk whose stack this certificate knows — state its depth here")
+	let func = try module.functions.get(index) otherwise panic("PreemptionDepth: `{String.from(name)}` is function {index} of the name index, past the {module.functions.count()} the target module holds")
 
 	if not func.name.equals(name) 'indexDrifted'
-		panic("requirePreemptionFitsTheGuardMargin: the name index places `{String.from(name)}` at function {index}, which the target module holds as `{String.from(func.name)}`")
+		panic("PreemptionDepth: the name index places `{String.from(name)}` at function {index}, which the target module holds as `{String.from(func.name)}`")
 	end 'indexDrifted'
 
 	let framesBelow = framesLeft - 1
@@ -74,11 +102,11 @@ function unguardedTreeBytes(module TargetModule, funcNames FunctionNameIndex, na
 		let block = try module.blocks.get(blockRef) otherwise panic("requirePreemptionFitsTheGuardMargin: blockRef from func.blockRefs not in module.blocks")
 
 		for opIdx in block.opRefs 'eachOp'
-			deepest = deeperOf(deepest, other: unguardedCallBytes(module, funcNames: funcNames, opIdx: opIdx, target: target, framesLeft: framesBelow))
+			deepest = deeperOf(deepest, other: unguardedCallBytes(module, funcNames: funcNames, opIdx: opIdx, root: root, target: target, framesLeft: framesBelow))
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'terminator'
-			deepest = deeperOf(deepest, other: unguardedCallBytes(module, funcNames: funcNames, opIdx: block.terminatorIndex(), target: target, framesLeft: framesBelow))
+			deepest = deeperOf(deepest, other: unguardedCallBytes(module, funcNames: funcNames, opIdx: block.terminatorIndex(), root: root, target: target, framesLeft: framesBelow))
 		end 'terminator'
 	end 'eachBlock'
 
@@ -86,21 +114,21 @@ function unguardedTreeBytes(module TargetModule, funcNames FunctionNameIndex, na
 end 'unguardedTreeBytes'
 
 // What the op at `opIdx` adds below its function's frame: nothing unless it is a call.
-function unguardedCallBytes(module TargetModule, funcNames FunctionNameIndex, opIdx OpIndex, target Target, framesLeft UnguardedTreeFrames) returns StackSize
-	let op = try module.ops.get(opIdx) otherwise panic("requirePreemptionFitsTheGuardMargin: opIdx {opIdx} not in module.ops")
+function unguardedCallBytes(module TargetModule, funcNames FunctionNameIndex, opIdx OpIndex, root ByteArray, target Target, framesLeft UnguardedTreeFrames) returns StackSize
+	let op = try module.ops.get(opIdx) otherwise panic("PreemptionDepth: opIdx {opIdx} not in module.ops")
 
 	if not op.rawValue.isCall 'notACall'
 		return 0
 	end 'notACall'
 
-	return match callStepOf(op) 'step'
-		callee(name, below) gives below + unguardedTreeBytes(module, funcNames: funcNames, name: name, target: target, framesLeft: framesLeft)
+	return match callStepOf(op, root: root) 'step'
+		callee(name, below) gives below + unguardedTreeBytes(module, funcNames: funcNames, name: name, root: root, target: target, framesLeft: framesLeft)
 		fixed(bytes) gives bytes
 	end 'step'
 end 'unguardedCallBytes'
 
 // The step a call op takes, for every call op either native backend emits.
-function callStepOf(op TargetOp) returns UnguardedCallStep
+function callStepOf(op TargetOp, root ByteArray) returns UnguardedCallStep
 	return match op 'call'
 		callDirect(targetName) gives UnguardedCallStep.callee(targetName, below: 0)
 		arm64BranchLink(targetName) gives UnguardedCallStep.callee(targetName, below: 0)
@@ -110,8 +138,8 @@ function callStepOf(op TargetOp) returns UnguardedCallStep
 			arm64Syscall gives UnguardedCallStep.fixed(0)
 		callReg or
 			callMem or
-			arm64BranchLinkReg panic("requirePreemptionFitsTheGuardMargin: an indirect call in the tree under `{String.from(GtPreemptName)}` names no callee whose frame could be added up")
-		default panic("requirePreemptionFitsTheGuardMargin: a call op this certificate does not know is in the tree under `{String.from(GtPreemptName)}` — state what it costs the thread's stack here")
+			arm64BranchLinkReg panic("PreemptionDepth: an indirect call in the tree under `{String.from(root)}` names no callee whose frame could be added up")
+		default panic("PreemptionDepth: a call op this certificate does not know is in the tree under `{String.from(root)}` — state what it costs the thread's stack here")
 	end 'call'
 end 'callStepOf'
 

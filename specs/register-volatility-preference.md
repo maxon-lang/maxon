@@ -69,11 +69,12 @@ either mask and pin nothing.
 <!-- test: unconstrained-ints-leave-the-callee-saved-half-free -->
 Twelve integers that never cross a call, defined first, then ten that do.
 
-On arm64 the pool is 26 GPRs — `x0`..`x15` caller-saved, `x19`..`x28` callee-saved. The
-twelve `a` values are coloured first and take volatile registers; the ten `b` values are
-live across `sink(s)`, so they are forbidden all sixteen volatile ones and the ten
-callee-saved registers are their only home. Ten values, ten registers: the point fits
-exactly, and Hall's condition says so.
+On arm64 the pool is 25 GPRs — `x0`..`x14` caller-saved (`x15` is the
+asynchronous-preemption trampoline's return register and belongs to no pool),
+`x19`..`x28` callee-saved. The twelve `a` values are coloured first and take volatile
+registers; the ten `b` values are live across `sink(s)`, so they are forbidden all fifteen
+volatile ones and the ten callee-saved registers are their only home. Ten values, ten
+registers: the point fits exactly, and Hall's condition says so.
 
 With x64's mask standing in, only nine of arm64's volatile registers looked volatile
 (`x0`,`x1`,`x2`,`x6`..`x11`); the next three preferred were `x19`,`x20`,`x21`, so the `a`

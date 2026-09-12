@@ -264,6 +264,9 @@ end 'seedRoots'
 //   * `__sched_syscall_regain` and the bracket pair — called only from the Target tier's syscall handoff,
 //     on the lanes that build it (`SchedRuntime.targetBracketsBlockingSyscalls`, whose gate the install
 //     shares); an ungated root here would be the shape in which the two halves drift apart silently.
+//   * `__gt_preempt_safe` / `__gt_async_preempt_park` — asynchronous preemption's two Std halves, called
+//     only by the monitor's hand-assembled sender and by the trampoline, on the lanes that stop a thread
+//     where it stands (`SchedRuntime.targetStopsThreadsForPreemption`, whose gate the install shares).
 //   * `__gt_drain_at_exit` / `__gt_run_main` — the entry stub's scheduler teardown and its call into a
 //     green-thread program.
 //   * `__gt_preempt` — the preemption's Std half, called only from the hand-assembled `__gt_guard_tripped`'s
@@ -285,6 +288,11 @@ module function compilerOwnedRootNames(target Target) returns ByteArrayArray
 		names.push(SchedEnterSyscallName)
 		names.push(SchedExitSyscallName)
 	end 'theBracketIsCalled'
+
+	if targetStopsThreadsForPreemption(target) 'itCanStopAThread'
+		names.push(PreemptSafeName)
+		names.push(AsyncPreemptParkName)
+	end 'itCanStopAThread'
 
 	names.push(GtDrainAtExitName)
 	names.push(GtRunMainName)

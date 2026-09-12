@@ -530,6 +530,19 @@ export enum IatSlot
 	CreateWaitableTimerExW = IatSlotMeta{dll: ImportDll.kernel32}
 	SetWaitableTimer = IatSlotMeta{dll: ImportDll.kernel32}
 
+	// ⭐⭐ **ASYNCHRONOUS PREEMPTION'S THREE, AND THEY JOIN THE SAMPLER'S RUN RATHER THAN OPENING ONE OF THEIR
+	// OWN.** The scheduler's monitor suspends a thread of THIS process and hands it back pointing at a
+	// trampoline, so it needs `SetThreadContext` beside the sampler's `SuspendThread`/`GetThreadContext`/
+	// `ResumeThread`. `GetCurrentThreadId` + `OpenThread` are how a machine opens a suspendable handle onto
+	// ITSELF at birth: the joinable handle the creator got back is 0 for the main OS thread this runtime never
+	// created, so it could never stop the one machine that runs `main`.
+	//
+	// ⚠ They go HERE, above the ws2_32 run, for the reason the sampler's block states — a kernel32 slot
+	// declared below a ws2_32 one would interleave the two runs.
+	SetThreadContext = IatSlotMeta{dll: ImportDll.kernel32}
+	OpenThread = IatSlotMeta{dll: ImportDll.kernel32}
+	GetCurrentThreadId = IatSlotMeta{dll: ImportDll.kernel32}
+
 	// ⭐⭐ **THE MODULE MAP — THREE TOOLHELP CALLS, AND THE MEASUREMENT THAT CONDEMNS TOOLHELP IS ABOUT A
 	// DIFFERENT SNAPSHOT CLASS.** `TH32CS_SNAPTHREAD` IGNORES the pid it is handed and hands back every
 	// thread on the box (MEASURED in the reference: 7,198 walked to find 6), which is why the thread walk
@@ -702,6 +715,9 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 			GetThreadId or
 			CreateWaitableTimerExW or
 			SetWaitableTimer or
+			SetThreadContext or
+			OpenThread or
+			GetCurrentThreadId or
 			CreateToolhelp32Snapshot or
 			Module32FirstW or
 			Module32NextW or

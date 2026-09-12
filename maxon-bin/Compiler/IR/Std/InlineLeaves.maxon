@@ -646,6 +646,30 @@ function terminatorRefusal(term StdOp, meta StdOpMetaMemo) returns CalledOnceRef
 	return CalledOnceRefusal.throwing if meta.hasRole(term, role: OpRole.errorReturn) else CalledOnceRefusal.unsupportedOp
 end 'terminatorRefusal'
 
+// ⛔⛔ **THE SAFE-POINT BYTE DESCRIBES A WHOLE SYMBOL, SO EVERY BYTE INSIDE ONE MUST AGREE ON WHETHER A
+// THREAD MAY BE STOPPED THERE.** `__symtable` carries ONE flag per SYMBOL
+// (`BacktraceFormat.SymtabSafeFromBias`) and each backend derives it from the function's OWN provenance
+// (`TargetPrinter.skipsGreenThreadStackGuard`, read by both `emitFunctionChunk`s). A splice moves code
+// ACROSS that boundary, and a body the compiler owns — the scheduler core, the memory manager, the shims —
+// spliced into a body it does not would sit inside a symbol the safe-point predicate answers PREEMPTIBLE
+// for, with no per-byte channel left to say otherwise. A thread stopped there is stopped in code that must
+// never be stopped.
+//
+// ⚠ **ONE DIRECTION ONLY.** The reverse — an ordinary body spliced into the scaffolding — only takes stop
+// opportunities AWAY, which costs a little latency and never correctness, so it stays admitted.
+//
+// ⚠ It cannot be asked in `scanSpliceableShape`, which sees a callee and no caller: this is a fact about
+// a PAIR. Each rule asks it where its OWN caller is known, and the two places are not the same one:
+//   * the CALLED-ONCE rule at the census, which is the only gate it has — a callee refused there never
+//     becomes a candidate, is never admitted to a wave, and `spliceCalledOnceSites` splices from the
+//     positions the census recorded rather than by walking the caller's blocks, so there is no later
+//     per-site door to put this behind.
+//   * the LEAF rule per SITE (`SiteSplicer.considerSite`), because one eligible leaf is spliced at every
+//     site it has and its callers need not agree about provenance.
+function splicingWouldWidenTheSafePoint(callee IrFunction, caller IrFunction) returns bool
+	return skipsGreenThreadStackGuard(callee) and not skipsGreenThreadStackGuard(caller)
+end 'splicingWouldWidenTheSafePoint'
+
 // The site census, accumulated across every caller — the pass's report. Site counts, not callee counts:
 // the plan already carries the callee tallies, and a callee refused at 16 ops that nothing calls costs
 // nothing.
@@ -655,13 +679,17 @@ type InlineLeafStats
 	export var sitesRefusedBySizeWithinLargerBudget as SiteCount
 	export var selfCallSites as SiteCount
 
+	// Sites refused because the callee is the compiler's own scaffolding and this caller is not — see
+	// `splicingWouldWidenTheSafePoint`.
+	export var sitesRefusedBySafePoint as SiteCount
+
 	// EC7 — how many spliced parameter cascades this compile proved dead and did not copy. Reported for
 	// `ReportedLargerLeafBudget`'s reason: it is the number the row is graded on, and it should come from the
 	// compile being asked about rather than be re-derived from a corpus later.
 	export var declinedParamGuards as SiteCount
 
 	export static function create() returns InlineLeafStats
-		return Self{inlinedSites: 0, sitesRefusedBySize: 0, sitesRefusedBySizeWithinLargerBudget: 0, selfCallSites: 0, declinedParamGuards: 0}
+		return Self{inlinedSites: 0, sitesRefusedBySize: 0, sitesRefusedBySizeWithinLargerBudget: 0, selfCallSites: 0, sitesRefusedBySafePoint: 0, declinedParamGuards: 0}
 	end 'create'
 
 	export function noteDeclinedParamGuard()
@@ -675,6 +703,10 @@ type InlineLeafStats
 	export function noteSelfCall()
 		self.selfCallSites = self.selfCallSites + 1
 	end 'noteSelfCall'
+
+	export function noteSafePointRefusal()
+		self.sitesRefusedBySafePoint = self.sitesRefusedBySafePoint + 1
+	end 'noteSafePointRefusal'
 
 	export function noteSizeRefusal(withinLargerBudget bool)
 		self.sitesRefusedBySize = self.sitesRefusedBySize + 1
@@ -929,10 +961,11 @@ function spliceLeaves(project Project, module StdModule, byName FunctionNameInde
 	let sizeRefusals = stats.sitesRefusedBySize
 	let sizeRefusalsAtLargerBudget = stats.sitesRefusedBySizeWithinLargerBudget
 	let selfCalls = stats.selfCallSites
+	let safePointRefusals = stats.sitesRefusedBySafePoint
 	let declinedGuards = stats.declinedParamGuards
 	let calleesSizeRefused = plan.tooManyOpsCount
 	let calleesWithinLargerBudget = plan.tooManyOpsWithinLargerBudget
-	logDebug(LogCategory.ir, message: function() gives "inlineLeaves: {inlined} site(s) inlined, {eligible} callee(s) eligible, {sizeRefusals} refused-by-size at {MaxInlinedLeafOps} ops ({calleesSizeRefused} callee(s)) of which {sizeRefusalsAtLargerBudget} site(s) / {calleesWithinLargerBudget} callee(s) a budget of {ReportedLargerLeafBudget} would admit, {selfCalls} self-call site(s), {declinedGuards} spliced parameter cascade(s) declined as provably dead")
+	logDebug(LogCategory.ir, message: function() gives "inlineLeaves: {inlined} site(s) inlined, {eligible} callee(s) eligible, {sizeRefusals} refused-by-size at {MaxInlinedLeafOps} ops ({calleesSizeRefused} callee(s)) of which {sizeRefusalsAtLargerBudget} site(s) / {calleesWithinLargerBudget} callee(s) a budget of {ReportedLargerLeafBudget} would admit, {selfCalls} self-call site(s), {safePointRefusals} site(s) refused as the compiler's own scaffolding spliced into code that is not, {declinedGuards} spliced parameter cascade(s) declined as provably dead")
 end 'spliceLeaves'
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -952,6 +985,10 @@ enum CalledOnceRefusal
 	throwing
 	byReferenceParameter
 	greenThreadStackGuard
+
+	// The callee is the compiler's own scaffolding and the caller is not, so one symbol would carry both
+	// answers to "may a thread be stopped here" — see `splicingWouldWidenTheSafePoint`.
+	safePointProvenance
 	unloweredBody
 	entryCarriesPhis
 	unsupportedOp
@@ -973,6 +1010,7 @@ function calledOnceRefusalText(reason CalledOnceRefusal) returns String
 		throwing gives "it throws"
 		byReferenceParameter gives "it takes a by-reference parameter"
 		greenThreadStackGuard gives "it carries the green-thread stack guard"
+		safePointProvenance gives "it is the compiler's own scaffolding and its caller is not, so the spliced bytes could be stopped where the callee never may be"
 		unloweredBody gives "its body was never lowered"
 		entryCarriesPhis gives "its entry block carries phis"
 		unsupportedOp gives "it holds an op the splice cannot copy"
@@ -1650,6 +1688,11 @@ function spliceCalledOnceCallees(project Project, module StdModule, byName Funct
 			noteCalledOnceRefusal(refusals, reason: CalledOnceRefusal.recursive, func: func)
 			continue
 		end 'callsItself'
+
+		if splicingWouldWidenTheSafePoint(func, caller: module.getFunc(census.callerOfCallee(funcIndex))) 'wouldWidenTheSafePoint'
+			noteCalledOnceRefusal(refusals, reason: CalledOnceRefusal.safePointProvenance, func: func)
+			continue
+		end 'wouldWidenTheSafePoint'
 
 		match scanSpliceableShape(module, func: func, meta: meta) 'shape'
 			refused(reason) then noteCalledOnceRefusal(refusals, reason: reason, func: func)
@@ -2501,11 +2544,22 @@ type SiteSplicer
 
 	function considerLeafSite(pos BlockOpPos, calleeIndex FuncIndex, plan LeafPlan)
 		match plan.verdictOf(calleeIndex) 'verdict'
-			eligible then self.recordSite(pos, calleeIndex: calleeIndex)
+			eligible then self.recordLeafSiteUnlessItWidensTheSafePoint(pos, calleeIndex: calleeIndex)
 			tooManyOps then self.stats.noteSizeRefusal(plan.isWithinLargerBudget(calleeIndex))
 			notALeaf then break 'verdict'
 		end 'verdict'
 	end 'considerLeafSite'
+
+	// The leaf rule's half of `splicingWouldWidenTheSafePoint`. Asked per SITE rather than per callee: one
+	// eligible leaf is spliced at every site it has, and its callers need not agree about provenance.
+	function recordLeafSiteUnlessItWidensTheSafePoint(pos BlockOpPos, calleeIndex FuncIndex)
+		if splicingWouldWidenTheSafePoint(self.module.getFunc(calleeIndex), caller: self.func) 'wouldWidenTheSafePoint'
+			self.stats.noteSafePointRefusal()
+			return
+		end 'wouldWidenTheSafePoint'
+
+		self.recordSite(pos, calleeIndex: calleeIndex)
+	end 'recordLeafSiteUnlessItWidensTheSafePoint'
 
 	function considerCalledOnceSite(pos BlockOpPos, calleeIndex FuncIndex, wave CalledOnceWave)
 		if wave.admits(calleeIndex) 'admitted'

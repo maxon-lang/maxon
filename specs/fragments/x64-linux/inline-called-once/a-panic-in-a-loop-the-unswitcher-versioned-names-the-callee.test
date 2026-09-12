@@ -1,0 +1,287 @@
+// Test: a-panic-in-a-loop-the-unswitcher-versioned-names-the-callee
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function scale(a IntArray, n Integer, factor Integer) returns Integer
+	var total = 0
+
+	for i in 0 upto n 'each'
+		let v = try a.get(i) otherwise panic("scale: a is shorter than n")
+		try a.set(i, value: v * factor) otherwise panic("scale: a is shorter than n")
+		total = total + v * factor
+	end 'each'
+
+	return total
+end 'scale'
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.resize(3)
+
+	for i in 0 upto 3 'fill'
+		try a.set(i, value: i + 1) otherwise panic("main: i < 3 = a.count()")
+	end 'fill'
+
+	return scale(a, n: 5, factor: 3) as ExitCode
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 64
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_resize
+    x64.movRegImm32 rdx, 0
+  __us_test#69:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, forhdr#1
+  __us_test#70:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, forhdr#1
+  __us_test#71:
+    x64.leaRegRegImm32 rsi, rcx, -24
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, forhdr#1
+    x64.jmp forhdr#59
+  fill#2:
+    x64.leaRegRegImm32 rax, rdx, 1
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __im_slow#11
+  __im_bounds#12:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.cmpRegReg rdx, rcx
+    x64.jcc aboveEqual, __im_slow#11
+  __im_buffer#13:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_slow#11
+  __im_viewed#14:
+    x64.leaRegRegImm32 rsi, rcx, -24
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __im_slow#11
+  __im_store#15:
+    x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], rax
+  forstep#3:
+    x64.movRegReg rdx, rax
+  forhdr#1:
+    x64.cmpRegImm32 rdx, 3
+    x64.jcc less, fill#2
+    x64.jmp __il_body
+  fill#68:
+    x64.leaRegRegImm32 rsi, rdx, 1
+  __im_bounds#67:
+    x64.cmpRegReg rdx, rax
+    x64.jcc aboveEqual, __im_slow#63
+  __im_store#64:
+    x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], rsi
+  forstep#60:
+    x64.movRegReg rdx, rsi
+  forhdr#59:
+    x64.cmpRegImm32 rdx, 3
+    x64.jcc less, fill#68
+  __il_body:
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rdx, 0
+  __us_test#55:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc less, forhdr#18
+  __us_test#56:
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, forhdr#18
+  __us_test#57:
+    x64.leaRegRegImm32 rdi, rsi, -24
+    x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc notEqual, forhdr#18
+    x64.jmp forhdr#39
+  __rc_ok#26:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.cmpRegReg rdx, rcx
+    x64.jcc aboveEqual, __im_slow#31
+  __im_load#32:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.loadRegBaseIndexScale.word64 rcx, [rcx + rdx*8 + 0]
+    x64.movRegReg r8, rcx
+  tryok#22:
+    x64.imulRegRegImm32 rsi, r8, 3
+  __rc_ok#28:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __im_slow#34
+  __im_bounds#35:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.cmpRegReg rdx, rcx
+    x64.jcc aboveEqual, __im_slow#34
+  __im_buffer#36:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_slow#34
+  __im_viewed#37:
+    x64.leaRegRegImm32 rdi, rcx, -24
+    x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc notEqual, __im_slow#34
+  __im_store#38:
+    x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], rsi
+  tryok#24:
+    x64.leaRegRegReg rax, rax, rsi
+  forstep#20:
+    x64.leaRegRegImm32 rdx, rdx, 1
+  forhdr#18:
+    x64.cmpRegImm32 rdx, 5
+    x64.jcc less, __rc_ok#26
+  critsplit#74:
+    x64.movRegReg r12, rax
+    x64.jmp __il_cont
+  __rc_ok#53:
+    x64.cmpRegReg rdx, rcx
+    x64.jcc aboveEqual, __im_slow#51
+  __im_load#52:
+    x64.loadRegBaseIndexScale.word64 rdi, [rsi + rdx*8 + 0]
+    x64.movRegReg r8, rdi
+  tryok#49:
+    x64.imulRegRegImm32 rdi, r8, 3
+  __im_store#44:
+    x64.storeBaseIndexScaleReg.word64 [rsi + rdx*8 + 0], rdi
+  tryok#41:
+    x64.leaRegRegReg rax, rax, rdi
+  forstep#40:
+    x64.leaRegRegImm32 rdx, rdx, 1
+  forhdr#39:
+    x64.cmpRegImm32 rdx, 5
+    x64.jcc less, __rc_ok#53
+  critsplit#77:
+    x64.movRegReg r12, rax
+  __il_cont:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok#7:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 64
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#11:
+    x64.storeSlotReg slot0, rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_set
+    x64.loadRegSlot rax, slot0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#6
+    x64.jmp forstep#3
+  __im_slow#63:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rsi
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, rsi
+    x64.callDirect __managed_set
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rsi, slot2
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, forstep#60
+  tryerr#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-panic-in-a-loop-the-unswitcher-versioned-names-the-callee.test:22: main: i < 3 = a.count()\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 64
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#31:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot3, rdx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rdx, slot3
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#23
+    x64.jmp tryok#22
+  __im_slow#34:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot3, rdx
+    x64.storeSlotReg slot2, rsi
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, rsi
+    x64.callDirect __managed_set
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rdx, slot3
+    x64.loadRegSlot rsi, slot2
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#24
+  tryerr#25:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-panic-in-a-loop-the-unswitcher-versioned-names-the-callee.test:10: scale: a is shorter than n\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 64
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#51:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot3, rdx
+    x64.storeSlotReg slot2, rsi
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot3
+    x64.loadRegSlot rsi, slot2
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#49
+  tryerr#23:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-panic-in-a-loop-the-unswitcher-versioned-names-the-callee.test:9: scale: a is shorter than n\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 64
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at a-panic-in-a-loop-the-unswitcher-versioned-names-the-callee.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 64
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

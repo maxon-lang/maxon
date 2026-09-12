@@ -73,11 +73,11 @@
 	let ProfileModuleEntryExtentOffset = 32
 	let ProfileModuleEntryNameOffset = 48
 
-	// The two x64 `CONTEXT` displacements only the walk reads; RSP, which the runtime also bounds the copy
-	// from, is `ProfileContextRspOffset` in `ProfileSampleContract.maxon` — as are the two negative answers
-	// `__prof_sample` gives and the allocation base a region query fills in.
+	// The one x64 `CONTEXT` displacement only this walk reads. RSP and RIP are
+	// `ProfileSampleContract.maxon`'s `Win64Context*`, shared with the two runtime readers of the same
+	// record — as are the two negative answers `__prof_sample` gives and the allocation base a region query
+	// fills in.
 	let ProfileContextRbpOffset = 0xA0
-	let ProfileContextRipOffset = 0xF8
 
 	// A DWORD's worth of a word read out of a foreign record, and one UTF-16 code unit of a module name.
 	let ProfileDwordMask = 0xFFFFFFFF
@@ -722,9 +722,9 @@
 			// Everything below runs with the thread ALREADY RESUMED, over the copy. Nothing about walking or
 			// symbolizing needs the target held, and holding it would multiply the suspension by the stack's
 			// depth.
-			let programCounter = __Builtins.profileReadWord(self.contextPtr(), ProfileContextRipOffset)
+			let programCounter = __Builtins.profileReadWord(self.contextPtr(), Win64ContextRipOffset)
 			let framePointer = __Builtins.profileReadWord(self.contextPtr(), ProfileContextRbpOffset)
-			let stackPointer = __Builtins.profileReadWord(self.contextPtr(), ProfileContextRspOffset)
+			let stackPointer = __Builtins.profileReadWord(self.contextPtr(), Win64ContextRspOffset)
 			let lostItsRoot = walkProfileFrames(frames, image: image, leafPc: programCounter, framePointer: framePointer, stackPointer: stackPointer, windowPtr: self.window, windowBytes: windowBytes as ProfileWord)
 			accumulator.accept(frames, charged: charges, allocationBase: allocationBase, lostItsRoot: lostItsRoot, hadNoChain: windowBytes == 0)
 

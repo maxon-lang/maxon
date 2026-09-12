@@ -555,6 +555,19 @@ end 'x64RegisterArgCapacity'
 // Exported so the GT trampoline (X64GtRuntime) loads its arguments in the SAME register order the ABI
 // passes them — the trampoline's arg-load order IS the arg-register order, and a second copy of the
 // `[rcx, rdx, rax, r9, rsi, rdi]` list would be the one-fact-written-twice bug this file's header warns of.
+// ⭐⭐ **THE TargetOp THAT ENDS THE PROCESS ON WINDOWS — one answer for the three sites that need it.** On a
+// lane whose monitor SUSPENDS threads it is `__gt_exit_process`, which closes the monitor's window first
+// (`SchedRuntime.ExitProcessGateName`); everywhere else it is `ExitProcess` straight through the IAT. A site
+// that spelled the `iatCall` for itself would be an exit that can be suspended inside, which hangs the
+// process with no diagnostic — so the choice is asked once.
+export function win64ProcessExitOp(usesGt bool, target Target) returns TargetOp
+	if usesGt and targetPreemptDelivery(target) == PreemptDelivery.threadSuspend 'throughTheGate'
+		return TargetOp.callDirect(ExitProcessGateName)
+	end 'throughTheGate'
+
+	return TargetOp.iatCall(iatSlotIndex(IatSlot.ExitProcess))
+end 'win64ProcessExitOp'
+
 export function argRegisterAt(index ParamCount) returns X64Register
 	return try argRegisters.get(index) otherwise panic("argRegisterAt: argument index {index} exceeds the {argRegisters.count()} register-argument slots — a slot past the file must have been routed to an outgoing stack slot by `abiArgIsOnStack`")
 end 'argRegisterAt'
@@ -2523,10 +2536,10 @@ type StdToX64Lowering
 		end 'route'
 	end 'lowerOsExit'
 
-	// Win64: the code in ECX (the first-argument register), then `ExitProcess` through the IAT.
+	// Win64: the code in ECX (the first-argument register), then the process-exit door.
 	function lowerOsExitWin64(codeId ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movReg32Reg32(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(codeId)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.ExitProcess)))
+		self.targetModule.appendOp(dstBlock, op: win64ProcessExitOp(self.usesGt, target: self.target))
 	end 'lowerOsExitWin64'
 
 	// Linux: the code in EDI (syscall arg 0), then `exit_group` via a raw syscall.

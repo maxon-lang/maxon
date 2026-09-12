@@ -1,0 +1,234 @@
+// Test: a-function-with-two-call-sites-stays-a-call
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function fill(a IntArray, n Integer, base Integer) returns Integer
+	var total = 0
+
+	for i in 0 upto n 'each'
+		let v = base + i * i
+		try a.set(i, value: v) otherwise panic("fill: i < n = a.count()")
+		total = total + v
+	end 'each'
+
+	return total
+end 'fill'
+
+function main() returns ExitCode
+	let n = 4
+	var a = IntArray.create()
+	a.resize(n)
+	let first = fill(a, n: n, base: 1)
+	let second = fill(a, n: n, base: 2)
+	let last = try a.get(n - 1) otherwise panic("main: n >= 1")
+	return (first + second + last) as ExitCode
+end 'main'
+---
+ExitCode: 51
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @fill {
+  entry:
+    arm64.prologue 80
+    arm64.movImm x3, 0
+    arm64.movImm x4, 0
+  __us_test#26:
+    arm64.loadRegBaseDisp.word64 x5, [x0 + 16]
+    arm64.cmp x5, 0
+    arm64.b.lt forhdr#1
+  __us_test#27:
+    arm64.loadRegBaseDisp.word64 x5, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x6, [x0 + 0]
+    arm64.cmp x6, 0
+    arm64.b.eq forhdr#1
+  __us_test#28:
+    arm64.sub x7, x6, 24
+    arm64.loadRegBaseDisp.word64 x7, [x7 + 16]
+    arm64.cmp x7, 0
+    arm64.b.ne forhdr#1
+    arm64.b forhdr#15
+  each#2:
+    arm64.mul x5, x4, x4
+    arm64.add x5, x2, x5
+  __rc_ok:
+    arm64.loadRegBaseDisp.word64 x6, [x0 + 16]
+    arm64.cmp x6, 0
+    arm64.b.lt __im_slow#10
+  __im_bounds#11:
+    arm64.loadRegBaseDisp.word64 x6, [x0 + 8]
+    arm64.cmp x4, x6
+    arm64.b.hs __im_slow#10
+  __im_buffer:
+    arm64.loadRegBaseDisp.word64 x6, [x0 + 0]
+    arm64.cmp x6, 0
+    arm64.b.eq __im_slow#10
+  __im_viewed:
+    arm64.sub x7, x6, 24
+    arm64.loadRegBaseDisp.word64 x7, [x7 + 16]
+    arm64.cmp x7, 0
+    arm64.b.ne __im_slow#10
+  __im_store#14:
+    arm64.storeBaseIndexScaleReg.word64 [x6 + x4*8 + 0], x5
+  tryok#5:
+    arm64.add x3, x3, x5
+  forstep#3:
+    arm64.add x4, x4, 1
+  forhdr#1:
+    arm64.cmp x4, x1
+    arm64.b.lt each#2
+  critsplit#30:
+    arm64.movRegReg x0, x3
+    arm64.b forexit
+  each#25:
+    arm64.mul x7, x4, x4
+    arm64.add x7, x2, x7
+  __im_bounds#23:
+    arm64.cmp x4, x5
+    arm64.b.hs __im_slow#19
+  __im_store#20:
+    arm64.storeBaseIndexScaleReg.word64 [x6 + x4*8 + 0], x7
+  tryok#17:
+    arm64.add x3, x3, x7
+  forstep#16:
+    arm64.add x4, x4, 1
+  forhdr#15:
+    arm64.cmp x4, x1
+    arm64.b.lt each#25
+  critsplit#32:
+    arm64.movRegReg x0, x3
+  forexit:
+    arm64.epilogue 80
+    arm64.ret
+  __im_slow#10:
+    arm64.storeSlotReg slot0, x0
+    arm64.storeSlotReg slot1, x1
+    arm64.storeSlotReg slot2, x2
+    arm64.storeSlotReg slot3, x3
+    arm64.storeSlotReg slot4, x4
+    arm64.storeSlotReg slot5, x5
+    arm64.movRegReg x1, x4
+    arm64.movRegReg x2, x5
+    arm64.bl __managed_set
+    arm64.movRegReg x6, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.loadRegSlot x1, slot1
+    arm64.loadRegSlot x2, slot2
+    arm64.loadRegSlot x3, slot3
+    arm64.loadRegSlot x4, slot4
+    arm64.loadRegSlot x5, slot5
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr
+    arm64.b tryok#5
+  __im_slow#19:
+    arm64.storeSlotReg slot0, x0
+    arm64.storeSlotReg slot1, x1
+    arm64.storeSlotReg slot2, x2
+    arm64.storeSlotReg slot3, x3
+    arm64.storeSlotReg slot4, x4
+    arm64.storeSlotReg slot5, x5
+    arm64.storeSlotReg slot6, x6
+    arm64.storeSlotReg slot7, x7
+    arm64.movRegReg x1, x4
+    arm64.movRegReg x2, x7
+    arm64.bl __managed_set
+    arm64.movRegReg x8, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.loadRegSlot x1, slot1
+    arm64.loadRegSlot x2, slot2
+    arm64.loadRegSlot x3, slot3
+    arm64.loadRegSlot x4, slot4
+    arm64.loadRegSlot x5, slot5
+    arm64.loadRegSlot x6, slot6
+    arm64.loadRegSlot x7, slot7
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#17
+  tryerr:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-function-with-two-call-sites-stays-a-call.test:10: fill: i < n = a.count()\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 80
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 4
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl __managed_resize
+    arm64.movImm x2, 1
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl fill
+    arm64.movRegReg x21, x0
+    arm64.movImm x2, 2
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl fill
+    arm64.movImm x1, 3
+  __rc_ok#3:
+    arm64.loadRegBaseDisp.word64 x2, [x20 + 8]
+    arm64.cmp x2, 3
+    arm64.b.ls __im_slow
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
+    arm64.add x1, x1, 24
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+  tryok:
+    arm64.add x0, x21, x0
+    arm64.add x19, x0, x1
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.b.gt __rc_panic
+  __rc_ok#5:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __im_slow:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_get
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok
+  tryerr:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-function-with-two-call-sites-stays-a-call.test:23: main: n >= 1\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at a-function-with-two-call-sites-stays-a-call.test:24: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

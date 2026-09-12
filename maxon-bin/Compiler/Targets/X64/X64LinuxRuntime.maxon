@@ -236,11 +236,15 @@ export let X64LinuxSyscallSigaltstack = 131
 
 // sa_flags = SA_SIGINFO (0x4 — the handler receives (sig, siginfo*, ucontext*)) | SA_RESTORER (0x04000000)
 // | SA_ONSTACK (0x08000000 — the handler runs on the thread's `SignalStackInstallName` stack, not on a green
-// thread's few kilobytes).
+// thread's few kilobytes) | SA_RESTART (0x10000000).
 // ⚠ x86-64 has NO kernel-provided signal trampoline, so SA_RESTORER + a valid `sa_restorer` are MANDATORY:
 // without them the kernel raises a KERNEL SIGSEGV building the signal return frame — BEFORE the handler
 // runs, and even for a handler that never returns (measured: strace showed SIGFPE then SI_KERNEL SIGSEGV).
-export let X64LinuxSigactionFlags = 0x0C000004
+// ⛔ **SA_RESTART IS THE PREEMPTION SIGNAL'S, AND WITHOUT IT A STOP TURNS SOMEBODY ELSE'S `read` INTO AN
+// ERROR.** The monitor aims at a RUNNING machine, but a machine may enter a kernel call between the decision
+// and the delivery; a restartable call then resumes instead of failing. The fault handler inherits the flag
+// and is untouched by it — it never returns.
+export let X64LinuxSigactionFlags = 0x1C000004
 
 // STDERR_FILENO — where the panic diagnostic goes — is `Targets/Shared/StdLoweringShared.StderrFd`. It
 // is not an x64-Linux fact: arm64's two OSes name the same descriptor from their own panic runtime.
@@ -501,6 +505,18 @@ function x64LinuxEmitStashIfFailed(asm X64RuntimeAsm)
 
 	asm.placeLabel(succeeded)
 end 'x64LinuxEmitStashIfFailed'
+
+// ⭐ **ONE `EINTR` TEST, SHARED BY EVERY CALL IN THIS FILE THAT OWES ONE** — the netpoll wait, the pipe
+// peek and the read/write transfer pair. A raw `syscall` answers the NEGATED number in rax itself, so there
+// is no accessor to call and the whole test is a compare and a branch; written three times it was three
+// chances to compare against the wrong sign.
+//
+// ⚠ **`whenInterrupted` IS NOT ALWAYS A LOOP**: the transfer pair aims it BACKWARD at its own syscall to
+// re-issue it, and the peek and the netpoll wait aim it FORWARD at a different answer.
+function x64LinuxEmitBranchIfEintr(asm X64RuntimeAsm, whenInterrupted BlockId)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: (0 - PosixErrnoInterrupted) as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: whenInterrupted)
+end 'x64LinuxEmitBranchIfEintr'
 
 // Leave `Win32True` in rax when the flags say the last compare was equal-to-zero, `Win32False` otherwise.
 // x64 has `setcc`, but every consumer of this fragment wants a full 64-bit 0/1 and a branch pair says so
@@ -1125,28 +1141,46 @@ end 'buildX64LinuxFileOpenChunk'
 // ⚠ **ONE BUILDER, TWO CHUNKS**: read and write differ in a syscall number and in nothing else.
 function buildX64LinuxTransferChunk(name ByteArray, syscallNumber MachineWord) returns FunctionCodeChunk
 	let SlotOutPtr = 0 as StackSize
-	var asm = X64RuntimeAsm.beginFunction(1)
+	let SlotFd = 1 as StackSize
+	let SlotBuf = 2 as StackSize
+	let SlotLen = 3 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(4)
 
+	let issue = asm.newLabel()
 	let transferred = asm.newLabel()
 	let answered = asm.newLabel()
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), srcReg: X64Register.r9)
-	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rcx, wide: true)
-	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: X64Register.rdx, wide: true)
-	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.r8, wide: true)
+
+	// ⛔ **THE THREE ARGUMENTS OUTLIVE THE CALL BECAUSE AN `EINTR` RE-ISSUES IT** — the arm64 twins' reason
+	// (`Arm64DarwinRuntime.buildArm64DarwinTransferChunk`), and a `syscall` clobbers rcx outright.
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFd), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBuf), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotLen), srcReg: X64Register.r8)
+
+	asm.placeLabel(issue)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotFd), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotBuf), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotLen), wide: true)
 	encodeX64Syscall(asm.code, number: syscallNumber)
 
-	x64LinuxEmitStashIfFailed(asm)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), wide: true)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: transferred)
 
+	// ⛔ **THE EINTR TEST COMES BEFORE THE STASH, BECAUSE NOTHING CLEARS THE STASH ON SUCCESS.** An
+	// interrupted attempt that then succeeds would otherwise leave `EINTR` in the last-error word behind a
+	// TRUE answer, and `subprocessLastErrorMessage()` would name it.
+	x64LinuxEmitBranchIfEintr(asm, whenInterrupted: issue)
+	x64LinuxEmitStashIfFailed(asm)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: 0)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rdx, disp: 0, srcReg: X64Register.rsi)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win32False as MachineWord)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
 
 	asm.placeLabel(transferred)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rdx, disp: 0, srcReg: X64Register.rax)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win32True as MachineWord)
 
@@ -2920,6 +2954,7 @@ function buildX64LinuxPipePeekChunk() returns FunctionCodeChunk
 	var asm = X64RuntimeAsm.beginFunction(2 + LinuxTimespecSlots)
 
 	let notReady = asm.newLabel()
+	let interrupted = asm.newLabel()
 	let broken = asm.newLabel()
 	let publish = asm.newLabel()
 	let answered = asm.newLabel()
@@ -2941,7 +2976,7 @@ function buildX64LinuxPipePeekChunk() returns FunctionCodeChunk
 	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: LinuxSigsetBytes)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallPpoll)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: broken)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: interrupted)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: notReady)
 
 	// Ready — unless the descriptor itself is unusable, which is `PeekNamedPipe`'s own failure and the Std
@@ -2962,6 +2997,12 @@ function buildX64LinuxPipePeekChunk() returns FunctionCodeChunk
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.r8)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win32True as MachineWord)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	// An INTERRUPTED poll has learned nothing about the descriptor, so it answers "no bytes yet" and the
+	// caller's next pass asks again — `Arm64PosixRuntime.arm64PosixEmitPollWasInterrupted` carries the whole
+	// argument. The raw `svc` answers the negated number itself, so there is no errno to fetch here.
+	asm.placeLabel(interrupted)
+	x64LinuxEmitBranchIfEintr(asm, whenInterrupted: notReady)
 
 	asm.placeLabel(broken)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win32False as MachineWord)
@@ -3081,7 +3122,7 @@ end 'buildX64LinuxProcReapChunk'
 function buildX64LinuxProcAwaitChunk() returns FunctionCodeChunk
 	let SlotObj = 0 as StackSize
 	let SlotTimeout = 1 as StackSize
-	let SlotElapsed = 2 as StackSize
+	let SlotDeadline = 2 as StackSize
 	var asm = X64RuntimeAsm.beginFunction(3)
 
 	let bounded = asm.newLabel()
@@ -3104,8 +3145,10 @@ function buildX64LinuxProcAwaitChunk() returns FunctionCodeChunk
 	// 0 and everything else share one loop: it reaps FIRST and tests the deadline second, so a zero timeout
 	// makes exactly one non-blocking reap and then answers.
 	asm.placeLabel(bounded)
-	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotElapsed), srcReg: X64Register.rax)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostTickMsName)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotTimeout), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotDeadline), srcReg: X64Register.rax)
 
 	asm.placeLabel(boundedStep)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), wide: true)
@@ -3113,15 +3156,12 @@ function buildX64LinuxProcAwaitChunk() returns FunctionCodeChunk
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostProcReapName)
 	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: signalled)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotElapsed), wide: true)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotTimeout), wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostTickMsName)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotDeadline), wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: notSignalled)
 	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: PosixChildPollMs)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostSleepMsName)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotElapsed), wide: true)
-	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rax, imm: PosixChildPollMs as Imm32)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotElapsed), srcReg: X64Register.rax)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: boundedStep)
 
 	asm.placeLabel(signalled)
@@ -3205,7 +3245,7 @@ function buildX64LinuxWaitAnyChunk() returns FunctionCodeChunk
 	let SlotBase = 0 as StackSize
 	let SlotCount = 1 as StackSize
 	let SlotTimeout = 2 as StackSize
-	let SlotElapsed = 3 as StackSize
+	let SlotDeadline = 3 as StackSize
 	let SlotIndex = 4 as StackSize
 	var asm = X64RuntimeAsm.beginFunction(5)
 
@@ -3213,13 +3253,19 @@ function buildX64LinuxWaitAnyChunk() returns FunctionCodeChunk
 	let scanStep = asm.newLabel()
 	let scanned = asm.newLabel()
 	let sleepStep = asm.newLabel()
+	let timedOut = asm.newLabel()
 	let done = asm.newLabel()
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBase), srcReg: X64Register.rcx)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCount), srcReg: X64Register.rdx)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTimeout), srcReg: X64Register.r8)
-	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotElapsed), srcReg: X64Register.rax)
+
+	// The deadline is computed on both roads and READ only on the bounded one. `WaitInfinite` is a 32-bit
+	// sentinel, so the sum cannot wrap a 64-bit tick count.
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostTickMsName)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotTimeout), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotDeadline), srcReg: X64Register.rax)
 
 	asm.placeLabel(scanRound)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
@@ -3249,17 +3295,20 @@ function buildX64LinuxWaitAnyChunk() returns FunctionCodeChunk
 	encodeMovRegImm64(asm.code, dest: X64Register.rcx, value: WaitInfinite)
 	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: sleepStep)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotElapsed), wide: true)
-	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rcx, src: X64Register.rax, wide: true)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: done)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostTickMsName)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotDeadline), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: timedOut)
 
 	asm.placeLabel(sleepStep)
 	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: PosixChildPollMs)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostSleepMsName)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotElapsed), wide: true)
-	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rax, imm: PosixChildPollMs as Imm32)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotElapsed), srcReg: X64Register.rax)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: scanRound)
+
+	// ⚠ **THE ANSWER IS RE-ZEROED BECAUSE THE CLOCK READ DESTROYED IT.** Reaching the deadline test means
+	// every reap answered 0, and that 0 was this chunk's answer until a `call` began landing in rax.
+	asm.placeLabel(timedOut)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: PosixNoChildSignalled)
 
 	asm.placeLabel(done)
 	return asm.finishFunction(HostWaitAnyName)
@@ -3846,13 +3895,10 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 		chunks.push(buildX64LinuxProcTerminateChunk())
 	end 'childPipes'
 
-	if posixReadsUptimeClock(usage) 'uptimeClock'
+	if posixReadsMonotonicClock(usage) 'clocks'
 		chunks.push(buildX64LinuxTickMsChunk())
-	end 'uptimeClock'
-
-	if posixReadsMonotonicClock(usage) 'monotonicClock'
 		chunks.push(buildX64LinuxMonotonicClockChunk())
-	end 'monotonicClock'
+	end 'clocks'
 
 	// ⚠ **SIX CHUNKS WHERE THE DARWIN LANE HAS FOUR**: with no `shm_open` to name a segment, this lane builds
 	// the `/dev/shm` path itself and unpublishes through a body of its own.
@@ -3987,6 +4033,7 @@ let LinuxEpollPackedDataOffset = 4
 // `INFINITE` the op carries reads as -1 there — epoll's own "for ever".
 function buildX64LinuxNetpollWaitChunk() returns FunctionCodeChunk
 	var asm = X64RuntimeAsm.beginFunction(0)
+	let interrupted = asm.newLabel()
 	let answered = asm.newLabel()
 
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rcx, wide: true)
@@ -3994,8 +4041,10 @@ function buildX64LinuxNetpollWaitChunk() returns FunctionCodeChunk
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.r8, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r10, src: X64Register.r9, wide: true)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallEpollWait)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: (0 - PosixErrnoInterrupted) as Imm32)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: answered)
+	x64LinuxEmitBranchIfEintr(asm, whenInterrupted: interrupted)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	asm.placeLabel(interrupted)
 	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
 
 	asm.placeLabel(answered)

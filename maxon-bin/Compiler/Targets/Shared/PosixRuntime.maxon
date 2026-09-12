@@ -141,17 +141,18 @@ export let HostTickMsName = b"mrt_host_tick_ms"
 // deadline reads it, every DebugStream entry stamps `now - start_timestamp`, and `__uptime_ms` is the
 // language's own door onto it — so the gate is their union, which is what lets `TargetFacilities` claim
 // `HostFacility.uptimeClock` on a POSIX lane.
-export function posixReadsUptimeClock(usage RuntimeUsage) returns bool
-	return usage.usesIocp or usage.usesDebugStream or usage.usesUptimeClock
-end 'posixReadsUptimeClock'
-
-// ⚠ **ONE CLOCK, TWO CALLERS, SO ONE GATE THAT IS THEIR UNION.** `mrt_host_tick_ms` derives its
-// milliseconds from `mrt_host_monotonic_clock` rather than reading a second clock, and the scheduler's
-// deadlines come from that chunk directly — so a program with either reaches it, and gating it on the
-// scheduler alone leaves a traced program branching to a symbol nothing laid out. DERIVED from its own
-// subset so the two cannot come apart.
+// ⭐⭐ **ONE GATE FOR BOTH CLOCK CHUNKS, BECAUSE ONE IS BUILT OUT OF THE OTHER.** `mrt_host_tick_ms`
+// derives its milliseconds from `mrt_host_monotonic_clock` rather than reading a second clock, so laying
+// either one out without the other is a `bl` to a symbol nothing emitted — a link failure rather than a
+// diagnostic. Two predicates that must always agree are one predicate.
+//
+// ⛔ **A GREEN-THREAD PROGRAM READS THE MILLISECOND CLOCK EVEN WITH NO CHILD AND NO TRACE.** The bounded
+// child waits time their deadline off `mrt_host_tick_ms`
+// (`Arm64PosixRuntime.buildArm64PosixProcAwaitChunk`) and ride `usesGt`, because `installGtRuntime` builds
+// `__gt_process_run` unconditionally — so `usesGt` is a member here and not merely of the scheduler's own
+// need for the monotonic chunk.
 export function posixReadsMonotonicClock(usage RuntimeUsage) returns bool
-	return usage.usesGt or posixReadsUptimeClock(usage)
+	return usage.usesGt or usage.usesIocp or usage.usesDebugStream or usage.usesUptimeClock
 end 'posixReadsMonotonicClock'
 
 // ⭐ **THE TWO MEMBERS OF THE NAMED-SECTION BAND THAT ARE ONE BODY ON EVERY POSIX LANE.** A segment is
@@ -583,6 +584,11 @@ export let PosixChildPidMask = 0xFFFFFFFF
 // rather than a spin, and one number keeps the two from drifting into different responsiveness.
 export let PosixChildPollMs = 1
 
+// What `mrt_host_wait_any` answers when its deadline arrives with no child reaped. Its one caller discards
+// the answer (`GtRuntime.emitProcWait` re-scans), so this names the 0 the scan road already produced rather
+// than introducing a report.
+export let PosixNoChildSignalled = 0
+
 // `GtProcHandlesBaseLabel`'s array is one 64-bit handle per entry, so an index scales by 8 — as a SHIFT,
 // which is what an indexed load off a base wants.
 export let PosixHandleArrayStrideShift = 3 as ShiftCount
@@ -618,7 +624,25 @@ export let PosixPipeWriteEndOffset = 4
 export let PosixPollNoWaitMillis = 0
 
 // `ppoll`'s `sigmask` argument. NULL leaves the calling thread's signal mask alone, which is what `poll` does
-// and all this surface wants — this backend installs no signal handlers at all.
+// and what this surface wants: on a lane that installs the preemption signal it must stay deliverable
+// whatever a machine is doing, and what keeps a STOP off a thread is the safe-point predicate rather than a
+// mask (`SchedRuntime.buildGtPreemptSafe`).
+//
+// ⛔⛔ **`SA_RESTART` DOES NOT COVER `poll`, AND A ZERO TIMEOUT DOES NOT MAKE IT SAFE.** POSIX exempts
+// `select`/`poll` from restart outright, so the flag the preemption signal is installed with buys
+// `mrt_host_pipe_peek` nothing. This binds the three lanes that install that signal — arm64-macOS,
+// arm64-Linux and x64-Linux, which `TargetFacilities.targetProvidesFacility` gives `greenThreads` and which
+// therefore have a monitor to send it; x64-Windows suspends threads instead and has no `EINTR` at all.
+// MEASURED on arm64-macOS: with the monitor stopping machines, 41 of 300 collects of a healthy child's
+// stdout had `poll(fd, 1, 0)` answer -1 with `revents` unset — a drain that read that as a broken pipe
+// threw the child's whole output away.
+//
+// ⇒ **EVERY CALL HERE OWES ITS OWN `EINTR` ANSWER, WAITING OR NOT**, and the four that do are the netpoll
+// wait (folded to "no entries"), the pipe peek ("no bytes yet"), the read/write transfer pair (RE-ISSUED,
+// because an interrupted transfer moved nothing) and `nanosleep` — whose callers absorb it by holding an
+// absolute deadline rather than a lap count (`Arm64PosixRuntime.buildArm64PosixProcAwaitChunk`).
+// A blocking `read` and a blocking `wait4` are restarted by the kernel today (0 interrupted in 400 and in
+// 30); the transfer pair does not rely on that.
 export let PosixPollNoSignalMask = 0
 
 // `wait4`'s `struct rusage *` out-param, which NULL discards — and the register `waitpid` never reads.

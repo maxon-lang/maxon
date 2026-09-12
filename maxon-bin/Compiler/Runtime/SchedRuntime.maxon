@@ -658,9 +658,60 @@ let MOffParkWakes = MOffIdlePrev + (PointerSlotBytes as ByteOffset)
 // links because such a machine holds a green thread and is not idle.
 let MOffRegainNext = MOffParkWakes + (PointerSlotBytes as ByteOffset)
 
+// ==========================================================================
+// ⭐⭐⭐ ASYNCHRONOUS PREEMPTION'S WORDS — "MAY THIS THREAD BE STOPPED WHERE IT STANDS, AND HAS IT BEEN ASKED?"
+// ==========================================================================
+
+// ⭐⭐⭐ **HOW MANY RUNTIME LOCKS THIS MACHINE HOLDS — Go's `m.locks`, and the one word that makes a
+// safe-point predicate able to say NO to a thread that is otherwise perfectly stoppable.** An asynchronous
+// stop parks the green thread where it stands, and a park takes `__sched_lock`; a thread stopped while it
+// already holds that lock would carry it into a context switch and never come back to release it, wedging
+// every other machine. So the count is stepped at `emitSchedLockEnter`/`emitSchedLockLeave` and at the
+// slab's own lock pair, and a non-zero count is a refusal.
+//
+// ⛔ **THE STEP IS AN ATOMIC READ-MODIFY-WRITE, AND THE REASON IS ORDERING RATHER THAN A RACE.** Only this
+// machine writes it, so no two writers contend — but the increment must be VISIBLE BEFORE the lock is
+// acquired and the decrement only AFTER it is released, and a plain store has no such obligation on a
+// weakly ordered lane. A `lock`-prefixed RMW is a full barrier on x64 and an acquire-release on arm64,
+// which is exactly the fence each edge needs. `atomicStep` in `MultiMSharing`'s vocabulary, though it is a
+// per-machine field.
+//
+// ⚠ **A THREAD WITH NO MACHINE STEPS `SchedLockDepthSinkLabel` INSTEAD** — see `emitSchedLockDepthAddr`.
+export let MOffLocks = MOffRegainNext + (PointerSlotBytes as ByteOffset)
+
+// ⭐ **THE OS THREAD ID THIS MACHINE RUNS ON**, recorded by the thread itself at `emitSchedBecomeM`. Windows
+// needs it to open a suspendable handle; a POSIX lane needs it as the `tgkill`/`pthread_kill` target. 0 means
+// this machine has not adopted its thread yet, which no reader can observe: the publish that makes the M
+// reachable is the TLS store at the end of the same block.
+export let MOffOsThreadId = MOffLocks + (PointerSlotBytes as ByteOffset)
+
+// ⭐⭐ **A HANDLE THAT CAN SUSPEND AND RESUME *THIS* THREAD, AND IT IS NOT `MOffOsThreadHandle`.** That field
+// is the JOINABLE handle the CREATOR got back, and it is 0 for the main OS thread, which this runtime never
+// created — so the one machine that runs `main` could never be stopped through it. This one is opened by the
+// thread itself from its own id, so every machine has one.
+//
+// ⚠ **IT IS NEVER CLOSED, because an M is never freed** (`MOffCurrentP`'s section): the handles outstanding
+// are bounded by the machine count, and closing one would mean a lifetime the suspender would have to
+// synchronise against.
+//
+// ⚠ **A SIGNALLING LANE LEAVES IT 0.** A signal is addressed to the thread ID above, so there is no handle
+// to open and nothing reads this word (`PreemptDelivery.signal`).
+export let MOffPreemptThreadHandle = MOffOsThreadId + (PointerSlotBytes as ByteOffset)
+
+// ⭐⭐ **IS A STOP ALREADY OUTSTANDING AGAINST THIS MACHINE? — Go's `m.signalPending`, and the rate limit that
+// keeps the monitor from stacking two.** The sender compare-and-swaps 0→1 and the trampoline clears it on the
+// far side, so at most one injection is in flight per machine. `atomicStep`: the sender and the stopped
+// thread are two writers.
+//
+// ⚠ **A LANE THAT DELIVERS SYNCHRONOUSLY STILL NEEDS IT.** On x64-windows the suspend/inject/resume is over
+// before the sender returns, so the window is short — but the trampoline has not RUN yet when the sender
+// releases, and the next poll would otherwise inject a second one on top of the first.
+export let MOffSignalPending = MOffPreemptThreadHandle + (PointerSlotBytes as ByteOffset)
+
 // The three head scalars, the inline GT, the idle tail, the syscall bracket's three, the idle back-link, the
-// wake count and the regain link. Derived, never written down as a number, for `PStructSize`'s reason.
-let MStructSize = ((MOffRegainNext as ParsedInt) + PointerSlotBytes) as ParsedInt
+// wake count, the regain link and asynchronous preemption's four. Derived, never written down as a number,
+// for `PStructSize`'s reason.
+let MStructSize = ((MOffSignalPending as ParsedInt) + PointerSlotBytes) as ParsedInt
 
 // ==========================================================================
 // The ProcContext (P) struct
@@ -1458,6 +1509,46 @@ function targetBracketsInsideTheImportShim(target Target) returns bool
 	return target.cpu == CpuArch.x64 and target.os == Os.windows
 end 'targetBracketsInsideTheImportShim'
 
+// ⭐⭐⭐ **CAN THIS LANE STOP A RUNNING THREAD WHERE IT STANDS?** The cooperative request is read only by a
+// function that reserves a frame, so a loop that calls nothing never answers one; the backstop is to take the
+// thread's register file away from it and hand it back pointing at a trampoline. Whether a lane can do that
+// is whether it has a delivery mechanism — `SuspendThread`/`SetThreadContext` on Windows, a signal whose
+// handler rewrites a `ucontext` on a POSIX lane — and the machinery above it (the safe-point predicate, the
+// symbol-table flag, the trampoline's park, the lock depth) is the same on all of them.
+//
+// ⚠ **A LANE THAT ANSWERS `false` STILL GETS THE COOPERATIVE PATH**, which is every lane's and is what
+// `__sched_preemptone` writes before it asks this. What such a lane loses is the call-free loop.
+export function targetStopsThreadsForPreemption(target Target) returns bool
+	return targetPreemptDelivery(target) != PreemptDelivery.none
+end 'targetStopsThreadsForPreemption'
+
+// ⭐⭐ **HOW A LANE REACHES A THREAD THAT IS RUNNING.** The two mechanisms differ in WHO reads the register
+// file: the monitor reads a suspended thread's, or the thread reads its own inside a signal handler. Almost
+// everything above them is shared, and the handful of pieces that are not — the process-wide suspend claim,
+// the `CONTEXT` buffer and the exit gate — belong to the suspending lane alone.
+export enum PreemptDelivery
+	// `SuspendThread` / `GetThreadContext` / `SetThreadContext` / `ResumeThread`, run by the monitor.
+	threadSuspend
+
+	// A `SIGURG` the monitor sends, whose handler rewrites the interrupted `ucontext` on the thread itself.
+	signal
+
+	// No mechanism, so the cooperative request is the only one there is.
+	none
+end 'PreemptDelivery'
+
+export function targetPreemptDelivery(target Target) returns PreemptDelivery
+	return match target.os 'os'
+		windows gives PreemptDelivery.threadSuspend
+		linux or
+			macos gives PreemptDelivery.signal
+
+		// A WASI component has one thread and no signals, and `targetProvidesFacility` denies it
+		// `greenThreads` — so there is neither a thread to stop nor a scheduler asking for one.
+		wasi gives PreemptDelivery.none
+	end 'os'
+end 'targetPreemptDelivery'
+
 // ⭐ **THE ONE LOCK OVER THE RUN QUEUE — a `.data` word holding a slab-allocated CRITICAL_SECTION.** It was
 // `__io_lock`, allocated by `__io_init` and taken only when the program read a pipe, because the IOCP
 // completion thread was then the run queue's only cross-thread mutator. A worker M is a second one, so the
@@ -1469,6 +1560,97 @@ end 'targetBracketsInsideTheImportShim'
 // an ORDER that two files would each have to remember. A CRITICAL_SECTION is recursive, so one lock covering
 // both has no order to get wrong.
 export let SchedLockLabel = b"__sched_lock"
+
+// ⭐ **WHERE A THREAD WITH NO MACHINE KEEPS ITS LOCK DEPTH** — see `emitSchedLockDepthAddr`. The monitor and
+// the completion thread take `__sched_lock` and are not machines; neither runs a green thread, so the number
+// they leave here is read by nobody and the word exists only so the step has an address that is not zero.
+// `atomicStep`, because the step that lands here is the same `atomicRmw` every other one is.
+let SchedLockDepthSinkLabel = b"__sched_lock_depth_sink"
+
+// ⭐⭐⭐ **THE ONE CLAIM OVER "A THREAD OF THIS PROCESS IS SUSPENDED, OR IS ABOUT TO EXIT IT" — Go's
+// `preemptExtLock`.** `__gt_preempt_m` takes it around its suspend/inject/resume window and `__gt_exit_process`
+// takes it and never gives it back, which is the whole of the Windows lane's deadlock avoidance: a thread
+// suspended inside `ExitProcess` holds the loader lock the terminating thread needs, and the process hangs
+// with no diagnostic anywhere.
+//
+// ⚠ **PROCESS-WIDE RATHER THAN PER-MACHINE, AND THE EXIT IS WHY.** A per-machine claim would let the monitor
+// suspend machine B while machine A is inside `ExitProcess`; process exit is not a per-machine act.
+//
+// ⛔ **THERE IS NO SEPARATE `suspendLock`, BECAUSE THE MONITOR IS THE ONLY SUSPENDER.** Go needs one because
+// its `OpenThread` handle is a shared scratch slot; here each machine opens its own handle once, at birth,
+// and only `__sysmon` ever calls `__gt_preempt_m`.
+export let SchedPreemptExtLockLabel = b"__sched_preempt_ext_lock"
+
+// ⭐ **THE ONE `CONTEXT` BUFFER THE MONITOR READS A SUSPENDED THREAD'S REGISTERS INTO.** A page, because
+// `GetThreadContext` REJECTS a pointer that is not 16-byte aligned and a page boundary is aligned by
+// construction (`ProfileRuntime`'s header carries the measurement). One buffer and no locking around it:
+// `__sysmon` is the only caller of `__gt_preempt_m`, and it is one thread.
+//
+// ⚠ **IT IS ALLOCATED AT BRING-UP RATHER THAN PER STOP**, so an asynchronous preemption allocates nothing —
+// the property every scale-test reading depends on.
+export let SchedPreemptContextLabel = b"__sched_preempt_context"
+
+// A page. An x64 `CONTEXT` is 1232 bytes and `osAllocPages` has no finer unit, so the reservation is stated
+// as what it actually takes rather than as a struct size the Std tier has no other use for.
+let SchedPreemptContextBytes = 0x1000 as ParsedInt
+
+// ⭐⭐ **`__gt_preempt_self_register(m)` — WHAT A NEW MACHINE RECORDS ABOUT ITS OWN THREAD SO THE MONITOR CAN
+// STOP IT.** A hand-assembled chunk per lane, because what it records is the host's: on x64-windows the
+// thread id and a `THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_SET_CONTEXT` handle onto itself; a
+// POSIX lane records the `gettid` identity its `tgkill` needs. The alternate signal stack is NOT this
+// chunk's — `emitSchedWorkerBirth` installs it, under `GtRuntime.targetInstallsSignalStack`, because a lane
+// with a fault handler and no preemption signal owes one too. Called by `emitSchedBecomeM` on the thread
+// that is becoming the machine — the only side that can ask these questions.
+export let PreemptSelfRegisterName = b"__gt_preempt_self_register"
+
+// ⭐⭐⭐ **`__gt_preempt_m(m)` — STOP THE GREEN THREAD `m` IS RUNNING, WHERE IT STANDS.** A hand-assembled chunk
+// per lane: the Windows one suspends the thread, reads its register file, asks `__gt_preempt_safe` whether
+// this instant is a safe point and, if it is, rewrites the thread's Rsp/Rip so that resuming lands in
+// `__gt_async_preempt` with the interrupted PC as its return address. A POSIX lane sends a signal whose
+// handler rewrites the same two words of a `ucontext`.
+//
+// ⚠ **`__sysmon` IS ITS ONLY CALLER**, which is what lets it use one process-wide `CONTEXT` buffer and one
+// claim word with no lock of its own.
+export let PreemptMachineName = b"__gt_preempt_m"
+
+// The two states of `__sched_preempt_ext_lock` and of a machine's `MOffSignalPending` — both are claimed by a
+// compare-and-swap from the first to the second, so the pair is named once rather than as two bare literals
+// at each end, in each backend.
+export let PreemptClaimFree = 0
+export let PreemptClaimHeld = 1
+
+// ⭐⭐ **`__gt_preempt_safe(m, pc, sp) -> gt | 0` — IS THIS INSTANT A SAFE POINT?** See `buildGtPreemptSafe`.
+// EXPORTED for the hand-assembled senders, which call it by name with the register file they just read out
+// of the stopped thread, and for the root that keeps it alive for that call.
+export let PreemptSafeName = b"__gt_preempt_safe"
+
+// ⭐⭐ **`__gt_async_preempt_park()` — WHAT THE TRAMPOLINE CALLS ONCE THE REGISTER FILE IS SPILLED.** See
+// `buildGtAsyncPreemptPark`. EXPORTED for the same two reasons.
+export let AsyncPreemptParkName = b"__gt_async_preempt_park"
+
+// ⭐⭐⭐ **`__gt_async_preempt` — THE ADDRESS A STOPPED THREAD IS MADE TO RETURN INTO.** A hand-assembled chunk
+// per ISA (Go's `mkpreempt` output): it spills every register and the flags, calls the park above, restores
+// them and returns to the interrupted PC. EXPORTED because the sender injects its address and the
+// preemption-depth certificate sizes its frame.
+export let AsyncPreemptName = b"__gt_async_preempt"
+
+// ⭐⭐⭐ **`mrt_preempt_handler(sig, info, ucontext)` — THE SIGNAL ENTRY A SIGNALLING LANE STOPS A THREAD
+// THROUGH.** Go's `doSigPreempt` inside `sigtrampgo`. It runs ON the thread being stopped, asks
+// `__gt_preempt_safe` about the register file the kernel saved, and either rewrites the `ucontext` so the
+// return from the signal lands in `__gt_async_preempt` or hands `MOffSignalPending` back.
+//
+// ⚠ **IT IS A SEPARATE ENTRY FROM `mrt_fault_handler`, NOT AN ARM OF IT.** A fault handler never returns;
+// this one always does, and the two share neither a diagnostic nor a terminal step.
+export let PreemptHandlerName = b"mrt_preempt_handler"
+
+// ⭐⭐⭐ **`__gt_exit_process(code)` — THE ONE DOOR OUT OF THE PROCESS ON A LANE THAT SUSPENDS THREADS.** Go's
+// `osPreemptExtEnter`: it takes `__sched_preempt_ext_lock` before terminating, so the monitor can no longer
+// suspend anything — and a thread suspended inside the OS's exit holds the loader lock the terminating
+// thread needs, which hangs the process with nothing printed.
+//
+// ⛔ **EVERY EXIT SITE OF A GREEN-THREAD PROGRAM ON SUCH A LANE ROUTES THROUGH IT**: the entry stub's
+// bridge, the `osExit` lowering and the fault/panic diagnostics' terminal call.
+export let ExitProcessGateName = b"__gt_exit_process"
 
 // ==========================================================================
 // Entry points
@@ -2146,6 +2328,7 @@ export function schedRuntimeGlobals(usage RuntimeUsage, target Target) returns D
 		// `__sched_init_procs`'s like the three above.
 		pushRuntimeGlobal(out, label: SchedShutdownFlagLabel, sharing: MultiMSharing.lastWriterWins)
 		pushRuntimeGlobal(out, label: SchedLockLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+		pushRuntimeGlobal(out, label: SchedLockDepthSinkLabel, sharing: MultiMSharing.atomicStep)
 
 		// Every mutation is the `atomicRmw` in `emitSchedSpinningTransition` or the gate's `atomicCas`; see
 		// `SchedSpinningLabel` for what a lost update would cost (a permanently suppressed wakeup).
@@ -2160,6 +2343,14 @@ export function schedRuntimeGlobals(usage RuntimeUsage, target Target) returns D
 			pushRuntimeGlobal(out, label: SchedSysmonWaitLabel, sharing: MultiMSharing.underSchedLock)
 			pushRuntimeGlobal(out, label: SchedTimerStartsLabel, sharing: MultiMSharing.underSchedLock)
 		end 'theMonitorExists'
+
+		// ⭐ **GATE SITE — the two words only a lane that SUSPENDS a thread has any writer for.** A signalling
+		// lane suspends nothing and reads no `CONTEXT`; on it these would be slots nothing touches, in the
+		// `data {` block of every green-thread golden.
+		if targetPreemptDelivery(target) == PreemptDelivery.threadSuspend 'theMonitorSuspendsThreads'
+			pushRuntimeGlobal(out, label: SchedPreemptExtLockLabel, sharing: MultiMSharing.atomicStep)
+			pushRuntimeGlobal(out, label: SchedPreemptContextLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+		end 'theMonitorSuspendsThreads'
 	end 'procsTeardown'
 
 	return out
@@ -2235,12 +2426,20 @@ export function installSchedRuntime(module StdModule, target Target, usesComplet
 		// `__sched_handoffp` and `__sched_preemptone` are `__sched_retake`'s, `__sysmon` is `__sched_retake`'s only
 		// caller, and `__sched_syscall_regain` is the bracket's road back.
 		buildSchedHandoffP(module)
-		buildSchedPreemptOne(module)
+		buildSchedPreemptOne(module, target: target)
 		buildSchedRetake(module)
 		buildSysmon(module, target: target)
 		buildSchedLockedCountQuery(module, name: SchedTimerStartCountName, label: SchedTimerStartsLabel)
 		buildSchedSyscallRegain(module)
 	end 'theSyscallHandoff'
+
+	// ⛔ **GATE SITE — the two Std halves of asynchronous preemption.** Their callers are hand-assembled
+	// (the sender and the trampoline), so a lane that lays out neither would carry two functions nothing
+	// reaches. See `targetStopsThreadsForPreemption`.
+	if targetStopsThreadsForPreemption(target) 'itCanStopAThread'
+		buildGtPreemptSafe(module, target: target)
+		buildGtAsyncPreemptPark(module)
+	end 'itCanStopAThread'
 
 	if targetCallsTheSyscallBracket(target) 'theBracketIsCalled'
 		buildSchedEnterSyscall(module)
@@ -2263,15 +2462,63 @@ function emitLoadProc(module StdModule, block IrBlock, index ValueId, ids ValueM
 	return emitLoadField(module, block: block, record: emitProcSlotAddr(module, block: block, index: index, ids: ids), offset: 0, ids: ids)
 end 'emitLoadProc'
 
-// Take / release the one run-queue lock. Both are two ops, and both are spelled here so `GtRuntime`'s four
-// mutation sites and this file's two reach the same word the same way.
+// Take / release the one run-queue lock, stepping this machine's lock depth around it so an asynchronous
+// stop can refuse a thread that holds it (`MOffLocks`). Both are spelled here so `GtRuntime`'s four mutation
+// sites and this file's reach the same word the same way.
+//
+// ⛔ **THE ORDER IS NOT FREE.** The depth goes UP before the acquire and DOWN after the release, so the
+// window in which this machine reads as lock-free is always a window in which it really is. The other order
+// would leave an instant holding the lock with a zero count, which is exactly the instant a stop would wedge
+// every other machine.
 export function emitSchedLockEnter(module StdModule, block IrBlock, ids ValueMinter)
+	emitSchedStepLockDepth(module, block: block, delta: OneMore, ids: ids)
 	module.appendOp(block, op: StdOp.osLockEnter(emitLoadGlobalWord(module, block: block, label: SchedLockLabel, ids: ids)))
 end 'emitSchedLockEnter'
 
 export function emitSchedLockLeave(module StdModule, block IrBlock, ids ValueMinter)
 	module.appendOp(block, op: StdOp.osLockLeave(emitLoadGlobalWord(module, block: block, label: SchedLockLabel, ids: ids)))
+	emitSchedStepLockDepth(module, block: block, delta: OneFewer, ids: ids)
 end 'emitSchedLockLeave'
+
+// ⭐⭐ **STEP THE CALLING MACHINE'S RUNTIME-LOCK DEPTH — `MOffLocks`, and the slab's lock pair steps it too.**
+// EXPORTED for that second pair: a thread holding the ALLOCATOR's slow-path lock is as unstoppable as one
+// holding `__sched_lock`, and two mechanisms writing one word through two spellings is the shape this file's
+// header refuses.
+export function emitSchedStepLockDepth(module StdModule, block IrBlock, delta ParsedInt, ids ValueMinter)
+	let addr = emitSchedLockDepthAddr(module, block: block, ids: ids)
+	module.appendOp(block, op: StdOp.atomicRmw(ids.mint(), addrId: addr, operandId: emitConst(module, block: block, value: delta, ids: ids), opcode: StdAtomicRmwOpcode.add))
+end 'emitSchedStepLockDepth'
+
+// ⭐⭐ **WHERE THE CALLING THREAD KEEPS ITS LOCK DEPTH: ITS OWN MACHINE'S WORD, OR THE SINK IF IT HAS NO
+// MACHINE.** The monitor thread and the completion thread take `__sched_lock` and have no M
+// (`buildSysmon`'s header), and neither runs a green thread, so nothing ever reads the depth they keep —
+// what they need is somewhere to keep it that is not address zero.
+//
+// ⛔ **IT IS A BRANCHLESS SELECT, BECAUSE THE CALLERS ARE EXPRESSIONS RATHER THAN GRAPHS.** Every
+// `emitSchedLockEnter` site appends into a block it did not create and cannot split, so a test here would
+// have to become a call, and a call at every lock edge is a frame on paths that have none to spare. The
+// mask is all-ones exactly when there is a machine, so one of the two `and`s is always zero.
+// ⛔⛔ **AND THE TEB OFFSET IS TESTED TOO, BECAUSE A ZERO OFFSET MAKES THE SLOT LOAD READ `gs:[0]`.** That is
+// `NT_TIB.ExceptionList`, a NON-NULL pointer, and a machine test alone would take it for an M and step a word
+// inside it — a wild write. The allocator's slow-path lock is taken during bring-up, BEFORE
+// `__sched_init_procs` publishes the offset, so this is a state the runtime really reaches.
+// `emitLoadCurrentMOrBail` is the guarded walk that answers both questions, and it cannot be used here: it
+// needs blocks the lock sites have no way to give it.
+function emitSchedLockDepthAddr(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+	let tebOffset = emitLoadGlobalWord(module, block: block, label: SchedTlsTebOffsetLabel, ids: ids)
+	let m = emitLoadCurrentM(module, block: block, ids: ids)
+	let scheduled = emitCmp(module, block: block, a: tebOffset, b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	let hasMachine = emitCmp(module, block: block, a: m, b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	let onMachine = emitBin(module, block: block, a: scheduled, b: hasMachine, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let mineMask = emitBin(module, block: block, a: emitConst(module, block: block, value: 0, ids: ids), b: onMachine, opcode: StdBinOpcode.sub, ids: ids)
+	let sinkMask = emitBin(module, block: block, a: onMachine, b: emitConst(module, block: block, value: OneMore, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	let mine = emitBin(module, block: block, a: m, b: emitConst(module, block: block, value: MOffLocks as ParsedInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let sink = ids.mint()
+	module.appendOp(block, op: StdOp.globalAddr(sink, label: SchedLockDepthSinkLabel))
+	let mineBits = emitBin(module, block: block, a: mine, b: mineMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let sinkBits = emitBin(module, block: block, a: sink, b: sinkMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	return emitBin(module, block: block, a: mineBits, b: sinkBits, opcode: StdBinOpcode.bitOr, ids: ids)
+end 'emitSchedLockDepthAddr'
 
 // ==========================================================================
 // ⭐⭐⭐ THE SINGLY LINKED INTRUSIVE LISTS
@@ -2754,12 +3001,20 @@ function buildSchedInitProcs(module StdModule, target Target)
 	// critical section, like every other writer of the word.
 	emitSchedPidleClaimLocked(module, block: adopt, p: p0, ids: ids)
 	emitSchedLockLeave(module, block: adopt, ids: ids)
-	emitSchedBecomeM(module, block: adopt, m: m0, ids: ids)
+	emitSchedBecomeM(module, block: adopt, m: m0, target: target, ids: ids)
 
 	// The main thread takes P[0] directly rather than through `MOffNextP`: it is not waking from a park, and
 	// the field is stamped above only so that every M is born with the processor it is going to run on.
 	emitStoreField(module, block: adopt, record: m0, offset: MOffNextP, value: emitConst(module, block: adopt, value: 0, ids: ids))
 	emitSchedAdoptProc(module, block: adopt, m: m0, p: p0)
+
+	// ⭐ **THE MONITOR'S `CONTEXT` BUFFER, TAKEN ONCE** — see `SchedPreemptContextLabel`. Bring-up, so the
+	// store needs no lock, and an asynchronous stop then allocates nothing for the life of the process.
+	if targetPreemptDelivery(target) == PreemptDelivery.threadSuspend 'theContextBuffer'
+		let contextPage = ids.mint()
+		module.appendOp(adopt, op: StdOp.osAllocPages(contextPage, sizeId: emitConst(module, block: adopt, value: SchedPreemptContextBytes, ids: ids)))
+		emitStoreGlobalWord(module, block: adopt, label: SchedPreemptContextLabel, value: contextPage, ids: ids)
+	end 'theContextBuffer'
 
 	// The poller, before any machine can go idle and claim it, and a last poll of "now": 0 would read as a
 	// machine blocked in it. Single-threaded, like the rest of bring-up.
@@ -2838,7 +3093,7 @@ end 'emitSchedAllocM'
 // still reads 0 — so any allocation it makes takes the raw shard, which is correct for a thread that holds
 // no P — and no other party can see a half-adopted M, because nothing but this thread will ever read this
 // slot.
-function emitSchedBecomeM(module StdModule, block IrBlock, m ValueId, ids ValueMinter)
+function emitSchedBecomeM(module StdModule, block IrBlock, m ValueId, target Target, ids ValueMinter)
 	let sysStackSize = emitConst(module, block: block, value: GtSystemStackSize, ids: ids)
 	let sysStackBase = ids.mint()
 	module.appendOp(block, op: StdOp.osAllocPages(sysStackBase, sizeId: sysStackSize))
@@ -2850,6 +3105,20 @@ function emitSchedBecomeM(module StdModule, block IrBlock, m ValueId, ids ValueM
 
 	let tlsIndex = emitLoadGlobalWord(module, block: block, label: SchedTlsIndexLabel, ids: ids)
 	module.appendOp(block, op: StdOp.tlsSetValue(tlsIndex, valueId: m))
+
+	// ⭐⭐ **WHAT ONLY THIS THREAD CAN LEARN ABOUT ITSELF, FOR THE MONITOR TO STOP IT BY LATER** — its OS
+	// thread id and, on Windows, a handle that can suspend it. Neither is knowable on the creating side:
+	// `osThreadCreate` answers a JOINABLE handle, which is 0 for the main OS thread this runtime never
+	// created, so a machine that could not be stopped would be exactly the one that runs `main`.
+	//
+	// ⛔⛔ **IT COMES AFTER THE TLS PUBLISH, AND THE ORDER IS WHAT MAKES A SIGNAL HANDLER ABLE TO FIND ITS
+	// MACHINE.** The id recorded here is what a POSIX sender aims `tgkill` at; the handler then walks TLS
+	// back to the machine to hand the claim back. Recorded BEFORE the publish, there would be a window in
+	// which a machine is signallable and its own handler reads an empty slot — and the claim it could not
+	// name would stay raised for the life of the process.
+	if targetStopsThreadsForPreemption(target) 'itCanBeStopped'
+		module.appendOp(block, op: StdOp.call(ids.mint(), callee: PreemptSelfRegisterName, args: argsOf(m)))
+	end 'itCanBeStopped'
 end 'emitSchedBecomeM'
 
 // ⭐⭐ **"THIS M NOW HOLDS THIS P" — the two stores that are the whole of adoption once the M exists.** The
@@ -5329,12 +5598,15 @@ end 'emitSchedMainMachineExit'
 // collected the same way on every road into `wloop` — here, and after every park — through `MOffNextP`: one
 // field, one door, and no arm that adopts a processor it got some other way.
 function emitSchedWorkerBirth(module StdModule, func IrFunction, entry IrBlock, m ValueId, cont IrBlock, target Target, ids ValueMinter)
-	emitSchedBecomeM(module, block: entry, m: m, ids: ids)
+	emitSchedBecomeM(module, block: entry, m: m, target: target, ids: ids)
 
-	// ⭐ **THIS THREAD's SIGNAL STACK, BEFORE IT RUNS A GREEN THREAD.** `sigaltstack` is per thread, and a fault
+	// ⭐ **THIS THREAD's SIGNAL STACK, BEFORE IT RUNS A GREEN THREAD.** `sigaltstack` is per thread, and a
 	// handler registered `SA_ONSTACK` on a thread with none builds its frame on whatever green thread's few
-	// kilobytes faulted. The main thread's is `mrt_runtime_init`'s, which every program runs.
-	if gtFaultFrameHome(target) == FaultFrameHome.signalStack 'signalStack'
+	// kilobytes it interrupted — a fault's, or an asynchronous preemption's. The main thread's is
+	// `mrt_runtime_init`'s, which every program on such a lane runs.
+	// `usesGt: true` is not an assumption — a worker loop is built only for a program that spawns
+	// (`installSchedRuntime` rides `usesGt`), so the bit is a fact of being here.
+	if targetInstallsSignalStack(target, usesGt: true) 'signalStack'
 		module.appendOp(entry, op: StdOp.call(ids.mint(), callee: SignalStackInstallName, args: ValueIdArray.create()))
 	end 'signalStack'
 
@@ -6108,7 +6380,7 @@ end 'buildSchedRetake'
 // ⚠ **THE STORE IS PLAIN AND RACES THE THREAD, AS GO's DOES.** By the time it lands the machine may have switched
 // to another thread, which then yields once for nothing, or to its scheduler context, whose next switch-in
 // restores the word (`GtRuntime.emitGtExecute`). Records are never freed, so the store always lands in one.
-function buildSchedPreemptOne(module StdModule)
+function buildSchedPreemptOne(module StdModule, target Target)
 	var func = IrFunction.createFromStd(SchedPreemptOneName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
@@ -6134,12 +6406,241 @@ function buildSchedPreemptOne(module StdModule)
 	module.setTerminator(onThread, op: StdOp.condBranch(schedulerContext, thenBlockId: doneBlock.id, elseBlockId: request.id))
 
 	emitStoreField(module, block: request, record: gt, offset: GtOffStackGuard, value: emitConst(module, block: request, value: GtStackGuardPreempt, ids: ids))
+
+	// ⭐⭐⭐ **THE POISON FIRST, THEN THE STOP — AND THE ORDER IS WHAT MAKES THE STOP LEGITIMATE.** The safe-point
+	// predicate requires the guard word to carry the request, so a thread stopped here is one that has ALREADY
+	// been asked to yield and simply cannot read the question. A lane that cannot stop a thread ends at the
+	// store and waits for the next prologue.
+	if targetStopsThreadsForPreemption(target) 'stopItWhereItStands'
+		module.appendOp(request, op: StdOp.call(ids.mint(), callee: PreemptMachineName, args: argsOf(m)))
+	end 'stopItWhereItStands'
+
 	module.setTerminator(request, op: StdOp.branch(doneBlock.id))
 
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
 
 	module.functions.push(func)
 end 'buildSchedPreemptOne'
+
+// `__gt_preempt_safe(m, pc, sp) -> gt | 0` — see `PreemptSafeName`. PURE LOADS AND COMPARES, no lock and no
+// call but the table lookup, because a POSIX lane will run it inside a signal handler on an arbitrary
+// instruction boundary of the thread it is judging.
+//
+// ⭐⭐⭐ **EVERY TEST IS A REASON A STOP WOULD BE UNSOUND, AND ALL OF THEM MUST HOLD:**
+//   • **there is a green thread and it is not a scheduler context.** A g0 is the machine's own loop; parking
+//     it has no meaning, and its `stackBase` is 0 (`MOffSchedulerContext`), which is the test.
+//   • **the guard word carries the cooperative request.** The request is what makes the stop LEGITIMATE:
+//     `__sched_preemptone` wrote it a moment ago, and a thread that never got one is a thread nobody asked
+//     to yield. It is also what keeps a stop off a thread that has since switched, because a switch-in
+//     restores the word (`emitGtExecute`).
+//   • **the machine is not inside or leaving a bracketed kernel call.** Its register file then describes the
+//     shim's stack switch or a kernel frame, neither of which the trampoline could return into. A machine
+//     blocked in the poller is inside one of those calls.
+//   • **it holds no runtime lock** (`MOffLocks`) — a parked thread holding `__sched_lock` never releases it.
+//   • **the stack pointer is inside the green thread's own stack with the whole stop floor below it**
+//     (`GtRuntime.gtAsyncPreemptFloor`: the trampoline's own cost plus the OS's fault-frame reserve).
+//     That excludes the syscall shim's window and `__gt_morestack` (both run on the machine's system stack),
+//     the guard region, and any instant with too little room for the register block the trampoline spills.
+//   • **the PC lies in a function `__symtable` marks asynchronously preemptible** — see
+//     `BacktraceFormat.SymtabSafeFromBias`, which also excludes that function's own prologue guard.
+//
+// ⚠ **THE ADDRESS COMPARES ARE SIGNED, WHICH IS EVERY OTHER ADDRESS COMPARE IN THIS RUNTIME.** Nothing this
+// judges is a kernel address: a green thread's stack is `osAllocPages`'d user memory and the PC is inside
+// this image, both far below the sign bit.
+function buildGtPreemptSafe(module StdModule, target Target)
+	var func = IrFunction.createFromStd(PreemptSafeName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var onThread = module.addBlock(func, label: b"psonthread", heat: BlockHeat.normal)
+	var asked = module.addBlock(func, label: b"psasked", heat: BlockHeat.normal)
+	var notInCall = module.addBlock(func, label: b"psnotincall", heat: BlockHeat.normal)
+	var unlocked = module.addBlock(func, label: b"psunlocked", heat: BlockHeat.normal)
+	var aboveFloor = module.addBlock(func, label: b"psabovefloor", heat: BlockHeat.normal)
+	var inStack = module.addBlock(func, label: b"psinstack", heat: BlockHeat.normal)
+	var inText = module.addBlock(func, label: b"psintext", heat: BlockHeat.normal)
+	var named = module.addBlock(func, label: b"psnamed", heat: BlockHeat.normal)
+	var flagged = module.addBlock(func, label: b"psflagged", heat: BlockHeat.normal)
+	var pastTheGuard = module.addBlock(func, label: b"pspastguard", heat: BlockHeat.normal)
+	var safe = module.addBlock(func, label: b"pssafe", heat: BlockHeat.normal)
+	var notSafe = module.addBlock(func, label: b"psnotsafe", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 3)
+	let m = 0 as ValueId
+	let pc = 1 as ValueId
+	let sp = 2 as ValueId
+
+	let gt = emitLoadField(module, block: entry, record: m, offset: MOffCurrentGt, ids: ids)
+	let noThread = emitCmp(module, block: entry, a: gt, b: emitConst(module, block: entry, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(noThread, thenBlockId: notSafe.id, elseBlockId: onThread.id))
+
+	let stackBase = emitLoadField(module, block: onThread, record: gt, offset: GtOffStackBase, ids: ids)
+	let schedulerContext = emitCmp(module, block: onThread, a: stackBase, b: emitConst(module, block: onThread, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(onThread, op: StdOp.condBranch(schedulerContext, thenBlockId: notSafe.id, elseBlockId: asked.id))
+
+	let guard = emitLoadField(module, block: asked, record: gt, offset: GtOffStackGuard, ids: ids)
+	let notRequested = emitCmp(module, block: asked, a: guard, b: emitConst(module, block: asked, value: GtStackGuardPreempt, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(asked, op: StdOp.condBranch(notRequested, thenBlockId: notSafe.id, elseBlockId: notInCall.id))
+
+	let stateBits = emitBin(module, block: notInCall, a: emitLoadField(module, block: notInCall, record: m, offset: MOffSyscallState, ids: ids), b: emitConst(module, block: notInCall, value: MSyscallStateMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	let inCall = emitCmp(module, block: notInCall, a: stateBits, b: emitConst(module, block: notInCall, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(notInCall, op: StdOp.condBranch(inCall, thenBlockId: notSafe.id, elseBlockId: unlocked.id))
+
+	let depth = emitLoadField(module, block: unlocked, record: m, offset: MOffLocks, ids: ids)
+	let holdsALock = emitCmp(module, block: unlocked, a: depth, b: emitConst(module, block: unlocked, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(unlocked, op: StdOp.condBranch(holdsALock, thenBlockId: notSafe.id, elseBlockId: aboveFloor.id))
+
+	let floor = emitBin(module, block: aboveFloor, a: stackBase, b: emitConst(module, block: aboveFloor, value: gtAsyncPreemptFloor(target), ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let tooLow = emitCmp(module, block: aboveFloor, a: sp, b: floor, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(aboveFloor, op: StdOp.condBranch(tooLow, thenBlockId: notSafe.id, elseBlockId: inStack.id))
+
+	let top = emitBin(module, block: inStack, a: stackBase, b: emitLoadField(module, block: inStack, record: gt, offset: GtOffStackSize, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let offTheStack = emitCmp(module, block: inStack, a: sp, b: top, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(inStack, op: StdOp.condBranch(offTheStack, thenBlockId: notSafe.id, elseBlockId: inText.id))
+
+	// `__symtable` closes `.text` and `mrt_start` opens it, so the pair bounds the code exactly — the same
+	// two addresses every backtrace walk bounds itself by.
+	let textBase = ids.mint()
+	module.appendOp(inText, op: StdOp.funcAddr(textBase, funcName: EntryPointName))
+	let symtable = ids.mint()
+	module.appendOp(inText, op: StdOp.funcAddr(symtable, funcName: SymbolTableName))
+	let belowText = emitCmp(module, block: inText, a: pc, b: textBase, pred: StdCmpPred.lt, ids: ids)
+	let aboveText = emitCmp(module, block: inText, a: pc, b: symtable, pred: StdCmpPred.ge, ids: ids)
+	let outsideText = emitBin(module, block: inText, a: belowText, b: aboveText, opcode: StdBinOpcode.bitOr, ids: ids)
+	module.setTerminator(inText, op: StdOp.condBranch(outsideText, thenBlockId: notSafe.id, elseBlockId: named.id))
+
+	let textOffset = emitBin(module, block: named, a: pc, b: textBase, opcode: StdBinOpcode.sub, ids: ids)
+	let index = ids.mint()
+	module.appendOp(named, op: StdOp.call(index, callee: SymtabIndexName, args: twoArgs(textOffset, second: symtable)))
+	let unnamed = emitCmp(module, block: named, a: index, b: emitConst(module, block: named, value: 0, ids: ids), pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(named, op: StdOp.condBranch(unnamed, thenBlockId: notSafe.id, elseBlockId: flagged.id))
+
+	// The safe-point run is one byte per entry at the entry's own index, reached through the header column
+	// that records where the variable-length names end — read as the whole header word and shifted down,
+	// because the Std tier has no 32-bit access (`BacktraceFormat.SymtabHeaderFlagsOffsetShift`).
+	let header = emitLoadField(module, block: flagged, record: symtable, offset: 0, ids: ids)
+	let flagsOffset = emitBin(module, block: flagged, a: header, b: emitConst(module, block: flagged, value: SymtabHeaderFlagsOffsetShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
+	let flagsBase = emitBin(module, block: flagged, a: symtable, b: flagsOffset, opcode: StdBinOpcode.add, ids: ids)
+	let safeFrom = emitLoadByteIndexed(module, block: flagged, base: flagsBase, index: index, ids: ids)
+	let neverSafe = emitCmp(module, block: flagged, a: safeFrom, b: emitConst(module, block: flagged, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(flagged, op: StdOp.condBranch(neverSafe, thenBlockId: notSafe.id, elseBlockId: pastTheGuard.id))
+
+	// ⛔⛔ **AND PAST THE FUNCTION'S PROLOGUE GUARD, WHICH HOLDS A *MACHINE* IN A REGISTER.** The guard walks
+	// TLS to the machine and then to the machine's green thread; a thread stopped between those two loads
+	// resumes — possibly on another machine — with a register naming the machine it left, and the next load
+	// takes somebody else's green thread for its own. `BacktraceFormat.SymtabSafeFromBias` carries the whole
+	// argument and the byte that measures the region.
+	let entryStride = emitBin(module, block: pastTheGuard, a: index, b: emitConst(module, block: pastTheGuard, value: SymtabEntryShift, ids: ids), opcode: StdBinOpcode.shl, ids: ids)
+	let entryOffset = emitBin(module, block: pastTheGuard, a: entryStride, b: emitConst(module, block: pastTheGuard, value: SymtabOffEntries as ParsedInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let entryAddr = emitBin(module, block: pastTheGuard, a: symtable, b: entryOffset, opcode: StdBinOpcode.add, ids: ids)
+	let entryWord = emitLoadField(module, block: pastTheGuard, record: entryAddr, offset: 0, ids: ids)
+	let funcStart = emitBin(module, block: pastTheGuard, a: entryWord, b: emitConst(module, block: pastTheGuard, value: SymtabEntryCodeOffsetMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	let intoFunc = emitBin(module, block: pastTheGuard, a: textOffset, b: funcStart, opcode: StdBinOpcode.sub, ids: ids)
+	let firstSafe = emitBin(module, block: pastTheGuard, a: safeFrom, b: emitConst(module, block: pastTheGuard, value: SymtabSafeFromBias, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	let insideTheGuard = emitCmp(module, block: pastTheGuard, a: intoFunc, b: firstSafe, pred: StdCmpPred.lt, ids: ids)
+	let cleared = emitGtPreemptSafeLlscLookback(module, func: func, pc: pc, notSafe: notSafe, safe: safe, target: target, ids: ids)
+	module.setTerminator(pastTheGuard, op: StdOp.condBranch(insideTheGuard, thenBlockId: notSafe.id, elseBlockId: cleared.id))
+
+	module.setTerminator(safe, op: StdOp.ret(gt))
+	module.setTerminator(notSafe, op: StdOp.ret(emitConst(module, block: notSafe, value: 0, ids: ids)))
+
+	module.functions.push(func)
+end 'buildGtPreemptSafe'
+
+// ⛔⛔ **arm64 ONLY: A STOP INSIDE A LOAD-LINKED / STORE-CONDITIONAL PAIR IS DECLINED.** The park between the
+// two halves runs arbitrary code — including other exclusive pairs — so the reservation is gone by the time
+// the `STLXR` runs, and the loop's own retry would be the only thing keeping it correct. It is declined
+// rather than relied on: the atomic's exclusive scratch is x16/x17, and a `CBNZ` that keeps failing is a
+// thread that makes no progress while the monitor keeps stopping it. The check walks the
+// `Arm64ExclusiveLookbackWords` instruction words before the interrupted one and refuses if any is a
+// load-exclusive.
+//
+// ⛔ **x64 NEEDS NO SUCH RULE**: every atomic there is one `lock`-prefixed instruction, and `rep movsb` lives
+// only in `__gt_stack_relocate`, which the safe-point range test already excludes.
+//
+// ⚠ **THE FOUR WORDS BEFORE THE PC ARE ALWAYS INSIDE `.text`.** `mrt_start` sits at `.text` offset 0 and is
+// longer than four instructions, and no compiled function precedes it — so the earliest preemptible PC in
+// any image is far past the bound already tested above.
+//
+// Answers the block the caller's "past the guard" test should fall through TO.
+function emitGtPreemptSafeLlscLookback(module StdModule, func IrFunction, pc ValueId, notSafe IrBlock, safe IrBlock, target Target, ids ValueMinter) returns IrBlock
+	if target.cpu != CpuArch.arm64 'noRestartableSequences'
+		return safe
+	end 'noRestartableSequences'
+
+	var head = safe
+
+	// ⚠ **ONE LABEL PER WORD, NOT ONE FOR ALL OF THEM.** An IR dump is read to tell which of the four
+	// lookbacks refused, and four blocks sharing a name are four blocks a reader cannot tell apart.
+	for back in 1 to Arm64ExclusiveLookbackWords 'eachPrecedingWord'
+		var check = module.addBlock(func, label: arm64LookbackBlockLabel(back), heat: BlockHeat.normal)
+		let word = emitLoadInstructionWord(module, block: check, pc: pc, wordsBack: back, ids: ids)
+		let group = emitBin(module, block: check, a: word, b: emitConst(module, block: check, value: Arm64ExclusiveLoadMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+		let isExclusiveLoad = emitCmp(module, block: check, a: group, b: emitConst(module, block: check, value: Arm64ExclusiveLoadBits, ids: ids), pred: StdCmpPred.eq, ids: ids)
+		module.setTerminator(check, op: StdOp.condBranch(isExclusiveLoad, thenBlockId: notSafe.id, elseBlockId: head.id))
+		head = check
+	end 'eachPrecedingWord'
+
+	return head
+end 'emitGtPreemptSafeLlscLookback'
+
+// `psnollsc1` … `psnollsc4` — the block that refuses on the `wordsBack`-th word before the interrupted one.
+// One ASCII digit, which the refusal below is what makes safe rather than the reader's arithmetic.
+function arm64LookbackBlockLabel(wordsBack ParsedInt) returns ByteArray
+	if Arm64ExclusiveLookbackWords > SingleDigitLimit 'twoDigits'
+		panic("arm64LookbackBlockLabel: the lookback walks {Arm64ExclusiveLookbackWords} words and this label carries one ASCII digit — widen it, or blocks {SingleDigitLimit + 1} and up would collide with earlier ones under one name")
+	end 'twoDigits'
+
+	var label = ByteArray.create()
+	label.append(b"psnollsc")
+	label.push(AsciiZeroDigit + wordsBack)
+	return label
+end 'arm64LookbackBlockLabel'
+
+// The largest number one ASCII digit spells.
+let SingleDigitLimit = 9 as ParsedInt
+
+// The instruction word `wordsBack` words before `pc`, read through the naturally aligned 64-bit word that
+// holds it: the Std tier has no 32-bit memory access (`StdLoweringShared.accessWidthFor`), and an AArch64
+// PC is 4-aligned, so the wanted half is selected by the address's own bit 2.
+function emitLoadInstructionWord(module StdModule, block IrBlock, pc ValueId, wordsBack ParsedInt, ids ValueMinter) returns ValueId
+	let addr = emitBin(module, block: block, a: pc, b: emitConst(module, block: block, value: wordsBack * Arm64InstructionBytes, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	let aligned = emitBin(module, block: block, a: addr, b: emitConst(module, block: block, value: 0 - (SpillSlotBytes as ParsedInt), ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	let pair = emitLoadField(module, block: block, record: aligned, offset: 0, ids: ids)
+	let half = emitBin(module, block: block, a: addr, b: emitConst(module, block: block, value: Arm64InstructionBytes, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	let shift = emitBin(module, block: block, a: half, b: emitConst(module, block: block, value: BitsPerByte, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
+	let shifted = emitBin(module, block: block, a: pair, b: shift, opcode: StdBinOpcode.shrLogical, ids: ids)
+	return emitBin(module, block: block, a: shifted, b: emitConst(module, block: block, value: Arm64InstructionWordMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+end 'emitLoadInstructionWord'
+
+// `__gt_async_preempt_park()` — what `__gt_async_preempt` calls once it has spilled the interrupted thread's
+// whole register file. It takes no argument because the trampoline is entered with the interrupted
+// function's registers and has nowhere to have put one; the running green thread is one TLS read away.
+//
+// ⛔ **THE RATE LIMIT IS RELEASED BEFORE THE PARK, AND THAT ORDER IS FORCED.** The park may resume this green
+// thread on a DIFFERENT machine, so after it `m` names a machine this thread no longer runs on. Releasing it
+// here opens a window in which the monitor may inject a second stop — which the safe-point predicate then
+// declines, because this thread's PC is inside `__gt_preempt` and, a moment later, its lock depth is not
+// zero.
+function buildGtAsyncPreemptPark(module StdModule)
+	var func = IrFunction.createFromStd(AsyncPreemptParkName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+
+	let m = emitLoadCurrentM(module, block: entry, ids: ids)
+	let gt = emitLoadField(module, block: entry, record: m, offset: MOffCurrentGt, ids: ids)
+
+	let acked = emitFieldAddr(module, block: entry, record: m, offset: MOffSignalPending, ids: ids)
+	module.appendOp(entry, op: StdOp.storeRelease(acked, offset: 0, valueId: emitConst(module, block: entry, value: 0, ids: ids), valueType: StdType.i64))
+
+	// The cooperative body, not a copy of it: the guard restore, the count on this processor and `gopreempt`
+	// are the same act however the thread was stopped.
+	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: GtPreemptName, args: argsOf(gt)))
+	module.setTerminator(entry, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildGtAsyncPreemptPark'
 
 // ⭐⭐⭐ **START THE SYSTEM MONITOR — Go's `runtime.main` starting `sysmon`.** Its one caller is `__gt_run_main`, at
 // bring-up, before `main` runs. It terminates `cur` and lands on `cont`.

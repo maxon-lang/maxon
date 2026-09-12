@@ -828,6 +828,10 @@ function emitSlabLockEnter(module StdModule, block IrBlock, state ValueId, shard
 		return
 	end 'singleThreaded'
 
+	// The allocator's slow path is as unstoppable as the scheduler's critical sections: a thread stopped
+	// holding this lock would carry it into a park and never release it. Same word, same order as
+	// `SchedRuntime.emitSchedLockEnter` — up before the acquire, down after the release.
+	emitSchedStepLockDepth(module, block: block, delta: OneMore, ids: ids)
 	module.appendOp(block, op: StdOp.osLockEnter(emitSlabLockAddr(module, block: block, state: state, ids: ids)))
 end 'emitSlabLockEnter'
 
@@ -837,6 +841,7 @@ function emitSlabLockLeave(module StdModule, block IrBlock, state ValueId, shard
 	end 'singleThreaded'
 
 	module.appendOp(block, op: StdOp.osLockLeave(emitSlabLockAddr(module, block: block, state: state, ids: ids)))
+	emitSchedStepLockDepth(module, block: block, delta: OneFewer, ids: ids)
 end 'emitSlabLockLeave'
 
 // ⭐⭐ **CAS-PUSH `slot` ONTO P `target`'s REMOTE-FREE QUEUE — a Treiber stack at `POffRemoteFreeHead`, many

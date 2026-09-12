@@ -1,0 +1,238 @@
+// Test: two-returns-from-inside-a-loop-join-at-the-continuation
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function firstIndexOf(a IntArray, n Integer, needle Integer) returns Integer
+	for i in 0 upto n 'scan'
+		let v = try a.get(i) otherwise panic("firstIndexOf: i < n = a.count()")
+
+		if v == needle 'hit'
+			return i
+		end 'hit'
+	end 'scan'
+
+	return n
+end 'firstIndexOf'
+
+function main() returns ExitCode
+	let n = 4
+	var a = IntArray.create()
+	a.resize(n)
+
+	for i in 0 upto n 'fill'
+		try a.set(i, value: 5 + 2 * i) otherwise panic("main: i < n = a.count()")
+	end 'fill'
+
+	var total = 0
+
+	for round in 0 to 1 'rounds'
+		let needle = 9 if round == 0 else 100
+		total = total + firstIndexOf(a, n: n, needle: needle)
+	end 'rounds'
+
+	return (total + 36) as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 80
+    x64.movRegImm32 rbx, 4
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect __managed_resize
+    x64.movRegImm32 rdx, 0
+  __us_test#49:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, forhdr#1
+  __us_test#50:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, forhdr#1
+  __us_test#51:
+    x64.leaRegRegImm32 rsi, rcx, -24
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, forhdr#1
+    x64.jmp forhdr#39
+  fill#2:
+    x64.imulRegRegImm32 rax, rdx, 2
+    x64.leaRegRegImm32 rax, rax, 5
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __im_slow#18
+  __im_bounds#19:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 8]
+    x64.cmpRegReg rdx, rcx
+    x64.jcc aboveEqual, __im_slow#18
+  __im_buffer:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_slow#18
+  __im_viewed:
+    x64.leaRegRegImm32 rsi, rcx, -24
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __im_slow#18
+  __im_store#22:
+    x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], rax
+  forstep#3:
+    x64.leaRegRegImm32 rdx, rdx, 1
+  forhdr#1:
+    x64.cmpRegImm32 rdx, 4
+    x64.jcc less, fill#2
+    x64.jmp forexit#4
+  fill#48:
+    x64.imulRegRegImm32 rsi, rdx, 2
+    x64.leaRegRegImm32 rsi, rsi, 5
+  __im_bounds#47:
+    x64.cmpRegReg rdx, rax
+    x64.jcc aboveEqual, __im_slow#43
+  __im_store#44:
+    x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], rsi
+  forstep#40:
+    x64.leaRegRegImm32 rdx, rdx, 1
+  forhdr#39:
+    x64.cmpRegImm32 rdx, 4
+    x64.jcc less, fill#48
+  forexit#4:
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
+    x64.jmp forhdr#7
+  rounds:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 rdx, 9
+    x64.jmp __il_body
+  ternaryfalse:
+    x64.movRegImm32 rdx, 100
+  __il_body:
+    x64.movRegImm32 rsi, 0
+  __us_test#38:
+    x64.loadRegBaseDisp.word64 rdi, [r12 + 8]
+    x64.loadRegBaseDisp.word64 r8, [r12 + 0]
+    x64.jmp forhdr#25
+  __rc_ok#33:
+    x64.cmpRegReg rsi, rdi
+    x64.jcc aboveEqual, __im_slow#36
+  __im_load:
+    x64.loadRegBaseIndexScale.word64 r9, [r8 + rsi*8 + 0]
+  tryok:
+    x64.cmpRegReg r9, rdx
+    x64.jcc equal, __il_cont
+  forstep#27:
+    x64.leaRegRegImm32 rsi, rsi, 1
+  forhdr#25:
+    x64.cmpRegImm32 rsi, 4
+    x64.jcc less, __rc_ok#33
+  forexit#28:
+    x64.movRegReg rsi, rbx
+  __il_cont:
+    x64.leaRegRegReg rax, rax, rsi
+  forstep#9:
+    x64.leaRegRegImm32 rcx, rcx, 1
+  forhdr#7:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc lessEqual, rounds
+  forexit#10:
+    x64.leaRegRegImm32 rbx, rax, 36
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok#14:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 80
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#18:
+    x64.storeSlotReg slot0, rdx
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_set
+    x64.loadRegSlot rdx, slot0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#6
+    x64.jmp forstep#3
+  __im_slow#43:
+    x64.storeSlotReg slot1, rax
+    x64.storeSlotReg slot2, rcx
+    x64.storeSlotReg slot0, rdx
+    x64.movRegReg rcx, r12
+    x64.movRegReg rax, rsi
+    x64.callDirect __managed_set
+    x64.loadRegSlot rax, slot1
+    x64.loadRegSlot rcx, slot2
+    x64.loadRegSlot rdx, slot0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, forstep#40
+  tryerr#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at two-returns-from-inside-a-loop-join-at-the-continuation.test:23: main: i < n = a.count()\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 80
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#36:
+    x64.storeSlotReg slot1, rax
+    x64.storeSlotReg slot2, rcx
+    x64.storeSlotReg slot0, rdx
+    x64.storeSlotReg slot3, rsi
+    x64.storeSlotReg slot4, rdi
+    x64.storeSlotReg slot5, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rsi
+    x64.callDirect __managed_get
+    x64.movRegReg r9, r8
+    x64.loadRegSlot rax, slot1
+    x64.loadRegSlot rcx, slot2
+    x64.loadRegSlot rdx, slot0
+    x64.loadRegSlot rsi, slot3
+    x64.loadRegSlot rdi, slot4
+    x64.loadRegSlot r8, slot5
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr#30:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at two-returns-from-inside-a-loop-join-at-the-continuation.test:7: firstIndexOf: i < n = a.count()\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 80
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at two-returns-from-inside-a-loop-join-at-the-continuation.test:33: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 80
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

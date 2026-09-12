@@ -317,6 +317,17 @@ export enum OsImportSlot
 	sigaction
 	sigaltstack
 
+	// ⭐⭐ **`pthread_self` AND `pthread_kill` — ASYNCHRONOUS PREEMPTION'S DELIVERY ON THIS LANE.** Darwin
+	// publishes no thread id a signal can be addressed by: `tgkill` does not exist and `gettid` answers a
+	// Mach thread port no signal call takes. The `pthread_t` a thread learns about ITSELF is the only handle
+	// `pthread_kill` accepts, which is why the machine records one at birth
+	// (`SchedRuntime.PreemptSelfRegisterName`) rather than the creator recording it.
+	//
+	// ⚠ **NEITHER HAS A LINUX TWIN THIS ENUM COULD SERVE**, for `sigaction`'s reason: a Linux lane sends
+	// `tgkill(getpid(), gettid(), SIGURG)` as three raw `svc`s and needs no slot at all.
+	pthreadSelf
+	pthreadKill
+
 	// ⭐ **THE SCHEDULER'S POLLER (`StdOp.osNetpoll`).** `kqueue` creates it, and `kevent` is every other verb:
 	// registering the `EVFILT_USER` break, triggering it, and the wait. Linux's twin is `epoll`, three raw
 	// system calls that need no slot.

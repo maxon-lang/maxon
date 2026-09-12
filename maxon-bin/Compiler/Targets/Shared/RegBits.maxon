@@ -235,6 +235,14 @@ export type RegisterFile
 	end 'create'
 end 'RegisterFile'
 
+// ⭐ **HOW MANY VECTOR REGISTERS A FILE HOLDS** — the run from the GPR/vector boundary to the end. Both
+// asynchronous-preemption trampolines size their register block from it, and neither writes the count down:
+// a file that grew a register would otherwise leave one of them spilling less than the interrupted function
+// can lose.
+export function vectorRegisterCount(file RegisterFile) returns RegCount
+	return (file.size - (file.firstVector as RegCount)) as RegCount
+end 'vectorRegisterCount'
+
 // The x64 register file: 32 registers, XMMs from 16. Its `size` (32) is the X64Register enum's
 // case count, held to it by `assertRegisterFileMatchesEnum`; its boundary is `FirstXmmRegisterNumber`.
 export function x64RegisterFile() returns RegisterFile

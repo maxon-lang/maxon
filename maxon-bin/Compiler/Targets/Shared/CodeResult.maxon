@@ -41,12 +41,18 @@ export typealias CallFixupArray = Array with CallFixup
 
 // A DebugSymbol pairs a function name with its byte offset in `.text`.
 // Format-neutral: PE writes COFF symbols, ELF Elf64_Sym, Mach-O nlist_64.
+//
+// `asyncPreemptible` and the unsafe prefix ride along because `__symtable` carries them
+// (`BacktraceFormat.SymtabSafeFromBias`): they are the only per-function facts the backtrace table holds
+// beyond a name, and the object writers ignore both.
 export type DebugSymbol
 	export var name as ByteArray
 	export var codeOffset as CodeOffset
+	export var asyncPreemptible as bool
+	export var asyncUnsafePrefixBytes as CodeOffset
 
-	export static function create(name ByteArray, codeOffset CodeOffset) returns DebugSymbol
-		return Self{name: name, codeOffset: codeOffset}
+	export static function create(name ByteArray, codeOffset CodeOffset, asyncPreemptible bool = false, asyncUnsafePrefixBytes CodeOffset = 0) returns DebugSymbol
+		return Self{name: name, codeOffset: codeOffset, asyncPreemptible: asyncPreemptible, asyncUnsafePrefixBytes: asyncUnsafePrefixBytes}
 	end 'create'
 end 'DebugSymbol'
 
@@ -468,6 +474,22 @@ export type FunctionCodeChunk
 	export var inlineSites as InlineSiteArray
 	export var inlineRanges as InlineRangeArray
 
+	// ⭐ **MAY A THREAD BE STOPPED WHERE IT STANDS INSIDE THIS CHUNK?** True for every function a green thread
+	// runs that is not the compiler's own scaffolding, which is what `BacktraceFormat.SymtabSafeFromBias`
+	// records for the safe-point predicate. FALSE for every hand-assembled chunk, which is the arena's answer
+	// here: those are the context switch, the stack mover, the shims and the trampolines, and a thread
+	// stopped inside one of them has no coherent state to park.
+	export var asyncPreemptible as bool
+
+	// ⭐ **THE BYTES AT THIS CHUNK'S START A STOP MAY NOT LAND IN** — the prologue stack guard, which holds a
+	// MACHINE-bound value in a register while it walks TLS (`BacktraceFormat.SymtabSafeFromBias`). 0 for a
+	// chunk with no guard, which is every hand-assembled one and every frameless function.
+	//
+	// ⚠ **AN INLINED BODY CANNOT MOVE IT.** The guard is not IR: the encoder emits it at the first block of
+	// the FINAL function and reads this count off the buffer, so it is derived from the function as the
+	// inliner left it and there is no prefix for a splice to copy into a caller's interior.
+	export var asyncUnsafePrefixBytes as CodeOffset
+
 	export static function create(funcName ByteArray) returns FunctionCodeChunk
 		return Self{
 			funcName: funcName,
@@ -484,7 +506,9 @@ export type FunctionCodeChunk
 			frameSize: 0,
 			paramCount: 0,
 			inlineSites: InlineSiteArray.create(),
-			inlineRanges: InlineRangeArray.create()
+			inlineRanges: InlineRangeArray.create(),
+			asyncPreemptible: false,
+			asyncUnsafePrefixBytes: 0
 		}
 	end 'create'
 
@@ -510,7 +534,9 @@ export type FunctionCodeChunk
 			frameSize: 0,
 			paramCount: 0,
 			inlineSites: InlineSiteArray.create(),
-			inlineRanges: InlineRangeArray.create()
+			inlineRanges: InlineRangeArray.create(),
+			asyncPreemptible: false,
+			asyncUnsafePrefixBytes: 0
 		}
 	end 'createWith'
 end 'FunctionCodeChunk'

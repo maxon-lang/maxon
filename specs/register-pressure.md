@@ -169,7 +169,7 @@ error E5001: the loop at <fragment>:21 needs 3 more register(s) than are availab
 
 <!-- test: hot-loop-overflow-arm64 -->
 <!-- unsupported-targets: x64-windows, x64-linux, wasm32-wasi -->
-arm64 allocates from 26 GPRs (x0-x15 ∪ x19-x28), not x64's 14, so an overflow needs more live values than `hot-loop-overflow`. Twenty-eight accumulators `s1`..`s28` are all updated every iteration, plus the counter `i` — twenty-nine values live at the loop header against a pool of twenty-six. The condition adds nothing: `i < N` lowers to a fused `cmp`+`b.cond`, materializing no boolean into a GPR. The deficit is exactly 3 (29 − 26), reported against the FULL arm64 pool, and each accumulator points at its declaration span.
+arm64 allocates from 25 GPRs (x0-x14 ∪ x19-x28), not x64's 14 — x15 is the register the asynchronous-preemption trampoline returns through, since this ISA has no stack-popping return and every other scratch is spoken for, so an overflow needs more live values than `hot-loop-overflow`. Twenty-eight accumulators `s1`..`s28` are all updated every iteration, plus the counter `i` — twenty-nine values live at the loop header against a pool of twenty-five. The condition adds nothing: `i < N` lowers to a fused `cmp`+`b.cond`, materializing no boolean into a GPR. The deficit is exactly 4 (29 − 25), reported against the FULL arm64 pool, and each accumulator points at its declaration span.
 ```maxon
 function hot(_ Integer) returns Integer
 	var s1 = 1
@@ -241,13 +241,13 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E5001: the loop at <fragment>:33 needs 3 more register(s) than are available
+error E5001: the loop at <fragment>:33 needs 4 more register(s) than are available
   29 values must be held in registers at once inside this loop, but
-  only 26 registers are available. The values idle across the loop were already
+  only 25 registers are available. The values idle across the loop were already
   spilled around it at no cost; spilling any of these would put a load or store inside
   the loop body, which is exactly what this error exists to prevent.
 
-  remove 3 of these 29 value(s) from the loop, cheapest first (ranked by reads inside the loop):
+  remove 4 of these 29 value(s) from the loop, cheapest first (ranked by reads inside the loop):
     <fragment>:3:11   read 1 time in the loop
     <fragment>:4:11   read 1 time in the loop
     <fragment>:5:11   read 1 time in the loop
@@ -303,7 +303,7 @@ does not touch a value they can see it assigning. ⚠ It also means a 0 here is 
 sufficient** as the tell of a surplus value ARCHITECTURE's "Known limits" #1 describes: nothing
 upstream over-produced anything in this program.
 
-No arm64 twin, and that is MEASURED rather than a missing golden: arm64 allocates from 26 GPRs, so
+No arm64 twin, and that is MEASURED rather than a missing golden: arm64 allocates from 25 GPRs, so
 seventeen live values fit and the same source compiles there (`--target=arm64-macos`, verified). The
 pool is the subject, exactly as this file's header says. `main` reaches `parseFlags` from two sites so the
 called-once inliner leaves it a function; spliced into `main`, `i < 0` folds and the loop vanishes.
@@ -617,7 +617,7 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: hot-loop-param-used-arm64 -->
 <!-- unsupported-targets: x64-windows, x64-linux, wasm32-wasi -->
-The arm64 twin of `hot-loop-param-used`: a PARAMETER read every iteration is part of the hot working set and must resolve to its declaration span through `ParamOriginTable` (it is minted by no op) rather than trip the Rule-3 panic. `p` is read in `s1 = s1 + i + p`, so with twenty-six accumulators and the counter it is one of twenty-eight values live against arm64's 26-GPR pool. It ranks first (`<fragment>:2:14` — the `p` token); the counter `i` ranks last. Deficit 2. `main` reaches `hot` from two sites so the called-once inliner leaves it a function; spliced into `main`, `p` is a constant and the twenty-eight values fit the pool.
+The arm64 twin of `hot-loop-param-used`: a PARAMETER read every iteration is part of the hot working set and must resolve to its declaration span through `ParamOriginTable` (it is minted by no op) rather than trip the Rule-3 panic. `p` is read in `s1 = s1 + i + p`, so with twenty-six accumulators and the counter it is one of twenty-eight values live against arm64's 25-GPR pool. It ranks first (`<fragment>:2:14` — the `p` token); the counter `i` ranks last. Deficit 3. `main` reaches `hot` from two sites so the called-once inliner leaves it a function; spliced into `main`, `p` would fold to a constant and the diagnostic would be a DIFFERENT one — MEASURED on `--target=arm64-macos`, twenty-seven values and deficit 2, with every span pointing into `main`. The x64 twin fits its pool outright when spliced; this one does not, so the second site is what keeps the case pinning `hot`'s own shape rather than what makes it compile.
 ```maxon
 function hot(p Integer) returns Integer
 	var s1 = 1
@@ -685,13 +685,13 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E5001: the loop at <fragment>:31 needs 2 more register(s) than are available
+error E5001: the loop at <fragment>:31 needs 3 more register(s) than are available
   28 values must be held in registers at once inside this loop, but
-  only 26 registers are available. The values idle across the loop were already
+  only 25 registers are available. The values idle across the loop were already
   spilled around it at no cost; spilling any of these would put a load or store inside
   the loop body, which is exactly what this error exists to prevent.
 
-  remove 2 of these 28 value(s) from the loop, cheapest first (ranked by reads inside the loop):
+  remove 3 of these 28 value(s) from the loop, cheapest first (ranked by reads inside the loop):
     <fragment>:2:14   read 1 time in the loop
     <fragment>:3:11   read 1 time in the loop
     <fragment>:4:11   read 1 time in the loop
@@ -810,7 +810,7 @@ error E5001: the loop at <fragment>:19 needs 2 more register(s) than are availab
 
 <!-- test: hot-loop-rematerialized-constant-arm64 -->
 <!-- unsupported-targets: x64-windows, x64-linux, wasm32-wasi -->
-The arm64 twin of `hot-loop-rematerialized-constant`: a constant the loop uses (`let d`, read by `s26 = d - s26`) is REMATERIALIZED by the splitter with a fresh ValueId that has no origin of its own, and must be chased through `SplitLineage` back to the `let d` literal (`<fragment>:56:11`) rather than trip the Rule-3 panic. Twenty-six accumulators plus the counter plus the rematerialized constant overflow arm64's 26-GPR pool by two.
+The arm64 twin of `hot-loop-rematerialized-constant`: a constant the loop uses (`let d`, read by `s26 = d - s26`) is REMATERIALIZED by the splitter with a fresh ValueId that has no origin of its own, and must be chased through `SplitLineage` back to the `let d` literal (`<fragment>:56:11`) rather than trip the Rule-3 panic. Twenty-six accumulators plus the counter plus the rematerialized constant overflow arm64's 25-GPR pool by three.
 ```maxon
 function hot() returns Integer
 	var s1 = 1
@@ -879,13 +879,13 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E5001: the loop at <fragment>:31 needs 2 more register(s) than are available
+error E5001: the loop at <fragment>:31 needs 3 more register(s) than are available
   28 values must be held in registers at once inside this loop, but
-  only 26 registers are available. The values idle across the loop were already
+  only 25 registers are available. The values idle across the loop were already
   spilled around it at no cost; spilling any of these would put a load or store inside
   the loop body, which is exactly what this error exists to prevent.
 
-  remove 2 of these 28 value(s) from the loop, cheapest first (ranked by reads inside the loop):
+  remove 3 of these 28 value(s) from the loop, cheapest first (ranked by reads inside the loop):
     <fragment>:31:11   read 0 times in the loop
     <fragment>:32:11   read 0 times in the loop
     <fragment>:33:11   read 0 times in the loop
@@ -1340,9 +1340,9 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: dead-def-parameter-past-the-arm64-pool -->
-The arm64 twin of the boundary. arm64 allocates from 26 GPRs (x0-x15 ∪ x19-x28), so the dead-def
-cliff sits at 27 where x64's sits at 15 — twenty-six live parameters plus one dead materialization
-is one past the arm64 pool, and it panicked `chooseRegister` there for exactly the reason it did on
+The arm64 twin of the boundary. arm64 allocates from 25 GPRs (x0-x14 ∪ x19-x28 — x15 is the
+asynchronous-preemption trampoline's return register), so the dead-def cliff sits at 26 where x64's
+sits at 15 — twenty-six live parameters plus one dead materialization is two past the arm64 pool, and it panicked `chooseRegister` there for exactly the reason it did on
 x64. It is not gated to arm64: on x64 the same program is simply well past the pool and the
 splitter relieves it cold, which is worth pinning too. The trailing arguments are zero so the sum
 fits an exit code while the first twenty stay distinct — a swapped register still changes the

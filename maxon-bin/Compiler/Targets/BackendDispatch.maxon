@@ -173,6 +173,10 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	// the runtime augmentation adds functions the name index does not cover.
 	if usage.usesGt 'preemptionDepth'
 		requirePreemptionFitsTheGuardMargin(targetModule, funcNames: funcNames, target: target)
+
+		if targetStopsThreadsForPreemption(target) 'asyncPreemptionDepth'
+			requireAsyncPreemptionFitsItsMargin(targetModule, funcNames: funcNames, target: target)
+		end 'asyncPreemptionDepth'
 	end 'preemptionDepth'
 
 	let runtimeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.runtimeAugment)
@@ -330,7 +334,7 @@ function augmentWithRuntime(module TargetModule, target Target, checkLeaks bool,
 	end 'mainIsAGreenThread'
 
 	match target.os 'os'
-		windows then prependEntryStub(module, checkLeaks: checkLeaks, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, debugStream: debugStream, dumpCoverage: dumpCoverage, entryFunction: entryFunction)
+		windows then prependEntryStub(module, target: target, checkLeaks: checkLeaks, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, debugStream: debugStream, dumpCoverage: dumpCoverage, entryFunction: entryFunction)
 
 		// The Linux stub brackets the producer exactly as the Windows one does: x64-linux provides both the
 		// named section and the millisecond stopwatch, so `--debugstream` reaches this arm.
@@ -369,7 +373,7 @@ end 'augmentWithRuntime'
 // backtrace in the corpus expects. Its own saved rbp is whatever the loader left, and the
 // walk's `.text` bound is what discards it. When `main` is a green thread the same line
 // comes from `mrt_main_entry` instead — see `prependMainThreadEntry`.
-function prependEntryStub(module TargetModule, checkLeaks bool, initGlobals bool, drainGreenThreads bool, debugStream bool, dumpCoverage bool, entryFunction ByteArray)
+function prependEntryStub(module TargetModule, target Target, checkLeaks bool, initGlobals bool, drainGreenThreads bool, debugStream bool, dumpCoverage bool, entryFunction ByteArray)
 	var func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var block = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
@@ -407,7 +411,7 @@ function prependEntryStub(module TargetModule, checkLeaks bool, initGlobals bool
 	appendCoverageDump(module, block: block, dumpCoverage: dumpCoverage)
 
 	module.appendOp(block, op: TargetOp.movReg32Reg32(x64PhysReg(X64Register.rcx), srcReg: x64PhysReg(X64Register.r8)))
-	module.appendOp(block, op: TargetOp.iatCall(iatSlotIndex(IatSlot.ExitProcess)))
+	module.appendOp(block, op: win64ProcessExitOp(drainGreenThreads, target: target))
 	module.appendOp(block, op: TargetOp.epilogue(EntryStubFrameBytes))
 	module.appendOp(block, op: TargetOp.popReg(X64Register.rbp))
 	module.setTerminator(block, op: TargetOp.ret)

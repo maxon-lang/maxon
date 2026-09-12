@@ -103,16 +103,10 @@ let ModuleSnapshotFlags = SnapModule or SnapModule32
 // `sizeof(MEMORY_BASIC_INFORMATION)` on x64: BaseAddress, AllocationBase, AllocationProtect + PartitionId,
 // RegionSize, and the State/Protect/Type triple with its tail padding.
 
-// `CONTEXT.ContextFlags`, and the two families `GetThreadContext` is asked to fill: CONTEXT_CONTROL supplies
-// RIP and RSP, CONTEXT_INTEGER supplies RBP.
-//
-// ⚠ **WRITTEN AS A WHOLE WORD, WHICH ALSO ZEROES `MxCsr` AT 0x34 — and that is correct rather than
-// tolerated:** every field of a `CONTEXT` but this one is an OUTPUT, so the only input the API reads is the
-// flags word itself.
-let ContextFlagsOffset = 0x30
-let ContextControl = 0x00100001
-let ContextInteger = 0x00100002
-let ContextSampleFlags = ContextControl or ContextInteger
+// The two `CONTEXT` families `GetThreadContext` is asked to fill here: CONTEXT_CONTROL supplies RIP and RSP,
+// CONTEXT_INTEGER supplies RBP. The record's own displacements are `ProfileSampleContract`'s, which is where
+// the scheduler's monitor reads them from too.
+let ContextSampleFlags = Win64ContextControl or Win64ContextInteger
 
 // Win32's FALSE, which `GetThreadContext`, `ReadProcessMemory` and the two module walks all answer with.
 let Win32False = 0
@@ -335,7 +329,7 @@ function buildProfileSample(module StdModule)
 	let unreadable = emitConst(module, block: readContext, value: ProfileSampleNoRegisters, ids: ids)
 	emitStoreField(module, block: readContext, record: resultPtr, offset: 0, value: unreadable)
 	let sampleFlags = emitConst(module, block: readContext, value: ContextSampleFlags, ids: ids)
-	emitStoreField(module, block: readContext, record: ctxPtr, offset: ContextFlagsOffset, value: sampleFlags)
+	emitStoreField(module, block: readContext, record: ctxPtr, offset: Win64ContextFlagsOffset, value: sampleFlags)
 	let gotContext = emitHostSample(module, block: readContext, service: ProfileHostCall.threadContext, a0: thread, a1: ctxPtr, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
 	let noContext = emitConst(module, block: readContext, value: Win32False, ids: ids)
 	let contextFailed = emitCmp(module, block: readContext, a: gotContext, b: noContext, pred: StdCmpPred.eq, ids: ids)
@@ -343,7 +337,7 @@ function buildProfileSample(module StdModule)
 
 	// The registers ARE read from here on, so the answer becomes a byte count — zero until a copy succeeds.
 	emitStoreField(module, block: queryRegion, record: resultPtr, offset: 0, value: zero)
-	let stackPointer = emitLoadField(module, block: queryRegion, record: ctxPtr, offset: ProfileContextRspOffset, ids: ids)
+	let stackPointer = emitLoadField(module, block: queryRegion, record: ctxPtr, offset: Win64ContextRspOffset, ids: ids)
 	let mbiBytes = emitConst(module, block: queryRegion, value: ProfileRegionRecordBytes, ids: ids)
 	let queried = emitHostSample(module, block: queryRegion, service: ProfileHostCall.queryRegion, a0: proc, a1: stackPointer, a2: mbiPtr, a3: mbiBytes, a4: zero, a5: zero, ids: ids)
 	let queryMiss = emitConst(module, block: queryRegion, value: RegionQueryFailed, ids: ids)

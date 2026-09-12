@@ -395,3 +395,267 @@ wrong=0 preempted=true
 ```exitcode
 0
 ```
+
+<!-- test: sched-preempt.a-call-free-loop-is-preempted-anyway -->
+<!-- procs: 1 -->
+**A LOOP THAT CALLS NOTHING STILL GIVES UP ITS PROCESSOR.** A request written into the stack guard is read
+only by a function that reserves a frame, so this spinner never reads one; the thread has to be stopped where
+it is instead. `main` sleeps before sending the bystander its request, so the bystander cannot answer early by
+some queue order.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+// Far below the spinner's run and far above a preemption request's 10 ms.
+let promptMs = 150
+// Calibrated to about 300 ms: a loop this long cannot be mistaken for a thread that simply finished.
+let spinSteps = 90000000
+
+type Spinner
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	// ⛔ NOT ONE CALL IN THE LOOP, which is the whole point: a poisoned stack guard is read by a function
+	// that reserves a frame, and this body never enters one.
+	export function spin(steps Integer) returns Integer
+		var acc = 0
+		var i = 0
+		while i < steps 'spin'
+			acc = (acc * 31 + i) mod 1000003
+			i = i + 1
+		end 'spin'
+		return acc mod 2 + 1
+	end 'spin'
+end 'Spinner'
+
+type Bystander
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function ping() returns Integer
+		return 1
+	end 'ping'
+end 'Bystander'
+
+function main() returns ExitCode
+	let s = spawn Spinner.create()
+	let b = spawn Bystander.create()
+	let start = Clock.nowMs()
+	let spun = s.spin(spinSteps)
+	sleep(20)
+	let p = try await b.ping() otherwise 0
+	let tookMs = Clock.elapsedMs(start) as Integer
+	let q = try await spun otherwise 0
+	print("prompt={tookMs < promptMs} ping={p} spun={q > 0} preempted={__Builtins.schedPreemptCount() > 0}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+prompt=true ping=1 spun=true preempted=true
+```
+```exitcode
+0
+```
+
+<!-- test: sched-preempt.every-processor-in-a-call-free-loop-still-yields -->
+<!-- procs: 4 -->
+**ONE CALL-FREE SPINNER PER PROCESSOR, AND A FIFTH SERVICE STILL GETS A TURN.** No processor is ever idle and
+no spinner ever reaches a prologue, so only stopping a thread where it runs hands one over.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias SpinnerHandleArray = Array with Spinner.handle
+typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromiseArray = Array with ReplyPromise
+
+let promptMs = 150
+let spinSteps = 90000000
+
+type Spinner
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	// ⛔ NOT ONE CALL IN THE LOOP, which is the whole point: a poisoned stack guard is read by a function
+	// that reserves a frame, and this body never enters one.
+	export function spin(steps Integer) returns Integer
+		var acc = 0
+		var i = 0
+		while i < steps 'spin'
+			acc = (acc * 31 + i) mod 1000003
+			i = i + 1
+		end 'spin'
+		return acc mod 2 + 1
+	end 'spin'
+end 'Spinner'
+
+type Bystander
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function ping() returns Integer
+		return 1
+	end 'ping'
+end 'Bystander'
+
+function main() returns ExitCode
+	var spinners = SpinnerHandleArray.create()
+	var i = 0
+	while i < __Builtins.schedProcessorCount() 'spawnEach'
+		spinners.push(spawn Spinner.create())
+		i = i + 1
+	end 'spawnEach'
+	let b = spawn Bystander.create()
+	let start = Clock.nowMs()
+	var spun = ReplyPromiseArray.create()
+	var k = 0
+	while k < spinners.count() 'sendEach'
+		let s = try spinners.get(k) otherwise panic("spinners.get out of range at {k}: bounded by the pushes above")
+		spun.push(s.spin(spinSteps))
+		k = k + 1
+	end 'sendEach'
+	sleep(20)
+	let p = try await b.ping() otherwise 0
+	let tookMs = Clock.elapsedMs(start) as Integer
+	var ran = 0
+	while spun.count() > 0 'collect'
+		let r = try spun.pop() otherwise panic("spun.pop on a non-empty array")
+		let q = try await r otherwise 0
+		if q > 0 'spun'
+			ran = ran + 1
+		end 'spun'
+	end 'collect'
+	print("prompt={tookMs < promptMs} spinners={ran == spinners.count()} ping={p}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+prompt=true spinners=true ping=1
+```
+```exitcode
+0
+```
+
+<!-- test: sched-preempt.every-register-survives-a-stop-anywhere -->
+<!-- procs: 1 -->
+**A THREAD STOPPED MID-LOOP RESUMES WITH EVERY REGISTER IT HAD.** Eight integers and eight floats are live
+across a loop with no call in it, so a stop lands among them rather than at a boundary where fewer are live.
+Every round recomputes the same checksum and is compared with the first.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+let rounds = 40
+let stepsPerRound = 2000000
+
+type Churner
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	// Sixteen values live across a loop with no call in it: a preemption that restores one of them wrongly
+	// changes the round's checksum, and every round after the first is compared with the first.
+	export function churn() returns Integer
+		var wrong = 0
+		var expected = 0
+		var r = 0
+		while r < rounds 'rounds'
+			var a = 1
+			var b = 2
+			var c = 3
+			var d = 4
+			var e = 5
+			var f = 6
+			var g = 7
+			var h = 8
+			var p = 1.5
+			var q = 2.25
+			var u = 3.125
+			var v = 4.0625
+			var w = 5.5
+			var x = 6.75
+			var y = 7.875
+			var z = 8.5
+			var i = 0
+			while i < stepsPerRound 'spin'
+				a = (a * 31 + i) mod 1000003
+				b = (b * 17 + a) mod 1000003
+				c = (c * 13 + b) mod 1000003
+				d = (d * 11 + c) mod 1000003
+				e = (e * 7 + d) mod 1000003
+				f = (f * 5 + e) mod 1000003
+				g = (g * 3 + f) mod 1000003
+				h = (h * 2 + g) mod 1000003
+				p = p * 0.5 + q
+				q = q * 0.5 + u
+				u = u * 0.5 + v
+				v = v * 0.5 + w
+				w = w * 0.5 + x
+				x = x * 0.5 + y
+				y = y * 0.5 + z
+				z = z * 0.5 + p
+				i = i + 1
+			end 'spin'
+			var mix = a + b * 3 + c * 5 + d * 7 + e * 11 + f * 13 + g * 17 + h * 19
+			if p > q 'pq'
+				mix = mix + 1
+			end 'pq'
+			if q > u 'qu'
+				mix = mix + 2
+			end 'qu'
+			if u > v 'uv'
+				mix = mix + 4
+			end 'uv'
+			if v > w 'vw'
+				mix = mix + 8
+			end 'vw'
+			if w > x 'wx'
+				mix = mix + 16
+			end 'wx'
+			if x > y 'xy'
+				mix = mix + 32
+			end 'xy'
+			if y > z 'yz'
+				mix = mix + 64
+			end 'yz'
+			if z > p 'zp'
+				mix = mix + 128
+			end 'zp'
+			if r == 0 'reference'
+				expected = mix
+			end 'reference' else 'compare'
+				if mix != expected 'differs'
+					wrong = wrong + 1
+				end 'differs'
+			end 'compare'
+			r = r + 1
+		end 'rounds'
+		return wrong
+	end 'churn'
+end 'Churner'
+
+function main() returns ExitCode
+	let c = spawn Churner.create()
+	let churned = c.churn()
+	sleep(20)
+	let wrong = try await churned otherwise 0 - 1
+	print("wrong={wrong} preempted={__Builtins.schedPreemptCount() > 0}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+wrong=0 preempted=true
+```
+```exitcode
+0
+```

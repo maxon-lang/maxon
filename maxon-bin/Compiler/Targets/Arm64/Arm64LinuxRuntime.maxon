@@ -99,6 +99,31 @@ export let Arm64LinuxSyscallMadvise = 233
 // (`X64LinuxRuntime`'s twin), which is exactly why these numbers wear the arch prefix.
 export let Arm64LinuxSyscallGettid = 178
 
+// ⭐⭐ **ASYNCHRONOUS PREEMPTION'S THREE, AND THE `ucontext` THE KERNEL SAVES A STOPPED THREAD'S FILE INTO.**
+// `rt_sigaction` publishes the SIGURG handler, `sigaltstack` gives each thread the stack that handler runs
+// on, and `tgkill` addresses the signal to ONE thread where `kill` would let the kernel pick any machine.
+//
+// ⚠ **AArch64 NEEDS NO `SA_RESTORER`**, where x86-64 makes one mandatory: the kernel points the signal
+// frame's return at its own vDSO trampoline, so `Arm64LinuxSigactionFlags` carries only the three that say
+// something.
+export let Arm64LinuxSyscallRtSigaction = 134
+export let Arm64LinuxSyscallSigaltstack = 132
+export let Arm64LinuxSyscallTgkill = 131
+
+// sa_flags = SA_SIGINFO (0x4 — the handler receives (sig, siginfo*, ucontext*), which is the only way it
+// reaches the saved register file) | SA_ONSTACK (0x8000000) | SA_RESTART (0x10000000 — a machine that
+// entered a kernel call between the monitor's decision and the delivery resumes its call rather than
+// failing it). MEASURED by a C probe over this lane's headers, together with the offsets below.
+export let Arm64LinuxSigactionFlags = 0x18000004
+
+// ⭐⭐ **WHERE A SIGNAL HANDLER FINDS THE INTERRUPTED REGISTERS.** `ucontext_t.uc_mcontext` is an INLINE
+// `struct sigcontext` here rather than a pointer (which is what Darwin has), so these are offsets into the
+// ucontext the handler is handed. MEASURED by a C probe on this lane: `uc_mcontext` 176, `regs[0]` 184,
+// `regs[30]` 424, `sp` 432, `pc` 440, `pstate` 448, `sizeof(ucontext_t)` 4560.
+export let Arm64LinuxUcontextOffLr = 424 as MachineWord
+export let Arm64LinuxUcontextOffSp = 432 as MachineWord
+export let Arm64LinuxUcontextOffPc = 440 as MachineWord
+
 // --- The rest of the table: the FILESYSTEM syscalls (MAC4/5/6's Linux twins) ---
 //
 // ⭐ **THE `*at` FAMILY IS THE ONLY SPELLING AArch64 HAS.** There is no plain `open`, `stat`, `unlink`,
@@ -737,25 +762,46 @@ end 'buildArm64LinuxFileOpenChunk'
 // `buildArm64DarwinTransferChunk` is the same argument on the other lane.)
 function buildArm64LinuxTransferChunk(name ByteArray, syscallNumber MachineWord) returns FunctionCodeChunk
 	let SlotOutPtr = 0 as StackSize
-	var asm = Arm64RuntimeAsm.beginFunction(1)
+	let SlotFd = 1 as StackSize
+	let SlotBuf = 2 as StackSize
+	let SlotLen = 3 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(4)
 
+	let issue = asm.newLabel()
 	let transferred = asm.newLabel()
 	let answered = asm.newLabel()
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x3, slot: SlotOutPtr)
+
+	// ⛔ **THE THREE ARGUMENTS OUTLIVE THE CALL BECAUSE AN `EINTR` RE-ISSUES IT** — the Darwin twin's reason
+	// (`Arm64DarwinRuntime.buildArm64DarwinTransferChunk`), and a `svc` clobbers x0 just as a `bl` does.
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotFd)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotBuf)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotLen)
+
+	asm.placeLabel(issue)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotFd)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotBuf)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotLen)
 	arm64EmitSyscall(asm.code, number: syscallNumber)
 
-	arm64LinuxEmitStashIfFailed(asm)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotOutPtr)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: transferred)
 
+	// ⛔ **THE EINTR TEST COMES BEFORE THE STASH, BECAUSE NOTHING CLEARS THE STASH ON SUCCESS.** An
+	// interrupted attempt that then succeeds would otherwise leave `EINTR` in the last-error word behind a
+	// TRUE answer, and `subprocessLastErrorMessage()` would name it.
+	arm64PosixEmitSyscallBranchIfEintr(asm, whenInterrupted: issue)
+	arm64LinuxEmitStashIfFailed(asm)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotOutPtr)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x2, base: Arm64Register.x1, byteOffset: 0)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32False as MachineWord)
 	arm64EmitBranchTo(asm, label: answered)
 
 	asm.placeLabel(transferred)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotOutPtr)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x1, byteOffset: 0)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32True as MachineWord)
 
@@ -2835,13 +2881,10 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		chunks.push(buildArm64PosixProcTerminateChunk(PosixHostCall.syscall(Arm64LinuxSyscallKill)))
 	end 'childPipes'
 
-	if posixReadsUptimeClock(usage) 'uptimeClock'
+	if posixReadsMonotonicClock(usage) 'clocks'
 		chunks.push(buildArm64PosixTickMsChunk())
-	end 'uptimeClock'
-
-	if posixReadsMonotonicClock(usage) 'monotonicClock'
 		chunks.push(buildArm64LinuxMonotonicClockChunk())
-	end 'monotonicClock'
+	end 'clocks'
 
 	// ⚠ **SIX CHUNKS WHERE THE DARWIN LANE HAS FOUR**: with no `shm_open` to name a segment, this lane builds
 	// the `/dev/shm` path itself and unpublishes through a body of its own.

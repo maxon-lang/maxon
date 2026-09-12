@@ -231,9 +231,18 @@ end 'arm64DarwinThreadCpuStackBytes'
 // minutes would silently wrap into a short one. The `timespec` is two adjacent frame slots — see
 // `DarwinTimespecSecSlot` — so the request is `&slot0` with no packing step.
 //
-// ⚠ **A SIGNAL CAN CUT A `nanosleep` SHORT (EINTR) AND THIS DOES NOT RESTART IT.** Both callers re-test their
-// own condition after every step, so a short sleep costs one extra lap; a restart loop here would be a
-// second, weaker copy of that test.
+// ⚠ **A SIGNAL CAN CUT A `nanosleep` SHORT (EINTR) AND THIS DOES NOT RESTART IT** — `nanosleep` is one of
+// the three calls POSIX never restarts, whatever `SA_RESTART` says, and on a lane that installs the
+// preemption signal a monitor lap really does cut one short. Both callers survive it because BOTH of their
+// conditions are re-tested from a source a short sleep cannot move: the child is re-reaped, and the
+// deadline is re-read from `mrt_host_tick_ms`.
+//
+// ⛔⛔ **THAT ARGUMENT IS ONLY SOUND BECAUSE THE WAITS HOLD AN ABSOLUTE DEADLINE.** While they counted
+// LAPS — crediting `PosixChildPollMs` per step whatever the step cost — a cut-short sleep credited a full
+// millisecond for almost no time at all, `elapsed` ran ahead of the clock, and
+// `Subprocess.waitWithTimeout` took its timed-out arm against a healthy child and TERMINATED it. A restart
+// loop here would be a second place that fact could be got wrong; the deadline is the one place it is
+// right.
 function buildArm64DarwinSleepChunk(name ByteArray, unit PosixTimeUnit) returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(2)
 
@@ -1114,8 +1123,12 @@ end 'buildArm64DarwinLastErrorChunk'
 // loop with two chances to disagree about which register holds the length.
 function buildArm64DarwinTransferChunk(name ByteArray, importSlot OsImportSlot) returns FunctionCodeChunk
 	let SlotOutPtr = 0 as StackSize
-	var asm = Arm64RuntimeAsm.beginFunction(1)
+	let SlotFd = 1 as StackSize
+	let SlotBuf = 2 as StackSize
+	let SlotLen = 3 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(4)
 
+	let issue = asm.newLabel()
 	let transferred = asm.newLabel()
 	let answered = asm.newLabel()
 
@@ -1125,20 +1138,46 @@ function buildArm64DarwinTransferChunk(name ByteArray, importSlot OsImportSlot) 
 	// stdin, `StdOp.osReadOverlapped` on either output pipe). Masking the kind bits off is a no-op for the
 	// untagged descriptors `osFileOpenRead`/`osStdHandle` answer, so one mask serves every producer.
 	arm64PosixUntagHandle(asm, reg: Arm64Register.x0)
+
+	// ⛔ **THE THREE ARGUMENTS OUTLIVE THE CALL BECAUSE AN `EINTR` RE-ISSUES IT**, and a libSystem call is
+	// free to clobber every one of their registers.
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotFd)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotBuf)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotLen)
+
+	asm.placeLabel(issue)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotFd)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotBuf)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotLen)
 	arm64DarwinCallImport(asm, slot: importSlot)
 
 	// `ssize_t` is already 64 bits wide, so the answer needs no narrowing — unlike every `int`-returning
 	// call in this file. A negative one is the failure.
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotOutPtr)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: transferred)
 
+	// ⛔⛔ **AN INTERRUPTED TRANSFER MOVED NOTHING, SO IT IS RE-ISSUED RATHER THAN REPORTED.** POSIX gives a
+	// PARTIAL transfer its own answer — the count, which is non-negative — so a -1 here is a call that did
+	// nothing and re-issuing it cannot double-write or lose a byte. Reported instead, it reaches
+	// `GtRuntime.buildSubpYieldRead` as `SubpReadFailedCount` through `ErrorGenericFailure`, and a collect
+	// ends the stream with what it had.
+	//
+	// ⭐⭐ **WHY THE LOOP TERMINATES.** `MOffSignalPending` is CAS'd free→held by the sender
+	// (`Arm64GtRuntime.buildArm64PreemptMachineChunk`) and cleared only by a handler that has RUN, so at most
+	// one stop is in flight per machine and the re-issue always has an interval to make progress in. ⛔ The
+	// weaker argument — *"the monitor takes the syscall arm because this machine is bracketed"* — is NOT
+	// available: the diagnostic chain reaches these chunks by direct branch from hand-assembled code, never
+	// through the lowering that brackets them.
+	arm64PosixEmitDarwinBranchIfEintr(asm, whenInterrupted: issue)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotOutPtr)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x2, base: Arm64Register.x1, byteOffset: 0)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32False as MachineWord)
 	arm64EmitBranchTo(asm, label: answered)
 
 	asm.placeLabel(transferred)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotOutPtr)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x1, byteOffset: 0)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32True as MachineWord)
 
@@ -2154,13 +2193,10 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 		chunks.push(buildArm64PosixProcTerminateChunk(PosixHostCall.importCall(OsImportSlot.kill)))
 	end 'childPipes'
 
-	if posixReadsUptimeClock(usage) 'uptimeClock'
+	if posixReadsMonotonicClock(usage) 'clocks'
 		chunks.push(buildArm64PosixTickMsChunk())
-	end 'uptimeClock'
-
-	if posixReadsMonotonicClock(usage) 'monotonicClock'
 		chunks.push(buildArm64DarwinMonotonicClockChunk())
-	end 'monotonicClock'
+	end 'clocks'
 
 	// ⚠ **FOUR CHUNKS WHERE A LINUX LANE HAS SIX**: `shm_open` NAMES a segment here, so the band needs
 	// neither a `/dev/shm` path builder nor an unlink body — the unpublish is one bare import call.

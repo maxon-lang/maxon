@@ -1,0 +1,726 @@
+// Test: a-called-once-function-with-a-loop-stores-and-panics-is-spliced
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function flipOnce(current IntArray, temp IntArray, n Integer) returns Integer
+	for i in 0 upto n 'copy'
+		let element = try current.get(i) otherwise panic("flipOnce: i < n = current.count()")
+		try temp.set(i, value: element) otherwise panic("flipOnce: i < n = temp.count()")
+	end 'copy'
+
+	let firstValue = try temp.get(0) otherwise panic("flipOnce: n >= 1")
+	var low = 0
+	var high = firstValue
+
+	while low < high 'reverse'
+		let atLow = try temp.get(low) otherwise panic("flipOnce: low < high <= firstValue < n")
+		let atHigh = try temp.get(high) otherwise panic("flipOnce: high <= firstValue < n")
+		try temp.set(low, value: atHigh) otherwise panic("flipOnce: low < n")
+		try temp.set(high, value: atLow) otherwise panic("flipOnce: high < n")
+		low = low + 1
+		high = high - 1
+	end 'reverse'
+
+	let first = try temp.get(0) otherwise panic("flipOnce: n >= 1")
+	let second = try temp.get(1) otherwise panic("flipOnce: n >= 2")
+	return first + second
+end 'flipOnce'
+
+function main() returns ExitCode
+	let n = 5
+	var current = IntArray.create()
+	current.resize(n)
+	var temp = IntArray.create()
+	temp.resize(n)
+
+	for i in 0 upto n 'fill'
+		try current.set(i, value: i) otherwise panic("main: i < n = current.count()")
+	end 'fill'
+
+	var total = 0
+
+	for round in 1 to 4 'rounds'
+		try current.set(0, value: round) otherwise panic("main: n >= 1")
+		total = total + flipOnce(current, temp: temp, n: n)
+	end 'rounds'
+
+	return total as ExitCode
+end 'main'
+---
+ExitCode: 17
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 112
+    arm64.storeSlotReg slot11, x21
+    arm64.storeSlotReg slot10, x20
+    arm64.storeSlotReg slot9, x19
+    arm64.movImm x19, 5
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl __managed_resize
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x19
+    arm64.bl __managed_resize
+    arm64.movImm x2, 0
+  __us_test#193:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 16]
+    arm64.cmp x0, 0
+    arm64.b.lt forhdr#1
+  __us_test#194:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
+    arm64.cmp x1, 0
+    arm64.b.eq forhdr#1
+  __us_test#195:
+    arm64.sub x3, x1, 24
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
+    arm64.cmp x3, 0
+    arm64.b.ne forhdr#1
+    arm64.b forhdr#183
+  fill:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 16]
+    arm64.cmp x0, 0
+    arm64.b.lt __im_slow#17
+  __im_bounds#18:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x2, x0
+    arm64.b.hs __im_slow#17
+  __im_buffer#19:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.cmp x0, 0
+    arm64.b.eq __im_slow#17
+  __im_viewed#20:
+    arm64.sub x1, x0, 24
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
+    arm64.cmp x1, 0
+    arm64.b.ne __im_slow#17
+  __im_store#21:
+    arm64.storeBaseIndexScaleReg.word64 [x0 + x2*8 + 0], x2
+  forstep#3:
+    arm64.add x2, x2, 1
+  forhdr#1:
+    arm64.cmp x2, 5
+    arm64.b.lt fill
+    arm64.b forexit#4
+  __im_bounds#191:
+    arm64.cmp x2, x0
+    arm64.b.hs __im_slow#187
+  __im_store#188:
+    arm64.storeBaseIndexScaleReg.word64 [x1 + x2*8 + 0], x2
+  forstep#184:
+    arm64.add x2, x2, 1
+  forhdr#183:
+    arm64.cmp x2, 5
+    arm64.b.lt __im_bounds#191
+  forexit#4:
+    arm64.movImm x0, 0
+    arm64.movImm x2, 1
+  __us_test#173:
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 16]
+    arm64.cmp x1, 0
+    arm64.b.lt forhdr#7
+  __us_test#174:
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 8]
+    arm64.loadRegBaseDisp.word64 x3, [x21 + 16]
+    arm64.cmp x3, 0
+    arm64.b.lt forhdr#7
+  __us_test#175:
+    arm64.loadRegBaseDisp.word64 x3, [x21 + 8]
+    arm64.loadRegBaseDisp.word64 x4, [x21 + 0]
+    arm64.cmp x4, 0
+    arm64.b.eq forhdr#7
+  __us_test#176:
+    arm64.sub x5, x4, 24
+    arm64.loadRegBaseDisp.word64 x5, [x5 + 16]
+    arm64.cmp x5, 0
+    arm64.b.ne forhdr#7
+  __us_test#177:
+    arm64.loadRegBaseDisp.word64 x5, [x20 + 0]
+    arm64.cmp x3, 0
+    arm64.b.ls forhdr#7
+  __us_test#178:
+    arm64.cmp x3, 1
+    arm64.b.ls forhdr#7
+  __us_test#179:
+    arm64.cmp x1, 0
+    arm64.b.ls forhdr#7
+  __us_test#180:
+    arm64.cmp x5, 0
+    arm64.b.eq forhdr#7
+  __us_test#181:
+    arm64.sub x6, x5, 24
+    arm64.loadRegBaseDisp.word64 x6, [x6 + 16]
+    arm64.cmp x6, 0
+    arm64.b.ne forhdr#7
+    arm64.b forhdr#103
+  rounds:
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x3, [x20 + 16]
+    arm64.cmp x3, 0
+    arm64.b.lt __im_slow#23
+  __im_bounds#24:
+    arm64.loadRegBaseDisp.word64 x3, [x20 + 8]
+    arm64.cmp x3, 0
+    arm64.b.ls __im_slow#23
+  __im_buffer#25:
+    arm64.loadRegBaseDisp.word64 x3, [x20 + 0]
+    arm64.cmp x3, 0
+    arm64.b.eq __im_slow#23
+  __im_viewed#26:
+    arm64.sub x4, x3, 24
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 16]
+    arm64.cmp x4, 0
+    arm64.b.ne __im_slow#23
+  __im_store#27:
+    arm64.storeBaseDispReg.word64 [x3 + 0], x2
+  __il_body#29:
+    arm64.movImm x1, 0
+    arm64.b forhdr#30
+  __rc_ok#55:
+    arm64.loadRegBaseDisp.word64 x3, [x20 + 8]
+    arm64.cmp x1, x3
+    arm64.b.hs __im_slow#77
+  __im_load#78:
+    arm64.loadRegBaseDisp.word64 x3, [x20 + 0]
+    arm64.loadRegBaseIndexScale.word64 x3, [x3 + x1*8 + 0]
+  __rc_ok#57:
+    arm64.loadRegBaseDisp.word64 x4, [x21 + 16]
+    arm64.cmp x4, 0
+    arm64.b.lt __im_slow#80
+  __im_bounds#81:
+    arm64.loadRegBaseDisp.word64 x4, [x21 + 8]
+    arm64.cmp x1, x4
+    arm64.b.hs __im_slow#80
+  __im_buffer#82:
+    arm64.loadRegBaseDisp.word64 x4, [x21 + 0]
+    arm64.cmp x4, 0
+    arm64.b.eq __im_slow#80
+  __im_viewed#83:
+    arm64.sub x5, x4, 24
+    arm64.loadRegBaseDisp.word64 x5, [x5 + 16]
+    arm64.cmp x5, 0
+    arm64.b.ne __im_slow#80
+  __im_store#84:
+    arm64.storeBaseIndexScaleReg.word64 [x4 + x1*8 + 0], x3
+  forstep#32:
+    arm64.add x1, x1, 1
+  forhdr#30:
+    arm64.cmp x1, 5
+    arm64.b.lt __rc_ok#55
+  forexit#33:
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x3, [x21 + 8]
+    arm64.cmp x3, 0
+    arm64.b.ls __im_slow#68
+  __im_load#69:
+    arm64.loadRegBaseDisp.word64 x1, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+  tryok#38:
+    arm64.movImm x3, 0
+    arm64.xchgRegReg x1, x3
+    arm64.b whilehdr#40
+  __rc_ok#59:
+    arm64.loadRegBaseDisp.word64 x4, [x21 + 8]
+    arm64.cmp x1, x4
+    arm64.b.hs __im_slow#86
+  __im_load#87:
+    arm64.loadRegBaseDisp.word64 x4, [x21 + 0]
+    arm64.loadRegBaseIndexScale.word64 x4, [x4 + x1*8 + 0]
+  __rc_ok#61:
+    arm64.loadRegBaseDisp.word64 x5, [x21 + 8]
+    arm64.cmp x3, x5
+    arm64.b.hs __im_slow#89
+  __im_load#90:
+    arm64.loadRegBaseDisp.word64 x5, [x21 + 0]
+    arm64.loadRegBaseIndexScale.word64 x5, [x5 + x3*8 + 0]
+  __rc_ok#63:
+    arm64.loadRegBaseDisp.word64 x6, [x21 + 16]
+    arm64.cmp x6, 0
+    arm64.b.lt __im_slow#92
+  __im_bounds#93:
+    arm64.loadRegBaseDisp.word64 x6, [x21 + 8]
+    arm64.cmp x1, x6
+    arm64.b.hs __im_slow#92
+  __im_buffer#94:
+    arm64.loadRegBaseDisp.word64 x6, [x21 + 0]
+    arm64.cmp x6, 0
+    arm64.b.eq __im_slow#92
+  __im_viewed#95:
+    arm64.sub x7, x6, 24
+    arm64.loadRegBaseDisp.word64 x7, [x7 + 16]
+    arm64.cmp x7, 0
+    arm64.b.ne __im_slow#92
+  __im_store#96:
+    arm64.storeBaseIndexScaleReg.word64 [x6 + x1*8 + 0], x5
+  __im_bounds#99:
+    arm64.loadRegBaseDisp.word64 x5, [x21 + 8]
+    arm64.cmp x3, x5
+    arm64.b.hs __im_slow#98
+  __im_buffer#100:
+    arm64.loadRegBaseDisp.word64 x5, [x21 + 0]
+  __im_store#102:
+    arm64.storeBaseIndexScaleReg.word64 [x5 + x3*8 + 0], x4
+  tryok#49:
+    arm64.add x1, x1, 1
+    arm64.sub x3, x3, 1
+  whilehdr#40:
+    arm64.cmp x1, x3
+    arm64.b.lt __rc_ok#59
+  __im_load#72:
+    arm64.loadRegBaseDisp.word64 x1, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+  tryok#51:
+    arm64.movImm x3, 1
+    arm64.loadRegBaseDisp.word64 x4, [x21 + 8]
+    arm64.cmp x4, 1
+    arm64.b.ls __im_slow#74
+  __im_load#75:
+    arm64.loadRegBaseDisp.word64 x3, [x21 + 0]
+    arm64.add x3, x3, 8
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 0]
+  tryok#53:
+    arm64.add x1, x1, x3
+  __il_cont#28:
+    arm64.add x0, x0, x1
+  forstep#9:
+    arm64.add x2, x2, 1
+  forhdr#7:
+    arm64.cmp x2, 4
+    arm64.b.le rounds
+  critsplit#197:
+    arm64.movRegReg x19, x0
+    arm64.b forexit#10
+  __im_store#168:
+    arm64.storeBaseDispReg.word64 [x5 + 0], x2
+  __il_body#149:
+    arm64.movImm x6, 0
+    arm64.b forhdr#148
+  __rc_ok#163:
+    arm64.cmp x6, x1
+    arm64.b.hs __im_slow#161
+  __im_load#162:
+    arm64.loadRegBaseIndexScale.word64 x7, [x5 + x6*8 + 0]
+  __im_bounds#157:
+    arm64.cmp x6, x3
+    arm64.b.hs __im_slow#153
+  __im_store#154:
+    arm64.storeBaseIndexScaleReg.word64 [x4 + x6*8 + 0], x7
+  forstep#150:
+    arm64.add x6, x6, 1
+  forhdr#148:
+    arm64.cmp x6, 5
+    arm64.b.lt __rc_ok#163
+  __im_load#146:
+    arm64.loadRegBaseDisp.word64 x6, [x4 + 0]
+  tryok#116:
+    arm64.movImm x7, 0
+    arm64.b whilehdr#115
+  __rc_ok#142:
+    arm64.cmp x7, x3
+    arm64.b.hs __im_slow#140
+  __im_load#141:
+    arm64.loadRegBaseIndexScale.word64 x8, [x4 + x7*8 + 0]
+  __rc_ok#137:
+    arm64.cmp x6, x3
+    arm64.b.hs __im_slow#135
+  __im_load#136:
+    arm64.loadRegBaseIndexScale.word64 x9, [x4 + x6*8 + 0]
+    arm64.movRegReg x10, x9
+  __im_store#128:
+    arm64.storeBaseIndexScaleReg.word64 [x4 + x7*8 + 0], x10
+  __im_store#120:
+    arm64.storeBaseIndexScaleReg.word64 [x4 + x6*8 + 0], x8
+  tryok#117:
+    arm64.add x7, x7, 1
+    arm64.sub x6, x6, 1
+  whilehdr#115:
+    arm64.cmp x7, x6
+    arm64.b.lt __rc_ok#142
+  __im_load#113:
+    arm64.loadRegBaseDisp.word64 x6, [x4 + 0]
+  __im_load#109:
+    arm64.add x7, x4, 8
+    arm64.loadRegBaseDisp.word64 x7, [x7 + 0]
+  tryok#106:
+    arm64.add x6, x6, x7
+  __il_cont#105:
+    arm64.add x0, x0, x6
+  forstep#104:
+    arm64.add x2, x2, 1
+  forhdr#103:
+    arm64.cmp x2, 4
+    arm64.b.le __im_store#168
+  critsplit#208:
+    arm64.movRegReg x19, x0
+  forexit#10:
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.b.gt __rc_panic
+  __rc_ok#13:
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot9
+    arm64.loadRegSlot x20, slot10
+    arm64.loadRegSlot x21, slot11
+    arm64.epilogue 112
+    arm64.ret
+  __im_slow#17:
+    arm64.storeSlotReg slot0, x2
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_set
+    arm64.loadRegSlot x2, slot0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#6
+    arm64.b forstep#3
+  __im_slow#187:
+    arm64.storeSlotReg slot1, x0
+    arm64.storeSlotReg slot2, x1
+    arm64.storeSlotReg slot0, x2
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_set
+    arm64.movRegReg x3, x0
+    arm64.loadRegSlot x0, slot1
+    arm64.loadRegSlot x1, slot2
+    arm64.loadRegSlot x2, slot0
+    arm64.cmp x9, 0
+    arm64.b.eq forstep#184
+  tryerr#6:
+    arm64.leaRdata x0, __str_blob_9  ; "panic at a-called-once-function-with-a-loop-stores-and-panics-is-spliced.test:37: main: i < n = current.count()\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot9
+    arm64.loadRegSlot x20, slot10
+    arm64.loadRegSlot x21, slot11
+    arm64.epilogue 112
+    arm64.ret
+  __im_slow#23:
+    arm64.storeSlotReg slot1, x0
+    arm64.storeSlotReg slot0, x2
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_set
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot1
+    arm64.loadRegSlot x2, slot0
+    arm64.cmp x9, 0
+    arm64.b.eq __il_body#29
+  tryerr#12:
+    arm64.leaRdata x0, __str_blob_10  ; "panic at a-called-once-function-with-a-loop-stores-and-panics-is-spliced.test:43: main: n >= 1\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot9
+    arm64.loadRegSlot x20, slot10
+    arm64.loadRegSlot x21, slot11
+    arm64.epilogue 112
+    arm64.ret
+  __im_slow#77:
+    arm64.storeSlotReg slot1, x0
+    arm64.storeSlotReg slot2, x1
+    arm64.storeSlotReg slot0, x2
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_get
+    arm64.movRegReg x3, x0
+    arm64.loadRegSlot x0, slot1
+    arm64.loadRegSlot x1, slot2
+    arm64.loadRegSlot x2, slot0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#35
+    arm64.b __rc_ok#57
+  __im_slow#80:
+    arm64.storeSlotReg slot1, x0
+    arm64.storeSlotReg slot2, x1
+    arm64.storeSlotReg slot0, x2
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x2, x3
+    arm64.bl __managed_set
+    arm64.movRegReg x3, x0
+    arm64.loadRegSlot x0, slot1
+    arm64.loadRegSlot x1, slot2
+    arm64.loadRegSlot x2, slot0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#37
+    arm64.b forstep#32
+  __im_slow#68:
+    arm64.storeSlotReg slot1, x0
+    arm64.storeSlotReg slot0, x2
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_get
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot1
+    arm64.loadRegSlot x2, slot0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#38
+  tryerr#39:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at a-called-once-function-with-a-loop-stores-and-panics-is-spliced.test:11: flipOnce: n >= 1\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot9
+    arm64.loadRegSlot x20, slot10
+    arm64.loadRegSlot x21, slot11
+    arm64.epilogue 112
+    arm64.ret
+  __im_slow#86:
+    arm64.storeSlotReg slot1, x0
+    arm64.storeSlotReg slot2, x1
+    arm64.storeSlotReg slot0, x2
+    arm64.storeSlotReg slot3, x3
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_get
+    arm64.movRegReg x4, x0
+    arm64.loadRegSlot x0, slot1
+    arm64.loadRegSlot x1, slot2
+    arm64.loadRegSlot x2, slot0
+    arm64.loadRegSlot x3, slot3
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#44
+    arm64.b __rc_ok#61
+  __im_slow#89:
+    arm64.storeSlotReg slot1, x0
+    arm64.storeSlotReg slot2, x1
+    arm64.storeSlotReg slot0, x2
+    arm64.storeSlotReg slot3, x3
+    arm64.storeSlotReg slot4, x4
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x3
+    arm64.bl __managed_get
+    arm64.movRegReg x5, x0
+    arm64.loadRegSlot x0, slot1
+    arm64.loadRegSlot x1, slot2
+    arm64.loadRegSlot x2, slot0
+    arm64.loadRegSlot x3, slot3
+    arm64.loadRegSlot x4, slot4
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#46
+    arm64.b __rc_ok#63
+  __im_slow#92:
+    arm64.storeSlotReg slot1, x0
+    arm64.storeSlotReg slot2, x1
+    arm64.storeSlotReg slot0, x2
+    arm64.storeSlotReg slot3, x3
+    arm64.storeSlotReg slot4, x4
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x2, x5
+    arm64.bl __managed_set
+    arm64.movRegReg x5, x0
+    arm64.loadRegSlot x0, slot1
+    arm64.loadRegSlot x1, slot2
+    arm64.loadRegSlot x2, slot0
+    arm64.loadRegSlot x3, slot3
+    arm64.loadRegSlot x4, slot4
+    arm64.cmp x9, 0
+    arm64.b.eq __im_bounds#99
+  tryerr#48:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at a-called-once-function-with-a-loop-stores-and-panics-is-spliced.test:18: flipOnce: low < n\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot9
+    arm64.loadRegSlot x20, slot10
+    arm64.loadRegSlot x21, slot11
+    arm64.epilogue 112
+    arm64.ret
+  __im_slow#98:
+    arm64.storeSlotReg slot1, x0
+    arm64.storeSlotReg slot2, x1
+    arm64.storeSlotReg slot0, x2
+    arm64.storeSlotReg slot3, x3
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x3
+    arm64.movRegReg x2, x4
+    arm64.bl __managed_set
+    arm64.movRegReg x4, x0
+    arm64.loadRegSlot x0, slot1
+    arm64.loadRegSlot x1, slot2
+    arm64.loadRegSlot x2, slot0
+    arm64.loadRegSlot x3, slot3
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#49
+  tryerr#50:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at a-called-once-function-with-a-loop-stores-and-panics-is-spliced.test:19: flipOnce: high < n\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot9
+    arm64.loadRegSlot x20, slot10
+    arm64.loadRegSlot x21, slot11
+    arm64.epilogue 112
+    arm64.ret
+  __im_slow#74:
+    arm64.storeSlotReg slot1, x0
+    arm64.storeSlotReg slot2, x1
+    arm64.storeSlotReg slot0, x2
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x3
+    arm64.bl __managed_get
+    arm64.movRegReg x3, x0
+    arm64.loadRegSlot x0, slot1
+    arm64.loadRegSlot x1, slot2
+    arm64.loadRegSlot x2, slot0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#53
+  tryerr#54:
+    arm64.leaRdata x0, __str_blob_8  ; "panic at a-called-once-function-with-a-loop-stores-and-panics-is-spliced.test:25: flipOnce: n >= 2\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot9
+    arm64.loadRegSlot x20, slot10
+    arm64.loadRegSlot x21, slot11
+    arm64.epilogue 112
+    arm64.ret
+  __im_slow#161:
+    arm64.storeSlotReg slot1, x0
+    arm64.storeSlotReg slot2, x1
+    arm64.storeSlotReg slot0, x2
+    arm64.storeSlotReg slot3, x3
+    arm64.storeSlotReg slot4, x4
+    arm64.storeSlotReg slot5, x5
+    arm64.storeSlotReg slot6, x6
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x6
+    arm64.bl __managed_get
+    arm64.movRegReg x7, x0
+    arm64.loadRegSlot x0, slot1
+    arm64.loadRegSlot x1, slot2
+    arm64.loadRegSlot x2, slot0
+    arm64.loadRegSlot x3, slot3
+    arm64.loadRegSlot x4, slot4
+    arm64.loadRegSlot x5, slot5
+    arm64.loadRegSlot x6, slot6
+    arm64.cmp x9, 0
+    arm64.b.eq __im_bounds#157
+  tryerr#35:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-called-once-function-with-a-loop-stores-and-panics-is-spliced.test:7: flipOnce: i < n = current.count()\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot9
+    arm64.loadRegSlot x20, slot10
+    arm64.loadRegSlot x21, slot11
+    arm64.epilogue 112
+    arm64.ret
+  __im_slow#153:
+    arm64.storeSlotReg slot1, x0
+    arm64.storeSlotReg slot2, x1
+    arm64.storeSlotReg slot0, x2
+    arm64.storeSlotReg slot3, x3
+    arm64.storeSlotReg slot4, x4
+    arm64.storeSlotReg slot5, x5
+    arm64.storeSlotReg slot6, x6
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x6
+    arm64.movRegReg x2, x7
+    arm64.bl __managed_set
+    arm64.movRegReg x7, x0
+    arm64.loadRegSlot x0, slot1
+    arm64.loadRegSlot x1, slot2
+    arm64.loadRegSlot x2, slot0
+    arm64.loadRegSlot x3, slot3
+    arm64.loadRegSlot x4, slot4
+    arm64.loadRegSlot x5, slot5
+    arm64.loadRegSlot x6, slot6
+    arm64.cmp x9, 0
+    arm64.b.eq forstep#150
+  tryerr#37:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-called-once-function-with-a-loop-stores-and-panics-is-spliced.test:8: flipOnce: i < n = temp.count()\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot9
+    arm64.loadRegSlot x20, slot10
+    arm64.loadRegSlot x21, slot11
+    arm64.epilogue 112
+    arm64.ret
+  __im_slow#140:
+    arm64.storeSlotReg slot1, x0
+    arm64.storeSlotReg slot2, x1
+    arm64.storeSlotReg slot0, x2
+    arm64.storeSlotReg slot3, x3
+    arm64.storeSlotReg slot4, x4
+    arm64.storeSlotReg slot5, x5
+    arm64.storeSlotReg slot6, x6
+    arm64.storeSlotReg slot7, x7
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x7
+    arm64.bl __managed_get
+    arm64.movRegReg x8, x0
+    arm64.loadRegSlot x0, slot1
+    arm64.loadRegSlot x1, slot2
+    arm64.loadRegSlot x2, slot0
+    arm64.loadRegSlot x3, slot3
+    arm64.loadRegSlot x4, slot4
+    arm64.loadRegSlot x5, slot5
+    arm64.loadRegSlot x6, slot6
+    arm64.loadRegSlot x7, slot7
+    arm64.cmp x9, 0
+    arm64.b.eq __rc_ok#137
+  tryerr#44:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at a-called-once-function-with-a-loop-stores-and-panics-is-spliced.test:16: flipOnce: low < high <= firstValue < n\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot9
+    arm64.loadRegSlot x20, slot10
+    arm64.loadRegSlot x21, slot11
+    arm64.epilogue 112
+    arm64.ret
+  __im_slow#135:
+    arm64.storeSlotReg slot1, x0
+    arm64.storeSlotReg slot2, x1
+    arm64.storeSlotReg slot0, x2
+    arm64.storeSlotReg slot3, x3
+    arm64.storeSlotReg slot4, x4
+    arm64.storeSlotReg slot5, x5
+    arm64.storeSlotReg slot6, x6
+    arm64.storeSlotReg slot7, x7
+    arm64.storeSlotReg slot8, x8
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x6
+    arm64.bl __managed_get
+    arm64.movRegReg x10, x0
+    arm64.loadRegSlot x0, slot1
+    arm64.loadRegSlot x1, slot2
+    arm64.loadRegSlot x2, slot0
+    arm64.loadRegSlot x3, slot3
+    arm64.loadRegSlot x4, slot4
+    arm64.loadRegSlot x5, slot5
+    arm64.loadRegSlot x6, slot6
+    arm64.loadRegSlot x7, slot7
+    arm64.loadRegSlot x8, slot8
+    arm64.cmp x9, 0
+    arm64.b.eq __im_store#128
+  tryerr#46:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at a-called-once-function-with-a-loop-stores-and-panics-is-spliced.test:17: flipOnce: high <= firstValue < n\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot9
+    arm64.loadRegSlot x20, slot10
+    arm64.loadRegSlot x21, slot11
+    arm64.epilogue 112
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_17  ; "panic at a-called-once-function-with-a-loop-stores-and-panics-is-spliced.test:47: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot9
+    arm64.loadRegSlot x20, slot10
+    arm64.loadRegSlot x21, slot11
+    arm64.epilogue 112
+    arm64.ret
+}

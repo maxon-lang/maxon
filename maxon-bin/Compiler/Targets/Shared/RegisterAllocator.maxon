@@ -679,26 +679,28 @@ export function x64AllocatablePool() returns RegMask
 	return callerSavedMask() or calleeSavedMask()
 end 'x64AllocatablePool'
 
-// The arm64 pool (AAPCS64-derived, M1 notes): allocatable GPRs x0..x15 ∪ x19..x28, and the WHOLE
+// The arm64 pool (AAPCS64-derived, M1 notes): allocatable GPRs x0..x14 ∪ x19..x28, and the WHOLE
 // SIMD file d0..d31 (all 32 are allocatable — d0..d7/d16..d31 caller-saved, d8..d15 callee-saved).
-// x16/x17 (IP scratch), x18 (the untouchable Darwin platform register), x29 (FP), x30 (LR) and sp
-// are NOT in the pool. arm64 now runs the allocator (the M2 runtime floor), so this pool is LIVE;
-// x16/x17 being out of it is what lets the `arm64ImportCall` trampoline (`adrp/ldr/blr x16`) clobber
-// x16 freely — no value is ever coloured there, so its omission from the caller-saved mask is sound.
+// x15 (the asynchronous-preemption resume register), x16/x17 (IP scratch), x18 (the untouchable Darwin
+// platform register), x29 (FP), x30 (LR) and sp are NOT in the pool. arm64 now runs the allocator (the M2
+// runtime floor), so this pool is LIVE; x16/x17 being out of it is what lets the `arm64ImportCall`
+// trampoline (`adrp/ldr/blr x16`) clobber x16 freely — no value is ever coloured there, so its omission
+// from the caller-saved mask is sound.
 function arm64AllocatablePool() returns RegMask
 	return arm64AllocatableGprMask() or classRegisterMask(RegClass.xmm, file: arm64RegisterFile())
 end 'arm64AllocatablePool'
 
-// arm64 allocatable GPRs: x0..x15 (RegNum 0..15) ∪ x19..x28 (RegNum 19..28). x16/x17/x18/x29/x30/sp
-// are excluded (see `arm64AllocatablePool`).
+// arm64 allocatable GPRs: x0..x14 (RegNum 0..14) ∪ x19..x28 (RegNum 19..28). x15/x16/x17/x18/x29/x30/sp
+// are excluded (see `arm64AllocatablePool`). The caller-saved run ENDS at `Arm64AsyncPreemptScratch`, which
+// is where that register's reservation is argued.
 function arm64AllocatableGprMask() returns RegMask
 	var mask = 0 as RegMask
 
-	for reg in 0 upto 16 'callerSavedGprs'
+	for reg in 0 upto Arm64AsyncPreemptScratch 'callerSavedGprs'
 		mask = regMaskAdd(mask, regNum: reg)
 	end 'callerSavedGprs'
 
-	for reg in 19 upto 29 'calleeSavedGprs'
+	for reg in Arm64CalleeSavedGprLow upto Arm64CalleeSavedGprEnd 'calleeSavedGprs'
 		mask = regMaskAdd(mask, regNum: reg)
 	end 'calleeSavedGprs'
 
@@ -811,7 +813,7 @@ end 'assertX64CallClobbers'
 
 // The arm64 call ops against the caller-saved pool the COLORER holds, with x19 (callee-saved) the
 // drift witness.
-// It holds the same one-fact-one-place guard the x64 pair does: the `0x7FFF807F8000FFFF` literal on
+// It holds the same one-fact-one-place guard the x64 pair does: the `0x7FFF807F80007FFF` literal on
 // `arm64BranchLink`/`arm64BranchLinkReg`/`arm64ImportCall` must equal `arm64CallerSavedMask`, or a value
 // live across a call is mis-constrained. Both OS-call forms are calls and so answer here too —
 // `arm64ImportCall` (the macOS mmap/write GOT call) is the M2 case the x64 `iatCall` comment warns
@@ -970,9 +972,14 @@ function assertVolatilitySplitsEveryClass(pool RegMask, callerSaved RegMask, fil
 	end 'eachClass'
 end 'assertVolatilitySplitsEveryClass'
 
-// The arm64 caller-saved set: GPRs x0..x15 (RegNum 0..15) ∪ SIMD d0..d7 (31..38) ∪ d16..d31
-// (47..62) — d8..d15 and x19..x28 are callee-saved. Equals the `0x7FFF807F8000FFFF` literal the
+// The arm64 caller-saved set: GPRs x0..x14 (RegNum 0..14) ∪ SIMD d0..d7 (31..38) ∪ d16..d31
+// (47..62) — d8..d15 and x19..x28 are callee-saved. Equals the `0x7FFF807F80007FFF` literal the
 // arm64 call ops carry (asserted).
+//
+// ⚠ **IT STOPS AT `Arm64AsyncPreemptScratch`, NOT AT THE ABI's CALLER-SAVED BOUNDARY.** x15, x16 and x17
+// really are caller-saved by AAPCS64 and are all absent here, for one reason: this mask constrains
+// COLOURING, and no value is ever coloured into a register outside the pool — so naming one would only make
+// the volatility split a claim about registers the colorer cannot reach.
 //
 // Derived by loop rather than spelled register by register the way x64's is, and the asymmetry is
 // deliberate: the MEASURED trap `callerSavedMask`'s header records is a PER-VALUE one, and this is
@@ -983,7 +990,7 @@ function arm64CallerSavedMask() returns RegMask
 	let fpBase = Arm64FirstVectorRegister
 	var mask = 0 as RegMask
 
-	for reg in 0 upto 16 'callerGprs'
+	for reg in 0 upto Arm64AsyncPreemptScratch 'callerGprs'
 		mask = regMaskAdd(mask, regNum: reg)
 	end 'callerGprs'
 

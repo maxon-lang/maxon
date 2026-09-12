@@ -28,8 +28,16 @@
 //   - `.text` is READ|EXECUTE, so a read-only table living in it needs no new section.
 //
 // Format:
-//   count(4) | entries[count] of { codeOffset(4), nameOffset(4) } | NUL-terminated names
-// `nameOffset` is relative to the START of the table; the header is `4 + 8*count` bytes.
+//   count(4) | flagsOffset(4) | entries[count] of { codeOffset(4), nameOffset(4) } | NUL-terminated names
+//   | flags[count] of 1 byte
+// `nameOffset` and `flagsOffset` are both relative to the START of the table; the header is
+// `8 + 8*count` bytes.
+//
+// ⭐⭐ **THE PER-SYMBOL FLAGS ARE A PARALLEL BYTE ARRAY PAST THE NAMES, NOT A THIRD ENTRY COLUMN, AND THE
+// REASON IS THE TWO WALKERS.** Both index the entry array by a SHIFT (`SymtabEntryShift`), which a 12-byte
+// entry makes impossible; a byte array keyed on the same entry index leaves every instruction in both
+// hand-assembled walkers exactly as it was and adds one derived displacement. Its offset is a header column
+// because the names run is variable-length, so nothing else could find it.
 export let SymbolTableName = b"__symtable"
 
 // The format's ONE definition. It has THREE parties — `buildSymbolTableBytes` below writes it,
@@ -39,10 +47,13 @@ export let SymbolTableName = b"__symtable"
 // copies of one layout, agreeing today, with nothing that MAKES them agree. Widen the count here
 // against a walker that still adds 4 and every frame symbolizes to the wrong function — no compile
 // error, no failing assert, just a backtrace that lies.
-export let SymbolTableColumnBytes = 4  // every column is a u32: the count, and each entry field
+export let SymbolTableColumnBytes = 4  // every column is a u32: the two header words, and each entry field
 let SymbolTableEntryColumns = 2  // an entry is { codeOffset, nameOffset }
+let SymbolTableHeaderColumns = 2  // the header is { count, flagsOffset }
 let SymbolTableCountBytes = SymbolTableColumnBytes
+let SymbolTableHeaderBytes = SymbolTableColumnBytes * SymbolTableHeaderColumns
 let SymbolTableEntryBytes = SymbolTableColumnBytes * SymbolTableEntryColumns
+
 
 // `__symtable`'s alignment within `.text`: the natural alignment of its u32 columns.
 export let SymbolTableAlignment = 4
@@ -54,9 +65,61 @@ export let SymbolTableAlignment = 4
 // its own words would be the same layout written down twice, free to disagree the moment either
 // side moved — and the disagreement is not a compile error but a walker striding through the
 // table at the wrong pitch, naming the wrong function for every frame.
-export let SymtabOffEntries = SymbolTableCountBytes as Imm32  // the entry array starts just past the count
+export let SymtabOffEntries = SymbolTableHeaderBytes as Imm32  // the entry array starts just past the header
+
+// ⭐ **HOW THE SAFE-POINT PREDICATE READS THAT COLUMN: ONE 64-BIT LOAD OF THE WHOLE HEADER, THEN A SHIFT.**
+// The Std tier has no 32-bit memory access at all (`StdLoweringShared.accessWidthFor`), and the two header
+// columns are adjacent, so the pair comes back in one aligned word — count in the low half, flags offset in
+// the high. Derived from the column width, so widening a column moves the shift with it.
+export let SymtabHeaderFlagsOffsetShift = SymbolTableColumnBytes * 8
+
+// ⭐ **AND THE SAME TRICK ONE ARRAY OVER: AN ENTRY'S TWO COLUMNS COME BACK IN ONE WORD, `codeOffset` IN THE
+// LOW HALF.** The safe-point predicate needs a function's START to measure how far into it the interrupted PC
+// is; the walkers read the columns separately with 32-bit loads, which the Std tier does not have.
+export let SymtabEntryCodeOffsetMask = (1 shl (SymbolTableColumnBytes * 8)) - 1
 export let SymtabEntryOffCodeOffset = 0 as Imm32  // an entry's first column
 export let SymtabEntryOffNameOffset = SymbolTableColumnBytes as Imm32  // … and its second
+
+// ⭐⭐⭐ **THE PER-SYMBOL BYTE: FROM WHICH OFFSET INSIDE THIS FUNCTION MAY A THREAD BE STOPPED WHERE IT
+// STANDS?** Zero means NEVER — every hand-assembled chunk and every un-guarded runtime function, because a
+// thread stopped inside one of those is mid-context-switch, mid-stack-move, on the system stack or holding a
+// lock. Any other value is `1 + the number of bytes at the function's start that are NOT safe`.
+//
+// ⛔⛔ **THE UNSAFE PREFIX IS THE PROLOGUE STACK GUARD, AND IT IS UNSAFE FOR ONE REASON: IT HOLDS A
+// MACHINE-BOUND VALUE IN A REGISTER.** The guard walks TLS to the MACHINE and then to the machine's current
+// green thread; for the instruction between those two loads the register names a MACHINE. A stop there parks
+// the thread, and the thread may resume on a DIFFERENT machine — where that register now names the wrong
+// machine and the next load reads a green thread belonging to somebody else. The guard's cold path carries
+// the same hazard one step further, handing `__gt_morestack` a system-stack top that is another machine's.
+// Excluding the whole guard region is what makes "this register is still mine" true of every instruction a
+// stop can land on.
+//
+// ⚠ **IT IS A PROVENANCE QUESTION *AND* AN OFFSET, NOT ONE OR THE OTHER.** The provenance half is
+// `TargetPrinter.skipsGreenThreadStackGuard`, and it is NOT "does the function carry a guard": a call-free
+// loop that spills nothing reserves no frame and so carries none, and that is exactly the function this
+// mechanism exists to stop.
+export let SymtabSafeFromBias = 1
+let SymtabNeverPreemptible = 0
+
+// The widest unsafe prefix one byte can carry. The guard is a few dozen fixed bytes, so a function that
+// exceeded this would be a guard that had grown by an order of magnitude — refused at the writer rather
+// than truncated into a safe point that is not one.
+let SymtabMaxUnsafePrefix = 254
+
+// What the shared lookup answers for a `.text` offset below the first symbol. A real answer is an index into
+// an array, so the two cannot collide.
+export let SymtabIndexNotFound = 0 - 1
+
+// ⭐ **THE ONE LOOKUP OVER THIS TABLE — a binary search, shared by BOTH readers of the format.** Each backend
+// assembles it once (`X64Runtime.buildSymtabIndexChunk`, `Arm64PanicRuntime.buildArm64SymtabIndexChunk`);
+// the backtrace walkers resolve a frame's name through it and the safe-point predicate reads the flag byte
+// at the index it answers. A second scan would be a second reading of one format, free to disagree about
+// which entry a `.text` offset belongs to — and the two disagreeing is a thread stopped in a function the
+// walker names differently.
+//
+// `(textOffset, symtablePtr) -> the index of the LAST entry whose `codeOffset` is <= `textOffset`, or
+// `SymtabIndexNotFound`.
+export let SymtabIndexName = b"__symtab_index"
 
 // log2 of the entry stride: both walkers index the entry array by a left shift, not by a multiply.
 // A SHIFT COUNT, not a size — the two are only interchangeable by accident, so this is the
@@ -121,9 +184,10 @@ export let ReturnAddrSymbolBias = 1
 // the site that one is nested under, and so on out — ahead of the frame's own function. A trace therefore
 // reads exactly as it did when the call existed.
 //
-// Laid down immediately after `__symtable`'s names, under a label of its own: the names blob carries no
-// length word, so a table appended to it can only be found by name. Being past `__symtable`, the tables
-// lie outside `[mrt_start, __symtable)` and no return address can symbolize into them.
+// Laid down immediately after the WHOLE of `__symtable` — past its flag run, which is its last column —
+// under a label of its own: neither the names blob nor the flag run carries a length word, so a table
+// appended after them can only be found by name. Being past `__symtable`, the tables lie outside
+// `[mrt_start, __symtable)` and no return address can symbolize into them.
 //
 // Format, every column a u32:
 //   siteCount(4) | rangeCount(4)
@@ -449,7 +513,7 @@ export let MainThreadEntryName = b"mrt_main_entry"
 // anywhere else, its frames would be named after whatever function preceded it.
 export function recordChunkSymbol(symbols DebugSymbolArray, chunk FunctionCodeChunk, codeOffset CodeOffset)
 	if not chunk.funcName.equals(MainThreadEntryName) 'ownSymbol'
-		symbols.push(DebugSymbol.create(chunk.funcName, codeOffset: codeOffset))
+		symbols.push(DebugSymbol.create(chunk.funcName, codeOffset: codeOffset, asyncPreemptible: chunk.asyncPreemptible, asyncUnsafePrefixBytes: chunk.asyncUnsafePrefixBytes))
 		return
 	end 'ownSymbol'
 
@@ -468,17 +532,37 @@ end 'recordChunkSymbol'
 // descriptor is a target-independent fact two mechanisms name — this file's writers and the Std tier's
 // `printError` — and one spelling is what keeps them from drifting. This file holds vocabulary only.
 
+// One symbol's safe-point byte — see `SymtabSafeFromBias`.
+function symbolSafeFromByte(sym DebugSymbol) returns MachineWord
+	if not sym.asyncPreemptible 'never'
+		return SymtabNeverPreemptible
+	end 'never'
+
+	if sym.asyncUnsafePrefixBytes > SymtabMaxUnsafePrefix 'prefixTooWide'
+		panic("symbolSafeFromByte: '{String.from(sym.name)}' has {sym.asyncUnsafePrefixBytes} bytes of stack guard before its first safe point, past the {SymtabMaxUnsafePrefix} one byte can carry — a thread stopped inside that guard holds another machine's value in a register, so the prefix may not be truncated. Widen the column")
+	end 'prefixTooWide'
+
+	return (sym.asyncUnsafePrefixBytes as MachineWord) + SymtabSafeFromBias
+end 'symbolSafeFromByte'
+
 // Serialize the symbol table. `symbols` MUST already be in ascending `codeOffset` order:
 // the runtime's lookup keeps the LAST entry satisfying `text_offset >= codeOffset`, which
 // is the greatest such entry ONLY if the table ascends. Concat lays chunks out in order,
 // so the order is a fact of the layout — asserted here rather than re-established by a
 // sort, because a sort would silently paper over a layout that had stopped ascending.
 export function buildSymbolTableBytes(symbols DebugSymbolArray) returns ByteArray
-	let headerSize = SymbolTableCountBytes + SymbolTableEntryBytes * symbols.count()
+	let headerSize = SymbolTableHeaderBytes + SymbolTableEntryBytes * symbols.count()
 	var names = ByteArray.create()
+	var flags = ByteArray.create()
 	var table = ByteArray.create()
 	table.reserve(headerSize)
 	writeDword(table, value: symbols.count())
+
+	// The flags run starts where the names end, and the names are built below — so the column is written
+	// as a placeholder and patched once their length is known. A reader that had to SCAN the names to find
+	// it would be walking NUL-terminated strings to answer a question about a fixed-stride array.
+	let flagsOffsetField = table.count()
+	writeDword(table, value: 0)
 
 	var prevOffset = 0 as CodeOffset
 
@@ -504,8 +588,13 @@ export function buildSymbolTableBytes(symbols DebugSymbolArray) returns ByteArra
 
 		names.append(sym.name)
 		names.push(0)
+		flags.push(symbolSafeFromByte(sym))
 	end 'entries'
 
+	// The flags run is pushed once per entry in the loop above, so its length is the symbol count by
+	// construction and the patched offset is where the names end.
 	table.append(names)
+	patchDword(table, offset: flagsOffsetField, value: table.count())
+	table.append(flags)
 	return table
 end 'buildSymbolTableBytes'

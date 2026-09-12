@@ -1,0 +1,317 @@
+// Test: a-panic-in-the-innermost-of-a-chain-names-every-level
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function inner(a IntArray, n Integer) returns Integer
+	var sum = 0
+
+	for i in 0 upto n 'each'
+		let v = try a.get(i) otherwise panic("inner: a is shorter than n")
+		try a.set(i, value: v * 2) otherwise panic("inner: a is shorter than n")
+		sum = sum + v
+	end 'each'
+
+	return sum
+end 'inner'
+
+function outer(a IntArray, n Integer) returns Integer
+	for i in 0 upto a.count() 'fill'
+		try a.set(i, value: i + 1) otherwise panic("outer: i < a.count()")
+	end 'fill'
+
+	let before = inner(a, n: n)
+	let last = try a.get(a.count() - 1) otherwise panic("outer: a is not empty")
+	return before + last
+end 'outer'
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.resize(3)
+	return outer(a, n: 4) as ExitCode
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 80
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_resize
+  __il_body#5:
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+  __us_test#78:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, forhdr#6
+  __us_test#79:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, forhdr#6
+  __us_test#80:
+    x64.leaRegRegImm32 rsi, rcx, -24
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, forhdr#6
+    x64.jmp forhdr#68
+  fill#7:
+    x64.leaRegRegImm32 rsi, rdx, 1
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __im_slow#17
+  __im_bounds#18:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.cmpRegReg rdx, rcx
+    x64.jcc aboveEqual, __im_slow#17
+  __im_buffer#19:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_slow#17
+  __im_viewed#20:
+    x64.leaRegRegImm32 rdi, rcx, -24
+    x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc notEqual, __im_slow#17
+  __im_store#21:
+    x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], rsi
+  forstep#8:
+    x64.movRegReg rdx, rsi
+  forhdr#6:
+    x64.cmpRegReg rdx, rax
+    x64.jcc less, fill#7
+    x64.jmp __il_body#26
+  fill#77:
+    x64.leaRegRegImm32 rsi, rdx, 1
+  __im_store#73:
+    x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], rsi
+  forstep#69:
+    x64.movRegReg rdx, rsi
+  forhdr#68:
+    x64.cmpRegReg rdx, rax
+    x64.jcc less, fill#77
+  __il_body#26:
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rdx, 0
+  __us_test#64:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc less, forhdr#27
+  __us_test#65:
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, forhdr#27
+  __us_test#66:
+    x64.leaRegRegImm32 rdi, rsi, -24
+    x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc notEqual, forhdr#27
+    x64.jmp forhdr#48
+  __rc_ok#35:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.cmpRegReg rdx, rcx
+    x64.jcc aboveEqual, __im_slow#40
+  __im_load#41:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.loadRegBaseIndexScale.word64 rcx, [rcx + rdx*8 + 0]
+    x64.movRegReg r8, rcx
+  tryok#31:
+    x64.imulRegRegImm32 rsi, r8, 2
+  __rc_ok#37:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __im_slow#43
+  __im_bounds#44:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.cmpRegReg rdx, rcx
+    x64.jcc aboveEqual, __im_slow#43
+  __im_buffer#45:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_slow#43
+  __im_viewed#46:
+    x64.leaRegRegImm32 rdi, rcx, -24
+    x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc notEqual, __im_slow#43
+  __im_store#47:
+    x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], rsi
+  tryok#33:
+    x64.leaRegRegReg rax, rax, r8
+  forstep#29:
+    x64.leaRegRegImm32 rdx, rdx, 1
+  forhdr#27:
+    x64.cmpRegImm32 rdx, 4
+    x64.jcc less, __rc_ok#35
+    x64.jmp __il_cont#25
+  __rc_ok#62:
+    x64.cmpRegReg rdx, rcx
+    x64.jcc aboveEqual, __im_slow#60
+  __im_load#61:
+    x64.loadRegBaseIndexScale.word64 rdi, [rsi + rdx*8 + 0]
+    x64.movRegReg r8, rdi
+  tryok#58:
+    x64.imulRegRegImm32 rdi, r8, 2
+  __im_store#53:
+    x64.storeBaseIndexScaleReg.word64 [rsi + rdx*8 + 0], rdi
+  tryok#50:
+    x64.leaRegRegReg rax, rax, r8
+  forstep#49:
+    x64.leaRegRegImm32 rdx, rdx, 1
+  forhdr#48:
+    x64.cmpRegImm32 rdx, 4
+    x64.jcc less, __rc_ok#62
+  __il_cont#25:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.leaRegRegImm32 rdx, rcx, -1
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic#15
+  __rc_ok#14:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.cmpRegReg rdx, rcx
+    x64.jcc aboveEqual, __im_slow#23
+  __im_load#24:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.loadRegBaseIndexScale.word64 rcx, [rcx + rdx*8 + 0]
+    x64.movRegReg r8, rcx
+  tryok#12:
+    x64.leaRegRegReg r12, rax, r8
+  __il_cont#4:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic#2
+  __rc_chk:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc greater, __rc_panic#2
+  __rc_ok#1:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 80
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#17:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rsi
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, rsi
+    x64.callDirect __managed_set
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rsi, slot1
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, forstep#8
+  tryerr#11:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-panic-in-the-innermost-of-a-chain-names-every-level.test:19: outer: i < a.count()\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 80
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#40:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot2, rdx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rdx, slot2
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#32
+    x64.jmp tryok#31
+  __im_slow#43:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot2, rdx
+    x64.storeSlotReg slot3, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, rsi
+    x64.callDirect __managed_set
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rdx, slot2
+    x64.loadRegSlot r8, slot3
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#33
+  tryerr#34:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-panic-in-the-innermost-of-a-chain-names-every-level.test:10: inner: a is shorter than n\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 80
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#60:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot4, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.storeSlotReg slot1, rsi
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot4
+    x64.loadRegSlot rdx, slot2
+    x64.loadRegSlot rsi, slot1
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#58
+  tryerr#32:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-panic-in-the-innermost-of-a-chain-names-every-level.test:9: inner: a is shorter than n\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 80
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#15:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at a-panic-in-the-innermost-of-a-chain-names-every-level.test:23: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 80
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#23:
+    x64.storeSlotReg slot0, rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.loadRegSlot rax, slot0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#12
+  tryerr#13:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-panic-in-the-innermost-of-a-chain-names-every-level.test:23: outer: a is not empty\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 80
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at a-panic-in-the-innermost-of-a-chain-names-every-level.test:30: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 80
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

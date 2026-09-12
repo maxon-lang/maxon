@@ -975,10 +975,25 @@ export function buildArm64DarwinLibcCallChunk(greenThreads bool) returns Functio
 		arm64EmitMovFromSp(asm.code, dest: arm64RuntimeReg(Arm64DoorSpReg))
 		emitArm64GtBailUnlessOnItsOwnStack(asm, gt: Arm64DoorGtReg, scratch: Arm64DoorLowReg, addr: Arm64DoorSpReg, bail: direct)
 
+		// ⭐⭐ **THE SAME WINDOW x64's IMPORT SHIM HAS, AND HERE IT CANNOT FIRE — WHICH IS NOT THE SAME FACT
+		// AND MUST NOT READ AS THOUGH IT WERE.** A machine cached in a register while SP is still on the
+		// green thread's stack is a machine this thread can stop belonging to, and the switch below would
+		// then run a libSystem call on ANOTHER machine's 64 KB system stack. On x64 that window is emitted
+		// INLINE into every compiled function holding an IAT call, so it is reachable and is closed by
+		// `__gt_shim_enter`. Here the whole door is `mrt_darwin_libc_call`, a hand-assembled CHUNK — and a
+		// chunk's `__symtable` safe-point byte is 0, so no instruction of it is ever a safe point and the
+		// window has no instant to open in.
+		//
+		// ⚠ **THE BRACKET IS KEPT ANYWAY, AS A BELT ON THAT ONE PROPERTY.** It costs two instructions and it
+		// is what would still be true the day this door stopped being a chunk; the exclusion is what makes it
+		// unnecessary today, not the bracket that makes the exclusion unnecessary.
+		emitArm64ShimLockDepthStep(asm, m: Arm64DoorMReg, delta: OneMore, scratch: Arm64DoorLowReg)
+
 		// The green thread's SP goes in the system stack's top pair — twice, because a pair is what keeps SP
 		// 16-aligned — and the frame record under it.
-		arm64EmitLoadWord64At(asm, dest: Arm64DoorMReg, base: Arm64DoorMReg, byteOffset: MOffSystemStackSP)
-		arm64EmitMovToSp(asm.code, src: arm64RuntimeReg(Arm64DoorMReg))
+		arm64EmitLoadWord64At(asm, dest: Arm64DoorGtReg, base: Arm64DoorMReg, byteOffset: MOffSystemStackSP)
+		arm64EmitMovToSp(asm.code, src: arm64RuntimeReg(Arm64DoorGtReg))
+		emitArm64ShimLockDepthStep(asm, m: Arm64DoorMReg, delta: OneFewer, scratch: Arm64DoorLowReg)
 		arm64EmitPushPairGpr(asm.code, rt1: arm64RuntimeReg(Arm64DoorSpReg), rt2: arm64RuntimeReg(Arm64DoorSpReg))
 		arm64EmitPushPairGpr(asm.code, rt1: arm64RuntimeReg(Arm64Register.x29), rt2: arm64RuntimeReg(Arm64Register.x30))
 		arm64EmitMovFromSp(asm.code, dest: arm64RuntimeReg(Arm64Register.x29))
@@ -1008,6 +1023,19 @@ export function buildArm64DarwinLibcCallChunk(greenThreads bool) returns Functio
 
 	return asm.finishChunk(DarwinLibcCallName)
 end 'buildArm64DarwinLibcCallChunk'
+
+// `[m + MOffLocks] += delta` — the bracket over the window where `m` names a machine this thread may stop
+// belonging to.
+//
+// ⭐ **A PLAIN READ-MODIFY-WRITE, NOT AN LL/SC ONE, AND THAT IS ARGUED RATHER THAN SAVED.** This word is
+// written only by the thread that IS this machine, and the only other party reads it from a signal handler
+// running on that same thread — so there is no interleaving for an exclusive pair to prevent, and an
+// exclusive pair here would be a reservation the stop itself could break.
+function emitArm64ShimLockDepthStep(asm Arm64RuntimeAsm, m Arm64Register, delta ParsedInt, scratch Arm64Register)
+	arm64EmitLoadWord64At(asm, dest: scratch, base: m, byteOffset: MOffLocks)
+	arm64EmitAddRuntimeImm(asm, dest: scratch, base: scratch, imm: delta as Imm32)
+	arm64EmitStoreWord64At(asm, src: scratch, base: m, byteOffset: MOffLocks)
+end 'emitArm64ShimLockDepthStep'
 
 // The door's scratch — caller-saved, non-argument, and neither x16 (the callee's address) nor x9 (the
 // throwing-call error flag, which a call site close to a `tryCall` must not find borrowed). A call through the
@@ -1067,6 +1095,363 @@ function arm64AppendResolvedFragment(asm Arm64RuntimeAsm, code ByteArray, callFi
 end 'arm64AppendResolvedFragment'
 
 // ==========================================================================
+// ⭐⭐⭐ ASYNCHRONOUS PREEMPTION — STOPPING A THREAD THAT REACHES NO PROLOGUE (arm64)
+// ==========================================================================
+//
+// ⭐⭐⭐ **THE COOPERATIVE PATH STAYS AND THIS IS ITS BACKSTOP.** `__sched_preemptone` poisons the running
+// thread's guard word, and a function that reserves a frame reads the poison at its prologue. A loop that
+// calls nothing never reaches one — so the monitor sends that thread a SIGURG, and the handler rewrites the
+// register file the kernel saved so that returning from the signal lands in `__gt_async_preempt` instead of
+// at the interrupted instruction.
+//
+// ⛔ **THE POISON IS STILL WHAT AUTHORISES THE STOP** (`SchedRuntime.buildGtPreemptSafe` tests for it), so an
+// asynchronous stop is never a thing that happens to a thread nobody asked to yield.
+
+// ⭐ **THE GENERAL REGISTERS THE TRAMPOLINE SPILLS.** A stop lands at an arbitrary instruction, so every
+// register a compiled function or an encoder macro-sequence may hold a live value in must come back exactly
+// as it was: the allocatable file, the x16/x17 IP scratch (an import call holds the callee's address in x16
+// across two instructions, a jump table holds its base in x17 across six), the frame pointer and the link
+// register.
+//
+// ⛔ **x18 IS ABSENT BECAUSE NOTHING EVER WRITES IT** — it is Darwin's platform register, out of the
+// allocatable pool on both lanes, and restoring it would be the one way this chunk could corrupt it.
+// ⛔ **x15 IS ABSENT BECAUSE IT IS THE RESUME REGISTER** — see `Arm64AsyncPreemptScratch`.
+function arm64AsyncPreemptGprs() returns Arm64RegisterArray
+	var gprs = Arm64RegisterArray.create()
+
+	for reg in 0 upto Arm64AsyncPreemptScratch 'callerSaved'
+		gprs.push(try Arm64Register.fromRawValue(reg) otherwise panic("arm64AsyncPreemptGprs: {reg} is below the GPR/vector boundary and so names a general register"))
+	end 'callerSaved'
+
+	for reg in Arm64AsyncPreemptScratch + 1 upto Arm64PlatformRegister 'ipScratch'
+		gprs.push(try Arm64Register.fromRawValue(reg) otherwise panic("arm64AsyncPreemptGprs: {reg} is below the GPR/vector boundary and so names a general register"))
+	end 'ipScratch'
+
+	for reg in Arm64CalleeSavedGprLow upto Arm64FirstVectorRegister 'calleeSavedAndTheRecord'
+		gprs.push(try Arm64Register.fromRawValue(reg) otherwise panic("arm64AsyncPreemptGprs: {reg} is below the GPR/vector boundary and so names a general register"))
+	end 'calleeSavedAndTheRecord'
+
+	return gprs
+end 'arm64AsyncPreemptGprs'
+
+// The trampoline's block, in slots: every general register above, the flags, then the whole SIMD file.
+function arm64AsyncPreemptFlagsSlot() returns MachineWord
+	return (arm64AsyncPreemptGprs().count() as MachineWord) * SpillSlotBytes
+end 'arm64AsyncPreemptFlagsSlot'
+
+function arm64AsyncPreemptVectorBase() returns MachineWord
+	return arm64AsyncPreemptFlagsSlot() + SpillSlotBytes
+end 'arm64AsyncPreemptVectorBase'
+
+// ⚠ **EIGHT BYTES PER VECTOR REGISTER, NOT SIXTEEN, AND THAT IS THIS COMPILER'S OWN INVARIANT rather than a
+// shortcut.** Every value the backend puts in the SIMD file is a scalar f64 in the `d` view — every spill,
+// every argument and the context switch's own callee-saved block are 8-byte `STR Dt` / `LDR Dt` — so no
+// upper half is ever live and a `d`-width save is the whole of what an interrupted function can lose.
+function arm64AsyncPreemptBlockBytes() returns StackSize
+	return alignUpStack((arm64AsyncPreemptVectorBase() as StackSize) + ((vectorRegisterCount(arm64RegisterFile()) * SpillSlotBytes) as StackSize), alignment: StackFrameAlignment)
+end 'arm64AsyncPreemptBlockBytes'
+
+// ⭐ **WHAT AN ASYNCHRONOUS STOP COSTS THE GREEN THREAD's STACK BELOW THE INTERRUPTED SP, BEFORE
+// `__gt_async_preempt_park` RUNS**: the pair of words the injection pushed, and the trampoline's own block.
+// A `bl` pushes nothing on this ISA, so there is no third term.
+export function arm64GtAsyncPreemptStackBytes() returns StackSize
+	return (Arm64GtPairBytes as StackSize) + arm64AsyncPreemptBlockBytes()
+end 'arm64GtAsyncPreemptStackBytes'
+
+// `__gt_async_preempt` — see `SchedRuntime.AsyncPreemptName`. NOT a normal call: the signal handler entered
+// it by rewriting the saved register file, so on entry `x30` holds the INTERRUPTED PC, `[sp]` holds the
+// interrupted `x30`, and every other register and flag still holds the interrupted function's value.
+//
+// ⛔⛔ **THE RESUME NEEDS ONE REGISTER THAT IS DEAD AT EVERY SAFE POINT, AND THAT IS WHY `x15` IS NOT IN THE
+// ALLOCATABLE POOL.** AArch64 has no stack-popping return: setting the program counter costs a register, and
+// that register's value is gone from the instant of the branch. `x30` cannot be it (the interrupted function
+// needs its own link register back) and neither can x16/x17 (an import call and a jump table leave live
+// values there). See `RegisterAllocator.arm64AllocatableGprMask`, which reserves it, and
+// `Arm64Backend.Arm64AsyncPreemptScratch`, which names it.
+//
+// ⛔ **THE FLAGS ARE SAVED BEFORE ANY COMPARE AND RESTORED AFTER THE LAST LOAD.** `LDR` and `ADD` write no
+// flags, so the block's own arithmetic cannot disturb what it is carrying.
+//
+// It runs on the green thread's own stack, so what it puts there is certified against the margin the
+// safe-point predicate demanded (`PreemptionDepth.requireAsyncPreemptionFitsItsMargin`).
+function buildArm64GtAsyncPreemptChunk() returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginRawFunction()
+	let blockBytes = arm64AsyncPreemptBlockBytes()
+
+	arm64EmitStackAlloc(asm.code, amount: blockBytes)
+	emitArm64AsyncPreemptBlock(asm, direction: Arm64GtBlockDirection.push)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: AsyncPreemptParkName)
+	emitArm64AsyncPreemptBlock(asm, direction: Arm64GtBlockDirection.pop)
+
+	// The two words the injection pushed: the interrupted PC came in through x30 and was spilled with the
+	// rest of the file, and the interrupted x30 sits at the block's top.
+	arm64GtLoadSp(asm, dest: Arm64AsyncPreemptResumeReg, byteOffset: arm64AsyncPreemptResumePcSlot())
+	arm64GtLoadSp(asm, dest: Arm64Register.x30, byteOffset: blockBytes as MachineWord)
+	arm64EmitStackFree(asm.code, amount: blockBytes + (Arm64GtPairBytes as StackSize))
+	arm64EmitBranchReg(asm.code, reg: arm64RuntimeReg(Arm64AsyncPreemptResumeReg))
+
+	return asm.finishChunk(AsyncPreemptName)
+end 'buildArm64GtAsyncPreemptChunk'
+
+// Where the interrupted PC lands in the block: x30's slot, because the injection handed it over IN x30.
+function arm64AsyncPreemptResumePcSlot() returns MachineWord
+	let gprs = arm64AsyncPreemptGprs()
+	return ((gprs.count() - 1) as MachineWord) * SpillSlotBytes
+end 'arm64AsyncPreemptResumePcSlot'
+
+// The register block, laid and lifted from ONE list in both directions — `emitArm64GtSavedBlock`'s reason,
+// in the chunk where a mismatch is an interrupted function silently given somebody else's register.
+//
+// ⛔ **THE FLAGS MOVE THROUGH x0, SO THE RESTORE ORDER IS FORCED**: flags first, then the general registers,
+// the first of which is x0 itself. `x30` is restored by neither direction — the pop leaves it holding the
+// interrupted PC for the resume branch to read out of its slot.
+function emitArm64AsyncPreemptBlock(asm Arm64RuntimeAsm, direction Arm64GtBlockDirection)
+	let gprs = arm64AsyncPreemptGprs()
+
+	match direction 'flagsFirst'
+		push then emitArm64AsyncPreemptGprs(asm, gprs: gprs, direction: direction)
+		pop then emitArm64AsyncPreemptFlags(asm, direction: direction)
+	end 'flagsFirst'
+
+	for k in 0 upto vectorRegisterCount(arm64RegisterFile()) 'vectors'
+		let reg = try Arm64Register.fromRawValue((Arm64FirstVectorRegister + k) as RegNum) otherwise panic("emitArm64AsyncPreemptBlock: {k} vector registers past the boundary is inside a file of {vectorRegisterCount(arm64RegisterFile())}")
+		let slot = arm64AsyncPreemptVectorBase() + (k as MachineWord) * SpillSlotBytes
+
+		match direction 'dir'
+			push then arm64EmitStoreFpSp(asm.code, src: arm64RuntimeFpReg(reg), byteOffset: slot)
+			pop then arm64EmitLoadFpSp(asm.code, dest: arm64RuntimeFpReg(reg), byteOffset: slot)
+		end 'dir'
+	end 'vectors'
+
+	match direction 'flagsLast'
+		push then emitArm64AsyncPreemptFlags(asm, direction: direction)
+		pop then emitArm64AsyncPreemptGprs(asm, gprs: gprs, direction: direction)
+	end 'flagsLast'
+end 'emitArm64AsyncPreemptBlock'
+
+// The condition flags, through x0 — the one register the block can borrow, because it is the first the
+// general half saves and the last it restores.
+function emitArm64AsyncPreemptFlags(asm Arm64RuntimeAsm, direction Arm64GtBlockDirection)
+	if direction == Arm64GtBlockDirection.push 'save'
+		arm64EmitMrsNzcv(asm.code, rt: arm64RuntimeReg(Arm64Register.x0))
+		arm64GtStoreSp(asm, src: Arm64Register.x0, byteOffset: arm64AsyncPreemptFlagsSlot())
+	end 'save' else 'restore'
+		arm64GtLoadSp(asm, dest: Arm64Register.x0, byteOffset: arm64AsyncPreemptFlagsSlot())
+		arm64EmitMsrNzcv(asm.code, rt: arm64RuntimeReg(Arm64Register.x0))
+	end 'restore'
+end 'emitArm64AsyncPreemptFlags'
+
+// The general half. The POP stops one register short: x30's slot holds the interrupted PC the resume branch
+// reads, and x30 itself is reloaded from the word the injection pushed.
+function emitArm64AsyncPreemptGprs(asm Arm64RuntimeAsm, gprs Arm64RegisterArray, direction Arm64GtBlockDirection)
+	let restored = match direction 'count'
+		push gives gprs.count()
+		pop gives gprs.count() - 1
+	end 'count'
+
+	for k in 0 upto restored 'gprs'
+		let reg = try gprs.get(k) otherwise panic("emitArm64AsyncPreemptGprs: index derived from count is in range")
+		let slot = (k as MachineWord) * SpillSlotBytes
+
+		match direction 'dir'
+			push then arm64GtStoreSp(asm, src: reg, byteOffset: slot)
+			pop then arm64GtLoadSp(asm, dest: reg, byteOffset: slot)
+		end 'dir'
+	end 'gprs'
+end 'emitArm64AsyncPreemptGprs'
+
+// `__gt_preempt_self_register(x0 = m)` — see `SchedRuntime.PreemptSelfRegisterName`. Run by the thread that
+// is becoming the machine, because the identity a signal is addressed by is knowable nowhere else: Darwin's
+// `pthread_kill` takes the `pthread_t` a thread learns from `pthread_self`, and Linux's `tgkill` takes the
+// kernel thread id `gettid` answers.
+//
+// ⚠ **`MOffPreemptThreadHandle` STAYS 0 ON BOTH LANES** — it is the suspending lane's word, and a signal
+// needs no handle. This thread's alternate signal stack is installed separately, by `mrt_runtime_init` for
+// the main thread and by `SchedRuntime.emitSchedWorkerBirth` for a worker.
+function buildArm64PreemptSelfRegisterChunk(os Os) returns FunctionCodeChunk
+	let SlotMachine = 0 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(1)
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotMachine)
+	arm64EmitOsPrimitive(asm, os: os, importSlot: OsImportSlot.pthreadSelf, syscallNumber: Arm64LinuxSyscallGettid)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotMachine)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x1, byteOffset: MOffOsThreadId)
+
+	return asm.finishFunction(PreemptSelfRegisterName)
+end 'buildArm64PreemptSelfRegisterChunk'
+
+// `__gt_preempt_m(x0 = m)` — see `SchedRuntime.PreemptMachineName`. Go's `preemptM` (`signal_unix.go`).
+//
+// ⛔ **EVERY ROAD THAT DOES NOT DELIVER MUST HAND `signalPending` BACK**, or that machine is never preempted
+// again for the life of the process. Only a send the kernel accepted leaves it raised, because only then is
+// a handler going to run — and the handler either injects and lets the trampoline clear it, or declines and
+// clears it itself.
+//
+// ⚠ **`__sysmon` IS ITS ONLY CALLER**, and the monitor is not a machine: it runs on a real OS-thread stack
+// with no green thread to switch off, which is what lets the Darwin arm reach libSystem through the ordinary
+// door.
+//
+// Slots: 0 = m, 1 = the thread identity across the `getpid` the Linux arm needs.
+function buildArm64PreemptMachineChunk(os Os) returns FunctionCodeChunk
+	let SlotMachine = 0 as StackSize
+	let SlotThread = 1 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(2)
+
+	let giveBack = asm.newLabel()
+	let done = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotMachine)
+
+	// CAS(m.signalPending, free -> held). A loss means a stop is already outstanding against this machine.
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x1, base: Arm64Register.x0, imm: MOffSignalPending as Imm32)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PreemptClaimFree)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PreemptClaimHeld)
+	arm64EmitAtomicCas(asm.code, dest: arm64RuntimeReg(Arm64Register.x4), addrReg: arm64RuntimeReg(Arm64Register.x1), expectedReg: arm64RuntimeReg(Arm64Register.x2), replacementReg: arm64RuntimeReg(Arm64Register.x3))
+	arm64EmitCbzTo(asm, reg: Arm64Register.x4, label: done)
+
+	// A machine that has not adopted its thread yet has no identity to address, and keeps the cooperative
+	// path until it has.
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x1, base: Arm64Register.x0, byteOffset: MOffOsThreadId)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x1, label: giveBack)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotThread)
+
+	match arm64OsCallKind(os) 'send'
+		importCall then emitArm64DarwinPreemptSend(asm, thread: Arm64Register.x1, delivered: done)
+		syscall then emitArm64LinuxPreemptSend(asm, threadSlot: SlotThread, delivered: done)
+	end 'send'
+
+	asm.placeLabel(giveBack)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotMachine)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PreemptClaimFree)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: MOffSignalPending)
+
+	asm.placeLabel(done)
+	return asm.finishFunction(PreemptMachineName)
+end 'buildArm64PreemptMachineChunk'
+
+// `pthread_kill(thread, SIGURG)` — 0 on success, an errno otherwise.
+function emitArm64DarwinPreemptSend(asm Arm64RuntimeAsm, thread Arm64Register, delivered BlockId)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x0, src: thread)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DarwinSignalUrg as MachineWord)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.pthreadKill)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: delivered)
+end 'emitArm64DarwinPreemptSend'
+
+// `tgkill(getpid(), tid, SIGURG)` — 0 on success, a negative errno otherwise. The identity rides a frame slot
+// rather than a register, so nothing here depends on which registers an `svc` leaves alone.
+function emitArm64LinuxPreemptSend(asm Arm64RuntimeAsm, threadSlot StackSize, delivered BlockId)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallGetPid)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: threadSlot)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: LinuxSignalUrg as MachineWord)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallTgkill)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: delivered)
+end 'emitArm64LinuxPreemptSend'
+
+// `mrt_preempt_handler(x0 = sig, x1 = siginfo, x2 = ucontext)` — see `SchedRuntime.PreemptHandlerName`.
+//
+// ⛔ **IT RETURNS, WHICH IS WHAT MAKES THE INJECTION WORK AT ALL.** The rewrite it makes to the SAVED
+// register file is applied by the kernel's signal return; a handler that exited would rewrite nothing.
+//
+// ⛔⛔ **THE INJECTION IS `sp -= 16; [sp] = lr; lr = pc; pc = trampoline`, AND THE PAIR IS WHAT KEEPS SP
+// 16-ALIGNED.** AArch64 faults on a stack pointer that is not, at every access that names SP as a base, so
+// the 8 bytes the second word does not use are alignment rather than waste.
+//
+// ⚠ **A THREAD WITH NO MACHINE RETURNS AT ONCE.** Only `__sysmon` sends this signal and only to a machine,
+// but a thread whose TLS block is not yet published would read a wild slot, and `emitArm64LoadCurrentMOrBail`
+// is the guarded walk that refuses to.
+//
+// Slots: 0 = the saved register file's address, 1 = m.
+function buildArm64PreemptHandlerChunk(os Os) returns FunctionCodeChunk
+	let SlotRegisterFile = 0 as StackSize
+	let SlotMachine = 1 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(2)
+
+	let decline = asm.newLabel()
+	let noMachine = asm.newLabel()
+	let done = asm.newLabel()
+
+	emitArm64SavedRegisterFile(asm, dest: Arm64Register.x3, ucontext: Arm64Register.x2, os: os)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x3, slot: SlotRegisterFile)
+
+	// ⛔⛔ **EVERY ROAD HANDS `MOffSignalPending` BACK, AND THE ONE THAT CANNOT NAME A MACHINE HAS NO CLAIM TO
+	// HAND BACK.** The sender aims its signal at `MOffOsThreadId`, which `SchedRuntime.emitSchedBecomeM`
+	// records AFTER publishing this thread's TLS slot — so a thread this runtime can signal always has a
+	// slot, and a handler that finds none is answering a SIGURG this runtime did not send.
+	emitArm64LoadCurrentMOrBail(asm, dest: Arm64Register.x0, scratch: Arm64Register.x4, bail: noMachine, os: os)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotMachine)
+
+	let saved = arm64SavedFileOffsets(os)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x3, slot: SlotRegisterFile)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x1, base: Arm64Register.x3, byteOffset: saved.pc)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x2, base: Arm64Register.x3, byteOffset: saved.sp)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: PreemptSafeName)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: decline)
+
+	// The injection, written into the SAVED file rather than into live registers.
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x3, slot: SlotRegisterFile)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x1, base: Arm64Register.x3, byteOffset: saved.sp)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x1, base: Arm64Register.x1, imm: -(Arm64GtPairBytes as Imm32))
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x2, base: Arm64Register.x3, byteOffset: saved.lr)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x2, base: Arm64Register.x1, byteOffset: 0)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x3, byteOffset: saved.sp)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x2, base: Arm64Register.x3, byteOffset: saved.pc)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x2, base: Arm64Register.x3, byteOffset: saved.lr)
+	arm64EmitLeaRuntimeFuncAddr(asm, dest: Arm64Register.x2, funcName: AsyncPreemptName)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x2, base: Arm64Register.x3, byteOffset: saved.pc)
+
+	// The stop has landed: `signalPending` stays raised for the trampoline to clear.
+	arm64EmitBranchTo(asm, label: done)
+
+	// Declined: this instant is no safe point, so the machine is re-armed for the monitor's next poll.
+	asm.placeLabel(decline)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotMachine)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PreemptClaimFree)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: MOffSignalPending)
+
+	// A SIGURG this runtime did not send — see the header. There is no claim of ours to hand back.
+	asm.placeLabel(noMachine)
+
+	asm.placeLabel(done)
+	return asm.finishFunction(PreemptHandlerName)
+end 'buildArm64PreemptHandlerChunk'
+
+// ⭐⭐ **WHERE THE INTERRUPTED REGISTER FILE LIVES, AND THE TWO LANES DISAGREE ABOUT WHETHER IT IS THERE AT
+// ALL.** Darwin's `ucontext_t` holds a POINTER to an `mcontext64`; Linux's holds the `sigcontext` INLINE. So
+// the Darwin arm dereferences and the Linux arm does not, and every offset below is relative to whatever
+// this answers.
+function emitArm64SavedRegisterFile(asm Arm64RuntimeAsm, dest Arm64Register, ucontext Arm64Register, os Os)
+	match os 'os'
+		macos then arm64EmitLoadWord64At(asm, dest: dest, base: ucontext, byteOffset: DarwinUcontextOffMcontext)
+		linux then arm64EmitMovRuntimeReg(asm, dest: dest, src: ucontext)
+		windows then panic("emitArm64SavedRegisterFile: there is no arm64-Windows lane in this compiler, and Windows delivers no signal — `SchedRuntime.targetPreemptDelivery` answers `threadSuspend` there")
+		wasi then panic("emitArm64SavedRegisterFile: `wasm32-wasi` is not an arm64 lane — a WASI component takes a wasm trap, not a signal")
+	end 'os'
+end 'emitArm64SavedRegisterFile'
+
+// ⭐ **THE THREE DISPLACEMENTS OF ONE LANE'S SAVED REGISTER FILE, ANSWERED TOGETHER.** They are one record's
+// layout, and a lane that can answer any of them can answer all three — so asking them one at a time was
+// three copies of one `match` and three copies of its two refusals.
+type Arm64SavedFileOffsets
+	export let pc as MachineWord
+	export let sp as MachineWord
+	export let lr as MachineWord
+
+	static function create(pc MachineWord, sp MachineWord, lr MachineWord) returns Self
+		return Self{pc: pc, sp: sp, lr: lr}
+	end 'create'
+end 'Arm64SavedFileOffsets'
+
+function arm64SavedFileOffsets(os Os) returns Arm64SavedFileOffsets
+	return match os 'os'
+		macos gives Arm64SavedFileOffsets.create(DarwinMcontextOffSsPc, sp: DarwinMcontextOffSsSp, lr: DarwinMcontextOffSsLr)
+		linux gives Arm64SavedFileOffsets.create(Arm64LinuxUcontextOffPc, sp: Arm64LinuxUcontextOffSp, lr: Arm64LinuxUcontextOffLr)
+		windows panic("arm64SavedFileOffsets: {os.name} delivers no signal to this backend — see `emitArm64SavedRegisterFile`")
+		wasi panic("arm64SavedFileOffsets: {os.name} delivers no signal to this backend — see `emitArm64SavedRegisterFile`")
+	end 'os'
+end 'arm64SavedFileOffsets'
+
+// ==========================================================================
 // Assembly
 // ==========================================================================
 
@@ -1080,4 +1465,14 @@ export function appendArm64GtRuntimeChunks(chunks FunctionCodeChunkArray, target
 	chunks.push(buildArm64GtGuardTrippedChunk())
 	chunks.push(buildArm64GtMorestackChunk(target))
 	chunks.push(buildArm64GtStackRelocateChunk(target))
+
+	// ⛔ **GATE SITE — asynchronous preemption's four hand-assembled halves.** The trampoline is ISA-shaped
+	// and the other three are the OS's, though on this ISA both lanes deliver by signal and so share their
+	// bodies. See `SchedRuntime.targetPreemptDelivery`.
+	if targetStopsThreadsForPreemption(target) 'itCanStopAThread'
+		chunks.push(buildArm64GtAsyncPreemptChunk())
+		chunks.push(buildArm64PreemptSelfRegisterChunk(target.os))
+		chunks.push(buildArm64PreemptMachineChunk(target.os))
+		chunks.push(buildArm64PreemptHandlerChunk(target.os))
+	end 'itCanStopAThread'
 end 'appendArm64GtRuntimeChunks'

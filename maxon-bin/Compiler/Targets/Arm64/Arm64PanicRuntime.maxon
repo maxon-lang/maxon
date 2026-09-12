@@ -83,26 +83,76 @@ function buildArm64WriteStderrChunk(os Os) returns FunctionCodeChunk
 end 'buildArm64WriteStderrChunk'
 
 // ==========================================================================
+// __symtab_index(x0 = text_offset, x1 = symtable) -> x0
+// ==========================================================================
+
+// The arm64 twin of `X64Runtime.buildSymtabIndexChunk`, over the same table and answering the same index —
+// see `BacktraceFormat.SymtabIndexName` for why the format has exactly one lookup.
+//
+// No call, so every working value stays in a register: x0 = text_offset then the answer, x1 = symtable,
+// x2 = hi, x3 = lo, x4 = best, x5 = mid, x6 = the entry address, x7 = its `codeOffset`.
+function buildArm64SymtabIndexChunk() returns FunctionCodeChunk
+	assertSymtabStride()
+	var asm = Arm64RuntimeAsm.beginFunction(0)
+
+	let search = asm.newLabel()
+	let goLower = asm.newLabel()
+	let searchDone = asm.newLabel()
+
+	arm64EmitLoadColumn(asm, dest: Arm64Register.x2, base: Arm64Register.x1, byteOffset: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: SymtabIndexNotFound)
+
+	asm.placeLabel(search)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x3, rhs: Arm64Register.x2)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: searchDone)
+
+	// mid = lo + (hi - lo)/2 — the difference form, so a table whose indices summed past the signed range
+	// could not wrap. Both ends are entry indices, so the halving is logical.
+	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x5, lhs: Arm64Register.x2, rhs: Arm64Register.x3)
+	arm64EmitLsrImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x5), rn: arm64RuntimeReg(Arm64Register.x5), sh: 1 as ShiftCount)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x5, lhs: Arm64Register.x5, rhs: Arm64Register.x3)
+
+	// entry = symtable + SymtabOffEntries + mid*SymbolTableEntryBytes
+	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x6), rn: arm64RuntimeReg(Arm64Register.x5), sh: SymtabEntryShift as ShiftCount)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x6, lhs: Arm64Register.x1, rhs: Arm64Register.x6)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x6, base: Arm64Register.x6, imm: SymtabOffEntries)
+	arm64EmitLoadColumn(asm, dest: Arm64Register.x7, base: Arm64Register.x6, byteOffset: SymtabEntryOffCodeOffset)
+
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x0, rhs: Arm64Register.x7)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: goLower)
+
+	// This entry starts at or below the offset, so it is the best so far and everything below it is settled.
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x4, src: Arm64Register.x5)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x3, base: Arm64Register.x5, imm: 1)
+	arm64EmitBranchTo(asm, label: search)
+
+	asm.placeLabel(goLower)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x2, src: Arm64Register.x5)
+	arm64EmitBranchTo(asm, label: search)
+
+	asm.placeLabel(searchDone)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x0, src: Arm64Register.x4)
+	return asm.finishFunction(SymtabIndexName)
+end 'buildArm64SymtabIndexChunk'
+
+// ==========================================================================
 // mrt_panic_print_frame(x0 = text_offset, x1 = symtable)
 // ==========================================================================
 
 // Print one frame: the inline lines the offset sits under, then `  in <name>\n` with `text_offset`
-// resolved through the symbol table — a linear scan keeping the LAST entry whose `codeOffset` is <=
-// `text_offset`, which is the GREATEST such entry because the table ascends (asserted where it is
-// built). The arm64 twin of `X64Runtime.buildPrintFrameChunk`, over the same tables and printing the
-// same words.
+// resolved through the symbol table's one lookup (`__symtab_index`), whose matched entry carries the
+// `nameOffset`. The arm64 twin of `X64Runtime.buildPrintFrameChunk`, over the same tables and printing
+// the same words.
 //
 // Slots: 0 = text_offset, 1 = symtable. They are the only two values that must survive the opening
-// calls; the scan itself makes no call, so its five working values stay in registers.
+// inline-frame call, the `  in ` write and the lookup call.
 function buildArm64PrintFrameChunk(globalData GlobalDataTable) returns FunctionCodeChunk
 	let SlotTextOffset = 0 as StackSize
 	let SlotSymtable = 1 as StackSize
 	assertSymtabStride()
 	var asm = Arm64RuntimeAsm.beginFunction(2)
 
-	let lookup = asm.newLabel()
-	let next = asm.newLabel()
-	let lookupDone = asm.newLabel()
 	let unknown = asm.newLabel()
 	let newline = asm.newLabel()
 
@@ -114,41 +164,20 @@ function buildArm64PrintFrameChunk(globalData GlobalDataTable) returns FunctionC
 
 	arm64EmitPrintConstant(asm, globalData: globalData, bytes: FrameLinePrefix)
 
-	// x1 = symtable, x5 = text_offset, x2 = count, x3 = index, x4 = best nameOffset, x6 = found.
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotTextOffset)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotSymtable)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x5, slot: SlotTextOffset)
-	arm64EmitLoadColumn(asm, dest: Arm64Register.x2, base: Arm64Register.x1, byteOffset: 0)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: 0)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: 0)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x6, value: 0)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: SymtabIndexName)
 
-	asm.placeLabel(lookup)
-	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x3, rhs: Arm64Register.x2)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: lookupDone)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: SymtabIndexNotFound as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: unknown)
 
-	// entry = symtable + SymtabOffEntries + index*8
-	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x7), rn: arm64RuntimeReg(Arm64Register.x3), sh: SymtabEntryShift as ShiftCount)
-	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x7, lhs: Arm64Register.x1, rhs: Arm64Register.x7)
-	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x7, base: Arm64Register.x7, imm: SymtabOffEntries)
-
-	arm64EmitLoadColumn(asm, dest: Arm64Register.x8, base: Arm64Register.x7, byteOffset: SymtabEntryOffCodeOffset)
-	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x5, rhs: Arm64Register.x8)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: next)
-	arm64EmitLoadColumn(asm, dest: Arm64Register.x4, base: Arm64Register.x7, byteOffset: SymtabEntryOffNameOffset)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x6, value: 1)
-
-	asm.placeLabel(next)
-	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x3, base: Arm64Register.x3, imm: 1)
-	arm64EmitBranchTo(asm, label: lookup)
-
-	// ⚠ A SEPARATE `found` REGISTER, not a sentinel `best`. x64 marks "nothing matched" with -1 and
-	// can, because its `nameOffset` is read into a register the sentinel cannot collide with; here the
-	// honest encoding costs one register and cannot be confused with offset 0 at all.
-	asm.placeLabel(lookupDone)
-	arm64EmitCbzTo(asm, reg: Arm64Register.x6, label: unknown)
-
-	// name_ptr = symtable + nameOffset (which is relative to the table's start).
-	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x1, rhs: Arm64Register.x4)
+	// name_ptr = symtable + entry[index].nameOffset (which is relative to the table's start).
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotSymtable)
+	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x2), rn: arm64RuntimeReg(Arm64Register.x0), sh: SymtabEntryShift as ShiftCount)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x2, lhs: Arm64Register.x1, rhs: Arm64Register.x2)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x2, base: Arm64Register.x2, imm: SymtabOffEntries)
+	arm64EmitLoadColumn(asm, dest: Arm64Register.x3, base: Arm64Register.x2, byteOffset: SymtabEntryOffNameOffset)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x1, rhs: Arm64Register.x3)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: WriteStderrName)
 	arm64EmitBranchTo(asm, label: newline)
 
@@ -454,6 +483,7 @@ export function appendArm64PanicRuntimeChunks(chunks FunctionCodeChunkArray, glo
 	chunks.push(buildArm64WalkFramesChunk(globalData, greenThreads: greenThreads, os: target.os))
 	chunks.push(buildArm64PrintFrameChunk(globalData))
 	chunks.push(buildArm64PrintInlineFramesChunk(globalData))
+	chunks.push(buildArm64SymtabIndexChunk())
 	chunks.push(buildArm64WriteStderrChunk(target.os))
 end 'appendArm64PanicRuntimeChunks'
 

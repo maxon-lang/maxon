@@ -122,7 +122,7 @@ end 'arm64ThreadPointerSource'
 // scalar core, which has no allocator and cannot leak. `initGlobals` gates the managed-global
 // initialization and release the same way (P1.7 slice 2a) — `false` for a program with no managed
 // top-level `var`, which is every program in the scalar corpus.
-export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, captureEnvp bool, debugStream bool, dumpCoverage bool, os Os, entryFunction ByteArray) returns FunctionCodeChunk
+export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, captureEnvp bool, debugStream bool, dumpCoverage bool, runsRuntimeInit bool, os Os, entryFunction ByteArray) returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
 	var iatRelocs = RelocationArray.create()
@@ -149,13 +149,14 @@ export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drain
 		emitArm64EnvpCapture(code, rdataRelocs: rdataRelocs, os: os)
 	end 'envp'
 
-	// ⭐ **THE FAULT HANDLER IS INSTALLED BEFORE ANY OTHER `bl`, SO THE FIRST INSTRUCTION IT COVERS IS THE
-	// FIRST ONE THAT COULD FAULT.** `mrt_runtime_init` takes no argument and returns nothing, so there is
-	// nothing to move around it; it is gated on `arm64OsInstallsFaultHandler` because a `bl` to a chunk
-	// the lane's appender did not lay down is a link failure rather than a diagnostic.
-	if arm64OsInstallsFaultHandler(os) 'faultHandler'
+	// ⭐ **THE SIGNAL HANDLERS ARE INSTALLED BEFORE ANY OTHER `bl`, SO THE FIRST INSTRUCTION THEY COVER IS
+	// THE FIRST ONE THAT COULD FAULT.** `mrt_runtime_init` takes no argument and returns nothing, so there
+	// is nothing to move around it; the gate is the caller's answer to `arm64RunsRuntimeInit`, which is the
+	// same question the chunk appender asks — a `bl` to a chunk the lane's appender did not lay down is a
+	// link failure rather than a diagnostic.
+	if runsRuntimeInit 'signalHandlers'
 		arm64EmitBranchLink(code, callFixups: callFixups, targetName: RuntimeInitName)
-	end 'faultHandler'
+	end 'signalHandlers'
 
 	// ⭐ **THE PRODUCER ATTACHES BEFORE `__module_init`, WHICH IS THE FIRST THING THAT CAN ALLOCATE.** An
 	// eager managed global's box is a real allocation and belongs in the trace; attaching after it would

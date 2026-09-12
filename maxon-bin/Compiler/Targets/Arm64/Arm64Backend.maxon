@@ -43,6 +43,27 @@ let Arm64Fp = 29
 export let Arm64FramePointerRegNum = Arm64Fp as RegNum
 let Arm64Lr = 30
 
+// ⭐⭐⭐ **x15 — THE ONE REGISTER HELD BACK FROM THE ALLOCATOR SO A STOPPED THREAD CAN BE PUT BACK WHERE IT
+// STOOD.** AArch64 has no stack-popping return: `__gt_async_preempt` must set the program counter through a
+// register, and that register's own value is gone from the instant of the branch — so the resume needs one
+// register that is DEAD at every instruction a stop may land on. x30 is not (the interrupted function wants
+// its link register back) and neither are x16/x17 (an import call holds a callee address in x16 across two
+// instructions; a jump table holds its table base in x17 across six). Nothing colours x15 and no encoder
+// touches it, which is what makes it the answer.
+//
+// ⚠ **IT IS RESERVED ON EVERY arm64 PROGRAM, GREEN THREADS OR NOT.** Making the pool depend on whether a
+// module spawns would make a function's register assignment depend on something no caller of the allocator
+// knows, to save one of twenty-six.
+export let Arm64AsyncPreemptScratch = 15
+export let Arm64AsyncPreemptResumeReg = Arm64Register.x15
+
+// x18 — Darwin's platform register. Out of the allocatable pool on BOTH lanes and written by nothing here:
+// Apple reserves it for the OS, and using it corrupts thread state. Named because the asynchronous-preemption
+// trampoline's register list stops AT it (`Arm64GtRuntime.arm64AsyncPreemptGprs`): a stop lands
+// at an arbitrary instruction, so that list spills everything between the scratch register and this one, and
+// x18 is where it must stop rather than a number the list restates.
+export let Arm64PlatformRegister = 18
+
 // The IP scratch registers (x16/x17) — never in the allocatable pool, so the encoder clobbers them
 // freely for immediate materialisation, the `xchg` cycle-break and the ADRP scratch of a float load.
 let Arm64Ip0 = 16
@@ -203,6 +224,30 @@ let Arm64XzrField = 31
 // --- Data-processing (immediate) ---
 let Arm64OpAddImm = 0x91000000
 export let Arm64OpSubImm = 0xD1000000
+
+// MRS/MSR against NZCV — see `arm64EmitMrsNzcv`.
+let Arm64OpMrsNzcv = 0xD53B4200
+let Arm64OpMsrNzcv = 0xD51B4200
+
+// ⭐⭐ **HOW TO RECOGNISE A LOAD-EXCLUSIVE, WHICH IS THE HEAD OF EVERY LL/SC PAIR THIS BACKEND EMITS.** Bits
+// 29..22 name the load/store-exclusive group with L set and o2 clear, which is `LDXR`/`LDAXR`/`LDXP`/`LDAXP`
+// at any width. The SIZE field (31..30) and the pair bit are deliberately outside the mask: an exclusive
+// load of any shape opens a reservation, and every shape must be declined alike.
+//
+// ⚠ **ITS READER IS THE SAFE-POINT PREDICATE** (`SchedRuntime.buildGtPreemptSafe`): a thread stopped between
+// an exclusive load and its store-exclusive would carry a reservation across a park.
+export let Arm64ExclusiveLoadMask = 0x3FC00000
+export let Arm64ExclusiveLoadBits = 0x08400000
+
+// ⭐ **HOW FAR BACK THAT LOOK REACHES.** The longest LL/SC body this backend emits is the compare-and-swap's
+// `LDAXR · CMP · B.NE · STLXR · CBNZ`, so the last instruction inside a reservation is four words past its
+// head — and nothing after the `CBNZ` reads the exclusive scratch.
+export let Arm64ExclusiveLookbackWords = 4
+
+// An AArch64 instruction is one 32-bit word, and two of them share one naturally aligned 64-bit load — which
+// is how the predicate reads them, the Std tier having no 32-bit access at all.
+export let Arm64InstructionBytes = 4
+export let Arm64InstructionWordMask = 0xFFFFFFFF
 let Arm64ImmShift = 10
 
 // The WIDTH of the imm12 field. It is TWO facts in one number and they cannot be allowed to drift: how
@@ -2324,6 +2369,17 @@ export function arm64EmitBranchLinkReg(code ByteArray, reg MachineWord)
 	emitArm64Insn(code, insn: Arm64OpBlr or (reg shl Arm64RnShift))
 end 'arm64EmitBranchLinkReg'
 
+// ⭐ **`MRS Xt, NZCV` / `MSR NZCV, Xt` — THE CONDITION FLAGS AS A VALUE.** The only way to carry an
+// interrupted thread's flags across a park: a stop lands between a `cmp` and the `b.cond` that reads it as
+// readily as anywhere else. `NZCV` is system register (op0=3, op1=3, CRn=4, CRm=2, op2=0).
+export function arm64EmitMrsNzcv(code ByteArray, rt MachineWord)
+	emitArm64Insn(code, insn: Arm64OpMrsNzcv or rt)
+end 'arm64EmitMrsNzcv'
+
+export function arm64EmitMsrNzcv(code ByteArray, rt MachineWord)
+	emitArm64Insn(code, insn: Arm64OpMsrNzcv or rt)
+end 'arm64EmitMsrNzcv'
+
 // `BR Xn` — an indirect jump: the jump table's computed target, and the system-stack door's tail call.
 export function arm64EmitBranchReg(code ByteArray, reg MachineWord)
 	emitArm64Insn(code, insn: Arm64OpBr or (reg shl Arm64RnShift))
@@ -2558,6 +2614,7 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThrea
 	var jumpTables = JumpTablePendingArray.create()
 	var blockOffsets = BlockOffsetTable.forBlockCount(func.nextBlockId)
 	let guarded = greenThreads and not skipsGreenThreadStackGuard(func)
+	var unsafePrefixBytes = 0 as CodeOffset
 	var isFirstBlock = true
 
 	// ⭐ x64's twin: one bool test per op when debug info is off, and the span column untouched.
@@ -2585,6 +2642,9 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThrea
 		// `stdlib/Builtins.maxon` and segfaulted a green thread) and the split from `isRuntimeFunction`.
 		if isFirstBlock and guarded 'guard'
 			emitArm64GtStackGuard(code, callFixups: callFixups, rdataRelocs: rdataRelocs, frameBytes: arm64PrologueFrameBytes(module, block: block), margin: gtStackGuardMargin(target), site: GtGuardSite.functionEntry, target: target)
+
+			// x64's twin: the guard's bytes are where an asynchronous stop may not land, read off the buffer.
+			unsafePrefixBytes = code.count()
 		end 'guard'
 
 		isFirstBlock = false
@@ -2619,6 +2679,11 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThrea
 	var chunk = FunctionCodeChunk.createWith(func.name, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())
 	chunk.funcAdrpRelocs = funcAdrpRelocs
 	chunk.jumpTableRelocs = resolveJumpTableRelocs(jumpTables, blockOffsets: blockOffsets)
+
+	// x64's twin, and the same fact: this is code a green thread runs rather than the compiler's own
+	// scaffolding, which is what makes a PC inside it a safe point for an asynchronous stop.
+	chunk.asyncPreemptible = guarded
+	chunk.asyncUnsafePrefixBytes = unsafePrefixBytes
 
 	// Gated on `--coverage` rather than on debug info: the two are independent channels, and this one is
 	// empty for an ordinary build because no `covInc` was emitted to fill it. Dropping it would leave every
@@ -2674,8 +2739,8 @@ end 'arm64PrologueFrameBytes'
 // managed top-level `var`), `debugStream` the DebugStream producer's attach/detach bracket, and
 // `os` picks the stub's exit route — a libSystem GOT call on macOS, a raw `svc #0` on Linux (see
 // `Arm64Runtime.arm64OsCallKind`).
-function appendArm64RuntimeChunks(chunks FunctionCodeChunkArray, leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, captureEnvp bool, debugStream bool, dumpCoverage bool, os Os, entryFunction ByteArray)
-	chunks.push(buildArm64EntryStubChunk(leakCheck, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, captureArgv: captureArgv, captureEnvp: captureEnvp, debugStream: debugStream, dumpCoverage: dumpCoverage, os: os, entryFunction: entryFunction))
+function appendArm64RuntimeChunks(chunks FunctionCodeChunkArray, leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, captureEnvp bool, debugStream bool, dumpCoverage bool, runsRuntimeInit bool, os Os, entryFunction ByteArray)
+	chunks.push(buildArm64EntryStubChunk(leakCheck, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, captureArgv: captureArgv, captureEnvp: captureEnvp, debugStream: debugStream, dumpCoverage: dumpCoverage, runsRuntimeInit: runsRuntimeInit, os: os, entryFunction: entryFunction))
 
 	// Directly behind the stub — the layout `recordChunkSymbol` requires of the thread entry.
 	if drainGreenThreads 'mainIsAGreenThread'
@@ -2778,8 +2843,9 @@ function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModul
 	labelsLaid = labelsLaid + 1
 	code.append(buildSymbolTableBytes(debugSymbols))
 
-	// The inline frame tables follow `__symtable`'s names under their own label (`BacktraceFormat`), past the
-	// `[mrt_start, __symtable)` window the walkers symbolize in — x64's concat lays them out the same way.
+	// The inline frame tables follow the whole of `__symtable` — names and flag run both — under their own
+	// label (`BacktraceFormat`), past the `[mrt_start, __symtable)` window the walkers symbolize in; x64's
+	// concat lays them out the same way.
 	padTo(code, size: alignUp(code.count(), alignment: SymbolTableAlignment))
 	try recordChunkLabel(labelOffsets, name: InlineFrameTableName, offset: code.count(), laidOut: labelsLaid, project: project, funcNames: funcNames)
 	code.append(buildInlineFrameTableBytes(inlineFrames))
@@ -2966,6 +3032,10 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	// A preemption request is honoured below a guarded function's entry, in frames sized only now.
 	if usage.usesGt 'preemptionDepth'
 		requirePreemptionFitsTheGuardMargin(targetModule, funcNames: funcNames, target: target)
+
+		if targetStopsThreadsForPreemption(target) 'asyncPreemptionDepth'
+			requireAsyncPreemptionFitsItsMargin(targetModule, funcNames: funcNames, target: target)
+		end 'asyncPreemptionDepth'
 	end 'preemptionDepth'
 
 	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
@@ -2979,7 +3049,7 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	//
 	// ⚠ It is not the WHOLE arm64 runtime: the panic, fault, host-surface and scheduler families appended
 	// below user code are the rest of it.
-	appendArm64RuntimeChunks(chunks, leakCheck: usage.usesHeap, initGlobals: usage.usesManagedGlobals, drainGreenThreads: usage.usesGt, captureArgv: usage.usesCommandLine, captureEnvp: linuxReadsEnvironment(usage) and target.os == Os.linux, debugStream: stdModule.debugStream, dumpCoverage: usage.usesCoverage, os: target.os, entryFunction: project.entryFunctionName)
+	appendArm64RuntimeChunks(chunks, leakCheck: usage.usesHeap, initGlobals: usage.usesManagedGlobals, drainGreenThreads: usage.usesGt, captureArgv: usage.usesCommandLine, captureEnvp: linuxReadsEnvironment(usage) and target.os == Os.linux, debugStream: stdModule.debugStream, dumpCoverage: usage.usesCoverage, runsRuntimeInit: arm64RunsRuntimeInit(target, usesGt: usage.usesGt), os: target.os, entryFunction: project.entryFunctionName)
 
 	for func in targetModule.functions 'eachFunc'
 		chunks.push(emitArm64FunctionChunk(targetModule, func: func, greenThreads: usage.usesGt, target: target))
@@ -2995,7 +3065,7 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	// every chunk in it calls that runtime's walker, frame printer and stderr writer BY NAME — order
 	// among runtime chunks is inert (they all fall inside `[mrt_start, __symtable)`, the only range the
 	// text guard tests), so this is about reading order rather than about layout.
-	appendArm64FaultRuntimeChunks(chunks, globalData: globalData, os: target.os)
+	appendArm64FaultRuntimeChunks(chunks, globalData: globalData, usesGt: usage.usesGt, target: target)
 
 	// The HOST SURFACE — the sequences behind the `os*` ops. EXACTLY ONE lane's chunks are appended, which
 	// is what lets both build under the shared `mrt_host_*` names (`Arm64PosixRuntime`'s header): macOS's

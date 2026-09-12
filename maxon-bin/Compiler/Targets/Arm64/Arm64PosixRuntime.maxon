@@ -620,6 +620,7 @@ export function buildArm64PosixPipePeekChunk(poll PosixPollCall) returns Functio
 	var asm = Arm64RuntimeAsm.beginFunction(4)
 
 	let notReady = asm.newLabel()
+	let interrupted = asm.newLabel()
 	let broken = asm.newLabel()
 	let publish = asm.newLabel()
 	let answered = asm.newLabel()
@@ -633,7 +634,7 @@ export function buildArm64PosixPipePeekChunk(poll PosixPollCall) returns Functio
 
 	arm64PosixEmitPollNoWait(asm, poll: poll, pollfdSlot: SlotPollfd, secSlot: SlotTsSec, nsecSlot: SlotTsNsec)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: broken)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: interrupted)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: notReady)
 
 	// Ready — unless the descriptor itself is unusable, which is `PeekNamedPipe`'s own failure and the Std
@@ -655,6 +656,11 @@ export function buildArm64PosixPipePeekChunk(poll PosixPollCall) returns Functio
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x2, base: Arm64Register.x1, byteOffset: 0)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32True as MachineWord)
 	arm64EmitBranchTo(asm, label: answered)
+
+	// An INTERRUPTED poll has learned nothing about the descriptor, so it answers "no bytes yet" and the
+	// caller's next pass asks again. Every other failure falls through and condemns it.
+	asm.placeLabel(interrupted)
+	arm64PosixEmitPollWasInterrupted(asm, poll: poll, whenInterrupted: notReady)
 
 	asm.placeLabel(broken)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32False as MachineWord)
@@ -692,6 +698,41 @@ function arm64PosixEmitPollNoWait(asm Arm64RuntimeAsm, poll PosixPollCall, pollf
 		ppollSyscall(number, sigsetBytes) then arm64PosixEmitPpoll(asm, number: number, sigsetBytes: sigsetBytes, pollfdSlot: pollfdSlot, secSlot: secSlot, nsecSlot: nsecSlot)
 	end 'route'
 end 'arm64PosixEmitPollNoWait'
+
+// Branch to `whenInterrupted` when the failure `poll`/`ppoll` has just reported is `EINTR`. The lane fork is
+// `PosixPollCall`'s own, because where the number is reported is the same fact as how the call is reached.
+//
+// ⛔⛔ **AN INTERRUPTED POLL IS NOT A BROKEN PIPE, AND THE PREEMPTION SIGNAL'S `SA_RESTART` DOES NOT COVER
+// IT.** POSIX exempts `select`/`poll` from restart, and the exemption holds even at a ZERO timeout — MEASURED
+// on arm64-macOS with the monitor stopping machines: 41 of 300 collects of a healthy child's stdout had
+// `poll(fd, 1, 0)` answer -1 with `revents` unset, and a caller that read that as end-of-stream threw the
+// child's whole output away. An interrupted poll has learned nothing, so the honest answer is "no bytes yet".
+function arm64PosixEmitPollWasInterrupted(asm Arm64RuntimeAsm, poll PosixPollCall, whenInterrupted BlockId)
+	match poll 'route'
+		pollImport then arm64PosixEmitDarwinBranchIfEintr(asm, whenInterrupted: whenInterrupted)
+		ppollSyscall then arm64PosixEmitSyscallBranchIfEintr(asm, whenInterrupted: whenInterrupted)
+	end 'route'
+end 'arm64PosixEmitPollWasInterrupted'
+
+// ⭐ **ONE `EINTR` TEST PER LANE, SHARED BY EVERY CALL THAT OWES ONE** — the pipe peek and the
+// read/write transfer chunks both branch through these, so the two lanes cannot drift in how they
+// recognise it. ⚠ **`whenInterrupted` IS NOT ALWAYS A LOOP**: the transfer chunks aim it BACKWARD at
+// their own call to re-issue it, and the peek aims it FORWARD at a different answer.
+//
+// libSystem answers -1 and keeps the number in the thread-local `*__error()`, which is also why the narrowed
+// result register cannot carry it. ⚠ It CLOBBERS x0, which every caller has already finished with.
+export function arm64PosixEmitDarwinBranchIfEintr(asm Arm64RuntimeAsm, whenInterrupted BlockId)
+	arm64PosixEmitHostCall(asm, call: PosixHostCall.importCall(OsImportSlot.errnoLocation))
+	arm64EmitLoadWord32At(asm, dest: Arm64Register.x1, base: Arm64Register.x0, byteOffset: 0)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x1, imm: PosixErrnoInterrupted as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: whenInterrupted)
+end 'arm64PosixEmitDarwinBranchIfEintr'
+
+// A raw `svc` answers the NEGATED number in the result register itself, so there is no accessor to call.
+export function arm64PosixEmitSyscallBranchIfEintr(asm Arm64RuntimeAsm, whenInterrupted BlockId)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: (0 - PosixErrnoInterrupted) as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: whenInterrupted)
+end 'arm64PosixEmitSyscallBranchIfEintr'
 
 function arm64PosixEmitPollImport(asm Arm64RuntimeAsm, slot OsImportSlot, pollfdSlot StackSize)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: pollfdSlot)
@@ -828,7 +869,7 @@ end 'buildArm64PosixProcReapChunk'
 export function buildArm64PosixProcAwaitChunk() returns FunctionCodeChunk
 	let SlotObj = 0 as StackSize
 	let SlotTimeout = 1 as StackSize
-	let SlotElapsed = 2 as StackSize
+	let SlotDeadline = 2 as StackSize
 	var asm = Arm64RuntimeAsm.beginFunction(3)
 
 	let bounded = asm.newLabel()
@@ -851,23 +892,22 @@ export function buildArm64PosixProcAwaitChunk() returns FunctionCodeChunk
 	// 0 and everything else share one loop: it reaps FIRST and tests the deadline second, so a zero timeout
 	// makes exactly one non-blocking reap and then answers.
 	asm.placeLabel(bounded)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotElapsed)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostTickMsName)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotTimeout)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotDeadline)
 
 	asm.placeLabel(boundedStep)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixReapWithoutBlocking)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostProcReapName)
 	arm64EmitCbnzTo(asm, reg: Arm64Register.x0, label: signalled)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotElapsed)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotTimeout)
-	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x2, rhs: Arm64Register.x1)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostTickMsName)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotDeadline)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: notSignalled)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: PosixChildPollMs)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostSleepMsName)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotElapsed)
-	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x2, base: Arm64Register.x2, imm: PosixChildPollMs as Imm32)
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotElapsed)
 	arm64EmitBranchTo(asm, label: boundedStep)
 
 	asm.placeLabel(signalled)
@@ -953,7 +993,7 @@ export function buildArm64PosixWaitAnyChunk() returns FunctionCodeChunk
 	let SlotBase = 0 as StackSize
 	let SlotCount = 1 as StackSize
 	let SlotTimeout = 2 as StackSize
-	let SlotElapsed = 3 as StackSize
+	let SlotDeadline = 3 as StackSize
 	let SlotIndex = 4 as StackSize
 	var asm = Arm64RuntimeAsm.beginFunction(5)
 
@@ -961,13 +1001,19 @@ export function buildArm64PosixWaitAnyChunk() returns FunctionCodeChunk
 	let scanStep = asm.newLabel()
 	let scanned = asm.newLabel()
 	let sleepStep = asm.newLabel()
+	let timedOut = asm.newLabel()
 	let done = asm.newLabel()
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotBase)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotCount)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotTimeout)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: 0)
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x3, slot: SlotElapsed)
+
+	// The deadline is computed on both roads and READ only on the bounded one. `WaitInfinite` is a 32-bit
+	// sentinel, so the sum cannot wrap a 64-bit tick count.
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostTickMsName)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotTimeout)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x0, rhs: Arm64Register.x2)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotDeadline)
 
 	asm.placeLabel(scanRound)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: 0)
@@ -996,17 +1042,20 @@ export function buildArm64PosixWaitAnyChunk() returns FunctionCodeChunk
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: WaitInfinite)
 	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x2, rhs: Arm64Register.x3)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: sleepStep)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x3, slot: SlotElapsed)
-	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x3, rhs: Arm64Register.x2)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: done)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostTickMsName)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x3, slot: SlotDeadline)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x0, rhs: Arm64Register.x3)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: timedOut)
 
 	asm.placeLabel(sleepStep)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: PosixChildPollMs)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostSleepMsName)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x3, slot: SlotElapsed)
-	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x3, base: Arm64Register.x3, imm: PosixChildPollMs as Imm32)
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x3, slot: SlotElapsed)
 	arm64EmitBranchTo(asm, label: scanRound)
+
+	// ⚠ **THE ANSWER IS RE-ZEROED BECAUSE THE CLOCK READ DESTROYED IT.** Reaching the deadline test means
+	// every reap answered 0, and that 0 was this chunk's answer until a `bl` began landing in x0.
+	asm.placeLabel(timedOut)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: PosixNoChildSignalled)
 
 	asm.placeLabel(done)
 	return asm.finishFunction(HostWaitAnyName)

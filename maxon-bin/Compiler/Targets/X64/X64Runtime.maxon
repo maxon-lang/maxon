@@ -525,9 +525,9 @@ end 'emitFaultAddressesAndBacktrace'
 // code in ECX; the Linux syscall ABI passes `exit_group`'s in EDI. That is why the immediate load sits
 // inside each arm rather than above the match — exactly the split `lowerOsExit` makes, and for the
 // same reason.
-export function encodeX64ProcessExit(code ByteArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, callFixups CallFixupArray, route X64OsCallKind, exitCode MachineWord, usesGt bool)
+export function encodeX64ProcessExit(code ByteArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, callFixups CallFixupArray, route X64OsCallKind, exitCode MachineWord, usesGt bool, target Target)
 	match route 'route'
-		importCall then encodeWin64ProcessExit(code, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, callFixups: callFixups, exitCode: exitCode, usesGt: usesGt)
+		importCall then encodeWin64ProcessExit(code, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, callFixups: callFixups, exitCode: exitCode, usesGt: usesGt, target: target)
 		syscall then encodeLinuxProcessExit(code, exitCode: exitCode)
 	end 'route'
 end 'encodeX64ProcessExit'
@@ -536,8 +536,17 @@ end 'encodeX64ProcessExit'
 // diagnostic raised on a green thread runs on that thread's few-kilobyte stack — below the vectored handler's
 // dispatch frames when it is a fault — and `ExitProcess` outruns what is left of it, faulting again inside
 // the exit. Never returns, so nothing follows it.
-function encodeWin64ProcessExit(code ByteArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, callFixups CallFixupArray, exitCode MachineWord, usesGt bool)
+function encodeWin64ProcessExit(code ByteArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, callFixups CallFixupArray, exitCode MachineWord, usesGt bool, target Target)
 	encodeMovRegImm32(code, dest: X64Register.rcx, value: exitCode)
+
+	// A diagnostic's exit goes through the same door every other exit does on a lane whose monitor suspends
+	// threads — see `SchedRuntime.ExitProcessGateName`. The gate carries the shim itself, so the direct arm
+	// is the only one that still needs the gated IAT call.
+	if usesGt and targetPreemptDelivery(target) == PreemptDelivery.threadSuspend 'throughTheGate'
+		encodeCallDirect(code, callFixups: callFixups, targetName: ExitProcessGateName)
+		return
+	end 'throughTheGate'
+
 	emitGtGatedIatCall(code, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, callFixups: callFixups, slotIndex: iatSlotIndex(IatSlot.ExitProcess), usesGt: usesGt)
 end 'encodeWin64ProcessExit'
 
@@ -1019,26 +1028,86 @@ function buildWriteHexChunk() returns FunctionCodeChunk
 end 'buildWriteHexChunk'
 
 // ==========================================================================
+// __symtab_index(rcx = text_offset, rdx = symtable_ptr) -> r8
+// ==========================================================================
+
+// ⭐⭐ **THE ONE LOOKUP OVER `__symtable`, AND BOTH ITS READERS COME THROUGH IT** — see
+// `BacktraceFormat.SymtabIndexName`. A BINARY search for the LAST entry whose `codeOffset` is at most
+// `text_offset`, which is the greatest such entry because the table ascends (asserted where it is built).
+// It answers the entry's INDEX rather than its address: the backtrace walker wants a name out of the entry
+// array and the safe-point predicate wants a byte out of the flags array, and an index is what addresses
+// both.
+//
+// Binary rather than linear because the predicate runs on every monitor poll over a table with one entry
+// per function in the program — the compiler's own is tens of thousands — where the walker ran it a hundred
+// times in the life of a process that was already dying.
+//
+// No call, so every working value stays in a register: rcx = text_offset, rdx = symtable, r8 = the answer,
+// r9 = hi, r10 = lo, r11 = mid, rax = the entry address then its `codeOffset`.
+function buildSymtabIndexChunk() returns FunctionCodeChunk
+	assertSymtabStride()
+	var asm = X64RuntimeAsm.beginFunction(0)
+
+	let search = asm.newLabel()
+	let goLower = asm.newLabel()
+	let searchDone = asm.newLabel()
+
+	// -1 = "no entry matched". A real answer is an array index, so the two cannot collide.
+	encodeMovRegImm64(asm.code, dest: X64Register.r8, value: SymtabIndexNotFound as MachineWord)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.r10, src: X64Register.r10, wide: true)
+
+	// hi = count — a 32-bit load, which zero-extends.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r9, base: X64Register.rdx, disp: 0, wide: false)
+
+	asm.placeLabel(search)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.r10, src: X64Register.r9, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: searchDone)
+
+	// mid = lo + (hi - lo)/2 — the difference form, so a table whose indices summed past the signed range
+	// could not wrap. Both ends are entry indices, so the halving is logical.
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r11, src: X64Register.r9, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: X64Register.r11, src: X64Register.r10, wide: true)
+	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShr, reg: X64Register.r11, count: 1)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.r11, src: X64Register.r10, wide: true)
+
+	// entry = symtable + SymtabOffEntries + mid*SymbolTableEntryBytes
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: X64Register.r11, wide: true)
+	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShl, reg: X64Register.rax, count: SymtabEntryShift)
+	encodeLeaRegBaseIndexScale(asm.code, dest: X64Register.rax, base: X64Register.rdx, index: X64Register.rax, scale: MemoryIndexScale.byOne)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rax, disp: SymtabOffEntries + SymtabEntryOffCodeOffset, wide: false)
+
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rcx, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: goLower)
+
+	// This entry starts at or below the offset, so it is the best so far and everything below it is settled.
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r8, src: X64Register.r11, wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.r10, base: X64Register.r11, disp: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: search)
+
+	asm.placeLabel(goLower)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r9, src: X64Register.r11, wide: true)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: search)
+
+	asm.placeLabel(searchDone)
+	return asm.finishFunction(SymtabIndexName)
+end 'buildSymtabIndexChunk'
+
+// ==========================================================================
 // mrt_panic_print_frame(rcx = text_offset, rdx = symtable_ptr)
 // ==========================================================================
 
-// Print one frame: the inline lines the offset sits under, then `  in <name>\n` with `text_offset`
-// resolved through the symbol table — a linear scan keeping the LAST entry whose codeOffset is <=
-// text_offset, which is the GREATEST such entry because the table ascends (asserted where it is built).
+// Print one frame: the inline lines the offset sits under, then `  in <name>` plus a newline, with
+// `text_offset` resolved through the symbol table's one lookup (`__symtab_index`) and the matched
+// entry's `nameOffset` read off it.
 //
-// Slots: 0 = text_offset, 1 = symtable_ptr, 2 = count, 3 = index, 4 = best name offset.
+// Slots: 0 = text_offset, 1 = symtable_ptr — the two values that must survive the inline-frame call, the
+// `  in ` write and the lookup call.
 function buildPrintFrameChunk() returns FunctionCodeChunk
 	let SlotTextOffset = 0
 	let SlotSymtable = 1
-	let SlotCount = 2
-	let SlotIndex = 3
-	let SlotBestName = 4
 	assertSymtabStride()
-	var asm = X64RuntimeAsm.beginFunction(5)
+	var asm = X64RuntimeAsm.beginFunction(2)
 
-	let lookup = asm.newLabel()
-	let next = asm.newLabel()
-	let lookupDone = asm.newLabel()
 	let unknown = asm.newLabel()
 	let newline = asm.newLabel()
 
@@ -1051,54 +1120,19 @@ function buildPrintFrameChunk() returns FunctionCodeChunk
 
 	emitPrintString(asm, bytes: FrameLinePrefix)
 
-	// count = *(u32*)symtable — a 32-bit load, which zero-extends. Loading 8 bytes and
-	// masking would be the same value in two instructions.
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), wide: true)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rax, disp: 0, wide: false)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCount), srcReg: X64Register.rax)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotTextOffset), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: SymtabIndexName)
 
-	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotIndex), srcReg: X64Register.rax)
-
-	// -1 = "no symbol matched yet". A real nameOffset is a u32 read from the table, so it
-	// can never collide with this.
-	encodeMovRegImm64(asm.code, dest: X64Register.rax, value: u64.max)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBestName), srcReg: X64Register.rax)
-
-	asm.placeLabel(lookup)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotIndex), wide: true)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotCount), wide: true)
-	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: lookupDone)
-
-	// entry = symtable + 4 + index*8
-	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r8, src: X64Register.rax, wide: true)
-	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShl, reg: X64Register.r8, count: SymtabEntryShift)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r9, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), wide: true)
-	encodeLeaRegBaseIndexScale(asm.code, dest: X64Register.r9, base: X64Register.r9, index: X64Register.r8, scale: MemoryIndexScale.byOne)
-	encodeLeaRegRegImm32(asm.code, dest: X64Register.r9, base: X64Register.r9, disp: SymtabOffEntries)
-
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.r9, disp: SymtabEntryOffCodeOffset, wide: false)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotTextOffset), wide: true)
-	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rdx, src: X64Register.rax, wide: true)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: next)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.r9, disp: SymtabEntryOffNameOffset, wide: false)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBestName), srcReg: X64Register.rax)
-
-	asm.placeLabel(next)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotIndex), wide: true)
-	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: 1)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotIndex), srcReg: X64Register.rax)
-	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: lookup)
-
-	asm.placeLabel(lookupDone)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotBestName), wide: true)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: -1)
+	emitCmpRegImm(asm, reg: X64Register.r8, imm: SymtabIndexNotFound as Imm32)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: unknown)
 
-	// name_ptr = symtable + best (nameOffset is relative to the table's start)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), wide: true)
-	encodeLeaRegBaseIndexScale(asm.code, dest: X64Register.rcx, base: X64Register.rcx, index: X64Register.rax, scale: MemoryIndexScale.byOne)
+	// name_ptr = symtable + entry[index].nameOffset (which is relative to the table's start).
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), wide: true)
+	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShl, reg: X64Register.r8, count: SymtabEntryShift)
+	encodeLeaRegBaseIndexScale(asm.code, dest: X64Register.r8, base: X64Register.rdx, index: X64Register.r8, scale: MemoryIndexScale.byOne)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.r8, disp: SymtabOffEntries + SymtabEntryOffNameOffset, wide: false)
+	encodeLeaRegBaseIndexScale(asm.code, dest: X64Register.rcx, base: X64Register.rdx, index: X64Register.rax, scale: MemoryIndexScale.byOne)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteStderrName)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: newline)
 
@@ -1421,7 +1455,7 @@ end 'emitFaultCodeArm'
 // code no spec case could reach on purpose. `FaultProbeRuntime` is that door.
 //
 // Slots: 0 = EXCEPTION_POINTERS*, 1 = fault_rip, 2 = fault_rbp, 3 = fault_rsp, 4 = panic prefix.
-function buildFaultThunkChunk(usesGt bool) returns FunctionCodeChunk
+function buildFaultThunkChunk(usesGt bool, target Target) returns FunctionCodeChunk
 	let SlotExcPtrs = 0
 	let SlotFaultRip = 1
 	let SlotFaultRbp = 2
@@ -1465,7 +1499,7 @@ function buildFaultThunkChunk(usesGt bool) returns FunctionCodeChunk
 	emitFaultAddressesAndBacktrace(asm, ripSlot: SlotFaultRip, rbpSlot: SlotFaultRbp, rspSlot: SlotFaultRsp)
 
 	// ExitProcess(1) — never returns. There is no `recover()`, so a converted fault is terminal.
-	encodeWin64ProcessExit(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, exitCode: PanicExitCode, usesGt: usesGt)
+	encodeWin64ProcessExit(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, exitCode: PanicExitCode, usesGt: usesGt, target: target)
 
 	// Falls through: unreachable after ExitProcess, and the single `ret` every other code
 	// reaches directly.
@@ -1549,7 +1583,7 @@ function buildPanicChunk(exitRoute X64OsCallKind, dumpCoverage bool, usesGt bool
 	emitCoverageAbortDump(asm, dumpCoverage: dumpCoverage)
 
 	// (5) exit(PanicExitCode) — the one step with an OS in it.
-	encodeX64ProcessExit(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, route: exitRoute, exitCode: PanicExitCode, usesGt: usesGt)
+	encodeX64ProcessExit(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, route: exitRoute, exitCode: PanicExitCode, usesGt: usesGt, target: target)
 
 	return asm.finishFunction(PanicName)
 end 'buildPanicChunk'
@@ -1731,14 +1765,18 @@ function buildLinuxSignalStackInstallChunk() returns FunctionCodeChunk
 	return asm.finishFunction(SignalStackInstallName)
 end 'buildLinuxSignalStackInstallChunk'
 
-// mrt_runtime_init (LINUX) — registers the SIGFPE handler via rt_sigaction. `mrt_start` calls this before
-// `main`, so the first user instruction is already covered. The Linux twin of `buildRuntimeInitChunk`.
+// mrt_runtime_init (LINUX) — registers the SIGFPE handler, and on a lane that stops threads the SIGURG one
+// too, via rt_sigaction. `mrt_start` calls this before `main`, so the first user instruction is already
+// covered. The Linux twin of `buildRuntimeInitChunk`.
 // It installs the main thread's signal stack FIRST — `SA_ONSTACK` is a promise that one exists, so the
 // handler is not made reachable before it does. Then it builds a `struct sigaction` on the stack: the handler
 // address, `X64LinuxSigactionFlags`, the mandatory restorer, and an empty mask — then
 // rt_sigaction(SIGFPE, &act, NULL, 8). Slots 0..3 are the 32-byte struct, ascending from the LOWEST
 // slot so `&act` (= the lowest field, sa_handler) is `slotDisp(3)`.
-function buildLinuxRuntimeInitChunk() returns FunctionCodeChunk
+//
+// ⭐ **THE SECOND INSTALL REWRITES ONLY `sa_handler`.** The flags, the restorer and the mask are the same
+// three words for both signals, so the struct is built once and the one field that differs is stored again.
+function buildLinuxRuntimeInitChunk(usesGt bool, target Target) returns FunctionCodeChunk
 	let SlotHandler = 3  // rbp-32 = &act = sa_handler (offset 0)
 	let SlotFlags = 2  // rbp-24 = sa_flags (offset 8)
 	let SlotRestorer = 1  // rbp-16 = sa_restorer (offset 16)
@@ -1761,16 +1799,27 @@ function buildLinuxRuntimeInitChunk() returns FunctionCodeChunk
 	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotMask), srcReg: X64Register.rax)
 
-	// rt_sigaction(SIGFPE, &act, NULL, 8): rdi=SIGFPE, rsi=&act (the lowest field's address), rdx=0
-	// (oldact), r10=8 (the kernel's sigset_t size).
-	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: LinuxSignalFpe)
-	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotHandler))
-	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rdx, src: X64Register.rdx, wide: true)
-	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: LinuxSigsetBytes)
-	encodeX64Syscall(asm.code, number: X64LinuxSyscallRtSigaction)
+	emitLinuxSigactionCall(asm, signal: LinuxSignalFpe, handlerSlot: SlotHandler)
+
+	if programInstallsPreemptSignal(target, usesGt: usesGt) 'itCanStopAThread'
+		encodeLeaRegFuncAddr(asm.code, callFixups: asm.callFixups, dest: X64Register.rax, targetName: PreemptHandlerName)
+		encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotHandler), srcReg: X64Register.rax)
+		emitLinuxSigactionCall(asm, signal: LinuxSignalUrg, handlerSlot: SlotHandler)
+	end 'itCanStopAThread'
 
 	return asm.finishFunction(RuntimeInitName)
 end 'buildLinuxRuntimeInitChunk'
+
+// rt_sigaction(signal, &act, NULL, 8): rdi=signal, rsi=&act (the struct's lowest field), rdx=0 (oldact),
+// r10=8 (the kernel's sigset_t size). `&act` is re-derived per call because `syscall` clobbers rcx and r11
+// and a second install would have to keep it live across the first.
+function emitLinuxSigactionCall(asm X64RuntimeAsm, signal MachineWord, handlerSlot StackSize)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: signal)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(handlerSlot))
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rdx, src: X64Register.rdx, wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: LinuxSigsetBytes)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallRtSigaction)
+end 'emitLinuxSigactionCall'
 
 // ==========================================================================
 // Assembly
@@ -1801,7 +1850,7 @@ end 'appendX64RuntimeChunks'
 // other, which closes the failure mode rather than one instance of it.
 //
 // `exitRoute` (`mrt_panic`'s step (5)) and the walker's stack top (`emitWalkStackBounds`) are the OS facts
-// these five contain, besides the thread pointer `mrt_panic`'s green-thread guard reads through; every other
+// these seven contain, besides the thread pointer `mrt_panic`'s green-thread guard reads through; every other
 // byte they assemble is identical on both lanes, because the rest reaches the OS BY NAME through
 // `mrt_write_cstr_stderr`, which each lane appends its own writer under.
 //
@@ -1814,6 +1863,7 @@ function appendX64SharedRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X
 	chunks.push(buildWalkFramesChunk(usesGt, os: target.os))
 	chunks.push(buildPrintFrameChunk())
 	chunks.push(buildPrintInlineFramesChunk())
+	chunks.push(buildSymtabIndexChunk())
 	chunks.push(buildWriteHexChunk())
 end 'appendX64SharedRuntimeChunks'
 
@@ -1826,7 +1876,7 @@ end 'appendX64SharedRuntimeChunks'
 // compiled function's is — and because `mrt_panic` guards its own stack on a green thread.
 function appendX64WindowsRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X64OsCallKind, dumpCoverage bool, usesGt bool, target Target)
 	chunks.push(buildRuntimeInitChunk())
-	chunks.push(buildFaultThunkChunk(usesGt))
+	chunks.push(buildFaultThunkChunk(usesGt, target: target))
 	chunks.push(buildWriteStreamChunk(usesGt, target: target))
 	chunks.push(buildWriteStderrChunk())
 	appendX64SharedRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage, usesGt: usesGt, target: target)
@@ -1840,7 +1890,7 @@ end 'appendX64WindowsRuntimeChunks'
 // ⚠ Every OS call in this half is a raw `syscall` instruction, which runs on whatever stack it is on and asks
 // the scheduler nothing; `usesGt` reaches here for `mrt_panic`'s stack guard alone.
 function appendX64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X64OsCallKind, dumpCoverage bool, usesGt bool, target Target)
-	chunks.push(buildLinuxRuntimeInitChunk())
+	chunks.push(buildLinuxRuntimeInitChunk(usesGt, target: target))
 	chunks.push(buildLinuxSignalStackInstallChunk())
 	chunks.push(buildLinuxSigreturnTrampolineChunk())
 	chunks.push(buildLinuxFaultHandlerChunk())

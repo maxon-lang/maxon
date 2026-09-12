@@ -103,6 +103,16 @@ let CallReturnAddressWords = 1 as RegCount
 // that makes a call reserves it, `mrt_start`'s hand-built 0x20 frame included.
 export let ShadowSpaceBytes = 32 as StackSize
 
+// ⛔⛔ **THE BYTES BELOW RSP A FUNCTION MAY KEEP LIVE DATA IN — System V's "red zone", which Win64 does not
+// have and this compiler therefore never uses.** Everything a frame holds is at or above RSP, which is what
+// makes the memory below it free for somebody else to write.
+//
+// ⭐⭐ **ASYNCHRONOUS PREEMPTION IS THAT SOMEBODY ELSE.** Stopping a thread pushes the interrupted PC at
+// `rsp - 8` of the thread's own stack, so a non-zero red zone would silently overwrite a live value of the
+// interrupted function at every stop. `X64GtRuntime.buildPreemptMachineChunk` REFUSES to build against a
+// non-zero one rather than relying on this line being read.
+export let X64RedZoneBytes = 0 as StackSize
+
 // The custom-ABI callee-saved GPRs, in PUSH order (popped in reverse). The register
 // allocator may color values into any of these; the prologue pushes exactly the ones a
 // function's coloring used, and the epilogue pops them. rbx + r12–r15 mirror

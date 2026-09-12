@@ -382,6 +382,11 @@ end 'buildGtTrampolineChunk'
 // rather than repeating an 8, for the reason `XmmSaveSlotBytes` does (X64PrologueEpilogue).
 let ShimPushedWordBytes = StackWordBytes as StackSize
 
+// ⭐⭐ **`__gt_shim_enter` — THE SHIM'S FIRST INSTRUCTION, AND A CHUNK RATHER THAN TWO INLINE ONES.** See
+// `buildGtShimEnterChunk`: a chunk is never an asynchronous safe point, which is the whole of why the
+// machine it answers cannot be one this thread has stopped belonging to.
+let GtShimEnterName = b"__gt_shim_enter"
+
 // The shim's scratch registers (see the header's register discipline). None is a Win64 argument register.
 let ShimGtReg = X64Register.r11  // currentGt in the guard, then the stack-arg copy shuttle, then reloaded post-call
 let ShimGtRspReg = X64Register.r10  // the GT's RSP across the switch (push/pop-balanced)
@@ -658,6 +663,9 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		SuspendThread gives 0  // 1: hThread
 		ResumeThread gives 0  // 1: hThread
 		GetThreadContext gives 0  // 2: hThread, lpContext
+		SetThreadContext gives 0  // 2: hThread, lpContext
+		OpenThread gives 0  // 3: dwDesiredAccess, bInheritHandle, dwThreadId
+		GetCurrentThreadId gives 0  // 0
 		GetThreadId gives 0  // 1: Thread
 		VirtualQueryEx gives 0  // 4: hProcess, lpAddress, lpBuffer, dwLength
 		CreateWaitableTimerExW gives 0  // 4: lpTimerAttributes, lpTimerName, dwFlags, dwDesiredAccess
@@ -854,6 +862,9 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 		SuspendThread gives SyscallClass.schedulerBound
 		ResumeThread gives SyscallClass.schedulerBound
 		GetThreadContext gives SyscallClass.schedulerBound
+		SetThreadContext gives SyscallClass.schedulerBound
+		OpenThread gives SyscallClass.schedulerBound
+		GetCurrentThreadId gives SyscallClass.schedulerBound
 		GetThreadId gives SyscallClass.schedulerBound
 		VirtualQueryEx gives SyscallClass.schedulerBound
 		NtGetNextThread gives SyscallClass.schedulerBound
@@ -1002,6 +1013,38 @@ end 'emitGtGatedIatCall'
 //   add rsp,0x58 ; pop r10 ; mov rsp,r10 ; pop r10 ; jmp done                  (switch back to the GT stack)
 //   direct: call [CreateProcessA]
 //   done:
+// `[m + MOffLocks] += delta` — the shim's bracket over the window where `m` names a machine this thread may
+// stop belonging to. See the call sites for why it is unlocked.
+//
+// ⭐ **A PLAIN READ-MODIFY-WRITE, NOT A LOCKED ONE, AND THAT IS ARGUED RATHER THAN SAVED.** This word is
+// written only by the thread that IS this machine, and the only other party READS it while that thread is
+// SUSPENDED (or, on a POSIX lane, from a handler running on the thread itself) — so there is no interleaving
+// for a lock prefix to prevent, and these are hand-assembled bytes no pass can reorder.
+function emitShimLockDepthStep(code ByteArray, m X64Register, delta ParsedInt)
+	encodeGrp1BaseDispImm32(code, ext: Grp1ExtAdd, base: m, disp: MOffLocks as Imm32, imm: delta as Imm32)
+end 'emitShimLockDepthStep'
+
+// `__gt_shim_enter() -> rax = m`, with `m.locks` ALREADY RAISED — see the shim's call site for the boundary
+// this exists to delete. Its caller has already proven there is a machine (`emitLoadCurrentGtOrBail`
+// answered non-null a moment ago and a thread never stops being one), so the walk is the bail-less one.
+//
+// ⚠ **IT CLOBBERS RAX AND THE FLAGS AND NOTHING ELSE.** At the call site rcx/rdx/r8/r9 carry the kernel
+// call's own arguments, r10 the caller's value and r11 the current green thread; all four survive. The
+// flags are dead there — the guard above ends in a conditional branch.
+//
+// ⚠ **ITS RETURN ADDRESS IS THE ONLY THING IT PUTS ON THE GREEN THREAD'S STACK, AND IT IS GONE BEFORE THE
+// SHIM PUSHES ANYTHING** — so the peak `x64ShimmedImportStep` reports is unchanged.
+function buildGtShimEnterChunk(target Target) returns FunctionCodeChunk
+	var code = ByteArray.create()
+	var rdataRelocs = RdataRelocationArray.create()
+
+	emitLoadCurrentMOrBailless(code, rdataRelocs: rdataRelocs, dest: X64Register.rax, os: target.os)
+	emitShimLockDepthStep(code, m: X64Register.rax, delta: OneMore)
+	code.push(OpcodeRet)
+
+	return FunctionCodeChunk.createWith(GtShimEnterName, code: code, callFixups: CallFixupArray.create(), rdataRelocs: rdataRelocs, iatRelocs: RelocationArray.create(), rdataConstants: GlobalDataTable.create())
+end 'buildGtShimEnterChunk'
+
 function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, callFixups CallFixupArray, slotIndex RelocSlotIndex)
 	// ⭐ **THE SLOT IS RESOLVED ONCE AND ASKED TWO QUESTIONS** — how many stack argument words it takes, and
 	// whether it may cost this machine its processor. Both are COMPILE-TIME constants here, so the syscall
@@ -1037,15 +1080,36 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 	// system-stack top is read out of it after the two pushes below.
 	emitLoadCurrentGtOrBail(code, rdataRelocs: rdataRelocs, fixups: shimFixups, mDest: X64Register.rax, gtDest: ShimGtReg, bail: ShimDirectLabel, os: Os.windows)
 	emitGtBailUnlessOnItsOwnStack(code, fixups: shimFixups, gt: ShimGtReg, scratch: X64Register.rax, addr: X64Register.rsp, bail: ShimDirectLabel)
-	emitLoadCurrentMOrBailless(code, rdataRelocs: rdataRelocs, dest: X64Register.rax, os: Os.windows)
+
+	// ⛔⛔⛔ **THE MACHINE IS IN A REGISTER FROM HERE UNTIL RSP LEAVES THE GREEN THREAD'S STACK, AND THAT
+	// WINDOW MUST NOT BE STOPPED IN.** An asynchronous preemption parks the thread wherever it stands and it
+	// may resume on a DIFFERENT machine — where `rax` would name the machine it left, and the switch below
+	// would put this thread's kernel call on ANOTHER machine's 64 KB system stack while that machine is using
+	// it. `MOffLocks` is exactly the word the safe-point predicate refuses on, so the window is bracketed
+	// with it.
+	//
+	// ⛔⛔ **AND THE READ AND THE RAISE ARE ONE CALL, BECAUSE THE BOUNDARY BETWEEN THEM IS ITSELF A SAFE
+	// POINT.** Written inline — `mov rax, gs:[…]` then `add [rax + locks], 1` — there is an instruction
+	// boundary at which the machine is cached and the depth is NOT yet raised: a stop there is a safe point
+	// by every clause of the predicate, and the thread that resumes elsewhere then steps ANOTHER machine's
+	// counter (a lost update leaves that machine permanently unpreemptible) before switching onto its stack.
+	// No ordering of a "read m, then step m's counter" pair closes it; only moving both inside code that is
+	// never a safe point does. `__gt_shim_enter` is a hand-assembled chunk, and a chunk's `__symtable`
+	// safe-point byte is 0 — so a stop lands either BEFORE the call, with nothing cached, or AFTER it, with
+	// the depth already raised.
+	encodeCallDirect(code, callFixups: callFixups, targetName: GtShimEnterName)
 
 	// Switch RSP to THIS M's OWN system stack (`SchedRuntime.MOffSystemStackSP` carries why it is the M's). r10
 	// = the GT rsp anchor (points at the pushed caller-r10 word); rax holds the system-stack top through the
 	// copy and the TIB repoint below.
 	encodePushReg(code, reg: ShimGtRspReg)
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: ShimGtRspReg, src: X64Register.rsp, wide: true)
-	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rax, disp: MOffSystemStackSP as Imm32, wide: true)
-	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rsp, src: X64Register.rax, wide: true)
+	encodeLoadRegBaseDisp(code, destReg: X64Register.rsp, base: X64Register.rax, disp: MOffSystemStackSP as Imm32, wide: true)
+
+	// The release, and it needs no chunk of its own: RSP is already off the green thread's stack, so the
+	// safe-point predicate's range test refuses a stop here whatever the depth says.
+	emitShimLockDepthStep(code, m: X64Register.rax, delta: OneFewer)
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: X64Register.rsp, wide: true)
 	encodePushReg(code, reg: ShimGtRspReg)
 
 	// sub rsp, reserve — the outgoing-arg frame on the system stack. Shadow space plus one import's
@@ -1389,13 +1453,18 @@ function buildGtMorestackChunk(target Target) returns FunctionCodeChunk
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rsp, src: ShimGtRspReg, wide: true)  // rsp = relocated GT rsp
 	code.push(OpcodeRet)  // ret into the copied return address, now on the new stack
 
-	// The two refusals. rsp is on the system stack, 16-aligned, with the TIB describing it (step 3) — every
-	// precondition the exit door has, and why it needs no shim: off a green thread's own stack the shim takes
-	// its direct road anyway.
+	// The two refusals. rsp is on the system stack, 16-aligned, with the TIB describing it (step 3).
+	//
+	// ⛔⛔ **THEY GO THROUGH THE EXIT GATE LIKE EVERY OTHER EXIT (`usesGt: true`), AND AN ABORT IS EXACTLY THE
+	// CASE THAT NEEDS IT.** The gate closes the monitor's suspend window before terminating; without it a
+	// stack-exhaustion abort can run into a thread the monitor has suspended inside `ExitProcess`, which
+	// hangs the process with nothing printed — the one deadlock the gate exists to prevent, reached by the
+	// one path that is already reporting a fatal error. The gate carries the shim itself, and off a green
+	// thread's own stack the shim takes its direct road anyway.
 	growLabels.place(GrowExhaustedLabel, value: code.count())
-	encodeX64ProcessExit(code, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, callFixups: callFixups, route: x64OsCallKind(target.os), exitCode: RuntimeAbort.greenThreadStackExhausted.rawValue as MachineWord, usesGt: false)
+	encodeX64ProcessExit(code, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, callFixups: callFixups, route: x64OsCallKind(target.os), exitCode: RuntimeAbort.greenThreadStackExhausted.rawValue as MachineWord, usesGt: true, target: target)
 	growLabels.place(GrowRefusedLabel, value: code.count())
-	encodeX64ProcessExit(code, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, callFixups: callFixups, route: x64OsCallKind(target.os), exitCode: RuntimeAbort.greenThreadStackAllocationFailed.rawValue as MachineWord, usesGt: false)
+	encodeX64ProcessExit(code, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, callFixups: callFixups, route: x64OsCallKind(target.os), exitCode: RuntimeAbort.greenThreadStackAllocationFailed.rawValue as MachineWord, usesGt: true, target: target)
 	resolveChunkRel32Fixups(code, labelOffsets: growLabels, rel32Fixups: growFixups)
 
 	return FunctionCodeChunk.createWith(GtMorestackName, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())
@@ -1913,6 +1982,535 @@ function buildIoCompletionLoopChunk() returns FunctionCodeChunk
 	return FunctionCodeChunk.createWith(IoCompletionLoopName, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())
 end 'buildIoCompletionLoopChunk'
 
+// ==========================================================================
+// ⭐⭐⭐ ASYNCHRONOUS PREEMPTION — STOPPING A THREAD THAT REACHES NO PROLOGUE (x64-windows)
+// ==========================================================================
+//
+// ⭐⭐⭐ **THE COOPERATIVE PATH STAYS AND THIS IS ITS BACKSTOP.** `__sched_preemptone` poisons the running
+// thread's guard word, and a function that reserves a frame reads the poison at its prologue. A loop that
+// calls nothing never reaches one — so the monitor takes the thread's register file away from it, pushes the
+// interrupted PC on the thread's own stack and hands the file back with RIP pointing at `__gt_async_preempt`.
+// The thread resumes INTO the trampoline, spills everything, parks, and later returns to the instruction it
+// was executing.
+//
+// ⛔ **THE POISON IS STILL WHAT AUTHORISES THE STOP** (`SchedRuntime.buildGtPreemptSafe` tests for it), so an
+// asynchronous stop is never a thing that happens to a thread nobody asked to yield.
+
+// The rights a machine opens onto its OWN thread at birth: suspend it, read its register file, write it back.
+// Exactly the three things `__gt_preempt_m` does.
+let ThreadSuspendResume = 0x0002
+let ThreadGetContext = 0x0008
+let ThreadSetContext = 0x0010
+let PreemptThreadAccess = ThreadSuspendResume or ThreadGetContext or ThreadSetContext
+
+// `SuspendThread` answers the thread's previous suspend count, or `(DWORD)-1` if the thread is gone. The
+// answer is a DWORD, so the failure value is compared as one.
+let SuspendThreadFailed = 0xFFFFFFFF
+
+// Win32's FALSE: what `OpenThread` is handed for `bInheritHandle`, and what `GetThreadContext` /
+// `SetThreadContext` answer on failure.
+let PreemptWin32False = 0
+
+// `lock cmpxchg r/m64, r64` (F0 0F B1 /r) and `lock xadd r/m64, r64` (F0 0F C1 /r) — the two-byte-escape
+// opcodes the claims and the acknowledgement counter ride.
+let OpcodeCmpxchg2ndByte = 0xB1
+let OpcodeXadd2ndByte = 0xC1
+
+// `pushfq` / `popfq`: the only way to carry the interrupted thread's flags across the park, and the reason
+// the trampoline saves them BEFORE it aligns its stack (`and` writes flags).
+let OpcodePushfq = 0x9C
+let OpcodePopfq = 0x9D
+
+// `pause` — the spin hint in `__gt_exit_process`'s wait for the monitor's window to close.
+let OpcodePauseRepPrefix = 0xF3
+let OpcodePauseNop = 0x90
+
+// ⭐⭐ **EVERY GENERAL REGISTER THE TRAMPOLINE SPILLS — all of them but rsp and rbp.** The stop lands at an
+// arbitrary instruction, so every one of these may hold a live value of the interrupted function; rsp is
+// restored by the frame arithmetic and rbp by the `push` that opens it.
+//
+// ⛔ **IT IS A HAND-WRITTEN LIST AND `assertAsyncPreemptGprOrder` IS WHAT KEEPS IT HONEST.** A register
+// missing from it is one the interrupted function silently loses — no fault, no diagnostic, a wrong answer
+// wherever that register happened to be live. Its XMM sibling is derived from the two files that partition
+// the vector registers; the GPR half cannot be, because the two registers it omits are omitted for
+// different reasons, so the COUNT is checked against the register file instead.
+let AsyncPreemptGprOrder = [X64Register.rax, X64Register.rcx, X64Register.rdx, X64Register.rbx, X64Register.rsi, X64Register.rdi, X64Register.r8, X64Register.r9, X64Register.r10, X64Register.r11, X64Register.r12, X64Register.r13, X64Register.r14, X64Register.r15]
+
+// The two the list leaves out: rsp, which the frame arithmetic restores, and rbp, which the `push` that
+// opens the frame does.
+let AsyncPreemptUnspilledGprs = 2 as RegCount
+
+function assertAsyncPreemptGprOrder()
+	let file = x64RegisterFile()
+	let expected = (file.firstVector as RegCount) - AsyncPreemptUnspilledGprs
+
+	if AsyncPreemptGprOrder.count() != expected 'incomplete'
+		panic("assertAsyncPreemptGprOrder: `__gt_async_preempt` spills {AsyncPreemptGprOrder.count()} general registers but the x64 file has {file.firstVector} of them and the frame restores {AsyncPreemptUnspilledGprs} — a stop lands at an arbitrary instruction, so every register missing from that list is one the interrupted function loses with no fault and no diagnostic")
+	end 'incomplete'
+end 'assertAsyncPreemptGprOrder'
+
+// The chunk-local labels of the two Windows chunks.
+let PreemptGiveBackLabel = 0 as BlockId
+let PreemptUnlockLabel = 1 as BlockId
+let PreemptResumeLabel = 2 as BlockId
+let PreemptDoneLabel = 3 as BlockId
+let PreemptNoMachineLabel = 4 as BlockId
+let ExitProcessSpinLabel = 0 as BlockId
+
+// ⭐⭐ **THE INJECTION, WRITTEN ONCE FOR BOTH WAYS A STOP IS DELIVERED.** `sp -= 8; [sp] = pc;
+// pc = __gt_async_preempt`, applied to a SAVED register file — a Windows `CONTEXT` the monitor read out of a
+// suspended thread, or the `ucontext` the kernel handed a signal handler. The two differ in where the file
+// lives and in the record's two displacements; nothing else about the act differs, which is why those are
+// the parameters. It leaves the file's address in r10, which the Windows caller hands straight to
+// `SetThreadContext`.
+//
+// ⛔⛔ **THE WORD GOES BELOW THE INTERRUPTED STACK POINTER, WHICH IS FREE ONLY BECAUSE THIS ABI HAS NO RED
+// ZONE** — `X64PrologueEpilogue.X64RedZoneBytes`. The refusal lives HERE, at the one site both lanes come
+// through, and not on the Windows half alone: x86-64 System V is the ABI that HAS a red zone, so Linux is
+// the lane a non-zero one would reach first.
+function emitX64PreemptInject(asm X64RuntimeAsm, fileSlot StackSize, spOffset Imm32, pcOffset Imm32)
+	if X64RedZoneBytes != 0 'aRedZone'
+		panic("emitX64PreemptInject: this ABI declares a {X64RedZoneBytes}-byte red zone below RSP, and an asynchronous stop writes the interrupted PC there — the injected word would overwrite live data of the interrupted function at every stop, silently. Push the PC below the red zone and teach `{String.from(AsyncPreemptName)}` to restore RSP past it")
+	end 'aRedZone'
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rbp, disp: asm.slotDisp(fileSlot), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.r10, disp: spOffset, wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: -(StackWordBytes as Imm32))
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.r10, disp: pcOffset, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rax, disp: 0, srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: spOffset, srcReg: X64Register.rax)
+	encodeLeaRegFuncAddr(asm.code, callFixups: asm.callFixups, dest: X64Register.rdx, targetName: AsyncPreemptName)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: pcOffset, srcReg: X64Register.rdx)
+end 'emitX64PreemptInject'
+
+// CAS(m.signalPending, free → held) on the machine in `m`, branching to `alreadyOutstanding` when a stop is
+// already in flight against it. Clobbers rax and rdx, which every caller has just finished with.
+function emitX64PreemptClaim(asm X64RuntimeAsm, m X64Register, alreadyOutstanding BlockId)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: PreemptClaimFree)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: PreemptClaimHeld)
+	encodeLockedRmwBaseDispReg(asm.code, twoByteEscape: true, opcode: OpcodeCmpxchg2ndByte, base: m, disp: MOffSignalPending as Imm32, reg: X64Register.rdx)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: alreadyOutstanding)
+end 'emitX64PreemptClaim'
+
+// ⛔ **HAND THE CLAIM BACK — EVERY ROAD THAT DOES NOT INJECT OWES THIS.** A machine left claimed is a machine
+// the monitor never stops again for the life of the process, which is the one failure mode of this word that
+// is silent. Reads the machine back out of `machineSlot` rather than a register, because the roads that reach
+// it have spent every scratch register on the kernel calls in between.
+function emitX64PreemptGiveBack(asm X64RuntimeAsm, machineSlot StackSize)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rbp, disp: asm.slotDisp(machineSlot), wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: PreemptClaimFree)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: MOffSignalPending as Imm32, srcReg: X64Register.rax)
+end 'emitX64PreemptGiveBack'
+
+// `__gt_preempt_self_register(rcx = m)` — see `SchedRuntime.PreemptSelfRegisterName`. Run by the thread that
+// is becoming the machine, because neither fact is knowable anywhere else: `GetCurrentThread` is a pseudo-
+// handle that names "whoever asks", and the joinable handle the CREATOR got back is 0 for the main OS thread.
+//
+// ⚠ **A REFUSED `OpenThread` LEAVES THE HANDLE 0 AND THE MACHINE KEEPS THE COOPERATIVE PATH.** `__gt_preempt_m`
+// tests for it and declines; a machine that cannot be stopped still yields at every prologue, which is what
+// every lane without this mechanism does.
+function buildPreemptSelfRegisterChunk() returns FunctionCodeChunk
+	let SlotMachine = 0
+	var asm = X64RuntimeAsm.beginFunction(1)
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotMachine), srcReg: X64Register.rcx)
+
+	// `GetCurrentThreadId()` answers a DWORD; the zero-extending `mov eax, eax` is what makes the id a whole
+	// word before it is stored and handed on.
+	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.GetCurrentThreadId))
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: X64Register.rax, wide: false)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rbp, disp: asm.slotDisp(SlotMachine), wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: MOffOsThreadId as Imm32, srcReg: X64Register.rax)
+
+	// `OpenThread(PreemptThreadAccess, FALSE, id)`
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r8, src: X64Register.rax, wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: PreemptThreadAccess)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: PreemptWin32False)
+	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.OpenThread))
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rbp, disp: asm.slotDisp(SlotMachine), wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: MOffPreemptThreadHandle as Imm32, srcReg: X64Register.rax)
+
+	return asm.finishFunction(PreemptSelfRegisterName)
+end 'buildPreemptSelfRegisterChunk'
+
+// `__gt_preempt_m(rcx = m)` — see `SchedRuntime.PreemptMachineName`. Go's `preemptM` (`signal_windows.go`).
+//
+// ⭐⭐ **THE ORDER OF THE TWO CLAIMS IS THE WHOLE PROTOCOL.** The machine's `signalPending` goes up FIRST, so
+// at most one stop is ever in flight against one machine and the trampoline's clear is what re-arms it; then
+// the process-wide `preemptExtLock`, which `__gt_exit_process` takes and never releases — a thread suspended
+// inside `ExitProcess` holds the loader lock the terminating thread needs, and the process hangs with nothing
+// printed anywhere.
+//
+// ⛔ **EVERY ROAD THAT DOES NOT INJECT MUST HAND `signalPending` BACK**, or that machine is never preempted
+// again for the life of the process. Only the road that reaches `SetThreadContext` successfully leaves it
+// raised, because only then is a trampoline going to run and clear it.
+//
+// ⚠ **THE IMPORT CALLS ARE DIRECT, NOT SHIMMED.** `__sysmon` is this chunk's only caller and it is not a
+// machine (`SchedRuntime.buildSysmon`), so it runs on a real OS-thread stack with no green thread to switch
+// off and no processor to hand away.
+function buildPreemptMachineChunk() returns FunctionCodeChunk
+	let SlotMachine = 0
+	let SlotHandle = 1
+	let SlotContext = 2
+	var asm = X64RuntimeAsm.beginFunction(3)
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotMachine), srcReg: X64Register.rcx)
+
+	emitX64PreemptClaim(asm, m: X64Register.rcx, alreadyOutstanding: PreemptDoneLabel)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rcx, disp: MOffPreemptThreadHandle as Imm32, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotHandle), srcReg: X64Register.r10)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtCmp, reg: X64Register.r10, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: PreemptGiveBackLabel)
+
+	// CAS(preemptExtLock, free -> held). A loss means a thread of this process is exiting it.
+	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.r10, label: SchedPreemptExtLockLabel)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: PreemptClaimFree)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: PreemptClaimHeld)
+	encodeLockedRmwBaseDispReg(asm.code, twoByteEscape: true, opcode: OpcodeCmpxchg2ndByte, base: X64Register.r10, disp: 0, reg: X64Register.rdx)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: PreemptGiveBackLabel)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotHandle), wide: true)
+	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.SuspendThread))
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: X64Register.rax, wide: false)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: SuspendThreadFailed)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: PreemptUnlockLabel)
+
+	// The thread IS suspended from here on, so every road out goes through `PreemptResumeLabel`.
+	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.r10, label: SchedPreemptContextLabel)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.r10, disp: 0, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotContext), srcReg: X64Register.r10)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win64ContextControl)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: Win64ContextFlagsOffset as Imm32, srcReg: X64Register.rax)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotHandle), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.r10, wide: true)
+	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.GetThreadContext))
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: X64Register.rax, wide: false)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtCmp, reg: X64Register.rax, imm: PreemptWin32False)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: PreemptResumeLabel)
+
+	// `__gt_preempt_safe(m, pc, sp)` — the third argument rides RAX, which is this compiler's own third
+	// argument register (`StdToX64Conversion.argRegisters`) and not Win64's.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rbp, disp: asm.slotDisp(SlotContext), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.r10, disp: Win64ContextRipOffset as Imm32, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: argRegisterAt(2), base: X64Register.r10, disp: Win64ContextRspOffset as Imm32, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotMachine), wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: PreemptSafeName)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtCmp, reg: X64Register.r8, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: PreemptResumeLabel)
+
+	emitX64PreemptInject(asm, fileSlot: SlotContext, spOffset: Win64ContextRspOffset as Imm32, pcOffset: Win64ContextRipOffset as Imm32)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotHandle), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.r10, wide: true)
+	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.SetThreadContext))
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: X64Register.rax, wide: false)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtCmp, reg: X64Register.rax, imm: PreemptWin32False)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: PreemptResumeLabel)
+
+	// The stop has landed: resume the thread and release the window — and leave `signalPending` raised,
+	// because the trampoline that is about to run is what clears it.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotHandle), wide: true)
+	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.ResumeThread))
+	emitPreemptReleaseExtLock(asm)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: PreemptDoneLabel)
+
+	// resume: suspended, not injected.
+	asm.placeLabel(PreemptResumeLabel)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotHandle), wide: true)
+	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.ResumeThread))
+
+	// unlock: the window is held, nothing is suspended.
+	asm.placeLabel(PreemptUnlockLabel)
+	emitPreemptReleaseExtLock(asm)
+
+	// giveBack: nothing is held but this machine's `signalPending`.
+	asm.placeLabel(PreemptGiveBackLabel)
+	emitX64PreemptGiveBack(asm, machineSlot: SlotMachine)
+
+	asm.placeLabel(PreemptDoneLabel)
+	return asm.finishFunction(PreemptMachineName)
+end 'buildPreemptMachineChunk'
+
+// Release `__sched_preempt_ext_lock`. A plain store, because x86-64 is total store order: every write this
+// window made is already visible to any thread that then wins the claim.
+function emitPreemptReleaseExtLock(asm X64RuntimeAsm)
+	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.r10, label: SchedPreemptExtLockLabel)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: PreemptClaimFree)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: 0, srcReg: X64Register.rax)
+end 'emitPreemptReleaseExtLock'
+
+// `__gt_async_preempt` — see `SchedRuntime.AsyncPreemptName`. NOT a normal call: it is entered by a `ret`
+// the monitor manufactured, with the interrupted PC where a return address would be and every register and
+// flag still holding the interrupted function's values.
+//
+// ⛔ **THE FLAGS ARE SAVED BEFORE THE STACK IS ALIGNED**, because `and rsp, -16` writes them. They are
+// restored last for the same reason — nothing between the reload of the last register and `popfq` touches
+// them.
+//
+// ⚠ **EIGHT BYTES PER XMM, NOT SIXTEEN, AND THAT IS THIS COMPILER'S OWN INVARIANT rather than a shortcut.**
+// Every XMM value the backend produces is a scalar f64 and nothing reads an upper half —
+// `encodeMovsdRegBaseDisp`'s header states it and the context switch already preserves callee-saved XMMs
+// through 8-byte slots.
+//
+// It runs on the green thread's own stack, so what it puts there is certified against the margin the
+// safe-point predicate demanded (`PreemptionDepth.requireAsyncPreemptionFitsItsMargin`).
+function buildGtAsyncPreemptChunk() returns FunctionCodeChunk
+	assertAsyncPreemptGprOrder()
+	var code = ByteArray.create()
+	var callFixups = CallFixupArray.create()
+
+	_ = emitAsyncPreemptBody(code, callFixups: callFixups)
+
+	return FunctionCodeChunk.createWith(AsyncPreemptName, code: code, callFixups: callFixups, rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create(), rdataConstants: GlobalDataTable.create())
+end 'buildGtAsyncPreemptChunk'
+
+// The trampoline's bytes, and the answer `x64GtAsyncPreemptStackBytes` measures itself with — one emitter, so
+// the certificate cannot describe a frame the chunk does not lay.
+function emitAsyncPreemptBody(code ByteArray, callFixups CallFixupArray) returns StackSize
+	let blockBytes = asyncPreemptBlockBytes()
+
+	encodePushReg(code, reg: X64Register.rbp)
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rbp, src: X64Register.rsp, wide: true)
+	code.push(OpcodePushfq)
+	encodeGrp1RegImm32(code, ext: Grp1ExtAnd, reg: X64Register.rsp, imm: (0 - StackFrameAlignment) as Imm32)
+	encodePrologue(code, stackSize: blockBytes, probeScratchIsFree: false)
+
+	emitAsyncPreemptRegisterBlock(code, direction: GtRegisterBlockDirection.save)
+	encodeCallDirect(code, callFixups: callFixups, targetName: AsyncPreemptParkName)
+	emitAsyncPreemptRegisterBlock(code, direction: GtRegisterBlockDirection.restore)
+
+	// `lea` writes no flags, so the frame comes home with the interrupted flags still on the stack below it.
+	encodeLeaRegRegImm32(code, dest: X64Register.rsp, base: X64Register.rbp, disp: -(StackWordBytes as Imm32))
+	code.push(OpcodePopfq)
+	encodePopReg(code, reg: X64Register.rbp)
+	code.push(OpcodeRet)
+
+	// The pushed rbp and flags, the most the alignment can drop from a word-aligned rsp, and the block.
+	return ((2 * StackWordBytes) + (StackFrameAlignment - StackWordBytes)) as StackSize + blockBytes
+end 'emitAsyncPreemptBody'
+
+// Every general register and every XMM, one 8-byte slot each above the shadow space the park may clobber.
+function emitAsyncPreemptRegisterBlock(code ByteArray, direction GtRegisterBlockDirection)
+	for (iter, reg) in AsyncPreemptGprOrder.withIterator() 'gprs'
+		let disp = (ShadowSpaceBytes + ((iter.index() as StackSize) * StackWordBytes)) as Imm32
+
+		match direction 'dir'
+			save then encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: disp, srcReg: reg)
+			restore then encodeLoadRegBaseDisp(code, destReg: reg, base: X64Register.rsp, disp: disp, wide: true)
+		end 'dir'
+	end 'gprs'
+
+	for (iter, reg) in asyncPreemptXmmOrder().withIterator() 'xmms'
+		let disp = (ShadowSpaceBytes + asyncPreemptGprBytes() + ((iter.index() as StackSize) * XmmSaveSlotBytes)) as Imm32
+
+		match direction 'dir'
+			save then encodeMovsdBaseDispReg(code, base: X64Register.rsp, disp: disp, srcReg: reg)
+			restore then encodeMovsdRegBaseDisp(code, destReg: reg, base: X64Register.rsp, disp: disp)
+		end 'dir'
+	end 'xmms'
+end 'emitAsyncPreemptRegisterBlock'
+
+// ⭐ **EVERY XMM, DERIVED FROM THE TWO LISTS THAT ALREADY PARTITION THEM** — the FP argument registers (the
+// caller-saved half) and the callee-saved half — rather than a third list of sixteen names that could drift
+// from either. The count is asserted because the partition is what makes the derivation total.
+function asyncPreemptXmmOrder() returns X64RegisterArray
+	var all = X64RegisterArray.create()
+
+	for reg in argFpRegisters 'callerSaved'
+		all.push(reg)
+	end 'callerSaved'
+
+	for reg in calleeSavedXmmOrder 'calleeSaved'
+		all.push(reg)
+	end 'calleeSaved'
+
+	if all.count() != vectorRegisterCount(x64RegisterFile()) 'notTheWholeFile'
+		panic("asyncPreemptXmmOrder: the caller-saved and callee-saved XMM lists name {all.count()} registers between them, not the {vectorRegisterCount(x64RegisterFile())} the file has — a stop lands at an arbitrary instruction, so a register missing from this block is one the interrupted function loses")
+	end 'notTheWholeFile'
+
+	return all
+end 'asyncPreemptXmmOrder'
+
+// The GPR half of the block, which is also where the XMM half starts.
+function asyncPreemptGprBytes() returns StackSize
+	return (AsyncPreemptGprOrder.count() * StackWordBytes) as StackSize
+end 'asyncPreemptGprBytes'
+
+// The whole block: the shadow space the park's own callees may clobber, then a slot per register, rounded so
+// rsp is 16-aligned at the `call`.
+function asyncPreemptBlockBytes() returns StackSize
+	return alignUpStack(ShadowSpaceBytes + asyncPreemptGprBytes() + ((vectorRegisterCount(x64RegisterFile()) * XmmSaveSlotBytes) as StackSize), alignment: StackFrameAlignment)
+end 'asyncPreemptBlockBytes'
+
+// ⭐ **WHAT AN ASYNCHRONOUS STOP COSTS THE GREEN THREAD's STACK BELOW THE INTERRUPTED RSP, BEFORE
+// `__gt_async_preempt_park` RUNS**: the injected return address, the trampoline's frame read off its own
+// emitter, and the `call` that enters the park.
+export function x64GtAsyncPreemptStackBytes() returns StackSize
+	return (2 * StackWordBytes) as StackSize + emitAsyncPreemptBody(ByteArray.create(), callFixups: CallFixupArray.create())
+end 'x64GtAsyncPreemptStackBytes'
+
+// `__gt_exit_process(rcx = exitCode)` — see `SchedRuntime.ExitProcessGateName`. Go's `osPreemptExtEnter`.
+//
+// ⛔⛔ **IT TAKES `__sched_preempt_ext_lock` AND NEVER GIVES IT BACK, WHICH IS THE POINT.** From here on the
+// monitor's compare-and-swap fails and no thread of this process is suspended again — so no thread can be
+// suspended INSIDE `ExitProcess`, holding the loader lock this one is about to need. The spin is bounded by
+// one suspend/inject/resume window, which is a handful of kernel calls.
+//
+// ⚠ **A THREAD SUSPENDED WHILE SPINNING HERE IS FINE**: its PC is inside this chunk, which claims no
+// `__symtable` preemptible flag, so the safe-point predicate declines it and the monitor resumes it.
+function buildExitProcessGateChunk() returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(1)
+	let SlotExitCode = 0
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotExitCode), srcReg: X64Register.rcx)
+
+	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.r10, label: SchedPreemptExtLockLabel)
+
+	asm.placeLabel(ExitProcessSpinLabel)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: PreemptClaimFree)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: PreemptClaimHeld)
+	encodeLockedRmwBaseDispReg(asm.code, twoByteEscape: true, opcode: OpcodeCmpxchg2ndByte, base: X64Register.r10, disp: 0, reg: X64Register.rdx)
+	asm.code.push(OpcodePauseRepPrefix)
+	asm.code.push(OpcodePauseNop)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: ExitProcessSpinLabel)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotExitCode), wide: true)
+	emitGtGatedIatCall(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.ExitProcess), usesGt: true)
+
+	// `ExitProcess` never returns; the closer is what makes this a well-formed chunk.
+	return asm.finishFunction(ExitProcessGateName)
+end 'buildExitProcessGateChunk'
+
+/// ==========================================================================
+// ⭐⭐⭐ THE SIGNALLING LANE'S THREE (x64-linux)
+// ==========================================================================
+//
+// ⭐⭐⭐ **THE SAME PROTOCOL AS THE SUSPENDING LANE, WITH THE REGISTER FILE READ BY THE THREAD ITSELF.** The
+// monitor cannot read another thread's registers on POSIX, so it sends a signal and the kernel saves the
+// file into a `ucontext` the handler may rewrite — Go's `preemptM` and `doSigPreempt`. Everything above the
+// delivery is shared: the poison still authorises the stop, `__gt_preempt_safe` still judges it, and the
+// same `__gt_async_preempt` is what the thread resumes into.
+//
+// ⛔ **NO `preemptExtLock` AND NO EXIT GATE HERE.** Both exist on the suspending lane because a thread
+// suspended inside `ExitProcess` holds the loader lock the terminating thread needs. Nothing is suspended
+// here: a signal handler runs to completion on the signalled thread and blocks no other.
+
+// `tgkill(tgid, tid, sig)` — the one delivery that names a THREAD. `kill` names a process and lets the
+// kernel pick any thread with the signal unblocked, which is every machine.
+let X64LinuxSyscallTgkill = 234
+
+// `__gt_preempt_self_register(rcx = m)` on the signalling lane — see `SchedRuntime.PreemptSelfRegisterName`.
+// The thread id is the whole of it: `MOffPreemptThreadHandle` stays 0 because a signal is addressed to the
+// id, and this thread's alternate signal stack is installed by `mrt_runtime_init` (the main thread's) or by
+// `SchedRuntime.emitSchedWorkerBirth` (a worker's), which is the same stack the fault handler needs.
+//
+// ⚠ **THE SYSCALL CLOBBERS rcx**, which is the argument register, so the machine goes to a frame slot first.
+function buildLinuxPreemptSelfRegisterChunk() returns FunctionCodeChunk
+	let SlotMachine = 0
+	var asm = X64RuntimeAsm.beginFunction(1)
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotMachine), srcReg: X64Register.rcx)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallGettid)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rbp, disp: asm.slotDisp(SlotMachine), wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: MOffOsThreadId as Imm32, srcReg: X64Register.rax)
+
+	return asm.finishFunction(PreemptSelfRegisterName)
+end 'buildLinuxPreemptSelfRegisterChunk'
+
+// `__gt_preempt_m(rcx = m)` on the signalling lane — Go's `preemptM` (`signal_unix.go`).
+//
+// ⛔ **EVERY ROAD THAT DOES NOT DELIVER MUST HAND `signalPending` BACK**, or that machine is never preempted
+// again for the life of the process. Only a `tgkill` the kernel accepted leaves it raised, because only then
+// is a handler going to run — and the handler either injects and lets the trampoline clear it, or declines
+// and clears it itself.
+//
+// ⚠ **A REFUSED `tgkill` IS A THREAD THAT IS GONE**, which is the one failure this can meet: the id was
+// recorded by the thread itself and an M is never freed.
+function buildLinuxPreemptMachineChunk() returns FunctionCodeChunk
+	let SlotMachine = 0
+	var asm = X64RuntimeAsm.beginFunction(1)
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotMachine), srcReg: X64Register.rcx)
+
+	emitX64PreemptClaim(asm, m: X64Register.rcx, alreadyOutstanding: PreemptDoneLabel)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rcx, disp: MOffOsThreadId as Imm32, wide: true)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtCmp, reg: X64Register.r10, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: PreemptGiveBackLabel)
+
+	// tgkill(getpid(), tid, SIGURG). `syscall` clobbers rcx and r11 and nothing else, so the tid survives the
+	// pid read in r10.
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallGetPid)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rax, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: X64Register.r10, wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: LinuxSignalUrg)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallTgkill)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtCmp, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: PreemptDoneLabel)
+
+	asm.placeLabel(PreemptGiveBackLabel)
+	emitX64PreemptGiveBack(asm, machineSlot: SlotMachine)
+
+	asm.placeLabel(PreemptDoneLabel)
+	return asm.finishFunction(PreemptMachineName)
+end 'buildLinuxPreemptMachineChunk'
+
+// `mrt_preempt_handler(rdi = sig, rsi = info, rdx = ucontext)` — see `SchedRuntime.PreemptHandlerName`. The
+// kernel's `SA_SIGINFO` entry ABI, as `mrt_fault_handler`'s is.
+//
+// ⛔ **IT RETURNS, WHICH IS WHAT MAKES THE INJECTION WORK AT ALL.** The rewrite it makes to the SAVED
+// register file is applied by `rt_sigreturn` on the way out; a handler that exited would rewrite nothing.
+//
+// ⛔⛔ **EVERY ROAD HANDS `MOffSignalPending` BACK, AND THE ONE THAT CANNOT NAME A MACHINE HAS NO CLAIM TO
+// HAND BACK.** A machine left claimed is one the monitor never stops again for the life of the process. The
+// sender aims `tgkill` at `MOffOsThreadId`, which `emitSchedBecomeM` records AFTER publishing this thread's
+// TLS slot — so a thread this runtime can signal always has a slot, and a handler that finds none is
+// answering a SIGURG this runtime did not send. It returns without touching a word it has no owner for.
+//
+// Slots: 0 = ucontext, 1 = m.
+function buildLinuxPreemptHandlerChunk() returns FunctionCodeChunk
+	let SlotUcontext = 0
+	let SlotMachine = 1
+	var asm = X64RuntimeAsm.beginFunction(2)
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotUcontext), srcReg: X64Register.rdx)
+
+	emitLoadCurrentMOrBail(asm.code, rdataRelocs: asm.rdataRelocs, fixups: asm.rel32Fixups, dest: X64Register.rax, bail: PreemptNoMachineLabel, os: Os.linux)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotMachine), srcReg: X64Register.rax)
+
+	// `__gt_preempt_safe(m, pc, sp)` over the register file the kernel saved. The third argument rides RAX,
+	// this compiler's own third argument register (`StdToX64Conversion.argRegisters`) — which is why the
+	// machine is re-read from its slot rather than kept in the register it arrived in.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rbp, disp: asm.slotDisp(SlotUcontext), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.r10, disp: X64LinuxUContextRipOffset, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: argRegisterAt(2), base: X64Register.r10, disp: X64LinuxUContextRspOffset, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotMachine), wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: PreemptSafeName)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtCmp, reg: X64Register.r8, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: PreemptGiveBackLabel)
+
+	// The injection, written into the saved file rather than into live registers — the same act the Windows
+	// monitor performs on a `CONTEXT`, through the one emitter both come to.
+	emitX64PreemptInject(asm, fileSlot: SlotUcontext, spOffset: X64LinuxUContextRspOffset, pcOffset: X64LinuxUContextRipOffset)
+
+	// The stop has landed: `signalPending` stays raised for the trampoline to clear.
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: PreemptDoneLabel)
+
+	// Declined: this instant is no safe point, so the machine is re-armed for the monitor's next poll.
+	asm.placeLabel(PreemptGiveBackLabel)
+	emitX64PreemptGiveBack(asm, machineSlot: SlotMachine)
+
+	// A SIGURG this runtime did not send — see the header. There is no claim of ours to hand back.
+	asm.placeLabel(PreemptNoMachineLabel)
+
+	asm.placeLabel(PreemptDoneLabel)
+	return asm.finishFunction(PreemptHandlerName)
+end 'buildLinuxPreemptHandlerChunk'
+
 // Append the hand-assembled GT chunks — called by BackendDispatch when the module spawns a green thread, alongside
 // `appendX64RuntimeChunks` for the panic runtime. They lay out above user code like every other runtime chunk, so
 // `mrt_start` stays at `.text` offset 0. `usesIocp` (P1.5 slice 1a-ii) additionally appends the IOCP completion-drain
@@ -1924,6 +2522,12 @@ export function appendX64GtRuntimeChunks(chunks FunctionCodeChunkArray, usesIocp
 	chunks.push(buildGtMorestackChunk(target))
 	chunks.push(buildGtStackRelocateChunk(target))
 
+	// ⛔ **GATE SITE — the import shim's own door.** It is the shim's, not asynchronous preemption's: the
+	// shim calls it unconditionally and only a lane whose kernel calls go through an IAT emits a shim at all.
+	if x64OsCallKind(target.os) == X64OsCallKind.importCall 'theImportShim'
+		chunks.push(buildGtShimEnterChunk(target))
+	end 'theImportShim'
+
 	// ⛔⛔ **THE COMPLETION-DRAIN THREAD IS THE ONE CHUNK HERE THAT IS NOT MERELY OS-PARAMETRIC BUT OS-ONLY,
 	// AND ITS GATE IS `ioCompletionShape` RATHER THAN THE OS.** `usesIocp` asks *"does this module read a
 	// pipe?"*, which is true on every lane; whether a read COMPLETES SOMEWHERE ELSE is the target's question,
@@ -1932,4 +2536,33 @@ export function appendX64GtRuntimeChunks(chunks FunctionCodeChunkArray, usesIocp
 	if usesIocp and ioCompletionShape(target) == IoCompletionShape.completionPort 'io'
 		chunks.push(buildIoCompletionLoopChunk())
 	end 'io'
+
+	// ⛔ **GATE SITE — asynchronous preemption.** The trampoline is ISA-shaped and is the same bytes whichever
+	// way the stop was delivered; what a machine records about its own thread, and how the monitor reaches
+	// that thread, are the OS's. See `SchedRuntime.targetPreemptDelivery`.
+	if targetStopsThreadsForPreemption(target) 'itCanStopAThread'
+		chunks.push(buildGtAsyncPreemptChunk())
+
+		match targetPreemptDelivery(target) 'delivery'
+			threadSuspend then appendX64SuspendPreemptChunks(chunks)
+			signal then appendX64SignalPreemptChunks(chunks)
+			none then panic("appendX64GtRuntimeChunks: `targetStopsThreadsForPreemption` admitted {targetToString(target)}, which `targetPreemptDelivery` says has no delivery mechanism at all — the two have drifted")
+		end 'delivery'
+	end 'itCanStopAThread'
 end 'appendX64GtRuntimeChunks'
+
+// x64-windows: the monitor reads and writes the stopped thread's register file, and every exit closes its
+// window first (`SchedRuntime.ExitProcessGateName`).
+function appendX64SuspendPreemptChunks(chunks FunctionCodeChunkArray)
+	chunks.push(buildPreemptSelfRegisterChunk())
+	chunks.push(buildPreemptMachineChunk())
+	chunks.push(buildExitProcessGateChunk())
+end 'appendX64SuspendPreemptChunks'
+
+// x64-linux: the thread reads its own file inside a signal handler, so the third chunk is that handler
+// rather than an exit gate.
+function appendX64SignalPreemptChunks(chunks FunctionCodeChunkArray)
+	chunks.push(buildLinuxPreemptSelfRegisterChunk())
+	chunks.push(buildLinuxPreemptMachineChunk())
+	chunks.push(buildLinuxPreemptHandlerChunk())
+end 'appendX64SignalPreemptChunks'

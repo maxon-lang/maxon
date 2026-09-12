@@ -1,0 +1,68 @@
+// Test: a-tight-loops-back-edge-never-straddles-a-32-byte-boundary
+typealias Rounds = int(0 to 1000000)
+
+function spin(rounds Rounds) returns Rounds
+	var acc = 0
+	var i = 0
+
+	while i < rounds 'spin'
+		acc = acc + i
+		i = i + 1
+	end 'spin'
+
+	return acc mod 251
+end 'spin'
+
+function main() returns ExitCode
+	return spin(1000)
+end 'main'
+---
+ExitCode: 10
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  __rc_ok#9:
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.b whilehdr
+  spin:
+    arm64.add x0, x0, x1
+    arm64.add x1, x1, 1
+  whilehdr:
+    arm64.cmp x1, 1000
+    arm64.b.lt spin
+  whileexit:
+    arm64.movImm x1, 2351776136887273513
+    arm64.smulh x1, x1, x0
+    arm64.asr x1, x1, 5
+    arm64.lsr x2, x1, 63
+    arm64.add x1, x1, x2
+    arm64.movImm x16, 251
+    arm64.mul x1, x1, x16
+    arm64.sub x0, x0, x1
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#13
+  __rc_chk#14:
+    arm64.movImm x16, 1000000
+    arm64.cmp x0, x16
+    arm64.b.gt __rc_panic#13
+  __rc_chk#3:
+    arm64.cmp x0, 255
+    arm64.b.gt __rc_panic#2
+  __rc_ok#1:
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic#13:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-tight-loops-back-edge-never-straddles-a-32-byte-boundary.test:13: Range check failed: value outside typealias 'Rounds'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at a-tight-loops-back-edge-never-straddles-a-32-byte-boundary.test:17: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -3756,8 +3756,9 @@ end 'main'
 ```
 
 <!-- test: first-class-function.indirect-call-arity-26 -->
-The arm64 twin: arm64 allocates from 26 GPRs, so its `__fnref_` thunk cliff is at 26 user
-arguments (27 thunk parameters) where x64's is at 14. It is not gated to arm64 — on x64 it is
+The arm64 twin: arm64 allocates from 25 GPRs (x15 is the asynchronous-preemption trampoline's
+return register), so its `__fnref_` thunk cliff is at 25 user arguments where x64's is at 14, and
+twenty-six arguments is one past it. It is not gated to arm64 — on x64 it is
 simply further past the pool, which is worth pinning on both lanes. The trailing arguments are zero
 so the sum fits an exit code while the first twenty stay distinct. Result is `sum(1..20) = 210`.
 ```maxon

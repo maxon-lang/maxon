@@ -1,0 +1,281 @@
+// Test: a-panic-in-a-loop-the-unswitcher-versioned-names-the-callee
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function scale(a IntArray, n Integer, factor Integer) returns Integer
+	var total = 0
+
+	for i in 0 upto n 'each'
+		let v = try a.get(i) otherwise panic("scale: a is shorter than n")
+		try a.set(i, value: v * factor) otherwise panic("scale: a is shorter than n")
+		total = total + v * factor
+	end 'each'
+
+	return total
+end 'scale'
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.resize(3)
+
+	for i in 0 upto 3 'fill'
+		try a.set(i, value: i + 1) otherwise panic("main: i < 3 = a.count()")
+	end 'fill'
+
+	return scale(a, n: 5, factor: 3) as ExitCode
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot5, x20
+    arm64.storeSlotReg slot4, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 3
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_resize
+    arm64.movImm x1, 0
+  __us_test#69:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.cmp x0, 0
+    arm64.b.lt forhdr#1
+  __us_test#70:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
+    arm64.cmp x2, 0
+    arm64.b.eq forhdr#1
+  __us_test#71:
+    arm64.sub x3, x2, 24
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
+    arm64.cmp x3, 0
+    arm64.b.ne forhdr#1
+    arm64.b forhdr#59
+  fill#2:
+    arm64.add x2, x1, 1
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.cmp x0, 0
+    arm64.b.lt __im_slow#11
+  __im_bounds#12:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x1, x0
+    arm64.b.hs __im_slow#11
+  __im_buffer#13:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.cmp x0, 0
+    arm64.b.eq __im_slow#11
+  __im_viewed#14:
+    arm64.sub x3, x0, 24
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
+    arm64.cmp x3, 0
+    arm64.b.ne __im_slow#11
+  __im_store#15:
+    arm64.storeBaseIndexScaleReg.word64 [x0 + x1*8 + 0], x2
+  forstep#3:
+    arm64.movRegReg x1, x2
+  forhdr#1:
+    arm64.cmp x1, 3
+    arm64.b.lt fill#2
+    arm64.b __il_body
+  fill#68:
+    arm64.add x3, x1, 1
+  __im_bounds#67:
+    arm64.cmp x1, x0
+    arm64.b.hs __im_slow#63
+  __im_store#64:
+    arm64.storeBaseIndexScaleReg.word64 [x2 + x1*8 + 0], x3
+  forstep#60:
+    arm64.movRegReg x1, x3
+  forhdr#59:
+    arm64.cmp x1, 3
+    arm64.b.lt fill#68
+  __il_body:
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+  __us_test#55:
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 16]
+    arm64.cmp x3, 0
+    arm64.b.lt forhdr#18
+  __us_test#56:
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 0]
+    arm64.cmp x3, 0
+    arm64.b.eq forhdr#18
+  __us_test#57:
+    arm64.sub x4, x3, 24
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 16]
+    arm64.cmp x4, 0
+    arm64.b.ne forhdr#18
+    arm64.b forhdr#39
+  __rc_ok#26:
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
+    arm64.cmp x1, x2
+    arm64.b.hs __im_slow#31
+  __im_load#32:
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
+    arm64.loadRegBaseIndexScale.word64 x2, [x2 + x1*8 + 0]
+  tryok#22:
+    arm64.arm64AddLsl x2, x2, x2, lsl #1
+  __rc_ok#28:
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 16]
+    arm64.cmp x3, 0
+    arm64.b.lt __im_slow#34
+  __im_bounds#35:
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 8]
+    arm64.cmp x1, x3
+    arm64.b.hs __im_slow#34
+  __im_buffer#36:
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 0]
+    arm64.cmp x3, 0
+    arm64.b.eq __im_slow#34
+  __im_viewed#37:
+    arm64.sub x4, x3, 24
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 16]
+    arm64.cmp x4, 0
+    arm64.b.ne __im_slow#34
+  __im_store#38:
+    arm64.storeBaseIndexScaleReg.word64 [x3 + x1*8 + 0], x2
+  tryok#24:
+    arm64.add x0, x0, x2
+  forstep#20:
+    arm64.add x1, x1, 1
+  forhdr#18:
+    arm64.cmp x1, 5
+    arm64.b.lt __rc_ok#26
+  critsplit#74:
+    arm64.movRegReg x20, x0
+    arm64.b __il_cont
+  __rc_ok#53:
+    arm64.cmp x1, x2
+    arm64.b.hs __im_slow#51
+  __im_load#52:
+    arm64.loadRegBaseIndexScale.word64 x4, [x3 + x1*8 + 0]
+  tryok#49:
+    arm64.arm64AddLsl x4, x4, x4, lsl #1
+  __im_store#44:
+    arm64.storeBaseIndexScaleReg.word64 [x3 + x1*8 + 0], x4
+  tryok#41:
+    arm64.add x0, x0, x4
+  forstep#40:
+    arm64.add x1, x1, 1
+  forhdr#39:
+    arm64.cmp x1, 5
+    arm64.b.lt __rc_ok#53
+  critsplit#77:
+    arm64.movRegReg x20, x0
+  __il_cont:
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.b.gt __rc_panic
+  __rc_ok#7:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.epilogue 64
+    arm64.ret
+  __im_slow#11:
+    arm64.storeSlotReg slot0, x2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_set
+    arm64.loadRegSlot x2, slot0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#6
+    arm64.b forstep#3
+  __im_slow#63:
+    arm64.storeSlotReg slot1, x0
+    arm64.storeSlotReg slot0, x2
+    arm64.storeSlotReg slot2, x3
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x2, x3
+    arm64.bl __managed_set
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot1
+    arm64.loadRegSlot x2, slot0
+    arm64.loadRegSlot x3, slot2
+    arm64.cmp x9, 0
+    arm64.b.eq forstep#60
+  tryerr#6:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at a-panic-in-a-loop-the-unswitcher-versioned-names-the-callee.test:22: main: i < 3 = a.count()\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.epilogue 64
+    arm64.ret
+  __im_slow#31:
+    arm64.storeSlotReg slot1, x0
+    arm64.storeSlotReg slot3, x1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.movRegReg x2, x0
+    arm64.loadRegSlot x0, slot1
+    arm64.loadRegSlot x1, slot3
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#23
+    arm64.b tryok#22
+  __im_slow#34:
+    arm64.storeSlotReg slot1, x0
+    arm64.storeSlotReg slot3, x1
+    arm64.storeSlotReg slot0, x2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_set
+    arm64.movRegReg x3, x0
+    arm64.loadRegSlot x0, slot1
+    arm64.loadRegSlot x1, slot3
+    arm64.loadRegSlot x2, slot0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#24
+  tryerr#25:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-panic-in-a-loop-the-unswitcher-versioned-names-the-callee.test:10: scale: a is shorter than n\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.epilogue 64
+    arm64.ret
+  __im_slow#51:
+    arm64.storeSlotReg slot1, x0
+    arm64.storeSlotReg slot3, x1
+    arm64.storeSlotReg slot0, x2
+    arm64.storeSlotReg slot2, x3
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.movRegReg x4, x0
+    arm64.loadRegSlot x0, slot1
+    arm64.loadRegSlot x1, slot3
+    arm64.loadRegSlot x2, slot0
+    arm64.loadRegSlot x3, slot2
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#49
+  tryerr#23:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-panic-in-a-loop-the-unswitcher-versioned-names-the-callee.test:9: scale: a is shorter than n\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.epilogue 64
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at a-panic-in-a-loop-the-unswitcher-versioned-names-the-callee.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.epilogue 64
+    arm64.ret
+}

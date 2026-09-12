@@ -564,8 +564,9 @@ export let GtStackMarksOfAGrow = GtStackMarkResized or GtStackMarkGrew
 // ⭐⭐ **WHERE THE OS WRITES A HARDWARE FAULT'S FRAME WHEN A GREEN THREAD FAULTS.** A fault's frame is not a
 // Maxon frame, so no guard ever projects it; each lane answers once here, and the two consequences read it:
 // how much stack the guard reserves under every green thread (`gtStackSystemBytes`), and whether a machine
-// installs a signal stack when it is born (`SchedRuntime.buildSchedLoop`).
-export enum FaultFrameHome
+// installs a signal stack when it is born (`targetInstallsSignalStack`, read by
+// `SchedRuntime.emitSchedWorkerBirth`).
+enum FaultFrameHome
 	// x64-Windows: the kernel pushes the exception record and the CONTEXT onto the FAULTING stack and runs the
 	// vectored handler below them.
 	faultingStack
@@ -578,13 +579,35 @@ export enum FaultFrameHome
 	noHandler
 end 'FaultFrameHome'
 
-export function gtFaultFrameHome(target Target) returns FaultFrameHome
+function gtFaultFrameHome(target Target) returns FaultFrameHome
 	return match target.cpu 'cpu'
 		x64 gives x64FaultFrameHome(target.os)
 		arm64 gives FaultFrameHome.signalStack if arm64OsInstallsFaultHandler(target.os) else FaultFrameHome.noHandler
 		wasm32 panic("gtFaultFrameHome: wasm32-wasi has no green-thread stack — a WASI component takes a wasm trap, not a hardware fault. `targetProvidesFacility` denies `greenThreads` there, and reaching here means a compiler-inserted scheduler op got past that gate")
 	end 'cpu'
 end 'gtFaultFrameHome'
+
+// ⭐⭐⭐ **DOES THIS PROGRAM INSTALL THE PREEMPTION SIGNAL? — THE ONE SPELLING, AND THREE MECHANISMS READ
+// IT.** The handler's registration (`mrt_runtime_init` on each POSIX lane), the alternate stack its frame
+// lands on, and whether a runtime-init chunk is laid out at all. It takes `usesGt` because only a program
+// that runs green threads has a SENDER for the signal: a lane that stops threads still installs nothing in a
+// program with no scheduler, and a predicate that omitted the bit would answer `true` where the chunk
+// appender answers `false` — a `bl` to a symbol nothing laid out, which is a link failure rather than a
+// diagnostic.
+export function programInstallsPreemptSignal(target Target, usesGt bool) returns bool
+	return usesGt and targetPreemptDelivery(target) == PreemptDelivery.signal
+end 'programInstallsPreemptSignal'
+
+// ⭐⭐ **DOES EVERY THREAD OF THIS PROGRAM OWE ITSELF AN ALTERNATE SIGNAL STACK?** Two mechanisms want one and
+// either is enough: a fault handler registered `SA_ONSTACK`, and the preemption signal's handler, which is
+// registered the same way. Neither frame fits in a green thread's few kilobytes.
+//
+// ⚠ **IT IS NOT `gtFaultFrameHome(target) == signalStack`.** arm64-Linux installs no fault handler at all and
+// still needs the stack, because it is a lane that stops threads — but only when it has a sender, which is
+// why the second term is `programInstallsPreemptSignal` and not a bare target test.
+export function targetInstallsSignalStack(target Target, usesGt bool) returns bool
+	return gtFaultFrameHome(target) == FaultFrameHome.signalStack or programInstallsPreemptSignal(target, usesGt: usesGt)
+end 'targetInstallsSignalStack'
 
 function x64FaultFrameHome(os Os) returns FaultFrameHome
 	return match os 'os'
@@ -658,6 +681,49 @@ export function gtStackGuardMargin(target Target) returns ParsedInt
 end 'gtStackGuardMargin'
 
 let GtStackGuardMarginBytes = 0x3A0 as ParsedInt
+
+// ⭐⭐⭐ **HOW MUCH ROOM AN ASYNCHRONOUS STOP DEMANDS BELOW THE INTERRUPTED STACK POINTER.** A stop lands at an
+// arbitrary instruction rather than at a prologue, so nothing has projected the trampoline's frame against
+// the guard word — the safe-point predicate demands the room outright (`SchedRuntime.buildGtPreemptSafe`),
+// and the backend PROVES the number covers the trampoline's register block plus everything its park reaches
+// (`PreemptionDepth.requireAsyncPreemptionFitsItsMargin`) rather than trusting it.
+//
+// ⚠ **IT IS LARGER THAN `GtStackGuardMarginBytes` AND MUST BE.** The guard margin covers the frames that
+// free-ride between checkpoints; this covers those PLUS a full register file — every general register, the
+// flags and all sixteen XMMs — spilled before any of them runs.
+//
+// ⭐ **A THREAD THIS CLOSE TO ITS BASE IS SIMPLY NOT STOPPED**, which costs nothing: it is inside a guarded
+// function, so its next prologue reads the request the cooperative way.
+// ⭐⭐⭐ **HOW FAR ABOVE ITS STACK BASE A THREAD MUST BE BEFORE IT MAY BE STOPPED — the async twin of
+// `gtStackGuardHeight`, and it has the SAME two terms for the same two reasons.** The trampoline's own cost
+// is `gtAsyncPreemptMargin`; under it sits the OS's reservation, which nothing Maxon emits may write into —
+// on x64-windows that is where the kernel builds a faulting thread's exception record and CONTEXT, and a
+// green thread stopped below it would have no room left to take a fault. The cooperative guard word defends
+// that reserve (`gtStackGuardHeight`); this floor is the only other thing that decides where a runtime frame
+// may open, so it defends it too.
+//
+// ⚠ **IT IS NOT BINDING TODAY AND IS STILL THE RIGHT NUMBER.** A preemptible PC is inside a guarded
+// function, whose entry already proved `sp >= stackBase + gtStackGuardHeight + margin` — comfortably above
+// this. The floor exists for the case that argument stops covering: it is read where the stop is decided,
+// not where the guard is.
+export function gtAsyncPreemptFloor(target Target) returns ParsedInt
+	return gtAsyncPreemptMargin(target) + gtStackSystemBytes(target)
+end 'gtAsyncPreemptFloor'
+
+// What the trampoline and its park actually spend below the interrupted stack pointer — the term
+// `PreemptionDepth.requireAsyncPreemptionFitsItsMargin` proves against.
+export function gtAsyncPreemptMargin(target Target) returns ParsedInt
+	return match target.cpu 'cpu'
+		x64 or
+			arm64 gives GtAsyncPreemptMarginBytes
+		wasm32 panic("gtAsyncPreemptMargin: wasm32 has no addressable call stack to stop a thread on — `targetProvidesFacility` denies `greenThreads` there, and `targetStopsThreadsForPreemption` denies it twice over")
+	end 'cpu'
+end 'gtAsyncPreemptMargin'
+
+// 0x400 (1024 B). MEASURED on x64-windows: the trampoline's own frame is 312 bytes and everything
+// `__gt_async_preempt_park` reaches adds 272, so 584 of it is spent and the rest is headroom the certificate
+// re-proves on every build.
+let GtAsyncPreemptMarginBytes = 0x400 as ParsedInt
 
 // The SYSTEM (scratch) stack a green thread's kernel calls run on (P1.5-B1a′ slice 1): a 64 KB region
 // committed once PER M by `emitSchedBecomeM`, its TOP held in `M->systemStackSP`. The syscall shim switches
@@ -5855,9 +5921,19 @@ function buildGtRunStrand(module StdModule, target Target)
 	// registers are saved and it is on no store and no queue yet — so it is where a stack may move
 	// (`__gt_stack_shrink`). A stack at the floor has nothing to give back, and that load and compare is all a
 	// park of one pays.
+	// ⛔⛔ **A THREAD THAT DID NOT ASK TO STOP KEEPS ITS STACK WHERE IT IS — Go's rule, and the reason is what
+	// a MOVE can and cannot rebase.** `__gt_stack_relocate` rebases `gt.sp`, `gt.fp` and the saved
+	// frame-pointer chain; a REGISTER holding an address inside the stack is rebased by nothing. At a
+	// voluntary park the thread stopped at a call boundary it wrote itself; at a preemption it was stopped
+	// at a prologue it had not reached, or — asynchronously — at an arbitrary instruction with its whole
+	// register file spilled verbatim, and a promoted stack record's address in any of those registers would
+	// come back naming freed pages. Go never shrinks at a preemption either (`gopreempt_m` goes through
+	// `goschedImpl`, which does not call `shrinkstack`) and refuses outright at an async safe point.
 	let size = emitLoadField(module, block: parked, record: member, offset: GtOffStackSize, ids: ids)
 	let aboveFloor = emitCmp(module, block: parked, a: size, b: emitConst(module, block: parked, value: gtSeedStackBytes(target), ids: ids), pred: StdCmpPred.gt, ids: ids)
-	module.setTerminator(parked, op: StdOp.condBranch(aboveFloor, thenBlockId: shrink.id, elseBlockId: dispatch.id))
+	let stopped = emitCmp(module, block: parked, a: emitLoadField(module, block: parked, record: member, offset: GtOffParkKind, ids: ids), b: emitConst(module, block: parked, value: GtParkKindPreempt, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	let mayShrink = emitBin(module, block: parked, a: aboveFloor, b: stopped, opcode: StdBinOpcode.bitAnd, ids: ids)
+	module.setTerminator(parked, op: StdOp.condBranch(mayShrink, thenBlockId: shrink.id, elseBlockId: dispatch.id))
 
 	module.appendOp(shrink, op: StdOp.call(ids.mint(), callee: GtStackShrinkName, args: argsOf(member)))
 	module.setTerminator(shrink, op: StdOp.branch(dispatch.id))

@@ -1188,13 +1188,13 @@ export union TargetOp
 	arm64LeaGlobal(dest TargetVReg, label ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
 	// Direct / indirect call (`bl` / `blr`). Full call-barrier semantics: implicitDefs =
-	// 0x7FFF807F8000FFFF — every CALLER-saved register of both files the AAPCS64-derived ABI
+	// 0x7FFF807F80007FFF — every CALLER-saved register of both files the AAPCS64-derived ABI
 	// clobbers: GPRs x0..x15 (bits 0..15 = 0xFFFF), SIMD d0..d7 (bits 31..38) and d16..d31 (bits
 	// 47..62); x19..x28 and d8..d15 are callee-saved and DELIBERATELY excluded. This equals
 	// `RegisterAllocator.callerSavedMask` for arm64 and `assertCallClobberConsistent` holds them
 	// equal. A union-backing literal cannot reference a named `let`, so the mask is inline.
-	arm64BranchLink(targetName ByteArray) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0x7FFF807F8000FFFF}
-	arm64BranchLinkReg(reg TargetVReg) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0x7FFF807F8000FFFF}
+	arm64BranchLink(targetName ByteArray) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0x7FFF807F80007FFF}
+	arm64BranchLinkReg(reg TargetVReg) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0x7FFF807F80007FFF}
 
 	// Float ALU / compare / int↔float conversion. The four ALU ops are 3-address PLAIN defs (arm64
 	// FP has a real 3-operand form, so no reuse — cleaner than x64's two-address SSE). `fcmp` sets
@@ -1257,12 +1257,12 @@ export union TargetOp
 	// x64 set (leaving x3/x4/x5/x12–x15, all arm64 caller-saved, free to colour and be clobbered): a silent
 	// miscompile, and `__slab_alloc` genuinely holds values live across its page call (the exact shape the
 	// `iatCall` comment records for `VirtualAlloc`). So this op carries the ARM64 caller-saved clobber:
-	// implicitDefs = 0x7FFF807F8000FFFF — GPRs x0..x15 (0xFFFF), SIMD d0..d7 (bits 31..38) and d16..d31
+	// implicitDefs = 0x7FFF807F80007FFF — GPRs x0..x14 (0x7FFF), SIMD d0..d7 (bits 31..38) and d16..d31
 	// (bits 47..62); x19..x28/d8..d15 are callee-saved and excluded. Identical to `arm64BranchLink`, and
 	// `assertArm64CallClobbers` holds it equal to `arm64CallerSavedMask`. A union-backing literal cannot
 	// reference a named `let`, so the mask is inline (guarded there). `slotIndex` names the libSystem GOT
 	// slot the Mach-O writer patches.
-	arm64ImportCall(slotIndex RelocSlotIndex) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0x7FFF807F8000FFFF}
+	arm64ImportCall(slotIndex RelocSlotIndex) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0x7FFF807F80007FFF}
 
 	// A raw Linux `svc #0` supervisor call (`movz x8, #number; svc #0`) — the LINUX sibling of
 	// `arm64ImportCall`, and the reason arm64-linux needs no import table, no GOT and no dynamic
@@ -1278,13 +1278,13 @@ export union TargetOp
 	// by the encoder, where the AArch64 Linux ABI wants it).
 	//
 	// The meta is `arm64BranchLink`'s, byte for byte, and that is what makes the above sound:
-	// `isCall: true` plus implicitDefs = 0x7FFF807F8000FFFF (GPRs x0..x15, SIMD d0..d7 and
+	// `isCall: true` plus implicitDefs = 0x7FFF807F80007FFF (GPRs x0..x14, SIMD d0..d7 and
 	// d16..d31 — every AAPCS64 caller-saved register; x19..x28/d8..d15 excluded) confines any
 	// value live ACROSS the syscall to the callee-saved half. x8 is inside that mask, so the
 	// encoder is free to clobber it. A union-backing literal cannot reference a named
 	// `let`, so the mask is inline (`assertArm64CallClobbers` holds it equal to
 	// `arm64CallerSavedMask`).
-	arm64Syscall(number MachineWord) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0x7FFF807F8000FFFF}
+	arm64Syscall(number MachineWord) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0x7FFF807F80007FFF}
 
 	// `FCSEL Dd, Dn, Dm, cond` (0x1E600C00 | Rm<<16 | cond<<12 | Rn<<5 | Rd) — pick `ifTrue` when the
 	// flags a preceding `arm64Fcmp` set satisfy `cond`, else `ifFalse`. It exists for exactly one
