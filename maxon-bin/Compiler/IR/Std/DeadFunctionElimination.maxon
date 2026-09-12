@@ -87,7 +87,9 @@ export function eliminateDeadFunctions(module StdModule, globalData GlobalDataTa
 
 	while worklist.count() > 0 'walk'
 		let idx = try worklist.pop() otherwise panic("eliminateDeadFunctions: pop from a non-empty worklist")
-		markCalleesOf(module, func: module.getFunc(idx), byName: byName, reached: reached, worklist: worklist)
+		let func = module.getFunc(idx)
+		requireNotSplicedAway(module, func: func, reached: reached)
+		markCalleesOf(module, func: func, byName: byName, reached: reached, worklist: worklist)
 	end 'walk'
 
 	requireUnreachableStdlibStayedDead(project, byName: byName, reached: reached)
@@ -237,77 +239,60 @@ end 'requireUnreachableStdlibStayedDead'
 function seedRoots(globalData GlobalDataTable, project Project, index FunctionNameIndex, reached BoolArray, worklist FuncIndexArray) throws CompileError
 	markLiveFunction(project.entryFunctionName, byName: index.byName, reached: reached, worklist: worklist)
 	seedTestRoots(index, reached: reached, worklist: worklist)
-	try markCompilerOwnedRoot(ModuleInitName, project: project, index: index, reached: reached, worklist: worklist)
-	try markCompilerOwnedRoot(GlobalCleanupName, project: project, index: index, reached: reached, worklist: worklist)
-	try markCompilerOwnedRoot(MmLeakCheckName, project: project, index: index, reached: reached, worklist: worklist)
 
-	// ⭐ **THE IOCP COMPLETION LOOP's TWO CALLEES (SV1).** That loop is a hand-assembled Target-tier chunk, so
-	// no Std caller reaches what it calls and the prune would drop them — leaving a pipe-reading program
-	// calling functions that were never laid out, which is a LINK failure and not a compile error, in exactly
-	// the programs that read pipes (`Testing/SpecWorkerPool.maxon`, i.e. the compiler's own harness).
-	//
-	// ⚠ **THE PAIR IS WHATEVER THE CHUNK CALLS**: the ready door and the wake its debt may owe. What the ready
-	// door calls in turn is reached by ordinary edges from it.
-	try markCompilerOwnedRoot(GtReadyLockedName, project: project, index: index, reached: reached, worklist: worklist)
-	try markCompilerOwnedRoot(SchedWakeOrSpawnName, project: project, index: index, reached: reached, worklist: worklist)
-
-	// ⭐ **THE SYSCALL BRACKET AND ITS RETURN ROAD, AND IT IS THE IOCP LOOP'S CASE EXACTLY.** All three are
-	// called only from the TARGET tier — `__sched_enter_syscall` / `__sched_exit_syscall` from the arm64
-	// isel's dispatch door, `__sched_syscall_regain` from `emitGtExitSyscall`'s hand-assembly — so no Std
-	// caller reaches them, the prune drops them, and the failure is `resolveCallFixups` panicking on an
-	// unknown function at the END of codegen rather than a compile error anywhere near the cause.
-	// ⚠ **WITHIN A LANE THAT BRACKETS, THE ROOTS CANNOT BE NARROWED FURTHER**: which calls get a bracket is
-	// decided at codegen and this pass runs before it.
-	//
-	// ⛔ **IT IS GATED ON THE TARGET, AND THAT GATE IS ONE OF FOUR THAT MUST AGREE** — see
-	// `SchedRuntime.targetBracketsBlockingSyscalls`, which carries the fork; the bracket's own pair rides the
-	// narrower `targetCallsTheSyscallBracket`, which is the same question the installer builds them under. On
-	// a lane that does not build one of these, rooting a name the module does not define is a SILENT no-op
-	// rather than an error, so an ungated root here is exactly the shape in which the two halves would drift
-	// apart with nothing to say so.
-	if targetBracketsBlockingSyscalls(project.target) 'theSyscallHandoffIsBuilt'
-		try markCompilerOwnedRoot(SchedSyscallRegainName, project: project, index: index, reached: reached, worklist: worklist)
-	end 'theSyscallHandoffIsBuilt'
-
-	if targetCallsTheSyscallBracket(project.target) 'theBracketIsCalled'
-		try markCompilerOwnedRoot(SchedEnterSyscallName, project: project, index: index, reached: reached, worklist: worklist)
-		try markCompilerOwnedRoot(SchedExitSyscallName, project: project, index: index, reached: reached, worklist: worklist)
-	end 'theBracketIsCalled'
-
-	// ⭐ **THE ENTRY STUB's SCHEDULER TEARDOWN (SV1)** — `__gt_drain_at_exit`, called from `mrt_start` between
-	// the global cleanup and the leak gate and from nowhere else. Exactly `__mm_leak_check`'s position, and
-	// rooted for exactly its reason: the gate emits its call from `RuntimeUsage.usesGt` — where installation
-	// is decided — so a pruned root leaves a call with no callee rather than a program without a drain.
-	try markCompilerOwnedRoot(GtDrainAtExitName, project: project, index: index, reached: reached, worklist: worklist)
-
-	// ⭐ **THE ENTRY STUB's CALL INTO A GREEN-THREAD PROGRAM** — `__gt_run_main`, which `mrt_start` calls in
-	// place of `main` when the scheduler is installed, and nothing else calls. Rooted for `__gt_drain_at_exit`'s
-	// reason, and `main` needs nothing more: it is rooted as the entry, and the stub hands its address over
-	// through a thread entry that joins at the Target tier.
-	try markCompilerOwnedRoot(GtRunMainName, project: project, index: index, reached: reached, worklist: worklist)
-
-	// ⭐ **THE PREEMPTION's Std HALF** — `__gt_preempt`, called only from the hand-assembled `__gt_guard_tripped`'s
-	// preempt arm, so no Std caller reaches it. Rooted for the IOCP loop's callees' reason.
-	try markCompilerOwnedRoot(GtPreemptName, project: project, index: index, reached: reached, worklist: worklist)
-
-	// ⭐ **THE DEBUGSTREAM PRODUCER'S TWO ENTRY-STUB CALLEES (O3).** `__ds_init` and `__ds_shutdown` are
-	// called from `mrt_start` and from nowhere else — exactly `__mm_leak_check`'s position — so nothing in
-	// the Std module reaches them and the prune would drop both, leaving the stub calling functions that
-	// were never laid out. Rooting an ABSENT name is a no-op (`markCompilerOwnedRoot` returns when the
-	// module defines none), so an untraced build is unaffected: it installs neither and roots neither.
-	try markCompilerOwnedRoot(DsInitName, project: project, index: index, reached: reached, worklist: worklist)
-	try markCompilerOwnedRoot(DsShutdownName, project: project, index: index, reached: reached, worklist: worklist)
-
-	// ⭐ **THE COVERAGE DUMP**, called from `mrt_start` between the leak gate and the exit primitive and from
-	// nowhere else — exactly `__ds_shutdown`'s position and rooted for its reason. `__cov_write_file` under it
-	// is an ordinary call-graph edge and needs no root of its own; an uninstrumented build installs neither
-	// and roots neither, since rooting an absent name is a no-op.
-	try markCompilerOwnedRoot(CoverageDumpName, project: project, index: index, reached: reached, worklist: worklist)
+	for name in compilerOwnedRootNames(project.target) 'eachOwnedRoot'
+		try markCompilerOwnedRoot(name, project: project, index: index, reached: reached, worklist: worklist)
+	end 'eachOwnedRoot'
 
 	for reloc in globalData.pendingRdataRelocs 'eachRdataSlot'
 		markLiveFunction(reloc.funcName, byName: index.byName, reached: reached, worklist: worklist)
 	end 'eachRdataSlot'
 end 'seedRoots'
+
+// ⭐ **KIND 2, AS ONE ROSTER** — every name an entry stub or a hand-assembled chunk calls, on `target`. Read
+// here to root them and by the inliner to keep them out of the called-once rule (a body the stub still
+// calls would be copied, not moved). Rooting a name the module does not define is a no-op, so a lane or a
+// build that installs none of a family costs nothing here.
+//
+//   * `__module_init` / `__maxon_global_cleanup` — the managed-global initialization and release the entry
+//     stub brackets `main` with.
+//   * `__mm_leak_check` — both entry stubs' leak gate, emitted from `RuntimeUsage.usesHeap` where
+//     installation is decided; a pruned root leaves a call with no callee, loudly, on every backend.
+//   * `__gt_ready_locked` / `__sched_wake_or_spawn` — the IOCP completion loop's two callees, named by a
+//     hand-assembled chunk unconditionally.
+//   * `__sched_syscall_regain` and the bracket pair — called only from the Target tier's syscall handoff,
+//     on the lanes that build it (`SchedRuntime.targetBracketsBlockingSyscalls`, whose gate the install
+//     shares); an ungated root here would be the shape in which the two halves drift apart silently.
+//   * `__gt_drain_at_exit` / `__gt_run_main` — the entry stub's scheduler teardown and its call into a
+//     green-thread program.
+//   * `__gt_preempt` — the preemption's Std half, called only from the hand-assembled `__gt_guard_tripped`'s
+//     preempt arm.
+//   * `__ds_init` / `__ds_shutdown` and `__cov_dump` — the entry stub's debugstream and coverage brackets.
+module function compilerOwnedRootNames(target Target) returns ByteArrayArray
+	var names = ByteArrayArray.create()
+	names.push(ModuleInitName)
+	names.push(GlobalCleanupName)
+	names.push(MmLeakCheckName)
+	names.push(GtReadyLockedName)
+	names.push(SchedWakeOrSpawnName)
+
+	if targetBracketsBlockingSyscalls(target) 'theSyscallHandoffIsBuilt'
+		names.push(SchedSyscallRegainName)
+	end 'theSyscallHandoffIsBuilt'
+
+	if targetCallsTheSyscallBracket(target) 'theBracketIsCalled'
+		names.push(SchedEnterSyscallName)
+		names.push(SchedExitSyscallName)
+	end 'theBracketIsCalled'
+
+	names.push(GtDrainAtExitName)
+	names.push(GtRunMainName)
+	names.push(GtPreemptName)
+	names.push(DsInitName)
+	names.push(DsShutdownName)
+	names.push(CoverageDumpName)
+	return names
+end 'compilerOwnedRootNames'
 
 // ⭐⭐ **A FOURTH KIND OF ROOT: EVERY `test` DECLARATION.** Nothing CALLS a test — that is what a test IS,
 // a body the program reaches by no edge — so this walk would drop every one of them and the binary would
@@ -366,6 +351,48 @@ function markLiveFunction(name ByteArray, byName FuncIndexByName, reached BoolAr
 	worklist.push(idx)
 end 'markLiveFunction'
 
+// ⛔ A body the inliner spliced into its one call site and emptied must be reached by NOTHING: laid out it
+// is a zero-byte chunk. Reaching one means a reference the called-once census did not count — the census
+// reads `stdFunctionReferenceOf` and the roots `CalledOnceCensus.markRoots` names, so the door is one of
+// those two — and the panic names the reference that got through.
+function requireNotSplicedAway(module StdModule, func IrFunction, reached BoolArray)
+	if not func.bodySplicedAway 'aBodyIsThere'
+		return
+	end 'aBodyIsThere'
+
+	panic("eliminateDeadFunctions: '{String.from(func.name)}' was spliced into its one call site and emptied, yet it is still reached — {referenceKeepingAlive(module, name: func.name, reached: reached)}. The called-once census (`CalledOnceCensus.markRoots`, `stdFunctionReferenceOf`) must count that reference as referenced-elsewhere so the body stays a call")
+end 'requireNotSplicedAway'
+
+// For the panic above: the first reached function whose live ops name `name`, or the root set when no
+// function does. Walks every reached function, on the failure path only.
+function referenceKeepingAlive(module StdModule, name ByteArray, reached BoolArray) returns String
+	for funcIndex in 0 upto module.funcCount() 'eachFunc'
+		let isReached = try reached.get(funcIndex) otherwise panic("referenceKeepingAlive: reached.get OOB at function index {funcIndex}")
+
+		if not isReached 'notWalked'
+			continue
+		end 'notWalked'
+
+		let func = module.getFunc(funcIndex)
+
+		for opIdx in module.liveOpIndices(func) 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("referenceKeepingAlive: live op index {opIdx} not in module.ops")
+
+			let namesIt = match stdFunctionReferenceOf(op) 'edge'
+				none gives false
+				directCall(callee) gives callee == name
+				otherReference(callee) gives callee == name
+			end 'edge'
+
+			if namesIt 'keepsIt'
+				return "'{String.from(func.name)}' still names it (a direct call, a `tryCall` or a `funcAddr`)"
+			end 'keepsIt'
+		end 'eachOp'
+	end 'eachFunc'
+
+	return "a root (`seedRoots`) names it and no reached function does"
+end 'referenceKeepingAlive'
+
 // Every static callee edge out of one live function. Walks LIVE ops (`IrModule.liveOpIndices`), never
 // the flat `module.ops` array: that array is append-only and holds the ops every prior block-rebuilding
 // pass replaced, so scanning it would resurrect callees from IR that no longer exists.
@@ -376,8 +403,27 @@ function markCalleesOf(module StdModule, func IrFunction, byName FuncIndexByName
 	end 'eachOp'
 end 'markCalleesOf'
 
-// The static reachability edge one `StdOp` names, if any. THREE variants carry a function NAME —
-// `call`, `tryCall` and `funcAddr` — and every one of them is an edge:
+// The static reachability edge one `StdOp` names, if any. Read here to walk the call graph and by the
+// inliner's called-once census, which counts the direct calls and refuses a callee anything else names.
+function markCalleeOf(op StdOp, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray)
+	match stdFunctionReferenceOf(op) 'edge'
+		none then break 'edge'
+		directCall(callee) then markLiveFunction(callee, byName: byName, reached: reached, worklist: worklist)
+		otherReference(callee) then markLiveFunction(callee, byName: byName, reached: reached, worklist: worklist)
+	end 'edge'
+end 'markCalleeOf'
+
+// The function name one `StdOp` reaches: a direct `call`, or a reference that is not one.
+module union StdFunctionReference
+	none
+	directCall(callee ByteArray)
+
+	// A `tryCall` or a `funcAddr`.
+	otherReference(callee ByteArray)
+end 'StdFunctionReference'
+
+// THREE variants carry a function NAME — `call`, `tryCall` and `funcAddr` — and every one of them is a
+// static edge:
 //
 //   * `call` / `tryCall` — the direct call graph.
 //   * `funcAddr` — a function's ADDRESS, and it is a STATIC edge even though the call that consumes it
@@ -389,12 +435,12 @@ end 'markCalleesOf'
 //     pruned.
 //
 // `callIndirect` and `witnessCall` deliberately name NO callee: they consume a code pointer that some
-// `funcAddr` (marked above) or some `.rdata` slot (rooted in `seedRoots`) already produced, so crediting
+// `funcAddr` (named above) or some `.rdata` slot (rooted in `seedRoots`) already produced, so crediting
 // them would be crediting the same edge twice with no name to credit it to.
 //
 // The arms NAME every variant of the union, so a variant added later FAILS TO COMPILE here rather than
 // being classified by omission. A new variant that carries a callee name must be added as its own arm.
-function markCalleeOf(op StdOp, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray)
+module function stdFunctionReferenceOf(op StdOp) returns StdFunctionReference
 	match op 'op'
 		// arith + control + the call band up to `call`: pure computation, branches, `ret`, `param`.
 		const or
@@ -409,7 +455,7 @@ function markCalleeOf(op StdOp, byName FuncIndexByName, reached BoolArray, workl
 			branch or
 			ret or
 			param then break 'op'
-		call(_, callee, _) then markLiveFunction(callee, byName: byName, reached: reached, worklist: worklist)
+		call(_, callee, _) then return StdFunctionReference.directCall(callee)
 
 		// `retVoid` … `rdataAddr`: returns, `.data`/`.rdata` ADDRESSES (labels, not functions), loads,
 		// stores, and the two OS primitives that name no Maxon function.
@@ -420,12 +466,12 @@ function markCalleeOf(op StdOp, byName FuncIndexByName, reached BoolArray, workl
 			osAllocPages or
 			osWriteStdout or
 			rdataAddr then break 'op'
-		tryCall(_, _, callee, _) then markLiveFunction(callee, byName: byName, reached: reached, worklist: worklist)
+		tryCall(_, _, callee, _) then return StdFunctionReference.otherReference(callee)
 
 		// `errorReturn` reads two local virtuals; `osExit` is an OS primitive.
 		errorReturn or
 			osExit then break 'op'
-		funcAddr(_, funcName) then markLiveFunction(funcName, byName: byName, reached: reached, worklist: worklist)
+		funcAddr(_, funcName) then return StdFunctionReference.otherReference(funcName)
 
 		// `callIndirect`/`witnessCall` (see above) plus every appended `os*` primitive and `switch`,
 		// none of which names a Maxon function.
@@ -565,7 +611,9 @@ function markCalleeOf(op StdOp, byName FuncIndexByName, reached BoolArray, workl
 		osHostSample or
 			osNetpoll then break 'op'
 	end 'op'
-end 'markCalleeOf'
+
+	return StdFunctionReference.none
+end 'stdFunctionReferenceOf'
 
 // Rebuild `module.functions` keeping only what the walk reached.
 //

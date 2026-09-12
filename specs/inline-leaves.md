@@ -19,14 +19,8 @@ stands BEFORE any splice, and memoised:
   `witnessTryCall`) — which is also what makes ownership free here, because a retain, a release and a
   scope drop are all parser-emitted calls;
 - it contains **no op the dialect marks `isUnsupportedInInlineBody`** except the two PANIC ops, which
-  have a rule of their own below — so an `errorReturn` (a throwing body) and every `os*` primitive
-  refuse the callee;
-- it contains **no `/` or `mod`**. Those lower to `idiv`, which can FAULT (`i64.min / -1`, or a divisor
-  the compiler could not prove non-zero), and a hardware fault's backtrace is taken from where the
-  INSTRUCTION is. A panic OP has a slow arm this pass can re-issue the call through, so its frame
-  survives; a faulting instruction has nothing to re-issue, so the only way to keep its frame is not to
-  move it. `specs/safety.md`'s `integer-overflow-fault-from-int-min-over-minus-one` is what pins
-  this, and it is what caught the rule missing;
+  are copied like any other block (see `THE PANIC RULE` below) — so an `errorReturn` (a throwing body)
+  and every `os*` primitive refuse the callee;
 - it has **no more than 24 body ops** (over all its blocks, terminators counted, the `param` ops not).
   24 is measured rather than chosen: `regMaskContains` — the function this pass exists for — is 23 Std
   ops, because a shift whose count the compiler cannot fold carries the 6-op saturation `THE SHIFT RULE`
@@ -40,6 +34,10 @@ stands BEFORE any splice, and memoised:
 
 Only a direct `StdOp.call` site is ever rewritten. A `tryCall` is never touched: it is the throwing
 call's spelling AND the existential-returning call's, and neither is what a tiny leaf is.
+
+The leaf rule is one of the inliner's TWO admission rules. The other — a function with exactly one
+direct call site in the program is spliced regardless of size — is `specs/inline-called-once.md`,
+which also holds the trace mechanism both rules share.
 
 ### ⭐ WHY IT RUNS AFTER `inlineManagedPrimitives` (EC17)
 
@@ -57,9 +55,7 @@ by rule — so no body it can reach is one this pass would have accepted. (Measu
 callees 469 → 530, sites 4,138 → 4,921, and that pass's own expansion count unchanged at 6,032.)
 
 ⚠ **IT IS A REORDER AND NOT A SECOND ROUND**, which was the other shape considered. A second round
-would also re-expand the `__il_slow` arms this pass mints — they hold *the very call the splice moved*,
-so re-inlining one copies a panicking leaf's body again for no call removed — and it would admit the
-cascade the next paragraph refuses on purpose.
+would admit the cascade the next paragraph refuses on purpose.
 
 **ONE ROUND, NO CASCADE.** Eligibility is decided on the pre-splice body, so a caller that becomes
 call-free BY being inlined into does not become eligible in the same compile. That is what bounds the
@@ -68,30 +64,26 @@ work at one copy per site and keeps a chain of helpers from pulling a large body
 ### ⭐ THE PANIC RULE — how a ranged-parameter leaf is inlined without moving a stack trace
 
 A ranged parameter's entry guard ends in an `osPanic` block, so nearly every small function with a
-narrowed parameter or return would be excluded by a rule that simply refused to copy one. It is not
-refused. Instead:
+narrowed parameter or return would be excluded by a rule that refused to copy one. It is not refused:
+a leaf's panic blocks are **copied with the rest of its body**, and every copied block carries its
+INLINE SITE — the callee it came out of. The backend turns those tags into inline range records in
+the `__inlframes` table behind `__symtable` and the frame printers walk them, so a panic from a copied block still prints
+`in clampPct / in main / in mrt_start` off a frame that belongs to `main`. The mechanism is
+`specs/inline-called-once.md`'s, and its cases are the gate on the trace; the two stderr cases below
+are the leaf rule's own pins on it.
 
-- a leaf holding a panic block is eligible **only if it is PURE** — no op anywhere in its body writes
-  memory (the panic ops themselves excepted, since they are never copied);
-- its panic blocks are **NOT copied**. Every edge that led into one is redirected to ONE slow block per
-  splice, which re-issues the **original call** with a fresh result and branches to the continuation
-  carrying it.
-
-Because the callee is pure, re-running it from the start on the same arguments takes the same path and
-panics with the same message, from **its own frame**. So the trace still reads `in clampPct / in main /
-in mrt_start`, the callee stays alive (it is still called) and no `.rdata` blob moves.
-
-A leaf with a store AND a panic is refused outright — re-running it would repeat the store. A leaf with
-stores and no panic is copied whole.
+Stores make no difference to eligibility: a leaf with a store and a panic is copied whole, exactly as
+one with stores and no panic is. `/` and `mod` are admitted for the same reason — a hardware fault's
+address falls inside a range record too.
 
 ### What the splice does
 
 The call's block is split at the site. The head keeps everything before the call; a CONTINUATION takes
 everything after it, plus the block's whole exit; and the continuation's single block arg **IS the
-call's original result id**, so no op after the site changes. The callee's non-panic blocks are copied
-as fresh blocks, its `param i` maps to the site's argument `i` (a generic callee's trailing layout /
-count / witness parameters are ordinary parameters and map the same way), and every `ret v` becomes a
-branch to the continuation carrying `v`.
+call's original result id**, so no op after the site changes. The callee's blocks are copied as fresh
+blocks tagged with the site, its `param i` maps to the site's argument `i` (a generic callee's trailing
+layout / count / witness parameters are ordinary parameters and map the same way), and every `ret v`
+becomes a branch to the continuation carrying `v`.
 
 ## Tests
 
@@ -126,12 +118,12 @@ end 'main'
 ```
 
 <!-- test: the-inlined-guard-still-panics-with-the-callees-frame -->
-⭐ **THE PANIC RULE'S GATE.** `clampPct` is a pure leaf whose entry guard panics, and the argument is
+⭐ **THE PANIC RULE'S GATE.** `clampPct` is a leaf whose entry guard panics, and the argument is
 COMPUTED from a loop counter so the compile-time half cannot fold it — and carries no typealias, so it
 reaches `Percent` with no cast and the guard that refuses it is the CALLEE's own. The inlined guard
-refuses the value, control leaves for the slow block, the ORIGINAL call runs, and the panic comes out
-of `clampPct`'s own frame — which is why this stderr is byte-identical to what the same program prints
-with the pass disabled.
+refuses the value from a panic block copied into `main`, and the block's inline site is what prints
+`in clampPct` above `in main` — which is why this stderr is byte-identical to what the same program
+prints with the pass disabled.
 
 ```maxon
 typealias Percent = int(0 to 100)
@@ -193,9 +185,10 @@ end 'main'
 42
 ```
 
-<!-- test: a-leaf-with-a-store-and-a-panic-stays-a-call -->
-`record` writes a field AND carries a ranged parameter's panic block. Re-running it on the slow arm
-would repeat the store, so the panic rule refuses it and the call stands.
+<!-- test: a-leaf-with-a-store-and-a-panic-is-inlined -->
+`record` writes a field AND carries a ranged parameter's panic block. The panic block is copied with
+its inline site rather than re-run through the call, so the store runs once and the leaf is spliced
+at both sites like any other.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -496,11 +489,10 @@ end 'main'
 ```
 
 <!-- test: the-panic-rule-holds-when-the-argument-is-an-inlined-element -->
-⭐ **THE PANIC RULE, UNDER THE NEW ORDER.** The value the inlined guard tests is an ELEMENT, produced by
-the access `inlineManagedPrimitives` has already expanded into this loop — so the splice reads a value
-that pass wrote, in a block it shaped, which is the arrangement the old order could never produce. The
-guard still refuses it, control still leaves for `__il_slow`, the ORIGINAL call still runs, and the
-panic still comes out of `clampPct`'s own frame.
+⭐ **THE PANIC RULE, UNDER THE EC17 ORDER.** The value the inlined guard tests is an ELEMENT, produced
+by the access `inlineManagedPrimitives` has already expanded into this loop — so the splice reads a
+value that pass wrote, in a block it shaped. The guard still refuses it, the copied panic block still
+carries `clampPct` as its inline site, and the trace still names `clampPct` above `main`.
 
 The array is a LITERAL because its element must carry no alias: a `Percent`-typed store is guarded at
 every write, so no element of an `Array with Percent` can be out of `Percent`'s range, and an element of

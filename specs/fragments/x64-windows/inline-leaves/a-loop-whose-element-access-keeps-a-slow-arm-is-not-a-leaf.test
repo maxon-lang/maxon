@@ -24,9 +24,12 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
-func @totalBytes {
+func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
@@ -36,17 +39,24 @@ func @totalBytes {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 40
-    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 20
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 22
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+  __il_body:
     x64.movRegImm32 r12, 0
     x64.movRegImm32 rdx, 0
   __us_test:
     x64.loadRegBaseDisp.word64 r13, [rbx + 8]
     x64.loadRegBaseDisp.word64 r14, [rbx + 24]
     x64.loadRegBaseDisp.word64 r15, [rbx + 0]
-  forhdr:
-    x64.storeSlotReg slot0, rdx
-    x64.cmpRegReg rdx, r13
-    x64.jcc greaterEqual, forexit
+    x64.jmp forhdr
   each:
     x64.cmpRegImm32 r14, 8
     x64.jcc notEqual, __im_stride
@@ -69,8 +79,20 @@ func @totalBytes {
   forstep:
     x64.loadRegSlot rax, slot0
     x64.leaRegRegImm32 rdx, rax, 1
-    x64.jmp forhdr
-  forexit:
+  forhdr:
+    x64.storeSlotReg slot0, rdx
+    x64.cmpRegReg rdx, r13
+    x64.jcc less, each
+  __il_cont:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
     x64.movRegReg r8, r12
     x64.epilogue 40
     x64.popReg r15
@@ -80,48 +102,14 @@ func @totalBytes {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-}
-
-func @main {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegImm32 rcx, 1
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __managed_create
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 rdx, 20
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_push
-    x64.movRegImm32 rdx, 22
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_push
-    x64.movRegReg rcx, rbx
-    x64.callDirect totalBytes
-    x64.movRegReg r12, r8
-    x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r12, rax
-    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-loop-whose-element-access-keeps-a-slow-arm-is-not-a-leaf.test:17: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

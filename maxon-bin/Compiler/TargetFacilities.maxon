@@ -998,6 +998,19 @@ export function targetCanMeasureCoverage(target Target) returns bool
 	return targetProvidesFacility(target, facility: HostFacility.managedFile)
 end 'targetCanMeasureCoverage'
 
+// Whether the target's backend emits the inline frame records a panic backtrace names a spliced callee
+// by (`BacktraceFormat`'s `__inlframes`, read by the two native frame printers). On wasm the frames are
+// the engine's — there is no frame chain to walk and no printer of ours — so a trace raised inside a
+// spliced body would lose the callee's frame with no record to restore it; the inliner refuses the
+// splices whose trace could change there.
+module function targetEmitsInlineFrameRecords(target Target) returns bool
+	return match target.cpu 'cpu'
+		x64 or
+			arm64 gives true
+		wasm32 gives false
+	end 'cpu'
+end 'targetEmitsInlineFrameRecords'
+
 export function targetProvidesEveryFacility(target Target) returns bool
 	for facility in HostFacility.allCases 'each'
 		if not targetProvidesFacility(target, facility: facility) 'missing'

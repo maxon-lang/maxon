@@ -204,10 +204,50 @@ export function colderHeat(a BlockHeat, b BlockHeat) returns BlockHeat
 	return BlockHeat.cold if a == BlockHeat.cold or b == BlockHeat.cold else BlockHeat.normal
 end 'colderHeat'
 
+// An index into `IrFunction.inlineSites`.
+export typealias InlineSiteIndex = int(0 to u64.max)
+
+// Which spliced body a block belongs to. `none` is a block of the function's own text; `site` names the
+// entry of the function's site table the block was copied under. A union rather than a sentinel index,
+// because site 0 is a real site.
+export union InlineSiteRef
+	none
+	site(index InlineSiteIndex)
+end 'InlineSiteRef'
+
+export typealias InlineSiteRefArray = Array with InlineSiteRef
+
+// A fresh record naming the same site, for a copy of a block that must own its fields outright — the
+// register allocator's unit crosses a thread boundary, which admits no co-owned record.
+export function copiedInlineSite(site InlineSiteRef) returns InlineSiteRef
+	return match site 's'
+		none gives InlineSiteRef.none
+		site(index) gives InlineSiteRef.site(index)
+	end 's'
+end 'copiedInlineSite'
+
+// One splice a function holds: the callee whose body was copied in, and the site that copy is nested
+// under — `none` for a body spliced straight into the function's own text. A site nested under another
+// always has the lower index, because the enclosing splice is recorded before anything is copied into it.
+export type InlineSite
+	export var calleeName as ByteArray
+	export var parent as InlineSiteRef
+
+	export static function create(calleeName ByteArray, parent InlineSiteRef) returns InlineSite
+		return Self{calleeName: calleeName, parent: parent}
+	end 'create'
+end 'InlineSite'
+
+export typealias InlineSiteArray = Array with InlineSite
+
 export type IrBlock
 	export var id as BlockId
 	export var label as ByteArray
 	export var heat as BlockHeat
+
+	// The spliced body this block was copied under, so a frame printer can name the callee the block's
+	// code came from. Carried by every copy of the block, exactly as `heat` is.
+	export var inlineSite as InlineSiteRef
 	export var opRefs as OpIndexArray
 	export var terminator as Terminator
 
@@ -229,12 +269,14 @@ export type IrBlock
 	export var branchEdges as BranchEdgeArray
 
 	// The heat is REQUIRED: a block minted without saying how often it runs is the omission that leaves a
-	// cold arm's call confined, so no creator may default it.
-	export static function create(id BlockId, label ByteArray, heat BlockHeat) returns IrBlock
+	// cold arm's call confined, so no creator may default it. The inline site is required for the same
+	// reason: a block minted inside a spliced body without saying so is a frame a panic trace loses.
+	export static function create(id BlockId, label ByteArray, heat BlockHeat, inlineSite InlineSiteRef) returns IrBlock
 		return Self{
 			id: id,
 			label: label,
 			heat: heat,
+			inlineSite: inlineSite,
 			opRefs: OpIndexArray.create(),
 			terminator: Terminator.unset,
 			condBranch: CondBranch.none,
@@ -243,10 +285,10 @@ export type IrBlock
 		}
 	end 'create'
 
-	// An empty block carrying `src`'s identity — id, label and heat — for every tier boundary and copier
-	// that rebuilds a block's body but keeps what the block IS.
+	// An empty block carrying `src`'s identity — id, label, heat and inline site — for every tier boundary
+	// and copier that rebuilds a block's body but keeps what the block IS.
 	export static function createLike(src IrBlock) returns IrBlock
-		return IrBlock.create(src.id, label: src.label, heat: src.heat)
+		return IrBlock.create(src.id, label: src.label, heat: src.heat, inlineSite: src.inlineSite)
 	end 'createLike'
 
 	// True when the block has a real terminator op (returns / branches).

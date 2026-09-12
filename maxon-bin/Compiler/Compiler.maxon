@@ -167,6 +167,7 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	project.asyncTrace = asyncTrace
 	project.debugStream = debugStream
 	project.debugInfo = debugInfo
+	project.requestedRuntimeBodies = runtimeIrNames
 	project.coverage = coverage
 	project.productVersion = productVersion
 	project.defines = defines
@@ -1013,8 +1014,8 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// through the uniform `(userargs, env)` indirect ABI, whose signature its own `(userargs) -> R` shape does
 	// not match. Its `__fnref_` env-thunk targets are collected from the MAXON module — which the pipeline
 	// leaves intact — and the thunks are installed already-lowered below, like the destructor cascades
-	// (P1.5-A2b-2).
-	let fnRefThunkTargets = collectFnRefThunkTargets(module, funcSignatures: project.funcSignatures)
+	// (P1.5-A2b-2). Held on the project because the inliner's called-once census reads it mid-pipeline.
+	project.functionValueTargets = collectFnRefThunkTargets(module, funcSignatures: project.funcSignatures)
 	recordPhase(project, phase: CompilePhase.deriveRuntimeNeeds, probe: scanProbe)
 
 	// The `.data` slot list assembled from those answers, and the section laid out. Its own phase
@@ -1594,9 +1595,9 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	installGenericInstanceCascades(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededSoleWalks as CascadeSymbolSet, action: CascadeAction.soleWalk)
 
 	// The `__fnref_` env-thunks for plain functions used as first-class values — collected before the pipeline
-	// (see `fnRefThunkTargets`), installed here already-lowered so they flow through the whole backend and (on
-	// wasm) receive a funcref-table slot at their funcIdx (P1.5-A2b-2).
-	installFnRefThunks(pipeline.stdModule, project: project, targets: fnRefThunkTargets)
+	// (`Project.functionValueTargets`), installed here already-lowered so they flow through the whole backend
+	// and (on wasm) receive a funcref-table slot at their funcIdx (P1.5-A2b-2).
+	installFnRefThunks(pipeline.stdModule, project: project, targets: project.functionValueTargets)
 
 	// The `__gt_release_<callee>` helpers that give back the reference an `async` spawn took to each managed
 	// argument, and release the result-or-error of a promise nobody awaited (A2). Collected before the

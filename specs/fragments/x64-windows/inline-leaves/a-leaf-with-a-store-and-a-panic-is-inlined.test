@@ -1,0 +1,84 @@
+// Test: a-leaf-with-a-store-and-a-panic-is-inlined
+typealias Integer = int(i64.min to i64.max)
+typealias Percent = int(0 to 100)
+
+type Meter
+	export var level as Integer
+
+	export static function create() returns Self
+		return Self{level: 0}
+	end 'create'
+
+	export function record(p Percent) returns Integer
+		self.level = self.level + (p as Integer)
+		return self.level
+	end 'record'
+end 'Meter'
+
+function main() returns ExitCode
+	var m = Meter.create()
+	let first = m.record(40 as Percent)
+	let second = m.record(2 as Percent)
+	return (second - first + 40) as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+  __il_body:
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+  __rc_ok#9:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.leaRegRegImm32 rax, rax, 40
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+  __rc_ok#13:
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
+    x64.leaRegRegImm32 rcx, rcx, 2
+    x64.storeBaseDispReg.word64 [r8 + 0], rcx
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
+  __il_cont:
+    x64.subRegReg rcx, rcx, rax
+    x64.leaRegRegImm32 rbx, rcx, 40
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok#1:
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-leaf-with-a-store-and-a-panic-is-inlined.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

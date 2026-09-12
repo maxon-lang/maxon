@@ -95,7 +95,7 @@ Pipeline: `maxon-bin/Compiler/IR/PassPipeline.maxon:395-413`.
 | Optimization | State |
 |---|---|
 | Whole-program dead-function elim | ✅ `DeadFunctionElimination.maxon` |
-| Inlining | ◑ `InlineLeaves` — leaf-only, one round, ≤24 ops, scheduled AFTER the managed rewrite (EC17) |
+| Inlining | ◑ `InlineLeaves` — every function called exactly once (any size), then leaves ≤24 ops at every site; one round, scheduled AFTER the managed rewrite (EC17); spliced bodies keep their frame in a trace through `__inlframes` |
 | Managed-primitive inlining | ✅ `InlineManagedPrimitives` (EC1) |
 | Const **operand** → immediate | ✅ `FoldConstOperands` |
 | Algebraic identity (`x+0`, `x*1`) | ✅ `FoldConstOperands` move 3 |
@@ -1878,6 +1878,37 @@ row 13; a reload cheaper than memory (an idle callee-saved XMM as the slot) and,
 interprocedural clobber analysis or inlining the two callees are the rows that remove or shrink the
 cost this one only redistributed.
 
+
+**`EC33` · Called-once inlining, sound for stack traces through inline frame records.** — ✅
+**CLOSED 2026-09-12 (round 11 of the fannkuch loop).** The per-instruction profile of the round-10 binary put 8 of the
+10 s gap to C at n=12 in per-permutation overhead rather than in the flip loop: the two calls per permutation, their
+prologues and epilogues, the argument moves, the call-crossing spills and each callee's entry re-running the array
+shape guards. `inlineLeaves` now has a second admission: a function named by exactly one direct `call` in the module —
+and by nothing else: no `tryCall`, `funcAddr`, `.rdata` slot, entry, test, compiler-owned root, function-value thunk
+target or golden request — is spliced into its caller whatever its size, in post-order waves over the direct-call graph
+(a cycle's members are all refused before any retires), unless it throws, takes a by-reference parameter, carries the
+green-thread stack guard, or its live set plus the caller's live-across set at the site exceeds the unswitcher's
+register budget. The splice reuses the leaf splicer (`SiteSplicer`); a spliced body is emptied so no later pass walks
+it twice, and dead-function elimination drops it. What made it sound: every `IrBlock` carries an inline site, kept by
+every copy (unswitch versions, crit-splits, the allocator's units), the backends emit an `__inlframes` table behind
+`__symtable` (sites with parents, disjoint ranges keyed by the innermost site), and the x64/arm64
+`mrt_panic_print_inline` chunks print the site chain before the physical frame's name, at the same address the
+function lookup uses (biased for a call frame, exact for a fault) — so the 68 spec cases pinning callee frame names did
+not move, nested splices print every level, and `maxon profile run` attributes a sample to the innermost site through
+`.mxdbg` v4. The leaf inliner's `__il_slow` re-run redirect and its store+panic and `div`/`mod` refusals are gone; on
+wasm, whose frames are the engine's, `targetEmitsInlineFrameRecords` is false and the rule fails closed (called-once
+refused; a leaf holding a panic or a fault refused). Landed beside it: the JCC-erratum padding (`tests/profile` was red
+because one fixture loop's fused `cmp`+`jl` straddled a 32-byte boundary), a diverging op role so a copied panic block
+ends in the caller's dead return instead of feeding the continuation phi, a frame-local two-word pair elision in
+`ValueTupleReturn` for the tuple record a splice leaves behind, and the optimize pass's four fixes (a `Terminator.dead`
+block has no successor; the splitter's reach cache is generation-stamped and cut at loop headers past the peak; caller
+facts computed once per caller; the cleanups and folds rescheduled after the range passes). The A/B (n=11, 5 runs
+interleaved, control = the rebased base rebuilt with itself): **2,335 → 1,810 ms (−22.5%)**; n=12 30,930 → 24,054 ms,
+ratio 1.50 → **1.17**; census ops 2085 → 1984, mov 226 → 206. The self-compile went 40,194 → 43,377 ms (**+7.9%**),
+over the 5% band, and landed on the user's ruling: +1.25 s is the inliner's own pass (one liveness solve per callee for
+the pressure gate plus the splice), +1.0 s the allocator on the bigger functions, +0.85 s the rescheduled passes; the
+compiler's own emitted code runs slightly faster. The two follow-ups the ruling named: a cheaper pressure bound that
+needs no full liveness, and the per-function fan-out driver the pipeline's `PassClassification` has always anticipated.
 
 **`A3` · `retainBorrowedPayload` — the rest of `EC2`.** ⛔ **DECLINED 2026-08-30, MEASURED. The
 acquire is load-bearing, the prize is under 1%, and the rule `EC2` used is a WRONG ANSWER here.** The row

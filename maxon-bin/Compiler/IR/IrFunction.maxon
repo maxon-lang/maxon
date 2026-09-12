@@ -130,6 +130,9 @@ let sharedEmptyGlobalAliasValues = GlobalAliasValueSet.create()
 // copy-on-write test below unable to fire at all.
 var sharedEmptyParamGuards = RangeCheckParamGuardArray.create()
 
+// The same anchor for the inline-site table, which only the inliner writes to and nearly no function has.
+var sharedEmptyInlineSites = InlineSiteArray.create()
+
 // ⭐⭐ **ONE SOURCE NAME A DEBUGGER CAN BE ASKED ABOUT, AND EVERY SSA VALUE IT EVER OWNED.**
 //
 // A name owns a SEQUENCE of values, not one: `mergeAtContinuation` mints a fresh `ValueId` where control
@@ -643,6 +646,11 @@ export type IrFunction
 	// give.
 	export var bodyWasSkippedAsUnreached as bool
 
+	// The body MOVED into its one call site (`InlineLeaves.spliceWave`) and the original was emptied. Nothing
+	// may reach it afterwards: dead-function elimination panics on one it still reaches, because laid out
+	// it would be a zero-byte chunk, and an empty `blockRefs` alone reads as an extern.
+	export var bodySplicedAway as bool
+
 	// ⭐⭐ **THIS FUNCTION HANDS ITS TUPLE BACK IN THE TWO RETURN REGISTERS** — the THIRD writer of the
 	// secondary return slot, beside a throwing function's error flag and an interface-returning one's
 	// witness half (`functionUsesSecondaryReturnSlot`).
@@ -700,6 +708,11 @@ export type IrFunction
 	// it. Read by `InlineLeaves`, which is the only pass that can prove a cascade dead from OUTSIDE the
 	// function it stands in.
 	export var paramGuards as RangeCheckParamGuardArray
+
+	// Every body the inliner spliced into this function, indexed by `IrBlock.inlineSite`. Filled by
+	// `InlineLeaves` and read by the backends, which emit one code range per run of blocks under a site so
+	// a frame printer can name the callee a return address or a faulting instruction sits in.
+	export var inlineSites as InlineSiteArray
 
 	// ⭐ **THE SOURCE BINDINGS OF THIS FUNCTION, PUBLISHED BY THE PARSER FOR THE DEBUG-INFO SIDECAR** (see
 	// `DebugLocalDecl`). Empty unless the build is writing one — no pass reads it and nothing branches on
@@ -784,9 +797,11 @@ export type IrFunction
 			assignsIntoAnExistingAggregate: false,
 			writesModuleStorage: false,
 			bodyWasSkippedAsUnreached: false,
+			bodySplicedAway: false,
 			usesValueTupleReturn: false,
 			borrowFacts: sharedEmptyBorrowFacts,
 			paramGuards: sharedEmptyParamGuards,
+			inlineSites: sharedEmptyInlineSites,
 			debugLocals: sharedEmptyDebugLocals,
 			debugLocalLocations: sharedEmptyDebugValueLocations
 		}
@@ -852,9 +867,11 @@ export type IrFunction
 			assignsIntoAnExistingAggregate: false,
 			writesModuleStorage: false,
 			bodyWasSkippedAsUnreached: false,
+			bodySplicedAway: false,
 			usesValueTupleReturn: false,
 			borrowFacts: BorrowFacts.create(),
 			paramGuards: RangeCheckParamGuardArray.create(),
+			inlineSites: InlineSiteArray.create(),
 			debugLocals: DebugLocalDeclArray.create(),
 			debugLocalLocations: DebugValueLocationArray.create()
 		}
@@ -909,13 +926,18 @@ export type IrFunction
 			assignsIntoAnExistingAggregate: src.assignsIntoAnExistingAggregate,
 			writesModuleStorage: src.writesModuleStorage,
 			bodyWasSkippedAsUnreached: src.bodyWasSkippedAsUnreached,
+			bodySplicedAway: src.bodySplicedAway,
 			usesValueTupleReturn: src.usesValueTupleReturn,
 			borrowFacts: src.borrowFacts,
 			// NOT carried, and it cannot need to be: every copy of a function is made at or before the
 			// lowering (`relocateFunction` is `IrModule.merge`'s), and this column is filled by
 			// `InsertRangeChecks`, which runs after the last of them. A copy that carried it would carry
 			// BLOCK IDS into a function whose blocks the copy has yet to be given.
-			paramGuards: sharedEmptyParamGuards
+			paramGuards: sharedEmptyParamGuards,
+
+			// Not carried either: the table is filled by the inliner, which also runs after the last copy, and
+			// its entries are meaningful only against the blocks that name them.
+			inlineSites: sharedEmptyInlineSites
 		}
 	end 'shallowCopy'
 
@@ -949,6 +971,18 @@ export type IrFunction
 
 		self.paramGuards.push(RangeCheckParamGuard.create(index, alias: alias, headBlockId: headBlockId, okBlockId: okBlockId, ownedBlockIds: ownedBlockIds))
 	end 'recordParamGuard'
+
+	// Record one splice into this function and answer the site its copied blocks carry. COPY-ON-WRITE off
+	// the shared empty, for `recordParamGuard`'s reason.
+	export function recordInlineSite(calleeName ByteArray, parent InlineSiteRef) returns InlineSiteRef
+		if self.inlineSites is sharedEmptyInlineSites 'stillShared'
+			self.inlineSites = InlineSiteArray.create()
+		end 'stillShared'
+
+		let index = self.inlineSites.count() as InlineSiteIndex
+		self.inlineSites.push(InlineSite.create(calleeName, parent: parent))
+		return InlineSiteRef.site(index)
+	end 'recordInlineSite'
 
 	export function releaseScope()
 		self.scope.reset()

@@ -613,11 +613,14 @@ export type IrModule uses Op
 		block.terminator = Terminator.opIndex(idx)
 	end 'setTerminator'
 
-	// Every pass-minted block enters through here, and every one states its heat (`BlockHeat`).
-	export function addBlock(func IrFunction, label ByteArray, heat BlockHeat) returns IrBlock
+	// Every pass-minted block enters through here, and every one states its heat (`BlockHeat`). The
+	// inline site defaults to the function's own text: a runtime installer and every pass ahead of the
+	// inliner mint nothing inside a spliced body. A pass that copies or splits a block AFTER the inliner
+	// passes the source block's site, so the copy stays inside the callee it came from.
+	export function addBlock(func IrFunction, label ByteArray, heat BlockHeat, inlineSite InlineSiteRef = InlineSiteRef.none) returns IrBlock
 		let id = func.nextBlockId
 		func.nextBlockId = func.nextBlockId + 1
-		let block = createAndRegisterBlock(func.blockRefs, id: id, label: label, heat: heat)
+		let block = createAndRegisterBlock(func.blockRefs, id: id, label: label, heat: heat, inlineSite: inlineSite)
 		self.blockSourceInfo.push(BlockSourceInfo.empty())
 		return block
 	end 'addBlock'
@@ -633,7 +636,7 @@ export type IrModule uses Op
 	export function addBlockAt(func IrFunction, label ByteArray, filePath String, firstLine LineNumber) returns IrBlock
 		let id = func.nextBlockId
 		func.nextBlockId = func.nextBlockId + 1
-		let block = createAndRegisterBlock(func.blockRefs, id: id, label: label, heat: BlockHeat.normal)
+		let block = createAndRegisterBlock(func.blockRefs, id: id, label: label, heat: BlockHeat.normal, inlineSite: InlineSiteRef.none)
 		self.blockSourceInfo.push(BlockSourceInfo.create(filePath, firstLine: firstLine))
 		return block
 	end 'addBlockAt'
@@ -641,9 +644,9 @@ export type IrModule uses Op
 	// Create a new IrBlock, append it to the blocks array, and register its
 	// index in the function's blockRefs. The caller must bump func.nextBlockId
 	// after calling this (the function returns the allocated id via the block).
-	function createAndRegisterBlock(blockRefs BlockRefArray, id BlockId, label ByteArray, heat BlockHeat) returns IrBlock
+	function createAndRegisterBlock(blockRefs BlockRefArray, id BlockId, label ByteArray, heat BlockHeat, inlineSite InlineSiteRef) returns IrBlock
 		let blockIdx = blocks.count()
-		let block = IrBlock.create(id, label: label, heat: heat)
+		let block = IrBlock.create(id, label: label, heat: heat, inlineSite: inlineSite)
 		blocks.push(block)
 		blockRefs.push(blockIdx)
 		return block

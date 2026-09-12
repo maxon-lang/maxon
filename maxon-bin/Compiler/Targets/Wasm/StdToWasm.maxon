@@ -411,6 +411,10 @@ end 'wasmRdataBase'
 // entry point: both a baked `.rdata` blob (`StringRuntime.stringBlobBytes` NUL-terminates it) and an
 // interpolated buffer (`Parser.renderedPanicMessagePointer` — the slab zeroes the byte past the payload)
 // arrive as a C string.
+// ⚠ **AND SO THE INLINE FRAME TABLES HAVE NO WASM HALF.** The inliner still runs for this target and its
+// blocks still carry their inline sites (`IrBlock.inlineSite`), but with no frame chain and no printer of
+// ours there is nothing to consume `__inlframes` here: a spliced body's frame is whatever the engine
+// prints, which is the enclosing function's.
 function appendPanicRuntime(builder WasmModuleBuilder, funcNames FunctionNameIndex)
 	var body = WasmBody.create()
 

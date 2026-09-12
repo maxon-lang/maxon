@@ -1,9 +1,11 @@
 // The debug-info fixture: three DECLARED functions, each with a body of several statements, so a
 // sidecar has functions to name, code ranges to bound and line rows to place.
 //
-// ⛔ **EVERY FUNCTION LOOPS, AND THAT IS WHAT KEEPS IT IN THE SIDECAR.** `inlineLeaves` copies a tiny
-// callee's body into its caller and `DeadFunctionElimination` then drops the callee, so a one-line
-// helper is a name the dump can honestly answer nothing about. A loop makes each of these a real
+// ⛔ **EVERY HELPER LOOPS AND IS CALLED FROM TWO SITES, AND THAT IS WHAT KEEPS IT IN THE SIDECAR.**
+// `inlineLeaves` copies a tiny callee's body into its caller, splices a callee with exactly one call site
+// into its caller whatever its size, and `DeadFunctionElimination` then drops the callee — so a one-line
+// helper, or one called once, is a name the dump can honestly answer nothing about. A loop keeps each of
+// these out of the leaf rule and a second call site out of the called-once rule, so each is a real
 // function with a real code range whatever the inliner decides.
 typealias Step = int(0 to 1000)
 
@@ -31,6 +33,6 @@ end 'scale'
 
 function main() returns ExitCode
 	print("spans\n")
-	let answer = scale(2)
+	let answer = scale(2) + scale(0) + accumulate(3)
 	return answer as ExitCode
 end 'main'

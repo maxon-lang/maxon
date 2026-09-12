@@ -318,7 +318,7 @@ type RangeCheckEmitter
 	var module as StdModule
 	var func as IrFunction
 	var funcIndex as FuncIndex
-	var nextId as ValueId
+	var ids as ValueMinter
 
 	// The function's compile-time constants, PARTITIONED BY DOMAIN: an integer `const`'s payload is a
 	// number, a float `const`'s is an IEEE-754 bit pattern, and the two must never be read as each
@@ -366,16 +366,14 @@ type RangeCheckEmitter
 	var guardChainSource as PreSplitOpsByBlock
 
 	static function create(project Project, module StdModule, func IrFunction, funcIndex FuncIndex) returns RangeCheckEmitter
-		return Self{project: project, module: module, func: func, funcIndex: funcIndex, nextId: nextFreeValueId(module, func: func), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create(), writtenNegativeLiterals: noValueMarks, guardChainTail: sharedEmptyGuardChainTail, guardChainBase: sharedEmptyGuardChainBase, guardChainSource: sharedEmptyGuardChainSource}
+		return Self{project: project, module: module, func: func, funcIndex: funcIndex, ids: ValueMinter.resuming(nextFreeValueId(module, func: func)), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create(), writtenNegativeLiterals: noValueMarks, guardChainTail: sharedEmptyGuardChainTail, guardChainBase: sharedEmptyGuardChainBase, guardChainSource: sharedEmptyGuardChainSource}
 	end 'create'
 
 	// A fresh ValueId for a guard op. The colored register file / dense value columns downstream grow to
 	// fit the highest id, so a monotonically increasing id past the function's current maximum is all
 	// that is required.
 	function mintId() returns ValueId
-		let id = self.nextId
-		self.nextId = self.nextId + 1
-		return id
+		return self.ids.mint()
 	end 'mintId'
 
 	// A fresh id that stands in for `source` — a guard's bound or compare for the value it checks, a cell
@@ -1177,7 +1175,7 @@ type RangeCheckEmitter
 		let panicBlock = self.module.addBlock(self.func, label: b"__rc_panic", heat: BlockHeat.cold)
 		let blobLabel = registerStringBlob(self.project.globalData, bytes: message)
 		self.module.appendOp(panicBlock, op: StdOp.osPanic(blobLabel.toByteArray()))
-		self.emitDeadReturn(panicBlock)
+		appendDeadReturn(self.module, func: self.func, block: panicBlock, ids: self.ids)
 		return panicBlock
 	end 'emitPanicBlock'
 
@@ -1200,28 +1198,6 @@ type RangeCheckEmitter
 	//
 	// ⭐ The zero's TYPE is `stdDefaultPrimaryReturnType`'s, which is also lowering's THROW-edge answer —
 	// one rule for one fact, in the dialect both passes already read (X6 review).
-	function emitDeadReturn(block IrBlock)
-		if functionUsesSecondaryReturnSlot(self.func.maxonReturnType, throws: self.func.throwsTypeName) 'aSecondReturnWord'
-			let dead = self.emitZeroConstOf(block, valueType: stdDefaultPrimaryReturnType(self.func.returnType))
-			let second = self.emitZeroConstOf(block, valueType: StdType.i64)
-			self.module.setTerminator(block, op: StdOp.errorReturn(dead, errorFlagId: second))
-			return
-		end 'aSecondReturnWord'
-
-		match self.func.returnType 'rt'
-			void then self.module.setTerminator(block, op: StdOp.retVoid)
-			value(inner) then self.module.setTerminator(block, op: StdOp.ret(self.emitZeroConstOf(block, valueType: inner)))
-		end 'rt'
-	end 'emitDeadReturn'
-
-	// A zero `const` of an EXPLICIT type, appended to `block` — the one place this pass mints one, so the
-	// throwing and non-throwing dead returns cannot come to disagree about how a zero is made.
-	function emitZeroConstOf(block IrBlock, valueType StdType) returns ValueId
-		let zero = self.mintId()
-		self.module.appendOp(block, op: StdOp.const(zero, value: 0, valueType: valueType))
-		return zero
-	end 'emitZeroConstOf'
-
 	// Emit the compare cascade, `head` first: each check is `const bound; cmp value <pred> bound;
 	// condBranch (predicate TRUE) -> trueTarget, (FALSE) -> next`. The TRUE target is `panicId` for an
 	// out-of-range check and `okId` for an in-range one (see `RangeCheckEdge`); the FALSE edge falls
@@ -1598,6 +1574,31 @@ type RangeCheckEmitter
 	end 'recordConst'
 end 'RangeCheckEmitter'
 
+// The return after an aborting op: never executed, present so the block leaves `func` with the arity its
+// type declares. Shared with the inliner, which ends a copied aborting block the same way in the CALLER
+// (`SiteSplicer.copyBodies`), so the two cannot disagree about how a dead return is made.
+module function appendDeadReturn(module StdModule, func IrFunction, block IrBlock, ids ValueMinter)
+	if functionUsesSecondaryReturnSlot(func.maxonReturnType, throws: func.throwsTypeName) 'aSecondReturnWord'
+		let dead = appendZeroConst(module, block: block, valueType: stdDefaultPrimaryReturnType(func.returnType), ids: ids)
+		let second = appendZeroConst(module, block: block, valueType: StdType.i64, ids: ids)
+		module.setTerminator(block, op: StdOp.errorReturn(dead, errorFlagId: second))
+		return
+	end 'aSecondReturnWord'
+
+	match func.returnType 'rt'
+		void then module.setTerminator(block, op: StdOp.retVoid)
+		value(inner) then module.setTerminator(block, op: StdOp.ret(appendZeroConst(module, block: block, valueType: inner, ids: ids)))
+	end 'rt'
+end 'appendDeadReturn'
+
+// A zero `const` of an EXPLICIT type, appended to `block` — the one place a dead return mints one, so the
+// throwing and non-throwing shapes cannot come to disagree about how a zero is made.
+function appendZeroConst(module StdModule, block IrBlock, valueType StdType, ids ValueMinter) returns ValueId
+	let zero = ids.mint()
+	module.appendOp(block, op: StdOp.const(zero, value: 0, valueType: valueType))
+	return zero
+end 'appendZeroConst'
+
 // The label this pass's continuations carry. `InlineManagedPrimitives` passes its own — the two passes
 // share the splitter below and nothing else, and a golden that named every continuation `__rc_ok` would
 // say a range check produced blocks a range check knows nothing about.
@@ -1673,8 +1674,8 @@ end 'splitBlockInPlace'
 function splitBlockExit(module StdModule, func IrFunction, head IrBlock, label ByteArray) returns IrBlock
 	var headBlock = head
 
-	// The tail runs exactly when the head does.
-	var ok = module.addBlock(func, label: label, heat: headBlock.heat)
+	// The tail runs exactly when the head does, and it is the same text.
+	var ok = module.addBlock(func, label: label, heat: headBlock.heat, inlineSite: headBlock.inlineSite)
 
 	ok.terminator = headBlock.terminator
 	ok.condBranch = headBlock.condBranch

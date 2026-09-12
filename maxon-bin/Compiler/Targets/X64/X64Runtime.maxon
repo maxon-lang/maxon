@@ -1022,9 +1022,9 @@ end 'buildWriteHexChunk'
 // mrt_panic_print_frame(rcx = text_offset, rdx = symtable_ptr)
 // ==========================================================================
 
-// Print one frame as `  in <name>\n`, resolving `text_offset` through the symbol table.
-// A linear scan keeping the LAST entry whose codeOffset is <= text_offset — which is the
-// GREATEST such entry because the table ascends (asserted where it is built).
+// Print one frame: the inline lines the offset sits under, then `  in <name>\n` with `text_offset`
+// resolved through the symbol table — a linear scan keeping the LAST entry whose codeOffset is <=
+// text_offset, which is the GREATEST such entry because the table ascends (asserted where it is built).
 //
 // Slots: 0 = text_offset, 1 = symtable_ptr, 2 = count, 3 = index, 4 = best name offset.
 function buildPrintFrameChunk() returns FunctionCodeChunk
@@ -1044,6 +1044,10 @@ function buildPrintFrameChunk() returns FunctionCodeChunk
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTextOffset), srcReg: X64Register.rcx)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), srcReg: X64Register.rdx)
+
+	// The spliced bodies the offset lies inside come first, innermost out, so the trace reads as the calls
+	// would have printed it.
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: PrintInlineFramesName)
 
 	emitPrintString(asm, bytes: FrameLinePrefix)
 
@@ -1106,6 +1110,93 @@ function buildPrintFrameChunk() returns FunctionCodeChunk
 
 	return asm.finishFunction(PrintFrameName)
 end 'buildPrintFrameChunk'
+
+// ==========================================================================
+// mrt_panic_print_inline(rcx = text_offset)
+// ==========================================================================
+
+// Print `  in <callee>\n` for every inline site `text_offset` lies under, innermost first, through the
+// `__inlframes` tables (`BacktraceFormat`). The ranges are disjoint and ascend, so the scan stops at the
+// first range starting past the offset; a hit's site chain is then walked through `parent` until
+// `InlineSiteNoParent`. An offset under no range prints nothing.
+//
+// Slots: 0 = text_offset, 1 = the tables, 2 = the site being printed, 3 = one past the last range entry.
+function buildPrintInlineFramesChunk() returns FunctionCodeChunk
+	let SlotTextOffset = 0
+	let SlotTables = 1
+	let SlotSite = 2
+	let SlotRangesEnd = 3
+	assertInlineTableStrides()
+	var asm = X64RuntimeAsm.beginFunction(4)
+
+	let scan = asm.newLabel()
+	let found = asm.newLabel()
+	let printSite = asm.newLabel()
+	let done = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTextOffset), srcReg: X64Register.rcx)
+	encodeLeaRegFuncAddr(asm.code, callFixups: asm.callFixups, dest: X64Register.rax, targetName: InlineFrameTableName)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTables), srcReg: X64Register.rax)
+
+	// r9 = the first range entry: tables + InlineTableOffSites + siteCount * 8.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rax, disp: InlineTableOffSiteCount, wide: false)
+	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShl, reg: X64Register.rdx, count: InlineSiteEntryShift)
+	encodeLeaRegBaseIndexScale(asm.code, dest: X64Register.r9, base: X64Register.rax, index: X64Register.rdx, scale: MemoryIndexScale.byOne)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.r9, base: X64Register.r9, disp: InlineTableOffSites)
+
+	// [SlotRangesEnd] = r9 + rangeCount * 12, as (count shl 3) + (count shl 2).
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rax, disp: InlineTableOffRangeCount, wide: false)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r8, src: X64Register.rdx, wide: true)
+	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShl, reg: X64Register.r8, count: InlineRangeStrideShiftEight)
+	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShl, reg: X64Register.rdx, count: InlineRangeStrideShiftFour)
+	encodeLeaRegBaseIndexScale(asm.code, dest: X64Register.r8, base: X64Register.r8, index: X64Register.rdx, scale: MemoryIndexScale.byOne)
+	encodeLeaRegBaseIndexScale(asm.code, dest: X64Register.r8, base: X64Register.r9, index: X64Register.r8, scale: MemoryIndexScale.byOne)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRangesEnd), srcReg: X64Register.r8)
+
+	// The scan makes no call, so the cursor stays in r9 and the offset in rdx.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotTextOffset), wide: true)
+
+	asm.placeLabel(scan)
+	encodeCmpRegBaseDisp(asm.code, destReg: X64Register.r9, base: X64Register.rbp, disp: asm.slotDisp(SlotRangesEnd))
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.aboveEqual, targetBlockId: done)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.r9, disp: InlineRangeOffStart, wide: false)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rdx, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: done)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.r9, disp: InlineRangeOffEnd, wide: false)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rdx, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: found)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.r9, base: X64Register.r9, disp: InlineRangeStrideBytes)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: scan)
+
+	asm.placeLabel(found)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.r9, disp: InlineRangeOffSite, wide: false)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSite), srcReg: X64Register.rax)
+
+	// One line per site: rcx = its entry, the parent replaces the site slot, then the name is printed.
+	asm.placeLabel(printSite)
+	emitPrintString(asm, bytes: FrameLinePrefix)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotSite), wide: true)
+	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShl, reg: X64Register.rax, count: InlineSiteEntryShift)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotTables), wide: true)
+	encodeLeaRegBaseIndexScale(asm.code, dest: X64Register.rcx, base: X64Register.rcx, index: X64Register.rax, scale: MemoryIndexScale.byOne)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rcx, base: X64Register.rcx, disp: InlineTableOffSites)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rcx, disp: InlineSiteOffParent, wide: false)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSite), srcReg: X64Register.rdx)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: InlineSiteOffName, wide: false)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotTables), wide: true)
+	encodeLeaRegBaseIndexScale(asm.code, dest: X64Register.rcx, base: X64Register.rcx, index: X64Register.rax, scale: MemoryIndexScale.byOne)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteStderrName)
+	emitPrintString(asm, bytes: FrameLineTerminator)
+
+	// A parent is a site index or the explicit "none"; the comparand is loaded zero-extended, as the column was.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotSite), wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: InlineSiteNoParent)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: printSite)
+
+	asm.placeLabel(done)
+	return asm.finishFunction(PrintInlineFramesName)
+end 'buildPrintInlineFramesChunk'
 
 // ==========================================================================
 // mrt_panic_walk_frames(rcx = start_frame, rdx = stack_low)
@@ -1722,6 +1813,7 @@ function appendX64SharedRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X
 	chunks.push(buildFaultBacktraceChunk())
 	chunks.push(buildWalkFramesChunk(usesGt, os: target.os))
 	chunks.push(buildPrintFrameChunk())
+	chunks.push(buildPrintInlineFramesChunk())
 	chunks.push(buildWriteHexChunk())
 end 'appendX64SharedRuntimeChunks'
 

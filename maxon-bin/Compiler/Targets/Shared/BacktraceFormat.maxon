@@ -76,9 +76,10 @@ end 'assertSymtabStride'
 
 // --- Frame walking ---
 //
-// The most frames one walk prints (a fault's frame 0, read from the faulting instruction, comes before
-// them). A backtrace is a diagnostic, not a transcript: a trace deeper than this is a recursion whose
-// innermost frames are the ones worth reading.
+// The most PHYSICAL frames one walk prints (a fault's frame 0, read from the faulting instruction, comes
+// before them). A backtrace is a diagnostic, not a transcript: a trace deeper than this is a recursion whose
+// innermost frames are the ones worth reading. The inline lines a frame prints ahead of its own
+// (`__inlframes` below) are part of that frame and do not count against the cap.
 export let MaxBacktraceFrames = 100
 
 // A frame record's two words: the CALLER's saved frame pointer at +0 and the return address at
@@ -110,6 +111,219 @@ export let StackWindowBytes = 0x4000000
 // Biasing by one byte resolves the frame to the calling function. Frame 0 of a FAULT
 // backtrace takes no bias — a faulting RIP already IS the faulting instruction.
 export let ReturnAddrSymbolBias = 1
+
+// --- `__inlframes`: the backtrace's INLINE FRAME tables ---
+//
+// A body the inliner spliced into its caller has no frame of its own, so the frame chain alone would
+// print the caller where the call used to print the callee. Every IR block carries the splice it was
+// copied under (`IrBlock.inlineSite`), each backend records the code range of every run of blocks under
+// one site, and the printer names the site a return address or a faulting instruction sits in — then
+// the site that one is nested under, and so on out — ahead of the frame's own function. A trace therefore
+// reads exactly as it did when the call existed.
+//
+// Laid down immediately after `__symtable`'s names, under a label of its own: the names blob carries no
+// length word, so a table appended to it can only be found by name. Being past `__symtable`, the tables
+// lie outside `[mrt_start, __symtable)` and no return address can symbolize into them.
+//
+// Format, every column a u32:
+//   siteCount(4) | rangeCount(4)
+//   | sites[siteCount]  of { nameOffset(4), parent(4) }
+//   | ranges[rangeCount] of { codeStart(4), codeEnd(4), site(4) }
+//   | NUL-terminated names
+// `nameOffset` is relative to the START of the table. `parent` is a site index, or `InlineSiteNoParent`
+// for a body spliced into the function's own text. The ranges are DISJOINT and ascend by `codeStart`
+// (a nested body's blocks carry the inner site, so nesting lives in `parent` alone), which is what lets
+// a walker stop at the first range starting past the offset it holds.
+export let InlineFrameTableName = b"__inlframes"
+
+// "No enclosing site", spelled explicitly rather than as a 0 that site 0 would collide with.
+export let InlineSiteNoParent = 0xFFFFFFFF as MachineWord
+
+let InlineTableColumnBytes = SymbolTableColumnBytes
+let InlineSiteEntryColumns = 2  // { nameOffset, parent }
+let InlineRangeEntryColumns = 3  // { codeStart, codeEnd, site }
+let InlineSiteEntryBytes = InlineTableColumnBytes * InlineSiteEntryColumns
+let InlineRangeEntryBytes = InlineTableColumnBytes * InlineRangeEntryColumns
+
+// The READER's view — derived from the writer above and from nothing else, for `SymtabOffEntries`' reason.
+export let InlineTableOffSiteCount = 0 as Imm32
+export let InlineTableOffRangeCount = InlineTableColumnBytes as Imm32
+export let InlineTableOffSites = (InlineTableColumnBytes * 2) as Imm32  // the site array starts past the two counts
+export let InlineSiteOffName = 0 as Imm32
+export let InlineSiteOffParent = InlineTableColumnBytes as Imm32
+export let InlineRangeOffStart = 0 as Imm32
+export let InlineRangeOffEnd = InlineTableColumnBytes as Imm32
+export let InlineRangeOffSite = (InlineTableColumnBytes * 2) as Imm32
+
+// log2 of the site stride — a SHIFT COUNT, guarded like `SymtabEntryShift`. A range entry is not a power of
+// two wide, so both walkers advance a range cursor by `InlineRangeStrideBytes` instead of indexing, and
+// size the range array as `count shl 3` plus `count shl 2`.
+export let InlineSiteEntryShift = 3 as ShiftCount
+export let InlineRangeStrideBytes = InlineRangeEntryBytes as Imm32
+export let InlineRangeStrideShiftEight = 3 as ShiftCount
+export let InlineRangeStrideShiftFour = 2 as ShiftCount
+
+export function assertInlineTableStrides()
+	let siteStride = 1 shl InlineSiteEntryShift
+
+	if siteStride != InlineSiteEntryBytes 'siteStrideDrift'
+		panic("assertInlineTableStrides: a walker strides {siteStride} bytes per inline site (shift {InlineSiteEntryShift}) but `buildInlineFrameTableBytes` writes {InlineSiteEntryBytes} — every inline frame would name the wrong callee")
+	end 'siteStrideDrift'
+
+	let rangeStride = (1 shl InlineRangeStrideShiftEight) + (1 shl InlineRangeStrideShiftFour)
+
+	if rangeStride != InlineRangeEntryBytes or (InlineRangeStrideBytes as ParsedInt) != InlineRangeEntryBytes 'rangeStrideDrift'
+		panic("assertInlineTableStrides: a walker sizes the range array by {rangeStride} bytes per entry and steps by {InlineRangeStrideBytes} but `buildInlineFrameTableBytes` writes {InlineRangeEntryBytes} — the range scan would read past the table")
+	end 'rangeStrideDrift'
+end 'assertInlineTableStrides'
+
+// One run of emitted code under one inline site: chunk-local offsets on a `FunctionCodeChunk`, whole-`.text`
+// offsets once concat has rebased them.
+export type InlineRange
+	export var codeStart as CodeOffset
+	export var codeEnd as CodeOffset
+	export var site as InlineSiteIndex
+
+	export static function create(codeStart CodeOffset, codeEnd CodeOffset, site InlineSiteIndex) returns InlineRange
+		return Self{codeStart: codeStart, codeEnd: codeEnd, site: site}
+	end 'create'
+end 'InlineRange'
+
+export typealias InlineRangeArray = Array with InlineRange
+
+// The per-chunk collector both native encoders feed one block at a time, in layout order. Adjacent blocks
+// under one site merge into one range, and an empty block adds nothing.
+export type InlineRangeBuilder
+	export var ranges as InlineRangeArray
+
+	export static function create() returns InlineRangeBuilder
+		return Self{ranges: InlineRangeArray.create()}
+	end 'create'
+
+	export function note(inlineSite InlineSiteRef, codeStart CodeOffset, codeEnd CodeOffset)
+		if codeStart == codeEnd 'noCode'
+			return
+		end 'noCode'
+
+		match inlineSite 'site'
+			none then break 'site'
+			site(index) then self.extendOrOpen(index, codeStart: codeStart, codeEnd: codeEnd)
+		end 'site'
+	end 'note'
+
+	function extendOrOpen(index InlineSiteIndex, codeStart CodeOffset, codeEnd CodeOffset)
+		if self.ranges.count() != 0 'mayExtend'
+			var last = try self.ranges.get(self.ranges.count() - 1) otherwise panic("InlineRangeBuilder.extendOrOpen: ranges.get OOB at the last of {self.ranges.count()}")
+
+			if last.site == index and last.codeEnd == codeStart 'adjacentSameSite'
+				last.codeEnd = codeEnd
+				return
+			end 'adjacentSameSite'
+		end 'mayExtend'
+
+		self.ranges.push(InlineRange.create(codeStart, codeEnd: codeEnd, site: index))
+	end 'extendOrOpen'
+end 'InlineRangeBuilder'
+
+// Hand a finished chunk its function's inline-frame half. The site table travels by reference only when the
+// function holds one: a chunk is built on a pool worker, and retaining the shared empty every parsed function
+// starts with from there would be the cross-thread refcount write `IrFunction.createFromStd` refuses.
+export function carryInlineFrames(chunk FunctionCodeChunk, func IrFunction, ranges InlineRangeBuilder)
+	if func.inlineSites.count() == 0 'nothingSpliced'
+		if ranges.ranges.count() != 0 'aBlockNamesASite'
+			panic("carryInlineFrames: '{String.from(func.name)}' emitted {ranges.ranges.count()} inline range(s) but records no inline site — a block carries a site its function never recorded")
+		end 'aBlockNamesASite'
+
+		return
+	end 'nothingSpliced'
+
+	chunk.inlineSites = func.inlineSites
+	chunk.inlineRanges = ranges.ranges
+end 'carryInlineFrames'
+
+// The whole program's tables, folded chunk by chunk in `.text` order: every chunk's site indices are
+// rebased past the sites already folded, and its ranges past `funcStart`, so one `parent` or `site`
+// column indexes one array.
+export type InlineFrameTables
+	export var sites as InlineSiteArray
+	export var ranges as InlineRangeArray
+
+	export static function create() returns InlineFrameTables
+		return Self{sites: InlineSiteArray.create(), ranges: InlineRangeArray.create()}
+	end 'create'
+
+	export function appendChunk(chunk FunctionCodeChunk, funcStart CodeOffset)
+		let siteBase = self.sites.count() as InlineSiteIndex
+
+		for site in chunk.inlineSites 'eachSite'
+			let parent = match site.parent 'p'
+				none gives InlineSiteRef.none
+				site(index) gives InlineSiteRef.site(siteBase + index)
+			end 'p'
+
+			self.sites.push(InlineSite.create(site.calleeName, parent: parent))
+		end 'eachSite'
+
+		for range in chunk.inlineRanges 'eachRange'
+			if range.site >= chunk.inlineSites.count() 'siteOutsideTheChunk'
+				panic("InlineFrameTables.appendChunk: '{String.from(chunk.funcName)}' emitted a range under site {range.site} but carries {chunk.inlineSites.count()} site(s) — a block names a site its function never recorded")
+			end 'siteOutsideTheChunk'
+
+			self.ranges.push(InlineRange.create(funcStart + range.codeStart, codeEnd: funcStart + range.codeEnd, site: siteBase + range.site))
+		end 'eachRange'
+	end 'appendChunk'
+end 'InlineFrameTables'
+
+// Serialize the inline frame tables. The ranges MUST ascend and not overlap: both walkers stop at the
+// first range starting past their offset, so an out-of-order range is a frame that silently loses its
+// inline lines. Concat folds chunks in layout order and each chunk's builder walks its blocks in layout
+// order, so the order is a fact of the layout — asserted rather than re-established by a sort.
+export function buildInlineFrameTableBytes(tables InlineFrameTables) returns ByteArray
+	assertInlineTableStrides()
+	var table = ByteArray.create()
+	var names = ByteArray.create()
+	let namesStart = (InlineTableOffSites as ParsedInt) + InlineSiteEntryBytes * tables.sites.count() + InlineRangeEntryBytes * tables.ranges.count()
+	writeDword(table, value: tables.sites.count() as MachineWord)
+	writeDword(table, value: tables.ranges.count() as MachineWord)
+
+	for site in tables.sites 'eachSite'
+		writeDword(table, value: (namesStart + names.count()) as MachineWord)
+		writeDword(table, value: inlineParentWord(site.parent))
+		names.append(site.calleeName)
+		names.push(0)
+	end 'eachSite'
+
+	var prevEnd = 0 as CodeOffset
+
+	for (iter, range) in tables.ranges.withIterator() 'eachRange'
+		if range.codeStart >= range.codeEnd 'emptyRange'
+			panic("buildInlineFrameTableBytes: range {iter.index()} is [{range.codeStart}, {range.codeEnd}) — the builder drops an empty block, so an empty range here is a chunk rebased past its own code")
+		end 'emptyRange'
+
+		if range.codeStart < prevEnd 'overlapsOrDescends'
+			panic("buildInlineFrameTableBytes: range {iter.index()} starts at .text offset {range.codeStart}, inside or before its predecessor's end {prevEnd} — the ranges must ascend and stay disjoint, because the walkers stop at the first range past their offset")
+		end 'overlapsOrDescends'
+
+		prevEnd = range.codeEnd
+		writeDword(table, value: range.codeStart as MachineWord)
+		writeDword(table, value: range.codeEnd as MachineWord)
+		writeDword(table, value: range.site as MachineWord)
+	end 'eachRange'
+
+	if table.count() != namesStart 'headerWidth'
+		panic("buildInlineFrameTableBytes: wrote {table.count()} header bytes where the declared entry widths give {namesStart} — the emitted columns and the widths the walkers stride by have drifted")
+	end 'headerWidth'
+
+	table.append(names)
+	return table
+end 'buildInlineFrameTableBytes'
+
+function inlineParentWord(parent InlineSiteRef) returns MachineWord
+	return match parent 'p'
+		none gives InlineSiteNoParent
+		site(index) gives index as MachineWord
+	end 'p'
+end 'inlineParentWord'
 
 // --- The words a trace prints ---
 //
@@ -194,6 +408,7 @@ export let HexBufferBytes = HexDigitsPerWord + 1  // the digits and the NUL
 // may print it — on each of two backends.
 export let WriteStderrName = b"mrt_write_cstr_stderr"
 export let PrintFrameName = b"mrt_panic_print_frame"
+export let PrintInlineFramesName = b"mrt_panic_print_inline"
 export let WalkFramesName = b"mrt_panic_walk_frames"
 
 // The callable SOFTWARE panic entry (a P1.9 range check, and a user `panic("…")`). Named here so

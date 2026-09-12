@@ -1703,7 +1703,9 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	let headersSize = DosAndPeSigBytes + CoffHeaderBytes + OptionalHeaderBytes + SectionHeaderBytes * numSections
 	let headersAligned = alignUp(headersSize, alignment: FileAlignment)
 
-	// .text
+	// .text — its RVA is the page-aligned `SectionAlignment`, so every branch window the x64 encoder padded
+	// against `.text`-relative offsets lands on a window in the loaded image; the 512-byte FILE alignment
+	// decides only where the bytes sit on disk, never an execution address.
 	let codeSizeAligned = alignUp(codeSize, alignment: FileAlignment)
 	let codeSizeVirtual = alignUp(codeSize, alignment: SectionAlignment)
 	let textRva = SectionAlignment

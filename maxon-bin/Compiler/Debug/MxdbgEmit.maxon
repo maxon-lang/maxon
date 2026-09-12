@@ -85,6 +85,7 @@ export function writeDebugInfoSidecar(project Project, codeResult CodeResult, ou
 	end 'eachRow'
 
 	writeCoveragePoints(project, writer: writer, emitted: emittedPoints)
+	writeInlineFrames(writer, codeResult: codeResult)
 
 	// The sidecar's build-id, and the `.mxcov`'s: one fold, so a driver joining the two cannot be handed
 	// two numbers for one build.
@@ -102,6 +103,23 @@ export function writeDebugInfoSidecar(project Project, codeResult CodeResult, ou
 
 	logInfo(LogCategory.compiler, message: function() gives "Wrote {image.count()} bytes of debug info to {sidecarPath}")
 end 'writeDebugInfoSidecar'
+
+// The rows concat wrote into `__inlframes`, spelled the sidecar's way, so the profiler names the spliced
+// body a sample landed in exactly as the panic runtime names the one a frame sits in.
+function writeInlineFrames(writer MxdbgWriter, codeResult CodeResult)
+	for site in codeResult.inlineSites 'eachSite'
+		let parent = match site.parent 'p'
+			none gives MxdbgNoParentSite
+			site(index) gives index as MxdbgIndex
+		end 'p'
+
+		writer.addInlineSite(String.from(site.calleeName), parent: parent)
+	end 'eachSite'
+
+	for range in codeResult.inlineRanges 'eachRange'
+		writer.addInlineRange(range.codeStart as MxdbgCodeOffset, codeEnd: range.codeEnd as MxdbgCodeOffset, site: range.site as MxdbgIndex)
+	end 'eachRange'
+end 'writeInlineFrames'
 
 // ============================================================================================
 // COVERAGE POINTS

@@ -21,6 +21,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -66,12 +69,7 @@ func @main {
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r14 + 24], rax
     x64.movRegImm32 rax, 0
-  forhdr#1:
-    x64.storeSlotReg slot3, rax
-    x64.storeSlotReg slot0, r14
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
-    x64.cmpRegReg rax, rcx
-    x64.jcc greaterEqual, forexit#4
+    x64.jmp forhdr#1
   eachOne:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.loadRegBaseIndexScale.word64 r12, [rcx + rax*8 + 0]
@@ -122,7 +120,12 @@ func @main {
     x64.leaRegRegImm32 rax, rax, 1
     x64.loadRegSlot rcx, slot7
     x64.movRegReg r14, rcx
-    x64.jmp forhdr#1
+  forhdr#1:
+    x64.storeSlotReg slot3, rax
+    x64.storeSlotReg slot0, r14
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.cmpRegReg rax, rcx
+    x64.jcc less, eachOne
   forexit#4:
     x64.leaRegRdata rax, [rip + __str_rec_3]  ; ""
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
@@ -145,12 +148,7 @@ func @main {
     x64.storeBaseDispReg.word64 [r14 + 24], rax
     x64.movRegImm32 rax, 0
     x64.movRegReg rcx, r14
-  forhdr#5:
-    x64.storeSlotReg slot4, rcx
-    x64.storeSlotReg slot2, rax
-    x64.loadRegBaseDisp.word64 rdx, [rbx + 8]
-    x64.cmpRegReg rax, rdx
-    x64.jcc greaterEqual, forexit#8
+    x64.jmp forhdr#5
   eachTwo:
     x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
     x64.loadRegBaseIndexScale.word64 r12, [rdx + rax*8 + 0]
@@ -199,7 +197,12 @@ func @main {
     x64.loadRegSlot rax, slot2
     x64.leaRegRegImm32 rax, rax, 1
     x64.loadRegSlot rcx, slot10
-    x64.jmp forhdr#5
+  forhdr#5:
+    x64.storeSlotReg slot4, rcx
+    x64.storeSlotReg slot2, rax
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 8]
+    x64.cmpRegReg rax, rdx
+    x64.jcc less, eachTwo
   forexit#8:
     x64.loadRegSlot rax, slot0
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]

@@ -2408,6 +2408,349 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 end 'emitTargetOp'
 
 // ==========================================================================
+// The JCC erratum: no jump crosses or ends on a 32-byte boundary
+// ==========================================================================
+
+// Intel's Skylake-family microcode (erratum SKX102 and its siblings) cannot cache the decoded µops of a
+// jump — `jcc`, `jmp`, `call`, `ret`, or the macro-fused ALU+`jcc` pair — whose bytes cross a 32-byte
+// boundary or whose last byte sits right before one, so a tight loop containing one runs from the legacy
+// decoder at a fraction of the speed. The block loop pads such a unit forward to the next boundary with
+// multi-byte NOPs, the layout `-mbranches-within-32B-boundaries` produces. The rule is about the FINAL
+// address, so `concatX64FunctionChunks` starts every chunk on a boundary; the chunk-local offset then has
+// the address's window wherever the writer places `.text` on one (PE: RVA 0x1000).
+//
+// Scope: the TargetOps of compiled functions. A hand-assembled sequence — the runtime chunks, the GT
+// system-stack shim an `iatCall` becomes under the scheduler, the prologue's probe walk, the jump table —
+// places its own branches through the shared primitives and stays byte-exact.
+//
+// arm64 needs nothing of this: its instructions are four bytes on four-byte alignment, so none straddles
+// a fetch line, and its cores carry no such erratum.
+// Exported for the ELF writer: its `.text` file offset must start on a window too, or every window the
+// padding computed from chunk-local offsets is shifted in the loaded image.
+export let BranchWindowBytes = 32
+
+// A pad reaches the next boundary from inside a window, so it is at most a window less a byte: a unit that
+// would need a whole window is wider than the window itself, which `emitUnit` refuses.
+typealias BranchPadBytes = int(1 to 31)
+
+// One instruction per length, up to the longest single NOP Intel recommends.
+typealias NopBytes = int(1 to 9)
+
+let LongestNopBytes = 9
+
+// Intel's recommended multi-byte NOPs (SDM vol. 2B, `NOP`), one instruction per length.
+let Nop1 = b"\x90"  // nop
+let Nop2 = b"\x66\x90"  // 66 nop
+let Nop3 = b"\x0F\x1F\x00"  // nop dword [rax]
+let Nop4 = b"\x0F\x1F\x40\x00"  // nop dword [rax+0]
+let Nop5 = b"\x0F\x1F\x44\x00\x00"  // nop dword [rax+rax*1+0]
+let Nop6 = b"\x66\x0F\x1F\x44\x00\x00"  // 66 nop word [rax+rax*1+0]
+let Nop7 = b"\x0F\x1F\x80\x00\x00\x00\x00"  // nop dword [rax+0] (disp32)
+let Nop8 = b"\x0F\x1F\x84\x00\x00\x00\x00\x00"  // nop dword [rax+rax*1+0] (disp32)
+let Nop9 = b"\x66\x0F\x1F\x84\x00\x00\x00\x00\x00"  // 66 nop word [rax+rax*1+0] (disp32)
+
+function nopOfLength(length NopBytes) returns ByteArray
+	return match length 'form'
+		1 gives Nop1
+		2 gives Nop2
+		3 gives Nop3
+		4 gives Nop4
+		5 gives Nop5
+		6 gives Nop6
+		7 gives Nop7
+		8 gives Nop8
+		9 gives Nop9
+		default panic("nopOfLength: {length} is outside NopBytes")
+	end 'form'
+end 'nopOfLength'
+
+// `bytes` of NOPs as the fewest instructions: full-length ones, then the remainder as one.
+function encodeNopPad(code ByteArray, bytes BranchPadBytes)
+	var remaining = bytes
+
+	while remaining > LongestNopBytes 'fullLength'
+		code.append(Nop9)
+		remaining = remaining - LongestNopBytes
+	end 'fullLength'
+
+	code.append(nopOfLength(remaining as NopBytes))
+end 'encodeNopPad'
+
+// True when `[start, unitEnd)` crosses a window boundary or ends on one: both say the first byte and the
+// byte after the last lie in different windows.
+function straddlesBranchWindow(start CodeOffset, unitEnd CodeOffset) returns bool
+	return start / BranchWindowBytes != unitEnd / BranchWindowBytes
+end 'straddlesBranchWindow'
+
+// What the erratum makes of a TargetOp. `iatCall` is told apart from the other calls because under the GT
+// scheduler it is the system-stack shim rather than one `call`; a fusible ALU op is a unit only as the
+// front half of a pair with the `jcc` right after it.
+enum BranchWindowRole
+	other
+	jump
+	condBranch
+	call
+	importCall
+	fusibleAlu
+end 'BranchWindowRole'
+
+// Every op the encoder has, so a new one is classified here or does not compile.
+function branchWindowRoleOf(op TargetOp) returns BranchWindowRole
+	return match op 'role'
+		ret or
+			jmp gives BranchWindowRole.jump
+		jcc gives BranchWindowRole.condBranch
+		callDirect or
+			callReg or
+			callMem gives BranchWindowRole.call
+		iatCall gives BranchWindowRole.importCall
+		subRegReg or
+			cmpRegReg or
+			cmpRegImm32 or
+			andRegReg or
+			andRegImm32 gives BranchWindowRole.fusibleAlu
+		prologue or
+			epilogue or
+			movRegImm or
+			movRegImm32 or
+			movRegReg or
+			movReg32Reg32 or
+			imulRegReg or
+			negReg or
+			leaRegRegReg or
+			leaRegRegImm32 or
+			imulRegRegImm32 or
+			xchgRegReg or
+			cqo or
+			divideReg or
+			pushReg or
+			popReg or
+			storeSlotReg or
+			loadRegSlot or
+			orRegReg or
+			xorRegReg or
+			notReg or
+			orRegImm32 or
+			xorRegImm32 or
+			shlRegImm8 or
+			sarRegImm8 or
+			shrRegImm8 or
+			shlRegCl or
+			sarRegCl or
+			shrRegCl or
+			setccReg or
+			leaRegGlobal or
+			loadRegBaseDisp or
+			storeBaseDispReg or
+			addsdRegReg or
+			subsdRegReg or
+			mulsdRegReg or
+			divsdRegReg or
+			ucomisdRegReg or
+			movsdRegRip or
+			cvtsi2sdRegReg or
+			cvttsd2siRegReg or
+			sqrtsdRegReg or
+			roundsdRegReg or
+			movqGprXmm or
+			absF64RegReg or
+			leaRegRdata or
+			minMaxSdRegReg or
+			movqXmmGpr or
+			negF64RegReg or
+			arm64Ret or
+			arm64Branch or
+			arm64CondBranch or
+			arm64Cbz or
+			arm64Cbnz or
+			arm64MovImm or
+			arm64Prologue or
+			arm64Epilogue or
+			arm64Add or
+			arm64Sub or
+			arm64Mul or
+			arm64Sdiv or
+			arm64Udiv or
+			arm64Msub or
+			arm64And or
+			arm64Orr or
+			arm64Eor or
+			arm64Lslv or
+			arm64Asrv or
+			arm64Lsrv or
+			arm64Neg or
+			arm64Mvn or
+			arm64AddImm or
+			arm64SubImm or
+			arm64AndImm or
+			arm64OrrImm or
+			arm64EorImm or
+			arm64LslImm or
+			arm64AsrImm or
+			arm64LsrImm or
+			arm64Cmp or
+			arm64CmpImm or
+			arm64Cset or
+			arm64LeaFuncAddr or
+			arm64LeaRdata or
+			arm64LeaGlobal or
+			arm64BranchLink or
+			arm64BranchLinkReg or
+			arm64Fadd or
+			arm64Fsub or
+			arm64Fmul or
+			arm64Fdiv or
+			arm64Fcmp or
+			arm64Scvtf or
+			arm64Fcvtzs or
+			arm64Fsqrt or
+			arm64Frint or
+			arm64Fabs or
+			arm64FpLoadRdata or
+			arm64ImportCall or
+			arm64Syscall or
+			arm64Fcsel or
+			leaRegFunc or
+			x64Syscall or
+			x64JumpTable or
+			arm64JumpTable or
+			arm64StoreOutgoingArg or
+			arm64LoadIncomingArg or
+			arm64FmovGprFp or
+			arm64FmovFpGpr or
+			leaRegSlot or
+			x64MemFill or
+			arm64MemFill or
+			x64LockCmpxchg or
+			x64LockXadd or
+			x64LockAdd or
+			x64TebSelfPointer or
+			x64GsLoadRegBase or
+			arm64AtomicCas or
+			arm64AtomicRmw or
+			arm64ThreadPointer or
+			leaRegBaseIndexScale or
+			loadRegBaseIndexScale or
+			storeBaseIndexScaleReg or
+			arm64AddLsl or
+			imulHighReg or
+			arm64Fneg or
+			arm64LoadAcquire or
+			arm64StoreRelease or
+			arm64Smulh or
+			covInc gives BranchWindowRole.other
+	end 'role'
+end 'branchWindowRoleOf'
+
+// Whether an op of `role` is, on its own, one instruction the erratum is stated over.
+function isBranchWindowUnit(role BranchWindowRole, usesGt bool) returns bool
+	return match role 'unit'
+		jump or
+			condBranch or
+			call gives true
+		importCall gives not usesGt
+		other or
+			fusibleAlu gives false
+	end 'unit'
+end 'isBranchWindowUnit'
+
+// The counts a unit's emission started from — its bytes and every record an op files against them.
+// Rolling a unit back truncates all seven, so its first attempt leaves nothing behind. One per chunk,
+// rewritten per unit, so a rollback allocates nothing.
+type EmitMark
+	var codeCount as ElementIndex = 0
+	var covCount as ElementIndex = 0
+	var callCount as ElementIndex = 0
+	var iatCount as ElementIndex = 0
+	var rdataCount as ElementIndex = 0
+	var rel32Count as ElementIndex = 0
+	var jumpTableCount as ElementIndex = 0
+
+	static function create() returns EmitMark
+		return Self{}
+	end 'create'
+
+	function take(code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray)
+		self.codeCount = code.count()
+		self.covCount = covOffsets.count()
+		self.callCount = callFixups.count()
+		self.iatCount = iatRelocs.count()
+		self.rdataCount = rdataRelocs.count()
+		self.rel32Count = rel32Fixups.count()
+		self.jumpTableCount = jumpTables.count()
+	end 'take'
+
+	function rollBack(code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray)
+		code.truncate(self.codeCount)
+		covOffsets.truncate(self.covCount)
+		callFixups.truncate(self.callCount)
+		iatRelocs.truncate(self.iatCount)
+		rdataRelocs.truncate(self.rdataCount)
+		rel32Fixups.truncate(self.rel32Count)
+		jumpTables.truncate(self.jumpTableCount)
+	end 'rollBack'
+end 'EmitMark'
+
+function opAt(module TargetModule, opIdx OpIndex) returns TargetOp
+	return try module.ops.get(opIdx) otherwise panic("emitFunctionChunk: opIdx {opIdx} not in module.ops")
+end 'opAt'
+
+function opRefAt(block IrBlock, pos BlockOpPos) returns OpIndex
+	return try block.opRefs.get(pos) otherwise panic("emitFunctionChunk: op position {pos} is past the end of block '{String.from(block.label)}'")
+end 'opRefAt'
+
+// Emit `first`, then `last` when it is a second op, returning where the unit's last op begins.
+function emitUnitOps(module TargetModule, first OpIndex, last OpIndex, code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray, spillBaseDisp StackSize, usesGt bool, threadPointerSegment X64ThreadPointerSegment) returns CodeOffset
+	var lastStart = code.count()
+	emitTargetOp(opAt(module, opIdx: first), code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment)
+
+	if last != first 'pair'
+		lastStart = code.count()
+		emitTargetOp(opAt(module, opIdx: last), code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment)
+	end 'pair'
+
+	return lastStart
+end 'emitUnitOps'
+
+// Emit a unit — `first` alone, or `first` and `last` as a fused pair — where the erratum allows. It is
+// emitted first and measured after, so no encoder's width is tabled: only a `covered` unit that straddles a
+// window is rolled back, padded to the next boundary and emitted again. Line rows are noted once the
+// placement is final, so a row lands on its instruction and never on the pad before it.
+function emitUnit(module TargetModule, first OpIndex, last OpIndex, covered bool, mark EmitMark, code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray, spillBaseDisp StackSize, usesGt bool, threadPointerSegment X64ThreadPointerSegment, lineRows DebugLineRowBuilder, captureSpans bool)
+	if covered 'markable'
+		mark.take(code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables)
+	end 'markable'
+
+	var firstStart = code.count()
+	var lastStart = emitUnitOps(module, first: first, last: last, code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment)
+
+	if covered and straddlesBranchWindow(firstStart, unitEnd: code.count()) 'straddles'
+		let width = code.count() - firstStart
+
+		if width >= BranchWindowBytes 'tooWide'
+			panic("emitUnit: a {width}-byte unit cannot sit inside a {BranchWindowBytes}-byte window — no jump, call, return or fused pair is that wide, so branchWindowRoleOf classified a macro-op sequence as one")
+		end 'tooWide'
+
+		mark.rollBack(code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables)
+		encodeNopPad(code, bytes: (BranchWindowBytes - firstStart mod BranchWindowBytes) as BranchPadBytes)
+		firstStart = code.count()
+		lastStart = emitUnitOps(module, first: first, last: last, code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment)
+
+		if straddlesBranchWindow(firstStart, unitEnd: code.count()) 'stillStraddles'
+			panic("emitUnit: a unit re-emitted on a window boundary still straddles it — an encoder emitted different bytes at a different offset")
+		end 'stillStraddles'
+	end 'straddles'
+
+	if captureSpans 'rows'
+		lineRows.note(module.spans.at(first), codeOffset: firstStart)
+
+		if last != first 'pair'
+			lineRows.note(module.spans.at(last), codeOffset: lastStart)
+		end 'pair'
+	end 'rows'
+end 'emitUnit'
+
+// ==========================================================================
 // Per-function chunk emission
 // ==========================================================================
 
@@ -2481,12 +2824,20 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 	// knows where an instruction begins; empty for every build that emits none.
 	var covOffsets = CovPointOffsetArray.create()
 
+	// The code range of every run of blocks under one inline site, read off the block loop itself: the
+	// only thing that knows where a block's code starts and ends.
+	var inlineRanges = InlineRangeBuilder.create()
+
+	let threadPointerSegment = x64ThreadPointerSegment(target.os)
+	var mark = EmitMark.create()
+
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("emitFunctionChunk: blockRef from func.blockRefs not in module.blocks")
 
 		// Record this block's chunk-local start BEFORE emitting its ops, so branches
 		// (from any block) can resolve to it. Blocks are emitted in blockRefs order.
-		chunkLabelOffsets.place(block.id, value: code.count())
+		let blockStart = code.count()
+		chunkLabelOffsets.place(block.id, value: blockStart)
 
 		if isFirstBlock and emitGuard 'guard'
 			emitGtStackGuard(code, callFixups: callFixups, rdataRelocs: rdataRelocs, frameBytes: guardFrameBytes, margin: gtStackGuardMargin(target), site: GtGuardSite.functionEntry, target: target)
@@ -2494,23 +2845,36 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 
 		isFirstBlock = false
 
-		for opIdx in block.opRefs 'eachOp'
-			if captureSpans 'aRowMayOpenHere'
-				lineRows.note(module.spans.at(opIdx), codeOffset: code.count())
-			end 'aRowMayOpenHere'
+		let opCount = block.opRefs.count()
+		var opPos = 0 as BlockOpPos
 
-			let op = try module.ops.get(opIdx) otherwise panic("emitFunctionChunk: opIdx {opIdx} not in module.ops")
-			emitTargetOp(op, code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: x64ThreadPointerSegment(target.os))
+		while opPos < opCount 'eachOp'
+			let opIdx = opRefAt(block, pos: opPos)
+			let role = branchWindowRoleOf(opAt(module, opIdx: opIdx))
+			var last = opIdx
+			var covered = isBranchWindowUnit(role, usesGt: usesGt)
+
+			// One lookahead: a fusible ALU op and the `jcc` right after it macro-fuse, so the erratum reads
+			// the pair as one jump and it is placed as one unit.
+			if role == BranchWindowRole.fusibleAlu and opPos + 1 < opCount 'lookahead'
+				let nextIdx = opRefAt(block, pos: opPos + 1)
+
+				if branchWindowRoleOf(opAt(module, opIdx: nextIdx)) == BranchWindowRole.condBranch 'fuses'
+					last = nextIdx
+					covered = true
+				end 'fuses'
+			end 'lookahead'
+
+			emitUnit(module, first: opIdx, last: last, covered: covered, mark: mark, code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment, lineRows: lineRows, captureSpans: captureSpans)
+			opPos = opPos + (2 if last != opIdx else 1)
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'hasTerm'
-			if captureSpans 'aRowMayOpenAtTheTerminator'
-				lineRows.note(module.spans.at(block.terminatorIndex()), codeOffset: code.count())
-			end 'aRowMayOpenAtTheTerminator'
-
-			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("emitFunctionChunk: terminator not in module.ops")
-			emitTargetOp(termOp, code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: x64ThreadPointerSegment(target.os))
+			let termIdx = block.terminatorIndex()
+			emitUnit(module, first: termIdx, last: termIdx, covered: isBranchWindowUnit(branchWindowRoleOf(opAt(module, opIdx: termIdx)), usesGt: usesGt), mark: mark, code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment, lineRows: lineRows, captureSpans: captureSpans)
 		end 'hasTerm'
+
+		inlineRanges.note(block.inlineSite, codeStart: blockStart, codeEnd: code.count())
 	end 'eachBlock'
 
 	resolveChunkRel32Fixups(code, labelOffsets: chunkLabelOffsets, rel32Fixups: rel32Fixups)
@@ -2523,6 +2887,7 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 	// Gated on `--coverage` rather than on debug info: the two are independent channels, and this one is
 	// empty for an ordinary build because no `covInc` was emitted to fill it.
 	chunk.covPointOffsets = covOffsets
+	carryInlineFrames(chunk, func: func, ranges: inlineRanges)
 
 	if captureSpans 'debugInfo'
 		chunk.lineRows = lineRows.rows
@@ -2738,16 +3103,22 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 	var debugFunctions = DebugFunctionRangeArray.create()
 	var debugLineRows = DebugLineRowArray.create()
 	var covPointOffsets = CovPointOffsetArray.create()
+	var inlineFrames = InlineFrameTables.create()
 
 	// A label claimed twice is a wrong `.text` address, never a near miss — see `recordChunkLabel`, which
 	// owns the rule and the refusal for both native backends.
 	var labelsLaid = 0 as ChunkLabelCount
 
 	for chunk in chunks 'eachChunk'
+		// Every chunk starts on a branch-window boundary, so the window `emitFunctionChunk` placed a jump
+		// in by chunk-local offset is the window its final address falls in. The gap is `int3`, so a stray
+		// jump into it traps rather than sliding into the next function.
+		padTo(code, size: alignUp(code.count(), alignment: BranchWindowBytes), fill: OpcodeInt3)
 		let funcStart = code.count()
 		try recordChunkLabel(labelOffsets, name: chunk.funcName, offset: funcStart, laidOut: labelsLaid, project: project, funcNames: funcNames)
 		labelsLaid = labelsLaid + 1
 		recordChunkSymbol(debugSymbols, chunk: chunk, codeOffset: funcStart)
+		inlineFrames.appendChunk(chunk, funcStart: funcStart)
 
 		if captureSpans 'debugInfo'
 			foldChunkDebugInfo(chunk, funcStart: funcStart, functions: debugFunctions, lineRows: debugLineRows, covPointOffsets: covPointOffsets)
@@ -2798,7 +3169,14 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 	// bound `textSize = __symtable - mrt_start` reads, silently mis-sizing every backtrace.
 	padTo(code, size: alignUp(code.count(), alignment: SymbolTableAlignment))
 	try recordChunkLabel(labelOffsets, name: SymbolTableName, offset: code.count(), laidOut: labelsLaid, project: project, funcNames: funcNames)
+	labelsLaid = labelsLaid + 1
 	code.append(buildSymbolTableBytes(debugSymbols))
+
+	// The inline frame tables follow `__symtable`'s names under their own label (`BacktraceFormat`), past the
+	// `[mrt_start, __symtable)` window the walkers symbolize in.
+	padTo(code, size: alignUp(code.count(), alignment: SymbolTableAlignment))
+	try recordChunkLabel(labelOffsets, name: InlineFrameTableName, offset: code.count(), laidOut: labelsLaid, project: project, funcNames: funcNames)
+	code.append(buildInlineFrameTableBytes(inlineFrames))
 
 	resolveCallFixups(code, labelOffsets: labelOffsets, callFixups: callFixups)
 
@@ -2823,6 +3201,8 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 	result.debugSymbols = debugSymbols
 	result.dataPrelude = globalData.dataSectionImage()
 	result.jumpTableRelocs = jumpTableRelocs
+	result.inlineSites = inlineFrames.sites
+	result.inlineRanges = inlineFrames.ranges
 
 	// The chunks' own PRE-LINK bytes, for the one reader `code` cannot serve: a ```RequiredRuntime
 	// golden over a hand-assembled chunk (`mrt_panic`, `__gt_context_switch`, …), which has no

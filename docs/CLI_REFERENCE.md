@@ -672,7 +672,7 @@ executable or the sidecar itself.
 
 **Usage:**
 ```bash
-maxon debug --dump-info <exe|.mxdbg> [header|files|functions|types|lines|statements]
+maxon debug --dump-info <exe|.mxdbg> [header|files|functions|types|lines|statements|inline]
 maxon debug --symbolize <exe|.mxdbg> <codeOffset...>
 ```
 

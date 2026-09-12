@@ -1,0 +1,155 @@
+// Test: a-hardware-fault-inside-a-spliced-body-names-the-callee
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias NegativeOne = int(-1 to -1)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function divide(scratch IntArray, d NegativeOne) returns Integer
+	for i in 0 upto scratch.count() 'fill'
+		try scratch.set(i, value: i) otherwise panic("divide: i < scratch.count()")
+	end 'fill'
+
+	return (dividend / d) as Integer
+end 'divide'
+
+function main() returns ExitCode
+	dividend = ident(i64.min)
+	let d = ident(-1)
+	var scratch = IntArray.create()
+	scratch.resize(4)
+	return divide(scratch, d: d as NegativeOne) as ExitCode
+end 'main'
+var dividend = 0
+---
+ExitCode: 1
+---
+data {
+  __data_dividend@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_console_probe_stdin@40 = i8 0
+  __mrt_console_probe_stdout@41 = i8 0
+  __mrt_console_probe_stderr@42 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 48
+    x64.movRegImm rax, 9223372036854775808
+  __il_cont#25:
+    x64.leaRegGlobal rcx, __data_dividend
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.movRegImm rbx, 18446744073709551615
+  __il_cont#24:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rdx, 4
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_resize
+  __rc_ok#15:
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 8]
+  __us_test#38:
+    x64.loadRegBaseDisp.word64 rdx, [r12 + 16]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, forhdr#9
+  __us_test#39:
+    x64.loadRegBaseDisp.word64 rdx, [r12 + 0]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc equal, forhdr#9
+  __us_test#40:
+    x64.leaRegRegImm32 rsi, rdx, -24
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, forhdr#9
+    x64.jmp forhdr#28
+  fill:
+    x64.loadRegBaseDisp.word64 rdx, [r12 + 16]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __im_slow
+  __im_bounds:
+    x64.loadRegBaseDisp.word64 rdx, [r12 + 8]
+    x64.cmpRegReg rax, rdx
+    x64.jcc aboveEqual, __im_slow
+  __im_buffer:
+    x64.loadRegBaseDisp.word64 rdx, [r12 + 0]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc equal, __im_slow
+  __im_viewed:
+    x64.leaRegRegImm32 rsi, rdx, -24
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __im_slow
+  __im_store#23:
+    x64.storeBaseIndexScaleReg.word64 [rdx + rax*8 + 0], rax
+  forstep#11:
+    x64.leaRegRegImm32 rax, rax, 1
+  forhdr#9:
+    x64.cmpRegReg rax, rcx
+    x64.jcc less, fill
+    x64.jmp forexit
+  __im_store#33:
+    x64.storeBaseIndexScaleReg.word64 [rdx + rax*8 + 0], rax
+  forstep#29:
+    x64.leaRegRegImm32 rax, rax, 1
+  forhdr#28:
+    x64.cmpRegReg rax, rcx
+    x64.jcc less, __im_store#33
+  forexit:
+    x64.leaRegGlobal rax, __data_dividend
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.cqo
+    x64.idivReg rbx
+    x64.movRegReg rbx, rax
+  __il_cont#7:
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok#4:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 48
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rax
+    x64.callDirect __managed_set
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, forstep#11
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-hardware-fault-inside-a-spliced-body-names-the-callee.test:12: divide: i < scratch.count()\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 rbx, 0
+    x64.jmp __il_cont#7
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-hardware-fault-inside-a-spliced-body-names-the-callee.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 48
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -70,7 +70,7 @@ union PassKind
 	//
 	// ⭐ **THE REORDER CANNOT COST `inlineLeaves` A SINGLE CALLEE, AND THAT IS A PROOF RATHER THAN A
 	// MEASUREMENT.** This pass rewrites only bodies holding a `__managed_*` CALL, and a leaf holds no call
-	// BY RULE (`InlineLeaves.LeafOpRole.calling` refuses the callee outright) — so no body this pass can
+	// BY RULE (`InlineLeaves.InlineOpRole.calling` refuses the callee outright) — so no body this pass can
 	// touch is one the leaf inliner would have accepted, and the eligible set can only grow. MEASURED
 	// anyway, because a proof about two passes is worth checking: on the self-compile the leaf inliner's
 	// eligible callees go **469 → 530** and its sites **4,138 → 4,921**, while THIS pass's own expansion
@@ -83,28 +83,25 @@ union PassKind
 	// continuation result arg of a void `set` nothing reads.
 	inlineManagedPrimitives
 
-	// Phase 3.45: Std → Std splicing of TINY LEAF callees into their direct call sites (EC5), leaving the
-	// callee where it is — and, for a leaf whose ranged-parameter guard can panic, leaving one slow arm
-	// per site that re-issues the original call so the panic still comes out of the callee's own frame.
+	// Phase 3.45: Std → Std splicing of callees into their direct call sites — every function called
+	// exactly once, then every TINY LEAF at every site (EC5) — copying panic blocks with their inline site so
+	// a panic still prints the callee's frame (`InlineLeaves`' header, `BacktraceFormat`'s `__inlframes`).
 	//
 	// ⚠ **IT RUNS AFTER `insertRangeChecks` FOR THAT PASS'S OWN REASON, RESTATED HERE ONLY AS A
 	// POINTER**: a range-check site is a `(blockId, stdOpPos)` coordinate in the space `lowerMaxonToStd`
 	// left the block in, and this pass SPLITS blocks and removes ops from them. It also needs the guards
-	// to already EXIST — the panic rule is about a callee whose entry guard panics, and before
-	// `insertRangeChecks` no callee has one, so every ranged-parameter leaf would look store-free and
-	// panic-free and be copied WITH its guard emitted later into the callee alone.
+	// to already EXIST — a copy made before `insertRangeChecks` would carry no entry guard, which would
+	// then be emitted into the callee alone.
 	//
 	// ⭐⭐ **AND SINCE EC17 IT RUNS AFTER `inlineManagedPrimitives`, WHICH IS WHAT MAKES THE
 	// COUNT-BACKED ACCESSORS LEAVES AT ALL** — see that pass's entry above for the measurement, and for
 	// why the move cannot cost this one a callee.
 	//
-	// ⛔ **A SECOND ROUND WAS THE OTHER SHAPE EC17 WEIGHED, AND IT IS NOT WHAT LANDED.** Running this pass
-	// again after the managed rewrite buys the same callees AND two things the row did not ask for. The
-	// `__il_slow` arms this pass mints hold *the very call the splice moved*, so a second round re-expands
-	// them — a fresh copy of a panicking leaf's body at every such site, for no call removed. And
+	// ⛔ **A SECOND ROUND WAS THE OTHER SHAPE EC17 WEIGHED, AND IT IS NOT WHAT LANDED.** Running the leaf
+	// rule again after the managed rewrite buys the same callees AND a cascade the row did not ask for:
 	// eligibility recomputed on an already-spliced module admits a caller that became call-free BY being
-	// inlined into, which is the cascade `LeafPlan`'s header refuses on purpose and which
-	// `inline-leaves.a-leaf-called-from-a-leaf-is-not-cascaded` pins. Both would need suppressing
+	// inlined into, which `LeafPlan`'s header refuses on purpose and which
+	// `inline-leaves.a-leaf-called-from-a-leaf-is-not-cascaded` pins. That would need suppressing
 	// machinery; the reorder needs none, and one round stays one round.
 	//
 	// `promoteStackRecords` runs last, so no `stackRecordAddr` exists here (which is what its
@@ -129,7 +126,9 @@ union PassKind
 	// across a loop was pinned in a register where an idle `let` was spilled for free — and
 	// past the pool, a FALSE E5001. It runs after the prune (which is cheaper and removes the
 	// self-sustaining dead phis first) and before `foldConstOperands`, whose const DCE can then
-	// drop a `const` whose only reader was a folded phi's edge.
+	// drop a `const` whose only reader was a folded phi's edge. Both are scheduled AGAIN after
+	// the branch-folding passes (`buildLoweringPasses` says why): a fold that orphans every
+	// predecessor of a block but one turns its args into single-value phis.
 	//
 	// `foldConstants` EVALUATES `const <op> const`, replacing the arithmetic with the answer and
 	// turning a `condBranch` on a known constant into an unconditional `branch`. It runs AFTER BOTH
@@ -428,11 +427,32 @@ export function buildLoweringPasses() returns PassKindArray
 	passes.push(PassKind.foldConstOperands)
 	passes.push(PassKind.threadConstantBranches)
 	passes.push(PassKind.refineValueRanges)
+
+	// ⚠ THE BLOCK-ARG CLEANUPS RUN AGAIN AFTER THE LAST BRANCH FOLD OF EACH GROUP, AND THAT IS A REGISTER-
+	// ALLOCATOR INVARIANT, NOT TIDINESS. A folded branch orphans an arm (`dropUnreachableBlocks`), and a
+	// block that loses every predecessor but one keeps its args as phis each fed by ONE value — a loop
+	// header whose exit compare `refineValueRanges` decided is the case: an untaken loop's carried `var`s
+	// become that many phis at one block entry. A phi arrives in a register at its block's entry, so more
+	// phis than the pool at one block is an overflow no split relieves (the store anchors AT that entry,
+	// where every phi is already live), and the splitter runs to its bound. Folding them to the value they
+	// carry is what `elimTrivialBlockArgs` is for; the prune first, for the same reason as above.
+	passes.push(PassKind.pruneDeadBlockArgs)
+	passes.push(PassKind.elimTrivialBlockArgs)
+
+	// ⚠ THE FOLDING PAIR RUNS AGAIN AFTER THAT CLEANUP, FOR WHAT THE CLEANUP EXPOSES. A phi `elimTrivialBlockArgs`
+	// folds onto the one `const` that fed it turns every op that read the phi into `const <op> const` or a
+	// const-operand op, and nothing after this point evaluates either: `foldConstants` and `foldConstOperands`
+	// ran before `refineValueRanges` decided the branches that orphaned the phi's other inputs. Both are
+	// idempotent over a module they have already folded, so the pair costs one walk each here.
+	passes.push(PassKind.foldConstants)
+	passes.push(PassKind.foldConstOperands)
 	passes.push(PassKind.commonSubexpressionElimination)
 	passes.push(PassKind.loopInvariantCodeMotion)
 	passes.push(PassKind.unswitchInvariantGuards)
 	passes.push(PassKind.foldEstablishedGuards)
 	passes.push(PassKind.refineVersionedRanges)
+	passes.push(PassKind.pruneDeadBlockArgs)
+	passes.push(PassKind.elimTrivialBlockArgs)
 	passes.push(PassKind.promoteStackRecords)
 	passes.push(PassKind.valueTupleReturn)
 	return passes

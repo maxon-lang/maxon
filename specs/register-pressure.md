@@ -305,7 +305,8 @@ upstream over-produced anything in this program.
 
 No arm64 twin, and that is MEASURED rather than a missing golden: arm64 allocates from 26 GPRs, so
 seventeen live values fit and the same source compiles there (`--target=arm64-macos`, verified). The
-pool is the subject, exactly as this file's header says.
+pool is the subject, exactly as this file's header says. `main` reaches `parseFlags` from two sites so the
+called-once inliner leaves it a function; spliced into `main`, `i < 0` folds and the loop vanishes.
 ```maxon
 function parseFlags(argc Integer) returns Integer
 	var f0 = 0
@@ -362,7 +363,7 @@ function parseFlags(argc Integer) returns Integer
 end 'parseFlags'
 
 function main() returns ExitCode
-	return parseFlags(0)
+	return parseFlags(0) + parseFlags(15)
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -499,7 +500,9 @@ blocking set — and it is a user-visible, deletable value. Here `p` is read ins
 values live at once against a pool of fourteen. `p` has NO defining op (it is captured at
 entry, ValueId 0), yet it must NOT trip the Rule-3 "compiler-introduced value" panic: it is
 resolved to its DECLARATION span in the signature (`<fragment>:2:14` — the `p` token) through
-the `ParamOriginTable`. It ranks first (used once in the loop); the counter `i` ranks last.
+the `ParamOriginTable`. It ranks first (used once in the loop); the counter `i` ranks last. `main`
+reaches `hot` from two sites so the called-once inliner leaves it a function; spliced into `main`, `p`
+is a constant and the fourteen values fit the pool.
 ```maxon
 function hot(p Integer) returns Integer
 	var s1 = 1
@@ -536,7 +539,7 @@ function hot(p Integer) returns Integer
 end 'hot'
 
 function main() returns ExitCode
-	return hot(0)
+	return hot(0) + hot(1)
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -614,7 +617,7 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: hot-loop-param-used-arm64 -->
 <!-- unsupported-targets: x64-windows, x64-linux, wasm32-wasi -->
-The arm64 twin of `hot-loop-param-used`: a PARAMETER read every iteration is part of the hot working set and must resolve to its declaration span through `ParamOriginTable` (it is minted by no op) rather than trip the Rule-3 panic. `p` is read in `s1 = s1 + i + p`, so with twenty-six accumulators and the counter it is one of twenty-eight values live against arm64's 26-GPR pool. It ranks first (`<fragment>:2:14` — the `p` token); the counter `i` ranks last. Deficit 2.
+The arm64 twin of `hot-loop-param-used`: a PARAMETER read every iteration is part of the hot working set and must resolve to its declaration span through `ParamOriginTable` (it is minted by no op) rather than trip the Rule-3 panic. `p` is read in `s1 = s1 + i + p`, so with twenty-six accumulators and the counter it is one of twenty-eight values live against arm64's 26-GPR pool. It ranks first (`<fragment>:2:14` — the `p` token); the counter `i` ranks last. Deficit 2. `main` reaches `hot` from two sites so the called-once inliner leaves it a function; spliced into `main`, `p` is a constant and the twenty-eight values fit the pool.
 ```maxon
 function hot(p Integer) returns Integer
 	var s1 = 1
@@ -677,7 +680,7 @@ function hot(p Integer) returns Integer
 end 'hot'
 
 function main() returns ExitCode
-	return hot(0)
+	return hot(0) + hot(1)
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```

@@ -25,8 +25,7 @@
 //     `otherwise (e)` binding forms and a rethrowing bare `try` read the flag in `tryerr`, which the
 //     rewrite reaches from P directly, where C's block args are not defined.
 //   • Every predecessor reaches C through `branch(C)` with exactly that one edge. A `condBranch` or
-//     `switch` predecessor would need one arm retargeted, which is a different rewrite, and a physical
-//     fall-through has no terminator op to overwrite.
+//     `switch` predecessor would need one arm retargeted, which is a different rewrite.
 //   • The constant-deciding predecessors agree on X, and there is at least one. Two answers would need
 //     two exits from C.
 //   • X has exactly one predecessor, C. That is what keeps X dominated by C once P's edges to Y exist:
@@ -481,7 +480,7 @@ end 'refuseIfOwnedReadEscapes'
 function applyAdmitted(module StdModule, func IrFunction, funcIndex FuncIndex, origins ValueOriginTable, analysis FunctionAnalysis, candidates ThreadCandidateArray, argOwner ValueIdArray, argSlot ValueIdArray) returns ThreadedSiteCount
 	// Seeded ONCE, before any rewrite, past every id the function uses; each duplicated compare mints
 	// its result from here.
-	var minter = ValueMinter.create(nextFreeValueId(module, func: func) as ParamCount)
+	var minter = ValueMinter.resuming(nextFreeValueId(module, func: func))
 	var doomedCompares = StdValueUseSet.create()
 	var applied = 0 as ThreadedSiteCount
 

@@ -559,41 +559,64 @@ export type ValueOriginTable
 	// `ParamOriginTable` also holds them, so `lookup`'s first match already decides between the two rows
 	// for a parameter, pre-EC5). What this function owes is only to add no THIRD row: the value the
 	// parameter maps to at the splice is the caller's argument, whose rows the caller filed itself.
+	//
+	// ⭐ **THE ROWS IT APPENDS FOR `toFunc` ARE NOTED IN THE INDEX**, so a later splice of `toFunc` into ITS
+	// caller re-files them too — a nested body's values keep their provenance through every level — and the
+	// index is built once per phase rather than once per splice wave.
 	export function copyRows(index ValueOriginRowIndex, fromFunc FuncIndex, toFunc FuncIndex, subst ValueIdArray, calleeParamCount ParamCount)
-		for k in index.ops.firstRowOf(fromFunc) upto index.ops.endRowOf(fromFunc) 'eachRow'
-			let row = index.ops.rowAt(k)
-			let v = try self.valueIds.get(row) otherwise panic("ValueOriginTable.copyRows: valueIds.get OOB at row {row}")
-			let opIndex = try self.opIndices.get(row) otherwise panic("ValueOriginTable.copyRows: opIndices.get OOB at row {row}")
+		let firstAppendedOp = self.count() as OpIndex
+		let firstAppendedDerived = self.derivedFuncIndices.count() as OpIndex
 
-			if v < valueIdAtParamPosition(calleeParamCount) 'rowNamesAParameter'
-				continue
-			end 'rowNamesAParameter'
+		for k in index.ops.firstRowOf(fromFunc) upto index.ops.endRowOf(fromFunc) 'eachIndexedRow'
+			self.copyOpRow(index.ops.rowAt(k), toFunc: toFunc, subst: subst, calleeParamCount: calleeParamCount)
+		end 'eachIndexedRow'
 
-			let cloned = try subst.get(v) otherwise continue
-			self.record(toFunc, valueId: cloned, opIndex: opIndex)
-		end 'eachRow'
+		for range in index.appendedOpsOf(fromFunc) 'eachAppendedRange'
+			for row in range.first upto range.bound 'eachAppendedRow'
+				self.copyOpRow(row, toFunc: toFunc, subst: subst, calleeParamCount: calleeParamCount)
+			end 'eachAppendedRow'
+		end 'eachAppendedRange'
 
-		self.copyDerivedRows(index.derived, fromFunc: fromFunc, toFunc: toFunc, subst: subst)
+		for k in index.derived.firstRowOf(fromFunc) upto index.derived.endRowOf(fromFunc) 'eachIndexedDerivedRow'
+			self.copyDerivedRow(index.derived.rowAt(k), toFunc: toFunc, subst: subst)
+		end 'eachIndexedDerivedRow'
+
+		for range in index.appendedDerivedOf(fromFunc) 'eachAppendedDerivedRange'
+			for row in range.first upto range.bound 'eachAppendedDerivedRow'
+				self.copyDerivedRow(row, toFunc: toFunc, subst: subst)
+			end 'eachAppendedDerivedRow'
+		end 'eachAppendedDerivedRange'
+
+		index.noteAppended(toFunc, opRows: OriginRowRange.create(firstAppendedOp, bound: self.count() as OpIndex), derivedRows: OriginRowRange.create(firstAppendedDerived, bound: self.derivedFuncIndices.count() as OpIndex))
 	end 'copyRows'
 
-	// The derived rows of `fromFunc`, re-filed one id at a time: the column maps a range onto ids that
-	// are contiguous only while every id of the range is below the column's bound, which a row is not
-	// the place to rest on. A source below the parameter count maps onto the call site's own argument,
-	// which is what the copied id stands in for there.
-	function copyDerivedRows(index FunctionRowCsr, fromFunc FuncIndex, toFunc FuncIndex, subst ValueIdArray)
-		for k in index.firstRowOf(fromFunc) upto index.endRowOf(fromFunc) 'eachRow'
-			let row = index.rowAt(k)
-			let first = try self.derivedFirstIds.get(row) otherwise panic("ValueOriginTable.copyDerivedRows: derivedFirstIds.get OOB at row {row}")
-			let bound = try self.derivedEndIds.get(row) otherwise panic("ValueOriginTable.copyDerivedRows: derivedEndIds.get OOB at row {row}")
-			let sourceId = try self.derivedSourceIds.get(row) otherwise panic("ValueOriginTable.copyDerivedRows: derivedSourceIds.get OOB at row {row}")
-			let clonedSource = try subst.get(sourceId) otherwise continue
+	function copyOpRow(row OpIndex, toFunc FuncIndex, subst ValueIdArray, calleeParamCount ParamCount)
+		let v = try self.valueIds.get(row) otherwise panic("ValueOriginTable.copyRows: valueIds.get OOB at row {row}")
+		let opIndex = try self.opIndices.get(row) otherwise panic("ValueOriginTable.copyRows: opIndices.get OOB at row {row}")
 
-			for v in first upto bound 'eachId'
-				let cloned = try subst.get(v) otherwise continue
-				self.recordDerived(toFunc, valueId: cloned, sourceId: clonedSource)
-			end 'eachId'
-		end 'eachRow'
-	end 'copyDerivedRows'
+		if v < valueIdAtParamPosition(calleeParamCount) 'rowNamesAParameter'
+			return
+		end 'rowNamesAParameter'
+
+		let cloned = try subst.get(v) otherwise return
+		self.record(toFunc, valueId: cloned, opIndex: opIndex)
+	end 'copyOpRow'
+
+	// One derived row of the callee, re-filed one id at a time: the column maps a range onto ids that are
+	// contiguous only while every id of the range is below the column's bound, which a row is not the
+	// place to rest on. A source below the parameter count maps onto the call site's own argument, which
+	// is what the copied id stands in for there.
+	function copyDerivedRow(row OpIndex, toFunc FuncIndex, subst ValueIdArray)
+		let first = try self.derivedFirstIds.get(row) otherwise panic("ValueOriginTable.copyDerivedRow: derivedFirstIds.get OOB at row {row}")
+		let bound = try self.derivedEndIds.get(row) otherwise panic("ValueOriginTable.copyDerivedRow: derivedEndIds.get OOB at row {row}")
+		let sourceId = try self.derivedSourceIds.get(row) otherwise panic("ValueOriginTable.copyDerivedRow: derivedSourceIds.get OOB at row {row}")
+		let clonedSource = try subst.get(sourceId) otherwise return
+
+		for v in first upto bound 'eachId'
+			let cloned = try subst.get(v) otherwise continue
+			self.recordDerived(toFunc, valueId: cloned, sourceId: clonedSource)
+		end 'eachId'
+	end 'copyDerivedRow'
 
 	export function appendFrom(source ValueOriginTable, funcOffset FuncIndex, opOffset OpIndex)
 		for i in 0 upto source.count() 'each'
@@ -629,16 +652,64 @@ end 'isSelectedFunction'
 // row indices of function `f`, for every `f` its `selected` column named (and an EMPTY range for every
 // other, which is what makes an unselected function safe to ask about rather than a panic).
 //
-// It is a row-index permutation and not a copy of the columns, so it costs one word per selected row and
-// stays honest if the table is appended to afterwards — which `copyRows` does, once per splice.
+// It is a row-index permutation and not a copy of the columns, so it costs one word per selected row; the
+// rows `copyRows` appends afterwards — once per splice, contiguous, for the function spliced INTO — are
+// noted here as ranges, so a function's rows are its indexed rows plus whatever splices into it added.
 export type ValueOriginRowIndex
 	export var ops as FunctionRowCsr
 	export var derived as FunctionRowCsr
+	var appendedOps as AppendedRowsByFunction
+	var appendedDerived as AppendedRowsByFunction
 
 	export static function create(ops FunctionRowCsr, derived FunctionRowCsr) returns ValueOriginRowIndex
-		return Self{ops: ops, derived: derived}
+		return Self{ops: ops, derived: derived, appendedOps: AppendedRowsByFunction.create(), appendedDerived: AppendedRowsByFunction.create()}
 	end 'create'
+
+	function appendedOpsOf(funcIndex FuncIndex) returns OriginRowRangeArray
+		return try self.appendedOps.get(funcIndex) otherwise sharedNoAppendedRows
+	end 'appendedOpsOf'
+
+	function appendedDerivedOf(funcIndex FuncIndex) returns OriginRowRangeArray
+		return try self.appendedDerived.get(funcIndex) otherwise sharedNoAppendedRows
+	end 'appendedDerivedOf'
+
+	// Note the rows one splice appended for `funcIndex`; an empty range files nothing.
+	function noteAppended(funcIndex FuncIndex, opRows OriginRowRange, derivedRows OriginRowRange)
+		noteAppendedRange(self.appendedOps, funcIndex: funcIndex, range: opRows)
+		noteAppendedRange(self.appendedDerived, funcIndex: funcIndex, range: derivedRows)
+	end 'noteAppended'
 end 'ValueOriginRowIndex'
+
+// A contiguous run `[first, bound)` of origin-table rows.
+type OriginRowRange
+	export var first as OpIndex
+	export var bound as OpIndex
+
+	export static function create(first OpIndex, bound OpIndex) returns OriginRowRange
+		return Self{first: first, bound: bound}
+	end 'create'
+end 'OriginRowRange'
+
+typealias OriginRowRangeArray = Array with OriginRowRange
+typealias AppendedRowsByFunction = Map with (FuncIndex, OriginRowRangeArray)
+
+// The empty answer for a function nothing was spliced into — the common case — read and never written.
+var sharedNoAppendedRows = OriginRowRangeArray.create()
+
+function noteAppendedRange(appended AppendedRowsByFunction, funcIndex FuncIndex, range OriginRowRange)
+	if range.first >= range.bound 'nothingAppended'
+		return
+	end 'nothingAppended'
+
+	if var known = try appended.get(funcIndex) 'alreadyListed'
+		known.push(range)
+		return
+	end 'alreadyListed'
+
+	var ranges = OriginRowRangeArray.create()
+	ranges.push(range)
+	appended.upsert(funcIndex, value: ranges)
+end 'noteAppendedRange'
 
 // One CSR over one function-keyed column: `rows[rowStarts[f] .. rowStarts[f + 1])` are the row indices
 // of function `f`.

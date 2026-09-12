@@ -219,11 +219,22 @@ def main():
     ap.add_argument("--hz", type=float, default=200.0)
     ap.add_argument("--top", type=int, default=40)
     ap.add_argument(
+        "--depth",
+        type=int,
+        default=2,
+        help="callers to walk above each leaf for the edge histogram",
+    )
+    ap.add_argument(
         "--start-after",
         type=float,
         default=0.0,
         help="seconds to let the target run before sampling begins — "
         "focuses the histogram on one compile phase",
+    )
+    ap.add_argument(
+        "--edges-out",
+        default=None,
+        help="write EVERY call-chain edge with its sample count to this file, for aggregation",
     )
     ap.add_argument("cmd", nargs=argparse.REMAINDER)
     args = ap.parse_args()
@@ -338,7 +349,7 @@ def run_sampler(proc, args, text_rva, sym_offsets, sym_names):
                         rbp = struct.unpack_from("<Q", ctx, 0xA0)[0]
                         chain = [leaf]
                         ph = int(proc._handle)
-                        for _ in range(2):
+                        for _ in range(args.depth):
                             if rbp < 0x10000:
                                 break
                             ret = read_remote_u64(ph, rbp + 8)
@@ -378,6 +389,11 @@ def run_sampler(proc, args, text_rva, sym_offsets, sym_names):
     for name, n in edge_hist.most_common(args.top):
         pct = 100.0 * n / in_text if in_text else 0.0
         print(f"{pct:6.2f}%  {n:6d}  {name}")
+
+    if args.edges_out:
+        with open(args.edges_out, "w", encoding="utf-8") as f:
+            for name, n in edge_hist.most_common():
+                f.write(f"{n}\t{name}\n")
 
     sys.exit(124 if timed_out else proc.returncode)
 

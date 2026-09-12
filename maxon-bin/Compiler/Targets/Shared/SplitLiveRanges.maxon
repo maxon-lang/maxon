@@ -197,6 +197,13 @@ typealias ReachRowColumn = Array with ReachRow
 // `row * numBlocks + blockLocal`. A row BASE is one of these with `blockLocal = 0`.
 typealias ReachSlot = int(0 to u64.max)
 
+// The stamp of one peak the cache was aimed at: a row slot or a `rowOf` entry is live under the current
+// one and stale under any other, so aiming at a new peak is a bump rather than a clear.
+typealias ReachGeneration = int(0 to u64.max)
+typealias ReachGenerationColumn = Array with ReachGeneration
+
+let NoReachGeneration = 0 as ReachGeneration
+
 // SplitLineage — maps every fresh ValueId the splitter mints back to the ORIGINAL user value
 // it derives from: a reload's `loadRegSlot` def -> the value it reloads, a rematerialized
 // constant's re-emitted def -> the constant it re-emits. This is what lets the E5001
@@ -5852,21 +5859,45 @@ end 'killsValueAtPeak'
 // peak at that same call for every one of their splits. Rebuilding the cache per split cost an O(blocks)
 // allocation and fill plus a fresh BFS per def block, K times, for rows that had not changed.
 //
+// ⭐ **IT ANSWERS FOR BLOCKS AT OR BEFORE THE PEAK ONLY, AND THAT BOUNDS A WALK BY THE PEAK'S LOOP NEST
+// RATHER THAN BY THE FUNCTION.** The one question asked of it is `killsValueAtPeak`'s — is a use BEFORE
+// the peak still reachable from it — and blocks are numbered in layout order (`seqAt`), so such a use
+// lies in a block at or before the peak's. A block reaches an earlier one only through a back edge, whose
+// header holds it in a natural loop, so the lowest block a block can reach is the header of the outermost
+// loop holding it, or itself (`lowReach`). A block whose lowest reach lies past the peak reaches nothing
+// the question asks about, and the walk never expands it. Unbounded, a row is the peak's whole forward
+// closure — the rest of the function — per def block per peak, on a function that after the called-once
+// splices holds most of the program. The bound rests on the CFG being REDUCIBLE and the layout an RPO
+// of it (`reorderFuncBlocksRpo`, after the critical-edge splits): every layout-retreating edge is then a
+// back edge, so the lowest-numbered block on any path from `b` to an earlier block is the header of a
+// natural loop holding `b`. `NaturalLoops` states that premise for the whole compiler.
+//
+// EVERY RESET IS A GENERATION STAMP: a row slot and a `rowOf` entry are live only under the generation of
+// the peak they were walked for, so retargeting costs nothing and a fresh row costs its walk alone. A
+// clear of the matrix and a refill of `rowOf` per peak would cost `rows × numBlocks` and `numBlocks`, and
+// the peaks a function relieves grow with it.
+//
 // `retargetTo` is the one thing that invalidates them, and `reachableFromPeak` ASSERTS it was called:
 // serving a row walked from a DIFFERENT peak would flip `killsValueAtPeak`, change the victim's tier,
 // and silently emit a different split.
 type ReachCache
 	var numBlocks as CfgIndex
 
-	// The peak block every row in `rows` was walked FROM. `hasPeak` is false until the first
-	// `retargetTo`, which is the state in which no row exists to be misread.
+	// The peak block every live row was walked FROM. `hasPeak` is false until the first `retargetTo`,
+	// which is the state in which no row exists to be misread.
 	var hasPeak as bool
 	var peakBlockLocal as CfgIndex
 
-	// defBlock -> its row index in `rows`, or `numBlocks` for "not walked yet" (no row index can
-	// equal numBlocks: there are at most numBlocks distinct def blocks, so rows are 0..numBlocks-1).
+	// The stamp of the current peak; `NoReachGeneration`, which every grown column starts with, is no
+	// peak's, so a slot or entry nothing walked never reads as live.
+	var generation as ReachGeneration
+
+	// defBlock -> its row index in `rows`, live iff `rowOfGeneration[defBlock]` is the current generation.
 	var rowOf as ReachRowColumn
-	var rows as BoolArray
+	var rowOfGeneration as ReachGenerationColumn
+
+	// Row-major `row * numBlocks + block` (`slotOf`): the generation whose walk marked the slot.
+	var rows as ReachGenerationColumn
 	var rowCount as ReachRow
 
 	// The BFS worklist every row's walk steps with — owned by the CACHE, exactly as
@@ -5876,13 +5907,17 @@ type ReachCache
 	// entry and drains it to empty, so it is storage only.
 	var worklist as CfgIndexArray
 
-	// `rowOf` is left EMPTY here and sized by the first `retargetTo` (`Array.refill` resizes as well
-	// as fills). The overwhelmingly common function needs no split at all — 1202 of 1202 in the
-	// call-heavy benchmark — and so never reaches `chooseVictim` and never retargets. Sizing the
-	// column eagerly would put a per-function allocation, proportional to the block count, on every
-	// function in the program to serve the few that spill.
+	// Block -> the lowest block index it can reach: the header of the outermost natural loop holding it,
+	// or itself. Built by the first walk, over the CFG every row is walked on.
+	var lowReach as CfgIndexArray
+	var lowReachBuilt as bool
+
+	// Every column is left EMPTY here and grown by the first walk (`rowFor`). The overwhelmingly common
+	// function needs no split at all — 1202 of 1202 in the call-heavy benchmark — and so never reaches
+	// `chooseVictim` and never walks. Sizing the columns eagerly would put a per-function allocation,
+	// proportional to the block count, on every function in the program to serve the few that spill.
 	static function create(numBlocks CfgIndex) returns ReachCache
-		return Self{numBlocks: numBlocks, hasPeak: false, peakBlockLocal: 0, rowOf: ReachRowColumn.create(), rows: BoolArray.create(), rowCount: 0, worklist: CfgIndexArray.create()}
+		return Self{numBlocks: numBlocks, hasPeak: false, peakBlockLocal: 0, generation: NoReachGeneration, rowOf: ReachRowColumn.create(), rowOfGeneration: ReachGenerationColumn.create(), rows: ReachGenerationColumn.create(), rowCount: 0, worklist: CfgIndexArray.create(), lowReach: CfgIndexArray.create(), lowReachBuilt: false}
 	end 'create'
 
 	// Aim the cache at the peak `chooseVictim` is about to ask about. Everything walked from a
@@ -5894,19 +5929,23 @@ type ReachCache
 
 		self.hasPeak = true
 		self.peakBlockLocal = peakBlock
+		self.generation = self.generation + 1
 		self.rowCount = 0
-		self.rows.clear()
-		self.rowOf.refill(self.numBlocks as ElementIndex, value: self.numBlocks as ReachRow)
 	end 'retargetTo'
 
-	// Is `block` reachable from the peak's SUCCESSORS without passing through `defBlock`?
+	// Is `block` — at or before the peak in layout order — reachable from the peak's SUCCESSORS without
+	// passing through `defBlock`?
 	export function reachableFromPeak(topo FuncTopology, peakBlock CfgIndex, defBlock CfgIndex, block CfgIndex) returns bool
 		if (not self.hasPeak) or self.peakBlockLocal != peakBlock 'staleTarget'
 			panic("ReachCache.reachableFromPeak: the cached walks start at peak block {self.peakBlockLocal} but the caller is asking about peak block {peakBlock} — `retargetTo` must run once per peak, before any query. A row walked from a different peak would flip `killsValueAtPeak`, pick a different victim, and emit a different split.")
 		end 'staleTarget'
 
+		if block > peakBlock 'pastThePeak'
+			panic("ReachCache.reachableFromPeak: block {block} lies past peak block {peakBlock} — a row is walked for the blocks at or before the peak, where every use before it lies, and answers for no other")
+		end 'pastThePeak'
+
 		let row = self.rowFor(topo, defBlock: defBlock)
-		return try self.rows.get(self.slotOf(row, block: block)) otherwise panic("ReachCache.reachableFromPeak: block {block} out of range")
+		return (try self.rows.get(self.slotOf(row, block: block)) otherwise panic("ReachCache.reachableFromPeak: block {block} out of range")) == self.generation
 	end 'reachableFromPeak'
 
 	// The flat index of `(row, block)` in the row-major `rows` matrix — the ONE place its layout is
@@ -5916,44 +5955,80 @@ type ReachCache
 	end 'slotOf'
 
 	function rowFor(topo FuncTopology, defBlock CfgIndex) returns ReachRow
-		let cached = try self.rowOf.get(defBlock) otherwise panic("ReachCache.rowFor: def block {defBlock} out of range")
+		self.rowOfGeneration.growFilled(self.numBlocks as ElementIndex, value: NoReachGeneration)
+		self.rowOf.growFilled(self.numBlocks as ElementIndex, value: 0)
 
-		if cached != self.numBlocks as ReachRow 'hit'
-			return cached
+		if (try self.rowOfGeneration.get(defBlock) otherwise panic("ReachCache.rowFor: def block {defBlock} out of range")) == self.generation 'hit'
+			return try self.rowOf.get(defBlock) otherwise panic("ReachCache.rowFor: def block {defBlock} out of range")
 		end 'hit'
 
+		self.buildLowReach(topo)
 		let row = self.rowCount
 		self.rowCount = row + 1
 
 		// `growFilled`, NEVER `resize` — this matrix is extended ONE ROW AT A TIME, which is the exact
 		// shape `resize` is quadratic on: it reserves EXACTLY the length asked, so row `r` reallocates
-		// and copies all `r × numBlocks` entries already there. Θ(rows² × numBlocks) BYTES for a matrix
-		// that ends up Θ(rows × numBlocks) long, and rows and numBlocks BOTH grow with the function.
-		//
-		// The fill is the row the walk needs — it only ever SETS marks, so the row must arrive all-false —
-		// and `growFilled` adds EXACTLY this row and nothing else. Proof that its fill covers `[base,
-		// base + numBlocks)`: `rows.count() == rowCount * numBlocks` holds after every step (`create` and
-		// `retargetTo`'s `clear()` both leave 0 == 0 * numBlocks, and `growFilled` below re-establishes
-		// it), `numBlocks` never changes for a cache's life, and `markBlocksReachableFromPeak` only
-		// `set`s. So on entry `existing == rowCount_old * numBlocks == row * numBlocks == base`, and
-		// `growFilled`'s fill runs over `[existing, newLength) == [base, base + numBlocks)`.
+		// and copies all `r × numBlocks` entries already there. A row index this function has used before
+		// is already there and costs nothing; the fill a new row arrives with is no peak's generation, so
+		// only this walk marks it.
 		let base = self.slotOf(row, block: 0)
-		self.rows.growFilled(self.slotOf(self.rowCount, block: 0) as ElementIndex, value: false)
-		markBlocksReachableFromPeak(topo, peakBlockLocal: self.peakBlockLocal, defBlock: defBlock, rows: self.rows, base: base, worklist: self.worklist)
+		self.rows.growFilled(self.slotOf(self.rowCount, block: 0) as ElementIndex, value: NoReachGeneration)
+		markBlocksReachableFromPeak(topo, peakBlockLocal: self.peakBlockLocal, defBlock: defBlock, rows: self.rows, base: base, generation: self.generation, lowReach: self.lowReach, worklist: self.worklist)
 		try self.rowOf.set(defBlock, value: row) otherwise panic("ReachCache.rowFor: rowOf.set OOB")
+		try self.rowOfGeneration.set(defBlock, value: self.generation) otherwise panic("ReachCache.rowFor: rowOfGeneration.set OOB")
 		return row
 	end 'rowFor'
+
+	// `lowReach`, once per cache. Headers are visited in layout order, so an outer loop's header comes
+	// before every header inside it (it dominates them); a header already owned by an outer loop is
+	// skipped, its members being the outer loop's, so each block is walked once.
+	function buildLowReach(topo FuncTopology)
+		if self.lowReachBuilt 'built'
+			return
+		end 'built'
+
+		self.lowReachBuilt = true
+
+		for block in 0 upto self.numBlocks 'eachBlock'
+			self.lowReach.push(block)
+		end 'eachBlock'
+
+		let loops = NaturalLoops.find(topo.succ, nodeCount: self.numBlocks as CsrIndex)
+
+		if loops.headers.count() == 0 'loopless'
+			return
+		end 'loopless'
+
+		var member = LoopMembership.create()
+
+		for header in 0 upto self.numBlocks 'eachHeaderInLayoutOrder'
+			if loops.latches.degree(header as CsrIndex) == 0 or self.lowReachOf(header) != header 'notAnOutermostHeader'
+				continue
+			end 'notAnOutermostHeader'
+
+			loops.collect(topo.pred, header: header as CsrIndex, into: member)
+
+			for b in member.blocks 'eachMember'
+				try self.lowReach.set(b, value: header) otherwise panic("ReachCache.buildLowReach: lowReach.set OOB at {b}")
+			end 'eachMember'
+		end 'eachHeaderInLayoutOrder'
+	end 'buildLowReach'
+
+	function lowReachOf(block CfgIndex) returns CfgIndex
+		return try self.lowReach.get(block) otherwise panic("ReachCache.lowReachOf: block {block} out of range")
+	end 'lowReachOf'
 end 'ReachCache'
 
 // Mark, into `rows[base .. base+numBlocks)`, the blocks reachable from `peakBlockLocal` WITHOUT
 // passing through `defBlock` — the blocks in which the value is still carrying its pre-peak
-// definition. The walk starts at the peak block's SUCCESSORS (so the peak's own block is reached
-// only via a genuine cycle) and never expands into `defBlock` (entering it redefines the value;
-// see `killsValueAtPeak`). Worklist-driven: no CFG traversal in the allocator may recurse.
+// definition — restricted to the blocks that can reach one at or before the peak (`lowReach`). The
+// walk starts at the peak block's SUCCESSORS (so the peak's own block is reached only via a genuine
+// cycle) and never expands into `defBlock` (entering it redefines the value; see `killsValueAtPeak`).
+// Worklist-driven: no CFG traversal in the allocator may recurse.
 //
 // `worklist` is the CACHE's, not this walk's (see `ReachCache.worklist`) — a block is pushed once per
 // in-edge, so a fresh one here was an O(edges) allocation per walk.
-function markBlocksReachableFromPeak(topo FuncTopology, peakBlockLocal CfgIndex, defBlock CfgIndex, rows BoolArray, base ReachSlot, worklist CfgIndexArray)
+function markBlocksReachableFromPeak(topo FuncTopology, peakBlockLocal CfgIndex, defBlock CfgIndex, rows ReachGenerationColumn, base ReachSlot, generation ReachGeneration, lowReach CfgIndexArray, worklist CfgIndexArray)
 	worklist.clear()
 	let deg = topo.succ.degree(peakBlockLocal as CsrIndex)
 
@@ -5968,13 +6043,17 @@ function markBlocksReachableFromPeak(topo FuncTopology, peakBlockLocal CfgIndex,
 			continue
 		end 'redefined'
 
-		let seen = try rows.get(base + (b as ReachSlot)) otherwise panic("markBlocksReachableFromPeak: rows.get OOB")
+		if (try lowReach.get(b) otherwise panic("markBlocksReachableFromPeak: lowReach.get OOB at {b}")) > peakBlockLocal 'reachesNothingBeforeThePeak'
+			continue
+		end 'reachesNothingBeforeThePeak'
 
-		if seen 'already'
+		let slot = base + (b as ReachSlot)
+
+		if (try rows.get(slot) otherwise panic("markBlocksReachableFromPeak: rows.get OOB")) == generation 'already'
 			continue
 		end 'already'
 
-		try rows.set(base + (b as ReachSlot), value: true) otherwise panic("markBlocksReachableFromPeak: rows.set OOB")
+		try rows.set(slot, value: generation) otherwise panic("markBlocksReachableFromPeak: rows.set OOB")
 
 		let d = topo.succ.degree(b as CsrIndex)
 

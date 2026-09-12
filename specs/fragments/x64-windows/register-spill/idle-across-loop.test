@@ -31,6 +31,12 @@ typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 126
 ---
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+}
+
 func @idleAcrossLoop {
   entry:
     x64.pushReg rbp
@@ -61,13 +67,13 @@ func @idleAcrossLoop {
     x64.storeSlotReg slot1, rcx
     x64.movRegImm32 rcx, 0
     x64.movRegImm32 r15, 0
-  whilehdr:
-    x64.cmpRegImm32 r15, 4
-    x64.jcc greaterEqual, whileexit
+    x64.jmp whilehdr
   loop:
     x64.leaRegRegReg rcx, rcx, r15
     x64.leaRegRegImm32 r15, r15, 1
-    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 r15, 4
+    x64.jcc less, loop
   whileexit:
     x64.leaRegRegReg rax, rcx, rax
     x64.leaRegRegReg rax, rax, rdx
@@ -109,15 +115,15 @@ func @main {
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc lessEqual, __rc_ok
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at idle-across-loop.test:28: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

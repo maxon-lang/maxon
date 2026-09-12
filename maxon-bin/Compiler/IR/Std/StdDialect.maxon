@@ -325,6 +325,11 @@ export enum OpRole
 	ret
 	errorReturn
 	param
+
+	// Control never comes back from it: the process aborts or exits. A block holding one reaches no
+	// terminator, so the return that follows it exists only for the function's declared arity
+	// (`InsertRangeChecks.appendDeadReturn`).
+	diverging
 end 'OpRole'
 
 // The Std-tier binary-operation opcodes carried by `StdOp.binOp`. A family that
@@ -1211,7 +1216,7 @@ export union StdOp
 	// `ExitProcess` through the IAT; arm64-macOS: the `_exit` import), keeping the OS ABI out of the
 	// target-neutral tier; and it appends at the END of the union, where the append is LOUD. Full
 	// call-barrier metadata: it IS a diverging call once lowered.
-	osExit(codeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	osExit(codeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.diverging, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// --- P1.5-A1: non-capturing function values ---
 	//
@@ -1293,7 +1298,7 @@ export union StdOp
 	//
 	// Its `category: system` places it logically,
 	// independent of this tail position.
-	osPanic(label ByteArray) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	osPanic(label ByteArray) = StdOpMeta{category: StdOpCategory.system, role: OpRole.diverging, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// --- The OS-import primitive the green-thread SLEEP substrate's clock needs ---
 	//
@@ -1788,7 +1793,7 @@ export union StdOp
 	//
 	// It shares `osPanic`'s metadata exactly: `isCall: true` so a caller reserves the shadow space the call
 	// needs, defines no value, and never returns.
-	osPanicValue(messagePtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	osPanicValue(messagePtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.diverging, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// --- The COMMAND LINE ---
 	//
@@ -5208,6 +5213,33 @@ module function recordValueSubstitution(subst ValueIdArray, resultId ValueId, re
 	try subst.set(resultId, value: remappedValue(replacement, subst: subst)) otherwise panic("recordValueSubstitution: subst.set OOB at {resultId} against a column of {subst.count()}")
 end 'recordValueSubstitution'
 
+// Point every entry at the END of its chain. A builder that records in layout order and DELETES the
+// defs it rewrites (`valueTupleReturn`'s frame-local pair: a load of one elided box stored into another,
+// whose own loads are rewritten to it) can record `a -> b` before `b -> c` is known, and a read left at
+// `b` would then name a deleted def. Chains are acyclic — a replacement is never the value it replaces —
+// so each entry is followed to a fixpoint once; a chain longer than the column can only be a cycle, and
+// that is a builder defect reported by name rather than a walk that never ends. Linear in the column: an
+// entry already at its end costs one read.
+module function compressValueSubstitutions(subst ValueIdArray)
+	let longestAcyclicChain = subst.count()
+
+	for i in 0 upto subst.count() 'eachEntry'
+		var at = try subst.get(i) otherwise panic("compressValueSubstitutions: subst.get OOB at {i}")
+		var followed = 0 as ValueId
+
+		while remappedValue(at, subst: subst) != at 'followTheChain'
+			at = remappedValue(at, subst: subst)
+			followed = followed + 1
+
+			if followed > longestAcyclicChain 'aCycle'
+				panic("compressValueSubstitutions: the chain from value {i} never reaches a fixpoint — a substitution column maps some value back onto itself through {at}")
+			end 'aCycle'
+		end 'followTheChain'
+
+		try subst.set(i, value: at) otherwise panic("compressValueSubstitutions: subst.set OOB at {i}")
+	end 'eachEntry'
+end 'compressValueSubstitutions'
+
 module function remappedArgs(args ValueIdArray, subst ValueIdArray) returns ValueIdArray
 	var out = ValueIdArray.create()
 
@@ -5228,15 +5260,14 @@ end 'remappedArgs'
 // is added here is only what a clone needs beyond a substitution: the DEF fields (which `remapStdOpUses`
 // deliberately leaves alone — a def is not a use) and the branch targets.
 //
-// ⭐ **IT COVERS THE OPS AN INLINABLE LEAF MAY HOLD, AND PANICS ON EVERY OTHER — which is not a gap but
-// the eligibility rule's backstop.** `InlineLeaves.scanLeafBody` refuses a callee holding any call,
-// any `isUnsupportedInInlineBody` op, or a panic op (whose block is dropped rather than copied), so the
-// set that can reach here is closed: the arith band, the two branches, `switch`, the two returns, the
-// three address ops and the two indirect accesses. Writing arms for the other seventy would be
-// unreachable generality — and a `panic` naming the op is what a disagreement between the two rules
-// looks like, instead of a silently mis-cloned body. Every non-clonable variant is covered by a RANGE
-// arm ending at the union's last member, so a variant appended past it fails to compile here until it
-// is consciously placed.
+// ⭐ **IT COVERS THE OPS AN INLINABLE BODY MAY HOLD, AND PANICS ON EVERY OTHER — which is not a gap but
+// the admission rule's backstop.** `InlineLeaves.inlineOpRole` refuses a callee holding any other
+// `isUnsupportedInInlineBody` op, so the set that can reach here is closed: the arith band, the two
+// branches, `switch`, the two returns, the address ops, the indirect accesses, every call kind and the
+// two panic ops. Writing arms for the other seventy would be unreachable generality — and a `panic`
+// naming the op is what a disagreement between the two rules looks like, instead of a silently
+// mis-cloned body. Every non-clonable variant is covered by a RANGE arm ending at the union's last
+// member, so a variant appended past it fails to compile here until it is consciously placed.
 module function remapStdOpForClone(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray, def StdDefinedValues) returns StdOp
 	let cloned = remapClonedDefsAndTargets(remapStdOpUses(op, subst: valueSubst), valueSubst: valueSubst, blockSubst: blockSubst)
 	requireClonedDefAgreesWithTheDefEnumerator(op, cloned: cloned, valueSubst: valueSubst, def: def)
@@ -5337,32 +5368,34 @@ function remapClonedDefsAndTargets(op StdOp, valueSubst ValueIdArray, blockSubst
 		// holds the entry block.
 		param then panic("remapStdOpForClone: a `param` op reached the cloner — a splice maps a parameter to its argument instead of copying it, and a loop copy never holds the entry block")
 
-		// The two direct calls are cloned by `unswitchInvariantGuards`' loop copy; `scanLeafBody`
-		// refuses a callee holding either.
 		call(resultId, callee, args) then return StdOp.call(clonedValue(resultId, subst: valueSubst), callee: callee, args: args)
 		retVoid then return op
 		globalAddr(resultId, label) then return StdOp.globalAddr(clonedValue(resultId, subst: valueSubst), label: label)
 		loadIndirect(resultId, addrId, offset, valueType) then return StdOp.loadIndirect(clonedValue(resultId, subst: valueSubst), addrId: addrId, offset: offset, valueType: valueType)
 		storeIndirect then return op
 		osAllocPages or
-			osWriteStdout then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is marked `isUnsupportedInInlineBody`, which `scanLeafBody` refuses a callee for")
+			osWriteStdout then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is marked `isUnsupportedInInlineBody`, which `inlineOpRole` refuses a callee for")
 		rdataAddr(resultId, label) then return StdOp.rdataAddr(clonedValue(resultId, subst: valueSubst), label: label)
 		tryCall(resultId, errorFlagId, callee, args) then return StdOp.tryCall(clonedValue(resultId, subst: valueSubst), errorFlagId: clonedValue(errorFlagId, subst: valueSubst), callee: callee, args: args)
 		errorReturn or
-			osExit then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is a dual-register return or a process exit — each refused by `scanLeafBody`, and neither can sit inside a loop")
+			osExit then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is a dual-register return or a process exit — each refused by `inlineOpRole`, and neither can sit inside a loop")
 		funcAddr(resultId, funcName) then return StdOp.funcAddr(clonedValue(resultId, subst: valueSubst), funcName: funcName)
-		callIndirect then panic("remapStdOpForClone: an indirect call reached the cloner — `scanLeafBody` refuses a callee holding one")
+		callIndirect(resultId, calleeReg, resultType, argFloatMask, args) then return StdOp.callIndirect(clonedValue(resultId, subst: valueSubst), calleeReg: calleeReg, resultType: resultType, argFloatMask: argFloatMask, args: args)
+
+		// A panic defines nothing and names no block: its message travels as an `.rdata` label or an
+		// already-remapped pointer, so the copy is the op itself.
 		osPanic or
-			osReadClock or
+			osPanicValue then return op
+		osReadClock or
 			osProcessSpawn or
 			osProcessExitCode or
 			osWaitHandles or
 			osCloseHandle or
 			osWaitHandle or
-			osFreePages then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is a panic or an `isUnsupportedInInlineBody` system primitive — a panic BLOCK is redirected to the slow arm rather than copied, and the rest refuse the callee outright")
+			osFreePages then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` system primitive, which `inlineOpRole` refuses a callee for")
 		switch(subjectId, denseTargetBlockIds, defaultBlockId) then return StdOp.switch(subjectId, denseTargetBlockIds: clonedBlocks(denseTargetBlockIds, subst: blockSubst), defaultBlockId: clonedBlock(defaultBlockId, subst: blockSubst))
-		witnessCall or
-			osPipeCreate or
+		witnessCall(resultId, witnessAddr, methodIndex, resultType, argFloatMask, args) then return StdOp.witnessCall(clonedValue(resultId, subst: valueSubst), witnessAddr: witnessAddr, methodIndex: methodIndex, resultType: resultType, argFloatMask: argFloatMask, args: args)
+		osPipeCreate or
 			osIocpCreate or
 			osEventCreate or
 			osThreadCreate or
@@ -5376,9 +5409,9 @@ function remapClonedDefsAndTargets(op StdOp, valueSubst ValueIdArray, blockSubst
 			osGetPid or
 			osPipeCreateOutbound or
 			osWriteFile or
-			osReadWallClock or
-			witnessTryCall or
-			osFileOpenRead or
+			osReadWallClock then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` system primitive, which `inlineOpRole` refuses a callee for")
+		witnessTryCall(resultId, errorFlagId, witnessAddr, methodIndex, resultType, argFloatMask, args) then return StdOp.witnessTryCall(clonedValue(resultId, subst: valueSubst), errorFlagId: clonedValue(errorFlagId, subst: valueSubst), witnessAddr: witnessAddr, methodIndex: methodIndex, resultType: resultType, argFloatMask: argFloatMask, args: args)
+		osFileOpenRead or
 			osFileClose or
 			osReadFile or
 			osFileOpenWrite or
@@ -5391,7 +5424,6 @@ function remapClonedDefsAndTargets(op StdOp, valueSubst ValueIdArray, blockSubst
 			osDirCreate or
 			osDirCurrentPath or
 			osFileAttributes or
-			osPanicValue or
 			osCommandLine or
 			osStdHandle or
 			osExecutablePath or
@@ -5413,15 +5445,15 @@ function remapClonedDefsAndTargets(op StdOp, valueSubst ValueIdArray, blockSubst
 			osSocketRecv or
 			osSocketClose or
 			osCpuCount or
-			osThreadCpuTicks then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is a witness call or an `isUnsupportedInInlineBody` system primitive — both refused by `scanLeafBody`")
+			osThreadCpuTicks then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` system primitive, which `inlineOpRole` refuses a callee for")
 
 		// The appended page/fill/atomic band (F1, F2) and the thread/TLS band (G1), placed consciously: the
-		// three `scanLeafBody` ADMITS are cloned like any body op — a fill defines nothing, the two atomics
+		// three `inlineOpRole` ADMITS are cloned like any body op — a fill defines nothing, the two atomics
 		// define their result — and the rest are `isUnsupportedInInlineBody` import calls it refuses.
-		osDecommitPages then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` page primitive, which `scanLeafBody` refuses a callee for")
+		osDecommitPages then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` page primitive, which `inlineOpRole` refuses a callee for")
 		memFill then return op
 		osCommitPages or
-			osReservePages then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` page primitive, which `scanLeafBody` refuses a callee for")
+			osReservePages then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` page primitive, which `inlineOpRole` refuses a callee for")
 		atomicCas(resultId, addrId, expectedId, replacementId) then return StdOp.atomicCas(clonedValue(resultId, subst: valueSubst), addrId: addrId, expectedId: expectedId, replacementId: replacementId)
 		atomicRmw(resultId, addrId, operandId, opcode) then return StdOp.atomicRmw(clonedValue(resultId, subst: valueSubst), addrId: addrId, operandId: operandId, opcode: opcode)
 		currentThreadToken or
@@ -5429,22 +5461,22 @@ function remapClonedDefsAndTargets(op StdOp, valueSubst ValueIdArray, blockSubst
 			tlsSetValue or
 			tlsSlotLoad or
 			osSetEvent or
-			osEnterBackgroundPriority then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` system primitive, which `scanLeafBody` refuses a callee for")
-		osFileOpenWriteExecutable then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is a witness call or an `isUnsupportedInInlineBody` system primitive — both refused by `scanLeafBody`")
+			osEnterBackgroundPriority then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` system primitive, which `inlineOpRole` refuses a callee for")
+		osFileOpenWriteExecutable then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` system primitive, which `inlineOpRole` refuses a callee for")
 		osEnvBlock or
-			osEnvBlockFree then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is a witness call or an `isUnsupportedInInlineBody` system primitive — both refused by `scanLeafBody`")
+			osEnvBlockFree then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` system primitive, which `inlineOpRole` refuses a callee for")
 
 		// G3: cloned like their plain twins — an ordered load defines its result, an ordered store defines
 		// nothing. Inlining copies the op unchanged, which preserves its ordering with it.
 		loadAcquire(resultId, addrId, offset, valueType) then return StdOp.loadAcquire(clonedValue(resultId, subst: valueSubst), addrId: addrId, offset: offset, valueType: valueType)
 		storeRelease then return op
-		osHandleFileType then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` system primitive, which `scanLeafBody` refuses a callee for")
+		osHandleFileType then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` system primitive, which `inlineOpRole` refuses a callee for")
 		osCreateNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
 			osHostSample or
-			osNetpoll then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` system primitive, which `scanLeafBody` refuses a callee for")
+			osNetpoll then panic("remapStdOpForClone: `{stdOpCloneRefusalName(op)}` is an `isUnsupportedInInlineBody` system primitive, which `inlineOpRole` refuses a callee for")
 	end 'r'
 end 'remapClonedDefsAndTargets'
 
@@ -5471,8 +5503,8 @@ module function clonedValue(v ValueId, subst ValueIdArray) returns ValueId
 	return try subst.get(v) otherwise panic("remapStdOpForClone: callee value {v} is outside the {subst.count()}-entry value column this splice built — the column is sized by the callee's own `nextFreeValueId`, so an id past it means the op belongs to another function")
 end 'clonedValue'
 
-// A cloned terminator's block target, through the splice's dense block column. Every callee block is
-// mapped: a copied block to its fresh caller block, a PANIC block to the splice's single slow arm.
+// A cloned terminator's block target, through the splice's dense block column: every copied callee
+// block maps to its fresh caller block.
 module function clonedBlock(id BlockId, subst BlockIdArray) returns BlockId
 	return try subst.get(id) otherwise panic("remapStdOpForClone: callee block id {id} is outside the {subst.count()}-entry block column this splice built — the column is sized by the callee's own `nextBlockId`")
 end 'clonedBlock'

@@ -7841,6 +7841,17 @@ export type Project
 	// sidecar may exist at all.
 	export var debugInfo as bool
 
+	// The withheld bodies this build was asked to print (`--emit-ir-runtime=`, a ```RequiredRuntime golden's
+	// request). A name here is a REFERENCE the inliner's census must see: a called-once callee spliced away
+	// is dropped by dead-function elimination, and the printer then has no body to render.
+	export var requestedRuntimeBodies as RuntimeFunctionNameArray
+
+	// Every plain function used as a first-class VALUE (`collectFnRefThunkTargets`). Its `__fnref_` thunk is
+	// installed after the pipeline and `call`s it directly, so the inliner's census must count that call
+	// before the thunk exists: a callee spliced away on the strength of its one visible site would leave
+	// the thunk calling an emptied body.
+	export var functionValueTargets as ByteArrayArray
+
 	// ⭐ Whether this build instruments for code coverage (`--coverage`). Set by the driver right after the
 	// project is loaded, exactly as `debugInfo` is, and a per-BUILD switch for the same reason.
 	//
@@ -8168,6 +8179,8 @@ export type Project
 			asyncTrace: false,
 			debugStream: false,
 			debugInfo: false,
+			requestedRuntimeBodies: RuntimeFunctionNameArray.create(),
+			functionValueTargets: ByteArrayArray.create(),
 			coverage: false,
 			covPoints: CovPointTable.create(),
 			coverageDataPath: "",

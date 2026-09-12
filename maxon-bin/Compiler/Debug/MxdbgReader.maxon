@@ -151,6 +151,24 @@ export union MxdbgFunctionLookup
 	found(info MxdbgFunctionInfo)
 end 'MxdbgFunctionLookup'
 
+// One spliced body: the callee's name and the site it is nested under, or `none` for a body spliced
+// into its function's own text.
+export type MxdbgInlineSiteInfo
+	export var name as String
+	export var parent as MxdbgInlineSiteLookup
+
+	export static function create(name String, parent MxdbgInlineSiteLookup) returns MxdbgInlineSiteInfo
+		return Self{name: name, parent: parent}
+	end 'create'
+end 'MxdbgInlineSiteInfo'
+
+// A site index, or none: what an offset outside every inline range answers, and what a site spliced
+// into the function's own text names as its parent.
+export union MxdbgInlineSiteLookup
+	none
+	site(index MxdbgIndex)
+end 'MxdbgInlineSiteLookup'
+
 export union MxdbgLineLookup
 	none
 	found(info MxdbgLineInfo)
@@ -178,6 +196,10 @@ export type MxdbgReader
 	var localTally as MxdbgIndex
 	var covTableOff as ByteOffset
 	var covTally as MxdbgIndex
+	var inlineSiteTableOff as ByteOffset
+	var inlineSiteTally as MxdbgIndex
+	var inlineRangeTableOff as ByteOffset
+	var inlineRangeTally as MxdbgIndex
 
 	// Function indices in code-start order, which is what makes `functionContaining` a binary search. It is
 	// a sort rather than a claim about the writer: a sidecar may store its table in emission order, so a walk
@@ -235,10 +257,19 @@ export type MxdbgReader
 			throw MxdbgReadError.truncated
 		end 'coverageTablePastEnd'
 
+		let inlineSiteTableOff = imageReadU32(image, at: MxdbgOffInlineSiteTableOff) as ByteOffset
+		let inlineSiteTally = imageReadU32(image, at: MxdbgOffInlineSiteCount) as MxdbgIndex
+		let inlineRangeTableOff = imageReadU32(image, at: MxdbgOffInlineRangeTableOff) as ByteOffset
+		let inlineRangeTally = imageReadU32(image, at: MxdbgOffInlineRangeCount) as MxdbgIndex
+
+		if not imageRangeFits(image, start: inlineSiteTableOff, count: (inlineSiteTally * MxdbgInlineSiteEntrySize) as BytePos) or not imageRangeFits(image, start: inlineRangeTableOff, count: (inlineRangeTally * MxdbgInlineRangeEntrySize) as BytePos) 'inlineTablePastEnd'
+			throw MxdbgReadError.truncated
+		end 'inlineTablePastEnd'
+
 		let tripleOff = imageReadU32(image, at: MxdbgOffTripleOff) as ByteOffset
 		let tripleLen = imageReadU32(image, at: MxdbgOffTripleLen) as BytePos
 
-		return Self{image: image, buildId: imageReadU64(image, at: MxdbgOffBuildId) as HashDigest, triple: String.from(imageSlice(image, start: stringPoolOff + tripleOff, count: tripleLen)), stringPoolOff: stringPoolOff, fileTableOff: fileTableOff, fileTally: fileTally, funcTableOff: funcTableOff, funcTally: funcTally, lineTableOff: lineTableOff, lineTally: lineTally, typeTableOff: typeTableOff, typeTally: typeTally, fieldTableOff: fieldTableOff, fieldTally: fieldTally, localTableOff: localTableOff, localTally: localTally, covTableOff: covTableOff, covTally: covTally, funcOrder: functionOrderByCodeStart(image, tableOff: funcTableOff, tally: funcTally)}
+		return Self{image: image, buildId: imageReadU64(image, at: MxdbgOffBuildId) as HashDigest, triple: String.from(imageSlice(image, start: stringPoolOff + tripleOff, count: tripleLen)), stringPoolOff: stringPoolOff, fileTableOff: fileTableOff, fileTally: fileTally, funcTableOff: funcTableOff, funcTally: funcTally, lineTableOff: lineTableOff, lineTally: lineTally, typeTableOff: typeTableOff, typeTally: typeTally, fieldTableOff: fieldTableOff, fieldTally: fieldTally, localTableOff: localTableOff, localTally: localTally, covTableOff: covTableOff, covTally: covTally, inlineSiteTableOff: inlineSiteTableOff, inlineSiteTally: inlineSiteTally, inlineRangeTableOff: inlineRangeTableOff, inlineRangeTally: inlineRangeTally, funcOrder: functionOrderByCodeStart(image, tableOff: funcTableOff, tally: funcTally)}
 	end 'parse'
 
 	export function fileCount() returns MxdbgIndex
@@ -271,6 +302,64 @@ export type MxdbgReader
 	export function coveragePointCount() returns MxdbgIndex
 		return self.covTally
 	end 'coveragePointCount'
+
+	export function inlineSiteCount() returns MxdbgIndex
+		return self.inlineSiteTally
+	end 'inlineSiteCount'
+
+	export function inlineRangeCount() returns MxdbgIndex
+		return self.inlineRangeTally
+	end 'inlineRangeCount'
+
+	export function inlineSite(index MxdbgIndex) returns MxdbgInlineSiteInfo
+		if index >= self.inlineSiteTally 'noSuchSite'
+			panic("MxdbgReader.inlineSite: site {index} is past the sidecar's {self.inlineSiteTally} — every caller bounds itself by `inlineSiteCount` or by a lookup this reader answered")
+		end 'noSuchSite'
+
+		let rec = self.inlineSiteTableOff + (index * MxdbgInlineSiteEntrySize) as ByteOffset
+		let parent = imageReadU32(self.image, at: rec + MxdbgInlineSiteParent) as MxdbgIndex
+
+		return MxdbgInlineSiteInfo.create(self.poolString(imageReadU32(self.image, at: rec + MxdbgInlineSiteNameOff) as ByteOffset, length: imageReadU32(self.image, at: rec + MxdbgInlineSiteNameLen) as BytePos), parent: MxdbgInlineSiteLookup.none if parent == MxdbgNoParentSite else MxdbgInlineSiteLookup.site(parent))
+	end 'inlineSite'
+
+	// The innermost spliced body `codeOffset` lies in, or none — a binary search over ranges that are
+	// disjoint and ascend, so the greatest start not past the offset is the only candidate.
+	export function inlineSiteContaining(codeOffset MxdbgCodeOffset) returns MxdbgInlineSiteLookup
+		var lo = 0 as MxdbgIndex
+		var hi = self.inlineRangeTally
+
+		while lo < hi 'partition'
+			let mid = lo + ((hi - lo) shr 1)
+
+			if (self.inlineRangeField(mid, field: MxdbgInlineRangeCodeStart) as MxdbgCodeOffset) > codeOffset 'startsPastIt'
+				hi = mid
+			end 'startsPastIt' else 'startsAtOrBeforeIt'
+				lo = mid + 1
+			end 'startsAtOrBeforeIt'
+		end 'partition'
+
+		if lo == 0 'beforeEveryRange'
+			return MxdbgInlineSiteLookup.none
+		end 'beforeEveryRange'
+
+		if codeOffset >= (self.inlineRangeField(lo - 1, field: MxdbgInlineRangeCodeEnd) as MxdbgCodeOffset) 'inAGap'
+			return MxdbgInlineSiteLookup.none
+		end 'inAGap'
+
+		return MxdbgInlineSiteLookup.site(self.inlineRangeField(lo - 1, field: MxdbgInlineRangeSite))
+	end 'inlineSiteContaining'
+
+	export function inlineRangeStart(index MxdbgIndex) returns MxdbgCodeOffset
+		if index >= self.inlineRangeTally 'noSuchRange'
+			panic("MxdbgReader.inlineRangeStart: range {index} is past the sidecar's {self.inlineRangeTally} — every caller bounds itself by `inlineRangeCount`")
+		end 'noSuchRange'
+
+		return self.inlineRangeField(index, field: MxdbgInlineRangeCodeStart) as MxdbgCodeOffset
+	end 'inlineRangeStart'
+
+	function inlineRangeField(index MxdbgIndex, field ByteOffset) returns MxdbgIndex
+		return imageReadU32(self.image, at: self.inlineRangeTableOff + (index * MxdbgInlineRangeEntrySize) as ByteOffset + field) as MxdbgIndex
+	end 'inlineRangeField'
 
 	export function typeRecord(index MxdbgIndex) returns MxdbgTypeInfo
 		if index >= self.typeTally 'noSuchType'

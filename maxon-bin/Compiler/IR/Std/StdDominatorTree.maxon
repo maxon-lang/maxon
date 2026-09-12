@@ -487,15 +487,19 @@ type RpoOrder
 	end 'copyOfReachableNonEntryBlocks'
 end 'RpoOrder'
 
-// The CFG of one Std function as a CSR adjacency over block POSITIONS.
+// The CFG of one Std function as a CSR adjacency over block POSITIONS: exactly the edges the blocks'
+// terminator ops name (`collectStdBlockSuccessorIds`).
 //
-// ⚠ **A BLOCK WITH NO TERMINATOR OP FALLS THROUGH PHYSICALLY, AND THE OPS-DERIVED CFG CANNOT SEE THAT
-// EDGE** — `EC11`'s finding, which `foldConstants.dropUnreachableBlocks` states and takes the same cure
-// for. Here the consequence of missing it would be worse than a stale reachability bit: an edge left out
-// makes dominance STRONGER than it is, and a pass would then treat a value as available on a path that
-// does not carry it. An edge added that does not exist only makes dominance weaker, which costs a missed
-// optimization and nothing else — so the fall-through is added unconditionally where a block has no
-// terminator op and a physical successor.
+// ⚠ **A BLOCK WITHOUT A TERMINATOR OP HAS NO SUCCESSOR HERE, AND THAT IS THE ONE RULE THIS TIER AND THE
+// TARGET TIER SHARE.** The only such Std block is a `Terminator.dead` one — terminated by declaration
+// (`IrBlock.isTerminated`), which no execution enters: the parser's continuation after a diverging
+// construct, or an exhaustive `match`'s miss target, which its dispatch names and every value passes by.
+// The Target tier's `collectBlockSuccessorIds` gives it no exit either; the physical fall-through a
+// block without a terminator op takes exists only there, after jump elision, where `BranchCleanup` models
+// it. A "physical" edge out of a dead block into the block minted after it is not a conservative extra:
+// it hands a `match` dispatch test a second predecessor from a block that can only be reached through it,
+// which `NaturalLoops` reads as a back edge, and the member set of that phantom loop is everything from
+// the dispatch to the block before it — one walk of the function per `match`.
 module function buildStdSuccessorGraph(module StdModule, func IrFunction, blockCount BlockRefIndex) returns CsrGraph
 	var edgeFrom = CsrColumn.create()
 	var edgeTo = CsrColumn.create()
@@ -518,11 +522,6 @@ module function buildStdSuccessorGraph(module StdModule, func IrFunction, blockC
 			edgeFrom.push(position)
 			edgeTo.push(successor)
 		end 'eachSuccessor'
-
-		if not block.hasTerminatorOp() and position + 1 < blockCount 'fallsThroughPhysically'
-			edgeFrom.push(position)
-			edgeTo.push(position + 1)
-		end 'fallsThroughPhysically'
 	end 'eachBlock'
 
 	return buildCsr(edgeFrom, to: edgeTo, nodeCount: blockCount as CsrIndex)

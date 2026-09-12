@@ -2567,10 +2567,14 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThrea
 	// Where this chunk's coverage counters land — the x64 backend's channel, filled the same way.
 	var covOffsets = CovPointOffsetArray.create()
 
+	// The code range of every run of blocks under one inline site — x64's channel, read off the block loop.
+	var inlineRanges = InlineRangeBuilder.create()
+
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("emitArm64FunctionChunk: blockRef from func.blockRefs not in module.blocks")
 
-		blockOffsets.place(block.id, value: code.count())
+		let blockStart = code.count()
+		blockOffsets.place(block.id, value: blockStart)
 
 		// ⭐ THE GREEN-THREAD STACK GUARD, at the very START of a guarded function's entry block — BEFORE the
 		// prologue — so a green thread whose stack would overflow grows and relocates it first. It is EXEMPT
@@ -2602,6 +2606,8 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThrea
 			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("emitArm64FunctionChunk: terminator not in module.ops")
 			emitArm64TargetOp(termOp, code: code, covOffsets: covOffsets, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, funcAdrpRelocs: funcAdrpRelocs, branchFixups: branchFixups, jumpTables: jumpTables, greenThreads: greenThreads)
 		end 'hasTerm'
+
+		inlineRanges.note(block.inlineSite, codeStart: blockStart, codeEnd: code.count())
 	end 'eachBlock'
 
 	arm64ResolveBlockBranches(code, blockOffsets: blockOffsets, fixups: branchFixups)
@@ -2618,6 +2624,7 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThrea
 	// empty for an ordinary build because no `covInc` was emitted to fill it. Dropping it would leave every
 	// point ELIMINATED in the sidecar while the binary was faithfully counting.
 	chunk.covPointOffsets = covOffsets
+	carryInlineFrames(chunk, func: func, ranges: inlineRanges)
 
 	if captureSpans 'debugInfo'
 		chunk.lineRows = lineRows.rows
@@ -2704,10 +2711,11 @@ function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModul
 	var debugFunctions = DebugFunctionRangeArray.create()
 	var debugLineRows = DebugLineRowArray.create()
 	var covPointOffsets = CovPointOffsetArray.create()
+	var inlineFrames = InlineFrameTables.create()
 
 	// A label claimed twice is a wrong `.text` address, never a near miss — see `recordChunkLabel`, which
-	// owns the rule and the refusal for both native backends. `__symtable` goes through the same door
-	// after the loop.
+	// owns the rule and the refusal for both native backends. `__symtable` and `__inlframes` go through
+	// the same door after the loop.
 	var labelsLaid = 0 as ChunkLabelCount
 
 	for chunk in chunks 'eachChunk'
@@ -2715,6 +2723,7 @@ function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModul
 		try recordChunkLabel(labelOffsets, name: chunk.funcName, offset: funcStart, laidOut: labelsLaid, project: project, funcNames: funcNames)
 		labelsLaid = labelsLaid + 1
 		recordChunkSymbol(debugSymbols, chunk: chunk, codeOffset: funcStart)
+		inlineFrames.appendChunk(chunk, funcStart: funcStart)
 
 		if captureSpans 'debugInfo'
 			foldChunkDebugInfo(chunk, funcStart: funcStart, functions: debugFunctions, lineRows: debugLineRows, covPointOffsets: covPointOffsets)
@@ -2766,7 +2775,14 @@ function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModul
 	// a second claim would move the bound `textSize` reads, silently mis-sizing every backtrace.
 	padTo(code, size: alignUp(code.count(), alignment: SymbolTableAlignment))
 	try recordChunkLabel(labelOffsets, name: SymbolTableName, offset: code.count(), laidOut: labelsLaid, project: project, funcNames: funcNames)
+	labelsLaid = labelsLaid + 1
 	code.append(buildSymbolTableBytes(debugSymbols))
+
+	// The inline frame tables follow `__symtable`'s names under their own label (`BacktraceFormat`), past the
+	// `[mrt_start, __symtable)` window the walkers symbolize in — x64's concat lays them out the same way.
+	padTo(code, size: alignUp(code.count(), alignment: SymbolTableAlignment))
+	try recordChunkLabel(labelOffsets, name: InlineFrameTableName, offset: code.count(), laidOut: labelsLaid, project: project, funcNames: funcNames)
+	code.append(buildInlineFrameTableBytes(inlineFrames))
 
 	arm64ResolveCallFixups(code, labelOffsets: labelOffsets, callFixups: callFixups)
 	arm64ResolveFuncAdrpRelocs(funcAdrpRelocs, labelOffsets: labelOffsets)
@@ -2785,6 +2801,8 @@ function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModul
 	result.dataPrelude = globalData.dataSectionImage()
 	result.arm64FuncAdrpRelocs = funcAdrpRelocs
 	result.jumpTableRelocs = jumpTableRelocs
+	result.inlineSites = inlineFrames.sites
+	result.inlineRanges = inlineFrames.ranges
 
 	// The chunks' own PRE-LINK bytes, for the one reader `code` cannot serve: a ```RequiredRuntime
 	// golden over a hand-assembled chunk (here, the entry stub — arm64 builds it as bytes, not as a

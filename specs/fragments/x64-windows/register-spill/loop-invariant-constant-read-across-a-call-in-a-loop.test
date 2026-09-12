@@ -34,63 +34,51 @@ typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
-func @loopConst {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 rax, 1000
-    x64.leaRegRegImm32 rdx, rcx, 1
-    x64.leaRegRegImm32 rsi, rcx, 2
-    x64.leaRegRegImm32 rdi, rcx, 3
-    x64.leaRegRegImm32 r8, rcx, 4
-    x64.leaRegRegImm32 rcx, rcx, 5
-    x64.movRegImm32 r9, 0
-    x64.movRegImm32 r10, 0
-  whilehdr:
-    x64.cmpRegImm32 r10, 3
-    x64.jcc greaterEqual, whileexit
-  loop:
-    x64.leaRegRegReg r9, r9, rdx
-    x64.leaRegRegReg r9, r9, rsi
-    x64.leaRegRegReg r9, r9, rdi
-    x64.leaRegRegReg r9, r9, r8
-    x64.leaRegRegReg r9, r9, rcx
-    x64.movRegReg r11, rax
-    x64.subRegReg r11, rax, r10
-  __il_cont:
-    x64.leaRegRegReg r9, r9, r11
-    x64.leaRegRegReg r9, r9, r11
-    x64.leaRegRegReg r9, r9, r10
-    x64.leaRegRegReg r9, r9, rdx
-    x64.leaRegRegReg r9, r9, rsi
-    x64.leaRegRegReg r9, r9, rdi
-    x64.leaRegRegReg r9, r9, r8
-    x64.leaRegRegReg r9, r9, rcx
-    x64.leaRegRegImm32 r10, r10, 1
-    x64.jmp whilehdr
-  whileexit:
-    x64.movRegReg r8, r9
-    x64.popReg rbp
-    x64.ret
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
 }
 
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
+  __il_body:
+    x64.movRegImm32 rax, 1000
     x64.movRegImm32 rcx, 0
-    x64.callDirect loopConst
-    x64.cmpRegImm32 r8, 6087
+    x64.movRegImm32 rdx, 0
+    x64.jmp whilehdr
+  loop:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.leaRegRegImm32 rcx, rcx, 2
+    x64.leaRegRegImm32 rcx, rcx, 3
+    x64.leaRegRegImm32 rcx, rcx, 4
+    x64.leaRegRegImm32 rcx, rcx, 5
+    x64.movRegReg rsi, rax
+    x64.subRegReg rsi, rax, rdx
+  __il_cont#8:
+    x64.leaRegRegReg rcx, rcx, rsi
+    x64.leaRegRegReg rcx, rcx, rsi
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.leaRegRegImm32 rcx, rcx, 2
+    x64.leaRegRegImm32 rcx, rcx, 3
+    x64.leaRegRegImm32 rcx, rcx, 4
+    x64.leaRegRegImm32 rcx, rcx, 5
+    x64.leaRegRegImm32 rdx, rdx, 1
+  whilehdr:
+    x64.cmpRegImm32 rdx, 3
+    x64.jcc less, loop
+  __il_cont#3:
+    x64.cmpRegImm32 rcx, 6087
     x64.jcc notEqual, ifcont
   ok:
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 r8, 99
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

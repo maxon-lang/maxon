@@ -1,0 +1,183 @@
+// Test: a-void-called-once-function-with-stores
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function fillSquares(a IntArray, n Integer)
+	for i in 0 upto n 'each'
+		try a.set(i, value: i * i) otherwise panic("fillSquares: i < n = a.count()")
+	end 'each'
+end 'fillSquares'
+
+function main() returns ExitCode
+	let n = 5
+	var a = IntArray.create()
+	a.resize(n)
+	fillSquares(a, n: n)
+	let fourth = try a.get(4) otherwise panic("main: n = 5")
+	let third = try a.get(3) otherwise panic("main: n = 5")
+	return (fourth + third) as ExitCode
+end 'main'
+---
+ExitCode: 25
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 64
+    x64.movRegImm32 rbx, 5
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect __managed_resize
+  __il_body:
+    x64.movRegImm32 rdx, 0
+  __us_test#41:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, forhdr#16
+  __us_test#42:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, forhdr#16
+  __us_test#43:
+    x64.leaRegRegImm32 rsi, rcx, -24
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, forhdr#16
+    x64.jmp forhdr#30
+  each#17:
+    x64.movRegReg rax, rdx
+    x64.imulRegReg rax, rdx, rdx
+  __rc_ok#22:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __im_slow#25
+  __im_bounds#26:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 8]
+    x64.cmpRegReg rdx, rcx
+    x64.jcc aboveEqual, __im_slow#25
+  __im_buffer:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_slow#25
+  __im_viewed:
+    x64.leaRegRegImm32 rsi, rcx, -24
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, __im_slow#25
+  __im_store#29:
+    x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], rax
+  forstep#18:
+    x64.leaRegRegImm32 rdx, rdx, 1
+  forhdr#16:
+    x64.cmpRegImm32 rdx, 5
+    x64.jcc less, each#17
+    x64.jmp __il_cont
+  each#40:
+    x64.movRegReg rsi, rdx
+    x64.imulRegReg rsi, rdx, rdx
+  __im_bounds#38:
+    x64.cmpRegReg rdx, rax
+    x64.jcc aboveEqual, __im_slow#34
+  __im_store#35:
+    x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], rsi
+  forstep#31:
+    x64.leaRegRegImm32 rdx, rdx, 1
+  forhdr#30:
+    x64.cmpRegImm32 rdx, 5
+    x64.jcc less, each#40
+  __il_cont:
+    x64.movRegImm32 rdx, 4
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegImm32 rax, 4
+    x64.jcc belowEqual, __im_slow#9
+  __im_load#10:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
+    x64.movRegReg r8, rax
+  __im_load#13:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.leaRegRegImm32 rax, rax, 24
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+  tryok:
+    x64.leaRegRegReg rbx, r8, rax
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok#5:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 64
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#25:
+    x64.storeSlotReg slot0, rdx
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_set
+    x64.loadRegSlot rdx, slot0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#21
+    x64.jmp forstep#18
+  __im_slow#34:
+    x64.storeSlotReg slot1, rax
+    x64.storeSlotReg slot2, rcx
+    x64.storeSlotReg slot0, rdx
+    x64.movRegReg rcx, r12
+    x64.movRegReg rax, rsi
+    x64.callDirect __managed_set
+    x64.loadRegSlot rax, slot1
+    x64.loadRegSlot rcx, slot2
+    x64.loadRegSlot rdx, slot0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, forstep#31
+  tryerr#21:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-void-called-once-function-with-stores.test:7: fillSquares: i < n = a.count()\x0a"
+    x64.callDirect mrt_panic
+    x64.jmp __il_cont
+  __im_slow#9:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __im_load#13
+  tryerr#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-void-called-once-function-with-stores.test:16: main: n = 5\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 64
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at a-void-called-once-function-with-stores.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 64
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

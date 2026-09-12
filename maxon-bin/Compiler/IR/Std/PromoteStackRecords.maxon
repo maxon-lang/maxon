@@ -267,10 +267,6 @@ let MmAllocArgCount = 2 as ParamCount
 // `__mm_decref(ptr)` takes exactly one.
 let MmDecrefArgCount = 1 as ParamCount
 
-// The `destructor` argument of a record whose drop is nothing but the free: no managed field to release, so
-// no `__destruct_<T>` cascade. THE one value this pass will promote (see the header).
-let TrivialDestructor = 0 as ParsedInt
-
 // ⭐ **THE PASS.** Whole-module: the constructor table and the parameter-escape summary are both facts about
 // the call graph, and a call site cannot be judged without them.
 export function promoteStackRecords(project Project, module StdModule, usesGreenThreads bool)
@@ -1531,9 +1527,7 @@ end 'recordIsFrameLocal'
 // allocation to free, and `__mm_decref` on a frame address would run `__mm_free`'s poison fill across live
 // stack memory.
 function applyPromotions(module StdModule, func IrFunction, valueBound ValueId, plans RecordPromotionArray)
-	// `ValueMinter.create` is seeded with the first FREE id, which for a synthesized function is its
-	// parameter count and here is the whole value space — the same meaning, a different way of knowing it.
-	var mint = ValueMinter.create(valueBound as ParamCount)
+	var mint = ValueMinter.resuming(valueBound)
 
 	// ⚠ THE PLANS ARE KEYED BY OP INDEX, not scanned per op. Walked as a list inside the rebuild, the
 	// rewrite is Θ(ops × promotions) — and a function that builds many records is exactly the one with many

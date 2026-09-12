@@ -83,14 +83,15 @@ type RegAllocUnitBlock
 	export var id as BlockId
 	export var label as ByteArray
 	export var heat as BlockHeat
+	export var inlineSite as InlineSiteRef
 	export var body as TargetOpArray
 	export var terminator as UnitTerminator
 	export var condBranch as UnitCondBranch
 	export var blockArgIds as ValueIdArray
 	export var edges as UnitEdgeArray
 
-	export static function create(id BlockId, label ByteArray, heat BlockHeat, body TargetOpArray, terminator UnitTerminator, condBranch UnitCondBranch, blockArgIds ValueIdArray, edges UnitEdgeArray) returns RegAllocUnitBlock
-		return Self{id: id, label: label, heat: heat, body: body, terminator: terminator, condBranch: condBranch, blockArgIds: blockArgIds, edges: edges}
+	export static function create(id BlockId, label ByteArray, heat BlockHeat, inlineSite InlineSiteRef, body TargetOpArray, terminator UnitTerminator, condBranch UnitCondBranch, blockArgIds ValueIdArray, edges UnitEdgeArray) returns RegAllocUnitBlock
+		return Self{id: id, label: label, heat: heat, inlineSite: inlineSite, body: body, terminator: terminator, condBranch: condBranch, blockArgIds: blockArgIds, edges: edges}
 	end 'create'
 end 'RegAllocUnitBlock'
 
@@ -265,7 +266,7 @@ function extractUnitBlock(module TargetModule, block IrBlock) returns RegAllocUn
 		edges.push(UnitEdge.create(edge.targetBlockId, argIds: edge.argIds.clone()))
 	end 'eachEdge'
 
-	return RegAllocUnitBlock.create(block.id, label: block.label.clone(), heat: block.heat, body: body.ops, terminator: unitTerminatorOf(module, block: block, moduleKeepsOps: true), condBranch: body.condBranch(), blockArgIds: blockArgIds, edges: edges)
+	return RegAllocUnitBlock.create(block.id, label: block.label.clone(), heat: block.heat, inlineSite: copiedInlineSite(block.inlineSite), body: body.ops, terminator: unitTerminatorOf(module, block: block, moduleKeepsOps: true), condBranch: body.condBranch(), blockArgIds: blockArgIds, edges: edges)
 end 'extractUnitBlock'
 
 // One block's spans, in the order `liveOpIndices` reports them — the body, then the terminator when the
@@ -498,7 +499,7 @@ function rebuildUnitModule(unit RegAllocUnit) returns TargetModule
 
 	for unitBlock in unit.blocks 'eachBlock'
 		let blockRef = module.blocks.count()
-		var block = IrBlock.create(unitBlock.id, label: unitBlock.label, heat: unitBlock.heat)
+		var block = IrBlock.create(unitBlock.id, label: unitBlock.label, heat: unitBlock.heat, inlineSite: copiedInlineSite(unitBlock.inlineSite))
 		module.pushBlock(block)
 		func.blockRefs.push(blockRef)
 		spanAt = fillRebuiltBlock(module, block: block, unitBlock: unitBlock, spanIds: unit.spanIds, spanAt: spanAt)

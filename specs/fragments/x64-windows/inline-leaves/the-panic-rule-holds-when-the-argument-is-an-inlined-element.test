@@ -21,30 +21,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
-}
-
-func @clampPct {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 rcx, 100
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at the-panic-rule-holds-when-the-argument-is-an-inlined-element.test:4: Range check failed: value outside typealias 'Percent'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegReg r8, rcx
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -66,49 +45,51 @@ func @main {
     x64.storeBaseDispReg.word64 [r8 + 24], rax
     x64.movRegImm32 rbx, 0
     x64.movRegImm32 rax, 0
-  forhdr:
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 8]
-    x64.cmpRegReg rax, rcx
-    x64.jcc greaterEqual, forexit
+    x64.jmp forhdr
   each:
     x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
     x64.loadRegBaseIndexScale.word64 rcx, [rcx + rax*8 + 0]
   __il_body:
     x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __il_slow
-  __rc_chk#12:
+    x64.jcc less, __rc_panic#12
+  __rc_chk#13:
     x64.cmpRegImm32 rcx, 100
-    x64.jcc lessEqual, forstep
-  __il_slow:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, r8
-    x64.callDirect clampPct
-    x64.movRegReg rcx, r8
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot r8, slot1
+    x64.jcc greater, __rc_panic#12
   forstep:
     x64.leaRegRegImm32 rax, rax, 1
     x64.movRegReg rbx, rcx
-    x64.jmp forhdr
+  forhdr:
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 8]
+    x64.cmpRegReg rax, rcx
+    x64.jcc less, each
   forexit:
     x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic
+    x64.jcc less, __rc_panic#6
   __rc_chk#7:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at the-panic-rule-holds-when-the-argument-is-an-inlined-element.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 56
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc greater, __rc_panic#6
   __rc_ok:
     x64.movRegReg rcx, r8
     x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
+    x64.epilogue 56
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#12:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, r8
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at the-panic-rule-holds-when-the-argument-is-an-inlined-element.test:4: Range check failed: value outside typealias 'Percent'\x0a"
+    x64.callDirect mrt_panic
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot r8, slot1
+    x64.movRegImm32 rcx, 0
+    x64.jmp forstep
+  __rc_panic#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at the-panic-rule-holds-when-the-argument-is-an-inlined-element.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 56
     x64.popReg rbx
     x64.popReg rbp

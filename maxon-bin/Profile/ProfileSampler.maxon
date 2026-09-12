@@ -375,6 +375,31 @@
 		end 'lookup'
 	end 'profileFunctionNameAt'
 
+	// ⭐ **ONE PHYSICAL FRAME IS AS MANY PROFILE FRAMES AS THE CODE AT `offset` HAS CALLEES SPLICED INTO
+	// IT.** A body the inliner spliced away has no frame of its own, so the chain alone would credit its
+	// caller with its time and lose the level a report ranks by. The sidecar's inline tables name the
+	// innermost spliced body first — where self time goes — then each body it nests under, then the
+	// function whose frame this is, exactly as the panic runtime prints the same frame.
+	function pushProfileFramesAt(frames ProfileStringArray, image ProfileImage, offset MxdbgCodeOffset)
+		var site = image.sidecar.inlineSiteContaining(offset)
+
+		while true 'eachSpliceOutwards'
+			match site 's'
+				none then break 'eachSpliceOutwards'
+				site(index) then site = pushInlineSiteFrame(frames, image: image, index: index)
+			end 's'
+		end 'eachSpliceOutwards'
+
+		frames.push(profileFunctionNameAt(image, offset: offset))
+	end 'pushProfileFramesAt'
+
+	// Push one spliced body's name and answer the site it nests under.
+	function pushInlineSiteFrame(frames ProfileStringArray, image ProfileImage, index MxdbgIndex) returns MxdbgInlineSiteLookup
+		let site = image.sidecar.inlineSite(index)
+		frames.push(site.name)
+		return site.parent
+	end 'pushInlineSiteFrame'
+
 	// ⭐ **ONLY THE LEAF EARNS A FOREIGN PLACEHOLDER.** Above the leaf, leaving `.text` is simply where our
 	// code ends — the outermost Maxon frame returns into the C runtime or the thread starter — so stopping
 	// there is what makes a stack's root its entry function rather than a symbol we cannot name. At the LEAF
@@ -420,7 +445,7 @@
 			return false
 		end 'foreignLeaf'
 
-		frames.push(profileFunctionNameAt(image, offset: (leafPc - image.textBase) as MxdbgCodeOffset))
+		pushProfileFramesAt(frames, image: image, offset: (leafPc - image.textBase) as MxdbgCodeOffset)
 
 		if windowBytes < ProfileFrameLinkBytes 'nothingToWalk'
 			return false
@@ -453,7 +478,7 @@
 			// ⭐ A frame above the leaf is a RETURN address, so it resolves through the ONE call-site bias
 			// this tree states — without it, a call that is a function's last instruction names the function
 			// AFTER it.
-			frames.push(profileFunctionNameAt(image, offset: profileCallSiteLookup((returnAddress - image.textBase) as MxdbgCodeOffset)))
+			pushProfileFramesAt(frames, image: image, offset: profileCallSiteLookup((returnAddress - image.textBase) as MxdbgCodeOffset))
 			walked = walked + 1
 
 			if savedFp <= fp 'notGrowingOutwards'

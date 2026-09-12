@@ -259,7 +259,7 @@ module typealias ChunkLabelCount = int(0 to u64.max)
 //
 // ⚠ **AND `FunctionNameIndex` CANNOT COVER IT, WHICH IS WHY THE CHECK LIVES HERE.** These names are not
 // a module's function names: the chunk list is every Std function PLUS the entry stub PLUS the
-// hand-assembled runtime chunks (`mrt_*`, `__gt_*`) PLUS `__symtable` — and the last three are minted at
+// hand-assembled runtime chunks (`mrt_*`, `__gt_*`) PLUS `__symtable` and `__inlframes` — and the last three are minted at
 // the TARGET tier, after the last index any Std pass can build. Which of them exist depends on the target
 // and on `RuntimeUsage`, so the set cannot be PREDICTED upstream; it can only be NOTICED here, at the one
 // place that decides the layout. That is A1t's lesson (a collision is something to notice, never
@@ -286,7 +286,7 @@ end 'recordChunkLabel'
 function refuseDuplicateChunkName(name ByteArray, project Project, funcNames FunctionNameIndex) throws CompileError
 	let spelled = String.from(name)
 	let declared = try funcNames.funcNamed(name) otherwise 'noModuleFunction'
-		panic("refuseDuplicateChunkName: two chunks are laid out under '{spelled}' and NEITHER is a Std function, so both were minted at the Target tier — the entry stub, a hand-assembled runtime chunk, or `__symtable`. Each of those is appended at exactly one site, so this is an augmentation that ran twice")
+		panic("refuseDuplicateChunkName: two chunks are laid out under '{spelled}' and NEITHER is a Std function, so both were minted at the Target tier — the entry stub, a hand-assembled runtime chunk, `__symtable` or `__inlframes`. Each of those is appended at exactly one site, so this is an augmentation that ran twice")
 	end 'noModuleFunction'
 
 	if declared.sourceFilePath.isEmpty() 'bothSynthesized'

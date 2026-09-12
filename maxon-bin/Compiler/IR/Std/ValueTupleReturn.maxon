@@ -64,6 +64,15 @@
 // alias), and while the call-site test above refuses every site that observes it, widening this pass to
 // user records is a different rung with a different acceptance.
 //
+// ⭐ **THE THIRD SHAPE IS BOTH ENDS IN ONE FRAME.** A called-once callee is spliced into its caller
+// (`InlineLeaves`), so a fresh pair the callee minted and the loads-then-drop the caller did are now one
+// function's ops with no call between them: `__mm_alloc`, the two half stores, whole-slot loads of the
+// halves, and the one trivial `__mm_decref`. Nothing else sees the box, so it is deleted outright and every
+// load reads the STORED value — the same ownership argument as the fresh literal, with no register to
+// cross. It asks one thing more than the other two: the box's destructor is the trivial one, because here
+// the drop being deleted is the drop that would have run it. A function holding such a box is analysed
+// whether or not it returns a tuple or calls a candidate.
+//
 // Scheduled last in `PassPipeline.buildLoweringPasses`, after `promoteStackRecords`, so every shape it
 // matches is the final one — a record a promotion already turned into frame storage is no longer a call
 // this pass can see, and the two therefore cannot both claim one site.
@@ -83,6 +92,7 @@ typealias DoomedOpSet = Set with OpIndex
 // `LayoutDescriptor` gives a record of two word-sized fields.
 let LowHalfOffset = 0 as ByteOffset
 let HighHalfOffset = MachineWordBytes
+let PairBytes = HighHalfOffset + MachineWordBytes
 
 // `__mm_alloc(size, destructor)` — plus a trace tag in a `--debugstream` build, which this pass reads
 // past: it deletes the allocation, so the tag loses its reader with it.
@@ -165,6 +175,12 @@ type TupleValueRow
 	export function isAnUnsharedFreshPair() returns bool
 		return self.storeLow == 1 and self.storeHigh == 1 and self.returnUses == 1 and self.loadLow == 0 and self.loadHigh == 0 and self.trivialDrops == 0 and self.other == 0
 	end 'isAnUnsharedFreshPair'
+
+	// The FRAME-LOCAL shape: built, read by whole-slot loads only, and dropped once, all in one frame. Any
+	// number of loads — each becomes a read of the stored value.
+	export function isAFrameLocalPair() returns bool
+		return self.storeLow == 1 and self.storeHigh == 1 and self.trivialDrops == 1 and self.returnUses == 0 and self.other == 0
+	end 'isAFrameLocalPair'
 
 	// The CALL-SITE shape that needs no record: the halves are read out and the box is released by the one
 	// trivial decref. Zero loads is admitted — a result nobody reads still costs the call.
@@ -311,28 +327,25 @@ export function applyValueTupleReturn(project Project, module StdModule)
 end 'applyValueTupleReturn'
 
 function convertWithNameIndex(project Project, module StdModule, byName FunctionNameIndex)
-	// PHASE 1 — the structural candidates. Most programs have none, and then nothing below runs.
+	// PHASE 1 — the structural candidates, and one analysis per function a verdict can turn on or that
+	// holds a frame-local pair.
 	var onTheConvention = collectCandidates(project, module: module)
-
-	if not anyCandidate(onTheConvention) 'noTupleReturningFunction'
-		return
-	end 'noTupleReturningFunction'
-
-	// PHASE 2 — one analysis per function a verdict can turn on, and the two verdict lists read off it.
 	let flows = analyseAffectedFunctions(module, byName: byName, onTheConvention: onTheConvention)
-	let retVerdicts = collectRetVerdicts(module, flows: flows, onTheConvention: onTheConvention)
-	let callSites = collectCallSites(module, byName: byName, flows: flows, onTheConvention: onTheConvention)
 
-	// PHASE 3 — remove every candidate one of those lists refuses, until nothing changes.
-	settleTheConvention(onTheConvention, retVerdicts: retVerdicts, callSites: callSites)
+	// PHASES 2 and 3 — the two verdict lists, and the fixpoint that removes every candidate one of them
+	// refuses. Only where a candidate exists: a frame-local pair needs no convention and is rewritten
+	// from its flow alone.
+	if anyCandidate(onTheConvention) 'aCandidateExists'
+		let retVerdicts = collectRetVerdicts(module, flows: flows, onTheConvention: onTheConvention)
+		let callSites = collectCallSites(module, byName: byName, flows: flows, onTheConvention: onTheConvention)
+		settleTheConvention(onTheConvention, retVerdicts: retVerdicts, callSites: callSites)
+	end 'aCandidateExists'
 
-	if not anyCandidate(onTheConvention) 'everyCandidateWasRefused'
-		return
-	end 'everyCandidateWasRefused'
-
-	// PHASE 4 — stamp the bit the ABI readers ask, then rewrite both ends against it.
-	logTheSettledConvention(module, onTheConvention: onTheConvention)
-	stampTheConvention(module, onTheConvention: onTheConvention)
+	// PHASE 4 — stamp the bit the ABI readers ask, then rewrite every analysed function.
+	if anyCandidate(onTheConvention) 'someCandidateKeptIt'
+		logTheSettledConvention(module, onTheConvention: onTheConvention)
+		stampTheConvention(module, onTheConvention: onTheConvention)
+	end 'someCandidateKeptIt'
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		let flow = try flowOf(flows, funcIndex: funcIndex) otherwise continue
@@ -596,17 +609,90 @@ function analyseAffectedFunctions(module StdModule, byName FunctionNameIndex, on
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		let func = module.getFunc(funcIndex)
 		module.collectLiveOpIndices(func, into: liveOps)
+		let consts = constantsFeedingAllocations(module, liveOps: liveOps)
 
-		if not isOnTheConvention(onTheConvention, funcIndex: funcIndex) and not callsACandidate(module, liveOps: liveOps, byName: byName, onTheConvention: onTheConvention) 'nothingToJudgeHere'
+		if not isOnTheConvention(onTheConvention, funcIndex: funcIndex) and not callsACandidate(module, liveOps: liveOps, byName: byName, onTheConvention: onTheConvention) and not allocatesATwoWordTrivialBox(module, liveOps: liveOps, consts: consts) 'nothingToJudgeHere'
 			flows.push(FunctionTupleFlowSlot.absent)
 			continue
 		end 'nothingToJudgeHere'
 
-		flows.push(FunctionTupleFlowSlot.present(analyseOneFunction(module, func: func, liveOps: liveOps, byName: byName, onTheConvention: onTheConvention)))
+		flows.push(FunctionTupleFlowSlot.present(analyseOneFunction(module, func: func, liveOps: liveOps, byName: byName, onTheConvention: onTheConvention, consts: consts)))
 	end 'eachFunc'
 
 	return flows
 end 'analyseAffectedFunctions'
+
+// The constants a function's `__mm_alloc` calls read — the size and the destructor — and nothing else:
+// most functions allocate nothing, and those pay one scan and no map.
+function constantsFeedingAllocations(module StdModule, liveOps OpIndexArray) returns ConstValueMap
+	var consts = ConstValueMap.create()
+	var call = StdCallOperands.create()
+
+	if not anyAllocation(module, liveOps: liveOps, call: call) 'nothingToSize'
+		return consts
+	end 'nothingToSize'
+
+	var def = StdFoldableDef.create()
+
+	for opIdx in liveOps 'eachConst'
+		classifyFoldableDef(try module.ops.get(opIdx) otherwise panic("constantsFeedingAllocations: live op index {opIdx} not in module.ops"), def: def)
+
+		if def.isConstDef() 'aConstant'
+			consts.upsert(def.definedId, value: def.constant)
+		end 'aConstant'
+	end 'eachConst'
+
+	return consts
+end 'constantsFeedingAllocations'
+
+function anyAllocation(module StdModule, liveOps OpIndexArray, call StdCallOperands) returns bool
+	for opIdx in liveOps 'eachOp'
+		classifyCallOperands(try module.ops.get(opIdx) otherwise panic("anyAllocation: live op index {opIdx} not in module.ops"), call: call)
+
+		if call.namesACallee() and call.callee.equals(MmAllocName) 'allocates'
+			return true
+		end 'allocates'
+	end 'eachOp'
+
+	return false
+end 'anyAllocation'
+
+function allocatesATwoWordTrivialBox(module StdModule, liveOps OpIndexArray, consts ConstValueMap) returns bool
+	if consts.isEmpty() 'allocatesNothing'
+		return false
+	end 'allocatesNothing'
+
+	var call = StdCallOperands.create()
+
+	for opIdx in liveOps 'eachOp'
+		classifyCallOperands(try module.ops.get(opIdx) otherwise panic("allocatesATwoWordTrivialBox: live op index {opIdx} not in module.ops"), call: call)
+
+		if call.namesACallee() and isATwoWordTrivialBox(call.callee, argCount: call.argCount, sizeId: call.firstArg, destructorId: call.secondArg, consts: consts) 'found'
+			return true
+		end 'found'
+	end 'eachOp'
+
+	return false
+end 'allocatesATwoWordTrivialBox'
+
+// An `__mm_alloc` of exactly two machine words with the trivial destructor — the box a frame-local pair
+// lives in. The destructor matters HERE and nowhere else in this pass: the frame-local rewrite deletes the
+// drop that would have run it, where the two convention shapes hand the drop to the caller untouched.
+function isATwoWordTrivialBox(callee ByteArray, argCount ParamCount, sizeId ValueId, destructorId ValueId, consts ConstValueMap) returns bool
+	if not callee.equals(MmAllocName) or argCount < MmAllocMinArgCount 'notAnAllocation'
+		return false
+	end 'notAnAllocation'
+
+	if not consts.contains(sizeId) or not consts.contains(destructorId) 'notConstantlySized'
+		return false
+	end 'notConstantlySized'
+
+	return consts.constantOf(sizeId) == (PairBytes as ParsedInt) and consts.constantOf(destructorId) == TrivialDestructor
+end 'isATwoWordTrivialBox'
+
+function allocArg(args ValueIdArray, index ParamCount) returns ValueId
+	return try args.get(index) otherwise panic("allocArg: args.get({index}) OOB on an `__mm_alloc` of at least two arguments")
+end 'allocArg'
 
 function isOnTheConvention(onTheConvention BoolArray, funcIndex FuncIndex) returns bool
 	return try onTheConvention.get(funcIndex) otherwise panic("isOnTheConvention: onTheConvention.get OOB at {funcIndex} — the column has one entry per module function")
@@ -755,7 +841,7 @@ end 'isCandidateCallee'
 // candidates — so no later reader can meet a value whose row does not exist yet. Then every op and every
 // BRANCH EDGE is read once. A read the classifier has no arm for lands in `other`, which refuses the
 // value, so an op variant appended tomorrow costs a missed rewrite and never a wrong one.
-function analyseOneFunction(module StdModule, func IrFunction, liveOps OpIndexArray, byName FunctionNameIndex, onTheConvention BoolArray) returns FunctionTupleFlow
+function analyseOneFunction(module StdModule, func IrFunction, liveOps OpIndexArray, byName FunctionNameIndex, onTheConvention BoolArray, consts ConstValueMap) returns FunctionTupleFlow
 	var flow = FunctionTupleFlow.create(nextFreeValueId(module, func: func))
 
 	// ⚠ THE RETURNED VALUES FIRST, AND SEPARATELY. A `const` gets a row only where a `ret` already named it
@@ -766,7 +852,7 @@ function analyseOneFunction(module StdModule, func IrFunction, liveOps OpIndexAr
 	end 'eachReturn'
 
 	for opIdx in liveOps 'eachDef'
-		trackValueOrigin(try module.ops.get(opIdx) otherwise panic("analyseOneFunction: live op index {opIdx} not in module.ops"), byName: byName, onTheConvention: onTheConvention, flow: flow)
+		trackValueOrigin(try module.ops.get(opIdx) otherwise panic("analyseOneFunction: live op index {opIdx} not in module.ops"), byName: byName, onTheConvention: onTheConvention, flow: flow, consts: consts)
 	end 'eachDef'
 
 	var readByOneOp = StdValueUseSet.createRecordingIds()
@@ -811,7 +897,7 @@ function trackReturnedValue(op StdOp, flow FunctionTupleFlow)
 end 'trackReturnedValue'
 
 // Stamp where a tracked value came from, and give a row to the call results a rewrite could name.
-function trackValueOrigin(op StdOp, byName FunctionNameIndex, onTheConvention BoolArray, flow FunctionTupleFlow)
+function trackValueOrigin(op StdOp, byName FunctionNameIndex, onTheConvention BoolArray, flow FunctionTupleFlow, consts ConstValueMap)
 	match op 'op'
 		const(resultId, _, _) then trackConstant(resultId, flow: flow)
 		binOp or
@@ -825,7 +911,7 @@ function trackValueOrigin(op StdOp, byName FunctionNameIndex, onTheConvention Bo
 			branch then break 'op'
 		ret then break 'op'
 		param then break 'op'
-		call(resultId, callee, args) then trackCallResult(resultId, callee: callee, args: args, byName: byName, onTheConvention: onTheConvention, flow: flow)
+		call(resultId, callee, args) then trackCallResult(resultId, callee: callee, args: args, byName: byName, onTheConvention: onTheConvention, flow: flow, consts: consts)
 		retVoid or
 			globalAddr or
 			loadIndirect or
@@ -936,11 +1022,16 @@ function trackConstant(resultId ValueId, flow FunctionTupleFlow)
 	row.origin = TupleValueOrigin.constant
 end 'trackConstant'
 
-function trackCallResult(resultId ValueId, callee ByteArray, args ValueIdArray, byName FunctionNameIndex, onTheConvention BoolArray, flow FunctionTupleFlow)
-	// ⚠ Like a constant, a BOX gets a row only where a `ret` already named it — one that is not returned can
-	// never be a fresh-pair return, and giving every allocation a row would make the classifier's per-op
-	// scan of the rows grow with the function's allocation count.
+function trackCallResult(resultId ValueId, callee ByteArray, args ValueIdArray, byName FunctionNameIndex, onTheConvention BoolArray, flow FunctionTupleFlow, consts ConstValueMap)
+	// ⚠ A BOX gets a row where a `ret` already named it, or where it is two trivially-dropped words — the
+	// box a frame-local pair may live in; its row decides which shape it is, if either. Giving every
+	// allocation a row would make the classifier's per-op scan of the rows grow with the function's
+	// allocation count.
 	if callee.equals(MmAllocName) and args.count() >= MmAllocMinArgCount 'aHeapBox'
+		if not flow.tracks(resultId) and isATwoWordTrivialBox(callee, argCount: args.count(), sizeId: allocArg(args, index: 0), destructorId: allocArg(args, index: 1), consts: consts) 'aPairSizedBox'
+			flow.track(resultId)
+		end 'aPairSizedBox'
+
 		if not flow.tracks(resultId) 'noReturnNamesIt'
 			return
 		end 'noReturnNamesIt'
@@ -1694,6 +1785,14 @@ type ValueTuplePlan
 		self.markPairHalves(box, low: low, high: high)
 	end 'markFreshPair'
 
+	// Both ends in one frame: the box is not built (its allocation and stores go) and its loads and drop
+	// are those of a pair whose halves are the stored values.
+	export function markFrameLocalPair(box ValueId, low ValueId, high ValueId)
+		self.mark(self.elidedBox, value: box)
+		self.mark(self.registerPair, value: box)
+		self.markPairHalves(box, low: low, high: high)
+	end 'markFrameLocalPair'
+
 	// The unreachable panic return: both registers take the same zero. Nothing reads either, and minting a
 	// second constant for a block that never runs would be one more op to keep in step with the first.
 	export function markUnreachableZero(zero ValueId)
@@ -1738,7 +1837,7 @@ function rewriteOneFunction(module StdModule, funcIndex FuncIndex, flow Function
 	// The value space, read ONCE: it is a walk of the function, and the minter and the plan's columns are
 	// two readings of the same number.
 	let valueBound = nextFreeValueId(module, func: func)
-	var mint = ValueMinter.create(valueBound as ParamCount)
+	var mint = ValueMinter.resuming(valueBound)
 	var plan = ValueTuplePlan.create(valueBound, onTheConvention: isOnTheConvention(onTheConvention, funcIndex: funcIndex))
 
 	for opIdx in liveOps 'eachOp'
@@ -1758,6 +1857,9 @@ function rewriteOneFunction(module StdModule, funcIndex FuncIndex, flow Function
 
 	// The substitution must land before the removal: it walks the LIVE ops, and the loads it retires are
 	// still among them until `removeDoomedOps` takes them out.
+	// The column was recorded in layout order, and a spliced body lies AFTER the continuation that reads
+	// it — so a frame-local pair stored into another records its chain out of def order.
+	compressValueSubstitutions(subst)
 	substituteValuesInFunc(module, func: func, subst: subst)
 	removeDoomedOps(module, func: func, doomed: doomed)
 	removeConstantsNothingReadsAnyMore(module, func: func)
@@ -2057,12 +2159,22 @@ function planOneCallResult(resultId ValueId, flow FunctionTupleFlow, onTheConven
 	end 'notOurs'
 
 	match flow.rowOf(resultId).origin 'origin'
-		freshBox then break 'origin'
+		freshBox then markTheBoxIfFrameLocal(resultId, flow: flow, plan: plan)
 		directCall(calleeIndex) then markThePairIfTheCalleeKeptTheConvention(resultId, calleeIndex: calleeIndex, onTheConvention: onTheConvention, plan: plan, mint: mint)
 		constant then break 'origin'
 		elsewhere then break 'origin'
 	end 'origin'
 end 'planOneCallResult'
+
+function markTheBoxIfFrameLocal(box ValueId, flow FunctionTupleFlow, plan ValueTuplePlan)
+	let row = flow.rowOf(box)
+
+	if not row.isAFrameLocalPair() 'somethingElseSeesTheBox'
+		return
+	end 'somethingElseSeesTheBox'
+
+	plan.markFrameLocalPair(box, low: row.storedLow, high: row.storedHigh)
+end 'markTheBoxIfFrameLocal'
 
 function markThePairIfTheCalleeKeptTheConvention(resultId ValueId, calleeIndex FuncIndex, onTheConvention BoolArray, plan ValueTuplePlan, mint ValueMinter)
 	if not isOnTheConvention(onTheConvention, funcIndex: calleeIndex) 'refusedByTheFixpoint'
@@ -2204,15 +2316,16 @@ function rewriteOneReturn(module StdModule, opIdx OpIndex, retValId ValueId, pla
 end 'rewriteOneReturn'
 
 function rewriteOneCall(module StdModule, opIdx OpIndex, resultId ValueId, callee ByteArray, args ValueIdArray, plan ValueTuplePlan, doomed DoomedOpSet)
-	if plan.isARegisterPair(resultId) 'capturesBothRegisters'
-		try module.ops.set(opIdx, value: StdOp.tryCall(resultId, errorFlagId: plan.highHalfOf(resultId), callee: callee, args: args)) otherwise panic("rewriteOneCall: ops.set({opIdx}) OOB")
-		return
-	end 'capturesBothRegisters'
-
+	// Before the register-pair arm: a frame-local box is BOTH, and its allocation is deleted, not captured.
 	if callee.equals(MmAllocName) and plan.isAnElidedBox(resultId) 'theBoxThatIsNoLongerBuilt'
 		doomed.insert(opIdx)
 		return
 	end 'theBoxThatIsNoLongerBuilt'
+
+	if plan.isARegisterPair(resultId) 'capturesBothRegisters'
+		try module.ops.set(opIdx, value: StdOp.tryCall(resultId, errorFlagId: plan.highHalfOf(resultId), callee: callee, args: args)) otherwise panic("rewriteOneCall: ops.set({opIdx}) OOB")
+		return
+	end 'capturesBothRegisters'
 
 	let dropped = try trivialDropOf(callee, args: args) otherwise return
 

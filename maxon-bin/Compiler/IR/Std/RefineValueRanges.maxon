@@ -842,8 +842,8 @@ end 'leaveBlock'
 
 // The first guardrail: a block reached by exactly ONE predecessor edge, from a `condBranch` on a compare,
 // sees that compare's operands narrowed — a second edge in would carry values the predicate says nothing
-// about, and a physical fall-through has no compare deciding it — and a block reached by exactly the two
-// arms of one guarded access sees the guard's predicate false (see the header's join paragraph).
+// about — and a block reached by exactly the two arms of one guarded access sees the guard's predicate
+// false (see the header's join paragraph).
 function refineOnEntry(module StdModule, func IrFunction, analysis RangeFunction, position BlockRefIndex, scratch RangeScratch)
 	if position == StdEntryBlockPosition 'theEntry'
 		return
@@ -1095,9 +1095,7 @@ end 'baseDominates'
 // it is; a dead predecessor's edge contributes nothing.
 //
 // The phi model records one edge per predecessor of a block that takes args, so a reachable predecessor
-// with no edge here is a broken invariant, never a missing contribution — except a `dead` block, which
-// the CFG connects to its physical successor by the fall-through edge it adds for every block without a
-// terminator op: no execution takes that edge, and the phi model records none for it.
+// with no edge here is a broken invariant, never a missing contribution.
 function joinIncomingEdges(module StdModule, func IrFunction, analysis RangeFunction, position BlockRefIndex, block IrBlock, slot ElementIndex, scratch RangeScratch) returns bool
 	var any = false
 	let tree = analysis.tree
@@ -1144,24 +1142,13 @@ function joinIncomingEdges(module StdModule, func IrFunction, analysis RangeFunc
 			end 'first'
 		end 'eachEdge'
 
-		if edgesIn == 0 and not blockCarriesNoFlow(pred) 'edgeMissing'
-			panic("refineValueRanges: in '{String.from(func.name)}', block_{block.id} '{String.from(block.label)}' (position {position}) takes {block.blockArgs.count()} block arg(s) but its predecessor block_{pred.id} '{String.from(pred.label)}' (position {predPosition}, {"with" if pred.hasTerminatorOp() else "without"} a terminator op, {pred.branchEdges.count()} edge(s)) carries no edge to it")
+		if edgesIn == 0 'edgeMissing'
+			panic("refineValueRanges: in '{String.from(func.name)}', block_{block.id} '{String.from(block.label)}' (position {position}) takes {block.blockArgs.count()} block arg(s) but its predecessor block_{pred.id} '{String.from(pred.label)}' (position {predPosition}, {pred.branchEdges.count()} edge(s)) carries no edge to it")
 		end 'edgeMissing'
 	end 'eachPred'
 
 	return any
 end 'joinIncomingEdges'
-
-// Whether `block` is the parser's `dead` continuation — code after a fully-terminated construct, which
-// no path enters and which reaches nothing but through the CFG's conservative fall-through edge.
-function blockCarriesNoFlow(block IrBlock) returns bool
-	return match block.terminator 'kind'
-		dead gives true
-		unset or
-			fallthrough or
-			opIndex gives false
-	end 'kind'
-end 'blockCarriesNoFlow'
 
 // The interval one arithmetic op defines, written for its result. A compare additionally records a
 // decision when the intervals settle it.

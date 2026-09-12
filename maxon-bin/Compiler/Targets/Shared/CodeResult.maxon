@@ -462,6 +462,12 @@ export type FunctionCodeChunk
 	export var frameSize as StackSize
 	export var paramCount as ParamCount
 
+	// The function's inline-site table and the CHUNK-LOCAL code range of every run of blocks under one
+	// site (`BacktraceFormat`'s `__inlframes`), rebased and folded at concat like `lineRows`. Both empty
+	// for a function nothing was spliced into and for every hand-assembled chunk.
+	export var inlineSites as InlineSiteArray
+	export var inlineRanges as InlineRangeArray
+
 	export static function create(funcName ByteArray) returns FunctionCodeChunk
 		return Self{
 			funcName: funcName,
@@ -476,7 +482,9 @@ export type FunctionCodeChunk
 			lineRows: DebugLineRowArray.create(),
 			covPointOffsets: CovPointOffsetArray.create(),
 			frameSize: 0,
-			paramCount: 0
+			paramCount: 0,
+			inlineSites: InlineSiteArray.create(),
+			inlineRanges: InlineRangeArray.create()
 		}
 	end 'create'
 
@@ -500,7 +508,9 @@ export type FunctionCodeChunk
 			lineRows: DebugLineRowArray.create(),
 			covPointOffsets: CovPointOffsetArray.create(),
 			frameSize: 0,
-			paramCount: 0
+			paramCount: 0,
+			inlineSites: InlineSiteArray.create(),
+			inlineRanges: InlineRangeArray.create()
 		}
 	end 'createWith'
 end 'FunctionCodeChunk'
@@ -580,6 +590,12 @@ export type CodeResult
 	// asked for `--coverage`; a point the sidecar cannot find here is ELIMINATED.
 	export var covPointOffsets as CovPointOffsetArray
 
+	// The whole program's inline frame tables (`BacktraceFormat.InlineFrameTables`), the same rows concat
+	// wrote into `__inlframes`, so the sidecar and the runtime describe one set of splices. Both empty on
+	// the wasm path, which emits no frame chain and no printer of its own.
+	export var inlineSites as InlineSiteArray
+	export var inlineRanges as InlineRangeArray
+
 	export static function create(code ByteArray, mainCallFixupOffset CodeOffset, relocations RelocationArray, globalData GlobalDataTable, targetModule TargetModule, stdModule StdModule, rdata ByteArray, rdataRelocations RdataRelocationArray, symdata ByteArray) returns CodeResult
 		return Self{
 			code: code,
@@ -599,7 +615,9 @@ export type CodeResult
 			codeChunks: FunctionCodeChunkArray.create(),
 			debugFunctions: DebugFunctionRangeArray.create(),
 			debugLineRows: DebugLineRowArray.create(),
-			covPointOffsets: CovPointOffsetArray.create()
+			covPointOffsets: CovPointOffsetArray.create(),
+			inlineSites: InlineSiteArray.create(),
+			inlineRanges: InlineRangeArray.create()
 		}
 	end 'create'
 
@@ -627,7 +645,9 @@ export type CodeResult
 			codeChunks: FunctionCodeChunkArray.create(),
 			debugFunctions: DebugFunctionRangeArray.create(),
 			debugLineRows: DebugLineRowArray.create(),
-			covPointOffsets: CovPointOffsetArray.create()
+			covPointOffsets: CovPointOffsetArray.create(),
+			inlineSites: InlineSiteArray.create(),
+			inlineRanges: InlineRangeArray.create()
 		}
 	end 'forWasm'
 end 'CodeResult'

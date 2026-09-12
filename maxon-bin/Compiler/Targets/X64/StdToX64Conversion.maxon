@@ -5177,7 +5177,7 @@ type StdToX64Lowering
 
 		// The `ordered` block is the second half of the original's branch, so it runs exactly when the
 		// original does.
-		let newRef = self.addOrderedBlock(funcIdx, heat: self.blockAt(blockRef).heat)
+		let newRef = self.addOrderedBlock(funcIdx, heat: self.blockAt(blockRef).heat, inlineSite: self.blockAt(blockRef).inlineSite)
 		let newId = self.blockAt(newRef).id
 		self.emitOrderedBlockBody(newRef, cond: floatCondCodeForPred(pred), thenBlockId: thenBlockId, elseBlockId: elseBlockId, edges: inheritedEdges)
 		return newId
@@ -5189,11 +5189,11 @@ type StdToX64Lowering
 	// `blockSourceInfo`, which the Target module does not carry (`prepareSkeleton` never fills it).
 	// The function is fetched HERE, by index, and mutated directly — its borrow never escapes to a
 	// caller that could still be holding one. Same shape as `addSplitBlock`.
-	function addOrderedBlock(funcIdx FuncIndex, heat BlockHeat) returns BlockRef
+	function addOrderedBlock(funcIdx FuncIndex, heat BlockHeat, inlineSite InlineSiteRef) returns BlockRef
 		var srcFunc = self.stdModule.getFunc(funcIdx)
 		let newId = srcFunc.nextBlockId
 		srcFunc.nextBlockId = srcFunc.nextBlockId + 1
-		self.targetModule.blocks.push(IrBlock.create(newId, label: FloatOrderedLabel, heat: heat))
+		self.targetModule.blocks.push(IrBlock.create(newId, label: FloatOrderedLabel, heat: heat, inlineSite: inlineSite))
 		let newRef = self.targetModule.blocks.count() - 1
 		srcFunc.blockRefs.push(newRef)
 		return newRef

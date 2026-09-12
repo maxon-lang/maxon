@@ -43,56 +43,7 @@ data {
   __mrt_console_probe_stderr@34 = i8 0
 }
 
-func @weigh {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic
-  __rc_ok:
-    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
-    x64.cmpRegReg rdx, rax
-    x64.jcc aboveEqual, __im_slow
-    x64.jmp __im_load
-  tryerr:
-    x64.movRegImm32 rbx, 0
-    x64.jmp trycont
-  __im_load:
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
-    x64.movRegReg r8, rax
-  tryok:
-    x64.movRegReg rbx, r8
-  trycont:
-    x64.cmpRegImm32 rbx, 2
-    x64.jcc lessEqual, ifcont
-  heavy:
-    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; ""
-    x64.callDirect print
-  ifcont:
-    x64.imulRegRegImm32 r8, rbx, 2
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-hot-call-in-a-loop-confines-as-before.test:6: Range check failed: value outside typealias 'ElementIndex'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __im_slow:
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-}
-
-func @total {
+func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
@@ -102,28 +53,69 @@ func @total {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-    x64.movRegImm32 r13, 0
-    x64.movRegImm32 rax, 5
-    x64.movRegImm32 r14, 0
-    x64.jmp forhdr
-  each:
-    x64.leaRegRegReg r15, rax, r14
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 0
+    x64.jmp forhdr#1
+  seed:
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r14
-    x64.callDirect weigh
-    x64.leaRegRegReg rax, r13, r8
-    x64.leaRegRegReg rax, rax, r15
-  forstep:
-    x64.leaRegRegImm32 r14, r14, 1
-    x64.movRegReg r13, rax
-    x64.movRegReg rax, r15
-  forhdr:
-    x64.cmpRegReg r14, r12
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_push
+  forstep#3:
+    x64.leaRegRegImm32 r12, r12, 1
+  forhdr#1:
+    x64.cmpRegImm32 r12, 5
+    x64.jcc less, seed
+  __il_body#8:
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 rax, 5
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr#9
+  each:
+    x64.leaRegRegReg r14, rax, r13
+  __rc_ok:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg r13, rax
+    x64.jcc aboveEqual, __im_slow
+    x64.jmp __im_load
+  tryerr:
+    x64.movRegImm32 r15, 0
+    x64.jmp trycont
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rax + r13*8 + 0]
+    x64.movRegReg r8, rax
+  tryok:
+    x64.movRegReg r15, r8
+  trycont:
+    x64.cmpRegImm32 r15, 2
+    x64.jcc lessEqual, ifcont#19
+  heavy:
+    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; ""
+  __il_body#26:
+    x64.callDirect __write_stdout
+  ifcont#19:
+    x64.imulRegRegImm32 rax, r15, 2
+  __il_cont#13:
+    x64.leaRegRegReg rax, r12, rax
+    x64.leaRegRegReg rax, rax, r14
+  forstep#11:
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.movRegReg r12, rax
+    x64.movRegReg rax, r14
+  forhdr#9:
+    x64.cmpRegImm32 r13, 5
     x64.jcc less, each
-  forexit:
-    x64.movRegReg r8, r13
+  __il_cont#7:
+    x64.cmpRegImm32 r12, 65
+    x64.jcc equal, ifcont#6
+  sum:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
     x64.epilogue 40
     x64.popReg r15
     x64.popReg r14
@@ -132,54 +124,24 @@ func @total {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-}
-
-func @main {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __managed_create
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 r12, 0
-    x64.jmp forhdr
-  seed:
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
-    x64.callDirect __managed_push
-  forstep:
-    x64.leaRegRegImm32 r12, r12, 1
-  forhdr:
-    x64.cmpRegImm32 r12, 5
-    x64.jcc less, seed
-  forexit:
-    x64.movRegImm32 rdx, 5
-    x64.movRegReg rcx, rbx
-    x64.callDirect total
-    x64.cmpRegImm32 r8, 65
-    x64.jcc equal, ifcont
-  sum:
-    x64.movRegImm32 r12, 1
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  ifcont:
+  ifcont#6:
     x64.movRegImm32 r12, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
 }

@@ -129,6 +129,29 @@ end 'MxdbgCovRecord'
 
 typealias MxdbgCovRecordArray = Array with MxdbgCovRecord
 
+type MxdbgInlineSiteRecord
+	export var name as MxdbgPoolSlice
+	export var parent as MxdbgIndex
+
+	export static function create(name MxdbgPoolSlice, parent MxdbgIndex) returns MxdbgInlineSiteRecord
+		return Self{name: name, parent: parent}
+	end 'create'
+end 'MxdbgInlineSiteRecord'
+
+typealias MxdbgInlineSiteRecordArray = Array with MxdbgInlineSiteRecord
+
+type MxdbgInlineRangeRecord
+	export var codeStart as MxdbgCodeOffset
+	export var codeEnd as MxdbgCodeOffset
+	export var site as MxdbgIndex
+
+	export static function create(codeStart MxdbgCodeOffset, codeEnd MxdbgCodeOffset, site MxdbgIndex) returns MxdbgInlineRangeRecord
+		return Self{codeStart: codeStart, codeEnd: codeEnd, site: site}
+	end 'create'
+end 'MxdbgInlineRangeRecord'
+
+typealias MxdbgInlineRangeRecordArray = Array with MxdbgInlineRangeRecord
+
 export type MxdbgWriter
 	var stringPool as ByteArray = ByteArray.create()
 	var interned as MxdbgPoolSliceMap = MxdbgPoolSliceMap.create()
@@ -139,6 +162,8 @@ export type MxdbgWriter
 	var fields as MxdbgFieldRecordArray = MxdbgFieldRecordArray.create()
 	var locals as MxdbgLocalRecordArray = MxdbgLocalRecordArray.create()
 	var covPoints as MxdbgCovRecordArray = MxdbgCovRecordArray.create()
+	var inlineSites as MxdbgInlineSiteRecordArray = MxdbgInlineSiteRecordArray.create()
+	var inlineRanges as MxdbgInlineRangeRecordArray = MxdbgInlineRangeRecordArray.create()
 
 	export static function create() returns MxdbgWriter
 		return Self{}
@@ -218,6 +243,19 @@ export type MxdbgWriter
 	end 'addCoveragePoint'
 
 	// Serialize everything added so far into a `.mxdbg` image bound to `buildId`.
+	// One spliced body; its index is its position, which is what a range and a nested site name.
+	export function addInlineSite(name String, parent MxdbgIndex)
+		self.inlineSites.push(MxdbgInlineSiteRecord.create(self.intern(name), parent: parent))
+	end 'addInlineSite'
+
+	export function addInlineRange(codeStart MxdbgCodeOffset, codeEnd MxdbgCodeOffset, site MxdbgIndex)
+		if site >= self.inlineSites.count() 'noSuchSite'
+			panic("MxdbgWriter.addInlineRange: range [0x{codeStart:x}, 0x{codeEnd:x}) names site {site} of {self.inlineSites.count()} — every site is added before the ranges under it")
+		end 'noSuchSite'
+
+		self.inlineRanges.push(MxdbgInlineRangeRecord.create(codeStart, codeEnd: codeEnd, site: site))
+	end 'addInlineRange'
+
 	export function build(buildId HashDigest, targetTriple String) returns ByteArray
 		self.requireAscendingTables()
 		let windows = self.lineWindows()
@@ -234,7 +272,9 @@ export type MxdbgWriter
 		let fieldTableOff = typeTableOff + (self.types.count() * MxdbgTypeEntrySize) as ByteOffset
 		let localTableOff = fieldTableOff + (self.fields.count() * MxdbgFieldEntrySize) as ByteOffset
 		let covTableOff = localTableOff + (self.locals.count() * MxdbgLocalEntrySize) as ByteOffset
-		let stringPoolOff = covTableOff + (self.covPoints.count() * MxdbgCovEntrySize) as ByteOffset
+		let inlineSiteTableOff = covTableOff + (self.covPoints.count() * MxdbgCovEntrySize) as ByteOffset
+		let inlineRangeTableOff = inlineSiteTableOff + (self.inlineSites.count() * MxdbgInlineSiteEntrySize) as ByteOffset
+		let stringPoolOff = inlineRangeTableOff + (self.inlineRanges.count() * MxdbgInlineRangeEntrySize) as ByteOffset
 
 		// ⛔ **PATCHED BY SLOT, NEVER WRITTEN AS A RUN.** The reader indexes these 96 bytes by the very same
 		// named offsets, so writing them positionally would let the two ends drift by one word — the failure
@@ -264,6 +304,10 @@ export type MxdbgWriter
 		patchDword(buf, offset: MxdbgOffLocalCount, value: self.locals.count() as MachineWord)
 		patchDword(buf, offset: MxdbgOffCovTableOff, value: covTableOff as MachineWord)
 		patchDword(buf, offset: MxdbgOffCovCount, value: self.covPoints.count() as MachineWord)
+		patchDword(buf, offset: MxdbgOffInlineSiteTableOff, value: inlineSiteTableOff as MachineWord)
+		patchDword(buf, offset: MxdbgOffInlineSiteCount, value: self.inlineSites.count() as MachineWord)
+		patchDword(buf, offset: MxdbgOffInlineRangeTableOff, value: inlineRangeTableOff as MachineWord)
+		patchDword(buf, offset: MxdbgOffInlineRangeCount, value: self.inlineRanges.count() as MachineWord)
 
 		for file in self.files 'eachFile'
 			writeDword(buf, value: file.offset as MachineWord)
@@ -331,6 +375,18 @@ export type MxdbgWriter
 			writeDword(buf, value: point.funcName.length as MachineWord)
 			writeDword(buf, value: point.flags as MachineWord)
 		end 'eachCoveragePoint'
+
+		for site in self.inlineSites 'eachInlineSite'
+			writeDword(buf, value: site.name.offset as MachineWord)
+			writeDword(buf, value: site.name.length as MachineWord)
+			writeDword(buf, value: site.parent as MachineWord)
+		end 'eachInlineSite'
+
+		for range in self.inlineRanges 'eachInlineRange'
+			writeDword(buf, value: range.codeStart as MachineWord)
+			writeDword(buf, value: range.codeEnd as MachineWord)
+			writeDword(buf, value: range.site as MachineWord)
+		end 'eachInlineRange'
 
 		buf.append(self.stringPool)
 
@@ -413,6 +469,18 @@ export type MxdbgWriter
 
 			previousFunc = f.codeStart
 		end 'eachFunc'
+
+		var previousRangeEnd = 0 as MxdbgCodeOffset
+
+		for i in 0 upto self.inlineRanges.count() 'eachRange'
+			let range = try self.inlineRanges.get(i) otherwise panic("MxdbgWriter.requireAscendingTables: inlineRanges.get OOB at {i} despite the upto bound")
+
+			if range.codeStart < previousRangeEnd or range.codeStart >= range.codeEnd 'rangeOutOfOrder'
+				panic("MxdbgWriter: inline range {i} is [0x{range.codeStart:x}, 0x{range.codeEnd:x}) behind 0x{previousRangeEnd:x} — the ranges are disjoint and ascending by construction, and the reader binary-searches them")
+			end 'rangeOutOfOrder'
+
+			previousRangeEnd = range.codeEnd
+		end 'eachRange'
 	end 'requireAscendingTables'
 end 'MxdbgWriter'
 

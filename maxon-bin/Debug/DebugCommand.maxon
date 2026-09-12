@@ -33,6 +33,7 @@ let FunctionsSection = "functions"
 let TypesSection = "types"
 let LinesSection = "lines"
 let StatementsSection = "statements"
+let InlineSection = "inline"
 
 // A section's position in that roster. ⛔ **NOTHING NAMES ONE BY NUMBER**: a second list of positions
 // beside the roster would be the order written twice, and inserting a section into the middle of one of
@@ -204,6 +205,7 @@ function dumpSectionRoster() returns StringArray
 	names.push(TypesSection)
 	names.push(LinesSection)
 	names.push(StatementsSection)
+	names.push(InlineSection)
 
 	return names
 end 'dumpSectionRoster'
@@ -299,8 +301,49 @@ function dumpSidecar(reader MxdbgReader, path String, sections BoolArray) return
 		end 'eachRow'
 	end 'theLineTable'
 
+	if sectionIsPrinted(sections, section: InlineSection) 'theInlineFrames'
+		dumpInlineFrames(reader)
+	end 'theInlineFrames'
+
 	return 0
 end 'dumpSidecar'
+
+// The spliced bodies and the code each occupies: a site row names its callee and the site it nests under,
+// a range row the site its bytes belong to.
+function dumpInlineFrames(reader MxdbgReader)
+	print("  inline sites ({reader.inlineSiteCount()}):\n")
+
+	for i in 0 upto reader.inlineSiteCount() 'eachSite'
+		let site = reader.inlineSite(i as MxdbgIndex)
+		let parent = match site.parent 'p'
+			none gives ""
+			site(index) gives "  under [{index}]"
+		end 'p'
+
+		print("    [{i}] {site.name}{parent}\n")
+	end 'eachSite'
+
+	print("  inline ranges ({reader.inlineRangeCount()}):\n")
+
+	for offset in inlineRangeStarts(reader) 'eachRange'
+		match reader.inlineSiteContaining(offset) 'site'
+			none then panic("dumpInlineFrames: a range's own start offset 0x{offset:x} resolves to no site")
+			site(index) then print("    0x{offset:04x}  [{index}] {reader.inlineSite(index).name}\n")
+		end 'site'
+	end 'eachRange'
+end 'dumpInlineFrames'
+
+// Every range's start, read back through the same lookup the profiler uses so the dump shows what a
+// sample there would be named.
+function inlineRangeStarts(reader MxdbgReader) returns MxdbgCodeOffsetArray
+	var starts = MxdbgCodeOffsetArray.create()
+
+	for i in 0 upto reader.inlineRangeCount() 'eachRange'
+		starts.push(reader.inlineRangeStart(i as MxdbgIndex))
+	end 'eachRange'
+
+	return starts
+end 'inlineRangeStarts'
 
 // ⭐ **A FUNCTION'S LOCALS NEST UNDER ITS ROW**, which is why there is no `locals` section to ask for: the
 // records belong to the function that owns them, and a stop is inside one function.

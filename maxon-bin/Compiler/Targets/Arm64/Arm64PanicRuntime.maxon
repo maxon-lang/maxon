@@ -86,13 +86,14 @@ end 'buildArm64WriteStderrChunk'
 // mrt_panic_print_frame(x0 = text_offset, x1 = symtable)
 // ==========================================================================
 
-// Print one frame as `  in <name>\n`, resolving `text_offset` through the symbol table: a linear scan
-// keeping the LAST entry whose `codeOffset` is <= `text_offset`, which is the GREATEST such entry
-// because the table ascends (asserted where it is built). The arm64 twin of
-// `X64Runtime.buildPrintFrameChunk`, over the same table and printing the same words.
+// Print one frame: the inline lines the offset sits under, then `  in <name>\n` with `text_offset`
+// resolved through the symbol table — a linear scan keeping the LAST entry whose `codeOffset` is <=
+// `text_offset`, which is the GREATEST such entry because the table ascends (asserted where it is
+// built). The arm64 twin of `X64Runtime.buildPrintFrameChunk`, over the same tables and printing the
+// same words.
 //
 // Slots: 0 = text_offset, 1 = symtable. They are the only two values that must survive the opening
-// `  in ` write; the scan itself makes no call, so its five working values stay in registers.
+// calls; the scan itself makes no call, so its five working values stay in registers.
 function buildArm64PrintFrameChunk(globalData GlobalDataTable) returns FunctionCodeChunk
 	let SlotTextOffset = 0 as StackSize
 	let SlotSymtable = 1 as StackSize
@@ -107,6 +108,9 @@ function buildArm64PrintFrameChunk(globalData GlobalDataTable) returns FunctionC
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotTextOffset)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotSymtable)
+
+	// The spliced bodies the offset lies inside come first, innermost out — x0 still holds the offset.
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: PrintInlineFramesName)
 
 	arm64EmitPrintConstant(asm, globalData: globalData, bytes: FrameLinePrefix)
 
@@ -156,6 +160,91 @@ function buildArm64PrintFrameChunk(globalData GlobalDataTable) returns FunctionC
 
 	return asm.finishFunction(PrintFrameName)
 end 'buildArm64PrintFrameChunk'
+
+// ==========================================================================
+// mrt_panic_print_inline(x0 = text_offset)
+// ==========================================================================
+
+// Print `  in <callee>\n` for every inline site `text_offset` lies under, innermost first, through the
+// `__inlframes` tables (`BacktraceFormat`). The arm64 twin of `X64Runtime.buildPrintInlineFramesChunk`,
+// step for step: the ranges are disjoint and ascend, so the scan stops at the first range starting past
+// the offset, and a hit's site chain is walked through `parent` until `InlineSiteNoParent`.
+//
+// Slots: 0 = text_offset, 1 = the tables, 2 = the site being printed, 3 = one past the last range entry.
+function buildArm64PrintInlineFramesChunk(globalData GlobalDataTable) returns FunctionCodeChunk
+	let SlotTextOffset = 0 as StackSize
+	let SlotTables = 1 as StackSize
+	let SlotSite = 2 as StackSize
+	let SlotRangesEnd = 3 as StackSize
+	assertInlineTableStrides()
+	var asm = Arm64RuntimeAsm.beginFunction(4)
+
+	let scan = asm.newLabel()
+	let found = asm.newLabel()
+	let printSite = asm.newLabel()
+	let done = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotTextOffset)
+	arm64EmitLeaRuntimeFuncAddr(asm, dest: Arm64Register.x1, funcName: InlineFrameTableName)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotTables)
+
+	// x3 = the first range entry: tables + InlineTableOffSites + siteCount * 8.
+	arm64EmitLoadColumn(asm, dest: Arm64Register.x2, base: Arm64Register.x1, byteOffset: InlineTableOffSiteCount)
+	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x2), rn: arm64RuntimeReg(Arm64Register.x2), sh: InlineSiteEntryShift)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x3, lhs: Arm64Register.x1, rhs: Arm64Register.x2)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x3, base: Arm64Register.x3, imm: InlineTableOffSites)
+
+	// [SlotRangesEnd] = x3 + rangeCount * 12, as (count shl 3) + (count shl 2).
+	arm64EmitLoadColumn(asm, dest: Arm64Register.x4, base: Arm64Register.x1, byteOffset: InlineTableOffRangeCount)
+	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x5), rn: arm64RuntimeReg(Arm64Register.x4), sh: InlineRangeStrideShiftEight)
+	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x4), rn: arm64RuntimeReg(Arm64Register.x4), sh: InlineRangeStrideShiftFour)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x4, lhs: Arm64Register.x4, rhs: Arm64Register.x5)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x4, lhs: Arm64Register.x3, rhs: Arm64Register.x4)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x4, slot: SlotRangesEnd)
+
+	// The scan makes no call, so the cursor stays in x3, the end in x4 and the offset in x5.
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x5, slot: SlotTextOffset)
+
+	asm.placeLabel(scan)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x3, rhs: Arm64Register.x4)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.hs, label: done)
+	arm64EmitLoadColumn(asm, dest: Arm64Register.x6, base: Arm64Register.x3, byteOffset: InlineRangeOffStart)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x5, rhs: Arm64Register.x6)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: done)
+	arm64EmitLoadColumn(asm, dest: Arm64Register.x6, base: Arm64Register.x3, byteOffset: InlineRangeOffEnd)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x5, rhs: Arm64Register.x6)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: found)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x3, base: Arm64Register.x3, imm: InlineRangeStrideBytes)
+	arm64EmitBranchTo(asm, label: scan)
+
+	asm.placeLabel(found)
+	arm64EmitLoadColumn(asm, dest: Arm64Register.x6, base: Arm64Register.x3, byteOffset: InlineRangeOffSite)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x6, slot: SlotSite)
+
+	// One line per site: x2 = its entry, the parent replaces the site slot, then the name is printed.
+	asm.placeLabel(printSite)
+	arm64EmitPrintConstant(asm, globalData: globalData, bytes: FrameLinePrefix)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotSite)
+	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x2), rn: arm64RuntimeReg(Arm64Register.x2), sh: InlineSiteEntryShift)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotTables)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x2, lhs: Arm64Register.x1, rhs: Arm64Register.x2)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x2, base: Arm64Register.x2, imm: InlineTableOffSites)
+	arm64EmitLoadColumn(asm, dest: Arm64Register.x3, base: Arm64Register.x2, byteOffset: InlineSiteOffParent)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x3, slot: SlotSite)
+	arm64EmitLoadColumn(asm, dest: Arm64Register.x0, base: Arm64Register.x2, byteOffset: InlineSiteOffName)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x1, rhs: Arm64Register.x0)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: WriteStderrName)
+	arm64EmitPrintConstant(asm, globalData: globalData, bytes: FrameLineTerminator)
+
+	// A parent is a site index or the explicit "none"; the column was loaded zero-extended, as the comparand is.
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotSite)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: InlineSiteNoParent)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x2, rhs: Arm64Register.x3)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: printSite)
+
+	asm.placeLabel(done)
+	return asm.finishFunction(PrintInlineFramesName)
+end 'buildArm64PrintInlineFramesChunk'
 
 // ==========================================================================
 // mrt_panic_walk_frames(x0 = start_frame, x1 = stack_low)
@@ -364,6 +453,7 @@ export function appendArm64PanicRuntimeChunks(chunks FunctionCodeChunkArray, glo
 	chunks.push(buildArm64PanicChunk(globalData, dumpCoverage: dumpCoverage, greenThreads: greenThreads, target: target))
 	chunks.push(buildArm64WalkFramesChunk(globalData, greenThreads: greenThreads, os: target.os))
 	chunks.push(buildArm64PrintFrameChunk(globalData))
+	chunks.push(buildArm64PrintInlineFramesChunk(globalData))
 	chunks.push(buildArm64WriteStderrChunk(target.os))
 end 'appendArm64PanicRuntimeChunks'
 

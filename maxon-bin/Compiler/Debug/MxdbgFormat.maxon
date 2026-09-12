@@ -25,7 +25,7 @@ let MxdbgMagicByte4 = 71
 
 // Bumped on any change to what the file MEANS. A reader refuses a version it does not know rather than
 // misreading it.
-module let MxdbgFormatVersion = 3
+module let MxdbgFormatVersion = 4
 
 // The one width of every count/offset/length word in the file.
 module let MxdbgFieldSize = 4
@@ -76,7 +76,17 @@ module let MxdbgOffFieldTableOff = 88
 
 module let MxdbgOffFieldCount = 92
 
-module let MxdbgHeaderSize = 96
+// The inline frame tables (`BacktraceFormat`'s `__inlframes`, as the sidecar spells them): the sites
+// and the code ranges under them, so a profiler can attribute a sample to the spliced body it landed in.
+module let MxdbgOffInlineSiteTableOff = 96
+
+module let MxdbgOffInlineSiteCount = 100
+
+module let MxdbgOffInlineRangeTableOff = 104
+
+module let MxdbgOffInlineRangeCount = 108
+
+module let MxdbgHeaderSize = 112
 
 // Fixed record strides.
 module let MxdbgFileEntrySize = 8
@@ -97,6 +107,16 @@ module let MxdbgLocalEntrySize = 28
 // INDEX is its record index, which is what binds this table to the `.mxcov` counter array
 // position-for-position.
 module let MxdbgCovEntrySize = 36
+
+// nameOff nameLen parent — `parent` is a site index or `MxdbgNoParentSite`.
+module let MxdbgInlineSiteEntrySize = 12
+
+// codeStart codeEnd site — disjoint, ascending by codeStart; nesting lives in the site's `parent`.
+module let MxdbgInlineRangeEntrySize = 12
+
+// A site spliced into its function's own text, spelled explicitly rather than as a 0 that site 0 would
+// collide with.
+export let MxdbgNoParentSite = 0xFFFFFFFF as MxdbgIndex
 
 // Line-entry flag bits. A row this compiler writes is always a statement boundary — see
 // `DebugLineRowBuilder`, which is where that granularity is decided.
@@ -212,6 +232,20 @@ module let MxdbgLocalScopeStart = 20
 
 module let MxdbgLocalScopeEnd = 24
 
+// Where an inline-site record's fields sit inside its 12 bytes.
+module let MxdbgInlineSiteNameOff = 0
+
+module let MxdbgInlineSiteNameLen = 4
+
+module let MxdbgInlineSiteParent = 8
+
+// Where an inline-range record's fields sit inside its 12 bytes.
+module let MxdbgInlineRangeCodeStart = 0
+
+module let MxdbgInlineRangeCodeEnd = 4
+
+module let MxdbgInlineRangeSite = 8
+
 // Where a line record's fields sit inside its 20 bytes.
 module let MxdbgLineCodeOffset = 0
 
@@ -228,6 +262,8 @@ export typealias MxdbgIndex = int(0 to u32.max)
 
 // A `.text` code offset as the sidecar records one.
 export typealias MxdbgCodeOffset = int(0 to u32.max)
+
+export typealias MxdbgCodeOffsetArray = Array with MxdbgCodeOffset
 
 // A local record's `locValue`: a stack displacement, a register number, or unused, per its `locKind`.
 export typealias MxdbgLocValue = int(i32.min to i32.max)

@@ -139,12 +139,12 @@ let InLoopTemporaryMargin = 3 as RegCount
 
 // What a loop's live-across set is measured against: the target's allocatable GPRs less the margin, or
 // nothing on a stack machine, where a hoisted value holds no register.
-union HoistPressureBudget
+module union HoistPressureBudget
 	unbounded
 	registers(count RegCount)
 end 'HoistPressureBudget'
 
-function hoistPressureBudgetFor(target Target) returns HoistPressureBudget
+module function hoistPressureBudgetFor(target Target) returns HoistPressureBudget
 	return match target.cpu 'cpu'
 		x64 or
 			arm64 gives HoistPressureBudget.registers(allocatableGprCount(target) - InLoopTemporaryMargin)
@@ -271,7 +271,7 @@ function unswitchInFunc(module StdModule, func IrFunction, funcIndex FuncIndex, 
 	end 'nothingAdmitted'
 
 	// Seeded ONCE, past every id the function uses; every copy, chain value and exit phi mints from here.
-	var minter = ValueMinter.create(analysis.valueBound as ParamCount)
+	var minter = ValueMinter.resuming(analysis.valueBound)
 	var columns = RewriteColumns.identity(analysis.valueBound, blockBound: func.nextBlockId, funcIndex: funcIndex, origins: origins)
 
 	for index in 0 upto plans.count() 'eachExitPhi'
@@ -643,8 +643,8 @@ function refuse(plan UnswitchPlan, reason UnswitchRefusal, scratch UnswitchScrat
 	return false
 end 'refuse'
 
-// Every member has a terminator op — a copy cannot reproduce a physical fall-through — and holds only
-// ops the cloner accepts; the body fits the op budget.
+// Every member has a terminator op — a `dead` block reaches no latch, so none is a member, and the copy
+// asserts it rather than assumes it — and holds only ops the cloner accepts; the body fits the op budget.
 function sizeFits(module StdModule, func IrFunction, plan UnswitchPlan, scratch UnswitchScratch) returns bool
 	var ops = 0 as LoopOpCount
 
@@ -1451,7 +1451,7 @@ function copyLoop(module StdModule, func IrFunction, plan UnswitchPlan, analysis
 	for index in 0 upto plan.members.count() 'eachMember'
 		let position = try plan.members.get(index) otherwise panic("unswitchInvariantGuards: members.get OOB at {index}")
 		let original = module.blockAtPosition(func, position: position)
-		let copy = module.addBlock(func, label: original.label, heat: original.heat)
+		let copy = module.addBlock(func, label: original.label, heat: original.heat, inlineSite: original.inlineSite)
 		columns.mapBlock(original.id, fresh: copy.id)
 		copyRefs.push(registeredBlockRef(module, func: func, block: copy))
 	end 'eachMember'
@@ -1524,15 +1524,18 @@ type TestChain
 	export var testRefs as BlockRefArray
 	export var testConds as ValueIdArray
 
-	static function create() returns TestChain
-		return Self{currentRef: 0, open: false, firstRef: 0, started: false, testRefs: BlockRefArray.create(), testConds: ValueIdArray.create()}
+	// The loop's own site: the chain stands in front of the loop, inside whatever spliced body holds it.
+	var inlineSite as InlineSiteRef
+
+	static function create(inlineSite InlineSiteRef) returns TestChain
+		return Self{currentRef: 0, open: false, firstRef: 0, started: false, testRefs: BlockRefArray.create(), testConds: ValueIdArray.create(), inlineSite: inlineSite}
 	end 'create'
 
 	// The block to emit into, opened on demand so an empty block is never minted.
 	function block(module StdModule, func IrFunction) returns IrBlock
 		if not self.open 'openOne'
 			// The chain runs once per loop entry.
-			let fresh = module.addBlock(func, label: UnswitchTestLabel, heat: BlockHeat.normal)
+			let fresh = module.addBlock(func, label: UnswitchTestLabel, heat: BlockHeat.normal, inlineSite: self.inlineSite)
 			self.currentRef = registeredBlockRef(module, func: func, block: fresh)
 			self.open = true
 
@@ -1571,7 +1574,7 @@ end 'TestChain'
 // each admitted guard's compare closing a block whose refusal goes to `__us_slow` (which enters the
 // original) and whose pass goes on to the next test, the last pass entering the copy.
 function emitTestChain(module StdModule, func IrFunction, plan UnswitchPlan, analysis UnswitchFunction, scratch UnswitchScratch, columns RewriteColumns, minter ValueMinter)
-	var chain = TestChain.create()
+	var chain = TestChain.create(module.blockAtPosition(func, position: plan.header).inlineSite)
 	var guardCursor = 0 as GuardCount
 	var hoistCursor = 0 as HoistedValueCount
 
@@ -1722,7 +1725,7 @@ function wireTestChain(module StdModule, func IrFunction, plan UnswitchPlan, cha
 
 	if chain.testRefs.count() != 0 'aTestCanRefuse'
 		// Entered once per loop entry whose guards refuse; it only forwards to the original loop.
-		var slow = module.addBlock(func, label: UnswitchSlowLabel, heat: BlockHeat.normal)
+		var slow = module.addBlock(func, label: UnswitchSlowLabel, heat: BlockHeat.normal, inlineSite: header.inlineSite)
 		module.setTerminator(slow, op: StdOp.branch(headerId))
 
 		if takesArgs 'slowCarriesArgs'
