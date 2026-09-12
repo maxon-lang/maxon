@@ -52,6 +52,19 @@ let CacheCommandDirName = "run"
 let SlotKeySeparator = "-"
 let PendingBuildMarker = ".tmp"
 
+// ⛔ **A SLOT PATH HAS A BUDGET, AND WINDOWS SETS IT AT 260 CHARACTERS.** Two full SHA-256s spelled out
+// is 128 of them before the root, the stem or the extension are counted — MEASURED: a checkout five
+// characters deeper than usual put the `.mxdbg` sidecar at 259 and the backend could not write it, which
+// reads as a build that produced no file rather than as a path too long.
+//
+// ⚠ **THESE ARE NAMES, NOT SIGNATURES.** 64 bits distinguishes the builds one developer's cache holds;
+// the collision it risks is a stale binary served for changed inputs, at a population no cache reaches.
+let CacheNameDigestBytes = 8
+
+// A stem is for a READER and for the program's own `argv[0]`, so it is trimmed rather than dropped — a
+// name long enough to recognise costs a fraction of what spelling a whole digest does.
+let MaxSlotStemLength = 24
+
 // Manifest fields are tab-separated and one fact per line: a path may contain a space, and cannot contain
 // a tab or a newline on any host this compiler targets.
 let ManifestFieldSeparator = "\t"
@@ -284,7 +297,21 @@ function slotStem(program FilePath, isProject bool) returns String throws RunCac
 		throw RunCacheError.unavailable("{program.toString()} has no name a cached build could be called after")
 	end 'unnameable'
 
-	return name
+	// Trimmed by CHARACTER rather than by byte: a stem is a filename, and half a codepoint is not one.
+	// The key that follows it is what identifies the build, so a shortened stem collides with nothing.
+	var trimmed = ""
+	var taken = 0
+
+	for character in name 'eachCharacter'
+		if taken >= MaxSlotStemLength 'longEnough'
+			break
+		end 'longEnough'
+
+		trimmed.append("{character}")
+		taken = taken + 1
+	end 'eachCharacter'
+
+	return trimmed
 end 'slotStem'
 
 // ============================================================================================
@@ -412,11 +439,15 @@ function stdlibSources() returns MaxonSourcePathArray throws RunCacheError
 end 'stdlibSources'
 
 // Nothing in the standard library renders bytes as hex, and a key has to be TEXT: it is the build's
-// filename.
+// filename. Only the leading `CacheNameDigestBytes` are spelled — see the budget beside that constant.
 function hexDigest(digest ByteArray) returns String
 	var rendered = ""
 
-	for one in digest 'eachByte'
+	for (iter, one) in digest.withIterator() 'eachByte'
+		if iter.index() >= CacheNameDigestBytes 'enoughToName'
+			break
+		end 'enoughToName'
+
 		rendered.append("{one:02x}")
 	end 'eachByte'
 
