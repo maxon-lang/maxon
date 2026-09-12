@@ -405,7 +405,7 @@ end 'classifyFoldableDef'
 // The two runs are disjoint by construction — the appended band starts exactly where the pipeline's module
 // ended — so no function is folded twice, and folding is not idempotent-by-luck: it is simply never asked.
 export function foldConstOperands(module StdModule, firstFuncIndex FuncIndex)
-	logDebug(LogCategory.ir, message: function() gives "foldConstOperands: functions [{firstFuncIndex}, {module.funcCount()})")
+	logDebug(LogCategory.ir, message: function() gives foldConstOperandsHeadline(firstFuncIndex, funcCount: module.funcCount()))
 
 	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
 	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
@@ -414,6 +414,11 @@ export function foldConstOperands(module StdModule, firstFuncIndex FuncIndex)
 		foldConstOperandsInFunc(module, func: try module.functions.get(fnIndex) otherwise panic("foldConstOperands: fnIndex {fnIndex} is below module.functions.count()"))
 	end 'eachFunc'
 end 'foldConstOperands'
+
+// The pass's headline: the function range it is about to fold.
+module function foldConstOperandsHeadline(firstFuncIndex FuncIndex, funcCount FuncCount) returns String
+	return "foldConstOperands: functions [{firstFuncIndex}, {funcCount})"
+end 'foldConstOperandsHeadline'
 
 // ⭐ **ONE `liveOpIndices` FOR THE WHOLE PASS OVER THIS FUNCTION, NOT ONE PER WALK.** Every step below
 // visits exactly the same live ops, and none of them changes WHICH ops are live: the two rewrites replace
@@ -425,7 +430,7 @@ end 'foldConstOperands'
 // entry per live op into it, so a per-walk rebuild is a per-walk O(ops) allocation and copy. Four walks
 // meant four of them (five once the identity substitution fired), and the pass runs over every function
 // in the module.
-function foldConstOperandsInFunc(module StdModule, func IrFunction)
+module function foldConstOperandsInFunc(module StdModule, func IrFunction)
 	let opIndices = module.liveOpIndices(func)
 
 	// ONE classification record for all three walks below — refilled per op, never re-created. See

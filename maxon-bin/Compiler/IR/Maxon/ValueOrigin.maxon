@@ -640,6 +640,34 @@ export type ValueOriginTable
 	end 'appendFrom'
 end 'ValueOriginTable'
 
+// ⭐ **THE DERIVED ROWS ONE FUNCTION'S PASSES FILE OFF THE MAIN THREAD** (`ValueOriginTable.recordDerived`
+// for one function), carried home by the unit that ran them and folded into the project's table in
+// function-index order. A pool worker has no `Project` — a module `var` reached from a message is E3143 —
+// so the two passes that file derived ids (`threadConstantBranches`, `unswitchInvariantGuards`) write here
+// whichever thread runs them, and the function index is supplied at the fold rather than carried per row.
+export type DerivedOrigins
+	var valueIds as ValueIdArray
+	var sourceIds as ValueIdArray
+
+	export static function create() returns DerivedOrigins
+		return Self{valueIds: ValueIdArray.create(), sourceIds: ValueIdArray.create()}
+	end 'create'
+
+	// File `valueId` as standing in for `sourceId`.
+	export function record(valueId ValueId, sourceId ValueId)
+		self.valueIds.push(valueId)
+		self.sourceIds.push(sourceId)
+	end 'record'
+
+	export function foldInto(table ValueOriginTable, funcIndex FuncIndex)
+		for i in 0 upto self.valueIds.count() 'eachRow'
+			let valueId = try self.valueIds.get(i) otherwise panic("DerivedOrigins.foldInto: valueIds.get OOB at {i}")
+			let sourceId = try self.sourceIds.get(i) otherwise panic("DerivedOrigins.foldInto: sourceIds.get OOB at {i} — the two columns are pushed together")
+			table.recordDerived(funcIndex, valueId: valueId, sourceId: sourceId)
+		end 'eachRow'
+	end 'foldInto'
+end 'DerivedOrigins'
+
 // Is `funcIndex` one of the functions an index was asked to cover? A column shorter than the module is
 // answered `false` rather than refused: a caller that selected nothing beyond function K has no rows to
 // find past it, and reading the length as the answer is what lets the caller size its column by the

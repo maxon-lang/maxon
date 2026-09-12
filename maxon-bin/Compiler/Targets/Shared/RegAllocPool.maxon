@@ -45,6 +45,8 @@
 //
 // More than two buys nothing and costs memory: a unit in flight is a full copy of one function's ops, so
 // the queue depth IS the pool's peak memory over the module.
+//
+// `PoolDispatch` applies it to both pools, whose units and splices have the same shape.
 let JobsInFlightPerWorker = 2
 
 // A reply cell carrying one allocated function. `RegAllocWorker.allocate.errors` is the synthesized
@@ -58,16 +60,86 @@ typealias RegAllocWorkerHandleArray = Array with RegAllocWorker.handle
 // The per-function landing slots the drain fills and the fold reads, in index order.
 typealias RegAllocCountersArray = Array with RegAllocCounters
 typealias RegAllocFactsArray = Array with RegAllocFacts
-typealias RegAllocCostsArray = Array with RegAllocCosts
+typealias RegAllocCostsArray = Array with PoolPhaseCosts
 
-// A position in the pool's own arrays — a worker slot, an in-flight reply, a job in the dispatch order.
-typealias PoolSlot = int(0 to u64.max)
+// A position in a pool's own arrays — a worker slot, an in-flight reply, a job in the dispatch order.
+export typealias PoolSlot = int(0 to u64.max)
 
-// How many workers a pool holds, or how many functions it has to allocate. NARROWED to exclude zero,
-// which is what lets the round-robin and the key unpacking DIVIDE by one: both are reached only past a
-// guard that has already answered for the empty module, and a range is how that guard is carried to the
+// How many workers a pool holds, or how many functions it has to run. NARROWED to exclude zero, which
+// is what lets the round-robin and the key unpacking DIVIDE by one: both are reached only past a guard
+// that has already answered for the empty module, and a range is how that guard is carried to the
 // arithmetic instead of being remembered at it.
-typealias PoolSize = int(1 to u32.max)
+export typealias PoolSize = int(1 to u32.max)
+
+export typealias PoolSlotArray = Array with PoolSlot
+
+// ⭐⭐ **THE HALF OF A POOL DRAIN THAT NAMES NO MESSAGE — one record for both drains, this pool's and
+// `StdPassPool`'s.** A drain fills a pipeline of `JobsInFlightPerWorker` jobs per worker longest-first,
+// then serves whichever reply `awaitAny` answers and hands its worker the next job in order. Everything
+// in that protocol that is not the reply itself lives here: the dispatch order and how far it has been
+// consumed, and for each outstanding reply which function it is for and which worker holds it.
+//
+// ⚠ **THE REPLY ARRAY STAYS WITH THE CALLER, IN THE SAME SLOT ORDER.** A reply's type names the worker's
+// message (`allocate`, `run`), which no shared record can be generic over. So a caller pushes its reply
+// exactly when it takes a job (`nextJob`) and removes the reply at the slot `awaitAny` answered exactly
+// when it lands that slot here (`land`); the two columns here and the caller's array are one sequence,
+// and `land`'s count check is what catches a caller that pushed without taking or took without pushing.
+export type PoolDispatch
+	var order as FuncIndexArray
+	var jobCount as PoolSize
+	var workerCount as PoolSize
+	var dispatched as PoolSlot
+	var replyJob as FuncIndexArray
+	var replyWorker as PoolSlotArray
+
+	export static function create(functions IrFunctionArray, blocks IrBlockArray, funcCount PoolSize, workerCount PoolSize) returns PoolDispatch
+		return Self{order: functionsLongestFirst(functions, blocks: blocks, funcCount: funcCount), jobCount: funcCount, workerCount: workerCount, dispatched: 0, replyJob: FuncIndexArray.create(), replyWorker: PoolSlotArray.create()}
+	end 'create'
+
+	// How many jobs the fill hands out before the first await: the pipeline, or every job when there are
+	// fewer.
+	export function initialInFlight() returns PoolSlot
+		let pipeline = self.workerCount * JobsInFlightPerWorker
+		let inFlight = pipeline if pipeline < self.jobCount else self.jobCount
+		return inFlight as PoolSlot
+	end 'initialInFlight'
+
+	// The worker the fill's next job goes to: round-robin over the pool.
+	export function fillWorker() returns PoolSlot
+		return try (self.dispatched mod (self.workerCount as PoolSlot)) otherwise panic("PoolDispatch.fillWorker: a pool of no workers never reaches the dispatch loop")
+	end 'fillWorker'
+
+	export function hasUndispatched() returns bool
+		return self.dispatched < self.jobCount as PoolSlot
+	end 'hasUndispatched'
+
+	// Take the next job in dispatch order for `worker`. The caller pushes the worker's reply now, at the
+	// slot these columns just gained.
+	export function nextJob(worker PoolSlot) returns FuncIndex
+		let job = try self.order.get(self.dispatched) otherwise panic("PoolDispatch.nextJob: the dispatch order holds {self.order.count()} job(s) and slot {self.dispatched} is past the end — ask `hasUndispatched` first")
+		self.dispatched = self.dispatched + 1
+		self.replyJob.push(job)
+		self.replyWorker.push(worker)
+		return job
+	end 'nextJob'
+
+	// The worker holding the reply at `ready`, free once the caller lands that slot.
+	export function workerAt(ready ElementIndex) returns PoolSlot
+		return try self.replyWorker.get(ready) otherwise panic("PoolDispatch.workerAt: {ready} is not an outstanding slot — {self.replyWorker.count()} are in flight")
+	end 'workerAt'
+
+	// Land the reply at `ready` — `awaitAny`'s answer over the caller's reply array — and say which
+	// function it was for. `outstanding` is that array's count before the caller removes its reply, so
+	// the two sequences are checked to be one.
+	export function land(ready ElementIndex, outstanding ElementIndex) returns FuncIndex
+		if outstanding != self.replyJob.count() 'columnsOutOfStep'
+			panic("PoolDispatch.land: the caller holds {outstanding} reply(ies) against {self.replyJob.count()} job(s) in flight — a reply was pushed without `nextJob`, or a job taken without its reply being pushed")
+		end 'columnsOutOfStep'
+
+		_ = try self.replyWorker.remove(ready) otherwise panic("PoolDispatch.land: replyWorker.remove({ready}) — the two columns are pushed and removed together")
+		return try self.replyJob.remove(ready) otherwise panic("PoolDispatch.land: replyJob.remove({ready}) — `awaitAny` answered a slot of the caller's reply array, which is in step with this one")
+	end 'land'
+end 'PoolDispatch'
 
 // How many ops one function holds, and the packed longest-first sort key built from it.
 typealias FunctionOpTally = int(0 to u64.max)
@@ -150,7 +222,7 @@ module function allocateOnAWorkerPool(module TargetModule, target Target, projec
 	for _ in 0 upto funcCount 'eachFunction'
 		counters.push(RegAllocCounters.create())
 		facts.push(RegAllocFacts.create())
-		costs.push(RegAllocCosts.create())
+		costs.push(PoolPhaseCosts.create(RegAllocPhase.allCases.count()))
 	end 'eachFunction'
 
 	// ⭐ **WHAT THE SCHEDULER DID WHILE THE POOL RAN.** A pool of W workers over P processors is only
@@ -196,37 +268,26 @@ end 'allocateOnAWorkerPool'
 // worker that finished early behind whichever job is at the head — and the head is, by the longest-first
 // rule below, the biggest job in the module.
 function drainThePool(module TargetModule, valueClasses ValueClassColumns, workers RegAllocWorkerHandleArray, workerCount PoolSize, counters RegAllocCountersArray, facts RegAllocFactsArray, costs RegAllocCostsArray) returns FuncIndex
-	let funcCount = module.funcCount() as PoolSize
-	let order = functionsLongestFirst(module, funcCount: funcCount)
-
 	// The sentinel is "one past the last function", spelled in the FUNCTION-INDEX space rather than the
 	// pool's: a refusal of function 0 has to be storable here, and `PoolSize` starts at one.
 	var refused = module.funcCount() as FuncIndex
-
+	var scratch = SpliceScratch.create()
+	var dispatch = PoolDispatch.create(module.functions, blocks: module.blocks, funcCount: module.funcCount() as PoolSize, workerCount: workerCount)
 	var replies = RegAllocReplyArray.create()
-	var replyJob = FuncIndexArray.create()
-	var replyWorker = FuncIndexArray.create()
-	var dispatched = 0 as PoolSlot
 
-	let pipeline = workerCount * JobsInFlightPerWorker
-	let inFlight = pipeline if pipeline < funcCount else funcCount
-
-	while dispatched < inFlight as PoolSlot 'fillThePipeline'
-		let workerSlot = try (dispatched mod (workerCount as PoolSlot)) otherwise panic("drainThePool: a pool of no workers never reaches the dispatch loop")
-		let job = try order.get(dispatched) otherwise panic("drainThePool: the dispatch order holds {order.count()} job(s) and slot {dispatched} is past the end")
-		dispatchOneJob(module, valueClasses: valueClasses, workers: workers, workerSlot: workerSlot, funcIndex: job, replies: replies, replyJob: replyJob, replyWorker: replyWorker)
-		dispatched = dispatched + 1
+	for _ in 0 upto dispatch.initialInFlight() 'fillThePipeline'
+		dispatchOneJob(module, valueClasses: valueClasses, workers: workers, workerSlot: dispatch.fillWorker(), dispatch: dispatch, replies: replies)
 	end 'fillThePipeline'
 
 	while replies.count() > 0 'serveWhoeverFinishedFirst'
 		let ready = __Builtins.awaitAny(replies)
-		let funcIndex = try replyJob.remove(ready) otherwise panic("drainThePool: replyJob.remove({ready}) — the three in-flight columns are pushed and removed together, so an index in one is an index in all three")
-		let freedWorker = try replyWorker.remove(ready) otherwise panic("drainThePool: replyWorker.remove({ready}) — the three in-flight columns are pushed and removed together")
+		let freedWorker = dispatch.workerAt(ready)
+		let funcIndex = dispatch.land(ready, outstanding: replies.count())
 		let reply = try replies.remove(ready) otherwise panic("drainThePool: replies.remove({ready}) — `awaitAny` answered a slot of this very array")
 
 		if let result = try await reply 'allocated'
 			var func = try module.functions.get(funcIndex) otherwise panic("drainThePool: functions.get OOB at {funcIndex}")
-			spliceRegAllocResult(module, func: func, result: result)
+			spliceRegAllocResult(module, func: func, result: result, scratch: scratch)
 			try counters.set(funcIndex, value: result.counters) otherwise panic("drainThePool: counters.set OOB at {funcIndex}")
 			try facts.set(funcIndex, value: result.facts) otherwise panic("drainThePool: facts.set OOB at {funcIndex}")
 			try costs.set(funcIndex, value: result.costs) otherwise panic("drainThePool: costs.set OOB at {funcIndex}")
@@ -240,10 +301,8 @@ function drainThePool(module TargetModule, valueClasses ValueClassColumns, worke
 			end 'why'
 		end 'notAllocated'
 
-		if dispatched < funcCount as PoolSlot 'handTheFreedWorkerTheNextJob'
-			let job = try order.get(dispatched) otherwise panic("drainThePool: the dispatch order holds {order.count()} job(s) and slot {dispatched} is past the end")
-			dispatchOneJob(module, valueClasses: valueClasses, workers: workers, workerSlot: freedWorker as PoolSlot, funcIndex: job, replies: replies, replyJob: replyJob, replyWorker: replyWorker)
-			dispatched = dispatched + 1
+		if dispatch.hasUndispatched() 'handTheFreedWorkerTheNextJob'
+			dispatchOneJob(module, valueClasses: valueClasses, workers: workers, workerSlot: freedWorker, dispatch: dispatch, replies: replies)
 		end 'handTheFreedWorkerTheNextJob'
 	end 'serveWhoeverFinishedFirst'
 
@@ -255,18 +314,18 @@ function classColumnFor(valueClasses ValueClassColumns, module TargetModule, fun
 	return try valueClasses.get(funcIndex) otherwise panic("classColumnFor: the lowering produced class columns for {valueClasses.count()} function(s) but the module has {module.funcCount()} — every function's vregs are classified as they are minted, so the two counts are the same walk of the same module")
 end 'classColumnFor'
 
-// Send ONE function to ONE worker.
+// Send the next job in dispatch order to ONE worker, and push its reply at the slot `PoolDispatch` just
+// recorded the job in.
 //
 // ⭐ **THE UNIT IS BUILT INSIDE THE ARGUMENT AND STORED NOWHERE**, which is E3138's rule and not a
 // style: a value this frame has taken a second reference to cannot be proven sole at the send, and the
 // only shape the check admits is a call whose every `return` is a record literal (see
 // `RegAllocUnit.extract`).
-function dispatchOneJob(module TargetModule, valueClasses ValueClassColumns, workers RegAllocWorkerHandleArray, workerSlot PoolSlot, funcIndex FuncIndex, replies RegAllocReplyArray, replyJob FuncIndexArray, replyWorker FuncIndexArray)
+function dispatchOneJob(module TargetModule, valueClasses ValueClassColumns, workers RegAllocWorkerHandleArray, workerSlot PoolSlot, dispatch PoolDispatch, replies RegAllocReplyArray)
 	var worker = try workers.get(workerSlot) otherwise panic("dispatchOneJob: workers.get OOB at {workerSlot} below count {workers.count()}")
+	let funcIndex = dispatch.nextJob(workerSlot)
 	let func = try module.functions.get(funcIndex) otherwise panic("dispatchOneJob: functions.get OOB at {funcIndex}")
 	replies.push(worker.allocate(RegAllocUnit.extract(module, func: func, valueClass: classColumnFor(valueClasses, module: module, funcIndex: funcIndex))))
-	replyJob.push(funcIndex)
-	replyWorker.push(workerSlot)
 end 'dispatchOneJob'
 
 // ⭐⭐ **THE DISPATCH ORDER: LONGEST JOB FIRST (LPT).**
@@ -286,13 +345,16 @@ end 'dispatchOneJob'
 // scalars with no comparator closure to carry: `opCount * funcCount + funcIndex` is injective for
 // `funcIndex < funcCount`, and it is bounded by the module's total op count times its function count.
 // Read back DESCENDING, which is what makes it longest-first.
-function functionsLongestFirst(module TargetModule, funcCount PoolSize) returns FuncIndexArray
+//
+// It takes the two arrays rather than a module because it serves two tiers — `StdPassPool`'s module and
+// this one's — and a block's op count is the same question in both.
+function functionsLongestFirst(functions IrFunctionArray, blocks IrBlockArray, funcCount PoolSize) returns FuncIndexArray
 	var keys = FunctionOpTallyArray.create()
 	let keyStride = funcCount as FunctionOpTally
 
 	for funcIndex in 0 upto funcCount 'eachFunc'
-		let func = try module.functions.get(funcIndex) otherwise panic("functionsLongestFirst: functions.get OOB at {funcIndex}")
-		keys.push(liveOpTallyOf(module, func: func) * keyStride + funcIndex)
+		let func = try functions.get(funcIndex) otherwise panic("functionsLongestFirst: functions.get OOB at {funcIndex}")
+		keys.push((liveOpTallyOf(blocks, func: func) as FunctionOpTally) * keyStride + funcIndex)
 	end 'eachFunc'
 
 	keys.sort()
@@ -309,12 +371,12 @@ end 'functionsLongestFirst'
 
 // How many ops one function holds. Counted rather than collected: `IrModule.liveOpIndices` answers the
 // same number and allocates an array per function to do it, and this runs on every function of every
-// compile.
-function liveOpTallyOf(module TargetModule, func IrFunction) returns FunctionOpTally
-	var tally = 0 as FunctionOpTally
+// compile — here to order the dispatch, and in `StdUnit.extract` to reserve a unit's op array.
+export function liveOpTallyOf(blocks IrBlockArray, func IrFunction) returns OpCount
+	var tally = 0 as OpCount
 
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("liveOpTallyOf: blockRef {blockRef} is not in module.blocks")
+		let block = try blocks.get(blockRef) otherwise panic("liveOpTallyOf: blockRef {blockRef} is not in the module's blocks")
 		tally = tally + block.opRefs.count()
 
 		if block.hasTerminatorOp() 'hasTerminator'

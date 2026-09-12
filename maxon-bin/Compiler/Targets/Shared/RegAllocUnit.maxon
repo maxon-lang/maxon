@@ -634,7 +634,7 @@ module type RegAllocResult
 	export var blocks as RegAllocResultBlockArray
 	export var counters as RegAllocCounters
 	export var facts as RegAllocFacts
-	export var costs as RegAllocCosts
+	export var costs as PoolPhaseCosts
 
 	// The spans of the ops in `blocks`, flat and in the order those blocks list them — the same
 	// `liveOpIndices` order the unit's column arrived in, re-derived on THIS side because the allocator
@@ -669,7 +669,7 @@ module type RegAllocResult
 		unit.blocks.clear()
 		var func = try module.functions.get(0) otherwise panic("RegAllocResult.byAllocating: the rebuilt module holds no function — `rebuildUnitModule` pushes exactly one")
 		var counters = RegAllocCounters.create()
-		var costs = RegAllocCosts.create()
+		var costs = PoolPhaseCosts.create(RegAllocPhase.allCases.count())
 		var facts = RegAllocFacts.create()
 		var refusal = RegAllocRefusalSite.create()
 
@@ -749,18 +749,15 @@ end 'harvestResultBlock'
 // arrays are SHARED with the Maxon and Std tiers and reach back into the parse memo, so emptying one in
 // place corrupts every later compile of the project — silently, since nothing downstream re-reads it
 // (`IrBlock`'s header states the rule; this is one of its sites).
-module function spliceRegAllocResult(module TargetModule, func IrFunction, result RegAllocResult)
-	let blockRefById = blockRefsByIdOf(module, func: func)
-	let noSuchBlock = module.blocks.count()
-	var slots = OpSlotSupply.create(module.liveOpIndices(func), spanIds: result.spanIds)
-
-	var newRefs = BlockRefArray.create()
-	newRefs.reserve(result.blocks.count())
+module function spliceRegAllocResult(module TargetModule, func IrFunction, result RegAllocResult, scratch SpliceScratch)
+	module.prepareSplice(func, scratch: scratch)
+	var spans = ResultSpanSupply.create(result.spanIds)
+	func.blockRefs.clear()
 
 	for resultBlock in result.blocks 'eachBlock'
-		let blockRef = try blockRefById.get(resultBlock.id) otherwise panic("spliceRegAllocResult: '{String.from(func.name)}' names a block id {resultBlock.id} outside this function's id space")
+		let blockRef = scratch.blockRefOf(resultBlock.id)
 
-		if blockRef == noSuchBlock 'idNotInThisFunction'
+		if blockRef == scratch.absent 'idNotInThisFunction'
 			panic("spliceRegAllocResult: '{String.from(func.name)}' has no block with id {resultBlock.id} — the allocator neither adds nor removes blocks, so every result block is one this function already owns")
 		end 'idNotInThisFunction'
 
@@ -770,7 +767,7 @@ module function spliceRegAllocResult(module TargetModule, func IrFunction, resul
 		opRefs.reserve(resultBlock.ops.count())
 
 		for op in resultBlock.ops 'eachOp'
-			opRefs.push(slots.place(module, op: op))
+			opRefs.push(module.placeOp(scratch.slots, op: op, spanId: spans.next()))
 		end 'eachOp'
 
 		block.opRefs = opRefs
@@ -784,15 +781,14 @@ module function spliceRegAllocResult(module TargetModule, func IrFunction, resul
 			unset then block.terminator = Terminator.unset
 			dead then block.terminator = Terminator.dead
 			fallthrough then block.terminator = Terminator.fallthrough
-			op(instruction) then block.terminator = Terminator.opIndex(slots.place(module, op: instruction))
+			op(instruction) then block.terminator = Terminator.opIndex(module.placeOp(scratch.slots, op: instruction, spanId: spans.next()))
 		end 'term'
 
 		block.blockArgs = IrBlockArgArray.create()
 		block.branchEdges = BranchEdgeArray.create()
-		newRefs.push(blockRef)
+		func.blockRefs.push(blockRef)
 	end 'eachBlock'
 
-	func.blockRefs = newRefs
 	func.stackSize = result.stackSize
 
 	// ⭐ **THE LOCATIONS COME HOME BY ORDER, SO THE COUNT IS THE ONLY THING THAT CAN SAY THE TWO AGREE.**
@@ -809,94 +805,35 @@ module function spliceRegAllocResult(module TargetModule, func IrFunction, resul
 	// ⭐ **THE COLUMN AND THE OPS CAME OUT EVEN.** The splice walks the result's blocks and the column was
 	// collected off those very blocks, so a leftover or a shortfall is the two orders having drifted —
 	// which would misattribute every line row from that point on, silently.
-	if module.spans.armed and slots.spansConsumed() != result.spanIds.count() 'spansOutOfStep'
-		panic("spliceRegAllocResult: '{String.from(func.name)}' placed {slots.spansConsumed()} spans against the {result.spanIds.count()} the allocator sent home — the harvest's op order and this splice's order have drifted")
+	if module.spans.armed and spans.consumed() != result.spanIds.count() 'spansOutOfStep'
+		panic("spliceRegAllocResult: '{String.from(func.name)}' placed {spans.consumed()} spans against the {result.spanIds.count()} the allocator sent home — the harvest's op order and this splice's order have drifted")
 	end 'spansOutOfStep'
 end 'spliceRegAllocResult'
 
-// WHERE A SPLICED OP GOES: THIS FUNCTION'S OWN SLOTS FIRST, THEN THE TAIL OF `module.ops`.
-//
-// A rebuilt function's ops are new VALUES, but they are the same COUNT to within the handful a split
-// added and a self-move dropped - and the slots the function held before the splice belong to nobody
-// else, because an op index is never shared between functions. Appending all of them instead would put
-// a second copy of the whole program's Target ops into a module that already holds one, which is a
-// doubling of the backend's largest single structure for no gain.
-//
-// The recycled list is `liveOpIndices`, not every index in the function's range: the array is
-// append-only and earlier passes leave orphans in it, and an orphan is not this splice's to reuse.
-// ⚠ **THE SPAN COLUMN RIDES HERE RATHER THAN AT THE CALL SITES**, because a slot is either RECYCLED (an
-// `ops.set`, which the column mirrors with a `set` of its own) or APPENDED (a push past the tail, which it
-// mirrors with a push) — and a caller that had to mirror that choice itself would be the one place the two
-// halves could disagree.
-type OpSlotSupply
-	var recycled as OpIndexArray
-	var taken as ElementIndex
+// The spans a result sent home, handed out in the order the splice places its ops — the same
+// `liveOpIndices` order the harvest collected them in.
+type ResultSpanSupply
 	var spanIds as SpanIdArray
-	var spanTaken as ElementIndex
+	var taken as ElementIndex
 
-	export static function create(recycled OpIndexArray, spanIds SpanIdArray) returns OpSlotSupply
-		return Self{recycled: recycled, taken: 0, spanIds: spanIds, spanTaken: 0}
+	export static function create(spanIds SpanIdArray) returns ResultSpanSupply
+		return Self{spanIds: spanIds, taken: 0}
 	end 'create'
 
-	export function spansConsumed() returns ElementIndex
-		return self.spanTaken
-	end 'spansConsumed'
-
-	export function place(module TargetModule, op TargetOp) returns OpIndex
-		let spanId = self.nextSpan()
-
-		if self.taken < self.recycled.count() 'reuseThisFunctionsOwnSlot'
-			let recycledIdx = try self.recycled.get(self.taken) otherwise panic("OpSlotSupply.place: recycled.get OOB at {self.taken} below count {self.recycled.count()}")
-			self.taken = self.taken + 1
-			try module.ops.set(recycledIdx, value: op) otherwise panic("OpSlotSupply.place: ops.set OOB at {recycledIdx}")
-			module.spans.placeAt(recycledIdx, spanId: spanId)
-			return recycledIdx
-		end 'reuseThisFunctionsOwnSlot'
-
-		let freshIdx = module.ops.count()
-		module.ops.push(op)
-		module.spans.pushId(freshIdx, spanId: spanId)
-		return freshIdx
-	end 'place'
+	export function consumed() returns ElementIndex
+		return self.taken
+	end 'consumed'
 
 	// The next span the result sent home. A build that is not capturing carries none and never advances,
 	// which is what makes the caller's even-count refusal a statement about capturing builds only.
-	function nextSpan() returns SpanId
+	export function next() returns SpanId
 		if self.spanIds.count() == 0 'notCapturing'
 			return NoSpanId
 		end 'notCapturing'
 
-		let at = self.spanTaken
-		self.spanTaken = self.spanTaken + 1
+		let at = self.taken
+		self.taken = self.taken + 1
 
-		return try self.spanIds.get(at) otherwise panic("OpSlotSupply.nextSpan: the result carried {self.spanIds.count()} spans and the splice asked for more — the allocator's op order and this splice's order have drifted")
-	end 'nextSpan'
-end 'OpSlotSupply'
-
-// This function's `BlockId -> BlockRef` map, as a dense column over the id space. One pass over the
-// block list rather than `IrModule.getBlockByIdIn` per result block, which is a scan and would make the
-// splice quadratic in a function's block count.
-function blockRefsByIdOf(module TargetModule, func IrFunction) returns BlockRefArray
-	var highestId = 0 as BlockId
-
-	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("blockRefsByIdOf: blockRef {blockRef} is not in module.blocks")
-
-		if block.id > highestId 'higher'
-			highestId = block.id
-		end 'higher'
-	end 'eachBlock'
-
-	// `module.blocks.count()` is the "no such block" sentinel: it is not a `BlockRef` any block has, so
-	// an id this function does not own reads as absent rather than as block 0. The id space is dense per
-	// function but not gap-free, so the holes are real.
-	var byId = BlockRefArray.create()
-	byId.refill(((highestId + 1) as ElementIndex), value: module.blocks.count())
-
-	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("blockRefsByIdOf: blockRef {blockRef} is not in module.blocks")
-		try byId.set(block.id, value: blockRef) otherwise panic("blockRefsByIdOf: block id {block.id} is above the {byId.count()} the id space was sized to")
-	end 'eachBlock'
-
-	return byId
-end 'blockRefsByIdOf'
+		return try self.spanIds.get(at) otherwise panic("ResultSpanSupply.next: the result carried {self.spanIds.count()} spans and the splice asked for more — the allocator's op order and this splice's order have drifted")
+	end 'next'
+end 'ResultSpanSupply'

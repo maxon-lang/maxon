@@ -2932,9 +2932,9 @@ export type SplitDriver
 	// had no use for and therefore never paid for.
 	//
 	// The ONE liveness build happens here too. Everything after it is an incremental repair of the region
-	// a split dirtied (`refreshAfterSplit`) — the whole-function rebuild this used to run per split was
-	// the O(function × splits) quadratic.
-	export static function create(module TargetModule, func IrFunction, topo FuncTopology, pool RegMask, file RegisterFile, valueClass ValueClassColumn, opFacts OpVariantFacts, costs RegAllocCosts) returns SplitDriver
+	// a split dirtied (`refreshAfterSplit`): a whole-function rebuild per split would be O(function ×
+	// splits).
+	export static function create(module TargetModule, func IrFunction, topo FuncTopology, pool RegMask, file RegisterFile, valueClass ValueClassColumn, opFacts OpVariantFacts, costs PoolPhaseCosts) returns SplitDriver
 		var cfg = buildFuncCfg(module, func: func, topo: topo)
 		let liveness = timedLiveness(module, cfg: cfg, func: func, valueClass: valueClass, file: file, opFacts: opFacts, costs: costs)
 
@@ -4162,16 +4162,16 @@ end 'peakCrossesAColdRun'
 //
 // It takes `costs`, not `counters`, because the probe records all five quantities and only that value
 // holds all five. It is the FUNCTION's own cost column, not the compile's: the core has no `Project`
-// (see `RegAllocCosts`), and the driver folds one function's column home when its result lands.
+// (see `PoolPhaseCosts`), and the driver folds one function's column home when its result lands.
 //
-// The driver now runs exactly ONE of these per function, so what this phase reports is a single
+// The driver runs exactly ONE of these per function, so what this phase reports is a single
 // whole-function build. The per-split REPAIR of that build (`refreshAfterSplit`) is billed to
 // `splitting`, which is where it belongs: it is proportional to what the split changed, not to the
 // function, and it is the splitter's own bookkeeping.
-function timedLiveness(module TargetModule, cfg FuncCfg, func IrFunction, valueClass ValueClassColumn, file RegisterFile, opFacts OpVariantFacts, costs RegAllocCosts) returns LivenessResult
+function timedLiveness(module TargetModule, cfg FuncCfg, func IrFunction, valueClass ValueClassColumn, file RegisterFile, opFacts OpVariantFacts, costs PoolPhaseCosts) returns LivenessResult
 	let probe = PhaseProbe.beginCounters()
 	let liveness = computeLivenessOn(module, cfg: cfg, func: func, valueClass: valueClass, file: file, opFacts: opFacts)
-	costs.record(RegAllocPhase.liveness, probe: probe)
+	costs.record(RegAllocPhase.liveness.ordinal, probe: probe)
 	return liveness
 end 'timedLiveness'
 

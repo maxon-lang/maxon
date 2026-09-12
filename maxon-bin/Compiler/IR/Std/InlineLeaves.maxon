@@ -3075,7 +3075,7 @@ type SiteSplicer
 			// debugger could never step into one. Read before the append, for the borrow reason above.
 			let calleeSpan = self.module.spans.at(opIdx)
 			let aborts = self.meta.hasRole(op, role: OpRole.diverging)
-			let cloned = self.cloner.clone(op, valueSubst: subst, blockSubst: blocks.blockSubst)
+			let cloned = self.cloner.clone(op, valueSubst: subst, blockSubst: blocks.blockSubst, payloads: ClonePayloads.shared)
 			self.noteClonedDefs(cloned)
 			self.module.spans.current = calleeSpan
 			self.module.appendOp(fresh, op: cloned)
@@ -3252,7 +3252,7 @@ type SiteSplicer
 	// the parse memo, so an in-place write corrupts every later compile of the project with nothing
 	// downstream that re-reads it to notice.
 	function cloneExit(calleeBlock IrBlock, freshRef BlockRef, term StdOp, subst ValueIdArray, blocks SpliceBlocks)
-		let cloned = self.cloner.clone(term, valueSubst: subst, blockSubst: blocks.blockSubst)
+		let cloned = self.cloner.clone(term, valueSubst: subst, blockSubst: blocks.blockSubst, payloads: ClonePayloads.shared)
 		self.module.setTerminator(self.blockAt(freshRef), op: cloned)
 
 		var edges = BranchEdgeArray.create()

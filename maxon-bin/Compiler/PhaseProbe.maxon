@@ -102,11 +102,11 @@ var openPhaseSpans = TraceNameArray.create()
 //
 // `frees` is DERIVED, never counted — see PhaseProbe.elapsed.
 export type PhaseDelta
-	export let nanos as DurationNanos
-	export let cpuTicks as CpuTicks
-	export let allocs as AllocCount
-	export let frees as AllocCount
-	export let bytes as HeapByteCount
+	export var nanos as DurationNanos
+	export var cpuTicks as CpuTicks
+	export var allocs as AllocCount
+	export var frees as AllocCount
+	export var bytes as HeapByteCount
 
 	export static function create(nanos DurationNanos, cpuTicks CpuTicks, allocs AllocCount, frees AllocCount, bytes HeapByteCount) returns PhaseDelta
 		return Self{nanos: nanos, cpuTicks: cpuTicks, allocs: allocs, frees: frees, bytes: bytes}
@@ -117,7 +117,7 @@ export type PhaseDelta
 	end 'zero'
 
 	// This delta MINUS an inner one — the "subtract the inner delta" discipline, applied
-	// to all four quantities at once (see `RegAllocCosts.recordExcluding`).
+	// to all four quantities at once (see `PoolPhaseCosts.recordExcluding`).
 	//
 	// Every component is a non-negative range, so an inner delta that EXCEEDS the outer
 	// one traps here rather than wrapping. That is the intent: the inner phase is a
@@ -154,16 +154,16 @@ end 'CounterSource'
 
 // An open bracket: the counters as they stood when the phase began, and WHICH counters they were.
 export type PhaseProbe
-	export let nanos as InstantNanos
-	export let cpuTicks as CpuTicks
+	export var nanos as InstantNanos
+	export var cpuTicks as CpuTicks
 
 	// Cumulative allocations and cumulative FREES at the instant the phase opened. The process-wide source
 	// keeps no free counter — it keeps a LIVE one — so its cumulative frees are read as `total - live`,
 	// which is exact at every instant by definition. See `freesSoFar`.
-	export let allocTotal as AllocCount
-	export let freeTotal as AllocCount
-	export let bytes as HeapByteCount
-	export let source as CounterSource
+	export var allocTotal as AllocCount
+	export var freeTotal as AllocCount
+	export var bytes as HeapByteCount
+	export var source as CounterSource
 
 	// Open a bracket, and open the matching TRACE SPAN.
 	//
@@ -211,14 +211,34 @@ export type PhaseProbe
 	end 'beginCounters'
 
 	// The two openers differ in ONE thing — which counters — so they are one body with that as its argument.
-	// Memory counters first, clock next, CPU last, exactly as this file's header requires.
 	static function openOn(source CounterSource) returns PhaseProbe
-		let allocTotal = allocsSoFar(source)
-		let freeTotal = freesSoFar(source)
-		let bytes = bytesSoFar(source)
-		let nanos = Clock.nowNanos()
-		return Self{nanos: nanos, cpuTicks: threadCpuTicks(), allocTotal: allocTotal, freeTotal: freeTotal, bytes: bytes, source: source}
+		var probe = Self{nanos: 0, cpuTicks: 0, allocTotal: 0, freeTotal: 0, bytes: 0, source: source}
+		probe.readCounters()
+		return probe
 	end 'openOn'
+
+	// ⭐ **OPEN THIS PROBE AGAIN, ON THE COUNTERS IT WAS OPENED ON** — for a bracket that runs once per
+	// step per function on a pool worker, where a fresh probe per bracket is an allocation INSIDE the
+	// bracket it measures (the record is minted after the counters are read) and so a per-function term in
+	// every row it brackets. A worker keeps one probe and reopens it.
+	//
+	// Only a counters-only probe reopens: a span-opening one pairs its BEGIN with the END a recorder emits,
+	// and reopening it would leave that pairing to the caller.
+	export function reopenCounters()
+		match self.source 'source'
+			callingThread then self.readCounters()
+			processWide then panic("PhaseProbe.reopenCounters: this probe opened a trace span (`begin`), and a span is closed by the recorder that ends it — open a fresh one instead")
+		end 'source'
+	end 'reopenCounters'
+
+	// Memory counters first, clock next, CPU last, exactly as this file's header requires.
+	function readCounters()
+		self.allocTotal = allocsSoFar(self.source)
+		self.freeTotal = freesSoFar(self.source)
+		self.bytes = bytesSoFar(self.source)
+		self.nanos = Clock.nowNanos()
+		self.cpuTicks = threadCpuTicks()
+	end 'readCounters'
 
 	// Open a bracket around a pipeline phase. The name comes from the phase, so the span the
 	// trace shows and the row the timing table shows can never disagree about which phase it is.
@@ -241,6 +261,14 @@ export type PhaseProbe
 	// the free with nobody counting it. Array growth IS reallocation, so this is the whole
 	// difference between an alloc column that can see a growth policy and one that cannot.
 	export function elapsed() returns PhaseDelta
+		var delta = PhaseDelta.zero()
+		self.elapsedInto(delta)
+		return delta
+	end 'elapsed'
+
+	// `elapsed` into a record the caller already holds — a bracket closed once per step per function
+	// (`PoolPhaseCosts.record`) then allocates nothing of its own.
+	export function elapsedInto(delta PhaseDelta)
 		let endCpuTicks = threadCpuTicks()
 		let elapsedNanos = Clock.elapsedNanos(self.nanos)
 
@@ -249,15 +277,17 @@ export type PhaseProbe
 		let endFreeTotal = freesSoFar(self.source)
 		let endBytes = bytesSoFar(self.source)
 
-		let allocs = endAllocTotal - self.allocTotal
-		let frees = endFreeTotal - self.freeTotal
+		delta.nanos = elapsedNanos
 
 		// The CPU counter is per-thread and monotonic, so this subtraction cannot go
 		// negative while the phase runs on the thread that opened it. If green threads ever
 		// migrate a compile across Ms, that stops being true and this is where it would
 		// surface — as a trap on the non-negative range, not as a quietly wrapped number.
-		return PhaseDelta.create(elapsedNanos, cpuTicks: endCpuTicks - self.cpuTicks, allocs: allocs, frees: frees, bytes: endBytes - self.bytes)
-	end 'elapsed'
+		delta.cpuTicks = endCpuTicks - self.cpuTicks
+		delta.allocs = endAllocTotal - self.allocTotal
+		delta.frees = endFreeTotal - self.freeTotal
+		delta.bytes = endBytes - self.bytes
+	end 'elapsedInto'
 end 'PhaseProbe'
 
 // THE ALLOCATOR HAS TWO LAYERS, AND EVERY FIGURE THIS FILE REPORTS SUMS BOTH.
@@ -396,20 +426,41 @@ end 'closeOpenPhaseSpans'
 // because the sub-phases open none (see `PhaseProbe.beginCounters`).
 //
 // It takes a DELTA rather than a probe because the bracket it describes did not run here: the allocator
-// measures each sub-phase into a `RegAllocCosts` value the function it allocated carries back, and the
+// measures each sub-phase into a `PoolPhaseCosts` value the function it allocated carries back, and the
 // driver folds that value in on the main thread. In a PARALLEL compile several such brackets overlap in
-// wall time, so these rows SUM over workers — see `RegAllocCosts` for which columns that makes a sum and
+// wall time, so these rows SUM over workers — see `PoolPhaseCosts` for which columns that makes a sum and
 // which it leaves exact.
 module function addRegAllocDelta(project Project, phase RegAllocPhase, delta PhaseDelta)
 	project.timings.regAlloc.addPhaseCost(phase, nanos: delta.nanos, cpuTicks: delta.cpuTicks)
 	project.memory.regAlloc.addPhase(phase, delta: delta)
 end 'addRegAllocDelta'
 
-// ⭐⭐ **ONE FUNCTION'S REGISTER-ALLOCATOR SUB-PHASE COSTS, MEASURED WITHOUT A `Project`.**
+// ⭐ **FOLD A COMPILE PHASE MEASURED ON A POOL WORKER INTO BOTH TABLES.** `addRegAllocDelta`'s twin for a
+// phase that IS a `CompilePhase` row — the Std passes `StdPassPool` runs per function — and the third
+// writer of phase attribution beside `recordPhaseDelta`. No span closes and no heartbeat is touched: the
+// bracket ran on a worker (`PhaseProbe.beginCounters`), and the driver phase that ran the pool carries
+// both on the main thread.
 //
-// The allocator's core runs on a pool worker, which has no `Project` — a module `var` reached from a
-// message is E3143, and `Project` is how the compile's tables are reached. So the core accumulates into
-// one of these, the result carries it home, and the driver folds it in with `addRegAllocDelta`.
+// The phase is MARKED as pool-measured in the timing table, which is what keeps the attribution honest:
+// its row is a sum over workers that overlaps the driver's wall, so it is a breakdown OF the driver phase
+// rather than a disjoint interval beside it, and `CompileTimings.attributedCost` counts it as such.
+module function foldPoolPhaseDelta(project Project, phase CompilePhase, delta PhaseDelta)
+	project.timings.addPoolPhaseCost(phase, nanos: delta.nanos, cpuTicks: delta.cpuTicks)
+	project.memory.addPhase(phase, delta: delta)
+end 'foldPoolPhaseDelta'
+
+// A position in a `PoolPhaseCosts` — an ordinal of whichever phase enum, or a step of whichever schedule,
+// the holder was sized for.
+typealias PoolPhaseIndex = int(0 to u64.max)
+
+// ⭐⭐ **ONE UNIT OF POOL WORK'S PER-PHASE COSTS, MEASURED WITHOUT A `Project`.**
+//
+// A pool worker has no `Project` — a module `var` reached from a message is E3143, and `Project` is how
+// the compile's tables are reached. So a worker accumulates into one of these and the driver folds it in
+// on the main thread: the register allocator's core into the `RegAllocPhase` sub-phase rows through
+// `addRegAllocDelta`, one record per function; the Std pass pool into the passes' own `CompilePhase` rows
+// through `foldPoolPhaseDelta`, one record per worker for the whole compile. The index space is the
+// caller's — a phase enum's ordinals, or a schedule's step positions.
 //
 // ⚠ **WHICH COLUMNS SURVIVE A PARALLEL COMPILE, AND WHAT THEY SUM TO.** `nanos` and `cpuTicks` are
 // per-bracket durations and remain exactly that: summed over workers they answer *"how much time did the
@@ -429,15 +480,17 @@ end 'addRegAllocDelta'
 // Five scalar columns rather than an `Array with PhaseDelta`, for `RegAllocStats.phaseNanos`' reason: a
 // boxed pair per sub-phase per function is thousands of allocations on the one pass the scale ladder
 // watches.
-module type RegAllocCosts
+module type PoolPhaseCosts
 	var nanos as DurationNanosArray
 	var cpuTicks as CpuTicksArray
 	var allocs as AllocCountArray
 	var frees as AllocCountArray
 	var bytes as ByteCountArray
 
-	export static function create() returns RegAllocCosts
-		let width = RegAllocPhase.allCases.count()
+	// The one delta every `record` closes its probe into, so closing a bracket allocates nothing.
+	var closing as PhaseDelta
+
+	export static function create(width PoolPhaseIndex) returns PoolPhaseCosts
 		var spentNanos = DurationNanosArray.create()
 		spentNanos.resize(width)
 		var spentCpu = CpuTicksArray.create()
@@ -448,35 +501,44 @@ module type RegAllocCosts
 		spentFrees.resize(width)
 		var spentBytes = ByteCountArray.create()
 		spentBytes.resize(width)
-		return Self{nanos: spentNanos, cpuTicks: spentCpu, allocs: spentAllocs, frees: spentFrees, bytes: spentBytes}
+		return Self{nanos: spentNanos, cpuTicks: spentCpu, allocs: spentAllocs, frees: spentFrees, bytes: spentBytes, closing: PhaseDelta.zero()}
 	end 'create'
 
-	export function add(phase RegAllocPhase, delta PhaseDelta)
-		let idx = phase.ordinal
-		try self.nanos.set(idx, value: (try self.nanos.get(idx) otherwise panic("RegAllocCosts.add: nanos index OOB for '{phase.name}'")) + delta.nanos) otherwise panic("RegAllocCosts.add: nanos index OOB for '{phase.name}'")
-		try self.cpuTicks.set(idx, value: (try self.cpuTicks.get(idx) otherwise panic("RegAllocCosts.add: cpuTicks index OOB for '{phase.name}'")) + delta.cpuTicks) otherwise panic("RegAllocCosts.add: cpuTicks index OOB for '{phase.name}'")
-		try self.allocs.set(idx, value: (try self.allocs.get(idx) otherwise panic("RegAllocCosts.add: allocs index OOB for '{phase.name}'")) + delta.allocs) otherwise panic("RegAllocCosts.add: allocs index OOB for '{phase.name}'")
-		try self.frees.set(idx, value: (try self.frees.get(idx) otherwise panic("RegAllocCosts.add: frees index OOB for '{phase.name}'")) + delta.frees) otherwise panic("RegAllocCosts.add: frees index OOB for '{phase.name}'")
-		try self.bytes.set(idx, value: (try self.bytes.get(idx) otherwise panic("RegAllocCosts.add: bytes index OOB for '{phase.name}'")) + delta.bytes) otherwise panic("RegAllocCosts.add: bytes index OOB for '{phase.name}'")
+	// A record nothing else holds, with `source`'s figures — what a worker hands back through a reply,
+	// which moves and so admits no record a second frame still owns.
+	export static function copyOf(source PoolPhaseCosts) returns PoolPhaseCosts
+		return Self{nanos: source.nanos.clone(), cpuTicks: source.cpuTicks.clone(), allocs: source.allocs.clone(), frees: source.frees.clone(), bytes: source.bytes.clone(), closing: PhaseDelta.zero()}
+	end 'copyOf'
+
+	export function width() returns PoolPhaseIndex
+		return self.nanos.count()
+	end 'width'
+
+	export function add(index PoolPhaseIndex, delta PhaseDelta)
+		try self.nanos.set(index, value: (try self.nanos.get(index) otherwise panic("PoolPhaseCosts.add: index {index} is outside the {self.width()} phases this record was sized for")) + delta.nanos) otherwise panic("PoolPhaseCosts.add: nanos.set OOB at {index}")
+		try self.cpuTicks.set(index, value: (try self.cpuTicks.get(index) otherwise panic("PoolPhaseCosts.add: cpuTicks.get OOB at {index}")) + delta.cpuTicks) otherwise panic("PoolPhaseCosts.add: cpuTicks.set OOB at {index}")
+		try self.allocs.set(index, value: (try self.allocs.get(index) otherwise panic("PoolPhaseCosts.add: allocs.get OOB at {index}")) + delta.allocs) otherwise panic("PoolPhaseCosts.add: allocs.set OOB at {index}")
+		try self.frees.set(index, value: (try self.frees.get(index) otherwise panic("PoolPhaseCosts.add: frees.get OOB at {index}")) + delta.frees) otherwise panic("PoolPhaseCosts.add: frees.set OOB at {index}")
+		try self.bytes.set(index, value: (try self.bytes.get(index) otherwise panic("PoolPhaseCosts.add: bytes.get OOB at {index}")) + delta.bytes) otherwise panic("PoolPhaseCosts.add: bytes.set OOB at {index}")
 	end 'add'
 
-	// Everything one sub-phase has claimed so far — the "before" snapshot `recordExcluding` subtracts
+	// Everything one phase has claimed so far — the "before" snapshot `recordExcluding` subtracts
 	// against, and what the driver folds home one phase at a time.
-	export function accumulated(phase RegAllocPhase) returns PhaseDelta
-		let idx = phase.ordinal
-		let spentNanos = try self.nanos.get(idx) otherwise panic("RegAllocCosts.accumulated: nanos index OOB for '{phase.name}'")
-		let spentCpu = try self.cpuTicks.get(idx) otherwise panic("RegAllocCosts.accumulated: cpuTicks index OOB for '{phase.name}'")
-		let spentAllocs = try self.allocs.get(idx) otherwise panic("RegAllocCosts.accumulated: allocs index OOB for '{phase.name}'")
-		let spentFrees = try self.frees.get(idx) otherwise panic("RegAllocCosts.accumulated: frees index OOB for '{phase.name}'")
-		let spentBytes = try self.bytes.get(idx) otherwise panic("RegAllocCosts.accumulated: bytes index OOB for '{phase.name}'")
+	export function accumulated(index PoolPhaseIndex) returns PhaseDelta
+		let spentNanos = try self.nanos.get(index) otherwise panic("PoolPhaseCosts.accumulated: index {index} is outside the {self.width()} phases this record was sized for")
+		let spentCpu = try self.cpuTicks.get(index) otherwise panic("PoolPhaseCosts.accumulated: cpuTicks.get OOB at {index}")
+		let spentAllocs = try self.allocs.get(index) otherwise panic("PoolPhaseCosts.accumulated: allocs.get OOB at {index}")
+		let spentFrees = try self.frees.get(index) otherwise panic("PoolPhaseCosts.accumulated: frees.get OOB at {index}")
+		let spentBytes = try self.bytes.get(index) otherwise panic("PoolPhaseCosts.accumulated: bytes.get OOB at {index}")
 		return PhaseDelta.create(spentNanos, cpuTicks: spentCpu, allocs: spentAllocs, frees: spentFrees, bytes: spentBytes)
 	end 'accumulated'
 
-	export function record(phase RegAllocPhase, probe PhaseProbe)
-		self.add(phase, delta: probe.elapsed())
+	export function record(index PoolPhaseIndex, probe PhaseProbe)
+		probe.elapsedInto(self.closing)
+		self.add(index, delta: self.closing)
 	end 'record'
 
-	// Record `phase`, less whatever an INNER phase already claimed while it ran.
+	// Record `index`, less whatever an INNER phase already claimed while it ran.
 	//
 	// The splitter owns every liveness computation, so the wall clock around the splitter contains the
 	// whole of liveness — and so does its allocation count, and its byte volume. Billing the splitter for
@@ -485,8 +547,9 @@ module type RegAllocCosts
 	// accumulated total of the inner phase taken BEFORE the outer one opened; this subtracts what it grew
 	// by. The two brackets NEST, so every component of the subtraction is non-negative even when other
 	// workers are inflating the memory columns — `PhaseDelta.minus` traps if that ever stops holding.
-	export function recordExcluding(phase RegAllocPhase, probe PhaseProbe, innerPhase RegAllocPhase, innerBefore PhaseDelta)
-		let innerGrowth = self.accumulated(innerPhase).minus(innerBefore)
-		self.add(phase, delta: probe.elapsed().minus(innerGrowth))
+	export function recordExcluding(index PoolPhaseIndex, probe PhaseProbe, innerIndex PoolPhaseIndex, innerBefore PhaseDelta)
+		let innerGrowth = self.accumulated(innerIndex).minus(innerBefore)
+		probe.elapsedInto(self.closing)
+		self.add(index, delta: self.closing.minus(innerGrowth))
 	end 'recordExcluding'
-end 'RegAllocCosts'
+end 'PoolPhaseCosts'

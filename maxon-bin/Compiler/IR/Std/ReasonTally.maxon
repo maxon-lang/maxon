@@ -21,6 +21,18 @@ export type OrdinalTally
 		try self.counts.set(ordinal, value: before + count) otherwise panic("OrdinalTally.add: ordinal {ordinal} is outside the {self.counts.count()} cases this tally was created for")
 	end 'add'
 
+	// Add `other`'s counts into this tally, case by case. Two tallies of one enum have one width; any
+	// other pairing is two passes' reasons being summed into one line.
+	export function absorb(other OrdinalTally)
+		if other.counts.count() != self.counts.count() 'differentEnums'
+			panic("OrdinalTally.absorb: a tally of {other.counts.count()} cases cannot be folded into one of {self.counts.count()} — the two index different enums")
+		end 'differentEnums'
+
+		for ordinal in 0 upto other.counts.count() 'eachCase'
+			self.add(ordinal, count: other.countAt(ordinal))
+		end 'eachCase'
+	end 'absorb'
+
 	export function countAt(ordinal ElementIndex) returns TallyCount
 		return try self.counts.get(ordinal) otherwise panic("OrdinalTally.countAt: ordinal {ordinal} is outside the {self.counts.count()} cases this tally was created for")
 	end 'countAt'

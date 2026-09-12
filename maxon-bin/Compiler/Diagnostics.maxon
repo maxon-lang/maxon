@@ -244,23 +244,26 @@ end 'reportPositionedWithNote'
 // `PhaseProbe.openPhaseSpans` and `QueryEngine.sharedFileMemos`. Each states WHAT it needs and points
 // here for WHY, so the reason moves in one edit rather than four.
 //
-// ⛔⛔ **ALL FOUR USED TO SAY "the compiler's SCHEDULER IS SINGLE-M", AND THAT PREMISE HAS EXPIRED.** The default
-// processor count is the machine's since the `DefaultMaxProcs` flip, and a green-thread program really
-// does run on several Ms. The CONCLUSION is unchanged; what carries it is EC10, one door further in:
+// ⛔⛔ **THE PREMISE IS NOT "the compiler's SCHEDULER IS SINGLE-M"** — the default processor count is the
+// machine's, and this compiler really does run on several Ms. What carries the conclusion:
 //
 //   * A green thread and its coroutines form a STRAND, and one machine runs one member of a strand at a
 //     time (`GtRuntime.GtOffStrandHolder`; `SchedRuntime.maxon`'s header states the invariant in full).
-//   * **This compiler contains no `spawn`.** Its only concurrency is `async`, and an `async` frame is a
-//     COROUTINE of the green thread that created it — a member of `main`'s strand. So this process runs one
-//     member of one strand at a time, at every `MAXON_MAX_PROCS`.
+//     An `async` frame is a COROUTINE of the green thread that created it — a member of `main`'s strand.
+//   * **This compiler spawns TWO pools of worker services — `RegAllocPool` and `StdPassPool` — and no
+//     worker touches any of these four latches.** A module `var` reached from a service message is E3143,
+//     so a worker structurally cannot log through `Logger`, open a trace span or write a diagnostic: each
+//     buffers what it has to say (`PassLog`, `PoolPhaseCosts`) and the driver folds it on `main`'s strand
+//     after the pool has drained. The latches are therefore still written by exactly one strand.
 //   * The IOCP completion thread is a second OS thread and is not a counter-example: it readies a parked
 //     reader (`__gt_ready_locked`) and compiles nothing.
-//   * `compileToProduct` reaches no yield point between its ends, so the one M is inside one compile.
+//   * `compileToProduct` reaches no yield point between its ends except the two drains, and a drain
+//     awaits replies from workers that write none of the four.
 //
 // ⇒ two compiles cannot interleave inside one process — which makes a second `begin` while one is open a
 // CALLER BUG rather than a race, and is why it panics instead of nesting. A compiler that ever runs two
-// compiles concurrently in one process — by spawning a service, or by yielding inside the pipeline —
-// needs a per-compile home for all four, not a lock around this one.
+// compiles concurrently in one process — by yielding inside the pipeline to another compile — needs a
+// per-compile home for all four, not a lock around this one.
 
 // The exact bytes each captured line would have been printed as, in report order — TERMINATED, so
 // that joining them is a concatenation rather than a second decision about the line ending.

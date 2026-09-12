@@ -246,41 +246,36 @@ type FeedTriggers
 	end 'detach'
 end 'FeedTriggers'
 
-// Fold every trivial block-arg in every function, in place.
-export function elimTrivialBlockArgs(module StdModule)
-	var removed = 0 as ValueId
+// The pass's summary line, from the tally its runs over every function summed into (`StdPassPool`).
+module function elimTrivialBlockArgsSummary(tally StdPassTally, funcCount FuncCount) returns String
+	return "elimTrivialBlockArgs: folded {tally.removedBlockArgs} trivial block-arg(s) across {funcCount} function(s)"
+end 'elimTrivialBlockArgsSummary'
 
-	// ⭐⭐ **AN INDEX LOOP, NOT `for … in`, AND THE REASON IS A ⚖ USER RULING (2026-08-26). THIS IS THE
-	// CANONICAL SITE; TWENTY-FOUR OTHERS POINT HERE.** `for func in module.functions` hands the body a BORROW
-	// of the element, and the E3070 SUBJECT of that borrow is the whole `module` record —
-	// `Parser.iterationSubjectNameAt` names a chain's BASE, necessarily: a callee handed `module` can reach
-	// every field of it. The loop element's borrow is LEXICAL, running to the loop's `end` (exactly what
-	// `borrow-liveness:forin-element-borrow-is-lexical` pins), so it is still live when the call below takes
-	// `module` mutably. **E3070, and it is correct.**
-	//
-	// ⚠ **THE REFUSAL IS THE RULING, NOT A DEFECT TO ROUTE AROUND.** The compiler does not retain on element read,
-	// so a callee that cleared `module.functions` would leave that borrow pointing at freed memory — measured
-	// at P1.8 as the `0x3F` free-poison byte. The runnable oracle COMPILES the `for … in` spelling, because it
-	// retains; The compiler refuses it, deliberately, and `specs/borrow-liveness.md` carries both answers. Do not
-	// "fix" this by weakening E3070, the iteration lock or `iterationSubjectNameAt`.
-	//
-	// ⇒ **THE IDIOM IS `count()` + `get(i)`, AND ONE EXPRESSION SUPPLIES BOTH.** A `get` borrow has ordinary
-	// last-use liveness, so it dies at the call it feeds and nothing is live across the write.
-	// `SemanticCheck.resolveOverloadedCalls` already carries this same argument one level down, where the
-	// ORDER of its match arms is load-bearing for it. The bound is evaluated ONCE into the preheader, which is
-	// what every one of these walks means: none resizes the array it is walking, and one that did would be
-	// precisely the bug the borrow exists to catch.
-	for fnIndex in 0 upto module.functions.count() 'eachFunc'
-		removed = removed + elimTrivialBlockArgsInFunc(module, func: try module.functions.get(fnIndex) otherwise panic("elimTrivialBlockArgs: fnIndex {fnIndex} is below module.functions.count()"))
-	end 'eachFunc'
-
-	let total = removed
-	logDebug(LogCategory.ir, message: function() gives "elimTrivialBlockArgs: folded {total} trivial block-arg(s) across {module.funcCount()} function(s)")
-end 'elimTrivialBlockArgs'
+// ⭐⭐ **EVERY WALK OF `module.functions` IN THIS TIER IS AN INDEX LOOP, NOT `for … in`, AND THE REASON IS
+// A ⚖ USER RULING (2026-08-26). THIS IS THE CANONICAL NOTE; THE OTHER SITES POINT HERE.** `for func in
+// module.functions` hands the body a BORROW of the element, and the E3070 SUBJECT of that borrow is the
+// whole `module` record — `Parser.iterationSubjectNameAt` names a chain's BASE, necessarily: a callee
+// handed `module` can reach every field of it. The loop element's borrow is LEXICAL, running to the
+// loop's `end` (exactly what `borrow-liveness:forin-element-borrow-is-lexical` pins), so it is still live
+// when a call in the body takes `module` mutably. **E3070, and it is correct.**
+//
+// ⚠ **THE REFUSAL IS THE RULING, NOT A DEFECT TO ROUTE AROUND.** The compiler does not retain on element
+// read, so a callee that cleared `module.functions` would leave that borrow pointing at freed memory —
+// measured at P1.8 as the `0x3F` free-poison byte. The runnable oracle COMPILES the `for … in` spelling,
+// because it retains; the compiler refuses it, deliberately, and `specs/borrow-liveness.md` carries both
+// answers. Do not "fix" this by weakening E3070, the iteration lock or `iterationSubjectNameAt`.
+//
+// ⇒ **THE IDIOM IS `count()` + `get(i)`, AND ONE EXPRESSION SUPPLIES BOTH.** A `get` borrow has ordinary
+// last-use liveness, so it dies at the call it feeds and nothing is live across the write.
+// `SemanticCheck.resolveOverloadedCalls` already carries this same argument one level down, where the
+// ORDER of its match arms is load-bearing for it. The bound is evaluated ONCE into the preheader, which is
+// what every one of these walks means: none resizes the array it is walking, and one that did would be
+// precisely the bug the borrow exists to catch. A pool worker reads its unit's one function through
+// `IrModule.getFunc`, which ends the borrow at its return, for the same reason.
 
 // Fold one function to its fixpoint in a SINGLE pass over the IR. Returns how many block-args it
 // folded away.
-function elimTrivialBlockArgsInFunc(module StdModule, func IrFunction) returns ValueId
+module function elimTrivialBlockArgsInFunc(module StdModule, func IrFunction) returns ValueId
 	let bound = blockArgIdBound(module, func: func)
 
 	if bound == 0 'noBlockArgs'

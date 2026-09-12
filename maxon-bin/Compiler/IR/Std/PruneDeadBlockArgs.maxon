@@ -70,20 +70,13 @@
 // hand it.
 export typealias ValueFlagColumn = Array with bool
 
-// Delete every dead block-arg in every function, in place.
-export function pruneDeadBlockArgs(module StdModule)
-	var removed = 0 as ValueId
+// The pass's summary line, from the tally its runs over every function summed into (`StdPassPool`).
+module function pruneDeadBlockArgsSummary(tally StdPassTally, funcCount FuncCount) returns String
+	return "pruneDeadBlockArgs: removed {tally.removedBlockArgs} dead block-arg(s) across {funcCount} function(s)"
+end 'pruneDeadBlockArgsSummary'
 
-	for func in module.functions 'eachFunc'
-		removed = removed + pruneDeadBlockArgsInFunc(module, func: func)
-	end 'eachFunc'
-
-	let total = removed
-	logDebug(LogCategory.ir, message: function() gives "pruneDeadBlockArgs: removed {total} dead block-arg(s) across {module.funcCount()} function(s)")
-end 'pruneDeadBlockArgs'
-
-// Prune one function. Returns how many block-args it dropped.
-function pruneDeadBlockArgsInFunc(module StdModule, func IrFunction) returns ValueId
+// Prune one function, in place. Returns how many block-args it dropped.
+module function pruneDeadBlockArgsInFunc(module StdModule, func IrFunction) returns ValueId
 	let bound = blockArgIdBound(module, func: func)
 
 	if bound == 0 'noBlockArgs'

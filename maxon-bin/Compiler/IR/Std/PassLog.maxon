@@ -1,0 +1,106 @@
+// PassLog — THE LOG SINK A PER-FUNCTION Std PASS WRITES TO, whichever thread runs it.
+//
+// The twelve passes `StdPassPool` fans out run on pool workers, and a worker may not reach the logger:
+// its level tables are module `var`s, and a module `var` reached from a service message is E3143. So a
+// pass writes its per-function lines HERE — a level and a text per line — and the driver hands them to the
+// logger on the main thread after the pool has drained, in function-index order, so `--log=ir:trace`
+// reads exactly as a serial run of the same passes would (`tests/parallel-compile/log-order`).
+//
+// ⚠ **THE THRESHOLD IS CAPTURED AT CONSTRUCTION, ON THE MAIN THREAD.** `effectiveLogLevelOf` is the one
+// read of the logger's tables, and it happens where a `spawn` argument is built; a worker asks only the
+// two booleans it was handed.
+//
+// ⚠ **A LINE IS AN EAGER `String`, GUARDED AT THE SITE, NOT A THUNK.** The logger takes a closure so a
+// disabled line costs nothing; a closure CALLED from a worker is an indirect dispatch, and E3143 answers
+// one by treating every address-taken function in the program as message-reachable — which reaches the
+// logger and refuses the compile. So a site asks `traces`/`debugs` first and builds the text only past
+// the guard, which is the same cost the thunk would have had.
+//
+// ⭐ **LINES ARE GROUPED BY STEP.** A worker runs one function through every step of the schedule in
+// order and `beginStep` marks where each step's lines start, so the driver can replay pass-major — every
+// function's lines for step k, then every function's for step k+1 — out of logs that were written
+// function-major. Nothing is recorded at all while both booleans are false, which is every ordinary build.
+
+module typealias LogLevelArray = Array with LogLevel
+module typealias LogLineIndex = int(0 to u64.max)
+module typealias LogLineIndexArray = Array with LogLineIndex
+
+module type PassLog
+	export var debugs as bool
+	export var traces as bool
+	var levels as LogLevelArray
+	var lines as StringArray
+
+	// The first line of each step begun, in step order; the line count closes the last step.
+	var stepStarts as LogLineIndexArray
+
+	// `level` is the category's effective level, read on the main thread (`effectiveLogLevelOf`).
+	module static function create(level LogLevel) returns PassLog
+		return Self{debugs: level.rawValue >= LogLevel.DEBUG.rawValue, traces: level.rawValue >= LogLevel.TRACE.rawValue, levels: LogLevelArray.create(), lines: StringArray.create(), stepStarts: LogLineIndexArray.create()}
+	end 'create'
+
+	// Start a function: the step starts of the previous one are meaningless for this one. A worker takes
+	// a log's lines when it has any (`taking`), so lines still here are a function whose log was never
+	// taken — a replay would attribute them to the wrong function.
+	module function beginFunction()
+		if not self.isEmpty() 'linesNeverTaken'
+			panic("PassLog.beginFunction: {self.lines.count()} line(s) are still held from the previous function — a worker takes a log's lines before it starts the next function")
+		end 'linesNeverTaken'
+
+		self.stepStarts.clear()
+	end 'beginFunction'
+
+	module function beginStep()
+		if not self.debugs 'nothingWillBeRecorded'
+			return
+		end 'nothingWillBeRecorded'
+
+		self.stepStarts.push(self.lines.count())
+	end 'beginStep'
+
+	// A DEBUG line. The site has asked `debugs` before building `text`.
+	module function debug(text String)
+		self.levels.push(LogLevel.DEBUG)
+		self.lines.push(text)
+	end 'debug'
+
+	// A TRACE line. The site has asked `traces` before building `text`.
+	module function trace(text String)
+		self.levels.push(LogLevel.TRACE)
+		self.lines.push(text)
+	end 'trace'
+
+	module function isEmpty() returns bool
+		return self.lines.count() == 0
+	end 'isEmpty'
+
+	// A fresh log holding every line `from` recorded, which is left empty for the next function. The
+	// columns MOVE rather than copy: the new record is the reply's alone, and the worker's keeps nothing
+	// the transfer walk could find a second owner of.
+	module static function taking(from PassLog) returns PassLog
+		let taken = Self{debugs: from.debugs, traces: from.traces, levels: from.levels, lines: from.lines, stepStarts: from.stepStarts}
+		from.levels = LogLevelArray.create()
+		from.lines = StringArray.create()
+		from.stepStarts = LogLineIndexArray.create()
+		return taken
+	end 'taking'
+
+	// Hand the lines of step `step` to the logger, in order. A log that recorded nothing has no steps and
+	// replays nothing; one that recorded has a start for every step the worker began.
+	module function replayStep(step LogLineIndex, category LogCategory)
+		if self.stepStarts.count() == 0 'nothingRecorded'
+			return
+		end 'nothingRecorded'
+
+		let first = try self.stepStarts.get(step) otherwise panic("PassLog.replayStep: step {step} was never begun — the log holds {self.stepStarts.count()} step(s) and the replay walks the schedule the worker ran")
+		let bound = (try self.stepStarts.get(step + 1) otherwise self.lines.count() as LogLineIndex)
+
+		for index in first upto bound 'eachLine'
+			let level = try self.levels.get(index) otherwise panic("PassLog.replayStep: levels.get OOB at {index} — the two columns are pushed together")
+			let text = try self.lines.get(index) otherwise panic("PassLog.replayStep: lines.get OOB at {index}")
+			logAt(category, level: level, message: function() gives text)
+		end 'eachLine'
+	end 'replayStep'
+end 'PassLog'
+
+module typealias PassLogArray = Array with PassLog

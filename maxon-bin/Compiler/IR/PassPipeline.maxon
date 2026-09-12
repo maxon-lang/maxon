@@ -222,9 +222,10 @@ union PassKind
 	// index — `i ≤ length − 1` below `for i in 0 upto a.count()`, `high ≤ length − 2` for
 	// `high = firstValue − 1` under `firstValue`'s own check — is stated against that one value, so
 	// the checks decide only once it exists. It visits ONLY the functions `unswitchInvariantGuards`
-	// answered it rewrote (`RewrittenFunctions`, held on the pipeline between the two): every other
-	// function is the shape the first run already read. The first run keeps its place before CSE for
-	// its own reason; this one runs BEFORE `promoteStackRecords`, which must see the final shape.
+	// answered it rewrote — the pool worker runs it on a unit exactly when that pass rewrote the unit's
+	// function (`StdPassPool`): every other function is the shape the first run already read. The first
+	// run keeps its place before CSE for its own reason; this one runs BEFORE `promoteStackRecords`,
+	// which must see the final shape.
 	refineVersionedRanges
 
 	// Phase 3.6: Std → Std ESCAPE ANALYSIS + STACK PROMOTION (`PromoteStackRecords`).
@@ -247,27 +248,43 @@ union PassKind
 	// call this pass can see — so the two cannot both claim one site. Whole-module, like its neighbour: a
 	// callee's return convention and its call sites are one decision.
 	valueTupleReturn
+
+	// ⭐⭐ **THE PER-FUNCTION FAN-OUT: every `perFunction` pass of the Std tier, run FUNCTION-MAJOR on a
+	// pool of worker services (`StdPassPool`).** `members` is the schedule — the passes above in the order
+	// the run would have dispatched them, repeats included — and it is the one place that order is spelled.
+	// A worker takes one function through every member before the next, so a function crosses to the pool
+	// once; the output is byte-identical to a pass-major serial run of the same members.
+	//
+	// The members are spelled as `StdFanOutStep`s rather than as `PassKind`s because a union may not reach
+	// itself; `passKindOfFanOutStep` is the one map back, and everything a member is billed or announced
+	// as goes through it.
+	//
+	// ⛔ **MEMBERSHIP IS THE CLASSIFICATION, ENFORCED AT `run`**: a `perFunction` pass scheduled outside
+	// this arm, or any other kind inside it, is a panic before the first pass runs
+	// (`requireFanOutMembership`), so `classifyPass` stays the one source of truth.
+	stdFanOut(members StdFanOutStepArray)
 end 'PassKind'
 
 export typealias PassKindArray = Array with PassKind
 
-// Whether a pass runs over the whole module at once or can fan out per function.
-// `perFunction` passes are intra-function only (no pass reaches into another
-// function's blocks); they will run through the per-function fan-out driver
-// added at M5. `wholeModule` passes need call-graph / cross-function visibility.
-// ⚠ Not exported: the classification is recorded and read inside this pipeline alone (its fan-out reader is
-// still to come), and `checkUnusedExports` (E3092) refuses an export nothing reads.
+// How a pass reaches the module, which decides how it is scheduled.
+//
+//   wholeModule    — needs call-graph or cross-function visibility, or the whole declaration set: runs
+//                    on the main thread over the module.
+//   perFunction    — intra-function only and reaches NOTHING outside its function but what a unit
+//                    carries (`StdUnit`): a member of the fan-out, run on the pool. Every such pass IS
+//                    scheduled inside `stdFanOut` — `requireFanOutMembership` panics otherwise.
+//   perFunctionOnTheProject — intra-function, but reads or writes a `Project` table or raises a
+//                    diagnostic, neither of which a pool worker can reach (E3143): runs serially.
+//   fanOutDriver   — the fan-out itself, whose members are the `perFunction` passes.
 enum PassClassification
 	wholeModule
 	perFunction
+	perFunctionOnTheProject
+	fanOutDriver
 end 'PassClassification'
 
-// Map a pass to its fan-out classification. resolveTypes / semanticCheck are
-// whole-module (they need the full declaration set); the lowering is
-// intra-function and becomes the first fan-out target at M5. NOTE: M1's `run()`
-// runs EVERY pass whole-module regardless — this classification is recorded for
-// the M5 fan-out driver, not yet acted on (per PLAN.md: classification present
-// but trivial at M1).
+// Map a pass to its classification — THE membership table of the fan-out.
 function classifyPass(pass PassKind) returns PassClassification
 	return match pass 'classify'
 		resolveTypes gives PassClassification.wholeModule
@@ -275,12 +292,17 @@ function classifyPass(pass PassKind) returns PassClassification
 
 		// Whole-module by nature: "does any OTHER file name this?" cannot be answered per function.
 		checkUnusedExports gives PassClassification.wholeModule
-		lowerMaxonToStd gives PassClassification.perFunction
-		insertRangeChecks gives PassClassification.perFunction
+
+		// Intra-function, and it reads the Maxon module and the project's registries to produce the Std one.
+		lowerMaxonToStd gives PassClassification.perFunctionOnTheProject
+
+		// Intra-function, and it raises E3005 and files derived origins into the project's table.
+		insertRangeChecks gives PassClassification.perFunctionOnTheProject
 
 		// Intra-function by construction: a site is expanded entirely inside the block that holds it, and
-		// nothing about the callee's body is consulted — the body is not even in the module yet.
-		inlineManagedPrimitives gives PassClassification.perFunction
+		// nothing about the callee's body is consulted — the body is not even in the module yet. It reads
+		// the project's element-stride and trivial-element tables.
+		inlineManagedPrimitives gives PassClassification.perFunctionOnTheProject
 
 		// WHOLE-MODULE by nature, like `promoteStackRecords`: the whole question is what the CALLEE's body
 		// contains, and a caller cannot be judged without every callee it names in view.
@@ -321,15 +343,69 @@ function classifyPass(pass PassKind) returns PassClassification
 		// callee's row.
 		promoteStackRecords gives PassClassification.wholeModule
 		valueTupleReturn gives PassClassification.wholeModule
+		stdFanOut gives PassClassification.fanOutDriver
 	end 'classify'
 end 'classifyPass'
+
+// ⭐ **THE PASS A FAN-OUT STEP STANDS FOR** — what a member is announced, billed and classified as. The
+// step is the scalar spelling a worker receives and a union payload may hold (`StdPassPool.StdFanOutStep`).
+module function passKindOfFanOutStep(step StdFanOutStep) returns PassKind
+	return match step 'pass'
+		pruneDeadBlockArgs gives PassKind.pruneDeadBlockArgs
+		elimTrivialBlockArgs gives PassKind.elimTrivialBlockArgs
+		foldConstants gives PassKind.foldConstants
+		strengthReduceDivision gives PassKind.strengthReduceDivision
+		foldConstOperands gives PassKind.foldConstOperands
+		threadConstantBranches gives PassKind.threadConstantBranches
+		refineValueRanges gives PassKind.refineValueRanges
+		commonSubexpressionElimination gives PassKind.commonSubexpressionElimination
+		loopInvariantCodeMotion gives PassKind.loopInvariantCodeMotion
+		unswitchInvariantGuards gives PassKind.unswitchInvariantGuards
+		foldEstablishedGuards gives PassKind.foldEstablishedGuards
+		refineVersionedRanges gives PassKind.refineVersionedRanges
+	end 'pass'
+end 'passKindOfFanOutStep'
+
+// ⛔⛔ **THE SCHEDULE AGREES WITH THE CLASSIFICATION, OR NOTHING RUNS.** A `perFunction` pass outside the
+// fan-out would run nowhere — `dispatch` has no serial arm for it — and a pass of any other kind inside
+// it would run on a worker that cannot reach what it reads. Both are refused here, before the first pass
+// of the schedule, so the membership table in `classifyPass` is the one place membership is decided.
+function requireFanOutMembership(passes PassKindArray)
+	for pass in passes 'eachPass'
+		match classifyPass(pass) 'placement'
+			perFunction then panic("PassPipeline: `{passKindToString(pass)}` is classified `perFunction` but is scheduled outside the fan-out — every per-function pass runs inside `stdFanOut`, so schedule it there or reclassify it")
+			fanOutDriver then requireEveryMemberIsPerFunction(pass)
+			wholeModule then break 'placement'
+			perFunctionOnTheProject then break 'placement'
+		end 'placement'
+	end 'eachPass'
+end 'requireFanOutMembership'
+
+function requireEveryMemberIsPerFunction(driver PassKind)
+	match driver 'driver'
+		stdFanOut(members) then requireMembersArePerFunction(members)
+		default panic("requireEveryMemberIsPerFunction: `{passKindToString(driver)}` is classified `fanOutDriver` and carries no member list")
+	end 'driver'
+end 'requireEveryMemberIsPerFunction'
+
+function requireMembersArePerFunction(members StdFanOutStepArray)
+	if members.count() == 0 'nothingToFanOut'
+		panic("PassPipeline: `stdFanOut` was scheduled with no members — a fan-out of nothing spawns a pool for nothing")
+	end 'nothingToFanOut'
+
+	for member in members 'eachMember'
+		if classifyPass(passKindOfFanOutStep(member)) != PassClassification.perFunction 'notAMember'
+			panic("PassPipeline: `{passKindToString(passKindOfFanOutStep(member))}` is scheduled inside the fan-out but is not classified `perFunction` — a pool worker cannot run it")
+		end 'notAMember'
+	end 'eachMember'
+end 'requireMembersArePerFunction'
 
 // The wall-clock phase each pass is billed to. EXHAUSTIVE by construction: a new
 // PassKind fails to compile until it names its phase, so a pass cannot be added and
 // silently go unmeasured — which is the whole point of the attribution (see
 // CompileTimings' header). The mapping is 1:1 today and is expected to stay so; a
 // pass grouping several phases would defeat the table's purpose.
-function compilePhaseOfPass(pass PassKind) returns CompilePhase
+module function compilePhaseOfPass(pass PassKind) returns CompilePhase
 	return match pass 'phase'
 		resolveTypes gives CompilePhase.resolveTypes
 		semanticCheck gives CompilePhase.semanticCheck
@@ -352,6 +428,7 @@ function compilePhaseOfPass(pass PassKind) returns CompilePhase
 		refineVersionedRanges gives CompilePhase.refineVersionedRanges
 		promoteStackRecords gives CompilePhase.promoteStackRecords
 		valueTupleReturn gives CompilePhase.valueTupleReturn
+		stdFanOut gives CompilePhase.stdFanOut
 	end 'phase'
 end 'compilePhaseOfPass'
 
@@ -379,8 +456,15 @@ function passKindToString(pass PassKind) returns String
 		refineVersionedRanges gives "refineVersionedRanges"
 		promoteStackRecords gives "promoteStackRecords"
 		valueTupleReturn gives "valueTupleReturn"
+		stdFanOut gives "stdFanOut"
 	end 'name'
 end 'passKindToString'
+
+// The line `run` prints before a pass, and the fan-out prints before each of its members
+// (`StdPassPool.replayFanOutLog`) — one spelling, so the two logs read alike.
+module function passBanner(pass PassKind) returns String
+	return "=== Running pass: {passKindToString(pass)} ==="
+end 'passBanner'
 
 // ⭐⭐ **THE PIPELINE IS SCHEDULED IN TWO STAGES, AND THE SEAM BETWEEN THEM IS A HARD IR BOUNDARY, NOT A
 // CONVENIENCE.** Everything up to and including `semanticCheck` operates on the MAXON module and may still
@@ -414,19 +498,26 @@ export function buildMaxonTierPasses() returns PassKindArray
 end 'buildMaxonTierPasses'
 
 // The second stage — see `buildMaxonTierPasses` for what the seam between them is for.
+//
+// ⭐ **THE PER-FUNCTION RUN IS ONE `stdFanOut` PASS** whose members are listed in the order a pass-major
+// run would have dispatched them (`PassKind.stdFanOut`); the ordering arguments below are about that
+// order and hold on the pool exactly as they held serially, because a worker runs the members in this
+// order over each function.
 export function buildLoweringPasses() returns PassKindArray
 	var passes = PassKindArray.create()
 	passes.push(PassKind.lowerMaxonToStd)
 	passes.push(PassKind.insertRangeChecks)
 	passes.push(PassKind.inlineManagedPrimitives)
 	passes.push(PassKind.inlineLeaves)
-	passes.push(PassKind.pruneDeadBlockArgs)
-	passes.push(PassKind.elimTrivialBlockArgs)
-	passes.push(PassKind.foldConstants)
-	passes.push(PassKind.strengthReduceDivision)
-	passes.push(PassKind.foldConstOperands)
-	passes.push(PassKind.threadConstantBranches)
-	passes.push(PassKind.refineValueRanges)
+
+	var members = StdFanOutStepArray.create()
+	members.push(StdFanOutStep.pruneDeadBlockArgs)
+	members.push(StdFanOutStep.elimTrivialBlockArgs)
+	members.push(StdFanOutStep.foldConstants)
+	members.push(StdFanOutStep.strengthReduceDivision)
+	members.push(StdFanOutStep.foldConstOperands)
+	members.push(StdFanOutStep.threadConstantBranches)
+	members.push(StdFanOutStep.refineValueRanges)
 
 	// ⚠ THE BLOCK-ARG CLEANUPS RUN AGAIN AFTER THE LAST BRANCH FOLD OF EACH GROUP, AND THAT IS A REGISTER-
 	// ALLOCATOR INVARIANT, NOT TIDINESS. A folded branch orphans an arm (`dropUnreachableBlocks`), and a
@@ -436,23 +527,24 @@ export function buildLoweringPasses() returns PassKindArray
 	// phis than the pool at one block is an overflow no split relieves (the store anchors AT that entry,
 	// where every phi is already live), and the splitter runs to its bound. Folding them to the value they
 	// carry is what `elimTrivialBlockArgs` is for; the prune first, for the same reason as above.
-	passes.push(PassKind.pruneDeadBlockArgs)
-	passes.push(PassKind.elimTrivialBlockArgs)
+	members.push(StdFanOutStep.pruneDeadBlockArgs)
+	members.push(StdFanOutStep.elimTrivialBlockArgs)
 
 	// ⚠ THE FOLDING PAIR RUNS AGAIN AFTER THAT CLEANUP, FOR WHAT THE CLEANUP EXPOSES. A phi `elimTrivialBlockArgs`
 	// folds onto the one `const` that fed it turns every op that read the phi into `const <op> const` or a
 	// const-operand op, and nothing after this point evaluates either: `foldConstants` and `foldConstOperands`
 	// ran before `refineValueRanges` decided the branches that orphaned the phi's other inputs. Both are
 	// idempotent over a module they have already folded, so the pair costs one walk each here.
-	passes.push(PassKind.foldConstants)
-	passes.push(PassKind.foldConstOperands)
-	passes.push(PassKind.commonSubexpressionElimination)
-	passes.push(PassKind.loopInvariantCodeMotion)
-	passes.push(PassKind.unswitchInvariantGuards)
-	passes.push(PassKind.foldEstablishedGuards)
-	passes.push(PassKind.refineVersionedRanges)
-	passes.push(PassKind.pruneDeadBlockArgs)
-	passes.push(PassKind.elimTrivialBlockArgs)
+	members.push(StdFanOutStep.foldConstants)
+	members.push(StdFanOutStep.foldConstOperands)
+	members.push(StdFanOutStep.commonSubexpressionElimination)
+	members.push(StdFanOutStep.loopInvariantCodeMotion)
+	members.push(StdFanOutStep.unswitchInvariantGuards)
+	members.push(StdFanOutStep.foldEstablishedGuards)
+	members.push(StdFanOutStep.refineVersionedRanges)
+	members.push(StdFanOutStep.pruneDeadBlockArgs)
+	members.push(StdFanOutStep.elimTrivialBlockArgs)
+	passes.push(PassKind.stdFanOut(members))
 	passes.push(PassKind.promoteStackRecords)
 	passes.push(PassKind.valueTupleReturn)
 	return passes
@@ -515,14 +607,11 @@ export type PassPipeline
 	// `scanRuntimeUsage` has just answered it and before any Std pass runs.
 	export var usesGreenThreads as bool
 
-	// `unswitchInvariantGuards`' answer, which scopes `refineVersionedRanges` (see the PassKind).
-	var unswitchRewrote as RewrittenFunctions
-
 	// ⚠ **IT THROWS, BECAUSE BUILDING THE NAME INDEX IS THE COMPILE'S DUPLICATE-FUNCTION-NAME REFUSAL**
-	// (E4015 / `refuseDuplicateFunctionName`). The gate used to be `run`'s; with two runs it belongs to the
-	// one construction they share, and the driver wraps it in the same `refuseCompile` it wraps `run` in.
-	// Nothing is refused later than before: the index was already built ahead of `resolveTypes`, which is
-	// still the first pass to report anything.
+	// (E4015 / `refuseDuplicateFunctionName`). `run` is called twice, so the gate belongs to the one
+	// construction both runs share, and the driver wraps it in the same `refuseCompile` it wraps `run` in.
+	// The index is built ahead of `resolveTypes`, which is the first pass to report anything, so nothing
+	// is refused later than the first diagnostic.
 	export static function create(project Project, maxonModule MaxonModule, signatures ProgramSignatures) returns PassPipeline throws CompileError
 		// ⭐⭐ **ONE CHECKED NAME INDEX FOR THE WHOLE PIPELINE (A2l).** Three passes derive a name-keyed map
 		// from this module's function array — `semanticCheck`'s throws map and escape summary, and
@@ -570,8 +659,7 @@ export type PassPipeline
 			stdModule: StdModule.create(),
 			signatures: signatures,
 			funcNames: funcNames,
-			usesGreenThreads: false,
-			unswitchRewrote: RewrittenFunctions.create()
+			usesGreenThreads: false
 		}
 	end 'create'
 
@@ -583,9 +671,17 @@ export type PassPipeline
 	//
 	// The schedule is an ARGUMENT rather than accumulated state because the driver runs the pipeline in two
 	// stages and each stage is one list — see `buildMaxonTierPasses` for what sits between them.
+	//
+	// The fan-out announces each of its members itself, after the drain, so its members' banners sit
+	// where a serial run would have printed them; the driver pass gets no banner of its own.
 	export function run(passes PassKindArray) throws CompileError
+		requireFanOutMembership(passes)
+
 		for pass in passes 'eachPass'
-			logDebug(LogCategory.ir, message: function() gives "=== Running pass: {passKindToString(pass)} ===")
+			if classifyPass(pass) != PassClassification.fanOutDriver 'announced'
+				logDebug(LogCategory.ir, message: function() gives passBanner(pass))
+			end 'announced'
+
 			try self.dispatch(pass)
 
 			if projectHasErrors(self.project) 'errorGate'
@@ -617,32 +713,25 @@ export type PassPipeline
 			insertRangeChecks then insertRangeChecks(self.project, module: self.stdModule)
 			inlineManagedPrimitives then inlineManagedPrimitives(self.project, module: self.stdModule)
 			inlineLeaves then inlineLeaves(self.project, module: self.stdModule)
-			pruneDeadBlockArgs then pruneDeadBlockArgs(self.stdModule)
-			elimTrivialBlockArgs then elimTrivialBlockArgs(self.stdModule)
 
-			// The whole module, and no start index: see `foldConstants`' own header for why the appended
-			// runtime band has nothing for it to fold.
-			foldConstants then foldConstants(self.stdModule)
+			// Over the whole module, which is everything that EXISTS at this point: the runtime band is
+			// appended below the pipeline, and `Compiler.compileToCodeResult` runs `strengthReduceDivision`
+			// and `foldConstOperands` over it a second time by themselves.
+			stdFanOut(members) then runStdPassesOnAWorkerPool(self.project, module: self.stdModule, members: members)
 
-			// From function 0 — the whole module, which is everything that EXISTS at this point. The pass's
-			// other caller is `Compiler.compileToCodeResult`, which runs it a second time over the band the
-			// runtime installs append below the pipeline; see `foldConstOperands`' own header.
-			// From function 0 — the whole module, which is everything that EXISTS at this point. Like
-			// `foldConstOperands`, this pass's other caller is `Compiler.compileToCodeResult`, which runs it
-			// over the band the runtime installs append below the pipeline; see the pass's own header for
-			// which divisions live there and why they are worth a second run.
-			strengthReduceDivision then strengthReduceDivision(self.project, module: self.stdModule, firstFuncIndex: 0)
-			foldConstOperands then foldConstOperands(self.stdModule, firstFuncIndex: 0)
-			threadConstantBranches then threadConstantBranches(self.project, module: self.stdModule)
-			refineValueRanges then refineValueRanges(self.stdModule, scope: RangeRunScope.everyFunction)
-
-			// The whole module, and no start index: like `foldConstants`, its other caller would be the
-			// appended runtime band, whose hand-built bodies recompute nothing (see the pass's header).
-			commonSubexpressionElimination then eliminateCommonSubexpressions(self.stdModule)
-			loopInvariantCodeMotion then hoistLoopInvariants(self.stdModule)
-			unswitchInvariantGuards then self.unswitchRewrote = unswitchInvariantGuards(self.project, module: self.stdModule)
-			foldEstablishedGuards then foldEstablishedGuards(self.stdModule)
-			refineVersionedRanges then refineValueRanges(self.stdModule, scope: RangeRunScope.rewrittenBy(self.unswitchRewrote))
+			// Unreachable past `requireFanOutMembership`: a per-function pass is scheduled inside the fan-out.
+			pruneDeadBlockArgs or
+				elimTrivialBlockArgs or
+				foldConstants or
+				strengthReduceDivision or
+				foldConstOperands or
+				threadConstantBranches or
+				refineValueRanges or
+				commonSubexpressionElimination or
+				loopInvariantCodeMotion or
+				unswitchInvariantGuards or
+				foldEstablishedGuards or
+				refineVersionedRanges then panic("PassPipeline.dispatch: `{passKindToString(pass)}` reached the serial dispatch — it is a fan-out member and runs only inside `stdFanOut`, which `requireFanOutMembership` checks before the first pass")
 			promoteStackRecords then promoteStackRecords(self.project, module: self.stdModule, usesGreenThreads: self.usesGreenThreads)
 			valueTupleReturn then applyValueTupleReturn(self.project, module: self.stdModule)
 		end 'dispatch'

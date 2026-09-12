@@ -20,13 +20,16 @@
 // on its own green thread, and those figures are summed into the `regalloc` sub-phase rows. So on a
 // sixteen-processor box the breakdown reads several times the phase above it: that is the pool's work,
 // not a double count, and the multiple is the parallelism. The row under the breakdown says which reading
-// it is (see `RegAllocRemainder`). Every SERIAL row in the table is unaffected, and so is the `regalloc`
-// PHASE row itself — it is bracketed on the main thread and stays exact in every column.
+// it is (see `PoolRemainder`). The twelve per-function Std pass rows `StdPassPool` folds are sums of the
+// same kind, marked `(pool)` in the report and broken down under `stdFanOut`; `attributedCost` leaves
+// them out of the disjoint sum for that reason. Every SERIAL row in the table is unaffected, and so are
+// the `regalloc` and `stdFanOut` PHASE rows themselves — they are bracketed on the main thread and stay
+// exact in every column.
 //
 // ⚠ **THE SUB-PHASES' MEMORY COLUMNS ARE NOT THE SAME KIND OF SUM.** They read the CALLING GREEN THREAD's
 // allocator counters (`__Builtins.threadAllocTotal` and its two siblings), so each bracket counts what its
 // own worker allocated and the total over workers is the figure a one-processor run reports — where the
-// time columns sum to a wall-clock multiple. `RegAllocCosts` carries the argument, and the measurement from
+// time columns sum to a wall-clock multiple. `PoolPhaseCosts` carries the argument, and the measurement from
 // the rung where these columns were process-wide and therefore fiction.
 //
 // WHY THIS EXISTS, and why the phases must be DISJOINT:
@@ -89,6 +92,10 @@ let RuleWidth = (PhaseNameWidth + TimeWidth + PercentWidth + PercentWidth) as Co
 // once more, under the phase whose wall time it breaks down.
 let RowIndent = "  "
 let SubPhaseIndent = "    "
+
+// Marks a row folded from pool workers (`CompileTimings.measuredOnAPool`) in both reports: a sum over
+// workers that is a breakdown of `stdFanOut`, not an interval beside it.
+export let PoolMeasuredSuffix = " (pool)"
 
 // What `repeated` lays down: a column is filled with spaces, a rule is drawn with dashes.
 let PadUnit = " "
@@ -456,6 +463,18 @@ export enum CompilePhase
 	// row rather than a second billing of `refineValueRanges`: the two runs see different shapes, and a
 	// reader of the table must be able to tell what the second one costs on its own.
 	refineVersionedRanges
+
+	// The per-function Std pass fan-out's DRIVER (`StdPassPool`): extracting each function into a unit,
+	// dispatching it to a worker, splicing the answer back, folding the workers' tallies and replaying
+	// their logs — everything the pool costs the main thread, and the wall the pool ran inside.
+	//
+	// ⚠ **THE PASSES IT RUNS KEEP THEIR OWN ROWS, MEASURED ON THE WORKERS, AND THOSE ROWS ARE A
+	// BREAKDOWN OF THIS ONE.** Each of the twelve per-function pass rows above is a sum of worker
+	// brackets that ran inside this phase's wall, so it overlaps this row exactly as `regalloc`'s
+	// sub-phases overlap `regalloc` — and `attributedCost` leaves a pool-measured row out of the disjoint
+	// sum for that reason (`measuredOnAPool`). The row under this one in the report says whether the
+	// breakdown left a remainder or ran concurrently (`PoolRemainder`).
+	stdFanOut
 end 'CompilePhase'
 
 // Per-compile timing state, owned by `Project` (which is already threaded through
@@ -468,6 +487,12 @@ end 'CompilePhase'
 export type CompileTimings
 	export var phaseNanos as DurationNanosArray
 	export var phaseCpuTicks as CpuTicksArray
+
+	// Per phase: whether its row was folded from POOL WORKER brackets (`addPoolPhaseCost`) rather than
+	// bracketed on the main thread. A pooled row is a sum over workers that ran inside another phase's
+	// wall — the driver's — so it is a breakdown of that phase and not a disjoint interval beside it:
+	// `attributedCost` leaves it out, and the two reports nest it under its driver.
+	export var measuredOnAPool as BoolArray
 
 	// Cost of the whole compile, stamped once by `compile`. Zero until then: the
 	// warm-rebuild gate drives `compileToCodeResult` directly and never reports, so a
@@ -490,7 +515,9 @@ export type CompileTimings
 		phaseNanos.resize(CompilePhase.allCases.count())
 		var phaseCpuTicks = CpuTicksArray.create()
 		phaseCpuTicks.resize(CompilePhase.allCases.count())
-		return Self{phaseNanos: phaseNanos, phaseCpuTicks: phaseCpuTicks, total: PhaseCost.zero(), regAlloc: RegAllocStats.create()}
+		var measuredOnAPool = BoolArray.create()
+		measuredOnAPool.resize(CompilePhase.allCases.count())
+		return Self{phaseNanos: phaseNanos, phaseCpuTicks: phaseCpuTicks, measuredOnAPool: measuredOnAPool, total: PhaseCost.zero(), regAlloc: RegAllocStats.create()}
 	end 'create'
 
 	// Takes the two quantities as SCALARS rather than a PhaseCost, and that is the hot path
@@ -507,6 +534,13 @@ export type CompileTimings
 		try self.phaseCpuTicks.set(idx, value: curCpu + cpuTicks) otherwise panic("CompileTimings.addPhaseCost: phase index OOB for '{phase.name}'")
 	end 'addPhaseCost'
 
+	// A cost measured on a pool worker, folded into `phase`'s row — which marks the row as a breakdown of
+	// the driver phase the pool ran inside (`measuredOnAPool`).
+	export function addPoolPhaseCost(phase CompilePhase, nanos DurationNanos, cpuTicks CpuTicks)
+		self.addPhaseCost(phase, nanos: nanos, cpuTicks: cpuTicks)
+		try self.measuredOnAPool.set(phase.ordinal, value: true) otherwise panic("CompileTimings.addPoolPhaseCost: phase index OOB for '{phase.name}'")
+	end 'addPoolPhaseCost'
+
 	export function costOf(phase CompilePhase) returns PhaseCost
 		let idx = phase.ordinal
 		let nanos = try self.phaseNanos.get(idx) otherwise panic("CompileTimings.costOf: phase index OOB for '{phase.name}'")
@@ -514,16 +548,36 @@ export type CompileTimings
 		return PhaseCost.create(nanos, cpuTicks: cpuTicks)
 	end 'costOf'
 
-	// What the instrumentation actually claimed — the sum of every phase.
+	export function isMeasuredOnAPool(phase CompilePhase) returns bool
+		return try self.measuredOnAPool.get(phase.ordinal) otherwise panic("CompileTimings.isMeasuredOnAPool: phase index OOB for '{phase.name}'")
+	end 'isMeasuredOnAPool'
+
+	// What the instrumentation actually claimed — the sum of every DISJOINT phase. A pool-measured row is
+	// a breakdown of its driver's row, which is already in the sum.
 	export function attributedCost() returns PhaseCost
 		var sum = PhaseCost.zero()
 
 		for phase in CompilePhase.allCases 'eachPhase'
-			sum = sum.plus(self.costOf(phase))
+			if not self.isMeasuredOnAPool(phase) 'disjoint'
+				sum = sum.plus(self.costOf(phase))
+			end 'disjoint'
 		end 'eachPhase'
 
 		return sum
 	end 'attributedCost'
+
+	// What the pool-measured rows claimed between them — the breakdown of `CompilePhase.stdFanOut`.
+	export function poolMeasuredCost() returns PhaseCost
+		var sum = PhaseCost.zero()
+
+		for phase in CompilePhase.allCases 'eachPhase'
+			if self.isMeasuredOnAPool(phase) 'pooled'
+				sum = sum.plus(self.costOf(phase))
+			end 'pooled'
+		end 'eachPhase'
+
+		return sum
+	end 'poolMeasuredCost'
 
 	// Compile cost no phase claimed: the glue between phases (project construction,
 	// output-path resolution, the query spine's own cache/hash bookkeeping). Visible
@@ -550,44 +604,49 @@ export type CompileTimings
 	end 'unattributedCost'
 end 'CompileTimings'
 
-// WHAT THE ALLOCATOR'S SUB-PHASES LEAVE OVER - or, on a POOL, what they overlap by.
+// WHAT A POOL PHASE'S BREAKDOWN LEAVES OVER - or, on a POOL, what it overlaps by.
 //
-// The sub-phases are disjoint intervals of ONE function's allocation, and `regalloc` allocates every
-// function on a pool of worker services (`RegAllocPool`), so several of them run inside one wall. Their
-// SUM is therefore the pool's work and is not bounded by the phase's wall at all: at sixteen workers it
-// is expected to be several times it, and reading that multiple IS the parallelism the pass bought.
+// Two phases run a pool of worker services and are broken down by rows summed over the workers: the
+// register allocator's sub-phases under `regalloc` (`RegAllocPool`), and the per-function Std passes under
+// `stdFanOut` (`StdPassPool`). The brackets are disjoint intervals of ONE function's work, and the pool
+// runs several functions inside one wall, so their SUM is the pool's work and is not bounded by the
+// driver phase's wall at all: at sixteen workers it is expected to be several times it, and reading that
+// multiple IS the parallelism the pass bought.
 //
 // ⛔ **SO NO OVERLAP CHECK CAN STAND HERE: A SUM ABOVE THE WALL IS THE NORMAL READING.** The defect
 // worth refusing is `splitting` silently containing `liveness` - the failure this whole file exists to
 // prevent - and it is refused at the site that CREATES it rather than a report away from it:
-// `RegAllocCosts.recordExcluding` takes liveness back out of the splitter's bracket through
+// `PoolPhaseCosts.recordExcluding` takes liveness back out of the splitter's bracket through
 // `PhaseDelta.minus`, whose non-negative components trap on exactly that overlap. One fact, checked
 // once, where it is still answerable.
-union RegAllocRemainder
-	// The phase's wall minus what its sub-phases claimed: the driver loop's own cost. What a pool of one
-	// leaves, which is every compile at `MAXON_MAX_PROCS=1` and every one a bootstrap-built compiler runs.
+union PoolRemainder
+	// The driver phase's wall minus what its breakdown claimed: the driver loop's own cost. What a pool
+	// of one leaves, which is every compile at `MAXON_MAX_PROCS=1` and every one a bootstrap-built
+	// compiler runs.
 	unattributed(cost PhaseCost)
 
-	// What the sub-phases claimed BEYOND the phase's wall: work the pool did at the same time as other
-	// work. Read as a multiple of the wall it is the allocator's realised parallelism.
+	// What the breakdown claimed BEYOND the driver's wall: work the pool did at the same time as other
+	// work. Read as a multiple of the wall it is the pool's realised parallelism.
 	concurrent(cost PhaseCost)
-end 'RegAllocRemainder'
+end 'PoolRemainder'
 
-function regAllocRemainder(timings CompileTimings) returns RegAllocRemainder
-	let wall = timings.costOf(CompilePhase.regalloc)
+function poolRemainder(wall PhaseCost, claimed PhaseCost) returns PoolRemainder
+	if claimed.nanos > wall.nanos or claimed.cpuTicks > wall.cpuTicks 'thePoolRanSeveralAtOnce'
+		return PoolRemainder.concurrent(costGap(claimed, under: wall))
+	end 'thePoolRanSeveralAtOnce'
 
+	return PoolRemainder.unattributed(wall.minus(claimed))
+end 'poolRemainder'
+
+function regAllocClaimedCost(timings CompileTimings) returns PhaseCost
 	var claimed = PhaseCost.zero()
 
 	for sub in RegAllocPhase.allCases 'eachSub'
 		claimed = claimed.plus(timings.regAlloc.costOf(sub))
 	end 'eachSub'
 
-	if claimed.nanos > wall.nanos or claimed.cpuTicks > wall.cpuTicks 'thePoolRanSeveralAtOnce'
-		return RegAllocRemainder.concurrent(costGap(claimed, under: wall))
-	end 'thePoolRanSeveralAtOnce'
-
-	return RegAllocRemainder.unattributed(wall.minus(claimed))
-end 'regAllocRemainder'
+	return claimed
+end 'regAllocClaimedCost'
 
 // `over` minus `under`, componentwise, floored at zero. The floor is not a rounding convenience: a pool
 // exceeds its phase in ONE column and not the other - the driver sleeps through most of the phase, so
@@ -598,13 +657,15 @@ function costGap(over PhaseCost, under PhaseCost) returns PhaseCost
 	return PhaseCost.create(nanos, cpuTicks: cpuTicks)
 end 'costGap'
 
-// The one row the remainder renders as, labelled for what it actually is.
-function regAllocRemainderRow(timings CompileTimings, total PhaseCost) returns String
-	return match regAllocRemainder(timings) 'remainder'
+// The one row a pool phase's remainder renders as, labelled for what it actually is. The concurrent
+// reading is a sum over workers and may exceed the whole compile; the unattributed one is a slice of the
+// driver's wall and cannot.
+function poolRemainderRow(remainder PoolRemainder, total PhaseCost) returns String
+	return match remainder 'remainder'
 		unattributed(cost) gives timingRow("{SubPhaseIndent}(unattributed)", cost: cost, total: total)
-		concurrent(cost) gives timingRow("{SubPhaseIndent}(concurrent)", cost: cost, total: total)
+		concurrent(cost) gives poolTimingRow("{SubPhaseIndent}(concurrent)", cost: cost, total: total)
 	end 'remainder'
-end 'regAllocRemainderRow'
+end 'poolRemainderRow'
 
 // The whole-compile attribution table: every phase with its ms, its share of the wall
 // total and its share of the CPU total, the allocator's sub-phases nested under
@@ -627,12 +688,18 @@ export function compileTimingsReport(timings CompileTimings) returns String
 	msg.append("{padRight("{RowIndent}phase", width: PhaseNameWidth)}{padLeft("ms", width: TimeWidth)}{padLeft("%", width: PercentWidth)}{padLeft("cpu%", width: PercentWidth)}\n")
 	msg.append(horizontalRule(RuleWidth))
 
+	// A pool-measured row keeps its place in the enum order and is labelled for what it is: a breakdown
+	// of `stdFanOut`, whose own row carries the remainder line, exactly as `regalloc`'s does.
 	for phase in CompilePhase.allCases 'eachPhase'
-		msg.append(timingRow("{RowIndent}{phase.name}", cost: timings.costOf(phase), total: total))
+		msg.append(phaseTimingRow(timings, phase: phase, total: total))
 
 		if phase == CompilePhase.regalloc 'nestRegAlloc'
 			msg.append(regAllocBreakdown(timings, total: total))
 		end 'nestRegAlloc'
+
+		if phase == CompilePhase.stdFanOut 'nestFanOut'
+			msg.append(poolRemainderRow(poolRemainder(timings.costOf(phase), claimed: timings.poolMeasuredCost()), total: total))
+		end 'nestFanOut'
 	end 'eachPhase'
 
 	msg.append(horizontalRule(RuleWidth))
@@ -650,16 +717,32 @@ function regAllocBreakdown(timings CompileTimings, total PhaseCost) returns Stri
 	var msg = StringBuilder.create()
 
 	for sub in RegAllocPhase.allCases 'eachSub'
-		msg.append(timingRow("{SubPhaseIndent}{sub.name}", cost: timings.regAlloc.costOf(sub), total: total))
+		msg.append(poolTimingRow("{SubPhaseIndent}{sub.name}", cost: timings.regAlloc.costOf(sub), total: total))
 	end 'eachSub'
 
-	msg.append(regAllocRemainderRow(timings, total: total))
+	msg.append(poolRemainderRow(poolRemainder(timings.costOf(CompilePhase.regalloc), claimed: regAllocClaimedCost(timings)), total: total))
 	return msg.build()
 end 'regAllocBreakdown'
+
+// A phase's own row: a pool-measured phase is a sum over workers, so its shares go through the formatter
+// that admits a multiple; a main-thread phase is disjoint from every other and its share is a slice.
+function phaseTimingRow(timings CompileTimings, phase CompilePhase, total PhaseCost) returns String
+	if timings.isMeasuredOnAPool(phase) 'aSumOverWorkers'
+		return poolTimingRow("{RowIndent}{phase.name}{PoolMeasuredSuffix}", cost: timings.costOf(phase), total: total)
+	end 'aSumOverWorkers'
+
+	return timingRow("{RowIndent}{phase.name}", cost: timings.costOf(phase), total: total)
+end 'phaseTimingRow'
 
 function timingRow(label String, cost PhaseCost, total PhaseCost) returns String
 	return "{padRight(label, width: PhaseNameWidth)}{padLeft(millisText(cost.nanos), width: TimeWidth)}{padLeft(percentOfTotal(cost.nanos as ShareQuantity, total: total.nanos as ShareQuantity), width: PercentWidth)}{padLeft(percentOfTotal(cost.cpuTicks as ShareQuantity, total: total.cpuTicks as ShareQuantity), width: PercentWidth)}\n"
 end 'timingRow'
+
+// A row whose cost is a SUM OVER POOL WORKERS: its share of the compile can exceed 100%, and that multiple
+// is the parallelism the pool bought, not a double count (`PoolRemainder`).
+function poolTimingRow(label String, cost PhaseCost, total PhaseCost) returns String
+	return "{padRight(label, width: PhaseNameWidth)}{padLeft(millisText(cost.nanos), width: TimeWidth)}{padLeft(percentOfPool(cost.nanos as ShareQuantity, total: total.nanos as ShareQuantity), width: PercentWidth)}{padLeft(percentOfPool(cost.cpuTicks as ShareQuantity, total: total.cpuTicks as ShareQuantity), width: PercentWidth)}\n"
+end 'poolTimingRow'
 
 // Nanoseconds rendered as milliseconds to one decimal place, in integer math.
 //
@@ -706,6 +789,18 @@ function percentOfTotal(value ShareQuantity, total ShareQuantity) returns String
 	let permille = (try ((value * PermilleScale) / total) otherwise panic("percentOfTotal: total was 0 past its own guard")) as Permille
 	return "{permille / PermilleTenthsPerPercent}.{permille mod PermilleTenthsPerPercent}%"
 end 'percentOfTotal'
+
+// `value` as a percentage of `total` for a SUM OVER WORKERS, which the overlap rule above does not bind:
+// several brackets ran inside one wall, so the share may exceed 100% by up to the worker count, and the
+// share keeps the quantities' own width rather than a `Permille`.
+function percentOfPool(value ShareQuantity, total ShareQuantity) returns String
+	if total == 0 'noTotal'
+		return "0.0%"
+	end 'noTotal'
+
+	let permille = try ((value * PermilleScale) / total) otherwise panic("percentOfPool: total was 0 past its own guard")
+	return "{permille / PermilleTenthsPerPercent}.{permille mod PermilleTenthsPerPercent}%"
+end 'percentOfPool'
 
 // Pad to `width` with spaces. A label longer than its column widens that row rather
 // than being truncated — a phase name must always be readable in full.

@@ -121,7 +121,7 @@ typealias PositiveModulus = int(1 to i64.max)
 //
 // wasm's isel PANICS on the opcode it cannot lower, so a wrong answer here is a loud compiler failure on
 // the first reduced division rather than a silent miscompile.
-function targetLowersMulHighSigned(cpu CpuArch) returns bool
+module function targetLowersMulHighSigned(cpu CpuArch) returns bool
 	return match cpu 'c'
 		x64 or
 			arm64 gives true
@@ -149,7 +149,7 @@ end 'DivisionReductionKind'
 // ⚠ **EVERY FIELD BELOW IS MEANINGLESS UNTIL `kind` SAYS WHICH OF THEM THE LAST CLASSIFICATION FILLED**
 // — `StdArithOperands`' discipline, and for its reason: 0 is a real ValueId, a real constant and a real
 // shift, so no field here can be read as a sentinel.
-type DivisionReduction
+module type DivisionReduction
 	export var kind as DivisionReductionKind
 
 	// `|K|`, always in `2 .. i64.max` when `kind` is not `notReducible`.
@@ -180,7 +180,7 @@ type DivisionReduction
 	// unsigned (see the header's fourth refusal), and they need no sign correction at all.
 	export var isUnsigned as bool
 
-	static function create() returns DivisionReduction
+	module static function create() returns DivisionReduction
 		return Self{kind: DivisionReductionKind.notReducible, divisorMagnitude: 0, negateQuotient: false, shift: 0, magic: 0, magicIsNegative: false, isUnsigned: false}
 	end 'create'
 
@@ -215,12 +215,12 @@ end 'DivisionReduction'
 
 // The `(multiplier, postShift)` pair `deriveSignedMagic` answers with, plus whether it found one at
 // all. Caller-owned and refilled, for `DivisionReduction`'s reason.
-type SignedMagic
+module type SignedMagic
 	export var found as bool
 	export var multiplier as ParsedInt
 	export var postShift as ShiftCount
 
-	static function create() returns SignedMagic
+	module static function create() returns SignedMagic
 		return Self{found: false, multiplier: 0, postShift: 0}
 	end 'create'
 end 'SignedMagic'
@@ -467,12 +467,12 @@ end 'classifyDivision'
 // `foldConstOperands` is the only other pass that runs over that band, for the same reason and with the
 // same shape of argument (`Compiler.compileToCodeResult`'s install block is where that rule is stated).
 export function strengthReduceDivision(project Project, module StdModule, firstFuncIndex FuncIndex)
-	if not targetLowersMulHighSigned(project.target.cpu) 'targetCannotSpellTheMultiply'
-		logDebug(LogCategory.ir, message: function() gives "strengthReduceDivision: skipped — this target has no `mulHighSigned` lowering")
+	let reduces = targetLowersMulHighSigned(project.target.cpu)
+	logDebug(LogCategory.ir, message: function() gives strengthReduceDivisionHeadline(reduces, firstFuncIndex: firstFuncIndex, funcCount: module.funcCount()))
+
+	if not reduces 'targetCannotSpellTheMultiply'
 		return
 	end 'targetCannotSpellTheMultiply'
-
-	logDebug(LogCategory.ir, message: function() gives "strengthReduceDivision: function {firstFuncIndex} onward of {module.funcCount()}")
 
 	// ONE record of each kind for the whole module, refilled per site and never re-created — the
 	// allocation discipline `StdArithOperands` and `StdFoldableDef` both state.
@@ -488,6 +488,16 @@ export function strengthReduceDivision(project Project, module StdModule, firstF
 	end 'eachFunc'
 end 'strengthReduceDivision'
 
+// The pass's headline: what it is about to do, or why it does nothing on this target. `reduces` is
+// `targetLowersMulHighSigned`'s answer for the compile's CPU.
+module function strengthReduceDivisionHeadline(reduces bool, firstFuncIndex FuncIndex, funcCount FuncCount) returns String
+	if not reduces 'targetCannotSpellTheMultiply'
+		return "strengthReduceDivision: skipped — this target has no `mulHighSigned` lowering"
+	end 'targetCannotSpellTheMultiply'
+
+	return "strengthReduceDivision: function {firstFuncIndex} onward of {funcCount}"
+end 'strengthReduceDivisionHeadline'
+
 // ⚠ **THE PRE-SCAN IS A SECOND DESCENT AND IT IS SAFE FOR A STATED REASON**, which `EC16`'s header
 // demands of any pass that walks its ops twice: it asks a STRICTLY WEAKER question than the rewrite —
 // "is there a `div` or a `mod` here at all?" against "is this one reducible?" — so the only
@@ -496,7 +506,7 @@ end 'strengthReduceDivision'
 // the divisions. What it buys is everything below it: most functions in a program contain no division
 // at all, and `liveOpIndices`, the const map, the value-id mint and the per-block `opRefs` rebuild are
 // all allocations they would otherwise pay for nothing.
-function reduceDivisionsInFunc(module StdModule, func IrFunction, reduction DivisionReduction, magic SignedMagic, def StdFoldableDef)
+module function reduceDivisionsInFunc(module StdModule, func IrFunction, reduction DivisionReduction, magic SignedMagic, def StdFoldableDef)
 	if not funcHoldsADivision(module, func: func) 'noDivision'
 		return
 	end 'noDivision'

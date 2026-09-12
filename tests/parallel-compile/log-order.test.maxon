@@ -1,0 +1,215 @@
+// log-order.test.maxon — the lines the per-function IR passes log come out in DECLARATION ORDER, and
+// that order does not depend on how many workers ran the passes. One staged copy, compiled twice with
+// `--log=ir:trace` — pinned to one processor and at the machine's count — and the two stderrs are
+// compared byte for byte after the pinned one is checked against the order the program declares its
+// functions in. Identity alone would let two runs agree on a WRONG order; the order check alone would
+// let a pool that happens to finish in order today pass tomorrow's by luck.
+//
+// ⚠ THE PER-FUNCTION LINES ARE LOGGED UNDER `LogCategory.ir` AT TRACE, so the flag is `--log=ir:trace`:
+// `ir:debug` shows a pass's whole-module summary and the `=== Running pass:` banners but not the line a
+// pass prints about ONE function (`refineValueRanges: 'f3' decided …`, printed under the
+// `refineVersionedRanges` banner — see `passesNamingEveryFunction`). The banners matter to the order
+// check — see `requireDeclarationOrder`.
+//
+// Two compiles in one file is the budget `test-command/reserved-name-refused.test.maxon` prices against
+// the 5,000 ms deadline; a third case here would need its own file.
+
+// The flag that raises the IR category to TRACE — see the header for why not `ir:debug`.
+let IrTraceLogFlag = "--log=ir:trace"
+
+// The pipeline's banner before each pass, and what closes it after the pass name. A pass may run more
+// than once, and each run walks the functions from the first again, so the banner is where the order
+// check starts over.
+let PassBannerNeedle = "=== Running pass: "
+let PassBannerClose = " ==="
+
+// How a pass's per-function line names its function, and how the staged program declares one. The
+// staged file name mirrors what `stagedProgram` stages the fixture's entry as.
+let FunctionNameQuote = "'"
+let DeclarationPrefix = "function "
+let ParameterListOpener = "("
+let StagedEntryFileName = "main.maxon"
+
+let LogLineSeparator = "\n"
+
+typealias SeenFlagArray = Array with bool
+
+// A position in `passesNamingEveryFunction`'s list, or its count for a pass not in it.
+typealias CoveringPosition = int(0 to u64.max)
+
+test 'the per-function log lines come out in declaration order at one processor and at the default'
+	let staged = stagedProgram("log-program", caseLabel: "log-order")
+
+	var arguments = StringArray.create()
+	arguments.push(IrTraceLogFlag)
+
+	let pinnedRun = spawnBuild(staged, label: "single-processor", extraArguments: arguments, singleProcessor: true)
+	let pinnedExit = pinnedRun.exitCode() as AssertedInt
+	try Expect.equal(pinnedExit, expected: 0, message: "the log program did not compile pinned to one processor. It wrote to stderr: {pinnedRun.stderr}")
+
+	// Moved aside so the second build is handed the same output path with nothing at it, exactly as the
+	// first was: the processor count is then the only difference between the two runs compared.
+	_ = retainImage(staged)
+
+	let defaultRun = spawnBuild(staged, label: "default-processors", extraArguments: arguments, singleProcessor: false)
+	let defaultExit = defaultRun.exitCode() as AssertedInt
+	try Expect.equal(defaultExit, expected: 0, message: "the log program did not compile at the default processor count. It wrote to stderr: {defaultRun.stderr}")
+
+	let pinnedStderr = normalizedStderr(pinnedRun, staged: staged)
+	let defaultStderr = normalizedStderr(defaultRun, staged: staged)
+
+	try requireDeclarationOrder(pinnedStderr, declared: declaredFunctionNames(staged))
+	try Expect.equal(defaultStderr, expected: pinnedStderr, message: "`{IrTraceLogFlag}` reads differently at the default processor count than pinned to one. The per-function passes must log each function's lines in function-index order whichever worker ran it and in whatever order the pool finished; a difference here is the pool's order reaching the log.")
+end 'the per-function log lines come out in declaration order at one processor and at the default'
+
+// The passes whose per-function lines name EVERY function of the fixture, by construction of the fixture:
+// each function's loop reads a guarded element whose bound is a record field, so the unswitcher hoists
+// the field and reports the loop (a DEBUG line naming the function), and the SECOND range refinement —
+// `refineVersionedRanges`, over exactly the functions the unswitcher rewrote — then decides the guard's
+// compare (a TRACE line naming the function). The first refinement decides nothing in those loops, so
+// its banner, like every other pass's, is checked for order alone. Under each banner listed here every
+// declared function must be named at least once, and each banner must appear.
+function passesNamingEveryFunction() returns StringArray
+	var passes = StringArray.create()
+	passes.push("unswitchInvariantGuards")
+	passes.push("refineVersionedRanges")
+	return passes
+end 'passesNamingEveryFunction'
+
+// Every log line naming exactly ONE declared function is checked against the last such line since the
+// pass banner: its position in the declaration order may not go backwards. A line naming two functions
+// (`splicing 'f2' into 'main'`) is about neither and is skipped.
+//
+// The control: under each banner of `passesNamingEveryFunction`, every declared function must be named
+// by at least one such line. A pass that stops printing about a function — in both lanes alike, so the
+// byte comparison cannot see it — is then red here rather than an order this case never checked; a log
+// holding no per-function line at all is in declaration order vacuously.
+function requireDeclarationOrder(stderr String, declared StringArray) throws TestFailure
+	let covering = passesNamingEveryFunction()
+
+	var seen = SeenFlagArray.create()
+	var bannersSeen = SeenFlagArray.create()
+	bannersSeen.refill(covering.count(), value: false)
+
+	var currentPass = ""
+	var lastPosition = 0
+	var lastNamed = false
+
+	for line in stderr.split(LogLineSeparator) 'eachLine'
+		if line.contains(PassBannerNeedle) 'newInvocation'
+			try requireEveryFunctionNamedUnder(currentPass, covering: covering, seen: seen, declared: declared)
+			currentPass = passNamedByBanner(line)
+			noteBannerSeen(currentPass, covering: covering, bannersSeen: bannersSeen)
+			seen.refill(declared.count(), value: false)
+			lastNamed = false
+			continue
+		end 'newInvocation'
+
+		var namedCount = 0
+		var namedPosition = 0
+		var position = 0
+
+		for name in declared 'eachName'
+			if line.contains("{FunctionNameQuote}{name}{FunctionNameQuote}") 'namesIt'
+				namedCount = namedCount + 1
+				namedPosition = position
+			end 'namesIt'
+
+			position = position + 1
+		end 'eachName'
+
+		if namedCount != 1 'notAboutOneFunction'
+			continue
+		end 'notAboutOneFunction'
+
+		if lastNamed 'ordered'
+			let named = try declared.get(namedPosition) otherwise panic("parallel-compile.test: the gate could not run — position {namedPosition} was found in the declared list and is not in it.")
+			let previous = try declared.get(lastPosition) otherwise panic("parallel-compile.test: the gate could not run — position {lastPosition} was found in the declared list and is not in it.")
+			try Expect.isTrue(namedPosition >= lastPosition, message: "a pass logged '{named}' after '{previous}' in one run of the pass, and '{named}' is declared first. The per-function passes log in function-index order; a line out of that order is the pool's finishing order reaching the log. The line: {line}")
+		end 'ordered'
+
+		lastNamed = true
+		lastPosition = namedPosition
+		try seen.set(namedPosition, value: true) otherwise panic("parallel-compile.test: the gate could not run — position {namedPosition} was found in the declared list and is not in the seen flags.")
+	end 'eachLine'
+
+	try requireEveryFunctionNamedUnder(currentPass, covering: covering, seen: seen, declared: declared)
+
+	var position = 0
+
+	for pass in covering 'eachCovering'
+		let appeared = try bannersSeen.get(position) otherwise panic("parallel-compile.test: the gate could not run — the banner flags are shorter than the pass list they were sized from.")
+		try Expect.isTrue(appeared, message: "no `{PassBannerNeedle}{pass}{PassBannerClose}` banner appeared under `{IrTraceLogFlag}`, so the control that every function is named under it never ran. The pipeline announces each pass by that banner; a renamed or unscheduled pass needs this list to follow it.")
+		position = position + 1
+	end 'eachCovering'
+end 'requireDeclarationOrder'
+
+// The pass a banner line announces: the text between the needle and its close.
+function passNamedByBanner(line String) returns String
+	let afterNeedle = try line.split(PassBannerNeedle).get(1) otherwise panic("parallel-compile.test: the gate could not run — a banner line has nothing after '{PassBannerNeedle}': {line}")
+	return try afterNeedle.split(PassBannerClose).get(0) otherwise panic("parallel-compile.test: the gate could not run — a banner line has no pass name before '{PassBannerClose}': {line}")
+end 'passNamedByBanner'
+
+// The position of `pass` in `covering`, or its count when the pass is not one of them.
+function coveringPositionOf(pass String, covering StringArray) returns CoveringPosition
+	var position = 0
+
+	for candidate in covering 'eachCovering'
+		if candidate == pass 'found'
+			return position
+		end 'found'
+
+		position = position + 1
+	end 'eachCovering'
+
+	return position
+end 'coveringPositionOf'
+
+function noteBannerSeen(pass String, covering StringArray, bannersSeen SeenFlagArray)
+	let position = coveringPositionOf(pass, covering: covering)
+
+	if position == covering.count() 'notACoveringPass'
+		return
+	end 'notACoveringPass'
+
+	try bannersSeen.set(position, value: true) otherwise panic("parallel-compile.test: the gate could not run — the banner flags are shorter than the pass list they were sized from.")
+end 'noteBannerSeen'
+
+// Close the section a banner opened: when its pass is one whose lines cover every function, every
+// declared function must have been named at least once since that banner. Before the first banner, and
+// under any other pass, there is nothing to require.
+function requireEveryFunctionNamedUnder(pass String, covering StringArray, seen SeenFlagArray, declared StringArray) throws TestFailure
+	if coveringPositionOf(pass, covering: covering) == covering.count() 'notACoveringPass'
+		return
+	end 'notACoveringPass'
+
+	var position = 0
+
+	for name in declared 'eachDeclared'
+		let named = try seen.get(position) otherwise panic("parallel-compile.test: the gate could not run — the seen flags are shorter than the declared list they were sized from.")
+		try Expect.isTrue(named, message: "under `{PassBannerNeedle}{pass}{PassBannerClose}` no line named '{name}' under `{IrTraceLogFlag}`, so this case cannot see where that function's lines fall for that pass. Every function of the fixture carries a loop over a guarded element access so the pass has something to say about it; give '{name}' one, or read why the pass stopped logging per function — a line dropped in both lanes alike is invisible to the byte comparison, and this is the check that sees it.")
+		position = position + 1
+	end 'eachDeclared'
+end 'requireEveryFunctionNamedUnder'
+
+// The staged program's function names in the order it declares them — the order the passes must log
+// in — read off the source itself rather than spelled here, so a fixture reordered without this file
+// is a red case and not a silently agreeing one.
+function declaredFunctionNames(staged FilePath) returns StringArray
+	let entry = staged.join("{StagedEntryFileName}")
+	let source = try File.readText(entry) otherwise panic("parallel-compile.test: the gate could not run — could not read {entry.toString()}.")
+
+	var names = StringArray.create()
+
+	for line in source.split(LogLineSeparator) 'eachLine'
+		if not line.startsWith(DeclarationPrefix) 'notADeclaration'
+			continue
+		end 'notADeclaration'
+
+		let afterPrefix = try line.split(DeclarationPrefix).get(1) otherwise panic("parallel-compile.test: the gate could not run — a line starting with '{DeclarationPrefix}' has nothing after it: {line}")
+		let name = try afterPrefix.split(ParameterListOpener).get(0) otherwise panic("parallel-compile.test: the gate could not run — a declaration line has no name before its parameter list: {line}")
+		names.push(name)
+	end 'eachLine'
+
+	return names
+end 'declaredFunctionNames'

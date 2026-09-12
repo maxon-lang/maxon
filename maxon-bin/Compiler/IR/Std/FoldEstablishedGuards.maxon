@@ -49,7 +49,6 @@ let NoLengthFloor = -1 as LengthFloor
 
 typealias RecordSlot = int(0 to u64.max)
 typealias RecordSlotColumn = Array with RecordSlot
-typealias FoldedGuardCount = int(0 to u64.max)
 typealias FactRound = int(0 to u64.max)
 
 // A position in the fact arena `EstablishedState` keeps every block's run in.
@@ -62,27 +61,20 @@ typealias BoundLinkColumn = Array with BoundLink
 
 let NoBound = 0 as BoundLink
 
-// Fold every established guard of every function, in place.
-export function foldEstablishedGuards(module StdModule)
-	var scratch = EstablishedScratch.create()
-	var visited = 0 as FuncCount
-	var rewritten = 0 as FuncCount
+// The pass's summary line, from the tally its runs over every function summed into (`StdPassPool`).
+module function foldEstablishedGuardsSummary(tally StdPassTally) returns String
+	return "foldEstablishedGuards: folded {tally.foldedGuards} guard(s) — {tally.foldedGuardKinds.summary(ManagedGuardKind.allCaseNames)} — in {tally.guardRewrittenFunctions} of the {tally.guardVisitedFunctions} function(s) visited"
+end 'foldEstablishedGuardsSummary'
 
-	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
-	// recorded as writing that same storage — canonical note at
-	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
-	for fnIndex in 0 upto module.functions.count() 'eachFunc'
-		visited = visited + 1
+// Fold every established guard of one function, in place, counting the visit and the rewrite into the
+// tally.
+module function foldEstablishedGuardsInFunc(module StdModule, func IrFunction, scratch EstablishedScratch)
+	scratch.tally.guardVisitedFunctions = scratch.tally.guardVisitedFunctions + 1
 
-		if foldInFunc(module, func: try module.functions.get(fnIndex) otherwise panic("foldEstablishedGuards: fnIndex {fnIndex} is below module.functions.count()"), scratch: scratch) 'rewrote'
-			rewritten = rewritten + 1
-		end 'rewrote'
-	end 'eachFunc'
-
-	let visitedTotal = visited
-	let rewrittenTotal = rewritten
-	logDebug(LogCategory.ir, message: function() gives "foldEstablishedGuards: folded {scratch.foldedTotal} guard(s) — {scratch.folded.summary(ManagedGuardKind.allCaseNames)} — in {rewrittenTotal} of the {visitedTotal} function(s) visited")
-end 'foldEstablishedGuards'
+	if foldInFunc(module, func: func, scratch: scratch) 'rewrote'
+		scratch.tally.guardRewrittenFunctions = scratch.tally.guardRewrittenFunctions + 1
+	end 'rewrote'
+end 'foldEstablishedGuardsInFunc'
 
 // ══════════════════════════════════════════════════════════════════════════
 // Per-function driver
@@ -128,10 +120,11 @@ function foldInFunc(module StdModule, func IrFunction, scratch EstablishedScratc
 		return false
 	end 'nothingDecided'
 
-	let decided = scratch.decisions.count()
-	let roundsTaken = rounds
-	logTrace(LogCategory.ir, message: function() gives "foldEstablishedGuards: '{String.from(func.name)}' decided {decided} guard(s) after {roundsTaken} round(s)")
-	_ = applyCompareDecisions(module, func: func, decisions: scratch.decisions, branch: scratch.branch, def: scratch.def)
+	if scratch.log.traces 'traced'
+		scratch.log.trace("foldEstablishedGuards: '{String.from(func.name)}' decided {scratch.decisions.count()} guard(s) after {rounds} round(s)")
+	end 'traced'
+
+	_ = applyCompareDecisions(module, func: func, decisions: scratch.decisions, branch: scratch.branch, def: scratch.def, log: scratch.log)
 	retireGuardOperands(module, func: func, reader: analysis.reader, scratch: scratch)
 
 	return true
@@ -464,8 +457,8 @@ function decideAtBlock(module StdModule, func IrFunction, analysis EstablishedFu
 	let compareOpIdx = analysis.reader.defs.definingOp(condId)
 	collectStdOpUses(module.getOp(compareOpIdx), referenced: scratch.seeds)
 	scratch.decisions.push(CompareDecision.create(compareOpIdx, resultId: condId, holds: false))
-	scratch.folded.add(scratch.guard.kind.ordinal, count: 1)
-	scratch.foldedTotal = scratch.foldedTotal + 1
+	scratch.tally.foldedGuardKinds.add(scratch.guard.kind.ordinal, count: 1)
+	scratch.tally.foldedGuards = scratch.tally.foldedGuards + 1
 end 'decideAtBlock'
 
 // Whether `block` closes on a recognised guard, filling `scratch.branch` and `scratch.guard`.
@@ -784,7 +777,7 @@ end 'factIsEmpty'
 
 // The mutable state one run of the pass carries, created once per module: the flow state, the
 // classification records refilled per op, the decisions and the folded compares' operands.
-type EstablishedScratch
+module type EstablishedScratch
 	export var state as EstablishedState
 	export var edge as EdgeFacts
 	export var plainEdge as EdgeFacts
@@ -801,10 +794,12 @@ type EstablishedScratch
 	// left alone; and the operands of the folded compares, the retirement's seeds.
 	export var readers as StdValueUseSet
 	export var seeds as StdValueUseSet
-	export var folded as OrdinalTally
-	export var foldedTotal as FoldedGuardCount = 0
 
-	static function create() returns EstablishedScratch
-		return Self{state: EstablishedState.create(), edge: EdgeFacts.create(), plainEdge: EdgeFacts.create(), success: RememberedSuccess.create(), call: StdCallOperands.create(), store: StdStoreOperands.create(), slot: ElementSlotOperands.create(), branch: StdBranchOperands.create(), guard: ManagedGuardOperands.create(), def: StdFoldableDef.create(), decisions: CompareDecisionArray.create(), readers: StdValueUseSet.createTrackingRepeats(), seeds: StdValueUseSet.createRecordingIds(), folded: OrdinalTally.create(ManagedGuardKind.allCases.count())}
+	// The step's counts and where a per-function line goes, both the pool worker's (`StdPassPool`).
+	export var tally as StdPassTally
+	export var log as PassLog
+
+	module static function create(tally StdPassTally, log PassLog) returns EstablishedScratch
+		return Self{state: EstablishedState.create(), edge: EdgeFacts.create(), plainEdge: EdgeFacts.create(), success: RememberedSuccess.create(), call: StdCallOperands.create(), store: StdStoreOperands.create(), slot: ElementSlotOperands.create(), branch: StdBranchOperands.create(), guard: ManagedGuardOperands.create(), def: StdFoldableDef.create(), decisions: CompareDecisionArray.create(), readers: StdValueUseSet.createTrackingRepeats(), seeds: StdValueUseSet.createRecordingIds(), tally: tally, log: log}
 	end 'create'
 end 'EstablishedScratch'

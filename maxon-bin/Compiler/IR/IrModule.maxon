@@ -10,7 +10,7 @@
 
 export typealias OpCount = int(0 to u64.max)
 export typealias BlockCount = int(0 to u64.max)
-export typealias FuncCount = int(0 to u64.max)
+module typealias FuncCount = int(0 to u64.max)
 export typealias FuncIndex = int(0 to u64.max)
 
 module typealias BlockRefIndex = int(0 to u64.max)
@@ -282,12 +282,11 @@ export type IrModule uses Op
 	// every prior pass — which is a false positive for anything asking "did this
 	// pass leave a forbidden op behind?".
 	//
-	// ⚠ **THE MAXON TIER ORPHANS TOO, SINCE THE CONSTANT-SLICE FOLD.**
-	// `Parser.removeCurrentBlockOpAt` takes one op ref out of a block and leaves the
-	// op itself in `self.ops` (it must: `ConstPayloadDomain.stringLiteralOp` and
-	// `Parser.charLiteralOps` both FILE indices into this array, so closing the gap
-	// would invalidate them). So "orphans start at the Std tier" is no longer true,
-	// and a Maxon-tier consumer must reach ops through a block like every other.
+	// ⚠ **THE MAXON TIER ORPHANS TOO.** `Parser.removeCurrentBlockOpAt` takes one op
+	// ref out of a block and leaves the op itself in `self.ops` (it must:
+	// `ConstPayloadDomain.stringLiteralOp` and `Parser.charLiteralOps` both FILE
+	// indices into this array, so closing the gap would invalidate them). So a
+	// Maxon-tier consumer must reach ops through a block like every other.
 	export function liveOpIndices(func IrFunction) returns OpIndexArray
 		var indices = OpIndexArray.create()
 		self.collectLiveOpIndices(func, into: indices)
@@ -339,6 +338,34 @@ export type IrModule uses Op
 
 		return byId
 	end 'blockIndexById'
+
+	// Refill `scratch` for a splice of `func`'s rebuilt body: its live op slots, and its `BlockId -> BlockRef`
+	// map as a dense column over its id space, with `absent` — a ref no block has — standing for an id the
+	// function does not own, so such an id reads as absent rather than as block 0. One pass over the block
+	// list rather than `getBlockByIdIn` per lookup, which is a scan and would make a per-block splice
+	// quadratic in a function's block count. The id space is dense per function but not gap-free, so the
+	// holes are real.
+	export function prepareSplice(func IrFunction, scratch SpliceScratch)
+		self.collectLiveOpIndices(func, into: scratch.slots.recycled)
+		scratch.slots.taken = 0
+		scratch.absent = self.blocks.count()
+		var highestId = 0 as BlockId
+
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try self.blocks.get(blockRef) otherwise panic("prepareSplice: blockRef {blockRef} is not in module.blocks")
+
+			if block.id > highestId 'higher'
+				highestId = block.id
+			end 'higher'
+		end 'eachBlock'
+
+		scratch.blockRefById.refill(((highestId + 1) as ElementIndex), value: scratch.absent)
+
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try self.blocks.get(blockRef) otherwise panic("prepareSplice: blockRef {blockRef} is not in module.blocks")
+			try scratch.blockRefById.set(block.id, value: blockRef) otherwise panic("prepareSplice: block id {block.id} is above the {scratch.blockRefById.count()} the id space was sized to")
+		end 'eachBlock'
+	end 'prepareSplice'
 
 	// Reclaim orphaned ops from `self.ops` in place.
 	//
@@ -613,6 +640,31 @@ export type IrModule uses Op
 		block.terminator = Terminator.opIndex(idx)
 	end 'setTerminator'
 
+	// ⭐ **PUT AN OP THAT CAME HOME FROM A POOL WORKER INTO THIS MODULE: ONE OF THE FUNCTION'S OWN SLOTS
+	// FIRST, THEN THE TAIL OF `ops`.** A rebuilt function's ops are new VALUES, but they are close to the
+	// same COUNT, and the slots the function held before belong to nobody else — an op index is never
+	// shared between functions. Appending all of them instead would put a second copy of the whole
+	// program's ops into a module that already holds one, doubling the largest structure of the tier.
+	//
+	// ⚠ **THE SPAN COLUMN RIDES HERE RATHER THAN AT THE CALL SITES**, because a slot is either RECYCLED
+	// (an `ops.set`, which the column mirrors with a `set` of its own) or APPENDED (a push past the tail,
+	// which it mirrors with a push) — and a caller that had to mirror that choice itself would be the one
+	// place the two halves could disagree.
+	export function placeOp(slots OpSlotSupply, op Op, spanId SpanId) returns OpIndex
+		if slots.taken < slots.recycled.count() 'reuseThisFunctionsOwnSlot'
+			let recycledIdx = try slots.recycled.get(slots.taken) otherwise panic("IrModule.placeOp: recycled.get OOB at {slots.taken} below count {slots.recycled.count()}")
+			slots.taken = slots.taken + 1
+			try self.ops.set(recycledIdx, value: op) otherwise panic("IrModule.placeOp: ops.set OOB at {recycledIdx}")
+			self.spans.placeAt(recycledIdx, spanId: spanId)
+			return recycledIdx
+		end 'reuseThisFunctionsOwnSlot'
+
+		let freshIdx = self.ops.count()
+		self.ops.push(op)
+		self.spans.pushId(freshIdx, spanId: spanId)
+		return freshIdx
+	end 'placeOp'
+
 	// Every pass-minted block enters through here, and every one states its heat (`BlockHeat`). The
 	// inline site defaults to the function's own text: a runtime installer and every pass ahead of the
 	// inliner mint nothing inside a spliced body. A pass that copies or splits a block AFTER the inliner
@@ -705,6 +757,41 @@ export type IrModule uses Op
 		end 'eachFunc'
 	end 'merge'
 end 'IrModule'
+
+// THE SLOTS ONE FUNCTION'S OPS MAY BE PLACED BACK INTO (`IrModule.placeOp`): the function's own live
+// op indices, taken in order, and then the tail of `ops`. The recycled list is the function's live op
+// indices, not every index in the function's range: the array is append-only and earlier passes leave
+// orphans in it, and an orphan is not this splice's to reuse.
+export type OpSlotSupply
+	export var recycled as OpIndexArray
+	export var taken as ElementIndex
+
+	export static function create() returns OpSlotSupply
+		return Self{recycled: OpIndexArray.create(), taken: 0}
+	end 'create'
+end 'OpSlotSupply'
+
+// WHAT A SPLICE REUSES ACROSS EVERY FUNCTION OF A POOL DRAIN, refilled per function by
+// `IrModule.prepareSplice`: the function's live op slots and its `BlockId -> BlockRef` column. A drain over
+// the module then allocates neither once per function, and `Array.clear`/`refill` keep the capacity the
+// largest function reached.
+export type SpliceScratch
+	export var slots as OpSlotSupply
+	export var blockRefById as BlockRefArray
+
+	// The ref `blockRefById` answers for an id the function does not own: `blocks.count()` at the refill,
+	// which no block of the function has.
+	export var absent as BlockRef
+
+	export static function create() returns SpliceScratch
+		return Self{slots: OpSlotSupply.create(), blockRefById: BlockRefArray.create(), absent: 0}
+	end 'create'
+
+	// The function's ref for block `id`, or `absent`.
+	export function blockRefOf(id BlockId) returns BlockRef
+		return try self.blockRefById.get(id) otherwise self.absent
+	end 'blockRefOf'
+end 'SpliceScratch'
 
 // Forwarding plan for an in-place array compaction. `forward[oldIndex]` holds the
 // compacted destination index of the entry that lived at `oldIndex`, or

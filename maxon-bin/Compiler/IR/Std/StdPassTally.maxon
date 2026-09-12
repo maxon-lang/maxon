@@ -1,0 +1,78 @@
+// StdPassTally — WHAT ONE STEP OF THE FANNED-OUT Std PASSES COUNTED, summed over the functions a worker
+// ran and then over the workers.
+//
+// Every per-function Std pass ends its run with one summary line — how many block-args it removed, how
+// many loops it versioned, why it left the others alone — and on a pool that line is a SUM over every
+// worker's share. Each pass adds into the fields that are its own; every count here is a sum, so the
+// order the workers are folded in cannot reach the line, and the driver prints it after the drain from
+// the total (`StdPassPool`). One record per SCHEDULE STEP rather than per pass: `pruneDeadBlockArgs`
+// runs three times in the schedule and each run reports its own total.
+//
+// The four `OrdinalTally`s are sized by the enums whose ordinals index them, which is why each names its
+// pass's reason enum here rather than taking a width.
+
+module typealias StdPassTallyArray = Array with StdPassTally
+
+module type StdPassTally
+	// `pruneDeadBlockArgs` / `elimTrivialBlockArgs`
+	export var removedBlockArgs as TallyCount = 0
+
+	// `threadConstantBranches`
+	export var threadedSites as TallyCount = 0
+	export var threadRefusals as OrdinalTally
+
+	// `refineValueRanges` / `refineVersionedRanges`
+	export var decidedCompares as TallyCount = 0
+	export var symbolicDecisions as TallyCount = 0
+	export var foldedBranches as TallyCount = 0
+	export var touchedFunctions as TallyCount = 0
+	export var visitedFunctions as TallyCount = 0
+	export var unboundedReasons as OrdinalTally
+
+	// `unswitchInvariantGuards`
+	export var rewrittenLoops as TallyCount = 0
+	export var versionedLoops as TallyCount = 0
+	export var hoistedLoops as TallyCount = 0
+	export var rewrittenFunctions as TallyCount = 0
+	export var genericGuardsLeftAlone as TallyCount = 0
+	export var unswitchRefusals as OrdinalTally
+
+	// `foldEstablishedGuards`
+	export var foldedGuards as TallyCount = 0
+	export var foldedGuardKinds as OrdinalTally
+	export var guardRewrittenFunctions as TallyCount = 0
+	export var guardVisitedFunctions as TallyCount = 0
+
+	module static function create() returns StdPassTally
+		return Self{threadRefusals: OrdinalTally.create(ThreadRefusal.allCases.count()), unboundedReasons: OrdinalTally.create(UnboundedReason.allCases.count()), unswitchRefusals: OrdinalTally.create(UnswitchRefusal.allCases.count()), foldedGuardKinds: OrdinalTally.create(ManagedGuardKind.allCases.count())}
+	end 'create'
+
+	// A record nothing else holds, with `source`'s counts — what a worker hands back through a reply.
+	module static function copyOf(source StdPassTally) returns StdPassTally
+		var copy = Self.create()
+		copy.absorb(source)
+		return copy
+	end 'copyOf'
+
+	module function absorb(other StdPassTally)
+		self.removedBlockArgs = self.removedBlockArgs + other.removedBlockArgs
+		self.threadedSites = self.threadedSites + other.threadedSites
+		self.threadRefusals.absorb(other.threadRefusals)
+		self.decidedCompares = self.decidedCompares + other.decidedCompares
+		self.symbolicDecisions = self.symbolicDecisions + other.symbolicDecisions
+		self.foldedBranches = self.foldedBranches + other.foldedBranches
+		self.touchedFunctions = self.touchedFunctions + other.touchedFunctions
+		self.visitedFunctions = self.visitedFunctions + other.visitedFunctions
+		self.unboundedReasons.absorb(other.unboundedReasons)
+		self.rewrittenLoops = self.rewrittenLoops + other.rewrittenLoops
+		self.versionedLoops = self.versionedLoops + other.versionedLoops
+		self.hoistedLoops = self.hoistedLoops + other.hoistedLoops
+		self.rewrittenFunctions = self.rewrittenFunctions + other.rewrittenFunctions
+		self.genericGuardsLeftAlone = self.genericGuardsLeftAlone + other.genericGuardsLeftAlone
+		self.unswitchRefusals.absorb(other.unswitchRefusals)
+		self.foldedGuards = self.foldedGuards + other.foldedGuards
+		self.foldedGuardKinds.absorb(other.foldedGuardKinds)
+		self.guardRewrittenFunctions = self.guardRewrittenFunctions + other.guardRewrittenFunctions
+		self.guardVisitedFunctions = self.guardVisitedFunctions + other.guardVisitedFunctions
+	end 'absorb'
+end 'StdPassTally'

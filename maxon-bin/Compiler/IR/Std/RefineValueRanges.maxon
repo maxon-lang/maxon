@@ -82,9 +82,9 @@
 // compare's result across blocks, and isel then materializes a `setcc` for it, so a compare this pass
 // would have deleted must not first become one CSE has made canonical — and a SECOND time after
 // `unswitchInvariantGuards`, whose copied loops compare every bound against one hoisted length. The
-// second run is scoped to the functions that pass rewrote (`RangeRunScope`): every other function is
-// the shape the first run already read, and the per-function tree, reader and columns are most of what
-// a run costs.
+// second run is scoped to the functions that pass rewrote — the pool worker runs it only on a unit whose
+// function `unswitchInFunc` answered it rewrote (`StdPassPool`): every other function is the shape the
+// first run already read, and the per-function tree, reader and columns are most of what a run costs.
 //
 // GUARDRAILS, each applied where the code says so:
 //   • a refinement is pushed only under a target with exactly one predecessor edge, or under the
@@ -119,7 +119,7 @@ let ForcedRoundAllowance = 2 as FixpointRound
 
 // What kept an interval, a compare or a block arg at the whole range. Tallied for the pass summary so a
 // reader can tell what a wider model would buy before building it.
-enum UnboundedReason
+module enum UnboundedReason
 	// A binary op or block arg whose type is not `i64`/`u64`.
 	narrowType
 
@@ -333,7 +333,7 @@ end 'RangeFunction'
 // Everything a function's analysis writes into, created ONCE for the module: the interval columns, the
 // refinement trail, the walk and its per-block scopes, the decision list and the classification
 // records. `Array.clear` keeps capacity, so the second function's columns reuse the first's buffers.
-type RangeScratch
+module type RangeScratch
 	// Per value id: the interval and its symbolic bound; whether this round or an earlier one has
 	// written it; whether the pass MODELS it at all; and one past the position of the block that
 	// defines it. A value that is modelled but not yet written is a loop-carried input this round has
@@ -377,13 +377,13 @@ type RangeScratch
 	export var right as Interval
 	export var result as Interval
 	export var incoming as Interval
-	export var reasons as OrdinalTally
+
+	// The step's counts and where a per-function line goes, both the pool worker's (`StdPassPool`).
+	export var tally as StdPassTally
+	export var log as PassLog
 
 	// The function under analysis, for the column panics.
 	export var funcName as ByteArray
-
-	// Decisions a symbolic bound made, for the whole module.
-	export var symbolicDecisions as TallyCount = 0
 
 	// The round in progress: whether any interval or dead flag moved, whether block args are forced to
 	// the whole range, and the tallies of which only the last round's reading is kept.
@@ -395,9 +395,16 @@ type RangeScratch
 	export var undecidedThisRound as TallyCount = 0
 	export var symbolicThisRound as TallyCount = 0
 
-	static function create() returns RangeScratch
-		return Self{lo: ParsedIntArray.create(), hi: ParsedIntArray.create(), symBasePlusOne: ValueIdArray.create(), symOffset: ParsedIntArray.create(), computed: BoolArray.create(), modelled: BoolArray.create(), defPosition: BlockPositionColumn.create(), trailValue: ValueIdArray.create(), trailLo: ParsedIntArray.create(), trailHi: ParsedIntArray.create(), trailSymBasePlusOne: ValueIdArray.create(), trailSymOffset: ParsedIntArray.create(), trailComputed: BoolArray.create(), walk: StdDominatorWalk.create(), walkTrailMark: TrailMarkColumn.create(), walkOpenedDead: BoolArray.create(), blockDead: BoolArray.create(), decisions: CompareDecisionArray.create(), arith: StdArithOperands.create(), branch: StdBranchOperands.create(), join: GuardedAccessJoinReader.create(), def: StdFoldableDef.create(), defined: StdDefinedValues.create(), left: Interval.create(), right: Interval.create(), result: Interval.create(), incoming: Interval.create(), reasons: OrdinalTally.create(UnboundedReason.allCases.count()), funcName: ByteArray.create()}
+	module static function create(tally StdPassTally, log PassLog) returns RangeScratch
+		return Self{lo: ParsedIntArray.create(), hi: ParsedIntArray.create(), symBasePlusOne: ValueIdArray.create(), symOffset: ParsedIntArray.create(), computed: BoolArray.create(), modelled: BoolArray.create(), defPosition: BlockPositionColumn.create(), trailValue: ValueIdArray.create(), trailLo: ParsedIntArray.create(), trailHi: ParsedIntArray.create(), trailSymBasePlusOne: ValueIdArray.create(), trailSymOffset: ParsedIntArray.create(), trailComputed: BoolArray.create(), walk: StdDominatorWalk.create(), walkTrailMark: TrailMarkColumn.create(), walkOpenedDead: BoolArray.create(), blockDead: BoolArray.create(), decisions: CompareDecisionArray.create(), arith: StdArithOperands.create(), branch: StdBranchOperands.create(), join: GuardedAccessJoinReader.create(), def: StdFoldableDef.create(), defined: StdDefinedValues.create(), left: Interval.create(), right: Interval.create(), result: Interval.create(), incoming: Interval.create(), tally: tally, log: log, funcName: ByteArray.create()}
 	end 'create'
+
+	// Drop the reference into the function a run held for its panics. This scratch outlives the function
+	// on a pool worker, and a unit crossing back to the driver must have one owner per record
+	// (`StdUnit`): the name it aliased would be that record's second.
+	module function endFunction()
+		self.funcName = b""
+	end 'endFunction'
 
 	function isComputed(valueId ValueId) returns bool
 		return try self.computed.get(valueId) otherwise panic("refineValueRanges: in '{String.from(self.funcName)}', value {valueId} is read but lies outside the {self.computed.count()} ids `nextFreeValueId` answered — nothing defines it")
@@ -559,57 +566,29 @@ type RangeScratch
 	end 'recordBlockDead'
 end 'RangeScratch'
 
-// Which functions a run visits (see the header's SCHEDULING paragraph).
-export union RangeRunScope
-	everyFunction
-	rewrittenBy(functions RewrittenFunctions)
+// The pass's summary line, from the tally its runs over every function summed into (`StdPassPool`).
+module function refineValueRangesSummary(tally StdPassTally, funcCount FuncCount) returns String
+	return "refineValueRanges: decided {tally.decidedCompares} compare(s) ({tally.symbolicDecisions} by a symbolic bound) and folded {tally.foldedBranches} branch(es) in {tally.touchedFunctions} of the {tally.visitedFunctions} function(s) visited of {funcCount}; unbounded: {tally.unboundedReasons.summary(UnboundedReason.allCaseNames)}"
+end 'refineValueRangesSummary'
 
-	function includes(fnIndex FuncIndex) returns bool
-		return match self 'scope'
-			everyFunction gives true
-			rewrittenBy(functions) gives functions.includes(fnIndex)
-		end 'scope'
-	end 'includes'
-end 'RangeRunScope'
+// Refine one function, in place, counting what it decided into the tally.
+module function refineValueRangesInFunc(module StdModule, func IrFunction, scratch RangeScratch)
+	scratch.tally.visitedFunctions = scratch.tally.visitedFunctions + 1
+	let foldedHere = refineOneFunction(module, func: func, scratch: scratch)
+	scratch.endFunction()
 
-// Refine every function of `module` in `scope`, in place.
-export function refineValueRanges(module StdModule, scope RangeRunScope)
-	var scratch = RangeScratch.create()
-	var decided = 0 as TallyCount
-	var folded = 0 as TallyCount
-	var touched = 0 as TallyCount
-	var visited = 0 as TallyCount
+	if scratch.decisions.count() == 0 'nothingDecided'
+		return
+	end 'nothingDecided'
 
-	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
-	// recorded as writing that same storage — canonical note at
-	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
-	for fnIndex in 0 upto module.functions.count() 'eachFunc'
-		if not scope.includes(fnIndex) 'outOfScope'
-			continue
-		end 'outOfScope'
-
-		visited = visited + 1
-		let foldedHere = refineValueRangesInFunc(module, func: try module.functions.get(fnIndex) otherwise panic("refineValueRanges: fnIndex {fnIndex} is below module.functions.count()"), scratch: scratch)
-
-		if scratch.decisions.count() == 0 'nothingDecided'
-			continue
-		end 'nothingDecided'
-
-		touched = touched + 1
-		decided = decided + scratch.decisions.count()
-		folded = folded + foldedHere
-	end 'eachFunc'
-
-	let decidedTotal = decided
-	let foldedTotal = folded
-	let touchedTotal = touched
-	let visitedTotal = visited
-	logDebug(LogCategory.ir, message: function() gives "refineValueRanges: decided {decidedTotal} compare(s) ({scratch.symbolicDecisions} by a symbolic bound) and folded {foldedTotal} branch(es) in {touchedTotal} of the {visitedTotal} function(s) visited of {module.funcCount()}; unbounded: {scratch.reasons.summary(UnboundedReason.allCaseNames)}")
-end 'refineValueRanges'
+	scratch.tally.touchedFunctions = scratch.tally.touchedFunctions + 1
+	scratch.tally.decidedCompares = scratch.tally.decidedCompares + scratch.decisions.count()
+	scratch.tally.foldedBranches = scratch.tally.foldedBranches + foldedHere
+end 'refineValueRangesInFunc'
 
 // Analyse and rewrite one function. Answers how many branches folded; `scratch.decisions` holds the
 // compares that were decided.
-function refineValueRangesInFunc(module StdModule, func IrFunction, scratch RangeScratch) returns TallyCount
+function refineOneFunction(module StdModule, func IrFunction, scratch RangeScratch) returns TallyCount
 	scratch.decisions.clear()
 
 	// A compare feeds a branch only across blocks, and without a branch there is no refinement to
@@ -637,7 +616,7 @@ function refineValueRangesInFunc(module StdModule, func IrFunction, scratch Rang
 
 		if round > WideningRoundCap and not scratch.forceTop 'giveUpPrecision'
 			scratch.forceTop = true
-			scratch.reasons.add(UnboundedReason.forcedByRoundCap.ordinal, count: 1)
+			scratch.tally.unboundedReasons.add(UnboundedReason.forcedByRoundCap.ordinal, count: 1)
 		end 'giveUpPrecision'
 
 		beginRound(scratch)
@@ -645,21 +624,23 @@ function refineValueRangesInFunc(module StdModule, func IrFunction, scratch Rang
 		stable = not scratch.changed
 	end 'untilStable'
 
-	scratch.reasons.add(UnboundedReason.mayWrap.ordinal, count: scratch.wrapsThisRound)
-	scratch.reasons.add(UnboundedReason.unmodelledOperand.ordinal, count: scratch.unmodelledThisRound)
-	scratch.reasons.add(UnboundedReason.unsignedOutsideSignedRange.ordinal, count: scratch.unsignedRefusedThisRound)
-	scratch.reasons.add(UnboundedReason.undecidedCompare.ordinal, count: scratch.undecidedThisRound)
-	scratch.symbolicDecisions = scratch.symbolicDecisions + scratch.symbolicThisRound
+	scratch.tally.unboundedReasons.add(UnboundedReason.mayWrap.ordinal, count: scratch.wrapsThisRound)
+	scratch.tally.unboundedReasons.add(UnboundedReason.unmodelledOperand.ordinal, count: scratch.unmodelledThisRound)
+	scratch.tally.unboundedReasons.add(UnboundedReason.unsignedOutsideSignedRange.ordinal, count: scratch.unsignedRefusedThisRound)
+	scratch.tally.unboundedReasons.add(UnboundedReason.undecidedCompare.ordinal, count: scratch.undecidedThisRound)
+	scratch.tally.symbolicDecisions = scratch.tally.symbolicDecisions + scratch.symbolicThisRound
 
 	if scratch.decisions.count() == 0 'nothingDecided'
 		return 0
 	end 'nothingDecided'
 
-	logTrace(LogCategory.ir, message: function() gives "refineValueRanges: '{String.from(func.name)}' decided {scratch.decisions.count()} compare(s) after {round} round(s)")
+	if scratch.log.traces 'traced'
+		scratch.log.trace("refineValueRanges: '{String.from(func.name)}' decided {scratch.decisions.count()} compare(s) after {round} round(s)")
+	end 'traced'
 
 	// The fourth guardrail: a decided compare is rewritten only at its own definition.
-	return applyCompareDecisions(module, func: func, decisions: scratch.decisions, branch: scratch.branch, def: scratch.def)
-end 'refineValueRangesInFunc'
+	return applyCompareDecisions(module, func: func, decisions: scratch.decisions, branch: scratch.branch, def: scratch.def, log: scratch.log)
+end 'refineOneFunction'
 
 function beginRound(scratch RangeScratch)
 	scratch.changed = false
@@ -759,8 +740,8 @@ function prepareFunction(module StdModule, func IrFunction, scratch RangeScratch
 		end 'eachOp'
 	end 'eachBlock'
 
-	scratch.reasons.add(UnboundedReason.narrowType.ordinal, count: narrowCount)
-	scratch.reasons.add(UnboundedReason.unmodelledOp.ordinal, count: unmodelledCount)
+	scratch.tally.unboundedReasons.add(UnboundedReason.narrowType.ordinal, count: narrowCount)
+	scratch.tally.unboundedReasons.add(UnboundedReason.unmodelledOp.ordinal, count: unmodelledCount)
 
 	return anyCompare
 end 'prepareFunction'

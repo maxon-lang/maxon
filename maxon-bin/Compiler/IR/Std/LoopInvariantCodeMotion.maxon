@@ -165,21 +165,9 @@
 // straight-line Std IR with their loops already hand-hoisted — a second run there would walk every
 // appended function to find nothing, and it is also what keeps Rule 1's thread premise narrow, because
 // the runtime's own handshakes never pass through here.
-export function hoistLoopInvariants(module StdModule)
-	logDebug(LogCategory.ir, message: function() gives "hoistLoopInvariants: {module.funcCount()} function(s)")
-
-	// ONE set of scratch for the whole module. Every column in it is cleared per loop and reused at the
-	// size the largest loop so far needed, rather than reallocated — the shape `CseScratch` states and
-	// `foldConstants.evaluateOps` gives the reason for.
-	var scratch = LicmScratch.create()
-
-	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
-	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
-	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
-	for fnIndex in 0 upto module.functions.count() 'eachFunc'
-		hoistInFunc(module, func: try module.functions.get(fnIndex) otherwise panic("hoistLoopInvariants: fnIndex {fnIndex} is below module.functions.count()"), scratch: scratch)
-	end 'eachFunc'
-end 'hoistLoopInvariants'
+module function hoistLoopInvariantsHeadline(funcCount FuncCount) returns String
+	return "hoistLoopInvariants: {funcCount} function(s)"
+end 'hoistLoopInvariantsHeadline'
 
 // Hoist out of every natural loop of one function.
 //
@@ -192,7 +180,7 @@ end 'hoistLoopInvariants'
 // ⚠ Applying a hoist moves op REFERENCES between blocks and creates and deletes no block, so the
 // dominator tree, the CFG adjacency, the back edges and every member set stay valid across it. That is
 // why they are built ONCE per function here rather than per loop.
-function hoistInFunc(module StdModule, func IrFunction, scratch LicmScratch)
+module function hoistInFunc(module StdModule, func IrFunction, scratch LicmScratch)
 	let blockCount = func.blockRefs.count()
 
 	// Fewer than two blocks cannot hold a loop this pass can serve: the only loop a one-block function
@@ -249,7 +237,10 @@ function hoistIntoPreheader(module StdModule, func IrFunction, tree StdDominator
 		return
 	end 'nothingInvariant'
 
-	logDebug(LogCategory.ir, message: function() gives "hoistLoopInvariants: '{String.from(func.name)}' loop at block position {header} — {scratch.hoisted.count()} op(s) to preheader {preheader}")
+	if scratch.log.debugs 'logged'
+		scratch.log.debug("hoistLoopInvariants: '{String.from(func.name)}' loop at block position {header} — {scratch.hoisted.count()} op(s) to preheader {preheader}")
+	end 'logged'
+
 	appendToPreheader(module, func: func, preheader: preheader, ops: scratch.hoisted)
 end 'hoistIntoPreheader'
 
@@ -774,7 +765,10 @@ typealias WitnessCoverageMap = LoopValueMap with LoadCoverage
 // parameters at every level — they are created together, cleared together and reset together, and a walk
 // that took them separately would have to name all seven at each of six call sites (`CseScratch`'s
 // reason, and the same shape).
-type LicmScratch
+module type LicmScratch
+	// Where a per-loop line goes — the pool worker's (`StdPassPool`).
+	export var log as PassLog
+
 	// Every value the CURRENT loop defines, and the subset of those this pass has decided to hoist. Two
 	// sets rather than one mutable "variant" set: a removal would need a second column anyway, and a
 	// value moving from one set to the other is exactly what the analysis records.
@@ -807,8 +801,8 @@ type LicmScratch
 	export var load as StdLoadOperands
 	export var def as StdDefinedValues
 
-	static function create() returns LicmScratch
-		return Self{definedInLoop: LoopValueStamps.create(), invariant: LoopValueStamps.create(), members: LoopMembership.create(), effects: LoopEffects.create(), mustExecute: MustExecuteCounter.create(), witness: LoadWitnessTable.create(), walkOrder: BlockPositionColumn.create(), hoisted: OpIndexArray.create(), leaving: BlockOpPosArray.create(), arith: StdArithOperands.create(), load: StdLoadOperands.create(), def: StdDefinedValues.create()}
+	module static function create(log PassLog) returns LicmScratch
+		return Self{log: log, definedInLoop: LoopValueStamps.create(), invariant: LoopValueStamps.create(), members: LoopMembership.create(), effects: LoopEffects.create(), mustExecute: MustExecuteCounter.create(), witness: LoadWitnessTable.create(), walkOrder: BlockPositionColumn.create(), hoisted: OpIndexArray.create(), leaving: BlockOpPosArray.create(), arith: StdArithOperands.create(), load: StdLoadOperands.create(), def: StdDefinedValues.create()}
 	end 'create'
 
 	// Empty every per-loop column, keeping capacity. ⛔ **A LEAKED ENTRY IS A MISCOMPILE, NOT A MISSED

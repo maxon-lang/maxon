@@ -5262,9 +5262,8 @@ end 'remappedArgs'
 // is one the copy shares with its source (a loop-invariant value defined before the loop, for the
 // unswitcher; for a splice the column is total over the callee, so nothing is outside it). Its def half
 // is STRICT through `clonedValue`: a def is always the copy's own. An op that reads nothing, defines
-// nothing and names no block — `retVoid`, `osPanic` — is handed back itself, and the two slots of
-// `module.ops` then share one immutable box, exactly as `substituteValuesInBlock` leaves an unchanged op
-// in place.
+// nothing and names no block — `retVoid`, `osPanic` — is minted afresh all the same, so an `owned` copy
+// shares no box with its source.
 //
 // ⭐ **IT COVERS THE OPS A COPIED BODY MAY HOLD, AND PANICS ON EVERY OTHER — which is not a gap but the
 // admission rule's backstop.** `InlineLeaves.inlineOpRole` refuses a callee holding any other
@@ -5273,7 +5272,15 @@ end 'remappedArgs'
 // indirect accesses, every call kind and the two panic ops. Writing rewrites for the other seventy would
 // be unreachable generality — and a `panic` naming the op is what a disagreement between the two rules
 // looks like, instead of a silently mis-cloned body. Exhaustive with no bare `default`, so a variant
-// appended to `StdOp` fails to compile here until it is consciously placed.
+// appended to `StdOp` fails to compile here until it is consciously placed. A whole function copied for
+// a pool worker is not a splice and does not come through here: `StdUnit` deep-clones each op as it is.
+//
+// ⭐ **A COPY MADE ON A POOL WORKER OWNS ITS MANAGED PAYLOADS.** The unswitcher's loop copies are made on
+// a worker and cross back in a reply, which MOVES: the transfer walk aborts the process on a record with
+// a second owner (`RuntimeAbort.transferredRecordNotSole`), so a callee name, a label or a return-type
+// union shared between the copy and its original — fine inside one module, where the two ops are
+// immutable — is copied for it (`ClonePayloads.owned`; `ownedBytes`, `ownedReturnType`). A `switch`'s
+// table and a call's `args` are built fresh either way.
 //
 // ⛔⛔ **THE DEF HALF IS CHECKED AGAINST `stdOpDefinedValue`, ONCE PER VARIANT** — because this file holds
 // two per-variant def walks and nothing else makes them agree. A variant APPENDED to `StdOp` is a compile
@@ -5283,6 +5290,17 @@ end 'remappedArgs'
 // not it defines a value. Whether an arm rewrites its def is a property of the ARM, so the first clone of each
 // variant is checked and the rest of that variant's clones are not — two jump-table matches per variant
 // per cloner rather than per copied op.
+
+// Who owns a clone's managed payloads — a callee name, a label, a return type.
+//
+//   shared — a splice on the main thread inside ONE module: the clone reads the source op's boxes.
+//   owned  — a copy made on a pool worker: every payload is the clone's own, so the copy and its
+//            original can cross back in one reply.
+module enum ClonePayloads
+	shared
+	owned
+end 'ClonePayloads'
+
 module type StdOpCloner
 	var def as StdDefinedValues
 	var verified as BoolArray
@@ -5291,8 +5309,8 @@ module type StdOpCloner
 		return Self{def: StdDefinedValues.create(), verified: BoolArray.create()}
 	end 'create'
 
-	module function clone(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray) returns StdOp
-		let cloned = cloneStdOp(op, valueSubst: valueSubst, blockSubst: blockSubst)
+	module function clone(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray, payloads ClonePayloads) returns StdOp
+		let cloned = cloneStdOp(op, valueSubst: valueSubst, blockSubst: blockSubst, payloads: payloads)
 		let variant = op.ordinal as ElementIndex
 		self.verified.growFilled(variant + 1, value: false)
 		let checked = try self.verified.get(variant) otherwise panic("StdOpCloner.clone: verified.get OOB at {variant} after growing to hold it")
@@ -5312,7 +5330,7 @@ end 'StdOpCloner'
 // a nil function name in the next pass's name index). The `gives` form with these arm bodies is the shape
 // `remapStdOpUses` has run in for every substitution pass, so the clone keeps to it; a refused variant
 // answers through a function that panics, since an arm of this form cannot panic itself.
-function cloneStdOp(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray) returns StdOp
+function cloneStdOp(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray, payloads ClonePayloads) returns StdOp
 	return match op 'r'
 		const(resultId, value, valueType) gives StdOp.const(clonedValue(resultId, subst: valueSubst), value: value, valueType: valueType)
 		binOp(resultId, lhs, rhs, opcode, operandType) gives StdOp.binOp(clonedValue(resultId, subst: valueSubst), lhs: remappedValue(lhs, subst: valueSubst), rhs: remappedValue(rhs, subst: valueSubst), opcode: opcode, operandType: operandType)
@@ -5326,20 +5344,20 @@ function cloneStdOp(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray) 
 		branch(targetBlockId) gives StdOp.branch(clonedBlock(targetBlockId, subst: blockSubst))
 		ret(retValId) gives StdOp.ret(remappedValue(retValId, subst: valueSubst))
 		param gives refuseParamClone()
-		call(resultId, callee, args) gives StdOp.call(clonedValue(resultId, subst: valueSubst), callee: callee, args: remappedArgs(args, subst: valueSubst))
-		retVoid gives op
-		globalAddr(resultId, label) gives StdOp.globalAddr(clonedValue(resultId, subst: valueSubst), label: label)
+		call(resultId, callee, args) gives StdOp.call(clonedValue(resultId, subst: valueSubst), callee: ownedBytes(callee, payloads: payloads), args: remappedArgs(args, subst: valueSubst))
+		retVoid gives StdOp.retVoid
+		globalAddr(resultId, label) gives StdOp.globalAddr(clonedValue(resultId, subst: valueSubst), label: ownedBytes(label, payloads: payloads))
 		loadIndirect(resultId, addrId, offset, valueType) gives StdOp.loadIndirect(clonedValue(resultId, subst: valueSubst), addrId: remappedValue(addrId, subst: valueSubst), offset: offset, valueType: valueType)
 		storeIndirect(addrId, offset, valueId, valueType) gives StdOp.storeIndirect(remappedValue(addrId, subst: valueSubst), offset: offset, valueId: remappedValue(valueId, subst: valueSubst), valueType: valueType)
 		osAllocPages or
 			osWriteStdout gives refuseUnclonable(op)
-		rdataAddr(resultId, label) gives StdOp.rdataAddr(clonedValue(resultId, subst: valueSubst), label: label)
-		tryCall(resultId, errorFlagId, callee, args) gives StdOp.tryCall(clonedValue(resultId, subst: valueSubst), errorFlagId: clonedValue(errorFlagId, subst: valueSubst), callee: callee, args: remappedArgs(args, subst: valueSubst))
+		rdataAddr(resultId, label) gives StdOp.rdataAddr(clonedValue(resultId, subst: valueSubst), label: ownedBytes(label, payloads: payloads))
+		tryCall(resultId, errorFlagId, callee, args) gives StdOp.tryCall(clonedValue(resultId, subst: valueSubst), errorFlagId: clonedValue(errorFlagId, subst: valueSubst), callee: ownedBytes(callee, payloads: payloads), args: remappedArgs(args, subst: valueSubst))
 		errorReturn or
 			osExit gives refuseUnclonable(op)
-		funcAddr(resultId, funcName) gives StdOp.funcAddr(clonedValue(resultId, subst: valueSubst), funcName: funcName)
-		callIndirect(resultId, calleeReg, resultType, argFloatMask, args) gives StdOp.callIndirect(clonedValue(resultId, subst: valueSubst), calleeReg: remappedValue(calleeReg, subst: valueSubst), resultType: resultType, argFloatMask: argFloatMask, args: remappedArgs(args, subst: valueSubst))
-		osPanic gives op
+		funcAddr(resultId, funcName) gives StdOp.funcAddr(clonedValue(resultId, subst: valueSubst), funcName: ownedBytes(funcName, payloads: payloads))
+		callIndirect(resultId, calleeReg, resultType, argFloatMask, args) gives StdOp.callIndirect(clonedValue(resultId, subst: valueSubst), calleeReg: remappedValue(calleeReg, subst: valueSubst), resultType: ownedReturnType(resultType, payloads: payloads), argFloatMask: argFloatMask, args: remappedArgs(args, subst: valueSubst))
+		osPanic(label) gives StdOp.osPanic(ownedBytes(label, payloads: payloads))
 		osPanicValue(messagePtr) gives StdOp.osPanicValue(remappedValue(messagePtr, subst: valueSubst))
 		osReadClock or
 			osProcessSpawn or
@@ -5349,7 +5367,7 @@ function cloneStdOp(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray) 
 			osWaitHandle or
 			osFreePages gives refuseUnclonable(op)
 		switch(subjectId, denseTargetBlockIds, defaultBlockId) gives StdOp.switch(remappedValue(subjectId, subst: valueSubst), denseTargetBlockIds: clonedBlocks(denseTargetBlockIds, subst: blockSubst), defaultBlockId: clonedBlock(defaultBlockId, subst: blockSubst))
-		witnessCall(resultId, witnessAddr, methodIndex, resultType, argFloatMask, args) gives StdOp.witnessCall(clonedValue(resultId, subst: valueSubst), witnessAddr: remappedValue(witnessAddr, subst: valueSubst), methodIndex: methodIndex, resultType: resultType, argFloatMask: argFloatMask, args: remappedArgs(args, subst: valueSubst))
+		witnessCall(resultId, witnessAddr, methodIndex, resultType, argFloatMask, args) gives StdOp.witnessCall(clonedValue(resultId, subst: valueSubst), witnessAddr: remappedValue(witnessAddr, subst: valueSubst), methodIndex: methodIndex, resultType: ownedReturnType(resultType, payloads: payloads), argFloatMask: argFloatMask, args: remappedArgs(args, subst: valueSubst))
 		osPipeCreate or
 			osIocpCreate or
 			osEventCreate or
@@ -5365,7 +5383,7 @@ function cloneStdOp(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray) 
 			osPipeCreateOutbound or
 			osWriteFile or
 			osReadWallClock gives refuseUnclonable(op)
-		witnessTryCall(resultId, errorFlagId, witnessAddr, methodIndex, resultType, argFloatMask, args) gives StdOp.witnessTryCall(clonedValue(resultId, subst: valueSubst), errorFlagId: clonedValue(errorFlagId, subst: valueSubst), witnessAddr: remappedValue(witnessAddr, subst: valueSubst), methodIndex: methodIndex, resultType: resultType, argFloatMask: argFloatMask, args: remappedArgs(args, subst: valueSubst))
+		witnessTryCall(resultId, errorFlagId, witnessAddr, methodIndex, resultType, argFloatMask, args) gives StdOp.witnessTryCall(clonedValue(resultId, subst: valueSubst), errorFlagId: clonedValue(errorFlagId, subst: valueSubst), witnessAddr: remappedValue(witnessAddr, subst: valueSubst), methodIndex: methodIndex, resultType: ownedReturnType(resultType, payloads: payloads), argFloatMask: argFloatMask, args: remappedArgs(args, subst: valueSubst))
 		osFileOpenRead or
 			osFileClose or
 			osReadFile or
@@ -5427,6 +5445,30 @@ function cloneStdOp(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray) 
 			osNetpoll gives refuseUnclonable(op)
 	end 'r'
 end 'cloneStdOp'
+
+// The payload a clone carries: the source's own box for a splice, a copy for a worker-made copy
+// (`ClonePayloads`).
+function ownedBytes(bytes ByteArray, payloads ClonePayloads) returns ByteArray
+	return match payloads 'scope'
+		shared gives bytes
+		owned gives bytes.clone()
+	end 'scope'
+end 'ownedBytes'
+
+// The same rule for a return-type payload, which is a union value and so a box of its own.
+function ownedReturnType(returnType StdReturnType, payloads ClonePayloads) returns StdReturnType
+	return match payloads 'scope'
+		shared gives returnType
+		owned gives freshReturnType(returnType)
+	end 'scope'
+end 'ownedReturnType'
+
+function freshReturnType(returnType StdReturnType) returns StdReturnType
+	return match returnType 'rt'
+		void gives StdReturnType.void
+		value(inner) gives StdReturnType.value(inner)
+	end 'rt'
+end 'freshReturnType'
 
 // The backstops of `cloneStdOp`'s refusing arms — functions rather than messages, for the reason above.
 function refuseParamClone() returns StdOp

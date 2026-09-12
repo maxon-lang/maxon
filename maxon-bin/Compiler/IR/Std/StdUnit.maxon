@@ -1,0 +1,199 @@
+// StdUnit — ONE FUNCTION AS A SINGLE-FUNCTION Std MODULE, for a pool worker, and the splice that puts
+// the worker's answer back.
+//
+// ⭐⭐ **WHY A MODULE AND NOT A LIGHTER RECORD.** The passes `StdPassPool` fans out take a `StdModule` and
+// an `IrFunction` and read the module's `blocks`, `ops` and `spans` through them, so a unit that IS a
+// module runs every pass body UNCHANGED — one copy of each pass, on the pool and on the main thread alike.
+// The module holds the one function at index `UnitFunctionIndex`; its `blockRefs` name the unit's own
+// `blocks`, every block's `opRefs` name the unit's own `ops`, and the span column is parallel to them.
+// `ValueId`s and `BlockId`s are function-local and cross unchanged.
+//
+// ⛔⛔ **EVERY RECORD REACHABLE FROM A UNIT IS BUILT FRESH, AND THAT IS A RUN-TIME CONTRACT WITH A LOUD
+// FAILURE.** A message MOVES: the send walks the whole graph and a record with a second owner aborts the
+// process with exit 96 (`RuntimeAbort.transferredRecordNotSole`). So the function record comes through
+// `IrFunction.createFromStd` (whose six placeholders are fresh, not the parser's singletons), every block
+// and every op is a DEEP CLONE of the real module's (`IrBlock.clone`, `StdOp.clone` — a union value copied
+// out of an array is a shared box; a callee name or a label shared with the source op is one too), and the
+// module's own tables are the empties `IrModule.create` gives it.
+//
+// ⭐ **A CLONE, NOT THE Std OP CLONER.** The cloner rewrites an op into another function's coordinates and
+// so needs a value column sized by a walk over every op of the function (`nextFreeValueId`) before the
+// first copy; a unit keeps every id, so the deep clone the compiler synthesizes for the union is the whole
+// copy, and the function is walked once.
+//
+// ⚠ **WHAT THE UNIT DOES NOT CARRY IS AS DELIBERATE AS WHAT IT DOES.** The twelve passes read `blockRefs`,
+// `nextBlockId`, `name` and `stackSize` of their function and nothing else — the value columns, the
+// parameter masks, the guard and inline-site tables are all read by passes on either side of the fan-out,
+// and they stay on the REAL function, which is mutated in place at the splice. Carrying a column nothing
+// reads would be a second home for it. The unit's `blockSourceInfo` is empty for the same reason: no
+// fanned-out pass reads it, and the real module's column stays parallel to its `blocks` through the splice.
+//
+// ⭐ **THE SPLICE PUTS THE FUNCTION'S OPS INTO ITS OWN SLOTS FIRST (`IrModule.placeOp`) and its blocks
+// back into their own slots by id**, so a spliced module is the serial run's up to the INDEX of an op or
+// a block that was newly minted — and nothing reads those indices: every consumer walks `blockRefs →
+// opRefs → ops`, `blockSourceInfo` stays parallel to `blocks` because a reused slot keeps its entry and a
+// new block pushes an empty one, and the span column rides the placement. The emitted code and the IR
+// dump are byte-identical to a serial run (`tests/parallel-compile/byte-identical`).
+
+// The one function a unit module holds.
+module let UnitFunctionIndex = 0 as FuncIndex
+
+module typealias StdUnitBodyArray = Array with StdUnitBody
+
+// EVERYTHING ONE FUNCTION CARRIES TO A WORKER AND BACK: the module, the derived-origin rows the passes
+// file for it, and — on the way home — the lines they logged about it.
+//
+// `capturedLog` holds at most one log, and none on an ordinary build: a worker moves its lines here only
+// when it has any (`PassLog.taking`), so a build that logs nothing carries one empty array per function
+// rather than a log record and three columns.
+module type StdUnitBody
+	export var unitModule as StdModule
+	export var origins as DerivedOrigins
+	export var capturedLog as PassLogArray
+
+	// ⭐ **EVERY RETURN IS `Self{…}`**, which is what lets a reply carry one of these: a message may return
+	// only a value its frame provably owns alone, and a call whose every return is a record literal is the
+	// shape `SignatureIndex.returnsFreshValue` admits (E3137).
+	module static function afterRunning(unit StdUnit, worker StdPassWorker) returns StdUnitBody
+		// ⛔ **POPPED, NOT READ.** The unit is the message's parameter and lives until the reply is sent, so
+		// a body still reachable from it would have two owners at the transfer walk. The holder is left
+		// empty, and the fresh literal below is the reply's alone once this frame's `body` has died.
+		var body = try unit.holder.pop() otherwise panic("StdUnitBody.afterRunning: the unit for function {unit.funcIndex} carried no body — `StdUnit.extract` pushes exactly one")
+		worker.runSteps(body)
+		return Self{unitModule: body.unitModule, origins: body.origins, capturedLog: body.capturedLog}
+	end 'afterRunning'
+
+	module static function extract(module StdModule, func IrFunction) returns StdUnitBody
+		var unitModule = StdModule.create()
+
+		// Armed before the first op, so every op placed below is attributed to the span it had. The passes
+		// then push through the cursor exactly as they do on the real module.
+		unitModule.spans.armed = module.spans.armed
+
+		var unitFunc = IrFunction.createFromStd(func.name.clone(), returnType: StdReturnType.void, paramCount: func.paramCount, paramTypes: StdTypeArray.create(), returnLine: func.returnLine)
+		unitFunc.stackSize = func.stackSize
+		unitFunc.nextBlockId = func.nextBlockId
+		unitFunc.blockRefs.reserve(func.blockRefs.count())
+		unitModule.blocks.reserve(func.blockRefs.count())
+		unitModule.ops.reserve(liveOpTallyOf(module.blocks, func: func) as ElementIndex)
+
+		for blockRef in func.blockRefs 'eachBlock'
+			let copy = copiedBlock(module, blockRef: blockRef, into: unitModule)
+			unitFunc.blockRefs.push(unitModule.blocks.count())
+			unitModule.blocks.push(copy)
+		end 'eachBlock'
+
+		unitModule.pushFunc(unitFunc)
+		return Self{unitModule: unitModule, origins: DerivedOrigins.create(), capturedLog: PassLogArray.create()}
+	end 'extract'
+end 'StdUnitBody'
+
+// THE MESSAGE ARGUMENT: which function, and its body in a one-slot holder the worker pops (see
+// `StdUnitBody.afterRunning`).
+module type StdUnit
+	export var funcIndex as FuncIndex
+	export var holder as StdUnitBodyArray
+
+	// ⭐ **EVERY RETURN IS `Self{…}` AND THERE IS ONLY ONE**, which is what makes a call to this the
+	// argument of a send (E3138, `SignatureIndex.returnsFreshValue`).
+	module static function extract(module StdModule, func IrFunction, funcIndex FuncIndex) returns StdUnit
+		var holder = StdUnitBodyArray.create()
+		holder.push(StdUnitBody.extract(module, func: func))
+		return Self{funcIndex: funcIndex, holder: holder}
+	end 'extract'
+end 'StdUnit'
+
+// One block of the real module, deep-cloned into the unit — its identity, its phi model and its edges —
+// with its ops cloned in at the unit's next indices and the `opRefs` renumbered onto them, keeping the
+// spans they had.
+//
+// The ops go in through `unitModule.ops` directly rather than `appendOp`: that door stamps the CURSOR's
+// span, and a copied op keeps the span the real module recorded for it.
+function copiedBlock(module StdModule, blockRef BlockRef, into StdModule) returns IrBlock
+	let block = module.getBlock(blockRef)
+	requireNoCondBranchOp(block)
+	var copy = block.clone()
+
+	for pos in 0 upto copy.opRefs.count() 'eachOp'
+		let opIdx = try copy.opRefs.get(pos) otherwise panic("copiedBlock: opRefs.get OOB at {pos}")
+		try copy.opRefs.set(pos, value: copiedOp(module, opIdx: opIdx, into: into)) otherwise panic("copiedBlock: opRefs.set OOB at {pos}")
+	end 'eachOp'
+
+	if copy.hasTerminatorOp() 'terminated'
+		copy.terminator = Terminator.opIndex(copiedOp(module, opIdx: copy.terminatorIndex(), into: into))
+	end 'terminated'
+
+	return copy
+end 'copiedBlock'
+
+// A Std block's two-way branch is its terminator; a body op recorded as a conditional branch belongs to
+// the Target tier, and a unit that met one would carry an index into an ops array it does not have.
+function requireNoCondBranchOp(block IrBlock)
+	if block.hasCondBranchOp() 'targetTierShape'
+		panic("StdUnit: block '{String.from(block.label)}' records a conditional-branch body op at {block.condBranchIndex()} — a Std block's two-way branch is its `condBranch` TERMINATOR, so this block is not Std-tier shaped")
+	end 'targetTierShape'
+end 'requireNoCondBranchOp'
+
+// One op deep-cloned at the unit's next index, with the span the real module recorded for it.
+function copiedOp(module StdModule, opIdx OpIndex, into StdModule) returns OpIndex
+	let unitIdx = into.ops.count()
+	into.ops.push(module.getOp(opIdx).clone())
+	into.spans.pushId(unitIdx, spanId: module.spans.at(opIdx))
+	return unitIdx
+end 'copiedOp'
+
+// ⭐⭐ **PUT ONE FUNCTION BACK, EXACTLY AS THE PASSES LEFT IT IN THE UNIT.**
+//
+// The unit's live ops go into this function's own op slots first and the tail of `module.ops` after
+// (`IrModule.placeOp`), with their spans; a block whose id the function already had goes back into that
+// block's slot, so its `blockSourceInfo` entry stays parallel to it, and a block the passes minted is
+// pushed with an empty entry, exactly as `addBlock` would have pushed it on the main thread. A block the
+// passes dropped is simply not in the unit's `blockRefs` any more, and its slot becomes an orphan — as
+// `dropUnreachableBlocks` leaves it on the real module.
+//
+// The unit's block records themselves move in: their opRefs are renumbered in place and the records are
+// set into the module's array, so the phi model the passes rebuilt on them comes across without a copy.
+// The function's `blockRefs` is refilled in place, and `scratch` is the drain's (`IrModule.prepareSplice`).
+module function spliceStdUnit(module StdModule, func IrFunction, body StdUnitBody, scratch SpliceScratch)
+	let unitModule = body.unitModule
+	let unitFunc = unitModule.getFunc(UnitFunctionIndex)
+
+	// Asked here because this is where the unit stops being appended to: every pass that mints an op
+	// goes through the three recording doors, and a column short by one would misattribute every later
+	// line row once it is placed into the real module.
+	unitModule.spans.requireParallelTo(unitModule.ops.count(), what: "after the fanned-out passes of '{String.from(func.name)}'")
+
+	module.prepareSplice(func, scratch: scratch)
+	func.blockRefs.clear()
+
+	for unitRef in unitFunc.blockRefs 'eachBlock'
+		var block = unitModule.getBlock(unitRef)
+		requireNoCondBranchOp(block)
+
+		for pos in 0 upto block.opRefs.count() 'eachOp'
+			let unitIdx = try block.opRefs.get(pos) otherwise panic("spliceStdUnit: opRefs.get OOB at {pos}")
+			try block.opRefs.set(pos, value: placedOp(module, slots: scratch.slots, unitModule: unitModule, unitIdx: unitIdx)) otherwise panic("spliceStdUnit: opRefs.set OOB at {pos}")
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'terminated'
+			block.terminator = Terminator.opIndex(placedOp(module, slots: scratch.slots, unitModule: unitModule, unitIdx: block.terminatorIndex()))
+		end 'terminated'
+
+		let ownSlot = scratch.blockRefOf(block.id)
+
+		if ownSlot == scratch.absent 'aBlockThePassesMinted'
+			func.blockRefs.push(module.blocks.count())
+			module.pushBlock(block)
+		end 'aBlockThePassesMinted' else 'theFunctionsOwnBlock'
+			try module.blocks.set(ownSlot, value: block) otherwise panic("spliceStdUnit: blocks.set OOB at {ownSlot} — the slot came out of this function's own blockRefs")
+			func.blockRefs.push(ownSlot)
+		end 'theFunctionsOwnBlock'
+	end 'eachBlock'
+
+	func.nextBlockId = unitFunc.nextBlockId
+end 'spliceStdUnit'
+
+// One unit op placed into the real module, with the span the unit's column holds for it.
+function placedOp(module StdModule, slots OpSlotSupply, unitModule StdModule, unitIdx OpIndex) returns OpIndex
+	return module.placeOp(slots, op: unitModule.getOp(unitIdx), spanId: unitModule.spans.at(unitIdx))
+end 'placedOp'

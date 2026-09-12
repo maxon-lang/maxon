@@ -1,0 +1,108 @@
+// Nine functions — eight callees and `main` — each with a loop over a guarded element access, so the
+// per-function IR passes have one line per function to log under `--log=ir:trace` and the case that
+// stages this program can read the order those lines come out in. Every such loop reads an element
+// through a guarded `get` and adds a constant-foldable product, which gives `unswitchInvariantGuards` a
+// loop to report and, once the bound is hoisted, `refineVersionedRanges` a compare to decide.
+//
+// `main` CALLS EACH FUNCTION TWICE, AND THAT IS WHAT KEEPS THEM FUNCTIONS. A callee with one call site
+// is spliced into its caller by `inlineLeaves`, after which every pass logs one function named `main`
+// and the case has no order to check.
+
+typealias Integer = int(i64.min to i64.max)
+typealias IntegerArray = Array with Integer
+
+function f1(values IntegerArray, seed Integer) returns Integer
+	var acc = seed
+	for i in 0 upto values.count() 'loop'
+		let v = try values.get(i) otherwise 0
+		acc = acc + v * (1 * 4 + 5)
+	end 'loop'
+	return acc
+end 'f1'
+
+function f2(values IntegerArray, seed Integer) returns Integer
+	var acc = seed
+	for i in 0 upto values.count() 'loop'
+		let v = try values.get(i) otherwise 0
+		acc = acc + v * (2 * 4 + 5)
+	end 'loop'
+	return acc
+end 'f2'
+
+function f3(values IntegerArray, seed Integer) returns Integer
+	var acc = seed
+	for i in 0 upto values.count() 'loop'
+		let v = try values.get(i) otherwise 0
+		acc = acc + v * (3 * 4 + 5)
+	end 'loop'
+	return acc
+end 'f3'
+
+function f4(values IntegerArray, seed Integer) returns Integer
+	var acc = seed
+	for i in 0 upto values.count() 'loop'
+		let v = try values.get(i) otherwise 0
+		acc = acc + v * (4 * 4 + 5)
+	end 'loop'
+	return acc
+end 'f4'
+
+function f5(values IntegerArray, seed Integer) returns Integer
+	var acc = seed
+	for i in 0 upto values.count() 'loop'
+		let v = try values.get(i) otherwise 0
+		acc = acc + v * (5 * 4 + 5)
+	end 'loop'
+	return acc
+end 'f5'
+
+function f6(values IntegerArray, seed Integer) returns Integer
+	var acc = seed
+	for i in 0 upto values.count() 'loop'
+		let v = try values.get(i) otherwise 0
+		acc = acc + v * (6 * 4 + 5)
+	end 'loop'
+	return acc
+end 'f6'
+
+function f7(values IntegerArray, seed Integer) returns Integer
+	var acc = seed
+	for i in 0 upto values.count() 'loop'
+		let v = try values.get(i) otherwise 0
+		acc = acc + v * (7 * 4 + 5)
+	end 'loop'
+	return acc
+end 'f7'
+
+function f8(values IntegerArray, seed Integer) returns Integer
+	var acc = seed
+	for i in 0 upto values.count() 'loop'
+		let v = try values.get(i) otherwise 0
+		acc = acc + v * (8 * 4 + 5)
+	end 'loop'
+	return acc
+end 'f8'
+
+function main() returns ExitCode
+	var values = IntegerArray.create()
+	for i in 0 upto 16 'fill'
+		values.push(i)
+	end 'fill'
+
+	var total = 0
+	for i in 0 upto values.count() 'loop'
+		let v = try values.get(i) otherwise 0
+		total = total + v * (9 * 4 + 5)
+	end 'loop'
+	total = total + f1(values, seed: 1) + f1(values, seed: 2)
+	total = total + f2(values, seed: 1) + f2(values, seed: 2)
+	total = total + f3(values, seed: 1) + f3(values, seed: 2)
+	total = total + f4(values, seed: 1) + f4(values, seed: 2)
+	total = total + f5(values, seed: 1) + f5(values, seed: 2)
+	total = total + f6(values, seed: 1) + f6(values, seed: 2)
+	total = total + f7(values, seed: 1) + f7(values, seed: 2)
+	total = total + f8(values, seed: 1) + f8(values, seed: 2)
+	print("{total}\n")
+
+	return 0 if total > 0 else 1
+end 'main'

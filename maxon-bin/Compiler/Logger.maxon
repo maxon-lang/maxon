@@ -29,7 +29,7 @@ end 'LogCategory'
 
 var globalLogLevel = 2
 
-typealias LazyMessage = function() returns String
+export typealias LazyMessage = function() returns String
 
 // Offset by 1 so 0 can mean "unset" without conflicting with LogLevel.NONE (rawValue 0).
 // Ranges kept at i64-width because Array with ranged types smaller than i64 has a sizing bug.
@@ -66,20 +66,27 @@ function effectiveLogLevel(category LogCategory) returns StoredLevel
 end 'effectiveLogLevel'
 
 export function logError(category LogCategory, message LazyMessage)
-	log(category, level: LogLevel.ERROR, message: message)
+	logAt(category, level: LogLevel.ERROR, message: message)
 end 'logError'
 
 export function logInfo(category LogCategory, message LazyMessage)
-	log(category, level: LogLevel.INFO, message: message)
+	logAt(category, level: LogLevel.INFO, message: message)
 end 'logInfo'
 
 export function logDebug(category LogCategory, message LazyMessage)
-	log(category, level: LogLevel.DEBUG, message: message)
+	logAt(category, level: LogLevel.DEBUG, message: message)
 end 'logDebug'
 
 module function logTrace(category LogCategory, message LazyMessage)
-	log(category, level: LogLevel.TRACE, message: message)
+	logAt(category, level: LogLevel.TRACE, message: message)
 end 'logTrace'
+
+// The level `category` prints at right now — what a sink that must decide OFF the main thread is handed
+// at its construction, because the two tables this reads are module `var`s a service message may not
+// reach (E3143). `PassLog` is that sink.
+module function effectiveLogLevelOf(category LogCategory) returns LogLevel
+	return try LogLevel.fromRawValue(effectiveLogLevel(category)) otherwise panic("effectiveLogLevelOf: the stored level {effectiveLogLevel(category)} for '{category.name}' names no LogLevel — every writer stores a LogLevel's rawValue")
+end 'effectiveLogLevelOf'
 
 export function setLogLevel(level LogLevel)
 	globalLogLevel = level.rawValue
@@ -160,7 +167,10 @@ end 'logEvent'
 //
 // This tier allocates (the caller's thunk already built a String), and it says so. That is why
 // there is a structured tier above it.
-function log(category LogCategory, level LogLevel, message LazyMessage)
+//
+// Module-visible for the one caller that hands a line over at a level it did not choose:
+// `PassLog.replayStep`, which prints lines a pool worker captured at the levels the worker captured them at.
+module function logAt(category LogCategory, level LogLevel, message LazyMessage)
 	let effectiveLevel = effectiveLogLevel(category)
 
 	if level.rawValue <= effectiveLevel 'check'
@@ -178,4 +188,4 @@ function log(category LogCategory, level LogLevel, message LazyMessage)
 
 		printError("[{category.rawValue}] {level.name}: {msg}\n")
 	end 'check'
-end 'log'
+end 'logAt'

@@ -91,24 +91,9 @@
 // Like `foldConstants` it takes no start index: its other caller would be the appended runtime band,
 // and those hand-built bodies (`MmRuntime`, `GtRuntime`, the synthesized cascades) recompute nothing —
 // a second run there would walk every appended function to find nothing.
-export function eliminateCommonSubexpressions(module StdModule)
-	logDebug(LogCategory.ir, message: function() gives "eliminateCommonSubexpressions: {module.funcCount()} function(s)")
-
-	// ONE set of scratch for the whole module, not one per function. `eliminateInFunc` opens and closes a
-	// table scope around each function (see the ⛔ note there — a leaked entry is a MISCOMPILE, not a
-	// missed fold), so the table arrives empty every time and its dense columns are reused at the size
-	// the largest function so far needed instead of being reallocated per function. The three records are
-	// refilled per op and never re-created — the shape `StdArithOperands` states, and the reason
-	// `foldConstants.evaluateOps` gives.
-	var scratch = CseScratch.create()
-
-	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
-	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
-	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
-	for fnIndex in 0 upto module.functions.count() 'eachFunc'
-		eliminateInFunc(module, func: try module.functions.get(fnIndex) otherwise panic("eliminateCommonSubexpressions: fnIndex {fnIndex} is below module.functions.count()"), scratch: scratch)
-	end 'eachFunc'
-end 'eliminateCommonSubexpressions'
+module function commonSubexpressionEliminationHeadline(funcCount FuncCount) returns String
+	return "eliminateCommonSubexpressions: {funcCount} function(s)"
+end 'commonSubexpressionEliminationHeadline'
 
 // ⭐ **ANALYSE FIRST, REWRITE ONCE.** The dominator walk records what each redundant value may read
 // instead; nothing is rewritten until the whole function has been read. That is not tidiness — the
@@ -119,7 +104,7 @@ end 'eliminateCommonSubexpressions'
 // A function in which nothing was redundant — most functions — pays the analysis walk and NOTHING else:
 // no rewrite, no block rebuild and no prune. `recordValueSubstitution` always extends the column by at
 // least the slot it writes, so an empty column is an exact test for "found nothing".
-function eliminateInFunc(module StdModule, func IrFunction, scratch CseScratch)
+module function eliminateInFunc(module StdModule, func IrFunction, scratch CseScratch)
 	var subst = ValueIdArray.create()
 
 	// ⛔⛔ **THE FUNCTION BOUNDARY IS ITSELF A TABLE SCOPE, AND IT IS NOT BELT-AND-BRACES — IT CLOSED A
@@ -275,7 +260,10 @@ function analyzeOp(module StdModule, opIdx OpIndex, subst ValueIdArray, scratch 
 		return
 	end 'firstOccurrence'
 
-	logTrace(LogCategory.ir, message: function() gives "eliminateCommonSubexpressions: value {scratch.current.resultId} recomputes value {scratch.outcome.canonicalValue()}")
+	if scratch.log.traces 'traced'
+		scratch.log.trace("eliminateCommonSubexpressions: value {scratch.current.resultId} recomputes value {scratch.outcome.canonicalValue()}")
+	end 'traced'
+
 	recordValueSubstitution(subst, resultId: scratch.current.resultId, replacement: scratch.outcome.canonicalValue())
 end 'analyzeOp'
 
@@ -416,8 +404,11 @@ typealias CallBarrierCountColumn = Array with CallBarrierCount
 // classified into. ONE object threaded through the walk rather than four parameters at every level —
 // they are created together, live together and are reset together, and a walk that took them separately
 // would have to name all four at each of five call sites.
-type CseScratch
+module type CseScratch
 	export var table as CseExpressionTable
+
+	// Where a per-hit line goes — the pool worker's (`StdPassPool`).
+	export var log as PassLog
 
 	// The expression of the op being classified.
 	export var current as StdArithOperands
@@ -427,8 +418,8 @@ type CseScratch
 	export var candidate as StdArithOperands
 	export var outcome as CseLookup
 
-	static function create() returns CseScratch
-		return Self{table: CseExpressionTable.create(), current: StdArithOperands.create(), candidate: StdArithOperands.create(), outcome: CseLookup.create()}
+	module static function create(log PassLog) returns CseScratch
+		return Self{table: CseExpressionTable.create(), log: log, current: StdArithOperands.create(), candidate: StdArithOperands.create(), outcome: CseLookup.create()}
 	end 'create'
 end 'CseScratch'
 
