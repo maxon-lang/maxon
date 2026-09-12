@@ -159,7 +159,36 @@ The runner has no `--verbose` (it always prints a line per test), no `--no-batch
 ### Targets
 
 The compiler emits `x64-windows`, `x64-linux`, `arm64-macos`, `arm64-linux` and **`wasm32-wasi`** (a
-WASI Preview2 component). `run_spec_test` takes `target: "wasm32-wasi"` and runs the output under the
+WASI Preview2 component).
+
+> #### ⛔⛔ `--target=` CROSS-COMPILES THE PROGRAMS. IT NEVER HOSTS THE COMPILER.
+>
+> `spec-test --target=x64-linux` on a Windows host builds and runs the TEST binaries for Linux while
+> the compiler stays a Windows process. So that lane never runs the compiler's own `main` **as** a
+> Linux program — on a Linux green thread, through the Linux runtime, with that lane's frame layout —
+> and it is not evidence about anything that only happens there. **CI hosts every target on its own
+> architecture**: seed → `C1` → `C2` → the suite under `C2`, which is a whole class of defect a cross
+> lane cannot reach.
+>
+> MEASURED: the x64 large-frame page walk touched-then-compared, so its last store landed below the
+> frame base (`ca4abf52b8`). Harmless on an OS-grown stack; a SIGSEGV on a green thread's exact mmap'd
+> one — and reachable only once the called-once inliner carried the compiler's own `main` past one
+> page. **Three consecutive pushes to `main` died at exit 139 in `build-from-seed.sh` before the suite
+> could start, while the cross lane read 7706/0 on the same tree.**
+>
+> ⇒ **TO HOST x64-linux LOCALLY, CROSS-BUILD ONCE AND THEN STAY INSIDE WSL.** `stdlib/` resolves by
+> walking UP from the executable, so a binary under `temp/` in this tree reaches this tree's library.
+> WSL starts in the Windows working directory, so nothing has to `cd`:
+> ```
+> ./maxon-bin/.maxon/maxon.exe build maxon-bin --target=x64-linux -o temp/linux-lane/maxon
+> wsl -- chmod +x temp/linux-lane/maxon
+> wsl -- ./temp/linux-lane/maxon build maxon-bin -o temp/linux-lane/maxon2   # C2, hosted on Linux
+> wsl -- ./temp/linux-lane/maxon2 spec-test
+> ```
+> `C1` is emitted by the Windows compiler and `C2` by `C1`, so `C2` is the first binary whose own
+> runtime came from this tree — the same two-stage rule `Compiler/Runtime/` follows everywhere else.
+
+`run_spec_test` takes `target: "wasm32-wasi"` and runs the output under the
 vendored wasmtime. By hand, for ONE program:
 
 ```

@@ -447,7 +447,7 @@ before yours (CLAUDE.md). To attribute it: do the failures touch what you change
 cases alone, by filter** — never the whole suite for them. If that still does not settle it, **measure
 the control** on that same filter — `git stash -u`, re-run, `git stash pop`. ⚠ **A lane that
 did not RUN is not a red gate** (remote arm64 is outside this battery): that is a SKIP you report, never
-folded into the green.
+folded into the green — and §8's CI watch is where every lane you skipped is answered.
 
 ## 8. Commit and push
 
@@ -467,6 +467,20 @@ git push origin main
 
 ⛔ **A REJECTED PUSH IS NOT A RETRY.** Someone landed while you were running, so the tree you tested is
 not the tree you would push: **rebase and RE-RUN §7** before pushing again.
+
+> ### ⭐ THE PUSH IS NOT THE END OF THE GATE — WATCH CI SETTLE
+> ```bash
+> gh run watch "$(gh run list --limit 1 --json databaseId --jq '.[0].databaseId')"
+> ```
+> **CI hosts every target on its own architecture and runs the two-stage seed build, and your battery
+> runs neither.** `--target=` cross-compiles the PROGRAMS while the compiler stays a host process, so a
+> defect that only appears when the compiler itself runs on that platform is invisible to you and
+> certain on CI (CLAUDE.md's Targets box carries the measurement). ⛔ **Do not report the rung done
+> until all four lanes are green.** A red `main` is inherited by whoever lands next, and by then the
+> break is no longer attributable to the commit that caused it.
+>
+> A red lane is yours to fix whether or not you caused it (CLAUDE.md), in its own commit — and reproduce
+> it on that platform's own host, never on the cross lane that missed it.
 
 Then report in a few lines: the change, the cases that went red → green, each gate's number, and
 anything skipped with the reason.
