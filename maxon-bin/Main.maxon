@@ -58,7 +58,6 @@ module let BuildSubcommandName = "build"
 let VerifyWarmRebuildCommandName = "verify-warm-rebuild"
 let VerifyRecheckCommandName = "verify-recheck"
 let LspServerCommandName = "lsp-server"
-module let McpServerCommandName = "mcp-server"
 let DevFlag = "--dev"
 let ScaleTestCommandName = "scale-test"
 
@@ -392,9 +391,11 @@ function main() returns ExitCode
 	// An option the driver does not implement aborts BEFORE any command runs. Every
 	// command below would otherwise proceed as though the flag had been honoured,
 	// which is the one outcome a caller can neither see nor recover from.
-	// ⚠ `fmt` and `upgrade` are EXEMPT: each refuses every option it does not take itself, `fmt` in the
-	// reference's words (see `FmtUsageLine`) and `upgrade` with stdout left empty.
-	if not args.badOption.isEmpty() and args.command != MaxonCommand.fmt and args.command != MaxonCommand.upgrade 'badOption'
+	// ⚠ `fmt`, `upgrade` and `mcp-server` are EXEMPT: each refuses every option it does not take itself,
+	// `fmt` in the reference's words (see `FmtUsageLine`), `upgrade` with stdout left empty, and
+	// `mcp-server` before it speaks a word of protocol. The latter two MUST be exempt — their own flag
+	// is recorded as a bad option so that no OTHER command silently accepts it.
+	if not args.badOption.isEmpty() and args.command != MaxonCommand.fmt and args.command != MaxonCommand.upgrade and args.command != MaxonCommand.mcpServer 'badOption'
 		printError("error: unknown option: {args.badOption}\n")
 		printCommandList()
 		return refusedCommandLineExit(args.command)
@@ -1203,8 +1204,8 @@ end 'runSpecTest'
 // gate. The reason is in `FmtCommandName`, and it is not tidiness — a dropped flag makes this command
 // rewrite the working directory.
 function runFmt(args MaxonArgs) returns ExitCode
-	if not args.anyOption.isEmpty() 'refusedOption'
-		printError("fmt: unrecognized option: {args.anyOption}\n")
+	if not args.anyOption().isEmpty() 'refusedOption'
+		printError("fmt: unrecognized option: {args.anyOption()}\n")
 		printError("{FmtUsageLine}\n")
 		return 1
 	end 'refusedOption'
@@ -1744,10 +1745,20 @@ end 'versionLine'
 // the release workflow compares it against the tag, and a packager scrapes it — so it goes to stdout
 // where a pipe can reach it.
 //
+// ⚠ **IT TAKES ONE OPTION AND REFUSES EVERY OTHER**, including the ones this driver implements
+// elsewhere. It speaks a protocol on stdout, so a flag honoured silently would corrupt a session no
+// caller can inspect; the refusal goes to stderr before the first frame.
 function runMcpServerCommand(args MaxonArgs) returns ExitCode
 	if refusedPositionalBeyond(args, allowed: 0, usage: "maxon {McpServerCommandName} [{DevFlag}]") 'unexpectedArgument'
 		return 1
 	end 'unexpectedArgument'
+
+	let stray = args.firstOptionOtherThan(DevFlag)
+
+	if not stray.isEmpty() 'refusedOption'
+		printError("error: {McpServerCommandName} takes no option but {DevFlag}: {stray}\n")
+		return 1
+	end 'refusedOption'
 
 	return runMcpServer(args.devMode)
 end 'runMcpServerCommand'
@@ -2128,8 +2139,8 @@ end 'helpUsageLine'
 // uses, and for one half of its reason: `badOption` never sees a flag this driver DOES implement, so
 // `maxon --emit-ir help` would otherwise print the reference as though the flag had meant something.
 function runHelp(args MaxonArgs) returns ExitCode
-	if not args.anyOption.isEmpty() 'refusedOption'
-		printError("error: {HelpCommandName} takes no options: {args.anyOption}\n")
+	if not args.anyOption().isEmpty() 'refusedOption'
+		printError("error: {HelpCommandName} takes no options: {args.anyOption()}\n")
 		printError("Usage: {helpUsageLine()}\n")
 		return 1
 	end 'refusedOption'
@@ -2162,13 +2173,13 @@ end 'runHelp'
 // command, or an option with no command to apply it to, is a mistake and is reported as one: the same
 // list, under an error on stderr, exit 1.
 function noCommandGiven(args MaxonArgs) returns ExitCode
-	if args.paths.isEmpty() and args.anyOption.isEmpty() 'nothingWasTyped'
+	if args.paths.isEmpty() and args.anyOption().isEmpty() 'nothingWasTyped'
 		printOverview()
 		return 0
 	end 'nothingWasTyped'
 
 	if args.paths.isEmpty() 'anOptionWithNoCommand'
-		printError("error: no command given, and {args.anyOption} names an option rather than one\n")
+		printError("error: no command given, and {args.anyOption()} names an option rather than one\n")
 	end 'anOptionWithNoCommand' else 'aWordThatNamesNoCommand'
 		printError("error: unknown command: {args.solePositional()}\n")
 	end 'aWordThatNamesNoCommand'
@@ -2405,11 +2416,12 @@ module type MaxonArgs
 	// ORDER-INDEPENDENT, so an arm asking `command == fmt` sees nothing when the flag is typed AHEAD of
 	// the word `fmt`. Recorded above the chain instead, unconditionally — the one site no ordering can
 	// reach around.
-	export var anyOption as String
+	//
+	// ⭐ EVERY arrival is kept, not just the first, because a command that takes ONE option has to ask
+	// "any option OTHER than mine?" — and that question cannot be answered from a single remembered
+	// spelling once the caller has typed their own flag. See `firstOptionOtherThan`.
+	export var optionsSeen as SourcePathSpellingArray
 
-	// The first `-`-leading argument that is not `--dry-run`, recorded beside `anyOption` for its reason:
-	// `upgrade` takes that one option and refuses every other, including the ones this driver implements.
-	export var anyOptionButDryRun as String
 	export var badOption as String
 
 	// `--dry-run` (upgrade only): say what would run, and run nothing.
@@ -2433,8 +2445,27 @@ module type MaxonArgs
 	// nothing can through the `let` binding `main` holds it by (E3063) — the tier states who may write,
 	// and the binding states whether anyone does.
 	export static function create() returns MaxonArgs
-		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, debugInfo: true, coverage: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filter: "", updateRequired: false, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metricsPath: "", defines: DefineArray.create(), emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, anyOption: "", anyOptionButDryRun: "", badOption: "", dryRun: false, devMode: false, withdrawnOption: ""}
+		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, debugInfo: true, coverage: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filter: "", updateRequired: false, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metricsPath: "", defines: DefineArray.create(), emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(), badOption: "", dryRun: false, devMode: false, withdrawnOption: ""}
 	end 'create'
+
+	// The first option this driver saw, whichever arm went on to consume it. A command that takes NO
+	// options refuses by this.
+	export function anyOption() returns String
+		return try self.optionsSeen.get(0) otherwise ""
+	end 'anyOption'
+
+	// The first option that is not `allowed`. A command that takes EXACTLY ONE option refuses by this:
+	// `upgrade` with `--dry-run`, `mcp-server` with `--dev`. Both are exempt from `main`'s `badOption`
+	// gate precisely because their own flag would trip it.
+	export function firstOptionOtherThan(allowed String) returns String
+		for option in self.optionsSeen 'each'
+			if option != allowed 'notMine'
+				return option
+			end 'notMine'
+		end 'each'
+
+		return ""
+	end 'firstOptionOtherThan'
 
 	// The one positional a command that takes at most one was given, or "" when there was none —
 	// the same "empty means absent" convention every other optional field here uses
@@ -2479,11 +2510,7 @@ module type MaxonArgs
 			// Recorded BEFORE the chain decides anything, so it sees a flag whichever arm goes on to consume
 			// it and wherever on the line it sat. See `anyOption`.
 			if arg.startsWith(OptionPrefix) 'anOption'
-				parsed.anyOption = firstBadOption(parsed.anyOption, arg: arg)
-
-				if arg != DryRunFlag 'notTheDryRun'
-					parsed.anyOptionButDryRun = firstBadOption(parsed.anyOptionButDryRun, arg: arg)
-				end 'notTheDryRun'
+				parsed.optionsSeen.push(arg)
 			end 'anOption'
 
 			// ⭐⭐ **A `.maxon` FIRST ARGUMENT IS `run`, AND THAT IS WHAT A `#!/usr/bin/env maxon` SCRIPT
@@ -2755,6 +2782,11 @@ module type MaxonArgs
 				parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
 			end 'dryRunFlag' else if arg == DevFlag 'devFlag'
 				parsed.devMode = true
+
+				// ⛔ ALSO A BAD OPTION, for the reason `--dry-run` above is: only `mcp-server` has a
+				// contributor mode, and `main` exempts it from `badOption`. Any other command that took the
+				// flag would accept a word it does not act on.
+				parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
 			end 'devFlag' else if arg == WithdrawnVersionFlag or arg == WithdrawnVersionFlagShort 'withdrawnVersionFlag'
 				// ⛔ RECORDED AS WITHDRAWN, NOT AS UNKNOWN — see `WithdrawnVersionFlag` and
 				// `withdrawnOptionMessage`. Both spellings are matched EXACTLY: anything longer that merely

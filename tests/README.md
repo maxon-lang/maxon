@@ -153,7 +153,7 @@ tests/
     McpHarness.maxon                        the shared JSON-RPC stdio harness and JSON helpers
     standard.test.maxon                     standard user-facing MCP server tests (8 standard tools)
     dev.test.maxon                          contributor MCP server tests (11 tools + --dev)
-    rebuild.test.maxon                      compiler rebuild while MCP server is running (--timeout=60000)
+    rebuild.test.maxon                      a running server survives its image being replaced on disk
 ```
 
 ## The six rules, and the hazard each one answers
@@ -527,17 +527,18 @@ The Model Context Protocol (MCP) server runs over standard I/O using newline-del
 `McpHarness.maxon` provides the shared harness for spawning the compiler as an MCP server, exchanging
 JSON-RPC messages, and inspecting structured responses.
 
-- `standard.test.maxon` gates the default end-user mode (`maxon mcp-server`), verifying initialization,
-  the 8 standard tools (`build`, `run`, `test`, `fmt`, `check`, `dump_ir`, `lookup_error_code`, `info`),
-  their input schemas, execution, and error handling.
-- `dev.test.maxon` gates contributor mode (`maxon mcp-server --dev`), verifying advertisement of 11 tools
-  (including `run_spec_test`, `run_scale_test`, `spec_test_outcome`), `repoRoot` and `from` schema additions,
-  and checkout validation.
-- `rebuild.test.maxon` tests that the compiler can be rebuilt while `maxon mcp-server` is actively running.
-  During self-rebuild, the running executable image is vacated to `.previous` and replaced on disk; the
-  MCP server process survives the replacement and continues serving subsequent JSON-RPC requests.
+- `standard.test.maxon` gates the default end-user mode (`maxon mcp-server`): the handshake, the 8 tools
+  (`build`, `run`, `test`, `fmt`, `check`, `dump_ir`, `lookup_error_code`, `info`), their schemas, and the
+  refusals — an argument no tool declares, an argument of the wrong JSON type, a contributor argument in
+  user mode, and an error code no registry case claims.
+- `dev.test.maxon` gates contributor mode (`maxon mcp-server --dev`): the 11 tools, the `repoRoot` and
+  `from` arguments, checkout validation, and the `repoRoot` ECHO on both an answer and a refusal.
+- `rebuild.test.maxon` gates the half of a self-rebuild that a live server depends on: its image is
+  renamed out from under it and another is written in its place, and it keeps answering.
 
-⚠ **`rebuild.test.maxon` REBUILDS THE COMPILER AND EXCEEDS THE DEFAULT 5,000 ms DEADLINE**:
-Rebuilding `maxon-bin` compiles ~160,000 lines of code (~25 s). Run the rebuild case with a raised timeout:
-`maxon test tests/mcp -t=rebuild --timeout=60000`.
+⛔ **`rebuild.test.maxon` STAGES ITS OWN COPY OF THE COMPILER AND REPLACES THAT.** Driving a real
+`build maxon-bin` would rebuild the tree's compiler as a side effect of running the corpus — and a
+FAILED build leaves the slot EMPTY, so a red test would take the checkout's compiler with it. The
+property is the OS's, not the build's, and testing it on a copy costs a file write rather than 25 s.
+The whole corpus therefore runs at the default deadline: `maxon test tests/mcp`.
 

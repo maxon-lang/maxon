@@ -1,0 +1,16 @@
+// mcp-server-takes-no-other-option.test.maxon - `mcp-server` takes `--dev` and refuses every other
+// option, including the ones this driver implements elsewhere.
+//
+// It speaks a protocol on stdout, so a flag honoured silently would corrupt a session no caller can
+// inspect. The refusal goes to stderr before the first frame.
+
+let AnotherOption = "--emit-ir"
+
+test 'mcp-server refuses an option that is not --dev'
+	let run = runDriver([McpServerCommandWord, AnotherOption])
+
+	let observedExit = run.exitCode() as AssertedInt
+	try Expect.equal(observedExit, expected: 1, message: "`maxon {McpServerCommandWord} {AnotherOption}` was accepted. It said: {run.stdout}{run.stderr}")
+	try Expect.contains(run.stderr, needle: AnotherOption, message: "the refusal does not name the option that was typed. It said: {run.stderr}")
+	try Expect.isTrue(run.stdout.isEmpty(), message: "nothing may reach stdout before the refusal: a client reads that stream as protocol. It said: {run.stdout}")
+end 'mcp-server refuses an option that is not --dev'

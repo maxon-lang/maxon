@@ -1,0 +1,349 @@
+// JSON-RPC 2.0 framing over newline-delimited stdio, and the JSON shapes every tool answers in.
+//
+// One JSON object per line in each direction. The MCP spec does not use the LSP's Content-Length
+// framing on stdio, so a response is written whole and terminated by a newline.
+
+export let McpProtocolVersion = "2024-11-05"
+export let ServerName = "maxon"
+
+export enum McpError implements Error
+	notFound
+end 'McpError'
+
+// A `JsonNodeId` that may be absent. A JSON null is a VALUE the protocol distinguishes from an
+// omitted key — a request carrying `"id": null` is a notification — so absence needs its own case.
+export union OptionalNode
+	some(id JsonNodeId)
+	none
+end 'OptionalNode'
+
+// JSON-RPC 2.0 reserves -32768..-32000 for protocol errors; these are the five this server emits.
+export enum RpcStandardErrorCode
+	parseError = -32700
+	invalidRequest = -32600
+	methodNotFound = -32601
+	invalidParams = -32602
+	internalError = -32603
+end 'RpcStandardErrorCode'
+
+export typealias BytePos = int(0 to u64.max)
+
+// A tool answer is capped so one runaway subprocess cannot flood the transport. Enough for a
+// summary plus a handful of failure lines.
+export let RawTailMaxBytes = 4096 as BytePos
+
+// =============================================================================
+// Object building
+// =============================================================================
+
+// An object under construction. The `keys` and `children` arrays of `JsonNode.objectNode` must stay
+// the same length and in the same order; pairing every push here is what makes that unbreakable
+// rather than merely observed.
+export type JsonObjectBuilder
+	var keys as StringArray
+	var children as JsonNodeIdArray
+
+	export static function create() returns JsonObjectBuilder
+		return Self{keys: StringArray.create(), children: JsonNodeIdArray.create()}
+	end 'create'
+
+	export function addString(doc JsonDoc, key String, value String)
+		self.keys.push(key)
+		self.children.push(doc.add(JsonNode.stringNode(value)))
+	end 'addString'
+
+	export function addBool(doc JsonDoc, key String, value bool)
+		self.keys.push(key)
+		self.children.push(doc.add(JsonNode.boolNode(value)))
+	end 'addBool'
+
+	export function addNumber(doc JsonDoc, key String, value JsonFloat)
+		self.keys.push(key)
+		self.children.push(doc.add(JsonNode.numberNode(value)))
+	end 'addNumber'
+
+	export function addNode(key String, node JsonNodeId)
+		self.keys.push(key)
+		self.children.push(node)
+	end 'addNode'
+
+	export function build(doc JsonDoc) returns JsonNodeId
+		return doc.add(JsonNode.objectNode(self.keys, children: self.children))
+	end 'build'
+
+	// Build and install as the document's root, for a document whose only purpose is this object.
+	export function buildAsRoot(doc JsonDoc) returns String
+		doc.root = build(doc)
+		return Json.stringifyPrettyNode(doc, root: doc.root)
+	end 'buildAsRoot'
+end 'JsonObjectBuilder'
+
+// =============================================================================
+// Node copying
+// =============================================================================
+
+// Responses are assembled in a fresh document, so an id taken from the REQUEST and a result built by
+// a tool must both be transplanted into the envelope's arena before they can be referenced there.
+export function copyJsonNode(src JsonDoc, srcId JsonNodeId, dst JsonDoc) returns JsonNodeId
+	let node = src.get(srcId)
+	return match node.kind 'k'
+		jsonNull gives dst.add(JsonNode.nullNode())
+		jsonBool gives dst.add(JsonNode.boolNode(node.boolValue))
+		jsonNumber gives dst.add(JsonNode.numberNode(node.numberValue))
+		jsonString gives dst.add(JsonNode.stringNode(node.stringValue))
+		jsonArray gives copyJsonArray(src, node: node, dst: dst)
+		jsonObject gives copyJsonObject(src, node: node, dst: dst)
+	end 'k'
+end 'copyJsonNode'
+
+function copyJsonArray(src JsonDoc, node JsonNode, dst JsonDoc) returns JsonNodeId
+	var ids = JsonNodeIdArray.create()
+
+	for childId in node.children 'each'
+		ids.push(copyJsonNode(src, srcId: childId, dst: dst))
+	end 'each'
+
+	return dst.add(JsonNode.arrayNode(ids))
+end 'copyJsonArray'
+
+function copyJsonObject(src JsonDoc, node JsonNode, dst JsonDoc) returns JsonNodeId
+	var copied = JsonObjectBuilder.create()
+
+	for (iter, k) in node.keys.withIterator() 'each'
+		let childId = try node.children.get(iter.index()) otherwise panic("copyJsonObject: keys and children disagree in length")
+		copied.addNode(k, node: copyJsonNode(src, srcId: childId, dst: dst))
+	end 'each'
+
+	return copied.build(dst)
+end 'copyJsonObject'
+
+// =============================================================================
+// Member lookup
+// =============================================================================
+
+function findChildKey(doc JsonDoc, parent JsonNodeId, key String) returns JsonNodeId throws McpError
+	let node = doc.get(parent)
+
+	for (iter, k) in node.keys.withIterator() 'scan'
+		if k.equals(key) 'hit'
+			return try node.children.get(iter.index()) otherwise throw McpError.notFound
+		end 'hit'
+	end 'scan'
+
+	throw McpError.notFound
+end 'findChildKey'
+
+export function resolveChildKey(doc JsonDoc, parent JsonNodeId, key String) returns OptionalNode
+	let childId = try findChildKey(doc, parent: parent, key: key) otherwise return OptionalNode.none
+	return OptionalNode.some(childId)
+end 'resolveChildKey'
+
+export function objectHasKey(doc JsonDoc, parent JsonNodeId, key String) returns bool
+	let node = doc.get(parent)
+
+	for k in node.keys 'scan'
+		if k.equals(key) 'hit'
+			return true
+		end 'hit'
+	end 'scan'
+
+	return false
+end 'objectHasKey'
+
+// =============================================================================
+// Argument readers
+// =============================================================================
+//
+// Every read defaults on a miss. That is safe ONLY because the roster has already refused any key the
+// tool does not declare and any value of the wrong shape — see `validateToolArguments`. Without that
+// gate, defaulting here is how an argument the caller explicitly set gets silently ignored.
+
+export function argumentsGiven(args OptionalNode) returns bool
+	return match args 'a'
+		none gives false
+		some(id) gives id >= 0
+	end 'a'
+end 'argumentsGiven'
+
+// Meaningful only where `argumentsGiven` already answered true.
+export function argumentsNode(args OptionalNode) returns JsonNodeId
+	return match args 'a'
+		none gives 0 as JsonNodeId
+		some(id) gives id
+	end 'a'
+end 'argumentsNode'
+
+export function getOptionalStringArg(doc JsonDoc, args OptionalNode, key String, defaultVal String) returns String
+	return match args 'a'
+		none gives defaultVal
+		some(id) gives (try doc.getString(id, key: key) otherwise defaultVal)
+	end 'a'
+end 'getOptionalStringArg'
+
+export function getOptionalIntArg(doc JsonDoc, args OptionalNode, key String, defaultVal JsonInt) returns JsonInt
+	return match args 'a'
+		none gives defaultVal
+		some(id) gives (try doc.getInt(id, key: key) otherwise defaultVal)
+	end 'a'
+end 'getOptionalIntArg'
+
+export function getOptionalBoolArg(doc JsonDoc, args OptionalNode, key String, defaultVal bool) returns bool
+	return match args 'a'
+		none gives defaultVal
+		some(id) gives (try doc.getBool(id, key: key) otherwise defaultVal)
+	end 'a'
+end 'getOptionalBoolArg'
+
+export function getOptionalStringArrayArg(doc JsonDoc, args OptionalNode, key String) returns StringArray
+	var result = StringArray.create()
+
+	if not argumentsGiven(args) 'noArgs'
+		return result
+	end 'noArgs'
+
+	var childId = 0 as JsonNodeId
+
+	match resolveChildKey(doc, parent: argumentsNode(args), key: key) 'cr'
+		none then return result
+		some(id) then childId = id
+	end 'cr'
+
+	let count = try doc.arrayLength(childId) otherwise return result
+
+	for i in 0 upto count 'each'
+		let elemId = try doc.arrayAt(childId, index: i) otherwise continue
+		let elemNode = doc.get(elemId)
+
+		if elemNode.kind == JsonKind.jsonString 'isStr'
+			result.push(elemNode.stringValue)
+		end 'isStr'
+	end 'each'
+
+	return result
+end 'getOptionalStringArrayArg'
+
+// =============================================================================
+// Responses
+// =============================================================================
+
+export function sendRpcResult(reqDoc JsonDoc, idNode JsonNodeId, resultDoc JsonDoc, resultRoot JsonNodeId)
+	var envelope = JsonDoc.create()
+	var response = JsonObjectBuilder.create()
+	response.addString(envelope, key: "jsonrpc", value: "2.0")
+	response.addNode("id", node: copyJsonNode(reqDoc, srcId: idNode, dst: envelope))
+	response.addNode("result", node: copyJsonNode(resultDoc, srcId: resultRoot, dst: envelope))
+	envelope.root = response.build(envelope)
+
+	print("{Json.stringify(envelope)}\n")
+end 'sendRpcResult'
+
+export function sendRpcError(reqDoc JsonDoc, idNode JsonNodeId, code RpcStandardErrorCode, message String)
+	var envelope = JsonDoc.create()
+
+	var err = JsonObjectBuilder.create()
+	err.addNumber(envelope, key: "code", value: code.rawValue as JsonFloat)
+	err.addString(envelope, key: "message", value: message)
+
+	var response = JsonObjectBuilder.create()
+	response.addString(envelope, key: "jsonrpc", value: "2.0")
+	response.addNode("id", node: copyJsonNode(reqDoc, srcId: idNode, dst: envelope))
+	response.addNode("error", node: err.build(envelope))
+	envelope.root = response.build(envelope)
+
+	print("{Json.stringify(envelope)}\n")
+end 'sendRpcError'
+
+// A tool answer. `isError` is the MCP-level flag a client reads to colour the result; the payload
+// itself is the JSON text a caller parses.
+export function sendToolResult(reqDoc JsonDoc, idNode JsonNodeId, payloadText String, isError bool)
+	var envelope = JsonDoc.create()
+
+	var item = JsonObjectBuilder.create()
+	item.addString(envelope, key: "type", value: "text")
+	item.addString(envelope, key: "text", value: payloadText)
+
+	var contentArr = JsonNodeIdArray.create()
+	contentArr.push(item.build(envelope))
+
+	var result = JsonObjectBuilder.create()
+	result.addNode("content", node: envelope.add(JsonNode.arrayNode(contentArr)))
+	result.addBool(envelope, key: "isError", value: isError)
+	let resultRoot = result.build(envelope)
+
+	sendRpcResult(reqDoc, idNode: idNode, resultDoc: envelope, resultRoot: resultRoot)
+end 'sendToolResult'
+
+// =============================================================================
+// Payloads
+// =============================================================================
+
+// What tree a tool acted in is the single most consequential fact about a dev-mode call, and the
+// caller cannot see it any other way: one server process serves every worktree. Every answer carries
+// it back so a caller can read it against the tree they meant.
+export function sendToolError(reqDoc JsonDoc, idNode JsonNodeId, message String, repoRoot String)
+	var doc = JsonDoc.create()
+	var payload = JsonObjectBuilder.create()
+	payload.addBool(doc, key: "success", value: false)
+	payload.addString(doc, key: "error", value: message)
+
+	if not repoRoot.isEmpty() 'knowsTree'
+		payload.addString(doc, key: "repoRoot", value: repoRoot)
+	end 'knowsTree'
+
+	sendToolResult(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: true)
+end 'sendToolError'
+
+export function formatSubprocessResult(res CollectedOutput, command String, repoRoot String) returns String
+	var doc = JsonDoc.create()
+	var payload = JsonObjectBuilder.create()
+	payload.addBool(doc, key: "success", value: res.succeeded())
+	payload.addString(doc, key: "command", value: command)
+
+	if not repoRoot.isEmpty() 'knowsTree'
+		payload.addString(doc, key: "repoRoot", value: repoRoot)
+	end 'knowsTree'
+
+	payload.addNumber(doc, key: "exitCode", value: res.exitCode() as JsonFloat)
+	payload.addString(doc, key: "stdout", value: res.stdout)
+	payload.addString(doc, key: "stderr", value: res.stderr)
+
+	return payload.buildAsRoot(doc)
+end 'formatSubprocessResult'
+
+// =============================================================================
+// Stream helpers
+// =============================================================================
+
+export function combineStreams(stdout String, stderr String) returns String
+	if stdout.isEmpty() 'noOut'
+		return stderr
+	end 'noOut'
+
+	if stderr.isEmpty() 'noErr'
+		return stdout
+	end 'noErr'
+
+	return "{stdout}\n{stderr}"
+end 'combineStreams'
+
+export function sliceBytes(bytes ByteArray, from BytePos, until BytePos) returns String
+	var out = ByteArray.create()
+
+	for i in from upto until 'copy'
+		let b = try bytes.get(i) otherwise panic("sliceBytes: {i} is outside a range derived from the array's own length")
+		out.push(b)
+	end 'copy'
+
+	return String.from(out)
+end 'sliceBytes'
+
+export function lastBytes(s String, max BytePos) returns String
+	let bytes = s.toByteArray()
+	let n = bytes.count()
+
+	if n <= max 'fits'
+		return s
+	end 'fits'
+
+	return sliceBytes(bytes, from: (n - max) as BytePos, until: n as BytePos)
+end 'lastBytes'

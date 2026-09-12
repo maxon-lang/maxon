@@ -615,22 +615,32 @@ assistants (e.g. Antigravity, Claude Code, Cursor) with structured tools for wor
 maxon mcp-server [--dev]
 ```
 
-**Standard Tools (for Maxon users):**
-- `build`: Build a Maxon project or source file (`maxon build`)
-- `run`: Compile and run a Maxon program (`maxon run`)
+**Standard tools (for Maxon users):**
+- `build`: Build a project, a source file, or an inline `source` snippet (`maxon build`)
+- `run`: Compile and run a program or an inline `source` snippet (`maxon run`)
 - `test`: Run unit tests in a Maxon project (`maxon test`)
-- `fmt`: Format Maxon source files in place (`maxon fmt`)
+- `fmt`: Format source in place, or format an inline `source` snippet and return it (`maxon fmt`)
 - `check`: Verify code syntax and incremental types (`maxon verify-warm-rebuild`)
 - `dump_ir`: Dump compiler intermediate representation (`maxon build --emit-ir`)
-- `lookup_error_code`: Look up explanations and documentation for compiler error codes (e.g. `E1002`, `E3094`)
-- `info`: Inspect compiler version, commit, executable path, and host target
+- `lookup_error_code`: A code's canonical registry name, stage, and documentation. Takes `3014`,
+  `"3014"`, `"E3014"` or the case name `"semanticUnneededCast"`. **A number no case claims is refused**,
+  never answered. The name and stage come from the compiled registry, so they are available from any
+  install; the prose is read from `ErrorCodeRegistry.maxon` when a checkout is present, and the answer
+  says which of the two it could give.
+- `info`: Compiler version, commit, executable path, and host target
 
-**Developer Tools (`--dev` mode):**
-When launched with `--dev`, the MCP server exposes additional tools and options for developers contributing to the Maxon compiler codebase itself:
-- `build`: Enhanced with `repoRoot` targeting and `from` (custom compiler binary path)
-- `run_spec_test`: Run compiler spec tests with filters, target selection, and network options
-- `run_scale_test`: Run compiler memory and CPU scale benchmarks across test rungs
-- `spec_test_outcome`: Run targeted spec tests and report structured pass/fail verdicts
+**An argument no tool declares is refused** (`invalidParams`), never ignored — an argument silently
+dropped is a caller told their run honoured something it never did.
+
+**Contributor tools (`--dev`):**
+- `build`: gains `repoRoot` (which checkout to build) and `from` (the compiler to build WITH)
+- `run_spec_test`: run the spec suite with filters, target selection, and network options
+- `run_scale_test`: the scaling instrument — a doubling ladder of memory and CPU measurements
+- `spec_test_outcome`: structured per-test PASS/FAIL verdicts for a filter
+
+Every contributor tool takes `repoRoot`, spawns **that tree's own compiler** (`stdlib/` is resolved by
+walking up from the executable, so the server's own binary would compile the wrong library), and echoes
+the root it used back in its answer.
 
 ---
 
@@ -993,7 +1003,6 @@ nothing is compiled.
 export function build() returns ExitCode
 	var targets = BuildConfigArray.create()
 	targets.push(Build.target("maxon-bin", source: "maxon-bin", output: "maxon-bin/.maxon/maxon"))
-	targets.push(Build.target("dev-mcp", source: "maxon-dev-mcp/mcp", output: "maxon-dev-mcp/mcp/.maxon/maxon-dev-mcp"))
 	Build.buildTargets(targets)
 	return 0
 end 'build'

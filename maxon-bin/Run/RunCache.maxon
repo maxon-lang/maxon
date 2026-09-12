@@ -221,7 +221,10 @@ function cacheRootVariables() returns CacheVariableArray
 	return names
 end 'cacheRootVariables'
 
-function cacheRoot() returns FilePath throws RunCacheError
+// ⭐ THE HOST'S SCRATCH AREA, spelled once. The run cache keeps compiled programs under it and the
+// MCP server stages inline snippets under it; a second derivation of the variable list is a second
+// answer to "where may this host be written to?".
+export function hostCacheRoot() returns FilePath throws RunCacheError
 	for name in cacheRootVariables() 'eachVariable'
 		let spelled = try Process.environmentVariable(name) otherwise continue
 
@@ -259,7 +262,7 @@ end 'noCacheRootMessage'
 // answers false when the underlying create fails, and a run losing the mkdir to a simultaneous one fails
 // exactly that way against a directory that now EXISTS — so the creation alone is not the question to ask.
 function slotDirectory(program FilePath) returns FilePath throws RunCacheError
-	let root = try cacheRoot()
+	let root = try hostCacheRoot()
 	let dir = root.join("{CacheVendorDirName}").join("{CacheCommandDirName}").join(hexDigest(sha256(program.toString().toByteArray())))
 
 	if not Directory.create(dir) and not Directory.isDirectory(dir) 'unusable'

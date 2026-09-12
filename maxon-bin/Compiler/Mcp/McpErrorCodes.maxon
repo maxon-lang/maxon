@@ -1,0 +1,214 @@
+// `lookup_error_code`: given `3014`, `"3014"`, `"E3014"` or the case name `"semanticUnneededCast"`,
+// answer what the registry knows about it.
+//
+// ⭐ THE COMPILED ENUM IS THE AUTHORITY ON WHETHER A CODE EXISTS. `ErrorCode.allCases` and
+// `allCaseNames` travel inside this binary, so existence, the canonical name and the stage are
+// answerable anywhere the compiler runs — including from a release install, which ships `maxon` and
+// `stdlib/` and no `maxon-bin/`.
+//
+// ⛔ A number no case claims is REFUSED. Answering "documentation for E7777 under stage …" for a code
+// that does not exist reads as an answer and is not one.
+//
+// The registry's DOC TEXT lives in the `//` comments above each case, which the compiler does not
+// carry, so it is read from `ErrorCodeRegistry.maxon` when a checkout is at hand and reported ABSENT
+// when it is not. That is an enrichment failing, never the lookup failing.
+
+let ErrorCodeRegistryRelativePath = "maxon-bin/Compiler/ErrorCodeRegistry.maxon"
+let CommentPrefix = "//"
+
+typealias CodeDigit = int(0 to 9)
+
+export let AsciiZeroByte = 0x30 as Byte
+let AsciiNineByte = 0x39 as Byte
+
+// What the caller asked for. A number-shaped `code` names a NUMBER; anything else is taken as a case
+// name, so a caller holding the generated member does not have to find its digits first.
+union LookupKey
+	codeNumber(text String)
+	caseName(text String)
+end 'LookupKey'
+
+type RegistryEntry
+	export var code as String
+	export var name as String
+
+	export static function create(code String, name String) returns RegistryEntry
+		return Self{code: code, name: name}
+	end 'create'
+end 'RegistryEntry'
+
+export function isAsciiDigit(b Byte) returns bool
+	return b >= AsciiZeroByte and b <= AsciiNineByte
+end 'isAsciiDigit'
+
+function isAllDigits(s String) returns bool
+	if s.isEmpty() 'empty'
+		return false
+	end 'empty'
+
+	for b in s.bytes() 'each'
+		if not isAsciiDigit(b) 'notADigit'
+			return false
+		end 'notADigit'
+	end 'each'
+
+	return true
+end 'isAllDigits'
+
+// `E3014`, `e3014` and `3014` all name the same code; a case name does not.
+function normalizeKey(raw String) returns LookupKey
+	if isAllDigits(raw) 'bareDigits'
+		return LookupKey.codeNumber("E{raw}")
+	end 'bareDigits'
+
+	let upper = raw.toUpper()
+
+	if upper.startsWith("E") and isAllDigits(sliceBytes(upper.toByteArray(), from: 1, until: upper.byteLength())) 'prefixed'
+		return LookupKey.codeNumber(upper)
+	end 'prefixed'
+
+	return LookupKey.caseName(raw)
+end 'normalizeKey'
+
+function findRegistryEntry(key LookupKey) returns RegistryEntry throws McpError
+	let names = ErrorCode.allCaseNames
+
+	for (iter, code) in ErrorCode.allCases.withIterator() 'eachCase'
+		let name = try names.get(iter.index()) otherwise panic("findRegistryEntry: allCaseNames is shorter than allCases")
+
+		let hit = match key 'k'
+			codeNumber(text) gives code.rawValue.equals(text)
+			caseName(text) gives name.equals(text)
+		end 'k'
+
+		if hit 'found'
+			return RegistryEntry.create(code.rawValue, name: name)
+		end 'found'
+	end 'eachCase'
+
+	throw McpError.notFound
+end 'findRegistryEntry'
+
+// The stage is DERIVED from the leading digit and is never written down beside a code, so it cannot
+// disagree with one. A digit no band claims is a registry that grew a band this function has not been
+// taught, which is a defect here rather than a caller's mistake.
+function stageForCode(code String) returns String throws McpError
+	let bytes = code.toByteArray()
+	let digitByte = try bytes.get(1) otherwise throw McpError.notFound
+
+	if not isAsciiDigit(digitByte) 'notADigit'
+		throw McpError.notFound
+	end 'notADigit'
+
+	let digit = (digitByte - AsciiZeroByte) as CodeDigit
+
+	return match digit 'band'
+		1 gives "Lexer (character encoding, string literals, escapes, comments)"
+		2 gives "Parser (syntax, grammar, block matching, expected tokens)"
+		3 gives "Semantic Analysis (type checking, borrowing, visibility, declaration lookup)"
+		4 gives "Intermediate Representation (IR generation)"
+		5 gives "Code Generation (native machine code emission)"
+		6 gives "Binary Writer / Linker (executable formatting and linking)"
+		9 gives "Internal Compiler Diagnostic"
+		default panic("stageForCode: `{code}` is in the registry but its leading digit names no stage band")
+	end 'band'
+end 'stageForCode'
+
+// Where this compiler's own checkout keeps the authored registry, when it has one.
+function registrySourcePath() returns FilePath throws McpError
+	let stdlib = try locateStdlibDir() otherwise throw McpError.notFound
+	let repoRoot = try stdlib.parent() otherwise throw McpError.notFound
+	let regPath = repoRoot.join(ErrorCodeRegistryRelativePath)
+
+	if not File.exists(regPath) 'absent'
+		throw McpError.notFound
+	end 'absent'
+
+	return regPath
+end 'registrySourcePath'
+
+// The `//` run immediately above the case that carries `code`. A blank or non-comment line between
+// them ends the run, which is what makes the text belong to THIS case rather than to the file.
+function readDocumentation(code String) returns String throws McpError
+	let regPath = try registrySourcePath()
+	let text = try File.readText(regPath) otherwise throw McpError.notFound
+	let targetPattern = "= \"{code}\""
+
+	var docAcc = StringArray.create()
+
+	for raw in text.split("\n") 'eachLine'
+		let line = raw.trim()
+
+		if line.startsWith(CommentPrefix) 'commentLine'
+			let body = sliceBytes(line.toByteArray(), from: CommentPrefix.byteLength(), until: line.byteLength())
+			docAcc.push(body.trim())
+			continue
+		end 'commentLine'
+
+		if line.contains(targetPattern) 'theCase'
+			var full = ""
+
+			for d in docAcc 'join'
+				if not d.isEmpty() 'hasText'
+					full = d if full.isEmpty() else "{full} {d}"
+				end 'hasText'
+			end 'join'
+
+			return full
+		end 'theCase'
+
+		docAcc.clear()
+	end 'eachLine'
+
+	throw McpError.notFound
+end 'readDocumentation'
+
+export function executeLookupErrorCodeTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode)
+	var raw = getOptionalStringArg(reqDoc, args: args, key: "code", defaultVal: "").trim()
+
+	// A JSON number is the spelling an agent reaches for first; the roster accepts it and the digits
+	// mean the same thing either way.
+	if raw.isEmpty() 'maybeNumeric'
+		let numeric = getOptionalIntArg(reqDoc, args: args, key: "code", defaultVal: 0)
+
+		if numeric > 0 'gotDigits'
+			raw = "{numeric}"
+		end 'gotDigits'
+	end 'maybeNumeric'
+
+	if raw.isEmpty() 'noCode'
+		sendToolError(reqDoc, idNode: idNode, message: "`code` must name a code: 3014, \"3014\", \"E3014\", or a registry case name.", repoRoot: "")
+		return
+	end 'noCode'
+
+	let key = normalizeKey(raw)
+	let entry = try findRegistryEntry(key) otherwise 'unclaimed'
+		let reason = match key 'k'
+			codeNumber(text) gives "no case in the error-code registry claims {text}. The number is FREE."
+			caseName(text) gives "the error-code registry declares no case named `{text}`."
+		end 'k'
+
+		sendToolError(reqDoc, idNode: idNode, message: "lookup_error_code: {reason}", repoRoot: "")
+		return
+	end 'unclaimed'
+
+	let stage = try stageForCode(entry.code) otherwise panic("executeLookupErrorCodeTool: `{entry.code}` came from the registry and must have a stage")
+
+	var doc = JsonDoc.create()
+	var payload = JsonObjectBuilder.create()
+	payload.addBool(doc, key: "success", value: true)
+	payload.addString(doc, key: "code", value: entry.code)
+	payload.addString(doc, key: "name", value: entry.name)
+	payload.addString(doc, key: "stage", value: stage)
+
+	let documentation = try readDocumentation(entry.code) otherwise 'noSource'
+		payload.addBool(doc, key: "documentationAvailable", value: false)
+		payload.addString(doc, key: "documentation", value: "This install has no `{ErrorCodeRegistryRelativePath}` to read the registry's prose from — a release ships the compiler and `stdlib/` only. The code, its canonical name and its stage above come from the compiler itself and are complete.")
+		sendToolResult(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: false)
+		return
+	end 'noSource'
+
+	payload.addBool(doc, key: "documentationAvailable", value: true)
+	payload.addString(doc, key: "documentation", value: documentation)
+	sendToolResult(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: false)
+end 'executeLookupErrorCodeTool'

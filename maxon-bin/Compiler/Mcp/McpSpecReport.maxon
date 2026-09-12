@@ -1,0 +1,319 @@
+// Reading the spec runner's console output back into structure.
+//
+// The runner prints one `PASS <spec>/<test>` or `FAIL <spec>/<test>: <reason>` line per case and a
+// final `<n> passed, <m> failed` summary. A failure's reason continues over the following lines until
+// the next verdict or the summary, so a reason is gathered rather than taken from one line.
+
+let PassPrefix = "PASS "
+let FailPrefix = "FAIL "
+let PassedMarker = " passed, "
+let FailedMarker = " failed"
+let ColonByte = 0x3A as Byte
+
+export typealias TestCount = int(0 to u64.max)
+typealias FindResult = int(-1 to i64.max)
+
+export type SpecSummary
+	export var passed as TestCount = 0
+	export var total as TestCount = 0
+	export var parsed as bool = false
+
+	export static function empty() returns SpecSummary
+		return Self{}
+	end 'empty'
+
+	static function withCounts(passed TestCount, total TestCount) returns SpecSummary
+		return Self{passed: passed, total: total, parsed: true}
+	end 'withCounts'
+
+	export function failed() returns TestCount
+		if not self.parsed or self.total < self.passed 'unknown'
+			return 0
+		end 'unknown'
+
+		return self.total - self.passed
+	end 'failed'
+end 'SpecSummary'
+
+type LeadingDigits
+	export var value as TestCount
+	export var rest as String
+
+	export static function create(value TestCount, rest String) returns LeadingDigits
+		return Self{value: value, rest: rest}
+	end 'create'
+end 'LeadingDigits'
+
+export type SpecTestEntry
+	export var spec as String
+	export var name as String
+	export var passed as bool
+
+	export static function create(spec String, name String, passed bool) returns SpecTestEntry
+		return Self{spec: spec, name: name, passed: passed}
+	end 'create'
+end 'SpecTestEntry'
+
+export typealias SpecTestEntryArray = Array with SpecTestEntry
+
+export type SpecFailureSummary
+	export var spec as String
+	export var message as String
+
+	export static function create(spec String, message String) returns SpecFailureSummary
+		return Self{spec: spec, message: message}
+	end 'create'
+end 'SpecFailureSummary'
+
+export typealias SpecFailureSummaryArray = Array with SpecFailureSummary
+
+export type SpecReport
+	export var tests as SpecTestEntryArray
+	export var failures as SpecFailureSummaryArray
+
+	static function create(tests SpecTestEntryArray, failures SpecFailureSummaryArray) returns SpecReport
+		return Self{tests: tests, failures: failures}
+	end 'create'
+
+	export function passedCount() returns TestCount
+		var n = 0 as TestCount
+
+		for t in self.tests 'each'
+			if t.passed 'p'
+				n = n + 1
+			end 'p'
+		end 'each'
+
+		return n
+	end 'passedCount'
+
+	export function failedCount() returns TestCount
+		return self.tests.count() - passedCount()
+	end 'failedCount'
+end 'SpecReport'
+
+type VerdictLabel
+	export var spec as String
+	export var name as String
+	export var rest as String
+
+	export static function create(spec String, name String, rest String) returns VerdictLabel
+		return Self{spec: spec, name: name, rest: rest}
+	end 'create'
+end 'VerdictLabel'
+
+// =============================================================================
+// Scanning
+// =============================================================================
+
+function firstSeparator(s String) returns FindResult
+	let bytes = s.toByteArray()
+
+	for (iter, b) in bytes.withIterator() 'scan'
+		if b == SlashByte or b == BackslashByte 'sep'
+			return iter.index() as FindResult
+		end 'sep'
+	end 'scan'
+
+	return -1
+end 'firstSeparator'
+
+function parseLeadingInt(s String) returns LeadingDigits throws McpError
+	let bytes = s.toByteArray()
+	let n = bytes.count()
+	var i = 0
+	var value = 0 as TestCount
+	var anyDigits = false
+
+	while i < n 'scan'
+		let b = try bytes.get(i) otherwise panic("parseLeadingInt: {i} is outside a range derived from the string's own length")
+
+		if not isAsciiDigit(b) 'notDigit'
+			break
+		end 'notDigit'
+
+		value = value * 10 + ((b - AsciiZeroByte) as TestCount)
+		anyDigits = true
+		i = i + 1
+	end 'scan'
+
+	if not anyDigits 'noDigits'
+		throw McpError.notFound
+	end 'noDigits'
+
+	return LeadingDigits.create(value, rest: sliceBytes(bytes, from: i, until: n))
+end 'parseLeadingInt'
+
+function findByteSequence(haystack ByteArray, needle String) returns BytePos throws McpError
+	let needleBytes = needle.toByteArray()
+	let nLen = needleBytes.count()
+	let hLen = haystack.count()
+
+	if nLen == 0 'empty'
+		return 0
+	end 'empty'
+
+	if nLen > hLen 'tooLong'
+		throw McpError.notFound
+	end 'tooLong'
+
+	for start in 0 upto (hLen - nLen) + 1 'scan'
+		var matched = true
+
+		for (iter, nb) in needleBytes.withIterator() 'inner'
+			let hb = try haystack.get(start + iter.index()) otherwise panic("findByteSequence: the start bound keeps every probe inside the haystack")
+
+			if hb != nb 'differs'
+				matched = false
+				break
+			end 'differs'
+		end 'inner'
+
+		if matched 'hit'
+			return start
+		end 'hit'
+	end 'scan'
+
+	throw McpError.notFound
+end 'findByteSequence'
+
+function sliceAfter(s String, marker String) returns String throws McpError
+	let bytes = s.toByteArray()
+	let pos = try findByteSequence(bytes, needle: marker)
+	return sliceBytes(bytes, from: pos + marker.byteLength(), until: bytes.count())
+end 'sliceAfter'
+
+function joinLines(lines StringArray) returns String
+	var s = ""
+
+	for (iter, l) in lines.withIterator() 'each'
+		s = l if iter.index() == 0 else "{s}\n{l}"
+	end 'each'
+
+	return s
+end 'joinLines'
+
+// =============================================================================
+// Verdicts
+// =============================================================================
+
+function parseVerdictLabel(line String, prefix String) returns VerdictLabel throws McpError
+	let body = sliceBytes(line.toByteArray(), from: prefix.byteLength(), until: line.byteLength())
+	let bodyBytes = body.toByteArray()
+
+	let slash = firstSeparator(body)
+
+	if slash < 0 'noSlash'
+		throw McpError.notFound
+	end 'noSlash'
+
+	let spec = sliceBytes(bodyBytes, from: 0, until: slash as BytePos)
+
+	let nameStart = (slash + 1) as BytePos
+	let total = bodyBytes.count()
+	var colon = nameStart
+
+	while colon < total 'findColon'
+		let b = try bodyBytes.get(colon) otherwise panic("parseVerdictLabel: the while guard keeps every probe inside the line")
+
+		if b == ColonByte 'foundColon'
+			break
+		end 'foundColon'
+
+		colon = colon + 1
+	end 'findColon'
+
+	let name = sliceBytes(bodyBytes, from: nameStart, until: colon).trim()
+
+	if name.isEmpty() 'noName'
+		throw McpError.notFound
+	end 'noName'
+
+	let reasonStart = (colon + 1) as BytePos if colon < total else total
+	let rest = sliceBytes(bodyBytes, from: reasonStart, until: total).trim()
+
+	return VerdictLabel.create(spec, name: name, rest: rest)
+end 'parseVerdictLabel'
+
+function parseSummaryLine(line String) returns SpecSummary throws McpError
+	let passed = try parseLeadingInt(line)
+
+	if not passed.rest.startsWith(PassedMarker) 'notASummary'
+		throw McpError.notFound
+	end 'notASummary'
+
+	let afterPassed = try sliceAfter(passed.rest, marker: PassedMarker)
+	let failed = try parseLeadingInt(afterPassed)
+
+	if not failed.rest.startsWith(FailedMarker) 'notASummary'
+		throw McpError.notFound
+	end 'notASummary'
+
+	return SpecSummary.withCounts(passed.value, total: passed.value + failed.value)
+end 'parseSummaryLine'
+
+function isSummaryLine(line String) returns bool
+	let summary = try parseSummaryLine(line) otherwise return false
+	return summary.parsed
+end 'isSummaryLine'
+
+// The LAST summary line is the run's, so the scan runs backwards: a fragment's own output may contain
+// something that parses as one.
+export function parseSummary(combined String) returns SpecSummary
+	let lines = combined.split("\n")
+	var i = lines.count()
+
+	while i > 0 'scanBackwards'
+		i = i - 1
+		let line = try lines.get(i) otherwise panic("parseSummary: {i} is outside a range derived from the split's own length")
+		let summary = try parseSummaryLine(line.trim()) otherwise continue
+		return summary
+	end 'scanBackwards'
+
+	return SpecSummary.empty()
+end 'parseSummary'
+
+export function parseReport(combined String) returns SpecReport
+	var tests = SpecTestEntryArray.create()
+	var failures = SpecFailureSummaryArray.create()
+
+	let lines = combined.split("\n")
+	let n = lines.count()
+	var i = 0
+
+	while i < n 'eachLine'
+		let line = try lines.get(i) otherwise panic("parseReport: {i} is outside a range derived from the split's own length")
+		i = i + 1
+
+		if line.startsWith(PassPrefix) 'passed'
+			let label = try parseVerdictLabel(line, prefix: PassPrefix) otherwise continue
+			tests.push(SpecTestEntry.create(label.spec, name: label.name, passed: true))
+			continue
+		end 'passed'
+
+		if not line.startsWith(FailPrefix) 'notAVerdict'
+			continue
+		end 'notAVerdict'
+
+		let label = try parseVerdictLabel(line, prefix: FailPrefix) otherwise continue
+		tests.push(SpecTestEntry.create(label.spec, name: label.name, passed: false))
+
+		var reason = StringArray.create()
+		reason.push(label.rest)
+
+		while i < n 'reasonLines'
+			let next = try lines.get(i) otherwise panic("parseReport: {i} is outside a range derived from the split's own length")
+
+			if next.startsWith(PassPrefix) or next.startsWith(FailPrefix) or isSummaryLine(next.trim()) 'reasonEnds'
+				break
+			end 'reasonEnds'
+
+			reason.push(next)
+			i = i + 1
+		end 'reasonLines'
+
+		failures.push(SpecFailureSummary.create(label.spec, message: "{label.name}: {joinLines(reason).trim()}"))
+	end 'eachLine'
+
+	return SpecReport.create(tests, failures: failures)
+end 'parseReport'

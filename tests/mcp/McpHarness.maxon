@@ -18,9 +18,11 @@ export function testedCompilerPath() returns FilePath
 	let spelled = "{TestedCompilerStem}{executableSuffix()}"
 	let relative = try FilePath.from(spelled) otherwise panic("McpHarness: '{spelled}' is not a valid path")
 	let binary = relative.resolve(Directory.currentPath())
+
 	if not File.exists(binary) 'noBinary'
 		panic("McpHarness: compiler binary not found at {binary.path}")
 	end 'noBinary'
+
 	return binary
 end 'testedCompilerPath'
 
@@ -61,12 +63,14 @@ end 'unknownMethodRequest'
 export function runMcp(requests StringArray, devMode bool = false) returns McpRun
 	var argv = StringArray.create()
 	argv.push("mcp-server")
+
 	if devMode 'dev'
 		argv.push("--dev")
 	end 'dev'
 
 	var stdin = ""
 	let n = requests.count()
+
 	for i in 0 upto n 'each'
 		let r = try requests.get(i) otherwise continue
 		stdin = "{stdin}{r}\n"
@@ -92,20 +96,22 @@ end 'runMcpSingle'
 export type StreamingMcpSession
 	export var server as StreamingSubprocess
 
-	export static function start(devMode bool = false) returns StreamingMcpSession
+	// `binary` is a parameter because one case starts a server from a STAGED COPY and then replaces
+	// that copy on disk; it must not be the tree's own slot.
+	export static function startFrom(binary FilePath, devMode bool = false) returns StreamingMcpSession
 		var argv = StringArray.create()
 		argv.push("mcp-server")
+
 		if devMode 'dev'
 			argv.push("--dev")
 		end 'dev'
 
-		let binary = testedCompilerPath()
 		let spawned = try StreamingSubprocess.spawn(Executable.path(binary), arguments: argv) otherwise (e) 'spawnFailed'
 			panic("StreamingMcpSession: failed to spawn mcp server: {e.displayReason()}")
 		end 'spawnFailed'
 
 		return StreamingMcpSession{server: spawned}
-	end 'start'
+	end 'startFrom'
 
 	export function sendLine(line String) throws SubprocessError
 		try self.server.writeStdinLine(line)
@@ -122,6 +128,7 @@ export type StreamingMcpSession
 			self.server.release()
 			throw e
 		end 'waitErr'
+
 		self.server.release()
 		return code
 	end 'close'
@@ -129,14 +136,18 @@ end 'StreamingMcpSession'
 
 export function responseDocs(run McpRun) returns JsonDocArray
 	var docs = JsonDocArray.create()
+
 	for line in run.stdout.split("\n") 'each'
 		let trimmed = line.trim()
+
 		if trimmed.isEmpty() 'blank'
 			continue
 		end 'blank'
+
 		let doc = try Json.parse(trimmed) otherwise continue
 		docs.push(doc)
 	end 'each'
+
 	return docs
 end 'responseDocs'
 
@@ -146,11 +157,11 @@ export function hasChildKey(doc JsonDoc, parent JsonNodeId, key String) returns 
 end 'hasChildKey'
 
 export function resultNode(doc JsonDoc) returns JsonNodeId
-	return try doc.getChild(doc.root, key: "result") otherwise panic("response has no result")
+	return try doc.getChild(doc.root, key: "result") otherwise panic("response has no `result`: {Json.stringify(doc)}")
 end 'resultNode'
 
 function errorNode(doc JsonDoc) returns JsonNodeId
-	return try doc.getChild(doc.root, key: "error") otherwise panic("response has no error")
+	return try doc.getChild(doc.root, key: "error") otherwise panic("response has no `error`: {Json.stringify(doc)}")
 end 'errorNode'
 
 export function toolNames(doc JsonDoc) returns StringArray
@@ -158,22 +169,27 @@ export function toolNames(doc JsonDoc) returns StringArray
 	let resId = resultNode(doc)
 	let toolsId = try doc.getChild(resId, key: "tools") otherwise return names
 	let count = try doc.arrayLength(toolsId) otherwise return names
+
 	for i in 0 upto count 'each'
 		let toolId = try doc.arrayAt(toolsId, index: i) otherwise continue
 		let name = try doc.getString(toolId, key: "name") otherwise continue
 		names.push(name)
 	end 'each'
+
 	return names
 end 'toolNames'
 
 export function containsString(arr StringArray, target String) returns bool
 	let n = arr.count()
+
 	for i in 0 upto n 'each'
 		let s = try arr.get(i) otherwise continue
+
 		if s.equals(target) 'match'
 			return true
 		end 'match'
 	end 'each'
+
 	return false
 end 'containsString'
 
@@ -182,42 +198,95 @@ export function toolPropertyKeys(doc JsonDoc, toolName String) returns StringArr
 	let resId = resultNode(doc)
 	let toolsId = try doc.getChild(resId, key: "tools") otherwise return props
 	let count = try doc.arrayLength(toolsId) otherwise return props
+
 	for i in 0 upto count 'each'
 		let toolId = try doc.arrayAt(toolsId, index: i) otherwise continue
 		let name = try doc.getString(toolId, key: "name") otherwise continue
+
 		if name.equals(toolName) 'found'
 			let schemaId = try doc.getChild(toolId, key: "inputSchema") otherwise return props
 			let propsId = try doc.getChild(schemaId, key: "properties") otherwise return props
 			let node = doc.get(propsId)
 			let keyCount = node.keys.count()
+
 			for k in 0 upto keyCount 'eachKey'
 				let keyName = try node.keys.get(k) otherwise continue
 				props.push(keyName)
 			end 'eachKey'
+
 			return props
 		end 'found'
 	end 'each'
+
 	return props
 end 'toolPropertyKeys'
 
+// ⛔ A missing field is a BROKEN RESPONSE, not an empty one. Answering "" would let an assertion on
+// the payload pass against a response that never carried it.
 export function toolCallText(doc JsonDoc) returns String
 	let resId = resultNode(doc)
-	let contentId = try doc.getChild(resId, key: "content") otherwise return ""
-	let firstElemId = try doc.arrayAt(contentId, index: 0) otherwise return ""
-	return try doc.getString(firstElemId, key: "text") otherwise ""
+	let contentId = try doc.getChild(resId, key: "content") otherwise panic("tool result has no `content`: {Json.stringify(doc)}")
+	let firstElemId = try doc.arrayAt(contentId, index: 0) otherwise panic("tool result `content` is empty: {Json.stringify(doc)}")
+	return try doc.getString(firstElemId, key: "text") otherwise panic("tool result content[0] has no `text`: {Json.stringify(doc)}")
 end 'toolCallText'
 
 export function toolCallIsError(doc JsonDoc) returns bool
 	let resId = resultNode(doc)
-	return try doc.getBool(resId, key: "isError") otherwise false
+	return try doc.getBool(resId, key: "isError") otherwise panic("tool result has no `isError`: {Json.stringify(doc)}")
 end 'toolCallIsError'
 
 export function rpcErrorCode(doc JsonDoc) returns JsonInt
 	let errId = errorNode(doc)
-	return try doc.getInt(errId, key: "code") otherwise 0
+	return try doc.getInt(errId, key: "code") otherwise panic("rpc error has no `code`: {Json.stringify(doc)}")
 end 'rpcErrorCode'
 
 export function rpcErrorMessage(doc JsonDoc) returns String
 	let errId = errorNode(doc)
-	return try doc.getString(errId, key: "message") otherwise ""
+	return try doc.getString(errId, key: "message") otherwise panic("rpc error has no `message`: {Json.stringify(doc)}")
 end 'rpcErrorMessage'
+
+function toolPayload(doc JsonDoc) returns JsonDoc
+	let text = toolCallText(doc)
+	return try Json.parse(text) otherwise panic("tool payload is not JSON: {text}")
+end 'toolPayload'
+
+export function payloadString(doc JsonDoc, key String) returns String
+	let payload = toolPayload(doc)
+	return try payload.getString(payload.root, key: key) otherwise panic("tool payload has no `{key}`: {toolCallText(doc)}")
+end 'payloadString'
+
+// Drive one request against a server started in the given mode and return its response.
+export function callTool(name String, argumentsJson String = "\{\}", devMode bool = false) returns JsonDoc
+	var reqs = StringArray.create()
+	reqs.push(initRequest(1))
+	reqs.push(toolCallRequest(2, name: name, argumentsJson: argumentsJson))
+
+	let docs = responseDocs(runMcp(reqs, devMode: devMode))
+	return try docs.get(1) otherwise panic("no response to tools/call `{name}`")
+end 'callTool'
+
+export function listTools(devMode bool = false) returns JsonDoc
+	var reqs = StringArray.create()
+	reqs.push(initRequest(1))
+	reqs.push(toolsListRequest(2))
+
+	let docs = responseDocs(runMcp(reqs, devMode: devMode))
+	return try docs.get(1) otherwise panic("no response to tools/list")
+end 'listTools'
+
+// A Windows path is full of backslashes, and a backslash is an escape inside a JSON string. Cases
+// that build a request by interpolation must escape what they interpolate.
+export function jsonEscaped(raw String) returns String
+	let backslash = 0x5C as Byte
+	var out = ByteArray.create()
+
+	for b in raw.bytes() 'each'
+		if b == backslash 'doubleIt'
+			out.push(backslash)
+		end 'doubleIt'
+
+		out.push(b)
+	end 'each'
+
+	return String.from(out)
+end 'jsonEscaped'

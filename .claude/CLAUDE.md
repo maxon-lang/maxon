@@ -11,8 +11,8 @@ One compiler builds this tree and it is written in Maxon: source `maxon-bin/`, b
 the Windows form.
 
 - **Build it:** `./maxon-bin/.maxon/maxon build maxon-bin` at the repo root. `build.maxon` there
-  declares two targets — `maxon-bin` and `dev-mcp` — so a BARE `maxon build` lists them rather than
-  picking one.
+  declares the one target, so a bare `maxon build` builds it; name it anyway, because the seed rule
+  below turns a bare invocation into a path build.
 - **Get a compiler to build it WITH:** put a released `maxon` binary at `.bootstrap/maxon.exe`, which
   you run directly when the slot is empty. Maxon compiles Maxon, so there is no second
   implementation here — a previous build of this compiler is the only thing that can build it.
@@ -78,8 +78,15 @@ the Windows form.
 
 ## maxon-dev MCP tools (PREFER THESE — **IN A WORKTREE, PASS `repoRoot`**)
 
-Prefer the `maxon-dev` MCP tools over raw Bash invocations of the compiler binaries: faster (no shell
-startup), structured results. Use Bash only where no tool covers the case.
+**The server IS the compiler**: `maxon mcp-server --dev`, implemented under `maxon-bin/Compiler/Mcp/`.
+There is no separate project and nothing to build but the compiler itself, so a rebuild of the slot is
+a rebuild of the server. Prefer these tools over raw Bash invocations: faster (no shell startup),
+structured results. Use Bash only where no tool covers the case.
+
+⚠ **A RUNNING SERVER IS THE COMPILER YOU BUILT IT FROM.** Rebuilding the slot renames the running
+image to `maxon.previous` and writes a new one; the live process keeps serving from the vacated image
+until the host restarts it. So after a build, a tool answer still comes from the PREVIOUS compiler —
+restart the MCP server when you need the new one to answer.
 
 > ## 🟡 IN A WORKTREE, EVERY MCP TOOL NEEDS `repoRoot` — OR IT DRIVES THE **MAIN REPO**
 >
@@ -87,15 +94,21 @@ startup), structured results. Use Bash only where no tool covers the case.
 > main checkout (derived from the SERVER's own binary path). **Say nothing and you are told
 > `success: true` about a tree containing none of your work.**
 >
-> ⇒ **In a worktree, pass `repoRoot` — the ABSOLUTE path of your worktree root — to EVERY tool call.**
-> All eight take it.
+> ⇒ **In a worktree, pass `repoRoot` — the ABSOLUTE path of your worktree root — to EVERY tool call
+> that acts in a tree**: `build`, `run_spec_test`, `run_scale_test` and `spec_test_outcome`. The
+> user-facing tools (`run`, `test`, `fmt`, `check`, `dump_ir`, `lookup_error_code`, `info`) take none —
+> they act in the host's working directory and name no tree.
 >
 > ```
 > build(repoRoot: "C:/Users/Eric/dev/maxon/.claude/worktrees/agent-xyz")
 > ```
 >
-> - **Every result echoes the `repoRoot` it actually used** (successes in `repoRoot`, failures in
->   `error.data.repoRoot`). **READ IT BACK.**
+> - **Every result echoes the `repoRoot` it actually used**, in the payload's `repoRoot` field —
+>   answers and refusals alike. **READ IT BACK.**
+> - ⭐ **THE TREE'S OWN COMPILER RUNS, NOT THE SERVER'S.** A tool acting on `repoRoot` spawns
+>   `<repoRoot>/maxon-bin/.maxon/maxon`, because `stdlib/` is resolved by walking UP from the
+>   EXECUTABLE — the server's binary would compile your worktree against the MAIN repo's standard
+>   library. A tree whose slot is empty is REFUSED, naming the `build` tool.
 > - **A `repoRoot` that is not a Maxon checkout is REFUSED** (`invalidParams`), never quietly swapped
 >   for the main repo. Relative paths are refused too — they would resolve against the *server's* cwd.
 >   A checkout is any tree holding `stdlib/` and `maxon-bin/`, so a brand-new worktree qualifies
@@ -107,19 +120,26 @@ startup), structured results. Use Bash only where no tool covers the case.
 
 | Task | Tool |
 |------|------|
-| Build the compiler | `build` — runs `build.maxon` at the root; `from:` names the compiler to build WITH |
+| Build the compiler | `build` — `path: "maxon-bin"`; `from:` names the compiler to build WITH |
 | Run the spec suite | `run_spec_test` |
 | Per-test PASS/FAIL detail | `spec_test_outcome` (requires `filter`) |
 | MEASURE per-phase memory + CPU scaling — an instrument, **no verdict** | `run_scale_test` |
-| Run an inline snippet or a file | `run_program` |
+| Run an inline snippet or a file | `run` — `source:` for a snippet, `path:` for a file |
 | Dump IR | `dump_ir` |
-| Format a file or snippet | `fmt` |
-| Look up a 4-digit error code | `lookup_error_code` |
+| Format a file or snippet | `fmt` — `source:` returns the formatted text; `path:` rewrites in place |
+| Look up a 4-digit error code | `lookup_error_code` — number, `"E3014"`, or the case name |
 
-Flags are exposed as parameters: `filter`, `updateRequired`, `log`, `target`, `network`. Always pair
-`updateRequired` with a `filter` — unfiltered, it rewrites every golden in the suite. `mmTrace` and
-`dumpStages` name mechanisms the compiler does not have, so they are REJECTED with an `invalidParams`
-error naming the gap, never silently dropped.
+⭐ **AN ARGUMENT NO TOOL DECLARES IS REFUSED** (`invalidParams`), never dropped: a `mmTrace: true` run
+that never traced, reported back as a clean success, is indistinguishable from a leak-free run. The
+refusal is by ARRIVAL against the tool roster, so it covers `mmTrace` and `dumpStages` and every other
+argument nobody thought to reject. A contributor argument sent to a server started WITHOUT `--dev` is
+refused the same way.
+
+Always pair `updateRequired` with a `filter` — unfiltered, it rewrites every golden in the suite.
+
+⛔ **`build`'s `target:` TELLS A TRIPLE FROM A MANIFEST TARGET BY THE DASH.** `wasm32-wasi` becomes
+`--target=wasm32-wasi`; a bare word becomes a positional naming a target in `build.maxon`. `maxon
+build` reads a bare word as another SOURCE PATH, so the two cannot be passed the same way.
 
 **A `spec-test` filter is ONE CASE-SENSITIVE substring** of the `<spec>/<test>` label (`maxon test`
 lowercases its own, and takes a comma-separated union). Neither is a list here —
@@ -127,7 +147,6 @@ lowercases its own, and takes a comma-separated union). Neither is a list here �
 
 The runner has no `--verbose` (it always prints a line per test), no `--no-batch` (its batching is
 `RunStrategy`, chosen by target and host) and no `--debug-info`; it does have `--network`.
-`checkSpecTestFlags` refuses a flag it does not support.
 
 ### Common flags
 
@@ -377,15 +396,13 @@ emits it.
 - `--update-required` regenerates RequiredIR but **not** `maxoncstderr` blocks — an error-code
   renumber moves those by hand.
 
-## ⚠ The MCP server's binary is gitignored and nothing rebuilds it
+## ⚠ A running MCP server keeps answering from the compiler it was started as
 
-**If you edit anything under `maxon-dev-mcp/mcp/` — or pull a commit that does — the fix has THREE
-steps, in this order: (1) KILL the running MCP server process, which holds an open handle on its own
-binary; (2) `maxon build dev-mcp`; (3) RESTART THE SERVER.** Rebuilding first fails with
-`E6002: could not remove the previous build artifact ... it is locked or read-only`, and a rebuild
-alone does not replace the running process.
+The server is the compiler, so editing `maxon-bin/Compiler/Mcp/` and rebuilding the slot leaves the
+LIVE process running the old code: a build renames the running image to `maxon.previous` rather than
+overwriting it (an OS will not let a running executable be deleted, but will let one be renamed), and
+the process serves on from the vacated image. **RESTART THE MCP SERVER after a build whose result you
+want the tools to reflect.**
 
-You will not get away with forgetting: **every `tools/call` compares the running binary's timestamp
-against its own sources and REFUSES if a source is newer**, naming the file and the fix (`tools/list`
-still answers, so the host can tell you why). A tool that answers confidently from stale code is worse
-than one that refuses.
+`tests/mcp/rebuild.test.maxon` pins the surviving half of that: the process keeps answering across the
+replacement rather than dying mid-session.

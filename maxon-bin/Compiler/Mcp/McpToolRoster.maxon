@@ -1,0 +1,257 @@
+// THE ROSTER: every tool, every argument it accepts, and which mode exposes it.
+//
+// ⭐ ONE declaration serves BOTH directions. `tools/list` renders it into JSON Schema, and
+// `tools/call` validates an incoming `arguments` object against it. A tool that reads an argument the
+// roster does not declare cannot exist, and an argument the caller sets that no tool declares is
+// REFUSED rather than dropped.
+//
+// ⛔ Dropping it is the worse failure and the reason this is a roster rather than a list of names to
+// reject: a `mmTrace: true` run that never traced, reported back as a clean success, is
+// indistinguishable from a leak-free run. Refusing by ARRIVAL — anything not declared — also covers
+// the argument nobody thought to write a rejection for.
+
+export type McpProperty
+	export var name as String
+	export var jsonType as String
+	export var description as String
+	export var required as bool
+	export var devOnly as bool
+
+	// A second accepted JSON type, or "" for the usual one-type argument. An error code arrives as
+	// `3014` as readily as `"3014"`, and refusing one spelling of the same digits helps nobody.
+	export var altType as String
+
+	export static function create(name String, jsonType String, description String, required bool = false, devOnly bool = false, altType String = "") returns McpProperty
+		return Self{name: name, jsonType: jsonType, description: description, required: required, devOnly: devOnly, altType: altType}
+	end 'create'
+
+	export function accepts(kind JsonKind) returns bool
+		if propertyTypeAccepts(self.jsonType, kind: kind) 'primary'
+			return true
+		end 'primary'
+
+		return not self.altType.isEmpty() and propertyTypeAccepts(self.altType, kind: kind)
+	end 'accepts'
+
+	// How the refusal names what was wanted.
+	export function acceptedTypes() returns String
+		return self.jsonType if self.altType.isEmpty() else "{self.jsonType} or {self.altType}"
+	end 'acceptedTypes'
+end 'McpProperty'
+
+export typealias McpPropertyArray = Array with McpProperty
+
+export type McpToolSpec
+	export var name as String
+	export var description as String
+	export var properties as McpPropertyArray
+	export var devOnly as bool
+
+	export static function create(name String, description String, properties McpPropertyArray, devOnly bool = false) returns McpToolSpec
+		return Self{name: name, description: description, properties: properties, devOnly: devOnly}
+	end 'create'
+
+	// Whether this tool is reachable in the mode the server was started in.
+	export function visibleIn(devMode bool) returns bool
+		return devMode or not self.devOnly
+	end 'visibleIn'
+end 'McpToolSpec'
+
+export typealias McpToolSpecArray = Array with McpToolSpec
+
+function str(name String, description String, required bool = false, devOnly bool = false) returns McpProperty
+	return McpProperty.create(name, jsonType: "string", description: description, required: required, devOnly: devOnly)
+end 'str'
+
+function flag(name String, description String, devOnly bool = false) returns McpProperty
+	return McpProperty.create(name, jsonType: "boolean", description: description, devOnly: devOnly)
+end 'flag'
+
+function whole(name String, description String, devOnly bool = false) returns McpProperty
+	return McpProperty.create(name, jsonType: "integer", description: description, devOnly: devOnly)
+end 'whole'
+
+function list(name String, description String) returns McpProperty
+	return McpProperty.create(name, jsonType: "array", description: description)
+end 'list'
+
+// `repoRoot` reads the same on every tool that takes it, and a caller who learns it once should not
+// have to read four spellings of it.
+function repoRootProperty() returns McpProperty
+	return str("repoRoot", description: "Absolute path of the Maxon checkout to act in. Defaults to the checkout this compiler sits in. Every answer echoes back the root it used.", devOnly: true)
+end 'repoRootProperty'
+
+export function mcpToolRoster() returns McpToolSpecArray
+	var tools = McpToolSpecArray.create()
+
+	var buildProps = McpPropertyArray.create()
+	buildProps.push(str("path", description: "Source file or project directory to build. Defaults to '.'"))
+	buildProps.push(str("source", description: "Inline Maxon source to build instead of a path. Mutually exclusive with `path`."))
+	buildProps.push(str("output", description: "Output executable path (-o)"))
+	buildProps.push(str("target", description: "Cross-compile target (--target=<cpu>-<os>), or the name of a target declared in build.maxon"))
+	buildProps.push(flag("emitIr", description: "Emit intermediate representation (--emit-ir)"))
+	buildProps.push(str("from", description: "Compiler binary to build WITH, instead of the target tree's own.", devOnly: true))
+	buildProps.push(repoRootProperty())
+	tools.push(McpToolSpec.create("build", description: "Build a Maxon project, source file, or inline snippet using `maxon build`.", properties: buildProps))
+
+	var runProps = McpPropertyArray.create()
+	runProps.push(str("path", description: "Path to the .maxon file to run. Mutually exclusive with `source`."))
+	runProps.push(str("source", description: "Inline Maxon source to compile and run instead of a path."))
+	runProps.push(list("arguments", description: "Command-line arguments passed to the program"))
+	tools.push(McpToolSpec.create("run", description: "Compile and run a Maxon program, or an inline snippet, using `maxon run`.", properties: runProps))
+
+	var testProps = McpPropertyArray.create()
+	testProps.push(str("path", description: "Project directory containing tests. Defaults to '.'"))
+	testProps.push(str("filter", description: "Substring pattern selecting tests by name or file (case-insensitive; comma-separated patterns are a union)"))
+	tools.push(McpToolSpec.create("test", description: "Run unit tests in a Maxon project using `maxon test`.", properties: testProps))
+
+	var fmtProps = McpPropertyArray.create()
+	fmtProps.push(str("path", description: "File or directory to format in place. Defaults to '.'"))
+	fmtProps.push(str("source", description: "Inline Maxon source to format, returned rather than written. Mutually exclusive with `path`."))
+	tools.push(McpToolSpec.create("fmt", description: "Format Maxon source in place, or format an inline snippet and return it.", properties: fmtProps))
+
+	var checkProps = McpPropertyArray.create()
+	checkProps.push(str("path", description: "Path to the .maxon file to verify", required: true))
+	tools.push(McpToolSpec.create("check", description: "Check a Maxon source file for syntax and type errors using `maxon verify-warm-rebuild`.", properties: checkProps))
+
+	var lookupProps = McpPropertyArray.create()
+	lookupProps.push(McpProperty.create("code", jsonType: "string", description: "Error code to look up: 'E3014', '3014', 3014, or the registry case name 'semanticUnneededCast'", required: true, altType: "integer"))
+	tools.push(McpToolSpec.create("lookup_error_code", description: "Look up a Maxon compiler error code: its canonical registry name, compilation stage, and documentation.", properties: lookupProps))
+
+	var irProps = McpPropertyArray.create()
+	irProps.push(str("path", description: "Path to the .maxon source file", required: true))
+	tools.push(McpToolSpec.create("dump_ir", description: "Dump the compiler intermediate representation (IR) for a Maxon source file.", properties: irProps))
+
+	tools.push(McpToolSpec.create("info", description: "Get Maxon compiler version, commit, executable path, and host target.", properties: McpPropertyArray.create()))
+
+	var specProps = McpPropertyArray.create()
+	specProps.push(str("filter", description: "Passed to --filter=<pattern>: ONE CASE-SENSITIVE substring of the `<spec>/<test>` label. Not a list — a comma selects nothing.", devOnly: true))
+	specProps.push(str("directory", description: "Spec directory to run (default: 'specs').", devOnly: true))
+	specProps.push(flag("updateRequired", description: "Pass --update-required to regenerate committed RequiredIR blocks. ALWAYS pair with `filter`: unfiltered it rewrites every golden in the suite.", devOnly: true))
+	specProps.push(str("log", description: "Passed to --log=<value> (e.g. 'ir:debug').", devOnly: true))
+	specProps.push(flag("network", description: "Pass --network to ALSO run live network fragments.", devOnly: true))
+	specProps.push(str("target", description: "Cross-compile target passed to --target=<value> (e.g. 'wasm32-wasi').", devOnly: true))
+	specProps.push(whole("workers", description: "Number of worker subprocesses (--workers=<n>). A debugging tool; the suite's own count is the default.", devOnly: true))
+	specProps.push(repoRootProperty())
+	tools.push(McpToolSpec.create("run_spec_test", description: "Run the Maxon spec-test suite, optionally filtered, returning structured pass/fail counts.", properties: specProps, devOnly: true))
+
+	var scaleProps = McpPropertyArray.create()
+	scaleProps.push(whole("rungs", description: "How many rungs of the ladder to climb (1-8, default 6). Each rung DOUBLES the program.", devOnly: true))
+	scaleProps.push(whole("repeat", description: "How many times each rung is compiled (1-25, default 3). CPU takes minimum; memory cross-checks.", devOnly: true))
+	scaleProps.push(str("note", description: "Record this run in docs/optimization-log.md with this text as the reason.", devOnly: true))
+	scaleProps.push(str("emitCorpus", description: "Dump the generated corpus to this directory and compile nothing.", devOnly: true))
+	scaleProps.push(str("log", description: "Passed to --log=<value>.", devOnly: true))
+	scaleProps.push(repoRootProperty())
+	tools.push(McpToolSpec.create("run_scale_test", description: "Run the scaling INSTRUMENT: compile a doubling ladder and report per-phase memory and CPU. It has no verdict — the RATIO between rungs is the reading.", properties: scaleProps, devOnly: true))
+
+	var outcomeProps = McpPropertyArray.create()
+	outcomeProps.push(str("filter", description: "Passed to --filter=<pattern>. ONE CASE-SENSITIVE substring, typically a label like 'arithmetic/addition'.", required: true, devOnly: true))
+	outcomeProps.push(str("target", description: "Cross-compile target passed to --target=<value>.", devOnly: true))
+	outcomeProps.push(flag("network", description: "Pass --network to ALSO run live network fragments.", devOnly: true))
+	outcomeProps.push(repoRootProperty())
+	tools.push(McpToolSpec.create("spec_test_outcome", description: "Run spec-tests with a filter, returning structured per-test PASS/FAIL entries plus a failure summary.", properties: outcomeProps, devOnly: true))
+
+	return tools
+end 'mcpToolRoster'
+
+export function findToolSpec(name String, devMode bool) returns McpToolSpec throws McpError
+	for spec in mcpToolRoster() 'each'
+		if spec.name.equals(name) and spec.visibleIn(devMode) 'hit'
+			return spec
+		end 'hit'
+	end 'each'
+
+	throw McpError.notFound
+end 'findToolSpec'
+
+// =============================================================================
+// Argument validation
+// =============================================================================
+
+// Why an `arguments` object was refused. Each names the gap rather than merely the key, so a caller
+// reads what is missing rather than a usage dump.
+export union ArgumentFault
+	unknown(key String, tool String)
+	devOnly(key String, tool String)
+	missing(key String, tool String)
+	wrongType(key String, tool String, expected String)
+end 'ArgumentFault'
+
+export function argumentFaultReason(fault ArgumentFault) returns String
+	return match fault 'f'
+		unknown(key, tool) gives "`{tool}` has no argument `{key}`. Setting an argument a tool does not read would be silently ignored, so it is refused instead."
+		devOnly(key, tool) gives "`{key}` on `{tool}` is a compiler-contributor argument and this server was started without --dev."
+		missing(key, tool) gives "`{tool}` requires the `{key}` argument."
+		wrongType(key, tool, expected) gives "`{key}` on `{tool}` must be of type {expected}."
+	end 'f'
+end 'argumentFaultReason'
+
+// Declared above `McpProperty.accepts`, which is its only caller.
+function propertyTypeAccepts(jsonType String, kind JsonKind) returns bool
+	if jsonType.equals("string") 'str'
+		return kind == JsonKind.jsonString
+	end 'str'
+
+	if jsonType.equals("boolean") 'bool'
+		return kind == JsonKind.jsonBool
+	end 'bool'
+
+	if jsonType.equals("integer") or jsonType.equals("number") 'num'
+		return kind == JsonKind.jsonNumber
+	end 'num'
+
+	if jsonType.equals("array") 'arr'
+		return kind == JsonKind.jsonArray
+	end 'arr'
+
+	if jsonType.equals("object") 'obj'
+		return kind == JsonKind.jsonObject
+	end 'obj'
+
+	panic("propertyTypeAccepts: the roster declares no JSON type `{jsonType}`")
+end 'propertyTypeAccepts'
+
+function findProperty(spec McpToolSpec, key String) returns McpProperty throws McpError
+	for prop in spec.properties 'each'
+		if prop.name.equals(key) 'hit'
+			return prop
+		end 'hit'
+	end 'each'
+
+	throw McpError.notFound
+end 'findProperty'
+
+// Check every key the caller SENT against the roster, then every key the roster REQUIRES against what
+// arrived. Walking the arrivals is what catches the argument nobody anticipated.
+export function validateToolArguments(doc JsonDoc, args OptionalNode, spec McpToolSpec, devMode bool) throws ArgumentFault
+	let present = argumentsGiven(args)
+	let argsId = argumentsNode(args)
+
+	if present 'checkArrivals'
+		let node = doc.get(argsId)
+
+		for (iter, key) in node.keys.withIterator() 'eachArrival'
+			let prop = try findProperty(spec, key: key) otherwise throw ArgumentFault.unknown(key, tool: spec.name)
+
+			if prop.devOnly and not devMode 'refusedInUserMode'
+				throw ArgumentFault.devOnly(key, tool: spec.name)
+			end 'refusedInUserMode'
+
+			let valueId = try node.children.get(iter.index()) otherwise panic("validateToolArguments: keys and children disagree in length")
+
+			if not prop.accepts(doc.get(valueId).kind) 'wrongShape'
+				throw ArgumentFault.wrongType(key, tool: spec.name, expected: prop.acceptedTypes())
+			end 'wrongShape'
+		end 'eachArrival'
+	end 'checkArrivals'
+
+	for prop in spec.properties 'eachRequired'
+		if not prop.required 'optional'
+			continue
+		end 'optional'
+
+		if not present or not objectHasKey(doc, parent: argsId, key: prop.name) 'absent'
+			throw ArgumentFault.missing(prop.name, tool: spec.name)
+		end 'absent'
+	end 'eachRequired'
+end 'validateToolArguments'

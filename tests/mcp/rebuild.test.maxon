@@ -1,72 +1,60 @@
-// rebuild.test.maxon — Tests rebuilding the compiler while the MCP server is actively running.
+// A running MCP server survives its own executable being replaced on disk.
 //
-// Verifies:
-// 1. An MCP server process can be spawned and initialized.
-// 2. The MCP server can execute a self-rebuild of the compiler (`build maxon-bin`).
-// 3. During self-rebuild, the running executable image is safely vacated to `.previous`
-//    on Windows and a fresh compiler executable is written to disk.
-// 4. The running MCP server process survives image replacement and continues responding
-//    to subsequent JSON-RPC tool calls (e.g. `lookup_error_code`).
-// 5. The newly built compiler binary on disk is valid and executable.
-// 6. The MCP server terminates cleanly (exit code 0) upon stdin close.
+// A compiler rebuilding its own slot RENAMES its running image to `.previous` — an OS will not let a
+// running executable be deleted, but will let one be renamed — and writes the new one in its place.
+// An MCP server started FROM that slot is a live process whose image is vacated underneath it, and
+// the question is whether it keeps answering.
 //
-// ⚠ REBUILDING THE COMPILER COMPILES ~160,000 LINES OF CODE:
-// This test takes ~25 seconds and exceeds the default 5,000 ms test deadline.
-// Run this test with a raised timeout:
-//   maxon test tests/mcp -t=rebuild --timeout=60000
+// ⛔ THE CASE STAGES ITS OWN COPY AND REPLACES THAT. Driving a real `build maxon-bin` here would
+// rebuild the tree's compiler as a side effect of running the corpus — and a FAILED build leaves the
+// slot EMPTY, so a red test would take the checkout's compiler with it. The property under test is
+// the OS's, not the build's: rename the image, write another in its place, and ask the process.
 
-test 'compiler can be rebuilt while mcp server is running'
-	var session = StreamingMcpSession.start(true)
+let StagedDirName = "temp/mcp-rebuild"
 
-	// 1. Initialize handshake
+function stagedCopyOf(binary FilePath, name String) returns FilePath
+	let dir = try FilePath.from(StagedDirName) otherwise panic("`{StagedDirName}` is a valid path")
+	let resolved = dir.resolve(Directory.currentPath())
+
+	if not Directory.create(resolved) and not Directory.isDirectory(resolved) 'unusable'
+		panic("could not create {resolved.path}, where this case stages its compiler copy")
+	end 'unusable'
+
+	let target = try FilePath.from("{resolved.path}/{name}{executableSuffix()}") otherwise panic("staged path is valid")
+	let bytes = try File.readBinary(binary) otherwise panic("could not read {binary.path}")
+	try File.writeBinary(target, content: bytes, mode: FilePermission.executable) otherwise panic("could not write {target.path}")
+
+	return target
+end 'stagedCopyOf'
+
+test 'mcp server keeps answering after its executable is replaced on disk'
+	let staged = stagedCopyOf(testedCompilerPath(), name: "maxon-under-test")
+
+	var session = StreamingMcpSession.startFrom(staged, devMode: false)
+
 	try session.sendLine(initRequest(1))
 	let initDoc = try session.readResponseDoc()
-	let initResId = resultNode(initDoc)
-	try Expect.isTrue(hasChildKey(initDoc, parent: initResId, key: "serverInfo"), message: "initialize response missing serverInfo")
+	try Expect.isTrue(hasChildKey(initDoc, parent: resultNode(initDoc), key: "serverInfo"), message: "initialize response missing serverInfo")
 
-	// 2. Initialized notification
 	try session.sendLine(initializedNotification())
 
-	// 3. Request compiler rebuild via MCP 'build' tool
-	try session.sendLine(toolCallRequest(2, name: "build", argumentsJson: "\{\"path\":\"maxon-bin\"\}"))
-	let buildDoc = try session.readResponseDoc()
-	try Expect.isFalse(toolCallIsError(buildDoc), message: "rebuild failed: {toolCallText(buildDoc)}")
+	// Vacate the running image exactly as a self-rebuild does, then put a fresh one back.
+	let vacated = try FilePath.from("{staged.path}.previous") otherwise panic("vacated path is valid")
+	try File.delete(vacated) otherwise ignore
+	try File.rename(staged, to: vacated) otherwise panic("could not rename the running image out of the way")
 
-	let buildText = toolCallText(buildDoc)
-	try Expect.isTrue(buildText.contains("Compiled -> maxon-bin"), message: "build output should confirm 'Compiled -> maxon-bin', got: {buildText}")
+	let replacement = stagedCopyOf(testedCompilerPath(), name: "maxon-under-test")
+	try Expect.isTrue(File.exists(replacement), message: "a replacement image should now sit at the vacated path")
 
-	// 4. Verify that while the server is STILL running, it continues responding to requests.
-	// The binary on disk was replaced while this process was executing.
-	try session.sendLine(toolCallRequest(3, name: "lookup_error_code", argumentsJson: "\{\"code\":\"E3014\"\}"))
+	// The process was started from an image that no longer exists at that path.
+	try session.sendLine(toolCallRequest(2, name: "lookup_error_code", argumentsJson: "\{\"code\":\"E3014\"\}"))
 	let lookupDoc = try session.readResponseDoc()
-	try Expect.isFalse(toolCallIsError(lookupDoc), message: "lookup_error_code failed after rebuild: {toolCallText(lookupDoc)}")
+	try Expect.isFalse(toolCallIsError(lookupDoc), message: "the server should still answer after its image was replaced: {toolCallText(lookupDoc)}")
+	try Expect.equal(payloadString(lookupDoc, key: "code"), expected: "E3014")
 
-	let lookupText = toolCallText(lookupDoc)
-	try Expect.isTrue(lookupText.contains("E3014"), message: "lookup text should describe E3014, got: {lookupText}")
-
-	// 5. Verify the on-disk binary exists
-	let compilerPath = testedCompilerPath()
-	try Expect.isTrue(File.exists(compilerPath), message: "newly built compiler should exist at {compilerPath.toString()}")
-
-	// 6. Verify the newly built compiler executes successfully
-	var versionConfig = Configuration.create(Executable.path(compilerPath))
-	var versionArgs = StringArray.create()
-	versionArgs.push("version")
-	versionConfig.arguments = versionArgs
-	let versionRun = try versionConfig.run() otherwise (e) 'versionFailed'
-		panic("failed to run version on newly built compiler: {e.displayReason()}")
-	end 'versionFailed'
-	try Expect.equal(versionRun.exitCode() as AssertedInt, expected: 0, message: "newly built compiler should exit 0 on version")
-
-	// 7. Cleanly shut down the MCP server
 	let exitCode = try session.close()
-	try Expect.equal(exitCode as AssertedInt, expected: 0, message: "mcp-server should exit cleanly with 0 on stdin EOF")
+	try Expect.equal(exitCode as AssertedInt, expected: 0, message: "mcp-server should exit 0 on stdin EOF")
 
-	// 8. Clean up the vacated .previous image now that the running process has exited
-	let previousSpelled = "maxon-bin/.maxon/maxon.previous{executableSuffix()}"
-	let previousRelative = try FilePath.from(previousSpelled) otherwise panic("invalid previous path")
-	let previousPath = previousRelative.resolve(Directory.currentPath())
-	if File.exists(previousPath) 'cleanupPrevious'
-		try File.delete(previousPath) otherwise ignore
-	end 'cleanupPrevious'
-end 'compiler can be rebuilt while mcp server is running'
+	try File.delete(vacated) otherwise ignore
+	try File.delete(replacement) otherwise ignore
+end 'mcp server keeps answering after its executable is replaced on disk'

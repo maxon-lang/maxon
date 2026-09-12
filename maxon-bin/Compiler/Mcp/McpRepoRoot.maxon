@@ -1,0 +1,160 @@
+// WHICH TREE, and WHICH COMPILER IN IT.
+//
+// One stdio server process is shared by every agent in every worktree, and its working directory
+// belongs to the MCP host rather than to the caller. The server cannot guess the tree, so a dev-mode
+// caller names it with `repoRoot` and every answer echoes back the one that was used.
+//
+// ⛔ The compiler resolves `stdlib/` by walking UP from its own EXECUTABLE. Running this server's own
+// binary against another tree's sources would therefore compile that tree against the SERVER's
+// standard library — a build that succeeds and answers about a library that is not the caller's. So a
+// tool acting on a tree runs THAT TREE's compiler, and refuses when it has not been built.
+
+export let SlashByte = 0x2F as Byte
+export let BackslashByte = 0x5C as Byte
+
+let StdlibMarkerDir = "stdlib"
+let CompilerMarkerDir = "maxon-bin"
+let CompilerSlotStem = "maxon-bin/.maxon/maxon"
+
+// A checkout nests at most a handful of levels below the executable that lives in it. The bound
+// exists so a path that is its own parent cannot spin forever.
+let MaxRepoRootWalkDepth = 16
+
+// The tree to act in, or why there is none. A struct rather than a union because a match arm holds
+// ONE statement and every caller's failure path is "report it, then stop".
+export type ResolvedRoot
+	export var path as FilePath
+	export var error as String
+
+	static function found(path FilePath) returns ResolvedRoot
+		return Self{path: path, error: ""}
+	end 'found'
+
+	static function refused(reason String) returns ResolvedRoot
+		return Self{path: currentDirPath(), error: reason}
+	end 'refused'
+
+	export function ok() returns bool
+		return self.error.isEmpty()
+	end 'ok'
+end 'ResolvedRoot'
+
+export function childPath(parent FilePath, segment String) returns FilePath
+	let joined = "{parent.path}/{segment}"
+	return try FilePath.from(joined) otherwise panic("childPath: `{joined}` is not a valid path")
+end 'childPath'
+
+export function currentDirPath() returns FilePath
+	return try FilePath.from(".") otherwise panic("`.` is a valid path on every host")
+end 'currentDirPath'
+
+function parentDirOrThrow(path FilePath) returns FilePath throws McpError
+	let bytes = path.path.toByteArray()
+	let n = bytes.count()
+	var i = n
+
+	while i > 0 'scan'
+		i = i - 1
+		let b = try bytes.get(i) otherwise panic("parentDirOrThrow: {i} is outside a range derived from the path's own length")
+
+		if b != SlashByte and b != BackslashByte 'notSep'
+			continue
+		end 'notSep'
+
+		if i == 0 'leadingSep'
+			if n == 1 'isPosixRoot'
+				throw McpError.notFound
+			end 'isPosixRoot'
+
+			let root = sliceBytes(bytes, from: 0, until: 1)
+			return try FilePath.from(root) otherwise panic("parentDirOrThrow: a lone separator is a valid path")
+		end 'leadingSep'
+
+		let parentStr = sliceBytes(bytes, from: 0, until: i)
+		return try FilePath.from(parentStr) otherwise panic("parentDirOrThrow: a prefix of a valid path is a valid path")
+	end 'scan'
+
+	throw McpError.notFound
+end 'parentDirOrThrow'
+
+function isMaxonCheckout(dir FilePath) returns bool
+	if not Directory.exists(childPath(dir, segment: StdlibMarkerDir)) 'noStdlib'
+		return false
+	end 'noStdlib'
+
+	return Directory.exists(childPath(dir, segment: CompilerMarkerDir))
+end 'isMaxonCheckout'
+
+function findRepoRoot(exePath FilePath) returns FilePath throws McpError
+	var dir = try parentDirOrThrow(exePath)
+
+	for _ in 0 upto MaxRepoRootWalkDepth 'walk'
+		if dir.isAbsolute() and isMaxonCheckout(dir) 'found'
+			return dir
+		end 'found'
+
+		dir = try parentDirOrThrow(dir)
+	end 'walk'
+
+	throw McpError.notFound
+end 'findRepoRoot'
+
+// The tree a dev-mode tool acts in: the caller's `repoRoot` when it names one, otherwise the checkout
+// this server's own binary sits in.
+export function resolveTargetRepoRoot(reqDoc JsonDoc, args OptionalNode, exePath FilePath) returns ResolvedRoot
+	let raw = getOptionalStringArg(reqDoc, args: args, key: "repoRoot", defaultVal: "")
+
+	if raw.isEmpty() 'noExplicit'
+		let discovered = try findRepoRoot(exePath) otherwise 'noDisc'
+			return ResolvedRoot.refused("no `repoRoot` was given and this compiler does not sit inside a Maxon checkout, so there is no tree to act on. Pass `repoRoot` as an absolute path.")
+		end 'noDisc'
+
+		return ResolvedRoot.found(discovered)
+	end 'noExplicit'
+
+	let candidate = try FilePath.from(raw) otherwise return ResolvedRoot.refused("repoRoot \"{raw}\" is not a valid filesystem path")
+
+	// A relative path would resolve against the SERVER's working directory, which belongs to the MCP
+	// host and is never the caller's.
+	if not candidate.isAbsolute() 'notAbs'
+		return ResolvedRoot.refused("repoRoot \"{raw}\" is relative. It must be an absolute path to a Maxon checkout.")
+	end 'notAbs'
+
+	if not isMaxonCheckout(candidate) 'notCheckout'
+		return ResolvedRoot.refused("repoRoot \"{candidate.path}\" is not a Maxon checkout (missing {StdlibMarkerDir}/ or {CompilerMarkerDir}/)")
+	end 'notCheckout'
+
+	return ResolvedRoot.found(candidate)
+end 'resolveTargetRepoRoot'
+
+// Where a tree's own compiler lives, built or not.
+function compilerBinaryPath(repoRoot FilePath) returns FilePath
+	return childPath(repoRoot, segment: "{CompilerSlotStem}{hostExecutableExtension()}")
+end 'compilerBinaryPath'
+
+// A tree's compiler, refusing when the slot is empty. A FAILED build leaves it empty rather than
+// reinstating anything, so "not built yet" and "the last build failed" arrive here the same way and
+// both want the same answer: build it.
+export function compilerBinary(repoRoot FilePath) returns FilePath throws McpError
+	let path = compilerBinaryPath(repoRoot)
+
+	if not File.exists(path) 'missing'
+		throw McpError.notFound
+	end 'missing'
+
+	return path
+end 'compilerBinary'
+
+export function compilerBinaryMissingReason(repoRoot FilePath) returns String
+	return "{compilerBinaryPath(repoRoot).path} does not exist — that tree's compiler has not been built, or its last build failed and left the slot empty. Build it with the `build` tool first."
+end 'compilerBinaryMissingReason'
+
+export function formatArgv(exePath FilePath, argv StringArray) returns String
+	var out = exePath.path
+
+	for a in argv 'each'
+		out = "{out} {a}"
+	end 'each'
+
+	return out
+end 'formatArgv'

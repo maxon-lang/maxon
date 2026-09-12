@@ -1,166 +1,101 @@
-// dev.test.maxon — Tests for `maxon mcp-server --dev` (compiler contributor mode).
+// `maxon mcp-server --dev` — the mode that serves someone working on the COMPILER.
 //
-// Verifies:
-// 1. All 11 tools advertised (8 standard + 3 dev tools)
-// 2. Build tool inputSchema exposes `repoRoot` and `from`
-// 3. Contributor tools inputSchemas expose required arguments
-// 4. `repoRoot` validation (relative path refusal, non-checkout refusal)
-// 5. Argument validation for contributor tools (from, filter, repoRoot)
+// Gates the eleven tools, the `repoRoot` and `from` arguments, and the two facts a caller in a
+// worktree cannot check any other way: that a refusal names the tree it refused, and that an answer
+// ECHOES the tree it acted in.
 
-test 'dev mcp-server tools/list advertises 11 tools including contributor tools'
-	var reqs = StringArray.create()
-	reqs.push(initRequest(1))
-	reqs.push(toolsListRequest(2))
+#if os(Windows)
+	let NonCheckoutDir = "C:/no_such_checkout"
+#else
+	let NonCheckoutDir = "/no_such_checkout"
+#endif
 
-	let run = runMcp(reqs, devMode: true)
-	let docs = responseDocs(run)
-	let doc = try docs.get(1) otherwise panic("no tools/list doc")
+// The worktree this corpus runs in, as an absolute path — a real checkout to name in `repoRoot`.
+function thisCheckout() returns String
+	return Directory.currentPath().path
+end 'thisCheckout'
 
-	let names = toolNames(doc)
-	try Expect.equal(names.count() as AssertedInt, expected: 11, message: "dev mcp-server must advertise exactly 11 tools")
+// The same path, escaped for the hand-built JSON these cases send.
+function thisCheckoutJson() returns String
+	return jsonEscaped(thisCheckout())
+end 'thisCheckoutJson'
 
-	// Standard tools
-	try Expect.isTrue(containsString(names, target: "build"))
-	try Expect.isTrue(containsString(names, target: "run"))
-	try Expect.isTrue(containsString(names, target: "test"))
-	try Expect.isTrue(containsString(names, target: "fmt"))
-	try Expect.isTrue(containsString(names, target: "check"))
-	try Expect.isTrue(containsString(names, target: "dump_ir"))
-	try Expect.isTrue(containsString(names, target: "lookup_error_code"))
-	try Expect.isTrue(containsString(names, target: "info"))
+test 'dev mcp-server advertises the eight user tools plus the three contributor tools'
+	let names = toolNames(listTools(true))
+	try Expect.equal(names.count() as AssertedInt, expected: 11, message: "dev mode must advertise exactly 11 tools")
 
-	// Contributor tools
-	try Expect.isTrue(containsString(names, target: "run_spec_test"), message: "missing run_spec_test in dev mode")
-	try Expect.isTrue(containsString(names, target: "run_scale_test"), message: "missing run_scale_test in dev mode")
-	try Expect.isTrue(containsString(names, target: "spec_test_outcome"), message: "missing spec_test_outcome in dev mode")
-end 'dev mcp-server tools/list advertises 11 tools including contributor tools'
+	try Expect.isTrue(containsString(names, target: "run_spec_test"), message: "missing run_spec_test")
+	try Expect.isTrue(containsString(names, target: "run_scale_test"), message: "missing run_scale_test")
+	try Expect.isTrue(containsString(names, target: "spec_test_outcome"), message: "missing spec_test_outcome")
+	try Expect.isTrue(containsString(names, target: "build"), message: "missing build")
+	try Expect.isTrue(containsString(names, target: "info"), message: "missing info")
+end 'dev mcp-server advertises the eight user tools plus the three contributor tools'
 
-test 'dev mcp-server build tool inputSchema exposes repoRoot and from'
-	var reqs = StringArray.create()
-	reqs.push(initRequest(1))
-	reqs.push(toolsListRequest(2))
+test 'dev mcp-server exposes repoRoot on every tool that acts in a tree'
+	let doc = listTools(true)
 
-	let run = runMcp(reqs, devMode: true)
-	let docs = responseDocs(run)
-	let doc = try docs.get(1) otherwise panic("no doc")
+	let buildProps = toolPropertyKeys(doc, toolName: "build")
+	try Expect.isTrue(containsString(buildProps, target: "repoRoot"), message: "build must take repoRoot in dev mode")
+	try Expect.isTrue(containsString(buildProps, target: "from"), message: "build must take from in dev mode")
 
-	let props = toolPropertyKeys(doc, toolName: "build")
-	try Expect.isTrue(containsString(props, target: "path"))
-	try Expect.isTrue(containsString(props, target: "output"))
-	try Expect.isTrue(containsString(props, target: "target"))
-	try Expect.isTrue(containsString(props, target: "emitIr"))
-	try Expect.isTrue(containsString(props, target: "repoRoot"), message: "repoRoot must be exposed in dev mode")
-	try Expect.isTrue(containsString(props, target: "from"), message: "from must be exposed in dev mode")
-end 'dev mcp-server build tool inputSchema exposes repoRoot and from'
+	for tool in ["run_spec_test", "run_scale_test", "spec_test_outcome"] 'each'
+		try Expect.isTrue(containsString(toolPropertyKeys(doc, toolName: tool), target: "repoRoot"), message: "{tool} must take repoRoot")
+	end 'each'
+end 'dev mcp-server exposes repoRoot on every tool that acts in a tree'
 
-test 'dev mcp-server contributor tools expose repoRoot in inputSchema'
-	var reqs = StringArray.create()
-	reqs.push(initRequest(1))
-	reqs.push(toolsListRequest(2))
+test 'dev mcp-server refuses a relative repoRoot on every tool that takes one'
+	for tool in ["build", "run_spec_test", "run_scale_test"] 'each'
+		let doc = callTool(tool, argumentsJson: "\{\"repoRoot\":\"relative/path\"\}", devMode: true)
 
-	let run = runMcp(reqs, devMode: true)
-	let docs = responseDocs(run)
-	let doc = try docs.get(1) otherwise panic("no doc")
+		try Expect.isTrue(toolCallIsError(doc), message: "{tool} must refuse a relative repoRoot")
+		try Expect.contains(toolCallText(doc), needle: "is relative. It must be an absolute path")
+	end 'each'
 
-	let specProps = toolPropertyKeys(doc, toolName: "run_spec_test")
-	try Expect.isTrue(containsString(specProps, target: "repoRoot"))
-	try Expect.isTrue(containsString(specProps, target: "filter"))
+	// `spec_test_outcome` requires a filter, so its relative-root refusal has to carry one.
+	let outcome = callTool("spec_test_outcome", argumentsJson: "\{\"repoRoot\":\"relative/path\",\"filter\":\"x\"\}", devMode: true)
+	try Expect.isTrue(toolCallIsError(outcome), message: "spec_test_outcome must refuse a relative repoRoot")
+	try Expect.contains(toolCallText(outcome), needle: "is relative. It must be an absolute path")
+end 'dev mcp-server refuses a relative repoRoot on every tool that takes one'
 
-	let scaleProps = toolPropertyKeys(doc, toolName: "run_scale_test")
-	try Expect.isTrue(containsString(scaleProps, target: "repoRoot"))
-	try Expect.isTrue(containsString(scaleProps, target: "rungs"))
-
-	let outcomeProps = toolPropertyKeys(doc, toolName: "spec_test_outcome")
-	try Expect.isTrue(containsString(outcomeProps, target: "repoRoot"))
-	try Expect.isTrue(containsString(outcomeProps, target: "filter"))
-end 'dev mcp-server contributor tools expose repoRoot in inputSchema'
-
-test 'dev mcp-server relative repoRoot is refused'
-	var reqs = StringArray.create()
-	reqs.push(initRequest(1))
-	reqs.push(toolCallRequest(2, name: "build", argumentsJson: "\{\"repoRoot\":\"relative/path\"\}"))
-
-	let run = runMcp(reqs, devMode: true)
-	let docs = responseDocs(run)
-	let doc = try docs.get(1) otherwise panic("no call doc")
-
-	try Expect.isTrue(toolCallIsError(doc), message: "relative repoRoot must be an error")
-	let text = toolCallText(doc)
-	try Expect.contains(text, needle: "is relative. It must be an absolute path")
-end 'dev mcp-server relative repoRoot is refused'
-
-test 'dev mcp-server non-checkout repoRoot is refused'
-	#if os(Windows)
-		let nonCheckout = "C:/non_checkout_dir"
-	#else
-		let nonCheckout = "/non_checkout_dir"
-	#endif
-
-	var reqs = StringArray.create()
-	reqs.push(initRequest(1))
-	reqs.push(toolCallRequest(2, name: "build", argumentsJson: "\{\"repoRoot\":\"{nonCheckout}\"\}"))
-
-	let run = runMcp(reqs, devMode: true)
-	let docs = responseDocs(run)
-	let doc = try docs.get(1) otherwise panic("no call doc")
-
-	try Expect.isTrue(toolCallIsError(doc), message: "non-checkout repoRoot must be an error")
-	let text = toolCallText(doc)
-	try Expect.contains(text, needle: "is not a Maxon checkout")
-end 'dev mcp-server non-checkout repoRoot is refused'
-
-test 'dev mcp-server spec_test_outcome requires filter argument'
-	var reqs = StringArray.create()
-	reqs.push(initRequest(1))
-	reqs.push(toolCallRequest(2, name: "spec_test_outcome", argumentsJson: "\{\}"))
-
-	let run = runMcp(reqs, devMode: true)
-	let docs = responseDocs(run)
-	let doc = try docs.get(1) otherwise panic("no call doc")
+test 'dev mcp-server refuses a repoRoot that is not a checkout'
+	let doc = callTool("build", argumentsJson: "\{\"repoRoot\":\"{NonCheckoutDir}\"\}", devMode: true)
 
 	try Expect.isTrue(toolCallIsError(doc))
-	let text = toolCallText(doc)
-	try Expect.contains(text, needle: "Missing required 'filter' argument")
-end 'dev mcp-server spec_test_outcome requires filter argument'
+	try Expect.contains(toolCallText(doc), needle: "is not a Maxon checkout")
+end 'dev mcp-server refuses a repoRoot that is not a checkout'
 
-test 'dev mcp-server build with nonexistent from binary is refused'
-	var reqs = StringArray.create()
-	reqs.push(initRequest(1))
-	reqs.push(toolCallRequest(2, name: "build", argumentsJson: "\{\"from\":\"nonexistent/compiler/binary.exe\"\}"))
+// ⭐ ONE server process serves every worktree, so "which tree did that act in?" is a question the
+// caller cannot answer from their own side. Every answer carries it.
+//
+// `build` is the cheap one of the four: `run_spec_test` pays for a worker pool before it can answer
+// anything, and this case is about the echo rather than about a suite.
+test 'dev mcp-server echoes the repoRoot it acted in'
+	let doc = callTool("build", argumentsJson: "\{\"repoRoot\":\"{thisCheckoutJson()}\",\"path\":\"no-such-source.maxon\"\}", devMode: true)
 
-	let run = runMcp(reqs, devMode: true)
-	let docs = responseDocs(run)
-	let doc = try docs.get(1) otherwise panic("no call doc")
+	try Expect.equal(payloadString(doc, key: "repoRoot"), expected: thisCheckout())
+	try Expect.contains(payloadString(doc, key: "command"), needle: "no-such-source.maxon")
+end 'dev mcp-server echoes the repoRoot it acted in'
 
-	try Expect.isTrue(toolCallIsError(doc), message: "nonexistent from binary must be an error")
-	let text = toolCallText(doc)
-	try Expect.contains(text, needle: "Compiler binary in 'from' does not exist")
-end 'dev mcp-server build with nonexistent from binary is refused'
+test 'dev mcp-server names the tree in a refusal too'
+	let doc = callTool("build", argumentsJson: "\{\"repoRoot\":\"{thisCheckoutJson()}\",\"from\":\"nowhere/at/all.exe\"\}", devMode: true)
 
-test 'dev mcp-server run_spec_test relative repoRoot is refused'
-	var reqs = StringArray.create()
-	reqs.push(initRequest(1))
-	reqs.push(toolCallRequest(2, name: "run_spec_test", argumentsJson: "\{\"repoRoot\":\"relative/path\"\}"))
+	try Expect.isTrue(toolCallIsError(doc))
+	try Expect.contains(toolCallText(doc), needle: "does not exist")
+	try Expect.equal(payloadString(doc, key: "repoRoot"), expected: thisCheckout())
+end 'dev mcp-server names the tree in a refusal too'
 
-	let run = runMcp(reqs, devMode: true)
-	let docs = responseDocs(run)
-	let doc = try docs.get(1) otherwise panic("no call doc")
+test 'dev mcp-server requires a filter for spec_test_outcome'
+	let doc = callTool("spec_test_outcome", argumentsJson: "\{\}", devMode: true)
 
-	try Expect.isTrue(toolCallIsError(doc), message: "relative repoRoot for run_spec_test must be an error")
-	let text = toolCallText(doc)
-	try Expect.contains(text, needle: "is relative. It must be an absolute path")
-end 'dev mcp-server run_spec_test relative repoRoot is refused'
+	try Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: -32602)
+	try Expect.contains(rpcErrorMessage(doc), needle: "requires the `filter` argument")
+end 'dev mcp-server requires a filter for spec_test_outcome'
 
-test 'dev mcp-server run_scale_test relative repoRoot is refused'
-	var reqs = StringArray.create()
-	reqs.push(initRequest(1))
-	reqs.push(toolCallRequest(2, name: "run_scale_test", argumentsJson: "\{\"repoRoot\":\"relative/path\"\}"))
+// ⛔ An `mmTrace: true` run that never traced, reported back as a clean success, is
+// indistinguishable from a leak-free run.
+test 'dev mcp-server refuses a flag the compiler cannot honour'
+	let doc = callTool("run_spec_test", argumentsJson: "\{\"mmTrace\":true\}", devMode: true)
 
-	let run = runMcp(reqs, devMode: true)
-	let docs = responseDocs(run)
-	let doc = try docs.get(1) otherwise panic("no call doc")
-
-	try Expect.isTrue(toolCallIsError(doc), message: "relative repoRoot for run_scale_test must be an error")
-	let text = toolCallText(doc)
-	try Expect.contains(text, needle: "is relative. It must be an absolute path")
-end 'dev mcp-server run_scale_test relative repoRoot is refused'
+	try Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: -32602)
+	try Expect.contains(rpcErrorMessage(doc), needle: "has no argument `mmTrace`")
+end 'dev mcp-server refuses a flag the compiler cannot honour'
