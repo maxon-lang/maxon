@@ -1865,10 +1865,13 @@ end 'encodePrologue'
 //     sub  r11, stackSize
 //   walk:
 //     sub  rsp, 4096         ; rsp IS the cursor — no second register to find
-//     mov  [rsp], r11        ; TOUCH. The value is irrelevant; the ACCESS is the point
 //     cmp  rsp, r11
-//     ja   walk
+//     jbe  land              ; the next touch would be BELOW the frame — stop walking
+//     mov  [rsp], r11        ; TOUCH. The value is irrelevant; the ACCESS is the point
+//     jmp  walk
+//   land:
 //     mov  rsp, r11          ; land exactly on the frame base
+//     mov  [rsp], r11        ; TOUCH the base's page, which the walk stopped short of
 //
 // ⭐ WHY rsp WALKS rather than a second scratch register cursored against a limit: a cursor plus a
 // limit is TWO dead
@@ -1877,19 +1880,20 @@ end 'encodePrologue'
 // `mov rsp, r11` IS the reservation, so there is no separate `sub rsp, stackSize` to keep in step
 // with the walk.
 //
-// ⚠ The last iteration may touch up to one page BELOW the frame base (the walk overshoots whenever
-// the frame is not a whole number of pages). It is harmless and it is not the bug this code exists
-// to prevent: at the instant of that store rsp
-// points AT the word being written, so nothing else owns it, and the only consequence is that the
-// OS commits one page the function will not use. Skipping a page costs a fault; touching a spare
-// one costs a page.
+// ⛔⛔ **NOT ONE BYTE IS TOUCHED BELOW THE FRAME BASE, AND THAT IS WHAT THE TEST-BEFORE-TOUCH SHAPE
+// BUYS.** A walk that touched first and compared after overshot the base by up to a page whenever the
+// frame is not a whole number of pages. On an OS-grown stack that costs a spare committed page; on a
+// GREEN THREAD's stack it is a SIGSEGV, because that stack is an exact mmap'd region whose size the
+// prologue's guard reserved from `frameBytes` alone — an overshoot walks off the bottom of it.
+// The walk still covers every page: consecutive touches are one page apart, and the base is less than
+// a page below the last of them, so no page is stepped over.
 //
-// ⚠ EMITTED ON EVERY x64 OS, NOT ONLY WINDOWS. Linux's default guard gap is 256 pages, so a frame
-// of this size is already safe there and this walk is redundant on that lane — but touching pages
+// ⚠ EMITTED ON EVERY x64 OS, NOT ONLY WINDOWS. Linux's default guard gap is 256 pages, so an OS
+// thread's stack is already safe there and this walk is redundant on that lane — but touching pages
 // you are about to write is never WRONG, the encoder has no target OS in hand (threading one down
 // to the byte layer would be a new fact to keep in step for a sequence that costs nothing), and it
-// is exactly what `-fstack-clash-protection` emits for the same instruction stream. The cost is
-// borne only by a function whose frame is past a page, of which the entire spec corpus has three.
+// is the discipline `-fstack-clash-protection` emits. The cost is borne only by a function whose
+// frame is past a page.
 function encodeStackProbe(code ByteArray, stackSize StackSize)
 	// The frame base, computed exactly as `emitGtStackGuard` computes its projected rsp — one
 	// idiom for "rsp minus a frame", not two. The cast bounds the frame at i32.max, which is the
@@ -1899,14 +1903,17 @@ function encodeStackProbe(code ByteArray, stackSize StackSize)
 
 	let walkStart = code.count()
 	encodeRspAdjust(code, ext: Grp1ExtSub, amount: StackGuardPageBytes)
-	encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: 0, srcReg: StackProbeScratchReg)
 	encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: X64Register.rsp, src: StackProbeScratchReg, wide: true)
 
-	// UNSIGNED `ja`: these are addresses, and a stack near the top of the address space would read
+	// UNSIGNED `jbe`: these are addresses, and a stack near the top of the address space would read
 	// as negative under a signed compare.
-	encodeJccBackward(code, cond: X64CondCode.above, targetOffset: walkStart, what: PatchSite.x64StackProbeRel32)
+	let toLanding = encodeJccPlaceholder(code, cond: X64CondCode.belowEqual)
+	encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: 0, srcReg: StackProbeScratchReg)
+	encodeJmpBackwardShort(code, targetOffset: walkStart)
 
+	patchLocalForwardBranch(code, dispOffset: toLanding, what: PatchSite.x64StackProbeRel32)
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rsp, src: StackProbeScratchReg, wide: true)
+	encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: 0, srcReg: StackProbeScratchReg)
 end 'encodeStackProbe'
 
 // epilogue: release the frame with `add rsp, stackSize` (mirror of prologue).

@@ -26,8 +26,8 @@ any function with six parameters or a small frame. The size now travels in R11: 
 argument register, and dead at function entry — the discipline `__gt_morestack` and the arm64 probe
 (X16/X17) already followed.
 
-The self-hosted backend emits no `__chkstk` (it allocates even large frames with a bare
-`sub rsp, imm32`) and never writes RAX in its prologue, so it cannot have this bug. The test still
+The self-hosted backend emits no `__chkstk`: it walks the pages INLINE
+(`X64Backend.encodeStackProbe`), borrowing R11 and never RAX, so it cannot have this bug. The test still
 runs there, and still asserts that a seventh parameter survives the prologue — its GT stack guard
 does execute — but note the two lanes are guarding different things.
 
