@@ -9,7 +9,7 @@ category: concurrency
 
 ## Documentation
 
-Network I/O operations (`TcpClient.connect`, `send`, `recv`, `close`) are non-blocking when called from green threads. They delegate to the sync worker thread, allowing other green threads to run while waiting for network operations to complete.
+Network I/O operations (`TcpClient.connect`, `send`, `recv`, `close`) are non-blocking when called from green threads. The descriptor itself is non-blocking and registered with the scheduler's network poller, so a call that cannot finish at once PARKS its green thread on that descriptor and hands the processor back; the poller readies it when the descriptor becomes readable or writable. A green thread waiting for a peer therefore holds no machine at all. (`specs/netpoll-socket.md` is that mechanism's own oracle; x64-windows keeps a blocking path and is marked there.)
 
 This enables `async`/`await` with TCP networking:
 

@@ -6,6 +6,13 @@ typealias NetworkPort = int(1 to 65535)
 // backing `__ManagedMemory`'s signed machine-word length is the ceiling.
 typealias BytePos = int(0 to u64.max)
 
+// A deadline in milliseconds, `0` meaning none. The ceiling is a REAL bound and not a round number: the value
+// becomes `now + milliseconds * 1_000_000` in signed 64-bit NANOSECONDS, so a count past about 9.2e12 ms wraps
+// NEGATIVE and yields a deadline permanently in the past — every read would then time out instantly. 2^32 - 1
+// ms is about 49 days, which is past any deadline a socket operation can mean and leaves four orders of
+// magnitude of headroom under the wrap.
+typealias Milliseconds = int(0 to 4294967295)
+
 /// TCP networking errors
 public enum NetworkError implements Error
 	resolveFailed
@@ -13,6 +20,7 @@ public enum NetworkError implements Error
 	sendFailed
 	recvFailed
 	connectionClosed
+	timedOut
 end 'NetworkError'
 
 /// TCP client connection. Automatically closes when it goes out of scope.
@@ -46,6 +54,12 @@ public type TcpClient
 		while remaining > 0 'send_loop'
 			// bufferOutOfBounds is impossible here: remaining <= bytes.length() by loop invariant.
 			let sent = try socket.sendFrom(bytes, totalSent, remaining) otherwise (e) 'sendErr'
+				// The deadline is a PREDICATE on the socket, not a variant of the builtin error: it says
+				// whether the call that just failed ran out of time rather than out of connection.
+				if socket.timedOut() 'late'
+					throw NetworkError.timedOut
+				end 'late'
+
 				match e 'matchSend'
 					bufferOutOfBounds then panic("TcpClient.send: sendFrom OOB — loop invariant violated")
 					default throws NetworkError.sendFailed
@@ -71,6 +85,11 @@ public type TcpClient
 		end 'createErr'
 
 		let received = try socket.recv(managed) otherwise 'recvErr'
+			// See `send` for why the deadline crosses as a predicate.
+			if socket.timedOut() 'late'
+				throw NetworkError.timedOut
+			end 'late'
+
 			throw NetworkError.recvFailed
 		end 'recvErr'
 
@@ -97,6 +116,24 @@ public type TcpClient
 
 		return String.init(managed)
 	end 'recv'
+
+	/// End a read that the peer leaves unanswered after `milliseconds`, with `NetworkError.timedOut`.
+	/// `0` clears the deadline. It is measured from this call, not from the read that observes it.
+	public function setReadDeadline(milliseconds Milliseconds) throws NetworkError
+		// The only failure the setter has is a socket that is already closed.
+		try socket.setReadDeadline(milliseconds) otherwise 'deadlineErr'
+			throw NetworkError.connectionClosed
+		end 'deadlineErr'
+	end 'setReadDeadline'
+
+	/// End a send that cannot make progress after `milliseconds`, with `NetworkError.timedOut`.
+	/// `0` clears the deadline. It is measured from this call, not from the send that observes it.
+	public function setWriteDeadline(milliseconds Milliseconds) throws NetworkError
+		// See `setReadDeadline`.
+		try socket.setWriteDeadline(milliseconds) otherwise 'deadlineErr'
+			throw NetworkError.connectionClosed
+		end 'deadlineErr'
+	end 'setWriteDeadline'
 
 	/// Explicitly close the connection.
 	/// Safe to call multiple times (idempotent).

@@ -1,0 +1,335 @@
+// Test: netpoll-socket.a-read-deadline-fires
+// Far above the 300 ms deadline and far below any kernel-side idle-read timeout: an elapsed reading under
+// this can only have come from the deadline itself.
+let promptMs = 3000
+
+function readPastTheDeadline() returns ExitCode throws NetworkError
+	let client = try TcpClient.connect("tcpbin.com", port: 4242)
+	try client.setReadDeadline(300)
+
+	var fired = false
+	let start = Clock.nowMs()
+
+	try client.recv(1024) otherwise (e) 'readErr'
+		match e 'check'
+			timedOut then fired = true
+			default panic("unreachable: nothing was sent, so only the read deadline can end this recv")
+		end 'check'
+	end 'readErr'
+
+	let tookMs = Clock.elapsedMs(start)
+	print("timedOut={fired} prompt={tookMs < promptMs}\n")
+	return 0
+end 'readPastTheDeadline'
+
+function main() returns ExitCode
+	let result = try readPastTheDeadline() otherwise 1
+	return result
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_timer_count@24 = i64 0
+  __gt_timer_heap_base@32 = i64 0
+  __gt_timer_capacity@40 = i64 0
+  __gt_timer_seq@48 = i64 0
+  __gt_timer_when@56 = i64 9223372036854775807
+  __gt_trace_counter@64 = i64 0
+  __gt_proc_count@72 = i64 0
+  __gt_proc_handles_base@80 = i64 0
+  __gt_proc_gts_base@88 = i64 0
+  __gt_live_count@96 = i64 0
+  __gt_seed_bytes@104 = i64 2048
+  __gt_stack_bytes_sum@112 = i64 0
+  __gt_stack_bytes_count@120 = i64 0
+  __gt_seed_sum_seen@128 = i64 0
+  __gt_seed_count_seen@136 = i64 0
+  __sched_active_workers@144 = i64 1
+  __sched_max_active_workers@152 = i64 1
+  __sched_tls_index@160 = i64 0
+  __sched_tls_teb_offset@168 = i64 0
+  __sched_procs@176 = i64 0
+  __sched_allm@184 = i64 0
+  __sched_midle@192 = i64 0
+  __sched_pidle@200 = i64 0
+  __gt_gfree_head@208 = i64 0
+  __sched_arena_cursor@216 = i64 0
+  __sched_arena_limit@224 = i64 0
+  __gt_records_carved@232 = i64 0
+  __sched_npidle@240 = i64 0
+  __sched_runq_size@248 = i64 0
+  __sched_global_pushes@256 = i64 0
+  __sched_mcount@264 = i64 0
+  __sched_nmidle@272 = i64 0
+  __sched_main_m@280 = i64 0
+  __sched_phase@288 = i64 0
+  __sched_lastpoll@296 = i64 0
+  __sched_poll_until@304 = i64 0
+  __sched_regain_head@312 = i64 0
+  __np_poller@320 = i64 0
+  __np_break@328 = i64 0
+  __np_wake_sig@336 = i64 0
+  __np_pd_table@344 = i64 0
+  __np_pd_cap@352 = i64 0
+  __np_waiters@360 = i64 0
+  __sched_num_procs@368 = i64 0
+  __sched_shutdown_flag@376 = i64 0
+  __sched_lock@384 = i64 0
+  __sched_lock_depth_sink@392 = i64 0
+  __sched_nmspinning@400 = i64 0
+  __sched_needspinning@408 = i64 0
+  __sched_sysmon_event@416 = i64 0
+  __sched_sysmon_wait@424 = i64 0
+  __sched_timer_starts@432 = i64 0
+  __mrt_envp@440 = i64 0
+  __mrt_tls_next_key@448 = i64 0
+  __mrt_errno@456 = i64 0
+  __mrt_tls_ready@464 = i64 0
+  __slab_arena_list@472 = i64 0
+  __slab_arena_map_l1@480 = i64 0
+  __slab_state@488 = i64 0
+}
+
+func @readPastTheDeadline {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 104
+    x64.leaRegRdata rcx, [rip + __str_rec_4]  ; "tcpbin.com"
+    x64.movRegImm32 rdx, 4242
+    x64.callDirect TcpClient.connect
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#1:
+    x64.movRegImm32 rdx, 300
+    x64.movRegReg rcx, rbx
+    x64.callDirect TcpClient.setReadDeadline
+    x64.movRegReg r12, r10
+    x64.cmpRegImm32 r12, 0
+    x64.jcc equal, tryok#3
+  tryerr#4:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_TcpClient
+    x64.movRegImm32 r8, 0
+    x64.movRegReg r10, r12
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#3:
+    x64.movRegImm32 r12, 0
+    x64.callDirect Clock.nowMs
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rdx, 1024
+    x64.movRegReg rcx, rbx
+    x64.callDirect TcpClient.recv
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#5
+  tryerr#6:
+    x64.leaRegRegImm32 rax, r10, -1
+    x64.cmpRegImm32 rax, 5
+    x64.jcc notEqual, matchdefault
+  matcharm:
+    x64.movRegImm32 rbx, 1
+    x64.jmp __il_body#13
+  matchdefault:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at netpoll-socket.a-read-deadline-fires.test:16: unreachable: nothing was sent, so only the read deadline can end this recv\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#5:
+    x64.movRegReg rcx, r8
+    x64.callDirect __str_decref
+    x64.movRegReg rbx, r12
+  __il_body#13:
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic#17
+  __rc_ok#16:
+    x64.callDirect Clock.nowMs
+    x64.cmpRegReg r8, r13
+    x64.jcc aboveEqual, ifcont
+  clockSkew:
+    x64.movRegImm32 r12, 0
+    x64.jmp __il_cont#12
+  ifcont:
+    x64.subRegReg r8, r8, r13
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#19
+  __rc_ok#18:
+    x64.movRegReg r12, r8
+  __il_cont#12:
+    x64.leaRegRdata rax, [rip + __str_rec_6]  ; "timedOut="
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot8, rcx
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.movRegImm32 rcx, 5
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot7, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __bool_to_string
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_7]  ; " prompt="
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot6, rcx
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.cmpRegImm32 r12, 3000
+    x64.setccReg below, r12
+    x64.movRegImm32 rcx, 5
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r15
+    x64.callDirect __bool_to_string
+    x64.storeSlotReg slot5, r8
+    x64.leaRegRdata rax, [rip + __str_rec_8]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot4, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot3, rax
+    x64.leaRegRegReg rcx, r13, rbx
+    x64.leaRegRegReg rcx, rcx, r14
+    x64.leaRegRegReg rcx, rcx, r8
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot1, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot2, r8
+    x64.leaRegRegImm32 r12, r8, 56
+    x64.loadRegSlot rdx, slot8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r13, r12, r13
+    x64.loadRegSlot rdx, slot7
+    x64.movRegReg rcx, r13
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r13, rbx
+    x64.loadRegSlot rdx, slot6
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r14
+    x64.loadRegSlot rax, slot5
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r15
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot5
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.loadRegSlot rax, slot3
+    x64.loadRegSlot rdx, slot4
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot3
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rax, slot2
+    x64.storeBaseDispReg.word64 [rax + 0], r12
+    x64.loadRegSlot rcx, slot1
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+    x64.loadRegSlot rcx, slot7
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_decref
+  __il_body#20:
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __write_stdout
+  __il_cont#11:
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __str_decref
+    x64.movRegImm32 rbx, 0
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_TcpClient
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, rbx
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#17:
+    x64.leaRegRdata rcx, [rip + __str_blob_16]  ; "panic at Clock.maxon:32: Range check failed: value outside typealias 'InstantMs'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#19:
+    x64.leaRegRdata rcx, [rip + __str_blob_17]  ; "panic at Clock.maxon:39: Range check failed: value outside typealias 'DurationMs'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect readPastTheDeadline
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, trycont
+  tryerr:
+    x64.movRegImm32 r8, 1
+  trycont:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

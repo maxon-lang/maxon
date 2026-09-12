@@ -880,6 +880,11 @@ export function lowerStdToX64(stdModule StdModule, target Target, globalData Glo
 	return (lowering.targetModule, valueClasses)
 end 'lowerStdToX64'
 
+// The width of a Win32 `int`, and the distance `emitCaptureWin32Int` shifts an answer up and back to
+// replicate its sign across the whole machine word — a C `int` answer arrives in EAX with RAX's upper
+// half whatever the callee left there.
+let Win32IntBits = 32 as ShiftCount
+
 type StdToX64Lowering
 	// Exported like `targetModule`: `lowerStdToX64` hands both to the shared `buildValueClassColumns`.
 	export var stdModule as StdModule
@@ -1051,6 +1056,7 @@ type StdToX64Lowering
 				osSocketCreate or
 				osSocketConnect or
 				osSocketSend or
+				osSocketError or
 				osSocketRecv or
 				osSocketClose or
 				osCpuCount or
@@ -1439,6 +1445,7 @@ type StdToX64Lowering
 			osSocketFreeAddrInfo(addrInfoPtrId) then self.lowerOsSocketFreeAddrInfo(addrInfoPtrId, dstBlock: dstBlock)
 			osSocketCreate(resultId) then self.lowerOsSocketCreate(resultId, dstBlock: dstBlock)
 			osSocketConnect(resultId, sockId, addrPtrId) then self.lowerOsSocketConnect(resultId, sockId: sockId, addrPtrId: addrPtrId, dstBlock: dstBlock)
+			osSocketError(resultId, sockId, valuePtrId, lenPtrId) then self.lowerOsSocketError(resultId, sockId: sockId, valuePtrId: valuePtrId, lenPtrId: lenPtrId, dstBlock: dstBlock)
 			osSocketSend(resultId, sockId, bufPtrId, lenId) then self.lowerOsSocketSend(resultId, sockId: sockId, bufPtrId: bufPtrId, lenId: lenId, dstBlock: dstBlock)
 			osSocketRecv(resultId, sockId, bufPtrId, lenId) then self.lowerOsSocketRecv(resultId, sockId: sockId, bufPtrId: bufPtrId, lenId: lenId, dstBlock: dstBlock)
 			osSocketClose(sockId) then self.lowerOsSocketClose(sockId, dstBlock: dstBlock)
@@ -1615,6 +1622,7 @@ type StdToX64Lowering
 				osSocketCreate or
 				osSocketConnect or
 				osSocketSend or
+				osSocketError or
 				osSocketRecv or
 				osSocketClose then panic("lowerStdToX64: a socket host primitive appeared as a block terminator (lowering bug — every socket primitive is a body op, never a terminator)")
 			osFreePages then panic("lowerStdToX64: an `osFreePages` op appeared as a block terminator (lowering bug — a page release is a body op)")
@@ -3611,12 +3619,17 @@ type StdToX64Lowering
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsSocketCreateWin64'
 
+	// ⭐⭐ **THE DESCRIPTOR IS BORN NON-BLOCKING AND CLOSE-ON-EXEC, IN ONE CALL.** Linux takes both flags in
+	// `socket(2)`'s TYPE argument, so there is no window in which the descriptor is blocking and no second
+	// syscall to pay for — the BSDs have neither flag and need an `fcntl` apiece. Non-blocking is what makes a
+	// socket call able to answer `EAGAIN` instead of holding its machine, which is the whole of this band's
+	// contract with the poller; `FD_CLOEXEC` keeps a spawned child out of the scheduler's descriptors.
 	function lowerOsSocketCreateLinux(resultId ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rdi), value: AfInet as MachineWord))
-		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rsi), value: SockStream as MachineWord))
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rsi), value: (SockStream + LinuxSockNonBlock + LinuxSockCloexec) as MachineWord))
 		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rdx), value: IpprotoTcp as MachineWord))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(X64LinuxSyscallSocket))
-		self.emitSyscallFailureSentinel(resultId, dstBlock: dstBlock)
+		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsSocketCreateLinux'
 
 	// `connect(sock, addr, sizeof(sockaddr_in))` — the length is the Std tier's `SockaddrInBytes`, which is
@@ -3642,7 +3655,7 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rsi), srcReg: TargetVReg.virtual(addrPtrId)))
 		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rdx), value: SockaddrInBytes as MachineWord))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(X64LinuxSyscallConnect))
-		self.emitSyscallFailureSentinel(resultId, dstBlock: dstBlock)
+		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsSocketConnectLinux'
 
 	// `send`/`recv` differ ONLY in their import slot, so the register setup is written once. Two near-identical
@@ -3653,8 +3666,24 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(lenId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: SendRecvNoFlags))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(slot)))
-		self.emitCaptureRax(dstBlock, resultId: resultId)
+		self.emitCaptureWin32Int(dstBlock, resultId: resultId)
 	end 'emitWin64SocketTransfer'
+
+	// ⭐⭐ **A C `int` RETURN, SIGN-EXTENDED — AND WITHOUT IT A FAILED `send`/`recv` IS REPORTED AS A BYTE
+	// COUNT.** `ws2_32`'s `send` and `recv` answer an `int`; the compiler writes EAX and leaves RAX's upper half
+	// whatever the callee had, and on MSVC that is a zero-extension — so `SOCKET_ERROR` arrives as
+	// `0x00000000FFFFFFFF`. Against the Std tier's failure test that reads as 4,294,967,295 bytes transferred:
+	// neither the old `== -1` nor the present `< 0` sees it, and `__ManagedSocketError.sendFailed` is never
+	// raised. `shl`/`sar` by 32 is the exact widening and needs no `movsxd` at this tier.
+	//
+	// ⚠ **ONLY THE TWO TRANSFERS NEED IT.** `socket()` answers a `SOCKET`, whose failure really is all-ones in
+	// the full word, and `connect` is tested against 0.
+	function emitCaptureWin32Int(dstBlock IrBlock, resultId ValueId)
+		let answer = x64PhysReg(X64Register.rax)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.shlRegImm8(answer, lhs: answer, imm: Win32IntBits))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.sarRegImm8(answer, lhs: answer, imm: Win32IntBits))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'emitCaptureWin32Int'
 
 	// ⭐⭐ **THE TWO TRANSFERS, AND THE ROUTES DO NOT AGREE ON THE CALL'S ARITY.** `ws2_32` exports
 	// `send`/`recv` (four arguments); x86-64's syscall table has neither, only `sendto`/`recvfrom` (six), so
@@ -3691,7 +3720,7 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.r8), value: LinuxSocketNoPeerAddress as MachineWord))
 		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.r9), value: LinuxSocketNoPeerAddress as MachineWord))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(syscallNumber))
-		self.emitSyscallFailureSentinel(resultId, dstBlock: dstBlock)
+		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'emitLinuxSocketTransfer'
 
 	// A socket is a DESCRIPTOR under POSIX, so the syscall route reaches the same `close` the file band does
@@ -3703,22 +3732,25 @@ type StdToX64Lowering
 		end 'route'
 	end 'lowerOsSocketClose'
 
-	// ⭐⭐ **`answer | (answer sar 63)` — THE `-errno` A RAW SYSCALL ANSWERS BECOMING THE EXACT -1 THE Std
-	// TIER TESTS FOR.** It compares against `InvalidSocket`/`SOCKET_ERROR`, both exactly -1, because that is
-	// what Winsock reports; a syscall reports `-ECONNREFUSED`, `-EPIPE` or `-EBADF`, which are negative and
-	// almost never -1. An arithmetic shift by the sign bit's distance leaves all-ones for a negative answer
-	// and zero otherwise, so the OR collapses every failure to -1 and leaves every descriptor and byte count
-	// untouched — branchless, and needing no frame, which is why this band needs no chunk where the file band
-	// does. (The file surface must also PUBLISH the errno for `osLastError` to classify;
-	// `__ManagedSocketError` has no errno-classified variant to publish into.)
-	//
-	// ⚠ rcx is scratch here because `syscall` CLOBBERS it in hardware, so nothing live can be holding it.
-	function emitSyscallFailureSentinel(resultId ValueId, dstBlock IrBlock)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: x64PhysReg(X64Register.rax)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.sarRegImm8(x64PhysReg(X64Register.rcx), lhs: x64PhysReg(X64Register.rcx), imm: LinuxSyscallSignShift))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.orRegReg(x64PhysReg(X64Register.rax), lhs: x64PhysReg(X64Register.rax), rhs: x64PhysReg(X64Register.rcx)))
+	// ⭐⭐ **`getsockopt(sock, SOL_SOCKET, SO_ERROR, valuePtr, lenPtr)` — THE VERDICT OF A NON-BLOCKING
+	// `connect`** (`StdOp.osSocketError`). The 4th syscall argument is r10, not rcx: rcx is clobbered by
+	// `syscall` in hardware.
+	function lowerOsSocketError(resultId ValueId, sockId ValueId, valuePtrId ValueId, lenPtrId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then panic("lowerOsSocketError: `osSocketError` reads the outcome of a NON-BLOCKING connect, and x64-windows connects blocking — `ManagedSocketRuntime.emitSocketConnectWait` emits this op only under `SocketWaitShape.polled`, which that lane is not")
+			syscall then self.lowerOsSocketErrorLinux(resultId, sockId: sockId, valuePtrId: valuePtrId, lenPtrId: lenPtrId, dstBlock: dstBlock)
+		end 'route'
+	end 'lowerOsSocketError'
+
+	function lowerOsSocketErrorLinux(resultId ValueId, sockId ValueId, valuePtrId ValueId, lenPtrId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdi), srcReg: TargetVReg.virtual(sockId)))
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rsi), value: posixSolSocket(self.target.os)))
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rdx), value: posixSoError(self.target.os)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r10), srcReg: TargetVReg.virtual(valuePtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(lenPtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(X64LinuxSyscallGetsockopt))
 		self.emitCaptureRax(dstBlock, resultId: resultId)
-	end 'emitSyscallFailureSentinel'
+	end 'lowerOsSocketErrorLinux'
 
 	// ⭐⭐ **`osCpuCount(result)` ⇒ `GetActiveProcessorCount(ALL_PROCESSOR_GROUPS)`** — one immediate into
 	// rcx, one import call, and the count captured out of RAX. `emitCaptureRax` is the same capture
@@ -3826,6 +3858,7 @@ type StdToX64Lowering
 				raiseBreak or
 				drainBreak or
 				sleepOnTimer or
+				armSource or
 				shortSleep then self.lowerLinuxHostChunkValue(resultId, args: posixNetpollChunkArgs(verb, operands: operands), chunk: posixNetpollChunk(verb), dstBlock: dstBlock)
 		end 'v'
 	end 'lowerOsNetpollLinux'
@@ -3839,6 +3872,7 @@ type StdToX64Lowering
 			wait then self.lowerNetpollWaitWin64(resultId, operands: operands, dstBlock: dstBlock)
 			raiseBreak then self.lowerNetpollRaiseBreakWin64(resultId, port: netpollOperand(operands, index: 0), dstBlock: dstBlock)
 			drainBreak then panic("lowerOsNetpollWin64: `drainBreak` is the epoll shape's read of its eventfd, and x64-windows is `NetpollShape.completionPort`, whose break is consumed by receiving its packet — `NetpollRuntime` emits this verb only under `NetpollShape.epoll`")
+			armSource then panic("lowerOsNetpollWin64: `armSource` registers a SOCKET with the poller, and x64-windows registers none — its socket band is blocking, so `NetpollRuntime.installNetpollRuntime` does not build `__np_pd_open`, the verb's only producer, on `NetpollShape.completionPort`")
 			openTimer then self.lowerNetpollOpenTimerWin64(resultId, flags: netpollOperand(operands, index: 0), dstBlock: dstBlock)
 			sleepOnTimer then self.lowerNetpollSleepWin64(resultId, microseconds: netpollOperand(operands, index: 0), timer: netpollOperand(operands, index: 1), dstBlock: dstBlock)
 
@@ -5082,6 +5116,7 @@ type StdToX64Lowering
 				osSocketCreate or
 				osSocketConnect or
 				osSocketSend or
+				osSocketError or
 				osSocketRecv or
 				osSocketClose or
 				osCpuCount or
@@ -5340,6 +5375,7 @@ type StdToX64Lowering
 				osSocketCreate or
 				osSocketConnect or
 				osSocketSend or
+				osSocketError or
 				osSocketRecv or
 				osSocketClose panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a socket host primitive, not a condBranch")
 			osCpuCount panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osCpuCount`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")

@@ -747,6 +747,7 @@ type StdToArm64Lowering
 				osSocketCreate or
 				osSocketConnect or
 				osSocketSend or
+				osSocketError or
 				osSocketRecv or
 				osSocketClose or
 				osCpuCount or
@@ -1199,6 +1200,7 @@ type StdToArm64Lowering
 			osSocketFreeAddrInfo(addrInfoPtrId) then self.lowerOsSocketFreeAddrInfo(addrInfoPtrId, dstRef: dstRef)
 			osSocketCreate(resultId) then self.lowerOsSocketCreate(resultId, dstRef: dstRef)
 			osSocketConnect(resultId, sockId, addrPtrId) then self.lowerOsSocketConnect(resultId, sockId: sockId, addrPtrId: addrPtrId, dstRef: dstRef)
+			osSocketError(resultId, sockId, valuePtrId, lenPtrId) then self.lowerOsSocketError(resultId, sockId: sockId, valuePtrId: valuePtrId, lenPtrId: lenPtrId, dstRef: dstRef)
 			osSocketSend(resultId, sockId, bufPtrId, lenId) then self.lowerOsSocketTransfer(resultId, sockId: sockId, bufPtrId: bufPtrId, lenId: lenId, importSlot: OsImportSlot.send, syscallNumber: Arm64LinuxSyscallSendto, suppressSigpipe: true, dstRef: dstRef)
 			osSocketRecv(resultId, sockId, bufPtrId, lenId) then self.lowerOsSocketTransfer(resultId, sockId: sockId, bufPtrId: bufPtrId, lenId: lenId, importSlot: OsImportSlot.recv, syscallNumber: Arm64LinuxSyscallRecvfrom, suppressSigpipe: false, dstRef: dstRef)
 
@@ -1365,6 +1367,7 @@ type StdToArm64Lowering
 				osSocketCreate or
 				osSocketConnect or
 				osSocketSend or
+				osSocketError or
 				osSocketRecv or
 				osSocketClose then panic("lowerStdToArm64: a socket host primitive appeared as a block terminator (lowering bug — every socket primitive is a body op, never a terminator)")
 			osCpuCount then panic("lowerStdToArm64: an `osCpuCount` op appeared as a block terminator (lowering bug — a machine query is a value-producing body op)")
@@ -2716,13 +2719,29 @@ type StdToArm64Lowering
 	// `socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)` — the three protocol arguments are the Std tier's
 	// (`ManagedSocketRuntime`'s protocol block owns them, because the `hints` it fills must agree with them),
 	// and all three values are portable.
+	// ⭐⭐ **THE DESCRIPTOR IS BORN NON-BLOCKING, AND THE TWO LANES BUY THAT DIFFERENTLY.** Linux takes
+	// `SOCK_NONBLOCK | SOCK_CLOEXEC` in the TYPE argument, so one call does it; Darwin has neither flag and
+	// pays a chunk that sets both with `fcntl` before it hands the descriptor back. Non-blocking is what lets a
+	// socket call answer `EAGAIN` instead of holding its machine, which is the whole of this band's contract
+	// with the poller.
 	function lowerOsSocketCreate(resultId ValueId, dstRef BlockRef)
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x0), value: AfInet as MachineWord))
-		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x1), value: SockStream as MachineWord))
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x1), value: self.socketCreateType()))
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x2), value: IpprotoTcp as MachineWord))
 		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.socket, syscallNumber: Arm64LinuxSyscallSocket)
-		self.emitSocketIntResult(resultId, dstRef: dstRef)
+
+		match arm64OsCallKind(self.target.os) 'route'
+			importCall then self.emitDarwinSocketChunk(resultId, chunk: HostSocketBirthName, dstRef: dstRef)
+			syscall then self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
+		end 'route'
 	end 'lowerOsSocketCreate'
+
+	function socketCreateType() returns MachineWord
+		return match arm64OsCallKind(self.target.os) 'route'
+			importCall gives SockStream as MachineWord
+			syscall gives (SockStream + LinuxSockNonBlock + LinuxSockCloexec) as MachineWord
+		end 'route'
+	end 'socketCreateType'
 
 	// `connect(sock, addr, sizeof(sockaddr_in))` — the length is the Std tier's `SockaddrInBytes`, which is
 	// also the size of the block it allocated for the address. ⚠ MEASURED on Darwin: an `addrlen` below 16 is
@@ -2734,6 +2753,18 @@ type StdToArm64Lowering
 		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.connect, syscallNumber: Arm64LinuxSyscallConnect)
 		self.emitSocketIntResult(resultId, dstRef: dstRef)
 	end 'lowerOsSocketConnect'
+
+	// `getsockopt(sock, SOL_SOCKET, SO_ERROR, valuePtr, lenPtr)` — see `StdOp.osSocketError`. The level and the
+	// option are per-OS (`PosixRuntime.posixSolSocket`), which is why they are asked for rather than spelled.
+	function lowerOsSocketError(resultId ValueId, sockId ValueId, valuePtrId ValueId, lenPtrId ValueId, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(sockId)))
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x1), value: posixSolSocket(self.target.os)))
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x2), value: posixSoError(self.target.os)))
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x3), srcReg: TargetVReg.virtual(valuePtrId)))
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x4), srcReg: TargetVReg.virtual(lenPtrId)))
+		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.getsockopt, syscallNumber: Arm64LinuxSyscallGetsockopt)
+		self.emitSocketIntResult(resultId, dstRef: dstRef)
+	end 'lowerOsSocketError'
 
 	// ⭐⭐ **THE TWO TRANSFERS — ONE EMITTER, AND THE TWO ROUTES DO NOT EVEN AGREE ON THE CALL'S ARITY.**
 	// libSystem exports `send`/`recv` (four arguments); AArch64's syscall table has neither, only
@@ -2777,41 +2808,34 @@ type StdToArm64Lowering
 		end 'route'
 	end 'socketTransferFlags'
 
-	// ⭐⭐ **A C `int` ON THE IMPORT ROUTE, A `-errno` ON THE SYSCALL ROUTE, AND THE Std TIER READS NEITHER.**
-	// It tests the answer against `InvalidSocket`/`SOCKET_ERROR` — both exactly -1 — because that is what
-	// Winsock reports. libSystem reports -1 in a 32-bit `int` whose high word AAPCS64 leaves unspecified, and
-	// a raw `svc` reports `-errno`, which is negative and almost never -1. Both are folded into the OP's
-	// vocabulary here rather than by giving the Std tier a per-lane comparison, which is the discipline
-	// `PosixRuntime`'s errno block states: one lane's vocabulary becomes the op's contract, never the reverse.
+	// ⭐⭐ **EVERY SOCKET CALL ANSWERS `-errno`, AND THE TWO LANES REACH THAT ANSWER DIFFERENTLY.** A raw `svc`
+	// already reports it; libSystem reports -1 in a 32-bit `int` and keeps the reason in `*__error()`, so the
+	// Darwin route goes through a chunk that widens the answer and, for a negative one, fetches and negates the
+	// errno. The Std tier has to TELL `EAGAIN` and `EINPROGRESS` from a real failure — two of the three are the
+	// descriptor saying *"not yet"* — which is why nothing folds them together any more.
 	function emitSocketIntResult(resultId ValueId, dstRef BlockRef)
 		match arm64OsCallKind(self.target.os) 'route'
-			importCall then self.emitWidenedCallResult(resultId, dstRef: dstRef)
-			syscall then self.emitSyscallFailureSentinel(resultId, dstRef: dstRef)
+			importCall then self.emitDarwinSocketChunk(resultId, chunk: HostSocketIntStatusName, dstRef: dstRef)
+			syscall then self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
 		end 'route'
 	end 'emitSocketIntResult'
 
-	// The same fold for the two transfers, whose import-route answer is a `ssize_t` and is therefore NOT
-	// widened: it is already 64 bits, so sign-extending from bit 31 would truncate any count above 2^31 —
-	// `emitWidenedCallResult`'s own warning about `mmap` and `write`, one band over.
+	// The two transfers, whose import-route answer is a `ssize_t` and must NOT be widened: it is already 64
+	// bits, so sign-extending from bit 31 would truncate any count above 2^31 — `emitWidenedCallResult`'s own
+	// warning about `mmap` and `write`, one band over.
 	function emitSocketTransferResult(resultId ValueId, dstRef BlockRef)
 		match arm64OsCallKind(self.target.os) 'route'
-			importCall then self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
-			syscall then self.emitSyscallFailureSentinel(resultId, dstRef: dstRef)
+			importCall then self.emitDarwinSocketChunk(resultId, chunk: HostSocketSizeStatusName, dstRef: dstRef)
+			syscall then self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
 		end 'route'
 	end 'emitSocketTransferResult'
 
-	// ⭐ **`answer | (answer asr 63)` — BRANCHLESS, EXACT, AND IT NEEDS NO FRAME.** An arithmetic shift by the
-	// sign bit's distance leaves all-ones for a negative answer and zero for a non-negative one, so the OR
-	// collapses every `-errno` to -1 and leaves every descriptor and byte count untouched. That is why the
-	// socket band needs no chunk on this lane where the file band does: the file surface must also PUBLISH the
-	// errno for `osLastError` to classify, and `__ManagedSocketError` has no errno-classified variant to
-	// publish into (`ManagedSocketRuntime.emitSocketTransferOutcome` states that).
-	function emitSyscallFailureSentinel(resultId ValueId, dstRef BlockRef)
-		let answer = arm64PhysReg(Arm64IntReturnReg)
-		let sign = arm64PhysReg(Arm64Scratch)
-		self.emit(dstRef, op: TargetOp.arm64AsrImm(sign, src: answer, imm: LinuxSyscallSignShift))
-		self.emit(dstRef, op: TargetOp.arm64Orr(TargetVReg.virtual(resultId), lhs: answer, rhs: sign))
-	end 'emitSyscallFailureSentinel'
+	// Hand the call's own answer, already in x0, to one of the Darwin socket chunks and capture what it
+	// answers. Each of the three takes the raw libSystem result and gives back the op's contract.
+	function emitDarwinSocketChunk(resultId ValueId, chunk ByteArray, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.arm64BranchLink(chunk))
+		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
+	end 'emitDarwinSocketChunk'
 
 	// ⭐⭐ **MAC6: `GetStdHandle(which)` ⇒ THE DESCRIPTOR ITSELF, WITH NO CALL AT ALL.** Win32 numbers its
 	// three selectors DOWNWARDS from `(DWORD)-10` while POSIX numbers its three descriptors UPWARDS from 0,
@@ -3105,6 +3129,7 @@ type StdToArm64Lowering
 				raiseBreak or
 				drainBreak or
 				sleepOnTimer or
+				armSource or
 				shortSleep then self.lowerHostChunkValue(resultId, args: posixNetpollChunkArgs(verb, operands: operands), chunk: posixNetpollChunk(verb), dstRef: dstRef)
 		end 'v'
 	end 'lowerOsNetpoll'

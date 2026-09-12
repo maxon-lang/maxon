@@ -235,6 +235,9 @@ let Arm64LinuxSyscallChdir = 49
 // constraint from the macOS lane, where libSystem exports the four-argument forms and the six-argument ones
 // would cost two more registers for nothing.
 export let Arm64LinuxSyscallSocket = 198
+
+// `getsockopt` — the verdict of a non-blocking connect (`StdOp.osSocketError`).
+export let Arm64LinuxSyscallGetsockopt = 209
 export let Arm64LinuxSyscallConnect = 203
 export let Arm64LinuxSyscallSendto = 206
 export let Arm64LinuxSyscallRecvfrom = 207
@@ -2866,6 +2869,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		chunks.push(buildArm64LinuxNetpollOpenChunk())
 		chunks.push(buildArm64LinuxNetpollOpenBreakChunk())
 		chunks.push(buildArm64LinuxNetpollWaitChunk())
+		chunks.push(buildArm64LinuxNetpollArmChunk())
 		chunks.push(buildArm64LinuxNetpollCounterChunk(HostNetpollRaiseBreakName, syscallNumber: Arm64LinuxSyscallWrite, descriptor: Arm64Register.x1))
 		chunks.push(buildArm64LinuxNetpollCounterChunk(HostNetpollDrainBreakName, syscallNumber: Arm64LinuxSyscallRead, descriptor: Arm64Register.x0))
 		chunks.push(buildArm64LinuxSleepChunk(HostNetpollSleepName, unit: PosixTimeUnit.microseconds))
@@ -3014,6 +3018,26 @@ function buildArm64LinuxNetpollOpenBreakChunk() returns FunctionCodeChunk
 	asm.placeLabel(failed)
 	return asm.finishFunction(HostNetpollOpenBreakName)
 end 'buildArm64LinuxNetpollOpenBreakChunk'
+
+// `mrt_host_netpoll_arm(x0 = epfd, x1 = fd) -> x0 = 0, or -errno` — `epoll_ctl(EPOLL_CTL_ADD)` with both
+// directions and `EPOLLET`, the descriptor itself as the `epoll_data` the decode reads back. AArch64's
+// `struct epoll_event` is naturally aligned: the 32-bit `events` in the first slot, the 64-bit `data` in the
+// second.
+function buildArm64LinuxNetpollArmChunk() returns FunctionCodeChunk
+	let SlotEvents = 0 as StackSize
+	let SlotData = 1 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(2)
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: LinuxEpollSocketEvents as MachineWord)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotEvents)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotData)
+
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x2, src: Arm64Register.x1)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: LinuxEpollCtlAdd)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x3, slot: SlotEvents)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallEpollCtl)
+	return asm.finishFunction(HostNetpollArmSourceName)
+end 'buildArm64LinuxNetpollArmChunk'
 
 // `mrt_host_netpoll_wait(x0 = epfd, x1 = entries, x2 = capacity, x3 = timeoutMs) -> x0 = count, 0 when
 // interrupted, or -errno`. `WaitInfinite` needs no translation, for the x86-64 lane's reason: the timeout is an

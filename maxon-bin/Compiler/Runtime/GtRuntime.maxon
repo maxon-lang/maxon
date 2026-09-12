@@ -322,7 +322,9 @@ let GtOffCoroTail = GtOffCoroHead + PointerFieldBytes
 // never cleared. `__gt_promise_drop` also reads the kind of a thread it found `waiting`, which is the kind the
 // thread parked with.
 let GtOffParkKind = GtOffCoroTail + PointerFieldBytes
-let GtOffParkArg = GtOffParkKind + PointerFieldBytes
+
+// EXPORTED because `NetpollRuntime` reads a netpoll park's `(fd, mode)` note out of it.
+export let GtOffParkArg = GtOffParkKind + PointerFieldBytes
 
 // ⭐⭐⭐ **WHAT THIS GREEN THREAD HAS ALLOCATED AND FREED — the memory columns a POOL can be measured with,
 // and the process-wide ones structurally cannot.** `__mm_alloc_total` and its five siblings are one set of
@@ -464,6 +466,11 @@ let GtParkKindAwaitAny = 6 as ParsedInt
 
 // `__gt_resched`: a yield, which the strand runner places rather than registers.
 let GtParkKindYield = 7 as ParsedInt
+
+// ⭐⭐ **`__np_pd_wait`: the argument is the `(fd, mode)` pair of the socket direction this thread waits on**
+// (`NetpollRuntime.emitNetpollParkArg`). EXPORTED because the site that PRODUCES it is `NetpollRuntime` while
+// the arm that consumes it is here — `GtParkKindMailbox`'s arrangement, for its reason.
+export let GtParkKindNetpoll = 8 as ParsedInt
 
 // `__gt_preempt`: a thread that honoured a preemption request, which the strand runner also places.
 let GtParkKindPreempt = 9 as ParsedInt
@@ -805,11 +812,27 @@ export let StackWordBytes = 8
 // The heap region itself is `__slab_alloc`'d once in `__gt_init` (a zeroed block) rather than a `.data`
 // reservation, because `.data` entries are single scalar slots.
 let TimerHeapCapacity = 256
-let TimerEntrySize = 24
+let TimerEntrySize = 32
 let TimerOffDeadline = 0
 let TimerOffGt = 8
 let TimerOffSeq = 16
+let TimerOffTag = 24
 let TimerHeapBytes = TimerHeapCapacity * TimerEntrySize
+
+// ⭐⭐ **WHAT THIS DEADLINE IS FOR — the half of an entry's IDENTITY that is not the green thread.** One
+// thread may hold a `sleep` and a socket read deadline at the same instant, so a removal keyed on the thread
+// alone takes whichever entry it meets first and leaves the other behind to fire at a record its owner has
+// moved on from. The key is the PAIR `(gt, tag)`, which is unique: a thread holds at most one wait of each
+// kind.
+let TimerTagSleep = 0 as ParsedInt
+let TimerTagReadDeadline = 1 as ParsedInt
+let TimerTagWriteDeadline = 2 as ParsedInt
+
+// A netpoll park's direction (`NetpollModeRead`/`NetpollModeWrite`) as the tag its deadline entry carries.
+// EXPORTED for `NetpollRuntime`, which arms an entry at the park and removes it whenever the wait ends.
+export function emitTimerTagOfNetpollMode(module StdModule, block IrBlock, mode ValueId, ids ValueMinter) returns ValueId
+	return emitBin(module, block: block, a: mode, b: emitConst(module, block: block, value: TimerTagReadDeadline, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+end 'emitTimerTagOfNetpollMode'
 
 // What `__gt_timer_when` holds while the store is empty: a deadline no clock reading reaches, so *"is the
 // earliest deadline past?"* is one compare that answers no. EXPORTED for the scheduler's owed-poller test
@@ -927,7 +950,10 @@ let RunProcessStoreOverflowFlag = RunProcessStoreOverflowOrdinal + ErrorFlagOrdi
 // `ns = ticks * 1e9 / freq`, evaluated as the OVERFLOW-SAFE split identity
 // `ns = (ticks/freq)*1e9 + ((ticks mod freq)*1e9)/freq` — see `buildGtNowNs`.
 let NanosPerSecond = 1000000000
-let NanosPerMilli = 1000000
+
+// EXPORTED for `NetpollRuntime`, which turns a deadline in milliseconds into the absolute nanoseconds the
+// timer store keys on.
+export let NanosPerMilli = 1000000
 
 // --- Runtime function names ---
 export let GtContextSwitchName = b"__gt_context_switch"
@@ -1448,7 +1474,7 @@ end 'registerIoOperationTags'
 // clocks. The WALL clock has no such relationship to the scheduler and correctly rides its own
 // `usesWallClock` bit instead (see `ClockRuntime.maxon`'s header).
 export let GtNowNsName = b"__gt_now_ns"
-let GtTimerAddName = b"__gt_timer_add"
+export let GtTimerAddName = b"__gt_timer_add"
 
 // ⭐ EXPORTED because the scheduler loop fires the timer store itself when a deadline is due at the top of a
 // schedule and after its park (`SchedRuntime.buildSchedLoop`). It answers the wake debt the fires owe and pays
@@ -2230,7 +2256,7 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 
 	// ⭐ The P/M half — the processor structure, the TLS door, the scheduler loop and the wake. FIRST in the
 	// list because `__gt_init` calls `__sched_init_procs` before it does anything else.
-	installSchedRuntime(module, target: target, usesCompletionPort: usesCompletionPort)
+	installSchedRuntime(module, target: target, usesCompletionPort: usesCompletionPort, rawFree: rawFree)
 	buildGtInit(module, usesCompletionPort: usesCompletionPort)
 
 	// ⭐ ALL THREE spawn doors, from one body. Whether a program can REACH one is `DeadFunctionElimination`'s
@@ -3125,9 +3151,10 @@ type TimerEntry
 	export let deadline as ValueId
 	export let gt as ValueId
 	export let seq as ValueId
+	export let tag as ValueId
 
-	export static function create(deadline ValueId, gt ValueId, seq ValueId) returns TimerEntry
-		return Self{deadline: deadline, gt: gt, seq: seq}
+	export static function create(deadline ValueId, gt ValueId, seq ValueId, tag ValueId) returns TimerEntry
+		return Self{deadline: deadline, gt: gt, seq: seq, tag: tag}
 	end 'create'
 end 'TimerEntry'
 
@@ -3144,7 +3171,8 @@ function emitTimerEntryLoad(module StdModule, block IrBlock, ids ValueMinter, ad
 	let deadline = emitLoadField(module, block: block, record: addr, offset: TimerOffDeadline, ids: ids)
 	let gt = emitLoadField(module, block: block, record: addr, offset: TimerOffGt, ids: ids)
 	let seq = emitLoadField(module, block: block, record: addr, offset: TimerOffSeq, ids: ids)
-	return TimerEntry.create(deadline, gt: gt, seq: seq)
+	let tag = emitLoadField(module, block: block, record: addr, offset: TimerOffTag, ids: ids)
+	return TimerEntry.create(deadline, gt: gt, seq: seq, tag: tag)
 end 'emitTimerEntryLoad'
 
 // Write `entry` to the slot at `addr`.
@@ -3152,6 +3180,7 @@ function emitTimerEntryStore(module StdModule, block IrBlock, addr ValueId, entr
 	emitStoreField(module, block: block, record: addr, offset: TimerOffDeadline, value: entry.deadline)
 	emitStoreField(module, block: block, record: addr, offset: TimerOffGt, value: entry.gt)
 	emitStoreField(module, block: block, record: addr, offset: TimerOffSeq, value: entry.seq)
+	emitStoreField(module, block: block, record: addr, offset: TimerOffTag, value: entry.tag)
 end 'emitTimerEntryStore'
 
 // ⭐⭐ **THE HEAP'S ORDER, STATED ONCE: `a` comes before `b` iff `(a.deadline, a.seq) < (b.deadline, b.seq)`.**
@@ -3291,16 +3320,17 @@ end 'emitTimerSiftDown'
 // `__gt_timer_heap_base` under the lock, which is what makes the base a `.data` word rather than a value
 // anybody caches.
 function buildGtTimerAdd(module StdModule, rawFree ByteArray)
-	var func = IrFunction.createFromStd(GtTimerAddName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(2)
+	var func = IrFunction.createFromStd(GtTimerAddName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var grow = module.addBlock(func, label: b"grow", heat: BlockHeat.normal)
 	var doAdd = module.addBlock(func, label: b"doadd", heat: BlockHeat.normal)
 	var doneBlock = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
-	emitParams(module, block: entry, count: 2)
+	emitParams(module, block: entry, count: 3)
 	let gt = 0 as ValueId
 	let deadline = 1 as ValueId
+	let tag = 2 as ValueId
 
 	// ⛔⛔ **THE WHOLE INSERT RUNS UNDER THE RUN-QUEUE LOCK (G2), AND THE GROW IS WHY IT MUST BE THE WHOLE OF
 	// IT RATHER THAN THE COUNT ALONE.** The store is five `.data` words plus a heap region, and a full store
@@ -3364,9 +3394,9 @@ function buildGtTimerAdd(module StdModule, rawFree ByteArray)
 	let nextSeq = emitBin(module, block: doAdd, a: seq, b: oneConst, opcode: StdBinOpcode.add, ids: ids)
 	emitStoreGlobalWord(module, block: doAdd, label: GtTimerSeqLabel, value: nextSeq, ids: ids)
 
-	// heap[count] = {deadline, gt, seq}; count++.
+	// heap[count] = {deadline, gt, seq, tag}; count++.
 	let entryAddr = emitTimerEntryAddr(module, block: doAdd, ids: ids, heapBase: heapBase, index: count)
-	emitTimerEntryStore(module, block: doAdd, addr: entryAddr, entry: TimerEntry.create(deadline, gt: gt, seq: seq))
+	emitTimerEntryStore(module, block: doAdd, addr: entryAddr, entry: TimerEntry.create(deadline, gt: gt, seq: seq, tag: tag))
 	let newCount = emitBin(module, block: doAdd, a: count, b: oneConst, opcode: StdBinOpcode.add, ids: ids)
 	module.appendOp(doAdd, op: StdOp.storeIndirect(countAddr, offset: 0, valueId: newCount, valueType: StdType.i64))
 
@@ -3472,6 +3502,9 @@ function buildGtTimerCheck(module StdModule)
 	var popRoot = module.addBlock(func, label: b"poproot", heat: BlockHeat.normal)
 	var moveLast = module.addBlock(func, label: b"movelast", heat: BlockHeat.normal)
 	var fire = module.addBlock(func, label: b"fire", heat: BlockHeat.normal)
+	var fireSleep = module.addBlock(func, label: b"firesleep", heat: BlockHeat.normal)
+	var fireNetpoll = module.addBlock(func, label: b"firenetpoll", heat: BlockHeat.normal)
+	var fireJoin = module.addBlock(func, label: b"firejoin", heat: BlockHeat.normal)
 	var doneBlock = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
@@ -3517,12 +3550,29 @@ function buildGtTimerCheck(module StdModule)
 	emitTimerEntryStore(module, block: moveLast, addr: heapBase, entry: last)
 	emitTimerSiftDown(module, func: func, ids: ids, startBlock: moveLast, heapBase: heapBase, count: newCount, startIndex: zeroConst, cont: fire)
 
-	// fire: ready the popped GT. The order these readies happen in IS the order the threads resume in, which is
-	// what makes the pop-min above observable at all.
-	let fireDebt = emitGtReadyLocked(module, block: fire, gt: root.gt, ids: ids)
-	let fireNowOwes = emitBin(module, block: fire, a: owesWake, b: fireDebt, opcode: StdBinOpcode.bitOr, ids: ids)
-	module.setTerminator(fire, op: StdOp.branch(loopHdr.id))
-	fire.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: twoArgs(newCount, second: fireNowOwes)))
+	// fire: end the popped wait. The order these happen in IS the order the threads resume in, which is what
+	// makes the pop-min above observable at all.
+	//
+	// ⭐⭐ **THE TAG DECIDES WHOSE DEADLINE THIS IS.** A sleep or an I/O yield is readied straight away; a SOCKET
+	// deadline goes through the poll-descriptor band, which must take the thread off the direction word it is
+	// published on first — and which answers no debt at all when a readiness event got there first.
+	let isSleep = emitCmp(module, block: fire, a: root.tag, b: emitConst(module, block: fire, value: TimerTagSleep, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(fire, op: StdOp.condBranch(isSleep, thenBlockId: fireSleep.id, elseBlockId: fireNetpoll.id))
+
+	let sleepDebt = emitGtReadyLocked(module, block: fireSleep, gt: root.gt, ids: ids)
+	module.setTerminator(fireSleep, op: StdOp.branch(fireJoin.id))
+	fireSleep.branchEdges.push(BranchEdge.create(fireJoin.id, argIds: argsOf(sleepDebt)))
+
+	let expireDebt = ids.mint()
+	module.appendOp(fireNetpoll, op: StdOp.call(expireDebt, callee: NetpollPdExpireName, args: argsOf(root.gt)))
+	module.setTerminator(fireNetpoll, op: StdOp.branch(fireJoin.id))
+	fireNetpoll.branchEdges.push(BranchEdge.create(fireJoin.id, argIds: argsOf(expireDebt)))
+
+	let firedDebt = ids.mint()
+	fireJoin.blockArgs.push(IrBlockArg.create(firedDebt, argType: StdType.i64))
+	let fireNowOwes = emitBin(module, block: fireJoin, a: owesWake, b: firedDebt, opcode: StdBinOpcode.bitOr, ids: ids)
+	module.setTerminator(fireJoin, op: StdOp.branch(loopHdr.id))
+	fireJoin.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: twoArgs(newCount, second: fireNowOwes)))
 
 	// done(count, owesWake): publish the surviving entry count, release, and answer the debt. Its two
 	// predecessors are the two ways the walk ends: an emptied heap and a root that is not due yet.
@@ -4273,12 +4323,15 @@ end 'emitGtLoadPublishedStatus'
 //
 //   • a plain `storeIndirect` of the constant `completed` into `GtOffStatus` — a PUBLICATION with no
 //     release, which is the defect itself;
-//   • a plain `loadIndirect` from `GtOffStatus` whose result is compared against the constant `completed` —
-//     an OBSERVATION with no acquire, which is the same defect read from the other end.
+//   • a plain `loadIndirect` from `GtOffStatus` whose result is compared FOR EQUALITY against the constant
+//     `completed` — an OBSERVATION with no acquire, which is the same defect read from the other end.
 //
-// Both tests require the OFFSET **and** the constant together, which is what makes them exact: `GtOffStatus`
-// is 0x10, an offset three other structs in this file also use, and `2` is an ordinary small integer. Only
-// the pair names the publication.
+// Both tests require the OFFSET **and** the constant together: `GtOffStatus` is 0x10, an offset three other
+// structs in this file also use, and `2` is an ordinary small integer, so only the pair names the publication.
+//
+// ⚠ **THE PAIR ALONE IS NOT ENOUGH, WHICH IS WHY THE OBSERVATION TEST ALSO READS THE PREDICATE** — see
+// `requireOrderedObservation` for the record in another file that matched both halves and asked nothing about a
+// green thread.
 //
 // ⚠ **THE TWO HAND-ASSEMBLED TRAMPOLINES ARE OUTSIDE ITS REACH**: they are machine-code bytes and never Std
 // ops. Each publishes at ONE site and names its ordering in the instruction it emits. ⇒ the check is the
@@ -4415,6 +4468,7 @@ function collectCompletedWordDefs(op StdOp, completedConsts ValueIdArray, plainS
 			osSocketCreate or
 			osSocketConnect or
 			osSocketSend or
+			osSocketError or
 			osSocketRecv or
 			osSocketClose or
 			osCpuCount or
@@ -4467,7 +4521,7 @@ function requireOrderedCompletedAccess(op StdOp, func IrFunction, completedConst
 		const or
 			binOp or
 			unaryOp then break 'k'
-		cmp(_, lhs, rhs, _, _) then requireOrderedObservation(func, lhs: lhs, rhs: rhs, completedConsts: completedConsts, plainStatusLoads: plainStatusLoads)
+		cmp(_, lhs, rhs, pred, _) then requireOrderedObservation(func, lhs: lhs, rhs: rhs, pred: pred, completedConsts: completedConsts, plainStatusLoads: plainStatusLoads)
 		binOpImm or
 			cmpImm or
 			div or
@@ -4547,6 +4601,7 @@ function requireOrderedCompletedAccess(op StdOp, func IrFunction, completedConst
 			osSocketCreate or
 			osSocketConnect or
 			osSocketSend or
+			osSocketError or
 			osSocketRecv or
 			osSocketClose or
 			osCpuCount or
@@ -4601,7 +4656,27 @@ end 'requireOrderedPublication'
 // ⚠ **BOTH OPERAND ORDERS ARE TESTED, and that is not defensive symmetry**: `emitGtStatusEquals` puts the
 // loaded word on the LEFT, but `foldConstOperands` reorders around a constant operand, and a check that knew
 // one spelling would go quiet the day a fold ran first.
-function requireOrderedObservation(func IrFunction, lhs ValueId, rhs ValueId, completedConsts ValueIdArray, plainStatusLoads ValueIdArray)
+function requireOrderedObservation(func IrFunction, lhs ValueId, rhs ValueId, pred StdCmpPred, completedConsts ValueIdArray, plainStatusLoads ValueIdArray)
+	// ⛔⛔ **ONLY AN EQUALITY TEST ASKS THIS QUESTION, AND THE OFFSET-AND-CONSTANT PAIR IS NOT THE EXACT
+	// DISCRIMINATOR THIS CHECK'S HEADER CLAIMS.** `GtOffStatus` is 0x10 and `completed` is 2, and a record in
+	// another file whose word at 0x10 is ORDERED against 2 matches both halves while asking nothing about a
+	// green thread — MEASURED: `NetpollRuntime.__np_pd_release` tests a poll descriptor's write-direction word
+	// (`PdOffWg`, 0x10) against `PdWait` (2) to see whether a thread is published on it, and was refused by this
+	// panic. ⇒ the predicate is the third half of the pair: *"has this thread reached `completed`?"* is `==` or
+	// `!=` and can be nothing else, so an ORDER comparison is not the observation this check exists for.
+	//
+	// ⚠ **IT LOSES NOTHING.** `emitGtStatusEquals` is the one speller of a status test and emits `eq`; a
+	// `status >= completed` would be meaningless against an enum whose order carries no meaning.
+	match pred 'asked'
+		eq or
+			ne then break 'asked'
+
+		lt or
+			gt or
+			le or
+			ge then return
+	end 'asked'
+
 	let lhsIsPlainRead = plainStatusLoads.contains(lhs) and completedConsts.contains(rhs)
 	let rhsIsPlainRead = plainStatusLoads.contains(rhs) and completedConsts.contains(lhs)
 
@@ -4794,6 +4869,10 @@ function buildGtPromiseDrop(module StdModule, usesCompletionPort bool, rawFree B
 	var mailboxParked = module.addBlock(func, label: b"droppedmailboxpark", heat: BlockHeat.normal)
 	var notMailbox = module.addBlock(func, label: b"droppednotmailbox", heat: BlockHeat.normal)
 	var waitingArm = module.addBlock(func, label: b"waitingarm", heat: BlockHeat.normal)
+	var notAwaiting = module.addBlock(func, label: b"droppednotawaiting", heat: BlockHeat.normal)
+	var netpollParked = module.addBlock(func, label: b"droppednetpoll", heat: BlockHeat.normal)
+	var notNetpollPark = module.addBlock(func, label: b"droppednotnetpoll", heat: BlockHeat.normal)
+	var timerParked = module.addBlock(func, label: b"droppedtimer", heat: BlockHeat.normal)
 	var waitingStores = module.addBlock(func, label: b"waitingstores", heat: BlockHeat.normal)
 	var waitingProc = module.addBlock(func, label: b"waitingproc", heat: BlockHeat.normal)
 	var waitingUnlock = module.addBlock(func, label: b"waitingunlock", heat: BlockHeat.normal)
@@ -4864,7 +4943,35 @@ function buildGtPromiseDrop(module StdModule, usesCompletionPort bool, rawFree B
 	let inAwait = emitCmp(module, block: notMailbox, a: parkKind, b: awaitKind, pred: StdCmpPred.eq, ids: ids)
 	let inAwaitAny = emitCmp(module, block: notMailbox, a: parkKind, b: awaitAnyKind, pred: StdCmpPred.eq, ids: ids)
 	let awaiting = emitBin(module, block: notMailbox, a: inAwait, b: inAwaitAny, opcode: StdBinOpcode.bitOr, ids: ids)
-	module.setTerminator(notMailbox, op: StdOp.condBranch(awaiting, thenBlockId: queuedArm.id, elseBlockId: waitingStores.id))
+	module.setTerminator(notMailbox, op: StdOp.condBranch(awaiting, thenBlockId: queuedArm.id, elseBlockId: notAwaiting.id))
+
+	// ⭐⭐⭐ **A PARKED THREAD IS RENOUNCED, NOT ABANDONED — the AWAIT arm's answer, generalised, and MEASURED.**
+	// Nothing can unwind a SUSPENDED frame from outside: freeing the stack of a thread that will never resume
+	// strands every heap value its locals own. MEASURED with no socket anywhere in it — a coroutine holding one
+	// interpolated `String` inside a `sleep`, dropped while parked, exits 101; the same coroutine holding
+	// nothing exits 0. So the wait is EXPIRED and the thread READIED: it resumes, unwinds its own frame, and its
+	// runner reclaims it. The status re-read below then finds `ready` and takes the queued arm by itself.
+	let netpollKind = emitConst(module, block: notAwaiting, value: GtParkKindNetpoll, ids: ids)
+	let parkedOnAPoller = emitCmp(module, block: notAwaiting, a: parkKind, b: netpollKind, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(notAwaiting, op: StdOp.condBranch(parkedOnAPoller, thenBlockId: netpollParked.id, elseBlockId: notNetpollPark.id))
+
+	// The poller's expiry takes the thread off its direction word and marks the wait, so its resumption answers
+	// `timedOut` rather than re-issuing a syscall on a descriptor nobody wants.
+	emitSchedLockEnter(module, block: netpollParked, ids: ids)
+	module.appendOp(netpollParked, op: StdOp.call(ids.mint(), callee: NetpollPdDropName, args: argsOf(gt)))
+	emitGtRenouncePark(module, func: func, ids: ids, cur: netpollParked, gt: gt, cont: waitingUnlock, label: b"netpoll")
+
+	// ⚠ **A `sleep` AND AN I/O YIELD ARE ONE KIND HERE**, because `__gt_io_park` IS a timer park with a
+	// deadline of `now` (`GtIoParkName`): both resume from `emitGtParkOnDeadline` and both simply carry on, so
+	// the expiry is the store removal and nothing else — a sleep that ends early is an answer, not an error.
+	let timerKind = emitConst(module, block: notNetpollPark, value: GtParkKindTimer, ids: ids)
+	let parkedOnADeadline = emitCmp(module, block: notNetpollPark, a: parkKind, b: timerKind, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(notNetpollPark, op: StdOp.condBranch(parkedOnADeadline, thenBlockId: timerParked.id, elseBlockId: waitingStores.id))
+
+	var timerExpired = module.addBlock(func, label: b"droppedtimerexpired", heat: BlockHeat.normal)
+	emitSchedLockEnter(module, block: timerParked, ids: ids)
+	emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: timerParked, gt: gt, tag: emitConst(module, block: timerParked, value: TimerTagSleep, ids: ids), cont: timerExpired)
+	emitGtRenouncePark(module, func: func, ids: ids, cur: timerExpired, gt: gt, cont: waitingUnlock, label: b"timer")
 
 	if usesCompletionPort 'ioAware'
 		var waitingTimer = module.addBlock(func, label: b"waitingtimer", heat: BlockHeat.normal)
@@ -4878,11 +4985,11 @@ function buildGtPromiseDrop(module StdModule, usesCompletionPort bool, rawFree B
 		module.setTerminator(waitingStores, op: StdOp.condBranch(isInFlightRead, thenBlockId: ioArm.id, elseBlockId: waitingTimer.id))
 		emitGtIoCancelArm(module, func: func, ids: ids, startBlock: ioArm, gt: gt, cont: soleOwner, queuedCont: queuedArm, rawFree: rawFree)
 		emitSchedLockEnter(module, block: waitingTimer, ids: ids)
-		emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: waitingTimer, gt: gt, cont: waitingProc)
+		emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: waitingTimer, gt: gt, tag: emitConst(module, block: waitingTimer, value: TimerTagSleep, ids: ids), cont: waitingProc)
 		emitGtProcStoreRemove(module, func: func, ids: ids, startBlock: waitingProc, gt: gt, cont: waitingUnlock)
 	end 'ioAware' else 'timerProcOnly'
 		emitSchedLockEnter(module, block: waitingStores, ids: ids)
-		emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: waitingStores, gt: gt, cont: waitingProc)
+		emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: waitingStores, gt: gt, tag: emitConst(module, block: waitingStores, value: TimerTagSleep, ids: ids), cont: waitingProc)
 		emitGtProcStoreRemove(module, func: func, ids: ids, startBlock: waitingProc, gt: gt, cont: waitingUnlock)
 	end 'timerProcOnly'
 
@@ -4944,6 +5051,34 @@ function buildGtPromiseDrop(module StdModule, usesCompletionPort bool, rawFree B
 
 	module.functions.push(func)
 end 'buildGtPromiseDrop'
+
+// ⭐⭐ **THE HALF EVERY EXPIRED PARK SHARES: READY THE THREAD, PAY THE WAKE, AND REJOIN THE VERDICT.** The
+// caller has already taken `__sched_lock` and emptied whatever store held the thread; this readies it, releases,
+// pays a wake debt outside the lock (a wake inside a critical section has no StoreLoad fence), and takes the
+// lock again — recursively, as every other re-entry in this file does — because the verdict `cont` reads is
+// taken under it. What that verdict will read is `ready` or `completed`, both of which are the queued arm's: a
+// renounced thread is one a runner will arrive for.
+//
+// ⚠ **READIED WHATEVER THE STORE SAID.** A thread some other party re-readied while this arm waited for the
+// lock is already queued, and this is a second ready on it — which `__gt_ready_locked` answers for, exactly as
+// every other re-ready racing a drop in this function does.
+function emitGtRenouncePark(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, gt ValueId, cont IrBlock, label ByteArray)
+	var payWake = module.addBlock(func, label: bytesWithSuffix(b"droppedwake", suffix: label), heat: BlockHeat.normal)
+	var rejoin = module.addBlock(func, label: bytesWithSuffix(b"droppedrejoin", suffix: label), heat: BlockHeat.normal)
+
+	let debt = emitGtReadyLocked(module, block: cur, gt: gt, ids: ids)
+	emitSchedLockLeave(module, block: cur, ids: ids)
+	emitSchedWakeIfOwed(module, cur: cur, owed: debt, wake: payWake, cont: rejoin, ids: ids)
+	emitSchedLockEnter(module, block: rejoin, ids: ids)
+	module.setTerminator(rejoin, op: StdOp.branch(cont.id))
+end 'emitGtRenouncePark'
+
+// A block label with a per-arm suffix, so the two renounce arms' blocks are distinguishable in a dump.
+function bytesWithSuffix(base ByteArray, suffix ByteArray) returns ByteArray
+	var out = base.clone()
+	out.append(suffix)
+	return out
+end 'bytesWithSuffix'
 
 // ⭐ **CANCEL + DRAIN AN IN-FLIGHT OVERLAPPED READ, then branch to `cont` (the drop's `soleOwner`)** — the drop DUAL
 // of the completion thread's re-ready. The GT is parked on a yielding `ReadFile`; the completion thread holds its
@@ -5232,17 +5367,22 @@ function buildGtRunnerDone(module StdModule, target Target)
 	module.functions.push(func)
 end 'buildGtRunnerDone'
 
-// Remove `gt`'s entry from the timer MIN-HEAP, then branch to `cont`. Used by `__gt_promise_drop`'s waiting
-// arm. Keyed on `gt == entry.gt`, so FINDING the entry is a linear scan: the heap is ordered
-// by `(deadline, seq)` and says nothing about which GT sits where. A GT is on the timer at most once, so the
-// first match removes and stops; a GT NOT on the timer (parked on a process instead) scans to the end and
-// branches to `cont` untouched.
+// Remove the `(gt, tag)` entry from the timer MIN-HEAP, then branch to `cont`. Used by `__gt_promise_drop`'s
+// waiting arm and by the poller's readiness path, whose readiness ends a wait the deadline no longer has to.
+// Keyed on the PAIR, so FINDING the entry is a linear scan: the heap is ordered by `(deadline, seq)` and says
+// nothing about which GT sits where. A thread holds at most one wait of each tag, so the first match removes
+// and stops; a `(gt, tag)` NOT on the timer scans to the end and branches to `cont` untouched.
+//
+// ⚠ **THE TAG IS HALF THE KEY AND NOT A FILTER** — see `TimerTagSleep`: a thread holding both a `sleep` and a
+// socket read deadline has two entries, and a gt-keyed scan would take whichever it met first.
+//
+// EXPORTED for `NetpollRuntime`, whose readiness path disarms the deadline of the wait it is ending.
 //
 // ⭐ **REMOVING FROM THE MIDDLE OF A HEAP NEEDS BOTH DIRECTIONS, AND THIS PICKS THE ONE THAT APPLIES.** The
 // last live entry fills the hole, and from there it may be too EARLY for its new parent or too LATE for its
 // new children — never both, because the rest of the array is still a heap. Comparing it against its parent
 // answers which, so exactly one sift walk runs. Removing the last entry itself leaves a heap already.
-function emitGtTimerStoreRemove(module StdModule, func IrFunction, ids ValueMinter, startBlock IrBlock, gt ValueId, cont IrBlock)
+export function emitGtTimerStoreRemove(module StdModule, func IrFunction, ids ValueMinter, startBlock IrBlock, gt ValueId, tag ValueId, cont IrBlock)
 	var scanHdr = module.addBlock(func, label: b"tmscanhdr", heat: BlockHeat.normal)
 	var scanBody = module.addBlock(func, label: b"tmscanbody", heat: BlockHeat.normal)
 	var advance = module.addBlock(func, label: b"tmadvance", heat: BlockHeat.normal)
@@ -5268,10 +5408,14 @@ function emitGtTimerStoreRemove(module StdModule, func IrFunction, ids ValueMint
 	let atEnd = emitCmp(module, block: scanHdr, a: i, b: count, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(scanHdr, op: StdOp.condBranch(atEnd, thenBlockId: cont.id, elseBlockId: scanBody.id))
 
-	// scanBody: entryGt = heap[i].gt; if it is our GT → removeAt, else → advance.
+	// scanBody: both halves of the key are compared, and the AND is branch-free for
+	// `emitTimerEntryBefore`'s reason — a comparison's value lives in the 0/1 domain on every lane.
 	let entryAddr = emitTimerEntryAddr(module, block: scanBody, ids: ids, heapBase: heapBase, index: i)
 	let entryGt = emitLoadField(module, block: scanBody, record: entryAddr, offset: TimerOffGt, ids: ids)
-	let isMatch = emitCmp(module, block: scanBody, a: entryGt, b: gt, pred: StdCmpPred.eq, ids: ids)
+	let entryTag = emitLoadField(module, block: scanBody, record: entryAddr, offset: TimerOffTag, ids: ids)
+	let sameGt = emitCmp(module, block: scanBody, a: entryGt, b: gt, pred: StdCmpPred.eq, ids: ids)
+	let sameTag = emitCmp(module, block: scanBody, a: entryTag, b: tag, pred: StdCmpPred.eq, ids: ids)
+	let isMatch = emitBin(module, block: scanBody, a: sameGt, b: sameTag, opcode: StdBinOpcode.bitAnd, ids: ids)
 	module.setTerminator(scanBody, op: StdOp.condBranch(isMatch, thenBlockId: removeAt.id, elseBlockId: advance.id))
 
 	// advance: i + 1 → scanHdr.
@@ -5522,6 +5666,10 @@ end 'emitLoadCurrentGtCpuOffset'
 //   • **io** — two PLAIN stores, `waiting` then `ioParked`, and no lock: the IOCP completion thread waits for
 //     `ioParked` to turn non-zero before it takes the lock and readies the thread, so its ready always lands
 //     after the `waiting` store rather than under it.
+//   • **netpoll** — `NetpollRuntime.__np_pd_commit` under the lock, which may UNDO the park for the mailbox
+//     arm's reason: readiness that landed between the mark and the commit was recorded by a party that found
+//     nobody published, so the thread is readied rather than left waiting for a wake already delivered. A
+//     socket deadline armed here owes the poller a look, exactly as the timer arm's does.
 //   • **mailbox** — `MailboxRuntime.emitMboxRegisterPark`, which may UNDO the park.
 //   • **await** — under the lock, re-read the awaited GT's status: `completed` means it finished after the
 //     await's own read, so the thread is readied at once (Go's `unlockf` answering false); otherwise the
@@ -5545,6 +5693,11 @@ function buildGtRegisterPark(module StdModule)
 	var notProc = module.addBlock(func, label: b"notparkproc", heat: BlockHeat.normal)
 	var ioArm = module.addBlock(func, label: b"parkio", heat: BlockHeat.normal)
 	var notIo = module.addBlock(func, label: b"notparkio", heat: BlockHeat.normal)
+	var netpollArm = module.addBlock(func, label: b"parknetpoll", heat: BlockHeat.normal)
+	var netpollWake = module.addBlock(func, label: b"parknetpollwake", heat: BlockHeat.normal)
+	var netpollPaid = module.addBlock(func, label: b"parknetpollpaid", heat: BlockHeat.normal)
+	var netpollPayM = module.addBlock(func, label: b"parknetpollpaym", heat: BlockHeat.normal)
+	var notNetpoll = module.addBlock(func, label: b"notparknetpoll", heat: BlockHeat.normal)
 	var mailboxArm = module.addBlock(func, label: b"parkmailbox", heat: BlockHeat.normal)
 	var notMailbox = module.addBlock(func, label: b"notparkmailbox", heat: BlockHeat.normal)
 	var awaitArm = module.addBlock(func, label: b"parkawait", heat: BlockHeat.normal)
@@ -5579,7 +5732,7 @@ function buildGtRegisterPark(module StdModule)
 	emitSchedLockEnter(module, block: timerArm, ids: ids)
 	emitStoreField(module, block: timerArm, record: gt, offset: GtOffStatus, value: waitingConst)
 	let rootBefore = emitGtLoadTimerWhen(module, block: timerArm, ids: ids)
-	module.appendOp(timerArm, op: StdOp.call(ids.mint(), callee: GtTimerAddName, args: twoArgs(gt, second: arg)))
+	module.appendOp(timerArm, op: StdOp.call(ids.mint(), callee: GtTimerAddName, args: threeArgs(gt, second: arg, third: emitConst(module, block: timerArm, value: TimerTagSleep, ids: ids))))
 	emitSchedLockLeave(module, block: timerArm, ids: ids)
 	let becameRoot = emitCmp(module, block: timerArm, a: arg, b: rootBefore, pred: StdCmpPred.lt, ids: ids)
 	module.setTerminator(timerArm, op: StdOp.condBranch(becameRoot, thenBlockId: timerWake.id, elseBlockId: doneBlock.id))
@@ -5619,9 +5772,29 @@ function buildGtRegisterPark(module StdModule)
 	emitStoreField(module, block: ioArm, record: gt, offset: GtOffIoParked, value: inFlight)
 	module.setTerminator(ioArm, op: StdOp.branch(doneBlock.id))
 
-	let mailboxKind = emitConst(module, block: notIo, value: GtParkKindMailbox, ids: ids)
-	let isMailbox = emitCmp(module, block: notIo, a: kind, b: mailboxKind, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(notIo, op: StdOp.condBranch(isMailbox, thenBlockId: mailboxArm.id, elseBlockId: notMailbox.id))
+	let netpollKind = emitConst(module, block: notIo, value: GtParkKindNetpoll, ids: ids)
+	let isNetpoll = emitCmp(module, block: notIo, a: kind, b: netpollKind, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(notIo, op: StdOp.condBranch(isNetpoll, thenBlockId: netpollArm.id, elseBlockId: notNetpoll.id))
+
+	// ⭐⭐ **THE NETPOLL ARM OWES TWO WAKES AND THEY ARE NOT THE SAME WAKE.** `__np_pd_commit` may READY the
+	// thread instead of parking it — readiness that landed between the mark and this commit — which is an
+	// ordinary wake debt; and a socket DEADLINE it arms may be earlier than every other now pending, which owes
+	// the poller a look exactly as the timer arm's does. The root is read on both sides of the commit rather
+	// than compared against the arm's own deadline, because the commit arms nothing when no deadline is set.
+	emitSchedLockEnter(module, block: netpollArm, ids: ids)
+	let rootBeforeCommit = emitGtLoadTimerWhen(module, block: netpollArm, ids: ids)
+	let commitDebt = ids.mint()
+	module.appendOp(netpollArm, op: StdOp.call(commitDebt, callee: NetpollPdCommitName, args: argsOf(gt)))
+	let rootAfterCommit = emitGtLoadTimerWhen(module, block: netpollArm, ids: ids)
+	emitSchedLockLeave(module, block: netpollArm, ids: ids)
+	let becameEarliest = emitCmp(module, block: netpollArm, a: rootAfterCommit, b: rootBeforeCommit, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(netpollArm, op: StdOp.condBranch(becameEarliest, thenBlockId: netpollWake.id, elseBlockId: netpollPaid.id))
+	emitGtWakeNetpoller(module, block: netpollWake, when: rootAfterCommit, cont: netpollPaid, ids: ids)
+	emitSchedWakeIfOwed(module, cur: netpollPaid, owed: commitDebt, wake: netpollPayM, cont: doneBlock, ids: ids)
+
+	let mailboxKind = emitConst(module, block: notNetpoll, value: GtParkKindMailbox, ids: ids)
+	let isMailbox = emitCmp(module, block: notNetpoll, a: kind, b: mailboxKind, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(notNetpoll, op: StdOp.condBranch(isMailbox, thenBlockId: mailboxArm.id, elseBlockId: notMailbox.id))
 
 	// ⭐⭐ **THE MAILBOX PARK MAY DECLINE TO PARK AT ALL.** The registration is `MailboxRuntime`'s — the mailbox's
 	// fields are that file's — and it answers a WAKE DEBT because it may UNDO the park: an envelope that
@@ -5818,7 +5991,13 @@ export function emitGtStoresPending(module StdModule, block IrBlock, ids ValueMi
 	let children = ids.mint()
 	module.appendOp(block, op: StdOp.call(children, callee: GtProcCountName, args: ValueIdArray.create()))
 	let either = emitBin(module, block: block, a: emitLoadGlobalWord(module, block: block, label: GtTimerCountLabel, ids: ids), b: children, opcode: StdBinOpcode.bitOr, ids: ids)
-	return emitCmp(module, block: block, a: either, b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+
+	// ⭐ **A SOCKET WAIT IS PENDING WORK TOO, AND IT IS THE ONLY KIND WITH NO DEADLINE OF ITS OWN.** A process
+	// whose sole outstanding wait is a read has no timer and no child, so without this count the idle tail
+	// would never enter the poller and `__sched_checkdead` would declare a program that is merely waiting for
+	// a peer to be deadlocked.
+	let anyStore = emitBin(module, block: block, a: either, b: emitLoadGlobalWord(module, block: block, label: NetpollWaitersLabel, ids: ids), opcode: StdBinOpcode.bitOr, ids: ids)
+	return emitCmp(module, block: block, a: anyStore, b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
 end 'emitGtStoresPending'
 
 // ⭐⭐ **FIRE THE TIMERS THAT ARE DUE AND REAP THE CHILDREN THAT HAVE EXITED, EACH ONLY IF AN UNLOCKED PEEK

@@ -6308,14 +6308,49 @@ module type BuiltinErrorOrdinalCheck
 	// enum and no verb to that function is refused HERE, which is the point at which the omission is still
 	// one edit old.
 	export function requireTotal()
-		for index in 0 upto self.declaration.caseCount() 'eachCase'
+		let known = self.accountedPrefixLength()
+
+		for index in 0 upto known 'eachCase'
 			let accounted = try self.accountedByIndex.get(index) otherwise panic("BuiltinErrorOrdinalCheck.requireTotal: accountedByIndex.get OOB at {index} for `{self.declaration.kindWord()} {String.from(self.declaration.name)}`, whose {self.declaration.caseCount()} cases sized this column at construction — the layout was mutated after the check was built")
 
 			if not accounted 'unaccounted'
-				self.refuse("`{self.declaration.kindWord()} {String.from(self.declaration.name)}` declares '{String.from(self.declaration.caseNameAt(index))}' at ordinal {self.declaration.tagOfIndex(index)} and {String.from(self.installer)} accounts for it NEITHER WAY — every declared case must be either a `claim` (the runtime throws it at that ordinal) or a `neverThrown` (the runtime never produces it, and its position is transcribed anyway). Silence is the third answer this check no longer takes: a case nobody mentions is a GAP, and an insertion, deletion or reorder inside a gap moves a wire value with nothing watching it. Add whichever verb is true of this case")
+				self.refuse("`{self.declaration.kindWord()} {String.from(self.declaration.name)}` declares '{String.from(self.declaration.caseNameAt(index))}' at ordinal {self.declaration.tagOfIndex(index)} and {String.from(self.installer)} accounts for it NEITHER WAY, while accounting for a LATER case — so this is a GAP inside the range the runtime transcribes, not a case the runtime has yet to hear of. Every declared case before the last one a verb names must be either a `claim` (the runtime throws it at that ordinal) or a `neverThrown` (the runtime never produces it, and its position is transcribed anyway): an insertion, deletion or reorder inside a gap moves a wire value with nothing watching it. Add whichever verb is true of this case")
 			end 'unaccounted'
 		end 'eachCase'
 	end 'requireTotal'
+
+	// ⭐⭐⭐ **ONE PAST THE LAST CASE ANY VERB NAMED — the boundary that makes this a PREFIX check, and the
+	// reason an older compiler can build a NEWER corpus.**
+	//
+	// ⛔⛔ **A TOTAL CHECK MAKES EVERY APPENDED CASE A BOOTSTRAP WALL, AND CI BUILDS EVERY LANE FROM THE LAST
+	// PUBLISHED RELEASE.** Growing one of these enums needs the corpus and the compiler's transcription to
+	// change together; a check that demands an EXACT corpus refuses BOTH orders — the released seed meets a
+	// stdlib with one case more than it knows and stops, and there is no compiler in the tree that can build
+	// past it, because the seed is the one binary that cannot be regenerated from the tree.
+	//
+	// ⭐ **WHAT A COMPILER ACTUALLY NEEDS TO BE TRUE IS NARROWER: the cases IT emits sit at the ordinals it
+	// thinks they do.** A TRAILING case it has never heard of is none of its business — no runtime path in that
+	// compiler can produce that ordinal, and no handler it compiles can be mis-aimed by it. So the transcription
+	// must match case-for-case up to the end of what it knows, and declared cases beyond that are accepted.
+	//
+	// ⚠ **EVERY FAILURE THE TOTAL CHECK CAUGHT IS STILL CAUGHT**, which is what makes this a weakening and not
+	// a hole: a case the runtime names that the corpus does not declare is refused by `recordCase` (a deletion);
+	// a case whose declared ordinal differs from the claimed one is refused there too (a reorder); and an
+	// unaccounted case with an accounted case AFTER it is a GAP and is refused above (an insertion in the
+	// middle). Only the one shape that is genuinely safe — a suffix of cases nobody transcribed — passes.
+	function accountedPrefixLength() returns CaseIndex
+		var boundary = 0 as CaseIndex
+
+		for index in 0 upto self.declaration.caseCount() 'eachCase'
+			let accounted = try self.accountedByIndex.get(index) otherwise panic("BuiltinErrorOrdinalCheck.accountedPrefixLength: accountedByIndex.get OOB at {index} for `{self.declaration.kindWord()} {String.from(self.declaration.name)}`, whose {self.declaration.caseCount()} cases sized this column at construction — the layout was mutated after the check was built")
+
+			if accounted 'named'
+				boundary = index + 1
+			end 'named'
+		end 'eachCase'
+
+		return boundary
+	end 'accountedPrefixLength'
 
 	// THE one place a failed transcription becomes a verdict, so the failure shapes above — an absent case, a
 	// case accounted for twice, a drifted ordinal, a case accounted for neither way — cannot come to disagree

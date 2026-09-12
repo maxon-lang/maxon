@@ -1018,6 +1018,11 @@ let POffSysmonWhen = POffSysmonTick + (PointerSlotBytes as ByteOffset)
 // is its only writer, and a per-P word for `POffStealCount`'s reason.
 let POffPreemptCount = POffSysmonWhen + (PointerSlotBytes as ByteOffset)
 
+// ⭐ **HOW MANY TIMES A GREEN THREAD ON THIS PROCESSOR HAS SUSPENDED ON THE NETWORK POLLER — the reading
+// `__Builtins.schedNetpollBlockCount()` sums.** Stepped by `__gt_register_park`'s netpoll arm on the machine
+// holding the processor, which is its only writer, and a per-P word for `POffStealCount`'s reason.
+let POffNetpollBlockCount = POffPreemptCount + (PointerSlotBytes as ByteOffset)
+
 // ⭐⭐ **THE RING'S 256 SLOTS, AT THE P's TAIL.** Go's `runq [256]guintptr` (`runtime2.go:807`). FIXED
 // rather than grown: the overflow has somewhere to go (the global queue), so a full ring is a routing
 // decision and never an error, and a growable ring would need a lock on the one path this whole design
@@ -1045,7 +1050,7 @@ let RunqHalfSlots = RunqSlots shr 1
 //
 // ⚠ **IT IS NOT `POffSchedTick` AND CANNOT BE.** That counter is DELIBERATELY frozen for the whole of a slot
 // chain (`POffRunnext`), which is exactly the interval this one has to measure.
-let POffRunnextStreak = POffPreemptCount + (PointerSlotBytes as ByteOffset)
+let POffRunnextStreak = POffNetpollBlockCount + (PointerSlotBytes as ByteOffset)
 
 let POffRunqBase = POffRunnextStreak + (PointerSlotBytes as ByteOffset)
 
@@ -1809,6 +1814,11 @@ export let SchedGtRecycleCountName = b"__sched_gt_recycle_count"
 // `buildSchedPerProcSum` body, for `__sched_retake_count`'s reason.
 export let SchedPreemptCountName = b"__sched_preempt_count"
 
+// ⭐ `__sched_netpoll_block_count() -> i64` — the sum of every P's `POffNetpollBlockCount`, and the floor of
+// `__Builtins.schedNetpollBlockCount()`: how many times a green thread has parked on the network poller
+// waiting for a socket to become ready. A `buildSchedPerProcSum` body, for `__sched_retake_count`'s reason.
+export let SchedNetpollBlockCountName = b"__sched_netpoll_block_count"
+
 // ⭐⭐ `__sched_slice_count() -> i64` — the sum of every P's `POffSchedTick`, and the floor of
 // `__Builtins.schedSliceCount()`: how many schedules started a TIME SLICE OF THEIR OWN rather than inheriting
 // the running one from the `runnext` slot.
@@ -1907,7 +1917,7 @@ let SchedArenaCarveName = b"__sched_arena_carve"
 // never writes (`isSchedRuntimeCallee`), and one member is a `__slab_` name, because the number it reports is
 // the ALLOCATOR's (see `SlabRuntime.SlabRemoteFreeCountName`).
 function isSchedPerProcSumCallee(callee ByteArray) returns bool
-	return callee.equals(SchedStealCountName) or callee.equals(SchedRetakeCountName) or callee.equals(SlabRemoteFreeCountName) or callee.equals(SchedGtRecycleCountName) or callee.equals(SchedPreemptCountName) or callee.equals(SchedSliceCountName)
+	return callee.equals(SchedStealCountName) or callee.equals(SchedRetakeCountName) or callee.equals(SlabRemoteFreeCountName) or callee.equals(SchedGtRecycleCountName) or callee.equals(SchedPreemptCountName) or callee.equals(SchedSliceCountName) or callee.equals(SchedNetpollBlockCountName)
 end 'isSchedPerProcSumCallee'
 
 // ⭐⭐ **THE QUERIES ANSWERED FROM THE SCHEDULER'S OWN STATE — the roster that says "asking this question IS
@@ -2358,7 +2368,7 @@ end 'schedRuntimeGlobals'
 
 // Install the P/M half of the scheduler. Called from `installGtRuntime`, so it rides `usesGt` exactly as the
 // green-thread half does — there is no program that wants one without the other.
-export function installSchedRuntime(module StdModule, target Target, usesCompletionPort bool)
+export function installSchedRuntime(module StdModule, target Target, usesCompletionPort bool, rawFree ByteArray)
 	buildSchedInitProcs(module, target: target)
 	buildSchedRunqPut(module)
 	buildSchedRunqNext(module)
@@ -2387,6 +2397,7 @@ export function installSchedRuntime(module StdModule, target Target, usesComplet
 	buildSchedPerProcSum(module, name: SchedGtRecycleCountName, offset: POffGtRecycleCount)
 	buildSchedPerProcSum(module, name: SchedPreemptCountName, offset: POffPreemptCount)
 	buildSchedPerProcSum(module, name: SchedSliceCountName, offset: POffSchedTick)
+	buildSchedPerProcSum(module, name: SchedNetpollBlockCountName, offset: POffNetpollBlockCount)
 	buildSchedLockedCountQuery(module, name: SchedIdleProcessorCountName, label: SchedNpidleLabel)
 	buildSchedLockedCountQuery(module, name: SchedGtRecordsCarvedName, label: GtRecordsCarvedLabel)
 	buildSchedLockedCountQuery(module, name: SchedGlobalPushCountName, label: SchedGlobalPushesLabel)
@@ -2401,7 +2412,7 @@ export function installSchedRuntime(module StdModule, target Target, usesComplet
 	buildSchedWakeOrSpawn(module)
 
 	// The poller the idle tail blocks in, and the door a newly earliest deadline wakes it through.
-	installNetpollRuntime(module, target: target)
+	installNetpollRuntime(module, target: target, rawFree: rawFree)
 	buildSchedWakeNetpoller(module)
 	buildSchedWakePoller(module)
 
@@ -4664,6 +4675,14 @@ export function emitSchedCountPreemption(module StdModule, block IrBlock, ids Va
 	_ = emitFieldAccumulate(module, block: block, record: p, offset: POffPreemptCount, delta: emitConst(module, block: block, value: OneMore, ids: ids), multiM: false, ids: ids)
 end 'emitSchedCountPreemption'
 
+// Step the current processor's `POffNetpollBlockCount` — `__np_pd_commit`'s count, from a green thread whose
+// machine holds a processor. EXPORTED because its one caller is in `NetpollRuntime` and the processor's layout
+// is this file's.
+export function emitSchedCountNetpollBlock(module StdModule, block IrBlock, ids ValueMinter)
+	let p = emitLoadCurrentP(module, block: block, ids: ids)
+	_ = emitFieldAccumulate(module, block: block, record: p, offset: POffNetpollBlockCount, delta: emitConst(module, block: block, value: OneMore, ids: ids), multiM: false, ids: ids)
+end 'emitSchedCountNetpollBlock'
+
 // A query that answers one `underSchedLock` count with a plain load and no lock — `__sched_idle_processor_count`,
 // `__sched_gt_records_carved` and `__sched_timer_start_count`, all named among `MultiMSharing.underSchedLock`'s
 // unlocked reads. `__gt_run_main` brings the scheduler up before `main`, so
@@ -5576,7 +5595,9 @@ function emitSchedPollerOwed(module StdModule, block IrBlock, ids ValueMinter) r
 	let children = ids.mint()
 	module.appendOp(block, op: StdOp.call(children, callee: GtProcCountName, args: ValueIdArray.create()))
 	let childPending = emitCmp(module, block: block, a: children, b: zero, pred: StdCmpPred.ne, ids: ids)
-	let pending = emitBin(module, block: block, a: timerPending, b: childPending, opcode: StdBinOpcode.bitOr, ids: ids)
+	let socketPending = emitCmp(module, block: block, a: emitLoadGlobalWord(module, block: block, label: NetpollWaitersLabel, ids: ids), b: zero, pred: StdCmpPred.ne, ids: ids)
+	let storePending = emitBin(module, block: block, a: timerPending, b: childPending, opcode: StdBinOpcode.bitOr, ids: ids)
+	let pending = emitBin(module, block: block, a: storePending, b: socketPending, opcode: StdBinOpcode.bitOr, ids: ids)
 	let nobodyPolls = emitCmp(module, block: block, a: emitLoadAcquireGlobalWord(module, block: block, label: SchedLastPollLabel, ids: ids), b: zero, pred: StdCmpPred.ne, ids: ids)
 	return emitBin(module, block: block, a: pending, b: nobodyPolls, opcode: StdBinOpcode.bitAnd, ids: ids)
 end 'emitSchedPollerOwed'
@@ -5655,15 +5676,41 @@ function emitSchedLoopExitTest(module StdModule, block IrBlock, leave SchedLoopL
 	end 'testFor'
 end 'emitSchedLoopExitTest'
 
-// Branch-free: `(drain and (live == 0 or stuck)) or (not drain and phase != running)`, each operand a `cmp`
-// result, so the bitwise operators are the logical ones.
+// Branch-free: `(drain and ((live == 0 and nothing runnable and nothing parked) or stuck)) or
+// (not drain and phase != running)`, each operand a `cmp` result, so the bitwise operators are the logical
+// ones.
+//
+// ⛔⛔ **A ZERO OWNER COUNT IS NOT AN EMPTY PROCESS, AND THE DIFFERENCE IS A RENOUNCED COROUTINE.**
+// `__gt_live_count` counts PROMISES outstanding, and `__gt_promise_drop` debits it the moment it renounces a
+// thread — before that thread has run a single instruction of its own unwinding. Left at the owner count
+// alone, the drain leaves, `__sched_stop_workers` joins the workers out from under a coroutine that was
+// mid-frame, and every heap value its locals owned is reported by the leak gate. MEASURED: a dropped
+// `sleep`-parked coroutine holding one `String` exits 101 with the count test alone and 0 with this one.
+//
+// ⚠ **IT CANNOT WAIT FOR EVER, WHICH IS WHY RUNNABLE IS THE RIGHT WORD.** Work that is runnable makes
+// progress by definition, and a thread that parks AGAIN stops being runnable and puts its own store back on
+// `emitGtStoresPending` — which is what `SchedPhase.stuck` already ends. Nothing here waits on a party
+// outside the process.
 function emitSchedMainLoopUntilMet(module StdModule, block IrBlock, until ValueId, ids ValueMinter) returns ValueId
 	let phase = emitLoadAcquireGlobalWord(module, block: block, label: SchedPhaseLabel, ids: ids)
 
 	let mainDone = emitCmp(module, block: block, a: emitSchedPhaseIs(module, block: block, phase: phase, want: SchedPhase.mainRunning, ids: ids), b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	let nothingOwned = emitCmp(module, block: block, a: emitLoadGlobalWord(module, block: block, label: GtLiveCountLabel, ids: ids), b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	let isStuck = emitSchedPhaseIs(module, block: block, phase: phase, want: SchedPhase.stuck, ids: ids)
-	let drainOver = emitBin(module, block: block, a: nothingOwned, b: isStuck, opcode: StdBinOpcode.bitOr, ids: ids)
+	let anyWork = ids.mint()
+	module.appendOp(block, op: StdOp.call(anyWork, callee: SchedAnyWorkName, args: ValueIdArray.create()))
+	let nothingRunnable = emitCmp(module, block: block, a: anyWork, b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+
+	// ⚠ **AND NOTHING PARKED, BECAUSE A RENOUNCED THREAD PARKS AGAIN ON ITS WAY OUT.** A dropped reader's
+	// unwinding drops its socket, and `__ms_close` opens with an I/O yield — so the thread is briefly on the
+	// TIMER store with no owner and nothing runnable, which the two tests above both read as "finished".
+	// MEASURED: exit 101 without this term and 0 with it. A service's mailbox park is on none of these stores,
+	// so a parked service still does not hold the exit open.
+	let stillParked = emitGtStoresPending(module, block: block, ids: ids)
+	let nothingPending = emitCmp(module, block: block, a: stillParked, b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let quiet = emitBin(module, block: block, a: nothingRunnable, b: nothingPending, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let nothingLeft = emitBin(module, block: block, a: nothingOwned, b: quiet, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let drainOver = emitBin(module, block: block, a: nothingLeft, b: isStuck, opcode: StdBinOpcode.bitOr, ids: ids)
 
 	let draining = emitCmp(module, block: block, a: until, b: emitConst(module, block: block, value: SchedMainLoopUntil.drained.rawValue as ParsedInt, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	let awaitingMain = emitCmp(module, block: block, a: until, b: emitConst(module, block: block, value: SchedMainLoopUntil.mainCompleted.rawValue as ParsedInt, ids: ids), pred: StdCmpPred.eq, ids: ids)

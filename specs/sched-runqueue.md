@@ -567,19 +567,38 @@ total=4 finished=4 recycled=6
 0
 ```
 
-<!-- test: sched-runqueue.a-drop-of-a-parked-thread-is-both-halves -->
-**THE ONE ARM WHERE ONE CALL IS BOTH PARTIES.** `s` parks on a 200 ms timer and `await f` returns long
-before it fires, so the loop body's scope exit drops a thread that is registered in the timer store and
-that no runner will ever come back for. The drop takes it out of the store under `__sched_lock` — and,
-having done so, is the only holder left, so it performs the RUNNER's half (the stack the parked thread is
-suspended on) and then the consumer's, which reclaims. Three iterations with no hang, because nothing ever
-waits on the 200 ms deadline, and after a warm-up round both spawns of every round are served from the free
-list — `schedGtRecycleCount()` grows by exactly 6.
+<!-- test: sched-runqueue.a-drop-of-a-parked-thread-renounces-it -->
+**A DROP RENOUNCES A PARKED THREAD; IT DOES NOT FREE IT.** `s` parks on a 200 ms timer and `await f` returns
+long before it fires, so the loop body's scope exit drops a thread that is registered in the timer store. The
+drop takes it out of the store under `__sched_lock` and READIES it: the thread resumes from its `sleep` early,
+runs its own body out, unwinds its own frame, and its own completion performs the runner's half. Three
+iterations with no hang, because nothing ever waits on the 200 ms deadline.
 
-✅ **SABOTAGE-VERIFIED, AND THE COUNT IS THE ONLY THING THAT SEES IT.** With the runner's half removed from
-this arm, the parked record is never reclaimed and this case reads `recycled=3` — but it still exits 0,
-because the consumer's half has already debited `__gt_live_count` and the exit gate reads clean. The two
-cases above stay GREEN under that sabotage.
+⛔⛔ **THE DROP MAY NOT PERFORM THE RUNNER's HALF ITSELF, AND THAT IS WHAT THIS COUNT PINS.** The runner's half
+frees the STACK the parked thread is suspended on — and nothing can unwind a suspended frame from outside, so
+every heap value that thread's locals own is stranded. MEASURED with no socket anywhere in it: a coroutine
+holding one interpolated `String` inside a `sleep`, dropped while parked, exits **101** when the drop frees its
+stack and **0** when the drop renounces it.
+
+⛔⛔ **THE `Runtime.yield()` AT THE TOP OF THE MEASURED LOOP IS A SYNCHRONISATION POINT, NOT A PAUSE — WITHOUT
+IT THIS NUMBER RACES THE RECLAIM AND VARIES BY LANE.** The renounced sleeper is readied onto MAIN's strand
+queue, and a coroutine is never stolen off a strand (the case above pins exactly that), so a yield puts `main`
+BEHIND it in one FIFO and the thread has run to completion by the time `main` is scheduled again. That is what
+makes the free list's contents a FACT at every spawn below rather than a question about when a machine got
+round to it. MEASURED without it: x64-windows read `recycled=5` and x64-linux `recycled=4`, from the same
+binary's behaviour, because the spawns and the reclaims interleaved differently. ⚠ A `sleep()` here would be
+the same race with a longer fuse; the yield waits for the EVENT.
+
+✅ **TWO READINGS, AND THE COUNT IS THE ONLY THING THAT TELLS THEM APART.** Six spawns happen inside the
+window, and each one either takes a record off the free list or carves a new one:
+  • **`recycled=6`** — every spawn was served from the free list. Each round frees two records before the next
+    round's spawns: `await f` reclaims that round's `done`, and the yield above lets the previous round's
+    renounced sleeper finish and give its record back.
+  • **`recycled=3`** — the renounced record is NEVER reclaimed, so only the awaited `done` of each round comes
+    back and every sleeper's spawn carves. The sabotage reading: remove the reclamation from this arm
+    altogether and the case still exits 0, because the consumer's half has already debited `__gt_live_count`
+    and the exit gate reads clean.
+The two cases above stay GREEN under both.
 ```maxon
 function done() returns Integer
 	Runtime.yield()
@@ -608,6 +627,10 @@ function main() returns ExitCode
 	var j = 0
 
 	while j < 3 'parkedThenDropped'
+		// The previous round's renounced sleeper is queued ahead of us on this strand; one yield lets it run
+		// out, so both records are back before the two spawns below ask for one. See the note above.
+		Runtime.yield()
+
 		let s = async sleeper()
 		let f = async done()
 		total = total + await f

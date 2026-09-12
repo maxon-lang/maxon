@@ -7343,15 +7343,23 @@ export let ManagedSocketTypeName = b"__ManagedSocket"
 let ManagedSocketHandleFieldName = b"_handle"
 let ManagedSocketHandleFieldIndex = 0 as FieldIndex
 
-// The four `__ManagedSocket` methods: one static and three instance methods. A name outside this
-// set is refused by name at its own span rather than mangled into a callee no file declares.
+// The `__ManagedSocket` methods: one static and five instance methods. A name outside this set is refused by
+// name at its own span rather than mangled into a callee no file declares.
 //
-// ⚠ `stdlib/TcpClient.maxon` calls all four and nothing else (`:23`, `:43`, `:65`, `:93`), so this
-// set is the whole contract the corpus needs.
+// ⚠ `stdlib/TcpClient.maxon` calls every one of them and nothing else, so this set is the whole contract the
+// corpus needs.
 export let ManagedSocketTcpConnectMethod = b"tcpConnect"
 export let ManagedSocketSendFromMethod = b"sendFrom"
 export let ManagedSocketRecvMethod = b"recv"
 export let ManagedSocketCloseMethod = b"close"
+export let ManagedSocketSetReadDeadlineMethod = b"setReadDeadline"
+export let ManagedSocketSetWriteDeadlineMethod = b"setWriteDeadline"
+
+// ⭐⭐ **THE TIMEOUT CROSSES AS A PREDICATE AND NOT AS AN ERROR CASE — Go's `net.Error.Timeout()`.** It asks
+// whether the operation that just failed ended in its deadline, which `stdlib/TcpClient.maxon` maps onto
+// `NetworkError.timedOut`; the builtin enum keeps its seven committed cases. See
+// `ManagedSocketRuntime.claimManagedSocketOrdinals` for why that matters to a bootstrap.
+export let ManagedSocketTimedOutMethod = b"timedOut"
 
 // ⭐ **THE ERROR EVERY THROWING `__ManagedSocket` OPERATION THROWS**, and the type a handler’s `match e`
 // discriminates. DECLARED at `stdlib/Builtins.maxon:164` and read from there (A1s), exactly as the file and
@@ -7390,6 +7398,7 @@ module let ManagedSocketClosedCaseName = b"closed"
 export let ManagedSocketHostParamName = b"host"
 export let ManagedSocketPortParamName = b"port"
 export let ManagedSocketLengthParamName = b"length"
+export let ManagedSocketDeadlineParamName = b"milliseconds"
 
 // ⭐ **THE ERROR A POSSIBLY-ZERO `/` OR `mod` THROWS (A1)**, and the type an `otherwise (e)` handler's
 // `match e` discriminates. Its ONE case lives with the layout, in `Project.builtinDivisionByZeroErrorEnum`.

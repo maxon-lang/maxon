@@ -2157,6 +2157,7 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 		chunks.push(buildArm64DarwinNetpollOpenChunk())
 		chunks.push(buildArm64DarwinNetpollUserEventChunk(HostNetpollOpenBreakName, flags: DarwinEvAdd + DarwinEvClear, fflags: 0, queue: Arm64Register.x0, answersQueue: true))
 		chunks.push(buildArm64DarwinNetpollWaitChunk())
+		chunks.push(buildArm64DarwinNetpollArmChunk())
 		chunks.push(buildArm64DarwinNetpollUserEventChunk(HostNetpollRaiseBreakName, flags: 0, fflags: DarwinNoteTrigger, queue: Arm64Register.x1, answersQueue: false))
 		chunks.push(buildArm64DarwinSleepChunk(HostNetpollSleepName, unit: PosixTimeUnit.microseconds))
 
@@ -2264,6 +2265,14 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 		chunks.push(buildArm64DarwinDirCreateChunk())
 		chunks.push(buildArm64DarwinDirCurrentPathChunk())
 	end 'managedDirectory'
+
+	// ⭐ **THE POLLED SOCKET BAND's THREE FOLDS.** Every socket lowering on this lane ends in one of them, so
+	// the gate is `installManagedSocketRuntime`'s own bit — one bit, two tiers, exactly as the gates above.
+	if usage.usesManagedSocket 'managedSocket'
+		chunks.push(buildArm64DarwinSocketBirthChunk())
+		chunks.push(buildArm64DarwinSocketStatusChunk(HostSocketIntStatusName, widens: true))
+		chunks.push(buildArm64DarwinSocketStatusChunk(HostSocketSizeStatusName, widens: false))
+	end 'managedSocket'
 
 	// The mode→attribute-mask decoder is called by BOTH `mrt_darwin_fill_find_data` (the cluster above) and
 	// `mrt_darwin_file_attributes` (below), so its gate is the union of theirs — which is what lifted it out
@@ -2406,3 +2415,130 @@ end 'buildArm64DarwinNetpollWaitChunk'
 
 // What a failed `kevent` answers, restored after `__error()` has used the return register.
 let DarwinKeventFailed = 0xFFFFFFFFFFFFFFFF
+
+// ⭐⭐ **`mrt_host_netpoll_arm(x0 = kq, x1 = fd) -> x0 = 0, or negative` — A SOCKET JOINS THE KQUEUE AS TWO
+// CHANGES, NOT ONE.** Each direction is a filter of its own here, where an epoll set takes one registration
+// carrying both; both are `EV_CLEAR`, which is kqueue's edge trigger — see `NetpollVerb.armSource` for why that
+// is required rather than preferred. The `ident` is the descriptor, which is what the decode reads back.
+function buildArm64DarwinNetpollArmChunk() returns FunctionCodeChunk
+	let SlotQueue = 0 as StackSize
+	let SlotEvents = 1 as StackSize
+	let eventSlots = runtimeFrameSlots(DarwinKeventBytes * DarwinSocketChanges)
+	var asm = Arm64RuntimeAsm.beginFunction(1 + eventSlots)
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotQueue)
+	arm64EmitZeroSlots(asm, firstSlot: SlotEvents, slotCount: eventSlots)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x2, slot: SlotEvents)
+
+	arm64DarwinEmitSocketFilter(asm, changes: Arm64Register.x2, fd: Arm64Register.x1, index: 0, filter: DarwinEvfiltRead)
+	arm64DarwinEmitSocketFilter(asm, changes: Arm64Register.x2, fd: Arm64Register.x1, index: 1, filter: DarwinEvfiltWrite)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotQueue)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x1, src: Arm64Register.x2)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: DarwinSocketChanges as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x5, value: 0)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.kevent)
+	arm64PosixWidenIntResult(asm, reg: Arm64Register.x0)
+	return asm.finishFunction(HostNetpollArmSourceName)
+end 'buildArm64DarwinNetpollArmChunk'
+
+// One change record of the pair: `(fd, filter, EV_ADD | EV_CLEAR)` at `index` in the changelist `changes`
+// points at. x9 is the value scratch every chunk in this file uses.
+function arm64DarwinEmitSocketFilter(asm Arm64RuntimeAsm, changes Arm64Register, fd Arm64Register, index ParsedInt, filter ParsedInt)
+	let recordAt = index * DarwinKeventBytes
+	arm64EmitStoreWord64At(asm, src: fd, base: changes, byteOffset: (recordAt + DarwinKeventIdentOffset) as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x9, value: darwinKeventFilterWord(filter, flags: (DarwinEvAdd or DarwinEvClear) as MachineWord, fflags: 0))
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x9, base: changes, byteOffset: (recordAt + DarwinKeventFilterOffset) as MachineWord)
+end 'arm64DarwinEmitSocketFilter'
+
+// ==========================================================================
+// The polled socket band — libSystem's answers in the op's own vocabulary
+// ==========================================================================
+
+// ⭐⭐ **`mrt_host_socket_birth(x0 = socket()'s raw answer) -> x0 = the descriptor, or -errno`.** Darwin has
+// neither `SOCK_NONBLOCK` nor `SOCK_CLOEXEC` to pass `socket(2)`, so both flags are set here — and `fcntl` is
+// VARIADIC, whose third argument this ABI passes on the STACK, which is why this is a chunk with a frame and
+// not an isel sequence.
+function buildArm64DarwinSocketBirthChunk() returns FunctionCodeChunk
+	let SlotFd = 0 as StackSize
+	let SlotErrno = 1 as StackSize
+	var asm = Arm64RuntimeAsm.beginVariadicCallerFunction(2)
+
+	let noSocket = asm.newLabel()
+	let flagsRefused = asm.newLabel()
+	let answered = asm.newLabel()
+
+	arm64PosixWidenIntResult(asm, reg: Arm64Register.x0)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: noSocket)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotFd)
+
+	arm64DarwinEmitFcntl(asm, fdSlot: SlotFd, command: DarwinFcntlSetFlags, value: DarwinONonBlock, failed: flagsRefused)
+	arm64DarwinEmitFcntl(asm, fdSlot: SlotFd, command: DarwinFcntlSetFd, value: DarwinFdCloexec, failed: flagsRefused)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotFd)
+	arm64EmitBranchTo(asm, label: answered)
+
+	// ⚠ **A DESCRIPTOR THAT COULD NOT BE FLAGGED IS CLOSED HERE OR IT LEAKS FOR THE PROCESS LIFETIME.** It
+	// belongs to nobody: the answer this chunk is about to give is a failure, so no box will ever own it and no
+	// `__ms_destruct` will ever close it — and a descriptor is not memory, so the exit-101 gate cannot see it.
+	// The errno is CAPTURED FIRST, because `close` sets its own on the way past.
+	asm.placeLabel(flagsRefused)
+	arm64DarwinEmitCaptureErrno(asm, slot: SlotErrno)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotFd)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.close)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x9, slot: SlotErrno)
+	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x0, rhs: Arm64Register.x9)
+	arm64EmitBranchTo(asm, label: answered)
+
+	asm.placeLabel(noSocket)
+	arm64DarwinEmitNegatedErrno(asm)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostSocketBirthName)
+end 'buildArm64DarwinSocketBirthChunk'
+
+// `fcntl(fd, command, value)` — the value is the VARARG and goes at `[sp, #0]`, the one outgoing word
+// `beginVariadicCallerFunction` reserves. A negative answer leaves the branch at `failed`, where the errno is
+// fetched.
+function arm64DarwinEmitFcntl(asm Arm64RuntimeAsm, fdSlot StackSize, command ParsedInt, value ParsedInt, failed BlockId)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: fdSlot)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: command as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: value as MachineWord)
+	arm64EmitStoreWord64Sp(asm.code, src: arm64RuntimeReg(Arm64Register.x2), byteOffset: 0)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.fcntl)
+	arm64PosixNarrowIntStatus(asm, reg: Arm64Register.x0)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: failed)
+end 'arm64DarwinEmitFcntl'
+
+// ⭐ **THE TWO STATUS FOLDS — a libSystem -1 becoming the `-errno` a raw `svc` would have answered.** The
+// `int` form widens first because AAPCS64 leaves a C `int`'s upper half unspecified; the `ssize_t` form must
+// NOT, because bit 31 of a byte count is a count's and not a sign.
+function buildArm64DarwinSocketStatusChunk(name ByteArray, widens bool) returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(0)
+
+	let answered = asm.newLabel()
+
+	if widens 'intAnswer'
+		arm64PosixWidenIntResult(asm, reg: Arm64Register.x0)
+	end 'intAnswer'
+
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: answered)
+	arm64DarwinEmitNegatedErrno(asm)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(name)
+end 'buildArm64DarwinSocketStatusChunk'
+
+// `x0 = -(*__error())` — this thread's errno, negated into the vocabulary every socket op answers in.
+function arm64DarwinEmitNegatedErrno(asm Arm64RuntimeAsm)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.errnoLocation)
+	arm64EmitLoadWord32At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x9, value: 0)
+	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x9, rhs: Arm64Register.x0)
+end 'arm64DarwinEmitNegatedErrno'

@@ -93,6 +93,22 @@ end 'linuxReadsEnvironment'
 // reports; see either lane's `…DirPrefixChunk` for why that is a refusal rather than a truncation.
 export let LinuxErrnoNameTooLong = 36
 
+// ⭐ **THE TWO A NON-BLOCKING SOCKET ANSWERS INSTEAD OF WAITING.** `EAGAIN` (which is `EWOULDBLOCK` on Linux —
+// one number, not two) is what a transfer answers with nothing to move, and `EINPROGRESS` is `connect`'s
+// handshake still running. Both are per-OS and neither is a failure: they are what sends a green thread to the
+// poller. Darwin's twins are `PosixRuntime.DarwinErrno*`.
+export let LinuxErrnoWouldBlock = 11
+export let LinuxErrnoInProgress = 115
+
+// `SOL_SOCKET` and `SO_ERROR` — `getsockopt`'s level and option for a completed non-blocking connect's verdict.
+export let LinuxSolSocket = 1
+export let LinuxSoError = 4
+
+// `SOCK_NONBLOCK | SOCK_CLOEXEC`, OR-ed into `socket(2)`'s TYPE argument. Linux takes them there, so a socket
+// is born non-blocking in ONE call; the BSDs have no such flag and pay a second syscall for it.
+export let LinuxSockNonBlock = 0x800
+export let LinuxSockCloexec = 0x80000
+
 // ⭐ **THE `.data` WORD EACH LANE'S HOST SURFACE STASHES A FAILED SYSCALL'S REASON INTO.**
 // `StdOp.osLastError` is a SEPARATE op emitted immediately after the call that failed, so the reason must
 // survive from one to the other; a syscall reports it in the return register and keeps no copy, and a raw
@@ -756,8 +772,3 @@ export let LinuxMsgNoSignal = 0x4000
 // have no syscall for.
 export let LinuxSocketNoPeerAddress = 0
 
-// ⭐ **HOW FAR TO SHIFT AN ANSWER TO REPLICATE ITS SIGN** — one less than a machine word's width, spent by
-// the `answer | (answer asr 63)` fold each isel's socket band applies to a raw syscall result. A syscall
-// reports failure as `-errno` where the Std tier's socket ops promise exactly -1, and that fold is the
-// cheapest total translation between the two (see each isel's `emitSyscallFailureSentinel`).
-export let LinuxSyscallSignShift = (MachineWordBits - 1) as ShiftCount

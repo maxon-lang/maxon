@@ -781,10 +781,11 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// which is what a parallelism hint wants, and what `nproc` itself answers.
 			cpuCount gives true
 
-			// ⭐⭐⭐ **THE SOCKET BAND — FIVE INLINE `svc`s AND A RESOLVER WRITTEN IN Std IR, BECAUSE THERE IS NO
+			// ⭐⭐⭐ **THE SOCKET BAND — INLINE `svc`s AND A RESOLVER WRITTEN IN Std IR, BECAUSE THERE IS NO
 			// `getaddrinfo` ON A LANE THAT LINKS NO LIBC.** The transfers are `sendto`/`recvfrom` with a NULL peer
-			// (AArch64 has no `send`/`recv` syscall at all) and every raw answer is folded from `-errno` to the
-			// exact -1 the Std tier tests for (`StdToArm64Conversion.emitSyscallFailureSentinel`).
+			// (AArch64 has no `send`/`recv` syscall at all) and every raw answer reaches the Std tier as the
+			// `-errno` the kernel gave it, which is what lets the socket band tell `EAGAIN` and `EINPROGRESS` from
+			// a real failure (`ManagedSocketRuntime.emitSocketWouldBlock`).
 			//
 			// ⭐ **THE RESOLVE IS A DIFFERENT Std GRAPH RATHER THAN A DIFFERENT LOWERING** — the answer
 			// `commandLineShape` gives for argv, one family over. `ManagedSocketRuntime`'s

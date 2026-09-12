@@ -664,6 +664,10 @@ export let HostNetpollRaiseBreakName = b"mrt_host_netpoll_raise_break"
 export let HostNetpollDrainBreakName = b"mrt_host_netpoll_drain_break"
 export let HostNetpollSleepName = b"mrt_host_netpoll_sleep"
 
+// The socket registration — `NetpollVerb.armSource`. One chunk on each POSIX lane: an `epoll_ctl` add on the
+// two Linux ones, a two-element `kevent` changelist on macOS.
+export let HostNetpollArmSourceName = b"mrt_host_netpoll_arm"
+
 // What `openTimer` answers where a sleep needs no object; `sleepOnTimer` never reads it on these lanes.
 export let PosixNoTimerObject = 0
 
@@ -677,6 +681,22 @@ export let LinuxEventfdNonblock = 0x800
 export let LinuxEpollCtlAdd = 1
 export let LinuxEpollIn = 1
 
+// ⭐ **THE REST OF THE `events` VOCABULARY — what a SOCKET is registered with, and what a wait may answer.**
+// `EPOLLERR` and `EPOLLHUP` are reported whether or not they were asked for, which is why the decode counts
+// each of them as BOTH directions: a thread parked on a descriptor that has failed is a wait nothing else can
+// end. `EPOLLET` makes the registration edge-triggered — see `NetpollVerb.armSource` for why that is required
+// rather than preferred.
+export let LinuxEpollOut = 4
+export let LinuxEpollErr = 8
+export let LinuxEpollHup = 16
+export let LinuxEpollRdHup = 0x2000
+let LinuxEpollEdgeTriggered = 0x80000000
+
+// ⭐ **WHAT A SOCKET IS REGISTERED WITH: BOTH DIRECTIONS AND A PEER HANGUP, EDGE-TRIGGERED.** One registration
+// serves both directions because a descriptor's two waits are independent and the decode tells them apart from
+// the `events` a wait answers; `EPOLLERR`/`EPOLLHUP` need no asking for.
+export let LinuxEpollSocketEvents = LinuxEpollIn + LinuxEpollOut + LinuxEpollRdHup + LinuxEpollEdgeTriggered
+
 // An eventfd is read and written in 8-byte counters; a raise adds one.
 export let LinuxEventfdCounterBytes = 8
 export let LinuxEventfdRaise = 1
@@ -684,6 +704,58 @@ export let LinuxEventfdRaise = 1
 // The two answers a wait may give that are not failures: `EINTR` (the kernel's `-4`), which `wait` reports as
 // no entries, and every non-negative count.
 export let PosixErrnoInterrupted = 4
+
+// ⭐ **DARWIN's TWO NON-BLOCKING ANSWERS AND ITS `getsockopt` VOCABULARY.** `EAGAIN`/`EWOULDBLOCK` is 35 and
+// `EINPROGRESS` 36 there where Linux has 11 and 115, which is why `ManagedSocketRuntime` asks the TARGET rather
+// than reading one pair (`LinuxRuntime.LinuxErrnoWouldBlock` is the other).
+export let DarwinErrnoWouldBlock = 35
+export let DarwinErrnoInProgress = 36
+let DarwinSolSocket = 0xFFFF
+let DarwinSoError = 0x1007
+
+// `F_SETFL`/`O_NONBLOCK` and `F_SETFD`/`FD_CLOEXEC` — the two `fcntl` calls `mrt_host_socket_birth` makes,
+// because Darwin's `socket(2)` can be given neither flag where Linux's can be given both.
+export let DarwinFcntlSetFlags = 4
+export let DarwinFcntlSetFd = 2
+export let DarwinONonBlock = 4
+export let DarwinFdCloexec = 1
+
+// ⭐ **`getsockopt`'s LEVEL AND OPTION, ASKED OF THE OS.** The two POSIX kernels do not agree on either number
+// (`SOL_SOCKET` is 1 on Linux and 0xFFFF on Darwin), so the isels ask here rather than each carrying a pair.
+export function posixSolSocket(os Os) returns MachineWord
+	return match os 'os'
+		linux gives LinuxSolSocket as MachineWord
+		macos gives DarwinSolSocket as MachineWord
+		windows panic("posixSolSocket: x64-windows drives its sockets through blocking calls, so `osSocketError` — the verdict of a NON-blocking connect — is never emitted there")
+		wasi panic("posixSolSocket: `targetProvidesFacility` denies `managedSocket` on wasm32-wasi, so no socket option is ever read there")
+	end 'os'
+end 'posixSolSocket'
+
+export function posixSoError(os Os) returns MachineWord
+	return match os 'os'
+		linux gives LinuxSoError as MachineWord
+		macos gives DarwinSoError as MachineWord
+		windows panic("posixSoError: see `posixSolSocket` — x64-windows reads no socket option")
+		wasi panic("posixSoError: see `posixSolSocket` — wasm32-wasi reads no socket option")
+	end 'os'
+end 'posixSoError'
+
+// The `fcntl` chunk both of those go through — a chunk rather than an import lowering because `fcntl` is
+// VARIADIC on Darwin's arm64 ABI and its third argument is passed on the STACK, which a frame-less isel
+// sequence has nowhere to put.
+// ⭐⭐ **THREE DARWIN-ONLY CHUNKS, AND THEY EXIST BECAUSE libSystem KEEPS ITS REASON SOMEWHERE ELSE.** A raw
+// `svc` answers `-errno` in the return register; a libSystem call answers -1 and leaves the reason in
+// `*__error()`, which no frame-less isel sequence can fetch (it is a CALL). Each takes the raw libSystem
+// answer and gives back the op's contract:
+//
+//   • `mrt_host_socket_birth` — `socket(2)`'s answer: widen, then set `O_NONBLOCK` and `FD_CLOEXEC`, which
+//     Darwin cannot pass to `socket` and Linux can.
+//   • `mrt_host_socket_int_status` — a C `int` answer (`connect`, `getsockopt`): widen, then fold.
+//   • `mrt_host_socket_size_status` — a `ssize_t` answer (`send`, `recv`): fold WITHOUT widening, because the
+//     count is already 64 bits and bit 31 is a byte count's, not a sign.
+export let HostSocketBirthName = b"mrt_host_socket_birth"
+export let HostSocketIntStatusName = b"mrt_host_socket_int_status"
+export let HostSocketSizeStatusName = b"mrt_host_socket_size_status"
 
 // `kqueue`'s user event: `EVFILT_USER`, registered `EV_ADD | EV_CLEAR` so a receive consumes it, and fired
 // with `NOTE_TRIGGER`.
@@ -696,6 +768,17 @@ export let DarwinNoteTrigger = 0x01000000
 export let DarwinKeventBytes = 32
 export let DarwinKeventIdentOffset = 0
 export let DarwinKeventFilterOffset = 8
+
+// ⭐ **THE TWO SOCKET FILTERS, AND THE MASK THAT READS ONE BACK.** `filter` is a SIGNED 16-bit field inside the
+// quadword that starts at `DarwinKeventFilterOffset`, so the decode masks the load rather than narrowing it —
+// this tier has no 16-bit load — and compares against the constants masked the same way.
+export let DarwinEvfiltRead = -1
+export let DarwinEvfiltWrite = -2
+export let DarwinKeventFilterMask = 0xFFFF
+
+// A socket costs TWO kevent changes where an epoll set takes one registration: each direction is a filter of
+// its own there.
+export let DarwinSocketChanges = 2
 
 // Where `flags` and `fflags` sit in the quadword that starts at `filter`, as bit positions of a little-endian load.
 export let DarwinKeventFlagsShift = 16
@@ -711,6 +794,7 @@ export function posixNetpollChunk(verb NetpollVerb) returns ByteArray
 		drainBreak gives HostNetpollDrainBreakName
 		sleepOnTimer or
 			shortSleep gives HostNetpollSleepName
+		armSource gives HostNetpollArmSourceName
 		openTimer panic("posixNetpollChunk: `openTimer` has no chunk on a POSIX lane — a sleep needs no object there, so the isel answers `PosixNoTimerObject` inline")
 	end 'v'
 end 'posixNetpollChunk'
@@ -726,6 +810,7 @@ export function posixNetpollOperandCount(verb NetpollVerb) returns ParamCount
 		drainBreak gives 1
 		sleepOnTimer or
 			shortSleep gives 1
+		armSource gives 2
 		openTimer panic("posixNetpollOperandCount: `openTimer` has no chunk on a POSIX lane — see `posixNetpollChunk`")
 	end 'v'
 end 'posixNetpollOperandCount'

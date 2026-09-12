@@ -321,6 +321,9 @@ let X64LinuxSyscallRenameat = 264
 // constrained the same way here and the macOS lane is constrained the opposite way, which is why the two
 // isels name an import slot AND a syscall number at every transfer site.
 export let X64LinuxSyscallSocket = 41
+
+// `getsockopt` — the verdict of a non-blocking connect (`StdOp.osSocketError`).
+export let X64LinuxSyscallGetsockopt = 55
 export let X64LinuxSyscallConnect = 42
 export let X64LinuxSyscallSendto = 44
 export let X64LinuxSyscallRecvfrom = 45
@@ -3880,6 +3883,7 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 		chunks.push(buildX64LinuxNetpollOpenChunk())
 		chunks.push(buildX64LinuxNetpollOpenBreakChunk())
 		chunks.push(buildX64LinuxNetpollWaitChunk())
+		chunks.push(buildX64LinuxNetpollArmChunk())
 		chunks.push(buildX64LinuxNetpollCounterChunk(HostNetpollRaiseBreakName, syscallNumber: X64LinuxSyscallWrite, descriptor: X64Register.rdx))
 		chunks.push(buildX64LinuxNetpollCounterChunk(HostNetpollDrainBreakName, syscallNumber: X64LinuxSyscallRead, descriptor: X64Register.rcx))
 		chunks.push(buildX64LinuxSleepChunk(HostNetpollSleepName, unit: PosixTimeUnit.microseconds))
@@ -4025,6 +4029,29 @@ end 'buildX64LinuxNetpollOpenBreakChunk'
 
 // `epoll_event.data`'s byte offset in x86-64's packed layout.
 let LinuxEpollPackedDataOffset = 4
+
+// `mrt_host_netpoll_arm(rcx = epfd, rdx = fd) -> rax = 0, or -errno` — `epoll_ctl(EPOLL_CTL_ADD)` with both
+// directions and `EPOLLET`, the descriptor itself as the `epoll_data` the decode reads back.
+//
+// ⚠ The record is two quadword stores, the second overlapping the first's upper half — x86-64's
+// `struct epoll_event` is PACKED, exactly as `buildX64LinuxNetpollOpenBreakChunk` writes the break's.
+function buildX64LinuxNetpollArmChunk() returns FunctionCodeChunk
+	let SlotEvent = 0 as StackSize
+	let eventSlots = 2 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(eventSlots)
+
+	let eventDisp = x64LinuxBufferDisp(asm, firstSlot: SlotEvent, slotCount: eventSlots)
+
+	encodeMovRegImm64(asm.code, dest: X64Register.r8, value: LinuxEpollSocketEvents as MachineWord)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: eventDisp, srcReg: X64Register.r8)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: eventDisp + (LinuxEpollPackedDataOffset as Imm32), srcReg: X64Register.rdx)
+
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rcx, wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: LinuxEpollCtlAdd)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.r10, base: X64Register.rbp, disp: eventDisp)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallEpollCtl)
+	return asm.finishFunction(HostNetpollArmSourceName)
+end 'buildX64LinuxNetpollArmChunk'
 
 // `mrt_host_netpoll_wait(rcx = epfd, rdx = entries, r8 = capacity, r9 = timeoutMs) -> rax = count, 0 when
 // interrupted, or -errno`.

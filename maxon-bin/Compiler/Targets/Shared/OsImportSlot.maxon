@@ -333,6 +333,17 @@ export enum OsImportSlot
 	// system calls that need no slot.
 	kqueue
 	kevent
+
+	// ⭐ **THE POLLED SOCKET BAND's TWO.** `getsockopt` reads `SO_ERROR`, the verdict of a non-blocking
+	// `connect` (`StdOp.osSocketError`); `fcntl` is what makes a descriptor non-blocking on a platform with no
+	// `SOCK_NONBLOCK` to pass `socket(2)`.
+	//
+	// ⚠ **`fcntl` IS VARIADIC AND ITS THIRD ARGUMENT GOES ON THE STACK**, which is why the only site that
+	// calls it is a CHUNK opened with `Arm64RuntimeAsm.beginVariadicCallerFunction` and never an isel sequence:
+	// a frame-less lowering has nowhere to put it. `getsockopt` is an ordinary five-argument function and needs
+	// none of that.
+	getsockopt
+	fcntl
 end 'OsImportSlot'
 
 // The import slot index a call site records and the writer patches against. One accessor

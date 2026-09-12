@@ -382,6 +382,20 @@ export enum RuntimeAbort
 	// The monitor is what preempts a strand holding a processor and retakes one from a blocked kernel call, so a
 	// scheduler without it can starve `main` at one processor rather than fail.
 	schedulerMonitorUnstarted = 106
+
+	// `__np_pd_wait`: two green threads waited on ONE direction of one socket. The second's mark would
+	// overwrite the first's publication and the first would never be woken again, so this names the shape at
+	// the instruction that produced it rather than losing a thread silently.
+	netpollDoubleWait = 107
+
+	// `__np_pd_open` / `__np_pd_release`: a descriptor's record was reset while a green thread was still
+	// PUBLISHED on one of its direction words. That word is the only pointer anything holds to the thread, so
+	// zeroing it strands it for ever — and, because the published-waiter count feeds both the poller's
+	// owed test and the exit drain, the process would then never leave the drain with the deadlock detector
+	// explicitly disarmed. It is unreachable today (`ManagedSocketRuntime`'s header carries the proof), which
+	// is exactly why a silent clear would be the wrong guard: the shape that makes it reachable is a caller
+	// nobody has written yet.
+	netpollReleaseWithWaiter = 108
 end 'RuntimeAbort'
 
 // ⭐ **THE PANIC LINE ITSELF — `panic at <file>:<line>: <text>\n` — WRITTEN ONCE.**

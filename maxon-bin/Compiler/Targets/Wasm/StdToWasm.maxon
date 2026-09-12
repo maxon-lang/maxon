@@ -798,6 +798,7 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 			osSocketCreate or
 			osSocketConnect or
 			osSocketSend or
+			osSocketError or
 			osSocketRecv or
 			osSocketClose or
 			osCpuCount or
@@ -1503,6 +1504,7 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		osSocketFreeAddrInfo then break 'def'
 		osSocketCreate(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		osSocketConnect(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		osSocketError(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		osSocketSend(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		osSocketRecv(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		osSocketClose then break 'def'
@@ -1841,6 +1843,7 @@ type WasmFuncEmitter
 				osSocketCreate or
 				osSocketConnect or
 				osSocketSend or
+				osSocketError or
 				osSocketRecv or
 				osSocketClose then panic("emitStraightLineTerminator: a socket host primitive is a body op, never a terminator")
 			osCpuCount then panic("emitStraightLineTerminator: an `osCpuCount` is a body op, never a terminator")
@@ -2011,6 +2014,7 @@ type WasmFuncEmitter
 				osSocketCreate or
 				osSocketConnect or
 				osSocketSend or
+				osSocketError or
 				osSocketRecv or
 				osSocketClose then panic("emitDispatcherTerminator: a socket host primitive is a body op, never a terminator")
 			osCpuCount then panic("emitDispatcherTerminator: an `osCpuCount` is a body op, never a terminator")
@@ -2250,6 +2254,7 @@ type WasmFuncEmitter
 				osSocketCreate or
 				osSocketConnect or
 				osSocketSend or
+				osSocketError or
 				osSocketRecv or
 				osSocketClose then panic("emitBodyOp: the socket host primitives have no wasm32-wasi lowering — this lane does not use WASI's `wasi:sockets`, and SemanticCheck refuses such a program at its own source span (E3104)")
 
@@ -3803,6 +3808,7 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 			osSocketCreate or
 			osSocketConnect or
 			osSocketSend or
+			osSocketError or
 			osSocketRecv or
 			osSocketClose then panic("decideDispatcher: a socket host primitive is a body op, never a terminator")
 		osCpuCount then panic("decideDispatcher: an `osCpuCount` is a body op, never a terminator")

@@ -5967,6 +5967,17 @@ let BuiltinsSchedSliceCountName = b"__Builtins.schedSliceCount"
 // It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
 let SchedSliceCountArity = 0 as ParamCount
 
+// ⭐⭐ **`__Builtins.schedNetpollBlockCount()` — how many times a green thread has suspended on the NETWORK
+// POLLER waiting for a socket to become ready.** It is the witness that a socket wait really left the
+// processor rather than merely finishing fast: a reader busy-waiting on a non-blocking descriptor provokes no
+// monitor rescue either, and only this count separates the two. The surface is invented here on the
+// argumentless-integer shape the family already has; `SchedRuntime.SchedNetpollBlockCountName` owns what the
+// count costs.
+let BuiltinsSchedNetpollBlockCountName = b"__Builtins.schedNetpollBlockCount"
+
+// It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
+let SchedNetpollBlockCountArity = 0 as ParamCount
+
 // ⭐⭐ **`__Builtins.schedGlobalPushCount()` — how many green threads have ever been pushed onto the GLOBAL
 // run queue.** Every producer counts: a full ring's overflow batch, a yield, a preemption, and a publish by a
 // thread holding no processor. It is the WITNESS that a global-queue property was really under test — the
@@ -66319,8 +66330,34 @@ export type Parser
 			return self.emitRuntimeCall(ManagedSocketCloseName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'close'
 
-		throw ParseError.unsupported("`{String.from(ManagedSocketTypeName)}` method '{String.from(methodTok.value)}' — the type has exactly these three: `sendFrom()`, `recv()` and `close()`", line: methodTok.line, column: methodTok.column)
+		// ⭐ **THE TWO DEADLINE SETTERS TAKE ONE UNLABELLED MILLISECOND COUNT**, which is the shape every
+		// single-argument builtin method on this surface has; `0` clears the deadline.
+		if methodTok.value.equals(ManagedSocketSetReadDeadlineMethod) 'setReadDeadline'
+			return try self.emitManagedSocketDeadlineCall(func, recv: recv, methodTok: methodTok, callee: ManagedSocketSetReadDeadlineName, range: range)
+		end 'setReadDeadline'
+
+		if methodTok.value.equals(ManagedSocketSetWriteDeadlineMethod) 'setWriteDeadline'
+			return try self.emitManagedSocketDeadlineCall(func, recv: recv, methodTok: methodTok, callee: ManagedSocketSetWriteDeadlineName, range: range)
+		end 'setWriteDeadline'
+
+		// ⭐ **A PREDICATE, TAGGED `boolean` AND NOT `integer`** — `BuiltinsStdoutWantsAnsiColorName`'s rule:
+		// a question whose answer is yes-or-no must not arrive as a number.
+		if methodTok.value.equals(ManagedSocketTimedOutMethod) 'timedOut'
+			try self.consumeEmptyArgList()
+			return self.emitRuntimeCall(ManagedSocketTimedOutName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
+		end 'timedOut'
+
+		throw ParseError.unsupported("`{String.from(ManagedSocketTypeName)}` method '{String.from(methodTok.value)}' — the type has exactly these six: `sendFrom()`, `recv()`, `close()`, `setReadDeadline()`, `setWriteDeadline()` and `timedOut()`", line: methodTok.line, column: methodTok.column)
 	end 'dispatchManagedSocketMethod'
+
+	// One body for both deadline setters: they differ only in the callee, and two copies of an argument list is
+	// how one of them would quietly acquire a different label rule.
+	function emitManagedSocketDeadlineCall(func IrFunction, recv MethodReceiver, methodTok Token, callee ByteArray, range SourceRange) returns ValueId throws ParseError
+		try self.consume(TokenKind.leftParen)
+		let milliseconds = try self.parseBuiltinIntegerArg(func, paramName: ManagedSocketDeadlineParamName, methodTok: methodTok)
+		try self.consume(TokenKind.rightParen)
+		return self.emitRuntimeCall(callee, args: pairArgs(recv.value, second: milliseconds), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+	end 'emitManagedSocketDeadlineCall'
 
 	// ⭐ **AN OWNED `__ManagedMemory` OUT OF A RUNTIME CALL — the shape `filename()`, `currentPath()` (R4.3)
 	// and `__Builtins.commandLineArg(i)` share.** Three facts have to travel together and each of them is a
@@ -83108,6 +83145,12 @@ export type Parser
 			if callee.equals(BuiltinsSchedSliceCountName) 'schedSliceCount'
 				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSchedSliceCountName, runtimeName: SchedSliceCountName, arity: SchedSliceCountArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'schedSliceCount'
+
+			// The poller-park count: the same shape, and it sets `usesGt` for the same reason. See
+			// `SchedRuntime.SchedNetpollBlockCountName`.
+			if callee.equals(BuiltinsSchedNetpollBlockCountName) 'schedNetpollBlockCount'
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSchedNetpollBlockCountName, runtimeName: SchedNetpollBlockCountName, arity: SchedNetpollBlockCountArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
+			end 'schedNetpollBlockCount'
 
 			// The global-queue push count: the same shape, and it sets `usesGt` for the same reason. See
 			// `SchedRuntime.SchedGlobalPushCountName`.

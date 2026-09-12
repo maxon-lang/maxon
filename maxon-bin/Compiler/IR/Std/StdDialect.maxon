@@ -907,6 +907,20 @@ export enum NetpollVerb
 	// asked; Windows quantises a waitable timer to 1–15 ms, so there the shortest honourable wait is the rest
 	// of this thread's quantum (`SwitchToThread`) and the operand is unread.
 	shortSleep
+
+	// ⭐⭐ **`(poller, fd) -> the host's raw answer`. REGISTER A SOCKET WITH THE POLLER, EDGE-TRIGGERED, IN BOTH
+	// DIRECTIONS AT ONCE.** An `epoll_ctl(EPOLL_CTL_ADD)` whose `epoll_data` is the descriptor itself, or a
+	// two-element `kevent` changelist adding `EVFILT_READ` and `EVFILT_WRITE` `EV_CLEAR`. There is no matching
+	// DEREGISTER verb and none is owed: closing a descriptor takes it out of the set on both kernels, and the
+	// poll-descriptor band resets its record before the close (`NetpollRuntime.__np_pd_release`).
+	//
+	// ⚠ **EDGE-TRIGGERED IS NOT AN OPTIMIZATION HERE.** The readiness a waiter has not yet consumed is held in
+	// the descriptor's own record, so a level-triggered registration would re-report it on every wait and the
+	// one machine in the poller would spin.
+	//
+	// ⚠ **THE COMPLETION-PORT SHAPE NEVER EMITS IT** — that lane's socket band is blocking, so
+	// `NetpollRuntime.buildNetpollPdOpen`, the only producer, is not built there.
+	armSource
 end 'NetpollVerb'
 
 // ⭐ **THE IDENTITY A BREAK ARRIVES UNDER, ON EVERY LANE** — the completion key `raiseBreak` posts with, the
@@ -2066,24 +2080,48 @@ export union StdOp
 	// free leaks OS memory for the process lifetime, and that leak is invisible to the exit-101 gate.
 	osSocketFreeAddrInfo(addrInfoPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
-	// `osSocketCreate(result)` = `socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)`, the raw SOCKET (or
-	// `INVALID_SOCKET`, -1) in `result`. NO value operands: all three arguments are fixed Win32 constants, so
-	// the op is a pure def in the shape `osReadClock`'s direct-return siblings use.
+	// `osSocketCreate(result)` = `socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)`, the raw descriptor in `result`,
+	// or a NEGATIVE failure. NO value operands: all three arguments are fixed constants, so the op is a pure
+	// def in the shape `osReadClock`'s direct-return siblings use.
+	//
+	// ⭐⭐ **THE FAILURE VOCABULARY IS THE LANE's, AND EVERY READER TESTS `< 0`** — see
+	// `ManagedSocketRuntime.emitSocketCallFailed`. A POSIX lane answers `-errno`, because the band above has to
+	// tell `EAGAIN` and `EINPROGRESS` from a refusal; Winsock answers `INVALID_SOCKET`, which is -1 and
+	// negative too. A POSIX descriptor is also born NON-BLOCKING and close-on-exec, which is the lowering's to
+	// arrange and not an operand.
 	//
 	// ⚠ **THE REFERENCES CALL `WSASocketW` WITH `WSA_FLAG_OVERLAPPED` AND THIS CALLS PLAIN `socket`.** Theirs is
-	// registered with an IOCP for the async lane; this slice's connect is SYNCHRONOUS, and an overlapped socket
+	// registered with an IOCP for the async lane; x64-windows connects SYNCHRONOUSLY, and an overlapped socket
 	// whose completions nothing drains is strictly worse than a blocking one. The async lane changes this op's
 	// lowering when it arrives, which is exactly why the flags are not operands.
 	osSocketCreate(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// `osSocketConnect(result, sock, addrPtr)` = `connect(sock, addrPtr, sizeof(sockaddr_in))`, the returned int
-	// in `result` (0 = success). The length is fixed because the caller always hands an IPv4 `sockaddr_in`;
-	// an IPv6 slice takes a length operand rather than widening this one silently.
+	// in `result` (0 = success, else a negative failure in the lane's vocabulary — see `osSocketCreate`). The
+	// length is fixed because the caller always hands an IPv4 `sockaddr_in`; an IPv6 slice takes a length
+	// operand rather than widening this one silently.
+	//
+	// ⚠ **ON A POSIX LANE `-EINPROGRESS` IS NOT A FAILURE**: the descriptor is non-blocking, so the handshake
+	// runs on and `osSocketError` is what reports its outcome.
 	osSocketConnect(resultId ValueId, sockId ValueId, addrPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
-	// `osSocketSend(result, sock, bufPtr, len)` = `send(sock, bufPtr, len, 0)`, bytes sent (or
-	// `SOCKET_ERROR`, -1) in `result`. Flags are always 0; a partial send is a NORMAL answer the caller loops
-	// on, not a failure — `stdlib/TcpClient.send` documents exactly that loop.
+	// ⭐⭐ **`osSocketError(result, sock, valuePtr, lenPtr)` = `getsockopt(sock, SOL_SOCKET, SO_ERROR, valuePtr,
+	// lenPtr)` — THE VERDICT OF A NON-BLOCKING `connect`.** `result` is the CALL's status (0, or a negative
+	// failure); the connect's own outcome is the 32-bit value the kernel writes through `valuePtr`, 0 for a
+	// connection and an errno for a refusal. `lenPtr` is an in-out `socklen_t` the caller seeds with the value's
+	// size, which is why it is an operand rather than a constant: the kernel READS it before it writes.
+	//
+	// ⚠ **THE LEVEL AND THE OPTION ARE THE LOWERING's, and they are per-OS** (`PosixRuntime.posixSolSocket`),
+	// which is why they are not operands: nothing above the target tier has to know that Darwin spells
+	// `SOL_SOCKET` 0xFFFF where Linux spells it 1.
+	//
+	// ⚠ **ONLY THE POLLED SOCKET BAND EMITS IT.** A blocking `connect` has answered by the time it returns, so
+	// x64-windows has no second question to ask and its lowering says so rather than answering one.
+	osSocketError(resultId ValueId, sockId ValueId, valuePtrId ValueId, lenPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
+	// `osSocketSend(result, sock, bufPtr, len)` = `send(sock, bufPtr, len, 0)`, bytes sent in `result`, or a
+	// negative failure in the lane's vocabulary (see `osSocketCreate`). Flags are always 0; a partial send is a
+	// NORMAL answer the caller loops on, not a failure — `stdlib/TcpClient.send` documents exactly that loop.
 	osSocketSend(resultId ValueId, sockId ValueId, bufPtrId ValueId, lenId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// `osSocketRecv(result, sock, bufPtr, len)` = `recv(sock, bufPtr, len, 0)`, bytes received in `result`.
@@ -2883,17 +2921,32 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		osPipeCreateOutbound gives SyscallClass.blocking
 		osPipePeek gives SyscallClass.blocking
 
-		// The socket family. Resolution waits on DNS, `connect`/`send`/`recv` on a peer, the close on whatever
-		// linger was set to, and the startup loads and initialises the provider stack.
+		// The two socket calls that really do wait on another party: resolution speaks to a resolver, and the
+		// startup loads and initialises the provider stack.
+		//
+		// ⚠ **THE FIVE DESCRIPTOR OPS ARE NOT HERE, AND THAT IS THIS TABLE'S ONE LANE-SHAPED ENTRY.** Every lane
+		// that reaches `StdLoweringShared.opTakesSyscallBracket` drives its sockets NON-BLOCKING
+		// (`ManagedSocketRuntime.SocketWaitShape.polled`), so `socket`, `connect`, `send`, `recv` and `close`
+		// answer at once — `EAGAIN` rather than a wait — and the green thread suspends on the POLLER instead.
+		// x64-windows, whose sockets really are blocking, classifies its own imports through a table of its own
+		// (`X64GtRuntime.gtShimSyscallClassOf`) and never reads this arm.
 		osSocketStartup gives SyscallClass.blocking
 		osSocketResolve gives SyscallClass.blocking
-		osSocketCreate gives SyscallClass.blocking
-		osSocketConnect gives SyscallClass.blocking
-		osSocketSend gives SyscallClass.blocking
-		osSocketRecv gives SyscallClass.blocking
-		osSocketClose gives SyscallClass.blocking
 
 		// --- `schedulerBound`: the scheduler's own machinery, and the bounded-and-short remainder ---
+		//
+		// ⭐⭐ **THE SOCKET DESCRIPTOR BAND LEADS IT, AND BRACKETING IT WAS THE DEFECT `specs/netpoll-socket.md`
+		// MEASURES.** The bracket exists so `__sysmon` can take a processor away from a machine stuck in the
+		// kernel; around a call that CANNOT be stuck it buys nothing and costs exactly the retake that file's
+		// first case counts — MEASURED at one processor with four concurrent round trips. `getsockopt`, the
+		// verdict of a non-blocking connect, reads a word the kernel already holds and joins them.
+		osSocketCreate gives SyscallClass.schedulerBound
+		osSocketConnect gives SyscallClass.schedulerBound
+		osSocketError gives SyscallClass.schedulerBound
+		osSocketSend gives SyscallClass.schedulerBound
+		osSocketRecv gives SyscallClass.schedulerBound
+		osSocketClose gives SyscallClass.schedulerBound
+
 		//
 		// ⛔ The lock pair is the deadlock this header sets out. Do not move them.
 		osLockInit gives SyscallClass.schedulerBound
@@ -3394,6 +3447,7 @@ export function classifyArithOperands(op StdOp, operands StdArithOperands)
 			osSocketCreate or
 			osSocketConnect or
 			osSocketSend or
+			osSocketError or
 			osSocketRecv or
 			osSocketClose or
 			osCpuCount or
@@ -3592,6 +3646,7 @@ export function classifyLoadOperands(op StdOp, load StdLoadOperands)
 			osSocketCreate or
 			osSocketConnect or
 			osSocketSend or
+			osSocketError or
 			osSocketRecv or
 			osSocketClose or
 			osCpuCount or
@@ -3756,6 +3811,7 @@ module function classifyStoreOperands(op StdOp, store StdStoreOperands)
 			osSocketCreate or
 			osSocketConnect or
 			osSocketSend or
+			osSocketError or
 			osSocketRecv or
 			osSocketClose or
 			osCpuCount or
@@ -3947,6 +4003,7 @@ module function classifyCallOperands(op StdOp, call StdCallOperands)
 			osSocketCreate or
 			osSocketConnect or
 			osSocketSend or
+			osSocketError or
 			osSocketRecv or
 			osSocketClose or
 			osCpuCount or
@@ -4527,6 +4584,7 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osSocketFreeAddrInfo(addrInfoPtr) then referenced.insert(addrInfoPtr)
 		osSocketCreate then break 'u'
 		osSocketConnect(_, sock, addrPtr) then insertUsePair(referenced, a: sock, b: addrPtr)
+		osSocketError(_, sock, valuePtr, lenPtr) then insertUseTriple(referenced, a: sock, b: valuePtr, c: lenPtr)
 		osSocketSend(_, sock, bufPtr, len) then insertUseTriple(referenced, a: sock, b: bufPtr, c: len)
 		osSocketRecv(_, sock, bufPtr, len) then insertUseTriple(referenced, a: sock, b: bufPtr, c: len)
 		osSocketClose(sock) then referenced.insert(sock)
@@ -4844,6 +4902,7 @@ module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 		osSocketFreeAddrInfo then def.recordNone()
 		osSocketCreate(resultId) then def.recordOne(resultId)
 		osSocketConnect(resultId, _, _) then def.recordOne(resultId)
+		osSocketError(resultId, _, _, _) then def.recordOne(resultId)
 		osSocketSend(resultId, _, _, _) then def.recordOne(resultId)
 		osSocketRecv(resultId, _, _, _) then def.recordOne(resultId)
 		osSocketClose then def.recordNone()
@@ -5127,6 +5186,7 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osSocketFreeAddrInfo(addrInfoPtr) gives StdOp.osSocketFreeAddrInfo(remappedValue(addrInfoPtr, subst: subst))
 		osSocketCreate(resultId) gives StdOp.osSocketCreate(resultId)
 		osSocketConnect(resultId, sock, addrPtr) gives StdOp.osSocketConnect(resultId, sockId: remappedValue(sock, subst: subst), addrPtrId: remappedValue(addrPtr, subst: subst))
+		osSocketError(resultId, sock, valuePtr, lenPtr) gives StdOp.osSocketError(resultId, sockId: remappedValue(sock, subst: subst), valuePtrId: remappedValue(valuePtr, subst: subst), lenPtrId: remappedValue(lenPtr, subst: subst))
 		osSocketSend(resultId, sock, bufPtr, len) gives StdOp.osSocketSend(resultId, sockId: remappedValue(sock, subst: subst), bufPtrId: remappedValue(bufPtr, subst: subst), lenId: remappedValue(len, subst: subst))
 		osSocketRecv(resultId, sock, bufPtr, len) gives StdOp.osSocketRecv(resultId, sockId: remappedValue(sock, subst: subst), bufPtrId: remappedValue(bufPtr, subst: subst), lenId: remappedValue(len, subst: subst))
 		osSocketClose(sock) gives StdOp.osSocketClose(remappedValue(sock, subst: subst))
@@ -5415,6 +5475,7 @@ function cloneStdOp(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray, 
 			osSocketCreate or
 			osSocketConnect or
 			osSocketSend or
+			osSocketError or
 			osSocketRecv or
 			osSocketClose or
 			osCpuCount or
@@ -5889,6 +5950,7 @@ module function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out
 			osSocketCreate or
 			osSocketConnect or
 			osSocketSend or
+			osSocketError or
 			osSocketRecv or
 			osSocketClose or
 			osCpuCount or
@@ -6081,6 +6143,7 @@ module function classifyBranch(op StdOp, out StdBranchOperands)
 			osSocketCreate or
 			osSocketConnect or
 			osSocketSend or
+			osSocketError or
 			osSocketRecv or
 			osSocketClose or
 			osCpuCount or
