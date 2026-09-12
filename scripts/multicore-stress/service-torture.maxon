@@ -146,12 +146,17 @@ function main() returns ExitCode
 	// here, so the payloads they have yet to release are not in this number.
 	let remoteFrees = __Builtins.slabRemoteFreeCount()
 
+	// The one-worker pin at ONE processor is conditional on the monitor, for `monitor-witness.maxon`'s
+	// reason: a preemption, a retake or a machine started for an overdue timer can each put a second M
+	// to work that no spawn asked for.
+	let monitor = monitorActions()
 	let waitVerdict = "ok" if arrived else "timeout"
 
 	print("aggregate={total}\n")
 	print("workerwait={waitVerdict}\n")
 	print("workers={workers}\n")
 	print("steals={steals}\n")
+	print("monitor={monitor}\n")
 	print("procs={procs}\n")
 	print("remoteFrees={remoteFrees}\n")
 	print("cpucount={cpus}\n")

@@ -3812,7 +3812,8 @@ type StdToX64Lowering
 				wait or
 				raiseBreak or
 				drainBreak or
-				sleepOnTimer then self.lowerLinuxHostChunkValue(resultId, args: posixNetpollChunkArgs(verb, operands: operands), chunk: posixNetpollChunk(verb), dstBlock: dstBlock)
+				sleepOnTimer or
+				shortSleep then self.lowerLinuxHostChunkValue(resultId, args: posixNetpollChunkArgs(verb, operands: operands), chunk: posixNetpollChunk(verb), dstBlock: dstBlock)
 		end 'v'
 	end 'lowerOsNetpollLinux'
 
@@ -3827,8 +3828,17 @@ type StdToX64Lowering
 			drainBreak then panic("lowerOsNetpollWin64: `drainBreak` is the epoll shape's read of its eventfd, and x64-windows is `NetpollShape.completionPort`, whose break is consumed by receiving its packet — `NetpollRuntime` emits this verb only under `NetpollShape.epoll`")
 			openTimer then self.lowerNetpollOpenTimerWin64(resultId, flags: netpollOperand(operands, index: 0), dstBlock: dstBlock)
 			sleepOnTimer then self.lowerNetpollSleepWin64(resultId, microseconds: netpollOperand(operands, index: 0), timer: netpollOperand(operands, index: 1), dstBlock: dstBlock)
+
+			// `SwitchToThread()` — the microseconds are unread here, for `NetpollVerb.shortSleep`'s reason: a
+			// waitable timer quantised to the system tick would turn a 3 µs back-off into a millisecond one.
+			shortSleep then self.lowerNetpollYieldWin64(resultId, dstBlock: dstBlock)
 		end 'v'
 	end 'lowerOsNetpollWin64'
+
+	function lowerNetpollYieldWin64(resultId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.SwitchToThread)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerNetpollYieldWin64'
 
 	// `CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, DWORD_MAX)` — a port of the scheduler's own.
 	function lowerNetpollOpenPortWin64(resultId ValueId, dstBlock IrBlock)

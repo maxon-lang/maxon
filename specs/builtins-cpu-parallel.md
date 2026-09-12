@@ -506,13 +506,15 @@ function main() returns ExitCode
 	let c2 = __Builtins.slabRemoteFreeCount()
 	let c3 = __Builtins.schedGtRecycleCount()
 	let c4 = __Builtins.schedPreemptCount()
-	let c5 = __Builtins.schedTimerStartCount()
-	let c6 = __Builtins.schedIdleProcessorCount()
-	let c7 = __Builtins.schedGtRecordsCarved()
-	let c8 = __Builtins.schedParkWakeCount()
-	let c9 = __Builtins.gtStackBytes()
+	let c5 = __Builtins.schedSliceCount()
+	let c6 = __Builtins.schedGlobalPushCount()
+	let c7 = __Builtins.schedTimerStartCount()
+	let c8 = __Builtins.schedIdleProcessorCount()
+	let c9 = __Builtins.schedGtRecordsCarved()
+	let c10 = __Builtins.schedParkWakeCount()
+	let c11 = __Builtins.gtStackBytes()
 
-	return (c0 + c1 + c2 + c3 + c4 + c5 + c6 + c7 + c8 + c9) as ExitCode
+	return (c0 + c1 + c2 + c3 + c4 + c5 + c6 + c7 + c8 + c9 + c10 + c11) as ExitCode
 end 'main'
 ```
 ```maxoncstderr
@@ -521,9 +523,11 @@ error E3104: <fragment>:4:22: this construct lowers to the runtime entry '__sche
 error E3104: <fragment>:5:22: this construct lowers to the runtime entry '__slab_remote_free_count', which has no wasm32-wasi implementation
 error E3104: <fragment>:6:22: this construct lowers to the runtime entry '__sched_gt_recycle_count', which has no wasm32-wasi implementation
 error E3104: <fragment>:7:22: this construct lowers to the runtime entry '__sched_preempt_count', which has no wasm32-wasi implementation
-error E3104: <fragment>:8:22: this construct lowers to the runtime entry '__sched_timer_start_count', which has no wasm32-wasi implementation
-error E3104: <fragment>:9:22: this construct lowers to the runtime entry '__sched_idle_processor_count', which has no wasm32-wasi implementation
-error E3104: <fragment>:10:22: this construct lowers to the runtime entry '__sched_gt_records_carved', which has no wasm32-wasi implementation
-error E3104: <fragment>:11:22: this construct lowers to the runtime entry '__sched_park_wake_count', which has no wasm32-wasi implementation
-error E3104: <fragment>:12:22: this construct lowers to the runtime entry '__sched_gt_stack_bytes', which has no wasm32-wasi implementation
+error E3104: <fragment>:8:22: this construct lowers to the runtime entry '__sched_slice_count', which has no wasm32-wasi implementation
+error E3104: <fragment>:9:22: this construct lowers to the runtime entry '__sched_global_push_count', which has no wasm32-wasi implementation
+error E3104: <fragment>:10:22: this construct lowers to the runtime entry '__sched_timer_start_count', which has no wasm32-wasi implementation
+error E3104: <fragment>:11:22: this construct lowers to the runtime entry '__sched_idle_processor_count', which has no wasm32-wasi implementation
+error E3104: <fragment>:12:22: this construct lowers to the runtime entry '__sched_gt_records_carved', which has no wasm32-wasi implementation
+error E3104: <fragment>:13:23: this construct lowers to the runtime entry '__sched_park_wake_count', which has no wasm32-wasi implementation
+error E3104: <fragment>:14:23: this construct lowers to the runtime entry '__sched_gt_stack_bytes', which has no wasm32-wasi implementation
 ```

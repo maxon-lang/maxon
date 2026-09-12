@@ -5955,6 +5955,29 @@ let BuiltinsSchedPreemptCountName = b"__Builtins.schedPreemptCount"
 // It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
 let SchedPreemptCountArity = 0 as ParamCount
 
+// ⭐⭐ **`__Builtins.schedSliceCount()` — how many TIME SLICES the scheduler has started.** It answers the sum
+// of every processor's schedule counter, which steps once per schedule that did NOT inherit the running slice
+// out of the `runnext` slot. It is the quantity the 61-schedule global-queue check and `__sysmon`'s overdue
+// test are both phrased in, so it is what a fairness assertion has to be written against: a thread's POSITION
+// in a run order moves on a slot hand-off that spent no slice at all. The surface is invented here on the
+// argumentless-integer shape the family already has; `SchedRuntime.SchedSliceCountName` owns what the count
+// costs.
+let BuiltinsSchedSliceCountName = b"__Builtins.schedSliceCount"
+
+// It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
+let SchedSliceCountArity = 0 as ParamCount
+
+// ⭐⭐ **`__Builtins.schedGlobalPushCount()` — how many green threads have ever been pushed onto the GLOBAL
+// run queue.** Every producer counts: a full ring's overflow batch, a yield, a preemption, and a publish by a
+// thread holding no processor. It is the WITNESS that a global-queue property was really under test — the
+// queue's population can read empty because nothing was ever put there, which is a program whose setup never
+// came about rather than one whose scheduler behaved. The surface is invented here on the argumentless-integer
+// shape the family already has; `SchedRuntime.SchedGlobalPushesLabel` owns what it counts.
+let BuiltinsSchedGlobalPushCountName = b"__Builtins.schedGlobalPushCount"
+
+// It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
+let SchedGlobalPushCountArity = 0 as ParamCount
+
 // ⭐⭐ **`__Builtins.schedTimerStartCount()` — how many machines the system monitor has started for an overdue
 // timer.** With `schedPreemptCount()` and `schedRetakeCount()` it is everything the monitor does that can put a
 // machine to work, which is what an `async`-only program's one-worker reading is conditional on. The surface is
@@ -83079,6 +83102,18 @@ export type Parser
 			if callee.equals(BuiltinsSchedPreemptCountName) 'schedPreemptCount'
 				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSchedPreemptCountName, runtimeName: SchedPreemptCountName, arity: SchedPreemptCountArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'schedPreemptCount'
+
+			// The slice count: the same shape, and it sets `usesGt` for the same reason. See
+			// `SchedRuntime.SchedSliceCountName`.
+			if callee.equals(BuiltinsSchedSliceCountName) 'schedSliceCount'
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSchedSliceCountName, runtimeName: SchedSliceCountName, arity: SchedSliceCountArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
+			end 'schedSliceCount'
+
+			// The global-queue push count: the same shape, and it sets `usesGt` for the same reason. See
+			// `SchedRuntime.SchedGlobalPushCountName`.
+			if callee.equals(BuiltinsSchedGlobalPushCountName) 'schedGlobalPushCount'
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSchedGlobalPushCountName, runtimeName: SchedGlobalPushCountName, arity: SchedGlobalPushCountArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
+			end 'schedGlobalPushCount'
 
 			// The monitor's timer-start count: the same shape, and it sets `usesGt` for the same reason. See
 			// `SchedRuntime.SchedTimerStartsLabel`.

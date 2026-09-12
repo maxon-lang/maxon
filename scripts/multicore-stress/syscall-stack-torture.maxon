@@ -175,12 +175,21 @@ function main() returns ExitCode
 	let workers = __Builtins.schedMaxActiveWorkers()
 	let steals = __Builtins.schedStealCount()
 	let procs = __Builtins.schedProcessorCount()
+
+	// ⭐⭐ THE ONE SPAWN-DRIVEN PROGRAM WHOSE `workers` PIN IS CONDITIONAL, AND THE BLOCKING CALLS ARE WHY.
+	// At one processor a spawned green thread has no second M to wake, so every other program here reads
+	// `workers=1` outright. This one spends its run inside the syscall shim: the monitor retakes the processor
+	// from a machine it finds in a kernel call and `__sched_handoffp` starts another on it, which is the
+	// handoff working rather than a green thread reaching a worker. `monitor-witness.maxon` is the reading
+	// that tells the two apart, and `pin-matrix.sh` asserts the pin only where it is 0.
+	let monitor = monitorActions()
 	let waitVerdict = "ok" if arrived else "timeout"
 
 	print("aggregate={total}\n")
 	print("workerwait={waitVerdict}\n")
 	print("workers={workers}\n")
 	print("steals={steals}\n")
+	print("monitor={monitor}\n")
 	print("procs={procs}\n")
 
 	return 42

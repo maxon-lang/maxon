@@ -426,11 +426,14 @@ satisfies its `steals > 0` family assertion. The steal COUNT is the instrument, 
   `idleFlag` protocol it replaces — on the one path that deliberately runs with the run-queue lock
   RELEASED, because that release is the StoreLoad fence.
 - **`runnext` (`POffRunnext`, reserved since W212).** Whether the compiler's cooperative model makes Go's
-  no-`sysmon` objection inapplicable was settled by a probe rather than by argument:
-  `scripts/multicore-stress/runnext-starvation-probe.maxon`, one program, two compilers, `MAXON_MAX_PROCS=1` —
-  shipped compiler runs the bystander FIRST on 3 of 3, an experimental `runnext` runs it LAST on 3 of 3,
-  after all 4,000 bounces. The 61-schedule fairness check does not rescue it: it consults the GLOBAL
-  queue, and the starved thread is in a P's LOCAL RING. The slot stays reserved for W213.
+  no-`sysmon` objection inapplicable was settled by a probe rather than by argument: one program, two
+  compilers, `MAXON_MAX_PROCS=1` — shipped compiler runs the bystander FIRST on 3 of 3, an experimental
+  `runnext` runs it LAST on 3 of 3, after all 4,000 bounces. The 61-schedule fairness check does not rescue
+  it: it consults the GLOBAL queue, and the starved thread is in a P's LOCAL RING. ⇒ **the slot was built at
+  L8 with a bound the probe's reading forced** (`SchedRuntime.RunnextStreakLimit`): the monitor cannot break
+  a pair whose turns contain no frame-reserving function, so the ring gets the same 61-schedule guarantee the
+  global queue has. The probe's measurement now lives in
+  `specs/sched-runqueue.md`'s `a-runnext-ping-pong-pair-cannot-starve-a-bystander`.
 
 **RE-MEASURED AT MC1's REVIEW, WHICH FOUND A STRANDED CREDIT AND CLOSED IT — AND THE NUMBERS DID NOT
 MOVE.** An M that parks publishes `idleFlag = 1` before its re-search; a waker can win that flag and hand

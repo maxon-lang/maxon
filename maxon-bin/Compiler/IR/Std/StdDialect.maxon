@@ -895,6 +895,13 @@ export enum NetpollVerb
 	// `(microseconds, timer) -> nothing`. Sleep the calling OS thread: the timer set and waited on, or a
 	// `nanosleep`.
 	sleepOnTimer
+
+	// `(microseconds) -> nothing`. Back the calling OS thread off for the shortest interval the host can
+	// honour — Go's `usleep(3)`/`osyield()` pair at `runqgrab` (`proc.go:7714`), the pause a thief owes a
+	// victim that is about to run the thread in its `runnext` slot. A POSIX lane sleeps for the microseconds
+	// asked; Windows quantises a waitable timer to 1–15 ms, so there the shortest honourable wait is the rest
+	// of this thread's quantum (`SwitchToThread`) and the operand is unread.
+	shortSleep
 end 'NetpollVerb'
 
 // ⭐ **THE IDENTITY A BREAK ARRIVES UNDER, ON EVERY LANE** — the completion key `raiseBreak` posts with, the

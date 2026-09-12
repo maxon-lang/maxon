@@ -36,7 +36,11 @@
 #      row with `monitor` above 0 is reported and not judged. A SPAWN-DRIVEN one —
 #      the `SPAWNING_PROGRAMS` list, which is where the fact is written down once —
 #      reads `1/0` at N=1 and `workers >= 2`, `steals > 0` at every N >= 2, which
-#      is this script's own prediction below, cashed.
+#      is this script's own prediction below, cashed. ⚠ THE `1` AT N=1 IS ITSELF
+#      CONDITIONAL ON `monitor=0`, and `syscall-stack-torture` is the row that needs
+#      it: its blocking calls are RETAKEN, and a retake's `__sched_handoffp` starts a
+#      machine on the processor it took. The assertion block below carries the
+#      enumeration that makes `monitor=0` the exact condition.
 #   5. Every program in `REFUSED_PROGRAMS` FAILS TO BUILD, with the code named.
 #
 # ⭐⭐ ASSERTION 4 IS WHAT THIS SCRIPT EXISTS FOR, AND IT IS THE ONE THAT FLIPPED.
@@ -460,9 +464,26 @@ for prog in $PROGRAMS; do
 			# the others. `effective` rather than `$p` because the `default` row's count
 			# is the machine's, and on a one-processor box that is this arm.
 			if [ "$effective" = 1 ]; then
-				if [ "$wk" != "-" ] && [ "$wk" != 1 ]; then
-					bad "$prog procs=$p (resolves to 1 P) workers=$wk — with one P there is no second M for a spawned green thread to wake"
+				# ⭐⭐ THE `workers` PIN AT ONE PROCESSOR IS CONDITIONAL ON THE MONITOR, FOR THE SAME REASON THE
+				# COROUTINE ROWS BELOW ARE, AND THE ENUMERATION IS EXHAUSTIVE. Every `osThreadCreate` that makes a
+				# green-thread machine is inside `__sched_startm`, which has four callers:
+				# `__sched_wake_or_spawn` (needs an IDLE processor, and at one P the only machine either holds it
+				# or has released it and joined `__sched_midle` in the SAME critical section, so a publish signals
+				# that machine rather than creating one — the exception being a machine waiting in
+				# `__sched_syscall_regain` for a processor a RETAKE took), `__sched_handoffp`'s two arms (reached
+				# from `__sched_retake` alone, which steps `schedRetakeCount()` BEFORE the call), and `__sysmon`'s
+				# overdue-timer arm (which steps `schedTimerStartCount()` before its own). ⇒ at one processor
+				# every machine past the first follows a COUNTED monitor action, so `monitor=0` is exactly the
+				# condition under which `workers=1` is a property of the scheduler rather than of timing.
+				if [ "$wk" != "-" ] && [ "$mon" = "-" ]; then
+					bad "$prog procs=$p (resolves to 1 P) prints workers= but no monitor= reading — the pin is conditional on it (monitor-witness.maxon)"
+				elif [ "$wk" != "-" ] && [ "$mon" = 0 ] && [ "$wk" != 1 ]; then
+					bad "$prog procs=$p (resolves to 1 P) workers=$wk with monitor=0 — with one P and no monitor action there is no second M for a spawned green thread to wake"
 				fi
+
+				# ⚠ THE STEAL PIN IS NOT CONDITIONAL: a machine the monitor started is on the SAME one processor,
+				# and `__sched_find_runnable`'s victim walk skips its own — so there is nobody to steal from
+				# whatever the monitor did.
 				if [ "$st" != "-" ] && [ "$st" != 0 ]; then
 					bad "$prog procs=$p (resolves to 1 P) steals=$st — with one P there is nobody to steal from"
 				fi

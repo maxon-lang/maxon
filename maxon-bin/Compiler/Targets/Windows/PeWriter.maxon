@@ -547,6 +547,11 @@ export enum IatSlot
 	GetQueuedCompletionStatusEx = IatSlotMeta{dll: ImportDll.kernel32}
 	PostQueuedCompletionStatus = IatSlotMeta{dll: ImportDll.kernel32}
 
+	// ⭐ **THE THIEF'S BACK-OFF BEFORE IT TAKES A VICTIM'S `runnext`** (`NetpollVerb.shortSleep`). A yield and
+	// not a timed sleep, because this host's timer granularity is 1–15 ms and the interval wanted is
+	// microseconds. In the optional band beside the poller: only a green-thread program steals.
+	SwitchToThread = IatSlotMeta{dll: ImportDll.kernel32}
+
 	// ⭐⭐ **THE EIGHT `ws2_32.dll` SOCKET IMPORTS — THE FIRST NON-kernel32 IMPORTS THIS WRITER HAS EMITTED.**
 	// `stdlib/TcpClient.maxon` reaches all four `__ManagedSocket` methods and they bottom out here:
 	// `WSAStartup` (Winsock demands it once per process before any other call), `getaddrinfo`/`freeaddrinfo`
@@ -667,7 +672,7 @@ end 'iatSlotIndex'
 // import table — the trade is not close.
 //
 // ⚠ **THE BAND'S MEMBERSHIP IS THE RUN BELOW, NOT THIS PROSE.** Read it off the `true` arm, which spans
-// `GetEnvironmentVariableA` through `PostQueuedCompletionStatus`; a producer added later must extend that arm (or fail
+// `GetEnvironmentVariableA` through `SwitchToThread`; a producer added later must extend that arm (or fail
 // this total match) and this comment with it.
 function isOptionalTrailingImport(slot IatSlot) returns bool
 	return match slot 'band'
@@ -701,7 +706,8 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 			Module32FirstW or
 			Module32NextW or
 			GetQueuedCompletionStatusEx or
-			PostQueuedCompletionStatus gives true
+			PostQueuedCompletionStatus or
+			SwitchToThread gives true
 		ExitProcess or
 			GetStdHandle or
 			WriteFile or

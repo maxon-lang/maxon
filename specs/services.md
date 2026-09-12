@@ -1092,7 +1092,7 @@ kept a1
 ⚠ **THE `procs: 1` PIN IS THIS CASE'S OWN STATED PREMISE, WRITTEN DOWN WHERE THE RUNNER CAN READ IT.** The
 paragraph below says *"nothing runs on a service's green thread until the main thread stops running"*, which
 holds only under ONE proc: there is no `MAXON_MAX_PROCS=1` default — the count is the machine's. The ORDER `beep
-2` then `beep 1` follows from the premise and not from the feature: with a second M the two services run
+1` then `beep 2` follows from the premise and not from the feature: with a second M the two services run
 concurrently and either order is correct, MEASURED 2/5 red on arm64-macOS and 3/3 on arm64-linux. So the
 expectation stands and the CONDITION is pinned — the same pin five `sched-runqueue` cases carry.
 
@@ -1103,8 +1103,9 @@ and BOTH services' queued work runs — which is the property under test.
 ⚠⚠ **THE ORDER OF THE TWO LINES IS THE EXIT DRAIN'S AND NOT CAUSALITY, AND THIS CASE SAYS SO RATHER THAN
 IMPLYING OTHERWISE.** At one processor nothing runs on a service's green thread until the main thread stops
 running — an early handle drop closes the mailbox, but `main` never parks, so its machine takes nothing else
-off the ring — and both handlers run at the exit drain, in the order the drain's scheduler loop takes them
-off the ring, which is spawn order. MEASURED stable across five runs at N=1 and three at N=4.
+off the ring — and both handlers run at the exit drain, in the order the drain's scheduler loop takes them:
+the processor's `runnext` slot first, so the service spawned LAST, then the ring in spawn order.
+MEASURED stable across five runs at N=1 and three at N=4.
 `two-instances-are-independent` is the case whose order IS forced, by a handle transfer.
 
 ⚠⚠ **THE `stdout` BLOCK PINS THAT ORDER EXACTLY, SO THIS CASE IS A TRIPWIRE ON THE DRAIN AND NOT ONLY ON
@@ -1143,8 +1144,8 @@ typealias Integer = int(i64.min to i64.max)
 0
 ```
 ```stdout
-beep 2
 beep 1
+beep 2
 ```
 
 <!-- test: a-cloned-handle-keeps-the-service-alive -->

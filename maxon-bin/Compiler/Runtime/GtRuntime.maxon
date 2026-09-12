@@ -2532,7 +2532,7 @@ end 'emitGtSeedX64ReturnWord'
 // `__gt_ready(gt)` — make a spawned GT discoverable. See `GtReadyName` for why this is not the tail of
 // `__gt_spawn`. Which queue is the GT's own question, answered by `__gt_ready_locked`: a coroutine joins its
 // owner's strand queue, where the strand's machine finds it, and a green thread heads a new strand whose token
-// goes to this processor's ring.
+// goes to this processor's `runnext` slot.
 function buildGtReady(module StdModule)
 	var func = IrFunction.createFromStd(GtReadyName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -2818,7 +2818,9 @@ end 'emitGtTombstoneHandback'
 // `__sched_lock`.
 //
 // ⭐ **IT AND `__gt_dequeue` ARE THE ONLY TWO FUNCTIONS THAT MOVE THE GLOBAL QUEUE, SO THEY ARE WHERE
-// `__sched_runq_size` IS STEPPED** — no caller can move the queue without moving its count.
+// `__sched_runq_size` IS STEPPED** — no caller can move the queue without moving its count. The cumulative
+// `__sched_global_pushes` is stepped here for the same reason and on this side only: it counts arrivals, so
+// nothing a dequeue does may take it back down.
 function buildGtEnqueue(module StdModule)
 	var func = IrFunction.createFromStd(GtEnqueueName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -2829,6 +2831,7 @@ function buildGtEnqueue(module StdModule)
 
 	emitParams(module, block: entry, count: 1)
 	emitSchedStepLockedCount(module, block: entry, label: SchedRunqSizeLabel, delta: OneMore, ids: ids)
+	emitSchedStepLockedCount(module, block: entry, label: SchedGlobalPushesLabel, delta: OneMore, ids: ids)
 	emitGtFifoAppend(module, entry: entry, appendBlock: appendBlock, emptyBlock: emptyBlock, ends: GtQueueEnds.globalLabels, g: 0 as ValueId, ids: ids)
 
 	module.functions.push(func)

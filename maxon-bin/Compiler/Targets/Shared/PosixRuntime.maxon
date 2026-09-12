@@ -630,7 +630,9 @@ export let PosixReapDiscardsRusage = 0
 
 // ⭐ **ONE CHUNK PER VERB ON EVERY POSIX LANE** — epoll on both Linux lanes, kqueue on macOS; the verbs and the
 // operands each reads are the op's, and only the bodies differ. `openTimer` has none: a POSIX sleep needs no
-// object, so the isel answers `PosixNoTimerObject` inline.
+// object, so the isel answers `PosixNoTimerObject` inline. `shortSleep` shares `sleepOnTimer`'s chunk, because
+// a POSIX thread sleep is one call whatever the interval — only Windows needs two spellings, its waitable
+// timer being too coarse for a microsecond back-off.
 export let HostNetpollOpenName = b"mrt_host_netpoll_open"
 export let HostNetpollOpenBreakName = b"mrt_host_netpoll_open_break"
 export let HostNetpollWaitName = b"mrt_host_netpoll_wait"
@@ -683,7 +685,8 @@ export function posixNetpollChunk(verb NetpollVerb) returns ByteArray
 		wait gives HostNetpollWaitName
 		raiseBreak gives HostNetpollRaiseBreakName
 		drainBreak gives HostNetpollDrainBreakName
-		sleepOnTimer gives HostNetpollSleepName
+		sleepOnTimer or
+			shortSleep gives HostNetpollSleepName
 		openTimer panic("posixNetpollChunk: `openTimer` has no chunk on a POSIX lane — a sleep needs no object there, so the isel answers `PosixNoTimerObject` inline")
 	end 'v'
 end 'posixNetpollChunk'
@@ -697,7 +700,8 @@ export function posixNetpollOperandCount(verb NetpollVerb) returns ParamCount
 		wait gives 4
 		raiseBreak gives 2
 		drainBreak gives 1
-		sleepOnTimer gives 1
+		sleepOnTimer or
+			shortSleep gives 1
 		openTimer panic("posixNetpollOperandCount: `openTimer` has no chunk on a POSIX lane — see `posixNetpollChunk`")
 	end 'v'
 end 'posixNetpollOperandCount'

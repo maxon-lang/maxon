@@ -668,6 +668,7 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		// The poller's pair. The wait takes six, so two on the stack; the break four.
 		GetQueuedCompletionStatusEx gives GetQueuedCompletionStatusExStackArgWords  // 6: CompletionPort, lpCompletionPortEntries, ulCount, ulNumEntriesRemoved, dwMilliseconds, fAlertable
 		PostQueuedCompletionStatus gives 0  // 4: CompletionPort, dwNumberOfBytesTransferred, dwCompletionKey, lpOverlapped
+		SwitchToThread gives 0  // 0
 	end 'k'
 end 'gtShimStackArgWordsOf'
 
@@ -863,6 +864,9 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 		// the scheduler waiting for its own work.
 		GetQueuedCompletionStatusEx gives SyscallClass.schedulerBound
 		PostQueuedCompletionStatus gives SyscallClass.schedulerBound
+
+		// A yield gives the rest of this quantum away and comes straight back; it waits on no other party.
+		SwitchToThread gives SyscallClass.schedulerBound
 	end 'k'
 end 'gtShimSyscallClassOf'
 

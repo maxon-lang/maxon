@@ -122,12 +122,6 @@ family a program is in decides what its rows mean**, so it is the first column h
   count until one record lost per round would reach twice that bound. The coroutine's `Probe` argument
   makes the heap gate a second witness: a lost reclaim is also a 101. The control is built in: one arm
   awaits its coroutine. ⚠ **NO DRIVER RUNS IT.**
-- **`runnext-starvation-probe.maxon`** — ⭐⭐ **UNDRIVEN ON PURPOSE.** Every program a driver runs
-  asserts something about the SHIPPED compiler; this one goes red only against a compiler with
-  `runnext` BUILT, which no tree here produces, so a driver would assert nothing for ever. It is
-  committed because it is the measurement `SchedRuntime.POffRunnext` cites for keeping the slot
-  reserved, and a reason nobody can re-run is a reason that rots. Its header carries both readings
-  and how to reproduce them.
 - **`refcount-service-refused.maxon`** — a **MUST-NOT-COMPILE** entry: `refcount-torture` written
   against services. A send is a MOVE, so the first send takes the shared `String` away from `main`
   and the second asks `main` to give up a reference it no longer holds. `pin-matrix.sh` asserts the

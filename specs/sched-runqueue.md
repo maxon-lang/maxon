@@ -248,6 +248,142 @@ s=3 a1=1 a2=2 a3=3
 0
 ```
 
+<!-- test: sched-runqueue.the-last-spawned-thread-runs-first-at-one-processor -->
+<!-- procs: 1 -->
+**THE MOST RECENTLY READIED GREEN THREAD RUNS NEXT, AHEAD OF THE RING** — Go's `runnext`
+(`vendor/go/src/runtime/proc.go`, `runqput` with `next`). A `spawn` readies its service at once, so of three
+spawned in order the third holds the slot and the first two wait in the ring. Each service answers its
+message the moment it runs, so the index `awaitAny` names is the one that ran first: the third, then the
+ring in its own order. The slot is what keeps a reply beside the thread that woke it, where its data is.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromiseArray = Array with ReplyPromise
+
+type Marker
+	var id as Integer
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
+
+	export function rank() returns Integer
+		return self.id
+	end 'rank'
+end 'Marker'
+
+function main() returns ExitCode
+	let a = spawn Marker.create(1)
+	let b = spawn Marker.create(2)
+	let c = spawn Marker.create(3)
+	var replies = ReplyPromiseArray.create()
+	replies.push(a.rank())
+	replies.push(b.rank())
+	replies.push(c.rank())
+	let first = __Builtins.awaitAny(replies)
+	var sum = 0
+	for p in replies 'drainthemall'
+		sum = sum + (try await p otherwise 0)
+	end 'drainthemall'
+	print("first={first} sum={sum}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+first=2 sum=6
+```
+```exitcode
+0
+```
+
+<!-- test: sched-runqueue.a-runnext-ping-pong-pair-cannot-starve-a-bystander -->
+<!-- procs: 1 -->
+⭐ **THE SLOT MUST NOT LET TWO THREADS KEEP ONE PROCESSOR BETWEEN THEM.** Each bounce readies its peer into
+the slot, so scheduling alone never reaches the ring, where the bystander waits. The spawn order is what
+puts it there: a `spawn` readies at once, so `Pong`, spawned last, holds the slot and the ring reads
+`[Ping, Bystander]` — the pair starts bouncing before the bystander's turn comes, and only cutting the
+chain lets it in. A send to a service that has not run yet fills a mailbox and readies nothing, so the
+kick and the poke do not reorder anything.
+
+⭐ **TWO MECHANISMS CUT THE CHAIN, AND MEASURED IT TAKES BOTH TO STARVE THE BYSTANDER** — with either one
+alone the case still passes, and it goes red only when both are gone (`pingpong-done` then
+`bystander-ran`). A thread taken from the slot inherits the slice instead of counting a schedule of its
+own, so the pair reads to the monitor as one long slice and is asked to yield (`specs/sched-preempt.md`);
+and a chain of slot handoffs is cut on its own count once it has run long enough.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+let totalBounces = 200000
+
+type Ping
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function hit(pong Pong.handle, me Ping.handle, n Integer)
+		self.seen = self.seen + 1
+
+		if n > 0 'bounce'
+			pong.hit(me.clone(), pong: pong.clone(), n: n - 1)
+		end 'bounce'
+
+		if n == 0 'last'
+			print("pingpong-done\n")
+		end 'last'
+	end 'hit'
+end 'Ping'
+
+type Pong
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function hit(ping Ping.handle, pong Pong.handle, n Integer)
+		self.seen = self.seen + 1
+
+		if n > 0 'bounce'
+			ping.hit(pong.clone(), me: ping.clone(), n: n - 1)
+		end 'bounce'
+	end 'hit'
+end 'Pong'
+
+type Bystander
+	var poked as Integer
+
+	static function create() returns Self
+		return Self{poked: 0}
+	end 'create'
+
+	export function poke()
+		self.poked = self.poked + 1
+		print("bystander-ran\n")
+	end 'poke'
+end 'Bystander'
+
+function main() returns ExitCode
+	let ping = spawn Ping.create()
+	let idle = spawn Bystander.create()
+	let pong = spawn Pong.create()
+
+	ping.hit(pong.clone(), me: ping.clone(), n: totalBounces)
+
+	idle.poke()
+
+	return 42
+end 'main'
+```
+```stdout
+bystander-ran
+pingpong-done
+```
+```exitcode
+42
+```
+
 <!-- test: sched-runqueue.a-yield-hands-the-processor-to-a-never-run-sibling -->
 **THE TAIL, AND THE ARM THAT DOES NOT DECIDE IT.** A yield parks the yielder and the strand runner places
 it: behind whatever its strand already has runnable, or — with nothing else runnable — at the back of its
@@ -771,60 +907,74 @@ sum=6000
 0
 ```
 
-<!-- test: sched-runqueue.the-global-queue-is-consulted-within-sixty-one-schedules -->
+<!-- test: sched-runqueue.the-global-queue-is-consulted-within-sixty-one-slices -->
 <!-- procs: 1 -->
-**THE FAIRNESS CHECK, AND THE ONE SHAPE THAT CAN SEE IT.** The overflow above moves the OLDEST half of
-the ring to the global queue, so service #1 — the first ever spawned — ends up at the global head while
-~170 services remain in the ring. The scheduler prefers its ring, so without the every-61st-schedule
-global check service #1 would run only after all ~170 of them; with it, it runs within the first 61
-schedules. The case records the position at which #1 ran and asserts it is early.
+**THE FAIRNESS CHECK, AND THE ONE SHAPE THAT CAN SEE IT.** A ring overflow moves the OLDEST half of the
+ring to the global queue, so leaf #1 — the first published — ends up at the global head while the rest stay
+in the ring. The scheduler prefers its ring, so without the every-61st-slice global check leaf #1 would run
+only after all of them; with it, it runs within 61 slices of the first leaf.
 
-⚠ It reports EARLY/LATE rather than the exact position, because the position depends on how many
-schedules the drain loop has already spent — a number this spec has no business pinning. The two outcomes
-are ~61 and ~171, so the boundary at 130 has a wide margin either way.
+⭐ **THE QUANTITY IS SLICES, NOT POSITIONS, AND THAT DISTINCTION IS WHAT THE `runnext` SLOT MADE MATTER.** A
+thread taken from the slot inherits the slice it was handed, so it costs no tick — here each leaf's `note`
+readies `Tally` into the slot, and `Tally` therefore rides the leaf's own slice. Counting RUNS would count
+those too and measure something the check does not act on. `__Builtins.schedSliceCount()` is the tick the
+check itself tests, read in the LEAF, since reading it in `Tally` would time `Tally`.
 
-⭐ **SEEN RED, AND BOTH POSITIONS MEASURED.** Healthy, an instrumented copy of this program prints
-`firstPos=61` — the fairness check firing on its first opportunity, since the compiler tests the tick AFTER the
-increment. With the check disabled (`atFairness` compared against `GtFairnessInterval`, a value
-`tick mod 61` can never take) it prints `firstPos=172` and this case reads `oldest=late`. 61 against 172
-is why the boundary is a wide one rather than a pinned number.
+⭐⭐ **THE SETUP IS A BURST OF SENDS TO PARKED SERVICES, AND THE SLEEP IS WHAT MAKES IT ONE.** Publishing by
+`spawn` alone cannot be relied on: 300 spawns take longer than one 10 ms slice, and a preemption in the
+middle (`specs/sched-preempt.md`) lets the leaves drain as they are created, so the ring never fills and
+nothing reaches the global queue. After the sleep every leaf is parked on an empty mailbox, so the 300
+sends ready them all in id order — MEASURED as costing no slices at all, on every lane — the 257th ready
+overflows the ring, and the batch it moves is leaves #1..#129 with #1 at its head.
 
-⛔⛔ **THE SEQUENCE IS A SERVICE'S MAILBOX AND NO LONGER A MODULE-LEVEL `var runCount`, WHICH
-`green-thread-globals.md` REFUSES — AND A MAILBOX IS THE RIGHT CHANNEL RATHER THAN A SUBSTITUTE FOR ONE.**
-This case is the only one in the file whose subject is an ORDER ACROSS SERVICES, so its tally genuinely
-cannot live in any one leaf's `self`. What it can live in is a 301st service: each leaf sends `note(id)`
-fire-and-forget as it runs, and a mailbox is FIFO, so the order the notes are *enqueued* — which is the order
-the leaves *ran* — is the order `Tally` counts them in. That is exactly the sequence the shared word used to
-approximate, and it is a sequence rather than a read-modify-write, so no interleaving can lose a step at any
-processor count.
+⛔ **THE CASE STATES WHETHER ITS OWN SETUP HAPPENED.** `__Builtins.schedGlobalPushCount()` across the burst
+is that witness: `pushed=true` means the overflow really did put threads on the global queue, so the
+reading below is about the check. A `pushed=false` reading is the setup having dissolved, and it fails
+this case rather than passing it quietly.
 
-⚠ **`Tally` IS SPAWNED LAST, AFTER ALL 300 LEAVES, AND THAT IS NOT TIDINESS.** The whole measurement rests on
-leaf #1 being the FIRST thread ever published, so that the 257th push is what moves it to the global head.
-Spawning the collector ahead of the leaves would put it in that slot and shift every position the table above
-was measured at.
+⭐ **SEEN RED, AND BOTH READINGS MEASURED.** Healthy, an instrumented copy prints `S1-S0` of 2 — the first
+consult after the burst happens to fall three slices away, and the property is the bound of 61 rather than
+that phase. With the check disabled (`atFairness` compared against `GtFairnessInterval`, a value
+`tick mod 61` can never take) it prints 172, and this case reads `within=false`. Identical on all four
+native lanes, three runs each, with and without a preemption during the spawn loop.
 
-⚠ **THE BOUNDED DRAIN SURVIVES, AND SO DOES ITS REASON.** `main` now asks `Tally` for the count instead of
-reading a word, but the loop is still bounded, so a leaf the overflow dropped still leaves `runCount` short
-and still prints a wrong answer rather than wedging.
+⛔⛔ **THE SEQUENCE IS A SERVICE'S MAILBOX AND NOT A MODULE-LEVEL `var`, WHICH `green-thread-globals.md`
+REFUSES.** This case's subject is an ORDER ACROSS SERVICES, so its tally cannot live in any one leaf's
+`self`. It lives in a 301st service: each leaf sends `note(id, slice)` fire-and-forget as it runs, and a
+mailbox is FIFO, so the order the notes are enqueued is the order the leaves ran, with no word two green
+threads both step.
+
+⚠ **THE BOUNDED DRAIN SURVIVES, AND SO DOES ITS REASON.** `main` asks `Tally` for the count rather than
+reading a word, and the loop is bounded, so a leaf the overflow dropped leaves `runCount` short and prints
+a wrong answer rather than wedging.
 ```maxon
 typealias LeafHandleArray = Array with Leaf.handle
 
+let leafCount = 300
+let fairnessInterval = 61
+let parkBarrierMs = 50
 let drainSpinLimit = 200000
 
 // The 301st service, and the only shared sequence in the program. A send is an ENQUEUE, so the order these
 // arrive in is the order the leaves ran — with no word two green threads both step.
 type Tally
 	var n as Integer
-	var firstPos as Integer
+	var firstSlice as Integer
+	var oldestSlice as Integer
 
 	static function create() returns Self
-		return Self{n: 0, firstPos: 0}
+		return Self{n: 0, firstSlice: 0, oldestSlice: 0}
 	end 'create'
 
-	export function note(id Integer)
+	export function note(id Integer, slice Integer)
 		self.n = self.n + 1
+
+		if self.n == 1 'firstToRun'
+			self.firstSlice = slice
+		end 'firstToRun'
+
 		if id == 1 'oldest'
-			self.firstPos = self.n
+			self.oldestSlice = slice
 		end 'oldest'
 	end 'note'
 
@@ -832,9 +982,9 @@ type Tally
 		return self.n
 	end 'count'
 
-	export function oldestPosition() returns Integer
-		return self.firstPos
-	end 'oldestPosition'
+	export function slicesWaited() returns Integer
+		return self.oldestSlice - self.firstSlice
+	end 'slicesWaited'
 end 'Tally'
 
 type Leaf
@@ -845,7 +995,7 @@ type Leaf
 	end 'create'
 
 	export function go(sink Tally.handle)
-		sink.note(self.id)
+		sink.note(self.id, slice: __Builtins.schedSliceCount())
 	end 'go'
 end 'Leaf'
 
@@ -853,47 +1003,47 @@ function main() returns ExitCode
 	var leaves = LeafHandleArray.create()
 
 	var i = 0
-	while i < 300 'spawnEach'
+	while i < leafCount 'spawnEach'
 		leaves.push(spawn Leaf.create(i + 1))
 		i = i + 1
 	end 'spawnEach'
 
-	// Last, so leaf #1 keeps the first-published slot the overflow arithmetic depends on.
 	let tally = spawn Tally.create()
 
+	// Every service reaches its park on an empty mailbox, so the burst below is what publishes them.
+	sleep(parkBarrierMs)
+
+	let pushedBefore = __Builtins.schedGlobalPushCount()
+
 	var k = 0
-	while k < 300 'sendEach'
+	while k < leafCount 'sendEach'
 		let leaf = try leaves.get(k) otherwise panic("leaves.get OOB at {k} — the loop is bounded by the count the pushes above filled")
 		// A send MOVES its argument, so each leaf gets its own reference to the collector.
 		leaf.go(tally.clone())
 		k = k + 1
 	end 'sendEach'
 
+	let burstPushes = __Builtins.schedGlobalPushCount() - pushedBefore
+
 	var runCount = 0
 	var spins = 0
-	while runCount < 300 and spins < drainSpinLimit 'drain'
+	while runCount < leafCount and spins < drainSpinLimit 'drain'
 		runCount = try await tally.count() otherwise 0
 		spins = spins + 1
 	end 'drain'
 
-	let firstPos = try await tally.oldestPosition() otherwise 0
-	if firstPos < 130 'early'
-		print("runCount={runCount} oldest=early")
-	end 'early' else 'late'
-		print("runCount={runCount} oldest=late")
-	end 'late'
-
+	let waited = try await tally.slicesWaited() otherwise 0 - 1
+	print("runCount={runCount} pushed={burstPushes > 0} within={waited <= fairnessInterval}\n")
 	return 0 as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```stdout
-runCount=300 oldest=early
+runCount=300 pushed=true within=true
 ```
 ```exitcode
 0
 ```
-
 <!-- test: sched-runqueue.a-yield-goes-behind-the-global-queue -->
 <!-- procs: 1 -->
 **THE BACK OF THE QUEUE, AND THE ONLY SHAPE AT ONE PROCESSOR THAT CAN SEE IT.** A drained yielder goes to
