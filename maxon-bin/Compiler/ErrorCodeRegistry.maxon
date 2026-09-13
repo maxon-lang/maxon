@@ -1828,6 +1828,22 @@ export enum ErrorCode
 	// file-to-file sharing a runtime split across several files needs.
 	wideVisibilityInRuntimeSource = "E3154"
 
+	// A source file named a compiler-internal or runtime entry as a function VALUE — `let f = __parallel_boundary`.
+	// It is the value-position half of the rule E3004 states for a CALL, and its sentence is E3004's own
+	// explanation under a different lead, derived from the one classifier (`MmRuntime.reservedCalleeReasonOf`),
+	// so the two halves cannot drift.
+	//
+	// NOT E3004, for E3152's reason one code over: E3004's subject is a CALL. The registry names it
+	// `callUnknownFunction`, `SemanticCheck.validateCall` raises it for an ordinary undefined callee, and the
+	// word "call" in its sentence would be false of a `let` binding — a reader shown "call to" on a line with
+	// no call is being told something that is not there. The value position's own undefined-name code, E2004
+	// "Undefined variable", is wrong in the other direction: the name is not undefined, it is the compiler's
+	// and this file may not write it.
+	//
+	// ONE RULE, TWO CODES is the cost, and it is paid deliberately: what makes E3004 and this one one rule is
+	// the classifier they share, which is a single derivation rather than a number.
+	reservedNameAsFunctionValue = "E3155"
+
 	// A field access could not be lowered: the base is not a struct, or the field has no slot.
 	invalidFieldAccess = "E4006"
 

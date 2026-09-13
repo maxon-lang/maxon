@@ -21,13 +21,18 @@ opposite of `Compiler/Runtime/` below, which the compiler WRITES into every prog
 `__Builtins.currentUnixTimeSeconds()`, `__Builtins.tickCountMs()`, `__Builtins.parallelBoundary()` and
 `__Builtins.forceSegfault()` lower to calls naming them, from whatever file wrote the construct.
 
-⛔⛔ **THE TIER'S PROTECTION IS OVER THE *CALL* DOOR AND NOT OVER THE NAME, AND THE DIFFERENCE IS A DOOR
-THAT IS OPEN — see the standing limit below.** `Parser.requireCalleeIsNotReservedName` admits a reserved
-CALLEE only where the FILE may declare reserved names, which is `runtime/` itself plus
-`stdlib/Builtins.maxon` and `stdlib/Testing.maxon`; an ordinary stdlib or user file calling one earns E3004,
-and that is what keeps the visibility admit-list below sound. A user file that names a runtime entry as a
-VALUE (`let f = __parallel_boundary`) passes no such door and is accepted today. So write the property as
-*"no source file outside the tier may CALL a runtime entry"*, never as *"may NAME"* one.
+⛔⛔ **THE TIER'S PROTECTION IS OVER BOTH DOORS A NAME CAN BE REACHED THROUGH, AND IT TAKES TWO REFUSALS.**
+`Parser.requireCalleeIsNotReservedName` admits a reserved CALLEE, and
+`Parser.requireFunctionValueNameIsNotReserved` a reserved name in VALUE position, only where
+`Parser.fileMayUseReservedNames` holds — `runtime/` itself, `stdlib/Builtins.maxon` and
+`stdlib/Testing.maxon`, **and any file this compile WROTE part of, which is a staged `*.test.maxon` under
+`maxon test`** — and in both doors conjoined with `declaresCallee`. An ordinary stdlib or user file calling
+one earns E3004 and naming one as a value earns E3155, which is what keeps the visibility admit-list below
+sound. The value door is cured at `requireNameIsUsableAsFunctionValue`, the one site both producers of an
+author-named function value ask — a bare name READ and a function-backed enum case — so the rule needs no
+list of syntactic positions. ⇒ The property is *"no source file outside the tier may CALL **or NAME** a
+runtime entry"*, and the staged-file provenance is the standing exception to it on BOTH doors alike: under
+`maxon test` an author's own file may do either.
 
 ⛔⛔ **ONE TIER ENTRY WEARS NO PREFIX AND SO CARRIES ITS OWN RESERVATION — `maxon_force_segfault`.** Its name
 is the FRAME a backtrace prints (`specs/safety.md` asserts three of them), so it cannot be moved into the
@@ -119,7 +124,7 @@ its consumer") failing open. Vacuous while every tier body calls only `__Raw`, w
 (`MaxonDialect.maxonOpCalleeKind` answers `noCallee` for `rawIntrinsic`) — true of all three families in
 the tier. The first family that CALLS something is the one that has to answer it.
 
-Six doors are still standing open rather than shut:
+Five doors are still standing open rather than shut:
 
 - **E3153 is complete over SPELLED types and incomplete over INFERRED values.** `parseTypeReference`
   catches every type a runtime file writes; the value-side check at `declareInitializedBinding` and
@@ -139,19 +144,6 @@ Six doors are still standing open rather than shut:
   `builtins-parallel-boundary.md`'s `checkpoint-body-is-runtime-source` renders the body it protects —
   though a ```RequiredRuntime block pins a body never-inline for its own compile, so what actually guards
   the rule is the unchanged `call __parallel_boundary` in every other golden.
-- **A USER FILE MAY NAME A RUNTIME ENTRY AS A *VALUE*, AND THE CALL-DOOR REFUSAL DOES NOT SEE IT.**
-  `Parser.requireCalleeIsNotReservedName` guards a CALL; nothing guards a `functionRef`, so a bare mention of
-  a reserved runtime name in value position resolves to the tier's declaration and links. MEASURED on
-  x64-windows, three spellings from an ordinary user file in a plain project directory:
-  `let f = __parallel_boundary` compiles and links, exit 0; `let f = __clock_now_unix_s` is accepted (the only
-  complaint is E3012 on the unused result); and `let f = maxon_force_segfault` followed by `f()` runs and
-  faults, printing
-  `in maxon_force_segfault / in __fnref_maxon_force_segfault / in main / in mrt_start`. That
-  `__fnref_` frame is the legible half: the value route reaches the entry through a synthesized uniform-ABI
-  thunk, which `FnRefThunk.functionValueNeedsEnvThunk` mints precisely BECAUSE a tier entry now has a
-  signature (`MmRuntime.isSignaturelessCompilerCallee` answers `false` for one). ⇒ Closing it is a REFUSAL at
-  the value door and therefore its own change: every legal spelling that reaches a reserved name by value has
-  to be found first, and `fileMayUseReservedNames` is the exemption that then needs testing.
 - **`__Raw.scratch` is the one door that materializes a frame ADDRESS in a register in a GT program, and
   the gate that protects the other such door does not cover it.** `PromoteStackRecords` promotes NOTHING in
   a program running green threads, because `__gt_stack_relocate` frees the old pages and a promoted address

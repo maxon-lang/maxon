@@ -14,9 +14,10 @@ symbols — runtime intrinsics (`__gt_spawn`, `__chkstk`), built-in types
 (`__ManagedMemory`, `__Builtins`), synthetic destructor names (`__destruct_String`),
 and parser-generated temporaries (`__discard_*`, `__try_result_*`).
 
-User code MAY still reference these existing internal names (the stdlib does so
-extensively to define `String`, `Array`, `Map`, etc.). What user code MAY NOT do is
-**declare** a new identifier with that prefix. Any binding site that introduces a
+The files that DECLARE the reserved space — `stdlib/Builtins.maxon`,
+`stdlib/Testing.maxon` and the `runtime/` tier — may write these names; no other
+file may **declare** one, **call** one (E3004) or **name** one as a function value
+(E3155). Any binding site that introduces a
 fresh `__`-prefixed name — function, type, typealias, field, parameter, local
 variable, enum case, match binding — is a compile-time error.
 
@@ -357,6 +358,125 @@ end 'main'
 ```
 ```maxoncstderr
 error E3004: <fragment>:3:9: call to undefined function '__int_fromString': the '__' prefix names a compiler intrinsic, and no intrinsic of that name exists
+```
+
+<!-- test: user-file-cannot-name-a-reserved-entry-as-a-value -->
+⛔⛔ **THE VALUE DOOR, THE CALL DOOR'S OTHER HALF.** `requireCalleeIsNotReservedName` refuses a reserved
+CALLEE and `requireFunctionValueNameIsNotReserved` refuses the same name in VALUE position, so the tier's
+protection is a property of the NAME and not of how an entry is reached. This case is what holds the two
+doors to one rule: without it the name resolves to the tier's declaration, links, and reaches the entry
+through a synthesized `__fnref_` thunk when the value is called.
+
+⚠ The subject is a `runtime/` entry rather than a `stdlib/Builtins.maxon` name because a tier entry is
+the case that LINKS, and the value is CALLED so that nothing about the case turns on an unused binding:
+unrefused, this program compiles, links and exits 0, reaching the checkpoint through the thunk. A case
+that only BOUND the name would rest on E3012 to fail, which is a different rule and would go green the
+day that one moved.
+
+⚠ The refusal is E3155 rather than the call door's E3004 because there is no call here and E3004's
+subject is one; the registry entry argues it. What makes the two one rule is the classifier they share
+(`MmRuntime.reservedCalleeReasonOf`), which supplies both sentences' second half.
+```maxon
+function main() returns ExitCode
+	let f = __parallel_boundary
+	f()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3155: <fragment>:3:10: reference to undefined function '__parallel_boundary': the '__' prefix names a compiler intrinsic, and no intrinsic of that name exists
+```
+
+<!-- test: user-file-named-builtins-cannot-name-a-reserved-entry-as-a-value -->
+**THE NEGATIVE CONTROL ON THE VALUE DOOR'S EXEMPTION** — the program above, one file name over. The
+exemption `Parser.requireFunctionValueNameIsNotReserved` reads is the CALL door's
+(`fileMayUseReservedNames`), which is keyed on PROVENANCE and never on a spelling: for a file claiming to
+be `Builtins.maxon` that is the IDENTITY test (`<stdlibDir>/Builtins.maxon`, both sides resolved), of
+which the basename is only a prefilter. Both doors are pinned on both sides, because a rule
+pinned on one side is a rule that can lapse on the other.
+```maxon
+// --- file: Builtins.maxon
+function main() returns ExitCode
+	let f = __parallel_boundary
+	f()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3155: <fragment>:4:10: reference to undefined function '__parallel_boundary': the '__' prefix names a compiler intrinsic, and no intrinsic of that name exists
+```
+
+<!-- test: user-file-cannot-name-the-fault-probe-as-a-value -->
+**THE TIER ENTRY THAT WEARS NO PREFIX, IN VALUE POSITION.** `maxon_force_segfault` is reserved by NAME
+rather than by shape — its spelling is the frame a backtrace prints, which `specs/safety.md` asserts —
+so it is the arm of `MmRuntime.reservedCalleeReasonOf` a prefix test cannot reach, and it carries its
+own sentence. Unrefused this program does not merely link: it RUNS, reaching the probe through the
+`__fnref_` thunk and faulting, which is the compiler's own fault injector with a user program's finger
+on it.
+```maxon
+function main() returns ExitCode
+	let f = maxon_force_segfault
+	f()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3155: <fragment>:3:10: reference to undefined function 'maxon_force_segfault': that name is the compiler's own fault-probe entry point, which a program reaches through `__Builtins.forceSegfault()` and never by naming the symbol
+```
+
+<!-- test: error.function-backed-enum-case-cannot-name-a-reserved-entry -->
+**THE SECOND POSITION A NAME BECOMES A FUNCTION VALUE, AND IT IS A DECLARATION RATHER THAN AN
+EXPRESSION.** A function-backed enum case IS a function reference written in a declaration, so
+`Parser.checkFunctionBackedCase` asks the same gate `let f = doubleFn` asks — which is why the value
+door is cured at `requireNameIsUsableAsFunctionValue` and not at the expression site. Refused at the
+CASE, whether or not any program ever reads the enum: `.rawValue` would otherwise hand a caller the
+tier entry's address.
+```maxon
+enum Boundary
+	checkpoint = __parallel_boundary
+end 'Boundary'
+
+function main() returns ExitCode
+	let f = Boundary.checkpoint.rawValue
+	f()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3155: <fragment>:3:2: reference to undefined function '__parallel_boundary': the '__' prefix names a compiler intrinsic, and no intrinsic of that name exists
+```
+
+<!-- test: a-reserved-space-file-may-name-its-own-entry-as-a-value -->
+⭐ **THE POSITIVE CONTROL ON THE VALUE DOOR'S EXEMPTION — the branch the three refusals above never
+reach.** `Parser.requireFunctionValueNameIsNotReserved` admits a reserved name in value position on
+`fileMayUseReservedNames() and declaresCallee`, and this is the only program that exercises it: the
+compiler's OWN function addresses (`__destruct_<T>`, `__str_decref`) are minted at `emitRuntimeFuncAddr`
+and emit their op directly, so they pass no door at all. Without this case the admit branch could be
+deleted or inverted and every case in this file would stay green while `stdlib/Builtins.maxon` lost the
+right to name what it declares.
+
+⚠ The overlay declares the entry AND names it, because the exemption is the DECLARING file's — a user
+file spelling the same name is the negative control two cases up. The 42 is routed through the function
+VALUE, so a run that admitted the name and then mis-lowered the reference cannot pass either.
+```maxon
+// --- stdlib-overlay: Builtins.maxon
+export typealias OverlayHalf = int(0 to 100)
+
+export function __overlayDouble(n OverlayHalf) returns OverlayHalf
+	return n * 2
+end '__overlayDouble'
+
+export function overlayApplyDouble(n OverlayHalf) returns OverlayHalf
+	let f = __overlayDouble
+	return f(n)
+end 'overlayApplyDouble'
+// --- file: main.maxon
+function main() returns ExitCode
+	return overlayApplyDouble(21) as ExitCode
+end 'main'
+```
+```exitcode
+42
 ```
 
 <!-- test: user-file-named-builtins-cannot-call-a-reserved-name -->

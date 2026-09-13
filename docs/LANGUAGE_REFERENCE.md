@@ -5183,6 +5183,10 @@ formula all ship the pair.
 ⛔ **A `__Raw` call from outside `runtime/` is E3152.** The privilege belongs to the tier, not to any
 name in it, so no re-export or wrapper carries it out.
 
+⛔ **A runtime entry is unreachable from outside the tier by either route.** Calling one is **E3004**;
+naming one as a function value (`let f = __parallel_boundary`) is **E3155**. The reservation is over the
+NAME, so binding it and calling the binding reaches nothing the direct call could not.
+
 #### What a runtime file may not do
 
 | Restriction | Code |

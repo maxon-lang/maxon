@@ -1561,6 +1561,12 @@ export union ParseError implements Error
 	// let this class of program through to the backend (see `requireCalleeIsNotReservedName`).
 	unknownCompilerIntrinsic(callee String, reason ReservedCalleeReason, line LineNumber, column ColumnNumber)
 
+	// ⭐ A RESERVED NAME IN *VALUE* POSITION — `let f = __parallel_boundary`. Renders as **E3155**, the
+	// value-position half of the rule `unknownCompilerIntrinsic` states for a CALL, and it carries the same
+	// `reason` so both halves explain a refusal from the one classifier. A separate code rather than its
+	// sibling's E3004 because E3004's subject is a CALL and there is none here; the registry entry argues it.
+	reservedNameAsFunctionValue(name String, reason ReservedCalleeReason, line LineNumber, column ColumnNumber)
+
 	// ⭐ A `__Raw.*` INTRINSIC CALLED FROM OUTSIDE `runtime/`. Renders as **E3152**, positioned at the same
 	// anchor its E3004 sibling above uses — the MEMBER name, which is where a qualified call's anchor token
 	// stands.
@@ -27274,8 +27280,8 @@ export type Parser
 	// ⭐⭐ **THE TWO THINGS A FUNCTION-BACKED CASE OWES, ASKED AT THE DECLARATION — where every one of them is
 	// asked exactly once, whether or not any program ever reads the enum.**
 	//
-	//   1. **The name must stand as a function VALUE at all** — declared, non-throwing, and returning
-	//      something a single result register can carry. Asked through `requireNameIsUsableAsFunctionValue`,
+	//   1. **The name must stand as a function VALUE at all** — not the compiler's own, declared, non-throwing,
+	//      and returning something a single result register can carry. Asked through `requireNameIsUsableAsFunctionValue`,
 	//      the very gate `emitFunctionRef` applies to `let f = doubleFn`, because it is the same claim: the
 	//      case IS a function reference, written in a declaration instead of an expression.
 	//   2. **Its signature must be the one the enum already fixed.** `/specs/enum-function-backing.md` states
@@ -79102,12 +79108,51 @@ export type Parser
 		end 'declaredReturn'
 	end 'requireFunctionValueReturnHasRoom'
 
+	// ⭐⭐ **THE VALUE DOOR, THE CALL DOOR'S OTHER HALF** — `requireCalleeIsNotReservedName` refuses a reserved
+	// CALLEE and this refuses the same name in VALUE position, so the tier's protection is a property of the
+	// NAME rather than of how an entry is REACHED. Unrefused, `let f = __parallel_boundary` then `f()` binds
+	// the tier's own declaration and reaches it through a synthesized `__fnref_` thunk, which links and runs.
+	//
+	// ⭐ **IT SITS AT `requireNameIsUsableAsFunctionValue` BECAUSE THAT IS THE COMPLETE SITE.** Every syntactic
+	// position in which an author's bare name becomes a function value funnels into `emitFunctionRef` — the
+	// last-resort door for a bare name READ, reached from the single `topLevelGlobalRead` fallthrough — and the
+	// one other producer is a function-backed enum case, checked at its DECLARATION by `checkFunctionBackedCase`.
+	// Both ask this routine. An enumeration of positions here would rot; these two callers are the whole of it.
+	//
+	// ⚠ **THE COMPILER'S OWN FUNCTION-VALUE MINTS DO NOT COME THROUGH HERE AT ALL**, which is why this needs no
+	// `CalleeMint` and why it cannot break the destructor cascade: `emitRuntimeFuncAddr` (`__destruct_<T>`,
+	// `__str_decref`, `__managed_decref`) and the lifted-closure reference emit their `functionRef` op directly.
+	// What reaches this door is an identifier token, and an identifier token is bytes the author typed.
+	//
+	// ⇒ **THE EXEMPTION IS THE CALL DOOR'S `theReservedSpacesOwnDeclaration` CLAUSE AND ONLY THAT ONE.** The
+	// others are about QUALIFIED callees a bare name cannot spell: `__Raw.*`, a `<conformer>.<method>` impl, a
+	// `<primitive>.<method>` or default-helper mint, and the stdlib shadow mint — whose contest moves nominal
+	// TYPE names alone (`Queries.contestStdlibDeclarationsAgainstUserNames`), so no function name is ever one.
+	// `declaresCallee` is conjoined for the call door's reason: the file fact says this file may write the
+	// reserved space, and this says the program actually has that function.
+	function requireFunctionValueNameIsNotReserved(tok Token) throws ParseError
+		let reason = reservedCalleeReasonOf(tok.value)
+
+		if reason == ReservedCalleeReason.notReserved 'ordinaryName'
+			return
+		end 'ordinaryName'
+
+		if self.fileMayUseReservedNames() and self.signatures.declaresCallee(tok.value) 'theReservedSpacesOwnDeclaration'
+			return
+		end 'theReservedSpacesOwnDeclaration'
+
+		throw ParseError.reservedNameAsFunctionValue(String.from(tok.value), reason: reason, line: tok.line, column: tok.column)
+	end 'requireFunctionValueNameIsNotReserved'
+
 	// ⭐ **MAY THE NAME `tok` SPELLS STAND AS A FUNCTION VALUE? — the whole of what separates a function
-	// reference from an undefined variable, asked in one place.** Split out of `emitFunctionRef` because a
+	// reference from an undefined variable, asked in one place.** It is not inside `emitFunctionRef` because a
 	// SECOND site asks the identical question about a name it will not immediately emit: a function-backed
 	// enum case (`Parser.checkFunctionBackedCase`), which must refuse an unusable target at the DECLARATION
-	// even in a program that never reads the enum. The gates are the header's, unchanged.
+	// even in a program that never reads the enum. Both sites therefore get the RESERVED-name gate above too,
+	// which is what lets that gate be stated once.
 	function requireNameIsUsableAsFunctionValue(tok Token) throws ParseError
+		try self.requireFunctionValueNameIsNotReserved(tok)
+
 		match self.signatures.returnTypeOf(tok.value, into: self.artifact.typeNames) 'callee'
 			// ⭐ **A FUNCTION VALUE CARRIES ONE RESULT, SO A FUNCTION THAT USES THE SECONDARY RETURN SLOT CANNOT
 			// BE ONE** — both disjuncts of `functionUsesSecondaryReturnSlot`, refused here at the one door a
@@ -79132,8 +79177,8 @@ export type Parser
 		// then costs nothing on the path every identifier in every program takes, and runs only on a program
 		// already destined for a diagnostic.
 		//
-		// ⚠ **"A BARE NAME READ" IS NARROWER THAN "AN ORDINARY EXPRESSION", WHICH THIS COMMENT USED TO SAY
-		// (W72 review).** `parsePrimary` splits the four forms an identifier can open one token before this
+		// ⚠ **"A BARE NAME READ" IS NARROWER THAN "AN ORDINARY EXPRESSION".** `parsePrimary` splits the four
+		// forms an identifier can open one token before this
 		// door, so the CALL, DOTTED and STRUCT-LITERAL forms never reach it and are refused under their own
 		// codes. See `requireNotACallerLocationDefault`'s header for the measured table and for why the codes
 		// are not brought into line here.

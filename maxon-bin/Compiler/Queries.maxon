@@ -1654,14 +1654,18 @@ export let HiddenTypeNameMessage = "Expected type name after 'as'"
 // is a method the compiler synthesizes that no file declares — the operation genuinely has no body
 // a call could be checked against, so the author is sent to the value rather than told to define
 // the symbol.
-function unknownReservedCalleeMessage(callee String, reason ReservedCalleeReason) returns String
+//
+// ⭐ **THE LEAD IS THE POSITION'S AND THE REST IS THIS CLASSIFIER'S**, so the CALL door (E3004) and the
+// VALUE door (E3155) explain one refusal with one text. Both leads say "undefined function" because both
+// state the same thing about the name; only the verb a reader can see on the line differs.
+function reservedNameReason(name String, reason ReservedCalleeReason) returns String
 	return match reason 'reason'
-		compilerInternalPrefix gives "call to undefined function '{callee}': the '__' prefix names a compiler intrinsic, and no intrinsic of that name exists"
-		synthesizedConformanceImpl gives "call to undefined function '{callee}': that name is the symbol the compiler synthesizes for the builtin's conformance, which a program reaches through a value of the type (`value.method()`) and never by naming the symbol"
-		faultProbeEntry gives "call to undefined function '{callee}': that name is the compiler's own fault-probe entry point, which a program reaches through `__Builtins.forceSegfault()` and never by naming the symbol"
-		notReserved panic("unknownReservedCalleeMessage: asked to explain '{callee}' as reserved while the classifier calls it ordinary — `requireCalleeIsNotReservedName` returns on that answer and is the only site that raises this error")
+		compilerInternalPrefix gives "the '__' prefix names a compiler intrinsic, and no intrinsic of that name exists"
+		synthesizedConformanceImpl gives "that name is the symbol the compiler synthesizes for the builtin's conformance, which a program reaches through a value of the type (`value.method()`) and never by naming the symbol"
+		faultProbeEntry gives "that name is the compiler's own fault-probe entry point, which a program reaches through `__Builtins.forceSegfault()` and never by naming the symbol"
+		notReserved panic("reservedNameReason: asked to explain '{name}' as reserved while the classifier calls it ordinary — `Parser.requireCalleeIsNotReservedName` and `Parser.requireFunctionValueNameIsNotReserved` both return on that answer and are the only sites that raise these errors")
 	end 'reason'
-end 'unknownReservedCalleeMessage'
+end 'reservedNameReason'
 
 // The E2015 sentence, written once for the two `ParseError` cases that carry it — see
 // `tupleElementRejected` for why there are two cases and only one sentence.
@@ -2063,7 +2067,11 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// every refusal it was about a `__` prefix — which is false for a synthesized conformance impl
 		// that wears no prefix at all. Both clauses forbid a DECLARATION as well as a call, so neither
 		// reading sends the author off to define the function.
-		unknownCompilerIntrinsic(callee, reason, line, column) then reportPositioned(project, code: ErrorCode.callUnknownFunction, message: unknownReservedCalleeMessage(callee, reason: reason), line: line, column: column, filePath: path)
+		unknownCompilerIntrinsic(callee, reason, line, column) then reportPositioned(project, code: ErrorCode.callUnknownFunction, message: "call to undefined function '{callee}': {reservedNameReason(callee, reason: reason)}", line: line, column: column, filePath: path)
+
+		// E3155, the arm above one position over: the same name, the same classifier's reason, no call. It
+		// carries its own code because E3004's subject is a call — see the registry entry, which argues it.
+		reservedNameAsFunctionValue(name, reason, line, column) then reportPositioned(project, code: ErrorCode.reservedNameAsFunctionValue, message: "reference to undefined function '{name}': {reservedNameReason(name, reason: reason)}", line: line, column: column, filePath: path)
 
 		// ⭐ The three rules that hold only inside `runtime/`. The first says the name IS defined and this
 		// file may not reach it — deliberately not the "undefined function" wording above, which would send
