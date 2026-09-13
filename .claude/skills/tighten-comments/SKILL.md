@@ -287,12 +287,12 @@ original was long.
    non-blank. Both sides get identical mangling of any `//` inside a string. Put this output in your
    report verbatim; **an empty diff is the only acceptable result** — do not argue around a non-empty
    one.
-3. **`mcp__maxon-dev__fmt`, the file form** (name the file — with no path it formats the whole
+3. **`mcp__maxon__fmt`, the file form** (name the file — with no path it formats the whole
    directory). Proves the file still lexes and the formatter's line-keyed comment map still resolves.
    ⚠ A file `fmt` cannot lex is left byte-identical and reported `unchanged` — the same word it uses
    for an already-canonical file — so `unchanged` alone proves nothing. Step 4 is what proves it
    parses.
-4. **The build**, unless your caller says they are batching it: `mcp__maxon-dev__build`. ~4 min.
+4. **The build**, unless your caller says they are batching it: `mcp__maxon__build`. ~4 min.
 
 The spec suite is not run — a comments-only edit cannot move it, so it is confirmation, not
 detection.

@@ -306,7 +306,7 @@ deliverable stays one chunk and one commit.)*
 **What the agents must be told, beyond the standard six:**
 
 - **Run `maxon-coder` before writing any Maxon.**
-- **They work in the MAIN checkout, so the `maxon-dev` MCP tools need no `repoRoot`** — and they do not
+- **They work in the MAIN checkout, so the `maxon` MCP tools need no `repoRoot`** — and they do not
   commit, do not `git add`, do not push, and leave every golden the runs touch exactly as it lies —
   golden drift is not theirs to measure, investigate or worry about. You commit everything, once, at §8.
 - ⛔ **`/specs/**` is READ-ONLY — not one byte.** It is the canonical definition of the language; an edit

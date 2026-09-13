@@ -53,7 +53,7 @@ at realistic volume. For a prioritization signal, measure the compiler
 compiling itself:
 
 1. **Refcount-traffic baseline.** `scripts/analyze_mm_trace.py` — what the
-   `mcp__maxon-dev__mm_trace_analyze` tool drives — reads an `--mm-trace`
+   `mcp__maxon__mm_trace_analyze` tool drives — reads an `--mm-trace`
    capture into op counts, per-tag / per-scope breakdowns and pointless-pair
    candidates. It needs a workload that builds.
 2. **Build-time and exe-size baseline.** `scripts/self-host-ab.sh` builds

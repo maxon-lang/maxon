@@ -127,7 +127,7 @@ Three doors are still standing open rather than shut:
 > unpacked whole would leave a RELEASED stdlib and runtime one directory above the compiler and the
 > tree's own would never be reached. The build would succeed and compile the wrong sources, silently.
 
-## maxon-dev MCP tools (PREFER THESE — **IN A WORKTREE, PASS `repoRoot`**)
+## maxon MCP tools (PREFER THESE — **IN A WORKTREE, PASS `repoRoot`**)
 
 **The server IS the compiler**: `maxon mcp-server --dev`, implemented under `maxon-bin/Compiler/Mcp/`.
 There is no separate project and nothing to build but the compiler itself, so a rebuild of the slot is

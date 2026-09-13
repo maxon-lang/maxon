@@ -54,7 +54,7 @@ Controls for a fair comparison:
 ```
 # Rust
 cd bench && rustc -O sortbench.rs -o sortbench_rs.exe && ./sortbench_rs.exe
-# Maxon (via the maxon-dev run_program tool, or build + run the emitted exe)
+# Maxon (via the maxon run_program tool, or build + run the emitted exe)
 maxon-bin/.maxon/maxon build bench/sortbench.maxon && ./bench/sortbench.exe
 ```
 

@@ -7,7 +7,7 @@ Read `docs/WRITING_MAXON_CODE.md` before writing any Maxon code. It contains man
 
 ## Building and testing
 
-After writing or modifying Maxon code, verify it compiles and passes tests. Prefer the `maxon-dev` MCP
+After writing or modifying Maxon code, verify it compiles and passes tests. Prefer the `maxon` MCP
 tools — they are faster than shelling out and return structured output. See CLAUDE.md for the full tool
 mapping. **In a worktree, pass `repoRoot` (your worktree's absolute path) to EVERY tool call**, or you
 will drive the main checkout and be told `success: true` about a tree containing none of your work.
@@ -15,17 +15,17 @@ will drive the main checkout and be told `success: true` about a tree containing
 **One compiler builds this tree** — source `maxon-bin/`, binary `maxon-bin/.maxon/maxon`, suite
 `specs/`:
 
-- Build: `mcp__maxon-dev__build` (after modifying `maxon-bin/` or `stdlib/`).
-- Spec tests: `mcp__maxon-dev__run_spec_test` (suite `specs/`).
+- Build: `mcp__maxon__build` (after modifying `maxon-bin/` or `stdlib/`).
+- Spec tests: `mcp__maxon__run_spec_test` (suite `specs/`).
 
 **Quick experiments / verification:**
-- Run a snippet or file end-to-end: `mcp__maxon-dev__run_program`.
-- Inspect lowered IR: `mcp__maxon-dev__dump_ir`.
-- Format Maxon source: `mcp__maxon-dev__fmt`.
+- Run a snippet or file end-to-end: `mcp__maxon__run_program`.
+- Inspect lowered IR: `mcp__maxon__dump_ir`.
+- Format Maxon source: `mcp__maxon__fmt`.
   ⚠ Give it the **file** you mean: with no path it formats the whole current directory.
-- Look up a 4-digit error code: `mcp__maxon-dev__lookup_error_code`. Never reference a code by its bare
+- Look up a 4-digit error code: `mcp__maxon__lookup_error_code`. Never reference a code by its bare
   number in source — use the generated `ErrorCode` member.
-- Debug memory leaks: `mcp__maxon-dev__mm_trace_analyze`. **Exit code 101 = a leak was detected.**
+- Debug memory leaks: `mcp__maxon__mm_trace_analyze`. **Exit code 101 = a leak was detected.**
 
 ⚠ **The compiler binary is gitignored and nothing rebuilds it**, so a stale one lies in both
 directions — build before you trust a run.

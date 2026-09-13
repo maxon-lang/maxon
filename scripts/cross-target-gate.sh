@@ -139,7 +139,7 @@ prior_row() {
 
 # --- The --skip-build freshness guard ---
 #
-# Same contract the maxon-dev MCP server holds over its own binary: a tool that answers confidently
+# Same contract the maxon MCP server holds over its own binary: a tool that answers confidently
 # from stale code is worse than one that refuses. `--skip-build` is the only way into this script
 # without a build, so it is the only place the check can live.
 assert_fresh() {

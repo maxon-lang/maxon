@@ -10,7 +10,7 @@ This file holds what binds EVERY tree in the repository. The compiler is a proje
 own build, gates and traps, and those rules load with it:
 
 - **`maxon-bin/CLAUDE.md`** — the compiler: how to build it, the seed, the two-self-compiles rule, the
-  `maxon-dev` MCP tools, targets, `spec-test`, `tests/`, `fmt`, the error-code registry, spec fragments.
+  `maxon` MCP tools, targets, `spec-test`, `tests/`, `fmt`, the error-code registry, spec fragments.
   `stdlib/`, `specs/`, `tests/`, `scripts/` and `examples/` import it, because work there is compiler work.
 - **the `compiler-workflow` skill** — the long procedures: the `run_scale_test` ladder, `fixpoint.sh`,
   hosting the x64-linux lane under WSL, staging `vendor/`.

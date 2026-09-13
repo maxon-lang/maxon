@@ -343,7 +343,7 @@ All start as `disabled-test`, enabled one at a time.
 
 1. `scripts/build.sh` — exit 0, **zero warnings**.
 2. The error-code self-test passes (it runs as part of every `spec-test`).
-3. `mcp__maxon-dev__run_spec_test` with `filter: "context-parameters"` — walk the disabled tests green one
+3. `mcp__maxon__run_spec_test` with `filter: "context-parameters"` — walk the disabled tests green one
    at a time.
 4. **Full suite neutral** — no regression against a pre-change baseline established first-hand; never
    trust a claimed-green tree.

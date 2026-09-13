@@ -41,7 +41,7 @@ CLAUDE.md is explicit that you do not care whether an issue predates the change.
 **Invoked standalone**, steps 6–8 below are yours: the gates and the commit. Skip them when you were
 dispatched.
 
-Prefer the `maxon-dev` MCP tools for build/test/format (see CLAUDE.md for the mapping). ⚠ **In a
+Prefer the `maxon` MCP tools for build/test/format (see CLAUDE.md for the mapping). ⚠ **In a
 worktree, pass `repoRoot`** — the absolute path of your worktree root — to every tool call, or you drive
 the main checkout and get a green about a tree containing none of the work.
 
@@ -51,7 +51,7 @@ Create a task list to perform these steps.
 
 ## 2. Format modified `.maxon` files
 
-`mcp__maxon-dev__fmt`, the **file** form. ⚠ **`fmt` with NO PATH formats the whole current directory** —
+`mcp__maxon__fmt`, the **file** form. ⚠ **`fmt` with NO PATH formats the whole current directory** —
 that is its documented default, so name the file you mean. Check `git status` after formatting.
 
 ## 3. ⭐ ELIMINATE DUPLICATED CODE — the top priority, by user directive
@@ -102,9 +102,9 @@ Update documentation (`LANGUAGE_REFERENCE.md`, `STDLIB_REFERENCE.md`, `QUICK_REF
 
 ## 6. Rebuild and re-run the gates — STANDALONE ONLY
 
-- **Build:** `mcp__maxon-dev__build`.
-- **Suite:** `mcp__maxon-dev__run_spec_test` — all green.
-- **Scaling:** `mcp__maxon-dev__run_scale_test` if the change touched a pass, the IR, or a data
+- **Build:** `mcp__maxon__build`.
+- **Suite:** `mcp__maxon__run_spec_test` — all green.
+- **Scaling:** `mcp__maxon__run_scale_test` if the change touched a pass, the IR, or a data
   structure the compiler indexes by. ⚠ **It is an INSTRUMENT with no verdict — there is no green one,
   and you never touch it to make a number look better.** Read the doubling ladder straight off the
   ALLOCATION columns: **×2 is linear, ×4 is quadratic.** A curve that bends is a reading to explain.
