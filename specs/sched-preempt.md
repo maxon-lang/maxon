@@ -23,17 +23,30 @@ sending the bystander its request. With every processor busy, `main`'s own timer
 spinner gives a processor back, so the measurement cannot pass by a queue order that happens to run the
 bystander first.
 
+⛔⛔ **`prompt` IS AN ORDER BETWEEN TWO EVENTS, NEVER A WALL-CLOCK BUDGET.** Each spinner records, against
+the instant `main` started it, the moment its own loop ended, and `prompt` is *the bystander's reply reached
+`main` before that*. A budget cannot be written down instead: a handover costs the retake threshold, a monitor
+lap and a thread stop, and on a host whose own scheduler holds the process off a core those stretch without
+bound while nothing about preemption has changed. MEASURED on a 12-core box carrying sixteen other
+green-thread programs, the two forms of `a-call-free-loop-is-preempted-anyway` run one after the other:
+a 150 ms budget held in 1 run of 16 and the ORDER in 16 of 16, with the spinner still 150 ms from its end
+every time. Push the load far enough and the order does go false — and only ever alongside `preempted`,
+because what has stopped there is preemption itself.
+
 ## Tests
 
 <!-- test: sched-preempt.a-cpu-bound-service-yields-to-a-bystander -->
 <!-- procs: 1 -->
-**A SERVICE THAT COMPUTES FOR 300 MS DOES NOT HOLD THE ONLY PROCESSOR FOR 300 MS.** Every iteration of the
-spinner passes a function prologue, so a preemption request reaches it within one sysmon period.
+**A SERVICE WITH 300 MS OF WORK DOES NOT HOLD THE ONLY PROCESSOR FOR ALL OF IT.** Every iteration of the
+spinner passes a function prologue, so a preemption request reaches it within one sysmon period. The spinner
+dates the end of its own run, so `prompt` is the ORDER of the bystander's reply and that end rather than a
+wall-clock budget the host's own load can exhaust.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-// Far below a spinner's 300 ms and far above a preemption request's 10 ms.
-let promptMs = 150
+// Calibrated to about 300 ms. The bound is WORK and not the clock, so a host that holds the process off a
+// core stretches the spinner's run exactly as it stretches a handover, and the margin below survives it.
+let spinBursts = 15000
 
 // Recursive, so it is never inlined and every iteration passes a function prologue.
 function step(acc Integer, depth Integer) returns Integer
@@ -44,24 +57,31 @@ function step(acc Integer, depth Integer) returns Integer
 end 'step'
 
 type Spinner
-	var n as Integer
+	var endedMs as Integer
 
 	static function create() returns Self
-		return Self{n: 0}
+		return Self{endedMs: 0}
 	end 'create'
 
-	export function spin(ms Integer) returns Integer
-		let start = Clock.nowMs()
+	export function spin(bursts Integer, startMs InstantMs) returns Integer
 		var acc = 0
-		while (Clock.elapsedMs(start) as Integer) < ms 'spin'
+		var b = 0
+		while b < bursts 'spin'
 			var i = 0
 			while i < 1000 'burst'
 				acc = step(acc, depth: 4)
 				i = i + 1
 			end 'burst'
+			b = b + 1
 		end 'spin'
+		self.endedMs = Clock.elapsedMs(startMs) as Integer
 		return acc mod 2 + 1
 	end 'spin'
+
+	// Asked after `spin`'s reply, and a mailbox is FIFO, so the field is settled by the time this runs.
+	export function endedAt() returns Integer
+		return self.endedMs
+	end 'endedAt'
 end 'Spinner'
 
 type Bystander
@@ -80,12 +100,13 @@ function main() returns ExitCode
 	let s = spawn Spinner.create()
 	let b = spawn Bystander.create()
 	let start = Clock.nowMs()
-	let spun = s.spin(300)
+	let spun = s.spin(spinBursts, startMs: start)
 	sleep(20)
 	let p = try await b.ping() otherwise 0
-	let tookMs = Clock.elapsedMs(start) as Integer
+	let pingAtMs = Clock.elapsedMs(start) as Integer
 	let q = try await spun otherwise 0
-	print("prompt={tookMs < promptMs} ping={p} spun={q > 0} preempted={__Builtins.schedPreemptCount() > 0}\n")
+	let spinEndedAtMs = try await s.endedAt() otherwise 0 - 1
+	print("prompt={pingAtMs < spinEndedAtMs} ping={p} spun={q > 0} preempted={__Builtins.schedPreemptCount() > 0}\n")
 	return 0 as ExitCode
 end 'main'
 ```
@@ -100,12 +121,15 @@ prompt=true ping=1 spun=true preempted=true
 <!-- procs: 1 -->
 **A PREEMPTION CAN LAND ANYWHERE IN A 20,000-FRAME RECURSION**, including at a prologue whose stack must also
 grow. Every pass recomputes a value that flows through every frame and compares it with the first pass, so
-a frame a preemption corrupted shows up as `wrong` above zero.
+a frame a preemption corrupted shows up as `wrong` above zero. The recurser dates the end of its own churn,
+so `prompt` is the ORDER of the bystander's reply and that end rather than a wall-clock budget the host's own
+load can exhaust.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-// Far below a spinner's 300 ms and far above a preemption request's 10 ms.
-let promptMs = 150
+// Calibrated to about 300 ms. The bound is PASSES and not the clock, so a busy host does not quietly buy the
+// corruption check fewer of them, and the churn stretches with the load exactly as a handover does.
+let churnRounds = 3000
 
 function down(n Integer, acc Integer) returns Integer
 	if n == 0 'bottom'
@@ -115,23 +139,30 @@ function down(n Integer, acc Integer) returns Integer
 end 'down'
 
 type Recurser
-	var n as Integer
+	var endedMs as Integer
 
 	static function create() returns Self
-		return Self{n: 0}
+		return Self{endedMs: 0}
 	end 'create'
 
-	export function churn(ms Integer) returns Integer
+	export function churn(rounds Integer, startMs InstantMs) returns Integer
 		let expected = down(20000, acc: 1)
-		let start = Clock.nowMs()
 		var wrong = 0
-		while (Clock.elapsedMs(start) as Integer) < ms 'churn'
+		var r = 0
+		while r < rounds 'churn'
 			if down(20000, acc: 1) != expected 'differs'
 				wrong = wrong + 1
 			end 'differs'
+			r = r + 1
 		end 'churn'
+		self.endedMs = Clock.elapsedMs(startMs) as Integer
 		return wrong
 	end 'churn'
+
+	// Asked after `churn`'s reply, and a mailbox is FIFO, so the field is settled by the time this runs.
+	export function endedAt() returns Integer
+		return self.endedMs
+	end 'endedAt'
 end 'Recurser'
 
 type Bystander
@@ -150,12 +181,13 @@ function main() returns ExitCode
 	let r = spawn Recurser.create()
 	let b = spawn Bystander.create()
 	let start = Clock.nowMs()
-	let churned = r.churn(300)
+	let churned = r.churn(churnRounds, startMs: start)
 	sleep(20)
 	let p = try await b.ping() otherwise 0
-	let tookMs = Clock.elapsedMs(start) as Integer
+	let pingAtMs = Clock.elapsedMs(start) as Integer
 	let wrong = try await churned otherwise 0 - 1
-	print("prompt={tookMs < promptMs} ping={p} wrong={wrong}\n")
+	let churnEndedAtMs = try await r.endedAt() otherwise 0 - 1
+	print("prompt={pingAtMs < churnEndedAtMs} ping={p} wrong={wrong}\n")
 	return 0 as ExitCode
 end 'main'
 ```
@@ -169,15 +201,17 @@ prompt=true ping=1 wrong=0
 <!-- test: sched-preempt.as-many-spinners-as-processors-cannot-starve-another -->
 <!-- procs: 4 -->
 **EVERY PROCESSOR BUSY WITH A SPINNER, AND `main` AND ONE MORE SERVICE STILL GET A TURN.** No processor is ever
-idle, so only a preemption hands one over.
+idle, so only a preemption hands one over. Each spinner dates the end of its own run and `prompt` takes the
+EARLIEST of them, so what it states is that the bystander was answered while every processor was still busy.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias SpinnerHandleArray = Array with Spinner.handle
 typealias ReplyPromise = Promise with (Integer, ServiceError)
 typealias ReplyPromiseArray = Array with ReplyPromise
 
-// Far below a spinner's 300 ms and far above a preemption request's 10 ms.
-let promptMs = 150
+// Calibrated to about 300 ms. The bound is WORK and not the clock, so a host that holds the process off a
+// core stretches the spinner's run exactly as it stretches a handover, and the margin below survives it.
+let spinBursts = 15000
 
 // Recursive, so it is never inlined and every iteration passes a function prologue.
 function step(acc Integer, depth Integer) returns Integer
@@ -188,24 +222,31 @@ function step(acc Integer, depth Integer) returns Integer
 end 'step'
 
 type Spinner
-	var n as Integer
+	var endedMs as Integer
 
 	static function create() returns Self
-		return Self{n: 0}
+		return Self{endedMs: 0}
 	end 'create'
 
-	export function spin(ms Integer) returns Integer
-		let start = Clock.nowMs()
+	export function spin(bursts Integer, startMs InstantMs) returns Integer
 		var acc = 0
-		while (Clock.elapsedMs(start) as Integer) < ms 'spin'
+		var b = 0
+		while b < bursts 'spin'
 			var i = 0
 			while i < 1000 'burst'
 				acc = step(acc, depth: 4)
 				i = i + 1
 			end 'burst'
+			b = b + 1
 		end 'spin'
+		self.endedMs = Clock.elapsedMs(startMs) as Integer
 		return acc mod 2 + 1
 	end 'spin'
+
+	// Asked after `spin`'s reply, and a mailbox is FIFO, so the field is settled by the time this runs.
+	export function endedAt() returns Integer
+		return self.endedMs
+	end 'endedAt'
 end 'Spinner'
 
 type Bystander
@@ -233,12 +274,12 @@ function main() returns ExitCode
 	var k = 0
 	while k < spinners.count() 'sendEach'
 		let s = try spinners.get(k) otherwise panic("spinners.get out of range at {k}: bounded by the pushes above")
-		spun.push(s.spin(300))
+		spun.push(s.spin(spinBursts, startMs: start))
 		k = k + 1
 	end 'sendEach'
 	sleep(20)
 	let p = try await b.ping() otherwise 0
-	let tookMs = Clock.elapsedMs(start) as Integer
+	let pingAtMs = Clock.elapsedMs(start) as Integer
 	var ran = 0
 	while spun.count() > 0 'collect'
 		let r = try spun.pop() otherwise panic("spun.pop on a non-empty array")
@@ -247,7 +288,17 @@ function main() returns ExitCode
 			ran = ran + 1
 		end 'spun'
 	end 'collect'
-	print("prompt={tookMs < promptMs} spinners={ran == spinners.count()} ping={p}\n")
+	var firstEndMs = 0 - 1
+	var j = 0
+	while j < spinners.count() 'earliest'
+		let s = try spinners.get(j) otherwise panic("spinners.get out of range at {j}: bounded by the pushes above")
+		let e = try await s.endedAt() otherwise 0 - 1
+		if firstEndMs < 0 or e < firstEndMs 'earlier'
+			firstEndMs = e
+		end 'earlier'
+		j = j + 1
+	end 'earliest'
+	print("prompt={pingAtMs < firstEndMs} spinners={ran == spinners.count()} ping={p}\n")
 	return 0 as ExitCode
 end 'main'
 ```
@@ -401,33 +452,38 @@ wrong=0 preempted=true
 **A LOOP THAT CALLS NOTHING STILL GIVES UP ITS PROCESSOR.** A request written into the stack guard is read
 only by a function that reserves a frame, so this spinner never reads one; the thread has to be stopped where
 it is instead. `main` sleeps before sending the bystander its request, so the bystander cannot answer early by
-some queue order.
+some queue order, and the spinner dates the end of its own loop so `prompt` compares two events instead of
+measuring one against a wall-clock budget.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-// Far below the spinner's run and far above a preemption request's 10 ms.
-let promptMs = 150
 // Calibrated to about 300 ms: a loop this long cannot be mistaken for a thread that simply finished.
 let spinSteps = 90000000
 
 type Spinner
-	var n as Integer
+	var endedMs as Integer
 
 	static function create() returns Self
-		return Self{n: 0}
+		return Self{endedMs: 0}
 	end 'create'
 
 	// ⛔ NOT ONE CALL IN THE LOOP, which is the whole point: a poisoned stack guard is read by a function
-	// that reserves a frame, and this body never enters one.
-	export function spin(steps Integer) returns Integer
+	// that reserves a frame, and this body never enters one. The reading below the loop dates its end.
+	export function spin(steps Integer, startMs InstantMs) returns Integer
 		var acc = 0
 		var i = 0
 		while i < steps 'spin'
 			acc = (acc * 31 + i) mod 1000003
 			i = i + 1
 		end 'spin'
+		self.endedMs = Clock.elapsedMs(startMs) as Integer
 		return acc mod 2 + 1
 	end 'spin'
+
+	// Asked after `spin`'s reply, and a mailbox is FIFO, so the field is settled by the time this runs.
+	export function endedAt() returns Integer
+		return self.endedMs
+	end 'endedAt'
 end 'Spinner'
 
 type Bystander
@@ -446,12 +502,13 @@ function main() returns ExitCode
 	let s = spawn Spinner.create()
 	let b = spawn Bystander.create()
 	let start = Clock.nowMs()
-	let spun = s.spin(spinSteps)
+	let spun = s.spin(spinSteps, startMs: start)
 	sleep(20)
 	let p = try await b.ping() otherwise 0
-	let tookMs = Clock.elapsedMs(start) as Integer
+	let pingAtMs = Clock.elapsedMs(start) as Integer
 	let q = try await spun otherwise 0
-	print("prompt={tookMs < promptMs} ping={p} spun={q > 0} preempted={__Builtins.schedPreemptCount() > 0}\n")
+	let spinEndedAtMs = try await s.endedAt() otherwise 0 - 1
+	print("prompt={pingAtMs < spinEndedAtMs} ping={p} spun={q > 0} preempted={__Builtins.schedPreemptCount() > 0}\n")
 	return 0 as ExitCode
 end 'main'
 ```
@@ -465,34 +522,41 @@ prompt=true ping=1 spun=true preempted=true
 <!-- test: sched-preempt.every-processor-in-a-call-free-loop-still-yields -->
 <!-- procs: 4 -->
 **ONE CALL-FREE SPINNER PER PROCESSOR, AND A FIFTH SERVICE STILL GETS A TURN.** No processor is ever idle and
-no spinner ever reaches a prologue, so only stopping a thread where it runs hands one over.
+no spinner ever reaches a prologue, so only stopping a thread where it runs hands one over. Each spinner dates
+the end of its own loop and `prompt` takes the EARLIEST of them, so what it states is that the bystander was
+answered while every processor was still busy.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias SpinnerHandleArray = Array with Spinner.handle
 typealias ReplyPromise = Promise with (Integer, ServiceError)
 typealias ReplyPromiseArray = Array with ReplyPromise
 
-let promptMs = 150
 let spinSteps = 90000000
 
 type Spinner
-	var n as Integer
+	var endedMs as Integer
 
 	static function create() returns Self
-		return Self{n: 0}
+		return Self{endedMs: 0}
 	end 'create'
 
 	// ⛔ NOT ONE CALL IN THE LOOP, which is the whole point: a poisoned stack guard is read by a function
-	// that reserves a frame, and this body never enters one.
-	export function spin(steps Integer) returns Integer
+	// that reserves a frame, and this body never enters one. The reading below the loop dates its end.
+	export function spin(steps Integer, startMs InstantMs) returns Integer
 		var acc = 0
 		var i = 0
 		while i < steps 'spin'
 			acc = (acc * 31 + i) mod 1000003
 			i = i + 1
 		end 'spin'
+		self.endedMs = Clock.elapsedMs(startMs) as Integer
 		return acc mod 2 + 1
 	end 'spin'
+
+	// Asked after `spin`'s reply, and a mailbox is FIFO, so the field is settled by the time this runs.
+	export function endedAt() returns Integer
+		return self.endedMs
+	end 'endedAt'
 end 'Spinner'
 
 type Bystander
@@ -520,12 +584,12 @@ function main() returns ExitCode
 	var k = 0
 	while k < spinners.count() 'sendEach'
 		let s = try spinners.get(k) otherwise panic("spinners.get out of range at {k}: bounded by the pushes above")
-		spun.push(s.spin(spinSteps))
+		spun.push(s.spin(spinSteps, startMs: start))
 		k = k + 1
 	end 'sendEach'
 	sleep(20)
 	let p = try await b.ping() otherwise 0
-	let tookMs = Clock.elapsedMs(start) as Integer
+	let pingAtMs = Clock.elapsedMs(start) as Integer
 	var ran = 0
 	while spun.count() > 0 'collect'
 		let r = try spun.pop() otherwise panic("spun.pop on a non-empty array")
@@ -534,7 +598,17 @@ function main() returns ExitCode
 			ran = ran + 1
 		end 'spun'
 	end 'collect'
-	print("prompt={tookMs < promptMs} spinners={ran == spinners.count()} ping={p}\n")
+	var firstEndMs = 0 - 1
+	var j = 0
+	while j < spinners.count() 'earliest'
+		let s = try spinners.get(j) otherwise panic("spinners.get out of range at {j}: bounded by the pushes above")
+		let e = try await s.endedAt() otherwise 0 - 1
+		if firstEndMs < 0 or e < firstEndMs 'earlier'
+			firstEndMs = e
+		end 'earlier'
+		j = j + 1
+	end 'earliest'
+	print("prompt={pingAtMs < firstEndMs} spinners={ran == spinners.count()} ping={p}\n")
 	return 0 as ExitCode
 end 'main'
 ```
