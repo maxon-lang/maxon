@@ -945,6 +945,8 @@ function buildNetpollPdAdopt(module StdModule, rawFree ByteArray)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var notASource = module.addBlock(func, label: b"npadoptbad", heat: BlockHeat.normal)
+	var indexed = module.addBlock(func, label: b"npadoptok", heat: BlockHeat.normal)
 	var growPick = module.addBlock(func, label: b"npgrowpick", heat: BlockHeat.normal)
 	var growSeed = module.addBlock(func, label: b"npgrowseed", heat: BlockHeat.normal)
 	var growHdr = module.addBlock(func, label: b"npgrowhdr", heat: BlockHeat.normal)
@@ -960,10 +962,18 @@ function buildNetpollPdAdopt(module StdModule, rawFree ByteArray)
 	emitParams(module, block: entry, count: 1)
 	let fd = 0 as ValueId
 
-	emitSchedLockEnter(module, block: entry, ids: ids)
-	let capBefore = emitLoadGlobalWord(module, block: entry, label: NetpollPdCapLabel, ids: ids)
-	let tooSmall = emitCmp(module, block: entry, a: fd, b: capBefore, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(tooSmall, thenBlockId: growPick.id, elseBlockId: haveSlot.id))
+	// ⛔⛔ **THE TABLE'S ONE WRITER BOUNDS ITS INDEX AT BOTH ENDS, WHERE THE GROW ONLY EVER BOUNDS THE TOP.**
+	// `table + 8 * fd` is signed, so a value that is not a source addresses the words BEFORE the table and the
+	// reset below hands one of them to `emitNetpollPdClear` as a record. `__np_pd_slot` already refuses a
+	// negative on the reading side.
+	let negative = emitCmp(module, block: entry, a: fd, b: emitConst(module, block: entry, value: 0, ids: ids), pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(negative, thenBlockId: notASource.id, elseBlockId: indexed.id))
+	emitRuntimeAbort(module, func: func, block: notASource, abort: RuntimeAbort.netpollAdoptIndexIsNotASource, ids: ids)
+
+	emitSchedLockEnter(module, block: indexed, ids: ids)
+	let capBefore = emitLoadGlobalWord(module, block: indexed, label: NetpollPdCapLabel, ids: ids)
+	let tooSmall = emitCmp(module, block: indexed, a: fd, b: capBefore, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(indexed, op: StdOp.condBranch(tooSmall, thenBlockId: growPick.id, elseBlockId: haveSlot.id))
 
 	// Where the doubling starts: the seed for a table that does not exist yet, the current capacity otherwise.
 	let unborn = emitCmp(module, block: growPick, a: capBefore, b: emitConst(module, block: growPick, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
@@ -1782,8 +1792,10 @@ end 'buildNetpollPdTimedOut'
 // reaches them through `emitNetpollAcquireChildSource`, which is the one body that tests the arm's answer; a
 // second spelling outside this file is how a refused registration becomes a park nothing can end.
 //
-// `__np_child_open(childHandle) -> source` — mint this handle's poll source and give it a record. It aborts
-// `netpollFailed` when the host refuses one, exactly as a socket the poller will not take does.
+// `__np_child_open(childHandle) -> source | -ESRCH` — mint this handle's poll source and give it a record. It
+// aborts `netpollFailed` when the host refuses one, exactly as a socket the poller will not take does; a POSIX
+// kernel's `-ESRCH` says the child is already gone and travels back in the source's place, having been given
+// no record (`emitNetpollChildSourceFromHost`).
 let NetpollChildOpenName = b"__np_child_open"
 
 // `__np_child_arm(source, childHandle) -> token` — register the source with the poller. A 0 says the
@@ -1915,15 +1927,24 @@ end 'emitNetpollSourceKeyFromAllocator'
 
 // A POSIX lane's source key IS a descriptor the host mints, so a refusal is the host's — and the answer to
 // *"this child can never be waited for"* is the one a socket the poller will not take already gets.
+//
 // ⛔ **`-ESRCH` TRAVELS BACK RATHER THAN ABORTING**: it says the child has already exited, which
 // `emitNetpollAcquireChildSource` answers by reading the status. Every other negative is a real refusal.
+//
+// ⛔⛔ **AND IT RETURNS FROM `__np_child_open` HERE RATHER THAN JOINING `cont`, BECAUSE AN errno IS NOT AN
+// INDEX.** `cont` is the block that gives the answer a RECORD, and `__np_pd_adopt` reads what it is handed as
+// the record table's index: `-ESRCH` addresses the words BEFORE the table, and one of them is then handed to
+// `emitNetpollPdClear` as a poll descriptor — a wild pointer readied as a green thread, or eight bytes
+// belonging to something else overwritten with a fresh record's address. MEASURED on a loaded arm64-macos
+// host as a SIGSEGV in `__np_pd_ready_one`, on a program that did nothing wrong.
 function emitNetpollChildSourceFromHost(module StdModule, func IrFunction, cur IrBlock, target Target, childHandle ValueId, cont IrBlock, ids ValueMinter)
 	var checked = module.addBlock(func, label: b"npchsrcchk", heat: BlockHeat.normal)
+	var gone = module.addBlock(func, label: b"npchsrcgone", heat: BlockHeat.normal)
 
 	let source = emitNetpoll(module, block: cur, verb: NetpollVerb.openChildSource, operands: argsOf(childHandle), ids: ids)
 	let exited = emitCmp(module, block: cur, a: source, b: emitConst(module, block: cur, value: 0 - PosixErrnoNoSuchProcess, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(exited, thenBlockId: cont.id, elseBlockId: checked.id))
-	cur.branchEdges.push(BranchEdge.create(cont.id, argIds: argsOf(source)))
+	module.setTerminator(cur, op: StdOp.condBranch(exited, thenBlockId: gone.id, elseBlockId: checked.id))
+	module.setTerminator(gone, op: StdOp.ret(source))
 
 	emitNetpollRequire(module, func: func, cur: checked, shape: netpollShape(target), verb: NetpollVerb.openChildSource, subject: childHandle, answer: source, cont: cont, ids: ids)
 	checked.branchEdges.push(BranchEdge.create(cont.id, argIds: argsOf(source)))

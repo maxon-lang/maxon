@@ -411,6 +411,14 @@ export enum RuntimeAbort
 	// ends at the creation rather than at the first wrong answer.
 	overlappedPipeStillPostsOnSuccess = 112
 
+	// `__np_pd_adopt`: the poll-record table's one writer was handed an index no source can wear. The table is
+	// addressed as `table + 8 * index` with only an upper bound to grow against, so a negative one names the
+	// words BEFORE the table — read as a record and readied as a green thread, or overwritten with a fresh
+	// record's address. `__np_pd_slot` refuses the same index on the reading side; this is the writing side of
+	// that refusal, and it is an abort rather than a skip because a source with no record is a wait nothing
+	// can end.
+	netpollAdoptIndexIsNotASource = 113
+
 	// ⚠ **108 IS RETIRED, NOT REUSABLE.** It was `netpollReleaseWithWaiter` — `__np_pd_open` / `__np_pd_release`
 	// finding a green thread still PUBLISHED on a direction word of the record they were about to reset. It was
 	// admitted on the argument that no two green threads could name one socket box, which was never true of a
