@@ -316,9 +316,19 @@ deliverable stays one chunk and one commit.)*
 - **Root causes, no workarounds** — and a defect is fixed whether or not it predates you (CLAUDE.md).
 - **Cross-target consistency**: an x64 change needs its arm64 equivalent. The wasm lane runs in §7 and
   is not scalar-only — a float or `String` case failing there is a bug on that lane.
-- **A new diagnostic goes through the registry**: an entry in `docs/error-codes.txt`, then
-  `maxon error-codes generate`, then the code that emits it. Never hand-edit a generated enum, never
-  grep one for a free number, never write a bare `"E3010"` in source.
+- **A new diagnostic goes through the registry, which is HAND-AUTHORED and has NO generator**: add a
+  `//` doc comment and a `<caseName> = "EXXXX"` entry to `maxon-bin/Compiler/ErrorCodeRegistry.maxon`,
+  then write the code that emits it. **That comment IS the documentation surface** —
+  `Mcp/McpErrorCodes.maxon` re-parses the registry SOURCE at runtime to serve `lookup_error_code`, so a
+  case without one answers with nothing. Take the next free number in the band by reading the enum
+  (1xxx lexer, 2xxx parser, 3xxx semantic, 4xxx IR, 5xxx emitter, 6xxx PE writer, 9xxx internal): a
+  duplicate NAME does not compile, and a duplicate NUMBER is structural in neither direction and is
+  caught only by `requireErrorCodesUnique()`, which runs as part of `spec-test`. Never write a bare
+  `"E3010"` in source — a diagnostic names `ErrorCode.<case>`.
+  ⛔ **`docs/error-codes.txt` and `maxon error-codes generate` DO NOT EXIST** — no such file was ever
+  tracked in git and `MaxonCommand` has no such case. Stale citations of both survive in
+  `GlobalInitOrder.maxon`, `Lsp/LspDiagnostics.maxon`, `Parser.maxon`, `Queries.maxon`,
+  `Runtime/RuntimeAbort.maxon` and six files under `specs/`. Follow the enum, not them.
 - **A mechanism that does not exist yet gets BUILT** — a builtin, a runtime slice, an opcode on every
   target. Size is never a reason to stop; see the two boxes at the top of this file.
 
