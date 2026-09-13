@@ -91,18 +91,41 @@ feature is the instrument's blind spot, not the cost — in **every** column, CP
 case: `regalloc:splitting`'s float-across-calls quadratic was hidden because the corpus's `floatSpill`
 knob was 4 — few enough that every float fit a register. The knob went 4 → 12; that is a corpus fix.)*
 
-### `scripts/self-host-ab.sh` — when the question is the EMITTED code
+### When the question is the EMITTED code, not the compiler's logic
 
 A green suite and `scale-test` both measure the compiler's LOGIC, which every stage of the self-host
-chain shares byte for byte. **The QUALITY OF THE CODE the compiler EMITS is a different question, and this is
-the one command that answers it.** It builds stage-2 (stage-1 compiling the compiler) and stage-3 (stage-2
-compiling the compiler), `cmp`s them (the fixpoint gate — a difference is a MISCOMPILE), times both
-self-compiles, and runs `scale-test` on stage-1 and stage-2 INTERLEAVED, printing stage-2's per-phase
-ratios over stage-1. Same logic in both ⇒ **any allocation ratio above 1.00 is a construct this
-tree's codegen allocates for and the seed's does not.** It reads the SEED as stage-1 (the tree binary is
-already stage-2). `--profile` adds function-level attribution via `scripts/sample_profile.py`, which
-reads compiler-emitted binaries (no `.mxdbg` needed — their `__symtable` closes `.text`). ~15 min; writes
-only under `temp/selfhost/`.
+chain shares byte for byte. **The QUALITY OF THE CODE the compiler EMITS is a different question**, and
+it is answered by four instruments, none of which is a single command:
+
+- **`scripts/fixpoint.sh`** — builds stage-2 (stage-1 compiling the compiler) and stage-3 (stage-2
+  compiling the compiler) and `cmp`s them. A difference is a **MISCOMPILE**, and this is the gate that
+  says so. ⚠ It compares one compiler against its OWN successor, never two compilers: its header states
+  the limit — *a wrong answer both stages agree on is invisible here*.
+- **`scripts/emitted-code-count.py`** (~10 s) — a per-program op census over a fixed corpus, the cheap
+  standing read on emitted-code debris. ⚠ Its unit changed on 2026-08-29 when `--emit-ir` stopped
+  emitting library bodies; they are now opt-in BY NAME, so a count taken before that date is not
+  comparable with one taken after.
+- **`--emit-ir --emit-ir-runtime=<name>,<name>`** — renders named withheld bodies as Target IR, the same
+  text a spec's ```RequiredRuntime block pins. This is the instrument when the subject is a SPECIFIC
+  body rather than the corpus: point two compilers at one program and diff the sidecars.
+- **`scripts/sample_profile.py`** — a standalone sampling profiler for Maxon-compiled executables, for
+  function-level attribution when you need to know WHERE the emitted code spends its time. It resolves
+  samples against the `__symtable` every backend embeds, so it needs no `.mxdbg`, and it reads both the
+  bootstrap's `.symtab` placement and this compiler's `.text`-closing one. ⚠ Windows x64 only. It takes
+  the command to profile as its trailing arguments; it is not a flag of anything.
+
+⛔ **THERE IS NO TWO-COMPILER A/B HARNESS, AND NO `scripts/self-host-ab.sh`** — that path has never been
+tracked in git, and neither has any predecessor. The per-phase ratio table it was described as printing
+(stage-1 and stage-2 `scale-test`ed interleaved, so any allocation ratio above 1.00 is a construct this
+tree's codegen allocates for and the seed's does not) is a real and useful measurement that **nothing in
+the tree performs**. Building one is blocked on a separate defect: `scale-test --repeat=N` for N>=2
+reports the compiler nondeterministic, and the REPEAT is what is nondeterministic — state carried from
+one compile to the next inside one process, +4 allocs and +4,453 bytes per rung, reproduced on
+origin HEAD as well as locally. Fix that first or the ratio table cannot be trusted.
+
+⚠ **A control compiler is still available** where the question is runtime speed rather than emitted
+bytes: `bench/fannkuch/out/ref-<sha>/tree/` holds complete checkouts at prior commits, which the
+`fannkuch-iterate` skill builds and runs against. It measures ONE benchmark's wall time, not code size.
 
 ⚠ **Measure on an IDLE machine, and measure the instrument before the subject.** This project has had a
 dominant cost hide in the *wrong timing bucket* four separate times. Load can MASK a bug, not just
