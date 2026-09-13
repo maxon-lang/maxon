@@ -1,0 +1,95 @@
+// ⭐⭐ **THE OBJECT LAYER'S OS-DIRECT TIER.** Above `SlabMaxSmallSize` a request is its own mapping rather
+// than a slot in a span, and these two entry points are the whole of that road: one `osAllocPages` per
+// allocation, one `osFreePages` per free, and the mapping's own length in a 16-byte prefix.
+//
+// ⛔⛔ **THE REST OF `Compiler/Runtime/SlabRuntime.maxon` IS NOT MISSING — IT CANNOT BE SOURCE YET, AND THE
+// BLOCKER IS A BUILD-TIME ARGUMENT RATHER THAN A CALL.** Eleven of that file's fourteen entry points are
+// emitted DIFFERENTLY depending on `sharded` (`RuntimeUsage.usesGt`), `zeroed` or `countRaw` — the lock
+// enter/leave, the TLS read that answers *"which P am I"*, and the two-arm zeroing of a recycled slot are
+// all present or absent per PROGRAM. Tier source is compiled once and has no such knob, and the ops the
+// sharded arms are made of (`osLockEnter`, `tlsSlotLoad`) do not lower on the wasm and arm64 lanes at all,
+// so a body spelling one unconditionally dies in those backends. `__slab_drain_remote` is blocked for the
+// other reason — it calls `__slab_arena_map_get`, which stays a builder because `__slab_free` splices that
+// walk inline — and `__slab_rounded_size` for the same reason one layer up: it shares the size-class
+// lookup (`SlabRuntime.emitSlabClassIndex`) with `__slab_alloc`, so porting it alone would be a second
+// spelling of that walk. ⇒ **`__slab_state_base` IS THE LINCHPIN: its only build-time gate is one
+// `osLockInit`, and `__slab_meta_alloc`, `__slab_meta_free` and `__slab_span_destroy` call nothing else
+// that stays.**
+//
+// ⛔⛔ **THE CONSTANTS BELOW ARE RESTATED FROM `Compiler/Runtime/SlabRuntime.maxon` BECAUSE NO NAME CROSSES
+// THE TIER BOUNDARY**, the rule `runtime/SlabArena.maxon` states in full for its own geometry. Each names
+// the fact it restates; a seed that drifts here is a wrong offset with nothing to catch it.
+
+// ⭐ **SIGNED AND FULL-RANGE, AND THE SIGN IS WHAT MAKES `__slab_assert_os_alloc`'s TEST WORK.** A raw
+// POSIX page syscall answers a small NEGATIVE errno in the result register; read unsigned that is the
+// largest address the machine could have. `runtime/SlabArena.maxon`'s `ArenaWord` carries the same
+// argument for the layer beneath, and full-range for the same reason: an address and a byte count share
+// this type and neither has a bound this file could state.
+typealias SlabWord = int(i64.min to i64.max)
+
+// ⭐ **THE CHUNK IS GO'S 8 KiB PAGE.** `SlabClasses.SlabPageShift` is the compiler's copy, and an OS-direct
+// mapping is rounded up to it so the whole road speaks one granularity.
+let SlabPageBytes = 8192
+
+// The align-up pair for that width — `(x + mask) and alignMask` — which is what `MmRuntime.emitAlignUp`
+// emits one tier down and what `__slab_rounded_size` still reaches it through.
+let SlabPageMask = SlabPageBytes - 1
+let SlabPageAlignMask = -SlabPageBytes
+
+// ⭐⭐ **THE PREFIX IS THE MAPPING'S OWN SIZE RECORD.** A free has to know how many bytes to hand back and
+// the pointer→span reverse map cannot answer: a map MISS *is* the OS-direct sentinel, so registering these
+// pages would destroy the very signal that identifies them.
+//
+// It is 16 bytes rather than 8 so the pointer handed back keeps the 16-byte alignment every record layout
+// above this file assumes. ⚠ **`SlabRuntime.OsDirectPrefixBytes` IS THE OTHER COPY**, read by
+// `__slab_rounded_size` to report the bytes a caller may actually use; the two must agree or that answer
+// names more room than the mapping holds.
+let OsDirectPrefixBytes = 16
+let OsDirectTotalBytesOffset = 0
+let OsDirectMagicOffset = 8
+
+// ⭐ **THE DOUBLE-FREE GUARD, IN ONE COMPARE.** With no tracking array to search there is nothing for a
+// bogus pointer to miss, so the fault — a double free, or a pointer that was never ours — is caught by a
+// magic word the allocator stamps and the free checks. Without it a bogus free reads user data as a byte
+// count and hands it to `osFreePages`, which unmaps an arbitrary region.
+//
+// `"SLABOSD!"` read as a little-endian machine word. Any value would do; a legible one makes a memory dump
+// readable, which is the only thing this constant is ever looked at in.
+let OsDirectMagic = 0x2144534F42414C53 as MachineWord
+
+// The exit code this file ends the process with, restated from `RuntimeAbort` for
+// `runtime/SlabArena.maxon`'s reason: an exit rather than a panic, because a panic builds a message and
+// walks a stack and both allocate.
+let SlabOsDirectPointerNotOursExit = 87 as MachineWord
+
+// `__slab_os_direct_alloc(size) -> ptr` — one mapping for one request, with its length in a prefix.
+module function __slab_os_direct_alloc(size MachineWord) returns MachineWord
+	let withPrefix = (size as SlabWord) + OsDirectPrefixBytes
+	let total = (withPrefix + SlabPageMask) and SlabPageAlignMask
+
+	let base = __slab_assert_os_alloc(__Raw.osAllocPages(total as MachineWord) as SlabWord)
+
+	__Raw.storeWord(base as MachineWord, offset: OsDirectTotalBytesOffset, value: total as MachineWord)
+	__Raw.storeWord(base as MachineWord, offset: OsDirectMagicOffset, value: OsDirectMagic)
+
+	// The pages are fresh from the OS, so the payload past the prefix is already zero — the zeroing
+	// contract costs this tier nothing at all, and an OS-direct mapping is never recycled through us.
+	return (base + OsDirectPrefixBytes) as MachineWord
+end '__slab_os_direct_alloc'
+
+// `__slab_os_direct_free(ptr)` — hand one mapping back whole.
+//
+// ⚠ **THE RELEASE IS THE ARM THAT IS SPELLED, NOT THE GUARD**, which is the opposite of
+// `runtime/SlabArena.maxon`'s guard-first shape and is deliberate: a body written as *"refuse, then
+// release"* lays the abort out as the FALL-THROUGH and puts a taken branch on every large free.
+module function __slab_os_direct_free(ptr MachineWord)
+	let base = (ptr as SlabWord) - OsDirectPrefixBytes
+
+	if __Raw.loadWord(base as MachineWord, offset: OsDirectMagicOffset) == OsDirectMagic 'ours'
+		__Raw.osFreePages(base as MachineWord, size: __Raw.loadWord(base as MachineWord, offset: OsDirectTotalBytesOffset))
+
+		return
+	end 'ours'
+
+	__Raw.osExit(SlabOsDirectPointerNotOursExit)
+end '__slab_os_direct_free'

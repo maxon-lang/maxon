@@ -21,6 +21,9 @@ opposite of `Compiler/Runtime/` below, which the compiler WRITES into every prog
 `runtime/CpuParallel.maxon` holds `__cpu_count`, `__sched_max_active_workers` and
 `__sched_processor_count`, and `runtime/Process.maxon` holds `__proc_pid` and `__proc_bg_priority`; the
 matching `__Builtins` spellings lower to calls naming them, from whatever file wrote the construct.
+⚠ **TWO MORE FAMILIES ARE IN AND NEITHER IS REACHED THAT WAY** — `runtime/SlabArena.maxon` and
+`runtime/SlabRuntime.maxon`, whose roots are `StdOp.call` sites an INSTALLER mints. They owe the declared
+reach edge below rather than a `__Builtins` spelling.
 ⛔ **THE PROCESS FAMILY'S THIRD ENTRY, `__proc_exe_path`, IS NOT IN AND IS BLOCKED RATHER THAN DEFERRED.**
 It is a grow-and-retry loop that allocates and builds an `__ManagedMemory` answer, so as tier source it
 would CALL other runtime entries. The blocker is no longer the usage scan (see `unreachedRuntimeTier`
@@ -216,7 +219,19 @@ Four doors are still standing open rather than shut:
   `__slab_arena_alloc_chunks`, `__slab_arena_free_chunks`, `__slab_arena_of`, `__slab_arena_scavenge`,
   `__slab_arena_map_ensure`, `__slab_arena_map_set`), so the reserve/commit/decommit rows, `memFill`,
   `osExit` and the two address rows below are now MEASURED through a reached body rather than at what a
-  probe proves. ⛔ **THE NINTH — `__slab_arena_map_get` — STAYS A BUILDER, AND THAT IS NOT DEBT**:
+  probe proves.
+  ⭐⭐ **AND THE OBJECT LAYER ABOVE IT IS THE FAMILY WHOSE PARTITION IS DECIDED BY A BUILD-TIME ARGUMENT
+  RATHER THAN BY ITS CALL GRAPH.** `runtime/SlabRuntime.maxon` holds TWO of `SlabRuntime.maxon`'s fourteen
+  entry points — `__slab_os_direct_alloc` and `__slab_os_direct_free`, the whole of the above-32 KiB road.
+  ELEVEN of the rest are emitted DIFFERENTLY per program off `sharded` (`usage.usesGt`), `zeroed` or
+  `countRaw`, and tier source reads no usage record: it must spell every arm, and the sharded arms are
+  `osLockEnter` and `tlsSlotLoad`, which reach no wasm or arm64 case at all. ⇒ **ASK A FAMILY'S BUILD-TIME
+  ARGUMENTS BEFORE ITS CALL GRAPH — A PARAMETERISED BUILDER HAS NO TIER SPELLING.** `__slab_state_base` is
+  that set's linchpin: its only gate is one `osLockInit`, and `__slab_meta_alloc`, `__slab_meta_free` and
+  `__slab_span_destroy` call nothing else that stays. The remaining two are blocked the arena's way:
+  `__slab_drain_remote` calls `__slab_arena_map_get`, and `__slab_rounded_size` shares `emitSlabClassIndex`
+  with `__slab_alloc`, so porting either alone would be a second spelling of one walk.
+  ⛔ **THE NINTH — `__slab_arena_map_get` — STAYS A BUILDER, AND THAT IS NOT DEBT**:
   `__slab_free` splices the walk INLINE (`SlabArena.emitSlabArenaMapGet`), because a frame around four loads
   and three tests is overhead on the path of every free in the language, so porting it would be a SECOND
   spelling of one walk. The three `osLock*` rows and the atomics are still spelled only by UNREACHED probe

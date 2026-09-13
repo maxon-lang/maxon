@@ -60,6 +60,17 @@ The restrictions are what a runtime cannot have:
   outside the tier contests names with the programs it is linked into, and the compiler compiling
   itself is one of them. `module` is the widest visibility the tier's own file-to-file sharing needs.
 
+⛔⛔ **AND ONE RESTRICTION IS NOT A RULE OF THE TIER AT ALL BUT A PROPERTY OF WHAT A BUILDER CAN DO THAT
+SOURCE CANNOT: A BODY EMITTED DIFFERENTLY PER PROGRAM HAS NO TIER SPELLING.** A builder is a function of
+`RuntimeUsage`, so it can emit a lock acquire only where the program has a second thread, or a slot memzero
+only into the zeroing door of a pair. Tier source is compiled once and reads no usage record, so such a body
+must spell every arm unconditionally — and the arms are made of ops several lanes do not lower
+(`osLockEnter` and `tlsSlotLoad` reach no wasm or arm64 case; `HostFacility.hostMutex` is `true` on
+x64-windows alone), so an unconditional spelling does not merely cost bytes, it dies in those backends.
+⇒ **A FAMILY'S PARTITION IS DECIDED BY ITS BUILD-TIME ARGUMENTS BEFORE ITS CALL GRAPH IS EVEN CONSULTED.**
+Eleven of the object layer's fourteen entry points are blocked this way; the two that move
+(`runtime/SlabRuntime.maxon`'s OS-direct pair) take none.
+
 ## Tests
 
 <!-- test: runtime-file-may-declare-a-reserved-name -->

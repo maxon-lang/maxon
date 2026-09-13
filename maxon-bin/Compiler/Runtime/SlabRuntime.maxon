@@ -358,8 +358,17 @@ let SlabFreeToSpanName = b"__slab_free_to_span"
 let SlabDrainRemoteName = b"__slab_drain_remote"
 let SlabSpanReturnName = b"__slab_span_return"
 let SlabSpanDestroyName = b"__slab_span_destroy"
+
+// ⭐⭐ **THE TWO THIS FILE NAMES BUT NO LONGER BUILDS.** Their bodies are `runtime/SlabRuntime.maxon`
+// source; what stays here is the two `StdOp.call` sites `__slab_alloc` and `__slab_free` mint, which is why
+// the names do. That mint is also the whole reach evidence the from-`main` walk has about the tier file, so
+// `StdlibSource.runtimeTierFileIsCompilerCalled` names it — see `SlabRuntimeTierFileName`.
 let SlabOsDirectAllocName = b"__slab_os_direct_alloc"
 let SlabOsDirectFreeName = b"__slab_os_direct_free"
+
+// The tier file holding those two bodies, for the declared reach edge. Stated beside the names it covers so
+// a reader of either finds the other; `SlabArena.SlabArenaTierFileName` is the same statement one layer down.
+export let SlabRuntimeTierFileName = "SlabRuntime.maxon"
 
 // ⭐ **THE SCAVENGER'S PUBLIC DOOR.** `__Builtins.scavengeMemory()` lowers straight to it and reads its
 // answer — the bytes this call handed back to the OS. Exported because `RuntimeUsage` matches the callee to
@@ -390,6 +399,10 @@ export let SlabRemoteFreeCountName = b"__slab_remote_free_count"
 
 // --- The OS-direct tier ---
 //
+// ⛔ **ITS TWO BODIES ARE `runtime/SlabRuntime.maxon` SOURCE.** What stays here is the SHAPE they and
+// `__slab_rounded_size` share — the boundary above which a request is its own mapping, and the prefix
+// width both sides address the mapping through.
+//
 // ⭐⭐ **ABOVE `SlabMaxSmallSize` A REQUEST IS ITS OWN MAPPING, AND ITS SIZE RIDES IN A 16-BYTE PREFIX.**
 // A free has to know how many bytes to hand back, and the pointer→span reverse map cannot answer: a map
 // MISS *is* the OS-direct sentinel (`SlabArena.ArenaMapNoSpan`), so registering these pages would destroy
@@ -402,18 +415,12 @@ export let SlabRemoteFreeCountName = b"__slab_remote_free_count"
 //
 // The prefix is 16 bytes rather than 8 so the pointer handed back keeps 16-byte alignment, which is what
 // every record layout above this file assumes.
-let OsDirectPrefixBytes = 16
-let OsDirectTotalBytesOffset = 0 as ByteOffset
-let OsDirectMagicOffset = 8 as ByteOffset
-
-// ⭐ **THE DOUBLE-FREE GUARD, IN ONE COMPARE.** With no tracking array to search there is nothing for a
-// bogus pointer to miss, so the fault — a double free, or a pointer that was never ours — is caught by a
-// magic word the allocator stamps and the free checks. Without it a bogus free reads user data as a
-// byte count and hands it to `osFreePages`, which unmaps an arbitrary region.
 //
-// `"SLABOSD!"` read as a little-endian machine word. Any value would do; a legible one makes a memory dump
-// readable, which is the only thing this constant is ever looked at in.
-let OsDirectMagic = 0x2144534F42414C53
+// ⚠ **THE TIER CARRIES THE OTHER COPY.** `runtime/SlabRuntime.maxon`'s two entry points reserve the
+// prefix and address the two words inside it; the one reader left here is `__slab_rounded_size`, which
+// subtracts the same width to report the bytes a caller may actually use. The pair must agree or that
+// answer names more room than the mapping holds.
+let OsDirectPrefixBytes = 16
 
 // --- Installation ---
 
@@ -476,8 +483,6 @@ export function installSlabRuntime(module StdModule, globalData GlobalDataTable,
 	buildSlabScavenge(module, sharded: sharded)
 	buildSlabFreeToSpan(module)
 	buildSlabFree(module, sharded: sharded)
-	buildSlabOsDirectAlloc(module)
-	buildSlabOsDirectFree(module)
 end 'installSlabRuntime'
 
 // The one `.data` slot the object layer owns. The gate rides inside the producer, following
@@ -613,9 +618,10 @@ end 'slabStateChunks'
 // naming a class for a request the allocator sends to the OS. Both callers branch through here, so they
 // cannot disagree about where the boundary is.
 //
-// ⚠ **THE PAGE ROUNDING ON THE OS-DIRECT ARM IS THE OTHER HALF OF THE SAME AGREEMENT**, and it is not a
-// second function: both arms call `MmRuntime.emitAlignUp` naming `SlabPageBytes`, so the width they round
-// to is one named constant rather than two spellings of 8192.
+// ⛔ **THE PAGE ROUNDING ON THE OS-DIRECT ARM IS THE OTHER HALF OF THE SAME AGREEMENT AND IT IS NO LONGER
+// ONE SPELLING.** `__slab_rounded_size` reaches `MmRuntime.emitAlignUp` naming `SlabPageBytes`;
+// `__slab_os_direct_alloc` is tier source and rounds with `runtime/SlabRuntime.maxon`'s own restated pair.
+// A drift between them reports a usable byte count larger than the mapping reserved.
 function emitSlabSizeRouting(module StdModule, block IrBlock, size ValueId, osDirect IrBlock, small IrBlock, ids ValueMinter)
 	let maxSmall = emitConst(module, block: block, value: SlabMaxSmallSize, ids: ids)
 	let isLarge = emitCmp(module, block: block, a: size, b: maxSmall, pred: StdCmpPred.gt, ids: ids)
@@ -1047,9 +1053,9 @@ end 'emitReverseTableLookup'
 
 // `__slab_rounded_size(size) -> bytes` — the number of bytes `__slab_alloc(size)` actually serves.
 //
-// ⭐ **IT SHARES THE ROUTING WITH THE ALLOCATOR (`emitSlabSizeRouting`) AND THE PAGE ALIGNMENT WITH THE
-// OS-DIRECT PATH (`emitAlignUp` over `SlabPageBytes`)**, so it cannot report a class for a request the
-// allocator sends to the OS.
+// ⭐ **IT SHARES THE ROUTING WITH THE ALLOCATOR (`emitSlabSizeRouting`)**, so it cannot report a class for
+// a request the allocator sends to the OS. ⚠ Its OS-direct arm's page rounding and prefix width are
+// RESTATED against `runtime/SlabRuntime.maxon` rather than shared — see `emitSlabSizeRouting`.
 //
 // ⚠ **IT HAS NO CALLER TODAY.** The caller it waits for is an inline-small-array capacity reclaim, which
 // turns a class's slack into spare elements. Array records
@@ -2091,67 +2097,3 @@ function buildSlabFree(module StdModule, sharded bool)
 
 	module.functions.push(func)
 end 'buildSlabFree'
-
-// `__slab_os_direct_alloc(size) -> ptr` — one mapping for one request, with its length in a prefix.
-//
-// See `OsDirectPrefixBytes` for why the length rides in the mapping rather than in a side table.
-function buildSlabOsDirectAlloc(module StdModule)
-	var func = IrFunction.createFromStd(SlabOsDirectAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
-	var ids = ValueMinter.create(1)
-
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-
-	emitParams(module, block: entry, count: 1)
-	let size = 0 as ValueId
-
-	let prefix = emitConst(module, block: entry, value: OsDirectPrefixBytes, ids: ids)
-	let withPrefix = emitBin(module, block: entry, a: size, b: prefix, opcode: StdBinOpcode.add, ids: ids)
-	let total = emitAlignUp(module, block: entry, value: withPrefix, width: SlabPageBytes, ids: ids)
-
-	let raw = ids.mint()
-	module.appendOp(entry, op: StdOp.osAllocPages(raw, sizeId: total))
-	let base = ids.mint()
-	module.appendOp(entry, op: StdOp.call(base, callee: SlabAssertOsAllocName, args: argsOf(raw)))
-
-	emitStoreField(module, block: entry, record: base, offset: OsDirectTotalBytesOffset, value: total)
-	let magic = emitConst(module, block: entry, value: OsDirectMagic, ids: ids)
-	emitStoreField(module, block: entry, record: base, offset: OsDirectMagicOffset, value: magic)
-
-	// The pages are fresh from the OS, so the payload past the prefix is already zero — the zeroing contract
-	// costs this tier nothing at all, and an OS-direct mapping is never recycled through us.
-	let payload = emitBin(module, block: entry, a: base, b: prefix, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(entry, op: StdOp.ret(payload))
-
-	module.functions.push(func)
-end 'buildSlabOsDirectAlloc'
-
-// `__slab_os_direct_free(ptr)` — hand one mapping back whole.
-//
-// ⭐ The magic word is the double-free guard: without it, a double free or a pointer that was never ours
-// reads user data as a byte count and unmaps an arbitrary region.
-function buildSlabOsDirectFree(module StdModule)
-	var func = IrFunction.createFromStd(SlabOsDirectFreeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
-	var ids = ValueMinter.create(1)
-
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var notOurs = module.addBlock(func, label: b"notours", heat: BlockHeat.normal)
-	var release = module.addBlock(func, label: b"release", heat: BlockHeat.normal)
-
-	emitParams(module, block: entry, count: 1)
-	let ptr = 0 as ValueId
-
-	let prefix = emitConst(module, block: entry, value: OsDirectPrefixBytes, ids: ids)
-	let base = emitBin(module, block: entry, a: ptr, b: prefix, opcode: StdBinOpcode.sub, ids: ids)
-	let stamped = emitLoadField(module, block: entry, record: base, offset: OsDirectMagicOffset, ids: ids)
-	let magic = emitConst(module, block: entry, value: OsDirectMagic, ids: ids)
-	let ours = emitCmp(module, block: entry, a: stamped, b: magic, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(ours, thenBlockId: release.id, elseBlockId: notOurs.id))
-
-	emitRuntimeAbort(module, func: func, block: notOurs, abort: RuntimeAbort.slabOsDirectPointerNotOurs, ids: ids)
-
-	let total = emitLoadField(module, block: release, record: base, offset: OsDirectTotalBytesOffset, ids: ids)
-	module.appendOp(release, op: StdOp.osFreePages(base, sizeId: total))
-	module.setTerminator(release, op: StdOp.retVoid)
-
-	module.functions.push(func)
-end 'buildSlabOsDirectFree'
