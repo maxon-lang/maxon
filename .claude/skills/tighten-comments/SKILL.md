@@ -17,10 +17,14 @@ inside a statement. Found a bug, or a comment describing a shape the code no lon
 to the **comment**; report the bug and leave the code alone. Deleting comments cannot break a build —
 that is exactly what lets you delete freely, and it is true only while you delete nothing else.
 
-**2. Generated files are refused outright.** Rewriting one is reverted by the next `generate` run
-*and* fails `maxon error-codes check` on drift. Refuse and stop if the path is
+**2. Generated files are refused outright.** Rewriting one is reverted by the next generator run *and*
+fails that generator's own drift check — for `SlabClasses.maxon` that is
+`scripts/gen-slab-classes.sh --check`. Refuse and stop if the path is
 `maxon-bin/Compiler/Runtime/SlabClasses.maxon`, or if the file's first 20 lines say `GENERATED` or
-`DO NOT EDIT`.
+`DO NOT EDIT`; the second test is the one that holds as generators are added.
+⚠ **`maxon-bin/Compiler/ErrorCodeRegistry.maxon` is NOT one of these.** It is hand-authored, has no
+generator, and the `//` comment above each case is the text `lookup_error_code` serves — so it is
+edited like any other file, and a comment deleted there is documentation deleted.
 
 Three things are never edited: **`///` doc comments** on exported functions (the language server
 renders them in `textDocument/hover`, so they are what a reader sees in an editor; tighten their
