@@ -15,12 +15,16 @@ compiler READS, so the first build already compiles against the edited file and 
 opposite of `Compiler/Runtime/` below, which the compiler WRITES into every program including itself.
 `scripts/self-compiles-needed.sh` answers for both; it does not watch `runtime/`, deliberately.
 
-⭐ **FOUR FAMILIES ARE IN, AND THE ROOT THAT REACHES ANY OF THEM IS A CALL THE COMPILER EMITS.**
+⭐ **FIVE FAMILIES ARE IN, AND THE ROOT THAT REACHES ANY OF THEM IS A CALL THE COMPILER EMITS.**
 `runtime/Clock.maxon` holds `__clock_now_unix_s` and `__uptime_ms`, `runtime/ParallelBoundary.maxon` holds
-`__parallel_boundary`, `runtime/FaultProbe.maxon` holds `maxon_force_segfault` and
+`__parallel_boundary`, `runtime/FaultProbe.maxon` holds `maxon_force_segfault`,
 `runtime/CpuParallel.maxon` holds `__cpu_count`, `__sched_max_active_workers` and
-`__sched_processor_count`; the matching `__Builtins` spellings lower to calls naming them, from whatever
-file wrote the construct.
+`__sched_processor_count`, and `runtime/Process.maxon` holds `__proc_pid` and `__proc_bg_priority`; the
+matching `__Builtins` spellings lower to calls naming them, from whatever file wrote the construct.
+⛔ **THE PROCESS FAMILY'S THIRD ENTRY, `__proc_exe_path`, IS NOT IN AND IS BLOCKED RATHER THAN DEFERRED.**
+It is a grow-and-retry loop that allocates and builds an `__ManagedMemory` answer, so as tier source it
+would CALL other runtime entries — which is the `scanRuntimeUsage` vacuity below. The allocator's own
+migration is what admits it.
 
 ⛔⛔ **THE TIER'S PROTECTION IS OVER BOTH DOORS A NAME CAN BE REACHED THROUGH, AND IT TAKES TWO REFUSALS.**
 `Parser.requireCalleeIsNotReservedName` admits a reserved CALLEE, and
@@ -65,9 +69,11 @@ commit set a precedent for reading it.
 DFE decides whether the body survives, so `usesWallClock` and `usesUptimeClock` install nothing — but the
 per-target hand-assembled `osReadWallClock` chunk, the POSIX clock floor and the Windows optional import
 band are all still theirs. Retire a bit when its LAST consumer is gone, not when the body moves.
-`usesParallelBoundary` and `usesFaultProbe` are the two that qualified and both are GONE: neither body
-declares any dependency — no heap, no scheduler, no import, no `.data` word — so the install guard was the
-only reader of each.
+`usesParallelBoundary`, `usesFaultProbe` and `usesProcessId` are the three that qualified and all are
+GONE: no body of theirs declares any dependency — no heap, no scheduler, no import, no `.data` word — so
+the install guard was the only reader of each. `usesBackgroundPriority` is the near miss that stays: its
+body declares nothing either, but the Windows OPTIONAL IMPORT band still reads it through
+`IrModule.usesBackgroundPriority`.
 
 ⛔⛔ **AND A BIT CAN GAIN A SHARPER JOB THAN GATING AN INSTALL: IT CAN LAY OUT THE WORD THE SOURCED BODY
 READS.** `usesSchedMaxActiveWorkers` and `usesSchedProcessorCount` are `SchedRuntime.schedRuntimeGlobals`'s
@@ -134,8 +140,9 @@ declarations stay module-scoped, which
 `unreachable`, so the scan never skips one — and a CALL inside a runtime body would therefore set that
 family's bit for a program DFE sweeps the body out of, which is rule 1 ("vocabulary does not ship ahead of
 its consumer") failing open. Vacuous while every tier body calls only `__Raw`, which names no callee
-(`MaxonDialect.maxonOpCalleeKind` answers `noCallee` for `rawIntrinsic`) — true of all four families in
-the tier. The first family that CALLS something is the one that has to answer it.
+(`MaxonDialect.maxonOpCalleeKind` answers `noCallee` for `rawIntrinsic`) — true of all five families in
+the tier. The first family that CALLS something is the one that has to answer it, and
+`__proc_exe_path` is the entry point waiting on that answer.
 
 Five doors are still standing open rather than shut:
 
@@ -146,7 +153,10 @@ Five doors are still standing open rather than shut:
   `IrFunction`, and it is now reached, so the hole can be closed on its own.
 - **`osThreadCpuTicks` is the one `__Raw` row nothing exercises**, as are `reserveRawScratchSlot`'s refusals.
   `osCpuCount`, `schedNumProcsAddr` and `schedMaxActiveWorkersAddr` are the cpu-parallel family's, and
-  `builtins-cpu-parallel.md`'s two `-body-is-runtime-source` cases render the bodies they lower to.
+  `builtins-cpu-parallel.md`'s two `-body-is-runtime-source` cases render the bodies they lower to;
+  `osGetPid` and `osEnterBackgroundPriority` are the process family's, rendered by
+  `process-id.md`'s `pid-body-is-runtime-source` and `process-background-priority.md`'s
+  `priority-body-is-runtime-source`.
   `osTickCountMs`, `osReadWallClock`, `scratch` and `loadWord` are the clock family's, and
   `builtins-clock.md`'s `wall-clock-body-is-runtime-source` renders the emitted body the last three lower to;
   `storeWord` is the fault probe's, and no golden renders that body — what measures it is a LIVE fault, in
@@ -169,10 +179,12 @@ Five doors are still standing open rather than shut:
 - **A `__Raw` row's host facility reaches no refusable site.** `maxonOpCalleeKind` answers `noCallee`,
   so `LibraryFacts.substrateEntries` never sees one, and a lane without the op reaches instruction
   selection instead of E3104. A substrate-entry row per op is what closes it.
-  ⚠ **`osCpuCount` IS THE FIRST ROW WHOSE FACILITY IS GENUINELY ABSENT ON A SUPPORTED LANE**, and what
-  refuses the wasm program is the CALLEE band (`TargetFacilities.calleeHostFacility` on `__cpu_`), not this
-  route. That covers the one entry point spelling the row; a second tier body spelling it would reach
-  instruction selection on wasm with nothing said.
+  ⚠ **FOUR ROWS NAME A FACILITY GENUINELY ABSENT ON A SUPPORTED LANE** — `osCpuCount`, `osGetPid`,
+  `osEnterBackgroundPriority` and `osThreadCpuTicks` — and what refuses the wasm program is the CALLEE route
+  (`TargetFacilities.calleeHostFacility`: the `__cpu_` band, the `__proc_` band, and
+  `ProcessBackgroundPriorityName` by name), not this one. The fourth is spelled by no tier body yet, so
+  nothing exercises its route at all. That covers the one entry point spelling each row; a second tier body
+  spelling any of them would reach instruction selection on wasm with nothing said.
 
 - **Build it:** `./maxon-bin/.maxon/maxon build maxon-bin` at the repo root. `build.maxon` there
   declares the one target, so a bare `maxon build` builds it; name it anyway, because the seed rule

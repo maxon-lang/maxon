@@ -1,0 +1,48 @@
+// The two PROCESS-CONTROL entry points a program reaches through `__Builtins.currentProcessId()` and
+// `__Builtins.enterBackgroundPriority()`.
+//
+// ⭐⭐ **TWO ENTRIES, TWO HOST FACILITIES, AND THE SPLIT IS WHAT DECIDES WHICH TARGETS MAY RUN EACH.** One
+// READS an identity the kernel already holds; the other WRITES the scheduling priority of the running
+// process and then reads it back. A lane can serve the read long before it can serve the write — a POSIX
+// `setpriority` scopes to the process on Darwin and to the calling thread on Linux — so
+// `TargetFacilities.calleeHostFacility` answers `processPriority` for `__proc_bg_priority` by NAME, ahead of
+// the `__proc_` band that answers `processInfo` for the identity reads.
+//
+// ⛔⛔ **THE FAMILY'S THIRD ENTRY POINT, `__proc_exe_path`, IS NOT HERE AND IS NOT MISSING BY NEGLECT.**
+// Its body is a doubling grow-and-retry loop that allocates a raw buffer and builds an `__ManagedMemory`
+// answer, so as tier source it would CALL other runtime entries — and `scanRuntimeUsage` walks every runtime
+// body in every program, so a call inside one sets that family's bit for a program dead-function elimination
+// sweeps the body out of. That vacuity holds only while every tier body calls nothing but `__Raw`, which
+// names no callee. The allocator's own migration is what answers it; until then the path walk stays IR the
+// compiler builds (`Compiler/Runtime/ProcessRuntime.maxon`).
+//
+// ⚠ **BOTH ANSWER A MACHINE WORD, WHICH IS AN UNGUARDED DOOR, AND THAT IS THE POINT.** Neither value is a
+// quantity a program computed: one is an OS-assigned id, the other a priority in whatever unit the platform
+// keeps (a Windows priority CLASS against a POSIX NICE value, scales that even run in opposite directions).
+// A narrower `int(...)` alias would be a guarded door that could only ever fire on a word the substrate
+// itself wrote, in a body with no caller to report to — `runtime/Word.maxon` carries the rule.
+
+// ⭐⭐ **`__proc_pid()` — THE OS-ASSIGNED ID OF THE RUNNING PROCESS.**
+//
+// ⚠ **THERE IS NO RETRY, NO FAILURE ARM AND NO BUFFER.** `GetCurrentProcessId` and `getpid` both read a
+// value the kernel already holds, cannot fail, have no out-parameter and answer the same 32-bit id on every
+// call in a process. The op is nevertheless not pure — it is a call, and the backends need the call
+// barrier's clobber accounting — so two reads in one function are two calls, which
+// `specs/process-id.md:is-stable-across-calls` asserts agree rather than assuming.
+module function __proc_pid() returns MachineWord
+	return __Raw.osGetPid()
+end '__proc_pid'
+
+// ⭐⭐ **`__proc_bg_priority()` — DROP THIS PROCESS TO BACKGROUND SCHEDULING PRIORITY AND ANSWER WHAT THE
+// OS THEN REPORTS.**
+//
+// ⭐ **WHY A PROCESS-WIDE CALL AND NOT A PER-THREAD OR PER-CHILD ONE.** A child inherits the priority class
+// on Windows and the nice value under POSIX, so ONE call at a harness's startup covers every worker
+// subprocess it spawns AND every test binary those workers launch. A per-child variant would be the same
+// fact spelled once per spawn site, and would miss the threads this process runs itself.
+//
+// ⚠ **THE ANSWER IS A SECOND READING, NOT AN ECHO** — see `StdOp.osEnterBackgroundPriority`, which owns
+// that argument and the measurement behind it.
+module function __proc_bg_priority() returns MachineWord
+	return __Raw.osEnterBackgroundPriority()
+end '__proc_bg_priority'

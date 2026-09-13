@@ -439,18 +439,13 @@ export type RuntimeUsage
 	// an `Array` record built one tier down.
 	export var usesExecutablePath as bool
 
-	// G17: the program asks for its own PROCESS ID (`__Builtins.currentProcessId` ⇒ `__proc_pid`). Its own
-	// bit even though it shares the `__proc_` family — and here the discipline earns more than tidiness:
-	// `__proc_pid` is ONE call op with no buffer, no retry and no allocation, so it declares NEITHER
-	// transitive bit. Folded into `usesExecutablePath`, a program whose only introspection is a pid would
-	// have carried the doubling path walk, the heap runtime AND the whole managed-memory runtime (installed
-	// as one closure) to link against nothing.
-	export var usesProcessId as bool
-
 	// The program asks to be put at BACKGROUND scheduling priority (`__Builtins.enterBackgroundPriority` ⇒
-	// `__proc_bg_priority`). Its OWN bit rather than sharing `usesProcessId`'s, on this file's standing rule:
-	// a prefix answers "may this target run it", a bit answers "must this program carry it", and the three
-	// `__proc_` entries cost nothing alike.
+	// `__proc_bg_priority`). Its body is runtime source, so this bit installs nothing; what it still gates is
+	// the Windows OPTIONAL IMPORT band the lowering needs (`PeWriter`), reached through
+	// `IrModule.usesBackgroundPriority`. Its OWN bit rather than a corner of `usesExecutablePath`'s, on this
+	// file's standing rule: a prefix answers "may this target run it", a bit answers "must this program carry
+	// it", and the `__proc_` entries cost nothing alike — the path walk declares the heap AND the whole
+	// managed-memory runtime, and this declares neither.
 	export var usesBackgroundPriority as bool
 
 	// The program asks whether its report is going to a terminal that wants colour
@@ -613,7 +608,7 @@ export type RuntimeUsage
 	export var parksOnIo as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesBackgroundPriority: false, usesTerminalDetection: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesSchedProcessorCount: false, usesMmCounters: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSlabArena: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, parksOnIo: true}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesBackgroundPriority: false, usesTerminalDetection: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesSchedProcessorCount: false, usesMmCounters: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSlabArena: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, parksOnIo: true}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -953,23 +948,19 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesManagedMemory = true
 	end 'consoleStdin'
 
-	// ⚠ **BY NAME, NOT BY THE `__proc_` PREFIX, AND THE PREFIX WAS WHAT THIS ASKED BEFORE G17.** The
-	// entries in that family cost nothing alike: `__proc_exe_path` is a doubling retry loop whose answer is
-	// an `Array` record built one tier down, while `__proc_pid` and `__proc_bg_priority` are a single call
-	// op each. A prefix test would have made the cheap ones declare the expensive one's whole transitive
-	// closure — see `usesProcessId`.
+	// ⚠ **BY NAME, NOT BY THE `__proc_` PREFIX.** The entries in that family cost nothing alike:
+	// `__proc_exe_path` is a doubling retry loop whose answer is an `Array` record built one tier down, while
+	// `__proc_pid` and `__proc_bg_priority` are a single op each. A prefix test would make the cheap ones
+	// declare the expensive one's whole transitive closure.
 	if callee.equals(ProcessExecutablePathName) 'executablePath'
 		usage.usesExecutablePath = true
 		usage.usesHeap = true
 		usage.usesManagedMemory = true
 	end 'executablePath'
 
-	if callee.equals(ProcessCurrentPidName) 'processId'
-		usage.usesProcessId = true
-	end 'processId'
-
-	// Like the pid and unlike the executable path, its whole body is one op: it declares nothing beside
-	// itself, no heap and no managed memory.
+	// Unlike the executable path its whole body is one op, so it declares nothing beside itself, no heap and
+	// no managed memory. `__proc_pid` is asked for nowhere here: its body is runtime source that declares
+	// nothing either, and nothing else reads a bit for it.
 	if callee.equals(ProcessBackgroundPriorityName) 'backgroundPriority'
 		usage.usesBackgroundPriority = true
 	end 'backgroundPriority'

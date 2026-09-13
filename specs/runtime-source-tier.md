@@ -186,8 +186,53 @@ end 'main'
 0
 ```
 
+<!-- test: runtime-file-may-ask-the-os-for-its-process-id -->
+**AN OS ROW WHOSE ANSWER IS AN IDENTITY THE KERNEL ALREADY HOLDS.** `osGetPid` is the raw floor's spelling
+of the read behind `__proc_pid`, and it carries `HostFacility.processInfo` — so a lane without the read has
+nothing to lower it onto.
+
+⚠ The probe is uncalled, so dead-function elimination drops the body before instruction selection and the
+case runs on every lane. What is under test is the TABLE: the row exists, the tier may spell it, and its
+result is a machine word.
+```maxon
+// --- runtime-file: Probe.maxon
+function probePid() returns MachineWord
+	return __Raw.osGetPid()
+end 'probePid'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: runtime-file-may-enter-background-priority -->
+⭐ **THE ONE OS ROW ON THIS FLOOR THAT CHANGES THE PROCESS RATHER THAN REPORTING ON IT**, and it still
+answers a machine word: the op sets the priority and then READS IT BACK, so what a tier body receives is a
+second reading rather than an echo of the value written (`StdOp.osEnterBackgroundPriority`). Its facility is
+`HostFacility.processPriority`, which is its own row and not `processInfo`'s — a lane can serve the identity
+reads long before it can serve this write.
+
+⚠ The probe is uncalled, so nothing here changes the priority of the process running the suite: the body is
+dropped before instruction selection. What is under test is the TABLE.
+```maxon
+// --- runtime-file: Probe.maxon
+function probeBackgroundPriority() returns MachineWord
+	return __Raw.osEnterBackgroundPriority()
+end 'probeBackgroundPriority'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: raw-intrinsic-refused-outside-the-runtime-tier -->
-⭐⭐ **THE NEGATIVE CONTROL ON P2, AND IT IS THE HALF THAT MATTERS.** The two cases above prove the
+⭐⭐ **THE NEGATIVE CONTROL ON P2, AND IT IS THE HALF THAT MATTERS.** The positive cases above prove the
 privileges are not EMPTY. Neither proves they are not UNIVERSAL — a compiler that let ANY file call
 `__Raw.osTickCountMs` would pass both of them, and would hand every program a direct call to the raw
 machine floor with no runtime between.

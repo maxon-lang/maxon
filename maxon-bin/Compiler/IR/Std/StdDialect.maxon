@@ -1571,8 +1571,8 @@ export union StdOp
 	// DEFINING the result (captured from the return register). It has TWO producers, which is why it sits in
 	// the IOCP band and answers a question that has nothing to do with one: the pipe-name uniquifier mints it
 	// to make an overlapped name CROSS-PROCESS unique (the high 32 bits of the name's hex uniquifier; the low
-	// 32 are a per-process counter), and `ProcessRuntime.buildProcessCurrentPid` mints it as the whole body of
-	// `__proc_pid`.
+	// 32 are a per-process counter), and `runtime/Process.maxon` spells it through `__Raw.osGetPid` as the
+	// whole body of `__proc_pid`.
 	//
 	// ⚠ **THE FIRST PRODUCER IS COMPILER-INSERTED AND NO CALLEE-NAME GATE CAN SEE IT**
 	// (`GtRuntime.emitGtPipeNameUniquifier`), so a backend arm for this op must refuse a lane it cannot serve
@@ -2559,12 +2559,15 @@ export union StdOp
 	// 10)` states an ABSOLUTE value, which is what makes the "set" idempotent and what
 	// `is-stable-across-calls` (both spellings) is written to test.
 	//
-	// ⭐ Which targets lower it is `TargetFacilities.targetProvidesFacility`'s `processPriority` row — its
-	// OWN row since L3, and no longer `processInfo`'s: arm64-linux serves the two identity reads in that band
-	// and cannot serve this WRITE, whose POSIX scope is the calling thread there and the process on Darwin.
+	// ⭐ Which targets lower it is `TargetFacilities.targetProvidesFacility`'s `processPriority` row, which is
+	// its OWN row rather than `processInfo`'s: reading an identity is one call that cannot fail, while this
+	// WRITE's POSIX scope is the calling thread on Linux and the process on Darwin, so a lane can serve the
+	// band's identity reads without serving this.
 	// The refusal still needs no `SemanticCheck` edit; `calleeHostFacility` names
 	// `ProcessRuntime.ProcessBackgroundPriorityName` explicitly, ahead of the `__proc_` band the other two
-	// reach by prefix. Full call-barrier metadata: it IS two indirect calls once lowered, on both lanes.
+	// reach by prefix. `runtime/Process.maxon` spells the op through `__Raw.osEnterBackgroundPriority` as the
+	// whole body of `__proc_bg_priority`. Full call-barrier metadata: it IS two indirect calls once lowered,
+	// on both lanes.
 	osEnterBackgroundPriority(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	//

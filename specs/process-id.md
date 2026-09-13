@@ -193,6 +193,42 @@ end 'main'
 7
 ```
 
+<!-- test: process-id.pid-body-is-runtime-source -->
+⭐⭐ **THE PID'S BODY IS MAXON SOURCE THE COMPILER READS OUT OF THE TREE, AND THIS IS THE CASE THAT SEES
+IT.** `runtime/Process.maxon` writes `__proc_pid` against the `__Raw` floor — one host read answered
+straight back — and the block below renders what the back end made of that source. Every other case here
+reads the ANSWER, and each would pass just as happily against a body the compiler built itself.
+
+⛔ **AN ENTRY POINT THIS SMALL IS EXACTLY WHERE A BODY CAN GO MISSING UNSEEN.** There is no retry arm, no
+buffer and no failure path, so the only thing the shape can say is that the call is made and its result is
+what the function answers; a lowering that dropped the call would leave a plausible number in the result
+register and every property case above would still pass.
+
+⚠ **WHAT THIS CASE CANNOT SAY.** A `RequiredRuntime` block ALSO marks the function it names
+never-inline for that one compile (`InlineLeaves.goldenRequestedFunctions`), so a rendered body here is
+no evidence about what survives inlining; `main` reads the id twice, and
+`StdOp.osGetPid.isUnsupportedInInlineBody` is what keeps the call standing in every other golden.
+```maxon
+function main() returns ExitCode
+	let first = __Builtins.currentProcessId()
+	let second = __Builtins.currentProcessId()
+	var score = 0
+	if first > 0 'positive'
+		score = score + 1
+	end 'positive'
+	if second == first 'stable'
+		score = score + 1
+	end 'stable'
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+```RequiredRuntime
+__proc_pid
+```
+
 <!-- test: process-id.arity-checked -->
 `currentProcessId` takes no arguments. An intrinsic has no signature for the ordinary arity check to
 read, so it is refused by the same `builtinArity` check `executablePath`/`commandLineCount` use.

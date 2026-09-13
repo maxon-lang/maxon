@@ -224,6 +224,43 @@ end 'main'
 3
 ```
 
+<!-- test: process-background-priority.priority-body-is-runtime-source -->
+⭐⭐ **THE PRIORITY WRITE'S BODY IS MAXON SOURCE THE COMPILER READS OUT OF THE TREE, AND THIS IS THE CASE
+THAT SEES IT.** `runtime/Process.maxon` writes `__proc_bg_priority` against the `__Raw` floor, and the block
+below renders what the back end made of that source. It is the one place in this file where the SET is
+visible at all: every case above reads the answer back, and the section on the suite's own priority explains
+why none of them can tell a working set from a missing one. The rendered body carries both halves of the op
+— the write and the read — so a lowering that lost the write changes this block even where it changes no
+exit code.
+
+⚠ The unit of the answer is platform-defined, so the assertions here are the two properties both scales
+share: the reading is live rather than zero, and asking twice does not drift.
+
+⚠ **WHAT THIS CASE CANNOT SAY.** A `RequiredRuntime` block ALSO marks the function it names
+never-inline for that one compile (`InlineLeaves.goldenRequestedFunctions`), so a rendered body here is
+no evidence about what survives inlining; `StdOp.osEnterBackgroundPriority.isUnsupportedInInlineBody` is
+what keeps the call standing in every other golden.
+```maxon
+function main() returns ExitCode
+	let first = __Builtins.enterBackgroundPriority()
+	let second = __Builtins.enterBackgroundPriority()
+	var score = 0
+	if first > 0 'live'
+		score = score + 1
+	end 'live'
+	if second == first 'stable'
+		score = score + 1
+	end 'stable'
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+```RequiredRuntime
+__proc_bg_priority
+```
+
 <!-- test: process-background-priority.rejected-on-wasm -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 wasm32-wasi has no scheduler-priority substrate, so the call is refused at its source span with

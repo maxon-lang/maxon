@@ -1,63 +1,63 @@
-// Runtime/ProcessRuntime.maxon — the RUNNING image, asked about and acted on.
+// Runtime/ProcessRuntime.maxon — the process family's COMPILER-SIDE VOCABULARY: the three entry-point names
+// the parser emits calls to, the band test that decides which targets may run them, and the ONE body still
+// built as IR here.
 //
-// ⭐ **WHAT IT SERVES — THREE `__Builtins` INTRINSICS ABOUT THE RUNNING PROCESS.**
+// ⭐ **WHAT THE FAMILY SERVES — THREE `__Builtins` INTRINSICS ABOUT THE RUNNING PROCESS.**
 // `stdlib/Process.maxon`'s `executablePath()` bottoms out in `__Builtins.executablePath()`;
 // `Compiler/TreeLock.maxon`'s lock token bottoms out in `__Builtins.currentProcessId()`; and
 // `Main.runSpecTest` calls `__Builtins.enterBackgroundPriority()` before it spawns a worker pool. Only the
 // first has a stdlib wrapper: a declaration whose whole body is one intrinsic call is the thin wrapper the
 // house rules forbid. Nothing else in the language reaches these entry points.
 //
-// ⚠ **THE THIRD ONE IS NOT A QUESTION, AND IT IS THE ONLY ONE IN THIS FILE THAT IS NOT.** The first two
-// report; `enterBackgroundPriority` CHANGES the process and then reports, which is why its answer is a
-// read-back rather than an echo of what it wrote — see `StdOp.osEnterBackgroundPriority`.
-//
-// ⚠ **EACH IS INSTALLED ON ITS OWN `RuntimeUsage` BIT, NOT ON ONE SHARED `__proc_` BIT**, for the reason the
-// console/process SPLIT itself exists (`Compiler.maxon`'s install block: *"each on its OWN bit, so a program
-// that reads stdin carries no path walk"*). A pid is three machine instructions and touches no memory; the
-// path walk is a doubling retry loop that drags in `usesHeap` AND `usesManagedMemory` — i.e. the WHOLE
-// managed-memory runtime, installed as one closure. Keyed together, `__Builtins.currentProcessId()` alone
-// would have pulled all of that into a program that allocates nothing — and the same now holds for
-// `__proc_bg_priority`, which is likewise a handful of instructions that touch no memory.
+// ⛔⛔ **TWO OF THE THREE BODIES ARE RUNTIME SOURCE AND THIS ONE IS NOT, AND THE LINE IS A MECHANISM RATHER
+// THAN AN APPETITE.** `runtime/Process.maxon` writes `__proc_pid` and `__proc_bg_priority`, each one `__Raw`
+// op the tier can spell. `__proc_exe_path` cannot follow yet: it allocates a raw buffer, grows it and builds
+// an `__ManagedMemory` answer, so as tier source it would CALL other runtime entries — and `scanRuntimeUsage`
+// walks every runtime body in every program, so a call inside one would set that family's bit for a program
+// dead-function elimination sweeps the body out of. That vacuity holds only while every tier body calls
+// nothing but `__Raw`, which names no callee. The allocator's own migration is what answers it.
 //
 // ⭐ **TWO HOST FACILITIES, AND WHICH TARGETS HAVE EACH IS `TargetFacilities`' TO SAY.** A target that has
 // neither refuses at the call site with the EXISTING `E3104 targetUnsupportedConstruct`.
 //
-// ⚠⚠ **THE `__proc_` PREFIX NO LONGER ANSWERS FOR THE WHOLE BAND, AND L3 IS WHY.** The two IDENTITY reads
-// answer `processInfo` by that prefix; the PRIORITY write answers `processPriority`, which
-// `calleeHostFacility` tests for by NAME ahead of the band. The split is not bookkeeping — arm64-linux
-// lowers `getpid` and `readlinkat` and cannot yet lower `setpriority` honestly (its scope is the THREAD
-// there), so one answer for three entries would have forced the whole band to wait on the narrowest of
-// them. ⇒ **A fourth entry point is still covered by construction, and it will answer `processInfo`** —
-// which is right for another identity read and wrong for another write, so a write joins by name.
+// ⚠⚠ **THE `__proc_` PREFIX DOES NOT ANSWER FOR THE WHOLE BAND.** The two IDENTITY reads answer
+// `processInfo` by that prefix; the PRIORITY write answers `processPriority`, which `calleeHostFacility`
+// tests for by NAME ahead of the band. The split records a difference in KIND rather than a schedule:
+// reading an identity is one call that cannot fail, while the write's POSIX scope disagrees —
+// `setpriority` scopes to the process on Darwin and to the calling THREAD on Linux — so a lane can serve
+// the reads without serving the write, and one answer for three entries would make the whole band wait on
+// the narrowest of them. ⇒ **A fourth entry point is still covered by construction, and it will answer
+// `processInfo`** — which is right for another identity read and wrong for another write, so a write joins
+// by name.
 //
-// ⚠⚠ **THE REASON THIS BAND WAS A RUNG AND NOT A LOWERING IS INTACT, AND MAC2 DISCHARGED IT RATHER THAN
-// DELETING IT: THERE ARE THREE DIFFERENT OS APIS AND THEY DO NOT AGREE ON THEIR OWN SHAPE.**
-// `stdlib/Process.maxon:26-27` names all three — `GetModuleFileNameA` on Windows, `_NSGetExecutablePath` on
-// macOS, `/proc/self/exe` on Linux — and they differ in more than spelling: the first FILLS a caller's buffer
-// and answers a count, the second takes an IN-OUT size, signals "too small" through a `-1` return plus a
-// rewritten size, leaves that size UNCHANGED on success (so the length must be MEASURED) and answers a path
-// that "may be a symbolic link and not the real file", the third is a SYMLINK that must be `readlink`'d and
-// is not NUL-terminated. Those are three retry protocols behind one surface, and the compiler's Std tier is
-// TARGET-NEUTRAL: there is no place in it for a body that is a doubling loop on one target and a readlink on
-// another. So each backend translates its own convention into `osExecutablePath`'s, and the loop below is
-// written once — which is what the arm64 lane actually did (`Arm64DarwinRuntime.buildArm64DarwinExePathChunk`),
-// with no edit to this file.
+// ⚠⚠ **THE REASON THE PATH WALK IS A LOOP HERE RATHER THAN A LOWERING: THERE ARE THREE DIFFERENT OS APIS
+// AND THEY DO NOT AGREE ON THEIR OWN SHAPE.** `stdlib/Process.maxon:26-27` names all three —
+// `GetModuleFileNameA` on Windows, `_NSGetExecutablePath` on macOS, `/proc/self/exe` on Linux — and they
+// differ in more than spelling: the first FILLS a caller's buffer and answers a count, the second takes an
+// IN-OUT size, signals "too small" through a `-1` return plus a rewritten size, leaves that size UNCHANGED
+// on success (so the length must be MEASURED) and answers a path that "may be a symbolic link and not the
+// real file", the third is a SYMLINK that must be `readlink`'d and is not NUL-terminated. Those are three
+// retry protocols behind one surface, and the compiler's Std tier is TARGET-NEUTRAL: there is no place in it
+// for a body that is a doubling loop on one target and a readlink on another. So each backend translates its
+// own convention into `osExecutablePath`'s, and the loop below is written once — which is what the arm64
+// lane actually did (`Arm64DarwinRuntime.buildArm64DarwinExePathChunk`), with no edit to this file.
 // ⚠ wasm is refused for a STRONGER reason than any of those: WASI has no executable-path primitive AT ALL.
 // A component has no image path to report, and `args_get[0]` is whatever the host chose to pass rather than
 // a resolved path — so a lowering there could only be a plausible WRONG ANSWER, which is worse than a
 // refusal because `File.exists` on it would simply say false and the program would blame itself.
 
-// The `__proc_` prefix that identifies EVERY process-introspection runtime entry point — the one test
-// `scanRuntimeUsage` reads to set `usesProcessIntrospection`, and the one `SemanticCheck` reads for E3104.
+// The `__proc_` prefix that identifies every process runtime entry point, and the one `SemanticCheck` reads
+// for E3104 through `TargetFacilities.calleeHostFacility`.
 let ProcessRuntimePrefix = b"__proc_"
 
-// ⭐ **THE THREE ENTRY POINTS.**
+// ⭐ **THE THREE ENTRY POINTS.** Only the first is built below; the other two are declared in
+// `runtime/Process.maxon` and reached by a call the parser emits from the `__Builtins` spelling.
 export let ProcessExecutablePathName = b"__proc_exe_path"
 export let ProcessCurrentPidName = b"__proc_pid"
 
-// ⭐ **THE THIRD, AND THE ONE THE PREFIX STOPPED ANSWERING FOR (L3).** It is still refused by E3104 on a
-// target that cannot lower it, but through `processPriority` rather than `processInfo` — see the header for
-// why a WRITE whose scope differs per platform could not stay fused to the two identity reads.
+// ⭐ **THE ONE THE PREFIX DOES NOT ANSWER FOR.** It is refused by E3104 on a target that cannot lower
+// it, but through `processPriority` rather than `processInfo` — see the header for why a WRITE whose scope
+// differs per platform cannot be fused to the two identity reads.
 export let ProcessBackgroundPriorityName = b"__proc_bg_priority"
 
 // The first buffer the walk asks for is `ManagedDirectoryRuntime.MaxPathBytes` — the same `MAX_PATH` the
@@ -168,83 +168,25 @@ function buildProcessExecutablePath(module StdModule)
 	module.functions.push(func)
 end 'buildProcessExecutablePath'
 
-// ⭐⭐ **`__proc_pid() -> i64`** — the OS-assigned id of the running process, and the whole body is the op.
-//
-// ⭐ **THE Std OP AND ITS x64 LOWERING ALREADY EXISTED; ONLY THE DOOR WAS MISSING.** `StdOp.osGetPid` and
-// `lowerOsGetPid`'s `GetCurrentProcessId` import shipped with the P1.5 IOCP substrate, where the pid is the
-// high half of the overlapped pipe name's uniquifier (`GtRuntime.emitGtPipeNameUniquifier`) — so this rung
-// adds a name and an entry point, not an instruction. That is why there was no backend work here and no new
-// `IatSlot`: a second producer of the same op reaches the same slot. (⚠ A LANE is a different question from
-// a producer: arm64-macOS had to write the `getpid` call itself, and the compiler-inserted producer above is
-// exactly why that arm refuses a route it cannot serve rather than trusting the name-keyed gate.)
-//
-// ⚠ **THERE IS NO RETRY, NO FAILURE ARM AND NO BUFFER**, which is what makes it three lines beside
-// `__proc_exe_path`'s loop: `GetCurrentProcessId` and `getpid()` both read a value the kernel already holds,
-// cannot fail, have no out-parameter and answer the same 32-bit id on every call in a process. `isPure` is nevertheless `false` on the op (it is a
-// call, and the backends need the call barrier's clobber accounting), so two calls in one function are two
-// calls — which `specs/process-id.md:is-stable-across-calls` asserts agree rather than assuming.
-function buildProcessCurrentPid(module StdModule)
-	var func = IrFunction.createFromStd(ProcessCurrentPidName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
-	var ids = ValueMinter.create(0)
-
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	let pid = ids.mint()
-	module.appendOp(entry, op: StdOp.osGetPid(pid))
-	module.setTerminator(entry, op: StdOp.ret(pid))
-
-	module.functions.push(func)
-end 'buildProcessCurrentPid'
-
-// ⭐⭐ **`__proc_bg_priority() -> i64`** — drop this process to background scheduling priority and answer
-// what the OS then reports, and, like `__proc_pid`, the whole body is the op.
-//
-// ⭐ **WHY A PROCESS-WIDE CALL AND NOT A PER-THREAD OR PER-CHILD ONE.** A child inherits the priority class
-// on Windows and the nice value under POSIX, so ONE call at a harness's startup covers every worker
-// subprocess it spawns AND every test binary those workers launch. A per-child variant would be the same
-// fact spelled once per spawn site, and would miss the threads this process runs itself.
-//
-// ⚠ **THE ANSWER IS A SECOND READING, NOT AN ECHO** — see `StdOp.osEnterBackgroundPriority`, which owns
-// that argument and the measurement behind it.
-function buildProcessBackgroundPriority(module StdModule)
-	var func = IrFunction.createFromStd(ProcessBackgroundPriorityName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
-	var ids = ValueMinter.create(0)
-
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	let priority = ids.mint()
-	module.appendOp(entry, op: StdOp.osEnterBackgroundPriority(priority))
-	module.setTerminator(entry, op: StdOp.ret(priority))
-
-	module.functions.push(func)
-end 'buildProcessBackgroundPriority'
-
-// ⚠ **ONE GUARD PER ENTRY, NOT ONE FOR THE FILE.** See the header: the three entries cost wildly different
-// amounts and a program almost always wants exactly one of them.
+// ⚠ **THE GUARD IS PER ENTRY, NOT PER FILE**, and one entry is left to guard: the path walk drags in
+// `usesHeap` AND `usesManagedMemory`, i.e. the whole managed-memory runtime installed as one closure, so a
+// program whose only introspection is a pid must not reach it. The other two entries need no guard here at
+// all — their bodies are tier source, and dead-function elimination decides whether each survives.
 export function installProcessRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesExecutablePath 'executablePath'
 		buildProcessExecutablePath(module)
 	end 'executablePath'
-
-	if usage.usesProcessId 'processId'
-		buildProcessCurrentPid(module)
-	end 'processId'
-
-	if usage.usesBackgroundPriority 'backgroundPriority'
-		buildProcessBackgroundPriority(module)
-	end 'backgroundPriority'
 end 'installProcessRuntime'
 
-// Every callee this file installs — the band `calleeHostFacility` reads AFTER its by-name test for the
-// priority write, so what this answers for is the `processInfo` half. A PREFIX test rather than an `equals`
-// against a roster of names, for `isCommandLineRuntimeCallee`'s reason: a second entry point here is then
-// covered by construction instead of having to be remembered at two sites.
+// ⭐ **THE FAMILY'S BAND, AND IT ANSWERS FOR THE `processInfo` HALF.** `calleeHostFacility` reads it AFTER
+// its by-name test for the priority write, so the write never reaches here. A PREFIX test rather than an
+// `equals` against a roster of names, for `isCommandLineRuntimeCallee`'s reason: a further identity read is
+// then covered by construction instead of having to be remembered at two sites.
+// `specs/process-id.md:rejected-on-wasm` is the case that pins the E3104 `__proc_pid` earns by prefix alone.
 //
-// ✅ **THAT PROMISE WAS TESTED AND HELD.** `__proc_pid` arrived after this predicate was written and needed
-// no edit here: `specs/process-id.md:rejected-on-wasm` pins the E3104 it earns by prefix alone.
-//
-// ⚠ **`scanRuntimeUsage` DOES NOT READ THIS ONE**, and used to: it now asks for each entry by NAME, because
-// the entries are installed on separate bits (see the header). A prefix is the right test for "may this
-// target run it at all" — one answer for the family — and the wrong test for "must this program carry it",
-// which is per entry point.
+// ⚠ **`scanRuntimeUsage` DOES NOT READ THIS ONE.** It asks for the path walk by NAME, because a prefix is
+// the right test for "may this target run it at all" — one answer for the family — and the wrong test for
+// "must this program carry it", which is per entry point and costs wildly different amounts here.
 export function isProcessRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: ProcessRuntimePrefix)
 end 'isProcessRuntimeCallee'

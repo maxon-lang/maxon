@@ -30,6 +30,8 @@ let RawOsTickCountMsName = b"__Raw.osTickCountMs"
 let RawOsReadWallClockName = b"__Raw.osReadWallClock"
 let RawOsThreadCpuTicksName = b"__Raw.osThreadCpuTicks"
 let RawOsCpuCountName = b"__Raw.osCpuCount"
+let RawOsGetPidName = b"__Raw.osGetPid"
+let RawOsEnterBackgroundPriorityName = b"__Raw.osEnterBackgroundPriority"
 let RawScratchName = b"__Raw.scratch"
 let RawSchedNumProcsAddrName = b"__Raw.schedNumProcsAddr"
 let RawSchedMaxActiveWorkersAddrName = b"__Raw.schedMaxActiveWorkersAddr"
@@ -42,6 +44,14 @@ export enum RawIntrinsic
 	osReadWallClock
 	osThreadCpuTicks
 	osCpuCount
+	osGetPid
+
+	// ⭐ **THE ONE OS ROW THAT CHANGES THE PROCESS RATHER THAN REPORTING ON IT, AND IT STILL ANSWERS A
+	// WORD.** A `void` set would leave a tier body nothing to return and a spec nothing to name, so the op
+	// sets the priority and READS IT BACK; the word is the second reading. See
+	// `StdOp.osEnterBackgroundPriority`, which owns that argument.
+	osEnterBackgroundPriority
+
 	scratch
 
 	// ⭐⭐ **A COMPILER-OWNED `.data` WORD IS ADDRESSED BY ITS OWN ROW, NOT BY A LABEL A BODY WRITES.** The
@@ -125,6 +135,14 @@ function rawIntrinsicLookupOf(callee ByteArray) returns RawIntrinsicLookup
 		return RawIntrinsicLookup.found(RawIntrinsic.osCpuCount)
 	end 'osCpuCount'
 
+	if callee.equals(RawOsGetPidName) 'osGetPid'
+		return RawIntrinsicLookup.found(RawIntrinsic.osGetPid)
+	end 'osGetPid'
+
+	if callee.equals(RawOsEnterBackgroundPriorityName) 'osEnterBackgroundPriority'
+		return RawIntrinsicLookup.found(RawIntrinsic.osEnterBackgroundPriority)
+	end 'osEnterBackgroundPriority'
+
 	if callee.equals(RawScratchName) 'scratch'
 		return RawIntrinsicLookup.found(RawIntrinsic.scratch)
 	end 'scratch'
@@ -179,6 +197,8 @@ export function rawIntrinsicCalleeName(intrinsic RawIntrinsic) returns ByteArray
 		osReadWallClock gives RawOsReadWallClockName
 		osThreadCpuTicks gives RawOsThreadCpuTicksName
 		osCpuCount gives RawOsCpuCountName
+		osGetPid gives RawOsGetPidName
+		osEnterBackgroundPriority gives RawOsEnterBackgroundPriorityName
 		scratch gives RawScratchName
 		schedNumProcsAddr gives RawSchedNumProcsAddrName
 		schedMaxActiveWorkersAddr gives RawSchedMaxActiveWorkersAddrName
@@ -193,7 +213,9 @@ export function rawArgShapeOf(intrinsic RawIntrinsic) returns RawArgShape
 		osTickCountMs gives RawArgShape.nothing
 		osReadWallClock gives RawArgShape.oneWord
 		osThreadCpuTicks gives RawArgShape.twoWords
-		osCpuCount gives RawArgShape.nothing
+		osCpuCount or
+			osGetPid or
+			osEnterBackgroundPriority gives RawArgShape.nothing
 		scratch gives RawArgShape.oneConstant
 		schedNumProcsAddr or
 			schedMaxActiveWorkersAddr gives RawArgShape.nothing
@@ -209,6 +231,8 @@ export function rawResultKindOf(intrinsic RawIntrinsic) returns RawResultKind
 		osReadWallClock gives RawResultKind.nothing
 		osThreadCpuTicks gives RawResultKind.nothing
 		osCpuCount or
+			osGetPid or
+			osEnterBackgroundPriority or
 			scratch or
 			schedNumProcsAddr or
 			schedMaxActiveWorkersAddr or
@@ -247,7 +271,7 @@ export function rawArgumentIsTheConstant(shape RawArgShape, position ParamCount)
 end 'rawArgumentIsTheConstant'
 
 // ⭐⭐ **THE HOST FACILITY A ROW'S INSTRUCTION NEEDS.** It is the same question `TargetFacilities` answers
-// for every runtime entry, asked of an op instead — the four OS rows name facilities that already exist
+// for every runtime entry, asked of an op instead — the six OS rows name facilities that already exist
 // for exactly these Std ops.
 //
 // ⛔ **NOTHING REPORTS OFF IT YET, AND THE SITE THAT WOULD IS `LibraryFacts.substrateEntries`.**
@@ -257,11 +281,14 @@ end 'rawArgumentIsTheConstant'
 // library, and that table is built from CALLEES: an op names none, so a row's facility reaches no
 // user-refusable site. Until it does, a lane missing the facility reaches instruction selection.
 //
-// ⚠ **`osCpuCount` IS THE ROW WHERE THAT GAP IS CLOSEST TO BITING, AND WHAT KEEPS IT SHUT IS A SECOND
-// ROUTE RATHER THAN THIS ONE.** Its facility is genuinely absent on wasm, and the program that asks for it
-// is refused at the call to `__cpu_count` by `TargetFacilities.calleeHostFacility`, which reads the CALLEE
-// band. That covers the one entry point spelling the row today; a second tier body spelling it would reach
-// instruction selection on that lane with nothing said.
+// ⚠ **FOUR ROWS NAME A FACILITY THAT IS GENUINELY ABSENT ON A SUPPORTED LANE, AND WHAT KEEPS THE GAP
+// SHUT IS A SECOND ROUTE RATHER THAN THIS ONE.** `osCpuCount`, `osGetPid`, `osEnterBackgroundPriority` and
+// `osThreadCpuTicks` have no wasm lowering — WASI has no per-thread CPU clock at all, which
+// `TargetFacilities` records as permanent rather than pending. A program asking for one of the first three
+// is refused at the call to `__cpu_count`, `__proc_pid` or `__proc_bg_priority` by
+// `TargetFacilities.calleeHostFacility`, which reads the CALLEE name and band; the fourth is spelled by no
+// tier body yet, so nothing tests its route. That covers the one entry point spelling each row today, and a
+// second tier body spelling any of them would reach instruction selection on that lane with nothing said.
 //
 // ⚠ **`none` IS "NO HOST FACILITY", NOT "EVERY TARGET".** The word and address rows are pure code
 // generation on the lanes that have an addressable frame, and wasm is not one of them: a wasm local has no
@@ -280,6 +307,8 @@ export function rawHostFacilityOf(intrinsic RawIntrinsic) returns RawHostFacilit
 		osReadWallClock gives RawHostFacility.required(HostFacility.wallClock)
 		osThreadCpuTicks gives RawHostFacility.required(HostFacility.threadCpuClock)
 		osCpuCount gives RawHostFacility.required(HostFacility.cpuCount)
+		osGetPid gives RawHostFacility.required(HostFacility.processInfo)
+		osEnterBackgroundPriority gives RawHostFacility.required(HostFacility.processPriority)
 		scratch or
 			schedNumProcsAddr or
 			schedMaxActiveWorkersAddr or
