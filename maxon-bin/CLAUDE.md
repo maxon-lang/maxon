@@ -15,22 +15,49 @@ compiler READS, so the first build already compiles against the edited file and 
 opposite of `Compiler/Runtime/` below, which the compiler WRITES into every program including itself.
 `scripts/self-compiles-needed.sh` answers for both; it does not watch `runtime/`, deliberately.
 
-⚠ **THE TIER HOSTS NO RUNTIME FAMILY YET, AND A FUNCTION PLACED IN IT DOES NOT REACH CODE GENERATION.**
-`runtime/` carries typealiases only. Nothing in source calls a runtime entry — the compiler reaches one
-by NAME, which is the tier's defining property — so `deriveLibraryFacts` files every runtime function
-`unreachable`, `lowerMaxonToStd` skips its body, and a reloc naming one panics
-`requireUnreachableLibraryStayedDead`. Rooting the reachability walk at the tier belongs with the first
-family that moves, because the same rung decides the `RuntimeUsage` gating that keeps a program from
-carrying families it never calls. Three consequences bind until then, and each is a door standing open
-rather than a door that is shut:
+⭐ **THE FIRST FAMILY IS IN, AND THE ROOT THAT REACHES IT IS A CALL THE COMPILER EMITS.**
+`runtime/Clock.maxon` holds `__clock_now_unix_s` and `__uptime_ms`; `__Builtins.currentUnixTimeSeconds()`
+and `__Builtins.tickCountMs()` lower to calls naming them, from whatever file wrote the construct. No
+source file OUTSIDE the tier can NAME a runtime entry — that is the tier's defining property, and
+`Parser.requireCalleeIsNotReservedName` admits a reserved callee only where the FILE may declare reserved
+names, which is `runtime/` itself plus `stdlib/Builtins.maxon` and `stdlib/Testing.maxon`. An ordinary
+stdlib or user file still earns E3004, and that is what keeps the visibility admit-list below sound. So a
+runtime name is never
+classified `LibraryFacts.unreachable`, and the exemption is by PROVENANCE rather than by reachability: a
+walk over source call edges holds no evidence about the tier at all
+(`StdlibSource.unreachableLibraryNames`). Its bodies therefore lower, its range guards are inserted and
+its runtime floor is counted, while dead-function elimination still sweeps an entry nothing calls, so a
+program that reaches no runtime family carries none of it.
+
+⚠ **A `RuntimeUsage` BIT NO LONGER GATES A SOURCED BODY'S INSTALLATION, AND STILL GATES EVERYTHING ELSE.**
+DFE decides whether the body survives, so `usesWallClock` and `usesUptimeClock` install nothing — but the
+per-target hand-assembled `osReadWallClock` chunk, the POSIX clock floor and the Windows optional import
+band are all still theirs. Retire a bit when its LAST consumer is gone, not when the body moves.
+
+⚠ **A COMPILER-EMITTED CALL INTO THE TIER IS EXEMPT FROM MODULE VISIBILITY, AND THE EXEMPTION IS AN
+ADMIT-LIST.** `SemanticCheck.calleeVisibleFrom` admits a callee that wears the reserved prefix AND is
+declared under `runtime/`; the prefix is what proves no author wrote the name. A runtime file's
+UNRESERVED declarations stay module-scoped, which
+`specs/runtime-source-tier.md`'s `runtime-file-unreserved-declaration-is-still-module-scoped` measures.
+
+⚠ **`scanRuntimeUsage` WALKS EVERY RUNTIME BODY, IN EVERY PROGRAM.** A runtime name is never
+`unreachable`, so the scan never skips one — and a CALL inside a runtime body would therefore set that
+family's bit for a program DFE sweeps the body out of, which is rule 1 ("vocabulary does not ship ahead of
+its consumer") failing open. Vacuous while `runtime/Clock.maxon` calls only `__Raw` and so carries no
+callee edge at all. The second family to migrate is the one that has to answer it.
+
+Three doors are still standing open rather than shut:
 
 - **E3153 is complete over SPELLED types and incomplete over INFERRED values.** `parseTypeReference`
   catches every type a runtime file writes; the value-side check at `declareInitializedBinding` and
   `bindParameters` does not see a `for` binding, a closure cell, a caught error, a `match` payload, or
   an unbound temporary. `for c in "abc"` in a runtime file is admitted. The complete site is the built
-  `IrFunction`, which is unreachable while bodies are dropped — so the two land together.
-- **Five of the six `__Raw` rows are unexercised**, as are `reserveRawScratchSlot`, both its refusals and
-  the statement door. A case can spell a raw intrinsic and watch it parse; nothing yet watches one lower.
+  `IrFunction`, and it is now reached, so the hole can be closed on its own.
+- **`osThreadCpuTicks` and `storeWord` are the `__Raw` rows nothing exercises**, as are
+  `reserveRawScratchSlot`'s refusals. `osTickCountMs`, `osReadWallClock`, `scratch` and `loadWord` are the
+  clock family's, and `builtins-clock.md`'s `wall-clock-body-is-runtime-source` renders the emitted body
+  the last three lower to. `osThreadCpuTicks` waits on `__thread_cpu_ticks`, which cannot move until a
+  `__Raw` row names the current-GT read its green-thread arm makes.
 - **A `__Raw` row's host facility reaches no refusable site.** `maxonOpCalleeKind` answers `noCallee`,
   so `LibraryFacts.substrateEntries` never sees one, and a lane without the op reaches instruction
   selection instead of E3104. A substrate-entry row per op is what closes it.

@@ -4300,7 +4300,7 @@ let MethodNameSeparator = "."
 //
 // What makes the duplication safe is not this comment: it is that the two copies have a TEST between them.
 // Every direct builtin-conformance dispatch resolves through `isCompilerInternalCallee` →
-// `isBuiltinConformanceImplName` → `isQualifiedUnderTypeName`, so a byte here that disagrees with the join
+// `isBuiltinConformanceImplName` → `splitQualifiedName`, so a byte here that disagrees with the join
 // above makes EVERY direct builtin-conformance call fail to be recognized as compiler-owned, and every
 // `primitive-comparable`/`primitive-hashable`/`method-call-on-call-result` case goes RED with E3004. The
 // copies cannot drift silently.
@@ -83891,8 +83891,9 @@ export type Parser
 	end 'reserveRawScratchSlot'
 
 	// ⭐ **THE ARITY CHECK AND THE EMIT EVERY CLOCK INTRINSIC SHARES**, written once and returning the
-	// integer-tagged reading. All three take no arguments and become one call to a runtime entry point the
-	// compiler builds at the Std tier, so only the entry point's NAME differs.
+	// integer-tagged reading. All three take no arguments and become one call to a runtime entry point, so
+	// only the entry point's NAME differs — `__gt_now_ns` is built at the Std tier, `__clock_now_unix_s` is
+	// `runtime/Clock.maxon` source.
 	//
 	// The arity rejection is the SAME `builtinArity` every other builtin raises — a builtin has no signature
 	// registry entry for SemanticCheck's ordinary arity check to consult, which is exactly why that variant

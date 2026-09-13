@@ -1164,9 +1164,8 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 		end 'each'
 	end 'subpGlobals'
 
-	// ⚠ **`ClockRuntime` CONTRIBUTES NO `.data` SLOT.** Its host reads take FRAME scratch, which is what a
-	// multi-M runtime requires, so there is no `clockRuntimeGlobals` to call here; the two `usage` bits gate
-	// only the two BODIES `installClockRuntime` builds.
+	// ⚠ **`ClockRuntime` CONTRIBUTES NO `.data` SLOT.** Its host read takes FRAME scratch, which is what a
+	// multi-M runtime requires, so there is no `clockRuntimeGlobals` to call here.
 	// The slab's PAGE-LAYER slots — the arena list head and the reverse map's L1 pointer — and the OBJECT
 	// layer's one slot, the pointer to its lazily-committed state region. Each gate rides inside its producer
 	// (`slabArenaRuntimeGlobals` asks `usesSlabArena`, `slabRuntimeGlobals` asks `usesHeap`) rather than being
@@ -1522,11 +1521,11 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// Its co-ownership twin (`__retain_existential`), on its own bit for the same reason.
 	installRetainExistentialRuntime(pipeline.stdModule, usage: usage)
 
-	// The two host clocks that are not the scheduler's — the WALL clock (`__clock_now_unix_s`) and this
-	// THREAD's CPU consumption (`__thread_cpu_ticks`) — installed the same already-lowered way, each on its
-	// OWN bit. The monotonic sibling (`__gt_now_ns`) comes from `installGtRuntime` above instead, because the
-	// SCHEDULER owns that counter: its timer deadlines are expressed in it, and routing both the scheduler
-	// and `__Builtins.currentTimeNanos` to ONE function is what keeps them from disagreeing.
+	// This THREAD's own CPU consumption (`__thread_cpu_ticks`), installed the same already-lowered way. Its
+	// two clock siblings are `runtime/Clock.maxon` source and arrive through the ordinary pipeline; the
+	// monotonic one (`__gt_now_ns`) comes from `installGtRuntime` above instead, because the SCHEDULER owns
+	// that counter — its timer deadlines are expressed in it, and routing both the scheduler and
+	// `__Builtins.currentTimeNanos` to ONE function is what keeps them from disagreeing.
 	installClockRuntime(pipeline.stdModule, usage: usage)
 
 	// The coverage dump (`__cov_dump`/`__cov_write_file`), on its own DECLARED bit beside them. It takes

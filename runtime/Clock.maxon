@@ -1,0 +1,64 @@
+// The two host clocks a program reads through a NAME the compiler emits: the CALENDAR
+// (`__clock_now_unix_s`) and the machine's UPTIME (`__uptime_ms`).
+//
+// ⭐ **THE MONOTONIC PAIR IS DELIBERATELY ABSENT.** `__Builtins.currentTimeNanos` / `currentTimeMs` route
+// to the scheduler's `__gt_now_ns`, because that reading and the scheduler's sleep deadlines and netpoll
+// waits must come from ONE counter; two monotonic clocks that could disagree is the bug that split exists
+// to avoid. A calendar has no such relationship — nothing in the scheduler can use a reading that steps
+// backwards when NTP corrects a drift.
+//
+// ⚠ **`__thread_cpu_ticks` IS NOT HERE EITHER, AND FOR A MECHANICAL REASON**: its green-thread arm reads
+// the running green thread's clock offset through the current-GT pointer, and no `__Raw` row names that
+// op. It stays a Std-IR builder (`Compiler/Runtime/ClockRuntime.maxon`) until one does.
+
+// A FILETIME counts 100-NANOSECOND intervals since 1601-01-01 00:00:00 UTC, and the two facts that turn
+// one into Unix seconds. The 1601→1970 shift is 11,644,473,600 seconds, which is 116444736000000000
+// ticks — an i64 with three orders of magnitude to spare.
+//
+// ⚠ **THE PER-TARGET WALL-CLOCK CHUNKS SPELL THESE TOO** (`Targets/X64/X64LinuxRuntime`,
+// `Targets/Arm64/Arm64PosixRuntime`, `Targets/Arm64/Arm64DarwinRuntime`): a POSIX host answers
+// nanoseconds and its chunk converts to FILETIME ticks so that this arithmetic is the one every lane
+// runs. The tier boundary is why the constants are restated there — no name crosses it.
+//
+// ⛔ **A THIRD COPY EXISTS AND SHADOWS THIS ONE.** `Runtime/ManagedFileRuntime.maxon` declares its own
+// `FileTimeUnixEpochDelta` and `FileTimeTicksPerSecond` and runs the same conversion for a file's mtime;
+// the second name shadows `ClockRuntime`'s export inside that file. Nothing makes the three agree, so a
+// correction here reaches neither of them.
+let FileTimeTicksPerSecond = 10000000
+let FileTimeTicksFrom1601To1970 = 116444736000000000
+
+// `osReadWallClock` answers through a POINTER, so the reading needs a word of storage. It is a slot of
+// THIS CALL's frame rather than a global: two Ms do not need a yield point to be inside one function at
+// once, and a shared word would hand each the other's reading — a wall clock that jumps.
+let WallClockScratchBytes = 8
+
+// The whole FILETIME the host wrote, and the calendar seconds it scales to. ⛔ **BOTH RANGES ARE
+// FULL-RANGE SIGNED, AND THAT IS THE CONTRACT RATHER THAN A MISSING BOUND**: a quotient whose operands
+// both declare a non-negative range is emitted as an UNSIGNED divide, and this arithmetic is the host's
+// signed i64. A narrowed range costs a second thing besides: it is a guarded door, and the guard could only
+// ever fire on a word the host itself wrote.
+typealias FileTimeTicks = int(i64.min to i64.max)
+typealias UnixSeconds = int(i64.min to i64.max)
+
+// ⭐ **`__clock_now_unix_s()` — WHOLE SECONDS SINCE 1970-01-01 UTC.** The host op reads its calendar into
+// the scratch word and nothing more; the epoch shift and the ticks→seconds scale are HERE, so a lane
+// pays for one host read and shares the arithmetic.
+//
+// The subtraction cannot underflow on any clock a program can observe: a FILETIME below the 1970 offset
+// means the host's calendar is set before 1970, which Windows does not permit (its own minimum system
+// time is 1980).
+module function __clock_now_unix_s() returns UnixSeconds
+	let ticksAddr = __Raw.scratch(WallClockScratchBytes)
+	__Raw.osReadWallClock(ticksAddr)
+	let ticks = __Raw.loadWord(ticksAddr, offset: 0) as FileTimeTicks
+
+	return ((ticks - FileTimeTicksFrom1601To1970) / FileTimeTicksPerSecond) as UnixSeconds
+end '__clock_now_unix_s'
+
+// ⭐ **`__uptime_ms()` — MILLISECONDS SINCE THE MACHINE BOOTED, STRAIGHT THROUGH.** The absence of any
+// arithmetic is the contract: the DebugStream wire format stamps every ring entry with
+// `osTickCountMs() - start_timestamp`, so a consumer that scales or reseeds this reading turns each
+// delta into a number with no meaning.
+module function __uptime_ms() returns MachineWord
+	return __Raw.osTickCountMs()
+end '__uptime_ms'

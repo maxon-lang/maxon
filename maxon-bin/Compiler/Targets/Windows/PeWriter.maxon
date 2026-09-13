@@ -170,17 +170,14 @@ let ImportThunkPasses = 2  // the IAT and the ILT hold identical thunks
 // relocation) is unchanged — a reorder would silently repoint every prior import.
 //
 // `GetSystemTimeAsFileTime` is the WALL clock — the one import that answers a CALENDAR question rather than
-// a stopwatch one. `__clock_now_unix_s` (`__Builtins.currentUnixTimeSeconds`) reads it into a `.data` word,
+// a stopwatch one. `__clock_now_unix_s` (`__Builtins.currentUnixTimeSeconds`) reads it into a frame word,
 // shifts the 1601→1970 epoch and divides by the 100 ns tick. It lowers from the Std `osReadWallClock` op.
 // APPENDED AFTER `CancelIoEx` so every existing slot INDEX (and hence every existing `iatCall` relocation) is
 // unchanged — a reorder would silently repoint every prior import.
 //
-// ⛔ **THIS IS NO LONGER ONE DLL, AND THIS LINE CLAIMED IT WAS.** It closed with *"All are kernel32, so
-// this is still ONE DLL and `Kernel32DirEntries` stays 1"* while the eight `ws2_32` cases sat a few lines
-// below it and `Kernel32DirEntries` had been DELETED. The directory count is now DERIVED —
-// `emittedDllCount` walks `ImportDll` and asks `dllIsEmitted` — so there is no constant to keep at any
-// value, and which DLL a slot belongs to is `slotDll`'s single answer. See `ImportDll` for the layout rule
-// the two runs obey.
+// ⛔ **MORE THAN ONE DLL IS IMPORTED FROM, AND NO CONSTANT RECORDS HOW MANY.** The directory count is
+// DERIVED — `emittedDllCount` walks `ImportDll` and asks `dllIsEmitted` — and which DLL a slot belongs to
+// is `slotDll`'s single answer. See `ImportDll` for the layout rule the two runs obey.
 // Which DLL an import comes from, stated AT the case. The two runs are laid out by DLL, and a thunk
 // pointing into another library's Hint/Name table is not a failure any test would catch — so the fact
 // sits where the import is declared, and an import added without one is E3032 (a struct-backed enum

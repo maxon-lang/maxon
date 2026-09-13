@@ -29,6 +29,14 @@ The privileges are what a runtime needs and nothing else:
 - **It may CALL a `__Raw.*` intrinsic.** `__Raw` is the closed table of raw machine and OS operations
   — the floor a runtime is written on top of, and the one surface below which there is no Maxon.
 
+⭐ **THE BODIES ARE COMPILED, AND THE CASE THAT SAYS SO IS `builtins-clock.md`'s.** Every test below
+stops at the parser: each asserts what the tier ADMITS or REFUSES, and every one would still pass if the
+compiler threw the body away immediately afterwards. What proves otherwise is a REAL family — the wall
+clock, `runtime/Clock.maxon`'s `__clock_now_unix_s` — reached from a user program through
+`__Builtins.currentUnixTimeSeconds()` and pinned there under a ```RequiredRuntime block. No source file
+may NAME a runtime entry, so a call the compiler emits is the only root that crosses into the tier, and
+a family that has one is the only honest way to watch the far end.
+
 The restrictions are what a runtime cannot have:
 
 - **No managed value may be admitted.** The reference-counting pass emits calls into the very runtime
@@ -225,4 +233,30 @@ end 'main'
 ```
 ```maxoncstderr
 error E3153: <fragment>:4:15: managed type 'String' is not allowed in a runtime source file: the reference-counting pass would emit calls into the very runtime this tier defines
+```
+
+<!-- test: runtime-file-unreserved-declaration-is-still-module-scoped -->
+⭐⭐ **THE NEGATIVE CONTROL ON THE ONE RULE THAT LETS A COMPILER-EMITTED CALL REACH THE TIER.** A runtime
+entry point answers to no directory's module scope: `stdlib/Clock.maxon`'s `nowUnixSeconds` becomes a call
+to `runtime/Clock.maxon`'s `__clock_now_unix_s`, from a different directory, and visibility has nothing to
+refuse there because no file NAMED it — the reserved prefix is what makes the name unwritable
+(`SemanticCheck.calleeVisibleFrom`).
+
+⛔ **THE PREFIX IS HALF THAT TEST, AND THIS IS THE HALF THAT MEASURES IT.** Keyed on the tier alone, the
+exemption would make every declaration in `runtime/` callable from every file in the program — the tier is
+loaded into all of them — so an UNRESERVED runtime declaration would become a global name in everything the
+compiler builds, which is the contest E3154's ceiling exists to prevent. It stays module-scoped, and the
+module is `runtime/`.
+```maxon
+// --- runtime-file: Probe.maxon
+module function probeHelper() returns ExitCode
+	return 7
+end 'probeHelper'
+// --- file: main.maxon
+function main() returns ExitCode
+	return probeHelper()
+end 'main'
+```
+```maxoncstderr
+error E3088: <fragment>:8:9: function 'probeHelper' is module-scoped and not visible from this directory
 ```

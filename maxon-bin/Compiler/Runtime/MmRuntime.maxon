@@ -601,8 +601,14 @@ let CompilerInternalPrefix = b"__"
 // `float.`, `bool.` and, since BATCH2 slice 2, `String.` — and that bound is load-bearing rather than
 // conservative. See `isBuiltinConformanceImplName` for the two DIFFERENT things that make it sound: the
 // three primitives are keywords, while `String.` rests on the name being reserved from user declarations
-// (`TypeResolution.isCompilerOwnedTypeName`). It is allocation-free (`isQualifiedUnderTypeName`), because
-// this sits on the per-call path of `validateCall` and `lowerCall`.
+// (`TypeResolution.isCompilerOwnedTypeName`).
+//
+// ⚠ **IT COSTS ~23 ALLOCATIONS A CALL, AND IT SITS ON THE PER-CALL PATH** of `validateCall` and
+// `lowerCall`: the second clause reaches `isBuiltinConformanceImplName`, which SLICES the name apart
+// through `splitQualifiedName` rather than comparing it in place. Measured at 22.3/23.2/23.8 per call
+// across scale rungs 0-2. A caller that can ask a cheaper question first must do so — the runtime-tier
+// admit-list in `SemanticCheck.calleeVisibleFrom` asks the ordinary visibility rule first for exactly
+// this reason, which is worth ~150,000 allocations at rung 3.
 export function isCompilerInternalCallee(callee ByteArray) returns bool
 	return not (reservedCalleeReasonOf(callee) == ReservedCalleeReason.notReserved)
 end 'isCompilerInternalCallee'

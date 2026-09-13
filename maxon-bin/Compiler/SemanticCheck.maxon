@@ -3641,7 +3641,7 @@ function validateCall(project Project, func IrFunction, signatures ProgramSignat
 		return
 	end 'unknownFn'
 
-	if not calleeVisibleFrom(signatures, funcNames: funcNames, callee: callee, mint: mint, readerFilePath: filePath) 'notVisibleHere'
+	if not calleeVisibleFrom(project, signatures: signatures, funcNames: funcNames, callee: callee, mint: mint, readerFilePath: filePath) 'notVisibleHere'
 		reportCalleeNotVisible(project, funcNames: funcNames, callee: callee, noun: noun, callRange: callRange, filePath: filePath)
 		return
 	end 'notVisibleHere'
@@ -3672,7 +3672,7 @@ end 'validateCall'
 // Nobody wrote it, so no file can be refused it, and comparing its empty path against a real caller's would
 // refuse every call to it. A callee the index does not know at all is exempt for the same reason it cannot
 // be checked: there is no declaration to read a tier off.
-function calleeVisibleFrom(signatures ProgramSignatures, funcNames FunctionNameIndex, callee ByteArray, mint CalleeMint, readerFilePath FilePath) returns bool
+function calleeVisibleFrom(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, callee ByteArray, mint CalleeMint, readerFilePath FilePath) returns bool
 	// ⭐ **A CALLEE NAME THE AUTHOR DID NOT WRITE HAS NO VISIBILITY TO ANSWER FOR** — visibility governs what
 	// a file may NAME, and a minted callee is one the compiler spelled out of something else the author
 	// wrote (`int.fromString` ⇒ `__int_fromString`, an omitted argument ⇒ its default helper,
@@ -3711,7 +3711,30 @@ function calleeVisibleFrom(signatures ProgramSignatures, funcNames FunctionNameI
 		return true
 	end 'compilerBuilt'
 
-	return signatures.isVisibleFrom(declared.visibility, declFilePath: declared.sourceFilePath, readerFilePath: readerFilePath)
+	if signatures.isVisibleFrom(declared.visibility, declFilePath: declared.sourceFilePath, readerFilePath: readerFilePath) 'theOrdinaryRule'
+		return true
+	end 'theOrdinaryRule'
+
+	// ⭐⭐ **AND A `runtime/` ENTRY POINT ANSWERS TO NO DIRECTORY'S MODULE SCOPE.** The tier is loaded into
+	// every program and the compiler reaches an entry BY NAME, out of whatever file wrote the construct that
+	// needs it — `stdlib/Clock.maxon`'s `nowUnixSeconds` reaches `__clock_now_unix_s`. This is the
+	// compiler-built arm above with a declaring file attached: nobody WROTE the call either way, so there is
+	// no author to refuse.
+	//
+	// ⛔ **THE RESERVED PREFIX IS HALF THE TEST DELIBERATELY.** It is what makes the name unwritable by any
+	// file (`Parser.requireCalleeIsNotReservedName`), and so what proves the call is the compiler's. A
+	// runtime file's UNRESERVED declarations are ordinary module-scoped names, and `module` is the tier's
+	// visibility ceiling (E3154) precisely so they stay refused outside it.
+	//
+	// ⚠ **IT IS ASKED AFTER THE ORDINARY RULE, AND THE ORDER IS A COST RATHER THAN A PRECEDENCE.** An
+	// admit-list only ever turns a refusal into an admission, so either order answers the same — and every
+	// call site in the program crosses this line, where neither conjunct is cheap. The prefix test is a
+	// CLASSIFIER (`MmRuntime.reservedCalleeReasonOf`), which slices a qualified name apart to tell a
+	// synthesized conformance impl from an ordinary callee, and `isRuntimeSourceFile` probes a memo keyed on
+	// a `FilePath`, whose Windows hash lower-cases a copy of the path. MEASURED at ~23 allocations per call
+	// site when this runs first: `phase:semanticCheck` +23,430 at the doubling ladder's rung 0 and +150,732
+	// at rung 3. Asked here it runs only where the ordinary rule has already refused.
+	return isCompilerInternalCallee(callee) and isRuntimeSourceFile(project, path: declared.sourceFilePath)
 end 'calleeVisibleFrom'
 
 // ⭐⭐ **DID THE MINT SPELL THE WHOLE CALLEE, OR ONLY ITS QUALIFIER? (F31)** — the exemption above turns on
@@ -3762,7 +3785,7 @@ function reportAmbiguousCrossFileCall(project Project, signatures ProgramSignatu
 			continue
 		end 'noSuchDeclarationAfterAll'
 
-		if not calleeVisibleFrom(signatures, funcNames: funcNames, callee: spelling, mint: CalleeMint.notMinted, readerFilePath: filePath) 'notAFixThisFileCouldTake'
+		if not calleeVisibleFrom(project, signatures: signatures, funcNames: funcNames, callee: spelling, mint: CalleeMint.notMinted, readerFilePath: filePath) 'notAFixThisFileCouldTake'
 			continue
 		end 'notAFixThisFileCouldTake'
 

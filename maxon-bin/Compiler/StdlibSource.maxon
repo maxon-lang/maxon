@@ -176,12 +176,14 @@ export type LibraryFacts
 	// `isLibraryFunction`).
 	export let libraryFunctions as FunctionNameSet
 
-	// Stdlib functions NOT reachable from `main`. Dead-function elimination drops them before the back
-	// end, so a pass that runs earlier and examines function BODIES to decide something about the PROGRAM
-	// — the runtime floor it carries (`scanRuntimeUsage`), the targets it can be built for
-	// (`checkCalls`) — must not let them decide it, or the program pays for code it does not contain.
-	// User functions are never in it: a diagnostic in unreached USER code is still the user's bug, while
-	// a runtime requirement of unreached STDLIB code is nobody's.
+	// Stdlib functions NOT reachable from `main` — the functions whose BODY this compile does not build.
+	// Dead-function elimination drops them before the back end, so a pass that runs earlier and examines
+	// function BODIES to decide something about the PROGRAM — the runtime floor it carries
+	// (`scanRuntimeUsage`), the targets it can be built for (`checkCalls`) — must not let them decide it,
+	// or the program pays for code it does not contain. User functions are never in it: a diagnostic in
+	// unreached USER code is still the user's bug, while a runtime requirement of unreached STDLIB code is
+	// nobody's. ⛔ **AND NO `runtime/` FUNCTION IS EVER IN IT** — `unreachableLibraryNames` carries that
+	// exemption and why it is by PROVENANCE rather than by reachability.
 	export let unreachable as FunctionNameSet
 
 	// The REACHABLE stdlib functions that need the x64-windows substrate, and which runtime entry each
@@ -222,15 +224,15 @@ export function deriveLibraryFacts(project Project, module MaxonModule, signatur
 		return LibraryFacts.empty()
 	end 'malformedModule'
 
-	let stdlibNames = try stdlibFunctionNames(project)
+	let roster = try libraryFunctionRoster(project)
 
-	if stdlibNames.count() == 0 'noStdlibSource'
+	if roster.names.count() == 0 'noStdlibSource'
 		return LibraryFacts.empty()
 	end 'noStdlibSource'
 
 	var stdlibSet = FunctionNameSet.create()
 
-	for name in stdlibNames 'seed'
+	for name in roster.names 'seed'
 		stdlibSet.insert(name)
 	end 'seed'
 
@@ -239,35 +241,24 @@ export function deriveLibraryFacts(project Project, module MaxonModule, signatur
 	let initCallees = signatures.globalInitCallees()
 
 	// ⭐ COMMON-CASE SHORT-CIRCUIT. If no op in USER code REACHES stdlib, no stdlib function is
-	// reachable at all, so ALL of them are unreachable and NONE can be blamed for a substrate — reached by
+	// reachable at all — so an EMPTY reached set is the exact answer to hand `unreachableLibraryNames`,
+	// which is what the call below does, and NONE can be blamed for a substrate — reached by
 	// ONE allocation-free O(ops) scan, WITHOUT the O(functions) name->index map and reached-array the
 	// from-`main` walk allocates, and without the substrate fixpoint. That map is the whole per-compile
 	// memory cost of loading stdlib source into a program that never touches it, so skipping it keeps the
 	// cost a per-compile CONSTANT instead of growing with the user program. It stays EXACT: a stdlib
 	// function referenced by nothing is reachable from nothing.
 	if not userCodeReachesStdlib(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees) 'noneReferenced'
-		var allUnreachable = FunctionNameSet.create()
-
-		for name in stdlibNames 'markAll'
-			allUnreachable.insert(name)
-		end 'markAll'
-
-		return LibraryFacts.create(stdlibSet, unreachable: allUnreachable, substrateEntries: StdlibSubstrateEntryMap.create())
+		return LibraryFacts.create(stdlibSet, unreachable: unreachableLibraryNames(roster, reachable: FunctionNameSet.create()), substrateEntries: StdlibSubstrateEntryMap.create())
 	end 'noneReferenced'
 
 	// User code DOES call stdlib — resolve exactly which stdlib functions the program REACHES from `main`
 	// and mark only the untouched ones. This precise walk (and its maps) runs ONLY for a program that
 	// actually uses stdlib.
 	let reachable = try reachableMaxonFunctionNames(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees)
-	var unreachable = FunctionNameSet.create()
+	let unreachable = unreachableLibraryNames(roster, reachable: reachable)
 
-	for name in stdlibNames 'classify'
-		if not reachable.contains(name) 'unreached'
-			unreachable.insert(name)
-		end 'unreached'
-	end 'classify'
-
-	return LibraryFacts.create(stdlibSet, unreachable: unreachable, substrateEntries: stdlibSubstrateEntries(module, stdlibNames: stdlibNames, unreachable: unreachable))
+	return LibraryFacts.create(stdlibSet, unreachable: unreachable, substrateEntries: stdlibSubstrateEntries(module, stdlibNames: roster.names, unreachable: unreachable))
 end 'deriveLibraryFacts'
 
 // ⭐⭐ **GROW THE BODY DEMAND BY ONE ROUND — the fixpoint step `queryAllModule` iterates.**
@@ -292,15 +283,15 @@ export function growStdlibBodyDemand(project Project, module MaxonModule, signat
 		return false
 	end 'malformedModule'
 
-	let stdlibNames = try stdlibFunctionNames(project)
+	let roster = try libraryFunctionRoster(project)
 
-	if stdlibNames.count() == 0 'noStdlibSource'
+	if roster.names.count() == 0 'noStdlibSource'
 		return false
 	end 'noStdlibSource'
 
 	var stdlibSet = FunctionNameSet.create()
 
-	for name in stdlibNames 'seed'
+	for name in roster.names 'seed'
 		stdlibSet.insert(name)
 	end 'seed'
 
@@ -334,10 +325,6 @@ export function growStdlibBodyDemand(project Project, module MaxonModule, signat
 	return grew
 end 'growStdlibBodyDemand'
 
-// Every function the merged module got from stdlib source, in load order. Read back from each stdlib
-// file's PARSE ARTIFACT — a memo HIT, since `queryAllModule` has already parsed it — so the cost is
-// O(stdlib functions) and touches nothing the user wrote. A `ByteArrayArray` rather than a set because
-// the names are unique by construction (E3006 rejects a duplicate) and the substrate fixpoint needs a
 // Demand ONE stdlib file's bodies if any function it declares is reachable, answering whether the demand
 // set grew. ⭐ **THE PATH ARRIVES AS A PARAMETER**, which is what lets it be named three times: read
 // inline out of `project.librarySourcePaths` it is a borrow of `project`, and `queryParseOps` and the
@@ -370,23 +357,86 @@ function demandOneStdlibFileIfReached(project Project, path FilePath, reachable 
 	return false
 end 'demandOneStdlibFileIfReached'
 
-// dense ORDER for its node space as well as membership.
-function stdlibFunctionNames(project Project) returns ByteArrayArray throws CompileError
+// Every function the merged module got from library source, WITH the tier each one was declared in. The
+// two columns are built by ONE walk because the tier is a property of the FILE the first column is read
+// out of; asking it afterwards would need a name->path map nothing else here has a use for.
+type LibraryFunctionRoster
+	// Every library function, in load order. A `ByteArrayArray` rather than a set because the names are
+	// unique by construction (E3006 rejects a duplicate) and the substrate fixpoint needs a dense ORDER
+	// for its node space as well as membership.
+	export let names as ByteArrayArray
+
+	// The `runtime/` subset of `names` — the tier `unreachableLibraryNames` may never file.
+	export let runtimeTier as FunctionNameSet
+
+	export static function create(names ByteArrayArray, runtimeTier FunctionNameSet) returns LibraryFunctionRoster
+		return Self{names: names, runtimeTier: runtimeTier}
+	end 'create'
+end 'LibraryFunctionRoster'
+
+// Read back from each library file's PARSE ARTIFACT — a memo HIT, since `queryAllModule` has already
+// parsed it — so the cost is O(library functions) and touches nothing the user wrote.
+function libraryFunctionRoster(project Project) returns LibraryFunctionRoster throws CompileError
 	var names = ByteArrayArray.create()
+	var runtimeTier = FunctionNameSet.create()
 
 	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
 	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for fileIndex in 0 upto project.librarySourcePaths.count() 'eachFile'
-		let artifact = try queryParseOps(project, path: try project.librarySourcePaths.get(fileIndex) otherwise panic("stdlibFunctionNames: fileIndex {fileIndex} is below project.librarySourcePaths.count()"))
-
-		for func in artifact.module.functions 'eachFunc'
-			names.push(func.name)
-		end 'eachFunc'
+		try collectOneLibraryFile(project, path: try project.librarySourcePaths.get(fileIndex) otherwise panic("libraryFunctionRoster: fileIndex {fileIndex} is below project.librarySourcePaths.count()"), names: names, runtimeTier: runtimeTier)
 	end 'eachFile'
 
-	return names
-end 'stdlibFunctionNames'
+	return LibraryFunctionRoster.create(names, runtimeTier: runtimeTier)
+end 'libraryFunctionRoster'
+
+// One library file's functions, filed into both columns. ⭐ **THE PATH ARRIVES AS A PARAMETER**, for
+// `demandOneStdlibFileIfReached`'s reason: it is named twice here, and both `isRuntimeSourceFile` (a
+// provenance memo) and `queryParseOps` WRITE `project`, so a borrow read inline out of
+// `project.librarySourcePaths` survives neither call.
+function collectOneLibraryFile(project Project, path FilePath, names ByteArrayArray, runtimeTier FunctionNameSet) throws CompileError
+	let isRuntime = isRuntimeSourceFile(project, path: path)
+	let artifact = try queryParseOps(project, path: path)
+
+	for func in artifact.module.functions 'eachFunc'
+		names.push(func.name)
+
+		if isRuntime 'theRuntimeTier'
+			runtimeTier.insert(func.name)
+		end 'theRuntimeTier'
+	end 'eachFunc'
+end 'collectOneLibraryFile'
+
+// Which library names this compile files `unreachable`, given what it REACHES.
+//
+// ⛔⛔ **A `runtime/` NAME IS NEVER ONE OF THEM, AND THE EXEMPTION IS BY PROVENANCE RATHER THAN BY
+// REACHABILITY.** `unreachable` means *no body was built for this, do not expect one*, and that is what
+// every reader of the set acts on. For a runtime file it is false: its bodies are built unconditionally
+// (`Queries.buildsBodiesFor`), and no source file can name a runtime entry, because the compiler reaches
+// one BY NAME. So a walk over SOURCE call edges holds no evidence about the tier at all, and the answer it
+// would otherwise give — every runtime function is dead — empties a body the back end may still call.
+// `UnusedExportCheck` exempts the same cone in the same terms and for the same reason.
+//
+// ⚠ **IT KEEPS NOTHING IN THE PROGRAM.** Dead-function elimination roots its own walk
+// (`DeadFunctionElimination.seedRoots`) and reads this set only to CHECK it
+// (`requireUnreachableLibraryStayedDead`), so a runtime entry nothing calls is still swept there and a
+// program that reaches no runtime family carries none of it.
+//
+// The short-circuit caller passes an EMPTY `reachable`, which is precisely what it has concluded: no op in
+// user code and no root crosses into library source, so nothing in it is reached.
+function unreachableLibraryNames(roster LibraryFunctionRoster, reachable FunctionNameSet) returns FunctionNameSet
+	var unreachable = FunctionNameSet.create()
+
+	for name in roster.names 'classify'
+		if reachable.contains(name) or roster.runtimeTier.contains(name) 'notUnreached'
+			continue
+		end 'notUnreached'
+
+		unreachable.insert(name)
+	end 'classify'
+
+	return unreachable
+end 'unreachableLibraryNames'
 
 // The reachable-from-`main` closure over the merged Maxon module, as a set of function NAMES.
 // The Maxon-tier twin of `DeadFunctionElimination.markCalleeOf`: the FOUR ops that name a callee

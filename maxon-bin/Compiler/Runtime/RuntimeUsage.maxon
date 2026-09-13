@@ -25,11 +25,12 @@
 //   1. **ONE BIT PER ENTRY POINT.** Vocabulary does not ship ahead of its consumer: a program that only
 //      prints must not carry the stderr writer, and one that only reads a String's bytes must not carry
 //      the segmenter. Where two near-identical graphs exist, they get two bits.
-//   2. **A SYNTHESIZED BODY'S CALLS ARE *DECLARED*, NEVER DISCOVERED.** This scan walks the MAXON module;
-//      a runtime function's body is a `StdOp` graph that no Maxon module contains. So `__str_decref`'s
-//      `__mm_free` and `__managed_create`'s `__mm_alloc` are stated in the
-//      `close*Needs` closures. What a CORPUS body calls is the opposite case — an ordinary Maxon call
-//      edge the reachability walk FINDS — and a declared list of those could only go stale.
+//   2. **A CALL THE WALK CANNOT SEE IS *DECLARED*; EVERY CALL IT CAN SEE IS *DISCOVERED*.** This scan
+//      walks the MAXON module, so which half a runtime family falls in is decided by where its BODY is.
+//      A body built as a `StdOp` graph (`installStringRuntime` and its siblings) is in no Maxon module at
+//      all, so `__str_decref`'s `__mm_free` and `__managed_create`'s `__mm_alloc` are stated in the
+//      `close*Needs` closures. A body written as Maxon — corpus source, and `runtime/` source with it —
+//      is an ordinary call edge the walk FINDS, and a declared list of those could only go stale.
 //   3. **A CLOSURE RUNS AFTER EVERY RECORD, NOT INSIDE THE ARM THAT SET THE BIT**, so the answer cannot
 //      depend on the order in which a module happens to NAME its entry points. The order the four
 //      `record*Usage` calls run in IS load-bearing and is a rule about FAMILIES: a family that closes
@@ -331,7 +332,9 @@ export type RuntimeUsage
 	// a leaf that calls one Win32 import and divides, with no relationship to the green-thread scheduler
 	// whose `__gt_now_ns` answers the OTHER clock question. Folding it under `usesGt` would install the
 	// entire scheduler — plus the allocator and the leak gate under it — for a program that asks what
-	// today's date is. Drives `installClockRuntime` + the one `__clock_wall_ticks` `.data` slot.
+	// today's date is. The BODY is `runtime/Clock.maxon`'s and needs no bit to install it — dead-function
+	// elimination sweeps it when nothing calls it — so what this drives is the per-target hand-assembled
+	// `osReadWallClock` chunk on each POSIX lane, which no source file can write.
 	export var usesWallClock as bool
 
 	// ⭐ **THE P1.8 SLICE B GRAPHEME FAMILY — ONE BIT PER ENTRY POINT**, following this file's existing
@@ -543,7 +546,8 @@ export type RuntimeUsage
 	// bit rather than either clock's above, for their own reason one import over: it is the sole producer of
 	// `GetTickCount64` outside a `--debugstream` or child-spawning build, so a calendar read must not import
 	// it and this must not import theirs. Like them it declares NO transitive dependency — one host read, no
-	// `.data`, no heap and no scheduler.
+	// `.data`, no heap and no scheduler. The BODY is `runtime/Clock.maxon`'s; this gates the import band and
+	// the POSIX substrate floor (`PosixRuntime.posixReadsMonotonicClock`).
 	export var usesUptimeClock as bool
 
 	// ⭐⭐ **THE PROGRAM REACHES THE SLAB'S PAGE LAYER** — the chunk arena, its bitmap and the pointer→span
@@ -870,10 +874,10 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesIntToString = true
 	end 'streaming'
 
-	// A `__clock_*` call carries the WALL clock and NOTHING ELSE — no scheduler, no heap, no leak gate. It is
-	// the ONE runtime family here that declares no transitive dependency, and that is a fact about the code
-	// rather than an omission: `__clock_now_unix_s`'s Std body reads one `.data` word through one Win32 import
-	// and divides, calling nothing this Maxon-module scan cannot see.
+	// A `__clock_*` call carries the WALL clock and NOTHING ELSE — no scheduler, no heap, no leak gate. It
+	// declares no transitive dependency, and that is a fact about the code rather than an omission:
+	// `runtime/Clock.maxon`'s `__clock_now_unix_s` reads one host word into a frame slot and divides, calling
+	// nothing this Maxon-module scan cannot see.
 	if isClockRuntimeCallee(callee) 'wallClock'
 		usage.usesWallClock = true
 	end 'wallClock'
@@ -1071,15 +1075,15 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	end 'scavenge'
 
 	// The THREAD-CPU clock. It carries nothing beside itself, exactly as the wall clock two families up does
-	// and for the identical reason: `__thread_cpu_ticks`'s Std body reads one `.data` word through one Win32
-	// import and returns it, calling nothing this Maxon-module scan cannot see.
+	// and for the identical reason: `__thread_cpu_ticks`'s Std body reads one host word into a frame slot and
+	// returns it, calling nothing this Maxon-module scan cannot see.
 	if isThreadCpuRuntimeCallee(callee) 'threadCpuTicks'
 		usage.usesThreadCpuTicks = true
 	end 'threadCpuTicks'
 
 	// The UPTIME clock. It carries nothing beside itself, exactly as the two clocks above do and for the
-	// identical reason: `__uptime_ms`'s Std body is one host read and a `ret`, calling nothing this
-	// Maxon-module scan cannot see.
+	// identical reason: `runtime/Clock.maxon`'s `__uptime_ms` is one host read and a `ret`, calling nothing
+	// this Maxon-module scan cannot see.
 	if isUptimeRuntimeCallee(callee) 'uptimeClock'
 		usage.usesUptimeClock = true
 	end 'uptimeClock'

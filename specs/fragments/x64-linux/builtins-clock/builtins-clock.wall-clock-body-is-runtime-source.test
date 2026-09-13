@@ -1,0 +1,69 @@
+// Test: builtins-clock.wall-clock-body-is-runtime-source
+function main() returns ExitCode
+	let first = __Builtins.currentUnixTimeSeconds()
+	let second = __Builtins.currentUnixTimeSeconds()
+	var score = 0
+	if second >= first 'nondecreasing'
+		score = score + 1
+	end 'nondecreasing'
+	if first > 1735689600 'afterKnownPast'
+		score = score + 1
+	end 'afterKnownPast'
+	return score as ExitCode
+end 'main'
+---
+ExitCode: 2
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.callDirect __clock_now_unix_s
+    x64.movRegReg rbx, r8
+    x64.callDirect __clock_now_unix_s
+    x64.movRegImm32 rax, 0
+    x64.cmpRegReg r8, rbx
+    x64.jcc less, ifcont
+  nondecreasing:
+    x64.movRegImm32 rax, 1
+  ifcont:
+    x64.cmpRegImm32 rbx, 1735689600
+    x64.jcc lessEqual, critsplit
+  afterKnownPast:
+    x64.leaRegRegImm32 r8, rax, 1
+    x64.jmp __rc_ok
+  critsplit:
+    x64.movRegReg r8, rax
+  __rc_ok:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @__clock_now_unix_s {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.leaRegSlot rbx, slot0
+    x64.movRegReg rcx, rbx
+    x64.callDirect mrt_host_wall_clock
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.movRegImm rax, 116444736000000000
+    x64.subRegReg rcx, rcx, rax
+    x64.movRegImm rax, 15474250491067253437
+    x64.imulHighReg rcx
+    x64.leaRegRegReg rax, rdx, rcx
+    x64.sarRegImm8 rax, rax, 23
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 63
+    x64.leaRegRegReg r8, rax, rcx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

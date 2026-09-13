@@ -298,6 +298,43 @@ end 'main'
 5
 ```
 
+<!-- test: builtins-clock.wall-clock-body-is-runtime-source -->
+⭐⭐ **THE CALENDAR'S BODY IS MAXON SOURCE THE COMPILER READS OUT OF THE TREE, AND THIS IS THE CASE THAT
+SEES IT.** `runtime/Clock.maxon` writes `__clock_now_unix_s` against the `__Raw` floor — a frame word,
+`osReadWallClock` into it, a load, the 1601→1970 shift and the ticks→seconds divide — and the block
+below renders what the back end made of that source. Every OTHER case in this file reads the clock's
+ANSWER, and each would pass just as happily against a body the compiler built itself; only a rendered
+body says which tier it came from.
+
+⚠ **THE DIVIDE IS THE HALF THAT NEEDS WATCHING.** A quotient whose two operand ranges are both declared
+non-negative is emitted UNSIGNED, so the source states both its types full-range signed and this golden
+is where a widened range would show up — as a plain `mul`-high reciprocal with the sign correction gone.
+The divisor is a literal constant, which is what keeps the divide BARE: a `__checked_div` call appearing
+here is a divisor that stopped being provably non-zero.
+
+⚠ `main` reads the clock TWICE so that the rendered body is the one that runs: a called-once function is
+moved into its caller, which would leave this golden pinning an emitted leftover.
+```maxon
+function main() returns ExitCode
+	let first = __Builtins.currentUnixTimeSeconds()
+	let second = __Builtins.currentUnixTimeSeconds()
+	var score = 0
+	if second >= first 'nondecreasing'
+		score = score + 1
+	end 'nondecreasing'
+	if first > 1735689600 'afterKnownPast'
+		score = score + 1
+	end 'afterKnownPast'
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+```RequiredRuntime
+__clock_now_unix_s
+```
+
 <!-- test: builtins-clock.arity-checked -->
 A clock intrinsic takes no arguments; one given an argument is refused by the same builtin-arity
 check `trunc`/`sleep` use, because a builtin has no signature for the ordinary arity check to read.

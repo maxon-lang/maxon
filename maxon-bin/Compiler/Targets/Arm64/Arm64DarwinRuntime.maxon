@@ -38,8 +38,9 @@
 // runtime beside them, and for a reason that runtime does not have: a panic is reachable from any program
 // and costs a few hundred bytes, while these come one family at a time and each drags its own libSystem
 // imports into the GOT. A program that reads no clock emits no clock chunk. The bits are the SAME ones the
-// Std-tier installers read (`installClockRuntime` builds `__clock_now_unix_s` under `usesWallClock`), so a
-// chunk can never be absent for a body that calls it: one bit, two tiers.
+// Std tier reads, so a chunk can never be absent for a body that calls it: one bit, two tiers. A bit is set
+// by the CALL the parser emitted, which is also what keeps `runtime/Clock.maxon`'s `__clock_now_unix_s`
+// covered — a body dead-function elimination keeps is a body something called.
 
 // ==========================================================================
 // Darwin ABI constants
@@ -120,7 +121,7 @@ end 'arm64DarwinReadClockNanos'
 //
 // ⭐⭐ **THE FILETIME ENCODING IS NOT A WINDOWS DETAIL LEAKING INTO A POSIX LANE — IT IS THE OP's CONTRACT,
 // AND KEEPING IT IS WHAT LEAVES THE Std TIER TARGET-NEUTRAL.** `osReadWallClock`'s consumer
-// (`ClockRuntime.buildWallClockNowUnixSeconds`) subtracts the 1601 epoch and divides by 10⁷ — arithmetic
+// (`runtime/Clock.maxon`'s `__clock_now_unix_s`) subtracts the 1601 epoch and divides by 10⁷ — arithmetic
 // built ONCE for every target. A lane that wrote raw Unix nanoseconds here would have to make that graph
 // ask which target it is compiling for, which is precisely the shape the rewrite does not have: the ops are
 // neutral and the BACKENDS hold every OS fact. So the conversion belongs on this side of the boundary.
@@ -2106,9 +2107,10 @@ end 'arm64DarwinCaptureDescriptor'
 // there rather than merely dead code.
 //
 // ⚠ **THE GATES ARE THE Std TIER's OWN USAGE BITS, WHICH IS WHAT MAKES A MISSING CHUNK IMPOSSIBLE.** A
-// chunk is emitted exactly when the Std function that calls it is built: `usesWallClock` builds
-// `__clock_now_unix_s` AND emits `mrt_host_wall_clock`. Gating the two on different questions is how a
-// `bl` to an absent symbol happens, and an unresolved `bl` is a link failure rather than a diagnostic.
+// chunk is emitted exactly when something calls it: `usesWallClock` says the program reads the calendar,
+// which is what both keeps `__clock_now_unix_s` alive and emits `mrt_host_wall_clock`. Gating the two on
+// different questions is how a `bl` to an absent symbol happens, and an unresolved `bl` is a link failure
+// rather than a diagnostic.
 export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, usage RuntimeUsage, globalData GlobalDataTable)
 	// Unconditional: every hand-assembled chunk's libSystem call goes through it, and so does a compiled
 	// function's in a green-thread program.
