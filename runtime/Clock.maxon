@@ -32,13 +32,21 @@ let FileTimeTicksFrom1601To1970 = 116444736000000000
 // once, and a shared word would hand each the other's reading — a wall clock that jumps.
 let WallClockScratchBytes = 8
 
-// The whole FILETIME the host wrote, and the calendar seconds it scales to. ⛔ **BOTH RANGES ARE
-// FULL-RANGE SIGNED, AND THAT IS THE CONTRACT RATHER THAN A MISSING BOUND**: a quotient whose operands
-// both declare a non-negative range is emitted as an UNSIGNED divide, and this arithmetic is the host's
-// signed i64. A narrowed range costs a second thing besides: it is a guarded door, and the guard could only
-// ever fire on a word the host itself wrote.
+// The whole FILETIME the host wrote, and the calendar seconds it scales to.
+//
+// ⛔ **BOTH ARE FULL-RANGE SIGNED, AND THE HOST'S OWN WORD IS WHY.** A FILETIME cannot be negative and
+// `stdlib/Clock.maxon` publishes `UnixSeconds` as `int(0 to u64.max)`, so the unsigned spelling reads as
+// the honest one — and it is not. `0 to u64.max` is not vacuous off a `MachineWord`: it emits a
+// sign-bit test and `__rc_panic` on the loaded word, a second on the quotient, and an unsigned divide in
+// place of the signed magic multiply. MEASURED. Those guards can fire only on a FILETIME past year 30828,
+// which is to say only on a word the host itself wrote — and a runtime body has no caller to report a
+// panic to. A guarded door is exactly what this tier must not have.
+//
+// ⚠ **THE NAME IS `EpochSeconds` AND NOT `UnixSeconds` FOR THAT REASON.** The value crosses into
+// `stdlib`'s `UnixSeconds` at the intrinsic call, where it is non-negative in fact; sharing the name
+// across the boundary would assert the two ranges agree, and they deliberately do not.
 typealias FileTimeTicks = int(i64.min to i64.max)
-typealias UnixSeconds = int(i64.min to i64.max)
+typealias EpochSeconds = int(i64.min to i64.max)
 
 // ⭐ **`__clock_now_unix_s()` — WHOLE SECONDS SINCE 1970-01-01 UTC.** The host op reads its calendar into
 // the scratch word and nothing more; the epoch shift and the ticks→seconds scale are HERE, so a lane
@@ -47,12 +55,12 @@ typealias UnixSeconds = int(i64.min to i64.max)
 // The subtraction cannot underflow on any clock a program can observe: a FILETIME below the 1970 offset
 // means the host's calendar is set before 1970, which Windows does not permit (its own minimum system
 // time is 1980).
-module function __clock_now_unix_s() returns UnixSeconds
+module function __clock_now_unix_s() returns EpochSeconds
 	let ticksAddr = __Raw.scratch(WallClockScratchBytes)
 	__Raw.osReadWallClock(ticksAddr)
 	let ticks = __Raw.loadWord(ticksAddr, offset: 0) as FileTimeTicks
 
-	return ((ticks - FileTimeTicksFrom1601To1970) / FileTimeTicksPerSecond) as UnixSeconds
+	return ((ticks - FileTimeTicksFrom1601To1970) / FileTimeTicksPerSecond) as EpochSeconds
 end '__clock_now_unix_s'
 
 // ⭐ **`__uptime_ms()` — MILLISECONDS SINCE THE MACHINE BOOTED, STRAIGHT THROUGH.** The absence of any
