@@ -232,6 +232,8 @@ end 'main'
 ```
 
 <!-- test: an-unreached-runtime-body-costs-the-program-nothing -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
+⚠ **THE PROPERTY IS TARGET-NEUTRAL AND THE CHANNEL IS NOT.** `RequiredData` is a PREFIX compare, so it can only catch a word inserted where something still TRAILS it — and the only globals laid out after a program's own are the x64-windows console probes. On a lane without them the pinned tail runs past the end of the section, and a shorter `.data` is all the gate can say. The bit this measures is set by a target-neutral walk; what is missing elsewhere is an anchor, not the behaviour.
 ⛔⛔ **A TIER BODY THE PROGRAM CANNOT REACH MUST NOT SPEND ITS BUDGET.** A runtime name is never
 `unreachable` — the tier's bodies are built unconditionally, because no source call edge earns them — and
 `scanRuntimeUsage`'s only skip reads that same set. So a CALL inside a tier body is credited to EVERY
@@ -272,6 +274,8 @@ i8 0
 ```
 
 <!-- test: a-reached-runtime-entry-still-earns-its-word -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
+⚠ **THE PROPERTY IS TARGET-NEUTRAL AND THE CHANNEL IS NOT.** `RequiredData` is a PREFIX compare, so it can only catch a word inserted where something still TRAILS it — and the only globals laid out after a program's own are the x64-windows console probes. On a lane without them the pinned tail runs past the end of the section, and a shorter `.data` is all the gate can say. The bit this measures is set by a target-neutral walk; what is missing elsewhere is an anchor, not the behaviour.
 ⭐⭐ **THE CONTROL ON THE CASE ABOVE, AND WITHOUT IT THE RULE COULD BE *"CREDIT NO TIER BODY, EVER"*.** That
 answer passes the unreached case and is the dangerous direction: a bit left UNSET while the body survives
 leaves `runtime/CpuParallel.maxon`'s query loading a `.data` word the image never laid out. So the same
@@ -316,6 +320,8 @@ __sched_max_active_workers
 ```
 
 <!-- test: reaching-one-family-does-not-credit-another-tier-body -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
+⚠ **THE PROPERTY IS TARGET-NEUTRAL AND THE CHANNEL IS NOT.** `RequiredData` is a PREFIX compare, so it can only catch a word inserted where something still TRAILS it — and the only globals laid out after a program's own are the x64-windows console probes. On a lane without them the pinned tail runs past the end of the section, and a shorter `.data` is all the gate can say. The bit this measures is set by a target-neutral walk; what is missing elsewhere is an anchor, not the behaviour.
 ⭐ **REACHED IS PER ENTRY POINT, NOT PER TIER.** `main` reaches the process family and nothing else, so the
 precise walk runs and files `probeWorkers` unreached — and the worker counters stay out of `.data` even
 though a tier body, compiled into this very image, calls the query that lays them.
