@@ -2045,7 +2045,8 @@ type MaxonToStdLowering
 	// say anything at all.
 	//
 	// `constant` is the compile-time integer the row's shape carried — a frame SLOT for `scratch`, already
-	// laid out by `Parser.reserveRawScratchSlot`, and a byte offset for the two word accessors.
+	// laid out by `Parser.reserveRawScratchSlot`, a byte offset for the four word and byte accessors, and the
+	// fill byte for `memFill`.
 	//
 	// ⚠ **AN ADDRESS ROW NAMES ITS `.data` LABEL HERE AND NOWHERE ELSE, so the label the emitted image lays
 	// out and the label a tier body reads are the SAME constant** (`SchedRuntime`). The slot is laid out on
@@ -2064,6 +2065,19 @@ type MaxonToStdLowering
 			schedMaxActiveWorkersAddr then self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(result, label: SchedMaxActiveWorkersLabel))
 			loadWord then self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(result, addrId: rawWordOperand(args, index: 0, intrinsic: intrinsic), offset: constant as ByteOffset, valueType: StdType.i64))
 			storeWord then self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(rawWordOperand(args, index: 0, intrinsic: intrinsic), offset: constant as ByteOffset, valueId: rawWordOperand(args, index: 1, intrinsic: intrinsic), valueType: StdType.i64))
+			loadByte then self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(result, addrId: rawWordOperand(args, index: 0, intrinsic: intrinsic), offset: constant as ByteOffset, valueType: StdType.u8))
+			storeByte then self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(rawWordOperand(args, index: 0, intrinsic: intrinsic), offset: constant as ByteOffset, valueId: rawWordOperand(args, index: 1, intrinsic: intrinsic), valueType: StdType.u8))
+			atomicAddWord then self.stdModule.appendOp(dstBlock, op: StdOp.atomicRmw(result, addrId: rawWordOperand(args, index: 0, intrinsic: intrinsic), operandId: rawWordOperand(args, index: 1, intrinsic: intrinsic), opcode: StdAtomicRmwOpcode.add))
+			atomicCas then self.stdModule.appendOp(dstBlock, op: StdOp.atomicCas(result, addrId: rawWordOperand(args, index: 0, intrinsic: intrinsic), expectedId: rawWordOperand(args, index: 1, intrinsic: intrinsic), replacementId: rawWordOperand(args, index: 2, intrinsic: intrinsic)))
+			memFill then self.stdModule.appendOp(dstBlock, op: StdOp.memFill(rawWordOperand(args, index: 0, intrinsic: intrinsic), byteCountId: rawWordOperand(args, index: 1, intrinsic: intrinsic), value: constant))
+			osAllocPages then self.stdModule.appendOp(dstBlock, op: StdOp.osAllocPages(result, sizeId: rawWordOperand(args, index: 0, intrinsic: intrinsic)))
+			osReservePages then self.stdModule.appendOp(dstBlock, op: StdOp.osReservePages(result, sizeId: rawWordOperand(args, index: 0, intrinsic: intrinsic)))
+			osCommitPages then self.stdModule.appendOp(dstBlock, op: StdOp.osCommitPages(result, addrId: rawWordOperand(args, index: 0, intrinsic: intrinsic), sizeId: rawWordOperand(args, index: 1, intrinsic: intrinsic)))
+			osDecommitPages then self.stdModule.appendOp(dstBlock, op: StdOp.osDecommitPages(rawWordOperand(args, index: 0, intrinsic: intrinsic), sizeId: rawWordOperand(args, index: 1, intrinsic: intrinsic)))
+			osFreePages then self.stdModule.appendOp(dstBlock, op: StdOp.osFreePages(rawWordOperand(args, index: 0, intrinsic: intrinsic), sizeId: rawWordOperand(args, index: 1, intrinsic: intrinsic)))
+			osLockInit then self.stdModule.appendOp(dstBlock, op: StdOp.osLockInit(rawWordOperand(args, index: 0, intrinsic: intrinsic)))
+			osLockEnter then self.stdModule.appendOp(dstBlock, op: StdOp.osLockEnter(rawWordOperand(args, index: 0, intrinsic: intrinsic)))
+			osLockLeave then self.stdModule.appendOp(dstBlock, op: StdOp.osLockLeave(rawWordOperand(args, index: 0, intrinsic: intrinsic)))
 			ownFrame then self.currentKeepsItsOwnFrame = true
 		end 'row'
 	end 'lowerRawIntrinsic'

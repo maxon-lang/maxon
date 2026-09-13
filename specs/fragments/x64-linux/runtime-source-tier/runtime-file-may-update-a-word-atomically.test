@@ -1,0 +1,29 @@
+// Test: runtime-file-may-update-a-word-atomically
+// --- runtime-file: Probe.maxon
+let ProbeAtomicBytes = 8
+let ProbeDelta = 1 as MachineWord
+let ProbeExpected = 0 as MachineWord
+let ProbeReplacement = 7 as MachineWord
+
+module function probeAtomics() returns MachineWord
+	let addr = __Raw.scratch(ProbeAtomicBytes)
+	let prior = __Raw.atomicAddWord(addr, delta: ProbeDelta)
+	let swapped = __Raw.atomicCas(addr, expected: ProbeExpected, replacement: ProbeReplacement)
+
+	return prior + swapped
+end 'probeAtomics'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

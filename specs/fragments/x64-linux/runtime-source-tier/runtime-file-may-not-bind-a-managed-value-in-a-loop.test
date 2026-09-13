@@ -1,0 +1,18 @@
+// Test: runtime-file-may-not-bind-a-managed-value-in-a-loop
+// --- runtime-file: Probe.maxon
+module function probeWalk() returns MachineWord
+	var seen = 0
+
+	for c in "abc" 'eachByte'
+		seen = seen + (c.byteLength() as MachineWord)
+	end 'eachByte'
+
+	return seen as MachineWord
+end 'probeWalk'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E3153: <fragment>:6:11: a managed value of type 'String' is built in a runtime source file: the reference-counting pass would emit calls into the very runtime this tier defines

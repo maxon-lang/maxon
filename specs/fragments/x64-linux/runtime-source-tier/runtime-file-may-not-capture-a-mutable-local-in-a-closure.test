@@ -1,0 +1,16 @@
+// Test: runtime-file-may-not-capture-a-mutable-local-in-a-closure
+// --- runtime-file: Probe.maxon
+module function probeClosure() returns MachineWord
+	var total = 0 as MachineWord
+	let bump = function(x MachineWord) gives total + x
+	total = bump(1 as MachineWord)
+
+	return total
+end 'probeClosure'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E3153: <fragment>:5:13: a managed value of type 'function' is built in a runtime source file: the reference-counting pass would emit calls into the very runtime this tier defines

@@ -183,7 +183,7 @@ door that records the fact, and a note on it.
 
 Four doors are still standing open rather than shut:
 
-- **`osThreadCpuTicks` is the one `__Raw` row nothing exercises**, as are `reserveRawScratchSlot`'s refusals.
+- **`osThreadCpuTicks` is the one `__Raw` row no spec case spells at all**, as are `reserveRawScratchSlot`'s refusals.
   `osCpuCount`, `schedNumProcsAddr` and `schedMaxActiveWorkersAddr` are the cpu-parallel family's, and
   `builtins-cpu-parallel.md`'s two `-body-is-runtime-source` cases render the bodies they lower to;
   `osGetPid` and `osEnterBackgroundPriority` are the process family's, rendered by
@@ -194,6 +194,19 @@ Four doors are still standing open rather than shut:
   `storeWord` is the fault probe's, and no golden renders that body — what measures it is a LIVE fault, in
   `specs/safety.md`'s three backtrace cases. `osThreadCpuTicks` waits on `__thread_cpu_ticks`, which cannot
   move until a `__Raw` row names the current-GT read its green-thread arm makes.
+  ⭐⭐ **THE SLAB ARENA'S VOCABULARY IS IN AND ITS CONSUMER IS NOT, WHICH IS A DELIBERATE INVERSION OF THE
+  USUAL ORDER.** `loadByte`, `storeByte`, `atomicAddWord`, `atomicCas`, `memFill`, the five page rows
+  (`osAllocPages`, `osReservePages`, `osCommitPages`, `osDecommitPages`, `osFreePages`) and the three
+  `osLock*` rows landed WITHOUT a family, because once the tier supplies allocation a bad tier file breaks
+  `C1` — the compiler `C2` is built with. Each is spelled by a probe case in
+  `specs/runtime-source-tier.md`, so the objection this file records against `osThreadCpuTicks` — a row
+  nothing spells is a row nothing tests — is answered. ⚠ **WHAT A PROBE CASE PROVES STOPS AT THE PARSER AND
+  THE Maxon→Std LOWERING**: the probe is UNCALLED, so dead-function elimination drops the body before
+  instruction selection and no page is taken, no lock entered and no lane's isel consulted. Evidence about
+  the emitted INSTRUCTION is a measurement — spell the rows inside a REACHED tier body and read
+  `--emit-ir-runtime=`.
+  ⛔ **`memcpy` IS NOT A ROW AND MUST NOT BECOME ONE.** The tree has no `memcpy` Std op; bulk copy is a
+  hand-built loop over word and byte chunks, which in tier source is ordinary Maxon over the accessors.
 - **`ownFrame` is the one row that is a DIRECTIVE rather than an operation.** It appends no Std op and
   instead sets `IrFunction.keepsItsOwnFrame`, which `InlineLeaves.functionShape` refuses to splice. Without
   it a tier body small enough to inline is spliced into every call site and then swept, and a runtime entry
@@ -208,15 +221,29 @@ Four doors are still standing open rather than shut:
   cannot fire today — the guard precedes the `lea`, an async stop cannot relocate (`GtRuntime`), and the
   shim window is not a safe point — but a tier body holding a `scratch` address across a guarded call is
   the bug it becomes.
+  ⛔ **IT ALSO HAS NO wasm LOWERING AND THE TABLE CANNOT SAY SO.** `StdOp.stackRecordAddr` panics in
+  `StdToWasm.emitBodyOp` — a wasm local has no address — and no `HostFacility` row names an addressable
+  frame, so the row answers `none` and a REACHED tier body spelling it dies in that backend. MEASURED. Every
+  probe that spells it is unreached, which is why the suite is green there.
 - **A `__Raw` row's host facility reaches no refusable site.** `maxonOpCalleeKind` answers `noCallee`,
   so `LibraryFacts.substrateEntries` never sees one, and a lane without the op reaches instruction
   selection instead of E3104. A substrate-entry row per op is what closes it.
-  ⚠ **FOUR ROWS NAME A FACILITY GENUINELY ABSENT ON A SUPPORTED LANE** — `osCpuCount`, `osGetPid`,
-  `osEnterBackgroundPriority` and `osThreadCpuTicks` — and what refuses the wasm program is the CALLEE route
-  (`TargetFacilities.calleeHostFacility`: the `__cpu_` band, the `__proc_` band, and
-  `ProcessBackgroundPriorityName` by name), not this one. The fourth is spelled by no tier body yet, so
-  nothing exercises its route at all. That covers the one entry point spelling each row; a second tier body
-  spelling any of them would reach instruction selection on wasm with nothing said.
+  ⚠ **SEVEN ROWS NAME A FACILITY A SUPPORTED LANE DOES NOT PROVIDE** — `osCpuCount`, `osGetPid`,
+  `osEnterBackgroundPriority` and `osThreadCpuTicks`, plus `osLockInit`/`osLockEnter`/`osLockLeave`. For the
+  first three what refuses the wasm program is the CALLEE route (`TargetFacilities.calleeHostFacility`: the
+  `__cpu_` band, the `__proc_` band, and `ProcessBackgroundPriorityName` by name), not this one. The other
+  four are spelled only by UNREACHED probe bodies, which dead-function elimination removes before
+  instruction selection, so nothing exercises their route at all; a REACHED tier body spelling any of them
+  reaches instruction selection with nothing said.
+  ⛔ **THE LOCK ROWS' GAP IS TWO GAPS.** wasm refuses them at emission, and on the three POSIX lanes their
+  `mrt_host_lock_*` chunk is installed only under `PosixRuntime.posixUsesHostObjects` — green threads,
+  DebugStream or a shared section — so a fourth producer calls a symbol the image never laid out (MEASURED:
+  `bl to unknown function 'mrt_host_lock_init'`). `HostFacility.hostMutex` is therefore `false` on all four
+  non-Windows lanes, and is claimed by widening that union alongside the first tier body that spells them.
+  ⚠ **`HostFacility.pageMemory` IS `true` ON ALL FIVE LANES, MEASURED RATHER THAN ASSUMED** — including
+  wasm32-wasi, where `memory.grow` is the whole page API, a reserve IS an alloc, and a decommit or a free
+  emits nothing. `targetProvidesFacility` spells wasm32-wasi as its OWN BLOCK rather than reaching the
+  fallthrough `false`, which is what lets that row be stated at all.
 
 - **Build it:** `./maxon-bin/.maxon/maxon build maxon-bin` at the repo root. `build.maxon` there
   declares the one target, so a bare `maxon build` builds it; name it anyway, because the seed rule

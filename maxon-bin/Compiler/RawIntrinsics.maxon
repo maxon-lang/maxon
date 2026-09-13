@@ -37,6 +37,19 @@ let RawSchedNumProcsAddrName = b"__Raw.schedNumProcsAddr"
 let RawSchedMaxActiveWorkersAddrName = b"__Raw.schedMaxActiveWorkersAddr"
 let RawLoadWordName = b"__Raw.loadWord"
 let RawStoreWordName = b"__Raw.storeWord"
+let RawLoadByteName = b"__Raw.loadByte"
+let RawStoreByteName = b"__Raw.storeByte"
+let RawAtomicAddWordName = b"__Raw.atomicAddWord"
+let RawAtomicCasName = b"__Raw.atomicCas"
+let RawMemFillName = b"__Raw.memFill"
+let RawOsAllocPagesName = b"__Raw.osAllocPages"
+let RawOsReservePagesName = b"__Raw.osReservePages"
+let RawOsCommitPagesName = b"__Raw.osCommitPages"
+let RawOsDecommitPagesName = b"__Raw.osDecommitPages"
+let RawOsFreePagesName = b"__Raw.osFreePages"
+let RawOsLockInitName = b"__Raw.osLockInit"
+let RawOsLockEnterName = b"__Raw.osLockEnter"
+let RawOsLockLeaveName = b"__Raw.osLockLeave"
 let RawOwnFrameName = b"__Raw.ownFrame"
 
 export enum RawIntrinsic
@@ -69,6 +82,45 @@ export enum RawIntrinsic
 	loadWord
 	storeWord
 
+	// ⭐ **A BYTE IS NOT A NARROW WORD.** An allocator's bitmaps, headers and poison bytes are addressed one
+	// byte at a time, and a masked `storeWord` writes the seven neighbours too — so the byte width is its own
+	// pair of rows rather than something a body can build out of the word rows.
+	loadByte
+	storeByte
+
+	// ⚠ **NEITHER ATOMIC TAKES AN OFFSET, AND THE TWO ANSWER IN OPPOSITE CONVENTIONS.** An atomic names ONE
+	// word, so a caller addressing a field computes `addr + k` itself; `atomicAddWord` answers the PRIOR
+	// value and `atomicCas` answers 1/0 SUCCESS. Both are `StdOp`'s own contracts — see `StdOp.atomicRmw`
+	// and `StdOp.atomicCas` for why reversing either costs an instruction on both ISAs.
+	atomicAddWord
+	atomicCas
+
+	// ⭐ **THE FILL IS A ROW BECAUSE WHAT IT BECOMES IS A SIZE LADDER**, and choosing an instruction sequence
+	// by size is not something this floor can say. Its byte is the shape's CONSTANT position, which is what
+	// lets the selector broadcast it into a 64-bit immediate at compile time.
+	memFill
+
+	// ⭐⭐ **FIVE PAGE ROWS, BECAUSE RESERVING ADDRESS SPACE AND BACKING IT ARE DIFFERENT QUESTIONS.**
+	// `osAllocPages` does both at once and charges the process for the whole arena on the day it maps it;
+	// the reserve/commit pair lets an arena be sized for the address space it wants while a small program
+	// commits a fraction of it. `osDecommitPages` returns the backing and KEEPS the reservation, so the base
+	// stays valid, where `osFreePages` returns both.
+	//
+	// ⛔ **`osCommitPages` DESTROYS THE CONTENTS OF THE RANGE ON THE THREE POSIX LANES**, where a commit is a
+	// `MAP_FIXED` mapping that replaces whatever was there with fresh zeroed pages; Windows keeps every byte.
+	// A caller may commit only a range it holds no data in.
+	osAllocPages
+	osReservePages
+	osCommitPages
+	osDecommitPages
+	osFreePages
+
+	// The lock is the REGION the caller set aside, not a handle the OS hands back: the host object behind it
+	// differs in size and shape per platform, so each row takes an address and answers nothing.
+	osLockInit
+	osLockEnter
+	osLockLeave
+
 	// ⭐⭐ **THE ONE ROW THAT IS A DIRECTIVE RATHER THAN AN OPERATION.** It emits no instruction; it states
 	// that the enclosing function's FRAME is its product, so nothing may splice the body away. A runtime
 	// body whose whole contract is the call itself — a checkpoint a profile attaches to, a stack-walk entry
@@ -83,15 +135,17 @@ end 'RawIntrinsic'
 //
 // A WORD position is an ordinary SSA value — an address, a handle, the word being stored. A CONSTANT
 // position is a compile-time integer the emitted instruction CARRIES in place of an operand: a scratch
-// record's size fixes a frame slot and a field offset is encoded in the addressing mode, so neither can
-// be a value computed at run time.
+// record's size fixes a frame slot, a field offset is encoded in the addressing mode, and a fill byte is
+// broadcast into an immediate, so none of the three can be a value computed at run time.
 enum RawArgShape
 	nothing
 	oneWord
 	twoWords
+	threeWords
 	oneConstant
 	wordThenConstant
 	wordConstantWord
+	twoWordsThenConstant
 end 'RawArgShape'
 
 // What a row ANSWERS. `nothing` is a void intrinsic — legal as a statement and refused in value position,
@@ -163,6 +217,58 @@ function rawIntrinsicLookupOf(callee ByteArray) returns RawIntrinsicLookup
 		return RawIntrinsicLookup.found(RawIntrinsic.storeWord)
 	end 'storeWord'
 
+	if callee.equals(RawLoadByteName) 'loadByte'
+		return RawIntrinsicLookup.found(RawIntrinsic.loadByte)
+	end 'loadByte'
+
+	if callee.equals(RawStoreByteName) 'storeByte'
+		return RawIntrinsicLookup.found(RawIntrinsic.storeByte)
+	end 'storeByte'
+
+	if callee.equals(RawAtomicAddWordName) 'atomicAddWord'
+		return RawIntrinsicLookup.found(RawIntrinsic.atomicAddWord)
+	end 'atomicAddWord'
+
+	if callee.equals(RawAtomicCasName) 'atomicCas'
+		return RawIntrinsicLookup.found(RawIntrinsic.atomicCas)
+	end 'atomicCas'
+
+	if callee.equals(RawMemFillName) 'memFill'
+		return RawIntrinsicLookup.found(RawIntrinsic.memFill)
+	end 'memFill'
+
+	if callee.equals(RawOsAllocPagesName) 'osAllocPages'
+		return RawIntrinsicLookup.found(RawIntrinsic.osAllocPages)
+	end 'osAllocPages'
+
+	if callee.equals(RawOsReservePagesName) 'osReservePages'
+		return RawIntrinsicLookup.found(RawIntrinsic.osReservePages)
+	end 'osReservePages'
+
+	if callee.equals(RawOsCommitPagesName) 'osCommitPages'
+		return RawIntrinsicLookup.found(RawIntrinsic.osCommitPages)
+	end 'osCommitPages'
+
+	if callee.equals(RawOsDecommitPagesName) 'osDecommitPages'
+		return RawIntrinsicLookup.found(RawIntrinsic.osDecommitPages)
+	end 'osDecommitPages'
+
+	if callee.equals(RawOsFreePagesName) 'osFreePages'
+		return RawIntrinsicLookup.found(RawIntrinsic.osFreePages)
+	end 'osFreePages'
+
+	if callee.equals(RawOsLockInitName) 'osLockInit'
+		return RawIntrinsicLookup.found(RawIntrinsic.osLockInit)
+	end 'osLockInit'
+
+	if callee.equals(RawOsLockEnterName) 'osLockEnter'
+		return RawIntrinsicLookup.found(RawIntrinsic.osLockEnter)
+	end 'osLockEnter'
+
+	if callee.equals(RawOsLockLeaveName) 'osLockLeave'
+		return RawIntrinsicLookup.found(RawIntrinsic.osLockLeave)
+	end 'osLockLeave'
+
 	if callee.equals(RawOwnFrameName) 'ownFrame'
 		return RawIntrinsicLookup.found(RawIntrinsic.ownFrame)
 	end 'ownFrame'
@@ -204,6 +310,19 @@ export function rawIntrinsicCalleeName(intrinsic RawIntrinsic) returns ByteArray
 		schedMaxActiveWorkersAddr gives RawSchedMaxActiveWorkersAddrName
 		loadWord gives RawLoadWordName
 		storeWord gives RawStoreWordName
+		loadByte gives RawLoadByteName
+		storeByte gives RawStoreByteName
+		atomicAddWord gives RawAtomicAddWordName
+		atomicCas gives RawAtomicCasName
+		memFill gives RawMemFillName
+		osAllocPages gives RawOsAllocPagesName
+		osReservePages gives RawOsReservePagesName
+		osCommitPages gives RawOsCommitPagesName
+		osDecommitPages gives RawOsDecommitPagesName
+		osFreePages gives RawOsFreePagesName
+		osLockInit gives RawOsLockInitName
+		osLockEnter gives RawOsLockEnterName
+		osLockLeave gives RawOsLockLeaveName
 		ownFrame gives RawOwnFrameName
 	end 'name'
 end 'rawIntrinsicCalleeName'
@@ -219,8 +338,21 @@ export function rawArgShapeOf(intrinsic RawIntrinsic) returns RawArgShape
 		scratch gives RawArgShape.oneConstant
 		schedNumProcsAddr or
 			schedMaxActiveWorkersAddr gives RawArgShape.nothing
-		loadWord gives RawArgShape.wordThenConstant
-		storeWord gives RawArgShape.wordConstantWord
+		loadWord or
+			loadByte gives RawArgShape.wordThenConstant
+		storeWord or
+			storeByte gives RawArgShape.wordConstantWord
+		atomicAddWord gives RawArgShape.twoWords
+		atomicCas gives RawArgShape.threeWords
+		memFill gives RawArgShape.twoWordsThenConstant
+		osAllocPages or
+			osReservePages or
+			osLockInit or
+			osLockEnter or
+			osLockLeave gives RawArgShape.oneWord
+		osCommitPages or
+			osDecommitPages or
+			osFreePages gives RawArgShape.twoWords
 		ownFrame gives RawArgShape.nothing
 	end 'shape'
 end 'rawArgShapeOf'
@@ -236,8 +368,21 @@ export function rawResultKindOf(intrinsic RawIntrinsic) returns RawResultKind
 			scratch or
 			schedNumProcsAddr or
 			schedMaxActiveWorkersAddr or
-			loadWord gives RawResultKind.machineWord
+			loadWord or
+			loadByte or
+			atomicAddWord or
+			atomicCas or
+			osAllocPages or
+			osReservePages or
+			osCommitPages gives RawResultKind.machineWord
 		storeWord or
+			storeByte or
+			memFill or
+			osDecommitPages or
+			osFreePages or
+			osLockInit or
+			osLockEnter or
+			osLockLeave or
 			ownFrame gives RawResultKind.nothing
 	end 'result'
 end 'rawResultKindOf'
@@ -252,7 +397,9 @@ export function rawArgCountOf(shape RawArgShape) returns ParamCount
 		oneConstant gives 1 as ParamCount
 		twoWords gives 2 as ParamCount
 		wordThenConstant gives 2 as ParamCount
-		wordConstantWord gives 3 as ParamCount
+		threeWords or
+			wordConstantWord or
+			twoWordsThenConstant gives 3 as ParamCount
 	end 'count'
 end 'rawArgCountOf'
 
@@ -263,16 +410,18 @@ export function rawArgumentIsTheConstant(shape RawArgShape, position ParamCount)
 	return match shape 'position'
 		nothing or
 			oneWord or
-			twoWords gives false
+			twoWords or
+			threeWords gives false
 		oneConstant gives position == 0
 		wordThenConstant or
 			wordConstantWord gives position == 1
+		twoWordsThenConstant gives position == 2
 	end 'position'
 end 'rawArgumentIsTheConstant'
 
 // ⭐⭐ **THE HOST FACILITY A ROW'S INSTRUCTION NEEDS.** It is the same question `TargetFacilities` answers
-// for every runtime entry, asked of an op instead — the six OS rows name facilities that already exist
-// for exactly these Std ops.
+// for every runtime entry, asked of an op instead — every OS row names a facility that exists for exactly
+// these Std ops.
 //
 // ⛔ **NOTHING REPORTS OFF IT YET, AND THE SITE THAT WOULD IS `LibraryFacts.substrateEntries`.**
 // `SemanticCheck.requireTargetSupportsRawIntrinsic` is the reader, and it blames only a function that is
@@ -281,14 +430,18 @@ end 'rawArgumentIsTheConstant'
 // library, and that table is built from CALLEES: an op names none, so a row's facility reaches no
 // user-refusable site. Until it does, a lane missing the facility reaches instruction selection.
 //
-// ⚠ **FOUR ROWS NAME A FACILITY THAT IS GENUINELY ABSENT ON A SUPPORTED LANE, AND WHAT KEEPS THE GAP
-// SHUT IS A SECOND ROUTE RATHER THAN THIS ONE.** `osCpuCount`, `osGetPid`, `osEnterBackgroundPriority` and
-// `osThreadCpuTicks` have no wasm lowering — WASI has no per-thread CPU clock at all, which
-// `TargetFacilities` records as permanent rather than pending. A program asking for one of the first three
-// is refused at the call to `__cpu_count`, `__proc_pid` or `__proc_bg_priority` by
-// `TargetFacilities.calleeHostFacility`, which reads the CALLEE name and band; the fourth is spelled by no
-// tier body yet, so nothing tests its route. That covers the one entry point spelling each row today, and a
-// second tier body spelling any of them would reach instruction selection on that lane with nothing said.
+// ⚠ **SEVEN ROWS NAME A FACILITY A SUPPORTED LANE DOES NOT PROVIDE, AND WHAT KEEPS THE GAP SHUT IS A
+// SECOND ROUTE OR DEAD-FUNCTION ELIMINATION RATHER THAN THIS ONE.** `osCpuCount`, `osGetPid`,
+// `osEnterBackgroundPriority` and `osThreadCpuTicks` have no wasm lowering; the three `osLock*` rows have
+// none there either, and on the three POSIX lanes their chunk is installed only for a program that already
+// runs green threads, traces or maps a section — so a fourth producer calls a symbol the image never laid
+// out. A program asking for one of the first three is refused at the call to `__cpu_count`, `__proc_pid` or
+// `__proc_bg_priority` by `TargetFacilities.calleeHostFacility`, which reads the CALLEE name and band. The
+// other four are spelled by no REACHED tier body, so dead-function elimination removes them before
+// instruction selection and nothing exercises their route at all. ⇒ **a reached tier body spelling one of
+// the seven reaches instruction selection with nothing said**, which is what the lock rows' consumer owes
+// before it spells them: widening `PosixRuntime.posixUsesHostObjects` to count a `__Raw.osLock*` producer,
+// and the substrate-entry row below.
 //
 // ⚠ **`none` IS "NO HOST FACILITY", NOT "EVERY TARGET".** The word and address rows are pure code
 // generation on the lanes that have an addressable frame, and wasm is not one of them: a wasm local has no
@@ -309,11 +462,24 @@ export function rawHostFacilityOf(intrinsic RawIntrinsic) returns RawHostFacilit
 		osCpuCount gives RawHostFacility.required(HostFacility.cpuCount)
 		osGetPid gives RawHostFacility.required(HostFacility.processInfo)
 		osEnterBackgroundPriority gives RawHostFacility.required(HostFacility.processPriority)
+		osAllocPages or
+			osReservePages or
+			osCommitPages or
+			osDecommitPages or
+			osFreePages gives RawHostFacility.required(HostFacility.pageMemory)
+		osLockInit or
+			osLockEnter or
+			osLockLeave gives RawHostFacility.required(HostFacility.hostMutex)
 		scratch or
 			schedNumProcsAddr or
 			schedMaxActiveWorkersAddr or
 			loadWord or
 			storeWord or
+			loadByte or
+			storeByte or
+			atomicAddWord or
+			atomicCas or
+			memFill or
 			ownFrame gives RawHostFacility.none
 	end 'facility'
 end 'rawHostFacilityOf'

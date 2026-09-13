@@ -131,6 +131,28 @@ export enum HostFacility
 	// How many processors the machine has (`__cpu_count`).
 	cpuCount
 
+	// ⭐⭐ **PAGES FROM THE OS — reserve, commit, decommit and free (`StdOp.osAllocPages`,
+	// `osReservePages`, `osCommitPages`, `osDecommitPages`, `osFreePages`).** One facility over all five
+	// rather than one per verb, on this enum's stated rule that a facility is named for what the HOST
+	// provides: the five are one page API per platform (`VirtualAlloc`/`VirtualFree`, `mmap`/`munmap`/
+	// `madvise`, `memory.grow`), and a lane that lowers one lowers all of them or none.
+	//
+	// ⚠ **wasm32-wasi PROVIDES IT, AND ITS RESERVE IS ITS ALLOC.** Linear memory only ever GROWS and
+	// `memory.grow` both takes the range and backs it, so there is no state between "not there" and "there"
+	// for a reservation to occupy; the decommit and the free emit nothing. That is the honest translation of
+	// a distinction the machine does not have, not a gap — see `StdOp.osReservePages`.
+	pageMemory
+
+	// ⭐ **AN OS MUTUAL-EXCLUSION LOCK over a region the caller owns (`StdOp.osLockInit`, `osLockEnter`,
+	// `osLockLeave`).** Its own facility rather than a corner of `greenThreads`: the scheduler is the only
+	// consumer today, but the object is a bare host primitive with no scheduler in it, and a lane can serve
+	// one without the other.
+	//
+	// ⛔ **wasm32-wasi DOES NOT PROVIDE IT, AND THAT IS PERMANENT RATHER THAN PENDING.** A WASI component has
+	// one thread, so there is no second party to exclude and no host object to name; the three ops are
+	// refused at emission there.
+	hostMutex
+
 	// Whether a standard stream is a TERMINAL (`__tty_*`). Its own facility rather than a corner of
 	// `consoleStdin`, on this enum's stated rule that a facility is named for what the HOST provides:
 	// reading standard input and asking the OS what KIND of object a handle is are two different questions
@@ -570,6 +592,18 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// (`runtime/CpuParallel.maxon`'s `__cpu_count`), so this lane supplies only the read.
 			cpuCount gives true
 
+			// ⭐ **THE PAGE API, WHICH THE ALLOCATOR ALREADY SPENDS ON THIS LANE.** All five ops lower to
+			// `mmap`/`munmap`/`madvise` inline, with no chunk to install, so any producer reaches them.
+			pageMemory gives true
+
+			// ⛔ **THE LOCK'S LOWERING IS A CHUNK GATED ON `posixUsesHostObjects`, AND THAT UNION HAS NO
+			// `__Raw.osLock*` PRODUCER IN IT** — so a program that locks without running green threads,
+			// tracing or mapping a section `bl`s a symbol the image never laid out. MEASURED as
+			// `arm64ResolveCallFixups: bl to unknown function 'mrt_host_lock_init'`, which is the failure
+			// `posixReadsEnvironment` records one facility over. This row is claimed by widening that union,
+			// alongside the first tier body that spells the rows.
+			hostMutex gives false
+
 			// ⭐⭐ **THE GREEN-THREAD FLOOR AND EVERYTHING STANDING ON IT.** The hand-assembled chunks have their
 			// AAPCS64 twins in `Arm64GtRuntime.appendArm64GtRuntimeChunks`, the prologue stack guard and the
 			// import-call stack shim are emitted inline beside them, and the P/M tier's own host objects — the
@@ -781,6 +815,12 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// which is what a parallelism hint wants, and what `nproc` itself answers.
 			cpuCount gives true
 
+			// The arm64-macOS row's two reasons, unchanged by the ISA: the page ops are inline `mmap`s that
+			// need no chunk, and the lock's chunk rides `posixUsesHostObjects`, which no `__Raw.osLock*`
+			// producer is in.
+			pageMemory gives true
+			hostMutex gives false
+
 			// ⭐⭐⭐ **THE SOCKET BAND — INLINE `svc`s AND A RESOLVER WRITTEN IN Std IR, BECAUSE THERE IS NO
 			// `getaddrinfo` ON A LANE THAT LINKS NO LIBC.** The transfers are `sendto`/`recvfrom` with a NULL peer
 			// (AArch64 has no `send`/`recv` syscall at all) and every raw answer reaches the Std tier as the
@@ -884,6 +924,12 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// the CPUs the machine has — which is what a parallelism hint wants and what `nproc` answers.
 			cpuCount gives true
 
+			// The arm64-macOS row's two reasons, unchanged by the ISA: the page ops are inline `mmap`s that
+			// need no chunk, and the lock's chunk rides `posixUsesHostObjects`, which no `__Raw.osLock*`
+			// producer is in.
+			pageMemory gives true
+			hostMutex gives false
+
 			// ⛔⛔ **THESE FIVE ROWS ARE INDIVISIBLE: A LANE PROVIDES ALL OF THEM OR NONE, AND FLIPPING ONE
 			// ALONE MAKES A PROGRAM THAT PANICS IN THE ISEL.** Whoever next touches them is bound by it:
 			//
@@ -964,6 +1010,52 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 		end 'f'
 	end 'linuxX64'
 
+	if target.cpu == CpuArch.wasm32 and target.os == Os.wasi 'wasmWasi'
+		return match facility 'f'
+			// ⭐⭐ **THE ONE ROW THIS LANE CLAIMS, AND IT IS THE ONE ITS HEAP ALREADY STANDS ON.**
+			// `memory.grow` is the whole page API here: it takes the range and backs it, so a reserve IS an
+			// alloc, a commit copies the address through, and a decommit or a free emits nothing — linear
+			// memory never shrinks. Every one of the five ops has an arm in `StdToWasm.emitBodyOp`, which is
+			// what a `true` promises.
+			pageMemory gives true
+
+			// ⛔ **PERMANENT, NOT PENDING — there is no second party to exclude.** A WASI component has one
+			// thread, so a mutex names no host object and the three ops are refused at emission.
+			hostMutex gives false
+
+			// ⛔ **THE REST ARE ABSENT, AND FOR TWO DIFFERENT KINDS OF REASON THIS COLUMN DOES NOT RECORD.**
+			// A WASI component has one thread and no process-spawn primitive, so the green-thread floor,
+			// the child-process band and the per-thread CPU clock are permanent refusals; the file, directory,
+			// socket, argv, stdin, identity, priority, machine-query and named-section families are surfaces
+			// nobody has ported. `SemanticCheck.targetCanHostSubprocess` is where the permanent half of that
+			// distinction is written down, reading this table's SUBJECT rather than its answer.
+			//
+			// ⚠ `terminalDetection` is the row whose `false` is an ANSWER rather than a refusal:
+			// `TerminalRuntime.installTerminalRuntime` reads it and builds a body answering "not a terminal".
+			monotonicClock or
+				wallClock or
+				threadCpuClock or
+				uptimeClock or
+				sleep or
+				reschedule or
+				greenThreads or
+				subprocess or
+				managedFile or
+				managedDirectory or
+				managedSocket or
+				commandLine or
+				consoleStdin or
+				processInfo or
+				processPriority or
+				cpuCount or
+				terminalDetection or
+				sharedMemory or
+				processSampling gives false
+		end 'f'
+	end 'wasmWasi'
+
+	// Every CPU/OS pair the driver does not support. `Target` is a product of two enums, so most of its
+	// combinations name no lane at all and none of them provides anything.
 	return false
 end 'targetProvidesFacility'
 

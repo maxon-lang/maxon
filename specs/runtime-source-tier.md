@@ -41,12 +41,11 @@ clock, `runtime/Clock.maxon`'s `__clock_now_unix_s` — reached from a user prog
 outside the tier may CALL a runtime entry, so a call the compiler emits is the only root a program can
 deliberately reach one through, and a family that has one is the only honest way to watch the far end.
 
-⛔ **THE REFUSAL IS OVER THE CALL DOOR AND NOT OVER THE NAME, AND THE VALUE DOOR IS OPEN.** A user file
-that mentions a runtime entry in VALUE position — `let f = __parallel_boundary` — passes no reserved-name
-check, resolves to the tier's declaration and links; called through that value it reaches the entry by way
-of a synthesized `__fnref_` thunk. Nothing below tests it, and no test here should be read as saying the
-name itself is out of a program's reach. `maxon-bin/CLAUDE.md` carries the measurement and states what
-closing it would cost.
+⛔ **THE PROTECTION TAKES TWO REFUSALS, BECAUSE A NAME CAN BE REACHED THROUGH TWO DOORS.** A user file
+CALLING a runtime entry earns E3004 and one NAMING it in value position — `let f = __parallel_boundary`,
+which would otherwise resolve to the tier's declaration and reach it through a synthesized `__fnref_` thunk
+— earns E3155. Both are conjoined with the same tier test, so the property is *"no source file outside the
+tier may CALL or NAME a runtime entry"* rather than a rule about call syntax.
 
 The restrictions are what a runtime cannot have:
 
@@ -225,6 +224,175 @@ dropped before instruction selection. What is under test is the TABLE.
 function probeBackgroundPriority() returns MachineWord
 	return __Raw.osEnterBackgroundPriority()
 end 'probeBackgroundPriority'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: runtime-file-may-address-a-single-byte -->
+**THE WORD ROWS HAVE A BYTE-WIDE TWIN, AND A BYTE IS NOT A NARROW WORD.** `loadWord`/`storeWord` move
+the machine's own unit; an allocator's bitmaps, headers and poison bytes are addressed one byte at a
+time, and a tier body cannot get at one by masking — a `storeWord` of a masked value writes the seven
+neighbours too. So the floor carries `loadByte`/`storeByte`, which lower to the same `loadIndirect`
+/`storeIndirect` the word rows do under `StdType.u8`.
+
+The probe reaches a byte through the frame address `__Raw.scratch` answers, which is the only address
+a tier body can obtain without asking the OS for one.
+
+⚠ The probe is uncalled, so dead-function elimination drops the body before instruction selection and
+the case runs on every lane. What is under test is the TABLE: the two rows exist, the tier may spell
+them, and a load answers a machine word while a store answers nothing.
+```maxon
+// --- runtime-file: Probe.maxon
+let ProbeScratchBytes = 8
+let ProbeByte = 255 as MachineWord
+
+module function probeBytes() returns MachineWord
+	let addr = __Raw.scratch(ProbeScratchBytes)
+	__Raw.storeByte(addr, offset: 0, value: ProbeByte)
+
+	return __Raw.loadByte(addr, offset: 0)
+end 'probeBytes'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: runtime-file-may-update-a-word-atomically -->
+⭐⭐ **THE TWO ATOMICS, AND THEY ANSWER IN OPPOSITE CONVENTIONS ON PURPOSE.** `atomicAddWord` answers the
+PRIOR value, which is what both ISAs' read-modify-write instructions leave behind and what a caller
+wanting the new one recovers with a single add; `atomicCas` answers 1 on success and 0 on failure, which
+is what both ISAs leave in their flags and what every compare-and-swap loop tests. A caller written for
+one convention against an op implementing the other loops for ever on a legitimately failing swap, so the
+two rows are read here together.
+
+⛔ **NEITHER TAKES AN OFFSET, AND THAT IS THE STD OPS' RULE RATHER THAN AN OMISSION** — an atomic names
+ONE word and nothing else, so a caller addressing a field computes `addr + k` itself. That is why their
+shapes are `twoWords` and `threeWords` where the byte and word accessors carry a constant displacement.
+
+⚠ The probe is uncalled, so dead-function elimination drops the body before instruction selection and the
+case runs on every lane. What is under test is the TABLE.
+```maxon
+// --- runtime-file: Probe.maxon
+let ProbeAtomicBytes = 8
+let ProbeDelta = 1 as MachineWord
+let ProbeExpected = 0 as MachineWord
+let ProbeReplacement = 7 as MachineWord
+
+module function probeAtomics() returns MachineWord
+	let addr = __Raw.scratch(ProbeAtomicBytes)
+	let prior = __Raw.atomicAddWord(addr, delta: ProbeDelta)
+	let swapped = __Raw.atomicCas(addr, expected: ProbeExpected, replacement: ProbeReplacement)
+
+	return prior + swapped
+end 'probeAtomics'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: runtime-file-may-fill-a-range-with-one-byte -->
+⭐ **THE FILL IS A ROW BECAUSE THE THING IT BECOMES IS A SIZE LADDER, AND A TIER BODY CANNOT WRITE ONE.**
+Spelled out of `storeByte`, zeroing a recycled slot is one store, one add, one compare and one branch per
+byte; the backend picks overlapping stores, a block loop or `rep stosq` by SIZE, and choosing an
+instruction sequence by size is not something this floor has the vocabulary to say.
+
+⛔ **THE FILL BYTE IS A COMPILE-TIME CONSTANT AND THE ROW'S SHAPE SAYS SO.** Every producer of a fill
+knows its pattern at compile time — zero to restore the zeroing contract, a poison byte to mark a dead
+payload — and a constant is what lets the instruction selector broadcast the byte across a 64-bit
+immediate for free. A value operand would buy a generality no caller asks for and charge every fill a
+runtime multiply.
+
+⚠ The probe is uncalled, so dead-function elimination drops the body before instruction selection and the
+case runs on every lane. What is under test is the TABLE.
+```maxon
+// --- runtime-file: Probe.maxon
+let ProbeFillBytes = 16
+let ProbeFillByte = 0
+
+module function probeFill()
+	let addr = __Raw.scratch(ProbeFillBytes)
+	__Raw.memFill(addr, byteCount: ProbeFillBytes as MachineWord, value: ProbeFillByte)
+end 'probeFill'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: runtime-file-may-take-pages-from-the-os -->
+⭐⭐ **FIVE PAGE ROWS, AND THEY ARE FIVE BECAUSE RESERVING ADDRESS SPACE AND BACKING IT ARE DIFFERENT
+QUESTIONS.** `osAllocPages` does both at once, which charges an allocator for every byte of the arena it
+wants to OWN on the day it maps it. `osReservePages` takes address space with no backing and
+`osCommitPages` backs a range inside it, so an arena can be sized for the address space it wants while a
+hello-world commits a fraction of it. `osDecommitPages` gives the backing back and KEEPS the reservation,
+so the base stays valid; `osFreePages` gives both back and the base does not.
+
+⛔ **`osCommitPages` DESTROYS THE CONTENTS OF THE RANGE IT COMMITS ON THE THREE POSIX LANES.** POSIX has
+no commit call — the mapping IS the commitment, so a commit is a `MAP_FIXED` mapping that REPLACES
+whatever was there with fresh zeroed pages, where Windows keeps every byte. A caller may therefore commit
+only a range it holds no data in.
+
+⚠ The probe is uncalled, so dead-function elimination drops the body before instruction selection: no
+page is taken, none is leaked, and the case runs on every lane. What is under test is the TABLE.
+```maxon
+// --- runtime-file: Probe.maxon
+let ProbePageBytes = 65536 as MachineWord
+
+module function probePages() returns MachineWord
+	let reserved = __Raw.osReservePages(ProbePageBytes)
+	let committed = __Raw.osCommitPages(reserved, size: ProbePageBytes)
+	__Raw.osDecommitPages(committed, size: ProbePageBytes)
+	__Raw.osFreePages(reserved, size: ProbePageBytes)
+
+	let whole = __Raw.osAllocPages(ProbePageBytes)
+	__Raw.osFreePages(whole, size: ProbePageBytes)
+
+	return committed
+end 'probePages'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: runtime-file-may-guard-a-word-with-an-os-lock -->
+**THE THREE LOCK ROWS, OVER A REGION THE CALLER OWNS RATHER THAN A HANDLE THE OS HANDS BACK.** Each takes
+the ADDRESS of a region the caller has set aside and nothing else: the OS objects behind them differ in
+size and shape per platform, so the region is the lock and the row carries no result to store. A tier
+body's own frame is a region it owns, which is what `__Raw.scratch` answers here.
+
+⚠ The probe is uncalled, so dead-function elimination drops the body before instruction selection — no
+lock is initialised and none is entered — and the case runs on every lane. What is under test is the
+TABLE.
+```maxon
+// --- runtime-file: Probe.maxon
+let ProbeLockBytes = 64
+
+module function probeLock()
+	let lock = __Raw.scratch(ProbeLockBytes)
+	__Raw.osLockInit(lock)
+	__Raw.osLockEnter(lock)
+	__Raw.osLockLeave(lock)
+end 'probeLock'
 // --- file: main.maxon
 function main() returns ExitCode
 	return 0
@@ -499,44 +667,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3153: <fragment>:5:13: a managed value of type 'function' is built in a runtime source file: the reference-counting pass would emit calls into the very runtime this tier defines
-```
-
-<!-- test: runtime-file-may-walk-raw-words-in-a-loop -->
-⭐⭐ **THE CONTROL, AND WITHOUT IT THE RULE COULD BE *"REFUSE EVERY LOOP IN `runtime/`"*.** That answer
-passes every refusal above and is the dangerous direction: the allocator is the next family to migrate and
-it is the first tier code written out of counted loops, bit-run walks and copy ranges. A rule that refused
-a `for` — rather than refusing a MANAGED VALUE a `for` can happen to build — would make that port
-impossible while every case above stayed green.
-
-Both loop forms are here because they bind differently: a `for` element is bound by the loop's own door,
-which is precisely the door the first refusal above closed, and a `while` condition binds nothing at all.
-Every value this body builds is a machine word, so the file is legal and compiles.
-```maxon
-// --- runtime-file: Probe.maxon
-module function probeWords() returns MachineWord
-	var total = 0 as MachineWord
-
-	for i in 0 upto 4 'eachIndex'
-		total = total + (i as MachineWord)
-	end 'eachIndex'
-
-	var bits = total
-	var runs = 0 as MachineWord
-
-	while bits > 0 'eachRun'
-		runs = runs + (bits and 1)
-		bits = bits shr 1
-	end 'eachRun'
-
-	return runs
-end 'probeWords'
-// --- file: main.maxon
-function main() returns ExitCode
-	return 0
-end 'main'
-```
-```exitcode
-0
 ```
 
 <!-- test: runtime-file-may-catch-an-unmanaged-error -->

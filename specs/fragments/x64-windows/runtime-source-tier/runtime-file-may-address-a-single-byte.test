@@ -1,0 +1,32 @@
+// Test: runtime-file-may-address-a-single-byte
+// --- runtime-file: Probe.maxon
+let ProbeScratchBytes = 8
+let ProbeByte = 255 as MachineWord
+
+module function probeBytes() returns MachineWord
+	let addr = __Raw.scratch(ProbeScratchBytes)
+	__Raw.storeByte(addr, offset: 0, value: ProbeByte)
+
+	return __Raw.loadByte(addr, offset: 0)
+end 'probeBytes'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

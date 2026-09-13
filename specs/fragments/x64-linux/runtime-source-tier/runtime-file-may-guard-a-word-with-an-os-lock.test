@@ -1,0 +1,25 @@
+// Test: runtime-file-may-guard-a-word-with-an-os-lock
+// --- runtime-file: Probe.maxon
+let ProbeLockBytes = 64
+
+module function probeLock()
+	let lock = __Raw.scratch(ProbeLockBytes)
+	__Raw.osLockInit(lock)
+	__Raw.osLockEnter(lock)
+	__Raw.osLockLeave(lock)
+end 'probeLock'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
