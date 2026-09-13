@@ -164,11 +164,12 @@ typealias StdlibNodeByName = Map with (ByteArray, CsrIndex)
 // handler roster once rather than once per `spawn`.
 typealias CreditedServiceSet = Set with ByteArray
 
-// ⭐ THE TWO FACTS ABOUT LIBRARY SOURCE A COMPILE DERIVES, from ONE walk of the merged module. They are one
-// object rather than two `Project` fields because they are one derivation over one call graph:
+// ⭐ THE FACTS ABOUT LIBRARY SOURCE A COMPILE DERIVES, from ONE walk of the merged module. They are one
+// object rather than separate `Project` fields because they are one derivation over one call graph:
 // `substrateEntries` is meaningful only for the functions `unreachable` does NOT hold (code the program
-// cannot reach is invisible to it, substrate and all), and two fields assigned from two calls could come
-// to disagree about which functions those are.
+// cannot reach is invisible to it, substrate and all), `unreachable` and `unreachedRuntimeTier` are the
+// same reach answer split by tier, and fields assigned from separate calls could come to disagree about
+// which functions those are.
 export type LibraryFacts
 	// Every function the merged module got from LIBRARY source — `stdlib/` and its sibling `runtime/`
 	// alike, which are one population to every reader of this set. Materialized once so the question can
@@ -182,8 +183,9 @@ export type LibraryFacts
 	// (`scanRuntimeUsage`), the targets it can be built for (`checkCalls`) — must not let them decide it,
 	// or the program pays for code it does not contain. User functions are never in it: a diagnostic in
 	// unreached USER code is still the user's bug, while a runtime requirement of unreached STDLIB code is
-	// nobody's. ⛔ **AND NO `runtime/` FUNCTION IS EVER IN IT** — `unreachableLibraryNames` carries that
-	// exemption and why it is by PROVENANCE rather than by reachability.
+	// nobody's. ⛔ **AND NO `runtime/` FUNCTION IS EVER IN IT** — `classifyLibraryReach` carries that
+	// exemption and why it is by PROVENANCE rather than by reachability; an unreached tier name is filed
+	// under `unreachedRuntimeTier` instead, which answers the narrower question its readers may ask.
 	export let unreachable as FunctionNameSet
 
 	// The REACHABLE stdlib functions that need the x64-windows substrate, and which runtime entry each
@@ -193,21 +195,34 @@ export type LibraryFacts
 
 	// The `runtime/` half of `libraryFunctions` — the tier whose bodies the compiler reaches BY NAME and no
 	// source file may call. It is provenance, so every question of the form *"is this callee the runtime's
-	// rather than the program's?"* reads it: `unreachableLibraryNames`, which may never file one, and the
-	// yield walk's fallback, which must answer about a runtime entry exactly as it did when the entry had no
-	// body in any source. One derivation, because a second walk over the same files could come to disagree
-	// about which names are in the tier.
+	// rather than the program's?"* reads it: `classifyLibraryReach`, which may never file one under
+	// `unreachable`, and the yield walk's fallback, which must answer about a runtime entry exactly as it
+	// did when the entry had no body in any source. One derivation, because a second walk over the same
+	// files could come to disagree about which names are in the tier.
 	export let runtimeTier as FunctionNameSet
 
-	export static function create(libraryFunctions FunctionNameSet, unreachable FunctionNameSet, substrateEntries StdlibSubstrateEntryMap, runtimeTier FunctionNameSet) returns LibraryFacts
-		return Self{libraryFunctions: libraryFunctions, unreachable: unreachable, substrateEntries: substrateEntries, runtimeTier: runtimeTier}
+	// The `runtimeTier` names no root of this program reaches. BUILT and REACHED are different questions
+	// for the tier and only this field answers the second: a tier body is built unconditionally, so it is
+	// never `unreachable`, yet dead-function elimination still sweeps one nothing calls. A pass that reads
+	// a BODY to decide what the PROGRAM carries (`scanRuntimeUsage`) must skip it, or the program pays a
+	// `.data` word or a host chunk for code it does not contain.
+	//
+	// ⛔⛔ **OVER-APPROXIMATION IS THE SAFE DIRECTION AND THE OTHER ONE IS A LINK FAILURE.** A name missing
+	// here costs bytes; a name present here while the body survives leaves that body reading a slot the
+	// image never laid out. So a name enters ONLY on the walk's positive evidence that nothing reaches it,
+	// and every edge the walk does not model resolves to "reached".
+	// `DeadFunctionElimination.requireUnreachableLibraryStayedDead` is where the unsafe direction is caught.
+	export let unreachedRuntimeTier as FunctionNameSet
+
+	export static function create(libraryFunctions FunctionNameSet, unreachable FunctionNameSet, substrateEntries StdlibSubstrateEntryMap, runtimeTier FunctionNameSet, unreachedRuntimeTier FunctionNameSet) returns LibraryFacts
+		return Self{libraryFunctions: libraryFunctions, unreachable: unreachable, substrateEntries: substrateEntries, runtimeTier: runtimeTier, unreachedRuntimeTier: unreachedRuntimeTier}
 	end 'create'
 
 	// A compile that has not derived them yet, and the answer for a compile that loaded no stdlib source
 	// at all: no function is stdlib, nothing is unreachable-stdlib, nothing is in the runtime tier and
 	// nothing needs the substrate.
 	export static function empty() returns LibraryFacts
-		return Self.create(FunctionNameSet.create(), unreachable: FunctionNameSet.create(), substrateEntries: StdlibSubstrateEntryMap.create(), runtimeTier: FunctionNameSet.create())
+		return Self.create(FunctionNameSet.create(), unreachable: FunctionNameSet.create(), substrateEntries: StdlibSubstrateEntryMap.create(), runtimeTier: FunctionNameSet.create(), unreachedRuntimeTier: FunctionNameSet.create())
 	end 'empty'
 end 'LibraryFacts'
 
@@ -250,7 +265,7 @@ export function deriveLibraryFacts(project Project, module MaxonModule, signatur
 	let initCallees = signatures.globalInitCallees()
 
 	// ⭐ COMMON-CASE SHORT-CIRCUIT. If no op in USER code REACHES stdlib, no stdlib function is
-	// reachable at all — so an EMPTY reached set is the exact answer to hand `unreachableLibraryNames`,
+	// reachable at all — so an EMPTY reached set is the exact answer to hand `classifyLibraryReach`,
 	// which is what the call below does, and NONE can be blamed for a substrate — reached by
 	// ONE allocation-free O(ops) scan, WITHOUT the O(functions) name->index map and reached-array the
 	// from-`main` walk allocates, and without the substrate fixpoint. That map is the whole per-compile
@@ -258,16 +273,18 @@ export function deriveLibraryFacts(project Project, module MaxonModule, signatur
 	// cost a per-compile CONSTANT instead of growing with the user program. It stays EXACT: a stdlib
 	// function referenced by nothing is reachable from nothing.
 	if not userCodeReachesStdlib(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees) 'noneReferenced'
-		return LibraryFacts.create(stdlibSet, unreachable: unreachableLibraryNames(roster, reachable: FunctionNameSet.create()), substrateEntries: StdlibSubstrateEntryMap.create(), runtimeTier: roster.runtimeTier)
+		let noneReached = classifyLibraryReach(roster, reachable: FunctionNameSet.create())
+
+		return LibraryFacts.create(stdlibSet, unreachable: noneReached.unreachable, substrateEntries: StdlibSubstrateEntryMap.create(), runtimeTier: roster.runtimeTier, unreachedRuntimeTier: noneReached.unreachedRuntimeTier)
 	end 'noneReferenced'
 
 	// User code DOES call stdlib — resolve exactly which stdlib functions the program REACHES from `main`
 	// and mark only the untouched ones. This precise walk (and its maps) runs ONLY for a program that
 	// actually uses stdlib.
 	let reachable = try reachableMaxonFunctionNames(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees)
-	let unreachable = unreachableLibraryNames(roster, reachable: reachable)
+	let split = classifyLibraryReach(roster, reachable: reachable)
 
-	return LibraryFacts.create(stdlibSet, unreachable: unreachable, substrateEntries: stdlibSubstrateEntries(module, stdlibNames: roster.names, unreachable: unreachable), runtimeTier: roster.runtimeTier)
+	return LibraryFacts.create(stdlibSet, unreachable: split.unreachable, substrateEntries: stdlibSubstrateEntries(module, stdlibNames: roster.names, unreachable: split.unreachable), runtimeTier: roster.runtimeTier, unreachedRuntimeTier: split.unreachedRuntimeTier)
 end 'deriveLibraryFacts'
 
 // ⭐⭐ **GROW THE BODY DEMAND BY ONE ROUND — the fixpoint step `queryAllModule` iterates.**
@@ -375,7 +392,7 @@ type LibraryFunctionRoster
 	// for its node space as well as membership.
 	export let names as ByteArrayArray
 
-	// The `runtime/` subset of `names` — the tier `unreachableLibraryNames` may never file.
+	// The `runtime/` subset of `names` — the tier `classifyLibraryReach` may never file `unreachable`.
 	export let runtimeTier as FunctionNameSet
 
 	export static function create(names ByteArrayArray, runtimeTier FunctionNameSet) returns LibraryFunctionRoster
@@ -416,37 +433,66 @@ function collectOneLibraryFile(project Project, path FilePath, names ByteArrayAr
 	end 'eachFunc'
 end 'collectOneLibraryFile'
 
-// Which library names this compile files `unreachable`, given what it REACHES.
+// The two answers `classifyLibraryReach` splits one walk into. One record because they partition one
+// question over one roster, and separate derivations could come to disagree about which names each holds.
+type LibraryReachSplit
+	export let unreachable as FunctionNameSet
+	export let unreachedRuntimeTier as FunctionNameSet
+
+	export static function create(unreachable FunctionNameSet, unreachedRuntimeTier FunctionNameSet) returns LibraryReachSplit
+		return Self{unreachable: unreachable, unreachedRuntimeTier: unreachedRuntimeTier}
+	end 'create'
+end 'LibraryReachSplit'
+
+// Split the library roster by what this compile REACHES, filing an unreached name under the question its
+// tier can answer.
 //
-// ⛔⛔ **A `runtime/` NAME IS NEVER ONE OF THEM, AND THE EXEMPTION IS BY PROVENANCE RATHER THAN BY
-// REACHABILITY.** `unreachable` means *no body was built for this, do not expect one*, and that is what
-// every reader of the set acts on. For a runtime file it is false: its bodies are built unconditionally
-// (`Queries.buildsBodiesFor`), and no source file outside the tier can CALL a runtime entry, because the
-// compiler reaches one BY NAME. So a walk over SOURCE call edges holds no evidence about the tier at all,
-// and the answer it
-// would otherwise give — every runtime function is dead — empties a body the back end may still call.
+// ⛔⛔ **BUILT AND REACHED ARE THE SAME QUESTION FOR `stdlib/` AND TWO DIFFERENT ONES FOR `runtime/`.**
+// `unreachable` means *no body was built for this, do not expect one*, and that is what every reader of
+// the set acts on. For a runtime file it is false: its bodies are built unconditionally
+// (`Queries.buildsBodiesFor`), because no source file outside the tier can CALL a runtime entry — the
+// compiler reaches one BY NAME — so a walk over source call edges could never earn one its body. Filing a
+// tier name `unreachable` would therefore empty a body the back end may still call.
 // `UnusedExportCheck` exempts the same cone in the same terms and for the same reason.
 //
-// ⚠ **IT KEEPS NOTHING IN THE PROGRAM.** Dead-function elimination roots its own walk
-// (`DeadFunctionElimination.seedRoots`) and reads this set only to CHECK it
+// ⭐ **WHAT THE WALK DOES HOLD EVIDENCE ABOUT IS WHETHER THE PROGRAM REACHES THE TIER**, because the call
+// the compiler mints is an ordinary `MaxonOp.call` in the caller's body long before this runs, and the
+// tier's bodies are in the merged module too — so the answer is closed over runtime→runtime edges like any
+// other. That is `unreachedRuntimeTier`, and its readers act on *"dead-function elimination will sweep
+// this"* rather than on *"no body exists"*.
+//
+// ⛔⛔ **AN UNREACHED TIER NAME MUST REST ON POSITIVE EVIDENCE, BECAUSE THE TWO ERRORS ARE NOT ALIKE.**
+// Omitting a name costs the program bytes; filing one whose body then survives leaves that body reading a
+// `.data` word or a host chunk nothing laid out, which is a link failure. So every edge this walk does not
+// model must resolve to "reached" — which is what the over-approximating `reachable` set already delivers.
+//
+// ⚠ **NEITHER SET KEEPS ANYTHING IN THE PROGRAM.** Dead-function elimination roots its own walk
+// (`DeadFunctionElimination.seedRoots`) and reads both only to CHECK them
 // (`requireUnreachableLibraryStayedDead`), so a runtime entry nothing calls is still swept there and a
 // program that reaches no runtime family carries none of it.
 //
 // The short-circuit caller passes an EMPTY `reachable`, which is precisely what it has concluded: no op in
-// user code and no root crosses into library source, so nothing in it is reached.
-function unreachableLibraryNames(roster LibraryFunctionRoster, reachable FunctionNameSet) returns FunctionNameSet
+// user code and no root crosses into library source — tier names included, since they are on the same
+// roster the scan tests against — so nothing in it is reached.
+function classifyLibraryReach(roster LibraryFunctionRoster, reachable FunctionNameSet) returns LibraryReachSplit
 	var unreachable = FunctionNameSet.create()
+	var unreachedRuntimeTier = FunctionNameSet.create()
 
 	for name in roster.names 'classify'
-		if reachable.contains(name) or roster.runtimeTier.contains(name) 'notUnreached'
+		if reachable.contains(name) 'reached'
 			continue
-		end 'notUnreached'
+		end 'reached'
+
+		if roster.runtimeTier.contains(name) 'theTier'
+			unreachedRuntimeTier.insert(name)
+			continue
+		end 'theTier'
 
 		unreachable.insert(name)
 	end 'classify'
 
-	return unreachable
-end 'unreachableLibraryNames'
+	return LibraryReachSplit.create(unreachable, unreachedRuntimeTier: unreachedRuntimeTier)
+end 'classifyLibraryReach'
 
 // The reachable-from-`main` closure over the merged Maxon module, as a set of function NAMES.
 // The Maxon-tier twin of `DeadFunctionElimination.markCalleeOf`: the FOUR ops that name a callee

@@ -23,8 +23,11 @@ opposite of `Compiler/Runtime/` below, which the compiler WRITES into every prog
 matching `__Builtins` spellings lower to calls naming them, from whatever file wrote the construct.
 ⛔ **THE PROCESS FAMILY'S THIRD ENTRY, `__proc_exe_path`, IS NOT IN AND IS BLOCKED RATHER THAN DEFERRED.**
 It is a grow-and-retry loop that allocates and builds an `__ManagedMemory` answer, so as tier source it
-would CALL other runtime entries — which is the `scanRuntimeUsage` vacuity below. The allocator's own
-migration is what admits it.
+would CALL other runtime entries. The blocker is no longer the usage scan (see `unreachedRuntimeTier`
+below) but the CALL DOOR: `__mm_alloc`, `__mm_free`, `__managed_create` and `__managed_reserve` are
+DECLARED in no source file — the compiler synthesizes their bodies as `StdOp` graphs — so
+`Parser.requireCalleeIsNotReservedName`'s `signatures.declaresCallee` conjunct is false and a tier body
+spelling one earns E3004. The allocator's own migration is what admits it.
 
 ⛔⛔ **THE TIER'S PROTECTION IS OVER BOTH DOORS A NAME CAN BE REACHED THROUGH, AND IT TAKES TWO REFUSALS.**
 `Parser.requireCalleeIsNotReservedName` admits a reserved CALLEE, and
@@ -51,11 +54,12 @@ because it tells the two sides apart by one having no source file and both are n
 OWES THE SAME TWO DOORS.**
 
 A runtime name is therefore never
-classified `LibraryFacts.unreachable`, and the exemption is by PROVENANCE rather than by reachability: a
-walk over source call edges holds no evidence about the tier at all
-(`StdlibSource.unreachableLibraryNames`). Its bodies therefore lower, its range guards are inserted and
-its runtime floor is counted, while dead-function elimination still sweeps an entry nothing calls, so a
-program that reaches no runtime family carries none of it.
+classified `LibraryFacts.unreachable`, and the exemption is by PROVENANCE rather than by reachability: no
+source call edge can earn a tier body, so a walk over them holds no evidence about whether one was BUILT
+(`StdlibSource.classifyLibraryReach`). Its bodies therefore lower and its range guards are inserted, while
+dead-function elimination still sweeps an entry nothing calls, so a program that reaches no runtime family
+carries none of it. **Whether the program REACHES one is a different question and the same walk does answer
+it** — `LibraryFacts.unreachedRuntimeTier`, below.
 
 ⚠ **THE TWO arm64-macos force-segfault GOLDENS OWE A RE-MINT ON A MAC, AND THE DRIFT IS EXPECTED.** A
 Mach-O runs only on macOS, so an x64 host reports `force-segfault-macos` and that lane's
@@ -136,13 +140,28 @@ IS THE DECLARATION DOOR, so a name admitted here owes a refusal in
 declarations stay module-scoped, which
 `specs/runtime-source-tier.md`'s `runtime-file-unreserved-declaration-is-still-module-scoped` measures.
 
-⚠ **`scanRuntimeUsage` WALKS EVERY RUNTIME BODY, IN EVERY PROGRAM.** A runtime name is never
-`unreachable`, so the scan never skips one — and a CALL inside a runtime body would therefore set that
-family's bit for a program DFE sweeps the body out of, which is rule 1 ("vocabulary does not ship ahead of
-its consumer") failing open. Vacuous while every tier body calls only `__Raw`, which names no callee
-(`MaxonDialect.maxonOpCalleeKind` answers `noCallee` for `rawIntrinsic`) — true of all five families in
-the tier. The first family that CALLS something is the one that has to answer it, and
-`__proc_exe_path` is the entry point waiting on that answer.
+⭐⭐ **BUILT AND REACHED ARE TWO QUESTIONS FOR THE TIER, AND `scanRuntimeUsage` ASKS THE SECOND.** Every
+tier body is built, in every program; the scan credits a body's calls only where some root can reach it
+(`LibraryFacts.unreachedRuntimeTier`, filed by `StdlibSource.classifyLibraryReach` out of the SAME
+from-`main` walk that files `unreachable` — one derivation, two answers, so they cannot disagree). Without
+that split, a CALL inside a tier body sets its family's bit in every program DFE sweeps the body out of,
+which is rule 1 ("vocabulary does not ship ahead of its consumer") failing open.
+`specs/runtime-source-tier.md`'s three-case group is the channel: the unreached program, the control that
+reaches the entry, and the program that reaches a DIFFERENT family.
+
+⛔⛔ **OVER-APPROXIMATING IS SAFE AND THE OTHER DIRECTION IS A LINK FAILURE.** A bit set for a swept body
+costs BYTES and nothing else — never a wrong answer and never a refusal, because
+`SemanticCheck.blameTargetErrorsIn` skips the target gate inside library code and usage-installs /
+DFE-removes is a one-way composition. A bit UNSET while the body ships is
+`runtime/CpuParallel.maxon` loading a `.data` word nothing laid out. So a name enters the set only on the
+walk's positive evidence, every unmodelled edge resolves to "reached", and
+`DeadFunctionElimination.requireUnreachableLibraryStayedDead` panics on the unsafe direction.
+
+⚠ The reach answer is CLOSED over runtime→runtime calls for free: a tier body is in the merged Maxon
+module with real ops, and `markMaxonCalleeEdge` filters no callee by provenance. What is not yet exercised
+is a REACHED tier body that calls another entry — every tier body today calls only `__Raw`, which names no
+callee (`MaxonDialect.maxonOpCalleeKind` answers `noCallee` for `rawIntrinsic`), and no source file outside
+the tier may reach a spec fragment's own tier function, so no spec case can construct one.
 
 Five doors are still standing open rather than shut:
 

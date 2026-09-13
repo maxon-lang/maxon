@@ -112,6 +112,10 @@ end 'eliminateDeadFunctions'
 // function an `.rdata` slot names) over the STD module. So the premise is a claim about two algorithms
 // agreeing, not a tautology, and it is checked rather than argued.
 //
+// ⭐ **AND `scanRuntimeUsage` BETS TWICE**, because it also skips a `runtime/` body no root reaches
+// (`LibraryFacts.unreachedRuntimeTier`) — built either way, but swept here. Same bet, different stake:
+// see the second loop.
+//
 // ⚠ **AND THE FAILURE IT CATCHES IS SILENT, WHICH IS WHY IT IS A PANIC AND NOT A COMMENT.** A function
 // whose body `lowerMaxonToStd` skipped is EMPTY; if this walk kept it, the program would link cleanly and
 // call a function that does nothing — a wrong answer with no diagnostic anywhere, the worst outcome this
@@ -123,20 +127,37 @@ end 'eliminateDeadFunctions'
 // witness-table or layout-descriptor slot), or a call from a body synthesized after that walk
 // (`__module_init`, a service's `__loop`) that the walk does not credit at the op making that body live.
 //
-// COST: O(unreachable stdlib functions), bounded by the stdlib source LOADED and independent of the user's
-// program — the set is iterated, never `module.functions`, so a growing user program adds nothing. A name
-// this module does not define is simply not there to keep (the same non-case `markLiveFunction` handles).
+// COST: O(unreached library functions), bounded by the library source LOADED and independent of the user's
+// program — the sets are iterated, never `module.functions`, so a growing user program adds nothing.
 function requireUnreachableLibraryStayedDead(project Project, byName FuncIndexByName, reached BoolArray)
 	for name in project.libraryFacts.unreachable 'eachSkipped'
-		if let idx = try byName.get(name) 'aModuleFunction'
-			let isLive = try reached.get(idx) otherwise panic("requireUnreachableLibraryStayedDead: reached.get OOB at function index {idx}")
-
-			if isLive 'reachedAnyway'
-				panic("requireUnreachableLibraryStayedDead: '{String.from(name)}' is in LibraryFacts.unreachable — so `lowerMaxonToStd` lowered no body for it, `insertRangeChecks` emitted no guards, and the PARSER may never have built its body at all (`Parser.skipUnreachedFunctionBody`, gated by the same walk through `growStdlibBodyDemand`) — yet this pass reached it from the root set and would keep it. The two reachability derivations disagree: this pass reached it along an edge the Maxon-tier walk in StdlibSource does not model — a DATA edge (a witness-table or layout-descriptor slot), or a call from a body synthesized after that walk (`__module_init`, a service's `__loop`) that the walk does not credit at the op making that body live. Keeping it would emit an EMPTY function the program calls")
-			end 'reachedAnyway'
-		end 'aModuleFunction'
+		if thisWalkReached(name, byName: byName, reached: reached) 'reachedAnyway'
+			panic("requireUnreachableLibraryStayedDead: '{String.from(name)}' is in LibraryFacts.unreachable — so `lowerMaxonToStd` lowered no body for it, `insertRangeChecks` emitted no guards, and the PARSER may never have built its body at all (`Parser.skipUnreachedFunctionBody`, gated by the same walk through `growStdlibBodyDemand`) — yet this pass reached it from the root set and would keep it. The two reachability derivations disagree: this pass reached it along an edge the Maxon-tier walk in StdlibSource does not model — a DATA edge (a witness-table or layout-descriptor slot), or a call from a body synthesized after that walk (`__module_init`, a service's `__loop`) that the walk does not credit at the op making that body live. Keeping it would emit an EMPTY function the program calls")
+		end 'reachedAnyway'
 	end 'eachSkipped'
+
+	// ⛔⛔ **THE TIER'S HALF OF THE BET, AND IT FAILS THE OTHER WAY.** A tier body is BUILT whatever this
+	// set says, so nothing here is ever empty — what a name promised is that `scanRuntimeUsage` could skip
+	// it, and that skip decides `.data` words and hand-assembled host chunks. Kept by this walk, the body
+	// survives to `globalAddr` a slot the image never laid out: a link failure or a load of nothing, with
+	// no diagnostic. Over-approximating `unreachedRuntimeTier` is therefore the SAFE direction and this is
+	// where the unsafe one is caught.
+	for name in project.libraryFacts.unreachedRuntimeTier 'eachUncredited'
+		if thisWalkReached(name, byName: byName, reached: reached) 'reachedAnyway'
+			panic("requireUnreachableLibraryStayedDead: '{String.from(name)}' is in LibraryFacts.unreachedRuntimeTier — so `scanRuntimeUsage` skipped its body and none of the runtime its calls ask for was installed — yet this pass reached it from the root set and would keep it. The two reachability derivations disagree: this pass reached the tier entry along an edge the Maxon-tier walk in StdlibSource does not model. Keeping it would emit a body reading `.data` words and host chunks this image never laid out")
+		end 'reachedAnyway'
+	end 'eachUncredited'
 end 'requireUnreachableLibraryStayedDead'
+
+// Whether THIS pass's walk kept a library function, for a name the module may not define at all — the
+// same non-case `markLiveFunction` handles.
+function thisWalkReached(name ByteArray, byName FuncIndexByName, reached BoolArray) returns bool
+	if let idx = try byName.get(name) 'aModuleFunction'
+		return try reached.get(idx) otherwise panic("thisWalkReached: reached.get OOB at function index {idx}")
+	end 'aModuleFunction'
+
+	return false
+end 'thisWalkReached'
 
 // ⭐⭐ **THE ASSUMPTION THE DUPLICATE-NAME REFUSAL RESTS ON: NOTHING CAN SUPPRESS ONE SIDE OF THE PAIR
 // BEFORE THE COUNT SEES IT.** A detector that counts two functions is walked around by anything that removes

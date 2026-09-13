@@ -612,18 +612,26 @@ export type RuntimeUsage
 	end 'create'
 end 'RuntimeUsage'
 
-// `unreachableStdlib` names the functions this scan must ignore — the STDLIB functions no path from
-// `main` reaches (`LibraryFacts.unreachable`, see StdlibSource). Dead-function elimination drops them
-// before the back end, so the floor they would ask for is a floor for code the program does not
-// contain: a `Clock` nothing calls must not install the green-thread scheduler and the wall-clock
-// `.data` slot. It never contains a USER function — an unreached user body still speaks for the
-// program — so the answer for every stdlib-free program is unchanged.
-export function scanRuntimeUsage(module MaxonModule, unreachableStdlib FunctionNameSet, funcSignatures FuncSignatureMap, parksOnIo bool) returns RuntimeUsage
+// ⭐ **TWO SETS NAME THE BODIES THIS SCAN MUST IGNORE, FOR ONE REASON AND FROM ONE WALK.** Dead-function
+// elimination drops both before the back end, so the floor they would ask for is a floor for code the
+// program does not contain: a `Clock` nothing calls must not install the green-thread scheduler and the
+// wall-clock `.data` slot.
+//
+//   • `unreachableStdlib` — the STDLIB functions no path from `main` reaches
+//     (`LibraryFacts.unreachable`), whose bodies this compile did not even build.
+//   • `unreachedRuntimeTier` — the `runtime/` entries no path reaches. Their bodies ARE built, because no
+//     source call edge could ever earn them, but a call INSIDE one is still a call only the swept body
+//     makes; credited, it would ship that family's `.data` words and host chunks to a program that cannot
+//     read them.
+//
+// Neither ever contains a USER function — an unreached user body still speaks for the program — so the
+// answer for every library-free program is unchanged.
+export function scanRuntimeUsage(module MaxonModule, unreachableStdlib FunctionNameSet, unreachedRuntimeTier FunctionNameSet, funcSignatures FuncSignatureMap, parksOnIo bool) returns RuntimeUsage
 	var usage = RuntimeUsage.create()
 	usage.parksOnIo = parksOnIo
 
 	for func in module.functions 'eachFunc'
-		if unreachableStdlib.contains(func.name) 'notInTheProgram'
+		if unreachableStdlib.contains(func.name) or unreachedRuntimeTier.contains(func.name) 'notInTheProgram'
 			continue
 		end 'notInTheProgram'
 

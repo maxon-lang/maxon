@@ -231,6 +231,127 @@ end 'main'
 0
 ```
 
+<!-- test: an-unreached-runtime-body-costs-the-program-nothing -->
+⛔⛔ **A TIER BODY THE PROGRAM CANNOT REACH MUST NOT SPEND ITS BUDGET.** A runtime name is never
+`unreachable` — the tier's bodies are built unconditionally, because no source call edge earns them — and
+`scanRuntimeUsage`'s only skip reads that same set. So a CALL inside a tier body is credited to EVERY
+program the tier is linked into, including the ones dead-function elimination sweeps the body out of.
+
+Here `probeWorkers` asks for the worker mark and `main` asks for nothing. The body is swept, so the
+program cannot observe the answer — but the call sets `usesSchedMaxActiveWorkers`, which is what lays the
+`.data` word out (`SchedRuntime.schedRuntimeGlobals`), so the word ships in an image that can never read
+it. The `.data` roster is the channel that shows it.
+
+⚠ The probe calls a RUNTIME ENTRY and not a `__Raw` row, and that is the whole point: a `rawIntrinsic`
+names no callee and records nothing, which is why every tier family before this one left the question
+untouched.
+⚠ **THE PIN STATES THE WHOLE ROSTER, NOT A LEADING SLOT, AND IT HAS TO.** `RequiredData` is a PREFIX
+compare and a program's own globals are laid out AHEAD of the runtime's, so a word the program did not
+earn lands BEHIND `used` where a one-line pin cannot see it. Spelling the trailing console probes is what
+makes an inserted word a mismatch rather than a longer tail.
+```maxon
+// --- runtime-file: Probe.maxon
+module function probeWorkers() returns MachineWord
+	return __sched_max_active_workers()
+end 'probeWorkers'
+// --- file: main.maxon
+var used = 42
+
+function main() returns ExitCode
+	return used - 42
+end 'main'
+```
+```exitcode
+0
+```
+```RequiredData
+i64 42
+i8 0
+i8 0
+i8 0
+```
+
+<!-- test: a-reached-runtime-entry-still-earns-its-word -->
+⭐⭐ **THE CONTROL ON THE CASE ABOVE, AND WITHOUT IT THE RULE COULD BE *"CREDIT NO TIER BODY, EVER"*.** That
+answer passes the unreached case and is the dangerous direction: a bit left UNSET while the body survives
+leaves `runtime/CpuParallel.maxon`'s query loading a `.data` word the image never laid out. So the same
+`Probe.maxon` stands here unchanged and `main` asks for the worker mark itself — a call the compiler mints
+is the only root a program can reach a tier entry through — and both halves of the bit's job are pinned: the
+word is in `.data`, and the body that reads it is in the image.
+
+⚠ **WHAT ACTUALLY FIRES ON THE BAD ANSWER IS A PANIC, NOT A MISMATCH.** Uncredit this entry and it enters
+`LibraryFacts.unreachedRuntimeTier` while `main` still calls it, which is the disagreement
+`DeadFunctionElimination.requireUnreachableLibraryStayedDead` exists to refuse — so this case reddens on an
+abort with the name in it rather than on a shorter `.data` roster.
+
+⚠ It also puts the DERIVATION's other path under a case. The unreached program above names no library
+function at all, so the reach split is decided by `deriveLibraryFacts`' short-circuit; this one crosses into
+library source at `__sched_max_active_workers`, so the precise from-`main` walk decides it.
+```maxon
+// --- runtime-file: Probe.maxon
+module function probeWorkers() returns MachineWord
+	return __sched_max_active_workers()
+end 'probeWorkers'
+// --- file: main.maxon
+var used = 42
+
+function main() returns ExitCode
+	let workers = __Builtins.schedMaxActiveWorkers()
+	return used - 41 - workers
+end 'main'
+```
+```exitcode
+0
+```
+```RequiredData
+i64 42
+i64 1
+i64 1
+i8 0
+i8 0
+i8 0
+```
+```RequiredRuntime
+__sched_max_active_workers
+```
+
+<!-- test: reaching-one-family-does-not-credit-another-tier-body -->
+⭐ **REACHED IS PER ENTRY POINT, NOT PER TIER.** `main` reaches the process family and nothing else, so the
+precise walk runs and files `probeWorkers` unreached — and the worker counters stay out of `.data` even
+though a tier body, compiled into this very image, calls the query that lays them.
+
+⚠ **THE SECOND FAMILY IS `__proc_pid` BECAUSE IT IS THE ONE THAT PINS HONESTLY HERE.** The other bits a tier
+body could set on this lane — `usesBackgroundPriority`, `usesCpuCount`, `usesWallClock` — reach only the PE
+writer's optional import band and the non-Windows host chunks, which no spec channel renders; the pid read
+lays no word of its own, so its presence leaves the `.data` roster exactly as the unreached case's and the
+two sched words are the whole difference between the three programs in this group.
+```maxon
+// --- runtime-file: Probe.maxon
+module function probeWorkers() returns MachineWord
+	return __sched_max_active_workers()
+end 'probeWorkers'
+// --- file: main.maxon
+var used = 42
+
+function main() returns ExitCode
+	let pid = __Builtins.currentProcessId()
+	if pid > 0 'aRealProcess'
+		return used - 42
+	end 'aRealProcess'
+
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+```RequiredData
+i64 42
+i8 0
+i8 0
+i8 0
+```
+
 <!-- test: raw-intrinsic-refused-outside-the-runtime-tier -->
 ⭐⭐ **THE NEGATIVE CONTROL ON P2, AND IT IS THE HALF THAT MATTERS.** The positive cases above prove the
 privileges are not EMPTY. Neither proves they are not UNIVERSAL — a compiler that let ANY file call
