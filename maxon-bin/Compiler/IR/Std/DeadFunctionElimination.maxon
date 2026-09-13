@@ -116,6 +116,10 @@ end 'eliminateDeadFunctions'
 // (`LibraryFacts.unreachedRuntimeTier`) — built either way, but swept here. Same bet, different stake:
 // see the second loop.
 //
+// ⭐ **AND THE THREE `.rdata` DOORS BET ON A SHARPER SET AGAIN** — `Project.sweptRuntimeTier`, which adds
+// the tier files the compiler DECLARES it calls into for a program whose installer never mints those
+// calls. Same stake as the first loop's, since acting on it means lowering no body: see the third.
+//
 // ⚠ **AND THE FAILURE IT CATCHES IS SILENT, WHICH IS WHY IT IS A PANIC AND NOT A COMMENT.** A function
 // whose body `lowerMaxonToStd` skipped is EMPTY; if this walk kept it, the program would link cleanly and
 // call a function that does nothing — a wrong answer with no diagnostic anywhere, the worst outcome this
@@ -147,6 +151,18 @@ function requireUnreachableLibraryStayedDead(project Project, byName FuncIndexBy
 			panic("requireUnreachableLibraryStayedDead: '{String.from(name)}' is in LibraryFacts.unreachedRuntimeTier — so `scanRuntimeUsage` skipped its body and none of the runtime its calls ask for was installed — yet this pass reached it from the root set and would keep it. The two reachability derivations disagree: this pass reached the tier entry along an edge the Maxon-tier walk in StdlibSource does not model. Keeping it would emit a body reading `.data` words and host chunks this image never laid out")
 		end 'reachedAnyway'
 	end 'eachUncredited'
+
+	// ⛔⛔ **AND THE SHARPER SET'S HALF, WHERE THE DIRECTION OF RISK IS THE FIRST LOOP'S RATHER THAN THE
+	// SECOND'S.** `Project.sweptRuntimeTier` is what the three pre-elimination `.rdata` doors act on, and
+	// acting on it means lowering NO BODY — so a name here that this walk keeps is an EMPTY function the
+	// program calls. It is a superset of `unreachedRuntimeTier`: the extra names are the compiler-called tier
+	// files in a program whose installer never mints their calls, and this is the only thing standing behind
+	// that join.
+	for name in project.sweptRuntimeTier 'eachSwept'
+		if thisWalkReached(name, byName: byName, reached: reached) 'reachedAnyway'
+			panic("requireUnreachableLibraryStayedDead: '{String.from(name)}' is in Project.sweptRuntimeTier — so `lowerMaxonToStd` lowered no body for it and `insertRangeChecks` emitted no guards — yet this pass reached it from the root set and would keep it. Either the Maxon-tier walk in StdlibSource missed an edge, or an installer minted a call into a compiler-called `runtime/` file for a program `sweptRuntimeTierNames` judged not to reach it. Keeping it would emit an EMPTY function the program calls")
+		end 'reachedAnyway'
+	end 'eachSwept'
 end 'requireUnreachableLibraryStayedDead'
 
 // Whether THIS pass's walk kept a library function, for a name the module may not define at all — the

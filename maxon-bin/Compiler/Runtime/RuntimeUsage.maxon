@@ -665,10 +665,12 @@ end 'scanRuntimeUsage'
 // DECLARED here rather than discovered, which is rule 2 of this file's header.
 //
 // ⚠ It is a CLOSURE over the whole usage record rather than an arm inside `recordCallUsage`, because
-// `usesHeap` has more than a dozen producers and two of them (`--async-trace`, `--debugstream`) run in
-// `Compiler.compileToCodeResult` AFTER the walk has finished. An arm would answer for the walk's producers
-// and silently miss the flags' — a program that allocates only through a trace would then emit
+// `usesHeap` has more than a dozen producers and SIX of them run in `Compiler.compileToCodeResult` after the
+// walk has finished — the two flags (`--async-trace`, `--debugstream`), the two destructor/clone cascades,
+// the soleness walk and the boxed-enum lookup helper. An arm would answer for the walk's producers and
+// silently miss the rest — a program that allocates only through one of them would then emit
 // `__slab_arena_alloc_chunks` calls into a module carrying neither the function nor its `.data` slots.
+// ⛔ **SO THIS MUST BE CALLED PAST THE LAST OF THEM**, which is where its one call site sits.
 export function closeSlabNeeds(usage RuntimeUsage)
 	if usage.usesHeap 'allocatorNeedsTheArena'
 		usage.usesSlabArena = true

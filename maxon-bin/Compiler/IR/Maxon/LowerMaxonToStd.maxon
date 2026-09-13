@@ -858,7 +858,7 @@ function requireSiteOrdinalsAscend(sites RangeCheckSiteArray, order RangeSiteInd
 end 'requireSiteOrdinalsAscend'
 
 export function lowerMaxonToStd(maxonModule MaxonModule, project Project, funcNames FunctionNameIndex) returns StdModule
-	registerProgramLiteralBlobs(maxonModule, globalData: project.globalData, unreachableStdlib: project.libraryFacts.unreachable)
+	registerProgramLiteralBlobs(maxonModule, project: project)
 	return MaxonToStdLowering.create(maxonModule, project: project, funcNames: funcNames).lower(project)
 end 'lowerMaxonToStd'
 
@@ -892,41 +892,28 @@ end 'lowerMaxonToStd'
 // a PREFIX FROM BYTE 0 with no label to anchor on, which is the pin's semantics rather than this walk's
 // fault. The cure for it is a label-anchored read (`Testing/SpecTestRunner.compareLinkedSection`), which is
 // a harness question and not this one.
-function registerProgramLiteralBlobs(maxonModule MaxonModule, globalData GlobalDataTable, unreachableStdlib FunctionNameSet)
+function registerProgramLiteralBlobs(maxonModule MaxonModule, project Project)
 	for func in maxonModule.functions 'eachFunc'
-		// ⭐⭐ **THE THIRD PRE-ELIMINATION DOOR ONTO `nextStringId`, AND IT WAS OPEN (W69).** The two this
-		// walk's siblings shut — the body lowering below and `insertRangeChecks` — both skip a stdlib
-		// function no path from `main` reaches, and both say why in the same words: DFE prunes FUNCTIONS,
-		// never `.rdata`, so a blob registered for a body the back end never receives SURVIVES it, and one
-		// shared counter means a surviving blob renumbers every later `__str_blob_`/`__jumptable_` label
-		// in EVERY program. (⚠ `__fconst_` was on that list until float islands became VALUE-NAMED and left
-		// the counter — see `GlobalDataTable.registerFloatConstant`; the mechanism is unchanged for the two
-		// prefixes that remain.) This walk runs EARLIER THAN EITHER and had no such test, so it registered
-		// the blob those two exist to prevent.
+		// ⭐⭐ **THE EARLIEST OF THE THREE PRE-ELIMINATION DOORS ONTO `nextStringId`.** The two below it — the
+		// body lowering and `insertRangeChecks` — skip on the same fact and for the same reason: elimination
+		// prunes FUNCTIONS, never `.rdata`, so a blob registered for a body the back end never receives
+		// SURVIVES it, and one shared counter means a surviving blob renumbers every later
+		// `__str_blob_`/`__jumptable_` label in EVERY program. (⚠ `__fconst_` left that counter when float
+		// islands became VALUE-NAMED — see `GlobalDataTable.registerFloatConstant`; the mechanism is unchanged
+		// for the two prefixes that remain.)
 		//
-		// ⚠ **MEASURED at `stdlib/Json.maxon`'s entry, which is the first listed module to reach it.** A
-		// STRING field default is not a `FieldDefault.literal` (that payload is a `ParsedInt`), so
-		// `export var stringValue as String = ""` mints the nullary helper `__fieldDefault#JsonNode#stringValue`
-		// whose whole body is `return ""` — an ordinary function, in the merged module, that nothing in a
-		// `return 7` program can reach. Its 8-byte blob was registered here at id 0 and referenced by
-		// nothing: `function main() returns ExitCode / return 7` grew a `.rdata` SECTION it had never had
-		// (5,567 ⇒ 6,115 bytes on disk, codeBytes unmoved at 1,592) and **13 committed goldens shifted by
-		// exactly one label**.
+		// ⛔ **THE GATE IS THE SAME REACHABILITY FACT, STATED THE SAME WAY, AND NEVER "IS THIS
+		// WHITELISTED"** — a roster of exempt modules would have to be kept in step with the load and could
+		// only ever be wrong quietly. A REACHABLE library function is in neither set and registers exactly as
+		// before, and no user function is ever in either, so the ordering property this walk exists to
+		// establish is untouched for every literal a program can actually name.
 		//
-		// ⛔ **NO COMMITTED CASE WENT RED OVER ANY OF THAT, AND THIS COMMENT CREDITED ONE THAT HAD NOT (W69
-		// review).** `stdlib-loading.a-stdlib-modules-literals-are-byte-neutral` sees a displaced payload only
-		// through its golden FRAGMENT, and a fragment mismatch is REFERENCE, NOT A GATE — it prints a `note:`
-		// and leaves the exit code at 0. MEASURED by neutralising this very gate and rebuilding: that case
-		// reported PASS with an orphan blob at `.rdata` byte 0 of every program in the suite. The gate below is
-		// held by `stdlib-loading.a-stdlib-modules-literals-cannot-reach-the-rdata-image` instead, whose
-		// ```RequiredRdata block pins the LINKED image from byte 0 and fails at byte 6 without this `continue`.
-		//
-		// ⇒ the gate is the SAME reachability fact stated the same way, never "is this whitelisted" — and
-		// that prediction is now CASHED: the whitelist has been deleted and this gate did not move. A
-		// REACHABLE stdlib function is not in the set and registers exactly as
-		// before, and no user function is ever in it — the ordering property this walk exists to establish
-		// is untouched for every literal a program can actually name.
-		if unreachableStdlib.contains(func.name) 'notInTheProgram'
+		// ⛔ **AND NO GOLDEN FRAGMENT CAN HOLD IT.** A fragment mismatch prints a `note:` and leaves the exit
+		// code at 0, so `stdlib-loading.a-stdlib-modules-literals-are-byte-neutral` reads a displaced payload
+		// without failing. What holds this door is
+		// `stdlib-loading.a-stdlib-modules-literals-cannot-reach-the-rdata-image`, whose ```RequiredRdata block
+		// pins the LINKED image from byte 0.
+		if libraryBodyReachesNoBackEnd(project, name: func.name) 'notInTheProgram'
 			continue
 		end 'notInTheProgram'
 
@@ -935,7 +922,7 @@ function registerProgramLiteralBlobs(maxonModule MaxonModule, globalData GlobalD
 
 			for opIdx in block.opRefs 'eachOp'
 				let op = try maxonModule.ops.get(opIdx) otherwise panic("registerProgramLiteralBlobs: opIdx {opIdx} not in module.ops")
-				registerIfProgramLiteral(op, globalData: globalData)
+				registerIfProgramLiteral(op, globalData: project.globalData)
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
@@ -1315,13 +1302,6 @@ type MaxonToStdLowering
 	// `functionUsesSecondaryReturnSlot`, and reads the interface NAME out of it to materialize the witness.
 	var currentMaxonReturnType as MaxonReturnType
 
-	// The stdlib functions no path from `main` reaches (`LibraryFacts.unreachable`) — the ONE fact `lower`
-	// skips a body on, and the SAME derivation `insertRangeChecks`, `checkCalls` and `scanRuntimeUsage`
-	// read. Copied out of `Project` at `create` like every other registry here (this pass holds no
-	// `Project`), and named for the FACT rather than for its use, exactly as `scanRuntimeUsage`'s
-	// `unreachableStdlib` parameter is.
-	var unreachableStdlib as FunctionNameSet
-
 	// The whole-program range-check plan (P1.9), from `project.rangeChecks` — the SAME table
 	// `InsertRangeChecks` reads its sites from one pass later, held here so this pass can answer the one
 	// question that table cannot ask for itself: which STD op position each site's Maxon ordinal became.
@@ -1362,7 +1342,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedImmortalStructBoxes: ImmortalStructBoxLabelSet.create(), emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, stdOpElementStrides: project.stdOpElementStrides, stdOpTrivialElementSites: project.stdOpTrivialElementSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: ValueExistentialInstanceMap.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, currentKeepsItsOwnFrame: false, covPointBases: project.covPointBases, currentCovPointBase: 0, implicitLayoutValueId: 0, hasImplicitLayout: false, implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, unreachableStdlib: project.libraryFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedImmortalStructBoxes: ImmortalStructBoxLabelSet.create(), emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, stdOpElementStrides: project.stdOpElementStrides, stdOpTrivialElementSites: project.stdOpTrivialElementSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: ValueExistentialInstanceMap.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, currentKeepsItsOwnFrame: false, covPointBases: project.covPointBases, currentCovPointBase: 0, implicitLayoutValueId: 0, hasImplicitLayout: false, implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -1507,23 +1487,15 @@ type MaxonToStdLowering
 		for fnIndex in 0 upto self.stdModule.functions.count() 'eachFunc'
 			let srcFunc = try self.stdModule.functions.get(fnIndex) otherwise panic("lowerFunctionBodies: fnIndex {fnIndex} is below self.stdModule.functions.count()")
 
-			// ⭐⭐ **A STDLIB FUNCTION NO PATH FROM `main` REACHES HAS NO BODY LOWERED, AND THE REASON IS THE
+			// ⭐⭐ **A LIBRARY FUNCTION THE BACK END NEVER RECEIVES HAS NO BODY LOWERED, AND THE REASON IS THE
 			// LOADER'S BYTE-NEUTRALITY INVARIANT** (`StdlibLoader`: "adding a module to `stdlib/` changes
-			// NOTHING for a program that does not reach it"). This pass is PRE-ELIMINATION, and lowering a body REGISTERS
-			// `.rdata`: `lowerStringLiteral` mints a blob + a record, `lowerConstArrayLiteral` mints a blob,
-			// and `ensureWitnessTable`/`ensureLayoutDescriptor` mint a labelled payload. Dead-function
+			// NOTHING for a program that does not reach it"). This pass is PRE-ELIMINATION, and lowering a body
+			// REGISTERS `.rdata`: `lowerStringLiteral` mints a blob + a record, `lowerConstArrayLiteral` mints a
+			// blob, and `ensureWitnessTable`/`ensureLayoutDescriptor` mint a labelled payload. Dead-function
 			// elimination prunes FUNCTIONS, never `.rdata`, so every one of those SURVIVES its own function —
 			// and `GlobalDataTable.nextStringId` is ONE counter shared by every rdata prefix, so a surviving
 			// blob renumbers every later `__str_blob_`/`__jumptable_` label in the whole program and moves its
-			// `.rdata` offset besides. (⚠ `__fconst_` was on that list until float islands became VALUE-NAMED
-			// and left the counter — see `GlobalDataTable.registerFloatConstant`; the mechanism is unchanged
-			// for the two prefixes that remain.)
-			//
-			// ⚠ MEASURED, and it is the debt `InsertRangeChecks` filed against this exact site (A1s): listing
-			// `stdlib/Builtins.maxon` — the first listed module that contains LITERALS — moved **317 committed
-			// goldens** (`__fconst` 156, `__str_blob` 132, `__jumptable` 29) for declarations no user program
-			// reaches. `insertRangeChecks` had already shut its own door onto the same counter; this is the
-			// other one, and the two are stated identically because they rest on one fact.
+			// `.rdata` offset besides.
 			//
 			// ⚠ **THE FUNCTION IS STILL PUSHED — only its BODY is skipped**, and that is not a detail.
 			// `FunctionNameIndex` counts the functions in this module to raise E4015, and DFE's header
@@ -1531,8 +1503,8 @@ type MaxonToStdLowering
 			// the module before the count sees it. Dropping the function here would do exactly that. The
 			// empty body is instead PROVED harmless where the two reachability derivations meet —
 			// `requireUnreachableLibraryStayedDead` refuses the compile if DFE ever keeps a function this
-			// skipped, so a Maxon-tier walk that missed an edge is a loud panic and never an empty callee.
-			if self.unreachableStdlib.contains(srcFunc.name) 'notInTheProgram'
+			// skipped, so a walk that missed an edge is a loud panic and never an empty callee.
+			if libraryBodyReachesNoBackEnd(project, name: srcFunc.name) 'notInTheProgram'
 				continue
 			end 'notInTheProgram'
 
@@ -3225,10 +3197,10 @@ type MaxonToStdLowering
 	function requireCalleeIgnoresParametricWitness(request NullWitnessArgRequest, project Project)
 		// ⚠ **A CALLEE THE WALK SKIPPED HAS NO BODY, AND AN EMPTY USE SET WOULD PASS THIS PROOF VACUOUSLY.**
 		// It cannot happen — a reachable caller materialized this argument, and `requireUnreachableLibraryStayedDead`
-		// refuses a compile where DFE keeps a function the Maxon-tier walk called dead — so the silent hole is
-		// worth a panic rather than a comment.
-		if self.unreachableStdlib.contains(request.callee) 'calleeHasNoLoweredBody'
-			panic("requireCalleeIgnoresParametricWitness: '{String.from(request.callee)}' was skipped by the function walk as unreachable stdlib, so its lowered body proves nothing — yet '{String.from(request.caller)}' materialized a witness argument for it")
+		// refuses a compile where DFE keeps a library function the reach derivations called dead — so the silent
+		// hole is worth a panic rather than a comment.
+		if libraryBodyReachesNoBackEnd(project, name: request.callee) 'calleeHasNoLoweredBody'
+			panic("requireCalleeIgnoresParametricWitness: '{String.from(request.callee)}' was skipped by the function walk as library code the back end never receives, so its lowered body proves nothing — yet '{String.from(request.caller)}' materialized a witness argument for it")
 		end 'calleeHasNoLoweredBody'
 
 		let callee = try self.funcNames.funcNamed(request.callee) otherwise panic("requireCalleeIgnoresParametricWitness: '{String.from(request.callee)}' is in no function of this module — `materializeWitnessArg` recorded a call the lowering had already resolved")

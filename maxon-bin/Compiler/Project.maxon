@@ -7707,6 +7707,13 @@ export type Project
 	// holds a USER function, so no user-only program's checks change.
 	export var libraryFacts as LibraryFacts
 
+	// The `runtime/` bodies dead-function elimination will sweep out of THIS program
+	// (`sweptRuntimeTierNames`). It is a field of its own rather than a sixth `LibraryFacts` column
+	// because it cannot be derived when the rest are: it joins the walk's answer with whether the
+	// allocator is installed, which is settled only after the runtime-needs scan. Empty until then, which
+	// is the honest answer for every pass that runs before it.
+	export var sweptRuntimeTier as FunctionNameSet
+
 	// Declared function return types (the M1 parse-staging registry).
 	export var funcReturnTypes as FuncReturnTypeMap
 
@@ -8189,6 +8196,7 @@ export type Project
 			runtimeDir: runtimeDir,
 			librarySourcePaths: MaxonSourcePathArray.create(),
 			libraryFacts: LibraryFacts.empty(),
+			sweptRuntimeTier: FunctionNameSet.create(),
 			funcReturnTypes: FuncReturnTypeMap.create(),
 			funcSignatures: FuncSignatureMap.create(),
 			overloadSets: OverloadSetMap.create(),

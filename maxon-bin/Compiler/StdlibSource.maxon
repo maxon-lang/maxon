@@ -214,17 +214,67 @@ export type LibraryFacts
 	// `DeadFunctionElimination.requireUnreachableLibraryStayedDead` is where the unsafe direction is caught.
 	export let unreachedRuntimeTier as FunctionNameSet
 
-	export static function create(libraryFunctions FunctionNameSet, unreachable FunctionNameSet, substrateEntries StdlibSubstrateEntryMap, runtimeTier FunctionNameSet, unreachedRuntimeTier FunctionNameSet) returns LibraryFacts
-		return Self{libraryFunctions: libraryFunctions, unreachable: unreachable, substrateEntries: substrateEntries, runtimeTier: runtimeTier, unreachedRuntimeTier: unreachedRuntimeTier}
+	// The tier names `runtimeTierFileIsCompilerCalled` DECLARES reached — the roster this derivation
+	// credits because the walk holds no evidence about an installer-minted call. It is carried rather than
+	// consumed and dropped because the declaration is a claim about a MINTER that may not run: whether the
+	// allocator is installed is settled long after this, and `sweptRuntimeTierNames` is where the two are
+	// finally joined.
+	export let compilerCalledRuntimeTier as FunctionNameSet
+
+	export static function create(libraryFunctions FunctionNameSet, unreachable FunctionNameSet, substrateEntries StdlibSubstrateEntryMap, runtimeTier FunctionNameSet, unreachedRuntimeTier FunctionNameSet, compilerCalledRuntimeTier FunctionNameSet) returns LibraryFacts
+		return Self{libraryFunctions: libraryFunctions, unreachable: unreachable, substrateEntries: substrateEntries, runtimeTier: runtimeTier, unreachedRuntimeTier: unreachedRuntimeTier, compilerCalledRuntimeTier: compilerCalledRuntimeTier}
 	end 'create'
 
 	// A compile that has not derived them yet, and the answer for a compile that loaded no stdlib source
 	// at all: no function is stdlib, nothing is unreachable-stdlib, nothing is in the runtime tier and
 	// nothing needs the substrate.
 	export static function empty() returns LibraryFacts
-		return Self.create(FunctionNameSet.create(), unreachable: FunctionNameSet.create(), substrateEntries: StdlibSubstrateEntryMap.create(), runtimeTier: FunctionNameSet.create(), unreachedRuntimeTier: FunctionNameSet.create())
+		return Self.create(FunctionNameSet.create(), unreachable: FunctionNameSet.create(), substrateEntries: StdlibSubstrateEntryMap.create(), runtimeTier: FunctionNameSet.create(), unreachedRuntimeTier: FunctionNameSet.create(), compilerCalledRuntimeTier: FunctionNameSet.create())
 	end 'empty'
 end 'LibraryFacts'
+
+// ⭐⭐ **THE LIBRARY BODIES THE BACK END NEVER RECEIVES — THE ONE FACT EVERY PRE-ELIMINATION PASS THAT
+// REGISTERS `.rdata` MAY SKIP ON.** Elimination prunes FUNCTIONS, never `.rdata`, so a blob minted for a
+// body it will sweep SURVIVES that sweep, and one shared counter means a surviving blob renumbers every
+// later `__str_blob_`/`__jumptable_` label in the program. Both halves are proved rather than assumed:
+// `DeadFunctionElimination.requireUnreachableLibraryStayedDead` refuses a compile where the sweep keeps
+// anything either set names.
+module function libraryBodyReachesNoBackEnd(project Project, name ByteArray) returns bool
+	return project.libraryFacts.unreachable.contains(name) or project.sweptRuntimeTier.contains(name)
+end 'libraryBodyReachesNoBackEnd'
+
+// ⭐⭐ **WHICH TIER BODIES *THIS* PROGRAM SWEEPS, WHICH IS A STRICTLY SHARPER QUESTION THAN
+// `unreachedRuntimeTier` AND CANNOT BE ASKED WHERE THAT ONE IS DERIVED.** A tier name the compiler
+// declares reached is credited unconditionally at derivation time, because the only alternative there is
+// to guess; but the declaration stands on a MINTER, and the slab family's minter
+// (`SlabRuntime.installSlabRuntime`) returns without emitting anything unless the program allocates. So in
+// a program with no allocator the whole declared roster is swept, and every `.rdata` blob its bodies
+// registered is an orphan at the front of the image.
+//
+// ⛔ **IT IS ASKED ONLY AFTER `usesHeap` IS FINAL** (`Compiler.compileToCodeResult`, past every arm that
+// can still turn it on), and `installsAllocator` is that bit rather than a restatement of it.
+//
+// ⚠ **THE DIRECTION OF RISK INVERTS HERE, WHICH IS WHY THIS SET IS NOT THE ONE `scanRuntimeUsage` READS.**
+// Over-approximating `unreachedRuntimeTier` costs bytes; over-approximating THIS set skips the lowering of
+// a body the program calls, which is an empty callee. The panic named above is what turns that into a
+// refusal instead of a wrong answer.
+module function sweptRuntimeTierNames(facts LibraryFacts, installsAllocator bool) returns FunctionNameSet
+	var swept = FunctionNameSet.create()
+
+	for name in facts.unreachedRuntimeTier 'walkProvedItUnreached'
+		swept.insert(name)
+	end 'walkProvedItUnreached'
+
+	if installsAllocator 'theMinterRuns'
+		return swept
+	end 'theMinterRuns'
+
+	for name in facts.compilerCalledRuntimeTier 'noInstallerMintsItsCall'
+		swept.insert(name)
+	end 'noInstallerMintsItsCall'
+
+	return swept
+end 'sweptRuntimeTierNames'
 
 // ⭐ DERIVE BOTH FACTS. Runs once per compile, right after the module is merged and before any pass that
 // reads either of them — and before `DeadGlobalElimination.liveGlobalLabels`, which is the earliest
@@ -275,7 +325,7 @@ export function deriveLibraryFacts(project Project, module MaxonModule, signatur
 	if not userCodeReachesStdlib(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees) 'noneReferenced'
 		let noneReached = classifyLibraryReach(roster, reachable: FunctionNameSet.create())
 
-		return LibraryFacts.create(stdlibSet, unreachable: noneReached.unreachable, substrateEntries: StdlibSubstrateEntryMap.create(), runtimeTier: roster.runtimeTier, unreachedRuntimeTier: noneReached.unreachedRuntimeTier)
+		return LibraryFacts.create(stdlibSet, unreachable: noneReached.unreachable, substrateEntries: StdlibSubstrateEntryMap.create(), runtimeTier: roster.runtimeTier, unreachedRuntimeTier: noneReached.unreachedRuntimeTier, compilerCalledRuntimeTier: roster.compilerReached)
 	end 'noneReferenced'
 
 	// User code DOES call stdlib — resolve exactly which stdlib functions the program REACHES from `main`
@@ -284,7 +334,7 @@ export function deriveLibraryFacts(project Project, module MaxonModule, signatur
 	let reachable = try reachableMaxonFunctionNames(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees)
 	let split = classifyLibraryReach(roster, reachable: reachable)
 
-	return LibraryFacts.create(stdlibSet, unreachable: split.unreachable, substrateEntries: stdlibSubstrateEntries(module, stdlibNames: roster.names, unreachable: split.unreachable), runtimeTier: roster.runtimeTier, unreachedRuntimeTier: split.unreachedRuntimeTier)
+	return LibraryFacts.create(stdlibSet, unreachable: split.unreachable, substrateEntries: stdlibSubstrateEntries(module, stdlibNames: roster.names, unreachable: split.unreachable), runtimeTier: roster.runtimeTier, unreachedRuntimeTier: split.unreachedRuntimeTier, compilerCalledRuntimeTier: roster.compilerReached)
 end 'deriveLibraryFacts'
 
 // ⭐⭐ **GROW THE BODY DEMAND BY ONE ROUND — the fixpoint step `queryAllModule` iterates.**
@@ -471,9 +521,12 @@ end 'collectOneLibraryFile'
 // ⚠ **A DECLARED ROSTER CAN GO STALE, AND WHAT KEEPS THIS ONE HONEST IS ONE GUARD AND ONE DIRECTION.**
 // `DeadFunctionElimination.requireUnreachableLibraryStayedDead` panics BY NAME the moment elimination
 // reaches a body this roster left out — so a tier file the compiler starts calling into and nobody lists
-// here fails loudly on the first program that allocates. Nothing catches the other direction, because there
-// is nothing to catch: a file listed here that the compiler stopped calling costs the bytes above and no
-// wrong answer.
+// here fails loudly on the first program that allocates.
+//
+// ⭐ **THE OTHER DIRECTION IS NOT "NO WRONG ANSWER" — IT IS `.rdata` IN FRONT OF THE PROGRAM'S OWN.** A
+// file listed here whose minter does not run for THIS program has every one of its bodies swept, and the
+// blobs the pre-elimination passes registered for them survive the sweep. That is the question
+// `sweptRuntimeTierNames` asks, once the minter's own gate is finally known.
 function runtimeTierFileIsCompilerCalled(path FilePath) returns bool
 	let filename = path.filename()
 

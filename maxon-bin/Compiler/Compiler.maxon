@@ -991,14 +991,6 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 
 	usage.usesManagedGlobals = usesManagedGlobals
 
-	// ⭐ **THE HEAP NOW CARRIES THE ARENA WITH IT, AND THAT DECLARATION IS WHAT OPENS `usesSlabArena`.**
-	// `__slab_alloc` cuts its spans out of the chunk arena and `__slab_free` asks the reverse map who owns a
-	// pointer — both from SYNTHESIZED Std bodies the Maxon-module walk above structurally cannot see, which
-	// is rule 2 of `RuntimeUsage`'s header (a synthesized body's calls are DECLARED, never discovered). It
-	// sits here rather than inside `scanRuntimeUsage` because the two arms above can still turn `usesHeap`
-	// ON after the walk has finished, and a closure that ran before them would miss exactly those programs.
-	closeSlabNeeds(usage)
-
 	// A managed-payload union's `__destruct_<U>` (P1.3 slice 2) and a managed-field struct's
 	// `__destruct_<Struct>` (P1.4a wave 2) call `__str_decref`/`__mm_free`/nested `__destruct_<T>` inside
 	// SYNTHESIZED Std bodies the Maxon-module scan above cannot see. Close the needed-destructor set over that
@@ -1041,6 +1033,26 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// see. Declared here for the two installers' reason and in their window: before `.data` layout reads
 	// `usesHeap` and before `installStringRuntime` reads `usesStrEq`.
 	noteEnumLookupUsage(usage, project: project)
+
+	// ⭐⭐ **`usesHeap` IS FINAL HERE AND NOWHERE EARLIER, WHICH IS WHY BOTH ANSWERS BELOW ARE TAKEN AT THIS
+	// LINE.** The trace and DebugStream arms above are not its last producers: a destructor cascade, a clone
+	// cascade and a boxed-enum lookup helper each allocate inside a body synthesized after the pipeline, so
+	// each declares the heap from its own walk. A reader that ran before them would miss exactly those
+	// programs.
+	//
+	// ⭐ **THE HEAP CARRIES THE ARENA WITH IT, AND THAT DECLARATION IS WHAT OPENS `usesSlabArena`.**
+	// `__slab_alloc` cuts its spans out of the chunk arena and `__slab_free` asks the reverse map who owns a
+	// pointer — both from SYNTHESIZED Std bodies the Maxon-module walk structurally cannot see, which is rule
+	// 2 of `RuntimeUsage`'s header (a synthesized body's calls are DECLARED, never discovered). A bit unset
+	// while the allocator ships is a `globalAddr` on a slot nothing laid out.
+	closeSlabNeeds(usage)
+
+	// ⭐⭐ **AND THE MIRROR QUESTION: WHICH TIER BODIES THIS PROGRAM SWEEPS.** The slab family's reach is a
+	// DECLARATION about an installer, and `installSlabRuntime` returns without emitting anything unless
+	// `usesHeap` — so in a program with no allocator every body of that family is swept, and any `.rdata` a
+	// pre-elimination pass registered for one is an orphan at the front of the image. Every such pass reads
+	// this through `libraryBodyReachesNoBackEnd`, and all of them run in the lowering stage below.
+	project.sweptRuntimeTier = sweptRuntimeTierNames(project.libraryFacts, installsAllocator: usage.usesHeap)
 
 	// Every plain function used as a first-class value (`let f = triple`, `apply(triple, …)`) is called
 	// through the uniform `(userargs, env)` indirect ABI, whose signature its own `(userargs) -> R` shape does
