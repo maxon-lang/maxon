@@ -15246,7 +15246,8 @@ export type Parser
 	// ⭐⭐ **IS THE FILE BEING PARSED A `runtime/` SOURCE FILE?** The tier's own bit, decided once per file
 	// by `Queries` — the only tier holding the project — and read by the three rules that hold nowhere
 	// else: the `__Raw.*` call privilege (E3152 outside it), the managed-value refusal (E3153) and the
-	// `public` refusal (E3154).
+	// `public` refusal (E3154). `coverageActive` reads it beside `isStdlibSource` for a fourth reason —
+	// not a tier privilege, but the library/author split both tiers sit on the same side of.
 	//
 	// ⚠ **IT IS NOT `declaresCompilerInternalNames`, THOUGH THAT ONE IS TRUE OF EVERY RUNTIME FILE TOO.**
 	// That bit answers "may this file DECLARE into the reserved space", which `stdlib/Builtins.maxon` and
@@ -52768,13 +52769,19 @@ export type Parser
 
 	// ⭐⭐ **DOES THIS PARSE MINT COVERAGE POINTS? — the one predicate every mint site asks.**
 	//
-	// ⚠ **THE STDLIB BIT IS `isStdlibSource`, NOT `livesUnderStdlibDirectory`, and here the difference runs
-	// the other way from the two doors that pick the second one.** Coverage measures the PROGRAM UNDER TEST
-	// and not the library it links, and `isStdlibSource` is exactly that question: it hands a project ROOTED
-	// under `stdlib/` its own files back as the user's, so `maxon build stdlib/URL.maxon --coverage`
-	// measures `URL.maxon` — which is the whole point of pointing the flag at it.
+	// ⛔ **BOTH LIBRARY TIERS ARE OUT, NOT `stdlib/` ALONE.** Coverage measures the PROGRAM UNDER TEST, and
+	// `runtime/` is no more the author's code than `stdlib/` is — every compile links it, so instrumenting
+	// it puts a second file's lines into the report of a program that never named one. That is
+	// `Queries.isLibrarySourceFile`'s question, spelled here from the two provenance bits this parser
+	// carries because it holds no project to ask.
+	//
+	// ⚠ **THE BITS ARE THE PROVENANCE ONES, NOT `livesUnderStdlibDirectory`, and here the difference runs
+	// the other way from the two doors that pick that one.** Each provenance bit hands a project ROOTED
+	// inside its own tier those files back as the user's, so `maxon build stdlib/URL.maxon --coverage` and
+	// `maxon build runtime/Clock.maxon --coverage` measure the module named — which is the whole point of
+	// pointing the flag at it.
 	function coverageActive() returns bool
-		return self.instrumentsCoverage and not self.isStdlibSource
+		return self.instrumentsCoverage and not self.isStdlibSource and not self.isRuntimeSource
 	end 'coverageActive'
 
 	// Mint one counter slot for a source position and emit its increment at the END of `block` — which is
