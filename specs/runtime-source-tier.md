@@ -96,6 +96,35 @@ end 'main'
 0
 ```
 
+<!-- test: runtime-file-may-keep-its-own-frame -->
+**⭐⭐ A RUNTIME BODY WHOSE CONTRACT IS THE CALL ITSELF, AND THE ROW THAT SAYS SO.** Every other
+`__Raw` row is an operation; `ownFrame` is the one that is an INSTRUCTION TO THE COMPILER, and it earns
+that exception by being the only thing a runtime body cannot otherwise state. A tier body flows through
+the ordinary pipeline, so `InlineLeaves` splices a small one into each of its call sites and dead-function
+elimination then drops it — which is correct for a body that computes an answer and destroys a body whose
+whole product is a FRAME: a checkpoint a profile attaches to, a stack-walk entry a backtrace prints.
+
+⚠ It appends no Std op and costs no instruction. What it does is set a fact about the enclosing function
+(`IrFunction.keepsItsOwnFrame`), which `InlineLeaves.functionShape` refuses to splice for the reason it
+already refuses a green-thread stack guard: the frame is load-bearing.
+
+Under test here is the DECLARATION door alone — that the row exists and a runtime file may spell it. That
+the frame then survives is measured where a compiler-emitted call reaches one, in
+`builtins-parallel-boundary.md`.
+```maxon
+// --- runtime-file: Probe.maxon
+function __probe_marked()
+	__Raw.ownFrame()
+end '__probe_marked'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: raw-intrinsic-refused-outside-the-runtime-tier -->
 ⭐⭐ **THE NEGATIVE CONTROL ON P2, AND IT IS THE HALF THAT MATTERS.** The two cases above prove the
 privileges are not EMPTY. Neither proves they are not UNIVERSAL — a compiler that let ANY file call

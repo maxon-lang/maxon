@@ -32,7 +32,10 @@ waits: it computes. Under the plain rule it could only be spawned by pretending 
 `sleep(0)`, a stat of a file it does not read — which buys a real syscall to satisfy a check.
 
 `parallelBoundary` is the honest spelling of that intent. It compiles to a bare call to a runtime
-entry point with an empty body, and the emitted program pays one call and one return for it.
+entry point with an empty body — `runtime/ParallelBoundary.maxon`'s `__parallel_boundary`, whose whole
+body is `__Raw.ownFrame()` — and the emitted program pays one call and one return for it. The row is
+what keeps that true: a body this small is otherwise spliced into each of its call sites and swept, and
+a checkpoint with no frame is not a checkpoint (`specs/runtime-source-tier.md`).
 
 ⚠⚠ **AND SINCE EC10 THE MARKER BUYS NO PARALLELISM WHATEVER, WHICH IS WORTH SAYING OUT LOUD BECAUSE THE
 NAME SUGGESTS OTHERWISE.** ⚖ An `async` call creates a COROUTINE of the calling green thread (user
@@ -49,14 +52,21 @@ the processor to anybody — `Runtime.yield()` is the intrinsic that does (`__Bu
 `builtins-sleep.md`'s neighbours). A future scheduler could hang a cooperative-yield check here; today
 the body is a prologue and an epilogue.
 
-### the compiler satisfies E3073 through the WALK, not through a roster
+### the compiler satisfies E3073 through PROVENANCE, not through a roster
 
-`SemanticCheck.calleeYields` answers `true` for any callee the program does not DECLARE, and a runtime
-entry point is declared in no source at all — so `__parallel_boundary` reaches E3073's yield closure by
-the same route `__mm_alloc` and `__gt_sleep` do, and needs no entry in
-`ioYieldingRuntimeCallee`'s roster. That is why the two cases below are stated as a PAIR: the marker
-case alone would pass against a compiler that had stopped checking, and the control is what says the
-check is still live.
+`SemanticCheck.calleeYields` answers `true` for a callee declared under `runtime/` and for any callee the
+program does not declare at all — so `__parallel_boundary` reaches E3073's yield closure by the same route
+`__mm_alloc` and `__gt_sleep` do, and needs no entry in `ioYieldingRuntimeCallee`'s roster. That roster
+describes callees whose bodies really park a green thread, and this one parks nothing.
+
+⭐ **THE TIER ARM IS WHAT KEEPS THE ANSWER A FACT ABOUT THE PROGRAM.** A runtime body is Maxon source the
+compiler reads, so its entry point IS in the module's function index — and letting that record an edge
+would hand the caller the body's own (non-yielding) answer and refuse this very case. Where a runtime
+family's body happens to be WRITTEN is not something a user program can observe, so it may not move a
+verdict.
+
+That is why the two cases below are stated as a PAIR: the marker case alone would pass against a compiler
+that had stopped checking, and the control is what says the check is still live.
 
 ⚠ The bootstrap arrives at the same verdict by the opposite construction — an explicit
 `YieldingRuntimeEntries` roster naming `maxon_parallel_boundary` (`SemanticCheckPass.cs`), because its
@@ -139,6 +149,45 @@ end 'main'
 ```
 ```exitcode
 3
+```
+
+<!-- test: builtins-parallel-boundary.checkpoint-body-is-runtime-source -->
+⭐⭐ **THE CHECKPOINT'S BODY IS MAXON SOURCE THE COMPILER READS OUT OF THE TREE, AND THIS IS THE CASE THAT
+SEES IT.** `runtime/ParallelBoundary.maxon` writes `__parallel_boundary` as `__Raw.ownFrame()` and nothing
+else, and the block below renders what the back end made of that: a prologue, an epilogue, a `ret`. Every
+other case in this file watches the CALL; only a rendered body says the callee exists and what it costs. An
+op appearing here is a row that stopped being a directive, and a body with a frame reservation is a
+checkpoint that has started paying for storage it does not use.
+
+⚠ **AND IT CANNOT, BY ITSELF, CATCH A REGRESSION IN `ownFrame` — READ THIS BEFORE TRUSTING IT.** A
+`RequiredRuntime` block ALSO marks the function it names never-inline for that one compile
+(`InlineLeaves.goldenRequestedFunctions`), so this body would be rendered here even by a compiler that had
+stopped honouring `IrFunction.keepsItsOwnFrame` and spliced the checkpoint away everywhere else. What
+actually guards the rule is the `call __parallel_boundary` standing in every OTHER golden that reaches one —
+`statement-position` above, and the `sched-*`, `builtins-mm-counters`, `builtins-cpu-parallel`,
+`debugstream-log-events` and `runtime-scratch-reclaim` families. This case pins the far end of that call;
+those pin that the call is still there.
+
+⚠ `main` calls the checkpoint TWICE, through a function that is itself called twice, so neither the leaf
+rule nor the called-once rule has a single site to move: the golden pins the body that runs rather than an
+emitted leftover.
+```maxon
+function checkpoint()
+	__Builtins.parallelBoundary()
+	__Builtins.parallelBoundary()
+end 'checkpoint'
+
+function main() returns ExitCode
+	checkpoint()
+	checkpoint()
+	return 4
+end 'main'
+```
+```exitcode
+4
+```
+```RequiredRuntime
+__parallel_boundary
 ```
 
 <!-- test: builtins-parallel-boundary.error.value-position-rejected -->

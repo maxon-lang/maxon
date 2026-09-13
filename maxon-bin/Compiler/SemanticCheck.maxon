@@ -4058,7 +4058,7 @@ function checkAsyncYielding(project Project, module MaxonModule, funcNames Funct
 		return
 	end 'noSpawnsInThisProgram'
 
-	let yields = buildYieldingSummary(module, funcNames: funcNames)
+	let yields = buildYieldingSummary(module, funcNames: funcNames, runtimeTier: project.libraryFacts.runtimeTier)
 
 	for funcIndex in 0 upto funcNames.functions.count() 'eachFunc'
 		let func = try funcNames.functions.get(funcIndex) otherwise panic("checkAsyncYielding: functions.get OOB at {funcIndex}")
@@ -4125,6 +4125,12 @@ end 'reportIfNonYielding'
 // The spawn site itself. Keyed by the SAME name `calleeYields` built its edges from, so a spawn can never look
 // up a different function than the one whose yields were computed. A callee the index does not know is one
 // this pass cannot see through, and by the closure's asymmetry that resolves toward accepting.
+//
+// ⚠ **FOR A `runtime/` CALLEE THE TWO READ THE SAME FUNCTION AND ANSWER OFF DIFFERENT FACTS**: the column
+// here holds the tier body's own verdict, while `calleeYields` answers "yields" by provenance and records no
+// edge. No program can reach the disagreement — only a `runtime/` file may name a runtime entry, and no tier
+// file spawns — but the scheduler is due in the tier, so a spawn OF a runtime entry is the shape to check
+// before that lands.
 //
 // ⭐⭐ **AND IT IS ALSO WHERE A SPAWN MEETS THE TARGET GATE, BECAUSE A SPAWN REACHES THE GREEN-THREAD FLOOR
 // THROUGH AN OP RATHER THAN A CALLEE.** `checkCalls` sees `async f()`'s callee — `f` — and nothing about
@@ -4241,7 +4247,7 @@ function effectFreeSummaryIfConsulted(project Project, module MaxonModule, signa
 	for siteIndex in 0 upto project.pendingDiscardedResults.count() 'eachSite'
 		match resolveDiscardSite(project, siteIndex: siteIndex, funcNames: funcNames) 'resolved'
 			settled then break 'resolved'
-			purityOf then return buildEffectFreeSummary(module, signatures: signatures, funcNames: funcNames)
+			purityOf then return buildEffectFreeSummary(module, signatures: signatures, funcNames: funcNames, runtimeTier: project.libraryFacts.runtimeTier)
 		end 'resolved'
 	end 'eachSite'
 
@@ -4404,14 +4410,14 @@ end 'calleeIsChainable'
 // own bodies show one. The same relation, the same CSR and the same complexity argument as the parameter
 // mutation and closure escape summaries; see that routine's header for why a re-scan loop is a different
 // complexity and not a different spelling.
-function buildEffectFreeSummary(module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex) returns BoolArray
+function buildEffectFreeSummary(module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, runtimeTier FunctionNameSet) returns BoolArray
 	var seeds = BoolArray.create()
 	var edges = CallGraphEdges.create()
 	var dispatch = WitnessDispatchTargets.create(signatures, functions: funcNames.functions)
 
 	for i in 0 upto funcNames.functions.count() 'eachFunc'
 		let func = try funcNames.functions.get(i) otherwise panic("buildEffectFreeSummary: functions.get OOB at {i}")
-		seeds.push(functionShowsAnEffect(module, func: func, funcIndexByName: funcNames.byName, callerIndex: i, edges: edges, dispatch: dispatch))
+		seeds.push(functionShowsAnEffect(module, func: func, funcIndexByName: funcNames.byName, callerIndex: i, edges: edges, dispatch: dispatch, runtimeTier: runtimeTier))
 	end 'eachFunc'
 
 	var effectFree = BoolArray.create()
@@ -4557,7 +4563,7 @@ end 'WitnessDispatchTargets'
 // `array-conditional-conformance-withheld.the-cloneable-witness-route-is-opened-by-the-instance-dictionary`
 // — `_ = copyIt(src)` over `function copyIt(c Cloneable) returns Cloneable` — is REFUSED E3064, which is the
 // over-refusing direction this summary must never take.
-function witnessDispatchShowsAnEffect(dispatch WitnessDispatchTargets, func IrFunction, args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges) returns bool
+function witnessDispatchShowsAnEffect(dispatch WitnessDispatchTargets, func IrFunction, args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges, runtimeTier FunctionNameSet) returns bool
 	if (try func.valueTags.get(witnessDispatchReceiver(args)) otherwise return true) != ValueTypeTag.typeParameter 'chosenAtRunTime'
 		return true
 	end 'chosenAtRunTime'
@@ -4573,7 +4579,7 @@ function witnessDispatchShowsAnEffect(dispatch WitnessDispatchTargets, func IrFu
 	var effectful = false
 
 	for candidate in candidates 'eachCandidate'
-		if calleeShowsAnEffect(candidate, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges) 'thisOneDoes'
+		if calleeShowsAnEffect(candidate, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges, runtimeTier: runtimeTier) 'thisOneDoes'
 			effectful = true
 		end 'thisOneDoes'
 	end 'eachCandidate'
@@ -4599,13 +4605,13 @@ end 'witnessDispatchShowsAnEffect'
 // declares — is treated as YIELDING. Over-accepting costs a pointless spawn the compiler failed to complain
 // about; under-accepting REFUSES A CORRECT PROGRAM, and a false rejection is not something the author can work
 // around. Every unknown therefore resolves toward "yields".
-function buildYieldingSummary(module MaxonModule, funcNames FunctionNameIndex) returns BoolArray
+function buildYieldingSummary(module MaxonModule, funcNames FunctionNameIndex, runtimeTier FunctionNameSet) returns BoolArray
 	var seeds = BoolArray.create()
 	var edges = CallGraphEdges.create()
 
 	for i in 0 upto funcNames.functions.count() 'eachFunc'
 		let func = try funcNames.functions.get(i) otherwise panic("buildYieldingSummary: functions.get OOB at {i}")
-		seeds.push(functionYieldsDirectly(module, func: func, funcIndexByName: funcNames.byName, callerIndex: i, edges: edges))
+		seeds.push(functionYieldsDirectly(module, func: func, funcIndexByName: funcNames.byName, callerIndex: i, edges: edges, runtimeTier: runtimeTier))
 	end 'eachFunc'
 
 	return markSeededCallers(edges, seeds: seeds, nodeCount: funcNames.functions.count())
@@ -4645,7 +4651,7 @@ end 'markSeededCallees'
 //
 // A body this pass cannot read proves nothing, so by the erring-toward-accepting rule above it counts as
 // yielding — the same direction `functionShowsAnEffect` resolves it in, off the same predicate.
-function functionYieldsDirectly(module MaxonModule, func IrFunction, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges) returns bool
+function functionYieldsDirectly(module MaxonModule, func IrFunction, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges, runtimeTier FunctionNameSet) returns bool
 	if bodyIsUnreadable(func) 'noBodyToProveAnythingAbout'
 		return true
 	end 'noBodyToProveAnythingAbout'
@@ -4654,7 +4660,7 @@ function functionYieldsDirectly(module MaxonModule, func IrFunction, funcIndexBy
 		let block = try module.blocks.get(blockRef) otherwise panic("functionYieldsDirectly: blockRef from func.blockRefs not in module.blocks")
 
 		for opIdx in block.opRefs 'eachOp'
-			if opYields(try module.ops.get(opIdx) otherwise panic("functionYieldsDirectly: opIdx {opIdx} not in module.ops"), funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges) 'yields'
+			if opYields(try module.ops.get(opIdx) otherwise panic("functionYieldsDirectly: opIdx {opIdx} not in module.ops"), funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges, runtimeTier: runtimeTier) 'yields'
 				return true
 			end 'yields'
 		end 'eachOp'
@@ -4666,9 +4672,9 @@ end 'functionYieldsDirectly'
 // The per-op arm, band-for-band with `opShowsAnEffect` so a newly appended op fails to compile here too. The
 // bands that differ from that function are the ones where "suspends the green thread" and "is observable"
 // genuinely part company: a `globalAddr` is an effect and no yield at all, while an `await` is both.
-function opYields(op MaxonOp, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges) returns bool
+function opYields(op MaxonOp, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges, runtimeTier FunctionNameSet) returns bool
 	return match op 'op'
-		call(_, callee, _, _, _, _, _, _) gives calleeYields(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges)
+		call(_, callee, _, _, _, _, _, _) gives calleeYields(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges, runtimeTier: runtimeTier)
 		literal or
 			ret or
 			retVoid or
@@ -4681,7 +4687,7 @@ function opYields(op MaxonOp, funcIndexByName FuncIndexByName, callerIndex FuncI
 		loadIndirect or
 			storeIndirect or
 			stringLiteral gives false
-		tryCall(_, _, callee, _, _, _, _, _, _) gives calleeYields(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges)
+		tryCall(_, _, callee, _, _, _, _, _, _) gives calleeYields(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges, runtimeTier: runtimeTier)
 		throwError or
 			propagateError gives false
 		panicAbort gives false
@@ -4694,7 +4700,7 @@ function opYields(op MaxonOp, funcIndexByName FuncIndexByName, callerIndex FuncI
 		// ⭐ A SPAWN IS AN EDGE, NOT A YIELD. `async f()` suspends this frame exactly when `f` can suspend, so it
 		// contributes the same edge an ordinary call does — which is what makes a function that spawns a
 		// yielding function itself yielding, and is also exactly the case E3073 rejects when `f` cannot.
-		asyncCall(_, callee, _, _, _, _, _) gives calleeYields(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges)
+		asyncCall(_, callee, _, _, _, _, _) gives calleeYields(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges, runtimeTier: runtimeTier)
 
 		// An `await` suspends this frame until another green thread completes. That IS the yield.
 		await or
@@ -4722,13 +4728,26 @@ function opYields(op MaxonOp, funcIndexByName FuncIndexByName, callerIndex FuncI
 	end 'op'
 end 'opYields'
 
-// One call, judged by its callee: a runtime park point yields outright, a callee this module declares
-// contributes an EDGE and lets the closure decide, and anything else is an unknown that resolves toward
-// "yields".
-function calleeYields(callee ByteArray, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges) returns bool
+// One call, judged by its callee: a runtime park point yields outright, a RUNTIME entry is opaque, a callee
+// this module declares contributes an EDGE and lets the closure decide, and anything else is an unknown that
+// resolves toward "yields".
+//
+// ⛔⛔ **A `runtime/` CALLEE IS OPAQUE TO THIS QUESTION, AND THAT IS PROVENANCE RATHER THAN AN EXEMPTION.**
+// The runtime is what the compiler EMITS a call to; whether a frame can be suspended there is settled by
+// `ioYieldingRuntimeCallee` above, which describes measured park behaviour. What the tier's bodies are
+// WRITTEN IN — Std IR the compiler builds, or Maxon source it reads out of `runtime/` — is not a fact about
+// any program, so it must not move a verdict: without this, migrating a family into the source tier puts its
+// entry point in `funcIndexByName`, the edge is recorded, the closure reads the body's own (non-yielding)
+// answer, and every `async` over a caller of it inverts. The whole tier is covered, because every family
+// still to migrate would otherwise flip on the day it moves.
+function calleeYields(callee ByteArray, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges, runtimeTier FunctionNameSet) returns bool
 	if ioYieldingRuntimeCallee(callee) 'parksTheGreenThread'
 		return true
 	end 'parksTheGreenThread'
+
+	if runtimeTier.contains(callee) 'theRuntimeTier'
+		return true
+	end 'theRuntimeTier'
 
 	return not recordCallGraphEdge(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges)
 end 'calleeYields'
@@ -4838,7 +4857,7 @@ end 'CallGraphEdges'
 // (callee, this) exists only to carry a CALLEE's mark up into this function, and this function is already
 // marked. Its own mark reaches its callers through the edges THEY record. The op loop returns early for the
 // same reason.
-function functionShowsAnEffect(module MaxonModule, func IrFunction, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges, dispatch WitnessDispatchTargets) returns bool
+function functionShowsAnEffect(module MaxonModule, func IrFunction, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges, dispatch WitnessDispatchTargets, runtimeTier FunctionNameSet) returns bool
 	// Nothing this pass can read, so nothing about it is provable.
 	if bodyIsUnreadable(func) 'noBodyToProveAnythingAbout'
 		return true
@@ -4877,7 +4896,7 @@ function functionShowsAnEffect(module MaxonModule, func IrFunction, funcIndexByN
 		let block = try module.blocks.get(blockRef) otherwise panic("functionShowsAnEffect: blockRef from func.blockRefs not in module.blocks")
 
 		for opIdx in block.opRefs 'eachOp'
-			if opShowsAnEffect(try module.ops.get(opIdx) otherwise panic("functionShowsAnEffect: opIdx {opIdx} not in module.ops"), func: func, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges, dispatch: dispatch) 'effectful'
+			if opShowsAnEffect(try module.ops.get(opIdx) otherwise panic("functionShowsAnEffect: opIdx {opIdx} not in module.ops"), func: func, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges, dispatch: dispatch, runtimeTier: runtimeTier) 'effectful'
 				return true
 			end 'effectful'
 		end 'eachOp'
@@ -4908,9 +4927,9 @@ end 'functionReturnsNothing'
 // the closure will carry the callee's answer back along. The non-call bands range to `break`, so a newly
 // an op added later fails to compile here rather than silently reading as effect-free,
 // and here it is load-bearing in the refusing direction (see `buildEffectFreeSummary`'s safety argument).
-function opShowsAnEffect(op MaxonOp, func IrFunction, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges, dispatch WitnessDispatchTargets) returns bool
+function opShowsAnEffect(op MaxonOp, func IrFunction, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges, dispatch WitnessDispatchTargets, runtimeTier FunctionNameSet) returns bool
 	return match op 'op'
-		call(_, callee, _, _, _, _, _, _) gives calleeShowsAnEffect(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges)
+		call(_, callee, _, _, _, _, _, _) gives calleeShowsAnEffect(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges, runtimeTier: runtimeTier)
 		literal or
 			ret or
 			retVoid or
@@ -4941,7 +4960,7 @@ function opShowsAnEffect(op MaxonOp, func IrFunction, funcIndexByName FuncIndexB
 		loadIndirect or
 			storeIndirect or
 			stringLiteral gives false
-		tryCall(_, _, callee, _, _, _, _, _, _) gives calleeShowsAnEffect(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges)
+		tryCall(_, _, callee, _, _, _, _, _, _) gives calleeShowsAnEffect(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges, runtimeTier: runtimeTier)
 
 		// ⛔ **FAILING IS NOT AN EFFECT, AND ABORTING IS NOT ONE EITHER: a THROWING pure function's discarded
 		// result is still E3064** (`specs/discarded-results.md`'s `try-pure-let-discard`). A throw hands the
@@ -4968,8 +4987,8 @@ function opShowsAnEffect(op MaxonOp, func IrFunction, funcIndexByName FuncIndexB
 			switch gives false
 
 		// ⭐⭐ **A CONSTRAINED REQUIREMENT'S CALL IS CLOSED OVER, NOT REFUSED — see `WitnessDispatchTargets`.**
-		witnessDispatch(_, args, _, methodIndex, interfaceDeclIndex, _, _) gives witnessDispatchShowsAnEffect(dispatch, func: func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges)
-		witnessTryDispatch(_, _, args, _, methodIndex, interfaceDeclIndex, _) gives witnessDispatchShowsAnEffect(dispatch, func: func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges)
+		witnessDispatch(_, args, _, methodIndex, interfaceDeclIndex, _, _) gives witnessDispatchShowsAnEffect(dispatch, func: func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges, runtimeTier: runtimeTier)
+		witnessTryDispatch(_, _, args, _, methodIndex, interfaceDeclIndex, _) gives witnessDispatchShowsAnEffect(dispatch, func: func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges, runtimeTier: runtimeTier)
 		panicAbortValue gives false
 		errorFlagEncode gives false
 
@@ -4988,21 +5007,38 @@ function opShowsAnEffect(op MaxonOp, func IrFunction, funcIndexByName FuncIndexB
 		// would refuse the code it was pointed at.
 		covPoint gives false
 
-		// ⭐ **`true` FOR THE WHOLE FAMILY, AND IT IS THE HONEST ANSWER RATHER THAN A CONSERVATIVE ONE.** The
-		// `__Raw` floor IS the effect: a store writes memory, a clock read consults the host, and an out-pointer
-		// row writes through its argument. A row-by-row purity claim would be a second, drifting idea of what
-		// each instruction does, while the table states what each one IS.
+		// ⭐ **`true` FOR THE WHOLE FAMILY, WHICH IS THE HONEST ANSWER FOR EVERY OPERATION ROW AND THE SAFE ONE
+		// FOR THE DIRECTIVE.** The `__Raw` floor IS the effect wherever a row is an operation: a store writes
+		// memory, a clock read consults the host, an out-pointer row writes through its argument. `ownFrame`
+		// computes nothing and emits nothing, so for that row alone this is conservative rather than exact.
+		//
+		// ⛔ **DO NOT "CORRECT" IT ROW BY ROW.** A per-row purity claim is a second, drifting idea of what each
+		// instruction does — and making `ownFrame` answer `false` would classify the body that spells it as
+		// effect-free, which is the very verdict `calleeShowsAnEffect`'s tier arm exists to keep a runtime body
+		// from handing its callers.
 		rawIntrinsic gives true
 	end 'op'
 end 'opShowsAnEffect'
 
-// One call, judged by its callee. A runtime entry point on the effect-free roster says nothing; any other
-// callee this module does not declare is an effect; a declared one contributes an EDGE and lets the closure
-// decide.
-function calleeShowsAnEffect(callee ByteArray, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges) returns bool
+// One call, judged by its callee. A runtime entry point on the effect-free roster says nothing; any OTHER
+// runtime entry is an effect; so is any callee this module does not declare; a declared one contributes an
+// EDGE and lets the closure decide.
+//
+// ⛔⛔ **A `runtime/` CALLEE IS OPAQUE TO THIS WALK, FOR `calleeYields`' REASON AND WITH THE SAME FORCE.**
+// The roster above is the whole positive side, so every unlisted runtime entry must read as an effect —
+// and that used to follow from the entry being declared in no source. A migrated family's entry point IS
+// declared, so without this arm the edge is recorded and the closure hands the caller the tier body's own
+// verdict: a pure `module function` helper in a runtime file would classify effect-free, propagate that to
+// any user function whose only effect is calling it, and earn E3064 on a legal program. The roster is
+// asked FIRST, because a read-only entry is read-only wherever its body is written.
+function calleeShowsAnEffect(callee ByteArray, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges, runtimeTier FunctionNameSet) returns bool
 	if effectFreeRuntimeCallee(callee) 'aRuntimeEntryThatObservesNothing'
 		return false
 	end 'aRuntimeEntryThatObservesNothing'
+
+	if runtimeTier.contains(callee) 'theRuntimeTier'
+		return true
+	end 'theRuntimeTier'
 
 	let calleeIndex = try funcIndexByName.get(callee) otherwise return true
 	edges.record(calleeIndex, callerIndex: callerIndex)

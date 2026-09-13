@@ -1250,6 +1250,11 @@ type MaxonToStdLowering
 	// dictionary-passing invariant checks raise (`bindImplicitLayoutParam` / `forwardCallerLayout`).
 	var currentFuncName as ByteArray
 
+	// Has the function CURRENTLY being lowered claimed its own frame (`__Raw.ownFrame`)? Re-stamped per
+	// function beside `currentFuncName` and written onto the Std function once its blocks are walked,
+	// because the claim is made by an op in the body and there is nowhere earlier to read it from.
+	var currentKeepsItsOwnFrame as bool
+
 	// Where each file's coverage points begin in `Project.covPoints`. EMPTY for every build `--coverage` is
 	// off for, which is what makes the per-function lookup below cost nothing in an ordinary compile.
 	var covPointBases as CovPointBaseMap
@@ -1357,7 +1362,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedImmortalStructBoxes: ImmortalStructBoxLabelSet.create(), emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, stdOpElementStrides: project.stdOpElementStrides, stdOpTrivialElementSites: project.stdOpTrivialElementSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: ValueExistentialInstanceMap.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, covPointBases: project.covPointBases, currentCovPointBase: 0, implicitLayoutValueId: 0, hasImplicitLayout: false, implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, unreachableStdlib: project.libraryFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedImmortalStructBoxes: ImmortalStructBoxLabelSet.create(), emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, stdOpElementStrides: project.stdOpElementStrides, stdOpTrivialElementSites: project.stdOpTrivialElementSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: ValueExistentialInstanceMap.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, currentKeepsItsOwnFrame: false, covPointBases: project.covPointBases, currentCovPointBase: 0, implicitLayoutValueId: 0, hasImplicitLayout: false, implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, unreachableStdlib: project.libraryFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -1556,6 +1561,7 @@ type MaxonToStdLowering
 			// receiver's `GenericInstanceId` out of it.
 			self.valueNameIds = srcFunc.valueNameIds
 			self.currentFuncName = srcFunc.name
+			self.currentKeepsItsOwnFrame = false
 			self.bindCovPointBase(srcFunc)
 
 			// Bind this function's hidden implicit parameters (P1.6-B1 layout + P1.7a slice 2a witnesses).
@@ -1638,6 +1644,12 @@ type MaxonToStdLowering
 					carryOplessTerminator(srcTerminator, srcBlockId: srcBlockId, dstBlock: dstBlock)
 				end 'noTermOp'
 			end 'eachBlock'
+
+			// The claim is made by an op, so it is answerable for only once every block of the body is walked.
+			if self.currentKeepsItsOwnFrame 'ownsItsFrame'
+				var lowered = try self.stdModule.functions.get(fnIndex) otherwise panic("lowerFunctionBodies: fnIndex {fnIndex} is below self.stdModule.functions.count()")
+				lowered.keepsItsOwnFrame = true
+			end 'ownsItsFrame'
 
 			// The cursor belongs to THIS function's walk. `installParametricWitnessChecks` and
 			// `installWitnessSlotAdapters` append below, and neither is any statement's code.
@@ -2022,10 +2034,15 @@ type MaxonToStdLowering
 	// relocation (`dataSectionRipRelDisp32`), and the record lives in read-only `.rdata`
 	// (`ripRelDisp32`). The two differ only in the section they measure from — which is exactly what
 	// the relocation kind discriminates.
-	// ⭐⭐ **THE `__Raw.*` TABLE'S MAP ONTO Std, ONE ROW TO ONE OP (see `RawIntrinsics`).** It is the whole of
-	// what "`__Raw` is the raw floor" means: no runtime entry stands between the source a `runtime/` file
-	// writes and the instruction it becomes. The match is exhaustive, so a row added to the table does not
-	// compile until it is lowered here.
+	// ⭐⭐ **THE `__Raw.*` TABLE'S MAP ONTO Std (see `RawIntrinsics`).** Every operation row maps to ONE Std
+	// op, which is the whole of what "`__Raw` is the raw floor" means: no runtime entry stands between the
+	// source a `runtime/` file writes and the instruction it becomes. The match is exhaustive, so a row added
+	// to the table does not compile until it is lowered here.
+	//
+	// ⚠ **`ownFrame` IS THE ONE ROW THAT APPENDS NOTHING, AND IT EARNS THE EXCEPTION BY BEING A DIRECTIVE
+	// RATHER THAN AN OPERATION.** It states that this function's frame is its product, so the body survives
+	// the inliner; there is no instruction that says that, and a row is the only place a runtime body can
+	// say anything at all.
 	//
 	// `constant` is the compile-time integer the row's shape carried — a frame SLOT for `scratch`, already
 	// laid out by `Parser.reserveRawScratchSlot`, and a byte offset for the two word accessors.
@@ -2037,6 +2054,7 @@ type MaxonToStdLowering
 			scratch then self.stdModule.appendOp(dstBlock, op: StdOp.stackRecordAddr(result, slot: constant as SpillSlot))
 			loadWord then self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(result, addrId: rawWordOperand(args, index: 0, intrinsic: intrinsic), offset: constant as ByteOffset, valueType: StdType.i64))
 			storeWord then self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(rawWordOperand(args, index: 0, intrinsic: intrinsic), offset: constant as ByteOffset, valueId: rawWordOperand(args, index: 1, intrinsic: intrinsic), valueType: StdType.i64))
+			ownFrame then self.currentKeepsItsOwnFrame = true
 		end 'row'
 	end 'lowerRawIntrinsic'
 

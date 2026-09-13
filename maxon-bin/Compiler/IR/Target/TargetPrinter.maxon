@@ -156,7 +156,7 @@ end 'printDataSection'
 // The printed text grows with the PROGRAM, so both accumulators here are `StringBuilder`s: a `String`
 // owns exactly the bytes it holds and its `append` recopies all of them (stdlib/String.maxon), which
 // would make printing a module quadratic in its own output.
-export function printTargetModule(module TargetModule, globalData GlobalDataTable, runtimeNames RuntimeFunctionNameArray, codeChunks FunctionCodeChunkArray, libraryFunctions FunctionNameSet) returns String
+export function printTargetModule(module TargetModule, globalData GlobalDataTable, runtimeNames RuntimeFunctionNameArray, codeChunks FunctionCodeChunkArray, libraryFunctions FunctionNameSet, runtimeTier FunctionNameSet) returns String
 	var body = StringBuilder.create()
 	let dataText = printDataSection(globalData)
 	body.append(dataText)
@@ -187,7 +187,7 @@ export function printTargetModule(module TargetModule, globalData GlobalDataTabl
 		// ONE question, asked ONCE per function and read by both rules below — the refusal and the skip.
 		// Asking it twice is what the flag column's own header warns against, in the shape that reports a
 		// WRONG ANSWER rather than an error.
-		let supplied = isSuppliedFunction(func, libraryFunctions: libraryFunctions)
+		let supplied = isSuppliedFunction(func, libraryFunctions: libraryFunctions, runtimeTier: runtimeTier)
 
 		// Naming a function the fragment ALREADY shows says nothing new, and reading the block as if it
 		// had would be a reader's mistake. It is caught here rather than in a pre-pass so it, too, reads
@@ -573,9 +573,24 @@ end 'requireEveryNameRendered'
 // synthesized bodies went at W105 and W129; the spec directories still reach the same naming band, by the
 // corpus route. On the GT side they are ordinary frames a
 // green thread runs and MUST grow for. Both readers want *"the invariant scaffolding"*, which is the
-// CONJUNCTION: the runtime's own naming band, and not parsed from source.
-function isRuntimeFunction(func IrFunction) returns bool
-	return (bytesStartWith(func.name, prefix: b"mrt_") or bytesStartWith(func.name, prefix: b"__")) and func.sourceFilePath.isEmpty()
+// CONJUNCTION: the runtime's own naming band, and BUILT BY THE COMPILER rather than written by the program.
+//
+// ⭐⭐ **"BUILT BY THE COMPILER" IS TWO PROVENANCES, AND AN EMPTY `sourceFilePath` IS ONLY THE FIRST.** A
+// `runtime/` body is the compiler's own invariant scaffolding written as Maxon the compiler READS, so it
+// has a real path and is exactly as much scaffolding as a Std-IR builder's output. `LibraryFacts.runtimeTier`
+// is the second, and it is the SAME set `SemanticCheck.calleeYields` and `calleeShowsAnEffect` read: three
+// predicates that each derived "is this the runtime's?" from a proxy the tier falsified, now answering off
+// one provenance fact. The alternative — a path test here — is the 118-test regression the paragraph above
+// measured, and it re-derives what one walk already knows.
+//
+// ⛔ **THIS DOES NOT REOPEN THE `__probeDeep` SEGFAULT, and the difference is WHO CAN ADD A NAME.** That
+// defect was a USER function reaching the exemption: `stdlib/Builtins.maxon` is a file user code calls into,
+// and the name test alone let anything declared there wear the scheduler's exemption. `runtime/` is a cone
+// the COMPILER loads and no user file may even name into (E3152/E2051, and `calleeVisibleFrom`'s admit-list),
+// so nothing a program writes can enter this set. The conjunct is widened by one closed, compiler-owned
+// population — not weakened.
+function isRuntimeFunction(func IrFunction, runtimeTier FunctionNameSet) returns bool
+	return (bytesStartWith(func.name, prefix: b"mrt_") or bytesStartWith(func.name, prefix: b"__")) and (func.sourceFilePath.isEmpty() or runtimeTier.contains(func.name))
 end 'isRuntimeFunction'
 
 // ⭐⭐ **EVERYTHING A PROGRAM WAS SUPPLIED WITH RATHER THAN WROTE — the ONE rule the render, the skip
@@ -596,8 +611,10 @@ end 'isRuntimeFunction'
 // The library half is a set lookup rather than a path test for the reason `StdlibSource`'s header
 // gives: provenance is materialized ONCE per compile, and re-deriving it with `FilePath.isInside`
 // costs about four String allocations per question.
-function isSuppliedFunction(func IrFunction, libraryFunctions FunctionNameSet) returns bool
-	return isRuntimeFunction(func) or libraryFunctions.contains(func.name)
+// ⚠ `runtimeTier` changes no answer HERE — `libraryFunctions` already holds every `runtime/` name — and is
+// taken only because the first disjunct needs it. The guard question is where the tier half is load-bearing.
+function isSuppliedFunction(func IrFunction, libraryFunctions FunctionNameSet, runtimeTier FunctionNameSet) returns bool
+	return isRuntimeFunction(func, runtimeTier: runtimeTier) or libraryFunctions.contains(func.name)
 end 'isSuppliedFunction'
 
 // ⭐⭐ **MAY THIS FUNCTION SKIP THE GREEN-THREAD STACK GUARD?** — the OTHER question `isRuntimeFunction`
@@ -613,8 +630,8 @@ end 'isSuppliedFunction'
 // per-type CASCADES, which recurse to the depth of the user's data graph, and the managed globals' fill and
 // release, which open and close `main`'s green thread. `IrFunction.needsGreenThreadStackGuard` is where that
 // is said, and carries the measurement.
-export function skipsGreenThreadStackGuard(func IrFunction) returns bool
-	return isRuntimeFunction(func) and not func.needsGreenThreadStackGuard
+export function skipsGreenThreadStackGuard(func IrFunction, runtimeTier FunctionNameSet) returns bool
+	return isRuntimeFunction(func, runtimeTier: runtimeTier) and not func.needsGreenThreadStackGuard
 end 'skipsGreenThreadStackGuard'
 
 // --- Block names: the ONE derivation a header and a branch target both read ---

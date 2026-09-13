@@ -4,11 +4,16 @@
 // (`Parser.requireCalleeIsNotReservedName`), because a raw machine operation in user code has no
 // runtime between it and the machine.
 //
+// ⚠ **ONE ROW IS A DIRECTIVE INSTEAD — `ownFrame`**, which emits nothing and states a fact about the
+// function that spells it. The table is the only vocabulary a runtime body has, so a thing a body must say
+// and cannot otherwise express belongs in it; see that row for why the exception stops at one.
+//
 // ⭐ **THE TABLE IS WHAT EVERY READER ASKS.** Recognition, the statement door, the argument shape check
 // and the lowering all read the four functions below, so "which intrinsics exist", "how is one written"
 // and "what does one answer" are one fact in one place rather than a roster restated per site. The
-// lowering's own `match` over `RawIntrinsic` is the fifth reader and the one that names a Std op; it is
-// exhaustive, so a row added here does not compile until it is lowered.
+// lowering's own `match` over `RawIntrinsic` is the fifth reader and the one that says what each row
+// BECOMES — a Std op for an operation, and nothing at all for the directive; it is exhaustive, so a row
+// added here does not compile until it is lowered.
 //
 // ⭐ A name NOT in the table is not silently a link error and earns no second error code: the call falls
 // through to `emitCall`, whose reserved-callee rejection already answers the positioned E3004 that names
@@ -27,6 +32,7 @@ let RawOsThreadCpuTicksName = b"__Raw.osThreadCpuTicks"
 let RawScratchName = b"__Raw.scratch"
 let RawLoadWordName = b"__Raw.loadWord"
 let RawStoreWordName = b"__Raw.storeWord"
+let RawOwnFrameName = b"__Raw.ownFrame"
 
 export enum RawIntrinsic
 	osTickCountMs
@@ -35,6 +41,13 @@ export enum RawIntrinsic
 	scratch
 	loadWord
 	storeWord
+
+	// ⭐⭐ **THE ONE ROW THAT IS A DIRECTIVE RATHER THAN AN OPERATION.** It emits no instruction; it states
+	// that the enclosing function's FRAME is its product, so nothing may splice the body away. A runtime
+	// body whose whole contract is the call itself — a checkpoint a profile attaches to, a stack-walk entry
+	// a backtrace prints — has no other way to say so, and every alternative keys the fact on a NAME the
+	// compiler would have to remember instead of on the body that owns it.
+	ownFrame
 end 'RawIntrinsic'
 
 // ⭐ **EVERY ARGUMENT SHAPE A ROW CAN WEAR, ENUMERATED RATHER THAN DERIVED from an arity plus a per-position
@@ -103,6 +116,10 @@ function rawIntrinsicLookupOf(callee ByteArray) returns RawIntrinsicLookup
 		return RawIntrinsicLookup.found(RawIntrinsic.storeWord)
 	end 'storeWord'
 
+	if callee.equals(RawOwnFrameName) 'ownFrame'
+		return RawIntrinsicLookup.found(RawIntrinsic.ownFrame)
+	end 'ownFrame'
+
 	return RawIntrinsicLookup.absent
 end 'rawIntrinsicLookupOf'
 
@@ -135,6 +152,7 @@ export function rawIntrinsicCalleeName(intrinsic RawIntrinsic) returns ByteArray
 		scratch gives RawScratchName
 		loadWord gives RawLoadWordName
 		storeWord gives RawStoreWordName
+		ownFrame gives RawOwnFrameName
 	end 'name'
 end 'rawIntrinsicCalleeName'
 
@@ -146,6 +164,7 @@ export function rawArgShapeOf(intrinsic RawIntrinsic) returns RawArgShape
 		scratch gives RawArgShape.oneConstant
 		loadWord gives RawArgShape.wordThenConstant
 		storeWord gives RawArgShape.wordConstantWord
+		ownFrame gives RawArgShape.nothing
 	end 'shape'
 end 'rawArgShapeOf'
 
@@ -156,7 +175,8 @@ export function rawResultKindOf(intrinsic RawIntrinsic) returns RawResultKind
 		osThreadCpuTicks gives RawResultKind.nothing
 		scratch gives RawResultKind.machineWord
 		loadWord gives RawResultKind.machineWord
-		storeWord gives RawResultKind.nothing
+		storeWord or
+			ownFrame gives RawResultKind.nothing
 	end 'result'
 end 'rawResultKindOf'
 
@@ -218,6 +238,7 @@ export function rawHostFacilityOf(intrinsic RawIntrinsic) returns RawHostFacilit
 		osThreadCpuTicks gives RawHostFacility.required(HostFacility.threadCpuClock)
 		scratch or
 			loadWord or
-			storeWord gives RawHostFacility.none
+			storeWord or
+			ownFrame gives RawHostFacility.none
 	end 'facility'
 end 'rawHostFacilityOf'

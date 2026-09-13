@@ -123,9 +123,8 @@ rather than with a machine-wide count. The authority on which target provides it
 that there is more than one, and the per-case `unsupported-targets:` markers below are what actually gate.
 
 `schedMaxActiveWorkers` is refused NOWHERE, and for a reason of its own rather than by omission: its
-whole body is one `.data` load and a `ret`, which lowers on every target the compiler emits — the same
-argument `__parallel_boundary`'s empty body makes for its own `__parallel_` band, and a load reaches
-no more OS than the constant return this used to be. It therefore wears the
+whole body is one `.data` load and a `ret`, which lowers on every target the compiler emits, and a load
+reaches no more OS than a constant return does. It therefore wears the
 `__sched_` band rather than `__cpu_`, because the two bands answer the question *"may this target
 run it"* differently and a prefix test can only give one answer per band.
 

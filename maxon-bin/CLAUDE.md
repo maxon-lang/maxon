@@ -15,9 +15,10 @@ compiler READS, so the first build already compiles against the edited file and 
 opposite of `Compiler/Runtime/` below, which the compiler WRITES into every program including itself.
 `scripts/self-compiles-needed.sh` answers for both; it does not watch `runtime/`, deliberately.
 
-⭐ **THE FIRST FAMILY IS IN, AND THE ROOT THAT REACHES IT IS A CALL THE COMPILER EMITS.**
-`runtime/Clock.maxon` holds `__clock_now_unix_s` and `__uptime_ms`; `__Builtins.currentUnixTimeSeconds()`
-and `__Builtins.tickCountMs()` lower to calls naming them, from whatever file wrote the construct. No
+⭐ **TWO FAMILIES ARE IN, AND THE ROOT THAT REACHES EITHER IS A CALL THE COMPILER EMITS.**
+`runtime/Clock.maxon` holds `__clock_now_unix_s` and `__uptime_ms` and `runtime/ParallelBoundary.maxon`
+holds `__parallel_boundary`; `__Builtins.currentUnixTimeSeconds()`, `__Builtins.tickCountMs()` and
+`__Builtins.parallelBoundary()` lower to calls naming them, from whatever file wrote the construct. No
 source file OUTSIDE the tier can NAME a runtime entry — that is the tier's defining property, and
 `Parser.requireCalleeIsNotReservedName` admits a reserved callee only where the FILE may declare reserved
 names, which is `runtime/` itself plus `stdlib/Builtins.maxon` and `stdlib/Testing.maxon`. An ordinary
@@ -32,7 +33,40 @@ program that reaches no runtime family carries none of it.
 ⚠ **A `RuntimeUsage` BIT NO LONGER GATES A SOURCED BODY'S INSTALLATION, AND STILL GATES EVERYTHING ELSE.**
 DFE decides whether the body survives, so `usesWallClock` and `usesUptimeClock` install nothing — but the
 per-target hand-assembled `osReadWallClock` chunk, the POSIX clock floor and the Windows optional import
-band are all still theirs. Retire a bit when its LAST consumer is gone, not when the body moves.
+band are all still theirs. Retire a bit when its LAST consumer is gone, not when the body moves. The
+checkpoint's bit is the one that qualified and it is GONE: that body declares no dependency at all — no
+heap, no scheduler, no import, no `.data` word — so the install guard was its only reader, and the band
+predicate that set it went with it.
+
+⛔⛔⛔ **THREE PREDICATES ASKED "IS THIS THE RUNTIME'S?" THROUGH A PROXY, AND THE TIER FALSIFIED ALL THREE.
+`LibraryFacts.runtimeTier` IS THE PROVENANCE FACT, AND A FOURTH SITE MUST READ IT RATHER THAN INVENT A
+PROXY OF ITS OWN.** Where a family's body is WRITTEN is not something a program can observe, so moving one
+must move no verdict. Two proxies said *"the module does not declare it"* and one said *"it was not parsed
+from source"*; a migrated entry point falsifies each:
+
+- `SemanticCheck.calleeYields` — answers "yields" for a tier callee and records NO edge. E3073's
+  unknown-callee fallback is what admits a CPU-bound `async` target; with the edge recorded the closure
+  hands the caller the tier body's own non-yielding answer and refuses a legal spawn.
+- `SemanticCheck.calleeShowsAnEffect` — answers "an effect", and records no edge. Its roster is the whole
+  positive side, so an unlisted runtime entry MUST read as effectful; otherwise a pure `module function`
+  helper in a tier file propagates purity into a user caller and a discarded call earns E3064 on a legal
+  program.
+- `TargetPrinter.isRuntimeFunction` — a tier body has a real `sourceFilePath` and is still the compiler's
+  own invariant scaffolding, so the second conjunct is *"compiler-built OR in the tier"*. It drives the
+  green-thread stack-guard exemption, `FunctionCodeChunk.asyncPreemptible` (which is `mightGuard`, NOT
+  `emitGuard` — a 0-byte frame does not escape it) and `InlineLeaves.splicingWouldWidenTheSafePoint`.
+
+⚠ **EACH ARM SITS AFTER ITS OWN WALK'S ROSTER**, which still decides a name it lists. ⛔ And widening
+`isRuntimeFunction` does NOT reopen the `__probeDeep` SIGSEGV its header records: that was a USER function
+in `stdlib/Builtins.maxon` reaching the scheduler's exemption, and `runtime/` is a compiler-loaded cone no
+user file can declare or even name into. The set is closed; the name test is untouched.
+
+⛔ **AND NOTHING IN THE SUITE CAN SEE THE LAST OF THE THREE.** The guard is emitted at byte level rather
+than as a TargetOp (`X64Backend`), and `asyncPreemptible` reaches only `__symtable`, whose sole reader is
+`__gt_preempt_safe` — a scheduler-internal decision with no program-visible result. `schedPreemptCount()`
+counts preemptions HONOURED, so a zero is indistinguishable from a monitor that never asked, and no program
+can arrange to be stopped inside a four-instruction runtime body. ⇒ **a golden CANNOT catch a regression
+here; read the predicate.** Closing this needs a channel that renders per-symbol safe-point provenance.
 
 ⚠ **A COMPILER-EMITTED CALL INTO THE TIER IS EXEMPT FROM MODULE VISIBILITY, AND THE EXEMPTION IS AN
 ADMIT-LIST.** `SemanticCheck.calleeVisibleFrom` admits a callee that wears the reserved prefix AND is
@@ -43,8 +77,9 @@ UNRESERVED declarations stay module-scoped, which
 ⚠ **`scanRuntimeUsage` WALKS EVERY RUNTIME BODY, IN EVERY PROGRAM.** A runtime name is never
 `unreachable`, so the scan never skips one — and a CALL inside a runtime body would therefore set that
 family's bit for a program DFE sweeps the body out of, which is rule 1 ("vocabulary does not ship ahead of
-its consumer") failing open. Vacuous while `runtime/Clock.maxon` calls only `__Raw` and so carries no
-callee edge at all. The second family to migrate is the one that has to answer it.
+its consumer") failing open. Vacuous while every tier body calls only `__Raw`, which names no callee
+(`MaxonDialect.maxonOpCalleeKind` answers `noCallee` for `rawIntrinsic`) — true of both families in the
+tier today. The first family that CALLS something is the one that has to answer it.
 
 Three doors are still standing open rather than shut:
 
@@ -58,6 +93,26 @@ Three doors are still standing open rather than shut:
   clock family's, and `builtins-clock.md`'s `wall-clock-body-is-runtime-source` renders the emitted body
   the last three lower to. `osThreadCpuTicks` waits on `__thread_cpu_ticks`, which cannot move until a
   `__Raw` row names the current-GT read its green-thread arm makes.
+- **`ownFrame` is the one row that is a DIRECTIVE rather than an operation.** It appends no Std op and
+  instead sets `IrFunction.keepsItsOwnFrame`, which `InlineLeaves.functionShape` refuses to splice. Without
+  it a tier body small enough to inline is spliced into every call site and then swept, and a runtime entry
+  whose whole product is a FRAME ceases to exist. It is the checkpoint's, and
+  `builtins-parallel-boundary.md`'s `checkpoint-body-is-runtime-source` renders the body it protects —
+  though a ```RequiredRuntime block pins a body never-inline for its own compile, so what actually guards
+  the rule is the unchanged `call __parallel_boundary` in every other golden.
+- **`__Raw.scratch` is the one door that materializes a frame ADDRESS in a register in a GT program, and
+  the gate that protects the other such door does not cover it.** `PromoteStackRecords` promotes NOTHING in
+  a program running green threads, because `__gt_stack_relocate` frees the old pages and a promoted address
+  would dangle; `__Raw.scratch` reaches `TargetOp.leaRegSlot` by a different route and no gate asks. It
+  cannot fire today — the guard precedes the `lea`, an async stop cannot relocate (`GtRuntime`), and the
+  shim window is not a safe point — but a tier body holding a `scratch` address across a guarded call is
+  the bug it becomes.
+- **`maxon_force_segfault` is the first tier candidate with NO reserved prefix to protect its symbol.**
+  `Parser.declaredMethodName` qualifies a declared free-function name only when `isContestedFreeFunction`
+  says another directory declares it too, so a user program declaring its own `maxon_force_segfault` in any
+  subdirectory would qualify BOTH, turn the runtime's symbol into `runtime.maxon_force_segfault`, and break
+  all three backtrace assertions in `specs/safety.md` with no diagnostic. Every family migrated so far is
+  protected by the `__` prefix.
 - **A `__Raw` row's host facility reaches no refusable site.** `maxonOpCalleeKind` answers `noCallee`,
   so `LibraryFacts.substrateEntries` never sees one, and a lane without the op reaches instruction
   selection instead of E3104. A substrate-entry row per op is what closes it.

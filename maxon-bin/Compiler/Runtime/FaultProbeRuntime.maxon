@@ -20,9 +20,10 @@
 // width, the one every runtime body here writes with — because the width decides nothing: any write through
 // address 0 traps.
 //
-// ⭐ **ITS OWN `__` BAND AND ITS OWN USAGE BIT — `ParallelBoundaryRuntime`'s reason exactly.** The body
-// declares nothing: no heap, no scheduler, no leak gate. Folding it into any existing family would install
-// that family's whole runtime for a program whose only concession to it is one faulting store.
+// ⭐ **ITS OWN `__` BAND AND ITS OWN USAGE BIT, AND THIS IS WHERE THAT IS ARGUED** (`RuntimeUsage`'s
+// `usesFaultProbe` points here rather than restating it). The body declares nothing: no heap, no scheduler,
+// no leak gate. Folded into any existing family, that family's whole runtime would be installed for a
+// program whose only concession to it is one faulting store.
 
 // The `__fault_` prefix this family shares. One entry point today; the prefix exists so "does this program
 // probe the fault handler?" is a family test from the start rather than a name compare to be widened later.
@@ -39,7 +40,7 @@ let FaultProbeStoredByte = 0 as ParsedInt
 let NullStoreOffset = 0 as ByteOffset
 
 // ⭐ **DOES THIS CALLEE PROBE THE FAULT HANDLER?** The `__fault_`-only test, the exact twin of
-// `isParallelBoundaryRuntimeCallee` and narrow in the same way.
+// `isClockRuntimeCallee` and narrow in the same way.
 //
 // ⚠ **THE ENTRY POINT DOES NOT WEAR THE PREFIX, AND THAT IS FORCED BY THE BACKTRACE.** `maxon_force_segfault`
 // is the frame name the backtrace prints, so it cannot be renamed to fit a family test — the test names it

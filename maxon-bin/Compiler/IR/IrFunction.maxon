@@ -298,6 +298,15 @@ export type IrFunction
 	// and SEGFAULTED a green thread. A synthesizing caller says this out loud; nothing infers it.
 	export var needsGreenThreadStackGuard as bool
 
+	// ⭐⭐ **THIS FUNCTION'S PRODUCT IS ITS FRAME, so no pass may make the body disappear into its callers.**
+	// A checkpoint a profile attaches to and a stack-walk entry a backtrace prints are worth exactly one call
+	// and one return, and an inliner measuring a body by the ops it computes reads that body as free to
+	// splice — after which dead-function elimination drops the symbol and the call is gone from the binary.
+	//
+	// ⚠ A FIELD rather than a name test, for `needsGreenThreadStackGuard`'s reason above: the body itself
+	// says so, by calling `__Raw.ownFrame()`, and nothing infers it from a naming band.
+	export var keepsItsOwnFrame as bool
+
 	// --- Maxon-phase types (populated by parser, consumed by LowerMaxonToStd) ---
 	export var maxonReturnType as MaxonReturnType
 	export var maxonParamTypes as MaxonTypeArray
@@ -765,6 +774,7 @@ export type IrFunction
 			name: name,
 			visibility: Visibility.file,
 			needsGreenThreadStackGuard: needsGreenThreadStackGuard,
+			keepsItsOwnFrame: false,
 			sourceFilePath: declaredAt.filePath,
 			paramCount: paramCount,
 			blockRefs: BlockRefArray.create(),
@@ -835,6 +845,7 @@ export type IrFunction
 			name: name,
 			visibility: Visibility.global,
 			needsGreenThreadStackGuard: needsGreenThreadStackGuard,
+			keepsItsOwnFrame: false,
 			sourceFilePath: declaredAt.filePath,
 			paramCount: paramCount,
 			blockRefs: BlockRefArray.create(),
@@ -892,6 +903,7 @@ export type IrFunction
 			// A copy is the same code with the same stack behaviour, so the claim TRAVELS rather than being
 			// re-decided here — exactly as `sourceFilePath` does one line down, and for the same reason.
 			needsGreenThreadStackGuard: src.needsGreenThreadStackGuard,
+			keepsItsOwnFrame: src.keepsItsOwnFrame,
 			sourceFilePath: src.sourceFilePath,
 			paramCount: src.paramCount,
 			blockRefs: BlockRefArray.create(),

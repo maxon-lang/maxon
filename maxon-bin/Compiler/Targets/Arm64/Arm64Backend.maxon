@@ -2593,7 +2593,7 @@ end 'arm64EmitStackFree'
 // `installGtRuntime` was gated on — read once by the caller and never re-derived per function, so this stays
 // O(1) per function. The door is macOS-only by construction: only the import-call route emits an
 // `arm64ImportCall`, and the guard's thread-pointer read is routed per OS (`arm64ThreadPointerSource`).
-function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThreads bool, target Target) returns FunctionCodeChunk
+function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThreads bool, target Target, runtimeTier FunctionNameSet) returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
 	var rdataRelocs = RdataRelocationArray.create()
@@ -2613,7 +2613,7 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThrea
 	// resolved after the block loop, when `blockOffsets` holds every block's chunk-local offset.
 	var jumpTables = JumpTablePendingArray.create()
 	var blockOffsets = BlockOffsetTable.forBlockCount(func.nextBlockId)
-	let guarded = greenThreads and not skipsGreenThreadStackGuard(func)
+	let guarded = greenThreads and not skipsGreenThreadStackGuard(func, runtimeTier: runtimeTier)
 	var unsafePrefixBytes = 0 as CodeOffset
 	var isFirstBlock = true
 
@@ -3049,7 +3049,7 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	appendArm64RuntimeChunks(chunks, leakCheck: usage.usesHeap, initGlobals: usage.usesManagedGlobals, drainGreenThreads: usage.usesGt, captureArgv: usage.usesCommandLine, captureEnvp: linuxReadsEnvironment(usage) and target.os == Os.linux, debugStream: stdModule.debugStream, dumpCoverage: usage.usesCoverage, runsRuntimeInit: arm64RunsRuntimeInit(target, usesGt: usage.usesGt), os: target.os, entryFunction: project.entryFunctionName)
 
 	for func in targetModule.functions 'eachFunc'
-		chunks.push(emitArm64FunctionChunk(targetModule, func: func, greenThreads: usage.usesGt, target: target))
+		chunks.push(emitArm64FunctionChunk(targetModule, func: func, greenThreads: usage.usesGt, target: target, runtimeTier: project.libraryFacts.runtimeTier))
 	end 'eachFunc'
 
 	// The panic runtime lays out ABOVE user code (x64's placement, and for x64's reason: only the entry

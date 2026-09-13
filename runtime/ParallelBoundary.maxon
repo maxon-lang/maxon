@@ -1,0 +1,22 @@
+// `__parallel_boundary()` — the CPU-PARALLEL CHECKPOINT a program reaches through
+// `__Builtins.parallelBoundary()`.
+//
+// ⭐⭐ **AN EMPTY BODY IS THE WHOLE IMPLEMENTATION, AND THAT IS THE FEATURE RATHER THAN A STUB.** `async f()`
+// exists to overlap WAITING with other work, so a spawn of a function that can never suspend is refused
+// (E3073, `SemanticCheck.checkAsyncYielding`). A hand-written CPU-BOUND task legitimately never waits — it
+// computes — and under the plain rule the only way to spawn one was to fake I/O: a `sleep(0)`, a stat of a
+// file nobody reads. That buys a real syscall to satisfy a check. This is the honest spelling of the same
+// intent, and it does nothing because there is nothing it should do.
+//
+// ⚠ **IT IS A MARKER, NOT A YIELD.** It does not reschedule, it does not park, and it hands the processor to
+// nobody — `Runtime.yield()` (`__Builtins.yield` ⇒ `__gt_resched`) is the intrinsic that does. A future
+// scheduler could hang a cooperative-yield check in this body; nothing may hang one at the CALL SITE, where
+// the marker's cost would stop being one call.
+//
+// ⭐ **`__Raw.ownFrame()` IS THE WHOLE BODY AND IT EMITS NOTHING.** A tier body flows through the ordinary
+// pipeline, so a body this small is spliced into each of its call sites and then swept — which destroys a
+// function whose entire product is a FRAME: the checkpoint a profile attaches to, the stack-walk entry a
+// backtrace prints. The row is how a body says so; see `RawIntrinsics`.
+module function __parallel_boundary()
+	__Raw.ownFrame()
+end '__parallel_boundary'

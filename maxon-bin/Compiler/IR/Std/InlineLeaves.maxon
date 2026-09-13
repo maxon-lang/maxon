@@ -576,8 +576,11 @@ function scanSpliceableShape(module StdModule, func IrFunction, meta StdOpMetaMe
 end 'scanSpliceableShape'
 
 // The function-level shape facts: a by-reference parameter is an ADDRESS whose aliasing the copy cannot
-// keep, and a body that carries the green-thread stack guard has a load-bearing FRAME that inlining into
-// an exempt caller erases (`IrFunction.needsGreenThreadStackGuard`).
+// keep, and two different claims about a FRAME the splice would erase — the green-thread stack guard
+// (`IrFunction.needsGreenThreadStackGuard`) and a body whose whole product IS its frame
+// (`IrFunction.keepsItsOwnFrame`).
+//
+// ⭐ ONE site serves BOTH the leaf rule and the called-once rule, which share this scan.
 function functionShape(func IrFunction) returns SpliceableShape
 	if func.blockRefs.count() == 0 'noBody'
 		return SpliceableShape.refused(CalledOnceRefusal.unloweredBody)
@@ -590,6 +593,10 @@ function functionShape(func IrFunction) returns SpliceableShape
 	if func.needsGreenThreadStackGuard 'guardedFrame'
 		return SpliceableShape.refused(CalledOnceRefusal.greenThreadStackGuard)
 	end 'guardedFrame'
+
+	if func.keepsItsOwnFrame 'ownFrame'
+		return SpliceableShape.refused(CalledOnceRefusal.keepsItsOwnFrame)
+	end 'ownFrame'
 
 	return SpliceableShape.spliceable
 end 'functionShape'
@@ -667,8 +674,12 @@ end 'terminatorRefusal'
 //     per-site door to put this behind.
 //   * the LEAF rule per SITE (`SiteSplicer.considerSite`), because one eligible leaf is spliced at every
 //     site it has and its callers need not agree about provenance.
-function splicingWouldWidenTheSafePoint(callee IrFunction, caller IrFunction) returns bool
-	return skipsGreenThreadStackGuard(callee) and not skipsGreenThreadStackGuard(caller)
+//
+// ⚠ **A `runtime/` BODY IS SCAFFOLDING HERE TOO**, which is why the tier set reaches this Std pass at all:
+// the predicate must answer about a sourced tier body exactly as it answers about the Std-IR builder's
+// output, or a runtime body small enough to inline lands inside a preemptible user symbol.
+function splicingWouldWidenTheSafePoint(callee IrFunction, caller IrFunction, runtimeTier FunctionNameSet) returns bool
+	return skipsGreenThreadStackGuard(callee, runtimeTier: runtimeTier) and not skipsGreenThreadStackGuard(caller, runtimeTier: runtimeTier)
 end 'splicingWouldWidenTheSafePoint'
 
 // The site census, accumulated across every caller — the pass's report. Site counts, not callee counts:
@@ -987,6 +998,10 @@ enum CalledOnceRefusal
 	byReferenceParameter
 	greenThreadStackGuard
 
+	// Its body claimed its own frame (`__Raw.ownFrame`): the call and the return ARE the product, so a
+	// splice would leave a profile and a backtrace nothing to attach to.
+	keepsItsOwnFrame
+
 	// The callee is the compiler's own scaffolding and the caller is not, so one symbol would carry both
 	// answers to "may a thread be stopped here" — see `splicingWouldWidenTheSafePoint`.
 	safePointProvenance
@@ -1011,6 +1026,7 @@ function calledOnceRefusalText(reason CalledOnceRefusal) returns String
 		throwing gives "it throws"
 		byReferenceParameter gives "it takes a by-reference parameter"
 		greenThreadStackGuard gives "it carries the green-thread stack guard"
+		keepsItsOwnFrame gives "its body claims its own frame"
 		safePointProvenance gives "it is the compiler's own scaffolding and its caller is not, so the spliced bytes could be stopped where the callee never may be"
 		unloweredBody gives "its body was never lowered"
 		entryCarriesPhis gives "its entry block carries phis"
@@ -1690,7 +1706,7 @@ function spliceCalledOnceCallees(project Project, module StdModule, byName Funct
 			continue
 		end 'callsItself'
 
-		if splicingWouldWidenTheSafePoint(func, caller: module.getFunc(census.callerOfCallee(funcIndex))) 'wouldWidenTheSafePoint'
+		if splicingWouldWidenTheSafePoint(func, caller: module.getFunc(census.callerOfCallee(funcIndex)), runtimeTier: project.libraryFacts.runtimeTier) 'wouldWidenTheSafePoint'
 			noteCalledOnceRefusal(refusals, reason: CalledOnceRefusal.safePointProvenance, func: func)
 			continue
 		end 'wouldWidenTheSafePoint'
@@ -2555,7 +2571,7 @@ type SiteSplicer
 	// The leaf rule's half of `splicingWouldWidenTheSafePoint`. Asked per SITE rather than per callee: one
 	// eligible leaf is spliced at every site it has, and its callers need not agree about provenance.
 	function recordLeafSiteUnlessItWidensTheSafePoint(pos BlockOpPos, calleeIndex FuncIndex)
-		if splicingWouldWidenTheSafePoint(self.module.getFunc(calleeIndex), caller: self.func) 'wouldWidenTheSafePoint'
+		if splicingWouldWidenTheSafePoint(self.module.getFunc(calleeIndex), caller: self.func, runtimeTier: self.project.libraryFacts.runtimeTier) 'wouldWidenTheSafePoint'
 			self.stats.noteSafePointRefusal()
 			return
 		end 'wouldWidenTheSafePoint'

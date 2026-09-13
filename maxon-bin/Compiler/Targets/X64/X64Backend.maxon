@@ -2772,7 +2772,7 @@ end 'emitUnit'
 // bit `installGtRuntime` was gated on, read once by the caller and never re-derived per function, so this
 // stays O(1) per function. It gates the Win32 syscall shim on every `iatCall` (see `emitGtGatedIatCall`)
 // and the per-function morestack guard below.
-export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt bool, target Target) returns FunctionCodeChunk
+export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt bool, target Target, runtimeTier FunctionNameSet) returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
 	var iatRelocs = RelocationArray.create()
@@ -2812,7 +2812,7 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 	// Only a GT module's non-runtime functions can be guarded, so `x64PrologueFrameOf` (which allocates a
 	// callee-saved scan) is called ONLY for those — a non-GT module (the common case, and the whole scale corpus)
 	// pays nothing here.
-	let mightGuard = usesGt and not skipsGreenThreadStackGuard(func)
+	let mightGuard = usesGt and not skipsGreenThreadStackGuard(func, runtimeTier: runtimeTier)
 	var guardFrameBytes = 0 as StackSize
 
 	if mightGuard 'guardFrame'

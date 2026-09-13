@@ -249,7 +249,7 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 
 	if emitIr 'emitIr'
 		let irProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.emitIr)
-		irText = printTargetModule(codeResult.targetModule, globalData: codeResult.globalData, runtimeNames: runtimeIrNames, codeChunks: codeResult.codeChunks, libraryFunctions: project.libraryFacts.libraryFunctions)
+		irText = printTargetModule(codeResult.targetModule, globalData: codeResult.globalData, runtimeNames: runtimeIrNames, codeChunks: codeResult.codeChunks, libraryFunctions: project.libraryFacts.libraryFunctions, runtimeTier: project.libraryFacts.runtimeTier)
 		recordPhase(project, phase: CompilePhase.emitIr, probe: irProbe)
 	end 'emitIr'
 
@@ -1534,22 +1534,14 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// environment names are.
 	installCoverageRuntime(pipeline.stdModule, globalData: project.globalData, usage: usage, dataPath: project.coverageDataPath, pointCount: project.covPoints.count() as MxcovPointIndex)
 
-	// The CPU-parallel checkpoint (`__Builtins.parallelBoundary`), on its own bit for the reason every other
-	// install here has one — and here the reason is at its strongest, since the entry point's body is a void
-	// return and filing it under the scheduler's `__gt_` band would have installed the whole green-thread
-	// runtime to link against it. See `ParallelBoundaryRuntime`'s header.
-	installParallelBoundaryRuntime(pipeline.stdModule, usage: usage)
-
-	// The deliberate access violation (`__Builtins.forceSegfault`), on its own bit beside the checkpoint above
-	// and for the identical reason — its body is a store and a return, and it exists so the FAULT HANDLER has
-	// a test that can reach it. See `FaultProbeRuntime`.
+	// The deliberate access violation (`__Builtins.forceSegfault`), on its own bit — its body is a store and
+	// a return, and it exists so the FAULT HANDLER has a test that can reach it. See `FaultProbeRuntime`.
 	installFaultProbeRuntime(pipeline.stdModule, usage: usage)
 
-	// The CPU-parallel QUERIES, beside the checkpoint above — and, like it, each on its OWN bit, so a
-	// program that asks only how many worker Ms ran carries neither the machine
-	// query's entry point nor the Win32 import band that entry point turns on, and no `.data` word but the
-	// one it reads. WHICH queries those are is `CpuParallelRuntime`'s to say, not this call site's; its
-	// header also owns why they wear two `__` bands rather than one.
+	// The CPU-parallel QUERIES, each on its OWN bit, so a program that asks only how many worker Ms ran
+	// carries neither the machine query's entry point nor the Win32 import band that entry point turns on,
+	// and no `.data` word but the one it reads. WHICH queries those are is `CpuParallelRuntime`'s to say, not
+	// this call site's; its header also owns why they wear two `__` bands rather than one.
 	installCpuParallelRuntime(pipeline.stdModule, usage: usage)
 
 	// The synthesized builtin-type conformance impls (P1.7a slices 2b/2b-ii/2b-iii + P1.7b) — installed the

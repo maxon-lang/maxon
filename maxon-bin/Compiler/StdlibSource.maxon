@@ -191,14 +191,23 @@ export type LibraryFacts
 	// a target that cannot lower it — at the user's own span.
 	export let substrateEntries as StdlibSubstrateEntryMap
 
-	export static function create(libraryFunctions FunctionNameSet, unreachable FunctionNameSet, substrateEntries StdlibSubstrateEntryMap) returns LibraryFacts
-		return Self{libraryFunctions: libraryFunctions, unreachable: unreachable, substrateEntries: substrateEntries}
+	// The `runtime/` half of `libraryFunctions` — the tier whose bodies the compiler reaches BY NAME and no
+	// source file may call. It is provenance, so every question of the form *"is this callee the runtime's
+	// rather than the program's?"* reads it: `unreachableLibraryNames`, which may never file one, and the
+	// yield walk's fallback, which must answer about a runtime entry exactly as it did when the entry had no
+	// body in any source. One derivation, because a second walk over the same files could come to disagree
+	// about which names are in the tier.
+	export let runtimeTier as FunctionNameSet
+
+	export static function create(libraryFunctions FunctionNameSet, unreachable FunctionNameSet, substrateEntries StdlibSubstrateEntryMap, runtimeTier FunctionNameSet) returns LibraryFacts
+		return Self{libraryFunctions: libraryFunctions, unreachable: unreachable, substrateEntries: substrateEntries, runtimeTier: runtimeTier}
 	end 'create'
 
 	// A compile that has not derived them yet, and the answer for a compile that loaded no stdlib source
-	// at all: no function is stdlib, nothing is unreachable-stdlib and nothing needs the substrate.
+	// at all: no function is stdlib, nothing is unreachable-stdlib, nothing is in the runtime tier and
+	// nothing needs the substrate.
 	export static function empty() returns LibraryFacts
-		return Self.create(FunctionNameSet.create(), unreachable: FunctionNameSet.create(), substrateEntries: StdlibSubstrateEntryMap.create())
+		return Self.create(FunctionNameSet.create(), unreachable: FunctionNameSet.create(), substrateEntries: StdlibSubstrateEntryMap.create(), runtimeTier: FunctionNameSet.create())
 	end 'empty'
 end 'LibraryFacts'
 
@@ -249,7 +258,7 @@ export function deriveLibraryFacts(project Project, module MaxonModule, signatur
 	// cost a per-compile CONSTANT instead of growing with the user program. It stays EXACT: a stdlib
 	// function referenced by nothing is reachable from nothing.
 	if not userCodeReachesStdlib(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees) 'noneReferenced'
-		return LibraryFacts.create(stdlibSet, unreachable: unreachableLibraryNames(roster, reachable: FunctionNameSet.create()), substrateEntries: StdlibSubstrateEntryMap.create())
+		return LibraryFacts.create(stdlibSet, unreachable: unreachableLibraryNames(roster, reachable: FunctionNameSet.create()), substrateEntries: StdlibSubstrateEntryMap.create(), runtimeTier: roster.runtimeTier)
 	end 'noneReferenced'
 
 	// User code DOES call stdlib — resolve exactly which stdlib functions the program REACHES from `main`
@@ -258,7 +267,7 @@ export function deriveLibraryFacts(project Project, module MaxonModule, signatur
 	let reachable = try reachableMaxonFunctionNames(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees)
 	let unreachable = unreachableLibraryNames(roster, reachable: reachable)
 
-	return LibraryFacts.create(stdlibSet, unreachable: unreachable, substrateEntries: stdlibSubstrateEntries(module, stdlibNames: roster.names, unreachable: unreachable))
+	return LibraryFacts.create(stdlibSet, unreachable: unreachable, substrateEntries: stdlibSubstrateEntries(module, stdlibNames: roster.names, unreachable: unreachable), runtimeTier: roster.runtimeTier)
 end 'deriveLibraryFacts'
 
 // ⭐⭐ **GROW THE BODY DEMAND BY ONE ROUND — the fixpoint step `queryAllModule` iterates.**

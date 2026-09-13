@@ -5848,10 +5848,23 @@ let RunProcessArity = 1 as ParamCount
 // It performs no work.
 //
 // It is `sleep`'s SHAPE — void, so it needs the statement door and refuses a value position — and
-// NOT its semantics: `sleep` and `yield` hand over the processor, this hands over nothing. See
-// `ParallelBoundaryRuntime` for why the entry point is a real (empty) function rather than a
-// lowering that vanishes, and for how the E3073 walk reaches its verdict.
+// NOT its semantics: `sleep` and `yield` hand over the processor, this hands over nothing.
 let BuiltinsParallelBoundaryName = b"__Builtins.parallelBoundary"
+
+// ⭐ **THE RUNTIME ENTRY THE SPELLING ABOVE LOWERS TO, AND THE PAIR IS THE FACT** — the two are read
+// together or not at all. Its BODY is Maxon source the compiler reads out of
+// `runtime/ParallelBoundary.maxon`; `__Raw.ownFrame()` is what keeps it a real (empty) function rather
+// than a lowering that vanishes, because a profile, a backtrace and a future hook all attach to the frame.
+//
+// ⭐ **IT WEARS NO EXISTING FAMILY'S `__` BAND, AND THAT IS DELIBERATE.** The obvious home is `__gt_`, since
+// the thing the marker is ABOUT is the scheduler — but `isGtRuntimeCallee` is a PREFIX test that sets
+// `usesGt`, so a name under that band would install the entire green-thread scheduler, the timer store and
+// the netpoll for a program whose only concession to concurrency is a marker in a function nobody spawns
+// (`specs/builtins-parallel-boundary.statement-position` is exactly that program). A checkpoint that costs a
+// scheduler is not a checkpoint. `__proc_` is wrong for the opposite reason: it is
+// `SemanticCheck.calleeNeedsWin32Substrate`'s host-only band, and an empty function lowers on every target
+// the compiler emits.
+let ParallelBoundaryName = b"__parallel_boundary"
 
 // `__Builtins.parallelBoundary` takes NOTHING and returns void — there is no knob on a checkpoint. Stated
 // here beside the intrinsic for `SleepIntrinsicArity`'s reason, and as its own constant rather than a
@@ -83151,7 +83164,7 @@ export type Parser
 			// ⭐ **THE CPU-PARALLEL CHECKPOINT — `yield`'s CALL CONTRACT AND THE OPPOSITE RUNTIME.** It marks
 			// a hand-written CPU-bound function as a deliberate `async` target (E3073) and hands the
 			// processor to nobody; `__parallel_boundary`'s body is a void return. See
-			// `BuiltinsParallelBoundaryName` and `ParallelBoundaryRuntime`.
+			// `BuiltinsParallelBoundaryName` and the runtime name it lowers to beside it.
 			if callee.equals(BuiltinsParallelBoundaryName) 'parallelBoundary'
 				return try self.emitVoidZeroArgIntrinsic(args, builtinName: BuiltinsParallelBoundaryName, runtimeName: ParallelBoundaryName, arity: ParallelBoundaryArity, calleeTok: anchor, resultUsed: resultUsed)
 			end 'parallelBoundary'
