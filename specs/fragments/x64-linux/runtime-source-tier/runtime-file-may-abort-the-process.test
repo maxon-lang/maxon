@@ -1,0 +1,24 @@
+// Test: runtime-file-may-abort-the-process
+// --- runtime-file: Probe.maxon
+let ProbeAbortCode = 93
+
+module function __probe_abort() returns MachineWord
+	__Raw.osExit(ProbeAbortCode)
+
+	return 0
+end '__probe_abort'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

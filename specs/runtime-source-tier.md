@@ -704,6 +704,41 @@ end 'main'
 0
 ```
 
+<!-- test: runtime-file-may-abort-the-process -->
+⭐⭐ **THE TIER'S ONLY WAY OUT, AND IT IS AN EXIT RATHER THAN A PANIC.** A `panic` builds a message and
+walks a stack, and both allocate — which the allocator cannot do while reporting that allocation has
+failed. So a runtime body that has established it cannot continue leaves by the same door the Std-tier
+builders use: a code, and the process ends.
+
+⚠ **THE ROW ANSWERS NOTHING AND THE BODY STILL NEEDS A TERMINATOR.** `osExit` does not return, but a
+block without a terminator is not a block, so the `return` below it is emitted and never runs — the
+shape `RuntimeAbort.emitRuntimeAbort` already has one tier down.
+
+⚠ The code is restated here rather than named across the boundary, because no name crosses it — the
+restatement `runtime/Clock.maxon` makes of the FILETIME constants, for the same reason.
+
+⚠ The probe is uncalled, so dead-function elimination drops the body before instruction selection and
+nothing exits: what is under test here is the TABLE. The LOWERING is measured instead by spelling the row
+inside a reached tier body, which reaches `ExitProcess` on x64-windows, `_exit` on arm64-macos,
+`syscall 231` / `svc 94` on the two Linux lanes and `exit-with-code` on wasm32-wasi.
+```maxon
+// --- runtime-file: Probe.maxon
+let ProbeAbortCode = 93
+
+module function __probe_abort() returns MachineWord
+	__Raw.osExit(ProbeAbortCode)
+
+	return 0
+end '__probe_abort'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: raw-intrinsic-refused-outside-the-runtime-tier -->
 ⭐⭐ **THE NEGATIVE CONTROL ON P2, AND IT IS THE HALF THAT MATTERS.** The positive cases above prove the
 privileges are not EMPTY. Neither proves they are not UNIVERSAL — a compiler that let ANY file call

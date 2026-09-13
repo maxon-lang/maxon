@@ -32,6 +32,7 @@ let RawOsThreadCpuTicksName = b"__Raw.osThreadCpuTicks"
 let RawOsCpuCountName = b"__Raw.osCpuCount"
 let RawOsGetPidName = b"__Raw.osGetPid"
 let RawOsEnterBackgroundPriorityName = b"__Raw.osEnterBackgroundPriority"
+let RawOsExitName = b"__Raw.osExit"
 let RawScratchName = b"__Raw.scratch"
 let RawSchedNumProcsAddrName = b"__Raw.schedNumProcsAddr"
 let RawSchedMaxActiveWorkersAddrName = b"__Raw.schedMaxActiveWorkersAddr"
@@ -64,6 +65,15 @@ export enum RawIntrinsic
 	// sets the priority and READS IT BACK; the word is the second reading. See
 	// `StdOp.osEnterBackgroundPriority`, which owns that argument.
 	osEnterBackgroundPriority
+
+	// ⭐⭐ **THE TIER'S ONLY WAY OUT, AND IT IS AN EXIT RATHER THAN A PANIC.** A `panic` builds a message
+	// and walks a stack, and both allocate — which the allocator cannot do while reporting that allocation
+	// has failed. So a body that has established it cannot continue names a code and the process ends.
+	//
+	// ⚠ **IT ANSWERS NOTHING AND DOES NOT RETURN, AND THE BLOCK STILL NEEDS A TERMINATOR**, so a tier body
+	// writes a `return` under it that never runs — the shape `RuntimeAbort.emitRuntimeAbort` emits one tier
+	// down.
+	osExit
 
 	scratch
 
@@ -197,6 +207,10 @@ function rawIntrinsicLookupOf(callee ByteArray) returns RawIntrinsicLookup
 		return RawIntrinsicLookup.found(RawIntrinsic.osEnterBackgroundPriority)
 	end 'osEnterBackgroundPriority'
 
+	if callee.equals(RawOsExitName) 'osExit'
+		return RawIntrinsicLookup.found(RawIntrinsic.osExit)
+	end 'osExit'
+
 	if callee.equals(RawScratchName) 'scratch'
 		return RawIntrinsicLookup.found(RawIntrinsic.scratch)
 	end 'scratch'
@@ -305,6 +319,7 @@ export function rawIntrinsicCalleeName(intrinsic RawIntrinsic) returns ByteArray
 		osCpuCount gives RawOsCpuCountName
 		osGetPid gives RawOsGetPidName
 		osEnterBackgroundPriority gives RawOsEnterBackgroundPriorityName
+		osExit gives RawOsExitName
 		scratch gives RawScratchName
 		schedNumProcsAddr gives RawSchedNumProcsAddrName
 		schedMaxActiveWorkersAddr gives RawSchedMaxActiveWorkersAddrName
@@ -335,6 +350,7 @@ export function rawArgShapeOf(intrinsic RawIntrinsic) returns RawArgShape
 		osCpuCount or
 			osGetPid or
 			osEnterBackgroundPriority gives RawArgShape.nothing
+		osExit gives RawArgShape.oneWord
 		scratch gives RawArgShape.oneConstant
 		schedNumProcsAddr or
 			schedMaxActiveWorkersAddr gives RawArgShape.nothing
@@ -360,8 +376,9 @@ end 'rawArgShapeOf'
 export function rawResultKindOf(intrinsic RawIntrinsic) returns RawResultKind
 	return match intrinsic 'result'
 		osTickCountMs gives RawResultKind.machineWord
-		osReadWallClock gives RawResultKind.nothing
-		osThreadCpuTicks gives RawResultKind.nothing
+		osReadWallClock or
+			osThreadCpuTicks or
+			osExit gives RawResultKind.nothing
 		osCpuCount or
 			osGetPid or
 			osEnterBackgroundPriority or
@@ -462,6 +479,12 @@ export function rawHostFacilityOf(intrinsic RawIntrinsic) returns RawHostFacilit
 		osCpuCount gives RawHostFacility.required(HostFacility.cpuCount)
 		osGetPid gives RawHostFacility.required(HostFacility.processInfo)
 		osEnterBackgroundPriority gives RawHostFacility.required(HostFacility.processPriority)
+
+		// Every supported lane lowers `StdOp.osExit` unconditionally — it is the floor under every `panic`
+		// and every range check, so a target that could not end its own process could compile no program at
+		// all. There is no facility to name and no lane to withhold it.
+		osExit gives RawHostFacility.none
+
 		osAllocPages or
 			osReservePages or
 			osCommitPages or

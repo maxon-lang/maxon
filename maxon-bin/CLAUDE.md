@@ -196,15 +196,24 @@ Four doors are still standing open rather than shut:
   move until a `__Raw` row names the current-GT read its green-thread arm makes.
   ⭐⭐ **THE SLAB ARENA'S VOCABULARY IS IN AND ITS CONSUMER IS NOT, WHICH IS A DELIBERATE INVERSION OF THE
   USUAL ORDER.** `loadByte`, `storeByte`, `atomicAddWord`, `atomicCas`, `memFill`, the five page rows
-  (`osAllocPages`, `osReservePages`, `osCommitPages`, `osDecommitPages`, `osFreePages`) and the three
-  `osLock*` rows landed WITHOUT a family, because once the tier supplies allocation a bad tier file breaks
-  `C1` — the compiler `C2` is built with. Each is spelled by a probe case in
+  (`osAllocPages`, `osReservePages`, `osCommitPages`, `osDecommitPages`, `osFreePages`), the three
+  `osLock*` rows and `osExit` landed WITHOUT a family, because once the tier supplies allocation a bad tier
+  file breaks `C1` — the compiler `C2` is built with. Each is spelled by a probe case in
   `specs/runtime-source-tier.md`, so the objection this file records against `osThreadCpuTicks` — a row
   nothing spells is a row nothing tests — is answered. ⚠ **WHAT A PROBE CASE PROVES STOPS AT THE PARSER AND
   THE Maxon→Std LOWERING**: the probe is UNCALLED, so dead-function elimination drops the body before
   instruction selection and no page is taken, no lock entered and no lane's isel consulted. Evidence about
   the emitted INSTRUCTION is a measurement — spell the rows inside a REACHED tier body and read
   `--emit-ir-runtime=`.
+  ⭐⭐ **`osExit` IS THE TIER'S ONLY WAY OUT, AND IT IS AN EXIT RATHER THAN A `panic` BECAUSE A PANIC
+  ALLOCATES.** Building a message and walking a stack are both heap work, which the allocator cannot do
+  while reporting that allocation has failed — so a tier body that cannot continue names a code and ends
+  the process, the shape `RuntimeAbort.emitRuntimeAbort` emits one tier down. Its facility is `none` for a
+  reason no other row's is: every supported lane lowers `StdOp.osExit` unconditionally, because it is the
+  floor under every `panic` and every range check, so there is no lane to withhold it. It is also the one
+  row MEASURED on all five through a REACHED tier body rather than left at what a probe proves —
+  `ExitProcess` on x64-windows, `_exit` on arm64-macos, `syscall 231` / `svc 94` on the two Linux lanes,
+  and `exit-with-code` on wasm32-wasi, where the program really did end at 93.
   ⛔ **`memcpy` IS NOT A ROW AND MUST NOT BECOME ONE.** The tree has no `memcpy` Std op; bulk copy is a
   hand-built loop over word and byte chunks, which in tier source is ordinary Maxon over the accessors.
 - **`ownFrame` is the one row that is a DIRECTIVE rather than an operation.** It appends no Std op and
