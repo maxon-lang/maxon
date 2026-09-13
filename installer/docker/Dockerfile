@@ -20,9 +20,14 @@ ARG TARGETARCH
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl \
  && rm -rf /var/lib/apt/lists/*
-# ⛔ `stdlib/` AND `runtime/` MUST LAND BESIDE THE COMPILER'S PREFIX. `maxon` resolves both by walking
-# UP from its own executable, so /opt/maxon/bin/maxon reaches /opt/maxon/stdlib and /opt/maxon/runtime;
-# an image holding one without the other cannot compile at all.
+# ⛔ EVERY SOURCE TIER THE ARCHIVE CARRIES MUST LAND BESIDE THE COMPILER'S PREFIX. `maxon` resolves
+# `stdlib/`, and `runtime/` as its sibling, by walking UP from its own executable — so
+# /opt/maxon/bin/maxon reaches /opt/maxon/stdlib and /opt/maxon/runtime. A compiler whose tier is
+# missing from the image cannot compile at all.
+# ⚠ THE ARCHIVE DECIDES WHICH TIERS EXIST, so `runtime/` is placed only when the archive holds one.
+# This image is built from a PUBLISHED RELEASE, and a release older than the runtime tier carries no
+# `runtime/` — its compiler does not look for one either. Requiring it here refuses every such
+# release, which is a build break rather than a safeguard.
 RUN set -eu; \
     [ -n "$VERSION" ] || { echo "--build-arg VERSION=X.Y.Z is required" >&2; exit 1; }; \
     case "$TARGETARCH" in \
@@ -41,7 +46,7 @@ RUN set -eu; \
     tar -xzf "$asset"; \
     mkdir -p /opt/maxon/bin; \
     mv "maxon-$VERSION-$arch-linux/maxon" /opt/maxon/bin/maxon; \
-    mv "maxon-$VERSION-$arch-linux/stdlib" "maxon-$VERSION-$arch-linux/runtime" "maxon-$VERSION-$arch-linux/examples" /opt/maxon/
+    mv "maxon-$VERSION-$arch-linux/stdlib" "maxon-$VERSION-$arch-linux/examples" /opt/maxon/;     if [ -d "maxon-$VERSION-$arch-linux/runtime" ]; then mv "maxon-$VERSION-$arch-linux/runtime" /opt/maxon/; fi
 # One compile as root, here, leaves the standard library's build cache in /opt/maxon, so a compile by
 # an unprivileged user in the final image reads it instead of needing to write it.
 RUN set -eu; \
