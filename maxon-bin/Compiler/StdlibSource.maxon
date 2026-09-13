@@ -395,8 +395,12 @@ type LibraryFunctionRoster
 	// The `runtime/` subset of `names` — the tier `classifyLibraryReach` may never file `unreachable`.
 	export let runtimeTier as FunctionNameSet
 
-	export static function create(names ByteArrayArray, runtimeTier FunctionNameSet) returns LibraryFunctionRoster
-		return Self{names: names, runtimeTier: runtimeTier}
+	// The tier names a COMPILER-MINTED call reaches — the declared half of the reach answer, filled by the
+	// same walk as the two columns above so the three cannot come to disagree about which names they hold.
+	export let compilerReached as FunctionNameSet
+
+	export static function create(names ByteArrayArray, runtimeTier FunctionNameSet, compilerReached FunctionNameSet) returns LibraryFunctionRoster
+		return Self{names: names, runtimeTier: runtimeTier, compilerReached: compilerReached}
 	end 'create'
 end 'LibraryFunctionRoster'
 
@@ -405,23 +409,25 @@ end 'LibraryFunctionRoster'
 function libraryFunctionRoster(project Project) returns LibraryFunctionRoster throws CompileError
 	var names = ByteArrayArray.create()
 	var runtimeTier = FunctionNameSet.create()
+	var compilerReached = FunctionNameSet.create()
 
 	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
 	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for fileIndex in 0 upto project.librarySourcePaths.count() 'eachFile'
-		try collectOneLibraryFile(project, path: try project.librarySourcePaths.get(fileIndex) otherwise panic("libraryFunctionRoster: fileIndex {fileIndex} is below project.librarySourcePaths.count()"), names: names, runtimeTier: runtimeTier)
+		try collectOneLibraryFile(project, path: try project.librarySourcePaths.get(fileIndex) otherwise panic("libraryFunctionRoster: fileIndex {fileIndex} is below project.librarySourcePaths.count()"), names: names, runtimeTier: runtimeTier, compilerReached: compilerReached)
 	end 'eachFile'
 
-	return LibraryFunctionRoster.create(names, runtimeTier: runtimeTier)
+	return LibraryFunctionRoster.create(names, runtimeTier: runtimeTier, compilerReached: compilerReached)
 end 'libraryFunctionRoster'
 
 // One library file's functions, filed into both columns. ⭐ **THE PATH ARRIVES AS A PARAMETER**, for
 // `demandOneStdlibFileIfReached`'s reason: it is named twice here, and both `isRuntimeSourceFile` (a
 // provenance memo) and `queryParseOps` WRITE `project`, so a borrow read inline out of
 // `project.librarySourcePaths` survives neither call.
-function collectOneLibraryFile(project Project, path FilePath, names ByteArrayArray, runtimeTier FunctionNameSet) throws CompileError
+function collectOneLibraryFile(project Project, path FilePath, names ByteArrayArray, runtimeTier FunctionNameSet, compilerReached FunctionNameSet) throws CompileError
 	let isRuntime = isRuntimeSourceFile(project, path: path)
+	let isCompilerCalled = isRuntime and runtimeTierFileIsCompilerCalled(path)
 	let artifact = try queryParseOps(project, path: path)
 
 	for func in artifact.module.functions 'eachFunc'
@@ -430,8 +436,47 @@ function collectOneLibraryFile(project Project, path FilePath, names ByteArrayAr
 		if isRuntime 'theRuntimeTier'
 			runtimeTier.insert(func.name)
 		end 'theRuntimeTier'
+
+		if isCompilerCalled 'declaredReached'
+			compilerReached.insert(func.name)
+		end 'declaredReached'
 	end 'eachFunc'
 end 'collectOneLibraryFile'
+
+// ⭐⭐⭐ **THE DECLARED REACH EDGE: WHICH TIER FILES THE COMPILER ITSELF CALLS INTO.**
+// `RuntimeUsage`'s rule 2 is what decides that this is a roster and not a walk — *"A CALL THE WALK CANNOT
+// SEE IS DECLARED; EVERY CALL IT CAN SEE IS DISCOVERED."* Every other tier family is kept alive by a call
+// the PARSER mints from user source (`__Builtins.cpuCount()` ⇒ `__cpu_count`), which is an ordinary edge in
+// an ordinary body and the from-`main` walk finds it. The slab arena's callers are `StdOp.call` sites an
+// INSTALLER mints into the appended band (`Compiler.compileToCodeResult`), long after this derivation has
+// run and into a module that is not the Maxon one — so the walk holds no evidence about the arena at all,
+// and every one of its entries would be filed `unreachedRuntimeTier` while the bodies ship.
+//
+// ⛔⛔ **IT IS BY FILE AND NOT BY NAME, AND THAT IS WHAT MAKES IT SOUND ON *BOTH* PATHS.** An installer's
+// call lands on an ENTRY POINT whose body then reaches that file's module-scoped helpers. On the precise
+// path the walk would close over those for free, but `deriveLibraryFacts`' short-circuit hands
+// `classifyLibraryReach` an EMPTY reached set — and a program can allocate while naming no stdlib function
+// at all, because `__mm_alloc` is no stdlib declaration. A name roster would credit the eight entries there
+// and file their helpers unreached, with the bodies still shipping. A FILE is closed over its own helpers by
+// construction.
+//
+// ⛔⛔ **OVER-APPROXIMATION IS THE SAFE DIRECTION AND IT IS TAKEN OUTRIGHT: THE ROSTER IS UNCONDITIONAL.**
+// A name credited reached in a program that cannot reach it costs BYTES — `scanRuntimeUsage` reads the
+// bodies, sets `usesSlabArena`, and the image lays out two `.data` words dead-function elimination cannot
+// take back. A name filed unreached while its body ships is a `globalAddr` against a slot nothing laid out,
+// which is a link failure. Conditioning this on the heap is not available: `usesHeap` has producers
+// (`--async-trace`, `--debugstream`) that run AFTER the scan, and one of those missed is exactly the unsafe
+// direction.
+//
+// ⚠ **A DECLARED ROSTER CAN GO STALE, AND WHAT KEEPS THIS ONE HONEST IS ONE GUARD AND ONE DIRECTION.**
+// `DeadFunctionElimination.requireUnreachableLibraryStayedDead` panics BY NAME the moment elimination
+// reaches a body this roster left out — so a tier file the compiler starts calling into and nobody lists
+// here fails loudly on the first program that allocates. Nothing catches the other direction, because there
+// is nothing to catch: a file listed here that the compiler stopped calling costs the bytes above and no
+// wrong answer.
+function runtimeTierFileIsCompilerCalled(path FilePath) returns bool
+	return path.filename() == SlabArenaTierFileName
+end 'runtimeTierFileIsCompilerCalled'
 
 // The two answers `classifyLibraryReach` splits one walk into. One record because they partition one
 // question over one roster, and separate derivations could come to disagree about which names each holds.
@@ -474,12 +519,18 @@ end 'LibraryReachSplit'
 // The short-circuit caller passes an EMPTY `reachable`, which is precisely what it has concluded: no op in
 // user code and no root crosses into library source — tier names included, since they are on the same
 // roster the scan tests against — so nothing in it is reached.
+//
+// ⭐⭐ **AND THE REACH ANSWER HAS A SECOND HALF THE WALK CANNOT PRODUCE — `roster.compilerReached`.** A tier
+// body the compiler reaches through a call ONE OF ITS OWN INSTALLERS mints is reached by no edge in the
+// Maxon module, so it is declared rather than discovered; `runtimeTierFileIsCompilerCalled` is where that
+// roster and its staleness argument live. It is read HERE and not folded into `reachable` because it must
+// answer on the short-circuit path too, where there is no walk to fold it into.
 function classifyLibraryReach(roster LibraryFunctionRoster, reachable FunctionNameSet) returns LibraryReachSplit
 	var unreachable = FunctionNameSet.create()
 	var unreachedRuntimeTier = FunctionNameSet.create()
 
 	for name in roster.names 'classify'
-		if reachable.contains(name) 'reached'
+		if reachable.contains(name) or roster.compilerReached.contains(name) 'reached'
 			continue
 		end 'reached'
 

@@ -158,10 +158,23 @@ walk's positive evidence, every unmodelled edge resolves to "reached", and
 `DeadFunctionElimination.requireUnreachableLibraryStayedDead` panics on the unsafe direction.
 
 ⚠ The reach answer is CLOSED over runtime→runtime calls for free: a tier body is in the merged Maxon
-module with real ops, and `markMaxonCalleeEdge` filters no callee by provenance. What is not yet exercised
-is a REACHED tier body that calls another entry — every tier body today calls only `__Raw`, which names no
-callee (`MaxonDialect.maxonOpCalleeKind` answers `noCallee` for `rawIntrinsic`), and no source file outside
-the tier may reach a spec fragment's own tier function, so no spec case can construct one.
+module with real ops, and `markMaxonCalleeEdge` filters no callee by provenance. `runtime/SlabArena.maxon`
+is the family that exercises it — `__slab_arena_alloc_chunks` calls `__slab_arena_new` calls
+`__slab_assert_os_alloc`, and its module-scoped helpers are reached the same way.
+
+⛔⛔ **AND IT IS CLOSED ONLY OVER CALLS SOME ROOT CAN REACH, WHICH THE SLAB ARENA'S CANNOT BE.** Every other
+family is kept alive by a call the PARSER mints from user source (`__Builtins.cpuCount()` ⇒ `__cpu_count`),
+which is an ordinary edge this walk finds. The arena's callers are `StdOp.call` sites an INSTALLER mints
+into the appended band, long after the walk, into a module that is not the Maxon one — so the walk holds no
+evidence at all and would file every arena entry `unreachedRuntimeTier` while its body ships, which
+`DeadFunctionElimination.requireUnreachableLibraryStayedDead` panics on. The edge is therefore DECLARED:
+`StdlibSource.runtimeTierFileIsCompilerCalled` names the tier FILES the compiler itself calls into, out of
+the same one-walk derivation, and `classifyLibraryReach` reads it. **BY FILE rather than by NAME**, because
+an installer's call lands on an entry point whose body then reaches that file's module-scoped helpers — and
+the short-circuit path hands `classifyLibraryReach` an EMPTY reached set, so there is no walk there to close
+a name roster's difference. **UNCONDITIONAL**, because over-approximating costs the two `.data` words in
+every program and the other direction is a link failure. ⇒ **A NEW TIER FAMILY THE COMPILER REACHES BY
+MINTING A CALL OWES A LINE IN THAT ROSTER**; the panic above names the missing body.
 
 ⛔⛔ **E3153 IS COMPLETE ON BOTH SIDES, AND THE VALUE SIDE IS COMPLETE BECAUSE IT IS ASKED OF THE VALUE
 RATHER THAN OF THE BINDING FORM.** `parseTypeReference` catches every type a runtime file WRITES.
@@ -194,17 +207,36 @@ Four doors are still standing open rather than shut:
   `storeWord` is the fault probe's, and no golden renders that body — what measures it is a LIVE fault, in
   `specs/safety.md`'s three backtrace cases. `osThreadCpuTicks` waits on `__thread_cpu_ticks`, which cannot
   move until a `__Raw` row names the current-GT read its green-thread arm makes.
-  ⭐⭐ **THE SLAB ARENA'S VOCABULARY IS IN AND ITS CONSUMER IS NOT, WHICH IS A DELIBERATE INVERSION OF THE
-  USUAL ORDER.** `loadByte`, `storeByte`, `atomicAddWord`, `atomicCas`, `memFill`, the five page rows
-  (`osAllocPages`, `osReservePages`, `osCommitPages`, `osDecommitPages`, `osFreePages`), the three
+  ⭐⭐ **THE SLAB ARENA'S PAGE LAYER IS THE FIRST FAMILY WHOSE VOCABULARY LANDED AHEAD OF IT, AND THE
+  CONSUMER HAS NOW ARRIVED.** `loadByte`, `storeByte`, `atomicAddWord`, `atomicCas`, `memFill`, the five
+  page rows (`osAllocPages`, `osReservePages`, `osCommitPages`, `osDecommitPages`, `osFreePages`), the three
   `osLock*` rows and `osExit` landed WITHOUT a family, because once the tier supplies allocation a bad tier
-  file breaks `C1` — the compiler `C2` is built with. Each is spelled by a probe case in
-  `specs/runtime-source-tier.md`, so the objection this file records against `osThreadCpuTicks` — a row
-  nothing spells is a row nothing tests — is answered. ⚠ **WHAT A PROBE CASE PROVES STOPS AT THE PARSER AND
-  THE Maxon→Std LOWERING**: the probe is UNCALLED, so dead-function elimination drops the body before
-  instruction selection and no page is taken, no lock entered and no lane's isel consulted. Evidence about
-  the emitted INSTRUCTION is a measurement — spell the rows inside a REACHED tier body and read
-  `--emit-ir-runtime=`.
+  file breaks `C1` — the compiler `C2` is built with. `runtime/SlabArena.maxon` is that consumer: EIGHT of
+  the family's nine entry points (`__slab_assert_os_alloc`, `__slab_arena_new`,
+  `__slab_arena_alloc_chunks`, `__slab_arena_free_chunks`, `__slab_arena_of`, `__slab_arena_scavenge`,
+  `__slab_arena_map_ensure`, `__slab_arena_map_set`), so the reserve/commit/decommit rows, `memFill`,
+  `osExit` and the two address rows below are now MEASURED through a reached body rather than at what a
+  probe proves. ⛔ **THE NINTH — `__slab_arena_map_get` — STAYS A BUILDER, AND THAT IS NOT DEBT**:
+  `__slab_free` splices the walk INLINE (`SlabArena.emitSlabArenaMapGet`), because a frame around four loads
+  and three tests is overhead on the path of every free in the language, so porting it would be a SECOND
+  spelling of one walk. The three `osLock*` rows and the atomics are still spelled only by UNREACHED probe
+  cases, and the caveat below is theirs: **WHAT A PROBE CASE PROVES STOPS AT THE PARSER AND THE Maxon→Std
+  LOWERING** — the probe is uncalled, so dead-function elimination drops the body before instruction
+  selection and no lock is entered and no lane's isel consulted.
+  ⭐⭐ **AND THE ARENA'S TWO `.data` WORDS ARE ADDRESSED BY ROWS OF THEIR OWN** —
+  `slabArenaListAddr` and `slabArenaMapL1Addr`, lowering to a `globalAddr` on
+  `SlabArena.SlabArenaListLabel`/`SlabArenaMapL1Label`. ⛔ **THEY DO NOT GET THE `usesSchedMaxActiveWorkers`
+  ARGUMENT BELOW, AND CANNOT**: the arena's callers are `StdOp.call` sites an INSTALLER mints, so there is
+  no Maxon call site to set the bit from. `RuntimeUsage.usesSlabArena` is DECLARED instead
+  (`closeSlabNeeds`), and what makes that sound is that the ONLY minter of a call into the family,
+  `installSlabRuntime`, returns before emitting anything unless `usesHeap` — the same bit the declaration
+  reads, and `closeSlabNeeds` runs after every producer of it.
+  ⛔⛔ **THE FAMILY HAS NO DISCOVERED ARM, AND ADDING ONE BACK WOULD SET THE BIT IN EVERY PROGRAM.** Its
+  entry points are tier SOURCE, so its bodies are in the walked Maxon module and call each other; no file
+  outside the tier may name one, so a `__slab_arena_*` callee the walk can SEE is always the family talking
+  to itself. ⇒ **once a family's bodies move into the tier, its prefix arm in `recordCallUsage` stops being
+  evidence about the PROGRAM** — the clock's, the cpu-parallel pair's and the process family's are the
+  precedent to re-read, not to copy.
   ⭐⭐ **`osExit` IS THE TIER'S ONLY WAY OUT, AND IT IS AN EXIT RATHER THAN A `panic` BECAUSE A PANIC
   ALLOCATES.** Building a message and walking a stack are both heap work, which the allocator cannot do
   while reporting that allocation has failed — so a tier body that cannot continue names a code and ends

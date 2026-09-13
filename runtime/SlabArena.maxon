@@ -1,0 +1,621 @@
+// ⭐⭐ **THE PAGE LAYER THE SLAB SITS ON.** Everything above it — size classes, spans, free lists —
+// allocates in CHUNKS, and this is what a chunk comes from and goes back to: a bitmap-managed ARENA
+// committed a granule at a time, a singly-linked list of them, and the pointer→span reverse map a `free`
+// needs to answer *"which span owns this address?"* without a header word on every object.
+//
+// ⛔⛔ **ONE ENTRY POINT OF THE FAMILY IS NOT HERE AND IS NOT MISSING — `__slab_arena_map_get`.** Its walk
+// is FOUR LOADS AND THREE TESTS, and `__slab_free` splices it inline rather than paying a frame on the path
+// of every free in the language; the compiler emits that walk from `SlabArena.emitSlabArenaMapGet` straight
+// into the caller's blocks. Porting it would be a second spelling of the same walk, which is the one thing
+// this file's shared helpers exist to prevent.
+//
+// ⛔⛔ **THE GEOMETRY IS RESTATED HERE RATHER THAN SHARED, BECAUSE NO NAME CROSSES THE TIER BOUNDARY.**
+// `Compiler/Runtime/SlabArena.maxon` carries the same numbers and `checkSlabArenaGeometry` asserts the
+// DERIVATION over them on every compile; what is written twice is the handful of SEED constants, and
+// everything else on both sides follows from them. A seed that drifts is a wrong offset with nothing to
+// catch it, so each one below names the fact it restates.
+//
+// ⭐⭐ **THE ARENA HAS TWO GEOMETRIES AND THE LANE THAT DECIDES IS THE ONE WITH NO RESERVATION.**
+// `osReservePages` takes address space the OS neither charges nor backs on every native lane, so an arena
+// there is 64 MiB of reservation over 64 KiB of committed memory. wasm32's `memory.grow` takes the range AND
+// backs it, so a reservation IS an allocation and the same arena would be 64 MiB of charged linear memory —
+// which at hello-world size IS the whole program. The lane is asked as `#if arch(wasm32)`, which is what
+// `IrModule.hasPageReservation` answers one tier up.
+//
+// ✅ **NO LOCK OF ITS OWN, BECAUSE THE CALLER HOLDS ONE.** `SlabRuntime` holds `__slab_lock` across every
+// call into this file on the allocate and release paths. The one exception is the reverse-map READ, and that
+// read is not here.
+//
+// ⚠ **AND THERE IS NO INITIALISER.** The `.data` image IS the initialization: `__slab_arena_list` starts 0
+// and `__slab_arena_map_l1` starts 0, and the first call on each path tests for exactly that.
+
+// ⭐⭐ **ONE SIGNED FULL-RANGE ALIAS FOR EVERY QUANTITY THIS FILE HOLDS, AND THE SIGN IS LOAD-BEARING
+// TWICE.** `MachineWord` is a `bits(64)` PATTERN, so every ordering comparison on one reads UNSIGNED —
+// which turns `__slab_assert_os_alloc`'s whole test (a raw `mmap` answers a small NEGATIVE errno) into the
+// largest address the machine could have, and turns the bit-run and granule walks' `<` into a different
+// instruction for no reason. Full-range because an address, a bitmap word and a chunk index share this type
+// and none of them has a bound this file could state; narrowing it would be a guarded door that could only
+// ever fire on a word the OS itself wrote, in a body with no caller to report to (`runtime/Word.maxon`).
+typealias ArenaWord = int(i64.min to i64.max)
+
+// ⭐⭐ **A BIT'S POSITION IN ITS BITMAP WORD, RANGED — AND THE RANGE IS WHAT KEEPS THE ARENA'S INNERMOST
+// LOOP TO ONE SHIFT.** THE SHIFT RULE (`Parser.emitGuardedShift`) saturates a count the compiler can
+// neither fold nor BOUND, which is eight ops per bit test on the first-fit scan; a count whose declared
+// bounds lie inside 0…63 takes the instruction as written. `x and 63` is in range by construction, so the
+// cast's own guard is the only thing this buys back.
+//
+// ⚠ The high bound is spelled rather than named: a range bound must be a LITERAL. It is the same fact as
+// `BitmapBitsPerWordMask` above, which is what every site casting into this type masks with.
+typealias BitmapBitPosition = int(0 to 63)
+
+// The all-ones word, which is how this tier spells `not x`: there is no integer complement, and
+// `x xor -1` is the same answer.
+let AllOnesWord = -1 as ArenaWord
+
+// ⭐ **THE CHUNK IS GO'S 8 KiB PAGE, AND IT IS THE SEED THE REVERSE MAP'S BOTTOM FIELD IS ALSO CUT FROM.**
+// `SlabClasses.SlabPageShift` is the compiler's copy; the map indexes by `addr shr SlabPageShift`, so the
+// two halves of one address split must be this same number.
+let SlabPageShift = 13
+let SlabPageBytes = 8192
+
+// A bitmap word is a machine word. The count, the shift that divides by it and the mask that takes a
+// remainder of it are one fact three times over by necessity.
+let BitmapBitsPerWord = 64
+let BitmapBitsPerWordShift = 6
+let BitmapBitsPerWordMask = 63
+
+// The stride of the tables this file owns — its two bitmaps and the reverse map's three levels.
+let ArenaWordBytes = 8
+
+// ⭐ **CHUNK 0 IS THE ARENA'S OWN METADATA, so its bit is never free and it is never handed out.** A
+// returned chunk address is therefore never the arena base, so the two cannot be confused by a caller
+// holding one.
+let ArenaMetadataChunks = 1
+
+// A bitmap byte with every bit FREE. The polarity is what makes it right, not the hex: a SET bit means FREE,
+// and a freshly committed mapping is ZERO.
+let ArenaBitmapAllFreeByte = 0xFF
+
+// ⭐⭐ **THE UNIT AN ARENA COMMITS IN, AND EVERY REASON FOR THE NUMBER IS A PLATFORM'S.** 64 KiB is Windows'
+// allocation granularity and a whole multiple of every page size the five lanes use — including
+// arm64-macOS's 16 KiB, which is TWICE a chunk. So the granule is not a batching choice: it is what makes
+// every range this file names to the OS page-aligned on every lane at once.
+let SlabArenaCommitGranuleBytes = 65536
+let SlabArenaCommitGranuleChunks = 8
+let SlabArenaCommitGranuleChunksShift = 3
+let SlabArenaCommitGranuleShift = 16
+
+// The metadata chunk's layout: the arena-list link, then the chunk bitmap, then the granule COMMIT bitmap
+// immediately past it at the derived offset below.
+let ArenaNextOffset = 0
+let ArenaBitmapOffset = 8
+
+// The reverse map's address split — `[ L1 | L2 | L3 | page offset ]` over 48 bits, which is the canonical
+// user-address width (x64 user mode is 47 bits, arm64 is 48).
+let ArenaMapLevelEntries = 8192
+let ArenaMapLevelMask = 8191
+let ArenaMapL1Entries = 512
+let ArenaMapL1Mask = 511
+let ArenaMapL2Shift = 26
+let ArenaMapL1Shift = 39
+
+// ⭐⭐ **THE ARENA'S CHUNK COUNT, WHICH IS THE ONE NUMBER CHOSEN PER LANE — EVERYTHING BELOW IS DERIVED.**
+// Where a reservation is free the arena is exactly ONE bottom-level map table's span, so the map costs
+// 0.1–0.2% of the heap it describes. Where it is not, 64 chunks is Go's own wasm row
+// (`logHeapArenaBytes = (9+10)`), and the map stays ~0.1% there because linear memory only grows at the top:
+// successive arenas are ADJACENT, so one table serves ~128 of them.
+//
+// The align-up slack follows from the same fact read the other way. `osReservePages` promises only the
+// LANE'S page granularity — x64-linux's is 4 KiB, HALF a chunk — so `__slab_arena_new` raises the base to
+// the next commit granule and the reservation has to be that much longer. The lane that pays for its
+// reservation needs no slack: `memory.grow` hands out whole 64 KiB units, so its base is granule-aligned
+// already and the align-up is the identity.
+#if arch(wasm32)
+	let ArenaChunkCount = 64
+	let ArenaAlignSlackBytes = 0
+#else
+	let ArenaChunkCount = 8192
+	let ArenaAlignSlackBytes = 65535
+#endif
+
+let ArenaBitmapWords = ArenaChunkCount shr BitmapBitsPerWordShift
+let ArenaBitmapBytes = ArenaBitmapWords * ArenaWordBytes
+let ArenaGranuleCount = ArenaChunkCount shr SlabArenaCommitGranuleChunksShift
+let ArenaCommitBitmapOffset = ArenaBitmapOffset + ArenaBitmapBytes
+let ArenaBytes = ArenaChunkCount * SlabPageBytes
+let ArenaReservationBytes = ArenaBytes + ArenaAlignSlackBytes
+let ArenaAllocatableChunks = ArenaChunkCount - ArenaMetadataChunks
+
+// The align-up's two halves — `(base + bias) and mask` raises an address to the next commit granule — and
+// the bias doubles as the WITHIN-GRANULE mask the alignment check reads back.
+let ArenaGranuleMask = SlabArenaCommitGranuleBytes - 1
+let ArenaGranuleAlignMask = -SlabArenaCommitGranuleBytes
+
+// `-(1 shl k)` is the all-ones word with its low `k` bits cleared: the metadata chunks marked USED and every
+// other chunk of bitmap word 0 free.
+let ArenaFirstBitmapWord = -(1 shl ArenaMetadataChunks)
+
+// A granule's chunks all lie in ONE bitmap word, which is what makes *"is this granule entirely free?"* one
+// masked compare. This is the field that answers yes.
+let ArenaGranuleAllFreeField = (1 shl SlabArenaCommitGranuleChunks) - 1
+
+// ⭐⭐ **THE EXIT CODES THIS FILE ENDS THE PROCESS WITH, RESTATED FROM `RuntimeAbort` BECAUSE NO NAME
+// CROSSES THE TIER BOUNDARY.** They are exits rather than panics because a panic BUILDS A MESSAGE AND WALKS
+// A STACK, and both allocate — which the allocator cannot do while reporting that allocation has failed.
+// The compiler's `RuntimeAbort` enum is where the numbers are owned and where a duplicate is E3031.
+let SlabOsAllocFailedExit = 82 as MachineWord
+let SlabChunkRunUnsatisfiableExit = 83 as MachineWord
+let SlabChunkRangeOutOfArenaExit = 84 as MachineWord
+let SlabAddressOutsideEveryArenaExit = 88 as MachineWord
+let SlabArenaBaseNotGranuleAlignedExit = 91 as MachineWord
+
+// The word a body answers under an `osExit` that never returns. The block still needs a terminator, and the
+// value is unread by construction.
+let UnreachedAnswer = 0 as ArenaWord
+
+// ⭐ **`__slab_assert_os_alloc(ptr) -> ptr` — surface a refused OS page call as a clean abort, and hand the
+// pointer on when it was not refused.** Every caller stores INTO the pointer it just got back, so a failure
+// that is not caught here arrives as a store through garbage: an opaque access violation with no
+// attribution, in the one condition a user is most likely to hit for a reason outside their own program.
+// Its answer is its argument, so a guard that hands the value on cannot be forgotten at a call site.
+//
+// ⛔⛔ **THE TEST IS THE SIGN, AND `ptr == 0` WOULD BE A WINDOWS-ONLY TEST WEARING A PORTABLE ONE'S
+// CLOTHES.** `VirtualAlloc` answers NULL on failure; a RAW POSIX SYSCALL answers a small NEGATIVE ERRNO in
+// the result register (−ENOMEM is −12), which an equality test waves through as a valid base. Testing the
+// sign catches both at the same single compare, because no lane can answer a legitimate page base that is
+// zero or negative.
+module function __slab_assert_os_alloc(ptr ArenaWord) returns ArenaWord
+	if ptr <= 0 'refused'
+		__Raw.osExit(SlabOsAllocFailedExit)
+
+		return UnreachedAnswer
+	end 'refused'
+
+	return ptr
+end '__slab_assert_os_alloc'
+
+// `__slab_arena_new() -> arenaBase` — map an arena, initialise its metadata and bitmap, prepend it to the
+// arena list, and answer its base.
+//
+// ⭐⭐ **IT RESERVES THE WHOLE ARENA AND COMMITS ONE GRANULE.** Everything past the first granule stays
+// reserved-and-inaccessible until `__slab_arena_alloc_chunks` hands out a chunk that reaches it, which is
+// what makes a 64 MiB arena affordable on a lane that has reservations.
+//
+// ⛔⛔ **THE ARENA STARTS AT THE NEXT COMMIT GRANULE, NOT AT THE ADDRESS THE OS ANSWERED.**
+// `osReservePages` promises the lane's page granularity and nothing more — 4 KiB on BOTH LINUX LANES, HALF
+// a chunk. The reverse map indexes by `addr shr SlabPageShift`, so an arena based 4096 mod 8192 puts the
+// chunk grid out of phase with the map's page grid: the tail of every span goes unregistered and each
+// registered index covers bytes belonging to the PRECEDING chunk, which is a slot resolving to its
+// neighbour's span. A granule-aligned base is ONE statement covering that and the page alignment of every
+// range this file later names to the OS.
+//
+// ⛔⛔ **AND THE ALIGNMENT IS CHECKED RATHER THAN ASSUMED.** It is not tautological: a backend
+// materialising the mask at the wrong WIDTH puts a misaligned base here, and on the lane that reserves NO
+// slack a round-up that actually moved the base would move it past the reservation's end.
+//
+// ⛔⛔ **THE RAW RESERVATION ADDRESS DIES HERE, AND THE DAY ANYTHING RELEASES AN ARENA IT IS THE VALUE THAT
+// MUST COME BACK.** `base` is the wrong one to release: Windows' `VirtualFree(MEM_RELEASE)` REQUIRES the
+// address `VirtualAlloc` answered, and a POSIX unmap of `[base, base + bytes)` would leak the align-up's
+// head slack. The align-up is not injective, so a teardown has to start by giving the metadata chunk a
+// reserved-base word.
+module function __slab_arena_new() returns ArenaWord
+	let reserved = __slab_assert_os_alloc(__Raw.osReservePages(ArenaReservationBytes as MachineWord) as ArenaWord)
+	let base = (reserved + ArenaGranuleMask) and ArenaGranuleAlignMask
+
+	if (base and ArenaGranuleMask) != 0 'offGrid'
+		__Raw.osExit(SlabArenaBaseNotGranuleAlignedExit)
+
+		return UnreachedAnswer
+	end 'offGrid'
+
+	// Before ANY store below: the metadata chunk is inside the first granule, and until that granule is
+	// committed the arena's own base is not writable.
+	slabArenaCommit(base, byteCount: SlabArenaCommitGranuleBytes as ArenaWord)
+
+	// Prepend: `new.next = head; head = new`. The list is prepended to, so the newest arena is scanned first
+	// and a fresh one serves the request that grew it without a second walk.
+	let headAddr = __Raw.slabArenaListAddr() as ArenaWord
+	__Raw.storeWord(base as MachineWord, offset: ArenaNextOffset, value: __Raw.loadWord(headAddr as MachineWord, offset: 0))
+
+	// The fill writes ONES because a SET bit means FREE here and a freshly committed mapping is ZERO — the
+	// one place the zeroing contract works against this file rather than for it.
+	__Raw.memFill((base + ArenaBitmapOffset) as MachineWord, byteCount: ArenaBitmapBytes as MachineWord, value: ArenaBitmapAllFreeByte)
+	__Raw.storeWord(base as MachineWord, offset: ArenaBitmapOffset, value: ArenaFirstBitmapWord as MachineWord)
+
+	// ⭐ **GRANULE 0 IS COMMITTED AND EVERY OTHER GRANULE IS NOT, WHICH IS WHAT THE FRESH MAPPING ALREADY
+	// SAYS.** The commit bitmap sits past the chunk bitmap the fill stopped at, so it is still the
+	// reservation's own zeroes, and a zero bit MEANS "not committed".
+	__Raw.storeWord(base as MachineWord, offset: ArenaCommitBitmapOffset, value: 1 as MachineWord)
+	__Raw.storeWord(headAddr as MachineWord, offset: 0, value: base as MachineWord)
+
+	return base
+end '__slab_arena_new'
+
+// `__slab_arena_alloc_chunks(numChunks) -> base` — first-fit over the arena list's bitmaps: find a run of
+// `numChunks` consecutive free chunks, mark them used, and answer the address of the first. When no arena
+// has room, map a fresh one and scan that.
+//
+// ⭐ **THE UNSATISFIABLE REQUEST IS REFUSED.** Unrefused, the loop grows a fresh arena and rescans for ever
+// for a run no arena can hold, mapping memory until the OS refuses. A count of 0 is the quietest of them:
+// the run test succeeds before any bit is cleared, so the answer is a chunk still marked FREE that will be
+// handed out a second time.
+//
+// ⭐ **THE ALL-USED WORD IS SKIPPED WHOLE.** A bitmap word of 0 has no free bit, so no run can start inside
+// it and any run in progress ends at it — 64 bit tests collapse to one compare, asked only at a word
+// boundary. It is what makes scanning a FULL arena, which the list walk repeats for every arena it passes,
+// cost `ArenaBitmapWords` loads instead of `ArenaChunkCount`.
+//
+// ⚠ **THE WALK IS O(arenas × chunks) PER CALL AND THAT IS A KNOWN SHAPE.** Go replaces it with a radix
+// summary tree (`pageAlloc`) once arenas are many; it is left linear here because a chunk run is allocated
+// ONCE PER SPAN and a span serves many objects, so the constant amortises over the layer above.
+//
+// ⭐ **AND THE CLAIM COMMITS WHAT IT REACHES.** The bits are marked used, then every granule the run touches
+// that is not backed already is committed — the scavenger may since have dropped the backing of any granule
+// the run lands in.
+module function __slab_arena_alloc_chunks(numChunks ArenaWord) returns ArenaWord
+	if numChunks < 1 or numChunks > ArenaAllocatableChunks 'unsatisfiable'
+		__Raw.osExit(SlabChunkRunUnsatisfiableExit)
+
+		return UnreachedAnswer
+	end 'unsatisfiable'
+
+	var arena = __Raw.loadWord(__Raw.slabArenaListAddr(), offset: 0) as ArenaWord
+	var runStart = 0 as ArenaWord
+	var found = false
+
+	while not found 'arenas'
+		// A fresh arena is prepended, so the retry scans the one just mapped rather than re-walking the
+		// arenas that had no room.
+		if arena == 0 'grow'
+			arena = __slab_arena_new()
+		end 'grow'
+
+		var chunk = ArenaMetadataChunks as ArenaWord
+		var runLen = 0 as ArenaWord
+
+		while chunk < ArenaChunkCount 'scan'
+			let wordAddr = slabArenaBitmapWordAddr(arena, bitIndex: chunk)
+			let word = __Raw.loadWord(wordAddr as MachineWord, offset: ArenaBitmapOffset) as ArenaWord
+			let bitPos = (chunk and BitmapBitsPerWordMask) as BitmapBitPosition
+
+			// Nested rather than one `and`, so the skip test costs a branch the common path does not take:
+			// a conjunction is materialized through `setcc` and a merge, which is five ops in the innermost
+			// loop of the scan.
+			if bitPos == 0 'atWordStart'
+				if word == 0 'wholeWordUsed'
+					chunk = chunk + BitmapBitsPerWord
+					runLen = 0
+					continue
+				end 'wholeWordUsed'
+			end 'atWordStart'
+
+			if ((word shr bitPos) and 1) == 0 'chunkUsed'
+				chunk = chunk + 1
+				runLen = 0
+				continue
+			end 'chunkUsed'
+
+			// `runStart` is meaningful only while `runLen > 0`, which is why the two breaks above leave it
+			// alone rather than inventing a value for it.
+			if runLen == 0 'runBegins'
+				runStart = chunk
+			end 'runBegins'
+
+			runLen = runLen + 1
+			chunk = chunk + 1
+
+			if runLen >= numChunks 'longEnough'
+				found = true
+				break
+			end 'longEnough'
+		end 'scan'
+
+		if not found 'nextArena'
+			arena = __Raw.loadWord(arena as MachineWord, offset: ArenaNextOffset) as ArenaWord
+		end 'nextArena'
+	end 'arenas'
+
+	// The run's END is computed ONCE and read by both halves of the claim — the bit walk's bound and the
+	// commit's range are the same address, and computing it twice is how the two come to disagree about
+	// where a run stops.
+	let pastRun = runStart + numChunks
+	slabArenaMarkChunkRun(arena, firstChunk: runStart, pastChunk: pastRun, mode: SlabBitRun.claim)
+	slabArenaCommitGranulesFor(arena, firstChunk: runStart, pastChunk: pastRun)
+
+	return arena + (runStart shl SlabPageShift)
+end '__slab_arena_alloc_chunks'
+
+// `__slab_arena_free_chunks(arenaBase, chunkIndex, numChunks)` — ZERO a chunk run and mark it free again.
+//
+// ⭐ **THE RANGE IS CHECKED.** An index below the metadata chunks would free the arena's own bitmap into the
+// pool; one past the end writes past the bitmap into chunk 0's payload. Both are silent — the corruption
+// surfaces later, somewhere else, as a chunk handed out twice.
+//
+// ⭐⭐⭐ **INV-4 IS ESTABLISHED HERE AND NOWHERE ELSE: EVERY CHUNK `__slab_arena_alloc_chunks` HANDS OUT
+// READS ZERO.** The scavenger recycles chunks, and a recycled chunk holds the previous span's slots —
+// poisoned payloads, and in each box header a REFCOUNT. `__slab_refill` cuts a span whose whole bump region
+// is presumed zero and `__mm_alloc` does not write the refcount because 0 is the born state, so an unzeroed
+// recycled chunk is a heap that frees boxes at the wrong time, with no diagnostic.
+//
+// ⛔⛔ **THE ZERO IS WRITTEN ON THE RELEASE PATH, NOT RECOVERED FROM THE OS ON THE CLAIM PATH.** What a
+// recommitted page contains is FOUR different answers (Windows zeroes, Linux refaults zero, Darwin's
+// `MADV_FREE` may return the SAME DIRTY PAGE, wasm keeps the bytes verbatim). The zero is ours, written into
+// committed memory BEFORE any decommit can touch it, so every one of those four gives the chunk back holding
+// zeroes — and there is no lane flag for anyone to make conditional later.
+//
+// ⚠ **IT IS SAFE TO WRITE, WHICH IS NOT OBVIOUS.** The run is being RELEASED, so it was CLAIMED, so every
+// granule it touches was backed and the scavenger cannot have dropped one — a granule holding a claimed
+// chunk is not fully free.
+module function __slab_arena_free_chunks(arenaBase ArenaWord, chunkIndex ArenaWord, numChunks ArenaWord)
+	let pastRun = chunkIndex + numChunks
+
+	if chunkIndex < ArenaMetadataChunks or numChunks < 1 or pastRun > ArenaChunkCount 'outOfArena'
+		__Raw.osExit(SlabChunkRangeOutOfArenaExit)
+
+		return
+	end 'outOfArena'
+
+	// INV-4 lands BEFORE the bits are cleared, so no concurrent claim can ever observe a free-but-dirty
+	// chunk.
+	__Raw.memFill((arenaBase + (chunkIndex shl SlabPageShift)) as MachineWord, byteCount: (numChunks shl SlabPageShift) as MachineWord, value: 0)
+	slabArenaMarkChunkRun(arenaBase, firstChunk: chunkIndex, pastChunk: pastRun, mode: SlabBitRun.release)
+end '__slab_arena_free_chunks'
+
+// `__slab_arena_of(addr) -> arenaBase` — which arena's reservation contains `addr`.
+//
+// ⭐⭐ **IT STORES NOTHING, ON THE OBSERVATION THAT DECIDES BETWEEN IT AND THE THREE ALTERNATIVES.**
+// `__slab_arena_free_chunks` needs an arena base its caller does not hold: a span records where its chunk run
+// STARTS, not which arena it was cut from. Recording it at ALLOCATION — an out-value, an arena level in the
+// reverse map, an arena-aligned reservation to mask — pays at BIRTH what this pays at DESTRUCTION, and a
+// span is destroyed at most once and created at least once. The field would also have cost the mspan record
+// its last free word.
+//
+// ⚠ **THE LINEAR WALK COSTS NOTHING IT DID NOT ALREADY COST.** It walks the arena list, which is the same
+// list `__slab_arena_alloc_chunks` walks — and that one walks the arenas AND their bitmaps. Every address
+// handed here came out of a chunk run whose allocation had just paid strictly more.
+//
+// ⚠ It ABORTS rather than answering a sentinel: every caller is about to use the answer as a base to compute
+// a chunk index from, and a 0 there would release chunk `addr shr SlabPageShift` of the arena at address 0.
+module function __slab_arena_of(addr ArenaWord) returns ArenaWord
+	var arena = __Raw.loadWord(__Raw.slabArenaListAddr(), offset: 0) as ArenaWord
+
+	while arena != 0 'walk'
+		// Nested rather than one `and` for the reason the first-fit scan gives: a conjunction is
+		// materialized through `setcc` and a merge where two branches to the same target cost nothing.
+		if addr >= arena 'atOrAbove'
+			if addr < arena + ArenaBytes 'inside'
+				return arena
+			end 'inside'
+		end 'atOrAbove'
+
+		arena = __Raw.loadWord(arena as MachineWord, offset: ArenaNextOffset) as ArenaWord
+	end 'walk'
+
+	__Raw.osExit(SlabAddressOutsideEveryArenaExit)
+
+	return UnreachedAnswer
+end '__slab_arena_of'
+
+// `__slab_arena_scavenge() -> bytesDecommitted` — drop the physical backing of every commit granule, in
+// every arena, whose chunks are ALL free, and answer how many bytes that was.
+//
+// ⭐⭐ **THE UNIT IS THE GRANULE AND NOT THE SPAN, AND THAT IS A CORRECTNESS ARGUMENT RATHER THAN A BATCHING
+// ONE.** A span's own footprint is chunk-granular, and on a 16 KiB-page lane such a range is neither aligned
+// nor a whole number of pages: `madvise` answers `EINVAL` to a misaligned base (a silent no-op, since
+// nothing checks) or rounds the LENGTH up and throws away the first 8 KiB of the next span. arm64-macOS's
+// page is exactly twice a chunk. A granule is a whole multiple of every lane's page, so a granule-aligned
+// range of whole granules is legal everywhere from one target-neutral body.
+//
+// ⭐ **A GRANULE IS RELEASED ONLY WHEN EVERY CHUNK IN IT IS FREE**, which is what keeps the arena's own
+// metadata, the allocator's state region and the reverse-map level tables backed: each of those is a CLAIMED
+// chunk, and one claimed chunk in a granule is enough. Granule 0 can therefore never be released at all.
+//
+// ⚠ **ON wasm32-wasi `osDecommitPages` EMITS NOTHING, and this body still runs in full.** Linear memory only
+// grows, so there is no backing to drop; the commit bit still clears and is still re-set by the next claim
+// that reaches it, and the chunks are still reusable by any class.
+module function __slab_arena_scavenge() returns ArenaWord
+	var released = 0 as ArenaWord
+	var arena = __Raw.loadWord(__Raw.slabArenaListAddr(), offset: 0) as ArenaWord
+
+	while arena != 0 'arenas'
+		var granule = 0 as ArenaWord
+
+		while granule < ArenaGranuleCount 'granules'
+			let commitWordAddr = slabArenaBitmapWordAddr(arena, bitIndex: granule)
+			let commitWord = __Raw.loadWord(commitWordAddr as MachineWord, offset: ArenaCommitBitmapOffset) as ArenaWord
+			let commitBitPos = (granule and BitmapBitsPerWordMask) as BitmapBitPosition
+
+			if ((commitWord shr commitBitPos) and 1) == 0 'notBacked'
+				granule = granule + 1
+				continue
+			end 'notBacked'
+
+			// A granule's chunks all lie in one bitmap word, so *"is every chunk of this granule free?"* is
+			// one masked compare rather than a nested loop.
+			let granuleFirstChunk = granule shl SlabArenaCommitGranuleChunksShift
+			let chunkWord = __Raw.loadWord(slabArenaBitmapWordAddr(arena, bitIndex: granuleFirstChunk) as MachineWord, offset: ArenaBitmapOffset) as ArenaWord
+
+			if ((chunkWord shr ((granuleFirstChunk and BitmapBitsPerWordMask) as BitmapBitPosition)) and ArenaGranuleAllFreeField) != ArenaGranuleAllFreeField 'inUse'
+				granule = granule + 1
+				continue
+			end 'inUse'
+
+			__Raw.osDecommitPages((arena + (granule shl SlabArenaCommitGranuleShift)) as MachineWord, size: SlabArenaCommitGranuleBytes as MachineWord)
+
+			// The bit falls only after the OS has been told, so a granule can never be marked unbacked while
+			// its pages are still resident — the direction that matters, since the opposite marking is what a
+			// claim reads.
+			__Raw.storeWord(commitWordAddr as MachineWord, offset: ArenaCommitBitmapOffset, value: (commitWord and ((1 shl commitBitPos) xor AllOnesWord)) as MachineWord)
+
+			released = released + SlabArenaCommitGranuleBytes
+			granule = granule + 1
+		end 'granules'
+
+		arena = __Raw.loadWord(arena as MachineWord, offset: ArenaNextOffset) as ArenaWord
+	end 'arenas'
+
+	return released
+end '__slab_arena_scavenge'
+
+// `__slab_arena_map_ensure(addr) -> slotAddr` — the address of the reverse map's slot for the page holding
+// `addr`, lazy-allocating whichever of the three levels do not exist yet.
+//
+// ⭐⭐ **IT ANSWERS THE SLOT RATHER THAN NOTHING**, so `__slab_arena_map_set` does not repeat the whole
+// L1→L2→spans chain by hand to reach the slot the ensure was standing on — that would be two walks, two
+// copies of the index arithmetic, and two places for a shift to be wrong.
+module function __slab_arena_map_ensure(addr ArenaWord) returns ArenaWord
+	let l1 = slabArenaMapLevel(__Raw.slabArenaMapL1Addr() as ArenaWord, entryCount: ArenaMapL1Entries)
+	let l2 = slabArenaMapLevel(slabArenaMapSlotAddr(l1, addr: addr, shift: ArenaMapL1Shift, mask: ArenaMapL1Mask), entryCount: ArenaMapLevelEntries)
+	let l3 = slabArenaMapLevel(slabArenaMapSlotAddr(l2, addr: addr, shift: ArenaMapL2Shift, mask: ArenaMapLevelMask), entryCount: ArenaMapLevelEntries)
+
+	return slabArenaMapSlotAddr(l3, addr: addr, shift: SlabPageShift, mask: ArenaMapLevelMask)
+end '__slab_arena_map_ensure'
+
+// `__slab_arena_map_set(base, numPages, span)` — register `span` as the owner of every page in
+// `[base, base + numPages * SlabPageBytes)`.
+//
+// ⚠ **EVERY PAGE OF A MULTI-PAGE SPAN GETS ITS OWN SLOT, HOLDING THE SAME POINTER.** That is what makes the
+// reverse map answer for a pointer anywhere INSIDE the span rather than only at its base — which is the
+// whole question a `free` asks.
+module function __slab_arena_map_set(base ArenaWord, numPages ArenaWord, span ArenaWord)
+	var page = 0 as ArenaWord
+
+	while page < numPages 'pages'
+		__Raw.storeWord(__slab_arena_map_ensure(base + (page shl SlabPageShift)) as MachineWord, offset: 0, value: span as MachineWord)
+		page = page + 1
+	end 'pages'
+end '__slab_arena_map_set'
+
+// ⭐⭐ **WHICH DIRECTION A BIT RUN MOVES.** The allocate side and the release side are the SAME word-and-bit
+// arithmetic with opposite operators, written ONCE. Two copies of an index computation over one bitmap is
+// exactly the pair that drifts: change the metadata reservation on one side and the two stop describing the
+// same map.
+//
+// It is an enum rather than a bare operator parameter because the opcode is not the only thing that differs
+// — the OPERAND's polarity does too — and a caller handed two independent knobs can set them inconsistently.
+enum SlabBitRun
+	// The chunks become USED: `word = word and not bit`.
+	claim
+
+	// The chunks become FREE: `word = word or bit`.
+	release
+end 'SlabBitRun'
+
+// Walk `[firstChunk, pastChunk)` and move each chunk's bit in `arenaBase`'s bitmap.
+//
+// ⭐ **IT TAKES THE RUN'S END, NOT ITS LENGTH, BECAUSE BOTH CALLERS ALREADY HOLD THE END.** A `count`
+// parameter would make this derive a third time what its callers had both derived already.
+//
+// ⚠ A run may cross a bitmap-word boundary, which is why the word address is recomputed per bit rather than
+// hoisted: a run of 64 chunks spans two words, and ten pages of a large span can span two as well.
+function slabArenaMarkChunkRun(arenaBase ArenaWord, firstChunk ArenaWord, pastChunk ArenaWord, mode SlabBitRun)
+	var chunk = firstChunk
+
+	while chunk < pastChunk 'bits'
+		let wordAddr = slabArenaBitmapWordAddr(arenaBase, bitIndex: chunk)
+		let word = __Raw.loadWord(wordAddr as MachineWord, offset: ArenaBitmapOffset) as ArenaWord
+		let bit = 1 shl ((chunk and BitmapBitsPerWordMask) as BitmapBitPosition)
+
+		let updated = match mode 'polarity'
+			claim gives word and (bit xor AllOnesWord)
+			release gives word or bit
+		end 'polarity'
+
+		__Raw.storeWord(wordAddr as MachineWord, offset: ArenaBitmapOffset, value: updated as MachineWord)
+		chunk = chunk + 1
+	end 'bits'
+end 'slabArenaMarkChunkRun'
+
+// Back every commit granule the chunk run `[firstChunk, pastChunk)` touches that is not backed already, and
+// record each one in `arenaBase`'s commit bitmap.
+//
+// ⭐⭐ **THE COMMIT BIT IS WHY A COMMIT CAN NEVER LAND ON A LIVE RANGE, AND THAT IS A CORRECTNESS ARGUMENT
+// RATHER THAN AN OPTIMIZATION.** `osCommitPages` DESTROYS the contents of the range it commits on the three
+// POSIX lanes (a commit is a `MAP_FIXED` mapping there) and preserves them on Windows — so a re-commit of a
+// range holding data is a silent data loss on three lanes and green on the one most likely to be tested. A
+// granule whose bit is SET is skipped, and its bit is set exactly while its pages are backed: raised here
+// once, cleared only by `__slab_arena_scavenge` and only for a granule whose every chunk is FREE.
+//
+// The run's LAST granule, not one past it: `pastChunk` is one past the run, so `(pastChunk - 1)` is the
+// granule the final chunk actually lives in. A one-past index would commit a granule the run never reaches
+// whenever the run ended on a boundary.
+function slabArenaCommitGranulesFor(arenaBase ArenaWord, firstChunk ArenaWord, pastChunk ArenaWord)
+	var granule = firstChunk shr SlabArenaCommitGranuleChunksShift
+	let lastGranule = (pastChunk - 1) shr SlabArenaCommitGranuleChunksShift
+
+	while granule <= lastGranule 'granules'
+		let wordAddr = slabArenaBitmapWordAddr(arenaBase, bitIndex: granule)
+		let word = __Raw.loadWord(wordAddr as MachineWord, offset: ArenaCommitBitmapOffset) as ArenaWord
+		let bitPos = (granule and BitmapBitsPerWordMask) as BitmapBitPosition
+
+		if ((word shr bitPos) and 1) == 0 'unbacked'
+			slabArenaCommit(arenaBase + (granule shl SlabArenaCommitGranuleShift), byteCount: SlabArenaCommitGranuleBytes as ArenaWord)
+
+			// The bit is raised only after the OS has agreed, so a refused commit aborts inside the guard
+			// rather than leaving the arena claiming pages it does not have.
+			__Raw.storeWord(wordAddr as MachineWord, offset: ArenaCommitBitmapOffset, value: (word or (1 shl bitPos)) as MachineWord)
+		end 'unbacked'
+
+		granule = granule + 1
+	end 'granules'
+end 'slabArenaCommitGranulesFor'
+
+// Commit `byteCount` bytes at `base`, and abort cleanly if the OS refuses. Both of this file's commits go
+// through it, so the check cannot be present at one site and missing at the other — which is the failure it
+// exists to prevent, since an uncommitted page is INACCESSIBLE on Windows and on a `PROT_NONE` POSIX
+// reservation alike, and the very next instruction at either site is a store.
+//
+// ⚠ The guard's ANSWER is its argument and both callers already hold that address; what they want from it is
+// its REFUSAL.
+function slabArenaCommit(base ArenaWord, byteCount ArenaWord)
+	__slab_assert_os_alloc(__Raw.osCommitPages(base as MachineWord, size: byteCount as MachineWord) as ArenaWord)
+end 'slabArenaCommit'
+
+// The address of the bitmap word holding `bitIndex`'s bit, MINUS the table's own offset — every caller loads
+// and stores through that offset, so folding it into the addressing mode is one instruction saved per access
+// and one place each bitmap's position is expressed.
+//
+// ⚠ **IT SERVES BOTH BITMAPS, AND THE TABLE IS THE CALLER'S TO NAME.** The chunk bitmap's bit index is a
+// CHUNK and the commit bitmap's is a GRANULE; the word arithmetic is identical, and the only thing that
+// differs is the offset the caller loads through.
+function slabArenaBitmapWordAddr(arenaBase ArenaWord, bitIndex ArenaWord) returns ArenaWord
+	return arenaBase + ((bitIndex shr BitmapBitsPerWordShift) * ArenaWordBytes)
+end 'slabArenaBitmapWordAddr'
+
+// The address of one reverse-map slot: `tableBase + ((addr shr shift) and mask) * 8`. ONE spelling, shared by
+// the three index computations `__slab_arena_map_ensure` makes, which is what makes *"the L2 index is bits
+// 26..38"* a single statement rather than three.
+function slabArenaMapSlotAddr(tableBase ArenaWord, addr ArenaWord, shift ArenaWord, mask ArenaWord) returns ArenaWord
+	return tableBase + (((addr shr shift) and mask) * ArenaWordBytes)
+end 'slabArenaMapSlotAddr'
+
+// Load the table pointer at `slotAddr`, allocating and zeroing a table of `entryCount` words if there is
+// none, and answer the table's base.
+//
+// ⚠⚠ **THE ZEROING IS NOT OPTIONAL AND IT IS NOT PAID FOR BY THE OS.** A chunk from
+// `__slab_arena_alloc_chunks` is fresh OS memory ONLY the first time it is handed out; the scan is first-fit
+// over a bitmap, so a freed low chunk is reused before a virgin high one. An unzeroed level table reads a
+// dead chunk's bytes as a table pointer, and the next lookup follows it.
+//
+// ⚠ **FOLLOW-UP, NAMED: a per-arena virgin high-water mark.** The zeroing contract describes exactly this at
+// the SLOT level (memory above a span's bump cursor has never been handed out and is therefore already
+// zero). The chunk level has no such cursor, so every table is zeroed even when its chunk is provably
+// untouched — a fill run at most a handful of times per program.
+//
+// ⭐ **THE TABLE'S CHUNK COUNT IS DERIVED FROM ITS ENTRY COUNT RATHER THAN PASSED BESIDE IT.** A size and
+// the chunks that hold it are one fact, and a caller handed both can set them inconsistently — which is a
+// table whose tail lies in a chunk the arena still believes is free.
+function slabArenaMapLevel(slotAddr ArenaWord, entryCount ArenaWord) returns ArenaWord
+	let existing = __Raw.loadWord(slotAddr as MachineWord, offset: 0) as ArenaWord
+
+	if existing != 0 'present'
+		return existing
+	end 'present'
+
+	let tableBytes = entryCount * ArenaWordBytes
+	let table = __slab_arena_alloc_chunks((tableBytes + (SlabPageBytes - 1)) shr SlabPageShift)
+	__Raw.memFill(table as MachineWord, byteCount: tableBytes as MachineWord, value: 0)
+	__Raw.storeWord(slotAddr as MachineWord, offset: 0, value: table as MachineWord)
+
+	return table
+end 'slabArenaMapLevel'

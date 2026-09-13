@@ -546,12 +546,23 @@ export type RuntimeUsage
 	// carries the allocator for its own reasons; folding would install the whole page layer, and lay out its
 	// two `.data` words, in every program that allocates a single box.
 	//
-	// ⭐ **IT IS DECLARED FROM `usesHeap`, NOT DISCOVERED (`closeSlabNeeds`).** S2 routed `__slab_alloc`
-	// through the arena — spans are cut from its chunks and `__slab_free` asks its reverse map who owns a
-	// pointer — and every one of those calls lives in a SYNTHESIZED Std body, which is rule 2 of this file's
-	// header: what a synthesized body calls is declared, never discovered, because the Maxon-module walk
-	// structurally cannot see it. The prefix test below still answers for a call the walk CAN see, and no
-	// such call exists today; it is the door, not the producer.
+	// ⭐⭐ **IT IS DECLARED FROM `usesHeap` AND THERE IS NO DISCOVERED ARM AT ALL (`closeSlabNeeds`).**
+	// `__slab_alloc` cuts its spans from the arena's chunks and `__slab_free` asks its reverse map who owns a
+	// pointer; every one of those calls lives in a SYNTHESIZED Std body, which is rule 2 of this file's
+	// header — what a synthesized body calls is declared, never discovered.
+	//
+	// ⛔⛔ **AND A PREFIX ARM BESIDE THE CLOCK'S WOULD NOW BE WORSE THAN REDUNDANT: IT WOULD SET THE BIT IN
+	// EVERY PROGRAM.** The family's entry points are `runtime/SlabArena.maxon` source, so its bodies are in
+	// the walked Maxon module and they call each other — and no file outside the tier may name one (E3004),
+	// so a `__slab_arena_*` callee the walk can SEE is always the family talking to itself, which is no
+	// evidence about the program at all. Read as evidence it lays out the two `.data` words in a program
+	// that cannot allocate.
+	//
+	// ⇒ **WHAT KEEPS THE SLOTS PRESENT WHEREVER THE BODIES SHIP IS THAT THE ONLY MINTER OF A CALL TO THEM
+	// READS THE SAME BIT**: `SlabRuntime.installSlabRuntime` returns before emitting anything unless
+	// `usesHeap`, and `closeSlabNeeds` runs after every producer of `usesHeap`. (`SchedRuntime`'s GT-record
+	// carve mints `__slab_assert_os_alloc` off `usesGt` instead, and that body reads no `.data` word — it is
+	// a compare and an exit.)
 	//
 	// ⚠ It stays a bit of its OWN rather than being folded into `usesHeap` at every reader, because that is
 	// what keeps the two `.data` slots and the whole page layer out of a program that reaches neither.
@@ -884,14 +895,6 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if isClockRuntimeCallee(callee) 'wallClock'
 		usage.usesWallClock = true
 	end 'wallClock'
-
-	// A `__slab_arena_*` call carries the slab's PAGE LAYER and nothing else — the arena, its bitmap and the
-	// reverse map call each other and `osAllocPages`, and that is the whole of it. Like the wall clock above
-	// it declares no transitive dependency; unlike it, nothing emits such a call yet (see `usesSlabArena`),
-	// so this arm is what will answer for the first producer rather than something that answers today.
-	if isSlabArenaRuntimeCallee(callee) 'slabArena'
-		usage.usesSlabArena = true
-	end 'slabArena'
 
 	// A `__shm_*` call. It carries `usesHeap` and `usesManagedMemory` for the directory family's reasons:
 	// `__shm_copy_out` builds an `Array` record through `__managed_create`/`__managed_reserve` in a Std body

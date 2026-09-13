@@ -174,6 +174,14 @@ by construction: an address row that does not exist cannot be spelled, and the l
 means a row that exists names a LABEL. That the label is LAID OUT is a separate argument the family owes:
 the `.data` slot rides a `RuntimeUsage` bit the call site sets, and that same call site is the edge dead
 function elimination keeps the body alive for.
+
+⚠ **THAT LAST ARGUMENT IS THE SCHEDULER PAIR'S AND NOT EVERY FAMILY'S.** The slab arena's two words
+(`slabArenaListAddr`, `slabArenaMapL1Addr`) are read by tier bodies whose callers are `StdOp.call` sites an
+INSTALLER mints, so there is no call site in any Maxon body to set a bit from. Their slot rides a DECLARED
+bit instead (`RuntimeUsage.closeSlabNeeds`), and what makes that sound is that the only minter of a call
+into the family — `SlabRuntime.installSlabRuntime` — reads the same `usesHeap` the declaration does.
+⇒ **a family whose entry points the compiler reaches by minting a call owes that declaration, not this
+paragraph's coincidence.**
 ```maxon
 // --- runtime-file: Probe.maxon
 function probeProcessorCount() returns MachineWord
