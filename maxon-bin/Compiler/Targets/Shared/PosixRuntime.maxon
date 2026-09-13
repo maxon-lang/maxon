@@ -739,6 +739,14 @@ export let LinuxEventfdRaise = 1
 // no entries, and every non-negative count.
 export let PosixErrnoInterrupted = 4
 
+// ⭐⭐⭐ **`ESRCH` FROM A CHILD-SOURCE OPEN IS AN ANSWER, NOT A REFUSAL: THE CHILD HAS ALREADY EXITED.**
+// Both POSIX kernels report it that way — `pidfd_open` on a pid that has been reaped, and an `EVFILT_PROC`
+// registration on a task that is gone — and there is nothing left to wait for in either case, because the
+// thing the wait exists to observe has happened. Treating it as a host refusal aborts a program that did
+// everything right, and it is a RACE, so it aborts only sometimes: MEASURED on a 3-vCPU `macos-15` runner,
+// ten spec workers died on it while the same tree was green on every developer machine.
+export let PosixErrnoNoSuchProcess = 3
+
 // ⭐ **DARWIN's TWO NON-BLOCKING ANSWERS AND ITS `getsockopt` VOCABULARY.** `EAGAIN`/`EWOULDBLOCK` is 35 and
 // `EINPROGRESS` 36 there where Linux has 11 and 115, which is why `ManagedSocketRuntime` asks the TARGET rather
 // than reading one pair (`LinuxRuntime.LinuxErrnoWouldBlock` is the other).

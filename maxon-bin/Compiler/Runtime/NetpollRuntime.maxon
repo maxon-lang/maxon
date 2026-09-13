@@ -216,7 +216,7 @@ let NetpollFailName = b"__np_fail"
 // The three literals of the line, and the frame slot its digits are rendered into. A stack slot rather than
 // a `__slab_alloc`, because this runs on the way out of a process whose allocator may be why it is dying.
 let NetpollFailVerbText = b"netpoll: verb "
-let NetpollFailSubjectText = b" on fd "
+let NetpollFailSubjectText = b" on "
 let NetpollFailAnswerText = b" refused by the host, which answered "
 let NetpollFailEndText = b"\n"
 let NetpollFailDigitsBytes = 24 as StackSize
@@ -578,10 +578,21 @@ function emitNetpollConsumeBreak(module StdModule, func IrFunction, cur IrBlock,
 end 'emitNetpollConsumeBreak'
 
 // Read the eventfd's counter back to zero. Terminates `cur` and continues at `cont`.
+//
+// ⛔⛔ **A COUNTER ALREADY AT ZERO ANSWERS `EAGAIN`, AND THAT MEANS THE DRAIN IS DONE.** The descriptor is
+// non-blocking, so a read finding nothing to take is the state this call exists to reach — not a refusal. It
+// is the `openChildSource`/`ESRCH` shape exactly: a runtime path reading *"the thing already happened"* as
+// *"the host refused me"*, and one that aborts a correct program only when the timing goes a particular way.
+// The drain is `epoll`-only, so Linux's `EAGAIN` is the one number that can arrive here.
 function emitNetpollDrain(module StdModule, func IrFunction, cur IrBlock, cont IrBlock, ids ValueMinter)
+	var checked = module.addBlock(func, label: b"npdrainchk", heat: BlockHeat.normal)
+
 	let breakSource = emitLoadGlobalWord(module, block: cur, label: NetpollBreakLabel, ids: ids)
 	let answer = emitNetpoll(module, block: cur, verb: NetpollVerb.drainBreak, operands: argsOf(breakSource), ids: ids)
-	emitNetpollRequire(module, func: func, cur: cur, shape: NetpollShape.epoll, verb: NetpollVerb.drainBreak, subject: breakSource, answer: answer, cont: cont, ids: ids)
+	let empty = emitCmp(module, block: cur, a: answer, b: emitConst(module, block: cur, value: 0 - LinuxErrnoWouldBlock, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(empty, thenBlockId: cont.id, elseBlockId: checked.id))
+
+	emitNetpollRequire(module, func: func, cur: checked, shape: NetpollShape.epoll, verb: NetpollVerb.drainBreak, subject: breakSource, answer: answer, cont: cont, ids: ids)
 end 'emitNetpollDrain'
 
 // ==========================================================================
@@ -1785,10 +1796,18 @@ end 'emitNetpollChildKeyFromAllocator'
 
 // A POSIX lane's source key IS a descriptor the host mints, so a refusal is the host's — and the answer to
 // *"this child can never be waited for"* is the one a socket the poller will not take already gets.
+// ⛔ **`-ESRCH` TRAVELS BACK RATHER THAN ABORTING**: it says the child has already exited, which
+// `emitNetpollAcquireChildSource` answers by reading the status. Every other negative is a real refusal.
 function emitNetpollChildSourceFromHost(module StdModule, func IrFunction, cur IrBlock, target Target, childHandle ValueId, cont IrBlock, ids ValueMinter)
+	var checked = module.addBlock(func, label: b"npchsrcchk", heat: BlockHeat.normal)
+
 	let source = emitNetpoll(module, block: cur, verb: NetpollVerb.openChildSource, operands: argsOf(childHandle), ids: ids)
-	emitNetpollRequire(module, func: func, cur: cur, shape: netpollShape(target), verb: NetpollVerb.openChildSource, subject: childHandle, answer: source, cont: cont, ids: ids)
+	let exited = emitCmp(module, block: cur, a: source, b: emitConst(module, block: cur, value: 0 - PosixErrnoNoSuchProcess, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(exited, thenBlockId: cont.id, elseBlockId: checked.id))
 	cur.branchEdges.push(BranchEdge.create(cont.id, argIds: argsOf(source)))
+
+	emitNetpollRequire(module, func: func, cur: checked, shape: netpollShape(target), verb: NetpollVerb.openChildSource, subject: childHandle, answer: source, cont: cont, ids: ids)
+	checked.branchEdges.push(BranchEdge.create(cont.id, argIds: argsOf(source)))
 end 'emitNetpollChildSourceFromHost'
 
 // `__np_child_arm(source, childHandle)` — see `NetpollChildArmName`.
@@ -1907,15 +1926,29 @@ end 'NetpollChildSource'
 // ⛔ A poller that will not take the source leaves the caller nothing to wait on, which is the stop a socket
 // it will not take already gets — not a `RunProcessError`: the child spawned, and no caller could do anything
 // with the distinction but abandon a process it can no longer hear from.
-export function emitNetpollAcquireChildSource(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, hProcess ValueId, cont IrBlock) returns NetpollChildSource
+// ⛔⛔ **A CHILD THAT HAS ALREADY EXITED REACHES `gone`, AND THAT IS NOT A FAILURE.** The open answers
+// `-ESRCH` for it (`PosixRuntime.PosixErrnoNoSuchProcess`), and the caller's answer is the one it would have
+// reached anyway: read the status, which is still there to read. Aborting instead is the shape that has now
+// cost this rung three rounds — a runtime path reading *"the thing already happened"* as *"the host refused
+// me"*.
+//
+// ⚠ **THE WINDOWS LANE CANNOT REACH `gone` AND DOES NOT NEED TO.** Its open allocates a dense key and cannot
+// fail this way, and `RegisterWaitForSingleObject` on an ALREADY-SIGNALLED handle fires the callback at once
+// rather than refusing — so the packet is posted and the wait ends immediately, which is the same answer by a
+// different road.
+export function emitNetpollAcquireChildSource(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, hProcess ValueId, cont IrBlock, gone IrBlock) returns NetpollChildSource
+	var opened = module.addBlock(func, label: b"npchopened", heat: BlockHeat.normal)
 	var refused = module.addBlock(func, label: b"npchrefused", heat: BlockHeat.normal)
 
 	let source = ids.mint()
 	module.appendOp(cur, op: StdOp.call(source, callee: NetpollChildOpenName, args: argsOf(hProcess)))
+	let exited = emitCmp(module, block: cur, a: source, b: emitConst(module, block: cur, value: 0 - PosixErrnoNoSuchProcess, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(exited, thenBlockId: gone.id, elseBlockId: opened.id))
+
 	let token = ids.mint()
-	module.appendOp(cur, op: StdOp.call(token, callee: NetpollChildArmName, args: twoArgs(source, second: hProcess)))
-	let armed = emitCmp(module, block: cur, a: token, b: emitConst(module, block: cur, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(armed, thenBlockId: cont.id, elseBlockId: refused.id))
+	module.appendOp(opened, op: StdOp.call(token, callee: NetpollChildArmName, args: twoArgs(source, second: hProcess)))
+	let armed = emitCmp(module, block: opened, a: token, b: emitConst(module, block: opened, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(opened, op: StdOp.condBranch(armed, thenBlockId: cont.id, elseBlockId: refused.id))
 	emitNetpollFailWith(module, func: func, block: refused, verb: NetpollVerb.armChildSource, subject: hProcess, answer: token, ids: ids)
 
 	return NetpollChildSource.create(source, token: token)

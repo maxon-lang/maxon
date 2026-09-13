@@ -200,6 +200,46 @@ typealias Integer = int(i64.min to i64.max)
 123
 ```
 
+<!-- test: async-subprocess.posix-a-child-that-has-already-exited -->
+<!-- unsupported-targets: x64-windows -->
+⭐⭐ **A CHILD CAN FINISH BEFORE ITS PARENT FINISHES ARMING, AND THAT IS AN ANSWER RATHER THAN A REFUSAL.**
+Between the spawn and the registration the kernel may run the child to completion, and a source for a task
+that is gone cannot be opened: `pidfd_open` answers `ESRCH` for a reaped pid and an `EVFILT_PROC`
+registration answers it for a task that has exited. The exit STATUS is still there to read, so the wait is
+already over and the runtime takes the status — it does not abort.
+
+⛔⛔ **IT IS A RACE, WHICH IS WHY THE LOOP IS FIFTY AND WHY NOTHING PINNED IT BEFORE.** `exit 7` through
+`/bin/sh` is about as short-lived as a child gets, so each lap is a fresh chance to lose it; a machine that
+loses it once fails the whole case. MEASURED: as `RuntimeAbort.netpollFailed` (103) it killed ten spec
+workers on a 3-vCPU `macos-15` runner while every developer machine won the race every time and stayed
+green — a shape no existing case could see, because every other subprocess case spawns a child that outlives
+its own registration.
+
+⚠ **THE COUNT IS THE ASSERTION, NOT THE EXIT CODE.** Each lap that answers 7 steps `done`, so `50` says
+every child was spawned, waited for and reaped with the right status; an abort answers 103 and a lap that
+silently lost its child answers less.
+```maxon
+function once() returns Integer
+	return try __Builtins.runProcess("exit 7") otherwise 99
+end 'once'
+
+function main() returns ExitCode
+	var done = 0
+
+	for _ in 0 upto 50 'spawns'
+		if once() == 7 'reaped'
+			done = done + 1
+		end 'reaped'
+	end 'spawns'
+
+	return done as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+50
+```
+
 <!-- test: async-subprocess.posix-multi-concurrent -->
 <!-- unsupported-targets: x64-windows -->
 ⭐ **THE CONCURRENCY CASE — SEVERAL CHILDREN THROUGH THE NETPOLL AT ONCE.** Three children are spawned
