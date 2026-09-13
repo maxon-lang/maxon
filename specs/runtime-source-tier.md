@@ -26,6 +26,10 @@ The privileges are what a runtime needs and nothing else:
 
 - **It may DECLARE a `__`-prefixed name.** The reserved prefix is the runtime's own name space, so the
   E2051 reservation that stops user code from declaring into it is lifted across the whole cone.
+  ⚠ One tier entry wears no prefix and cannot take one, because its name is a FRAME a backtrace prints:
+  `maxon_force_segfault` (`specs/safety.md`). It is reserved from user declarations by NAME under the same
+  E2051, and that reservation is what keeps a second declaration of it from making the name contested
+  across directories and renaming the tier's own symbol.
 - **It may CALL a `__Raw.*` intrinsic.** `__Raw` is the closed table of raw machine and OS operations
   — the floor a runtime is written on top of, and the one surface below which there is no Maxon.
 
@@ -34,8 +38,15 @@ stops at the parser: each asserts what the tier ADMITS or REFUSES, and every one
 compiler threw the body away immediately afterwards. What proves otherwise is a REAL family — the wall
 clock, `runtime/Clock.maxon`'s `__clock_now_unix_s` — reached from a user program through
 `__Builtins.currentUnixTimeSeconds()` and pinned there under a ```RequiredRuntime block. No source file
-may NAME a runtime entry, so a call the compiler emits is the only root that crosses into the tier, and
-a family that has one is the only honest way to watch the far end.
+outside the tier may CALL a runtime entry, so a call the compiler emits is the only root a program can
+deliberately reach one through, and a family that has one is the only honest way to watch the far end.
+
+⛔ **THE REFUSAL IS OVER THE CALL DOOR AND NOT OVER THE NAME, AND THE VALUE DOOR IS OPEN.** A user file
+that mentions a runtime entry in VALUE position — `let f = __parallel_boundary` — passes no reserved-name
+check, resolves to the tier's declaration and links; called through that value it reaches the entry by way
+of a synthesized `__fnref_` thunk. Nothing below tests it, and no test here should be read as saying the
+name itself is out of a program's reach. `maxon-bin/CLAUDE.md` carries the measurement and states what
+closing it would cost.
 
 The restrictions are what a runtime cannot have:
 
@@ -268,14 +279,20 @@ error E3153: <fragment>:4:15: managed type 'String' is not allowed in a runtime 
 ⭐⭐ **THE NEGATIVE CONTROL ON THE ONE RULE THAT LETS A COMPILER-EMITTED CALL REACH THE TIER.** A runtime
 entry point answers to no directory's module scope: `stdlib/Clock.maxon`'s `nowUnixSeconds` becomes a call
 to `runtime/Clock.maxon`'s `__clock_now_unix_s`, from a different directory, and visibility has nothing to
-refuse there because no file NAMED it — the reserved prefix is what makes the name unwritable
-(`SemanticCheck.calleeVisibleFrom`).
+refuse there because no file could have NAMED it — the callee is RESERVED, which is what makes the name
+unwritable (`SemanticCheck.calleeVisibleFrom`).
 
-⛔ **THE PREFIX IS HALF THAT TEST, AND THIS IS THE HALF THAT MEASURES IT.** Keyed on the tier alone, the
+⛔ **BEING RESERVED IS HALF THAT TEST, AND THIS IS THE HALF THAT MEASURES IT.** Keyed on the tier alone, the
 exemption would make every declaration in `runtime/` callable from every file in the program — the tier is
 loaded into all of them — so an UNRESERVED runtime declaration would become a global name in everything the
 compiler builds, which is the contest E3154's ceiling exists to prevent. It stays module-scoped, and the
 module is `runtime/`.
+
+⚠ **RESERVED IS NOT THE SAME AS `__`-PREFIXED, AND ONE TIER ENTRY IS THE DIFFERENCE.**
+`maxon_force_segfault` wears no prefix and is admitted by that same arm, because the DECLARATION door
+reserves the word in the free-function name space (`specs/safety.md`). The rule the case below measures is
+therefore *"a runtime declaration the compiler has not reserved stays module-scoped"*, and `probeHelper` is
+one of those.
 ```maxon
 // --- runtime-file: Probe.maxon
 module function probeHelper() returns ExitCode

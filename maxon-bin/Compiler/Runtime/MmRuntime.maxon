@@ -613,6 +613,18 @@ export function isCompilerInternalCallee(callee ByteArray) returns bool
 	return not (reservedCalleeReasonOf(callee) == ReservedCalleeReason.notReserved)
 end 'isCompilerInternalCallee'
 
+// ⭐ **THE FAULT PROBE'S ENTRY POINT** (`runtime/FaultProbe.maxon`). Named for the machine event it
+// provokes, which is also the frame name the backtrace prints — a case that pins the frame list pins this
+// spelling, so the name cannot be moved into a band a shape test would recognise.
+//
+// It is read by `Parser`, which lowers `__Builtins.forceSegfault()` to a call naming it and refuses any
+// other file a free-function declaration of it, and by the classifier below.
+//
+// ⚠ **ONE NAME, NOT A FAMILY TEST.** A `__fault_` band would be unreachable: the tier declares this entry
+// and nothing else, and a second one would be refused a `__` name nowhere — so a band would be a disjunct
+// that cannot be true, which is the shape a reader mistakes for coverage.
+export let ForceSegfaultName = b"maxon_force_segfault"
+
 // ⭐⭐ **WHY A CALLEE IS THE COMPILER'S OWN — the two clauses above, told apart rather than summed (W55).**
 // The predicate answers *whether*; a REFUSAL has to say *why*, and deriving the two separately is how the
 // gate and its sentence came to disagree: `Parser.requireCalleeIsNotReservedName` refused on the OR and then
@@ -639,8 +651,10 @@ export enum ReservedCalleeReason
 
 	// The FAULT PROBE (`maxon_force_segfault`). It wears no prefix either, and for a reason of its own: the
 	// name is the FRAME a backtrace prints, so it is a user-visible string both compilers spell the same way
-	// and it cannot be renamed to fit a shape test. No file declares it — `FaultProbeRuntime` builds it at the
-	// Std tier, after the merge that fills `funcSignatures`.
+	// and it cannot be renamed to fit a shape test. `runtime/FaultProbe.maxon` declares it, so it DOES carry
+	// a signature — which is why `isSignaturelessCompilerCallee` below answers `false` for it, exactly as it
+	// does for every other runtime-tier entry. ⚠ This arm is also what keeps
+	// `SemanticCheck.calleeVisibleFrom`'s tier admit-list sound for an entry wearing no prefix.
 	faultProbeEntry
 end 'ReservedCalleeReason'
 
@@ -653,7 +667,7 @@ export function reservedCalleeReasonOf(callee ByteArray) returns ReservedCalleeR
 		return ReservedCalleeReason.synthesizedConformanceImpl
 	end 'aSynthesizedImpl'
 
-	if isFaultProbeRuntimeCallee(callee) 'theFaultProbe'
+	if callee.equals(ForceSegfaultName) 'theFaultProbe'
 		return ReservedCalleeReason.faultProbeEntry
 	end 'theFaultProbe'
 
@@ -693,9 +707,16 @@ end 'reservedCalleeReasonOf'
 // (`CompilerInternalPrefix`'s rule 1, `__add(7)`, exit 65543), which is why the fact this predicate states
 // is the REGISTRY's answer and not the name's.
 //
-// A compiler-EMITTED callee is still in no registry (`__mm_alloc`, `__print_string`, `int.compare` are built
-// at the Std tier, long after the merge that fills `funcSignatures`), so its answer is unchanged. The
-// registry probe runs ONLY for a `__`/builtin-conformance name, behind the allocation-free prefix test.
+// A BUILDER-BUILT callee is still in no registry (`__mm_alloc`, `__print_string`, `int.compare` are built at
+// the Std tier, long after the merge that fills `funcSignatures`), so its answer is unchanged. The registry
+// probe runs ONLY for a `__`/builtin-conformance/fault-probe name, behind the allocation-free prefix test.
+//
+// ⚠⚠ **A `runtime/` TIER ENTRY IS COMPILER-OWNED AND *DOES* HAVE A SIGNATURE, so this answers `false` for
+// one — which is the right answer at every reader above.** Its body is Maxon source, so the ordinary
+// arity/label/type battery has something real to check the compiler's own emitted call against, the lowering
+// slots its arguments through a declared signature, and a function VALUE of it gets the uniform-ABI
+// `__fnref_` thunk rather than a bare `.text` address. ⇒ **THIS PREDICATE IS "BUILDER-BUILT", NOT
+// "COMPILER-OWNED"**; the second question is `isCompilerInternalCallee`'s.
 export function isSignaturelessCompilerCallee(callee ByteArray, funcSignatures FuncSignatureMap) returns bool
 	return isCompilerInternalCallee(callee) and not funcSignatures.contains(callee)
 end 'isSignaturelessCompilerCallee'

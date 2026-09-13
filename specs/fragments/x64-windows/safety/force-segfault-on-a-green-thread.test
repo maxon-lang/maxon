@@ -40,35 +40,42 @@ data {
   __sched_midle@192 = i64 0
   __sched_pidle@200 = i64 0
   __gt_gfree_head@208 = i64 0
-  __gt_record_cursor@216 = i64 0
-  __gt_record_limit@224 = i64 0
+  __sched_arena_cursor@216 = i64 0
+  __sched_arena_limit@224 = i64 0
   __gt_records_carved@232 = i64 0
   __sched_npidle@240 = i64 0
   __sched_runq_size@248 = i64 0
-  __sched_mcount@256 = i64 0
-  __sched_nmidle@264 = i64 0
-  __sched_main_m@272 = i64 0
-  __sched_phase@280 = i64 0
-  __sched_lastpoll@288 = i64 0
-  __sched_poll_until@296 = i64 0
-  __sched_regain_head@304 = i64 0
-  __np_poller@312 = i64 0
-  __np_break@320 = i64 0
-  __np_wake_sig@328 = i64 0
-  __sched_num_procs@336 = i64 0
-  __sched_shutdown_flag@344 = i64 0
-  __sched_lock@352 = i64 0
-  __sched_nmspinning@360 = i64 0
-  __sched_needspinning@368 = i64 0
-  __sched_sysmon_started@376 = i64 0
-  __sched_sysmon_event@384 = i64 0
-  __sched_sysmon_wait@392 = i64 0
-  __slab_arena_list@400 = i64 0
-  __slab_arena_map_l1@408 = i64 0
-  __slab_state@416 = i64 0
-  __mrt_console_probe_stdin@424 = i8 0
-  __mrt_console_probe_stdout@425 = i8 0
-  __mrt_console_probe_stderr@426 = i8 0
+  __sched_global_pushes@256 = i64 0
+  __sched_mcount@264 = i64 0
+  __sched_nmidle@272 = i64 0
+  __sched_main_m@280 = i64 0
+  __sched_phase@288 = i64 0
+  __sched_lastpoll@296 = i64 0
+  __sched_poll_until@304 = i64 0
+  __sched_regain_head@312 = i64 0
+  __np_poller@320 = i64 0
+  __np_break@328 = i64 0
+  __np_wake_sig@336 = i64 0
+  __np_pd_table@344 = i64 0
+  __np_pd_cap@352 = i64 0
+  __np_waiters@360 = i64 0
+  __sched_num_procs@368 = i64 0
+  __sched_shutdown_flag@376 = i64 0
+  __sched_lock@384 = i64 0
+  __sched_lock_depth_sink@392 = i64 0
+  __sched_nmspinning@400 = i64 0
+  __sched_needspinning@408 = i64 0
+  __sched_sysmon_event@416 = i64 0
+  __sched_sysmon_wait@424 = i64 0
+  __sched_timer_starts@432 = i64 0
+  __sched_preempt_ext_lock@440 = i64 0
+  __sched_preempt_context@448 = i64 0
+  __slab_arena_list@456 = i64 0
+  __slab_arena_map_l1@464 = i64 0
+  __slab_state@472 = i64 0
+  __mrt_console_probe_stdin@480 = i8 0
+  __mrt_console_probe_stdout@481 = i8 0
+  __mrt_console_probe_stderr@482 = i8 0
 }
 
 func @faultOnAGreenThread {
@@ -98,17 +105,6 @@ func @main {
     x64.callDirect __gt_await
     x64.epilogue 40
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @maxon_force_segfault {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 rax, 0
-    x64.movRegImm32 rcx, 0
-    x64.storeBaseDispReg.word64 [rax + 0], rcx
     x64.popReg rbp
     x64.ret
 }

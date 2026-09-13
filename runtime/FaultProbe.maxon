@@ -1,0 +1,37 @@
+// `maxon_force_segfault()` — the DELIBERATE ACCESS VIOLATION a program reaches through
+// `__Builtins.forceSegfault()`.
+//
+// ⭐⭐ **A PROGRAM THAT FAULTS ON PURPOSE IS THE ONLY WAY TO TEST THE FAULT HANDLER, AND THAT IS THE WHOLE
+// JUSTIFICATION FOR AN ENTRY POINT WHOSE BODY IS UNDEFINED BEHAVIOUR.** The emitted runtime installs a fault
+// handler — a VEH plus a last-resort UEF on Windows, a `SIGSEGV` handler on macOS — whose job is to turn a
+// hardware trap into `panic: nil pointer or invalid memory access`, a symbolized backtrace and exit 1. Every
+// other path to that handler is a compiler BUG, so without this entry the handler is code no test can reach:
+// green on every suite, and unmeasured.
+//
+// ⚠ **`__Raw.ownFrame()` IS HERE BECAUSE THE BACKTRACE IS WHAT THE THREE CASES IN `specs/safety.md` ASSERT.**
+// They pin the FRAME LIST — `in maxon_force_segfault`, `in main`, `in mrt_start` — which is the handler
+// walking a stack it did not build. Spliced into its call site, frame 0 becomes `main` and all three stop
+// saying that the walk crosses a frame boundary at all.
+//
+// ⚠ **THE BODY IS A STORE RATHER THAN A LOAD, AND THAT IS ABOUT THE PIPELINE RATHER THAN ABOUT THE FAULT.**
+// Either faults on address 0, but this body runs through the whole optimizer, and a load whose result nobody
+// reads is exactly what dead-code elimination is for. A store is EFFECTFUL by its `StdOpMeta` (`isStore`), so
+// no pass may drop it, and the trap it takes is the same one.
+//
+// ⛔ **THE NAME WEARS NO RESERVED PREFIX AND CANNOT BE GIVEN ONE:** it is the frame name the backtrace
+// prints, a user-visible string both compilers spell the same way. What keeps it the compiler's is a
+// reservation rather than a shape — `Parser.requireUnreservedName` refuses any other file the declaration,
+// which is what stops a second declaration of it from reaching the free-function directory contest and
+// renaming this one out from under the call the compiler emits.
+
+// THE null pointer, and the machine word written through it. Named because a bare `0` in either position
+// would read as an arithmetic zero rather than as the address that traps, which is the entire content of
+// this function. The WIDTH decides nothing, because any write through address 0 traps; a machine word is
+// the tier's own unit (`runtime/Word.maxon`) and costs no cast to reach it.
+let NullAddress = 0 as MachineWord
+let FaultProbeStoredWord = 0 as MachineWord
+
+module function maxon_force_segfault()
+	__Raw.ownFrame()
+	__Raw.storeWord(NullAddress, offset: 0, value: FaultProbeStoredWord)
+end 'maxon_force_segfault'

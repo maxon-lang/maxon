@@ -1126,12 +1126,14 @@ error E3057: <fragment>:15:13: throwing division requires try: wrap it as `try (
 ⭐⭐ **THE ONLY CASE THAT CAN REACH THE FAULT HANDLER ON PURPOSE.** Every other route into
 `mrt_fault_thunk` is a compiler BUG, so before `__Builtins.forceSegfault()` existed the whole thunk was code
 no suite could exercise: green everywhere, and unmeasured. The intrinsic lowers to
-`maxon_force_segfault` — a real function whose body stores through address 0 — and the handler's
-EXCEPTION_ACCESS_VIOLATION arm turns the trap into this line, this backtrace and exit 1.
+`maxon_force_segfault`, whose body is Maxon source the compiler reads out of `runtime/FaultProbe.maxon`
+(`specs/runtime-source-tier.md`): a `__Raw.storeWord` through address 0, which the handler's
+EXCEPTION_ACCESS_VIOLATION arm turns into this line, this backtrace and exit 1.
 
 ⚠ **THE ENTRY POINT IS A FUNCTION AND NOT A STORE INLINED AT THE CALL SITE, BECAUSE THE FRAME LIST IS WHAT
 THIS ASSERTS.** Inlined, frame 0 would be `main` and the case would stop saying that the walk crosses a frame
-boundary at all. Both compilers emit the same symbol for the same reason.
+boundary at all. `__Raw.ownFrame()` is what keeps it a frame; both compilers emit the same symbol for the
+same reason.
 ### Deliberate access violation produces a clean panic with backtrace
 ```maxon
 function main() returns ExitCode
@@ -1210,4 +1212,86 @@ Stack trace:
   in maxon_force_segfault
   in faultOnAGreenThread
   in __gt_trampoline
+```
+
+<!-- test: force-segfault-name-is-free-outside-the-function-space -->
+⭐⭐ **THE RESERVATION'S OTHER SIDE, AND IT IS THE HALF THAT KEEPS IT HONEST.** `maxon_force_segfault` is
+reserved in exactly ONE name space — a FREE FUNCTION's, the one the compiler's own entry point occupies
+(`runtime/FaultProbe.maxon`). A field, a parameter, a METHOD, a local and an enum case all take the word
+here and the program runs.
+
+⚠ **THE HAZARD IS THE FREE-FUNCTION DIRECTORY CONTEST AND NOTHING ELSE**, so nothing else is refused. A
+method is already keyed `Holder.maxon_force_segfault`, an enum case is reachable only as `Marker.<case>`, and
+a local, a parameter and a field mint no symbol at all — none of them can reach `isContestedFreeFunction`, so
+refusing them would buy nothing and cost a legal program. It is the line `reserved-self.md` draws for `self`
+one rule over, where a type-qualified case may take the word the receiver rule refuses everywhere else.
+
+⚠ `main` returns 7 + 35, so a compiler that dropped either half of the program answers differently rather
+than exiting 0 by accident.
+```maxon
+typealias Small = int(0 to 100)
+
+type Holder
+	var maxon_force_segfault as Small
+
+	export static function make(maxon_force_segfault Small) returns Holder
+		return Self{maxon_force_segfault: maxon_force_segfault}
+	end 'make'
+
+	export function maxon_force_segfault() returns Small
+		return self.maxon_force_segfault
+	end 'maxon_force_segfault'
+end 'Holder'
+
+enum Marker
+	other
+	maxon_force_segfault
+end 'Marker'
+
+function main() returns ExitCode
+	let maxon_force_segfault = 7 as Small
+	let h = Holder.make(maxon_force_segfault)
+	var bump = 0 as Small
+
+	match Marker.maxon_force_segfault 'which'
+		other then bump = 0
+		maxon_force_segfault then bump = 35
+	end 'which'
+
+	return (h.maxon_force_segfault() + bump) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error.force-segfault-name-is-reserved -->
+⛔⛔ **`maxon_force_segfault` IS THE ONE COMPILER-OWNED FUNCTION SYMBOL WEARING NO RESERVED PREFIX, SO A
+RESERVATION IS WHAT PROTECTS IT.** The three cases above assert the name as a FRAME a backtrace prints, which
+is why it can never be moved into the `__` band a shape test could recognise — and its body is now ordinary
+Maxon source, `runtime/FaultProbe.maxon`, rather than IR the compiler builds after parsing.
+
+⚠ **WHAT THE REFUSAL PREVENTS IS A RENAME, NOT A DUPLICATE.** A second declaration of the bare name makes it
+contested across DIRECTORIES, and the compiler then files each declaration under its own directory-qualified
+spelling — so the runtime's becomes `runtime.maxon_force_segfault` and the bare call
+`__Builtins.forceSegfault()` emits binds to the program's own function, which does not fault. Nothing else
+would report it: the duplicate-symbol refusal tells the two apart by one side having no source file, and here
+both sides are parsed.
+
+A FREE FUNCTION is refused wherever it stands — a subdirectory here, because that is the shape the contest
+needs, and a root declaration is refused by the same one rule. Every other binding of the word is legal, which
+the case above measures.
+```maxon
+// --- file: sub/probe.maxon
+function maxon_force_segfault()
+	print("not the compiler's")
+end 'maxon_force_segfault'
+// --- file: main.maxon
+function main() returns ExitCode
+	__Builtins.forceSegfault()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2051: sub/<fragment>:3:10: identifier 'maxon_force_segfault' is reserved: it is the compiler's own fault-probe entry point, which a program reaches through `__Builtins.forceSegfault()`
 ```

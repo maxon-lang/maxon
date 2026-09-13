@@ -15,28 +15,55 @@ compiler READS, so the first build already compiles against the edited file and 
 opposite of `Compiler/Runtime/` below, which the compiler WRITES into every program including itself.
 `scripts/self-compiles-needed.sh` answers for both; it does not watch `runtime/`, deliberately.
 
-⭐ **TWO FAMILIES ARE IN, AND THE ROOT THAT REACHES EITHER IS A CALL THE COMPILER EMITS.**
-`runtime/Clock.maxon` holds `__clock_now_unix_s` and `__uptime_ms` and `runtime/ParallelBoundary.maxon`
-holds `__parallel_boundary`; `__Builtins.currentUnixTimeSeconds()`, `__Builtins.tickCountMs()` and
-`__Builtins.parallelBoundary()` lower to calls naming them, from whatever file wrote the construct. No
-source file OUTSIDE the tier can NAME a runtime entry — that is the tier's defining property, and
-`Parser.requireCalleeIsNotReservedName` admits a reserved callee only where the FILE may declare reserved
-names, which is `runtime/` itself plus `stdlib/Builtins.maxon` and `stdlib/Testing.maxon`. An ordinary
-stdlib or user file still earns E3004, and that is what keeps the visibility admit-list below sound. So a
-runtime name is never
+⭐ **THREE FAMILIES ARE IN, AND THE ROOT THAT REACHES ANY OF THEM IS A CALL THE COMPILER EMITS.**
+`runtime/Clock.maxon` holds `__clock_now_unix_s` and `__uptime_ms`, `runtime/ParallelBoundary.maxon` holds
+`__parallel_boundary` and `runtime/FaultProbe.maxon` holds `maxon_force_segfault`;
+`__Builtins.currentUnixTimeSeconds()`, `__Builtins.tickCountMs()`, `__Builtins.parallelBoundary()` and
+`__Builtins.forceSegfault()` lower to calls naming them, from whatever file wrote the construct.
+
+⛔⛔ **THE TIER'S PROTECTION IS OVER THE *CALL* DOOR AND NOT OVER THE NAME, AND THE DIFFERENCE IS A DOOR
+THAT IS OPEN — see the standing limit below.** `Parser.requireCalleeIsNotReservedName` admits a reserved
+CALLEE only where the FILE may declare reserved names, which is `runtime/` itself plus
+`stdlib/Builtins.maxon` and `stdlib/Testing.maxon`; an ordinary stdlib or user file calling one earns E3004,
+and that is what keeps the visibility admit-list below sound. A user file that names a runtime entry as a
+VALUE (`let f = __parallel_boundary`) passes no such door and is accepted today. So write the property as
+*"no source file outside the tier may CALL a runtime entry"*, never as *"may NAME"* one.
+
+⛔⛔ **ONE TIER ENTRY WEARS NO PREFIX AND SO CARRIES ITS OWN RESERVATION — `maxon_force_segfault`.** Its name
+is the FRAME a backtrace prints (`specs/safety.md` asserts three of them), so it cannot be moved into the
+`__` band a shape test recognises. `Parser.requireUnreservedName` refuses the DECLARATION of it by name, under
+E2051 and beside the `self` rule, and `MmRuntime.ReservedCalleeReason.faultProbeEntry` refuses the CALL. The
+declaration half is not tidiness: a second declaration of the bare name makes it CONTESTED across directories,
+`Parser.declaredMethodName` then files the tier's own declaration as `runtime.maxon_force_segfault`, and the
+bare call the compiler emits binds to the user's function — which does not fault. E4015 cannot report it,
+because it tells the two sides apart by one having no source file and both are now parsed.
+`specs/safety.md`'s `error.force-segfault-name-is-reserved` is the case. ⇒ **THE NEXT UNRESERVED TIER ENTRY
+OWES THE SAME TWO DOORS.**
+
+A runtime name is therefore never
 classified `LibraryFacts.unreachable`, and the exemption is by PROVENANCE rather than by reachability: a
 walk over source call edges holds no evidence about the tier at all
 (`StdlibSource.unreachableLibraryNames`). Its bodies therefore lower, its range guards are inserted and
 its runtime floor is counted, while dead-function elimination still sweeps an entry nothing calls, so a
 program that reaches no runtime family carries none of it.
 
+⚠ **THE TWO arm64-macos force-segfault GOLDENS OWE A RE-MINT ON A MAC, AND THE DRIFT IS EXPECTED.** A
+Mach-O runs only on macOS, so an x64 host reports `force-segfault-macos` and that lane's
+`force-segfault-on-a-green-thread` NOT RUN and the harness correctly mints nothing for them; their committed
+text still renders `func @maxon_force_segfault`, which the printer withholds now that the name is in
+`libraryFunctions`. The drift is exactly that block and nothing else. It is the FIRST tier migration whose
+entry was previously rendered in goldens — the clock's and the checkpoint's never were — so neither earlier
+commit set a precedent for reading it.
+
 ⚠ **A `RuntimeUsage` BIT NO LONGER GATES A SOURCED BODY'S INSTALLATION, AND STILL GATES EVERYTHING ELSE.**
 DFE decides whether the body survives, so `usesWallClock` and `usesUptimeClock` install nothing — but the
 per-target hand-assembled `osReadWallClock` chunk, the POSIX clock floor and the Windows optional import
-band are all still theirs. Retire a bit when its LAST consumer is gone, not when the body moves. The
-checkpoint's bit is the one that qualified and it is GONE: that body declares no dependency at all — no
-heap, no scheduler, no import, no `.data` word — so the install guard was its only reader, and the band
-predicate that set it went with it.
+band are all still theirs. Retire a bit when its LAST consumer is gone, not when the body moves.
+`usesParallelBoundary` and `usesFaultProbe` are the two that qualified and both are GONE: neither body
+declares any dependency — no heap, no scheduler, no import, no `.data` word — so the install guard was the
+only reader of each. The fault probe's family predicate `isFaultProbeRuntimeCallee` outlived its bit, because
+`MmRuntime.reservedCalleeReasonOf` still routes the call refusal through it; it moved there with the two
+constants and `Compiler/Runtime/FaultProbeRuntime.maxon` is deleted, having nothing left to build.
 
 ⛔⛔⛔ **THREE PREDICATES ASKED "IS THIS THE RUNTIME'S?" THROUGH A PROXY, AND THE TIER FALSIFIED ALL THREE.
 `LibraryFacts.runtimeTier` IS THE PROVENANCE FACT, AND A FOURTH SITE MUST READ IT RATHER THAN INVENT A
@@ -51,10 +78,17 @@ from source"*; a migrated entry point falsifies each:
   positive side, so an unlisted runtime entry MUST read as effectful; otherwise a pure `module function`
   helper in a tier file propagates purity into a user caller and a discarded call earns E3064 on a legal
   program.
-- `TargetPrinter.isRuntimeFunction` — a tier body has a real `sourceFilePath` and is still the compiler's
-  own invariant scaffolding, so the second conjunct is *"compiler-built OR in the tier"*. It drives the
-  green-thread stack-guard exemption, `FunctionCodeChunk.asyncPreemptible` (which is `mightGuard`, NOT
-  `emitGuard` — a 0-byte frame does not escape it) and `InlineLeaves.splicingWouldWidenTheSafePoint`.
+- `TargetPrinter.isRuntimeFunction` — tier membership is a DISJUNCT that stands on its own, because a name
+  band exists to identify a body nothing declared and a tier member has a path AND membership to argue from.
+  Keyed on the band as well, `maxon_force_segfault` — which can never take a prefix — would carry a
+  green-thread stack guard and be marked `FunctionCodeChunk.asyncPreemptible` (which is `mightGuard`, NOT
+  `emitGuard`, so a 0-byte frame does not escape it; arm64 has no frame-size exemption at all). It also drives
+  `InlineLeaves.splicingWouldWidenTheSafePoint`.
+  ⚠ **THE STANDING LIMIT THIS BUYS: EVERY DECLARATION IN A `runtime/` FILE IS EXEMPT FROM THE GREEN-THREAD
+  STACK GUARD, an unreserved `module function` helper included.** That is intended — they are compiler-authored
+  frames inside the margin `GtRuntime.gtStackGuardMargin` is sized for — but a tier helper that RECURSES on
+  program-sized data would be the `__probeDeep` SIGSEGV with a compiler author instead of a user. A tier body
+  that recurses needs a guard this predicate will not give it.
 
 ⚠ **EACH ARM SITS AFTER ITS OWN WALK'S ROSTER**, which still decides a name it lists. ⛔ And widening
 `isRuntimeFunction` does NOT reopen the `__probeDeep` SIGSEGV its header records: that was a USER function
@@ -69,30 +103,35 @@ can arrange to be stopped inside a four-instruction runtime body. ⇒ **a golden
 here; read the predicate.** Closing this needs a channel that renders per-symbol safe-point provenance.
 
 ⚠ **A COMPILER-EMITTED CALL INTO THE TIER IS EXEMPT FROM MODULE VISIBILITY, AND THE EXEMPTION IS AN
-ADMIT-LIST.** `SemanticCheck.calleeVisibleFrom` admits a callee that wears the reserved prefix AND is
-declared under `runtime/`; the prefix is what proves no author wrote the name. A runtime file's
-UNRESERVED declarations stay module-scoped, which
+ADMIT-LIST.** `SemanticCheck.calleeVisibleFrom` admits a callee that is RESERVED and is declared under
+`runtime/`. Reserved is `MmRuntime.isCompilerInternalCallee`, which is the `__` band OR a name the
+declaration door reserves outright — today `maxon_force_segfault`, and it belongs in the admit-list for the
+band's own reason: no author can have written it either. ⇒ **WHAT KEEPS THIS SOUND FOR AN UNPREFIXED ENTRY
+IS THE DECLARATION DOOR, so a name admitted here owes a refusal in
+`Parser.requireFreeFunctionNameIsNotTheFaultProbe` or its successor.** A runtime file's OTHER unreserved
+declarations stay module-scoped, which
 `specs/runtime-source-tier.md`'s `runtime-file-unreserved-declaration-is-still-module-scoped` measures.
 
 ⚠ **`scanRuntimeUsage` WALKS EVERY RUNTIME BODY, IN EVERY PROGRAM.** A runtime name is never
 `unreachable`, so the scan never skips one — and a CALL inside a runtime body would therefore set that
 family's bit for a program DFE sweeps the body out of, which is rule 1 ("vocabulary does not ship ahead of
 its consumer") failing open. Vacuous while every tier body calls only `__Raw`, which names no callee
-(`MaxonDialect.maxonOpCalleeKind` answers `noCallee` for `rawIntrinsic`) — true of both families in the
-tier today. The first family that CALLS something is the one that has to answer it.
+(`MaxonDialect.maxonOpCalleeKind` answers `noCallee` for `rawIntrinsic`) — true of all three families in
+the tier. The first family that CALLS something is the one that has to answer it.
 
-Three doors are still standing open rather than shut:
+Six doors are still standing open rather than shut:
 
 - **E3153 is complete over SPELLED types and incomplete over INFERRED values.** `parseTypeReference`
   catches every type a runtime file writes; the value-side check at `declareInitializedBinding` and
   `bindParameters` does not see a `for` binding, a closure cell, a caught error, a `match` payload, or
   an unbound temporary. `for c in "abc"` in a runtime file is admitted. The complete site is the built
   `IrFunction`, and it is now reached, so the hole can be closed on its own.
-- **`osThreadCpuTicks` and `storeWord` are the `__Raw` rows nothing exercises**, as are
-  `reserveRawScratchSlot`'s refusals. `osTickCountMs`, `osReadWallClock`, `scratch` and `loadWord` are the
-  clock family's, and `builtins-clock.md`'s `wall-clock-body-is-runtime-source` renders the emitted body
-  the last three lower to. `osThreadCpuTicks` waits on `__thread_cpu_ticks`, which cannot move until a
-  `__Raw` row names the current-GT read its green-thread arm makes.
+- **`osThreadCpuTicks` is the one `__Raw` row nothing exercises**, as are `reserveRawScratchSlot`'s refusals.
+  `osTickCountMs`, `osReadWallClock`, `scratch` and `loadWord` are the clock family's, and
+  `builtins-clock.md`'s `wall-clock-body-is-runtime-source` renders the emitted body the last three lower to;
+  `storeWord` is the fault probe's, and no golden renders that body — what measures it is a LIVE fault, in
+  `specs/safety.md`'s three backtrace cases. `osThreadCpuTicks` waits on `__thread_cpu_ticks`, which cannot
+  move until a `__Raw` row names the current-GT read its green-thread arm makes.
 - **`ownFrame` is the one row that is a DIRECTIVE rather than an operation.** It appends no Std op and
   instead sets `IrFunction.keepsItsOwnFrame`, which `InlineLeaves.functionShape` refuses to splice. Without
   it a tier body small enough to inline is spliced into every call site and then swept, and a runtime entry
@@ -100,6 +139,19 @@ Three doors are still standing open rather than shut:
   `builtins-parallel-boundary.md`'s `checkpoint-body-is-runtime-source` renders the body it protects —
   though a ```RequiredRuntime block pins a body never-inline for its own compile, so what actually guards
   the rule is the unchanged `call __parallel_boundary` in every other golden.
+- **A USER FILE MAY NAME A RUNTIME ENTRY AS A *VALUE*, AND THE CALL-DOOR REFUSAL DOES NOT SEE IT.**
+  `Parser.requireCalleeIsNotReservedName` guards a CALL; nothing guards a `functionRef`, so a bare mention of
+  a reserved runtime name in value position resolves to the tier's declaration and links. MEASURED on
+  x64-windows, three spellings from an ordinary user file in a plain project directory:
+  `let f = __parallel_boundary` compiles and links, exit 0; `let f = __clock_now_unix_s` is accepted (the only
+  complaint is E3012 on the unused result); and `let f = maxon_force_segfault` followed by `f()` runs and
+  faults, printing
+  `in maxon_force_segfault / in __fnref_maxon_force_segfault / in main / in mrt_start`. That
+  `__fnref_` frame is the legible half: the value route reaches the entry through a synthesized uniform-ABI
+  thunk, which `FnRefThunk.functionValueNeedsEnvThunk` mints precisely BECAUSE a tier entry now has a
+  signature (`MmRuntime.isSignaturelessCompilerCallee` answers `false` for one). ⇒ Closing it is a REFUSAL at
+  the value door and therefore its own change: every legal spelling that reaches a reserved name by value has
+  to be found first, and `fileMayUseReservedNames` is the exemption that then needs testing.
 - **`__Raw.scratch` is the one door that materializes a frame ADDRESS in a register in a GT program, and
   the gate that protects the other such door does not cover it.** `PromoteStackRecords` promotes NOTHING in
   a program running green threads, because `__gt_stack_relocate` frees the old pages and a promoted address
@@ -107,12 +159,6 @@ Three doors are still standing open rather than shut:
   cannot fire today — the guard precedes the `lea`, an async stop cannot relocate (`GtRuntime`), and the
   shim window is not a safe point — but a tier body holding a `scratch` address across a guarded call is
   the bug it becomes.
-- **`maxon_force_segfault` is the first tier candidate with NO reserved prefix to protect its symbol.**
-  `Parser.declaredMethodName` qualifies a declared free-function name only when `isContestedFreeFunction`
-  says another directory declares it too, so a user program declaring its own `maxon_force_segfault` in any
-  subdirectory would qualify BOTH, turn the runtime's symbol into `runtime.maxon_force_segfault`, and break
-  all three backtrace assertions in `specs/safety.md` with no diagnostic. Every family migrated so far is
-  protected by the `__` prefix.
 - **A `__Raw` row's host facility reaches no refusable site.** `maxonOpCalleeKind` answers `noCallee`,
   so `LibraryFacts.substrateEntries` never sees one, and a lane without the op reaches instruction
   selection instead of E3104. A substrate-entry row per op is what closes it.

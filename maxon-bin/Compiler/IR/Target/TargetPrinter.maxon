@@ -572,25 +572,36 @@ end 'requireEveryNameRendered'
 // the KEY's conformance impls (`Character.hash`/`Character.equals`) rather than a container runtime**, whose
 // synthesized bodies went at W105 and W129; the spec directories still reach the same naming band, by the
 // corpus route. On the GT side they are ordinary frames a
-// green thread runs and MUST grow for. Both readers want *"the invariant scaffolding"*, which is the
-// CONJUNCTION: the runtime's own naming band, and BUILT BY THE COMPILER rather than written by the program.
+// green thread runs and MUST grow for. Both readers want *"the invariant scaffolding"*, and a BUILDER-BUILT
+// body can only prove it is that by the CONJUNCTION: the runtime's own naming band, and no source file.
 //
-// ⭐⭐ **"BUILT BY THE COMPILER" IS TWO PROVENANCES, AND AN EMPTY `sourceFilePath` IS ONLY THE FIRST.** A
-// `runtime/` body is the compiler's own invariant scaffolding written as Maxon the compiler READS, so it
-// has a real path and is exactly as much scaffolding as a Std-IR builder's output. `LibraryFacts.runtimeTier`
-// is the second, and it is the SAME set `SemanticCheck.calleeYields` and `calleeShowsAnEffect` read: three
-// predicates that each derived "is this the runtime's?" from a proxy the tier falsified, now answering off
-// one provenance fact. The alternative — a path test here — is the 118-test regression the paragraph above
-// measured, and it re-derives what one walk already knows.
+// ⭐⭐ **A `runtime/` BODY PROVES IT WITHOUT A NAME, WHICH IS WHY TIER MEMBERSHIP IS ITS OWN DISJUNCT.**
+// The name band exists to identify a body NOTHING declared — a body with no path has nothing else to
+// argue from. A tier member has both a path and membership in `LibraryFacts.runtimeTier`, the provenance
+// fact `SemanticCheck.calleeYields` and `calleeShowsAnEffect` read for the same question, so requiring it
+// to ALSO wear a band would key a proven fact on a spelling. `maxon_force_segfault` is the body that
+// forces the point: the backtrace prints its name, so it can never take a prefix, and under a conjunction
+// it would carry a green-thread stack guard and be marked `asyncPreemptible`.
 //
 // ⛔ **THIS DOES NOT REOPEN THE `__probeDeep` SEGFAULT, and the difference is WHO CAN ADD A NAME.** That
 // defect was a USER function reaching the exemption: `stdlib/Builtins.maxon` is a file user code calls into,
-// and the name test alone let anything declared there wear the scheduler's exemption. `runtime/` is a cone
-// the COMPILER loads and no user file may even name into (E3152/E2051, and `calleeVisibleFrom`'s admit-list),
-// so nothing a program writes can enter this set. The conjunct is widened by one closed, compiler-owned
-// population — not weakened.
+// so the name test alone let anything declared there wear the scheduler's exemption — which is why the
+// band still needs `sourceFilePath.isEmpty()` beside it. `runtime/` is a cone the COMPILER loads and no user
+// file may declare into (E2051, plus `Parser.requireFreeFunctionNameIsNotTheFaultProbe` for the one entry
+// wearing no band) or CALL into (E3004, and `calleeVisibleFrom`'s admit-list), so nothing a program writes
+// can enter `runtimeTier`.
+//
+// ⚠ **EVERY DECLARATION IN A TIER FILE IS EXEMPT, ITS UNRESERVED `module function` HELPERS INCLUDED, AND
+// THAT IS THE INTENDED READING.** They are compiler-authored frames inside the margin
+// `GtRuntime.gtStackGuardMargin` is sized for. The limit it buys is real and stated in `maxon-bin/CLAUDE.md`:
+// a DEEPLY RECURSIVE tier helper would be `__probeDeep`'s shape with a compiler author instead of a user, so
+// a tier body that recurses on program-sized data needs a guard this predicate will not give it.
 function isRuntimeFunction(func IrFunction, runtimeTier FunctionNameSet) returns bool
-	return (bytesStartWith(func.name, prefix: b"mrt_") or bytesStartWith(func.name, prefix: b"__")) and (func.sourceFilePath.isEmpty() or runtimeTier.contains(func.name))
+	if runtimeTier.contains(func.name) 'theTierProvesItself'
+		return true
+	end 'theTierProvesItself'
+
+	return (bytesStartWith(func.name, prefix: b"mrt_") or bytesStartWith(func.name, prefix: b"__")) and func.sourceFilePath.isEmpty()
 end 'isRuntimeFunction'
 
 // ⭐⭐ **EVERYTHING A PROGRAM WAS SUPPLIED WITH RATHER THAN WROTE — the ONE rule the render, the skip

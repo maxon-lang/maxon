@@ -1375,6 +1375,26 @@ export union ParseError implements Error
 	// (`MmRuntime.isSignaturelessCompilerCallee`). `name` is the offending identifier, for the message.
 	reservedIdentifier(name String, line LineNumber, column ColumnNumber)
 
+	// A user declaration BINDING THE FAULT PROBE'S NAME — `maxon_force_segfault`, the entry point
+	// `__Builtins.forceSegfault()` lowers to and the frame name its backtrace prints. Renders as **E2051**
+	// too, positioned at the declared name, and raised by `requireFreeFunctionNameIsNotTheFaultProbe` — a
+	// SIBLING door rather than an arm of `requireUnreservedName`, because it governs ONE name space where that
+	// one governs every binding site there is.
+	//
+	// ⭐ It is `reservedIdentifier`'s SIBLING for `reservedReceiverName`'s reason — one CODE, because a user
+	// declaration may not take the name; separate MESSAGES, because what is reserved and why differs. This
+	// one is the only compiler-owned FUNCTION symbol wearing no reserved prefix, so the shape rule cannot
+	// reach it (`MmRuntime.ReservedCalleeReason.faultProbeEntry` is the call door's half of the same fact).
+	//
+	// ⛔ **WITHOUT IT THE COMPILER'S OWN SYMBOL IS RENAMED OUT FROM UNDER ITS CALL, SILENTLY.** A second
+	// FREE FUNCTION of the bare name makes it CONTESTED across directories, and `declaredMethodName` then files
+	// the runtime tier's declaration as `runtime.maxon_force_segfault` — leaving the bare call the compiler
+	// emits bound to the program's own function, which does not fault. `specs/safety.md`'s
+	// `error.force-segfault-name-is-reserved` is the case.
+	//
+	// It carries NO payload for `reservedReceiverName`'s reason: there is exactly one word this refuses.
+	reservedFaultProbeName(line LineNumber, column ColumnNumber)
+
 	// A user declaration BINDING THE NAME `self` — a parameter, a local, a field, a function, a type.
 	// Renders as **E2051** too, positioned at the declared name, and raised by the same
 	// `requireUnreservedName` at the same binding sites.
@@ -5876,8 +5896,10 @@ let ParallelBoundaryArity = 0 as ParamCount
 // POINT IS TO CRASH.** The emitted runtime carries a fault handler that turns a hardware trap into
 // `panic: nil pointer or invalid memory access`, a symbolized backtrace and exit 1; every other
 // route to that handler is a compiler BUG, so without this door the handler is code no test can
-// reach. See `FaultProbeRuntime` for why the entry point is a real function rather than a store
-// inlined here — the case asserts the FRAME LIST.
+// reach. Its body is Maxon source the compiler reads out of `runtime/FaultProbe.maxon`, where
+// `__Raw.ownFrame()` is what keeps it a real function rather than a store inlined here — the case asserts
+// the FRAME LIST. The runtime name it lowers to is `MmRuntime.ForceSegfaultName`, which is also the
+// classifier's.
 let BuiltinsForceSegfaultName = b"__Builtins.forceSegfault"
 
 // `__Builtins.forceSegfault` takes NOTHING and returns void — there is no knob on a crash. Its own constant
@@ -28225,6 +28247,10 @@ export type Parser
 			// sees the type prefix (`Self` is fine; a `__method` name is not).
 			try self.requireUnreservedName(nameTok, declaredName: nameTok.value)
 
+			// The fault probe's name, which is reserved HERE and at no other binding site: this is the only door
+			// a declaration reaches the free-function name space through.
+			try self.requireFreeFunctionNameIsNotTheFaultProbe(nameTok)
+
 			// `Point.create` inside `type Point`, the bare token at file scope. The SAME derivation the
 			// declaration sweep records the signature under, so the key an `IrFunction` carries and the
 			// key `mintCallResult` types a call from are one name — for the FIRST declaration of it. A later
@@ -34938,6 +34964,49 @@ export type Parser
 
 		throw ParseError.reservedIdentifier(String.from(declaredName), line: nameTok.line, column: nameTok.column)
 	end 'requireUnreservedName'
+
+	// ⭐⭐ **A DECLARATION MAY NOT TAKE THE FAULT PROBE'S NAME IN THE *FREE-FUNCTION* NAME SPACE.**
+	// `requireUnreservedName`'s second sibling, and a sibling for `requireTypeNameNotCompilerOwned`'s exact
+	// reason: `__` is reserved at EVERY declaration, while `maxon_force_segfault` is reserved only where a
+	// declaration would mint a FREE-FUNCTION SYMBOL under the bare name. That is the one name space the
+	// compiler's own entry point occupies — `runtime/FaultProbe.maxon` declares it, and the backtrace prints
+	// the name, so it can never move into the `__` band a shape test would recognise.
+	//
+	// ⛔ **THE HAZARD IS THE FREE-FUNCTION DIRECTORY CONTEST, WHICH IS WHY NOTHING ELSE IS REFUSED.** A second
+	// free function of the bare name makes it contested across directories, and `declaredMethodName` then files
+	// the TIER's declaration as `runtime.maxon_force_segfault` — leaving the bare call the compiler emits bound
+	// to the program's own function, which does not fault. `FunctionNameIndex.refuseDuplicateFunctionName`
+	// cannot report it: it tells the two sides apart by one of them having no source file, and the tier
+	// declares its body in source, so both sides are parsed.
+	//
+	// ⚠ **A LOCAL, A PARAMETER, A FIELD, AN ENUM OR UNION CASE AND A *METHOD* MAY ALL TAKE THE WORD, AND
+	// MUST.** None of them enters the free-function name space, so none can reach `isContestedFreeFunction`
+	// and none costs the compiler its symbol — a method is already keyed `Type.maxon_force_segfault`. Refusing
+	// them would buy nothing and refuse legal programs, which is the line `reserved-self.md` draws for `self`
+	// one rule over. `specs/safety.md`'s `force-segfault-name-is-free-outside-the-function-space` pins the
+	// legal side and `error.force-segfault-name-is-reserved` the refused one.
+	//
+	// ⚠ The gate is `enclosingType.isEmpty()` — the fact `declaredMethodName` reads to decide whether to
+	// qualify — and the subject is the BARE token rather than that qualified answer: under a live contest the
+	// author's own declaration is filed as `sub.maxon_force_segfault`, so the qualified spelling is exactly
+	// what a contest has already hidden the collision behind.
+	function requireFreeFunctionNameIsNotTheFaultProbe(nameTok Token) throws ParseError
+		// The tier declares it, and `stdlib/Builtins.maxon` / `stdlib/Testing.maxon` are the compiler's own
+		// bridge files — `requireUnreservedName`'s exemption, asked here so one provenance answers both doors.
+		if self.declaresCompilerInternalNames 'aFileWhoseEveryByteIsTheCompilersBridge'
+			return
+		end 'aFileWhoseEveryByteIsTheCompilersBridge'
+
+		if not self.enclosingType.isEmpty() 'aMethodIsKeyedByItsType'
+			return
+		end 'aMethodIsKeyedByItsType'
+
+		if not nameTok.value.equals(ForceSegfaultName) 'anOrdinaryName'
+			return
+		end 'anOrdinaryName'
+
+		throw ParseError.reservedFaultProbeName(nameTok.line, column: nameTok.column)
+	end 'requireFreeFunctionNameIsNotTheFaultProbe'
 
 	// ⭐ **A DECLARATION MAY NOT GIVE A COMPILER-OWNED TYPE NAME A *NOMINAL* IDENTITY (P1.7a slice 2b-ii).**
 	// `requireUnreservedName`'s sibling, and the two are separate rules over separate name sets rather than one
@@ -83171,7 +83240,7 @@ export type Parser
 
 			// ⭐ **THE DELIBERATE FAULT — the checkpoint's CALL CONTRACT and the opposite outcome.** It takes
 			// nothing, answers nothing, and does not return: the store in `maxon_force_segfault` traps. See
-			// `BuiltinsForceSegfaultName` and `FaultProbeRuntime`.
+			// `BuiltinsForceSegfaultName`.
 			if callee.equals(BuiltinsForceSegfaultName) 'forceSegfault'
 				return try self.emitVoidZeroArgIntrinsic(args, builtinName: BuiltinsForceSegfaultName, runtimeName: ForceSegfaultName, arity: ForceSegfaultArity, calleeTok: anchor, resultUsed: resultUsed)
 			end 'forceSegfault'

@@ -5177,6 +5177,7 @@ formula all ship the pair.
 | Privilege | Why |
 |-----------|-----|
 | **Declare a `__`-prefixed name.** The E2051 reservation that keeps user code out of that space is lifted across the whole cone | the reserved prefix is the runtime's own name space |
+| **Declare `maxon_force_segfault`.** The one runtime entry whose name wears no prefix, because a backtrace prints it; the same E2051 reserves that word from a free function in any other file | the name is the compiler's, and a second free function of it would rename the runtime's own symbol |
 | **Call a `__Raw.*` intrinsic.** `__Raw` is the closed table of raw machine and OS operations — the floor below which there is no Maxon | a runtime is written on that floor |
 
 ⛔ **A `__Raw` call from outside `runtime/` is E3152.** The privilege belongs to the tier, not to any

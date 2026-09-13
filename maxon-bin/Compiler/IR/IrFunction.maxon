@@ -270,8 +270,9 @@ export type IrFunction
 
 	// ⭐⭐ **IS THIS SYNTHESIZED FUNCTION'S STACK DEPTH THE PROGRAM'S RATHER THAN THE RUNTIME'S?** — which is
 	// to say, must it carry the green-thread stack guard despite being the compiler's own emitted code. FALSE
-	// for every parsed function — for which it is not asked, `isRuntimeFunction` having already answered — and
-	// false for the runtime's own scaffolding. TRUE for two families. The per-type CASCADES — `__destruct_<T>`,
+	// for the runtime's own scaffolding, and false for every parsed function a `runtime/` file declares — which
+	// IS asked, because `isRuntimeFunction` answers `true` for a tier body and `skipsGreenThreadStackGuard`
+	// then reads this field. TRUE for two families. The per-type CASCADES — `__destruct_<T>`,
 	// `__clone_<T>`, `__sole_<T>`, their dictionary twins and the one-argument element thunks — recurse once
 	// per LEVEL of the user's data graph, so their frame count is a property of the program's types and nothing
 	// in the runtime bounds it. `__module_init` and `__maxon_global_cleanup` are the first and last frames on
@@ -279,7 +280,8 @@ export type IrFunction
 	// guarded caller has projected any room for them.
 	//
 	// ⛔ **IT EXISTS BECAUSE PROVENANCE AND STACK BEHAVIOUR ARE DIFFERENT QUESTIONS.**
-	// `TargetPrinter.isRuntimeFunction` (empty `sourceFilePath` + the `mrt_`/`__` band) withholds the
+	// `TargetPrinter.isRuntimeFunction` (the `runtime/` tier, or the `mrt_`/`__` band with no source file)
+	// withholds the
 	// green-thread stack guard, on the premise that *"the scheduler core must never trigger the grower, and
 	// their kernel calls are already shimmed onto the system stack"*. Neither family satisfies it: both run on
 	// a green thread, with real frames — which is precisely what the guard is for. MEASURED on x64-windows: a 128-deep nested-struct

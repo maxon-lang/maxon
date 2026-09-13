@@ -473,15 +473,9 @@ export type RuntimeUsage
 	// program may not touch; under-declaring would leave a call landing on nothing.
 	export var usesTerminalDetection as bool
 
-	// The program deliberately faults, to exercise the FAULT HANDLER (`__Builtins.forceSegfault` ⇒
-	// `maxon_force_segfault`). Its own bit, and among the cheapest here to justify: the entry point's body is
-	// one store and a return, so it declares no transitive dependency at all. Why that earns a bit of its own
-	// is `FaultProbeRuntime`'s header, once.
-	export var usesFaultProbe as bool
-
 	// The program asks the MACHINE for its logical-processor count (`__Builtins.cpuCount` ⇒ `__cpu_count`).
-	// Like the fault probe above it declares NO transitive dependency: the entry point is one import call, one
-	// compare and two constant returns — no buffer, no allocation, no scheduler.
+	// Its own bit: the entry point is one import call, one compare and two constant returns — no buffer, no
+	// allocation, no scheduler, so it declares NO transitive dependency.
 	//
 	// ⚠ **IT IS THE ONE BIT HERE THAT COSTS AN IMPORT**, and that is why it must not be shared with its
 	// band-mate below: it is the sole producer of `GetActiveProcessorCount`, whose whole OPTIONAL TRAILING
@@ -611,7 +605,7 @@ export type RuntimeUsage
 	export var parksOnIo as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesBackgroundPriority: false, usesTerminalDetection: false, usesFaultProbe: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesSchedProcessorCount: false, usesMmCounters: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSlabArena: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, parksOnIo: true}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessId: false, usesBackgroundPriority: false, usesTerminalDetection: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesSchedProcessorCount: false, usesMmCounters: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSlabArena: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, parksOnIo: true}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -980,13 +974,6 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesTerminalDetection = true
 		usage.usesHeap = true
 	end 'terminalDetection'
-
-	// The deliberate fault. It declares NOTHING beside itself — one store and a return — which makes it the
-	// one arm here with no second line, and that is a fact about the code rather than an omission
-	// (`FaultProbeRuntime`).
-	if isFaultProbeRuntimeCallee(callee) 'faultProbe'
-		usage.usesFaultProbe = true
-	end 'faultProbe'
 
 	// The two CPU-parallel QUERIES. Both declare nothing beside themselves, for the arm above's reason one
 	// family over: `__cpu_count` is an import call and a compare, `__sched_max_active_workers` is one `.data`

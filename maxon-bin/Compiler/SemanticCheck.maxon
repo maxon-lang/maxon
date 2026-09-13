@@ -3721,10 +3721,13 @@ function calleeVisibleFrom(project Project, signatures ProgramSignatures, funcNa
 	// compiler-built arm above with a declaring file attached: nobody WROTE the call either way, so there is
 	// no author to refuse.
 	//
-	// ⛔ **THE RESERVED PREFIX IS HALF THE TEST DELIBERATELY.** It is what makes the name unwritable by any
-	// file (`Parser.requireCalleeIsNotReservedName`), and so what proves the call is the compiler's. A
-	// runtime file's UNRESERVED declarations are ordinary module-scoped names, and `module` is the tier's
-	// visibility ceiling (E3154) precisely so they stay refused outside it.
+	// ⛔ **THE CALLEE HALF IS DELIBERATE, AND IT IS "RESERVED", NOT "PREFIXED".** What it must prove is that
+	// no author could have written the name — `isCompilerInternalCallee` answers that for the `__` band and,
+	// through `ReservedCalleeReason.faultProbeEntry`, for `maxon_force_segfault`, whose free-function
+	// declaration `Parser.requireFreeFunctionNameIsNotTheFaultProbe` refuses outright. A runtime file's other
+	// UNRESERVED declarations are ordinary module-scoped names, and `module` is the tier's visibility ceiling
+	// (E3154) precisely so they stay refused outside it: keyed on the tier alone this arm would publish every
+	// one of them to every file in the program.
 	//
 	// ⚠ **IT IS ASKED AFTER THE ORDINARY RULE, AND THE ORDER IS A COST RATHER THAN A PRECEDENCE.** An
 	// admit-list only ever turns a refusal into an admission, so either order answers the same — and every
@@ -4128,7 +4131,7 @@ end 'reportIfNonYielding'
 //
 // ⚠ **FOR A `runtime/` CALLEE THE TWO READ THE SAME FUNCTION AND ANSWER OFF DIFFERENT FACTS**: the column
 // here holds the tier body's own verdict, while `calleeYields` answers "yields" by provenance and records no
-// edge. No program can reach the disagreement — only a `runtime/` file may name a runtime entry, and no tier
+// edge. No program can reach the disagreement — only a `runtime/` file may CALL a runtime entry, and no tier
 // file spawns — but the scheduler is due in the tier, so a spawn OF a runtime entry is the shape to check
 // before that lands.
 //
