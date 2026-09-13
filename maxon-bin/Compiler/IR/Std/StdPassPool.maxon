@@ -12,7 +12,7 @@
 //
 // ⭐⭐ **WHAT MAKES IT SAFE IS THE UNIT, NOT LOCKING — there is none.** A message MOVES, so a worker is
 // handed a `StdUnit` nobody else can reach and hands back a `StdUnitBody` nobody else can reach.
-// `StdUnit`'s header owns that argument, and `RegAllocPool`'s owns the pool's.
+// `StdUnit`'s header owns that argument, and `BackendPool`'s owns the pool's.
 //
 // ⭐⭐ **AND THE OUTPUT DOES NOT DEPEND ON THE POOL.** Splicing is order-independent — a result writes
 // this function's own block and op slots and the TAIL of the two module arrays, and an index into either
@@ -44,11 +44,9 @@ typealias StdPassReportReply = Promise with (StdPassWorkerReport, ServiceError)
 typealias StdPassWorkerHandleArray = Array with StdPassWorker.handle
 
 // The per-function landing slots the drain fills in ARRIVAL order, and the fold reads in index order
-// through `slotOfFunc`.
+// through `LandingSlots.slotOf`.
 typealias DerivedOriginsArray = Array with DerivedOrigins
 typealias CapturedLogArray = Array with PassLogArray
-typealias LandingSlot = int(0 to u64.max)
-typealias LandingSlotArray = Array with LandingSlot
 
 // A position in the schedule the fan-out runs.
 typealias StepIndex = int(0 to u64.max)
@@ -128,7 +126,7 @@ end 'VersioningAnswer'
 // tallies and log those scratches write into, and the per-step costs** — built ONCE and reused for every
 // function the pool hands it, exactly as the pipeline reuses one scratch per pass across the module.
 //
-// ⚠ **IT IS HANDED `cpu` AND `os`, NOT A `Target`, AND THE SCHEDULE AS SCALARS**, for `RegAllocWorker`'s
+// ⚠ **IT IS HANDED `cpu` AND `os`, NOT A `Target`, AND THE SCHEDULE AS SCALARS**, for `BackendWorker`'s
 // reason: a `spawn`'s factory arguments are MOVED, and a record or a union box the driver still holds
 // would be a second owner.
 //
@@ -295,11 +293,7 @@ export function runStdPassesOnAWorkerPool(project Project, module StdModule, mem
 
 	var landedOrigins = DerivedOriginsArray.create()
 	var landedLogs = CapturedLogArray.create()
-
-	// Filled with the one value no landing slot has, so a function that never landed is a panic at the
-	// fold rather than function 0's rows filed twice.
-	var slotOfFunc = LandingSlotArray.create()
-	slotOfFunc.refill(funcCount as ElementIndex, value: funcCount as LandingSlot)
+	var slots = LandingSlots.create(funcCount)
 
 	if funcCount > 0 'somethingToRun'
 		// ⛔ **THE FLOOR IS ASKED, NOT ASSUMED.** `min(P, F)` is the pool size, so a resolved P of zero
@@ -319,7 +313,7 @@ export function runStdPassesOnAWorkerPool(project Project, module StdModule, mem
 		end 'eachWorker'
 
 		let stealsBefore = __Builtins.schedStealCount()
-		drainTheStdPool(module, workers: workers, workerCount: poolSize, landedOrigins: landedOrigins, landedLogs: landedLogs, slotOfFunc: slotOfFunc)
+		drainTheStdPool(module, workers: workers, workerCount: poolSize, landedOrigins: landedOrigins, landedLogs: landedLogs, slots: slots)
 		let stealsAfter = __Builtins.schedStealCount()
 		logDebug(LogCategory.codegen, message: function() gives "stdFanOut pool: {stealsAfter - stealsBefore} work-steal(s) while the pool drained")
 
@@ -337,11 +331,11 @@ export function runStdPassesOnAWorkerPool(project Project, module StdModule, mem
 	end 'somethingToRun'
 
 	for funcIndex in 0 upto funcCount 'foldOriginsInIndexOrder'
-		let origins = try landedOrigins.get(landingSlotOf(slotOfFunc, funcIndex: funcIndex, funcCount: funcCount)) otherwise panic("runStdPassesOnAWorkerPool: landedOrigins.get OOB for function {funcIndex}")
+		let origins = try landedOrigins.get(slots.slotOf(funcIndex)) otherwise panic("runStdPassesOnAWorkerPool: landedOrigins.get OOB for function {funcIndex}")
 		origins.foldInto(project.valueOrigins, funcIndex: funcIndex)
 	end 'foldOriginsInIndexOrder'
 
-	replayFanOutLog(members, tallies: tallies, landedLogs: landedLogs, slotOfFunc: slotOfFunc, funcCount: funcCount, reducesDivision: reducesDivision)
+	replayFanOutLog(members, tallies: tallies, landedLogs: landedLogs, slots: slots, funcCount: funcCount, reducesDivision: reducesDivision)
 end 'runStdPassesOnAWorkerPool'
 
 function awaitedReport(reply StdPassReportReply, slot LandingSlot) returns StdPassWorkerReport
@@ -364,28 +358,18 @@ function foldWorkerReport(project Project, report StdPassWorkerReport, members S
 
 	for k in 0 upto members.count() 'eachStep'
 		let step = try members.get(k) otherwise panic("foldWorkerReport: members.get OOB at {k}")
-		foldPoolPhaseDelta(project, phase: compilePhaseOfPass(passKindOfFanOutStep(step)), delta: report.costs.accumulated(k))
+		foldPoolPhaseDelta(project, phase: compilePhaseOfPass(passKindOfFanOutStep(step)), driver: CompilePhase.stdFanOut, delta: report.costs.accumulated(k))
 		let tally = try tallies.get(k) otherwise panic("foldWorkerReport: tallies.get OOB at {k}")
 		tally.absorb(try report.tallies.get(k) otherwise panic("foldWorkerReport: report.tallies.get OOB at {k} after the count check"))
 	end 'eachStep'
 end 'foldWorkerReport'
 
-function landingSlotOf(slotOfFunc LandingSlotArray, funcIndex FuncIndex, funcCount FuncCount) returns LandingSlot
-	let slot = try slotOfFunc.get(funcIndex) otherwise panic("runStdPassesOnAWorkerPool: slotOfFunc.get OOB at {funcIndex} below count {funcCount}")
-
-	if slot == funcCount as LandingSlot 'neverLanded'
-		panic("runStdPassesOnAWorkerPool: function {funcIndex} never came home from the pool — the drain awaits every reply, so a function with no landing slot is a dispatch that never happened")
-	end 'neverLanded'
-
-	return slot
-end 'landingSlotOf'
-
 // ⭐⭐ **THE DISPATCH LOOP: fill the pipeline, then serve whoever finished first.** The protocol is
-// `PoolDispatch`'s, shared with `RegAllocPool.drainThePool`; what is this pool's own is the reply type
-// and the landing. Every promise is awaited (an un-awaited one is the green-thread exit gate's own error,
-// exit 75), `awaitAny` keeps the pool busy, and the dispatch order is longest-first
+// `PoolDispatch`'s, shared with `BackendPool.drainTheBackendPool`; what is this pool's own is the reply
+// type and the landing. Every promise is awaited (an un-awaited one is the green-thread exit gate's own
+// error, exit 75), `awaitAny` keeps the pool busy, and the dispatch order is longest-first
 // (`functionsLongestFirst`, which says why that order cannot reach the output).
-function drainTheStdPool(module StdModule, workers StdPassWorkerHandleArray, workerCount PoolSize, landedOrigins DerivedOriginsArray, landedLogs CapturedLogArray, slotOfFunc LandingSlotArray)
+function drainTheStdPool(module StdModule, workers StdPassWorkerHandleArray, workerCount PoolSize, landedOrigins DerivedOriginsArray, landedLogs CapturedLogArray, slots LandingSlots)
 	var scratch = SpliceScratch.create()
 	var dispatch = PoolDispatch.create(module.functions, blocks: module.blocks, funcCount: module.funcCount() as PoolSize, workerCount: workerCount)
 	var replies = StdPassReplyArray.create()
@@ -402,7 +386,7 @@ function drainTheStdPool(module StdModule, workers StdPassWorkerHandleArray, wor
 
 		if let body = try await reply 'ran'
 			spliceStdUnit(module, func: module.getFunc(funcIndex), body: body, scratch: scratch)
-			try slotOfFunc.set(funcIndex, value: landedOrigins.count()) otherwise panic("drainTheStdPool: slotOfFunc.set OOB at {funcIndex}")
+			slots.record(funcIndex, slot: landedOrigins.count())
 			landedOrigins.push(body.origins)
 			landedLogs.push(body.capturedLog)
 		end 'ran' else (e) 'notRun'
@@ -434,14 +418,14 @@ end 'dispatchOneStdJob'
 // The replay: the log of a serial run, pass-major, from what the workers captured
 // ══════════════════════════════════════════════════════════════════════════
 
-function replayFanOutLog(members StdFanOutStepArray, tallies StdPassTallyArray, landedLogs CapturedLogArray, slotOfFunc LandingSlotArray, funcCount FuncCount, reducesDivision bool)
+function replayFanOutLog(members StdFanOutStepArray, tallies StdPassTallyArray, landedLogs CapturedLogArray, slots LandingSlots, funcCount FuncCount, reducesDivision bool)
 	for k in 0 upto members.count() 'eachStep'
 		let step = try members.get(k) otherwise panic("replayFanOutLog: members.get OOB at {k}")
 		logIr(passBanner(passKindOfFanOutStep(step)))
 		announceStep(step, funcCount: funcCount, reducesDivision: reducesDivision)
 
 		for funcIndex in 0 upto funcCount 'eachFunctionInIndexOrder'
-			let captured = try landedLogs.get(landingSlotOf(slotOfFunc, funcIndex: funcIndex, funcCount: funcCount)) otherwise panic("replayFanOutLog: landedLogs.get OOB for function {funcIndex}")
+			let captured = try landedLogs.get(slots.slotOf(funcIndex)) otherwise panic("replayFanOutLog: landedLogs.get OOB for function {funcIndex}")
 
 			for log in captured 'theFunctionsLog'
 				log.replayStep(k as LogLineIndex, category: LogCategory.ir)

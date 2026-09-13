@@ -3,8 +3,9 @@
 
 Launches the target process, samples every thread's RIP at a fixed rate, and
 resolves samples against the `__symtable` function table the Maxon backends
-embed in every binary (format: [u32 count][count x (u32 codeOffset,
-u32 nameOffset)][NUL-terminated names], offsets relative to `.text`).
+embed in every binary (format: [u32 count][u32 flagsOffset][count x (u32 codeOffset,
+u32 nameOffset)][NUL-terminated names][count x u8 flags], offsets relative to
+`.text` — `BacktraceFormat.buildSymbolTableBytes`).
 
 The two compilers put that table in different places, and this reads both:
 the C# bootstrap writes it into a `.symtab` section; The compiler has no `.symtab`
@@ -138,12 +139,16 @@ def load_symbols(path):
     count = struct.unpack_from("<I", blob, 0)[0]
     offsets, names = [], []
     for i in range(count):
-        code_off, name_off = struct.unpack_from("<II", blob, 4 + 8 * i)
+        code_off, name_off = struct.unpack_from("<II", blob, SYMTABLE_HEADER_BYTES + 8 * i)
         end = blob.index(b"\0", name_off)
         offsets.append(code_off)
         names.append(blob[name_off:end].decode("utf-8", "replace"))
     return text_rva, offsets, names
 
+
+# The header is two u32s — { count, flagsOffset } — and the entries follow it
+# (`BacktraceFormat.SymbolTableHeaderColumns`).
+SYMTABLE_HEADER_BYTES = 8
 
 # How many leading entries must ascend before a candidate header is believed.
 # Two sufficed inside `.symtab`, whose other contents are text; a scan over
@@ -156,21 +161,21 @@ def find_symtable_blob(sect):
     """Locate the function table (`__symtable`) inside a section that holds
     other things too — `.symtab` concatenates it with every symdata blob
     (panic-message strings, ...), and the compiler's `.text` precedes it with all the
-    code. Its header is self-identifying: entry 0's nameOffset == 4 + 8*count,
+    code. Its header is self-identifying: entry 0's nameOffset == header + 8*count,
     and codeOffsets ascend. Scan 4-byte-aligned starts for that signature."""
-    for start in range(0, len(sect) - 12, 4):
+    for start in range(0, len(sect) - 16, 4):
         count = struct.unpack_from("<I", sect, start)[0]
-        header = 4 + 8 * count
+        header = SYMTABLE_HEADER_BYTES + 8 * count
         # A small program holds a handful of functions; only the shape identifies the table.
         if count < 2 or start + header >= len(sect):
             continue
-        first_code, first_name = struct.unpack_from("<II", sect, start + 4)
+        first_code, first_name = struct.unpack_from("<II", sect, start + SYMTABLE_HEADER_BYTES)
         if first_name != header or first_code > 0x10000:
             continue
         prev_code = -1
         ascending = True
         for entry in range(min(count, SYMTABLE_PROBE_ENTRIES)):
-            code_off, name_off = struct.unpack_from("<II", sect, start + 4 + 8 * entry)
+            code_off, name_off = struct.unpack_from("<II", sect, start + SYMTABLE_HEADER_BYTES + 8 * entry)
             if code_off < prev_code or start + name_off >= len(sect):
                 ascending = False
                 break

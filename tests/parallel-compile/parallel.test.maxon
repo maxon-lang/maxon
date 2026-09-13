@@ -1,11 +1,13 @@
-// parallel.test.maxon — the shared half of the register allocator's PARALLEL-POOL gate: how a fixture
-// program is staged, how the compiler is spawned at it with the processor count pinned or left to the
-// machine, and the two things asked of the corpus itself. The per-contract `test` declarations are the
-// files beside this one, one contract line each.
+// parallel.test.maxon — the shared half of the backend's PARALLEL-POOL gate: how a fixture program is
+// staged, how the compiler is spawned at it with the processor count pinned or left to the machine, and
+// the two things asked of the corpus itself. The per-contract `test` declarations are the files beside
+// this one, one contract line each.
 //
-// The allocator runs on a pool of worker services, one per processor, and its contract has three lines:
-// it REPORTS the pool it built, the executable it emits is BYTE-IDENTICAL whatever the processor count,
-// and a register-pressure refusal is RENDERED identically at every count.
+// Instruction selection and register allocation run on a pool of worker services, one per processor
+// (`BackendPool`), and its contract has four lines: it REPORTS the pool it built, the executable it
+// emits is BYTE-IDENTICAL whatever the processor count — its `.rdata` section included, which every
+// function's isel registers content into — a register-pressure refusal is RENDERED identically at every
+// count, and the per-function log lines of the Std pool come out in declaration order.
 //
 // ⚠ THE POOL LINE IS LOGGED UNDER `LogCategory.codegen`, SO THE FLAG THAT SHOWS IT IS `--log=codegen:debug`.
 // `Logger.parseLogOption` raises ONE category for a `<category>:<level>` spec and every other category

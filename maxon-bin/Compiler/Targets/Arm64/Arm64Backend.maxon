@@ -2997,25 +2997,22 @@ end 'arm64ResolveFuncAdrpRelocs'
 // Backend driver
 // ==========================================================================
 
-// Run the arm64 backend — the arm64 twin of `BackendDispatch.buildX64Backend`. The register allocator
-// (`allocateRegisters`) is reused as-is (the one-allocator / unified-`TargetOp` design); the
-// ISA-specific stages are the arm64 isel (`lowerStdToArm64`), frame (`insertArm64PrologueEpilogue`),
+// Run the arm64 backend — the arm64 twin of `BackendDispatch.buildX64Backend`. The backend pool and its
+// register allocator are reused as-is (the one-allocator / unified-`TargetOp` design); the
+// ISA-specific stages are the arm64 isel (`StdToArm64Lowering`), frame (`insertArm64PrologueEpilogue`),
 // encoder and link. There is NO module-level `augmentWithRuntime` step (x64's, which prepends
 // `mrt_start` as a module function): the arm64 entry stub calls `_exit` through a GOT import with no
 // TargetOp channel, so it is hand-assembled as a chunk in the encode phase (`appendArm64RuntimeChunks`)
 // and laid out first. `throws CompileError` because register allocation can fail for a real reason
 // (E5001), exactly as the x64 backend does.
 export function buildArm64Backend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage, funcNames FunctionNameIndex) returns CodeResult throws CompileError
-	let iselProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.isel)
-
-	// `target` reaches the ISEL because the three OS-primitive lowerings differ per OS: macOS routes
-	// them through libSystem GOT imports, Linux through raw `svc #0` (see `arm64OsCallKind`), and the
-	// mmap anonymous-mapping flag word is a different number on each.
-	var (targetModule, valueClasses) = lowerStdToArm64(stdModule, target: target, globalData: globalData, funcNames: funcNames, usesGt: usage.usesGt)
-	recordPhase(project, phase: CompilePhase.isel, probe: iselProbe)
-
+	// The x64 driver's shape: isel, edge splitting and allocation per function on one pool
+	// (`BackendPool`), inside the `regalloc` bracket. `target` reaches the ISEL because the three
+	// OS-primitive lowerings differ per OS: macOS routes them through libSystem GOT imports, Linux through
+	// raw `svc #0` (see `arm64OsCallKind`), and the mmap anonymous-mapping flag word is a different number
+	// on each.
 	let regAllocProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.regalloc)
-	try allocateRegisters(targetModule, target: target, project: project, valueClasses: valueClasses)
+	var targetModule = try lowerAndAllocateOnAWorkerPool(stdModule, target: target, globalData: globalData, project: project, funcNames: funcNames, usesGt: usage.usesGt)
 	recordPhase(project, phase: CompilePhase.regalloc, probe: regAllocProbe)
 
 	// EC11, and it must run HERE — after the allocator's `applyAllocation` and before the frame pass.

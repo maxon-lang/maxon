@@ -1,0 +1,193 @@
+// BackendUnit — ONE FUNCTION THROUGH INSTRUCTION SELECTION, CRITICAL-EDGE SPLITTING AND REGISTER
+// ALLOCATION ON A POOL WORKER, and the splice that puts the finished function into the Target module.
+//
+// ⭐⭐ **THE UNIT IS THE Std FAN-OUT'S** (`extractUnitModule`): a fresh single-function Std module every
+// record of which the message owns alone. The worker lowers it exactly as the isel lowers the whole
+// program's module — `prepareSkeleton`, the per-function walk, the class column — into a single-function
+// TARGET module, splits that module's critical edges and allocates it, and the reply carries THAT module
+// home. Nothing is copied on the way back: the ops the allocator settled on are the reply's, and
+// `spliceBackendUnit` appends them to the real module by index arithmetic.
+//
+// ⛔⛔ **EVERY RECORD REACHABLE FROM A REPLY IS THE REPLY'S ALONE, AND THAT IS A RUN-TIME CONTRACT WITH A
+// LOUD FAILURE.** A reply MOVES: the send walks the whole graph and a record with a second owner aborts
+// the process with exit 96 (`RuntimeAbort.transferredRecordNotSole`). The Target module's blocks are built
+// off the unit's own Std blocks and die with them; a block a pass mints copies the inline site it inherits
+// (`addOrderedBlock`, `addSplitBlock`); the isel's scratch hands the module over and keeps no reference
+// (`lowerUnit`); and the orphans a rewrite leaves in the flat `ops` array are compacted away before the
+// reply, since an orphan shares its managed payloads with the op that replaced it.
+//
+// ⭐⭐ **THE REAL TARGET MODULE IS ASSEMBLED FROM REPLIES.** It starts as the function table alone —
+// every `IrFunction` of the Std module, which the Target tier shares with it — and empty `ops` and
+// `blocks`; each reply's ops and blocks are APPENDED as it lands, and the function's `blockRefs` refilled
+// onto the appended blocks. An op or block INDEX reaches no emitted byte — every consumer walks `blockRefs
+// → opRefs → ops` — so the arrival order cannot reach the output, and everything that is order-dependent
+// is folded in function-index order after the drain (`BackendPool`).
+
+export typealias BackendUnitBodyArray = Array with BackendUnitBody
+
+// What crosses TO a worker: the function as a single-function Std module, and the two facts the allocator
+// reads off the real function that the unit's own does not carry.
+export type BackendUnitBody
+	export var unitModule as StdModule
+
+	// Was this function PARSED? The splitter asks it: a function the compiler emitted has no author to
+	// refuse, so its full-pool peak is relieved by a forced bracket rather than raised as E5001. Carried as
+	// the bool rather than the `FilePath` it is derived from: a path is a managed value with no other reader
+	// here, and a reconstruction that left it empty would silently turn every user function into a
+	// compiler-emitted one.
+	export var hasAuthor as bool
+
+	// ⭐ **THE VALUES THE PARSER NAMED, FLAT AND IN `IrFunction.debugLocals` ORDER.** The allocator is the
+	// last point at which a `ValueId` still means anything — the encoder sees physical registers — so this
+	// is the question that has to cross, and the answer comes home in the same order.
+	export var debugValueIds as ValueIdArray
+
+	export static function extract(module StdModule, func IrFunction) returns BackendUnitBody
+		return Self{unitModule: extractUnitModule(module, func: func), hasAuthor: not func.sourceFilePath.isEmpty(), debugValueIds: debugValueIdsOf(func)}
+	end 'extract'
+end 'BackendUnitBody'
+
+// THE MESSAGE ARGUMENT: which function, and its body in a one-slot holder the worker pops (see
+// `BackendUnitReply.afterRunning`).
+export type BackendUnit
+	export var funcIndex as FuncIndex
+	export var holder as BackendUnitBodyArray
+
+	// ⭐ **EVERY RETURN IS `Self{…}` AND THERE IS ONLY ONE**, which is what makes a call to this the
+	// argument of a send (E3138, `SignatureIndex.returnsFreshValue`).
+	export static function extract(module StdModule, func IrFunction, funcIndex FuncIndex) returns BackendUnit
+		var holder = BackendUnitBodyArray.create()
+		holder.push(BackendUnitBody.extract(module, func: func))
+		return Self{funcIndex: funcIndex, holder: holder}
+	end 'extract'
+end 'BackendUnit'
+
+// Every value the parser named a binding for, flattened — built FRESH, because it is MOVED to a worker.
+// Empty on a build that records no bindings, which is what makes the whole carrier free when disarmed.
+function debugValueIdsOf(func IrFunction) returns ValueIdArray
+	var valueIds = ValueIdArray.create()
+	valueIds.reserve(debugValueTallyOf(func))
+
+	for local in func.debugLocals 'eachBinding'
+		for v in local.valueIds 'eachValue'
+			valueIds.push(v)
+		end 'eachValue'
+	end 'eachBinding'
+
+	return valueIds
+end 'debugValueIdsOf'
+
+// How many values that list holds. Its own walk rather than `debugValueIdsOf(func).count()`, because the
+// splice asks it on EVERY function of every build and building the array to measure it would allocate one
+// per function for a number.
+function debugValueTallyOf(func IrFunction) returns ElementIndex
+	var tally = 0 as ElementIndex
+
+	for local in func.debugLocals 'eachBinding'
+		tally = tally + local.valueIds.count()
+	end 'eachBinding'
+
+	return tally
+end 'debugValueTallyOf'
+
+export typealias BackendUnitLandingArray = Array with BackendUnitLanding
+
+// ⭐ **WHAT ONE FUNCTION HANDS BACK BESIDE ITS MODULE — everything the driver folds in function-index
+// order after the drain.** Kept in the landing array after the module has been spliced, which is why it
+// is a record of its own rather than fields of the reply: the module is consumed on arrival and this
+// outlives it.
+export type BackendUnitLanding
+	// The `.rdata` registrations the isel needed, in encounter order (`RdataRequests`).
+	export var rdata as RdataRequestArray
+	export var counters as RegAllocCounters
+	export var facts as RegAllocFacts
+
+	// The allocator's sub-phase brackets, `criticalEdges` included — one record per function.
+	export var costs as PoolPhaseCosts
+
+	// The isel's own bracket, folded into the `isel` row as a breakdown of `regalloc`.
+	export var iselCost as PhaseDelta
+
+	export static function create(rdata RdataRequestArray, counters RegAllocCounters, facts RegAllocFacts, costs PoolPhaseCosts, iselCost PhaseDelta) returns BackendUnitLanding
+		return Self{rdata: rdata, counters: counters, facts: facts, costs: costs, iselCost: iselCost}
+	end 'create'
+end 'BackendUnitLanding'
+
+// A finished unit as the worker hands it to the reply: the module and the landing, as two values so the
+// reply can be one record literal over both.
+export type FinishedUnit
+	export var unitModule as TargetModule
+	export var landing as BackendUnitLanding
+
+	export static function create(unitModule TargetModule, landing BackendUnitLanding) returns FinishedUnit
+		return Self{unitModule: unitModule, landing: landing}
+	end 'create'
+end 'FinishedUnit'
+
+// EVERYTHING ONE FUNCTION HANDS BACK: the finished single-function Target module, and the landing.
+//
+// ⚠ It crosses a reply cell, which carries two words, so it is ONE record.
+export type BackendUnitReply
+	export var unitModule as TargetModule
+	export var landing as BackendUnitLanding
+
+	// ⭐⭐ **A STATIC FACTORY WHOSE ONE RETURN IS `Self{…}`, AND THAT SHAPE IS LOAD-BEARING (E3137).** A
+	// REPLY moves, exactly as a message argument does, so a message may return only a value its frame
+	// provably owns alone — a fresh record, a `.clone()`, or a call the freshness summary can prove. A call
+	// is proved by every one of its returns being a record literal, which is why the reply is built HERE
+	// and not behind the worker's own method.
+	//
+	// ⛔ **THE BODY IS POPPED, NOT READ.** The unit is the message's parameter and lives until the reply is
+	// sent, so a body still reachable from it would have two owners at the transfer walk. The holder is
+	// left empty, and the fresh literal below is the reply's alone once this frame's `body` has died.
+	export static function afterRunning(unit BackendUnit, worker BackendWorker) returns BackendUnitReply throws RegAllocRefusal
+		var body = try unit.holder.pop() otherwise panic("BackendUnitReply.afterRunning: the unit for function {unit.funcIndex} carried no body — `BackendUnit.extract` pushes exactly one")
+		let finished = try worker.finish(body)
+		return Self{unitModule: finished.unitModule, landing: finished.landing}
+	end 'afterRunning'
+end 'BackendUnitReply'
+
+// ⭐⭐ **PUT ONE FINISHED FUNCTION INTO THE MODULE, AS THE WORKER LEFT IT.**
+//
+// The unit's ops are appended whole with their spans (`appendOps` — the worker compacted the unit, so
+// they are exactly the function's live ops), its blocks are appended in `blockRefs` order with their op
+// indices shifted onto the appended ops (`IrBlock.shiftOpIndices`), and the function's `blockRefs` is
+// refilled in place onto them. A block the unit's `blockRefs` no longer names is one a pass dropped, and
+// it is left behind with the unit.
+//
+// The Target-tier scalars the worker settled — the frame size, the outgoing-argument reservation, the
+// next block id — and the debug locations come across onto the REAL function, which the Target module
+// shares with the Std module.
+export function spliceBackendUnit(module TargetModule, func IrFunction, unitModule TargetModule)
+	let unitFunc = unitModule.getFunc(UnitFunctionIndex)
+
+	// Asked here because this is where the unit stops being appended to: a column short by one would
+	// misattribute every later line row once it is placed into the real module.
+	unitModule.spans.requireParallelTo(unitModule.ops.count(), what: "after the backend unit of '{String.from(func.name)}'")
+
+	let opOffset = module.ops.count()
+	module.appendOps(unitModule)
+	func.blockRefs.clear()
+
+	for unitRef in unitFunc.blockRefs 'eachBlock'
+		var block = unitModule.getBlock(unitRef)
+		block.shiftOpIndices(opOffset)
+		func.blockRefs.push(module.blocks.count())
+		module.blocks.push(block)
+	end 'eachBlock'
+
+	func.nextBlockId = unitFunc.nextBlockId
+	func.stackSize = unitFunc.stackSize
+	func.outgoingArgSize = unitFunc.outgoingArgSize
+
+	// ⭐ **THE LOCATIONS COME HOME BY ORDER, SO THE COUNT IS THE ONLY THING THAT CAN SAY THE TWO AGREE.**
+	// A shortfall would silently shift every later binding onto its neighbour's location, which reads as a
+	// plausible dump rather than as a defect.
+	let debugValueTally = debugValueTallyOf(func)
+
+	if unitFunc.debugLocalLocations.count() != debugValueTally 'debugLocationsOutOfStep'
+		panic("spliceBackendUnit: '{String.from(func.name)}' asked the allocator about {debugValueTally} named value(s) and {unitFunc.debugLocalLocations.count()} came home — the two orders have drifted, and every record past the shortfall would name another binding's location")
+	end 'debugLocationsOutOfStep'
+
+	func.debugLocalLocations = unitFunc.debugLocalLocations
+end 'spliceBackendUnit'

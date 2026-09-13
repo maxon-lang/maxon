@@ -1,0 +1,27 @@
+// rdata-order.test.maxon — the `.rdata` section the backend pool emits does not depend on how many
+// workers lowered the functions that registered its content. Every function of the fixture registers
+// a jump table and two float islands, and a jump table's label and every island's offset are minted off
+// ONE counter in registration order: a pool that registered in arrival order would rename and move them
+// between two builds, and the images would differ in the section and in every load that names it. One
+// staged copy, compiled pinned and at the default, both to the SAME output path (`builtExecutable` says
+// why the basename must not vary), and the images are compared byte for byte.
+//
+// Two compiles in one file is the budget `test-command/reserved-name-refused.test.maxon` prices against
+// the 5,000 ms deadline; a third case here would need its own file.
+
+test 'the rdata section is byte-identical at one processor and at the default'
+	let staged = stagedProgram("rdata-program", caseLabel: "rdata-order")
+	let noArguments = StringArray.create()
+
+	let pinnedRun = spawnBuild(staged, label: "single-processor", extraArguments: noArguments, singleProcessor: true)
+	let pinnedExit = pinnedRun.exitCode() as AssertedInt
+	try Expect.equal(pinnedExit, expected: 0, message: "the rdata program did not compile pinned to one processor. It wrote to stderr: {pinnedRun.stderr}")
+
+	let pinnedImage = retainImage(staged)
+
+	let defaultRun = spawnBuild(staged, label: "default-processors", extraArguments: noArguments, singleProcessor: false)
+	let defaultExit = defaultRun.exitCode() as AssertedInt
+	try Expect.equal(defaultExit, expected: 0, message: "the rdata program did not compile at the default processor count. It wrote to stderr: {defaultRun.stderr}")
+
+	try requireIdenticalBytes(pinnedImage, second: builtExecutable(staged))
+end 'the rdata section is byte-identical at one processor and at the default'

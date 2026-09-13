@@ -4,7 +4,7 @@
 // dispatches the CodeResult to the per-OS object writer.
 //
 // Std, not MIR: The compiler has no MIR tier (see StdDialect's header). The backend's
-// input is the Std module the pipeline produced, and `lowerStdToX64` asserts on
+// input is the Std module the pipeline produced, and `buildBackend` asserts on
 // entry that no Std-only `sugar` op survived to reach it.
 //
 // These stages are driven as ordered function calls rather than PassKind entries
@@ -137,25 +137,13 @@ end 'buildWasmBackend'
 // The x64 backend: Std → Target → register allocation → prologue/epilogue → runtime augmentation →
 // machine-code emission → CodeResult.
 function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage, funcNames FunctionNameIndex) returns CodeResult throws CompileError
-	let iselProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.isel)
-
-	// `globalData` reaches ISel because a float CONSTANT is `.rdata` content the lowering is the
-	// first to see (`lowerFloatConst`). It is the same table concat resolves those labels against
-	// once sections are laid out — see `lowerStdToX64`.
-	// THE CLASS COLUMN CROSSES THE TIER BOUNDARY HERE, and it travels FORWARD, WITH the module: this
-	// call is the last pass that can see a Std type, so it is the only one that can say which register
-	// FILE a value lives in. The allocator consumes that answer and never re-derives it — `movRegReg`,
-	// `loadRegSlot` and `xchgRegReg` are class-agnostic by design, so a copy's class is knowable only
-	// from its source (see TargetDialect's `ValueClassColumn`).
-	//
-	// The two come back TOGETHER because a `TargetModule` alone is not a complete answer: it carries no
-	// types, so nothing downstream could say what file any of its values belongs in. Returning the pair
-	// is what makes it impossible to hand the allocator one without the other.
-	var (targetModule, valueClasses) = lowerStdToX64(stdModule, target: target, globalData: globalData, funcNames: funcNames, usesGt: usage.usesGt)
-	recordPhase(project, phase: CompilePhase.isel, probe: iselProbe)
-
+	// Instruction selection, critical-edge splitting and register allocation, per function on one pool
+	// (`BackendPool`). The `regalloc` bracket is the pool's wall; the isel's own cost is measured on the
+	// workers and folded into the `isel` row as a breakdown of it. `globalData` reaches it because a
+	// float constant, a jump table and an abort message are `.rdata` content the lowering is the first to
+	// see; the same table concat resolves those labels against once sections are laid out.
 	let regAllocProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.regalloc)
-	try allocateRegisters(targetModule, target: target, project: project, valueClasses: valueClasses)
+	var targetModule = try lowerAndAllocateOnAWorkerPool(stdModule, target: target, globalData: globalData, project: project, funcNames: funcNames, usesGt: usage.usesGt)
 	recordPhase(project, phase: CompilePhase.regalloc, probe: regAllocProbe)
 
 	// EC11, and it must run HERE — after the allocator's `applyAllocation` and before the frame pass.

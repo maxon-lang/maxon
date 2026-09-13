@@ -263,15 +263,15 @@ Written down because a limit nobody states gets mistaken for coverage.
   like one that was already perfect. One fixture pins that for one file; nothing tells
   you it is happening to two hundred.
 
-## `parallel-compile/` — the register allocator's worker pool
+## `parallel-compile/` — the backend's worker pools
 
 It gates a COMPILER phase rather than a driver command, and it lives here for the same reason `fmt/` does: what it asserts is what `maxon build`
 REPORTS and EMITS at two processor counts, which a `specs` program cannot observe about
 the compiler that compiled it. `parallel.test.maxon` is the shared half; each contract line has
-its own case file — `pool-default`, `pool-pinned`, `byte-identical`, `pressure-refusal` — and
-`fixtures/<program>/main.maxon.fixture` holds the two programs. It applies rule 1's `.fixture`
-half only (no `dot-` names), rule 4 (the child runs in its staging directory), and departs from
-rule 5 on rule 5's own terms: the four contracts need six compiles between them, and `maxon
+its own case file — `pool-default`, `pool-pinned`, `byte-identical`, `rdata-order`, `log-order`,
+`pressure-refusal` — and `fixtures/<program>/main.maxon.fixture` holds the programs. It applies
+rule 1's `.fixture` half only (no `dot-` names), rule 4 (the child runs in its staging directory),
+and departs from rule 5 on rule 5's own terms: the contracts need two compiles each, and `maxon
 test` runs files concurrently, so every case stages into a directory named for ITSELF under
 `temp/parallel-compile/`. Its expectations are not generated — they are properties (a pinned
 report prefix, byte identity, stderr equality between two runs), each guarded by a positive

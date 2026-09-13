@@ -597,7 +597,42 @@ end 'indirectResultRegister'
 // borrow of `targetModule.blocks` (its `dstBlock`), and recovering an id from a ref would need
 // a second borrow of that same array — the thing `moveBranchEdgeToSplit` scopes its helpers
 // apart to avoid. An id is a scalar and needs no borrow at all.
-typealias OrderedBlockIdMap = Map with (BlockRef, BlockId)
+//
+// ⛔ **TWO PARALLEL ARRAYS SEARCHED LINEARLY, NOT A `Map`.** A `Map` hashes its key through a witness
+// slot, and this isel runs on a pool worker, where a dispatch the compiler cannot name is refused
+// outright (E3143). A function splits a handful of float-equality branches at most, and usually none.
+type OrderedBlockRoster
+	var refs as BlockRefArray
+	var ids as BlockIdArray
+
+	static function create() returns OrderedBlockRoster
+		return Self{refs: BlockRefArray.create(), ids: BlockIdArray.create()}
+	end 'create'
+
+	function record(blockRef BlockRef, id BlockId)
+		self.refs.push(blockRef)
+		self.ids.push(id)
+	end 'record'
+
+	// An index loop rather than `withIterator`: an iterator's methods dispatch through a witness slot,
+	// which this isel may not reach (E3143).
+	function idOf(blockRef BlockRef) returns BlockId throws OrderedBlockLookup
+		for k in 0 upto self.refs.count() 'eachSplit'
+			let ref = try self.refs.get(k) otherwise panic("OrderedBlockRoster.idOf: refs.get OOB at {k} below {self.refs.count()}")
+
+			if ref == blockRef 'thisBlock'
+				return try self.ids.get(k) otherwise panic("OrderedBlockRoster.idOf: ids.get OOB at {k} beside {self.refs.count()} refs — the two columns are pushed together")
+			end 'thisBlock'
+		end 'eachSplit'
+
+		throw OrderedBlockLookup.notAFloatEquality
+	end 'idOf'
+end 'OrderedBlockRoster'
+
+// The miss `OrderedBlockRoster.idOf` answers: the block's branch was not split.
+enum OrderedBlockLookup implements Error
+	notAFloatEquality
+end 'OrderedBlockLookup'
 
 // The immediate a boolean condition is tested against. x64 branches on FLAGS, so a
 // condition that is a VALUE (a call's `bool` return, a `param`, a short-circuit merge phi,
@@ -773,8 +808,8 @@ end 'predicateIsEquality'
 
 // The register-FILE doors (`regClassForStdType`, `unaryResultClass`, `returnTypeResultClass`,
 // `setValueClass`) and the whole value-class-column producer are TARGET-INDEPENDENT and live in
-// `Targets/Shared/StdLoweringShared.maxon`, shared with the arm64 lowering — `lowerStdToX64` calls
-// `buildValueClassColumns`. See that file for the walk and why it must not be forked.
+// `Targets/Shared/StdLoweringShared.maxon`, shared with the arm64 lowering — `lowerUnit` calls
+// `buildFunctionValueClasses`. See that file for the walk and why it must not be forked.
 
 // ⚠ THE WHOLE SSE LOWERING IS SCALAR-DOUBLE, AND THIS IS WHERE IT SAYS SO. `movsd`, `addsd`,
 // `divsd`, `ucomisd` and an 8-byte `.rdata` island: every one of them is the `sd` (scalar-double)
@@ -839,77 +874,43 @@ function x64AtomicAdd(resultId ValueId, addrId ValueId, operandId ValueId, prior
 	return TargetOp.x64LockXadd(TargetVReg.virtual(resultId), src: TargetVReg.virtual(operandId), addrReg: TargetVReg.virtual(addrId))
 end 'x64AtomicAdd'
 
-// `globalData` is threaded in because a float CONSTANT is `.rdata` content, and `.rdata` is
-// resolved at concat time against this same table — the one the `.data` globals already live in.
-// Registering here (where the constant is first seen) and resolving there (where sections are laid
-// out) is exactly the split `leaRegGlobal` already uses for `.data`; the float path reuses it
-// rather than growing a second table with a second offset index.
-// ⭐ IT RETURNS THE CLASS COLUMN WITH THE MODULE, because the two are one artifact: the Target tier
-// carries no types, so a `TargetModule` alone does not say which file any of its values lives in,
-// and the allocator cannot recover it (see `ValueClassColumn`). Handing them back together is what
-// makes it impossible to have one without the other.
-export function lowerStdToX64(stdModule StdModule, target Target, globalData GlobalDataTable, funcNames FunctionNameIndex, usesGt bool) returns (TargetModule, ValueClassColumns)
-	var lowering = StdToX64Lowering.create(stdModule, target: target, globalData: globalData, funcNames: funcNames, usesGt: usesGt)
-
-	// ⭐ **THE STD COLUMN CAME OUT EVEN, ASKED HERE BECAUSE THIS IS WHERE THAT MODULE STOPS BEING
-	// APPENDED TO.** It is the one tier whose column nothing else counts: the walk below reads it BY
-	// INDEX, so a pass that pushed onto `ops` without recording leaves it short and every span from that
-	// op on is off by one — a line table that is confidently WRONG rather than missing.
-	let stdOpCount = stdModule.ops.count()
-	stdModule.spans.requireParallelTo(stdOpCount, what: "at the Std tier's end")
-
-	// The Target module carries spans exactly when the Std module it lowers from does. Armed BEFORE the
-	// skeleton, because `prepareSkeleton` is the first thing that can append.
-	lowering.targetModule.spans.armed = stdModule.spans.armed
-	lowering.prepareSkeleton()
-
-	// BY INDEX, never by iteration: `lowerFunction` MUTATES the function it lowers — the
-	// float-equality split appends to its `blockRefs` and bumps its `nextBlockId` — so no
-	// `srcFunc` borrowed out of `stdModule.functions` may be handed to it. This is the rule
-	// `splitCriticalEdges` states for the identical reason, and the borrow checker enforces it
-	// (E3019).
-	for funcIdx in 0 upto stdModule.funcCount() 'eachFunc'
-		lowering.lowerFunction(funcIdx)
-	end 'eachFunc'
-
-	// AFTER the walk, not during it: the column is sized by `scanFunctionValueCount` over the
-	// TARGET ops, so every op has to exist before it can be measured. `buildValueClassColumns` is the
-	// shared, target-independent producer (see `Targets/Shared/StdLoweringShared.maxon`); bind it
-	// FIRST so its borrow of `targetModule` closes before the tuple moves `targetModule` out.
-	let valueClasses = buildValueClassColumns(lowering.stdModule, targetModule: lowering.targetModule, funcNames: lowering.funcNames)
-	return (lowering.targetModule, valueClasses)
-end 'lowerStdToX64'
-
 // The width of a Win32 `int`, and the distance `emitCaptureWin32Int` shifts an answer up and back to
 // replicate its sign across the whole machine word — a C `int` answer arrives in EAX with RAX's upper
 // half whatever the callee left there.
 let Win32IntBits = 32 as ShiftCount
 
-type StdToX64Lowering
-	// Exported like `targetModule`: `lowerStdToX64` hands both to the shared `buildValueClassColumns`.
-	export var stdModule as StdModule
+// ⭐⭐ **THE x64 ISEL, AS ONE UNIT AT A TIME.** A `BackendPool` worker holds one of these for the whole
+// compile and hands it one single-function Std module per message (`lowerUnit`); the main thread builds
+// one only to re-run a function whose allocation was refused (`refuseForRegisterPressure`). Its analyses
+// are scratches reused across every unit; what is per unit is set by `lowerUnit` and given up by it.
+//
+// ⛔ **IT REACHES NO MODULE `var` AND NO `Project`** — a worker is refused both (E3143) — so the `.rdata`
+// registrations it needs go into a request log the driver performs on the main thread (`RdataRequestLog`).
+export type StdToX64Lowering
+	// The unit being lowered — `lowerUnit`'s argument, held here because the per-function walk reads it
+	// from hundreds of sites.
+	var stdModule as StdModule
 
 	// The compilation target — read for its OS by the three OS-primitive lowerings
 	// (`lowerOsExit`/`lowerOsWriteStdout`/`lowerOsAllocPages`), which route through `x64OsCallKind` to a
 	// Windows IAT call or a raw Linux syscall. The arm64 isel carries the same field for the same reason.
 	var target as Target
 
-	// The backend's data table — where a float constant's `.rdata` island is registered. Shared
-	// with concat, which resolves each `movsdRegRip`'s label against it once sections are laid out.
-	var globalData as GlobalDataTable
+	// The `.rdata` registrations this unit needs — a float island, a jump table, an abort message — in
+	// the order the walk meets them (`RdataRequests`).
+	var rdata as RdataRequestLog
 
-	// Exported so the free-function entry can read the finished module after
-	// driving the per-function loop (M5's fan-out driver reads it too).
-	export var targetModule as TargetModule
+	// The unit's Target module, built by `prepareSkeleton` and filled by the walk.
+	var targetModule as TargetModule
 
 	// Which compares this function keeps in the EFLAGS and which must write their boolean to a
 	// register — the TARGET-INDEPENDENT analysis both native isels read (`CompareFusionCensus`, in the
 	// shared lowering). Created ONCE and recomputed per function, like `scaledIndexFolds` below.
 	var compareFusion as CompareFusionCensus
 
-	// The `ordered` block minted for each float-equality branch — see OrderedBlockIdMap and
+	// The `ordered` block minted for each float-equality branch — see `OrderedBlockRoster` and
 	// `reserveFloatEqualityBlocks`. Reset per function beside the census.
-	var orderedBlockIds as OrderedBlockIdMap
+	var orderedBlockIds as OrderedBlockRoster
 
 	// EC16 — the `base + index*scale` chains this function's element accesses spell, and which of them
 	// the memory op itself can carry (`ScaledIndexFolds`, in the shared lowering). x64 answers
@@ -919,22 +920,10 @@ type StdToX64Lowering
 	// Created ONCE and RESET per function, unlike the three tables above — see the type's `create`.
 	var scaledIndexFolds as ScaledIndexFolds
 
-	// The module's CHECKED name index (`FunctionNameIndex`, A2l), built by `eliminateDeadFunctions` over the
-	// array it left behind and threaded down from `buildBackend`. It answers "what register FILE does this
-	// callee's result come back in?" — XMM0 for a float-returning callee, R8 otherwise (see
-	// `callResultRegister`) — WITHOUT a second name-keyed map: `calleeResultClass` reads the callee's own
-	// `returnType` through it, so a float result's CAPTURE register and its allocation CLASS are the one
-	// fact rather than two that could disagree. Exported like `targetModule`: `lowerStdToX64` reads it to
-	// thread the same index into `buildValueClassColumns`.
-	export let funcNames as FunctionNameIndex
-
-	// Callee name → its parameters' register FILES as a bitmask. Built ONCE here (not per call site), FROM
-	// the index above — so its key set is the checked one — and read by `emitCallArgMoves` to route each
-	// argument to a GPR or an XMM arg register by the callee's declared parameter type. It is a real FOLD
-	// over a parameter list rather than a field read, which is why it stays a map where the result-class
-	// map did not. Only the argument routing consults it — the value-class column already classes a `param`
-	// result from its own carried f64 type — so it is not threaded into `buildValueClassColumns`.
-	var calleeParamClasses as CalleeParamClassMap
+	// Every callee's declared ABI (`CalleeAbiTable`): which arguments a call routes to an XMM register, and
+	// whether its result comes back in XMM0 or R8 (`callResultRegister`). The one table the value-class
+	// column reads too, so a float result's CAPTURE register and its allocation CLASS are the one fact.
+	let abi as CalleeAbiTable
 
 	// Fresh virtuals for the function being lowered (`mintVirtual`).
 	var fresh as ValueMinter
@@ -943,9 +932,40 @@ type StdToX64Lowering
 	// isel's does — a program with no scheduler has no machine to announce anything to.
 	let usesGt as bool
 
-	static function create(stdModule StdModule, target Target, globalData GlobalDataTable, funcNames FunctionNameIndex, usesGt bool) returns StdToX64Lowering
-		return Self{stdModule: stdModule, target: target, globalData: globalData, targetModule: TargetModule.create(), compareFusion: CompareFusionCensus.create(), orderedBlockIds: OrderedBlockIdMap.create(), scaledIndexFolds: ScaledIndexFolds.create(), funcNames: funcNames, calleeParamClasses: buildCalleeParamClasses(funcNames), usesGt: usesGt, fresh: ValueMinter.create(0)}
+	export static function create(target Target, abi CalleeAbiTable, usesGt bool) returns StdToX64Lowering
+		return Self{stdModule: StdModule.create(), target: target, rdata: RdataRequestLog.create(), targetModule: TargetModule.create(), compareFusion: CompareFusionCensus.create(), orderedBlockIds: OrderedBlockRoster.create(), scaledIndexFolds: ScaledIndexFolds.create(), abi: abi, usesGt: usesGt, fresh: ValueMinter.create(0)}
 	end 'create'
+
+	// ⭐ **ONE UNIT THROUGH THE WHOLE CONVERSION**: the skeleton, the function's blocks, and its class
+	// column. The lowered module and the request log are HANDED OVER — the fields are reset to empties —
+	// because the caller sends them home in a reply, and a reply may reach nothing this scratch still holds.
+	// The empties left behind are the next unit's: a unit starts on the module and log the last one left
+	// (or `create` made), so the two are allocated once per unit.
+	export function lowerUnit(unitModule StdModule) returns LoweredUnit
+		// ⭐ **THE STD COLUMN CAME OUT EVEN, ASKED HERE BECAUSE THIS IS WHERE THAT MODULE STOPS BEING
+		// APPENDED TO.** It is the one tier whose column nothing else counts: the walk below reads it BY
+		// INDEX, so a pass that pushed onto `ops` without recording leaves it short and every span from that
+		// op on is off by one — a line table that is confidently WRONG rather than missing.
+		let stdOpCount = unitModule.ops.count()
+		unitModule.spans.requireParallelTo(stdOpCount, what: "at the Std tier's end")
+
+		self.stdModule = unitModule
+
+		// The Target module carries spans exactly when the Std module it lowers from does. Armed BEFORE the
+		// skeleton, because `prepareSkeleton` is the first thing that can append.
+		self.targetModule.spans.armed = unitModule.spans.armed
+		self.prepareSkeleton()
+		self.lowerFunction(UnitFunctionIndex)
+
+		// AFTER the walk, not during it: the column is sized by `scanFunctionValueCount` over the TARGET
+		// ops, so every op has to exist before it can be measured.
+		let valueClass = buildFunctionValueClasses(self.stdModule, targetModule: self.targetModule, funcIndex: UnitFunctionIndex, abi: self.abi)
+		let lowered = LoweredUnit.create(self.targetModule, valueClass: valueClass, rdata: self.rdata.requests)
+		self.stdModule = StdModule.create()
+		self.targetModule = TargetModule.create()
+		self.rdata = RdataRequestLog.create()
+		return lowered
+	end 'lowerUnit'
 
 	// A fresh virtual for a lowering that needs a value of its own beside `resultId` — a call's answer
 	// captured before anything else touches a register, so the reloads of a cold call's bracket can land
@@ -959,9 +979,9 @@ type StdToX64Lowering
 
 	// The value-class column producer — the pass that answers "what register file does this op's
 	// result land in?" — is TARGET-INDEPENDENT and lives in `Targets/Shared/StdLoweringShared.maxon`
-	// (`buildValueClassColumns`), shared with the arm64 lowering. `lowerStdToX64` calls it after the
-	// op walk. It is NOT a method here anymore: a value's class is what its Std TYPE says, identically
-	// on both targets, so forking it is exactly the drift that file's header warns against.
+	// (`buildFunctionValueClasses`), shared with the arm64 lowering. `lowerUnit` calls it after the op
+	// walk. It is NOT a method here: a value's class is what its Std TYPE says, identically on both
+	// targets, so forking it is exactly the drift that file's header warns against.
 
 	// Whole-module setup: relocate every StdModule block 1:1 into `targetModule.blocks`
 	// (preserving the flat-block indices `IrFunction.blockRefs` references) and
@@ -1007,7 +1027,7 @@ type StdToX64Lowering
 	//
 	// A METHOD rather than a free function because the four CALL arms need a mask: an indirect or witness call
 	// carries its own on the op, and a DIRECT call's comes from the callee's declared parameter files, which is
-	// `self.calleeParamClasses`.
+	// `self.abi`.
 	function stdOpOutgoingArgBytes(op StdOp) returns StackSize
 		return match op 'o'
 			// ⭐ Both stream writes are ONE `callDirect` to `mrt_write_stream`, whose three arguments are
@@ -1107,14 +1127,14 @@ type StdToX64Lowering
 			// The two NAME-callee calls: the callee's declared parameter files decide which arguments overflow,
 			// exactly as they decide which register each of the others travels in (`emitCallArgMoves` reads the
 			// same mask through the same `calleeArgFloatMask`).
-			call(_, callee, args) gives callOutgoingArgBytes(calleeArgFloatMask(self.calleeParamClasses, callee: callee, argCount: args.count(), registerCapacity: x64RegisterArgCapacity()), argCount: args.count())
+			call(_, callee, args) gives callOutgoingArgBytes(calleeArgFloatMask(self.abi, callee: callee, argCount: args.count(), registerCapacity: x64RegisterArgCapacity()), argCount: args.count())
 			retVoid or
 				globalAddr or
 				loadIndirect or
 				storeIndirect or
 				osAllocPages gives 0
 			rdataAddr gives 0
-			tryCall(_, _, callee, args) gives callOutgoingArgBytes(calleeArgFloatMask(self.calleeParamClasses, callee: callee, argCount: args.count(), registerCapacity: x64RegisterArgCapacity()), argCount: args.count())
+			tryCall(_, _, callee, args) gives callOutgoingArgBytes(calleeArgFloatMask(self.abi, callee: callee, argCount: args.count(), registerCapacity: x64RegisterArgCapacity()), argCount: args.count())
 
 			// `errorReturn`/`osExit` have no outgoing args; a `funcAddr` is a register-only `lea`.
 			errorReturn or
@@ -1311,12 +1331,12 @@ type StdToX64Lowering
 		let paramFloatMask = floatParamMaskOf(srcFunc.paramTypes)
 
 		for i in 0 upto originalBlockCount 'eachBlock'
-			let blockRef = try srcFunc.blockRefs.get(i) otherwise panic("lowerStdToX64: blockRefs.get OOB at {i} despite the captured bound")
-			let srcBlock = try self.stdModule.blocks.get(blockRef) otherwise panic("lowerStdToX64: blockRef from srcFunc.blockRefs not in stdModule.blocks")
-			var dstBlock = try self.targetModule.blocks.get(blockRef) otherwise panic("lowerStdToX64: targetModule.blocks 1:1 with stdModule.blocks but get({blockRef}) failed")
+			let blockRef = try srcFunc.blockRefs.get(i) otherwise panic("StdToX64Lowering: blockRefs.get OOB at {i} despite the captured bound")
+			let srcBlock = try self.stdModule.blocks.get(blockRef) otherwise panic("StdToX64Lowering: blockRef from srcFunc.blockRefs not in stdModule.blocks")
+			var dstBlock = try self.targetModule.blocks.get(blockRef) otherwise panic("StdToX64Lowering: targetModule.blocks 1:1 with stdModule.blocks but get({blockRef}) failed")
 
 			for opIdx in srcBlock.opRefs 'eachOp'
-				let stdOp = try self.stdModule.ops.get(opIdx) otherwise panic("lowerStdToX64: opIdx from srcBlock.opRefs not in stdModule.ops")
+				let stdOp = try self.stdModule.ops.get(opIdx) otherwise panic("StdToX64Lowering: opIdx from srcBlock.opRefs not in stdModule.ops")
 				let opOutgoing = self.stdOpOutgoingArgBytes(stdOp)
 
 				if opOutgoing > outgoingArgBytes 'largerArgRegion'
@@ -1331,7 +1351,7 @@ type StdToX64Lowering
 
 			if srcBlock.hasTerminatorOp() 'hasTerm'
 				let termIdx = srcBlock.terminatorIndex()
-				let termOp = try self.stdModule.ops.get(termIdx) otherwise panic("lowerStdToX64: terminatorIndex not in stdModule.ops")
+				let termOp = try self.stdModule.ops.get(termIdx) otherwise panic("StdToX64Lowering: terminatorIndex not in stdModule.ops")
 				self.targetModule.spans.current = self.stdModule.spans.at(termIdx)
 				self.lowerTerminatorOp(termOp, dstBlock: dstBlock, returnType: srcFunc.returnType, blockRef: blockRef)
 			end 'hasTerm'
@@ -1382,8 +1402,8 @@ type StdToX64Lowering
 			call(resultId, callee, args) then self.lowerCall(resultId, callee: callee, args: args, dstBlock: dstBlock)
 			ret(retValId) then self.lowerReturn(retValId, dstBlock: dstBlock, returnType: returnType, asTerminator: false)
 			retVoid then self.lowerVoidReturn(dstBlock, returnType: returnType, asTerminator: false)
-			condBranch then panic("lowerStdToX64: a `condBranch` appeared as a body op (lowering bug — a branch is always a block terminator)")
-			branch then panic("lowerStdToX64: a `branch` appeared as a body op (lowering bug — a branch is always a block terminator)")
+			condBranch then panic("StdToX64Lowering: a `condBranch` appeared as a body op (lowering bug — a branch is always a block terminator)")
+			branch then panic("StdToX64Lowering: a `branch` appeared as a body op (lowering bug — a branch is always a block terminator)")
 			globalAddr(resultId, label) then self.lowerGlobalAddr(resultId, label: label, dstBlock: dstBlock)
 			loadIndirect(resultId, addrId, offset, valueType) then self.lowerLoadIndirect(resultId, addrId: addrId, offset: offset, valueType: valueType, dstBlock: dstBlock)
 			storeIndirect(addrId, offset, valueId, valueType) then self.lowerStoreIndirect(addrId, offset: offset, valueId: valueId, valueType: valueType, dstBlock: dstBlock)
@@ -1464,7 +1484,7 @@ type StdToX64Lowering
 			osFreePages(addrId, sizeId) then self.lowerOsFreePages(addrId, sizeId: sizeId, dstBlock: dstBlock)
 
 			// The dense-match jump table is ALWAYS a block terminator, never a body op — see `lowerTerminatorOp`.
-			switch then panic("lowerStdToX64: a `switch` op appeared as a body op (lowering bug — the jump table is always a block terminator)")
+			switch then panic("StdToX64Lowering: a `switch` op appeared as a body op (lowering bug — the jump table is always a block terminator)")
 
 			// P1.7a slice 2a: the fused witness call — arg moves then a memory-indirect `call [witnessAddr + off]`.
 			witnessCall(resultId, witnessAddr, methodIndex, resultType, argFloatMask, args) then self.lowerWitnessCall(resultId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask, dstBlock: dstBlock)
@@ -1584,38 +1604,38 @@ type StdToX64Lowering
 			// match (the tail-slot-Array corruption `lowerIndirectCall` documents; here `defaultBlockId`
 			// follows it, but the helper keeps the discipline uniform).
 			switch then self.lowerSwitch(op, dstBlock: dstBlock)
-			const then panic("lowerStdToX64: a `const` op appeared as a block terminator (lowering bug — a constant is never a terminator)")
-			binOp then panic("lowerStdToX64: a `binOp` op appeared as a block terminator (lowering bug — a binary op is never a terminator)")
-			unaryOp then panic("lowerStdToX64: a `unaryOp` op appeared as a block terminator (lowering bug — a unary op is never a terminator)")
-			cmp then panic("lowerStdToX64: a `cmp` op appeared as a block terminator (lowering bug — a comparison is never a terminator)")
-			binOpImm then panic("lowerStdToX64: a `binOpImm` op appeared as a block terminator (lowering bug — an arithmetic op is never a terminator)")
-			cmpImm then panic("lowerStdToX64: a `cmpImm` op appeared as a block terminator (lowering bug — a comparison is never a terminator)")
-			div then panic("lowerStdToX64: a `div` op appeared as a block terminator (lowering bug — a division is never a terminator)")
-			mod then panic("lowerStdToX64: a `mod` op appeared as a block terminator (lowering bug — a modulo is never a terminator)")
-			param then panic("lowerStdToX64: a `param` op appeared as a block terminator (lowering bug — a parameter is an entry body op)")
-			call then panic("lowerStdToX64: a `call` op appeared as a block terminator (lowering bug — a call is a body op)")
+			const then panic("StdToX64Lowering: a `const` op appeared as a block terminator (lowering bug — a constant is never a terminator)")
+			binOp then panic("StdToX64Lowering: a `binOp` op appeared as a block terminator (lowering bug — a binary op is never a terminator)")
+			unaryOp then panic("StdToX64Lowering: a `unaryOp` op appeared as a block terminator (lowering bug — a unary op is never a terminator)")
+			cmp then panic("StdToX64Lowering: a `cmp` op appeared as a block terminator (lowering bug — a comparison is never a terminator)")
+			binOpImm then panic("StdToX64Lowering: a `binOpImm` op appeared as a block terminator (lowering bug — an arithmetic op is never a terminator)")
+			cmpImm then panic("StdToX64Lowering: a `cmpImm` op appeared as a block terminator (lowering bug — a comparison is never a terminator)")
+			div then panic("StdToX64Lowering: a `div` op appeared as a block terminator (lowering bug — a division is never a terminator)")
+			mod then panic("StdToX64Lowering: a `mod` op appeared as a block terminator (lowering bug — a modulo is never a terminator)")
+			param then panic("StdToX64Lowering: a `param` op appeared as a block terminator (lowering bug — a parameter is an entry body op)")
+			call then panic("StdToX64Lowering: a `call` op appeared as a block terminator (lowering bug — a call is a body op)")
 			globalAddr or
 				loadIndirect or
-				storeIndirect then panic("lowerStdToX64: a memory-band op appeared as a block terminator (lowering bug — a global's address, load and store are all body ops)")
-			osAllocPages then panic("lowerStdToX64: an `osAllocPages` op appeared as a block terminator (lowering bug — a page allocation is a body op)")
-			osWriteStdout then panic("lowerStdToX64: an `osWriteStdout` op appeared as a block terminator (lowering bug — a stdout write is a body op)")
-			rdataAddr then panic("lowerStdToX64: an `rdataAddr` op appeared as a block terminator (lowering bug — an rdata address is a value-producing body op)")
-			tryCall then panic("lowerStdToX64: a `tryCall` op appeared as a block terminator (lowering bug — a throwing call is a value-producing body op)")
+				storeIndirect then panic("StdToX64Lowering: a memory-band op appeared as a block terminator (lowering bug — a global's address, load and store are all body ops)")
+			osAllocPages then panic("StdToX64Lowering: an `osAllocPages` op appeared as a block terminator (lowering bug — a page allocation is a body op)")
+			osWriteStdout then panic("StdToX64Lowering: an `osWriteStdout` op appeared as a block terminator (lowering bug — a stdout write is a body op)")
+			rdataAddr then panic("StdToX64Lowering: an `rdataAddr` op appeared as a block terminator (lowering bug — an rdata address is a value-producing body op)")
+			tryCall then panic("StdToX64Lowering: a `tryCall` op appeared as a block terminator (lowering bug — a throwing call is a value-producing body op)")
 			errorReturn(retValId, errorFlagId) then self.lowerErrorReturn(retValId, errorFlagId: errorFlagId, dstBlock: dstBlock, returnType: returnType, asTerminator: true)
-			osExit then panic("lowerStdToX64: an `osExit` op appeared as a block terminator (lowering bug — a process exit is a body op followed by a dead return)")
-			funcAddr then panic("lowerStdToX64: a `funcAddr` op appeared as a block terminator (lowering bug — a function address is a value-producing body op)")
-			callIndirect then panic("lowerStdToX64: a `callIndirect` op appeared as a block terminator (lowering bug — an indirect call is a value-producing body op)")
-			osPanic then panic("lowerStdToX64: an `osPanic` op appeared as a block terminator (lowering bug — a range panic is a body op followed by a dead return)")
-			osReadClock then panic("lowerStdToX64: an `osReadClock` op appeared as a block terminator (lowering bug — a clock read is a value-consuming body op)")
+			osExit then panic("StdToX64Lowering: an `osExit` op appeared as a block terminator (lowering bug — a process exit is a body op followed by a dead return)")
+			funcAddr then panic("StdToX64Lowering: a `funcAddr` op appeared as a block terminator (lowering bug — a function address is a value-producing body op)")
+			callIndirect then panic("StdToX64Lowering: a `callIndirect` op appeared as a block terminator (lowering bug — an indirect call is a value-producing body op)")
+			osPanic then panic("StdToX64Lowering: an `osPanic` op appeared as a block terminator (lowering bug — a range panic is a body op followed by a dead return)")
+			osReadClock then panic("StdToX64Lowering: an `osReadClock` op appeared as a block terminator (lowering bug — a clock read is a value-consuming body op)")
 			osProcessSpawn or
 				osProcessExitCode or
 				osWaitHandles or
 				osCloseHandle or
-				osWaitHandle then panic("lowerStdToX64: a P1.5 subprocess op appeared as a block terminator (lowering bug — spawn/wait/exit-code/close are all body ops)")
+				osWaitHandle then panic("StdToX64Lowering: a P1.5 subprocess op appeared as a block terminator (lowering bug — spawn/wait/exit-code/close are all body ops)")
 			osHandleSetInherit or
 				osPipePeek or
 				osEnvRead or
-				osProcessTerminate then panic("lowerStdToX64: an attached-subprocess host primitive appeared as a block terminator (lowering bug — the inherit mark, the pipe peek, the env read and the terminate are all body ops)")
+				osProcessTerminate then panic("StdToX64Lowering: an attached-subprocess host primitive appeared as a block terminator (lowering bug — the inherit mark, the pipe peek, the env read and the terminate are all body ops)")
 			osSocketStartup or
 				osSocketResolve or
 				osSocketFreeAddrInfo or
@@ -1624,10 +1644,10 @@ type StdToX64Lowering
 				osSocketSend or
 				osSocketError or
 				osSocketRecv or
-				osSocketClose then panic("lowerStdToX64: a socket host primitive appeared as a block terminator (lowering bug — every socket primitive is a body op, never a terminator)")
-			osFreePages then panic("lowerStdToX64: an `osFreePages` op appeared as a block terminator (lowering bug — a page release is a body op)")
-			witnessCall then panic("lowerStdToX64: a `witnessCall` op appeared as a block terminator (lowering bug — a witness call is a value-producing body op)")
-			witnessTryCall then panic("lowerStdToX64: a `witnessTryCall` op appeared as a block terminator (lowering bug — a throwing witness call is a value-producing body op)")
+				osSocketClose then panic("StdToX64Lowering: a socket host primitive appeared as a block terminator (lowering bug — every socket primitive is a body op, never a terminator)")
+			osFreePages then panic("StdToX64Lowering: an `osFreePages` op appeared as a block terminator (lowering bug — a page release is a body op)")
+			witnessCall then panic("StdToX64Lowering: a `witnessCall` op appeared as a block terminator (lowering bug — a witness call is a value-producing body op)")
+			witnessTryCall then panic("StdToX64Lowering: a `witnessTryCall` op appeared as a block terminator (lowering bug — a throwing witness call is a value-producing body op)")
 			osPipeCreate or
 				osIocpCreate or
 				osEventCreate or
@@ -1641,8 +1661,8 @@ type StdToX64Lowering
 				osCancelIo or
 				osGetPid or
 				osPipeCreateOutbound or
-				osWriteFile then panic("lowerStdToX64: a P1.5 IOCP op appeared as a block terminator (lowering bug — pipe/iocp/event/thread/lock/read/last-error/spawn/cancel/pid are all body ops)")
-			osReadWallClock then panic("lowerStdToX64: an `osReadWallClock` op appeared as a block terminator (lowering bug — a wall-clock read is a value-consuming body op)")
+				osWriteFile then panic("StdToX64Lowering: a P1.5 IOCP op appeared as a block terminator (lowering bug — pipe/iocp/event/thread/lock/read/last-error/spawn/cancel/pid are all body ops)")
+			osReadWallClock then panic("StdToX64Lowering: an `osReadWallClock` op appeared as a block terminator (lowering bug — a wall-clock read is a value-consuming body op)")
 			osFileOpenRead or
 				osFileClose or
 				osReadFile or
@@ -1655,50 +1675,50 @@ type StdToX64Lowering
 				osFileFindNext or
 				osDirCreate or
 				osDirCurrentPath or
-				osFileAttributes then panic("lowerStdToX64: a file-IO op appeared as a block terminator (lowering bug — every one is a body op)")
-			osPanicValue then panic("lowerStdToX64: an `osPanicValue` op appeared as a block terminator (lowering bug — a rendered panic is a body op followed by a dead return, exactly like `osPanic`)")
-			osCommandLine then panic("lowerStdToX64: an `osCommandLine` op appeared as a block terminator (lowering bug — a command-line read is a value-producing body op)")
-			osStdHandle then panic("lowerStdToX64: an `osStdHandle` op appeared as a block terminator (lowering bug — a standard-handle read is a value-producing body op)")
-			osExecutablePath then panic("lowerStdToX64: an `osExecutablePath` op appeared as a block terminator (lowering bug — an executable-path read is a value-producing body op)")
-			osWriteStderr then panic("lowerStdToX64: an `osWriteStderr` op appeared as a block terminator (lowering bug — a stderr write is a body op, exactly like its stdout twin)")
-			stackRecordAddr then panic("lowerStdToX64: a `stackRecordAddr` op appeared as a block terminator (lowering bug — a frame address is a value-producing body op)")
+				osFileAttributes then panic("StdToX64Lowering: a file-IO op appeared as a block terminator (lowering bug — every one is a body op)")
+			osPanicValue then panic("StdToX64Lowering: an `osPanicValue` op appeared as a block terminator (lowering bug — a rendered panic is a body op followed by a dead return, exactly like `osPanic`)")
+			osCommandLine then panic("StdToX64Lowering: an `osCommandLine` op appeared as a block terminator (lowering bug — a command-line read is a value-producing body op)")
+			osStdHandle then panic("StdToX64Lowering: an `osStdHandle` op appeared as a block terminator (lowering bug — a standard-handle read is a value-producing body op)")
+			osExecutablePath then panic("StdToX64Lowering: an `osExecutablePath` op appeared as a block terminator (lowering bug — an executable-path read is a value-producing body op)")
+			osWriteStderr then panic("StdToX64Lowering: an `osWriteStderr` op appeared as a block terminator (lowering bug — a stderr write is a body op, exactly like its stdout twin)")
+			stackRecordAddr then panic("StdToX64Lowering: a `stackRecordAddr` op appeared as a block terminator (lowering bug — a frame address is a value-producing body op)")
 			osOpenNamedSegment or
 				osMapNamedSegment or
-				osTickCountMs then panic("lowerStdToX64: a DebugStream host primitive appeared as a block terminator (lowering bug — all three are value-producing body ops)")
-			osCpuCount then panic("lowerStdToX64: an `osCpuCount` op appeared as a block terminator (lowering bug — a machine query is a value-producing body op)")
-			osThreadCpuTicks then panic("lowerStdToX64: an `osThreadCpuTicks` op appeared as a block terminator (lowering bug — a thread-CPU read is a body op writing through an out-param)")
+				osTickCountMs then panic("StdToX64Lowering: a DebugStream host primitive appeared as a block terminator (lowering bug — all three are value-producing body ops)")
+			osCpuCount then panic("StdToX64Lowering: an `osCpuCount` op appeared as a block terminator (lowering bug — a machine query is a value-producing body op)")
+			osThreadCpuTicks then panic("StdToX64Lowering: an `osThreadCpuTicks` op appeared as a block terminator (lowering bug — a thread-CPU read is a body op writing through an out-param)")
 
 			// F1a: a decommit is a body op, exactly as the page release above is — a page-lifecycle op transfers
 			// control nowhere.
-			osDecommitPages then panic("lowerStdToX64: an `osDecommitPages` op appeared as a block terminator (lowering bug — a decommit is a body op, like the page release above)")
-			memFill then panic("lowerStdToX64: a `memFill` op appeared as a block terminator (lowering bug — a byte fill is a body op; its size dispatch branches INSIDE one macro-op's encoder, never between IR blocks)")
+			osDecommitPages then panic("StdToX64Lowering: an `osDecommitPages` op appeared as a block terminator (lowering bug — a decommit is a body op, like the page release above)")
+			memFill then panic("StdToX64Lowering: a `memFill` op appeared as a block terminator (lowering bug — a byte fill is a body op; its size dispatch branches INSIDE one macro-op's encoder, never between IR blocks)")
 
 			// F1c: a reserve and a commit are value-producing body ops, for the decommit's reason.
 			osCommitPages or
-				osReservePages then panic("lowerStdToX64: a page reserve or commit appeared as a block terminator (lowering bug — both are value-producing body ops, like the page allocation above)")
+				osReservePages then panic("StdToX64Lowering: a page reserve or commit appeared as a block terminator (lowering bug — both are value-producing body ops, like the page allocation above)")
 
 			// F2: all three are value-producing body ops. The arm64 CAS/RMW retry loop BRANCHES, but it does so
 			// inside one macro-op's encoder, never between IR blocks — the same division `memFill` states above.
 			atomicCas or
 				atomicRmw or
-				currentThreadToken then panic("lowerStdToX64: an atomic or a thread-token read appeared as a block terminator (lowering bug — all three are value-producing body ops)")
+				currentThreadToken then panic("StdToX64Lowering: an atomic or a thread-token read appeared as a block terminator (lowering bug — all three are value-producing body ops)")
 			tlsAlloc or
 				tlsSetValue or
 				tlsSlotLoad or
 				osSetEvent or
-				osEnterBackgroundPriority then panic("lowerStdToX64: a TLS op, an event signal or the priority door appeared as a block terminator (lowering bug — none of them is a terminator)")
-			osFileOpenWriteExecutable then panic("lowerStdToX64: a file-IO op appeared as a block terminator (lowering bug — every one is a body op)")
+				osEnterBackgroundPriority then panic("StdToX64Lowering: a TLS op, an event signal or the priority door appeared as a block terminator (lowering bug — none of them is a terminator)")
+			osFileOpenWriteExecutable then panic("StdToX64Lowering: a file-IO op appeared as a block terminator (lowering bug — every one is a body op)")
 			osEnvBlock or
-				osEnvBlockFree then panic("lowerStdToX64: an environment-block read or release appeared as a block terminator (lowering bug — one produces a value and the other is a void side effect, and neither terminates)")
+				osEnvBlockFree then panic("StdToX64Lowering: an environment-block read or release appeared as a block terminator (lowering bug — one produces a value and the other is a void side effect, and neither terminates)")
 			loadAcquire or
-				storeRelease then panic("lowerStdToX64: an ordered load or store appeared as a block terminator (lowering bug — both are body ops)")
-			osHandleFileType then panic("lowerStdToX64: a file-type query appeared as a block terminator (lowering bug — `osHandleFileType` produces a value and does not terminate)")
+				storeRelease then panic("StdToX64Lowering: an ordered load or store appeared as a block terminator (lowering bug — both are body ops)")
+			osHandleFileType then panic("StdToX64Lowering: a file-type query appeared as a block terminator (lowering bug — `osHandleFileType` produces a value and does not terminate)")
 			osCreateNamedSegment or
 				osUnmapNamedSegment or
-				osUnpublishNamedSegment then panic("lowerStdToX64: a named-section create or unmap appeared as a block terminator (lowering bug — one produces a value and the other is a void side effect, and neither terminates)")
-			covPoint then panic("lowerStdToX64: a `covPoint` appeared as a block terminator (lowering bug — a coverage counter is emitted at a block HEAD, ahead of the code it counts)")
-			osHostSample then panic("lowerStdToX64: an `osHostSample` op appeared as a block terminator (lowering bug — a host sample call produces a value and does not terminate)")
-			osNetpoll then panic("lowerStdToX64: an `osNetpoll` op appeared as a block terminator (lowering bug — a poller call produces a value and does not terminate)")
+				osUnpublishNamedSegment then panic("StdToX64Lowering: a named-section create or unmap appeared as a block terminator (lowering bug — one produces a value and the other is a void side effect, and neither terminates)")
+			covPoint then panic("StdToX64Lowering: a `covPoint` appeared as a block terminator (lowering bug — a coverage counter is emitted at a block HEAD, ahead of the code it counts)")
+			osHostSample then panic("StdToX64Lowering: an `osHostSample` op appeared as a block terminator (lowering bug — a host sample call produces a value and does not terminate)")
+			osNetpoll then panic("StdToX64Lowering: an `osNetpoll` op appeared as a block terminator (lowering bug — a poller call produces a value and does not terminate)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -1727,16 +1747,16 @@ type StdToX64Lowering
 	// the same bytes by construction rather than by agreement. Both happen inside the ONE door on the table
 	// that owns `.rdata` labels: see `GlobalDataTable.registerFloatConstant` for why the value, why the
 	// labelled door and not the byte-dedup one, why the payload is minted there rather than at each isel,
-	// and why the mint is memoized. What stays here is what is this target's own — the type check below,
-	// and which load op carries the label.
+	// and why the mint is memoized. The label is spelled here off the same formula and the registration is
+	// requested for the driver (`RdataRequestLog.floatConstant`). What stays here is what is this target's
+	// own — the type check below, and which load op carries the label.
 	//
 	// ⚠ THE OP IS NOT REMATERIALIZABLE, which is worth knowing precisely because it reads no
 	// register and therefore looks like it should be. See `movsdRegRip` in TargetDialect: rebuilding
 	// it needs a fresh RELOCATION, which the remat path has no way to express.
 	function lowerFloatConst(resultId ValueId, value ParsedInt, valueType StdType, dstBlock IrBlock)
 		requireScalarDouble(valueType, what: "lowerFloatConst")
-		let label = self.globalData.registerFloatConstant(value)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movsdRegRip(TargetVReg.virtual(resultId), label: label.toByteArray()))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movsdRegRip(TargetVReg.virtual(resultId), label: self.rdata.floatConstant(value)))
 	end 'lowerFloatConst'
 
 	// ⭐⭐ EC19 — **SWAP A COMMUTATIVE OP'S OPERANDS WHEN THE LEFT ONE SURVIVES THE OP AND THE RIGHT
@@ -2334,13 +2354,13 @@ type StdToX64Lowering
 	end 'lowerParam'
 
 	// The physical register a call to `callee` returns its PRIMARY value in — **XMM0** for a
-	// float-returning callee, **R8** otherwise. Read off the SAME checked name index the
+	// float-returning callee, **R8** otherwise. Read off the SAME ABI table the
 	// value-class column uses (`calleeResultClass`), so the value the capture move writes into is coloured
 	// in the file the register it reads from lives in: a float result is XMM-classed, so `movRegReg` sees
 	// two XMM ends (a `movsd`), never a cross-file `mov r, xmm`. The error-flag register (R10) is separate
 	// and unconditional — it is always a GPR.
 	function callResultRegister(callee ByteArray) returns X64Register
-		return X64Register.xmm0 if calleeResultClass(self.funcNames, callee: callee) == RegClass.xmm else X64Register.r8
+		return X64Register.xmm0 if calleeResultClass(self.abi, callee: callee) == RegClass.xmm else X64Register.r8
 	end 'callResultRegister'
 
 	// The DIRECT-call argument moves: each argument's register FILE is the CALLEE's declared PARAM class,
@@ -2350,7 +2370,7 @@ type StdToX64Lowering
 	// is the very one the callee's `lowerParam` folds out of its declared parameter types. Shared by
 	// `lowerCall` and `lowerTryCall`, whose argument passing is identical (extracted so the two cannot drift).
 	function emitCallArgMoves(callee ByteArray, args ValueIdArray, dstBlock IrBlock)
-		self.emitArgMovesByFloatMask(args, argFloatMask: calleeArgFloatMask(self.calleeParamClasses, callee: callee, argCount: args.count(), registerCapacity: x64RegisterArgCapacity()), dstBlock: dstBlock)
+		self.emitArgMovesByFloatMask(args, argFloatMask: calleeArgFloatMask(self.abi, callee: callee, argCount: args.count(), registerCapacity: x64RegisterArgCapacity()), dstBlock: dstBlock)
 	end 'emitCallArgMoves'
 
 	// Lower a Std `call` to the x64 call sequence: move each argument into its ABI register
@@ -3408,7 +3428,7 @@ type StdToX64Lowering
 	// A RUNTIME abort naming an op that is statically reachable and dynamically unreachable — `osCancelIo`'s
 	// shape on every POSIX lane. A compile-time panic would refuse every program that merely CONTAINS the arm.
 	function lowerRuntimeAbort(dstBlock IrBlock, message ByteArray)
-		self.lowerPanic(registerStringBlob(self.globalData, bytes: message).toByteArray(), dstBlock: dstBlock)
+		self.lowerPanic(self.rdata.stringBlob(message), dstBlock: dstBlock)
 	end 'lowerRuntimeAbort'
 
 	// Lower `osPipeCreate` to the five-call overlapped-read-pipe sequence. The two handles land in
@@ -4034,7 +4054,7 @@ type StdToX64Lowering
 	function requireWin64Import(opName String)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then return
-			syscall then panic("lowerStdToX64: `{opName}`'s only x64 lowering is a Win32 import, and this op's Std producer is supposed to emit a different graph on a syscall lane — reaching here means the producer did not fork")
+			syscall then panic("StdToX64Lowering: `{opName}`'s only x64 lowering is a Win32 import, and this op's Std producer is supposed to emit a different graph on a syscall lane — reaching here means the producer did not fork")
 		end 'route'
 	end 'requireWin64Import'
 
@@ -4849,7 +4869,7 @@ type StdToX64Lowering
 	// what made building the CFG skeleton O(total ops) (see `CondBranch`). It also seals the
 	// block: `appendOp` refuses to append past a conditional branch.
 	function lowerCondBranch(condId ValueId, thenBlockId BlockId, elseBlockId BlockId, dstBlock IrBlock, blockRef BlockRef)
-		let orderedId = try self.orderedBlockIds.get(blockRef) otherwise 'notFloatEquality'
+		let orderedId = try self.orderedBlockIds.idOf(blockRef) otherwise 'notFloatEquality'
 			let cond = self.branchConditionCode(condId, blockRef: blockRef, dstBlock: dstBlock)
 			self.targetModule.appendCondBranch(dstBlock, op: TargetOp.jcc(cond, targetBlockId: thenBlockId))
 			self.targetModule.setTerminator(dstBlock, op: TargetOp.jmp(elseBlockId))
@@ -4954,7 +4974,7 @@ type StdToX64Lowering
 	// whole of every block (its `dstBlock`) — the rule `moveBranchEdgeToSplit` scopes its helpers
 	// apart to obey. It also pushes to `srcFunc.blockRefs`, which the walk reads by index.
 	// Running it before either borrow exists is what makes both safe.
-	function reserveFloatEqualityBlocks(funcIdx FuncIndex) returns OrderedBlockIdMap
+	function reserveFloatEqualityBlocks(funcIdx FuncIndex) returns OrderedBlockRoster
 		// COLLECT FIRST, THEN MINT — `splitCriticalEdgesInFunc`'s exact discipline, and for its
 		// exact reason: the mint below fetches and MUTATES the function, so no borrow of it may
 		// still be live, and it also appends to the very `blockRefs` this would otherwise iterate.
@@ -4962,10 +4982,10 @@ type StdToX64Lowering
 		// stays valid across all of them.
 		let toSplit = self.blocksNeedingFloatEqualitySplit(funcIdx)
 
-		var reserved = OrderedBlockIdMap.create()
+		var reserved = OrderedBlockRoster.create()
 
 		for blockRef in toSplit 'eachSplit'
-			reserved.upsert(blockRef, value: self.buildOrderedBlock(funcIdx, blockRef: blockRef))
+			reserved.record(blockRef, id: self.buildOrderedBlock(funcIdx, blockRef: blockRef))
 		end 'eachSplit'
 
 		return reserved
@@ -5215,7 +5235,7 @@ type StdToX64Lowering
 	// coexist. Reads come first, then the mint, then the writes.
 	function buildOrderedBlock(funcIdx FuncIndex, blockRef BlockRef) returns BlockId
 		// The condition value is not needed here any more: the predicate is looked up by BLOCK
-		// (see `CmpPredMap`), which is the same key this split was selected under.
+		// (see `FusedPredColumn`), which is the same key this split was selected under.
 		let (_, thenBlockId, elseBlockId) = self.condBranchFieldsOf(blockRef)
 		let pred = self.compareFusion.fusedPredicateOf(blockRef)
 
@@ -5236,12 +5256,13 @@ type StdToX64Lowering
 	// the established way a Target-tier pass grows the CFG — including its deliberate omission of
 	// `blockSourceInfo`, which the Target module does not carry (`prepareSkeleton` never fills it).
 	// The function is fetched HERE, by index, and mutated directly — its borrow never escapes to a
-	// caller that could still be holding one. Same shape as `addSplitBlock`.
+	// caller that could still be holding one. Same shape as `addSplitBlock`, down to the inline site
+	// being COPIED: the original block keeps its own box, and the module travels home in a reply.
 	function addOrderedBlock(funcIdx FuncIndex, heat BlockHeat, inlineSite InlineSiteRef) returns BlockRef
 		var srcFunc = self.stdModule.getFunc(funcIdx)
 		let newId = srcFunc.nextBlockId
 		srcFunc.nextBlockId = srcFunc.nextBlockId + 1
-		self.targetModule.blocks.push(IrBlock.create(newId, label: FloatOrderedLabel, heat: heat, inlineSite: inlineSite))
+		self.targetModule.blocks.push(IrBlock.create(newId, label: FloatOrderedLabel, heat: heat, inlineSite: copiedInlineSite(inlineSite)))
 		let newRef = self.targetModule.blocks.count() - 1
 		srcFunc.blockRefs.push(newRef)
 		return newRef
@@ -5412,9 +5433,10 @@ type StdToX64Lowering
 		self.targetModule.setTerminator(dstBlock, op: TargetOp.jmp(targetBlockId))
 	end 'lowerBranch'
 
-	// Lower the dense-match jump table to the x64 `x64JumpTable` terminator. Reserves the `.rdata` blob of
-	// N i32 slots HERE (the lowering owns `globalData`, exactly as `lowerFloatConst` registers its float
-	// island), and the op carries the unique blob label the encoder emits a `lea` to and the writer patches.
+	// Lower the dense-match jump table to the x64 `x64JumpTable` terminator. Requests the `.rdata` blob of
+	// N i32 slots HERE (through the request log, exactly as `lowerFloatConst` requests its float island),
+	// and the op carries the blob's label — a placeholder until the driver registers the blob and patches
+	// it (`RdataRequests`) — which the encoder emits a `lea` to and the writer patches.
 	// The biased index rides as a virtual register; `caseTargets`/`defaultBlockId` are the CFG the successor
 	// walker and the encoder read. RE-MATCHES `op` in a SMALL match — the `lowerIndirectCall` discipline.
 	function lowerSwitch(op StdOp, dstBlock IrBlock)
@@ -5425,8 +5447,7 @@ type StdToX64Lowering
 	end 'lowerSwitch'
 
 	function emitJumpTable(subjectId ValueId, caseTargets BlockIdArray, defaultTarget BlockId, dstBlock IrBlock)
-		let tableLabel = self.globalData.registerJumpTable(caseTargets.count())
-		self.targetModule.setTerminator(dstBlock, op: TargetOp.x64JumpTable(TargetVReg.virtual(subjectId), defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel.toByteArray()))
+		self.targetModule.setTerminator(dstBlock, op: TargetOp.x64JumpTable(TargetVReg.virtual(subjectId), defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: self.rdata.jumpTable(caseTargets.count())))
 	end 'emitJumpTable'
 
 	// Value return: move the value into the primary-return register (R8), then emit the
@@ -5451,7 +5472,7 @@ type StdToX64Lowering
 	// of the value/void contract can be broken quietly.
 	function lowerVoidReturn(dstBlock IrBlock, returnType StdReturnType, asTerminator bool)
 		if not stdReturnTypeIsVoid(returnType) 'valueExpected'
-			panic("lowerStdToX64: a `retVoid` in a value-returning function — the return register would never be written, and the caller would read garbage")
+			panic("StdToX64Lowering: a `retVoid` in a value-returning function — the return register would never be written, and the caller would read garbage")
 		end 'valueExpected'
 
 		self.emitRet(dstBlock, asTerminator: asTerminator)
@@ -5498,7 +5519,7 @@ type StdToX64Lowering
 	// directly.)
 	function emitPrimaryReturnMove(retValId ValueId, dstBlock IrBlock, returnType StdReturnType)
 		if stdReturnTypeIsVoid(returnType) 'void'
-			panic("lowerStdToX64: a value `ret` in a void-returning function — a void return lowers to `StdOp.retVoid`, which never reaches this path")
+			panic("StdToX64Lowering: a value `ret` in a void-returning function — a void return lowers to `StdOp.retVoid`, which never reaches this path")
 		end 'void'
 
 		self.emitReturnValueMove(retValId, dstBlock: dstBlock, returnType: returnType)

@@ -79,6 +79,13 @@ let FloatConstantLabelPrefix = "__fconst_"
 // A float constant's IEEE bit pattern to the label minted for it — see `registerFloatConstant`.
 export typealias FloatConstantLabelMap = Map with (ParsedInt, String)
 
+// The label a float island is registered under. Exported because an isel running on a pool worker spells
+// the label into its load op itself and registers the island through the main thread afterwards
+// (`RdataRequestLog`): one formula, so the op and the table cannot name the island differently.
+export function floatConstantLabel(bits ParsedInt) returns String
+	return "{FloatConstantLabelPrefix}{scalarConstantText(bits, isFloat: true)}"
+end 'floatConstantLabel'
+
 // ⭐⭐ **WHAT A `.rdata` PAYLOAD *IS*, recorded by the party that knows — the registering caller — at the
 // one moment it is known.** The table has always held a label, some bytes and an offset, which is
 // everything the WRITERS need and nothing a READER can interpret: `TargetPrinter` is handed a
@@ -677,7 +684,7 @@ export type GlobalDataTable
 	// (below ×2 ⇒ sublinear), with CPU −0.7%…−3.3% and `codeBytes` IDENTICAL at all six rungs.
 	export function registerFloatConstant(bits ParsedInt) returns String
 		return try self.floatConstantLabels.get(bits) otherwise 'firstSighting'
-			let label = "{FloatConstantLabelPrefix}{scalarConstantText(bits, isFloat: true)}"
+			let label = floatConstantLabel(bits)
 			self.floatConstantLabels.upsert(bits, value: label)
 			return self.registerRdataConstantLabeled(label, bytes: scalarImage(bits, byteCount: stdTypeStorageBytes(StdType.f64)), kind: RdataPayloadKind.floatConstant)
 		end 'firstSighting'

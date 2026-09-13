@@ -1,0 +1,531 @@
+// BackendPool — INSTRUCTION SELECTION, CRITICAL-EDGE SPLITTING AND REGISTER ALLOCATION ON A POOL OF WORKER
+// SERVICES, one per processor: every function goes through all three on one worker, as ONE backend unit.
+//
+// ⚠ A run under `MAXON_MAX_PROCS=1` is THIS pool with one processor in it, not a serial fallback —
+// which is what makes the pinned and the default lane the same code path and their outputs comparable
+// at all.
+//
+// ⭐⭐ **WHY THESE THREE, TOGETHER.** The allocator is the largest pass in the compiler and it is PER
+// FUNCTION; the isel before it is per function too, and the edge split between them adds blocks to one
+// function at a time. Fusing them means a function crosses to a worker ONCE — as a Std unit — and comes
+// home ONCE — as a finished Target function — instead of being extracted, spliced and re-extracted around
+// a serial isel that ran on the main thread between two pools.
+//
+// ⭐⭐ **WHAT MAKES IT SAFE IS THE UNIT, NOT LOCKING — there is none.** A message MOVES, so a worker is
+// handed a `BackendUnit` nobody else can reach and hands back a `BackendUnitReply` nobody else can reach.
+// `BackendUnit`'s header owns that argument.
+//
+// ⭐⭐ **AND THE OUTPUT DOES NOT DEPEND ON THE POOL.** Splicing is order-independent — a reply appends its
+// ops and blocks to the module's two arrays, and an index into either reaches no emitted byte
+// (`BackendUnit`'s header) — and everything that is NOT order-independent is done in FUNCTION-INDEX ORDER
+// on this thread after the drain: the `.rdata` registrations every isel made (`RdataRequests` — a jump
+// table's label and every island's offset are minted off ONE counter, in registration order), and
+// `foldFunctionAllocation` (the per-function trace event carries a CUMULATIVE counter, and
+// `RegAllocStats.recordPressure` keeps the FIRST function to reach a maximum). The two byte-identity gates
+// pass on a pool of one (`tests/parallel-compile/byte-identical`, `rdata-order`).
+//
+// ⚠ **THE THREE THINGS A WORKER STRUCTURALLY CANNOT DO** are what shaped the split, and each is a rule
+// with teeth rather than a preference. It may not touch a module `var` — E3143, because a green thread
+// runs on whichever OS thread the scheduler gives it — which rules out the logger, the trace-span stack,
+// the `.rdata` table and every `Project` table. It may not await — E3139 refuses a service that blocks on
+// another, and this one never sends. And it may not be handed anything a second frame still owns — E3138
+// at the send, exit 96 at run time — which is why a unit is built inside the argument expression and the
+// callee ABI table is copied per worker.
+
+// How many jobs are kept in flight PER WORKER.
+//
+// ⚠ **ONE IS TOO FEW, AND NOT AS A TUNING GUESS: with one, a worker is idle from the instant it posts a
+// reply until the driver has selected it, awaited it, SPLICED it — which walks the function's blocks —
+// and extracted the next unit, which walks the next function's ops.** That is main-thread work proportional
+// to the very function the worker just finished, so at one job in flight the pool's throughput is bounded
+// by the main thread's serial half. Two means the next job is already in the worker's mailbox when it
+// finishes one.
+//
+// More than two buys nothing and costs memory: a unit in flight is a full copy of one function's ops, so
+// the queue depth IS the pool's peak memory over the module.
+//
+// `PoolDispatch` applies it to both pools, whose units and splices have the same shape.
+let JobsInFlightPerWorker = 2
+
+// A reply cell carrying one finished function. `BackendWorker.run.errors` is the synthesized fusion of
+// `ServiceError` (the service can be gone) with what the message itself throws — see `specs/services.md`;
+// a promise declared over the bare `ServiceError` is E3098 here, because it would erase the refusal.
+typealias BackendReply = Promise with (BackendUnitReply, BackendWorker.run.errors)
+typealias BackendReplyArray = Array with BackendReply
+typealias BackendWorkerHandleArray = Array with BackendWorker.handle
+
+// A position in a pool's own arrays — a worker slot, an in-flight reply, a job in the dispatch order.
+export typealias PoolSlot = int(0 to u64.max)
+
+// How many workers a pool holds, or how many functions it has to run. NARROWED to exclude zero, which
+// is what lets the round-robin and the key unpacking DIVIDE by one: both are reached only past a guard
+// that has already answered for the empty module, and a range is how that guard is carried to the
+// arithmetic instead of being remembered at it.
+export typealias PoolSize = int(1 to u32.max)
+
+export typealias PoolSlotArray = Array with PoolSlot
+
+// A position in a pool's landing array — where one function's answer was pushed as it arrived.
+export typealias LandingSlot = int(0 to u64.max)
+export typealias LandingSlotArray = Array with LandingSlot
+
+// ⭐ **WHERE EACH FUNCTION'S ANSWER LANDED — the column that turns arrival order back into index order.**
+// A drain pushes answers as they arrive and records the slot here; the fold after the drain walks the
+// functions in index order and reads each one's answer through `slotOf`. One record for both pools.
+export type LandingSlots
+	var slotOfFunc as LandingSlotArray
+	var funcCount as FuncCount
+
+	// Filled with the one value no landing slot has — the function count — so a function that never
+	// landed is a panic at the fold rather than function 0's answer folded twice.
+	export static function create(funcCount FuncCount) returns LandingSlots
+		var slotOfFunc = LandingSlotArray.create()
+		slotOfFunc.refill(funcCount as ElementIndex, value: funcCount as LandingSlot)
+		return Self{slotOfFunc: slotOfFunc, funcCount: funcCount}
+	end 'create'
+
+	export function record(funcIndex FuncIndex, slot LandingSlot)
+		try self.slotOfFunc.set(funcIndex, value: slot) otherwise panic("LandingSlots.record: slotOfFunc.set OOB at {funcIndex} below {self.funcCount}")
+	end 'record'
+
+	export function slotOf(funcIndex FuncIndex) returns LandingSlot
+		let slot = try self.slotOfFunc.get(funcIndex) otherwise panic("LandingSlots.slotOf: slotOfFunc.get OOB at {funcIndex} below {self.funcCount}")
+
+		if slot == self.funcCount as LandingSlot 'neverLanded'
+			panic("LandingSlots.slotOf: function {funcIndex} never came home from the pool — the drain awaits every reply, so a function with no landing slot is a dispatch that never happened")
+		end 'neverLanded'
+
+		return slot
+	end 'slotOf'
+end 'LandingSlots'
+
+// ⭐⭐ **THE HALF OF A POOL DRAIN THAT NAMES NO MESSAGE — one record for both drains, this pool's and
+// `StdPassPool`'s.** A drain fills a pipeline of `JobsInFlightPerWorker` jobs per worker longest-first,
+// then serves whichever reply `awaitAny` answers and hands its worker the next job in order. Everything
+// in that protocol that is not the reply itself lives here: the dispatch order and how far it has been
+// consumed, and for each outstanding reply which function it is for and which worker holds it.
+//
+// ⚠ **THE REPLY ARRAY STAYS WITH THE CALLER, IN THE SAME SLOT ORDER.** A reply's type names the worker's
+// message (`run`), which no shared record can be generic over. So a caller pushes its reply exactly when
+// it takes a job (`nextJob`) and removes the reply at the slot `awaitAny` answered exactly when it lands
+// that slot here (`land`); the two columns here and the caller's array are one sequence, and `land`'s
+// count check is what catches a caller that pushed without taking or took without pushing.
+export type PoolDispatch
+	var order as FuncIndexArray
+	var jobCount as PoolSize
+	var workerCount as PoolSize
+	var dispatched as PoolSlot
+	var replyJob as FuncIndexArray
+	var replyWorker as PoolSlotArray
+
+	export static function create(functions IrFunctionArray, blocks IrBlockArray, funcCount PoolSize, workerCount PoolSize) returns PoolDispatch
+		return Self{order: functionsLongestFirst(functions, blocks: blocks, funcCount: funcCount), jobCount: funcCount, workerCount: workerCount, dispatched: 0, replyJob: FuncIndexArray.create(), replyWorker: PoolSlotArray.create()}
+	end 'create'
+
+	// How many jobs the fill hands out before the first await: the pipeline, or every job when there are
+	// fewer.
+	export function initialInFlight() returns PoolSlot
+		let pipeline = self.workerCount * JobsInFlightPerWorker
+		let inFlight = pipeline if pipeline < self.jobCount else self.jobCount
+		return inFlight as PoolSlot
+	end 'initialInFlight'
+
+	// The worker the fill's next job goes to: round-robin over the pool.
+	export function fillWorker() returns PoolSlot
+		return try (self.dispatched mod (self.workerCount as PoolSlot)) otherwise panic("PoolDispatch.fillWorker: a pool of no workers never reaches the dispatch loop")
+	end 'fillWorker'
+
+	export function hasUndispatched() returns bool
+		return self.dispatched < self.jobCount as PoolSlot
+	end 'hasUndispatched'
+
+	// Take the next job in dispatch order for `worker`. The caller pushes the worker's reply now, at the
+	// slot these columns just gained.
+	export function nextJob(worker PoolSlot) returns FuncIndex
+		let job = try self.order.get(self.dispatched) otherwise panic("PoolDispatch.nextJob: the dispatch order holds {self.order.count()} job(s) and slot {self.dispatched} is past the end — ask `hasUndispatched` first")
+		self.dispatched = self.dispatched + 1
+		self.replyJob.push(job)
+		self.replyWorker.push(worker)
+		return job
+	end 'nextJob'
+
+	// The worker holding the reply at `ready`, free once the caller lands that slot.
+	export function workerAt(ready ElementIndex) returns PoolSlot
+		return try self.replyWorker.get(ready) otherwise panic("PoolDispatch.workerAt: {ready} is not an outstanding slot — {self.replyWorker.count()} are in flight")
+	end 'workerAt'
+
+	// Land the reply at `ready` — `awaitAny`'s answer over the caller's reply array — and say which
+	// function it was for. `outstanding` is that array's count before the caller removes its reply, so
+	// the two sequences are checked to be one.
+	export function land(ready ElementIndex, outstanding ElementIndex) returns FuncIndex
+		if outstanding != self.replyJob.count() 'columnsOutOfStep'
+			panic("PoolDispatch.land: the caller holds {outstanding} reply(ies) against {self.replyJob.count()} job(s) in flight — a reply was pushed without `nextJob`, or a job taken without its reply being pushed")
+		end 'columnsOutOfStep'
+
+		_ = try self.replyWorker.remove(ready) otherwise panic("PoolDispatch.land: replyWorker.remove({ready}) — the two columns are pushed and removed together")
+		return try self.replyJob.remove(ready) otherwise panic("PoolDispatch.land: replyJob.remove({ready}) — `awaitAny` answered a slot of the caller's reply array, which is in step with this one")
+	end 'land'
+end 'PoolDispatch'
+
+// How many ops one function holds, and the packed longest-first sort key built from it.
+typealias FunctionOpTally = int(0 to u64.max)
+typealias FunctionOpTallyArray = Array with FunctionOpTally
+
+// The isel of one ISA, as a worker holds it for the whole compile. A union rather than an interface
+// value because a worker's state is MOVED at `spawn`, and a value held at an interface type cannot cross
+// (E3135); the two conversions are otherwise interchangeable here.
+union UnitLowering
+	x64(lowering StdToX64Lowering)
+	arm64(lowering StdToArm64Lowering)
+end 'UnitLowering'
+
+typealias UnitLoweringArray = Array with UnitLowering
+
+module function unitLoweringFor(target Target, abi CalleeAbiTable, usesGt bool) returns UnitLowering
+	return match target.cpu 'cpu'
+		x64 gives UnitLowering.x64(StdToX64Lowering.create(target, abi: abi, usesGt: usesGt))
+		arm64 gives UnitLowering.arm64(StdToArm64Lowering.create(target, abi: abi, usesGt: usesGt))
+		wasm32 panic("unitLoweringFor: the wasm backend consumes the Std module directly and runs no backend unit (got {targetToString(target)})")
+	end 'cpu'
+end 'unitLoweringFor'
+
+function lowerUnitWith(lowering UnitLowering, unitModule StdModule) returns LoweredUnit
+	return match lowering 'isa'
+		x64(isel) gives isel.lowerUnit(unitModule)
+		arm64(isel) gives isel.lowerUnit(unitModule)
+	end 'isa'
+end 'lowerUnitWith'
+
+// ⭐ **THE ISEL AND THE EDGE SPLIT, AS ONE DOOR** — the worker's (`BackendWorker.finish`) and the E5001
+// re-run's (`refuseForRegisterPressure`). The re-run recovers a refusal by taking the function through
+// exactly what the worker did, so a step added here reaches both; one added beside it in a single caller
+// would make the two runs disagree, which the re-run can only report as a nondeterminism in the allocator.
+// The isel's bracket is closed into the caller's `iselCost`; the split's goes into `costs` under its own
+// sub-phase.
+module function lowerAndSplitUnit(lowering UnitLowering, unitModule StdModule, target Target, costs PoolPhaseCosts, iselCost PhaseDelta) returns LoweredUnit
+	let iselProbe = PhaseProbe.beginCounters()
+	let lowered = lowerUnitWith(lowering, unitModule: unitModule)
+	iselProbe.elapsedInto(iselCost)
+
+	let edgeProbe = PhaseProbe.beginCounters()
+	splitCriticalEdges(lowered.targetModule, target: target)
+	costs.record(RegAllocPhase.criticalEdges.ordinal, probe: edgeProbe)
+	return lowered
+end 'lowerAndSplitUnit'
+
+// ⭐⭐ **THE WORKER. Its state is the isel of this compile's ISA, and the four per-ISA facts the allocator
+// runs on** — derived once from the two enums it is handed and never re-derived. `OpVariantFacts`
+// especially: every fact in it is a property of the DIALECT (which registers a `callDirect` clobbers,
+// whether a `loadRegSlot` touches a spill slot), so its natural lifetime is the whole compile — rebuilt
+// per message it would re-derive the ~30 cases each function's ops name, on every function the pool sees.
+// The isel's analyses (`CompareFusionCensus`, `ScaledIndexFolds`) are scratches the same way: built once,
+// recomputed per unit.
+//
+// ⚠ **IT IS HANDED `cpu` AND `os`, NOT A `Target`, AND ITS OWN COPY OF THE ABI TABLE.** A `spawn`'s
+// factory arguments are MOVED, and the driver keeps its own `target` and its own table for the rest of
+// the compile — so passing either record would be handing a box to a second green thread while this one
+// still holds it, which is E3138 at best and exit 96 at worst. Two enums are scalars and copy; the table
+// is copied per worker (`CalleeAbiTable.copyOf`).
+//
+// ⛔ **THE ISEL IS BUILT ON THE FIRST MESSAGE, NOT AT `spawn`** — `StdPassWorker`'s rule, for its reason.
+// The factory's result is MOVED to the service exactly as an argument is, and the transfer walk requires
+// one owner per record; the isel's scratches reach shared records by design (every `StdValueUseSet` is
+// wired to one module-level empty, and the isel and the worker each hold the ABI table). Built on the
+// worker's own green thread, past every walk, that sharing is what it should be.
+//
+// ⚠ **AND THE FOUR IT DERIVES ARE THE DRIVER'S OWN, NOT A SECOND OPINION OF THEM.** `Target` has exactly
+// those two fields, and each of the four comes from the same pure function the driver called — so the
+// reconstruction is exact, not approximate. That matters because the driver's copies are what a REFUSAL
+// is rendered against (`refuseForRegisterPressure`): a pool colouring against one pool while E5001
+// measured a deficit against another would be a diagnostic about a machine nobody compiled for.
+export type BackendWorker
+	var target as Target
+	var abi as CalleeAbiTable
+	var usesGt as bool
+	var pool as RegMask
+	var callerSaved as RegMask
+	var file as RegisterFile
+	var opFacts as OpVariantFacts
+
+	// Empty until the first message (`lowering`), then the one isel of this compile's ISA.
+	var lowerings as UnitLoweringArray
+
+	static function create(cpu CpuArch, os Os, abi CalleeAbiTable, usesGt bool) returns Self
+		let target = Target.create(cpu, os: os)
+		return Self{target: target, abi: abi, usesGt: usesGt, pool: allocatablePool(target), callerSaved: callerSavedMaskFor(target), file: registerFileFor(target), opFacts: OpVariantFacts.create(), lowerings: UnitLoweringArray.create()}
+	end 'create'
+
+	// The isel is handed a `Target` of its own rather than this worker's: the driver's E5001 re-run builds
+	// an isel the same way, and a record two fields hold would be a second owner at a walk.
+	function lowering() returns UnitLowering
+		if self.lowerings.count() == 0 'firstMessage'
+			self.lowerings.push(unitLoweringFor(Target.create(self.target.cpu, os: self.target.os), abi: self.abi, usesGt: self.usesGt))
+		end 'firstMessage'
+
+		return try self.lowerings.get(0) otherwise panic("BackendWorker.lowering: the isel slot is empty after the first message filled it")
+	end 'lowering'
+
+	// The message. It never awaits and never sends, which is what makes the blocking graph E3139 checks
+	// trivially acyclic: a pool worker is a leaf.
+	export function run(unit BackendUnit) returns BackendUnitReply throws RegAllocRefusal
+		return try BackendUnitReply.afterRunning(unit, worker: self)
+	end 'run'
+
+	// ⭐ **ONE UNIT THROUGH ALL THREE STAGES**, each bracketed on this thread's counters: the isel into
+	// its own delta, the edge split and the allocator's sub-phases into one `PoolPhaseCosts` — the same
+	// rows a serial run bills them to.
+	//
+	// ⛔ **THE ORPHANS GO BEFORE THE REPLY.** The allocator's rewrite leaves the uncoloured op behind in the
+	// flat array beside the coloured one that replaced it, sharing its managed payloads — and a reply moves,
+	// so every record reachable from it must have one owner. Compacting drops the orphans, which is also
+	// what makes the reply carry the function's live ops and nothing else.
+	module function finish(body BackendUnitBody) returns FinishedUnit throws RegAllocRefusal
+		var costs = PoolPhaseCosts.create(RegAllocPhase.allCases.count())
+		var iselCost = PhaseDelta.zero()
+		let lowered = lowerAndSplitUnit(self.lowering(), unitModule: body.unitModule, target: self.target, costs: costs, iselCost: iselCost)
+		var unitFunc = lowered.targetModule.getFunc(UnitFunctionIndex)
+		var counters = RegAllocCounters.create()
+		var facts = RegAllocFacts.create()
+		var refusal = RegAllocRefusalSite.create()
+		var debugLocations = DebugValueLocationArray.create()
+		try allocateFunctionCore(lowered.targetModule, func: unitFunc, hasAuthor: body.hasAuthor, pool: self.pool, callerSaved: self.callerSaved, file: self.file, valueClass: lowered.valueClass, opFacts: self.opFacts, counters: counters, costs: costs, facts: facts, refusal: refusal, debugValueIds: body.debugValueIds, debugLocations: debugLocations)
+		unitFunc.debugLocalLocations = debugLocations
+
+		// Asked HERE because this is where the unit stops being appended to: the splitter and SSA
+		// destruction have both run, and both mint ops by pushing onto `ops` directly.
+		lowered.targetModule.spans.requireParallelTo(lowered.targetModule.ops.count(), what: "after allocation")
+		lowered.targetModule.compactOps()
+
+		return FinishedUnit.create(lowered.targetModule, landing: BackendUnitLanding.create(lowered.rdata, counters: counters, facts: facts, costs: costs, iselCost: iselCost))
+	end 'finish'
+end 'BackendWorker'
+
+// ⭐⭐ **LOWER AND ALLOCATE EVERY FUNCTION ON A POOL OF `min(P, F)` WORKERS, and hand back the assembled
+// Target module.** The one entry both native backends call.
+//
+// P is the SCHEDULER's resolved processor count, not the machine's: `MAXON_MAX_PROCS=1` resolves it to
+// one and the pool is then one worker, which is the whole of what pinning does here. F is the function
+// count, because a worker with no function to run is a mailbox and a green thread bought for nothing.
+//
+// `throws CompileError` because a genuine hot-loop overflow is E5001, reported onto `project.diagnostics`.
+// Only USER functions are present here — x64's `mrt_start` is prepended AFTER this pass by
+// `augmentWithRuntime` (it is hand-built in physical registers).
+export function lowerAndAllocateOnAWorkerPool(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, funcNames FunctionNameIndex, usesGt bool) returns TargetModule throws CompileError
+	logDebug(LogCategory.codegen, message: function() gives "Register allocation ({targetToString(target)})")
+
+	// ⭐ THE THREE PER-ISA FACTS THE WHOLE ALLOCATOR RUNS ON, SOURCED ONCE HERE AND CARRIED TOGETHER.
+	// Each is a `match` on the target that must happen exactly once per module: asking any of them
+	// per value is a cost, and asking any of them WITHOUT the target is how one of them came to be
+	// x64's on every ISA (see `callerSavedMaskFor`).
+	let pool = allocatablePool(target)
+	let file = registerFileFor(target)
+	let callerSaved = callerSavedMaskFor(target)
+	assertRegisterFacts(target, pool: pool, callerSaved: callerSaved, file: file)
+
+	// The stats object is the PROJECT's, not a fresh one: its sub-phase timers are a breakdown of the
+	// `regalloc` phase the backend measures around this call, and the whole-compile report nests them
+	// under it and reconciles the two. A locally-created stats object would be a second, disconnected
+	// accounting of the same wall time.
+	var stats = project.timings.regAlloc
+
+	let abi = CalleeAbiTable.build(funcNames)
+	var module = assembleTargetModule(stdModule)
+	let funcCount = stdModule.funcCount()
+	let processors = __Builtins.schedProcessorCount()
+	let workerCount = processors if processors < funcCount else funcCount
+
+	// The only evidence that the backend ran in PARALLEL rather than merely correctly: both
+	// byte-identity gates pass on a pool of one, so nothing else can tell a pool of one from a pool of
+	// sixteen. `tests/parallel-compile/` pins this line.
+	logDebug(LogCategory.codegen, message: function() gives "regalloc: {workerCount} worker(s) over {processors} processor(s), {funcCount} function(s)")
+
+	if funcCount == 0 'nothingToLower'
+		return module
+	end 'nothingToLower'
+
+	// ⛔ **THE FLOOR IS ASKED, NOT ASSUMED.** `min(P, F)` is the pool size, so a resolved P of zero would
+	// make an EMPTY pool — and an empty pool lowers nothing, which is a program emitted with no code at
+	// all rather than a diagnostic. The scheduler clamps to one; this is where that promise is held to,
+	// because the alternative failure is silent.
+	if processors < 1 'theSchedulerResolvedNoProcessor'
+		panic("lowerAndAllocateOnAWorkerPool: the scheduler resolved {processors} processor(s), so the pool would be empty and no function would be lowered at all")
+	end 'theSchedulerResolvedNoProcessor'
+
+	var workers = BackendWorkerHandleArray.create()
+
+	for _ in 0 upto workerCount 'eachWorker'
+		workers.push(spawn BackendWorker.create(target.cpu, os: target.os, abi: CalleeAbiTable.copyOf(abi), usesGt: usesGt))
+	end 'eachWorker'
+
+	var landed = BackendUnitLandingArray.create()
+	landed.reserve(funcCount as ElementIndex)
+	var slots = LandingSlots.create(funcCount)
+
+	// ⭐ **WHAT THE SCHEDULER DID WHILE THE POOL RAN.** A pool of W workers over P processors is only
+	// parallel if the runtime actually SPREADS it, and a work-STEAL is the one event that says an idle
+	// processor found a runnable green thread on another's queue. Zero steals at sixteen processors would
+	// mean the whole pool ran on the M that dispatched it — a correct compile at one processor's speed,
+	// which every other reading here would report as success.
+	let stealsBefore = __Builtins.schedStealCount()
+	let refused = drainTheBackendPool(stdModule, module: module, workers: workers, workerCount: workerCount as PoolSize, landed: landed, slots: slots)
+	let stealsAfter = __Builtins.schedStealCount()
+	logDebug(LogCategory.codegen, message: function() gives "regalloc pool: {stealsAfter - stealsBefore} work-steal(s) while the pool drained")
+
+	// ⛔ **EVERY HANDLE GOES BEFORE THIS FRAME DOES.** Dropping the last handle to a service closes its
+	// mailbox, which is what lets the worker's green thread finish; a handle still held at process exit
+	// is a service that never ends and an exit that never comes.
+	workers.clear()
+
+	if refused < funcCount as FuncIndex 'aFunctionDidNotFitTheMachine'
+		try refuseForRegisterPressure(project, stdModule: stdModule, funcIndex: refused, target: target, abi: abi, usesGt: usesGt, pool: pool, callerSaved: callerSaved, file: file)
+	end 'aFunctionDidNotFitTheMachine'
+
+	for funcIndex in 0 upto funcCount 'foldInIndexOrder'
+		let landing = try landed.get(slots.slotOf(funcIndex)) otherwise panic("lowerAndAllocateOnAWorkerPool: landed.get OOB for function {funcIndex}")
+		let func = module.getFunc(funcIndex)
+		performRdataRequests(globalData, module: module, func: func, requests: landing.rdata)
+		foldPoolPhaseDelta(project, phase: CompilePhase.isel, driver: CompilePhase.regalloc, delta: landing.iselCost)
+		foldFunctionAllocation(project, stats: stats, func: func, counters: landing.counters, costs: landing.costs, facts: landing.facts)
+	end 'foldInIndexOrder'
+
+	logDebug(LogCategory.codegen, message: function() gives regAllocStatsMessage(stats))
+	return module
+end 'lowerAndAllocateOnAWorkerPool'
+
+// The Target module every reply is spliced into: the Std module's function table — the same `IrFunction`
+// records, which the Target tier shares with the Std tier — over empty `ops` and `blocks`, carrying spans
+// exactly when the Std module does.
+function assembleTargetModule(stdModule StdModule) returns TargetModule
+	var module = TargetModule.create()
+	module.spans.armed = stdModule.spans.armed
+
+	for func in stdModule.functions 'eachFunc'
+		module.pushFunc(func)
+	end 'eachFunc'
+
+	return module
+end 'assembleTargetModule'
+
+// ⭐⭐ **THE DISPATCH LOOP: fill the pipeline, then serve whoever finished first.**
+//
+// Answers the index of the LOWEST-NUMBERED function that refused, or the function count when none did —
+// which is what makes the refusal the same one a serial allocation would have reported, since a serial
+// one stops at the first refusing function in index order and a pool reaches them in whatever order.
+//
+// ⛔ **A REFUSAL DOES NOT END THE LOOP.** Every promise must be awaited (an un-awaited one is the
+// green-thread exit gate's own error, exit 75) and every handle released, so the compile is failed after
+// the drain and never inside it.
+//
+// ⚠ **`awaitAny` IS WHAT KEEPS THE POOL BUSY.** Awaiting the promises in dispatch order would idle every
+// worker that finished early behind whichever job is at the head — and the head is, by the longest-first
+// rule below, the biggest job in the module.
+function drainTheBackendPool(stdModule StdModule, module TargetModule, workers BackendWorkerHandleArray, workerCount PoolSize, landed BackendUnitLandingArray, slots LandingSlots) returns FuncIndex
+	// The sentinel is "one past the last function", spelled in the FUNCTION-INDEX space rather than the
+	// pool's: a refusal of function 0 has to be storable here, and `PoolSize` starts at one.
+	var refused = stdModule.funcCount() as FuncIndex
+	var dispatch = PoolDispatch.create(stdModule.functions, blocks: stdModule.blocks, funcCount: stdModule.funcCount() as PoolSize, workerCount: workerCount)
+	var replies = BackendReplyArray.create()
+
+	for _ in 0 upto dispatch.initialInFlight() 'fillThePipeline'
+		dispatchOneBackendJob(stdModule, workers: workers, workerSlot: dispatch.fillWorker(), dispatch: dispatch, replies: replies)
+	end 'fillThePipeline'
+
+	while replies.count() > 0 'serveWhoeverFinishedFirst'
+		let ready = __Builtins.awaitAny(replies)
+		let freedWorker = dispatch.workerAt(ready)
+		let funcIndex = dispatch.land(ready, outstanding: replies.count())
+		let reply = try replies.remove(ready) otherwise panic("drainTheBackendPool: replies.remove({ready}) — `awaitAny` answered a slot of this very array")
+
+		if let answer = try await reply 'finished'
+			spliceBackendUnit(module, func: module.getFunc(funcIndex), unitModule: answer.unitModule)
+			slots.record(funcIndex, slot: landed.count())
+			landed.push(answer.landing)
+		end 'finished' else (e) 'notFinished'
+			match e 'why'
+				// The worker's mailbox closed under a job in flight. Nothing here drops a handle before
+				// the drain has finished, so it means the worker's green thread DIED — a panic inside the
+				// isel or the allocator, whose message is already on stderr.
+				stopped then panic("drainTheBackendPool: the worker running function {funcIndex} is gone. This driver drops no handle until every reply has landed, so its green thread ended on its own — look above for the panic it printed.")
+				hotOverflow then refused = funcIndex if funcIndex < refused else refused
+			end 'why'
+		end 'notFinished'
+
+		if dispatch.hasUndispatched() 'handTheFreedWorkerTheNextJob'
+			dispatchOneBackendJob(stdModule, workers: workers, workerSlot: freedWorker, dispatch: dispatch, replies: replies)
+		end 'handTheFreedWorkerTheNextJob'
+	end 'serveWhoeverFinishedFirst'
+
+	return refused
+end 'drainTheBackendPool'
+
+// Send the next job in dispatch order to ONE worker, and push its reply at the slot `PoolDispatch` just
+// recorded the job in.
+//
+// ⭐ **THE UNIT IS BUILT INSIDE THE ARGUMENT AND STORED NOWHERE**, which is E3138's rule and not a
+// style: a value this frame has taken a second reference to cannot be proven sole at the send, and the
+// only shape the check admits is a call whose every `return` is a record literal (see
+// `BackendUnit.extract`).
+function dispatchOneBackendJob(stdModule StdModule, workers BackendWorkerHandleArray, workerSlot PoolSlot, dispatch PoolDispatch, replies BackendReplyArray)
+	var worker = try workers.get(workerSlot) otherwise panic("dispatchOneBackendJob: workers.get OOB at {workerSlot} below count {workers.count()}")
+	let funcIndex = dispatch.nextJob(workerSlot)
+	replies.push(worker.run(BackendUnit.extract(stdModule, func: stdModule.getFunc(funcIndex), funcIndex: funcIndex)))
+end 'dispatchOneBackendJob'
+
+// ⭐⭐ **THE DISPATCH ORDER: LONGEST JOB FIRST (LPT).**
+//
+// A pool that takes jobs in declaration order finishes when its unluckiest worker finishes, and the
+// worst case is the biggest function starting LAST: it then runs alone while every other worker idles.
+// Starting the longest job first bounds that, and the module's shape here is the friendly one — 8,478
+// functions with the ten largest holding 4% of the ops — so the tail is small work that fills the gaps
+// behind the big jobs.
+//
+// ⚠ **IT IS A THROUGHPUT HEURISTIC AND CANNOT REACH THE OUTPUT.** The emitted code is a function of the
+// FUNCTION order, which this does not change: every fold runs in index order and splicing is
+// order-independent (see this file's header). A different order here is a different wall time and the
+// same bytes.
+//
+// The key packs (op count, function index) into ONE integer, so ordering is a plain ascending sort of
+// scalars with no comparator closure to carry: `opCount * funcCount + funcIndex` is injective for
+// `funcIndex < funcCount`, and it is bounded by the module's total op count times its function count.
+// Read back DESCENDING, which is what makes it longest-first.
+//
+// It takes the two arrays rather than a module because it serves two pools over the same Std module, and
+// a block's op count is one question for both.
+function functionsLongestFirst(functions IrFunctionArray, blocks IrBlockArray, funcCount PoolSize) returns FuncIndexArray
+	var keys = FunctionOpTallyArray.create()
+	let keyStride = funcCount as FunctionOpTally
+
+	for funcIndex in 0 upto funcCount 'eachFunc'
+		let func = try functions.get(funcIndex) otherwise panic("functionsLongestFirst: functions.get OOB at {funcIndex}")
+		keys.push((liveOpTallyOf(blocks, func: func) as FunctionOpTally) * keyStride + funcIndex)
+	end 'eachFunc'
+
+	keys.sort()
+
+	var order = FuncIndexArray.create()
+
+	for k in 0 upto keys.count() 'largestFirst'
+		let key = try keys.get(keys.count() - 1 - k) otherwise panic("functionsLongestFirst: keys.get OOB walking back from {keys.count()}")
+		order.push((try (key mod keyStride) otherwise panic("functionsLongestFirst: a pool of no functions never reaches the ordering")) as FuncIndex)
+	end 'largestFirst'
+
+	return order
+end 'functionsLongestFirst'
+
+// How many ops one function holds. Counted rather than collected: `IrModule.liveOpIndices` answers the
+// same number and allocates an array per function to do it, and this runs on every function of every
+// compile — here to order the dispatch, and in `extractUnitModule` to reserve a unit's op array.
+export function liveOpTallyOf(blocks IrBlockArray, func IrFunction) returns OpCount
+	var tally = 0 as OpCount
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try blocks.get(blockRef) otherwise panic("liveOpTallyOf: blockRef {blockRef} is not in the module's blocks")
+		tally = tally + block.opRefs.count()
+
+		if block.hasTerminatorOp() 'hasTerminator'
+			tally = tally + 1
+		end 'hasTerminator'
+	end 'eachBlock'
+
+	return tally
+end 'liveOpTallyOf'

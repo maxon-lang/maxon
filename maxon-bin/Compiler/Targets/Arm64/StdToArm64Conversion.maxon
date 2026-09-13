@@ -1,9 +1,9 @@
 // StdToArm64Conversion — arm64 instruction selection: Std → the unified `TargetOp`'s arm64 band.
 //
-// The counterpart of `StdToX64Conversion.lowerStdToX64`, and it returns the SAME pair — a
-// `TargetModule` plus the per-function `ValueClassColumns` — because the class column crosses the
-// tier boundary here, at the last pass that can see a Std type (see BackendDispatch.buildArm64Backend
-// and TargetDialect's `ValueClassColumn`). The result still uses VIRTUAL registers; the shared
+// The counterpart of `StdToX64Lowering`, and its `lowerUnit` answers the SAME record — a
+// `TargetModule` plus its `ValueClassColumn` (`LoweredUnit`) — because the class column crosses the
+// tier boundary here, at the last pass that can see a Std type (see `BackendWorker.finish` and
+// TargetDialect's `ValueClassColumn`). The result still uses VIRTUAL registers; the shared
 // register allocator colours them into NEUTRAL `RegNum`s and the arm64 encoder maps those to
 // `Arm64Register`s one tier below.
 //
@@ -356,8 +356,8 @@ function arm64FloatCondForPred(pred StdCmpPred) returns Arm64CondCode
 end 'arm64FloatCondForPred'
 
 // The register-FILE doors and the value-class-column producer are TARGET-INDEPENDENT and shared with
-// the x64 lowering — see `Targets/Shared/StdLoweringShared.maxon` (`buildValueClassColumns`).
-// `lowerStdToArm64` calls it; a value's class is what its Std type says, identically on both targets.
+// the x64 lowering — see `Targets/Shared/StdLoweringShared.maxon` (`buildFunctionValueClasses`).
+// `lowerUnit` calls it; a value's class is what its Std type says, identically on both targets.
 
 // The three arm64 variable-count shift instructions, and the whole of what the shift lowering needs to
 // know about a Std shift opcode: `shl`→`lslv`, `shr`→`asrv` (arithmetic — a signed left operand),
@@ -405,37 +405,11 @@ function arm64RequireScalarDouble(t StdType, what String)
 	end 'notDouble'
 end 'arm64RequireScalarDouble'
 
-export function lowerStdToArm64(stdModule StdModule, target Target, globalData GlobalDataTable, funcNames FunctionNameIndex, usesGt bool) returns (TargetModule, ValueClassColumns)
-	var lowering = StdToArm64Lowering.create(stdModule, target: target, globalData: globalData, funcNames: funcNames, usesGt: usesGt)
-
-	// x64's twin, and for its stated reason: this is where the Std module stops being appended to, and its
-	// column is read by index below.
-	let stdOpCount = stdModule.ops.count()
-	stdModule.spans.requireParallelTo(stdOpCount, what: "at the Std tier's end")
-
-	// The Target module carries spans exactly when the Std module it lowers from does. Armed BEFORE the
-	// skeleton, because `prepareSkeleton` is the first thing that can append.
-	lowering.targetModule.spans.armed = stdModule.spans.armed
-	lowering.prepareSkeleton()
-
-	// BY INDEX, never by iteration: `lowerFunction` MUTATES the function it lowers (the divide-by-zero
-	// guard appends blocks to its `blockRefs` and bumps `nextBlockId`), so no `srcFunc` borrowed out of
-	// `stdModule.functions` may be handed to it — the rule `splitCriticalEdges` states for the same
-	// reason, enforced by the borrow checker (E3019).
-	for funcIdx in 0 upto stdModule.funcCount() 'eachFunc'
-		lowering.lowerFunction(funcIdx)
-	end 'eachFunc'
-
-	// The value-class column producer is the shared, target-independent `buildValueClassColumns` (see
-	// `Targets/Shared/StdLoweringShared.maxon`); bind it FIRST so its borrow of `targetModule` closes
-	// before the tuple moves `targetModule` out.
-	let valueClasses = buildValueClassColumns(lowering.stdModule, targetModule: lowering.targetModule, funcNames: lowering.funcNames)
-	return (lowering.targetModule, valueClasses)
-end 'lowerStdToArm64'
-
-type StdToArm64Lowering
-	// Exported like `targetModule`: `lowerStdToArm64` hands both to the shared `buildValueClassColumns`.
-	export var stdModule as StdModule
+// ⭐⭐ **THE arm64 ISEL, AS ONE UNIT AT A TIME** — x64's twin (`StdToX64Lowering`), held by a `BackendPool`
+// worker for the whole compile and handed one single-function Std module per message (`lowerUnit`).
+export type StdToArm64Lowering
+	// The unit being lowered — `lowerUnit`'s argument, held here because the walk reads it from many sites.
+	var stdModule as StdModule
 
 	// The compilation target — read ONLY by the three OS-primitive lowerings, which differ between
 	// arm64-macOS and arm64-linux (import call vs. raw syscall, and the mmap flag word). Every other
@@ -443,26 +417,16 @@ type StdToArm64Lowering
 	// sub-64-bit values, so Apple's caller-extends-small-ints divergence is satisfied vacuously.
 	var target as Target
 
-	// The backend's data table — where a float constant's `.rdata` island is registered, resolved by
-	// the arm64 concat once sections are laid out.
-	var globalData as GlobalDataTable
-	export var targetModule as TargetModule
+	// The `.rdata` registrations this unit needs, in the order the walk meets them (`RdataRequests`).
+	var rdata as RdataRequestLog
 
-	// The module's CHECKED name index (`FunctionNameIndex`, A2l), built by `eliminateDeadFunctions` over the
-	// array it left behind and threaded down from `buildBackend`. It answers "what register FILE does this
-	// callee's result come back in?" — d0 for a float-returning callee, x0 otherwise (see
-	// `callResultRegister`) — WITHOUT a second name-keyed map: `calleeResultClass` reads the callee's own
-	// `returnType` through it, so a float result's CAPTURE register and its allocation CLASS are the one
-	// fact. Exported like `targetModule`: `lowerStdToArm64` threads the same index into the column.
-	export let funcNames as FunctionNameIndex
+	// The unit's Target module, built by `prepareSkeleton` and filled by the walk.
+	var targetModule as TargetModule
 
-	// Callee name → its parameters' register FILES as a bitmask. Built ONCE here, FROM the index above — so
-	// its key set is the checked one — and read by `emitCallArgMoves` to route each argument to a GPR
-	// (x0..x7) or a SIMD (d0..d7) arg register by the callee's declared parameter type. It is a real FOLD
-	// over a parameter list rather than a field read, which is why it stays a map where the result-class map
-	// did not. Only the argument routing consults it (the value-class column classes a `param` result from
-	// its own carried f64 type), so it is not threaded into `buildValueClassColumns`.
-	var calleeParamClasses as CalleeParamClassMap
+	// Every callee's declared ABI (`CalleeAbiTable`): which arguments a call routes to a SIMD register, and
+	// whether its result comes back in d0 or x0 (`callResultRegister`). The one table the value-class
+	// column reads too, so a float result's CAPTURE register and its allocation CLASS are the one fact.
+	let abi as CalleeAbiTable
 
 	// Fresh virtuals for the function being lowered (`mintVirtual`).
 	var fresh as ValueMinter
@@ -490,9 +454,30 @@ type StdToArm64Lowering
 	// no processor to lose, so its lowering is byte-identical to what it would be without this door.
 	let usesGt as bool
 
-	static function create(stdModule StdModule, target Target, globalData GlobalDataTable, funcNames FunctionNameIndex, usesGt bool) returns StdToArm64Lowering
-		return Self{stdModule: stdModule, target: target, globalData: globalData, targetModule: TargetModule.create(), scaledIndexFolds: ScaledIndexFolds.create(), mulScale: MemoryIndexScaleMatch.create(), compareFusion: CompareFusionCensus.create(), funcNames: funcNames, calleeParamClasses: buildCalleeParamClasses(funcNames), usesGt: usesGt, fresh: ValueMinter.create(0)}
+	export static function create(target Target, abi CalleeAbiTable, usesGt bool) returns StdToArm64Lowering
+		return Self{stdModule: StdModule.create(), target: target, rdata: RdataRequestLog.create(), targetModule: TargetModule.create(), scaledIndexFolds: ScaledIndexFolds.create(), mulScale: MemoryIndexScaleMatch.create(), compareFusion: CompareFusionCensus.create(), abi: abi, usesGt: usesGt, fresh: ValueMinter.create(0)}
 	end 'create'
+
+	// One unit through the whole conversion — x64's twin, and for its stated reasons: the Std column is
+	// checked where that module stops being appended to, the lowered module and request log are handed
+	// over with the fields reset, since the caller sends them home in a reply, and a unit starts on the
+	// empties the last one left.
+	export function lowerUnit(unitModule StdModule) returns LoweredUnit
+		let stdOpCount = unitModule.ops.count()
+		unitModule.spans.requireParallelTo(stdOpCount, what: "at the Std tier's end")
+
+		self.stdModule = unitModule
+		self.targetModule.spans.armed = unitModule.spans.armed
+		self.prepareSkeleton()
+		self.lowerFunction(UnitFunctionIndex)
+
+		let valueClass = buildFunctionValueClasses(self.stdModule, targetModule: self.targetModule, funcIndex: UnitFunctionIndex, abi: self.abi)
+		let lowered = LoweredUnit.create(self.targetModule, valueClass: valueClass, rdata: self.rdata.requests)
+		self.stdModule = StdModule.create()
+		self.targetModule = TargetModule.create()
+		self.rdata = RdataRequestLog.create()
+		return lowered
+	end 'lowerUnit'
 
 	// A fresh virtual for a lowering that needs a value of its own beside `resultId` — a call's answer
 	// captured before anything else touches a register, so the reloads of a cold call's bracket can land
@@ -641,7 +626,7 @@ type StdToArm64Lowering
 				branch or
 				ret or
 				param gives 0
-			call(_, callee, args) gives self.callOutgoingArgBytes(calleeArgFloatMask(self.calleeParamClasses, callee: callee, argCount: args.count(), registerCapacity: arm64RegisterArgCapacity()), argCount: args.count())
+			call(_, callee, args) gives self.callOutgoingArgBytes(calleeArgFloatMask(self.abi, callee: callee, argCount: args.count(), registerCapacity: arm64RegisterArgCapacity()), argCount: args.count())
 			retVoid or
 				globalAddr or
 				loadIndirect or
@@ -649,7 +634,7 @@ type StdToArm64Lowering
 				osAllocPages or
 				osWriteStdout or
 				rdataAddr gives 0
-			tryCall(_, _, callee, args) gives self.callOutgoingArgBytes(calleeArgFloatMask(self.calleeParamClasses, callee: callee, argCount: args.count(), registerCapacity: arm64RegisterArgCapacity()), argCount: args.count())
+			tryCall(_, _, callee, args) gives self.callOutgoingArgBytes(calleeArgFloatMask(self.abi, callee: callee, argCount: args.count(), registerCapacity: arm64RegisterArgCapacity()), argCount: args.count())
 			errorReturn or
 				osExit or
 				funcAddr gives 0
@@ -917,8 +902,8 @@ type StdToArm64Lowering
 			call(resultId, callee, args) then self.lowerCall(resultId, callee: callee, args: args, dstRef: dstRef)
 			ret(retValId) then self.lowerReturn(retValId, dstRef: dstRef, returnType: returnType, asTerminator: false)
 			retVoid then self.lowerVoidReturn(dstRef, returnType: returnType, asTerminator: false)
-			condBranch then panic("lowerStdToArm64: a `condBranch` appeared as a body op (lowering bug — a branch is always a block terminator)")
-			branch then panic("lowerStdToArm64: a `branch` appeared as a body op (lowering bug — a branch is always a block terminator)")
+			condBranch then panic("StdToArm64Lowering: a `condBranch` appeared as a body op (lowering bug — a branch is always a block terminator)")
+			branch then panic("StdToArm64Lowering: a `branch` appeared as a body op (lowering bug — a branch is always a block terminator)")
 			globalAddr(resultId, label) then self.emit(dstRef, op: TargetOp.arm64LeaGlobal(TargetVReg.virtual(resultId), label: label))
 			loadIndirect(resultId, addrId, offset, valueType) then self.lowerLoadIndirect(resultId, addrId: addrId, offset: offset, valueType: valueType, dstRef: dstRef)
 			storeIndirect(addrId, offset, valueId, valueType) then self.lowerStoreIndirect(addrId, offset: offset, valueId: valueId, valueType: valueType, dstRef: dstRef)
@@ -982,7 +967,7 @@ type StdToArm64Lowering
 			osReservePages(resultId, sizeId) then self.lowerOsReservePages(resultId, sizeId: sizeId, dstRef: dstRef)
 
 			// The dense-match jump table is ALWAYS a block terminator, never a body op — see `lowerTerminatorOp`.
-			switch then panic("lowerStdToArm64: a `switch` op appeared as a body op (lowering bug — the jump table is always a block terminator)")
+			switch then panic("StdToArm64Lowering: a `switch` op appeared as a body op (lowering bug — the jump table is always a block terminator)")
 
 			// P1.7a slice 2b-iv-C: constrained-type-parameter dispatch, the third and last target to get it.
 			// Both writers now fill the witness table's `funcAbs64InRdata` slots — ELF bakes an absolute `.text`
@@ -1002,7 +987,7 @@ type StdToArm64Lowering
 			// a read completes in its caller and there is no port, no wake event and no drain thread to create.
 			// So this is a compile-time panic and not a runtime one: reaching it means the shape fork was
 			// bypassed, which is a compiler bug rather than anything a program can ask for.
-			osIocpCreate then panic("lowerStdToArm64: `osIocpCreate` reached the arm64 isel — a completion port is emitted ONLY by `GtRuntime.buildIoInit`, which is built under `IoCompletionShape.completionPort`, and every arm64 lane answers `inlineCompletion` (a read completes in its caller, so there is nothing to poll and nothing to wake). Reaching here means the IO-completion shape fork was bypassed")
+			osIocpCreate then panic("StdToArm64Lowering: `osIocpCreate` reached the arm64 isel — a completion port is emitted ONLY by `GtRuntime.buildIoInit`, which is built under `IoCompletionShape.completionPort`, and every arm64 lane answers `inlineCompletion` (a read completes in its caller, so there is nothing to poll and nothing to wake). Reaching here means the IO-completion shape fork was bypassed")
 
 			// ⭐⭐ **MAC3: the P/M tier's own five ops, which sit INSIDE the IOCP band by declaration order and
 			// have nothing to do with IOCP.** `__sched_init_procs` builds them unconditionally under `usesGt`,
@@ -1093,7 +1078,7 @@ type StdToArm64Lowering
 			// lowering here would have to answer a question this op does not ask. SemanticCheck refuses such a
 			// program at its source span (E3104, `calleeNeedsWin32Substrate`'s `__cl_` prefix), so this is the
 			// backstop for a compiler bug rather than the user-facing rejection.
-			osCommandLine then panic("lowerStdToArm64: `osCommandLine` asks for ONE UNSPLIT COMMAND LINE, which is a Windows shape and not a missing lowering — MAC7 serves argv on this lane through a DIFFERENT Std graph (`CommandLineRuntime.commandLineShape`), which reads the vector `mrt_start` captured and never emits this op. Reaching here means the unsplit-string graph was installed for a target whose process start-up does not have one")
+			osCommandLine then panic("StdToArm64Lowering: `osCommandLine` asks for ONE UNSPLIT COMMAND LINE, which is a Windows shape and not a missing lowering — MAC7 serves argv on this lane through a DIFFERENT Std graph (`CommandLineRuntime.commandLineShape`), which reads the vector `mrt_start` captured and never emits this op. Reaching here means the unsplit-string graph was installed for a target whose process start-up does not have one")
 
 			// W5's two ops, and they now go OPPOSITE WAYS — which is exactly what the shared paragraph they used
 			// to carry could not express. ⛔ It read "Both are x64-windows only … Serving them is a rung, not a
@@ -1158,7 +1143,7 @@ type StdToArm64Lowering
 			// reason is not that the calls are unwritten: a sampled register file is an x64 `CONTEXT`, whose
 			// RIP/RSP/RBP displacements name three unrelated words on AArch64. A stub here would symbolize
 			// garbage into a confident profile — see that facility's row for the whole argument.
-			osHostSample then panic("lowerStdToArm64: `osHostSample` has no arm64 lowering — process sampling is `HostFacility.processSampling`, which no arm64 lane provides, so SemanticCheck refuses such a program at its own source span (E3104) and this is the backstop for a compiler bug that got one past that gate")
+			osHostSample then panic("StdToArm64Lowering: `osHostSample` has no arm64 lowering — process sampling is `HostFacility.processSampling`, which no arm64 lane provides, so SemanticCheck refuses such a program at its own source span (E3104) and this is the backstop for a compiler bug that got one past that gate")
 			osNetpoll(resultId, verb, a0Id, a1Id, a2Id, a3Id, a4Id) then self.lowerOsNetpoll(resultId, verb: verb, operands: fiveArgs(a0Id, second: a1Id, third: a2Id, fourth: a3Id, fifth: a4Id), dstRef: dstRef)
 
 			// One op, no operand, no register: the encoder reaches the counter through the reserved x16/x17
@@ -1270,7 +1255,7 @@ type StdToArm64Lowering
 			// into the Win32 word this tier reads (`StdOp.osHandleFileType` carries why it speaks Win32), so
 			// the lowering is one unconditional chunk call and only the appended body differs.
 			osHandleFileType(resultId, handleId) then self.lowerHostChunkValue(resultId, args: argsOf(handleId), chunk: HostHandleFileTypeName, dstRef: dstRef)
-			osEnvBlockFree then panic("lowerStdToArm64: `osEnvBlockFree` releases a `GetEnvironmentStringsA` COPY and neither POSIX lane has one — `SubprocessRuntime.environmentSnapshotShape` answers `pointerVector` for both, whose `__gt_subp_env_entry` body indexes the live environment vector and emits no release. Reaching here means a producer emitted one anyway, which is a compiler bug rather than a user-facing rejection")
+			osEnvBlockFree then panic("StdToArm64Lowering: `osEnvBlockFree` releases a `GetEnvironmentStringsA` COPY and neither POSIX lane has one — `SubprocessRuntime.environmentSnapshotShape` answers `pointerVector` for both, whose `__gt_subp_env_entry` body indexes the live environment vector and emits no release. Reaching here means a producer emitted one anyway, which is a compiler bug rather than a user-facing rejection")
 		end 'lower'
 
 		if bracketed 'readTheVerdict'
@@ -1284,37 +1269,37 @@ type StdToArm64Lowering
 			retVoid then self.lowerVoidReturn(dstRef, returnType: returnType, asTerminator: true)
 			condBranch(condId, thenBlockId, elseBlockId) then self.lowerCondBranch(condId, thenBlockId: thenBlockId, elseBlockId: elseBlockId, dstRef: dstRef)
 			branch(targetBlockId) then self.emitTerminator(dstRef, op: TargetOp.arm64Branch(targetBlockId))
-			const then panic("lowerStdToArm64: a `const` op appeared as a block terminator (lowering bug)")
-			binOp then panic("lowerStdToArm64: a `binOp` op appeared as a block terminator (lowering bug)")
-			unaryOp then panic("lowerStdToArm64: a `unaryOp` op appeared as a block terminator (lowering bug)")
-			cmp then panic("lowerStdToArm64: a `cmp` op appeared as a block terminator (lowering bug)")
-			binOpImm then panic("lowerStdToArm64: a `binOpImm` op appeared as a block terminator (lowering bug)")
-			cmpImm then panic("lowerStdToArm64: a `cmpImm` op appeared as a block terminator (lowering bug)")
-			div then panic("lowerStdToArm64: a `div` op appeared as a block terminator (lowering bug)")
-			mod then panic("lowerStdToArm64: a `mod` op appeared as a block terminator (lowering bug)")
-			param then panic("lowerStdToArm64: a `param` op appeared as a block terminator (lowering bug)")
-			call then panic("lowerStdToArm64: a `call` op appeared as a block terminator (lowering bug)")
+			const then panic("StdToArm64Lowering: a `const` op appeared as a block terminator (lowering bug)")
+			binOp then panic("StdToArm64Lowering: a `binOp` op appeared as a block terminator (lowering bug)")
+			unaryOp then panic("StdToArm64Lowering: a `unaryOp` op appeared as a block terminator (lowering bug)")
+			cmp then panic("StdToArm64Lowering: a `cmp` op appeared as a block terminator (lowering bug)")
+			binOpImm then panic("StdToArm64Lowering: a `binOpImm` op appeared as a block terminator (lowering bug)")
+			cmpImm then panic("StdToArm64Lowering: a `cmpImm` op appeared as a block terminator (lowering bug)")
+			div then panic("StdToArm64Lowering: a `div` op appeared as a block terminator (lowering bug)")
+			mod then panic("StdToArm64Lowering: a `mod` op appeared as a block terminator (lowering bug)")
+			param then panic("StdToArm64Lowering: a `param` op appeared as a block terminator (lowering bug)")
+			call then panic("StdToArm64Lowering: a `call` op appeared as a block terminator (lowering bug)")
 			globalAddr or
 				loadIndirect or
-				storeIndirect then panic("lowerStdToArm64: a memory-band op appeared as a block terminator (lowering bug)")
-			osAllocPages then panic("lowerStdToArm64: an `osAllocPages` op appeared as a block terminator (lowering bug)")
-			osWriteStdout then panic("lowerStdToArm64: an `osWriteStdout` op appeared as a block terminator (lowering bug)")
-			rdataAddr then panic("lowerStdToArm64: an `rdataAddr` op appeared as a block terminator (lowering bug)")
-			tryCall then panic("lowerStdToArm64: a `tryCall` op appeared as a block terminator (lowering bug — a throwing call is a body op)")
+				storeIndirect then panic("StdToArm64Lowering: a memory-band op appeared as a block terminator (lowering bug)")
+			osAllocPages then panic("StdToArm64Lowering: an `osAllocPages` op appeared as a block terminator (lowering bug)")
+			osWriteStdout then panic("StdToArm64Lowering: an `osWriteStdout` op appeared as a block terminator (lowering bug)")
+			rdataAddr then panic("StdToArm64Lowering: an `rdataAddr` op appeared as a block terminator (lowering bug)")
+			tryCall then panic("StdToArm64Lowering: a `tryCall` op appeared as a block terminator (lowering bug — a throwing call is a body op)")
 			errorReturn(retValId, errorFlagId) then self.lowerErrorReturn(retValId, errorFlagId: errorFlagId, dstRef: dstRef, returnType: returnType, asTerminator: true)
-			osExit then panic("lowerStdToArm64: an `osExit` op appeared as a block terminator (lowering bug — a process exit is a body op)")
-			funcAddr then panic("lowerStdToArm64: a `funcAddr` op appeared as a block terminator (lowering bug — a function address is a value-producing body op)")
-			callIndirect then panic("lowerStdToArm64: a `callIndirect` op appeared as a block terminator (lowering bug — an indirect call is a value-producing body op)")
-			witnessCall then panic("lowerStdToArm64: a `witnessCall` op appeared as a block terminator (lowering bug — a witness call is a value-producing body op)")
-			witnessTryCall then panic("lowerStdToArm64: a `witnessTryCall` op appeared as a block terminator (lowering bug — a throwing witness call is a value-producing body op)")
-			osPanic then panic("lowerStdToArm64: an `osPanic` op appeared as a block terminator (lowering bug — a range panic is a body op followed by a dead return)")
-			osReadClock then panic("lowerStdToArm64: an `osReadClock` op appeared as a block terminator (lowering bug — a clock read is a value-consuming body op)")
+			osExit then panic("StdToArm64Lowering: an `osExit` op appeared as a block terminator (lowering bug — a process exit is a body op)")
+			funcAddr then panic("StdToArm64Lowering: a `funcAddr` op appeared as a block terminator (lowering bug — a function address is a value-producing body op)")
+			callIndirect then panic("StdToArm64Lowering: a `callIndirect` op appeared as a block terminator (lowering bug — an indirect call is a value-producing body op)")
+			witnessCall then panic("StdToArm64Lowering: a `witnessCall` op appeared as a block terminator (lowering bug — a witness call is a value-producing body op)")
+			witnessTryCall then panic("StdToArm64Lowering: a `witnessTryCall` op appeared as a block terminator (lowering bug — a throwing witness call is a value-producing body op)")
+			osPanic then panic("StdToArm64Lowering: an `osPanic` op appeared as a block terminator (lowering bug — a range panic is a body op followed by a dead return)")
+			osReadClock then panic("StdToArm64Lowering: an `osReadClock` op appeared as a block terminator (lowering bug — a clock read is a value-consuming body op)")
 			osProcessSpawn or
 				osProcessExitCode or
 				osWaitHandles or
 				osCloseHandle or
-				osWaitHandle then panic("lowerStdToArm64: a P1.5 subprocess op appeared as a block terminator (lowering bug — spawn/wait/exit-code/close are all body ops)")
-			osFreePages then panic("lowerStdToArm64: an `osFreePages` op appeared as a block terminator (lowering bug — a page release is a body op)")
+				osWaitHandle then panic("StdToArm64Lowering: a P1.5 subprocess op appeared as a block terminator (lowering bug — spawn/wait/exit-code/close are all body ops)")
+			osFreePages then panic("StdToArm64Lowering: an `osFreePages` op appeared as a block terminator (lowering bug — a page release is a body op)")
 
 			// The dense-match jump table lowers to the arm64 jump-table target op, registering its `.rdata`
 			// slot blob (its label the ADRP+ADD addresses and the writer patches). Routed through a helper so
@@ -1330,11 +1315,11 @@ type StdToArm64Lowering
 				osReadOverlapped or
 				osLastError or
 				osProcessSpawnInherit or
-				osCancelIo then panic("lowerStdToArm64: a P1.5 IOCP op appeared as a block terminator (lowering bug — all are body ops)")
-			osGetPid then panic("lowerStdToArm64: an `osGetPid` op appeared as a block terminator (lowering bug — a process-id read is a value-producing body op)")
+				osCancelIo then panic("StdToArm64Lowering: a P1.5 IOCP op appeared as a block terminator (lowering bug — all are body ops)")
+			osGetPid then panic("StdToArm64Lowering: an `osGetPid` op appeared as a block terminator (lowering bug — a process-id read is a value-producing body op)")
 			osPipeCreateOutbound or
-				osWriteFile then panic("lowerStdToArm64: a P1.5 streaming-stdin op appeared as a block terminator (lowering bug — both are body ops)")
-			osReadWallClock then panic("lowerStdToArm64: an `osReadWallClock` op appeared as a block terminator (lowering bug — a wall-clock read is a value-consuming body op)")
+				osWriteFile then panic("StdToArm64Lowering: a P1.5 streaming-stdin op appeared as a block terminator (lowering bug — both are body ops)")
+			osReadWallClock then panic("StdToArm64Lowering: an `osReadWallClock` op appeared as a block terminator (lowering bug — a wall-clock read is a value-consuming body op)")
 			osFileOpenRead or
 				osFileClose or
 				osReadFile or
@@ -1347,20 +1332,20 @@ type StdToArm64Lowering
 				osFileFindNext or
 				osDirCreate or
 				osDirCurrentPath or
-				osFileAttributes then panic("lowerStdToArm64: a file-IO op appeared as a block terminator (lowering bug — every one is a body op)")
-			osPanicValue then panic("lowerStdToArm64: an `osPanicValue` op appeared as a block terminator (lowering bug — a rendered panic is a body op followed by a dead return, exactly like `osPanic`)")
-			osCommandLine then panic("lowerStdToArm64: an `osCommandLine` op appeared as a block terminator (lowering bug — a command-line read is a value-consuming body op)")
-			osStdHandle then panic("lowerStdToArm64: an `osStdHandle` op appeared as a block terminator (lowering bug — a standard-handle read is a value-producing body op)")
-			osExecutablePath then panic("lowerStdToArm64: an `osExecutablePath` op appeared as a block terminator (lowering bug — an executable-path read is a value-producing body op)")
-			osWriteStderr then panic("lowerStdToArm64: an `osWriteStderr` op appeared as a block terminator (lowering bug — a stderr write is a body op, exactly like its stdout twin)")
-			stackRecordAddr then panic("lowerStdToArm64: a `stackRecordAddr` op appeared as a block terminator (lowering bug — a frame address is a value-producing body op)")
+				osFileAttributes then panic("StdToArm64Lowering: a file-IO op appeared as a block terminator (lowering bug — every one is a body op)")
+			osPanicValue then panic("StdToArm64Lowering: an `osPanicValue` op appeared as a block terminator (lowering bug — a rendered panic is a body op followed by a dead return, exactly like `osPanic`)")
+			osCommandLine then panic("StdToArm64Lowering: an `osCommandLine` op appeared as a block terminator (lowering bug — a command-line read is a value-consuming body op)")
+			osStdHandle then panic("StdToArm64Lowering: an `osStdHandle` op appeared as a block terminator (lowering bug — a standard-handle read is a value-producing body op)")
+			osExecutablePath then panic("StdToArm64Lowering: an `osExecutablePath` op appeared as a block terminator (lowering bug — an executable-path read is a value-producing body op)")
+			osWriteStderr then panic("StdToArm64Lowering: an `osWriteStderr` op appeared as a block terminator (lowering bug — a stderr write is a body op, exactly like its stdout twin)")
+			stackRecordAddr then panic("StdToArm64Lowering: a `stackRecordAddr` op appeared as a block terminator (lowering bug — a frame address is a value-producing body op)")
 			osOpenNamedSegment or
 				osMapNamedSegment or
-				osTickCountMs then panic("lowerStdToArm64: a DebugStream host primitive appeared as a block terminator (lowering bug — all three are value-producing body ops)")
+				osTickCountMs then panic("StdToArm64Lowering: a DebugStream host primitive appeared as a block terminator (lowering bug — all three are value-producing body ops)")
 			osHandleSetInherit or
 				osPipePeek or
 				osEnvRead or
-				osProcessTerminate then panic("lowerStdToArm64: an attached-subprocess host primitive appeared as a block terminator (lowering bug — the inherit mark, the pipe peek, the env read and the terminate are all body ops)")
+				osProcessTerminate then panic("StdToArm64Lowering: an attached-subprocess host primitive appeared as a block terminator (lowering bug — the inherit mark, the pipe peek, the env read and the terminate are all body ops)")
 			osSocketStartup or
 				osSocketResolve or
 				osSocketFreeAddrInfo or
@@ -1369,51 +1354,51 @@ type StdToArm64Lowering
 				osSocketSend or
 				osSocketError or
 				osSocketRecv or
-				osSocketClose then panic("lowerStdToArm64: a socket host primitive appeared as a block terminator (lowering bug — every socket primitive is a body op, never a terminator)")
-			osCpuCount then panic("lowerStdToArm64: an `osCpuCount` op appeared as a block terminator (lowering bug — a machine query is a value-producing body op)")
-			osThreadCpuTicks then panic("lowerStdToArm64: an `osThreadCpuTicks` op appeared as a block terminator (lowering bug — a thread-CPU read is a body op writing through an out-param)")
+				osSocketClose then panic("StdToArm64Lowering: a socket host primitive appeared as a block terminator (lowering bug — every socket primitive is a body op, never a terminator)")
+			osCpuCount then panic("StdToArm64Lowering: an `osCpuCount` op appeared as a block terminator (lowering bug — a machine query is a value-producing body op)")
+			osThreadCpuTicks then panic("StdToArm64Lowering: an `osThreadCpuTicks` op appeared as a block terminator (lowering bug — a thread-CPU read is a body op writing through an out-param)")
 
 			// F1a: a decommit is a body op, exactly as `osFreePages` above is — a page-lifecycle op transfers
 			// control nowhere.
-			osDecommitPages then panic("lowerStdToArm64: an `osDecommitPages` op appeared as a block terminator (lowering bug — a decommit is a body op, like the page release above)")
+			osDecommitPages then panic("StdToArm64Lowering: an `osDecommitPages` op appeared as a block terminator (lowering bug — a decommit is a body op, like the page release above)")
 
 			// F1c: a reserve and a commit are value-producing body ops, for the decommit's reason.
 			osCommitPages or
-				osReservePages then panic("lowerStdToArm64: a page reserve or commit appeared as a block terminator (lowering bug — both are value-producing body ops, like the page allocation above)")
-			memFill then panic("lowerStdToArm64: a `memFill` op appeared as a block terminator (lowering bug — a byte fill is a body op; its size dispatch branches INSIDE one macro-op's encoder, never between IR blocks)")
+				osReservePages then panic("StdToArm64Lowering: a page reserve or commit appeared as a block terminator (lowering bug — both are value-producing body ops, like the page allocation above)")
+			memFill then panic("StdToArm64Lowering: a `memFill` op appeared as a block terminator (lowering bug — a byte fill is a body op; its size dispatch branches INSIDE one macro-op's encoder, never between IR blocks)")
 
 			// F2: all three are value-producing body ops. The CAS/RMW retry loop branches, but inside one macro-op's
 			// encoder — never between IR blocks, exactly as the fill ladder above.
 			atomicCas or
 				atomicRmw or
-				currentThreadToken then panic("lowerStdToArm64: an atomic or a thread-token read appeared as a block terminator (lowering bug — all three are value-producing body ops)")
+				currentThreadToken then panic("StdToArm64Lowering: an atomic or a thread-token read appeared as a block terminator (lowering bug — all three are value-producing body ops)")
 
 			// G1: none of the four terminates a block; two produce a value and two are void side effects.
 			tlsAlloc or
 				tlsSetValue or
 				tlsSlotLoad or
-				osSetEvent then panic("lowerStdToArm64: a TLS op or an event signal appeared as a block terminator (lowering bug — neither is a terminator)")
-			osEnterBackgroundPriority then panic("lowerStdToArm64: an `osEnterBackgroundPriority` op appeared as a block terminator (lowering bug — the priority door is a value-producing body op)")
-			osFileOpenWriteExecutable then panic("lowerStdToArm64: an `osFileOpenWriteExecutable` op appeared as a block terminator (lowering bug — an open is a value-producing body op, exactly like its two siblings)")
+				osSetEvent then panic("StdToArm64Lowering: a TLS op or an event signal appeared as a block terminator (lowering bug — neither is a terminator)")
+			osEnterBackgroundPriority then panic("StdToArm64Lowering: an `osEnterBackgroundPriority` op appeared as a block terminator (lowering bug — the priority door is a value-producing body op)")
+			osFileOpenWriteExecutable then panic("StdToArm64Lowering: an `osFileOpenWriteExecutable` op appeared as a block terminator (lowering bug — an open is a value-producing body op, exactly like its two siblings)")
 			osEnvBlock or
-				osEnvBlockFree then panic("lowerStdToArm64: an environment-block read or release appeared as a block terminator (lowering bug — one produces a value and the other is a void side effect, and neither terminates)")
+				osEnvBlockFree then panic("StdToArm64Lowering: an environment-block read or release appeared as a block terminator (lowering bug — one produces a value and the other is a void side effect, and neither terminates)")
 			loadAcquire or
-				storeRelease then panic("lowerStdToArm64: an ordered load or store appeared as a block terminator (lowering bug — both are body ops)")
-			osHandleFileType then panic("lowerStdToArm64: a file-type query appeared as a block terminator (lowering bug — `osHandleFileType` produces a value and does not terminate)")
+				storeRelease then panic("StdToArm64Lowering: an ordered load or store appeared as a block terminator (lowering bug — both are body ops)")
+			osHandleFileType then panic("StdToArm64Lowering: a file-type query appeared as a block terminator (lowering bug — `osHandleFileType` produces a value and does not terminate)")
 			osCreateNamedSegment or
 				osUnmapNamedSegment or
-				osUnpublishNamedSegment then panic("lowerStdToArm64: a named-section create or unmap appeared as a block terminator (lowering bug — one produces a value and the other is a void side effect, and neither terminates)")
-			covPoint then panic("lowerStdToArm64: a `covPoint` appeared as a block terminator (lowering bug — a coverage counter is emitted at a block HEAD, ahead of the code it counts)")
-			osHostSample then panic("lowerStdToArm64: an `osHostSample` appeared as a block terminator (lowering bug — a host sample call produces a value and does not terminate)")
-			osNetpoll then panic("lowerStdToArm64: an `osNetpoll` appeared as a block terminator (lowering bug — a poller call produces a value and does not terminate)")
+				osUnpublishNamedSegment then panic("StdToArm64Lowering: a named-section create or unmap appeared as a block terminator (lowering bug — one produces a value and the other is a void side effect, and neither terminates)")
+			covPoint then panic("StdToArm64Lowering: a `covPoint` appeared as a block terminator (lowering bug — a coverage counter is emitted at a block HEAD, ahead of the code it counts)")
+			osHostSample then panic("StdToArm64Lowering: an `osHostSample` appeared as a block terminator (lowering bug — a host sample call produces a value and does not terminate)")
+			osNetpoll then panic("StdToArm64Lowering: an `osNetpoll` appeared as a block terminator (lowering bug — a poller call produces a value and does not terminate)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
 	// Lower the dense-match jump table to the arm64 `arm64JumpTable` terminator — the twin of x64's
-	// `emitJumpTable`. Reserves the `.rdata` blob of N i32 slots HERE (the lowering owns `globalData`,
-	// exactly as `lowerFloatConst` registers its float island); the op carries the unique blob label the
-	// ADRP+ADD pair addresses and the writer patches. RE-MATCHES `op` in a SMALL match, the same discipline
-	// x64 uses.
+	// `emitJumpTable`. Requests the `.rdata` blob of N i32 slots HERE (through the request log, exactly as
+	// `lowerFloatConst` requests its float island); the op carries the blob's label — a placeholder until
+	// the driver registers the blob and patches it (`RdataRequests`) — which the ADRP+ADD pair addresses and
+	// the writer patches. RE-MATCHES `op` in a SMALL match, the same discipline x64 uses.
 	function lowerSwitch(op StdOp, dstRef BlockRef)
 		match op 'sw'
 			switch(subjectId, denseTargetBlockIds, defaultBlockId) then self.emitJumpTable(subjectId, caseTargets: denseTargetBlockIds, defaultTarget: defaultBlockId, dstRef: dstRef)
@@ -1422,8 +1407,7 @@ type StdToArm64Lowering
 	end 'lowerSwitch'
 
 	function emitJumpTable(subjectId ValueId, caseTargets BlockIdArray, defaultTarget BlockId, dstRef BlockRef)
-		let tableLabel = self.globalData.registerJumpTable(caseTargets.count())
-		self.emitTerminator(dstRef, op: TargetOp.arm64JumpTable(TargetVReg.virtual(subjectId), defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel.toByteArray()))
+		self.emitTerminator(dstRef, op: TargetOp.arm64JumpTable(TargetVReg.virtual(subjectId), defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: self.rdata.jumpTable(caseTargets.count())))
 	end 'emitJumpTable'
 
 	// Materialize a constant. The `movz`/`movk` ladder is the encoder's; the isel emits one op.
@@ -1441,13 +1425,11 @@ type StdToArm64Lowering
 	// for an arbitrary double.
 	//
 	// The island's NAME and its eight bytes are both the shared table's
-	// (`GlobalDataTable.registerFloatConstant`), not this file's: the width and the serializer are the same
-	// fact x64 needs, and this function used to carry its own `Arm64DoubleBytes` spelling of it beside its
-	// own copy of the label prefix. What is genuinely arm64's stays — the type check and the load op.
+	// (`GlobalDataTable.registerFloatConstant`, requested through the log as x64 does): the width and the
+	// serializer are the same fact x64 needs. What is genuinely arm64's stays — the type check and the load op.
 	function lowerFloatConst(resultId ValueId, value ParsedInt, valueType StdType, dstRef BlockRef)
 		arm64RequireScalarDouble(valueType, what: "lowerFloatConst")
-		let label = self.globalData.registerFloatConstant(value)
-		self.emit(dstRef, op: TargetOp.arm64FpLoadRdata(TargetVReg.virtual(resultId), label: label.toByteArray()))
+		self.emit(dstRef, op: TargetOp.arm64FpLoadRdata(TargetVReg.virtual(resultId), label: self.rdata.floatConstant(value)))
 	end 'lowerFloatConst'
 
 	// Lower an integer binary op to its 3-address arm64 instruction. arm64 has no two-address form, so
@@ -1982,7 +1964,7 @@ type StdToArm64Lowering
 	// that source (E3013), so a disagreement here is a lowering bug.
 	function lowerVoidReturn(dstRef BlockRef, returnType StdReturnType, asTerminator bool)
 		if not stdReturnTypeIsVoid(returnType) 'valueExpected'
-			panic("lowerStdToArm64: a `retVoid` in a value-returning function — the return register would never be written and the caller would read garbage")
+			panic("StdToArm64Lowering: a `retVoid` in a value-returning function — the return register would never be written and the caller would read garbage")
 		end 'valueExpected'
 
 		self.emitRet(dstRef, asTerminator: asTerminator)
@@ -2011,7 +1993,7 @@ type StdToArm64Lowering
 	// real dummy value to place, so it calls `emitReturnValueMove` directly.
 	function emitPrimaryReturnMove(retValId ValueId, dstRef BlockRef, returnType StdReturnType)
 		if stdReturnTypeIsVoid(returnType) 'void'
-			panic("lowerStdToArm64: a value `ret` in a void-returning function — a void return lowers to `StdOp.retVoid`, which never reaches this path")
+			panic("StdToArm64Lowering: a value `ret` in a void-returning function — a void return lowers to `StdOp.retVoid`, which never reaches this path")
 		end 'void'
 
 		self.emitReturnValueMove(retValId, dstRef: dstRef, returnType: returnType)
@@ -2046,11 +2028,11 @@ type StdToArm64Lowering
 	end 'lowerParam'
 
 	// The physical register a call to `callee` returns its PRIMARY value in — **d0** for a float-returning
-	// callee, **x0** otherwise. Read off the SAME checked name index the value-class column uses
+	// callee, **x0** otherwise. Read off the SAME ABI table the value-class column uses
 	// (`calleeResultClass`), so the captured value is coloured in the file the register it reads from lives
 	// in: a float result is XMM-classed, so `movRegReg` sees two FP ends (`fmov`), never a cross-file move.
 	function callResultRegister(callee ByteArray) returns Arm64Register
-		return Arm64FloatReturnReg if calleeResultClass(self.funcNames, callee: callee) == RegClass.xmm else Arm64IntReturnReg
+		return Arm64FloatReturnReg if calleeResultClass(self.abi, callee: callee) == RegClass.xmm else Arm64IntReturnReg
 	end 'callResultRegister'
 
 	// The DIRECT-call argument moves: each argument's register FILE is the CALLEE's declared PARAM class,
@@ -2060,7 +2042,7 @@ type StdToArm64Lowering
 	// the very one the callee's `lowerParam` folds out of its declared parameter types. Shared by `lowerCall`
 	// and `lowerTryCall`, whose argument passing is identical.
 	function emitCallArgMoves(callee ByteArray, args ValueIdArray, dstRef BlockRef)
-		self.emitArgMovesByFloatMask(args, argFloatMask: calleeArgFloatMask(self.calleeParamClasses, callee: callee, argCount: args.count(), registerCapacity: arm64RegisterArgCapacity()), dstRef: dstRef)
+		self.emitArgMovesByFloatMask(args, argFloatMask: calleeArgFloatMask(self.abi, callee: callee, argCount: args.count(), registerCapacity: arm64RegisterArgCapacity()), dstRef: dstRef)
 	end 'emitCallArgMoves'
 
 	// Lower a Std `call`: move each argument into its ABI register (`emitCallArgMoves`), `bl` the callee,
@@ -2684,7 +2666,7 @@ type StdToArm64Lowering
 	function lowerOsSocketResolve(resultId ValueId, hostPtrId ValueId, hintsPtrId ValueId, outPtrId ValueId, dstRef BlockRef)
 		match arm64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsSocketResolveDarwin(resultId, hostPtrId: hostPtrId, hintsPtrId: hintsPtrId, outPtrId: outPtrId, dstRef: dstRef)
-			syscall then panic("lowerStdToArm64: `osSocketResolve` asks for `getaddrinfo`, which is a libc FUNCTION rather than a syscall — it reads `/etc/nsswitch.conf` and `/etc/resolv.conf` and speaks DNS, and a raw static image links nothing that does. This lane resolves through a DIFFERENT Std graph (`ManagedSocketRuntime.SocketResolveShape.builtinResolver`) which never emits this op, so reaching here means the addrinfo graph was installed for a target that has no `getaddrinfo`")
+			syscall then panic("StdToArm64Lowering: `osSocketResolve` asks for `getaddrinfo`, which is a libc FUNCTION rather than a syscall — it reads `/etc/nsswitch.conf` and `/etc/resolv.conf` and speaks DNS, and a raw static image links nothing that does. This lane resolves through a DIFFERENT Std graph (`ManagedSocketRuntime.SocketResolveShape.builtinResolver`) which never emits this op, so reaching here means the addrinfo graph was installed for a target that has no `getaddrinfo`")
 		end 'route'
 	end 'lowerOsSocketResolve'
 
@@ -2704,7 +2686,7 @@ type StdToArm64Lowering
 	function lowerOsSocketFreeAddrInfo(addrInfoPtrId ValueId, dstRef BlockRef)
 		match arm64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsSocketFreeAddrInfoDarwin(addrInfoPtrId, dstRef: dstRef)
-			syscall then panic("lowerStdToArm64: `osSocketFreeAddrInfo` releases a list `getaddrinfo` allocated, and this lane has no `getaddrinfo` to allocate one — it resolves through `ManagedSocketRuntime.SocketResolveShape.builtinResolver`, which emits neither op. Reaching here means the addrinfo graph was installed for a target that has no `getaddrinfo`")
+			syscall then panic("StdToArm64Lowering: `osSocketFreeAddrInfo` releases a list `getaddrinfo` allocated, and this lane has no `getaddrinfo` to allocate one — it resolves through `ManagedSocketRuntime.SocketResolveShape.builtinResolver`, which emits neither op. Reaching here means the addrinfo graph was installed for a target that has no `getaddrinfo`")
 		end 'route'
 	end 'lowerOsSocketFreeAddrInfo'
 
@@ -3203,7 +3185,7 @@ type StdToArm64Lowering
 	// `lowerDarwinRuntimeAbort` named `"osCancelIo"` inside itself, so a second caller would have been refused
 	// under the FIRST one's name. A route is the caller's question; this is only the abort.
 	function lowerRuntimeAbort(dstRef BlockRef, message ByteArray)
-		self.lowerPanic(registerStringBlob(self.globalData, bytes: message).toByteArray(), dstRef: dstRef)
+		self.lowerPanic(self.rdata.stringBlob(message), dstRef: dstRef)
 	end 'lowerRuntimeAbort'
 
 	// `osEnvRead(result, namePtr, bufPtr, bufLen)` ⇒ `getenv` plus the copy Windows's API does for itself.

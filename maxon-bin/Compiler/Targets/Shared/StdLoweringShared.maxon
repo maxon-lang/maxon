@@ -6,7 +6,7 @@
 //   • the memory-access DOORS (`accessWidthFor`, `memoryDisplacement`) — a Std type / byte offset
 //     mapped to the neutral `X64AccessWidth` and the `Imm32` displacement the shared `loadRegBaseDisp`
 //     / `storeBaseDispReg` ops carry (the ENCODER that consumes them is per-ISA; the width is not).
-//   • the VALUE-CLASS COLUMN producer (`buildValueClassColumns`) — the register FILE each SSA value
+//   • the VALUE-CLASS COLUMN producer (`buildFunctionValueClasses`) — the register FILE each SSA value
 //     lands in. It is produced HERE because this is the last pass that can see a Std type: the Target
 //     tier carries none (see `ValueClassColumn` in TargetDialect), and the allocator downstream
 //     colours within a class it can no longer derive.
@@ -30,7 +30,7 @@
 // enum is what keeps a backend from serving one stream and forgetting the other: the map from this to that
 // backend's constant is exhaustive, so the day a THIRD stream exists every backend fails to compile.
 //
-// ⚠ It lives HERE and not in a target file for `buildValueClassColumns`'s reason — it is target-independent
+// ⚠ It lives HERE and not in a target file for `buildFunctionValueClasses`'s reason — it is target-independent
 // by construction (it names a stream, never an ISA) and it has three readers, so a per-backend copy is the
 // fork that file's header warns about. It is deliberately NOT the panic writer's stderr:
 // `BacktraceFormat.WriteStderrName` is a hand-assembled cstring chunk, a different mechanism (see
@@ -82,7 +82,7 @@ end 'posixStreamFd'
 // have had to widen the byte at RUNTIME — an `imul` by `0x0101010101010101` (or three shift-or pairs on
 // arm64) ahead of a sequence whose whole purpose is to be a handful of stores.
 //
-// It lives HERE for `buildValueClassColumns`'s reason: it reads a byte and answers a word, naming no ISA.
+// It lives HERE for `buildFunctionValueClasses`'s reason: it reads a byte and answers a word, naming no ISA.
 // Its callers are the two native ENCODERS, which materialize the answer into the register their ladder
 // stores from; wasm needs none of it — `memory.fill` takes the byte itself, via `memFillByte` below.
 export function memFillPatternWord(value ParsedInt) returns MachineWord
@@ -140,22 +140,189 @@ export function memoryDisplacement(offset ByteOffset) returns Imm32
 	return offset as Imm32
 end 'memoryDisplacement'
 
-// Callee name -> its `ArgFloatMask`. Built once per module so a call site's per-argument register-FILE
-// decision is an O(1) lookup rather than a Θ(calls × functions) scan of `stdModule.functions` for the
-// callee's parameter types.
+// ⭐⭐ **EVERYTHING A CALL SITE NEEDS TO KNOW ABOUT ITS CALLEE'S ABI: which parameters travel in the float
+// file, and which file the result comes back in.** Both are the callee's DECLARED types, folded once; a
+// call site reads the fold rather than the callee's `IrFunction`, because the isel runs on a pool worker
+// and a worker can reach no function but the one it was handed (`BackendPool`). The table is built once
+// on the main thread from the checked name index (`build`) and each worker is spawned with its own copy
+// (`copyOf`) — a send moves, so the driver's table cannot be the one a worker holds.
 //
-// A MASK, not the `Map with (ByteArray, RegClassArray)` an array-shaped mirror would be: a parameter's
-// class is ONE bit (GPR vs XMM), and a per-callee array would heap-box one small array for EVERY function
-// in the module — most all-integer and never the target of a float-argument call. The scalar mask keeps
-// this index allocation-flat (a scalar per entry). The bit is read back as a `RegClass` by
-// `calleeParamClass`, the one door the caller-side argument routing consults.
+// The parameter side is a MASK, not a per-callee `RegClassArray`: a parameter's class is ONE bit (GPR vs
+// XMM), and an array would heap-box one small array for EVERY function in the module — most all-integer
+// and never the target of a float-argument call. The result side is the class itself.
+
+// A callee's row in the table's columns. A probe slot holds a row, or the slot count — which no row
+// reaches, since the slots outnumber the rows — for an empty slot.
+typealias CalleeRow = int(0 to u64.max)
+typealias CalleeRowArray = Array with CalleeRow
+typealias NameStartArray = Array with ElementIndex
+typealias ArgFloatMaskArray = Array with ArgFloatMask
+typealias CalleeResultClassArray = Array with RegClass
+
+// A callee with no row — the hand-assembled runtime chunks, whose ABI the miss arms own.
+enum CalleeAbiLookup implements Error
+	unknownCallee
+end 'CalleeAbiLookup'
+
+// ⭐ **WHAT ONE UNIT'S CONVERSION HANDS BACK — the same three things from either isel.** The Target module
+// and its class column are ONE artifact: the Target tier carries no types, so a module alone does not say
+// which file any of its values lives in, and the allocator cannot recover it (`ValueClassColumn`). The
+// `.rdata` requests are the registrations the walk could not perform itself (`RdataRequests`).
+export type LoweredUnit
+	export var targetModule as TargetModule
+	export var valueClass as ValueClassColumn
+	export var rdata as RdataRequestArray
+
+	export static function create(targetModule TargetModule, valueClass ValueClassColumn, rdata RdataRequestArray) returns LoweredUnit
+		return Self{targetModule: targetModule, valueClass: valueClass, rdata: rdata}
+	end 'create'
+end 'LoweredUnit'
+
+// ⛔ **COLUMNS UNDER AN OPEN-ADDRESSING INDEX, NOT A `Map`.** A `Map` hashes its key through a witness
+// slot, and a message that dispatches through a witness the compiler cannot name is refused outright
+// (E3143) — the lookups run on a pool worker. `Array.hash` on the callee's own bytes is a named call that
+// reads the name once; the isel asks three or four times per call op, and a bisection over the sorted
+// names would walk the shared prefix of thirteen of them on every ask.
 //
-// ⚠ **ITS RESULT-SIDE TWIN NO LONGER EXISTS (A2l).** `CalleeResultClassMap` held
-// `returnTypeResultClass(func.returnType)` — a match over a field, not a fold — so it was a SECOND COPY of
-// something `FunctionNameIndex` already reaches in two O(1) steps, keyed on a uniqueness guarantee it did
-// not state. `calleeResultClass` reads through the index instead; there is one fewer name-keyed map per
-// native compile, and one fewer place the key set could disagree with the module's.
-export typealias CalleeParamClassMap = Map with (ByteArray, ArgFloatMask)
+// Every name lives in ONE flat byte array, so a worker's copy is five array clones rather than two
+// allocations per callee per worker.
+export type CalleeAbiTable
+	// Row r's name is `names[nameStarts[r], nameStarts[r + 1])`; the checked index holds each name once.
+	var names as ByteArray
+	var nameStarts as NameStartArray
+	var paramFloatMasks as ArgFloatMaskArray
+	var resultClasses as CalleeResultClassArray
+
+	// Linear probing over the low bits of the name's hash. A power of two holding `SlotsPerRow` slots per
+	// row, so `and (count - 1)` is the modulus and a probe always meets an empty slot.
+	var slots as CalleeRowArray
+
+	// ⭐ **IT TAKES THE CHECKED INDEX, NOT THE MODULE** — so its key set is provably the one
+	// `FunctionNameIndex.create` refused a duplicate over, rather than whatever the module happened to hold
+	// when someone called it. Which is also why a row is claimed without an equality probe: no name is
+	// already in the table.
+	export static function build(funcNames FunctionNameIndex) returns CalleeAbiTable
+		let rowCount = funcNames.functions.count()
+		var table = Self{names: ByteArray.create(), nameStarts: NameStartArray.create(), paramFloatMasks: ArgFloatMaskArray.create(), resultClasses: CalleeResultClassArray.create(), slots: CalleeRowArray.create()}
+		table.nameStarts.reserve(rowCount + 1)
+		table.paramFloatMasks.reserve(rowCount)
+		table.resultClasses.reserve(rowCount)
+		table.nameStarts.push(0)
+
+		let slotCount = slotCountFor(rowCount)
+		table.slots.refill(slotCount, value: slotCount as CalleeRow)
+
+		for func in funcNames.functions 'eachFunc'
+			let row = table.paramFloatMasks.count() as CalleeRow
+			table.names.append(func.name)
+			table.nameStarts.push(table.names.count())
+			table.paramFloatMasks.push(floatParamMaskOf(func.paramTypes))
+			table.resultClasses.push(returnTypeResultClass(func.returnType))
+			table.claimSlot(func.name, row: row)
+		end 'eachFunc'
+
+		return table
+	end 'build'
+
+	// A table nothing else holds, with `source`'s rows in `source`'s order — what a worker is spawned
+	// with, since a spawn's factory arguments move and the driver keeps its own for the E5001 re-run.
+	export static function copyOf(source CalleeAbiTable) returns CalleeAbiTable
+		return Self{names: source.names.clone(), nameStarts: source.nameStarts.clone(), paramFloatMasks: source.paramFloatMasks.clone(), resultClasses: source.resultClasses.clone(), slots: source.slots.clone()}
+	end 'copyOf'
+
+	export function paramFloatMaskOf(callee ByteArray) returns ArgFloatMask throws CalleeAbiLookup
+		let row = try self.rowFor(callee)
+		return try self.paramFloatMasks.get(row) otherwise panic("CalleeAbiTable.paramFloatMaskOf: row {row} is past the {self.paramFloatMasks.count()} rows the index was built over")
+	end 'paramFloatMaskOf'
+
+	export function resultClassOf(callee ByteArray) returns RegClass throws CalleeAbiLookup
+		let row = try self.rowFor(callee)
+		return try self.resultClasses.get(row) otherwise panic("CalleeAbiTable.resultClassOf: row {row} is past the {self.resultClasses.count()} rows the index was built over")
+	end 'resultClassOf'
+
+	function emptySlot() returns CalleeRow
+		return self.slots.count() as CalleeRow
+	end 'emptySlot'
+
+	function firstSlotFor(name ByteArray) returns ElementIndex
+		return (name.hash() as ElementIndex) and (self.slots.count() - 1)
+	end 'firstSlotFor'
+
+	function nextSlotAfter(slot ElementIndex) returns ElementIndex
+		return (slot + 1) and (self.slots.count() - 1)
+	end 'nextSlotAfter'
+
+	function claimSlot(name ByteArray, row CalleeRow)
+		var slot = self.firstSlotFor(name)
+
+		for _ in 0 upto self.slots.count() 'probe'
+			let held = try self.slots.get(slot) otherwise panic("CalleeAbiTable.claimSlot: slots.get OOB at {slot} under the mask of {self.slots.count()} slots")
+
+			if held == self.emptySlot() 'free'
+				try self.slots.set(slot, value: row) otherwise panic("CalleeAbiTable.claimSlot: slots.set OOB at {slot} just read")
+				return
+			end 'free'
+
+			slot = self.nextSlotAfter(slot)
+		end 'probe'
+
+		panic("CalleeAbiTable.claimSlot: no empty slot for row {row} among {self.slots.count()} — the slots are sized to at least twice the rows")
+	end 'claimSlot'
+
+	function rowFor(callee ByteArray) returns CalleeRow throws CalleeAbiLookup
+		var slot = self.firstSlotFor(callee)
+
+		for _ in 0 upto self.slots.count() 'probe'
+			let row = try self.slots.get(slot) otherwise panic("CalleeAbiTable.rowFor: slots.get OOB at {slot} under the mask of {self.slots.count()} slots")
+
+			if row == self.emptySlot() 'notHere'
+				throw CalleeAbiLookup.unknownCallee
+			end 'notHere'
+
+			if self.rowNamed(row, callee: callee) 'hit'
+				return row
+			end 'hit'
+
+			slot = self.nextSlotAfter(slot)
+		end 'probe'
+
+		panic("CalleeAbiTable.rowFor: probed every one of {self.slots.count()} slots without meeting an empty one — the slots are sized to at least twice the rows")
+	end 'rowFor'
+
+	function rowNamed(row CalleeRow, callee ByteArray) returns bool
+		let start = try self.nameStarts.get(row) otherwise panic("CalleeAbiTable.rowNamed: nameStarts.get OOB at row {row} of {self.nameStarts.count() - 1}")
+		let stop = try self.nameStarts.get(row + 1) otherwise panic("CalleeAbiTable.rowNamed: nameStarts.get OOB at row {row + 1} of {self.nameStarts.count() - 1} — the column carries one more start than there are rows")
+
+		if stop - start != callee.count() 'differentLength'
+			return false
+		end 'differentLength'
+
+		for i in 0 upto callee.count() 'eachByte'
+			let a = try self.names.get(start + i) otherwise panic("CalleeAbiTable.rowNamed: names.get OOB at {start + i} below the row's end {stop}")
+			let b = try callee.get(i) otherwise panic("CalleeAbiTable.rowNamed: callee.get OOB at {i} below its count {callee.count()}")
+
+			if a != b 'differ'
+				return false
+			end 'differ'
+		end 'eachByte'
+
+		return true
+	end 'rowNamed'
+end 'CalleeAbiTable'
+
+// Slots per row: a load factor of at most one half keeps a linear probe short.
+let SlotsPerRow = 2
+
+// The smallest power of two holding `SlotsPerRow` slots for every row.
+function slotCountFor(rowCount ElementIndex) returns ElementIndex
+	var slotCount = 1 as ElementIndex
+
+	while slotCount < rowCount * SlotsPerRow 'double'
+		slotCount = slotCount * 2
+	end 'double'
+
+	return slotCount
+end 'slotCountFor'
 
 // ⭐ THE ONE DOOR from a Std type to a register FILE. A value's class is what its TYPE says, and
 // nothing else — the whole content of `ValueClassColumn`'s "produced by the lowering, not derived in
@@ -330,46 +497,6 @@ function setValueClass(column ValueClassColumn, valueId ValueId, class RegClass)
 	try column.set(valueId, value: class) otherwise panic("setValueClass: v{valueId} outside the {column.count()}-wide class column after growFilled(v{valueId}+1) — a grow that just ensured the slot cannot leave it missing")
 end 'setValueClass'
 
-// ⭐⭐ THE VALUE-CLASS COLUMN PRODUCER. One dense-by-ValueId, FUNCTION-LOCAL column per function,
-// answering "what register file does this op's result land in?" — see the file header. Takes the Std
-// module (the source of truth for ops/blocks/functions) and the Target module (whose operand-derived
-// `scanFunctionValueCount` sizes the column). EXHAUSTIVE over `StdOp` with no bare `default`, so a new
-// op that defines a value fails to compile here rather than defaulting a float into a GPR.
-export function buildValueClassColumns(stdModule StdModule, targetModule TargetModule, funcNames FunctionNameIndex) returns ValueClassColumns
-	var columns = ValueClassColumns.create()
-
-	for funcIndex in 0 upto stdModule.funcCount() 'eachFunc'
-		columns.push(buildFunctionValueClasses(stdModule, targetModule: targetModule, funcIndex: funcIndex, funcNames: funcNames))
-	end 'eachFunc'
-
-	return columns
-end 'buildValueClassColumns'
-
-// Build the callee name → `ArgFloatMask` index, once per module. Each backend builds it in its `create`
-// and threads the one instance into the argument-move emission (`lowerCall`/`lowerTryCall`), so a float
-// argument's XMM destination and the callee's declared parameter type are the ONE fact, never two that
-// could disagree.
-//
-// ⭐ **IT TAKES THE CHECKED INDEX, NOT THE MODULE (A2l)** — so its key set is provably the one
-// `FunctionNameIndex.create` refused a duplicate over, rather than whatever the module happened to hold
-// when someone called it. See that file's header for why the guarantee is carried by the argument type.
-//
-// ⭐ **AND IT IS THE ONLY ONE OF THIS PAIR LEFT: the RESULT-class map is gone.** Its value was
-// `returnTypeResultClass(func.returnType)` — a match over a field the index already reaches in two O(1)
-// steps — so it was a second copy of a fact rather than a memo of a computation, and `calleeResultClass`
-// now reads it through the index. This one stays because `floatParamMaskOf` FOLDS a parameter list: it is
-// a real computation, asked twice per direct call op, and recomputing it per lookup would trade a stated
-// guarantee for a measured cost.
-export function buildCalleeParamClasses(funcNames FunctionNameIndex) returns CalleeParamClassMap
-	var calleeParamClasses = CalleeParamClassMap.create()
-
-	for func in funcNames.functions 'eachFunc'
-		calleeParamClasses.upsert(func.name, value: floatParamMaskOf(func.paramTypes))
-	end 'eachFunc'
-
-	return calleeParamClasses
-end 'buildCalleeParamClasses'
-
 // The `ArgFloatMask` for one parameter list: bit k set iff parameter k is an f64. EXPORTED because each
 // backend folds its OWN function's parameter types through it once per function and hands that single mask
 // to the placement rule for every `param` op — the callee-side mirror of `calleeArgFloatMask`, and the
@@ -388,8 +515,8 @@ export function floatParamMaskOf(paramTypes StdTypeArray) returns ArgFloatMask
 	return mask
 end 'floatParamMaskOf'
 
-// The per-ARGUMENT float mask for a DIRECT call to `callee` — ONE lookup of the map whose VALUE ALREADY IS
-// THAT MASK. It is the name-keyed twin of the `ArgFloatMask` an indirect `callIndirect` carries ON THE OP:
+// The per-ARGUMENT float mask for a DIRECT call to `callee` — ONE lookup of the table whose row ALREADY
+// HOLDS THAT MASK. It is the name-keyed twin of the `ArgFloatMask` an indirect `callIndirect` carries ON THE OP:
 // producing the direct call's mask here lets the DIRECT and INDIRECT argument-move loops share ONE
 // slotting+emit path (`emitArgMovesByFloatMask` in each backend), so the two differ ONLY in where the mask
 // comes from — a callee NAME here, the op there — and never in how an argument is slotted onto its file or
@@ -406,8 +533,8 @@ end 'floatParamMaskOf'
 // every reader (`argMaskBit` / `abiFileSlotIndex` / `abiStackSlotsBefore`) is only ever asked about an index
 // below `argCount`, so the high bits are unreadable; and the truncation itself — `(1 shl argCount) - 1` —
 // would overflow the machine word at the perfectly legal `argCount` of `MaxAbiArgs`.
-export function calleeArgFloatMask(calleeParamClasses CalleeParamClassMap, callee ByteArray, argCount ParamCount, registerCapacity RegisterArgCapacity) returns ArgFloatMask
-	let mask = try calleeParamClasses.get(callee) otherwise 'runtimeChunk'
+export function calleeArgFloatMask(abi CalleeAbiTable, callee ByteArray, argCount ParamCount, registerCapacity RegisterArgCapacity) returns ArgFloatMask
+	let mask = try abi.paramFloatMaskOf(callee) otherwise 'runtimeChunk'
 		return runtimeChunkArgFloatMask(callee, argCount: argCount, registerCapacity: registerCapacity)
 	end 'runtimeChunk'
 
@@ -544,10 +671,16 @@ export function abiStackSlotsBefore(mask ArgFloatMask, index ParamCount, capacit
 	return stackSlots
 end 'abiStackSlotsBefore'
 
-// One function's column. Pre-sized to `scanFunctionValueCount` (a LOWER bound — operand-used values)
-// and EXTENDED by `setValueClass` for the walk-defined values beyond it. `gpr` is the FILL for ids no
-// op defines (nothing is ever coloured for them).
-function buildFunctionValueClasses(stdModule StdModule, targetModule TargetModule, funcIndex FuncIndex, funcNames FunctionNameIndex) returns ValueClassColumn
+// ⭐⭐ THE VALUE-CLASS COLUMN PRODUCER. One dense-by-ValueId, FUNCTION-LOCAL column, answering "what
+// register file does this op's result land in?" — see the file header. Takes the Std module (the source
+// of truth for ops/blocks/functions) and the Target module (whose operand-derived `scanFunctionValueCount`
+// sizes the column). EXHAUSTIVE over `StdOp` with no bare `default`, so a new op that defines a value
+// fails to compile here rather than defaulting a float into a GPR.
+//
+// Pre-sized to `scanFunctionValueCount` (a LOWER bound — operand-used values) and EXTENDED by
+// `setValueClass` for the walk-defined values beyond it. `gpr` is the FILL for ids no op defines (nothing
+// is ever coloured for them).
+export function buildFunctionValueClasses(stdModule StdModule, targetModule TargetModule, funcIndex FuncIndex, abi CalleeAbiTable) returns ValueClassColumn
 	let srcFunc = stdModule.getFunc(funcIndex)
 	var column = ValueClassColumn.create()
 	column.refill(scanFunctionValueCount(targetModule, func: srcFunc) as ElementIndex, value: RegClass.gpr)
@@ -564,7 +697,7 @@ function buildFunctionValueClasses(stdModule StdModule, targetModule TargetModul
 		end 'targetOnlyBlock'
 
 		recordBlockArgClasses(stdModule, blockRef: blockRef, column: column)
-		recordBlockOpClasses(stdModule, blockRef: blockRef, column: column, funcNames: funcNames)
+		recordBlockOpClasses(stdModule, blockRef: blockRef, column: column, abi: abi)
 	end 'eachBlock'
 
 	return column
@@ -580,12 +713,12 @@ function recordBlockArgClasses(stdModule StdModule, blockRef BlockRef, column Va
 	end 'eachArg'
 end 'recordBlockArgClasses'
 
-function recordBlockOpClasses(stdModule StdModule, blockRef BlockRef, column ValueClassColumn, funcNames FunctionNameIndex)
+function recordBlockOpClasses(stdModule StdModule, blockRef BlockRef, column ValueClassColumn, abi CalleeAbiTable)
 	let block = try stdModule.blocks.get(blockRef) otherwise panic("recordBlockOpClasses: blockRef {blockRef} not in stdModule.blocks")
 
 	for opIdx in block.opRefs 'eachOp'
 		let op = try stdModule.ops.get(opIdx) otherwise panic("recordBlockOpClasses: opIdx {opIdx} not in stdModule.ops")
-		recordOpResultClass(op, column: column, funcNames: funcNames)
+		recordOpResultClass(op, column: column, abi: abi)
 	end 'eachOp'
 
 	if block.hasTerminatorOp() 'hasTerm'
@@ -593,11 +726,11 @@ function recordBlockOpClasses(stdModule StdModule, blockRef BlockRef, column Val
 		// being skipped — so an op that both terminates and defines is a compile error here rather than
 		// a value with no class.
 		let term = try stdModule.ops.get(block.terminatorIndex()) otherwise panic("recordBlockOpClasses: terminatorIndex not in stdModule.ops")
-		recordOpResultClass(term, column: column, funcNames: funcNames)
+		recordOpResultClass(term, column: column, abi: abi)
 	end 'hasTerm'
 end 'recordBlockOpClasses'
 
-function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames FunctionNameIndex)
+function recordOpResultClass(op StdOp, column ValueClassColumn, abi CalleeAbiTable)
 	match op 'result'
 		// The op's own type IS the result's.
 		const(resultId, _, valueType) then setValueClass(column, valueId: resultId, class: regClassForStdType(valueType))
@@ -621,11 +754,11 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 		div(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		mod(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		param(resultId, _, paramType) then setValueClass(column, valueId: resultId, class: regClassForStdType(paramType))
-		call(resultId, callee, _) then setValueClass(column, valueId: resultId, class: calleeResultClass(funcNames, callee: callee))
+		call(resultId, callee, _) then setValueClass(column, valueId: resultId, class: calleeResultClass(abi, callee: callee))
 
 		// A throwing call classes its primary result exactly as `call` does (the callee's return type);
 		// its error-flag second result is an i64, which the column's `gpr` default already covers (P1.4b).
-		tryCall(resultId, _, callee, _) then setValueClass(column, valueId: resultId, class: calleeResultClass(funcNames, callee: callee))
+		tryCall(resultId, _, callee, _) then setValueClass(column, valueId: resultId, class: calleeResultClass(abi, callee: callee))
 
 		// An ADDRESS is an integer, whatever the global holds.
 		globalAddr(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
@@ -859,24 +992,19 @@ function classifyIndirectResult(column ValueClassColumn, resultId ValueId, resul
 	end 'r'
 end 'classifyIndirectResult'
 
-// The class of a CALL's result — the callee's return type, looked up by name. A VOID call still
-// DEFINES a value (`lowerCall` moves the return register into it unconditionally), so a miss on `void`
-// is `gpr` and not an error: the value is a garbage integer nobody may read. Exported so `lowerCall`
-// picks the SAME capture register (XMM0/d0 for a float result, else R8/x0) the column classes the
-// result under — one door, so the capture and the class cannot disagree.
-//
-// ⭐ **READ THROUGH THE CHECKED INDEX, NOT OUT OF A MAP THAT COPIED IT (A2l).** The answer is a match over
-// the callee's own `returnType` field, so the index reaches it in the same one hash probe the deleted map
-// cost plus an array read — and the index is the only structure in the compile whose key set is PROVEN
-// duplicate-free. A callee with no Std function is the runtime-chunk case the miss arm below owns, exactly
-// as before: `funcNamed` misses on the same names the map missed on.
-export function calleeResultClass(funcNames FunctionNameIndex, callee ByteArray) returns RegClass
-	let func = try funcNames.funcNamed(callee) otherwise 'runtimeChunk'
+// The class of a CALL's result — the callee's declared return type, folded into the ABI table. A VOID
+// call still DEFINES a value (`lowerCall` moves the return register into it unconditionally), so `void`
+// folds to `gpr` and is not an error: the value is a garbage integer nobody may read. Exported so
+// `lowerCall` picks the SAME capture register (XMM0/d0 for a float result, else R8/x0) the column classes
+// the result under — one door, so the capture and the class cannot disagree. A callee with no Std
+// function is the runtime-chunk case the miss arm below owns.
+export function calleeResultClass(abi CalleeAbiTable, callee ByteArray) returns RegClass
+	let class = try abi.resultClassOf(callee) otherwise 'runtimeChunk'
 		requireRuntimeChunkCallee(callee, context: "calleeResultClass")
 		return RegClass.gpr
 	end 'runtimeChunk'
 
-	return returnTypeResultClass(func.returnType)
+	return class
 end 'calleeResultClass'
 
 // ==================================================================================================
@@ -912,7 +1040,7 @@ end 'IndexedMemoryForm'
 // array read and write. On x64 that is `imul` + `lea` + `mov`, three instructions for what
 // `mov rax, [rbx + r13*8]` does in one.
 //
-// It lives HERE, beside `buildValueClassColumns`, for that function's reason: the MATCH is a fact
+// It lives HERE, beside `buildFunctionValueClasses`, for that function's reason: the MATCH is a fact
 // about the Std graph and names no ISA. The one thing that IS per-ISA is `IndexedMemoryForm` — what
 // the target's own load/store can carry in its address operand, which the two native ISAs answer
 // differently and neither answers with a bare yes.
@@ -1495,7 +1623,48 @@ end 'opTakesSyscallBracket'
 // MEASURED as a silent wrong answer: `stdlib/Builtins.maxon`'s `__float_bitsFromDecimal` took
 // its `isSubnormal` branch on a false condition and `0.5` printed as `4503599627370496`.
 // A block has exactly ONE terminator, so keyed by the block the fact is exact.
-typealias CmpPredMap = Map with (BlockRef, StdCmpPred)
+//
+// ⛔ **A DENSE COLUMN OVER THE MODULE'S BLOCK REFS, NOT A `Map`.** A `Map` hashes its key through a
+// witness slot, and the census runs on a pool worker, where a dispatch the compiler cannot name is
+// refused outright (E3143). A unit module's block refs are exactly `0 upto blocks.count()`, so a column
+// sized to that count answers for every block of the function.
+type FusedPredColumn
+	var fused as BoolArray
+	var preds as StdCmpPredArray
+
+	static function create() returns FusedPredColumn
+		return Self{fused: BoolArray.create(), preds: StdCmpPredArray.create()}
+	end 'create'
+
+	// Emptied over the module's block refs. The predicate column's fill is never read: `fused` gates it.
+	function reset(blockCount ElementIndex)
+		self.fused.refill(blockCount, value: false)
+		self.preds.refill(blockCount, value: StdCmpPred.eq)
+	end 'reset'
+
+	function set(blockRef BlockRef, pred StdCmpPred)
+		try self.fused.set(blockRef, value: true) otherwise panic("FusedPredColumn.set: block ref {blockRef} is past the {self.fused.count()} blocks the column was reset over")
+		try self.preds.set(blockRef, value: pred) otherwise panic("FusedPredColumn.set: preds.set OOB at {blockRef} beside a fused column of {self.fused.count()}")
+	end 'set'
+
+	function contains(blockRef BlockRef) returns bool
+		return try self.fused.get(blockRef) otherwise panic("FusedPredColumn.contains: block ref {blockRef} is past the {self.fused.count()} blocks the column was reset over")
+	end 'contains'
+
+	function predOf(blockRef BlockRef) returns StdCmpPred
+		if not self.contains(blockRef) 'notFused'
+			panic("CompareFusionCensus.fusedPredicateOf: block ref {blockRef} fuses no compare — ask `blockFusesCompare` first")
+		end 'notFused'
+
+		return try self.preds.get(blockRef) otherwise panic("FusedPredColumn.predOf: preds.get OOB at {blockRef} beside a fused column of {self.fused.count()}")
+	end 'predOf'
+
+	function clear(blockRef BlockRef)
+		try self.fused.set(blockRef, value: false) otherwise panic("FusedPredColumn.clear: block ref {blockRef} is past the {self.fused.count()} blocks the column was reset over")
+	end 'clear'
+end 'FusedPredColumn'
+
+typealias StdCmpPredArray = Array with StdCmpPred
 
 // Record `condId` as fusable, but only when `pred`'s compare is the one that DEFINES it.
 //
@@ -1510,12 +1679,12 @@ typealias CmpPredMap = Map with (BlockRef, StdCmpPred)
 // Both columns are written HERE, by this one call, which is what keeps them in lockstep — the
 // predicate and the float-ness of the compare carrying it can never disagree, because nothing
 // can write one without the other.
-function fuseIfDefines(fused CmpPredMap, floatCmps StdValueUseSet, unsignedCmps StdValueUseSet, blockRef BlockRef, defId ValueId, condId ValueId, pred StdCmpPred, operandType StdType)
+function fuseIfDefines(fused FusedPredColumn, floatCmps StdValueUseSet, unsignedCmps StdValueUseSet, blockRef BlockRef, defId ValueId, condId ValueId, pred StdCmpPred, operandType StdType)
 	if defId != condId 'someOtherCompare'
 		return
 	end 'someOtherCompare'
 
-	// The PREDICATE is recorded against the branching BLOCK (see `CmpPredMap`); the FLOAT-NESS
+	// The PREDICATE is recorded against the branching BLOCK (see `FusedPredColumn`); the FLOAT-NESS
 	// stays against the compare's VALUE, and the asymmetry is exact rather than convenient. "Which
 	// flags does this jcc read?" is a question about a pair, so only a block can answer it; "is the
 	// compare defining v a float compare?" is a property of v's one defining op and cannot differ
@@ -1529,7 +1698,7 @@ function fuseIfDefines(fused CmpPredMap, floatCmps StdValueUseSet, unsignedCmps 
 	//
 	// ⚠ THE TWO ARE DISJOINT BY CONSTRUCTION, not by a rule anyone maintains: `stdTypeIsUnsigned` is
 	// false for every float `StdType`, and `comparisonSignedness` never routes a float here at all.
-	fused.upsert(blockRef, value: pred)
+	fused.set(blockRef, pred: pred)
 
 	if stdTypeIsFloat(operandType) 'float'
 		floatCmps.insert(condId)
@@ -1561,7 +1730,7 @@ end 'fuseIfDefines'
 // for arm64's.
 export type CompareFusionCensus
 	// The blocks whose terminating conditional branch reads a compare's flags → that compare's predicate.
-	var fusedPreds as CmpPredMap
+	var fusedPreds as FusedPredColumn
 
 	// ⭐ THE FUSED COMPARES WHOSE OPERANDS ARE FLOATS — `fusedPreds`' second column, written at the
 	// same instant by the same call (`fuseIfDefines`).
@@ -1601,13 +1770,13 @@ export type CompareFusionCensus
 	var valuesReadFromRegisters as StdValueUseSet
 
 	export static function create() returns CompareFusionCensus
-		return Self{fusedPreds: CmpPredMap.create(), fusedFloatCmps: StdValueUseSet.create(), fusedUnsignedCmps: StdValueUseSet.create(), valuesReadFromRegisters: StdValueUseSet.create()}
+		return Self{fusedPreds: FusedPredColumn.create(), fusedFloatCmps: StdValueUseSet.create(), fusedUnsignedCmps: StdValueUseSet.create(), valuesReadFromRegisters: StdValueUseSet.create()}
 	end 'create'
 
 	// Fresh tables each time: a `cmp`'s ValueId and a `BlockRef` only mean anything inside their own
 	// function, and both the fused branch and the value uses that consume a compare are in that function.
 	export function computeForFunction(module StdModule, func IrFunction)
-		self.fusedPreds = CmpPredMap.create()
+		self.fusedPreds.reset(module.blocks.count())
 		self.fusedFloatCmps = StdValueUseSet.create()
 		self.fusedUnsignedCmps = StdValueUseSet.create()
 		self.computeFusedCmps(module, func: func, fused: self.fusedPreds, floatCmps: self.fusedFloatCmps, unsignedCmps: self.fusedUnsignedCmps)
@@ -1624,7 +1793,7 @@ export type CompareFusionCensus
 	// … and which predicate that branch must therefore test. Guarded by the question above for the
 	// reason every accessor here is: a miss is a real answer ("nothing fused"), not a value to invent.
 	export function fusedPredicateOf(blockRef BlockRef) returns StdCmpPred
-		return try self.fusedPreds.get(blockRef) otherwise panic("CompareFusionCensus.fusedPredicateOf: block ref {blockRef} fuses no compare — ask `blockFusesCompare` first")
+		return self.fusedPreds.predOf(blockRef)
 	end 'fusedPredicateOf'
 
 	// Whether the fused compare defining `valueId` compared FLOATS, which selects the NaN-safe condition
@@ -1649,7 +1818,7 @@ export type CompareFusionCensus
 	// Only `fusedPreds` is unwound: every reader of the other two columns gates on `blockFusesCompare`,
 	// so dropping the key makes their entries unreachable.
 	export function dropFusion(blockRef BlockRef)
-		_ = self.fusedPreds.remove(blockRef)
+		self.fusedPreds.clear(blockRef)
 	end 'dropFusion'
 
 	// --- The walks ---
@@ -1689,7 +1858,7 @@ export type CompareFusionCensus
 	// Fills ALL THREE fusion columns in one walk — see `fusedFloatCmps` for why the float-ness (and, beside
 	// it, the signedness) is a column rather than a field inside the predicate. They are handed in
 	// rather than returned so the three can only be created together.
-	function computeFusedCmps(module StdModule, func IrFunction, fused CmpPredMap, floatCmps StdValueUseSet, unsignedCmps StdValueUseSet)
+	function computeFusedCmps(module StdModule, func IrFunction, fused FusedPredColumn, floatCmps StdValueUseSet, unsignedCmps StdValueUseSet)
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("computeFusedCmps: blockRef from func.blockRefs not in stdModule.blocks")
 
@@ -1853,7 +2022,7 @@ export type CompareFusionCensus
 	// Record `condId` as fusable iff the LAST flag-clobbering body op of `block` is a
 	// compare that DEFINES it. Walked backward from the end of the body, because that is
 	// the order the flags are overwritten in.
-	function recordFusableCompare(module StdModule, block IrBlock, blockRef BlockRef, condId ValueId, fused CmpPredMap, floatCmps StdValueUseSet, unsignedCmps StdValueUseSet)
+	function recordFusableCompare(module StdModule, block IrBlock, blockRef BlockRef, condId ValueId, fused FusedPredColumn, floatCmps StdValueUseSet, unsignedCmps StdValueUseSet)
 		var i = block.opRefs.count()
 
 		while i > 0 'scanBackward'
@@ -1908,7 +2077,7 @@ export type CompareFusionCensus
 	// of a LATER block (`if r … end / if r … end`), where the flags are long gone and the
 	// value must be in a register. Skipping every `condBranch` use unconditionally would miss
 	// that second one and leave the branch reading a value nothing ever wrote.
-	function computeValuesReadFromRegisters(module StdModule, func IrFunction, fused CmpPredMap) returns StdValueUseSet
+	function computeValuesReadFromRegisters(module StdModule, func IrFunction, fused FusedPredColumn) returns StdValueUseSet
 		var readAsValue = StdValueUseSet.create()
 
 		for blockRef in func.blockRefs 'eachBlock'
@@ -1937,11 +2106,11 @@ export type CompareFusionCensus
 	// Add the terminator's value uses to `readAsValue` — unless it is a `condBranch` whose
 	// condition this block FUSES, in which case it consumes EFLAGS and not a register.
 	//
-	// ⭐ **THE MEMBERSHIP TEST IS THE WHOLE QUESTION, because the map is keyed by BLOCK** (see
-	// `CmpPredMap`): an entry exists for exactly those blocks whose terminator is a `condBranch`
+	// ⭐ **THE MEMBERSHIP TEST IS THE WHOLE QUESTION, because the column is keyed by BLOCK** (see
+	// `FusedPredColumn`): an entry exists for exactly those blocks whose terminator is a `condBranch`
 	// that `recordFusableCompare` PROVED reads its compare's flags. A `match` over every `StdOp`
 	// variant would answer the same question by re-deriving what this lookup already knows.
-	function collectTerminatorValueUses(module StdModule, block IrBlock, blockRef BlockRef, readAsValue StdValueUseSet, fused CmpPredMap)
+	function collectTerminatorValueUses(module StdModule, block IrBlock, blockRef BlockRef, readAsValue StdValueUseSet, fused FusedPredColumn)
 		if not block.hasTerminatorOp() 'noTerm'
 			return
 		end 'noTerm'

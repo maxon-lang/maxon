@@ -340,9 +340,9 @@ function processWideBytes() returns HeapByteCount
 	return (__Builtins.mmAllocBytes() + __Builtins.mmRawAllocBytes()) as HeapByteCount
 end 'processWideBytes'
 
-// The only brackets that read the per-thread columns are the register allocator's sub-phases, which
-// run on `RegAllocPool` — so a bracket is only ever open while another thread allocates when that pool
-// is live.
+// The only brackets that read the per-thread columns are the backend pool's — the isel and the
+// allocator's sub-phases, which run on `BackendPool` — so a bracket is only ever open while another
+// thread allocates when that pool is live.
 
 function callingThreadAllocs() returns AllocCount
 	return __Builtins.threadAllocTotal() as AllocCount
@@ -436,16 +436,17 @@ module function addRegAllocDelta(project Project, phase RegAllocPhase, delta Pha
 end 'addRegAllocDelta'
 
 // ⭐ **FOLD A COMPILE PHASE MEASURED ON A POOL WORKER INTO BOTH TABLES.** `addRegAllocDelta`'s twin for a
-// phase that IS a `CompilePhase` row — the Std passes `StdPassPool` runs per function — and the third
-// writer of phase attribution beside `recordPhaseDelta`. No span closes and no heartbeat is touched: the
-// bracket ran on a worker (`PhaseProbe.beginCounters`), and the driver phase that ran the pool carries
-// both on the main thread.
+// phase that IS a `CompilePhase` row — the Std passes `StdPassPool` runs per function, the isel
+// `BackendPool` runs per function — and the third writer of phase attribution beside `recordPhaseDelta`.
+// No span closes and no heartbeat is touched: the bracket ran on a worker (`PhaseProbe.beginCounters`),
+// and `driver`, the phase that ran the pool, carries both on the main thread.
 //
-// The phase is MARKED as pool-measured in the timing table, which is what keeps the attribution honest:
-// its row is a sum over workers that overlaps the driver's wall, so it is a breakdown OF the driver phase
-// rather than a disjoint interval beside it, and `CompileTimings.attributedCost` counts it as such.
-module function foldPoolPhaseDelta(project Project, phase CompilePhase, delta PhaseDelta)
-	project.timings.addPoolPhaseCost(phase, nanos: delta.nanos, cpuTicks: delta.cpuTicks)
+// The phase is MARKED as a pool breakdown of `driver` in the timing table, which is what keeps the
+// attribution honest: its row is a sum over workers that overlaps the driver's wall, so it is a breakdown
+// OF the driver phase rather than a disjoint interval beside it, and `CompileTimings.attributedCost`
+// counts it as such.
+module function foldPoolPhaseDelta(project Project, phase CompilePhase, driver CompilePhase, delta PhaseDelta)
+	project.timings.addPoolPhaseCost(phase, driver: driver, nanos: delta.nanos, cpuTicks: delta.cpuTicks)
 	project.memory.addPhase(phase, delta: delta)
 end 'foldPoolPhaseDelta'
 

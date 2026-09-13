@@ -762,7 +762,7 @@ end 'classPoolSizeOf'
 // whole repair. Each arm used to source its own target's mask, so the check proved "arm64's call ops
 // agree with arm64's mask" while the colorer, one screen away, asked the X64 one unconditionally.
 // The two spellings it was written to hold together were never both under it. Sourced once in
-// `allocateRegisters` and passed in, the mask the ABI clobbers and the mask the colorer prefers are
+// `lowerAndAllocateOnAWorkerPool` and passed in, the mask the ABI clobbers and the mask the colorer prefers are
 // ONE value, and a target that got the wrong one fails the build here instead of colouring quietly.
 //
 // VERIFIED BY SABOTAGE: with `callerSavedMaskFor`'s arm64 arm put back to `callerSavedMask()`, an
@@ -779,7 +779,7 @@ end 'assertCallClobberConsistent'
 // The x64 call ops against the caller-saved pool the COLORER holds, with rbx (callee-saved) the
 // drift witness.
 function assertX64CallClobbers(pool RegMask)
-	// BEFORE the clobber masks are read, for the reason `allocateRegisters`'s call order documents:
+	// BEFORE the clobber masks are read, for the reason `assertRegisterFacts`'s call order documents:
 	// the caller-saved mask and the callee-saved lists are two halves of one fact, so a drifted list
 	// makes the clobber check fail too — and it would blame `TargetDialect.callDirect`, sending the
 	// reader to a file with nothing wrong in it. Checking the lists first means each panic accuses
@@ -904,7 +904,7 @@ end 'assertOneCallClobber'
 // The CALLER-saved (volatile) half of `target`'s pool — the registers a call destroys, and so the
 // registers the colorer should hand a value that does NOT cross one (`preferredVolatilityMask`).
 // The twin of `allocatablePool` and `registerFileFor`: sourced ONCE per module in
-// `allocateRegisters` and carried beside `pool` through the whole colorer.
+// `lowerAndAllocateOnAWorkerPool` and carried beside `pool` through the whole colorer.
 //
 // ⭐⭐ **THE COLORER ASKED `callerSavedMask()` — X64'S — ON EVERY TARGET UNTIL A5c, AND THE REGISTER
 // NUMBERS DO NOT EVEN LINE UP.** x64's `xmm0..xmm5` are RegNums 16–21, which in the arm64 file are
@@ -1150,45 +1150,17 @@ function assertCalleeSavedListsMatchMasks()
 	end 'overlap'
 end 'assertCalleeSavedListsMatchMasks'
 
-// Color every function's virtual registers into physical GPRs, in place. Only USER
-// functions are present here — `mrt_start` is prepended AFTER this pass by
-// augmentWithRuntime (it is hand-built in physical registers). `throws CompileError`
-// because a genuine hot-loop overflow is E5001, reported onto `project.diagnostics`.
-// One `ValueClassColumn` PER FUNCTION, indexed by the same function index `module.functions` is —
-// the shape the allocator's entry point takes the lowering's class output in.
+// ⭐ THE STRUCTURAL FACTS THE WHOLE ALLOCATOR RESTS ON, CHECKED ONCE PER COMPILE before the pool is
+// spawned (`lowerAndAllocateOnAWorkerPool`).
 //
-// ⚠ IT IS PER FUNCTION BECAUSE A ValueId IS. "Function-local and dense, allocated from a per-function
-// counter" (IrValueId) — so function 0's value 3 and function 1's value 3 are different values, and a
-// single module-wide column indexed by ValueId would alias them onto one class. The `ValueClassColumn`
-// the contract declares is therefore ONE function's; this is the carrier that says which.
-export typealias ValueClassColumns = Array with ValueClassColumn
-
-export function allocateRegisters(module TargetModule, target Target, project Project, valueClasses ValueClassColumns) throws CompileError
-	logDebug(LogCategory.codegen, message: function() gives "Register allocation ({targetToString(target)})")
-
-	// ⭐ THE THREE PER-ISA FACTS THE WHOLE ALLOCATOR RUNS ON, SOURCED ONCE HERE AND CARRIED TOGETHER.
-	// Each is a `match` on the target that must happen exactly once per module: asking any of them
-	// per value is a cost, and asking any of them WITHOUT the target is how one of them came to be
-	// x64's on every ISA (see `callerSavedMaskFor`).
-	let pool = allocatablePool(target)
-
-	// The target's register FILE — its GPR/vector boundary and width — carried beside `pool` through
-	// the whole allocator so every per-value class question is asked against the right ISA (16 vs 31).
-	// Sourced once here and stored on each function's `LivenessResult`; the sites that hold `pool` but
-	// not `target` read it back from there (see `poolOfClass`).
-	let file = registerFileFor(target)
-
-	// The CALLER-saved half of that pool — the colorer's volatility preference, and the mask the
-	// call ops' `implicitDefs` are held equal to just below.
-	let callerSaved = callerSavedMaskFor(target)
-
-	// ORDER IS LOAD-BEARING: most primitive fact first. `callerSavedMask` is built from
-	// `classRegisterMask`, which is built from `RegisterFileSize` — so a drifted register file makes
-	// the clobber check fail TOO, and it fails first and blames `TargetDialect.callDirect`, sending
-	// the reader to a file with nothing wrong in it. Verified by sabotage: with `RegisterFileSize`
-	// set to 31, the clobber check reported "callDirect ... drifted apart" and named neither the
-	// constant nor the enum. Checking the file's own width before anything derived from it is read
-	// means each panic accuses the thing that actually moved.
+// ORDER IS LOAD-BEARING: most primitive fact first. `callerSavedMask` is built from
+// `classRegisterMask`, which is built from `RegisterFileSize` — so a drifted register file makes
+// the clobber check fail TOO, and it fails first and blames `TargetDialect.callDirect`, sending
+// the reader to a file with nothing wrong in it. Verified by sabotage: with `RegisterFileSize`
+// set to 31, the clobber check reported "callDirect ... drifted apart" and named neither the
+// constant nor the enum. Checking the file's own width before anything derived from it is read
+// means each panic accuses the thing that actually moved.
+module function assertRegisterFacts(target Target, pool RegMask, callerSaved RegMask, file RegisterFile)
 	assertRegisterFileMatchesEnum()
 	assertCallClobberConsistent(target, callerSaved: callerSaved)
 	assertRegClassCountMatches()
@@ -1197,48 +1169,37 @@ export function allocateRegisters(module TargetModule, target Target, project Pr
 	// count would make this report an empty file rather than the miscount that produced it.
 	assertVolatilitySplitsEveryClass(pool, callerSaved: callerSaved, file: file, target: target)
 	assertEncoderScratchMasks(target)
+end 'assertRegisterFacts'
 
-	// The stats object is the PROJECT's, not a fresh one: its sub-phase timers are a
-	// breakdown of the `regalloc` phase `buildBackend` measures around this call, and the
-	// whole-compile report nests them under it and reconciles the two (any regalloc time
-	// they do not claim — the driver loop itself — surfaces as a nested `(unattributed)`
-	// row rather than vanishing). A locally-created stats object would be a second,
-	// disconnected accounting of the same wall time.
-	var stats = project.timings.regAlloc
-
-	// Split every phi-carrying CRITICAL edge before coloring, so SSA destruction
-	// always has a safe home for its parallel copies. This runs OUTSIDE the
-	// per-function loop (it mutates `func.blockRefs`, which the loop's `func` borrow
-	// would forbid).
-	let edgeProbe = PhaseProbe.beginCounters()
-	splitCriticalEdges(module, target: target)
-	addRegAllocDelta(project, phase: RegAllocPhase.criticalEdges, delta: edgeProbe.elapsed())
-
-	try allocateOnAWorkerPool(module, target: target, project: project, valueClasses: valueClasses, pool: pool, callerSaved: callerSaved, file: file, stats: stats)
-	logDebug(LogCategory.codegen, message: function() gives regAllocStatsMessage(stats))
-end 'allocateRegisters'
-
-// RENDER THE E5001 A UNIT RUN REFUSED WITH, BY RUNNING THE CORE AGAIN ON THE FUNCTION ITSELF.
+// RENDER THE E5001 A UNIT RUN REFUSED WITH, BY RUNNING THE WHOLE UNIT AGAIN ON THIS THREAD.
 //
 // The refusal's analysis state - the liveness it was measured against, the fresh-id lineage, the peak -
 // is far too large to come back through a reply cell, and it is on a worker's green thread besides. What
 // comes home is the bare `RegAllocRefusal`, so the second run is how the state is recovered — EXACTLY: the
-// first run allocated a COPY, so this function has not been touched, and the same core on the same input
-// refuses at the same peak. A compile that reaches here is failing, so the second run (and the fresh
-// variant memo it builds) costs nothing anybody will see.
-module function refuseForRegisterPressure(project Project, module TargetModule, func IrFunction, funcIndex FuncIndex, pool RegMask, callerSaved RegMask, file RegisterFile, valueClass ValueClassColumn) throws CompileError
+// function is re-extracted from the untouched Std module and taken through the same isel, the same edge
+// split and the same core, so it refuses at the same peak. A compile that reaches here is failing, so the
+// second run (and the fresh variant memo it builds) costs nothing anybody will see.
+module function refuseForRegisterPressure(project Project, stdModule StdModule, funcIndex FuncIndex, target Target, abi CalleeAbiTable, usesGt bool, pool RegMask, callerSaved RegMask, file RegisterFile) throws CompileError
+	let body = BackendUnitBody.extract(stdModule, func: stdModule.getFunc(funcIndex))
+	var costs = PoolPhaseCosts.create(RegAllocPhase.allCases.count())
+	var iselCost = PhaseDelta.zero()
+	let lowered = lowerAndSplitUnit(unitLoweringFor(target, abi: abi, usesGt: usesGt), unitModule: body.unitModule, target: target, costs: costs, iselCost: iselCost)
+	var func = lowered.targetModule.getFunc(UnitFunctionIndex)
+
+	// The unit's function is synthesized and names no file; the diagnostic locates the loop in the
+	// author's, so the real function's path is put on the record the renderer reads.
+	func.sourceFilePath = stdModule.getFunc(funcIndex).sourceFilePath
 	var opFacts = OpVariantFacts.create()
 	var refusal = RegAllocRefusalSite.create()
 	var counters = RegAllocCounters.create()
-	var costs = PoolPhaseCosts.create(RegAllocPhase.allCases.count())
 	var facts = RegAllocFacts.create()
 
 	// It asks about no named value: the compile is failing, and a diagnostic run has no sidecar to fill.
-	try allocateFunctionCore(module, func: func, hasAuthor: not func.sourceFilePath.isEmpty(), pool: pool, callerSaved: callerSaved, file: file, valueClass: valueClass, opFacts: opFacts, counters: counters, costs: costs, facts: facts, refusal: refusal, debugValueIds: ValueIdArray.create(), debugLocations: DebugValueLocationArray.create()) otherwise 'refusedAgain'
-		try renderRegisterPressureRefusal(project, module: module, func: func, funcIndex: funcIndex, pool: pool, refusal: refusal)
+	try allocateFunctionCore(lowered.targetModule, func: func, hasAuthor: body.hasAuthor, pool: pool, callerSaved: callerSaved, file: file, valueClass: lowered.valueClass, opFacts: opFacts, counters: counters, costs: costs, facts: facts, refusal: refusal, debugValueIds: ValueIdArray.create(), debugLocations: DebugValueLocationArray.create()) otherwise 'refusedAgain'
+		try renderRegisterPressureRefusal(project, module: lowered.targetModule, func: func, funcIndex: funcIndex, pool: pool, refusal: refusal)
 	end 'refusedAgain'
 
-	panic("refuseForRegisterPressure: the core refused a COPY of '{String.from(func.name)}' and then allocated the function itself - the two runs saw the same input, so one refusing and the other not is a nondeterminism in the allocator, not a program the compiler can report on")
+	panic("refuseForRegisterPressure: the core refused '{String.from(func.name)}' on a pool worker and then allocated it on this thread - the two runs saw the same input, so one refusing and the other not is a nondeterminism in the allocator, not a program the compiler can report on")
 end 'refuseForRegisterPressure'
 
 // Render the E5001 a refused core run recorded. The core throws without a `Project` and leaves the
@@ -2548,7 +2509,7 @@ end 'copyGroupBlocked'
 // xmm0..xmm5, so x19/x20/x21 read as volatile and x3/x4/x5/x12..x15 did not; on arm64 SIMD the
 // intersection is EMPTY, so `anyVolatileFree` is false at every value and this returns the whole
 // class pool — a preference that prefers nothing. `chooseRegister` then died on programs that fit
-// (`register-volatility-preference`). The mask is per ISA, so it arrives from `allocateRegisters`
+// (`register-volatility-preference`). The mask is per ISA, so it arrives from `lowerAndAllocateOnAWorkerPool`
 // with `pool`, and asking for it HERE — by any spelling, dispatched or not — is both the bug and a
 // per-value cost.
 function preferredVolatilityMask(blocked RegMask, classPool RegMask, callerSaved RegMask) returns RegMask
@@ -2820,11 +2781,17 @@ end 'computeBlockDeaths'
 // Applying a coloring to an op (used by the rewrite in SsaDestruction.maxon)
 // ==========================================================================
 
-// Resolve one operand: a physical register passes through (the R8 return target); a
-// virtual register becomes its assigned physical register.
+// Resolve one operand: a virtual register becomes its assigned physical register; a physical one (the R8
+// return target) keeps its number.
+//
+// ⛔ **A PHYSICAL OPERAND IS RE-MINTED, NOT PASSED THROUGH.** A `TargetVReg` is a box, and the isel binds one
+// to a local it names in several ops (`let scratch = x64PhysReg(rax)`), so the box has as many owners as
+// ops. The coloured module travels home from a pool worker in a reply, and the transfer walk aborts the
+// process on any record with a second owner (exit 96); minting every operand of every coloured op fresh
+// is what leaves each box with exactly one.
 function colorVRegWith(vreg TargetVReg, alloc Allocation) returns TargetVReg
 	return match vreg 'v'
-		physical gives vreg
+		physical(regNum) gives TargetVReg.physical(regNum)
 		virtual(id) gives TargetVReg.physical(alloc.regNumOf(id))
 	end 'v'
 end 'colorVRegWith'
@@ -3058,7 +3025,7 @@ end 'colorTargetOp'
 // Stats logging
 // ==========================================================================
 
-function regAllocStatsMessage(stats RegAllocStats) returns String
+module function regAllocStatsMessage(stats RegAllocStats) returns String
 	var msg = StringBuilder.create()
 	msg.append("regalloc stats: {stats.functionsAllocated} func(s), {stats.valuesColored} values colored, {regMaskPopcount(stats.registersUsed)} distinct regs used\n")
 

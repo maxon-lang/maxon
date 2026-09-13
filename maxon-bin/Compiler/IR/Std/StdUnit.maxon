@@ -4,9 +4,10 @@
 // ⭐⭐ **WHY A MODULE AND NOT A LIGHTER RECORD.** The passes `StdPassPool` fans out take a `StdModule` and
 // an `IrFunction` and read the module's `blocks`, `ops` and `spans` through them, so a unit that IS a
 // module runs every pass body UNCHANGED — one copy of each pass, on the pool and on the main thread alike.
-// The module holds the one function at index `UnitFunctionIndex`; its `blockRefs` name the unit's own
-// `blocks`, every block's `opRefs` name the unit's own `ops`, and the span column is parallel to them.
-// `ValueId`s and `BlockId`s are function-local and cross unchanged.
+// The same module is what the backend pool hands its isel (`BackendUnit`), which lowers it exactly as it
+// would lower the whole program's module. The module holds the one function at index `UnitFunctionIndex`;
+// its `blockRefs` name the unit's own `blocks`, every block's `opRefs` name the unit's own `ops`, and the
+// span column is parallel to them. `ValueId`s and `BlockId`s are function-local and cross unchanged.
 //
 // ⛔⛔ **EVERY RECORD REACHABLE FROM A UNIT IS BUILT FRESH, AND THAT IS A RUN-TIME CONTRACT WITH A LOUD
 // FAILURE.** A message MOVES: the send walks the whole graph and a record with a second owner aborts the
@@ -22,11 +23,12 @@
 // copy, and the function is walked once.
 //
 // ⚠ **WHAT THE UNIT DOES NOT CARRY IS AS DELIBERATE AS WHAT IT DOES.** The twelve passes read `blockRefs`,
-// `nextBlockId`, `name` and `stackSize` of their function and nothing else — the value columns, the
-// parameter masks, the guard and inline-site tables are all read by passes on either side of the fan-out,
-// and they stay on the REAL function, which is mutated in place at the splice. Carrying a column nothing
-// reads would be a second home for it. The unit's `blockSourceInfo` is empty for the same reason: no
-// fanned-out pass reads it, and the real module's column stays parallel to its `blocks` through the splice.
+// `nextBlockId`, `name` and `stackSize` of their function, and the isel reads its `returnType` and
+// `paramTypes` besides; nothing on a pool reads any other column — the value columns, the parameter masks,
+// the guard and inline-site tables are all read by passes on either side of the fan-outs, and they stay on
+// the REAL function, which is mutated in place at the splice. Carrying a column nothing reads would be a
+// second home for it. The unit's `blockSourceInfo` is empty for the same reason: no fanned-out pass reads
+// it, and the real module's column stays parallel to its `blocks` through the splice.
 //
 // ⭐ **THE SPLICE PUTS THE FUNCTION'S OPS INTO ITS OWN SLOTS FIRST (`IrModule.placeOp`) and its blocks
 // back into their own slots by id**, so a spliced module is the serial run's up to the INDEX of an op or
@@ -36,7 +38,7 @@
 // dump are byte-identical to a serial run (`tests/parallel-compile/byte-identical`).
 
 // The one function a unit module holds.
-module let UnitFunctionIndex = 0 as FuncIndex
+export let UnitFunctionIndex = 0 as FuncIndex
 
 module typealias StdUnitBodyArray = Array with StdUnitBody
 
@@ -64,27 +66,7 @@ module type StdUnitBody
 	end 'afterRunning'
 
 	module static function extract(module StdModule, func IrFunction) returns StdUnitBody
-		var unitModule = StdModule.create()
-
-		// Armed before the first op, so every op placed below is attributed to the span it had. The passes
-		// then push through the cursor exactly as they do on the real module.
-		unitModule.spans.armed = module.spans.armed
-
-		var unitFunc = IrFunction.createFromStd(func.name.clone(), returnType: StdReturnType.void, paramCount: func.paramCount, paramTypes: StdTypeArray.create(), returnLine: func.returnLine)
-		unitFunc.stackSize = func.stackSize
-		unitFunc.nextBlockId = func.nextBlockId
-		unitFunc.blockRefs.reserve(func.blockRefs.count())
-		unitModule.blocks.reserve(func.blockRefs.count())
-		unitModule.ops.reserve(liveOpTallyOf(module.blocks, func: func) as ElementIndex)
-
-		for blockRef in func.blockRefs 'eachBlock'
-			let copy = copiedBlock(module, blockRef: blockRef, into: unitModule)
-			unitFunc.blockRefs.push(unitModule.blocks.count())
-			unitModule.blocks.push(copy)
-		end 'eachBlock'
-
-		unitModule.pushFunc(unitFunc)
-		return Self{unitModule: unitModule, origins: DerivedOrigins.create(), capturedLog: PassLogArray.create()}
+		return Self{unitModule: extractUnitModule(module, func: func), origins: DerivedOrigins.create(), capturedLog: PassLogArray.create()}
 	end 'extract'
 end 'StdUnitBody'
 
@@ -102,6 +84,35 @@ module type StdUnit
 		return Self{funcIndex: funcIndex, holder: holder}
 	end 'extract'
 end 'StdUnit'
+
+// ⭐ **THE UNIT ITSELF: one function of the real module as a fresh single-function module**, its blocks
+// and ops deep-cloned, its arrays reserved to their final counts, and its function carrying exactly the
+// columns this file's header lists. The one extractor both pools use.
+export function extractUnitModule(module StdModule, func IrFunction) returns StdModule
+	var unitModule = StdModule.create()
+
+	// Armed before the first op, so every op placed below is attributed to the span it had. The passes
+	// then push through the cursor exactly as they do on the real module.
+	unitModule.spans.armed = module.spans.armed
+
+	// The return type is a union box and the parameter list an array: both are copied, since the real
+	// function keeps its own and the unit must own everything it reaches.
+	var unitFunc = IrFunction.createFromStd(func.name.clone(), returnType: func.returnType.clone(), paramCount: func.paramCount, paramTypes: func.paramTypes.clone(), returnLine: func.returnLine)
+	unitFunc.stackSize = func.stackSize
+	unitFunc.nextBlockId = func.nextBlockId
+	unitFunc.blockRefs.reserve(func.blockRefs.count())
+	unitModule.blocks.reserve(func.blockRefs.count())
+	unitModule.ops.reserve(liveOpTallyOf(module.blocks, func: func) as ElementIndex)
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let copy = copiedBlock(module, blockRef: blockRef, into: unitModule)
+		unitFunc.blockRefs.push(unitModule.blocks.count())
+		unitModule.blocks.push(copy)
+	end 'eachBlock'
+
+	unitModule.pushFunc(unitFunc)
+	return unitModule
+end 'extractUnitModule'
 
 // One block of the real module, deep-cloned into the unit — its identity, its phi model and its edges —
 // with its ops cloned in at the unit's next indices and the `opRefs` renumbered onto them, keeping the

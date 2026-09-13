@@ -105,7 +105,7 @@ export type PhaseMemoryColumns
 	end 'totalDelta'
 
 	// The same sum over the phases `selected` flags — one half of the table, for a table whose other half
-	// is a breakdown of a row already in it (`CompileTimings.measuredOnAPool`).
+	// is a breakdown of a row already in it (`CompileTimings.poolRowMask`).
 	export function totalDeltaWhere(selected BoolArray, wanted bool) returns PhaseDelta
 		var sum = PhaseDelta.zero()
 
@@ -198,11 +198,11 @@ export type CompileMemory
 		return PhaseDelta.create(0, cpuTicks: 0, allocs: allocs, frees: frees, bytes: self.columns.bytesAt(phase.ordinal))
 	end 'deltaOf'
 
-	// What the DISJOINT phases claimed between them. `measuredOnAPool` is the timing table's column
-	// (`CompileTimings.measuredOnAPool`): a phase folded from pool workers is a breakdown of the driver
-	// phase the pool ran inside, whose row is already in this sum.
-	export function attributed(measuredOnAPool BoolArray) returns PhaseDelta
-		return self.columns.totalDeltaWhere(measuredOnAPool, wanted: false)
+	// What the DISJOINT phases claimed between them. `poolRows` is the timing table's mask
+	// (`CompileTimings.poolRowMask`): a phase folded from pool workers is a breakdown of the driver phase
+	// the pool ran inside, whose row is already in this sum.
+	export function attributed(poolRows BoolArray) returns PhaseDelta
+		return self.columns.totalDeltaWhere(poolRows, wanted: false)
 	end 'attributed'
 
 	// Allocations no phase claimed: the glue between phases (project construction, output
@@ -213,8 +213,8 @@ export type CompileMemory
 	// sum can never exceed the whole compile's. If it does, two probes overlap and are
 	// double-counting — the exact failure this file's header describes, so it panics
 	// rather than clamp to zero.
-	export function unattributed(measuredOnAPool BoolArray) returns PhaseDelta
-		let claimed = self.attributed(measuredOnAPool)
+	export function unattributed(poolRows BoolArray) returns PhaseDelta
+		let claimed = self.attributed(poolRows)
 
 		if claimed.allocs > self.total.allocs 'overlapAllocs'
 			panic("CompileMemory: the phases claim {claimed.allocs} allocations but the whole compile made {self.total.allocs} — two phase probes OVERLAP and are double-counting. Phases must be disjoint intervals (see CompileMemory's header, and CompileTimings' for the original of this rule).")
@@ -248,23 +248,27 @@ function poolMemoryUnattributed(wall PhaseDelta, claimed PhaseDelta, breakdown S
 	return PhaseDelta.create(0, cpuTicks: 0, allocs: allocs, frees: frees, bytes: wall.bytes - claimed.bytes)
 end 'poolMemoryUnattributed'
 
-function regAllocClaimedMemory(memory CompileMemory) returns PhaseDelta
-	var claimed = PhaseDelta.zero()
+// What a driver phase's breakdown claimed: its pool rows, and for `regalloc` the allocator's own
+// sub-phase rows besides — the memory twin of `CompileTimings.claimedUnder`.
+function claimedMemoryUnder(memory CompileMemory, timings CompileTimings, driver CompilePhase) returns PhaseDelta
+	var claimed = memory.columns.totalDeltaWhere(timings.poolRowsUnder(driver), wanted: true)
 
-	for sub in RegAllocPhase.allCases 'eachSub'
-		claimed = deltaSum(claimed, other: memory.regAlloc.deltaOf(sub))
-	end 'eachSub'
+	if driver == CompilePhase.regalloc 'theAllocatorsOwnRows'
+		for sub in RegAllocPhase.allCases 'eachSub'
+			claimed = deltaSum(claimed, other: memory.regAlloc.deltaOf(sub))
+		end 'eachSub'
+	end 'theAllocatorsOwnRows'
 
 	return claimed
-end 'regAllocClaimedMemory'
+end 'claimedMemoryUnder'
 
 // The whole-compile memory table: every phase's allocations, frees and byte volume, the
 // allocator's sub-phases nested under `regalloc`, and a TOTAL / attributed / unattributed
 // footer that makes any gap explicit. Printed beside the timing table, under the same
 // `--log=compiler:debug`, and built lazily behind it so a plain build never formats a row.
 //
-// `timings` is read for one column: which phases were measured on a pool, and so are a breakdown of the
-// `stdFanOut` row rather than intervals beside it (`CompileTimings.measuredOnAPool`).
+// `timings` is read for one column: which phases were measured on a pool, and which driver's row each is
+// a breakdown of rather than an interval beside it (`PhaseRowKind`).
 export function compileMemoryReport(memory CompileMemory, timings CompileTimings) returns String
 	let total = memory.total
 
@@ -277,31 +281,31 @@ export function compileMemoryReport(memory CompileMemory, timings CompileTimings
 		msg.append(memoryRow("{MemRowIndent}{phase.name}{PoolMeasuredSuffix if timings.isMeasuredOnAPool(phase) else ""}", delta: memory.deltaOf(phase)))
 
 		if phase == CompilePhase.regalloc 'nestRegAlloc'
-			msg.append(regAllocMemoryBreakdown(memory))
+			msg.append(regAllocSubPhaseMemoryRows(memory))
 		end 'nestRegAlloc'
 
-		if phase == CompilePhase.stdFanOut 'nestFanOut'
-			msg.append(memoryRow("{MemSubPhaseIndent}(unattributed)", delta: poolMemoryUnattributed(memory.deltaOf(phase), claimed: memory.columns.totalDeltaWhere(timings.measuredOnAPool, wanted: true), breakdown: "the pool-measured Std pass rows")))
-		end 'nestFanOut'
+		if phase == CompilePhase.regalloc or timings.drivesAPool(phase) 'nestPool'
+			msg.append(memoryRow("{MemSubPhaseIndent}(unattributed)", delta: poolMemoryUnattributed(memory.deltaOf(phase), claimed: claimedMemoryUnder(memory, timings: timings, driver: phase), breakdown: "the rows breaking `{phase.name}` down")))
+		end 'nestPool'
 	end 'eachPhase'
 
+	let poolRows = timings.poolRowMask()
 	msg.append(horizontalRule(MemRuleWidth))
 	msg.append(memoryRow("{MemRowIndent}TOTAL", delta: total))
-	msg.append(memoryRow("{MemRowIndent}attributed", delta: memory.attributed(timings.measuredOnAPool)))
-	msg.append(memoryRow("{MemRowIndent}unattributed", delta: memory.unattributed(timings.measuredOnAPool)))
+	msg.append(memoryRow("{MemRowIndent}attributed", delta: memory.attributed(poolRows)))
+	msg.append(memoryRow("{MemRowIndent}unattributed", delta: memory.unattributed(poolRows)))
 	return msg.build()
 end 'compileMemoryReport'
 
-function regAllocMemoryBreakdown(memory CompileMemory) returns String
+function regAllocSubPhaseMemoryRows(memory CompileMemory) returns String
 	var msg = StringBuilder.create()
 
 	for sub in RegAllocPhase.allCases 'eachSub'
 		msg.append(memoryRow("{MemSubPhaseIndent}{sub.name}", delta: memory.regAlloc.deltaOf(sub)))
 	end 'eachSub'
 
-	msg.append(memoryRow("{MemSubPhaseIndent}(unattributed)", delta: poolMemoryUnattributed(memory.deltaOf(CompilePhase.regalloc), claimed: regAllocClaimedMemory(memory), breakdown: "the register allocator's sub-phases")))
 	return msg.build()
-end 'regAllocMemoryBreakdown'
+end 'regAllocSubPhaseMemoryRows'
 
 function memoryRow(label String, delta PhaseDelta) returns String
 	return "{padRight(label, width: MemPhaseNameWidth)}{padLeft("{delta.allocs}", width: MemAllocsWidth)}{padLeft("{delta.frees}", width: MemFreesWidth)}{padLeft("{delta.bytes}", width: MemBytesWidth)}\n"

@@ -291,6 +291,31 @@ export type IrBlock
 		return IrBlock.create(src.id, label: src.label, heat: src.heat, inlineSite: src.inlineSite)
 	end 'createLike'
 
+	// Shift everything that names an op by index — `opRefs`, the terminator, the cond-branch — by
+	// `shift`: the block's ops were appended after `shift` others in the module it now belongs to
+	// (`IrModule.merge`, the backend unit splice). The two unions are re-minted whole, so the block shares
+	// no box with whatever it was relocated from.
+	export function shiftOpIndices(shift OpCount)
+		let delta = shift as OpIndex
+
+		for pos in 0 upto self.opRefs.count() 'eachOp'
+			let opIdx = try self.opRefs.get(pos) otherwise panic("IrBlock.shiftOpIndices: opRefs.get OOB at {pos}")
+			try self.opRefs.set(pos, value: opIdx + delta) otherwise panic("IrBlock.shiftOpIndices: opRefs.set OOB at {pos}")
+		end 'eachOp'
+
+		self.terminator = match self.terminator 'relocate'
+			unset gives Terminator.unset
+			dead gives Terminator.dead
+			fallthrough gives Terminator.fallthrough
+			opIndex(index) gives Terminator.opIndex(index + delta)
+		end 'relocate'
+
+		self.condBranch = match self.condBranch 'relocateCond'
+			none gives CondBranch.none
+			opIndex(index) gives CondBranch.opIndex(index + delta)
+		end 'relocateCond'
+	end 'shiftOpIndices'
+
 	// True when the block has a real terminator op (returns / branches).
 	// Dead and fallthrough blocks return false — they have no op to
 	// reference even though they are effectively terminated.

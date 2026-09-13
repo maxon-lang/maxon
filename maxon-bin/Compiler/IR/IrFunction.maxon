@@ -27,8 +27,8 @@ export type SourcePosition
 	// naming it, and a reader grepping `synthesized` finds every site that claims it.
 	// ⚠ **`FilePath.empty()` AND NOT `FilePath from ""`, AND THE REASON IS REACHABILITY.** The full
 	// constructor resolves a file URL, which asks a `CharacterSet` — a `Set`, dispatching `hash` through a
-	// witness slot. This door is on the register allocator's POOL WORKER path (`createFromStd` builds the
-	// function a `RegAllocUnit` is rebuilt into), and a message that dispatches somewhere the compiler
+	// witness slot. This door is on the backend POOL WORKER path (`createFromStd` builds the function of
+	// every unit a worker is handed, `extractUnitModule`), and a message that dispatches somewhere the compiler
 	// cannot name makes every address-taken function in the program message-reachable (E3143's widening) —
 	// which refused the whole pool over a module `var` in the query engine that no allocator code goes
 	// near. The two constructions answer the identical value; see `FilePath.empty`.
@@ -724,7 +724,7 @@ export type IrFunction
 	export var debugLocals as DebugLocalDeclArray
 
 	// ⭐ **WHERE EACH OF THOSE BINDINGS' VALUES ENDED UP** — flat, in `debugLocals` order and within each
-	// record in its `valueIds` order, spliced home by the register allocator (`spliceRegAllocResult`). Kept
+	// record in its `valueIds` order, spliced home from the backend pool (`spliceBackendUnit`). Kept
 	// beside the roster it answers rather than inside it, because the two are filled by tiers a worker-pool
 	// boundary apart and only their ORDER can cross it.
 	export var debugLocalLocations as DebugValueLocationArray
@@ -822,8 +822,8 @@ export type IrFunction
 	// do not — see the field.
 	//
 	// ⛔⛔ **ITS SIX MANAGED PLACEHOLDERS ARE FRESH, WHERE `create`'s ARE THE SHARED SINGLETONS — AND THAT
-	// IS A CONCURRENCY FACT, NOT AN OVERSIGHT.** This door is on the register allocator's POOL WORKER path:
-	// `RegAllocUnit` rebuilds one function per message, on whichever green thread the scheduler picked.
+	// IS A CONCURRENCY FACT, NOT AN OVERSIGHT.** This door is on the POOL WORKER path: `extractUnitModule`
+	// builds one function per message, and a worker runs on whichever green thread the scheduler picked.
 	// Storing a module-level record into a fresh one RETAINS it, and this language's reference counting is a
 	// plain load/add/store precisely because the language guarantees one green thread per box — so sixteen
 	// workers retaining and releasing ONE singleton is the lost update that guarantee exists to make

@@ -138,14 +138,12 @@ Totals: **176 files, 306,347 lines, 169,086 comment lines (55%).**
 | 2 | `maxon-bin/Compiler/Runtime/TerminalRuntime.maxon` | 254 | 138 → | 30 | todo | | |
 | 2 | `maxon-bin/Compiler/Lsp/LspHover.maxon` | 1173 | 245 → | 28 | todo | | |
 | 2 | `maxon-bin/Compiler/TreeLock.maxon` | 424 | 228 → | 27 | todo | | |
-| 2 | `maxon-bin/Compiler/Targets/Shared/RegAllocUnit.maxon` | 686 | 208 → | 27 | todo | | |
 | 2 | `maxon-bin/Compiler/Targets/Arm64/Arm64Runtime.maxon` | 293 | 171 → | 26 | todo | | |
 | 2 | `maxon-bin/Compiler/Targets/BackendDispatch.maxon` | 593 | 357 → | 26 | todo | | |
 | 2 | `maxon-bin/Compiler/Runtime/UnicodeCategoryRuntime.maxon` | 229 | 132 → | 25 | todo | | |
 | 2 | `maxon-bin/Compiler/ConditionalCompilation.maxon` | 562 | 254 → | 25 | todo | | |
 | 2 | `maxon-bin/Compiler/Targets/Wasm/WasmBinary.maxon` | 1390 | 435 → | 24 | todo | | |
 | 2 | `maxon-bin/Compiler/ServiceProgramSurvey.maxon` | 295 | 102 → | 24 | todo | | |
-| 2 | `maxon-bin/Compiler/Targets/Shared/RegAllocPool.maxon` | 317 | 143 → | 24 | todo | | |
 | 2 | `maxon-bin/Compiler/Targets/Shared/RegisterPressureDiagnostic.maxon` | 626 | 279 → | 24 | todo | | |
 | 2 | `maxon-bin/Compiler/Targets/X64/X64PrologueEpilogue.maxon` | 634 | 343 → | 24 | todo | | |
 | 2 | `maxon-bin/Compiler/Diagnostics.maxon` | 334 | 194 → | 23 | todo | | |

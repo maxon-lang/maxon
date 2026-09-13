@@ -1,0 +1,305 @@
+// RdataRequests — THE `.rdata` REGISTRATIONS AN ISEL MAKES, RECORDED ON THE WORKER AND PERFORMED ON THE
+// MAIN THREAD.
+//
+// An isel registers three things into the module's data table as it lowers: a float constant's island,
+// a `match`'s jump-table blob and a runtime abort's message blob. The table is the compile's — reached
+// from a worker it is E3143 — and two of the three take their label from ONE counter shared with every
+// string blob, so their labels AND every `.rdata` offset after them depend on the order in which every
+// function's registrations were made. A worker therefore RECORDS what it needed, in encounter order, and
+// the driver performs every function's requests in FUNCTION-INDEX order once the pool has drained
+// (`registerRdataRequests`). That is the order a serial walk of the module registers in, so every label
+// and every offset is the one a serial isel mints — which `tests/parallel-compile/rdata-order` pins.
+//
+// A float island's label is derived from its VALUE (`floatConstantLabel`), so the worker spells it into
+// the load op itself and only the island's registration travels. A jump table's and a string blob's
+// labels are counter-minted and cannot be known on a worker, so their ops carry a PLACEHOLDER naming the
+// request's position in the function's log, and `patchRdataLabels` rewrites each one once the real label
+// exists.
+
+// One registration the isel needed, as the driver performs it.
+union RdataRequest
+	floatConstant(bits ParsedInt)
+	jumpTable(slotCount ElementIndex)
+	stringBlob(bytes ByteArray)
+end 'RdataRequest'
+
+export typealias RdataRequestArray = Array with RdataRequest
+
+// A request's position in one function's log — what its placeholder label spells.
+typealias RdataRequestOrdinal = int(0 to u64.max)
+
+// Placeholder label → the label the request was registered under, for one function.
+typealias RdataLabelMap = Map with (ByteArray, ByteArray)
+
+// A prefix no real `.rdata` label carries, so a placeholder can never be mistaken for a registered label
+// the Std tier put into an op — those reach the isel already final and are left alone by the patch.
+let PlaceholderLabelPrefix = "__rdata_request_"
+
+// ONE FUNCTION'S REQUESTS, IN ENCOUNTER ORDER — what the isel writes to in place of the data table.
+export type RdataRequestLog
+	export var requests as RdataRequestArray
+
+	export static function create() returns RdataRequestLog
+		return Self{requests: RdataRequestArray.create()}
+	end 'create'
+
+	// The island's label, spelled here by the table's own formula; the registration is deferred.
+	export function floatConstant(bits ParsedInt) returns ByteArray
+		self.requests.push(RdataRequest.floatConstant(bits))
+		return floatConstantLabel(bits).toByteArray()
+	end 'floatConstant'
+
+	export function jumpTable(slotCount ElementIndex) returns ByteArray
+		return self.placeholderFor(RdataRequest.jumpTable(slotCount))
+	end 'jumpTable'
+
+	// The bytes are copied: a message is a constant the isel shares with every abort it lowers, and a
+	// request travels home in a reply that must own everything it reaches.
+	export function stringBlob(bytes ByteArray) returns ByteArray
+		return self.placeholderFor(RdataRequest.stringBlob(bytes.clone()))
+	end 'stringBlob'
+
+	function placeholderFor(request RdataRequest) returns ByteArray
+		let ordinal = self.requests.count() as RdataRequestOrdinal
+		self.requests.push(request)
+		return placeholderLabel(ordinal)
+	end 'placeholderFor'
+end 'RdataRequestLog'
+
+function placeholderLabel(ordinal RdataRequestOrdinal) returns ByteArray
+	return "{PlaceholderLabelPrefix}{ordinal}".toByteArray()
+end 'placeholderLabel'
+
+// ⭐ **THE DRIVER'S ONE DOOR: perform one function's requests, then patch its placeholders.** Returns
+// before touching the table or minting the label map for the many functions that requested nothing.
+export function performRdataRequests(globalData GlobalDataTable, module TargetModule, func IrFunction, requests RdataRequestArray)
+	if requests.count() == 0 'nothingRequested'
+		return
+	end 'nothingRequested'
+
+	patchRdataLabels(module, func: func, labels: registerRdataRequests(globalData, requests: requests))
+end 'performRdataRequests'
+
+// Perform one function's requests against the table in the order the worker made them, and answer the
+// real label of every placeholder. A float island answers no placeholder — its op already names it.
+function registerRdataRequests(globalData GlobalDataTable, requests RdataRequestArray) returns RdataLabelMap
+	var labels = RdataLabelMap.create()
+
+	for (iter, request) in requests.withIterator() 'eachRequest'
+		let ordinal = iter.index() as RdataRequestOrdinal
+
+		match request 'request'
+			floatConstant(bits) then _ = globalData.registerFloatConstant(bits)
+			jumpTable(slotCount) then labels.upsert(placeholderLabel(ordinal), value: globalData.registerJumpTable(slotCount).toByteArray())
+			stringBlob(bytes) then labels.upsert(placeholderLabel(ordinal), value: registerStringBlob(globalData, bytes: bytes).toByteArray())
+		end 'request'
+	end 'eachRequest'
+
+	return labels
+end 'registerRdataRequests'
+
+// Rewrite every placeholder in the function's ops to its registered label. A function whose log holds
+// only float islands is not walked at all.
+function patchRdataLabels(module TargetModule, func IrFunction, labels RdataLabelMap)
+	if labels.count() == 0 'nothingToPatch'
+		return
+	end 'nothingToPatch'
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = module.getBlock(blockRef)
+
+		for opIdx in block.opRefs 'eachOp'
+			patchRdataLabelAt(module, opIdx: opIdx, labels: labels)
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'hasTerm'
+			patchRdataLabelAt(module, opIdx: block.terminatorIndex(), labels: labels)
+		end 'hasTerm'
+	end 'eachBlock'
+end 'patchRdataLabels'
+
+// ⛔ **EXHAUSTIVE BY VARIANT, NO `default`.** The four variants that can carry a placeholder are the ones
+// an isel mints off `RdataRequestLog.jumpTable`/`stringBlob`; a new op that carries an `.rdata` label
+// fails to compile here rather than reaching the writer with a placeholder in it. This match BINDS
+// NOTHING: the four carriers are re-matched in a small match of their own, because a tail-slot Array
+// bound in a large match corrupts the scrutinee's decref (`LowerMaxonToStd.lowerIndirectCall`).
+function patchRdataLabelAt(module TargetModule, opIdx OpIndex, labels RdataLabelMap)
+	match module.getOp(opIdx) 'variant'
+		x64JumpTable or
+			arm64JumpTable or
+			leaRegRdata or
+			arm64LeaRdata then patchLabelCarrier(module, opIdx: opIdx, labels: labels)
+		prologue or
+			epilogue or
+			ret or
+			jmp or
+			jcc or
+			movRegImm or
+			movRegImm32 or
+			movRegReg or
+			movReg32Reg32 or
+			subRegReg or
+			imulRegReg or
+			negReg or
+			cmpRegReg or
+			leaRegRegReg or
+			leaRegRegImm32 or
+			imulRegRegImm32 or
+			cmpRegImm32 or
+			xchgRegReg or
+			callDirect or
+			iatCall or
+			cqo or
+			divideReg or
+			pushReg or
+			popReg or
+			storeSlotReg or
+			loadRegSlot or
+			andRegReg or
+			orRegReg or
+			xorRegReg or
+			notReg or
+			andRegImm32 or
+			orRegImm32 or
+			xorRegImm32 or
+			shlRegImm8 or
+			sarRegImm8 or
+			shrRegImm8 or
+			shlRegCl or
+			sarRegCl or
+			shrRegCl or
+			setccReg or
+			leaRegGlobal or
+			loadRegBaseDisp or
+			storeBaseDispReg or
+			addsdRegReg or
+			subsdRegReg or
+			mulsdRegReg or
+			divsdRegReg or
+			ucomisdRegReg or
+			movsdRegRip or
+			cvtsi2sdRegReg or
+			cvttsd2siRegReg or
+			sqrtsdRegReg or
+			roundsdRegReg or
+			movqGprXmm or
+			absF64RegReg or
+			minMaxSdRegReg or
+			movqXmmGpr or
+			negF64RegReg or
+			arm64Ret or
+			arm64Branch or
+			arm64CondBranch or
+			arm64Cbz or
+			arm64Cbnz or
+			arm64MovImm or
+			arm64Prologue or
+			arm64Epilogue or
+			arm64Add or
+			arm64Sub or
+			arm64Mul or
+			arm64Sdiv or
+			arm64Udiv or
+			arm64Msub or
+			arm64And or
+			arm64Orr or
+			arm64Eor or
+			arm64Lslv or
+			arm64Asrv or
+			arm64Lsrv or
+			arm64Neg or
+			arm64Mvn or
+			arm64AddImm or
+			arm64SubImm or
+			arm64AndImm or
+			arm64OrrImm or
+			arm64EorImm or
+			arm64LslImm or
+			arm64AsrImm or
+			arm64LsrImm or
+			arm64Cmp or
+			arm64CmpImm or
+			arm64Cset or
+			arm64LeaFuncAddr or
+			arm64LeaGlobal or
+			arm64BranchLink or
+			arm64BranchLinkReg or
+			arm64Fadd or
+			arm64Fsub or
+			arm64Fmul or
+			arm64Fdiv or
+			arm64Fcmp or
+			arm64Scvtf or
+			arm64Fcvtzs or
+			arm64Fsqrt or
+			arm64Frint or
+			arm64Fabs or
+			arm64FpLoadRdata or
+			arm64ImportCall or
+			arm64Syscall or
+			arm64Fcsel or
+			leaRegFunc or
+			callReg or
+			x64Syscall or
+			callMem or
+			arm64StoreOutgoingArg or
+			arm64LoadIncomingArg or
+			arm64FmovGprFp or
+			arm64FmovFpGpr or
+			leaRegSlot or
+			x64MemFill or
+			arm64MemFill or
+			x64LockCmpxchg or
+			x64LockXadd or
+			x64LockAdd or
+			x64TebSelfPointer or
+			x64GsLoadRegBase or
+			arm64AtomicCas or
+			arm64AtomicRmw or
+			arm64ThreadPointer or
+			leaRegBaseIndexScale or
+			loadRegBaseIndexScale or
+			storeBaseIndexScaleReg or
+			arm64AddLsl or
+			imulHighReg or
+			arm64Fneg or
+			arm64LoadAcquire or
+			arm64StoreRelease or
+			arm64Smulh or
+			covInc then break 'variant'
+	end 'variant'
+end 'patchRdataLabelAt'
+
+function patchLabelCarrier(module TargetModule, opIdx OpIndex, labels RdataLabelMap)
+	match module.getOp(opIdx) 'carrier'
+		x64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then patchX64JumpTable(module, opIdx: opIdx, labels: labels, indexReg: indexReg, defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel)
+		arm64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then patchArm64JumpTable(module, opIdx: opIdx, labels: labels, indexReg: indexReg, defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel)
+		leaRegRdata(dest, label) then patchX64LeaRdata(module, opIdx: opIdx, labels: labels, dest: dest, label: label)
+		arm64LeaRdata(dest, label) then patchArm64LeaRdata(module, opIdx: opIdx, labels: labels, dest: dest, label: label)
+		default panic("patchLabelCarrier: op {opIdx} carries no `.rdata` label — `patchRdataLabelAt` routes only the four label-carrying variants here")
+	end 'carrier'
+end 'patchLabelCarrier'
+
+function patchX64JumpTable(module TargetModule, opIdx OpIndex, labels RdataLabelMap, indexReg TargetVReg, defaultTarget BlockId, caseTargets BlockIdArray, tableLabel ByteArray)
+	let registered = try labels.get(tableLabel) otherwise return
+	replaceOp(module, opIdx: opIdx, op: TargetOp.x64JumpTable(indexReg, defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: registered))
+end 'patchX64JumpTable'
+
+function patchArm64JumpTable(module TargetModule, opIdx OpIndex, labels RdataLabelMap, indexReg TargetVReg, defaultTarget BlockId, caseTargets BlockIdArray, tableLabel ByteArray)
+	let registered = try labels.get(tableLabel) otherwise return
+	replaceOp(module, opIdx: opIdx, op: TargetOp.arm64JumpTable(indexReg, defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: registered))
+end 'patchArm64JumpTable'
+
+function patchX64LeaRdata(module TargetModule, opIdx OpIndex, labels RdataLabelMap, dest TargetVReg, label ByteArray)
+	let registered = try labels.get(label) otherwise return
+	replaceOp(module, opIdx: opIdx, op: TargetOp.leaRegRdata(dest, label: registered))
+end 'patchX64LeaRdata'
+
+function patchArm64LeaRdata(module TargetModule, opIdx OpIndex, labels RdataLabelMap, dest TargetVReg, label ByteArray)
+	let registered = try labels.get(label) otherwise return
+	replaceOp(module, opIdx: opIdx, op: TargetOp.arm64LeaRdata(dest, label: registered))
+end 'patchArm64LeaRdata'
+
+function replaceOp(module TargetModule, opIdx OpIndex, op TargetOp)
+	try module.ops.set(opIdx, value: op) otherwise panic("patchRdataLabels: ops.set OOB at {opIdx} — the index came out of this function's own blocks")
+end 'replaceOp'

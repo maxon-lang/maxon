@@ -234,7 +234,7 @@ Target tier — which is what makes this rung a DELETION rather than a reorderin
 why it is low risk.
 
 ✅ **LANDED 2026-08-28** as `maxon-bin/Compiler/Targets/Shared/BranchCleanup.maxon`, scheduled in
-`buildX64Backend` and `buildArm64Backend` between `allocateRegisters` and the frame pass — after `applyAllocation`,
+`buildX64Backend` and `buildArm64Backend` between `lowerAndAllocateOnAWorkerPool` and the frame pass — after `applyAllocation`,
 which is the whole correctness argument for the threading half (before SSA destruction has placed its
 edge copies, a "jmp-only" block is an edge ABOUT to receive moves). Four transforms landed: jump
 elision, conditional inversion, jump threading, unreachable-block elimination. **Block REORDERING did

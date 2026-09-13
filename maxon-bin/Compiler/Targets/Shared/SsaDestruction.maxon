@@ -898,7 +898,8 @@ let CritSplitLabel = b"critsplit"
 // Run before coloring so the mutation of `func.blockRefs`/`func.nextBlockId` happens
 // OUTSIDE the per-function coloring loop's borrow of `func`. Each function is driven
 // by INDEX and re-fetched inside `addSplitBlock`, so no `func` borrowed from
-// `module.functions` is ever passed to a function that mutates it.
+// `module.functions` is ever passed to a function that mutates it. The module is a backend
+// UNIT's — one function — on a pool worker (`BackendWorker`) and on the E5001 re-run alike.
 export function splitCriticalEdges(module TargetModule, target Target)
 	for funcIdx in 0 upto module.funcCount() 'eachFunc'
 		splitCriticalEdgesInFunc(module, funcIdx: funcIdx, target: target)
@@ -968,11 +969,13 @@ end 'performCriticalSplit'
 // directly, so its borrow never escapes to a caller (which would clash with the
 // split loop mutating the same function). The branch op is the TARGET's — `jmp` for x64,
 // `arm64Branch` for arm64 — so the split block speaks the same ISA as the code around it.
+// The inline site is COPIED: the predecessor keeps its own box, and the module travels home from a
+// pool worker in a reply that must own everything it reaches.
 function addSplitBlock(module TargetModule, funcIdx FuncIndex, succId BlockId, heat BlockHeat, inlineSite InlineSiteRef, target Target) returns BlockRef
 	var func = module.getFunc(funcIdx)
 	let newId = func.nextBlockId
 	func.nextBlockId = func.nextBlockId + 1
-	module.blocks.push(IrBlock.create(newId, label: CritSplitLabel, heat: heat, inlineSite: inlineSite))
+	module.blocks.push(IrBlock.create(newId, label: CritSplitLabel, heat: heat, inlineSite: copiedInlineSite(inlineSite)))
 	let newRef = module.blocks.count() - 1
 	func.blockRefs.push(newRef)
 	var splitBlock = try module.blocks.get(newRef) otherwise panic("addSplitBlock: newRef not in module.blocks")

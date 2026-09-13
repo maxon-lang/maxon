@@ -667,7 +667,7 @@ export type LivenessResult
 	export var establishedAtDef as RegMaskColumn
 
 	// Which register FILE each value lives in — dense, by value id. PRODUCED BY THE LOWERING and
-	// handed to the allocator (see `allocateRegisters`); the allocator never derives it.
+	// handed to the allocator (see `BackendWorker.finish`); the allocator never derives it.
 	//
 	// ⭐ ITS OWN COLUMN, NOT A FORBIDDEN MASK, AND THE DISTINCTION IS THE WHOLE POINT. Encoding "not
 	// a GPR" as 16 set bits in `forbidden` costs no new column and is WRONG: `clearForbidden` ZEROES
@@ -683,7 +683,7 @@ export type LivenessResult
 	// rides here because it is the natural travelling companion of `valueClass`: every per-value class
 	// question the splitter/census/colorer ask (`poolOfClass`, `classPoolSizeOf`, `allowedRegistersOf`)
 	// needs this file, and every one of those sites already holds a `LivenessResult`. Sourced once in
-	// `allocateRegisters` (`registerFileFor(target)`) and threaded here through `computeLivenessOn` so
+	// `lowerAndAllocateOnAWorkerPool` (`registerFileFor(target)`) and threaded here through `computeLivenessOn` so
 	// the boundary is stated per-ISA rather than hardcoded to x64's 16.
 	export var registerFile as RegisterFile
 
@@ -4898,8 +4898,8 @@ typealias TargetOpVariant = int(0 to u64.max)
 // of that case pays an array read. There is no eager derivation, no warm-up, and nothing to invalidate.
 //
 // ⚠ THE COLUMNS ARE SIZED TO THE WHOLE UNION AT CREATION AND NEVER GROWN, WHICH KEEPS A COMPILE'S MEMORY
-// DETERMINISTIC. One memo lives per register-allocation worker for the whole compile, and which
-// functions a worker is handed depends on thread timing (`RegAllocPool` feeds whichever worker answers
+// DETERMINISTIC. One memo lives per backend worker for the whole compile, and which
+// functions a worker is handed depends on thread timing (`BackendPool` feeds whichever worker answers
 // first). A column grown to the highest variant seen so far would grow a timing-dependent number of
 // times to timing-dependent sizes, and `scale-test`'s exact memory columns would differ between two
 // compiles of one program. Sized once, a memo allocates the same whatever it is fed.

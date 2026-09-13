@@ -762,7 +762,7 @@ end 'IrModule'
 // op indices, taken in order, and then the tail of `ops`. The recycled list is the function's live op
 // indices, not every index in the function's range: the array is append-only and earlier passes leave
 // orphans in it, and an orphan is not this splice's to reuse.
-export type OpSlotSupply
+module type OpSlotSupply
 	export var recycled as OpIndexArray
 	export var taken as ElementIndex
 
@@ -775,7 +775,7 @@ end 'OpSlotSupply'
 // `IrModule.prepareSplice`: the function's live op slots and its `BlockId -> BlockRef` column. A drain over
 // the module then allocates neither once per function, and `Array.clear`/`refill` keep the capacity the
 // largest function reached.
-export type SpliceScratch
+module type SpliceScratch
 	export var slots as OpSlotSupply
 	export var blockRefById as BlockRefArray
 
@@ -961,37 +961,22 @@ function rewriteFuncBlockRefs(functions IrFunctionArray, plan OpCompactionPlan)
 	end 'rewriteFunc'
 end 'rewriteFuncBlockRefs'
 
-// RELOCATE a block into a destination module: everything that names an op by index —
-// `opRefs`, the terminator, the cond-branch — shifts by `opOffset`, because `merge`
-// appended the source's ops after the destination's. Nothing is deep-copied; this is
-// index arithmetic, not a clone.
+// RELOCATE a block into a destination module: a copy whose op indices are shifted by `opOffset`
+// (`IrBlock.shiftOpIndices`), because `merge` appended the source's ops after the destination's.
+// Nothing is deep-copied; this is index arithmetic, not a clone.
 //
 // The phi model (`blockArgs` / `branchEdges`) is SHARED with the source block, whose
 // module is the parse memo's. Safe because no Maxon-tier pass mutates it, and the one
 // in-place writer anywhere in the compiler (`rewriteEdgeArgsIn`, at the Target tier)
 // copies before it writes. See IrBlock's header for the ownership rules.
 function relocateIrBlock(src IrBlock, opOffset OpCount) returns IrBlock
-	let shift = opOffset as OpIndex
 	var block = IrBlock.createLike(src)
 	block.blockArgs = src.blockArgs
 	block.branchEdges = src.branchEdges
-
-	for opIdx in src.opRefs 'eachOp'
-		block.opRefs.push(opIdx + shift)
-	end 'eachOp'
-
-	block.terminator = match src.terminator 'relocate'
-		unset gives Terminator.unset
-		dead gives Terminator.dead
-		fallthrough gives Terminator.fallthrough
-		opIndex(index) gives Terminator.opIndex(index + shift)
-	end 'relocate'
-
-	block.condBranch = match src.condBranch 'relocateCond'
-		none gives CondBranch.none
-		opIndex(index) gives CondBranch.opIndex(index + shift)
-	end 'relocateCond'
-
+	block.opRefs = src.opRefs.clone()
+	block.terminator = src.terminator
+	block.condBranch = src.condBranch
+	block.shiftOpIndices(opOffset)
 	return block
 end 'relocateIrBlock'
 
