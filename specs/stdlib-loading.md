@@ -62,7 +62,7 @@ Two mechanisms compose to guarantee that:
    `__gt_now_ns` and WallClock.nowUnixSeconds's calls `__clock_now_unix_s`, so a naive load would
    install the scheduler and a `.data` slot for a program that reads no clock — slots the later
    elimination cannot prune. That scan therefore SKIPS the stdlib functions no path from `main`
-   reaches (`StdlibFacts.unreachable`): code the program does not contain feeds the floor decision
+   reaches (`LibraryFacts.unreachable`): code the program does not contain feeds the floor decision
    nothing. User functions are never skipped — an unreached user body still speaks for the program —
    so nothing about a program that touches no stdlib changes.
 
@@ -950,7 +950,7 @@ is declared by `stdlib/Array.maxon`'s `where Element is Equatable` extension AND
 `Array.contains#type parameter` and `Array.contains#struct` and NOTHING is named `Array.contains`.
 The scan therefore missed a real edge, every stdlib name was filed `unreachable`, `lowerMaxonToStd`
 lowered no body — and `DeadFunctionElimination` then reached the resolved member from its own root
-set and PANICKED (`requireUnreachableStdlibStayedDead`, which is the guard doing its job: without it
+set and PANICKED (`requireUnreachableLibraryStayedDead`, which is the guard doing its job: without it
 the program would have linked and called an EMPTY function).
 
 ⭐ The cure is the one this file's own header argues for everywhere else: **the widening is written

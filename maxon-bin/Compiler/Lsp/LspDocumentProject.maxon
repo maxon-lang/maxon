@@ -13,9 +13,13 @@
 // `verify-recheck` edits a buffer through when it measures the editor scenario.
 //
 // ⚠ **ONE BUFFER, NOT A PROJECT ON DISK.** The server holds the open documents and nothing else, so the
-// compile sees this file plus `stdlib/` — never the user's other sources. A diagnostic that depends on
-// what a sibling file declares is therefore answered about a program the author did not write; the cure
-// is project discovery, which this server does not have.
+// compile sees this file plus both library tiers, `stdlib/` and `runtime/` — never the user's other
+// sources. A diagnostic that depends on what a sibling file declares is therefore answered about a
+// program the author did not write; the cure is project discovery, which this server does not have.
+//
+// ⛔ **BOTH TIERS OR NOTHING.** Every compile the driver runs loads them together, so a project built
+// here from one of them would answer a diagnostic about a program no build ever sees — the editor
+// would then disagree with the build, which is the one thing this file exists to prevent.
 
 // `file:` — the one uri scheme a document this server checks can carry.
 let LspFileUriScheme = "file://"
@@ -60,14 +64,14 @@ function driveRooted(text String) returns bool
 end 'driveRooted'
 
 // The project an open buffer makes, or nothing when this compiler cannot assemble one. A failure is a
-// broken installation — no `stdlib/` beside the binary, or one that will not load — and each caller
-// says what it does with the absence; there is no half-built project to hand back.
+// broken installation — a library tier missing beside the binary, or one that will not load — and each
+// caller says what it does with the absence; there is no half-built project to hand back.
 module union LspDocumentProject
 	loaded(project Project)
 	unavailable
 end 'LspDocumentProject'
 
-// A `Project` holding exactly this buffer plus `stdlib/`.
+// A `Project` holding exactly this buffer plus both library roots.
 //
 // ⚠ **THE ROOT IS THE DOCUMENT ITSELF, WHICH IS WHAT A SINGLE-FILE BUILD USES.**
 // `Compiler.commonAncestorOf` hands one input path straight back, so `maxon build <file>` roots at the
@@ -75,10 +79,11 @@ end 'LspDocumentProject'
 // would give the same buffer a different namespace under the editor than under a build.
 module function lspDocumentProject(path FilePath, content String) returns LspDocumentProject
 	let stdlibDir = try locateStdlibDir() otherwise return LspDocumentProject.unavailable
-	var project = createProject(path, target: detectHostTarget(), stdlibDir: stdlibDir)
+	let runtimeDir = try runtimeDirBeside(stdlibDir) otherwise return LspDocumentProject.unavailable
+	var project = createProject(path, target: detectHostTarget(), stdlibDir: stdlibDir, runtimeDir: runtimeDir)
 
 	fileChanged(project, path: path, content: content)
 
-	try loadStdlibSources(project) otherwise return LspDocumentProject.unavailable
+	try loadLibrarySources(project) otherwise return LspDocumentProject.unavailable
 	return LspDocumentProject.loaded(project)
 end 'lspDocumentProject'

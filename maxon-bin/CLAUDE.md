@@ -4,6 +4,37 @@ One compiler builds this tree and it is written in Maxon: source `maxon-bin/`, b
 `maxon-bin/.maxon/maxon`, suite `specs/`. On Windows the binary is `maxon.exe`; commands below show
 the Windows form.
 
+⭐ **TWO SOURCE TIERS ARE READ ON EVERY COMPILE, AND BOTH LIVE AT THE CHECKOUT ROOT.** `stdlib/` is the
+standard library; `runtime/` beside it is the language runtime — the code every program needs before
+any of its own runs. The compiler locates `stdlib/` by walking UP from its own executable and reaches
+`runtime/` as its sibling, so the two travel together everywhere: a release archive, an install tree, a
+Docker image, a Homebrew prefix. A tree holding one without the other compiles nothing.
+
+⛔ **A `runtime/` FILE IS NOT COMPILER SOURCE AND NEEDS ONE SELF-COMPILE, NOT TWO.** It is input the
+compiler READS, so the first build already compiles against the edited file and carries it. That is the
+opposite of `Compiler/Runtime/` below, which the compiler WRITES into every program including itself.
+`scripts/self-compiles-needed.sh` answers for both; it does not watch `runtime/`, deliberately.
+
+⚠ **THE TIER HOSTS NO RUNTIME FAMILY YET, AND A FUNCTION PLACED IN IT DOES NOT REACH CODE GENERATION.**
+`runtime/` carries typealiases only. Nothing in source calls a runtime entry — the compiler reaches one
+by NAME, which is the tier's defining property — so `deriveLibraryFacts` files every runtime function
+`unreachable`, `lowerMaxonToStd` skips its body, and a reloc naming one panics
+`requireUnreachableLibraryStayedDead`. Rooting the reachability walk at the tier belongs with the first
+family that moves, because the same rung decides the `RuntimeUsage` gating that keeps a program from
+carrying families it never calls. Three consequences bind until then, and each is a door standing open
+rather than a door that is shut:
+
+- **E3153 is complete over SPELLED types and incomplete over INFERRED values.** `parseTypeReference`
+  catches every type a runtime file writes; the value-side check at `declareInitializedBinding` and
+  `bindParameters` does not see a `for` binding, a closure cell, a caught error, a `match` payload, or
+  an unbound temporary. `for c in "abc"` in a runtime file is admitted. The complete site is the built
+  `IrFunction`, which is unreachable while bodies are dropped — so the two land together.
+- **Five of the six `__Raw` rows are unexercised**, as are `reserveRawScratchSlot`, both its refusals and
+  the statement door. A case can spell a raw intrinsic and watch it parse; nothing yet watches one lower.
+- **A `__Raw` row's host facility reaches no refusable site.** `maxonOpCalleeKind` answers `noCallee`,
+  so `LibraryFacts.substrateEntries` never sees one, and a lane without the op reaches instruction
+  selection instead of E3104. A substrate-entry row per op is what closes it.
+
 - **Build it:** `./maxon-bin/.maxon/maxon build maxon-bin` at the repo root. `build.maxon` there
   declares the one target, so a bare `maxon build` builds it; name it anyway, because the seed rule
   below turns a bare invocation into a path build.
@@ -21,8 +52,7 @@ the Windows form.
   `CONTRIBUTING.md` spells it too.
 - **Run the suite:** `./maxon-bin/.maxon/maxon.exe spec-test`.
 - Exit code **101** means a memory leak was detected.
-- There is **no `maxon clean`**. To force a from-source stdlib rebuild, delete
-  `stdlib/.maxon/cache/*.mxc`; the compiler rebuilds the stdlib whenever the cache is absent.
+- There is **no `maxon clean`**.
 
 > ### ⭐ THE BUILD WRITES TO `.next` AND RENAMES INTO PLACE
 >
@@ -60,15 +90,15 @@ the Windows form.
 > wording asked whether "the seed you built with predates a runtime change", which nobody can evaluate
 > in their head, so the safe answer was always twice — and a needless self-compile is ninety seconds
 > off every task that touches the compiler.
-> ⛔ **THE COMPILER THAT BUILDS THIS TREE MUST LIVE INSIDE IT.** `stdlib/` is found by walking up from
-> the EXECUTABLE, so an installed `maxon` on PATH compiles this repository against the RELEASE's
-> standard library — MEASURED: it succeeds and exits 0, having built a compiler from a library that is
-> not this tree's. Run `.bootstrap/maxon` or the slot binary, never a PATH one.
+> ⛔ **THE COMPILER THAT BUILDS THIS TREE MUST LIVE INSIDE IT.** `stdlib/` and its sibling `runtime/` are
+> found by walking up from the EXECUTABLE, so an installed `maxon` on PATH compiles this repository
+> against the RELEASE's sources — MEASURED: it succeeds and exits 0, having built a compiler from a
+> library that is not this tree's. Run `.bootstrap/maxon` or the slot binary, never a PATH one.
 >
-> ⛔ **`.bootstrap/` HOLDS THE BINARY AND NOTHING ELSE.** A release archive ships its own
-> `stdlib/`, and the compiler resolves `stdlib/` by walking UP from its own executable — so an archive
-> unpacked whole would leave a RELEASED stdlib one directory above the compiler and the tree's own
-> would never be reached. The build would succeed and compile the wrong library, silently.
+> ⛔ **`.bootstrap/` HOLDS THE BINARY AND NOTHING ELSE.** A release archive ships its own `stdlib/` and
+> `runtime/`, and the compiler resolves both by walking UP from its own executable — so an archive
+> unpacked whole would leave a RELEASED stdlib and runtime one directory above the compiler and the
+> tree's own would never be reached. The build would succeed and compile the wrong sources, silently.
 
 ## maxon-dev MCP tools (PREFER THESE — **IN A WORKTREE, PASS `repoRoot`**)
 
@@ -100,12 +130,12 @@ restart the MCP server when you need the new one to answer.
 > - **Every result echoes the `repoRoot` it actually used**, in the payload's `repoRoot` field —
 >   answers and refusals alike. **READ IT BACK.**
 > - ⭐ **THE TREE'S OWN COMPILER RUNS, NOT THE SERVER'S.** A tool acting on `repoRoot` spawns
->   `<repoRoot>/maxon-bin/.maxon/maxon`, because `stdlib/` is resolved by walking UP from the
->   EXECUTABLE — the server's binary would compile your worktree against the MAIN repo's standard
->   library. A tree whose slot is empty is REFUSED, naming the `build` tool.
+>   `<repoRoot>/maxon-bin/.maxon/maxon`, because `stdlib/` and `runtime/` are resolved by walking UP
+>   from the EXECUTABLE — the server's binary would compile your worktree against the MAIN repo's
+>   sources. A tree whose slot is empty is REFUSED, naming the `build` tool.
 > - **A `repoRoot` that is not a Maxon checkout is REFUSED** (`invalidParams`), never quietly swapped
 >   for the main repo. Relative paths are refused too — they would resolve against the *server's* cwd.
->   A checkout is any tree holding `stdlib/` and `maxon-bin/`, so a brand-new worktree qualifies
+>   A checkout is any tree holding `stdlib/`, `runtime/` and `maxon-bin/`, so a brand-new worktree qualifies
 >   before anything is built in it.
 >
 > ⚠ These tools **EDIT** the tree they are pointed at: `run_spec_test` with `updateRequired: true`
@@ -221,8 +251,8 @@ difference there is a MISCOMPILE, and a green suite cannot see it. Load the skil
 
 **`spec-test` is for the LANGUAGE — compiler syntax and emitted code. A DRIVER COMMAND is not that**
 (user ruling), and could not be gated there anyway: a spec case is a Maxon PROGRAM the harness
-compiles and runs, so it can reach `stdlib/` and nothing else. Driver commands are gated by spawning
-the compiler at a fixture project and asserting what it reports.
+compiles and runs, so it can reach `stdlib/` and `runtime/` and nothing else. Driver commands are
+gated by spawning the compiler at a fixture project and asserting what it reports.
 
 **`tests/README.md` is the authority** — it lists every corpus, the constant each is reached through,
 and the rules that keep the corpora honest. Read it before touching anything under `tests/`. The three

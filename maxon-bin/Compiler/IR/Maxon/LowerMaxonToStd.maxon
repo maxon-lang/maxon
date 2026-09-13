@@ -858,7 +858,7 @@ function requireSiteOrdinalsAscend(sites RangeCheckSiteArray, order RangeSiteInd
 end 'requireSiteOrdinalsAscend'
 
 export function lowerMaxonToStd(maxonModule MaxonModule, project Project, funcNames FunctionNameIndex) returns StdModule
-	registerProgramLiteralBlobs(maxonModule, globalData: project.globalData, unreachableStdlib: project.stdlibFacts.unreachable)
+	registerProgramLiteralBlobs(maxonModule, globalData: project.globalData, unreachableStdlib: project.libraryFacts.unreachable)
 	return MaxonToStdLowering.create(maxonModule, project: project, funcNames: funcNames).lower(project)
 end 'lowerMaxonToStd'
 
@@ -1002,7 +1002,8 @@ function registerIfProgramLiteral(op MaxonOp, globalData GlobalDataTable)
 		// the relocations are recorded against. Every one of them byte-dedupes, so whichever pass asks first
 		// makes one object of two equal tables.
 		immortalStringTable or
-			covPoint then break 'op'
+			covPoint or
+			rawIntrinsic then break 'op'
 	end 'op'
 end 'registerIfProgramLiteral'
 
@@ -1309,7 +1310,7 @@ type MaxonToStdLowering
 	// `functionUsesSecondaryReturnSlot`, and reads the interface NAME out of it to materialize the witness.
 	var currentMaxonReturnType as MaxonReturnType
 
-	// The stdlib functions no path from `main` reaches (`StdlibFacts.unreachable`) — the ONE fact `lower`
+	// The stdlib functions no path from `main` reaches (`LibraryFacts.unreachable`) — the ONE fact `lower`
 	// skips a body on, and the SAME derivation `insertRangeChecks`, `checkCalls` and `scanRuntimeUsage`
 	// read. Copied out of `Project` at `create` like every other registry here (this pass holds no
 	// `Project`), and named for the FACT rather than for its use, exactly as `scanRuntimeUsage`'s
@@ -1356,7 +1357,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedImmortalStructBoxes: ImmortalStructBoxLabelSet.create(), emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, stdOpElementStrides: project.stdOpElementStrides, stdOpTrivialElementSites: project.stdOpTrivialElementSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: ValueExistentialInstanceMap.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, covPointBases: project.covPointBases, currentCovPointBase: 0, implicitLayoutValueId: 0, hasImplicitLayout: false, implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedImmortalStructBoxes: ImmortalStructBoxLabelSet.create(), emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, stdOpElementStrides: project.stdOpElementStrides, stdOpTrivialElementSites: project.stdOpTrivialElementSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: ValueExistentialInstanceMap.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, covPointBases: project.covPointBases, currentCovPointBase: 0, implicitLayoutValueId: 0, hasImplicitLayout: false, implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, unreachableStdlib: project.libraryFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -1524,7 +1525,7 @@ type MaxonToStdLowering
 			// records the assumption that check rests on: nothing may take one side of a colliding pair OUT of
 			// the module before the count sees it. Dropping the function here would do exactly that. The
 			// empty body is instead PROVED harmless where the two reachability derivations meet —
-			// `requireUnreachableStdlibStayedDead` refuses the compile if DFE ever keeps a function this
+			// `requireUnreachableLibraryStayedDead` refuses the compile if DFE ever keeps a function this
 			// skipped, so a Maxon-tier walk that missed an edge is a loud panic and never an empty callee.
 			if self.unreachableStdlib.contains(srcFunc.name) 'notInTheProgram'
 				continue
@@ -1722,6 +1723,7 @@ type MaxonToStdLowering
 			loadIndirect(result, addr, offset, valueType) then self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(result, addrId: addr, offset: offset, valueType: maxonTypeToStdType(valueType)))
 			storeIndirect(addr, offset, value, valueType) then self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(addr, offset: offset, valueId: value, valueType: maxonTypeToStdType(valueType)))
 			stringLiteral(result, bytes) then self.lowerStringLiteral(result, bytes: bytes, dstBlock: dstBlock)
+			rawIntrinsic(result, intrinsic, args, constant) then self.lowerRawIntrinsic(result, intrinsic: intrinsic, args: args, constant: constant, dstBlock: dstBlock)
 
 			// A throwing call: like `call`, plus the second `errorFlag` result (the Std `tryCall`).
 			tryCall(result, errorFlag, callee, args, argLabels, _, _, argDefaultSlots, _) then self.lowerTryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots, dstBlock: dstBlock)
@@ -1989,6 +1991,7 @@ type MaxonToStdLowering
 			immortalStructRecord then panic("lowerMaxonToStd: an `immortalStructRecord` op appeared as a block terminator (parser bug — an imaged struct record is a value-producing body op, never a terminator)")
 			immortalStringTable then panic("lowerMaxonToStd: an `immortalStringTable` op appeared as a block terminator (parser bug — an imaged string table is a value-producing body op, never a terminator)")
 			covPoint then panic("lowerMaxonToStd: a `covPoint` op appeared as a block terminator (parser bug — a coverage counter is emitted at a block HEAD, ahead of the code it counts, and is never a terminator)")
+			rawIntrinsic then panic("lowerMaxonToStd: a `rawIntrinsic` op appeared as a block terminator (parser bug — a __Raw intrinsic is an instruction emitted into a body, never a terminator)")
 			serviceSpawn or
 				serviceSend or
 				serviceReplyCell then panic("lowerMaxonToStd: a service op appeared as a block terminator (parser bug — a `spawn` produces a mailbox pointer the next op stores, a send is a statement and a reply cell is a value the send that follows it reads; all three are body ops, never terminators)")
@@ -2019,6 +2022,24 @@ type MaxonToStdLowering
 	// relocation (`dataSectionRipRelDisp32`), and the record lives in read-only `.rdata`
 	// (`ripRelDisp32`). The two differ only in the section they measure from — which is exactly what
 	// the relocation kind discriminates.
+	// ⭐⭐ **THE `__Raw.*` TABLE'S MAP ONTO Std, ONE ROW TO ONE OP (see `RawIntrinsics`).** It is the whole of
+	// what "`__Raw` is the raw floor" means: no runtime entry stands between the source a `runtime/` file
+	// writes and the instruction it becomes. The match is exhaustive, so a row added to the table does not
+	// compile until it is lowered here.
+	//
+	// `constant` is the compile-time integer the row's shape carried — a frame SLOT for `scratch`, already
+	// laid out by `Parser.reserveRawScratchSlot`, and a byte offset for the two word accessors.
+	function lowerRawIntrinsic(result ValueId, intrinsic RawIntrinsic, args ValueIdArray, constant ParsedInt, dstBlock IrBlock)
+		match intrinsic 'row'
+			osTickCountMs then self.stdModule.appendOp(dstBlock, op: StdOp.osTickCountMs(result))
+			osReadWallClock then self.stdModule.appendOp(dstBlock, op: StdOp.osReadWallClock(rawWordOperand(args, index: 0, intrinsic: intrinsic)))
+			osThreadCpuTicks then self.stdModule.appendOp(dstBlock, op: StdOp.osThreadCpuTicks(rawWordOperand(args, index: 0, intrinsic: intrinsic), outPtrId: rawWordOperand(args, index: 1, intrinsic: intrinsic)))
+			scratch then self.stdModule.appendOp(dstBlock, op: StdOp.stackRecordAddr(result, slot: constant as SpillSlot))
+			loadWord then self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(result, addrId: rawWordOperand(args, index: 0, intrinsic: intrinsic), offset: constant as ByteOffset, valueType: StdType.i64))
+			storeWord then self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(rawWordOperand(args, index: 0, intrinsic: intrinsic), offset: constant as ByteOffset, valueId: rawWordOperand(args, index: 1, intrinsic: intrinsic), valueType: StdType.i64))
+		end 'row'
+	end 'lowerRawIntrinsic'
+
 	function lowerStringLiteral(result ValueId, bytes ByteArray, dstBlock IrBlock)
 		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: registerStringLiteralRecord(self.globalData, bytes: bytes, debugStream: self.debugStream).toByteArray()))
 	end 'lowerStringLiteral'
@@ -3157,7 +3178,7 @@ type MaxonToStdLowering
 	// — `WithIterIterator.create` in the corpus — is usually a library's.
 	function requireCalleeIgnoresParametricWitness(request NullWitnessArgRequest, project Project)
 		// ⚠ **A CALLEE THE WALK SKIPPED HAS NO BODY, AND AN EMPTY USE SET WOULD PASS THIS PROOF VACUOUSLY.**
-		// It cannot happen — a reachable caller materialized this argument, and `requireUnreachableStdlibStayedDead`
+		// It cannot happen — a reachable caller materialized this argument, and `requireUnreachableLibraryStayedDead`
 		// refuses a compile where DFE keeps a function the Maxon-tier walk called dead — so the silent hole is
 		// worth a panic rather than a comment.
 		if self.unreachableStdlib.contains(request.callee) 'calleeHasNoLoweredBody'
@@ -5849,3 +5870,10 @@ function requireNoLeakedSpanCursor(project Project, module StdModule)
 		end 'eachOp'
 	end 'eachFunction'
 end 'requireNoLeakedSpanCursor'
+
+// The `index`-th WORD operand of a `__Raw` intrinsic. The parser filled this list under the row's own
+// argument shape, so a miss here is a disagreement between that shape and this lowering rather than
+// anything a program can express.
+function rawWordOperand(args ValueIdArray, index ParamCount, intrinsic RawIntrinsic) returns ValueId
+	return try args.get(index) otherwise panic("lowerRawIntrinsic: '{String.from(rawIntrinsicCalleeName(intrinsic))}' has no word operand {index} — the parser fills this list under `rawArgShapeOf`")
+end 'rawWordOperand'

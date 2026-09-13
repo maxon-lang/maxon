@@ -377,6 +377,22 @@ export function recordPhase(project Project, phase CompilePhase, probe PhaseProb
 	recordPhaseDelta(project, phase: phase, delta: probe.elapsed())
 end 'recordPhase'
 
+// ⭐ **THE SAME, MINUS A PHASE THAT ALREADY RAN INSIDE THIS BRACKET** — for the one shape a main-thread
+// bracket cannot avoid nesting: a step that must be billed separately sits in the middle of a span whose
+// ends the caller does not own. The rows stay a DISJOINT partition, which is what `attributedCost` and
+// both reconciliation traps rest on.
+//
+// ⚠ `inner` must ALREADY be recorded when this is called, and be a sub-interval of `probe`'s: it is read
+// back off the two tables the recorder wrote. `PhaseDelta.minus` traps rather than wrapping if the inner
+// exceeds the outer, which is the loudest available way to say the two brackets really overlapped.
+// `PoolPhaseCosts.recordExcluding` is the same discipline one tier down.
+export function recordPhaseExcluding(project Project, phase CompilePhase, probe PhaseProbe, inner CompilePhase)
+	let innerCost = project.timings.costOf(inner)
+	let innerMemory = project.memory.deltaOf(inner)
+	let innerDelta = PhaseDelta.create(innerCost.nanos, cpuTicks: innerCost.cpuTicks, allocs: innerMemory.allocs, frees: innerMemory.frees, bytes: innerMemory.bytes)
+	recordPhaseDelta(project, phase: phase, delta: probe.elapsed().minus(innerDelta))
+end 'recordPhaseExcluding'
+
 function recordPhaseDelta(project Project, phase CompilePhase, delta PhaseDelta)
 	project.timings.addPhaseCost(phase, nanos: delta.nanos, cpuTicks: delta.cpuTicks)
 	project.memory.addPhase(phase, delta: delta)

@@ -44,27 +44,23 @@
 #    over a mechanism that never fired).
 #
 # 3. The MEMORY BOUND: a shared entry lives for the life of the worker, so what the store HOLDS must
-#    track `stdlib/` and not the corpus — otherwise a suite grows it by one token array per spec
-#    fragment and a worker leaks for the whole run. Asserted as `holding == admitted` on every
-#    reported compile: `admitted` is what one compile offered, `holding` is what the process kept, and
-#    the two part company exactly when the bound breaks. Neither number is written down here — the
-#    value is the number of stdlib modules a compile loads (every `.maxon` under `stdlib/` less the one
-#    `StdlibLoader.SupersededRuntimeModule` names), and a copy of it would be a second place to update.
-#    ⚠ **This sentence used to read "the value is the whitelist's length".** The whitelist was DELETED
-#    2026-08-31 and the compiler now loads all of `stdlib/`; the loaded SET is unchanged by that — every file the
-#    old list named is still loaded and no other is — so this gate's readings do not move. The noun did,
-#    and this check's whole safety argument is that the number is never spelled out anywhere but the log.
+#    track the source tiers a compile loads — `stdlib/` and its sibling `runtime/` — and not the
+#    corpus; otherwise a suite grows it by one token array per spec fragment and a worker leaks for the
+#    whole run. Asserted as `holding == admitted` on every reported compile: `admitted` is what one
+#    compile offered, `holding` is what the process kept, and the two part company exactly when the
+#    bound breaks. ⛔ NEITHER NUMBER IS WRITTEN DOWN HERE, and that is the check's whole safety
+#    argument: a copy of the count would be a second place to update, and the gate would then pass
+#    against its own stale arithmetic rather than against the log.
 #
 #    ⚠ `holding == admitted` is the invariant for a process that sees ONE stdlib, which is what this
 #    gate's own driver does. A run that also compiles `// --- stdlib-overlay:` cases legitimately
 #    holds more, because an overlay stages a SECOND stdlib whose changed file has different bytes and
 #    so earns its own entry. That growth is bounded by the number of overlay cases, not by the corpus.
 #
-#    ⚠ **THIS CHECK USED TO COMPARE THE ADMITTED COUNT BETWEEN A ONE-FILE AND A TWO-FILE PROGRAM,
-#    AND THAT VERSION COULD NOT FAIL.** The sabotage below — publishing every file instead of the
-#    admitted ones — leaves the admission count at exactly `stdlib/`'s in both runs, because the
-#    admission LIST is not the thing that grows. The STORE is. Found by running the sabotage, which
-#    is the only reason this check now measures what its name claims.
+#    ⛔ THE STORE IS THE SUBJECT, NOT THE ADMISSION LIST. Comparing admitted counts between a one-file
+#    and a two-file program cannot fail: the sabotage below — publishing every file instead of the
+#    admitted ones — leaves the admission count identical in both runs, because the admission LIST is
+#    not the thing that grows.
 #
 # 4. The SUITE. Every case in a filtered run is a DIFFERENT program compiled in a worker that has
 #    already compiled hundreds of others, so a store that mis-serves anything shows up as a failing
@@ -221,7 +217,7 @@ else
 	if [ "$max_hits" -le 0 ]; then
 		fail "CHECK 2b: no compile ever read anything from the store — every other check here passed over a mechanism that never fired"
 	else
-		pass "CHECK 2b: a later compile read $max_hits stdlib file(s) out of the store (the mechanism fires)"
+		pass "CHECK 2b: a later compile read $max_hits source file(s) out of the store (the mechanism fires)"
 	fi
 
 	# `verify-warm-rebuild` compiles the same program many times AND edits it between runs, so its log
@@ -231,7 +227,7 @@ else
 	overgrown=$(sed 's/.*, \([0-9]*\) admitted, \([0-9]*\) holding.*/\1 \2/' "$WORK/memo-lines.txt" | awk '$1 != $2 { print $1" admitted, "$2" holding" }' | head -3)
 
 	if [ -n "$overgrown" ]; then
-		fail "CHECK 3: the store holds more than was admitted, so it grows with the corpus rather than with stdlib/"
+		fail "CHECK 3: the store holds more than was admitted, so it grows with the corpus rather than with the source tiers"
 		echo "$overgrown" | sed 's/^/       /'
 	else
 		held=$(head -1 "$WORK/memo-lines.txt" | sed 's/.*, \([0-9]*\) holding.*/\1/')

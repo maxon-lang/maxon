@@ -1671,7 +1671,7 @@ end 'firstBadOption'
 // `Diagnostics.emitDiagnosticLine`'s header recorded it as an outstanding obligation: every
 // `Diagnostic` went through the sink, but the SIX `CompileError` arms that never reach
 // `project.diagnostics` at all — `fileNotFound`, `directoryNotFound`, `noSourceFiles`, `readError`,
-// `noCommonRoot`, `stdlibNotFound` — were printed here, past it. So a capture was exact for a REFUSED compile and
+// `noCommonRoot`, `stdlibNotFound`, `runtimeNotFound` — were printed here, past it. So a capture was exact for a REFUSED compile and
 // EMPTY for a build that died on a missing file. `SpecTestRunner.compileOneTest` calls this INSIDE its
 // capture, which is what closes that gap and why there is still only one renderer of these sentences.
 //
@@ -1699,6 +1699,7 @@ module function reportCompileError(e CompileError)
 		noCommonRoot(first, other) then emitDiagnosticLine("error: {first} and {other} have no common directory this build can be rooted at. Name a directory they are both under as one of the paths, or build them separately")
 		readError(p) then emitDiagnosticLine("error: could not read {p}")
 		stdlibNotFound then emitDiagnosticLine("error: could not locate the stdlib/ directory (every compile loads stdlib source)")
+		runtimeNotFound then emitDiagnosticLine("error: could not locate the runtime/ directory beside stdlib/ (every compile loads runtime source)")
 		compileError then break 'report'
 	end 'report'
 end 'reportCompileError'

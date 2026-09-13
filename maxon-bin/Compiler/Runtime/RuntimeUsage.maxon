@@ -620,7 +620,7 @@ export type RuntimeUsage
 end 'RuntimeUsage'
 
 // `unreachableStdlib` names the functions this scan must ignore — the STDLIB functions no path from
-// `main` reaches (`StdlibFacts.unreachable`, see StdlibSource). Dead-function elimination drops them
+// `main` reaches (`LibraryFacts.unreachable`, see StdlibSource). Dead-function elimination drops them
 // before the back end, so the floor they would ask for is a floor for code the program does not
 // contain: a `Clock` nothing calls must not install the green-thread scheduler and the wall-clock
 // `.data` slot. It never contains a USER function — an unreached user body still speaks for the
@@ -745,6 +745,11 @@ function classifyRuntimeCall(op MaxonOp, usage RuntimeUsage, funcSignatures Func
 		// A coverage counter is a bare atomic increment against a fixed address: it calls nothing and turns
 		// no runtime family on.
 		covPoint then break 'op'
+
+		// A raw intrinsic turns no runtime family on either, and for a sharper reason: it lowers to a Std op
+		// the backend selects directly, which is the whole point of the `__Raw` floor — it is what a runtime
+		// family would be BUILT out of, never a call into one.
+		rawIntrinsic then break 'op'
 	end 'op'
 end 'classifyRuntimeCall'
 

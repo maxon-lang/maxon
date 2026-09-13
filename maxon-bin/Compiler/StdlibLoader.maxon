@@ -73,7 +73,7 @@
 //      so a NAIVE load would make `scanRuntimeUsage` install the GT scheduler + the wall-clock `.data`
 //      slots for a program that never reads a clock — slots DFE does not prune (it prunes FUNCTIONS,
 //      never `.data`). MEASURED before that gate: a bare `return 7` grew from 1512 to 2488 code bytes
-//      and gained 24 `.data` slots. `StdlibFacts.unreachable` is what closes it, and it is stated as
+//      and gained 24 `.data` slots. `LibraryFacts.unreachable` is what closes it, and it is stated as
 //      reachability rather than as membership precisely because the fix outlives this file.
 //
 // ⛔⛔ **THE INVARIANT IS ABOUT CODE, AND IT CANNOT BE ABOUT DECLARED NAMES — MEASURED WHEN `File.maxon`
@@ -262,60 +262,91 @@ let SupersededRuntimeModule = "Internals.maxon"
 // skips this path when staging, so the two questions coincide again and the refusal means what it says.
 //
 // ⚠ Returns the PATH, not the name, so the caller hoists ONE `join` out of its own walk exactly as
-// `loadStdlibSources` does. A `contains`-style predicate taking a path would have to rebuild that `join`
+// `loadLibraryRoot` does. A `contains`-style predicate taking a path would have to rebuild that `join`
 // per file, which is the allocation this file's own header measured and rejected.
 export function supersededRuntimeModulePath(stdlibDir FilePath) returns FilePath
-	// Interpolated for the E3007 reason stated at the call site in `loadStdlibSources`.
+	// Interpolated for the E3007 reason stated at the call site in `loadLibraryRoot`.
 	return stdlibDir.join("{SupersededRuntimeModule}")
 end 'supersededRuntimeModulePath'
 
-// ⭐ **THE LOADER.** Enumerate `stdlib/` and register each module, in the order the walk found them
-// (see the header on why it does not sort). Called by `loadProject`
-// AFTER the user's own sources are loaded (so a directory build's output name still derives from a user
-// file, not from a stdlib module, and an empty user project still fails with `noSourceFiles` rather than
-// silently compiling only stdlib).
+// ⭐ **THE LOADER.** Enumerate BOTH library roots — `stdlib/` and its sibling `runtime/` — and register
+// each module, in the order the walk found them (see the header on why it does not sort). Called by
+// `loadProject` AFTER the user's own sources are loaded (so a directory build's output name still
+// derives from a user file, not from a library module, and an empty user project still fails with
+// `noSourceFiles` rather than silently compiling only the library).
 //
-// ⚠ THE ENUMERATION IS `Compiler.collectMaxonSources` — the SAME function that walks the user's own
-// root — because "which files under this directory are Maxon sources?" is one question and `stdlib/`
-// is not entitled to its own answer to it. A second walk here would be free to drift on the extension,
-// on the build manifest, and on every ignore rule either walk grows.
-//
-// ⚠ LOUD, NEVER SILENT. An unreadable module propagates `readError` naming it; a PARSE failure surfaces
-// through the ordinary parse-diagnostic path (`queryParseOps` → `reportParseError`), which already
-// renders the file path. There is no arm that drops a stdlib module quietly.
-export function loadStdlibSources(project Project) throws CompileError
-	var found = MaxonSourcePathArray.create()
-	_ = try collectMaxonSources(project.stdlibDir, into: found)
+// ⚠ ONE implementation, parameterized by root, rather than one per tier: "register every Maxon source
+// under this directory as library source" is one question, and two copies of the answer would be free to
+// drift on the walk, on the double-load guard and on the memo admission.
+export function loadLibrarySources(project Project) throws CompileError
+	let usersOwn = registeredPathsWhenTheRootIsInsideALibrary(project)
 
-	// ⛔ **A `stdlib/` THAT CONTRIBUTES NOTHING IS A REFUSAL, NEVER A QUIET ZERO — and this guard exists
-	// because DELETING THE WHITELIST TOOK THE OLD ONE AWAY.** `listWhitelistedModule` resolved each listed
-	// name and threw `fileNotFound` when it was gone, so a `stdlib/` missing its contents was caught HERE,
-	// by name. Enumeration has no such floor: a walk that finds nothing returns an empty array and every
-	// caller downstream sees a program that simply contains no stdlib. That is reachable without anyone
-	// deleting a file — `collectMaxonSources` asks `isIgnoredDirectory` about its ROOT, so a `.maxonignore`
-	// in any ancestor of the checkout makes the walk return 0 rather than throw.
-	//
-	// The symptom without this line is a PANIC far downstream and in another file
-	// (`Project.requireCorpusDeclaredEnum`: *"this compile declares no enum of that name"*), naming a
-	// declaration rather than the directory that failed to arrive. `stdlibNotFound` already renders the
-	// sentence that is actually true — *"could not locate the stdlib/ directory (every compile loads
-	// stdlib source)"* — so the floor needs no new error case, and it reintroduces no list: it asserts
-	// that the walk found SOMETHING, never what.
-	if found.isEmpty() 'stdlibContributedNothing'
+	if not try loadLibraryRoot(project, root: project.stdlibDir, usersOwn: usersOwn) 'stdlibContributedNothing'
 		throw CompileError.stdlibNotFound
 	end 'stdlibContributedNothing'
 
-	let usersOwn = registeredPathsWhenTheRootIsInsideStdlib(project)
+	// Bracketed alone, so what the runtime tier costs a compile is a row of its own rather than a share
+	// of `load` nobody could attribute (`CompilePhase.loadRuntime`).
+	let runtimeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.loadRuntime)
+	let runtimeContributed = try loadLibraryRoot(project, root: project.runtimeDir, usersOwn: usersOwn)
+	recordPhase(project, phase: CompilePhase.loadRuntime, probe: runtimeProbe)
 
-	// Built off `project.stdlibDir` — the very directory the walk above enumerated — so both sides of
-	// the comparison come out of the same `join` and a `/`-spelled constant matches an enumerated `\`
-	// path on Windows. ⚠ It is `project.stdlibDir` and NOT a checkout constant deliberately: the spec
-	// runner aims a compile at a STAGED copy of `stdlib/` (`stdlibDirOverride`), and a hardcoded path
-	// would silently stop excluding there. Hoisted out of the loop — one `join` per compile, not one per
-	// file. (`supersededRuntimeModulePath` interpolates because a bare module-`let` literal stays untyped
-	// and matches BOTH `FilePath.join` overloads, String and FilePath — an E3007 ambiguity, the same
-	// reason `StdlibSource.locateStdlibDir` interpolates `StdlibDirName`.)
-	let supersededByTheCompilersOwnRuntime = supersededRuntimeModulePath(project.stdlibDir)
+	if not runtimeContributed 'runtimeContributedNothing'
+		throw CompileError.runtimeNotFound
+	end 'runtimeContributedNothing'
+end 'loadLibrarySources'
+
+// Register every Maxon source under ONE library root, answering whether the root contributed anything.
+//
+// ⚠ THE ENUMERATION IS `Compiler.collectMaxonSources` — the SAME function that walks the user's own
+// root — because "which files under this directory are Maxon sources?" is one question and a library
+// root is not entitled to its own answer to it. A second walk here would be free to drift on the
+// extension, on the build manifest, and on every ignore rule either walk grows.
+//
+// ⛔ **A ROOT THAT CONTRIBUTES NOTHING IS A REFUSAL, NEVER A QUIET ZERO — and this floor exists
+// because DELETING THE WHITELIST TOOK THE OLD ONE AWAY.** `listWhitelistedModule` resolved each listed
+// name and threw `fileNotFound` when it was gone, so a `stdlib/` missing its contents was caught HERE,
+// by name. Enumeration has no such floor: a walk that finds nothing returns an empty array and every
+// caller downstream sees a program that simply contains no library. That is reachable without anyone
+// deleting a file — `collectMaxonSources` asks `isIgnoredDirectory` about its ROOT, so a `.maxonignore`
+// in any ancestor of the checkout makes the walk return 0 rather than throw.
+//
+// The symptom without it is a PANIC far downstream and in another file
+// (`Project.requireCorpusDeclaredEnum`: *"this compile declares no enum of that name"*), naming a
+// declaration rather than the directory that failed to arrive. The verdict is returned rather than
+// thrown because the two roots owe DIFFERENT sentences — a user told `stdlib/` is missing when it is
+// `runtime/` that is gone looks in the wrong place.
+//
+// ⚠ An ABSENT directory answers the same way as an EMPTY one — "the tier did not arrive" is one fact
+// whichever way the filesystem says it — while a root that exists and cannot be listed still raises its
+// own `readError`, naming the path.
+//
+// ⚠ LOUD, NEVER SILENT, for what it DOES load. An unreadable module propagates `readError` naming it; a
+// PARSE failure surfaces through the ordinary parse-diagnostic path (`queryParseOps` →
+// `reportParseError`), which already renders the file path. There is no arm that drops a module quietly.
+function loadLibraryRoot(project Project, root FilePath, usersOwn MaxonSourcePathSet) returns bool throws CompileError
+	// Asked before the walk so an ABSENT tier answers "contributed nothing" and a tier that is present
+	// but unlistable still propagates its own `readError` naming the path.
+	if not Directory.exists(root) 'theTierDidNotArrive'
+		return false
+	end 'theTierDidNotArrive'
+
+	var found = MaxonSourcePathArray.create()
+	_ = try collectMaxonSources(root, into: found)
+
+	if found.isEmpty() 'contributedNothing'
+		return false
+	end 'contributedNothing'
+
+	// Built off the root the walk above enumerated, so both sides of the comparison come out of the same
+	// `join` and a `/`-spelled constant matches an enumerated `\` path on Windows. ⚠ It is the PROJECT's
+	// directory and NOT a checkout constant deliberately: the spec runner aims a compile at a STAGED copy
+	// (`stdlibDirOverride`), and a hardcoded path would silently stop excluding there. Hoisted out of the
+	// loop — one `join` per root, not one per file. (`supersededRuntimeModulePath` interpolates because a
+	// bare module-`let` literal stays untyped and matches BOTH `FilePath.join` overloads, String and
+	// FilePath — an E3007 ambiguity, the same reason `StdlibSource.locateStdlibDir` interpolates
+	// `StdlibDirName`.) A root with no such file simply never matches it.
+	let supersededByTheCompilersOwnRuntime = supersededRuntimeModulePath(root)
 
 	for path in found 'each'
 		if path.equals(supersededByTheCompilersOwnRuntime) 'superseded'
@@ -328,25 +359,27 @@ export function loadStdlibSources(project Project) throws CompileError
 
 		try loadOneSourceFile(project, path: path)
 
-		// RECORDED, because it is the answer to "which of this compile's files are stdlib source?" and
+		// RECORDED, because it is the answer to "which of this compile's files are library source?" and
 		// this loop is the one place that knows it for free — every path here came out of an enumeration
-		// of `stdlib/`. Re-deriving it later by testing each source path against that directory costs
-		// four String allocations a question (see StdlibSource's header).
-		project.stdlibSourcePaths.push(path)
+		// of a library root. Re-deriving it later means testing each source path against that directory,
+		// which resolves both sides against the working directory (see StdlibSource's header).
+		project.librarySourcePaths.push(path)
 
 		// AND ADMITTED to the process-wide token memo, from the same loop and for the same reason: this
-		// is the one place that knows a file came out of an enumeration of `stdlib/`, and a memo that
-		// outlives the `Project` has to be told which files are worth the memory. See
-		// `QueryEngine.sharedFileMemos`, and the header bullet above on why this is that memo's SCOPE
-		// widening rather than a second cache beside it.
+		// is the one place that knows a file came out of such an enumeration, and a memo that outlives the
+		// `Project` has to be told which files are worth the memory. See `QueryEngine.sharedFileMemos`, and
+		// the header bullet above on why this is that memo's SCOPE widening rather than a second cache
+		// beside it.
 		try markSharedTokenSource(project, path: path)
 	end 'each'
-end 'loadStdlibSources'
+
+	return true
+end 'loadLibraryRoot'
 
 // ⚠ **A FILE THE PROJECT ALREADY REGISTERED MUST NOT BE LOADED A SECOND TIME**, and the one way a
-// single file can be reached by BOTH walks is a user root that lies under `stdlib/` — which is exactly
-// what `maxon build stdlib/Clock.maxon` is, the command that compiles one stdlib module on its own
-// to see what it still owes.
+// single file can be reached by BOTH walks is a user root that lies under a LIBRARY ROOT — which is
+// exactly what `maxon build stdlib/Clock.maxon` is, the command that compiles one library module on its
+// own to see what it still owes.
 //
 // It matters because the query database keys a source on its `FilePath` and `FilePath.equals` compares
 // the path TEXT (case-insensitively on Windows) rather than resolving it — so a relative
@@ -356,24 +389,26 @@ end 'loadStdlibSources'
 // 'Clock.nowMs'`, each pointing at Clock's own lines. The ABSOLUTE spelling of the same command was
 // already clean, which is what identifies the fault as the spelling and not the double load.
 //
-// ⚠ **ASKED ONCE PER COMPILE, OF THE ROOT** — every source the project loaded lies under it, so one
-// `isInside` settles it for the whole compile and an ordinary project pays nothing per file and gets an
-// empty set. That bound is the point and not an optimization: re-deriving stdlib-ness per FILE was
+// ⚠ **ASKED ONCE PER COMPILE, OF THE ROOT** — every source the project loaded lies under it, so two
+// `isInside` calls settle it for the whole compile and an ordinary project pays nothing per file and
+// gets an empty set. That bound is the point and not an optimization: re-deriving stdlib-ness per FILE was
 // measured at +60…+1,920 allocations across the scale ladder and rejected (StdlibSource's header), and
 // making a compile's diagnostics carry resolved paths instead was measured HERE at +824…+5,009 — a
 // guard that cost either would be that decision undone.
 //
 // The file stays the USER's: they named it as their project, so its functions are user source and a
 // diagnostic raised in it belongs at its own lines — which are lines they asked to compile.
-function registeredPathsWhenTheRootIsInsideStdlib(project Project) returns MaxonSourcePathSet
+function registeredPathsWhenTheRootIsInsideALibrary(project Project) returns MaxonSourcePathSet
 	var registered = MaxonSourcePathSet.create()
 
 	// ⚠ `Project.rootIsUnderStdlibDirectory`, not a fourth spelling of the same `resolve` + `isInside`:
 	// `Queries.livesUnderStdlibDirectory`'s soundness proof is a claim about this exact predicate holding
-	// the same way here and in `isStdlibSourceFile`, so it is asked in ONE place. See its header.
+	// the same way here and in `isStdlibSourceFile`, so it is asked in ONE place. See its header. Its
+	// runtime twin is asked beside it and nowhere else: no parser privilege turns on that root, so the
+	// double-load guard is the whole of what it decides.
 	let cwd = Directory.currentPath()
 
-	if not rootIsUnderStdlibDirectory(project, cwd: cwd) 'rootIsElsewhere'
+	if not rootIsUnderStdlibDirectory(project, cwd: cwd) and not rootIsUnderRuntimeDirectory(project, cwd: cwd) 'rootIsElsewhere'
 		return registered
 	end 'rootIsElsewhere'
 
@@ -382,4 +417,4 @@ function registeredPathsWhenTheRootIsInsideStdlib(project Project) returns Maxon
 	end 'each'
 
 	return registered
-end 'registeredPathsWhenTheRootIsInsideStdlib'
+end 'registeredPathsWhenTheRootIsInsideALibrary'

@@ -51,13 +51,13 @@ reports the same codes a call in a function body gets: E3008 for a file-private 
 module-scoped one.
 
 **4. A factory in a LISTED STDLIB MODULE is REACHED by the initializer.** Every pre-elimination pass
-skips a stdlib function the program cannot reach (`StdlibFacts.unreachable`), and that reachability
+skips a stdlib function the program cannot reach (`LibraryFacts.unreachable`), and that reachability
 is walked from `main` over the program's own call edges. `__module_init` is not called from `main` —
 the entry stub calls it — so a stdlib factory named ONLY by a top-level initializer has to be reached
 through the DECLARATION that causes the call, not through the synthesized body that makes it. Getting
 this wrong is not a wrong answer but a compiler panic: dead-function elimination roots
 `__module_init`, reaches the factory the pre-elimination passes were told was dead, and
-`requireUnreachableStdlibStayedDead` fires on a program with nothing wrong with it.
+`requireUnreachableLibraryStayedDead` fires on a program with nothing wrong with it.
 
 **5. The callee's declared return type is ONE fact, however the callee spelled it.** A `static`
 whose `returns` clause names its own enclosing type — as `Self`, or by that type's own name — is
@@ -730,7 +730,7 @@ Rule 4 through the ARGUMENT rather than through the binding: `Map` is a listed s
 `StrMap.create()` is a call on a stdlib body — and here it is nowhere in the program but INSIDE another
 initializer's argument list. The declaration that causes the call therefore has to contribute BOTH
 callees to the root set, not just the one it names first. MEASURED with only the outer one rooted:
-`panic … requireUnreachableStdlibStayedDead: 'Map.create' is in StdlibFacts.unreachable`, on a program
+`panic … requireUnreachableLibraryStayedDead: 'Map.create' is in LibraryFacts.unreachable`, on a program
 with nothing wrong with it.
 ```maxon
 typealias Count = int(0 to u64.max)

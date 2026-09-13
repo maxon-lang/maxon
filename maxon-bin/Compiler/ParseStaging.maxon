@@ -188,9 +188,9 @@ export type FileParseArtifact
 	// ⭐ **DOES THIS FILE PHYSICALLY LIVE UNDER `stdlib/` (W3)** — the one fact `commitEnumTypes` needs to
 	// tell the CORPUS's declaration of a compiler-owned enum from a user's contest of it
 	// (`Project.upsertDeclaredEnum`). It rides the artifact rather than being re-derived at commit time
-	// because `Queries.isStdlibSourceFile` costs ~4 String allocations a call and this compile has already
-	// classified every path once — asking a second time per file is the number `StdlibSource`'s header
-	// rejects. It is `livesUnderStdlibDirectory` and NOT `isStdlibSource` for the reason
+	// because `Queries.isStdlibSourceFile` is a memo probe on a `FilePath` key — which clones and
+	// lower-cases the path — and this compile has already classified every path once. It is
+	// `livesUnderStdlibDirectory` and NOT `isStdlibSource` for the reason
 	// `Parser.requireTypeNameNotCompilerOwned` states: a project rooted under `stdlib/` must still record its
 	// own declarations, or the readiness probe would disagree with the loaded module.
 	export var livesUnderStdlibDirectory as bool

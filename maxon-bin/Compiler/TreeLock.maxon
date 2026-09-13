@@ -25,13 +25,18 @@
 // **ONE lock per CHECKOUT, covering `build` AND the two harnesses together.** Not per output
 // directory — a suite RUNS the binary a build REPLACES, so the two contend even though they write
 // different directories, which is exactly the pairing `E6002`'s message already names as its likeliest
-// cause. Not per machine either: every worktree carries its own `stdlib/`, `bin/` and `.maxon/`, so
-// worktrees must never block each other (that is the whole point of working in one).
+// cause. Not per machine either: every worktree carries its own `stdlib/`, `runtime/`, `bin/` and
+// `.maxon/`, so worktrees must never block each other (that is the whole point of working in one).
 //
 // **The checkout is the one CONTAINING THE PATH THE COMMAND WRITES INTO** — the project directory, the
 // spec directory, the scale corpus root — found by the same upward walk for `stdlib/` that locates the
 // compiler's own source (`stdlibDirAbove`). A path with no checkout above it has nothing shared to
 // guard, and takes no lock: `maxon build /tmp/scratch.maxon` is not a tree-level command.
+//
+// ⚠ **`stdlib/` ALONE IDENTIFIES THE CHECKOUT, AND ONE LOCK COVERS EVERY TIER IN IT.** `runtime/` is
+// that directory's sibling under the same root, so the walk already lands on the tree that holds both;
+// a second marker would only re-derive the same answer, and a second lock would split a guard whose
+// whole point is that ONE command at a time writes the tree.
 //
 // Three commands take it (`Main`): `build <directory>` with no `-o`, `spec-test`, `scale-test`. What
 // they have in common is that they write the tree's own output directories; everything else — a

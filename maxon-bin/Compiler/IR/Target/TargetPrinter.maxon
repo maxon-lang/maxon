@@ -112,8 +112,8 @@ end 'printDataSection'
 // the fragments exist to carry in a diff nobody can read.
 //
 // ⚠ **THE FACT IS THE FUNCTION'S OWN PROVENANCE, ASKED THE ONE WAY THIS COMPILER ASKS IT.** The set
-// arrives as `project.stdlibFacts.stdlibFunctions` — the per-function form of "came from `stdlib/`"
-// that `StdlibSource` derives once per compile and that `isStdlibFunction` is the reader of. It is
+// arrives as `project.libraryFacts.libraryFunctions` — the per-function form of "came from `stdlib/`"
+// that `StdlibSource` derives once per compile and that `isLibraryFunction` is the reader of. It is
 // NOT re-derived here from paths or from name shapes: a `String.`/`Array.` prefix test would be a
 // second answer to a question that already has one, and would misfile a user's own `String`-named
 // method the moment one existed.
@@ -156,7 +156,7 @@ end 'printDataSection'
 // The printed text grows with the PROGRAM, so both accumulators here are `StringBuilder`s: a `String`
 // owns exactly the bytes it holds and its `append` recopies all of them (stdlib/String.maxon), which
 // would make printing a module quadratic in its own output.
-export function printTargetModule(module TargetModule, globalData GlobalDataTable, runtimeNames RuntimeFunctionNameArray, codeChunks FunctionCodeChunkArray, stdlibFunctions FunctionNameSet) returns String
+export function printTargetModule(module TargetModule, globalData GlobalDataTable, runtimeNames RuntimeFunctionNameArray, codeChunks FunctionCodeChunkArray, libraryFunctions FunctionNameSet) returns String
 	var body = StringBuilder.create()
 	let dataText = printDataSection(globalData)
 	body.append(dataText)
@@ -187,7 +187,7 @@ export function printTargetModule(module TargetModule, globalData GlobalDataTabl
 		// ONE question, asked ONCE per function and read by both rules below — the refusal and the skip.
 		// Asking it twice is what the flag column's own header warns against, in the shape that reports a
 		// WRONG ANSWER rather than an error.
-		let supplied = isSuppliedFunction(func, stdlibFunctions: stdlibFunctions)
+		let supplied = isSuppliedFunction(func, libraryFunctions: libraryFunctions)
 
 		// Naming a function the fragment ALREADY shows says nothing new, and reading the block as if it
 		// had would be a reader's mistake. It is caught here rather than in a pre-pass so it, too, reads
@@ -596,8 +596,8 @@ end 'isRuntimeFunction'
 // The library half is a set lookup rather than a path test for the reason `StdlibSource`'s header
 // gives: provenance is materialized ONCE per compile, and re-deriving it with `FilePath.isInside`
 // costs about four String allocations per question.
-function isSuppliedFunction(func IrFunction, stdlibFunctions FunctionNameSet) returns bool
-	return isRuntimeFunction(func) or stdlibFunctions.contains(func.name)
+function isSuppliedFunction(func IrFunction, libraryFunctions FunctionNameSet) returns bool
+	return isRuntimeFunction(func) or libraryFunctions.contains(func.name)
 end 'isSuppliedFunction'
 
 // ⭐⭐ **MAY THIS FUNCTION SKIP THE GREEN-THREAD STACK GUARD?** — the OTHER question `isRuntimeFunction`

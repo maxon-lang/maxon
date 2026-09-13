@@ -6,7 +6,8 @@
 #
 # Downloads the release archive for this machine from GitHub, checks it against the release's
 # SHA256SUMS, and installs it into ~/.maxon: the compiler in ~/.maxon/bin, the standard library in
-# ~/.maxon/stdlib. Running it again installs the latest release, or says the install is current.
+# ~/.maxon/stdlib and the language runtime in ~/.maxon/runtime. Running it again installs the latest
+# release, or says the install is current.
 # `usage` below lists the options.
 #
 # ⛔ `maxon upgrade` RUNS THIS SCRIPT, SO ITS INTERFACE IS A CONTRACT WITH EVERY SHIPPED COMPILER:
@@ -69,9 +70,9 @@ main() {
 		return 0
 	fi
 
-	# A directory that already holds a stdlib/ or examples/ of its own is not ours to replace.
+	# A directory that already holds a stdlib/, runtime/ or examples/ of its own is not ours to replace.
 	if [ ! -e "$bin_dir/maxon" ]; then
-		for entry in stdlib examples; do
+		for entry in stdlib runtime examples; do
 			if [ -e "$root/$entry" ]; then
 				fail "$root/$entry exists and $root holds no bin/maxon, so it is not a Maxon install; set MAXON_INSTALL to a new directory"
 			fi
@@ -193,10 +194,13 @@ swap_in() {
 	root="$1"
 	unpacked="$2"
 	retired="$3"
-	for entry in stdlib examples; do
+	# ⚠ THE ARCHIVE DECIDES WHICH TIERS EXIST. `runtime/` is absent from releases that predate it, and
+	# this script installs any version, so an entry the archive does not carry is only retired.
+	for entry in stdlib runtime examples; do
 		if [ -e "$root/$entry" ]; then
 			mv "$root/$entry" "$retired/$entry" || return 1
 		fi
+		[ -d "$unpacked/$entry" ] || continue
 		mv "$unpacked/$entry" "$root/$entry" || return 1
 		: > "$retired/$entry.placed" || return 1
 	done
@@ -206,7 +210,7 @@ swap_in() {
 roll_back() {
 	root="$1"
 	retired="$2"
-	for entry in examples stdlib; do
+	for entry in examples runtime stdlib; do
 		if [ -e "$retired/$entry.placed" ]; then
 			rm -rf "${root:?}/$entry"
 		fi

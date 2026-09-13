@@ -1,0 +1,43 @@
+// The RUNTIME TIER's word roster — the machine-level aliases a runtime body spells its raw values in.
+//
+// `runtime/` sits beside `stdlib/` at the checkout root and the compiler loads it on every compile, the
+// way it loads `stdlib/`. What separates the two is the ALTITUDE of the code: a runtime body handles
+// values the OS, the allocator or the compiler itself minted, never a quantity a program computed.
+//
+// ⭐ **THAT IS WHY THESE ARE `bits(N)` AND NOT `int(...)`.** `bits(n)` is a PATTERN: it admits every
+// value n bits can hold, so its door is guarded by the WIDTH alone — vacuously at 64 — and every
+// ordering comparison on it reads UNSIGNED. An `int(...)` alias is a QUANTITY, and its door refuses a
+// value that arrived from a signed domain. A guarded door is exactly what a runtime body must NOT have
+// on a value the OS minted: the guard could only ever fire on something the substrate itself produced,
+// and it would panic where the runtime has no caller to report to.
+//
+// The three signed aliases below are the exception, each for a stated reason: their negative half
+// CARRIES MEANING, so reading them unsigned deletes a branch rather than widening one.
+
+// An address, a size, a raw bit pattern, a function pointer, a slot/page/class index, a count, a flag.
+module typealias MachineWord = bits(64)
+
+// A machine word proven non-zero: the divisor type for `/` and `mod`. Integer division is fallible, so
+// a structurally-non-zero-but-0-admitting divisor is cast to this at the divide — a bare divide, no
+// check, and portable across every target.
+module typealias NonZeroWord = int(1 to i64.max)
+
+// An element or byte coordinate into a managed buffer, AS THE CALLER SUPPLIED IT — an index, a length,
+// a count, a byte offset, a requested capacity. FULL-RANGE SIGNED, and it has to be: a buffer entry
+// point opens by refusing a negative coordinate, and that refusal IS the contract. Read unsigned the
+// test is always false, the bounds check disappears, and `get(-1)` becomes an out-of-bounds read.
+// It cannot be narrowed either: a narrowed range is a guarded door, and a guarded door PANICS where
+// these are specified to THROW a catchable error.
+module typealias BufferCoordinate = int(i64.min to i64.max)
+
+// A record's element stride, whose negative half is a real encoding rather than an error value: a
+// positive stride is bytes per element, zero is unset, and a negative one is `(-stride)` BITS per
+// element for a sub-byte-packed buffer. Read unsigned, every packed buffer takes the byte-strided path
+// and shreds itself. Full-range because a struct element's stride has no bound this file can state.
+module typealias ElementStride = int(i64.min to i64.max)
+
+// Refcount arithmetic: the delta an atomic exchange-add applies (a release is `-1`), and the prior and
+// resulting values it produces. FULL-RANGE SIGNED because the over-release trap (`prior <= 0`) exists
+// precisely to see a value a correct program cannot produce — read unsigned it degrades to `prior == 0`
+// and a corrupt negative reads back as a huge positive.
+module typealias RefCountDelta = int(i64.min to i64.max)

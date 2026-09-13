@@ -315,7 +315,7 @@ export enum CompilePhase
 	// ⚠ **NAMED FOR THE PIPELINE, NOT FOR NAME INDEXING, AND THE PRECISION IS THE POINT.** There are
 	// THREE Maxon-tier `FunctionNameIndex.create` calls; a row called `nameIndex` would name one of
 	// them and under-report the mechanism threefold. The other two are inside `checkConformance` and
-	// `deriveStdlibFacts`, so they are billed to `checkDeclarations` and `deriveRuntimeNeeds` — which
+	// `deriveLibraryFacts`, so they are billed to `checkDeclarations` and `deriveRuntimeNeeds` — which
 	// is where the cost belongs, since it is those passes' own.
 	pipelineNameIndex
 
@@ -482,6 +482,18 @@ export enum CompilePhase
 	// out of the disjoint sum for that reason (`PhaseRowKind`). The row under this one in the report says
 	// whether the breakdown left a remainder or ran concurrently (`PoolRemainder`).
 	stdFanOut
+
+	// Registering the RUNTIME tier's sources (`StdlibLoader.loadLibraryRoot`, for `project.runtimeDir`).
+	// APPENDED HERE rather than beside `load`, which it runs inside, for this enum's own reason — the
+	// ordinals are the `.metrics.tsv` wire format every trend row ever written is indexed by, so a member
+	// slotted into the middle would re-attribute every historical measurement to the wrong phase.
+	//
+	// Its OWN row rather than a slice of `load`, because it is the one part of the load whose cost tracks
+	// a directory neither the user nor the standard library owns: a tier that grows would grow `load` with
+	// nothing to say which of the three source populations did it. `load`'s row is recorded EXCLUDING this
+	// one (`Compiler.compileMeasured`), so the two are disjoint. It brackets the registration alone and
+	// absorbs no `lex`: the query spine tokenizes on demand, long after the load has returned.
+	loadRuntime
 end 'CompilePhase'
 
 // How a phase's row was measured. A pool row is a sum over worker brackets that ran inside `driver`'s

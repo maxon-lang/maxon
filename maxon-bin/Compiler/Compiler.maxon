@@ -90,7 +90,9 @@ end 'CompileProduct'
 // build (load, clear the output, write the executable, render the IR) are here, once.
 //
 // `stdlibDirOverride` names the `stdlib/` this compile reads instead of the one above the compiler's
-// own executable; empty ⇒ the walk-up, byte-for-byte unchanged (see `loadProject`).
+// own executable; empty ⇒ the walk-up, byte-for-byte unchanged (see `loadProject`). `runtimeDirOverride`
+// is its sibling for the RUNTIME tier; empty ⇒ the directory beside the `stdlib/` this compile resolved
+// (see `runtimeDirFor`).
 //
 // ⭐ **THE LAST THREE ARGUMENTS ARE ONE CALLER'S, AND THEIR DEFAULTS ARE EVERY OTHER BUILD'S ANSWER.**
 // `entryFunction` is where this build begins (`Project.entryFunctionName`), `compilerWrittenSources` names the
@@ -111,7 +113,7 @@ end 'CompileProduct'
 // diagnostics (semantic/lexer) are printed inside `compileToCodeResult` — through
 // `emitDiagnosticLine`, so a caller may CAPTURE them instead (see Diagnostics.maxon) — and
 // re-signaled as a FRESH `compileError`.
-export function compileToProduct(inputPaths MaxonSourcePathArray, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false, debugInfo bool = false, coverage bool = false, stdlibDirOverride String = "", entryFunction ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(), productVersion String = "", defines DefineArray = DefineArray.create()) returns CompileProduct throws CompileError
+export function compileToProduct(inputPaths MaxonSourcePathArray, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false, debugInfo bool = false, coverage bool = false, stdlibDirOverride String = "", runtimeDirOverride String = "", entryFunction ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(), productVersion String = "", defines DefineArray = DefineArray.create()) returns CompileProduct throws CompileError
 	// Every trace event this compile emits is attributed to this unit. Derived from the project ROOT
 	// — through the same `commonAncestorOf` the project itself is rooted at below, rather than from a
 	// second reading of the command line — so the pre-project `load` bracket and everything after it
@@ -149,7 +151,7 @@ export function compileToProduct(inputPaths MaxonSourcePathArray, target Target,
 	// in general: it is reached only from `Main.runVerifyWarmRebuild`, which turns a throw into an exit
 	// code, so a throw really does end the process there with nothing left to mis-nest. An in-process
 	// caller of THAT gate would need this drain too.
-	return try compileMeasured(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream, debugInfo: debugInfo, coverage: coverage, stdlibDirOverride: stdlibDirOverride, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, productVersion: productVersion, defines: defines, unit: unit) otherwise (e) 'compileFailed'
+	return try compileMeasured(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream, debugInfo: debugInfo, coverage: coverage, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, productVersion: productVersion, defines: defines, unit: unit) otherwise (e) 'compileFailed'
 		closeOpenPhaseSpans(unit)
 		throw e
 	end 'compileFailed'
@@ -158,12 +160,12 @@ end 'compileToProduct'
 // The build itself, from the whole-compile probe to the timing report — everything `compileToProduct`
 // measures. It is a separate function for the single reason its caller states: one failure path to hang
 // the trace-span drain on, rather than one per `try` in this body.
-function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputOverride String, emitIr bool, metricsPath String, runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool, debugStream bool, debugInfo bool, coverage bool, stdlibDirOverride String, entryFunction ByteArray, compilerWrittenSources CompilerWrittenSourceArray, sourceSelection SourceSelection, stagedSourceOrigins StagedSourceOriginArray, productVersion String, defines DefineArray, unit TraceUnit) returns CompileProduct throws CompileError
+function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputOverride String, emitIr bool, metricsPath String, runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool, debugStream bool, debugInfo bool, coverage bool, stdlibDirOverride String, runtimeDirOverride String, entryFunction ByteArray, compilerWrittenSources CompilerWrittenSourceArray, sourceSelection SourceSelection, stagedSourceOrigins StagedSourceOriginArray, productVersion String, defines DefineArray, unit TraceUnit) returns CompileProduct throws CompileError
 	let whole = PhaseProbe.begin(compilePhaseName(CompilePhase.load), unit: unit)
 
 	// Loading starts the instant the compile does, so `whole` is also the `load` phase's
 	// probe — a second set of reads here would sample the same instant.
-	var project = try loadProject(inputPaths, target: target, stdlibDirOverride: stdlibDirOverride, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins)
+	var project = try loadProject(inputPaths, target: target, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins)
 	project.asyncTrace = asyncTrace
 	project.debugStream = debugStream
 	project.debugInfo = debugInfo
@@ -171,7 +173,11 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	project.coverage = coverage
 	project.productVersion = productVersion
 	project.defines = defines
-	recordPhase(project, phase: CompilePhase.load, probe: whole)
+
+	// EXCLUDING the runtime tier's own bracket, which `loadLibrarySources` opened inside this one: a phase
+	// that absorbs a neighbour's cost is the defect CompileTimings exists to prevent, and the rows must
+	// stay a disjoint partition of the compile.
+	recordPhaseExcluding(project, phase: CompilePhase.load, probe: whole, inner: CompilePhase.loadRuntime)
 
 	// ⭐ RESOLVED BEFORE THE PIPELINE, AND THAT ORDER IS THE WHOLE POINT: the previous build's
 	// artifacts are removed HERE, ahead of every step that can fail. See `discardPreviousOutput`.
@@ -230,8 +236,8 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	// stub `mrt_start`, the allocator, the `__str_*`/`__managed_*` families) is the compiler's; the
 	// LIBRARY — every function the merged module got from `stdlib/` source — is the checkout's, and it
 	// is in this module at all only because `stdlib/` is compiled from source alongside the program. So
-	// both the fragment and `--emit-ir` show the program's own functions. `stdlibFacts.stdlibFunctions` is the per-function provenance the whole compiler
-	// asks this by (`StdlibSource.isStdlibFunction`), passed rather than re-derived.
+	// both the fragment and `--emit-ir` show the program's own functions. `libraryFacts.libraryFunctions` is the per-function provenance the whole compiler
+	// asks this by (`StdlibSource.isLibraryFunction`), passed rather than re-derived.
 	//
 	// `runtimeIrNames` (`--emit-ir-runtime=`) is how a caller asks for a NAMED one of those withheld
 	// bodies anyway: it is the only route either has to a golden, and it is per-build so no fragment
@@ -243,7 +249,7 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 
 	if emitIr 'emitIr'
 		let irProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.emitIr)
-		irText = printTargetModule(codeResult.targetModule, globalData: codeResult.globalData, runtimeNames: runtimeIrNames, codeChunks: codeResult.codeChunks, stdlibFunctions: project.stdlibFacts.stdlibFunctions)
+		irText = printTargetModule(codeResult.targetModule, globalData: codeResult.globalData, runtimeNames: runtimeIrNames, codeChunks: codeResult.codeChunks, libraryFunctions: project.libraryFacts.libraryFunctions)
 		recordPhase(project, phase: CompilePhase.emitIr, probe: irProbe)
 	end 'emitIr'
 
@@ -542,11 +548,12 @@ end 'writeTargetIr'
 // File/IO errors (`fileNotFound`, `noSourceFiles`, `readError`) carry NO
 // diagnostics and propagate straight to the caller, which prints a specific
 // message. `loadSourceFiles` is what raises them.
-export function loadProject(inputPaths MaxonSourcePathArray, target Target, stdlibDirOverride String = "", entryFunction ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create()) returns Project throws CompileError
-	// The checkout's `stdlib/` is found BEFORE the project exists, because the project carries it to
-	// the loader below. Nothing after the load asks where `stdlib/` is — a later pass asks about a
-	// FUNCTION (`isStdlibFunction`), which is answered from a set the loader already built.
-	var project = createProject(try commonAncestorOf(inputPaths), target: target, stdlibDir: try stdlibDirFor(stdlibDirOverride))
+export function loadProject(inputPaths MaxonSourcePathArray, target Target, stdlibDirOverride String = "", runtimeDirOverride String = "", entryFunction ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create()) returns Project throws CompileError
+	// Both library roots are found BEFORE the project exists, because the project carries them to the
+	// loader below. Nothing after the load asks where either is — a later pass asks about a FUNCTION
+	// (`isLibraryFunction`), which is answered from a set the loader already built.
+	let stdlibDir = try stdlibDirFor(stdlibDirOverride)
+	var project = createProject(try commonAncestorOf(inputPaths), target: target, stdlibDir: stdlibDir, runtimeDir: try runtimeDirFor(runtimeDirOverride, stdlibDir: stdlibDir))
 
 	// ⭐ **BOTH SET BEFORE THE FIRST FILE IS REGISTERED, AND THAT ORDER IS LOAD-BEARING.**
 	// `Queries.compilerMintedNamesIn` is asked while a file is being READ, so a list filled after the
@@ -562,9 +569,12 @@ export function loadProject(inputPaths MaxonSourcePathArray, target Target, stdl
 	try loadSourceFiles(project, paths: inputPaths, selection: sourceSelection)
 
 	// AFTER the user's own sources — so a directory build's output name still derives from a user
-	// file (not from a stdlib module), and an empty user project still fails with `noSourceFiles`
-	// above rather than compiling only stdlib.
-	try loadStdlibSources(project)
+	// file (not from a library module), and an empty user project still fails with `noSourceFiles`
+	// above rather than compiling only the library.
+	//
+	// ⚠ The RUNTIME tier's share of this is billed to its own phase from inside the loader, and
+	// `compileMeasured` subtracts that row from `load`'s so the two stay disjoint.
+	try loadLibrarySources(project)
 	return project
 end 'loadProject'
 
@@ -598,6 +608,28 @@ function stdlibDirFor(stdlibDirOverride String) returns FilePath throws CompileE
 	let staged = try FilePath.from(stdlibDirOverride) otherwise panic("stdlibDirFor: invalid stdlib directory '{stdlibDirOverride}' — the override names a directory the CALLER staged, so a path no FilePath can hold is a caller bug and not a user error")
 	return staged.resolve(Directory.currentPath())
 end 'stdlibDirFor'
+
+// ⭐ **WHICH `runtime/` THIS COMPILE READS — the twin of `stdlibDirFor`, with one difference that is the
+// whole design.** An empty override does NOT walk: the runtime root is DERIVED from the `stdlib/` this
+// same compile resolved (`StdlibSource.runtimeDirBeside`), so the two tiers a compile reads always come
+// out of one tree. A walk of its own could pair a released `stdlib/` with a checkout's `runtime/`, and a
+// compile built from two halves of two installs is wrong in a way nothing downstream could detect —
+// deriving makes that pairing unrepresentable rather than checked.
+//
+// ⚠ The override carries `stdlibDirFor`'s contract unchanged: resolved against the working directory,
+// because `Project.runtimeDir` is an ABSOLUTE path by contract and `Queries.isRuntimeSourceFile` compares
+// SPELLINGS — a relative one matches nothing and every staged runtime file reads as USER code. And an
+// unspellable override PANICS rather than falling back to the derivation: the path comes from a directory
+// the caller just created, so a bad one is a caller bug, and a silent fall-back would compile the case
+// against the CHECKOUT's runtime and report a confident wrong verdict.
+function runtimeDirFor(runtimeDirOverride String, stdlibDir FilePath) returns FilePath throws CompileError
+	if runtimeDirOverride.isEmpty() 'besideTheStdlibThisCompileRead'
+		return try runtimeDirBeside(stdlibDir)
+	end 'besideTheStdlibThisCompileRead'
+
+	let staged = try FilePath.from(runtimeDirOverride) otherwise panic("runtimeDirFor: invalid runtime directory '{runtimeDirOverride}' — the override names a directory the CALLER staged, so a path no FilePath can hold is a caller bug and not a user error")
+	return staged.resolve(Directory.currentPath())
+end 'runtimeDirFor'
 
 // Drive the query spine + mid/lowering pipeline + backend for an already-loaded
 // `project`, returning the emitted `CodeResult` (NOT yet written to disk). This is
@@ -793,7 +825,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	recordPhase(project, phase: CompilePhase.verifyOrdinals, probe: ordinalProbe)
 
 	// ⚠ **THE ONE QUERY REACHED FROM INSIDE THIS BRACKET IS A MEMO HIT, AND IF IT EVER IS NOT, THIS
-	// COMPILE IS ALREADY FAILING.** `deriveStdlibFacts` below reads each stdlib file's parse artifact
+	// COMPILE IS ALREADY FAILING.** `deriveLibraryFacts` below reads each stdlib file's parse artifact
 	// back through `queryParseOps`, which opens the `parse` phase — but only on a MISS, and every
 	// stdlib file was parsed and cached by `queryAllModule` above. The single way to reach a miss here
 	// is a stdlib file whose parse FAILED (a failed parse is never cached), and that compile throws at
@@ -814,7 +846,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// only by a direct call or a taken address, never by a witness or `.rdata` edge).
 	//
 	// ⚠ **ITS OWN GATE, BECAUSE IT IS THE FIRST SITE THAT CAN REFUSE AND THE PIPELINE'S IS STILL BELOW
-	// (A1w).** `deriveStdlibFacts` reads every stdlib file's parse artifact back and builds a
+	// (A1w).** `deriveLibraryFacts` reads every stdlib file's parse artifact back and builds a
 	// `FunctionNameIndex` over this module, either of which can throw. Without a gate here that throw would
 	// leave `compileToCodeResult` having passed both gates below, and the diagnostic would never be printed:
 	// exit 1 with nothing said.
@@ -830,9 +862,9 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// cycle was cut where it was thinnest: nothing is refused later than before, and one derivation feeds
 	// both readers instead of one reader re-deriving it. See `FunctionNameIndex`, which records what each
 	// index site can actually see.
-	project.stdlibFacts = try deriveStdlibFacts(project, module: module, signatures: signatures) otherwise 'stdlibFactsRefused'
+	project.libraryFacts = try deriveLibraryFacts(project, module: module, signatures: signatures) otherwise 'libraryFactsRefused'
 		try refuseCompile(project)
-	end 'stdlibFactsRefused'
+	end 'libraryFactsRefused'
 
 	// ⭐ **WHICH GLOBALS CAN THE PROGRAM STILL NAME — ASKED BEFORE ANYTHING IS BUILT FROM THEM** (P1.7
 	// slice 3, see `DeadGlobalElimination`). A binding nothing reads or writes costs an 8-byte slot, an
@@ -844,7 +876,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// opens every managed global with a `globalAddr` of that global's own slot, so a liveness scan run
 	// after the synthesis would find every global keeping itself alive — the answer would be "everything
 	// is live", silently and always.
-	let liveGlobals = liveGlobalLabels(module, storedGlobals: signatures.storedGlobalCount, unreachableStdlib: project.stdlibFacts.unreachable)
+	let liveGlobals = liveGlobalLabels(module, storedGlobals: signatures.storedGlobalCount, unreachableStdlib: project.libraryFacts.unreachable)
 
 	// ⭐ **SYNTHESIZE `__module_init` / `__maxon_global_cleanup` — HERE, and the position is the whole
 	// wiring** (P1.7 slice 2a, see `ModuleInit`). They are Maxon-tier functions appended to the merged
@@ -917,7 +949,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// `IrModule.parksOnIo` (which decides whether the park is emitted) cannot answer it differently. Both
 	// fields carry what a disagreement produces.
 	let parksOnIo = targetProvidesFacility(project.target, facility: HostFacility.greenThreads)
-	var usage = scanRuntimeUsage(module, unreachableStdlib: project.stdlibFacts.unreachable, funcSignatures: project.funcSignatures, parksOnIo: parksOnIo)
+	var usage = scanRuntimeUsage(module, unreachableStdlib: project.libraryFacts.unreachable, funcSignatures: project.funcSignatures, parksOnIo: parksOnIo)
 
 	// ⭐ A TRACED build carries what `__gt_trace_emit` calls, and the scan cannot see any of it: the trace is
 	// emitted BELOW the Maxon tier (into the synthesized `__gt_*` runtime), so no Maxon call site exists for
@@ -1184,7 +1216,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// ⚠⚠ **BELOW THE ERROR GATE, AND THAT POSITION IS PAID FOR.** `requireCorpusDeclaredEnum` PANICS on an
 	// absent entry, and there is one way to be absent in a checkout that lists the declaring module: a stdlib
 	// file whose parse FAILED, since a failed parse is never cached and so never merged
-	// (`deriveStdlibFacts`' header records the same rule for the same reason). MEASURED with this line above
+	// (`deriveLibraryFacts`' header records the same rule for the same reason). MEASURED with this line above
 	// the gate: any user program declaring `implements Iterable` — which expands `stdlib/Interfaces.maxon`'s
 	// `extension Iterable` onto the conformer and so can fail inside that file — died with this panic INSTEAD
 	// of the diagnostic naming the real fault. Below the gate, that compile has already refused and said why.
@@ -1855,7 +1887,7 @@ end 'loadSourceDirectory'
 // `SourceSelection` for why it is a parameter rather than a second walk.
 //
 // ⚠ BOTH of a compile's directory walks go through it — the USER's own root (`loadSourceDirectory`)
-// and the checkout's `stdlib/` (`loadStdlibSources`) — because that is ONE question, and two copies
+// and the checkout's `stdlib/` (`loadLibrarySources`) — because that is ONE question, and two copies
 // of the answer are two copies that can come to disagree. The remaining clause this rule owes is
 // named in `loadSourceFiles`: `.test`-fragment stripping. Added to one walk and not the other, it
 // would read as correct at BOTH sites while a file was silently compiled on one side and silently
@@ -1895,7 +1927,7 @@ end 'loadSourceDirectory'
 // a `Directory.list`, and contributes no path anybody outside can see. `scale-test` reports both
 // numbers so that a GITIGNORED directory — invisible to git, visible here, and not the same thing as a
 // `.maxonignore`d one, which this walk no longer lists at all — cannot go on being an unattributed
-// constant in the trend log (see `printStdlibWalkCensus`), and the count is returned from
+// constant in the trend log (see `printLibraryWalkCensus`), and the count is returned from
 // the recursion rather than re-derived by a second traversal because a second traversal would be free
 // to disagree the moment this one grows an exclusion.
 export function collectMaxonSources(dir FilePath, into MaxonSourcePathArray, selection SourceSelection = SourceSelection.productionOnly) returns DirectoryWalkCount throws CompileError
@@ -2111,7 +2143,7 @@ end 'testSourceNameFor'
 export let IgnoreMarkerName = ".maxonignore"
 
 // Paths of Maxon source files, in the order a walk found them — what `collectMaxonSources`
-// produces and what `Project.stdlibSourcePaths` keeps. The ORDER is the fact this name carries and
+// produces and what `Project.librarySourcePaths` keeps. The ORDER is the fact this name carries and
 // `FilePathArray` does not, which is why it is its own alias and not a second spelling of that one.
 //
 // ⛔ **IT USED TO GIVE A SECOND REASON AND THAT REASON IS MEASURED FALSE (G17)**: *"whose name

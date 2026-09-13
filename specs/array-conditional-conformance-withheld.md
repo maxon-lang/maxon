@@ -150,7 +150,7 @@ over-refusal it excused: a program that COPIES NOTHING (`for … in` over a nest
 NOTE** — the arrangement the remaining opaque-gate cases print. It is RAISED at `stdlib/Array.maxon:172:32`,
 a line no user wrote, and REPORTED at the `typealias` whose instantiation made the element uncopyable. The
 library location reads REPO-RELATIVE because the runner rewrites the compiler's absolute `stdlib/` root the
-way it already rewrites a staged fragment's path (`SpecTestRunner.rewriteStdlibPaths`). Only the NOTE carries
+way it already rewrites a staged fragment's path (`SpecTestRunner.rewriteSourceTierPaths`). Only the NOTE carries
 the library's line number, so an edit above `stdlib/Array.maxon:147` still moves those expectations — a real
 cost, and the same one the four `/specs` cases pinning `Array.maxon:407`'s panic already pay. The cases that
 still print it are `array-clone-managed-elements.error.clone-of-a-struct-holding-a-compiler-owned-handle-is-refused`,

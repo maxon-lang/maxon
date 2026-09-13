@@ -192,7 +192,7 @@ end 'SharedMemoMiss'
 export typealias SharedFileMemoMap = Map with (HashDigest, SharedFileMemo)
 
 // The byte-contents this compile is willing to hand to the process-wide memo — filled by
-// `StdlibLoader.loadStdlibSources`, which is the one place that knows a file came out of an
+// `StdlibLoader.loadLibrarySources`, which is the one place that knows a file came out of an
 // enumeration of `stdlib/`.
 //
 // ⚠ **IT IS AN ADMISSION LIST, NOT A CACHE, AND ITS ONLY JOB IS TO BOUND MEMORY.** A shared entry
@@ -211,6 +211,23 @@ export type SourceFileEntry
 		return Self{content: content, contentHash: contentHash}
 	end 'create'
 end 'SourceFileEntry'
+
+// ⭐ **BOTH PROVENANCE FACTS ABOUT ONE PATH, DERIVED TOGETHER AND HELD FOR THE COMPILE** — see
+// `Queries.fileProvenanceOf`, which is the one place that fills this.
+//
+// ⚠ TWO BITS AND NOT ONE TIER, because neither implies the other's answer: both are false for the
+// author's own files, and for a file the user named as their project even when it lies under a library
+// root (`Project.rootIsUnderStdlibDirectory`). The roots are siblings, so no file is ever both.
+export type FileProvenance
+	export var isStdlibSource as bool
+	export var isRuntimeSource as bool
+
+	export static function create(isStdlibSource bool, isRuntimeSource bool) returns FileProvenance
+		return Self{isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource}
+	end 'create'
+end 'FileProvenance'
+
+export typealias FileProvenanceMemo = Map with (FilePath, FileProvenance)
 
 export typealias SourceFileMap = Map with (FilePath, SourceFileEntry)
 export typealias TokenCacheMap = Map with (FilePath, TokenMemo)
@@ -231,6 +248,13 @@ export type QueryDatabase
 	// `fileChanged` is its only invalidator (see QueryEngine.compositeSourceHash).
 	export var compositeHash as HashDigest
 	export var compositeHashValid as bool
+
+	// ⭐ **WHICH LIBRARY ROOT, IF EITHER, EACH PATH BELONGS TO** — filled on first ask and never
+	// invalidated: the answer is a function of the path's spelling and the two library roots, and a
+	// compile moves none of the three. Deriving it resolves the path AND the project root against the
+	// working directory and tests containment, which allocates a String per path component; it is asked
+	// two to three times per file per compile, so the memo is what keeps that off the per-file path.
+	export var fileProvenance as FileProvenanceMemo
 
 	// The byte-contents `StdlibLoader` marked worth sharing process-wide (see `HashDigestSet`).
 	// Per-`Project` because the answer is "did THIS compile load the file from `stdlib/`"; the store
@@ -254,7 +278,7 @@ export type QueryDatabase
 	// It lives on the DATABASE rather than on `Project` because it is the third half of a parse memo's KEY:
 	// an artifact built when nothing reached this file is missing every body, and serving it to the round
 	// that has just reached one is the stale-memo failure `parseMemoKey`'s header is about.
-	export var demandedStdlibBodyFiles as MaxonSourcePathSet
+	export var demandedLibraryBodyFiles as MaxonSourcePathSet
 
 	// Whole-program signature-index memo. Sits BETWEEN tokens and parse in the chain:
 	// every parse reads it, and a parse memo is keyed on it (QueryEngine.parseMemoKey).
@@ -296,11 +320,12 @@ export type QueryDatabase
 			sourceFiles: SourceFileMap.create(),
 			sourcePaths: FilePathArray.create(),
 			compositeHash: 0, compositeHashValid: false,
+			fileProvenance: FileProvenanceMemo.create(),
 			shareableTokenHashes: HashDigestSet.create(),
 			tokenCache: TokenCacheMap.create(),
 			activeTokenCache: TokenCacheMap.create(),
 			parseCache: ParseCacheMap.create(),
-			demandedStdlibBodyFiles: MaxonSourcePathSet.create(),
+			demandedLibraryBodyFiles: MaxonSourcePathSet.create(),
 			signatureCache: SignatureMemo.empty(os),
 			allModuleCache: ModuleMemo.empty(),
 			tokenHits: 0, tokenMisses: 0,

@@ -190,6 +190,12 @@ export union CompileError implements Error
 	// pass tells stdlib from user code by that directory, so a missing stdlib is a loud, hard
 	// failure rather than a silent skip.
 	stdlibNotFound
+
+	// The compiler located `stdlib/` but not its sibling `runtime/`, or found no Maxon source there.
+	// The two tiers are one library and every compile loads both, so a tree holding one without the
+	// other compiles nothing — and the sentence a user needs names the directory that is missing, which
+	// is why this is not `stdlibNotFound`.
+	runtimeNotFound
 	compileError
 end 'CompileError'
 
@@ -230,7 +236,7 @@ end 'reportPositionedWithNote'
 // ✅ **THE WHOLE SET ROUTES THROUGH IT, AND THE SECOND HALF LANDED WITH THE CALLER THAT NEEDED IT
 // (G20).** `Project.printDiagnostics` brings every `Diagnostic`; `Main.reportCompileError` brings the
 // SIX `CompileError` arms that never reach `project.diagnostics` at all — `fileNotFound`,
-// `directoryNotFound`, `noSourceFiles`, `readError`, `noCommonRoot`, `stdlibNotFound` — which it used to print to stderr
+// `directoryNotFound`, `noSourceFiles`, `readError`, `noCommonRoot`, `stdlibNotFound`, `runtimeNotFound` — which it used to print to stderr
 // directly, past this sink. Until it did, a capture was exact for a REFUSED compile (the whole
 // `maxoncstderr` corpus, whose blocks are `Diagnostic.render()` output and nothing else) and EMPTY for
 // a build that died on a missing file. `SpecTestRunner.compileOneTest` calls `reportCompileError`

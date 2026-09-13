@@ -12,7 +12,11 @@
 export let SlashByte = 0x2F as Byte
 export let BackslashByte = 0x5C as Byte
 
+// The three directories a tree must hold to be a checkout this server can act in. `stdlib/` and
+// `runtime/` are both loaded by every compile, so a tree missing either one compiles nothing at all;
+// `maxon-bin/` is where the compiler that would run is built.
 let StdlibMarkerDir = "stdlib"
+let RuntimeMarkerDir = "runtime"
 let CompilerMarkerDir = "maxon-bin"
 let CompilerSlotStem = "maxon-bin/.maxon/maxon"
 
@@ -82,6 +86,10 @@ function isMaxonCheckout(dir FilePath) returns bool
 		return false
 	end 'noStdlib'
 
+	if not Directory.exists(childPath(dir, segment: RuntimeMarkerDir)) 'noRuntime'
+		return false
+	end 'noRuntime'
+
 	return Directory.exists(childPath(dir, segment: CompilerMarkerDir))
 end 'isMaxonCheckout'
 
@@ -121,7 +129,7 @@ export function resolveTargetRepoRoot(reqDoc JsonDoc, args OptionalNode, exePath
 	end 'notAbs'
 
 	if not isMaxonCheckout(candidate) 'notCheckout'
-		return ResolvedRoot.refused("repoRoot \"{candidate.path}\" is not a Maxon checkout (missing {StdlibMarkerDir}/ or {CompilerMarkerDir}/)")
+		return ResolvedRoot.refused("repoRoot \"{candidate.path}\" is not a Maxon checkout (missing {StdlibMarkerDir}/, {RuntimeMarkerDir}/ or {CompilerMarkerDir}/)")
 	end 'notCheckout'
 
 	return ResolvedRoot.found(candidate)

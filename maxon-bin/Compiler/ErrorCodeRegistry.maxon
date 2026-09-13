@@ -1796,6 +1796,30 @@ export enum ErrorCode
 	// would mean the binary disagreeing with code a reader can see.
 	defineNotAStringLiteral = "E3151"
 
+	// A source file OUTSIDE `runtime/` called a `__Raw.*` intrinsic. `__Raw` is the closed table of raw
+	// machine and OS operations the language runtime is written on top of — the one surface below which
+	// there is no Maxon — and reaching it directly from a program would put a raw machine operation in
+	// user code with no runtime between.
+	// NOT E3004: the name IS defined, and telling this author "no such function" would send them looking
+	// for a typo instead of for the rule.
+	rawIntrinsicOutsideRuntimeTier = "E3152"
+
+	// A `runtime/` source file admitted a managed value — a `String`, a container, a closure, or a struct
+	// with a managed field. The reference-counting pass emits `__mm_incref`/`__mm_decref` around such a
+	// value, into the very tier that DEFINES those entries: the runtime function managing it would be
+	// lowered with bookkeeping that calls the function being lowered, a circularity with no fixed point.
+	// Two positions answer the two ways one arrives: the TYPE the file spelled (a field, a return, a
+	// parameter, a cast target), and the NAME a binding gave a value whose type was never written. Asked at
+	// both, the legality of a runtime file never turns on which optimizations happened to elide its retains.
+	managedValueInRuntimeSource = "E3153"
+
+	// A `runtime/` declaration reaches for a visibility wider than `module` — `export` (global) or `public`.
+	// `runtime/` is loaded into every program, so such a declaration contests names with the programs the
+	// tier is linked into, the compiler compiling itself among them, where it and the compiler's own name
+	// render each other ambiguous (E3063). `module` is the widest tier that still gives the runtime the
+	// file-to-file sharing a runtime split across several files needs.
+	wideVisibilityInRuntimeSource = "E3154"
+
 	// A field access could not be lowered: the base is not a struct, or the field has no slot.
 	invalidFieldAccess = "E4006"
 

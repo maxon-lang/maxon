@@ -54,6 +54,7 @@ This reference provides complete syntax and semantics for the Maxon programming 
     - [String Trimming](#string-trimming)
     - [List](#list)
     - [Networking (TcpClient)](#networking-tcpclient)
+    - [The Runtime Tier](#the-runtime-tier)
     - [Builtin Managed Types](#builtin-managed-types)
 16. [Build System](#build-system)
 17. [Memory Model](#memory-model)
@@ -181,6 +182,8 @@ Identifiers name variables, functions, types, and other declarations.
 - **Alphanumeric content**: After the first character, letters (`a-z`, `A-Z`), digits (`0-9`), and underscores (`_`) are allowed.
 - **Case-sensitive**: `myVar` and `MyVar` are different identifiers.
 - **Cannot be keywords**: Reserved words like `if`, `for`, `return` cannot be used as identifiers.
+- **Cannot begin with `__`**: that space belongs to the compiler and to the
+  [runtime tier](#the-runtime-tier). A declaration elsewhere that takes a name from it is **E2051**.
 
 ```
 identifier = [a-zA-Z_][a-zA-Z0-9_]*
@@ -5155,6 +5158,36 @@ function main() returns ExitCode
 		return 0
 end 'main'
 ```
+
+### The Runtime Tier
+
+`runtime/` sits at the checkout root beside `stdlib/`, and the compiler loads both on every compile.
+Its `.maxon` files are a PRIVILEGED SOURCE TIER: they parse, type-check and lower like any other
+file, but the runtime the compiler puts into every program is written there, in Maxon, instead of
+being built as IR inside the compiler. Two rules that hold everywhere else are lifted inside the cone,
+and two that hold nowhere else are imposed on it.
+
+⛔ **THE TWO DIRECTORIES TRAVEL TOGETHER.** The compiler locates `stdlib/` by walking up from its own
+executable and reaches `runtime/` as its sibling, so a compiler with only one of them beside it cannot
+compile anything at all. Release archives, both install scripts, the Docker image and the Homebrew
+formula all ship the pair.
+
+#### What a runtime file may do, and nothing else may
+
+| Privilege | Why |
+|-----------|-----|
+| **Declare a `__`-prefixed name.** The E2051 reservation that keeps user code out of that space is lifted across the whole cone | the reserved prefix is the runtime's own name space |
+| **Call a `__Raw.*` intrinsic.** `__Raw` is the closed table of raw machine and OS operations — the floor below which there is no Maxon | a runtime is written on that floor |
+
+⛔ **A `__Raw` call from outside `runtime/` is E3152.** The privilege belongs to the tier, not to any
+name in it, so no re-export or wrapper carries it out.
+
+#### What a runtime file may not do
+
+| Restriction | Code |
+|-------------|------|
+| No managed value — asked of the TYPE the file spells (a field, a return, a parameter, a cast target) and of the NAME a binding gives a value whose type was never written; the reference-counting pass emits calls into the very runtime this tier defines | **E3153** |
+| Nothing wider than `module` — `runtime/` is loaded into every program, so an `export` or `public` declaration contests names with the programs it is linked into, the compiler compiling itself among them | **E3154** |
 
 ### Builtin Managed Types
 

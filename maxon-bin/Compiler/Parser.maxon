@@ -1541,6 +1541,30 @@ export union ParseError implements Error
 	// let this class of program through to the backend (see `requireCalleeIsNotReservedName`).
 	unknownCompilerIntrinsic(callee String, reason ReservedCalleeReason, line LineNumber, column ColumnNumber)
 
+	// ⭐ A `__Raw.*` INTRINSIC CALLED FROM OUTSIDE `runtime/`. Renders as **E3152**, positioned at the same
+	// anchor its E3004 sibling above uses — the MEMBER name, which is where a qualified call's anchor token
+	// stands.
+	//
+	// ⚠ It is deliberately NOT the "undefined function" sentence: `__Raw.osTickCountMs` IS defined, and
+	// telling this author no such function exists would send them looking for a typo instead of for the
+	// rule. An UNLISTED `__Raw` member is the other fact and keeps the sibling arm, whichever file calls it.
+	rawIntrinsicOutsideRuntimeTier(callee String, line LineNumber, column ColumnNumber)
+
+	// ⭐ A MANAGED value NAMED in a `runtime/` source file. Renders as **E3153**, positioned at the binding's
+	// own name: the reference-counting pass would emit `__mm_incref`/`__mm_decref` into the very tier that
+	// DEFINES them. At the name, so the legality of a runtime file never turns on which optimizations
+	// happened to elide its retains.
+	managedValueInRuntimeSource(name String, typeName String, line LineNumber, column ColumnNumber)
+
+	// ⭐ A `runtime/` declaration reaching for a visibility WIDER THAN `module` — `export` (global) or
+	// `public`. Renders as **E3154**, positioned at the keyword, which the payload names.
+	wideVisibilityInRuntimeSource(keyword VisibilityModifierWord, line LineNumber, column ColumnNumber)
+
+	// ⭐ A MANAGED type SPELLED in a `runtime/` source file — a field, a return, a parameter, a cast target.
+	// Renders as **E3153**, positioned at the type name. Its `managedValueInRuntimeSource` sibling answers for
+	// a value whose type the author never wrote.
+	managedTypeInRuntimeSource(typeName String, line LineNumber, column ColumnNumber)
+
 	// ⭐ `resize` on an array whose element is MANAGED. Renders as **E3106**, positioned at the method
 	// name. `__managed_resize` grows by publishing a longer length over slots `__managed_grow` left zeroed, and
 	// a zero is an ELEMENT only while the element lives inline in the buffer; a managed element lives
@@ -1943,7 +1967,8 @@ function asyncCalleeIfMatch(op MaxonOp, promise ValueId) returns AsyncCalleeLook
 		serviceReplyCell(result, messageName) gives serviceReplyIfEqual(result, messageName: messageName, promise: promise)
 		immortalStructRecord or
 			immortalStringTable or
-			covPoint gives AsyncCalleeLookup.none
+			covPoint or
+			rawIntrinsic gives AsyncCalleeLookup.none
 	end 'op'
 end 'asyncCalleeIfMatch'
 
@@ -4181,7 +4206,8 @@ function nascentOpBranchesTo(op MaxonOp, target BlockId) returns bool
 			serviceReplyCell gives false
 		immortalStructRecord or
 			immortalStringTable or
-			covPoint gives false
+			covPoint or
+			rawIntrinsic gives false
 	end 'k'
 end 'nascentOpBranchesTo'
 
@@ -7121,7 +7147,16 @@ function mintHeadIsTheCompilers(mint CalleeMint) returns bool
 	end 'm'
 end 'mintHeadIsTheCompilers'
 
-function requireCalleeIsNotReservedName(callee ByteArray, anchor Token, fileDeclaresReservedNames bool, isStdlibSource bool, mint CalleeMint, signatures ProgramSignatures) throws ParseError
+function requireCalleeIsNotReservedName(callee ByteArray, anchor Token, fileDeclaresReservedNames bool, isStdlibSource bool, isRuntimeSource bool, mint CalleeMint, signatures ProgramSignatures) throws ParseError
+	// ⭐⭐ **THE `__Raw` PRIVILEGE IS THE TIER'S, AND THIS IS THE ONE DOOR BOTH CALL FORMS FUNNEL THROUGH**
+	// — `emitCall` and `emitAsyncCall` — so the refusal cannot hold at one spelling and lapse at the other.
+	// A LISTED member called FROM a runtime file never arrives here at all: `parseCallNamed`'s table arm
+	// lowers it. What reaches this line is either the call from outside the tier, refused by name, or an
+	// unlisted member, which falls through to the ordinary E3004 below whichever file wrote it.
+	if isRawIntrinsicCallee(callee) and not isRuntimeSource 'theRawFloorIsTheRuntimesAlone'
+		throw ParseError.rawIntrinsicOutsideRuntimeTier(String.from(callee), line: anchor.line, column: anchor.column)
+	end 'theRawFloorIsTheRuntimesAlone'
+
 	// ⭐ **ASKED ONCE AND CARRIED, NOT ASKED AGAIN TO EXPLAIN (W55).** The gate used to refuse on
 	// `isCompilerInternalCallee` — an OR over two clauses — and then hand the message a reason derived
 	// independently, which is how `String.compare` came to be refused for a `__` prefix it does not carry.
@@ -7228,6 +7263,16 @@ end 'requireCalleeIsNotReservedName'
 // mints are separate because the diagnostic noun each decodes to is different
 // (`SemanticCheck.callDiagnosticNoun`), and every OTHER question about them has one answer, so it is
 // asked once here rather than as two clauses at each door.
+// The value tag a `__Raw` row's result carries. Every operand and result of the raw floor is a machine
+// word, so the map is the two-case one the table's `RawResultKind` states; it is HERE because
+// `ValueTypeTag` is this tier's vocabulary and the table is deliberately free of it.
+function rawIntrinsicResultTag(intrinsic RawIntrinsic) returns ValueTypeTag
+	return match rawResultKindOf(intrinsic) 'kind'
+		machineWord gives ValueTypeTag.integer
+		nothing gives ValueTypeTag.void
+	end 'kind'
+end 'rawIntrinsicResultTag'
+
 function calleeMintIsDefaultHelper(mint CalleeMint) returns bool
 	return mint == CalleeMint.paramDefaultHelper or mint == CalleeMint.fieldDefaultHelper
 end 'calleeMintIsDefaultHelper'
@@ -8234,7 +8279,7 @@ end 'cursorSurfaceMemberNames'
 // blocker was never the code: `requireArrayCopyMethodSupported` fires where the `managed.slice(0, len)` IS, so
 // two refusals relocate from `<fragment>:12:12 … 'clone'` to `stdlib/Array.maxon:142:32 … 'slice'`, and no
 // `maxoncstderr` block could name an absolute checkout path. ARRH cured THAT —
-// `SpecTestRunner.rewriteStdlibPaths` rewrites the compiler's library root to the repo-relative `stdlib/`
+// `SpecTestRunner.rewriteSourceTierPaths` rewrites the compiler's library root to the repo-relative `stdlib/`
 // exactly as a staged fragment's path is rewritten to `<fragment>` — and the retirement then cost 27
 // expectation texts and NOTHING else: 21 of them this roster rendering itself, 4 the relocated refusals, and
 // the deletion took `emitArrayCloneCall` and the whole `__managed_clone_opaque` wrapper with it (its only emitter
@@ -9710,6 +9755,11 @@ end 'literalEscapeKindPhrase'
 // (`parseDebugStreamNameId`). It was `PanicMessageRequirement` while there was one asker; a second copy of
 // the wording would be a second thing that can come to describe the rule differently.
 let StringLiteralRequirement = "string literal"
+
+// ⭐ What a `__Raw` operand refusal calls its two non-value requirements. Constants for
+// `StringLiteralRequirement`'s reason: a wording a golden pins belongs in one place, not at the throw.
+let RawConstantOperandRequirement = "a compile-time integer constant"
+let RawScratchSizeRequirement = "a positive whole number of 8-byte slots"
 
 // ⭐ **WHAT A PROMISE-STORAGE MISMATCH SENTENCE CALLS THE PROMISE, ON THE SPAWN ROAD** — beside the phrase
 // above for the same reason: it is a wording a GOLDEN pins, so it is a constant rather than a literal at
@@ -15149,6 +15199,17 @@ export type Parser
 	// Being the compiler's internal bridge is a property of the FILE, not of how a command line spelled it.
 	let declaresCompilerInternalNames as bool
 
+	// ⭐⭐ **IS THE FILE BEING PARSED A `runtime/` SOURCE FILE?** The tier's own bit, decided once per file
+	// by `Queries` — the only tier holding the project — and read by the three rules that hold nowhere
+	// else: the `__Raw.*` call privilege (E3152 outside it), the managed-value refusal (E3153) and the
+	// `public` refusal (E3154).
+	//
+	// ⚠ **IT IS NOT `declaresCompilerInternalNames`, THOUGH THAT ONE IS TRUE OF EVERY RUNTIME FILE TOO.**
+	// That bit answers "may this file DECLARE into the reserved space", which `stdlib/Builtins.maxon` and
+	// `stdlib/Testing.maxon` also may; these three rules are about being the RUNTIME, which neither of
+	// those is. One slot carrying both claims is a semantic slot shared by two facts.
+	let isRuntimeSource as bool
+
 	// ⭐⭐ **THE RESERVED NAMES THIS COMPILE MINTED INTO THIS FILE — the THIRD provenance the reserved-name
 	// doors read (`Queries.compilerMintedNamesIn`).** Non-empty only for the generated Maxon source a
 	// `maxon test` build stages; empty for every file of every other compile, which is what says the author
@@ -15195,7 +15256,7 @@ export type Parser
 	// that listing `File.maxon` moved a committed golden through its `typealias Byte`, i.e. that a
 	// DECLARATION reaches a program which never names the module. A declaration this parse skipped would
 	// silently un-move that golden. A BODY cannot: `lowerMaxonToStd` already skips an unreachable stdlib
-	// body (`StdlibFacts.unreachable`) and `DeadFunctionElimination` already drops it, so an op built here
+	// body (`LibraryFacts.unreachable`) and `DeadFunctionElimination` already drops it, so an op built here
 	// for a function nothing reaches is work the back end throws away.
 	//
 	// ⭐ MEASURED on `print("hi")` against the same tree with every body built: **139.5 ms → 82.6 ms of
@@ -15224,12 +15285,15 @@ export type Parser
 	// can wear one name.
 	var memberAccessedTypeNames as UsedTypeNameRoster
 
-	// ⭐ **DOES THIS WALK COLLECT USES AT ALL?** Set by `parseModule` and false everywhere else, because
-	// `parseModule` is the only entry point that ever REPORTS (`reportUnusedTypeAliases`). The
-	// declaration sweep runs the same `parseTypeReference` over every signature, field and payload type
-	// in the program and would hash all of them into a set it then discards — one allocation and N
-	// hashes per file, inside an O(files) loop, for an answer nobody reads.
-	var collectsTypeNameUses as bool
+	// ⭐ **IS THIS THE WALK THAT REPORTS?** Set by `parseModule` and false everywhere else, because
+	// `parseModule` is the only entry point whose diagnostics reach the user: the declaration sweep and the
+	// interface/extension passes absorb a throw with `try … otherwise return`, so a rule stated in a walk they
+	// share is a rule that silently DROPS a declaration instead of naming it.
+	//
+	// It also gates the use COLLECTION E3062 reads. The sweep runs the same `parseTypeReference` over every
+	// signature, field and payload type in the program and would hash all of them into a set it then discards
+	// — one allocation and N hashes per file, inside an O(files) loop, for an answer nobody reads.
+	var isTheReportingWalk as bool
 
 	// ⭐ **THIS FILE'S NON-EXPORTED TOP-LEVEL TYPEALIASES, in declaration order** — the E3062 check's
 	// candidates. An EXPORTED alias never enters (one file cannot see another's uses, so it can only
@@ -15342,7 +15406,7 @@ export type Parser
 		return renamed
 	end 'shadowRenamedTokens'
 
-	export static function create(tokens TokenArray, filePath FilePath, namespace String, signatures ProgramSignatures, isStdlibSource bool, declaresCompilerInternalNames bool, compilerMintedNames ByteArrayArray, livesUnderStdlibDirectory bool, buildsBodies bool, capturesDebugLocals bool, instrumentsCoverage bool) returns Parser
+	export static function create(tokens TokenArray, filePath FilePath, namespace String, signatures ProgramSignatures, isStdlibSource bool, isRuntimeSource bool, declaresCompilerInternalNames bool, compilerMintedNames ByteArrayArray, livesUnderStdlibDirectory bool, buildsBodies bool, capturesDebugLocals bool, instrumentsCoverage bool) returns Parser
 		return Self{
 			tokens: shadowRenamedTokens(tokens, signatures: signatures, isStdlibSource: isStdlibSource),
 			pos: 0,
@@ -15502,12 +15566,13 @@ export type Parser
 			emptyMoveMark: MoveMark.create(BoolArray.create(), values: ValueIdArray.create(), consumes: PromiseConsumeRecordArray.create()),
 			isStdlibSource: isStdlibSource,
 			buildsBodies: buildsBodies,
+			isRuntimeSource: isRuntimeSource,
 			declaresCompilerInternalNames: declaresCompilerInternalNames,
 			compilerMintedNames: compilerMintedNames,
 			livesUnderStdlibDirectory: livesUnderStdlibDirectory,
 			usedTypeNames: noUsedTypeNames,
 			memberAccessedTypeNames: noUsedTypeNames,
-			collectsTypeNameUses: false,
+			isTheReportingWalk: false,
 			declaredTypeAliases: noDeferredNameDiagnostics,
 			declaredFuncNames: noDeclaredFuncNames,
 			overloadMembers: noOverloadMembers,
@@ -15528,7 +15593,7 @@ export type Parser
 		// This walk is the one that reports unused typealiases at its end, so it is the one that collects
 		// the uses. Set HERE rather than at `create`, because it is a property of which ENTRY POINT was
 		// called and not of how the parser was built — the sweep and the real parse are built alike.
-		self.collectsTypeNameUses = true
+		self.isTheReportingWalk = true
 
 		// ⭐ **THE PER-FILE HALF OF PBR-2's CELL GATE.** One linear pass, here, so the per-BODY walk it gates
 		// (`collectCellLocalNames`) is skipped outright in a file that spells no closure — which is nearly
@@ -21404,18 +21469,22 @@ export type Parser
 	// absorb a malformed declaration: a modifier conflict is the REAL parse's to report, with a position.
 	function consumeOptionalVisibility() returns Visibility throws ParseError
 		if self.at(TokenKind.export) 'exported'
+			let exportTok = self.current()
 			self.advance()
 
 			// The anchor is the SECOND modifier's token and not the first: the modifier that cannot be there is
 			// the one the message is about, and it is the oracle's position (`module-keyword`'s 4:8).
 			try self.refuseSecondVisibilityModifier(VisibilityModifierWord.wordExport)
+			try self.requireVisibilityFitsTheRuntimeTier(VisibilityModifierWord.wordExport, anchor: exportTok)
 
 			return Visibility.global
 		end 'exported'
 
 		if self.at(TokenKind.public) 'publicApi'
+			let publicTok = self.current()
 			self.advance()
 			try self.refuseSecondVisibilityModifier(VisibilityModifierWord.wordPublic)
+			try self.requireVisibilityFitsTheRuntimeTier(VisibilityModifierWord.wordPublic, anchor: publicTok)
 
 			return Visibility.public
 		end 'publicApi'
@@ -21450,6 +21519,30 @@ export type Parser
 
 		throw ParseError.visibilityModifiersCombined(offending, later: consumed, line: tok.line, column: tok.column)
 	end 'refuseSecondVisibilityModifier'
+
+	// ⭐⭐ **R2 — A `runtime/` DECLARATION MAY NOT BE VISIBLE OUTSIDE THE TIER (E3154).** `runtime/` is loaded
+	// into EVERY program, so a declaration at `export` (global) or at `public` contests names with the very
+	// programs the tier is linked into — and the compiler compiling ITSELF is one of them, where a `runtime/`
+	// alias and the compiler's own of that name render each other ambiguous (E3063). `module` is the widest
+	// tier that still gives the runtime the file-to-file sharing a runtime split across several files needs,
+	// so the rule is a CEILING on visibility rather than two banned words.
+	//
+	// ⚠ It is stated at `consumeOptionalVisibility`, the file's ONE reader of `export`/`public`, and not at
+	// `visibilityBefore`: that twin reads the modifier BACKWARDS for the sweep's type and enum arms and would
+	// be a second position for one rule.
+	//
+	// ⚠ **ASKED ONLY ON THE REPORTING WALK, for `requireNoManagedTypeInRuntimeSource`'s reason.** The
+	// declaration sweep reads the same modifier through this same door and absorbs a throw with
+	// `try … otherwise return`, which would DROP the declaration from the signature registry — the `export`
+	// would then surface as unrelated unknown-type errors wherever that name is spelled, rather than as this
+	// refusal. The real parse reaches the same modifier and refuses the compile with the position.
+	function requireVisibilityFitsTheRuntimeTier(keyword VisibilityModifierWord, anchor Token) throws ParseError
+		if not self.isRuntimeSource or not self.isTheReportingWalk 'nothingToRefuse'
+			return
+		end 'nothingToRefuse'
+
+		throw ParseError.wideVisibilityInRuntimeSource(keyword, line: anchor.line, column: anchor.column)
+	end 'requireVisibilityFitsTheRuntimeTier'
 
 	// Which modifier word sits at `index`. Only ever asked where `visibilityModifierAt` already answered
 	// true, so a token that is none of the three is a caller bug rather than an input.
@@ -23618,7 +23711,7 @@ export type Parser
 	// recording site does not know what a written name denotes and must not have to ask. The filtering
 	// happens once, at `reportUnusedTypeAliases`, against this file's own declarations.
 	function recordTypeNameUse(name ByteArray)
-		if not self.collectsTypeNameUses 'notTheReportingWalk'
+		if not self.isTheReportingWalk 'notTheReportingWalk'
 			return
 		end 'notTheReportingWalk'
 
@@ -23629,12 +23722,12 @@ export type Parser
 	// ⭐ **A TYPE THIS FILE REACHED INTO — `recordTypeNameUse`'s twin for the fact a written name cannot
 	// carry.** Two call sites, one per family of reach and each stating its own rule: `requireFieldAccessible`
 	// (a struct's field) and `emitEnumTagOf` (an enum's or union's tag). The copy-on-write shape and the
-	// `collectsTypeNameUses` gate are its twin's, for its twin's reason — `parseModule` is the only walk whose
+	// `isTheReportingWalk` gate are its twin's, for its twin's reason — `parseModule` is the only walk whose
 	// artifact anyone reads these sets off, so any other one would hash into a set it discards.
 	// Sharing ONE empty singleton with `usedTypeNames` is deliberate: the seed is an identity test, so a
 	// second empty of the same type would be a fact to remember rather than one to derive.
 	function recordMemberAccessedTypeName(name ByteArray)
-		if not self.collectsTypeNameUses 'notTheReportingWalk'
+		if not self.isTheReportingWalk 'notTheReportingWalk'
 			return
 		end 'notTheReportingWalk'
 
@@ -30456,6 +30549,11 @@ export type Parser
 			// (`wordSlotStorageType`), so nothing narrows it on the way in.
 			let paramValue = i if paramIsByRef else self.narrowSignedParamValue(i as ValueId, paramType: paramType, range: paramRange)
 
+			// R1 at the SIGNATURE, and NOT the spelled-type door's duplicate: a LIFTED CLOSURE's parameters
+			// reach here too, and a `map` transform's may spell no type at all — `parameterTypeOrHinted` takes
+			// it from the container's element, so `parseTypeReference` never sees it.
+			try self.requireNoManagedValueInRuntimeSource(paramName, value: paramValue, line: paramRange.line, column: paramRange.column)
+
 			// ⭐⭐ **A BY-REFERENCE PARAMETER'S VALUE *IS* THE CELL** — the caller allocated it and the caller owns
 			// it, so this frame binds the name to that address and never drops it. Reads become `loadIndirect`
 			// through it and the rebind a `storeIndirect`, which is what makes the caller observe the write.
@@ -30693,6 +30791,37 @@ export type Parser
 	// whether a freshly minted value is ADOPTED as an owned temporary and therefore ever dropped. Spelled
 	// `tagIsText` it answers "no" for a Character, and every Character a program produces — every trip of
 	// `for c in s` — is allocated and never freed (measured by sabotage: exit 101).
+	// ⭐⭐ **R1 — NO MANAGED VALUE MAY BE NAMED IN A `runtime/` SOURCE FILE (E3153).** The reference-counting
+	// pass emits `__mm_incref` / `__mm_decref` around such a value, into the very tier this file DEFINES: the
+	// runtime function managing a `String` would be lowered with bookkeeping that calls the function being
+	// lowered, a circularity with no fixed point.
+	//
+	// ⚠ **IT IS ASKED AT THE NAME, WHICH IS WHY IT SITS AT THE BINDING DOOR AND NOT AT A LATER PASS.** Asked
+	// downstream, the legality of a runtime file would turn on which optimizations happened to elide its
+	// retains — a file that compiles or not depending on the inliner.
+	//
+	// The predicate is `valueIsManagedHeap`, the compiler's own answer to "does this value own heap": a
+	// String, a Character, a struct box, a boxed union, a closure and an existential are all one, and a
+	// ranged alias or a `bool` is not. Sharing it is what stops this rule from acquiring a second, drifting
+	// idea of what "managed" means.
+	//
+	// ⚠ **THIS IS THE HALF THAT ANSWERS FOR A VALUE WHOSE TYPE THE AUTHOR NEVER WROTE** — an inferred local,
+	// a `map` transform's hinted parameter. A SPELLED type is `requireNoManagedTypeInRuntimeSource`'s, asked
+	// at the one door every written type comes through, and that is what covers a field and a return.
+	//
+	// ⛔ **ITS TWO CALLERS ARE NOT EVERY BINDING DOOR, AND THE REMAINDER IS DEBT THE FIRST RUNTIME FAMILY
+	// OWES.** A loop variable (`declareLoopVariable`), a closure-captured cell (`declareCellLocal`), a caught
+	// error and a match payload each bind a name through their own door, and an unnamed managed TEMPORARY
+	// binds nothing at all — none of them reaches this line, so none of them is refused. The complete site is
+	// the value, not the binding: the rule wants asking wherever a managed value is minted in a runtime file.
+	function requireNoManagedValueInRuntimeSource(name ByteArray, value ValueId, line LineNumber, column ColumnNumber) throws ParseError
+		if not self.isRuntimeSource or not self.valueIsManagedHeap(value) 'nothingToRefuse'
+			return
+		end 'nothingToRefuse'
+
+		throw ParseError.managedValueInRuntimeSource(String.from(name), typeName: self.valueDisplayTypeName(value), line: line, column: column)
+	end 'requireNoManagedValueInRuntimeSource'
+
 	function valueIsManagedHeap(value ValueId) returns bool
 		return tagIsByteRecord(self.tagOf(value)) or self.valueIsNonTextAggregate(value)
 	end 'valueIsManagedHeap'
@@ -31008,7 +31137,7 @@ export type Parser
 	// A wrong REJECTION of a correct program, never a wrong answer, and the program it rejects is
 	// `struct-return` — still `disabled-test:`, deferred to P1.4's ownership ruling, which is what
 	// a struct crossing a call boundary needs before it can be right for any other reason.
-	function parseTypeReference(voice BarePrimitiveVoice) returns MaxonType throws ParseError
+	function readTypeReference(voice BarePrimitiveVoice) returns MaxonType throws ParseError
 		// A TUPLE TYPE (P1.10) — `(Integer, Integer)`. Asked first because `(` opens nothing else in a type
 		// position: the one other parenthesized type form, `function(…)`, is introduced by its own keyword and
 		// is read by `readFunctionTypeAlias` before this is ever reached.
@@ -31435,7 +31564,43 @@ export type Parser
 
 		let tok = self.current()
 		throw ParseError.unexpectedToken("a type", got: tokenDisplayText(tok), line: tok.line, column: tok.column)
+	end 'readTypeReference'
+
+	// ⭐⭐ **THE ONE DOOR EVERY TYPE A FILE SPELLS COMES THROUGH — a parameter, a return, a field, a payload,
+	// a declared local, a cast target, a generic argument, a tuple element.** The runtime tier's managed-type
+	// refusal (E3153) is asked HERE and nowhere else for that reason: a rule spelled at the individual
+	// declaration sites is a rule that the next declaration form added does not inherit.
+	// ⚠ The anchor is an INDEX and not the token: this runs once per type reference in the program, and a
+	// Token copy on that path would be paid by every file to serve a rule only `runtime/` can break.
+	function parseTypeReference(voice BarePrimitiveVoice) returns MaxonType throws ParseError
+		let anchorIndex = self.pos
+		let spelled = try self.readTypeReference(voice)
+		try self.requireNoManagedTypeInRuntimeSource(spelled, anchorIndex: anchorIndex)
+
+		return spelled
 	end 'parseTypeReference'
+
+	// ⭐⭐ **R1 AT A SPELLED TYPE — the half of the runtime tier's managed refusal that no VALUE can answer.**
+	// A `type` declared in `runtime/` with a `String` field, and a runtime function whose return type is
+	// managed, both put a refcounted value into the tier that DEFINES `__mm_incref`/`__mm_decref`; neither
+	// binds a name, so `requireNoManagedValueInRuntimeSource` never sees them.
+	//
+	// ⚠ **ASKED ONLY ON THE REPORTING WALK.** The declaration sweep reads the same types through the same
+	// door and absorbs a throw with `try … otherwise return`, which would drop the declaration instead of
+	// naming the fault — and it reads them while the whole-program index is still being built, so its answer
+	// to "is this name managed?" would depend on how far the sweep had got.
+	function requireNoManagedTypeInRuntimeSource(spelled MaxonType, anchorIndex TokenIndex) throws ParseError
+		if not self.isRuntimeSource or not self.isTheReportingWalk 'nothingToRefuse'
+			return
+		end 'nothingToRefuse'
+
+		if not self.signatures.typeIsManagedFor(spelled, from: self.artifact.typeNames, readerFilePath: self.filePath) 'ownsNoHeap'
+			return
+		end 'ownsNoHeap'
+
+		let anchor = self.tokenAt(anchorIndex)
+		throw ParseError.managedTypeInRuntimeSource(maxonTypeName(spelled, typeNames: self.artifact.typeNames), line: anchor.line, column: anchor.column)
+	end 'requireNoManagedTypeInRuntimeSource'
 
 	// The type naming the declaration currently being read, for `Self` and for its own name.
 	// `anchor` is only the token a diagnostic points at.
@@ -32503,6 +32668,8 @@ export type Parser
 	// a binding the compiler MINTED, which no diagnostic may tell an author to change. `sourceName` reaches
 	// this door for the MOVE poison, which is a different question. See `requireMutableBindingSource`.
 	function declareInitializedBinding(func IrFunction, nameTok Token, value ValueId, sourceName ByteArray, sourceReadsAField bool, mutable bool) throws ParseError
+		try self.requireNoManagedValueInRuntimeSource(nameTok.value, value: value, line: nameTok.line, column: nameTok.column)
+
 		// A bare read of a local is the only initializer that can MOVE an owned value out of an existing
 		// binding — a field read of one mints a fresh borrowed pointer that is the value of no binding.
 		let rhsWasBareLocal = not sourceName.isEmpty() and not sourceReadsAField
@@ -33152,7 +33319,8 @@ export type Parser
 				serviceReplyCell gives DiscardedCallee.notACall
 			immortalStructRecord or
 				immortalStringTable or
-				covPoint gives DiscardedCallee.notACall
+				covPoint or
+				rawIntrinsic gives DiscardedCallee.notACall
 		end 'producer'
 	end 'tryCallAt'
 
@@ -37271,7 +37439,8 @@ export type Parser
 				serviceReplyCell gives false
 			immortalStructRecord or
 				immortalStringTable or
-				covPoint gives false
+				covPoint or
+				rawIntrinsic gives false
 		end 'reinterpretation'
 	end 'opReinterpretsResultOf'
 
@@ -37344,7 +37513,8 @@ export type Parser
 				serviceReplyCell gives DiscardedCallee.notACall
 			immortalStructRecord or
 				immortalStringTable or
-				covPoint gives DiscardedCallee.notACall
+				covPoint or
+				rawIntrinsic gives DiscardedCallee.notACall
 		end 'producer'
 	end 'directCallDefining'
 
@@ -37456,7 +37626,8 @@ export type Parser
 			serviceReplyCell gives try self.rejectTryTarget(tryTok)
 			immortalStructRecord or
 				immortalStringTable or
-				covPoint gives try self.rejectTryTarget(tryTok)
+				covPoint or
+				rawIntrinsic gives try self.rejectTryTarget(tryTok)
 		end 'rewrite'
 	end 'rewriteLastCallToTryCall'
 
@@ -45214,7 +45385,8 @@ export type Parser
 				serviceReplyCell then return false
 			immortalStructRecord or
 				immortalStringTable or
-				covPoint then return false
+				covPoint or
+				rawIntrinsic then return false
 		end 'op'
 	end 'sourceCameFromAnIterationThrowingCall'
 
@@ -81078,7 +81250,7 @@ export type Parser
 	// ⭐⭐ **THE HELPER BECOMES AN ORDINARY ARENA ENTRY, WHICH IS WHAT ROOTS IT.** `factoryInitializerCallees`
 	// walks this arena to name everything a top-level initializer calls, and a helper reached any other way
 	// would be filed unreachable, never lowered, and met as an empty function by the call `__module_init`
-	// makes — `requireUnreachableStdlibStayedDead`'s failure, exactly as the union header describes for a
+	// makes — `requireUnreachableLibraryStayedDead`'s failure, exactly as the union header describes for a
 	// nested factory. That is also why the defaults are applied HERE and not on the index side.
 	//
 	// Both kinds go through the same `requireConstFieldValueFits` a WRITTEN value does, so a `= 3` meeting a
@@ -82936,6 +83108,15 @@ export type Parser
 		// to bit-for-bit parity with main. (The `flat union` rule in ARCHITECTURE.md is about NESTING
 		// costing a box per level; this is the same accounting one level down.)
 
+		// ⭐ **THE `__Raw.*` FLOOR (see `RawIntrinsics`), AND IT IS GATED ON THE TIER AS WELL AS THE PREFIX.**
+		// A call from outside `runtime/` is left to fall through to `emitCall`'s reserved-callee door, which
+		// refuses it by name (E3152) — so the privilege is stated at one door and the refusal at one other,
+		// never as two copies of one rule. An UNLISTED member falls through the same way from either side and
+		// earns the ordinary positioned E3004 that names it.
+		if self.isRuntimeSource and isRawIntrinsicCallee(callee) and rawIntrinsicIsListed(callee) 'rawIntrinsic'
+			return try self.emitRawIntrinsic(func, intrinsic: rawIntrinsicNamed(callee), args: args, calleeTok: anchor, resultUsed: resultUsed)
+		end 'rawIntrinsic'
+
 		// The `__Builtins.*` intrinsic table (see `BuiltinsQualifierPrefix`). Gated behind ONE prefix compare
 		// so a call to anything else pays two bytes and no allocation; an unrecognized member falls through to
 		// `emitCall`'s reserved-callee rejection, which is this table's "unknown intrinsic" arm.
@@ -83628,6 +83809,86 @@ export type Parser
 		let perMilli = self.emitLiteral(NanosPerMillisecond, valueType: MaxonType.integer, range: SourceRange.ofToken(calleeTok))
 		return try self.emitDivOrMod(nanos, divisor: perMilli, op: MaxonBinOp.div, opTok: calleeTok)
 	end 'emitMonotonicMs'
+
+	// ⭐⭐ **ONE `__Raw.*` INTRINSIC, EMITTED UNDER ITS TABLE ROW (`RawIntrinsics`).** The row states the
+	// argument shape and what the intrinsic answers; this reads the call under that shape and knows nothing
+	// else about any row, so a row added to the table is written here for free.
+	//
+	// ⚠ Checking the arity and the operands HERE is what an intrinsic needs BECAUSE no file declares it:
+	// there is no signature for SemanticCheck's ordinary battery to read. The rejections are the same
+	// `builtinArity` / `builtinOperandType` / `voidCallResultUsed` every other intrinsic door raises.
+	function emitRawIntrinsic(func IrFunction, intrinsic RawIntrinsic, args ValueIdArray, calleeTok Token, resultUsed bool) returns ValueId throws ParseError
+		let callee = rawIntrinsicCalleeName(intrinsic)
+		let shape = rawArgShapeOf(intrinsic)
+		let expected = rawArgCountOf(shape)
+
+		if args.count() != expected 'arity'
+			throw ParseError.builtinArity(String.from(callee), expected: expected, got: args.count(), line: calleeTok.line, column: calleeTok.column)
+		end 'arity'
+
+		if rawResultKindOf(intrinsic) == RawResultKind.nothing and resultUsed 'noValueToUse'
+			throw ParseError.voidCallResultUsed(String.from(callee), line: calleeTok.line, column: calleeTok.column)
+		end 'noValueToUse'
+
+		// Zero for a shape with no constant position, which is not a sentinel: the op's `constant` field is
+		// what the emitted instruction carries in place of an operand, and a shape without one carries none.
+		var constant = 0 as ParsedInt
+		var words = ValueIdArray.create()
+
+		for position in 0 upto args.count() 'eachArgument'
+			let arg = try args.get(position) otherwise panic("emitRawIntrinsic: arity was just checked but args.get({position}) failed")
+
+			if rawArgumentIsTheConstant(shape, position: position as ParamCount) 'compileTimeConstant'
+				if not self.constIsKnown(arg) 'notAConstant'
+					throw ParseError.builtinOperandType(String.from(callee), required: RawConstantOperandRequirement, got: self.valueDisplayTypeName(arg), line: calleeTok.line, column: calleeTok.column)
+				end 'notAConstant'
+
+				constant = self.constOf(arg)
+				continue
+			end 'compileTimeConstant'
+
+			try self.requireIntrinsicMachineWordArg(arg, callee: callee, calleeTok: calleeTok)
+			words.push(arg)
+		end 'eachArgument'
+
+		if intrinsic == RawIntrinsic.scratch 'frameRecord'
+			constant = try self.reserveRawScratchSlot(func, bytes: constant, callee: callee, calleeTok: calleeTok)
+		end 'frameRecord'
+
+		let result = self.mintValue(rawIntrinsicResultTag(intrinsic), nameId: UnnamedTypeId)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.rawIntrinsic(result, intrinsic: intrinsic, args: words, constant: constant), range: SourceRange.ofToken(calleeTok))
+		return result
+	end 'emitRawIntrinsic'
+
+	// ⭐ **`__Raw.scratch(bytes)` TAKES THE NEXT SLOTS OF THIS FUNCTION'S FRAME, and what the op carries is
+	// the SLOT, not the byte count** — `StdOp.stackRecordAddr` names a slot because the frame base is not
+	// known until the register allocator has settled it.
+	//
+	// ⚠ **THE LAYOUT RUNS FROM ZERO WITHIN ONE PARSE, which is what makes it idempotent**: the `IrFunction`
+	// this writes is the one THIS parse built, and a warm parse memo hands back that same object without
+	// re-running the walk, so the reservation is never counted twice.
+	//
+	// ⛔ **IT IS THE ONLY WRITER OF `stackSize` BEFORE THE ALLOCATOR, AND THAT RESTS ON E3153.**
+	// `promoteStackRecords` ASSIGNS this field rather than accumulating into it, so a function holding both
+	// a promoted record and a scratch record would lose the reservation — and no runtime function can hold
+	// a promoted record, because a managed value cannot be NAMED in a runtime source file at all.
+	function reserveRawScratchSlot(func IrFunction, bytes ParsedInt, callee ByteArray, calleeTok Token) returns ParsedInt throws ParseError
+		// Two tests rather than one disjunction: the cast below is a RANGED door that panics on a negative,
+		// so the sign must be settled before the size can be read as one.
+		if bytes <= 0 'notPositive'
+			throw ParseError.builtinOperandType(String.from(callee), required: RawScratchSizeRequirement, got: "{bytes}", line: calleeTok.line, column: calleeTok.column)
+		end 'notPositive'
+
+		let requested = bytes as StackSize
+
+		if (requested mod SpillSlotBytes) != 0 'notAWholeNumberOfSlots'
+			throw ParseError.builtinOperandType(String.from(callee), required: RawScratchSizeRequirement, got: "{bytes}", line: calleeTok.line, column: calleeTok.column)
+		end 'notAWholeNumberOfSlots'
+
+		let slot = (func.stackSize / SpillSlotBytes) as ParsedInt
+		func.stackSize = func.stackSize + requested
+		return slot
+	end 'reserveRawScratchSlot'
 
 	// ⭐ **THE ARITY CHECK AND THE EMIT EVERY CLOCK INTRINSIC SHARES**, written once and returning the
 	// integer-tagged reading. All three take no arguments and become one call to a runtime entry point the
@@ -85024,7 +85285,7 @@ export type Parser
 	// `spelling` says whether those callee bytes are the AUTHOR'S or the COMPILER'S, which is the one
 	// question the reserved-space door cannot answer from the name — see `CalleeMint`.
 	function emitCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, rparenTok Token, resultUsed bool, constructorInstance ConstructorInstance, mint CalleeMint, inferInstanceOf ByteArray = EmptySourceText, refuseUninferred bool = false) returns ValueId throws ParseError
-		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.fileMayUseReservedNames(), isStdlibSource: self.isStdlibSource, mint: mint, signatures: self.signatures)
+		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.fileMayUseReservedNames(), isStdlibSource: self.isStdlibSource, isRuntimeSource: self.isRuntimeSource, mint: mint, signatures: self.signatures)
 
 		// ⭐⭐ **A SLICE OF A LITERAL WITH COMPILE-TIME BOUNDS BECOMES A LITERAL, AND THEN THIS IS NOT A CALL AT
 		// ALL** (`specs/constant-string-slice.md`). Asked FIRST, ahead of the mint, the default fill and
@@ -86233,7 +86494,7 @@ export type Parser
 		// call's identifier and a `<Type>.<static>` mangle of two tokens the author wrote, and REFUSES a
 		// minted callee outright (`async int.fromString(s)`), because `MaxonOp.asyncCall` carries no `mint`
 		// field to tell one from the other. So an `async` spawn's name is always the author's own bytes.
-		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.fileMayUseReservedNames(), isStdlibSource: self.isStdlibSource, mint: CalleeMint.notMinted, signatures: self.signatures)
+		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.fileMayUseReservedNames(), isStdlibSource: self.isStdlibSource, isRuntimeSource: self.isRuntimeSource, mint: CalleeMint.notMinted, signatures: self.signatures)
 
 		// ⭐ **AN OMITTED ARGUMENT IS SUPPLIED AT THIS DOOR TOO** (BATCH2 slice 4) — the SECOND of the two
 		// source call doors, so `async f()` against `function f(n Integer = 1)` is the same legal call
@@ -89973,6 +90234,16 @@ export type Parser
 		if isBuiltinsIntrinsicCallee(callee) 'builtinsIntrinsic'
 			return true
 		end 'builtinsIntrinsic'
+
+		// ⭐ **THE THIRD BUILTIN QUALIFIER, ON THE SAME TERMS.** `__Raw.storeWord(addr, 0, v)` answers nothing,
+		// so a bare statement is the only position it can be written in. The QUALIFIER is the test and not a
+		// roster of the void rows — the rule above, and what routes an unrecognized or out-of-tier member to
+		// `parseCallNamed` and so to the positioned refusal that NAMES it, instead of a complaint about SHAPE.
+		// It claims the family in EVERY file for that reason: a `__Raw.osTickCountMs()` written as a statement
+		// in user code must earn E3152, not `E2015: Unsupported: identifier statement`.
+		if isRawIntrinsicCallee(callee) 'rawIntrinsic'
+			return true
+		end 'rawIntrinsic'
 
 		// ⭐ **THE SECOND BUILTIN TYPE, ON THE SAME TERMS (Workstream O3).** `__DebugStream`'s four emitting
 		// members return nothing, so a bare statement is the only position they can be written in — and the

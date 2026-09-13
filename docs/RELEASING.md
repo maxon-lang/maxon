@@ -92,8 +92,12 @@ scripts/release.sh --package                      # this host's target
 scripts/release.sh --package --target=arm64-linux # cross-build another
 ```
 
-It builds, **runs the whole suite**, stages `maxon` + `stdlib/` + `examples/` + both licences +
-a generated `INSTALL.md`, and archives the result into `dist/`.
+It builds, **runs the whole suite**, stages `maxon` + `stdlib/` + `runtime/` + `examples/` + both
+licences + a generated `INSTALL.md`, and archives the result into `dist/`.
+
+⛔ **`stdlib/` AND `runtime/` BOTH SHIP, AS SIBLINGS OF THE BINARY.** The compiler resolves `stdlib/` by
+walking up from its own executable and reaches `runtime/` beside it, so an archive carrying one without
+the other installs a compiler that cannot compile anything.
 
 - ⛔ **A cross-built archive is not a tested one.** `--target=` cannot run the suite for a machine it
   is not, and says so on stderr; `--publish` repeats it in the release notes. Use it for a target you
@@ -327,8 +331,8 @@ Re-download from the release page — not the local `dist/` copy, which is the t
 
 - Extract into a directory **outside any git checkout**, `cd` somewhere else entirely, and compile a
   program with the full path to the extracted `maxon`. This is what proves the walk up from the
-  executable finds the packaged `stdlib/`, and that the tree lock behaves when there is no checkout
-  above either the compiler or the source.
+  executable finds the packaged `stdlib/` and `runtime/`, and that the tree lock behaves when there is
+  no checkout above either the compiler or the source.
 - Both install scripts on a clean machine, then `maxon version` in a new terminal.
 - `docker run --rm ghcr.io/maxon-lang/maxon maxon version`, logged out, so the package is public.
 - `brew install maxon-lang/tap/maxon` on macOS and on Linux, then `maxon version` in the same shell —

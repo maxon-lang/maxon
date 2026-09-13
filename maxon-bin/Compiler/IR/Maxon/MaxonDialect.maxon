@@ -1750,6 +1750,21 @@ export union MaxonOp
 	//
 	// `OpCategory.plain` — it stands alone and reaches no other body.
 	covPoint(pointId CovPointId) = MaxonOpMeta{category: OpCategory.plain}
+
+	// ⭐⭐ **ONE `__Raw.*` INTRINSIC — the raw machine/OS floor a `runtime/` source file is written on, and
+	// the WHOLE family in one op.** `intrinsic` names the row of `RawIntrinsics`, which states the argument
+	// shape the parser read the call under and what it answers; `args` are that shape's WORD positions in
+	// source order, and `constant` is the compile-time integer a shape's CONSTANT position carried (a
+	// scratch record's size, a field offset) — zero for a shape that has none. `LowerMaxonToStd` maps the
+	// row to its Std op 1:1, exhaustively, so a row added to the table does not compile until it is lowered.
+	//
+	// ⭐ One case rather than one per row, because the rows differ in nothing this tier can act on: they are
+	// all a fixed instruction over machine words, none reaches another body, and every classifier reads the
+	// category alone. The TABLE is where a row's differences are stated.
+	//
+	// `OpCategory.plain` — it is an instruction, not a call to a function this program contains, so it is no
+	// edge in any call graph.
+	rawIntrinsic(result ValueId, intrinsic RawIntrinsic, args ValueIdArray, constant ParsedInt) = MaxonOpMeta{category: OpCategory.plain}
 end 'MaxonOp'
 
 // ⭐ **THE COMPANION ENVIRONMENT ARGUMENT AN `indirectCall` ALWAYS CARRIES, and it is why the op's `args`
@@ -1909,6 +1924,10 @@ export function maxonOpCalleeKind(op MaxonOp) returns MaxonCalleeKind
 
 		// A coverage counter names a `.data` SLOT, not a function.
 		covPoint gives MaxonCalleeKind.noCallee
+
+		// A raw intrinsic names an INSTRUCTION. That is the whole of what `__Raw` means: it lowers to a Std op
+		// and never to a call, so there is no callee for a reachability walk to follow.
+		rawIntrinsic gives MaxonCalleeKind.noCallee
 	end 'op'
 end 'maxonOpCalleeKind'
 
@@ -1965,7 +1984,8 @@ export function maxonOpIsServiceSpawn(op MaxonOp) returns bool
 			serviceReplyCell or
 			immortalStructRecord or
 			immortalStringTable or
-			covPoint gives false
+			covPoint or
+			rawIntrinsic gives false
 	end 'op'
 end 'maxonOpIsServiceSpawn'
 

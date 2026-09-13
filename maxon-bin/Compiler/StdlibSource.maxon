@@ -14,29 +14,33 @@
 // diagnostic about a file the user never opened.
 //
 // So the question asked throughout is **"is this function STDLIB source or USER source?"**, answered from
-// the function's own source path (`isStdlibFunction`) — never from a registry of loaded modules. Grow the
+// the function's own source path (`isLibraryFunction`) — never from a registry of loaded modules. Grow the
 // set of loaded files to every file under `stdlib/` and every function in this file still answers
 // correctly, over a larger set, with no edit.
 
-// ⭐ **WHICH FILES ARE STDLIB IS ESTABLISHED BY CONSTRUCTION, NOT BY RE-TESTING PATHS.** The stdlib loader
-// enumerates `project.stdlibDir` and records every file it parsed from there in `project.stdlibSourcePaths`
-// — so "this file lies under the checkout's `stdlib/`" is already known of exactly those files, and of no
-// others. That record is what the facts below are derived from.
+// ⭐ **WHICH FILES ARE THE LIBRARY'S IS ESTABLISHED BY CONSTRUCTION, NOT BY RE-TESTING PATHS.** The
+// loader enumerates BOTH library roots — `project.stdlibDir` and its sibling `project.runtimeDir` — and
+// records every file it parsed from either in `project.librarySourcePaths`, so "this file came out of a
+// library root" is already known of exactly those files, and of no others. That record is what the facts
+// below are derived from, and the two roots are one population here because they are one population to
+// every consumer: code the compile loads that the program's author did not write.
 //
-// ⚠ **THE ALTERNATIVE WAS MEASURED AND IS EXPENSIVE.** Re-deriving it by asking `FilePath.isInside` of
-// each of the program's source paths costs about FOUR String allocations per question — on Windows
-// `canonicalForCompare` clones and lower-cases both sides, and the needle is an interpolation — so it puts
-// a term into every compile that grows with the number of files the user wrote. Measured on the scale
-// ladder: +60 allocations at rung 0 rising to +1,920 at rung 5, doubling with the corpus, for a fact the
-// loader already had. Asking it per FUNCTION instead of per file was worse again (+3,633 rising to
-// +48,273). `isStdlibFunction` answers the per-function form from a set built once.
+// ⚠ **THE ALTERNATIVE WAS MEASURED AND IS EXPENSIVE.** Re-deriving it by resolving each of the
+// program's source paths against the working directory and asking `FilePath.isInside` costs on the
+// order of a HUNDRED allocations a question — `resolve` and `isInside` build a String per path
+// component, and on Windows `canonicalForCompare` clones and lower-cases both sides — so it puts a term
+// into every compile that grows with the number of files the user wrote. MEASURED by memoizing that
+// derivation per path (`Queries.fileProvenanceOf`): −7,129 in `phase:signatures`, −4,296 in
+// `phase:parse` and −9,514 in `phase:checkUnusedExports` at the scale ladder's rung 0, 88 source files.
+// Asking it per FUNCTION instead of per file is worse again (+3,633 rising to +48,273 across the
+// ladder). `isLibraryFunction` answers the per-function form from a set built once.
 //
-// ⭐ **IS THIS FUNCTION STDLIB SOURCE?** A `ByteArray` hash against that set. This is the question every
-// pass asks, and it stays true as stdlib grows from one module to all of it — nothing here depends on
-// WHICH files those are, only on their having come from `stdlib/`.
-export function isStdlibFunction(project Project, func IrFunction) returns bool
-	return project.stdlibFacts.stdlibFunctions.contains(func.name)
-end 'isStdlibFunction'
+// ⭐ **IS THIS FUNCTION LIBRARY SOURCE?** A `ByteArray` hash against that set. This is the question every
+// pass asks, and it stays true as the library grows from one module to all of it — nothing here depends
+// on WHICH files those are, only on their having come from a library root.
+export function isLibraryFunction(project Project, func IrFunction) returns bool
+	return project.libraryFacts.libraryFunctions.contains(func.name)
+end 'isLibraryFunction'
 
 // The directory name walked for, and a generous bound on how far up the tree to look. A checkout is
 // shallow (`<root>/maxon-bin/.maxon/maxon.exe` is three levels under the `stdlib/` that sits at
@@ -51,6 +55,10 @@ end 'isStdlibFunction'
 export let StdlibDirName = "stdlib"
 let MaxStdlibSearchDepth = 64
 
+// The second library root, `runtime/` — the language runtime, loaded by every compile exactly as
+// `stdlib/` is. Not exported: `locateRuntimeDir` below is the only thing that spells it.
+let RuntimeDirName = "runtime"
+
 // Locate the checkout's `stdlib/` by walking UP from the COMPILER's own executable directory.
 //
 // ⚠ NOT from `Directory.currentPath()`: the spec runner and `run_program` compile a program in a
@@ -63,6 +71,23 @@ export function locateStdlibDir() returns FilePath throws CompileError
 	let exeDir = try exePath.parent() otherwise throw CompileError.stdlibNotFound
 	return try stdlibDirAbove(exeDir)
 end 'locateStdlibDir'
+
+// ⭐⭐ **`runtime/` IS DERIVED FROM `stdlib/`'s LOCATION AND NEVER WALKED FOR ON ITS OWN.** An
+// independent walk could stop at a `runtime/` from a different tree than the `stdlib/` the same walk
+// found — a released library paired with a tree's runtime, or the reverse — and a compile built from
+// two halves of two installs is wrong in a way nothing downstream could detect. Deriving makes that
+// pairing UNREPRESENTABLE, so there is no error code for it and no case to write.
+//
+// ⚠ It takes the `stdlib/` rather than locating one, because every caller is already holding the
+// directory whose sibling it wants — `Compiler.runtimeDirFor` the compile's own (which may be a STAGED
+// copy), `RunCache.stdlibSources` the one it just walked. A no-argument twin would re-run the walk-up
+// and, handed a staged stdlib, silently answer about the checkout instead.
+export function runtimeDirBeside(stdlibDir FilePath) returns FilePath throws CompileError
+	let checkoutRoot = try stdlibDir.parent() otherwise throw CompileError.runtimeNotFound
+
+	// Interpolated so the argument is a committed `String`, for `stdlibDirAbove`'s E3007 reason.
+	return checkoutRoot.join("{RuntimeDirName}")
+end 'runtimeDirBeside'
 
 // The same walk, from a directory the CALLER names — which is a different question from the one above
 // and has one other asker: `TreeLock` needs the checkout containing the path a command WRITES INTO
@@ -112,7 +137,7 @@ export typealias FunctionNameSet = Set with ByteArray
 //     MANGLED one that reaches `IrFunction.name` and therefore the reachability walk's answer. Asking with
 //     the wrong one skips a body the program calls, and the call then lands on the bare `retVoid`
 //     `skipUnreachedFunctionBody` left — a SILENT WRONG ANSWER, in exactly the family
-//     `deriveStdlibFacts` already warns about ("it runs BEFORE overload resolution, so a callee name here
+//     `deriveLibraryFacts` already warns about ("it runs BEFORE overload resolution, so a callee name here
 //     is provisional"). A per-FILE demand never asks about a name at all.
 //   • **COST.** The demand is discovered round by round, so a per-function demand re-parses a file once per
 //     function of it that is reached — and, because a memo key built from the whole-program demand moves
@@ -139,16 +164,17 @@ typealias StdlibNodeByName = Map with (ByteArray, CsrIndex)
 // handler roster once rather than once per `spawn`.
 typealias CreditedServiceSet = Set with ByteArray
 
-// ⭐ THE TWO FACTS ABOUT STDLIB SOURCE A COMPILE DERIVES, from ONE walk of the merged module. They are one
+// ⭐ THE TWO FACTS ABOUT LIBRARY SOURCE A COMPILE DERIVES, from ONE walk of the merged module. They are one
 // object rather than two `Project` fields because they are one derivation over one call graph:
 // `substrateEntries` is meaningful only for the functions `unreachable` does NOT hold (code the program
 // cannot reach is invisible to it, substrate and all), and two fields assigned from two calls could come
 // to disagree about which functions those are.
-export type StdlibFacts
-	// Every function the merged module got from stdlib source — the per-function form of `isStdlibPath`,
-	// materialized once so the question can be asked of every function of the program without paying a
-	// path comparison each time (see `isStdlibFunction`).
-	export let stdlibFunctions as FunctionNameSet
+export type LibraryFacts
+	// Every function the merged module got from LIBRARY source — `stdlib/` and its sibling `runtime/`
+	// alike, which are one population to every reader of this set. Materialized once so the question can
+	// be asked of every function of the program without paying a path comparison each time (see
+	// `isLibraryFunction`).
+	export let libraryFunctions as FunctionNameSet
 
 	// Stdlib functions NOT reachable from `main`. Dead-function elimination drops them before the back
 	// end, so a pass that runs earlier and examines function BODIES to decide something about the PROGRAM
@@ -163,16 +189,16 @@ export type StdlibFacts
 	// a target that cannot lower it — at the user's own span.
 	export let substrateEntries as StdlibSubstrateEntryMap
 
-	export static function create(stdlibFunctions FunctionNameSet, unreachable FunctionNameSet, substrateEntries StdlibSubstrateEntryMap) returns StdlibFacts
-		return Self{stdlibFunctions: stdlibFunctions, unreachable: unreachable, substrateEntries: substrateEntries}
+	export static function create(libraryFunctions FunctionNameSet, unreachable FunctionNameSet, substrateEntries StdlibSubstrateEntryMap) returns LibraryFacts
+		return Self{libraryFunctions: libraryFunctions, unreachable: unreachable, substrateEntries: substrateEntries}
 	end 'create'
 
 	// A compile that has not derived them yet, and the answer for a compile that loaded no stdlib source
 	// at all: no function is stdlib, nothing is unreachable-stdlib and nothing needs the substrate.
-	export static function empty() returns StdlibFacts
+	export static function empty() returns LibraryFacts
 		return Self.create(FunctionNameSet.create(), unreachable: FunctionNameSet.create(), substrateEntries: StdlibSubstrateEntryMap.create())
 	end 'empty'
-end 'StdlibFacts'
+end 'LibraryFacts'
 
 // ⭐ DERIVE BOTH FACTS. Runs once per compile, right after the module is merged and before any pass that
 // reads either of them — and before `DeadGlobalElimination.liveGlobalLabels`, which is the earliest
@@ -184,7 +210,7 @@ end 'StdlibFacts'
 // body. It is read off the DECLARATION that causes the call instead (`ProgramSignatures.globalInitCallees`),
 // which is also what lets this run before the synthesis: see that function for why the answer does not
 // depend on the global liveness this derivation is about to decide.
-export function deriveStdlibFacts(project Project, module MaxonModule, signatures ProgramSignatures) returns StdlibFacts throws CompileError
+export function deriveLibraryFacts(project Project, module MaxonModule, signatures ProgramSignatures) returns LibraryFacts throws CompileError
 	// A prior diagnostic leaves the merged module and its registries describing a program that is already
 	// refused, so deriving anything from it can only be noise — the refusal the four siblings around this
 	// call already make (`checkConformance`, `checkWhereConstraints`, `checkTypeSymbolNamespace`,
@@ -193,13 +219,13 @@ export function deriveStdlibFacts(project Project, module MaxonModule, signature
 	// usage bits, and the two passes that do report off them (`checkCalls`'s target refusal,
 	// `insertRangeChecks`) are inside the pipeline, downstream of that gate.
 	if projectHasErrors(project) 'malformedModule'
-		return StdlibFacts.empty()
+		return LibraryFacts.empty()
 	end 'malformedModule'
 
 	let stdlibNames = try stdlibFunctionNames(project)
 
 	if stdlibNames.count() == 0 'noStdlibSource'
-		return StdlibFacts.empty()
+		return LibraryFacts.empty()
 	end 'noStdlibSource'
 
 	var stdlibSet = FunctionNameSet.create()
@@ -226,7 +252,7 @@ export function deriveStdlibFacts(project Project, module MaxonModule, signature
 			allUnreachable.insert(name)
 		end 'markAll'
 
-		return StdlibFacts.create(stdlibSet, unreachable: allUnreachable, substrateEntries: StdlibSubstrateEntryMap.create())
+		return LibraryFacts.create(stdlibSet, unreachable: allUnreachable, substrateEntries: StdlibSubstrateEntryMap.create())
 	end 'noneReferenced'
 
 	// User code DOES call stdlib — resolve exactly which stdlib functions the program REACHES from `main`
@@ -241,12 +267,12 @@ export function deriveStdlibFacts(project Project, module MaxonModule, signature
 		end 'unreached'
 	end 'classify'
 
-	return StdlibFacts.create(stdlibSet, unreachable: unreachable, substrateEntries: stdlibSubstrateEntries(module, stdlibNames: stdlibNames, unreachable: unreachable))
-end 'deriveStdlibFacts'
+	return LibraryFacts.create(stdlibSet, unreachable: unreachable, substrateEntries: stdlibSubstrateEntries(module, stdlibNames: stdlibNames, unreachable: unreachable))
+end 'deriveLibraryFacts'
 
 // ⭐⭐ **GROW THE BODY DEMAND BY ONE ROUND — the fixpoint step `queryAllModule` iterates.**
 //
-// It asks the SAME question `deriveStdlibFacts` asks, of the same walk, and that is deliberate rather
+// It asks the SAME question `deriveLibraryFacts` asks, of the same walk, and that is deliberate rather
 // than convenient: the set of bodies this compile BUILDS and the set `lowerMaxonToStd` LOWERS must be
 // decided by one derivation, or a body could be lowered that was never parsed. Round 0 merges every
 // file with no stdlib body built, so the walk sees the user's own edges into stdlib and stops there;
@@ -260,7 +286,7 @@ end 'deriveStdlibFacts'
 // Returns whether the demand actually grew, which is the caller's loop condition.
 export function growStdlibBodyDemand(project Project, module MaxonModule, signatures ProgramSignatures) returns bool throws CompileError
 	// A prior diagnostic leaves the merged module describing a program that is already refused, so a
-	// reachability walk over it can only be noise — `deriveStdlibFacts` declines for the same reason, one
+	// reachability walk over it can only be noise — `deriveLibraryFacts` declines for the same reason, one
 	// screen down, and a compile that stops here simply builds no further bodies.
 	if projectHasErrors(project) 'malformedModule'
 		return false
@@ -280,7 +306,7 @@ export function growStdlibBodyDemand(project Project, module MaxonModule, signat
 
 	let initCallees = signatures.globalInitCallees()
 
-	// The same short-circuit `deriveStdlibFacts` opens with, and it is the whole saving: nothing this
+	// The same short-circuit `deriveLibraryFacts` opens with, and it is the whole saving: nothing this
 	// program reaches — no op in its code, and no root on either list — names a stdlib function, so no
 	// stdlib body can be reached and the walk's O(functions) name->index map is never built.
 	if not userCodeReachesStdlib(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees) 'noneReferenced'
@@ -300,8 +326,8 @@ export function growStdlibBodyDemand(project Project, module MaxonModule, signat
 	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
 	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
-	for fileIndex in 0 upto project.stdlibSourcePaths.count() 'eachFile'
-		let demandedThisFile = try demandOneStdlibFileIfReached(project, path: try project.stdlibSourcePaths.get(fileIndex) otherwise panic("growStdlibBodyDemand: fileIndex {fileIndex} is below project.stdlibSourcePaths.count()"), reachable: reachable)
+	for fileIndex in 0 upto project.librarySourcePaths.count() 'eachFile'
+		let demandedThisFile = try demandOneStdlibFileIfReached(project, path: try project.librarySourcePaths.get(fileIndex) otherwise panic("growStdlibBodyDemand: fileIndex {fileIndex} is below project.librarySourcePaths.count()"), reachable: reachable)
 		grew = grew or demandedThisFile
 	end 'eachFile'
 
@@ -314,14 +340,21 @@ end 'growStdlibBodyDemand'
 // the names are unique by construction (E3006 rejects a duplicate) and the substrate fixpoint needs a
 // Demand ONE stdlib file's bodies if any function it declares is reachable, answering whether the demand
 // set grew. ⭐ **THE PATH ARRIVES AS A PARAMETER**, which is what lets it be named three times: read
-// inline out of `project.stdlibSourcePaths` it is a borrow of `project`, and `queryParseOps` and the
+// inline out of `project.librarySourcePaths` it is a borrow of `project`, and `queryParseOps` and the
 // `insert` both WRITE `project`, so the caller would need the same `try … get(fileIndex) otherwise
 // panic(…)` spelled once per use — one fact, three copies. Same cure as
 // `Parser.conformanceRequiresMethod`.
 function demandOneStdlibFileIfReached(project Project, path FilePath, reachable FunctionNameSet) returns bool throws CompileError
-	if project.db.demandedStdlibBodyFiles.contains(path) 'alreadyBuilding'
+	if project.db.demandedLibraryBodyFiles.contains(path) 'alreadyBuilding'
 		return false
 	end 'alreadyBuilding'
+
+	// `runtime/` is outside the demand entirely — its bodies are built unconditionally
+	// (`Queries.buildsBodiesFor`). A record here would be read by nobody and would spin the fixpoint one
+	// further round.
+	if isRuntimeSourceFile(project, path: path) 'notTheDemandTier'
+		return false
+	end 'notTheDemandTier'
 
 	let artifact = try queryParseOps(project, path: path)
 
@@ -330,7 +363,7 @@ function demandOneStdlibFileIfReached(project Project, path FilePath, reachable 
 			continue
 		end 'notReached'
 
-		project.db.demandedStdlibBodyFiles.insert(path)
+		project.db.demandedLibraryBodyFiles.insert(path)
 		return true
 	end 'eachFunc'
 
@@ -344,8 +377,8 @@ function stdlibFunctionNames(project Project) returns ByteArrayArray throws Comp
 	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
 	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
-	for fileIndex in 0 upto project.stdlibSourcePaths.count() 'eachFile'
-		let artifact = try queryParseOps(project, path: try project.stdlibSourcePaths.get(fileIndex) otherwise panic("stdlibFunctionNames: fileIndex {fileIndex} is below project.stdlibSourcePaths.count()"))
+	for fileIndex in 0 upto project.librarySourcePaths.count() 'eachFile'
+		let artifact = try queryParseOps(project, path: try project.librarySourcePaths.get(fileIndex) otherwise panic("stdlibFunctionNames: fileIndex {fileIndex} is below project.librarySourcePaths.count()"))
 
 		for func in artifact.module.functions 'eachFunc'
 			names.push(func.name)
@@ -371,7 +404,7 @@ end 'stdlibFunctionNames'
 // implementation that prints put a stdlib function behind a DATA edge — and
 // `specs/interface-dispatch.md`'s `dispatch-void-method` (a `Thing.show()` whose body is
 // `print("{label}\n")`, reached only through `__witness_Thing.Printer`) went from passing to a COMPILER
-// PANIC: `requireUnreachableStdlibStayedDead: 'print' is in StdlibFacts.unreachable`. The guard was right
+// PANIC: `requireUnreachableLibraryStayedDead: 'print' is in LibraryFacts.unreachable`. The guard was right
 // and the walk was wrong, which is what a guard stating a premise is for.
 //
 // ⇒ **THE WITNESS EDGE IS CREDITED AT THE CONFORMER THIS WALK REACHES** — `markConformerWitnessImpls`,
@@ -410,7 +443,7 @@ end 'stdlibFunctionNames'
 // ⭐⭐ **AND THIS IS WHY A RESIDUAL HERE IS TOLERABLE: AN UNDER-APPROXIMATION IS LOUD, ALWAYS.** The same
 // walk decides both what is BUILT (`growStdlibBodyDemand`) and what is filed `unreachable`, so the two can
 // never disagree in the silent direction — a function this walk misses is unbuilt AND in that set, and
-// `requireUnreachableStdlibStayedDead` panics the moment elimination reaches it through the reloc. The
+// `requireUnreachableLibraryStayedDead` panics the moment elimination reaches it through the reloc. The
 // SILENT failure — filed reachable, body never built, an empty function the program calls — is a different
 // mistake, it was the `witnessSlotImpls` cut, and this key cannot make it. Treat a panic from that guard as
 // this premise list having acquired a third entry, and add it here.
@@ -444,14 +477,14 @@ end 'stdlibFunctionNames'
 // both directions. `DeadFunctionElimination.seedRoots` roots it unconditionally (its kind 2), so leaving
 // the edge out is not conservative: the two derivations disagree, `lowerMaxonToStd` lowers no body for a
 // stdlib factory named only by an initializer, and the elimination walk reaches the empty function it
-// left. MEASURED before the fix, on `var sep = FilePath.separator()`: a `requireUnreachableStdlibStayedDead`
+// left. MEASURED before the fix, on `var sep = FilePath.separator()`: a `requireUnreachableLibraryStayedDead`
 // panic on a program with nothing wrong with it (`specs/top-level-factory-globals.md`'s
 // `stdlib-factory-reached-from-the-initializer`).
 //
 // ⚠⚠ **AND IT RUNS BEFORE OVERLOAD RESOLUTION, SO A CALLEE NAME HERE IS PROVISIONAL — WHICH IS WHY THE
 // OVERLOAD SET IS CREDITED WHOLE.** `SemanticCheck.resolveOverloadedCalls` rewrites `call FilePath.join`
 // into `call FilePath.join#FilePath` — and its own header opens *"OVERLOAD RESOLUTION RUNS FIRST, BEFORE
-// ANYTHING READS A CALLEE"* — but it runs inside `PassPipeline.run`, and `deriveStdlibFacts` runs one
+// ANYTHING READS A CALLEE"* — but it runs inside `PassPipeline.run`, and `deriveLibraryFacts` runs one
 // screen ABOVE that call in `compileToCodeResult`. So this walk is the one reader that precedes it, and
 // the bare name it sees is the registration name of the FIRST member only.
 //
@@ -460,7 +493,7 @@ end 'stdlibFunctionNames'
 // `stdlib/FilePath.maxon:357/371`'s two `join` overloads. The walk credited `FilePath.join` (the `String`
 // member, declared first), filed `FilePath.join#FilePath` as unreachable, `lowerMaxonToStd` skipped its
 // body — and then dead-function elimination, which runs AFTER resolution and sees the real callee,
-// reached it and tripped `requireUnreachableStdlibStayedDead`.
+// reached it and tripped `requireUnreachableLibraryStayedDead`.
 //
 // ⇒ A provisional callee names a SET, and this walk answers "might this be reached?", so every member is
 // credited. That is exact for the question asked and cannot make the assert fire: an OVER-approximation
@@ -486,7 +519,7 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 
 	// ⭐⭐ **EVERY `test` IS A ROOT HERE TOO, AND IT HAS TO BE, BECAUSE THE TWO WALKS ARE CHECKED AGAINST EACH
 	// OTHER.** `DeadFunctionElimination.seedRoots` roots tests over the STD module; this walk roots them over
-	// the MAXON one, and `requireUnreachableStdlibStayedDead` PANICS when the second walk reaches a stdlib
+	// the MAXON one, and `requireUnreachableLibraryStayedDead` PANICS when the second walk reaches a stdlib
 	// body the first declared unreachable. A test that calls `print` or an `Expect` matcher is exactly that
 	// shape — nothing reaches it from `main` — so a root missing here is a compiler abort on the first test
 	// that calls the library, not a lost prune.
@@ -504,9 +537,9 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 	// CALLEES ARE SEEDED FROM EVERY USER BODY AND NOT ONLY FROM THE REACHED ONES (W115).** This asymmetry is
 	// not this walk's invention — it is `DeadGlobalElimination.liveGlobalLabels`', stated in its own header:
 	// *"A USER function is still credited whether or not anything calls it … but a stdlib function
-	// `StdlibFacts.unreachable` names is skipped"*. That is the rule that decides whether the slot EXISTS,
+	// `LibraryFacts.unreachable` names is skipped"*. That is the rule that decides whether the slot EXISTS,
 	// so it is the rule that decides whether `__module_init` builds a record calling these bodies — and a
-	// root missing under it is `requireUnreachableStdlibStayedDead`, not a lost prune. Matching it exactly is
+	// root missing under it is `requireUnreachableLibraryStayedDead`, not a lost prune. Matching it exactly is
 	// what keeps the two derivations from disagreeing; the reached-code half is `markCorpusSlotInitCallees`,
 	// which covers the stdlib bodies this seed deliberately does not.
 	seedCorpusSlotInitCalleesOfUserCode(module, project: project, signatures: signatures, stdlib: stdlib, byName: byName, reached: reached, worklist: worklist, names: names)
@@ -590,7 +623,7 @@ end 'reachableMaxonFunctionNames'
 // reloc names the CORPUS body instead — a DATA edge this Maxon-tier walk cannot see.
 //
 // ⚠ **MEASURED, BEFORE THE THREE LINES BELOW EXISTED, THE MOMENT THE MODULE WAS LISTED: 124
-// `requireUnreachableStdlibStayedDead` panics** — `int.hash` (83), `int.equals` (23), `int.compare` (18) —
+// `requireUnreachableLibraryStayedDead` panics** — `int.hash` (83), `int.equals` (23), `int.compare` (18) —
 // which is `String`/`Character`'s 130 at W17 and `Array.hash`'s panic at ARR5b, a third time, on the roster
 // this function IS. **The omission is loud by construction, which is the whole reason a roster is tolerable
 // here**, and the previous two entries were each found by exactly this panic naming the missing name.
@@ -603,7 +636,7 @@ end 'reachableMaxonFunctionNames'
 // holding a vector reaches a `Vector.<method>` and the conformer key fires for it like any other type's —
 // which is the ONE clause `Map`'s deliberate absence rests on, one container over.
 //
-// ⚠ **MEASURED at W189, before the members retired: `requireUnreachableStdlibStayedDead` panicking on
+// ⚠ **MEASURED at W189, before the members retired: `requireUnreachableLibraryStayedDead` panicking on
 // `ArrayIterator.current`** — the cascade one step past the witness slot, since the corpus `createIterator`
 // returns an `ArrayIterator` whose own `Iterator` table is reached from there. **RE-MEASURED at W190 with the
 // line struck: the suite is green**, which is what says the key now reaches that cascade by the ordinary
@@ -617,7 +650,7 @@ end 'reachableMaxonFunctionNames'
 //
 // ⭐ **AN OMISSION HERE IS LOUD, ALWAYS, WHICH IS WHY A ROSTER IS TOLERABLE WHERE A PREDICTION WOULD NOT BE.**
 // This walk decides both what is BUILT and what is filed `unreachable`, so a conformer missing from this list
-// is a function `DeadFunctionElimination.requireUnreachableStdlibStayedDead` PANICS on BY NAME the moment a
+// is a function `DeadFunctionElimination.requireUnreachableLibraryStayedDead` PANICS on BY NAME the moment a
 // witness slot reaches it. That is how `Array` was found: `markConformerWitnessImpls`' header had predicted it
 // in so many words — *"the day a LISTED module declares `extension <builtin> implements <Iface>` with a corpus
 // body, this key misses it … `stdlib/Array.maxon:632` … listing it is the change that would need this
@@ -670,7 +703,7 @@ end 'drainReachableWorklist'
 // builds an impl only for a name the module does not already define (`undefinedImplNames`), so the witness
 // slot's `funcAbs64` reloc now names a CORPUS body.
 //
-// ⚠ MEASURED, the moment those modules were listed: **130 `requireUnreachableStdlibStayedDead` panics** —
+// ⚠ MEASURED, the moment those modules were listed: **130 `requireUnreachableLibraryStayedDead` panics** —
 // `Character.hash` (87), `String.hash` (40), `String.equals` (2), `Character.compare` (1). The guard was
 // right and the walk was wrong, which is what a guard stating a premise is for, and it is the SECOND time
 // this walk has been corrected by it (W35 was the first).
@@ -726,7 +759,7 @@ end 'drainReachableWorklist'
 // ⚠⚠ **AND THE OBLIGATION W17 DID NOT DISCHARGE IS DISCHARGED HERE.** `userCodeReachesStdlib`'s header
 // warns that a root kind which is *"a marking pass"* can be added to one side only — W17 added one, so a
 // program whose user code names no stdlib function took the short-circuit, filed every stdlib name
-// `unreachable` INCLUDING these, and `requireUnreachableStdlibStayedDead` panicked on the witness slot
+// `unreachable` INCLUDING these, and `requireUnreachableLibraryStayedDead` panicked on the witness slot
 // (MEASURED with the cone listed: 33 cases, every one a `Map`/`Set` with `String` keys or a `String`
 // conformance — `let m = ["a": 1]` panicked on `String.hash`, while the same program with one `print` line
 // added compiled, because the `print` dragged it onto the precise path). The two sides now ask ONE
@@ -871,7 +904,7 @@ module function markReachable(name ByteArray, project Project, byName FuncIndexB
 	// it. MEASURED at `stdlib/Testing.maxon`'s listing, on three programs differing only in one argument's
 	// type: `Expect.equal(5, expected: 5)` compiles (the `AssertedInt` arm is declared first), while
 	// `Expect.equal(true, expected: true)` and `Expect.equal("x", expected: "x")` are
-	// `requireUnreachableStdlibStayedDead` panics naming that member's own helper — the two derivations
+	// `requireUnreachableLibraryStayedDead` panics naming that member's own helper — the two derivations
 	// disagreeing over an ordinary CALL edge, with no data edge anywhere near it. Supplying the argument
 	// (`message: "m"`) compiles either way, since then no helper is minted at all.
 	//
@@ -957,7 +990,7 @@ end 'markEveryMembersOwnDefaultHelper'
 // `scanRuntimeUsage` and `checkCalls` all skip what that set names. A program whose ONLY edge into
 // stdlib was `nums.contains([20, 30])` — whose members are `Array.contains#struct` /
 // `Array.contains#type parameter`, with nothing named `Array.contains` — therefore took the
-// short-circuit, and `DeadFunctionElimination.requireUnreachableStdlibStayedDead` then reached the
+// short-circuit, and `DeadFunctionElimination.requireUnreachableLibraryStayedDead` then reached the
 // member the resolver had bound and PANICKED. That guard is the only thing that stood between this and
 // an EMPTY function the program calls, with no diagnostic anywhere.
 //
@@ -1053,7 +1086,7 @@ end 'markMaxonCallees'
 // only a second answer: a variant appended to `MaxonOp` does still fail to compile at both sites (the
 // compile error at each site), but nothing makes the two sites classify it the SAME WAY, and an
 // under-approximation here is not a compile error — it is `lowerMaxonToStd` skipping a body that is then
-// reached, which is exactly the `requireUnreachableStdlibStayedDead` panic this slice was opened by.
+// reached, which is exactly the `requireUnreachableLibraryStayedDead` panic this slice was opened by.
 //
 // A `functionValue` target is credited alongside a `direct` callee: a `functionRef`'s target is reachable
 // code even though no `call` op names it. `indirectCall` calls through the code POINTER that `functionRef`
@@ -1097,7 +1130,7 @@ end 'markServiceLoopHandlers'
 // implementation each one names is named by no `call` anywhere in the module. Without this, an interface
 // method whose body calls a stdlib function leaves that function filed `unreachable` while
 // `DeadFunctionElimination` — which DOES follow those relocations — reaches it, and the two derivations
-// disagree exactly as `requireUnreachableStdlibStayedDead` says.
+// disagree exactly as `requireUnreachableLibraryStayedDead` says.
 //
 // ⭐⭐ **THE KEY IS THE CONFORMER, AND THAT IS WHAT MAKES IT NARROW.** `LowerMaxonToStd.ensureWitnessTable`
 // has THREE callers and none of them is one op shape: an existential WIDENING at a call argument
@@ -1126,7 +1159,7 @@ end 'markServiceLoopHandlers'
 // ⚠ **IT JOINS `<Type>.<requirement>` RATHER THAN READING `project.witnessSlotImpls`, AND A CUT THAT READ
 // THAT MAP WAS WRONG. MEASURED:** the map is filled by `checkConformance`, which runs AFTER `queryAllModule`
 // — and `growStdlibBodyDemand`'s fixpoint, which decides which stdlib bodies are BUILT AT ALL, runs INSIDE
-// it. So the map is empty for every round of the fixpoint and full only by the time `deriveStdlibFacts`
+// it. So the map is empty for every round of the fixpoint and full only by the time `deriveLibraryFacts`
 // asks: the panic went away (the facts were right) and the emitted `@print` was an EMPTY function the
 // program called — a silent wrong answer in place of a loud one, which is strictly worse.
 // `conformances`/`interfaces` are merge-time stores (`Queries.resetMergeTargets` resets all three
@@ -1172,7 +1205,7 @@ end 'markServiceLoopHandlers'
 //     declaration. **MEASURED (W189): a `where S is Iterable` at a `Vector with 3 Int` names `Iterable` and
 //     NOTHING ELSE, while the loop it lowers to calls `Iterator`'s methods on the `ArrayIterator` the corpus
 //     `createIterator` returns** — so keying `ArrayIterator` on the named set alone left `ArrayIterator.current`
-//     unmarked and `requireUnreachableStdlibStayedDead` panicked on it.
+//     unmarked and `requireUnreachableLibraryStayedDead` panicked on it.
 //   • **A SEED conformer is one no reached function can ever belong to** (that is its membership rule), so
 //     the total credit has nothing to fire on and the seed supplies the crediting instead — keyed on the
 //     interfaces the reached code names, which is what keeps `float.toString` and its decimal bignum cone out
@@ -1298,7 +1331,7 @@ end 'seedCorpusSlotInitCalleesOfUserCode'
 //
 // ⚠ **OVER-CREDITING IS THE SAFE DIRECTION AND THIS DOES IT ONCE:** a read the program never executes
 // still credits the callees, whose bodies are then lowered and dropped by dead-function elimination. A
-// MISSING root is `requireUnreachableStdlibStayedDead` — the standing warning the retired synthesized-runtime
+// MISSING root is `requireUnreachableLibraryStayedDead` — the standing warning the retired synthesized-runtime
 // seed carried, kept in this function's own header block one screen up.
 function markCorpusSlotInitCallees(op MaxonOp, project Project, signatures ProgramSignatures, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	if not maxonOpNamesAGlobalLabel(op) 'namesNoSlot'
@@ -1368,8 +1401,8 @@ function userCodeReachesStdlib(module MaxonModule, project Project, signatures P
 		// unreachable-from-`main` anyway, so a false negative here is impossible; a false positive would
 		// merely trigger the exact full walk.)
 		//
-		// It reads the set being BUILT rather than `isStdlibFunction`, which reads the PUBLISHED one:
-		// this runs inside the derivation, before `project.stdlibFacts` holds anything.
+		// It reads the set being BUILT rather than `isLibraryFunction`, which reads the PUBLISHED one:
+		// this runs inside the derivation, before `project.libraryFacts` holds anything.
 		if stdlib.contains(func.name) 'skipStdlibBody'
 			continue
 		end 'skipStdlibBody'
@@ -1519,7 +1552,7 @@ function opReadsACorpusSlotRootedInStdlib(op MaxonOp, signatures ProgramSignatur
 end 'opReadsACorpusSlotRootedInStdlib'
 
 // The loop the caller above keeps out of its one-line answer. It reads the set being BUILT rather than
-// `isStdlibFunction`, for `userCodeReachesStdlib`'s stated reason: this runs inside the derivation that
+// `isLibraryFunction`, for `userCodeReachesStdlib`'s stated reason: this runs inside the derivation that
 // publishes it.
 function anyCalleeIsIn(callees ByteArrayArray, stdlib FunctionNameSet) returns bool
 	for callee in callees 'eachCallee'
@@ -1775,7 +1808,8 @@ function noteSubstrateEdge(op MaxonOp, callerNode CsrIndex, nodeOf StdlibNodeByN
 		serviceReplyCell then break 'op'
 		immortalStructRecord or
 			immortalStringTable or
-			covPoint then break 'op'
+			covPoint or
+			rawIntrinsic then break 'op'
 	end 'op'
 end 'noteSubstrateEdge'
 
@@ -1790,7 +1824,7 @@ end 'noteSubstrateEdge'
 // it records is *which entry each stdlib function reaches* — a property of stdlib source, identical for
 // every target — so the target question is asked once, later, at the USER call that crossed into stdlib
 // (`SemanticCheck.requireTargetSupportsCallee`). Seeding on "does the CURRENT target lack it" instead would
-// make `project.stdlibFacts` differ per target for no gain and one more thing to invalidate.
+// make `project.libraryFacts` differ per target for no gain and one more thing to invalidate.
 function noteSubstrateCallee(callee ByteArray, callerNode CsrIndex, nodeOf StdlibNodeByName, state SubstrateFixpoint)
 	if calleeHasHostFacility(callee) 'substrateEntry'
 		state.seed(callerNode, entry: callee)

@@ -447,14 +447,15 @@ end 'reportTypeCycle'
 
 // The declaration of `name` when a USER file wrote it — the candidate filter and the anchor, in one lookup.
 // A compiler-synthesized layout (a tuple, `__ManagedFile`, `Ordering`) carries no declaring file at all and a
-// stdlib one carries a file the author never opened; neither may be blamed for a cycle in a user's program.
+// LIBRARY one — either tier's — carries a file the author never opened; neither may be blamed for a cycle
+// in a user's program.
 //
-// ⚠ Asked ONLY of a node already proven to be on a cycle, which is what makes `isStdlibSourceFile`'s per-file
-// path resolution affordable here: on every program that compiles it runs zero times.
+// ⚠ Asked ONLY of a node already proven to be on a cycle, which is what makes `isLibrarySourceFile`'s
+// per-file path resolution affordable here: on every program that compiles it runs zero times.
 function userDeclarationOf(project Project, name ByteArray) returns TypeNameDecl throws MapError
 	let decl = try project.typeNameDecls.declarationOf(name)
 
-	if decl.claim.declFilePath.equals(CompilerOwnedDeclFilePath) or isStdlibSourceFile(project, path: decl.claim.declFilePath) 'noUserFileWroteIt'
+	if decl.claim.declFilePath.equals(CompilerOwnedDeclFilePath) or isLibrarySourceFile(project, path: decl.claim.declFilePath) 'noUserFileWroteIt'
 		throw MapError.keyNotFound
 	end 'noUserFileWroteIt'
 

@@ -121,7 +121,7 @@ let RungOutputSuffix = ".out"
 //
 // ⚠ AND IT DOES NOT KEEP THE CHECKOUT OUT OF THE BYTE COLUMN, which this comment claimed until it was
 // measured. The COMPILER resolves each source path against `Directory.currentPath()` itself — per file,
-// per compile, in `Queries.isStdlibSourceFile` — so the working directory's length lands in the byte
+// per compile, in `Queries.fileProvenanceOf` — so the working directory's length lands in the byte
 // column whatever this side hands it. The reading that showed it is ScaleHistory's header, under (2),
 // and it is deliberately NOT copied here: the copy that lived on this line said "against exactly 0
 // allocations", which was the general rule an implementer then lost most of a session to, and a fourth
@@ -392,7 +392,7 @@ function measureScaleLadder(args MaxonArgs, corpusRoot FilePath) returns ExitCod
 	//
 	// BOTH PATHS, and neither is optional. A compile derives every stdlib source path from the compiler's
 	// own executable path, and it resolves every RUNG source path against the working directory
-	// (`Queries.isStdlibSourceFile`, per file) — so the BYTE column of this run is comparable only with a
+	// (`Queries.fileProvenanceOf`, per file) — so the BYTE column of this run is comparable only with a
 	// logged row that had the same two. Keyed on the executable alone, one binary run from a second
 	// directory read `comparable` and printed a +203,310-byte fiction at rung 5. See ScaleHistory's header
 	// for both measurements.
@@ -452,9 +452,9 @@ function measureScaleLadder(args MaxonArgs, corpusRoot FilePath) returns ExitCod
 	// AND SAY WHAT THE COMPILER'S OWN INPUT WAS — the corpus is only half of what each rung compiles.
 	// Asked here rather than beside the manifest above because it describes the COMPILES, and the
 	// `--emit-corpus` run just above this line makes none.
-	try printStdlibWalkCensus() otherwise (error) 'noStdlibWalk'
-		return brokenRun("the checkout's stdlib/ could not be walked", detail: scaleErrorText(error))
-	end 'noStdlibWalk'
+	try printLibraryWalkCensus() otherwise (error) 'noLibraryWalk'
+		return brokenRun("the checkout's library sources could not be walked", detail: scaleErrorText(error))
+	end 'noLibraryWalk'
 
 	printRungHeader()
 	var results = RungResultArray.create()
@@ -1232,26 +1232,38 @@ export typealias LadderIndex = int(0 to u64.max)
 // and a census that refused would be the deleted gate apparatus growing back.
 //
 // The one thing that IS a refusal is being unable to walk at all, which is a BROKEN RUN in the ordinary
-// sense: every rung compile resolves stdlib the same way and would fail the same way, so saying it here
-// beats reporting it as "rung 0 did not deliver a rung to measure".
-function printStdlibWalkCensus() throws ScaleError
+// sense: every rung compile resolves both library tiers the same way and would fail the same way, so
+// saying it here beats reporting it as "rung 0 did not deliver a rung to measure".
+//
+// ⭐ **BOTH TIERS, OR THE CENSUS IS NOT ABOUT THE COLUMN IT EXPLAINS.** A rung compile allocates the
+// absolute path of every file under `stdlib/` AND under `runtime/`, and both land in the same byte
+// total — a census of one leaves a pair of runs whose walks differ in the other reading as comparable.
+function printLibraryWalkCensus() throws ScaleError
 	// The same resolution every spawned rung compile makes — this runner IS the compiler it spawns
-	// (`compilerExe` is its own path), so asking it here asks about the very directory they will load.
+	// (`compilerExe` is its own path), so asking it here asks about the very directories they load.
 	let stdlibDir = try locateStdlibDir() otherwise throw ScaleError.reason("stdlib/ could not be located by walking up from the running compiler's own path — every rung would fail to load it")
+	let runtimeDir = try runtimeDirBeside(stdlibDir) otherwise throw ScaleError.reason("runtime/ could not be derived from {stdlibDir.toString()} — every rung would fail to load it")
 
+	try printTierWalk(StdlibWalkLabel, dir: stdlibDir)
+	try printTierWalk(RuntimeWalkLabel, dir: runtimeDir)
+
+	print("{padRight("", width: LibraryWalkLabelWidth)}git cannot see IGNORED content and these walks can, so compare these counts against\n")
+	print("{padRight("", width: LibraryWalkLabelWidth)}the checkout a logged row was minted at before reading a flat delta as a code change.\n")
+end 'printLibraryWalkCensus'
+
+function printTierWalk(label String, dir FilePath) throws ScaleError
 	var sources = MaxonSourcePathArray.create()
-	let directories = try collectMaxonSources(stdlibDir, into: sources) otherwise throw ScaleError.reason("{stdlibDir.toString()} could not be listed")
+	let directories = try collectMaxonSources(dir, into: sources) otherwise throw ScaleError.reason("{dir.toString()} could not be listed")
 
-	print("{padRight(StdlibWalkLabel, width: StdlibWalkLabelWidth)}{groupDigits(sources.count())} source file(s) in {groupDigits(directories as Delta)} directory(ies) under {stdlibDir.toString()}\n")
-	print("{padRight("", width: StdlibWalkLabelWidth)}git cannot see IGNORED content and this walk can, so compare these two counts against\n")
-	print("{padRight("", width: StdlibWalkLabelWidth)}the checkout a logged row was minted at before reading a flat delta as a code change.\n")
-end 'printStdlibWalkCensus'
+	print("{padRight(label, width: LibraryWalkLabelWidth)}{groupDigits(sources.count())} source file(s) in {groupDigits(directories as Delta)} directory(ies) under {dir.toString()}\n")
+end 'printTierWalk'
 
-// Indented to the same column as every other line of the report. The label carries no trailing space
-// of its own: the width is what separates it from the counts AND what the two continuation lines are
-// padded to, so the label and its hanging indent cannot drift apart.
+// Indented to the same column as every other line of the report. A label carries no trailing space of
+// its own: the width is what separates it from the counts AND what the continuation lines are padded
+// to, so a label and its hanging indent cannot drift apart. It clears the longest label by one.
 let StdlibWalkLabel = "  stdlib walk:"
-let StdlibWalkLabelWidth = 15 as ColumnWidth
+let RuntimeWalkLabel = "  runtime walk:"
+let LibraryWalkLabelWidth = 16 as ColumnWidth
 
 // The corpus self-check's own numbers. They are PRINTED, not merely consulted: a reader looking at a
 // set of tidy proportional memory numbers is entitled to see the evidence that they are numbers about

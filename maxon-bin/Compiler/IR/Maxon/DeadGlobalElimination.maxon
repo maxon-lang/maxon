@@ -59,16 +59,16 @@
 // ⭐⭐ **ONE REACHABILITY TERM, AND IT IS SCOPED TO STDLIB SOURCE FOR THE SAME REASON EVERY OTHER
 // PRE-ELIMINATION PASS SCOPES IT THERE (S2h).** The spec says "never read or written by any REACHABLE
 // function". A USER function is still credited whether or not anything calls it — that keeps strictly MORE
-// globals and is only ever a missed prune — but a stdlib function `StdlibFacts.unreachable` names is
+// globals and is only ever a missed prune — but a stdlib function `LibraryFacts.unreachable` names is
 // skipped, and that is not an approximation of anything: `lowerMaxonToStd` lowers NO BODY for it
 // (`LowerMaxonToStd:741`), so the `globalAddr` this walk would have read reaches no back end at all. A
 // slot kept for it is a slot kept for code that provably is not in the output.
 //
 // ⚠ **IT IS THE SAME DECIDER AT ONE MORE CONSUMER, NEVER A SECOND ONE.** That distinction is what the
 // paragraph this replaces was protecting, and it is worth keeping stated. The set is derived ONCE, by
-// `StdlibSource.deriveStdlibFacts`, and already gates `lowerMaxonToStd`, `InsertRangeChecks:202`,
+// `StdlibSource.deriveLibraryFacts`, and already gates `lowerMaxonToStd`, `InsertRangeChecks:202`,
 // `scanRuntimeUsage` and `DeadFunctionElimination:130` — where
-// `requireUnreachableStdlibStayedDead` PANICS BY NAME if it ever disagrees with the Std-tier walk that
+// `requireUnreachableLibraryStayedDead` PANICS BY NAME if it ever disagrees with the Std-tier walk that
 // actually prunes. What may still NOT be done is widening that walk to decide a USER function's slot: it
 // models `call`/`tryCall`/`functionRef`/`asyncCall` edges only, so a function reached through a witness
 // table or an `.rdata` slot looks unreachable to it, and its own header records that it is exact "at this
@@ -229,7 +229,8 @@ export function maxonOpNamesAGlobalLabel(op MaxonOp) returns bool
 			serviceReplyCell then return false
 		immortalStructRecord or
 			immortalStringTable or
-			covPoint then return false
+			covPoint or
+			rawIntrinsic then return false
 	end 'op'
 end 'maxonOpNamesAGlobalLabel'
 

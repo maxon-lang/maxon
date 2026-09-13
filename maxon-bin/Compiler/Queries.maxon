@@ -203,6 +203,12 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// This is a PROVENANCE order, not a dependence on filesystem order — within each half the walk's
 	// own order is untouched and unsorted, so a latent order dependence still surfaces rather than
 	// being hidden. See `StdlibLoader`'s header for the filesystem-order rule this keeps.
+	//
+	// ⚠ A RUNTIME file is on the `userPaths` side of that partition, and deliberately: the contest is
+	// about the stdlib's parser privileges — the shadow rename, the `module` tier, the `__` doors — and a
+	// `runtime/` file holds none of them. What it does need is its OWN namespace anchor, which is a fact
+	// about the PATH and not about the contest, so the fold asks for it separately rather than reading it
+	// off this partition.
 	var userPaths = MaxonSourcePathArray.create()
 	var stdlibPaths = MaxonSourcePathArray.create()
 
@@ -221,13 +227,13 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	try discoverWholeProgramTokenFacts(project, signatures: signatures, userPaths: userPaths, stdlibPaths: stdlibPaths)
 
 	for path in userPaths 'eachUserFile'
-		try foldOneFileInto(project, signatures: signatures, path: path, isStdlibSource: false)
+		try foldOneFileInto(project, signatures: signatures, path: path, isStdlibSource: false, isRuntimeSource: isRuntimeSourceFile(project, path: path))
 	end 'eachUserFile'
 
 	try contestStdlibDeclarationsAgainstUserNames(project, signatures: signatures, stdlibPaths: stdlibPaths)
 
 	for path in stdlibPaths 'eachStdlibFile'
-		try foldOneFileInto(project, signatures: signatures, path: path, isStdlibSource: true)
+		try foldOneFileInto(project, signatures: signatures, path: path, isStdlibSource: true, isRuntimeSource: false)
 	end 'eachStdlibFile'
 
 	// The instances the compiler mints for itself (array literals, byte strings, the `from […]`
@@ -368,7 +374,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	return signatures
 end 'queryProgramSignatures'
 
-function foldOneFileInto(project Project, signatures ProgramSignatures, path FilePath, isStdlibSource bool) throws CompileError
+function foldOneFileInto(project Project, signatures ProgramSignatures, path FilePath, isStdlibSource bool, isRuntimeSource bool) throws CompileError
 	// Outside the probe, exactly as `queryAllModule` keeps `queryParseOps` outside its `merge` probe:
 	// the tokens query does its own `lex` timing, and a phase that absorbed another's is the defect
 	// CompileTimings' header is about.
@@ -380,7 +386,7 @@ function foldOneFileInto(project Project, signatures ProgramSignatures, path Fil
 	// sweep's own `module`-tier questions, the real parse, the constant evaluator) reads an index
 	// rather than re-deriving a string from a path. ⚠ The anchor is chosen by where the file lives,
 	// not by whose it is — see `moduleDirectoryForFile`.
-	let moduleDirectory = moduleDirectoryForFile(project, path: path, livesUnderStdlibDirectory: livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSource))
+	let moduleDirectory = moduleDirectoryForFile(project, path: path, livesUnderStdlibDirectory: livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSource), livesUnderRuntimeDirectory: isRuntimeSource)
 	signatures.recordFileModuleDirectory(path, moduleDirectory: moduleDirectory)
 
 	// A `Parser` IS the sweeper — same cursor, same `parseOptionalReturnType` — so the sweep and the
@@ -448,16 +454,22 @@ end 'producerMaskFor'
 // It is the same distinction `Project.rootIsUnderStdlibDirectory` draws for the two
 // `module`-visible `String` methods, arriving at a second door — asked rather than re-spelled, so
 // the two doors cannot drift apart on it.
-function moduleDirectoryForFile(project Project, path FilePath, livesUnderStdlibDirectory bool) returns String
+function moduleDirectoryForFile(project Project, path FilePath, livesUnderStdlibDirectory bool, livesUnderRuntimeDirectory bool) returns String
 	let cwd = Directory.currentPath()
-	return deriveModuleDirectory(path.resolve(cwd), rootPath: namespaceAnchorFor(project, cwd: cwd, livesUnderStdlibDirectory: livesUnderStdlibDirectory))
+	return deriveModuleDirectory(path.resolve(cwd), rootPath: namespaceAnchorFor(project, cwd: cwd, livesUnderStdlibDirectory: livesUnderStdlibDirectory, livesUnderRuntimeDirectory: livesUnderRuntimeDirectory))
 end 'moduleDirectoryForFile'
 
-function namespaceAnchorFor(project Project, cwd FilePath, livesUnderStdlibDirectory bool) returns FilePath
+function namespaceAnchorFor(project Project, cwd FilePath, livesUnderStdlibDirectory bool, livesUnderRuntimeDirectory bool) returns FilePath
 	if livesUnderStdlibDirectory 'thestdlibsOwnCone'
-		let stdlibDir = project.stdlibDir.resolve(cwd)
-		return try stdlibDir.parent() otherwise panic("namespaceAnchorFor: '{stdlibDir.toString()}' has no parent — it is an absolute directory path, resolved against the cwd on the line above")
+		return libraryConeAnchor(project.stdlibDir, cwd: cwd)
 	end 'thestdlibsOwnCone'
+
+	// The RUNTIME tier's cone, measured from its own root for the stdlib arm's reason: anchored at the
+	// USER's root instead, a `runtime/` file compiled under a project outside the checkout falls out of
+	// that root entirely and collapses onto `deriveModuleDirectory`'s parent-name fallback.
+	if livesUnderRuntimeDirectory 'theRuntimesOwnCone'
+		return libraryConeAnchor(project.runtimeDir, cwd: cwd)
+	end 'theRuntimesOwnCone'
 
 	let root = project.rootPath.resolve(cwd)
 
@@ -467,6 +479,14 @@ function namespaceAnchorFor(project Project, cwd FilePath, livesUnderStdlibDirec
 
 	return try root.parent() otherwise panic("namespaceAnchorFor: '{root.toString()}' has no parent — a single-file build's root is an absolute FILE path, resolved against the cwd on the line above")
 end 'namespaceAnchorFor'
+
+// A library root's cone is anchored at that root's PARENT, so `stdlib/String.maxon` is `stdlib` and
+// `runtime/Word.maxon` is `runtime`. One body for both roots, because the rule is the root's shape and
+// not which root it is.
+function libraryConeAnchor(libraryDir FilePath, cwd FilePath) returns FilePath
+	let resolved = libraryDir.resolve(cwd)
+	return try resolved.parent() otherwise panic("libraryConeAnchor: '{resolved.toString()}' has no parent — it is an absolute directory path, resolved against the cwd on the line above")
+end 'libraryConeAnchor'
 
 // Two whole-program facts the fold must already know, read off the tokens before the first file is
 // folded:
@@ -1198,20 +1218,19 @@ function probeOnePathCacheHits(project Project, path FilePath) throws CompileErr
 	_ = try queryParseOps(project, path: path)
 end 'probeOnePathCacheHits'
 
-// Asked once per file, by the three places that need a file's provenance: the two queries that
-// build a `Parser` for a real parse, and `queryProgramSignatures`'s partition of the declaration
-// sweep, which asks it once and hands the answer down rather than letting `foldOneFileInto`
-// re-derive it.
+// Asked once per file, by the places that need a file's provenance: the two queries that build a
+// `Parser` for a real parse, and `queryProgramSignatures`'s partition of the declaration sweep, which
+// asks it once and hands the answer down rather than letting `foldOneFileInto` re-derive it.
 //
-// ⚠ Not only a visibility question: besides a `typealias` declaration's visibility, this also
-// decides whether a file's tokens are rewritten by the stdlib/user shadow rename and whether the
-// `__`-reservation doors admit this compile's own mints. Resolving both sides before comparing
-// (below) governs all of those.
+// ⚠ **IT IS THE STDLIB TIER SPECIFICALLY, NOT "the library", AND EVERY READER HERE MEANS THAT.** It is
+// not only a visibility question: besides a `typealias` declaration's visibility, it decides whether a
+// file's tokens are rewritten by the stdlib/user shadow rename and whether the `__`-reservation doors
+// admit this compile's own mints — privileges the RUNTIME tier does not carry. A gate that means "not
+// the author's code" asks `isLibrarySourceFile` below instead. Resolving both sides before comparing
+// governs all of those.
 //
-// `FilePath.isInside` allocates, which is why this is asked per FILE rather than per function — the
-// same shape as the walk the loader already makes — and asks the directory rather than
-// `project.stdlibSourcePaths`, whose membership test would be a linear scan over that array instead
-// of one `isInside`, growing with every file added to `stdlib/`.
+// ⚠ The derivation asks the DIRECTORIES and not `project.librarySourcePaths`, whose membership test
+// would be a linear scan over that array, growing with every file added to a library root.
 //
 // ⚠ Resolve both sides first: `isInside` compares SPELLINGS, not files, so an unresolved path can
 // read the same file as the user's or as stdlib depending only on how the command line named it.
@@ -1221,15 +1240,74 @@ end 'probeOnePathCacheHits'
 // proof is a claim about this arm — two spellings would be two things free to drift while the proof
 // read as if it held.
 export function isStdlibSourceFile(project Project, path FilePath) returns bool
+	return fileProvenanceOf(project, path: path).isStdlibSource
+end 'isStdlibSourceFile'
+
+// The same question of the OTHER library root. Everything its stdlib twin's header says about resolving
+// both sides, and about a project ROOTED inside the root keeping its own files as the user's, holds here
+// unchanged — which is why one derivation answers both.
+export function isRuntimeSourceFile(project Project, path FilePath) returns bool
+	return fileProvenanceOf(project, path: path).isRuntimeSource
+end 'isRuntimeSourceFile'
+
+// ⭐⭐ **THE DERIVATION, ONCE PER SPELLING PER COMPILE (`QueryDatabase.fileProvenance`).** Resolving a
+// path and a project root against the working directory and testing containment allocates a String per
+// path component: MEASURED at ~150 allocations a question, against 88 files at the scale ladder's first
+// rung asking it two to three times each. The memo is keyed on the SPELLING the caller passed, which is
+// the same thing `isInside` compares, so a second spelling of one file derives its own answer exactly as
+// it does without the memo — the memo saves work and decides nothing.
+//
+// ⚠ Never invalidated: the answer is a function of that spelling, `project.rootPath` and the two library
+// roots, and a compile moves none of them.
+//
+// Both bits come out of ONE resolve of the path because both need it. They stay INDEPENDENT — see
+// `FileProvenance`.
+function fileProvenanceOf(project Project, path FilePath) returns FileProvenance
+	if let memoized = try project.db.fileProvenance.get(path) 'alreadyDerived'
+		return memoized
+	end 'alreadyDerived'
+
 	let cwd = Directory.currentPath()
 	let resolvedPath = path.resolve(cwd)
+	let isStdlibSource = isInsideLibraryRoot(project, resolvedPath: resolvedPath, libraryDir: project.stdlibDir, rootIsInsideIt: rootIsUnderStdlibDirectory(project, cwd: cwd), cwd: cwd)
+	let isRuntimeSource = isInsideLibraryRoot(project, resolvedPath: resolvedPath, libraryDir: project.runtimeDir, rootIsInsideIt: rootIsUnderRuntimeDirectory(project, cwd: cwd), cwd: cwd)
+	let derived = FileProvenance.create(isStdlibSource, isRuntimeSource: isRuntimeSource)
 
-	if rootIsUnderStdlibDirectory(project, cwd: cwd) 'rootInsideStdlib'
-		return not resolvedPath.isInside(project.rootPath.resolve(cwd))
-	end 'rootInsideStdlib'
+	project.db.fileProvenance.upsert(path, value: derived)
 
-	return resolvedPath.isInside(project.stdlibDir)
-end 'isStdlibSourceFile'
+	return derived
+end 'fileProvenanceOf'
+
+// ⭐ **"IS THIS FILE THE LIBRARY'S, AS OPPOSED TO THE AUTHOR'S?"** — the question every gate about
+// BLAME, about auditing and about lazily-built bodies is really asking, because none of them turns on
+// WHICH of the two tiers a file came from. The gates that DO turn on the tier — the parser's privilege
+// bit, the declaration sweep's shadow contest — ask `isStdlibSourceFile` directly and must keep doing so.
+export function isLibrarySourceFile(project Project, path FilePath) returns bool
+	let provenance = fileProvenanceOf(project, path: path)
+
+	return provenance.isStdlibSource or provenance.isRuntimeSource
+end 'isLibrarySourceFile'
+
+// ⚠ The path arrives ALREADY RESOLVED — `isInside` compares SPELLINGS, not files, so an unresolved path
+// can read the same file as the user's or as the library's depending only on how the command line named
+// it, and the caller resolves once for both roots.
+// ⛔ **CONTAINMENT IS ASKED FIRST AND OF THIS ROOT, AND THE PROJECT ROOT ONLY SUBTRACTS FROM IT.** A file
+// outside `libraryDir` is not this root's whatever the user's project root is — asked the other way round,
+// a project rooted under ONE library root answers "true" for every file outside it, and so hands the OTHER
+// root's files this root's privileges on top of their own.
+function isInsideLibraryRoot(project Project, resolvedPath FilePath, libraryDir FilePath, rootIsInsideIt bool, cwd FilePath) returns bool
+	if not resolvedPath.isInside(libraryDir) 'outsideThisRoot'
+		return false
+	end 'outsideThisRoot'
+
+	if not rootIsInsideIt 'theUsersProjectIsElsewhere'
+		return true
+	end 'theUsersProjectIsElsewhere'
+
+	// The user named a file under this root as their project, so that file is THEIRS: its functions are
+	// user source and a diagnostic in it belongs at its own lines.
+	return not resolvedPath.isInside(project.rootPath.resolve(cwd))
+end 'isInsideLibraryRoot'
 
 // A library line may not be blamed for a library line. The gate that produces a blame knows the
 // body it refuses is the library's, but cannot know whether the construct it found is the user's,
@@ -1240,7 +1318,7 @@ function blameOutsideTheLibrary(project Project, blame LibraryBlame) returns Lib
 	// binds ALL of a payload or none of it, and a binding it does not read is E3012.
 	return match blame 'blame'
 		unblamed gives blame
-		userSite(blamedPath, blamedLine, blamedColumn) gives LibraryBlame.unblamed if isStdlibSourceFile(project, path: blamedPath) else LibraryBlame.userSite(blamedPath, line: blamedLine, column: blamedColumn)
+		userSite(blamedPath, blamedLine, blamedColumn) gives LibraryBlame.unblamed if isLibrarySourceFile(project, path: blamedPath) else LibraryBlame.userSite(blamedPath, line: blamedLine, column: blamedColumn)
 	end 'blame'
 end 'blameOutsideTheLibrary'
 
@@ -1296,36 +1374,47 @@ let CompilerInternalDeclaringModule = "Builtins.maxon"
 // reporting surface a test binary speaks to its runner through. It is the compiler that emits the
 // calls to it, so the name is `__`-prefixed for the same reason `Builtins.maxon`'s are.
 //
-// ⛔ The exemption is a list of named modules and NOT "any stdlib module, except a name an intrinsic
-// already claims" — nothing in this compiler can answer that except-clause. The nearest thing,
-// `MmRuntime.isSignaturelessCompilerCallee`, defines the intrinsic set by ABSENCE from the source
+// ⛔ Under `stdlib/` the exemption is a list of NAMED MODULES and NOT "any stdlib module, except a name
+// an intrinsic already claims" — nothing in this compiler can answer that except-clause. The nearest
+// thing, `MmRuntime.isSignaturelessCompilerCallee`, defines the intrinsic set by ABSENCE from the source
 // index, not by enumeration; under a blanket rule a stdlib module declaring `__mm_incref` would
 // silently flip that predicate false and start routing the compiler's own emitted calls through the
 // full user-function battery. A refusal you cannot state is worse than a list you must extend.
 //
 // ⚠ Nor is it "is this file under `stdlib/`?": that would hand `__mm_incref` to any file dropped
 // into `stdlib/`, including the one `stdlib/Internals.maxon` the loader excludes precisely because
-// it declares exactly that. The exemption is about what a NAMED file is FOR, not where it lives.
+// it declares exactly that. Under `stdlib/` the exemption is about what a NAMED file is FOR, not where
+// it lives.
 let TestReportDeclaringModule = "Testing.maxon"
 
-// Read by the parser's single declaration choke point, `Parser.requireUnreservedName`.
+// ⭐⭐ **WHICH FILES MAY DECLARE INTO THE RESERVED `__` SPACE — read by the parser's single declaration
+// choke point, `Parser.requireUnreservedName`. TWO NAMED `stdlib/` MODULES, PLUS THE WHOLE `runtime/`
+// CONE, AND THE TWO ARE ASKED IN DIFFERENT SHAPES BECAUSE THEY ARE DIFFERENT FACTS.**
 //
-// ⚠ An identity test, not a containment one, and not `isStdlibSourceFile`'s answer: that function
-// decides VISIBILITY and deliberately hands a project rooted under `stdlib/` its own files back as
-// the user's, but being the compiler's internal bridge is a property of the FILE and must not turn
-// on how a command line spelled it. Both sides are resolved before comparing, because
-// `FilePath.equals` compares SPELLINGS.
+// **Under `stdlib/` it is IDENTITY.** `Builtins.maxon` and `Testing.maxon` are two files among twenty-odd
+// whose every other member is an ordinary library declaration a user could have written; the reserved
+// space is what those two are FOR, and nothing about their neighbours. See the two constants above for
+// why a blanket stdlib rule cannot be stated.
 //
-// The name test guards the path test: asked twice per file (the declaration sweep and the real
-// parse), the basename compare underneath allocates nothing and is false for every file in any real
-// program, so the expensive path resolve + `FilePath.equals` beneath it runs only for
-// `Builtins.maxon` and nothing else. That basename compare is a PREFILTER and not the answer: a
-// user's own `src/Builtins.maxon` passes it and is then refused by the path compare.
+// **Under `runtime/` it is CONTAINMENT.** Every file of that tier is the compiler's bridge — the tier
+// exists so the runtime the compiler emits into every program is source it READS rather than IR it
+// builds — and the reserved prefix is that tier's own name space, not a licence two of its files hold.
+// So the question is the DIRECTORY, and a runtime file added tomorrow is exempt without a list to
+// extend.
 //
-// One entry per module, each asked through the same two-step test, so a second exempt module costs
-// one more basename byte-scan per file and no second path probe.
-function declaresCompilerInternalNames(project Project, path FilePath) returns bool
-	return declaresReservedNamesAs(project, path: path, relative: CompilerInternalDeclaringModule) or declaresReservedNamesAs(project, path: path, relative: TestReportDeclaringModule)
+// The containment answer ARRIVES as a parameter, because the caller needs the same bit for the parser's
+// own tier field and two probes of one path are two chances to classify one file two ways inside one
+// compile. Each identity test below it is guarded by a basename compare: asked twice per file (the
+// declaration sweep and the real parse), that compare allocates nothing and is false for every file in
+// any real program, so the path resolve + `FilePath.equals` beneath it runs only for a file actually
+// SPELLED `Builtins.maxon` or `Testing.maxon`. The prefilter is not the answer — a user's own
+// `src/Builtins.maxon` passes it and is then refused by the path compare.
+//
+// ⚠ None of the three is `isStdlibSourceFile`'s answer: that function decides VISIBILITY and
+// deliberately hands a project rooted under `stdlib/` its own files back as the user's. Both sides are
+// resolved before comparing, because `FilePath.equals` and `FilePath.isInside` compare SPELLINGS.
+function declaresCompilerInternalNames(project Project, path FilePath, isRuntimeSource bool) returns bool
+	return isRuntimeSource or declaresReservedNamesAs(project, path: path, relative: CompilerInternalDeclaringModule) or declaresReservedNamesAs(project, path: path, relative: TestReportDeclaringModule)
 end 'declaresCompilerInternalNames'
 
 function declaresReservedNamesAs(project Project, path FilePath, relative String) returns bool
@@ -1392,22 +1481,37 @@ end 'compilerMintedNamesIn'
 // deliberately fetch them outside their phase probe, so that a `signatures` or `parse` phase never
 // absorbs the lexing it depends on.
 function fileReader(project Project, signatures ProgramSignatures, path FilePath, tokens TokenArray, isStdlibSource bool, buildsBodies bool) returns Parser
-	return Parser.create(tokens, filePath: path, namespace: signatures.namespaceOf(path), signatures: signatures, isStdlibSource: isStdlibSource, declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path), compilerMintedNames: compilerMintedNamesIn(project, path: path), livesUnderStdlibDirectory: livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSource), buildsBodies: buildsBodies, capturesDebugLocals: project.debugInfo, instrumentsCoverage: project.coverage)
+	// Probed ONCE and handed to both readers: the tier bit the parser carries and the declaration
+	// exemption derived from it. Two probes would be two chances to classify one file two ways inside
+	// one compile, which is the drift this routine exists to prevent.
+	let isRuntimeSource = isRuntimeSourceFile(project, path: path)
+
+	return Parser.create(tokens, filePath: path, namespace: signatures.namespaceOf(path), signatures: signatures, isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource, declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path, isRuntimeSource: isRuntimeSource), compilerMintedNames: compilerMintedNamesIn(project, path: path), livesUnderStdlibDirectory: livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSource), buildsBodies: buildsBodies, capturesDebugLocals: project.debugInfo, instrumentsCoverage: project.coverage)
 end 'fileReader'
 
-// A user file's bodies are always built — its bodies are the program, and a diagnostic in unreached
-// user code is still the user's bug. A stdlib file does once any function it declares has been
-// reached, and then builds all of them; see `BuildsBodies` for why the unit is the file.
+// ⭐⭐ **THREE STATES, AND ONLY `stdlib/` IS THE LAZY ONE.**
+//
+// A USER file's bodies are always built — its bodies are the program, and a diagnostic in unreached user
+// code is still the user's bug. A `stdlib/` file builds once any function it declares has been reached,
+// and then builds all of them; see `BuildsBodies` for why the unit is the file, and why the demand
+// cannot be asked per function.
+//
+// ⛔⛔ **A `runtime/` FILE IS ALWAYS BUILT, AND A DEMAND-DRIVEN ANSWER THERE IS NOT MERELY CONSERVATIVE —
+// IT IS ALWAYS EMPTY.** The demand is discovered from SOURCE CALL SITES: a library file earns its bodies
+// once some reached function calls into it. Nothing in any source file ever calls a runtime entry — the
+// compiler reaches one BY NAME, which is the tier's defining property — so the demand for a runtime file
+// can never grow, every one of its bodies would be skipped, and each would ship as the bare `retVoid`
+// `Parser.skipUnreachedFunctionBody` leaves behind. A silent wrong answer, not a missing feature.
 //
 // ⚠ It is a SET LOOKUP and reads no artifact, which is what lets `queryAllModule` drop the parse
 // memos between rounds: `growStdlibBodyDemand` records the answer while the artifacts still exist,
 // and this reads it back after they are gone.
 function buildsBodiesFor(project Project, path FilePath, isStdlibSource bool) returns bool
-	if not isStdlibSource 'theUsersOwnCode'
+	if not isStdlibSource 'notTheLazyTier'
 		return true
-	end 'theUsersOwnCode'
+	end 'notTheLazyTier'
 
-	return project.db.demandedStdlibBodyFiles.contains(path)
+	return project.db.demandedLibraryBodyFiles.contains(path)
 end 'buildsBodiesFor'
 
 // Clear the registries that `mergeArtifact` rebuilds from artifacts, so a queryAllModule miss
@@ -1959,6 +2063,15 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// that wears no prefix at all. Both clauses forbid a DECLARATION as well as a call, so neither
 		// reading sends the author off to define the function.
 		unknownCompilerIntrinsic(callee, reason, line, column) then reportPositioned(project, code: ErrorCode.callUnknownFunction, message: unknownReservedCalleeMessage(callee, reason: reason), line: line, column: column, filePath: path)
+
+		// ⭐ The three rules that hold only inside `runtime/`. The first says the name IS defined and this
+		// file may not reach it — deliberately not the "undefined function" wording above, which would send
+		// the author looking for a typo. The second names the BINDING and its type, because both halves are
+		// what has to change. The third says which of `public`/`export` is wrong, since only one is.
+		rawIntrinsicOutsideRuntimeTier(callee, line, column) then reportPositioned(project, code: ErrorCode.rawIntrinsicOutsideRuntimeTier, message: "call to '{callee}' from outside the runtime source tier: '__Raw' names a raw runtime intrinsic, callable only from a source file under runtime/", line: line, column: column, filePath: path)
+		managedValueInRuntimeSource(name, typeName, line, column) then reportPositioned(project, code: ErrorCode.managedValueInRuntimeSource, message: "'{name}' has managed type '{typeName}': a runtime source file may not name a managed value, because the reference-counting pass would emit calls into the very runtime this tier defines", line: line, column: column, filePath: path)
+		wideVisibilityInRuntimeSource(keyword, line, column) then reportPositioned(project, code: ErrorCode.wideVisibilityInRuntimeSource, message: "{visibilityModifierSpelling(keyword)} is not allowed in a runtime source file: runtime/ is loaded into every program, so a declaration visible outside the tier contests names with the programs it is linked into — the compiler compiling itself among them; 'module' is the widest visibility the tier's own file-to-file sharing needs", line: line, column: column, filePath: path)
+		managedTypeInRuntimeSource(typeName, line, column) then reportPositioned(project, code: ErrorCode.managedValueInRuntimeSource, message: "managed type '{typeName}' is not allowed in a runtime source file: the reference-counting pass would emit calls into the very runtime this tier defines", line: line, column: column, filePath: path)
 
 		// Omits the `growFilled`/`truncate` suggestions: The compiler synthesizes neither method, so naming them
 		// would send the reader to something that is not there.

@@ -68,13 +68,16 @@ let RunWorkingSubdirName = "temp"
 // normalized to `<fragment>`), so the committed x64 fragments are byte-unchanged.
 let MultiFileSourceDirSuffix = ".src"
 
-// A `// --- stdlib-overlay:` case's private checkout hangs off `<tempDir>/<name>.stdlib`, a SIBLING of
-// the `.src` directory and never a child of it: `Compiler.collectMaxonSources` recurses into every
-// subdirectory of what it is pointed at, so a copy of the whole stdlib placed under `.src` would be
-// compiled INTO the test's own program. It is a sibling of `exeBase` too, for `MultiFileSourceDirSuffix`'s
-// reason — a distinct suffix is what keeps the source, the exe and this from landing on one path on a
-// host whose `executableExtension` is empty.
-let StdlibOverlayDirSuffix = ".stdlib"
+// A case's private SOURCE TIERS hang off `<tempDir>/<name>.tiers`, which holds a `stdlib/` and a
+// `runtime/` side by side. It is a SIBLING of the `.src` directory and never a child of it:
+// `Compiler.collectMaxonSources` recurses into every subdirectory of what it is pointed at, so a copy of
+// a whole tier placed under `.src` would be compiled INTO the test's own program. It is a sibling of
+// `exeBase` too, for `MultiFileSourceDirSuffix`'s reason — a distinct suffix is what keeps the source,
+// the exe and this from landing on one path on a host whose `executableExtension` is empty.
+//
+// ⭐ **THE TWO TIERS SHARE ONE ROOT BECAUSE THE COMPILER REACHES `runtime/` AS `stdlib/`'s SIBLING.** A
+// staged runtime anywhere else is a directory nothing loads.
+let StagedTierRootSuffix = ".tiers"
 
 let DraftStatus = "draft"
 
@@ -2088,18 +2091,28 @@ type StagedTest
 	// `locateStdlibDir()` itself and hands the answer on, so the harness knows the directory it is
 	// about and does not have to infer it back out of a compile it did not watch.
 	//
-	// For a `// --- stdlib-overlay:` case this is the test's PRIVATE copy (see `stageStdlibOverlay`).
-	// It rides on the staging rather than being threaded from the caller because the overlay is what
-	// chooses it, and staging is where the overlay happens: a caller that passed its own would
-	// silently compile against the checkout's `stdlib/` and the case would report on a program that
-	// was never staged.
+	// For a case that stages its own tiers this is the test's PRIVATE copy (see `stageSourceTiers`).
+	// It rides on the staging rather than being threaded from the caller because the sections are what
+	// choose it, and staging is where they are applied: a caller that passed its own would silently
+	// compile against the checkout's `stdlib/` and the case would report on a program that was never
+	// staged.
 	export let stdlibDir as String
+
+	// ⭐⭐ **WHICH `runtime/` THIS TEST COMPILES AGAINST — `stdlibDir`'s twin, and it does the same two
+	// jobs.** It is handed to `Compiler.compileToProduct` as `runtimeDirOverride`, AND it is the root
+	// `normalizeCompilerOutput` rewrites out of a diagnostic raised inside the tier, so a refusal in a
+	// staged runtime file renders a path a golden can carry.
+	//
+	// ⚠ **IT IS ALWAYS EXPLICIT AND ALWAYS `stdlibDir`'s SIBLING**, for `stdlibDir`'s reason and one
+	// more of its own: the compiler reaches the tier as the library's sibling, so a pair that disagreed
+	// would compile one case's stdlib against another's runtime.
+	export let runtimeDir as String
 
 	// What was written, so it can be removed afterwards.
 	export let writtenFiles as FilePathArray
 
-	static function create(buildTargets MaxonSourcePathArray, stdlibDir String, paths FragmentPathMappingArray, writtenFiles FilePathArray) returns StagedTest
-		return Self{buildTargets: buildTargets, paths: paths, stdlibDir: stdlibDir, writtenFiles: writtenFiles}
+	static function create(buildTargets MaxonSourcePathArray, stdlibDir String, runtimeDir String, paths FragmentPathMappingArray, writtenFiles FilePathArray) returns StagedTest
+		return Self{buildTargets: buildTargets, paths: paths, stdlibDir: stdlibDir, runtimeDir: runtimeDir, writtenFiles: writtenFiles}
 	end 'create'
 end 'StagedTest'
 
@@ -2279,7 +2292,7 @@ function compileOneTest(test SpecTest, staged StagedTest, exeBase FilePath, exeP
 	// no printer for a name to reach. An `<!-- AsyncTrace -->` case and a capture case each ask for
 	// their producer per CASE, so no other case pays for it and an untraced program is byte-for-byte
 	// what it was.
-	let product = try compileToProduct(staged.buildTargets, target: effectiveTarget, outputOverride: exeBase.toString(), emitIr: pinnable, runtimeIrNames: test.runtimeNames, asyncTrace: test.asyncTrace, debugStream: traceCaptureMode(test), debugInfo: test.debugInfo, stdlibDirOverride: staged.stdlibDir) otherwise (e) 'compileFailed'
+	let product = try compileToProduct(staged.buildTargets, target: effectiveTarget, outputOverride: exeBase.toString(), emitIr: pinnable, runtimeIrNames: test.runtimeNames, asyncTrace: test.asyncTrace, debugStream: traceCaptureMode(test), debugInfo: test.debugInfo, stdlibDirOverride: staged.stdlibDir, runtimeDirOverride: staged.runtimeDir) otherwise (e) 'compileFailed'
 		reportCompileError(e)
 		return CompiledTest.create(test, staged: staged, compile: CompileAnswer.create(compileVerdictOf(e), diagnostics: endDiagnosticCapture()), cpu: CompileCpu.unreported, irText: MissingIrPlaceholder, exePath: exePath)
 	end 'compileFailed'
@@ -2305,7 +2318,8 @@ function compileVerdictOf(e CompileError) returns CompileVerdict
 			noSourceFiles or
 			readError or
 			noCommonRoot or
-			stdlibNotFound gives CompileVerdict.driverFailed
+			stdlibNotFound or
+			runtimeNotFound gives CompileVerdict.driverFailed
 	end 'arm'
 end 'compileVerdictOf'
 
@@ -2895,8 +2909,16 @@ function stageTest(tempDir FilePath, test SpecTest) returns StagingResult
 	buildTargets.push(fragmentPath)
 
 	let stdlibDir = try locateStdlibDir() otherwise return StagingResult.failed(missingStdlibReason())
-	return StagingResult.staged(StagedTest.create(buildTargets, stdlibDir: stdlibDir.toString(), paths: paths, writtenFiles: written))
+	let runtimeDir = try runtimeDirBeside(stdlibDir) otherwise return StagingResult.failed(missingRuntimeReason())
+	return StagingResult.staged(StagedTest.create(buildTargets, stdlibDir: stdlibDir.toString(), runtimeDir: runtimeDir.toString(), paths: paths, writtenFiles: written))
 end 'stageTest'
+
+// Why staging stopped when the runtime tier could not be derived. `missingStdlibReason`'s twin, for that
+// function's stated reason: both staging shapes report it and the sentence has to say the same thing in
+// both.
+function missingRuntimeReason() returns String
+	return "no runtime source tier beside the located {StdlibDirName}/, so a diagnostic raised inside it could not be rewritten to a portable path"
+end 'missingRuntimeReason'
 
 // A MULTI-file test: one directory, one file per `// --- file:` section, compiled as a project — and
 // the build NAMES those files, in the order the case declared them, ahead of the directory itself.
@@ -2929,7 +2951,7 @@ function stageSourceFiles(tempDir FilePath, test SpecTest) returns StagingResult
 	var paths = FragmentPathMappingArray.create()
 	var written = FilePathArray.create()
 
-	// Separate from `written` on purpose: an overlay appends its own files to that list below, and a
+	// Separate from `written` on purpose: tier staging appends its own files to that list below, and a
 	// case's private stdlib is not one of the units the program is built FROM. `staged` is separate
 	// from BOTH: it is every file the case declared, before `compilationUnitsAmong` decides which of
 	// them are part of the program.
@@ -2960,28 +2982,35 @@ function stageSourceFiles(tempDir FilePath, test SpecTest) returns StagingResult
 
 	var buildTargets = compilationUnitsAmong(staged)
 
-	// The checkout's own library, located exactly as a compile with no override would locate it — and
-	// the SOURCE an overlay case's private copy is made from.
+	// The checkout's own tiers, located exactly as a compile with no override would locate them — and
+	// the SOURCE a case's private copies are made from.
 	let checkoutStdlib = try locateStdlibDir() otherwise return StagingResult.failed(missingStdlibReason())
+	let checkoutRuntime = try runtimeDirBeside(checkoutStdlib) otherwise return StagingResult.failed(missingRuntimeReason())
 
-	// A STRING from here on, because that is what it is FOR: it is handed to `compileToProduct` as
-	// `stdlibDirOverride` and read by `normalizeCompilerOutput` as the root to rewrite out of a
-	// diagnostic, and both take the spelling rather than the path.
+	// STRINGS from here on, because that is what they are FOR: they are handed to `compileToProduct` as
+	// `stdlibDirOverride` and `runtimeDirOverride` and read by `normalizeCompilerOutput` as the roots to
+	// rewrite out of a diagnostic, and all of those take the spelling rather than the path.
 	var stdlibDir = checkoutStdlib.toString()
+	var runtimeDir = checkoutRuntime.toString()
 
-	if test.stdlibOverlays.count() > 0 'hasStdlibOverlay'
-		let overlayStdlib = try stageStdlibOverlay(tempDir, test: test, sourceStdlib: checkoutStdlib, paths: paths, written: written) otherwise (e) 'overlayFailed'
-			return StagingResult.failed(overlayErrorText(e))
-		end 'overlayFailed'
+	// ⭐ **EITHER MARKER STAGES BOTH TIERS.** The compiler reaches `runtime/` as `stdlib/`'s sibling, so
+	// a private copy of one tier without the other leaves the compile pointed at a root holding half of
+	// what it loads — a `stdlib-overlay:` case with no staged `runtime/` beside it has no runtime tier at
+	// all, and a `runtime-file:` case with no staged `stdlib/` has nothing to be a sibling OF.
+	if test.stdlibOverlays.count() > 0 or test.runtimeFiles.count() > 0 'stagesItsOwnTiers'
+		let tiers = try stageSourceTiers(tempDir, test: test, sourceStdlib: checkoutStdlib, sourceRuntime: checkoutRuntime, paths: paths, written: written) otherwise (e) 'tierStagingFailed'
+			return StagingResult.failed(tierStagingErrorText(e))
+		end 'tierStagingFailed'
 
-		stdlibDir = overlayStdlib.toString()
-	end 'hasStdlibOverlay'
+		stdlibDir = tiers.stdlibDir
+		runtimeDir = tiers.runtimeDir
+	end 'stagesItsOwnTiers'
 
 	// LAST, so every file above is registered before the walk reaches it and the walk finds nothing
 	// new — the directory is here to fix the project ROOT, not to contribute a unit.
 	buildTargets.push(testDir)
 
-	return StagingResult.staged(StagedTest.create(buildTargets, stdlibDir: stdlibDir, paths: paths, writtenFiles: written))
+	return StagingResult.staged(StagedTest.create(buildTargets, stdlibDir: stdlibDir, runtimeDir: runtimeDir, paths: paths, writtenFiles: written))
 end 'stageSourceFiles'
 
 // ⭐⭐ **WHICH OF THE STAGED FILES BELONG TO THE PROGRAM — ASKED WITH THE COMPILER'S OWN PREDICATE,
@@ -3034,24 +3063,41 @@ function missingStdlibReason() returns String
 	return "no {StdlibDirName}/ above this executable, so a diagnostic raised inside the library could not be rewritten to a portable path"
 end 'missingStdlibReason'
 
-// Why a `// --- stdlib-overlay:` case could not be staged. A one-arm union implementing `Error` — the
-// shape `ScaleError` already uses next door — so the staging steps below read as a `try` chain and every
-// failure carries its own sentence rather than a boolean the caller has to explain.
-union OverlayError implements Error
+// Why a case that stages its own source tiers could not be staged. A one-arm union implementing `Error`
+// — the shape `ScaleError` already uses next door — so the staging steps below read as a `try` chain and
+// every failure carries its own sentence rather than a boolean the caller has to explain.
+union TierStagingError implements Error
 	refused(reason String)
-end 'OverlayError'
+end 'TierStagingError'
 
 // The sentence a refusal carries, for the one caller that turns it back into a `StagingResult`.
 // `scaleErrorText`'s shape, for the same reason: a union arm is how the reason travels, and unwrapping
 // it belongs at the boundary rather than at every `throw`.
-function overlayErrorText(error OverlayError) returns String
+function tierStagingErrorText(error TierStagingError) returns String
 	return match error 'e'
 		refused(reason) gives reason
 	end 'e'
-end 'overlayErrorText'
+end 'tierStagingErrorText'
 
-// ⭐⭐ **A CASE'S PRIVATE STDLIB — the fixture that makes `<stdlibDir>/Builtins.maxon`'s OWN rules
-// testable, and the reason it has to exist rather than being a spec someone forgot to write.**
+// Where a case's private `stdlib/` and `runtime/` were staged. A pair, because they are chosen together
+// and the compile is told both: returning one and re-deriving the other is how the two would come to
+// name different roots.
+type StagedSourceTiers
+	export let stdlibDir as String
+	export let runtimeDir as String
+
+	static function create(stdlibDir String, runtimeDir String) returns StagedSourceTiers
+		return Self{stdlibDir: stdlibDir, runtimeDir: runtimeDir}
+	end 'create'
+end 'StagedSourceTiers'
+
+// The files under a tier that the compiler does NOT load, keyed by the path spelling the walk hands
+// back. EMPTY for a tier every file of which is loaded — the literal count of such files, not a sentinel.
+typealias UnloadedPathSet = Set with String
+
+// ⭐⭐ **A CASE'S PRIVATE SOURCE TIERS — the fixture that makes `<stdlibDir>/Builtins.maxon`'s OWN rules
+// and the `runtime/` tier's privileges testable, and the reason it has to exist rather than being a spec
+// someone forgot to write.**
 //
 // Three of the compiler's refusals can only be reached by a DECLARATION carrying the reserved `__`
 // prefix, and exactly one file in a compile may write one — `<stdlibDir>/Builtins.maxon`, matched by
@@ -3075,76 +3121,163 @@ end 'overlayErrorText'
 // ignored override would show up as eleven reds and not as a silent pass.
 //
 // ⚠ **ISOLATION, in a suite that runs a POOL of workers over ONE tree** (`defaultWorkerCount()` of
-// them, which asks the machine rather than naming a number). The overlay root is
-// `<tempDir>/<test.name>.stdlib`, and every term of that is already private: `tempDir` is per SPEC
+// them, which asks the machine rather than naming a number). The tier root is
+// `<tempDir>/<test.name>.tiers`, and every term of that is already private: `tempDir` is per SPEC
 // (`specTempDirFor`), one worker owns a spec for its whole duration, and a spec's tests run strictly
 // sequentially inside it. Two cases cannot share the path even in one spec, because the test's own name
 // is in it. It is PURGED before it is written for `stageSourceFiles`' reason — a file a killed run left
 // behind would otherwise join a later compile — and every byte it writes is recorded in `written`, so
 // `cleanup` removes it.
 //
-// `sourceStdlib` is the checkout's own library, located ONCE by the caller: it is both what this copies
-// from and what a case with no overlay compiles against, and asking for it twice would be two answers
-// to one question.
-function stageStdlibOverlay(tempDir FilePath, test SpecTest, sourceStdlib FilePath, paths FragmentPathMappingArray, written FilePathArray) returns FilePath throws OverlayError
-	let overlayRoot = tempDir.join("{test.name}{StdlibOverlayDirSuffix}")
+// `sourceStdlib` and `sourceRuntime` are the checkout's own tiers, located ONCE by the caller: they are
+// both what this copies from and what a case with no sections compiles against, and asking for them
+// twice would be two answers to one question.
+//
+// ⭐ **THE RUNTIME SECTIONS ARE WRITTEN AFTER THE TIER IS COPIED**, because the refusal that stops one
+// from clobbering a real runtime module asks whether the file is already there.
+function stageSourceTiers(tempDir FilePath, test SpecTest, sourceStdlib FilePath, sourceRuntime FilePath, paths FragmentPathMappingArray, written FilePathArray) returns StagedSourceTiers throws TierStagingError
+	let tierRoot = tempDir.join("{test.name}{StagedTierRootSuffix}")
 
-	if not Directory.create(overlayRoot) 'noRoot'
-		throw OverlayError.refused("could not create stdlib-overlay directory {overlayRoot.toString()}")
+	if not Directory.create(tierRoot) 'noRoot'
+		throw TierStagingError.refused("could not create source-tier directory {tierRoot.toString()}")
 	end 'noRoot'
 
-	purgeFilesIn(overlayRoot)
+	purgeFilesIn(tierRoot)
 
 	// Interpolated so the argument is a committed `String` — see `specTempRootDir` for why a bare
 	// module-`let` constant is ambiguous between `join`'s two overloads.
-	let stagedStdlib = overlayRoot.join("{StdlibDirName}")
-	try copyStdlibSources(sourceStdlib, into: stagedStdlib, written: written)
+	let stagedStdlib = tierRoot.join("{StdlibDirName}")
+	let stagedRuntime = try runtimeDirBeside(stagedStdlib) otherwise throw TierStagingError.refused("could not derive the staged runtime tier beside {stagedStdlib.toString()}")
+
+	var unloadedInStdlib = UnloadedPathSet.create()
+	unloadedInStdlib.insert(supersededRuntimeModulePath(sourceStdlib).toString())
+
+	try copySourceTier(sourceStdlib, into: stagedStdlib, written: written, notLoaded: unloadedInStdlib)
+	try copySourceTier(sourceRuntime, into: stagedRuntime, written: written, notLoaded: UnloadedPathSet.create())
 	try applyOverlaySections(test, stagedStdlib: stagedStdlib, sourceStdlib: sourceStdlib, paths: paths)
+	try writeRuntimeFileSections(test, stagedRuntime: stagedRuntime, sourceRuntime: sourceRuntime, paths: paths, written: written)
 
-	return stagedStdlib
-end 'stageStdlibOverlay'
+	return StagedSourceTiers.create(stagedStdlib.toString(), runtimeDir: stagedRuntime.toString())
+end 'stageSourceTiers'
 
-// Copy every file the compiler would LOAD from `from` into `into`, preserving the tree.
+// Copy every file the compiler would LOAD from `from` into `into`, preserving the tree. ONE routine for
+// both tiers: "stage a private copy of a directory the compiler loads" is one operation, and two copies
+// of it would be free to drift on what a source is or on where the tree lands.
 //
 // ⚠ **THE SET OF FILES IS ASKED OF `Compiler.collectMaxonSources`, WHICH IS THE COMPILER'S OWN ANSWER
 // TO "WHAT IS A SOURCE UNDER A DIRECTORY?"** A copy built from a second rule here — every `.maxon`,
 // say — would drift the day that walk grows a clause (it has since grown one, `.maxonignore`, and this
-// copy inherited it for free), and the drift would show up as a case compiling against a library
-// subtly unlike the one the same compiler loads everywhere else.
-function copyStdlibSources(from FilePath, into FilePath, written FilePathArray) throws OverlayError
+// copy inherited it for free), and the drift would show up as a case compiling against a tier subtly
+// unlike the one the same compiler loads everywhere else.
+//
+// ⚠ **STAGE WHAT THE COMPILER LOADS, NOT WHAT THE WALK FINDS, AND THE DIFFERENCE IS THE TIER'S OWN** —
+// which is why `notLoaded` is the caller's to supply. The two guards below cannot tell the sets apart on
+// their own: `applyOverlaySections` refuses an overlay naming "not a file the compiler loads from
+// <stdlib>" and `writeRuntimeFileSections` refuses a name that IS one, and both enforce that by asking
+// whether the name is in THIS copy. A file copied here but not loaded by the compiler passes the first
+// and trips the second, either way delivering an answer about a file nothing reads.
+function copySourceTier(from FilePath, into FilePath, written FilePathArray, notLoaded UnloadedPathSet) throws TierStagingError
 	var sources = MaxonSourcePathArray.create()
-	_ = try collectMaxonSources(from, into: sources) otherwise throw OverlayError.refused("could not walk {from.toString()} to copy it for a '{StdlibOverlayMarker}' case")
-
-	// ⚠ **STAGE WHAT THE COMPILER LOADS, NOT WHAT THE WALK FINDS — the two differ by exactly one file, and
-	// the overlay guard below cannot tell them apart on its own.** That guard refuses an overlay naming
-	// "not a file the compiler loads from <stdlib>", and it enforces that by asking whether the name is in
-	// THIS copy. So any file copied here but not loaded by the compiler passes the guard, overlays a file
-	// nothing reads, and delivers precisely the outcome the refusal exists to prevent: a case that passes
-	// having tested nothing. Skipping it here makes the guard's question and its message the same question
-	// again. Asked of the loader (`StdlibLoader.supersededRuntimeModulePath`) rather than spelled out — the
-	// name of the excluded module is the loader's to know, and a second copy of it here is the drift this
-	// whole rung deleted 2,200 lines to be rid of. Hoisted, one `join` per staging.
-	let supersededByTheCompilersOwnRuntime = supersededRuntimeModulePath(from)
+	_ = try collectMaxonSources(from, into: sources) otherwise throw TierStagingError.refused("could not walk {from.toString()} to stage a private copy of it")
 
 	for source in sources 'eachSource'
-		if source.equals(supersededByTheCompilersOwnRuntime) 'notLoadedSoNotStaged'
+		if notLoaded.contains(source.toString()) 'notLoadedSoNotStaged'
 			continue
 		end 'notLoadedSoNotStaged'
 
-		let relative = try source.relativeTo(from) otherwise throw OverlayError.refused("{source.toString()} is not under {from.toString()}, though that walk is what found it")
+		let relative = try source.relativeTo(from) otherwise throw TierStagingError.refused("{source.toString()} is not under {from.toString()}, though that walk is what found it")
 
 		let destination = into.join(relative)
-		let parent = try destination.parent() otherwise throw OverlayError.refused("could not derive a directory for {destination.toString()}")
+		let parent = try destination.parent() otherwise throw TierStagingError.refused("could not derive a directory for {destination.toString()}")
 
 		if not Directory.create(parent) 'noSubdir'
-			throw OverlayError.refused("could not create directory {parent.toString()}")
+			throw TierStagingError.refused("could not create directory {parent.toString()}")
 		end 'noSubdir'
 
-		let content = try File.readText(source) otherwise throw OverlayError.refused("could not read {source.toString()}")
-		try File.writeText(destination, content: content) otherwise throw OverlayError.refused("could not write {destination.toString()}")
+		let content = try File.readText(source) otherwise throw TierStagingError.refused("could not read {source.toString()}")
+		try File.writeText(destination, content: content) otherwise throw TierStagingError.refused("could not write {destination.toString()}")
 		written.push(destination)
 	end 'eachSource'
-end 'copyStdlibSources'
+end 'copySourceTier'
+
+// The phrases a staged-section refusal carries beyond the name the spec wrote: which marker it is, what
+// the tier root is called in a sentence, and what a second section naming one file would do to the first.
+// These sentences are what a spec author reads when the harness refuses, so each marker's wording sits in
+// one place.
+type StagedSectionWording
+	export let marker as String
+	export let stagedRoot as String
+	export let collision as String
+
+	static function runtimeFile() returns StagedSectionWording
+		return Self{marker: RuntimeFileMarker, stagedRoot: "runtime tier", collision: "overwrite the first"}
+	end 'runtimeFile'
+
+	static function stdlibOverlay() returns StagedSectionWording
+		return Self{marker: StdlibOverlayMarker, stagedRoot: "{StdlibDirName}/", collision: "be written above the first"}
+	end 'stdlibOverlay'
+end 'StagedSectionWording'
+
+// Where the section named `name` lands in the tier rooted at `root` — the walk a `// --- stdlib-overlay:`
+// and a `// --- runtime-file:` section share: refuse a name that escapes the staged tier, normalize its
+// separators, refuse a name a section already claimed, and join it onto the root.
+//
+// ⛔ **THE EXISTENCE POLARITY IS NOT HERE, AND THAT IS THE POINT.** An overlay requires the destination to
+// BE a module of the tier and a runtime file requires it NOT to be; one door answering both would have to
+// carry a flag deciding which, and the two call sites each state their own rule beside their own write.
+function stagedSectionDestination(wording StagedSectionWording, name String, root FilePath, seen StagedSectionNameSet) returns FilePath throws TierStagingError
+	if not isSafeRelativeName(name) 'unsafeName'
+		throw TierStagingError.refused("'{wording.marker}' names '{name}': a '.' or '..' segment escapes the staged {wording.stagedRoot}")
+	end 'unsafeName'
+
+	// Compared in the corpus's own forward-slash spelling for `sourceDirPrefixOf`'s reason: which
+	// separator a spec wrote is not a claim about the host that runs it.
+	let key = name.replace(WindowsPathSeparator, with: PathSeparator)
+
+	if seen.contains(key) 'namedTwice'
+		throw TierStagingError.refused("two '{wording.marker}' sections both name '{name}'. The second would {wording.collision}, so neither section's line numbers would be the ones its expectation was written against — merge them into one section")
+	end 'namedTwice'
+
+	seen.insert(key)
+
+	let relative = try FilePath.from(key) otherwise throw TierStagingError.refused("'{wording.marker}' names '{name}', which is not a valid relative path")
+
+	return root.join(relative)
+end 'stagedSectionDestination'
+
+// Write each `// --- runtime-file:` section as a NEW file in the staged `runtime/`, and record where the
+// compiler's diagnostics about it map back to.
+//
+// ⭐ **THE SECTION IS THE WHOLE FILE, so its own line 1 is the staged file's line 1** — exactly the
+// relation a `// --- file:` section's staged file has, and the same one `applyOverlaySections` buys by
+// writing at the top. ONE `mergedLineOffset` rule therefore covers all three.
+//
+// ⛔ **A NAME THAT IS ALREADY A MODULE OF THE TIER IS REFUSED.** Prepending to an existing module is what
+// `// --- stdlib-overlay:` does, and this marker does not do it: silently overwriting `runtime/`'s own
+// source would leave the case compiling against a runtime the tier does not have, and every later case in
+// the run reading the refusal it caused.
+function writeRuntimeFileSections(test SpecTest, stagedRuntime FilePath, sourceRuntime FilePath, paths FragmentPathMappingArray, written FilePathArray) throws TierStagingError
+	var created = StagedSectionNameSet.create()
+
+	for section in test.runtimeFiles 'eachRuntimeFile'
+		let destination = try stagedSectionDestination(StagedSectionWording.runtimeFile(), name: section.name, root: stagedRuntime, seen: created)
+
+		if File.exists(destination) 'namesAModuleOfTheTier'
+			throw TierStagingError.refused("'{RuntimeFileMarker}' names '{section.name}', which is already a file the compiler loads from {sourceRuntime.toString()} — this marker CREATES a file in the tier, and prepending to one that exists is what '{StdlibOverlayMarker}' does for {StdlibDirName}/. Name a file the tier does not have")
+		end 'namesAModuleOfTheTier'
+
+		let parent = try destination.parent() otherwise throw TierStagingError.refused("could not derive a directory for {destination.toString()}")
+
+		if not Directory.create(parent) 'noSubdir'
+			throw TierStagingError.refused("could not create directory {parent.toString()}")
+		end 'noSubdir'
+
+		try File.writeText(destination, content: section.source) otherwise throw TierStagingError.refused("could not write the staged {destination.toString()}")
+
+		paths.push(FragmentPathMapping.create(destination.toString(), lineOffset: section.mergedLineOffset, sourceDirPrefix: sourceDirPrefixOf(section.name)))
+		written.push(destination)
+	end 'eachRuntimeFile'
+end 'writeRuntimeFileSections'
 
 // Write each `// --- stdlib-overlay:` section into the copy of the file it names, and record where the
 // compiler's diagnostics about it map back to.
@@ -3159,42 +3292,26 @@ end 'copyStdlibSources'
 //
 // It is legitimate for the compiler because `queryProgramSignatures` sweeps every file's declarations before any
 // file is parsed, so where in a module a declaration sits decides nothing.
-function applyOverlaySections(test SpecTest, stagedStdlib FilePath, sourceStdlib FilePath, paths FragmentPathMappingArray) throws OverlayError
-	var overlaid = OverlaidNameSet.create()
+function applyOverlaySections(test SpecTest, stagedStdlib FilePath, sourceStdlib FilePath, paths FragmentPathMappingArray) throws TierStagingError
+	var overlaid = StagedSectionNameSet.create()
 
 	for overlay in test.stdlibOverlays 'eachOverlay'
-		if not isSafeRelativeName(overlay.name) 'unsafeName'
-			throw OverlayError.refused("'{StdlibOverlayMarker}' names '{overlay.name}': a '.' or '..' segment escapes the staged {StdlibDirName}/")
-		end 'unsafeName'
-
-		// Compared in the corpus's own forward-slash spelling for `sourceDirPrefixOf`'s reason: which
-		// separator a spec wrote is not a claim about the host that runs it.
-		let key = overlay.name.replace(WindowsPathSeparator, with: PathSeparator)
-
-		if overlaid.contains(key) 'namedTwice'
-			throw OverlayError.refused("two '{StdlibOverlayMarker}' sections both name '{overlay.name}'. The second would be written above the first, so neither section's line numbers would be the ones its expectation was written against — merge them into one section")
-		end 'namedTwice'
-
-		overlaid.insert(key)
-
-		let relative = try FilePath.from(key) otherwise throw OverlayError.refused("'{StdlibOverlayMarker}' names '{overlay.name}', which is not a valid relative path")
-
-		let destination = stagedStdlib.join(relative)
+		let destination = try stagedSectionDestination(StagedSectionWording.stdlibOverlay(), name: overlay.name, root: stagedStdlib, seen: overlaid)
 
 		if not File.exists(destination) 'namesNoModule'
-			throw OverlayError.refused("'{StdlibOverlayMarker}' names '{overlay.name}', which is not a file the compiler loads from {sourceStdlib.toString()} — an overlay over a file nothing reads would change nothing and the case would pass having tested nothing")
+			throw TierStagingError.refused("'{StdlibOverlayMarker}' names '{overlay.name}', which is not a file the compiler loads from {sourceStdlib.toString()} — an overlay over a file nothing reads would change nothing and the case would pass having tested nothing")
 		end 'namesNoModule'
 
-		let original = try File.readText(destination) otherwise throw OverlayError.refused("could not read the staged {destination.toString()}")
-		try File.writeText(destination, content: "{overlay.source}\n{original}") otherwise throw OverlayError.refused("could not write the overlaid {destination.toString()}")
+		let original = try File.readText(destination) otherwise throw TierStagingError.refused("could not read the staged {destination.toString()}")
+		try File.writeText(destination, content: "{overlay.source}\n{original}") otherwise throw TierStagingError.refused("could not write the overlaid {destination.toString()}")
 
 		paths.push(FragmentPathMapping.create(destination.toString(), lineOffset: overlay.mergedLineOffset, sourceDirPrefix: sourceDirPrefixOf(overlay.name)))
 	end 'eachOverlay'
 end 'applyOverlaySections'
 
-// The overlay names already written, so a second section naming one file is REFUSED rather than
-// silently stacked on top of the first. A Set because membership is the only question.
-typealias OverlaidNameSet = Set with String
+// The section names already written into a staged tier, so a second section naming one file is REFUSED
+// rather than silently stacked on top of the first. A Set because membership is the only question.
+typealias StagedSectionNameSet = Set with String
 
 // Remove every FILE under `dir`, depth-first. The stdlib has no directory-remove, so empty
 // subdirectories survive — which is harmless: nothing here reads a directory's existence, only its
@@ -3451,7 +3568,7 @@ end 'fragmentExitCodeText'
 // stderr (the ACTUAL diagnostic the compiler produced — what the fragment exists
 // to track — with every compiled file's path and line rewritten onto the fragment).
 function buildErrorFragment(test SpecTest, compile CompileAnswer, staged StagedTest) returns String
-	let normalizedError = normalizeCompilerOutput(compile.diagnostics, paths: staged.paths, stdlibRoot: staged.stdlibDir).trim()
+	let normalizedError = normalizeCompilerOutput(compile.diagnostics, paths: staged.paths, stdlibRoot: staged.stdlibDir, runtimeRoot: staged.runtimeDir).trim()
 	return "{fragmentHeader(test)}{CompilerErrorLabel}\n{normalizedError}\n"
 end 'buildErrorFragment'
 
@@ -3489,7 +3606,7 @@ function checkCompilerError(expectedText String, specName String, testName Strin
 		return TestOutcome.fail("expected a compile error but compilation succeeded")
 	end 'unexpectedSuccess'
 
-	let actual = normalizeCompilerOutput(compile.diagnostics, paths: staged.paths, stdlibRoot: staged.stdlibDir).trim()
+	let actual = normalizeCompilerOutput(compile.diagnostics, paths: staged.paths, stdlibRoot: staged.stdlibDir, runtimeRoot: staged.runtimeDir).trim()
 
 	// The EXPECTED side needs no renumbering: an expectation — ported or authored — already names
 	// the MERGED fragment's lines, because that is the file a reader has in front of them. Only its
@@ -3497,7 +3614,7 @@ function checkCompilerError(expectedText String, specName String, testName Strin
 	// for the reason this whole routine is one function: what "normalized" means may not differ by side,
 	// and an expectation naming a host's absolute checkout is a mistake worth normalizing INTO agreement
 	// rather than one worth passing through so it can fail somewhere else.
-	let expected = normalizeCompilerOutput(expectedText, paths: referencePathMapping(specName, testName: testName), stdlibRoot: staged.stdlibDir).trim()
+	let expected = normalizeCompilerOutput(expectedText, paths: referencePathMapping(specName, testName: testName), stdlibRoot: staged.stdlibDir, runtimeRoot: staged.runtimeDir).trim()
 
 	if actual == expected 'matched'
 		return TestOutcome.pass
@@ -5324,17 +5441,18 @@ end 'writeFragment'
 // is where the line sits in the merged block a reader is looking at. The C# reference does exactly
 // this translation (`TestRunner.RewriteMultiFileErrorPaths`), and a spec expectation is not a claim
 // about where a temp file lived, so neither side of it should decide a test.
-function normalizeCompilerOutput(text String, paths FragmentPathMappingArray, stdlibRoot String) returns String
+function normalizeCompilerOutput(text String, paths FragmentPathMappingArray, stdlibRoot String, runtimeRoot String) returns String
 	var out = text
 
 	for mapping in paths 'eachPath'
 		out = rewriteDiagnosticPaths(out, path: mapping.compiledPath, lineOffset: mapping.lineOffset, token: mapping.replacementToken)
 	end 'eachPath'
 
-	// LAST, and the order is load-bearing: a `// --- stdlib-overlay:` section's file lies UNDER the very
-	// root this rewrites and is also a staged source, so it has to become `<fragment>` above — with the
-	// renumbering its section is owed — before anything general about the library is applied to it.
-	return rewriteStdlibPaths(out, stdlibRoot: stdlibRoot)
+	// LAST, and the order is load-bearing: a `// --- stdlib-overlay:` or `// --- runtime-file:` section's
+	// file lies UNDER the very root its rewrite covers and is also a staged source, so it has to become
+	// `<fragment>` above — with the renumbering its section is owed — before anything general about the
+	// tier is applied to it.
+	return rewriteSourceTierPaths(rewriteSourceTierPaths(out, root: stdlibRoot), root: runtimeRoot)
 end 'normalizeCompilerOutput'
 
 // ⭐⭐ **THE SECOND FILE A DIAGNOSTIC CAN NAME, AND UNTIL ARRH NOTHING COULD PIN IT.** A refusal raised
@@ -5351,21 +5469,31 @@ end 'normalizeCompilerOutput'
 // above it.** That is a real cost, deliberately accepted: it is the same one the four `/specs` cases
 // pinning `Array.maxon:408`'s runtime panic already pay, and the alternative — normalizing the number away
 // — would delete the half of the assertion that says WHICH construct in the library refused.
-function rewriteStdlibPaths(text String, stdlibRoot String) returns String
-	if not text.contains(stdlibRoot) 'namesNoLibraryFile'
-		return text
-	end 'namesNoLibraryFile'
+function rewriteSourceTierPaths(text String, root String) returns String
+	// The token a rewritten path renders under is the root's OWN last segment, read off the root rather
+	// than named beside it: a tier whose directory and whose rendered name could disagree is a golden
+	// pinning a path no checkout has.
+	let dirName = tierDirNameOf(root)
 
-	let pieces = text.split(stdlibRoot)
-	var out = try pieces.get(0) otherwise panic("rewriteStdlibPaths: pieces.get(0) failed on a {pieces.count()}-part split of a text that contains '{stdlibRoot}'")
+	if not text.contains(root) 'namesNoFileOfThisTier'
+		return text
+	end 'namesNoFileOfThisTier'
+
+	let pieces = text.split(root)
+	var out = try pieces.get(0) otherwise panic("rewriteSourceTierPaths: pieces.get(0) failed on a {pieces.count()}-part split of a text that contains '{root}'")
 
 	for i in 1 upto pieces.count() 'eachOccurrence'
-		let tail = try pieces.get(i) otherwise panic("rewriteStdlibPaths: pieces.get({i}) failed on a {pieces.count()}-part split")
-		out = "{out}{StdlibDirName}{portableLibraryTail(tail)}"
+		let tail = try pieces.get(i) otherwise panic("rewriteSourceTierPaths: pieces.get({i}) failed on a {pieces.count()}-part split")
+		out = "{out}{dirName}{portableLibraryTail(tail)}"
 	end 'eachOccurrence'
 
 	return out
-end 'rewriteStdlibPaths'
+end 'rewriteSourceTierPaths'
+
+function tierDirNameOf(root String) returns String
+	let segments = root.replace(WindowsPathSeparator, with: PathSeparator).split(PathSeparator)
+	return try segments.get(segments.count() - 1) otherwise panic("SpecTestRunner.tierDirNameOf: '{root}' split into no segments, though a split with no separator found yields the whole string")
+end 'tierDirNameOf'
 
 // What follows a library root, with the PATH part put in the corpus's own forward-slash spelling and
 // everything from `:<line>:<col>` on left exactly as the compiler wrote it.

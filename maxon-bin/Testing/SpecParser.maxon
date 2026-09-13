@@ -599,14 +599,25 @@ let FragmentHeaderLines = 1 as LineIndex
 // A finding a suite cannot re-run is a check that cannot fail.
 export let StdlibOverlayMarker = "// --- stdlib-overlay:"
 
-// The prefix BOTH section markers share, and therefore the shape a MISSPELLED one has. A line that
-// opens with it and matches neither marker is refused rather than kept as source — without that,
+// ⭐⭐ **THE RUNTIME-FILE MARKER — how a case reaches a rule keyed on the `runtime/` SOURCE TIER.** Its
+// value is a path RELATIVE TO `runtime/`, and the section becomes a NEW file in the runner's private
+// copy of that directory (`SpecTestRunner.writeRuntimeFileSections`).
+//
+// ⚠ **IT CREATES WHERE `StdlibOverlayMarker` OVERLAYS, and the difference is forced by what the two
+// directories hold.** Every rule a `stdlib-overlay:` case reaches is keyed on an EXISTING library file,
+// so that marker refuses a name the compiler does not load. The runtime tier's privileges are keyed on
+// the DIRECTORY, and its real contents are the language runtime — a file no case wants to prepend to —
+// so a name already present there is refused instead, and the section writes a file of its own.
+export let RuntimeFileMarker = "// --- runtime-file:"
+
+// The prefix EVERY section marker shares, and therefore the shape a MISSPELLED one has. A line that
+// opens with it and matches no marker is refused rather than kept as source — without that,
 // `// --- stblib-overlay: Builtins.maxon` is just a comment, the overlay silently never happens, and
 // the case reports PASS for a program that was never staged.
 //
-// It is a third literal rather than a slice of `FileMarker`, because slicing needs a hardcoded length
+// It is its own literal rather than a slice of `FileMarker`, because slicing needs a hardcoded length
 // — a magic number standing in for the very prefix it was meant to stop repeating. What keeps the
-// three in step is a CHECK, not a derivation: `splitSourceSections` refuses to run if either marker
+// markers in step is a CHECK, not a derivation: `splitSourceSections` refuses to run if any of them
 // stops starting with it.
 let SectionMarkerPrefix = "// --- "
 
@@ -889,6 +900,10 @@ export type SpecTest
 	// markers, not a sentinel, exactly as `sourceFiles` is.
 	export let stdlibOverlays as SpecSourceFileArray
 
+	// The `// --- runtime-file:` sections, or EMPTY for every test that compiles against the checkout's
+	// own `runtime/`. Empty is the literal count of runtime-file markers, exactly as `stdlibOverlays` is.
+	export let runtimeFiles as SpecSourceFileArray
+
 	// The `targetToString` forms this test CANNOT run on (an `<!-- unsupported-targets: … -->` marker),
 	// or EMPTY for the ordinary test that runs on every target. The runner SKIPS a test whose list
 	// names the effective target (`SpecTestRunner.markerAllowsTarget`) — the same treatment a draft or
@@ -957,7 +972,7 @@ export type SpecTest
 	// exist with a file list that disagrees with its text.
 	export static function create(name String, source String, expectation SpecExpectation, unsupportedTargets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool, debugInfo bool, traceCapture SpecTraceCapture, network SpecNetwork, procs SpecProcs, stdin SpecStdin) returns SpecTest
 		let sections = splitSourceSections(name, source: source)
-		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, stdin: stdin}
+		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, runtimeFiles: sections.runtimeFiles, unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, stdin: stdin}
 	end 'create'
 
 	// True when this test's block declares `// --- file:` sections — i.e. it compiles as a
@@ -1816,20 +1831,73 @@ function recordTargetQualifiedText(lines StringArray, openIndex LineIndex, openL
 	return block.nextIndex
 end 'recordTargetQualifiedText'
 
-// The two section lists one ```maxon block yields. A record rather than two calls over the same text:
-// the scan is one pass and the two answers come out of the same walk, so a second walk would be a
+// The section lists one ```maxon block yields. A record rather than one call per list over the same
+// text: the scan is one pass and the answers come out of the same walk, so a second walk would be a
 // second thing free to disagree about where a section ends.
 type SpecSourceSections
 	export let files as SpecSourceFileArray
 	export let stdlibOverlays as SpecSourceFileArray
+	export let runtimeFiles as SpecSourceFileArray
 
-	static function create(files SpecSourceFileArray, stdlibOverlays SpecSourceFileArray) returns SpecSourceSections
-		return Self{files: files, stdlibOverlays: stdlibOverlays}
+	static function create(files SpecSourceFileArray, stdlibOverlays SpecSourceFileArray, runtimeFiles SpecSourceFileArray) returns SpecSourceSections
+		return Self{files: files, stdlibOverlays: stdlibOverlays, runtimeFiles: runtimeFiles}
 	end 'create'
 end 'SpecSourceSections'
 
-// Split a ```maxon block into its `// --- file:` and `// --- stdlib-overlay:` sections. BOTH lists are
-// EMPTY when the block has no marker — the ordinary single-file test, which is most of them.
+// Which list a marker line opens a section into. `notAMarker` is not a sentinel: "this line is not a
+// marker" is the ordinary answer for the body lines that are most of a block, and it is the arm the
+// misspelled-marker refusal is asked about.
+enum SpecSectionKind
+	programFile
+	stdlibOverlay
+	runtimeFile
+	notAMarker
+end 'SpecSectionKind'
+
+// ⭐ **THE ONE ENUMERATED SITE.** Recognizing a marker, naming one in a refusal, and the drift guard all
+// read the roster through here, so a fourth section kind is a case here and nothing else to keep in step.
+function sectionMarkerFor(kind SpecSectionKind) returns String
+	return match kind 'marker'
+		programFile gives FileMarker
+		stdlibOverlay gives StdlibOverlayMarker
+		runtimeFile gives RuntimeFileMarker
+		notAMarker panic("SpecParser.sectionMarkerFor: `notAMarker` names no marker — every caller asks only about a kind it took off `sectionKindOpenedBy` answering otherwise")
+	end 'marker'
+end 'sectionMarkerFor'
+
+function sectionKindOpenedBy(line String) returns SpecSectionKind
+	for kind in SpecSectionKind.allCases 'eachKind'
+		if kind == SpecSectionKind.notAMarker 'carriesNoMarker'
+			continue
+		end 'carriesNoMarker'
+
+		if line.startsWith(sectionMarkerFor(kind)) 'opensThisKind'
+			return kind
+		end 'opensThisKind'
+	end 'eachKind'
+
+	return SpecSectionKind.notAMarker
+end 'sectionKindOpenedBy'
+
+// Every marker spelled out, for the refusal that has to tell an author which ones exist.
+function knownSectionMarkerList() returns String
+	var out = ""
+
+	for kind in SpecSectionKind.allCases 'eachKind'
+		if kind == SpecSectionKind.notAMarker 'carriesNoMarker'
+			continue
+		end 'carriesNoMarker'
+
+		let separator = "" if out.isEmpty() else ", "
+		out = "{out}{separator}'{sectionMarkerFor(kind)}'"
+	end 'eachKind'
+
+	return out
+end 'knownSectionMarkerList'
+
+// Split a ```maxon block into its `// --- file:`, `// --- stdlib-overlay:` and `// --- runtime-file:`
+// sections. EVERY list is EMPTY when the block has no marker — the ordinary single-file test, which is
+// most of them.
 //
 // Two things about the split are easy to get subtly different and would silently misreport a
 // diagnostic's line for ever after:
@@ -1840,38 +1908,47 @@ end 'SpecSourceSections'
 //     only property that matters here, and getting it right is what makes a `/specs` expectation
 //     portable byte-for-byte.
 //
-// ⚠ The overlay marker takes the SAME offset arithmetic rather than a second one: an overlay's text
-// is written at the top of the staged
-// copy, so its own line 1 is that file's line 1, which is exactly the relation a `// --- file:`
-// section's staged file already has.
+// ⚠ The other two markers take the SAME offset arithmetic rather than one each: an overlay's text is
+// written at the top of the staged copy and a runtime file's text IS the staged file, so in both cases
+// the section's own line 1 is that file's line 1 — exactly the relation a `// --- file:` section's
+// staged file already has.
 function splitSourceSections(testName String, source String) returns SpecSourceSections
-	if not FileMarker.startsWith(SectionMarkerPrefix) or not StdlibOverlayMarker.startsWith(SectionMarkerPrefix) 'markersDrifted'
-		panic("SpecParser.splitSourceSections: '{FileMarker}' and '{StdlibOverlayMarker}' must both begin with '{SectionMarkerPrefix}', because the misspelled-marker refusal below recognizes a candidate by that prefix alone. One of them was renamed and the guard now admits a shape neither marker has")
-	end 'markersDrifted'
+	for kind in SpecSectionKind.allCases 'eachKind'
+		if kind == SpecSectionKind.notAMarker 'carriesNoMarker'
+			continue
+		end 'carriesNoMarker'
+
+		let marker = sectionMarkerFor(kind)
+
+		if not marker.startsWith(SectionMarkerPrefix) 'markerDrifted'
+			panic("SpecParser.splitSourceSections: the section marker '{marker}' must begin with '{SectionMarkerPrefix}', because the misspelled-marker refusal below recognizes a candidate by that prefix alone. It was renamed, and the guard now admits a shape no marker has")
+		end 'markerDrifted'
+	end 'eachKind'
 
 	var files = SpecSourceFileArray.create()
 	var overlays = SpecSourceFileArray.create()
+	var runtimeFiles = SpecSourceFileArray.create()
 	let lines = source.split("\n")
 	let lineCount = lines.count()
 
 	var name = ""
 	var body = ""
-	var isOverlay = false
+	var kind = SpecSectionKind.notAMarker
 	var haveMarker = false
 	var offset = 0 as LineIndex
 
 	for i in 0 upto lineCount 'eachLine'
 		let line = try lines.get(i) otherwise panic("SpecParser.splitSourceSections: index {i} >= lineCount {lineCount} despite the upto bound")
 
-		let opensFile = line.startsWith(FileMarker)
+		let opened = sectionKindOpenedBy(line)
 
-		if not opensFile and not line.startsWith(StdlibOverlayMarker) 'notAMarker'
-			// ⭐ A line WEARING the marker shape but matching neither is a typo, and the failure mode of
+		if opened == SpecSectionKind.notAMarker 'notAMarker'
+			// ⭐ A line WEARING the marker shape but matching none is a typo, and the failure mode of
 			// letting it through is silence: it becomes a comment inside whichever section precedes it,
 			// the section it meant to open never exists, and the case then reports on a program the
 			// author did not write. Refused where the shape is recognized.
 			if line.startsWith(SectionMarkerPrefix) 'misspelledMarker'
-				panic("SpecParser: test '{testName}' carries the line '{line.trim()}', which has the shape of a section marker but is neither '{FileMarker}' nor '{StdlibOverlayMarker}'. A marker the parser does not recognize is kept as SOURCE, so the section it names is never staged and the case checks a program nobody wrote — fix the spelling, or write the line as ordinary source without the '{SectionMarkerPrefix}' opening")
+				panic("SpecParser: test '{testName}' carries the line '{line.trim()}', which has the shape of a section marker but is none of {knownSectionMarkerList()}. A marker the parser does not recognize is kept as SOURCE, so the section it names is never staged and the case checks a program nobody wrote — fix the spelling, or write the line as ordinary source without the '{SectionMarkerPrefix}' opening")
 			end 'misspelledMarker'
 
 			if haveMarker 'insideASection'
@@ -1882,11 +1959,11 @@ function splitSourceSections(testName String, source String) returns SpecSourceS
 		end 'notAMarker'
 
 		if haveMarker 'flushPrevious'
-			pushSection(files, overlays: overlays, isOverlay: isOverlay, name: name, body: body, offset: offset)
+			pushSection(files, overlays: overlays, runtimeFiles: runtimeFiles, kind: kind, name: name, body: body, offset: offset)
 		end 'flushPrevious'
 
-		isOverlay = not opensFile
-		name = valueAfterKey(line, key: FileMarker if opensFile else StdlibOverlayMarker)
+		kind = opened
+		name = valueAfterKey(line, key: sectionMarkerFor(opened))
 		body = ""
 		haveMarker = true
 
@@ -1899,27 +1976,47 @@ function splitSourceSections(testName String, source String) returns SpecSourceS
 	end 'eachLine'
 
 	if haveMarker 'flushLast'
-		pushSection(files, overlays: overlays, isOverlay: isOverlay, name: name, body: body, offset: offset)
+		pushSection(files, overlays: overlays, runtimeFiles: runtimeFiles, kind: kind, name: name, body: body, offset: offset)
 	end 'flushLast'
 
-	if overlays.count() > 0 and files.count() == 0 'overlayWithoutAFile'
-		panic("SpecParser: test '{testName}' declares a '{StdlibOverlayMarker}' section but no '{FileMarker}' section. An overlay says what the compile's STDLIB is, never what it COMPILES, so there would be no program — and the block's own text cannot stand in for one, since it carries the marker lines themselves. Add the '{FileMarker}' section that holds the program")
-	end 'overlayWithoutAFile'
+	if files.count() == 0 'noProgram'
+		refuseSectionsWithoutAProgram(testName, kind: SpecSectionKind.stdlibOverlay, sections: overlays)
+		refuseSectionsWithoutAProgram(testName, kind: SpecSectionKind.runtimeFile, sections: runtimeFiles)
+	end 'noProgram'
 
-	return SpecSourceSections.create(files, stdlibOverlays: overlays)
+	return SpecSourceSections.create(files, stdlibOverlays: overlays, runtimeFiles: runtimeFiles)
 end 'splitSourceSections'
+
+// A tier section without a `// --- file:` section is a block that stages a compile and gives it nothing
+// to compile. ONE rule for both tier markers, because what each section SAYS is the only part that
+// differs — written twice, a third tier marker would arrive with a third copy of the same sentence.
+function refuseSectionsWithoutAProgram(testName String, kind SpecSectionKind, sections SpecSourceFileArray)
+	if sections.count() == 0 'nothingDeclared'
+		return
+	end 'nothingDeclared'
+
+	let says = match kind 'says'
+		stdlibOverlay gives "An overlay says what the compile's STDLIB is"
+		runtimeFile gives "A runtime file says what the compile's RUNTIME TIER is"
+		programFile panic("SpecParser.refuseSectionsWithoutAProgram: `programFile` IS the program section, so its absence is the condition this is asked under and never its subject")
+		notAMarker panic("SpecParser.refuseSectionsWithoutAProgram: `notAMarker` opens no section, so no list it names could be non-empty")
+	end 'says'
+
+	panic("SpecParser: test '{testName}' declares a '{sectionMarkerFor(kind)}' section but no '{FileMarker}' section. {says}, never what it COMPILES, so there would be no program — and the block's own text cannot stand in for one, since it carries the marker lines themselves. Add the '{FileMarker}' section that holds the program")
+end 'refuseSectionsWithoutAProgram'
 
 // File the section just closed into the list its marker chose. Split out because the scan closes a
 // section in two places — at the next marker and at end of block — and the two must agree about which
 // list, which trimming and which offset a section gets.
-function pushSection(files SpecSourceFileArray, overlays SpecSourceFileArray, isOverlay bool, name String, body String, offset LineIndex)
+function pushSection(files SpecSourceFileArray, overlays SpecSourceFileArray, runtimeFiles SpecSourceFileArray, kind SpecSectionKind, name String, body String, offset LineIndex)
 	let section = SpecSourceFile.create(name, source: body.trim(), mergedLineOffset: offset)
 
-	if isOverlay 'toOverlays'
-		overlays.push(section)
-	end 'toOverlays' else 'toFiles'
-		files.push(section)
-	end 'toFiles'
+	match kind 'toItsList'
+		programFile then files.push(section)
+		stdlibOverlay then overlays.push(section)
+		runtimeFile then runtimeFiles.push(section)
+		notAMarker then panic("SpecParser.pushSection: a section is closed only where a marker opened it, so its kind cannot be `notAMarker`")
+	end 'toItsList'
 end 'pushSection'
 
 // The VALUE of an HTML-comment marker line: the text between the first ": " and the trailing

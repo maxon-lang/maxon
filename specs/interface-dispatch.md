@@ -3030,7 +3030,7 @@ by no `call` anywhere in the module. The Maxon-tier reachability walk that decid
 this compile even BUILDS (`StdlibSource.reachableMaxonFunctionNames`) therefore cannot see them — and
 when a requirement implementation's body calls a stdlib function, that function is filed unreachable
 while dead-function elimination, which DOES follow the relocations, reaches it. The two derivations
-disagree and the compiler PANICS (`requireUnreachableStdlibStayedDead`).
+disagree and the compiler PANICS (`requireUnreachableLibraryStayedDead`).
 
 `print` is why this is pinned and not merely noted. The hole predates `print` becoming an ordinary
 `stdlib/Print.maxon` call — substituting `sleep(1)` panics identically — but *a witness impl that

@@ -175,15 +175,17 @@ banner() {
 if [ "$SKIP_BUILD" = 1 ]; then
 	banner "Build SKIPPED (--skip-build) — verifying the existing binary is not stale"
 
-	assert_fresh "$MAXON" "the compiler" maxon-bin stdlib
+	# `runtime/` is read on every compile, the compiler's own included, so an edit there dates the
+	# binary exactly as one under `stdlib/` does.
+	assert_fresh "$MAXON" "the compiler" maxon-bin stdlib runtime
 
-	echo "The compiler is newer than every source under maxon-bin/ and stdlib/."
+	echo "The compiler is newer than every source under maxon-bin/, stdlib/ and runtime/."
 else
 	banner "Building the compiler"
 
-	# ⛔ THE COMPILER THAT BUILDS THIS TREE MUST LIVE INSIDE IT — `stdlib/` is found by walking up from
-	# the EXECUTABLE, so a `maxon` on PATH would compile this checkout against the RELEASE's library and
-	# succeed. The slot binary first, then the seed; never a PATH lookup.
+	# ⛔ THE COMPILER THAT BUILDS THIS TREE MUST LIVE INSIDE IT — `stdlib/` and its sibling `runtime/` are
+	# found by walking up from the EXECUTABLE, so a `maxon` on PATH would compile this checkout against
+	# the RELEASE's sources and succeed. The slot binary first, then the seed; never a PATH lookup.
 	builder="$(maxon_compiler_path .)"
 	if [ ! -x "$builder" ]; then
 		builder=".bootstrap/maxon$MAXON_EXE_EXT"

@@ -99,6 +99,23 @@ jobs:
             *) echo "::error::expected ${latest#v}, the latest release"; exit 1 ;;
           esac
 
+      # ⛔ EVERY DIRECTORY THE ARCHIVE SHIPS MUST LAND BESIDE THE COMPILER. `stdlib/` and its sibling
+      # `runtime/` are resolved by walking UP from the executable, so one left behind by the install is a
+      # compiler that cannot compile. The archive is asked for the set rather than a list kept here, which
+      # would go stale the next time a tier is added.
+      - name: Every directory in the archive is installed beside the compiler
+        run: |
+          set -euo pipefail
+          latest="$(gh release view --json tagName --jq .tagName)"
+          work="$(mktemp -d)"
+          gh release download "$latest" --pattern "maxon-${latest#v}-${{ matrix.target }}.tar.gz" --dir "$work"
+          tar -tzf "$work"/maxon-*.tar.gz | awk -F/ 'NF >= 3 && $3 != "" { print $2 }' | sort -u > "$work/dirs"
+          cat "$work/dirs"
+          [ -s "$work/dirs" ] || { echo "::error::the archive holds no directories at all"; exit 1; }
+          while read -r dir; do
+            [ -d "$HOME/.maxon/$dir" ] || { echo "::error::$dir/ is in the archive but not in the install"; exit 1; }
+          done < "$work/dirs"
+
       # A new terminal is where the user meets the PATH edit, so the check runs in a new interactive
       # shell of the kind the profile was written for.
       - name: A new ${{ matrix.shell }} finds `maxon` by name
@@ -179,13 +196,15 @@ jobs:
           custom="$(mktemp -d)/maxon"
           MAXON_INSTALL="$custom" sh -s -- --no-modify-path < website/public/install.sh
           "$custom/bin/maxon" version
-          foreign="$(mktemp -d)"
-          mkdir "$foreign/stdlib"
-          if MAXON_INSTALL="$foreign" sh -s -- --no-modify-path < website/public/install.sh; then
-            echo "::error::a directory with its own stdlib/ was installed over"
-            exit 1
-          fi
-          [ -z "$(ls -A "$foreign/stdlib")" ] || { echo "::error::the foreign stdlib/ was touched"; exit 1; }
+          for entry in stdlib runtime examples; do
+            foreign="$(mktemp -d)"
+            mkdir "$foreign/$entry"
+            if MAXON_INSTALL="$foreign" sh -s -- --no-modify-path < website/public/install.sh; then
+              echo "::error::a directory with its own $entry/ was installed over"
+              exit 1
+            fi
+            [ -z "$(ls -A "$foreign/$entry")" ] || { echo "::error::the foreign $entry/ was touched"; exit 1; }
+          done
 
       # ⛔ THE REFUSAL IS THE SCRIPT'S ONE SECURITY CLAIM, SO IT IS MADE TO FIRE. The real archive is
       # served from a mirror whose SHA256SUMS names another hash; the install must refuse and leave the
@@ -244,6 +263,31 @@ jobs:
           $reported = & "$HOME\.maxon\bin\maxon.exe" version
           $reported
           if ($reported -notlike "maxon $latest *") { throw "expected $latest, the latest release" }
+
+      # ⛔ EVERY DIRECTORY THE ARCHIVE SHIPS MUST LAND BESIDE THE COMPILER. `stdlib\` and its sibling
+      # `runtime\` are resolved by walking UP from the executable, so one left behind by the install is a
+      # compiler that cannot compile. The archive is asked for the set rather than a list kept here, which
+      # would go stale the next time a tier is added.
+      - name: Every directory in the archive is installed beside the compiler
+        run: |
+          $tag = (gh release view --json tagName --jq .tagName)
+          $work = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'shape')
+          gh release download $tag --pattern "maxon-$($tag.TrimStart('v'))-x64-windows.zip" --dir $work
+          $zip = (Get-ChildItem -LiteralPath $work -Filter *.zip)[0].FullName
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [IO.Compression.ZipFile]::OpenRead($zip)
+          try {
+            $dirs = @($archive.Entries.FullName |
+              Where-Object { ($_ -split '/').Count -ge 3 -and ($_ -split '/')[2] -ne '' } |
+              ForEach-Object { ($_ -split '/')[1] } | Sort-Object -Unique)
+          } finally {
+            $archive.Dispose()
+          }
+          $dirs
+          if ($dirs.Count -eq 0) { throw 'the archive holds no directories at all' }
+          foreach ($dir in $dirs) {
+            if (-not (Test-Path -LiteralPath "$HOME\.maxon\$dir" -PathType Container)) { throw "$dir\ is in the archive but not in the install" }
+          }
 
       - name: A new terminal finds `maxon`, and the user PATH kept its kind and its entries
         run: |

@@ -93,7 +93,7 @@ export function eliminateDeadFunctions(module StdModule, globalData GlobalDataTa
 		markCalleesOf(module, func: func, byName: byName, reached: reached, worklist: worklist, reference: reference)
 	end 'walk'
 
-	requireUnreachableStdlibStayedDead(project, byName: byName, reached: reached)
+	requireUnreachableLibraryStayedDead(project, byName: byName, reached: reached)
 	sweepUnreachedFunctions(module, reached: reached, project: project)
 
 	// The survivors are a SUBSET of an array this pass already refused a duplicate over, so this build
@@ -104,10 +104,10 @@ export function eliminateDeadFunctions(module StdModule, globalData GlobalDataTa
 end 'eliminateDeadFunctions'
 
 // ⭐⭐ **THE PRE-ELIMINATION PASSES BET ON THIS PASS, AND THIS IS WHERE THE BET IS SETTLED.** Four passes
-// that run BEFORE the back end skip a function `StdlibFacts.unreachable` names — `lowerMaxonToStd` (its
+// that run BEFORE the back end skip a function `LibraryFacts.unreachable` names — `lowerMaxonToStd` (its
 // body, and therefore its `.rdata`), `insertRangeChecks` (its guards), `scanRuntimeUsage` (its runtime
 // floor) and `checkCalls` (its target refusal) — every one of them on the premise that THIS pass drops it.
-// The two derivations are independent: `StdlibFacts` walks the MAXON module from `main` alone, while this
+// The two derivations are independent: `LibraryFacts` walks the MAXON module from `main` alone, while this
 // walk starts from a strictly LARGER root set (the entry, the stub-called runtime symbols, and every
 // function an `.rdata` slot names) over the STD module. So the premise is a claim about two algorithms
 // agreeing, not a tautology, and it is checked rather than argued.
@@ -126,22 +126,22 @@ end 'eliminateDeadFunctions'
 // COST: O(unreachable stdlib functions), bounded by the stdlib source LOADED and independent of the user's
 // program — the set is iterated, never `module.functions`, so a growing user program adds nothing. A name
 // this module does not define is simply not there to keep (the same non-case `markLiveFunction` handles).
-function requireUnreachableStdlibStayedDead(project Project, byName FuncIndexByName, reached BoolArray)
-	for name in project.stdlibFacts.unreachable 'eachSkipped'
+function requireUnreachableLibraryStayedDead(project Project, byName FuncIndexByName, reached BoolArray)
+	for name in project.libraryFacts.unreachable 'eachSkipped'
 		if let idx = try byName.get(name) 'aModuleFunction'
-			let isLive = try reached.get(idx) otherwise panic("requireUnreachableStdlibStayedDead: reached.get OOB at function index {idx}")
+			let isLive = try reached.get(idx) otherwise panic("requireUnreachableLibraryStayedDead: reached.get OOB at function index {idx}")
 
 			if isLive 'reachedAnyway'
-				panic("requireUnreachableStdlibStayedDead: '{String.from(name)}' is in StdlibFacts.unreachable — so `lowerMaxonToStd` lowered no body for it, `insertRangeChecks` emitted no guards, and the PARSER may never have built its body at all (`Parser.skipUnreachedFunctionBody`, gated by the same walk through `growStdlibBodyDemand`) — yet this pass reached it from the root set and would keep it. The two reachability derivations disagree: this pass reached it along an edge the Maxon-tier walk in StdlibSource does not model — a DATA edge (a witness-table or layout-descriptor slot), or a call from a body synthesized after that walk (`__module_init`, a service's `__loop`) that the walk does not credit at the op making that body live. Keeping it would emit an EMPTY function the program calls")
+				panic("requireUnreachableLibraryStayedDead: '{String.from(name)}' is in LibraryFacts.unreachable — so `lowerMaxonToStd` lowered no body for it, `insertRangeChecks` emitted no guards, and the PARSER may never have built its body at all (`Parser.skipUnreachedFunctionBody`, gated by the same walk through `growStdlibBodyDemand`) — yet this pass reached it from the root set and would keep it. The two reachability derivations disagree: this pass reached it along an edge the Maxon-tier walk in StdlibSource does not model — a DATA edge (a witness-table or layout-descriptor slot), or a call from a body synthesized after that walk (`__module_init`, a service's `__loop`) that the walk does not credit at the op making that body live. Keeping it would emit an EMPTY function the program calls")
 			end 'reachedAnyway'
 		end 'aModuleFunction'
 	end 'eachSkipped'
-end 'requireUnreachableStdlibStayedDead'
+end 'requireUnreachableLibraryStayedDead'
 
 // ⭐⭐ **THE ASSUMPTION THE DUPLICATE-NAME REFUSAL RESTS ON: NOTHING CAN SUPPRESS ONE SIDE OF THE PAIR
 // BEFORE THE COUNT SEES IT.** A detector that counts two functions is walked around by anything that removes
 // one of them first, and there IS a pass that could remove a side — `StdlibSource.reachableMaxonFunctionNames`
-// computes `StdlibFacts.unreachable`, which gates which runtime floor is installed (`scanRuntimeUsage` skips
+// computes `LibraryFacts.unreachable`, which gates which runtime floor is installed (`scanRuntimeUsage` skips
 // the body of every function whose NAME is in that set). If a `Builtins.maxon` declaration of `__foo` could
 // land in `unreachable`, the runtime's own `__foo` could go uninstalled, exactly ONE `__foo` would reach the
 // name index, and the compile would SUCCEED with every emitted call bound to the author's stub.
@@ -149,7 +149,7 @@ end 'requireUnreachableStdlibStayedDead'
 // ⚠⚠ **IT CAN NOW, AND THE TWO BARS THAT USED TO CLOSE IT ARE BOTH GONE.** They were: *(1)* E2051 — no
 // LOADED stdlib module may declare a `__` name, and the exempt file was not being loaded; *(2)* the exempt
 // file is never stdlib SOURCE, since `Builtins.maxon` could only enter a compile as the user's own ROOT,
-// which `registeredPathsWhenTheRootIsInsideStdlib` keeps out of `stdlibSourcePaths`. **A1s brought
+// which `registeredPathsWhenTheRootIsInsideALibrary` keeps out of `librarySourcePaths`. **A1s brought
 // `stdlib/Builtins.maxon` into the load**, which deletes both at once: it is the E2051-exempt file AND stdlib source, so
 // its four `__*_fromString` declarations are ordinary members of the space `unreachable` is drawn from. The
 // re-derivation that widening owed is below, and what stands in the bars' place is STRUCTURAL rather than a
@@ -224,7 +224,7 @@ end 'requireUnreachableStdlibStayedDead'
 // compiler's function. `main` asserts the opposite — it must be the author's — so the two kinds cannot go through one
 // door. Neither premise was checked, and the `__` half was reachable and LOUD IN THE WRONG WAY: MEASURED, a
 // `stdlib/Builtins.maxon` declaration of `__mm_leak_check` / `__module_init` / `__gt_enqueue` in a program
-// that installs NO runtime under that name panicked in `requireUnreachableStdlibStayedDead` above, with no
+// that installs NO runtime under that name panicked in `requireUnreachableLibraryStayedDead` above, with no
 // file and no line — the author's mistake wearing a compiler bug's clothes, which is the exact shape A1t was
 // written to remove. The pair case never reached it because the name index refuses first; this case has no
 // pair to count, so nothing saw it.

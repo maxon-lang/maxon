@@ -1,0 +1,223 @@
+// ⭐⭐ **`__Raw` — THE CLOSED TABLE OF RAW MACHINE AND OS OPERATIONS, AND THE ONE SURFACE BELOW WHICH
+// THERE IS NO MAXON.** It is the floor a `runtime/` source file is written on top of, and only such a
+// file may reach it: a call from anywhere else is E3152
+// (`Parser.requireCalleeIsNotReservedName`), because a raw machine operation in user code has no
+// runtime between it and the machine.
+//
+// ⭐ **THE TABLE IS WHAT EVERY READER ASKS.** Recognition, the statement door, the argument shape check
+// and the lowering all read the four functions below, so "which intrinsics exist", "how is one written"
+// and "what does one answer" are one fact in one place rather than a roster restated per site. The
+// lowering's own `match` over `RawIntrinsic` is the fifth reader and the one that names a Std op; it is
+// exhaustive, so a row added here does not compile until it is lowered.
+//
+// ⭐ A name NOT in the table is not silently a link error and earns no second error code: the call falls
+// through to `emitCall`, whose reserved-callee rejection already answers the positioned E3004 that names
+// it (`reservedCalleeReasonOf` ⇒ `unknownCompilerIntrinsic`). "An intrinsic of that name does not exist"
+// is one rule, and numbering it twice is the disease one level up.
+//
+// `__Raw` reaches the parser as an ORDINARY QUALIFIED CALLEE — the mangled bytes `__Raw.osTickCountMs` —
+// exactly as `__Builtins` and `__DebugStream` do, which is why a row is spelled as the whole mangled
+// name and the family is gated behind ONE prefix compare that allocates nothing.
+
+let RawQualifierPrefix = b"__Raw."
+
+let RawOsTickCountMsName = b"__Raw.osTickCountMs"
+let RawOsReadWallClockName = b"__Raw.osReadWallClock"
+let RawOsThreadCpuTicksName = b"__Raw.osThreadCpuTicks"
+let RawScratchName = b"__Raw.scratch"
+let RawLoadWordName = b"__Raw.loadWord"
+let RawStoreWordName = b"__Raw.storeWord"
+
+export enum RawIntrinsic
+	osTickCountMs
+	osReadWallClock
+	osThreadCpuTicks
+	scratch
+	loadWord
+	storeWord
+end 'RawIntrinsic'
+
+// ⭐ **EVERY ARGUMENT SHAPE A ROW CAN WEAR, ENUMERATED RATHER THAN DERIVED from an arity plus a per-position
+// kind column.** A shape is what the parser's one reader switches on, and an (arity, kinds) pair would let
+// a row state a combination no reader can build.
+//
+// A WORD position is an ordinary SSA value — an address, a handle, the word being stored. A CONSTANT
+// position is a compile-time integer the emitted instruction CARRIES in place of an operand: a scratch
+// record's size fixes a frame slot and a field offset is encoded in the addressing mode, so neither can
+// be a value computed at run time.
+enum RawArgShape
+	nothing
+	oneWord
+	twoWords
+	oneConstant
+	wordThenConstant
+	wordConstantWord
+end 'RawArgShape'
+
+// What a row ANSWERS. `nothing` is a void intrinsic — legal as a statement and refused in value position,
+// which is `emitVoidZeroArgIntrinsic`'s rule one family over.
+export enum RawResultKind
+	machineWord
+	nothing
+end 'RawResultKind'
+
+// The roster's answer. Every case of a boxed union allocates, payload-free ones included — affordable here
+// and nowhere hotter, because the roster is reached only behind `isRawIntrinsicCallee`, i.e. for a call
+// whose callee already begins `__Raw.`.
+union RawIntrinsicLookup
+	absent
+	found(intrinsic RawIntrinsic)
+end 'RawIntrinsicLookup'
+
+// Is this callee a member of the `__Raw` family? The membership question, asked by the three doors that
+// must never disagree about it: the dispatch table in `Parser.parseCallNamed`, the STATEMENT door
+// `Parser.qualifiedStaticCallsAt` — without which a `__Raw.storeWord(a, 0, v)` on a line of its own is not
+// a statement at all — and the E3152 refusal.
+export function isRawIntrinsicCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: RawQualifierPrefix)
+end 'isRawIntrinsicCallee'
+
+// THE roster — the one scan, read by the predicate and the accessor below and by nothing else.
+function rawIntrinsicLookupOf(callee ByteArray) returns RawIntrinsicLookup
+	if callee.equals(RawOsTickCountMsName) 'osTickCountMs'
+		return RawIntrinsicLookup.found(RawIntrinsic.osTickCountMs)
+	end 'osTickCountMs'
+
+	if callee.equals(RawOsReadWallClockName) 'osReadWallClock'
+		return RawIntrinsicLookup.found(RawIntrinsic.osReadWallClock)
+	end 'osReadWallClock'
+
+	if callee.equals(RawOsThreadCpuTicksName) 'osThreadCpuTicks'
+		return RawIntrinsicLookup.found(RawIntrinsic.osThreadCpuTicks)
+	end 'osThreadCpuTicks'
+
+	if callee.equals(RawScratchName) 'scratch'
+		return RawIntrinsicLookup.found(RawIntrinsic.scratch)
+	end 'scratch'
+
+	if callee.equals(RawLoadWordName) 'loadWord'
+		return RawIntrinsicLookup.found(RawIntrinsic.loadWord)
+	end 'loadWord'
+
+	if callee.equals(RawStoreWordName) 'storeWord'
+		return RawIntrinsicLookup.found(RawIntrinsic.storeWord)
+	end 'storeWord'
+
+	return RawIntrinsicLookup.absent
+end 'rawIntrinsicLookupOf'
+
+// ⭐ Does the table carry this `__Raw.` member? The parser's dispatch gate: a member that is NOT listed is
+// left to fall through to `emitCall`'s reserved-callee door, which answers the positioned E3004 that names
+// it. The predicate and the accessor below read ONE roster, the `constIsKnown` / `constOf` discipline.
+export function rawIntrinsicIsListed(callee ByteArray) returns bool
+	match rawIntrinsicLookupOf(callee) 'row'
+		found then return true
+		absent then return false
+	end 'row'
+end 'rawIntrinsicIsListed'
+
+// The row for a mangled callee. Only meaningful when `rawIntrinsicIsListed(callee)` — asking otherwise is
+// a caller bug, and there is no row to answer with, so it panics rather than inventing one.
+export function rawIntrinsicNamed(callee ByteArray) returns RawIntrinsic
+	match rawIntrinsicLookupOf(callee) 'row'
+		found(intrinsic) then return intrinsic
+		absent then panic("rawIntrinsicNamed: '{String.from(callee)}' is not a listed __Raw intrinsic — guard the call with rawIntrinsicIsListed")
+	end 'row'
+end 'rawIntrinsicNamed'
+
+// The mangled spelling of a row, for a diagnostic that must quote the intrinsic rather than the bytes at
+// a call site the compiler itself may have minted.
+export function rawIntrinsicCalleeName(intrinsic RawIntrinsic) returns ByteArray
+	return match intrinsic 'name'
+		osTickCountMs gives RawOsTickCountMsName
+		osReadWallClock gives RawOsReadWallClockName
+		osThreadCpuTicks gives RawOsThreadCpuTicksName
+		scratch gives RawScratchName
+		loadWord gives RawLoadWordName
+		storeWord gives RawStoreWordName
+	end 'name'
+end 'rawIntrinsicCalleeName'
+
+export function rawArgShapeOf(intrinsic RawIntrinsic) returns RawArgShape
+	return match intrinsic 'shape'
+		osTickCountMs gives RawArgShape.nothing
+		osReadWallClock gives RawArgShape.oneWord
+		osThreadCpuTicks gives RawArgShape.twoWords
+		scratch gives RawArgShape.oneConstant
+		loadWord gives RawArgShape.wordThenConstant
+		storeWord gives RawArgShape.wordConstantWord
+	end 'shape'
+end 'rawArgShapeOf'
+
+export function rawResultKindOf(intrinsic RawIntrinsic) returns RawResultKind
+	return match intrinsic 'result'
+		osTickCountMs gives RawResultKind.machineWord
+		osReadWallClock gives RawResultKind.nothing
+		osThreadCpuTicks gives RawResultKind.nothing
+		scratch gives RawResultKind.machineWord
+		loadWord gives RawResultKind.machineWord
+		storeWord gives RawResultKind.nothing
+	end 'result'
+end 'rawResultKindOf'
+
+// How many arguments a shape is written with, and which position (if any) carries the compile-time
+// constant. Both are derived from the shape rather than stated per row, so a row cannot declare an arity
+// that contradicts the shape its arguments are read under.
+export function rawArgCountOf(shape RawArgShape) returns ParamCount
+	return match shape 'count'
+		nothing gives 0 as ParamCount
+		oneWord gives 1 as ParamCount
+		oneConstant gives 1 as ParamCount
+		twoWords gives 2 as ParamCount
+		wordThenConstant gives 2 as ParamCount
+		wordConstantWord gives 3 as ParamCount
+	end 'count'
+end 'rawArgCountOf'
+
+// Is argument `position` of this shape the COMPILE-TIME CONSTANT one? Asked per argument by the parser's
+// one reader, which is why it is a predicate over the pair rather than a position to compare against: a
+// shape with no constant has no position for a caller to accidentally match.
+export function rawArgumentIsTheConstant(shape RawArgShape, position ParamCount) returns bool
+	return match shape 'position'
+		nothing or
+			oneWord or
+			twoWords gives false
+		oneConstant gives position == 0
+		wordThenConstant or
+			wordConstantWord gives position == 1
+	end 'position'
+end 'rawArgumentIsTheConstant'
+
+// ⭐⭐ **THE HOST FACILITY A ROW'S INSTRUCTION NEEDS.** It is the same question `TargetFacilities` answers
+// for every runtime entry, asked of an op instead — the three clock rows name the three clock facilities
+// that already exist for exactly these Std ops.
+//
+// ⛔ **NOTHING REPORTS OFF IT YET, AND THE FIRST RUNTIME FAMILY OWES THAT WIRING.**
+// `SemanticCheck.requireTargetSupportsRawIntrinsic` is the reader, and it blames only a function that is
+// the AUTHOR'S — while a `__Raw` op can stand only in a runtime file, which is the library's. A runtime
+// entry's substrate need reaches the user through `LibraryFacts.substrateEntries`, at the call that
+// CROSSES into the library, and that table is built from CALLEES: an op names none, so a row's facility
+// reaches no user-refusable site. Until it does, a lane missing the facility reaches instruction
+// selection.
+//
+// ⚠ **`none` IS "NO HOST FACILITY", NOT "EVERY TARGET".** The three word rows are pure code generation on
+// the lanes that have an addressable frame, and wasm is not one of them: a wasm local has no address, so
+// `StdOp.stackRecordAddr` cannot be selected there at all. That is a MISSING FACILITY ROW rather than a
+// missing answer here — no row of `HostFacility` names an addressable frame, because nothing needed to ask
+// until `__Raw.scratch` existed — and it is the next rung's to add, alongside the first runtime body that
+// spends it.
+union RawHostFacility
+	none
+	required(facility HostFacility)
+end 'RawHostFacility'
+
+export function rawHostFacilityOf(intrinsic RawIntrinsic) returns RawHostFacility
+	return match intrinsic 'facility'
+		osTickCountMs gives RawHostFacility.required(HostFacility.uptimeClock)
+		osReadWallClock gives RawHostFacility.required(HostFacility.wallClock)
+		osThreadCpuTicks gives RawHostFacility.required(HostFacility.threadCpuClock)
+		scratch or
+			loadWord or
+			storeWord gives RawHostFacility.none
+	end 'facility'
+end 'rawHostFacilityOf'

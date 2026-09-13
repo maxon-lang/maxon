@@ -46,10 +46,13 @@ Ideas for the language, the standard library or the toolchain go in
 tracker. Search there first — if someone has already proposed it, upvote it and add your use
 case in a comment. The most-upvoted ideas are the ones looked at first.
 
-### Improve the compiler or standard library
+### Improve the compiler, the standard library or the runtime
 
-The compiler (a native backend, with no LLVM), the language server, and the standard library are all
-open. Patches that fix bugs, improve diagnostics, or extend the standard library are welcome.
+The compiler (a native backend, with no LLVM), the language server, the standard library
+([`stdlib/`](stdlib/)) and the language runtime ([`runtime/`](runtime/)) are all open. Patches that fix
+bugs, improve diagnostics, or extend the standard library are welcome. `runtime/` is the code every
+program needs before any of its own runs; its files are written under tighter rules than the rest of
+the language — see the runtime section of [`docs/LANGUAGE_REFERENCE.md`](docs/LANGUAGE_REFERENCE.md).
 A bug fix goes straight to a pull request. A new feature or a change of design starts in
 [Ideas](https://github.com/maxon-lang/maxon/discussions/categories/ideas), so the approach can be
 agreed before you invest the work.
@@ -85,8 +88,8 @@ in this repo to fall back on — the published release is what seeds a build.
 
 [Install](https://maxon.dev/install) a release and copy its binary into `.bootstrap/` with
 `mkdir -p .bootstrap && cp "$(command -v maxon)" .bootstrap/` — the **binary alone**, not the release's
-directory, because the compiler resolves `stdlib/` by walking up from its own executable and a released
-one left beside it would be compiled in place of this tree's.
+directory, because the compiler resolves `stdlib/` and its sibling `runtime/` by walking up from its own
+executable and released ones left beside it would be compiled in place of this tree's.
 
 ```bash
 ./.bootstrap/maxon build maxon-bin -o maxon-bin/.maxon/maxon   # first build, with the seed
@@ -95,9 +98,9 @@ one left beside it would be compiled in place of this tree's.
 ```
 
 ⛔ **Run a compiler that lives INSIDE this checkout — never one installed on your PATH.** The
-compiler finds `stdlib/` by walking up from its own executable, so an installed `maxon` compiles this
-repository's sources against the RELEASE's standard library. Measured: it succeeds and exits 0, having
-built a compiler from a library that is not this tree's.
+compiler finds `stdlib/` and `runtime/` by walking up from its own executable, so an installed `maxon`
+compiles this repository's sources against the RELEASE's standard library and runtime. Measured: it
+succeeds and exits 0, having built a compiler from a library that is not this tree's.
 
 `build` with no path compiles [`build.maxon`](build.maxon) at the root and runs the build it
 describes — it is a program, not a config file, so a build can compute what it compiles. Rebuilding

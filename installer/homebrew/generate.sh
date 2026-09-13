@@ -8,11 +8,11 @@
 # attribute, so the Gatekeeper warning a downloaded archive earns does not appear.
 #
 # ⛔ THE BINARY IS LINKED INTO `bin` AS A SYMLINK, AND THAT IS SAFE — MEASURED, NOT ASSUMED. The
-# compiler finds `stdlib/` by walking UP from its own executable, so a symlink whose directory has no
-# `stdlib/` beside it would break every compile if the walk started at the LINK. It does not:
-# `Process.executablePath()` resolves the link (`/proc/self/exe` on Linux), and a `maxon` reached through
-# a symlink on PATH compiles against the stdlib in its real prefix. `homebrew.yml` tests exactly that on
-# every platform before a formula is published.
+# compiler finds `stdlib/` and its sibling `runtime/` by walking UP from its own executable, so a symlink
+# whose directory has neither beside it would break every compile if the walk started at the LINK. It
+# does not: `Process.executablePath()` resolves the link (`/proc/self/exe` on Linux), and a `maxon` reached
+# through a symlink on PATH compiles against the stdlib and runtime in its real prefix. `homebrew.yml`
+# tests exactly that on every platform before a formula is published.
 #
 # ⛔ THE TAP PREFIX IS REQUIRED, NOT A CONVENTION — `brew install maxon` INSTALLS SOMETHING ELSE.
 # `maxon` in homebrew-cask is **Maxon App**, Maxon Computer's Cinema 4D / ZBrush installer, and a bare
@@ -97,10 +97,10 @@ EOF
 
 	cat <<'EOF'
   def install
-    # ⛔ THE COMPILER AND ITS STANDARD LIBRARY MUST STAY SIBLINGS. `maxon` finds `stdlib/` by walking up
-    # from its own executable, so installing the binary into `bin` on its own would leave it with no
-    # standard library at all. The whole tree goes into libexec, and `bin/maxon` is a symlink to it —
-    # the compiler resolves that link, so the walk starts in the real prefix.
+    # ⛔ THE COMPILER, ITS STANDARD LIBRARY AND ITS RUNTIME MUST STAY SIBLINGS. `maxon` finds `stdlib/`
+    # and `runtime/` by walking up from its own executable, so installing the binary into `bin` on its
+    # own would leave it unable to compile at all. The whole tree goes into libexec, and `bin/maxon` is
+    # a symlink to it — the compiler resolves that link, so the walk starts in the real prefix.
     libexec.install Dir["*"]
     bin.install_symlink libexec/"maxon"
   end

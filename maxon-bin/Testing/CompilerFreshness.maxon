@@ -23,11 +23,17 @@
 //
 // **The sources compiled INTO the binary — `<project>/**.maxon` — and nothing else.**
 //
-// ⚠ NOT `stdlib/`, although `cross-target-gate.sh`'s `--skip-build` guard does sweep it. That guard
-// is about a binary that is ABOUT to be trusted for a build; this one is about a suite, and a suite
-// compiles the stdlib modules FROM SOURCE for every fragment it builds. An edited
-// `stdlib/*.maxon` is therefore already live in the verdicts — refusing over one would be a FALSE
-// REFUSAL, and a false refusal wedges the suite just as thoroughly as a stale binary lies to it.
+// ⚠ NOT `stdlib/` AND NOT `runtime/`, although `cross-target-gate.sh`'s `--skip-build` guard does
+// sweep both. That guard is about a binary that is ABOUT to be trusted for a build; this one is about
+// a suite, and a suite compiles BOTH library tiers FROM SOURCE for every fragment it builds. An edited
+// `stdlib/*.maxon` or `runtime/*.maxon` is therefore already live in the verdicts — refusing over one
+// would be a FALSE REFUSAL, and a false refusal wedges the suite just as thoroughly as a stale binary
+// lies to it.
+//
+// ⭐ **AND NO CLAUSE HERE EXCLUDES THEM, BECAUSE NEITHER IS IN THE SWEPT ROOT.** Both tiers sit at the
+// CHECKOUT root beside `maxon-bin/`, and the walk starts at the directory above the binary's own
+// `.maxon/` — so the paragraph above says why nothing needs excluding, not what a filter does. A tier
+// moved under the compiler's own project would enter the sweep and produce exactly that false refusal.
 //
 // ⚠ NOT every `.maxon` file under the project root either — only the ones `maxon build` actually
 // compiles. `maxon-bin/excluded-source-fixture/` carries a `.maxonignore` and its source is not in the

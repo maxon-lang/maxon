@@ -60,7 +60,7 @@ import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MAXON = os.path.join(REPO, "maxon-bin", ".maxon",
-                    "maxon.exe" if os.name == "nt" else "maxon-bin")
+                    "maxon.exe" if os.name == "nt" else "maxon")
 
 JMP = re.compile(r"x64\.jmp\s+(\S+)$")
 LABEL = re.compile(r"(\S+):$")

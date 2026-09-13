@@ -90,11 +90,15 @@ package_one() {
 	# being spelled differently.
 	find "$stage" -maxdepth 1 -type f -name '*.mxdbg' -delete
 
-	# ⚠ `stdlib/` SHIPS AS SOURCE, WITHOUT ITS BUILD CACHE. The compiler reads the stdlib from source
-	# and finds it by walking up from its own executable, so the layout here IS the contract: `maxon`
-	# and `stdlib/` as siblings. `.maxon/` is this machine's cache and means nothing anywhere else.
+	# ⚠ `stdlib/` AND `runtime/` SHIP AS SOURCE, WITHOUT THEIR BUILD CACHES. The compiler reads both
+	# from source and finds them by walking up from its own executable — `runtime/` as a sibling of
+	# `stdlib/` — so the layout here IS the contract: `maxon`, `stdlib/` and `runtime/` side by side.
+	# `.maxon/` is this machine's cache and means nothing anywhere else. An archive missing either
+	# directory yields a compiler that cannot compile anything, so neither copy may be made optional.
 	cp -r stdlib "$stage/stdlib"
 	rm -rf "$stage/stdlib/.maxon"
+	cp -r runtime "$stage/runtime"
+	rm -rf "$stage/runtime/.maxon"
 	cp -r examples "$stage/examples" 2>/dev/null || true
 	rm -rf "$stage/examples/.maxon"
 	cp LICENSE-MIT LICENSE-APACHE README.md "$stage/"
@@ -226,10 +230,11 @@ This archive holds the \`maxon\` compiler and the standard library it reads.
 
     maxon$exe_ext     the compiler
     stdlib/           the standard library, as source
+    runtime/          the language runtime the compiler links in, as source
 
-⛔ **Keep these two together.** The compiler finds \`stdlib/\` by walking UP from its own executable,
-so moving \`maxon$exe_ext\` somewhere else on its own leaves it with no standard library. Move the
-whole directory, or put it on your PATH as it is.
+⛔ **Keep these three together.** The compiler finds \`stdlib/\` and \`runtime/\` by walking UP from its
+own executable, so moving \`maxon$exe_ext\` somewhere else on its own leaves it unable to compile at
+all. Move the whole directory, or put it on your PATH as it is.
 
 ## Install
 
@@ -332,8 +337,9 @@ write_default_notes() {
 		echo "\`xattr -d com.apple.quarantine ./maxon\` once."
 		echo
 
-		echo "⚠ **Keep \`maxon\` and \`stdlib/\` together.** The compiler finds its standard library by walking"
-		echo "up from its own executable, so moving the binary out on its own leaves it without one."
+		echo "⚠ **Keep \`maxon\`, \`stdlib/\` and \`runtime/\` together.** The compiler finds its standard library"
+		echo "and its runtime by walking up from its own executable, so moving the binary out on its own leaves"
+		echo "it unable to compile."
 		echo
 		echo "## Verify a download"
 		echo

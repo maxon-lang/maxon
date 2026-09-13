@@ -24,6 +24,14 @@
 // monomorphized `Array with Item` body carries `stdlib/Array.maxon` as its source file and cannot
 // possibly have named `Item`. The rule and what it cost are stated in full there.
 //
+// ⛔⛔ **THE RUNTIME TIER IS EXEMPT BY PATH, AND IT IS THE ONE EXEMPTION THIS PASS HAS.** The argument
+// above turns on every exported `stdlib/` declaration being `public`; a `runtime/` declaration is not,
+// so an `export`ed one would be audited like an author's. It cannot be: **every runtime declaration is
+// permanently "unused" to this pass BY CONSTRUCTION**, because a runtime entry is reached by the
+// COMPILER looking up a NAME, never by a source file referencing it. There is no program in which one of
+// them acquires a reader, so E3092/E3093/E3094 over that tier report nothing a change could ever fix.
+// Keyed on `isRuntimeSourceFile` so it fails CLOSED: a file outside `runtime/` is audited.
+//
 // ⚠ **WHAT IS STILL AUDITED IN `stdlib/`: its six `module` declarations** (all in `String.maxon`).
 // That is deliberate — `module` is the marked, narrower tier there, and E3094 is exactly the signal its
 // author wants if a door stops being reached. MEASURED at the time of writing: all six are named from
@@ -126,20 +134,23 @@ typealias GlobalLabelIndexMap = Map with (ByteArray, TopLevelDeclIndex)
 typealias VisitedTypeNameSet = Set with ByteArray
 
 // The LIBRARY's source files, keyed by the `FilePath.toString()` spelling every reader in this pass
-// already carries. A SET and not a second walk, because `isStdlibSourceFile` resolves a path against the
-// process's working directory — a `Directory.currentPath()` and two path builds — while `noteRead` asks
-// the question at every credit.
+// already carries. A SET and not a second walk, because `isStdlibSourceFile` is a memo probe on a
+// `FilePath` key — which clones and lower-cases the path — while `noteRead` asks the question at every
+// credit, and a String key hashes in place.
 typealias LibrarySourcePathSet = Set with String
 
-// The author's files and the library's, told apart in ONE walk over `project.db.sourcePaths`. Both halves
-// come from the same `isStdlibSourceFile` answer per path, so the two populations cannot come to
-// disagree about a file the way two independently-filtered walks could.
+// The author's files, the library's, and the runtime tier's, told apart in ONE walk over
+// `project.db.sourcePaths`. All three come from the same pair of answers per path, so the populations
+// cannot come to disagree about a file the way independently-filtered walks could. `runtimeFiles` is a
+// SUBSET of `libraryFiles`: a runtime file is the library's for `noteRead`'s rule and additionally
+// exempt from emission.
 type SourcePathSplit
 	export let userFiles as FilePathArray
 	export let libraryFiles as LibrarySourcePathSet
+	export let runtimeFiles as LibrarySourcePathSet
 
-	export static function create(userFiles FilePathArray, libraryFiles LibrarySourcePathSet) returns SourcePathSplit
-		return Self{userFiles: userFiles, libraryFiles: libraryFiles}
+	export static function create(userFiles FilePathArray, libraryFiles LibrarySourcePathSet, runtimeFiles LibrarySourcePathSet) returns SourcePathSplit
+		return Self{userFiles: userFiles, libraryFiles: libraryFiles, runtimeFiles: runtimeFiles}
 	end 'create'
 end 'SourcePathSplit'
 
@@ -219,7 +230,7 @@ module function checkUnusedExports(project Project, module MaxonModule, signatur
 
 	collectReferences(module, signatures: signatures, tracked: tracked, moduleTypeNames: project.typeNames)
 	try collectFileTypeReferences(project, signatures: signatures, userFiles: sources.userFiles, tracked: tracked)
-	emitDiagnostics(project, tracked: tracked)
+	emitDiagnostics(project, tracked: tracked, runtimeFiles: sources.runtimeFiles)
 end 'checkUnusedExports'
 
 // The files the AUTHOR wrote, and the library's own — see `MinimumUserFilesToAudit` for why the gate above
@@ -227,6 +238,7 @@ end 'checkUnusedExports'
 function splitSourcePaths(project Project) returns SourcePathSplit throws CompileError
 	var paths = FilePathArray.create()
 	var libraryFiles = LibrarySourcePathSet.create()
+	var runtimeFiles = LibrarySourcePathSet.create()
 
 	for path in project.db.sourcePaths 'eachFile'
 		if isStdlibSourceFile(project, path: path) 'stdlibFile'
@@ -234,10 +246,16 @@ function splitSourcePaths(project Project) returns SourcePathSplit throws Compil
 			continue
 		end 'stdlibFile'
 
+		if isRuntimeSourceFile(project, path: path) 'runtimeFile'
+			libraryFiles.insert(path.toString())
+			runtimeFiles.insert(path.toString())
+			continue
+		end 'runtimeFile'
+
 		paths.push(path)
 	end 'eachFile'
 
-	return SourcePathSplit.create(paths, libraryFiles: libraryFiles)
+	return SourcePathSplit.create(paths, libraryFiles: libraryFiles, runtimeFiles: runtimeFiles)
 end 'splitSourcePaths'
 
 // One pass over the declaration arena, so `noteGlobalLabel` is a lookup and not a scan of it.
@@ -892,9 +910,20 @@ end 'noteRead'
 // ── Emission ─────────────────────────────────────────────────────────────────────────────────────
 
 // In DECLARATION order, which is the order the seed was built in — see `TrackedDecls`.
-function emitDiagnostics(project Project, tracked TrackedDecls)
+//
+// ⛔ The RUNTIME tier's declarations are dropped HERE rather than at seed time, and a set lookup rather
+// than a path probe, for the reason `LibrarySourcePathSet` states: this runs per tracked DECLARATION,
+// not per file, and the answer was already computed once per file by `splitSourcePaths`. See this
+// file's header for why the tier is exempt at all.
+function emitDiagnostics(project Project, tracked TrackedDecls, runtimeFiles LibrarySourcePathSet)
 	for i in 0 upto tracked.entries.count() 'eachTracked'
-		emitOne(project, decl: tracked.at(i))
+		let decl = tracked.at(i)
+
+		if runtimeFiles.contains(decl.declFilePath.toString()) 'theRuntimeTiersOwn'
+			continue
+		end 'theRuntimeTiersOwn'
+
+		emitOne(project, decl: decl)
 	end 'eachTracked'
 end 'emitDiagnostics'
 

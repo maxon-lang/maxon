@@ -40,6 +40,14 @@ cd "$repo_root"
 #
 # ⚠ **THE NAME IS THE CONTRACT.** A new file of emitted per-target runtime must carry `Runtime` in
 # its name or this will not see it.
+#
+# ⛔ **THE CHECKOUT-ROOT `runtime/` IS DELIBERATELY NOT HERE.** That tier is SOURCE THE COMPILER READS,
+# a sibling of `stdlib/`, so the first build already compiles against the edited files and carries
+# them — ONE self-compile. The emitted runtime below is the opposite case: the compiler WRITES it into
+# every program including itself, so a first build only fixes the emitter.
+#
+# ⚠ Every entry is rooted at `maxon-bin/`, which is what keeps a `runtime/`-only edit out of the
+# `twice` answer; a new entry that is not so rooted would sweep it back in.
 RuntimePaths=(
 	"maxon-bin/Compiler/Runtime"
 	"maxon-bin/Compiler/Targets/*/*Runtime*.maxon"

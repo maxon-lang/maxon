@@ -416,14 +416,19 @@ function programSources(program FilePath, isProject bool) returns MaxonSourcePat
 	return sources
 end 'programSources'
 
-// ⛔ **THE SUPERSEDED RUNTIME MODULE IS SKIPPED BECAUSE THE LOADER NEVER COMPILES IT.** A file no build
+// ⛔ **EVERY SOURCE A COMPILE READS AND THE AUTHOR DID NOT WRITE — BOTH LIBRARY ROOTS, because a build
+// reads both and a key that hashed only one would serve a stale executable after a `runtime/` edit.**
+//
+// ⛔ The superseded runtime module is skipped because the loader never compiles it. A file no build
 // reads cannot change what a build produces, and it is a large one to hash ahead of every run.
 function stdlibSources() returns MaxonSourcePathArray throws RunCacheError
 	let stdlibDir = try locateStdlibDir() otherwise throw RunCacheError.unavailable("could not locate the stdlib/ directory, which the build cache key is computed over")
+	let runtimeDir = try runtimeDirBeside(stdlibDir) otherwise throw RunCacheError.unavailable("could not locate the runtime/ directory beside stdlib/, which the build cache key is computed over")
 	let superseded = supersededRuntimeModulePath(stdlibDir)
 
 	var walked = MaxonSourcePathArray.create()
 	_ = try collectMaxonSources(stdlibDir, into: walked) otherwise throw RunCacheError.unavailable("could not walk {stdlibDir.toString()} for the sources the build cache key is computed over")
+	_ = try collectMaxonSources(runtimeDir, into: walked) otherwise throw RunCacheError.unavailable("could not walk {runtimeDir.toString()} for the sources the build cache key is computed over")
 
 	var compiled = MaxonSourcePathArray.create()
 

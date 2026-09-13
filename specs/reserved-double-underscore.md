@@ -641,7 +641,7 @@ why the next case's message is a different sentence about a different thing.
 
 ⚠ It is also the pin that `stdlib/Print.maxon` being LISTED (W35) did not quietly widen the runtime floor:
 the corpus module is loaded into this program like every other, and `__write_stdout` is STILL not installed,
-because `scanRuntimeUsage` skips a stdlib body no path from `main` reaches (`StdlibFacts.unreachable`).
+because `scanRuntimeUsage` skips a stdlib body no path from `main` reaches (`LibraryFacts.unreachable`).
 
 ⚠ The exit code is routed through a SECOND declaration in the same overlay, and that is deliberate: a
 program returning a bare `42` would compile with the overlay dropped on the floor, so the case would go on

@@ -5957,7 +5957,7 @@ export typealias EnumLayoutMap = Map with (ByteArray, EnumLayout)
 // ⭐⭐ **`Ordering` IS DECLARED, NOT SYNTHESIZED (W3) — AND IT WAS THE LAST TRANSCRIPTION OF A CORPUS
 // DECLARATION THIS FILE CARRIED.** `builtinOrderingEnum()` stood here, restating `stdlib/Interfaces.maxon:34-38`
 // case for case, for the stated reason that the compiler read no stdlib. It reads that module now
-// (`StdlibLoader.loadStdlibSources`), so the declaration arrives through `upsertDeclaredEnum` like any
+// (`StdlibLoader.loadLibrarySources`), so the declaration arrives through `upsertDeclaredEnum` like any
 // other and every tag reader takes its layout from `requireCorpusDeclaredEnum` — the `__Managed*Error`
 // precedent directly below, applied to the one enum in the set whose ordinals the compiler EMITS rather than
 // merely throws.
@@ -7684,23 +7684,28 @@ export type Project
 
 	// The checkout's `stdlib/` directory, located once at load time (`locateStdlibDir`). Read by the
 	// stdlib loader, which enumerates it, and by nothing else — every later pass asks about a
-	// FUNCTION, not a path (`isStdlibFunction`).
+	// FUNCTION, not a path (`isLibraryFunction`).
 	export var stdlibDir as FilePath
 
-	// Every file the stdlib loader parsed out of that directory — which is exactly "the STDLIB source
-	// this compile contains", established by construction rather than by re-testing paths later (see
-	// StdlibSource). Empty until the loader runs; it grows with the stdlib the compiler can load, and in the end
-	// state it is every file under `stdlib/`.
-	export var stdlibSourcePaths as MaxonSourcePathArray
+	// The checkout's `runtime/` directory — the language runtime, the second source tier every compile
+	// loads. DERIVED from `stdlibDir`'s location rather than located on its own (`locateRuntimeDir`), so
+	// a compile cannot pair one tree's stdlib with another tree's runtime.
+	export var runtimeDir as FilePath
 
-	// What THIS compile knows about the stdlib source it loaded (`deriveStdlibFacts`), computed once
+	// Every file the library loader parsed out of those two directories — which is exactly "the LIBRARY
+	// source this compile contains", established by construction rather than by re-testing paths later
+	// (see StdlibSource). One array and not one per root, because every reader asks the same question of
+	// it: which of this compile's files did the program's author not write. Empty until the loader runs.
+	export var librarySourcePaths as MaxonSourcePathArray
+
+	// What THIS compile knows about the stdlib source it loaded (`deriveLibraryFacts`), computed once
 	// after the module is merged: which stdlib functions the program cannot reach, and which of the
 	// ones it CAN reach need the x64-windows substrate. Every PRE-elimination pass that examines
 	// function BODIES for a target/runtime decision — `scanRuntimeUsage`'s floor scan, `checkCalls`'s
 	// E3104 target-support gate — consults it, so unreachable stdlib code decides nothing about a
 	// program that does not contain it. Both halves are empty for stdlib-free code and neither ever
 	// holds a USER function, so no user-only program's checks change.
-	export var stdlibFacts as StdlibFacts
+	export var libraryFacts as LibraryFacts
 
 	// Declared function return types (the M1 parse-staging registry).
 	export var funcReturnTypes as FuncReturnTypeMap
@@ -8177,12 +8182,13 @@ export type Project
 	// day N compiles run at once.
 	export var traceUnit as TraceUnit
 
-	export static function create(db QueryDatabase, rootPath FilePath, target Target, stdlibDir FilePath) returns Project
+	export static function create(db QueryDatabase, rootPath FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath) returns Project
 		return Self{
 			db: db,
 			stdlibDir: stdlibDir,
-			stdlibSourcePaths: MaxonSourcePathArray.create(),
-			stdlibFacts: StdlibFacts.empty(),
+			runtimeDir: runtimeDir,
+			librarySourcePaths: MaxonSourcePathArray.create(),
+			libraryFacts: LibraryFacts.empty(),
 			funcReturnTypes: FuncReturnTypeMap.create(),
 			funcSignatures: FuncSignatureMap.create(),
 			overloadSets: OverloadSetMap.create(),
@@ -8250,11 +8256,11 @@ end 'Project'
 
 // Construct a fresh Project rooted at `rootPath` for `target`. The single
 // constructor a driver needs.
-// `stdlibDir` is passed IN rather than located here so the project is born with a
-// valid one: the stdlib loader reads it before the first pass runs, and a field
-// that is briefly wrong is a field something can read while it is wrong.
-export function createProject(rootPath FilePath, target Target, stdlibDir FilePath) returns Project
-	return Project.create(QueryDatabase.create(target.os), rootPath: rootPath, target: target, stdlibDir: stdlibDir)
+// Both library roots are passed IN rather than located here so the project is born
+// with valid ones: the library loader reads them before the first pass runs, and a
+// field that is briefly wrong is a field something can read while it is wrong.
+export function createProject(rootPath FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath) returns Project
+	return Project.create(QueryDatabase.create(target.os), rootPath: rootPath, target: target, stdlibDir: stdlibDir, runtimeDir: runtimeDir)
 end 'createProject'
 
 // ⭐⭐ **IS THE PROJECT ROOT ITSELF UNDER `stdlib/`? — ONE HOME, BECAUSE THREE RULES REST ON IT AND TWO
@@ -8286,6 +8292,18 @@ export function rootIsUnderStdlibDirectory(project Project, cwd FilePath) return
 	return project.rootPath.resolve(cwd).isInside(project.stdlibDir)
 end 'rootIsUnderStdlibDirectory'
 
+// The same question of the OTHER library root, and it has TWO readers: the loader's double-load guard,
+// which must not register `runtime/Word.maxon` twice when the user named it as their project, and
+// `Queries.fileProvenanceOf`, where it is what subtracts the user's own root from the tier.
+//
+// ⛔ **A FILE THE USER NAMES AS THEIR PROJECT IS THEIRS, AND THAT COSTS IT THE TIER'S PRIVILEGES.**
+// `isInsideLibraryRoot` answers `isRuntimeSource = false` for that one file, so a runtime module that
+// spells a `__Raw` call (E3152) or declares a `__` name (E2051) cannot be compiled on its own the way
+// `maxon build stdlib/Clock.maxon` compiles one stdlib module — it is reached through the tier walk.
+export function rootIsUnderRuntimeDirectory(project Project, cwd FilePath) returns bool
+	return project.rootPath.resolve(cwd).isInside(project.runtimeDir)
+end 'rootIsUnderRuntimeDirectory'
+
 // Append a diagnostic to the project's sink. The single funnel every reporting
 // pass routes through, so diagnostic bookkeeping lives in one place — which is
 // why the library-blame swap (`Diagnostic.blamedAt`) and the staged-source path
@@ -8301,7 +8319,7 @@ end 'rootIsUnderStdlibDirectory'
 //
 // ⛔ **BUT IT IS NOT EVERY LINE THIS COMPILER PRINTS, AND THE EXCEPTION CARRIES
 // PATHS.** The six `CompileError` arms — `fileNotFound`, `directoryNotFound`,
-// `noSourceFiles`, `readError`, `noCommonRoot`, `stdlibNotFound` — never become
+// `noSourceFiles`, `readError`, `noCommonRoot`, `stdlibNotFound`, `runtimeNotFound` — never become
 // a `Diagnostic` at all: `Main.reportCompileError` writes them straight to
 // `emitDiagnosticLine`, whose own header owns that argument. They therefore
 // bypass BOTH rules stated here, so a staged path in one of them is still

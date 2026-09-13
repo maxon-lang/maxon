@@ -919,20 +919,20 @@ end 'TopLevelConstant'
 //
 //   * `ProgramSignatures.contributesStorage` reads the BOOLEAN — a global whose initializer calls keeps
 //     its slot however dead it looks, because the call may print, mutate or throw.
-//   * `StdlibSource.deriveStdlibFacts` reads the CALLEES — it must ROOT them, since the body that will make
+//   * `StdlibSource.deriveLibraryFacts` reads the CALLEES — it must ROOT them, since the body that will make
 //     the calls (`__module_init`) does not exist yet when the reachability walk runs, and is called by the
 //     entry stub rather than from `main` even once it does.
 //
 // A boolean beside a separate callee scan would let an outcome appended past `factoryValue` be KEPT by the
 // first and left UNROOTED by the second — which is `lowerMaxonToStd` skipping a body that
-// `DeadFunctionElimination` then reaches, i.e. `requireUnreachableStdlibStayedDead`.
+// `DeadFunctionElimination` then reaches, i.e. `requireUnreachableLibraryStayedDead`.
 //
 // ⚠ **A LIST, NOT ONE NAME, BECAUSE ONE INITIALIZER MAKES SEVERAL CALLS (W41).** It carried a single callee
 // while a factory call was the only calling form and every ARGUMENT was a constant or a runtime-built
 // container. A DECLARED generic's empty record is neither: `var db = Database.create(EntryMap.create(), …)`
 // calls `Map.create` as well as `Database.create`, and `__module_init` emits both. MEASURED with the single
 // name: the argument's `create` was left out of the root set and the compile died in
-// `requireUnreachableStdlibStayedDead` — the exact failure this union's header already described, arriving
+// `requireUnreachableLibraryStayedDead` — the exact failure this union's header already described, arriving
 // through the ARGUMENT rather than through a new outcome arm.
 export union TopLevelInitializerCall
 	none
@@ -5760,7 +5760,7 @@ let ReservedTypeNamePrefix = b"__"
 // With the three readers retired, the suite was run with this line respelled `b"ArrayProbe"`: **5457 passed,
 // 0 failed**, byte-identical verdicts to the tree with `b"Array"`. That is the seed being REPLACED before
 // anything reads it, on every one of 5,457 compiles, and it follows structurally:
-// `StdlibLoader.loadStdlibSources` loads every module under `stdlib/`, `Array.maxon` among them, so the
+// `StdlibLoader.loadLibrarySources` loads every module under `stdlib/`, `Array.maxon` among them, so the
 // stdlib half of `discoverWholeProgramTokenFacts` always finds a declaration in a checkout that has the
 // file. ⇒ **The remaining read is dead in every compile that has a corpus, and it may not therefore be
 // replaced by a discovered-or-panic**: the compile it describes is the one with no corpus, which is the only
@@ -10713,7 +10713,8 @@ export type ProgramSignatures
 
 	// ⭐ Which `<Conformer>.<method>` names a STDLIB file's `extension` published — the provenance half of
 	// the contest test below, kept as a set rather than derived from `extensionMethodDeclFiles` because
-	// `isStdlibSourceFile` costs four String allocations per ask and this is asked per extension member.
+	// `isStdlibSourceFile` is a memo probe on a `FilePath` key — which clones and lower-cases the path —
+	// and this is asked per extension member, where a set on the name needs no path at all.
 	var stdlibPublishedExtensionMethods as ExtensionMethodNameSet
 
 	// ⭐⭐ The stdlib extension methods a USER file's `extension` takes over — see
@@ -15467,7 +15468,7 @@ export type ProgramSignatures
 		// no method dispatch at all, so the gate has no site to fire at either. This walk never asks the
 		// project for a path, and giving it a reason to would put a `Directory.currentPath()` probe on the
 		// per-declaration path to answer a question nothing here can pose.
-		var parser = Parser.create(decl.tokens, filePath: decl.declFilePath, namespace: self.namespaceOf(decl.declFilePath), signatures: self, isStdlibSource: false, declaresCompilerInternalNames: false, compilerMintedNames: ByteArrayArray.create(), livesUnderStdlibDirectory: false, buildsBodies: true, capturesDebugLocals: false, instrumentsCoverage: false)
+		var parser = Parser.create(decl.tokens, filePath: decl.declFilePath, namespace: self.namespaceOf(decl.declFilePath), signatures: self, isStdlibSource: false, isRuntimeSource: false, declaresCompilerInternalNames: false, compilerMintedNames: ByteArrayArray.create(), livesUnderStdlibDirectory: false, buildsBodies: true, capturesDebugLocals: false, instrumentsCoverage: false)
 		let folded = try parser.evalConstInitializer(decl, stack: stack) otherwise (err) 'noValue'
 			return self.recordFailure(decl, error: err)
 		end 'noValue'
@@ -16789,7 +16790,7 @@ export type ProgramSignatures
 	// root, exactly as a builtin container's `create` is — but a FIELD is admitted from the same set an
 	// argument is, so a `Holder{xs: StrMap.create()}` reaches a declared generic's static and a defaulted
 	// field reaches its synthesized `__fieldDefault#…` helper. Both are rooted here or they are lowered by
-	// nothing and `requireUnreachableStdlibStayedDead` fires.
+	// nothing and `requireUnreachableLibraryStayedDead` fires.
 	function factoryInitializerCallees(calls ConstFactoryCallArray) returns ByteArrayArray
 		var callees = ByteArrayArray.create()
 
@@ -16902,7 +16903,7 @@ export type ProgramSignatures
 	//
 	// ⭐⭐ **IT IS THE `create` AND THE ELEMENT-ADD, BECAUSE `ModuleInit.builtContainerRecord` EMITS BOTH
 	// (W90).** Rooting only the create is what a `Set from […]` global measured as
-	// `requireUnreachableStdlibStayedDead: 'Set.insert' is in StdlibFacts.unreachable` — the walk never saw
+	// `requireUnreachableLibraryStayedDead: 'Set.insert' is in LibraryFacts.unreachable` — the walk never saw
 	// the edge, no body was lowered, and dead-function elimination reached the empty function `__module_init`
 	// calls. Both come off `containerCreateCall`'s own routers, so what is rooted here and what is emitted
 	// there stay two readings of one answer.
@@ -16922,13 +16923,13 @@ export type ProgramSignatures
 
 			// A KEYED add is rooted on the identical rule its one-column sibling is, and for the identical
 			// reason: an over-rooted leaf is lowered and then dropped by dead-function elimination, while a
-			// missing root is `requireUnreachableStdlibStayedDead`.
+			// missing root is `requireUnreachableLibraryStayedDead`.
 			upsert(callee) then callees.push(callee)
 		end 'add'
 	end 'appendDeclaredInstanceCreateCallee'
 
 	// ⭐ **EVERY FUNCTION A TOP-LEVEL INITIALIZER CALLS**, in ARENA order — the roots
-	// `StdlibSource.deriveStdlibFacts` walks from BESIDE `main`, because `__module_init` is synthesized
+	// `StdlibSource.deriveLibraryFacts` walks from BESIDE `main`, because `__module_init` is synthesized
 	// after that walk and is called by the entry stub rather than from `main`. Without them a stdlib
 	// factory named only by an initializer is filed unreachable, its body is never lowered, and
 	// dead-function elimination — which DOES root `__module_init` — reaches the empty function it left.

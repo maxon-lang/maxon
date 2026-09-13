@@ -39,7 +39,9 @@
 // subtraction this file exists to refuse:
 //
 //   1. THE COMPILER'S OWN EXECUTABLE PATH. `locateStdlibDir` walks up from it and derives the absolute
-//      path of every stdlib source file from what it finds. MEASURED, one binary, two real checkouts
+//      path of every stdlib source file from what it finds — and `runtime/`, the second library tier
+//      loaded on every compile, is derived from that same `stdlib/` (`runtimeDirBeside`), so its source
+//      paths ride on the identical term. MEASURED with one tier, one binary, two real checkouts
 //      44 characters apart, one working directory each, six rungs:
 //
 //        bytes        +92,576 / +102,740 / +123,068 / +163,724 / +245,036 / +407,660
@@ -47,8 +49,9 @@
 //
 //   2. THE WORKING DIRECTORY. The rung sources are handed to the compiler as a RELATIVE path on purpose
 //      (see `CorpusRelativeRoot`), and that does NOT keep the checkout out of the byte column, because
-//      the compiler resolves each source path against `Directory.currentPath()` itself —
-//      `Queries.isStdlibSourceFile` does it PER FILE, per compile. MEASURED, one binary at ONE
+//      the compiler resolves each source path against `Directory.currentPath()` itself — the library
+//      classifier `Queries.fileProvenanceOf` does it PER FILE, per compile, answering for both tiers
+//      off the one resolve. MEASURED with one classifier, one binary at ONE
 //      executable path, two working directories 44 characters apart, six rungs:
 //
 //        bytes        +34,515 / +39,960 / +50,850 / +72,630 / +116,190 / +203,310

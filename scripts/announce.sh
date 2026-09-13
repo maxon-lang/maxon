@@ -88,9 +88,9 @@ powershell -c "irm maxon.dev/install.ps1|iex"   # Windows
 Elsewhere, take the archive for your platform from the
 [releases page]($ReleasesUrl/tag/v$version) and follow the \`INSTALL.md\` inside it.
 
-⚠ Each archive holds the \`maxon\` compiler and \`stdlib/\` **as siblings**, and that layout is the
-contract: the compiler finds its standard library by walking up from its own executable, so moving the
-binary out on its own leaves it without one.
+⚠ Each archive holds the \`maxon\` compiler, \`stdlib/\` and \`runtime/\` **as siblings**, and that layout
+is the contract: the compiler finds its standard library and its runtime by walking up from its own
+executable, so moving the binary out on its own leaves it unable to compile.
 EOF
 }
 

@@ -1557,6 +1557,11 @@ function opEscapesValue(op MaxonOp, subject EscapeScanSubject, func IrFunction, 
 		immortalStructRecord or
 			immortalStringTable or
 			covPoint then break 'op'
+
+		// A raw intrinsic's operands are machine words and its stores are raw, so nothing TRACKED can reach
+		// one: `__Raw` is callable only from `runtime/`, where a managed value may not be named at all
+		// (E3153), and this walk tracks managed values.
+		rawIntrinsic then break 'op'
 	end 'op'
 
 	return false
@@ -1661,7 +1666,8 @@ function terminatorEscapesValue(term MaxonOp, subject EscapeScanSubject, func Ir
 			serviceReplyCell then break 'term'
 		immortalStructRecord or
 			immortalStringTable or
-			covPoint then break 'term'
+			covPoint or
+			rawIntrinsic then break 'term'
 	end 'term'
 
 	return false
@@ -2046,7 +2052,8 @@ function collectCallParamEdgesAt(project Project, signatures ProgramSignatures, 
 			serviceReplyCell then break 'op'
 		immortalStructRecord or
 			immortalStringTable or
-			covPoint then break 'op'
+			covPoint or
+			rawIntrinsic then break 'op'
 	end 'op'
 end 'collectCallParamEdgesAt'
 
@@ -2338,7 +2345,8 @@ function opConsumesAPromise(op MaxonOp) returns bool
 			serviceReplyCell gives false
 		immortalStructRecord or
 			immortalStringTable or
-			covPoint gives false
+			covPoint or
+			rawIntrinsic gives false
 	end 'op'
 end 'opConsumesAPromise'
 
@@ -2422,7 +2430,8 @@ function collectAwaitSites(func IrFunction, module MaxonModule) returns AwaitSit
 					serviceReplyCell then break 'op'
 				immortalStructRecord or
 					immortalStringTable or
-					covPoint then break 'op'
+					covPoint or
+					rawIntrinsic then break 'op'
 			end 'op'
 		end 'eachOp'
 	end 'eachBlock'
@@ -2683,7 +2692,8 @@ function classifyOpForPromise(op MaxonOp, promise ValueId) returns OpAwaitRole
 			serviceReplyCell then break 'op'
 		immortalStructRecord or
 			immortalStringTable or
-			covPoint then break 'op'
+			covPoint or
+			rawIntrinsic then break 'op'
 	end 'op'
 
 	return rearmRoleIfDefines(op, promise: promise)
@@ -2793,7 +2803,8 @@ function collectAwaitSuccessors(module MaxonModule, block IrBlock, into BlockIdA
 			serviceReplyCell then break 'term'
 		immortalStructRecord or
 			immortalStringTable or
-			covPoint then break 'term'
+			covPoint or
+			rawIntrinsic then break 'term'
 	end 'term'
 end 'collectAwaitSuccessors'
 
@@ -2826,7 +2837,7 @@ end 'pushSuccessorPair'
 // that crossed INTO stdlib and repeating it here would position a second diagnostic in a file the user never
 // opened.
 function blameTargetErrorsIn(project Project, func IrFunction) returns bool
-	return not targetProvidesEveryFacility(project.target) and not isStdlibFunction(project, func: func)
+	return not targetProvidesEveryFacility(project.target) and not isLibraryFunction(project, func: func)
 end 'blameTargetErrorsIn'
 
 function checkCalls(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, throwsMap FuncThrowsMap, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary)
@@ -2846,7 +2857,7 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 		// never reads a clock would refuse a compile that contains no clock (see Compiler.maxon /
 		// StdlibSource). A REACHABLE Clock on wasm is NOT in this set, so a program that genuinely
 		// reads the clock still gets its E3104 — at the CROSSING call, not here.
-		if project.stdlibFacts.unreachable.contains(func.name) 'notInTheProgram'
+		if project.libraryFacts.unreachable.contains(func.name) 'notInTheProgram'
 			continue
 		end 'notInTheProgram'
 
@@ -3003,11 +3014,44 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 					// either. The targets that cannot MEASURE coverage are refused at the driver
 					// (`targetCanMeasureCoverage`), which is where the whole build is refused rather than one op.
 					covPoint then break 'op'
+
+					// ⭐ A `__Raw` intrinsic's target question is its TABLE ROW's: the row names the host facility
+					// its instruction needs, so a lane without it is refused here rather than panicking in isel.
+					rawIntrinsic(_, intrinsic, _, _) then requireTargetSupportsRawIntrinsic(project, func: func, opIndex: opIdx, intrinsic: intrinsic, blameTargetErrorsHere: blameTargetErrorsHere)
 				end 'op'
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
 end 'checkCalls'
+
+// The `__Raw` floor's half of the target gate. A row naming NO facility is pure code generation and nothing
+// here can refuse it — see `rawHostFacilityOf` for the one lane that still owes a row.
+//
+// ⛔ `blameTargetErrorsHere` is false for every function this can visit — a `__Raw` op stands only in a
+// runtime file, and that is library source — so no compile reaches the refusal below. It is the gate's
+// shape, not yet its effect; `rawHostFacilityOf`'s header carries what the wiring still owes.
+function requireTargetSupportsRawIntrinsic(project Project, func IrFunction, opIndex OpIndex, intrinsic RawIntrinsic, blameTargetErrorsHere bool)
+	if not blameTargetErrorsHere 'nothingRefusableHere'
+		return
+	end 'nothingRefusableHere'
+
+	match rawHostFacilityOf(intrinsic) 'facility'
+		none then return
+		required(facility) then reportIfTargetLacksRawIntrinsic(project, func: func, opIndex: opIndex, intrinsic: intrinsic, facility: facility)
+	end 'facility'
+end 'requireTargetSupportsRawIntrinsic'
+
+// ⚠ It does NOT share `reportTargetUnsupportedCallee`'s wire format, and the difference is the whole of what
+// `__Raw` is: there is no runtime entry between the source and the machine, so a sentence naming one would
+// send the reader looking for a symbol that does not exist.
+function reportIfTargetLacksRawIntrinsic(project Project, func IrFunction, opIndex OpIndex, intrinsic RawIntrinsic, facility HostFacility)
+	if targetProvidesFacility(project.target, facility: facility) 'theSubstrateIsHere'
+		return
+	end 'theSubstrateIsHere'
+
+	let callRange = project.opRanges.get(opIndex)
+	reportPositioned(project, code: ErrorCode.targetUnsupportedConstruct, message: "'{String.from(rawIntrinsicCalleeName(intrinsic))}' is a raw machine operation the {targetToString(project.target)} lane does not provide", line: callRange.line, column: callRange.column, filePath: func.sourceFilePath)
+end 'reportIfTargetLacksRawIntrinsic'
 
 // An `async` spawn (P1.5-B1a): validate its arguments exactly like a plain call, then require the callee's
 // PARAMETERS to be GPR scalars. The argument-VALUE and RESULT scalar checks are the parser's (it holds the
@@ -4050,7 +4094,8 @@ function reportIfNonYielding(project Project, op MaxonOp, opIndex OpIndex, func 
 			serviceReplyCell then return
 		immortalStructRecord or
 			immortalStringTable or
-			covPoint then return
+			covPoint or
+			rawIntrinsic then return
 	end 'op'
 end 'reportIfNonYielding'
 
@@ -4649,7 +4694,8 @@ function opYields(op MaxonOp, funcIndexByName FuncIndexByName, callerIndex FuncI
 			serviceReplyCell gives false
 		immortalStructRecord or
 			immortalStringTable or
-			covPoint gives false
+			covPoint or
+			rawIntrinsic gives false
 	end 'op'
 end 'opYields'
 
@@ -4918,6 +4964,12 @@ function opShowsAnEffect(op MaxonOp, func IrFunction, funcIndexByName FuncIndexB
 		// otherwise instrumenting a build would move a diagnostic, and the tool that finds untested code
 		// would refuse the code it was pointed at.
 		covPoint gives false
+
+		// ⭐ **`true` FOR THE WHOLE FAMILY, AND IT IS THE HONEST ANSWER RATHER THAN A CONSERVATIVE ONE.** The
+		// `__Raw` floor IS the effect: a store writes memory, a clock read consults the host, and an out-pointer
+		// row writes through its argument. A row-by-row purity claim would be a second, drifting idea of what
+		// each instruction does, while the table states what each one IS.
+		rawIntrinsic gives true
 	end 'op'
 end 'opShowsAnEffect'
 
@@ -5069,7 +5121,7 @@ let TargetUnsupportedUnnamedSubject = "this construct"
 // inside a function `main` never calls is still refused for wasm (measured), for the same reason a type
 // error in an unreached function is: this pass visits every function, and dead-function elimination runs two
 // tiers later. STDLIB source is the ONE exemption, because a stdlib module the program does not use must
-// leave the compile byte-identical: an unreachable stdlib function is in `stdlibFacts.unreachable`, so it
+// leave the compile byte-identical: an unreachable stdlib function is in `libraryFacts.unreachable`, so it
 // has no `substrateEntries` entry and no crossing to it can be refused. Clock shows both halves: a
 // `Clock.nowMs()` in code `main` never calls compiles clean for wasm while a reached one is refused.
 //
@@ -5100,7 +5152,7 @@ function requireTargetSupportsCallee(project Project, func IrFunction, opIndex O
 		return
 	end 'compilerOwnedEntry'
 
-	if let entry = try project.stdlibFacts.substrateEntries.get(callee) 'stdlibCrossing'
+	if let entry = try project.libraryFacts.substrateEntries.get(callee) 'stdlibCrossing'
 		// ⭐⭐ **THE CROSSING ASKS THE FACILITY TABLE TOO, AND BEFORE ANYTHING ELSE — WITHOUT THIS, A LANDED
 		// FAMILY IS STILL REFUSED THROUGH STDLIB.** The fixpoint is target-blind by design
 		// (`StdlibSource.noteSubstrateCallee`), so `substrateEntries` holds an entry for every stdlib body
@@ -6017,7 +6069,8 @@ function closureEscapeReason(op MaxonOp) returns String
 			serviceReplyCell then return "cannot hand a closure that captures to a service: a message MOVES its arguments to another green thread, and a capturing closure's environment is a box this one would still hold. {CapturingClosureEscapeSuffix}"
 		immortalStructRecord or
 			immortalStringTable or
-			covPoint then break 'op'
+			covPoint or
+			rawIntrinsic then break 'op'
 	end 'op'
 
 	// Reached only if `opEscapesValue` reported an escape at an op this mapping believes cannot persist a
@@ -6889,7 +6942,7 @@ function checkReturnedValueTypes(project Project, module MaxonModule)
 	for func in module.functions 'eachFunc'
 		// A stdlib function no path from `main` reaches is dropped before the back end, so a diagnostic here
 		// would name code the program does not contain — `checkCalls`' gate, for its reason.
-		if project.stdlibFacts.unreachable.contains(func.name) 'notInTheProgram'
+		if project.libraryFacts.unreachable.contains(func.name) 'notInTheProgram'
 			continue
 		end 'notInTheProgram'
 
@@ -6962,7 +7015,8 @@ function checkReturnsAgainstInterface(project Project, module MaxonModule, func 
 				serviceReplyCell then break 'op'
 			immortalStructRecord or
 				immortalStringTable or
-				covPoint then break 'op'
+				covPoint or
+				rawIntrinsic then break 'op'
 		end 'op'
 	end 'eachOp'
 end 'checkReturnsAgainstInterface'
