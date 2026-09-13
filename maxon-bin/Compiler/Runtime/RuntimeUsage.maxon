@@ -11,7 +11,7 @@
 //
 // **A String is one tenant of that list and was never its landlord.** The file's name said otherwise, and
 // a name that lies is the cheapest kind of wrong fact to leave lying around: it tells the next reader that
-// `usesIocp` is a String concern and that a new runtime family's bit belongs in a String file. The two
+// `usesChildPipes` is a String concern and that a new runtime family's bit belongs in a String file. The two
 // String-specific arms (`recordStringMethodUsage`/`closeStringMethodNeeds`) stay here with their siblings
 // rather than going back, because what makes them work is that every family follows ONE discipline —
 // declared here, checked against each other here, and ORDERED against each other here.
@@ -93,16 +93,15 @@ export type RuntimeUsage
 	// lowering.
 	export var usesGt as bool
 
-	// The program issues a YIELDING overlapped pipe read (`__gt_io_read`, the `spawnReadLine` probe, P1.5 slice
-	// 1a-ii). A SUPERSET of `usesGt` (a read yields the green thread, so it needs the whole scheduler), plus the
-	// IOCP substrate: `installIoRuntime` (`__io_init` + `__gt_io_read`), the hand-assembled `__io_completion_loop`
-	// chunk, the six `__io_*` `.data` slots, and the run-queue CRITICAL_SECTION that guards the completion thread's
-	// cross-thread `__gt_enqueue`. Set by `recordCallUsage` on a `__gt_io_read` call (which also sets `usesGt`).
-	export var usesIocp as bool
+	// The program reads a CHILD's pipe — a YIELDING read (`__gt_io_read`, `__gt_subp_yield_read`). A SUPERSET of
+	// `usesGt` (a read parks the green thread, so it needs the whole scheduler), plus the pipe substrate: the
+	// readers themselves, the pipe-name uniquifier's `.data` slot, and each lane's host chunks for opening,
+	// peeking at and terminating a child. Set by `recordCallUsage` on a `__gt_io_read` or `__gt_subp_*` call.
+	export var usesChildPipes as bool
 
-	// The STREAMING subprocess API (P1.5 dogfood slice 1b) — the handle table + `__gt_subp_*` functions. A SUPERSET
-	// of `usesIocp` (the yielding line read rides the completion thread), set by `recordCallUsage` on any
-	// `__gt_subp_*` call. Drives `installSubpRuntime` + the `__subp_table` `.data` slot.
+	// The STREAMING subprocess API — the handle table + `__gt_subp_*` functions. A SUPERSET of
+	// `usesChildPipes` (the line reader IS the yielding read), set by `recordCallUsage` on any `__gt_subp_*`
+	// call. Drives `installSubpRuntime` + the `__subp_table` `.data` slot.
 	export var usesStreaming as bool
 
 	// W35: the two stream writers, each with its OWN bit under this file's one-bit-per-entry-point
@@ -619,7 +618,7 @@ export type RuntimeUsage
 	export var parksOnIo as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesBackgroundPriority: false, usesTerminalDetection: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesSchedProcessorCount: false, usesMmCounters: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSlabArena: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, parksOnIo: true}
+		return Self{usesHeap: false, usesGt: false, usesChildPipes: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesBackgroundPriority: false, usesTerminalDetection: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesSchedProcessorCount: false, usesMmCounters: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSlabArena: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, parksOnIo: true}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -847,11 +846,10 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		recordGtUsage(usage)
 	end 'gt'
 
-	// A `__gt_io_read` call (the `spawnReadLine` probe, P1.5 slice 1a-ii) additionally carries the IOCP substrate:
-	// the completion port + completion thread + wake event + run-queue lock. `usesGt` is already set by the `__gt_`
-	// prefix above; this bit installs the IOCP-only pieces.
+	// A `__gt_io_read` call (the `spawnReadLine` probe) additionally carries the pipe substrate. `usesGt` is
+	// already set by the `__gt_` prefix above; this bit installs the pipe-only pieces.
 	if callee.equals(IoReadName) 'ioread'
-		usage.usesIocp = true
+		usage.usesChildPipes = true
 	end 'ioread'
 
 	// `__mm_is_null` is a heap PREDICATE, not a subprocess entry — it reads a pointer and nothing else — so it
@@ -868,13 +866,13 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	end 'debugStreamLog'
 
 	// A `__gt_subp_*` call (the P1.5 streaming subprocess API, slice 1b) carries the whole streaming runtime: the
-	// handle table + the `__gt_subp_*` functions, which ride the IOCP substrate (`usesIocp`) and build owned Strings
+	// handle table + the `__gt_subp_*` functions, which ride the pipe substrate (`usesChildPipes`) and build owned Strings
 	// from raw bytes (`__mm_alloc`/`__str_copy` inside their bodies — `usesHeap`/`usesStrCopy`, declared here because
 	// this Maxon-module scan cannot see those transitive calls). `usesGt`/`usesHeap` are already set by the `__gt_`
 	// prefix above; these bits install the streaming-only pieces.
 	if isSubprocessRuntimeCallee(callee) 'streaming'
 		usage.usesStreaming = true
-		usage.usesIocp = true
+		usage.usesChildPipes = true
 		usage.usesStrCopy = true
 
 		// ⭐ **THE ATTACHED HALF ADDS THREE MORE TRANSITIVE BITS**, declared here for the reason the three

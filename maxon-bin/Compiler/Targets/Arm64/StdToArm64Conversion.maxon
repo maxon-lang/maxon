@@ -171,7 +171,7 @@ let TlsUninitialisedSlotOffset = 0 as Imm32
 // ⭐ The message `osCancelIo` aborts with — see `lowerRuntimeAbort` for why a runtime abort is the
 // honest lowering of an op that the Std tier builds unconditionally and this lane can never execute.
 //
-let Arm64NoCancelIoMessage = b"panic: CancelIoEx was reached on arm64-macos, where every pipe read completes in its caller: nothing sets a green thread's `ioParked`, so `__gt_promise_drop`'s IO-cancel arm is unreachable and a build that runs it has a parked reader this lane cannot have created\n"
+let Arm64NoCancelIoMessage = b"panic: CancelIoEx was reached on arm64-macos, where every pipe read completes in its caller: no read is ever in flight across a park, so the renounced arm of `__gt_subp_yield_read` that cancels one is unreachable and a build that runs it has a parked reader this lane cannot have created\n"
 
 // The bitmask the LOGICAL `not` flips: a bool lives in the 0/1 domain, so complementing it is
 // flipping bit 0 — `eor dest, src, #1` — not the 64-bit `mvn` (which would turn true into -2, still
@@ -647,7 +647,6 @@ export type StdToArm64Lowering
 			witnessCall(_, _, _, _, argFloatMask, args) gives self.callOutgoingArgBytes(argFloatMask, argCount: args.count())
 			witnessTryCall(_, _, _, _, _, argFloatMask, args) gives self.callOutgoingArgBytes(argFloatMask, argCount: args.count())
 			osPipeCreate or
-				osIocpCreate or
 				osEventCreate or
 				osThreadCreate or
 				osLockInit or
@@ -795,7 +794,8 @@ export type StdToArm64Lowering
 			osHostSample gives 0
 
 			// Every poller chunk takes at most four arguments, all inside x0..x7.
-			osNetpoll gives 0
+			osNetpoll or
+				osSocketOverlapped gives 0
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -968,17 +968,10 @@ export type StdToArm64Lowering
 			witnessTryCall(resultId, errorFlagId, witnessAddr, methodIndex, resultType, argFloatMask, args) then self.lowerWitnessTryCall(resultId, errorFlagId: errorFlagId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask, dstRef: dstRef)
 
 			// ⭐ **MAC8: A PIPE IS A PIPE; A COMPLETION PORT IS NOT.** `osPipeCreate`'s name, security
-			// attributes and port operands are Windows shapes with nothing to bind to here — see
-			// `Arm64DarwinRuntime.buildArm64DarwinPipeChunk` — so only the two out-params are passed on.
-			osPipeCreate(_, _, _, readPtrId, writePtrId) then self.emitHostChunkCall(dstRef, chunk: HostPipeName, args: twoArgs(readPtrId, second: writePtrId))
-
-			// ⛔ **`osIocpCreate` CANNOT BE EMITTED ON THIS LANE, AND THAT IS A BUILD-TIME FACT RATHER THAN A
-			// HOPE.** Its ONE producer is `GtRuntime.buildIoInit`, which `installGtRuntime` builds only under
-			// the `completionPort` half of `IoCompletionShape` — and this lane answers `inlineCompletion`, where
-			// a read completes in its caller and there is no port, no wake event and no drain thread to create.
-			// So this is a compile-time panic and not a runtime one: reaching it means the shape fork was
-			// bypassed, which is a compiler bug rather than anything a program can ask for.
-			osIocpCreate then panic("StdToArm64Lowering: `osIocpCreate` reached the arm64 isel — a completion port is emitted ONLY by `GtRuntime.buildIoInit`, which is built under `IoCompletionShape.completionPort`, and every arm64 lane answers `inlineCompletion` (a read completes in its caller, so there is nothing to poll and nothing to wake). Reaching here means the IO-completion shape fork was bypassed")
+			// attributes, port and sync-silencing operands are Windows shapes with nothing to bind to here — see
+			// `Arm64DarwinRuntime.buildArm64DarwinPipeChunk` — so only the two out-params are passed on. A read
+			// here completes in its caller, so the caller's seeded silencing answer is already true.
+			osPipeCreate(_, _, _, readPtrId, writePtrId, _) then self.emitHostChunkCall(dstRef, chunk: HostPipeName, args: twoArgs(readPtrId, second: writePtrId))
 
 			// ⭐⭐ **MAC3: the P/M tier's own five ops, which sit INSIDE the IOCP band by declaration order and
 			// have nothing to do with IOCP.** `__sched_init_procs` builds them unconditionally under `usesGt`,
@@ -1013,10 +1006,9 @@ export type StdToArm64Lowering
 			// ⛔ **`osCancelIo` IS STATICALLY REACHABLE AND DYNAMICALLY UNREACHABLE HERE, so it is a RUNTIME
 			// abort rather than a compile-time one** — `osThreadCreate`'s shape on the Linux lane, and the same
 			// argument.
-			// `__gt_promise_drop`'s cancel arm is built whenever the pipe substrate is, but it runs only when
-			// the dropped promise's green thread has `ioParked` set, and nothing sets that on a lane where
-			// every read completes in its caller. A silent no-op would turn "this promise was dropped mid-read"
-			// into a read nobody cancelled and a handle nobody closed.
+			// The renounced arm of `__gt_subp_yield_read` is built whenever the pipe substrate is, but it runs
+			// only for a read still IN FLIGHT across a park, and a read on this lane completes in its caller.
+			// A silent no-op would turn "this promise was dropped mid-read" into a read nobody cancelled.
 			osCancelIo then self.lowerRuntimeAbort(dstRef, message: Arm64NoCancelIoMessage)
 
 			// ⭐ MAC2: the PROCESS ID. It sits inside the IOCP band because the pipe-name uniquifier minted it
@@ -1133,6 +1125,7 @@ export type StdToArm64Lowering
 			// garbage into a confident profile — see that facility's row for the whole argument.
 			osHostSample then panic("StdToArm64Lowering: `osHostSample` has no arm64 lowering — process sampling is `HostFacility.processSampling`, which no arm64 lane provides, so SemanticCheck refuses such a program at its own source span (E3104) and this is the backstop for a compiler bug that got one past that gate")
 			osNetpoll(resultId, verb, a0Id, a1Id, a2Id, a3Id, a4Id) then self.lowerOsNetpoll(resultId, verb: verb, operands: fiveArgs(a0Id, second: a1Id, third: a2Id, fourth: a3Id, fifth: a4Id), dstRef: dstRef)
+			osSocketOverlapped then panic("StdToArm64Lowering: `osSocketOverlapped` is an OVERLAPPED Winsock transfer and this lane has no Winsock — its sockets are driven by readiness, so `ManagedSocketRuntime.socketWaitShape` answers `polled` and emits none")
 
 			// One op, no operand, no register: the encoder reaches the counter through the reserved x16/x17
 			// scratch pair, which is outside the allocatable pool.
@@ -1293,7 +1286,6 @@ export type StdToArm64Lowering
 			// the `denseTargetBlockIds` Array is not bound in this big match.
 			switch then self.lowerSwitch(op, dstRef: dstRef)
 			osPipeCreate or
-				osIocpCreate or
 				osEventCreate or
 				osThreadCreate or
 				osLockInit or
@@ -1378,6 +1370,7 @@ export type StdToArm64Lowering
 			covPoint then panic("StdToArm64Lowering: a `covPoint` appeared as a block terminator (lowering bug — a coverage counter is emitted at a block HEAD, ahead of the code it counts)")
 			osHostSample then panic("StdToArm64Lowering: an `osHostSample` appeared as a block terminator (lowering bug — a host sample call produces a value and does not terminate)")
 			osNetpoll then panic("StdToArm64Lowering: an `osNetpoll` appeared as a block terminator (lowering bug — a poller call produces a value and does not terminate)")
+			osSocketOverlapped then panic("StdToArm64Lowering: an `osSocketOverlapped` appeared as a block terminator (lowering bug — a socket transfer produces a value and does not terminate)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -3066,10 +3059,9 @@ export type StdToArm64Lowering
 	// and gets it the same way.
 	//
 	// ⛔ **THIS WAS A ROUTE WITH A RUNTIME ABORT ON THE LINUX ARM, AND THE ABORT DID ITS JOB.** L4 refused to
-	// write a `clone` nothing could reach — `ioCompletionShape(linux)` is `inlineCompletion`, so there is no
-	// completion-drain thread, and `SchedRuntime.emitSchedWakeOrSpawn`'s worker M had no producer. `spawn`
-	// plus a default processor count that is the machine's gave it one, and the panic named the gap by name
-	// on the first such program built for this lane rather than leaving it to a hang or a wrong answer.
+	// write a `clone` nothing could reach — `SchedRuntime.emitSchedWakeOrSpawn`'s worker M had no producer.
+	// `spawn` plus a default processor count that is the machine's gave it one, and the panic named the gap by
+	// name on the first such program built for this lane rather than leaving it to a hang or a wrong answer.
 	function lowerOsThreadCreate(resultId ValueId, entryPtrId ValueId, argId ValueId, dstRef BlockRef)
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(entryPtrId)))
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(argId)))

@@ -217,7 +217,6 @@ function inlineOpRole(op StdOp, meta StdOpMetaMemo) returns InlineOpRole
 			switch then break 'kind'
 		witnessCall then return InlineOpRole.calling
 		osPipeCreate or
-			osIocpCreate or
 			osEventCreate or
 			osThreadCreate or
 			osLockInit or
@@ -297,7 +296,8 @@ function inlineOpRole(op StdOp, meta StdOpMetaMemo) returns InlineOpRole
 			osUnpublishNamedSegment or
 			covPoint or
 			osHostSample or
-			osNetpoll then break 'kind'
+			osNetpoll or
+			osSocketOverlapped then break 'kind'
 	end 'kind'
 
 	return InlineOpRole.refusing if meta.isUnsupportedInInlineBody(op) else InlineOpRole.body
@@ -2451,7 +2451,6 @@ type SiteSplicer
 					switch or
 					witnessCall or
 					osPipeCreate or
-					osIocpCreate or
 					osEventCreate or
 					osThreadCreate or
 					osLockInit or
@@ -2526,7 +2525,8 @@ type SiteSplicer
 					osUnpublishNamedSegment or
 					covPoint or
 					osHostSample or
-					osNetpoll then break 'kind'
+					osNetpoll or
+					osSocketOverlapped then break 'kind'
 			end 'kind'
 		end 'eachOp'
 
@@ -2655,7 +2655,6 @@ type SiteSplicer
 				switch or
 				witnessCall or
 				osPipeCreate or
-				osIocpCreate or
 				osEventCreate or
 				osThreadCreate or
 				osLockInit or
@@ -2730,7 +2729,8 @@ type SiteSplicer
 				osUnpublishNamedSegment or
 				covPoint or
 				osHostSample or
-				osNetpoll then self.refuseNotTheSplitCall()
+				osNetpoll or
+				osSocketOverlapped then self.refuseNotTheSplitCall()
 		end 'site'
 
 		var pred = self.blockAt(predRef)
@@ -3160,7 +3160,6 @@ type SiteSplicer
 			switch then self.cloneExit(calleeBlock, freshRef: freshRef, term: term, subst: subst, blocks: blocks)
 			witnessCall or
 				osPipeCreate or
-				osIocpCreate or
 				osEventCreate or
 				osThreadCreate or
 				osLockInit or
@@ -3235,7 +3234,8 @@ type SiteSplicer
 				osUnpublishNamedSegment or
 				covPoint or
 				osHostSample or
-				osNetpoll then refuseNotATerminator(calleeFunc)
+				osNetpoll or
+				osSocketOverlapped then refuseNotATerminator(calleeFunc)
 		end 'exit'
 	end 'copyBlockExit'
 
@@ -3380,7 +3380,6 @@ function assertParamOpMatchesConvention(op StdOp, calleeFunc IrFunction)
 			switch or
 			witnessCall or
 			osPipeCreate or
-			osIocpCreate or
 			osEventCreate or
 			osThreadCreate or
 			osLockInit or
@@ -3455,7 +3454,8 @@ function assertParamOpMatchesConvention(op StdOp, calleeFunc IrFunction)
 			osUnpublishNamedSegment or
 			covPoint or
 			osHostSample or
-			osNetpoll then refuseNotAParamOp()
+			osNetpoll or
+			osSocketOverlapped then refuseNotAParamOp()
 	end 'p'
 end 'assertParamOpMatchesConvention'
 

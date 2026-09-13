@@ -58,7 +58,7 @@
 // RELEASED on completion (`__gt_runner_done` → `osFreePages`).
 
 // --- GreenThread struct offsets ---
-// The offsets below 0xA8 are a FIXED, portable layout: a field placed at a different offset later is a
+// The offsets 0x00 through 0xA8 are a FIXED, portable layout: a field placed at a different offset later is a
 // layout fork, and the hand-assembled chunks would read the wrong word with nothing failing.
 // The offsets the hand-assembled chunks (X64GtRuntime — the context switch, the trampoline, and now the
 // syscall shim) read/write are EXPORTED so the byte code and this builder name one struct layout — the
@@ -109,24 +109,14 @@ export let GtStackGuardPreempt = -1314 as ParsedInt
 // (P1.5-B2b): 0 = success, non-zero = threw (a scalar error's `ordinal + ErrorFlagOrdinalBias`, or a boxed
 // union's box pointer — whatever the thunk left in R10). Read ONLY by `__gt_try_await`, which returns it as
 // the second register of its dual-register exit; `__gt_await` (a non-throwing await) never reads it, so a
-// non-throwing thunk leaving garbage in R10 here is harmless. Offset 0x58 leaves a one-word gap at 0x50,
-// which the portable layout reserves.
+// non-throwing thunk leaving garbage in R10 here is harmless. Offset 0x58 sits above the stack guard at 0x50.
 export let GtOffThrew = 0x58
 
-// The pipe HANDLE the running GT is parked on. Written by `__gt_subp_yield_read` when it parks on a read and
-// read back after the GT resumes. It fills the `io_handle` slot of the 0x60–0xA0 reserved window. Std is its
-// only reader, so it is not exported to the hand-assembled chunks.
-//
-// ⭐ **ITS LOW BIT CARRIES THE READING GT's PIPE OWNERSHIP** (kernel HANDLEs from CreatePipe/CreateNamedPipe
-// are 4-aligned, so bit 0 is free): 1 = one-shot/owned (`__gt_io_read`'s per-GT pipe, closed by the drop
-// cancel arm), 0 = streaming/table-owned (`__gt_subp_read_line`'s pipe, left open for `subpRelease`).
-// `__gt_subp_yield_read` ORs the bit in at park; `emitGtIoCancelArm` masks it off before
-// CancelIoEx/CloseHandle and branches its CloseHandle on it. A bit rather than a field keeps the struct one
-// word smaller, and it is cross-thread-safe: the completion thread never reads or writes io_handle (it
-// touches only io_result/status/ioParked and the run queue), and only yield_read parks reach the cancel arm
-// (proc/timer parks have `ioParked == 0` and take the store-removal path), so the tag is always present and
-// never clobbered.
-let GtOffIoHandle = 0x80
+// ⭐ **THE NTSTATUS THE COMPLETION PACKET CARRIED, masked to its 32 bits.** Written by the poller's decode
+// (`NetpollRuntime.emitNetpollDecodeCompletion`) beside `io_result` and read by `__gt_subp_yield_read` after
+// its wait, which is how a parked read tells bytes from a clean end of stream from a failure. It fills 0x80 of
+// the 0x60–0xA8 reserved window. EXPORTED because `NetpollRuntime` writes it.
+export let GtOffIoStatus = 0x80
 
 // The GT's OWN Windows TIB stack bounds, saved so the syscall shim (P1.5-B1a′) can repoint `gs:[0x08]`
 // (NT_TIB.StackBase) / `gs:[0x10]` (NT_TIB.StackLimit) at the system stack for a kernel call and RESTORE
@@ -134,50 +124,43 @@ let GtOffIoHandle = 0x80
 // bounds. `__gt_spawn` seeds them to the GT's own stack (`tibStackBase = stackBase + seed size`,
 // `tibStackLimit = stackBase`); an M's inline scheduler context starts at 0/0 — the shim calls directly for it
 // (`stackBase == 0`), and the first context switch away from it captures its OS thread's real bounds. EXPORTED
-// because the shim (a hand-assembled Target-tier chunk) reads them. Offsets
-// 0x90/0x98 fill two words of the 0x60–0xA0 reserved gap, which is left zeroed so a later field can be
-// placed without moving one.
+// because the shim (a hand-assembled Target-tier chunk) reads them. Offsets 0x90/0x98 fill two words of the
+// 0x60–0xA8 window, which is now assigned end to end — a further field takes 0xB8 or beyond.
 export let GtOffTibStackBase = 0x90
 export let GtOffTibStackLimit = 0x98
 
-// Reserved: 0xA8 is part of the portable layout, and nothing reads or writes it.
-let GtOffReservedIoYielded = 0xA8
+// ⭐ **THE PIPE HANDLE THE IN-FLIGHT READ WAS ISSUED ON.** Written before the read, read by
+// `__gt_promise_drop` to cancel it — and READ ONLY WHERE `io_source` IS NON-ZERO, which is exactly while the
+// kernel owns the operation. 0xA8 is part of the portable layout, so no field moves. EXPORTED because
+// `NetpollRuntime`'s aim writes it.
+export let GtOffIoHandle = 0xA8
 
-// --- P1.5 dogfood slice 1a-ii: the IOCP overlapped-read handshake fields ---
+// --- The overlapped-read fields ---
 // The 32-byte Win32 OVERLAPPED the yielding ReadFile is issued against, EMBEDDED in the GT struct's reserved
-// 0x60-0x7F window (four words). The completion thread recovers the parked GT from the completion packet's
+// 0x60-0x7F window (four words). The poller's decode recovers the reading thread from the completion packet's
 // lpOverlapped by CONTAINING_RECORD (`gt = ovlPtr - GtOffOverlapped`), so no per-read allocation and no separate
-// waiter table is needed. EXPORTED because the hand-assembled `__io_completion_loop` chunk (X64GtRuntime) reads
-// it to recover the GT and the read builtin passes `gt + GtOffOverlapped` to ReadFile. It MUST be zero-inited
-// before each ReadFile (a dirty `hEvent` low bit suppresses the completion packet) — the read builtin zeroes it.
+// waiter table is needed. EXPORTED because `NetpollRuntime`'s decode reads it to recover the thread and the read
+// builtin passes `gt + GtOffOverlapped` to ReadFile. It MUST be zero-inited before each ReadFile (a dirty
+// `hEvent` low bit suppresses the completion packet) — the read builtin zeroes it.
 export let GtOffOverlapped = 0x60
 
-// The bytes-read result the completion thread writes (from GetQueuedCompletionStatus's lpNumberOfBytesTransferred)
-// and the resumed read builtin reads back. 0x88 is the free word between `io_handle@0x80` and `tib_base@0x90`,
-// so no field moves. EXPORTED — the completion loop writes it.
+// The bytes the completion packet reported transferred (`OVERLAPPED_ENTRY.dwNumberOfBytesTransferred`), read
+// back by `__gt_subp_yield_read` once its wait ends. 0x88 is the free word between `io_status@0x80` and
+// `tib_base@0x90`, so no field moves. EXPORTED — the poller's decode writes it.
 export let GtOffIoResult = 0x88
 
-// ⭐ THE CROSS-THREAD PARK HANDSHAKE FLAG (P1.5 slice 1a-ii). The reading GT sets this to 1 only AFTER it has
-// committed to parking (`status = waiting` already stored); the completion thread SPIN-WAITS until it reads 1
-// before it sets `status = ready` / enqueues, so the completion thread's ready-write can never LAND BEFORE the
-// GT's own waiting-write (a torn status / lost wakeup — the publish-before-park race). Cleared to 0 on resume.
-// 0xA0 is the free word between `tib_limit@0x98` and `io_yielded@0xA8`, so no field moves. EXPORTED — the
-// completion loop's spin reads it.
-export let GtOffIoParked = 0xA0
-
-// ⭐ The `ioParked` field is a small STATE MACHINE for the cross-thread read handshake AND its drop-in-flight
-// cancellation (P1.5 slice 1a-ii). 0 = not parked (slab-zero / cleared on resume). The completion thread and the
-// `__gt_promise_drop` IO arm coordinate the GT's fate through it, under `__sched_lock`, so exactly one side frees the GT
-// and neither dereferences it after free. EXPORTED because the hand-assembled completion loop reads and writes it.
-//   IoParkedInFlight (1)   the reader committed to parking; a read is in flight (the completion thread's spin target)
-//   IoParkedAbandoned (2)  `__gt_promise_drop` cancelled an in-flight read — the completion thread must NOT ready it
-//   IoParkedDrainDone (3)  the completion thread finished draining an ABANDONED GT (the drop arm's spin target)
-//   IoParkedNormalDone (4) the completion thread finished a NORMAL read and readied the GT — the drop arm reads this
-//                          to detect a promise dropped just AFTER its read completed, and renounces the GT in place
-let IoParkedInFlight = 1
-export let IoParkedAbandoned = 2
-export let IoParkedDrainDone = 3
-export let IoParkedNormalDone = 4
+// ⭐⭐ **THE STAMPED SOURCE KEY OF THE READ THIS THREAD HAS IN FLIGHT** — `index | (gen << 32)` for the poll
+// record `__np_op_open` gave the operation. The completion packet names the OPERATION through its
+// `lpOverlapped` and carries no key of its own, so the decode recovers this thread and then reads the record
+// to wake out of this word. Written BEFORE the read is issued, which is what makes it readable by a packet
+// that arrives before the thread has parked. 0xA0 is the free word between `tib_limit@0x98` and
+// `io_handle@0xA8`, so no field moves. EXPORTED because `NetpollRuntime` writes and reads it.
+//
+// ⛔ **A ZERO HERE MEANS "NO READ IN FLIGHT", AND THE STAMP IS WHAT MAKES THAT EXACT.** `__gt_promise_drop`
+// reads this word to tell a dropped READ from a dropped socket or child wait, so a live read must never
+// stamp a zero — and it cannot: `__np_pd_adopt` BUMPS the record's generation, so every stamped key carries
+// a generation of at least one in its high half whatever index it got, index zero included.
+export let GtOffIoSource = 0xA0
 
 // ⭐⭐ **THE PER-CALLEE RELEASER — the address of this GT's `__gt_release_<callee>`, or 0.** A spawn whose
 // callee has NO managed argument, result or error writes 0 here and both release sites skip rather than
@@ -210,24 +193,17 @@ export let GtOffReleaser = 0xB0
 // shape with a debug flag would mean the byte code and the builder disagreed in exactly the configuration
 // nobody routinely runs. Eight bytes per green thread is the price of one layout.
 //
-// ⚠ It cannot sit at 0xA0, which `ioParked`'s IOCP handshake holds. At 0xB8 it leaves every already-placed
-// field (0x00–0xB0, through `io_yielded`@0xA8 and `releaser`@0xB0) exactly where it is and moves only the
-// inline argument region.
+// ⚠ It cannot sit at 0xA0, which the in-flight operation's source key holds. At 0xB8 it leaves every
+// already-placed field (0x00–0xB0, through `io_handle`@0xA8 and `releaser`@0xB0) exactly where it is and moves
+// only the inline argument region.
 let GtOffTraceId = 0xB8
 
-// ⭐ **THE ONE-SHOT READ'S ACROSS-THE-PARK SCRATCH, OR 0 (S3).** `__gt_io_read` issues an overlapped
-// `ReadFile` into a region the completion thread keeps writing while the green thread is suspended, so that
-// region — alone among the eight the probe allocates — outlives the function's own straight-line code. The
-// normal path frees it the moment the yielding read returns and clears this slot; the DROP path frees it
-// through this slot, because `__gt_promise_drop` cancels a read whose frame it can never return to.
-//
-// ⚠ **IT IS A FIELD WHERE THE PIPE-OWNERSHIP MARKER WAS A BIT, AND THE DIFFERENCE IS THAT A POINTER HAS NO
-// SPARE BIT.** `GtOffIoHandle`'s note records declining a field for that marker — kernel HANDLEs are
-// 4-aligned, so bit 0 carried it for nothing. There is no such room here: the alternative to eight bytes on
-// the struct is ~4.1 KB abandoned per dropped in-flight read, which is the debt this rung exists to close and
-// not a cheaper place to put it. A STREAMING read leaves the slot 0 (its buffer belongs to the handle table
-// and `subpRelease` is its sole owner), so the cancel arm frees exactly what the probe allocated.
-let GtOffIoScratch = 0xC0
+// ⭐⭐ **WHICH DIRECTION THE IN-FLIGHT OVERLAPPED OPERATION IS, `NetpollModeRead` or `NetpollModeWrite`.**
+// A completion packet names the OPERATION through its `lpOverlapped` and carries no direction of its own, so
+// the decode reads it off the thread to know which of the record's two direction words to ready. Written
+// before the operation is issued, beside `io_handle` and under the same guard: it is read only where
+// `io_source` is non-zero. EXPORTED because `NetpollRuntime`'s decode reads it.
+export let GtOffIoMode = 0xC0
 
 // ⭐ **THE INLINE ARGUMENT REGION.** MaxAsyncArgs i64 slots at the END of the GT struct, so a spawn needs NO
 // separate argument buffer — `__gt_spawn` sets `gt.argBuf` (0x48) to a SELF-POINTER `gt + GtOffArgInline`,
@@ -399,7 +375,7 @@ let StrandHeld = 1 as ParsedInt
 // each coroutine it created that has not yet finished, and the strand hold. A coroutine can outlive its
 // owner's return — a dropped one runs out its body — and it still pushes onto this struct's strand queue, so
 // the owner's runner arrival (`GtOffTeardown`) waits until this reaches 0. Stepped atomically: a claim is
-// taken on whatever thread readies a member, the IOCP completion thread included.
+// taken on whatever thread readies a member, a machine draining the poller included.
 let GtOffStrandRefs = GtOffStrandHolder + PointerFieldBytes
 
 // ⭐⭐ **THE GT PARKED WAITING FOR THIS ONE TO COMPLETE, OR 0.** Written under `__sched_lock` by the await and
@@ -473,8 +449,8 @@ function emitGtBranchOnPollerPark(module StdModule, block IrBlock, kind ValueId,
 	module.setTerminator(block, op: StdOp.condBranch(parked, thenBlockId: onPoller.id, elseBlockId: elsewhere.id))
 end 'emitGtBranchOnPollerPark'
 
-// ⚠ **2 IS RESERVED, NOT FREE** — a park kind travels in a green thread's own record, so a number is spent once allocated and a new kind takes the next one past the highest.
-let GtParkKindIo = 3 as ParsedInt
+// ⚠ **2 AND 3 ARE RESERVED, NOT FREE** — a park kind travels in a green thread's own record, so a number is
+// spent once allocated and a new kind takes the next one past the highest.
 
 // EXPORTED because the site that PRODUCES it is `MailboxRuntime` while the arm that consumes it is here — the
 // two files must spell one number.
@@ -504,8 +480,8 @@ let GtParkKindPreempt = 9 as ParsedInt
 // address of its own group. EXPORTED for `GtParkKindNetpoll`'s reason.
 export let GtParkKindNetpollAny = 10 as ParsedInt
 
-// The `arg` a park that needs none carries — an IO park (its handshake is two stores on the GT itself), a
-// yield and a preemption — so the site says so rather than passing whatever happened to be in a register.
+// The `arg` a park that needs none carries — a yield and a preemption — so the site says so rather than
+// passing whatever happened to be in a register.
 let GtParkArgUnused = 0 as ParsedInt
 
 // ⭐ **THE LOW BIT OF `GtOffAwaiter` MARKS AN awaitAny WAITER.** GT structs are word-aligned, so the bit is free.
@@ -1057,8 +1033,8 @@ export let GtReadyName = b"__gt_ready"
 // release (`SchedRuntime.emitSchedWakeIfOwed`), because a wake inside a critical section has no StoreLoad fence
 // and a nested leave of this recursive lock releases nothing.
 //
-// EXPORTED for its callers in `MailboxRuntime`, for the hand-assembled IOCP completion loop, and for the root
-// that keeps it alive for that call (`DeadFunctionElimination.seedRoots`).
+// EXPORTED for its callers in `MailboxRuntime` and for the root that keeps it alive for the hand-assembled
+// chunks that name it (`DeadFunctionElimination.seedRoots`).
 export let GtReadyLockedName = b"__gt_ready_locked"
 
 // What `__gt_ready_locked` answers. Named because every waker compares against them and a bare literal at each
@@ -1120,9 +1096,8 @@ export let GtPromiseDropName = b"__gt_promise_drop"
 // ⛔⛔⛔ **IT IS NEVER CALLED WITH `__sched_lock` HELD.** `__sched_lock` is RECURSIVE: a nested
 // `LeaveCriticalSection` decrements the count and RELEASES NOTHING, silently. This call takes the lock itself
 // to hand the awaiter over, and it reaches `__gt_reclaim` and through it the per-callee RELEASER, which can
-// reach `__gt_promise_drop`, whose IO arm SPIN-WAITS on `gt.ioParked` *with the lock released so the
-// completion thread can acquire it*. Under an outer lock that release is a no-op and the completion thread
-// blocks on `EnterCriticalSection` for ever while this thread spins for it.
+// reach `__gt_promise_drop`, whose arms take and release the lock themselves. Under an outer lock a release
+// there is a no-op, and the party it was released for blocks on `EnterCriticalSection` for ever.
 //
 // **`__gt_owner_done(gt)` — THE CONSUMER's half: the promise is finished with.** It gives back the thread's
 // slot in `__gt_live_count` and adds the consumer ticket; if the runner was already there it performs the
@@ -1505,13 +1480,9 @@ let GtRegisterParkName = b"__gt_register_park"
 // P1.5 subprocess seed. `__gt_process_run` is the front-end target for `runProcess(cmd)`.
 export let GtProcessRunName = b"__gt_process_run"
 
-// P1.5 dogfood slice 1a-ii — the IOCP overlapped-read substrate. `__gt_io_read` is the front-end target for the
-// `spawnReadLine` probe builtin; `__io_init` creates the IOCP and its completion thread;
-// `__io_completion_loop` is the hand-assembled completion-drain thread entry (X64GtRuntime). Named in the `__gt_`
-// / `__io_` bands so `isGtRuntimeCallee`/`isIoRuntimeCallee` catch them and they stay out of the goldens.
+// `__gt_io_read` is the front-end target for the `spawnReadLine` probe builtin. Named in the `__gt_` band so
+// `isGtRuntimeCallee` catches it and it stays out of the goldens.
 export let IoReadName = b"__gt_io_read"
-let IoInitName = b"__io_init"
-export let IoCompletionLoopName = b"__io_completion_loop"
 
 // --- `.data` globals (all i64, zero-initialized) ---
 // The zero image IS the initial state: no current GT and an empty run queue — exactly as `__slab_state`'s
@@ -1650,22 +1621,11 @@ let GtClockTicksSlot = 0 as SpillSlot
 let GtClockFreqSlot = 1 as SpillSlot
 let GtClockScratchBytes = 16 as StackSize
 
-// The IOCP substrate's `.data` slots. `__io_iocp` = the process-wide completion port; `__io_init_done` = the
-// idempotency guard for `__io_init`; `__io_pending` = the count of in-flight overlapped reads (++ before a
-// park, -- on resume). EXPORTED where the hand-assembled completion loop reads them, and `__io_pending` for
-// `__sched_checkdead`, to which a read in flight is a wake still to come.
-//
-// ⚠ There is no IO lock: the completion thread's re-ready and the `ioParked` handshake take `__sched_lock`
-// (`SchedRuntime.SchedLockLabel`), one lock so that no lock ORDER exists for two files to remember.
-export let IoIocpLabel = b"__io_iocp"
-let IoInitDoneLabel = b"__io_init_done"
-export let IoPendingLabel = b"__io_pending"
-
 // ⭐⭐ **THE ONE-SHOT READ'S ACROSS-THE-PARK SCRATCH — ONE REGION, TWO USES.** `__gt_io_read` needs a read
 // buffer big enough for one line of child stdout (the probe reads `cmd /c echo hello`, ~7 bytes) AND an
 // 8-byte slot for `ReadFile`'s transferred-byte out-param, and both must survive the park. They are ONE
-// allocation because that is what makes them ONE free and ONE pointer on the GT (`GtOffIoScratch`): a second
-// region would need a second field for the drop path to reach, for eight bytes.
+// allocation because that is what makes them ONE free: the reading thread is the only party that ever frees
+// it, on the normal road and on the renounced one alike.
 //
 // ⚠ **THE OUT-SLOT IS FIRST SO THE WHOLE REGION IS EXACTLY A SIZE CLASS.** Adding the slot to a round 4096
 // would push the request into the next class up and waste most of the difference; taking it OUT of 4096
@@ -1701,22 +1661,24 @@ export let StartupInfoHStdErrorOffset = 0x60
 // returned `>= 0` — so an end of stream is a 0-byte SUCCESS and never reaches the error classification at
 // all. What reaches it there is a `read` that returned negative, which is a real fault on any lane.
 //
-// ⚠ `export` because the IOCP COMPLETION THREAD makes the identical fold for a read that had already parked
-// (`X64GtRuntime.buildIoCompletionLoopChunk`): one classification, reachable from both tiers that make it.
-// ⚠ `export` because a POSIX lane's errno translator answers it for `EAGAIN`: a non-blocking read that
-// could not be served yet IS an operation still in flight, and translating it to anything else would send the
-// caller down the classification road instead of the park.
+// ⚠ `export` because a POSIX lane's errno translator answers `ERROR_IO_PENDING` for `EAGAIN`: a non-blocking
+// read that could not be served yet IS an operation still in flight, and translating it to anything else would
+// send the caller down the classification road instead of the park.
 export let ErrorIoPending = 997
-export let ErrorBrokenPipe = 109
+let ErrorBrokenPipe = 109
+
+// ⭐ **THE SAME TWO ENDS OF STREAM AS THE KERNEL REPORTS THEM.** A completion packet carries an NTSTATUS rather
+// than a Win32 error, so the parked read's fold is written in that vocabulary: the child's write end gone
+// (`STATUS_PIPE_BROKEN`) and the last byte already delivered (`STATUS_END_OF_FILE`) are 0 bytes, and every other
+// status is a failure.
+let NtStatusPipeBroken = 0xC000014B as ParsedInt
+let NtStatusEndOfFile = 0xC0000011 as ParsedInt
 
 // ⭐ **`__gt_subp_yield_read`'s ANSWER FOR A READ THAT FAILED**, against the 0 that means a clean end of
 // stream. It rides the byte count rather than an out-parameter because every caller already branches on
 // that count — and each must branch on it as `<= 0` rather than `== 0`, since a negative added to a buffer
 // length is a length past what the buffer holds.
-//
-// ⚠ `export` for `ErrorBrokenPipe`'s reason: the completion thread writes this very value into
-// `gt.io_result`, so a PARKED failure and a SYNCHRONOUS one reach `emitSubpTopUpStream` as one answer.
-export let SubpReadFailedCount = -1
+let SubpReadFailedCount = -1
 
 // The wide pipe-name buffer: prefix `\\.\pipe\mx` (11 wchars) + a 16-wchar hex uniquifier + NUL, in a `__slab_alloc`
 // buffer. `PipeNamePrefixWchars` counts the prefix wide chars; `PipeNameHexDigits` the uniquifier digits (a 64-bit
@@ -2166,41 +2128,34 @@ export function gtRuntimeGlobals(target Target) returns DataSectionEntryArray
 	return out
 end 'gtRuntimeGlobals'
 
-// The IOCP substrate's `.data` slots — laid out ONLY when the module reads a pipe (`usesIocp`): the completion
-// port, the init guard, the in-flight-read count, and the pipe-name uniquifier counter. All 0 until
-// `__io_init` seeds them.
+// The pipe substrate's one `.data` slot — laid out ONLY when the module reads a pipe (`usesChildPipes`): the
+// pipe-name uniquifier counter, 0 until the first pipe is created.
 export function ioRuntimeGlobals() returns DataSectionEntryArray
 	var out = DataSectionEntryArray.create()
-	pushRuntimeGlobal(out, label: IoIocpLabel, sharing: MultiMSharing.sealedBeforeWorkers)
-	pushRuntimeGlobal(out, label: IoInitDoneLabel, sharing: MultiMSharing.sealedBeforeWorkers)
-	pushRuntimeGlobal(out, label: IoPendingLabel, sharing: MultiMSharing.atomicStep)
 	pushRuntimeGlobal(out, label: IoPipeSeqLabel, sharing: MultiMSharing.atomicStep)
 	return out
 end 'ioRuntimeGlobals'
 
-// ⭐⭐⭐ **HOW A READ ON THIS TARGET FINISHES — the fact the IOCP substrate exists to serve, and the only
-// one of it that is not target-neutral (MAC8).**
+// ⭐⭐⭐ **HOW A READ ON THIS TARGET FINISHES — the one fact about a pipe read that is not target-neutral.**
 //
-// Windows's overlapped `ReadFile` may answer `ERROR_IO_PENDING`: the read is IN FLIGHT and its completion
-// will be delivered LATER, to a completion port, on another thread. Everything `__io_init` builds is there
-// to receive that — the port and the drain thread that re-readies the parked green thread. A descriptor read
-// on a POSIX lane cannot be in flight: it either moves bytes or it does not, in the caller, before it returns.
+// Windows's overlapped `ReadFile` may answer `ERROR_IO_PENDING`: the read is IN FLIGHT and its completion will
+// be delivered LATER, as a packet on the scheduler's poller. A descriptor read on a POSIX lane cannot be in
+// flight: it either moves bytes or it does not, in the caller, before it returns.
 //
-// ⇒ under `inlineCompletion` there is nothing to create and nothing to wake, so `__io_init` is not built at
-// all, `__gt_init` does not call it, `__sched_checkdead` counts no read in flight and `__gt_promise_drop`'s
-// IO-cancel arm is unreachable.
+// ⇒ under `inlineCompletion` no read is ever outstanding across a park, so there is nothing to cancel and
+// `__gt_promise_drop`'s in-flight-read arm is unreachable.
 //
-// ⚠ **THAT LANE STILL PARKS A READER, ON THE POLLER RATHER THAN ON A COMPLETION.** `__gt_subp_yield_read`
-// forks on this shape: the completion port carries the read itself, while a POSIX read that cannot be served
-// answers `EAGAIN`, which the errno translators map to `ERROR_IO_PENDING` so the thread suspends on the
-// descriptor's poll record and re-issues the read when it is readable. Both arms are live; what differs is
-// WHAT the thread is waiting on.
+// ⚠ **BOTH LANES PARK A READER ON THE POLLER, AND WHAT THEY PARK ON DIFFERS.** `__gt_subp_yield_read` forks on
+// this shape: a completion port carries the READ, so the source is the OPERATION and its packet is what ends
+// the wait; a POSIX read that cannot be served answers `EAGAIN`, which the errno translators map to
+// `ERROR_IO_PENDING`, so the thread suspends on the DESCRIPTOR's poll record and re-issues the read when it is
+// readable. Both arms are live; what differs is WHAT the thread is waiting on.
 //
-// ⚠ **THIS IS NOT `usesIocp`, AND CONFLATING THE TWO IS WHAT THE SPLIT FIXES.** `usesIocp` asks *"does this
-// module read a pipe?"* and still gates the reader itself (`__gt_io_read`, `__gt_subp_yield_read`); this asks
+// ⚠ **THIS IS NOT `usesChildPipes`, AND CONFLATING THE TWO IS WHAT THE SPLIT FIXES.** `usesChildPipes` asks *"does this
+// module read a pipe?"* and gates the reader itself (`__gt_io_read`, `__gt_subp_yield_read`); this asks
 // *"does a read on this target complete somewhere else?"*, and only the second one is about the target.
 export enum IoCompletionShape
-	// Windows: a completion port and a drain thread.
+	// Windows: the read is handed to a completion port and finishes as a packet on it.
 	completionPort
 
 	// POSIX and WASI: a read completes in its caller.
@@ -2218,7 +2173,7 @@ export function ioCompletionShape(target Target) returns IoCompletionShape
 	end 'os'
 end 'ioCompletionShape'
 
-export function installGtRuntime(module StdModule, globalData GlobalDataTable, asyncTrace bool, usesIocp bool, usesStreaming bool, rawFree ByteArray, target Target, streamState EnumLayout)
+export function installGtRuntime(module StdModule, globalData GlobalDataTable, asyncTrace bool, usesChildPipes bool, usesStreaming bool, rawFree ByteArray, target Target, streamState EnumLayout)
 	// The first function index this install owns — the range `assertCompletedPublicationIsOrdered` checks at
 	// the end. Taken from the module rather than assumed to be zero: the runtime installs run after the whole
 	// user program is already lowered into this module.
@@ -2238,13 +2193,10 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 		buildGtTraceEmit(module, tags: tags)
 	end 'traceEmitter'
 
-	// The substrate a COMPLETION PORT needs, as opposed to the reader itself — see `IoCompletionShape`.
-	let usesCompletionPort = usesIocp and ioCompletionShape(target) == IoCompletionShape.completionPort
-
 	// ⭐ The P/M half — the processor structure, the TLS door, the scheduler loop and the wake. FIRST in the
 	// list because `__gt_init` calls `__sched_init_procs` before it does anything else.
-	installSchedRuntime(module, target: target, usesCompletionPort: usesCompletionPort, rawFree: rawFree)
-	buildGtInit(module, usesCompletionPort: usesCompletionPort)
+	installSchedRuntime(module, target: target, rawFree: rawFree)
+	buildGtInit(module)
 
 	// ⭐ ALL THREE spawn doors, from one body. Whether a program can REACH one is `DeadFunctionElimination`'s
 	// question, and answering it here would be a second reachability analysis that could disagree with it.
@@ -2274,7 +2226,7 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtRunMain(module, target: target)
 	buildGtAwait(module, name: GtAwaitName, throwing: false, asyncTrace: asyncTrace, tags: tags)
 	buildGtAwait(module, name: GtTryAwaitName, throwing: true, asyncTrace: asyncTrace, tags: tags)
-	buildGtPromiseDrop(module, usesCompletionPort: usesCompletionPort, rawFree: rawFree)
+	buildGtPromiseDrop(module)
 
 	// The three halves of the teardown rendezvous, beside the drop and the two awaits that step it.
 	// `__gt_reclaim` last, because it is what the other two call. See `GtOffTeardown` for the protocol.
@@ -2302,17 +2254,13 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	// whose spawn primitive takes a vector. Beside its callers, for the reason its own header carries.
 	installSubpShellCommandBuilder(module, target: target)
 
-	if usesCompletionPort 'completionPort'
-		buildIoInit(module)
-	end 'completionPort'
-
-	if usesIocp 'io'
+	if usesChildPipes 'io'
 		buildSubpYieldRead(module, target: target)
 		buildGtIoRead(module, rawFree: rawFree, commandShape: subprocessCommandShape(target))
 	end 'io'
 
-	// The streaming subprocess API (slice 1b) rides the same IOCP substrate (`usesStreaming` implies `usesIocp`),
-	// so `__gt_subp_yield_read` is already installed above; only the API surface is added here.
+	// The streaming subprocess API rides the same pipe substrate (`usesStreaming` implies `usesChildPipes`), so
+	// `__gt_subp_yield_read` is already installed above; only the API surface is added here.
 	if usesStreaming 'streaming'
 		installSubpRuntime(module, target: target, streamState: streamState)
 	end 'streaming'
@@ -2329,13 +2277,13 @@ end 'installGtRuntime'
 
 // ⚠ **THE RUN-QUEUE LOCK IS UNCONDITIONAL**: every green-thread program has a second cross-thread mutator (a
 // worker M) as soon as `MAXON_MAX_PROCS` allows one. The queue primitives (`__gt_enqueue`, `__gt_dequeue`,
-// `__gt_ready_locked`) take no lock of their own; the CALLER holds it, so the completion thread's
-// hand-assembled loop can call them inside its own critical section.
+// `__gt_ready_locked`) take no lock of their own; the CALLER holds it, so a readiness walk can call them
+// inside its own critical section.
 
 // `__gt_init()` — scheduler bring-up, called once by `__gt_run_main` on the main machine's scheduler context
 // before `main`'s green thread exists. Every later scheduler call can therefore take the P/M structure, the
 // stores and the run-queue lock as given.
-function buildGtInit(module StdModule, usesCompletionPort bool)
+function buildGtInit(module StdModule)
 	var func = IrFunction.createFromStd(GtInitName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
@@ -2364,13 +2312,6 @@ function buildGtInit(module StdModule, usesCompletionPort bool)
 	let capAddr = ids.mint()
 	module.appendOp(entry, op: StdOp.globalAddr(capAddr, label: GtTimerCapacityLabel))
 	module.appendOp(entry, op: StdOp.storeIndirect(capAddr, offset: 0, valueId: capSeedConst, valueType: StdType.i64))
-
-	// The IOCP substrate (port + completion thread), before any read can be issued. A void call mints
-	// an unread result id.
-	if usesCompletionPort 'ioInit'
-		let ioInitResult = ids.mint()
-		module.appendOp(entry, op: StdOp.call(ioInitResult, callee: IoInitName, args: ValueIdArray.create()))
-	end 'ioInit'
 
 	module.setTerminator(entry, op: StdOp.retVoid)
 	module.functions.push(func)
@@ -2918,8 +2859,8 @@ end 'buildGtDequeue'
 // `__gt_coro_enqueue(gt)` — append `gt` to its owner's strand queue. `__gt_enqueue`'s body off the owner's
 // struct. The caller holds `__sched_lock`.
 //
-// ⚠ **THE OWNER IS READ OFF THE GT AND NOT FROM TLS**, because a waker may be an OS thread with no M — the
-// IOCP completion thread — and the GT it recovered knows which strand it belongs to.
+// ⚠ **THE OWNER IS READ OFF THE GT AND NOT FROM TLS**, because a waker may be an OS thread with no M — a
+// machine draining the poller with no processor — and the GT it recovered knows which strand it belongs to.
 function buildGtCoroEnqueue(module StdModule)
 	var func = IrFunction.createFromStd(GtCoroEnqueueName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -4147,10 +4088,9 @@ end 'buildGtOwnerDone'
 // ⛔⛔ **AND IT ASKS A SECOND QUESTION — HAS THIS THREAD EVER RUN — BECAUSE RECLAIMING FROM A QUEUE IS
 // FREEING WITHOUT RUNNING THE THREAD'S OWN CLEANUP.** A thread that has never been switched into holds
 // nothing but its untouched seed stack and struct, so taking it off a queue and freeing both is complete. A
-// thread that HAS run and is back in a queue may be holding an in-flight OVERLAPPED read's `__io_pending`
-// slot, a per-GT pipe handle, its read scratch, or a child process HANDLE — and every one of those is
-// released by the thread's OWN resumption path and by nothing else. Freeing such a thread here would strand
-// `__io_pending` above zero for ever.
+// thread that HAS run and is back in a queue may be holding a per-GT pipe handle, its read scratch, an
+// operation's poll source or a child process HANDLE — and every one of those is released by the thread's OWN
+// resumption path and by nothing else. Freeing such a thread here would strand every one of them.
 //
 // ⚠ **EVERY ASKER HAS CLAIMED THE THREAD FIRST**: the handback asks of a candidate already POPPED, and the
 // sweep of a head it holds `__sched_lock` over. Asked of a thread nobody claimed, the answer could be read
@@ -4366,7 +4306,6 @@ function collectCompletedWordDefs(op StdOp, completedConsts ValueIdArray, plainS
 			switch or
 			witnessCall or
 			osPipeCreate or
-			osIocpCreate or
 			osEventCreate or
 			osThreadCreate or
 			osLockInit or
@@ -4444,7 +4383,8 @@ function collectCompletedWordDefs(op StdOp, completedConsts ValueIdArray, plainS
 			osUnpublishNamedSegment or
 			covPoint or
 			osHostSample or
-			osNetpoll then break 'k'
+			osNetpoll or
+			osSocketOverlapped then break 'k'
 	end 'k'
 end 'collectCompletedWordDefs'
 
@@ -4498,7 +4438,6 @@ function requireOrderedCompletedAccess(op StdOp, func IrFunction, completedConst
 			switch or
 			witnessCall or
 			osPipeCreate or
-			osIocpCreate or
 			osEventCreate or
 			osThreadCreate or
 			osLockInit or
@@ -4576,7 +4515,8 @@ function requireOrderedCompletedAccess(op StdOp, func IrFunction, completedConst
 			osUnpublishNamedSegment or
 			covPoint or
 			osHostSample or
-			osNetpoll then break 'k'
+			osNetpoll or
+			osSocketOverlapped then break 'k'
 	end 'k'
 end 'requireOrderedCompletedAccess'
 
@@ -4779,12 +4719,10 @@ end 'buildGtCellComplete'
 //     child handle — abandon the WAIT, do not kill the child). **If a scan finds it, this dropper is now its
 //     ONLY owner** and performs the runner's half as well: the (possibly morestack-grown) stack, then the
 //     consumer's half, which reclaims.
-//   • `waiting` with an IN-FLIGHT OVERLAPPED READ (P1.5 slice 1a-ii): the thread parked on a yielding
-//     `ReadFile` and the IOCP completion thread STILL HOLDS its OVERLAPPED (`gt + 0x60`). Freeing the GT here
-//     would be a cross-thread use-after-free when the read completes. So `emitGtIoCancelArm` CANCELS the read
-//     (CancelIoEx), DRAINS the completion (a cross-thread abandon/drain handshake through `ioParked`, so the
-//     completion thread is provably DONE with the GT), closes the read handle, and decrements `__io_pending`
-//     — only THEN is it this dropper's outright.
+//   • `waiting` with an IN-FLIGHT OVERLAPPED READ: the thread parked on a yielding `ReadFile` and the KERNEL
+//     still holds its OVERLAPPED (`gt + 0x60`). Freeing the GT here would be a use-after-free when the read
+//     completes, so the park is left standing and the read is CANCELLED (CancelIoEx): its own packet readies
+//     the thread, which unwinds itself — the await arm's answer, and this dropper never owns the struct.
 //   • `waiting` in an await or an awaitAny — the thread will be readied by the completion it waits for, so it
 //     takes the arm below.
 //   • anything else (`ready`, or a `completed`/running thread whose status this call never inspects) — the
@@ -4797,14 +4735,12 @@ end 'buildGtCellComplete'
 // ⛔⛔ **A THREAD THAT IS RE-READIED WHILE THIS CALL IS ACQUIRING THE LOCK IS NOT AN ERROR PATH, AND IT IS
 // WHY THE TWO ARMS SHARE AN EXIT.** A `waiting` thread can be re-readied under `__sched_lock` between the
 // status load above and this call's own acquisition of that lock — `__gt_timer_check` fires a due deadline,
-// the poller's walk reaches a ready source, the completion thread finishes a read — and the thread is then
-// QUEUED, not parked. Deregistering nothing and freeing anyway would be a use-after-free on a thread sitting
-// in a queue. The waiting arm therefore RE-READS the status under the lock it holds and falls through to the
-// queued arm when it no longer says `waiting`; whichever party got the lock first decides, exactly, and the
-// tombstone the fall-through leaves is reclaimed by whoever pops it. `emitGtIoCancelArm`'s
-// `IoParkedNormalDone` exit is the SAME fall-through by the SAME argument, which is why the two share
-// `queuedArm` rather than each having its own.
-function buildGtPromiseDrop(module StdModule, usesCompletionPort bool, rawFree ByteArray)
+// or the poller's walk reaches a ready source — and the thread is then QUEUED, not parked. Deregistering
+// nothing and freeing anyway would be a use-after-free on a thread sitting in a queue. The waiting arm
+// therefore RE-READS the status under the lock it holds and falls through to the queued arm when it no longer
+// says `waiting`; whichever party got the lock first decides, exactly, and the tombstone the fall-through
+// leaves is reclaimed by whoever pops it.
+function buildGtPromiseDrop(module StdModule)
 	var func = IrFunction.createFromStd(GtPromiseDropName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
@@ -4814,6 +4750,10 @@ function buildGtPromiseDrop(module StdModule, usesCompletionPort bool, rawFree B
 	var notMailbox = module.addBlock(func, label: b"droppednotmailbox", heat: BlockHeat.normal)
 	var waitingArm = module.addBlock(func, label: b"waitingarm", heat: BlockHeat.normal)
 	var notAwaiting = module.addBlock(func, label: b"droppednotawaiting", heat: BlockHeat.normal)
+	var pollerParked = module.addBlock(func, label: b"droppedpollerpark", heat: BlockHeat.normal)
+	var readParked = module.addBlock(func, label: b"droppedreadpark", heat: BlockHeat.normal)
+	var readCancel = module.addBlock(func, label: b"droppedreadcancel", heat: BlockHeat.normal)
+	var readMovedOn = module.addBlock(func, label: b"droppedreadmovedon", heat: BlockHeat.normal)
 	var netpollParked = module.addBlock(func, label: b"droppednetpoll", heat: BlockHeat.normal)
 	var notNetpollPark = module.addBlock(func, label: b"droppednotnetpoll", heat: BlockHeat.normal)
 	var timerParked = module.addBlock(func, label: b"droppedtimer", heat: BlockHeat.normal)
@@ -4839,34 +4779,27 @@ function buildGtPromiseDrop(module StdModule, usesCompletionPort bool, rawFree B
 	let isWaiting = emitGtStatusEquals(module, block: notAReplyCell, status: status, want: GtStatusWaiting, ids: ids)
 	module.setTerminator(notAReplyCell, op: StdOp.condBranch(isWaiting, thenBlockId: waitingArm.id, elseBlockId: queuedArm.id))
 
-	// waiting arm: an in-flight OVERLAPPED READ (ioParked != 0) is DEREGISTERED via the cross-thread cancel/drain
-	// handshake (the completion thread still holds its OVERLAPPED — this is the one in-flight I/O the compiler now has to
-	// abort); a timer/proc-parked GT (ioParked == 0) takes the existing store-removal path. Under `usesIocp` the
-	// distinction exists; without it there is no read runtime, so ioParked is always 0 and the path is byte-identical.
+	// waiting arm: the park kind decides which store has to be emptied before the thread can be given up.
 	//
-	// ⛔⛔⛔ **THE FOURTH PARK KIND IS ANSWERED HERE, AND THE ANSWER IS AN ABORT (SV2 — the trap SV1's review
-	// left on this row).** `__gt_register_park` registers FOUR kinds — TIMER, PROC, IO and, since SV1,
-	// MAILBOX (`MailboxRuntime.emitMboxRegisterPark`, which stores the GT into `mbox.parkedGt`). The road
-	// below empties the first three stores, and NOTHING anywhere clears `mbox.parkedGt` but the waker's own
-	// store — so a mailbox-parked GT falling through it would miss both scans, re-read `waiting`, take
-	// `soleOwner`, and free the stack (and possibly the struct) while `mbox.parkedGt` still pointed at it.
-	// The next `__mbox_send` / `__mbox_close` would then store `ready` into freed memory and publish a freed
-	// GT: a cross-green-thread use-after-free.
+	// ⛔⛔⛔ **THE MAILBOX PARK KIND IS ANSWERED HERE, AND THE ANSWER IS AN ABORT.**
+	// `__gt_register_park` registers a park on the TIMER, on the POLLER or on a MAILBOX
+	// (`MailboxRuntime.emitMboxRegisterPark`, which stores the GT into `mbox.parkedGt`). The road below empties
+	// the timer and poller stores, and NOTHING anywhere clears `mbox.parkedGt` but the waker's own store — so a
+	// mailbox-parked GT falling through it would miss both scans, re-read `waiting`, take `soleOwner`, and free
+	// the stack (and possibly the struct) while `mbox.parkedGt` still pointed at it. The next `__mbox_send` /
+	// `__mbox_close` would then store `ready` into freed memory and publish a freed GT: a cross-green-thread
+	// use-after-free.
 	//
-	// ⭐⭐ **SV2 RETIRED ONE OF THE TWO GROUNDS THAT MADE IT UNREACHABLE AND THE OTHER STILL HOLDS, WHICH IS
-	// WHY THIS IS AN ABORT AND NOT A FOURTH DEREGISTRATION.** The review recorded two independent grounds:
-	// (1) `spawn` yields a `<T>.handle` box and never a promise, so no promise named a service's green
-	// thread; (2) `__mbox_recv` — the ONE producer of a mailbox park — has exactly two callers, both inside
-	// the synthesized `<T>.__loop`. **(1) is gone**: a reply cell IS a promise and this function is exactly
-	// the door it travels through. **(2) is UNCHANGED and is re-derived at the code for SV2's own shape**: a
-	// reply cell has `funcPtr == 0` and is never enqueued, so it can execute nothing and can never call
-	// `__mbox_recv`; `<T>.__loop` is reached only by `__gt_spawn_green` from `__svc_spawn`, which still hands
-	// back a mailbox rather than a promise; and no `async` can spawn `<T>.__loop`, whose symbol
+	// ⭐⭐ **IT IS AN ABORT RATHER THAN A THIRD DEREGISTRATION BECAUSE NOTHING IN THE LANGUAGE CAN REACH IT.**
+	// `__mbox_recv` — the ONE producer of a mailbox park — has exactly two callers, both inside the synthesized
+	// `<T>.__loop`: a reply cell has `funcPtr == 0` and is never enqueued, so it can execute nothing and can
+	// never call `__mbox_recv`; `<T>.__loop` is reached only by `__gt_spawn_green` from `__svc_spawn`, which
+	// hands back a mailbox rather than a promise; and no `async` can spawn `<T>.__loop`, whose symbol
 	// (`serviceLoopSymbol`) is `__`-prefixed and unspellable in source (E2051). ⇒ **the only GT that can be
 	// mailbox-parked is a service's own green thread, and nothing in the language names one with a
 	// `Promise`.**
 	//
-	// ⇒ **What is written here is the STOP, not a repair.** A fourth deregistration would be emitter code
+	// ⇒ **What is written here is the STOP, not a repair.** A third deregistration would be emitter code
 	// nothing in this tree can execute, in a reclamation path, deciding a question the design has not
 	// answered — what a service whose loop is freed mid-`recv` owes its mailbox's `refs` and its state. The
 	// abort turns a silent use-after-free into a named exit at the instruction that caused it, and it is
@@ -4894,7 +4827,55 @@ function buildGtPromiseDrop(module StdModule, usesCompletionPort bool, rawFree B
 	// interpolated `String` inside a `sleep`, dropped while parked, exits 101; the same coroutine holding
 	// nothing exits 0. So the wait is EXPIRED and the thread READIED: it resumes, unwinds its own frame, and its
 	// runner reclaims it. The status re-read below then finds `ready` and takes the queued arm by itself.
-	emitGtBranchOnPollerPark(module, block: notAwaiting, kind: parkKind, onPoller: netpollParked, elsewhere: notNetpollPark, ids: ids)
+	emitGtBranchOnPollerPark(module, block: notAwaiting, kind: parkKind, onPoller: pollerParked, elsewhere: notNetpollPark, ids: ids)
+
+	// ⭐⭐⭐ **AN OPERATION THE KERNEL IS STILL SERVING IS RENOUNCED IN PLACE, WITHOUT BEING TAKEN OFF THE POLLER —
+	// the AWAIT arm's answer, for the one park whose wait cannot be ended by the runtime.** The thread's
+	// OVERLAPPED is embedded in its own struct, so a thread taken off the poller here could unwind and be
+	// reclaimed while the kernel still holds that memory. Its completion packet is the only proof the kernel is
+	// done, so the drop CANCELS the operation — which makes the packet come at once — and leaves the park
+	// standing. The thread is readied by its own completion, answers a failed operation, unwinds its frame and
+	// its runner reclaims it: the queued arm's contract exactly.
+	//
+	// ⚠ **`io_source` IS THE GUARD AND IT MEANS "AN OVERLAPPED OPERATION OF ANY KIND IS IN FLIGHT".** It is
+	// stamped by `__np_op_open` for a pipe read and by `__np_op_aim` for a socket transfer, and cleared by the
+	// completion's own wake or by `__np_op_close`; `io_handle` beside it names whichever handle the request is
+	// on. ⛔ **A SOCKET PARKED IN A `WSARecv`/`WSASend` THEREFORE READS NON-ZERO AND BELONGS ON THIS ARM**, not
+	// on the deregistering one below: taking it off its record while the kernel holds its OVERLAPPED is the
+	// use-after-free this arm exists to prevent. Only a park with NO request outstanding — a child, or a socket
+	// waiting on a readiness — reads 0.
+	let inFlightSource = emitLoadField(module, block: pollerParked, record: gt, offset: GtOffIoSource, ids: ids)
+	let readInFlight = emitCmp(module, block: pollerParked, a: inFlightSource, b: emitConst(module, block: pollerParked, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(pollerParked, op: StdOp.condBranch(readInFlight, thenBlockId: readParked.id, elseBlockId: netpollParked.id))
+
+	// ⛔⛔ **THE CANCEL MUST NAME THE OPERATION THIS THREAD IS PARKED ON, AND ONLY A RE-READ UNDER THE LOCK SAYS
+	// SO.** The status this arm was chosen on was read without the lock: a packet landing since readies the
+	// thread, which can resume, finish its operation, give its source back and ISSUE ANOTHER on the same
+	// OVERLAPPED — and the cancel would then abort a request nobody dropped. Under the lock a `waiting` status
+	// is exact, because the only party that ends a poller park is a readiness walk and it holds this lock; and a
+	// thread that is `waiting` is not running, so its own `io_source` and `io_handle` cannot move either.
+	//
+	// ⛔ **AND THE CANCEL IS ISSUED UNDER THE SAME HOLD, BECAUSE THE PROOF EXPIRES THE INSTANT IT IS RELEASED.**
+	// Dropping the lock between the re-read and `CancelIoEx` is the very race the re-read closes. It costs
+	// nothing to hold it: the call is `SyscallClass.schedulerBound`, so no handoff happens inside it, and
+	// `CancelIoEx` only MARKS the request — it never waits on the poller that is waiting on this lock.
+	// ⚠ **`emitSocketCollectOutstanding`'s cancel is outside the lock for a reason that does not apply here**:
+	// there a thread cancels its OWN in-flight request, so no second party can retire it underneath.
+	emitSchedLockEnter(module, block: readParked, ids: ids)
+	let readStatus = emitLoadField(module, block: readParked, record: gt, offset: GtOffStatus, ids: ids)
+	let stillReading = emitGtStatusEquals(module, block: readParked, status: readStatus, want: GtStatusWaiting, ids: ids)
+	module.setTerminator(readParked, op: StdOp.condBranch(stillReading, thenBlockId: readCancel.id, elseBlockId: readMovedOn.id))
+
+	let readHandle = emitLoadField(module, block: readCancel, record: gt, offset: GtOffIoHandle, ids: ids)
+	let readOvl = emitBin(module, block: readCancel, a: gt, b: emitConst(module, block: readCancel, value: GtOffOverlapped as ParsedInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	module.appendOp(readCancel, op: StdOp.osCancelIo(readHandle, ovlId: readOvl))
+	emitSchedLockLeave(module, block: readCancel, ids: ids)
+	module.setTerminator(readCancel, op: StdOp.branch(queuedArm.id))
+
+	// The completion got there first, so the thread is queued and owes this dropper nothing but the consumer's
+	// half — the same fall-through every arm below makes.
+	emitSchedLockLeave(module, block: readMovedOn, ids: ids)
+	module.setTerminator(readMovedOn, op: StdOp.branch(queuedArm.id))
 
 	// The poller's expiry takes the thread off its direction word and marks the wait, so its resumption answers
 	// `timedOut` rather than re-issuing a syscall on a descriptor nobody wants.
@@ -4914,23 +4895,8 @@ function buildGtPromiseDrop(module StdModule, usesCompletionPort bool, rawFree B
 	emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: timerParked, gt: gt, tag: emitConst(module, block: timerParked, value: TimerTagSleep, ids: ids), cont: timerExpired)
 	emitGtRenouncePark(module, func: func, ids: ids, cur: timerExpired, gt: gt, cont: waitingUnlock, label: b"timer")
 
-	if usesCompletionPort 'ioAware'
-		var waitingTimer = module.addBlock(func, label: b"waitingtimer", heat: BlockHeat.normal)
-		var ioArm = module.addBlock(func, label: b"ioarm", heat: BlockHeat.normal)
-		let ioParked = ids.mint()
-		module.appendOp(waitingStores, op: StdOp.loadIndirect(ioParked, addrId: gt, offset: GtOffIoParked, valueType: StdType.i64))
-		let ioZeroConst = ids.mint()
-		module.appendOp(waitingStores, op: StdOp.const(ioZeroConst, value: 0, valueType: StdType.i64))
-		let isInFlightRead = ids.mint()
-		module.appendOp(waitingStores, op: StdOp.cmp(isInFlightRead, lhs: ioParked, rhs: ioZeroConst, pred: StdCmpPred.ne, operandType: StdType.i64))
-		module.setTerminator(waitingStores, op: StdOp.condBranch(isInFlightRead, thenBlockId: ioArm.id, elseBlockId: waitingTimer.id))
-		emitGtIoCancelArm(module, func: func, ids: ids, startBlock: ioArm, gt: gt, cont: soleOwner, queuedCont: queuedArm, rawFree: rawFree)
-		emitSchedLockEnter(module, block: waitingTimer, ids: ids)
-		emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: waitingTimer, gt: gt, tag: emitConst(module, block: waitingTimer, value: TimerTagSleep, ids: ids), cont: waitingUnlock)
-	end 'ioAware' else 'timerOnly'
-		emitSchedLockEnter(module, block: waitingStores, ids: ids)
-		emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: waitingStores, gt: gt, tag: emitConst(module, block: waitingStores, value: TimerTagSleep, ids: ids), cont: waitingUnlock)
-	end 'timerOnly'
+	emitSchedLockEnter(module, block: waitingStores, ids: ids)
+	emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: waitingStores, gt: gt, tag: emitConst(module, block: waitingStores, value: TimerTagSleep, ids: ids), cont: waitingUnlock)
 
 	// ⭐⭐ **EVERY ARM ABOVE RUNS UNDER THE RUN-QUEUE LOCK (G2), AND THE VERDICT IS A RE-READ OF THE
 	// STATUS UNDER THAT SAME LOCK.** The timer removal is a scan-then-swap-remove over the `.data` store that
@@ -4939,7 +4905,7 @@ function buildGtPromiseDrop(module StdModule, usesCompletionPort bool, rawFree B
 	//
 	// **`status` IS STILL `waiting` IF AND ONLY IF NOTHING RE-READIED THIS THREAD**, because the three parties
 	// that could — the timer check firing a due deadline, the poller's walk readying a source's waiter, and
-	// the completion thread finishing a read — all store `ready`, and all of them do it under this lock, which
+	// the poller's walk finishing a read — all store `ready`, and all of them do it under this lock, which
 	// this arm holds. So ONE load answers the question exactly, and it answers it for every arm at once: none
 	// has to report whether its own scan hit, and none's dozen exits grows an argument a later exit could
 	// forget to supply. `completed` reads here too (re-readied, run and finished while this arm waited for the
@@ -5018,130 +4984,6 @@ function bytesWithSuffix(base ByteArray, suffix ByteArray) returns ByteArray
 	out.append(suffix)
 	return out
 end 'bytesWithSuffix'
-
-// ⭐ **CANCEL + DRAIN AN IN-FLIGHT OVERLAPPED READ, then branch to `cont` (the drop's `soleOwner`)** — the drop DUAL
-// of the completion thread's re-ready. The GT is parked on a yielding `ReadFile`; the completion thread holds its
-// OVERLAPPED (`gt + GtOffOverlapped`) and will deref + ready the GT when the read completes. This coordinates with
-// the completion thread through the `ioParked` state machine, under `__sched_lock`, so exactly ONE side owns the GT:
-//
-//   • Under `__sched_lock`, read `ioParked`. `IoParkedNormalDone` (4) ⇒ the read ALREADY completed and the
-//     completion thread readied the GT onto its strand queue: it is a started thread, so it runs its body out and
-//     its own resumption (`__gt_subp_yield_read`'s `resume`, then its caller) gives back `__io_pending`, the
-//     read's pipe and its scratch. The drop RENOUNCES it (`queuedCont`) and touches none of the three — doing
-//     so as well would free the scratch and close the pipe twice and count the read out twice.
-//   • Otherwise (`IoParkedInFlight`, 1): set `ioParked = IoParkedAbandoned` (2) UNDER the lock, release, then
-//     `CancelIoEx(readEnd, ovl)`. The completion thread's next packet (ERROR_OPERATION_ABORTED, or a natural
-//     completion that raced) sees `ioParked == 2`, sets `ioParked = IoParkedDrainDone` (3), and touches the GT no
-//     further. This arm SPIN-WAITS on `ioParked == 3` (the cancel completes in microseconds) with the lock
-//     RELEASED so the completion thread can acquire it, proving the completion thread is done — and the GT's
-//     resumption will never run, so this arm does its cleanup: `__io_pending--` and — ONLY when `io_handle`'s
-//     spare low bit (the ownership tag) is 1 — `CloseHandle(readEnd)`, then the scratch free. A ONE-SHOT read
-//     (`__gt_io_read`) owns its per-GT pipe; a STREAMING read (`__gt_subp_read_line`) reads a TABLE-owned pipe
-//     that stays open for the next `subpReadLine(h)` (CancelIoEx cancels only the pending op), and
-//     `subpRelease` is its sole closer.
-//
-// The lock-serialized `ioParked` read here versus the completion thread's `ioParked` read there is what makes the
-// ownership decision mutually exclusive.
-function emitGtIoCancelArm(module StdModule, func IrFunction, ids ValueMinter, startBlock IrBlock, gt ValueId, cont IrBlock, queuedCont IrBlock, rawFree ByteArray)
-	var ioAbandon = module.addBlock(func, label: b"ioabandon", heat: BlockHeat.normal)
-	var ioDrainSpin = module.addBlock(func, label: b"iodrainspin", heat: BlockHeat.normal)
-	var ioDrainLoop = module.addBlock(func, label: b"iodrainloop", heat: BlockHeat.normal)
-	var ioAlreadyFired = module.addBlock(func, label: b"ioalreadyfired", heat: BlockHeat.normal)
-	var ioCleanup = module.addBlock(func, label: b"iocleanup", heat: BlockHeat.normal)
-	var ioClosePipe = module.addBlock(func, label: b"ioclosepipe", heat: BlockHeat.normal)
-	var ioPendingDec = module.addBlock(func, label: b"iopendingdec", heat: BlockHeat.normal)
-	var ioFreeScratch = module.addBlock(func, label: b"iofreescratch", heat: BlockHeat.normal)
-
-	// startBlock: split gt.io_handle into its ownership tag + real handle ; ovl = gt + GtOffOverlapped ;
-	// Enter __sched_lock ; branch on ioParked == 4. io_handle's spare low bit carries pipe ownership (yield_read
-	// OR'd it in; kernel HANDLEs are 4-aligned): `ownsPipe` is bit 0 (1 = one-shot/owned, 0 = streaming/table),
-	// `readEnd` is the real handle with the tag masked off — used for CancelIoEx and the conditional CloseHandle.
-	let rawHandle = ids.mint()
-	module.appendOp(startBlock, op: StdOp.loadIndirect(rawHandle, addrId: gt, offset: GtOffIoHandle, valueType: StdType.i64))
-	let ownsBitConst = ids.mint()
-	module.appendOp(startBlock, op: StdOp.const(ownsBitConst, value: 1, valueType: StdType.i64))
-	let ownsPipe = ids.mint()
-	module.appendOp(startBlock, op: StdOp.binOp(ownsPipe, lhs: rawHandle, rhs: ownsBitConst, opcode: StdBinOpcode.bitAnd, operandType: StdType.i64))
-	let readEnd = ids.mint()
-	module.appendOp(startBlock, op: StdOp.binOp(readEnd, lhs: rawHandle, rhs: ownsPipe, opcode: StdBinOpcode.sub, operandType: StdType.i64))
-	let ovlOffConst = ids.mint()
-	module.appendOp(startBlock, op: StdOp.const(ovlOffConst, value: GtOffOverlapped as ParsedInt, valueType: StdType.i64))
-	let ovlPtr = ids.mint()
-	module.appendOp(startBlock, op: StdOp.binOp(ovlPtr, lhs: gt, rhs: ovlOffConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let lockAddr = ids.mint()
-	module.appendOp(startBlock, op: StdOp.globalAddr(lockAddr, label: SchedLockLabel))
-	let lockPtr = ids.mint()
-	module.appendOp(startBlock, op: StdOp.loadIndirect(lockPtr, addrId: lockAddr, offset: 0, valueType: StdType.i64))
-	module.appendOp(startBlock, op: StdOp.osLockEnter(lockPtr))
-	let parkedState = ids.mint()
-	module.appendOp(startBlock, op: StdOp.loadIndirect(parkedState, addrId: gt, offset: GtOffIoParked, valueType: StdType.i64))
-	let normalDoneConst = ids.mint()
-	module.appendOp(startBlock, op: StdOp.const(normalDoneConst, value: IoParkedNormalDone, valueType: StdType.i64))
-	let alreadyFired = ids.mint()
-	module.appendOp(startBlock, op: StdOp.cmp(alreadyFired, lhs: parkedState, rhs: normalDoneConst, pred: StdCmpPred.eq, operandType: StdType.i64))
-	module.setTerminator(startBlock, op: StdOp.condBranch(alreadyFired, thenBlockId: ioAlreadyFired.id, elseBlockId: ioAbandon.id))
-
-	// ioAbandon (holding lock): mark abandoned (2) so the completion thread will NOT ready it, release the lock, then
-	// CancelIoEx the specific pending read → the completion thread drains it. Then spin for the drain-done signal.
-	let abandonedConst = ids.mint()
-	module.appendOp(ioAbandon, op: StdOp.const(abandonedConst, value: IoParkedAbandoned, valueType: StdType.i64))
-	module.appendOp(ioAbandon, op: StdOp.storeIndirect(gt, offset: GtOffIoParked, valueId: abandonedConst, valueType: StdType.i64))
-	module.appendOp(ioAbandon, op: StdOp.osLockLeave(lockPtr))
-	module.appendOp(ioAbandon, op: StdOp.osCancelIo(readEnd, ovlId: ovlPtr))
-	module.setTerminator(ioAbandon, op: StdOp.branch(ioDrainSpin.id))
-
-	// ioDrainSpin: loop until gt.ioParked == IoParkedDrainDone (3) — the completion thread finished with the GT. The
-	// lock is NOT held here, so the completion thread can acquire it to set the flag (no deadlock). Header + loop
-	// block (the codebase idiom for a re-reading loop), re-reading gt.ioParked from memory each pass.
-	let drainState = ids.mint()
-	module.appendOp(ioDrainSpin, op: StdOp.loadIndirect(drainState, addrId: gt, offset: GtOffIoParked, valueType: StdType.i64))
-	let drainDoneConst = ids.mint()
-	module.appendOp(ioDrainSpin, op: StdOp.const(drainDoneConst, value: IoParkedDrainDone, valueType: StdType.i64))
-	let isDrained = ids.mint()
-	module.appendOp(ioDrainSpin, op: StdOp.cmp(isDrained, lhs: drainState, rhs: drainDoneConst, pred: StdCmpPred.eq, operandType: StdType.i64))
-	module.setTerminator(ioDrainSpin, op: StdOp.condBranch(isDrained, thenBlockId: ioCleanup.id, elseBlockId: ioDrainLoop.id))
-	module.setTerminator(ioDrainLoop, op: StdOp.branch(ioDrainSpin.id))
-
-	// ioAlreadyFired (holding lock): the completion thread already readied the GT, whose own resumption does the
-	// cleanup. Release and renounce.
-	module.appendOp(ioAlreadyFired, op: StdOp.osLockLeave(lockPtr))
-	module.setTerminator(ioAlreadyFired, op: StdOp.branch(queuedCont.id))
-
-	// ioCleanup: close the read end ONLY if the GT owns the pipe (a one-shot read); a streaming read's pipe is
-	// table-owned and left open for `subpRelease`. `ownsPipe` (0/1) was split out of io_handle's tag bit in
-	// startBlock, which dominates this block.
-	let zeroOwns = ids.mint()
-	module.appendOp(ioCleanup, op: StdOp.const(zeroOwns, value: 0, valueType: StdType.i64))
-	let isOwned = ids.mint()
-	module.appendOp(ioCleanup, op: StdOp.cmp(isOwned, lhs: ownsPipe, rhs: zeroOwns, pred: StdCmpPred.ne, operandType: StdType.i64))
-	module.setTerminator(ioCleanup, op: StdOp.condBranch(isOwned, thenBlockId: ioClosePipe.id, elseBlockId: ioPendingDec.id))
-
-	// ioClosePipe: the one-shot per-GT pipe — close it (the resume that would have never runs).
-	module.appendOp(ioClosePipe, op: StdOp.osCloseHandle(readEnd))
-	module.setTerminator(ioClosePipe, op: StdOp.branch(ioPendingDec.id))
-
-	// ioPendingDec: __io_pending-- (the reader's park incremented it and its resume never runs). Runs for owned
-	// and shared alike.
-	let dropPendingDebit = emitConst(module, block: ioPendingDec, value: OneFewer, ids: ids)
-	_ = emitGlobalAccumulate(module, block: ioPendingDec, label: IoPendingLabel, delta: dropPendingDebit, multiM: true, ids: ids)
-
-	// ⭐ **AND THE ABANDONED READ'S BUFFER GOES BACK.** `__gt_io_read` published it to `gt.ioScratch` before
-	// issuing the read and will never return to free it — this is the only site that can. It runs AFTER the
-	// drain handshake above, which is what proves the completion thread has finished writing into it. A
-	// STREAMING read leaves the slot 0 (its buffer belongs to the handle table), so the guard is what tells the
-	// two apart.
-	let scratch = ids.mint()
-	module.appendOp(ioPendingDec, op: StdOp.loadIndirect(scratch, addrId: gt, offset: GtOffIoScratch, valueType: StdType.i64))
-	let noScratch = ids.mint()
-	module.appendOp(ioPendingDec, op: StdOp.const(noScratch, value: 0, valueType: StdType.i64))
-	let hasScratch = ids.mint()
-	module.appendOp(ioPendingDec, op: StdOp.cmp(hasScratch, lhs: scratch, rhs: noScratch, pred: StdCmpPred.ne, operandType: StdType.i64))
-	module.setTerminator(ioPendingDec, op: StdOp.condBranch(hasScratch, thenBlockId: ioFreeScratch.id, elseBlockId: cont.id))
-
-	// No clear afterwards: every path out of here ends at a teardown arrival that releases the struct.
-	module.appendOp(ioFreeScratch, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(scratch)))
-	module.setTerminator(ioFreeScratch, op: StdOp.branch(cont.id))
-end 'emitGtIoCancelArm'
 
 // ⭐⭐ **`__gt_runner_done(gt)` — THE RUNNER's HALF OF THE TEARDOWN RENDEZVOUS: this party is finished with
 // the thread's EXECUTION.** Ready whoever awaits it, free the stack, arrive at the word, and reclaim if the
@@ -5525,9 +5367,6 @@ end 'emitLoadCurrentGtCpuOffset'
 //     status under the lock then reads that as *"still parked, I am its sole owner"* and frees a queued
 //     thread. `__gt_timer_add` takes the lock itself, recursively. A deadline earlier than every other now
 //     pending owes the poller a look (`SchedRuntime.__sched_wake_netpoller`), after the release.
-//   • **io** — two PLAIN stores, `waiting` then `ioParked`, and no lock: the IOCP completion thread waits for
-//     `ioParked` to turn non-zero before it takes the lock and readies the thread, so its ready always lands
-//     after the `waiting` store rather than under it.
 //   • **netpoll** — `NetpollRuntime.__np_pd_commit` under the lock, which may UNDO the park for the mailbox
 //     arm's reason: readiness that landed between the mark and the commit was recorded by a party that found
 //     nobody published, so the thread is readied rather than left waiting for a wake already delivered. A
@@ -5549,8 +5388,6 @@ function buildGtRegisterPark(module StdModule)
 	var timerArm = module.addBlock(func, label: b"parktimer", heat: BlockHeat.normal)
 	var timerWake = module.addBlock(func, label: b"parktimerwake", heat: BlockHeat.normal)
 	var notTimer = module.addBlock(func, label: b"notparktimer", heat: BlockHeat.normal)
-	var ioArm = module.addBlock(func, label: b"parkio", heat: BlockHeat.normal)
-	var notIo = module.addBlock(func, label: b"notparkio", heat: BlockHeat.normal)
 	var netpollArm = module.addBlock(func, label: b"parknetpoll", heat: BlockHeat.normal)
 	var netpollWake = module.addBlock(func, label: b"parknetpollwake", heat: BlockHeat.normal)
 	var netpollPaid = module.addBlock(func, label: b"parknetpollpaid", heat: BlockHeat.normal)
@@ -5596,16 +5433,7 @@ function buildGtRegisterPark(module StdModule)
 	module.setTerminator(timerArm, op: StdOp.condBranch(becameRoot, thenBlockId: timerWake.id, elseBlockId: doneBlock.id))
 	emitGtWakeNetpoller(module, block: timerWake, when: arg, cont: doneBlock, ids: ids)
 
-	let ioKind = emitConst(module, block: notTimer, value: GtParkKindIo, ids: ids)
-	let isIo = emitCmp(module, block: notTimer, a: kind, b: ioKind, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(notTimer, op: StdOp.condBranch(isIo, thenBlockId: ioArm.id, elseBlockId: notIo.id))
-
-	emitStoreField(module, block: ioArm, record: gt, offset: GtOffStatus, value: waitingConst)
-	let inFlight = emitConst(module, block: ioArm, value: IoParkedInFlight, ids: ids)
-	emitStoreField(module, block: ioArm, record: gt, offset: GtOffIoParked, value: inFlight)
-	module.setTerminator(ioArm, op: StdOp.branch(doneBlock.id))
-
-	emitGtBranchOnPollerPark(module, block: notIo, kind: kind, onPoller: netpollArm, elsewhere: notNetpoll, ids: ids)
+	emitGtBranchOnPollerPark(module, block: notTimer, kind: kind, onPoller: netpollArm, elsewhere: notNetpoll, ids: ids)
 
 	// ⭐⭐ **THE NETPOLL ARM OWES TWO WAKES AND THEY ARE NOT THE SAME WAKE.** `__np_pd_commit` may READY the
 	// thread instead of parking it — readiness that landed between the mark and this commit — which is an
@@ -6494,59 +6322,6 @@ function buildGtProcessRun(module StdModule, rawFree ByteArray, commandShape Sub
 	module.functions.push(func)
 end 'buildGtProcessRun'
 
-// ⭐ `__io_init()` — one-time IOCP substrate init (P1.5 slice 1a-ii), idempotent via `__io_init_done`. Creates the
-// process-wide completion port and — LAST, once the port exists — the completion-drain thread. Called from
-// `__gt_init` when the module reads pipes, so both are up before any read can complete. Runs on the main
-// machine's scheduler context (`stackBase == 0`), so its shimmed kernel calls run direct.
-function buildIoInit(module StdModule)
-	var func = IrFunction.createFromStd(IoInitName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
-	var ids = ValueMinter.create(0)
-
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var doInit = module.addBlock(func, label: b"doinit", heat: BlockHeat.normal)
-	var doneBlock = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
-
-	let initDoneAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(initDoneAddr, label: IoInitDoneLabel))
-	let initDone = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(initDone, addrId: initDoneAddr, offset: 0, valueType: StdType.i64))
-	let zeroConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
-	let already = ids.mint()
-	module.appendOp(entry, op: StdOp.cmp(already, lhs: initDone, rhs: zeroConst, pred: StdCmpPred.ne, operandType: StdType.i64))
-	module.setTerminator(entry, op: StdOp.condBranch(already, thenBlockId: doneBlock.id, elseBlockId: doInit.id))
-
-	// __io_iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1).
-	let iocp = ids.mint()
-	module.appendOp(doInit, op: StdOp.osIocpCreate(iocp))
-	let iocpAddr = ids.mint()
-	module.appendOp(doInit, op: StdOp.globalAddr(iocpAddr, label: IoIocpLabel))
-	module.appendOp(doInit, op: StdOp.storeIndirect(iocpAddr, offset: 0, valueId: iocp, valueType: StdType.i64))
-
-	// ⚠ **THE RUN-QUEUE LOCK IS `__sched_init_procs`'s**, and `__gt_init` calls that before it calls this, so the
-	// lock exists before the thread below can take it. Start the completion-drain thread LAST — the port it
-	// drains now exists. The thread handle is unneeded (the thread runs for the whole program and is torn down
-	// at process exit), so its result id is left unread.
-	let entryPtr = ids.mint()
-	module.appendOp(doInit, op: StdOp.funcAddr(entryPtr, funcName: IoCompletionLoopName))
-	let threadHandle = ids.mint()
-
-	// The completion loop reads every word it needs from `.data`, so it is passed NOTHING — the one caller of
-	// `osThreadCreate` that wants a null `lpParameter`, where a worker M is told its P through exactly this
-	// operand. See the op for why the null is a constant HERE rather than baked into the lowering.
-	let noThreadArg = emitConst(module, block: doInit, value: 0, ids: ids)
-	module.appendOp(doInit, op: StdOp.osThreadCreate(threadHandle, entryPtrId: entryPtr, argId: noThreadArg))
-
-	// __io_init_done = 1.
-	let oneConst = ids.mint()
-	module.appendOp(doInit, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
-	module.appendOp(doInit, op: StdOp.storeIndirect(initDoneAddr, offset: 0, valueId: oneConst, valueType: StdType.i64))
-	module.setTerminator(doInit, op: StdOp.branch(doneBlock.id))
-
-	module.setTerminator(doneBlock, op: StdOp.retVoid)
-	module.functions.push(func)
-end 'buildIoInit'
-
 // Store the LOW byte of wide char `wcharIndex` in `bufPtr` to `asciiCode` (the high byte stays the slab-zero, so a
 // wide char with an ASCII low byte results). The pipe-name buffer is freshly slab-zeroed, so only the non-zero low
 // bytes are written and the wide NUL after the last digit is automatic.
@@ -6686,7 +6461,7 @@ end 'buildPipeName'
 
 // ⭐ `__gt_io_read(strPtr) -> bytesRead` — THE YIELDING OVERLAPPED PIPE READ (P1.5 slice 1a-ii, the `spawnReadLine`
 // probe). Spawns the Windows child named by the command String with its stdout redirected to a fresh overlapped pipe,
-// issues an overlapped ReadFile that YIELDS the green thread (via the IOCP completion thread) when the read is pending,
+// issues an overlapped ReadFile that YIELDS the green thread onto the poller when the read is pending,
 // and returns the byte count. The command String is BORROWED (buffer/length read like `__print_string`); ownership
 // stays with the caller. On any spawn/pipe failure the read returns 0 (an environment error the slice-1a probe treats
 // as EOF).
@@ -6700,10 +6475,9 @@ end 'buildPipeName'
 //     out-param block, the command line, the STARTUPINFOA and the PROCESS_INFORMATION. Each is freed at the
 //     point its last reader finishes, BEFORE the branch that could throw the call away, so no arm carries a
 //     copy of the release.
-//   • ONE survives the park — the read scratch, which the completion thread is writing into while the green
-//     thread is suspended. It is freed after the yielding read returns, and its pointer is published to
-//     `gt.ioScratch` so `__gt_promise_drop`'s cancel arm can free it on the path this function never returns
-//     from.
+//   • ONE survives the park — the read scratch, which the kernel is writing into while the green thread is
+//     suspended. It rides this frame and is freed after the yielding read returns, on the dropped road as
+//     well: a dropped reader is renounced rather than abandoned, so it comes back here to free it.
 function buildGtIoRead(module StdModule, rawFree ByteArray, commandShape SubprocessCommandShape)
 	var func = IrFunction.createFromStd(IoReadName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -6733,32 +6507,20 @@ function buildGtIoRead(module StdModule, rawFree ByteArray, commandShape Subproc
 	module.appendOp(afterName, op: StdOp.const(saInheritConst, value: SecurityAttributesInheritable as ParsedInt, valueType: StdType.i64))
 	module.appendOp(afterName, op: StdOp.storeIndirect(saPtr, offset: SecurityAttributesBInheritOffset, valueId: saInheritConst, valueType: StdType.i64))
 
-	// A 16-byte region: readPtr slot @0, writePtr slot @8 — the two out-params for osPipeCreate.
 	let slotsSizeConst = ids.mint()
-	module.appendOp(afterName, op: StdOp.const(slotsSizeConst, value: 16, valueType: StdType.i64))
-	let readPtr = ids.mint()
-	module.appendOp(afterName, op: StdOp.call(readPtr, callee: SlabAllocName, args: argsOf(slotsSizeConst)))
-	let eightConst = ids.mint()
-	module.appendOp(afterName, op: StdOp.const(eightConst, value: 8, valueType: StdType.i64))
-	let writePtr = ids.mint()
-	module.appendOp(afterName, op: StdOp.binOp(writePtr, lhs: readPtr, rhs: eightConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let iocpAddr = ids.mint()
-	module.appendOp(afterName, op: StdOp.globalAddr(iocpAddr, label: IoIocpLabel))
-	let iocp = ids.mint()
-	module.appendOp(afterName, op: StdOp.loadIndirect(iocp, addrId: iocpAddr, offset: 0, valueType: StdType.i64))
-	module.appendOp(afterName, op: StdOp.osPipeCreate(namePtr, saPtrId: saPtr, iocpId: iocp, readPtrId: readPtr, writePtrId: writePtr))
-	let readEnd = ids.mint()
-	module.appendOp(afterName, op: StdOp.loadIndirect(readEnd, addrId: readPtr, offset: 0, valueType: StdType.i64))
-	let writeEnd = ids.mint()
-	module.appendOp(afterName, op: StdOp.loadIndirect(writeEnd, addrId: writePtr, offset: 0, valueType: StdType.i64))
+	module.appendOp(afterName, op: StdOp.const(slotsSizeConst, value: SubpPipeScratchBytes as ParsedInt, valueType: StdType.i64))
+	let scratch = ids.mint()
+	module.appendOp(afterName, op: StdOp.call(scratch, callee: SlabAllocName, args: argsOf(slotsSizeConst)))
+	afterName = emitSubpCreateReadPipe(module, func: func, ids: ids, cur: afterName, namePtr: namePtr, saPtr: saPtr, scratch: scratch)
+	let readEnd = emitLoadField(module, block: afterName, record: scratch, offset: 0, ids: ids)
+	let writeEnd = emitLoadField(module, block: afterName, record: scratch, offset: SubpPipeScratchSecondWord as ByteOffset, ids: ids)
 
 	// The pipe exists and both ends are in registers, so the three regions that described it are dead: the
 	// name has been resolved to a kernel object, the SECURITY_ATTRIBUTES was read by the create, and the
-	// out-param block has been emptied. `writePtr` is an interior pointer INTO `readPtr`'s block and so is not
-	// freed separately — the block is one allocation with two slots.
+	// out-param block has been emptied.
 	module.appendOp(afterName, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(namePtr)))
 	module.appendOp(afterName, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(saPtr)))
-	module.appendOp(afterName, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(readPtr)))
+	module.appendOp(afterName, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(scratch)))
 
 	// The mutable NUL-terminated cmdline copy (CreateProcessA may write to lpCommandLine; the .rdata String blob is
 	// neither writable nor NUL-terminated).
@@ -6834,11 +6596,10 @@ function buildGtIoRead(module StdModule, rawFree ByteArray, commandShape Subproc
 	module.appendOp(spawnOk, op: StdOp.osCloseHandle(hProcess))
 	module.appendOp(spawnOk, op: StdOp.osCloseHandle(writeEnd))
 
-	// The ONE region that outlives this function's straight-line code: the read buffer the completion thread
-	// writes into while we are parked, with `ReadFile`'s byte-count out-slot in its first word. Its pointer is
-	// published to `gt.ioScratch` BEFORE the read is issued, so a promise dropped mid-read has something to
-	// free; `selfGt` is loaded once here and reused after the resume, exactly as `__gt_process_run` carries its
-	// own GT across a park.
+	// The ONE region that outlives this function's straight-line code: the read buffer the kernel writes into
+	// while we are parked, with `ReadFile`'s byte-count out-slot in its first word. It rides this FRAME across
+	// the park and is freed below on every road out, the renounced one included — a dropped reader resumes and
+	// unwinds, so no second party ever has to reach it.
 	let scratchSizeConst = ids.mint()
 	module.appendOp(spawnOk, op: StdOp.const(scratchSizeConst, value: IoReadScratchBytes as ParsedInt, valueType: StdType.i64))
 	let scratch = ids.mint()
@@ -6851,27 +6612,18 @@ function buildGtIoRead(module StdModule, rawFree ByteArray, commandShape Subproc
 	module.appendOp(spawnOk, op: StdOp.const(readBufSizeConst, value: IoReadBufferBytes as ParsedInt, valueType: StdType.i64))
 	let bytesOutPtr = ids.mint()
 	module.appendOp(spawnOk, op: StdOp.binOp(bytesOutPtr, lhs: scratch, rhs: emitConst(module, block: spawnOk, value: IoReadBytesOutOffset as ParsedInt, ids: ids), opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let selfGt = emitLoadCurrentGt(module, block: spawnOk, ids: ids)
-	module.appendOp(spawnOk, op: StdOp.storeIndirect(selfGt, offset: GtOffIoScratch, valueId: scratch, valueType: StdType.i64))
 
-	// The yielding overlapped read — the shared `__gt_subp_yield_read`, which owns the cross-thread park/resume
-	// handshake the streaming reader also uses (one copy of the completion-thread coordination). It returns the byte
-	// count, 0 at a clean end of stream and `SubpReadFailedCount` on a failed read. The streaming API allocs its
-	// buffer per HANDLE and reuses it across reads, so it leaves `ioScratch` at 0 and the cancel arm frees nothing.
-	// The read end joins the poller BEFORE the first attempt, so an `EAGAIN` has a record to park on and a
-	// readiness that lands between the two is remembered rather than lost.
+	// The yielding read — the shared `__gt_subp_yield_read`, which owns the park/resume road the streaming
+	// reader also uses. It returns the byte count, 0 at a clean end of stream and `SubpReadFailedCount` on a
+	// failed read. The read end joins the poller BEFORE the first attempt, so an `EAGAIN` has a record to park
+	// on and a readiness that lands between the two is remembered rather than lost.
 	module.appendOp(spawnOk, op: StdOp.call(ids.mint(), callee: NetpollPipeOpenName, args: argsOf(readEnd)))
-	let ownsPipeConst = emitConst(module, block: spawnOk, value: 1, ids: ids)
 	let rawRead = ids.mint()
-	module.appendOp(spawnOk, op: StdOp.call(rawRead, callee: SubpYieldReadName, args: fiveArgs(readEnd, second: readBuf, third: readBufSizeConst, fourth: bytesOutPtr, fifth: ownsPipeConst)))
+	module.appendOp(spawnOk, op: StdOp.call(rawRead, callee: SubpYieldReadName, args: fourArgs(readEnd, second: readBuf, third: readBufSizeConst, fourth: bytesOutPtr)))
 	module.appendOp(spawnOk, op: StdOp.call(ids.mint(), callee: NetpollPipeCloseName, args: argsOf(readEnd)))
 	module.appendOp(spawnOk, op: StdOp.osCloseHandle(readEnd))
 
-	// The read is over — the completion thread is done with the buffer, so the slot is cleared FIRST and then
-	// released. Clearing first is what stops a later drop of this same (recycled) GT from freeing a region the
-	// allocator has already handed to somebody else.
-	let clearedScratch = emitConst(module, block: spawnOk, value: 0, ids: ids)
-	module.appendOp(spawnOk, op: StdOp.storeIndirect(selfGt, offset: GtOffIoScratch, valueId: clearedScratch, valueType: StdType.i64))
+	// The read is over — the pipe is closed and the kernel is done with the buffer, so it goes back.
 	module.appendOp(spawnOk, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(scratch)))
 
 	// ⭐ **THE PROBE ANSWERS A COUNT, SO A FAILED READ IS 0 HERE.** `spawnReadLine(cmd)`'s whole contract is
@@ -6897,10 +6649,8 @@ end 'buildGtIoRead'
 //
 // Generalizes the one-shot `__gt_io_read` probe into a handle-table API. A `__subp_table` (.data) slot points at a
 // slab region of `SubpMaxHandles` fixed slots (0 until the first spawn lazily allocs it); a HANDLE is a slot index.
-// ⛔ **THE TABLE IS NOT MAIN-THREAD-ONLY, AND THIS PARAGRAPH SAID IT WAS (fixed at G2).** The argument it made
-// was about the IOCP completion thread, which touches only the parked GT via its OVERLAPPED and never the
-// table — true, and irrelevant once a WORKER M runs green threads, because a green thread is what spawns. Two
-// things needed a discipline and now have one: the lazy CREATION of the region takes `__sched_lock` (a
+// ⛔ **THE TABLE IS NOT MAIN-THREAD-ONLY.** A WORKER M runs green threads and a green thread is what spawns,
+// so two things need a discipline and have one: the lazy CREATION of the region takes `__sched_lock` (a
 // test-then-allocate-then-store that two Ms would both win, losing a whole table and every handle given out of
 // it), and a SLOT is claimed by `CAS(inUse, 0 -> claimed)` at the scan rather than by a test whose write
 // landed after `CreateProcessA`. Everything INSIDE a claimed slot stays lock-free and GT-local, which is 1a's
@@ -6912,10 +6662,10 @@ end 'buildGtIoRead'
 // mechanism that rested on that — but not this one, because it rests on something else that is still true:
 // **`__gt_subp_release` does NOT cancel or drain a parked overlapped read.** It closes the pipe handles and
 // clears `inUse`, and the slot GENERATION is what makes a still-parked reader harmless when the slot is
-// respawned. A reader parked at that moment has handed the completion thread a pointer INTO `bufPtr`, so
-// freeing the buffer at release would be a cross-thread use-after-free rather than a reclamation. Freeing here
-// needs a cancel/drain handshake first — the one `emitGtIoCancelArm` performs for a DROPPED reader — and that
-// is a change to what release means, not a change to where memory goes.
+// respawned. A reader parked at that moment has handed the KERNEL a pointer INTO `bufPtr`, so freeing the
+// buffer at release would be a use-after-free rather than a reclamation. Freeing here needs the release to
+// cancel the read and wait for its packet first, which is a change to what release means, not a change to
+// where memory goes.
 //
 // Each stream (stdout/stderr) carries a growable line buffer holding unconsumed bytes; a read appends a chunk into
 // it (the yielding overlapped read the streaming reader shares with the probe), the reader returns through the
@@ -6947,7 +6697,7 @@ let SubpSlotWriteCap = 120
 // handle while the reader slept, so the reader returns its own empty/EOF result and writes NOTHING back — without
 // this, `subpRelease(h)` on a parked reader let it resume and stamp its EOF/bufLen into whatever handle now owns
 // the slot, silently making the NEW handle read EOF (memory-safe, but a wrong answer). Read and written ONLY by
-// GT-side code (spawn + the reader's resume) — the completion thread never touches it, so no cross-thread state.
+// GT-side code (spawn + the reader's resume), so no cross-thread state.
 let SubpSlotGeneration = 128
 
 // ⭐ **THE FIVE FIELDS THE ATTACHED SPAWN ADDED.** The streaming half needed none of them: it never reports a
@@ -7003,11 +6753,15 @@ export let SubpReadChunkBytes = 4096
 let SubpInitialLineBufBytes = 4096
 export let SubpMaxLineBytes = 1048576  // 1 MiB per-line cap — a newline-less child cannot grow the buffer without bound
 let SubpBytesOutBytes = 8
-let SubpPipeScratchBytes = 16  // the two handle out-param slots for a single osPipeCreate*, reused across the 3 pipes
 
-// The SECOND of those two out-param words. Named because `scratch + 8` at a pipe creation says nothing about
-// which end of the pipe is being read back out of it.
+// The out-param block a single `osPipeCreate*` writes, reused across the 3 pipes: the read end, the write end,
+// and — for the inbound form alone — the host's answer to whether an inline read stays off the completion port.
+let SubpPipeScratchBytes = 24
+
+// The SECOND and THIRD of those words. Named because `scratch + 8` at a pipe creation says nothing about which
+// end of the pipe is being read back out of it.
 let SubpPipeScratchSecondWord = 8 as ParsedInt
+let SubpPipeScratchSilencedWord = 16 as ParsedInt
 
 // The 3 CHILD-side pipe ends are parked in a slab region across pipe creation so they do not occupy registers across
 // the (register-hungry) pipe-name-formatting loops — the "keep values off the working set" discipline a hand-built
@@ -7210,36 +6964,34 @@ function emitEnsureSlotBuffer(module StdModule, func IrFunction, ids ValueMinter
 	return cont
 end 'emitEnsureSlotBuffer'
 
-// ⭐ `__gt_subp_yield_read(readEnd, buf, cap, bytesOutPtr) -> bytesRead` — THE YIELDING OVERLAPPED READ, factored
-// out of the `__gt_io_read` probe so the cross-thread park/resume handshake has exactly ONE copy (both the probe
-// and the streaming line reader call it). Zero the OVERLAPPED embedded in the current GT, issue the overlapped
-// ReadFile; on SYNCHRONOUS success (FILE_SKIP_COMPLETION_PORT_ON_SUCCESS ⇒ no IOCP packet) return the count; on
-// ERROR_IO_PENDING park+yield (the completion thread wakes us), returning the count it stored; on
-// ERROR_BROKEN_PIPE return 0 (a clean end of stream) and on any other error `SubpReadFailedCount`. Does NOT
-// close `readEnd` — the caller owns the handle's lifetime (the probe closes its one-shot pipe after; the
-// streaming reader keeps its table-owned pipe).
+// ⭐ `__gt_subp_yield_read(readEnd, buf, cap, bytesOutPtr) -> bytesRead` — THE YIELDING READ, factored out of
+// the `__gt_io_read` probe so the park/resume road has exactly ONE copy (both the probe and the streaming line
+// reader call it). It answers three things and only three: a byte count, 0 at a clean end of stream, and
+// `SubpReadFailedCount` for a read that failed. It does NOT close `readEnd` — the caller owns the handle's
+// lifetime (the probe closes its one-shot pipe after; the streaming reader keeps its table-owned pipe).
 //
-// ⚠ It stores `readEnd | ownsPipe` into `gt.io_handle` (the ownership tag rides the handle's spare low bit, no
-// dedicated field) and sets `ioParked` — so a promise DROPPED while parked here runs `__gt_promise_drop`'s IO
-// cancel arm, which CancelIoEx+drains for both but only `CloseHandle`s the read pipe when the tag bit is 1 (the
-// one-shot per-GT pipe). A STREAMING read passes
-// `ownsPipe = 0`: the cancel arm leaves its TABLE-owned pipe open (usable for the next `subpReadLine(h)`), and
-// `subpRelease` is the sole closer — so dropping a streaming reader mid-read is CORRECT, not out of scope.
+// ⭐⭐⭐ **THE TWO SHAPES PARK ON DIFFERENT THINGS AND BOTH PARK ON THE POLLER.** A completion port carries the
+// READ: the overlapped `ReadFile` answers `ERROR_IO_PENDING`, the operation gets a poll source of its own
+// (`NetpollRuntime.__np_op_open`), and the packet the kernel delivers is what ends the wait — so the count and
+// the status come off the thread's own record rather than out of a second attempt. A POSIX lane has no
+// in-flight read: the descriptor is non-blocking (`NetpollRuntime.__np_pipe_open`), `EAGAIN` arrives as
+// `ERROR_IO_PENDING`, and the thread parks on the DESCRIPTOR's poll record and RE-ISSUES the read when it is
+// readable again.
 //
-// ⭐⭐⭐ **THE TWO SHAPES PARK ON DIFFERENT THINGS AND ANSWER THE SAME THREE THINGS.** A completion port
-// carries the read itself, so the park is `GtParkKindIo` and the completion thread hands back the count. A POSIX
-// lane has no in-flight read: the descriptor is non-blocking (`NetpollRuntime.__np_pipe_open`), `EAGAIN` arrives
-// as `ERROR_IO_PENDING`, and the thread parks on the descriptor's own poll record and RE-ISSUES the read when it
-// is readable again.
+// ⛔⛔ **A DROPPED READER MUST NOT WALK AWAY FROM A READ THE KERNEL IS STILL SERVING.** The OVERLAPPED is
+// embedded in the green thread (`GtOffOverlapped`), so a thread that unwound and was reclaimed with its read in
+// flight would be written into after it was freed. The renounced arm therefore CANCELS the read and waits for
+// its completion packet: the packet is the only proof the kernel has finished with that memory, and waiting for
+// it costs the dropped thread microseconds. It is also what keeps the read BUFFER a single owner's — the reader
+// frees its own, on this road and on the normal one alike.
 //
 // ⛔⛔ **AN `EAGAIN` IS CONSUMED HERE AND NEVER ANSWERED AS A COUNT.** Every caller reads a 0 as a permanent
 // end of stream (`emitSubpTopUpStream`'s `setEof`, `emitSubpDrainStream`'s `markDone`), so answering 0 for a
 // merely-empty pipe would latch a stream the child is still writing to — a wrong answer that looks green on a
-// fast child. The loop is what makes the three answers exactly what they were while the descriptor blocked:
-// bytes, a real end of stream, or a failure.
+// fast child.
 function buildSubpYieldRead(module StdModule, target Target)
-	var func = IrFunction.createFromStd(SubpYieldReadName, returnType: StdReturnType.value(StdType.i64), paramCount: 5, paramTypes: fiveI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(5)
+	var func = IrFunction.createFromStd(SubpYieldReadName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(4)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var attempt = module.addBlock(func, label: b"attempt", heat: BlockHeat.normal)
@@ -7249,15 +7001,13 @@ function buildSubpYieldRead(module StdModule, target Target)
 	var cleanEof = module.addBlock(func, label: b"cleaneof", heat: BlockHeat.normal)
 	var readFailed = module.addBlock(func, label: b"readfailed", heat: BlockHeat.normal)
 	var pending = module.addBlock(func, label: b"pending", heat: BlockHeat.normal)
-	var park = module.addBlock(func, label: b"park", heat: BlockHeat.normal)
-	var resume = module.addBlock(func, label: b"resume", heat: BlockHeat.normal)
+	var answer = module.addBlock(func, label: b"yieldreadanswer", heat: BlockHeat.normal)
 
-	emitParams(module, block: entry, count: 5)
+	emitParams(module, block: entry, count: 4)
 	let readEnd = 0 as ValueId
 	let buf = 1 as ValueId
 	let cap = 2 as ValueId
 	let bytesOutPtr = 3 as ValueId
-	let ownsPipe = 4 as ValueId
 
 	let zeroConst = emitConst(module, block: entry, value: 0, ids: ids)
 	let selfGt = emitLoadCurrentGt(module, block: entry, ids: ids)
@@ -7267,6 +7017,19 @@ function buildSubpYieldRead(module StdModule, target Target)
 	module.appendOp(entry, op: StdOp.storeIndirect(ovlPtr, offset: 8, valueId: zeroConst, valueType: StdType.i64))
 	module.appendOp(entry, op: StdOp.storeIndirect(ovlPtr, offset: 16, valueId: zeroConst, valueType: StdType.i64))
 	module.appendOp(entry, op: StdOp.storeIndirect(ovlPtr, offset: 24, valueId: zeroConst, valueType: StdType.i64))
+
+	// ⛔ **THE SOURCE IS OPENED BEFORE THE READ IS ISSUED**, because a packet can be delivered the instant it is
+	// — see `NetpollRuntime.NetpollOpOpenName`. The handle goes on the thread FIRST, because the open is what
+	// makes `io_source` non-zero and that word is the only thing telling a dropping thread the handle is
+	// readable. On a lane whose reads complete inline the DESCRIPTOR is the source and there is nothing to open.
+	var source = readEnd
+
+	match ioCompletionShape(target) 'source'
+		completionPort then source = emitSubpOpenReadSource(module, block: entry, gt: selfGt, readEnd: readEnd, ids: ids)
+
+		inlineCompletion then break 'source'
+	end 'source'
+
 	module.setTerminator(entry, op: StdOp.branch(attempt.id))
 
 	let readResult = ids.mint()
@@ -7275,8 +7038,13 @@ function buildSubpYieldRead(module StdModule, target Target)
 	let syncOk = emitCmp(module, block: attempt, a: readResult, b: attemptZero, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(attempt, op: StdOp.condBranch(syncOk, thenBlockId: syncDone.id, elseBlockId: checkErr.id))
 
+	// A read served out of the pipe's own buffer posts NO packet, so it must not wait for one — and it gives the
+	// operation's source back on its way out, so a packet that DID come would land on the next operation's
+	// stamp. `emitSubpCreateReadPipe` is what makes that impossible rather than unlikely: the pipe does not
+	// exist unless the host granted `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` on this handle.
 	let syncBytes = emitLoadField(module, block: syncDone, record: bytesOutPtr, offset: 0, ids: ids)
-	module.setTerminator(syncDone, op: StdOp.ret(syncBytes))
+	module.setTerminator(syncDone, op: StdOp.branch(answer.id))
+	syncDone.branchEdges.push(BranchEdge.create(answer.id, argIds: argsOf(syncBytes)))
 
 	let err = ids.mint()
 	module.appendOp(checkErr, op: StdOp.osLastError(err))
@@ -7285,12 +7053,12 @@ function buildSubpYieldRead(module StdModule, target Target)
 	module.setTerminator(checkErr, op: StdOp.condBranch(isPending, thenBlockId: pending.id, elseBlockId: classifyErr.id))
 
 	match ioCompletionShape(target) 'wait'
-		completionPort then module.setTerminator(pending, op: StdOp.branch(park.id))
+		completionPort then emitSubpAwaitCompletion(module, func: func, ids: ids, cur: pending, source: source, selfGt: selfGt, answer: answer, cleanEof: cleanEof, readFailed: readFailed)
 
 		// The descriptor is merely empty. Suspend on its poll record and read again once it is readable; a wait
 		// that ended any other way was RENOUNCED by a dropped promise, and the caller's own unwinding is what
 		// follows, so it answers a failed read rather than re-issuing on a descriptor nobody wants.
-		inlineCompletion then emitGtWaitReadable(module, cur: pending, source: readEnd, ready: attempt, renounced: readFailed, ids: ids)
+		inlineCompletion then emitGtWaitReadable(module, cur: pending, source: source, ready: attempt, renounced: readFailed, ids: ids)
 	end 'wait'
 
 	// ⭐ **A BROKEN PIPE IS THE END OF THE STREAM; ANYTHING ELSE IS A FAILED READ.** A child that exited and
@@ -7301,47 +7069,72 @@ function buildSubpYieldRead(module StdModule, target Target)
 	let isBroken = emitCmp(module, block: classifyErr, a: err, b: brokenConst, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(classifyErr, op: StdOp.condBranch(isBroken, thenBlockId: cleanEof.id, elseBlockId: readFailed.id))
 
-	module.setTerminator(cleanEof, op: StdOp.ret(zeroConst))
+	module.setTerminator(cleanEof, op: StdOp.branch(answer.id))
+	cleanEof.branchEdges.push(BranchEdge.create(answer.id, argIds: argsOf(zeroConst)))
 
 	let failureConst = emitConst(module, block: readFailed, value: SubpReadFailedCount, ids: ids)
-	module.setTerminator(readFailed, op: StdOp.ret(failureConst))
+	module.setTerminator(readFailed, op: StdOp.branch(answer.id))
+	readFailed.branchEdges.push(BranchEdge.create(answer.id, argIds: argsOf(failureConst)))
 
-	// park: __io_pending++ ; io_handle = readEnd | ownsPipe ; hand the scheduler an IO park note ; yield.
-	//
-	// ⛔⛔ **THE `waiting`/`ioParked` PAIR IS NOT STORED HERE.** Setting `ioParked` before the context switch
-	// would publish this GT to the IOCP completion thread while it is still executing on its own stack: the
-	// packet can arrive, the completion thread readies it, and another M resumes the thread onto the SP saved
-	// at its PREVIOUS suspension. The pair is stored by `__gt_register_park`'s io arm, which the strand runner
-	// runs once `__gt_context_switch` has returned.
-	//
-	// ⚠ **`io_handle` STILL GOES HERE, AND THAT IS SAFE FOR A REASON WORTH STATING:** its only cross-thread
-	// reader is `__gt_promise_drop`'s cancel arm, which reads it only when `ioParked != 0` — i.e. only after the
-	// registration has published the park. Written before the switch, it is simply in place when that becomes
-	// true.
-	let parkPendingCredit = emitConst(module, block: park, value: OneMore, ids: ids)
-	_ = emitGlobalAccumulate(module, block: park, label: IoPendingLabel, delta: parkPendingCredit, multiM: true, ids: ids)
+	// Every road out gives the operation's poll source back, because every road out is a read the kernel has
+	// finished with — the source outlives the read and nothing else.
+	let count = ids.mint()
+	answer.blockArgs.push(IrBlockArg.create(count, argType: StdType.i64))
 
-	// Tag pipe ownership into io_handle's spare low bit (1 = one-shot/owned, 0 = streaming/table) — the drop
-	// cancel arm masks it off and branches its CloseHandle on it. Kernel HANDLEs are 4-aligned, so bit 0 is free;
-	// this avoids a dedicated GT field (and the +8-byte struct growth it would cost every async program).
-	let taggedHandle = emitBin(module, block: park, a: readEnd, b: ownsPipe, opcode: StdBinOpcode.bitOr, ids: ids)
-	module.appendOp(park, op: StdOp.storeIndirect(selfGt, offset: GtOffIoHandle, valueId: taggedHandle, valueType: StdType.i64))
-	let ioParkArg = emitConst(module, block: park, value: GtParkArgUnused, ids: ids)
-	emitGtPark(module, ids: ids, cur: park, kind: GtParkKindIo, arg: ioParkArg, cont: resume)
+	match ioCompletionShape(target) 'give'
+		completionPort then emitNetpollOpClose(module, block: answer, source: source, ids: ids)
 
-	// resume: clear ioParked ; __io_pending-- ; return the count the completion thread stored — which is
-	// `SubpReadFailedCount` when the COMPLETION carried a fault, so a parked failure needs no classification
-	// of its own here. The completion thread has already made this function's broken-pipe fold. Both blocks are
-	// unreachable on a lane with no completion port; the shape fork above is what leaves them so.
-	let clearParked = emitConst(module, block: resume, value: 0, ids: ids)
-	module.appendOp(resume, op: StdOp.storeIndirect(selfGt, offset: GtOffIoParked, valueId: clearParked, valueType: StdType.i64))
-	let resumePendingDebit = emitConst(module, block: resume, value: OneFewer, ids: ids)
-	_ = emitGlobalAccumulate(module, block: resume, label: IoPendingLabel, delta: resumePendingDebit, multiM: true, ids: ids)
-	let bytesRead = emitLoadField(module, block: resume, record: selfGt, offset: GtOffIoResult, ids: ids)
-	module.setTerminator(resume, op: StdOp.ret(bytesRead))
+		inlineCompletion then break 'give'
+	end 'give'
+
+	module.setTerminator(answer, op: StdOp.ret(count))
 
 	module.functions.push(func)
 end 'buildSubpYieldRead'
+
+// ⭐⭐ **PUBLISH THE READ'S SOURCE, THE HANDLE IT IS ON AND ITS DIRECTION, in the order a dropping thread and
+// the poller's decode read them.** `io_source` is the guard and the other two are what it guards, so they are
+// stored first and the open — which writes the guard — is what publishes the set.
+function emitSubpOpenReadSource(module StdModule, block IrBlock, gt ValueId, readEnd ValueId, ids ValueMinter) returns ValueId
+	emitStoreField(module, block: block, record: gt, offset: GtOffIoHandle, value: readEnd)
+	emitStoreField(module, block: block, record: gt, offset: GtOffIoMode, value: emitConst(module, block: block, value: NetpollModeRead, ids: ids))
+	return emitNetpollOpOpen(module, block: block, ids: ids)
+end 'emitSubpOpenReadSource'
+
+// ⭐⭐ **WAIT FOR THE PACKET THAT SAYS THE KERNEL IS DONE WITH THIS READ, and sort what it carried.** Readiness
+// IS the completion. `cur` is terminated and each answer reaches the block that carries it.
+//
+// ⛔ **NOTHING ELSE CAN END THIS WAIT, AND A WAIT THAT ENDED ANOTHER WAY IS A NAMED STOP.** A pipe read arms no
+// deadline, its source is this operation's alone and nobody else releases it, and a DROPPED promise leaves the
+// park exactly where it is — it cancels the read so the packet comes at once (`__gt_promise_drop`). So
+// `NetpollWaitTimedOut` and `NetpollWaitStale` are both impossible, and answering a count for either would hand
+// the caller bytes out of a buffer the kernel may still be writing into.
+function emitSubpAwaitCompletion(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, source ValueId, selfGt ValueId, answer IrBlock, cleanEof IrBlock, readFailed IrBlock)
+	var completed = module.addBlock(func, label: b"completed", heat: BlockHeat.normal)
+	var completedOk = module.addBlock(func, label: b"completedok", heat: BlockHeat.normal)
+	var completedErr = module.addBlock(func, label: b"completederr", heat: BlockHeat.normal)
+	var renounced = module.addBlock(func, label: b"readrenounced", heat: BlockHeat.normal)
+
+	emitGtWaitReadable(module, cur: cur, source: source, ready: completed, renounced: renounced, ids: ids)
+	emitRuntimeAbort(module, func: func, block: renounced, abort: RuntimeAbort.netpollOverlappedWaitNotACompletion, ids: ids)
+
+	let status = emitLoadField(module, block: completed, record: selfGt, offset: GtOffIoStatus, ids: ids)
+	let succeeded = emitCmp(module, block: completed, a: status, b: emitConst(module, block: completed, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(completed, op: StdOp.condBranch(succeeded, thenBlockId: completedOk.id, elseBlockId: completedErr.id))
+
+	let bytes = emitLoadField(module, block: completedOk, record: selfGt, offset: GtOffIoResult, ids: ids)
+	module.setTerminator(completedOk, op: StdOp.branch(answer.id))
+	completedOk.branchEdges.push(BranchEdge.create(answer.id, argIds: argsOf(bytes)))
+
+	// ⭐ **THE SAME FOLD THE SYNCHRONOUS ROAD MAKES, IN THE KERNEL'S OWN VOCABULARY.** A completion reports an
+	// NTSTATUS rather than a Win32 error, and the two a child's own exit produces — the write end gone, and the
+	// last byte already delivered — are the end of the stream. Everything else, a cancelled read included, is a
+	// failure.
+	let pipeBroken = emitCmp(module, block: completedErr, a: status, b: emitConst(module, block: completedErr, value: NtStatusPipeBroken, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let atEnd = emitCmp(module, block: completedErr, a: status, b: emitConst(module, block: completedErr, value: NtStatusEndOfFile, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let finished = emitBin(module, block: completedErr, a: pipeBroken, b: atEnd, opcode: StdBinOpcode.bitOr, ids: ids)
+	module.setTerminator(completedErr, op: StdOp.condBranch(finished, thenBlockId: cleanEof.id, elseBlockId: readFailed.id))
+end 'emitSubpAwaitCompletion'
 
 // ⭐ **SUSPEND ON A SOURCE'S READ DIRECTION AND SORT THE TWO WAYS THE WAIT CAN END.** Readiness reaches
 // `ready`; anything else reaches `renounced`, which for a child or a pipe end can only be a DROPPED PROMISE,
@@ -7404,6 +7197,34 @@ function emitSubpAllocPipeName(module StdModule, block IrBlock, ids ValueMinter)
 	module.appendOp(block, op: StdOp.call(nameBuf, callee: SlabAllocName, args: argsOf(nameSize)))
 	return nameBuf
 end 'emitSubpAllocPipeName'
+
+// Create ONE overlapped read pipe into `scratch`'s three words — the read end @0, the child's write end @8 —
+// and reach the returned block with both in place. Terminates `cur`.
+//
+// ⛔⛔ **THE THIRD WORD IS A PROMISE THE HOST HAS TO KEEP, AND A HOST THAT WILL NOT ENDS THE PROCESS HERE.**
+// `__gt_subp_yield_read` answers a read the pipe served out of its own buffer without waiting for a packet, and
+// gives the operation's poll source back on its way out. That is sound only while an inline completion posts NO
+// packet: one that did would arrive under the reading thread's OVERLAPPED after the source was released, and the
+// NEXT operation's `__np_op_wake` would take it — clearing that operation's stamp and storing this read's byte
+// count and status as its answer. Nothing downstream can notice, so the stop is at the creation. The word is
+// SEEDED true and only a lane with a completion port can falsify it.
+function emitSubpCreateReadPipe(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, namePtr ValueId, saPtr ValueId, scratch ValueId) returns IrBlock
+	var stillPosts = module.addBlock(func, label: b"subppipeloud", heat: BlockHeat.normal)
+	let made = module.addBlock(func, label: b"subppipemade", heat: BlockHeat.normal)
+
+	let writePtr = emitBin(module, block: cur, a: scratch, b: emitConst(module, block: cur, value: SubpPipeScratchSecondWord, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let silencedPtr = emitBin(module, block: cur, a: scratch, b: emitConst(module, block: cur, value: SubpPipeScratchSilencedWord, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: cur, record: silencedPtr, offset: 0, value: emitConst(module, block: cur, value: 1, ids: ids))
+	let poller = emitNetpollPollerHandle(module, block: cur, ids: ids)
+	module.appendOp(cur, op: StdOp.osPipeCreate(namePtr, saPtrId: saPtr, iocpId: poller, readPtrId: scratch, writePtrId: writePtr, syncSilencedPtrId: silencedPtr))
+
+	let silenced = emitLoadField(module, block: cur, record: silencedPtr, offset: 0, ids: ids)
+	let quiet = emitCmp(module, block: cur, a: silenced, b: emitConst(module, block: cur, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(quiet, thenBlockId: made.id, elseBlockId: stillPosts.id))
+	emitRuntimeAbort(module, func: func, block: stillPosts, abort: RuntimeAbort.overlappedPipeStillPostsOnSuccess, ids: ids)
+
+	return made
+end 'emitSubpCreateReadPipe'
 
 // Fill a fresh SECURITY_ATTRIBUTES (nLength + bInheritHandle=TRUE) into a slab region and return its pointer — the
 // inheritable SA every child-facing pipe end is created with, spelled once for the three pipes.
@@ -7936,19 +7757,14 @@ function emitSubpOutputSetup(module StdModule, func IrFunction, ids ValueMinter,
 	let scratchSizeConst = emitConst(module, block: pipeMake, value: SubpPipeScratchBytes as ParsedInt, ids: ids)
 	let scratch = ids.mint()
 	module.appendOp(pipeMake, op: StdOp.call(scratch, callee: SlabAllocName, args: argsOf(scratchSizeConst)))
-	let eight = emitConst(module, block: pipeMake, value: SubpPipeScratchSecondWord as ParsedInt, ids: ids)
-	let scratchB = emitBin(module, block: pipeMake, a: scratch, b: eight, opcode: StdBinOpcode.add, ids: ids)
-	let iocpAddr = ids.mint()
-	module.appendOp(pipeMake, op: StdOp.globalAddr(iocpAddr, label: IoIocpLabel))
-	let iocp = emitLoadField(module, block: pipeMake, record: iocpAddr, offset: 0, ids: ids)
-	module.appendOp(pipeMake, op: StdOp.osPipeCreate(name, saPtrId: saPtr, iocpId: iocp, readPtrId: scratch, writePtrId: scratchB))
+	pipeMake = emitSubpCreateReadPipe(module, func: func, ids: ids, cur: pipeMake, namePtr: name, saPtr: saPtr, scratch: scratch)
 	let parentRead = emitLoadField(module, block: pipeMake, record: scratch, offset: 0, ids: ids)
 	let slotP = emitSubpSlotAddr(module, block: pipeMake, ids: ids, table: table, handle: slotIdx)
 	let streamBaseConstP = emitConst(module, block: pipeMake, value: streamBase as ParsedInt, ids: ids)
 	let streamP = emitBin(module, block: pipeMake, a: slotP, b: streamBaseConstP, opcode: StdBinOpcode.add, ids: ids)
 	emitStoreField(module, block: pipeMake, record: streamP, offset: SubpStreamReadEnd, value: parentRead)
 	module.appendOp(pipeMake, op: StdOp.call(ids.mint(), callee: NetpollPipeOpenName, args: argsOf(parentRead)))
-	let childWrite = emitLoadField(module, block: pipeMake, record: scratchB, offset: 0, ids: ids)
+	let childWrite = emitLoadField(module, block: pipeMake, record: scratch, offset: SubpPipeScratchSecondWord as ByteOffset, ids: ids)
 	module.setTerminator(pipeMake, op: StdOp.branch(join.id))
 	pipeMake.branchEdges.push(BranchEdge.create(join.id, argIds: twoArgs(childWrite, second: childWrite)))
 
@@ -8153,12 +7969,11 @@ function emitSubpTopUpStream(module StdModule, func IrFunction, ids ValueMinter,
 	let readDst = emitBin(module, block: doRead, a: bufPtrD, b: bufLenD, opcode: StdBinOpcode.add, ids: ids)
 	let chunkConst2 = emitConst(module, block: doRead, value: SubpReadChunkBytes as ParsedInt, ids: ids)
 
-	// ownsPipe = 0: the read pipe is TABLE-owned, so a promise dropped mid-read must NOT close it — the cancel
-	// arm cancels+drains, leaves it open for the next read on this handle, and `subpRelease` closes it.
-	let sharedPipeConst = emitConst(module, block: doRead, value: 0, ids: ids)
+	// The read pipe is TABLE-owned, so a promise dropped mid-read leaves it open for the next read on this
+	// handle and `subpRelease` is its sole closer.
 	let genAtPark = emitLoadField(module, block: doRead, record: streamPtr, offset: genOffFromStream, ids: ids)
 	let nRead = ids.mint()
-	module.appendOp(doRead, op: StdOp.call(nRead, callee: SubpYieldReadName, args: fiveArgs(readEnd, second: readDst, third: chunkConst2, fourth: bytesOutPtr, fifth: sharedPipeConst)))
+	module.appendOp(doRead, op: StdOp.call(nRead, callee: SubpYieldReadName, args: fourArgs(readEnd, second: readDst, third: chunkConst2, fourth: bytesOutPtr)))
 	let genOnResume = emitLoadField(module, block: doRead, record: streamPtr, offset: genOffFromStream, ids: ids)
 	let slotReused = emitCmp(module, block: doRead, a: genOnResume, b: genAtPark, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(doRead, op: StdOp.condBranch(slotReused, thenBlockId: whenStale.id, elseBlockId: readDone.id))
@@ -8698,9 +8513,8 @@ function buildSubpRelease(module StdModule)
 end 'buildSubpRelease'
 
 // Install the streaming subprocess runtime (P1.5 slice 1b). Called from `installGtRuntime` when `usesStreaming`,
-// which also implies `usesIocp` (the yielding read rides the completion thread + `__io_init`) — so
-// `buildSubpYieldRead` is installed under `usesIocp` alongside `__gt_io_read`, and only the streaming API surface
-// lives here.
+// which also implies `usesChildPipes` — so `buildSubpYieldRead` is installed under that bit alongside
+// `__gt_io_read`, and only the streaming API surface lives here.
 function installSubpRuntime(module StdModule, target Target, streamState EnumLayout)
 	buildSubpStrFromBytes(module)
 	buildSubpSpawnCore(module, commandShape: subprocessCommandShape(target), streamState: streamState)

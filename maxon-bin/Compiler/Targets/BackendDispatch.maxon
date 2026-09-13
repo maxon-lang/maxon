@@ -211,12 +211,11 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 		appendX64LinuxHostSurfaceChunks(chunks, usage: usage)
 	end 'linuxHostSurface'
 
-	// The three hand-assembled green-thread chunks (`__gt_context_switch`, `__gt_trampoline`,
-	// `__gt_morestack`) and, under `usesIocp`, the IOCP completion-drain loop are part of the GT
-	// runtime's INSTALLATION, so they ride the same bits `installGtRuntime` was gated on rather than a
-	// probe of the module (see this file's `buildBackend` header for the probe that DFE invalidated).
+	// The hand-assembled green-thread chunks (`__gt_context_switch`, `__gt_trampoline`, `__gt_morestack`) are
+	// part of the GT runtime's INSTALLATION, so they ride the same bit `installGtRuntime` was gated on rather
+	// than a probe of the module (see this file's `buildBackend` header for the probe that DFE invalidated).
 	if usage.usesGt 'gtChunks'
-		appendX64GtRuntimeChunks(chunks, usesIocp: usage.usesIocp, target: target)
+		appendX64GtRuntimeChunks(chunks, target: target)
 	end 'gtChunks'
 
 	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)

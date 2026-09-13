@@ -16,9 +16,9 @@ inbound that the parent reads — hands back a non-negative integer handle index
 every later call names that handle.
 
 ⚠ **WHICH LANES RUN THESE, AND HOW EACH PARKS A READER, IS THE *Targets* SECTION BELOW.** The mechanism
-differs — Windows registers the two inbound pipes with IOCP and parks the reader on an OVERLAPPED; the
-POSIX lane makes the read end non-blocking and parks it on a poll descriptor — and that difference is a
-measured property with cases pinning it, not an aside.
+differs — Windows hands the two inbound pipes to the scheduler's poller and parks the reader on the READ
+itself; the POSIX lane makes the read end non-blocking and parks it on the DESCRIPTOR — and that difference
+is a measured property with cases pinning it, not an aside.
 
 - `subpSpawn(cmd)` spawns the child named by the command `String` with all three std streams redirected to
   pipes, and returns the handle (or `-1` on spawn failure). The command reaches `CreateProcessA` on
@@ -26,8 +26,8 @@ measured property with cases pinning it, not an aside.
 - `subpReadLine(h)` reads one line from the child's stdout, INCLUDING the trailing `\n` (so a caller can
   distinguish a blank line from EOF by length). ⛔ **IT YIELDS ON EVERY LANE AND ONLY THE MECHANISM DIFFERS**,
   which is the lane difference above: on Windows the read is in flight and the green thread parks on its
-  OVERLAPPED, resumed by the IOCP completion thread; on the POSIX lane the read end is non-blocking and the
-  green thread parks on its poll descriptor, resumed by the poller. Other green threads make progress either
+  own poll source; on the POSIX lane the read end is non-blocking and the green thread parks on its poll
+  descriptor. Both are resumed by the poller. Other green threads make progress either
   way. Returns an empty `String` on EOF, and the EOF is latched. `subpReadErrLine(h)` is the
   stderr twin (post-exit use only in the harness).
 - `subpWriteLine(h, line: s)` writes `s + "\n"` to the child's stdin, synchronously, returning
@@ -79,7 +79,7 @@ subject exists on these lanes now; the ports are simply unwritten.
 <!-- test: streaming-subprocess.echo-read -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 `main` spawns `cmd /c echo hello`, reads its one stdout line (`hello\r\n`, 7 bytes), waits, and releases.
-The read parks `main` until the completion thread readies it. The line's byte length (7) is returned.
+The read parks `main` until the poller readies it. The line's byte length (7) is returned.
 ```maxon
 function main() returns ExitCode
 	let h = subpSpawn("cmd /c echo hello")
@@ -338,8 +338,8 @@ end 'main'
 <!-- test: streaming-subprocess.spawned-reader -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 The read runs inside an `async` coroutine rather than in `main`, so its resume is a cross-thread ready of a
-coroutine: the completion thread readies the reader onto `main`'s strand queue under `__sched_lock`, and the
-machine that takes the strand switches back into it.
+coroutine: the machine draining the poller readies the reader onto `main`'s strand queue under
+`__sched_lock`, and the machine that takes the strand switches back into it.
 The reader returns the line's byte length (7); `main` awaits it.
 ```maxon
 function reader() returns Integer
@@ -505,10 +505,10 @@ end 'main'
 A streaming reader is DROPPED mid-read, then the SAME handle is re-read and must still work. `reader(h)` runs
 `subpReadLine(h)` in an `async` GT; the child (`ping -n 3` then `echo hi`) delays ~2 s, so the reader parks on
 the overlapped read with no data. `dropIt` sleeps 200 ms (the reader is parked) then returns, DROPPING the
-un-awaited promise. Because the read pipe is TABLE-owned (not the GT's), the drop's cancel arm CancelIoEx +
-drains but must NOT close it — so the follow-up `subpReadLine(h)` on the same handle re-issues a fresh read and
-gets `hi\r\n` (4 bytes), and `subpRelease` is the sole pipe-closer (no double-close). Before the ownership
-marker, the drop closed the shared pipe and this returned 0 (EOF forever).
+un-awaited promise. Because the read pipe is TABLE-owned (not the GT's), the drop cancels the READ and must
+NOT close the pipe — so the follow-up `subpReadLine(h)` on the same handle re-issues a fresh read and gets
+`hi\r\n` (4 bytes), and `subpRelease` is the sole pipe-closer (no double-close). Before the ownership marker,
+the drop closed the shared pipe and this returned 0 (EOF forever).
 ```maxon
 function reader(h Integer) returns Integer
 	let line = subpReadLine(h)
@@ -626,3 +626,37 @@ end 'main'
 72
 ```
 
+
+<!-- test: streaming-subprocess.windows-a-parked-line-read-is-on-the-poller -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
+<!-- procs: 1 -->
+⭐ **A PIPE READ THAT WAITS MUST WAIT ON THE SCHEDULER'S POLLER, AND `schedNetpollBlockCount()` IS WHAT
+SAYS SO.** A read parked anywhere else is a wait the scheduler cannot see: it does not count toward
+`__np_waiters`, the deadlock census cannot reason about it, and a second completion port needs a thread of
+its own to drain it. The counter is stepped by `__np_pd_commit` alone, so a non-zero delta across the read
+means the green thread published itself on a poll descriptor and nothing else can produce it.
+
+⚠ **THE WINDOW BRACKETS THE READ AND NOT THE SPAWN.** `subpSpawn` is `SyscallClass.blocking` and has
+parks of its own that have nothing to do with this subject, so the reading opens after the child exists.
+The child sleeps about a second before writing, which is what guarantees the read finds nothing ready and
+has to wait — a read satisfied inline completes without ever reaching the poller, correctly, and would
+witness nothing.
+```maxon
+function main() returns ExitCode
+	let h = subpSpawn("cmd /c ping -n 3 127.0.0.1 >nul & echo hi")
+	let before = __Builtins.schedNetpollBlockCount()
+	let line = subpReadLine(h)
+	let parks = __Builtins.schedNetpollBlockCount() - before
+	let n = line.byteLength()
+	_ = subpWait(h)
+	subpRelease(h)
+	print("n={n} polled={parks >= 1}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+n=4 polled=true
+```
+```exitcode
+0
+```

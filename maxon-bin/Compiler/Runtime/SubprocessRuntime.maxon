@@ -1690,9 +1690,6 @@ function emitSubpWaitForAnySource(module StdModule, func IrFunction, ids ValueMi
 	// ⛔ **A GROUP WITH NO MEMBER IS A PARK NOTHING CAN END**, so the idle pass falls back to the yield the
 	// completion-port lane always takes. Both streams at EOF with the child already reaped is the shape that
 	// reaches it, and the drain's own exit check ends the loop on the very next pass.
-	// ⛔ **A GROUP WITH NO MEMBER IS A PARK NOTHING CAN END**, so the idle pass falls back to the yield the
-	// completion-port lane always takes. Both streams at EOF with the child already reaped is the shape that
-	// reaches it, and the drain's own exit check ends the loop on the very next pass.
 	emitNetpollGroupSetCount(module, block: waitBlock, group: group, count: emitLoadField(module, block: waitBlock, record: state, offset: WcGroupCount, ids: ids))
 	let members = emitLoadField(module, block: waitBlock, record: state, offset: WcGroupCount, ids: ids)
 	let haveOne = emitCmp(module, block: waitBlock, a: members, b: emitConst(module, block: waitBlock, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
@@ -2143,8 +2140,7 @@ function emitSubpDrainStream(module StdModule, func IrFunction, ids ValueMinter,
 	module.setTerminator(grow, op: StdOp.branch(doRead.id))
 
 	// doRead: the peek said bytes are ready, so the overlapped read completes SYNCHRONOUSLY and the yielding
-	// reader returns without parking. `ownsPipe = 0` — the pipe is TABLE-owned and `subpRelease` is its sole
-	// closer, exactly as the streaming line reader passes.
+	// reader returns without parking.
 	let readEndD = emitSubpStreamReadEnd(module, block: doRead, ids: ids, state: state, streamBase: streamBase)
 	let bufD = emitLoadField(module, block: doRead, record: state, offset: bufOffset, ids: ids)
 	let lenD = emitLoadField(module, block: doRead, record: state, offset: lenOffset, ids: ids)
@@ -2152,9 +2148,8 @@ function emitSubpDrainStream(module StdModule, func IrFunction, ids ValueMinter,
 	let wantD = emitLoadField(module, block: doRead, record: state, offset: WcAvail, ids: ids)
 	let bytesOutOffset = emitConst(module, block: doRead, value: WcBytesOut as ParsedInt, ids: ids)
 	let bytesOutSlot = emitBin(module, block: doRead, a: state, b: bytesOutOffset, opcode: StdBinOpcode.add, ids: ids)
-	let ownsPipe = emitConst(module, block: doRead, value: 0, ids: ids)
 	let got = ids.mint()
-	module.appendOp(doRead, op: StdOp.call(got, callee: SubpYieldReadName, args: fiveArgs(readEndD, second: dst, third: wantD, fourth: bytesOutSlot, fifth: ownsPipe)))
+	module.appendOp(doRead, op: StdOp.call(got, callee: SubpYieldReadName, args: fourArgs(readEndD, second: dst, third: wantD, fourth: bytesOutSlot)))
 	emitStoreField(module, block: doRead, record: state, offset: WcAvail, value: got)
 
 	// ⚠ `<= 0`, not `== 0`: `__gt_subp_yield_read` answers `SubpReadFailedCount` for a read that FAILED, and

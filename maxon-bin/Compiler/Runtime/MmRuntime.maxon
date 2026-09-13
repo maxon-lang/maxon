@@ -916,8 +916,8 @@ export function fourI64Params() returns StdTypeArray
 	return types
 end 'fourI64Params'
 
-// Five i64 parameters — `__gt_subp_yield_read(readEnd, buf, cap, bytesOutPtr, ownsPipe)`.
-export function fiveI64Params() returns StdTypeArray
+// Five i64 parameters — the rung below `sixI64Params`, which is the ladder's only consumer of it.
+function fiveI64Params() returns StdTypeArray
 	var types = fourI64Params()
 	types.push(StdType.i64)
 	return types
@@ -1169,7 +1169,7 @@ end 'emitUnary'
 //
 // ⛔ **THIS DOOR KEEPS ITS `multiM` ARM AND THE REFCOUNT DOOR DROPPED ITS ATOMIC OUTRIGHT (EC10), AND THE
 // TWO ARE NOT ONE RULE TO BE SIMPLIFIED INTO EACH OTHER.** What this function steps is a `.data` word,
-// which is reachable from every OS thread the process has — including the IOCP completion thread and, the
+// which is reachable from every OS thread the process has — including a machine holding no processor and, the
 // day `spawn` lands, a worker M — so "can a second OS thread exist" is exactly the right question and
 // `multiM` is exactly the right shape for it. What `emitAdjustRefcount` steps is a word inside a BOX, and a
 // box is owned by one green thread which runs on one M: it has no second party at any `MAXON_MAX_PROCS`,
@@ -2200,24 +2200,18 @@ end 'emitLoadRefcount'
 // has and keeps its atomic; a refcount is not and never was.
 //
 // ⚠ **THE ONE OS THREAD THAT IS NOT THE OWNER'S M REACHES EXACTLY TWO FUNCTIONS, AND THIS IS NOT ONE OF
-// THEM.** An emitted program creates OS threads at **three** `osThreadCreate` sites: the IOCP completion
-// thread (`GtRuntime.buildIoInit`), a worker M (`SchedRuntime.emitSchedWakeOrSpawn`), and the syscall
-// monitor (`SchedRuntime.emitSchedSysmonStart`).
+// THEM.** An emitted program creates OS threads at **two** `osThreadCreate` sites: a worker M
+// (`SchedRuntime.emitSchedWakeOrSpawn`) and the syscall monitor (`SchedRuntime.emitSchedSysmonStart`).
 //
-// ⛔ **THIS SAID "EXACTLY TWO", AND THE COUNT IS LOAD-BEARING RATHER THAN DECORATIVE — the plain refcount
-// rests on ENUMERATING the threads, so a missing one is a missing case.** Two things expired: `spawn` has
-// landed, so the worker M's "no caller with a producer" clause is gone; and W213-C3 added the monitor.
-// ✅ **The conclusion survives the third thread, and here is why rather than an assurance.** The monitor
+// ⛔ **THE COUNT IS LOAD-BEARING RATHER THAN DECORATIVE — the plain refcount rests on ENUMERATING the
+// threads, so a missing one is a missing case.**
+// ✅ **The conclusion survives the monitor, and here is why rather than an assurance.** The monitor
 // runs with NO processor and never executes Maxon user code: its whole job is to read per-M state words,
 // claim a stuck processor and hand it on. It touches queues, status words and claims — every one of which
 // states its `MultiMSharing` class — and it never dereferences a box, so it cannot be a second writer of a
 // refcount. It is the same argument the worker M gets, arrived at differently: the worker is safe because
 // every refcount it touches belongs to the green thread it is RUNNING; the monitor is safe because it runs
 // none.
-//
-// The completion thread's Maxon call graph is `__io_completion_loop` → `__gt_ready_locked` and
-// `__sched_wake_or_spawn`: strand and run queues and scheduler words, every one of which states its
-// `MultiMSharing` class. It never touches a box.
 //
 // ⭐ **THE CONTROL IS COMMITTED, BECAUSE THE LAST ONE WAS NOT.** G2's measurement lived in
 // `temp/g2/rc-global.maxon`, and `temp/` is gitignored and swept — so the evidence for a `lock` prefix on
@@ -2691,7 +2685,7 @@ end 'emitLayerSum'
 //
 // ⚠ **THE OWNER, NOT THE RUNNING GT** — see `buildThreadCounterReader`. A null running GT answers 0 rather
 // than reading `owner` through it: an M exists with no GT for the few instructions of its own bring-up, and
-// the IOCP completion thread has one for its whole life.
+// the system monitor has none for its whole life.
 function emitCurrentThreadOrZero(module StdModule, func IrFunction, cur IrBlock, threadId ValueId, ids ValueMinter) returns IrBlock
 	var haveOffset = module.addBlock(func, label: b"thoffset", heat: BlockHeat.normal)
 	var haveMachine = module.addBlock(func, label: b"thmachine", heat: BlockHeat.normal)

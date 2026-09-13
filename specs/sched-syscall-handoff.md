@@ -536,7 +536,7 @@ done sibling=1 read=5 blocked=yes
 <!-- procs: 1 -->
 <!-- stdin: delayed -->
 ⭐ **THIS CASE PINS THE MECHANISM, BECAUSE THE CASE ABOVE CAN BE GREENED BY THE WRONG CURE.** Routing
-`__con_read_stdin` through the existing `__gt_io_park`/IOCP road would reorder those two lines without a
+`__con_read_stdin` through the existing overlapped-read road would reorder those two lines without a
 processor ever being retaken — a real improvement, and a **different** rung's. `__Builtins.schedRetakeCount()`
 sums a per-P counter (the `schedStealCount` shape, so no `.data` word and no golden churn) and answers how
 many times a `sysmon` actually took a processor away from a machine stuck in the kernel.

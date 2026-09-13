@@ -870,8 +870,9 @@ end 'ProfileHostCall'
 // list puts what the POSIX lanes read first, so their chunks take a prefix (`posixNetpollOperandCount`).
 export enum NetpollVerb
 	// `() -> poller`. A completion port (`CreateIoCompletionPort`), an `epoll_create1(EPOLL_CLOEXEC)`, or a
-	// `kqueue`. A port of the scheduler's own, never the IOCP read substrate's (`__io_iocp`), whose drain thread
-	// would read a break packet as its shutdown sentinel.
+	// `kqueue`. It is the process's ONE poller: every child, every registered descriptor and — on the
+	// completion-port lane — every overlapped pipe read reports through it, so a machine that blocks here sees
+	// all of them.
 	openPoller
 
 	// `(poller) -> breakSource`. What `raiseBreak` interrupts a wait through: the port itself on Windows, a
@@ -908,18 +909,17 @@ export enum NetpollVerb
 	// of this thread's quantum (`SwitchToThread`) and the operand is unread.
 	shortSleep
 
-	// ⭐⭐ **`(poller, fd) -> the host's raw answer`. REGISTER A SOCKET WITH THE POLLER, EDGE-TRIGGERED, IN BOTH
-	// DIRECTIONS AT ONCE.** An `epoll_ctl(EPOLL_CTL_ADD)` whose `epoll_data` is the descriptor itself, or a
-	// two-element `kevent` changelist adding `EVFILT_READ` and `EVFILT_WRITE` `EV_CLEAR`. There is no matching
-	// DEREGISTER verb and none is owed: closing a descriptor takes it out of the set on both kernels, and the
-	// poll-descriptor band resets its record before the close (`NetpollRuntime.__np_pd_release`).
+	// ⭐⭐ **`(poller, fd) -> the host's raw answer`. REGISTER A SOCKET WITH THE POLLER, IN BOTH DIRECTIONS AT
+	// ONCE.** An `epoll_ctl(EPOLL_CTL_ADD)` whose `epoll_data` is the descriptor itself, a two-element `kevent`
+	// changelist adding `EVFILT_READ` and `EVFILT_WRITE` `EV_CLEAR`, or a `CreateIoCompletionPort` joining the
+	// socket to the port. There is no matching DEREGISTER verb and none is owed: closing a descriptor takes it
+	// out of the set on every kernel, and the poll-descriptor band resets its record before the close
+	// (`NetpollRuntime.__np_pd_release`).
 	//
-	// ⚠ **EDGE-TRIGGERED IS NOT AN OPTIMIZATION HERE.** The readiness a waiter has not yet consumed is held in
-	// the descriptor's own record, so a level-triggered registration would re-report it on every wait and the
-	// one machine in the poller would spin.
-	//
-	// ⚠ **THE COMPLETION-PORT SHAPE NEVER EMITS IT** — that lane's socket band is blocking, so
-	// `NetpollRuntime.buildNetpollPdOpen`, the only producer, is not built there.
+	// ⚠ **EDGE-TRIGGERED IS NOT AN OPTIMIZATION ON THE TWO POSIX LANES.** The readiness a waiter has not yet
+	// consumed is held in the descriptor's own record, so a level-triggered registration would re-report it on
+	// every wait and the one machine in the poller would spin. A completion port reports an OPERATION rather than
+	// a state and has no such choice to make.
 	armSource
 
 	// ⭐⭐ **`(childHandle) -> a poll source for this child's exit, or a failure in this shape's vocabulary`.**
@@ -956,8 +956,8 @@ export enum NetpollVerb
 	// FLAG.** `pipe2(O_NONBLOCK)` sets the flag on BOTH file descriptions, and the child holds the write end as
 	// its stdout — so the CHILD's writes would fail `EAGAIN`, on a program that did nothing unusual.
 	//
-	// ⚠ **THE COMPLETION-PORT SHAPE NEVER EMITS IT.** Its pipes are overlapped and were registered with the port
-	// when they were created, so `NetpollRuntime.__np_pipe_open` does nothing there.
+	// ⚠ **THE COMPLETION-PORT SHAPE NEVER EMITS IT.** Its pipes are overlapped and are handed to the poller
+	// under `NetpollOverlappedToken` when they are created, so `NetpollRuntime.__np_pipe_open` does nothing there.
 	armPipeSource
 end 'NetpollVerb'
 
@@ -965,7 +965,49 @@ end 'NetpollVerb'
 // `epoll_data` the eventfd is registered with, and the `EVFILT_USER` ident. Go's `kqIdent`: a number no
 // descriptor, pointer or key this runtime registers can equal, so the decoder tells a break from every other
 // source by this one word.
+//
+// ⛔ **WHAT KEEPS THE TWO TOKENS OUT OF THE SOURCE-KEY SPACE IS MAGNITUDE, NOT THE PARITY SPLIT**
+// (`NetpollRuntime.emitNetpollDescriptorIndex`): one of them is even and one odd, so parity puts each in one of
+// the two runs rather than outside both. Nearly four billion is what no run reaches — a minted key steps from
+// zero and is bounded by the operations alive at once, and a descriptor's index is twice a Windows handle,
+// which the kernel hands out as small multiples of four.
 export let NetpollBreakToken = 0xEE1EB9F4 as ParsedInt
+
+// ⭐⭐ **THE IDENTITY AN OVERLAPPED OPERATION COMPLETES UNDER, ON THE COMPLETION-PORT LANE.** A completion key
+// is fixed when the handle joins the port and cannot vary per operation, so it cannot name the OPERATION — and
+// the operation is what a parked green thread waits for. So the key says only *"this packet is an overlapped
+// transfer"* and the packet's `lpOverlapped` names the operation: `NetpollRuntime`'s decode recovers the issuing
+// thread from it by CONTAINING_RECORD. Beside the break token because the decode tells the three packet shapes
+// apart by these two words alone, and neither may equal a source key.
+export let NetpollOverlappedToken = 0xEE1EB9F5 as ParsedInt
+
+// ⭐⭐ **WHICH WINSOCK ENTRY POINT ONE `osSocketOverlapped` ASKS FOR, AND WHICH OPERANDS IT READS.** Each verb
+// is one call with one argument list; the op carries four operands and a verb reads a prefix of them, so the
+// operands a verb does not name are passed zero.
+export enum SocketOverlappedVerb
+	// `(socket, buffers, flags, overlapped) -> the host's raw answer`. `WSARecv(s, buffers, 1, NULL, flags,
+	// overlapped, NULL)` — ONE `WSABUF`, and the transferred count comes back on the packet rather than through
+	// an out-param, because a receive that is still in flight has none to write yet.
+	//
+	// ⛔ **`flags` IS A POINTER AND IS READ BEFORE IT IS WRITTEN**, so the caller's word must hold 0 and must
+	// outlive the operation exactly as the `WSABUF` must.
+	receive
+
+	// `(socket, buffers, overlapped, unused) -> the host's raw answer`. `WSASend(s, buffers, 1, NULL, 0,
+	// overlapped, NULL)` — the same shape, with `flags` a plain DWORD the send has nothing to say in.
+	transmit
+
+	// ⭐⭐ `(socket, event, unused, unused) -> the host's raw answer`. `WSAEventSelect(s, event, FD_CONNECT)` —
+	// the handshake's own notification, and the reason a connect on this lane holds no machine: the call ALSO
+	// puts the socket into non-blocking mode, so the `connect` that follows answers `WSAEWOULDBLOCK` at once and
+	// the green thread parks on the event instead of sitting in the kernel.
+	watchConnect
+
+	// `(socket, unused, unused, unused) -> the host's raw answer`. `WSAEventSelect(s, NULL, 0)` — give the
+	// association back once the handshake has been read. The socket STAYS non-blocking, which costs the
+	// overlapped transfers nothing: an overlapped operation ignores the mode.
+	stopWatchingConnect
+end 'SocketOverlappedVerb'
 
 export union StdOp
 	// --- band: arith ---
@@ -1484,7 +1526,7 @@ export union StdOp
 	// chained-fixup rebase by the always-PIE arm64-macOS.
 	witnessCall(resultId ValueId, witnessAddr ValueId, methodIndex WitnessMethodIndex, resultType StdReturnType, argFloatMask ArgFloatMask, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
-	// --- P1.5 dogfood slice 1a: the IOCP overlapped-read substrate's OS-import primitives ---
+	// --- The green-thread substrate's OS primitives: pipes, threads, locks, overlapped reads and spawns ---
 	//
 	// Each carries `category: system` (metadata placing it logically in the
 	// system band, independent of this tail position) — the same shape and rationale as the P1.5 subprocess ops:
@@ -1493,22 +1535,25 @@ export union StdOp
 	// emitted only inside the x64-windows-gated IOCP runtime, so a linux/arm64/wasm lowering would be untested dead
 	// code no test could reach). Full call-barrier metadata: each IS one or more indirect calls once lowered.
 	//
-	// The FIVE value-defining ones — `osIocpCreate`, `osEventCreate`, `osThreadCreate`, `osReadOverlapped`,
+	// The FOUR value-defining ones — `osEventCreate`, `osThreadCreate`, `osReadOverlapped`,
 	// `osLastError` — DEFINE a result (a HANDLE, a BOOL, or an error code captured from RAX). The rest consume their
 	// result via MEMORY (an out-param pointer) or ignore it (a lock op's void return), so they carry no result id, as
 	// `osCloseHandle` does.
 	//
-	// `osPipeCreate(namePtr, saPtr, iocp, readPtr, writePtr)` = create ONE overlapped read pipe: CreateNamedPipeW(name,
-	// INBOUND|OVERLAPPED|FIRST_PIPE_INSTANCE, …) → the parent READ end stored to `[readPtr]`; CreateFileW(name,
-	// GENERIC_WRITE, …, saPtr=inheritable, OPEN_EXISTING, …) → the inheritable child WRITE end stored to `[writePtr]`;
-	// SetHandleInformation strips inheritance from the read end; CreateIoCompletionPort registers the read end with
-	// `iocp` and SetFileCompletionNotificationModes sets FILE_SKIP_COMPLETION_PORT_ON_SUCCESS. Five VALUE operands, no
-	// result (the two handles land in memory).
-	osPipeCreate(namePtrId ValueId, saPtrId ValueId, iocpId ValueId, readPtrId ValueId, writePtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
-
-	// `osIocpCreate()` = `CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1)` — create the process-wide IOCP. No
-	// value operands; DEFINES the port handle (captured from RAX).
-	osIocpCreate(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+	// `osPipeCreate(namePtr, saPtr, iocp, readPtr, writePtr, syncSilencedPtr)` = create ONE overlapped read pipe:
+	// CreateNamedPipeW(name, INBOUND|OVERLAPPED|FIRST_PIPE_INSTANCE, …) → the parent READ end stored to `[readPtr]`;
+	// CreateFileW(name, GENERIC_WRITE, …, saPtr=inheritable, OPEN_EXISTING, …) → the inheritable child WRITE end
+	// stored to `[writePtr]`; SetHandleInformation strips inheritance from the read end; CreateIoCompletionPort
+	// registers the read end with `iocp` and SetFileCompletionNotificationModes sets
+	// FILE_SKIP_COMPLETION_PORT_ON_SUCCESS. Six VALUE operands, no result (everything lands in memory).
+	//
+	// ⛔⛔ **`[syncSilencedPtr]` IS THE ANSWER TO *"WILL A READ THAT COMPLETES INLINE POST A PACKET?"*, AND IT IS A
+	// LOAD-BEARING ONE.** `GtRuntime.__gt_subp_yield_read` answers an inline `ReadFile` out of `[bytesOut]` without
+	// waiting; a packet for that read would arrive after its source was given back, and the next operation's wake
+	// would take it and store one read's byte count and status as another's. The caller SEEDS the word with the
+	// vacuous truth and a lane that can falsify it writes its host's answer — so a lane with no completion port
+	// ignores this operand exactly as it ignores the name, the SA and the port.
+	osPipeCreate(namePtrId ValueId, saPtrId ValueId, iocpId ValueId, readPtrId ValueId, writePtrId ValueId, syncSilencedPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
 
 	// `osEventCreate()` = `CreateEventA(NULL, FALSE, FALSE, NULL)` — an AUTO-RESET, initially-unsignaled event (the
 	// netpoll's wake). No value operands; DEFINES the event handle.
@@ -1524,8 +1569,8 @@ export union StdOp
 	// `osThreadCreateWithArg` op would be this one plus a constant, which is the thin-wrapper rule
 	// in op form.
 	// ⭐⭐ **SCHEDULING PRIORITY — THE CONTRACT EVERY THREAD THIS OP MINTS INHERITS, AND THE ONE PLACE IT
-	// CAN BE STATED.** This op is the ONLY way an emitted program acquires an OS thread, at exactly two
-	// sites: `GtRuntime.buildIoInit`'s completion thread and `SchedRuntime.emitSchedWakeOrSpawn`'s worker M.
+	// CAN BE STATED.** This op is the ONLY way an emitted program acquires an OS thread, at two sites:
+	// `SchedRuntime.emitSchedWakeOrSpawn`'s worker M and `emitSchedSysmonStart`'s syscall monitor.
 	// So a thread born here runs at whatever priority `__proc_bg_priority` last set for the process — and on
 	// the two WHOLE-PROCESS lanes, that holds with NOTHING EMITTED HERE: `SetPriorityClass` sets a PROCESS
 	// class covering threads created before and after it, and Darwin scopes a `nice` value to the process in
@@ -1541,17 +1586,15 @@ export union StdOp
 	// `processPriority` rows in `TargetFacilities.targetProvidesFacility` and each lane's
 	// `lowerOsEnterBackgroundPriorityLinux`, and all of them say so.
 	//
-	// ⚠ **THE WORKER-M SITE IS NOW REACHED, WHICH THIS NOTE SAID IT WAS NOT.** It read *"the compiler reaches neither
-	// site today — `emitSchedWakeOrSpawn` has had no producer since EC10"*; `spawn` publishes a green thread,
-	// the publish doors' green arms wake or spawn, and every M in every green-threaded program is minted
-	// through this op. `buildIoInit`'s completion thread is still lazy and still Windows-only.
+	// ⚠ **THE WORKER-M SITE IS REACHED BY EVERY GREEN-THREADED PROGRAM**: `spawn` publishes a green thread,
+	// the publish doors' green arms wake or spawn, and every M is minted through this op.
 	osThreadCreate(resultId ValueId, entryPtrId ValueId, argId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
 
 	// `osLockInit(lockPtr)` = `InitializeCriticalSection(lockPtr)`. One VALUE operand (the CRITICAL_SECTION region), no result.
 	osLockInit(lockPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
 
-	// `osLockEnter(lockPtr)` = `EnterCriticalSection(lockPtr)` — the run-queue guard's acquire at a main-thread mutation
-	// site (the completion thread acquires it DIRECTLY in the hand-assembled loop, not through this op). One VALUE operand, no result.
+	// `osLockEnter(lockPtr)` = `EnterCriticalSection(lockPtr)` — the run-queue guard's acquire. One VALUE
+	// operand, no result.
 	osLockEnter(lockPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
 
 	// `osLockLeave(lockPtr)` = `LeaveCriticalSection(lockPtr)`. One VALUE operand, no result.
@@ -1590,16 +1633,16 @@ export union StdOp
 	// means "inherit the parent's", so 0 remains what a caller with nothing to say passes.
 	osProcessSpawnInherit(cmdlinePtrId ValueId, cwdPtrId ValueId, creationFlagsId ValueId, startupPtrId ValueId, procInfoPtrId ValueId, envPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
 
-	// `osCancelIo(handle, ovl)` = `CancelIoEx(handle, ovl)` — cancel a specific pending overlapped read (P1.5 slice
-	// 1a-ii, the in-flight-reader-promise DROP path). Two VALUE operands (the pipe read handle + the OVERLAPPED whose
-	// operation to cancel), no result: the cancellation posts an ERROR_OPERATION_ABORTED completion packet the
-	// completion thread drains, which is how the drop arm knows the completion thread is DONE with the GT before it
-	// frees it. x64-windows only, like every IOCP op.
+	// `osCancelIo(handle, ovl)` = `CancelIoEx(handle, ovl)` — cancel a specific pending overlapped read, the
+	// DROP path of a promise whose green thread is parked on one. Two VALUE operands (the pipe read handle and
+	// the OVERLAPPED whose operation to cancel), no result: the cancellation posts an ERROR_OPERATION_ABORTED
+	// packet to the poller at once, and that packet is what readies the dropped thread and proves the kernel
+	// has finished with its buffer. x64-windows only, like every overlapped-read op.
 	osCancelIo(handleId ValueId, ovlId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
 
 	// `osGetPid()` = `GetCurrentProcessId()` on Windows, `getpid()` on arm64-macOS — the current process id,
 	// DEFINING the result (captured from the return register). It has TWO producers, which is why it sits in
-	// the IOCP band and answers a question that has nothing to do with one: the pipe-name uniquifier mints it
+	// the overlapped-read band and answers a question that has nothing to do with one: the pipe-name uniquifier mints it
 	// to make an overlapped name CROSS-PROCESS unique (the high 32 bits of the name's hex uniquifier; the low
 	// 32 are a per-process counter), and `runtime/Process.maxon` spells it through `__Raw.osGetPid` as the
 	// whole body of `__proc_pid`.
@@ -1686,7 +1729,7 @@ export union StdOp
 	//
 	// `osFileOpenRead(result, pathPtr)` = `CreateFileA(pathPtr, GENERIC_READ, FILE_SHARE_READ, NULL,
 	// OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)`, the raw HANDLE (or `INVALID_HANDLE_VALUE`) in `result`.
-	// One value operand and one def — the direct-return shape `osIocpCreate`/`osEventCreate` use, NOT the
+	// One value operand and one def — the direct-return shape `osEventCreate` uses, NOT the
 	// out-param shape `osReadClock` needs, because `CreateFileA` returns its answer in RAX.
 	//
 	// ⚠ **THE `A` ENTRY POINT, AND THIS COMMENT USED TO SAY `W` WHILE THE LOWERING EMITTED `A` (fixed R4.2).**
@@ -2120,10 +2163,11 @@ export union StdOp
 	// negative too. A POSIX descriptor is also born NON-BLOCKING and close-on-exec, which is the lowering's to
 	// arrange and not an operand.
 	//
-	// ⚠ **THE REFERENCES CALL `WSASocketW` WITH `WSA_FLAG_OVERLAPPED` AND THIS CALLS PLAIN `socket`.** Theirs is
-	// registered with an IOCP for the async lane; x64-windows connects SYNCHRONOUSLY, and an overlapped socket
-	// whose completions nothing drains is strictly worse than a blocking one. The async lane changes this op's
-	// lowering when it arrives, which is exactly why the flags are not operands.
+	// ⚠ **THE REFERENCES CALL `WSASocketW` WITH `WSA_FLAG_OVERLAPPED` AND THIS CALLS PLAIN `socket` — AND THE
+	// DESCRIPTOR IS OVERLAPPED EITHER WAY.** ws2_32's `socket()` implies `WSA_FLAG_OVERLAPPED`; only
+	// `WSASocketW` can WITHHOLD it, which is why the flag is a parameter there and not here. That is what lets
+	// x64-windows join this descriptor to the scheduler's one poller and drive it with `WSARecv`/`WSASend`
+	// (`ManagedSocketRuntime`'s `SocketWaitShape.overlapped`) without a flags operand.
 	osSocketCreate(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// `osSocketConnect(result, sock, addrPtr)` = `connect(sock, addrPtr, sizeof(sockaddr_in))`, the returned int
@@ -2546,11 +2590,9 @@ export union StdOp
 	// **`osSetEvent(handle)`** = `SetEvent(handle)` — signal an auto-reset event. The wake half of the
 	// worker park's Dekker pair, and the twin of the `osWaitHandle` a parked worker blocks in.
 	//
-	// ⚠ It is a NEW op even though `SetEvent` was already an IAT slot: the only prior caller is the
-	// hand-assembled `__io_completion_loop`, which emits the import call as raw bytes because it is not a
-	// Std function at all. A builder-built caller cannot reach that, and the alternative — hand-assembling
-	// the worker loop — would put the scheduler's newest logic in the one form that gets no register
-	// allocation and no frame checking.
+	// ⚠ It is an op rather than a raw import call because the alternative — hand-assembling the worker loop —
+	// would put the scheduler's newest logic in the one form that gets no register allocation and no frame
+	// checking.
 	osSetEvent(handleId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// --- The PROCESS-PRIORITY door behind `__Builtins.enterBackgroundPriority()` ---
@@ -2844,6 +2886,17 @@ export union StdOp
 	// metadata otherwise. wasm32-wasi has no second thread to break a wait and refuses every verb with the
 	// `greenThreads` facility.
 	osNetpoll(resultId ValueId, verb NetpollVerb, a0Id ValueId, a1Id ValueId, a2Id ValueId, a3Id ValueId, a4Id ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
+	// ⭐⭐ **A SOCKET TRANSFER THAT THE KERNEL FINISHES LATER, AS ONE FAMILY OP** —
+	// `osSocketOverlapped(result, verb, a0…a3) -> the host's raw answer`. It is `osNetpoll`'s arrangement for
+	// `osNetpoll`'s reason: every verb is one Winsock entry point with the same shape — a socket, up to three
+	// operands it reads, and an `int` answer — so one op with a compile-time verb spares the dialect an arm per
+	// entry point in fifty total matches. `SocketOverlappedVerb` says which operands each verb reads.
+	//
+	// ⛔ **x64-windows ONLY, LIKE EVERY OVERLAPPED OP.** A POSIX socket is driven by READINESS — the descriptor
+	// is non-blocking and the poller says when a retry can be served — so there is no operation for a kernel to
+	// be still holding, and `ManagedSocketRuntime.socketWaitShape` emits none of this there.
+	osSocketOverlapped(resultId ValueId, verb SocketOverlappedVerb, a0Id ValueId, a1Id ValueId, a2Id ValueId, a3Id ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -2961,8 +3014,8 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		// that reaches `StdLoweringShared.opTakesSyscallBracket` drives its sockets NON-BLOCKING
 		// (`ManagedSocketRuntime.SocketWaitShape.polled`), so `socket`, `connect`, `send`, `recv` and `close`
 		// answer at once — `EAGAIN` rather than a wait — and the green thread suspends on the POLLER instead.
-		// x64-windows, whose sockets really are blocking, classifies its own imports through a table of its own
-		// (`X64GtRuntime.gtShimSyscallClassOf`) and never reads this arm.
+		// x64-windows suspends on the poller too, one operation at a time rather than one descriptor at a time,
+		// and classifies its own imports through a table of its own (`X64GtRuntime.gtShimSyscallClassOf`).
 		osSocketStartup gives SyscallClass.blocking
 		osSocketResolve gives SyscallClass.blocking
 
@@ -3001,7 +3054,8 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		// `PostQueuedCompletionStatus`, so the bound is this process's own thread pool rather than a far end. The
 		// rule this table encodes is *\"`blocking` means it can wait an unbounded time on something OUTSIDE the
 		// scheduler\"*, and a wait on our own callback is not that.
-		osNetpoll gives SyscallClass.schedulerBound
+		osNetpoll or
+			osSocketOverlapped gives SyscallClass.schedulerBound
 
 		// The PAGE band: bounded, and every one of them is reachable under `__slab_lock`.
 		osAllocPages gives SyscallClass.schedulerBound
@@ -3033,7 +3087,6 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		osCloseHandle gives SyscallClass.schedulerBound
 		osFileClose gives SyscallClass.schedulerBound
 		osFileFindClose gives SyscallClass.schedulerBound
-		osIocpCreate gives SyscallClass.schedulerBound
 		osCancelIo gives SyscallClass.schedulerBound
 		osLastError gives SyscallClass.schedulerBound
 		osEventCreate gives SyscallClass.schedulerBound
@@ -3438,7 +3491,6 @@ export function classifyArithOperands(op StdOp, operands StdArithOperands)
 			switch or
 			witnessCall or
 			osPipeCreate or
-			osIocpCreate or
 			osEventCreate or
 			osThreadCreate or
 			osLockInit or
@@ -3516,7 +3568,8 @@ export function classifyArithOperands(op StdOp, operands StdArithOperands)
 			osUnpublishNamedSegment or
 			covPoint or
 			osHostSample or
-			osNetpoll then operands.recordNeither()
+			osNetpoll or
+			osSocketOverlapped then operands.recordNeither()
 	end 'b'
 end 'classifyArithOperands'
 
@@ -3636,7 +3689,6 @@ export function classifyLoadOperands(op StdOp, load StdLoadOperands)
 			switch or
 			witnessCall or
 			osPipeCreate or
-			osIocpCreate or
 			osEventCreate or
 			osThreadCreate or
 			osLockInit or
@@ -3718,7 +3770,8 @@ export function classifyLoadOperands(op StdOp, load StdLoadOperands)
 			osUnpublishNamedSegment or
 			covPoint or
 			osHostSample or
-			osNetpoll then load.recordNotALoad()
+			osNetpoll or
+			osSocketOverlapped then load.recordNotALoad()
 	end 'l'
 end 'classifyLoadOperands'
 
@@ -3800,7 +3853,6 @@ module function classifyStoreOperands(op StdOp, store StdStoreOperands)
 			switch or
 			witnessCall or
 			osPipeCreate or
-			osIocpCreate or
 			osEventCreate or
 			osThreadCreate or
 			osLockInit or
@@ -3875,7 +3927,8 @@ module function classifyStoreOperands(op StdOp, store StdStoreOperands)
 			osUnpublishNamedSegment or
 			covPoint or
 			osHostSample or
-			osNetpoll then store.recordNotAStore()
+			osNetpoll or
+			osSocketOverlapped then store.recordNotAStore()
 	end 's'
 end 'classifyStoreOperands'
 
@@ -3991,7 +4044,6 @@ module function classifyCallOperands(op StdOp, call StdCallOperands)
 			switch or
 			witnessCall or
 			osPipeCreate or
-			osIocpCreate or
 			osEventCreate or
 			osThreadCreate or
 			osLockInit or
@@ -4066,7 +4118,8 @@ module function classifyCallOperands(op StdOp, call StdCallOperands)
 			osUnpublishNamedSegment or
 			covPoint or
 			osHostSample or
-			osNetpoll then call.recordOther()
+			osNetpoll or
+			osSocketOverlapped then call.recordOther()
 	end 'c'
 end 'classifyCallOperands'
 
@@ -4506,11 +4559,10 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		// `methodIndex`/`resultType`/`argFloatMask` are metadata (not value operands).
 		witnessCall(_, witnessAddr, _, _, _, args) then insertUseCalleeAndArgs(referenced, calleeReg: witnessAddr, args: args)
 
-		// P1.5 dogfood slice 1a: each IOCP op reports its VALUE operands; its `resultId` (where present) is a DEF,
-		// skipped here exactly as `osWaitHandle`'s is. `osIocpCreate`/`osEventCreate`/`osLastError` read nothing (a
+		// Each OS-primitive op reports its VALUE operands; its `resultId` (where present) is a DEF,
+		// skipped here exactly as `osWaitHandle`'s is. `osEventCreate`/`osLastError` read nothing (a
 		// pure result def, like `osAllocPages`'s but with no size operand).
-		osPipeCreate(namePtr, saPtr, iocp, readPtr, writePtr) then insertUseQuint(referenced, a: namePtr, b: saPtr, c: iocp, d: readPtr, e: writePtr)
-		osIocpCreate then break 'u'
+		osPipeCreate(namePtr, saPtr, iocp, readPtr, writePtr, syncSilencedPtr) then insertUseSextet(referenced, a: namePtr, b: saPtr, c: iocp, d: readPtr, e: writePtr, f: syncSilencedPtr)
 		osEventCreate then break 'u'
 		osThreadCreate(_, entryPtr, arg) then insertUsePair(referenced, a: entryPtr, b: arg)
 		osLockInit(lockPtr) then referenced.insert(lockPtr)
@@ -4567,6 +4619,7 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		// selector, not a value.
 		osHostSample(_, _, a0, a1, a2, a3, a4, a5) then insertUseSextet(referenced, a: a0, b: a1, c: a2, d: a3, e: a4, f: a5)
 		osNetpoll(_, _, a0, a1, a2, a3, a4) then insertUseQuint(referenced, a: a0, b: a1, c: a2, d: a3, e: a4)
+		osSocketOverlapped(_, _, a0, a1, a2, a3) then insertUseQuad(referenced, a: a0, b: a1, c: a2, d: a3)
 		osFileSize(_, handle, sizeOutPtr) then insertUsePair(referenced, a: handle, b: sizeOutPtr)
 		osFileDelete(_, pathPtr) then referenced.insert(pathPtr)
 		osFileRename(_, oldPathPtr, newPathPtr) then insertUsePair(referenced, a: oldPathPtr, b: newPathPtr)
@@ -4841,10 +4894,9 @@ module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 		witnessCall(resultId, _, _, _, _, _) then def.recordOne(resultId)
 		witnessTryCall(resultId, errorFlagId, _, _, _, _, _) then def.recordPair(resultId, errorFlagId: errorFlagId)
 
-		// P1.5 dogfood slice 1a: the FIVE value-defining IOCP ops (iocp/event/thread handles, the read BOOL, the
-		// last-error code) capture RAX; osPipeCreate/osLock*/osProcessSpawnInherit define nothing (see StdDialect).
+		// The FOUR value-defining overlapped-read ops (event/thread handles, the read BOOL, the last-error
+		// code) capture RAX; osPipeCreate/osLock*/osProcessSpawnInherit define nothing (see StdDialect).
 		osPipeCreate then def.recordNone()
-		osIocpCreate(resultId) then def.recordOne(resultId)
 		osEventCreate(resultId) then def.recordOne(resultId)
 		osThreadCreate(resultId, _, _) then def.recordOne(resultId)
 		osLockInit or
@@ -4886,6 +4938,7 @@ module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 			covPoint then def.recordNone()
 		osHostSample(resultId, _, _, _, _, _, _, _) then def.recordOne(resultId)
 		osNetpoll(resultId, _, _, _, _, _, _) then def.recordOne(resultId)
+		osSocketOverlapped(resultId, _, _, _, _, _) then def.recordOne(resultId)
 		osFileSize(resultId, _, _) then def.recordOne(resultId)
 		osFileDelete(resultId, _) then def.recordOne(resultId)
 		osFileRename(resultId, _, _) then def.recordOne(resultId)
@@ -5007,8 +5060,7 @@ function insertUseQuad(referenced StdValueUseSet, a ValueId, b ValueId, c ValueI
 	referenced.insert(d)
 end 'insertUseQuad'
 
-// The five-operand twin — for the P1.5 IOCP ops that read five value operands (`osPipeCreate`'s name + SA + iocp +
-// two out-pointers; `osReadOverlapped`'s handle + buf + cap + bytesOut-pointer + overlapped).
+// The five-operand twin — for `osReadOverlapped`'s handle + buf + cap + bytesOut-pointer + overlapped.
 function insertUseQuint(referenced StdValueUseSet, a ValueId, b ValueId, c ValueId, d ValueId, e ValueId)
 	referenced.insert(a)
 	referenced.insert(b)
@@ -5017,8 +5069,9 @@ function insertUseQuint(referenced StdValueUseSet, a ValueId, b ValueId, c Value
 	referenced.insert(e)
 end 'insertUseQuint'
 
-// The six-operand twin — for the two `CreateProcessA` ops, whose command line, working directory,
-// creation flags, STARTUPINFO, PROCESS_INFORMATION and environment block are all values.
+// The six-operand twin — for the two `CreateProcessA` ops, whose command line, working directory, creation
+// flags, STARTUPINFO, PROCESS_INFORMATION and environment block are all values, and for `osPipeCreate`'s name
+// + SA + port + three out-pointers.
 function insertUseSextet(referenced StdValueUseSet, a ValueId, b ValueId, c ValueId, d ValueId, e ValueId, f ValueId)
 	insertUseQuint(referenced, a: a, b: b, c: c, d: d, e: e)
 	referenced.insert(f)
@@ -5129,10 +5182,9 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		// args (its result is a def; `methodIndex`/`resultType`/`argFloatMask` are metadata carried through).
 		witnessCall(resultId, witnessAddr, methodIndex, resultType, argFloatMask, args) gives StdOp.witnessCall(resultId, witnessAddr: remappedValue(witnessAddr, subst: subst), methodIndex: methodIndex, resultType: resultType, argFloatMask: argFloatMask, args: remappedArgs(args, subst: subst))
 
-		// The exact mirror of `collectStdOpUses`'s P1.5 IOCP arms: rewrite exactly the value operands they read;
-		// the result-only ops (`osIocpCreate`/`osEventCreate`/`osLastError`) rewrite nothing.
-		osPipeCreate(namePtr, saPtr, iocp, readPtr, writePtr) gives StdOp.osPipeCreate(remappedValue(namePtr, subst: subst), saPtrId: remappedValue(saPtr, subst: subst), iocpId: remappedValue(iocp, subst: subst), readPtrId: remappedValue(readPtr, subst: subst), writePtrId: remappedValue(writePtr, subst: subst))
-		osIocpCreate gives op
+		// The exact mirror of `collectStdOpUses`'s OS-primitive arms: rewrite exactly the value operands they read;
+		// the result-only ops (`osEventCreate`/`osLastError`) rewrite nothing.
+		osPipeCreate(namePtr, saPtr, iocp, readPtr, writePtr, syncSilencedPtr) gives StdOp.osPipeCreate(remappedValue(namePtr, subst: subst), saPtrId: remappedValue(saPtr, subst: subst), iocpId: remappedValue(iocp, subst: subst), readPtrId: remappedValue(readPtr, subst: subst), writePtrId: remappedValue(writePtr, subst: subst), syncSilencedPtrId: remappedValue(syncSilencedPtr, subst: subst))
 		osEventCreate gives op
 		osThreadCreate(resultId, entryPtr, arg) gives StdOp.osThreadCreate(resultId, entryPtrId: remappedValue(entryPtr, subst: subst), argId: remappedValue(arg, subst: subst))
 		osLockInit(lockPtr) gives StdOp.osLockInit(remappedValue(lockPtr, subst: subst))
@@ -5178,6 +5230,7 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		covPoint(pointId) gives StdOp.covPoint(pointId)
 		osHostSample(resultId, service, a0, a1, a2, a3, a4, a5) gives StdOp.osHostSample(resultId, service: service, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst), a3Id: remappedValue(a3, subst: subst), a4Id: remappedValue(a4, subst: subst), a5Id: remappedValue(a5, subst: subst))
 		osNetpoll(resultId, verb, a0, a1, a2, a3, a4) gives StdOp.osNetpoll(resultId, verb: verb, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst), a3Id: remappedValue(a3, subst: subst), a4Id: remappedValue(a4, subst: subst))
+		osSocketOverlapped(resultId, verb, a0, a1, a2, a3) gives StdOp.osSocketOverlapped(resultId, verb: verb, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst), a3Id: remappedValue(a3, subst: subst))
 		osFileSize(resultId, handle, sizeOutPtr) gives StdOp.osFileSize(resultId, handleId: remappedValue(handle, subst: subst), sizeOutPtrId: remappedValue(sizeOutPtr, subst: subst))
 		osFileDelete(resultId, pathPtr) gives StdOp.osFileDelete(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
 		osFileRename(resultId, oldPathPtr, newPathPtr) gives StdOp.osFileRename(resultId, oldPathPtrId: remappedValue(oldPathPtr, subst: subst), newPathPtrId: remappedValue(newPathPtr, subst: subst))
@@ -5459,7 +5512,6 @@ function cloneStdOp(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray, 
 		switch(subjectId, denseTargetBlockIds, defaultBlockId) gives StdOp.switch(remappedValue(subjectId, subst: valueSubst), denseTargetBlockIds: clonedBlocks(denseTargetBlockIds, subst: blockSubst), defaultBlockId: clonedBlock(defaultBlockId, subst: blockSubst))
 		witnessCall(resultId, witnessAddr, methodIndex, resultType, argFloatMask, args) gives StdOp.witnessCall(clonedValue(resultId, subst: valueSubst), witnessAddr: remappedValue(witnessAddr, subst: valueSubst), methodIndex: methodIndex, resultType: ownedReturnType(resultType, payloads: payloads), argFloatMask: argFloatMask, args: remappedArgs(args, subst: valueSubst))
 		osPipeCreate or
-			osIocpCreate or
 			osEventCreate or
 			osThreadCreate or
 			osLockInit or
@@ -5533,7 +5585,8 @@ function cloneStdOp(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray, 
 			osUnpublishNamedSegment or
 			covPoint or
 			osHostSample or
-			osNetpoll gives refuseUnclonable(op)
+			osNetpoll or
+			osSocketOverlapped gives refuseUnclonable(op)
 	end 'r'
 end 'cloneStdOp'
 
@@ -5932,7 +5985,6 @@ module function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out
 		switch(_, denseTargetBlockIds, defaultBlockId) then pushSwitchTargets(out, denseTargetBlockIds: denseTargetBlockIds, defaultBlockId: defaultBlockId)
 		witnessCall or
 			osPipeCreate or
-			osIocpCreate or
 			osEventCreate or
 			osThreadCreate or
 			osLockInit or
@@ -6007,7 +6059,8 @@ module function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out
 			osUnpublishNamedSegment or
 			covPoint or
 			osHostSample or
-			osNetpoll then break 'term'
+			osNetpoll or
+			osSocketOverlapped then break 'term'
 	end 'term'
 end 'collectStdBlockSuccessorIds'
 
@@ -6124,7 +6177,6 @@ module function classifyBranch(op StdOp, out StdBranchOperands)
 			switch or
 			witnessCall or
 			osPipeCreate or
-			osIocpCreate or
 			osEventCreate or
 			osThreadCreate or
 			osLockInit or
@@ -6199,6 +6251,7 @@ module function classifyBranch(op StdOp, out StdBranchOperands)
 			osUnpublishNamedSegment or
 			covPoint or
 			osHostSample or
-			osNetpoll then out.recordOther()
+			osNetpoll or
+			osSocketOverlapped then out.recordOther()
 	end 'term'
 end 'classifyBranch'

@@ -76,9 +76,9 @@ a spawn published a green thread to the scheduler.** `multicore-stress/pin-matri
 its coroutine family and `workers >= 2` for the spawn family; the coroutine half is asserted only for a row whose
 `monitor=` reading — the three counters' sum — is 0.
 
-⚠ **THE IOCP COMPLETION THREAD IS STILL NOT A WORKER M, AND IT IS THE ONE THING THAT COULD MAKE THIS
-LOOK WRONG.** The OS thread `__io_init` creates drains completions and re-readies parked green
-threads; it never RUNS one and it never adopts a P.
+⚠ **THE SYSTEM MONITOR IS STILL NOT A WORKER M, AND IT IS THE ONE THING THAT COULD MAKE THIS
+LOOK WRONG.** It reads per-machine state and hands a stuck processor on; it never RUNS a green thread and it
+never adopts a P.
 
 ### What the compiler answers for `alloc-torture.maxon`
 

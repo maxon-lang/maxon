@@ -196,8 +196,8 @@ let SlabMaxShards = 256
 // corruption with no diagnostic. The reservation costs one row
 // in 256 and it is what makes "no live P" a state of its own rather than an alias for the first one.
 //
-// ⭐⭐⭐ **ITS PREMISE USED TO BE *"the compiler's ONLY P-LESS THREAD IS THE IOCP COMPLETION LOOP, WHICH NEVER
-// ALLOCATES"*, AND W213-C1 REPLACED THAT WITH A RULE THAT DOES NOT DEPEND ON A ROSTER OF THREADS.**
+// ⭐⭐⭐ **THE RULE DOES NOT DEPEND ON A ROSTER OF THREADS, WHICH IS WHAT MAKES IT HOLD AS THE RUNTIME GROWS
+// ONE.**
 //
 // > **A THREAD WITH NO P TAKES THIS ROW, WHETHER IT IS NOT YET AN M OR IS AN M HOLDING NO PROCESSOR.**
 //
@@ -736,7 +736,7 @@ end 'emitMcacheSlotAddr'
 //     NON-NULL pointer on Windows — so reading through it hands back a garbage pointer whose next field load
 //     faults. The allocator reaches this path on the very first allocation of every program, long before any
 //     `async`, so that is the COMMON case rather than an edge.
-//   * A zero SLOT is an OS thread with no M — the IOCP completion thread for its whole life, and the main
+//   * A zero SLOT is an OS thread with no M — the system monitor for its whole life, and the main
 //     thread and every worker for the few instructions between the offset being published and their own
 //     `emitSchedBecomeM` finishing. ⚠ **THAT WINDOW NO LONGER CONTAINS THE `__slab_alloc` FOR THE M STRUCT
 //     ITSELF (W213-C2)** — a worker's M is built by its CREATOR (`emitSchedAllocM`, because a thread cannot
@@ -1374,7 +1374,7 @@ end 'emitSlabProbe'
 // three chances for two of them to disagree about which row a span was stamped for.
 //
 // ⭐⭐ **AND WHERE THE SHARED RAW ROW IS SERIALISED.** `SlabRawShardRow` belongs to every OS thread that owns
-// no P — a subprocess worker, the IOCP completion thread — and to any P clamped onto it, so the "sole writer"
+// no P — a subprocess worker, the system monitor — and to any P clamped onto it, so the "sole writer"
 // argument the lockless pop rests on does not hold there. Taking the lock around the whole class-alloc is
 // what restores it. ⚠ Only ONCE A SCHEDULER EXISTS: before that the raw row belongs to the lone main
 // thread, so no raw thread ever takes the unlocked path — `__gt_init` runs on main before any worker

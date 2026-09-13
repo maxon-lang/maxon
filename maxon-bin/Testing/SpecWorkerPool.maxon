@@ -27,9 +27,6 @@
 // concurrency is `async`, and an `async` frame is a COROUTINE of the green thread that created it — a
 // member of its strand. `SchedRuntime.maxon`'s header states the invariant.
 //
-// ⚠ The IOCP completion thread IS a second OS thread here — the workers' pipes are read through it — and
-// it is not a counter-example: it readies a parked drain (`__gt_ready_locked`) and runs none of this file.
-//
 // ⇒ the dispatcher and its drains interleave only at the drains' own yield points, which is exactly what
 // the four notes need. **A `spawn` added to this harness would end all four at once.**
 //
@@ -231,8 +228,8 @@ let GoldenUnrecordedToken = "NOREC"
 // How long the dispatcher parks when no worker has an answer ready.
 //
 // This is a POLL, and it is deliberately NOT a busy-spin. `sleep` parks the dispatcher green thread
-// on the runtime's timer heap and hands the scheduler to the drain GTs, which are blocked on genuinely
-// overlapped IOCP reads of their workers' stdout (`maxon_pipe_overlapped_read`) — so the parent burns
+// on the runtime's timer heap and hands the scheduler to the drain GTs, which are parked on the poller
+// waiting for genuinely overlapped reads of their workers' stdout to complete — so the parent burns
 // no CPU while it waits, and every drain progresses while it does. The deadline is honest, too: the
 // timer heap is anchored to the monotonic NANOSECOND clock, not the ~15.6 ms `GetTickCount64` tick
 // that once made `sleep(N)` return EARLY.

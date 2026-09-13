@@ -5,15 +5,15 @@ keywords: [spawnReadLine, async, await, green-threads, scheduler, iocp, overlapp
 category: concurrency
 ---
 
-# spawnReadLine — the IOCP overlapped-read substrate (P1.5 dogfood slice 1a)
+# spawnReadLine — the overlapped-read substrate (P1.5 dogfood slice 1a)
 
 ## Documentation
 
 `spawnReadLine(cmd)` spawns the Windows child named by the command String with its **stdout redirected to a
 fresh overlapped pipe**, issues a **yielding** overlapped `ReadFile` of that pipe, and returns the number of
 bytes read once the read completes. It is the risky core of async-subprocess-stdio: the read PARKS the green
-thread and is resumed — by a dedicated **IOCP completion thread** — when the read finishes, so the M is free
-to run other green threads while the read is in flight.
+thread and is resumed — by the scheduler's own **poller**, which is what the completion is delivered to —
+when the read finishes, so the M is free to run other green threads while the read is in flight.
 
 ```text
 function main() returns ExitCode
@@ -25,16 +25,16 @@ end 'main'
 `spawnReadLine` is a **temporary probe surface** for the substrate — the full async-subprocess-stdio API and
 its stdlib arrive in a later slice. It requires exactly one `String` argument (the command line; a non-String
 is refused) and returns an `int` (the byte count), so its result is usable in value position. It is
-**x64-windows only** (the whole IOCP substrate is x64-windows-gated at this rung).
+**x64-windows only** (the whole overlapped-read substrate is x64-windows-gated at this rung).
 
-Mechanically: an overlapped named pipe is registered with a process-wide I/O completion port; a completion
-thread created at scheduler init drains the port with `GetQueuedCompletionStatus` and readies the parked
-reading thread through `__gt_ready_locked`, under `__sched_lock` — the lock every run-queue and strand-queue
-access takes — then, when that ready published a strand token, pays the wake it owes
-(`__sched_wake_or_spawn`) after releasing the lock. A publish-after-park handshake (the park's registration
-sets a `parked` flag only AFTER committing `waiting`; the completion thread spins on that flag before
-readying) closes the lost-wakeup / torn-status race a completion arriving before the park would otherwise
-cause.
+Mechanically: an overlapped named pipe joins the scheduler's ONE poller, which on this lane is a completion
+port. The read gets a poll source of its own — the source is the OPERATION rather than the handle, because a
+completion key is fixed per handle and two reads may be in flight on one pipe — and the green thread parks on
+it exactly as a socket reader parks on a descriptor. Whichever machine drains the poller recovers the reading
+thread from the packet's `lpOverlapped`, stores the transfer and the status onto it, and readies it through
+`__np_pd_wake`, under `__sched_lock`. A readiness that arrives before the thread has published itself is
+recorded on the poll descriptor and taken by the wait without parking at all, which is what closes the
+lost-wakeup race.
 
 **Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one
 statement of it.** Reading a line from a spawned child parks the calling green thread,
@@ -60,7 +60,7 @@ kqueue this lane does not have.
 
 <!-- test: spawn-read-line.top-level -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
-`main` reads a child's stdout. The read parks `main` until the completion thread readies it, then `main`
+`main` reads a child's stdout. The read parks `main` until the poller readies it, then `main`
 resumes and returns the byte count. `cmd /c echo hello` writes `hello\r\n` = 7 bytes.
 ```maxon
 function main() returns ExitCode
@@ -77,10 +77,10 @@ end 'main'
 `top-level`'s subject on the POSIX lane. `main` reads a child's stdout through the one-shot probe and returns
 the byte count; `echo hello` writes `hello\n` = SIX bytes, an LF where `cmd /c echo` writes CRLF.
 
-⚠ **THE READ COMPLETES IN ITS CALLER HERE RATHER THAN ON A COMPLETION THREAD.** There is no IOCP and no
-port to drain on this lane — `GtRuntime.IoCompletionShape` is why the port, the wake event and the drain
-thread are not built at all — so what this case pins is that the probe reads the child's bytes and answers
-the count, not the publish-after-park handshake its Windows sibling additionally exercises. The command
+⚠ **THE READ COMPLETES IN ITS CALLER HERE RATHER THAN AS A PACKET.** No read is ever in flight across a park
+on this lane — `GtRuntime.IoCompletionShape` is why — so what this case pins is that the probe reads the
+child's bytes and answers the count, not the per-operation poll source its Windows sibling additionally
+exercises. The command
 line reaches the child through `/bin/sh -c`, exactly as `__Builtins.runProcess`'s does.
 ```maxon
 function main() returns ExitCode
@@ -94,7 +94,7 @@ end 'main'
 
 <!-- test: spawn-read-line.spawned-reader -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
-The read runs inside an `async` coroutine rather than in `main`, so the completion thread readies a member
+The read runs inside an `async` coroutine rather than in `main`, so the poller readies a member
 that is not its strand's owner: `__gt_ready_locked` appends it to the back of `main`'s strand queue under
 `__sched_lock` and — `main` being parked on its await, so no machine holds the strand — publishes the
 strand's token, and the machine that pops it switches back into the reader. `top-level` takes the owner's
@@ -220,12 +220,12 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: spawn-read-line.drop-in-flight -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
-An `async` reader promise is DROPPED (un-awaited) while its overlapped read is still in flight — the IOCP
-completion thread still holds the reader's OVERLAPPED. Dropping it must NOT free the green thread out from under
-the completion thread (a cross-thread use-after-free). The drop path cancels the read (`CancelIoEx`), drains the
-completion through the `ioParked` abandon/drain handshake so the completion thread is provably done with the GT,
-closes the read handle, and only then frees. Five in-flight drops, then one clean read (7 bytes) — a recurrence
-of the bug crashes with 0xC0000005 instead of returning 7.
+An `async` reader promise is DROPPED (un-awaited) while its overlapped read may still be in flight — the
+KERNEL still holds the reader's OVERLAPPED, which is embedded in its green thread. Dropping it must NOT free
+that thread out from under the kernel. The drop therefore leaves the park standing and cancels the read
+(`CancelIoEx`): the cancellation's own packet readies the thread, which answers a failed read, unwinds its
+frame, closes its handle and frees its buffer. Five in-flight drops, then one clean read (7 bytes) — a
+recurrence of the bug crashes with 0xC0000005 instead of returning 7.
 ```maxon
 function reader() returns Integer
 	return spawnReadLine("cmd /c echo hello")

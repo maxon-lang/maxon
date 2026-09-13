@@ -248,7 +248,7 @@ export enum RuntimeAbort
 	schedulerDeadlock = 92
 
 	// `__gt_register_park`: the park note carries a kind it does not register. `GtRuntime`'s
-	// `GtParkKindTimer` / `GtParkKindIo` / `GtParkKindNetpoll` / `GtParkKindMailbox` / `GtParkKindAwait` /
+	// `GtParkKindTimer` / `GtParkKindNetpoll` / `GtParkKindNetpollAny` / `GtParkKindMailbox` / `GtParkKindAwait` /
 	// `GtParkKindAwaitAny` are the kinds it registers, and `GtParkKindYield` and `GtParkKindPreempt` are placed by
 	// the strand runner and never reach it — so any other value is a COMPILER bug rather than a program's, and it
 	// is silent without this: the thread would be suspended having been registered on NO store at all, which is a
@@ -394,6 +394,22 @@ export enum RuntimeAbort
 	// `pd.rd` is 0, so the re-arm would find nothing to disarm and add a SECOND entry under a `(gt, tag)` that
 	// `__gt_timer_check` admits exactly one of. No caller does this today, and this is what keeps it that way.
 	netpollGroupMemberDeadline = 110
+
+	// `__gt_subp_yield_read`, and the collect a cancelled socket transfer makes: a wait on a MINTED source ended
+	// without the completion packet that is the only proof the kernel has finished with the thread's buffer and
+	// its embedded OVERLAPPED. Nothing else can end such a wait — it arms no deadline, the source belongs to that
+	// one operation, and a dropped promise cancels the operation rather than deregistering the park — so reaching
+	// here is a RUNTIME bug, and answering a byte count instead would hand the caller bytes out of a buffer still
+	// being written.
+	netpollOverlappedWaitNotACompletion = 111
+
+	// `osPipeCreate`: the host refused `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` on a child pipe's read end, so a
+	// read served out of the pipe's own buffer would still post a completion packet. `__gt_subp_yield_read`
+	// answers such a read out of `[bytesOut]` and gives its poll source back without waiting, so that packet
+	// would land on the NEXT operation's stamp and overwrite its byte count and status — a short or wrong
+	// answer from a child that ran correctly. There is no reading of the pipe that survives it, so the process
+	// ends at the creation rather than at the first wrong answer.
+	overlappedPipeStillPostsOnSuccess = 112
 
 	// ⚠ **108 IS RETIRED, NOT REUSABLE.** It was `netpollReleaseWithWaiter` — `__np_pd_open` / `__np_pd_release`
 	// finding a green thread still PUBLISHED on a direction word of the record they were about to reset. It was

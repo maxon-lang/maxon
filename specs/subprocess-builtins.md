@@ -124,7 +124,7 @@ prefix is `os error` rather than `win32 error` because a caller sees one spellin
 
 ### Targets — the Win32 substrate gate
 
-`CreateProcessA`, three named pipes and an IOCP completion port are a WINDOWS shape, and WASI has no
+`CreateProcessA` and three overlapped named pipes are a WINDOWS shape, and WASI has no
 process-spawn primitive at all. Every one of these intrinsics lowers into the `__gt_subp_` band,
 which `SemanticCheck.calleeNeedsWin32Substrate` refuses on any other target with **E3104** at the
 call's own span. ⚠ Before this rung that band was NOT in the gate and such a program died as a

@@ -7,11 +7,11 @@
 // idle tail). A deadline armed earlier than the one the poller waits for ends its wait through a BREAK
 // (`__np_break`), which is the whole cost of waking on time.
 //
-// ⭐ **THE POLLER CARRIES ITS BREAK SOURCE, ONE SOURCE PER PARKED CHILD, AND — ON EVERY POSIX LANE — ONE PER
-// REGISTERED SOCKET.** A wait answers entries and the decode keys on each entry's source: the break token takes
-// the break arm, and anything else is a source whose readiness goes to the poll-descriptor band below. The
-// completion-port shape registers no SOCKET — that lane's socket band is blocking — so a child is the only
-// other source there.
+// ⭐ **THE POLLER CARRIES ITS BREAK SOURCE, ONE SOURCE PER PARKED CHILD, ONE PER REGISTERED SOCKET, AND — ON
+// THE COMPLETION-PORT LANE — ONE PER OVERLAPPED OPERATION IN FLIGHT.** A wait answers entries and the decode
+// keys on each entry's token: the break token takes the break arm, the overlapped token names an operation
+// through its `lpOverlapped`, and anything else is a source key whose readiness goes to the poll-descriptor
+// band below.
 
 // ⭐⭐ **HOW THIS TARGET'S POLLER REPORTS AN EVENT — the fact the decode keys on, as `IoCompletionShape` is for a
 // read.** Each shape is one OS mechanism, and each reports a break its own way:
@@ -51,9 +51,14 @@ type NetpollEntryLayout
 	end 'create'
 end 'NetpollEntryLayout'
 
-// `OVERLAPPED_ENTRY` is `lpCompletionKey, lpOverlapped, Internal, dwNumberOfBytesTransferred` (32 bytes).
+// `OVERLAPPED_ENTRY` is `lpCompletionKey, lpOverlapped, Internal, dwNumberOfBytesTransferred` (32 bytes). The
+// last three are read only by the pipe-read arm of the decode: a child's exit is posted by hand and carries
+// none of them.
 let CompletionEntryBytes = 32 as ByteOffset
 let CompletionEntryKeyOffset = 0 as ByteOffset
+let CompletionEntryOverlappedOffset = 8 as ByteOffset
+let CompletionEntryStatusOffset = 16 as ByteOffset
+let CompletionEntryTransferredOffset = 24 as ByteOffset
 let EpollPackedEntryBytes = 12 as ByteOffset
 let EpollPackedDataOffset = 4 as ByteOffset
 let EpollAlignedEntryBytes = 16 as ByteOffset
@@ -116,8 +121,8 @@ export function netpollRuntimeGlobals() returns DataSectionEntryArray
 
 	// The completion-port lane's source-key allocator — see `PdOffNextFreeKey`. Both words move inside ONE hold
 	// of `__sched_lock`, exactly as the table's base and capacity do.
-	pushRuntimeGlobal(out, label: NetpollChildKeyFreeLabel, sharing: MultiMSharing.underSchedLock)
-	pushRuntimeGlobal(out, label: NetpollChildKeyHighLabel, sharing: MultiMSharing.underSchedLock)
+	pushRuntimeGlobal(out, label: NetpollSourceKeyFreeLabel, sharing: MultiMSharing.underSchedLock)
+	pushRuntimeGlobal(out, label: NetpollSourceKeyHighLabel, sharing: MultiMSharing.underSchedLock)
 	return out
 end 'netpollRuntimeGlobals'
 
@@ -145,8 +150,7 @@ export function installNetpollRuntime(module StdModule, target Target, rawFree B
 	buildNetpollBreak(module, target: target)
 
 	// The poll-descriptor band. It is built on every lane because the park kind it serves is dispatched by
-	// `__gt_register_park` and `__gt_timer_check`, which every green-thread program contains; what the
-	// completion-port lane never does is OPEN a descriptor, so its `armSource` is unreachable there.
+	// `__gt_register_park` and `__gt_timer_check`, which every green-thread program contains.
 	buildNetpollPdSlot(module)
 	buildNetpollPdAdopt(module, rawFree: rawFree)
 	buildNetpollGroupUnhook(module)
@@ -163,15 +167,17 @@ export function installNetpollRuntime(module StdModule, target Target, rawFree B
 	buildNetpollPdSetTimeout(module)
 	buildNetpollPdTimedOut(module)
 
-	// ⚠ **THE SOCKET OPEN IS THE ONE MEMBER THE COMPLETION-PORT LANE DOES NOT GET**, because it is `armSource`'s
-	// only producer and that lane registers no socket. Its callers are the socket band's, which forks on the same
-	// question (`ManagedSocketRuntime.socketWaitShape`), so nothing on that lane names a symbol nobody built.
-	match netpollShape(target) 'openers'
-		completionPort then buildNetpollChildKeyBand(module)
+	buildNetpollPdOpen(module, target: target)
+
+	// The completion-port lane's own source allocator, the per-operation doors it feeds and the wake an
+	// overlapped completion takes. The two POSIX lanes draw every source from the kernel's descriptor table and
+	// their transfers complete in their caller, so none of it exists there.
+	match netpollShape(target) 'minters'
+		completionPort then buildNetpollSourceKeyBand(module)
 
 		epoll or
-			kqueue then buildNetpollPdOpen(module, target: target)
-	end 'openers'
+			kqueue then break 'minters'
+	end 'minters'
 
 	// The child-exit band. Every lane has it: a parked child is a source on the poller everywhere.
 	buildNetpollChildOpen(module, target: target)
@@ -431,7 +437,7 @@ function buildNetpollPoll(module StdModule, target Target)
 	module.setTerminator(entryBody, op: StdOp.condBranch(isBreak, thenBlockId: consume.id, elseBlockId: otherSource.id))
 
 	emitNetpollConsumeBreak(module, func: func, cur: consume, shape: shape, timeoutMs: timeoutMs, cont: nextEntry, ids: ids)
-	emitNetpollSourceReady(module, func: func, cur: otherSource, shape: shape, entryAddr: entryAddr, fd: source, cont: nextEntry, ids: ids)
+	emitNetpollDecodeSource(module, func: func, cur: otherSource, shape: shape, entryAddr: entryAddr, key: source, cont: nextEntry, ids: ids)
 
 	let nextIndex = emitBin(module, block: nextEntry, a: index, b: emitConst(module, block: nextEntry, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids)
 	module.setTerminator(nextEntry, op: StdOp.branch(entryHdr.id))
@@ -443,16 +449,64 @@ function buildNetpollPoll(module StdModule, target Target)
 	module.functions.push(func)
 end 'buildNetpollPoll'
 
-// ⭐⭐ **AN ENTRY THAT IS NOT THE BREAK — a SOCKET or a CHILD on a POSIX lane, a CHILD on the completion-port
-// one.** Every shape carries the same two facts (which source, and in which directions), each in its own
-// field, so one readiness walk serves all three.
+// ⭐⭐⭐ **THE COMPLETION-PORT LANE HAS THREE PACKET SHAPES AND EACH IS NAMED HERE.** A break, a child's exit
+// posted by hand, and an overlapped pipe read the kernel finished — and the two tokens are what tell them
+// apart, because a source key is the only other thing the key word can hold. A POSIX poller reports one shape
+// and reaches the readiness walk directly.
+function emitNetpollDecodeSource(module StdModule, func IrFunction, cur IrBlock, shape NetpollShape, entryAddr ValueId, key ValueId, cont IrBlock, ids ValueMinter)
+	match shape 'shape'
+		epoll or
+			kqueue then emitNetpollSourceReady(module, func: func, cur: cur, shape: shape, entryAddr: entryAddr, fd: key, cont: cont, label: b"npsockwake", ids: ids)
+
+		completionPort then emitNetpollDecodeCompletion(module, func: func, cur: cur, shape: shape, entryAddr: entryAddr, key: key, cont: cont, ids: ids)
+	end 'shape'
+end 'emitNetpollDecodeSource'
+
+// ⭐⭐ **AN OVERLAPPED OPERATION'S PACKET NAMES ITS OPERATION THROUGH `lpOverlapped`, NOT THROUGH ITS KEY.**
+// The key is fixed when the handle joins the port, so every read on one pipe and every transfer on one socket
+// carries the same one; the OVERLAPPED is embedded in the issuing green thread (`GtRuntime.GtOffOverlapped`),
+// so CONTAINING_RECORD recovers exactly the thread whose buffer the kernel has finished with.
+//
+// ⚠ **THE TRANSFER IS TAKEN FROM THE PACKET RATHER THAN FROM THE OVERLAPPED.** `dwNumberOfBytesTransferred`
+// and `Internal` are the documented fields of `OVERLAPPED_ENTRY`; the same two words inside an `OVERLAPPED` are
+// an `IO_STATUS_BLOCK` whose high half is a union with a pointer, so the status is masked to its 32 bits.
+//
+// ⚠ **THE TWO STORES PRECEDE THE WAKE AND NEED NO LOCK.** They are the issuing thread's own words, and that
+// thread is either still parked or not yet parked — either way it reads them only after `__np_op_wake` has
+// readied it, which is a lock release later.
+function emitNetpollDecodeCompletion(module StdModule, func IrFunction, cur IrBlock, shape NetpollShape, entryAddr ValueId, key ValueId, cont IrBlock, ids ValueMinter)
+	var overlappedDone = module.addBlock(func, label: b"npovldone", heat: BlockHeat.normal)
+	var childExit = module.addBlock(func, label: b"npchildexit", heat: BlockHeat.normal)
+	var payWake = module.addBlock(func, label: b"npovlwake", heat: BlockHeat.normal)
+
+	let isOverlapped = emitCmp(module, block: cur, a: key, b: emitConst(module, block: cur, value: NetpollOverlappedToken, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(isOverlapped, thenBlockId: overlappedDone.id, elseBlockId: childExit.id))
+
+	let overlapped = emitLoadField(module, block: overlappedDone, record: entryAddr, offset: CompletionEntryOverlappedOffset, ids: ids)
+	let gt = emitBin(module, block: overlappedDone, a: overlapped, b: emitConst(module, block: overlappedDone, value: GtOffOverlapped as ParsedInt, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	emitStoreField(module, block: overlappedDone, record: gt, offset: GtOffIoResult, value: emitLoadField(module, block: overlappedDone, record: entryAddr, offset: CompletionEntryTransferredOffset, ids: ids))
+	let status = emitLoadField(module, block: overlappedDone, record: entryAddr, offset: CompletionEntryStatusOffset, ids: ids)
+	emitStoreField(module, block: overlappedDone, record: gt, offset: GtOffIoStatus, value: emitBin(module, block: overlappedDone, a: status, b: emitConst(module, block: overlappedDone, value: NetpollStatusMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids))
+	let debt = ids.mint()
+	module.appendOp(overlappedDone, op: StdOp.call(debt, callee: NetpollOpWakeName, args: argsOf(gt)))
+	emitSchedWakeIfOwed(module, cur: overlappedDone, owed: debt, wake: payWake, cont: cont, ids: ids)
+
+	emitNetpollSourceReady(module, func: func, cur: childExit, shape: shape, entryAddr: entryAddr, fd: key, cont: cont, label: b"npsockwake", ids: ids)
+end 'emitNetpollDecodeCompletion'
+
+// An NTSTATUS is 32 bits in a word that is 64 — see `emitNetpollDecodeCompletion`.
+let NetpollStatusMask = 4294967295 as ParsedInt
+
+// ⭐⭐ **AN ENTRY THAT NAMES A SOURCE — a SOCKET or a CHILD on a POSIX lane, a CHILD or a pipe read on the
+// completion-port one.** Every shape carries the same two facts (which source, and in which directions), each
+// in its own field, so one readiness walk serves all three.
 //
 // ⚠ **THE WALK READIES ONTO THE GLOBAL QUEUE AND PAYS ITS OWN WAKE DEBT.** The polling machine holds no
 // processor, so a thread it readies has no ring to go in; and its two callers differ — the idle tail looks for
 // work itself the moment it returns, where `__sysmon`'s stale poll does not. Paying here is correct for both
 // and costs the idle tail one needless wake.
-function emitNetpollSourceReady(module StdModule, func IrFunction, cur IrBlock, shape NetpollShape, entryAddr ValueId, fd ValueId, cont IrBlock, ids ValueMinter)
-	var payWake = module.addBlock(func, label: b"npsockwake", heat: BlockHeat.normal)
+function emitNetpollSourceReady(module StdModule, func IrFunction, cur IrBlock, shape NetpollShape, entryAddr ValueId, fd ValueId, cont IrBlock, label ByteArray, ids ValueMinter)
+	var payWake = module.addBlock(func, label: label, heat: BlockHeat.normal)
 
 	let ready = emitNetpollEntryReadiness(module, block: cur, shape: shape, entryAddr: entryAddr, ids: ids)
 	let debt = ids.mint()
@@ -476,9 +530,10 @@ function emitNetpollEntryReadiness(module StdModule, block IrBlock, shape Netpol
 		epoll gives emitEpollEntryReadiness(module, block: block, entryAddr: entryAddr, ids: ids)
 		kqueue gives emitKeventEntryReadiness(module, block: block, entryAddr: entryAddr, ids: ids)
 
-		// ⭐ **A PACKET CARRIES NO DIRECTIONS, AND IT DOES NOT NEED TO.** The only source registered with this
-		// lane's port is a CHILD, whose one direction is read: its socket band is blocking and registers none,
-		// and its pipes ride the port as overlapped reads rather than as poll descriptors.
+		// ⭐ **A PACKET CARRIES NO DIRECTIONS, AND THE ONLY ONE THAT REACHES THIS WALK DOES NOT NEED ANY.** What is
+		// left here is a handle a thread-pool wait posted by hand — a child's exit, or a handshake's event — and
+		// its one direction is read. An overlapped transfer takes `__np_op_wake` instead, which reads the
+		// direction off the thread that issued it.
 		completionPort gives NetpollReadiness.create(emitConst(module, block: block, value: 1, ids: ids), writeReady: emitConst(module, block: block, value: 0, ids: ids))
 	end 'shape'
 end 'emitNetpollEntryReadiness'
@@ -652,9 +707,10 @@ let PdOffTimedOut = 48 as ByteOffset
 let PdOffGen = 56 as ByteOffset
 
 // ⭐ **THE FREE-LIST LINK FOR A SOURCE KEY NOBODY HOLDS, AND ONLY THE COMPLETION-PORT LANE EVER WRITES IT.** A
-// POSIX lane draws a child's key from the kernel's own descriptor table, which recycles it; Windows has no
-// descriptor to draw, so `__np_child_key_alloc` allocates one and this word is where a released key waits for
-// the next child. It holds `key + 1`, so a zero is the end of the list rather than key zero.
+// POSIX lane draws a source key from the kernel's own descriptor table, which recycles it; Windows has no
+// descriptor to draw — for a child, and for each overlapped read in flight — so `__np_src_key_alloc` allocates
+// one and this word is where a released key waits for the next holder. It holds `key + 1`, so a zero is the end
+// of the list rather than key zero.
 let PdOffNextFreeKey = 64 as ByteOffset
 let PdBytes = 72 as ParsedInt
 
@@ -683,8 +739,9 @@ export let NetpollWaitTimedOut = 1 as ParsedInt
 // The caller reports its own operation’s failure instead, with no syscall (`emitSocketWaitReady`).
 export let NetpollWaitStale = 2 as ParsedInt
 
-// The fd table: how many descriptors the first allocation covers, and one pointer per slot. 64 is a process's
-// ordinary descriptor ceiling before anything unusual is open, so the common program never grows it.
+// The record table: how many indices the first allocation covers, and one pointer per slot. 64 covers a POSIX
+// process's whole ordinary descriptor range; a Windows SOCKET is a handle value rather than a low dense index
+// and its record sits at twice it (`emitNetpollDescriptorIndex`), so a program that opens one grows the table.
 let PdTableSeedSlots = 64 as ParsedInt
 let PdTableSlotBytes = 8 as ParsedInt
 
@@ -709,12 +766,13 @@ let NetpollPdSlotName = b"__np_pd_slot"
 let NetpollPdReadyOneName = b"__np_pd_ready_one"
 
 // `__np_pd_adopt(source)` — give this source a record, growing the table to reach it. The RECORD half of an
-// open, without the registration: a child's source is registered by a verb of its own, and this lane's
-// completion port registers nothing at all.
+// open, without the registration: a child's source is registered by a verb of its own, and a minted
+// per-operation source is registered by nothing, the operation's own packet being what reports it.
 let NetpollPdAdoptName = b"__np_pd_adopt"
 
-// `__np_pd_open(fd)` — give this descriptor a record and register it with the poller. Called once per socket,
-// between `socket()` and `connect()`.
+// `__np_pd_open(source, fd)` — give this descriptor a record at `source` and register the descriptor itself
+// with the poller. Called once per socket, between `socket()` and `connect()`. The two arguments differ only
+// where the record table has a second allocator in it — see `emitNetpollDescriptorIndex`.
 export let NetpollPdOpenName = b"__np_pd_open"
 
 // `__np_pd_release(fd)` — reset the record before the descriptor is closed, so the next owner of a recycled
@@ -914,8 +972,11 @@ function buildNetpollPdAdopt(module StdModule, rawFree ByteArray)
 	module.setTerminator(growSeed, op: StdOp.branch(growHdr.id))
 	growSeed.branchEdges.push(BranchEdge.create(growHdr.id, argIds: argsOf(emitConst(module, block: growSeed, value: PdTableSeedSlots, ids: ids))))
 
-	// growHdr(c): double until the descriptor fits. The seed already covers every ordinary program, so this
-	// walk runs at most once in the life of a process that opens few sockets.
+	// growHdr(c): double until the index fits. The walk is amortized against every adoption already inside the
+	// capacity, and the table is indexed and never walked — so a sparse index space costs slots and no time. What
+	// it costs in MEMORY is the whole span: one Windows handle drives a table of
+	// `2^ceil(log2(2*handle)) * PdTableSlotBytes` bytes, of which everything below the live descriptors is
+	// untouched.
 	let candidate = ids.mint()
 	growHdr.blockArgs.push(IrBlockArg.create(candidate, argType: StdType.i64))
 	let fits = emitCmp(module, block: growHdr, a: candidate, b: fd, pred: StdCmpPred.gt, ids: ids)
@@ -975,16 +1036,17 @@ end 'buildNetpollPdAdopt'
 // reaching `__np_pd_wake` for a source with no record is DROPPED, and for a source nothing can re-arm that
 // would be a wait nothing ends.
 function buildNetpollPdOpen(module StdModule, target Target)
-	var func = IrFunction.createFromStd(NetpollPdOpenName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
-	var ids = ValueMinter.create(1)
+	var func = IrFunction.createFromStd(NetpollPdOpenName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var doneBlock = module.addBlock(func, label: b"npopendone", heat: BlockHeat.normal)
 
-	emitParams(module, block: entry, count: 1)
-	let fd = 0 as ValueId
+	emitParams(module, block: entry, count: 2)
+	let source = 0 as ValueId
+	let fd = 1 as ValueId
 
-	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: NetpollPdAdoptName, args: argsOf(fd)))
+	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: NetpollPdAdoptName, args: argsOf(source)))
 	let poller = emitLoadGlobalWord(module, block: entry, label: NetpollPollerLabel, ids: ids)
 	let armed = emitNetpoll(module, block: entry, verb: NetpollVerb.armSource, operands: twoArgs(poller, second: fd), ids: ids)
 	emitNetpollRequire(module, func: func, cur: entry, shape: netpollShape(target), verb: NetpollVerb.armSource, subject: fd, answer: armed, cont: doneBlock, ids: ids)
@@ -1710,7 +1772,17 @@ end 'buildNetpollPdTimedOut'
 // record is dropped (`__np_pd_wake`), and a child exits exactly once — so a registration made before the
 // record exists is a wait nothing can end.
 
-// `__np_child_open(childHandle) -> source` — mint this child's poll source and give it a record. It aborts
+// ⭐⭐ **THE BAND WATCHES A WAITABLE HANDLE, AND A CHILD PROCESS IS ITS FIRST HOLDER RATHER THAN ITS ONLY
+// ONE.** On the completion-port lane a source is minted and a thread-pool wait posts it when the handle
+// signals, which is exactly what an asynchronous CONNECT needs too: `ManagedSocketRuntime` arms an event for
+// `FD_CONNECT` and watches it through these three. On the two POSIX lanes the handle really is a child's, and
+// a socket there is polled directly.
+//
+// ⛔ **THE OPEN AND THE ARM ARE FILE-PRIVATE, AND THAT IS WHAT KEEPS THE REFUSAL ANSWERED.** Every holder
+// reaches them through `emitNetpollAcquireChildSource`, which is the one body that tests the arm's answer; a
+// second spelling outside this file is how a refused registration becomes a park nothing can end.
+//
+// `__np_child_open(childHandle) -> source` — mint this handle's poll source and give it a record. It aborts
 // `netpollFailed` when the host refuses one, exactly as a socket the poller will not take does.
 let NetpollChildOpenName = b"__np_child_open"
 
@@ -1725,10 +1797,10 @@ export let NetpollChildCloseName = b"__np_child_close"
 // value only has to be distinguishable from the 0 that means refused.
 let NetpollChildArmed = 1 as ParsedInt
 
-// The completion-port lane's key allocator: the head of the free list (a key + 1, so 0 is "empty") and the
-// lowest key never yet handed out.
-let NetpollChildKeyFreeLabel = b"__np_child_key_free"
-let NetpollChildKeyHighLabel = b"__np_child_key_high"
+// The completion-port lane's source-key allocator: the head of the free list (a key + 1, so 0 is "empty") and
+// the lowest key never yet handed out. Its holders are a parked child and an overlapped read in flight.
+let NetpollSourceKeyFreeLabel = b"__np_src_key_free"
+let NetpollSourceKeyHighLabel = b"__np_src_key_high"
 
 // ⭐⭐⭐ **A COMPLETION KEY CARRIES THE RECORD'S GENERATION IN ITS HIGH HALF, AND A STALE PACKET THEREFORE
 // NAMES NOTHING.** The key is the ONLY thing a completion packet carries, so a record generation alone could
@@ -1749,10 +1821,57 @@ let NetpollChildKeyHighLabel = b"__np_child_key_high"
 let NetpollKeyGenShift = 32 as ParsedInt
 let NetpollKeyIndexMask = 4294967295 as ParsedInt
 
-// `__np_child_key_alloc() -> key` / `__np_child_key_release(key)` — the completion-port lane's stand-in for a
+// `__np_src_key_alloc() -> key` / `__np_src_key_release(key)` — the completion-port lane's stand-in for a
 // descriptor table. `__sched_lock` is taken here, because the PAIR of words is what must move indivisibly.
-let NetpollChildKeyAllocName = b"__np_child_key_alloc"
-let NetpollChildKeyReleaseName = b"__np_child_key_release"
+let NetpollSourceKeyAllocName = b"__np_src_key_alloc"
+let NetpollSourceKeyReleaseName = b"__np_src_key_release"
+
+// ⭐⭐⭐ **ON A COMPLETION PORT THE POLL SOURCE IS THE OPERATION, NOT THE DESCRIPTOR — `__np_op_open() ->
+// source` and `__np_op_close(source)`, the completion-port lane's answer to `__np_pd_open`.** A POSIX poller
+// reports that a DESCRIPTOR became readable, so one record per descriptor is the whole of it; a port reports
+// that an OPERATION finished, and two overlapped reads may be in flight on one pipe at once — a promise
+// dropped mid-read stays parked until its cancellation lands, while the next caller is already issuing a fresh
+// read on the same handle. One record per handle would meet that with `netpollDoubleWait`, on a program that
+// did nothing wrong; one record per read gives each its own direction word for as long as the kernel owns its
+// buffer.
+//
+// ⛔ **THE SOURCE IS OPENED BEFORE THE READ IS ISSUED, AND THAT ORDER IS THE WHOLE RACE.** A packet may be
+// delivered the instant the read is issued — long before the thread reaches `__np_pd_wait` — and the decode
+// finds its record through the STAMPED KEY the open writes onto the reading thread (`GtRuntime.GtOffIoSource`).
+// Opened afterwards, the decode would read a word nobody had written yet. Readiness that arrives before the
+// wait is what `__np_pd_wait`'s `PdReady` arm is for, so the early packet costs nothing.
+let NetpollOpOpenName = b"__np_op_open"
+let NetpollOpCloseName = b"__np_op_close"
+
+// `__np_op_wake(gt) -> wakeDebt` — the decode's half of an overlapped completion: give back the record the
+// issuing thread stamped on itself and ready it there. `__sched_lock` NOT held.
+//
+// ⛔⛔ **THE STAMP IS READ AND CLEARED UNDER THE LOCK, AND THAT IS WHAT LETS A THREAD RE-AIM A CANCELLED
+// OPERATION.** A wait that ends any other way than in this packet — a deadline, a socket closed under it —
+// leaves the kernel still holding the caller's buffer, so that thread CANCELS and then waits again on a source
+// of its own. Both sides move `io_source` inside this one lock, so the thread either sees a zero (this packet
+// got there first, and there is nothing left to wait for) or re-aims before the packet is decoded. A zero here
+// therefore means exactly *"the kernel has finished with this operation"*, which is also what
+// `__gt_promise_drop` reads it as.
+let NetpollOpWakeName = b"__np_op_wake"
+
+// `__np_op_aim(source, mode, handle)` — tell the running thread which record its next overlapped operation
+// completes on, in which direction, and on which handle a cancellation must name it. The DESCRIPTOR twin of
+// `__np_op_open`: a socket already has a record of its own, so nothing is minted and only the stamp is made.
+let NetpollOpAimName = b"__np_op_aim"
+
+// `__np_op_clear()` — take the aim back, for an operation the host refused to start: no packet is coming, so
+// a stamp left standing would make `__gt_promise_drop` cancel an operation that does not exist.
+let NetpollOpClearName = b"__np_op_clear"
+
+// ⭐⭐⭐ **`__np_op_settle() -> source | 0` — WHAT A THREAD DOES WHEN ITS WAIT ENDED WITHOUT THE KERNEL'S
+// ANSWER.** A deadline, or a socket closed under the operation, readies the thread while the kernel still owns
+// its buffer and its OVERLAPPED — so the thread cancels and must then wait for the cancellation's own packet
+// before it may return and let that memory go. It cannot wait on the record it was on: a release has reset it,
+// and the next owner is entitled to it. So this mints a source of the thread's OWN and re-aims the operation at
+// it, under the one lock `__np_op_wake` reads the aim inside. A 0 answers *"the packet was decoded already"*,
+// and there is then nothing to wait for.
+let NetpollOpSettleName = b"__np_op_settle"
 
 // `__np_child_fired(source, timerFired)` — the thread pool's wait callback, which does nothing but forward the
 // exit to the port under the child's key. Built only on the completion-port lane.
@@ -1773,7 +1892,7 @@ function buildNetpollChildOpen(module StdModule, target Target)
 	adopt.blockArgs.push(IrBlockArg.create(source, argType: StdType.i64))
 
 	match netpollShape(target) 'mint'
-		completionPort then emitNetpollChildKeyFromAllocator(module, block: entry, cont: adopt, ids: ids)
+		completionPort then emitNetpollSourceKeyFromAllocator(module, block: entry, cont: adopt, ids: ids)
 
 		epoll or
 			kqueue then emitNetpollChildSourceFromHost(module, func: func, cur: entry, target: target, childHandle: childHandle, cont: adopt, ids: ids)
@@ -1787,12 +1906,12 @@ end 'buildNetpollChildOpen'
 
 // The completion-port lane's source key: allocated here, because Windows has no descriptor table to draw a
 // dense number from.
-function emitNetpollChildKeyFromAllocator(module StdModule, block IrBlock, cont IrBlock, ids ValueMinter)
+function emitNetpollSourceKeyFromAllocator(module StdModule, block IrBlock, cont IrBlock, ids ValueMinter)
 	let key = ids.mint()
-	module.appendOp(block, op: StdOp.call(key, callee: NetpollChildKeyAllocName, args: ValueIdArray.create()))
+	module.appendOp(block, op: StdOp.call(key, callee: NetpollSourceKeyAllocName, args: ValueIdArray.create()))
 	module.setTerminator(block, op: StdOp.branch(cont.id))
 	block.branchEdges.push(BranchEdge.create(cont.id, argIds: argsOf(key)))
-end 'emitNetpollChildKeyFromAllocator'
+end 'emitNetpollSourceKeyFromAllocator'
 
 // A POSIX lane's source key IS a descriptor the host mints, so a refusal is the host's — and the answer to
 // *"this child can never be waited for"* is the one a socket the poller will not take already gets.
@@ -1905,7 +2024,7 @@ end 'buildNetpollChildClose'
 function emitNetpollCloseChildOnPort(module StdModule, block IrBlock, source ValueId, token ValueId, cont IrBlock, ids ValueMinter)
 	_ = emitNetpoll(module, block: block, verb: NetpollVerb.closeChildSource, operands: argsOf(token), ids: ids)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: NetpollPdReleaseName, args: argsOf(source)))
-	module.appendOp(block, op: StdOp.call(ids.mint(), callee: NetpollChildKeyReleaseName, args: argsOf(source)))
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: NetpollSourceKeyReleaseName, args: argsOf(source)))
 	module.setTerminator(block, op: StdOp.branch(cont.id))
 end 'emitNetpollCloseChildOnPort'
 
@@ -1963,18 +2082,25 @@ function emitNetpollCloseChildOnPosix(module StdModule, block IrBlock, source Va
 	module.setTerminator(block, op: StdOp.branch(cont.id))
 end 'emitNetpollCloseChildOnPosix'
 
-// The completion-port lane's key allocator and the callback that posts under a key. Built only there — the two
-// POSIX lanes take their keys from the kernel's descriptor table and their kernels report a child themselves.
-function buildNetpollChildKeyBand(module StdModule)
-	buildNetpollChildKeyAlloc(module)
-	buildNetpollChildKeyRelease(module)
+// The completion-port lane's key allocator, the per-operation source doors it feeds, and the callback that
+// posts under a key. Built only there — the two POSIX lanes take their keys from the kernel's descriptor table,
+// their kernels report a child themselves, and a read there completes in its caller.
+function buildNetpollSourceKeyBand(module StdModule)
+	buildNetpollSourceKeyAlloc(module)
+	buildNetpollSourceKeyRelease(module)
+	buildNetpollOpOpen(module)
+	buildNetpollOpClose(module)
+	buildNetpollOpWake(module)
+	buildNetpollOpAim(module)
+	buildNetpollOpClear(module)
+	buildNetpollOpSettle(module)
 	buildNetpollChildFired(module)
-end 'buildNetpollChildKeyBand'
+end 'buildNetpollSourceKeyBand'
 
-// `__np_child_key_alloc()` — see `NetpollChildKeyAllocName`. A recycled key comes off the free list, which is
+// `__np_src_key_alloc()` — see `NetpollSourceKeyAllocName`. A recycled key comes off the free list, which is
 // threaded through the records themselves (`PdOffNextFreeKey`); otherwise the high-water mark steps.
-function buildNetpollChildKeyAlloc(module StdModule)
-	var func = IrFunction.createFromStd(NetpollChildKeyAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+function buildNetpollSourceKeyAlloc(module StdModule)
+	var func = IrFunction.createFromStd(NetpollSourceKeyAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1985,7 +2111,7 @@ function buildNetpollChildKeyAlloc(module StdModule)
 	var answer = module.addBlock(func, label: b"npkanswer", heat: BlockHeat.normal)
 
 	emitSchedLockEnter(module, block: entry, ids: ids)
-	let head = emitLoadGlobalWord(module, block: entry, label: NetpollChildKeyFreeLabel, ids: ids)
+	let head = emitLoadGlobalWord(module, block: entry, label: NetpollSourceKeyFreeLabel, ids: ids)
 	let empty = emitCmp(module, block: entry, a: head, b: emitConst(module, block: entry, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(empty, thenBlockId: fresh.id, elseBlockId: reuse.id))
 
@@ -1994,19 +2120,20 @@ function buildNetpollChildKeyAlloc(module StdModule)
 	let known = emitCmp(module, block: reuse, a: pd, b: emitConst(module, block: reuse, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(reuse, op: StdOp.condBranch(known, thenBlockId: relink.id, elseBlockId: lost.id))
 
-	emitStoreGlobalWord(module, block: relink, label: NetpollChildKeyFreeLabel, value: emitLoadField(module, block: relink, record: pd, offset: PdOffNextFreeKey, ids: ids), ids: ids)
+	emitStoreGlobalWord(module, block: relink, label: NetpollSourceKeyFreeLabel, value: emitLoadField(module, block: relink, record: pd, offset: PdOffNextFreeKey, ids: ids), ids: ids)
 	module.setTerminator(relink, op: StdOp.branch(answer.id))
 	relink.branchEdges.push(BranchEdge.create(answer.id, argIds: argsOf(recycled)))
 
-	// ⛔ **A KEY ON THE FREE LIST WITHOUT A RECORD CANNOT ARISE**: only `__np_child_key_release` puts one there,
+	// ⛔ **A KEY ON THE FREE LIST WITHOUT A RECORD CANNOT ARISE**: only `__np_src_key_release` puts one there,
 	// and every key it is handed was adopted. Reaching here would mean the list's links were being read out of
 	// a record that does not exist, and the next allocation would hand out a key already in use.
 	emitRuntimeAbort(module, func: func, block: lost, abort: RuntimeAbort.netpollUnknownSource, ids: ids)
 
-	let high = emitLoadGlobalWord(module, block: fresh, label: NetpollChildKeyHighLabel, ids: ids)
-	emitStoreGlobalWord(module, block: fresh, label: NetpollChildKeyHighLabel, value: emitBin(module, block: fresh, a: high, b: emitConst(module, block: fresh, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids), ids: ids)
+	let high = emitLoadGlobalWord(module, block: fresh, label: NetpollSourceKeyHighLabel, ids: ids)
+	emitStoreGlobalWord(module, block: fresh, label: NetpollSourceKeyHighLabel, value: emitBin(module, block: fresh, a: high, b: emitConst(module, block: fresh, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids), ids: ids)
+	let minted = emitBin(module, block: fresh, a: emitBin(module, block: fresh, a: high, b: emitConst(module, block: fresh, value: 1, ids: ids), opcode: StdBinOpcode.shl, ids: ids), b: emitConst(module, block: fresh, value: 1, ids: ids), opcode: StdBinOpcode.bitOr, ids: ids)
 	module.setTerminator(fresh, op: StdOp.branch(answer.id))
-	fresh.branchEdges.push(BranchEdge.create(answer.id, argIds: argsOf(high)))
+	fresh.branchEdges.push(BranchEdge.create(answer.id, argIds: argsOf(minted)))
 
 	let key = ids.mint()
 	answer.blockArgs.push(IrBlockArg.create(key, argType: StdType.i64))
@@ -2014,11 +2141,11 @@ function buildNetpollChildKeyAlloc(module StdModule)
 	module.setTerminator(answer, op: StdOp.ret(key))
 
 	module.functions.push(func)
-end 'buildNetpollChildKeyAlloc'
+end 'buildNetpollSourceKeyAlloc'
 
-// `__np_child_key_release(key)` — see `NetpollChildKeyReleaseName`.
-function buildNetpollChildKeyRelease(module StdModule)
-	var func = IrFunction.createFromStd(NetpollChildKeyReleaseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+// `__np_src_key_release(key)` — see `NetpollSourceKeyReleaseName`.
+function buildNetpollSourceKeyRelease(module StdModule)
+	var func = IrFunction.createFromStd(NetpollSourceKeyReleaseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2037,13 +2164,227 @@ function buildNetpollChildKeyRelease(module StdModule)
 	// released a key it never opened.
 	emitRuntimeAbort(module, func: func, block: lost, abort: RuntimeAbort.netpollUnknownSource, ids: ids)
 
-	emitStoreField(module, block: known, record: pd, offset: PdOffNextFreeKey, value: emitLoadGlobalWord(module, block: known, label: NetpollChildKeyFreeLabel, ids: ids))
-	emitStoreGlobalWord(module, block: known, label: NetpollChildKeyFreeLabel, value: emitBin(module, block: known, a: key, b: emitConst(module, block: known, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids), ids: ids)
+	emitStoreField(module, block: known, record: pd, offset: PdOffNextFreeKey, value: emitLoadGlobalWord(module, block: known, label: NetpollSourceKeyFreeLabel, ids: ids))
+	emitStoreGlobalWord(module, block: known, label: NetpollSourceKeyFreeLabel, value: emitBin(module, block: known, a: key, b: emitConst(module, block: known, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids), ids: ids)
 	emitSchedLockLeave(module, block: known, ids: ids)
 	module.setTerminator(known, op: StdOp.retVoid)
 
 	module.functions.push(func)
-end 'buildNetpollChildKeyRelease'
+end 'buildNetpollSourceKeyRelease'
+
+// Open a poll source for the read this block is about to issue, and answer it. The caller is the reading green
+// thread, so the stamped key lands on the thread the completion packet will name.
+export function emitNetpollOpOpen(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+	let source = ids.mint()
+	module.appendOp(block, op: StdOp.call(source, callee: NetpollOpOpenName, args: ValueIdArray.create()))
+	return source
+end 'emitNetpollOpOpen'
+
+// Give one back — see `NetpollOpOpenName`.
+export function emitNetpollOpClose(module StdModule, block IrBlock, source ValueId, ids ValueMinter)
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: NetpollOpCloseName, args: argsOf(source)))
+end 'emitNetpollOpClose'
+
+// ⭐ **THE ONE POLLER, FOR A CALLER OUTSIDE THIS FILE.** A Windows pipe joins the port when it is CREATED, which
+// is `GtRuntime`'s work rather than this band's — so the handle is read through a door rather than the label
+// being exported, exactly as every other word of this file is reached.
+export function emitNetpollPollerHandle(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+	return emitLoadGlobalWord(module, block: block, label: NetpollPollerLabel, ids: ids)
+end 'emitNetpollPollerHandle'
+
+// `__np_op_open()` — see `NetpollOpOpenName`.
+function buildNetpollOpOpen(module StdModule)
+	var func = IrFunction.createFromStd(NetpollOpOpenName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+
+	let source = ids.mint()
+	module.appendOp(entry, op: StdOp.call(source, callee: NetpollSourceKeyAllocName, args: ValueIdArray.create()))
+	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: NetpollPdAdoptName, args: argsOf(source)))
+
+	// The stamp reads the record's generation outside the lock, which is safe because nobody else holds this
+	// key: the allocator handed it to this thread and only `__np_op_close` gives it back.
+	let key = emitNetpollStampKey(module, block: entry, source: source, ids: ids)
+	emitStoreField(module, block: entry, record: emitLoadCurrentGt(module, block: entry, ids: ids), offset: GtOffIoSource, value: key)
+	module.setTerminator(entry, op: StdOp.ret(source))
+
+	module.functions.push(func)
+end 'buildNetpollOpOpen'
+
+// `__np_op_close(source)` — see `NetpollOpOpenName`. The guard on the thread goes first, because a promise
+// dropped after it is cleared takes the ordinary deregistering arm and this thread is no longer parked by
+// then. The release bumps the record's generation, so a packet that outlived the operation names nothing; the
+// key then goes back for the next one.
+function buildNetpollOpClose(module StdModule)
+	var func = IrFunction.createFromStd(NetpollOpCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let source = 0 as ValueId
+
+	emitStoreField(module, block: entry, record: emitLoadCurrentGt(module, block: entry, ids: ids), offset: GtOffIoSource, value: emitConst(module, block: entry, value: 0, ids: ids))
+	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: NetpollPdReleaseName, args: argsOf(source)))
+	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: NetpollSourceKeyReleaseName, args: argsOf(source)))
+	module.setTerminator(entry, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildNetpollOpClose'
+
+// `__np_op_wake(gt)` — see `NetpollOpWakeName`.
+function buildNetpollOpWake(module StdModule)
+	var func = IrFunction.createFromStd(NetpollOpWakeName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var current = module.addBlock(func, label: b"npowcurrent", heat: BlockHeat.normal)
+	var known = module.addBlock(func, label: b"npowknown", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"npowdone", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let gt = 0 as ValueId
+
+	emitSchedLockEnter(module, block: entry, ids: ids)
+	let key = emitLoadField(module, block: entry, record: gt, offset: GtOffIoSource, ids: ids)
+	emitStoreField(module, block: entry, record: gt, offset: GtOffIoSource, value: emitConst(module, block: entry, value: 0, ids: ids))
+	let mode = emitLoadField(module, block: entry, record: gt, offset: GtOffIoMode, ids: ids)
+	let index = emitBin(module, block: entry, a: key, b: emitConst(module, block: entry, value: NetpollKeyIndexMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	let pd = emitNetpollPdLookup(module, block: entry, fd: index, ids: ids)
+	let noDebt = emitConst(module, block: entry, value: WakeDebtNone, ids: ids)
+	let haveRecord = emitCmp(module, block: entry, a: pd, b: emitConst(module, block: entry, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(haveRecord, thenBlockId: current.id, elseBlockId: doneBlock.id))
+	entry.branchEdges.push(BranchEdge.create(doneBlock.id, argIds: argsOf(noDebt)))
+
+	// A packet whose record has moved on names nothing: the thread that issued the operation has already been
+	// readied by whatever reset the record, and the clear above is what tells it not to wait for this packet.
+	emitNetpollWakeCompareGeneration(module, block: current, key: key, pd: pd, live: known, stale: doneBlock, noDebt: noDebt, ids: ids)
+
+	let debt = ids.mint()
+	module.appendOp(known, op: StdOp.call(debt, callee: NetpollPdReadyOneName, args: twoArgs(pd, second: mode)))
+	module.setTerminator(known, op: StdOp.branch(doneBlock.id))
+	known.branchEdges.push(BranchEdge.create(doneBlock.id, argIds: argsOf(debt)))
+
+	let owed = ids.mint()
+	doneBlock.blockArgs.push(IrBlockArg.create(owed, argType: StdType.i64))
+	emitSchedLockLeave(module, block: doneBlock, ids: ids)
+	module.setTerminator(doneBlock, op: StdOp.ret(owed))
+
+	module.functions.push(func)
+end 'buildNetpollOpWake'
+
+// `__np_op_aim(source, mode, handle)` — see `NetpollOpAimName`. The generation is read under the lock because
+// the record is the DESCRIPTOR's and a close on another machine may be resetting it.
+function buildNetpollOpAim(module StdModule)
+	var func = IrFunction.createFromStd(NetpollOpAimName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var known = module.addBlock(func, label: b"npoaknown", heat: BlockHeat.normal)
+	var lost = module.addBlock(func, label: b"npoalost", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 3)
+	let source = 0 as ValueId
+	let mode = 1 as ValueId
+	let handle = 2 as ValueId
+
+	emitSchedLockEnter(module, block: entry, ids: ids)
+	let pd = emitNetpollPdLookup(module, block: entry, fd: source, ids: ids)
+	let haveRecord = emitCmp(module, block: entry, a: pd, b: emitConst(module, block: entry, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(haveRecord, thenBlockId: known.id, elseBlockId: lost.id))
+
+	// An operation aimed at a record nobody opened would complete into a packet the decode drops, and the thread
+	// would wait for a wake that cannot come.
+	emitRuntimeAbort(module, func: func, block: lost, abort: RuntimeAbort.netpollUnknownSource, ids: ids)
+
+	let gt = emitLoadCurrentGt(module, block: known, ids: ids)
+	emitStoreField(module, block: known, record: gt, offset: GtOffIoMode, value: mode)
+	emitStoreField(module, block: known, record: gt, offset: GtOffIoHandle, value: handle)
+	let gen = emitLoadField(module, block: known, record: pd, offset: PdOffGen, ids: ids)
+	let high = emitBin(module, block: known, a: gen, b: emitConst(module, block: known, value: NetpollKeyGenShift, ids: ids), opcode: StdBinOpcode.shl, ids: ids)
+	emitStoreField(module, block: known, record: gt, offset: GtOffIoSource, value: emitBin(module, block: known, a: high, b: source, opcode: StdBinOpcode.bitOr, ids: ids))
+	emitSchedLockLeave(module, block: known, ids: ids)
+	module.setTerminator(known, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildNetpollOpAim'
+
+// `__np_op_clear()` — see `NetpollOpClearName`.
+function buildNetpollOpClear(module StdModule)
+	var func = IrFunction.createFromStd(NetpollOpClearName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+
+	emitSchedLockEnter(module, block: entry, ids: ids)
+	emitStoreField(module, block: entry, record: emitLoadCurrentGt(module, block: entry, ids: ids), offset: GtOffIoSource, value: emitConst(module, block: entry, value: 0, ids: ids))
+	emitSchedLockLeave(module, block: entry, ids: ids)
+	module.setTerminator(entry, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildNetpollOpClear'
+
+// `__np_op_settle()` — see `NetpollOpSettleName`.
+//
+// ⚠ **THE MINT RUNS UNDER THIS HOLD, AND THE WAKE DEBT IT COULD HAND BACK IS PROVABLY NONE.** A key reaches
+// the free list only from a close that has already readied the record's waiters, and a key past the high-water
+// mark has no record at all — so `__np_pd_adopt`'s reset finds both directions empty and owes nothing.
+function buildNetpollOpSettle(module StdModule)
+	var func = IrFunction.createFromStd(NetpollOpSettleName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var mint = module.addBlock(func, label: b"npossmint", heat: BlockHeat.normal)
+	var settled = module.addBlock(func, label: b"npossdone", heat: BlockHeat.normal)
+
+	emitSchedLockEnter(module, block: entry, ids: ids)
+	let aimed = emitLoadField(module, block: entry, record: emitLoadCurrentGt(module, block: entry, ids: ids), offset: GtOffIoSource, ids: ids)
+	let inFlight = emitCmp(module, block: entry, a: aimed, b: emitConst(module, block: entry, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(inFlight, thenBlockId: mint.id, elseBlockId: settled.id))
+	entry.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(emitConst(module, block: entry, value: 0, ids: ids))))
+
+	let source = emitNetpollOpOpen(module, block: mint, ids: ids)
+	module.setTerminator(mint, op: StdOp.branch(settled.id))
+	mint.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(source)))
+
+	let answer = ids.mint()
+	settled.blockArgs.push(IrBlockArg.create(answer, argType: StdType.i64))
+	emitSchedLockLeave(module, block: settled, ids: ids)
+	module.setTerminator(settled, op: StdOp.ret(answer))
+
+	module.functions.push(func)
+end 'buildNetpollOpSettle'
+
+// The three doors the socket band reaches the overlapped aim through — see each name's own note.
+export function emitNetpollOpAim(module StdModule, block IrBlock, source ValueId, mode ParsedInt, handle ValueId, ids ValueMinter)
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: NetpollOpAimName, args: threeArgs(source, second: emitConst(module, block: block, value: mode, ids: ids), third: handle)))
+end 'emitNetpollOpAim'
+
+export function emitNetpollOpClear(module StdModule, block IrBlock, ids ValueMinter)
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: NetpollOpClearName, args: ValueIdArray.create()))
+end 'emitNetpollOpClear'
+
+export function emitNetpollOpSettle(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+	let source = ids.mint()
+	module.appendOp(block, op: StdOp.call(source, callee: NetpollOpSettleName, args: ValueIdArray.create()))
+	return source
+end 'emitNetpollOpSettle'
+
+// ⭐⭐⭐ **TWO ALLOCATORS SHARE ONE RECORD TABLE ON THE COMPLETION-PORT LANE, SO ITS INDEX SPACE IS SPLIT BY
+// PARITY.** A POSIX poller keys every record by a descriptor the KERNEL allocated, so one space is the whole of
+// it. Windows has no descriptor for a child or for an overlapped operation, so `__np_src_key_alloc` mints
+// indices of its own — and a minted index equal to a live SOCKET handle would be two owners of one record, with
+// a child's waiter readied by a socket's packet. So a minted key is ODD and a descriptor's record sits at TWICE
+// the descriptor; the two runs can never meet, whatever values the host hands out.
+export function emitNetpollDescriptorIndex(module StdModule, block IrBlock, target Target, fd ValueId, ids ValueMinter) returns ValueId
+	return match netpollShape(target) 'shape'
+		epoll or
+			kqueue gives fd
+
+		completionPort gives emitBin(module, block: block, a: fd, b: emitConst(module, block: block, value: 1, ids: ids), opcode: StdBinOpcode.shl, ids: ids)
+	end 'shape'
+end 'emitNetpollDescriptorIndex'
 
 // `__np_child_fired(source, timerFired)` — see `NetpollChildFiredName`. It runs on a thread-pool thread that
 // holds no processor and owns no green thread, which is why it does nothing but forward: the port is the one
@@ -2108,8 +2449,9 @@ function buildNetpollPipeOpen(module StdModule, target Target)
 	emitNetpollBranchOnPipe(module, block: entry, fd: fd, present: havePipe, absent: doneBlock, ids: ids)
 
 	match netpollShape(target) 'shape'
-		// This lane's pipes are OVERLAPPED and were handed to the port when they were created, so there is no
-		// descriptor to flag and no registration to make — the wait a read parks on is the port's own packet.
+		// This lane's pipes are OVERLAPPED and joined the port under `NetpollOverlappedToken` when they were
+		// created, so there is no descriptor to flag and no per-HANDLE registration to make: what a read parks
+		// on is a source of its own, opened per operation by `__np_op_open`.
 		completionPort then module.setTerminator(havePipe, op: StdOp.branch(doneBlock.id))
 
 		epoll or

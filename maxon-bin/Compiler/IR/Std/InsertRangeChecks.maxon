@@ -683,7 +683,6 @@ type RangeCheckEmitter
 					switch or
 					witnessCall or
 					osPipeCreate or
-					osIocpCreate or
 					osEventCreate or
 					osThreadCreate or
 					osLockInit or
@@ -758,7 +757,8 @@ type RangeCheckEmitter
 					osUnpublishNamedSegment or
 					covPoint or
 					osHostSample or
-					osNetpoll then self.refuseNonParamAheadOfAGuard(pos)
+					osNetpoll or
+					osSocketOverlapped then self.refuseNonParamAheadOfAGuard(pos)
 			end 'op'
 		end 'eachPrefixOp'
 	end 'requireGuardHeadHoldsOnlyParams'
@@ -1459,9 +1459,8 @@ type RangeCheckEmitter
 				witnessCall then break 'c'
 				witnessTryCall then break 'c'
 
-				// P1.5 dogfood slice 1a: the IOCP ops produce no ranged-typealias value to range-check.
+				// The OS-primitive ops produce no ranged-typealias value to range-check.
 				osPipeCreate or
-					osIocpCreate or
 					osEventCreate or
 					osThreadCreate or
 					osLockInit or
@@ -1559,7 +1558,8 @@ type RangeCheckEmitter
 					osUnpublishNamedSegment or
 					covPoint or
 					osHostSample or
-					osNetpoll then break 'c'
+					osNetpoll or
+					osSocketOverlapped then break 'c'
 			end 'c'
 		end 'eachOp'
 	end 'collectConsts'
@@ -1831,9 +1831,8 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 		witnessCall gives false
 		witnessTryCall gives false
 
-		// P1.5 dogfood slice 1a: an IOCP op is a body op, never a `ret`.
+		// An OS-primitive op is a body op, never a `ret`.
 		osPipeCreate or
-			osIocpCreate or
 			osEventCreate or
 			osThreadCreate or
 			osLockInit or
@@ -1930,7 +1929,8 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 			osUnpublishNamedSegment or
 			covPoint or
 			osHostSample or
-			osNetpoll gives false
+			osNetpoll or
+			osSocketOverlapped gives false
 	end 'term'
 end 'retMatchesValue'
 

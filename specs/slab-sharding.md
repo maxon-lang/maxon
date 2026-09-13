@@ -408,8 +408,7 @@ coroutine of its calling green thread its tasks never leave that one green threa
 time — a preemption can move it to another, but never runs it on two — and a run as short as this one's
 reads `workers=1` at every `MAXON_MAX_PROCS`. It still proves determinism and leak-freedom; it no longer
 discriminates the `lock` prefix, because no column is ever credited by two machines at once. ⚠ **This does NOT mean the counters went plain** — `emitGlobalAccumulate`
-keeps its `multiM` arm, and a `.data` word is reachable from the IOCP completion thread whatever `async`
-does. It means the ORACLE for that arm is waiting on `spawn`, which is where a second M comes back.
+keeps its `multiM` arm, and a `.data` word is reachable from the system monitor whatever `async` does. It means the ORACLE for that arm is waiting on `spawn`, which is where a second M comes back.
 
 ⚠⚠ **`spawn` HAS LANDED, AND THIS DEBT IS THEREFORE DISCHARGEABLE AND NOT DISCHARGED — SAID PLAINLY SO IT
 IS NOT READ AS PAID.** The condition the paragraph above names as missing is available today: a spawned

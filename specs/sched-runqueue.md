@@ -31,8 +31,8 @@ one executor (`GtOffStrandHolder`) and runs members off this queue (`__gt_run_st
 A readied coroutine joins the back and a readied owner the FRONT, so a strand runs its owner first when
 the owner is ready. `__gt_coro_enqueue` appends and `__gt_strand_next` is the one place the strand runner
 asks what runs next. `__sched_lock` covers every access, because whoever completes a wait readies the
-waiter onto this queue — another machine firing a timer or answering a reply, or the IOCP completion
-thread finishing a pipe read.
+waiter onto this queue — another machine firing a timer, answering a reply, or draining the poller for a
+finished pipe read.
 
 ⚠ **THE TWO DOORS DIFFER IN WHO TAKES THAT LOCK, AND A READER WHO GETS IT BACKWARDS WRITES A RACE.**
 `__gt_strand_next` takes it around its own dequeue and, finding the queue empty, gives the strand up in the

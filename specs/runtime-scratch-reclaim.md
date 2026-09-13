@@ -41,8 +41,8 @@ The GT-record case asks the recycling runtime's count instead: every spawn in th
 from a free list rather than carving a fresh record, and the window took nothing from the allocator
 and left nothing live.
 
-⚠ **EACH CASE WARMS THE SCHEDULER FIRST.** `__gt_init` and `__io_init` run before `main` does, so the timer
-store, the poller and the completion port are in place before any window opens; what a first call
+⚠ **EACH CASE WARMS THE SCHEDULER FIRST.** `__gt_init` runs before `main` does, so the timer
+store and the poller are in place before any window opens; what a first call
 can still create for the life of the process — the GT struct its processor's free list keeps for the next
 spawn is one — belongs outside the window too. Measuring across it would credit the window with
 allocations that are *supposed* to still be live. The warm-up call is what makes the window contain
@@ -64,9 +64,9 @@ could never use again. Here three reads follow a warm-up: the allocator sees the
 moves by at least three regions per read) and gets all of it back (`live` does not move by more than
 one region per read).
 
-⚠ The read buffer is the one region that outlives the PARK — the completion thread is writing into
-it while the green thread is suspended — so it is released only after the yielding read has
-returned, and the drop-in-flight path releases it through the GT's own scratch slot instead
+⚠ The read buffer is the one region that outlives the PARK — the kernel is writing into it while the green
+thread is suspended — so it is released only after the yielding read has returned. A DROPPED reader takes the
+same road: it is renounced rather than abandoned, so it comes back and frees its own buffer
 (`spawn-read-line.drop-in-flight`).
 ```maxon
 function main() returns ExitCode

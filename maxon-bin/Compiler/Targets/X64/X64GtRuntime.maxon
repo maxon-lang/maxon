@@ -413,8 +413,7 @@ let ShimDoneLabel = 1 as BlockId
 //     next field load faults. This is reachable: the prologue guard runs inside `main` before the first
 //     `async`.
 //   * a ZERO M means this OS thread is not one. That is reachable too, by a thread that runs real code: the
-//     IOCP completion thread is created by `__io_init`, never becomes an M, and calls builder-built
-//     `__gt_enqueue` — whose lock take is a shimmed `iatCall`.
+//     system monitor never becomes an M and takes `__sched_lock` — whose take is a shimmed `iatCall`.
 //
 // **THE THIRD IS THE GREEN THREAD ITSELF**, and it is inside this helper rather than at each caller for the
 // same reason the other two are: every caller asks it and bails on it, and the version where one of them
@@ -467,8 +466,8 @@ end 'emitLoadCurrentMOrBail'
 //     bring-up that publishes the offset word the FIRST test above reads, so "before the block exists" and
 //     "before the offset exists" are the same instant and that test already covers it;
 //   * a WORKER M, which gets one through `CLONE_SETTLS` before it executes an instruction.
-// There is no third: `ioCompletionShape(linux)` is `inlineCompletion`, so this lane starts no IOCP
-// completion-drain thread — which is exactly the thread the Windows arm's second null test exists for.
+// There is no third on this lane, where the system monitor is the only OS thread that never becomes an M —
+// which is exactly the thread the Windows arm's second null test exists for.
 //
 // ⚠ **AND IF THAT ARGUMENT WERE EVER FALSIFIED, THE FAILURE IS DIAGNOSABLE RATHER THAN SILENT.** A slot read
 // with FS base 0 is a load at `key * 8` — inside the unmapped null page — so it faults at the instruction
@@ -542,13 +541,6 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		// `stdOpOutgoingArgBytes` reserves the frame with, never restated here.
 		MapViewOfFile gives MapViewOfFileStackArgWords
 
-		// ⚠ FIVE arguments, so ONE lands on the stack — and this arm is why the enum is worth being exhaustive
-		// over. It sat in the old `return 0` fallthrough, where the answer was WRONG but harmless because the
-		// completion loop is hand-assembled and calls it DIRECTLY, never through the shim. Stated at its true
-		// ABI count rather than at the 0 its current unreachability would excuse, so the answer stays right if
-		// it is ever emitted as an `iatCall`.
-		GetQueuedCompletionStatus gives GetQueuedCompletionStatusStackArgWords
-
 		// --- four arguments or fewer: register-only, nothing on the stack ---
 		ExitProcess gives 0  // 1: uExitCode
 		GetStdHandle gives 0  // 1: nStdHandle
@@ -601,11 +593,12 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		PeekNamedPipe gives PeekPipeStackArgWords  // 6: hNamedPipe, lpBuffer, nBufferSize, lpBytesRead, lpTotalBytesAvail, lpBytesLeftThisMessage
 		TerminateProcess gives 0  // 2: hProcess, uExitCode
 
-		// ⭐ **THE EIGHT `ws2_32` SOCKET IMPORTS — EVERY ONE TAKES FOUR ARGUMENTS OR FEWER**, so every one
+		// ⭐ **THE BLOCKING `ws2_32` SOCKET IMPORTS — EVERY ONE TAKES FOUR ARGUMENTS OR FEWER**, so every one
 		// passes entirely in registers and needs no stack words. That is not a coincidence worth relying on
-		// silently: `getaddrinfo`, `send` and `recv` sit exactly AT the four-register limit, so a future
-		// socket import with a fifth argument (`WSARecv`, `select`) must state its count here like
-		// `PeekNamedPipe` does, or the shim will hand it a frame too small and it will read the caller's.
+		// silently: `getaddrinfo`, `send` and `recv` sit exactly AT the four-register limit, and the OVERLAPPED
+		// pair below is what the limit was warned about — a socket import past four arguments must state its
+		// count here like `PeekNamedPipe` does, or the shim will hand it a frame too small and it will read the
+		// caller's.
 		WSAStartup gives 0  // 2: wVersionRequested, lpWSAData
 		getaddrinfo gives 0  // 4: pNodeName, pServiceName, pHints, ppResult
 		freeaddrinfo gives 0  // 1: pAddrInfo
@@ -614,6 +607,13 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		send gives 0  // 4: s, buf, len, flags
 		recv gives 0  // 4: s, buf, len, flags
 		closesocket gives 0  // 1: s
+
+		// The overlapped pair. SEVEN arguments each, so three on the stack — derived from the same constant
+		// `stdOpOutgoingArgBytes` reserves the frame with, never restated here.
+		WSARecv gives SocketOverlappedStackArgWords  // 7: s, lpBuffers, dwBufferCount, lpNumberOfBytesRecvd, lpFlags, lpOverlapped, lpCompletionRoutine
+		WSASend gives SocketOverlappedStackArgWords  // 7: s, lpBuffers, dwBufferCount, lpNumberOfBytesSent, dwFlags, lpOverlapped, lpCompletionRoutine
+		WSAEventSelect gives 0  // 3: s, hEventObject, lNetworkEvents
+		getsockopt gives SocketOptionStackArgWords  // 5: s, level, optname, optval, optlen
 		GetActiveProcessorCount gives 0  // 1: GroupNumber
 
 		// ⚠ **THE SHIM SWITCHES STACKS, NOT THREADS**, which is the one thing that could have made this
@@ -700,8 +700,8 @@ end 'gtShimStackArgWordsOf'
 // ⇒ **the rule this table encodes is *"`blocking` means it can wait an unbounded time on something OUTSIDE
 // the scheduler"*, and its contrapositive is a REQUIREMENT ON THE RUNTIME: a `blocking` import may never be
 // called with `__sched_lock` held.** Every scheduler-internal call under that lock — the child poll's
-// `WaitForSingleObject`, the reap's `GetExitCodeProcess`, the register's `CloseHandle`, the completion loop's
-// own imports — is `schedulerBound` below, which is what makes the requirement checkable by reading one table
+// `WaitForSingleObject`, the reap's `GetExitCodeProcess`, the register's `CloseHandle`, the poller's own
+// imports — is `schedulerBound` below, which is what makes the requirement checkable by reading one table
 // rather than by tracing every lock bracket.
 //
 // ⚠ **THE `match` IS TOTAL OVER `IatSlot` AND HAS NO `default` ARM, WHICH IS `gtShimStackArgWordsOf`'s OWN
@@ -769,6 +769,17 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 		recv gives SyscallClass.blocking
 		closesocket gives SyscallClass.blocking
 
+		// ⭐⭐ **THE OVERLAPPED PAIR IS NOT `blocking`, AND THAT IS THE WHOLE POINT OF THEM.** Each hands the
+		// kernel a buffer and returns at once — `WSA_IO_PENDING` — with the transfer reported later as a packet on
+		// the poller, so there is no window for `__sysmon` to rescue a processor out of.
+		WSARecv gives SyscallClass.schedulerBound
+		WSASend gives SyscallClass.schedulerBound
+
+		// Neither reaches the network: the event select RECORDS which events are wanted, and the option read
+		// answers out of the socket object the kernel is already holding.
+		WSAEventSelect gives SyscallClass.schedulerBound
+		getsockopt gives SyscallClass.schedulerBound
+
 		// --- `schedulerBound`: the scheduler's own machinery, and the bounded-and-short remainder ---
 		//
 		// ⛔ The lock pair is the deadlock this table's header sets out in five steps. Do not move them.
@@ -780,13 +791,6 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 		// `__sched_syscall_regain`'s wait go through them holding no processor, so there is none for `__sysmon`
 		// to take.
 		WaitForSingleObject gives SyscallClass.schedulerBound
-
-		// ⚠ **THIS ARM IS INERT AND SAYS SO RATHER THAN BEING LEFT TO LOOK LIVE**, exactly as the same slot's
-		// stack-arg arm does one function up: the completion loop is hand-assembled and calls
-		// `GetQueuedCompletionStatus` DIRECTLY (`StdToX64Conversion`), so it never reaches this shim. It is
-		// classified anyway because this `match` is TOTAL — and `schedulerBound` is the right answer if it ever
-		// did, since that loop is the scheduler waiting on its own completions.
-		GetQueuedCompletionStatus gives SyscallClass.schedulerBound
 
 		// Process teardown, memory, events, handles and the clocks: bounded and short, every one.
 		ExitProcess gives SyscallClass.schedulerBound
@@ -1766,230 +1770,6 @@ end 'x64ShimmedImportStep'
 // alongside `appendX64RuntimeChunks` for the panic runtime. They lay out above user code like every other
 // runtime chunk, so `mrt_start` stays at `.text` offset 0.
 
-// --- The IOCP completion-drain thread (P1.5 slice 1a-ii) ---
-//
-// ⭐ A HAND-ASSEMBLED chunk, NOT builder-built Std — like `__gt_context_switch`/`__gt_trampoline`/`__gt_morestack`,
-// and for the same reason: it runs OUTSIDE the GT model, on its OWN OS-thread stack, so its kernel calls must be
-// DIRECT. A builder-built version would be shimmed and stack-guarded — both wrong here.
-//
-// `__io_completion_loop(rcx = lpParameter, ignored)` — the Win64 ThreadProc `__io_init` starts with CreateThread.
-// It loops: `GetQueuedCompletionStatus` blocks until an overlapped read completes; the completing packet's
-// lpOverlapped IS the reading GT's embedded OVERLAPPED, so `gt = lpOverlapped - GtOffOverlapped` (CONTAINING_RECORD).
-// It writes to `gt.io_result` the byte count, or `SubpReadFailedCount` when the packet says the IO FAILED for some
-// reason other than the broken pipe that is a clean end of stream. Then — THE HANDSHAKE — it SPIN-WAITS, holding no
-// lock, until `gt.ioParked` is non-zero (the reading GT's registration sets it only AFTER `status = waiting`, so the
-// ready below lands after the GT's own waiting-write: no torn status, no lost wakeup). It readies the GT under
-// `__sched_lock` (`__gt_ready_locked`) and pays the wake debt that answers after the release. The ready door is PURE
-// MEMORY (no shim), so calling it from this thread is safe.
-//
-// gt is spilled to a frame local (not a callee-saved register) and reloaded after each call, which
-// keeps the frame layout — and the 16-byte alignment at every `call` — trivial.
-
-// Frame locals (rbp-relative) and the GQCS 5th-argument stack slot (rsp-relative). The frame is 0x50 bytes: with the
-// `push rbp` it lands RSP 16-aligned at every `call` (entry RSP ≡ 8 mod 16; push rbp ⇒ 0; sub 0x50 ⇒ 0).
-let IoLoopFrameBytes = 0x50 as StackSize
-let IoLoopBytesLocalDisp = -0x08 as Imm32  // lpNumberOfBytesTransferred out-param
-let IoLoopKeyLocalDisp = -0x10 as Imm32  // lpCompletionKey out-param (unused)
-let IoLoopOverlappedLocalDisp = -0x18 as Imm32  // lpOverlapped out-param → the completing GT's OVERLAPPED
-let IoLoopGtLocalDisp = -0x20 as Imm32  // the recovered GT pointer, spilled across the Win32/enqueue calls
-
-// ⭐ **THE WAKE DEBT `__gt_ready_locked` ANSWERED** — `WakeDebtOwed` when a strand token was published, so a
-// `__sched_wake_or_spawn` is owed after the release. It is a FRAME LOCAL rather than a register because
-// `LeaveCriticalSection` sits between the answer and its use and clobbers every volatile register.
-//
-// ⚠ rbp-0x28 is rsp+0x28 in this 0x50 frame, one slot above the outgoing-argument region
-// (`win64OutgoingArgDisp(0)` = rsp+0x20, eight bytes wide), so it collides with nothing.
-let IoLoopWakeLocalDisp = -0x28 as Imm32
-let IoLoopInfiniteTimeout = 0xFFFFFFFF  // INFINITE
-
-// The completion loop's own forward/backward branch targets, resolved against a LOOP-LOCAL fixup list + offset map
-// (the same machinery the shim and the block assembler use), scoped so the ids never collide with anything else.
-let IoLoopTopLabel = 0 as BlockId
-let IoLoopSpinLabel = 1 as BlockId
-let IoLoopSpunLabel = 2 as BlockId
-let IoLoopExitLabel = 4 as BlockId
-let IoLoopAbandonedLabel = 5 as BlockId
-let IoLoopCleanEofLabel = 7 as BlockId
-let IoLoopDequeuedLabel = 8 as BlockId
-
-// The completion loop's scratch: r11 shuttles a `.data` global's address, rax/rcx are general scratch. None is read
-// across the loop's own iterations (gt lives in the frame), so any caller-saved use is invisible.
-let IoLoopGlobalPtrReg = X64Register.r11
-
-// Load a `.data` global's VALUE into `dest` — `lea r11, [rip+label] ; mov dest, [r11]`. The completion loop reads
-// `__io_iocp`/`__sched_lock` this way, through the ordinary rdata-relocation path.
-function emitIoLoopLoadGlobal(code ByteArray, rdataRelocs RdataRelocationArray, dest X64Register, label ByteArray)
-	encodeLeaRegGlobal(code, rdataRelocs: rdataRelocs, dest: IoLoopGlobalPtrReg, label: label)
-	encodeLoadRegBaseDisp(code, destReg: dest, base: IoLoopGlobalPtrReg, disp: 0, wide: true)
-end 'emitIoLoopLoadGlobal'
-
-function buildIoCompletionLoopChunk() returns FunctionCodeChunk
-	var code = ByteArray.create()
-	var callFixups = CallFixupArray.create()
-	var iatRelocs = RelocationArray.create()
-	var rdataRelocs = RdataRelocationArray.create()
-	var loopFixups = ChunkRel32FixupArray.create()
-	var loopLabels = BlockOffsetTable.create()
-
-	// Prologue: push rbp ; mov rbp, rsp ; sub rsp, 0x50.
-	encodePushReg(code, reg: X64Register.rbp)
-	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rbp, src: X64Register.rsp, wide: true)
-	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: X64Register.rsp, imm: IoLoopFrameBytes as Imm32)
-
-	// loop_top:
-	loopLabels.place(IoLoopTopLabel, value: code.count())
-
-	// Zero the bytes slot (GQCS writes only the low DWORD; the runtime reads a full i64).
-	encodeMovRegImm32(code, dest: X64Register.rax, value: 0)
-	encodeStoreBaseDispReg(code, base: X64Register.rbp, disp: IoLoopBytesLocalDisp, srcReg: X64Register.rax)
-
-	// GetQueuedCompletionStatus(iocp, &bytes, &key, &overlapped, INFINITE).
-	emitIoLoopLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, label: IoIocpLabel)
-	encodeLeaRegRegImm32(code, dest: X64Register.rdx, base: X64Register.rbp, disp: IoLoopBytesLocalDisp)
-	encodeLeaRegRegImm32(code, dest: X64Register.r8, base: X64Register.rbp, disp: IoLoopKeyLocalDisp)
-	encodeLeaRegRegImm32(code, dest: X64Register.r9, base: X64Register.rbp, disp: IoLoopOverlappedLocalDisp)
-	encodeMovRegImm32(code, dest: X64Register.rax, value: IoLoopInfiniteTimeout)
-
-	// `GetQueuedCompletionStatus`'s 5th argument (dwMilliseconds) goes in outgoing stack SLOT 0 of this loop's
-	// own frame, so the displacement is `win64OutgoingArgDisp(0)` — the SAME rule the ISEL and the GT shim place
-	// their stack arguments by. Asked HERE rather than bound to a global `let`, which may hold no function call.
-	// This is the one place that writes the stack argument `GetQueuedCompletionStatusStackArgWords` counts.
-	encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: win64OutgoingArgDisp(0), srcReg: X64Register.rax)
-	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.GetQueuedCompletionStatus))
-
-	// ⭐⭐ **A COMPLETION CAN CARRY A FAILURE, AND THE BYTE-COUNT SLOT IS WHERE IT TRAVELS.** A FALSE with a
-	// NON-NULL `lpOverlapped` is the PARKED twin of the synchronous `ReadFile` refusal `__gt_subp_yield_read`
-	// classifies — and parking is the normal path for every stdlib reader, so a `readFailed` the enum promises
-	// would otherwise be a state only the rare synchronous path could reach. The verdict rides the SAME `bytes`
-	// slot a count does, which is what leaves the `gt.io_result` store below with one path and the resumed
-	// reader with one word to read.
-	//
-	// ⚠ `GetLastError` is called with NOTHING between it and the failing call — that is the whole of its contract.
-	// ⚠ A FALSE with a NULL `lpOverlapped` means the WAIT failed rather than an IO; the exit test below takes that
-	// path and the slot written here is never read.
-	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
-	encodeJcc(code, rel32Fixups: loopFixups, cond: X64CondCode.notEqual, targetBlockId: IoLoopDequeuedLabel)
-	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.GetLastError))
-
-	// Widened through a 32-bit register move because the Win64 ABI leaves RAX's high half undefined for a DWORD
-	// return, and the 64-bit compare below reads the whole register.
-	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: X64Register.rax, wide: false)
-	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: X64Register.rcx, imm: ErrorBrokenPipe as Imm32)
-	encodeJcc(code, rel32Fixups: loopFixups, cond: X64CondCode.equal, targetBlockId: IoLoopCleanEofLabel)
-
-	// `or reg, imm` rather than a `mov`: this immediate is SIGN-EXTENDED from the signed `Imm32` domain the
-	// constant lives in, where `encodeMovRegImm64` takes an unsigned `MachineWord` and could not carry it.
-	encodeGrp1RegImm32(code, ext: Grp1ExtOr, reg: X64Register.rax, imm: SubpReadFailedCount as Imm32)
-	encodeStoreBaseDispReg(code, base: X64Register.rbp, disp: IoLoopBytesLocalDisp, srcReg: X64Register.rax)
-	encodeJmp(code, rel32Fixups: loopFixups, targetBlockId: IoLoopDequeuedLabel)
-
-	// clean_eof: the child closed its stdout. The 0 is stored rather than left to what the API put in the
-	// out-parameter, so the answer does not rest on a field documented only as "may be zero".
-	loopLabels.place(IoLoopCleanEofLabel, value: code.count())
-	encodeMovRegImm32(code, dest: X64Register.rax, value: 0)
-	encodeStoreBaseDispReg(code, base: X64Register.rbp, disp: IoLoopBytesLocalDisp, srcReg: X64Register.rax)
-
-	// dequeued: the bytes slot holds the count, 0 for a clean end of stream, or the failure marker.
-	loopLabels.place(IoLoopDequeuedLabel, value: code.count())
-
-	// overlapped == NULL → shutdown sentinel → exit (defensive; the slice never posts one).
-	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rbp, disp: IoLoopOverlappedLocalDisp, wide: true)
-	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
-	encodeJcc(code, rel32Fixups: loopFixups, cond: X64CondCode.equal, targetBlockId: IoLoopExitLabel)
-
-	// gt = overlapped - GtOffOverlapped ; spill to the frame.
-	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: X64Register.rax, imm: GtOffOverlapped as Imm32)
-	encodeStoreBaseDispReg(code, base: X64Register.rbp, disp: IoLoopGtLocalDisp, srcReg: X64Register.rax)
-
-	// spin: wait until gt.ioParked != 0 — the reader's registration has published its park (IoParkedInFlight, 1),
-	// or the drop arm has abandoned it (IoParkedAbandoned, 2). The packet can arrive before the reader has even
-	// switched out, and everything between its `ReadFile` and that registration — the syscall bracket's exit, which
-	// may wait on `__sched_lock` for a processor, among it — must be able to run, so the spin holds no lock.
-	loopLabels.place(IoLoopSpinLabel, value: code.count())
-	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rbp, disp: IoLoopGtLocalDisp, wide: true)
-	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rax, disp: GtOffIoParked as Imm32, wide: true)
-	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: X64Register.rcx, src: X64Register.rcx, wide: true)
-	encodeJcc(code, rel32Fixups: loopFixups, cond: X64CondCode.notEqual, targetBlockId: IoLoopSpunLabel)
-	code.push(0xF3)  // PAUSE (F3 90) — spin hint, reduces power and HT contention.
-	code.push(0x90)
-	encodeJmp(code, rel32Fixups: loopFixups, targetBlockId: IoLoopSpinLabel)
-
-	// ⭐ spun: LOCK __sched_lock, held across the WHOLE decision below — so the completion thread's
-	// abandoned-vs-normal branch and the `__gt_promise_drop` IO arm's in-flight-vs-already-fired branch are
-	// SERIALIZED, guaranteeing exactly one side owns the GT. `ioParked` is re-read under it: the drop arm may have
-	// moved it from 1 to 2 since the spin read it, and nothing but this thread moves it on from either.
-	loopLabels.place(IoLoopSpunLabel, value: code.count())
-	emitIoLoopLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, label: SchedLockLabel)
-	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.EnterCriticalSection))
-	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rbp, disp: IoLoopGtLocalDisp, wide: true)
-	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rax, disp: GtOffIoParked as Imm32, wide: true)
-
-	// rax = gt, rcx = gt.ioParked. ABANDONED (2) → the drop arm cancelled this read: signal drain-done and touch the
-	// GT no further (the drop arm frees it). Else (1) → NORMAL completion.
-	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: X64Register.rcx, imm: IoParkedAbandoned as Imm32)
-	encodeJcc(code, rel32Fixups: loopFixups, cond: X64CondCode.equal, targetBlockId: IoLoopAbandonedLabel)
-
-	// NORMAL: gt.io_result = the classified count.
-	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rbp, disp: IoLoopBytesLocalDisp, wide: true)
-	encodeStoreBaseDispReg(code, base: X64Register.rax, disp: GtOffIoResult as Imm32, srcReg: X64Register.rcx)
-
-	// Ready the reader under the outer __sched_lock — exactly the lock `__gt_ready_locked` requires of its
-	// caller. The door reads which strand the reader belongs to off the GT itself: this thread has no M, so
-	// nothing here could say. A strand token it publishes goes to the GLOBAL queue (`__sched_runq_put`'s
-	// `p == 0` arm), the tier a token belongs to when no processor owns it.
-	//
-	// ⭐⭐ **ITS ANSWER IS THE WAKE DEBT, WHICH IS WHY THE RESULT IS SPILLED RATHER THAN DISCARDED.** A token
-	// published here has no machine looking for it, so somebody owes `__sched_wake_or_spawn`. It may not be
-	// called here: the caller holds the lock, and a wake inside a critical section has no StoreLoad fence (the
-	// release IS the fence). It is paid below, after `LeaveCriticalSection`, and ONLY if owed — a member readied
-	// onto a strand some machine is already running owes nobody, and an unconditional wake would start an OS
-	// thread that finds nothing to run.
-	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rbp, disp: IoLoopGtLocalDisp, wide: true)
-	encodeCallDirect(code, callFixups: callFixups, targetName: GtReadyLockedName)
-	encodeStoreBaseDispReg(code, base: X64Register.rbp, disp: IoLoopWakeLocalDisp, srcReg: X64Register.r8)
-
-	// gt.ioParked = IoParkedNormalDone(4) — so a drop RIGHT AFTER this completion reads 4 and knows the GT is
-	// queued rather than in flight — then Leave __sched_lock. ⚠ It does NOT unlink: a queue is not spliced,
-	// so the drop renounces the GT in place, leaving a tombstone the queue's popper reclaims.
-	// `emitGtIoCancelArm` carries the protocol.
-	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rbp, disp: IoLoopGtLocalDisp, wide: true)
-	encodeMovRegImm32(code, dest: X64Register.rcx, value: IoParkedNormalDone)
-	encodeStoreBaseDispReg(code, base: X64Register.rax, disp: GtOffIoParked as Imm32, srcReg: X64Register.rcx)
-	emitIoLoopLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, label: SchedLockLabel)
-	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.LeaveCriticalSection))
-
-	// ⭐⭐ **PAY THE WAKE DEBT, AFTER THE UNLOCK — AND THAT ORDER IS THE DEKKER ORDERING RATHER THAN LOCK
-	// HYGIENE.** `LeaveCriticalSection` is a full barrier, so the queue publish above cannot be reordered past
-	// `__sched_wake_or_spawn`'s reads of every P's `idleFlag`; called inside the critical section it would have
-	// no fence and a missed wakeup would be a token waiting out a parked machine's timeout.
-	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rbp, disp: IoLoopWakeLocalDisp, wide: true)
-	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: X64Register.rax, imm: WakeDebtNone as Imm32)
-	encodeJcc(code, rel32Fixups: loopFixups, cond: X64CondCode.equal, targetBlockId: IoLoopTopLabel)
-	encodeCallDirect(code, callFixups: callFixups, targetName: SchedWakeOrSpawnName)
-	encodeJmp(code, rel32Fixups: loopFixups, targetBlockId: IoLoopTopLabel)
-
-	// abandoned: gt.ioParked = IoParkedDrainDone(3) (the drop arm's spin target), Leave __sched_lock, loop. No ready
-	// and no wake — the drop arm spins on ioParked==3 on the dropping thread and owns the free.
-	loopLabels.place(IoLoopAbandonedLabel, value: code.count())
-	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rbp, disp: IoLoopGtLocalDisp, wide: true)
-	encodeMovRegImm32(code, dest: X64Register.rcx, value: IoParkedDrainDone)
-	encodeStoreBaseDispReg(code, base: X64Register.rax, disp: GtOffIoParked as Imm32, srcReg: X64Register.rcx)
-	emitIoLoopLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, label: SchedLockLabel)
-	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.LeaveCriticalSection))
-	encodeJmp(code, rel32Fixups: loopFixups, targetBlockId: IoLoopTopLabel)
-
-	// exit: return 0.
-	loopLabels.place(IoLoopExitLabel, value: code.count())
-	encodeMovRegImm32(code, dest: X64Register.rax, value: 0)
-	encodeGrp1RegImm32(code, ext: Grp1ExtAdd, reg: X64Register.rsp, imm: IoLoopFrameBytes as Imm32)
-	encodePopReg(code, reg: X64Register.rbp)
-	code.push(OpcodeRet)
-
-	resolveChunkRel32Fixups(code, labelOffsets: loopLabels, rel32Fixups: loopFixups)
-
-	return FunctionCodeChunk.createWith(IoCompletionLoopName, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())
-end 'buildIoCompletionLoopChunk'
-
 // ==========================================================================
 // ⭐⭐⭐ ASYNCHRONOUS PREEMPTION — STOPPING A THREAD THAT REACHES NO PROLOGUE (x64-windows)
 // ==========================================================================
@@ -2521,9 +2301,8 @@ end 'buildLinuxPreemptHandlerChunk'
 
 // Append the hand-assembled GT chunks — called by BackendDispatch when the module spawns a green thread, alongside
 // `appendX64RuntimeChunks` for the panic runtime. They lay out above user code like every other runtime chunk, so
-// `mrt_start` stays at `.text` offset 0. `usesIocp` (P1.5 slice 1a-ii) additionally appends the IOCP completion-drain
-// thread entry.
-export function appendX64GtRuntimeChunks(chunks FunctionCodeChunkArray, usesIocp bool, target Target)
+// `mrt_start` stays at `.text` offset 0.
+export function appendX64GtRuntimeChunks(chunks FunctionCodeChunkArray, target Target)
 	chunks.push(buildGtContextSwitchChunk(target))
 	chunks.push(buildGtTrampolineChunk())
 	chunks.push(buildGtGuardTrippedChunk())
@@ -2535,15 +2314,6 @@ export function appendX64GtRuntimeChunks(chunks FunctionCodeChunkArray, usesIocp
 	if x64OsCallKind(target.os) == X64OsCallKind.importCall 'theImportShim'
 		chunks.push(buildGtShimEnterChunk(target))
 	end 'theImportShim'
-
-	// ⛔⛔ **THE COMPLETION-DRAIN THREAD IS THE ONE CHUNK HERE THAT IS NOT MERELY OS-PARAMETRIC BUT OS-ONLY,
-	// AND ITS GATE IS `ioCompletionShape` RATHER THAN THE OS.** `usesIocp` asks *"does this module read a
-	// pipe?"*, which is true on every lane; whether a read COMPLETES SOMEWHERE ELSE is the target's question,
-	// and only Windows answers `completionPort`. This is the same pairing `installGtRuntime` makes before it
-	// builds the port's Std-tier half, so the thread and the port it drains ride one fact.
-	if usesIocp and ioCompletionShape(target) == IoCompletionShape.completionPort 'io'
-		chunks.push(buildIoCompletionLoopChunk())
-	end 'io'
 
 	// ⛔ **GATE SITE — asynchronous preemption.** The trampoline is ISA-shaped and is the same bytes whichever
 	// way the stop was delivered; what a machine records about its own thread, and how the monitor reaches

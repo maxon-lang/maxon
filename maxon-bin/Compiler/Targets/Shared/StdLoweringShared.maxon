@@ -823,10 +823,9 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, abi CalleeAbiTab
 		// covers — the same split `tryCall`'s two results take.
 		witnessTryCall(resultId, _, _, _, resultType, _, _) then classifyIndirectResult(column, resultId: resultId, resultType: resultType)
 
-		// P1.5 dogfood slice 1a: the five value-defining IOCP ops define GPR i64 results (kernel handles, the
-		// ReadFile BOOL, the GetLastError DWORD — all integers); the rest define nothing.
+		// The four value-defining overlapped-read ops define GPR i64 results (kernel handles, the ReadFile
+		// BOOL, the GetLastError DWORD — all integers); the rest define nothing.
 		osPipeCreate then break 'result'
-		osIocpCreate(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osEventCreate(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osThreadCreate(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osLockInit or
@@ -975,6 +974,7 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, abi CalleeAbiTab
 		// The host call's raw answer is a machine integer, so a GPR.
 		osHostSample(resultId, _, _, _, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osNetpoll(resultId, _, _, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osSocketOverlapped(resultId, _, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 	end 'result'
 end 'recordOpResultClass'
 
@@ -1411,7 +1411,6 @@ export type ScaledIndexFolds
 				switch or
 				witnessCall or
 				osPipeCreate or
-				osIocpCreate or
 				osEventCreate or
 				osThreadCreate or
 				osLockInit or
@@ -1490,7 +1489,8 @@ export type ScaledIndexFolds
 				osUnpublishNamedSegment or
 				covPoint or
 				osHostSample or
-				osNetpoll then break 'mem'
+				osNetpoll or
+				osSocketOverlapped then break 'mem'
 		end 'mem'
 	end 'recordMemoryFold'
 
@@ -1911,9 +1911,8 @@ export type CompareFusionCensus
 				witnessCall then break 'term'
 				witnessTryCall then break 'term'
 
-				// P1.5 dogfood slice 1a: the IOCP ops are value-consuming/void body ops, never terminators.
+				// The OS-primitive ops are value-consuming/void body ops, never terminators.
 				osPipeCreate or
-					osIocpCreate or
 					osEventCreate or
 					osThreadCreate or
 					osLockInit or
@@ -2011,7 +2010,8 @@ export type CompareFusionCensus
 					osUnpublishNamedSegment or
 					covPoint or
 					osHostSample or
-					osNetpoll then break 'term'
+					osNetpoll or
+					osSocketOverlapped then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -2125,6 +2125,11 @@ end 'CompareFusionCensus'
 export function netpollOperand(operands ValueIdArray, index ParamCount) returns ValueId
 	return try operands.get(index) otherwise panic("netpollOperand: `osNetpoll` carries five operands and {index} is not one of them")
 end 'netpollOperand'
+
+// Operand `index` of an `osSocketOverlapped`, as the isel carries them: the op's four in order.
+export function socketOverlappedOperand(operands ValueIdArray, index ParamCount) returns ValueId
+	return try operands.get(index) otherwise panic("socketOverlappedOperand: `osSocketOverlapped` carries four operands and {index} is not one of them")
+end 'socketOverlappedOperand'
 
 // The operands a POSIX lane's `osNetpoll` chunk is called with — the prefix `posixNetpollOperandCount` names.
 export function posixNetpollChunkArgs(verb NetpollVerb, operands ValueIdArray) returns ValueIdArray

@@ -69,7 +69,7 @@ export enum HostFacility
 	// answer to one says nothing about the other.
 	//
 	// ⚠ **THE ROW IS ABOUT AN INSTALL GATE, NOT ABOUT WHETHER A LANE CAN SPELL THE CALL.** Every POSIX lane
-	// has a `mrt_host_tick_ms` chunk, and a lane that installs it only under `usesIocp` must answer `false`
+	// has a `mrt_host_tick_ms` chunk, and a lane that installs it only under `usesChildPipes` must answer `false`
 	// here: the callee's `iatCall`/`callDirect` would then relocate against a chunk that is not in the image
 	// for a program that reads the uptime and spawns nothing. A lane claims this row by gating the chunk on
 	// the union of the op's producers, which is the "a `true` promises a lowering" rule this file's header
@@ -949,9 +949,9 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			//
 			// ⚠ **MEASURED, not inferred from the call graph.** The smallest possible `async` program — one
 			// `async`, one `await`, one `sleep` to make the callee yield — compiled for x64-WINDOWS, the lane
-			// where every one of these lowerings exists, binds imports including `CreateProcessA`,
-			// `GetQueuedCompletionStatus` AND `CreateThread`. Dead-function elimination does not remove the
-			// child-process band from a program that spawns nothing.
+			// where every one of these lowerings exists, binds imports including `CreateProcessA` AND
+			// `CreateThread`. Dead-function elimination does not remove the child-process band from a program
+			// that spawns nothing.
 			monotonicClock gives true
 			sleep gives true
 			reschedule gives true

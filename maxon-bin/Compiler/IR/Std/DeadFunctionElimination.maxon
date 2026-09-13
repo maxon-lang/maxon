@@ -19,8 +19,8 @@
 // DIFFERENT questions, in that order:
 //
 //   * `RuntimeUsage` owns INSTALLATION — *does this program carry the allocator / the GT scheduler /
-//     the IOCP substrate / this `__destruct_<T>` at all?* It must run BEFORE lowering, because its
-//     `usesHeap`/`usesGt`/`usesIocp`/`usesStreaming` bits also gate the `.data` slots the backend
+//     the child-pipe substrate / this `__destruct_<T>` at all?* It must run BEFORE lowering, because its
+//     `usesHeap`/`usesGt`/`usesChildPipes`/`usesStreaming` bits also gate the `.data` slots the backend
 //     resolves a `globalAddr` against, and a slot cannot be laid out after the fact.
 //   * This pass owns REACHABILITY — *of what was installed, what can actually be reached from the
 //     program's roots?* It runs LAST, on the finished Std module, and it never installs anything.
@@ -219,13 +219,12 @@ end 'thisWalkReached'
 //        in `StdToWasm.appendLeakGate`. ⚠ Restore that property if you touch a gate: no committed spec
 //        makes the leak gate FIRE, so a gate that decided from the module instead would let this root's
 //        removal turn every exit-101 test silently green.
-//      * `__gt_ready_locked` and `__sched_wake_or_spawn` — the IOCP completion thread's ready of a parked
-//        reader and the wake it may owe (`X64GtRuntime.buildIoCompletionLoopChunk`). The chunk names both
-//        UNCONDITIONALLY, while a program's Std callers of them may all be unreachable — so a program that
-//        installs the IOCP substrate and therefore the completion loop reaches them from data alone. MEASURED
-//        for a predecessor by adding the call without a root: `panic at X64Backend.maxon:2280:
-//        resolveCallFixups: call to unknown function '__sched_wake_or_spawn'`, seventeen `subprocess-builtins`
-//        cases at once, exactly the shape `__mm_leak_check`'s note above predicts.
+//      * `__gt_ready_locked` and `__sched_wake_or_spawn` — a readiness walk's ready of a parked waiter and
+//        the wake it may owe. A program's Std callers of them may all be unreachable while a hand-assembled
+//        chunk still names them, so they are reached from data alone. MEASURED for a predecessor by adding
+//        the call without a root: `panic at X64Backend.maxon:2280: resolveCallFixups: call to unknown
+//        function '__sched_wake_or_spawn'`, seventeen `subprocess-builtins` cases at once, exactly the shape
+//        `__mm_leak_check`'s note above predicts.
 //      * `__gt_drain_at_exit` — the entry stub's scheduler teardown (`BackendDispatch.prependEntryStub`),
 //        in exactly `__mm_leak_check`'s position and for exactly its reason.
 //    They are rooted unconditionally: a name absent from this module is simply not found (a program
@@ -280,7 +279,7 @@ end 'seedRoots'
 //     stub brackets `main` with.
 //   * `__mm_leak_check` — both entry stubs' leak gate, emitted from `RuntimeUsage.usesHeap` where
 //     installation is decided; a pruned root leaves a call with no callee, loudly, on every backend.
-//   * `__gt_ready_locked` / `__sched_wake_or_spawn` — the IOCP completion loop's two callees, named by a
+//   * `__gt_ready_locked` / `__sched_wake_or_spawn` — a readiness walk's two callees, named by a
 //     hand-assembled chunk unconditionally.
 //   * `__sched_syscall_regain` and the bracket pair — called only from the Target tier's syscall handoff,
 //     on the lanes that build it (`SchedRuntime.targetBracketsBlockingSyscalls`, whose gate the install
@@ -364,7 +363,7 @@ end 'markCompilerOwnedRoot'
 
 // Mark `name` reachable and queue its body for the walk. A name this module does not define is not an
 // error and not a miss: it is a hand-assembled chunk (`__gt_context_switch`, `__gt_trampoline`,
-// `__gt_morestack`, `__io_completion_loop`) or a root whose runtime this program never installed. There
+// `__gt_morestack`) or a root whose runtime this program never installed. There
 // is nothing to keep and nothing to drop, so it is simply not queued.
 function markLiveFunction(name ByteArray, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray)
 	let idx = try byName.get(name) otherwise 'notAModuleFunction'
@@ -558,7 +557,6 @@ module function stdFunctionReferenceOf(op StdOp, byName FuncIndexByName, into St
 			switch or
 			witnessCall or
 			osPipeCreate or
-			osIocpCreate or
 			osEventCreate or
 			osThreadCreate or
 			osLockInit or
@@ -681,7 +679,8 @@ module function stdFunctionReferenceOf(op StdOp, byName FuncIndexByName, into St
 
 		// Every sampling service and poller verb bottoms out in a host call, never in a Maxon function.
 		osHostSample or
-			osNetpoll then break 'op'
+			osNetpoll or
+			osSocketOverlapped then break 'op'
 	end 'op'
 end 'stdFunctionReferenceOf'
 

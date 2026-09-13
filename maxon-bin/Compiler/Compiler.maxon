@@ -1148,16 +1148,16 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 		declaredGlobals.push(entry)
 	end 'each'
 
-	// The IOCP substrate's `.data` slots ride their OWN bit (P1.5 slice 1a-ii), so a plain async/timer/proc program's
-	// `.data` layout is unchanged — only a pipe-reading program lays them out.
-	if usage.usesIocp 'ioGlobals'
+	// The pipe substrate's `.data` slot rides its OWN bit, so a plain async/timer/proc program's `.data` layout
+	// is unchanged — only a pipe-reading program lays it out.
+	if usage.usesChildPipes 'ioGlobals'
 		for entry in ioRuntimeGlobals() 'each'
 			declaredGlobals.push(entry)
 		end 'each'
 	end 'ioGlobals'
 
-	// The streaming subprocess handle-table pointer (P1.5 slice 1b) rides its OWN bit, so a non-streaming IOCP
-	// program's `.data` layout is unchanged — only a streaming program lays out `__subp_table`.
+	// The streaming subprocess handle-table pointer rides its OWN bit, so a program that reads a pipe without
+	// the streaming API lays out no `__subp_table`.
 	if usage.usesStreaming 'subpGlobals'
 		for entry in subpRuntimeGlobals() 'each'
 			declaredGlobals.push(entry)
@@ -1388,7 +1388,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// what runs over the appended band). Its two hand-assembled chunks (`__gt_context_switch`/`__gt_trampoline`) are appended separately at the
 	// Target tier (BackendDispatch), because they are bytes rather than Std ops.
 	if usage.usesGt 'installGt'
-		installGtRuntime(pipeline.stdModule, globalData: project.globalData, asyncTrace: project.asyncTrace, usesIocp: usage.usesIocp, usesStreaming: usage.usesStreaming, rawFree: rawSlabFreeCallee(usage), target: project.target, streamState: subprocessStreamStateEnum)
+		installGtRuntime(pipeline.stdModule, globalData: project.globalData, asyncTrace: project.asyncTrace, usesChildPipes: usage.usesChildPipes, usesStreaming: usage.usesStreaming, rawFree: rawSlabFreeCallee(usage), target: project.target, streamState: subprocessStreamStateEnum)
 	end 'installGt'
 
 	// The String runtime (`__print_string`/`__str_eq`) is installed the SAME way and for the same

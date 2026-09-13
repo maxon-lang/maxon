@@ -739,7 +739,6 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 
 		// The IOCP ops have no wasm lowering and pull in no wasm import.
 		osPipeCreate or
-			osIocpCreate or
 			osEventCreate or
 			osThreadCreate or
 			osReadOverlapped or
@@ -841,7 +840,8 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 			osUnpublishNamedSegment or
 			covPoint or
 			osHostSample or
-			osNetpoll then break 'k'
+			osNetpoll or
+			osSocketOverlapped then break 'k'
 	end 'k'
 end 'internIndirectCallTypeFor'
 
@@ -1435,7 +1435,6 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 
 		// The IOCP ops have no wasm lowering — no wasm valtype to record.
 		osPipeCreate or
-			osIocpCreate or
 			osEventCreate or
 			osThreadCreate or
 			osReadOverlapped or
@@ -1556,7 +1555,8 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 			osUnpublishNamedSegment or
 			covPoint then break 'def'
 		osHostSample or
-			osNetpoll then break 'def'
+			osNetpoll or
+			osSocketOverlapped then break 'def'
 	end 'def'
 end 'recordDefValtype'
 
@@ -1801,7 +1801,6 @@ type WasmFuncEmitter
 				osLockEnter or
 				osLockLeave then panic("emitStraightLineTerminator: an `osLock*` op is a body op, never a terminator")
 			osPipeCreate or
-				osIocpCreate or
 				osEventCreate or
 				osThreadCreate or
 				osReadOverlapped or
@@ -1873,6 +1872,7 @@ type WasmFuncEmitter
 			covPoint then panic("emitStraightLineTerminator: a coverage counter is a body op, never a terminator")
 			osHostSample then panic("emitStraightLineTerminator: a host sample call is a body op, never a terminator")
 			osNetpoll then panic("emitStraightLineTerminator: a poller call is a body op, never a terminator")
+			osSocketOverlapped then panic("emitStraightLineTerminator: a socket transfer is a body op, never a terminator")
 		end 'term'
 	end 'emitStraightLineTerminator'
 
@@ -1971,7 +1971,6 @@ type WasmFuncEmitter
 				osLockEnter or
 				osLockLeave then panic("emitDispatcherTerminator: an `osLock*` op is a body op, never a terminator")
 			osPipeCreate or
-				osIocpCreate or
 				osEventCreate or
 				osThreadCreate or
 				osReadOverlapped or
@@ -2043,6 +2042,7 @@ type WasmFuncEmitter
 			covPoint then panic("emitDispatcherTerminator: a coverage counter is a body op, never a terminator")
 			osHostSample then panic("emitDispatcherTerminator: a host sample call is a body op, never a terminator")
 			osNetpoll then panic("emitDispatcherTerminator: a poller call is a body op, never a terminator")
+			osSocketOverlapped then panic("emitDispatcherTerminator: a socket transfer is a body op, never a terminator")
 		end 'term'
 	end 'emitDispatcherTerminator'
 
@@ -2177,7 +2177,6 @@ type WasmFuncEmitter
 			// The overlapped-read substrate has no wasm lowering, and wasm rejects rather than inventing an
 			// untested one.
 			osPipeCreate or
-				osIocpCreate or
 				osEventCreate or
 				osThreadCreate or
 				osReadOverlapped or
@@ -2315,6 +2314,7 @@ type WasmFuncEmitter
 			// neither — so this is a permanent absence rather than an unwritten lowering.
 			osHostSample then panic("emitBodyOp: `osHostSample` has no wasm32-wasi spelling — process sampling is `HostFacility.processSampling`, which this lane does not provide, so SemanticCheck refuses such a program at its own source span (E3104) and this is the backstop for a compiler bug that got one past that gate")
 			osNetpoll then panic("emitBodyOp: `osNetpoll` has no wasm32-wasi spelling — a WASI component has one thread, so there is no second party to interrupt a wait and no poller to block in; the scheduler that emits it is `HostFacility.greenThreads`, which SemanticCheck refuses on this lane at its own source span (E3104), and this is the backstop for a compiler bug that got one past that gate")
+			osSocketOverlapped then panic("emitBodyOp: `osSocketOverlapped` has no wasm32-wasi spelling — `TargetFacilities.targetProvidesFacility` denies `managedSocket` on this lane, so a socket call is refused at its own source span (E3104), and this is the backstop for a compiler bug that got one past that gate")
 		end 'body'
 	end 'emitBodyOp'
 
@@ -3773,7 +3773,6 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 			osLockEnter or
 			osLockLeave then panic("decideDispatcher: an `osLock*` op is a body op, never a terminator")
 		osPipeCreate or
-			osIocpCreate or
 			osEventCreate or
 			osThreadCreate or
 			osReadOverlapped or
@@ -3845,6 +3844,7 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		covPoint then panic("decideDispatcher: a coverage counter is a body op, never a terminator")
 		osHostSample then panic("decideDispatcher: a host sample call is a body op, never a terminator")
 		osNetpoll then panic("decideDispatcher: a poller call is a body op, never a terminator")
+		osSocketOverlapped then panic("decideDispatcher: a socket transfer is a body op, never a terminator")
 	end 'k'
 
 	return false

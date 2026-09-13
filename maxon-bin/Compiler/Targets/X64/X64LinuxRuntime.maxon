@@ -3829,11 +3829,11 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 		chunks.push(buildX64LinuxSleepChunk(HostNetpollSleepName, unit: PosixTimeUnit.microseconds))
 	end 'greenThreadFloor'
 
-	// ⭐ **THE PIPE SURFACE, WHICH REALLY IS NARROWER.** `usesIocp` is the bit `installGtRuntime` builds the
+	// ⭐ **THE PIPE SURFACE, WHICH REALLY IS NARROWER.** `usesChildPipes` is the bit `installGtRuntime` builds the
 	// pipe substrate under (`__gt_io_read` and `__gt_subp_yield_read`), and `usesStreaming` implies it — so a
 	// program that spawns a child WITHOUT reading from it pays for none of these. `osPipePeek` and
 	// `osProcessTerminate` have producers only inside that band.
-	if usage.usesIocp 'childPipes'
+	if usage.usesChildPipes 'childPipes'
 		chunks.push(buildX64LinuxPipeChunk())
 		chunks.push(buildX64LinuxNetpollArmPipeChunk())
 		chunks.push(buildX64LinuxPipePeekChunk())
@@ -3882,7 +3882,7 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 
 	// ⚠ `__gt_subp_write_all` and the collect loop's stdin push emit `StdOp.osWriteFile` on the child's stdin
 	// pipe, so the write half rides the same union its read twin does.
-	if usage.usesManagedFile or usage.usesIocp 'managedFileWrite'
+	if usage.usesManagedFile or usage.usesChildPipes 'managedFileWrite'
 		chunks.push(buildX64LinuxTransferChunk(HostWriteFileName, syscallNumber: X64LinuxSyscallWrite))
 	end 'managedFileWrite'
 
@@ -3903,14 +3903,14 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 	// The mode→attribute-mask decoder is called by BOTH `mrt_host_fill_find_data` (the filesystem cluster
 	// above) and `mrt_host_file_attributes` (below), so its gate is the union of theirs — which is what lifts
 	// it out of the cluster it used to sit inside.
-	if usesFilesystem or usage.usesIocp 'attrsFromMode'
+	if usesFilesystem or usage.usesChildPipes 'attrsFromMode'
 		chunks.push(buildX64LinuxAttrsFromModeChunk(x64LinuxStatLayout()))
 	end 'attrsFromMode'
 
 	// ⚠ **`GetFileAttributesA` HAS A SECOND PRODUCER AND IT IS NOT A DIRECTORY OP.** `__gt_subp_resolve_path`
 	// walks `PATH` testing each candidate with `StdOp.osFileAttributes`, so the executable lookup needs this
 	// chunk with no `Directory` call anywhere in the program.
-	if usage.usesManagedDirectory or usage.usesIocp 'fileAttributes'
+	if usage.usesManagedDirectory or usage.usesChildPipes 'fileAttributes'
 		chunks.push(buildX64LinuxFileAttributesChunk())
 	end 'fileAttributes'
 end 'appendX64LinuxHostSurfaceChunks'

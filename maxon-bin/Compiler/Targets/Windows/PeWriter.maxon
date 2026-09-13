@@ -158,15 +158,13 @@ let ImportThunkPasses = 2  // the IAT and the ILT hold identical thunks
 // (and hence every existing `iatCall` relocation) is unchanged — a reorder would silently repoint every prior import.
 //
 // `CreateNamedPipeW`/`CreateFileW`/`SetHandleInformation`/`CreateIoCompletionPort`/`SetFileCompletionNotificationModes`/
-// `GetQueuedCompletionStatus`/`CreateThread`/`CreateEventA`/`SetEvent`/`InitializeCriticalSection`/
-// `EnterCriticalSection`/`LeaveCriticalSection`/`ReadFile`/`GetLastError`/`GetCurrentProcessId` (P1.5 dogfood slice 1a —
-// the IOCP overlapped-read substrate) are the async-subprocess-stdio core: an overlapped named pipe (CreateNamedPipeW +
-// CreateFileW + SetHandleInformation) is registered with a process-wide IOCP (CreateIoCompletionPort +
-// SetFileCompletionNotificationModes), a dedicated completion thread (CreateThread) drains it with
-// GetQueuedCompletionStatus and re-readies the parked green thread under a CRITICAL_SECTION (Initialize/Enter/Leave),
-// waking the netpoll's WaitForSingleObject via an auto-reset CreateEventA/SetEvent; the yielding read is a ReadFile whose
-// FALSE return is classified by GetLastError (997 pending → yield, 109 broken-pipe → EOF); GetCurrentProcessId makes the
-// pipe name process-unique. APPENDED AFTER `VirtualFree` so every existing slot INDEX (and hence every existing `iatCall`
+// `CreateThread`/`CreateEventA`/`SetEvent`/`InitializeCriticalSection`/`EnterCriticalSection`/`LeaveCriticalSection`/
+// `ReadFile`/`GetLastError`/`GetCurrentProcessId` are the async-subprocess-stdio core: an overlapped named pipe
+// (CreateNamedPipeW + CreateFileW + SetHandleInformation) joins the scheduler's poller (CreateIoCompletionPort +
+// SetFileCompletionNotificationModes), whose packets re-ready the parked green thread under a CRITICAL_SECTION
+// (Initialize/Enter/Leave); a worker M is a CreateThread and parks on an auto-reset CreateEventA/SetEvent; the
+// yielding read is a ReadFile whose FALSE return is classified by GetLastError (997 pending → park, 109
+// broken-pipe → EOF); GetCurrentProcessId makes the pipe name process-unique. APPENDED AFTER `VirtualFree` so every existing slot INDEX (and hence every existing `iatCall`
 // relocation) is unchanged — a reorder would silently repoint every prior import.
 //
 // `GetSystemTimeAsFileTime` is the WALL clock — the one import that answers a CALENDAR question rather than
@@ -204,7 +202,6 @@ export enum IatSlot
 	SetHandleInformation = IatSlotMeta{dll: ImportDll.kernel32}
 	CreateIoCompletionPort = IatSlotMeta{dll: ImportDll.kernel32}
 	SetFileCompletionNotificationModes = IatSlotMeta{dll: ImportDll.kernel32}
-	GetQueuedCompletionStatus = IatSlotMeta{dll: ImportDll.kernel32}
 	CreateThread = IatSlotMeta{dll: ImportDll.kernel32}
 	CreateEventA = IatSlotMeta{dll: ImportDll.kernel32}
 	SetEvent = IatSlotMeta{dll: ImportDll.kernel32}
@@ -598,6 +595,18 @@ export enum IatSlot
 	recv = IatSlotMeta{dll: ImportDll.ws2_32}
 	closesocket = IatSlotMeta{dll: ImportDll.ws2_32}
 
+	// ⭐ **THE OVERLAPPED TRANSFER PAIR.** They sit INSIDE the ws2_32 run rather than past it, which is what
+	// keeps that run contiguous; renumbering every slot below them costs nothing, because no emitted
+	// artefact persists an ordinal.
+	WSARecv = IatSlotMeta{dll: ImportDll.ws2_32}
+	WSASend = IatSlotMeta{dll: ImportDll.ws2_32}
+
+	// ⭐ **THE ASYNCHRONOUS CONNECT's TWO.** `WSAEventSelect` arms an event for `FD_CONNECT` — which also makes
+	// the socket non-blocking, so the `connect` that follows answers `WSAEWOULDBLOCK` at once rather than holding
+	// its machine — and `getsockopt` reads the `SO_ERROR` the completed handshake left behind.
+	WSAEventSelect = IatSlotMeta{dll: ImportDll.ws2_32}
+	getsockopt = IatSlotMeta{dll: ImportDll.ws2_32}
+
 	// ⛔⛔ **THE ONE `ntdll.dll` IMPORT, AND IT CARRIES AN ACCEPTED RISK THAT IS WRITTEN DOWN HERE
 	// BECAUSE NOTHING ELSE CAN STATE IT.** `NtGetNextThread` is a STATIC PE import, so the Windows loader
 	// binds it before `main` runs: on a host whose ntdll does not export it, `maxon.exe` FAILS TO
@@ -755,7 +764,6 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 			SetHandleInformation or
 			CreateIoCompletionPort or
 			SetFileCompletionNotificationModes or
-			GetQueuedCompletionStatus or
 			CreateThread or
 			CreateEventA or
 			SetEvent or
@@ -795,7 +803,11 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 			connect or
 			send or
 			recv or
-			closesocket gives false
+			closesocket or
+			WSARecv or
+			WSASend or
+			WSAEventSelect or
+			getsockopt gives false
 
 		// ⚠ **THE ntdll SLOT ANSWERS `false` FOR THE SOCKET RUN'S REASON, AND THE FAILURE IT AVOIDS IS THE
 		// SHARPER ONE.** `dllIsEmitted` decides whether ntdll's run exists at all; this band decides

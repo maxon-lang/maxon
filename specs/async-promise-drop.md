@@ -391,6 +391,88 @@ typealias Integer = int(i64.min to i64.max)
 42
 ```
 
+<!-- test: async-promise-drop.windows-parked-pipe-read-drop-reclaims-the-frames-heap -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
+⭐ **A PIPE READ IS THE PARK KIND THIS FILE HAD NO CASE FOR, AND IT STRANDS THE FRAME.** Its siblings
+above park on a CHILD, which is a poll source and renounces correctly. A streaming read parks on the
+overlapped read itself, and the drop's cancel arm frees the parked stack outright once the cancellation has
+drained — so every heap value that thread's locals owned goes with it. `reader` holds one interpolated
+`String` across the read, and the leak gate reports the strand as **exit 101**, an exit code no arithmetic
+in the program can produce.
+
+⚠ **THE PROMISE MUST BE BOUND AND THE SLEEP IS WHAT PUTS THE DROP AFTER THE PARK.** `_ = async reader(h)`
+discards at its own statement, before the coroutine has run, and takes the never-ran arm instead. The
+`gtIsComplete` peek adds `0`, which is that thread saying it was still parked when `dropWhileParked`
+returned and dropped it.
+```maxon
+function reader(h Integer, tag Integer) returns Integer
+	let held = "held-{tag}"
+	let line = subpReadLine(h)
+	return line.byteLength() + held.byteLength()
+end 'reader'
+
+function dropWhileParked(h Integer) returns Integer
+	let p = async reader(h, tag: 1)
+	sleep(200)
+	return __Builtins.gtIsComplete(p.inner)
+end 'dropWhileParked'
+
+function main() returns ExitCode
+	let h = subpSpawn("cmd /c ping -n 3 127.0.0.1 >nul & echo hi")
+	let parked = dropWhileParked(h)
+	_ = subpWait(h)
+	subpRelease(h)
+	return (42 + parked) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+42
+```
+
+<!-- test: async-promise-drop.a-dropped-coroutine-still-running-holds-the-exit -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
+<!-- procs: 1 -->
+⭐ **THE EXIT DRAIN READS QUEUES, STORES AND PROMISES — AND A COROUTINE A MACHINE HAS ALREADY DEQUEUED IS
+IN NONE OF THEM.** A drop renounces the coroutine and debits the live count at once, so the promise term is
+already zero; from the moment a machine takes the readied token until that thread parks again or completes,
+it sits on no queue and in no wait store. `victim` holds one interpolated `String` and spends that window
+inside a child spawn — `SyscallClass.blocking`, tens of milliseconds in the kernel — and only its own unwind
+can release the `String`. A drain that leaves during the window joins the machine out from under it and the
+leak gate reports **exit 101**, an exit code no arithmetic here can produce.
+
+⚠ **THE DROP HAPPENS INSIDE A COROUTINE, AND THAT IS WHAT MAKES IT DETERMINISTIC RATHER THAN A 4% RACE.**
+What decides the outcome is which machine takes the readied token: the main machine taking it is inside the
+strand runner and never reaches the exit test at all. Dropping from `dropper` readies the victim into a
+WORKER's ring while the main machine is only being woken, so the vulnerable road is the one taken every
+time. Dropping from `main` instead reads green roughly nineteen runs in twenty, which is a gate that cannot
+be trusted rather than a gate that cannot fail.
+```maxon
+function victim(tag Integer) returns Integer
+	let held = "held-{tag}"
+	sleep(5000)
+	_ = spawnReadLine("cmd /c echo bye")
+	return held.byteLength()
+end 'victim'
+
+function dropper() returns Integer
+	let p = async victim(1)
+	sleep(200)
+	return 7 + __Builtins.gtIsComplete(p.inner)
+end 'dropper'
+
+function main() returns ExitCode
+	_ = spawnReadLine("cmd /c echo hello")
+	let d = async dropper()
+	let n = await d
+	return (35 + n) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+42
+```
+
 <!-- test: async-promise-drop.rearm-var-across-loop -->
 Re-arming a promise `var` INSIDE A LOOP is not phi-blind (P1.5-B2 #88, review Finding 1): the loop-header phi
 carries the promise mark, so each iteration DROPS the previous thread (cancelling it) and the last one drops at

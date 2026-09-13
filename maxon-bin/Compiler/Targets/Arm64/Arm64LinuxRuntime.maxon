@@ -1707,9 +1707,8 @@ end 'arm64LinuxEmitMapAnon'
 // two-word seed that is the only channel the child has to learn what to run.
 //
 // ⛔⛔ **THIS CHUNK REPLACES A RUNTIME ABORT, AND THE ABORT WAS RIGHT WHEN IT WAS WRITTEN.** L4 refused to
-// write a `clone` here on the measurement that nothing reached the op — `ioCompletionShape(linux)` is
-// `inlineCompletion` so there is no completion-drain thread, and `SchedRuntime.buildSchedWakeOrSpawn`'s
-// worker M had no producer. The second clause expired: `spawn` publishes a GREEN THREAD, the publish doors'
+// write a `clone` here on the measurement that nothing reached the op — `SchedRuntime.buildSchedWakeOrSpawn`'s
+// worker M had no producer. That expired: `spawn` publishes a GREEN THREAD, the publish doors'
 // green arms call `__sched_wake_or_spawn`, and the default processor count is the machine's. The abort is
 // what announced it, by name, on the first `spawn` program built for this lane.
 //
@@ -2786,12 +2785,8 @@ end 'buildArm64LinuxShmUnlinkChunk'
 // each other by `bl`, so a gate that admitted one and not another would be a `CallFixup` naming a symbol
 // nothing laid out.
 //
-// ⚠ **`usesIocp` NOW APPEARS IN FIVE GATES HERE, AND IT NAMED NONE OF THEM UNTIL L5.** This paragraph read
-// *"`targetProvidesFacility` denies `subprocess` on this lane, so the three ops the Darwin gates widen for —
-// the overlapped read, the child's stdin write, the `PATH` walk's attribute probe — have no producer in a
-// program this backend will compile"*, and every clause of it is now false: the facility is provided, the bit
-// asks *"does this module read a pipe?"*, and this lane opens one. It is the second sentence of that kind in
-// this header (`greenThreads` was the first, at L4), which is the shape a lane completing a table has.
+// ⚠ **`usesChildPipes` APPEARS IN FIVE GATES HERE.** The facility is provided on this lane, the bit asks
+// *"does this module read a pipe?"*, and this lane opens one.
 export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usage RuntimeUsage, globalData GlobalDataTable)
 	assertLinuxSearchGeometry()
 
@@ -2890,11 +2885,11 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		chunks.push(buildArm64LinuxSleepChunk(HostNetpollSleepName, unit: PosixTimeUnit.microseconds))
 	end 'greenThreadFloor'
 
-	// ⭐ **THE PIPE SURFACE, WHICH REALLY IS NARROWER.** `usesIocp` is the bit `installGtRuntime` builds the
+	// ⭐ **THE PIPE SURFACE, WHICH REALLY IS NARROWER.** `usesChildPipes` is the bit `installGtRuntime` builds the
 	// pipe substrate under (`__gt_io_read` and `__gt_subp_yield_read`), and `usesStreaming` implies it — so a
 	// program that spawns a child WITHOUT reading from it pays for none of these. `osPipePeek` and
 	// `osProcessTerminate` have producers only inside that band.
-	if usage.usesIocp 'childPipes'
+	if usage.usesChildPipes 'childPipes'
 		chunks.push(buildArm64PosixPipeChunk(PosixHostCall.syscall(Arm64LinuxSyscallPipe2), flags: LinuxOpenCloseOnExec))
 		chunks.push(buildArm64LinuxNetpollArmPipeChunk())
 		chunks.push(buildArm64PosixPipePeekChunk(PosixPollCall.ppollSyscall(Arm64LinuxSyscallPpoll, sigsetBytes: LinuxSigsetBytes)))
@@ -2952,7 +2947,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 
 	// ⚠ L5: `__gt_subp_write_all` and the collect loop's stdin push emit `StdOp.osWriteFile` on the child's
 	// stdin pipe, so the write half rides the same union its read twin does.
-	if usage.usesManagedFile or usage.usesIocp 'managedFileWrite'
+	if usage.usesManagedFile or usage.usesChildPipes 'managedFileWrite'
 		chunks.push(buildArm64LinuxTransferChunk(HostWriteFileName, syscallNumber: Arm64LinuxSyscallWrite))
 	end 'managedFileWrite'
 
@@ -2973,14 +2968,14 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 	// The mode→attribute-mask decoder is called by BOTH `mrt_host_fill_find_data` (the cluster above) and
 	// `mrt_host_file_attributes` (below), so its gate is the union of theirs — which is what lifted it out of
 	// the cluster it used to sit inside.
-	if usesFilesystem or usage.usesIocp 'attrsFromMode'
+	if usesFilesystem or usage.usesChildPipes 'attrsFromMode'
 		chunks.push(buildArm64PosixAttrsFromModeChunk(arm64LinuxStatLayout()))
 	end 'attrsFromMode'
 
 	// ⚠ **`GetFileAttributesA` HAS A SECOND PRODUCER AS OF L5, AND IT IS NOT A DIRECTORY OP.**
 	// `__gt_subp_resolve_path` walks `PATH` testing each candidate with `StdOp.osFileAttributes`, so the
 	// executable lookup needs this chunk with no `Directory` call anywhere in the program.
-	if usage.usesManagedDirectory or usage.usesIocp 'fileAttributes'
+	if usage.usesManagedDirectory or usage.usesChildPipes 'fileAttributes'
 		chunks.push(buildArm64LinuxFileAttributesChunk())
 	end 'fileAttributes'
 end 'appendArm64LinuxRuntimeChunks'

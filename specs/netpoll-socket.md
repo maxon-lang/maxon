@@ -28,7 +28,6 @@ A parked socket read carries a DEADLINE: `setReadDeadline(milliseconds)` and
 <!-- test: netpoll-socket.n-concurrent-reads-do-not-serialise -->
 <!-- procs: 1 -->
 <!-- network: live -->
-<!-- unsupported-targets: x64-windows -->
 **FOUR ECHO ROUND-TRIPS IN FLIGHT AT ONE PROCESSOR, AND THE MONITOR NEVER FIRES.** A blocking `recv` holds the
 only machine there, so four round-trips cost four times one round-trip and sysmon retakes the processor out of
 the kernel call; a reader parked on the poller holds nothing, so the four overlap and nothing is retaken.
@@ -44,9 +43,6 @@ first-touch cost is spent outside the window, and what remains inside it is the 
 ⚠ **THE ASSERTION IS EXACTLY ZERO AND MUST STAY SO.** A tolerance would hide the regression this case exists
 to catch — the whole reading is *"the monitor never had to rescue a machine"*, and *"rarely had to"* is the
 symptom, not the cure.
-
-⚠ **x64-windows IS MARKED BECAUSE ITS SOCKETS REALLY ARE BLOCKING** and a `recv` there really does hold its
-machine — overlapped I/O through the completion port is a mechanism of its own, and a rung of its own.
 
 ⭐ **THIS CASE NAMES NOTHING NEW AND MUST COMPILE AND RUN AGAINST ANY COMPILER IN THIS TREE.** It is the one
 case in this file whose red is BEHAVIOURAL — `stuck=true`, the monitor rescuing a machine out of a socket
@@ -104,15 +100,11 @@ ok=4 stuck=false
 <!-- test: netpoll-socket.a-parked-reader-is-on-the-poller -->
 <!-- procs: 1 -->
 <!-- network: live -->
-<!-- unsupported-targets: x64-windows -->
 **THE `blocked` WITNESS ON ITS OWN: THE PARKS ARE COUNTED, NOT INFERRED FROM A MISSING SYMPTOM.** Its sibling's
 `stuck=false` says only that the monitor never had to rescue a machine, and a reader busy-waiting on a
 non-blocking socket satisfies that just as well as a reader parked on the poller. This case counts the parks
 themselves: two concurrent round-trips must leave at least one poller park each behind them, and both must
 still answer correctly — a counter that rises while the data is wrong is measuring the wrong thing.
-
-⚠ **x64-windows IS MARKED BECAUSE NO SOCKET IS REGISTERED WITH ITS POLLER**, so a blocking reader parks on
-nothing and the count this case reads would be 0.
 ```maxon
 typealias Tally = int(0 to u64.max)
 
@@ -158,7 +150,6 @@ ok=2 blocked=true
 
 <!-- test: netpoll-socket.a-read-deadline-fires -->
 <!-- network: live -->
-<!-- unsupported-targets: x64-windows -->
 **A READ DEADLINE ANSWERS `timedOut`, AND PROMPTLY.** The connection sends nothing, so the echo peer sends
 nothing back and a read with no deadline waits for the kernel's own TCP timeout — minutes. The 300 ms
 deadline must end it, and `prompt` is what tells a deadline that fired from one the kernel eventually
@@ -166,9 +157,6 @@ supplied.
 
 ⚠ The `default` arm says *unreachable*, and it has to say so with `panic`: a `default throws` in a match
 whose error has nowhere to go is silently discarded, and with a payload-carrying error it leaks the box.
-
-⚠ **x64-windows IS MARKED BECAUSE A DEADLINE BOUNDS A POLLER WAIT**, and a reader inside a blocking `recv`
-there has no such wait to bound.
 ```maxon
 // Far above the 300 ms deadline and far below any kernel-side idle-read timeout: an elapsed reading under
 // this can only have come from the deadline itself.
@@ -208,7 +196,6 @@ timedOut=true prompt=true
 <!-- test: netpoll-socket.drop-a-parked-reader -->
 <!-- procs: 1 -->
 <!-- network: live -->
-<!-- unsupported-targets: x64-windows -->
 **A PROMISE DROPPED WHILE ITS COROUTINE IS PARKED IN `recv` DOES NOT HANG THE EXIT.** `main` spawns a reader
 that connects and then reads from a peer it never wrote to, sleeps long enough for the reader to reach the
 read, and lets the promise drop at scope exit without ever awaiting it. The drop must unregister the
@@ -230,9 +217,6 @@ counter separates a promise dropped off the POLLER from one dropped at a plain I
 ⚠ **`reader` MUST BE BOUND.** `_ = async stall()` discards the promise at its own statement, before `main`
 sleeps: `stall` never runs, never opens a socket, and the drop takes the never-ran arm. The peek pins that
 the reader really was still parked when it was dropped — a completed thread reads `1`.
-
-⚠ **x64-windows IS MARKED BECAUSE ITS READER NEVER REACHES THE POLLER**, so the drop this case measures has
-nothing there to deregister.
 ```maxon
 
 function stall() returns ExitCode throws NetworkError
@@ -262,7 +246,6 @@ dropped=true
 <!-- test: netpoll-socket.a-parked-reader-survives-its-owner-closing-the-socket -->
 <!-- procs: 1 -->
 <!-- network: live -->
-<!-- unsupported-targets: x64-windows -->
 **AN `async` ARGUMENT CO-OWNS THE SOCKET BOX, SO THE OWNER CAN CLOSE IT WHILE THE COROUTINE IS PARKED ON IT.**
 A coroutine shares its spawner's strand — only one of the two RUNS at a time — but a PARKED coroutine and a
 running owner are exactly the pair that can be alive at once, and the `async` door takes a reference on the box
@@ -280,9 +263,6 @@ nothing wrong.
 ⚠ **`parked > 0` IS WHAT MAKES THIS A POLLER CASE.** Without it, a reader that merely yielded ahead of its
 kernel call — or one that never ran — satisfies the rest of the program just as well, and the case would read
 green against a release that never met a waiter at all.
-
-⚠ **x64-windows IS MARKED BECAUSE NO SOCKET IS REGISTERED WITH ITS POLLER**, so its reader parks on nothing,
-`__np_pd_release` finds no record, and the state this case is about cannot be reached there.
 ```maxon
 // Exactly the four outcomes the match below can produce: 0 for a read that returned data, and one per
 // `NetworkError` variant a closed-under-it read can raise.
@@ -355,6 +335,13 @@ owner’s very next yield, which is inside the second `connect` — before that 
 this ordering does not reach the clobber even with the generation test removed, and the case passes either
 way. What it holds is the descriptor reuse itself: nothing else in the corpus closes a socket and opens
 another onto the same record, so without it the recycle path has no coverage at all.
+
+⚠ **x64-windows IS MARKED BECAUSE A SOCKET HANDLE THERE CARRIES NO LOWEST-FREE PROMISE.** The reuse this
+case rests on is POSIX's rule that `socket()` returns the lowest-numbered free descriptor; Winsock says
+nothing of the kind, so closing one socket and opening another there need not land on the same record and
+the state this case is about would not be built. Its subject is the generation test, which every polled
+lane runs — the descriptor reuse is only how this file reaches it.
+
 ```maxon
 typealias ReadOutcome = int(0 to 3)
 
@@ -402,7 +389,6 @@ echoed=true outcome=1
 <!-- test: netpoll-socket.two-readers-on-one-socket-is-a-named-stop -->
 <!-- procs: 1 -->
 <!-- network: live -->
-<!-- unsupported-targets: x64-windows -->
 **TWO GREEN THREADS READING ONE SOCKET IS A PROGRAM ERROR, AND IT STOPS WITH A NAMED ABORT.** A direction
 word holds ONE waiter, so a second wait on the same direction would overwrite the first's publication and
 the first would never be woken again. `__np_pd_wait` refuses that outright rather than losing a thread

@@ -13,20 +13,17 @@
 // > machine that holds the token runs every member of the strand (`GtRuntime.GtOffStrandHolder`); a strand
 // > moves between machines only through `__sched_lock`. Therefore every refcount read-modify-write on a box
 // > happens on the machine running that box's strand, one machine at a time, and refcounts are plain
-// > (`MmRuntime.emitAdjustRefcount`). The cross-thread writers that remain — the IOCP completion loop
-// > re-readying a parked GT, and machines publishing, popping and stealing tokens — touch queues, status
+// > (`MmRuntime.emitAdjustRefcount`). The cross-thread writers that remain — machines publishing, popping
+// > and stealing tokens, and a machine draining the poller re-readying a parked GT — touch queues, status
 // > words, counters and claims, every one of which states its `MultiMSharing` class; none touches a
 // > refcount.**
 //
 // ⭐ **THE LAST CLAUSE IS MEASURED, NOT ASSERTED, AND IT HAD TO BE — the plain refcount rests on it.** An
-// emitted program creates an OS thread at **three** `osThreadCreate` sites: `buildIoInit`'s completion
-// thread, `__sched_startm`'s worker M, and `emitSchedSysmonStart`'s system monitor. The monitor holds
-// no processor and runs no green thread, so it never dereferences a box. A worker M RUNS strands, so every
-// refcount it touches belongs to the strand it is running — which is the invariant, not an exception to it.
-// The completion thread owns no green thread at all, and its whole Maxon call graph is
-// `__io_completion_loop` → `__gt_ready_locked` → the queue pushes: no refcount anywhere. ⚠ **A rung that
-// gives that thread more to do owes this measurement again** — the refcount door's argument is exactly this
-// graph.
+// emitted program creates an OS thread at **two** `osThreadCreate` sites: `__sched_startm`'s worker M and
+// `emitSchedSysmonStart`'s system monitor. The monitor holds no processor and runs no green thread, so it
+// never dereferences a box. A worker M RUNS strands, so every refcount it touches belongs to the strand it is
+// running — which is the invariant, not an exception to it. ⚠ **A rung that gives either thread more to do
+// owes this measurement again** — the refcount door's argument is exactly this graph.
 //
 // ⚖ **USER, 2026-08-27:** *"async is not supposed to create a new green thread. it allows a function to yield
 // the current green thread while waiting for a blocking operation"*, and *"the language is supposed to
@@ -81,7 +78,7 @@
 //      measurement is now `scripts/multicore-stress/refcount-torture.maxon`, COMMITTED, driven by
 //      `multicore-stress/refcount-race.sh`.
 //   2. **EVERY `.data` COUNTER**, through the one `MmRuntime.emitGlobalAccumulate`, which is what the six
-//      scheduler counters (`__gt_live_count`, `__gt_trace_counter`, `__io_pending`, `__io_pipe_seq`,
+//      scheduler counters (`__gt_live_count`, `__gt_trace_counter`, `__io_pipe_seq`,
 //      `__sched_nmspinning` and `__sched_active_workers`) call instead of each spelling load/add/store by
 //      hand. ⚠ Since EC8 that door emits an `atomicRmw` only
 //      where a second OS thread can exist (`multiM`, which is `usage.usesGt`) — the six above are built
@@ -506,7 +503,7 @@ let MOffIdleNext = MOffAllNext + (PointerSlotBytes as ByteOffset)
 //
 // ⭐⭐⭐ **THE STATE IS ON THE MACHINE, NOT ON THE PROCESSOR AND NOT ON THE GREEN THREAD.** Go marks the *G*
 // `_Gsyscall` and mediates ownership through a lock bit in the G's status word (`_Gscan`). Here `GtOffStatus` is
-// stored UNCONDITIONALLY by the hand-assembled trampoline and by the IOCP completion loop — which is precisely why
+// stored UNCONDITIONALLY by the hand-assembled trampoline and by every readiness walk — which is precisely why
 // `GtOffTeardown` had to be a field of its own (see its header), and why a lock bit there would not survive
 // either.
 //
@@ -932,7 +929,7 @@ let POffRetakeCount = POffStealCount + (PointerSlotBytes as ByteOffset)
 // P. THE CHOICE IS FORCED, NOT A PREFERENCE.** The sum is over every P either way, so the total is the same
 // number whenever both parties have a P; what differs is the case where the FREEING side has none.
 // `SlabRuntime.emitSlabCurrentP` answers `MspanOwningPNone` for three real situations — before
-// `__sched_init_procs` has run, on an OS thread holding no M (the IOCP completion thread for its whole life),
+// `__sched_init_procs` has run, on an OS thread holding no M,
 // and on an M holding no P — and every one of those can free a box whose span a live P owns. That IS a
 // cross-processor free and it takes this road; crediting the pusher would have to store through a sentinel,
 // so it would need a guard, and the guard would DROP exactly those frees from the count. The target, by
@@ -1562,21 +1559,19 @@ export function targetPreemptDelivery(target Target) returns PreemptDelivery
 	end 'os'
 end 'targetPreemptDelivery'
 
-// ⭐ **THE ONE LOCK OVER THE RUN QUEUE — a `.data` word holding a slab-allocated CRITICAL_SECTION.** It was
-// `__io_lock`, allocated by `__io_init` and taken only when the program read a pipe, because the IOCP
-// completion thread was then the run queue's only cross-thread mutator. A worker M is a second one, so the
-// lock is now allocated by `__gt_init` for EVERY green-thread program and taken at every head/tail mutation.
+// ⭐ **THE ONE LOCK OVER THE RUN QUEUE — a `.data` word holding a slab-allocated CRITICAL_SECTION.** It is
+// allocated by `__gt_init` for EVERY green-thread program and taken at every head/tail mutation, because a
+// worker M is a cross-thread mutator of the queue.
 //
-// ⚠ **ONE LOCK RATHER THAN TWO, AND THAT IS A DEADLOCK ARGUMENT.** It also still guards the IOCP `ioParked`
-// state machine, which is what it guarded before. Two locks — one for the queue, one for the handshake —
-// would have to be held together on the completion thread's enqueue path, and two locks held together have
-// an ORDER that two files would each have to remember. A CRITICAL_SECTION is recursive, so one lock covering
-// both has no order to get wrong.
-export let SchedLockLabel = b"__sched_lock"
+// ⚠ **ONE LOCK RATHER THAN TWO, AND THAT IS A DEADLOCK ARGUMENT.** It also guards the poll-descriptor band and
+// the timer store. Two locks would have to be held together wherever a readiness readies a thread, and two
+// locks held together have an ORDER that every file touching them would have to remember. A CRITICAL_SECTION
+// is recursive, so one lock covering all of it has no order to get wrong.
+let SchedLockLabel = b"__sched_lock"
 
-// ⭐ **WHERE A THREAD WITH NO MACHINE KEEPS ITS LOCK DEPTH** — see `emitSchedLockDepthAddr`. The monitor and
-// the completion thread take `__sched_lock` and are not machines; neither runs a green thread, so the number
-// they leave here is read by nobody and the word exists only so the step has an address that is not zero.
+// ⭐ **WHERE A THREAD WITH NO MACHINE KEEPS ITS LOCK DEPTH** — see `emitSchedLockDepthAddr`. The monitor takes
+// `__sched_lock` and is not a machine; it runs no green thread, so the number it leaves here is read by nobody
+// and the word exists only so the step has an address that is not zero.
 // `atomicStep`, because the step that lands here is the same `atomicRmw` every other one is.
 let SchedLockDepthSinkLabel = b"__sched_lock_depth_sink"
 
@@ -1716,8 +1711,8 @@ enum SchedStartMCredit
 end 'SchedStartMCredit'
 
 // `__sched_wake_or_spawn()` — hand a newly-published strand token to an idle M, or start one on a free P.
-// EXPORTED for the hand-assembled IOCP completion loop (which wakes after readying a GT) and the
-// `DeadFunctionElimination` root that keeps it alive for that call.
+// EXPORTED for the hand-assembled chunks that wake after readying a GT and the `DeadFunctionElimination`
+// root that keeps it alive for those calls.
 export let SchedWakeOrSpawnName = b"__sched_wake_or_spawn"
 
 // ⭐⭐ `__sched_wake_netpoller(when)` — Go's `wakeNetPoller` (`proc.go:4018`): a deadline `when` has just become
@@ -2014,8 +2009,8 @@ export let SchedExitSyscallName = b"__sched_exit_syscall"
 // two loads they spent before. Only a caller that wants the PROCESSOR pays the extra field load, and every
 // such caller is scheduler-internal and per-schedule rather than per-call.
 //
-// ⚠ **A ZERO ANSWER IS REAL AND IT IS NOT THE SAME ZERO AS THE OFFSET'S.** An OS thread with no M is the
-// IOCP completion thread, for its whole life; a zero TEB OFFSET is *"the scheduler has not initialized"*.
+// ⚠ **A ZERO ANSWER IS REAL AND IT IS NOT THE SAME ZERO AS THE OFFSET'S.** An OS thread can have no M; a
+// zero TEB OFFSET is *"the scheduler has not initialized"*.
 // Neither is tested here — this door is straight-line by design — so a caller that cannot rule both out
 // takes `emitLoadCurrentGtAndProcIdOrZero` below, or tests what it must, as `__sched_runq_put` does.
 function emitLoadCurrentM(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
@@ -2052,7 +2047,7 @@ export function emitLoadCurrentMOrBail(module StdModule, cur IrBlock, haveOffset
 end 'emitLoadCurrentMOrBail'
 
 // The P this OS thread's M holds, live and non-null in `haveProc`. `noProc` takes all three ways to have
-// none — no scheduler yet, an OS thread with no M (the IOCP completion thread), an M holding no processor —
+// none — no scheduler yet, an OS thread with no M, an M holding no processor —
 // because a caller that wants a processor's per-P state has none to use in any of them. The blocks are the
 // caller's, for `emitLoadCurrentMOrBail`'s reason.
 function emitLoadCurrentPOrBail(module StdModule, cur IrBlock, haveOffset IrBlock, haveMachine IrBlock, haveProc IrBlock, noProc IrBlock, ids ValueMinter) returns ValueId
@@ -2126,7 +2121,7 @@ end 'emitLoadCurrentGt'
 // the third is this function's own:
 //   * a zero TEB OFFSET means `__sched_init_procs` has not run — and `gs:[0]` is `NT_TIB.ExceptionList`, a
 //     non-null pointer, so reading through it is a wild load rather than a null one.
-//   * a zero M means this OS thread has none, which the IOCP completion thread does for its whole life.
+//   * a zero M means this OS thread has none, which the system monitor does for its whole life.
 //   * ⭐ **a zero `currentP` is the THIRD, it was W213-C1's own arm, and W213-C2 GAVE IT A PRODUCER**: an M
 //     that holds no processor is every parked worker, for the whole of its park. C1 built this arm against a
 //     state nothing could yet reach, on the ground that a walk reading `P->id` without asking would be the
@@ -2382,7 +2377,7 @@ end 'schedRuntimeGlobals'
 
 // Install the P/M half of the scheduler. Called from `installGtRuntime`, so it rides `usesGt` exactly as the
 // green-thread half does — there is no program that wants one without the other.
-export function installSchedRuntime(module StdModule, target Target, usesCompletionPort bool, rawFree ByteArray)
+export function installSchedRuntime(module StdModule, target Target, rawFree ByteArray)
 	buildSchedInitProcs(module, target: target)
 	buildSchedRunqPut(module)
 	buildSchedRunqNext(module)
@@ -2418,7 +2413,7 @@ export function installSchedRuntime(module StdModule, target Target, usesComplet
 	buildSchedLockedCountQuery(module, name: SchedTimerScanStepCountName, label: SchedTimerScanStepsLabel)
 	buildSchedParkWakeCount(module)
 	buildSchedGtStackBytes(module)
-	buildSchedCheckdead(module, usesCompletionPort: usesCompletionPort)
+	buildSchedCheckdead(module)
 
 	// Every machine's loop, from one body: the workers' and the main machine's.
 	buildSchedLoop(module, role: SchedLoopRole.worker, target: target)
@@ -2516,9 +2511,9 @@ export function emitSchedStepLockDepth(module StdModule, block IrBlock, delta Pa
 end 'emitSchedStepLockDepth'
 
 // ⭐⭐ **WHERE THE CALLING THREAD KEEPS ITS LOCK DEPTH: ITS OWN MACHINE'S WORD, OR THE SINK IF IT HAS NO
-// MACHINE.** The monitor thread and the completion thread take `__sched_lock` and have no M
-// (`buildSysmon`'s header), and neither runs a green thread, so nothing ever reads the depth they keep —
-// what they need is somewhere to keep it that is not address zero.
+// MACHINE.** The monitor thread takes `__sched_lock` and has no M (`buildSysmon`'s header), and it runs no
+// green thread, so nothing ever reads the depth it keeps — what it needs is somewhere to keep it that is not
+// address zero.
 //
 // ⛔ **IT IS A BRANCHLESS SELECT, BECAUSE THE CALLERS ARE EXPRESSIONS RATHER THAN GRAPHS.** Every
 // `emitSchedLockEnter` site appends into a block it did not create and cannot split, so a test here would
@@ -2864,7 +2859,7 @@ function emitSchedFindRunnable(module StdModule, block IrBlock, m ValueId, ids V
 end 'emitSchedFindRunnable'
 
 // ⭐⭐ **TAKE THE NEXT TOKEN OFF THE GLOBAL QUEUE, OR 0.** Popping mutates head AND tail, which every other M
-// and the IOCP completion thread also mutate, so it takes the lock. Every search goes through
+// and every machine draining the poller also mutate, so it takes the lock. Every search goes through
 // `__sched_find_runnable`, and this serves the two places inside it which consult the global queue: the
 // 61-schedule fairness check and the batch.
 function emitSchedDequeueLocked(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
@@ -2887,9 +2882,8 @@ end 'emitSchedDequeueLocked'
 // In order: reserve the TLS slot and publish its TEB offset; decide how many Ps to build; allocate the run-
 // queue lock and the `P*` array; build each P; adopt P[0] for this OS thread.
 //
-// ⚠ **THE RUN-QUEUE LOCK IS ALLOCATED HERE AND NOT IN `__io_init`.** It guards the queue for every M, not
-// only for the IOCP completion thread, so a green-thread program that never touches a pipe must still have
-// it. See `SchedLockLabel`.
+// ⚠ **THE RUN-QUEUE LOCK IS ALLOCATED HERE.** It guards the queue for every M, so a green-thread program
+// that never touches a pipe must still have it. See `SchedLockLabel`.
 function buildSchedInitProcs(module StdModule, target Target)
 	var func = IrFunction.createFromStd(SchedInitProcsName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
@@ -3403,11 +3397,10 @@ end 'emitSchedAnyRunnable'
 //
 // ⚠⚠ **ONLY THE OWNING P's M MAY PUSH A RING, which is what makes the tail a single-writer word and the
 // push three instructions — AND THE RULE IS NOW ENFORCED HERE RATHER THAN OWED BY EVERY CALLER (SV1).** The
-// IOCP completion thread has no M and therefore no P: `emitLoadCurrentMOrBail` answers 0 for it, and a ring push
-// through a null P would store `gt` at offset `POffRunqBase` of address 0. It publishes GREEN THREADS now (a
-// parked reader resumed by a completion packet may be one), so the no-ring arm below routes it to the GLOBAL
-// queue — the tier that is everybody's and is behind a lock — and no caller has to remember which kind of
-// thread it is on.
+// system monitor has no M and therefore no P: `emitLoadCurrentMOrBail` answers 0 for it, and a ring push
+// through a null P would store `gt` at offset `POffRunqBase` of address 0. So the no-ring arm below routes a
+// publish to the GLOBAL queue — the tier that is everybody's and is behind a lock — and no caller has to
+// remember which kind of thread it is on.
 //
 // **THE OVERFLOW IS A ROUTING DECISION, NEVER AN ERROR.** A full ring moves its OLDEST HALF plus the new
 // thread to the global queue, so the ring keeps the freshest work and the rest becomes everybody's. The
@@ -3448,7 +3441,7 @@ function buildSchedRunqPut(module StdModule)
 	retry.blockArgs.push(IrBlockArg.create(pushGt, argType: StdType.i64))
 
 	// ⭐⭐ **THE THREE WAYS TO HAVE NO RING ALL REACH THE SAME ARM.** This caller really does run on a thread
-	// with NO M — the IOCP completion loop, through `__gt_ready_locked` — and an M holding no processor
+	// with NO M — the system monitor, through `__gt_ready_locked` — and an M holding no processor
 	// is the state a handoff produces; a thread with no ring of its own belongs on the global queue whichever
 	// of the three reasons put it there.
 	let p = emitLoadCurrentPOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, haveProc: slotPut, noProc: globalOnly, ids: ids)
@@ -4137,8 +4130,8 @@ function buildSchedFindRunnable(module StdModule)
 	emitRunqPublishTail(module, block: batchTail, p: p, delta: published, ids: ids)
 	module.setTerminator(batchTail, op: StdOp.branch(batchUnlock.id))
 
-	// The release is inside the function rather than at each exit for `emitGtIoCancelArm`'s reason: several
-	// arms reach it, and one release block cannot have an arm added later that forgets it.
+	// The release is inside the function rather than at each exit because several arms reach it, and one
+	// release block cannot have an arm added later that forgets it.
 	emitSchedLockLeave(module, block: batchUnlock, ids: ids)
 	let unlockZero = emitConst(module, block: batchUnlock, value: 0, ids: ids)
 	let batchFailed = emitCmp(module, block: batchUnlock, a: batchFirst, b: unlockZero, pred: StdCmpPred.eq, ids: ids)
@@ -5059,8 +5052,9 @@ export enum SchedMainLoopUntil
 	// `main`'s green thread has completed: `__sched_phase` has left `SchedPhase.mainRunning`.
 	mainCompleted = 0
 
-	// The exit drain is over: no promise is outstanding (`__gt_live_count` is 0), or nothing that owns one can
-	// ever run again (`SchedPhase.stuck`).
+	// The exit drain is over: no promise is outstanding, no green thread is queued, parked or in any other
+	// machine's hands (`emitSchedMainLoopUntilMet`), or nothing that owns one can ever run again
+	// (`SchedPhase.stuck`).
 	drained = 1
 end 'SchedMainLoopUntil'
 
@@ -5121,9 +5115,9 @@ end 'SchedLoopLeave'
 // ⭐⭐⭐ **`__sched_checkdead()` — Go's `checkdead`, called at `mput` under `__sched_lock`.** A machine that has
 // just joined `__sched_midle` asks whether any machine is still running. If none is, nothing can ever make a
 // green thread runnable again unless something outside every machine will: a pending timer or a parked child
-// (the last machine to go idle with either pending blocks in the poller rather than joining this list, and
-// counts as running while it does), or an in-flight read (the IOCP completion thread readies its reader). With
-// none of those either, the answer depends on the phase:
+// or a parked reader (the last machine to go idle with any of them pending blocks in the poller rather than
+// joining this list, and counts as running while it does). With none of those, the answer depends on the
+// phase:
 //
 //   • `SchedPhase.mainRunning` — `main` can never finish: `RuntimeAbort.schedulerDeadlock`.
 //   • `SchedPhase.draining` — the exit drain can never finish: the phase becomes `SchedPhase.stuck` and the main
@@ -5133,13 +5127,24 @@ end 'SchedLoopLeave'
 // ⭐⭐ **"RUNNING" IS `mcount − nmidle`, AND EVERY MACHINE OFF THE IDLE LIST COUNTS.** A machine in a kernel
 // call, the one blocked in the poller, one a waker has just taken off the list, one being created, one
 // waiting to regain a processor after a syscall, and the main machine between its two loops will each look for
-// work again before it can park, and its own `mput` asks this again. Every machine that can publish is one of those
-// or the IOCP completion thread, which the in-flight count covers.
+// work again before it can park, and its own `mput` asks this again. Every machine that can publish is one of
+// those.
 //
 // ⛔ **THE ANSWER IS TAKEN UNDER THE LOCK EVERY PARK'S FINAL LOOK IS TAKEN UNDER.** A machine joins the idle
 // list only after finding the global queue empty in the same hold, and a processor is idled only with an empty
 // ring (`emitSchedPidlePutLocked`), so with every machine idle every queue is empty.
-function buildSchedCheckdead(module StdModule, usesCompletionPort bool)
+// ⭐⭐ **EVERY MACHINE OFF THE IDLE LIST — `__sched_mcount − __sched_nmidle`.** `__sched_lock` held, so the
+// two words describe one instant; both move only under it. A machine off the list is one that will look for
+// work again before it can park, so this is the exact population that can still publish, still hold a green
+// thread it has taken out of a queue, and still be inside a kernel call on one's behalf. The deadlock check
+// asks whether it is empty and the exit drain whether it is down to the main machine alone.
+function emitSchedMachinesRunning(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+	let machines = emitLoadGlobalWord(module, block: block, label: SchedMcountLabel, ids: ids)
+	let idleMachines = emitLoadGlobalWord(module, block: block, label: SchedNmidleLabel, ids: ids)
+	return emitBin(module, block: block, a: machines, b: idleMachines, opcode: StdBinOpcode.sub, ids: ids)
+end 'emitSchedMachinesRunning'
+
+function buildSchedCheckdead(module StdModule)
 	var func = IrFunction.createFromStd(SchedCheckdeadName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
@@ -5152,19 +5157,11 @@ function buildSchedCheckdead(module StdModule, usesCompletionPort bool)
 	var doneBlock = module.addBlock(func, label: b"cddone", heat: BlockHeat.normal)
 
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let machines = emitLoadGlobalWord(module, block: entry, label: SchedMcountLabel, ids: ids)
-	let idleMachines = emitLoadGlobalWord(module, block: entry, label: SchedNmidleLabel, ids: ids)
-	let running = emitBin(module, block: entry, a: machines, b: idleMachines, opcode: StdBinOpcode.sub, ids: ids)
+	let running = emitSchedMachinesRunning(module, block: entry, ids: ids)
 	let someoneRunning = emitCmp(module, block: entry, a: running, b: zero, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(someoneRunning, thenBlockId: doneBlock.id, elseBlockId: nobodyRunning.id))
 
-	var somethingPending = emitGtStoresPending(module, block: nobodyRunning, ids: ids)
-
-	if usesCompletionPort 'aReadInFlightIsPending'
-		let readInFlight = emitCmp(module, block: nobodyRunning, a: emitLoadGlobalWord(module, block: nobodyRunning, label: IoPendingLabel, ids: ids), b: zero, pred: StdCmpPred.ne, ids: ids)
-		somethingPending = emitBin(module, block: nobodyRunning, a: somethingPending, b: readInFlight, opcode: StdBinOpcode.bitOr, ids: ids)
-	end 'aReadInFlightIsPending'
-
+	let somethingPending = emitGtStoresPending(module, block: nobodyRunning, ids: ids)
 	module.setTerminator(nobodyRunning, op: StdOp.condBranch(somethingPending, thenBlockId: doneBlock.id, elseBlockId: nothingPending.id))
 
 	let phase = emitLoadGlobalWord(module, block: nothingPending, label: SchedPhaseLabel, ids: ids)
@@ -5413,7 +5410,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	//
 	// ⭐ **THE GLOBAL QUEUE IS WHAT A PUBLISH OWING THIS MACHINE NO WAKE CAN STILL LEAVE BEHIND**: a yielding
 	// strand's token, the ring's overflow, this machine's own drained ring, and every publish by a party with no
-	// processor at all (the IOCP completion loop, and the poller's own fire below). A publish to a ring
+	// processor at all (the poller's own fire below). A publish to a ring
 	// owes its own wake, and `wspinrecheck` is where one skipped for a spinner is caught.
 	// `__sched_find_runnable`'s global-batch arm takes what this read sees, so a positive answer always makes
 	// progress.
@@ -5666,8 +5663,10 @@ end 'emitSchedWorkerBirth'
 
 // ⭐⭐ **LEAVE THE LOOP, OR CONTINUE AT `cont`** — `wloop`'s test, the park's under the lock, and the one after
 // a park ended empty-handed. It terminates `cur`; a `holdsLock` caller's exit road releases the lock first.
+// `holdsLock` is also what the test itself asks: the drain's verdict reads words only that lock orders, so a
+// site without it decides less (`emitSchedLoopExitTest`).
 function emitSchedLoopExitBranch(module StdModule, func IrFunction, cur IrBlock, leave SchedLoopLeave, exitBlock IrBlock, cont IrBlock, holdsLock bool, ids ValueMinter)
-	let stopping = emitSchedLoopExitTest(module, block: cur, leave: leave, ids: ids)
+	let stopping = emitSchedLoopExitTest(module, block: cur, leave: leave, underTheLock: holdsLock, ids: ids)
 
 	if holdsLock 'releaseOnTheWayOut'
 		var parkExit = module.addBlock(func, label: b"wparkexit", heat: BlockHeat.normal)
@@ -5679,22 +5678,29 @@ function emitSchedLoopExitBranch(module StdModule, func IrFunction, cur IrBlock,
 	end 'noLockHeld'
 end 'emitSchedLoopExitBranch'
 
-// 1 when the loop is to be left, else 0. See `SchedShutdownFlagLabel` for why a worker reads the flag at more
-// than one site, and `SchedPhase` for the word the main machine's test reads.
+// 1 when the loop is to be left, else 0. `underTheLock` says whether this site holds `__sched_lock`, which is
+// what decides whether the DRAIN's verdict may be taken here at all. See `SchedShutdownFlagLabel` for why a
+// worker reads the flag at more than one site, and `SchedPhase` for the word the main machine's test reads.
 //
 // ⚠ **THE PHASE IS READ WITH ACQUIRE**, because `__gt_run_main` reads `main`'s status and result once the
 // loop is left: `main`'s completion is published before `__gt_runner_done` moves the phase, and an acquire is
 // what orders the status read after this one on arm64 when the read is not under the lock.
-function emitSchedLoopExitTest(module StdModule, block IrBlock, leave SchedLoopLeave, ids ValueMinter) returns ValueId
+function emitSchedLoopExitTest(module StdModule, block IrBlock, leave SchedLoopLeave, underTheLock bool, ids ValueMinter) returns ValueId
 	return match leave 'testFor'
 		shutdown gives emitSchedShuttingDown(module, block: block, ids: ids)
-		untilMet(until) gives emitSchedMainLoopUntilMet(module, block: block, until: until, ids: ids)
+		untilMet(until) gives emitSchedMainLoopUntilMet(module, block: block, until: until, underTheLock: underTheLock, ids: ids)
 	end 'testFor'
 end 'emitSchedLoopExitTest'
 
-// Branch-free: `(drain and ((live == 0 and nothing runnable and nothing parked) or stuck)) or
-// (not drain and phase != running)`, each operand a `cmp` result, so the bitwise operators are the logical
-// ones.
+// Branch-free: `(drain and ((live == 0 and nothing runnable and nothing parked and nobody else running) or
+// stuck)) or (not drain and phase != running)`, each operand a `cmp` result, so the bitwise operators are the
+// logical ones. Without `underTheLock` only the second disjunct is emitted.
+//
+// ⛔⛔⛔ **THE DRAIN's VERDICT IS TAKEN UNDER `__sched_lock` AND NOWHERE ELSE.** Its last term reads
+// `__sched_nmidle`, a word every idle-list transition moves inside that lock, and an unlocked read of it is
+// stale in exactly the direction that ends the process early — short by the machine a waker has just handed
+// work to. So `wloop` asks only whether `main` has completed, and a drain that becomes met while the main
+// machine is there is met again at `wstoptest` one park road later, which costs a lap and cannot be got wrong.
 //
 // ⛔⛔ **A ZERO OWNER COUNT IS NOT AN EMPTY PROCESS, AND THE DIFFERENCE IS A RENOUNCED COROUTINE.**
 // `__gt_live_count` counts PROMISES outstanding, and `__gt_promise_drop` debits it the moment it renounces a
@@ -5705,12 +5711,19 @@ end 'emitSchedLoopExitTest'
 //
 // ⚠ **IT CANNOT WAIT FOR EVER, WHICH IS WHY RUNNABLE IS THE RIGHT WORD.** Work that is runnable makes
 // progress by definition, and a thread that parks AGAIN stops being runnable and puts its own store back on
-// `emitGtStoresPending` — which is what `SchedPhase.stuck` already ends. Nothing here waits on a party
-// outside the process.
-function emitSchedMainLoopUntilMet(module StdModule, block IrBlock, until ValueId, ids ValueMinter) returns ValueId
+// `emitGtStoresPending` — which is what `SchedPhase.stuck` already ends. A machine still off the idle list is
+// running such work or is in a kernel call for it, and both end; a machine with nothing to do parks, which is
+// what takes the last term down. Nothing here waits on a party outside the process.
+function emitSchedMainLoopUntilMet(module StdModule, block IrBlock, until ValueId, underTheLock bool, ids ValueMinter) returns ValueId
 	let phase = emitLoadAcquireGlobalWord(module, block: block, label: SchedPhaseLabel, ids: ids)
 
 	let mainDone = emitCmp(module, block: block, a: emitSchedPhaseIs(module, block: block, phase: phase, want: SchedPhase.mainRunning, ids: ids), b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let awaitingMainOnly = emitCmp(module, block: block, a: until, b: emitConst(module, block: block, value: SchedMainLoopUntil.mainCompleted.rawValue as ParsedInt, ids: ids), pred: StdCmpPred.eq, ids: ids)
+
+	if not underTheLock 'mainCompletionOnly'
+		return emitBin(module, block: block, a: awaitingMainOnly, b: mainDone, opcode: StdBinOpcode.bitAnd, ids: ids)
+	end 'mainCompletionOnly'
+
 	let nothingOwned = emitCmp(module, block: block, a: emitLoadGlobalWord(module, block: block, label: GtLiveCountLabel, ids: ids), b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	let isStuck = emitSchedPhaseIs(module, block: block, phase: phase, want: SchedPhase.stuck, ids: ids)
 	let anyWork = ids.mint()
@@ -5725,13 +5738,32 @@ function emitSchedMainLoopUntilMet(module StdModule, block IrBlock, until ValueI
 	let stillParked = emitGtStoresPending(module, block: block, ids: ids)
 	let nothingPending = emitCmp(module, block: block, a: stillParked, b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	let quiet = emitBin(module, block: block, a: nothingRunnable, b: nothingPending, opcode: StdBinOpcode.bitAnd, ids: ids)
-	let nothingLeft = emitBin(module, block: block, a: nothingOwned, b: quiet, opcode: StdBinOpcode.bitAnd, ids: ids)
+
+	// ⛔⛔⛔ **AND NO OTHER MACHINE IS HOLDING A GREEN THREAD — THE ONE TERM THAT SEES A THREAD MID-FLIGHT.**
+	// The three tests above read QUEUES, STORES and PROMISES, and a thread a machine has taken out of a queue
+	// to RUN is in none of them: not while it runs, and not while its unwinding sits in a blocking syscall,
+	// which hands the processor off and holds the thread in the kernel for as long as the call takes. So a
+	// renounced coroutine resumed on another machine is invisible to all three, and `__sched_stop_workers`
+	// joins that machine out from under it with every heap value its locals own unreleased. `__sched_nmidle`
+	// is where it IS visible: a machine running a strand is off the idle list by construction, and the main
+	// machine taking this test is itself off it, which is the `1`. MEASURED: a coroutine dropped by another
+	// coroutine — so the renounce readies it into a WORKER's ring, where the main machine never gets it —
+	// whose unwinding then spawns a child, exits 101 in 40 runs of 40 without this term and 42 in 40 of 40
+	// with it.
+	//
+	// ⭐ **NOTHING NEW HAS TO WAKE THE DRAIN FOR IT.** A machine joins the idle list only inside the critical
+	// section that ends with `__sched_checkdead`, which signals the main machine the moment the last one
+	// leaves it with nothing pending.
+	let running = emitSchedMachinesRunning(module, block: block, ids: ids)
+	let aloneOnTheBox = emitCmp(module, block: block, a: running, b: emitConst(module, block: block, value: 1, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let settled = emitBin(module, block: block, a: quiet, b: aloneOnTheBox, opcode: StdBinOpcode.bitAnd, ids: ids)
+
+	let nothingLeft = emitBin(module, block: block, a: nothingOwned, b: settled, opcode: StdBinOpcode.bitAnd, ids: ids)
 	let drainOver = emitBin(module, block: block, a: nothingLeft, b: isStuck, opcode: StdBinOpcode.bitOr, ids: ids)
 
 	let draining = emitCmp(module, block: block, a: until, b: emitConst(module, block: block, value: SchedMainLoopUntil.drained.rawValue as ParsedInt, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	let awaitingMain = emitCmp(module, block: block, a: until, b: emitConst(module, block: block, value: SchedMainLoopUntil.mainCompleted.rawValue as ParsedInt, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	let drainMet = emitBin(module, block: block, a: draining, b: drainOver, opcode: StdBinOpcode.bitAnd, ids: ids)
-	let mainMet = emitBin(module, block: block, a: awaitingMain, b: mainDone, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let mainMet = emitBin(module, block: block, a: awaitingMainOnly, b: mainDone, opcode: StdBinOpcode.bitAnd, ids: ids)
 	return emitBin(module, block: block, a: drainMet, b: mainMet, opcode: StdBinOpcode.bitOr, ids: ids)
 end 'emitSchedMainLoopUntilMet'
 

@@ -25,11 +25,6 @@
 // DLL entry and its only OUTBOUND boundary is `iatCall` into kernel32, where the compiler is the CALLER and
 // the callee preserves the compiler's registers. It does hand the OS **three inbound entry points** of its
 // own, and each is safe for a stated reason rather than by assumption:
-//   • `__io_completion_loop` — a `CreateThread` **ThreadProc** (Runtime/GtRuntime, lowered by
-//     StdToX64Conversion). It is a genuine Win64 callee, so it owes its OS caller all 128 bits of
-//     xmm6–15 — and it pays: it is hand-assembled, touches NO XMM at all, and the one the compiler function
-//     it calls (`__gt_enqueue`) is pure pointer work with no float in it. Nothing there can be
-//     coloured into an XMM, so there is nothing to preserve.
 //   • `mrt_fault_thunk` — a **Vectored Exception Handler** (X64Runtime), and its Linux SIGFPE twin.
 //     Both run only on the way to `mrt_panic` and terminate the process; neither returns to the OS,
 //     so no register state is owed back.

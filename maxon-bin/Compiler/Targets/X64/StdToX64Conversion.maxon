@@ -82,7 +82,7 @@ let hostChunkArgRegisters = [X64Register.rcx, X64Register.rdx, X64Register.r8, X
 
 // ⭐ The message `osCancelIo` aborts with on the syscall route — see `lowerRuntimeAbort` for why a RUNTIME
 // abort is the honest answer where a compile-time panic would refuse a program that only contains the arm.
-let X64LinuxNoCancelIoMessage = b"panic: CancelIoEx was reached on x64-linux, where every pipe read completes in its caller: nothing sets a green thread's `ioParked`, so `__gt_promise_drop`'s IO-cancel arm is unreachable and a build that runs it has a parked reader this lane cannot have created\n"
+let X64LinuxNoCancelIoMessage = b"panic: CancelIoEx was reached on x64-linux, where every pipe read completes in its caller: no read is ever in flight across a park, so the renounced arm of `__gt_subp_yield_read` that cancels one is unreachable and a build that runs it has a parked reader this lane cannot have created\n"
 
 // The physical register a host-surface chunk takes argument slot `index` in. Past the file is a
 // compiler-invariant break: no chunk in either runtime file takes a fifth argument, and one that did would
@@ -205,7 +205,7 @@ let CurrentModuleHandle = 0x0
 // `PeekNamedPipe`'s unread out-params.
 let NullPointer = 0x0
 
-// --- P1.5 dogfood slice 1a: the IOCP overlapped-read substrate's Win32 magic values ---
+// --- The green-thread substrate's Win32 magic values ---
 // The Win32 magic values the overlapped-read pipe and the IOCP init take, named
 // once here so the pipe/iocp/event/thread lowerings cannot restate them. `INBOUND|OVERLAPPED|FIRST_PIPE_INSTANCE`
 // is what makes the parent read end usable with FILE_FLAG_OVERLAPPED + IOCP (an anonymous `CreatePipe` handle
@@ -274,7 +274,6 @@ let IocpNoConcurrentThreads = 0x0  // CreateIoCompletionPort NumberOfConcurrentT
 // `INVALID_HANDLE_VALUE`. `CreateIoCompletionPort` reads it as "make a new port" and `CreateFileMappingA`
 // as "back this section with the page file rather than with a file on disk".
 let InvalidHandleValue = -1
-let IocpSingleConcurrentThread = 1  // NumberOfConcurrentThreads for a fresh port (the one completion thread)
 let FileSkipCompletionPortOnSuccess = 1  // SetFileCompletionNotificationModes — a SYNC read posts no IOCP packet
 let CreateEventManualReset = 0x0  // CreateEventA bManualReset = FALSE → AUTO-reset (one wait consumes one signal)
 let CreateEventInitialUnsignaled = 0x0  // CreateEventA bInitialState = FALSE (unsignaled until the first SetEvent)
@@ -356,7 +355,7 @@ let CreateProcessStartupInfoSlot = 4  // arg9 lpStartupInfo
 let CreateProcessProcInfoSlot = 5  // arg10 lpProcessInformation
 let CreateProcessOutgoingSlots = CreateProcessStackArgWords
 
-// --- P1.5 dogfood slice 1a: the IOCP-substrate imports' outgoing stack-argument counts ---
+// --- The substrate imports' outgoing stack-argument counts ---
 // Stated ONCE per import, exactly as `WriteFileStackArgWords`/`CreateProcessStackArgWords` are — the SAME
 // constant sizes the GT-frame reservation (`stdOpOutgoingArgBytes`) AND the syscall shim's per-call copy
 // (`gtShimStackArgWordsOf`), so the two can never disagree about how many words each kernel call reads off the
@@ -377,14 +376,6 @@ export let MapViewOfFileStackArgWords = 1 as MachineWord  // arg 5: dwNumberOfBy
 // for the band's own reason — the SAME constant sizes the frame reservation and the syscall shim's copy.
 export let CreateFileMappingStackArgWords = 2 as MachineWord  // args 5-6: dwMaximumSizeLow, lpName
 
-// ⚠ **NOT RESERVED BY `stdOpOutgoingArgBytes`, AND DELIBERATELY STATED ANYWAY (7a).** Unlike its five
-// neighbours above, `GetQueuedCompletionStatus` is never emitted as an `iatCall`: the completion loop is
-// hand-assembled and calls it DIRECTLY, so no Std op reserves a GT frame for it and there is nothing here
-// for a reservation to derive from. It is stated because `gtShimStackArgWordsOf` is exhaustive over
-// `IatSlot` and must give it an answer — and the honest answer is its real ABI count, not the 0 its current
-// unreachability would excuse. If it is ever routed through the shim, the copy is already right.
-export let GetQueuedCompletionStatusStackArgWords = 1 as MachineWord  // arg 5: dwMilliseconds
-
 // The process-sampling family's two counts. ⭐ **`osHostSample` IS ONE OP OVER THIRTEEN SERVICES, so its
 // frame reservation is its WIDEST member's** — `NtGetNextThread` and `SetWaitableTimer` both take six
 // arguments, four in registers and two on the stack. `ReadProcessMemory` states its own because
@@ -392,6 +383,46 @@ export let GetQueuedCompletionStatusStackArgWords = 1 as MachineWord  // arg 5: 
 // EXPORTED because the GT syscall shim reads them, exactly as its five siblings above are.
 export let HostSampleStackArgWords = 2 as MachineWord  // args 5-6 of the six-argument services
 export let ReadProcessMemoryStackArgWords = 1 as MachineWord  // arg 5: lpNumberOfBytesRead
+
+// The overlapped socket pair's three stack arguments, stated in this band for the poller's reason. EXPORTED
+// for the shim, which copies exactly what the kernel reads.
+export let SocketOverlappedStackArgWords = 3 as MachineWord  // args 5-7: lpFlags/dwFlags, lpOverlapped, lpCompletionRoutine
+
+// `osSocketOverlapped`'s outgoing slots: its widest verb's stack arguments, which is every verb's, since
+// `WSARecv` and `WSASend` take seven apiece.
+let SocketOverlappedOutgoingSlots = SocketOverlappedStackArgWords
+
+// `WSARecv`/`WSASend` read ONE `WSABUF`, and neither is handed a completion routine: the packet on the poller
+// is what reports the transfer.
+let WsaOneBuffer = 1
+let WsaNoCompletionRoutine = 0
+
+// `WSASend`'s `dwFlags`: no `MSG_OOB`, no `MSG_PARTIAL` — `ManagedSocketRuntime.SendRecvNoFlags`'s answer in
+// the one place a Win64 immediate can be written.
+let WsaSendNoFlags = 0
+
+// The transferred count is read off the completion packet, never through the out-param — a transfer still in
+// flight has none to write.
+let WsaNoTransferOutParam = 0
+
+// Which outgoing slot each of the three stack arguments takes.
+let WsaFlagsSlot = 0
+let WsaOverlappedSlot = 1
+let WsaCompletionRoutineSlot = 2
+
+// `getsockopt`'s fifth argument, the in/out option length. EXPORTED for the shim.
+export let SocketOptionStackArgWords = 1 as MachineWord  // arg 5: optlen
+let SocketOptionLengthSlot = 0
+
+// `WSAEventSelect`'s `lNetworkEvents`: the handshake's completion and nothing else, then none at all.
+let WsaFdConnect = 0x10
+let WsaNoNetworkEvents = 0
+let WsaNoEventObject = 0
+
+// `getsockopt(SOL_SOCKET, SO_ERROR)` on Winsock. Its two Linux twins are different numbers and live with that
+// lane's lowering — a level and an option name are per-platform, not per-protocol.
+let WinsockSolSocket = 0xFFFF
+let WinsockSoError = 0x1007
 
 // The poller's one import past the register file, stated in this band for its reason. EXPORTED for the shim.
 export let GetQueuedCompletionStatusExStackArgWords = 2 as MachineWord  // args 5-6: dwMilliseconds, fAlertable
@@ -479,12 +510,10 @@ let PipeCreateOutgoingSlots = CreateNamedPipeStackArgWords
 // reserving them nothing at all.
 // ⭐ **EXPORTED: THIS IS THE ONE ADDRESSING RULE FOR AN OUTGOING STACK ARGUMENT, AND TWO OTHER PLACES MUST
 // REPRODUCE THE EXACT ADDRESSES IT PLACES (7b2).** The ISEL stores every >4-argument import's stack arguments
-// through this; the GT syscall SHIM then copies those same words onto the system stack, and the hand-assembled
-// IO completion loop writes `GetQueuedCompletionStatus`'s 5th argument into slot 0 of its own frame. While it
-// was file-private both of those respelled it — the shim as an inline sum (with the WRONG stride, which 7a's
-// review caught), the loop as the bare literal `0x20`. Three spellings of one rule, on a path where a
-// disagreement is uninitialised KERNEL arguments and where no test fails, because the corpus combines no
-// `async` with OS calls. Exported so there is one.
+// through this; the GT syscall SHIM then copies those same words onto the system stack. While it was
+// file-private the shim respelled it as an inline sum, with the WRONG stride, which 7a's review caught — on a
+// path where a disagreement is uninitialised KERNEL arguments and where no test fails, because the corpus
+// combines no `async` with OS calls. Exported so there is one spelling.
 export function win64OutgoingArgDisp(slot MachineWord) returns Imm32
 	return (ShadowSpaceBytes + slot * SpillSlotBytes) as Imm32
 end 'win64OutgoingArgDisp'
@@ -1079,11 +1108,14 @@ export type StdToX64Lowering
 				osSocketCreate or
 				osSocketConnect or
 				osSocketSend or
-				osSocketError or
 				osSocketRecv or
 				osSocketClose or
 				osCpuCount or
 				osThreadCpuTicks gives 0
+
+			// `getsockopt` takes FIVE, so its `optlen` is a real outgoing stack argument. A raw-syscall lane passes
+			// all five in registers and reserves nothing, and reserving the slot there costs one unread word.
+			osSocketError gives win64OutgoingArgBytes(SocketOptionStackArgWords)
 
 			// F1a: `VirtualFree(MEM_DECOMMIT)` is three register arguments — inside the Win64 register file's
 			// capacity — so it reserves no outgoing stack space. Its Linux twin is a three-argument syscall,
@@ -1165,16 +1197,15 @@ export type StdToX64Lowering
 			// capture, not an outgoing argument), so it reserves the same outgoing space.
 			witnessTryCall(_, _, _, _, _, argFloatMask, args) gives callOutgoingArgBytes(argFloatMask, argCount: args.count())
 
-			// P1.5 dogfood slice 1a: the three >4-argument IOCP calls reserve their stack-arg region (osPipeCreate the
-			// max across CreateNamedPipeW/CreateFileW; osThreadCreate CreateThread's 2; osReadOverlapped ReadFile's 1);
-			// osProcessSpawnInherit is CreateProcessA, the same six as osProcessSpawn. The rest are ≤4-argument (register
-			// only): osIocpCreate/osEventCreate/osLockInit/osLockEnter/osLockLeave/osLastError reserve none.
+			// The three >4-argument overlapped-read calls reserve their stack-arg region (osPipeCreate the max
+			// across CreateNamedPipeW/CreateFileW; osThreadCreate CreateThread's 2; osReadOverlapped ReadFile's 1);
+			// osProcessSpawnInherit is CreateProcessA, the same six as osProcessSpawn. The rest are ≤4-argument
+			// (register only): osEventCreate/osLockInit/osLockEnter/osLockLeave/osLastError reserve none.
 			osPipeCreate gives win64OutgoingArgBytes(PipeCreateOutgoingSlots)
 			osThreadCreate gives win64OutgoingArgBytes(CreateThreadStackArgWords)
 			osReadOverlapped gives win64OutgoingArgBytes(ReadFileStackArgWords)
 			osProcessSpawnInherit gives win64OutgoingArgBytes(CreateProcessOutgoingSlots)
-			osIocpCreate or
-				osEventCreate gives 0
+			osEventCreate gives 0
 			osLockInit or
 				osLockEnter or
 				osLockLeave gives 0
@@ -1256,6 +1287,7 @@ export type StdToX64Lowering
 			// what a function containing any two services would get regardless.
 			osHostSample gives win64OutgoingArgBytes(HostSampleStackArgWords)
 			osNetpoll gives win64OutgoingArgBytes(NetpollOutgoingSlots)
+			osSocketOverlapped gives win64OutgoingArgBytes(SocketOverlappedOutgoingSlots)
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -1461,6 +1493,7 @@ export type StdToX64Lowering
 			covPoint(pointId) then self.targetModule.appendOp(dstBlock, op: TargetOp.covInc(pointId))
 			osHostSample(resultId, service, a0Id, a1Id, a2Id, a3Id, a4Id, a5Id) then self.lowerOsHostSample(resultId, service: service, a0Id: a0Id, a1Id: a1Id, a2Id: a2Id, a3Id: a3Id, a4Id: a4Id, a5Id: a5Id, dstBlock: dstBlock)
 			osNetpoll(resultId, verb, a0Id, a1Id, a2Id, a3Id, a4Id) then self.lowerOsNetpoll(resultId, verb: verb, operands: fiveArgs(a0Id, second: a1Id, third: a2Id, fourth: a3Id, fifth: a4Id), dstBlock: dstBlock)
+			osSocketOverlapped(resultId, verb, a0Id, a1Id, a2Id, a3Id) then self.lowerOsSocketOverlapped(resultId, verb: verb, operands: fourArgs(a0Id, second: a1Id, third: a2Id, fourth: a3Id), dstBlock: dstBlock)
 			osProcessTerminate(handleId, exitCodeId) then self.lowerOsProcessTerminate(handleId, exitCodeId: exitCodeId, dstBlock: dstBlock)
 			osSocketStartup(resultId, wsaDataPtrId) then self.lowerOsSocketStartup(resultId, wsaDataPtrId: wsaDataPtrId, dstBlock: dstBlock)
 			osSocketResolve(resultId, hostPtrId, hintsPtrId, outPtrId) then self.lowerOsSocketResolve(resultId, hostPtrId: hostPtrId, hintsPtrId: hintsPtrId, outPtrId: outPtrId, dstBlock: dstBlock)
@@ -1491,9 +1524,8 @@ export type StdToX64Lowering
 			witnessCall(resultId, witnessAddr, methodIndex, resultType, argFloatMask, args) then self.lowerWitnessCall(resultId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask, dstBlock: dstBlock)
 			witnessTryCall(resultId, errorFlagId, witnessAddr, methodIndex, resultType, argFloatMask, args) then self.lowerWitnessTryCall(resultId, errorFlagId: errorFlagId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask, dstBlock: dstBlock)
 
-			// P1.5 dogfood slice 1a: the IOCP overlapped-read substrate's OS-import ops.
-			osPipeCreate(namePtrId, saPtrId, iocpId, readPtrId, writePtrId) then self.lowerOsPipeCreate(namePtrId, saPtrId: saPtrId, iocpId: iocpId, readPtrId: readPtrId, writePtrId: writePtrId, dstBlock: dstBlock)
-			osIocpCreate(resultId) then self.lowerOsIocpCreate(resultId, dstBlock: dstBlock)
+			// The green-thread substrate's OS-import ops.
+			osPipeCreate(namePtrId, saPtrId, iocpId, readPtrId, writePtrId, syncSilencedPtrId) then self.lowerOsPipeCreate(namePtrId, saPtrId: saPtrId, iocpId: iocpId, readPtrId: readPtrId, writePtrId: writePtrId, syncSilencedPtrId: syncSilencedPtrId, dstBlock: dstBlock)
 			osEventCreate(resultId) then self.lowerOsEventCreate(resultId, dstBlock: dstBlock)
 			osThreadCreate(resultId, entryPtrId, argId) then self.lowerOsThreadCreate(resultId, entryPtrId: entryPtrId, argId: argId, dstBlock: dstBlock)
 			osLockInit(lockPtrId) then self.lowerOsLockOp(lockPtrId, importSlot: IatSlot.InitializeCriticalSection, chunk: HostLockInitName, dstBlock: dstBlock)
@@ -1649,7 +1681,6 @@ export type StdToX64Lowering
 			witnessCall then panic("StdToX64Lowering: a `witnessCall` op appeared as a block terminator (lowering bug — a witness call is a value-producing body op)")
 			witnessTryCall then panic("StdToX64Lowering: a `witnessTryCall` op appeared as a block terminator (lowering bug — a throwing witness call is a value-producing body op)")
 			osPipeCreate or
-				osIocpCreate or
 				osEventCreate or
 				osThreadCreate or
 				osLockInit or
@@ -1719,6 +1750,7 @@ export type StdToX64Lowering
 			covPoint then panic("StdToX64Lowering: a `covPoint` appeared as a block terminator (lowering bug — a coverage counter is emitted at a block HEAD, ahead of the code it counts)")
 			osHostSample then panic("StdToX64Lowering: an `osHostSample` op appeared as a block terminator (lowering bug — a host sample call produces a value and does not terminate)")
 			osNetpoll then panic("StdToX64Lowering: an `osNetpoll` op appeared as a block terminator (lowering bug — a poller call produces a value and does not terminate)")
+			osSocketOverlapped then panic("StdToX64Lowering: an `osSocketOverlapped` op appeared as a block terminator (lowering bug — a socket transfer produces a value and does not terminate)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -3312,7 +3344,7 @@ export type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(slot)))
 	end 'lowerOsWin64Call2'
 
-	// --- P1.5 dogfood slice 1a: the IOCP overlapped-read substrate lowerings ---
+	// --- The green-thread substrate's OS-primitive lowerings ---
 	// Every one routes on `x64OsCallKind` and REJECTS the syscall path — the whole substrate is x64-windows-gated.
 
 	// A Win64 outgoing stack argument set to an IMMEDIATE: `mov rax, imm ; mov [rsp + shadow + slot*8], rax`. rax is
@@ -3409,21 +3441,22 @@ export type StdToX64Lowering
 		self.lowerPanic(self.rdata.stringBlob(message), dstBlock: dstBlock)
 	end 'lowerRuntimeAbort'
 
-	// Lower `osPipeCreate` to the five-call overlapped-read-pipe sequence. The two handles land in
-	// `[readPtr]`/`[writePtr]`; each later call
-	// RELOADS the read end from `[readPtr]` rather than pinning a register across an intervening `iatCall`.
-	function lowerOsPipeCreate(namePtrId ValueId, saPtrId ValueId, iocpId ValueId, readPtrId ValueId, writePtrId ValueId, dstBlock IrBlock)
+	// Lower `osPipeCreate` to the five-call overlapped-read-pipe sequence. `iocpId` is the scheduler's poller.
+	// The two handles land in `[readPtr]`/`[writePtr]`; each later call RELOADS the read end from `[readPtr]`
+	// rather than pinning a register across an intervening `iatCall`.
+	function lowerOsPipeCreate(namePtrId ValueId, saPtrId ValueId, iocpId ValueId, readPtrId ValueId, writePtrId ValueId, syncSilencedPtrId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
-			importCall then self.lowerOsPipeCreateWin64(namePtrId, saPtrId: saPtrId, iocpId: iocpId, readPtrId: readPtrId, writePtrId: writePtrId, dstBlock: dstBlock)
+			importCall then self.lowerOsPipeCreateWin64(namePtrId, saPtrId: saPtrId, iocpId: iocpId, readPtrId: readPtrId, writePtrId: writePtrId, syncSilencedPtrId: syncSilencedPtrId, dstBlock: dstBlock)
 
-			// ⚠ **THE NAME, THE `SECURITY_ATTRIBUTES` AND THE COMPLETION PORT ARE ALL DROPPED.** Windows needs a
-			// uniquely NAMED pipe to get overlapped reads and a port for the packet to land on; a POSIX pipe is
-			// anonymous, inheritance is the spawn's business, and a read here completes in its caller.
+			// ⚠ **THE NAME, THE `SECURITY_ATTRIBUTES`, THE COMPLETION PORT AND THE SYNC-SILENCING ANSWER ARE ALL
+			// DROPPED.** Windows needs a uniquely NAMED pipe to get overlapped reads and a port for the packet to land
+			// on; a POSIX pipe is anonymous, inheritance is the spawn's business, and a read here completes in its
+			// caller with no packet to silence — so the caller's seeded answer stands.
 			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostPipeName, args: twoArgs(readPtrId, second: writePtrId))
 		end 'route'
 	end 'lowerOsPipeCreate'
 
-	function lowerOsPipeCreateWin64(namePtrId ValueId, saPtrId ValueId, iocpId ValueId, readPtrId ValueId, writePtrId ValueId, dstBlock IrBlock)
+	function lowerOsPipeCreateWin64(namePtrId ValueId, saPtrId ValueId, iocpId ValueId, readPtrId ValueId, writePtrId ValueId, syncSilencedPtrId ValueId, dstBlock IrBlock)
 		// 1) CreateNamedPipeW(name, PipeReadOpenMode, PipeMessageMode, PipeMaxInstances, nOutBuf, nInBuf, timeout, NULL).
 		//    Stack args 5-8 first (rax scratch, while every arg register is free), then the register args.
 		self.emitWin64StackArgImm(dstBlock, slot: 0, value: PipeBufferSize)
@@ -3454,22 +3487,24 @@ export type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: HandleFlagClear))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.SetHandleInformation)))
 
-		// 4) CreateIoCompletionPort(readEnd, iocp, key=0, threads=0) — register the read end with the process IOCP.
+		// 4) CreateIoCompletionPort(readEnd, poller, NetpollOverlappedToken, threads=0) — join the scheduler's ONE
+		//    poller. The key is a TOKEN rather than a source key: a completion key is fixed per handle, and what
+		//    a reader waits for is the OPERATION, which the packet names through its `lpOverlapped`.
 		self.targetModule.appendOp(dstBlock, op: TargetOp.loadRegBaseDisp(x64PhysReg(X64Register.rcx), base: TargetVReg.virtual(readPtrId), disp: 0, width: X64AccessWidth.word64))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(iocpId)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: IocpNoCompletionKey))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm(x64PhysReg(X64Register.r8), value: NetpollOverlappedToken as MachineWord))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: IocpNoConcurrentThreads))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateIoCompletionPort)))
 
-		// 5) SetFileCompletionNotificationModes(readEnd, FileSkipCompletionPortOnSuccess) — a SYNC read posts no packet.
+		// 5) SetFileCompletionNotificationModes(readEnd, FileSkipCompletionPortOnSuccess) — a SYNC read posts no
+		//    packet. Its BOOL is stored to `[syncSilencedPtr]`, which the caller REFUSES TO RUN WITHOUT: see the op's
+		//    own header for what a read whose inline completion still posts a packet does to the next one.
 		self.targetModule.appendOp(dstBlock, op: TargetOp.loadRegBaseDisp(x64PhysReg(X64Register.rcx), base: TargetVReg.virtual(readPtrId), disp: 0, width: X64AccessWidth.word64))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: FileSkipCompletionPortOnSuccess))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.SetFileCompletionNotificationModes)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(TargetVReg.virtual(syncSilencedPtrId), disp: 0, src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
 	end 'lowerOsPipeCreateWin64'
 
-	// Lower `osIocpCreate` to `CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1)`. INVALID_HANDLE_VALUE is a
-	// FULL 64-bit -1, so it uses `movRegImm` (64-bit) — `movRegImm32` would zero-extend to 0x00000000FFFFFFFF, a
-	// different (invalid) handle.
 	// ⭐ **R4.1: `CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
 	// NULL)`** — the file-IO runtime's OPEN primitive, and the first site in this file that opens an actual
 	// FILE rather than the far end of a named pipe.
@@ -3723,6 +3758,81 @@ export type StdToX64Lowering
 
 	// A socket is a DESCRIPTOR under POSIX, so the syscall route reaches the same `close` the file band does
 	// — `closesocket` exists only because a Win32 `SOCKET` is not a file `HANDLE`.
+	// ⭐⭐ **THE OVERLAPPED TRANSFER PAIR — `WSARecv`/`WSASend`, EACH SEVEN ARGUMENTS.** The three stack words go
+	// down first, while every argument register is still free, which is `lowerNetpollWaitWin64`'s order and for
+	// its reason.
+	function lowerOsSocketOverlapped(resultId ValueId, verb SocketOverlappedVerb, operands ValueIdArray, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsSocketOverlappedWin64(resultId, verb: verb, operands: operands, dstBlock: dstBlock)
+			syscall then panic("lowerOsSocketOverlapped: `osSocketOverlapped` is an OVERLAPPED Winsock transfer and a raw-syscall lane has no Winsock — its sockets are driven by readiness, so `ManagedSocketRuntime.socketWaitShape` answers `polled` and emits none")
+		end 'route'
+	end 'lowerOsSocketOverlapped'
+
+	function lowerOsSocketOverlappedWin64(resultId ValueId, verb SocketOverlappedVerb, operands ValueIdArray, dstBlock IrBlock)
+		match verb 'v'
+			receive or
+				transmit then self.lowerOsSocketTransferWin64(resultId, verb: verb, operands: operands, dstBlock: dstBlock)
+
+			// `WSAEventSelect(s, event, FD_CONNECT)` — three register arguments, no overlapped tail.
+			watchConnect then self.lowerOsSocketEventSelectWin64(resultId, socket: socketOverlappedOperand(operands, index: 0), event: socketOverlappedOperand(operands, index: 1), dstBlock: dstBlock)
+			stopWatchingConnect then self.lowerOsSocketStopEventSelectWin64(resultId, socket: socketOverlappedOperand(operands, index: 0), dstBlock: dstBlock)
+		end 'v'
+	end 'lowerOsSocketOverlappedWin64'
+
+	function lowerOsSocketTransferWin64(resultId ValueId, verb SocketOverlappedVerb, operands ValueIdArray, dstBlock IrBlock)
+		match verb 'v'
+			receive then self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(WsaFlagsSlot), src: TargetVReg.virtual(socketOverlappedOperand(operands, index: 2)), width: X64AccessWidth.word64))
+			transmit then self.emitWin64StackArgImm(dstBlock, slot: WsaFlagsSlot, value: WsaSendNoFlags)
+
+			watchConnect or
+				stopWatchingConnect then panic("lowerOsSocketTransferWin64: the event-select pair is not an overlapped transfer — `lowerOsSocketOverlappedWin64` routes it to its own emitter")
+		end 'v'
+
+		// The OVERLAPPED is operand 3 for a receive and operand 2 for a send — the one place the two shapes differ
+		// past the flags word, because a send has no pointer to read its flags out of.
+		let overlapped = match verb 'ovl'
+			receive gives socketOverlappedOperand(operands, index: 3)
+			transmit gives socketOverlappedOperand(operands, index: 2)
+			watchConnect or
+				stopWatchingConnect panic("lowerOsSocketTransferWin64: the event-select pair carries no OVERLAPPED — the arm above has already refused it")
+		end 'ovl'
+
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(WsaOverlappedSlot), src: TargetVReg.virtual(overlapped), width: X64AccessWidth.word64))
+		self.emitWin64StackArgImm(dstBlock, slot: WsaCompletionRoutineSlot, value: WsaNoCompletionRoutine)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(socketOverlappedOperand(operands, index: 0))))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(socketOverlappedOperand(operands, index: 1))))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: WsaOneBuffer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: WsaNoTransferOutParam))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(self.socketOverlappedSlot(verb))))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsSocketTransferWin64'
+
+	function socketOverlappedSlot(verb SocketOverlappedVerb) returns IatSlot
+		return match verb 'v'
+			receive gives IatSlot.WSARecv
+			transmit gives IatSlot.WSASend
+			watchConnect or
+				stopWatchingConnect panic("socketOverlappedSlot: the event-select pair never reaches the transfer's shared tail")
+		end 'v'
+	end 'socketOverlappedSlot'
+
+	// `WSAEventSelect(s, event, FD_CONNECT)` — three register arguments.
+	function lowerOsSocketEventSelectWin64(resultId ValueId, socket ValueId, event ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(socket)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(event)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: WsaFdConnect))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.WSAEventSelect)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsSocketEventSelectWin64'
+
+	function lowerOsSocketStopEventSelectWin64(resultId ValueId, socket ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(socket)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: WsaNoEventObject))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: WsaNoNetworkEvents))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.WSAEventSelect)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsSocketStopEventSelectWin64'
+
 	function lowerOsSocketClose(sockId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsWin64Call1(IatSlot.closesocket, arg0: sockId, dstBlock: dstBlock)
@@ -3735,10 +3845,22 @@ export type StdToX64Lowering
 	// `syscall` in hardware.
 	function lowerOsSocketError(resultId ValueId, sockId ValueId, valuePtrId ValueId, lenPtrId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
-			importCall then panic("lowerOsSocketError: `osSocketError` reads the outcome of a NON-BLOCKING connect, and x64-windows connects blocking — `ManagedSocketRuntime.emitSocketConnectWait` emits this op only under `SocketWaitShape.polled`, which that lane is not")
+			importCall then self.lowerOsSocketErrorWin64(resultId, sockId: sockId, valuePtrId: valuePtrId, lenPtrId: lenPtrId, dstBlock: dstBlock)
 			syscall then self.lowerOsSocketErrorLinux(resultId, sockId: sockId, valuePtrId: valuePtrId, lenPtrId: lenPtrId, dstBlock: dstBlock)
 		end 'route'
 	end 'lowerOsSocketError'
+
+	// `getsockopt(s, SOL_SOCKET, SO_ERROR, valuePtr, lenPtr)` — the verdict a completed non-blocking handshake
+	// left on the socket. The one stack argument goes down first, while every argument register is still free.
+	function lowerOsSocketErrorWin64(resultId ValueId, sockId ValueId, valuePtrId ValueId, lenPtrId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(SocketOptionLengthSlot), src: TargetVReg.virtual(lenPtrId), width: X64AccessWidth.word64))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(sockId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: WinsockSolSocket))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: WinsockSoError))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r9), srcReg: TargetVReg.virtual(valuePtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.getsockopt)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsSocketErrorWin64'
 
 	function lowerOsSocketErrorLinux(resultId ValueId, sockId ValueId, valuePtrId ValueId, lenPtrId ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdi), srcReg: TargetVReg.virtual(sockId)))
@@ -3875,7 +3997,7 @@ export type StdToX64Lowering
 			wait then self.lowerNetpollWaitWin64(resultId, operands: operands, dstBlock: dstBlock)
 			raiseBreak then self.lowerNetpollRaiseBreakWin64(resultId, port: netpollOperand(operands, index: 0), dstBlock: dstBlock)
 			drainBreak then panic("lowerOsNetpollWin64: `drainBreak` is the epoll shape's read of its eventfd, and x64-windows is `NetpollShape.completionPort`, whose break is consumed by receiving its packet — `NetpollRuntime` emits this verb only under `NetpollShape.epoll`")
-			armSource then panic("lowerOsNetpollWin64: `armSource` registers a SOCKET with the poller, and x64-windows registers none — its socket band is blocking, so `NetpollRuntime.installNetpollRuntime` does not build `__np_pd_open`, the verb's only producer, on `NetpollShape.completionPort`")
+			armSource then self.lowerNetpollArmSourceWin64(resultId, poller: netpollOperand(operands, index: 0), fd: netpollOperand(operands, index: 1), dstBlock: dstBlock)
 			armPipeSource then panic("lowerOsNetpollWin64: `armPipeSource` makes a pipe end non-blocking and registers it for reading, and this lane's pipes are OVERLAPPED and were given to the port when they were created — `NetpollRuntime.__np_pipe_open` emits nothing here")
 			openChildSource then panic("lowerOsNetpollWin64: `openChildSource` asks the HOST for a descriptor that reports a child's exit, and Windows has none — `NetpollRuntime.__np_child_open` allocates this lane's source key itself")
 			armChildSource then self.lowerNetpollArmChildWin64(resultId, child: netpollOperand(operands, index: 2), source: netpollOperand(operands, index: 1), callback: netpollOperand(operands, index: 3), dstBlock: dstBlock)
@@ -3889,6 +4011,19 @@ export type StdToX64Lowering
 			shortSleep then self.lowerNetpollYieldWin64(resultId, dstBlock: dstBlock)
 		end 'v'
 	end 'lowerOsNetpollWin64'
+
+	// ⭐⭐ **`CreateIoCompletionPort(socket, poller, NetpollOverlappedToken, 0)` — HOW A SOCKET JOINS THE PORT.**
+	// A completion key is fixed per HANDLE, so it cannot name one of several transfers in flight on one socket;
+	// what it says is only *"this packet is an overlapped transfer"*, and the packet's `lpOverlapped` names the
+	// operation. `NumberOfConcurrentThreads` is read only when the port is CREATED, so 0 here is not a limit.
+	function lowerNetpollArmSourceWin64(resultId ValueId, poller ValueId, fd ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(fd)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(poller)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm(x64PhysReg(X64Register.r8), value: NetpollOverlappedToken as MachineWord))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: IocpNoConcurrentThreads))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateIoCompletionPort)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerNetpollArmSourceWin64'
 
 	function lowerNetpollYieldWin64(resultId ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.SwitchToThread)))
@@ -4473,22 +4608,6 @@ export type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.GetModuleFileNameA)))
 	end 'lowerOsExecutablePathWin64'
 
-	function lowerOsIocpCreate(resultId ValueId, dstBlock IrBlock)
-		match x64OsCallKind(self.target.os) 'route'
-			importCall then self.lowerOsIocpCreateWin64(resultId, dstBlock: dstBlock)
-			syscall then panic("lowerOsIocpCreate: `osIocpCreate` reached the x64-linux isel — a completion port is emitted ONLY by `GtRuntime.buildIoInit`, which is built under `IoCompletionShape.completionPort`, and every POSIX lane answers `inlineCompletion` (a read completes in its caller, so there is nothing to poll and nothing to wake). Reaching here means the IO-completion shape fork was bypassed")
-		end 'route'
-	end 'lowerOsIocpCreate'
-
-	function lowerOsIocpCreateWin64(resultId ValueId, dstBlock IrBlock)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm(x64PhysReg(X64Register.rcx), value: InvalidHandleValue))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: NullPointer))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: IocpNoCompletionKey))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: IocpSingleConcurrentThread))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateIoCompletionPort)))
-		self.emitCaptureRax(dstBlock, resultId: resultId)
-	end 'lowerOsIocpCreateWin64'
-
 	// Lower `osEventCreate` to `CreateEventA(NULL, FALSE, FALSE, NULL)` — an AUTO-reset, initially-unsignaled event.
 	function lowerOsEventCreate(resultId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
@@ -4622,15 +4741,15 @@ export type StdToX64Lowering
 	end 'lowerOsLastErrorWin64'
 
 	// Lower `osCancelIo(handle, ovl)` to `CancelIoEx(handle, ovl)` — args rcx/rdx, result ignored. The
-	// in-flight-reader-promise DROP path cancels the specific pending overlapped read so the completion thread
-	// drains it (an ERROR_OPERATION_ABORTED packet) and is DONE with the GT before the drop arm frees it.
+	// A dropped reader cancels its own pending overlapped read so the kernel posts its ERROR_OPERATION_ABORTED
+	// packet at once, and waits for that packet before it unwinds.
 	function lowerOsCancelIo(handleId ValueId, ovlId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsWin64Call2(IatSlot.CancelIoEx, arg0: handleId, arg1: ovlId, dstBlock: dstBlock)
 
-			// A RUNTIME abort naming an op that is statically reachable and dynamically unreachable: nothing on
-			// this lane sets a green thread's `ioParked`, so `__gt_promise_drop`'s IO-cancel arm cannot fire.
-			// A compile-time panic here would refuse every program that merely CONTAINS the arm.
+			// A RUNTIME abort naming an op that is statically reachable and dynamically unreachable: a read on
+			// this lane completes in its caller, so the renounced arm that cancels an in-flight one cannot
+			// fire. A compile-time panic here would refuse every program that merely CONTAINS the arm.
 			syscall then self.lowerRuntimeAbort(dstBlock, message: X64LinuxNoCancelIoMessage)
 		end 'route'
 	end 'lowerOsCancelIo'
@@ -5117,9 +5236,8 @@ export type StdToX64Lowering
 			witnessCall gives false
 			witnessTryCall gives false
 
-			// P1.5 dogfood slice 1a: an IOCP op is never a terminator, let alone a float-equality condBranch.
+			// An OS-primitive op is never a terminator, let alone a float-equality condBranch.
 			osPipeCreate or
-				osIocpCreate or
 				osEventCreate or
 				osThreadCreate or
 				osLockInit or
@@ -5217,7 +5335,8 @@ export type StdToX64Lowering
 				osUnpublishNamedSegment or
 				covPoint or
 				osHostSample or
-				osNetpoll gives false
+				osNetpoll or
+				osSocketOverlapped gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -5392,7 +5511,6 @@ export type StdToX64Lowering
 			witnessCall panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a witness call, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			witnessTryCall panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a throwing witness call, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osPipeCreate or
-				osIocpCreate or
 				osEventCreate or
 				osThreadCreate or
 				osLockInit or
@@ -5467,6 +5585,7 @@ export type StdToX64Lowering
 			covPoint panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a coverage counter, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osHostSample panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osHostSample`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osNetpoll panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osNetpoll`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			osSocketOverlapped panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osSocketOverlapped`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 
