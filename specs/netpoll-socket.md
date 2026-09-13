@@ -258,3 +258,195 @@ dropped=true
 ```exitcode
 0
 ```
+
+<!-- test: netpoll-socket.a-parked-reader-survives-its-owner-closing-the-socket -->
+<!-- procs: 1 -->
+<!-- network: live -->
+<!-- unsupported-targets: x64-windows -->
+**AN `async` ARGUMENT CO-OWNS THE SOCKET BOX, SO THE OWNER CAN CLOSE IT WHILE THE COROUTINE IS PARKED ON IT.**
+A coroutine shares its spawner's strand — only one of the two RUNS at a time — but a PARKED coroutine and a
+running owner are exactly the pair that can be alive at once, and the `async` door takes a reference on the box
+rather than a copy of the descriptor (`Parser.coOwnConcreteRecordForSink`). So `client.close()` reaches
+`__np_pd_release` on a descriptor with a published waiter, which is a state a program can build.
+
+⭐ **THE RELEASE READIES THE WAITER, IT DOES NOT STRAND IT AND IT DOES NOT ABORT.** A direction word holding a
+green thread is the only pointer anything has to it, so the release resumes that thread with every word of the
+record back to its born state and the record's generation bumped: the resumed wait sees a record that has
+moved on, answers `NetpollWaitStale`, and the operation reports its own failure — `recvFailed`, never
+`timedOut` — having issued no syscall on a descriptor that may already name another socket. Dropping the
+waiter would hang the exit with the deadlock detector disarmed, and aborting would kill a program that did
+nothing wrong.
+
+⚠ **`parked > 0` IS WHAT MAKES THIS A POLLER CASE.** Without it, a reader that merely yielded ahead of its
+kernel call — or one that never ran — satisfies the rest of the program just as well, and the case would read
+green against a release that never met a waiter at all.
+
+⚠ **x64-windows IS MARKED BECAUSE NO SOCKET IS REGISTERED WITH ITS POLLER**, so its reader parks on nothing,
+`__np_pd_release` finds no record, and the state this case is about cannot be reached there.
+```maxon
+// Exactly the four outcomes the match below can produce: 0 for a read that returned data, and one per
+// `NetworkError` variant a closed-under-it read can raise.
+typealias ReadOutcome = int(0 to 3)
+
+// The peer echoes and is sent nothing, so this read parks and stays parked until the owner closes under it.
+function readUntilClosed(client TcpClient) returns ReadOutcome
+	var code = 0
+
+	try client.recv(1024) otherwise (e) 'readErr'
+		match e 'which'
+			recvFailed then code = 1
+			connectionClosed then code = 2
+			timedOut then code = 3
+			default panic("unreachable: a read whose socket closes under it ends in one of the three above")
+		end 'which'
+	end 'readErr'
+
+	return code
+end 'readUntilClosed'
+
+function main() returns ExitCode
+	let client = try TcpClient.connect("tcpbin.com", port: 4242) otherwise return 1
+
+	let before = __Builtins.schedNetpollBlockCount()
+	let reader = async readUntilClosed(client)
+	sleep(200)
+	let parked = __Builtins.schedNetpollBlockCount() - before
+
+	client.close()
+	let code = await reader
+
+	print("parked={parked > 0} code={code}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+parked=true code=1
+```
+```exitcode
+0
+```
+
+<!-- test: netpoll-socket.a-readied-waiter-does-not-clobber-the-next-owner-of-its-descriptor -->
+<!-- procs: 1 -->
+<!-- network: live -->
+<!-- unsupported-targets: x64-windows -->
+**A RELEASE LEAVES ITS RECORD IN THE TABLE, SO THE NEXT SOCKET ON THAT DESCRIPTOR INHERITS IT — AND THE
+THREAD THE RELEASE READIED IS STILL HOLDING A POINTER TO IT.** `__np_pd_release` readies the waiter and
+returns the record's words to their born state, but the table slot goes on naming that record, so
+`__np_pd_open` on a recycled descriptor hands the SAME record to the next socket. A resumed waiter that
+writes its direction word without first asking whether the record is still its own writes over whatever the
+new owner published there — and a direction word is the only pointer anything holds to a parked thread, so
+the new owner is stranded with `__np_waiters` still counting it: a hang with the deadlock detector disarmed.
+
+⭐ **THE DESCRIPTOR REUSE IS DETERMINISTIC, NOT HOPEFUL.** POSIX requires `socket()` to return the
+LOWEST-NUMBERED descriptor not currently open by the process, so closing the only socket this program holds
+and immediately connecting again returns that same number — there is no other free descriptor below it for
+the kernel to choose. That is why the case closes exactly one socket and opens exactly one, in that order,
+and holds nothing else open in between.
+
+⚠ **THE WITNESS IS THAT THE SECOND CONNECTION'S READ COMPLETES AT ALL.** A stranded reader is not a wrong
+answer, it is a thread nothing can ever wake, so the shape of the failure is the case never finishing —
+the runner reports it as TIMED OUT rather than as a mismatch. The echo is sent first so that a read on a
+HEALTHY socket has an answer waiting for it, which is what makes "never returned" mean the strand and not
+the peer.
+
+⚠⚠ **IT IS A GUARD OVER AN INVARIANT, NOT A REPRODUCTION.** On one strand the readied thread runs at the
+owner’s very next yield, which is inside the second `connect` — before that socket publishes anything — so
+this ordering does not reach the clobber even with the generation test removed, and the case passes either
+way. What it holds is the descriptor reuse itself: nothing else in the corpus closes a socket and opens
+another onto the same record, so without it the recycle path has no coverage at all.
+```maxon
+typealias ReadOutcome = int(0 to 3)
+
+// Nothing is ever sent on this connection, so this read parks and is still parked when the owner closes.
+function readNothing(client TcpClient) returns ReadOutcome
+	var code = 0
+
+	try client.recv(1024) otherwise (e) 'readErr'
+		match e 'which'
+			recvFailed then code = 1
+			connectionClosed then code = 2
+			timedOut then code = 3
+			default panic("unreachable: a read whose socket closes under it ends in one of the three above")
+		end 'which'
+	end 'readErr'
+
+	return code
+end 'readNothing'
+
+function main() returns ExitCode
+	let first = try TcpClient.connect("tcpbin.com", port: 4242) otherwise return 1
+
+	let stale = async readNothing(first)
+	sleep(200)
+	first.close()
+
+	// The lowest free descriptor is the one just closed, so this connection inherits the released record.
+	var second = try TcpClient.connect("tcpbin.com", port: 4242) otherwise return 2
+	_ = try second.send("reuse\n") otherwise return 3
+	let echo = try second.recv(1024) otherwise return 4
+
+	let outcome = await stale
+	let echoed = echo == "reuse\n"
+	print("echoed={echoed} outcome={outcome}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+echoed=true outcome=1
+```
+```exitcode
+0
+```
+
+<!-- test: netpoll-socket.two-readers-on-one-socket-is-a-named-stop -->
+<!-- procs: 1 -->
+<!-- network: live -->
+<!-- unsupported-targets: x64-windows -->
+**TWO GREEN THREADS READING ONE SOCKET IS A PROGRAM ERROR, AND IT STOPS WITH A NAMED ABORT.** A direction
+word holds ONE waiter, so a second wait on the same direction would overwrite the first's publication and
+the first would never be woken again. `__np_pd_wait` refuses that outright rather than losing a thread
+silently — `RuntimeAbort.netpollDoubleWait`, exit **107**.
+
+⭐ **AND THE REFUSAL IS RIGHT HERE WHERE ITS NEIGHBOUR'S WAS NOT.** Two readers racing one byte stream have
+no defined answer — whichever wakes first takes bytes the other was going to return — so naming the stop is
+the service. That is the opposite of a release finding a parked waiter, which happens to a program that did
+nothing wrong and is answered by readying the waiter rather than by stopping.
+
+⚠ **THE ORDER IS DETERMINISTIC BECAUSE THE SLEEP IS THE HANDOVER.** The coroutine shares its spawner's
+strand and runs when the spawner yields, so the `sleep` is what lets it reach its read and publish itself
+on the direction word; the owner's own read then arrives second, every time.
+```maxon
+typealias ReadOutcome = int(0 to 3)
+
+function readNothing(client TcpClient) returns ReadOutcome
+	var code = 0
+
+	try client.recv(1024) otherwise (e) 'readErr'
+		match e 'which'
+			recvFailed then code = 1
+			connectionClosed then code = 2
+			timedOut then code = 3
+			default panic("unreachable: a read on a socket nothing writes to ends in one of the three above")
+		end 'which'
+	end 'readErr'
+
+	return code
+end 'readNothing'
+
+function main() returns ExitCode
+	let client = try TcpClient.connect("tcpbin.com", port: 4242) otherwise return 1
+
+	let first = async readNothing(client)
+	sleep(200)
+
+	// The coroutine is published on this socket's READ direction, so this second read is the refusal.
+	try client.recv(1024) otherwise ignore
+
+	let unreachable = await first
+	return unreachable as ExitCode
+end 'main'
+```
+```exitcode
+107
+```

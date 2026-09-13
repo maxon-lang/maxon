@@ -253,3 +253,72 @@ end 'main'
 ```stdout
 FileAFileB
 ```
+
+<!-- test: async-filesystem.async-read-through-a-handle-holding-struct -->
+### A struct holding a `__ManagedFile`, spawned as an `async` argument
+⭐ **AN `async` ARGUMENT IS CO-OWNED, NEVER DEEP-COPIED, AND A HANDLE BOX IS WHY THAT DISTINCTION IS
+LOAD-BEARING.** A coroutine shares its spawner's strand — only one of the two runs at a time — so a second
+owner of an OS handle is safe where a second DESCRIPTOR would not be: duplicating one hands two owners a
+handle whose `__mf_destruct` closes it once. The argument door therefore increfs the box
+(`Parser.emitOwnBoxForSink`), and the deep-copy road is refused for exactly the types
+`typeSupportsDeepClone` refuses.
+```maxon
+enum HolderError implements Error
+	openFailed
+end 'HolderError'
+
+type Holder
+	export var f as __ManagedFile
+
+	export static function openRead(path __ManagedMemory) returns Holder throws HolderError
+		let handle = try __ManagedFile.openRead(path) otherwise 'fail'
+			throw HolderError.openFailed
+		end 'fail'
+		return Holder{f: handle}
+	end 'openRead'
+end 'Holder'
+
+function readOn(h Holder) returns String throws HolderError
+	let size = try h.f.size() otherwise 'sizeFail'
+		throw HolderError.openFailed
+	end 'sizeFail'
+	var buffer = try __ManagedMemory.create(size + 1, 1) otherwise 'allocFail'
+		throw HolderError.openFailed
+	end 'allocFail'
+	let bytesRead = try h.f.read(buffer, size) otherwise 'readFail'
+		throw HolderError.openFailed
+	end 'readFail'
+	try buffer.setLength(bytesRead) otherwise 'lenFail'
+		throw HolderError.openFailed
+	end 'lenFail'
+	return String.init(buffer)
+end 'readOn'
+
+// The holder's own scope ends here, so its handle is closed before `main` deletes the file.
+function readHolder(name String) returns String
+	let holder = try Holder.openRead(name.toByteArray().managed) otherwise 'openFail'
+		return "OPENFAILED"
+	end 'openFail'
+
+	let p = async readOn(holder)
+	return try await p otherwise "READFAILED"
+end 'readHolder'
+
+function main() returns ExitCode
+	let path = FilePath from "async_handle_holder.txt"
+	try File.writeText(path, content: "HandleRead") otherwise 'writeFail'
+		return 1
+	end 'writeFail'
+
+	let content = readHolder("async_handle_holder.txt")
+	try File.delete(path) otherwise ignore
+	print("{content}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+HandleRead
+```

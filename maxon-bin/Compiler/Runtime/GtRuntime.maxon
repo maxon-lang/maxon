@@ -326,6 +326,14 @@ let GtOffParkKind = GtOffCoroTail + PointerFieldBytes
 // EXPORTED because `NetpollRuntime` reads a netpoll park's `(fd, mode)` note out of it.
 export let GtOffParkArg = GtOffParkKind + PointerFieldBytes
 
+// ⭐⭐ **WHICH LIFE OF ITS POLL RECORD A NETPOLL PARK BELONGS TO** (`NetpollRuntime.PdOffGen`). A netpoll
+// park is registered on the FAR side of the context switch (`__np_pd_commit`, out of `__gt_register_park`),
+// by which time the descriptor may have been closed, reused and reopened onto that same record — and the
+// only mark the commit could otherwise test, `PdWait`, reads identically across two lives of it. So the wait
+// stamps the record's generation here before it switches, and the commit publishes only on a match.
+// A park of any other kind never reads this and never writes it.
+export let GtOffParkGen = GtOffParkArg + PointerFieldBytes
+
 // ⭐⭐⭐ **WHAT THIS GREEN THREAD HAS ALLOCATED AND FREED — the memory columns a POOL can be measured with,
 // and the process-wide ones structurally cannot.** `__mm_alloc_total` and its five siblings are one set of
 // words for the whole process, so a bracket opened inside one worker counts every other worker's traffic
@@ -352,7 +360,7 @@ export let GtOffParkArg = GtOffParkKind + PointerFieldBytes
 //
 // EXPORTED because the allocator steps them and the readers below are reached from `MmRuntime`'s counter
 // family, which is where a caller looks for a memory column.
-export let GtOffThreadAllocs = GtOffParkArg + PointerFieldBytes
+export let GtOffThreadAllocs = GtOffParkGen + PointerFieldBytes
 export let GtOffThreadFrees = GtOffThreadAllocs + PointerFieldBytes
 export let GtOffThreadAllocBytes = GtOffThreadFrees + PointerFieldBytes
 

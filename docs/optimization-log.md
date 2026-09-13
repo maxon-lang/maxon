@@ -617,14 +617,47 @@ is a single sample and moves a few percent.
   both walks that run per site — `unionPayloadsSupportDeepClone` and the new
   `Parser.requireUnionHoldsNoGreenThread` — call `classifyUnionPayload` once per payload, which returns
   a BOXED union, so the same product is quadratic in ALLOCATIONS: marginal **×2.96, ×3.30, ×3.58, ×3.76**
-  over C = 25…800 cases × C clone sites. **Filed rather than fixed because the population is bounded to
-  the point of being empty:** the whole compiler + stdlib holds 122 `.clone()` sites, and the union
-  clone door is new, so it has ZERO sites outside the new specs. **Named cure:** memoize
-  `aggregateSupportsDeepClone` by aggregate name at its FRESH-`visited` entry ONLY — never in
-  `aggregateNameSupportsDeepClone`, whose answer is computed under the cycle-break assumption that a
-  name already in flight is clonable and is therefore not a stand-alone truth. The green-thread walk
-  needs an answer of its own, because it also carries the float-payload refusal and must keep throwing
-  at every site.
+  over C = 25…800 cases × C clone sites. **Named cure:** memoize `aggregateSupportsDeepClone` by aggregate
+  name at its FRESH-`visited` entry ONLY — never in `aggregateNameSupportsDeepClone`, whose answer is
+  computed under the cycle-break assumption that a name already in flight is clonable and is therefore not
+  a stand-alone truth. The green-thread walk needs an answer of its own, because it also carries the
+  float-payload refusal and must keep throwing at every site.
+
+- ✅ **THE CURE ABOVE IS IMPLEMENTED — BUT NOT AS NAMED, BECAUSE THE NAMED SHAPE WAS MEASURED AND DOES NOT PAY
+  (2026-09-12).** Two things were wrong with the deferral. **First, the bound.** It was *"the population is
+  bounded to the point of being empty — 122 `.clone()` sites in the whole compiler + stdlib"*. `.clone()`
+  tokens are not the population: the same gate is asked by `Parser.coOwnConcreteRecordForSink` →
+  `valueIsAnImageableDeepBox` → `structBoxIsImageableWithSlots` → `structBoxHasADeepCloner`, **once per borrowed
+  struct value that reaches a durable sink** — every consumed argument, field store and element push over a
+  struct with a container or nested-struct field and no `String` field. **Second, the memo is not simply
+  sound.** `instanceGraphSupportsDeepClone`’s trivial-element arm reaches `containerOpaqueElementCanBeManaged`
+  → `anyInstanceTypeArgHasKind` → `instanceWithTypeArgKind`, which SCANS `instancesOfBase` and skips
+  speculative rows — and `Parser.internGenericInstanceOf` mints rows and clears speculative marks DURING
+  parsing. For a name whose graph reaches `Array with <a bare type parameter>` the true answer moves between
+  two asks, so an unguarded memo freezes the wrong one: a spurious E2015, or a `direct` stamp whose cascade
+  cannot be built.
+  **Ladder: `tests/ladders/genclonegate.sh`** (`<sites> <fields> <gate|control>`; `control` appends a `String`
+  field, which classifies `notImageable` and short-circuits the `and` before the walk, so the DIFFERENCE
+  between the modes is the walk alone). MEASURED x64-windows, interleaved in one session, `phase:parse`:
+
+  | reading | no memo | memo + REGISTRY-REVISION drop | memo + READ flag |
+  |---|---|---|---|
+  | gate−control allocations, sites 100·200·400 @ fields 8 | 2,686 · 5,378 · 10,803 | 3,999 · 7,991 · 16,016 | 1,694 · 3,386 · 6,811 |
+  | gate−control CPU ticks (min of 3), fields 8·64·256 @ sites 400 | 13.5M · 115.0M · **405.4M** | 20.8M · 97.1M · **441.0M** | 9.6M · 21.0M · **−24.6M** |
+
+  ⇒ **A REVISION COUNTER ON THE REGISTRY, DROPPING THE MAP WHENEVER IT MOVES, IS CORRECT AND WORTHLESS.** The
+  registry is edited continuously through parsing, which is the same phase the gate is asked in, so every ask
+  finds the map empty and pays the walk PLUS the re-creation: **40 allocations per site against 27 with no memo
+  at all**, and 441M ticks against 405M. It was implemented, measured, and removed.
+  ⇒ **WHAT PAYS IS REFUSING TO CACHE THE VOLATILE ANSWERS RATHER THAN CHASING THEM.** The two doors that read
+  a row SET — `instanceWithTypeArgKind` and `genericTypeIsInstantiated` — mark the walk in flight, and only an
+  unmarked walk’s answer is kept. Nothing that survives can go stale, so nothing has to be invalidated. The
+  graph term is then gone: at 400 sites over a 256-field graph the gate cost **405M ticks, 70% of the whole
+  `phase:parse`**, and the two modes now differ by less than the noise band (the delta is NEGATIVE).
+  ◑ **A RESIDUAL IS MEASURED AND LEFT: 16.9 allocations per site**, and it is `managedNameCascadeStrategy`,
+  the OTHER half of `structBoxHasADeepCloner` — it mints a `__clone_<T>` symbol ByteArray per ask. It is flat
+  in `fields` in both columns, which is what says it is the symbol mint and not a graph walk. **Named cure:**
+  memoize the per-name strategy on (name, asElement, action), which `structBoxCloneCallee` would share.
 
 - ⚠ **AND THE STANDING INSTRUMENT CANNOT SEE ANY OF THE THREE, FOR ONE STRUCTURAL REASON: `ScaleCorpus`
   GROWS THE NUMBER OF FUNCTIONS, NOT THE SIZE OF ONE.** Every term above is quadratic in a per-FUNCTION-

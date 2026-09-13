@@ -33,9 +33,10 @@
 // reports another abort's number, so it was deleted rather than kept as a number this space defends
 // against a claimant that no longer exists.
 //
-// ⚠⚠ **77 AND 80 ARE NOT HERE EITHER, FOR THAT SAME RULE APPLIED TWICE MORE (W49 wave 7)** — and the
-// second of them is why the first was found, because a comment reserving 80 tried to cite 77 as its
-// precedent and 77 turned out to be rot itself.
+// ⚠⚠ **80 IS NOT HERE EITHER, FOR THAT SAME RULE APPLIED ONCE MORE (W49 wave 7)**, and the case it was
+// retired alongside — `stringSliceInvalidRange`, a dead claim since W49 wave 4 deleted
+// `Runtime/StringIndexRuntime.maxon` — held the number 77, which a LATER abort has since taken:
+// `managedListNodeNotInThisChain` is declared at 77 below. So 77 is LIVE and only 76, 80 and 108 are vacant.
 //   • **80 was `stringByteAtOutOfRange`**, an out-of-range `__str_byte_at_or_panic`. It got a NUMBER
 //     rather than a message for exactly one recorded reason: The compiler answered that failure from a
 //     SYNTHESIZED runtime function *"which has no source line and no message to bake"*, so it could not
@@ -43,12 +44,7 @@
 //     IS `try byteAt(index) otherwise panic("String.byteAtOrPanic: index out of bounds — …")` — ordinary
 //     Maxon with a real line and a real message. ⇒ The abort's whole justification dissolved: that
 //     failure now reaches `osPanic` with an ordinary message and a real source line.
-//   • **77 was `stringSliceInvalidRange`**, and it had been a dead claim since W49 wave 4 deleted
-//     `Runtime/StringIndexRuntime.maxon` — its documented emitter `__strix_slice` went with that file and
-//     nothing has referenced the case since. It is retired here rather than left, because this file
-//     defines a case nothing emits as rot and a registry that tolerates one instance of its own defect
-//     cannot be cited about the next.
-// ⇒ **THE NEXT ENTRY TAKES THE NEXT FREE NUMBER ABOVE 70, WHICH IS 107.** 76 and 80 are vacant and stay so:
+// ⇒ **THE NEXT ENTRY TAKES THE NEXT FREE NUMBER ABOVE 70, WHICH IS 109.** 76, 80 and 108 are vacant and stay so:
 // reserving a vacated number would be this space defending against a claimant that no longer exists — the
 // very thing the paragraph above rejects.
 export enum RuntimeAbort
@@ -388,14 +384,15 @@ export enum RuntimeAbort
 	// the instruction that produced it rather than losing a thread silently.
 	netpollDoubleWait = 107
 
-	// `__np_pd_open` / `__np_pd_release`: a descriptor's record was reset while a green thread was still
-	// PUBLISHED on one of its direction words. That word is the only pointer anything holds to the thread, so
-	// zeroing it strands it for ever — and, because the published-waiter count feeds both the poller's
-	// owed test and the exit drain, the process would then never leave the drain with the deadlock detector
-	// explicitly disarmed. It is unreachable today (`ManagedSocketRuntime`'s header carries the proof), which
-	// is exactly why a silent clear would be the wrong guard: the shape that makes it reachable is a caller
-	// nobody has written yet.
-	netpollReleaseWithWaiter = 108
+	// ⚠ **108 IS RETIRED, NOT REUSABLE.** It was `netpollReleaseWithWaiter` — `__np_pd_open` / `__np_pd_release`
+	// finding a green thread still PUBLISHED on a direction word of the record they were about to reset. It was
+	// admitted on the argument that no two green threads could name one socket box, which was never true of a
+	// co-owning `async` argument: a parked coroutine and a running owner hold one socket, and `client.close()`
+	// under a parked `recv` reached it. The release READIES such a waiter instead (`NetpollRuntime`'s
+	// `emitNetpollPdClear`), so nothing emits the code and a live registry may not go on claiming the number.
+	// It is left VACANT for this registry's founding reason: an exit code is read by a debugger against
+	// whatever the tree said at the time, and a recycled number makes two different faults indistinguishable
+	// in an old log.
 end 'RuntimeAbort'
 
 // ⭐ **THE PANIC LINE ITSELF — `panic at <file>:<line>: <text>\n` — WRITTEN ONCE.**

@@ -451,16 +451,31 @@ function emitSocketPolledRetry(module StdModule, func IrFunction, attempt IrBloc
 	let notReady = emitSocketWouldBlock(module, block: classify, answer: answer, target: target, ids: ids)
 	module.setTerminator(classify, op: StdOp.condBranch(notReady, thenBlockId: waitReady.id, elseBlockId: failed.id))
 
-	emitSocketWaitReady(module, block: waitReady, socket: socket, mode: mode, timedOut: timedOut, ready: attempt, ids: ids)
+	emitSocketWaitReady(module, func: func, block: waitReady, socket: socket, mode: mode, timedOut: timedOut, stale: failed, ready: attempt, ids: ids)
 end 'emitSocketPolledRetry'
 
-// Suspend on `socket`'s poll descriptor until `mode` is ready, then `ready`; or `timedOut` when that
-// direction's deadline ended the wait first.
-function emitSocketWaitReady(module StdModule, block IrBlock, socket ValueId, mode ParsedInt, timedOut IrBlock, ready IrBlock, ids ValueMinter)
+// Suspend on `socket`'s poll descriptor until `mode` is ready, then `ready`; `timedOut` when that direction's
+// deadline ended the wait first; `stale` when the wait ended on a record the descriptor no longer owns.
+//
+// ⛔⛔ **`stale` MUST NOT RETRY, WHICH IS WHY IT IS A THIRD EXIT AND NOT A SECOND SPELLING OF `ready`.** The
+// descriptor in hand was decoded once at function entry (`emitLiveSocketOrThrow`), so it is a NUMBER rather
+// than a fact re-read from the box — and after a close-and-reuse that number names a live socket belonging to
+// somebody else. Retrying would read THEIR bytes when data is waiting and park on THEIR record when it is
+// not. The operation reports its own failure instead, having issued no syscall (`NetpollWaitStale`).
+//
+// ⛔ **SO A CALLER WHOSE FAILURE EXIT TOUCHES THE DESCRIPTOR OWES A SEPARATE `stale` BLOCK.** Reusing
+// `failed` is right only where it is a bare `emitErrorReturn` — recv and send. The CONNECT path's closes the
+// socket, which on this answer would be somebody else's socket; it passes its own exit for that reason.
+function emitSocketWaitReady(module StdModule, func IrFunction, block IrBlock, socket ValueId, mode ParsedInt, timedOut IrBlock, stale IrBlock, ready IrBlock, ids ValueMinter)
+	var live = module.addBlock(func, label: b"mswaitlive", heat: BlockHeat.normal)
+
 	let outcome = ids.mint()
 	module.appendOp(block, op: StdOp.call(outcome, callee: NetpollPdWaitName, args: twoArgs(socket, second: emitConst(module, block: block, value: mode, ids: ids))))
-	let late = emitCmp(module, block: block, a: outcome, b: emitConst(module, block: block, value: NetpollWaitTimedOut, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(block, op: StdOp.condBranch(late, thenBlockId: timedOut.id, elseBlockId: ready.id))
+	let gone = emitCmp(module, block: block, a: outcome, b: emitConst(module, block: block, value: NetpollWaitStale, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(block, op: StdOp.condBranch(gone, thenBlockId: stale.id, elseBlockId: live.id))
+
+	let late = emitCmp(module, block: live, a: outcome, b: emitConst(module, block: live, value: NetpollWaitTimedOut, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(live, op: StdOp.condBranch(late, thenBlockId: timedOut.id, elseBlockId: ready.id))
 end 'emitSocketWaitReady'
 
 // ⭐⭐ **THE BLOCK A DEADLINE ENDS AN OPERATION IN, AND IT REPORTS THE OPERATION'S OWN FAILURE.** The fact
@@ -777,9 +792,20 @@ function emitSocketConnectPolledWait(module StdModule, func IrFunction, cur IrBl
 	var waitWritable = module.addBlock(func, label: b"msdialready", heat: BlockHeat.normal)
 	var verify = module.addBlock(func, label: b"msdialverify", heat: BlockHeat.normal)
 
+	// ⛔⛔ **A STALE WAIT MAY NOT TAKE THE ORDINARY FAILURE EXIT, BECAUSE THAT EXIT CLOSES THE DESCRIPTOR.**
+	// `failed` here is the connect’s `closeAndFail`, which RELEASES the poll record and CLOSES the socket —
+	// right for a refused handshake, whose descriptor no box will ever own. But `NetpollWaitStale` says exactly
+	// *"this fd number may no longer be yours"*, so releasing and closing on it would reach into another
+	// socket. This exit therefore touches the descriptor not at all and reports the operation’s own failure.
+	// ⚠ **AND IT LEAKS NOTHING**: the only way this wait goes stale is that the record was reset under it,
+	// which means the descriptor this frame opened is already gone — there is nothing of ours left to close.
+	// Recv and send need no such exit: their `failed` is a bare `emitErrorReturn` that touches no descriptor.
+	var staleExit = module.addBlock(func, label: b"msdialstale", heat: BlockHeat.normal)
+	emitErrorReturn(module, block: staleExit, flag: ManagedSocketConnectFailedFlag, ids: ids)
+
 	let pending = emitSocketWouldBlock(module, block: cur, answer: answer, target: target, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(pending, thenBlockId: waitWritable.id, elseBlockId: failed.id))
-	emitSocketWaitReady(module, block: waitWritable, socket: socket, mode: NetpollModeWrite, timedOut: failed, ready: verify, ids: ids)
+	emitSocketWaitReady(module, func: func, block: waitWritable, socket: socket, mode: NetpollModeWrite, timedOut: failed, stale: staleExit, ready: verify, ids: ids)
 
 	// `getsockopt` writes a 32-bit value and reads a 32-bit length back through the same scratch, so one
 	// 8-byte block carries both — the value at 0 and the length, seeded with its own size, at 4.

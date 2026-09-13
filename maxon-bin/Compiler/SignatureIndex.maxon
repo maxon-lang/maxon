@@ -4303,6 +4303,10 @@ export typealias ByRefForwardingMap = Map with (ByteArray, bool)
 // the closure's answer, and what a forwarding edge is matched against.
 export typealias ByRefBareNameSet = Set with ByteArray
 
+// Aggregate name -> `aggregateSupportsDeepClone`'s answer for it. See that function for why one compile may
+// hold the answer at all.
+typealias DeepCloneAnswerMap = Map with (ByteArray, bool)
+
 // A bare name -> its dense node in the forwarding graph `closeByRefForwarding` closes. The CSR key space must
 // be dense and 0-based (see `CsrGraph`), and a bare name is neither, so it is interned into one.
 typealias DeclNodeIndex = Map with (ByteArray, CsrIndex)
@@ -10481,6 +10485,29 @@ export type ProgramSignatures
 	// honest answer rather than a shape-sensitive one.
 	var byRefBareNames as ByRefBareNameSet
 
+	// ⭐ The deep-clone gate's answers, one per aggregate name. A pure MEMO of a walk over declarations — it
+	// is written by `aggregateSupportsDeepClone` and read by nothing else, enters no hash, and a compile that
+	// dropped it would answer identically and only slower.
+	//
+	// ⛔⛔ **THIS FIELD AND THE ONE BELOW ARE WRITTEN FROM THE PARSE PATH, WHICH IS THE ONE THING THIS INDEX
+	// OTHERWISE FORBIDS.** `Parser.coOwnConcreteRecordForSink` reaches the gate at every durable-sink value, so
+	// these two words move while files are being parsed — against the invariant `deriveInstanceNames` and
+	// `typeParamOwners` both state outright, that *"the per-file parse fan-out may READ this index and may not
+	// write it"*. `deriveInstanceNames` exists solely to uphold it for memos of this class.
+	//
+	// ⚠ **IT IS NOT A RACE TODAY**: nothing spawns during the parse — only `StdPassPool` and `RegAllocPool`
+	// spawn at all, and neither is handed signatures. It is written down because the direction of travel is
+	// towards more parallelism, and a parallel parse would turn this into a data race no test would name.
+	// ⇒ **WHAT A PARALLEL PARSE WOULD OWE THESE TWO**: a per-worker memo merged after the fan-out, or a
+	// settle pass that answers every reachable aggregate BEFORE it — `deriveInstanceNames`’ own shape.
+	var deepCloneAnswers as DeepCloneAnswerMap
+
+	// Did the walk in flight READ the instance registry? Set by the two doors that scan a base’s row SET —
+	// `instanceWithTypeArgKind` and `genericTypeIsInstantiated` — and read by `aggregateSupportsDeepClone` to
+	// decide whether its answer may be kept. A parse-path write, exactly as the memo above is, and it carries
+	// LESS state than the map but the same obligation: see there.
+	var deepCloneWalkReadInstances as bool
+
 	// ⭐ Function name -> its `throws E` clause (P1.4b). `throwsOf(callee)` is the door a call site asks
 	// "does this callee throw, and what error type?". Filled by `recordThrows` from each file's scanned
 	// signatures; last-wins on a duplicate name (E3006 reported elsewhere), exactly as `returnTypes` is.
@@ -11071,7 +11098,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), crossKindContests: noCrossKindContests, sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: noGenericAliasContests, multiplyDeclaredGenericAliases: noDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: noNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), preVerdictInnerAliasRanges: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: NameInFileArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturnForwards: FreshReturnForwardMap.create(), freshReturnForwardsClosed: false, funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcConstructsFromParams: DeclaredBodyFactNameSet.create(), funcConstructingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: Hasher.empty(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, corpusSlotInitCallees: SlotInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), constInitializerTypeSites: NameInFileArray.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), serviceReplyErrorOwners: ServiceReplyErrorOwnerMap.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), crossKindContests: noCrossKindContests, sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: noGenericAliasContests, multiplyDeclaredGenericAliases: noDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: noNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), preVerdictInnerAliasRanges: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: NameInFileArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), deepCloneAnswers: DeepCloneAnswerMap.create(), deepCloneWalkReadInstances: false, funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturnForwards: FreshReturnForwardMap.create(), freshReturnForwardsClosed: false, funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcConstructsFromParams: DeclaredBodyFactNameSet.create(), funcConstructingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: Hasher.empty(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, corpusSlotInitCallees: SlotInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), constInitializerTypeSites: NameInFileArray.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), serviceReplyErrorOwners: ServiceReplyErrorOwnerMap.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -15941,10 +15968,13 @@ export type ProgramSignatures
 	// therefore reads the DECLARATION, where `constFieldImageSlot` reads the folded VALUE, and answers yes
 	// wherever that walk could: a struct it refuses has no imaged box with slots anywhere in the program.
 	//
-	// ⛔ **AND THE CLONER MUST EXIST**, which is the second half and not a nicety: the deep road stamps
-	// `__clone_<T>`, and a struct with an OS-handle field has no deep clone at all
-	// (`managedNameCascadeStrategy`'s `unsupported`). Such a struct can never be imaged either — no fold
-	// produces a handle — so declining it here declines nothing an image could reach.
+	// ⛔ **AND THE WHOLE FIELD GRAPH MUST BE DEEP-CLONEABLE**, which is the second half and not a nicety: the
+	// deep road stamps `__clone_<T>`, and the cascade closure behind that symbol needs a cloner for every
+	// managed field beneath it. A struct holding an OS HANDLE is `direct` at the top and carries a field
+	// (`__ManagedFile`, `__ManagedDirectory`, `__ManagedSocket`) with no cascade at all, so only the
+	// full-graph question refuses it — and refusing it costs an image nothing, because no fold produces a
+	// handle. Such a value takes the plain co-own road instead, which is the right one for it: a second
+	// OWNER of a handle box is safe where a second DESCRIPTOR is not.
 	export function structBoxIsImageableWithSlots(typeName ByteArray) returns bool
 		match self.structInAnyFile(typeName) 'declared'
 			declared(layout) then return self.everyStructSlotIsImageable(layout) and self.structBoxHasADeepCloner(typeName)
@@ -16009,15 +16039,28 @@ export type ProgramSignatures
 		return StructImageSlotKind.notImageable
 	end 'containerSlotImageKind'
 
-	// Has this struct a `(box) -> newBox` cloner at all? Asked through the very strategy the stamp is read
-	// off, so the gate and the callee cannot disagree about a name. It refuses only the compiler-owned
-	// OS-handle aggregates, which no fold can produce — it is the gate stated where the decision is, not a
-	// filter the corpus exercises.
+	// Has this struct a `(box) -> newBox` cloner whose WHOLE CASCADE can be emitted? The full-graph question
+	// is the load-bearing half: a struct is `direct` at the top — every declared struct has a `__clone_<T>` —
+	// while owning a field with no cascade at all, and `MmRuntime.noteStructCascadeNeeds` expands the stamped
+	// symbol into a cloner for every managed field, so a top-level-only answer admits a stamp whose closure
+	// cannot be built. `nameTransferWalkStrategy` asks the pair the same way round. The strategy is then asked
+	// through the very door `structBoxCloneCallee` reads the stamp off, so the gate and the callee cannot
+	// disagree about a name.
+	//
+	// ⛔ **ONLY `direct` IS A YES, BECAUSE ONLY `direct` HAS THE ONE-ARGUMENT CALLEE THE SINK STAMPS.**
+	// `__mm_own_deep` invokes the stamp as `callee(box)` and has nowhere to put a second argument, which is
+	// why `structBoxCloneCallee` answers a `managedElements` strategy with a panic — so admitting one here
+	// would be the gate and the resolver disagreeing about the same name, the shape this pair exists to rule
+	// out. Declined, such a value takes the co-own road, which is a right answer rather than a stop.
 	function structBoxHasADeepCloner(typeName ByteArray) returns bool
+		if not self.aggregateSupportsDeepClone(typeName) 'someFieldHasNoCascade'
+			return false
+		end 'someFieldHasNoCascade'
+
 		return match managedNameCascadeStrategy(self, declaredName: typeName, asElement: false, action: CascadeAction.clone) 'strategy'
-			direct or
-				managedElements gives true
-			unsupported gives false
+			direct gives true
+			managedElements or
+				unsupported gives false
 		end 'strategy'
 	end 'structBoxHasADeepCloner'
 
@@ -16028,7 +16071,7 @@ export type ProgramSignatures
 		match managedNameCascadeStrategy(self, declaredName: typeName, asElement: false, action: CascadeAction.clone) 'strategy'
 			direct(callee) then return callee
 			managedElements then panic("ProgramSignatures.structBoxCloneCallee: `type {String.from(typeName)}` copies through an element-bearing record's 2-argument entry, which no box co-own can call — a declared struct's strategy is the `direct` per-type cloner")
-			unsupported then panic("ProgramSignatures.structBoxCloneCallee: `type {String.from(typeName)}` has no deep cloner — `structBoxIsImageableWithSlots` asks this very strategy before a value reaches this road")
+			unsupported then panic("ProgramSignatures.structBoxCloneCallee: `type {String.from(typeName)}` has no deep cloner — `structBoxIsImageableWithSlots` asks the full-graph question and this same strategy before a value reaches this road")
 		end 'strategy'
 	end 'structBoxCloneCallee'
 
@@ -28501,6 +28544,13 @@ export type ProgramSignatures
 	// `ProgramSignatures.instantiationSiteOf`). One walk answers both rather than a second one being
 	// written for the identity, which is how the two would come to disagree about which instance matched.
 	function instanceWithTypeArgKind(param TypeParamId, kind TypeArgInstantiationKind) returns TypeArgKindMatch
+		// ⛔ **THIS IS THE ONE DOOR THAT READS ROWS THE PARSER IS STILL MINTING**, so an answer computed through it
+		// is true of a moment rather than of the program — see `aggregateSupportsDeepClone`, which declines to keep
+		// one. Marked on ARRIVAL rather than where a row is actually examined: a scan that matches nothing depends
+		// on the rows present just as much as one that matches, and so does an early `noInstance` off a name the
+		// interner does not hold YET.
+		self.deepCloneWalkReadInstances = true
+
 		let owner = try self.typeParamOwnerOf(param) otherwise return TypeArgKindMatch.noInstance
 		let position = owner.position
 
@@ -28591,6 +28641,9 @@ export type ProgramSignatures
 	// store — where `Parser.requireDescriptorForOpaqueStores` refuses it with a position rather than emitting a
 	// raw store. A refusal, never a silent wrong answer.
 	export function genericTypeIsInstantiated(typeName ByteArray) returns bool
+		// The row SET again — see `instanceWithTypeArgKind` for why a reader of it is marked on arrival.
+		self.deepCloneWalkReadInstances = true
+
 		let baseId = try self.typeNames.idOf(typeName) otherwise return false
 		let siblings = try self.genericInstances.instancesOfBase(baseId) otherwise return false
 		return not siblings.isEmpty()
@@ -30893,8 +30946,50 @@ export type ProgramSignatures
 	// the element gate disagreeing about `CharacterSet` / `__ManagedFile` / `__ManagedDirectory`. The
 	// cycle-break seeding comes free with it: that function inserts the name before it walks, so
 	// `type Node { var next as Node }` terminates on the same break.
+	//
+	// ⛔⛔ **THE MEMO BELONGS HERE AND NOWHERE DEEPER.** `aggregateNameSupportsDeepClone`'s answer is computed
+	// under the cycle break — a name already in flight is ASSUMED clonable so the walk terminates — so its
+	// result is true only of the walk that asked it and is not a stand-alone fact about the name. Only this
+	// entry, where `visited` is FRESH, holds an answer that stands on its own.
+	//
+	// ⛔⛔ **THE ANSWER MOVES DURING ONE COMPILE, SO ONLY THE ANSWERS THAT CANNOT MOVE ARE KEPT.** The
+	// declarations behind the walk are settled before parsing (`recordStruct` and `recordGenericAlias` are the
+	// SWEEP’s; `Queries.maxon` settles the alias registry with no file yet parsed) — but
+	// `instanceGraphSupportsDeepClone`’s trivial-element arm answers `not containerOpaqueElementCanBeManaged`,
+	// which SCANS the interned instances of a base (`anyInstanceTypeArgHasKind`) and skips speculative rows,
+	// and `Parser.internGenericInstanceOf` both mints rows and clears speculative marks DURING parsing. So for
+	// a name whose field graph reaches `Array with <a bare type parameter>` the true answer differs between two
+	// asks. Freezing the first would be a spurious E2015, or a `direct` stamp whose cascade cannot be built —
+	// the very panic the gate this memo sits under exists to prevent.
+	// ⇒ **SO AN ANSWER IS KEPT ONLY WHEN THE WALK THAT PRODUCED IT NEVER READ A ROW SET.** The two doors that
+	// do — `instanceWithTypeArgKind` and `genericTypeIsInstantiated` — mark `deepCloneWalkReadInstances`, and a
+	// marked walk’s answer is returned and thrown away. Nothing that survives here can go stale, so nothing has
+	// to be invalidated: the volatile answers are never written rather than written and chased. That is correct
+	// by CONSTRUCTION rather than by an argument about which pass writes when — the kind of argument that reads
+	// true and is falsified by the next caller.
+	//
+	// ⛔ **AND IT IS NOT AN OPTIMIZATION OF A RARE PATH.** The gate is asked once per borrowed struct value that
+	// reaches a DURABLE SINK (`Parser.coOwnConcreteRecordForSink`), not once per `.clone()` token, so the
+	// population is every consumed argument, field store and element push in the program. The cost it removes
+	// is measured in `docs/optimization-log.md`, on `tests/ladders/genclonegate.sh`.
 	export function aggregateSupportsDeepClone(aggregateName ByteArray) returns bool
-		return self.aggregateNameSupportsDeepClone(aggregateName, visited: ClonerSet.create())
+		if let walked = try self.deepCloneAnswers.get(aggregateName) 'alreadyAnswered'
+			return walked
+		end 'alreadyAnswered'
+
+		// SAVED AND RESTORED rather than simply cleared: no caller today asks this from inside a walk, but one
+		// that did would otherwise clear an enclosing walk's mark and let IT cache a registry-dependent answer.
+		let enclosingRead = self.deepCloneWalkReadInstances
+		self.deepCloneWalkReadInstances = false
+		let answer = self.aggregateNameSupportsDeepClone(aggregateName, visited: ClonerSet.create())
+		let thisWalkRead = self.deepCloneWalkReadInstances
+		self.deepCloneWalkReadInstances = enclosingRead or thisWalkRead
+
+		if not thisWalkRead 'restsOnDeclarationsAlone'
+			self.deepCloneAnswers.upsert(aggregateName, value: answer)
+		end 'restsOnDeclarationsAlone'
+
+		return answer
 	end 'aggregateSupportsDeepClone'
 
 	// The INSTANCE twin of the gate above, and the one the transfer door reads about a container. It is the

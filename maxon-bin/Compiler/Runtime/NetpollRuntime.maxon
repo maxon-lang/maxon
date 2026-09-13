@@ -143,7 +143,6 @@ export function installNetpollRuntime(module StdModule, target Target, rawFree B
 	// `__gt_register_park` and `__gt_timer_check`, which every green-thread program contains; what the
 	// completion-port lane never does is OPEN a descriptor, so its `armSource` is unreachable there.
 	buildNetpollPdSlot(module)
-	buildNetpollPdStranded(module)
 	buildNetpollPdRelease(module)
 	buildNetpollPdDeadline(module)
 	buildNetpollPdWait(module)
@@ -541,7 +540,20 @@ let PdOffErr = 40 as ByteOffset
 // can ask about a failure it has already been handed. An operation clears it before its first attempt, so it
 // answers about THAT operation and never about an older one.
 let PdOffTimedOut = 48 as ByteOffset
-let PdBytes = 56 as ParsedInt
+
+// ⭐⭐ **WHICH LIFE OF THIS RECORD A PARKED THREAD BELONGS TO.** A record OUTLIVES the socket it was opened
+// for: the release resets its words but the table slot goes on naming it, so `__np_pd_open` on a recycled
+// descriptor hands the same record to the next socket. A thread the release READIED is still holding that
+// record’s address and its direction word’s, and it writes both when it resumes — over whatever the next
+// owner has published there, which would strand a thread nothing can then wake. So every reset bumps this and
+// every act that could touch another life of the record is behind a match against the value the PARK saw:
+// the resume’s two writes (`__np_pd_wait`), and the PUBLICATION itself, which happens after the context
+// switch and is the one a `PdWait` mark cannot tell apart across lives (`__np_pd_commit`, reading the
+// thread’s copy at `GtRuntime.GtOffParkGen`). `__np_pd_expire` and `__np_pd_drop` need no stamp: each already
+// asks whether the direction word still names ITS OWN thread, which is the same question asked of the only
+// record they can act on.
+let PdOffGen = 56 as ByteOffset
+let PdBytes = 64 as ParsedInt
 
 // The three values a direction word can hold that are not a green thread — Go's `pdNil`, `pdReady`, `pdWait`.
 // A parked thread's record address is a heap pointer, so `> PdWait` is what tells a waiter from a state.
@@ -558,6 +570,14 @@ export let NetpollModeWrite = 1 as ParsedInt
 // treat every other answer as *"the descriptor is ready, issue the call again"*.
 let NetpollWaitReady = 0 as ParsedInt
 export let NetpollWaitTimedOut = 1 as ParsedInt
+
+// ⛔⛔ **THE WAIT ENDED ON A RECORD THAT IS NO LONGER THIS THREAD’S, AND THE CALLER MUST NOT RETRY.** The
+// generation test (`PdOffGen`) answers this when a release readied the waiter and the descriptor was then
+// CLOSED and REUSED. It cannot be folded into `NetpollWaitReady`: the socket band decodes its descriptor once
+// at function entry (`emitLiveSocketOrThrow`), so a retry would issue the syscall on a live descriptor that
+// now belongs to ANOTHER socket — stealing its bytes when data is waiting, and parking on its record when not.
+// The caller reports its own operation’s failure instead, with no syscall (`emitSocketWaitReady`).
+export let NetpollWaitStale = 2 as ParsedInt
 
 // The fd table: how many descriptors the first allocation covers, and one pointer per slot. 64 is a process's
 // ordinary descriptor ceiling before anything unusual is open, so the common program never grows it.
@@ -577,14 +597,6 @@ let NetpollPdCapLabel = b"__np_pd_cap"
 // nobody would ever look — and `__sched_checkdead` would call that same process DEADLOCKED, because every
 // machine really is idle and the event it waits for is outside this program.
 export let NetpollWaitersLabel = b"__np_waiters"
-
-// ⭐ **`__np_pd_stranded(pd) -> 0 | 1` — IS A GREEN THREAD PUBLISHED ON EITHER DIRECTION OF THIS RECORD?**
-// `__sched_lock` held by the caller. It is a FUNCTION and not two lines inside `emitNetpollPdClear` because the
-// question has two callers and one answer — and because a direction word compared against `PdWait` inside a
-// body that also takes `__sched_lock` is the exact pair `GtRuntime.assertCompletedPublicationIsOrdered` reads
-// as an unordered status test: the lock's own depth step loads a machine field at 0x10, and `PdWait` is 2. Kept
-// here, the comparison shares a body with no lock and the question is asked where it reads best.
-let NetpollPdStrandedName = b"__np_pd_stranded"
 
 // `__np_pd_slot(fd) -> pd | 0` — the bounds-checked lookup. `__sched_lock` held by the caller.
 let NetpollPdSlotName = b"__np_pd_slot"
@@ -649,6 +661,18 @@ function emitPdClearErrBit(module StdModule, block IrBlock, pd ValueId, bit Valu
 	let why = emitLoadField(module, block: block, record: pd, offset: PdOffErr, ids: ids)
 	emitStoreField(module, block: block, record: pd, offset: PdOffErr, value: emitBin(module, block: block, a: why, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids))
 end 'emitPdClearErrBit'
+
+// Take this direction's published waiter off its word and mark the wait EXPIRED — the half `__np_pd_expire`
+// and `__np_pd_drop` are the same, and a second spelling of it is a word of the record one of them would
+// eventually stop writing. `__sched_lock` held; READYING the thread is the caller's, because the two answer
+// that differently.
+function emitNetpollUnhookExpired(module StdModule, block IrBlock, pd ValueId, gpp ValueId, mode ValueId, ids ValueMinter)
+	emitStoreField(module, block: block, record: gpp, offset: 0, value: emitConst(module, block: block, value: PdNil, ids: ids))
+	emitNetpollStepWaiters(module, block: block, delta: -1, ids: ids)
+	let bit = emitPdErrBit(module, block: block, mode: mode, ids: ids)
+	let why = emitLoadField(module, block: block, record: pd, offset: PdOffErr, ids: ids)
+	emitStoreField(module, block: block, record: pd, offset: PdOffErr, value: emitBin(module, block: block, a: why, b: bit, opcode: StdBinOpcode.bitOr, ids: ids))
+end 'emitNetpollUnhookExpired'
 
 // Step the published-waiter count. `__sched_lock` held by every site, which is why a plain load/add/store is
 // the whole of it.
@@ -792,13 +816,13 @@ function buildNetpollPdOpen(module StdModule, target Target, rawFree ByteArray)
 	carve.branchEdges.push(BranchEdge.create(reset.id, argIds: argsOf(carved)))
 
 	// A recycled descriptor inherits its predecessor's record, so every word is written rather than assumed.
-	var cleared = module.addBlock(func, label: b"npcleared", heat: BlockHeat.normal)
+	var payWake = module.addBlock(func, label: b"npopenwake", heat: BlockHeat.normal)
 	let pd = ids.mint()
 	reset.blockArgs.push(IrBlockArg.create(pd, argType: StdType.i64))
-	emitNetpollPdClear(module, func: func, block: reset, pd: pd, cont: cleared, ids: ids)
-	emitStoreField(module, block: cleared, record: pd, offset: PdOffFd, value: fd)
-	emitSchedLockLeave(module, block: cleared, ids: ids)
-	module.setTerminator(cleared, op: StdOp.branch(arm.id))
+	let debt = emitNetpollPdClear(module, block: reset, pd: pd, ids: ids)
+	emitStoreField(module, block: reset, record: pd, offset: PdOffFd, value: fd)
+	emitSchedLockLeave(module, block: reset, ids: ids)
+	emitSchedWakeIfOwed(module, cur: reset, owed: debt, wake: payWake, cont: arm, ids: ids)
 
 	let poller = emitLoadGlobalWord(module, block: arm, label: NetpollPollerLabel, ids: ids)
 	let armed = emitNetpoll(module, block: arm, verb: NetpollVerb.armSource, operands: twoArgs(poller, second: fd), ids: ids)
@@ -808,48 +832,70 @@ function buildNetpollPdOpen(module StdModule, target Target, rawFree ByteArray)
 	module.functions.push(func)
 end 'buildNetpollPdOpen'
 
-// Both direction words, both deadlines and the reason word back to their born state, then `cont`. `fd` is NOT
-// cleared: a record's descriptor is what it is for, and the release keeps it for a reader that wants to know
-// whose record this was.
+// Both direction words, both deadlines and the reason word back to their born state, and the record's next
+// life opened. `fd` is NOT cleared: a record's descriptor is what it is for, and the release keeps it for a
+// reader that wants to know whose record this was.
 //
-// ⛔⛔ **A PUBLISHED WAITER IS AN ABORT AND NOT A CLEAR, BECAUSE THE CLEAR WOULD BE A HANG.** A direction word
-// holding a green thread is the ONLY pointer anything has to it: zeroing it strands the thread AND skips the
+// ⛔⛔ **A PUBLISHED WAITER IS READIED, NEVER ZEROED, BECAUSE ZEROING IT WOULD BE A HANG.** A direction word
+// holding a green thread is the ONLY pointer anything has to it: dropping it strands the thread AND skips the
 // `__np_waiters` decrement its three balanced exits make — and that count feeds `emitGtStoresPending`, which
 // gates both the poller's owed test and the exit drain's quiet term, while `__sched_checkdead` is prevented
 // from calling a pending process deadlocked. So the failure would be a silent hang with the deadlock detector
 // disarmed, which is the worst shape this runtime has.
 //
-// ⭐ **IT IS UNREACHABLE TODAY AND THE GUARD IS STILL THE RIGHT CODE** — `__gt_promise_drop`'s mailbox arm is
-// the same shape and states the same argument. The proof is `SignatureIndex.managedNameCascadeStrategy`, whose
-// `managedSocket` arm answers `unsupported`: a struct holding a `__ManagedSocket` can be neither retained into
-// an `async` argument buffer nor made a container element, so no SECOND green thread can name the box whose
-// descriptor this releases. Every caller here is the thread that was using the socket itself, and a running
-// thread is published on no direction word.
-function emitNetpollPdClear(module StdModule, func IrFunction, block IrBlock, pd ValueId, cont IrBlock, ids ValueMinter)
-	var stranded = module.addBlock(func, label: b"npstranded", heat: BlockHeat.normal)
+// ⭐⭐ **AND THE STATE IS ORDINARY, SO THE ANSWER IS A WAKE AND NOT A STOP.** An `async` argument CO-OWNS the
+// box it is handed (`Parser.coOwnConcreteRecordForSink` takes a reference, never a copy of the descriptor), and
+// a coroutine that is PARKED while its owner RUNS is exactly the pair that holds one socket at once — so
+// `client.close()` under a parked `recv` reaches here, on a program that did nothing wrong;
+// `specs/netpoll-socket.md`'s `a-parked-reader-survives-its-owner-closing-the-socket` is that program.
+// ⚠ **THE READIES NEED NO ACCOUNT OF WHICH ROUTES PUT A WAITER THERE**, and this arm deliberately offers
+// none: it answers whatever it finds on the two direction words, so an enumeration of the roads to a second
+// holder would be an unproven claim standing where the code needs no claim at all.
+//
+// ⚠ **THE READIED THREAD ISSUES NO FURTHER SYSCALL, BECAUSE WHAT IT READS IS THE GENERATION BUMP BELOW.** Its
+// resumed `__np_pd_wait` finds a record that has moved on and answers `NetpollWaitStale`, which the operation
+// reports as its own failure (`recvFailed`) without touching the descriptor — the number in its hand may name
+// another socket by then. `PdOffErr` going back to its born state therefore also discards an expiry that fired
+// and was never read, so a wait whose deadline passed and whose socket was then closed reports the close;
+// reporting a timeout would name the wrong cause for the same stop.
+//
+// The wake debt is the CALLER's to pay after its own lock release — `__gt_ready_locked`'s contract.
+function emitNetpollPdClear(module StdModule, block IrBlock, pd ValueId, ids ValueMinter) returns ValueId
+	let readDebt = ids.mint()
+	module.appendOp(block, op: StdOp.call(readDebt, callee: NetpollPdReadyOneName, args: twoArgs(pd, second: emitConst(module, block: block, value: NetpollModeRead, ids: ids))))
+	let writeDebt = ids.mint()
+	module.appendOp(block, op: StdOp.call(writeDebt, callee: NetpollPdReadyOneName, args: twoArgs(pd, second: emitConst(module, block: block, value: NetpollModeWrite, ids: ids))))
 
-	let anybody = ids.mint()
-	module.appendOp(block, op: StdOp.call(anybody, callee: NetpollPdStrandedName, args: argsOf(pd)))
-	let anyWaiter = emitCmp(module, block: block, a: anybody, b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(block, op: StdOp.condBranch(anyWaiter, thenBlockId: stranded.id, elseBlockId: cont.id))
-	emitRuntimeAbort(module, func: func, block: stranded, abort: RuntimeAbort.netpollReleaseWithWaiter, ids: ids)
+	// After the readies, which leave `PdReady` on a direction nobody waited on — a record starting its next life
+	// holding a readiness its new owner never earned would answer that owner's first wait at once.
+	let zeroWord = emitConst(module, block: block, value: 0, ids: ids)
+	emitStoreField(module, block: block, record: pd, offset: PdOffRg, value: zeroWord)
+	emitStoreField(module, block: block, record: pd, offset: PdOffWg, value: zeroWord)
+	emitStoreField(module, block: block, record: pd, offset: PdOffRd, value: zeroWord)
+	emitStoreField(module, block: block, record: pd, offset: PdOffWd, value: zeroWord)
+	emitStoreField(module, block: block, record: pd, offset: PdOffErr, value: zeroWord)
+	emitStoreField(module, block: block, record: pd, offset: PdOffTimedOut, value: zeroWord)
 
-	let zeroWord = emitConst(module, block: cont, value: 0, ids: ids)
-	emitStoreField(module, block: cont, record: pd, offset: PdOffRg, value: zeroWord)
-	emitStoreField(module, block: cont, record: pd, offset: PdOffWg, value: zeroWord)
-	emitStoreField(module, block: cont, record: pd, offset: PdOffRd, value: zeroWord)
-	emitStoreField(module, block: cont, record: pd, offset: PdOffWd, value: zeroWord)
-	emitStoreField(module, block: cont, record: pd, offset: PdOffErr, value: zeroWord)
-	emitStoreField(module, block: cont, record: pd, offset: PdOffTimedOut, value: zeroWord)
+	// The record's next life starts here, so a thread that parked on its previous one stops owning these words
+	// — see `PdOffGen`. It is BUMPED and not zeroed because a snapshot can only tell one life from the next by
+	// a value that DIFFERS between them, which a constant never would. A carve reaches here on `__slab_alloc`'s
+	// zeroed bytes, which is also what lets the readies above read `PdNil` from a record nothing has written.
+	let born = emitLoadField(module, block: block, record: pd, offset: PdOffGen, ids: ids)
+	emitStoreField(module, block: block, record: pd, offset: PdOffGen, value: emitBin(module, block: block, a: born, b: emitConst(module, block: block, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids))
+
+	return emitBin(module, block: block, a: readDebt, b: writeDebt, opcode: StdBinOpcode.bitOr, ids: ids)
 end 'emitNetpollPdClear'
 
-// `__np_pd_release(fd)` — see `NetpollPdReleaseName`.
+// `__np_pd_release(fd)` — see `NetpollPdReleaseName`. It pays its own wake debt because it owns its own lock
+// scope, where `__np_pd_wake` hands one back to a caller that is still inside the poller's.
 function buildNetpollPdRelease(module StdModule)
 	var func = IrFunction.createFromStd(NetpollPdReleaseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var clear = module.addBlock(func, label: b"npclear", heat: BlockHeat.normal)
+	var unlock = module.addBlock(func, label: b"nprelunlock", heat: BlockHeat.normal)
+	var payWake = module.addBlock(func, label: b"nprelwake", heat: BlockHeat.normal)
 	var doneBlock = module.addBlock(func, label: b"npreldone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
@@ -858,13 +904,18 @@ function buildNetpollPdRelease(module StdModule)
 	emitSchedLockEnter(module, block: entry, ids: ids)
 	let pd = emitNetpollPdLookup(module, block: entry, fd: fd, ids: ids)
 	let known = emitCmp(module, block: entry, a: pd, b: emitConst(module, block: entry, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(known, thenBlockId: clear.id, elseBlockId: doneBlock.id))
+	module.setTerminator(entry, op: StdOp.condBranch(known, thenBlockId: clear.id, elseBlockId: unlock.id))
+	entry.branchEdges.push(BranchEdge.create(unlock.id, argIds: argsOf(emitConst(module, block: entry, value: WakeDebtNone, ids: ids))))
 
-	var released = module.addBlock(func, label: b"nprelcleared", heat: BlockHeat.normal)
-	emitNetpollPdClear(module, func: func, block: clear, pd: pd, cont: released, ids: ids)
-	module.setTerminator(released, op: StdOp.branch(doneBlock.id))
+	let debt = emitNetpollPdClear(module, block: clear, pd: pd, ids: ids)
+	module.setTerminator(clear, op: StdOp.branch(unlock.id))
+	clear.branchEdges.push(BranchEdge.create(unlock.id, argIds: argsOf(debt)))
 
-	emitSchedLockLeave(module, block: doneBlock, ids: ids)
+	let owed = ids.mint()
+	unlock.blockArgs.push(IrBlockArg.create(owed, argType: StdType.i64))
+	emitSchedLockLeave(module, block: unlock, ids: ids)
+	emitSchedWakeIfOwed(module, cur: unlock, owed: owed, wake: payWake, cont: doneBlock, ids: ids)
+
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
 	module.functions.push(func)
 end 'buildNetpollPdRelease'
@@ -882,9 +933,9 @@ end 'buildNetpollPdRelease'
 // clears it as it parks and reads it as it resumes. Clearing it here would erase an expiry that has already
 // fired and is about to be read — the deadline would be reported as met when it was missed.
 //
-// ⚠ **NOTHING USER-WRITTEN REACHES THE RE-ARM TODAY**, because it needs a SECOND green thread holding the same
-// socket and no program can build one (`emitNetpollPdClear`'s proof). It is written correct rather than left
-// as a note, because the shape that makes it reachable is a caller, not a redesign.
+// ⚠ **THE RE-ARM NEEDS A SECOND GREEN THREAD HOLDING THE SAME SOCKET, AND A PROGRAM CAN BUILD ONE**: an
+// `async` argument co-owns the box it is handed, so a deadline set by the owner can land on a wait a parked
+// coroutine already published (`emitNetpollPdClear`).
 function buildNetpollPdDeadline(module StdModule)
 	var func = IrFunction.createFromStd(NetpollPdDeadlineName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(3)
@@ -973,6 +1024,8 @@ function buildNetpollPdWait(module StdModule)
 	var alreadyLate = module.addBlock(func, label: b"npwlate", heat: BlockHeat.normal)
 	var park = module.addBlock(func, label: b"npwpark", heat: BlockHeat.normal)
 	var resumed = module.addBlock(func, label: b"npwresumed", heat: BlockHeat.normal)
+	var stillOurs = module.addBlock(func, label: b"npwours", heat: BlockHeat.normal)
+	var recycled = module.addBlock(func, label: b"npwrecycled", heat: BlockHeat.normal)
 	var verdict = module.addBlock(func, label: b"npwverdict", heat: BlockHeat.normal)
 	var lateExit = module.addBlock(func, label: b"npwtimedout", heat: BlockHeat.normal)
 	var readyExit = module.addBlock(func, label: b"npwok", heat: BlockHeat.normal)
@@ -1026,19 +1079,43 @@ function buildNetpollPdWait(module StdModule)
 	let parkArg = emitNetpollParkArg(module, block: park, fd: fd, mode: mode, ids: ids)
 	emitStoreField(module, block: park, record: gpp, offset: 0, value: emitConst(module, block: park, value: PdWait, ids: ids))
 	emitPdClearErrBit(module, block: park, pd: pd, bit: errBit, ids: ids)
+
+	// Which life of the record this wait belongs to, read under the same hold that marks the intent — see
+	// `PdOffGen`. It rides the frame across the switch exactly as `pd` and `gpp` do, AND it is stamped on the
+	// thread as well, because the PUBLICATION happens on the far side of the switch in `__np_pd_commit`, which
+	// holds nothing but the thread (`GtRuntime.GtOffParkGen`).
+	let snapshot = emitLoadField(module, block: park, record: pd, offset: PdOffGen, ids: ids)
+	emitStoreField(module, block: park, record: emitLoadCurrentGt(module, block: park, ids: ids), offset: GtOffParkGen, value: snapshot)
 	emitSchedLockLeave(module, block: park, ids: ids)
 	emitGtPark(module, ids: ids, cur: park, kind: GtParkKindNetpoll, arg: parkArg, cont: resumed)
 
-	// The wait is over however it ended. The direction word goes back to `PdNil` unconditionally: a readiness
-	// wake left `PdReady` there and an expiry left `PdNil`, and both mean the same thing now — nothing waits.
+	// ⛔⛔ **THE WAIT IS OVER, BUT THE RECORD MAY NOT BE THIS THREAD’S ANY MORE.** A release readies its waiter
+	// and resets the record while the table slot goes on naming it, so by the time this thread runs the
+	// descriptor may have been closed, reused, and opened onto the SAME record — whose direction word and error
+	// word now belong to another thread. Writing either would strand that thread or erase a deadline it has
+	// already missed, so both writes are behind the generation test (`PdOffGen`).
 	emitSchedLockEnter(module, block: resumed, ids: ids)
-	emitStoreField(module, block: resumed, record: gpp, offset: 0, value: emitConst(module, block: resumed, value: PdNil, ids: ids))
-	let why = emitLoadField(module, block: resumed, record: pd, offset: PdOffErr, ids: ids)
-	emitPdClearErrBit(module, block: resumed, pd: pd, bit: errBit, ids: ids)
-	emitSchedLockLeave(module, block: resumed, ids: ids)
-	module.setTerminator(resumed, op: StdOp.branch(verdict.id))
+	let nowGen = emitLoadField(module, block: resumed, record: pd, offset: PdOffGen, ids: ids)
+	let sameLife = emitCmp(module, block: resumed, a: nowGen, b: snapshot, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(resumed, op: StdOp.condBranch(sameLife, thenBlockId: stillOurs.id, elseBlockId: recycled.id))
 
-	let expiredHere = emitBin(module, block: verdict, a: why, b: errBit, opcode: StdBinOpcode.bitAnd, ids: ids)
+	// The direction word goes back to `PdNil` unconditionally HERE: a readiness wake left `PdReady` there and an
+	// expiry left `PdNil`, and within one life of the record both mean the same thing — nothing waits.
+	emitStoreField(module, block: stillOurs, record: gpp, offset: 0, value: emitConst(module, block: stillOurs, value: PdNil, ids: ids))
+	let why = emitLoadField(module, block: stillOurs, record: pd, offset: PdOffErr, ids: ids)
+	emitPdClearErrBit(module, block: stillOurs, pd: pd, bit: errBit, ids: ids)
+	emitSchedLockLeave(module, block: stillOurs, ids: ids)
+	module.setTerminator(stillOurs, op: StdOp.branch(verdict.id))
+	stillOurs.branchEdges.push(BranchEdge.create(verdict.id, argIds: argsOf(why)))
+
+	// A record that has moved on owes this thread nothing — and the caller may not be sent back to its syscall
+	// either, because the descriptor it holds may now be LIVE and another socket’s. See `NetpollWaitStale`.
+	emitSchedLockLeave(module, block: recycled, ids: ids)
+	emitConstReturn(module, block: recycled, value: NetpollWaitStale, ids: ids)
+
+	let reason = ids.mint()
+	verdict.blockArgs.push(IrBlockArg.create(reason, argType: StdType.i64))
+	let expiredHere = emitBin(module, block: verdict, a: reason, b: errBit, opcode: StdBinOpcode.bitAnd, ids: ids)
 	let timedOut = emitCmp(module, block: verdict, a: expiredHere, b: emitConst(module, block: verdict, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(verdict, op: StdOp.condBranch(timedOut, thenBlockId: lateExit.id, elseBlockId: readyExit.id))
 	emitConstReturn(module, block: lateExit, value: NetpollWaitTimedOut, ids: ids)
@@ -1071,10 +1148,21 @@ function buildNetpollPdCommit(module StdModule)
 	module.setTerminator(entry, op: StdOp.condBranch(haveRecord, thenBlockId: look.id, elseBlockId: noRecord.id))
 	emitRuntimeAbort(module, func: func, block: noRecord, abort: RuntimeAbort.netpollUnknownSource, ids: ids)
 
+	// ⛔⛔ **`PdWait` DOES NOT TELL TWO LIVES OF THE RECORD APART, SO THE GENERATION IS PART OF THE TEST.** This
+	// runs after the context switch, so between the mark and here the descriptor may have been closed (release
+	// resets the record and bumps its generation) and REUSED, with a new owner marking `PdWait` on the very same
+	// word. Publishing then would put THIS thread into the new owner’s direction word, arm this thread’s
+	// deadline off a record it does not own, and step `__np_waiters` for a wait nothing will end — and the new
+	// owner’s next operation would meet a waiter and abort `netpollDoubleWait`, on a program that did nothing
+	// wrong. A mismatch takes `resumeNow`, whose wake the caller already pays for; the thread then resumes in
+	// `__np_pd_wait`, whose own generation test answers `NetpollWaitStale`.
 	let gpp = emitPdDirectionAddr(module, block: look, pd: pd, base: PdOffRg, mode: mode, ids: ids)
 	let state = emitLoadField(module, block: look, record: gpp, offset: 0, ids: ids)
 	let stillMarked = emitCmp(module, block: look, a: state, b: emitConst(module, block: look, value: PdWait, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(look, op: StdOp.condBranch(stillMarked, thenBlockId: publish.id, elseBlockId: resumeNow.id))
+	let parkedGen = emitLoadField(module, block: look, record: gt, offset: GtOffParkGen, ids: ids)
+	let sameLife = emitCmp(module, block: look, a: emitLoadField(module, block: look, record: pd, offset: PdOffGen, ids: ids), b: parkedGen, pred: StdCmpPred.eq, ids: ids)
+	let ourMark = emitBin(module, block: look, a: stillMarked, b: sameLife, opcode: StdBinOpcode.bitAnd, ids: ids)
+	module.setTerminator(look, op: StdOp.condBranch(ourMark, thenBlockId: publish.id, elseBlockId: resumeNow.id))
 
 	// Readiness landed between the mark and this commit, so the thread is readied rather than left waiting for
 	// a wake that has already happened — Go's `netpollblockcommit` answering false.
@@ -1126,11 +1214,7 @@ function buildNetpollPdExpire(module StdModule)
 	module.setTerminator(look, op: StdOp.condBranch(ours, thenBlockId: fire.id, elseBlockId: gone.id))
 	emitConstReturn(module, block: gone, value: WakeDebtNone, ids: ids)
 
-	emitStoreField(module, block: fire, record: gpp, offset: 0, value: emitConst(module, block: fire, value: PdNil, ids: ids))
-	emitNetpollStepWaiters(module, block: fire, delta: -1, ids: ids)
-	let bit = emitPdErrBit(module, block: fire, mode: mode, ids: ids)
-	let why = emitLoadField(module, block: fire, record: pd, offset: PdOffErr, ids: ids)
-	emitStoreField(module, block: fire, record: pd, offset: PdOffErr, value: emitBin(module, block: fire, a: why, b: bit, opcode: StdBinOpcode.bitOr, ids: ids))
+	emitNetpollUnhookExpired(module, block: fire, pd: pd, gpp: gpp, mode: mode, ids: ids)
 	module.setTerminator(fire, op: StdOp.ret(emitGtReadyLocked(module, block: fire, gt: gt, ids: ids)))
 
 	module.functions.push(func)
@@ -1174,11 +1258,7 @@ function buildNetpollPdDrop(module StdModule)
 	let ours = emitCmp(module, block: look, a: state, b: gt, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(look, op: StdOp.condBranch(ours, thenBlockId: unhook.id, elseBlockId: disarm.id))
 
-	emitStoreField(module, block: unhook, record: gpp, offset: 0, value: emitConst(module, block: unhook, value: PdNil, ids: ids))
-	emitNetpollStepWaiters(module, block: unhook, delta: -1, ids: ids)
-	let bit = emitPdErrBit(module, block: unhook, mode: mode, ids: ids)
-	let why = emitLoadField(module, block: unhook, record: pd, offset: PdOffErr, ids: ids)
-	emitStoreField(module, block: unhook, record: pd, offset: PdOffErr, value: emitBin(module, block: unhook, a: why, b: bit, opcode: StdBinOpcode.bitOr, ids: ids))
+	emitNetpollUnhookExpired(module, block: unhook, pd: pd, gpp: gpp, mode: mode, ids: ids)
 	module.setTerminator(unhook, op: StdOp.branch(disarm.id))
 
 	// The deadline goes whether or not the direction still named this thread: a readiness wake that got there
@@ -1342,22 +1422,3 @@ function buildNetpollPdTimedOut(module StdModule)
 	module.setTerminator(answer, op: StdOp.ret(held))
 	module.functions.push(func)
 end 'buildNetpollPdTimedOut'
-
-// `__np_pd_stranded(pd)` — see `NetpollPdStrandedName`. A direction word above `PdWait` is a green thread's
-// record address; the three states below it are not.
-function buildNetpollPdStranded(module StdModule)
-	var func = IrFunction.createFromStd(NetpollPdStrandedName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
-	var ids = ValueMinter.create(1)
-
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-
-	emitParams(module, block: entry, count: 1)
-	let pd = 0 as ValueId
-
-	let waiterBound = emitConst(module, block: entry, value: PdWait, ids: ids)
-	let readWaiter = emitCmp(module, block: entry, a: emitLoadField(module, block: entry, record: pd, offset: PdOffRg, ids: ids), b: waiterBound, pred: StdCmpPred.gt, ids: ids)
-	let writeWaiter = emitCmp(module, block: entry, a: emitLoadField(module, block: entry, record: pd, offset: PdOffWg, ids: ids), b: waiterBound, pred: StdCmpPred.gt, ids: ids)
-	module.setTerminator(entry, op: StdOp.ret(emitBin(module, block: entry, a: readWaiter, b: writeWaiter, opcode: StdBinOpcode.bitOr, ids: ids)))
-
-	module.functions.push(func)
-end 'buildNetpollPdStranded'
