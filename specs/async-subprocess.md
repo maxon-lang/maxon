@@ -30,12 +30,12 @@ mechanism (a poll-and-`__gt_sleep` drain over `__Builtins.subprocess*`), and rec
 deferred full-Subprocess-API rung. `__Builtins.runProcess` therefore still emits `__gt_process_run` in USER
 code, where the gate is reachability-BLIND — pinned by `rejected-on-wasm-when-unreached` below.
 
-`__Builtins.runProcess` is a **throwing** builtin (P1.5 #93): its two failure paths — a spawn failure and a full process
-store — THROW rather than abort, so it must be called under `try`, exactly as a throwing array accessor is. It
-rides the same dual-register error ABI (`errorReturn`) an ordinary throwing call uses — the exit code in R8, the
-error flag in R10 — so `try __Builtins.runProcess(cmd) otherwise <handler>` catches the two failures that used to abort the
-process, and a program can recover from them instead of dying. Recovery today is by VALUE — any error routes to
-the `otherwise` handler; binding `otherwise (e)` to a specific case is a deferred P1.7 feature, as for `ArrayError`.
+`__Builtins.runProcess` is a **throwing** builtin (P1.5 #93): a spawn failure THROWS rather than aborting, so it
+must be called under `try`, exactly as a throwing array accessor is. It rides the same dual-register error ABI
+(`errorReturn`) an ordinary throwing call uses — the exit code in R8, the error flag in R10 — so
+`try __Builtins.runProcess(cmd) otherwise <handler>` catches the failure that used to abort the process, and a
+program can recover from it instead of dying. Recovery today is by VALUE — any error routes to the `otherwise`
+handler; binding `otherwise (e)` to a specific case is a deferred P1.7 feature, as for `ArrayError`.
 
 ```text
 function runChild() returns int
@@ -49,23 +49,24 @@ function main() returns ExitCode
 end 'main'
 ```
 
-When no machine has anything to run and a child is parked, the idle machine's park is bounded by a short poll
-period (`ParkPollWithChildrenMs`), and each time it wakes it polls every parked child with a zero-timeout wait
-(`__gt_proc_check`) and readies each thread whose child has exited — never a busy-spin. The same wake fires every
-due timer, so a thread that is merely sleeping still wakes on time even while another thread's child is still
-running.
+When no machine has anything to run and a child is parked, the idle machine blocks in the POLLER, and the
+child's exit arrives there as an event of its own — never a poll period and never a busy-spin. A parked child is
+a SOURCE on the poller exactly as a socket is: a `pidfd` on Linux, a kqueue carrying the child's exit on macOS,
+a registered wait posting a packet on Windows. The same wait ends at every due timer, so a thread that is merely
+sleeping still wakes on time while another thread's child is still running.
 
 `__Builtins.runProcess` works from `main` and from an `async` coroutine alike. Its argument is a
 `String` command line — borrowed, not consumed; a `float`/`int`/`bool` is refused at compile time. Its result is
 an integer (the exit code), so — unlike `sleep` — it may be used in value position (under `try`).
 
 If the command names no runnable executable (`CreateProcessA` fails outright), it throws its
-**spawn-failure** error rather than parking on a non-existent child — a deterministic error the caller catches,
-never a hang. Parking more than the store's 64-slot capacity concurrently throws its **store-overflow** error
-rather than corrupting the parallel arrays. Both used to abort the process (exit 1 / exit 70); now they recover.
+**spawn-failure** error rather than parking on a non-existent child — a deterministic error the caller
+catches, never a hang. How many children may be parked at once is the poller's property and carries no
+ceiling of its own: `sixty-five-concurrent-children-all-complete` holds sixty-five waits open together, one
+past what a single `WaitForMultipleObjects` array could ever have held.
 
 **Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one
-statement of it.** A parked child is reaped by the scheduler loop (`__gt_proc_check`), so these cases need the substrate.
+statement of it.** A parked child is a source on the scheduler's poller, so these cases need the substrate.
 ⚠ The two `error.` cases are front-end refusals (`E3005`, `E3057`), are target-neutral, and carry NO
 marker.
 
@@ -166,11 +167,11 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: async-subprocess.multi-concurrent -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
-Three children are spawned BEFORE any await, so all three park on their processes SIMULTANEOUSLY — the netpoll
-blocks on a `WaitForMultipleObjects` of THREE handles, and `__gt_proc_check`'s parallel-array swap-remove runs with
-a multi-entry store (the path `sequence`, `spawn-loop` and `interleave` never reach, each parking ≤1 child at a
-time). Each exit code is read back into its own digit, so `123` proves all three resumed independently with the
-right handle-to-thread mapping and no cross-talk.
+Three children are spawned BEFORE any await, so all three park on their processes SIMULTANEOUSLY — the poller
+holds THREE child sources at once and its readiness walk wakes each waiter separately (the path `sequence`,
+`spawn-loop` and `interleave` never reach, each parking ≤1 child at a time). Each exit code is read back into
+its own digit, so `123` proves all three resumed independently with the right handle-to-thread mapping and no
+cross-talk.
 ```maxon
 function c1() returns Integer
 	return try __Builtins.runProcess("cmd /c exit 1") otherwise 99
@@ -202,16 +203,16 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: async-subprocess.posix-multi-concurrent -->
 <!-- unsupported-targets: x64-windows -->
 ⭐ **THE CONCURRENCY CASE — SEVERAL CHILDREN THROUGH THE NETPOLL AT ONCE.** Three children are spawned
-BEFORE any await, so all three park on their processes SIMULTANEOUSLY and `__gt_proc_check`'s
-parallel-array swap-remove runs with a multi-entry store — the path `posix-exit-code` and
-`posix-interleave-with-sleep` never reach, each parking one child at a time. Each exit code is read back
-into its own digit, so `123` proves all three resumed independently with the right child-to-thread mapping
-and no cross-talk; two children swapped, or one thread resumed with another's status, gives a different
-three-digit number rather than a near miss.
+BEFORE any await, so all three park on their processes SIMULTANEOUSLY and the poller holds three child
+sources at once — the path `posix-exit-code` and `posix-interleave-with-sleep` never reach, each parking one
+child at a time. Each exit code is read back into its own digit, so `123` proves all three resumed
+independently with the right child-to-thread mapping and no cross-talk; two children swapped, or one thread
+resumed with another's status, gives a different three-digit number rather than a near miss.
 
-⚠ On this lane the poll is a `waitpid`-per-entry sweep rather than a `WaitForMultipleObjects` of three
-handles, so the 64-slot `MAXIMUM_WAIT_OBJECTS` bound the Windows `store-overflow-caught` case pins is a
-Win32 fact this lane does not share; nothing here asserts it.
+⚠ On this lane each child's exit reaches the poller through a source the kernel mints for it — a `pidfd` on
+Linux, a kqueue carrying `NOTE_EXIT` on macOS — where the Windows lane's arrives as a completion packet. How
+many may be parked together is the poller's property on either, and
+`posix-sixty-five-concurrent-children-all-complete` is where that is asserted rather than here.
 ```maxon
 function c1() returns Integer
 	return try __Builtins.runProcess("exit 1") otherwise 99
@@ -316,6 +317,101 @@ typealias Integer = int(i64.min to i64.max)
 21
 ```
 
+<!-- test: async-subprocess.a-parked-child-costs-no-poll -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
+<!-- procs: 1 -->
+⭐ **A SECOND OF PARKED CHILD COSTS THE POLLER ONE WAIT, NOT A THOUSAND.** A child is a SOURCE on the
+network poller, exactly as a socket is: the green thread awaiting it is suspended there, and the poller's
+wait ends when the child's exit lands rather than at a poll period of the poller's own. Two facts say it.
+`quiet=` bounds how many times a parked machine's wait returned across the second the child runs — a
+poller that caps its wait so it can re-poll every parked child returns about a thousand times in that
+second, so the bound is a small constant and anything near it is the cap still there. `onpoller=` says the
+park was on the POLLER at all: a child parked on a store nothing blocks on steps that counter zero times,
+however promptly it is reaped.
+
+⚠ **NEITHER FACT STANDS ALONE.** A quiet second is satisfied by a machine that simply blocked on the
+child and polled nothing; a poller park is satisfied by a poller that parks and then wakes on a period
+anyway. Together they say the wait is ON the poller AND is not bounded by a period of its own.
+
+⚠ **`quietWakes` IS THE BOUND THIS CASE ASSERTS, NOT A NUMBER READ OFF A CONTROL.** It is chosen the way
+`netpoll-idle.an-idle-sleep-wakes-no-machine` chooses its own: small enough that a per-millisecond poll
+cannot fit under it by two orders of magnitude, loose enough to cover the handful of wakes the spawn, the
+exit and the await themselves cost.
+```maxon
+// The whole second the child runs. A poller that blocks until the child's exit lands returns a handful of
+// times; one that caps its wait to re-poll every parked child returns about a thousand.
+let quietWakes = 8
+
+// A child wait is a park on the poller — at least the one this program makes.
+let pollerParks = 1
+
+function slow() returns Integer
+	return try __Builtins.runProcess("cmd /c ping -n 2 127.0.0.1 >nul") otherwise 99
+end 'slow'
+
+function main() returns ExitCode
+	sleep(1)
+	let beforeWakes = __Builtins.schedParkWakeCount()
+	let beforeParks = __Builtins.schedNetpollBlockCount()
+	let p = async slow()
+	_ = await p
+	let wakes = __Builtins.schedParkWakeCount() - beforeWakes
+	let parks = __Builtins.schedNetpollBlockCount() - beforeParks
+	print("quiet={wakes <= quietWakes} onpoller={parks >= pollerParks}\n")
+	return 0 as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```stdout
+quiet=true onpoller=true
+```
+```exitcode
+0
+```
+
+<!-- test: async-subprocess.posix-a-parked-child-costs-no-poll -->
+<!-- unsupported-targets: x64-windows -->
+<!-- procs: 1 -->
+`a-parked-child-costs-no-poll`'s subject on the POSIX lane, where the child joins the poller as a source of
+its own rather than as a handle in a wait array. The same two facts: the second the child runs costs the
+poller a handful of wait returns rather than one per millisecond, and the awaiting green thread is counted
+as suspended ON the poller.
+
+⚠ **THE EXIT CODE IS FIXED AT 0 ON PURPOSE.** What a child answers is `posix-exit-code`'s subject; this
+case is about where its waiter sat, so the two printed facts carry the whole claim and the exit code
+carries none of it.
+```maxon
+// The whole second the child runs. A poller that blocks until the child's exit lands returns a handful of
+// times; one that caps its wait to re-poll every parked child returns about a thousand.
+let quietWakes = 8
+
+// A child wait is a park on the poller — at least the one this program makes.
+let pollerParks = 1
+
+function slow() returns Integer
+	return try __Builtins.runProcess("sleep 1") otherwise 99
+end 'slow'
+
+function main() returns ExitCode
+	sleep(1)
+	let beforeWakes = __Builtins.schedParkWakeCount()
+	let beforeParks = __Builtins.schedNetpollBlockCount()
+	let p = async slow()
+	_ = await p
+	let wakes = __Builtins.schedParkWakeCount() - beforeWakes
+	let parks = __Builtins.schedNetpollBlockCount() - beforeParks
+	print("quiet={wakes <= quietWakes} onpoller={parks >= pollerParks}\n")
+	return 0 as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```stdout
+quiet=true onpoller=true
+```
+```exitcode
+0
+```
+
 <!-- test: async-subprocess.spawn-loop -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 Robustness: twenty-five spawned threads each run a child that exits 1, awaited in turn. Each parks on its child
@@ -407,22 +503,34 @@ end 'main'
 9
 ```
 
-<!-- test: async-subprocess.store-overflow-caught -->
+<!-- test: async-subprocess.sixty-five-concurrent-children-all-complete -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
-Parking more children at once than the process store holds (64, `WaitForMultipleObjects`'s
-`MAXIMUM_WAIT_OBJECTS`) must not write past its 64-slot arrays. Sixty-five children are started as live
-promises before any await (a discarded promise is drop-cancelled, so each needs its own binding): the first
-sixty-four park on slots 0..63, and the sixty-fifth finds the store full, so `__gt_process_run` THROWS its
-store-overflow error rather than aborting. `child` catches it with `otherwise 88`, and `await p64` returns
-88 — the bound is a recoverable error.
+⭐ **SIXTY-FIVE CHILDREN PARKED AT ONCE, AND NOTHING IS FULL.** How many children a program may wait on
+concurrently is a property of the POLLER, which carries as many registered sources as the process has
+handles — not of a fixed-size store with a ceiling of its own. Sixty-five is one past the sixty-four a
+`WaitForMultipleObjects` array can hold, so a store reappearing anywhere on this path shows up as the
+sixty-fifth child failing rather than as a slower run. Each child is started as a live promise before any
+await (a discarded promise is drop-cancelled, so each needs its own binding) and every one that exits 0
+steps `done`, so `65` is the only answer all sixty-five completing produces — one child lost gives a
+different number rather than a near miss.
 
-⚠ **EVERY CHILD OUTLIVES THE BURST OF SIXTY-FIVE SPAWNS.** A spawn is a kernel call, and while one runs
-the scheduler may hand the processor to another machine, whose idle poll reaps every child that has
-already exited and frees its slot. A child that lives five seconds is still running when the sixty-fifth
-parks, so the store is full however the spawns interleave with that machine.
+⚠ **EVERY CHILD MUST OUTLIVE THE BURST OF SIXTY-FIVE SPAWNS, AND THAT IS WHY IT SLEEPS.** A spawn is a
+kernel call, and while one runs the scheduler may hand the processor to another machine, whose idle poll
+reaps every child that has already exited. A child that exited at once would be gone before the
+sixty-fifth parks: the program would never hold sixty-five waits open together, would pass without
+exercising the property at all, and would say nothing about the ceiling it exists to deny. A two-second
+child is still running when the last spawn returns, however the spawns interleave with that machine.
 ```maxon
+var done = 0
+
 function child() returns Integer
-	return try __Builtins.runProcess("cmd /c ping -n 6 127.0.0.1 >nul") otherwise 88
+	let code = try __Builtins.runProcess("cmd /c ping -n 3 127.0.0.1 >nul") otherwise 99
+
+	if code == 0 'completed'
+		done = done + 1
+	end 'completed'
+
+	return code
 end 'child'
 
 function main() returns ExitCode
@@ -491,7 +599,6 @@ function main() returns ExitCode
 	let p62 = async child()
 	let p63 = async child()
 	let p64 = async child()
-	let r = await p64
 	_ = await p00
 	_ = await p01
 	_ = await p02
@@ -556,22 +663,33 @@ function main() returns ExitCode
 	_ = await p61
 	_ = await p62
 	_ = await p63
-	return r as ExitCode
+	_ = await p64
+	return done as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
-88
+65
 ```
 
-<!-- test: async-subprocess.posix-store-overflow-caught -->
+<!-- test: async-subprocess.posix-sixty-five-concurrent-children-all-complete -->
 <!-- unsupported-targets: x64-windows -->
-`store-overflow-caught`'s subject on the POSIX lanes, whose process store has the same sixty-four slots:
-the sixty-fifth concurrent child finds it full and `await p64` returns the caught 88. `sleep 2` outlives
-the burst for the same reason as the Windows sibling's two-second child.
+`sixty-five-concurrent-children-all-complete`'s subject on the POSIX lanes: sixty-five children parked
+together, each a source on the poller rather than a slot in a store, and `65` only if every one of them
+completed. `sleep 2` outlives the burst of spawns for the same reason as the Windows sibling's two-second
+child — a child that exited at once would be reaped by another machine's idle poll before the sixty-fifth
+parked, and the program would never hold sixty-five waits open at the same time.
 ```maxon
+var done = 0
+
 function child() returns Integer
-	return try __Builtins.runProcess("sleep 2") otherwise 88
+	let code = try __Builtins.runProcess("sleep 2") otherwise 99
+
+	if code == 0 'completed'
+		done = done + 1
+	end 'completed'
+
+	return code
 end 'child'
 
 function main() returns ExitCode
@@ -640,7 +758,6 @@ function main() returns ExitCode
 	let p62 = async child()
 	let p63 = async child()
 	let p64 = async child()
-	let r = await p64
 	_ = await p00
 	_ = await p01
 	_ = await p02
@@ -705,12 +822,13 @@ function main() returns ExitCode
 	_ = await p61
 	_ = await p62
 	_ = await p63
-	return r as ExitCode
+	_ = await p64
+	return done as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
-88
+65
 ```
 
 <!-- test: async-subprocess.error.non-string-arg-rejected -->
@@ -729,7 +847,7 @@ error E3005: <fragment>:3:13: '__Builtins.runProcess' requires a String, but its
 <!-- unsupported-targets: wasm32-wasi -->
 `__Builtins.runProcess` is a throwing builtin (P1.5 #93), so a bare call that drops its error flag is refused
 (E3057) — the exact mirror of the throwing-array-accessor rule. A bare call would read only the exit code (R8)
-and silently drop the spawn-failure/store-overflow flag (R10), so the compiler forces a `try`.
+and silently drop the spawn-failure flag (R10), so the compiler forces a `try`.
 
 ⚠ **THE RULE IS TARGET-NEUTRAL AND THE CASE IS NOT, WHICH IS A CONSEQUENCE OF THE SUBSTRATE GATE.** Since
 this entry joined `SemanticCheck.calleeNeedsWin32Substrate`, this program is refused on every other target

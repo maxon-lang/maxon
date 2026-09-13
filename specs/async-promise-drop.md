@@ -25,12 +25,14 @@ A leak (or an over-reclaim) reports `RuntimeAbort.greenThreadLeak` (75), distinc
 `__gt_promise_drop` branches on the thread's state: a `completed` thread (which may have run while its owner
 was parked on a DIFFERENT await) has already had its stack freed, so only its struct is reclaimed; a `ready`
 (never-run) thread is renounced where it sits in its strand's queue, and whoever pops it reclaims it and frees
-its seed stack instead of running it; a `waiting` (parked) thread is removed from the timer / process stores —
-closing a parked child's handle to abandon the wait — and its stack freed.
+its seed stack instead of running it; a `waiting` (parked) thread is taken off whatever would have woken it —
+its timer entry, or the poll descriptor a socket or a child made it a waiter on — and its stack freed.
 
 **Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one
 statement of it.** Dropping a promise reaps a green-thread struct and releases its stack through
-`osFreePages`/`VirtualFree`, which exists only on x64-windows at this rung.
+`osFreePages`/`VirtualFree`, which every native lane provides; a WASI component is refused by E3104,
+which is why the cases here carry no `unsupported-targets` marker for it. A case marked for one lane
+family is marked because its CHILD COMMAND is a shell's or `cmd`'s, never because the drop is.
 
 ## Tests
 
@@ -245,11 +247,25 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-promise-drop.parked-subprocess-drop-cancel -->
-The process-store twin of the parked-timer case. `slowProc` spawns a child that runs for ~2 s and parks on the
-process store; `fast` completes immediately, so `await q` returns 42 while `slowProc` is still parked on its
-child. `return r` drops `slowProc` — the `waiting` arm scans the process store, `CloseHandle`s the child (abandon
-the WAIT, do not kill the child), swaps the entry out and frees the stack. The abandoned child runs to completion
-independently; the program exits promptly with 42 and the live count balances to zero.
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
+The CHILD twin of the parked-timer case, and the same program one op at a time. `slowProc` spawns a child
+that runs for ~2 s and parks on the poll source that child became; `fast` completes immediately, so `await q`
+returns 42 while `slowProc` is still parked on its child — the `gtIsComplete` peek adds `0`, which is that
+thread saying so. Scope exit drops `s` — the `waiting` arm takes it off that source and RENOUNCES it, so the
+thread resumes, gives the source back, closes the child's handle (abandon the WAIT, do not kill the child) and
+unwinds its own frame. The abandoned child runs to completion independently; the program exits promptly with 42
+and the live count balances to zero.
+
+⚠ **`s` MUST BE BOUND, AND THIS CASE READ `_ = async slowProc()` WHILE DESCRIBING THE `waiting` ARM.** That
+spelling discards the promise at its own statement, before `main` ever parks: the committed fragments showed
+`__gt_spawn` → `__gt_ready` → `__gt_promise_drop` back to back, so `slowProc` never ran, never spawned a
+child, and the drop took the QUEUED arm — the identical defect `parked-timer-drop-cancel`'s own warning
+records, in the case written against it. **It answered 42 by testing nothing**, which is why the expectation
+here is unchanged and the program is not.
+
+⚠ **AND IT CARRIED NO `unsupported-targets` MARKER WHILE SPAWNING THROUGH `cmd /c`**, so on the three POSIX
+lanes `/bin/sh -c "cmd /c ping …"` failed to exec and returned at once — nothing to park on even had the
+promise been bound. `posix-parked-subprocess-drop-cancel` is this case's real sibling on those lanes.
 ```maxon
 
 function slowProc() returns Integer
@@ -262,10 +278,112 @@ function fast() returns Integer
 end 'fast'
 
 function main() returns ExitCode
-	_ = async slowProc()
+	let s = async slowProc()
 	let q = async fast()
 	let r = await q
-	return r as ExitCode
+	return (r + __Builtins.gtIsComplete(s.inner)) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+42
+```
+
+<!-- test: async-promise-drop.posix-parked-subprocess-drop-cancel -->
+<!-- unsupported-targets: x64-windows -->
+`parked-subprocess-drop-cancel` on the POSIX lanes, where `/bin/sh -c "sleep 2"` is a child that really does
+outlive the `await`. The road is the same one: a child park is a poll source here too, so the `waiting` arm
+renounces rather than freeing the stack under a suspended thread.
+```maxon
+
+function slowProc() returns Integer
+	return try __Builtins.runProcess("sleep 2") otherwise 99
+end 'slowProc'
+
+function fast() returns Integer
+	Runtime.yield()
+	return 42
+end 'fast'
+
+function main() returns ExitCode
+	let s = async slowProc()
+	let q = async fast()
+	let r = await q
+	return (r + __Builtins.gtIsComplete(s.inner)) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+42
+```
+
+<!-- test: async-promise-drop.parked-subprocess-drop-reclaims-the-frames-heap -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
+⭐ **THE DROPPED COROUTINE UNWINDS ITS OWN FRAME, SO THE HEAP ITS LOCALS OWN GOES BACK.** `slowProc` holds
+one interpolated `String` across a park on its child, and `main` drops the promise while it is still parked.
+Renouncing resumes the thread on the source it was waiting on and lets it unwind, which releases that
+`String`; freeing the parked stack outright strands it, and the leak gate reports that as **exit 101** —
+not a wrong answer, which is why the symptom is an exit code no arithmetic in the program can produce.
+
+⚠ **`parked-subprocess-drop-cancel` DOES NOT COVER THIS, AND THE ONE INTERPOLATED `String` IS THE WHOLE
+DIFFERENCE.** Its coroutine holds nothing, so a drop that frees the parked stack and a drop that unwinds it
+answer 42 alike — there is nothing on that stack to strand. It also drops at the `_ =` site, before the
+coroutine has run; binding the promise to `p` and dropping it at scope exit is what puts the drop AFTER the
+park. `posix-parked-subprocess-drop-reclaims-the-frames-heap` is this case on the POSIX lane and carries the
+measurement.
+```maxon
+
+function slowProc(tag Integer) returns Integer
+	let held = "held-{tag}"
+	let code = try __Builtins.runProcess("cmd /c ping -n 3 127.0.0.1 >nul") otherwise 99
+	return code + held.byteLength()
+end 'slowProc'
+
+function fast() returns Integer
+	Runtime.yield()
+	return 42
+end 'fast'
+
+function main() returns ExitCode
+	let p = async slowProc(1)
+	let q = async fast()
+	let r = await q
+	return (r + __Builtins.gtIsComplete(p.inner)) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+42
+```
+
+<!-- test: async-promise-drop.posix-parked-subprocess-drop-reclaims-the-frames-heap -->
+<!-- unsupported-targets: x64-windows -->
+The same shape on the POSIX lane, where `/bin/sh -c "sleep 2"` is a child that really does outlive the
+`await`. ⚠ Its sibling above spawns through `cmd /c`, which on this lane fails to exec and returns before
+anything can park — so this is the case that actually holds a coroutine parked on a child here.
+
+**MEASURED on x64-linux: exit 101 before a child park became a poll source, exit 42 now.** The `waiting` arm
+reached the child through the process store: it scanned the store, closed the child's handle, re-read the
+status as still `waiting` and took the `soleOwner` path, which frees the stack the suspended thread sits on.
+Every heap value that thread's locals owned — here the interpolated `String` — was stranded with it.
+```maxon
+
+function slowProc(tag Integer) returns Integer
+	let held = "held-{tag}"
+	let code = try __Builtins.runProcess("sleep 2") otherwise 99
+	return code + held.byteLength()
+end 'slowProc'
+
+function fast() returns Integer
+	Runtime.yield()
+	return 42
+end 'fast'
+
+function main() returns ExitCode
+	let p = async slowProc(1)
+	let q = async fast()
+	let r = await q
+	return (r + __Builtins.gtIsComplete(p.inner)) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```

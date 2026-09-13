@@ -141,6 +141,54 @@ typealias Integer = int(i64.min to i64.max)
 6
 ```
 
+<!-- test: spawn-read-line.posix-a-parked-line-read-yields-to-a-sleeper -->
+<!-- unsupported-targets: x64-windows -->
+<!-- procs: 1 -->
+⭐ **THE READ YIELDS ON THIS LANE TOO.** A slow child (a one-second delay before its line) and a 50 ms
+sleeper run at ONE processor. The pipe's read end is non-blocking and carries a poll descriptor, so the
+reader PARKS and the sleeper's timer fires while the line is still unwritten. Each records its completion
+order into a global (`order = order * 10 + tag`), so `21` says the sleeper (tag 2) finished first. A read
+that holds the only machine inside a blocking `read(2)` answers `12` — which is what
+`async-subprocess.posix-interleave-with-sleep`'s own prose records for the streaming reader on this lane,
+and this case is that `12` turned into a `21`. The exit code IS the assertion.
+
+⚠ **THE ORDER IS THE ONLY THING THIS SURFACE CAN PIN, BECAUSE `spawnReadLine` SPAWNS AND READS IN ONE
+CALL.** A retake witness would say where the thread went rather than only that something else ran, but
+there is nowhere to open a bracket around the read alone here, and a bracket around the whole program
+counts the SPAWN: `osProcessSpawn` is `SyscallClass.blocking`, and `__sched_retake` spares a bracketed call
+only while `(nmspinning + npidle) > 0`. At ONE processor the machine inside `clone`+`execve` holds the only
+P, so that term is zero and the retake always fires — MEASURED as exactly one retake per spawn, and that
+retake is CORRECT: it is what lets the sleeper run at all while a child is being spawned.
+`streaming-subprocess.posix-a-parked-line-read-needs-no-rescue` is the case that pins the retake property,
+because its two-call surface (`subpSpawn` then `subpReadLine`) CAN bracket the read by itself.
+```maxon
+var order = 0
+
+function slow() returns Integer
+	_ = spawnReadLine("sleep 1; echo hello")
+	order = order * 10 + 1
+	return 1
+end 'slow'
+
+function fast() returns Integer
+	sleep(50)
+	order = order * 10 + 2
+	return 2
+end 'fast'
+
+function main() returns ExitCode
+	let p1 = async slow()
+	let p2 = async fast()
+	_ = await p1
+	_ = await p2
+	return order as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+21
+```
+
 <!-- test: spawn-read-line.interleave-with-sleep -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 A concurrent `async sleep(50)` runs while the read is in flight, PROVING the read yields: if the read blocked

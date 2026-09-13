@@ -231,8 +231,8 @@ end 'CalleeFacility'
 //     reading (`__Builtins.sleep(ms)`, and so every `sleep(ms)` through `stdlib/Sleep.maxon`'s body).
 //   • `__gt_resched` — the cooperative reschedule (`__Builtins.yield()`, and so every `Runtime.yield()`
 //     through `stdlib/Runtime.maxon`'s body). It is the same scheduler: a run-queue handoff through
-//     `__gt_context_switch`, falling back to `__gt_timer_check`/`__gt_proc_check`, none of which the other
-//     three backends provide.
+//     `__gt_context_switch`, falling back to `__gt_timer_check`, neither of which the other three backends
+//     provide.
 //   • `__cpu_*` — `osCpuCount`'s `GetActiveProcessorCount` (`__Builtins.cpuCount()`). The MACHINE query,
 //     and the one whose band-mate is deliberately NOT here: `__sched_max_active_workers` asks the
 //     SCHEDULER rather than the OS and its body is a constant return, so it lowers on every target. See
@@ -354,8 +354,8 @@ end 'CalleeFacility'
 // NARROW gate rather than a family-wide one.
 // ⭐⭐ **THE SELECT (`__Builtins.awaitAny` ⇒ `__gt_await_any`) JOINS INDIVIDUALLY, LIKE ITS THREE
 // SCHEDULER BAND-MATES ABOVE (SV3).** It is the whole green-thread substrate — a `TlsAlloc`'d current-P
-// slot, a context switch, `WaitForMultipleObjects` — so on any other backend the program dies in a
-// deliberate x64-windows gate that knows it is one (`StdToWasm: the P1.5 IOCP ops are x64-windows only`;
+// slot, a context switch, a poller — so on any other backend the program dies in a deliberate x64-windows
+// gate that knows it is one (`StdToWasm: the P1.5 IOCP ops are x64-windows only`;
 // `StdToX64Conversion: lowerTlsAlloc: TlsAlloc is x64-windows only`) rather than at its own span. That is
 // exactly the shape `W223` records for the `async`/`await` band, whose entry points are NOT here and
 // which is that row's to close; this rung refuses to open ANOTHER such door while it stands, so the new
@@ -631,10 +631,10 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			//   • An IO-COMPLETION shape (`GtRuntime.IoCompletionShape`): a read completes in its caller on
 			//     this lane, so the port, the wake event and the drain thread are not built at all.
 			//
-			// ⚠ **THE ONE THING IT DOES NOT HAVE IS A NETPOLL A READ CAN PARK ON.** `__gt_subp_read_line`
-			// blocks its M until the child writes or exits; the COLLECT loop never blocks, because
-			// `osPipePeek` asks first. A kqueue would lift that and change no answer — see
-			// `StdToArm64Conversion`'s `osReadOverlapped` arm.
+			// ⚠ **A PIPE READ PARKS ON THE KQUEUE HERE, WHICH IS WHY THE `inlineCompletion` SHAPE COSTS THE
+			// READER NOTHING.** The parent's read end is non-blocking and carries a poll descriptor, so an
+			// `EAGAIN` reaches `__gt_subp_yield_read` as `ERROR_IO_PENDING` and the green thread suspends on
+			// the poller instead of holding its M inside `read(2)`.
 			subprocess gives true
 
 			// ⭐⭐ **THE BSD SOCKET BAND, AND IT IS THE CHEAPEST ROW IN THIS BLOCK — SIX IMPORT SLOTS AND NOT ONE
@@ -770,9 +770,9 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			//
 			// ⭐⭐ **THE REST OF THE BAND IS ONE BODY FOR BOTH POSIX LANES, WHICH IS THE OPPOSITE OF HOW EVERY
 			// OTHER FAMILY IN THIS TABLE SPLIT.** `waitpid` and `wait4` decode the same status word, `poll` and
-			// `ppoll` fill the same `struct pollfd`, and the reap, the bounded await, the exit-code read and the
-			// netpoll's multi-wait make no OS call at all — so they live in `Arm64PosixRuntime` and take this
-			// lane's `svc` through `PosixHostCall` (see that file's L5 header).
+			// `ppoll` fill the same `struct pollfd`, and the reap, the bounded await and the exit-code read make
+			// no OS call at all — so they live in `Arm64PosixRuntime` and take this lane's `svc` through
+			// `PosixHostCall` (see that file's L5 header).
 			//
 			// ⚠ **A FAILED EXEC IS REPORTED THROUGH A `O_CLOEXEC` STATUS PIPE**, because a hand-built fork has
 			// no other channel: `posix_spawnp` answers its caller, while here the failure happens in another
@@ -938,8 +938,8 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			//   * `reschedule` is `__gt_context_switch`, a hand-assembled per-CPU chunk of the same floor.
 			//   * `subprocess` cannot lag behind `greenThreads` EITHER, because `installGtRuntime` calls
 			//     `buildGtProcessRun` UNCONDITIONALLY (`GtRuntime.maxon`): every green-thread program
-			//     statically contains `__gt_process_run`, whose `osProcessSpawn`/`osWaitHandles`/
-			//     `osProcessExitCode` reach a lowering that must have this lane's arm. A `greenThreads` row
+			//     statically contains `__gt_process_run`, whose `osProcessSpawn` and `osProcessExitCode` reach
+			//     a lowering that must have this lane's arm. A `greenThreads` row
 			//     set with `subprocess` false compiles no `async` program at all — it panics in the isel on a
 			//     spawn no source in the program mentions.
 			//

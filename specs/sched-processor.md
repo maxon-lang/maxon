@@ -11,7 +11,7 @@ category: system
 
 the compiler's green-thread runtime is split across two files, and the split is the subject of this spec.
 `Compiler/Runtime/GtRuntime.maxon` owns the GREEN THREAD (G) — its struct, its stack, the global FIFO
-run queue, the timer and process stores. `Compiler/Runtime/SchedRuntime.maxon` owns the two things a
+run queue, the timer store. `Compiler/Runtime/SchedRuntime.maxon` owns the two things a
 green thread alone cannot express:
 
 | | |

@@ -205,11 +205,6 @@ let CurrentModuleHandle = 0x0
 // `PeekNamedPipe`'s unread out-params.
 let NullPointer = 0x0
 
-// WaitForMultipleObjects' `bWaitAll` — FALSE: the netpoll wakes on the FIRST signaled handle (any child that
-// exited), not when ALL have. WaitForSingleObject / WaitForMultipleObjects return WAIT_OBJECT_0 (0) for the
-// (first) signaled handle; `__gt_proc_check` tests that value.
-let WaitAnyHandle = 0x0
-
 // --- P1.5 dogfood slice 1a: the IOCP overlapped-read substrate's Win32 magic values ---
 // The Win32 magic values the overlapped-read pipe and the IOCP init take, named
 // once here so the pipe/iocp/event/thread lowerings cannot restate them. `INBOUND|OVERLAPPED|FIRST_PIPE_INSTANCE`
@@ -402,15 +397,23 @@ export let ReadProcessMemoryStackArgWords = 1 as MachineWord  // arg 5: lpNumber
 export let GetQueuedCompletionStatusExStackArgWords = 2 as MachineWord  // args 5-6: dwMilliseconds, fAlertable
 
 // `osNetpoll`'s outgoing slots: the two stack arguments of its widest calls (`GetQueuedCompletionStatusEx`,
-// `SetWaitableTimer`), then the relative due time `SetWaitableTimer` reads through a pointer — a word the
-// frame owns for the length of the call, so it needs no operand to carry it.
+// `SetWaitableTimer`, `RegisterWaitForSingleObject`), then one word the frame owns for the length of a call —
+// `SetWaitableTimer`'s relative due time and `RegisterWaitForSingleObject`'s wait-handle out-param both reach
+// the kernel through a pointer, so neither needs an operand to carry it.
 let NetpollArg5Slot = 0
 let NetpollArg6Slot = 1
-let NetpollDueTimeSlot = 2
-let NetpollOutgoingSlots = (NetpollDueTimeSlot + 1) as MachineWord
+let NetpollBorrowedWordSlot = 2
+let NetpollOutgoingSlots = (NetpollBorrowedWordSlot + 1) as MachineWord
 
 // `GetQueuedCompletionStatusEx`'s `fAlertable`: no APC is ever queued to a machine, so none may end its wait.
 let NetpollWaitNotAlertable = 0
+
+// `RegisterWaitForSingleObject`'s `WT_EXECUTEONLYONCE`. A process handle signals once and stays signalled, so
+// without it the thread pool would re-arm and post a packet per pass.
+let WaitExecuteOnlyOnce = 8
+
+// `RegisterWaitForSingleObject`'s six arguments, two of which the kernel reads off the stack.
+export let RegisterWaitStackArgWords = 2 as MachineWord  // args 5-6: dwMilliseconds, dwFlags
 
 // ⛔ **THE SCHEDULER PORT'S `NumberOfConcurrentThreads` IS UNBOUNDED — Go's `_DWORD_MAX`.** Every machine that
 // has ever polled stays associated with the port and counts against the limit whenever it runs, so a limit of
@@ -1150,7 +1153,6 @@ export type StdToX64Lowering
 			// The four ≤4-argument subprocess ops (spawn is named above) reserve no outgoing stack space.
 			// `osFreePages`'s `VirtualFree(addr, 0, MEM_RELEASE)` is three register args, so it reserves none either.
 			osProcessExitCode or
-				osWaitHandles or
 				osCloseHandle or
 				osWaitHandle or
 				osFreePages gives 0
@@ -1474,7 +1476,6 @@ export type StdToX64Lowering
 			osCpuCount(resultId) then self.lowerOsCpuCount(resultId, dstBlock: dstBlock)
 			osThreadCpuTicks(handleId, outPtrId) then self.lowerOsThreadCpuTicks(handleId, outPtrId: outPtrId, dstBlock: dstBlock)
 			osProcessExitCode(handleId, codePtrId) then self.lowerOsProcessExitCode(handleId, codePtrId: codePtrId, dstBlock: dstBlock)
-			osWaitHandles(handleArrayPtrId, countId, timeoutMsId) then self.lowerOsWaitHandles(handleArrayPtrId, countId: countId, timeoutMsId: timeoutMsId, dstBlock: dstBlock)
 			osCloseHandle(handleId) then self.lowerOsCloseHandle(handleId, dstBlock: dstBlock)
 			osWaitHandle(resultId, handleId, timeoutMsId) then self.lowerOsWaitHandle(resultId, handleId: handleId, timeoutMsId: timeoutMsId, dstBlock: dstBlock)
 
@@ -1629,7 +1630,6 @@ export type StdToX64Lowering
 			osReadClock then panic("StdToX64Lowering: an `osReadClock` op appeared as a block terminator (lowering bug — a clock read is a value-consuming body op)")
 			osProcessSpawn or
 				osProcessExitCode or
-				osWaitHandles or
 				osCloseHandle or
 				osWaitHandle then panic("StdToX64Lowering: a P1.5 subprocess op appeared as a block terminator (lowering bug — spawn/wait/exit-code/close are all body ops)")
 			osHandleSetInherit or
@@ -2987,28 +2987,6 @@ export type StdToX64Lowering
 		end 'route'
 	end 'lowerOsProcessExitCode'
 
-	// Lower `osWaitHandles(handleArrayPtr, count, timeoutMs)` to `WaitForMultipleObjects(count, handleArrayPtr,
-	// FALSE, timeoutMs)` through the IAT — the netpoll's block on the parked children, performed by the M that
-	// holds the single-poller claim (`GtRuntime.GtProcPollerLabel`). Win64 args:
-	// count=rcx, handleArrayPtr=rdx, bWaitAll=FALSE=r8, timeoutMs=r9. No result captured (the netpoll re-scans).
-	function lowerOsWaitHandles(handleArrayPtrId ValueId, countId ValueId, timeoutMsId ValueId, dstBlock IrBlock)
-		match x64OsCallKind(self.target.os) 'route'
-			importCall then self.lowerOsWaitHandlesWin64(handleArrayPtrId, countId: countId, timeoutMsId: timeoutMsId, dstBlock: dstBlock)
-
-			// POSIX has no multi-object wait, so the chunk POLLS the handle array — and there is no `bWaitAll`
-			// to marshal, because the netpoll only ever asks for ANY.
-			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostWaitAnyName, args: threeArgs(handleArrayPtrId, second: countId, third: timeoutMsId))
-		end 'route'
-	end 'lowerOsWaitHandles'
-
-	function lowerOsWaitHandlesWin64(handleArrayPtrId ValueId, countId ValueId, timeoutMsId ValueId, dstBlock IrBlock)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(countId)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(handleArrayPtrId)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: WaitAnyHandle))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r9), srcReg: TargetVReg.virtual(timeoutMsId)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.WaitForMultipleObjects)))
-	end 'lowerOsWaitHandlesWin64'
-
 	// Lower `osCloseHandle(handle)` to `CloseHandle(handle)` through the IAT — arg rcx, result ignored.
 	function lowerOsCloseHandle(handleId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
@@ -3289,8 +3267,8 @@ export type StdToX64Lowering
 	end 'lowerCurrentThreadTokenLinux'
 
 	// Lower `osWaitHandle(handle, timeoutMs)` to `WaitForSingleObject(handle, timeoutMs)` — args rcx/rdx — and
-	// CAPTURE the wait result from RAX (the one subprocess op whose result is read: `__gt_proc_check` polls with
-	// `timeoutMs = 0` and tests `== WAIT_OBJECT_0`).
+	// CAPTURE the wait result from RAX (the one subprocess op whose result is read: the collect drain's exit
+	// test polls with `timeoutMs = 0` and tests `== WAIT_OBJECT_0`).
 	function lowerOsWaitHandle(resultId ValueId, handleId ValueId, timeoutMsId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsWaitHandleWin64(resultId, handleId: handleId, timeoutMsId: timeoutMsId, dstBlock: dstBlock)
@@ -3879,7 +3857,12 @@ export type StdToX64Lowering
 				drainBreak or
 				sleepOnTimer or
 				armSource or
+				openChildSource or
+				armChildSource or
+				closeChildSource or
+				armPipeSource or
 				shortSleep then self.lowerLinuxHostChunkValue(resultId, args: posixNetpollChunkArgs(verb, operands: operands), chunk: posixNetpollChunk(verb), dstBlock: dstBlock)
+			postChildExit then panic("lowerOsNetpollLinux: `postChildExit` forwards a child's exit to a completion port, and this lane's `pidfd` becomes readable on its own — `NetpollRuntime` emits it only under `NetpollShape.completionPort`")
 		end 'v'
 	end 'lowerOsNetpollLinux'
 
@@ -3893,6 +3876,11 @@ export type StdToX64Lowering
 			raiseBreak then self.lowerNetpollRaiseBreakWin64(resultId, port: netpollOperand(operands, index: 0), dstBlock: dstBlock)
 			drainBreak then panic("lowerOsNetpollWin64: `drainBreak` is the epoll shape's read of its eventfd, and x64-windows is `NetpollShape.completionPort`, whose break is consumed by receiving its packet — `NetpollRuntime` emits this verb only under `NetpollShape.epoll`")
 			armSource then panic("lowerOsNetpollWin64: `armSource` registers a SOCKET with the poller, and x64-windows registers none — its socket band is blocking, so `NetpollRuntime.installNetpollRuntime` does not build `__np_pd_open`, the verb's only producer, on `NetpollShape.completionPort`")
+			armPipeSource then panic("lowerOsNetpollWin64: `armPipeSource` makes a pipe end non-blocking and registers it for reading, and this lane's pipes are OVERLAPPED and were given to the port when they were created — `NetpollRuntime.__np_pipe_open` emits nothing here")
+			openChildSource then panic("lowerOsNetpollWin64: `openChildSource` asks the HOST for a descriptor that reports a child's exit, and Windows has none — `NetpollRuntime.__np_child_open` allocates this lane's source key itself")
+			armChildSource then self.lowerNetpollArmChildWin64(resultId, child: netpollOperand(operands, index: 2), source: netpollOperand(operands, index: 1), callback: netpollOperand(operands, index: 3), dstBlock: dstBlock)
+			closeChildSource then self.lowerNetpollCloseChildWin64(resultId, registeredWait: netpollOperand(operands, index: 0), dstBlock: dstBlock)
+			postChildExit then self.lowerNetpollPostChildExitWin64(resultId, port: netpollOperand(operands, index: 0), source: netpollOperand(operands, index: 1), dstBlock: dstBlock)
 			openTimer then self.lowerNetpollOpenTimerWin64(resultId, flags: netpollOperand(operands, index: 0), dstBlock: dstBlock)
 			sleepOnTimer then self.lowerNetpollSleepWin64(resultId, microseconds: netpollOperand(operands, index: 0), timer: netpollOperand(operands, index: 1), dstBlock: dstBlock)
 
@@ -3930,15 +3918,71 @@ export type StdToX64Lowering
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerNetpollWaitWin64'
 
-	// `PostQueuedCompletionStatus(port, 0, NetpollBreakToken, NULL)` — a packet no overlapped operation sent.
-	function lowerNetpollRaiseBreakWin64(resultId ValueId, port ValueId, dstBlock IrBlock)
+	// ⭐ **BOTH PACKETS THIS BACKEND POSTS ARE ONE CALL UNDER TWO KEYS, AND THE KEY IS WHAT THE POLLER'S WALK
+	// TELLS THEM APART BY** — the break's constant token, or a child's source. So the rest of
+	// `PostQueuedCompletionStatus(port, NetpollBreakBytes, <key>, NULL)` is written once.
+	//
+	// ⚠ **r8 IS THE CALLER'S AND IS READ HERE, NEVER WRITTEN**: an immediate and a vreg are different
+	// instructions, so the key is placed by whoever knows which. rcx, rdx and r9 are distinct from r8, so the
+	// caller's load survives them.
+	function emitNetpollPostUnderKeyWin64(resultId ValueId, port ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(port)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: NetpollBreakBytes))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm(x64PhysReg(X64Register.r8), value: NetpollBreakToken as MachineWord))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: NullPointer))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.PostQueuedCompletionStatus)))
 		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'emitNetpollPostUnderKeyWin64'
+
+	// The break's packet: a completion no overlapped operation sent, under the constant token.
+	function lowerNetpollRaiseBreakWin64(resultId ValueId, port ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm(x64PhysReg(X64Register.r8), value: NetpollBreakToken as MachineWord))
+		self.emitNetpollPostUnderKeyWin64(resultId, port: port, dstBlock: dstBlock)
 	end 'lowerNetpollRaiseBreakWin64'
+
+	// ⭐⭐⭐ **`RegisterWaitForSingleObject(&wait, child, callback, source, INFINITE, WT_EXECUTEONLYONCE)` — HOW A
+	// CHILD BECOMES A SOURCE ON A COMPLETION PORT, WITHOUT ntdll.**
+	//
+	// ⛔⛔ **THE ALTERNATIVE IS A STATIC `ntdll` IMPORT AND IT IS REFUSED HERE, DELIBERATELY.**
+	// `NtCreateWaitCompletionPacket` + `NtAssociateWaitCompletionPacket` would let the kernel post the packet
+	// with no thread of ours in the middle — but a static ntdll import that a host cannot bind makes the WHOLE
+	// IMAGE fail to load (`PeWriter.IatSlot.NtGetNextThread` records that accepted risk), and today only a
+	// PROFILING build takes it. Every program that spawns a child — this compiler included — would take it
+	// instead. `RegisterWaitForSingleObject` is kernel32, is bound in every image already, and is the OS
+	// running exactly the waiter-thread pool the hand-written fallback would have had to build.
+	//
+	// ⚠ **THE WAIT HANDLE COMES BACK THROUGH A POINTER, AND THE FRAME OWNS THAT WORD.** A failed call leaves
+	// the slot untouched, so it is zeroed first: the result is then the registered wait, or 0, which is the
+	// vocabulary `emitNetpollFailed` reads on this shape.
+	function lowerNetpollArmChildWin64(resultId ValueId, child ValueId, source ValueId, callback ValueId, dstBlock IrBlock)
+		let waitDisp = win64OutgoingArgDisp(NetpollBorrowedWordSlot)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rax), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: waitDisp, src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
+		self.emitWin64StackArgImm(dstBlock, slot: NetpollArg5Slot, value: WaitInfinite)
+		self.emitWin64StackArgImm(dstBlock, slot: NetpollArg6Slot, value: WaitExecuteOnlyOnce)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRegImm32(x64PhysReg(X64Register.rcx), base: x64PhysReg(X64Register.rsp), disp: waitDisp))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(child)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(callback)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r9), srcReg: TargetVReg.virtual(source)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.RegisterWaitForSingleObject)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.loadRegBaseDisp(TargetVReg.virtual(resultId), base: x64PhysReg(X64Register.rsp), disp: waitDisp, width: X64AccessWidth.word64))
+	end 'lowerNetpollArmChildWin64'
+
+	// ⚠ **`UnregisterWaitEx(wait, INVALID_HANDLE_VALUE)` — THE BLOCKING FORM, AND THE BLOCK IS THE POINT.** It
+	// waits for a callback already running to finish, so that once it returns either the packet has been
+	// posted or none ever will be; a non-blocking unregister would leave a callback free to post under a
+	// source key its caller is about to give back.
+	function lowerNetpollCloseChildWin64(resultId ValueId, registeredWait ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(registeredWait)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm(x64PhysReg(X64Register.rdx), value: InvalidHandleValue))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.UnregisterWaitEx)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerNetpollCloseChildWin64'
+
+	// A child's exit, under its own source key, from the thread pool's wait callback.
+	function lowerNetpollPostChildExitWin64(resultId ValueId, port ValueId, source ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(source)))
+		self.emitNetpollPostUnderKeyWin64(resultId, port: port, dstBlock: dstBlock)
+	end 'lowerNetpollPostChildExitWin64'
 
 	// `CreateWaitableTimerExW(NULL, NULL, flags, TIMER_ALL_ACCESS)`.
 	function lowerNetpollOpenTimerWin64(resultId ValueId, flags ValueId, dstBlock IrBlock)
@@ -3953,7 +3997,7 @@ export type StdToX64Lowering
 	// `SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE)` then `WaitForSingleObject(timer, INFINITE)`. A
 	// NEGATIVE due time is relative, in 100 ns units, and lives in the frame's own outgoing slot.
 	function lowerNetpollSleepWin64(resultId ValueId, microseconds ValueId, timer ValueId, dstBlock IrBlock)
-		let dueDisp = win64OutgoingArgDisp(NetpollDueTimeSlot)
+		let dueDisp = win64OutgoingArgDisp(NetpollBorrowedWordSlot)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.imulRegRegImm32(x64PhysReg(X64Register.rax), src: TargetVReg.virtual(microseconds), imm: WaitableTimerRelativeTicksPerMicro))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: dueDisp, src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
 		self.emitWin64StackArgImm(dstBlock, slot: NetpollArg5Slot, value: NullPointer)
@@ -5062,7 +5106,6 @@ export type StdToX64Lowering
 				osReadClock or
 				osProcessSpawn or
 				osProcessExitCode or
-				osWaitHandles or
 				osCloseHandle or
 				osWaitHandle or
 				osFreePages gives false
@@ -5342,7 +5385,6 @@ export type StdToX64Lowering
 				osReadClock or
 				osProcessSpawn or
 				osProcessExitCode or
-				osWaitHandles or
 				osCloseHandle or
 				osWaitHandle or
 				osFreePages panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")

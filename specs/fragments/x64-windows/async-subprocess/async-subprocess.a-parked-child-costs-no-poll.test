@@ -1,0 +1,238 @@
+// Test: async-subprocess.a-parked-child-costs-no-poll
+// The whole second the child runs. A poller that blocks until the child's exit lands returns a handful of
+// times; one that caps its wait to re-poll every parked child returns about a thousand.
+let quietWakes = 8
+
+// A child wait is a park on the poller — at least the one this program makes.
+let pollerParks = 1
+
+function slow() returns Integer
+	return try __Builtins.runProcess("cmd /c ping -n 2 127.0.0.1 >nul") otherwise 99
+end 'slow'
+
+function main() returns ExitCode
+	sleep(1)
+	let beforeWakes = __Builtins.schedParkWakeCount()
+	let beforeParks = __Builtins.schedNetpollBlockCount()
+	let p = async slow()
+	_ = await p
+	let wakes = __Builtins.schedParkWakeCount() - beforeWakes
+	let parks = __Builtins.schedNetpollBlockCount() - beforeParks
+	print("quiet={wakes <= quietWakes} onpoller={parks >= pollerParks}\n")
+	return 0 as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 0
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_timer_count@24 = i64 0
+  __gt_timer_heap_base@32 = i64 0
+  __gt_timer_capacity@40 = i64 0
+  __gt_timer_seq@48 = i64 0
+  __gt_timer_when@56 = i64 9223372036854775807
+  __gt_trace_counter@64 = i64 0
+  __gt_live_count@72 = i64 0
+  __gt_seed_bytes@80 = i64 8192
+  __gt_stack_bytes_sum@88 = i64 0
+  __gt_stack_bytes_count@96 = i64 0
+  __gt_seed_sum_seen@104 = i64 0
+  __gt_seed_count_seen@112 = i64 0
+  __sched_active_workers@120 = i64 1
+  __sched_max_active_workers@128 = i64 1
+  __sched_tls_index@136 = i64 0
+  __sched_tls_teb_offset@144 = i64 0
+  __sched_procs@152 = i64 0
+  __sched_allm@160 = i64 0
+  __sched_midle@168 = i64 0
+  __sched_pidle@176 = i64 0
+  __gt_gfree_head@184 = i64 0
+  __sched_arena_cursor@192 = i64 0
+  __sched_arena_limit@200 = i64 0
+  __gt_records_carved@208 = i64 0
+  __sched_npidle@216 = i64 0
+  __sched_runq_size@224 = i64 0
+  __sched_global_pushes@232 = i64 0
+  __sched_mcount@240 = i64 0
+  __sched_nmidle@248 = i64 0
+  __sched_main_m@256 = i64 0
+  __sched_phase@264 = i64 0
+  __sched_lastpoll@272 = i64 0
+  __sched_poll_until@280 = i64 0
+  __sched_regain_head@288 = i64 0
+  __np_poller@296 = i64 0
+  __np_break@304 = i64 0
+  __np_wake_sig@312 = i64 0
+  __np_pd_table@320 = i64 0
+  __np_pd_cap@328 = i64 0
+  __np_waiters@336 = i64 0
+  __np_child_key_free@344 = i64 0
+  __np_child_key_high@352 = i64 0
+  __sched_num_procs@360 = i64 0
+  __sched_shutdown_flag@368 = i64 0
+  __sched_lock@376 = i64 0
+  __sched_lock_depth_sink@384 = i64 0
+  __sched_nmspinning@392 = i64 0
+  __sched_needspinning@400 = i64 0
+  __sched_sysmon_event@408 = i64 0
+  __sched_sysmon_wait@416 = i64 0
+  __sched_timer_starts@424 = i64 0
+  __sched_preempt_ext_lock@432 = i64 0
+  __sched_preempt_context@440 = i64 0
+  __slab_arena_list@448 = i64 0
+  __slab_arena_map_l1@456 = i64 0
+  __slab_state@464 = i64 0
+  __mrt_console_probe_stdin@472 = i8 0
+  __mrt_console_probe_stdout@473 = i8 0
+  __mrt_console_probe_stderr@474 = i8 0
+}
+
+func @slow {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_4]  ; "cmd /c ping -n 2 127.0.0.1 >nul"
+    x64.callDirect __gt_process_run
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, trycont
+  tryerr:
+    x64.movRegImm32 r8, 99
+  trycont:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 104
+    x64.movRegImm32 rcx, 1
+  __rc_ok:
+    x64.callDirect __gt_sleep
+  __il_cont#2:
+    x64.callDirect __sched_park_wake_count
+    x64.movRegReg rbx, r8
+    x64.callDirect __sched_netpoll_block_count
+    x64.movRegReg r12, r8
+    x64.leaRegFunc rcx, [rip + slow]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_ready
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_await
+    x64.callDirect __sched_park_wake_count
+    x64.movRegReg r13, r8
+    x64.subRegReg r13, r8, rbx
+    x64.callDirect __sched_netpoll_block_count
+    x64.movRegReg rbx, r8
+    x64.subRegReg rbx, r8, r12
+    x64.leaRegRdata rax, [rip + __str_rec_5]  ; "quiet="
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot7, rcx
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.cmpRegImm32 r13, 8
+    x64.setccReg lessEqual, r13
+    x64.movRegImm32 rcx, 5
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot6, r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r8
+    x64.callDirect __bool_to_string
+    x64.movRegReg r13, r8
+    x64.leaRegRdata rax, [rip + __str_rec_6]  ; " onpoller="
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot5, rcx
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.cmpRegImm32 rbx, 1
+    x64.setccReg greaterEqual, rbx
+    x64.movRegImm32 rcx, 5
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r15
+    x64.callDirect __bool_to_string
+    x64.storeSlotReg slot4, r8
+    x64.leaRegRdata rax, [rip + __str_rec_7]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot3, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot2, rax
+    x64.leaRegRegReg rcx, r12, r13
+    x64.leaRegRegReg rcx, rcx, r14
+    x64.leaRegRegReg rcx, rcx, r8
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot0, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot1, r8
+    x64.leaRegRegImm32 rbx, r8, 56
+    x64.loadRegSlot rdx, slot7
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, rbx, r12
+    x64.loadRegSlot rdx, slot6
+    x64.movRegReg rcx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r12, r13
+    x64.loadRegSlot rdx, slot5
+    x64.movRegReg rcx, r12
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r12, r14
+    x64.loadRegSlot rax, slot4
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r15
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot4
+    x64.leaRegRegReg r12, r12, rax
+    x64.loadRegSlot rax, slot2
+    x64.loadRegSlot rdx, slot3
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot2
+    x64.leaRegRegReg rax, r12, rax
+    x64.loadRegSlot rax, slot1
+    x64.storeBaseDispReg.word64 [rax + 0], rbx
+    x64.loadRegSlot rcx, slot0
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+    x64.loadRegSlot rcx, slot6
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_decref
+  __il_body:
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __write_stdout
+  __il_cont#1:
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __str_decref
+    x64.movRegImm32 r8, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

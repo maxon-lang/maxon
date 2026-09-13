@@ -15,19 +15,20 @@ real handle-table API: a spawn creates THREE pipes — one outbound for stdin th
 inbound that the parent reads — hands back a non-negative integer handle indexing a runtime table, and
 every later call names that handle.
 
-⚠ **WHICH LANES RUN THESE, AND WHERE THE TWO GENUINELY PART, IS THE *Targets* SECTION BELOW.** The
-mechanism differs — Windows registers the two inbound pipes with IOCP and parks the reader on an
-OVERLAPPED; the POSIX lane blocks its machine in the read — and that difference is a measured property
-with cases pinning it, not an aside.
+⚠ **WHICH LANES RUN THESE, AND HOW EACH PARKS A READER, IS THE *Targets* SECTION BELOW.** The mechanism
+differs — Windows registers the two inbound pipes with IOCP and parks the reader on an OVERLAPPED; the
+POSIX lane makes the read end non-blocking and parks it on a poll descriptor — and that difference is a
+measured property with cases pinning it, not an aside.
 
 - `subpSpawn(cmd)` spawns the child named by the command `String` with all three std streams redirected to
   pipes, and returns the handle (or `-1` on spawn failure). The command reaches `CreateProcessA` on
   Windows and `/bin/sh -c` on the POSIX lane, which is why each subject carries a `posix-…` sibling.
 - `subpReadLine(h)` reads one line from the child's stdout, INCLUDING the trailing `\n` (so a caller can
-  distinguish a blank line from EOF by length). ⛔ Whether it YIELDS is the lane difference above: on Windows the
-  read is in flight and the green thread parks on its OVERLAPPED, resumed by the IOCP completion thread,
-  so other green threads make progress; on the POSIX lane there is no netpoll a pipe read can park on, so
-  the read blocks its machine instead. Returns an empty `String` on EOF, and the EOF is latched. `subpReadErrLine(h)` is the
+  distinguish a blank line from EOF by length). ⛔ **IT YIELDS ON EVERY LANE AND ONLY THE MECHANISM DIFFERS**,
+  which is the lane difference above: on Windows the read is in flight and the green thread parks on its
+  OVERLAPPED, resumed by the IOCP completion thread; on the POSIX lane the read end is non-blocking and the
+  green thread parks on its poll descriptor, resumed by the poller. Other green threads make progress either
+  way. Returns an empty `String` on EOF, and the EOF is latched. `subpReadErrLine(h)` is the
   stderr twin (post-exit use only in the harness).
 - `subpWriteLine(h, line: s)` writes `s + "\n"` to the child's stdin, synchronously, returning
   `0` on success or non-zero on a broken pipe.
@@ -61,18 +62,17 @@ builtins compile and run there. The programs above cannot be widened — they sp
 this lane can express carries a `posix-…` sibling marked `arm64-macos`, exactly as
 `process-background-priority.md` pairs its two units.
 
-⛔ **THREE OF THE NINE CASES ABOVE HAVE NO SIBLING, AND THE REASON IS A MEASURED PROPERTY RATHER THAN
-UNFINISHED WORK.** `interleave-with-sleep`, `drop-reader-then-reread` and
-`release-while-parked-then-reuse-slot` all assert something about a reader that is PARKED — a
-concurrent sleeper making progress, a drop cancelling an in-flight `ReadFile`, a generation guard
-catching a resume after the slot was reused. **There is no netpoll a pipe read can park on here**
-(`TargetFacilities`'s MAC8 row states it, and `StdToArm64Conversion`'s `osReadOverlapped` arm is
-where a kqueue would go): `__gt_subp_read_line` blocks its M until the child writes or exits, so a
-read is never in flight and there is no park to interrupt. MEASURED with `interleave-with-sleep`'s
-own shape — a slow child against a 50 ms sleeper, each recording its completion order — this lane
-answers **12** where Windows answers **21**. Those three cases would not merely be hard to port;
-their subject does not exist on this lane yet, and a case pinning the blocking behaviour instead
-would pin a limitation as a specification.
+⚠ **A READ PARKS HERE TOO, ON A POLL DESCRIPTOR RATHER THAN AN OVERLAPPED.** The pipe's read end is
+non-blocking and carries a poll source, so `subpReadLine` gives its machine up until the poller
+reports the descriptor ready. `posix-a-parked-line-read-needs-no-rescue` measures exactly that: the
+retake delta across one `subpReadLine` whose child delays a second is ZERO, so the machine was
+released deliberately rather than rescued out of a blocking call.
+
+⛔ **THREE OF THE NINE CASES ABOVE STILL HAVE NO SIBLING, AND THAT IS NOW A GAP RATHER THAN A LANE
+FACT.** `interleave-with-sleep`, `drop-reader-then-reread` and `release-while-parked-then-reuse-slot`
+each assert something about a reader that is PARKED — a concurrent sleeper making progress, a drop
+cancelling a read in flight, a generation guard catching a resume after the slot was reused. Their
+subject exists on these lanes now; the ports are simply unwritten.
 
 ## Tests
 
@@ -115,12 +115,10 @@ so the E3104 gate that covers a target with no substrate correctly did not fire.
 `__gt_process_run` and `__gt_io_read` had routed their line through `emitSubpCommandFromLine` since MAC8;
 this one now does too.
 
-⚠ **THE READ DOES NOT YIELD ON THIS LANE, AND THAT IS WHY `interleave-with-sleep` HAS NO SIBLING.** There
-is no netpoll a pipe read can park on here, so `subpReadLine` blocks its M until the child writes or exits
-(`TargetFacilities`'s MAC8 row states it). MEASURED with the Windows case's own shape, a slow child against
-a 50 ms sleeper recording completion order: this lane answers **12** (reader first) where Windows answers
-**21**. The property that case pins is genuinely absent here, so pinning it would be pinning a Windows fact
-on a machine that does not have it.
+⚠ **THE READ YIELDS ON THIS LANE, ON A POLL DESCRIPTOR RATHER THAN AN OVERLAPPED — BUT NOT MEASURABLY
+HERE.** `echo hello` races the parent to the pipe, so whether this read finds its line already waiting or
+parks for it is not decidable from the answer. `posix-a-parked-line-read-needs-no-rescue` puts a
+one-second delay under the child so the park is certain, and measures where the machine went.
 ```maxon
 function main() returns ExitCode
 	let h = subpSpawn("echo hello")
@@ -138,6 +136,148 @@ end 'main'
 ```stdout
 0
 
+```
+
+<!-- test: streaming-subprocess.posix-a-parked-line-read-needs-no-rescue -->
+<!-- unsupported-targets: x64-windows -->
+<!-- procs: 1 -->
+⭐ **THE READ PARKS, AND THE SYSTEM MONITOR NEVER HAS TO TAKE THE PROCESSOR BACK FOR IT.** This is the
+witness `spawn-read-line.posix-a-parked-line-read-yields-to-a-sleeper` cannot carry: `spawnReadLine` spawns
+AND reads in one call, so a bracket around it counts the SPAWN — `osProcessSpawn` is
+`SyscallClass.blocking`, and at ONE processor the machine inside `clone`+`execve` holds the only P, so
+`__sched_retake`'s `(nmspinning + npidle) > 0` term is zero and the retake always fires. That retake is
+correct; it is what lets anything else run while a child is being spawned. Here the two are SEPARATE calls,
+so `beforeRetake` … `schedRetakeCount() - beforeRetake` brackets `subpReadLine` ALONE and the spawn's
+retake falls outside it. The idiom is `netpoll-socket`'s verbatim.
+
+The child delays a second before its line, so the read is certainly outstanding when the scheduler runs out
+of other work. `rescued=false` then says the reader went onto its poll descriptor and gave the machine up
+deliberately, rather than sitting inside `read(2)` for `__sysmon` to rescue. The line's byte length is the
+exit code (`hello\n`, SIX), so a read that returned nothing cannot pass the case.
+
+⚠ **BEFORE THE PIPE CARRIED A POLL DESCRIPTOR THE DELTA WAS AT LEAST ONE.** `subpReadLine` blocked its
+machine in the read, `__sysmon` observed the same bracketed call twice and took the processor back. The
+witness is EXACTLY ZERO for the reason `netpoll-socket`'s `stuck=` witness is: a tolerance would admit
+precisely the arrangement the case exists to refuse.
+```maxon
+function main() returns ExitCode
+	let h = subpSpawn("sleep 1; echo hello")
+	let beforeRetake = __Builtins.schedRetakeCount()
+	let line = subpReadLine(h)
+	let delta = __Builtins.schedRetakeCount() - beforeRetake
+	let rescued = delta > 0
+	let n = line.byteLength()
+	print("rescued={rescued}\n")
+	_ = subpWait(h)
+	subpRelease(h)
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+6
+```
+```stdout
+rescued=false
+```
+
+<!-- test: streaming-subprocess.posix-a-drained-child-costs-no-timer-scan -->
+<!-- unsupported-targets: x64-windows -->
+<!-- procs: 1 -->
+⭐ **DRAINING A CHILD MUST NOT COST ANYTHING PER LIVE SLEEPER, AND `schedTimerScanStepCount()` IS THE ONLY
+READING THAT CAN SAY SO.** Disarming a deadline is a LINEAR walk of the live timer heap under `__sched_lock`
+(`GtRuntime.emitGtTimerStoreRemove`), and a `(gt, tag)` that is not on the heap walks to its END. A child
+exit and a pipe-read readiness arm NO deadline, and between them they are the highest-frequency wakes the
+runtime has — one per child and one per chunk boundary of everything a child writes. So the cancel side asks
+exactly what the arm side asked: `emitNetpollDisarmDeadline` branches on the same `deadline != 0` word that
+`__np_pd_commit`'s publish arm branches on before it adds an entry, and a cancel with nothing to find never
+starts the walk.
+
+The counter reports entries INSPECTED rather than cancels attempted, which is the whole point — a count of
+CALLS reads the same whether a cancel walked one entry or a thousand. Eight sleepers hold eight entries on
+the heap (`Runtime.yield()` puts them all there before the bracket opens), then twenty `echo`s are drained
+line by line inside it. Every readiness in that loop, and the child's exit, is a turned-away cancel over a
+NON-EMPTY heap, so the guard is under load rather than under a heap that is trivially short. The twenty
+lines are one length each (`line-a\n`, 7 bytes), so the 140 in the exit code cannot be reached by a short
+read, and the sleepers are awaited afterwards — their own deadlines fire and are popped from the root,
+which is not a scan.
+
+⚠ **`cancelWalked=true` IS THE CONTROL, AND WITHOUT IT `scanned=0` WOULD BE A GATE THAT CANNOT FAIL.** A
+counter that never moved at all would satisfy the first witness perfectly. So the same program then performs
+the ONE cancel in it that really does have an entry to find: `dropAParkedSleeper` drops a promise parked on
+a 2000 ms deadline, in `parked-timer-drop-cancel`'s exact shape — bound to a name, and `await`ing a `fast`
+sibling first so the victim has run and armed its timer (the `gtIsComplete` peek adds `0`, which is that
+thread saying it is still parked). That cancel walks a heap of nine, so the counter is live, and the `0`
+above is a measurement rather than a silence.
+
+⛔ **THIS CASE WAS WRITTEN GREEN AND IS A GUARD, NOT A REPRODUCTION.** The pre-guard number was never
+observed and is not claimed here: seeing it would need a compiler carrying this counter and NOT the guard,
+which is a build made to fail, and no such build was made. What it pins is the shape — with a guarded cancel
+the delta is 0 for any heap length and any number of wakes, so it is a regression re-routing undeadlined
+traffic back through the scan that this catches, at a cost of one heap length per wake.
+```maxon
+function sleeper() returns Integer
+	sleep(2000)
+	return 1
+end 'sleeper'
+
+function fast() returns Integer
+	Runtime.yield()
+	return 42
+end 'fast'
+
+function dropAParkedSleeper() returns Integer
+	let victim = async sleeper()
+	let q = async fast()
+	let r = await q
+	return r + __Builtins.gtIsComplete(victim.inner)
+end 'dropAParkedSleeper'
+
+function main() returns ExitCode
+	let s1 = async sleeper()
+	let s2 = async sleeper()
+	let s3 = async sleeper()
+	let s4 = async sleeper()
+	let s5 = async sleeper()
+	let s6 = async sleeper()
+	let s7 = async sleeper()
+	let s8 = async sleeper()
+	Runtime.yield()
+
+	let h = subpSpawn("for i in a b c d e f g h i j k l m n o p q r s t; do echo line-$i; done")
+	let before = __Builtins.schedTimerScanStepCount()
+	var total = 0
+	var line = subpReadLine(h)
+	while line.byteLength() > 0 'drain'
+		total = total + line.byteLength()
+		line = subpReadLine(h)
+	end 'drain'
+	let scanned = __Builtins.schedTimerScanStepCount() - before
+	_ = subpWait(h)
+	subpRelease(h)
+
+	let beforeCancel = __Builtins.schedTimerScanStepCount()
+	_ = dropAParkedSleeper()
+	let walked = __Builtins.schedTimerScanStepCount() - beforeCancel
+
+	_ = await s1
+	_ = await s2
+	_ = await s3
+	_ = await s4
+	_ = await s5
+	_ = await s6
+	_ = await s7
+	_ = await s8
+
+	print("scanned={scanned} cancelWalked={walked > 0}\n")
+	return total as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+140
+```
+```stdout
+scanned=0 cancelWalked=true
 ```
 
 <!-- test: streaming-subprocess.eof-latched -->

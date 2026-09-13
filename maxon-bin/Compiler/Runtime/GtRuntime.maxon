@@ -113,10 +113,9 @@ export let GtStackGuardPreempt = -1314 as ParsedInt
 // which the portable layout reserves.
 export let GtOffThrew = 0x58
 
-// The child process HANDLE, or the pipe HANDLE, the running GT is parked on. Written by
-// `__gt_proc_add_locked` when a GT parks on `runProcess` and by `__gt_subp_yield_read` when it parks on a
-// read; read back after the GT resumes. It fills the `io_handle` slot of the 0x60–0xA0 reserved window. Std
-// is its only reader, so it is not exported to the hand-assembled chunks.
+// The pipe HANDLE the running GT is parked on. Written by `__gt_subp_yield_read` when it parks on a read and
+// read back after the GT resumes. It fills the `io_handle` slot of the 0x60–0xA0 reserved window. Std is its
+// only reader, so it is not exported to the hand-assembled chunks.
 //
 // ⭐ **ITS LOW BIT CARRIES THE READING GT's PIPE OWNERSHIP** (kernel HANDLEs from CreatePipe/CreateNamedPipe
 // are 4-aligned, so bit 0 is free): 1 = one-shot/owned (`__gt_io_read`'s per-GT pipe, closed by the drop
@@ -321,7 +320,10 @@ let GtOffCoroTail = GtOffCoroHead + PointerFieldBytes
 // ⚠ A NOTE, NOT A STATE: it is read only by the strand runner right after the switch it describes, so it is
 // never cleared. `__gt_promise_drop` also reads the kind of a thread it found `waiting`, which is the kind the
 // thread parked with.
-let GtOffParkKind = GtOffCoroTail + PointerFieldBytes
+//
+// EXPORTED because `NetpollRuntime` reads it to tell a park on ONE source from a park on several: the two
+// carry different things in `GtOffParkArg`, and only the kind says which.
+export let GtOffParkKind = GtOffCoroTail + PointerFieldBytes
 
 // EXPORTED because `NetpollRuntime` reads a netpoll park's `(fd, mode)` note out of it.
 export let GtOffParkArg = GtOffParkKind + PointerFieldBytes
@@ -452,14 +454,26 @@ let GtOffStrandResume = GtOffStackHighWater + PointerFieldBytes
 // EXPORTED because `SchedRuntime`'s M struct embeds a whole GT inline as its scheduler context.
 export let GtStructSize = GtOffStrandResume + PointerFieldBytes
 
-// ⭐⭐ **THE PARK KINDS — what the strand runner dispatches on after the switch.** Each of the first six names
-// the STORE `__gt_register_park` puts the thread on; a yield and a preemption register nothing and are placed
-// back on the thread's strand (`__gt_run_strand`).
+// ⭐⭐ **THE PARK KINDS — what the strand runner dispatches on after the switch.** Each names the STORE
+// `__gt_register_park` puts the thread on; a yield and a preemption register nothing and are placed back on
+// the thread's strand (`__gt_run_strand`).
 //
 // ⚠ Zero is not a kind: it is the slab's, i.e. "this GT has never parked", which is why the numbering starts
 // at one.
 let GtParkKindTimer = 1 as ParsedInt
-let GtParkKindProc = 2 as ParsedInt
+
+// ⭐ **THE POLLER OWNS TWO PARK KINDS, AND EVERY SITE THAT ASKS WHETHER A THREAD IS ON IT MEANS BOTH.** One
+// source and several are the same wait to everything outside `NetpollRuntime`: the same commit, the same
+// expiry, the same drop. A test naming only `GtParkKindNetpoll` would send a multi-source wait down the road
+// for a kind registered on no store at all, and nothing would ever end it.
+function emitGtBranchOnPollerPark(module StdModule, block IrBlock, kind ValueId, onPoller IrBlock, elsewhere IrBlock, ids ValueMinter)
+	let onOneSource = emitCmp(module, block: block, a: kind, b: emitConst(module, block: block, value: GtParkKindNetpoll, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let onSeveral = emitCmp(module, block: block, a: kind, b: emitConst(module, block: block, value: GtParkKindNetpollAny, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let parked = emitBin(module, block: block, a: onOneSource, b: onSeveral, opcode: StdBinOpcode.bitOr, ids: ids)
+	module.setTerminator(block, op: StdOp.condBranch(parked, thenBlockId: onPoller.id, elseBlockId: elsewhere.id))
+end 'emitGtBranchOnPollerPark'
+
+// ⚠ **2 IS RESERVED, NOT FREE** — a park kind travels in a green thread's own record, so a number is spent once allocated and a new kind takes the next one past the highest.
 let GtParkKindIo = 3 as ParsedInt
 
 // EXPORTED because the site that PRODUCES it is `MailboxRuntime` while the arm that consumes it is here — the
@@ -482,6 +496,13 @@ export let GtParkKindNetpoll = 8 as ParsedInt
 
 // `__gt_preempt`: a thread that honoured a preemption request, which the strand runner also places.
 let GtParkKindPreempt = 9 as ParsedInt
+
+// ⭐⭐ **`__np_pd_wait_any`: the argument is a GROUP RECORD naming several `(fd, mode)` pairs**
+// (`NetpollRuntime`'s group band). It is a kind of its own rather than a flag on the netpoll one because every
+// door that reads a parked thread's note — the commit, the drop, the readiness that wakes it — must read the
+// argument as a LIST, and a door that read one as the other would publish a thread into a record at the
+// address of its own group. EXPORTED for `GtParkKindNetpoll`'s reason.
+export let GtParkKindNetpollAny = 10 as ParsedInt
 
 // The `arg` a park that needs none carries — an IO park (its handshake is two stores on the GT itself), a
 // yield and a preemption — so the site says so rather than passing whatever happened to be in a register.
@@ -507,8 +528,8 @@ let GtTeardownRunnerTicket = 2 as ParsedInt
 // survives the event a dropper must rendezvous with. **The rendezvous therefore lives in a word of its own
 // (`GtOffTeardown`) and the drop does not ask this one who is running** — it asks only `waiting?`, because a
 // PARKED thread is the single shape whose teardown needs a store deregistered, and that question this word
-// answers exactly (the timer and process stores are mutated under `__sched_lock`, which the drop's waiting
-// arm holds while it scans).
+// answers exactly (the timer store and the poll descriptors are mutated under `__sched_lock`, which the
+// drop's waiting arm holds while it scans).
 //
 // `waiting` MUST be distinct from `completed` so the strand runner's `status == completed` gate NEVER hands a
 // merely-parked GT to the runner's teardown (freeing a parked GT's stack is a use-after-free when it resumes).
@@ -847,22 +868,9 @@ end 'emitTimerTagOfNetpollMode'
 // (`SchedRuntime.emitSchedPollerOwed`), which asks whether any timer is pending.
 export let TimerWhenEmpty = 0x7FFFFFFFFFFFFFFF as ParsedInt
 
-// --- Process store (P1.5 subprocess seed) ---
-// The parked-child store: TWO PARALLEL arrays, `procHandles[i]` (the child's process HANDLE) and `procGts[i]`
-// (the GT waiting on it), each an i64 slot, `__slab_alloc`'d once in `__gt_init`. Removal is swap-with-last
-// across BOTH arrays in lockstep.
-//
-// ⚠ CAPACITY IS 64, `MAXIMUM_WAIT_OBJECTS`, and it is ENFORCED: `__gt_proc_add_locked` checks
-// `count >= ProcStoreCapacity` before every append and reports the `storeOverflow` flag, which
-// `__gt_process_run` throws as `RunProcessError.storeOverflow` rather than writing past the 64-slot arrays.
-// `async-subprocess`'s `store-overflow-caught` pins that answer.
-let ProcStoreCapacity = 64
-let ProcSlotBytes = 8  // one i64 handle / gt pointer per parallel-array entry
-let ProcStoreBytes = ProcStoreCapacity * ProcSlotBytes
-
 // --- Win32 wait / process constants (P1.5 subprocess seed) ---
-// `WAIT_OBJECT_0` (0) is what `WaitForSingleObject`/`WaitForMultipleObjects` return for a SIGNALED handle (an
-// exited child); `__gt_proc_check` polls each handle with a zero timeout and tests for it.
+// `WAIT_OBJECT_0` (0) is what `WaitForSingleObject` returns for a SIGNALED handle (an exited child); the
+// collect loop polls a handle with a zero timeout and tests for it.
 // EXPORTED since MAC3: the arm64-macOS lane EMULATES these waits over a pthread condition variable
 // (`Arm64DarwinRuntime`'s `DarwinWaitObject`), so its chunk has to ANSWER the same two codes the Std tier
 // tests for. A second spelling on that side would be one fact written twice, in a place where the two
@@ -904,22 +912,20 @@ let DwordMask = 0xFFFFFFFF as ParsedInt
 let ExitCodeSlotBytes = 8
 export let TrailingNulBytes = 1  // the one extra byte for the cmdline's NUL terminator (slab-zeroed → free)
 
-// ⭐ **`runProcess` IS A THROWING BUILTIN (P1.5 #93) — its two USER-REACHABLE failure paths THROW, they no
-// longer ABORT.** Both used to `emitRuntimeAbort` (spawn failure exit 1, store overflow exit 70); now each hands
-// the caller a `RunProcessError` through the dual-register `errorReturn` ABI, exactly as a throwing array
-// accessor hands back an `ArrayError` — so `try runProcess(cmd) otherwise <h>` catches them and the program
-// RECOVERS rather than dying. The two paths:
+// ⭐ **`runProcess` IS A THROWING BUILTIN (P1.5 #93) — its USER-REACHABLE failure path THROWS, it does not
+// ABORT.** A command the user typed is not a compiler invariant, so the failure hands the caller a
+// `RunProcessError` through the dual-register `errorReturn` ABI, exactly as a throwing array accessor hands
+// back an `ArrayError`: `try runProcess(cmd) otherwise <h>` catches it and the program RECOVERS.
 //
 //   * `RunProcessError.spawnFailed` — `__gt_process_run` when `CreateProcessA` FAILS (a command whose first token
 //     is not a runnable executable). On failure CreateProcessA leaves the PROCESS_INFORMATION untouched, and
 //     the call's is a freshly zeroed slot, so `hProcess == 0` detects it — and the runtime MUST NOT park on a
-//     null handle, which the child poll would never see signalled (a wait on a NULL handle returns WAIT_FAILED,
-//     never WAIT_OBJECT_0), leaving the thread parked for ever. Throwing hands the caller a catchable error
-//     instead of the seed's old hard abort.
-//   * `RunProcessError.storeOverflow` — the process store is FULL (a program parks more
-//     than `ProcStoreCapacity` = 64 children concurrently, beyond `WaitForMultipleObjects`'s `MAXIMUM_WAIT_OBJECTS`),
-//     and `__gt_process_run` propagates it as a throw rather than writing past the 64-slot parallel arrays. A safe,
-//     RECOVERABLE response to the seed's documented concurrency ceiling; real >64-way fan-in is the later IOCP rung.
+//     null handle, which nothing could ever make ready, leaving the thread parked for ever.
+//
+// ⭐⭐ **HOW MANY CHILDREN MAY BE PARKED AT ONCE IS NOT A QUESTION THIS ERROR ANSWERS.** A parked child is a
+// SOURCE ON THE POLLER (`NetpollRuntime`'s child band), so the ceiling is the process's own descriptor limit
+// and the host reports it by refusing to mint the source — `netpollFailed`, the same stop a socket the poller
+// will not take gets, not a case of this error.
 //
 // The throws-type NAME is a bare label on the clause (like `ManagedMemoryRuntime.ArrayErrorTypeName`) — the compiler
 // recognizes `__gt_process_run` as a throwing runtime callee by CALLEE name (not by this label), and recovery
@@ -929,9 +935,9 @@ export let TrailingNulBytes = 1  // the one extra byte for the cmdline's NUL ter
 // ⚠ **THE NAME IS `"RunProcessError"`, DELIBERATELY *NOT* `"SubprocessError"` — DO NOT "FIX" IT BACK.**
 // `stdlib/Subprocess.maxon` already declares `export union SubprocessError implements Error`, a BOXED,
 // String-carrying union with a DIFFERENT case set (`executableNotFound`/`spawnFailed`/`ioFailed`/`timeout`/
-// `inputTooLarge`, no `storeOverflow`), and the compiler COMPILES it (it is in the stdlib cone). That union is the
+// `inputTooLarge`), and the compiler COMPILES it (it is in the stdlib cone). That union is the
 // eventual USER-FACING subprocess error type (`Subprocess.run` throws it), reachable only once managed-error
-// async lands (Design B, deferred). This seed's error is a SCALAR stand-in with its OWN two ordinals; sharing
+// async lands (Design B, deferred). This seed's error is a SCALAR stand-in with its OWN ordinal; sharing
 // the union's name would be the project's signature ONE-NAME-TWICE bug AND a wild-free trap — the day an
 // `otherwise (e)` binding resolved a builtin's throws-label `"SubprocessError"` to that boxed union it would
 // bind the R10 flag (1/2) as a heap pointer and free `0x1`/`0x2`. A distinct name that names NO declared union
@@ -940,19 +946,20 @@ export let TrailingNulBytes = 1  // the one extra byte for the cmdline's NUL ter
 // `SubprocessError` union is the full-Subprocess-API / managed-error rung.
 let RunProcessErrorTypeName = "RunProcessError"
 
-// The `RunProcessError` case ORDINALS — they ride R10 as `ordinal + ErrorFlagOrdinalBias`, the SAME scalar-error
+// The `RunProcessError` case ORDINAL — it rides R10 as `ordinal + ErrorFlagOrdinalBias`, the SAME scalar-error
 // encoding a source `throw E.case` uses (`LowerMaxonToStd.lowerThrowError`), so the day an `otherwise (e)` binding
 // lands its decode (`e = flag - bias`, `parseOtherwiseBlock`) recovers the right case with no third copy of the
 // bias. `0` is reserved by the bias for "no error in flight".
+//
+// ⚠ **ORDINAL 1 IS SPENT — DO NOT HAND IT TO A NEW CASE.** An ordinal is the wire number an `otherwise (e)`
+// decode matches on, so ordinals are allocated once and never recycled: a second case takes 2.
 let RunProcessSpawnFailedOrdinal = 0 as ParsedInt
-let RunProcessStoreOverflowOrdinal = 1 as ParsedInt
 
-// The R10 error-flag VALUES the two throws emit and a successful `runProcess` clears — the ordinals biased by the
+// The R10 error-flag VALUE the throw emits and a successful `runProcess` clears — the ordinal biased by the
 // one `ErrorFlagOrdinalBias` (never a second literal, so the runtime encode cannot drift from the parser decode),
 // and the shared `MaxonDialect.NoErrorFlag` alongside a real exit code — the success value the bias reserves,
-// read from its one declaration rather than re-spelled `0` here (it used to be).
+// read from its one declaration rather than re-spelled `0` here.
 let RunProcessSpawnFailedFlag = RunProcessSpawnFailedOrdinal + ErrorFlagOrdinalBias
-let RunProcessStoreOverflowFlag = RunProcessStoreOverflowOrdinal + ErrorFlagOrdinalBias
 
 // --- Monotonic clock (P1.5 mid-body-yield) ---
 // `ns = ticks * 1e9 / freq`, evaluated as the OVERFLOW-SAFE split identity
@@ -1498,26 +1505,6 @@ let GtRegisterParkName = b"__gt_register_park"
 // P1.5 subprocess seed. `__gt_process_run` is the front-end target for `runProcess(cmd)`.
 export let GtProcessRunName = b"__gt_process_run"
 
-// ⭐⭐ **THE PROCESS STORE'S APPEND MOVED BEHIND THE CONTEXT SWITCH (W218), AND THE CAPACITY QUESTION DID
-// NOT — because a THROW cannot move.** `__gt_proc_add` used to check capacity, append and mark the GT
-// `waiting` in one call made by `__gt_process_run` BEFORE its switch. `runProcess` reports
-// `RunProcessError.storeOverflow` to the caller's `try`, and by the time the strand runner registers the note
-// the caller's frame is suspended — so the check stays at the `runProcess` site, asked of the existing
-// `__gt_proc_count` (a reserve entry point would be that call plus a compare), and the append becomes
-// `__gt_proc_add_locked`, called by `__gt_register_park` under the lock it already holds.
-//
-// ⚠ **THE SITE CHECK IS ADVISORY AND THE APPEND STILL ANSWERS THE SAME FLAG.** The lock is released between
-// them, so a second M can take the last slot in between — the append's own refusal is what makes that safe,
-// and `__gt_register_park`'s overflow arm is what turns it back into the same throw one suspension later.
-let GtProcAddLockedName = b"__gt_proc_add_locked"
-
-// EXPORTED because a scheduler loop reads the parked-child count to decide whether to poll before it parks
-// and how long to park for (`SchedRuntime.buildSchedLoop`).
-export let GtProcCountName = b"__gt_proc_count"
-
-// Reaps exited children for `emitGtPollStores`, answering the wake debt its reaps owe and paying none of it.
-let GtProcCheckName = b"__gt_proc_check"
-
 // P1.5 dogfood slice 1a-ii — the IOCP overlapped-read substrate. `__gt_io_read` is the front-end target for the
 // `spawnReadLine` probe builtin; `__io_init` creates the IOCP and its completion thread;
 // `__io_completion_loop` is the hand-assembled completion-drain thread entry (X64GtRuntime). Named in the `__gt_`
@@ -1663,12 +1650,6 @@ let GtClockTicksSlot = 0 as SpillSlot
 let GtClockFreqSlot = 1 as SpillSlot
 let GtClockScratchBytes = 16 as StackSize
 
-// P1.5 subprocess store: the live parked-child COUNT and the base addresses of the two `__slab_alloc`'d parallel
-// arrays (handles + waiting GTs). All 0 until `__gt_init` allocates the regions and seeds the bases.
-let GtProcCountLabel = b"__gt_proc_count"
-let GtProcHandlesBaseLabel = b"__gt_proc_handles_base"
-let GtProcGtsBaseLabel = b"__gt_proc_gts_base"
-
 // The IOCP substrate's `.data` slots. `__io_iocp` = the process-wide completion port; `__io_init_done` = the
 // idempotency guard for `__io_init`; `__io_pending` = the count of in-flight overlapped reads (++ before a
 // park, -- on resume). EXPORTED where the hand-assembled completion loop reads them, and `__io_pending` for
@@ -1722,7 +1703,10 @@ export let StartupInfoHStdErrorOffset = 0x60
 //
 // ⚠ `export` because the IOCP COMPLETION THREAD makes the identical fold for a read that had already parked
 // (`X64GtRuntime.buildIoCompletionLoopChunk`): one classification, reachable from both tiers that make it.
-let ErrorIoPending = 997
+// ⚠ `export` because a POSIX lane's errno translator answers it for `EAGAIN`: a non-blocking read that
+// could not be served yet IS an operation still in flight, and translating it to anything else would send the
+// caller down the classification road instead of the park.
+export let ErrorIoPending = 997
 export let ErrorBrokenPipe = 109
 
 // ⭐ **`__gt_subp_yield_read`'s ANSWER FOR A READ THAT FAILED**, against the 0 that means a clean end of
@@ -1795,7 +1779,7 @@ export function isGtRuntimeCallee(callee ByteArray) returns bool
 end 'isGtRuntimeCallee'
 
 // The THROWING GT runtime callees (P1.5 #93). `__gt_process_run` returns via the dual-register `errorReturn` ABI
-// and can throw `RunProcessError` (`spawnFailed`/`storeOverflow`), so a `runProcess` call MUST become a `tryCall`
+// and can throw `RunProcessError` (`spawnFailed`), so a `runProcess` call MUST become a `tryCall`
 // (under a `try`, which `rewriteLastCallToTryCall` converts). The GT-side twin of
 // `ManagedMemoryRuntime.isThrowingManagedMemoryRuntimeCallee`: the two are composed by `isThrowingRuntimeCallee`, read at the ONE
 // call site in the parser (E3055 accept) and the ONE in SemanticCheck (E3057 reject) so those two cannot drift.
@@ -2168,15 +2152,6 @@ export function gtRuntimeGlobals(target Target) returns DataSectionEntryArray
 	pushRuntimeGlobal(out, label: GtTimerWhenLabel, sharing: MultiMSharing.underSchedLock, seed: TimerWhenEmpty)
 	pushRuntimeGlobal(out, label: GtTraceCounterLabel, sharing: MultiMSharing.atomicStep)
 
-	// P1.5 subprocess store: the parked-child count + the two parallel-array bases.
-	pushRuntimeGlobal(out, label: GtProcCountLabel, sharing: MultiMSharing.underSchedLock)
-
-	// The BASES are written once by `__gt_init` and never again — the store is FIXED-capacity, so nothing
-	// republishes or frees them and any M may load them without the lock. Only the COUNT and the SLOTS move,
-	// and both move under it.
-	pushRuntimeGlobal(out, label: GtProcHandlesBaseLabel, sharing: MultiMSharing.sealedBeforeWorkers)
-	pushRuntimeGlobal(out, label: GtProcGtsBaseLabel, sharing: MultiMSharing.sealedBeforeWorkers)
-
 	// The green-thread live count (spawn++, await/drop reclaim--), asserted zero at exit. It counts GREEN
 	// THREADS, which the `__mm` gate cannot see whatever happens to their memory.
 	pushRuntimeGlobal(out, label: GtLiveCountLabel, sharing: MultiMSharing.atomicStep)
@@ -2213,9 +2188,13 @@ end 'ioRuntimeGlobals'
 //
 // ⇒ under `inlineCompletion` there is nothing to create and nothing to wake, so `__io_init` is not built at
 // all, `__gt_init` does not call it, `__sched_checkdead` counts no read in flight and `__gt_promise_drop`'s
-// cancel arm is unreachable. `__gt_subp_yield_read`'s PARK arm is still emitted (it is
-// one graph for both lanes) and is simply never taken, because no errno on such a lane translates to
-// `ERROR_IO_PENDING`.
+// IO-cancel arm is unreachable.
+//
+// ⚠ **THAT LANE STILL PARKS A READER, ON THE POLLER RATHER THAN ON A COMPLETION.** `__gt_subp_yield_read`
+// forks on this shape: the completion port carries the read itself, while a POSIX read that cannot be served
+// answers `EAGAIN`, which the errno translators map to `ERROR_IO_PENDING` so the thread suspends on the
+// descriptor's poll record and re-issues the read when it is readable. Both arms are live; what differs is
+// WHAT the thread is waiting on.
 //
 // ⚠ **THIS IS NOT `usesIocp`, AND CONFLATING THE TWO IS WHAT THE SPLIT FIXES.** `usesIocp` asks *"does this
 // module read a pipe?"* and still gates the reader itself (`__gt_io_read`, `__gt_subp_yield_read`); this asks
@@ -2314,9 +2293,6 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 
 	// The park's registrar, beside the store doors it dispatches to.
 	buildGtRegisterPark(module)
-	buildGtProcAddLocked(module)
-	buildGtProcCount(module)
-	buildGtProcCheck(module)
 	buildGtResched(module)
 	buildGtPreempt(module, target: target)
 	buildGtIoPark(module)
@@ -2331,7 +2307,7 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	end 'completionPort'
 
 	if usesIocp 'io'
-		buildSubpYieldRead(module)
+		buildSubpYieldRead(module, target: target)
 		buildGtIoRead(module, rawFree: rawFree, commandShape: subprocessCommandShape(target))
 	end 'io'
 
@@ -2388,21 +2364,6 @@ function buildGtInit(module StdModule, usesCompletionPort bool)
 	let capAddr = ids.mint()
 	module.appendOp(entry, op: StdOp.globalAddr(capAddr, label: GtTimerCapacityLabel))
 	module.appendOp(entry, op: StdOp.storeIndirect(capAddr, offset: 0, valueId: capSeedConst, valueType: StdType.i64))
-
-	// The process store's two parallel arrays (handles + waiting GTs), each `__slab_alloc`'d once (slab-zeroed,
-	// so the count starts at 0) with its base published — parallel to the timer heap above.
-	let procRegionSizeConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(procRegionSizeConst, value: ProcStoreBytes, valueType: StdType.i64))
-	let procHandlesBase = ids.mint()
-	module.appendOp(entry, op: StdOp.call(procHandlesBase, callee: SlabAllocName, args: argsOf(procRegionSizeConst)))
-	let procHandlesBaseAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(procHandlesBaseAddr, label: GtProcHandlesBaseLabel))
-	module.appendOp(entry, op: StdOp.storeIndirect(procHandlesBaseAddr, offset: 0, valueId: procHandlesBase, valueType: StdType.i64))
-	let procGtsBase = ids.mint()
-	module.appendOp(entry, op: StdOp.call(procGtsBase, callee: SlabAllocName, args: argsOf(procRegionSizeConst)))
-	let procGtsBaseAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(procGtsBaseAddr, label: GtProcGtsBaseLabel))
-	module.appendOp(entry, op: StdOp.storeIndirect(procGtsBaseAddr, offset: 0, valueId: procGtsBase, valueType: StdType.i64))
 
 	// The IOCP substrate (port + completion thread), before any read can be issued. A void call mints
 	// an unread result id.
@@ -3317,12 +3278,10 @@ end 'emitTimerSiftDown'
 // sequence (`__gt_timer_seq`, the tiebreaker the store's header explains), append it at `heap[count]`,
 // count++, sift it up to its place and publish the root's deadline. O(log n) in the number of parked threads.
 //
-// ⭐⭐ **A FULL STORE GROWS RATHER THAN FAILING, AND THAT IS THE DIFFERENCE FROM `__gt_proc_add_locked`.** Its
-// sibling REFUSES at capacity (a `storeOverflow` flag that `__gt_process_run` turns into a catchable
-// `RunProcessError`) because its bound is REAL: `ProcStoreCapacity` is pinned by Win32's
-// `MAXIMUM_WAIT_OBJECTS`. This store has no such external bound — `TimerHeapCapacity` is a number this file
-// picked — so refusing would be inventing a limit rather than reporting one, and `sleep` has nowhere to report
-// it anyway (`stdlib/Sleep.maxon` declares it with no `throws` clause). ⇒ **The store DOUBLES**: a fresh
+// ⭐⭐ **A FULL STORE GROWS RATHER THAN FAILING.** `TimerHeapCapacity` is a number this file picked rather
+// than a bound anything outside it imposes, so refusing at it would be inventing a limit rather than reporting
+// one — and `sleep` has nowhere to report one anyway (`stdlib/Sleep.maxon` declares it with no `throws`
+// clause). ⇒ **The store DOUBLES**: a fresh
 // `__slab_alloc`, the live entries copied across, the base and capacity republished, and the old region handed
 // back. The free is AFTER the copy, and nothing else holds a pointer into the store: every walk re-reads
 // `__gt_timer_heap_base` under the lock, which is what makes the base a `.data` word rather than a value
@@ -3467,27 +3426,6 @@ export function emitGtBranchOnTimerDue(module StdModule, func IrFunction, cur Ir
 
 	return now
 end 'emitGtBranchOnTimerDue'
-
-// ⭐ **THE ONE PLACE A PROC ENTRY'S FIELDS ARE COPIED ON A SWAP-REMOVE (Finding 3).** Copy the (handle, gt)
-// parallel-array entries at byte offset `lastOff` into `holeOff`, across BOTH proc-store arrays in lockstep.
-// Shared by `__gt_proc_check`'s fire and `__gt_promise_drop`'s proc-store remove, so the field
-// set (and the two-array lockstep) lives once. The caller does its own `CloseHandle`/count-store around it.
-function emitProcSwapDown(module StdModule, block IrBlock, ids ValueMinter, handlesBase ValueId, gtsBase ValueId, lastOff ValueId, holeOff ValueId)
-	let lastHandleAddr = ids.mint()
-	module.appendOp(block, op: StdOp.binOp(lastHandleAddr, lhs: handlesBase, rhs: lastOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let movedHandle = ids.mint()
-	module.appendOp(block, op: StdOp.loadIndirect(movedHandle, addrId: lastHandleAddr, offset: 0, valueType: StdType.i64))
-	let holeHandleAddr = ids.mint()
-	module.appendOp(block, op: StdOp.binOp(holeHandleAddr, lhs: handlesBase, rhs: holeOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.appendOp(block, op: StdOp.storeIndirect(holeHandleAddr, offset: 0, valueId: movedHandle, valueType: StdType.i64))
-	let lastGtAddr = ids.mint()
-	module.appendOp(block, op: StdOp.binOp(lastGtAddr, lhs: gtsBase, rhs: lastOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let movedGt = ids.mint()
-	module.appendOp(block, op: StdOp.loadIndirect(movedGt, addrId: lastGtAddr, offset: 0, valueType: StdType.i64))
-	let holeGtAddr = ids.mint()
-	module.appendOp(block, op: StdOp.binOp(holeGtAddr, lhs: gtsBase, rhs: holeOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.appendOp(block, op: StdOp.storeIndirect(holeGtAddr, offset: 0, valueId: movedGt, valueType: StdType.i64))
-end 'emitProcSwapDown'
 
 // `__gt_timer_check(now) -> wakeDebt` — fire every parked GT whose deadline has passed, IN DEADLINE ORDER:
 // while the heap's root is due, pop it and ready it, sifting the moved last entry back down after each pop.
@@ -4422,7 +4360,6 @@ function collectCompletedWordDefs(op StdOp, completedConsts ValueIdArray, plainS
 			osReadClock or
 			osProcessSpawn or
 			osProcessExitCode or
-			osWaitHandles or
 			osCloseHandle or
 			osWaitHandle or
 			osFreePages or
@@ -4555,7 +4492,6 @@ function requireOrderedCompletedAccess(op StdOp, func IrFunction, completedConst
 			osReadClock or
 			osProcessSpawn or
 			osProcessExitCode or
-			osWaitHandles or
 			osCloseHandle or
 			osWaitHandle or
 			osFreePages or
@@ -4834,7 +4770,7 @@ end 'buildGtCellComplete'
 // drop owes a thread that is queued, RUNNING on another M, or already completed is the same thing — the
 // consumer's half of the teardown rendezvous (`GtOffTeardown`) — so those three collapse into one arm that
 // cannot be got wrong by misreading a state. **A PARKED thread is the one genuine exception**: it is
-// registered in the timer store, in the process store, or in an in-flight OVERLAPPED read, and no runner
+// registered in the timer store, on a poll descriptor, or in an in-flight OVERLAPPED read, and no runner
 // will ever come back for it, so it must be DEREGISTERED first and then given up from BOTH sides by this
 // same call.
 //
@@ -4861,7 +4797,7 @@ end 'buildGtCellComplete'
 // ⛔⛔ **A THREAD THAT IS RE-READIED WHILE THIS CALL IS ACQUIRING THE LOCK IS NOT AN ERROR PATH, AND IT IS
 // WHY THE TWO ARMS SHARE AN EXIT.** A `waiting` thread can be re-readied under `__sched_lock` between the
 // status load above and this call's own acquisition of that lock — `__gt_timer_check` fires a due deadline,
-// `__gt_proc_check` reaps an exited child, the completion thread finishes a read — and the thread is then
+// the poller's walk reaches a ready source, the completion thread finishes a read — and the thread is then
 // QUEUED, not parked. Deregistering nothing and freeing anyway would be a use-after-free on a thread sitting
 // in a queue. The waiting arm therefore RE-READS the status under the lock it holds and falls through to the
 // queued arm when it no longer says `waiting`; whichever party got the lock first decides, exactly, and the
@@ -4882,7 +4818,6 @@ function buildGtPromiseDrop(module StdModule, usesCompletionPort bool, rawFree B
 	var notNetpollPark = module.addBlock(func, label: b"droppednotnetpoll", heat: BlockHeat.normal)
 	var timerParked = module.addBlock(func, label: b"droppedtimer", heat: BlockHeat.normal)
 	var waitingStores = module.addBlock(func, label: b"waitingstores", heat: BlockHeat.normal)
-	var waitingProc = module.addBlock(func, label: b"waitingproc", heat: BlockHeat.normal)
 	var waitingUnlock = module.addBlock(func, label: b"waitingunlock", heat: BlockHeat.normal)
 	var soleOwner = module.addBlock(func, label: b"soleowner", heat: BlockHeat.normal)
 	var queuedArm = module.addBlock(func, label: b"queuedarm", heat: BlockHeat.normal)
@@ -4959,9 +4894,7 @@ function buildGtPromiseDrop(module StdModule, usesCompletionPort bool, rawFree B
 	// interpolated `String` inside a `sleep`, dropped while parked, exits 101; the same coroutine holding
 	// nothing exits 0. So the wait is EXPIRED and the thread READIED: it resumes, unwinds its own frame, and its
 	// runner reclaims it. The status re-read below then finds `ready` and takes the queued arm by itself.
-	let netpollKind = emitConst(module, block: notAwaiting, value: GtParkKindNetpoll, ids: ids)
-	let parkedOnAPoller = emitCmp(module, block: notAwaiting, a: parkKind, b: netpollKind, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(notAwaiting, op: StdOp.condBranch(parkedOnAPoller, thenBlockId: netpollParked.id, elseBlockId: notNetpollPark.id))
+	emitGtBranchOnPollerPark(module, block: notAwaiting, kind: parkKind, onPoller: netpollParked, elsewhere: notNetpollPark, ids: ids)
 
 	// The poller's expiry takes the thread off its direction word and marks the wait, so its resumption answers
 	// `timedOut` rather than re-issuing a syscall on a descriptor nobody wants.
@@ -4993,26 +4926,24 @@ function buildGtPromiseDrop(module StdModule, usesCompletionPort bool, rawFree B
 		module.setTerminator(waitingStores, op: StdOp.condBranch(isInFlightRead, thenBlockId: ioArm.id, elseBlockId: waitingTimer.id))
 		emitGtIoCancelArm(module, func: func, ids: ids, startBlock: ioArm, gt: gt, cont: soleOwner, queuedCont: queuedArm, rawFree: rawFree)
 		emitSchedLockEnter(module, block: waitingTimer, ids: ids)
-		emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: waitingTimer, gt: gt, tag: emitConst(module, block: waitingTimer, value: TimerTagSleep, ids: ids), cont: waitingProc)
-		emitGtProcStoreRemove(module, func: func, ids: ids, startBlock: waitingProc, gt: gt, cont: waitingUnlock)
-	end 'ioAware' else 'timerProcOnly'
+		emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: waitingTimer, gt: gt, tag: emitConst(module, block: waitingTimer, value: TimerTagSleep, ids: ids), cont: waitingUnlock)
+	end 'ioAware' else 'timerOnly'
 		emitSchedLockEnter(module, block: waitingStores, ids: ids)
-		emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: waitingStores, gt: gt, tag: emitConst(module, block: waitingStores, value: TimerTagSleep, ids: ids), cont: waitingProc)
-		emitGtProcStoreRemove(module, func: func, ids: ids, startBlock: waitingProc, gt: gt, cont: waitingUnlock)
-	end 'timerProcOnly'
+		emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: waitingStores, gt: gt, tag: emitConst(module, block: waitingStores, value: TimerTagSleep, ids: ids), cont: waitingUnlock)
+	end 'timerOnly'
 
-	// ⭐⭐ **THE TWO STORE REMOVES RUN UNDER THE RUN-QUEUE LOCK (G2), AND THE VERDICT IS A RE-READ OF THE
-	// STATUS UNDER THAT SAME LOCK.** Each is a scan-then-swap-remove over a `.data` store that
-	// `__gt_timer_add` / `__gt_proc_add_locked` append to and `__gt_timer_check` / `__gt_proc_check` compact — all of
-	// them reachable from any M, which is what the lock is for.
+	// ⭐⭐ **EVERY ARM ABOVE RUNS UNDER THE RUN-QUEUE LOCK (G2), AND THE VERDICT IS A RE-READ OF THE
+	// STATUS UNDER THAT SAME LOCK.** The timer removal is a scan-then-swap-remove over the `.data` store that
+	// `__gt_timer_add` appends to and `__gt_timer_check` compacts; the poller's drop rewrites a direction word
+	// any M can reach. The lock is what makes either one act.
 	//
 	// **`status` IS STILL `waiting` IF AND ONLY IF NOTHING RE-READIED THIS THREAD**, because the three parties
-	// that could — the timer check firing a due deadline, the process check reaping an exited child, and the
-	// completion thread finishing a read — all store `ready`, and all of them do it under this lock, which
-	// this arm holds. So ONE load answers the question exactly, and it answers it for BOTH helpers at once:
-	// neither has to report whether its own scan hit, and neither's dozen exits grows an argument a later exit
-	// could forget to supply. `completed` reads here too (re-readied, run and finished while this arm waited
-	// for the lock) and takes the same road as `ready`, which is right for the same reason.
+	// that could — the timer check firing a due deadline, the poller's walk readying a source's waiter, and
+	// the completion thread finishing a read — all store `ready`, and all of them do it under this lock, which
+	// this arm holds. So ONE load answers the question exactly, and it answers it for every arm at once: none
+	// has to report whether its own scan hit, and none's dozen exits grows an argument a later exit could
+	// forget to supply. `completed` reads here too (re-readied, run and finished while this arm waited for the
+	// lock) and takes the same road as `ready`, which is right for the same reason.
 	let parkedStatus = emitLoadField(module, block: waitingUnlock, record: gt, offset: GtOffStatus, ids: ids)
 	let stillParked = emitGtStatusEquals(module, block: waitingUnlock, status: parkedStatus, want: GtStatusWaiting, ids: ids)
 	emitSchedLockLeave(module, block: waitingUnlock, ids: ids)
@@ -5418,6 +5349,11 @@ export function emitGtTimerStoreRemove(module StdModule, func IrFunction, ids Va
 
 	// scanBody: both halves of the key are compared, and the AND is branch-free for
 	// `emitTimerEntryBefore`'s reason — a comparison's value lives in the 0/1 domain on every lane.
+	//
+	// ⭐⭐ **THE STEP IS COUNTED HERE, PER ENTRY INSPECTED, AND THAT IS THE WHOLE VALUE OF THE READING** — a
+	// count of CALLS would read the same whether this walked one entry or a thousand, which is exactly the
+	// difference `SchedTimerScanStepsLabel` exists to make visible.
+	emitSchedStepLockedCount(module, block: scanBody, label: SchedTimerScanStepsLabel, delta: OneMore, ids: ids)
 	let entryAddr = emitTimerEntryAddr(module, block: scanBody, ids: ids, heapBase: heapBase, index: i)
 	let entryGt = emitLoadField(module, block: scanBody, record: entryAddr, offset: TimerOffGt, ids: ids)
 	let entryTag = emitLoadField(module, block: scanBody, record: entryAddr, offset: TimerOffTag, ids: ids)
@@ -5466,84 +5402,6 @@ export function emitGtTimerStoreRemove(module StdModule, func IrFunction, ids Va
 	var published = emitGtPublishTimerWhen(module, func: func, cur: republish, heapBase: heapBase, count: newCount, ids: ids)
 	module.setTerminator(published, op: StdOp.branch(cont.id))
 end 'emitGtTimerStoreRemove'
-
-// Remove `gt`'s entry from the process store (parallel `procHandles`/`procGts` arrays), CLOSING the child's
-// handle to abandon the wait (NOT killing the child — a dropped promise cancels the WAIT, not the process),
-// then branch to `cont`. Used by `__gt_promise_drop`'s waiting arm. Mirrors `__gt_proc_check`'s afterFire
-// swap-remove across BOTH arrays in lockstep, keyed on `gt == procGts[i]`. A GT not on a process (parked on a
-// timer instead) scans to the end and branches to `cont` untouched.
-function emitGtProcStoreRemove(module StdModule, func IrFunction, ids ValueMinter, startBlock IrBlock, gt ValueId, cont IrBlock)
-	var scanHdr = module.addBlock(func, label: b"pcscanhdr", heat: BlockHeat.normal)
-	var scanBody = module.addBlock(func, label: b"pcscanbody", heat: BlockHeat.normal)
-	var advance = module.addBlock(func, label: b"pcadvance", heat: BlockHeat.normal)
-	var removeAt = module.addBlock(func, label: b"pcremoveat", heat: BlockHeat.normal)
-
-	let countAddr = ids.mint()
-	module.appendOp(startBlock, op: StdOp.globalAddr(countAddr, label: GtProcCountLabel))
-	let count = ids.mint()
-	module.appendOp(startBlock, op: StdOp.loadIndirect(count, addrId: countAddr, offset: 0, valueType: StdType.i64))
-	let handlesBaseAddr = ids.mint()
-	module.appendOp(startBlock, op: StdOp.globalAddr(handlesBaseAddr, label: GtProcHandlesBaseLabel))
-	let handlesBase = ids.mint()
-	module.appendOp(startBlock, op: StdOp.loadIndirect(handlesBase, addrId: handlesBaseAddr, offset: 0, valueType: StdType.i64))
-	let gtsBaseAddr = ids.mint()
-	module.appendOp(startBlock, op: StdOp.globalAddr(gtsBaseAddr, label: GtProcGtsBaseLabel))
-	let gtsBase = ids.mint()
-	module.appendOp(startBlock, op: StdOp.loadIndirect(gtsBase, addrId: gtsBaseAddr, offset: 0, valueType: StdType.i64))
-	let slotBytesConst = ids.mint()
-	module.appendOp(startBlock, op: StdOp.const(slotBytesConst, value: ProcSlotBytes, valueType: StdType.i64))
-	let zeroConst = ids.mint()
-	module.appendOp(startBlock, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
-	module.setTerminator(startBlock, op: StdOp.branch(scanHdr.id))
-	startBlock.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: argsOf(zeroConst)))
-
-	// scanHdr(i): if i >= count → cont; else inspect procGts[i].
-	let i = ids.mint()
-	scanHdr.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	let atEnd = ids.mint()
-	module.appendOp(scanHdr, op: StdOp.cmp(atEnd, lhs: i, rhs: count, pred: StdCmpPred.ge, operandType: StdType.i64))
-	module.setTerminator(scanHdr, op: StdOp.condBranch(atEnd, thenBlockId: cont.id, elseBlockId: scanBody.id))
-
-	// scanBody: off = i * ProcSlotBytes; entryGt = procGts[i]; if it is our GT → removeAt, else → advance.
-	let off = ids.mint()
-	module.appendOp(scanBody, op: StdOp.binOp(off, lhs: i, rhs: slotBytesConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
-	let gtSlot = ids.mint()
-	module.appendOp(scanBody, op: StdOp.binOp(gtSlot, lhs: gtsBase, rhs: off, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let entryGt = ids.mint()
-	module.appendOp(scanBody, op: StdOp.loadIndirect(entryGt, addrId: gtSlot, offset: 0, valueType: StdType.i64))
-	let isMatch = ids.mint()
-	module.appendOp(scanBody, op: StdOp.cmp(isMatch, lhs: entryGt, rhs: gt, pred: StdCmpPred.eq, operandType: StdType.i64))
-	module.setTerminator(scanBody, op: StdOp.condBranch(isMatch, thenBlockId: removeAt.id, elseBlockId: advance.id))
-
-	// advance: i + 1 → scanHdr.
-	let oneAdv = ids.mint()
-	module.appendOp(advance, op: StdOp.const(oneAdv, value: 1, valueType: StdType.i64))
-	let iAdv = ids.mint()
-	module.appendOp(advance, op: StdOp.binOp(iAdv, lhs: i, rhs: oneAdv, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.setTerminator(advance, op: StdOp.branch(scanHdr.id))
-	advance.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: argsOf(iAdv)))
-
-	// removeAt: CloseHandle(procHandles[i]) to abandon the wait, then swap the last entry into slot i across
-	// BOTH arrays in lockstep, count--. A self-copy when i == last is harmless. Then stop → cont.
-	let curOff = ids.mint()
-	module.appendOp(removeAt, op: StdOp.binOp(curOff, lhs: i, rhs: slotBytesConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
-	let handleAddr = ids.mint()
-	module.appendOp(removeAt, op: StdOp.binOp(handleAddr, lhs: handlesBase, rhs: curOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let handle = ids.mint()
-	module.appendOp(removeAt, op: StdOp.loadIndirect(handle, addrId: handleAddr, offset: 0, valueType: StdType.i64))
-	module.appendOp(removeAt, op: StdOp.osCloseHandle(handle))
-	let oneRem = ids.mint()
-	module.appendOp(removeAt, op: StdOp.const(oneRem, value: 1, valueType: StdType.i64))
-	let newCount = ids.mint()
-	module.appendOp(removeAt, op: StdOp.binOp(newCount, lhs: count, rhs: oneRem, opcode: StdBinOpcode.sub, operandType: StdType.i64))
-	let lastOff = ids.mint()
-	module.appendOp(removeAt, op: StdOp.binOp(lastOff, lhs: newCount, rhs: slotBytesConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
-
-	// procHandles[i] = procHandles[last]; procGts[i] = procGts[last] — the shared swap-down (Finding 3).
-	emitProcSwapDown(module, block: removeAt, ids: ids, handlesBase: handlesBase, gtsBase: gtsBase, lastOff: lastOff, holeOff: curOff)
-	module.appendOp(removeAt, op: StdOp.storeIndirect(countAddr, offset: 0, valueId: newCount, valueType: StdType.i64))
-	module.setTerminator(removeAt, op: StdOp.branch(cont.id))
-end 'emitGtProcStoreRemove'
 
 // `__gt_sleep(ms)` — suspend the current GT for `ms` milliseconds: compute the absolute deadline and park on
 // the timer store (`__gt_park`).
@@ -5667,10 +5525,6 @@ end 'emitLoadCurrentGtCpuOffset'
 //     status under the lock then reads that as *"still parked, I am its sole owner"* and frees a queued
 //     thread. `__gt_timer_add` takes the lock itself, recursively. A deadline earlier than every other now
 //     pending owes the poller a look (`SchedRuntime.__sched_wake_netpoller`), after the release.
-//   • **proc** — the same shape through `__gt_proc_add_locked`, which sets `waiting` and `io_handle` itself
-//     under this lock, and owes the poller the child-poll cap the same way. Its overflow is CROSS-M (another
-//     M took the last slot after the site's check), so it un-parks the thread instead: close the child's
-//     handle, clear `io_handle` as the signal, ready the thread, and let its resumption throw.
 //   • **io** — two PLAIN stores, `waiting` then `ioParked`, and no lock: the IOCP completion thread waits for
 //     `ioParked` to turn non-zero before it takes the lock and readies the thread, so its ready always lands
 //     after the `waiting` store rather than under it.
@@ -5685,8 +5539,8 @@ end 'emitLoadCurrentGtCpuOffset'
 //   • **awaitAny** — the same over every slot: re-scan under the lock and ready at once if any slot has
 //     completed, else register on every slot with `GtOffSelectDone` cleared.
 //
-// The timer arm and a parked child leave by their own release, because each may owe the poller a look; every
-// other arm that takes the lock leaves through `unlockAndPay`, carrying the wake debt its ready answered or none.
+// The timer arm leaves by its own release, because it may owe the poller a look; every other arm that takes
+// the lock leaves through `unlockAndPay`, carrying the wake debt its ready answered or none.
 function buildGtRegisterPark(module StdModule)
 	var func = IrFunction.createFromStd(GtRegisterParkName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -5695,10 +5549,6 @@ function buildGtRegisterPark(module StdModule)
 	var timerArm = module.addBlock(func, label: b"parktimer", heat: BlockHeat.normal)
 	var timerWake = module.addBlock(func, label: b"parktimerwake", heat: BlockHeat.normal)
 	var notTimer = module.addBlock(func, label: b"notparktimer", heat: BlockHeat.normal)
-	var procArm = module.addBlock(func, label: b"parkproc", heat: BlockHeat.normal)
-	var procParked = module.addBlock(func, label: b"parkprocok", heat: BlockHeat.normal)
-	var procOverflow = module.addBlock(func, label: b"parkprocfull", heat: BlockHeat.normal)
-	var notProc = module.addBlock(func, label: b"notparkproc", heat: BlockHeat.normal)
 	var ioArm = module.addBlock(func, label: b"parkio", heat: BlockHeat.normal)
 	var notIo = module.addBlock(func, label: b"notparkio", heat: BlockHeat.normal)
 	var netpollArm = module.addBlock(func, label: b"parknetpoll", heat: BlockHeat.normal)
@@ -5746,49 +5596,26 @@ function buildGtRegisterPark(module StdModule)
 	module.setTerminator(timerArm, op: StdOp.condBranch(becameRoot, thenBlockId: timerWake.id, elseBlockId: doneBlock.id))
 	emitGtWakeNetpoller(module, block: timerWake, when: arg, cont: doneBlock, ids: ids)
 
-	let procKind = emitConst(module, block: notTimer, value: GtParkKindProc, ids: ids)
-	let isProc = emitCmp(module, block: notTimer, a: kind, b: procKind, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(notTimer, op: StdOp.condBranch(isProc, thenBlockId: procArm.id, elseBlockId: notProc.id))
-
-	emitSchedLockEnter(module, block: procArm, ids: ids)
-	let addFlag = ids.mint()
-	module.appendOp(procArm, op: StdOp.call(addFlag, callee: GtProcAddLockedName, args: twoArgs(gt, second: arg)))
-	let noAddError = emitConst(module, block: procArm, value: NoErrorFlag, ids: ids)
-	let addFailed = emitCmp(module, block: procArm, a: addFlag, b: noAddError, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(procArm, op: StdOp.condBranch(addFailed, thenBlockId: procOverflow.id, elseBlockId: procParked.id))
-
-	// The poller caps its wait at `ChildPollNs` while a child is parked; a poller already waiting longer is owed
-	// a look now.
-	emitSchedLockLeave(module, block: procParked, ids: ids)
-	emitGtWakeNetpoller(module, block: procParked, when: emitSchedChildPollDeadline(module, block: procParked, ids: ids), cont: doneBlock, ids: ids)
-
-	// ⭐ **THE STORE FILLED UP BETWEEN THE SITE'S CHECK AND THIS APPEND.** Abandon the WAIT (never the child)
-	// and clear `io_handle`, which is the signal `buildGtProcessRun`'s `reap` reads: it reloads the field, sees
-	// zero and throws `RunProcessError.storeOverflow`, raised at the same `try` one suspension later. The thread
-	// is on no queue and in no store, so it must be readied.
-	let zeroHandle = emitConst(module, block: procOverflow, value: 0, ids: ids)
-	module.appendOp(procOverflow, op: StdOp.osCloseHandle(arg))
-	emitStoreField(module, block: procOverflow, record: gt, offset: GtOffIoHandle, value: zeroHandle)
-	emitBranchWithDebt(module, from: procOverflow, to: unlockAndPay, debt: emitGtReadyLocked(module, block: procOverflow, gt: gt, ids: ids))
-
-	let ioKind = emitConst(module, block: notProc, value: GtParkKindIo, ids: ids)
-	let isIo = emitCmp(module, block: notProc, a: kind, b: ioKind, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(notProc, op: StdOp.condBranch(isIo, thenBlockId: ioArm.id, elseBlockId: notIo.id))
+	let ioKind = emitConst(module, block: notTimer, value: GtParkKindIo, ids: ids)
+	let isIo = emitCmp(module, block: notTimer, a: kind, b: ioKind, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(notTimer, op: StdOp.condBranch(isIo, thenBlockId: ioArm.id, elseBlockId: notIo.id))
 
 	emitStoreField(module, block: ioArm, record: gt, offset: GtOffStatus, value: waitingConst)
 	let inFlight = emitConst(module, block: ioArm, value: IoParkedInFlight, ids: ids)
 	emitStoreField(module, block: ioArm, record: gt, offset: GtOffIoParked, value: inFlight)
 	module.setTerminator(ioArm, op: StdOp.branch(doneBlock.id))
 
-	let netpollKind = emitConst(module, block: notIo, value: GtParkKindNetpoll, ids: ids)
-	let isNetpoll = emitCmp(module, block: notIo, a: kind, b: netpollKind, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(notIo, op: StdOp.condBranch(isNetpoll, thenBlockId: netpollArm.id, elseBlockId: notNetpoll.id))
+	emitGtBranchOnPollerPark(module, block: notIo, kind: kind, onPoller: netpollArm, elsewhere: notNetpoll, ids: ids)
 
 	// ⭐⭐ **THE NETPOLL ARM OWES TWO WAKES AND THEY ARE NOT THE SAME WAKE.** `__np_pd_commit` may READY the
 	// thread instead of parking it — readiness that landed between the mark and this commit — which is an
 	// ordinary wake debt; and a socket DEADLINE it arms may be earlier than every other now pending, which owes
 	// the poller a look exactly as the timer arm's does. The root is read on both sides of the commit rather
 	// than compared against the arm's own deadline, because the commit arms nothing when no deadline is set.
+	//
+	// ⚠ **ONE SOURCE AND SEVERAL TAKE THE SAME ARM**, because the difference is entirely in how the park note's
+	// argument is read — which is `__np_pd_commit`'s own question, asked once where the note is decoded rather
+	// than twice here and there.
 	emitSchedLockEnter(module, block: netpollArm, ids: ids)
 	let rootBeforeCommit = emitGtLoadTimerWhen(module, block: netpollArm, ids: ids)
 	let commitDebt = ids.mint()
@@ -5867,116 +5694,6 @@ export function emitBranchWithDebt(module StdModule, from IrBlock, to IrBlock, d
 	from.branchEdges.push(BranchEdge.create(to.id, argIds: argsOf(debt)))
 end 'emitBranchWithDebt'
 
-// `__gt_proc_add_locked(gt, handle) -> flag` — park `gt` on child `handle`: append `handle`/`gt` to the two
-// parallel arrays, then mark `gt` waiting and record the handle in `gt.io_handle` (its durable home across the
-// yield). An UNSORTED append (like `__gt_timer_add`), but — unlike the timer store — CAPACITY-GUARDED: parking
-// a 65th child concurrently would write `procHandles[64]`/`procGts[64]` one slot PAST the 64-slot slab arrays
-// (heap corruption), and then hand `WaitForMultipleObjects` a `pc > MAXIMUM_WAIT_OBJECTS` it refuses.
-//
-// ⭐ **A FULL STORE REPORTS the `storeOverflow` FLAG rather than aborting (P1.5 #93).** It returns
-// `NoErrorFlag` (0) when the child was parked and `RunProcessStoreOverflowFlag` when the store was full and
-// NOTHING was appended (the GT stays un-parked and un-`waiting`). `__gt_register_park`'s proc arm turns that
-// into a resumption that throws `RunProcessError.storeOverflow` — the seed's documented concurrency ceiling is
-// a RECOVERABLE error, not a hard abort (see `RunProcessErrorTypeName`, `ProcStoreCapacity`).
-//
-// ⚠ **THE CALLER HOLDS `__sched_lock`, AND THE NAME IS WHERE THAT REQUIREMENT LIVES (W218).** It used to take
-// the lock itself, because its caller was `__gt_process_run` before its context switch; the append moved
-// behind the switch into `__gt_register_park`, which already holds the lock — and must, because the
-// `waiting` store below has to be in the same critical section as the append (`buildGtRegisterPark` says why
-// splitting them is a use-after-free). `osLockEnter` is recursive, so a self-taken lock here would be safe
-// but would also let a future caller believe it needed none.
-//
-// ⚠ **THE STORE IS FIXED-CAPACITY**, so nothing is ever republished or freed and a scan can never walk dead
-// memory — what two Ms without the lock would still lose is an ENTRY, both writing slot `count` and both
-// bumping it to `count+1`, which parks a child nothing will ever reap.
-function buildGtProcAddLocked(module StdModule)
-	var func = IrFunction.createFromStd(GtProcAddLockedName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(2)
-
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var overflow = module.addBlock(func, label: b"overflow", heat: BlockHeat.normal)
-	var doAdd = module.addBlock(func, label: b"doadd", heat: BlockHeat.normal)
-	emitParams(module, block: entry, count: 2)
-	let gt = 0 as ValueId
-	let handle = 1 as ValueId
-
-	// entry: load count; if it has reached the store's capacity → overflow (report the flag), else → doAdd.
-	let countAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(countAddr, label: GtProcCountLabel))
-	let count = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(count, addrId: countAddr, offset: 0, valueType: StdType.i64))
-	let capacityConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(capacityConst, value: ProcStoreCapacity, valueType: StdType.i64))
-	let isFull = ids.mint()
-	module.appendOp(entry, op: StdOp.cmp(isFull, lhs: count, rhs: capacityConst, pred: StdCmpPred.ge, operandType: StdType.i64))
-	module.setTerminator(entry, op: StdOp.condBranch(isFull, thenBlockId: overflow.id, elseBlockId: doAdd.id))
-
-	// overflow: the store is full — return the `storeOverflow` flag rather than write past the 64-slot arrays.
-	// Nothing is appended and the GT is NOT marked waiting, so `__gt_process_run` must throw instead of parking.
-	let overflowFlag = ids.mint()
-	module.appendOp(overflow, op: StdOp.const(overflowFlag, value: RunProcessStoreOverflowFlag, valueType: StdType.i64))
-	module.setTerminator(overflow, op: StdOp.ret(overflowFlag))
-
-	// doAdd: append the entry to both parallel arrays, bump the count, and mark the GT waiting.
-	let slotBytesConst = ids.mint()
-	module.appendOp(doAdd, op: StdOp.const(slotBytesConst, value: ProcSlotBytes, valueType: StdType.i64))
-	let entryOff = ids.mint()
-	module.appendOp(doAdd, op: StdOp.binOp(entryOff, lhs: count, rhs: slotBytesConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
-
-	// procHandles[count] = handle.
-	let handlesBaseAddr = ids.mint()
-	module.appendOp(doAdd, op: StdOp.globalAddr(handlesBaseAddr, label: GtProcHandlesBaseLabel))
-	let handlesBase = ids.mint()
-	module.appendOp(doAdd, op: StdOp.loadIndirect(handlesBase, addrId: handlesBaseAddr, offset: 0, valueType: StdType.i64))
-	let handleSlot = ids.mint()
-	module.appendOp(doAdd, op: StdOp.binOp(handleSlot, lhs: handlesBase, rhs: entryOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.appendOp(doAdd, op: StdOp.storeIndirect(handleSlot, offset: 0, valueId: handle, valueType: StdType.i64))
-
-	// procGts[count] = gt.
-	let gtsBaseAddr = ids.mint()
-	module.appendOp(doAdd, op: StdOp.globalAddr(gtsBaseAddr, label: GtProcGtsBaseLabel))
-	let gtsBase = ids.mint()
-	module.appendOp(doAdd, op: StdOp.loadIndirect(gtsBase, addrId: gtsBaseAddr, offset: 0, valueType: StdType.i64))
-	let gtSlot = ids.mint()
-	module.appendOp(doAdd, op: StdOp.binOp(gtSlot, lhs: gtsBase, rhs: entryOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.appendOp(doAdd, op: StdOp.storeIndirect(gtSlot, offset: 0, valueId: gt, valueType: StdType.i64))
-
-	// count++.
-	let oneConst = ids.mint()
-	module.appendOp(doAdd, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
-	let newCount = ids.mint()
-	module.appendOp(doAdd, op: StdOp.binOp(newCount, lhs: count, rhs: oneConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.appendOp(doAdd, op: StdOp.storeIndirect(countAddr, offset: 0, valueId: newCount, valueType: StdType.i64))
-
-	// gt.status = waiting ; gt.io_handle = handle.
-	let waitingConst = ids.mint()
-	module.appendOp(doAdd, op: StdOp.const(waitingConst, value: GtStatusWaiting, valueType: StdType.i64))
-	module.appendOp(doAdd, op: StdOp.storeIndirect(gt, offset: GtOffStatus, valueId: waitingConst, valueType: StdType.i64))
-	module.appendOp(doAdd, op: StdOp.storeIndirect(gt, offset: GtOffIoHandle, valueId: handle, valueType: StdType.i64))
-
-	// The child was parked — report no error so the caller yields and later reaps.
-	let addedOk = ids.mint()
-	module.appendOp(doAdd, op: StdOp.const(addedOk, value: NoErrorFlag, valueType: StdType.i64))
-	module.setTerminator(doAdd, op: StdOp.ret(addedOk))
-
-	module.functions.push(func)
-end 'buildGtProcAddLocked'
-
-// `__gt_proc_count() -> count` — the live parked-child count.
-function buildGtProcCount(module StdModule)
-	var func = IrFunction.createFromStd(GtProcCountName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
-	var ids = ValueMinter.create(0)
-
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	let countAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(countAddr, label: GtProcCountLabel))
-	let count = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(count, addrId: countAddr, offset: 0, valueType: StdType.i64))
-	module.setTerminator(entry, op: StdOp.ret(count))
-
-	module.functions.push(func)
-end 'buildGtProcCount'
-
 // ⭐⭐ **SWITCH INTO `g` FROM THIS MACHINE'S SCHEDULER CONTEXT — Go's `execute`.** Name the context `g` switches
 // back to, make `g` the machine's running GT, switch, and restore the context on the way back. ⚠ It takes the
 // M and not the P: *"which green thread is running"* is a fact about the OS thread executing it
@@ -5992,50 +5709,36 @@ function emitGtExecute(module StdModule, block IrBlock, g ValueId, schedulerCont
 	emitStoreField(module, block: block, record: m, offset: MOffCurrentGt, value: schedulerContext)
 end 'emitGtExecute'
 
-// 1 when the timer store or the process store holds anything, else 0. `__sched_lock` held. EXPORTED for
-// `SchedRuntime`: the idle tail claims the poller on it, and `__sched_checkdead` counts a pending entry as a
-// wakeup source.
+// 1 when the timer store holds anything or any thread is published on a poll descriptor, else 0.
+// `__sched_lock` held. EXPORTED for `SchedRuntime`: the idle tail claims the poller on it, and
+// `__sched_checkdead` counts a pending entry as a wakeup source.
+//
+// ⭐ **A SOURCE WAIT IS PENDING WORK AND IS THE ONLY KIND WITH NO DEADLINE OF ITS OWN.** A process whose sole
+// outstanding wait is a read — or a child — has no timer at all, so without that count the idle tail would
+// never enter the poller and `__sched_checkdead` would declare a program that is merely waiting to be
+// deadlocked.
 export function emitGtStoresPending(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
-	let children = ids.mint()
-	module.appendOp(block, op: StdOp.call(children, callee: GtProcCountName, args: ValueIdArray.create()))
-	let either = emitBin(module, block: block, a: emitLoadGlobalWord(module, block: block, label: GtTimerCountLabel, ids: ids), b: children, opcode: StdBinOpcode.bitOr, ids: ids)
-
-	// ⭐ **A SOCKET WAIT IS PENDING WORK TOO, AND IT IS THE ONLY KIND WITH NO DEADLINE OF ITS OWN.** A process
-	// whose sole outstanding wait is a read has no timer and no child, so without this count the idle tail
-	// would never enter the poller and `__sched_checkdead` would declare a program that is merely waiting for
-	// a peer to be deadlocked.
-	let anyStore = emitBin(module, block: block, a: either, b: emitLoadGlobalWord(module, block: block, label: NetpollWaitersLabel, ids: ids), opcode: StdBinOpcode.bitOr, ids: ids)
+	let anyStore = emitBin(module, block: block, a: emitLoadGlobalWord(module, block: block, label: GtTimerCountLabel, ids: ids), b: emitLoadGlobalWord(module, block: block, label: NetpollWaitersLabel, ids: ids), opcode: StdBinOpcode.bitOr, ids: ids)
 	return emitCmp(module, block: block, a: anyStore, b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
 end 'emitGtStoresPending'
 
-// ⭐⭐ **FIRE THE TIMERS THAT ARE DUE AND REAP THE CHILDREN THAT HAVE EXITED, EACH ONLY IF AN UNLOCKED PEEK
-// SAYS THERE IS ANYTHING TO TAKE** — the due test (`emitGtBranchOnTimerDue`) and the parked-child count — so a
-// poll with a far deadline pending and no child takes no lock. It terminates `cur` and continues at `cont`,
-// whose one block argument receives the wake debt the walks owe. EXPORTED for the scheduler loop's idle poll and
-// its P-less poll (`SchedRuntime.buildSchedLoop`); the strand runner's yield is the third caller.
+// ⭐⭐ **FIRE THE TIMERS THAT ARE DUE, ONLY IF AN UNLOCKED PEEK SAYS THERE IS ANYTHING TO TAKE** — the due
+// test (`emitGtBranchOnTimerDue`) — so a poll with a far deadline pending takes no lock. It terminates `cur`
+// and continues at `cont`, whose one block argument receives the wake debt the walk owes. EXPORTED for the
+// scheduler loop's idle poll and its P-less poll (`SchedRuntime.buildSchedLoop`); the strand runner's yield is
+// the third caller.
+//
+// ⚠ **A PARKED CHILD IS NOT SWEPT HERE, BECAUSE NOTHING SWEEPS IT.** It is a source on the poller like a
+// socket, so its exit arrives as an entry the poller's own walk turns into a ready.
 export function emitGtPollStores(module StdModule, func IrFunction, cur IrBlock, cont IrBlock, ids ValueMinter)
 	var fire = module.addBlock(func, label: b"pollfire", heat: BlockHeat.normal)
-	var children = module.addBlock(func, label: b"pollchildren", heat: BlockHeat.normal)
-	var reap = module.addBlock(func, label: b"pollreap", heat: BlockHeat.normal)
 
 	let noDebt = emitConst(module, block: cur, value: WakeDebtNone, ids: ids)
-	let now = emitGtBranchOnTimerDue(module, func: func, cur: cur, due: fire, notDue: children, notDueArgs: argsOf(noDebt), ids: ids)
+	let now = emitGtBranchOnTimerDue(module, func: func, cur: cur, due: fire, notDue: cont, notDueArgs: argsOf(noDebt), ids: ids)
 
 	let timerDebt = ids.mint()
 	module.appendOp(fire, op: StdOp.call(timerDebt, callee: GtTimerCheckName, args: argsOf(now)))
-	emitBranchWithDebt(module, from: fire, to: children, debt: timerDebt)
-
-	let firedDebt = ids.mint()
-	children.blockArgs.push(IrBlockArg.create(firedDebt, argType: StdType.i64))
-	let parked = ids.mint()
-	module.appendOp(children, op: StdOp.call(parked, callee: GtProcCountName, args: ValueIdArray.create()))
-	let noChild = emitCmp(module, block: children, a: parked, b: emitConst(module, block: children, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(children, op: StdOp.condBranch(noChild, thenBlockId: cont.id, elseBlockId: reap.id))
-	children.branchEdges.push(BranchEdge.create(cont.id, argIds: argsOf(firedDebt)))
-
-	let procDebt = ids.mint()
-	module.appendOp(reap, op: StdOp.call(procDebt, callee: GtProcCheckName, args: ValueIdArray.create()))
-	emitBranchWithDebt(module, from: reap, to: cont, debt: emitBin(module, block: reap, a: firedDebt, b: procDebt, opcode: StdBinOpcode.bitOr, ids: ids))
+	emitBranchWithDebt(module, from: fire, to: cont, debt: timerDebt)
 end 'emitGtPollStores'
 
 // `__gt_run_strand(m, owner)` — see `GtRunStrandName`.
@@ -6636,119 +6339,6 @@ function buildGtPreempt(module StdModule, target Target)
 	module.functions.push(func)
 end 'buildGtPreempt'
 
-// `__gt_proc_check() -> wakeDebt` — poll every parked child; ready the GTs whose child has EXITED. For each
-// entry: `osWaitHandle(handle, 0) == WAIT_OBJECT_0` means the child exited → ready its GT and remove the entry
-// (swap the last live entry into the hole across BOTH parallel arrays, count--, re-examine the same index).
-// Mirrors `__gt_timer_check`'s fire, with a zero-timeout wait poll in place of the deadline compare, and answers
-// the wake debt the same way.
-function buildGtProcCheck(module StdModule)
-	var func = IrFunction.createFromStd(GtProcCheckName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
-	var ids = ValueMinter.create(0)
-
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var loopHdr = module.addBlock(func, label: b"loophdr", heat: BlockHeat.normal)
-	var loopBody = module.addBlock(func, label: b"loopbody", heat: BlockHeat.normal)
-	var advance = module.addBlock(func, label: b"advance", heat: BlockHeat.normal)
-	var fire = module.addBlock(func, label: b"fire", heat: BlockHeat.normal)
-	var doneBlock = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
-
-	// The walk MUTATES the store (each reap swap-removes an entry across both arrays), so it runs under the
-	// run-queue lock — `__gt_timer_check`'s arrangement exactly.
-	emitSchedLockEnter(module, block: entry, ids: ids)
-
-	let countAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(countAddr, label: GtProcCountLabel))
-	let count0 = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(count0, addrId: countAddr, offset: 0, valueType: StdType.i64))
-	let handlesBaseAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(handlesBaseAddr, label: GtProcHandlesBaseLabel))
-	let handlesBase = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(handlesBase, addrId: handlesBaseAddr, offset: 0, valueType: StdType.i64))
-	let gtsBaseAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(gtsBaseAddr, label: GtProcGtsBaseLabel))
-	let gtsBase = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(gtsBase, addrId: gtsBaseAddr, offset: 0, valueType: StdType.i64))
-	let zeroConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
-	let slotBytesConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(slotBytesConst, value: ProcSlotBytes, valueType: StdType.i64))
-	module.setTerminator(entry, op: StdOp.branch(loopHdr.id))
-
-	// loopHdr(i, count, owesWake): if i >= count → done(count, owesWake), else → loopBody. `owesWake` is
-	// `__gt_timer_check`'s, for its reason.
-	let i = ids.mint()
-	let count = ids.mint()
-	let owesWake = ids.mint()
-	loopHdr.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	loopHdr.blockArgs.push(IrBlockArg.create(count, argType: StdType.i64))
-	loopHdr.blockArgs.push(IrBlockArg.create(owesWake, argType: StdType.i64))
-	entry.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: threeArgs(zeroConst, second: count0, third: zeroConst)))
-	let atEnd = ids.mint()
-	module.appendOp(loopHdr, op: StdOp.cmp(atEnd, lhs: i, rhs: count, pred: StdCmpPred.ge, operandType: StdType.i64))
-	module.setTerminator(loopHdr, op: StdOp.condBranch(atEnd, thenBlockId: doneBlock.id, elseBlockId: loopBody.id))
-
-	// loopBody: h = procHandles[i]; poll it; if signaled (child exited) → fire, else → advance.
-	let off = ids.mint()
-	module.appendOp(loopBody, op: StdOp.binOp(off, lhs: i, rhs: slotBytesConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
-	let handleAddr = ids.mint()
-	module.appendOp(loopBody, op: StdOp.binOp(handleAddr, lhs: handlesBase, rhs: off, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let handle = ids.mint()
-	module.appendOp(loopBody, op: StdOp.loadIndirect(handle, addrId: handleAddr, offset: 0, valueType: StdType.i64))
-	let pollTimeoutConst = ids.mint()
-	module.appendOp(loopBody, op: StdOp.const(pollTimeoutConst, value: WaitPollTimeout, valueType: StdType.i64))
-	let waitResult = ids.mint()
-	module.appendOp(loopBody, op: StdOp.osWaitHandle(waitResult, handleId: handle, timeoutMsId: pollTimeoutConst))
-	let signaledConst = ids.mint()
-	module.appendOp(loopBody, op: StdOp.const(signaledConst, value: WaitObject0, valueType: StdType.i64))
-	let isSignaled = ids.mint()
-	module.appendOp(loopBody, op: StdOp.cmp(isSignaled, lhs: waitResult, rhs: signaledConst, pred: StdCmpPred.eq, operandType: StdType.i64))
-	module.setTerminator(loopBody, op: StdOp.condBranch(isSignaled, thenBlockId: fire.id, elseBlockId: advance.id))
-
-	// advance: not signaled → loopHdr(i+1, count, owesWake).
-	let oneAdv = ids.mint()
-	module.appendOp(advance, op: StdOp.const(oneAdv, value: 1, valueType: StdType.i64))
-	let iAdv = ids.mint()
-	module.appendOp(advance, op: StdOp.binOp(iAdv, lhs: i, rhs: oneAdv, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.setTerminator(advance, op: StdOp.branch(loopHdr.id))
-	advance.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: threeArgs(iAdv, second: count, third: owesWake)))
-
-	// fire: gt = procGts[i]; ready it under the lock this walk already holds — see `__gt_timer_check`. Then
-	// remove entry i — copy the last live entry over it in BOTH arrays, count--, re-examine i.
-	let fireOff = ids.mint()
-	module.appendOp(fire, op: StdOp.binOp(fireOff, lhs: i, rhs: slotBytesConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
-	let gtAddr = ids.mint()
-	module.appendOp(fire, op: StdOp.binOp(gtAddr, lhs: gtsBase, rhs: fireOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let gt = ids.mint()
-	module.appendOp(fire, op: StdOp.loadIndirect(gt, addrId: gtAddr, offset: 0, valueType: StdType.i64))
-	let fireDebt = emitGtReadyLocked(module, block: fire, gt: gt, ids: ids)
-	let fireNowOwes = emitBin(module, block: fire, a: owesWake, b: fireDebt, opcode: StdBinOpcode.bitOr, ids: ids)
-	let oneRem = ids.mint()
-	module.appendOp(fire, op: StdOp.const(oneRem, value: 1, valueType: StdType.i64))
-	let newCount = ids.mint()
-	module.appendOp(fire, op: StdOp.binOp(newCount, lhs: count, rhs: oneRem, opcode: StdBinOpcode.sub, operandType: StdType.i64))
-	let lastOff = ids.mint()
-	module.appendOp(fire, op: StdOp.binOp(lastOff, lhs: newCount, rhs: slotBytesConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
-
-	// procHandles[i] = procHandles[last]; procGts[i] = procGts[last] — the shared swap-down.
-	emitProcSwapDown(module, block: fire, ids: ids, handlesBase: handlesBase, gtsBase: gtsBase, lastOff: lastOff, holeOff: fireOff)
-	module.setTerminator(fire, op: StdOp.branch(loopHdr.id))
-	fire.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: threeArgs(i, second: newCount, third: fireNowOwes)))
-
-	// done(count, owesWake): publish the surviving entry count, release, and answer the debt.
-	let doneCount = ids.mint()
-	let doneOwesWake = ids.mint()
-	doneBlock.blockArgs.push(IrBlockArg.create(doneCount, argType: StdType.i64))
-	doneBlock.blockArgs.push(IrBlockArg.create(doneOwesWake, argType: StdType.i64))
-	loopHdr.branchEdges.push(BranchEdge.create(doneBlock.id, argIds: twoArgs(count, second: owesWake)))
-	let doneCountAddr = ids.mint()
-	module.appendOp(doneBlock, op: StdOp.globalAddr(doneCountAddr, label: GtProcCountLabel))
-	module.appendOp(doneBlock, op: StdOp.storeIndirect(doneCountAddr, offset: 0, valueId: doneCount, valueType: StdType.i64))
-	emitSchedLockLeave(module, block: doneBlock, ids: ids)
-	module.setTerminator(doneBlock, op: StdOp.ret(doneOwesWake))
-
-	module.functions.push(func)
-end 'buildGtProcCheck'
-
 // `__gt_process_run(strPtr) -> code` — spawn the Windows child named by the command-line String, wait for it to
 // exit (yielding the current GT while it runs), and return its scalar exit code. THE subprocess mid-body yield.
 // The command line is BORROWED: `strPtr` is the 56-byte String record, whose `buffer`/`length` this reads exactly
@@ -6757,8 +6347,7 @@ end 'buildGtProcCheck'
 // ⭐ **A THROWING FUNCTION (P1.5 #93)** — its `throws RunProcessError` clause makes the x64/wasm backends give it
 // the dual-register `errorReturn` ABI (exit code in R8, error flag in R10), the same shape a throwing array
 // accessor uses. Every exit is an `errorReturn`: the reap path returns `(code, NoErrorFlag)`, a
-// `CreateProcessA` failure returns `(0, RunProcessSpawnFailedFlag)`, and a full process store propagates
-// the `storeOverflow` flag (`(0, flag)`). The front end recognizes `__gt_process_run` as a
+// `CreateProcessA` failure returns `(0, RunProcessSpawnFailedFlag)`. The front end recognizes `__gt_process_run` as a
 // throwing runtime callee (`isThrowingGtRuntimeCallee`), so a `runProcess` call must be a `tryCall`.
 function buildGtProcessRun(module StdModule, rawFree ByteArray, commandShape SubprocessCommandShape)
 	var func = IrFunction.createFromStd(GtProcessRunName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: ThrowsClause.throwing(RunProcessErrorTypeName))
@@ -6809,10 +6398,8 @@ function buildGtProcessRun(module StdModule, rawFree ByteArray, commandShape Sub
 
 	var spawnFailed = module.addBlock(func, label: b"spawnfailed", heat: BlockHeat.normal)
 	var spawnOk = module.addBlock(func, label: b"spawnok", heat: BlockHeat.normal)
-	var overflowReturn = module.addBlock(func, label: b"overflowreturn", heat: BlockHeat.normal)
-	var parkOk = module.addBlock(func, label: b"parkok", heat: BlockHeat.normal)
-	var reap = module.addBlock(func, label: b"reap", heat: BlockHeat.normal)
-	var reapOverflowed = module.addBlock(func, label: b"reapoverflowed", heat: BlockHeat.normal)
+	var waitChild = module.addBlock(func, label: b"waitchild", heat: BlockHeat.normal)
+	var renounced = module.addBlock(func, label: b"renounced", heat: BlockHeat.normal)
 	var reapExit = module.addBlock(func, label: b"reapexit", heat: BlockHeat.normal)
 
 	// afterCopy: spawn the child. On FAILURE (`hProcess == 0` — CreateProcessA leaves the PROCESS_INFORMATION
@@ -6835,10 +6422,10 @@ function buildGtProcessRun(module StdModule, rawFree ByteArray, commandShape Sub
 
 	// ⚠ **BOTH HANDLES COME OUT BEFORE THE RECORD GOES BACK, AND THAT IS WHY THE RELEASE IS HERE RATHER THAN
 	// ON EACH ARM.** CreateProcessA has read the STARTUPINFOA and the command line and written the
-	// PROCESS_INFORMATION, so all three regions are dead at this point on EVERY path below — the throw, the
-	// overflow throw and the park alike. Freeing once, before the branch, is what keeps the three arms from
-	// each needing their own copy of it, and `hThread` is read here for the same reason (on the failure path it
-	// is the slot's zero, which that arm never looks at).
+	// PROCESS_INFORMATION, so all three regions are dead at this point on EVERY path below — the throw and the
+	// park alike. Freeing once, before the branch, is what keeps both arms from needing their own copy of it,
+	// and `hThread` is read here for the same reason (on the failure path it is the slot's zero, which that arm
+	// never looks at).
 	module.appendOp(afterCopy, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(cmBuf)))
 	module.appendOp(afterCopy, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(startupPtr)))
 	module.appendOp(afterCopy, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(procInfoPtr)))
@@ -6857,84 +6444,46 @@ function buildGtProcessRun(module StdModule, rawFree ByteArray, commandShape Sub
 	module.appendOp(spawnFailed, op: StdOp.const(spawnFailFlag, value: RunProcessSpawnFailedFlag, valueType: StdType.i64))
 	module.setTerminator(spawnFailed, op: StdOp.errorReturn(spawnFailSentinel, errorFlagId: spawnFailFlag))
 
-	// spawnOk: close the (unneeded) thread handle, then ask whether the process store has room. ⚠ **THE
-	// QUESTION IS ASKED HERE AND ANSWERED AGAIN AT THE APPEND (W218).** The append itself now happens in
-	// `__gt_register_park`, after the context switch, and a THROW cannot happen there — `runProcess` reports
-	// `RunProcessError.storeOverflow` to this frame's `try`, and this frame is suspended by then. So the common
-	// case is refused HERE, at the site the throw belongs to; the rare cross-M one (a second M took the last
-	// slot while this thread was switching out) comes back through `reap` below.
-	//
-	// ⚠ It asks `__gt_proc_count` rather than a reserve entry point of its own, because a reserve would be
-	// exactly that call plus this compare — and the count is already a function for the scheduler loop.
+	// spawnOk: close the (unneeded) thread handle, then make the child a SOURCE ON THE POLLER and park on it.
 	module.appendOp(spawnOk, op: StdOp.osCloseHandle(hThread))
+	let child = emitNetpollAcquireChildSource(module, func: func, ids: ids, cur: spawnOk, hProcess: hProcess, cont: waitChild)
 
-	// selfGt = this M's current GT, read here because `reap` needs it once we are running again.
-	let selfGt = emitLoadCurrentGt(module, block: spawnOk, ids: ids)
-	let parkedCount = ids.mint()
-	module.appendOp(spawnOk, op: StdOp.call(parkedCount, callee: GtProcCountName, args: ValueIdArray.create()))
-	let capacityConst = ids.mint()
-	module.appendOp(spawnOk, op: StdOp.const(capacityConst, value: ProcStoreCapacity, valueType: StdType.i64))
-	let storeFull = ids.mint()
-	module.appendOp(spawnOk, op: StdOp.cmp(storeFull, lhs: parkedCount, rhs: capacityConst, pred: StdCmpPred.ge, operandType: StdType.i64))
-	module.setTerminator(spawnOk, op: StdOp.condBranch(storeFull, thenBlockId: overflowReturn.id, elseBlockId: parkOk.id))
+	// waitChild: suspend on the source's READ direction and resume when the child's exit lands there. The
+	// registration is given back on every road out, because the source is a descriptor (or, on a completion
+	// port, a key) this call owns for exactly as long as the wait — which is why the close is appended AFTER
+	// the branch is set and still runs BEFORE it: a block's body ops all run ahead of its terminator, so one
+	// copy serves both roads out.
+	emitGtWaitReadable(module, cur: waitChild, source: child.source, ready: reapExit, renounced: renounced, ids: ids)
+	module.appendOp(waitChild, op: StdOp.call(ids.mint(), callee: NetpollChildCloseName, args: twoArgs(child.source, second: child.token)))
 
-	// overflowReturn: the process store is full, so this GT will not park — THROW
-	// `RunProcessError.storeOverflow` (P1.5 #93). The child WAS spawned, so close its handle to abandon the
-	// WAIT (it runs to completion independently, exactly as the parked-drop cancel abandons a child) — an
-	// un-parked GT never reaches `reap` to close it.
-	module.appendOp(overflowReturn, op: StdOp.osCloseHandle(hProcess))
-	let overflowSentinel = ids.mint()
-	module.appendOp(overflowReturn, op: StdOp.const(overflowSentinel, value: 0, valueType: StdType.i64))
-	let overflowFlagConst = ids.mint()
-	module.appendOp(overflowReturn, op: StdOp.const(overflowFlagConst, value: RunProcessStoreOverflowFlag, valueType: StdType.i64))
-	module.setTerminator(overflowReturn, op: StdOp.errorReturn(overflowSentinel, errorFlagId: overflowFlagConst))
+	// ⭐⭐ **A WAIT THAT ENDED ANY OTHER WAY WAS RENOUNCED, AND THE CHILD IS ABANDONED RATHER THAN KILLED.**
+	// Only `__np_pd_drop` can end this wait without readiness — no deadline is ever armed on a child — so the
+	// promise this coroutine belongs to has been dropped and nothing can observe the answer. The child runs to
+	// completion on its own: reading its code would mean blocking the machine on a process nobody is waiting
+	// for.
+	let renouncedCode = ids.mint()
+	module.appendOp(renounced, op: StdOp.const(renouncedCode, value: 0, valueType: StdType.i64))
+	module.appendOp(renounced, op: StdOp.osCloseHandle(hProcess))
+	let renouncedNoError = ids.mint()
+	module.appendOp(renounced, op: StdOp.const(renouncedNoError, value: NoErrorFlag, valueType: StdType.i64))
+	module.setTerminator(renounced, op: StdOp.errorReturn(renouncedCode, errorFlagId: renouncedNoError))
 
-	// parkOk: hand the scheduler a PROC park note carrying the child's handle and switch out. The strand runner
-	// registers it (`__gt_register_park`) once our registers are saved, which is what makes publishing the
-	// store's entry safe. The continuation is `reap`: the child has exited by the time we run again.
-	emitGtPark(module, ids: ids, cur: parkOk, kind: GtParkKindProc, arg: hProcess, cont: reap)
-
-	// reap: the child has exited. Reload hProcess from `selfGt.io_handle` (its durable home across the yield — the
-	// value in a register cannot be assumed to survive an arbitrary number of intervening switches), then read the
-	// exit code and close the handle. GetExitCodeProcess(hProcess, codePtr) ; code = codePtr[0] (i64 read).
+	// reapExit: the child has exited. Read its code and close the handle.
 	// ⭐ **THE EXIT-CODE SLOT IS TAKEN HERE, AFTER THE PARK, AND GIVEN BACK BEFORE THE RETURN (S3)** — so no
 	// scratch of this call's is alive while the green thread is suspended, and the slot cannot be shared with
 	// another call's reap. THE ZEROING IS WHY THE i64 READ IS CLEAN: GetExitCodeProcess writes only the low
 	// DWORD (4 bytes) of the 8-byte slot, so the high DWORD must already be zero for a full-word load to yield
 	// exactly this child's code (a full-word load is the only wide memory form — a u32 read would need an `as`
-	// cast the runtime builder cannot spell). A fresh slab slot supplies that; the explicit `store 0` that stood
-	// here existed only because #92's slot was reused across calls.
-	//
-	// ⭐⭐ **A ZERO HERE IS THE CROSS-M OVERFLOW, AND IT IS WHY THIS LOAD IS TESTED (W218).** `io_handle` is
-	// written by `__gt_proc_add_locked` when the park succeeded and CLEARED by `__gt_register_park`'s overflow
-	// arm when the store filled up between this frame's check and the append. That arm cannot throw — it runs
-	// on the scheduler context, not in this frame — so it un-parks the thread and leaves the zero as the signal, and this
-	// is the frame that turns it back into the `RunProcessError.storeOverflow` the `try` was written for.
-	let reapHandle = ids.mint()
-	module.appendOp(reap, op: StdOp.loadIndirect(reapHandle, addrId: selfGt, offset: GtOffIoHandle, valueType: StdType.i64))
-	let reapZeroConst = ids.mint()
-	module.appendOp(reap, op: StdOp.const(reapZeroConst, value: 0, valueType: StdType.i64))
-	let neverParked = ids.mint()
-	module.appendOp(reap, op: StdOp.cmp(neverParked, lhs: reapHandle, rhs: reapZeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
-	module.setTerminator(reap, op: StdOp.condBranch(neverParked, thenBlockId: reapOverflowed.id, elseBlockId: reapExit.id))
-
-	// reapOverflowed: the child's handle was closed by the register's overflow arm, so there is nothing to reap
-	// and nothing to release — only the throw this call could not make from the scheduler context.
-	let reapOverflowSentinel = ids.mint()
-	module.appendOp(reapOverflowed, op: StdOp.const(reapOverflowSentinel, value: 0, valueType: StdType.i64))
-	let reapOverflowFlag = ids.mint()
-	module.appendOp(reapOverflowed, op: StdOp.const(reapOverflowFlag, value: RunProcessStoreOverflowFlag, valueType: StdType.i64))
-	module.setTerminator(reapOverflowed, op: StdOp.errorReturn(reapOverflowSentinel, errorFlagId: reapOverflowFlag))
-
+	// cast the runtime builder cannot spell). A fresh slab slot supplies that.
 	let codeSizeConst = ids.mint()
 	module.appendOp(reapExit, op: StdOp.const(codeSizeConst, value: ExitCodeSlotBytes, valueType: StdType.i64))
 	let codePtr = ids.mint()
 	module.appendOp(reapExit, op: StdOp.call(codePtr, callee: SlabAllocName, args: argsOf(codeSizeConst)))
-	module.appendOp(reapExit, op: StdOp.osProcessExitCode(reapHandle, codePtrId: codePtr))
+	module.appendOp(reapExit, op: StdOp.osProcessExitCode(hProcess, codePtrId: codePtr))
 	let code = ids.mint()
 	module.appendOp(reapExit, op: StdOp.loadIndirect(code, addrId: codePtr, offset: 0, valueType: StdType.i64))
 	module.appendOp(reapExit, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(codePtr)))
-	module.appendOp(reapExit, op: StdOp.osCloseHandle(reapHandle))
+	module.appendOp(reapExit, op: StdOp.osCloseHandle(hProcess))
 
 	// A THROWING function's successful exit still writes BOTH registers (P1.5 #93) — the child's exit code in the
 	// primary, `NoErrorFlag` in the flag — so the `try` caller reads flag 0 and takes the success path.
@@ -7309,9 +6858,13 @@ function buildGtIoRead(module StdModule, rawFree ByteArray, commandShape Subproc
 	// handshake the streaming reader also uses (one copy of the completion-thread coordination). It returns the byte
 	// count, 0 at a clean end of stream and `SubpReadFailedCount` on a failed read. The streaming API allocs its
 	// buffer per HANDLE and reuses it across reads, so it leaves `ioScratch` at 0 and the cancel arm frees nothing.
+	// The read end joins the poller BEFORE the first attempt, so an `EAGAIN` has a record to park on and a
+	// readiness that lands between the two is remembered rather than lost.
+	module.appendOp(spawnOk, op: StdOp.call(ids.mint(), callee: NetpollPipeOpenName, args: argsOf(readEnd)))
 	let ownsPipeConst = emitConst(module, block: spawnOk, value: 1, ids: ids)
 	let rawRead = ids.mint()
 	module.appendOp(spawnOk, op: StdOp.call(rawRead, callee: SubpYieldReadName, args: fiveArgs(readEnd, second: readBuf, third: readBufSizeConst, fourth: bytesOutPtr, fifth: ownsPipeConst)))
+	module.appendOp(spawnOk, op: StdOp.call(ids.mint(), callee: NetpollPipeCloseName, args: argsOf(readEnd)))
 	module.appendOp(spawnOk, op: StdOp.osCloseHandle(readEnd))
 
 	// The read is over — the completion thread is done with the buffer, so the slot is cleared FIRST and then
@@ -7425,8 +6978,8 @@ export let SubpSlotWaitStartMs = 168 as ByteOffset
 // never fed, which is why the stdlib refuses `delayed` without a collected stdout.
 //
 // The feed is a deadline rather than a sleep because it comes from the drain loop: `__gt_subp_wait_collect`
-// pushes one chunk per pass between drains, and the loop's own `SubpPollMs` green sleep is what makes the
-// waiting free.
+// pushes one chunk per pass between drains, and the loop's own idle wait — which never holds a machine — is
+// what makes the waiting free.
 //
 // ⚠ Negative is the unarmed spelling because `osTickCountMs` is non-negative on every lane, and 176 is the
 // last free word of `SubpSlotBytes` (184): a second word would move the handle table's stride.
@@ -7672,16 +7225,30 @@ end 'emitEnsureSlotBuffer'
 // one-shot per-GT pipe). A STREAMING read passes
 // `ownsPipe = 0`: the cancel arm leaves its TABLE-owned pipe open (usable for the next `subpReadLine(h)`), and
 // `subpRelease` is the sole closer — so dropping a streaming reader mid-read is CORRECT, not out of scope.
-function buildSubpYieldRead(module StdModule)
+//
+// ⭐⭐⭐ **THE TWO SHAPES PARK ON DIFFERENT THINGS AND ANSWER THE SAME THREE THINGS.** A completion port
+// carries the read itself, so the park is `GtParkKindIo` and the completion thread hands back the count. A POSIX
+// lane has no in-flight read: the descriptor is non-blocking (`NetpollRuntime.__np_pipe_open`), `EAGAIN` arrives
+// as `ERROR_IO_PENDING`, and the thread parks on the descriptor's own poll record and RE-ISSUES the read when it
+// is readable again.
+//
+// ⛔⛔ **AN `EAGAIN` IS CONSUMED HERE AND NEVER ANSWERED AS A COUNT.** Every caller reads a 0 as a permanent
+// end of stream (`emitSubpTopUpStream`'s `setEof`, `emitSubpDrainStream`'s `markDone`), so answering 0 for a
+// merely-empty pipe would latch a stream the child is still writing to — a wrong answer that looks green on a
+// fast child. The loop is what makes the three answers exactly what they were while the descriptor blocked:
+// bytes, a real end of stream, or a failure.
+function buildSubpYieldRead(module StdModule, target Target)
 	var func = IrFunction.createFromStd(SubpYieldReadName, returnType: StdReturnType.value(StdType.i64), paramCount: 5, paramTypes: fiveI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(5)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var attempt = module.addBlock(func, label: b"attempt", heat: BlockHeat.normal)
 	var syncDone = module.addBlock(func, label: b"syncdone", heat: BlockHeat.normal)
 	var checkErr = module.addBlock(func, label: b"checkerr", heat: BlockHeat.normal)
 	var classifyErr = module.addBlock(func, label: b"classifyerr", heat: BlockHeat.normal)
 	var cleanEof = module.addBlock(func, label: b"cleaneof", heat: BlockHeat.normal)
 	var readFailed = module.addBlock(func, label: b"readfailed", heat: BlockHeat.normal)
+	var pending = module.addBlock(func, label: b"pending", heat: BlockHeat.normal)
 	var park = module.addBlock(func, label: b"park", heat: BlockHeat.normal)
 	var resume = module.addBlock(func, label: b"resume", heat: BlockHeat.normal)
 
@@ -7700,10 +7267,13 @@ function buildSubpYieldRead(module StdModule)
 	module.appendOp(entry, op: StdOp.storeIndirect(ovlPtr, offset: 8, valueId: zeroConst, valueType: StdType.i64))
 	module.appendOp(entry, op: StdOp.storeIndirect(ovlPtr, offset: 16, valueId: zeroConst, valueType: StdType.i64))
 	module.appendOp(entry, op: StdOp.storeIndirect(ovlPtr, offset: 24, valueId: zeroConst, valueType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.branch(attempt.id))
+
 	let readResult = ids.mint()
-	module.appendOp(entry, op: StdOp.osReadOverlapped(readResult, handleId: readEnd, bufId: buf, capId: cap, bytesOutPtrId: bytesOutPtr, ovlId: ovlPtr))
-	let syncOk = emitCmp(module, block: entry, a: readResult, b: zeroConst, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(syncOk, thenBlockId: syncDone.id, elseBlockId: checkErr.id))
+	module.appendOp(attempt, op: StdOp.osReadOverlapped(readResult, handleId: readEnd, bufId: buf, capId: cap, bytesOutPtrId: bytesOutPtr, ovlId: ovlPtr))
+	let attemptZero = emitConst(module, block: attempt, value: 0, ids: ids)
+	let syncOk = emitCmp(module, block: attempt, a: readResult, b: attemptZero, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(attempt, op: StdOp.condBranch(syncOk, thenBlockId: syncDone.id, elseBlockId: checkErr.id))
 
 	let syncBytes = emitLoadField(module, block: syncDone, record: bytesOutPtr, offset: 0, ids: ids)
 	module.setTerminator(syncDone, op: StdOp.ret(syncBytes))
@@ -7712,7 +7282,16 @@ function buildSubpYieldRead(module StdModule)
 	module.appendOp(checkErr, op: StdOp.osLastError(err))
 	let pendingConst = emitConst(module, block: checkErr, value: ErrorIoPending as ParsedInt, ids: ids)
 	let isPending = emitCmp(module, block: checkErr, a: err, b: pendingConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(checkErr, op: StdOp.condBranch(isPending, thenBlockId: park.id, elseBlockId: classifyErr.id))
+	module.setTerminator(checkErr, op: StdOp.condBranch(isPending, thenBlockId: pending.id, elseBlockId: classifyErr.id))
+
+	match ioCompletionShape(target) 'wait'
+		completionPort then module.setTerminator(pending, op: StdOp.branch(park.id))
+
+		// The descriptor is merely empty. Suspend on its poll record and read again once it is readable; a wait
+		// that ended any other way was RENOUNCED by a dropped promise, and the caller's own unwinding is what
+		// follows, so it answers a failed read rather than re-issuing on a descriptor nobody wants.
+		inlineCompletion then emitGtWaitReadable(module, cur: pending, source: readEnd, ready: attempt, renounced: readFailed, ids: ids)
+	end 'wait'
 
 	// ⭐ **A BROKEN PIPE IS THE END OF THE STREAM; ANYTHING ELSE IS A FAILED READ.** A child that exited and
 	// closed its stdout is the ONE way a `ReadFile` on a live pipe fails in normal operation, so
@@ -7752,7 +7331,8 @@ function buildSubpYieldRead(module StdModule)
 
 	// resume: clear ioParked ; __io_pending-- ; return the count the completion thread stored — which is
 	// `SubpReadFailedCount` when the COMPLETION carried a fault, so a parked failure needs no classification
-	// of its own here. The completion thread has already made this function's broken-pipe fold.
+	// of its own here. The completion thread has already made this function's broken-pipe fold. Both blocks are
+	// unreachable on a lane with no completion port; the shape fork above is what leaves them so.
 	let clearParked = emitConst(module, block: resume, value: 0, ids: ids)
 	module.appendOp(resume, op: StdOp.storeIndirect(selfGt, offset: GtOffIoParked, valueId: clearParked, valueType: StdType.i64))
 	let resumePendingDebit = emitConst(module, block: resume, value: OneFewer, ids: ids)
@@ -7762,6 +7342,17 @@ function buildSubpYieldRead(module StdModule)
 
 	module.functions.push(func)
 end 'buildSubpYieldRead'
+
+// ⭐ **SUSPEND ON A SOURCE'S READ DIRECTION AND SORT THE TWO WAYS THE WAIT CAN END.** Readiness reaches
+// `ready`; anything else reaches `renounced`, which for a child or a pipe end can only be a DROPPED PROMISE,
+// neither of them arming a deadline. The child wait and the pipe read are the same three ops for the same
+// reason, so they are one.
+function emitGtWaitReadable(module StdModule, cur IrBlock, source ValueId, ready IrBlock, renounced IrBlock, ids ValueMinter)
+	let verdict = ids.mint()
+	module.appendOp(cur, op: StdOp.call(verdict, callee: NetpollPdWaitName, args: twoArgs(source, second: emitConst(module, block: cur, value: NetpollModeRead, ids: ids))))
+	let readable = emitCmp(module, block: cur, a: verdict, b: emitConst(module, block: cur, value: NetpollWaitReady, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(readable, thenBlockId: ready.id, elseBlockId: renounced.id))
+end 'emitGtWaitReadable'
 
 // `__gt_subp_str_from_bytes(srcBuf, srcLen) -> ownedString` — a fresh OWNED inline String (record + bytes in ONE
 // `__mm_alloc`, `capacity@16 = InlineBufferCapacity`, `parent@32 = 0`), independently droppable through
@@ -8356,6 +7947,7 @@ function emitSubpOutputSetup(module StdModule, func IrFunction, ids ValueMinter,
 	let streamBaseConstP = emitConst(module, block: pipeMake, value: streamBase as ParsedInt, ids: ids)
 	let streamP = emitBin(module, block: pipeMake, a: slotP, b: streamBaseConstP, opcode: StdBinOpcode.add, ids: ids)
 	emitStoreField(module, block: pipeMake, record: streamP, offset: SubpStreamReadEnd, value: parentRead)
+	module.appendOp(pipeMake, op: StdOp.call(ids.mint(), callee: NetpollPipeOpenName, args: argsOf(parentRead)))
 	let childWrite = emitLoadField(module, block: pipeMake, record: scratchB, offset: 0, ids: ids)
 	module.setTerminator(pipeMake, op: StdOp.branch(join.id))
 	pipeMake.branchEdges.push(BranchEdge.create(join.id, argIds: twoArgs(childWrite, second: childWrite)))
@@ -9084,12 +8676,14 @@ function buildSubpRelease(module StdModule)
 	let stdoutBaseConst = emitConst(module, block: afterStdin, value: SubpStdoutBase as ParsedInt, ids: ids)
 	let stdoutStream = emitBin(module, block: afterStdin, a: slot, b: stdoutBaseConst, opcode: StdBinOpcode.add, ids: ids)
 	let stdoutRead = emitLoadField(module, block: afterStdin, record: stdoutStream, offset: SubpStreamReadEnd, ids: ids)
+	module.appendOp(afterStdin, op: StdOp.call(ids.mint(), callee: NetpollPipeCloseName, args: argsOf(stdoutRead)))
 	module.appendOp(afterStdin, op: StdOp.osCloseHandle(stdoutRead))
 	let zeroA = emitConst(module, block: afterStdin, value: 0, ids: ids)
 	emitStoreField(module, block: afterStdin, record: stdoutStream, offset: SubpStreamReadEnd, value: zeroA)
 	let stderrBaseConst = emitConst(module, block: afterStdin, value: SubpStderrBase as ParsedInt, ids: ids)
 	let stderrStream = emitBin(module, block: afterStdin, a: slot, b: stderrBaseConst, opcode: StdBinOpcode.add, ids: ids)
 	let stderrRead = emitLoadField(module, block: afterStdin, record: stderrStream, offset: SubpStreamReadEnd, ids: ids)
+	module.appendOp(afterStdin, op: StdOp.call(ids.mint(), callee: NetpollPipeCloseName, args: argsOf(stderrRead)))
 	module.appendOp(afterStdin, op: StdOp.osCloseHandle(stderrRead))
 	emitStoreField(module, block: afterStdin, record: stderrStream, offset: SubpStreamReadEnd, value: zeroA)
 	let hProcess = emitLoadField(module, block: afterStdin, record: slot, offset: SubpSlotHProcess, ids: ids)

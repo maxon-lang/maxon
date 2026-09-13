@@ -921,6 +921,44 @@ export enum NetpollVerb
 	// ⚠ **THE COMPLETION-PORT SHAPE NEVER EMITS IT** — that lane's socket band is blocking, so
 	// `NetpollRuntime.buildNetpollPdOpen`, the only producer, is not built there.
 	armSource
+
+	// ⭐⭐ **`(childHandle) -> a poll source for this child's exit, or a failure in this shape's vocabulary`.**
+	// A `pidfd_open` on Linux; on macOS a kqueue of this child's own, holding one `EVFILT_PROC`/`NOTE_EXIT`
+	// registration — both answer a REAL DESCRIPTOR that becomes readable when the child exits, which is what
+	// lets a child ride the same poll-descriptor band a socket does.
+	//
+	// ⚠ **THE COMPLETION-PORT SHAPE NEVER EMITS IT.** Windows has no descriptor table to draw a dense source
+	// key from, so `NetpollRuntime.__np_child_open` allocates one there instead of asking the host.
+	openChildSource
+
+	// `(poller, source, childHandle) -> the host's raw answer`. Register a child source with the poller: an
+	// `epoll_ctl(EPOLL_CTL_ADD)` or a one-element `kevent` changelist on `source` (both READ-only and
+	// edge-triggered, `armSource`'s reason), or a `RegisterWaitForSingleObject` on `childHandle` whose
+	// callback posts `source` to the port. Only Windows reads `childHandle`, and only Windows answers a value
+	// — the registered wait, which `closeChildSource` takes back.
+	armChildSource
+
+	// `(token) -> the host's raw answer`. Give back what `armChildSource` registered: a `close` of the
+	// descriptor on a POSIX lane, an `UnregisterWaitEx` of the registered wait on Windows.
+	closeChildSource
+
+	// `(poller, source)` — post a child's exit to the completion port under its source key. Emitted ONLY into
+	// the wait callback `armChildSource` registers, and therefore ONLY on the completion-port shape: the two
+	// POSIX kernels make a child readable themselves and need nobody to forward it.
+	postChildExit
+
+	// ⭐⭐ **`(poller, fd) -> the host's raw answer`. MAKE A PIPE'S READ END NON-BLOCKING AND REGISTER IT FOR
+	// READING.** The two halves are ONE verb because they are one decision: a descriptor a green thread parks on
+	// must never hold its machine inside `read(2)`, and a descriptor that answers `EAGAIN` must have somewhere
+	// to park.
+	//
+	// ⛔ **ONLY THE END THE PARENT READS IS FLAGGED, AND THAT IS WHY THIS IS PER-DESCRIPTOR RATHER THAN A PIPE
+	// FLAG.** `pipe2(O_NONBLOCK)` sets the flag on BOTH file descriptions, and the child holds the write end as
+	// its stdout — so the CHILD's writes would fail `EAGAIN`, on a program that did nothing unusual.
+	//
+	// ⚠ **THE COMPLETION-PORT SHAPE NEVER EMITS IT.** Its pipes are overlapped and were registered with the port
+	// when they were created, so `NetpollRuntime.__np_pipe_open` does nothing there.
+	armPipeSource
 end 'NetpollVerb'
 
 // ⭐ **THE IDENTITY A BREAK ARRIVES UNDER, ON EVERY LANE** — the completion key `raiseBreak` posts with, the
@@ -1345,12 +1383,12 @@ export union StdOp
 	// reject it), keeping the Win32 import table out of the target-neutral tier. Full call-barrier metadata: each
 	// IS an indirect call once lowered, exactly like `osAllocPages`.
 	//
-	// ⭐ ONLY `osWaitHandle` DEFINES A VALUE, and it is declared LAST among the five for that reason: keeping the
-	// four result-less ops contiguous lets the value-class classifiers (`recordOpResultClass`, `stdOpDefinesValue`,
+	// ⭐ ONLY `osWaitHandle` DEFINES A VALUE, and it is declared LAST for that reason: keeping the result-less
+	// ops contiguous lets the value-class classifiers (`recordOpResultClass`, `stdOpDefinesValue`,
 	// `stdOpDefinedIdOrZero`) name them as one contiguous run instead of carving `osWaitHandle` out of the
-	// middle of one. The other four consume their `BOOL` result via MEMORY (an exit code lands in `codePtr`) or ignore it
-	// (the netpoll re-scans after `osWaitHandles`), exactly as `osWriteStdout` ignores `WriteFile`'s `BOOL` — so
-	// they carry no result id and their x64 lowering emits no RAX capture.
+	// middle of one. The others consume their `BOOL` result via MEMORY (an exit code lands in `codePtr`) or
+	// ignore it, exactly as `osWriteStdout` ignores `WriteFile`'s `BOOL` — so they carry no result id and their
+	// x64 lowering emits no RAX capture.
 	//
 	// `osProcessSpawn(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr, envPtr)` = `CreateProcessA(NULL,
 	// cmdlinePtr, NULL, NULL, FALSE, creationFlags, envPtr, cwdPtr, startupPtr, procInfoPtr)`. SIX VALUE operands
@@ -1364,22 +1402,14 @@ export union StdOp
 	// code to `[codePtr]` (an out-param buffer, like `osReadClock`'s). Two VALUE operands, no result.
 	osProcessExitCode(handleId ValueId, codePtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
-	// `osWaitHandles(handleArrayPtr, count, timeoutMs)` = `WaitForMultipleObjects(count, handleArrayPtr, FALSE,
-	// timeoutMs)` — the netpoll's block on the parked children (and the earliest timer delta), performed by the
-	// ONE M that holds the single-poller claim (`GtRuntime.GtProcPollerLabel`; this used to say "single-M block"
-	// and meant the process, which is what that claim replaced). Three VALUE
-	// operands, no result: the netpoll re-scans each handle with `osWaitHandle(h, 0)` after the wait returns, so
-	// the aggregate wait result is not read.
-	osWaitHandles(handleArrayPtrId ValueId, countId ValueId, timeoutMsId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
-
 	// `osCloseHandle(handle)` = `CloseHandle(handle)`. One VALUE operand, no result (the `BOOL` is ignored, like
 	// `osWriteStdout`'s).
 	osCloseHandle(handleId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
-	// `osWaitHandle(handle, timeoutMs)` = `WaitForSingleObject(handle, timeoutMs)` — the per-handle poll
-	// `__gt_proc_check` runs with `timeoutMs = 0` to test `== WAIT_OBJECT_0 (0)`. THE ONE op here that DEFINES a
-	// value (the wait result, a GPR i64 captured from RAX). Declared LAST so the four result-less ops stay
-	// contiguous (see the ⭐ note above).
+	// `osWaitHandle(handle, timeoutMs)` = `WaitForSingleObject(handle, timeoutMs)` — the per-handle poll the
+	// attached collect drain's exit test runs with `timeoutMs = 0` to test `== WAIT_OBJECT_0 (0)`. THE ONE op
+	// here that DEFINES a value (the wait result, a GPR i64 captured from RAX). Declared LAST so the
+	// result-less ops stay contiguous (see the ⭐ note above).
 	osWaitHandle(resultId ValueId, handleId ValueId, timeoutMsId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// --- P1.5-B1a′ relocating morestack: the page-FREE twin of `osAllocPages` ---
@@ -1466,7 +1496,7 @@ export union StdOp
 	// The FIVE value-defining ones — `osIocpCreate`, `osEventCreate`, `osThreadCreate`, `osReadOverlapped`,
 	// `osLastError` — DEFINE a result (a HANDLE, a BOOL, or an error code captured from RAX). The rest consume their
 	// result via MEMORY (an out-param pointer) or ignore it (a lock op's void return), so they carry no result id, as
-	// `osCloseHandle`/`osWaitHandles` do.
+	// `osCloseHandle` does.
 	//
 	// `osPipeCreate(namePtr, saPtr, iocp, readPtr, writePtr)` = create ONE overlapped read pipe: CreateNamedPipeW(name,
 	// INBOUND|OVERLAPPED|FIRST_PIPE_INSTANCE, …) → the parent READ end stored to `[readPtr]`; CreateFileW(name,
@@ -2960,11 +2990,17 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		// `__sched_syscall_regain`'s wait go through them holding no processor, so there is none for `__sysmon`
 		// to take.
 		osWaitHandle gives SyscallClass.schedulerBound
-		osWaitHandles gives SyscallClass.schedulerBound
 
-		// ⛔ **THE POLLER IS THE SCHEDULER WAITING FOR ITS OWN WORK TOO.** Its blocking `wait` is made by a machine
-		// holding no processor, so there is nothing to retake, and every other verb is bounded and short. A
-		// bracketed wait would also be unjoinable at teardown for as long as it blocked.
+		// ⛔ **THE POLLER IS THE SCHEDULER WAITING FOR ITS OWN WORK TOO.** Its blocking `wait` is made by a
+		// machine holding no processor, so there is nothing to retake, and a bracketed wait would also be
+		// unjoinable at teardown for as long as it blocked.
+		//
+		// ⚠ **ONE VERB CAN BLOCK AND IS ISSUED BY A GREEN THREAD THAT DOES HOLD A PROCESSOR: `closeChildSource`.**
+		// On the completion-port shape it is `UnregisterWaitEx(wait, INVALID_HANDLE_VALUE)`, which waits for a
+		// callback already running to finish — and that callback's whole body is one
+		// `PostQueuedCompletionStatus`, so the bound is this process's own thread pool rather than a far end. The
+		// rule this table encodes is *\"`blocking` means it can wait an unbounded time on something OUTSIDE the
+		// scheduler\"*, and a wait on our own callback is not that.
 		osNetpoll gives SyscallClass.schedulerBound
 
 		// The PAGE band: bounded, and every one of them is reachable under `__slab_lock`.
@@ -3396,7 +3432,6 @@ export function classifyArithOperands(op StdOp, operands StdArithOperands)
 			osReadClock or
 			osProcessSpawn or
 			osProcessExitCode or
-			osWaitHandles or
 			osCloseHandle or
 			osWaitHandle or
 			osFreePages or
@@ -3595,7 +3630,6 @@ export function classifyLoadOperands(op StdOp, load StdLoadOperands)
 			osReadClock or
 			osProcessSpawn or
 			osProcessExitCode or
-			osWaitHandles or
 			osCloseHandle or
 			osWaitHandle or
 			osFreePages or
@@ -3760,7 +3794,6 @@ module function classifyStoreOperands(op StdOp, store StdStoreOperands)
 			osReadClock or
 			osProcessSpawn or
 			osProcessExitCode or
-			osWaitHandles or
 			osCloseHandle or
 			osWaitHandle or
 			osFreePages or
@@ -3952,7 +3985,6 @@ module function classifyCallOperands(op StdOp, call StdCallOperands)
 			osReadClock or
 			osProcessSpawn or
 			osProcessExitCode or
-			osWaitHandles or
 			osCloseHandle or
 			osWaitHandle or
 			osFreePages or
@@ -4449,7 +4481,6 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		// `resultId` is a DEF, so it is skipped here exactly as `osAllocPages`'s result id is.
 		osProcessSpawn(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr, envPtr) then insertUseSextet(referenced, a: cmdlinePtr, b: cwdPtr, c: creationFlags, d: startupPtr, e: procInfoPtr, f: envPtr)
 		osProcessExitCode(handle, codePtr) then insertUsePair(referenced, a: handle, b: codePtr)
-		osWaitHandles(handleArrayPtr, count, timeoutMs) then insertUseTriple(referenced, a: handleArrayPtr, b: count, c: timeoutMs)
 		osCloseHandle(handle) then referenced.insert(handle)
 		osWaitHandle(_, handle, timeoutMs) then insertUsePair(referenced, a: handle, b: timeoutMs)
 
@@ -4797,7 +4828,6 @@ module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 			osReadClock or
 			osProcessSpawn or
 			osProcessExitCode or
-			osWaitHandles or
 			osCloseHandle then def.recordNone()
 
 		// `osFreePages` (P1.5-B1a′) defines nothing; it sits past `osWaitHandle` in the union, so its own arm.
@@ -4961,8 +4991,7 @@ function insertUsePair(referenced StdValueUseSet, a ValueId, b ValueId)
 	referenced.insert(b)
 end 'insertUsePair'
 
-// The three-operand twin of `insertUsePair` — for the subprocess ops that read three value operands
-// (`osProcessSpawn`'s cmdline + two out-struct pointers; `osWaitHandles`'s handle array + count + timeout).
+// The three-operand twin of `insertUsePair` — for the ops that read three value operands.
 function insertUseTriple(referenced StdValueUseSet, a ValueId, b ValueId, c ValueId)
 	referenced.insert(a)
 	referenced.insert(b)
@@ -5081,7 +5110,6 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		// `osWaitHandle`'s `resultId` is a def, so it passes through unmapped.
 		osProcessSpawn(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr, envPtr) gives StdOp.osProcessSpawn(remappedValue(cmdlinePtr, subst: subst), cwdPtrId: remappedValue(cwdPtr, subst: subst), creationFlagsId: remappedValue(creationFlags, subst: subst), startupPtrId: remappedValue(startupPtr, subst: subst), procInfoPtrId: remappedValue(procInfoPtr, subst: subst), envPtrId: remappedValue(envPtr, subst: subst))
 		osProcessExitCode(handle, codePtr) gives StdOp.osProcessExitCode(remappedValue(handle, subst: subst), codePtrId: remappedValue(codePtr, subst: subst))
-		osWaitHandles(handleArrayPtr, count, timeoutMs) gives StdOp.osWaitHandles(remappedValue(handleArrayPtr, subst: subst), countId: remappedValue(count, subst: subst), timeoutMsId: remappedValue(timeoutMs, subst: subst))
 		osCloseHandle(handle) gives StdOp.osCloseHandle(remappedValue(handle, subst: subst))
 		osWaitHandle(resultId, handle, timeoutMs) gives StdOp.osWaitHandle(resultId, handleId: remappedValue(handle, subst: subst), timeoutMsId: remappedValue(timeoutMs, subst: subst))
 
@@ -5425,7 +5453,6 @@ function cloneStdOp(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray, 
 		osReadClock or
 			osProcessSpawn or
 			osProcessExitCode or
-			osWaitHandles or
 			osCloseHandle or
 			osWaitHandle or
 			osFreePages gives refuseUnclonable(op)
@@ -5899,7 +5926,6 @@ module function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out
 			osReadClock or
 			osProcessSpawn or
 			osProcessExitCode or
-			osWaitHandles or
 			osCloseHandle or
 			osWaitHandle or
 			osFreePages then break 'term'
@@ -6092,7 +6118,6 @@ module function classifyBranch(op StdOp, out StdBranchOperands)
 			osReadClock or
 			osProcessSpawn or
 			osProcessExitCode or
-			osWaitHandles or
 			osCloseHandle or
 			osWaitHandle or
 			osFreePages or

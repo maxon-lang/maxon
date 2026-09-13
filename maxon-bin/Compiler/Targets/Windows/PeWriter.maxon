@@ -145,11 +145,11 @@ let ImportThunkPasses = 2  // the IAT and the ILT hold identical thunks
 // monotonic high-resolution counter (QPC ticks scaled by the QPF frequency — NOT `GetTickCount64`, whose
 // ~15.6 ms coarseness makes a tick-derived deadline expire early). They lower from the Std `osReadClock` op.
 //
-// `CreateProcessA`/`GetExitCodeProcess`/`WaitForSingleObject`/`WaitForMultipleObjects`/`CloseHandle` are the
-// green-thread SUBPROCESS substrate's spawn, wait and reap: `__gt_process_run` spawns a child with
-// CreateProcessA and parks the GT, the reap polls each parked handle with WaitForSingleObject and, once a child
-// has exited, reads its code with GetExitCodeProcess and closes both handles. They lower from the Std
-// `osProcessSpawn`/`osProcessExitCode`/`osWaitHandles`/`osWaitHandle`/`osCloseHandle` ops.
+// `CreateProcessA`/`GetExitCodeProcess`/`WaitForSingleObject`/`CloseHandle` are the green-thread SUBPROCESS
+// substrate's spawn, wait and reap: `__gt_process_run` spawns a child with CreateProcessA and parks the GT on
+// the poller, and once the child has exited reads its code with GetExitCodeProcess and closes the handle.
+// `WaitForSingleObject` is the zero-timeout poll the attached collect drain's exit test makes. They lower from
+// the Std `osProcessSpawn`/`osProcessExitCode`/`osWaitHandle`/`osCloseHandle` ops.
 //
 // `VirtualFree` (P1.5-B1a′) is the page-FREE twin of `VirtualAlloc` — the relocating morestack releases a GT's
 // OLD stack after copying to the doubled one, and `__gt_runner_done` releases a completed GT's (possibly grown)
@@ -197,7 +197,6 @@ export enum IatSlot
 	CreateProcessA = IatSlotMeta{dll: ImportDll.kernel32}
 	GetExitCodeProcess = IatSlotMeta{dll: ImportDll.kernel32}
 	WaitForSingleObject = IatSlotMeta{dll: ImportDll.kernel32}
-	WaitForMultipleObjects = IatSlotMeta{dll: ImportDll.kernel32}
 	CloseHandle = IatSlotMeta{dll: ImportDll.kernel32}
 	VirtualFree = IatSlotMeta{dll: ImportDll.kernel32}
 	CreateNamedPipeW = IatSlotMeta{dll: ImportDll.kernel32}
@@ -562,6 +561,22 @@ export enum IatSlot
 	// microseconds. In the optional band beside the poller: only a green-thread program steals.
 	SwitchToThread = IatSlotMeta{dll: ImportDll.kernel32}
 
+	// ⭐⭐ **HOW A CHILD BECOMES A SOURCE ON THE SCHEDULER'S COMPLETION PORT** (`NetpollVerb.armChildSource` /
+	// `closeChildSource`): the thread pool waits on the child's handle and the callback posts a packet under
+	// the child's source key, which the poller's decode reads exactly as it reads a socket's descriptor.
+	//
+	// ⛔⛔ **THE ntdll ROAD WAS AVAILABLE AND WAS REFUSED, AND THE REASON IS THE `NtGetNextThread` CASE BELOW.**
+	// `NtCreateWaitCompletionPacket` + `NtAssociateWaitCompletionPacket` post that packet with no thread of
+	// ours in the middle, but a static ntdll import a host cannot bind makes the WHOLE IMAGE fail to load —
+	// and that risk is taken today only by a build that PROFILES. Registering children on the poller would
+	// extend it to every program that spawns one, this compiler included. These two are kernel32, already
+	// bound in every image, and available on every Windows this backend targets.
+	//
+	// ⚠ They join the OPTIONAL TRAILING BAND beside the poller's own two, on the same terms: only a
+	// green-thread program has a poller to register a child with.
+	RegisterWaitForSingleObject = IatSlotMeta{dll: ImportDll.kernel32}
+	UnregisterWaitEx = IatSlotMeta{dll: ImportDll.kernel32}
+
 	// ⭐⭐ **THE EIGHT `ws2_32.dll` SOCKET IMPORTS — THE FIRST NON-kernel32 IMPORTS THIS WRITER HAS EMITTED.**
 	// `stdlib/TcpClient.maxon` reaches all four `__ManagedSocket` methods and they bottom out here:
 	// `WSAStartup` (Winsock demands it once per process before any other call), `getaddrinfo`/`freeaddrinfo`
@@ -682,7 +697,7 @@ end 'iatSlotIndex'
 // import table — the trade is not close.
 //
 // ⚠ **THE BAND'S MEMBERSHIP IS THE RUN BELOW, NOT THIS PROSE.** Read it off the `true` arm, which spans
-// `GetEnvironmentVariableA` through `SwitchToThread`; a producer added later must extend that arm (or fail
+// `GetEnvironmentVariableA` through `UnregisterWaitEx`; a producer added later must extend that arm (or fail
 // this total match) and this comment with it.
 function isOptionalTrailingImport(slot IatSlot) returns bool
 	return match slot 'band'
@@ -720,7 +735,9 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 			Module32NextW or
 			GetQueuedCompletionStatusEx or
 			PostQueuedCompletionStatus or
-			SwitchToThread gives true
+			SwitchToThread or
+			RegisterWaitForSingleObject or
+			UnregisterWaitEx gives true
 		ExitProcess or
 			GetStdHandle or
 			WriteFile or
@@ -731,7 +748,6 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 			CreateProcessA or
 			GetExitCodeProcess or
 			WaitForSingleObject or
-			WaitForMultipleObjects or
 			CloseHandle or
 			VirtualFree or
 			CreateNamedPipeW or

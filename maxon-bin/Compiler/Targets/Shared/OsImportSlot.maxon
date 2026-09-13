@@ -214,12 +214,13 @@ export enum OsImportSlot
 	// execvp"* — because `subprocessResolveOnPath` is allowed to miss and hand the BARE NAME on. The
 	// non-searching form would turn that documented miss into a spawn failure.
 	//
-	// ⭐⭐ **THERE IS NO `fcntl` SLOT, AND ITS ABSENCE IS A DESIGN DECISION RATHER THAN AN OMISSION.** The
-	// descriptors a child must NOT inherit are closed by `POSIX_SPAWN_CLOEXEC_DEFAULT`
-	// (`Arm64DarwinRuntime.DarwinSpawnCloexecDefault`), which inverts the POSIX default so that ONLY what
-	// the file actions name survives the exec — precisely what Win32's `bInheritHandles` + `STARTUPINFOA`
-	// pair means. Marking each end `FD_CLOEXEC` by hand would need `fcntl`, whose third argument is a
-	// VARARG that Darwin's arm64 ABI passes on the STACK — a frame these chunks do not have.
+	// ⭐⭐ **`fcntl` IS A SLOT, BUT NOT FOR INHERITANCE.** The descriptors a child must NOT inherit are closed
+	// by `POSIX_SPAWN_CLOEXEC_DEFAULT` (`Arm64DarwinRuntime.DarwinSpawnCloexecDefault`), which inverts the
+	// POSIX default so that ONLY what the file actions name survives the exec — precisely what Win32's
+	// `bInheritHandles` + `STARTUPINFOA` pair means. What `fcntl` is here for is the PER-DESCRIPTOR
+	// `O_NONBLOCK` a polled socket and a polled pipe end each need, and its third argument is a VARARG that
+	// this ABI passes on the STACK — which is why both its callers are chunks with a frame
+	// (`arm64DarwinEmitFcntl`) rather than isel sequences.
 	//
 	// ⚠ **`poll` IS THE PEEK, AND THERE IS NO `ioctl`/`FIONREAD` SLOT FOR THE SAME VARARG REASON.**
 	// `PeekNamedPipe` answers a byte COUNT; `mrt_darwin_pipe_peek` answers only READABLE-or-not and lets the

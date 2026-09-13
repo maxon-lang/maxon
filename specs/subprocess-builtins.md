@@ -257,6 +257,77 @@ kind=0 code=0 outLen=6 errLen=0 matches=true
 
 ```
 
+<!-- test: subprocess-builtins.posix-a-collected-child-costs-no-timer-poll -->
+<!-- unsupported-targets: x64-windows -->
+<!-- procs: 1 -->
+⭐ **THE COLLECT LOOP WAITS ON THE POLLER, SO A SLOW CHILD COSTS IT NOTHING TO WAIT FOR.**
+`posix-collect-echo`'s child answers at once and says nothing about the wait; this one takes a whole
+second to produce its three bytes, and that second is the subject. A drain that yields a millisecond on
+every idle pass pays a park and a wake per pass — about two thousand across the second — and never reaches
+the poller at all; a drain registered with the poller blocks there until a pipe is readable or the child
+exits, and pays a handful. `timerpolls=` bounds the wakes and `onpoller=` says the wait was on the poller,
+and neither alone is the property: a loop that merely spun would also arm no timer, and a loop that parked
+on the poller and then woke on a period of its own would still be a poll.
+
+⚠ **THE PARK-WAKE COUNT IS WHAT A PER-PASS YIELD ACTUALLY COSTS, WHICH IS WHY IT IS THE ONE READ.**
+`__Builtins.schedTimerStartCount()` counts the machines the system monitor starts for an overdue timer,
+not the timers a program arms, and a drain whose own machine wakes at each deadline gives the monitor
+nothing to rescue — measured: 0 over this second, against 1810 park wakes. A bound on the monitor's count
+would therefore hold whatever the drain does.
+
+⚠ **THE COLLECTED BYTES ARE PINNED BESIDE THE COUNTS, BECAUSE A LOOP THAT COLLECTED NOTHING IS ALSO
+QUIET.** `outLen` and `matches` are what stop this case passing on an empty capture, exactly as
+`collect-echo`'s printed line stops that one passing on its exit code alone. `sh` ends the line with a bare
+LF, so `hi\n` is THREE bytes.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+// The whole second the child takes to answer. A drain parked on the poller returns a handful of times;
+// one that yields a millisecond per idle pass returns about two thousand.
+let quietWakes = 16
+
+// The collect wait is a park on the poller — at least the one this program makes.
+let pollerParks = 1
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+function main() returns ExitCode
+	var argv = ByteArray.create()
+	appendToken(argv, token: "/bin/sh")
+	appendToken(argv, token: "-c")
+	appendToken(argv, token: "sleep 1; echo hi")
+	let empty = ""
+	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
+	let beforeWakes = __Builtins.schedParkWakeCount()
+	let beforeParks = __Builtins.schedNetpollBlockCount()
+	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
+	let r = __Builtins.subprocessWaitCollect(h, 0)
+	let wakes = __Builtins.schedParkWakeCount() - beforeWakes
+	let parks = __Builtins.schedNetpollBlockCount() - beforeParks
+	let out = String.init(__Builtins.subprocessResultStdout(r))
+	let n = out.byteLength()
+	let matches = out.startsWith("hi")
+	print("timerpolls={wakes <= quietWakes} onpoller={parks >= pollerParks} outLen={n} matches={matches}\n")
+	__Builtins.subprocessResultRelease(r)
+	__Builtins.subprocessReleaseHandle(h)
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+```stdout
+timerpolls=true onpoller=true outLen=3 matches=true
+```
+
 <!-- test: subprocess-builtins.posix-argv-reaches-the-child-verbatim -->
 <!-- unsupported-targets: x64-windows -->
 ⭐ **THE CASE THAT PROVES THERE IS NO SHELL ON THE ARGV PATH — `argv-quoting`'s subject, inverted.** The

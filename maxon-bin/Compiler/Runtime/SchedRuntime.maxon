@@ -91,10 +91,11 @@
 //      that escapes it — `__sched_active_workers` is stepped at a worker's birth and exit, inside
 //      `buildSchedLoop`. A list of what obeys a rule is worth
 //      grepping against the ops it forbids: `StdOp.globalAddr` followed by `StdOp.atomicRmw` is that grep.
-//   3. **THE TWO PARK STORES**, under `__sched_lock` — the timer store's count/base/capacity and the process
-//      store's count, plus the three swap-removes `__gt_promise_drop` reaches. What is indivisible there is a
-//      TRANSACTION over several words, which no atomic can express. The wake is deliberately outside the
-//      lock; `emitSchedEnqueueLocked` / `emitSchedWakeAnIdleM` carry that requirement in their names.
+//   3. **THE PARK STORE AND THE POLLER'S RECORDS**, under `__sched_lock` — the timer store's
+//      count/base/capacity, and a poll descriptor's direction words beside `__np_waiters`. What is indivisible
+//      there is a TRANSACTION over several words, which no atomic can express. The wake is deliberately
+//      outside the lock; `emitSchedEnqueueLocked` / `emitSchedWakeAnIdleM` carry that requirement in their
+//      names.
 //   4. **THE THREE OUT-PARAM SCRATCH REGIONS** (`__gt_trace_digits`, `__gt_clock_ticks`, `__gt_clock_freq`)
 //      are FRAME SLOTS now, not `.data` — per-call storage for a per-call need, which also deleted three
 //      globals and one `__slab_alloc`.
@@ -182,8 +183,8 @@ export enum MultiMSharing
 
 	// Every mutation, and every read WHOSE ANSWER IS USED, happens inside `__sched_lock`. A word whose
 	// transaction spans several words — the FIFO's head/tail pair, the timer store's count/base/capacity
-	// triple, the process store's count — cannot be made indivisible by an atomic, because what must be
-	// indivisible is not a word.
+	// triple, a poll descriptor's direction word and its published-waiter count — cannot be made indivisible
+	// by an atomic, because what must be indivisible is not a word.
 	//
 	// ⭐⭐ **THE EXCEPTION IS EXPLICIT AND NARROW: AN UNLOCKED READ THAT ONLY PICKS AN ARM, WHERE BOTH ARMS ARE
 	// CORRECT WHATEVER IT ANSWERS.** A stale answer costs a wasted look or a skipped look, never a wrong value:
@@ -204,16 +205,15 @@ export enum MultiMSharing
 	// `__sched_wake_poller`'s peek (`wppeek`), which chooses whether to take the lock and look for a parked
 	// machine, and whose stale "empty" that function argues. The published earliest deadline (`__gt_timer_when`) is
 	// read through the one door `GtRuntime.emitGtLoadTimerWhen` by every due test — `buildSchedLoop`'s
-	// `wchecktimers`, the polls `GtRuntime.emitGtPollStores` makes for `widlepoll`, `wpolled` and the strand
-	// runner's yield, and `__sysmon`'s overdue-timer peek (`smontimer`) — and, with the parked-child count
-	// (`__gt_proc_count`), by the owed-poller test (`emitSchedPollerOwed`) and the children's poll. A stale answer
-	// costs one needless look or one look deferred to the next, and the locked walks behind them decide what fires;
-	// `GtTimerWhenLabel` argues why a deferred fire is not a lost one. The poller's claim and deadline
-	// (`__sched_lastpoll`, `__sched_poll_until`) are read by `__sched_wake_netpoller`, by the owed-poller test and
-	// by `__sysmon`'s stale-poll peek, each of which argues its two arms at its own site. One reads
-	// `__sched_phase`: the main machine's loop-top exit test (`emitSchedLoopExitTest`), whose stale answer costs
-	// one more lap before the locked test at `wstoptest` sees it. `GtRuntime.__gt_owner_done` reads it too, but
-	// that read is half of a Dekker pair and carries its own argument.
+	// `wchecktimers`, the polls `GtRuntime.emitGtPollStores` makes for `widlepoll`, `wpolled` and the strand runner's
+	// yield, and `__sysmon`'s overdue-timer peek (`smontimer`) — and by the owed-poller test (`emitSchedPollerOwed`).
+	// A stale answer costs one needless look or one look deferred to the next, and the locked walks behind them
+	// decide what fires; `GtTimerWhenLabel` argues why a deferred fire is not a lost one. The poller's claim and
+	// deadline (`__sched_lastpoll`, `__sched_poll_until`) are read by `__sched_wake_netpoller`, by the owed-poller
+	// test and by `__sysmon`'s stale-poll peek, each of which argues its two arms at its own site. One reads
+	// `__sched_phase`: the main machine's loop-top exit test (`emitSchedLoopExitTest`), whose stale answer costs one
+	// more lap before the locked test at `wstoptest` sees it. `GtRuntime.__gt_owner_done` reads it too, but that read
+	// is half of a Dekker pair and carries its own argument.
 	//
 	// ⭐ **FOUR MORE READ A WORD TO REPORT IT RATHER THAN TO PICK AN ARM**: `__sched_idle_processor_count`
 	// answers `__sched_npidle`, `__sched_gt_records_carved` answers `__gt_records_carved`,
@@ -1252,6 +1252,20 @@ export let SchedRunqSizeLabel = b"__sched_runq_size"
 // `underSchedLock`: the door runs under the lock, and the one read is an enumerated unlocked read.
 export let SchedGlobalPushesLabel = b"__sched_global_pushes"
 
+// ⭐⭐⭐ **HOW MANY TIMER-HEAP ENTRIES THE CANCEL SCAN HAS INSPECTED — the WORK
+// `GtRuntime.emitGtTimerStoreRemove` does, not how often it is entered.** Finding a `(gt, tag)` on the heap is
+// a linear walk, and a pair that is not there walks to the END of it; so a cancel that KNOWS it armed nothing
+// must not start the walk, and steps rather than calls is the only reading that can tell those apart. A
+// guarded cancel costs 0 here; an unguarded one costs the heap's length, on every child exit and every
+// `EAGAIN`.
+//
+// ⚠ **IT IS A COST, NOT AN EVENT, WHICH IS WHY NO OTHER COUNTER COULD STAND IN FOR IT.** The scheduler's
+// other queries count things that HAPPENED — parks, retakes, pushes — and every one of them holds whether the
+// walk behind it is O(1) or O(n). Only this one moves when the shape of the work does.
+//
+// `underSchedLock`: every site that scans holds the lock, and the one read is an enumerated unlocked read.
+export let SchedTimerScanStepsLabel = b"__sched_timer_scan_steps"
+
 // The global GT-record free list — Go's `sched.gFree`: what a P sheds past `GtFreeLocalHigh`, what a P-less
 // thread puts and gets, and what an empty local list refills from.
 let SchedGtFreeHeadLabel = b"__gt_gfree_head"
@@ -1447,11 +1461,6 @@ let SchedPollUntilLabel = b"__sched_poll_until"
 // whose processor `__sysmon` took (`__sched_syscall_regain`). A LIFO through `MOffRegainNext`; `pidleput` hands
 // a released processor to the head before it would idle it. `underSchedLock`: every door holds the lock.
 let SchedRegainHeadLabel = b"__sched_regain_head"
-
-// ⭐ **HOW LONG THE POLLER WAITS WHILE A CHILD IS PARKED — the interim until children join the poller as a
-// source of their own.** Nothing blocks on a parked child, so the poller caps its wait here and reaps after every
-// wait.
-let ChildPollNs = 1000 * 1000 as ParsedInt
 
 // ⭐ **THE LONGEST ONE POLL WAITS — Go's cap of 1e9 ms.** Every lane's wait takes its timeout as a 32-bit count, and
 // `epoll_wait` reads it SIGNED, so a deadline further out than ~24.8 days would wrap into a wait for ever; the
@@ -1847,6 +1856,11 @@ export let SchedTimerStartCountName = b"__sched_timer_start_count"
 // preempted reads 0, which is the answer that says its global queue was never under test.
 export let SchedGlobalPushCountName = b"__sched_global_push_count"
 
+// ⭐ `__sched_timer_scan_step_count() -> i64` — `__sched_timer_scan_steps`, and the floor of
+// `__Builtins.schedTimerScanStepCount()`. A program that cancels no deadline reads 0; one whose cancels are
+// GUARDED reads 0 however many of them there are, which is the whole point of the reading.
+export let SchedTimerScanStepCountName = b"__sched_timer_scan_step_count"
+
 // ⭐ `__sched_park_wake_count() -> i64` — the sum of every machine's `MOffParkWakes`, and the floor of
 // `__Builtins.schedParkWakeCount()`. It walks `__sched_allm` rather than `__sched_procs`, because the count
 // belongs to a machine, and a parked machine holds no processor.
@@ -1930,7 +1944,7 @@ end 'isSchedPerProcSumCallee'
 //     the green-thread floor, so a lane without it must REFUSE the call at its own span (E3104) rather than
 //     reach an install that has no TLS slot to emit.
 export function isSchedSubstrateQueryCallee(callee ByteArray) returns bool
-	return isSchedPerProcSumCallee(callee) or callee.equals(SchedIdleProcessorCountName) or callee.equals(SchedParkWakeCountName) or callee.equals(SchedGtRecordsCarvedName) or callee.equals(SchedTimerStartCountName) or callee.equals(SchedGtStackBytesName) or callee.equals(SchedGlobalPushCountName)
+	return isSchedPerProcSumCallee(callee) or callee.equals(SchedIdleProcessorCountName) or callee.equals(SchedParkWakeCountName) or callee.equals(SchedGtRecordsCarvedName) or callee.equals(SchedTimerStartCountName) or callee.equals(SchedGtStackBytesName) or callee.equals(SchedGlobalPushCountName) or callee.equals(SchedTimerScanStepCountName)
 end 'isSchedSubstrateQueryCallee'
 
 // ⭐⭐⭐ **`__sched_handoffp(p)` — "THIS PROCESSOR HAS BEEN TAKEN FROM A BLOCKED MACHINE; GIVE IT TO SOMEBODY
@@ -2300,6 +2314,7 @@ export function schedRuntimeGlobals(usage RuntimeUsage, target Target) returns D
 		pushRuntimeGlobal(out, label: SchedNpidleLabel, sharing: MultiMSharing.underSchedLock)
 		pushRuntimeGlobal(out, label: SchedRunqSizeLabel, sharing: MultiMSharing.underSchedLock)
 		pushRuntimeGlobal(out, label: SchedGlobalPushesLabel, sharing: MultiMSharing.underSchedLock)
+		pushRuntimeGlobal(out, label: SchedTimerScanStepsLabel, sharing: MultiMSharing.underSchedLock)
 		pushRuntimeGlobal(out, label: SchedMcountLabel, sharing: MultiMSharing.underSchedLock)
 		pushRuntimeGlobal(out, label: SchedNmidleLabel, sharing: MultiMSharing.underSchedLock)
 
@@ -2400,6 +2415,7 @@ export function installSchedRuntime(module StdModule, target Target, usesComplet
 	buildSchedLockedCountQuery(module, name: SchedIdleProcessorCountName, label: SchedNpidleLabel)
 	buildSchedLockedCountQuery(module, name: SchedGtRecordsCarvedName, label: GtRecordsCarvedLabel)
 	buildSchedLockedCountQuery(module, name: SchedGlobalPushCountName, label: SchedGlobalPushesLabel)
+	buildSchedLockedCountQuery(module, name: SchedTimerScanStepCountName, label: SchedTimerScanStepsLabel)
 	buildSchedParkWakeCount(module)
 	buildSchedGtStackBytes(module)
 	buildSchedCheckdead(module, usesCompletionPort: usesCompletionPort)
@@ -3049,7 +3065,7 @@ end 'buildSchedInitProcs'
 // its inline GT's owner and its own TLS slot. No word is written by both.
 //
 // ⚠ **A WORKER's M STRUCT COMES OUT OF THE CREATOR's OWN P SHARD.** `SlabRawShardRow` is exercised by other
-// callers: the poller, back from its wait holding no processor, runs `__gt_timer_check` and `__gt_proc_check`
+// callers: the poller, back from its wait holding no processor, runs `__gt_timer_check`
 // with `M->currentP == 0` (`wpolled`), which is `emitSlabCurrentP`'s **P-less-M** arm.
 
 // ⭐⭐ **ALLOCATE AND REGISTER AN M — the creator's half.** The struct, its park event, the processor it is
@@ -5426,7 +5442,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	// ==================================================================================================
 	//
 	// ⭐⭐ **ONE MACHINE WAITS FOR THE EARLIEST DEADLINE; EVERY OTHER IDLE MACHINE WAITS FOR A WAKER.** With a
-	// timer or a child pending and nobody polling, this machine claims the poller (`__sched_lastpoll` → 0),
+	// timer or a poll source pending and nobody polling, this machine claims the poller (`__sched_lastpoll` → 0),
 	// publishes the deadline it will wake at and blocks in `__np_poll` holding no processor — it is not on
 	// `__sched_midle`, so `__sched_checkdead` counts it running, which it is. Otherwise it parks with no timeout:
 	// a deadline armed earlier than the poller's breaks the poller (`__sched_wake_netpoller`), and the poller is
@@ -5447,7 +5463,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	var publishDeadline = module.addBlock(func, label: b"wpollpublish", heat: BlockHeat.normal)
 	publishDeadline.blockArgs.push(IrBlockArg.create(deadline, argType: StdType.i64))
 	emitStoreGlobalWord(module, block: pollDeadline, label: SchedLastPollLabel, value: emitConst(module, block: pollDeadline, value: 0, ids: ids), ids: ids)
-	emitSchedPollDeadline(module, func: func, cur: pollDeadline, cont: publishDeadline, ids: ids)
+	emitSchedPollDeadline(module, cur: pollDeadline, cont: publishDeadline, ids: ids)
 
 	emitStoreGlobalWord(module, block: publishDeadline, label: SchedPollUntilLabel, value: deadline, ids: ids)
 	emitSchedLockLeave(module, block: publishDeadline, ids: ids)
@@ -5483,7 +5499,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	let otherDeadline = ids.mint()
 	var compareDeadline = module.addBlock(func, label: b"wbreakcompare", heat: BlockHeat.normal)
 	compareDeadline.blockArgs.push(IrBlockArg.create(otherDeadline, argType: StdType.i64))
-	emitSchedPollDeadline(module, func: func, cur: breakCheck, cont: compareDeadline, ids: ids)
+	emitSchedPollDeadline(module, cur: breakCheck, cont: compareDeadline, ids: ids)
 
 	let pollUntil = emitLoadGlobalWord(module, block: compareDeadline, label: SchedPollUntilLabel, ids: ids)
 	let pollerLate = emitSchedPollerLate(module, block: compareDeadline, pollUntil: pollUntil, when: otherDeadline, ids: ids)
@@ -5589,19 +5605,15 @@ function emitSchedHandOnTheLooking(module StdModule, func IrFunction, cur IrBloc
 	module.setTerminator(poller, op: StdOp.branch(cont.id))
 end 'emitSchedHandOnTheLooking'
 
-// 1 when a timer or a child is pending and no machine is blocked in the poller, else 0 — read unlocked, and
-// every read picks an arm (`MultiMSharing.underSchedLock`): a stale "somebody polls" means that poller has just
-// given the role back and looks again itself, and a stale "nothing pending" misses only a deadline whose adder
-// calls `__sched_wake_netpoller` itself.
+// 1 when a timer or a poll source is pending and no machine is blocked in the poller, else 0 — read unlocked,
+// and every read picks an arm (`MultiMSharing.underSchedLock`): a stale "somebody polls" means that poller has
+// just given the role back and looks again itself, and a stale "nothing pending" misses only a deadline whose
+// adder calls `__sched_wake_netpoller` itself.
 function emitSchedPollerOwed(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	let zero = emitConst(module, block: block, value: 0, ids: ids)
 	let timerPending = emitCmp(module, block: block, a: emitGtLoadTimerWhen(module, block: block, ids: ids), b: emitConst(module, block: block, value: TimerWhenEmpty, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	let children = ids.mint()
-	module.appendOp(block, op: StdOp.call(children, callee: GtProcCountName, args: ValueIdArray.create()))
-	let childPending = emitCmp(module, block: block, a: children, b: zero, pred: StdCmpPred.ne, ids: ids)
-	let socketPending = emitCmp(module, block: block, a: emitLoadGlobalWord(module, block: block, label: NetpollWaitersLabel, ids: ids), b: zero, pred: StdCmpPred.ne, ids: ids)
-	let storePending = emitBin(module, block: block, a: timerPending, b: childPending, opcode: StdBinOpcode.bitOr, ids: ids)
-	let pending = emitBin(module, block: block, a: storePending, b: socketPending, opcode: StdBinOpcode.bitOr, ids: ids)
+	let sourcePending = emitCmp(module, block: block, a: emitLoadGlobalWord(module, block: block, label: NetpollWaitersLabel, ids: ids), b: zero, pred: StdCmpPred.ne, ids: ids)
+	let pending = emitBin(module, block: block, a: timerPending, b: sourcePending, opcode: StdBinOpcode.bitOr, ids: ids)
 	let nobodyPolls = emitCmp(module, block: block, a: emitLoadAcquireGlobalWord(module, block: block, label: SchedLastPollLabel, ids: ids), b: zero, pred: StdCmpPred.ne, ids: ids)
 	return emitBin(module, block: block, a: pending, b: nobodyPolls, opcode: StdBinOpcode.bitAnd, ids: ids)
 end 'emitSchedPollerOwed'
@@ -5732,34 +5744,14 @@ function emitSchedResumeFromPark(module StdModule, block IrBlock, m ValueId, p V
 	_ = emitSchedSpinningTransition(module, block: block, m: m, transition: SpinningTransition.becomeSpinning, ids: ids)
 end 'emitSchedResumeFromPark'
 
-// ⭐ **THE DEADLINE THE POLLER WAITS FOR: THE EARLIEST TIMER'S, CAPPED AT `ChildPollNs` FROM NOW WHILE A CHILD IS
-// PARKED.** `__sched_lock` held, so both reads are exact. It terminates `cur` and reaches `cont` with the deadline
-// as `cont`'s one block argument; with neither pending that is `TimerWhenEmpty`, and no caller asks then.
-function emitSchedPollDeadline(module StdModule, func IrFunction, cur IrBlock, cont IrBlock, ids ValueMinter)
-	var capped = module.addBlock(func, label: b"polldeadlinechild", heat: BlockHeat.normal)
-	var takeCap = module.addBlock(func, label: b"polldeadlinecap", heat: BlockHeat.normal)
-
+// ⭐ **THE DEADLINE THE POLLER WAITS FOR: THE EARLIEST TIMER'S, AND NOTHING CAPS IT.** `__sched_lock` held, so
+// the read is exact. It terminates `cur` and reaches `cont` with the deadline as `cont`'s one block argument;
+// with no timer pending that is `TimerWhenEmpty`, which is a wait bounded only by the sources themselves.
+function emitSchedPollDeadline(module StdModule, cur IrBlock, cont IrBlock, ids ValueMinter)
 	let earliest = emitGtLoadTimerWhen(module, block: cur, ids: ids)
-	let children = ids.mint()
-	module.appendOp(cur, op: StdOp.call(children, callee: GtProcCountName, args: ValueIdArray.create()))
-	let noChild = emitCmp(module, block: cur, a: children, b: emitConst(module, block: cur, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(noChild, thenBlockId: cont.id, elseBlockId: capped.id))
+	module.setTerminator(cur, op: StdOp.branch(cont.id))
 	cur.branchEdges.push(BranchEdge.create(cont.id, argIds: argsOf(earliest)))
-
-	let cap = emitSchedChildPollDeadline(module, block: capped, ids: ids)
-	let capSooner = emitCmp(module, block: capped, a: cap, b: earliest, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(capped, op: StdOp.condBranch(capSooner, thenBlockId: takeCap.id, elseBlockId: cont.id))
-	capped.branchEdges.push(BranchEdge.create(cont.id, argIds: argsOf(earliest)))
-
-	module.setTerminator(takeCap, op: StdOp.branch(cont.id))
-	takeCap.branchEdges.push(BranchEdge.create(cont.id, argIds: argsOf(cap)))
 end 'emitSchedPollDeadline'
-
-// `ChildPollNs` from now: the latest the poller may wake while a child is parked. EXPORTED for
-// `GtRuntime.__gt_register_park`, which owes the poller that deadline when it parks a child.
-export function emitSchedChildPollDeadline(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
-	return emitBin(module, block: block, a: emitGtNowNs(module, block: block, ids: ids), b: emitConst(module, block: block, value: ChildPollNs, ids: ids), opcode: StdBinOpcode.add, ids: ids)
-end 'emitSchedChildPollDeadline'
 
 // ⭐⭐⭐ **A WORKER's EXIT PUTS EVERY WORD THIS MACHINE PUBLISHED BACK DOWN, AND RELEASES THE PROCESSOR ONLY IF
 // IT STILL HOLDS ONE.** Its roads in differ in exactly that: `wloop`'s shutdown arm arrives holding a
@@ -5926,7 +5918,7 @@ end 'emitSchedRaiseHighWater'
 // StoreLoad barrier — that function states it at the instruction and forbids the "optimisation" back to a
 // plain store, and this is the reader it protects. ⚠ A caller that already HELD the lock and pushed to the
 // ring inside it has neither: the `lock xadd` is what covers it, which is why `__gt_timer_check` and
-// `__gt_proc_check` may publish inside their walk and wake once after it.
+// the poller's readiness walk may publish inside their walk and wake once after it.
 //
 // ⭐ **AND `__sched_startm` TAKES `__sched_lock`, WHICH THIS FUNCTION DELIBERATELY DID NOT — MC1 MEASURED
 // THAT TRADE AND ITS PREMISE IS WHAT THIS RUNG REMOVED.** MC1 kept a lock-free linear scan against Go's

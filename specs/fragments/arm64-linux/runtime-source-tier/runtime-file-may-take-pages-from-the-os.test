@@ -1,0 +1,29 @@
+// Test: runtime-file-may-take-pages-from-the-os
+// --- runtime-file: Probe.maxon
+let ProbePageBytes = 65536 as MachineWord
+
+module function probePages() returns MachineWord
+	let reserved = __Raw.osReservePages(ProbePageBytes)
+	let committed = __Raw.osCommitPages(reserved, size: ProbePageBytes)
+	__Raw.osDecommitPages(committed, size: ProbePageBytes)
+	__Raw.osFreePages(reserved, size: ProbePageBytes)
+
+	let whole = __Raw.osAllocPages(ProbePageBytes)
+	__Raw.osFreePages(whole, size: ProbePageBytes)
+
+	return committed
+end 'probePages'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

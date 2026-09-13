@@ -171,9 +171,6 @@ let TlsUninitialisedSlotOffset = 0 as Imm32
 // ⭐ The message `osCancelIo` aborts with — see `lowerRuntimeAbort` for why a runtime abort is the
 // honest lowering of an op that the Std tier builds unconditionally and this lane can never execute.
 //
-// ⚠ **THIS CONSTANT USED TO SERVE `osWaitHandles`, WHOSE ABORT MAC8 REPLACED WITH A REAL WAIT.** That arm's
-// reason was *"nothing can spawn a child here, so the handle array is always empty"*, and the whole of MAC8
-// is the rung that falsified it.
 let Arm64NoCancelIoMessage = b"panic: CancelIoEx was reached on arm64-macos, where every pipe read completes in its caller: nothing sets a green thread's `ioParked`, so `__gt_promise_drop`'s IO-cancel arm is unreachable and a build that runs it has a parked reader this lane cannot have created\n"
 
 // The bitmask the LOGICAL `not` flips: a bool lives in the 0/1 domain, so complementing it is
@@ -643,7 +640,6 @@ export type StdToArm64Lowering
 				osReadClock or
 				osProcessSpawn or
 				osProcessExitCode or
-				osWaitHandles or
 				osCloseHandle or
 				osWaitHandle or
 				osFreePages or
@@ -944,13 +940,8 @@ export type StdToArm64Lowering
 			osProcessSpawn(commandId, cwdPtrId, creationFlagsId, startupPtrId, procInfoPtrId, envPtrId) then self.lowerOsProcessSpawn(commandId, cwdPtrId: cwdPtrId, creationFlagsId: creationFlagsId, startupPtrId: startupPtrId, procInfoPtrId: procInfoPtrId, envPtrId: envPtrId, dstRef: dstRef)
 			osProcessExitCode(handleId, codePtrId) then self.emitHostChunkCall(dstRef, chunk: HostProcExitCodeName, args: twoArgs(handleId, second: codePtrId))
 
-			// ⭐⭐ **MAC3: THE THREE WAIT/HANDLE OPS DO LOWER HERE, AND THEY HAD TO — they are STATICALLY
-			// REACHABLE in a pure-`async` program.** The netpoll's process arm and `__gt_proc_check` sit on
-			// paths the dead-function prune keeps, so the isel sees them even though the proc store they read
-			// is provably empty on a lane where nothing can spawn a child. `osWaitHandle` is exercised for
-			// real, by the worker park and the join; the other two are lowered so the compile succeeds and are
-			// never executed.
-			osWaitHandles(handlesBase, countId, timeoutMsId) then self.emitHostChunkCall(dstRef, chunk: HostWaitAnyName, args: threeArgs(handlesBase, second: countId, third: timeoutMsId))
+			// ⭐ **MAC3: THE WAIT AND THE CLOSE ARE BOTH EXERCISED FOR REAL** — the worker park and the join go
+			// through `osWaitHandle`, and every handle this lane mints is given back through `osCloseHandle`.
 			osCloseHandle(handleId) then self.lowerOsCloseHandle(handleId, dstRef: dstRef)
 			osWaitHandle(resultId, handleId, timeoutMsId) then self.lowerOsWaitHandle(resultId, handleId: handleId, timeoutMsId: timeoutMsId, dstRef: dstRef)
 
@@ -1003,17 +994,14 @@ export type StdToArm64Lowering
 
 			// ⭐⭐ **MAC8: AN "OVERLAPPED" READ ON THIS LANE IS A PLAIN `read`, AND ITS OVERLAPPED OPERAND IS
 			// DEAD.** The op's contract is *"answer TRUE with the count in `bytesOutPtr` if the read completed
-			// SYNCHRONOUSLY, FALSE with `ERROR_IO_PENDING` if it is in flight"*. A blocking descriptor read
-			// completes synchronously by definition, so this lane only ever takes the first arm —
-			// `__gt_subp_yield_read`'s park arm is unreachable here, which is exactly what lets the whole IOCP
-			// substrate be absent. It is `osReadFile`'s chunk verbatim, because it is the same four arguments
-			// and the same answer.
+			// SYNCHRONOUSLY, FALSE with `ERROR_IO_PENDING` if it is in flight"*. It is `osReadFile`'s chunk
+			// verbatim, because it is the same four arguments and the same answer.
 			//
-			// ⚠ **THE READ ENDS ARE LEFT BLOCKING ON PURPOSE.** A non-blocking read would answer `EAGAIN` where
-			// the graph reads 0 as EOF, and `buildSubpReadLine` reads WITHOUT peeking first — so a spurious
-			// EAGAIN would latch a false end-of-stream. The cost is that the streaming line reader blocks its M
-			// until the child writes or exits; the COLLECT loop never blocks, because `osPipePeek` has already
-			// said bytes are there. Lifting that would need a kqueue netpoll to park on, which is its own rung.
+			// ⭐⭐ **A PIPE'S READ END IS NON-BLOCKING HERE, AND `EAGAIN` IS THIS LANE'S `ERROR_IO_PENDING`**
+			// (`arm64EmitErrnoToWin32`) — so the FALSE arm is live: `__gt_subp_yield_read` parks on the
+			// descriptor's poll record and reads again when it is readable. The EAGAIN never reaches a caller,
+			// which is what keeps a merely-empty pipe from latching the end of stream that a zero-byte read
+			// means to the two sites that consume one.
 			osReadOverlapped(resultId, handleId, bufId, capId, bytesOutPtrId, _) then self.lowerHostChunkValue(resultId, args: fourArgs(handleId, second: bufId, third: capId, fourth: bytesOutPtrId), chunk: HostReadFileName, dstRef: dstRef)
 
 			// ⭐⭐ **MAC4: `GetLastError` SITS INSIDE THE IOCP BAND BY DECLARATION ORDER AND BELONGS TO THE
@@ -1296,7 +1284,6 @@ export type StdToArm64Lowering
 			osReadClock then panic("StdToArm64Lowering: an `osReadClock` op appeared as a block terminator (lowering bug — a clock read is a value-consuming body op)")
 			osProcessSpawn or
 				osProcessExitCode or
-				osWaitHandles or
 				osCloseHandle or
 				osWaitHandle then panic("StdToArm64Lowering: a P1.5 subprocess op appeared as a block terminator (lowering bug — spawn/wait/exit-code/close are all body ops)")
 			osFreePages then panic("StdToArm64Lowering: an `osFreePages` op appeared as a block terminator (lowering bug — a page release is a body op)")
@@ -3112,7 +3099,12 @@ export type StdToArm64Lowering
 				drainBreak or
 				sleepOnTimer or
 				armSource or
+				openChildSource or
+				armChildSource or
+				closeChildSource or
+				armPipeSource or
 				shortSleep then self.lowerHostChunkValue(resultId, args: posixNetpollChunkArgs(verb, operands: operands), chunk: posixNetpollChunk(verb), dstRef: dstRef)
+			postChildExit then panic("lowerOsNetpoll: `postChildExit` forwards a child's exit to a completion port, and both of this CPU's lanes make a child's source readable on its own — `NetpollRuntime` emits it only under `NetpollShape.completionPort`")
 		end 'v'
 	end 'lowerOsNetpoll'
 

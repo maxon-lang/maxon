@@ -585,8 +585,9 @@ function main() returns ExitCode
 	let c10 = __Builtins.schedParkWakeCount()
 	let c11 = __Builtins.gtStackBytes()
 	let c12 = __Builtins.schedNetpollBlockCount()
+	let c13 = __Builtins.schedTimerScanStepCount()
 
-	return (c0 + c1 + c2 + c3 + c4 + c5 + c6 + c7 + c8 + c9 + c10 + c11 + c12) as ExitCode
+	return (c0 + c1 + c2 + c3 + c4 + c5 + c6 + c7 + c8 + c9 + c10 + c11 + c12 + c13) as ExitCode
 end 'main'
 ```
 ```maxoncstderr
@@ -603,4 +604,5 @@ error E3104: <fragment>:12:22: this construct lowers to the runtime entry '__sch
 error E3104: <fragment>:13:23: this construct lowers to the runtime entry '__sched_park_wake_count', which has no wasm32-wasi implementation
 error E3104: <fragment>:14:23: this construct lowers to the runtime entry '__sched_gt_stack_bytes', which has no wasm32-wasi implementation
 error E3104: <fragment>:15:23: this construct lowers to the runtime entry '__sched_netpoll_block_count', which has no wasm32-wasi implementation
+error E3104: <fragment>:16:23: this construct lowers to the runtime entry '__sched_timer_scan_step_count', which has no wasm32-wasi implementation
 ```

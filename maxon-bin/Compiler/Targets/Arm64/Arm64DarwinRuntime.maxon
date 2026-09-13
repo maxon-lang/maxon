@@ -417,8 +417,8 @@ end 'buildArm64DarwinExePathChunk'
 // writing past the object into whatever `malloc` put next.
 // ⭐⭐ **THE SIX SCALAR WORDS ARE `Arm64PosixRuntime`'s AND ONLY THE TWO OPAQUE PRIMITIVES ABOVE THEM ARE
 // THIS LANE'S.** `PosixWaitOffKind`, `PosixWaitOffSignal`, `PosixWaitOffThread` and the three child fields
-// sit at the same offsets on both POSIX lanes, which is what lets the reap, the await, the exit-code read
-// and the multi-wait be ONE body each. The `pthread_t` at `PosixWaitOffThread` was this file's own until the
+// sit at the same offsets on both POSIX lanes, which is what lets the reap, the await and the exit-code read
+// be ONE body each. The `pthread_t` at `PosixWaitOffThread` was this file's own until the
 // arm64-linux `clone` put a join word of its own at the same offset for the same purpose — see that
 // constant. Only the mutex and the condvar are still Darwin's, because an event on the other lane is a
 // futex word and needs neither. The offsets above them and the object's total size are DERIVED from the
@@ -693,7 +693,7 @@ function buildArm64DarwinWaitOneChunk(globalData GlobalDataTable) returns Functi
 	arm64EmitCbnzTo(asm, reg: Arm64Register.x1, label: takeSignal)
 
 	// A ZERO timeout is a POLL: the caller wants the state, not a wait (`WaitPollTimeout`, which
-	// `__gt_proc_check` uses). Answer the default `WAIT_TIMEOUT` without touching the condvar.
+	// the collect drain's exit test uses). Answer the default `WAIT_TIMEOUT` without touching the condvar.
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotTimeout)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x1, label: unlock)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: WaitInfinite)
@@ -775,7 +775,7 @@ end 'arm64DarwinCondArgs'
 //
 // ⚠ **THIS HEADER USED TO SAY A WAIT OBJECT WAS "THE ONLY HANDLE KIND THIS LANE CAN MINT", AND MAC8 IS
 // EXACTLY THE RUNG THAT FALSIFIED IT.** Its argument was that `osProcessSpawn` did not lower here, so the
-// netpoll's process store was provably empty. It lowers now, and with it come three pipe ends and any file a
+// netpoll registered no child at all. It lowers now, and with it come three pipe ends and any file a
 // redirected stream opened — so the close has three arms rather than one.
 //
 // ⭐ **A ZERO DESCRIPTOR IS A NO-OP, AND THAT IS LOAD-BEARING RATHER THAN DEFENSIVE.**
@@ -1098,7 +1098,7 @@ function buildArm64DarwinLastErrorChunk() returns FunctionCodeChunk
 
 	arm64DarwinCallImport(asm, slot: OsImportSlot.errnoLocation)
 	arm64EmitLoadWord32At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: 0)
-	arm64EmitErrnoToWin32(asm)
+	arm64EmitErrnoToWin32(asm, wouldBlock: DarwinErrnoWouldBlock)
 
 	return asm.finishFunction(HostLastErrorName)
 end 'buildArm64DarwinLastErrorChunk'
@@ -1775,10 +1775,10 @@ end 'buildArm64DarwinDirFindCloseChunk'
 // ==========================================================================
 
 // ⭐⭐ **EVERY OTHER MEMBER OF THIS BAND MOVED TO `Arm64PosixRuntime` WHEN arm64-LINUX GREW ONE (L5).** The
-// pipe, its peek, the deadline tick, the reap, the bounded await, the exit-code read, the kill and the
-// netpoll's multi-wait are ONE body each now — `waitpid` and `wait4` decode the same status word, `poll` and
-// `ppoll` fill the same `struct pollfd`, and the three loops among them make no OS call at all. Each takes
-// this lane's libSystem door through `PosixHostCall`.
+// pipe, its peek, the deadline tick, the reap, the bounded await, the exit-code read and the kill are ONE
+// body each now — `waitpid` and `wait4` decode the same status word, `poll` and `ppoll` fill the same
+// `struct pollfd`, and the loops among them make no OS call at all. Each takes this lane's libSystem door
+// through `PosixHostCall`.
 //
 // ⛔ **THE SPAWN IS THE ONE THAT COULD NOT MOVE, AND NOT FOR WANT OF TRYING.** `posix_spawnp` is one call
 // plus a file-actions builder; AArch64-Linux has no spawn primitive at all and builds its child by hand out
@@ -2160,6 +2160,9 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 		chunks.push(buildArm64DarwinNetpollUserEventChunk(HostNetpollOpenBreakName, flags: DarwinEvAdd + DarwinEvClear, fflags: 0, queue: Arm64Register.x0, answersQueue: true))
 		chunks.push(buildArm64DarwinNetpollWaitChunk())
 		chunks.push(buildArm64DarwinNetpollArmChunk())
+		chunks.push(buildArm64DarwinNetpollChildOpenChunk())
+		chunks.push(buildArm64DarwinNetpollArmChildChunk())
+		chunks.push(buildArm64DarwinNetpollChildCloseChunk())
 		chunks.push(buildArm64DarwinNetpollUserEventChunk(HostNetpollRaiseBreakName, flags: 0, fflags: DarwinNoteTrigger, queue: Arm64Register.x1, answersQueue: false))
 		chunks.push(buildArm64DarwinSleepChunk(HostNetpollSleepName, unit: PosixTimeUnit.microseconds))
 
@@ -2176,12 +2179,11 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 		chunks.push(buildArm64DarwinTlsAllocChunk(globalData))
 
 		// ⭐⭐ **MAC8's CHILD-PROCESS CORE RIDES `usesGt`, NOT THE SUBPROCESS BIT, BECAUSE `installGtRuntime`
-		// BUILDS `__gt_process_run` UNCONDITIONALLY.** Every green-thread program statically contains a
-		// spawn, an exit-code read and the netpoll's multi-wait — the child store is merely EMPTY in one that
-		// never runs a child — so a narrower gate here is a `bl` to a symbol nothing laid out, which is a
-		// link failure rather than a diagnostic (MEASURED, twice, while this rung was written).
+		// BUILDS `__gt_process_run` UNCONDITIONALLY.** Every green-thread program statically contains a spawn,
+		// a bounded await and an exit-code read — a program that never runs a child simply never reaches them —
+		// so a narrower gate here is a `bl` to a symbol nothing laid out, which is a link failure rather than a
+		// diagnostic.
 		chunks.push(buildArm64PosixProcAwaitChunk())
-		chunks.push(buildArm64PosixWaitAnyChunk())
 		chunks.push(buildArm64DarwinSpawnChunk())
 		chunks.push(buildArm64PosixProcExitCodeChunk())
 	end 'schedulerClocks'
@@ -2192,6 +2194,7 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 	// `osProcessTerminate` have producers only inside that band.
 	if usage.usesIocp 'childPipes'
 		chunks.push(buildArm64PosixPipeChunk(PosixHostCall.importCall(OsImportSlot.pipe), flags: DarwinPipeNoFlags))
+		chunks.push(buildArm64DarwinNetpollArmPipeChunk())
 		chunks.push(buildArm64PosixPipePeekChunk(PosixPollCall.pollImport(OsImportSlot.poll)))
 		chunks.push(buildArm64PosixProcTerminateChunk(PosixHostCall.importCall(OsImportSlot.kill)))
 	end 'childPipes'
@@ -2424,13 +2427,16 @@ let DarwinKeventFailed = 0xFFFFFFFFFFFFFFFF
 // is required rather than preferred. The `ident` is the descriptor, which is what the decode reads back.
 function buildArm64DarwinNetpollArmChunk() returns FunctionCodeChunk
 	let SlotQueue = 0 as StackSize
-	let SlotEvents = 1 as StackSize
+	let SlotFd = 1 as StackSize
+	let SlotEvents = 2 as StackSize
 	let eventSlots = runtimeFrameSlots(DarwinKeventBytes * DarwinSocketChanges)
-	var asm = Arm64RuntimeAsm.beginFunction(1 + eventSlots)
+	var asm = Arm64RuntimeAsm.beginFunction(2 + eventSlots)
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotQueue)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotFd)
 	arm64EmitZeroSlots(asm, firstSlot: SlotEvents, slotCount: eventSlots)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x2, slot: SlotEvents)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotFd)
 
 	arm64DarwinEmitSocketFilter(asm, changes: Arm64Register.x2, fd: Arm64Register.x1, index: 0, filter: DarwinEvfiltRead)
 	arm64DarwinEmitSocketFilter(asm, changes: Arm64Register.x2, fd: Arm64Register.x1, index: 1, filter: DarwinEvfiltWrite)
@@ -2442,9 +2448,133 @@ function buildArm64DarwinNetpollArmChunk() returns FunctionCodeChunk
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: 0)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x5, value: 0)
 	arm64DarwinCallImport(asm, slot: OsImportSlot.kevent)
-	arm64PosixWidenIntResult(asm, reg: Arm64Register.x0)
+	arm64DarwinEmitStatusOrErrno(asm)
 	return asm.finishFunction(HostNetpollArmSourceName)
 end 'buildArm64DarwinNetpollArmChunk'
+
+// ⭐⭐ **`mrt_host_netpoll_child_open(x0 = childHandle) -> x0 = a kqueue that becomes readable when this child
+// exits, or negative`** — see `DarwinEvfiltProc` for why the child's exit is registered on a kqueue of its own
+// rather than on the scheduler's. The inner registration is a plain `EV_ADD`: the event is never received, and
+// a kqueue holding a pending event is readable, which is the whole signal.
+//
+// ⚠ **A REFUSED REGISTRATION CLOSES THE QUEUE HERE OR IT LEAKS FOR THE PROCESS LIFETIME**, exactly as
+// `buildArm64DarwinSocketBirthChunk`'s flag failure does: the answer is a failure, so no record will ever own
+// the descriptor. The errno is captured FIRST, because `close` sets its own on the way past.
+function buildArm64DarwinNetpollChildOpenChunk() returns FunctionCodeChunk
+	let SlotQueue = 0 as StackSize
+	let SlotPid = 1 as StackSize
+	let SlotErrno = 2 as StackSize
+	let SlotEvent = 3 as StackSize
+	let eventSlots = runtimeFrameSlots(DarwinKeventBytes)
+	var asm = Arm64RuntimeAsm.beginFunction(3 + eventSlots)
+
+	let noQueue = asm.newLabel()
+	let refused = asm.newLabel()
+	let answered = asm.newLabel()
+
+	arm64PosixUntagHandle(asm, reg: Arm64Register.x0)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: PosixWaitOffChildPid)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotPid)
+
+	arm64DarwinCallImport(asm, slot: OsImportSlot.kqueue)
+	arm64PosixWidenIntResult(asm, reg: Arm64Register.x0)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: noQueue)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotQueue)
+
+	arm64EmitZeroSlots(asm, firstSlot: SlotEvent, slotCount: eventSlots)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotEvent)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotPid)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x2, base: Arm64Register.x1, byteOffset: DarwinKeventIdentOffset)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: darwinKeventFilterWord(DarwinEvfiltProc, flags: DarwinEvAdd as MachineWord, fflags: 0))
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x2, base: Arm64Register.x1, byteOffset: DarwinKeventFilterOffset)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: DarwinNoteExit as MachineWord)
+	arm64EmitStoreWord32At(asm, src: Arm64Register.x2, base: Arm64Register.x1, byteOffset: DarwinKeventFflagsOffset as MachineWord)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotQueue)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: DarwinOneChange)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x5, value: 0)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.kevent)
+	arm64PosixWidenIntResult(asm, reg: Arm64Register.x0)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: refused)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotQueue)
+	arm64EmitBranchTo(asm, label: answered)
+
+	asm.placeLabel(refused)
+	arm64DarwinEmitCloseAndAnswerErrno(asm, fdSlot: SlotQueue, errnoSlot: SlotErrno, answered: answered)
+
+	asm.placeLabel(noQueue)
+	arm64DarwinEmitNegatedErrno(asm)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostNetpollChildOpenName)
+end 'buildArm64DarwinNetpollChildOpenChunk'
+
+// `mrt_host_netpoll_arm_child(x0 = kq, x1 = source) -> x0 = 0, or negative` — one change where a socket costs
+// two: a child's source is only ever READ, so registering the write direction would ask for a readiness this
+// descriptor can never report.
+function buildArm64DarwinNetpollArmChildChunk() returns FunctionCodeChunk
+	let SlotQueue = 0 as StackSize
+	let SlotFd = 1 as StackSize
+	let SlotEvent = 2 as StackSize
+	let eventSlots = runtimeFrameSlots(DarwinKeventBytes)
+	var asm = Arm64RuntimeAsm.beginFunction(2 + eventSlots)
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotQueue)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotFd)
+	arm64EmitZeroSlots(asm, firstSlot: SlotEvent, slotCount: eventSlots)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x2, slot: SlotEvent)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotFd)
+	arm64DarwinEmitSocketFilter(asm, changes: Arm64Register.x2, fd: Arm64Register.x1, index: 0, filter: DarwinEvfiltRead)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotQueue)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x1, src: Arm64Register.x2)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: DarwinOneChange)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x5, value: 0)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.kevent)
+	arm64DarwinEmitStatusOrErrno(asm)
+	return asm.finishFunction(HostNetpollArmChildName)
+end 'buildArm64DarwinNetpollArmChildChunk'
+
+// ⭐⭐ **`mrt_host_netpoll_arm_pipe(x0 = kq, x1 = fd) -> x0 = 0, or negative`.** One `fcntl` and then exactly
+// the child source's registration, because a pipe end and a child's kqueue are the same thing to the poller.
+// `fcntl` is VARIADIC, whose third argument this ABI passes on the STACK, which is why this is a frame and not
+// an isel sequence — `buildArm64DarwinSocketBirthChunk` carries the same note.
+function buildArm64DarwinNetpollArmPipeChunk() returns FunctionCodeChunk
+	let SlotQueue = 0 as StackSize
+	let SlotFd = 1 as StackSize
+	var asm = Arm64RuntimeAsm.beginVariadicCallerFunction(2)
+
+	let refused = asm.newLabel()
+	let answered = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotQueue)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotFd)
+	arm64DarwinEmitFcntl(asm, fdSlot: SlotFd, command: DarwinFcntlSetFlags, value: DarwinONonBlock, failed: refused)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
+	arm64EmitBranchTo(asm, label: answered)
+
+	asm.placeLabel(refused)
+	arm64DarwinEmitNegatedErrno(asm)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostNetpollArmPipeName)
+end 'buildArm64DarwinNetpollArmPipeChunk'
+
+// `mrt_host_netpoll_child_close(x0 = source) -> x0 = 0, or negative`. Closing the descriptor is also what takes
+// it out of the scheduler's kqueue, exactly as closing a socket is.
+function buildArm64DarwinNetpollChildCloseChunk() returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(0)
+
+	arm64DarwinCallImport(asm, slot: OsImportSlot.close)
+	arm64DarwinEmitStatusOrErrno(asm)
+	return asm.finishFunction(HostNetpollChildCloseName)
+end 'buildArm64DarwinNetpollChildCloseChunk'
 
 // One change record of the pair: `(fd, filter, EV_ADD | EV_CLEAR)` at `index` in the changelist `changes`
 // points at. x9 is the value scratch every chunk in this file uses.
@@ -2483,18 +2613,8 @@ function buildArm64DarwinSocketBirthChunk() returns FunctionCodeChunk
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotFd)
 	arm64EmitBranchTo(asm, label: answered)
 
-	// ⚠ **A DESCRIPTOR THAT COULD NOT BE FLAGGED IS CLOSED HERE OR IT LEAKS FOR THE PROCESS LIFETIME.** It
-	// belongs to nobody: the answer this chunk is about to give is a failure, so no box will ever own it and no
-	// `__ms_destruct` will ever close it — and a descriptor is not memory, so the exit-101 gate cannot see it.
-	// The errno is CAPTURED FIRST, because `close` sets its own on the way past.
 	asm.placeLabel(flagsRefused)
-	arm64DarwinEmitCaptureErrno(asm, slot: SlotErrno)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotFd)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.close)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x9, slot: SlotErrno)
-	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x0, rhs: Arm64Register.x9)
-	arm64EmitBranchTo(asm, label: answered)
+	arm64DarwinEmitCloseAndAnswerErrno(asm, fdSlot: SlotFd, errnoSlot: SlotErrno, answered: answered)
 
 	asm.placeLabel(noSocket)
 	arm64DarwinEmitNegatedErrno(asm)
@@ -2537,6 +2657,21 @@ function buildArm64DarwinSocketStatusChunk(name ByteArray, widens bool) returns 
 	return asm.finishFunction(name)
 end 'buildArm64DarwinSocketStatusChunk'
 
+// ⛔⛔ **A libSystem STATUS IS `-1` AND THE REASON IS IN `errno`; ANSWERING THE `-1` DISCARDS IT.** A raw
+// Linux `svc` already answers `-errno`, so only this lane has to fold — and until it did, every kevent
+// refusal on this lane reached the poller's abort as a bare `-1`, which names the failure and nothing else.
+// MEASURED: that is exactly what arm64-macos printed for `armPipeSource`, and it cost a lane round trip.
+function arm64DarwinEmitStatusOrErrno(asm Arm64RuntimeAsm)
+	let answered = asm.newLabel()
+
+	arm64PosixWidenIntResult(asm, reg: Arm64Register.x0)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: answered)
+	arm64DarwinEmitNegatedErrno(asm)
+
+	asm.placeLabel(answered)
+end 'arm64DarwinEmitStatusOrErrno'
+
 // `x0 = -(*__error())` — this thread's errno, negated into the vocabulary every socket op answers in.
 function arm64DarwinEmitNegatedErrno(asm Arm64RuntimeAsm)
 	arm64DarwinCallImport(asm, slot: OsImportSlot.errnoLocation)
@@ -2544,3 +2679,17 @@ function arm64DarwinEmitNegatedErrno(asm Arm64RuntimeAsm)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x9, value: 0)
 	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x9, rhs: Arm64Register.x0)
 end 'arm64DarwinEmitNegatedErrno'
+
+// ⚠ **A DESCRIPTOR A CHUNK COULD NOT FINISH SETTING UP IS CLOSED HERE OR IT LEAKS FOR THE PROCESS LIFETIME.**
+// It belongs to nobody: the answer the chunk is about to give is a failure, so no box and no poll record will
+// ever own it, and no destructor will ever close it — and a descriptor is not memory, so the exit-101 gate
+// cannot see it. The errno is CAPTURED FIRST, because `close` sets its own on the way past.
+function arm64DarwinEmitCloseAndAnswerErrno(asm Arm64RuntimeAsm, fdSlot StackSize, errnoSlot StackSize, answered BlockId)
+	arm64DarwinEmitCaptureErrno(asm, slot: errnoSlot)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: fdSlot)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.close)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x9, slot: errnoSlot)
+	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x0, rhs: Arm64Register.x9)
+	arm64EmitBranchTo(asm, label: answered)
+end 'arm64DarwinEmitCloseAndAnswerErrno'

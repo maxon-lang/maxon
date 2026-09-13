@@ -1,6 +1,14 @@
-// Test: async-subprocess.posix-store-overflow-caught
+// Test: async-subprocess.posix-sixty-five-concurrent-children-all-complete
+var done = 0
+
 function child() returns Integer
-	return try __Builtins.runProcess("sleep 2") otherwise 88
+	let code = try __Builtins.runProcess("sleep 2") otherwise 99
+
+	if code == 0 'completed'
+		done = done + 1
+	end 'completed'
+
+	return code
 end 'child'
 
 function main() returns ExitCode
@@ -69,7 +77,6 @@ function main() returns ExitCode
 	let p62 = async child()
 	let p63 = async child()
 	let p64 = async child()
-	let r = await p64
 	_ = await p00
 	_ = await p01
 	_ = await p02
@@ -134,45 +141,46 @@ function main() returns ExitCode
 	_ = await p61
 	_ = await p62
 	_ = await p63
-	return r as ExitCode
+	_ = await p64
+	return done as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ---
-ExitCode: 88
+ExitCode: 65
 ---
 data {
-  __mm_alloc_count@0 = i64 0
-  __gt_run_queue_head@8 = i64 0
-  __gt_run_queue_tail@16 = i64 0
-  __gt_timer_count@24 = i64 0
-  __gt_timer_heap_base@32 = i64 0
-  __gt_timer_capacity@40 = i64 0
-  __gt_timer_seq@48 = i64 0
-  __gt_timer_when@56 = i64 9223372036854775807
-  __gt_trace_counter@64 = i64 0
-  __gt_proc_count@72 = i64 0
-  __gt_proc_handles_base@80 = i64 0
-  __gt_proc_gts_base@88 = i64 0
-  __gt_live_count@96 = i64 0
-  __gt_seed_bytes@104 = i64 2048
-  __gt_stack_bytes_sum@112 = i64 0
-  __gt_stack_bytes_count@120 = i64 0
-  __gt_seed_sum_seen@128 = i64 0
-  __gt_seed_count_seen@136 = i64 0
-  __sched_active_workers@144 = i64 1
-  __sched_max_active_workers@152 = i64 1
-  __sched_tls_index@160 = i64 0
-  __sched_tls_teb_offset@168 = i64 0
-  __sched_procs@176 = i64 0
-  __sched_allm@184 = i64 0
-  __sched_midle@192 = i64 0
-  __sched_pidle@200 = i64 0
-  __gt_gfree_head@208 = i64 0
-  __sched_arena_cursor@216 = i64 0
-  __sched_arena_limit@224 = i64 0
-  __gt_records_carved@232 = i64 0
-  __sched_npidle@240 = i64 0
-  __sched_runq_size@248 = i64 0
+  __data_done@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __gt_run_queue_head@16 = i64 0
+  __gt_run_queue_tail@24 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_timer_seq@56 = i64 0
+  __gt_timer_when@64 = i64 9223372036854775807
+  __gt_trace_counter@72 = i64 0
+  __gt_live_count@80 = i64 0
+  __gt_seed_bytes@88 = i64 2048
+  __gt_stack_bytes_sum@96 = i64 0
+  __gt_stack_bytes_count@104 = i64 0
+  __gt_seed_sum_seen@112 = i64 0
+  __gt_seed_count_seen@120 = i64 0
+  __sched_active_workers@128 = i64 1
+  __sched_max_active_workers@136 = i64 1
+  __sched_tls_index@144 = i64 0
+  __sched_tls_teb_offset@152 = i64 0
+  __sched_procs@160 = i64 0
+  __sched_allm@168 = i64 0
+  __sched_midle@176 = i64 0
+  __sched_pidle@184 = i64 0
+  __gt_gfree_head@192 = i64 0
+  __sched_arena_cursor@200 = i64 0
+  __sched_arena_limit@208 = i64 0
+  __gt_records_carved@216 = i64 0
+  __sched_npidle@224 = i64 0
+  __sched_runq_size@232 = i64 0
+  __sched_global_pushes@240 = i64 0
+  __sched_timer_scan_steps@248 = i64 0
   __sched_mcount@256 = i64 0
   __sched_nmidle@264 = i64 0
   __sched_main_m@272 = i64 0
@@ -183,20 +191,23 @@ data {
   __np_poller@312 = i64 0
   __np_break@320 = i64 0
   __np_wake_sig@328 = i64 0
-  __sched_num_procs@336 = i64 0
-  __sched_shutdown_flag@344 = i64 0
-  __sched_lock@352 = i64 0
-  __sched_nmspinning@360 = i64 0
-  __sched_needspinning@368 = i64 0
-  __sched_sysmon_event@376 = i64 0
-  __sched_sysmon_wait@384 = i64 0
-  __sched_timer_starts@392 = i64 0
-  __mrt_errno@400 = i64 0
-  __mrt_envp@408 = i64 0
-  __mrt_tls_next_key@416 = i64 0
-  __slab_arena_list@424 = i64 0
-  __slab_arena_map_l1@432 = i64 0
-  __slab_state@440 = i64 0
+  __np_pd_table@336 = i64 0
+  __np_pd_cap@344 = i64 0
+  __np_waiters@352 = i64 0
+  __np_child_key_free@360 = i64 0
+  __np_child_key_high@368 = i64 0
+  __sched_num_procs@376 = i64 0
+  __sched_shutdown_flag@384 = i64 0
+  __sched_lock@392 = i64 0
+  __sched_lock_depth_sink@400 = i64 0
+  __sched_nmspinning@408 = i64 0
+  __sched_needspinning@416 = i64 0
+  __sched_sysmon_event@424 = i64 0
+  __sched_sysmon_wait@432 = i64 0
+  __sched_timer_starts@440 = i64 0
+  __slab_arena_list@448 = i64 0
+  __slab_arena_map_l1@456 = i64 0
+  __slab_state@464 = i64 0
 }
 
 func @child {
@@ -207,8 +218,17 @@ func @child {
     arm64.cmp x9, 0
     arm64.b.eq trycont
   tryerr:
-    arm64.movImm x0, 88
+    arm64.movImm x0, 99
   trycont:
+    arm64.cmp x0, 0
+    arm64.b.ne ifcont
+  completed:
+    arm64.leaGlobal x1, __data_done
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.add x1, x1, 1
+    arm64.leaGlobal x2, __data_done
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+  ifcont:
     arm64.epilogue 16
     arm64.ret
 }
@@ -273,6 +293,11 @@ func @main {
     arm64.bl __gt_ready
     arm64.leaFuncAddr x0, child
     arm64.bl __gt_spawn
+    arm64.movRegReg x28, x0
+    arm64.movRegReg x0, x28
+    arm64.bl __gt_ready
+    arm64.leaFuncAddr x0, child
+    arm64.bl __gt_spawn
     arm64.storeSlotReg slot54, x0
     arm64.bl __gt_ready
     arm64.leaFuncAddr x0, child
@@ -326,14 +351,6 @@ func @main {
     arm64.leaFuncAddr x0, child
     arm64.bl __gt_spawn
     arm64.storeSlotReg slot41, x0
-    arm64.bl __gt_ready
-    arm64.leaFuncAddr x0, child
-    arm64.bl __gt_spawn
-    arm64.storeSlotReg slot40, x0
-    arm64.bl __gt_ready
-    arm64.leaFuncAddr x0, child
-    arm64.bl __gt_spawn
-    arm64.storeSlotReg slot39, x0
     arm64.bl __gt_ready
     arm64.leaFuncAddr x0, child
     arm64.bl __gt_spawn
@@ -493,12 +510,12 @@ func @main {
     arm64.bl __gt_ready
     arm64.leaFuncAddr x0, child
     arm64.bl __gt_spawn
-    arm64.movRegReg x28, x0
-    arm64.movRegReg x0, x28
+    arm64.storeSlotReg slot39, x0
     arm64.bl __gt_ready
-    arm64.movRegReg x0, x28
-    arm64.bl __gt_await
-    arm64.movRegReg x28, x0
+    arm64.leaFuncAddr x0, child
+    arm64.bl __gt_spawn
+    arm64.storeSlotReg slot40, x0
+    arm64.bl __gt_ready
     arm64.movRegReg x0, x19
     arm64.bl __gt_await
     arm64.movRegReg x0, x20
@@ -516,6 +533,8 @@ func @main {
     arm64.movRegReg x0, x26
     arm64.bl __gt_await
     arm64.movRegReg x0, x27
+    arm64.bl __gt_await
+    arm64.movRegReg x0, x28
     arm64.bl __gt_await
     arm64.loadRegSlot x0, slot54
     arm64.bl __gt_await
@@ -544,10 +563,6 @@ func @main {
     arm64.loadRegSlot x0, slot42
     arm64.bl __gt_await
     arm64.loadRegSlot x0, slot41
-    arm64.bl __gt_await
-    arm64.loadRegSlot x0, slot40
-    arm64.bl __gt_await
-    arm64.loadRegSlot x0, slot39
     arm64.bl __gt_await
     arm64.loadRegSlot x0, slot0
     arm64.bl __gt_await
@@ -627,13 +642,18 @@ func @main {
     arm64.bl __gt_await
     arm64.loadRegSlot x0, slot38
     arm64.bl __gt_await
-    arm64.cmp x28, 0
+    arm64.loadRegSlot x0, slot39
+    arm64.bl __gt_await
+    arm64.loadRegSlot x0, slot40
+    arm64.bl __gt_await
+    arm64.leaGlobal x0, __data_done
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.cmp x0, 0
     arm64.b.lt __rc_panic
   __rc_chk:
-    arm64.cmp x28, 255
+    arm64.cmp x0, 255
     arm64.b.gt __rc_panic
   __rc_ok:
-    arm64.movRegReg x0, x28
     arm64.loadRegSlot x19, slot55
     arm64.loadRegSlot x20, slot56
     arm64.loadRegSlot x21, slot57
@@ -647,7 +667,7 @@ func @main {
     arm64.epilogue 544
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at async-subprocess.posix-store-overflow-caught.test:137: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_2  ; "panic at async-subprocess.posix-sixty-five-concurrent-children-all-complete.test:145: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot55

@@ -1,0 +1,75 @@
+// Test: force-segfault-name-is-free-outside-the-function-space
+typealias Small = int(0 to 100)
+
+type Holder
+	var maxon_force_segfault as Small
+
+	export static function make(maxon_force_segfault Small) returns Holder
+		return Self{maxon_force_segfault: maxon_force_segfault}
+	end 'make'
+
+	export function maxon_force_segfault() returns Small
+		return self.maxon_force_segfault
+	end 'maxon_force_segfault'
+end 'Holder'
+
+enum Marker
+	other
+	maxon_force_segfault
+end 'Marker'
+
+function main() returns ExitCode
+	let maxon_force_segfault = 7 as Small
+	let h = Holder.make(maxon_force_segfault)
+	var bump = 0 as Small
+
+	match Marker.maxon_force_segfault 'which'
+		other then bump = 0
+		maxon_force_segfault then bump = 35
+	end 'which'
+
+	return (h.maxon_force_segfault() + bump) as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 7
+  __rc_ok#11:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+  __il_cont:
+    arm64.add x19, x1, 35
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.b.gt __rc_panic
+  __rc_ok#6:
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at force-segfault-name-is-free-outside-the-function-space.test:31: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

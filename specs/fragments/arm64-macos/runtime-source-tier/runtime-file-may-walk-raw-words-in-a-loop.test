@@ -1,0 +1,33 @@
+// Test: runtime-file-may-walk-raw-words-in-a-loop
+// --- runtime-file: Probe.maxon
+module function probeWords() returns MachineWord
+	var total = 0 as MachineWord
+
+	for i in 0 upto 4 'eachIndex'
+		total = total + (i as MachineWord)
+	end 'eachIndex'
+
+	var bits = total
+	var runs = 0 as MachineWord
+
+	while bits > 0 'eachRun'
+		runs = runs + (bits and 1)
+		bits = bits shr 1
+	end 'eachRun'
+
+	return runs
+end 'probeWords'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,31 @@
+// Test: a-reserved-space-file-may-name-its-own-entry-as-a-value
+// --- stdlib-overlay: Builtins.maxon
+export typealias OverlayHalf = int(0 to 100)
+
+export function __overlayDouble(n OverlayHalf) returns OverlayHalf
+	return n * 2
+end '__overlayDouble'
+
+export function overlayApplyDouble(n OverlayHalf) returns OverlayHalf
+	let f = __overlayDouble
+	return f(n)
+end 'overlayApplyDouble'
+// --- file: main.maxon
+function main() returns ExitCode
+	return overlayApplyDouble(21) as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 21
+  __rc_ok:
+    arm64.leaFuncAddr x2, __fnref___overlayDouble
+    arm64.movImm x1, 0
+    arm64.blr x2
+  __il_cont:
+    arm64.epilogue 16
+    arm64.ret
+}

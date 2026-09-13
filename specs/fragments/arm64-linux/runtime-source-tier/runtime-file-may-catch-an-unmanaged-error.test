@@ -1,0 +1,28 @@
+// Test: runtime-file-may-catch-an-unmanaged-error
+// --- runtime-file: Probe.maxon
+module function probeCaught() returns MachineWord
+	let ticks = __Raw.osTickCountMs()
+	var answer = 0 as MachineWord
+
+	try (100 / ticks) otherwise (e) 'handle'
+		match e 'kind'
+			divisionByZero then answer = 1 as MachineWord
+		end 'kind'
+	end 'handle'
+
+	return answer
+end 'probeCaught'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

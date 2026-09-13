@@ -775,6 +775,12 @@ end 'recordIoParkUsage'
 function recordGtUsage(usage RuntimeUsage)
 	usage.usesGt = true
 	usage.usesHeap = true
+
+	// ⭐ **AND THE NUMBER FORMATTER, BECAUSE THE POLLER'S FAILURE PATH RENDERS TWO OF THEM.**
+	// `NetpollRuntime.__np_fail` writes the verb and the host's answer before it exits, and it is emitted by a
+	// BUILDER — which this Maxon-module scan cannot see, exactly as it cannot see the streaming arm's
+	// `__gt_subp_last_error`. Without the bit the reloc names a function nothing laid out.
+	usage.usesIntToString = true
 end 'recordGtUsage'
 
 // A CONSTANT array literal over an immortal `.rdata` blob — a `b"…"` byte string, or a packed

@@ -202,6 +202,14 @@ let X64LinuxSyscallEpollCtl = 233
 let X64LinuxSyscallEpollWait = 232
 let X64LinuxSyscallChdir = 80
 
+// ⭐ **A CHILD AS A DESCRIPTOR** — `pidfd_open(pid, 0)`, whose answer polls readable once that child has
+// exited. The number is the SAME on both Linux CPUs: it was added to every architecture's table at once.
+let X64LinuxSyscallPidfdOpen = 434
+
+// The per-descriptor flag change a polled pipe end needs — see `NetpollVerb.armPipeSource` for why the flag
+// cannot come from `pipe2`.
+let X64LinuxSyscallFcntl = 72
+
 // --- Linux mmap parameters ---
 //
 // The `mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, -1, 0)` `lowerOsAllocPages`
@@ -622,15 +630,22 @@ end 'x64LinuxEmitZeroSlots'
 //
 // ⚠ **THE MAPPING IS NOT THE IDENTITY AND CANNOT BE**, even though `ENOENT` and `ERROR_FILE_NOT_FOUND` are
 // both 2. ⚠ **A CLEARED errno ANSWERS `ERROR_NO_MORE_FILES`** — see `PosixErrnoCleared`.
+//
+// ⭐⭐ **`EWOULDBLOCK` ANSWERS `ERROR_IO_PENDING` BECAUSE THAT IS WHAT IT MEANS** — a non-blocking read that
+// could not be served yet is an operation still in flight, which is exactly the arm `__gt_subp_yield_read`
+// parks on rather than classifying as a fault.
 function x64LinuxEmitErrnoToWin32(asm X64RuntimeAsm)
 	let notFound = asm.newLabel()
 	let pathNotFound = asm.newLabel()
 	let denied = asm.newLabel()
 	let noMoreFiles = asm.newLabel()
+	let stillInFlight = asm.newLabel()
 	let answered = asm.newLabel()
 
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: noMoreFiles)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: LinuxErrnoWouldBlock as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: stillInFlight)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrnoNoSuchFileOrDirectory as Imm32)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: notFound)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrnoNotADirectory as Imm32)
@@ -652,6 +667,10 @@ function x64LinuxEmitErrnoToWin32(asm X64RuntimeAsm)
 
 	asm.placeLabel(denied)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ErrorAccessDenied as MachineWord)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	asm.placeLabel(stillInFlight)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ErrorIoPending as MachineWord)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
 
 	asm.placeLabel(noMoreFiles)
@@ -2852,9 +2871,9 @@ let X64LinuxTlsNoBlockMessage = b"panic: an OS thread asked to write a scheduler
 // ==========================================================================
 //
 // ⭐⭐ **THE ALGORITHMS ARE `Arm64PosixRuntime`'s AND THE INSTRUCTIONS ARE NOT.** `waitpid` and `wait4` decode
-// the same status word, `poll` and `ppoll` fill the same `struct pollfd`, and the reap, the bounded await,
-// the exit-code read and the netpoll's multi-wait make no OS call of their own — so the two arm64 lanes share
-// one body each, parameterised by a `PosixHostCall`. x86-64 has only ONE POSIX lane, so there is no second
+// the same status word, `poll` and `ppoll` fill the same `struct pollfd`, and the reap, the bounded await and
+// the exit-code read make no OS call of their own — so the two arm64 lanes share one body each, parameterised
+// by a `PosixHostCall`. x86-64 has only ONE POSIX lane, so there is no second
 // route to parameterise for and each body below issues its own `syscall` directly; what it shares with the
 // arm64 pair is every NUMBER, which is `Targets/Shared/PosixRuntime`'s.
 
@@ -3112,14 +3131,16 @@ end 'buildX64LinuxProcReapChunk'
 // ⭐⭐ **`WaitForSingleObject` ON A CHILD, AND ALL THREE TIMEOUTS ITS CALLERS ACTUALLY USE.** They are three
 // different questions and answering them with one poll is a WRONG ANSWER rather than a slow one:
 //
-//   • **0 — a POLL.** `__gt_proc_check` and `__gt_subp_wait_collect`'s exit test drive their own loop.
+//   • **0 — a POLL.** `__gt_subp_wait_collect`'s exit test drives its own loop.
 //   • **INFINITE — a real block**, inside the wait syscall itself. There is nothing to poll for: the kernel
 //     already has the notification.
 //   • **anything else — a bounded poll.** A deadline no POSIX wait takes, so it is a scan and a millisecond
-//     sleep, exactly as the netpoll's multi-wait below does it.
+//     sleep.
 //
-// ⚠ **THE INFINITE ARM BLOCKS THE OS THREAD**, which is the same property the blocking pipe read has and for
-// the same missing mechanism: without a `SIGCHLD` handler there is nothing for a green thread to park on.
+// ⚠ **THE INFINITE ARM BLOCKS THE OS THREAD, AND ITS CALLERS ARE WHY IT MAY.** `__gt_subp_wait` and
+// `__gt_subp_wait_exit` are the streaming API's explicit `wait()`, reached with the child's output already
+// drained, so the block is bounded by the child's own exit. It is the one child wait on this lane that does
+// NOT go through the poller's child band, which every other one does.
 //
 // ⚠ **IT CONTAINS NO OS CALL AT ALL** — two calls and a compare — which is why the arm64 pair share one body.
 function buildX64LinuxProcAwaitChunk() returns FunctionCodeChunk
@@ -3228,94 +3249,6 @@ function buildX64LinuxProcTerminateChunk() returns FunctionCodeChunk
 
 	return asm.finishFunction(HostProcTerminateName)
 end 'buildX64LinuxProcTerminateChunk'
-
-// ==========================================================================
-// mrt_host_wait_any(rcx = handlesBase, rdx = count, r8 = timeoutMs)
-// ==========================================================================
-
-// ⭐ `WaitForMultipleObjects(handles, count, FALSE, timeoutMs)` — the NETPOLL's block on the parked children.
-// Its answer is DISCARDED by the one caller (`GtRuntime.emitProcWait` re-scans through `__gt_proc_check`
-// straight afterwards), so this reports nothing and only has to RETURN at the right moment: as soon as any
-// child has exited, or when the timeout runs out.
-//
-// ⚠ **IT POLLS, AND POLLING IS THE RIGHT ANSWER HERE RATHER THAN A COMPROMISE.** The alternative is a
-// `SIGCHLD` handler, and this backend installs none. Blocking the M is what the netpoll is FOR — it runs only
-// when nothing is runnable — so a millisecond scan costs an idle thread a syscall per millisecond.
-//
-// ⚠ **A ZERO COUNT WITH AN INFINITE TIMEOUT WOULD NEVER RETURN**, and cannot arise: `emitProcWait` is
-// reached only under `pc > 0`.
-function buildX64LinuxWaitAnyChunk() returns FunctionCodeChunk
-	let SlotBase = 0 as StackSize
-	let SlotCount = 1 as StackSize
-	let SlotTimeout = 2 as StackSize
-	let SlotDeadline = 3 as StackSize
-	let SlotIndex = 4 as StackSize
-	var asm = X64RuntimeAsm.beginFunction(5)
-
-	let scanRound = asm.newLabel()
-	let scanStep = asm.newLabel()
-	let scanned = asm.newLabel()
-	let sleepStep = asm.newLabel()
-	let timedOut = asm.newLabel()
-	let done = asm.newLabel()
-
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBase), srcReg: X64Register.rcx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCount), srcReg: X64Register.rdx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTimeout), srcReg: X64Register.r8)
-
-	// The deadline is computed on both roads and READ only on the bounded one. `WaitInfinite` is a 32-bit
-	// sentinel, so the sum cannot wrap a 64-bit tick count.
-	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostTickMsName)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotTimeout), wide: true)
-	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotDeadline), srcReg: X64Register.rax)
-
-	asm.placeLabel(scanRound)
-	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotIndex), srcReg: X64Register.rax)
-
-	asm.placeLabel(scanStep)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotIndex), wide: true)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotCount), wide: true)
-	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: scanned)
-	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShl, reg: X64Register.rax, count: PosixHandleArrayStrideShift)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotBase), wide: true)
-	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.rcx, src: X64Register.rax, wide: true)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rcx, disp: 0, wide: true)
-	x64LinuxEmitUntagHandle(asm, reg: X64Register.rcx)
-	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: PosixReapWithoutBlocking)
-	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostProcReapName)
-	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: done)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotIndex), wide: true)
-	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rax, imm: 1)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotIndex), srcReg: X64Register.rax)
-	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: scanStep)
-
-	asm.placeLabel(scanned)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotTimeout), wide: true)
-	encodeMovRegImm64(asm.code, dest: X64Register.rcx, value: WaitInfinite)
-	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: sleepStep)
-	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostTickMsName)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotDeadline), wide: true)
-	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: timedOut)
-
-	asm.placeLabel(sleepStep)
-	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: PosixChildPollMs)
-	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostSleepMsName)
-	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: scanRound)
-
-	// ⚠ **THE ANSWER IS RE-ZEROED BECAUSE THE CLOCK READ DESTROYED IT.** Reaching the deadline test means
-	// every reap answered 0, and that 0 was this chunk's answer until a `call` began landing in rax.
-	asm.placeLabel(timedOut)
-	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: PosixNoChildSignalled)
-
-	asm.placeLabel(done)
-	return asm.finishFunction(HostWaitAnyName)
-end 'buildX64LinuxWaitAnyChunk'
 
 // ==========================================================================
 // mrt_host_spawn(rcx = argv, rdx = cwd, r8 = creationFlags, r9 = startupInfo,
@@ -3871,12 +3804,11 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 		chunks.push(buildX64LinuxTlsSetChunk())
 
 		// ⭐⭐ **L5's CHILD-PROCESS CORE RIDES `usesGt`, NOT A SUBPROCESS BIT, BECAUSE `installGtRuntime` BUILDS
-		// `__gt_process_run` UNCONDITIONALLY.** Every green-thread program statically contains a spawn, an
-		// exit-code read and the netpoll's multi-wait — the child store is merely EMPTY in one that never runs
-		// a child — so a narrower gate here is a call to a symbol nothing laid out, which is a link failure
-		// rather than a diagnostic.
+		// `__gt_process_run` UNCONDITIONALLY.** Every green-thread program statically contains a spawn, a
+		// bounded await and an exit-code read — a program that never runs a child simply never reaches them —
+		// so a narrower gate here is a call to a symbol nothing laid out, which is a link failure rather than a
+		// diagnostic.
 		chunks.push(buildX64LinuxProcAwaitChunk())
-		chunks.push(buildX64LinuxWaitAnyChunk())
 		chunks.push(buildX64LinuxSpawnChunk())
 		chunks.push(buildX64LinuxProcExitCodeChunk())
 
@@ -3884,7 +3816,10 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 		chunks.push(buildX64LinuxNetpollOpenChunk())
 		chunks.push(buildX64LinuxNetpollOpenBreakChunk())
 		chunks.push(buildX64LinuxNetpollWaitChunk())
-		chunks.push(buildX64LinuxNetpollArmChunk())
+		chunks.push(buildX64LinuxNetpollArmChunk(HostNetpollArmSourceName, events: LinuxEpollSocketEvents as MachineWord))
+		chunks.push(buildX64LinuxNetpollArmChunk(HostNetpollArmChildName, events: LinuxEpollReadEvents as MachineWord))
+		chunks.push(buildX64LinuxNetpollChildOpenChunk())
+		chunks.push(buildX64LinuxNetpollChildCloseChunk())
 		chunks.push(buildX64LinuxNetpollCounterChunk(HostNetpollRaiseBreakName, syscallNumber: X64LinuxSyscallWrite, descriptor: X64Register.rdx))
 		chunks.push(buildX64LinuxNetpollCounterChunk(HostNetpollDrainBreakName, syscallNumber: X64LinuxSyscallRead, descriptor: X64Register.rcx))
 		chunks.push(buildX64LinuxSleepChunk(HostNetpollSleepName, unit: PosixTimeUnit.microseconds))
@@ -3896,6 +3831,7 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 	// `osProcessTerminate` have producers only inside that band.
 	if usage.usesIocp 'childPipes'
 		chunks.push(buildX64LinuxPipeChunk())
+		chunks.push(buildX64LinuxNetpollArmPipeChunk())
 		chunks.push(buildX64LinuxPipePeekChunk())
 		chunks.push(buildX64LinuxProcTerminateChunk())
 	end 'childPipes'
@@ -4036,14 +3972,14 @@ let LinuxEpollPackedDataOffset = 4
 //
 // ⚠ The record is two quadword stores, the second overlapping the first's upper half — x86-64's
 // `struct epoll_event` is PACKED, exactly as `buildX64LinuxNetpollOpenBreakChunk` writes the break's.
-function buildX64LinuxNetpollArmChunk() returns FunctionCodeChunk
+function buildX64LinuxNetpollArmChunk(name ByteArray, events MachineWord) returns FunctionCodeChunk
 	let SlotEvent = 0 as StackSize
 	let eventSlots = 2 as StackSize
 	var asm = X64RuntimeAsm.beginFunction(eventSlots)
 
 	let eventDisp = x64LinuxBufferDisp(asm, firstSlot: SlotEvent, slotCount: eventSlots)
 
-	encodeMovRegImm64(asm.code, dest: X64Register.r8, value: LinuxEpollSocketEvents as MachineWord)
+	encodeMovRegImm64(asm.code, dest: X64Register.r8, value: events)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: eventDisp, srcReg: X64Register.r8)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: eventDisp + (LinuxEpollPackedDataOffset as Imm32), srcReg: X64Register.rdx)
 
@@ -4051,8 +3987,63 @@ function buildX64LinuxNetpollArmChunk() returns FunctionCodeChunk
 	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: LinuxEpollCtlAdd)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.r10, base: X64Register.rbp, disp: eventDisp)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallEpollCtl)
-	return asm.finishFunction(HostNetpollArmSourceName)
+	return asm.finishFunction(name)
 end 'buildX64LinuxNetpollArmChunk'
+
+// ⭐⭐ **`mrt_host_netpoll_child_open(rcx = childHandle) -> rax = a pidfd, or -errno` — A CHILD BECOMES A
+// DESCRIPTOR.** `pidfd_open` answers a file descriptor that polls READABLE once the child has exited, so the
+// child joins the poller through the same registration and the same decode a socket does, and the netpoll
+// needs no notion of a process at all.
+//
+// ⚠ **THE CHILD MUST STILL BE UNREAPED, AND EVERY CALLER'S IS.** A pidfd names a task, and the only party
+// that takes this one's status is the green thread that is about to park on this descriptor.
+function buildX64LinuxNetpollChildOpenChunk() returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(0)
+
+	x64LinuxEmitUntagHandle(asm, reg: X64Register.rcx)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rcx, disp: PosixWaitOffChildPid as Imm32, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rsi, src: X64Register.rsi, wide: true)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallPidfdOpen)
+	return asm.finishFunction(HostNetpollChildOpenName)
+end 'buildX64LinuxNetpollChildOpenChunk'
+
+// ⭐⭐ **`mrt_host_netpoll_arm_pipe(rcx = epfd, rdx = fd) -> rax = 0, or -errno`.** One `fcntl` and then
+// exactly the child source's registration, because a pipe end and a `pidfd` are the same thing to the poller.
+// `F_SETFL` replaces the whole status word, which is right for a descriptor this call has just created: its
+// only other status bit is the access mode, which `F_SETFL` ignores.
+function buildX64LinuxNetpollArmPipeChunk() returns FunctionCodeChunk
+	let SlotPoller = 0 as StackSize
+	let SlotFd = 1 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(2)
+
+	let flagged = asm.newLabel()
+	let answered = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotPoller), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFd), srcReg: X64Register.rdx)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rdx, wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: LinuxFcntlSetFlags)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: LinuxONonBlock)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallFcntl)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: answered)
+
+	asm.placeLabel(flagged)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostNetpollArmPipeName)
+end 'buildX64LinuxNetpollArmPipeChunk'
+
+// `mrt_host_netpoll_child_close(rcx = source) -> rax = 0, or -errno`. Closing the descriptor is also what
+// takes it out of the epoll set, exactly as closing a socket is.
+function buildX64LinuxNetpollChildCloseChunk() returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(0)
+
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rcx, wide: true)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallClose)
+	return asm.finishFunction(HostNetpollChildCloseName)
+end 'buildX64LinuxNetpollChildCloseChunk'
 
 // `mrt_host_netpoll_wait(rcx = epfd, rdx = entries, r8 = capacity, r9 = timeoutMs) -> rax = count, 0 when
 // interrupted, or -errno`.

@@ -797,14 +797,13 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, abi CalleeAbiTab
 		osWaitHandle(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 
 		// `osPanic` defines no value (P1.9) — it aborts. `osReadClock` defines none either: the clock read
-		// writes its results to caller-provided out-param buffers. The four result-less P1.5 subprocess ops (`osProcessSpawn`,
-		// `osProcessExitCode`, `osWaitHandles`, `osCloseHandle`) join the range — they consume their `BOOL` via
-		// memory or ignore it, so none defines a value (`osWaitHandle`, which does, is named just above).
+		// writes its results to caller-provided out-param buffers. The three result-less P1.5 subprocess ops
+		// (`osProcessSpawn`, `osProcessExitCode`, `osCloseHandle`) join the range — they consume their `BOOL`
+		// via memory or ignore it, so none defines a value (`osWaitHandle`, which does, is named just above).
 		osPanic or
 			osReadClock or
 			osProcessSpawn or
 			osProcessExitCode or
-			osWaitHandles or
 			osCloseHandle then break 'result'
 
 		// `osFreePages` (P1.5-B1a′) defines no value — it releases a page region and returns nothing (its
@@ -1406,7 +1405,6 @@ export type ScaledIndexFolds
 				osReadClock or
 				osProcessSpawn or
 				osProcessExitCode or
-				osWaitHandles or
 				osCloseHandle or
 				osWaitHandle or
 				osFreePages or
@@ -1901,7 +1899,6 @@ export type CompareFusionCensus
 					osReadClock or
 					osProcessSpawn or
 					osProcessExitCode or
-					osWaitHandles or
 					osCloseHandle or
 					osWaitHandle or
 					osFreePages then break 'term'

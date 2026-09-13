@@ -63,10 +63,7 @@ export enum RuntimeAbort
 
 	// `__managed_create`: a 0 element size, which is a COMPILER bug rather than a program's (a concrete
 	// literal is never 0 and a descriptor read never yields 0) — it would make `__managed_grow` allocate a
-	// zero-byte buffer and corrupt. ⚠ It was 70 until this registry landed, colliding with the
-	// process-store-overflow abort that then held 70 (since P1.5 #93 that path throws
-	// `RunProcessError.storeOverflow` instead); this is the one that moved because it is unreachable from
-	// any source program.
+	// zero-byte buffer and corrupt.
 	arrayElementSizeZero = 74
 
 	// `__mm_leak_check` (the ONE OS-exit gate): a green thread was spawned but neither AWAITED nor DROPPED —
@@ -251,7 +248,7 @@ export enum RuntimeAbort
 	schedulerDeadlock = 92
 
 	// `__gt_register_park`: the park note carries a kind it does not register. `GtRuntime`'s
-	// `GtParkKindTimer` / `GtParkKindProc` / `GtParkKindIo` / `GtParkKindMailbox` / `GtParkKindAwait` /
+	// `GtParkKindTimer` / `GtParkKindIo` / `GtParkKindNetpoll` / `GtParkKindMailbox` / `GtParkKindAwait` /
 	// `GtParkKindAwaitAny` are the kinds it registers, and `GtParkKindYield` and `GtParkKindPreempt` are placed by
 	// the strand runner and never reach it — so any other value is a COMPILER bug rather than a program's, and it
 	// is silent without this: the thread would be suspended having been registered on NO store at all, which is a
@@ -383,6 +380,20 @@ export enum RuntimeAbort
 	// overwrite the first's publication and the first would never be woken again, so this names the shape at
 	// the instruction that produced it rather than losing a thread silently.
 	netpollDoubleWait = 107
+
+	// `__np_pd_wait_any`: a group member's direction word still named THIS thread when its wait had already
+	// ended. Every road out of a multi-source wait goes through `__np_group_unhook`, which clears each word it
+	// finds and pays `__np_waiters` back for it; a word still naming the resuming thread means one of those
+	// roads did not, and clearing it here would drop a published waiter WITHOUT the matching debit. A leaked
+	// `__np_waiters` is this runtime's worst shape — `emitGtStoresPending` never goes false again, so
+	// `__sched_checkdead` is disarmed for the life of the process and the idle tail polls for ever.
+	netpollGroupUnhookMissed = 109
+
+	// `__np_pd_deadline`: a per-direction deadline was set on a descriptor a MULTI-SOURCE wait is parked on.
+	// A group's deadline is the group's own word and rides one timer entry under the group's tag; a member's
+	// `pd.rd` is 0, so the re-arm would find nothing to disarm and add a SECOND entry under a `(gt, tag)` that
+	// `__gt_timer_check` admits exactly one of. No caller does this today, and this is what keeps it that way.
+	netpollGroupMemberDeadline = 110
 
 	// ⚠ **108 IS RETIRED, NOT REUSABLE.** It was `netpollReleaseWithWaiter` — `__np_pd_open` / `__np_pd_release`
 	// finding a green thread still PUBLISHED on a direction word of the record they were about to reset. It was

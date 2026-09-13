@@ -1,0 +1,40 @@
+// Test: builtins-parallel-boundary.checkpoint-body-is-runtime-source
+function checkpoint()
+	__Builtins.parallelBoundary()
+	__Builtins.parallelBoundary()
+end 'checkpoint'
+
+function main() returns ExitCode
+	checkpoint()
+	checkpoint()
+	return 4
+end 'main'
+---
+ExitCode: 4
+---
+func @checkpoint {
+  entry:
+    arm64.prologue 16
+    arm64.bl __parallel_boundary
+    arm64.bl __parallel_boundary
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.bl checkpoint
+    arm64.bl checkpoint
+    arm64.movImm x0, 4
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @__parallel_boundary {
+  entry:
+    arm64.prologue 16
+    arm64.epilogue 16
+    arm64.ret
+}

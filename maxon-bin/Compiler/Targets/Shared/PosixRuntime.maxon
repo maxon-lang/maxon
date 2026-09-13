@@ -134,7 +134,6 @@ export let HostProcReapName = b"mrt_host_proc_reap"
 export let HostProcAwaitName = b"mrt_host_proc_await"
 export let HostProcExitCodeName = b"mrt_host_proc_exit_code"
 export let HostProcTerminateName = b"mrt_host_proc_terminate"
-export let HostWaitAnyName = b"mrt_host_wait_any"
 export let HostTickMsName = b"mrt_host_tick_ms"
 
 // ⚠ **THE MILLISECOND STOPWATCH HAS THREE PRODUCERS AND ONLY ONE IS IN THE PIPE BAND.** A subprocess
@@ -467,8 +466,8 @@ export let PosixWaitKindThread = 2
 // The WAIT OBJECT's shared prefix
 // ==========================================================================
 
-// ⭐⭐ **SIX FIELDS AT SIX FIXED OFFSETS, IDENTICAL ON BOTH LANES — which is what lets the reap, the await,
-// the exit-code read and the multi-wait be ONE body each.** What the two lanes disagree about is what sits
+// ⭐⭐ **SIX FIELDS AT SIX FIXED OFFSETS, IDENTICAL ON BOTH LANES — which is what lets the reap, the await
+// and the exit-code read be ONE body each.** What the two lanes disagree about is what sits
 // ABOVE these: Darwin follows them with a `pthread_mutex_t` and a `pthread_cond_t` (an event there is a
 // condition variable); Linux follows them with nothing at all (a futex needs no mutex, and the object is one
 // `mmap`'d page).
@@ -579,19 +578,9 @@ export let PosixChildStillRunning = 0
 // A C `int`'s worth of bits — `pid_t`'s width, which is what a wait's answer must be compared at.
 export let PosixChildPidMask = 0xFFFFFFFF
 
-// How long the two bounded child waits sleep between scans — the netpoll's multi-wait and a
-// `waitWithTimeout` deadline. Both run where the M is meant to be idle, so a millisecond is a poll rate
-// rather than a spin, and one number keeps the two from drifting into different responsiveness.
+// How long a BOUNDED child wait sleeps between scans — `mrt_host_proc_await`'s deadline road, which runs
+// where the M is meant to be idle, so a millisecond is a poll rate rather than a spin.
 export let PosixChildPollMs = 1
-
-// What `mrt_host_wait_any` answers when its deadline arrives with no child reaped. Its one caller discards
-// the answer (`GtRuntime.emitProcWait` re-scans), so this names the 0 the scan road already produced rather
-// than introducing a report.
-export let PosixNoChildSignalled = 0
-
-// `GtProcHandlesBaseLabel`'s array is one 64-bit handle per entry, so an index scales by 8 — as a SHIFT,
-// which is what an indexed load off a base wants.
-export let PosixHandleArrayStrideShift = 3 as ShiftCount
 
 // The child's three standard descriptors, named because a bare 0/1/2 in an argument position says nothing.
 export let PosixChildStdinFd = 0
@@ -668,6 +657,20 @@ export let HostNetpollSleepName = b"mrt_host_netpoll_sleep"
 // two Linux ones, a two-element `kevent` changelist on macOS.
 export let HostNetpollArmSourceName = b"mrt_host_netpoll_arm"
 
+// ⭐ **THE CHILD-EXIT SOURCE — `NetpollVerb.openChildSource`, `armChildSource` and `closeChildSource`.** The
+// open answers a descriptor that becomes readable when the child exits (a `pidfd` on Linux, a per-child kqueue
+// carrying one `EVFILT_PROC`/`NOTE_EXIT` on macOS); the arm registers THAT descriptor with the scheduler's
+// poller for reading only, and the close gives it back. A child is then an ordinary poll descriptor, so the
+// decode that turns an entry into a wake needs no arm of its own.
+export let HostNetpollChildOpenName = b"mrt_host_netpoll_child_open"
+export let HostNetpollArmChildName = b"mrt_host_netpoll_arm_child"
+export let HostNetpollChildCloseName = b"mrt_host_netpoll_child_close"
+
+// ⭐ **THE PIPE READ END — `NetpollVerb.armPipeSource`.** One `fcntl(F_SETFL, O_NONBLOCK)` and then exactly
+// the child source's registration, because a pipe end and a `pidfd` are the same thing to a poller: a
+// descriptor watched for reading, edge-triggered.
+export let HostNetpollArmPipeName = b"mrt_host_netpoll_arm_pipe"
+
 // What `openTimer` answers where a sleep needs no object; `sleepOnTimer` never reads it on these lanes.
 export let PosixNoTimerObject = 0
 
@@ -696,6 +699,17 @@ let LinuxEpollEdgeTriggered = 0x80000000
 // serves both directions because a descriptor's two waits are independent and the decode tells them apart from
 // the `events` a wait answers; `EPOLLERR`/`EPOLLHUP` need no asking for.
 export let LinuxEpollSocketEvents = LinuxEpollIn + LinuxEpollOut + LinuxEpollRdHup + LinuxEpollEdgeTriggered
+
+// ⭐ **WHAT A ONE-DIRECTION SOURCE IS REGISTERED WITH: READING ONLY.** A `pidfd` is readable exactly once,
+// when the child has exited, and a pipe's read end is never writable — asking for the write direction on
+// either would register a readiness the kernel can never report and put a `PdReady` on a direction nothing
+// waits in.
+export let LinuxEpollReadEvents = LinuxEpollIn + LinuxEpollEdgeTriggered
+
+// `fcntl`'s "replace the status flags" command and Linux's `O_NONBLOCK` bit. `F_SETFL` is 4 on every POSIX
+// lane (`DarwinFcntlSetFlags` names the same number); the FLAG is not — Darwin's is 4 and Linux's is 0o4000.
+export let LinuxFcntlSetFlags = 4
+export let LinuxONonBlock = 0x800
 
 // An eventfd is read and written in 8-byte counters; a raise adds one.
 export let LinuxEventfdCounterBytes = 8
@@ -784,6 +798,22 @@ export let DarwinSocketChanges = 2
 export let DarwinKeventFlagsShift = 16
 export let DarwinKeventFflagsShift = 32
 
+// ⭐⭐ **THE PROCESS FILTER, AND WHY IT IS REGISTERED ON A KQUEUE OF THE CHILD'S OWN.** `EVFILT_PROC` keys on a
+// PID, and a kevent's `ident` is the same field a socket's descriptor arrives in — one number space, in which
+// a pid and a descriptor can collide. So a child's exit is registered on a private kqueue, and THAT kqueue's
+// descriptor is what joins the scheduler's poller for reading: the source the decode reads back is a real
+// descriptor again, and nothing downstream has to tell a process from a socket.
+//
+// ⚠ **THE INNER EVENT IS NEVER RECEIVED, WHICH IS WHAT KEEPS IT SIMPLE.** A kqueue holding a pending event is
+// readable; the outer registration is edge-triggered, so the one transition is the one wake, and the child's
+// source is closed rather than drained.
+export let DarwinEvfiltProc = -5
+export let DarwinNoteExit = 0x80000000
+
+// `fflags` as a 32-bit field of its own, which is how `NOTE_EXIT` is written: folding it into the quadword at
+// `DarwinKeventFilterOffset` would need bit 63 of a signed word.
+export let DarwinKeventFflagsOffset = 12
+
 // The chunk `verb` lowers to on a POSIX lane.
 export function posixNetpollChunk(verb NetpollVerb) returns ByteArray
 	return match verb 'v'
@@ -795,7 +825,12 @@ export function posixNetpollChunk(verb NetpollVerb) returns ByteArray
 		sleepOnTimer or
 			shortSleep gives HostNetpollSleepName
 		armSource gives HostNetpollArmSourceName
+		openChildSource gives HostNetpollChildOpenName
+		armChildSource gives HostNetpollArmChildName
+		armPipeSource gives HostNetpollArmPipeName
+		closeChildSource gives HostNetpollChildCloseName
 		openTimer panic("posixNetpollChunk: `openTimer` has no chunk on a POSIX lane — a sleep needs no object there, so the isel answers `PosixNoTimerObject` inline")
+		postChildExit panic("posixNetpollChunk: `postChildExit` forwards a child's exit to a completion port, and these kernels make a child's source readable themselves — `NetpollRuntime` emits it only under `NetpollShape.completionPort`")
 	end 'v'
 end 'posixNetpollChunk'
 
@@ -811,6 +846,14 @@ export function posixNetpollOperandCount(verb NetpollVerb) returns ParamCount
 		sleepOnTimer or
 			shortSleep gives 1
 		armSource gives 2
+		openChildSource or
+			closeChildSource gives 1
+
+		// The child handle is the third operand and only Windows reads it: these lanes register the SOURCE the
+		// open already answered.
+		armChildSource or
+			armPipeSource gives 2
 		openTimer panic("posixNetpollOperandCount: `openTimer` has no chunk on a POSIX lane — see `posixNetpollChunk`")
+		postChildExit panic("posixNetpollOperandCount: `postChildExit` has no chunk on a POSIX lane — see `posixNetpollChunk`")
 	end 'v'
 end 'posixNetpollOperandCount'

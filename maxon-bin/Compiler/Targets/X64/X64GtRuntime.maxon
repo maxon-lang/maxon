@@ -558,7 +558,6 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		QueryPerformanceFrequency gives 0  // 1: lpFrequency
 		GetExitCodeProcess gives 0  // 2: hProcess, lpExitCode
 		WaitForSingleObject gives 0  // 2: hHandle, dwMilliseconds
-		WaitForMultipleObjects gives 0  // 4: nCount, lpHandles, bWaitAll, dwMilliseconds
 		CloseHandle gives 0  // 1: hObject
 		VirtualFree gives 0  // 3: lpAddress, dwSize, dwFreeType
 		SetHandleInformation gives 0  // 3: hObject, dwMask, dwFlags
@@ -677,6 +676,10 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		GetQueuedCompletionStatusEx gives GetQueuedCompletionStatusExStackArgWords  // 6: CompletionPort, lpCompletionPortEntries, ulCount, ulNumEntriesRemoved, dwMilliseconds, fAlertable
 		PostQueuedCompletionStatus gives 0  // 4: CompletionPort, dwNumberOfBytesTransferred, dwCompletionKey, lpOverlapped
 		SwitchToThread gives 0  // 0
+
+		// The child-exit source. The register takes six, so two on the stack; the unregister two.
+		RegisterWaitForSingleObject gives RegisterWaitStackArgWords  // 6: phNewWaitObject, hObject, Callback, Context, dwMilliseconds, dwFlags
+		UnregisterWaitEx gives 0  // 2: WaitHandle, CompletionEvent
 	end 'k'
 end 'gtShimStackArgWordsOf'
 
@@ -696,10 +699,10 @@ end 'gtShimStackArgWordsOf'
 //
 // ⇒ **the rule this table encodes is *"`blocking` means it can wait an unbounded time on something OUTSIDE
 // the scheduler"*, and its contrapositive is a REQUIREMENT ON THE RUNTIME: a `blocking` import may never be
-// called with `__sched_lock` held.** Every scheduler-internal call under that lock — the timer walk's
-// `WaitForMultipleObjects`, the process walk's `GetExitCodeProcess`, the register's `CloseHandle`, the
-// completion loop's own imports — is `schedulerBound` below, which is what makes the requirement checkable by
-// reading one table rather than by tracing every lock bracket.
+// called with `__sched_lock` held.** Every scheduler-internal call under that lock — the child poll's
+// `WaitForSingleObject`, the reap's `GetExitCodeProcess`, the register's `CloseHandle`, the completion loop's
+// own imports — is `schedulerBound` below, which is what makes the requirement checkable by reading one table
+// rather than by tracing every lock bracket.
 //
 // ⚠ **THE `match` IS TOTAL OVER `IatSlot` AND HAS NO `default` ARM, WHICH IS `gtShimStackArgWordsOf`'s OWN
 // STATED RULE ONE FUNCTION UP AND FOR THE SAME MEASURED REASON.** That table's silent `return 0` once handed
@@ -777,7 +780,6 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 		// `__sched_syscall_regain`'s wait go through them holding no processor, so there is none for `__sysmon`
 		// to take.
 		WaitForSingleObject gives SyscallClass.schedulerBound
-		WaitForMultipleObjects gives SyscallClass.schedulerBound
 
 		// ⚠ **THIS ARM IS INERT AND SAYS SO RATHER THAN BEING LEFT TO LOOK LIVE**, exactly as the same slot's
 		// stack-arg arm does one function up: the completion loop is hand-assembled and calls
@@ -878,6 +880,12 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 
 		// A yield gives the rest of this quantum away and comes straight back; it waits on no other party.
 		SwitchToThread gives SyscallClass.schedulerBound
+
+		// ⚠ **THE UNREGISTER BLOCKS UNTIL A RUNNING CALLBACK FINISHES, AND IT IS STILL NOT `blocking`.** The
+		// callback it waits for is one `PostQueuedCompletionStatus`, so the bound is this process's own thread
+		// pool rather than a far end — and the register itself only arms a wait.
+		RegisterWaitForSingleObject gives SyscallClass.schedulerBound
+		UnregisterWaitEx gives SyscallClass.schedulerBound
 	end 'k'
 end 'gtShimSyscallClassOf'
 

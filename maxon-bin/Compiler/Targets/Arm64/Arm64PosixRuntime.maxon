@@ -154,6 +154,11 @@ end 'arm64PosixToTimespec'
 // ⚠ **IT CLOBBERS x1, x2 AND x3**, which is what all three call sites already used — the loop is instruction
 // for instruction what two of them held inline, and it is here because the third copy is the one that would
 // have drifted.
+// \u26d4\u26d4 **IT CLOBBERS x1, x2 AND x3 \u2014 SPILL AN ARGUMENT BEFORE CALLING IT, NOT AFTER.** The cursor is x1,
+// which is also the SECOND argument register, so a chunk that zeroes its changelist and only then reads its
+// `fd` out of x1 writes the zeroing cursor \u2014 a stack address \u2014 where the descriptor should be. MEASURED: that
+// is what made arm64-macos refuse every `kevent` registration, and the chunk answered a bare `-1` so the
+// reason never surfaced. The two Darwin arm chunks now store x1 to a slot first and reload it here.
 export function arm64EmitZeroSlots(asm Arm64RuntimeAsm, firstSlot StackSize, slotCount StackSize)
 	let step = asm.newLabel()
 	let zeroed = asm.newLabel()
@@ -196,14 +201,22 @@ end 'arm64EmitWin32BoolFromZeroStatus'
 //
 // ⚠ **THE MAPPING IS NOT THE IDENTITY AND CANNOT BE**, even though `ENOENT` and `ERROR_FILE_NOT_FOUND` are
 // both 2. ⚠ **A CLEARED errno ANSWERS `ERROR_NO_MORE_FILES`** — see `PosixErrnoCleared`.
-export function arm64EmitErrnoToWin32(asm Arm64RuntimeAsm)
+//
+// ⭐⭐ **`EWOULDBLOCK` IS THE ONE ARM WITH A LANE IN IT, AND IT IS THE ONE THE READER FORKS ON.** Linux
+// numbers it 11 and Darwin 35, so the caller supplies its own; every other row is the same on both. It answers
+// `ERROR_IO_PENDING` because that is what it MEANS — a non-blocking read that could not be served yet is an
+// operation still in flight, which is exactly the arm `__gt_subp_yield_read` parks on.
+export function arm64EmitErrnoToWin32(asm Arm64RuntimeAsm, wouldBlock ParsedInt)
 	let notFound = asm.newLabel()
 	let pathNotFound = asm.newLabel()
 	let denied = asm.newLabel()
 	let noMoreFiles = asm.newLabel()
+	let stillInFlight = asm.newLabel()
 	let answered = asm.newLabel()
 
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: noMoreFiles)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: wouldBlock as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: stillInFlight)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrnoNoSuchFileOrDirectory as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: notFound)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrnoNotADirectory as Imm32)
@@ -225,6 +238,10 @@ export function arm64EmitErrnoToWin32(asm Arm64RuntimeAsm)
 
 	asm.placeLabel(denied)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: ErrorAccessDenied as MachineWord)
+	arm64EmitBranchTo(asm, label: answered)
+
+	asm.placeLabel(stillInFlight)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: ErrorIoPending as MachineWord)
 	arm64EmitBranchTo(asm, label: answered)
 
 	asm.placeLabel(noMoreFiles)
@@ -453,10 +470,10 @@ end 'arm64PosixFillFindDataTime'
 // ⭐⭐⭐ **THE SUBPROCESS FAMILY IS THE ONE HOST SURFACE WHOSE TWO LANES SHARE THE ALGORITHM AND NOT THE
 // CALLS.** Every other family in this file splits the other way round: `FindFirstFileA`'s glob is one shape
 // over two entirely different directory readers. Here the reverse holds — `waitpid` and `wait4` decode the
-// SAME status word, `poll` and `ppoll` fill the SAME `struct pollfd`, and the three loops on top (the
-// bounded child await, the netpoll's multi-wait, the exit-code read) contain no OS call of their own at all:
-// they are `bl`s to the two chunks below them plus a millisecond sleep. So the bodies live here and the two
-// lanes contribute only their CALL, through `PosixHostCall`.
+// SAME status word, `poll` and `ppoll` fill the SAME `struct pollfd`, and the loops on top (the bounded child
+// await, the exit-code read) contain no OS call of their own at all: they are `bl`s to the two chunks below
+// them plus a millisecond sleep. So the bodies live here and the two lanes contribute only their CALL, through
+// `PosixHostCall`.
 //
 // ⚠ **THE ONE MEMBER THAT IS NOT SHARED IS THE SPAWN, AND IT IS NOT SHARED IN THE STRONGEST WAY.** Darwin
 // has `posix_spawnp` — one call, a file-actions builder and `POSIX_SPAWN_CLOEXEC_DEFAULT`. AArch64-Linux has
@@ -852,18 +869,18 @@ end 'buildArm64PosixProcReapChunk'
 // was merely still exiting, and `__gt_subp_wait_exit` read that as a fired deadline, KILLED the child and
 // threw `SubprocessError.timeout`.
 //
-//   • **0 — a POLL.** `__gt_proc_check` and `__gt_subp_wait_collect`'s exit test drive their own loop and want
-//     the state, not a wait.
+//   • **0 — a POLL.** `__gt_subp_wait_collect`'s exit test drives its own loop and wants the state, not a
+//     wait.
 //   • **INFINITE — a real block**, inside the wait syscall itself. `__gt_subp_wait` and
 //     `__gt_subp_wait_exit(h, 0)` mean "until it exits", and there is nothing to poll for: the kernel already
 //     has the notification.
 //   • **anything else — a bounded poll.** A deadline neither lane can hand to a POSIX wait, so it is a scan
-//     and a millisecond sleep, exactly as the netpoll's multi-wait below does it.
+//     and a millisecond sleep.
 //
-// ⚠ **THE INFINITE ARM BLOCKS THE OS THREAD**, which is the same property the blocking pipe read has and for
-// the same missing mechanism: without a `SIGCHLD` handler or a netpoll there is nothing for a green thread to
-// park on. Its callers have already drained the child's output, so the block is bounded by the child's own
-// exit rather than by anything this scheduler owes it.
+// ⚠ **THE INFINITE ARM BLOCKS THE OS THREAD, AND ITS CALLERS ARE WHY IT MAY.** `__gt_subp_wait` and
+// `__gt_subp_wait_exit` are the streaming API's explicit `wait()`, reached with the child's output already
+// drained, so the block is bounded by the child's own exit. It is the one child wait on these lanes that does
+// NOT go through the poller's child band, which every other one does.
 //
 // ⚠ **IT CONTAINS NO OS CALL AT ALL**, which is why one body serves both lanes: two `bl`s and a compare.
 export function buildArm64PosixProcAwaitChunk() returns FunctionCodeChunk
@@ -972,94 +989,6 @@ export function buildArm64PosixProcTerminateChunk(kill PosixHostCall) returns Fu
 
 	return asm.finishFunction(HostProcTerminateName)
 end 'buildArm64PosixProcTerminateChunk'
-
-// ==========================================================================
-// mrt_host_wait_any(x0 = handlesBase, x1 = count, x2 = timeoutMs)
-// ==========================================================================
-
-// ⭐ `WaitForMultipleObjects(handles, count, FALSE, timeoutMs)` — the NETPOLL's block on the parked children.
-// Its answer is DISCARDED by the one caller (`GtRuntime.emitProcWait` re-scans through `__gt_proc_check`
-// straight afterwards), so this reports nothing and only has to RETURN at the right moment: as soon as any
-// child has exited, or when the timeout runs out.
-//
-// ⚠ **IT POLLS, AND POLLING IS THE RIGHT ANSWER HERE RATHER THAN A COMPROMISE.** The alternative is a
-// `SIGCHLD` handler, and this backend installs no signal handlers at all (`Arm64Runtime`'s header). Blocking
-// the M is what the netpoll is FOR — it runs only when nothing is runnable — so a millisecond scan costs an
-// idle thread a syscall per millisecond and nothing else.
-//
-// ⚠ **A ZERO COUNT WITH AN INFINITE TIMEOUT WOULD NEVER RETURN**, and cannot arise: `emitProcWait` is reached
-// only under `pc > 0`.
-export function buildArm64PosixWaitAnyChunk() returns FunctionCodeChunk
-	let SlotBase = 0 as StackSize
-	let SlotCount = 1 as StackSize
-	let SlotTimeout = 2 as StackSize
-	let SlotDeadline = 3 as StackSize
-	let SlotIndex = 4 as StackSize
-	var asm = Arm64RuntimeAsm.beginFunction(5)
-
-	let scanRound = asm.newLabel()
-	let scanStep = asm.newLabel()
-	let scanned = asm.newLabel()
-	let sleepStep = asm.newLabel()
-	let timedOut = asm.newLabel()
-	let done = asm.newLabel()
-
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotBase)
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotCount)
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotTimeout)
-
-	// The deadline is computed on both roads and READ only on the bounded one. `WaitInfinite` is a 32-bit
-	// sentinel, so the sum cannot wrap a 64-bit tick count.
-	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostTickMsName)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotTimeout)
-	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x0, rhs: Arm64Register.x2)
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotDeadline)
-
-	asm.placeLabel(scanRound)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: 0)
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x3, slot: SlotIndex)
-
-	asm.placeLabel(scanStep)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: SlotIndex)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotCount)
-	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x4, rhs: Arm64Register.x1)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: scanned)
-	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x5), rn: arm64RuntimeReg(Arm64Register.x4), sh: PosixHandleArrayStrideShift)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotBase)
-	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x0, rhs: Arm64Register.x5)
-	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: 0)
-	arm64PosixUntagHandle(asm, reg: Arm64Register.x0)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixReapWithoutBlocking)
-	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostProcReapName)
-	arm64EmitCbnzTo(asm, reg: Arm64Register.x0, label: done)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: SlotIndex)
-	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x4, base: Arm64Register.x4, imm: 1)
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x4, slot: SlotIndex)
-	arm64EmitBranchTo(asm, label: scanStep)
-
-	asm.placeLabel(scanned)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotTimeout)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: WaitInfinite)
-	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x2, rhs: Arm64Register.x3)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: sleepStep)
-	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostTickMsName)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x3, slot: SlotDeadline)
-	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x0, rhs: Arm64Register.x3)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: timedOut)
-
-	asm.placeLabel(sleepStep)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: PosixChildPollMs)
-	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostSleepMsName)
-	arm64EmitBranchTo(asm, label: scanRound)
-
-	// ⚠ **THE ANSWER IS RE-ZEROED BECAUSE THE CLOCK READ DESTROYED IT.** Reaching the deadline test means
-	// every reap answered 0, and that 0 was this chunk's answer until a `bl` began landing in x0.
-	asm.placeLabel(timedOut)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: PosixNoChildSignalled)
-
-	asm.placeLabel(done)
-	return asm.finishFunction(HostWaitAnyName)
-end 'buildArm64PosixWaitAnyChunk'
 
 // ==========================================================================
 // mrt_host_shm_map(x0 = fd, x1 = bytes) -> x0 = base | 0

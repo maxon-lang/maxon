@@ -6061,6 +6061,17 @@ let BuiltinsSchedGlobalPushCountName = b"__Builtins.schedGlobalPushCount"
 // It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
 let SchedGlobalPushCountArity = 0 as ParamCount
 
+// ⭐⭐ **`__Builtins.schedTimerScanStepCount()` — how many timer-heap entries the cancel scan has INSPECTED.**
+// It reports a COST rather than an event, which is what no other member of this family can do: disarming a
+// deadline is a linear walk of the heap, so a cancel that armed nothing and walks anyway is quadratic in a
+// program with many sleepers and much I/O, and every event-shaped counter reads identically either way. The
+// surface is invented here on the argumentless-integer shape the family already has;
+// `SchedRuntime.SchedTimerScanStepsLabel` owns what it counts.
+let BuiltinsSchedTimerScanStepCountName = b"__Builtins.schedTimerScanStepCount"
+
+// It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
+let SchedTimerScanStepCountArity = 0 as ParamCount
+
 // ⭐⭐ **`__Builtins.schedTimerStartCount()` — how many machines the system monitor has started for an overdue
 // timer.** With `schedPreemptCount()` and `schedRetakeCount()` it is everything the monitor does that can put a
 // machine to work, which is what an `async`-only program's one-worker reading is conditional on. The surface is
@@ -83604,6 +83615,12 @@ export type Parser
 			if callee.equals(BuiltinsSchedGlobalPushCountName) 'schedGlobalPushCount'
 				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSchedGlobalPushCountName, runtimeName: SchedGlobalPushCountName, arity: SchedGlobalPushCountArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'schedGlobalPushCount'
+
+			// The timer-heap scan cost: the same shape, and it sets `usesGt` for the same reason. See
+			// `SchedRuntime.SchedTimerScanStepsLabel`.
+			if callee.equals(BuiltinsSchedTimerScanStepCountName) 'schedTimerScanStepCount'
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSchedTimerScanStepCountName, runtimeName: SchedTimerScanStepCountName, arity: SchedTimerScanStepCountArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
+			end 'schedTimerScanStepCount'
 
 			// The monitor's timer-start count: the same shape, and it sets `usesGt` for the same reason. See
 			// `SchedRuntime.SchedTimerStartsLabel`.

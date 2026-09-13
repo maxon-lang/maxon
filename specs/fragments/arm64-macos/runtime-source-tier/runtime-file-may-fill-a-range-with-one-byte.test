@@ -1,0 +1,23 @@
+// Test: runtime-file-may-fill-a-range-with-one-byte
+// --- runtime-file: Probe.maxon
+let ProbeFillBytes = 16
+let ProbeFillByte = 0
+
+module function probeFill()
+	let addr = __Raw.scratch(ProbeFillBytes)
+	__Raw.memFill(addr, byteCount: ProbeFillBytes as MachineWord, value: ProbeFillByte)
+end 'probeFill'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

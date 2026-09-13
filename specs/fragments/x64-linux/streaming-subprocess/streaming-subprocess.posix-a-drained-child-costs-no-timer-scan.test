@@ -1,0 +1,425 @@
+// Test: streaming-subprocess.posix-a-drained-child-costs-no-timer-scan
+function sleeper() returns Integer
+	sleep(2000)
+	return 1
+end 'sleeper'
+
+function fast() returns Integer
+	Runtime.yield()
+	return 42
+end 'fast'
+
+function dropAParkedSleeper() returns Integer
+	let victim = async sleeper()
+	let q = async fast()
+	let r = await q
+	return r + __Builtins.gtIsComplete(victim.inner)
+end 'dropAParkedSleeper'
+
+function main() returns ExitCode
+	let s1 = async sleeper()
+	let s2 = async sleeper()
+	let s3 = async sleeper()
+	let s4 = async sleeper()
+	let s5 = async sleeper()
+	let s6 = async sleeper()
+	let s7 = async sleeper()
+	let s8 = async sleeper()
+	Runtime.yield()
+
+	let h = subpSpawn("for i in a b c d e f g h i j k l m n o p q r s t; do echo line-$i; done")
+	let before = __Builtins.schedTimerScanStepCount()
+	var total = 0
+	var line = subpReadLine(h)
+	while line.byteLength() > 0 'drain'
+		total = total + line.byteLength()
+		line = subpReadLine(h)
+	end 'drain'
+	let scanned = __Builtins.schedTimerScanStepCount() - before
+	_ = subpWait(h)
+	subpRelease(h)
+
+	let beforeCancel = __Builtins.schedTimerScanStepCount()
+	_ = dropAParkedSleeper()
+	let walked = __Builtins.schedTimerScanStepCount() - beforeCancel
+
+	_ = await s1
+	_ = await s2
+	_ = await s3
+	_ = await s4
+	_ = await s5
+	_ = await s6
+	_ = await s7
+	_ = await s8
+
+	print("scanned={scanned} cancelWalked={walked > 0}\n")
+	return total as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+ExitCode: 140
+---
+data {
+  __mm_alloc_count@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_timer_count@24 = i64 0
+  __gt_timer_heap_base@32 = i64 0
+  __gt_timer_capacity@40 = i64 0
+  __gt_timer_seq@48 = i64 0
+  __gt_timer_when@56 = i64 9223372036854775807
+  __gt_trace_counter@64 = i64 0
+  __gt_live_count@72 = i64 0
+  __gt_seed_bytes@80 = i64 2048
+  __gt_stack_bytes_sum@88 = i64 0
+  __gt_stack_bytes_count@96 = i64 0
+  __gt_seed_sum_seen@104 = i64 0
+  __gt_seed_count_seen@112 = i64 0
+  __sched_active_workers@120 = i64 1
+  __sched_max_active_workers@128 = i64 1
+  __sched_tls_index@136 = i64 0
+  __sched_tls_teb_offset@144 = i64 0
+  __sched_procs@152 = i64 0
+  __sched_allm@160 = i64 0
+  __sched_midle@168 = i64 0
+  __sched_pidle@176 = i64 0
+  __gt_gfree_head@184 = i64 0
+  __sched_arena_cursor@192 = i64 0
+  __sched_arena_limit@200 = i64 0
+  __gt_records_carved@208 = i64 0
+  __sched_npidle@216 = i64 0
+  __sched_runq_size@224 = i64 0
+  __sched_global_pushes@232 = i64 0
+  __sched_timer_scan_steps@240 = i64 0
+  __sched_mcount@248 = i64 0
+  __sched_nmidle@256 = i64 0
+  __sched_main_m@264 = i64 0
+  __sched_phase@272 = i64 0
+  __sched_lastpoll@280 = i64 0
+  __sched_poll_until@288 = i64 0
+  __sched_regain_head@296 = i64 0
+  __np_poller@304 = i64 0
+  __np_break@312 = i64 0
+  __np_wake_sig@320 = i64 0
+  __np_pd_table@328 = i64 0
+  __np_pd_cap@336 = i64 0
+  __np_waiters@344 = i64 0
+  __np_child_key_free@352 = i64 0
+  __np_child_key_high@360 = i64 0
+  __sched_num_procs@368 = i64 0
+  __sched_shutdown_flag@376 = i64 0
+  __sched_lock@384 = i64 0
+  __sched_lock_depth_sink@392 = i64 0
+  __sched_nmspinning@400 = i64 0
+  __sched_needspinning@408 = i64 0
+  __sched_sysmon_event@416 = i64 0
+  __sched_sysmon_wait@424 = i64 0
+  __sched_timer_starts@432 = i64 0
+  __mrt_envp@440 = i64 0
+  __mrt_tls_next_key@448 = i64 0
+  __mrt_errno@456 = i64 0
+  __mrt_tls_ready@464 = i64 0
+  __io_iocp@472 = i64 0
+  __io_init_done@480 = i64 0
+  __io_pending@488 = i64 0
+  __io_pipe_seq@496 = i64 0
+  __subp_table@504 = i64 0
+  __subp_last_error@512 = i64 0
+  __slab_arena_list@520 = i64 0
+  __slab_arena_map_l1@528 = i64 0
+  __slab_state@536 = i64 0
+}
+
+func @sleeper {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 2000
+  __rc_ok:
+    x64.callDirect __gt_sleep
+  __il_cont:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @fast {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect Runtime.yield
+    x64.movRegImm32 r8, 42
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @dropAParkedSleeper {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegFunc rcx, [rip + sleeper]
+    x64.callDirect __gt_spawn
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __gt_ready
+    x64.leaRegFunc rcx, [rip + fast]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __gt_ready
+    x64.movRegReg rcx, r12
+    x64.callDirect __gt_await
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __gt_is_complete
+    x64.leaRegRegReg r12, r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __gt_promise_drop
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 184
+    x64.leaRegFunc rcx, [rip + sleeper]
+    x64.callDirect __gt_spawn
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __gt_ready
+    x64.leaRegFunc rcx, [rip + sleeper]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __gt_ready
+    x64.leaRegFunc rcx, [rip + sleeper]
+    x64.callDirect __gt_spawn
+    x64.storeSlotReg slot16, r8
+    x64.movRegReg rcx, r8
+    x64.callDirect __gt_ready
+    x64.leaRegFunc rcx, [rip + sleeper]
+    x64.callDirect __gt_spawn
+    x64.storeSlotReg slot14, r8
+    x64.movRegReg rcx, r8
+    x64.callDirect __gt_ready
+    x64.leaRegFunc rcx, [rip + sleeper]
+    x64.callDirect __gt_spawn
+    x64.storeSlotReg slot12, r8
+    x64.movRegReg rcx, r8
+    x64.callDirect __gt_ready
+    x64.leaRegFunc rcx, [rip + sleeper]
+    x64.callDirect __gt_spawn
+    x64.storeSlotReg slot10, r8
+    x64.movRegReg rcx, r8
+    x64.callDirect __gt_ready
+    x64.leaRegFunc rcx, [rip + sleeper]
+    x64.callDirect __gt_spawn
+    x64.storeSlotReg slot8, r8
+    x64.movRegReg rcx, r8
+    x64.callDirect __gt_ready
+    x64.leaRegFunc rcx, [rip + sleeper]
+    x64.callDirect __gt_spawn
+    x64.storeSlotReg slot6, r8
+    x64.movRegReg rcx, r8
+    x64.callDirect __gt_ready
+    x64.callDirect Runtime.yield
+    x64.leaRegRdata rcx, [rip + __str_rec_4]  ; "for i in a b c d e f g h i j k l m n o p q r s t; do echo line-$i; done"
+    x64.callDirect __gt_subp_spawn
+    x64.movRegReg r13, r8
+    x64.callDirect __sched_timer_scan_step_count
+    x64.movRegReg r14, r8
+    x64.movRegImm32 r15, 0
+    x64.movRegImm32 rdx, 1048576
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_subp_read_line
+    x64.movRegReg rax, r15
+    x64.movRegReg r15, r8
+    x64.jmp whilehdr
+  __il_body#12:
+    x64.loadRegBaseDisp.word64 rcx, [r15 + 8]
+  __il_cont#11:
+    x64.leaRegRegReg rax, rax, rcx
+    x64.storeSlotReg slot3, rax
+    x64.movRegImm32 rdx, 1048576
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_subp_read_line
+    x64.storeSlotReg slot5, r8
+    x64.movRegReg rcx, r15
+    x64.callDirect __str_decref
+    x64.loadRegSlot rax, slot3
+    x64.loadRegSlot rcx, slot5
+    x64.movRegReg r15, rcx
+  whilehdr:
+    x64.storeSlotReg slot2, rax
+    x64.storeSlotReg slot1, r15
+  __il_body#10:
+    x64.loadRegBaseDisp.word64 rcx, [r15 + 8]
+  __il_cont#9:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc above, __il_body#12
+  whileexit:
+    x64.callDirect __sched_timer_scan_step_count
+    x64.movRegReg r15, r8
+    x64.subRegReg r15, r8, r14
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_subp_wait
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_subp_release
+    x64.callDirect __sched_timer_scan_step_count
+    x64.movRegReg r13, r8
+    x64.callDirect dropAParkedSleeper
+    x64.callDirect __sched_timer_scan_step_count
+    x64.movRegReg r14, r8
+    x64.subRegReg r14, r8, r13
+    x64.movRegReg rcx, rbx
+    x64.callDirect __gt_await
+    x64.movRegReg rcx, r12
+    x64.callDirect __gt_await
+    x64.loadRegSlot rcx, slot16
+    x64.callDirect __gt_await
+    x64.loadRegSlot rcx, slot14
+    x64.callDirect __gt_await
+    x64.loadRegSlot rcx, slot12
+    x64.callDirect __gt_await
+    x64.loadRegSlot rcx, slot10
+    x64.callDirect __gt_await
+    x64.loadRegSlot rcx, slot8
+    x64.callDirect __gt_await
+    x64.loadRegSlot rcx, slot6
+    x64.callDirect __gt_await
+    x64.leaRegRdata rax, [rip + __str_rec_5]  ; "scanned="
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot17, rcx
+    x64.loadRegBaseDisp.word64 rbx, [rax + 8]
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot15, r8
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r8
+    x64.callDirect __int_to_string
+    x64.movRegReg r12, r8
+    x64.leaRegRdata rax, [rip + __str_rec_6]  ; " cancelWalked="
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot13, rcx
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.cmpRegImm32 r14, 0
+    x64.setccReg greater, r14
+    x64.movRegImm32 rcx, 5
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r15
+    x64.callDirect __bool_to_string
+    x64.storeSlotReg slot11, r8
+    x64.leaRegRdata rax, [rip + __str_rec_7]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot9, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot7, rax
+    x64.leaRegRegReg rcx, rbx, r12
+    x64.leaRegRegReg rcx, rcx, r13
+    x64.leaRegRegReg rcx, rcx, r8
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot0, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot4, r8
+    x64.leaRegRegImm32 r14, r8, 56
+    x64.loadRegSlot rdx, slot17
+    x64.movRegReg rcx, r14
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r14, rbx
+    x64.loadRegSlot rdx, slot15
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r12
+    x64.loadRegSlot rdx, slot13
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r13
+    x64.loadRegSlot rax, slot11
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r15
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot11
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.loadRegSlot rax, slot7
+    x64.loadRegSlot rdx, slot9
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot7
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rax, slot4
+    x64.storeBaseDispReg.word64 [rax + 0], r14
+    x64.loadRegSlot rcx, slot0
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+    x64.loadRegSlot rcx, slot15
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_decref
+  __il_body#8:
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect __write_stdout
+  __il_cont#7:
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect __str_decref
+    x64.loadRegSlot rax, slot2
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.loadRegSlot rax, slot2
+    x64.cmpRegImm32 rax, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __str_decref
+    x64.loadRegSlot r8, slot2
+    x64.epilogue 184
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at streaming-subprocess.posix-a-drained-child-costs-no-timer-scan.test:56: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 184
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

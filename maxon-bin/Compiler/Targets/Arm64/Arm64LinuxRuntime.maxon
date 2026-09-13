@@ -189,6 +189,14 @@ let Arm64LinuxSyscallEpollCreate1 = 20
 let Arm64LinuxSyscallEventfd2 = 19
 let Arm64LinuxSyscallEpollCtl = 21
 let Arm64LinuxSyscallEpollPwait = 22
+
+// ⭐ **A CHILD AS A DESCRIPTOR** — `pidfd_open(pid, 0)`, whose answer polls readable once that child has
+// exited. The number is the SAME on both Linux CPUs: it was added to every architecture's table at once.
+let Arm64LinuxSyscallPidfdOpen = 434
+
+// The per-descriptor flag change a polled pipe end needs — see `NetpollVerb.armPipeSource` for why the flag
+// cannot come from `pipe2`.
+let Arm64LinuxSyscallFcntl = 25
 let Arm64LinuxSyscallMprotect = 226
 export let Arm64LinuxSyscallSetPriority = 140
 export let Arm64LinuxSyscallGetPriority = 141
@@ -714,7 +722,7 @@ function buildArm64LinuxLastErrorChunk() returns FunctionCodeChunk
 
 	arm64LinuxEmitErrnoAddr(asm, dest: Arm64Register.x16)
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x16, byteOffset: 0)
-	arm64EmitErrnoToWin32(asm)
+	arm64EmitErrnoToWin32(asm, wouldBlock: LinuxErrnoWouldBlock)
 
 	return asm.finishFunction(HostLastErrorName)
 end 'buildArm64LinuxLastErrorChunk'
@@ -1869,7 +1877,7 @@ end 'buildArm64LinuxEventSetChunk'
 // ==========================================================================
 
 // `WaitForSingleObject`. Three timeouts reach it and each has its own arm, exactly as on the Darwin lane: a
-// ZERO is a POLL (`__gt_proc_check` wants the state, not a wait), `INFINITE` re-arms until the event fires,
+// ZERO is a POLL (a caller that wants the state, not a wait), `INFINITE` re-arms until the event fires,
 // and a finite one waits ONCE and re-tests.
 //
 // ⭐⭐ **THE TAKE IS THE SAME `cas` THE PUBLISH IS, RUN THE OTHER WAY, AND IT IS WHAT MAKES THE EVENT
@@ -2857,12 +2865,11 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		chunks.push(buildArm64LinuxTlsSetChunk(globalData))
 
 		// ⭐⭐ **L5's CHILD-PROCESS CORE RIDES `usesGt`, NOT A SUBPROCESS BIT, BECAUSE `installGtRuntime` BUILDS
-		// `__gt_process_run` UNCONDITIONALLY.** Every green-thread program statically contains a spawn, an
-		// exit-code read and the netpoll's multi-wait — the child store is merely EMPTY in one that never runs
-		// a child — so a narrower gate here is a `bl` to a symbol nothing laid out, which is a link failure
-		// rather than a diagnostic. The Darwin lane measured that twice while MAC8 was written.
+		// `__gt_process_run` UNCONDITIONALLY.** Every green-thread program statically contains a spawn, a
+		// bounded await and an exit-code read — a program that never runs a child simply never reaches them —
+		// so a narrower gate here is a `bl` to a symbol nothing laid out, which is a link failure rather than a
+		// diagnostic.
 		chunks.push(buildArm64PosixProcAwaitChunk())
-		chunks.push(buildArm64PosixWaitAnyChunk())
 		chunks.push(buildArm64LinuxSpawnChunk())
 		chunks.push(buildArm64PosixProcExitCodeChunk())
 
@@ -2870,7 +2877,10 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		chunks.push(buildArm64LinuxNetpollOpenChunk())
 		chunks.push(buildArm64LinuxNetpollOpenBreakChunk())
 		chunks.push(buildArm64LinuxNetpollWaitChunk())
-		chunks.push(buildArm64LinuxNetpollArmChunk())
+		chunks.push(buildArm64LinuxNetpollArmChunk(HostNetpollArmSourceName, events: LinuxEpollSocketEvents as MachineWord))
+		chunks.push(buildArm64LinuxNetpollArmChunk(HostNetpollArmChildName, events: LinuxEpollReadEvents as MachineWord))
+		chunks.push(buildArm64LinuxNetpollChildOpenChunk())
+		chunks.push(buildArm64LinuxNetpollChildCloseChunk())
 		chunks.push(buildArm64LinuxNetpollCounterChunk(HostNetpollRaiseBreakName, syscallNumber: Arm64LinuxSyscallWrite, descriptor: Arm64Register.x1))
 		chunks.push(buildArm64LinuxNetpollCounterChunk(HostNetpollDrainBreakName, syscallNumber: Arm64LinuxSyscallRead, descriptor: Arm64Register.x0))
 		chunks.push(buildArm64LinuxSleepChunk(HostNetpollSleepName, unit: PosixTimeUnit.microseconds))
@@ -2882,6 +2892,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 	// `osProcessTerminate` have producers only inside that band.
 	if usage.usesIocp 'childPipes'
 		chunks.push(buildArm64PosixPipeChunk(PosixHostCall.syscall(Arm64LinuxSyscallPipe2), flags: LinuxOpenCloseOnExec))
+		chunks.push(buildArm64LinuxNetpollArmPipeChunk())
 		chunks.push(buildArm64PosixPipePeekChunk(PosixPollCall.ppollSyscall(Arm64LinuxSyscallPpoll, sigsetBytes: LinuxSigsetBytes)))
 		chunks.push(buildArm64PosixProcTerminateChunk(PosixHostCall.syscall(Arm64LinuxSyscallKill)))
 	end 'childPipes'
@@ -3024,12 +3035,12 @@ end 'buildArm64LinuxNetpollOpenBreakChunk'
 // directions and `EPOLLET`, the descriptor itself as the `epoll_data` the decode reads back. AArch64's
 // `struct epoll_event` is naturally aligned: the 32-bit `events` in the first slot, the 64-bit `data` in the
 // second.
-function buildArm64LinuxNetpollArmChunk() returns FunctionCodeChunk
+function buildArm64LinuxNetpollArmChunk(name ByteArray, events MachineWord) returns FunctionCodeChunk
 	let SlotEvents = 0 as StackSize
 	let SlotData = 1 as StackSize
 	var asm = Arm64RuntimeAsm.beginFunction(2)
 
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: LinuxEpollSocketEvents as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: events)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotEvents)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotData)
 
@@ -3037,8 +3048,61 @@ function buildArm64LinuxNetpollArmChunk() returns FunctionCodeChunk
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: LinuxEpollCtlAdd)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x3, slot: SlotEvents)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallEpollCtl)
-	return asm.finishFunction(HostNetpollArmSourceName)
+	return asm.finishFunction(name)
 end 'buildArm64LinuxNetpollArmChunk'
+
+// ⭐⭐ **`mrt_host_netpoll_child_open(x0 = childHandle) -> x0 = a pidfd, or -errno` — A CHILD BECOMES A
+// DESCRIPTOR.** `pidfd_open` answers a file descriptor that polls READABLE once the child has exited, so the
+// child joins the poller through the same registration and the same decode a socket does.
+//
+// ⚠ **THE CHILD MUST STILL BE UNREAPED, AND EVERY CALLER'S IS.** A pidfd names a task, and the only party
+// that takes this one's status is the green thread that is about to park on this descriptor.
+function buildArm64LinuxNetpollChildOpenChunk() returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(0)
+
+	arm64PosixUntagHandle(asm, reg: Arm64Register.x0)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: PosixWaitOffChildPid)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: 0)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallPidfdOpen)
+	return asm.finishFunction(HostNetpollChildOpenName)
+end 'buildArm64LinuxNetpollChildOpenChunk'
+
+// ⭐⭐ **`mrt_host_netpoll_arm_pipe(x0 = epfd, x1 = fd) -> x0 = 0, or -errno`.** One `fcntl` and then exactly
+// the child source's registration, because a pipe end and a `pidfd` are the same thing to the poller.
+// `F_SETFL` replaces the whole status word, which is right for a descriptor this call has just created: its
+// only other status bit is the access mode, which `F_SETFL` ignores.
+function buildArm64LinuxNetpollArmPipeChunk() returns FunctionCodeChunk
+	let SlotPoller = 0 as StackSize
+	let SlotFd = 1 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(2)
+
+	let flagged = asm.newLabel()
+	let answered = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotPoller)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotFd)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x0, src: Arm64Register.x1)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: LinuxFcntlSetFlags as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: LinuxONonBlock as MachineWord)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallFcntl)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: answered)
+
+	asm.placeLabel(flagged)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostNetpollArmPipeName)
+end 'buildArm64LinuxNetpollArmPipeChunk'
+
+// `mrt_host_netpoll_child_close(x0 = source) -> x0 = 0, or -errno`. Closing the descriptor is also what takes
+// it out of the epoll set, exactly as closing a socket is.
+function buildArm64LinuxNetpollChildCloseChunk() returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(0)
+
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallClose)
+	return asm.finishFunction(HostNetpollChildCloseName)
+end 'buildArm64LinuxNetpollChildCloseChunk'
 
 // `mrt_host_netpoll_wait(x0 = epfd, x1 = entries, x2 = capacity, x3 = timeoutMs) -> x0 = count, 0 when
 // interrupted, or -errno`. `WaitInfinite` needs no translation, for the x86-64 lane's reason: the timeout is an
