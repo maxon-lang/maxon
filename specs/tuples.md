@@ -1684,3 +1684,443 @@ end 'main'
 ```stdout
 aalpha
 ```
+
+### A tuple literal's RECORD elements are owned whichever door minted the tuple type
+
+A tuple literal is a struct literal of a synthesized type, and every element that owns heap is moved in
+through `__mm_own` exactly as a `Self{…}` field is — whichever door minted the tuple type. Two doors do:
+the literal itself, and the declaration sweep, which mints the type from any signature in the program
+spelling it (`returns (A, B)`) before any body is parsed, with elements still bare `named`s that the real
+parse re-tags at every read. The cases below cover both, and every one returns 42 with the exit code as the
+pin, because the wrong answer here is a range panic (exit 1) or a leak (exit 101), never a quiet number.
+
+⛔⛔ **THE DEFECT THEY PIN: a sweep-minted tuple's record element was classified SCALAR, stored raw, and
+released at scope exit.** `parseTupleLiteral` handed `emitStructLiteral` the per-FILE copy of the layout
+(`adoptTupleLayout`, ids in the file's interner) while `fieldTypeOf` resolves a layout's ids against the
+INDEX's interner. The two interners number the same names differently, so a `named` element denoted
+whichever name the index held under that number; when that was not a record, `classifyUnionPayload`
+answered scalar and the element skipped `__mm_own` while the binding's scope-exit drop still ran —
+`mm_decref B #2 rc=0 / mm_free B #2` before `main` retained it out of the record, and `y.m` then read
+`0x3F3F3F3F3F3F3F3F`, the `__mm_free` poison. Found while a reviewer returned `(LoweredUnit, PhaseDelta)`
+from a compiler function. MEASURED with `fc9d4a33` and `c55aa798` identically, so it predated fannkuch
+round 11, and the shape was the same whether `pair` was spliced by the called-once inliner or stayed a
+call, and whether the elements were `let`-bound locals or fresh `create` results.
+
+⚠ **WHICH element was released followed the order the interners met the record TYPES in, not the tuple
+position and not the evaluation order** — `(b, a)` still released `b`; declaring `type B` above `type A`
+released `a` instead; `(A, A)` released BOTH. Every one of those shapes is kept below because a fix that
+looked only at the second slot left two of them red.
+
+The `(A, Integer)` case, the echoed-parameter case and the bound-literal-in-`main` case are the CONTROLS:
+a scalar element has nothing to release, a parameter is moved into the tuple with no release of its own,
+and a tuple type no signature spells is minted by the literal itself from elements already tagged
+`structRef`, which no interner has to re-tag.
+
+<!-- test: a-tuple-of-two-records-survives-destructuring -->
+```maxon
+type A
+	export var n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'A'
+
+type B
+	export var m as Integer
+
+	export static function create(m Integer) returns Self
+		return Self{m: m}
+	end 'create'
+end 'B'
+
+function pair() returns (A, B)
+	let a = A.create(40)
+	let b = B.create(2)
+	return (a, b)
+end 'pair'
+
+function main() returns ExitCode
+	let (x, y) = pair()
+	return (x.n + y.m) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+42
+```
+
+<!-- test: a-tuple-of-a-record-and-an-integer-survives-destructuring -->
+The scalar-element control.
+```maxon
+type A
+	export var n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'A'
+
+function pair() returns (A, Integer)
+	let a = A.create(40)
+	return (a, 2)
+end 'pair'
+
+function main() returns ExitCode
+	let (x, k) = pair()
+	return (x.n + k) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+42
+```
+
+<!-- test: a-tuple-of-a-built-record-and-an-echoed-parameter-survives-destructuring -->
+The parameter control: element 1 is a record the callee RECEIVED and hands back, which is moved into the
+tuple with no release of its own.
+```maxon
+type A
+	export var n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'A'
+
+type B
+	export var m as Integer
+
+	export static function create(m Integer) returns Self
+		return Self{m: m}
+	end 'create'
+end 'B'
+
+function build(seed Integer, given B) returns (A, B)
+	let a = A.create(seed)
+	return (a, given)
+end 'build'
+
+function main() returns ExitCode
+	let b = B.create(2)
+	let (x, y) = build(40, given: b)
+	return (x.n + y.m) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+42
+```
+
+<!-- test: a-tuple-of-two-records-called-once-survives-destructuring -->
+`pair` is called ONCE, so the called-once inliner splices it into `main` and the tuple record it leaves
+behind is what the caller reads. Its twin below keeps `pair` a call.
+```maxon
+type A
+	export var n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'A'
+
+type B
+	export var m as Integer
+
+	export static function create(m Integer) returns Self
+		return Self{m: m}
+	end 'create'
+end 'B'
+
+function pair(seed Integer) returns (A, B)
+	let a = A.create(seed)
+	let b = B.create(seed + 2)
+	return (a, b)
+end 'pair'
+
+function main() returns ExitCode
+	let (x, y) = pair(20)
+	return (x.n + y.m) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+42
+```
+
+<!-- test: a-tuple-of-two-records-called-twice-survives-destructuring -->
+The same `pair`, called TWICE, so it stays a call and the caller reads the record `pair`'s own `ret`
+hands back. 10 + 12 + 9 + 11.
+```maxon
+type A
+	export var n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'A'
+
+type B
+	export var m as Integer
+
+	export static function create(m Integer) returns Self
+		return Self{m: m}
+	end 'create'
+end 'B'
+
+function pair(seed Integer) returns (A, B)
+	let a = A.create(seed)
+	let b = B.create(seed + 2)
+	return (a, b)
+end 'pair'
+
+function main() returns ExitCode
+	let (x, y) = pair(10)
+	let (p, q) = pair(9)
+	return (x.n + y.m + p.n + q.m) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+42
+```
+
+<!-- test: a-tuple-of-two-records-of-one-type-survives-destructuring -->
+Both elements are the SAME record type — the shape that released BOTH.
+```maxon
+type A
+	export var n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'A'
+
+function pair() returns (A, A)
+	let a = A.create(40)
+	let b = A.create(2)
+	return (a, b)
+end 'pair'
+
+function main() returns ExitCode
+	let (x, y) = pair()
+	return (x.n + y.n) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+42
+```
+
+<!-- test: a-tuple-of-two-fresh-records-survives-destructuring -->
+No locals at all: both elements are `create` results moved straight into the literal.
+```maxon
+type A
+	export var n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'A'
+
+type B
+	export var m as Integer
+
+	export static function create(m Integer) returns Self
+		return Self{m: m}
+	end 'create'
+end 'B'
+
+function pair() returns (A, B)
+	return (A.create(40), B.create(2))
+end 'pair'
+
+function main() returns ExitCode
+	let (x, y) = pair()
+	return (x.n + y.m) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+42
+```
+
+<!-- test: a-tuple-of-two-records-in-reverse-position-survives-destructuring -->
+The literal is `(b, a)`, so the record the defect released sits at element 0.
+```maxon
+type A
+	export var n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'A'
+
+type B
+	export var m as Integer
+
+	export static function create(m Integer) returns Self
+		return Self{m: m}
+	end 'create'
+end 'B'
+
+function pair() returns (B, A)
+	let a = A.create(40)
+	let b = B.create(2)
+	return (b, a)
+end 'pair'
+
+function main() returns ExitCode
+	let (y, x) = pair()
+	return (x.n + y.m) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+42
+```
+
+<!-- test: a-tuple-of-two-records-whose-types-are-declared-in-the-other-order-survives-destructuring -->
+The first case with `type B` declared ABOVE `type A` and nothing else changed — the shape whose released
+element moved to `a`, which located the decision in interner order rather than in the tuple.
+```maxon
+type B
+	export var m as Integer
+
+	export static function create(m Integer) returns Self
+		return Self{m: m}
+	end 'create'
+end 'B'
+
+type A
+	export var n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'A'
+
+function pair() returns (A, B)
+	let a = A.create(40)
+	let b = B.create(2)
+	return (a, b)
+end 'pair'
+
+function main() returns ExitCode
+	let (x, y) = pair()
+	return (x.n + y.m) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+42
+```
+
+<!-- test: a-tuple-literal-of-two-record-locals-owns-both -->
+The bound-literal control: no signature in the program spells `(A, B)`, so the literal mints the type
+itself from elements already tagged `structRef`, and both go through `__mm_own` whichever layout copy is
+read.
+```maxon
+type A
+	export var n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'A'
+
+type B
+	export var m as Integer
+
+	export static function create(m Integer) returns Self
+		return Self{m: m}
+	end 'create'
+end 'B'
+
+function main() returns ExitCode
+	let a = A.create(40)
+	let b = B.create(2)
+	let t = (a, b)
+	return (t.0.n + t.1.m) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+42
+```
+
+<!-- test: a-bound-tuple-of-two-records-returned-by-name-survives-destructuring -->
+The literal is BOUND first and the binding is returned — the bound-literal control moved into a function
+whose signature spells `(A, B)`. It went red with the literal cases above, which located the defect in the
+literal's element classification rather than in `return`.
+```maxon
+type A
+	export var n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'A'
+
+type B
+	export var m as Integer
+
+	export static function create(m Integer) returns Self
+		return Self{m: m}
+	end 'create'
+end 'B'
+
+function pair() returns (A, B)
+	let a = A.create(40)
+	let b = B.create(2)
+	let t = (a, b)
+	return t
+end 'pair'
+
+function main() returns ExitCode
+	let (x, y) = pair()
+	return (x.n + y.m) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+42
+```
+
+<!-- test: a-bound-tuple-literal-owns-both-when-another-signature-spells-the-tuple -->
+The trigger is whole-program, not the enclosing signature: `main` spells no tuple type, but `pair`'s
+signature makes the sweep mint `(A, B)` before any body is parsed, and `main`'s own literal reads that
+layout. 40 + 2 + 0 + 0.
+```maxon
+type A
+	export var n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'A'
+
+type B
+	export var m as Integer
+
+	export static function create(m Integer) returns Self
+		return Self{m: m}
+	end 'create'
+end 'B'
+
+function pair() returns (A, B)
+	return (A.create(0), B.create(0))
+end 'pair'
+
+function main() returns ExitCode
+	let (p, q) = pair()
+	let a = A.create(40)
+	let b = B.create(2)
+	let t = (a, b)
+	return (t.0.n + t.1.m + p.n + q.m) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+42
+```

@@ -2328,7 +2328,7 @@ end 'ValueExistentialInstanceColumn'
 let noValueExistentialInstances = ValueExistentialInstanceColumn.unwritten
 
 // ⭐⭐ **"THIS WALK DEFERRED NO DIAGNOSTIC" AS A SPELLED STATE** — the parser's candidate list and both of
-// the artifact's. A shared empty `Array` cannot carry it, for `TupleLayoutTable`'s reason: an empty
+// the artifact's. A shared empty `Array` cannot carry it, for `FiledTupleNameRoster`'s reason: an empty
 // `Array` `let` is image data too, so a field seeded from one holds a private clone and a test against the
 // shared record answers false whatever the field was seeded with.
 export union DeferredNameDiagnosticRoster
@@ -2597,14 +2597,16 @@ let sharedEmptyCovMatchCols = ColumnNumberArray.create()
 // one is installed per function per column written. That is what the removed dependence costs;
 // `docs/optimization-log.md` carries the numbers.
 
-// The tuple layouts this file has adopted (P1.10) — its own copy of each, so `mergeArtifact` commits it to
+// The tuple type names this file has filed its own layout copy for, so `mergeArtifact` commits each to
 // `project.structTypes` and the destructor installer finds a layout in both places.
-union TupleLayoutTable
-	unwritten
-	entries(filed StructLayoutMap)
-end 'TupleLayoutTable'
+typealias FiledTupleNameSet = Set with ByteArray
 
-let noTupleLayouts = TupleLayoutTable.unwritten
+union FiledTupleNameRoster
+	unwritten
+	entries(filed FiledTupleNameSet)
+end 'FiledTupleNameRoster'
+
+let noFiledTupleNames = FiledTupleNameRoster.unwritten
 
 // ⚠⚠ **ONE INTERFACE'S TRANSITIVE WITNESS SLOT LIST, BUILT ONCE PER FILE RATHER THAN ONCE PER DISPATCH
 // SITE, AND THE DIFFERENCE IS A MEASURED QUADRATIC.** `findWitnessDispatchCandidates` runs at every method
@@ -14673,13 +14675,14 @@ export type Parser
 	// by `enterTypeScope`/`closeTypeParamScope` so it cannot outlive the one declaration that sets it.
 	var innerAliasesFromIndex as bool
 
-	// ⭐ The TUPLE layouts this file has minted (P1.10), keyed by the tuple's mangled name — this file's OWN
-	// copies, whose field types are interned against `artifact.typeNames`. They cannot be the copies
-	// `ProgramSignatures` holds: `remapArtifact` REWRITES an artifact layout's field types IN PLACE on the
-	// multi-file path, so a shared object would rewrite the whole-program index's ids to one file's.
-	// Memoized so a tuple type written N times in a file adopts one layout and files ONE contribution, rather
-	// than N identical ones for `commitStructTypes` to upsert over. Empty for a file with no tuples.
-	var tupleLayouts as TupleLayoutTable
+	// ⭐ The TUPLE type names this file has filed an artifact layout for. The filed copy's field types are
+	// interned against `artifact.typeNames` and it cannot be the copy `ProgramSignatures` holds: `remapArtifact`
+	// REWRITES an artifact layout's field types IN PLACE on the multi-file path, so a shared object would
+	// rewrite the whole-program index's ids to one file's. Nothing in the parser reads the copy back — every
+	// layout the parser holds is the index's (`ProgramSignatures.fieldTypeOf`'s precondition) — so only the
+	// NAME is kept, and a tuple type written N times in a file files ONE contribution rather than N identical
+	// ones for `commitStructTypes` to upsert over. Empty for a file with no tuples.
+	var filedTupleNames as FiledTupleNameRoster
 
 	// ⭐ Where each GENERIC type declared in THIS file begins its member list (W23c) — the sites
 	// `Queries.foldDescriptorNeeds` re-walks once the whole-program index is complete. A field rather than an
@@ -15444,7 +15447,7 @@ export type Parser
 			enclosingInnerAliases: noInnerAliases,
 			interfaceAliasScratch: sharedEmptyInterfaceAliases,
 			innerAliasesFromIndex: false,
-			tupleLayouts: noTupleLayouts,
+			filedTupleNames: noFiledTupleNames,
 			descriptorScanSites: sharedEmptyDescriptorScanSites,
 			functionCarriesLayoutParam: false,
 			functionCarriesFixedElementCountParam: false,
@@ -33318,7 +33321,7 @@ export type Parser
 			throw ParseError.unsupported("{patternSubject} of a '{typeTagName(self.tagOf(value))}' {sourceNoun} (only a TUPLE can be destructured — {needsClause})", line: keywordTok.line, column: keywordTok.column)
 		end 'notATuple'
 
-		return self.tupleLayoutOfValue(value)
+		return self.registeredTupleLayout(self.valueTypeName(value))
 	end 'requireTupleLayout'
 
 	// ⭐ **IS `value` A TUPLE THIS RUNG MAY COPY?** — a tuple `structRef` none of whose elements owns heap.
@@ -33380,7 +33383,7 @@ export type Parser
 	// allocation, the size and the per-slot offsets come from the one layout both routines read. The result
 	// is an OWNED temporary of the statement, like any freshly built box.
 	function copyTupleValue(value ValueId, range SourceRange) returns ValueId
-		let layout = self.tupleLayoutOfValue(value)
+		let layout = self.registeredTupleLayout(self.valueTypeName(value))
 		let box = self.emitOwnedStructBox(layout, range: range)
 
 		for i in 0 upto layout.fieldCount() 'eachElement'
@@ -33389,16 +33392,6 @@ export type Parser
 
 		return box
 	end 'copyTupleValue'
-
-	// The layout of the tuple `value` is typed with. Precondition: the value carries a tuple `structRef`,
-	// which is why a miss is a panic — every tuple type in the compiler is registered by `internTupleLayout`
-	// before anything is typed with it.
-	function tupleLayoutOfValue(value ValueId) returns StructLayout
-		match self.signatures.structFor(self.valueTypeName(value), readerFilePath: self.filePath) 'registered'
-			declared(layout) then return layout
-			undeclared then panic("tupleLayoutOfValue: the tuple `{String.from(self.valueTypeName(value))}` a value carries is not registered — every tuple `structRef` was minted by `internTupleLayout`, which registers the layout before it hands the name back")
-		end 'registered'
-	end 'tupleLayoutOfValue'
 
 	// The interned TYPE NAME a `structRef`/`named`-tagged value carries — the pair `internedName` and
 	// `valueNameId` spell together, wherever a value's NOMINAL identity is what decides something.
@@ -57198,30 +57191,45 @@ export type Parser
 	// commits it to `project.structTypes` and `installStructDestructors` synthesizes the drop cascade for a
 	// tuple that owns a String. Both registrations happen here, together, because a layout in one and not the
 	// other is what makes the destructor installer ask a question the index cannot answer.
+	//
+	// ⛔ **THE LAYOUT HANDED BACK IS THE INDEX'S OWN, NEVER THE ARTIFACT COPY FILED HERE.** The copy's
+	// field-type ids are this file's numbering of the names, and every reader of a layout's field types
+	// resolves them against the index's interner (`ProgramSignatures.fieldTypeOf`'s precondition). Read that
+	// way, a sweep-minted `named` element denotes whichever name the index numbered alike — a record element
+	// classified scalar is stored raw and released at scope exit.
 	function internTupleLayout(elements MaxonTypeArray, anchor Token) returns StructLayout throws ParseError
 		let name = try self.signatures.internTupleType(elements, from: self.artifact.typeNames, slotScopeFilePath: self.filePath) otherwise (rejection) 'rejected'
 			throw self.tupleElementError(rejection, anchor: anchor)
 		end 'rejected'
 
-		if let known = try self.filedTupleLayout(name) 'alreadyAdopted'
-			return known
-		end 'alreadyAdopted'
+		if not self.tupleLayoutIsFiled(name) 'firstMintInThisFile'
+			var filed = self.filedTupleNamesForWrite()
+			filed.insert(name)
+			self.artifact.recordStructType(self.signatures.adoptTupleLayout(name, into: self.artifact.typeNames))
+		end 'firstMintInThisFile'
 
-		let layout = self.signatures.adoptTupleLayout(name, into: self.artifact.typeNames)
-		var filed = self.tupleLayoutsForWrite()
-		filed.upsert(name, value: layout)
-		self.artifact.recordStructType(layout)
-		return layout
+		return self.registeredTupleLayout(name)
 	end 'internTupleLayout'
 
-	// The layout this file already adopted for `name`. A file that has minted no tuple holds no table and
-	// answers the miss without hashing.
-	function filedTupleLayout(name ByteArray) returns StructLayout throws MapError
-		match self.tupleLayouts 'file'
-			unwritten then throw MapError.keyNotFound
-			entries(filed) then return try filed.get(name)
+	// Has this file already filed its artifact copy of the tuple layout `name`? A file that has minted no
+	// tuple holds no roster and answers without hashing.
+	function tupleLayoutIsFiled(name ByteArray) returns bool
+		match self.filedTupleNames 'file'
+			unwritten then return false
+			entries(filed) then return filed.contains(name)
 		end 'file'
-	end 'filedTupleLayout'
+	end 'tupleLayoutIsFiled'
+
+	// The index's layout for the tuple type `name`. Precondition: `name` is a tuple `structRef`'s name, which
+	// is why a miss is a panic — every tuple type in the compiler is registered by `internTupleType` before
+	// anything is typed with it. A tuple's name is unspellable in source, so no alias can shadow it and the
+	// reader-scoped `structFor` has nothing to add.
+	function registeredTupleLayout(name ByteArray) returns StructLayout
+		match self.signatures.structInAnyFile(name) 'registered'
+			declared(layout) then return layout
+			undeclared then panic("registeredTupleLayout: the tuple `{String.from(name)}` is not registered — every tuple `structRef` in the compiler names a layout `internTupleType` registered before it handed the name back")
+		end 'registered'
+	end 'registeredTupleLayout'
 
 	// The witness slots this file already built for `name`.
 	function builtWitnessSlots(name ByteArray) returns CollectedInterfaceMethodArray throws MapError
@@ -57583,17 +57591,17 @@ export type Parser
 		return fresh
 	end 'stringBytesViewOpsForWrite'
 
-	// The tuple-layout table.
-	function tupleLayoutsForWrite() returns StructLayoutMap
-		match self.tupleLayouts 'state'
+	// The filed-tuple roster.
+	function filedTupleNamesForWrite() returns FiledTupleNameSet
+		match self.filedTupleNames 'state'
 			unwritten then break 'state'
 			entries(table) then return table
 		end 'state'
 
-		let fresh = StructLayoutMap.create()
-		self.tupleLayouts = TupleLayoutTable.entries(fresh)
+		let fresh = FiledTupleNameSet.create()
+		self.filedTupleNames = FiledTupleNameRoster.entries(fresh)
 		return fresh
-	end 'tupleLayoutsForWrite'
+	end 'filedTupleNamesForWrite'
 
 	// The unsigned-extreme literal column.
 	function unsignedMaxLiteralsForWrite() returns ValueMarkSet
@@ -59794,7 +59802,9 @@ export type Parser
 		panic("nascentFieldReachesCheck: the literal's block is not in this function's own block list, or field '{String.from(field)}' is absent from a roster built out of the very writes that produced it")
 	end 'nascentFieldReachesCheck'
 
-	// Emit the box: allocate, then fill every slot. `fieldValues` is parallel to the LAYOUT.
+	// Emit the box: allocate, then fill every slot. `fieldValues` is parallel to the LAYOUT, and `layout` is
+	// the index's own (`ProgramSignatures.fieldTypeOf`'s precondition) — what `requireConstructible` and
+	// `internTupleLayout` both hand back.
 	//
 	// The result is typed `structRef(layout.name)` — which is what makes `let p = Point.create(…)`
 	// bind a Point rather than an integer, since the factory returns this value and
