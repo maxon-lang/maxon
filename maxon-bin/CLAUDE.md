@@ -314,7 +314,10 @@ The runner has no `--verbose` (it always prints a line per test), no `--no-batch
 ### Common flags
 
 - `--filter=PATTERN`, `--update-required`, `--log=CATEGORY:LEVEL` (e.g. `--log=ir:debug`),
-  `--mm-trace`, `--workers=<n>`, `--target=ARCH-OS`.
+  `--workers=<n>`, `--target=ARCH-OS`, `--network`.
+- ⛔ **There is no `--mm-trace` on any command.** The driver refuses an unimplemented flag loudly
+  (`Main.MaxonArgs.parse`, which cites this very spelling as the reason it must), so a leak is read off
+  the RUN: the runtime's leak gate is **exit 101**, and a case pinning `exitcode 0` reddens on one.
 - **`--workers=1` is a DEBUGGING TOOL, not a gate.** It is the same pool with one worker in it, and
   the parent buffers results and reports in fixed order — **ordering cannot vary with pool size**.
   The default pool is 12 and that is the only count these processes run the suite at.

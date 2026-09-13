@@ -4984,10 +4984,9 @@ error E3138: <fragment>:16:9: argument `s` of the message `Store.keep` is BORROW
 ```
 
 <!-- test: a-borrowed-parameter-may-be-sent-as-a-clone -->
-<!-- procs: 1 -->
-⚠ **`procs: 1` IS WHAT MAKES THE `stdout` ORDER TRUE.** `keep` is sent and not awaited, so at one proc it runs at
-the exit drain, after the caller's line; with a second M it runs concurrently and either order is correct.
-MEASURED unpinned: red once in a full suite, green 6/6 alone.
+⚠ **NOTHING IN THIS CASE MAY REST ON WHICH GREEN THREAD REACHES `stdout` FIRST.** Its subject is OWNERSHIP,
+so `main` is the only writer and the awaited `report` is what puts the service's `keep` before the line that
+reads it back — a CAUSAL order rather than a timed one.
 
 ⭐⭐ **THE CURE THE REFUSALS NAME FIRST, AND IT DID NOT WORK UNTIL THE FRESH-RETURN CLAIM CLOSED OVER A
 HOP.** `String.clone`'s body is `return sliceBytes(…)` — a call to a function that IS fresh by
@@ -5003,15 +5002,20 @@ one frame out. A body that BINDS what it returns still states nothing, because s
 ```maxon
 type Store
 	var n as Integer
+	var last as String
 
 	static function create() returns Self
-		return Self{n: 0}
+		return Self{n: 0, last: ""}
 	end 'create'
 
 	export function keep(s String)
 		self.n = self.n + 1
-		print("kept {s} ({self.n})\n")
+		self.last = s
 	end 'keep'
+
+	export function report() returns String
+		return "kept {self.last} ({self.n})"
+	end 'report'
 end 'Store'
 
 function forward(h Store.handle, buf String)
@@ -5022,7 +5026,9 @@ function main() returns ExitCode
 	let h = spawn Store.create()
 	let s = "hello"
 	forward(h, buf: s)
+	let kept = try await h.report() otherwise panic("the service holds the value and must answer for it")
 	print("caller still has {s}\n")
+	print("{kept}\n")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -5036,10 +5042,9 @@ kept hello (1)
 ```
 
 <!-- test: a-borrowed-parameter-may-be-sent-as-a-fresh-interpolation -->
-<!-- procs: 1 -->
-⚠ **`procs: 1` IS WHAT MAKES THE `stdout` ORDER TRUE.** `keep` is sent and not awaited, so at one proc it runs at
-the exit drain, after the caller's line; with a second M it runs concurrently and either order is correct.
-MEASURED unpinned: red once in a full suite, green 6/6 alone.
+⚠ **NOTHING IN THIS CASE MAY REST ON WHICH GREEN THREAD REACHES `stdout` FIRST.** Its subject is OWNERSHIP,
+so `main` is the only writer and the awaited `report` is what puts the service's `keep` before the line that
+reads it back — a CAUSAL order rather than a timed one.
 
 ⭐⭐ **THE CURE THE TWO REFUSALS ABOVE NAME, AND THE CASE THAT SAYS IT IS REACHABLE.** A refusal that teaches
 a spelling the next diagnostic also refuses leaves an author with nothing to write, which is what a rule
@@ -5057,15 +5062,20 @@ away. `ProgramSignatures.closeFreshReturnForwards` is that hop.
 ```maxon
 type Store
 	var n as Integer
+	var last as String
 
 	static function create() returns Self
-		return Self{n: 0}
+		return Self{n: 0, last: ""}
 	end 'create'
 
 	export function keep(s String)
 		self.n = self.n + 1
-		print("kept {s} ({self.n})\n")
+		self.last = s
 	end 'keep'
+
+	export function report() returns String
+		return "kept {self.last} ({self.n})"
+	end 'report'
 end 'Store'
 
 function forward(h Store.handle, buf String)
@@ -5076,7 +5086,9 @@ function main() returns ExitCode
 	let h = spawn Store.create()
 	let s = "hello"
 	forward(h, buf: s)
+	let kept = try await h.report() otherwise panic("the service holds the value and must answer for it")
 	print("caller still has {s}\n")
+	print("{kept}\n")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
