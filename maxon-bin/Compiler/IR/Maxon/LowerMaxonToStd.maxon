@@ -2046,12 +2046,20 @@ type MaxonToStdLowering
 	//
 	// `constant` is the compile-time integer the row's shape carried — a frame SLOT for `scratch`, already
 	// laid out by `Parser.reserveRawScratchSlot`, and a byte offset for the two word accessors.
+	//
+	// ⚠ **AN ADDRESS ROW NAMES ITS `.data` LABEL HERE AND NOWHERE ELSE, so the label the emitted image lays
+	// out and the label a tier body reads are the SAME constant** (`SchedRuntime`). The slot is laid out on
+	// that family's `RuntimeUsage` bit, which the CALL SITE sets — the same call site that keeps the body
+	// alive through dead-function elimination — so a surviving body cannot address a word the image omitted.
 	function lowerRawIntrinsic(result ValueId, intrinsic RawIntrinsic, args ValueIdArray, constant ParsedInt, dstBlock IrBlock)
 		match intrinsic 'row'
 			osTickCountMs then self.stdModule.appendOp(dstBlock, op: StdOp.osTickCountMs(result))
 			osReadWallClock then self.stdModule.appendOp(dstBlock, op: StdOp.osReadWallClock(rawWordOperand(args, index: 0, intrinsic: intrinsic)))
 			osThreadCpuTicks then self.stdModule.appendOp(dstBlock, op: StdOp.osThreadCpuTicks(rawWordOperand(args, index: 0, intrinsic: intrinsic), outPtrId: rawWordOperand(args, index: 1, intrinsic: intrinsic)))
+			osCpuCount then self.stdModule.appendOp(dstBlock, op: StdOp.osCpuCount(result))
 			scratch then self.stdModule.appendOp(dstBlock, op: StdOp.stackRecordAddr(result, slot: constant as SpillSlot))
+			schedNumProcsAddr then self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(result, label: SchedNumProcsLabel))
+			schedMaxActiveWorkersAddr then self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(result, label: SchedMaxActiveWorkersLabel))
 			loadWord then self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(result, addrId: rawWordOperand(args, index: 0, intrinsic: intrinsic), offset: constant as ByteOffset, valueType: StdType.i64))
 			storeWord then self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(rawWordOperand(args, index: 0, intrinsic: intrinsic), offset: constant as ByteOffset, valueId: rawWordOperand(args, index: 1, intrinsic: intrinsic), valueType: StdType.i64))
 			ownFrame then self.currentKeepsItsOwnFrame = true

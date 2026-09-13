@@ -1,222 +1,50 @@
-// Runtime/CpuParallelRuntime.maxon — the CPU-parallel QUERIES: `__Builtins.cpuCount()`,
-// `__Builtins.schedMaxActiveWorkers()` and `__Builtins.schedProcessorCount()`.
+// The CPU-parallel family's COMPILER-SIDE VOCABULARY: the three entry-point names the parser emits calls to,
+// and the two band tests that decide what each call costs. The bodies are runtime source
+// (`runtime/CpuParallel.maxon`), so nothing here builds IR.
 //
-// ⭐ **WHAT THEY SERVE — THE MULTI-CORE VALIDATION HARNESS, AND NOTHING ELSE IN THE LANGUAGE.**
-// `scripts/multicore-stress/alloc-torture.maxon` prints both so `validate.sh` can sweep the scheduler's core-count
-// clamp (`cpucount=` gives it ncpu) and see that more than one core actually ran the work (`workers=`).
-// None has a `stdlib/` wrapper, for `__Builtins.currentProcessId`'s reason: a declaration whose whole
-// body is one intrinsic call is the thin wrapper the house rules forbid.
-//
-// ⭐⭐ **THEY ARE THREE QUESTIONS IN TWO BANDS, AND THE SPLIT IS THE FILE'S THESIS.** One asks the MACHINE
-// how parallel a run COULD be; the other two ask THIS COMPILER'S SCHEDULER how parallel it WAS CONFIGURED to
-// be and how parallel it actually GOT. That difference decides the only thing a `__` band actually
-// decides — *may this target run it* — and the two answers are opposite:
-//
-//   • `__cpu_count` is an OS call, so it lowers only where a backend has landed the read — x64-windows and,
-//     since MAC1, arm64-macOS — and must be refused at the call's own span on every other target (E3104, by
-//     the `__cpu_` PREFIX, so an entry point added to this band later is gated by construction rather than
-//     by memory). ⚠ WHICH targets is `TargetFacilities.targetProvidesFacility`'s `cpuCount` row and is
-//     deliberately not counted here: this sentence read "x64-windows and NOWHERE else" for one rung past the
-//     day that stopped being true, which is the second copy of a fact earning its keep as a lie.
-//   • `__sched_max_active_workers` and `__sched_processor_count` reach no OS at all: each body is one `.data`
-//     load and a `ret`, which lowers on every target the compiler emits. Refusing either would be refusing a load.
-//     (The first WAS a constant return until G1 gave the mark a writer; the argument is unchanged, because a
-//     `.data` load reaches no more OS than a constant does.)
-//
-// ⇒ **ONE PREFIX CANNOT CARRY BOTH ANSWERS**, because the gate is a prefix test — which is exactly why
-// this file wears two `__` bands rather than the one its single subject would suggest. `ProcessRuntime`'s
-// two entries share a prefix precisely because they agree on that question and differ only in COST (which
-// is what its two `RuntimeUsage` bits are for); these are alike in cost — a handful of instructions
-// apiece, no buffer, no allocation, no scheduler — and differ on the target answer. Same file, opposite
-// reason.
-//
-// ⭐ **WHY NOT `GtRuntime`, WHICH OWNS THE SCHEDULER THE OTHER TWO ARE ABOUT.** `ClockRuntime`'s argument,
-// verbatim: `isGtRuntimeCallee` is a `__gt_` PREFIX test and it sets `usesGt`, so filing
-// `__sched_max_active_workers` there would install the entire green-thread scheduler, the timer store and
-// the netpoll for a program whose only question about concurrency is how much of it happened. A program
-// may legitimately ask that having spawned nothing, so the query must not cost a scheduler.
-//
-// ⚠ **THAT ARGUMENT IS WHY `__sched_processor_count` IS HERE AND NOT `__sched_steal_count`'s SHAPE.** The
-// steal count sets `usesGt` outright, because summing `__sched_procs` needs an array only
-// `__sched_init_procs` builds; a processor count needs one aligned word, so it rides its own bit and lays
-// out that word alone (`SchedRuntime.schedRuntimeGlobals`'s third gate). Asking how many processors a
-// scheduler resolved must not be what CREATES one.
+// ⭐⭐ **THE FILE HOLDS TWO `__` BANDS RATHER THAN THE ONE ITS SINGLE SUBJECT WOULD SUGGEST, AND THE REASON
+// IS THE TARGET QUESTION.** `__cpu_count` asks the MACHINE and so lowers only where a lane provides the read;
+// `__sched_max_active_workers` and `__sched_processor_count` ask THIS COMPILER'S SCHEDULER and are each one
+// `.data` load, which every target the compiler emits can do. A band is a prefix test, and one prefix cannot
+// carry both answers. `ProcessRuntime`'s two entries share a prefix precisely because they AGREE on that
+// question and differ only in cost; these agree on cost — a handful of instructions apiece, no buffer, no
+// allocation, no scheduler — and differ on the target answer.
 
 // The `__cpu_` prefix — the "does this program ask the MACHINE about itself?" test, and the one
-// `SemanticCheck.calleeNeedsWin32Substrate` reads for E3104. One entry point today; a prefix rather than a
-// name compare for `isProcessRuntimeCallee`'s stated reason, and that promise has already been tested once
-// in this tree: `__proc_pid` arrived after its predicate was written and needed no edit there.
+// `TargetFacilities.calleeHostFacility` reads for E3104. One entry point today; a prefix rather than a name
+// compare for `isProcessRuntimeCallee`'s stated reason, and that promise has already been tested once in this
+// tree: `__proc_pid` arrived after its predicate was written and needed no edit there.
 let CpuRuntimeCallPrefix = b"__cpu_"
 
 // ⚠ The `__sched_` band holds the whole scheduler family: `SchedRuntime.maxon` adds `__sched_init_procs`,
 // `__sched_worker_loop`, `__sched_main_loop`, `__sched_wake_or_spawn` and `__sched_checkdead` beside this
 // file's two queries.
 
-// ⭐ **THE THREE ENTRY POINTS.**
+// ⭐ **THE THREE ENTRY POINTS**, each declared in `runtime/CpuParallel.maxon` and reached by a call the
+// parser emits from the `__Builtins` spelling.
 export let CpuCountName = b"__cpu_count"
 export let SchedMaxActiveWorkersName = b"__sched_max_active_workers"
-
-// ⭐⭐ **`__sched_processor_count()` — HOW MANY Ps THE SCHEDULER RESOLVED, which is the ONE thing
-// `MAXON_MAX_PROCS` actually decides.** Its band-mate above reads how parallel the run TURNED OUT; this reads
-// what the run was CONFIGURED for, and the difference is that the second is not a race. `emitResolveMaxProcs`
-// settles `__sched_num_procs` to `osCpuCount`, or to `min(requested, osCpuCount)` when the variable names a
-// count, in `__sched_init_procs` — before any green thread runs and without consulting the workload, so two
-// runs of one program on one machine cannot disagree.
-//
-// ⚠ **THE SURFACE IS THIS COMPILER'S OWN**, on the argumentless-integer shape the family already has, as
-// `__Builtins.schedStealCount`'s is.
 export let SchedProcessorCountName = b"__sched_processor_count"
-
-// ⚠ **THE CLAMP FLOOR IS A CONSTANT AND THE WORKER COUNT IS NOT — that asymmetry is the point of the pair.**
-// The floor is a permanent fact about what a processor COUNT can be; the worker high-water mark is a READING
-// of this runtime, and since G1 it is a `.data` word two sites maintain.
-
-// The clamp floor a PROCESSOR COUNT never answers below. A real guard over a value that can be 0
-// (`GetActiveProcessorCount` on failure) or negative (`sysconf`) — a count is a divisor for callers, so a
-// 0 must never escape.
-//
-// ⚠ **EXPORTED because `SchedRuntime` reads the same RAW op and owes the same floor.** It clamps
-// `MAXON_MAX_PROCS` against the machine and would otherwise size a `P*` array to zero — see
-// `emitResolveMaxProcs`, which records the wild write that costs. Two clamps over one op, from one number:
-// a second literal `1` there would be the guard's value written down twice.
-export let MinimumProcessorCount = 1 as ParsedInt
 
 // ⭐ **DOES THIS CALLEE ASK THE MACHINE FOR ITS PROCESSOR COUNT?** The `__cpu_`-only test, the exact twin of
 // `isClockRuntimeCallee`. Deliberately NARROW in the same way: it implies no scheduler, no heap and no leak
-// gate, because the body it installs is one import call and a compare.
+// gate, because the body behind it is one host read and a compare.
 export function isCpuCountRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: CpuRuntimeCallPrefix)
 end 'isCpuCountRuntimeCallee'
 
 // ⭐ **DOES THIS CALLEE ASK THE SCHEDULER HOW MANY WORKER Ms IT HAS RUN?**
 //
-// ⛔⛔ **IT IS A NAME TEST AND IT USED TO BE A `__sched_` PREFIX TEST, WHICH G1 FALSIFIED.** The prefix was
-// chosen when the band held exactly this one entry, under a comment saying so; `SchedRuntime.maxon` then put
-// four scheduler INTERNALS in the same band, and a prefix test cannot tell a QUERY a program asked from
-// machinery the compiler installed. Nothing broke — the internals are named only by builder-built Std, which
-// `recordCallUsage` never scans — so this is the enumerated-door shape that fails OPEN: the day one of them
-// became reachable from a Maxon-tier op it would have silently set "this program asks how parallel it was"
-// and laid out a `.data` word for a question nobody asked. The name is what the bit is about.
-//
-// ⚠ It is NOT in `calleeNeedsWin32Substrate`, and that absence is the decision this file exists to make
-// rather than an omission — see the header.
+// ⛔⛔ **IT IS A NAME TEST AND NOT A `__sched_` PREFIX TEST.** That band also holds four scheduler INTERNALS,
+// and a prefix test cannot tell a QUERY a program asked from machinery the compiler installed. Nothing
+// reaches the internals through here today — they are named only by builder-built Std, which
+// `recordCallUsage` never scans — which is exactly the enumerated-door shape that fails OPEN: the day one of
+// them became reachable from a Maxon-tier op, a prefix would silently set "this program asks how parallel it
+// was" and lay out a `.data` word for a question nobody asked. The name is what the bit is about.
 //
 // ⚠ **ITS BAND-MATE `__sched_processor_count` IS ASKED FOR SEPARATELY AND NOT THROUGH HERE**, because the two
 // answer to different `.data` words and therefore to different bits: one name test that set both would lay
-// out a word for a question the program did not ask, which is the whole discipline `RuntimeUsage` keeps.
+// out a word for a question the program did not ask.
 export function isSchedRuntimeCallee(callee ByteArray) returns bool
 	return callee.equals(SchedMaxActiveWorkersName)
 end 'isSchedRuntimeCallee'
-
-// ⚠ **ONE GUARD PER ENTRY, NOT ONE FOR THE FILE**, on `installProcessRuntime`'s terms: these are
-// independent questions and a program almost always wants one of them. Here the saving is smaller than
-// that file's (no entry drags in the heap), but the discipline is the same and the cost of getting it
-// wrong is an import — or a `.data` word — a program never uses.
-export function installCpuParallelRuntime(module StdModule, usage RuntimeUsage)
-	if usage.usesCpuCount 'cpuCount'
-		buildCpuCount(module)
-	end 'cpuCount'
-
-	if usage.usesSchedMaxActiveWorkers 'schedMaxActiveWorkers'
-		buildSchedWordQuery(module, name: SchedMaxActiveWorkersName, label: SchedMaxActiveWorkersLabel)
-	end 'schedMaxActiveWorkers'
-
-	if usage.usesSchedProcessorCount 'schedProcessorCount'
-		buildSchedWordQuery(module, name: SchedProcessorCountName, label: SchedNumProcsLabel)
-	end 'schedProcessorCount'
-end 'installCpuParallelRuntime'
-
-// ⭐⭐ **`__cpu_count() -> i64`** — the number of logical processors the host reports, never below 1.
-//
-// The op asks the question and the CLAMP is done here, in builder-built Std, for the reason
-// `StdOp.osCpuCount`'s own comment states: the two platform answers fail differently (`0` from
-// `GetActiveProcessorCount`, `-1` from `sysconf`) and one SIGNED `< 1` test covers both, so a future POSIX
-// lane supplies only the read. The count is a divisor for callers, so a 0 must never escape.
-//
-// ⚠ **THE GUARD IS NOT DEAD CODE, AND IT WAS MEASURED REACHED.** `GetActiveProcessorCount` returns 0 when the
-// group number is invalid, and `ALL_PROCESSOR_GROUPS` never is — so on x64-windows this arm is unreachable
-// through this call site, exactly as `__proc_exe_path`'s unavailable arm is. Sabotaged to an INVALID group
-// number, though, the API really does answer 0 and this arm really does convert it: the spec's bounds cases
-// stayed green under that sabotage and went red the moment the guard was also removed. It is here because
-// "the OS cannot fail" is not something a runtime gets to assume, and because it is the arm a POSIX read
-// WILL reach.
-function buildCpuCount(module StdModule)
-	var func = IrFunction.createFromStd(CpuCountName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
-	var ids = ValueMinter.create(0)
-
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var clamped = module.addBlock(func, label: b"cpufloor", heat: BlockHeat.normal)
-	var reported = module.addBlock(func, label: b"cpuok", heat: BlockHeat.normal)
-
-	let raw = ids.mint()
-	module.appendOp(entry, op: StdOp.osCpuCount(raw))
-
-	// ⚠ `clamped` and `reported` carry NO block args and take no edge arguments: `entry` dominates both, so
-	// `raw` is simply in scope in the arm that answers it — the dominance argument `__proc_exe_path`'s four exit
-	// blocks state for themselves.
-	let floor = emitConst(module, block: entry, value: MinimumProcessorCount, ids: ids)
-	let belowFloor = emitCmp(module, block: entry, a: raw, b: floor, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(belowFloor, thenBlockId: clamped.id, elseBlockId: reported.id))
-
-	emitConstReturn(module, block: clamped, value: MinimumProcessorCount, ids: ids)
-	module.setTerminator(reported, op: StdOp.ret(raw))
-
-	module.functions.push(func)
-end 'buildCpuCount'
-
-// ⭐⭐ **THE TWO SCHEDULER QUERIES, FROM ONE BODY: `name() -> i64` answers the `.data` word at `label`.**
-//
-// `__sched_max_active_workers` reads the high-water mark of concurrently-active green-thread worker Ms;
-// `__sched_processor_count` reads how many Ps `MAXON_MAX_PROCS` resolved to. Both are a `globalAddr` and a
-// load, and a second hand-built body would be that one fact written down twice — the shape this codebase
-// keeps finding. What legitimately differs between them is the WORD, which is the parameter, and the GATE,
-// which is the caller's.
-//
-// ⚠ **THE PAIR SHARES A BODY BUT NOT A SEED, AND THAT ASYMMETRY IS DELIBERATE.** The worker mark is seeded
-// to 1 because a program with no scheduler really does run on one M — its own; the processor count is seeded
-// to 0 because a scheduler that has not initialized has built no P, which is also what
-// `__sched_steal_count` reads that word for. Both readings are the truth about
-// the moment they are taken, and neither costs an instruction to arrange (`SchedRuntime.schedRuntimeGlobals`).
-//
-// ⭐⭐ **`__sched_max_active_workers` WAS A `ret 1`, AND THAT WAS THE HONEST SPELLING RIGHT UP TO THE RUNG
-// THAT GAVE IT A WRITER.** The old body's argument was that a global with no writer is a constant wearing a
-// variable's clothes: it costs a `.data` word and a load, tells the next reader that something maintains it,
-// and reads 0 rather than 1 in any program whose scheduler never installs. Every clause of that was true
-// while the compiler had no worker M. G1 built one, `__sched_worker_loop` raises the mark on each entry, and the two objections that remained are
-// both answered where they arise rather than here: the slot is SEEDED TO 1 in `.data`
-// (`SchedRuntime.schedRuntimeGlobals`), so a program with no scheduler reads the truth with no code at all,
-// and it is laid out on `usesSchedMaxActiveWorkers` as well as on `usesGt`, so asking the question does not
-// require having spawned anything.
-//
-// ⚠ **THE IOCP COMPLETION THREAD IS STILL NOT A WORKER M, AND IT IS THE ONE THING THAT COULD MAKE THIS LOOK
-// WRONG.** `__io_init` creates an OS thread, but it drains completions and re-readies parked green threads —
-// it never RUNS one, and it never adopts a P. The count is raised in `__sched_worker_loop` and nowhere
-// else.
-//
-// ⚠ **AND IT STILL ANSWERS 1 FOR AN `async` PROGRAM, THOUGH NO LONGER FOR THE REASON IT USED TO.** The old
-// reason was the default: `SchedRuntime.DefaultMaxProcs` was 1, so there was no second P to start an M on.
-// That constant is gone and the default is the machine's count — but an `async` frame is a COROUTINE of its
-// caller, a member of its strand, and a member readied while its strand is held owes no wake, so an `async`
-// program that reads no pipe creates no worker M at ANY count. `specs/builtins-cpu-parallel.md`'s
-// `sched-max-active-workers-is-one-under-async` pins that, and it is what makes the mark a measurement rather
-// than a promise. A `spawn` DOES produce green threads and does raise the mark;
-// `multicore-stress/pin-matrix.sh` asserts both families.
-//
-// ⭐⭐ **AND IT IS EXACTLY WHY THE PROCESSOR COUNT HAD TO EXIST (2026-09-01).** The mark is a reading of what
-// the SCHEDULER DID, so a program that finishes its backlog before `__sched_wake_or_spawn` needs a second M
-// reads 1 at four processors — legitimately. `specs/sched-default-procs.md`'s
-// `the-procs-marker-raises-the-processor-count` asserted that reading and was therefore green filtered and
-// RED under a loaded full suite (12 spec workers over 16 cores). What `MAXON_MAX_PROCS` promises is the P
-// COUNT, and that is what a case about the marker must assert; the worker mark stays what it is, a
-// measurement of an outcome, and belongs only in cases that can tolerate one.
-function buildSchedWordQuery(module StdModule, name ByteArray, label ByteArray)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
-	var ids = ValueMinter.create(0)
-
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	let wordAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(wordAddr, label: label))
-	module.setTerminator(entry, op: StdOp.ret(emitLoadField(module, block: entry, record: wordAddr, offset: 0, ids: ids)))
-
-	module.functions.push(func)
-end 'buildSchedWordQuery'

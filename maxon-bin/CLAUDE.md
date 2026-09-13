@@ -15,11 +15,12 @@ compiler READS, so the first build already compiles against the edited file and 
 opposite of `Compiler/Runtime/` below, which the compiler WRITES into every program including itself.
 `scripts/self-compiles-needed.sh` answers for both; it does not watch `runtime/`, deliberately.
 
-⭐ **THREE FAMILIES ARE IN, AND THE ROOT THAT REACHES ANY OF THEM IS A CALL THE COMPILER EMITS.**
+⭐ **FOUR FAMILIES ARE IN, AND THE ROOT THAT REACHES ANY OF THEM IS A CALL THE COMPILER EMITS.**
 `runtime/Clock.maxon` holds `__clock_now_unix_s` and `__uptime_ms`, `runtime/ParallelBoundary.maxon` holds
-`__parallel_boundary` and `runtime/FaultProbe.maxon` holds `maxon_force_segfault`;
-`__Builtins.currentUnixTimeSeconds()`, `__Builtins.tickCountMs()`, `__Builtins.parallelBoundary()` and
-`__Builtins.forceSegfault()` lower to calls naming them, from whatever file wrote the construct.
+`__parallel_boundary`, `runtime/FaultProbe.maxon` holds `maxon_force_segfault` and
+`runtime/CpuParallel.maxon` holds `__cpu_count`, `__sched_max_active_workers` and
+`__sched_processor_count`; the matching `__Builtins` spellings lower to calls naming them, from whatever
+file wrote the construct.
 
 ⛔⛔ **THE TIER'S PROTECTION IS OVER BOTH DOORS A NAME CAN BE REACHED THROUGH, AND IT TAKES TWO REFUSALS.**
 `Parser.requireCalleeIsNotReservedName` admits a reserved CALLEE, and
@@ -66,7 +67,19 @@ per-target hand-assembled `osReadWallClock` chunk, the POSIX clock floor and the
 band are all still theirs. Retire a bit when its LAST consumer is gone, not when the body moves.
 `usesParallelBoundary` and `usesFaultProbe` are the two that qualified and both are GONE: neither body
 declares any dependency — no heap, no scheduler, no import, no `.data` word — so the install guard was the
-only reader of each. The fault probe's family predicate `isFaultProbeRuntimeCallee` outlived its bit, because
+only reader of each.
+
+⛔⛔ **AND A BIT CAN GAIN A SHARPER JOB THAN GATING AN INSTALL: IT CAN LAY OUT THE WORD THE SOURCED BODY
+READS.** `usesSchedMaxActiveWorkers` and `usesSchedProcessorCount` are `SchedRuntime.schedRuntimeGlobals`'s
+gates for `__sched_max_active_workers` and `__sched_num_procs`, and those are the words
+`runtime/CpuParallel.maxon`'s two queries load. Unset while the body survives, a query would `globalAddr` a
+slot the image never laid out. What keeps them in step is that ONE call site does both — `recordCallUsage`
+sets the bit from it, and it is also the edge dead-function elimination keeps the body alive for — so a
+surviving body implies a set bit. ⇒ **A tier body that reads a `.data` word owes that argument**, and the
+day something else can keep a tier body alive it stops holding. `usesCpuCount` keeps the ordinary kind of
+consumer: the Windows optional import band and the two hand-assembled `mrt_host_cpu_count` chunks.
+
+The fault probe's family predicate `isFaultProbeRuntimeCallee` outlived its bit, because
 `MmRuntime.reservedCalleeReasonOf` still routes the call refusal through it; it moved there with the two
 constants and `Compiler/Runtime/FaultProbeRuntime.maxon` is deleted, having nothing left to build.
 
@@ -121,7 +134,7 @@ declarations stay module-scoped, which
 `unreachable`, so the scan never skips one — and a CALL inside a runtime body would therefore set that
 family's bit for a program DFE sweeps the body out of, which is rule 1 ("vocabulary does not ship ahead of
 its consumer") failing open. Vacuous while every tier body calls only `__Raw`, which names no callee
-(`MaxonDialect.maxonOpCalleeKind` answers `noCallee` for `rawIntrinsic`) — true of all three families in
+(`MaxonDialect.maxonOpCalleeKind` answers `noCallee` for `rawIntrinsic`) — true of all four families in
 the tier. The first family that CALLS something is the one that has to answer it.
 
 Five doors are still standing open rather than shut:
@@ -132,6 +145,8 @@ Five doors are still standing open rather than shut:
   an unbound temporary. `for c in "abc"` in a runtime file is admitted. The complete site is the built
   `IrFunction`, and it is now reached, so the hole can be closed on its own.
 - **`osThreadCpuTicks` is the one `__Raw` row nothing exercises**, as are `reserveRawScratchSlot`'s refusals.
+  `osCpuCount`, `schedNumProcsAddr` and `schedMaxActiveWorkersAddr` are the cpu-parallel family's, and
+  `builtins-cpu-parallel.md`'s two `-body-is-runtime-source` cases render the bodies they lower to.
   `osTickCountMs`, `osReadWallClock`, `scratch` and `loadWord` are the clock family's, and
   `builtins-clock.md`'s `wall-clock-body-is-runtime-source` renders the emitted body the last three lower to;
   `storeWord` is the fault probe's, and no golden renders that body — what measures it is a LIVE fault, in
@@ -154,6 +169,10 @@ Five doors are still standing open rather than shut:
 - **A `__Raw` row's host facility reaches no refusable site.** `maxonOpCalleeKind` answers `noCallee`,
   so `LibraryFacts.substrateEntries` never sees one, and a lane without the op reaches instruction
   selection instead of E3104. A substrate-entry row per op is what closes it.
+  ⚠ **`osCpuCount` IS THE FIRST ROW WHOSE FACILITY IS GENUINELY ABSENT ON A SUPPORTED LANE**, and what
+  refuses the wasm program is the CALLEE band (`TargetFacilities.calleeHostFacility` on `__cpu_`), not this
+  route. That covers the one entry point spelling the row; a second tier body spelling it would reach
+  instruction selection on wasm with nothing said.
 
 - **Build it:** `./maxon-bin/.maxon/maxon build maxon-bin` at the repo root. `build.maxon` there
   declares the one target, so a bare `maxon build` builds it; name it anyway, because the seed rule

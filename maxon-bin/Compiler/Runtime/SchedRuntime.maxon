@@ -1274,14 +1274,13 @@ let GtRecordsCarvedLabel = b"__gt_records_carved"
 // ⭐ **HOW MANY Ps EXIST — the bound every scan walks, and the ceiling on live Ms.** TWO words
 // (`__sched_num_procs` beside `__sched_max_procs`) are needed only where a P can be retired without
 // shrinking the array. There is ONE here, because nothing retires a P and a second word with no writer is a
-// variable's clothes on a constant — the same argument `CpuParallelRuntime` made against a `.data` slot for a `ret 1`.
-// The day a P is retired, the pair splits here, in one place.
+// variable's clothes on a constant. The day a P is retired, the pair splits here, in one place.
 //
 // ⭐⭐ **IT IS ALSO THE ANSWER `__Builtins.schedProcessorCount()` GIVES, WHICH IS WHY IT IS EXPORTED.** That
 // query is the processor count's only observable consequence that does not depend on how the work happened
 // to be scheduled: `emitResolveMaxProcs` settles this word to `osCpuCount`, or to `min(requested,
 // osCpuCount)` when `MAXON_MAX_PROCS` names a count, before a single green thread runs — so reading it is
-// reading the resolution itself. `CpuParallelRuntime` owns the query's body.
+// reading the resolution itself. `runtime/CpuParallel.maxon` owns the query's body.
 export let SchedNumProcsLabel = b"__sched_num_procs"
 
 // ⭐⭐ **HOW MANY MACHINES ARE ON `__sched_midle` — Go's `sched.nmidle`.** Stepped by the list's two doors
@@ -1790,10 +1789,10 @@ export let SchedSweepDroppedName = b"__sched_sweep_dropped"
 // `__Builtins.schedStealCount()`. It is the only way a Maxon program can observe that work stealing
 // happened, which is what `scripts/multicore-stress/steal-torture.maxon` asserts on.
 //
-// ⚠ **IT LIVES HERE RATHER THAN BESIDE `__sched_max_active_workers` IN `CpuParallelRuntime`, AND THE SPLIT
-// IS THAT FILE'S OWN TEST APPLIED HONESTLY.** That file holds the queries whose answer costs no scheduler —
-// its `__sched_max_active_workers` is a `.data` load that is TRUE (1) for a program with no scheduler at
-// all. A steal count is not: it walks `__sched_procs`, which only `__sched_init_procs` builds, so the
+// ⚠ **IT IS BUILDER-BUILT Std HERE RATHER THAN TIER SOURCE BESIDE `__sched_max_active_workers`, AND THE
+// SPLIT IS THAT FAMILY'S OWN TEST APPLIED HONESTLY.** `runtime/CpuParallel.maxon` holds the queries whose
+// answer costs no scheduler — its `__sched_max_active_workers` is a `.data` load that is TRUE (1) for a
+// program with no scheduler at all. A steal count is not: it walks `__sched_procs`, which only `__sched_init_procs` builds, so the
 // question has no answer without the machinery. `RuntimeUsage.recordCallUsage` therefore routes it to
 // `usesGt` — asking it installs the scheduler, because asking it is a question ABOUT the scheduler.
 export let SchedStealCountName = b"__sched_steal_count"
@@ -3148,6 +3147,11 @@ function emitSchedAdoptProc(module StdModule, block IrBlock, m ValueId, p ValueI
 	emitStoreField(module, block: block, record: m, offset: MOffCurrentP, value: p)
 end 'emitSchedAdoptProc'
 
+// The floor a processor count never answers below, spelled here because this is the only Std builder that
+// clamps one. `runtime/CpuParallel.maxon` states the same number for the entry point a program reads: no
+// name crosses the tier boundary.
+let MinimumProcessorCount = 1 as ParsedInt
+
 // ⭐⭐ **HOW MANY Ps TO BUILD: THE MACHINE'S PROCESSOR COUNT, unless `MAXON_MAX_PROCS` names a different
 // count in `[MinimumProcessorCount, osCpuCount]`.** The answer reaches `settled` as its single block arg;
 // every arm below terminates in a branch that supplies it.
@@ -3161,9 +3165,9 @@ end 'emitSchedAdoptProc'
 //
 // ⛔⛔ **THE FLOOR IS APPLIED TO THE RAW ANSWER, BECAUSE `osCpuCount` CAN REPORT ZERO.**
 // `GetActiveProcessorCount` returns 0 on failure and `sysconf` returns -1;
-// `CpuParallelRuntime.buildCpuCount` clamps for exactly that reason and has the sabotage to prove the arm is
-// reached. Nothing downstream re-checks it: a `cpus` of 0 would become `numProcs`, `__slab_alloc(0)` would
-// size the `P*` array, the build loop would run zero times, and `adopt` would then read `__sched_procs[0]`
+// `runtime/CpuParallel.maxon`'s `__cpu_count` clamps for exactly that reason. Nothing downstream re-checks
+// it: a `cpus` of 0 would become `numProcs`, `__slab_alloc(0)` would size the `P*` array, the build loop
+// would run zero times, and `adopt` would then read `__sched_procs[0]`
 // out of a zero-byte region and write three fields through whatever it found. A wild write, from a comment
 // that said the guard was unnecessary. ⭐ **AND THE FLOOR IS LOAD-BEARING IN A SECOND WAY NOW THAT THIS
 // READING IS THE DEFAULT** — before the flip a failed read could only lose a clamp on a variable almost

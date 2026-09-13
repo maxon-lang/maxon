@@ -1,0 +1,61 @@
+// Test: builtins-cpu-parallel.sched-processor-count-body-is-runtime-source
+function main() returns ExitCode
+	let first = __Builtins.schedProcessorCount()
+	let second = __Builtins.schedProcessorCount()
+	var score = 0
+	if first == 0 'noSchedulerResolvedNone'
+		score = score + 1
+	end 'noSchedulerResolvedNone'
+	if second == first 'stable'
+		score = score + 1
+	end 'stable'
+	return score as ExitCode
+end 'main'
+---
+ExitCode: 2
+---
+data {
+  __sched_num_procs@0 = i64 0
+  __mrt_console_probe_stdin@8 = i8 0
+  __mrt_console_probe_stdout@9 = i8 0
+  __mrt_console_probe_stderr@10 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.callDirect __sched_processor_count
+    x64.movRegReg rbx, r8
+    x64.callDirect __sched_processor_count
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc notEqual, ifcont
+  noSchedulerResolvedNone:
+    x64.movRegImm32 rax, 1
+  ifcont:
+    x64.cmpRegReg r8, rbx
+    x64.jcc notEqual, critsplit
+  stable:
+    x64.leaRegRegImm32 r8, rax, 1
+    x64.jmp __rc_ok
+  critsplit:
+    x64.movRegReg r8, rax
+  __rc_ok:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @__sched_processor_count {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegGlobal rax, __sched_num_procs
+    x64.loadRegBaseDisp.word64 r8, [rax + 0]
+    x64.popReg rbp
+    x64.ret
+}

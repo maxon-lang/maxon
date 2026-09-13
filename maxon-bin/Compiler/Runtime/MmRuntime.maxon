@@ -2585,12 +2585,11 @@ end 'buildMmFree'
 // One builder over a name/label table rather than six near-identical bodies: the only thing that differs
 // between them is which word to load, so that is the only thing passed in.
 //
-// ⚠ **ONE BIT INSTALLS ALL SIX, WHICH IS THE OPPOSITE OF `installProcessRuntime`'s AND
-// `installCpuParallelRuntime`'s ONE-GUARD-PER-ENTRY RULE — and the difference is the same difference those
-// files' own headers turn on.** There, the entries cost wildly different amounts and a program wants ONE of
-// them (a pid is a call op; an executable path is a doubling retry loop that installs the whole
-// managed-memory runtime). Here all six are a `globalAddr`, a load and a `ret`, and the one caller that
-// exists reads ALL SIX together — `PhaseProbe` sums the layers, so a `total` without its `live` cannot
+// ⚠ **ONE BIT INSTALLS ALL SIX, WHICH IS THE OPPOSITE OF `installProcessRuntime`'s ONE-GUARD-PER-ENTRY RULE
+// — and the difference is the same difference that file's own header turns on.** There, the entries cost
+// wildly different amounts and a program wants ONE of them (a pid is a call op; an executable path is a
+// doubling retry loop that installs the whole managed-memory runtime). Here all six are a `globalAddr`, a
+// load and a `ret`, and the one caller that exists reads ALL SIX together — `PhaseProbe` sums the layers, so a `total` without its `live` cannot
 // answer anything. Six bits would be six declarations to save about thirty instructions in the one build
 // that already asked for the counters, while the cost this family actually has — the MAINTENANCE on the
 // allocation path — is gated by the bit that is here.

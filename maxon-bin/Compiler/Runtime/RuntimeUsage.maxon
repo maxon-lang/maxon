@@ -485,9 +485,14 @@ export type RuntimeUsage
 	export var usesCpuCount as bool
 
 	// The program asks the SCHEDULER for its worker-M high-water mark (`__Builtins.schedMaxActiveWorkers` ⇒
-	// `__sched_max_active_workers`). Its own bit for the reason above, and the CHEAPEST here after the
-	// checkpoint's: the body is a constant return, so it declares nothing — emphatically not `usesGt`, since
-	// a program may ask the question having spawned nothing (see `CpuParallelRuntime`'s header).
+	// `__sched_max_active_workers`). Its own bit for the reason above: the body is one `.data` load, so it
+	// declares nothing — emphatically not `usesGt`, since a program may ask the question having spawned
+	// nothing (see `CpuParallelRuntime`'s header).
+	//
+	// ⭐⭐ **THE BIT LAYS OUT THE WORD THE BODY READS**, so it is not merely an install guard: unset while the
+	// body survives, `__sched_max_active_workers` would `globalAddr` a slot the image never laid out. What
+	// keeps them in step is that ONE call site does both — `recordCallUsage` sets the bit from it, and it is
+	// also the edge dead-function elimination keeps the body alive for.
 	export var usesSchedMaxActiveWorkers as bool
 
 	// The program asks the SCHEDULER how many processors it resolved (`__Builtins.schedProcessorCount` ⇒
@@ -498,6 +503,9 @@ export type RuntimeUsage
 	// ⚠ **IT DELIBERATELY DOES NOT DECLARE `usesGt`, WHICH IS WHERE IT PARTS FROM `__sched_steal_count`.**
 	// That one walks the `P*` array and is therefore meaningless without the machinery that builds it; this
 	// one reads a single word whose 0 — no scheduler has initialized — is a truthful answer.
+	//
+	// ⭐⭐ Like its band-mate, it LAYS OUT the word its body reads, and the same one call site sets the bit and
+	// keeps the body alive.
 	export var usesSchedProcessorCount as bool
 
 	// ⭐⭐ **THE PROGRAM READS THE ALLOCATOR'S OWN TRAFFIC COUNTERS** (`__Builtins.mmAllocTotal` and its five

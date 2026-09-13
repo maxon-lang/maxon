@@ -3776,7 +3776,7 @@ export type StdToX64Lowering
 	// rcx, one import call, and the count captured out of RAX. `emitCaptureRax` is the same capture
 	// `osGetPid` takes for `GetCurrentProcessId`'s DWORD, and the answer is left EXACTLY as the OS gave it:
 	// a 0 (the API's failure answer) reaches the caller, because the `< 1 ⇒ 1` clamp is builder-built Std's
-	// (`CpuParallelRuntime.buildCpuCount`) and stubbing it here as well would be one contract in two places.
+	// (`runtime/CpuParallel.maxon`'s `__cpu_count`) and stubbing it here as well would be one contract in two places.
 	//
 	// ⭐ **`GetSystemInfo` IS NOT CALLED HERE, WHICH IS A DECISION AND NOT AN OVERSIGHT.** Reading
 	// `dwNumberOfProcessors` out of it means carving a 48-byte `SYSTEM_INFO` scratch buffer, where a POSIX
@@ -3791,8 +3791,8 @@ export type StdToX64Lowering
 	// on — the two are identical.
 	// ⭐ **TWO APIs WITH TWO FAILURE CONVENTIONS AND ONE QUESTION.** Windows answers a count and 0 for
 	// failure; the Linux chunk answers a popcount and -1, which is `sysconf`'s spelling. Neither is clamped
-	// here — `CpuParallelRuntime.buildCpuCount`'s signed `< 1 ⇒ 1` reads both, and the clamp must stay in
-	// exactly one place.
+	// here — `runtime/CpuParallel.maxon`'s `__cpu_count` signed `< 1 ⇒ 1` reads both, and the clamp must stay
+	// in exactly one place.
 	function lowerOsCpuCount(resultId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsCpuCountWin64(dstBlock)

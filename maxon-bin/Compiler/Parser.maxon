@@ -5919,14 +5919,11 @@ let ForceSegfaultArity = 0 as ParamCount
 // clamp and see that more than one core actually ran the work.
 //
 // ⚠ **THEY ANSWER TWO DIFFERENT KINDS OF QUESTION, AND THE DIFFERENCE DECIDES THEIR TARGETS.**
-// `cpuCount` asks the OS about the MACHINE and lowers on x64-windows alone (`__cpu_count`, refused
-// elsewhere with E3104); `schedMaxActiveWorkers` asks THE RUNNING PROGRAM's own scheduler about itself
-// and lowers everywhere, because the answer is a `.data` word that scheduler maintains — a `globalAddr`
-// and a load, which every backend has. ⛔ This used to read *"because the compiler's scheduler is single-M and
-// the answer is a constant"*, and both halves have expired: the mark has had a real writer since G1
-// (`__sched_worker_loop` raises it on entry), so it is a MEASUREMENT of what the scheduler did rather
-// than a constant. See `CpuParallelRuntime`'s header, which owns that split — this file only routes the
-// names.
+// `cpuCount` asks the OS about the MACHINE, so it lowers only on a lane that provides the read and is
+// refused elsewhere with E3104; `schedMaxActiveWorkers` asks THE RUNNING PROGRAM's own scheduler about
+// itself and lowers everywhere, because the answer is a `.data` word that scheduler maintains — a
+// `globalAddr` and a load, which every backend has. See `CpuParallelRuntime`'s header, which owns that
+// split — this file only routes the names.
 let BuiltinsCpuCountName = b"__Builtins.cpuCount"
 let BuiltinsSchedMaxActiveWorkersName = b"__Builtins.schedMaxActiveWorkers"
 
@@ -83402,8 +83399,8 @@ export type Parser
 			// ⭐ **THE TWO CPU-PARALLEL QUERIES**, beside the checkpoint they share a family with. Both answer
 			// an `int` and take nothing, so both take the argumentless-integer emit above — the same door the
 			// pid takes, and the reason that door exists. What differs between them is not visible here and
-			// is not this file's: one lowers to an OS call gated to x64-windows and the other to a constant
-			// return that lowers everywhere. See `CpuParallelRuntime`'s header.
+			// is not this file's: one lowers to an OS read a lane must provide and the other to a `.data`
+			// load every lane has. See `CpuParallelRuntime`'s header.
 			if callee.equals(BuiltinsCpuCountName) 'cpuCount'
 				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsCpuCountName, runtimeName: CpuCountName, arity: CpuCountArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'cpuCount'

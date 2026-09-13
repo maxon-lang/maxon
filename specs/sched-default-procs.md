@@ -18,7 +18,7 @@ default build never executed it.** Flipping the default is what puts it under th
 
 ⭐ **THE DEFAULT IS NO LONGER A CONSTANT, WHICH IS WHY IT COULD NOT BE A CONSTANT SUBSTITUTION.** A
 processor count is a fact about the machine, so `emitResolveMaxProcs` reads `StdOp.osCpuCount` at scheduler
-bring-up — floored at `CpuParallelRuntime.MinimumProcessorCount`, since the OS read can answer 0 or -1 — and
+bring-up — floored at `SchedRuntime.MinimumProcessorCount`, since the OS read can answer 0 or -1 — and
 that ONE reading is both the default and the ceiling. Two readings could have disagreed; one cannot.
 
 ### `MAXON_MAX_PROCS` is GOMAXPROCS now — it LOWERS as well as raises
@@ -255,7 +255,7 @@ aggregate=479997
 **THE MARKER'S OWN GATE, AND IT IS LOAD-BEARING ONLY AFTER THE FLIP.** The same program pinned to one
 processor, and the one count here that can be asserted as a BARE NUMBER on any machine: `min(1, cpuCount)`
 is 1 wherever this runs, because a machine cannot report fewer than one processor
-(`CpuParallelRuntime.MinimumProcessorCount` is the floor that guarantees it). The aggregate is unchanged,
+(`SchedRuntime.MinimumProcessorCount` is the floor that guarantees it). The aggregate is unchanged,
 because it is unchangeable.
 
 ⭐ **THE COINCIDENCE HAS ENDED, AND THIS CASE IS NOW LOAD-BEARING.** It used to agree with the default it

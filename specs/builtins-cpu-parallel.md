@@ -306,6 +306,42 @@ end 'main'
 7
 ```
 
+<!-- test: builtins-cpu-parallel.cpu-count-body-is-runtime-source -->
+⭐⭐ **THE MACHINE QUERY'S BODY IS MAXON SOURCE THE COMPILER READS OUT OF THE TREE, AND THIS IS THE CASE
+THAT SEES IT.** `runtime/CpuParallel.maxon` writes `__cpu_count` against the `__Raw` floor — the host read
+and the floor test over it — and the block below renders what the back end made of that source. Every other
+`cpuCount` case here reads the ANSWER, and each would pass just as happily against a body the compiler built
+itself.
+
+⛔ **THE FLOOR TEST IS THE HALF THAT NEEDS WATCHING, AND IT MUST BE SIGNED.** `GetActiveProcessorCount`
+reports 0 for an invalid processor group and `sysconf` reports -1, and one signed `< 1` covers both. The
+source states the count full-range signed for exactly that reason; widened to a `bits(64)` machine word the
+comparison reads unsigned, -1 becomes the largest count a machine could have, and the guard silently stops
+guarding. That change is invisible to every other case in this file — the floor arm is unreachable through
+this call site on a healthy host — and it shows up HERE, as the compare's condition.
+
+⚠ `main` reads the count TWICE so that the rendered body is the one that runs.
+```maxon
+function main() returns ExitCode
+	let first = __Builtins.cpuCount()
+	let second = __Builtins.cpuCount()
+	var score = 0
+	if first >= 1 'atLeastOne'
+		score = score + 1
+	end 'atLeastOne'
+	if second == first 'stable'
+		score = score + 1
+	end 'stable'
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+```RequiredRuntime
+__cpu_count
+```
+
 <!-- test: builtins-cpu-parallel.cpu-count-arity-checked -->
 `cpuCount` takes no arguments. An intrinsic has no signature for the ordinary arity check to read,
 so it is refused by the same `builtinArity` check `currentProcessId`/`commandLineCount` use. This
@@ -427,6 +463,42 @@ end 'main'
 ```
 ```exitcode
 7
+```
+
+<!-- test: builtins-cpu-parallel.sched-processor-count-body-is-runtime-source -->
+⭐⭐ **THE QUERY READS A `.data` WORD WHOSE LABEL IS NOT ITS OWN NAME, AND ONLY A RENDERED BODY SAYS WHICH
+WORD.** `runtime/CpuParallel.maxon` writes `__sched_processor_count` as an address row plus a load, and the
+address row names `__sched_num_procs` — the P array's length wearing this query's second hat. Its band-mate
+`__sched_max_active_workers` is the one whose label DOES match its entry point, so the two rows are exactly
+the pair a mix-up would swap, and a swapped body still compiles, still links and still answers a plausible
+number.
+
+⚠ It also pins the other half of the `RuntimeUsage` bit's job: the bit that admits this body is the bit that
+lays the word out, so an image rendering this load must also carry `__sched_num_procs` in its `.data`
+section.
+
+⚠ **THE ANSWER IS 0 BECAUSE THIS PROGRAM SPAWNS NOTHING**, which is the word's `.data` seed and the truth
+about a scheduler that never initialized. What a resolved count looks like is `sched-default-procs.md`'s;
+asking that here would make this case depend on the machine it runs on.
+```maxon
+function main() returns ExitCode
+	let first = __Builtins.schedProcessorCount()
+	let second = __Builtins.schedProcessorCount()
+	var score = 0
+	if first == 0 'noSchedulerResolvedNone'
+		score = score + 1
+	end 'noSchedulerResolvedNone'
+	if second == first 'stable'
+		score = score + 1
+	end 'stable'
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+```RequiredRuntime
+__sched_processor_count
 ```
 
 <!-- test: builtins-cpu-parallel.sched-max-active-workers-arity-checked -->

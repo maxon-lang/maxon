@@ -1,0 +1,87 @@
+// The three CPU-PARALLEL QUERIES a program reaches through `__Builtins.cpuCount()`,
+// `__Builtins.schedMaxActiveWorkers()` and `__Builtins.schedProcessorCount()`.
+//
+// ⭐⭐ **THEY ARE THREE QUESTIONS IN TWO BANDS, AND THE SPLIT IS WHAT DECIDES WHICH TARGETS MAY RUN THEM.**
+// One asks the MACHINE how parallel a run COULD be; the other two ask THIS COMPILER'S SCHEDULER how parallel
+// it was CONFIGURED to be and how parallel it actually GOT.
+//
+//   • `__cpu_count` is an OS read, so it lowers only where a lane provides `HostFacility.cpuCount` and is
+//     refused at the call's own span everywhere else (E3104, keyed on the `__cpu_` band in
+//     `TargetFacilities.calleeHostFacility`).
+//   • `__sched_max_active_workers` and `__sched_processor_count` reach no OS at all: each is one `.data`
+//     load, which lowers on every target the compiler emits. Refusing either would be refusing a load.
+//
+// ⭐ **WHY THE SCHEDULER PAIR IS NOT `runtime/`'s GREEN-THREAD VOCABULARY.** A program may legitimately ask
+// how parallel it got having spawned nothing, so neither query may drag the scheduler in behind it. Each
+// rides its own `RuntimeUsage` bit, and that bit is what lays the word out
+// (`SchedRuntime.schedRuntimeGlobals`) — so the question costs one word and never a scheduler.
+//
+// ⚠ **NEITHER WORD IS SEEDED THE SAME WAY, AND THE ASYMMETRY IS THE TRUTH ABOUT AN UNINITIALIZED PROCESS.**
+// The worker mark is seeded to 1 because a program with no scheduler really does run on one M — its own;
+// the processor count is seeded to 0 because a scheduler that has not initialized has built no P.
+//
+// ⚠ **THE WORKER MARK IS A MEASUREMENT AND THE PROCESSOR COUNT IS A RESOLUTION**, which is why a case about
+// `MAXON_MAX_PROCS` must assert the second. `__sched_worker_loop` raises the mark when a worker M enters, so
+// a program that finishes its backlog before a second M is ever needed reads 1 at four processors —
+// legitimately. `emitResolveMaxProcs` settles `__sched_num_procs` before any green thread runs and without
+// consulting the workload, so two runs of one program on one machine cannot disagree about it.
+
+// ⭐ **FULL-RANGE SIGNED, AND THE HOST'S TWO FAILURE ANSWERS ARE WHY.** `GetActiveProcessorCount` reports 0
+// and `sysconf` reports -1, so the floor test below must read SIGNED — `MachineWord` is a `bits(64)` pattern
+// and every comparison on one reads unsigned, which turns -1 into the largest count the machine could have.
+// It cannot be narrowed to the post-clamp `1 to i64.max` either: a narrowed alias is a guarded door, and the
+// guard would panic on a word the host itself wrote, in a body with no caller to report to.
+//
+// ⚠ **THE NAME SAYS *REPORTED* BECAUSE `ProcessorCount` IS TAKEN BY A TYPE THAT CANNOT HOLD WHAT THIS ONE
+// DOES.** `Testing/SpecParser.maxon` publishes `ProcessorCount = int(1 to i64.max)` for an author-written
+// `<!-- procs: N -->`, where the decimal parse guarantees the floor. This alias is the HOST's answer before
+// any floor exists, and 0 and -1 are the two readings it is declared to carry. Sharing the name would assert
+// the two ranges agree, and they deliberately do not — `runtime/Clock.maxon`'s `EpochSeconds` is the same
+// ruling one family over.
+typealias ReportedProcessorCount = int(i64.min to i64.max)
+
+// The floor a processor count never answers below. A count is a divisor for callers, so a 0 must never
+// escape.
+//
+// ⚠ **`SchedRuntime` CLAMPS THE SAME OP AGAINST THE SAME FLOOR AND SPELLS THE NUMBER AGAIN**, because no
+// name crosses the tier boundary — the restatement `runtime/Clock.maxon` makes of the FILETIME constants,
+// for the same reason.
+let MinimumProcessorCount = 1 as ReportedProcessorCount
+
+// ⭐⭐ **`__cpu_count()` — HOW MANY LOGICAL PROCESSORS THE HOST REPORTS, NEVER BELOW 1.**
+//
+// ⚠ **THE FLOOR IS NOT DEAD CODE.** `GetActiveProcessorCount` answers 0 for an invalid processor group and
+// `sysconf` answers -1, so the arm is what a failing host read reaches. One signed test covers both
+// spellings, which is why a lane supplies only the read.
+module function __cpu_count() returns ReportedProcessorCount
+	let reported = __Raw.osCpuCount() as ReportedProcessorCount
+
+	if reported < MinimumProcessorCount 'belowFloor'
+		return MinimumProcessorCount
+	end 'belowFloor'
+
+	return reported
+end '__cpu_count'
+
+// ⭐ **`__sched_max_active_workers()` — THE HIGH-WATER MARK OF CONCURRENTLY-ACTIVE WORKER Ms.**
+//
+// ⚠ **THE IOCP COMPLETION THREAD IS NOT A WORKER M.** `__io_init` creates an OS thread, but it drains
+// completions and re-readies parked green threads — it never RUNS one and never adopts a P. The mark is
+// raised in `__sched_worker_loop` and nowhere else.
+//
+// ⚠ **IT ANSWERS 1 FOR AN `async` PROGRAM AT ANY PROCESSOR COUNT.** An `async` frame is a coroutine of its
+// caller and a member of its strand, and a member readied while its strand is held owes no wake, so an
+// `async` program that reads no pipe creates no worker M. A `spawn` does, and raises the mark.
+module function __sched_max_active_workers() returns MachineWord
+	return __Raw.loadWord(__Raw.schedMaxActiveWorkersAddr(), offset: 0)
+end '__sched_max_active_workers'
+
+// ⭐ **`__sched_processor_count()` — HOW MANY Ps `MAXON_MAX_PROCS` RESOLVED TO**, which is the one thing that
+// variable actually decides.
+//
+// ⚠ The word is `__sched_num_procs`, so the ADDRESS ROW and the entry point do not share a name. The word is
+// the P array's length wearing this query's second hat (`SchedRuntime.SchedNumProcsLabel`), and this body
+// must read that word rather than a second one kept in step with it.
+module function __sched_processor_count() returns MachineWord
+	return __Raw.loadWord(__Raw.schedNumProcsAddr(), offset: 0)
+end '__sched_processor_count'

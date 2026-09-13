@@ -29,7 +29,10 @@ let RawQualifierPrefix = b"__Raw."
 let RawOsTickCountMsName = b"__Raw.osTickCountMs"
 let RawOsReadWallClockName = b"__Raw.osReadWallClock"
 let RawOsThreadCpuTicksName = b"__Raw.osThreadCpuTicks"
+let RawOsCpuCountName = b"__Raw.osCpuCount"
 let RawScratchName = b"__Raw.scratch"
+let RawSchedNumProcsAddrName = b"__Raw.schedNumProcsAddr"
+let RawSchedMaxActiveWorkersAddrName = b"__Raw.schedMaxActiveWorkersAddr"
 let RawLoadWordName = b"__Raw.loadWord"
 let RawStoreWordName = b"__Raw.storeWord"
 let RawOwnFrameName = b"__Raw.ownFrame"
@@ -38,7 +41,21 @@ export enum RawIntrinsic
 	osTickCountMs
 	osReadWallClock
 	osThreadCpuTicks
+	osCpuCount
 	scratch
+
+	// ⭐⭐ **A COMPILER-OWNED `.data` WORD IS ADDRESSED BY ITS OWN ROW, NOT BY A LABEL A BODY WRITES.** The
+	// address of a runtime global is minted by the compiler and resolved by the linker, so a tier body has no
+	// way to compute one; what it can do is name the word. A label ARGUMENT would put every global the emitted
+	// runtime lays out within reach of a runtime file — a wider privilege than any other row grants, and wider
+	// than any family needs — and would need a second closed roster beside this one to take it back. A row per
+	// readable word keeps the roster closed by construction, and the lowering's exhaustive match is what makes
+	// a row that exists name a LABEL. That the label is LAID OUT is a separate argument and the family's own:
+	// the `.data` slot rides a `RuntimeUsage` bit the call site sets, and that call site is also the edge dead
+	// function elimination keeps the body alive for.
+	schedNumProcsAddr
+	schedMaxActiveWorkersAddr
+
 	loadWord
 	storeWord
 
@@ -104,9 +121,21 @@ function rawIntrinsicLookupOf(callee ByteArray) returns RawIntrinsicLookup
 		return RawIntrinsicLookup.found(RawIntrinsic.osThreadCpuTicks)
 	end 'osThreadCpuTicks'
 
+	if callee.equals(RawOsCpuCountName) 'osCpuCount'
+		return RawIntrinsicLookup.found(RawIntrinsic.osCpuCount)
+	end 'osCpuCount'
+
 	if callee.equals(RawScratchName) 'scratch'
 		return RawIntrinsicLookup.found(RawIntrinsic.scratch)
 	end 'scratch'
+
+	if callee.equals(RawSchedNumProcsAddrName) 'schedNumProcsAddr'
+		return RawIntrinsicLookup.found(RawIntrinsic.schedNumProcsAddr)
+	end 'schedNumProcsAddr'
+
+	if callee.equals(RawSchedMaxActiveWorkersAddrName) 'schedMaxActiveWorkersAddr'
+		return RawIntrinsicLookup.found(RawIntrinsic.schedMaxActiveWorkersAddr)
+	end 'schedMaxActiveWorkersAddr'
 
 	if callee.equals(RawLoadWordName) 'loadWord'
 		return RawIntrinsicLookup.found(RawIntrinsic.loadWord)
@@ -149,7 +178,10 @@ export function rawIntrinsicCalleeName(intrinsic RawIntrinsic) returns ByteArray
 		osTickCountMs gives RawOsTickCountMsName
 		osReadWallClock gives RawOsReadWallClockName
 		osThreadCpuTicks gives RawOsThreadCpuTicksName
+		osCpuCount gives RawOsCpuCountName
 		scratch gives RawScratchName
+		schedNumProcsAddr gives RawSchedNumProcsAddrName
+		schedMaxActiveWorkersAddr gives RawSchedMaxActiveWorkersAddrName
 		loadWord gives RawLoadWordName
 		storeWord gives RawStoreWordName
 		ownFrame gives RawOwnFrameName
@@ -161,7 +193,10 @@ export function rawArgShapeOf(intrinsic RawIntrinsic) returns RawArgShape
 		osTickCountMs gives RawArgShape.nothing
 		osReadWallClock gives RawArgShape.oneWord
 		osThreadCpuTicks gives RawArgShape.twoWords
+		osCpuCount gives RawArgShape.nothing
 		scratch gives RawArgShape.oneConstant
+		schedNumProcsAddr or
+			schedMaxActiveWorkersAddr gives RawArgShape.nothing
 		loadWord gives RawArgShape.wordThenConstant
 		storeWord gives RawArgShape.wordConstantWord
 		ownFrame gives RawArgShape.nothing
@@ -173,8 +208,11 @@ export function rawResultKindOf(intrinsic RawIntrinsic) returns RawResultKind
 		osTickCountMs gives RawResultKind.machineWord
 		osReadWallClock gives RawResultKind.nothing
 		osThreadCpuTicks gives RawResultKind.nothing
-		scratch gives RawResultKind.machineWord
-		loadWord gives RawResultKind.machineWord
+		osCpuCount or
+			scratch or
+			schedNumProcsAddr or
+			schedMaxActiveWorkersAddr or
+			loadWord gives RawResultKind.machineWord
 		storeWord or
 			ownFrame gives RawResultKind.nothing
 	end 'result'
@@ -209,23 +247,28 @@ export function rawArgumentIsTheConstant(shape RawArgShape, position ParamCount)
 end 'rawArgumentIsTheConstant'
 
 // ⭐⭐ **THE HOST FACILITY A ROW'S INSTRUCTION NEEDS.** It is the same question `TargetFacilities` answers
-// for every runtime entry, asked of an op instead — the three clock rows name the three clock facilities
-// that already exist for exactly these Std ops.
+// for every runtime entry, asked of an op instead — the four OS rows name facilities that already exist
+// for exactly these Std ops.
 //
-// ⛔ **NOTHING REPORTS OFF IT YET, AND THE FIRST RUNTIME FAMILY OWES THAT WIRING.**
+// ⛔ **NOTHING REPORTS OFF IT YET, AND THE SITE THAT WOULD IS `LibraryFacts.substrateEntries`.**
 // `SemanticCheck.requireTargetSupportsRawIntrinsic` is the reader, and it blames only a function that is
 // the AUTHOR'S — while a `__Raw` op can stand only in a runtime file, which is the library's. A runtime
-// entry's substrate need reaches the user through `LibraryFacts.substrateEntries`, at the call that
-// CROSSES into the library, and that table is built from CALLEES: an op names none, so a row's facility
-// reaches no user-refusable site. Until it does, a lane missing the facility reaches instruction
-// selection.
+// entry's substrate need reaches the user through `substrateEntries`, at the call that CROSSES into the
+// library, and that table is built from CALLEES: an op names none, so a row's facility reaches no
+// user-refusable site. Until it does, a lane missing the facility reaches instruction selection.
 //
-// ⚠ **`none` IS "NO HOST FACILITY", NOT "EVERY TARGET".** The three word rows are pure code generation on
-// the lanes that have an addressable frame, and wasm is not one of them: a wasm local has no address, so
-// `StdOp.stackRecordAddr` cannot be selected there at all. That is a MISSING FACILITY ROW rather than a
-// missing answer here — no row of `HostFacility` names an addressable frame, because nothing needed to ask
-// until `__Raw.scratch` existed — and it is the next rung's to add, alongside the first runtime body that
-// spends it.
+// ⚠ **`osCpuCount` IS THE ROW WHERE THAT GAP IS CLOSEST TO BITING, AND WHAT KEEPS IT SHUT IS A SECOND
+// ROUTE RATHER THAN THIS ONE.** Its facility is genuinely absent on wasm, and the program that asks for it
+// is refused at the call to `__cpu_count` by `TargetFacilities.calleeHostFacility`, which reads the CALLEE
+// band. That covers the one entry point spelling the row today; a second tier body spelling it would reach
+// instruction selection on that lane with nothing said.
+//
+// ⚠ **`none` IS "NO HOST FACILITY", NOT "EVERY TARGET".** The word and address rows are pure code
+// generation on the lanes that have an addressable frame, and wasm is not one of them: a wasm local has no
+// address, so `StdOp.stackRecordAddr` cannot be selected there at all. That is a MISSING FACILITY ROW
+// rather than a missing answer here — no row of `HostFacility` names an addressable frame, because nothing
+// needed to ask until `__Raw.scratch` existed — and it is the next rung's to add, alongside the first
+// runtime body that spends it.
 union RawHostFacility
 	none
 	required(facility HostFacility)
@@ -236,7 +279,10 @@ export function rawHostFacilityOf(intrinsic RawIntrinsic) returns RawHostFacilit
 		osTickCountMs gives RawHostFacility.required(HostFacility.uptimeClock)
 		osReadWallClock gives RawHostFacility.required(HostFacility.wallClock)
 		osThreadCpuTicks gives RawHostFacility.required(HostFacility.threadCpuClock)
+		osCpuCount gives RawHostFacility.required(HostFacility.cpuCount)
 		scratch or
+			schedNumProcsAddr or
+			schedMaxActiveWorkersAddr or
 			loadWord or
 			storeWord or
 			ownFrame gives RawHostFacility.none

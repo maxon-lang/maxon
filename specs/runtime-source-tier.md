@@ -136,6 +136,56 @@ end 'main'
 0
 ```
 
+<!-- test: runtime-file-may-ask-the-machine-for-its-cpu-count -->
+**AN OS ROW WHOSE FACILITY ONLY SOME LANES PROVIDE.** `osCpuCount` is the raw floor's spelling of the one
+question `__cpu_count` exists to answer, and it is the row that carries `HostFacility.cpuCount` — so a lane
+without the read has nothing to lower it onto.
+
+⚠ The probe is uncalled, so dead-function elimination drops the body before instruction selection and the
+case runs on every lane. What is under test is the TABLE: the row exists, the tier may spell it, and its
+result is a machine word.
+```maxon
+// --- runtime-file: Probe.maxon
+function probeCpuCount() returns MachineWord
+	return __Raw.osCpuCount()
+end 'probeCpuCount'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: runtime-file-may-read-a-compiler-owned-global -->
+⭐⭐ **A `.data` WORD THE COMPILER LAID OUT, ADDRESSED BY A ROW AND READ BY ANOTHER.** A runtime body that
+answers a scheduler counter needs the word's ADDRESS, and an address is not something the tier can compute:
+the label is minted by the compiler and resolved by the linker. So each readable word is its own row,
+answering an address, and the existing `loadWord` row turns that address into the value — the same two-step
+`__Raw.scratch` and `loadWord` already make over a frame slot.
+
+⛔ **WHICH WORDS ARE READABLE IS THE TABLE'S QUESTION AND NOT THE `.data` SECTION'S.** Every global the
+emitted runtime lays out would otherwise be in reach of a tier body by NAME, which is a wider privilege than
+anything else on this floor and wider than any family needs. A row per readable word keeps the roster closed
+by construction: an address row that does not exist cannot be spelled, and the lowering's exhaustive match
+means a row that exists names a LABEL. That the label is LAID OUT is a separate argument the family owes:
+the `.data` slot rides a `RuntimeUsage` bit the call site sets, and that same call site is the edge dead
+function elimination keeps the body alive for.
+```maxon
+// --- runtime-file: Probe.maxon
+function probeProcessorCount() returns MachineWord
+	return __Raw.loadWord(__Raw.schedNumProcsAddr(), offset: 0)
+end 'probeProcessorCount'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: raw-intrinsic-refused-outside-the-runtime-tier -->
 ⭐⭐ **THE NEGATIVE CONTROL ON P2, AND IT IS THE HALF THAT MATTERS.** The two cases above prove the
 privileges are not EMPTY. Neither proves they are not UNIVERSAL — a compiler that let ANY file call
