@@ -1591,6 +1591,12 @@ export union ParseError implements Error
 	// a value whose type the author never wrote.
 	managedTypeInRuntimeSource(typeName String, line LineNumber, column ColumnNumber)
 
+	// ⭐⭐ A MANAGED value BUILT in a `runtime/` source file, whatever bound it. Renders as **E3153**,
+	// positioned at the construct that produced the value. This is the arm that answers for every door its
+	// two siblings above cannot see — a `for` binding, a closure cell, a caught error, a `match` payload, an
+	// unnamed temporary — because it is raised off the value columns rather than off a binding form.
+	managedValueBuiltInRuntimeSource(typeName String, line LineNumber, column ColumnNumber)
+
 	// ⭐ `resize` on an array whose element is MANAGED. Renders as **E3106**, positioned at the method
 	// name. `__managed_resize` grows by publishing a longer length over slots `__managed_grow` left zeroed, and
 	// a zero is an ELEMENT only while the element lives inline in the buffer; a managed element lives
@@ -15248,6 +15254,29 @@ export type Parser
 	// those is. One slot carrying both claims is a semantic slot shared by two facts.
 	let isRuntimeSource as bool
 
+	// ⭐⭐ **THE FIRST MANAGED VALUE THIS RUNTIME FILE BUILDS, HELD UNTIL THE END OF ITS PARSE (R1's
+	// complete half).** `mintValue` and `retypeValue` are the only writers of the value type columns, so a
+	// managed value arriving through ANY door — a `for` element, a closure cell, a caught error, a `match`
+	// payload, an unnamed temporary — passes one of them; a list of binding sites can promise no such thing.
+	//
+	// ⚠ **IT IS RECORDED THERE AND REFUSED HERE BECAUSE NEITHER WRITER MAY THROW.** Both are called from
+	// every expression emitter in the parser, most of which are not `throws`, so a throw at the mint would
+	// put a `try` on the whole expression tier to serve a rule only `runtime/` can break. The record costs a
+	// runtime file one predicate per value and every other file one bool test.
+	//
+	// The name is EMPTY while the file is clean. The TYPE is rendered at the record rather than kept as a
+	// `ValueId`, because the columns a display reads are the CURRENT function's and the refusal runs after
+	// the last one closed.
+	//
+	// ⚠ **THE POSITION IS THE DEFINING OP'S SPAN AND IS RESOLVED AT THE REFUSAL, NOT AT THE RECORD.** A
+	// value is minted BEFORE the op that defines it is emitted, so at the record the span does not exist
+	// yet; by the end of the file it does, and `valueOrigins`/`opRanges` already hold it exactly. The token
+	// index kept alongside is the cursor at the mint, which serves the values no op defines — a merge phi.
+	var runtimeManagedValueTypeName as String
+	var runtimeManagedValueId as ValueId
+	var runtimeManagedValueFuncIndex as FuncIndex
+	var runtimeManagedValueAnchorIndex as TokenIndex
+
 	// ⭐⭐ **THE RESERVED NAMES THIS COMPILE MINTED INTO THIS FILE — the THIRD provenance the reserved-name
 	// doors read (`Queries.compilerMintedNamesIn`).** Non-empty only for the generated Maxon source a
 	// `maxon test` build stages; empty for every file of every other compile, which is what says the author
@@ -15605,6 +15634,10 @@ export type Parser
 			isStdlibSource: isStdlibSource,
 			buildsBodies: buildsBodies,
 			isRuntimeSource: isRuntimeSource,
+			runtimeManagedValueTypeName: "",
+			runtimeManagedValueId: 0,
+			runtimeManagedValueFuncIndex: 0,
+			runtimeManagedValueAnchorIndex: 0,
 			declaresCompilerInternalNames: declaresCompilerInternalNames,
 			compilerMintedNames: compilerMintedNames,
 			livesUnderStdlibDirectory: livesUnderStdlibDirectory,
@@ -15653,6 +15686,10 @@ export type Parser
 		// (BATCH2 slice 4; fields from S2f) — see `parseDefaultHelpers` for why the drain is at the end and why it comes
 		// before the unused-alias report below.
 		try self.parseDefaultHelpers()
+
+		// ⭐ AFTER THE HELPERS AND BEFORE ANYTHING ELSE REPORTS: R1's value half is a question about every
+		// function this file built, and a default helper is the last of them to be built.
+		try self.requireNoManagedValueWasBuiltInRuntimeSource()
 
 		// ⭐ AT THE END, AND ONLY AT THE END: "is this alias used?" is a question about the WHOLE file, so
 		// it cannot be answered before the last declaration has been read. A file that threw never gets
@@ -30843,19 +30880,25 @@ export type Parser
 	// retains — a file that compiles or not depending on the inliner.
 	//
 	// The predicate is `valueIsManagedHeap`, the compiler's own answer to "does this value own heap": a
-	// String, a Character, a struct box, a boxed union, a closure and an existential are all one, and a
-	// ranged alias or a `bool` is not. Sharing it is what stops this rule from acquiring a second, drifting
-	// idea of what "managed" means.
+	// String, a Character, a struct box, a boxed union and an existential are all one, and a ranged alias or
+	// a `bool` is not. Sharing it is what stops this rule from acquiring a second, drifting idea of what
+	// "managed" means.
+	//
+	// ⚠ **A CLOSURE IS NOT ONE OF THEM AND MUST BE ASKED SEPARATELY.** `valueIsManagedHeap` declines a
+	// `function` tag, because a non-capturing closure is a bare code address; the heap a CAPTURING one owns
+	// is its environment block, which is a fact about the value and not its type —
+	// `noteCapturingClosureInRuntimeSource`.
 	//
 	// ⚠ **THIS IS THE HALF THAT ANSWERS FOR A VALUE WHOSE TYPE THE AUTHOR NEVER WROTE** — an inferred local,
 	// a `map` transform's hinted parameter. A SPELLED type is `requireNoManagedTypeInRuntimeSource`'s, asked
 	// at the one door every written type comes through, and that is what covers a field and a return.
 	//
-	// ⛔ **ITS TWO CALLERS ARE NOT EVERY BINDING DOOR, AND THE REMAINDER IS DEBT THE FIRST RUNTIME FAMILY
-	// OWES.** A loop variable (`declareLoopVariable`), a closure-captured cell (`declareCellLocal`), a caught
-	// error and a match payload each bind a name through their own door, and an unnamed managed TEMPORARY
-	// binds nothing at all — none of them reaches this line, so none of them is refused. The complete site is
-	// the value, not the binding: the rule wants asking wherever a managed value is minted in a runtime file.
+	// ⚠ **ITS TWO CALLERS ARE NOT EVERY BINDING DOOR, AND THEY DO NOT HAVE TO BE.** A loop variable, a
+	// closure-captured cell, a caught error and a match payload each bind a name through their own door, and
+	// an unnamed managed TEMPORARY binds nothing at all; none of them reaches this line. What refuses those
+	// is `noteManagedValueInRuntimeSource`, asked at the two writers of the value type columns, which every
+	// value passes whatever bound it. This door survives it because a BOUND NAME is a sharper sentence than
+	// a construct — it names the thing the author has to change — and never because it is needed for cover.
 	function requireNoManagedValueInRuntimeSource(name ByteArray, value ValueId, line LineNumber, column ColumnNumber) throws ParseError
 		if not self.isRuntimeSource or not self.valueIsManagedHeap(value) 'nothingToRefuse'
 			return
@@ -30863,6 +30906,76 @@ export type Parser
 
 		throw ParseError.managedValueInRuntimeSource(String.from(name), typeName: self.valueDisplayTypeName(value), line: line, column: column)
 	end 'requireNoManagedValueInRuntimeSource'
+
+	// ⭐⭐ **R1's COMPLETE HALF — asked of the VALUE, at the two sites that write a value's type.** A binding
+	// form is a list and a list rots; `mintValue` and `retypeValue` are the whole of how a value acquires a
+	// type, so a managed one cannot enter a runtime file unseen. `retypeValue` is not a duplicate of the
+	// mint: a caught error is minted `integer` for its zero test and becomes its union type there, so the
+	// mint alone would admit exactly the door a `try`/`otherwise` binding opens.
+	//
+	// FIRST wins and later ones are dropped — the earliest is the one the author reaches first, and the
+	// refusal is a throw, so a second could never be reported anyway.
+	function noteManagedValueInRuntimeSource(value ValueId)
+		if not self.runtimeSourceHasNoRecordedOffence() 'nothingToRecord'
+			return
+		end 'nothingToRecord'
+
+		if not self.valueIsManagedHeap(value) 'ownsNoHeap'
+			return
+		end 'ownsNoHeap'
+
+		self.recordManagedValueInRuntimeSource(value)
+	end 'noteManagedValueInRuntimeSource'
+
+	// ⭐⭐ **THE ONE MANAGED THING THE TYPE COLUMNS CANNOT SEE: A CAPTURING CLOSURE'S ENVIRONMENT.**
+	// `valueIsManagedHeap` declines a `function`-tagged value — deliberately, because a NON-capturing
+	// closure is a bare code address that owns nothing — while a capturing one carries a refcounted env
+	// block, and the cell a captured-and-reassigned `var` is promoted into lives in that block. So the
+	// closure, its env and every cell under it are one fact, and `markCapturingClosure` is the one door that
+	// records it.
+	function noteCapturingClosureInRuntimeSource(value ValueId)
+		if not self.runtimeSourceHasNoRecordedOffence() 'nothingToRecord'
+			return
+		end 'nothingToRecord'
+
+		self.recordManagedValueInRuntimeSource(value)
+	end 'noteCapturingClosureInRuntimeSource'
+
+	// Is this a runtime file whose first offence is still ahead of it? Spelled out rather than folded into
+	// each caller's guard so that `mintValue`'s test — paid by every value in every file — is one field read.
+	function runtimeSourceHasNoRecordedOffence() returns bool
+		return self.isRuntimeSource and self.runtimeManagedValueTypeName.isEmpty()
+	end 'runtimeSourceHasNoRecordedOffence'
+
+	function recordManagedValueInRuntimeSource(value ValueId)
+		self.runtimeManagedValueTypeName = self.valueDisplayTypeName(value)
+		self.runtimeManagedValueId = value
+		self.runtimeManagedValueFuncIndex = self.artifact.currentFuncIndex
+		self.runtimeManagedValueAnchorIndex = self.pos
+	end 'recordManagedValueInRuntimeSource'
+
+	// The refusal the recording door defers to, raised once per file at the end of `parseModule` — the one
+	// point at which every function of the file, its lifted closures and its default helpers among them, has
+	// been built.
+	function requireNoManagedValueWasBuiltInRuntimeSource() throws ParseError
+		if self.runtimeManagedValueTypeName.isEmpty() 'nothingToRefuse'
+			return
+		end 'nothingToRefuse'
+
+		let span = self.runtimeManagedValueSpan()
+		throw ParseError.managedValueBuiltInRuntimeSource(self.runtimeManagedValueTypeName.clone(), line: span.line, column: span.column)
+	end 'requireNoManagedValueWasBuiltInRuntimeSource'
+
+	// Where the recorded value was built: its defining op's span, or — for a value no op defines, which a
+	// merge phi is — the cursor the mint stood at.
+	function runtimeManagedValueSpan() returns SourceRange
+		match self.artifact.valueOrigins.lookup(self.runtimeManagedValueFuncIndex, valueId: self.runtimeManagedValueId) 'origin'
+			none then break 'origin'
+			found(opIndex) then return self.artifact.opRanges.get(opIndex)
+		end 'origin'
+
+		return SourceRange.ofToken(self.tokenAt(self.runtimeManagedValueAnchorIndex))
+	end 'runtimeManagedValueSpan'
 
 	function valueIsManagedHeap(value ValueId) returns bool
 		return tagIsByteRecord(self.tagOf(value)) or self.valueIsNonTextAggregate(value)
@@ -41131,6 +41244,10 @@ export type Parser
 	function markCapturingClosure(closureValue ValueId, env ValueId)
 		try self.valueIsCapturingClosure.set(closureValue, value: true) otherwise panic("markCapturingClosure: v{closureValue} has no closure-mark slot — every SSA value is minted through mintValue, which seeds the column")
 		try self.valueClosureEnv.set(closureValue, value: env) otherwise panic("markCapturingClosure: v{closureValue} has no closure-env slot — the two closure columns are filled in lockstep")
+
+		// The env this marks is a refcounted heap block, which R1 forbids a runtime file as surely as a
+		// `String` — and the value type columns cannot see it (see `noteCapturingClosureInRuntimeSource`).
+		self.noteCapturingClosureInRuntimeSource(closureValue)
 	end 'markCapturingClosure'
 
 	// Is `value` a closure that CAPTURES its enclosing frame? Every escape check (through
@@ -52293,6 +52410,10 @@ export type Parser
 		// ⚠ **THE WITNESS COLUMN DELIBERATELY DOES *NOT* RIDE THIS LOCKSTEP** — it is grown ON DEMAND by
 		// `pairInterfaceWitness`, so a function that builds no existential never grows it at all. See the
 		// field header for the measurement that put it there.
+
+		// After every column is seeded, because the predicate reads them.
+		self.noteManagedValueInRuntimeSource(id)
+
 		return id
 	end 'mintValue'
 
@@ -52348,6 +52469,10 @@ export type Parser
 	function retypeValue(value ValueId, valueType MaxonType)
 		try self.valueTags.set(value, value: maxonTypeTag(valueType)) otherwise panic("retypeValue: v{value} has no type slot — every SSA value is minted through mintValue")
 		try self.valueNameIds.set(value, value: typeNameIdOf(valueType)) otherwise panic("retypeValue: v{value} has no type-name slot — the two type columns are filled in lockstep")
+
+		// A value minted unmanaged can BECOME managed here — a caught error's box pointer is the worked
+		// example — so R1's value half is asked at both writers or the `try` door escapes it.
+		self.noteManagedValueInRuntimeSource(value)
 	end 'retypeValue'
 
 	// ⭐ **PAIR AN EXISTENTIAL WITH ITS WITNESS HALF (P1.7a-existentials slice 1)** — the one writer of

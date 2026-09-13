@@ -53,7 +53,10 @@ The restrictions are what a runtime cannot have:
 - **No managed value may be admitted.** The reference-counting pass emits calls into the very runtime
   this tier DEFINES, so a managed local here is a runtime function that calls itself into existence.
   The rule is asked of the TYPE a runtime file spells — a field, a return, a parameter, a cast target —
-  and of the NAME a binding gives a value whose type was never written.
+  and of every VALUE the file builds, whatever names it or leaves it unnamed. Asking it of the value is
+  what reaches a `for` element, a caught error, a `match` payload and a temporary no binding form sees; a
+  CAPTURING closure is asked separately, because its heap is an environment block rather than the type of
+  any value. A non-capturing closure, and a caught error whose enum owns nothing, are both admitted.
 - **Nothing wider than `module`.** `runtime/` is loaded into every program, so a declaration visible
   outside the tier contests names with the programs it is linked into, and the compiler compiling
   itself is one of them. `module` is the widest visibility the tier's own file-to-file sharing needs.
@@ -356,6 +359,219 @@ i64 42
 i8 0
 i8 0
 i8 0
+```
+
+<!-- test: runtime-file-may-not-bind-a-managed-value-in-a-loop -->
+⛔⛔ **R1's VALUE HALF IS ASKED OF THE VALUE, NOT OF THE BINDING FORM — AND A LOOP IS WHY IT HAS TO BE.**
+A `for` element is bound by neither `declareInitializedBinding` nor `bindParameters`, so a rule stated at
+those two doors admits the element of a `String` walk in a file whose whole premise is that the
+reference-counting pass must never reach it. The refusal is raised off the parser's value type columns
+instead — `mintValue` and `retypeValue`, which every value passes whatever binds it or leaves it unbound.
+
+⚠ The anchor is the STRING, not the element name. A `String` walk builds the managed value at its
+iterable and the `Character` element out of it, and the first one the file builds is the one reported: it
+is the construct the author has to remove, and the element goes with it.
+```maxon
+// --- runtime-file: Probe.maxon
+module function probeWalk() returns MachineWord
+	var seen = 0
+
+	for c in "abc" 'eachByte'
+		seen = seen + (c.byteLength() as MachineWord)
+	end 'eachByte'
+
+	return seen as MachineWord
+end 'probeWalk'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3153: <fragment>:6:11: a managed value of type 'String' is built in a runtime source file: the reference-counting pass would emit calls into the very runtime this tier defines
+```
+
+<!-- test: runtime-file-may-not-build-an-unnamed-managed-temporary -->
+⭐⭐ **THE DOOR NO BINDING FORM CAN EVER REACH: A MANAGED VALUE NOTHING NAMES.** Here every name in the
+file is a machine word and every type it spells is one — the `String` exists only as the receiver of a
+method call, for the length of one expression. A rule asked at bindings sees nothing to ask about, and a
+rule asked at spelled types sees nothing written down; the value is still allocated, still refcounted, and
+still emits `__mm_decref` into the tier that defines it.
+
+⚠ This is the case that makes the value columns the RIGHT site rather than a convenient one. There is no
+name to hang a diagnostic on and no type to point at, so the only thing that can be refused is the value —
+which is exactly what the columns hold.
+```maxon
+// --- runtime-file: Probe.maxon
+module function probeLength() returns MachineWord
+	return "abc".count() as MachineWord
+end 'probeLength'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3153: <fragment>:4:9: a managed value of type 'String' is built in a runtime source file: the reference-counting pass would emit calls into the very runtime this tier defines
+```
+
+<!-- test: runtime-file-may-not-build-an-interpolated-string -->
+**A SECOND PRODUCER OF THE SAME REFUSAL, AND IT IS THE ONE THAT ALLOCATES.** A string LITERAL can be an
+immortal `.rdata` record; an interpolation is a fresh heap record built at run time by the very allocator
+this tier is being written to define. So the two are not one case with two spellings — the refusal has to
+hold for a value the compiler mints rather than one it lays out, and this is the half where a hole would
+cost a real `__mm_alloc`.
+```maxon
+// --- runtime-file: Probe.maxon
+module function probeInterpolated() returns MachineWord
+	return "a{1}b".count() as MachineWord
+end 'probeInterpolated'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3153: <fragment>:4:9: a managed value of type 'String' is built in a runtime source file: the reference-counting pass would emit calls into the very runtime this tier defines
+```
+
+<!-- test: runtime-file-may-walk-raw-words-in-a-loop -->
+⭐⭐ **THE CONTROL, AND WITHOUT IT THE RULE COULD BE *"REFUSE EVERY LOOP IN `runtime/`"*.** That answer
+passes all three refusals above and is the dangerous direction: the allocator is the next family to
+migrate and it is the first tier code written out of counted loops, bit-run walks and copy ranges. A rule
+that refused a `for` — rather than refusing a MANAGED VALUE that a `for` can happen to build — would make
+that port impossible while every case above stayed green.
+
+Both loop forms are here because they bind their induction variables differently: a `for` element is bound
+by the loop's own door and a `while` condition binds nothing at all. Every value the body builds is a
+machine word, so the file is legal and compiles.
+```maxon
+// --- runtime-file: Probe.maxon
+module function probeWords() returns MachineWord
+	var total = 0 as MachineWord
+
+	for i in 0 upto 4 'eachIndex'
+		total = total + (i as MachineWord)
+	end 'eachIndex'
+
+	var bits = total
+	var runs = 0 as MachineWord
+
+	while bits > 0 'eachRun'
+		runs = runs + (bits and 1)
+		bits = bits shr 1
+	end 'eachRun'
+
+	return runs
+end 'probeWords'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: runtime-file-may-not-capture-a-mutable-local-in-a-closure -->
+⛔⛔ **THE ONE MANAGED THING THE VALUE TYPE COLUMNS CANNOT SEE, AND IT IS NOT A `String`.** A closure is
+`function`-tagged and `valueIsManagedHeap` declines that tag — rightly, because a NON-capturing closure is
+a bare code address that owns nothing. A CAPTURING one allocates a refcounted ENVIRONMENT block, and the
+cell a captured-and-reassigned `var` is promoted into lives inside it, so the tier acquires exactly the
+refcount traffic R1 exists to forbid by a route the type of no value records.
+
+⚠ The refusal is therefore asked at `markCapturingClosure`, the one door that records the capture, rather
+than at the mint. The anchor is the closure literal, because the env and every cell under it exist only
+because of it.
+```maxon
+// --- runtime-file: Probe.maxon
+module function probeClosure() returns MachineWord
+	var total = 0 as MachineWord
+	let bump = function(x MachineWord) gives total + x
+	total = bump(1 as MachineWord)
+
+	return total
+end 'probeClosure'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3153: <fragment>:5:13: a managed value of type 'function' is built in a runtime source file: the reference-counting pass would emit calls into the very runtime this tier defines
+```
+
+<!-- test: runtime-file-may-walk-raw-words-in-a-loop -->
+⭐⭐ **THE CONTROL, AND WITHOUT IT THE RULE COULD BE *"REFUSE EVERY LOOP IN `runtime/`"*.** That answer
+passes every refusal above and is the dangerous direction: the allocator is the next family to migrate and
+it is the first tier code written out of counted loops, bit-run walks and copy ranges. A rule that refused
+a `for` — rather than refusing a MANAGED VALUE a `for` can happen to build — would make that port
+impossible while every case above stayed green.
+
+Both loop forms are here because they bind differently: a `for` element is bound by the loop's own door,
+which is precisely the door the first refusal above closed, and a `while` condition binds nothing at all.
+Every value this body builds is a machine word, so the file is legal and compiles.
+```maxon
+// --- runtime-file: Probe.maxon
+module function probeWords() returns MachineWord
+	var total = 0 as MachineWord
+
+	for i in 0 upto 4 'eachIndex'
+		total = total + (i as MachineWord)
+	end 'eachIndex'
+
+	var bits = total
+	var runs = 0 as MachineWord
+
+	while bits > 0 'eachRun'
+		runs = runs + (bits and 1)
+		bits = bits shr 1
+	end 'eachRun'
+
+	return runs
+end 'probeWords'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: runtime-file-may-catch-an-unmanaged-error -->
+⭐⭐ **THE SECOND CONTROL, OVER THE TWO DOORS A REFUSAL KEYED ON SYNTAX WOULD HAVE SHUT NEXT.** A caught
+error and a `match` payload are the other two bindings no spelled type and no `let` reaches, and the rule
+must admit both whenever what they bind owns no heap. The divide's error enum carries no payload and is
+not boxed, so `e` is a tag in a register and the tier may catch it, discriminate it and act on it.
+
+⚠ **THE DIVISOR IS A HOST READING BECAUSE A CONSTANT ONE NEVER REACHES THE HANDLER.** A literal zero is
+E3103 at compile time and a literal non-zero elides the check, so neither would put the caught-error
+binding under a case at all.
+
+⚠ A NON-capturing closure belongs to this control's family for the same reason and is not written here: it
+would need its own file, and the refusal above already states the line between the two.
+```maxon
+// --- runtime-file: Probe.maxon
+module function probeCaught() returns MachineWord
+	let ticks = __Raw.osTickCountMs()
+	var answer = 0 as MachineWord
+
+	try (100 / ticks) otherwise (e) 'handle'
+		match e 'kind'
+			divisionByZero then answer = 1 as MachineWord
+		end 'kind'
+	end 'handle'
+
+	return answer
+end 'probeCaught'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
 ```
 
 <!-- test: raw-intrinsic-refused-outside-the-runtime-tier -->

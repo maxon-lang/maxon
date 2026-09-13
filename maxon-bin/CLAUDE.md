@@ -163,13 +163,26 @@ is a REACHED tier body that calls another entry — every tier body today calls 
 callee (`MaxonDialect.maxonOpCalleeKind` answers `noCallee` for `rawIntrinsic`), and no source file outside
 the tier may reach a spec fragment's own tier function, so no spec case can construct one.
 
-Five doors are still standing open rather than shut:
+⛔⛔ **E3153 IS COMPLETE ON BOTH SIDES, AND THE VALUE SIDE IS COMPLETE BECAUSE IT IS ASKED OF THE VALUE
+RATHER THAN OF THE BINDING FORM.** `parseTypeReference` catches every type a runtime file WRITES.
+Everything else is caught off the parser's value type columns: `Parser.noteManagedValueInRuntimeSource` is
+asked at `mintValue` and `retypeValue` — the only two writers of those columns, so a `for` element, a
+`match` payload, a caught error and an UNNAMED temporary all pass one of them — and the first offence is
+held on the parser and refused at the end of `parseModule`, where every function of the file including its
+lifted closures and default helpers has been built. ⚠ **IT IS RECORDED AND REFUSED LATER BECAUSE NEITHER
+WRITER MAY THROW**: both are called from expression emitters that are not `throws`, and the position is
+the DEFINING OP's span, which does not exist yet at the mint and is resolved from
+`valueOrigins`/`opRanges` at the refusal. `declareInitializedBinding` and `bindParameters` still ask
+first, for a sharper sentence naming the binding — never for cover.
+⭐ **THE ONE MANAGED THING THE TYPE COLUMNS CANNOT SEE IS A CAPTURING CLOSURE**, because
+`valueIsManagedHeap` declines a `function` tag — correctly, a non-capturing closure owns nothing — while a
+capturing one carries a refcounted env block and the PBR-2 cells live inside it. That is its own fact with
+its own single door, `markCapturingClosure`, and the refusal is asked there.
+⇒ **A NEW WAY FOR A VALUE TO ACQUIRE HEAP THAT IS NOT A TYPE-COLUMN WRITE OWES THE SAME TREATMENT**: one
+door that records the fact, and a note on it.
 
-- **E3153 is complete over SPELLED types and incomplete over INFERRED values.** `parseTypeReference`
-  catches every type a runtime file writes; the value-side check at `declareInitializedBinding` and
-  `bindParameters` does not see a `for` binding, a closure cell, a caught error, a `match` payload, or
-  an unbound temporary. `for c in "abc"` in a runtime file is admitted. The complete site is the built
-  `IrFunction`, and it is now reached, so the hole can be closed on its own.
+Four doors are still standing open rather than shut:
+
 - **`osThreadCpuTicks` is the one `__Raw` row nothing exercises**, as are `reserveRawScratchSlot`'s refusals.
   `osCpuCount`, `schedNumProcsAddr` and `schedMaxActiveWorkersAddr` are the cpu-parallel family's, and
   `builtins-cpu-parallel.md`'s two `-body-is-runtime-source` cases render the bodies they lower to;

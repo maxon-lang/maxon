@@ -1816,9 +1816,12 @@ export enum ErrorCode
 	// with a managed field. The reference-counting pass emits `__mm_incref`/`__mm_decref` around such a
 	// value, into the very tier that DEFINES those entries: the runtime function managing it would be
 	// lowered with bookkeeping that calls the function being lowered, a circularity with no fixed point.
-	// Two positions answer the two ways one arrives: the TYPE the file spelled (a field, a return, a
-	// parameter, a cast target), and the NAME a binding gave a value whose type was never written. Asked at
-	// both, the legality of a runtime file never turns on which optimizations happened to elide its retains.
+	// Three positions answer it: the TYPE the file spelled (a field, a return, a parameter, a cast target),
+	// the NAME a binding gave a value whose type was never written, and the CONSTRUCT that built a value no
+	// name and no written type reaches — a `for` element, a caught error, a `match` payload, a temporary.
+	// The third is the complete one, raised off the parser's value type columns; the first two are asked
+	// earlier because a spelled type and a bound name make a sharper sentence than a construct does. Asked
+	// at all three, the legality of a runtime file never turns on which optimizations elided its retains.
 	managedValueInRuntimeSource = "E3153"
 
 	// A `runtime/` declaration reaches for a visibility wider than `module` — `export` (global) or `public`.
