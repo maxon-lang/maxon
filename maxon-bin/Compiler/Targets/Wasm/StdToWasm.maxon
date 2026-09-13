@@ -732,14 +732,16 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		witnessCall(_, _, _, resultType, argFloatMask, args) then internIndirectCallType(map, builder: builder, resultType: resultType, argFloatMask: argFloatMask, argCount: args.count(), isThrowing: false)
 		witnessTryCall(_, _, _, _, resultType, argFloatMask, args) then internIndirectCallType(map, builder: builder, resultType: resultType, argFloatMask: argFloatMask, argCount: args.count(), isThrowing: true)
 
+		// The lock ops emit nothing at all here, so they make no indirect call.
+		osLockInit or
+			osLockEnter or
+			osLockLeave then break 'k'
+
 		// The IOCP ops have no wasm lowering and pull in no wasm import.
 		osPipeCreate or
 			osIocpCreate or
 			osEventCreate or
 			osThreadCreate or
-			osLockInit or
-			osLockEnter or
-			osLockLeave or
 			osReadOverlapped or
 			osLastError or
 			osProcessSpawnInherit or
@@ -1426,14 +1428,16 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		witnessCall(resultId, _, _, resultType, _, _) then recordIndirectCallDefValtype(valtypes, resultId: resultId, resultType: resultType)
 		witnessTryCall(resultId, errorFlagId, _, _, resultType, _, _) then recordWitnessTryCallDefs(valtypes, resultId: resultId, errorFlagId: errorFlagId, resultType: resultType)
 
+		// The lock ops answer nothing and emit nothing — no def, so no wasm valtype.
+		osLockInit or
+			osLockEnter or
+			osLockLeave then break 'def'
+
 		// The IOCP ops have no wasm lowering — no wasm valtype to record.
 		osPipeCreate or
 			osIocpCreate or
 			osEventCreate or
 			osThreadCreate or
-			osLockInit or
-			osLockEnter or
-			osLockLeave or
 			osReadOverlapped or
 			osLastError or
 			osProcessSpawnInherit or
@@ -1793,13 +1797,13 @@ type WasmFuncEmitter
 			switch then panic("emitStraightLineTerminator: a `switch` (multiway) block always takes the dispatcher path, never straight-line")
 			witnessCall then panic("emitStraightLineTerminator: a `witnessCall` is a value-producing body op, never a terminator")
 			witnessTryCall then panic("emitStraightLineTerminator: a `witnessTryCall` is a value-producing body op, never a terminator")
+			osLockInit or
+				osLockEnter or
+				osLockLeave then panic("emitStraightLineTerminator: an `osLock*` op is a body op, never a terminator")
 			osPipeCreate or
 				osIocpCreate or
 				osEventCreate or
 				osThreadCreate or
-				osLockInit or
-				osLockEnter or
-				osLockLeave or
 				osReadOverlapped or
 				osLastError or
 				osProcessSpawnInherit or
@@ -1963,13 +1967,13 @@ type WasmFuncEmitter
 				osFreePages then panic("emitDispatcherTerminator: an `osPanic` is a body op, never a terminator")
 			witnessCall then panic("emitDispatcherTerminator: a `witnessCall` is a value-producing body op, never a terminator")
 			witnessTryCall then panic("emitDispatcherTerminator: a `witnessTryCall` is a value-producing body op, never a terminator")
+			osLockInit or
+				osLockEnter or
+				osLockLeave then panic("emitDispatcherTerminator: an `osLock*` op is a body op, never a terminator")
 			osPipeCreate or
 				osIocpCreate or
 				osEventCreate or
 				osThreadCreate or
-				osLockInit or
-				osLockEnter or
-				osLockLeave or
 				osReadOverlapped or
 				osLastError or
 				osProcessSpawnInherit or
@@ -2157,15 +2161,25 @@ type WasmFuncEmitter
 			witnessCall(resultId, witnessAddr, methodIndex, resultType, argFloatMask, args) then self.emitWitnessCall(resultId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask)
 			witnessTryCall(resultId, errorFlagId, witnessAddr, methodIndex, resultType, argFloatMask, args) then self.emitWitnessTryCall(resultId, errorFlagId: errorFlagId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask)
 
+			// ⭐⭐ **THE LOCK IS VACUOUS ON THIS LANE, SO ITS WHOLE LOWERING IS ZERO INSTRUCTIONS — AND THAT IS AN
+			// HONEST TRANSLATION RATHER THAN A STUB, THE SAME ONE `osDecommitPages` GETS ABOVE.** A WASI component
+			// has ONE thread, so a region has no second party to be excluded from: an acquire that can never
+			// contend and a release that can wake nobody are the identity. The three ops carry no result, so there
+			// is nothing to push either.
+			//
+			// ⛔ **A wasm LANE WITH THREADS WOULD NEED REAL BODIES HERE, AND `HostFacility.hostMutex` MUST COME OFF
+			// `true` UNTIL IT HAS THEM** — what that row promises is exactly that every one of the three has an arm
+			// in this match.
+			osLockInit or
+				osLockEnter or
+				osLockLeave then break 'body'
+
 			// The overlapped-read substrate has no wasm lowering, and wasm rejects rather than inventing an
 			// untested one.
 			osPipeCreate or
 				osIocpCreate or
 				osEventCreate or
 				osThreadCreate or
-				osLockInit or
-				osLockEnter or
-				osLockLeave or
 				osReadOverlapped or
 				osLastError or
 				osProcessSpawnInherit or
@@ -3755,13 +3769,13 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		// and the throwing form is a single-successor body op for the identical reason.
 		witnessCall then break 'k'
 		witnessTryCall then break 'k'
+		osLockInit or
+			osLockEnter or
+			osLockLeave then panic("decideDispatcher: an `osLock*` op is a body op, never a terminator")
 		osPipeCreate or
 			osIocpCreate or
 			osEventCreate or
 			osThreadCreate or
-			osLockInit or
-			osLockEnter or
-			osLockLeave or
 			osReadOverlapped or
 			osLastError or
 			osProcessSpawnInherit or

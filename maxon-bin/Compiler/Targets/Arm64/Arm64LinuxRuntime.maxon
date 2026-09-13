@@ -2839,15 +2839,19 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		chunks.push(buildArm64LinuxEnvReadChunk())
 	end 'envRead'
 
-	// ⚠ **THE LOCK IS A FUTEX WORD, SO ITS ENTER AND LEAVE NEED BODIES** — five chunks here where the Darwin
-	// lane's `pthread_mutex_t` leaves it three.
 	if posixUsesHostObjects(usage) 'hostObjects'
 		chunks.push(buildArm64PosixProcReapChunk(PosixHostCall.syscall(Arm64LinuxSyscallWait4)))
 		chunks.push(buildArm64LinuxWaitCloseChunk())
+	end 'hostObjects'
+
+	// ⚠ **THE LOCK IS A FUTEX WORD, SO ITS ENTER AND LEAVE NEED BODIES** — three chunks here where the Darwin
+	// lane's `pthread_mutex_t` leaves it one. They ride a gate of their own because their producer set is not
+	// the band's: the allocator's slow-path lock reaches them in every allocating program.
+	if posixUsesHostLock(usage) 'hostLock'
 		chunks.push(buildArm64LinuxLockInitChunk())
 		chunks.push(buildArm64LinuxLockEnterChunk())
 		chunks.push(buildArm64LinuxLockLeaveChunk())
-	end 'hostObjects'
+	end 'hostLock'
 
 	// ⭐ **THE GREEN-THREAD FLOOR, ON ONE BIT.** `usesGt` is the bit `installGtRuntime` itself was gated on,
 	// so every body that can `bl` one of these is built under exactly the same condition — one bit, two

@@ -178,6 +178,8 @@ the short-circuit path hands `classifyLibraryReach` an EMPTY reached set, so the
 a name roster's difference. **UNCONDITIONAL**, because over-approximating costs the two `.data` words in
 every program and the other direction is a link failure. ⇒ **A NEW TIER FAMILY THE COMPILER REACHES BY
 MINTING A CALL OWES A LINE IN THAT ROSTER**; the panic above names the missing body.
+⭐ **`runtime/SlabRuntime.maxon`'s THIRD, FOURTH AND FIFTH ENTRY POINTS NEEDED NO NEW LINE**, because the
+roster is keyed by FILE and that file was already on it — which is the whole reason it is keyed that way.
 
 ⛔⛔ **E3153 IS COMPLETE ON BOTH SIDES, AND THE VALUE SIDE IS COMPLETE BECAUSE IT IS ASKED OF THE VALUE
 RATHER THAN OF THE BINDING FORM.** `parseTypeReference` catches every type a runtime file WRITES.
@@ -220,24 +222,56 @@ Four doors are still standing open rather than shut:
   `__slab_arena_map_ensure`, `__slab_arena_map_set`), so the reserve/commit/decommit rows, `memFill`,
   `osExit` and the two address rows below are now MEASURED through a reached body rather than at what a
   probe proves.
-  ⭐⭐ **AND THE OBJECT LAYER ABOVE IT IS THE FAMILY WHOSE PARTITION IS DECIDED BY A BUILD-TIME ARGUMENT
-  RATHER THAN BY ITS CALL GRAPH.** `runtime/SlabRuntime.maxon` holds TWO of `SlabRuntime.maxon`'s fourteen
-  entry points — `__slab_os_direct_alloc` and `__slab_os_direct_free`, the whole of the above-32 KiB road.
-  ELEVEN of the rest are emitted DIFFERENTLY per program off `sharded` (`usage.usesGt`), `zeroed` or
-  `countRaw`, and tier source reads no usage record: it must spell every arm, and the sharded arms are
-  `osLockEnter` and `tlsSlotLoad`, which reach no wasm or arm64 case at all. ⇒ **ASK A FAMILY'S BUILD-TIME
-  ARGUMENTS BEFORE ITS CALL GRAPH — A PARAMETERISED BUILDER HAS NO TIER SPELLING.** `__slab_state_base` is
-  that set's linchpin: its only gate is one `osLockInit`, and `__slab_meta_alloc`, `__slab_meta_free` and
-  `__slab_span_destroy` call nothing else that stays. The remaining two are blocked the arena's way:
-  `__slab_drain_remote` calls `__slab_arena_map_get`, and `__slab_rounded_size` shares `emitSlabClassIndex`
-  with `__slab_alloc`, so porting either alone would be a second spelling of one walk.
+  ⭐⭐⭐ **THE OBJECT LAYER IS WHERE THE TIER'S BOUNDARY WAS FINALLY STATED, AND IT IS ONE SENTENCE:
+  A FAMILY'S BODIES CAN BE TIER SOURCE IFF THE BUILDER THAT EMITS THEM IS A CONSTANT FUNCTION OF
+  `RuntimeUsage`.** Tier source is compiled once and reads no usage record, so a builder whose OUTPUT varies
+  with the record has no tier spelling at all — not a harder one. It explains every outcome so far:
+  `SlabArena` moved because `installSlabArena` reads no usage; the OS-direct pair moved because it takes no
+  build-time argument; `__slab_state_base` was one `if` away and was therefore a LOWERING rung rather than a
+  port; `__mm_alloc` is permanently a builder because its ARITY forks on `--debugstream`; and
+  `ManagedMemoryRuntime` is permanently a builder because its function LIST is a function of the program's
+  types.
+  ⇒ **THE COROLLARY, AND IT IS THE PERMANENT SHAPE OF THE SPLIT: the allocator's MECHANISM is constant and
+  portable, and its INSTRUMENTATION and SPECIALISATION are a function of the program and a builder's job
+  forever.**
+  ⛔ **`zeroed` IS NOT ON THAT LIST AND NEVER WAS — IT NEVER TOUCHES `RuntimeUsage`.**
+  `installSlabRuntime` passes a LITERAL to each of the three allocation doors (`__slab_alloc` zeroes,
+  `__slab_alloc_raw` does not, `__slab_alloc_box` zeroes), and a build-time argument that is a literal per
+  ENTRY POINT is one tier source simply spells — as one Maxon helper with a `bool` parameter, which is a cost
+  and not a blocker. The real blockers there are `sharded` (`usage.usesGt`) and `countRaw`
+  (`usage.usesMmCounters`).
+
+  `runtime/SlabRuntime.maxon` holds FIVE of `SlabRuntime.maxon`'s fourteen entry points: the OS-direct pair
+  `__slab_os_direct_alloc`/`__slab_os_direct_free`, the whole of the above-32 KiB road, plus
+  `__slab_state_base` and the metadata slab's `__slab_meta_alloc`/`__slab_meta_free`. NINE of the rest are
+  emitted DIFFERENTLY per program off `sharded` or `countRaw` — the lock enter/leave and the TLS read that
+  answers *"which P am I"*. The other two are blocked the arena's way: `__slab_drain_remote` calls
+  `__slab_arena_map_get`, and `__slab_rounded_size` shares `emitSlabClassIndex` with `__slab_alloc`, so
+  porting either alone would be a second spelling of one walk.
+  ⛔⛔ **AND `__slab_span_destroy` IS BLOCKED THAT SAME WAY, WHICH IS NOT WHERE ITS BLOCKER WAS PREDICTED.**
+  It reads no usage record and every callee it names is now tier source, so the closure argument really does
+  reach it — but it and `__slab_refill` compute a span's chunk run from the same packed class geometry, and
+  the refill stays a builder. `emitSpanChunkCount`'s own header is the rule: the CUT and the DESTRUCTION must
+  agree TO THE CHUNK, or a span is released one chunk short and a chunk stays claimed forever. ⇒ **THE
+  SECOND-SPELLING TEST IS A SEPARATE GATE FROM THE BUILD-TIME-ARGUMENT ONE AND IS ASKED AFTER IT.**
+  ⚠ **THE STATE REGION'S GEOMETRY IS NOW WRITTEN TWICE AND PINNED ONCE.** The tier file cannot read the
+  class ladder, so it restates the head layout, the class count and the shard count and derives the region's
+  size itself; `checkSlabRuntimeGeometry` compares that derivation against `TierStateBytes`/`TierStateChunks`
+  on every compile of every allocating program. Without it a regenerated ladder is a request one chunk too
+  small — an mcache running off the end of its run, silently. **A RESTATED DERIVATION OWES A PIN.**
   ⛔ **THE NINTH — `__slab_arena_map_get` — STAYS A BUILDER, AND THAT IS NOT DEBT**:
   `__slab_free` splices the walk INLINE (`SlabArena.emitSlabArenaMapGet`), because a frame around four loads
   and three tests is overhead on the path of every free in the language, so porting it would be a SECOND
-  spelling of one walk. The three `osLock*` rows and the atomics are still spelled only by UNREACHED probe
-  cases, and the caveat below is theirs: **WHAT A PROBE CASE PROVES STOPS AT THE PARSER AND THE Maxon→Std
-  LOWERING** — the probe is uncalled, so dead-function elimination drops the body before instruction
-  selection and no lock is entered and no lane's isel consulted.
+  spelling of one walk. The atomics are still spelled only by UNREACHED probe cases, and the caveat below is
+  theirs: **WHAT A PROBE CASE PROVES STOPS AT THE PARSER AND THE Maxon→Std LOWERING** — the probe is
+  uncalled, so dead-function elimination drops the body before instruction selection and no lane's isel is
+  consulted.
+  ⭐⭐ **`osLockInit` IS OUT OF THAT CLASS ON ALL FIVE LANES.** `__slab_state_base` spells it
+  UNCONDITIONALLY and every allocating program reaches it, so the row is now MEASURED through a reached tier
+  body: `InitializeCriticalSection`, `mrt_host_lock_init`'s futex build on the two Linux lanes, a RECURSIVE
+  `pthread_mutex_init` on arm64-macOS, and nothing at all on wasm32-wasi. `osLockEnter`/`osLockLeave` are
+  still spelled from tier source by no reached body — the BUILDERS emit them in a sharded build, which is a
+  different road — so their isel evidence is the scheduler's and not the tier's.
   ⭐⭐ **AND THE ARENA'S TWO `.data` WORDS ARE ADDRESSED BY ROWS OF THEIR OWN** —
   `slabArenaListAddr` and `slabArenaMapL1Addr`, lowering to a `globalAddr` on
   `SlabArena.SlabArenaListLabel`/`SlabArenaMapL1Label`. ⛔ **THEY DO NOT GET THE `usesSchedMaxActiveWorkers`
@@ -284,18 +318,27 @@ Four doors are still standing open rather than shut:
 - **A `__Raw` row's host facility reaches no refusable site.** `maxonOpCalleeKind` answers `noCallee`,
   so `LibraryFacts.substrateEntries` never sees one, and a lane without the op reaches instruction
   selection instead of E3104. A substrate-entry row per op is what closes it.
-  ⚠ **SEVEN ROWS NAME A FACILITY A SUPPORTED LANE DOES NOT PROVIDE** — `osCpuCount`, `osGetPid`,
-  `osEnterBackgroundPriority` and `osThreadCpuTicks`, plus `osLockInit`/`osLockEnter`/`osLockLeave`. For the
-  first three what refuses the wasm program is the CALLEE route (`TargetFacilities.calleeHostFacility`: the
-  `__cpu_` band, the `__proc_` band, and `ProcessBackgroundPriorityName` by name), not this one. The other
-  four are spelled only by UNREACHED probe bodies, which dead-function elimination removes before
-  instruction selection, so nothing exercises their route at all; a REACHED tier body spelling any of them
-  reaches instruction selection with nothing said.
-  ⛔ **THE LOCK ROWS' GAP IS TWO GAPS.** wasm refuses them at emission, and on the three POSIX lanes their
-  `mrt_host_lock_*` chunk is installed only under `PosixRuntime.posixUsesHostObjects` — green threads,
-  DebugStream or a shared section — so a fourth producer calls a symbol the image never laid out (MEASURED:
-  `bl to unknown function 'mrt_host_lock_init'`). `HostFacility.hostMutex` is therefore `false` on all four
-  non-Windows lanes, and is claimed by widening that union alongside the first tier body that spells them.
+  ⚠ **FOUR ROWS NAME A FACILITY A SUPPORTED LANE DOES NOT PROVIDE** — `osCpuCount`, `osGetPid`,
+  `osEnterBackgroundPriority` and `osThreadCpuTicks`. For the first three what refuses the wasm program is
+  the CALLEE route (`TargetFacilities.calleeHostFacility`: the `__cpu_` band, the `__proc_` band, and
+  `ProcessBackgroundPriorityName` by name), not this one. The fourth is spelled only by an UNREACHED probe
+  body, which dead-function elimination removes before instruction selection, so nothing exercises its route
+  at all; a REACHED tier body spelling it reaches instruction selection with nothing said.
+  ⭐⭐ **THE LOCK ROWS' GAP WAS TWO GAPS AND BOTH ARE SHUT: `HostFacility.hostMutex` IS `true` ON ALL FIVE
+  LANES.** On wasm32-wasi each of the three has its own arm in `StdToWasm.emitBodyOp` emitting NOTHING — a
+  component has one thread, so exclusion is already total and the empty lowering is the honest translation,
+  the same shape `osDecommitPages` gets there. That is `pageMemory`'s standard of proof (*"every one of the
+  ops has an arm, which is what a `true` promises"*) and not `terminalDetection`'s; a threaded wasm lane
+  falsifies the premise and owes three real bodies before the row may stay.
+  ⛔ On the three POSIX lanes the `mrt_host_lock_*` chunks ride `PosixRuntime.posixUsesHostLock`, a gate
+  SPLIT OFF `posixUsesHostObjects` rather than a widening of it: the lock's producers are the scheduler, the
+  DebugStream ring and — widest — every program that allocates, and putting that on the host-object gate
+  would drag `mrt_host_proc_reap` (a `wait4` child reaper) and `mrt_host_wait_close` into every
+  single-threaded POSIX program that allocates one box. `posixReadsEnvironment` is the precedent: a union
+  over the producers of ONE op, split off for exactly this reason. ⇒ **A GATE NARROWER THAN ITS OP'S
+  PRODUCER SET IS A LINK FAILURE RATHER THAN A DIAGNOSTIC** (MEASURED one facility over as
+  `arm64ResolveCallFixups: bl to unknown function 'mrt_host_env_read'`), **and a `hostMutex` `true` is only
+  as good as that union.**
   ⚠ **`HostFacility.pageMemory` IS `true` ON ALL FIVE LANES, MEASURED RATHER THAN ASSUMED** — including
   wasm32-wasi, where `memory.grow` is the whole page API, a reserve IS an alloc, and a decommit or a free
   emits nothing. `targetProvidesFacility` spells wasm32-wasi as its OWN BLOCK rather than reaching the

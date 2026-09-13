@@ -153,7 +153,7 @@ let MspanScavStateOffset = 56 as ByteOffset
 //
 // ⚠ **`ACTIVE` IS 0, WHICH IS NOT AN ACCIDENT AND IS NOT LOAD-BEARING EITHER.** `__slab_refill` writes it
 // explicitly on both paths (see the `install` block), because a recycled mspan header holds STALE DATA
-// rather than zero — the rule `buildSlabMetaAlloc` states in full.
+// rather than zero — the rule `runtime/SlabRuntime.maxon`'s `__slab_meta_alloc` states in full.
 let MspanScavActive = 0
 let MspanScavSeenFree = 1
 
@@ -271,17 +271,22 @@ let SlabSmallTableMaxSize = SlabSmallSizeMax - SlabSmallSizeDiv
 // single words in an order this table may not depend on) — so they share one lazily-committed region and
 // this word is its base. Zero means "not yet committed", which is the state the `.data` image already
 // expresses; there is nothing to initialise and so nothing to guard.
-let SlabStateLabel = b"__slab_state"
+export let SlabStateLabel = b"__slab_state"
 
 // The region's fixed head, then the two arrays. `SlabStateMcentralOffset` onwards are DERIVED from the
 // class count so a regenerated ladder moves them rather than leaving a stale stride behind.
 //
-// ⭐ **`metaFree` IS S6's, AND IT EXISTS BECAUSE SOMETHING FINALLY DESTROYS SPANS.** `buildSlabMetaAlloc`'s
-// note used to say a free list here would be "a structure with no producer"; the scavenger is that producer,
-// and without it every span it destroys would leak its 64-byte header for the life of the process.
+// ⭐ **`metaFree` EXISTS BECAUSE SOMETHING FINALLY DESTROYS SPANS — the scavenger.** Without it every span
+// the scavenger reclaims would leak its 64-byte header for the life of the process.
+// ⚠ **THE THREE ARE `runtime/SlabRuntime.maxon`'s TO READ AND WRITE, AND ARE DECLARED HERE BECAUSE THE
+// LOCK OFFSET BELOW IS DERIVED FROM THEM** — the metadata cursor is what sits before the lock, so a fourth
+// head word moves the lock and the two arrays with it. The tier restates them; `checkSlabRuntimeGeometry`
+// pins the total both sides derive, which is what a drift moves.
+// Chained rather than written as 0/8/16 so that inserting a head word moves every offset after it — the
+// lock's included, since it is derived from the last of the three.
 let SlabStateMetaBumpOffset = 0 as ByteOffset
-let SlabStateMetaEndOffset = 8 as ByteOffset
-let SlabStateMetaFreeOffset = 16 as ByteOffset
+let SlabStateMetaEndOffset = ((SlabStateMetaBumpOffset as ParsedInt) + WordBytes) as ByteOffset
+let SlabStateMetaFreeOffset = ((SlabStateMetaEndOffset as ParsedInt) + WordBytes) as ByteOffset
 
 // ⭐⭐ **THE GLOBAL SLOW-PATH LOCK LIVES *HERE*, IN THE STATE REGION, AND NOT IN A `.data` WORD — WHICH IS A
 // GOLDEN-FRAGMENT ARGUMENT, NOT A TIDINESS ONE.** Every committed fragment under `specs/fragments/`
@@ -311,12 +316,20 @@ let SlabStateMetaFreeOffset = 16 as ByteOffset
 // reverse nesting does not exist and there is no order for two files to remember. **A future caller that
 // makes the allocator call into `GtRuntime` while holding this lock introduces a deadlock**, which is why
 // the direction is written down here rather than left to be re-derived.
-let SlabStateLockOffset = 24 as ByteOffset
+let SlabStateLockOffset = ((SlabStateMetaFreeOffset as ParsedInt) + WordBytes) as ByteOffset
 let SlabStateMcentralOffset = ((SlabStateLockOffset as ParsedInt) + OsLockBytes) as ByteOffset
 
-// The value the state `.data` word holds until the region is committed. Named because it is READ in two
-// places (the probe below) and WRITTEN in one (`buildSlabStateBase`'s publishing store), and a bare 0 at
-// three sites is three chances for one of them to stop meaning the same thing as the others.
+// ⚠ **WHAT `runtime/SlabRuntime.maxon` DERIVES FOR THE SAME REGION, RESTATED HERE SO IT CAN BE CHECKED.**
+// The tier file cannot read this one's class count or shard count, so it restates both and derives the total
+// itself; `checkSlabRuntimeGeometry` is where the two derivations are made to meet. Written as numbers
+// rather than as a second copy of the formula, because a formula restated agrees with itself by
+// construction and says nothing about the file this pins.
+let TierStateBytes = 139896
+let TierStateChunks = 18
+
+// The value the state `.data` word holds until the region is committed. Named rather than left a bare 0
+// because `emitSlabStateBase`'s probe TESTS it while `runtime/SlabRuntime.maxon` both tests and CLEARS it,
+// and a literal at each site is a chance for one to stop meaning the same thing as the others.
 let SlabStateUncommitted = 0 as ParsedInt
 
 // Whether THIS allocation took `__slab_lock` on its way in, carried across the pop as a block argument so
@@ -359,9 +372,10 @@ let SlabDrainRemoteName = b"__slab_drain_remote"
 let SlabSpanReturnName = b"__slab_span_return"
 let SlabSpanDestroyName = b"__slab_span_destroy"
 
-// ⭐⭐ **THE TWO THIS FILE NAMES BUT NO LONGER BUILDS.** Their bodies are `runtime/SlabRuntime.maxon`
-// source; what stays here is the two `StdOp.call` sites `__slab_alloc` and `__slab_free` mint, which is why
-// the names do. That mint is also the whole reach evidence the from-`main` walk has about the tier file, so
+// ⭐⭐ **THE FIVE THIS FILE NAMES BUT NO LONGER BUILDS.** Their bodies are `runtime/SlabRuntime.maxon`
+// source — the OS-direct pair, the state region's commit and the metadata slab's two cursors — and what
+// stays here is the `StdOp.call` sites the builders above mint, which is why the names do. That mint is also
+// the whole reach evidence the from-`main` walk has about the tier file, so
 // `StdlibSource.runtimeTierFileIsCompilerCalled` names it — see `SlabRuntimeTierFileName`.
 let SlabOsDirectAllocName = b"__slab_os_direct_alloc"
 let SlabOsDirectFreeName = b"__slab_os_direct_free"
@@ -459,15 +473,11 @@ export function installSlabRuntime(module StdModule, globalData GlobalDataTable,
 	// It is read once, here, so no builder below can ask a differently-worded version of it.
 	let sharded = usage.usesGt
 
-	buildSlabStateBase(module, sharded: sharded)
-
 	if sharded 'remoteQueue'
 		buildSlabDrainRemote(module)
 	end 'remoteQueue'
 
 	buildSlabRoundedSize(module)
-	buildSlabMetaAlloc(module)
-	buildSlabMetaFree(module)
 	buildSlabRefill(module, sharded: sharded)
 	buildSlabAllocEntry(module, name: SlabAllocName, countRaw: usage.usesMmCounters, zeroed: true, sharded: sharded)
 	buildSlabAllocEntry(module, name: SlabAllocRawName, countRaw: usage.usesMmCounters, zeroed: false, sharded: sharded)
@@ -550,6 +560,20 @@ function checkSlabRuntimeGeometry()
 	if slabStateBytes() > slabStateChunks() * SlabPageBytes 'stateOverflowsChunks'
 		panic("slab runtime: {slabStateBytes()} bytes of allocator state do not fit {slabStateChunks()} chunk(s) of {SlabPageBytes}")
 	end 'stateOverflowsChunks'
+
+	// ⛔⛔ **AND THE TIER'S COPY OF THAT ARITHMETIC MUST AGREE, BECAUSE NOTHING AT RUN TIME WOULD NOTICE.**
+	// `runtime/SlabRuntime.maxon`'s `__slab_state_base` is the one body that asks the arena for this region and
+	// zeroes it, and it derives the request from its OWN restated head layout, class count and shard count —
+	// no name crosses the tier boundary, so a regenerated ladder moves the numbers here and leaves the numbers
+	// there. Too small a request and the mcache runs off the end of the chunk run into whatever the arena hands
+	// out next; too large and the arena is asked for chunks it may not have. Both are silent.
+	if slabStateBytes() != TierStateBytes 'tierStateBytesDisagree'
+		panic("slab runtime: the state region is {slabStateBytes()} bytes and `runtime/SlabRuntime.maxon` derives {TierStateBytes} — update `SlabClassCount`/`SlabMaxShards` there, and this constant")
+	end 'tierStateBytesDisagree'
+
+	if slabStateChunks() != TierStateChunks 'tierStateChunksDisagree'
+		panic("slab runtime: the state region is {slabStateChunks()} chunk(s) and `runtime/SlabRuntime.maxon` derives {TierStateChunks} — update `SlabClassCount`/`SlabMaxShards` there, and this constant")
+	end 'tierStateChunksDisagree'
 
 	// ⭐⭐ **AND THE TWO REQUESTS THIS FILE MAKES OF THE PAGE LAYER MUST BE SATISFIABLE ON BOTH LANES — the
 	// bound that was MISSING until S6.** `slabStateChunks()` is 18 chunks and the non-reserving arena has 63
@@ -895,83 +919,21 @@ end 'emitSlabRemotePush'
 
 // --- The bodies ---
 
-// ⭐⭐ **"HAS THE STATE REGION BEEN COMMITTED YET?" — the `.data` word read and tested, ONE SPELLING.**
-// It answers the PREDICATE and leaves the word itself in `currentId` and its address in `addrId`, both of
-// which the callers need for different things: `buildSlabStateBase` returns the word on its hit arm and
-// stores THROUGH the address on its commit arm; `emitSlabStateBase` carries the word into a merge block.
-//
-// ⚠ **THE TWO CALLERS CANNOT COLLAPSE INTO ONE, WHICH IS PRECISELY WHY THIS EXISTS.** `emitSlabStateBase`'s
-// COLD arm is a call to `__slab_state_base`, so the function cannot be written as one emission of the
-// emitter — it would call itself. The read is therefore the one part that would otherwise be written twice,
-// and two spellings of it is how one of them ends up testing a sentinel the other stopped writing.
-function emitSlabStateWordRead(module StdModule, block IrBlock, addrId ValueId, currentId ValueId, ids ValueMinter) returns ValueId
-	module.appendOp(block, op: StdOp.globalAddr(addrId, label: SlabStateLabel))
-	module.appendOp(block, op: StdOp.loadIndirect(currentId, addrId: addrId, offset: 0, valueType: StdType.i64))
-
-	let absent = emitConst(module, block: block, value: SlabStateUncommitted, ids: ids)
-	return emitCmp(module, block: block, a: currentId, b: absent, pred: StdCmpPred.eq, ids: ids)
-end 'emitSlabStateWordRead'
-
-// `__slab_state_base() -> base` — the allocator's mutable state, committed on first use.
-//
-// ⭐ **THE REGION IS CHUNKS FROM THE ARENA, NOT A FRESH `osAllocPages`.** This sits ON the arena, so taking
-// its chunks out of a mapping the process has already committed costs no additional commit at all. (The
-// free-list table `MmRuntime` carried until S4 went straight to the OS instead, because it sat beneath
-// nothing and had no arena to ask.)
-//
-// ⚠ **THE ZEROING IS NOT OPTIONAL AND THE ARENA'S OWN CONTRACT IS WHY.** A chunk is fresh OS memory only
-// the first time it is handed out — the arena's scan is first-fit over a bitmap, so a freed low chunk is
-// reused before a virgin high one. `SlabArena.emitLazyMapLevel` zeroes its level tables for exactly this
-// reason and states it; an unzeroed mcache reads a dead chunk's bytes as a span pointer.
-//
-// ⭐ **AND IT IS WHERE THE SLOW-PATH LOCK IS BORN.** See `SlabStateLockOffset` for why the CRITICAL_SECTION
-// lives in this region rather than in a `.data` word, and for the argument that this arm runs while the main
-// thread is still the process's only one. The `memFill` above it is what makes `osLockInit` legal: it hands
-// the kernel a zeroed region rather than a dead chunk's bytes.
-function buildSlabStateBase(module StdModule, sharded bool)
-	var func = IrFunction.createFromStd(SlabStateName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
-	var ids = ValueMinter.create(0)
-
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var commit = module.addBlock(func, label: b"commit", heat: BlockHeat.normal)
-	var have = module.addBlock(func, label: b"have", heat: BlockHeat.normal)
-
-	let stateAddr = ids.mint()
-	let current = ids.mint()
-	let uncommitted = emitSlabStateWordRead(module, block: entry, addrId: stateAddr, currentId: current, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(uncommitted, thenBlockId: commit.id, elseBlockId: have.id))
-
-	let chunks = emitConst(module, block: commit, value: slabStateChunks(), ids: ids)
-	let base = ids.mint()
-	module.appendOp(commit, op: StdOp.call(base, callee: SlabArenaAllocChunksName, args: argsOf(chunks)))
-	let stateBytes = emitConst(module, block: commit, value: slabStateBytes(), ids: ids)
-	module.appendOp(commit, op: StdOp.memFill(base, byteCountId: stateBytes, value: 0))
-
-	if sharded 'theSlowPathLock'
-		module.appendOp(commit, op: StdOp.osLockInit(emitSlabLockAddr(module, block: commit, state: base, ids: ids)))
-	end 'theSlowPathLock'
-
-	// LAST: the `.data` word is what every other thread tests to decide the region exists, so publishing it
-	// before the lock inside it is initialised would hand a second thread an uninitialised CRITICAL_SECTION.
-	emitStoreField(module, block: commit, record: stateAddr, offset: 0, value: base)
-	module.setTerminator(commit, op: StdOp.ret(base))
-
-	module.setTerminator(have, op: StdOp.ret(current))
-
-	module.functions.push(func)
-end 'buildSlabStateBase'
-
-// ⭐⭐ **THE SAME ANSWER WITHOUT A FRAME: the `.data` word, tested, with the COMMIT left as the call it
-// already is** (EC8). It answers in `stateId`, the merge block's single argument.
+// ⭐⭐ **THE STATE REGION'S BASE WITHOUT A FRAME: the `.data` word, tested, with the COMMIT left as the call
+// it already is** (EC8). It answers in `stateId`, the merge block's single argument.
 //
 // ⭐ **THE HOT ARM IS FOUR OPS AND THE COLD ONE IS A CALL, WHICH IS THE WHOLE OF WHY THIS IS NOT A SECOND
 // COPY OF THE BODY.** The region is committed by the FIRST allocation a process makes and never released,
 // so every subsequent allocation and every free reads a non-zero word and is done. Reproducing the commit
 // here — the arena request, the `memFill`, the `osLockInit`, the publishing store, in the order that
 // publishes LAST — would be that sequence written twice, and it is the sequence whose ORDER is the
-// argument. So the cold arm calls `__slab_state_base`, which re-reads the word and commits it; that second
-// read costs one load on the once-per-process path, and it is the SAME read — `emitSlabStateWordRead` is
-// the one spelling both this and the function's own entry use.
+// argument. So the cold arm calls `__slab_state_base`, whose body is `runtime/SlabRuntime.maxon` source; it
+// re-reads the word and commits it, and that second read costs one load on the once-per-process path.
+//
+// ⚠ **THE READ IS SPELLED HERE AND ONCE MORE IN THE TIER, AND THE SENTINEL IS WHAT THE TWO MUST AGREE
+// ON.** The LABEL cannot drift — the tier names the word through `__Raw.slabStateAddr`, which lowers to this
+// same `SlabStateLabel` — so what a drift could break is the test: a tier that published a different
+// "uncommitted" value than this probe tests for would commit the region on every allocation.
 function emitSlabStateBase(module StdModule, func IrFunction, cur IrBlock, stateId ValueId, ids ValueMinter, label ByteArray) returns IrBlock
 	var commit = module.addBlock(func, label: label, heat: BlockHeat.normal)
 	var merge = module.addBlock(func, label: label, heat: BlockHeat.normal)
@@ -979,7 +941,11 @@ function emitSlabStateBase(module StdModule, func IrFunction, cur IrBlock, state
 
 	let stateAddr = ids.mint()
 	let current = ids.mint()
-	let uncommitted = emitSlabStateWordRead(module, block: cur, addrId: stateAddr, currentId: current, ids: ids)
+	module.appendOp(cur, op: StdOp.globalAddr(stateAddr, label: SlabStateLabel))
+	module.appendOp(cur, op: StdOp.loadIndirect(current, addrId: stateAddr, offset: 0, valueType: StdType.i64))
+
+	let absent = emitConst(module, block: cur, value: SlabStateUncommitted, ids: ids)
+	let uncommitted = emitCmp(module, block: cur, a: current, b: absent, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(uncommitted, thenBlockId: commit.id, elseBlockId: merge.id))
 	cur.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(current)))
 
@@ -1092,109 +1058,6 @@ function buildSlabRoundedSize(module StdModule)
 
 	module.functions.push(func)
 end 'buildSlabRoundedSize'
-
-// `__slab_meta_alloc() -> span` — one mspan header, off the free list if there is one and off the metadata
-// slab's bump cursor otherwise.
-//
-// ⭐ **THE FREE LIST'S PRODUCER IS THE SCAVENGER.** It destroys a span, and without a list to put the
-// header on, every span the scavenger reclaims would leak 64 bytes of metadata slab for the life of the
-// process.
-//
-// ⚠⚠ **THE SLOT IS NOT ASSUMED ZERO, AND THE FREE LIST IS WHY THAT RULE FINALLY BITES.** `__slab_refill`
-// writes every mspan field regardless — an uninitialised field here is STALE DATA, not zero — which is
-// what keeps this function free of any zeroing at all. A recycled header carries
-// the previous span's fields AND the list link this file wrote over its first word, so a refill that left
-// ONE field unwritten would produce a span describing a chunk run that belongs to somebody else.
-//
-// ⚠ **PRECONDITION: THE CALLER HOLDS `__slab_lock`.** The metadata slab's bump cursor and free list are
-// shared by every P; both callers (`__slab_refill`, `__slab_span_destroy`) are already inside it, so taking
-// it here would be a recursive re-entry paying for a fact the caller has established. It is stated rather
-// than taken for `__slab_span_destroy`'s reason: a precondition a caller can read is cheaper than a lock
-// every caller re-acquires.
-function buildSlabMetaAlloc(module StdModule)
-	var func = IrFunction.createFromStd(SlabMetaAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
-	var ids = ValueMinter.create(0)
-
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var recycled = module.addBlock(func, label: b"recycled", heat: BlockHeat.normal)
-	var bumpPath = module.addBlock(func, label: b"bump", heat: BlockHeat.normal)
-	var take = module.addBlock(func, label: b"take", heat: BlockHeat.normal)
-	var fresh = module.addBlock(func, label: b"fresh", heat: BlockHeat.normal)
-
-	let state = ids.mint()
-	module.appendOp(entry, op: StdOp.call(state, callee: SlabStateName, args: ValueIdArray.create()))
-
-	// POP FIRST. A recycled header is warm and costs one load; the bump path is what runs while the metadata
-	// slab is still growing, which is every program that never scavenges.
-	let listHead = emitLoadField(module, block: entry, record: state, offset: SlabStateMetaFreeOffset, ids: ids)
-	let noneFree = emitConst(module, block: entry, value: 0, ids: ids)
-	let listEmpty = emitCmp(module, block: entry, a: listHead, b: noneFree, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(listEmpty, thenBlockId: bumpPath.id, elseBlockId: recycled.id))
-
-	// The link lives in the dead header's FIRST word — `base_addr`, which `__slab_refill` overwrites — so
-	// unlinking is one load and one store and the slot needs no clearing.
-	let following = emitLoadField(module, block: recycled, record: listHead, offset: MspanBaseAddrOffset, ids: ids)
-	emitStoreField(module, block: recycled, record: state, offset: SlabStateMetaFreeOffset, value: following)
-	module.setTerminator(recycled, op: StdOp.ret(listHead))
-
-	let bump = emitLoadField(module, block: bumpPath, record: state, offset: SlabStateMetaBumpOffset, ids: ids)
-	let slotBytes = emitConst(module, block: bumpPath, value: MspanSlotBytes, ids: ids)
-	let advanced = emitBin(module, block: bumpPath, a: bump, b: slotBytes, opcode: StdBinOpcode.add, ids: ids)
-	let limit = emitLoadField(module, block: bumpPath, record: state, offset: SlabStateMetaEndOffset, ids: ids)
-
-	// The initial state is `bump == 0` and `limit == 0`, so the first call fails this test and takes the
-	// fresh-chunk arm — the `.data` zero IS the initialisation, exactly as it is for the arena list head.
-	let fits = emitCmp(module, block: bumpPath, a: advanced, b: limit, pred: StdCmpPred.le, ids: ids)
-	module.setTerminator(bumpPath, op: StdOp.condBranch(fits, thenBlockId: take.id, elseBlockId: fresh.id))
-
-	emitStoreField(module, block: take, record: state, offset: SlabStateMetaBumpOffset, value: advanced)
-	module.setTerminator(take, op: StdOp.ret(bump))
-
-	let one = emitConst(module, block: fresh, value: 1, ids: ids)
-	let chunk = ids.mint()
-	module.appendOp(fresh, op: StdOp.call(chunk, callee: SlabArenaAllocChunksName, args: argsOf(one)))
-	let firstFree = emitBin(module, block: fresh, a: chunk, b: slotBytes, opcode: StdBinOpcode.add, ids: ids)
-	emitStoreField(module, block: fresh, record: state, offset: SlabStateMetaBumpOffset, value: firstFree)
-	let chunkBytes = emitConst(module, block: fresh, value: SlabPageBytes, ids: ids)
-	let chunkEnd = emitBin(module, block: fresh, a: chunk, b: chunkBytes, opcode: StdBinOpcode.add, ids: ids)
-	emitStoreField(module, block: fresh, record: state, offset: SlabStateMetaEndOffset, value: chunkEnd)
-	module.setTerminator(fresh, op: StdOp.ret(chunk))
-
-	module.functions.push(func)
-end 'buildSlabMetaAlloc'
-
-// `__slab_meta_free(span)` — put a destroyed span's header back on the metadata free list.
-//
-// The link goes in the header's FIRST word (`base_addr`), which is the field `__slab_refill` overwrites
-// first on the way back out — so the list costs no storage of its own and a recycled header needs no
-// clearing. The same trick the SPAN free list plays with a dead slot's first word, one layer up.
-//
-// ⚠ **THE HEADER'S CHUNK IS NEVER RELEASED, ONLY ITS SLOTS ARE REUSED.** The metadata slab bump-allocates
-// out of whole chunks and this list hands the SLOTS back; the chunks themselves stay claimed for the life of
-// the process. That is deliberate: a metadata chunk holds up to 128 headers belonging to unrelated spans, so
-// it can only be released when every one of them is dead, which is a second free-list-of-chunks problem for
-// a structure that is 0.8% of the heap it describes.
-//
-// ⚠ **PRECONDITION: THE CALLER HOLDS `__slab_lock`** — see `__slab_meta_alloc`, whose cursor this list
-// shares.
-function buildSlabMetaFree(module StdModule)
-	var func = IrFunction.createFromStd(SlabMetaFreeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
-	var ids = ValueMinter.create(1)
-
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-
-	emitParams(module, block: entry, count: 1)
-	let span = 0 as ValueId
-
-	let state = ids.mint()
-	module.appendOp(entry, op: StdOp.call(state, callee: SlabStateName, args: ValueIdArray.create()))
-	let head = emitLoadField(module, block: entry, record: state, offset: SlabStateMetaFreeOffset, ids: ids)
-	emitStoreField(module, block: entry, record: span, offset: MspanBaseAddrOffset, value: head)
-	emitStoreField(module, block: entry, record: state, offset: SlabStateMetaFreeOffset, value: span)
-	module.setTerminator(entry, op: StdOp.retVoid)
-
-	module.functions.push(func)
-end 'buildSlabMetaFree'
 
 // `__slab_refill(classIdx, myP, row) -> span` — put a span with free slots in `row`'s mcache entry, stamp it
 // as `myP`'s, and answer it.

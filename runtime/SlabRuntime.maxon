@@ -1,20 +1,32 @@
-// ⭐⭐ **THE OBJECT LAYER'S OS-DIRECT TIER.** Above `SlabMaxSmallSize` a request is its own mapping rather
-// than a slot in a span, and these two entry points are the whole of that road: one `osAllocPages` per
-// allocation, one `osFreePages` per free, and the mapping's own length in a 16-byte prefix.
+// ⭐⭐ **FIVE OF THE OBJECT LAYER'S FOURTEEN ENTRY POINTS.** Two are the whole OS-DIRECT road, which above
+// `SlabMaxSmallSize` makes a request its own mapping rather than a slot in a span: one `osAllocPages` per
+// allocation, one `osFreePages` per free, and the mapping's own length in a 16-byte prefix. The other three
+// are the allocator's STATE — the lazily committed region every shared structure lives in, and the metadata
+// slab's two cursors, which hand mspan headers out and take them back.
 //
 // ⛔⛔ **THE REST OF `Compiler/Runtime/SlabRuntime.maxon` IS NOT MISSING — IT CANNOT BE SOURCE YET, AND THE
-// BLOCKER IS A BUILD-TIME ARGUMENT RATHER THAN A CALL.** Eleven of that file's fourteen entry points are
-// emitted DIFFERENTLY depending on `sharded` (`RuntimeUsage.usesGt`), `zeroed` or `countRaw` — the lock
-// enter/leave, the TLS read that answers *"which P am I"*, and the two-arm zeroing of a recycled slot are
-// all present or absent per PROGRAM. Tier source is compiled once and has no such knob, and the ops the
-// sharded arms are made of (`osLockEnter`, `tlsSlotLoad`) do not lower on the wasm and arm64 lanes at all,
-// so a body spelling one unconditionally dies in those backends. `__slab_drain_remote` is blocked for the
-// other reason — it calls `__slab_arena_map_get`, which stays a builder because `__slab_free` splices that
-// walk inline — and `__slab_rounded_size` for the same reason one layer up: it shares the size-class
-// lookup (`SlabRuntime.emitSlabClassIndex`) with `__slab_alloc`, so porting it alone would be a second
-// spelling of that walk. ⇒ **`__slab_state_base` IS THE LINCHPIN: its only build-time gate is one
-// `osLockInit`, and `__slab_meta_alloc`, `__slab_meta_free` and `__slab_span_destroy` call nothing else
-// that stays.**
+// BLOCKER IS A BUILD-TIME ARGUMENT RATHER THAN A CALL.** Nine of that file's fourteen entry points are
+// emitted DIFFERENTLY depending on `sharded` (`RuntimeUsage.usesGt`) or `countRaw` — the lock enter/leave,
+// the TLS read that answers *"which P am I"*, and the counted allocation door are present or absent per
+// PROGRAM. Tier source is compiled once and has no such knob. Two more are blocked for a different reason,
+// and it is the one `runtime/SlabArena.maxon`'s ninth entry gives: `__slab_drain_remote` calls
+// `__slab_arena_map_get`, whose walk `__slab_free` splices INLINE, and `__slab_rounded_size` shares
+// `SlabRuntime.emitSlabClassIndex` with `__slab_alloc` — so porting either alone would be a SECOND SPELLING
+// of one walk.
+//
+// ⛔ **AND `__slab_span_destroy` IS EXCLUDED ON THAT SAME RULE, WHICH IS NOT WHERE ITS BLOCKER WAS EXPECTED.**
+// It reads no usage record at all and every callee it names is here, so the build-time argument above does
+// not touch it; what stops it is that it and `__slab_refill` compute a span's chunk run from the same packed
+// class geometry, and the refill stays. `SlabRuntime.emitSpanChunkCount` states why that must be ONE
+// spelling: the CUT and the DESTRUCTION have to agree to the chunk, or a span is released one chunk short
+// and a chunk stays claimed forever.
+//
+// ⭐⭐ **THE ZEROING IS NOT WHAT BLOCKS THE ALLOCATION DOORS, AND IT NEVER WAS.** `zeroed` never reaches
+// `RuntimeUsage`: `SlabRuntime.installSlabRuntime` passes a LITERAL to each of the three doors —
+// `__slab_alloc` zeroes, `__slab_alloc_raw` does not, `__slab_alloc_box` zeroes — and a build-time argument
+// that is a literal per entry point is one tier source simply spells. What it costs is one Maxon helper
+// taking a `bool` parameter where the builder has three emissions of one emitter, which is a cost and not a
+// blocker. `sharded` and `countRaw` are the blockers there.
 //
 // ⛔⛔ **THE CONSTANTS BELOW ARE RESTATED FROM `Compiler/Runtime/SlabRuntime.maxon` BECAUSE NO NAME CROSSES
 // THE TIER BOUNDARY**, the rule `runtime/SlabArena.maxon` states in full for its own geometry. Each names
@@ -93,3 +105,157 @@ module function __slab_os_direct_free(ptr MachineWord)
 
 	__Raw.osExit(SlabOsDirectPointerNotOursExit)
 end '__slab_os_direct_free'
+
+// --- The state region, restated ---
+//
+// ⛔⛔ **`Compiler/Runtime/SlabRuntime.maxon` HOLDS THE OTHER COPY OF EVERY NUMBER BELOW, AND THE TWO ARE
+// MADE TO MEET AT `checkSlabRuntimeGeometry`.** That function pins the region's total size and chunk count
+// against `TierStateBytes`/`TierStateChunks` on every compile of every allocating program, which is the only
+// thing standing between a regenerated class ladder and a request one chunk too small — an mcache running
+// off the end of its run into whatever the arena hands out next, silently.
+
+// The stride of the region's head words and of both arrays past the lock.
+let SlabWordBytes = 8
+
+// The head: the metadata slab's bump cursor, its limit, and the free list of dead mspan headers. Chained so
+// that inserting a head word moves the lock and both arrays after it.
+let SlabStateMetaBumpOffset = 0
+let SlabStateMetaEndOffset = SlabStateMetaBumpOffset + SlabWordBytes
+let SlabStateMetaFreeOffset = SlabStateMetaEndOffset + SlabWordBytes
+
+// ⭐ **THE SLOW-PATH LOCK SITS IN THE REGION RATHER THAN IN A `.data` WORD**, because a new `.data` label
+// shifts every label after it and re-mints every heap program's golden. `MmRuntime.OsLockBytes` is the other
+// copy of the width, and it is the MAXIMUM over the five lanes (a Darwin `pthread_mutex_t`) rather than any
+// one lane's — which is what makes this offset one number instead of five.
+let SlabStateLockOffset = SlabStateMetaFreeOffset + SlabWordBytes
+let OsLockBytes = 64
+
+// The two arrays past the lock: one mcentral head per class, then one mcache row per shard.
+// `SlabClasses.slabClassCount()` and `SlabRuntime.SlabMaxShards` are the other copies.
+let SlabClassCount = 68
+let SlabMaxShards = 256
+
+let SlabStateBytes = SlabStateLockOffset + OsLockBytes + SlabClassCount * SlabWordBytes + SlabMaxShards * SlabClassCount * SlabWordBytes
+let SlabStateChunks = (SlabStateBytes + SlabPageMask) / SlabPageBytes
+
+// ⭐ **ZERO IS THE STATE THE `.data` IMAGE ALREADY EXPRESSES, so there is nothing to initialise and nothing
+// to guard.** `SlabRuntime.SlabStateUncommitted` is the other copy, and it is what
+// `SlabRuntime.emitSlabStateBase`'s inline probe tests for at every allocation and every free: a tier that
+// published some other value would send every one of them down the commit call.
+let SlabStateUncommitted = 0
+
+// The metadata slab's slot. `SlabRuntime.MspanSlotBytes` is the other copy and is checked there against the
+// mspan record's own width.
+let MspanSlotBytes = 64
+
+// A dead header's link rides in its FIRST word — `base_addr`, which `__slab_refill` overwrites on the way
+// back out — so the free list costs no storage of its own and a recycled header needs no clearing.
+// `SlabRuntime.MspanBaseAddrOffset` is the other copy.
+let MspanBaseAddrOffset = 0
+
+// `__slab_state_base() -> base` — the allocator's mutable state, committed on first use.
+//
+// ⭐ **THE REGION IS CHUNKS FROM THE ARENA, NOT A FRESH `osAllocPages`.** This sits ON the arena, so taking
+// its chunks out of a mapping the process has already committed costs no additional commit at all.
+//
+// ⚠ **THE ZEROING IS NOT OPTIONAL AND THE ARENA'S OWN CONTRACT IS WHY.** A chunk is fresh OS memory only
+// the first time it is handed out — the arena's scan is first-fit over a bitmap, so a freed low chunk is
+// reused before a virgin high one. An unzeroed mcache reads a dead chunk's bytes as a span pointer.
+//
+// ⛔⛔ **THE `osLockInit` IS UNCONDITIONAL AND MUST STAY SO.** This arm fires on the FIRST allocation the
+// process ever makes, which necessarily precedes any scheduler — `__gt_init` allocates the run-queue lock
+// and the P array through `__slab_alloc`. A lock initialised only for a program that already "has threads"
+// would therefore never be initialised at all, and every green-thread program would enter a raw region. The
+// `memFill` above it is what makes the call legal: it hands the OS a zeroed region rather than a dead
+// chunk's bytes.
+//
+// ⛔ **AND THE PUBLISHING STORE IS LAST.** The `.data` word is what every other thread tests to decide the
+// region exists, so publishing it before the lock inside it is initialised would hand a second thread an
+// uninitialised mutex.
+//
+// ⚠ **THE COMMIT IS THE ARM THAT FALLS THROUGH, NOT THE GUARD.** This function is reached from the inline
+// probe's COLD arm, so the uncommitted case is the one that arrives here; a guard-first shape would put the
+// taken branch on it. `__slab_os_direct_free` above makes the same argument the other way round.
+module function __slab_state_base() returns MachineWord
+	let stateAddr = __Raw.slabStateAddr()
+	let current = __Raw.loadWord(stateAddr, offset: 0)
+
+	if (current as SlabWord) == SlabStateUncommitted 'commit'
+		let base = __slab_arena_alloc_chunks(SlabStateChunks as SlabWord) as SlabWord
+
+		__Raw.memFill(base as MachineWord, byteCount: SlabStateBytes as MachineWord, value: 0)
+		__Raw.osLockInit((base + SlabStateLockOffset) as MachineWord)
+		__Raw.storeWord(stateAddr, offset: 0, value: base as MachineWord)
+
+		return base as MachineWord
+	end 'commit'
+
+	return current
+end '__slab_state_base'
+
+// `__slab_meta_alloc() -> span` — one mspan header, off the free list if there is one and off the metadata
+// slab's bump cursor otherwise.
+//
+// ⭐ **THE FREE LIST'S PRODUCER IS THE SCAVENGER.** It destroys a span, and without a list to put the
+// header on, every span it reclaims would leak 64 bytes of metadata slab for the life of the process.
+//
+// ⚠⚠ **THE SLOT IS NOT ASSUMED ZERO, AND THE FREE LIST IS WHY THAT RULE BITES.** `__slab_refill` writes
+// every mspan field regardless — an uninitialised field here is STALE DATA, not zero — which is what keeps
+// this function free of any zeroing at all. A recycled header carries the previous span's fields AND the
+// list link written over its first word, so a refill that left ONE field unwritten would produce a span
+// describing a chunk run that belongs to somebody else.
+//
+// ⚠ **PRECONDITION: THE CALLER HOLDS `__slab_lock`.** The bump cursor and the free list are shared by every
+// P; both callers (`__slab_refill`, `__slab_span_destroy`) are already inside it, so taking it here would be
+// a recursive re-entry paying for a fact the caller has established.
+module function __slab_meta_alloc() returns MachineWord
+	let state = __slab_state_base()
+
+	// POP FIRST, AND THE BUMP IS THE ARM THAT FALLS THROUGH. The list is tested first because a recycled
+	// header is warm and costs one load; the layout is the other way round because the bump path is what runs
+	// while the metadata slab is still growing, which is every program that never scavenges.
+	let listHead = __Raw.loadWord(state, offset: SlabStateMetaFreeOffset)
+
+	if (listHead as SlabWord) == 0 'bump'
+		let cursor = __Raw.loadWord(state, offset: SlabStateMetaBumpOffset) as SlabWord
+		let advanced = cursor + MspanSlotBytes
+
+		// The initial state is `cursor == 0` and `limit == 0`, so the first call fails this test and takes the
+		// fresh-chunk arm — the `.data` zero IS the initialisation, exactly as it is for the arena list head.
+		if advanced <= (__Raw.loadWord(state, offset: SlabStateMetaEndOffset) as SlabWord) 'take'
+			__Raw.storeWord(state, offset: SlabStateMetaBumpOffset, value: advanced as MachineWord)
+
+			return cursor as MachineWord
+		end 'take'
+
+		let chunk = __slab_arena_alloc_chunks(1 as SlabWord) as SlabWord
+
+		__Raw.storeWord(state, offset: SlabStateMetaBumpOffset, value: (chunk + MspanSlotBytes) as MachineWord)
+		__Raw.storeWord(state, offset: SlabStateMetaEndOffset, value: (chunk + SlabPageBytes) as MachineWord)
+
+		return chunk as MachineWord
+	end 'bump'
+
+	// The link lives in the dead header's FIRST word, so unlinking is one load and one store and the slot
+	// needs no clearing.
+	__Raw.storeWord(state, offset: SlabStateMetaFreeOffset, value: __Raw.loadWord(listHead, offset: MspanBaseAddrOffset))
+
+	return listHead
+end '__slab_meta_alloc'
+
+// `__slab_meta_free(span)` — put a destroyed span's header back on the metadata free list.
+//
+// ⚠ **THE HEADER'S CHUNK IS NEVER RELEASED, ONLY ITS SLOTS ARE REUSED.** The metadata slab bump-allocates
+// out of whole chunks and this list hands the SLOTS back; the chunks stay claimed for the life of the
+// process. A metadata chunk holds up to 128 headers belonging to unrelated spans, so it can only be released
+// when every one of them is dead — a second free-list-of-chunks problem for a structure that is 0.8% of the
+// heap it describes.
+//
+// ⚠ **PRECONDITION: THE CALLER HOLDS `__slab_lock`** — see `__slab_meta_alloc`, whose cursor this list
+// shares.
+module function __slab_meta_free(span MachineWord)
+	let state = __slab_state_base()
+
+	__Raw.storeWord(span, offset: MspanBaseAddrOffset, value: __Raw.loadWord(state, offset: SlabStateMetaFreeOffset))
+	__Raw.storeWord(state, offset: SlabStateMetaFreeOffset, value: span)
+end '__slab_meta_free'

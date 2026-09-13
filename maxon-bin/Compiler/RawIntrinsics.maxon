@@ -38,6 +38,7 @@ let RawSchedNumProcsAddrName = b"__Raw.schedNumProcsAddr"
 let RawSchedMaxActiveWorkersAddrName = b"__Raw.schedMaxActiveWorkersAddr"
 let RawSlabArenaListAddrName = b"__Raw.slabArenaListAddr"
 let RawSlabArenaMapL1AddrName = b"__Raw.slabArenaMapL1Addr"
+let RawSlabStateAddrName = b"__Raw.slabStateAddr"
 let RawLoadWordName = b"__Raw.loadWord"
 let RawStoreWordName = b"__Raw.storeWord"
 let RawLoadByteName = b"__Raw.loadByte"
@@ -99,6 +100,13 @@ export enum RawIntrinsic
 	// its slots.
 	slabArenaListAddr
 	slabArenaMapL1Addr
+
+	// The object layer's one word — the base of the allocator's lazily committed state region, or zero.
+	// `runtime/SlabRuntime.maxon`'s `__slab_state_base` is its only reader and its only writer, and the zero
+	// IS the initial state rather than a default. It rides `RuntimeUsage.usesHeap`, which
+	// `SlabRuntime.slabRuntimeGlobals` lays the slot out on and `SlabRuntime.installSlabRuntime` reads before
+	// minting any call into the file — so a surviving body cannot address a word the image omitted.
+	slabStateAddr
 
 	loadWord
 	storeWord
@@ -242,6 +250,10 @@ function rawIntrinsicLookupOf(callee ByteArray) returns RawIntrinsicLookup
 		return RawIntrinsicLookup.found(RawIntrinsic.slabArenaMapL1Addr)
 	end 'slabArenaMapL1Addr'
 
+	if callee.equals(RawSlabStateAddrName) 'slabStateAddr'
+		return RawIntrinsicLookup.found(RawIntrinsic.slabStateAddr)
+	end 'slabStateAddr'
+
 	if callee.equals(RawLoadWordName) 'loadWord'
 		return RawIntrinsicLookup.found(RawIntrinsic.loadWord)
 	end 'loadWord'
@@ -344,6 +356,7 @@ export function rawIntrinsicCalleeName(intrinsic RawIntrinsic) returns ByteArray
 		schedMaxActiveWorkersAddr gives RawSchedMaxActiveWorkersAddrName
 		slabArenaListAddr gives RawSlabArenaListAddrName
 		slabArenaMapL1Addr gives RawSlabArenaMapL1AddrName
+		slabStateAddr gives RawSlabStateAddrName
 		loadWord gives RawLoadWordName
 		storeWord gives RawStoreWordName
 		loadByte gives RawLoadByteName
@@ -376,7 +389,8 @@ export function rawArgShapeOf(intrinsic RawIntrinsic) returns RawArgShape
 		schedNumProcsAddr or
 			schedMaxActiveWorkersAddr or
 			slabArenaListAddr or
-			slabArenaMapL1Addr gives RawArgShape.nothing
+			slabArenaMapL1Addr or
+			slabStateAddr gives RawArgShape.nothing
 		loadWord or
 			loadByte gives RawArgShape.wordThenConstant
 		storeWord or
@@ -410,6 +424,7 @@ export function rawResultKindOf(intrinsic RawIntrinsic) returns RawResultKind
 			schedMaxActiveWorkersAddr or
 			slabArenaListAddr or
 			slabArenaMapL1Addr or
+			slabStateAddr or
 			loadWord or
 			loadByte or
 			atomicAddWord or
@@ -472,18 +487,20 @@ end 'rawArgumentIsTheConstant'
 // library, and that table is built from CALLEES: an op names none, so a row's facility reaches no
 // user-refusable site. Until it does, a lane missing the facility reaches instruction selection.
 //
-// ⚠ **SEVEN ROWS NAME A FACILITY A SUPPORTED LANE DOES NOT PROVIDE, AND WHAT KEEPS THE GAP SHUT IS A
-// SECOND ROUTE OR DEAD-FUNCTION ELIMINATION RATHER THAN THIS ONE.** `osCpuCount`, `osGetPid`,
-// `osEnterBackgroundPriority` and `osThreadCpuTicks` have no wasm lowering; the three `osLock*` rows have
-// none there either, and on the three POSIX lanes their chunk is installed only for a program that already
-// runs green threads, traces or maps a section — so a fourth producer calls a symbol the image never laid
-// out. A program asking for one of the first three is refused at the call to `__cpu_count`, `__proc_pid` or
-// `__proc_bg_priority` by `TargetFacilities.calleeHostFacility`, which reads the CALLEE name and band. The
-// other four are spelled by no REACHED tier body, so dead-function elimination removes them before
-// instruction selection and nothing exercises their route at all. ⇒ **a reached tier body spelling one of
-// the seven reaches instruction selection with nothing said**, which is what the lock rows' consumer owes
-// before it spells them: widening `PosixRuntime.posixUsesHostObjects` to count a `__Raw.osLock*` producer,
-// and the substrate-entry row below.
+// ⚠ **FOUR ROWS NAME A FACILITY A SUPPORTED LANE DOES NOT PROVIDE, AND WHAT KEEPS THE GAP SHUT IS A
+// SECOND ROUTE OR DEAD-FUNCTION ELIMINATION RATHER THAN THIS ONE.** `osCpuCount`, `osGetPid` and
+// `osEnterBackgroundPriority` have no wasm lowering, and a program asking for one is refused at the call to
+// `__cpu_count`, `__proc_pid` or `__proc_bg_priority` by `TargetFacilities.calleeHostFacility`, which reads
+// the CALLEE name and band — not this column. `osThreadCpuTicks` is spelled by no REACHED tier body, so
+// dead-function elimination removes it before instruction selection and nothing exercises its route at all.
+// ⇒ **a reached tier body spelling one of the four reaches instruction selection with nothing said**, and
+// the substrate-entry row below is what closes it.
+//
+// ⭐ **THE THREE `osLock*` ROWS WERE IN THAT LIST AND ARE OUT OF IT: `HostFacility.hostMutex` IS NOW `true`
+// ON ALL FIVE LANES.** wasm lowers each to zero instructions (`StdToWasm.emitBodyOp`, one thread means
+// exclusion is already total) and the three POSIX lanes install their chunks on
+// `PosixRuntime.posixUsesHostLock`, a gate that covers every producer including
+// `runtime/SlabRuntime.maxon`'s — which is what a REACHED tier body spelling them required.
 //
 // ⚠ **`none` IS "NO HOST FACILITY", NOT "EVERY TARGET".** The word and address rows are pure code
 // generation on the lanes that have an addressable frame, and wasm is not one of them: a wasm local has no
@@ -523,6 +540,7 @@ export function rawHostFacilityOf(intrinsic RawIntrinsic) returns RawHostFacilit
 			schedMaxActiveWorkersAddr or
 			slabArenaListAddr or
 			slabArenaMapL1Addr or
+			slabStateAddr or
 			loadWord or
 			storeWord or
 			loadByte or

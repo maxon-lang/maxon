@@ -2143,13 +2143,18 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 		chunks.push(buildArm64DarwinEnvReadChunk())
 	end 'envRead'
 
-	// ⚠ **THE LOCK IS ONE `pthread_mutex_t` HERE, SO ONLY THE INIT NEEDS A CHUNK** — the enter and the leave
-	// lower to bare import calls, which is why this lane's band is three chunks where a Linux lane's is five.
 	if posixUsesHostObjects(usage) 'hostObjects'
 		chunks.push(buildArm64PosixProcReapChunk(PosixHostCall.importCall(OsImportSlot.waitpid)))
 		chunks.push(buildArm64DarwinWaitCloseChunk())
-		chunks.push(buildArm64DarwinLockInitChunk())
 	end 'hostObjects'
+
+	// ⚠ **THE LOCK IS ONE `pthread_mutex_t` HERE, SO ONLY THE INIT NEEDS A CHUNK** — the enter and the leave
+	// lower to bare import calls, which is why this lane's lock band is one chunk where a Linux lane's is three.
+	// It rides a gate of its own because its producer set is not the host-object band's: the allocator's
+	// slow-path lock reaches it in every allocating program.
+	if posixUsesHostLock(usage) 'hostLock'
+		chunks.push(buildArm64DarwinLockInitChunk())
+	end 'hostLock'
 
 	// The thread sleep and the poller ride `usesGt`: the bounded child wait steps on the sleep and
 	// `__sched_init_procs` opens the poller, both installed unconditionally by `installGtRuntime`. Splitting

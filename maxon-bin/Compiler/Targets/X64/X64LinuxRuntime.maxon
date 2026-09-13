@@ -3778,15 +3778,19 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 		chunks.push(buildX64LinuxEnvReadChunk())
 	end 'envRead'
 
-	// ⚠ **THE LOCK IS A FUTEX WORD, SO ITS ENTER AND LEAVE NEED BODIES** — five chunks here where the Darwin
-	// lane's `pthread_mutex_t` leaves it three.
 	if posixUsesHostObjects(usage) 'hostObjects'
 		chunks.push(buildX64LinuxProcReapChunk())
 		chunks.push(buildX64LinuxWaitCloseChunk())
+	end 'hostObjects'
+
+	// ⚠ **THE LOCK IS A FUTEX WORD, SO ITS ENTER AND LEAVE NEED BODIES** — three chunks here where the Darwin
+	// lane's `pthread_mutex_t` leaves it one. They ride a gate of their own because their producer set is not
+	// the band's: the allocator's slow-path lock reaches them in every allocating program.
+	if posixUsesHostLock(usage) 'hostLock'
 		chunks.push(buildX64LinuxLockInitChunk())
 		chunks.push(buildX64LinuxLockEnterChunk())
 		chunks.push(buildX64LinuxLockLeaveChunk())
-	end 'hostObjects'
+	end 'hostLock'
 
 	// ⭐ **L4 — THE GREEN-THREAD FLOOR, ON ONE BIT.** `usesGt` is the bit `installGtRuntime` itself was gated
 	// on, so every body that can `call` one of these is built under exactly the same condition — one bit, two

@@ -148,9 +148,14 @@ export enum HostFacility
 	// consumer today, but the object is a bare host primitive with no scheduler in it, and a lane can serve
 	// one without the other.
 	//
-	// ⛔ **wasm32-wasi DOES NOT PROVIDE IT, AND THAT IS PERMANENT RATHER THAN PENDING.** A WASI component has
-	// one thread, so there is no second party to exclude and no host object to name; the three ops are
-	// refused at emission there.
+	// ⭐⭐ **wasm32-wasi PROVIDES IT VACUOUSLY, AND THAT IS AN ANSWER RATHER THAN A HOST OBJECT.** A WASI
+	// component has one thread, so there is no second party to exclude — exclusion is already total, and the
+	// honest lowering of all three ops is ZERO INSTRUCTIONS. Each has its own arm in `StdToWasm.emitBodyOp`
+	// emitting nothing, which is what a `true` promises, exactly as `pageMemory`'s row states for its five.
+	//
+	// ⛔ **A wasm LANE WITH THREADS FALSIFIES THAT AND OWES A REAL LOWERING FIRST.** The emptiness follows
+	// from the machine having one thread and from nothing else; a threaded component needs three real bodies,
+	// and this row must go back to `false` until it has them.
 	hostMutex
 
 	// Whether a standard stream is a TERMINAL (`__tty_*`). Its own facility rather than a corner of
@@ -596,13 +601,12 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// `mmap`/`munmap`/`madvise` inline, with no chunk to install, so any producer reaches them.
 			pageMemory gives true
 
-			// ⛔ **THE LOCK'S LOWERING IS A CHUNK GATED ON `posixUsesHostObjects`, AND THAT UNION HAS NO
-			// `__Raw.osLock*` PRODUCER IN IT** — so a program that locks without running green threads,
-			// tracing or mapping a section `bl`s a symbol the image never laid out. MEASURED as
-			// `arm64ResolveCallFixups: bl to unknown function 'mrt_host_lock_init'`, which is the failure
-			// `posixReadsEnvironment` records one facility over. This row is claimed by widening that union,
-			// alongside the first tier body that spells the rows.
-			hostMutex gives false
+			// ⭐ **`pthread_mutex_init` WITH A RECURSIVE ATTRIBUTE THROUGH `mrt_host_lock_init`, AND THE ENTER AND
+			// LEAVE ARE BARE IMPORT CALLS** — one chunk where a Linux lane needs three. What makes the row `true`
+			// is that the chunk's gate, `PosixRuntime.posixUsesHostLock`, covers every producer of the three ops
+			// including the allocator's. A gate narrower than that set is a `bl` to a symbol the image never laid
+			// out — a link failure rather than a diagnostic.
+			hostMutex gives true
 
 			// ⭐⭐ **THE GREEN-THREAD FLOOR AND EVERYTHING STANDING ON IT.** The hand-assembled chunks have their
 			// AAPCS64 twins in `Arm64GtRuntime.appendArm64GtRuntimeChunks`, the prologue stack guard and the
@@ -815,11 +819,11 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// which is what a parallelism hint wants, and what `nproc` itself answers.
 			cpuCount gives true
 
-			// The arm64-macOS row's two reasons, unchanged by the ISA: the page ops are inline `mmap`s that
-			// need no chunk, and the lock's chunk rides `posixUsesHostObjects`, which no `__Raw.osLock*`
-			// producer is in.
+			// The page ops are inline `mmap`s that need no chunk. The lock is a recursive futex mutex, so its
+			// three chunks are real bodies here where macOS needs one — all on `PosixRuntime.posixUsesHostLock`,
+			// which is what makes the second row `true`: that gate covers every producer of the three ops.
 			pageMemory gives true
-			hostMutex gives false
+			hostMutex gives true
 
 			// ⭐⭐⭐ **THE SOCKET BAND — INLINE `svc`s AND A RESOLVER WRITTEN IN Std IR, BECAUSE THERE IS NO
 			// `getaddrinfo` ON A LANE THAT LINKS NO LIBC.** The transfers are `sendto`/`recvfrom` with a NULL peer
@@ -924,11 +928,11 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// the CPUs the machine has — which is what a parallelism hint wants and what `nproc` answers.
 			cpuCount gives true
 
-			// The arm64-macOS row's two reasons, unchanged by the ISA: the page ops are inline `mmap`s that
-			// need no chunk, and the lock's chunk rides `posixUsesHostObjects`, which no `__Raw.osLock*`
-			// producer is in.
+			// The page ops are inline `mmap`s that need no chunk. The lock is a recursive futex mutex, so its
+			// three chunks are real bodies here where macOS needs one — all on `PosixRuntime.posixUsesHostLock`,
+			// which is what makes the second row `true`: that gate covers every producer of the three ops.
 			pageMemory gives true
-			hostMutex gives false
+			hostMutex gives true
 
 			// ⛔⛔ **THESE FIVE ROWS ARE INDIVISIBLE: A LANE PROVIDES ALL OF THEM OR NONE, AND FLIPPING ONE
 			// ALONE MAKES A PROGRAM THAT PANICS IN THE ISEL.** Whoever next touches them is bound by it:
@@ -1019,9 +1023,10 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// what a `true` promises.
 			pageMemory gives true
 
-			// ⛔ **PERMANENT, NOT PENDING — there is no second party to exclude.** A WASI component has one
-			// thread, so a mutex names no host object and the three ops are refused at emission.
-			hostMutex gives false
+			// ⭐ **VACUOUSLY PROVIDED — one thread means exclusion is already total.** All three ops have an arm in
+			// `StdToWasm.emitBodyOp` and each emits nothing, which is what a `true` promises here. See the
+			// `HostFacility.hostMutex` row for what a threaded wasm lane would owe before this stays `true`.
+			hostMutex gives true
 
 			// ⛔ **THE REST ARE ABSENT, AND FOR TWO DIFFERENT KINDS OF REASON THIS COLUMN DOES NOT RECORD.**
 			// A WASI component has one thread and no process-spawn primitive, so the green-thread floor,

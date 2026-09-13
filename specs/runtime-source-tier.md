@@ -61,15 +61,21 @@ The restrictions are what a runtime cannot have:
   itself is one of them. `module` is the widest visibility the tier's own file-to-file sharing needs.
 
 ⛔⛔ **AND ONE RESTRICTION IS NOT A RULE OF THE TIER AT ALL BUT A PROPERTY OF WHAT A BUILDER CAN DO THAT
-SOURCE CANNOT: A BODY EMITTED DIFFERENTLY PER PROGRAM HAS NO TIER SPELLING.** A builder is a function of
-`RuntimeUsage`, so it can emit a lock acquire only where the program has a second thread, or a slot memzero
-only into the zeroing door of a pair. Tier source is compiled once and reads no usage record, so such a body
-must spell every arm unconditionally — and the arms are made of ops several lanes do not lower
-(`osLockEnter` and `tlsSlotLoad` reach no wasm or arm64 case; `HostFacility.hostMutex` is `true` on
-x64-windows alone), so an unconditional spelling does not merely cost bytes, it dies in those backends.
-⇒ **A FAMILY'S PARTITION IS DECIDED BY ITS BUILD-TIME ARGUMENTS BEFORE ITS CALL GRAPH IS EVEN CONSULTED.**
-Eleven of the object layer's fourteen entry points are blocked this way; the two that move
-(`runtime/SlabRuntime.maxon`'s OS-direct pair) take none.
+SOURCE CANNOT — AND IT IS THE BOUNDARY: A FAMILY'S BODIES CAN BE TIER SOURCE IFF THE BUILDER THAT EMITS THEM
+IS A CONSTANT FUNCTION OF `RuntimeUsage`.** A builder can emit a lock acquire only where the program has a
+second thread, or a per-P TLS read only where there are processors to shard by. Tier source is compiled once
+and reads no usage record, so such a body would have to spell every arm unconditionally — which is a
+different body, not a harder one.
+
+⚠ **A LITERAL A BUILDER'S CALLER PASSES IS NOT SUCH AN ARGUMENT.** `zeroed` never reaches `RuntimeUsage`:
+`SlabRuntime.installSlabRuntime` passes a literal to each of the three allocation doors, and an argument
+that is fixed per ENTRY POINT is one tier source spells as a `bool` parameter on one helper. That is a cost;
+`sharded` (`usesGt`) and `countRaw` (`usesMmCounters`) are the blockers.
+
+⇒ **A FAMILY'S PARTITION IS DECIDED BY ITS BUILD-TIME ARGUMENTS BEFORE ITS CALL GRAPH IS EVEN CONSULTED, AND
+THE SECOND-SPELLING TEST IS ASKED AFTER BOTH.** Nine of the object layer's fourteen entry points are blocked
+by the argument; three more by the second-spelling rule (`__slab_drain_remote`, `__slab_rounded_size` and
+`__slab_span_destroy` each share a walk with a body that stays); and the five that move take neither.
 
 ## Tests
 

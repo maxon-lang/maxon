@@ -98,12 +98,16 @@ export let HostEnvReadName = b"mrt_host_env_read"
 
 export let HostTlsAllocName = b"mrt_host_tls_alloc"
 
-// ⭐⭐ **WHO REACHES THE HOST-OBJECT BAND — the reap, the close and the lock init — AND IT IS WIDER THAN THE
-// SCHEDULER'S BIT.** `__ds_init` guards the ring with `osLockInit`/`osLockEnter`/`osLockLeave` and closes the
-// section descriptor the moment the mapping exists, and `__shm_close` closes one with no lock and no
-// scheduler anywhere, so both ends of a named segment reach the band without a green thread. The reap rides
-// it rather than a gate of its own: `mrt_host_wait_close` dispatches to it for the process KIND of handle,
-// and a call to an absent symbol is a link failure rather than a diagnostic.
+// ⭐⭐ **WHO REACHES THE HOST-OBJECT BAND — the reap and the close — AND IT IS WIDER THAN THE SCHEDULER'S
+// BIT.** `__ds_init` closes the section descriptor the moment the mapping exists and `__shm_close` closes one
+// with no scheduler anywhere, so both ends of a named segment reach the band without a green thread. The reap
+// rides it rather than a gate of its own: `mrt_host_wait_close` dispatches to it for the process KIND of
+// handle, and a call to an absent symbol is a link failure rather than a diagnostic.
+//
+// ⛔⛔ **THE LOCK IS NOT ON THIS GATE AND MUST NOT BE PUT BACK ON IT.** Its producers are a different set
+// (`posixUsesHostLock` below), and the widest of them is every program that allocates — so a lock chunk moved
+// back here would drag `mrt_host_proc_reap`, a `wait4`-based child reaper, and `mrt_host_wait_close` into
+// every single-threaded POSIX program that allocates one box.
 //
 // ⚠ **ALL THREE POSIX LANES ASK IT AND NONE OWNS IT** — the question is about `RuntimeUsage` and names no
 // instruction set, exactly as `LinuxRuntime`'s four gates record for their bands. A copy beside one
@@ -111,6 +115,22 @@ export let HostTlsAllocName = b"mrt_host_tls_alloc"
 export function posixUsesHostObjects(usage RuntimeUsage) returns bool
 	return usage.usesGt or usage.usesDebugStream or usage.usesSharedMemory
 end 'posixUsesHostObjects'
+
+// ⭐⭐ **WHO EMITS `StdOp.osLockInit`/`osLockEnter`/`osLockLeave` — the union every POSIX lane lays its lock
+// chunks on.** Three independent producers: the scheduler's run-queue lock (`SchedRuntime`), the DebugStream
+// ring's guard (`DebugStreamRuntime.buildDsInit`), and — the widest — the allocator's slow-path lock, which
+// `runtime/SlabRuntime.maxon`'s `__slab_state_base` initialises on the first allocation any program makes.
+// That last one is tier SOURCE: it is compiled once and spells the op unconditionally, so the bit that
+// answers for it is the bit `SlabRuntime.installSlabRuntime` reads to mint a call into the file at all.
+//
+// ⚠ **A GATE NARROWER THAN THE PRODUCER SET IS A LINK FAILURE, NOT A DIAGNOSTIC** — MEASURED one facility
+// over as `arm64ResolveCallFixups: bl to unknown function 'mrt_host_env_read'`, and `HostFacility.hostMutex`
+// is `true` on these lanes only while this union covers every producer.
+//
+// ⚠ **ALL THREE POSIX LANES ASK IT AND NONE OWNS IT**, for `posixUsesHostObjects`' reason.
+export function posixUsesHostLock(usage RuntimeUsage) returns bool
+	return usage.usesGt or usage.usesDebugStream or usage.usesHeap
+end 'posixUsesHostLock'
 
 // ⭐⭐ **WHO EMITS `StdOp.osEnvRead` — the union both env-read gates on a POSIX lane read.** Two producers
 // and they are independent: `SchedRuntime.emitResolveMaxProcs` reads `MAXON_MAX_PROCS` in every
