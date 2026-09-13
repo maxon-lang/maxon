@@ -32,19 +32,3 @@ export let SchedProcessorCountName = b"__sched_processor_count"
 export function isCpuCountRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: CpuRuntimeCallPrefix)
 end 'isCpuCountRuntimeCallee'
-
-// ⭐ **DOES THIS CALLEE ASK THE SCHEDULER HOW MANY WORKER Ms IT HAS RUN?**
-//
-// ⛔⛔ **IT IS A NAME TEST AND NOT A `__sched_` PREFIX TEST.** That band also holds four scheduler INTERNALS,
-// and a prefix test cannot tell a QUERY a program asked from machinery the compiler installed. Nothing
-// reaches the internals through here today — they are named only by builder-built Std, which
-// `recordCallUsage` never scans — which is exactly the enumerated-door shape that fails OPEN: the day one of
-// them became reachable from a Maxon-tier op, a prefix would silently set "this program asks how parallel it
-// was" and lay out a `.data` word for a question nobody asked. The name is what the bit is about.
-//
-// ⚠ **ITS BAND-MATE `__sched_processor_count` IS ASKED FOR SEPARATELY AND NOT THROUGH HERE**, because the two
-// answer to different `.data` words and therefore to different bits: one name test that set both would lay
-// out a word for a question the program did not ask.
-export function isSchedRuntimeCallee(callee ByteArray) returns bool
-	return callee.equals(SchedMaxActiveWorkersName)
-end 'isSchedRuntimeCallee'

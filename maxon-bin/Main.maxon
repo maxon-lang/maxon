@@ -1606,6 +1606,13 @@ function reportResults(results SpecTestResultArray) returns ExitCode
 		print("{tally.notRunHere} not run here — COMPILED and compared against a committed golden where one exists, but this host cannot execute them (see the note on stderr)\n")
 	end 'anyUnrunnable'
 
+	// How many references were READ, silent at zero like every trailer. `scripts/shared-stdlib-memo-gate.sh`
+	// reads it: a warm-against-cold comparison over fewer programs than it names cannot fail, and without
+	// this line a run that compared nothing is indistinguishable from one that compared everything.
+	if tally.compared > 0 'anyCompared'
+		print("{tally.compared} compared against a committed golden\n")
+	end 'anyCompared'
+
 	// ⚖ THE SECOND AXIS, IN THE SAME BREATH AS THE FIRST (see `GoldenDrift`). It sits under the two
 	// not-run lines because it qualifies neither of them: a drifted case is already counted in whichever
 	// column it earned, and this line says only that its committed reference no longer describes what the

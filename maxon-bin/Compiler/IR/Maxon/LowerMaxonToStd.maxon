@@ -845,7 +845,7 @@ function requireSiteOrdinalsAscend(sites RangeCheckSiteArray, order RangeSiteInd
 end 'requireSiteOrdinalsAscend'
 
 export function lowerMaxonToStd(maxonModule MaxonModule, project Project, funcNames FunctionNameIndex) returns StdModule
-	registerProgramLiteralBlobs(maxonModule, project: project)
+	registerProgramLiteralBlobs(maxonModule, globalData: project.globalData, libraryFacts: project.libraryFacts)
 	return MaxonToStdLowering.create(maxonModule, project: project, funcNames: funcNames).lower(project)
 end 'lowerMaxonToStd'
 
@@ -879,7 +879,7 @@ end 'lowerMaxonToStd'
 // a PREFIX FROM BYTE 0 with no label to anchor on, which is the pin's semantics rather than this walk's
 // fault. The cure for it is a label-anchored read (`Testing/SpecTestRunner.compareLinkedSection`), which is
 // a harness question and not this one.
-function registerProgramLiteralBlobs(maxonModule MaxonModule, project Project)
+function registerProgramLiteralBlobs(maxonModule MaxonModule, globalData GlobalDataTable, libraryFacts LibraryFacts)
 	for func in maxonModule.functions 'eachFunc'
 		// ⭐⭐ **THE EARLIEST OF THE THREE PRE-ELIMINATION DOORS ONTO `nextStringId`.** The two below it — the
 		// body lowering and `insertRangeChecks` — skip on the same fact and for the same reason: elimination
@@ -899,8 +899,9 @@ function registerProgramLiteralBlobs(maxonModule MaxonModule, project Project)
 		// code at 0, so `stdlib-loading.a-stdlib-modules-literals-are-byte-neutral` reads a displaced payload
 		// without failing. What holds this door is
 		// `stdlib-loading.a-stdlib-modules-literals-cannot-reach-the-rdata-image`, whose ```RequiredRdata block
-		// pins the LINKED image from byte 0.
-		if libraryBodyReachesNoBackEnd(project, name: func.name) 'notInTheProgram'
+		// pins the LINKED image from byte 0 — a tier body is built in every program, so without this door the
+		// arena's panic strings would lead the read-only image of a program that cannot allocate.
+		if libraryFacts.bodyIsSwept(func.name) 'notInTheProgram'
 			continue
 		end 'notInTheProgram'
 
@@ -909,7 +910,7 @@ function registerProgramLiteralBlobs(maxonModule MaxonModule, project Project)
 
 			for opIdx in block.opRefs 'eachOp'
 				let op = try maxonModule.ops.get(opIdx) otherwise panic("registerProgramLiteralBlobs: opIdx {opIdx} not in module.ops")
-				registerIfProgramLiteral(op, globalData: project.globalData)
+				registerIfProgramLiteral(op, globalData: globalData)
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
@@ -1289,6 +1290,11 @@ type MaxonToStdLowering
 	// `functionUsesSecondaryReturnSlot`, and reads the interface NAME out of it to materialize the witness.
 	var currentMaxonReturnType as MaxonReturnType
 
+	// The library reach facts — `bodyIsSwept` is the ONE fact `lower` skips a body on, and the SAME
+	// derivation `insertRangeChecks`, `checkCalls` and `scanRuntimeUsage` read. Copied out of `Project` at
+	// `create` like every other registry here (this pass holds no `Project`).
+	var libraryFacts as LibraryFacts
+
 	// The whole-program range-check plan, from `project.rangeChecks` — the SAME table
 	// `InsertRangeChecks` reads its sites from one pass later, held here so this pass can answer the one
 	// question that table cannot ask for itself: which STD op position each site's Maxon ordinal became.
@@ -1329,7 +1335,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedImmortalStructBoxes: ImmortalStructBoxLabelSet.create(), emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, stdOpElementStrides: project.stdOpElementStrides, stdOpTrivialElementSites: project.stdOpTrivialElementSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: ValueExistentialInstanceMap.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, currentKeepsItsOwnFrame: false, covPointBases: project.covPointBases, currentCovPointBase: 0, implicitLayoutValueId: 0, hasImplicitLayout: false, implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedImmortalStructBoxes: ImmortalStructBoxLabelSet.create(), emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, stdOpElementStrides: project.stdOpElementStrides, stdOpTrivialElementSites: project.stdOpTrivialElementSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: ValueExistentialInstanceMap.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, currentKeepsItsOwnFrame: false, covPointBases: project.covPointBases, currentCovPointBase: 0, implicitLayoutValueId: 0, hasImplicitLayout: false, implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, libraryFacts: project.libraryFacts, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -1491,7 +1497,7 @@ type MaxonToStdLowering
 			// empty body is instead PROVED harmless where the two reachability derivations meet —
 			// `requireUnreachableLibraryStayedDead` refuses the compile if DFE ever keeps a function this
 			// skipped, so a walk that missed an edge is a loud panic and never an empty callee.
-			if libraryBodyReachesNoBackEnd(project, name: srcFunc.name) 'notInTheProgram'
+			if self.libraryFacts.bodyIsSwept(srcFunc.name) 'notInTheProgram'
 				continue
 			end 'notInTheProgram'
 
@@ -2008,9 +2014,9 @@ type MaxonToStdLowering
 	// fill byte for `memFill`.
 	//
 	// ⚠ **AN ADDRESS ROW NAMES ITS `.data` LABEL HERE AND NOWHERE ELSE, so the label the emitted image lays
-	// out and the label a tier body reads are the SAME constant** (`SchedRuntime`). The slot is laid out on
-	// that family's `RuntimeUsage` bit, which the CALL SITE sets — the same call site that keeps the body
-	// alive through dead-function elimination — so a surviving body cannot address a word the image omitted.
+	// out and the label a tier body reads are the SAME constant** (`SchedRuntime`). The slot is laid out
+	// where a body surviving dead-function elimination names it (`DataReach.walked`), so a surviving body
+	// cannot address a word the image omitted and a swept body lays out nothing.
 	function lowerRawIntrinsic(result ValueId, intrinsic RawIntrinsic, args ValueIdArray, constant ParsedInt, dstBlock IrBlock)
 		match intrinsic 'row'
 			osTickCountMs then self.stdModule.appendOp(dstBlock, op: StdOp.osTickCountMs(result))
@@ -3183,8 +3189,8 @@ type MaxonToStdLowering
 		// It cannot happen — a reachable caller materialized this argument, and `requireUnreachableLibraryStayedDead`
 		// refuses a compile where DFE keeps a library function the reach derivations called dead — so the silent
 		// hole is worth a panic rather than a comment.
-		if libraryBodyReachesNoBackEnd(project, name: request.callee) 'calleeHasNoLoweredBody'
-			panic("requireCalleeIgnoresParametricWitness: '{String.from(request.callee)}' was skipped by the function walk as library code the back end never receives, so its lowered body proves nothing — yet '{String.from(request.caller)}' materialized a witness argument for it")
+		if self.libraryFacts.bodyIsSwept(request.callee) 'calleeHasNoLoweredBody'
+			panic("requireCalleeIgnoresParametricWitness: '{String.from(request.callee)}' was skipped by the function walk as a swept library body, so its lowered body proves nothing — yet '{String.from(request.caller)}' materialized a witness argument for it")
 		end 'calleeHasNoLoweredBody'
 
 		let callee = try self.funcNames.funcNamed(request.callee) otherwise panic("requireCalleeIgnoresParametricWitness: '{String.from(request.callee)}' is in no function of this module — `materializeWitnessArg` recorded a call the lowering had already resolved")

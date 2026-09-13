@@ -2094,39 +2094,50 @@ export function requireQuotableSharedSpellings(spelling ByteArray, alsoSpelled B
 end 'requireQuotableSharedSpellings'
 
 // The GT runtime's `.data` slots, appended to the user's globals before `layOut` orders them — ordinary
-// i64 slots in every respect, exactly like MmRuntime's `runtimeGlobals()`.
+// i64 slots in every respect, exactly like MmRuntime's `runtimeGlobals()`. Every one is read only by Std
+// bodies, so each is laid out exactly where a surviving body names it (`DataReach.walked`).
+//
+// Empty on a target with no green-thread stack: the seed of `GtSeedBytesLabel` is that stack's size,
+// which `gtSeedStackBytes` refuses to compute where the facility is denied, and no body there can name
+// a slot anyway.
 export function gtRuntimeGlobals(target Target) returns DataSectionEntryArray
 	var out = DataSectionEntryArray.create()
-	pushRuntimeGlobal(out, label: GtRunQueueHeadLabel, sharing: MultiMSharing.underSchedLock)
-	pushRuntimeGlobal(out, label: GtRunQueueTailLabel, sharing: MultiMSharing.underSchedLock)
 
-	// The timer store's count + heap base, and the clock out-param scratch words.
-	pushRuntimeGlobal(out, label: GtTimerCountLabel, sharing: MultiMSharing.underSchedLock)
-	pushRuntimeGlobal(out, label: GtTimerHeapBaseLabel, sharing: MultiMSharing.underSchedLock)
-	pushRuntimeGlobal(out, label: GtTimerCapacityLabel, sharing: MultiMSharing.underSchedLock)
-	pushRuntimeGlobal(out, label: GtTimerSeqLabel, sharing: MultiMSharing.underSchedLock)
-	pushRuntimeGlobal(out, label: GtTimerWhenLabel, sharing: MultiMSharing.underSchedLock, seed: TimerWhenEmpty)
-	pushRuntimeGlobal(out, label: GtTraceCounterLabel, sharing: MultiMSharing.atomicStep)
+	if not targetProvidesFacility(target, facility: HostFacility.greenThreads) 'noGreenThreadStack'
+		return out
+	end 'noGreenThreadStack'
+
+	pushRuntimeGlobal(out, label: GtRunQueueHeadLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: GtRunQueueTailLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+
+	// The timer store — count, heap base, capacity, sequence and earliest deadline — plus the trace counter
+	// and the clock's out-param scratch words: what a mid-body yield parks on and wakes from.
+	pushRuntimeGlobal(out, label: GtTimerCountLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: GtTimerHeapBaseLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: GtTimerCapacityLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: GtTimerSeqLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: GtTimerWhenLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked, seed: TimerWhenEmpty)
+	pushRuntimeGlobal(out, label: GtTraceCounterLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
 
 	// The green-thread live count (spawn++, await/drop reclaim--), asserted zero at exit. It counts GREEN
 	// THREADS, which the `__mm` gate cannot see whatever happens to their memory.
-	pushRuntimeGlobal(out, label: GtLiveCountLabel, sharing: MultiMSharing.atomicStep)
+	pushRuntimeGlobal(out, label: GtLiveCountLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
 
 	// The adaptive seed starts at the floor, so the first spawn commits what every spawn committed before any
 	// thread has finished.
-	pushRuntimeGlobal(out, label: GtSeedBytesLabel, sharing: MultiMSharing.lastWriterWins, seed: gtSeedStackBytes(target))
-	pushRuntimeGlobal(out, label: GtStackBytesSumLabel, sharing: MultiMSharing.atomicStep)
-	pushRuntimeGlobal(out, label: GtStackBytesCountLabel, sharing: MultiMSharing.atomicStep)
-	pushRuntimeGlobal(out, label: GtSeedSumSeenLabel, sharing: MultiMSharing.underSchedLock)
-	pushRuntimeGlobal(out, label: GtSeedCountSeenLabel, sharing: MultiMSharing.underSchedLock)
+	pushRuntimeGlobal(out, label: GtSeedBytesLabel, sharing: MultiMSharing.lastWriterWins, reach: DataReach.walked, seed: gtSeedStackBytes(target))
+	pushRuntimeGlobal(out, label: GtStackBytesSumLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: GtStackBytesCountLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: GtSeedSumSeenLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: GtSeedCountSeenLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
 	return out
 end 'gtRuntimeGlobals'
 
-// The pipe substrate's one `.data` slot — laid out ONLY when the module reads a pipe (`usesChildPipes`): the
-// pipe-name uniquifier counter, 0 until the first pipe is created.
+// The pipe substrate's one `.data` slot — the pipe-name uniquifier counter, 0 until the first pipe is
+// created. It is read only by Std bodies, so it is laid out exactly where a surviving body names it.
 export function ioRuntimeGlobals() returns DataSectionEntryArray
 	var out = DataSectionEntryArray.create()
-	pushRuntimeGlobal(out, label: IoPipeSeqLabel, sharing: MultiMSharing.atomicStep)
+	pushRuntimeGlobal(out, label: IoPipeSeqLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
 	return out
 end 'ioRuntimeGlobals'
 
@@ -6833,14 +6844,15 @@ export function isSubprocessRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: SubpCalleePrefix)
 end 'isSubprocessRuntimeCallee'
 
-// The `.data` slots the streaming runtime owns — laid out only when the program spawns a streaming child
-// (`usesStreaming`). Just the table pointer; the table itself and every buffer are `__slab_alloc`'d lazily.
+// The `.data` slots the streaming runtime owns, each laid out where a surviving body names it
+// (`DataReach.walked`). Just the table pointer and the last error; the table itself and every buffer are
+// `__slab_alloc`'d lazily.
 export function subpRuntimeGlobals() returns DataSectionEntryArray
 	var out = DataSectionEntryArray.create()
 
 	// The table POINTER is created once, under `__sched_lock`, and never republished or freed — so every later
 	// read of it is a read of a sealed word, and the per-SLOT claim is the CAS in `buildSubpSpawnCore`.
-	pushRuntimeGlobal(out, label: SubpTableLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+	pushRuntimeGlobal(out, label: SubpTableLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
 
 	// ⚠ **THE ONE SLOT WHOSE *USEFULNESS* DEGRADES UNDER MULTI-M WHERE ITS SAFETY DOES NOT, AND THAT
 	// DISTINCTION IS THE WHOLE OF WHY IT IS CLASSIFIED RATHER THAN FIXED.** It is one aligned machine word
@@ -6850,7 +6862,7 @@ export function subpRuntimeGlobals() returns DataSectionEntryArray
 	// (`__Builtins.subprocessLastErrorMessage()` names no operation), so no promise breaks — the message can
 	// simply be the other failure's. Making it exact needs per-GREEN-THREAD storage, since a green thread may
 	// migrate between the failure and the read, and that is a GT-layout change and a rung of its own.
-	pushRuntimeGlobal(out, label: SubpLastErrorLabel, sharing: MultiMSharing.lastWriterWins)
+	pushRuntimeGlobal(out, label: SubpLastErrorLabel, sharing: MultiMSharing.lastWriterWins, reach: DataReach.walked)
 	return out
 end 'subpRuntimeGlobals'
 

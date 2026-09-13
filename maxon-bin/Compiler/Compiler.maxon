@@ -164,9 +164,8 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 
 	// Loading starts the instant the compile does, so `whole` is also the `load` phase's
 	// probe — a second set of reads here would sample the same instant.
-	var project = try loadProject(inputPaths, target: target, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins)
+	var project = try loadProject(inputPaths, target: target, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, debugStream: debugStream)
 	project.asyncTrace = asyncTrace
-	project.debugStream = debugStream
 	project.debugInfo = debugInfo
 	project.requestedRuntimeBodies = runtimeIrNames
 	project.coverage = coverage
@@ -547,12 +546,12 @@ end 'writeTargetIr'
 // File/IO errors (`fileNotFound`, `noSourceFiles`, `readError`) carry NO
 // diagnostics and propagate straight to the caller, which prints a specific
 // message. `loadSourceFiles` is what raises them.
-export function loadProject(inputPaths MaxonSourcePathArray, target Target, stdlibDirOverride String = "", runtimeDirOverride String = "", entryFunction ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create()) returns Project throws CompileError
+export function loadProject(inputPaths MaxonSourcePathArray, target Target, stdlibDirOverride String = "", runtimeDirOverride String = "", entryFunction ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(), debugStream bool = false) returns Project throws CompileError
 	// Both library roots are found BEFORE the project exists, because the project carries them to the
 	// loader below. Nothing after the load asks where either is — a later pass asks about a FUNCTION
 	// (`isLibraryFunction`), which is answered from a set the loader already built.
 	let stdlibDir = try stdlibDirFor(stdlibDirOverride)
-	var project = createProject(try commonAncestorOf(inputPaths), target: target, stdlibDir: stdlibDir, runtimeDir: try runtimeDirFor(runtimeDirOverride, stdlibDir: stdlibDir))
+	var project = createProject(try commonAncestorOf(inputPaths), target: target, stdlibDir: stdlibDir, runtimeDir: try runtimeDirFor(runtimeDirOverride, stdlibDir: stdlibDir), debugStream: debugStream)
 
 	// ⭐ **BOTH SET BEFORE THE FIRST FILE IS REGISTERED, AND THAT ORDER IS LOAD-BEARING.**
 	// `Queries.compilerMintedNamesIn` is asked while a file is being READ, so a list filled after the
@@ -867,7 +866,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// opens every managed global with a `globalAddr` of that global's own slot, so a liveness scan run
 	// after the synthesis would find every global keeping itself alive — the answer would be "everything
 	// is live", silently and always.
-	let liveGlobals = liveGlobalLabels(module, storedGlobals: signatures.storedGlobalCount, unreachableStdlib: project.libraryFacts.unreachable)
+	let liveGlobals = liveGlobalLabels(module, storedGlobals: signatures.storedGlobalCount, libraryFacts: project.libraryFacts)
 
 	// ⭐ **SYNTHESIZE `__module_init` / `__maxon_global_cleanup` — HERE, and the position is the whole
 	// wiring** (P1.7 slice 2a, see `ModuleInit`). They are Maxon-tier functions appended to the merged
@@ -939,7 +938,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// `IrModule.parksOnIo` (which decides whether the park is emitted) cannot answer it differently. Both
 	// fields carry what a disagreement produces.
 	let parksOnIo = targetProvidesFacility(project.target, facility: HostFacility.greenThreads)
-	var usage = scanRuntimeUsage(module, unreachableStdlib: project.libraryFacts.unreachable, unreachedRuntimeTier: project.libraryFacts.unreachedRuntimeTier, funcSignatures: project.funcSignatures, parksOnIo: parksOnIo)
+	var usage = scanRuntimeUsage(module, libraryFacts: project.libraryFacts, funcSignatures: project.funcSignatures, parksOnIo: parksOnIo)
 
 	// ⭐ A TRACED build carries what `__gt_trace_emit` calls, and the scan cannot see any of it: the trace is
 	// emitted BELOW the Maxon tier (into the synthesized `__gt_*` runtime), so no Maxon call site exists for
@@ -1019,15 +1018,16 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 
 	// A `<Enum>.fromName(name)` helper calls `__str_eq` per case tested and, for a boxed union, `__mm_alloc`s
 	// the record it returns — all inside a body synthesized after the pipeline, which the scan above cannot
-	// see. Declared here for the two installers' reason and in their window: before `.data` layout reads
-	// `usesHeap` and before `installStringRuntime` reads `usesStrEq`.
+	// see. Declared here, in the window every reader of the record requires: `usesHeap` must be final before
+	// `EntryStubCalls.fromUsage` and `withCompilerCalledTierUnreached` below read it, and `usesStrEq` before
+	// `installStringRuntime` does.
 	noteEnumLookupUsage(usage, project: project)
 
-	// ⭐⭐ **`usesHeap` IS FINAL HERE AND NOWHERE EARLIER, WHICH IS WHY BOTH ANSWERS BELOW ARE TAKEN AT THIS
-	// LINE.** The trace and DebugStream arms above are not its last producers: a destructor cascade, a clone
-	// cascade and a boxed-enum lookup helper each allocate inside a body synthesized after the pipeline, so
-	// each declares the heap from its own walk. A reader that ran before them would miss exactly those
-	// programs.
+	// ⭐⭐ **`usesHeap` IS FINAL HERE AND NOWHERE EARLIER, WHICH IS WHY THIS CALL AND
+	// `withCompilerCalledTierUnreached` BELOW BOTH SIT PAST THIS LINE.** The trace and DebugStream arms
+	// above are not its last producers: a destructor cascade, a clone cascade and a boxed-enum lookup helper
+	// each allocate inside a body synthesized after the pipeline, so each declares the heap from its own
+	// walk. A reader that ran before them would miss exactly those programs.
 	//
 	// ⭐ **THE HEAP CARRIES THE ARENA WITH IT, AND THAT DECLARATION IS WHAT OPENS `usesSlabArena`.**
 	// `__slab_alloc` cuts its spans out of the chunk arena and `__slab_free` asks the reverse map who owns a
@@ -1035,13 +1035,6 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// 2 of `RuntimeUsage`'s header (a synthesized body's calls are DECLARED, never discovered). A bit unset
 	// while the allocator ships is a `globalAddr` on a slot nothing laid out.
 	closeSlabNeeds(usage)
-
-	// ⭐⭐ **AND THE MIRROR QUESTION: WHICH TIER BODIES THIS PROGRAM SWEEPS.** The slab family's reach is a
-	// DECLARATION about an installer, and `installSlabRuntime` returns without emitting anything unless
-	// `usesHeap` — so in a program with no allocator every body of that family is swept, and any `.rdata` a
-	// pre-elimination pass registered for one is an orphan at the front of the image. Every such pass reads
-	// this through `libraryBodyReachesNoBackEnd`, and all of them run in the lowering stage below.
-	project.sweptRuntimeTier = sweptRuntimeTierNames(project.libraryFacts, installsAllocator: usage.usesHeap)
 
 	// Every plain function used as a first-class value (`let f = triple`, `apply(triple, …)`) is called
 	// through the uniform `(userargs, env)` indirect ABI, whose signature its own `(userargs) -> R` shape does
@@ -1051,150 +1044,44 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	project.functionValueTargets = collectFnRefThunkTargets(module, funcSignatures: project.funcSignatures)
 	recordPhase(project, phase: CompilePhase.deriveRuntimeNeeds, probe: scanProbe)
 
-	// The `.data` slot list assembled from those answers, and the section laid out. Its own phase
-	// because it is the only step in this run whose cost is O(globals) rather than O(module).
-	let layoutProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.layOutGlobals)
-
-	// ⛔ **THE TRACE BIT IS RECORDED BEFORE THE FIRST `.data` PRODUCER RUNS, NOT BESIDE THE ONE THAT IS
-	// OBVIOUSLY ITS OWN.** A backend sees only this record, and the producer's synthesized body reaches the
-	// uptime clock, the ring lock and the segment attach — so slots that belong to OTHER families are owed
-	// too: `LinuxRuntime.linuxEnvpGlobals` lays out `__mrt_envp` because the attach reads
-	// `MAXON_DEBUGSTREAM` out of the captured vector on a libc-less lane. Set after that producer, the word
-	// is absent and the backend panics at the relocation rather than diagnosing anything. `usesHeap` is
-	// final by here, which is what makes this the earliest honest place to ask.
+	// ⛔ **THE TRACE BIT IS FINAL BEFORE `EntryStubCalls.fromUsage` READS THE RECORD BELOW.** The stub's
+	// DebugStream bracket is rooted from that snapshot, and the producer's synthesized body reaches the
+	// uptime clock, the ring lock and the segment attach — so slots that belong to OTHER families ride this
+	// bit too: `LinuxRuntime.linuxEnvpGlobals` declares `__mrt_envp` because the attach reads
+	// `MAXON_DEBUGSTREAM` out of the captured vector on a libc-less lane. `usesHeap` is final by here, which
+	// is what makes this the earliest honest place to ask.
 	usage.usesDebugStream = buildCarriesDebugStream(project, usage: usage)
 
 	// ⭐ **AND THE COVERAGE BITS, IN THE SAME WINDOW AND FOR THE SAME REASON.** Nothing in a Maxon module
-	// names `__cov_dump`, so both are DECLARED here rather than discovered — and the file bit is what lays
-	// out the errno word and the host chunks every non-Windows lane's write goes through
-	// (`RuntimeUsage.usesCoverage`). Set after the first `.data` producer, either is a relocation against a
-	// label nothing laid out.
+	// names `__cov_dump`, so both are DECLARED here rather than discovered: the stub's coverage dump is
+	// rooted from the snapshot below, and the file bit is what declares the errno word and the host chunks
+	// every non-Windows lane's write goes through (`RuntimeUsage.usesCoverage`).
 	if project.coverage 'coverageWritesItsCounters'
 		usage.usesCoverage = true
 		usage.usesManagedFile = true
 	end 'coverageWritesItsCounters'
 
-	var declaredGlobals = signatures.declaredGlobals(liveGlobals)
+	// ⭐ **WHAT THE ENTRY STUB WILL CALL, RECORDED WHERE EVERY PRODUCER OF THOSE FACTS HAS RUN.** The
+	// reachability roots and the inliner's called-once census read it (`Project.entryStubCalls`), and the
+	// census runs inside the pipeline below, where no usage record is in reach.
+	project.entryStubCalls = EntryStubCalls.fromUsage(usage)
 
-	if usage.usesHeap 'heapGlobals'
-		for entry in runtimeGlobals(usage) 'each'
-			declaredGlobals.push(entry)
-		end 'each'
-	end 'heapGlobals'
+	// ⭐⭐ **THE MIRROR QUESTION, SETTLED HERE ON THE MINTER'S OWN GATE: WHICH TIER BODIES THIS PROGRAM
+	// SWEEPS.** The compiler-called tier files (`runtimeTierFileIsCompilerCalled`) were credited reached
+	// because no walk can see a call an installer mints; `installSlabRuntime` — the only minter of one —
+	// emits nothing without `usesHeap`, and that bit is final by this line. A program it will mint no call
+	// for files those bodies unreached, so every pre-elimination pass below skips them through
+	// `LibraryFacts.bodyIsSwept`: no `.rdata` blob of theirs leads the read-only image and no guard is
+	// inserted into code elimination sweeps. `requireUnreachableLibraryStayedDead` panics by name if one is
+	// kept after all.
+	if not usage.usesHeap 'noInstallerCallsTheTier'
+		project.libraryFacts = project.libraryFacts.withCompilerCalledTierUnreached()
+	end 'noInstallerCallsTheTier'
 
-	// The green-thread scheduler's `.data` slots (current GT, run-queue head/tail, init guard) — same
-	// pre-lowering timing and same reason as the heap slots: a `globalAddr` the backend resolves needs them
-	// laid out first. `usesGt` already implies `usesHeap` (the scheduler's tables come from `__slab_alloc`), but
-	// the GT slots are its OWN, so they ride their own bit.
-	if usage.usesGt 'gtGlobals'
-		for entry in gtRuntimeGlobals(project.target) 'each'
-			declaredGlobals.push(entry)
-		end 'each'
-	end 'gtGlobals'
-
-	// The P/M half's `.data` slots (G1). ⚠ **NO OUTER BIT TEST**, because the file it comes from has THREE
-	// gates and asks them itself: the P machinery rides `usesGt`, the two worker counters also serve
-	// `__Builtins.schedMaxActiveWorkers()` in a program that never spawns a green thread, and the system
-	// monitor's one-shot rides the TARGET as well (`targetBracketsBlockingSyscalls`), which is why this call
-	// passes one. A gate spelled here as well would be a second copy of those conditions —
-	// `slabRuntimeGlobals`'s reasoning, two files over, and `commandLineRuntimeGlobals`' shape one call down.
-	for entry in schedRuntimeGlobals(usage, target: project.target) 'each'
-		declaredGlobals.push(entry)
-	end 'each'
-
-	// argv's two captured words plus the empty-argument word (MAC7). ⚠ **NO OUTER BIT TEST**, for
-	// `schedRuntimeGlobals`'s reason: the answer depends on the TARGET as well as on the bit — a Windows
-	// program fetches its command line by a call and lays out nothing — and that pair of conditions is asked
-	// where it is stated (`commandLineRuntimeGlobals`) rather than being copied here.
-	for entry in commandLineRuntimeGlobals(usage, target: project.target) 'each'
-		declaredGlobals.push(entry)
-	end 'each'
-
-	// The arm64-Linux host surface's one `.data` word — the errno a raw `svc` reports and nothing stores
-	// (`Arm64LinuxRuntime.LinuxErrnoLabel`). ⚠ **NO OUTER BIT TEST**, for `commandLineRuntimeGlobals`'
-	// reason: the answer depends on the TARGET as well as on the bits, and that pair of conditions is asked
-	// where it is stated rather than being copied here.
-	for entry in arm64LinuxRuntimeGlobals(usage, target: project.target) 'each'
-		declaredGlobals.push(entry)
-	end 'each'
-
-	// The environment vector the Linux entry stub captured — BOTH Linux lanes, because a libc-less image has
-	// no other route to `NO_COLOR`, `TERM` or `MAXON_MAX_PROCS`. ⚠ **NO OUTER BIT TEST**, for its neighbours'
-	// reason: the answer depends on the TARGET as well as on the bits.
-	for entry in linuxEnvpGlobals(usage, target: project.target) 'each'
-		declaredGlobals.push(entry)
-	end 'each'
-
-	// The GREEN-THREAD floor's per-OS-thread slot counter, on BOTH Linux lanes. Its own producer beside the
-	// one above for the reason that one is separate from the scheduler's: the two ride different bits, and
-	// asking both conditions here would copy them.
-	for entry in linuxGreenThreadGlobals(usage, target: project.target) 'each'
-		declaredGlobals.push(entry)
-	end 'each'
-
-	// The x64-Linux host surface's one `.data` word — the errno a raw `syscall` reports and nothing stores
-	// (`X64LinuxRuntime.X64LinuxErrnoLabel`). ⚠ **NO OUTER BIT TEST**, for its arm64 twin's reason: the
-	// answer depends on the TARGET as well as on the bits, and that pair of conditions is asked where it is
-	// stated rather than being copied here.
-	for entry in x64LinuxRuntimeGlobals(usage, target: project.target) 'each'
-		declaredGlobals.push(entry)
-	end 'each'
-
-	// The x64-Windows write path's three console-probe cells — one per standard stream, holding what the
-	// probe answered (`X64Runtime.x64WindowsRuntimeGlobals`). ⚠ **NO OUTER BIT TEST**, for its neighbours'
-	// reason: the answer is the TARGET alone, and it is asked where it is stated. There is no usage bit that
-	// would gate it more tightly — every x64-Windows binary carries the writer, because a program that never
-	// prints still panics.
-	for entry in x64WindowsRuntimeGlobals(project.target) 'each'
-		declaredGlobals.push(entry)
-	end 'each'
-
-	// The pipe substrate's `.data` slot rides its OWN bit, so a plain async/timer/proc program's `.data` layout
-	// is unchanged — only a pipe-reading program lays it out.
-	if usage.usesChildPipes 'ioGlobals'
-		for entry in ioRuntimeGlobals() 'each'
-			declaredGlobals.push(entry)
-		end 'each'
-	end 'ioGlobals'
-
-	// The streaming subprocess handle-table pointer rides its OWN bit, so a program that reads a pipe without
-	// the streaming API lays out no `__subp_table`.
-	if usage.usesStreaming 'subpGlobals'
-		for entry in subpRuntimeGlobals() 'each'
-			declaredGlobals.push(entry)
-		end 'each'
-	end 'subpGlobals'
-
-	// ⚠ **`ClockRuntime` CONTRIBUTES NO `.data` SLOT.** Its host read takes FRAME scratch, which is what a
-	// multi-M runtime requires, so there is no `clockRuntimeGlobals` to call here.
-	// The slab's PAGE-LAYER slots — the arena list head and the reverse map's L1 pointer — and the OBJECT
-	// layer's one slot, the pointer to its lazily-committed state region. Each gate rides inside its producer
-	// (`slabArenaRuntimeGlobals` asks `usesSlabArena`, `slabRuntimeGlobals` asks `usesHeap`) rather than being
-	// spelled a second time here.
-	for entry in slabArenaRuntimeGlobals(usage) 'each'
-		declaredGlobals.push(entry)
-	end 'each'
-
-	for entry in slabRuntimeGlobals(usage) 'each'
-		declaredGlobals.push(entry)
-	end 'each'
-
-	// The DebugStream producer's own six `.data` slots, on the bit recorded at the top of this block —
-	// nothing in a program can ask for a trace, so `--debugstream` is the only thing that can set it.
-	if usage.usesDebugStream 'debugStreamGlobals'
-		for entry in debugStreamRuntimeGlobals() 'each'
-			declaredGlobals.push(entry)
-		end 'each'
-	end 'debugStreamGlobals'
-
-	// ⭐⭐ **THE `--coverage` COUNTER IMAGE — ONE CONTIGUOUS RESERVED `.data` RUN, RESERVED HERE BECAUSE THIS
-	// IS THE LAST MOMENT IT CAN BE.** `layOut` below is the single writer of every `.data` offset and refuses
-	// a run registered after it, and the point COUNT is final only now: the parse mints points and
-	// `mergeArtifact` folds them, both of which finished with `queryAllModule`.
-	reserveCoverageImage(project)
-
-	project.globalData.layOut(declaredGlobals)
-	recordPhase(project, phase: CompilePhase.layOutGlobals, probe: layoutProbe)
+	// The user's own `.data` slots, already filtered by `DeadGlobalElimination`. The runtime's are appended
+	// and the section is laid out in `buildBackend`, after dead-function elimination has said which runtime
+	// words a surviving body names (`BackendDispatch.dataSectionRoster`).
+	let userGlobals = signatures.declaredGlobals(liveGlobals)
 
 	// ⭐ Hand the pipeline the ONE runtime fact a Std pass cannot derive from the Std module: whether this
 	// program runs green threads, and so whether any frame can be RELOCATED underneath a pointer into it.
@@ -1245,8 +1132,8 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// the seam where lowering has finished and nothing has been installed yet — rather than threaded
 	// through forty signatures that could each forget it. It is the FULL condition and not the bare flag,
 	// so the field means what its own header says: a heapless traced build installs no producer, and a
-	// module claiming one it does not have is what would put a `globalAddr __ds_base` into a build whose
-	// `.data` never laid that slot out.
+	// module claiming one it does not have is what would put a `globalAddr __ds_base` into `__mm_alloc`
+	// with no `__ds_init` to ever write the word it reads.
 	pipeline.stdModule.debugStream = buildCarriesDebugStream(project, usage: usage)
 
 	// ⭐ **AND THE SUBPROCESS BIT, AT THE SAME SEAM AND FOR THE SAME REASON.** The PE writer needs it for the
@@ -1676,7 +1563,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// them apart (A1t), and at its root set, for the half of that rule with no pair to count (A1w). Passing
 	// `project` is also what gives the allocator the `opRanges`/`valueOrigins` tables it
 	// maps a Target ValueId back to its source span through.
-	let codeResult = try buildBackend(pipeline.stdModule, target: project.target, globalData: project.globalData, project: project, usage: usage) otherwise 'backendFailed'
+	let codeResult = try buildBackend(pipeline.stdModule, target: project.target, globalData: project.globalData, project: project, usage: usage, userGlobals: userGlobals) otherwise 'backendFailed'
 		try refuseCompile(project)
 	end 'backendFailed'
 

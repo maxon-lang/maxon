@@ -714,26 +714,23 @@ export function isSignaturelessCompilerCallee(callee ByteArray, funcSignatures F
 	return isCompilerInternalCallee(callee) and not funcSignatures.contains(callee)
 end 'isSignaturelessCompilerCallee'
 
-// The runtime's `.data` slots, appended to the user's declared globals before `layOut` orders them.
+// The allocator's `.data` slots, appended to the user's declared globals before `layOut` orders them.
 // They are ordinary slots in every respect — `layOut` sorts and offsets them exactly as it does a
-// user's `var`, and the image writer renders them the same way. Nothing here is special-cased.
-export function runtimeGlobals(usage RuntimeUsage) returns DataSectionEntryArray
+// user's `var`, and the image writer renders them the same way. Every one is read only by Std bodies, so
+// each is laid out exactly where a surviving body names it (`DataReach.walked`): the five traffic counters
+// are named only by a build that maintains them (`usesMmCounters` gates that maintenance), and the leak
+// gate's count only by an allocating one.
+export function runtimeGlobals() returns DataSectionEntryArray
 	var out = DataSectionEntryArray.create()
-	pushRuntimeGlobal(out, label: MmAllocCountLabel, sharing: MultiMSharing.atomicStep)
+	pushRuntimeGlobal(out, label: MmAllocCountLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
 
-	// The four traffic counters ride their OWN bit, so a program that never asks how much it allocated has
-	// the `.data` image it has always had — the same discipline every other runtime family's slots follow,
-	// and here it also gates the MAINTENANCE those slots would otherwise oblige (see `MmAllocTotalLabel`).
 	// Their zero initializer is the honest starting state for a cumulative counter, exactly as
 	// `__slab_state`'s is for a region nothing has committed yet.
-	if usage.usesMmCounters 'trafficCounters'
-		pushRuntimeGlobal(out, label: MmAllocTotalLabel, sharing: MultiMSharing.atomicStep)
-		pushRuntimeGlobal(out, label: MmAllocBytesLabel, sharing: MultiMSharing.atomicStep)
-		pushRuntimeGlobal(out, label: MmRawAllocCountLabel, sharing: MultiMSharing.atomicStep)
-		pushRuntimeGlobal(out, label: MmRawLiveCountLabel, sharing: MultiMSharing.atomicStep)
-		pushRuntimeGlobal(out, label: MmRawAllocBytesLabel, sharing: MultiMSharing.atomicStep)
-	end 'trafficCounters'
-
+	pushRuntimeGlobal(out, label: MmAllocTotalLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: MmAllocBytesLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: MmRawAllocCountLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: MmRawLiveCountLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: MmRawAllocBytesLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
 	return out
 end 'runtimeGlobals'
 

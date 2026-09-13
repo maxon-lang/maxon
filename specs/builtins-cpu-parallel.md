@@ -473,9 +473,8 @@ address row names `__sched_num_procs` — the P array's length wearing this quer
 the pair a mix-up would swap, and a swapped body still compiles, still links and still answers a plausible
 number.
 
-⚠ It also pins the other half of the `RuntimeUsage` bit's job: the bit that admits this body is the bit that
-lays the word out, so an image rendering this load must also carry `__sched_num_procs` in its `.data`
-section.
+⚠ It also pins the layout's half: a runtime word is laid out where a surviving body names it, so an image
+rendering this load must also carry `__sched_num_procs` in its `.data` section.
 
 ⚠ **THE ANSWER IS 0 BECAUSE THIS PROGRAM SPAWNS NOTHING**, which is the word's `.data` seed and the truth
 about a scheduler that never initialized. What a resolved count looks like is `sched-default-procs.md`'s;

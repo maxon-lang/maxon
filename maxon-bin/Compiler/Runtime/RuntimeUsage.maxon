@@ -444,36 +444,14 @@ export type RuntimeUsage
 	// Its own bit: the entry point is one import call, one compare and two constant returns — no buffer, no
 	// allocation, no scheduler, so it declares NO transitive dependency.
 	//
-	// ⚠ **IT IS THE ONE BIT HERE THAT COSTS AN IMPORT**, and that is why it must not be shared with its
-	// band-mate below: it is the sole producer of `GetActiveProcessorCount`, whose whole OPTIONAL TRAILING
-	// BAND (`PeWriter.isOptionalTrailingImport`) is emitted when it is set. Folded into one CPU-parallel bit,
-	// a program whose only question was how many worker Ms had run would have laid out seven imports and a
-	// second entry point to link against nothing.
+	// ⚠ **IT IS THE ONE BIT HERE THAT COSTS AN IMPORT**, and that is why its two scheduler band-mates
+	// (`__sched_max_active_workers`, `__sched_processor_count`) ride no bit rather than this one: it is the
+	// sole producer of `GetActiveProcessorCount`, whose whole OPTIONAL TRAILING BAND
+	// (`PeWriter.isOptionalTrailingImport`) is emitted when it is set. Folded into one CPU-parallel bit, a
+	// program whose only question was how many worker Ms had run would have laid out seven imports and a
+	// second entry point to link against nothing. Each band-mate's `.data` word is laid out where a
+	// surviving body names it (`SchedRuntime.schedRuntimeGlobals`).
 	export var usesCpuCount as bool
-
-	// The program asks the SCHEDULER for its worker-M high-water mark (`__Builtins.schedMaxActiveWorkers` ⇒
-	// `__sched_max_active_workers`). Its own bit for the reason above: the body is one `.data` load, so it
-	// declares nothing — emphatically not `usesGt`, since a program may ask the question having spawned
-	// nothing (see `CpuParallelRuntime`'s header).
-	//
-	// ⭐⭐ **THE BIT LAYS OUT THE WORD THE BODY READS**, so it is not merely an install guard: unset while the
-	// body survives, `__sched_max_active_workers` would `globalAddr` a slot the image never laid out. What
-	// keeps them in step is that ONE call site does both — `recordCallUsage` sets the bit from it, and it is
-	// also the edge dead-function elimination keeps the body alive for.
-	export var usesSchedMaxActiveWorkers as bool
-
-	// The program asks the SCHEDULER how many processors it resolved (`__Builtins.schedProcessorCount` ⇒
-	// `__sched_processor_count`). Its own bit for its band-mate's reason, and it gates something the band-mate's
-	// does not: `__sched_num_procs` is otherwise a `usesGt` word, so without this bit a program that asks the
-	// question having spawned nothing would `globalAddr` a slot the image never laid out.
-	//
-	// ⚠ **IT DELIBERATELY DOES NOT DECLARE `usesGt`, WHICH IS WHERE IT PARTS FROM `__sched_steal_count`.**
-	// That one walks the `P*` array and is therefore meaningless without the machinery that builds it; this
-	// one reads a single word whose 0 — no scheduler has initialized — is a truthful answer.
-	//
-	// ⭐⭐ Like its band-mate, it LAYS OUT the word its body reads, and the same one call site sets the bit and
-	// keeps the body alive.
-	export var usesSchedProcessorCount as bool
 
 	// ⭐⭐ **THE PROGRAM READS THE ALLOCATOR'S OWN TRAFFIC COUNTERS** (`__Builtins.mmAllocTotal` and its five
 	// siblings ⇒ the `__mm_counter_*` band). Its own bit, and here the discipline buys the most it ever has:
@@ -485,10 +463,10 @@ export type RuntimeUsage
 	// the same reason: an instrument may not tax a program that is not being measured.
 	//
 	// ⚠ It declares `usesHeap`, and that is a STRUCTURAL dependency rather than a convenience: the counters
-	// ARE the allocator's `.data` state, laid out by `runtimeGlobals`, so reading one without the allocator
-	// would be a `globalAddr` at a slot the image never laid out — the relocation panic `IrModule.debugStream`
-	// documents. The `__mm_` prefix already carries that declaration (`isRuntimeCallee`); this narrower band
-	// test is what adds the maintenance.
+	// ARE the allocator's state, and a reader without the allocator would read words nothing ever steps.
+	// The `__mm_` prefix already carries that declaration (`isRuntimeCallee`); this narrower band test is
+	// what adds the maintenance. The counter words themselves ride no bit: `MmRuntime.runtimeGlobals` lays
+	// each out where a surviving body names it.
 	export var usesMmCounters as bool
 
 	// The program asks how much CPU TIME its own thread has consumed (`__Builtins.threadCpuTicks` ⇒
@@ -527,17 +505,18 @@ export type RuntimeUsage
 	// EVERY PROGRAM.** The family's entry points are `runtime/SlabArena.maxon` source, so its bodies are in
 	// the walked Maxon module and they call each other — and no file outside the tier may name one (E3004),
 	// so a `__slab_arena_*` callee the walk can SEE is always the family talking to itself, which is no
-	// evidence about the program at all. Read as evidence it lays out the two `.data` words in a program
-	// that cannot allocate.
+	// evidence about the program at all. Read as evidence it installs the page layer's builder-built entry
+	// in a program that cannot allocate.
 	//
-	// ⇒ **WHAT KEEPS THE SLOTS PRESENT WHEREVER THE BODIES SHIP IS THAT THE ONLY MINTER OF A CALL TO THEM
+	// ⇒ **WHAT KEEPS THAT ENTRY PRESENT WHEREVER THE BODIES SHIP IS THAT THE ONLY MINTER OF A CALL TO THEM
 	// READS THE SAME BIT**: `SlabRuntime.installSlabRuntime` returns before emitting anything unless
 	// `usesHeap`, and `closeSlabNeeds` runs after every producer of `usesHeap`. (`SchedRuntime`'s GT-record
 	// carve mints `__slab_assert_os_alloc` off `usesGt` instead, and that body reads no `.data` word — it is
-	// a compare and an exit.)
+	// a compare and an exit.) The family's two `.data` words ride no bit: `SlabArena.slabArenaRuntimeGlobals`
+	// lays each out where a surviving body names it.
 	//
 	// ⚠ It stays a bit of its OWN rather than being folded into `usesHeap` at every reader, because that is
-	// what keeps the two `.data` slots and the whole page layer out of a program that reaches neither.
+	// what keeps the whole page layer out of a program that reaches neither.
 	export var usesSlabArena as bool
 
 	// The program creates or maps a NAMED SHARED SECTION (`stdlib/SharedMemory.maxon` ⇒ `__shm_*`). Its own
@@ -591,30 +570,25 @@ export type RuntimeUsage
 	export var parksOnIo as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesChildPipes: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesManagedListener: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesBackgroundPriority: false, usesTerminalDetection: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesSchedProcessorCount: false, usesMmCounters: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSlabArena: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, parksOnIo: true}
+		return Self{usesHeap: false, usesGt: false, usesChildPipes: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesManagedListener: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesBackgroundPriority: false, usesTerminalDetection: false, usesCpuCount: false, usesMmCounters: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSlabArena: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, parksOnIo: true}
 	end 'create'
 end 'RuntimeUsage'
 
-// ⭐ **TWO SETS NAME THE BODIES THIS SCAN MUST IGNORE, FOR ONE REASON AND FROM ONE WALK.** Dead-function
-// elimination drops both before the back end, so the floor they would ask for is a floor for code the
-// program does not contain: a `Clock` nothing calls must not install the green-thread scheduler and the
-// wall-clock `.data` slot.
+// ⭐ **THE BODIES THIS SCAN IGNORES ARE THE ONES DEAD-FUNCTION ELIMINATION SWEEPS** (`LibraryFacts.bodyIsSwept`),
+// because the floor they would ask for is a floor for code the program does not contain: a `Clock` nothing
+// calls must not install the green-thread scheduler. A swept stdlib body was never even built; a swept
+// `runtime/` body IS built, because no source call edge could ever earn it, but a call inside one is still
+// a call only the swept body makes — credited, it would ship that family's host chunks to a program that
+// cannot reach them.
 //
-//   • `unreachableStdlib` — the STDLIB functions no path from `main` reaches
-//     (`LibraryFacts.unreachable`), whose bodies this compile did not even build.
-//   • `unreachedRuntimeTier` — the `runtime/` entries no path reaches. Their bodies ARE built, because no
-//     source call edge could ever earn them, but a call INSIDE one is still a call only the swept body
-//     makes; credited, it would ship that family's `.data` words and host chunks to a program that cannot
-//     read them.
-//
-// Neither ever contains a USER function — an unreached user body still speaks for the program — so the
+// The set never contains a USER function — an unreached user body still speaks for the program — so the
 // answer for every library-free program is unchanged.
-export function scanRuntimeUsage(module MaxonModule, unreachableStdlib FunctionNameSet, unreachedRuntimeTier FunctionNameSet, funcSignatures FuncSignatureMap, parksOnIo bool) returns RuntimeUsage
+export function scanRuntimeUsage(module MaxonModule, libraryFacts LibraryFacts, funcSignatures FuncSignatureMap, parksOnIo bool) returns RuntimeUsage
 	var usage = RuntimeUsage.create()
 	usage.parksOnIo = parksOnIo
 
 	for func in module.functions 'eachFunc'
-		if unreachableStdlib.contains(func.name) or unreachedRuntimeTier.contains(func.name) 'notInTheProgram'
+		if libraryFacts.bodyIsSwept(func.name) 'notInTheProgram'
 			continue
 		end 'notInTheProgram'
 
@@ -813,7 +787,7 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	// `call` this scan sees — so any `__gt_*` callee here turns on the scheduler (and, via `recordGtUsage`,
 	// the heap). A source `sleep(ms)` reaches it one frame down, inside `stdlib/Sleep.maxon`'s body, which
 	// this scan walks because stdlib source is merged into the module it walks — but ONLY IF A PATH FROM
-	// `main` REACHES THAT BODY. `scanRuntimeUsage`'s `unreachableStdlib` filter (above) skips the rest, and
+	// `main` REACHES THAT BODY. `scanRuntimeUsage`'s `bodyIsSwept` filter (above) skips the rest, and
 	// that qualifier is the load-bearing half, not a footnote: it is what keeps listing a stdlib module
 	// byte-neutral for a program that does not use it, and it is why an unreached `sleep(ms)` compiles for a
 	// target with no `__gt_sleep` while an unreached `__Builtins.sleep(ms)` in USER code is still refused.
@@ -975,32 +949,19 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesHeap = true
 	end 'terminalDetection'
 
-	// The two CPU-parallel QUERIES. Both declare nothing beside themselves, for the arm above's reason one
-	// family over: `__cpu_count` is an import call and a compare, `__sched_max_active_workers` is one `.data`
-	// load, and neither touches the heap, the scheduler or the leak gate.
+	// The machine's processor count declares nothing beside itself: `__cpu_count` is an import call and a
+	// compare, and touches neither the heap, the scheduler nor the leak gate. A PREFIX test because the E3104
+	// gate reads the same family test, so a second entry in that band is gated by construction.
 	//
-	// ⚠ **THEY ARE ASKED DIFFERENTLY, AND THE ASYMMETRY IS THE POINT.** `__cpu_` stays a PREFIX test because
-	// the E3104 gate reads the same family test anyway, so a second entry in that band is gated by
-	// construction. `__sched_` is a NAME test, because since G1 that band also holds four scheduler
-	// INTERNALS a program never writes — see `isSchedRuntimeCallee`, which carries what the prefix version
-	// would have got wrong.
+	// ⚠ **ITS TWO BAND-MATES SET NO BIT AT ALL.** `__sched_max_active_workers` and `__sched_processor_count`
+	// are each one `.data` load whose word is laid out where the surviving body names it
+	// (`SchedRuntime.schedRuntimeGlobals`, `DataReach.walked`), so a program that asks how parallel it was
+	// carries one word and no scheduler, and nothing here has to say so.
 	if isCpuCountRuntimeCallee(callee) 'cpuCount'
 		usage.usesCpuCount = true
 	end 'cpuCount'
 
-	if isSchedRuntimeCallee(callee) 'schedMaxActiveWorkers'
-		usage.usesSchedMaxActiveWorkers = true
-	end 'schedMaxActiveWorkers'
-
-	// ⭐ **THE PROCESSOR COUNT — the same shape, a different word, and therefore a different bit.** A plain
-	// name compare rather than a second predicate beside `isSchedRuntimeCallee`, on `__sched_steal_count`'s
-	// precedent one arm down: a function whose whole body is one `.equals` is the thin wrapper the house
-	// rules forbid, and the two cannot share a predicate anyway, because they set different bits.
-	if callee.equals(SchedProcessorCountName) 'schedProcessorCount'
-		usage.usesSchedProcessorCount = true
-	end 'schedProcessorCount'
-
-	// ⭐⭐ **THE SCHEDULER-STATE QUERIES TAKE THE SCHEDULER, WHICH IS THE OPPOSITE OF BOTH BAND-MATES ABOVE —
+	// ⭐⭐ **THE SCHEDULER-STATE QUERIES TAKE THE SCHEDULER, WHICH IS THE OPPOSITE OF THE WORKER MARK ABOVE —
 	// and the difference is what the questions actually need.** `__sched_max_active_workers` is a `.data` load
 	// whose answer (1) is TRUE for a program with no scheduler at all, so it must not drag one in. The per-P
 	// sums walk `__sched_procs` and the idle-processor count reads what `__sched_init_procs` counted: without

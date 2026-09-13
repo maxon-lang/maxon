@@ -960,7 +960,7 @@ function spliceLeaves(project Project, module StdModule, byName FunctionNameInde
 		// `insertRangeChecks` and `inlineManagedPrimitives` skip on. Here it is purely cost:
 		// `eliminateDeadFunctions` drops the function before isel either way, and this pass registers no
 		// `.rdata`, so skipping cannot move a golden.
-		if project.libraryFacts.unreachable.contains(func.name) 'notInTheProgram'
+		if project.libraryFacts.bodyIsSwept(func.name) 'notInTheProgram'
 			continue
 		end 'notInTheProgram'
 
@@ -1137,8 +1137,10 @@ type CalledOnceCensus
 	function markRoots(project Project, byName FunctionNameIndex)
 		self.markReferenced(project.entryFunctionName, byName: byName)
 
-		for name in compilerOwnedRootNames(project.target) 'eachOwnedRoot'
-			self.markReferenced(name, byName: byName)
+		for root in compilerOwnedRoots(project.target, stub: project.entryStubCalls) 'eachOwnedRoot'
+			if root.isCalledHere 'calledByThisBuild'
+				self.markReferenced(root.name, byName: byName)
+			end 'calledByThisBuild'
 		end 'eachOwnedRoot'
 
 		for func in byName.functions 'eachFunction'

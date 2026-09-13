@@ -178,11 +178,23 @@ export function sharedMemoEntryCount() returns QueryCount
 	return sharedFileMemos.count()
 end 'sharedMemoEntryCount'
 
-// A `Target` as one integer. `Os` is the inner digit and its own case count is the radix, so the
-// packing stays correct when either enum gains a case — the number nobody has to remember.
-export function targetKeyOf(target Target) returns TargetKey
-	return (target.cpu.ordinal * Os.allCases.count()) + target.os.ordinal
-end 'targetKeyOf'
+// The two cases a bool has, as the innermost digit's radix.
+let FlagRadix = 2
+
+// The project's `ConditionFacts` as one integer — every input the `#if` filter reads, packed by
+// mixed radix. `Os` is the middle digit and its own case count is the radix, so the packing stays
+// correct when either enum gains a case; the `debugStream` flag is the innermost digit. A fact the
+// filter can read that is NOT folded in here would let a shared view answer for a build it was not
+// filtered for — see `SharedBuildView`.
+export function buildKeyOf(project Project) returns BuildKey
+	let flagDigit = 1 if project.debugStream else 0
+	return ((((project.target.cpu.ordinal * Os.allCases.count()) + project.target.os.ordinal) * FlagRadix) + flagDigit) as BuildKey
+end 'buildKeyOf'
+
+// What the `#if` filter is evaluated against for this project — the same facts `buildKeyOf` packs.
+export function conditionFactsOf(project Project) returns ConditionFacts
+	return ConditionFacts.create(project.target, debugStream: project.debugStream)
+end 'conditionFactsOf'
 
 // ⭐ **MARK THIS FILE'S BYTES AS WORTH KEEPING FOR THE WHOLE PROCESS.** Called by
 // `StdlibLoader.loadLibrarySources` for each file it registered, because that loop is the one place
@@ -199,11 +211,11 @@ function heldMemoFor(contentHash HashDigest) returns SharedFileMemo throws Share
 	return try sharedFileMemos.get(contentHash) otherwise throw SharedMemoMiss.notHeld
 end 'heldMemoFor'
 
-// The store's view for these bytes AND this target — `heldMemoFor` composed with `viewOf`, once,
+// The store's view for these bytes AND this build — `heldMemoFor` composed with `viewOf`, once,
 // because all three doors below want exactly that pair and a composition spelled three times is
 // three places for the two halves to come apart.
-function heldViewFor(contentHash HashDigest, targetKey TargetKey) returns SharedTargetView throws SharedMemoMiss
-	return try (try heldMemoFor(contentHash)).viewOf(targetKey)
+function heldViewFor(contentHash HashDigest, buildKey BuildKey) returns SharedBuildView throws SharedMemoMiss
+	return try (try heldMemoFor(contentHash)).viewOf(buildKey)
 end 'heldViewFor'
 
 // The tokens some earlier compile in this process already lexed from these exact bytes. Throws on a
@@ -237,9 +249,9 @@ export function shareTokens(project Project, contentHash HashDigest, tokens Toke
 	sharedFileMemos.upsert(contentHash, value: SharedFileMemo.create(tokens))
 end 'shareTokens'
 
-// The `#if`-resolved stream for these bytes AND this target, if this process has one.
-export function sharedActiveTokensOf(project Project, contentHash HashDigest, targetKey TargetKey) returns TokenArray throws SharedMemoMiss
-	let view = try heldViewFor(contentHash, targetKey: targetKey)
+// The `#if`-resolved stream for these bytes AND this build, if this process has one.
+export function sharedActiveTokensOf(project Project, contentHash HashDigest, buildKey BuildKey) returns TokenArray throws SharedMemoMiss
+	let view = try heldViewFor(contentHash, buildKey: buildKey)
 	project.db.sharedActiveTokenHits = project.db.sharedActiveTokenHits + 1
 	return view.activeTokens
 end 'sharedActiveTokensOf'
@@ -252,20 +264,20 @@ end 'sharedActiveTokensOf'
 // diagnostic is already on THAT compile's `project.diagnostics` and that build is already failing.
 // A later compile of a program that merely shares the bytes has neither, so serving it the empty
 // stream would be a file silently compiling as though it were blank.
-export function shareActiveTokens(contentHash HashDigest, targetKey TargetKey, activeTokens TokenArray)
+export function shareActiveTokens(contentHash HashDigest, buildKey BuildKey, activeTokens TokenArray)
 	// No entry means the bytes were never admitted — see `shareTokens`, which owns that decision. A
 	// view is only ever ADDED here, never replaced: `queryActiveTokens` reaches this line only after
-	// `sharedActiveTokensOf` answered no for this target.
+	// `sharedActiveTokensOf` answered no for this build.
 	var memo = try heldMemoFor(contentHash) otherwise return
-	memo.addView(SharedTargetView.create(targetKey, activeTokens: activeTokens))
+	memo.addView(SharedBuildView.create(buildKey, activeTokens: activeTokens))
 end 'shareActiveTokens'
 
 // The producer mask an earlier compile derived from this file's active stream, if any. Its own pair
 // of doors rather than a field the two above fill, because it is derived on FIRST DEMAND: only the
 // declaration sweep asks for it, and a compile that never reaches the sweep must not pay a token
 // walk for it.
-export function sharedProducerMaskOf(project Project, contentHash HashDigest, targetKey TargetKey) returns ProducerMask throws SharedMemoMiss
-	let view = try heldViewFor(contentHash, targetKey: targetKey)
+export function sharedProducerMaskOf(project Project, contentHash HashDigest, buildKey BuildKey) returns ProducerMask throws SharedMemoMiss
+	let view = try heldViewFor(contentHash, buildKey: buildKey)
 
 	if not view.producerMaskComputed 'notYetDerived'
 		throw SharedMemoMiss.notHeld
@@ -275,12 +287,12 @@ export function sharedProducerMaskOf(project Project, contentHash HashDigest, ta
 	return view.producerMask
 end 'sharedProducerMaskOf'
 
-export function shareProducerMask(contentHash HashDigest, targetKey TargetKey, mask ProducerMask)
+export function shareProducerMask(contentHash HashDigest, buildKey BuildKey, mask ProducerMask)
 	// Two ways there is nothing to write to, and both are ordinary: the bytes were never admitted (no
-	// entry — see `shareTokens`), or this target has no view because the file's `#if` filter FAILED and
+	// entry — see `shareTokens`), or this build has no view because the file's `#if` filter FAILED and
 	// a failure is deliberately not published (see `shareActiveTokens`). The sweep still walks the empty
 	// stream that failure produced, so it still arrives here with a mask.
-	var view = try heldViewFor(contentHash, targetKey: targetKey) otherwise return
+	var view = try heldViewFor(contentHash, buildKey: buildKey) otherwise return
 	view.rememberProducerMask(mask)
 end 'shareProducerMask'
 

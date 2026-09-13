@@ -492,17 +492,13 @@ export function installSlabRuntime(module StdModule, globalData GlobalDataTable,
 	buildSlabFree(module, sharded: sharded)
 end 'installSlabRuntime'
 
-// The one `.data` slot the object layer owns. The gate rides inside the producer, following
-// `slabArenaRuntimeGlobals` and `SchedRuntime.schedRuntimeGlobals`: a condition spelled at both ends is a
-// second place for the two to disagree, and the loop over an empty array is the no-op the absent `if` would
-// have produced.
-export function slabRuntimeGlobals(usage RuntimeUsage) returns DataSectionEntryArray
+// The one `.data` slot the object layer owns. `runtime/SlabRuntime.maxon`'s `__slab_state_base` is its only
+// reader, so it is laid out exactly where that body survives (`DataReach.walked`). Its one write is the
+// process's first allocation, which precedes any scheduler (that body's `osLockInit` argument), so it is
+// sealed before a worker M can exist.
+export function slabRuntimeGlobals() returns DataSectionEntryArray
 	var out = DataSectionEntryArray.create()
-
-	if usage.usesHeap 'allocatorState'
-		out.push(DataSectionEntry.create(String.from(SlabStateLabel), valueType: StdType.i64, value: 0))
-	end 'allocatorState'
-
+	pushRuntimeGlobal(out, label: SlabStateLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
 	return out
 end 'slabRuntimeGlobals'
 

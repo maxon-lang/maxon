@@ -3044,7 +3044,11 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	//
 	// ⚠ It is not the WHOLE arm64 runtime: the panic, fault, host-surface and scheduler families appended
 	// below user code are the rest of it.
-	appendArm64RuntimeChunks(chunks, leakCheck: usage.usesHeap, initGlobals: usage.usesManagedGlobals, drainGreenThreads: usage.usesGt, captureArgv: usage.usesCommandLine, captureEnvp: linuxReadsEnvironment(usage) and target.os == Os.linux, debugStream: stdModule.debugStream, dumpCoverage: usage.usesCoverage, runsRuntimeInit: arm64RunsRuntimeInit(target, usesGt: usage.usesGt), os: target.os, entryFunction: project.entryFunctionName)
+	//
+	// Its by-name calls read `Project.entryStubCalls`, the record the reachability roots and the inliner's
+	// census were built from, so the stub calls exactly what those kept alive.
+	let stub = project.entryStubCalls
+	appendArm64RuntimeChunks(chunks, leakCheck: stub.checksLeaks, initGlobals: usage.usesManagedGlobals, drainGreenThreads: stub.runsMainOnAGreenThread, captureArgv: usage.usesCommandLine, captureEnvp: linuxReadsEnvironment(usage) and target.os == Os.linux, debugStream: stub.bracketsDebugStream, dumpCoverage: stub.dumpsCoverage, runsRuntimeInit: arm64RunsRuntimeInit(target, usesGt: usage.usesGt), os: target.os, entryFunction: project.entryFunctionName)
 
 	for func in targetModule.functions 'eachFunc'
 		chunks.push(emitArm64FunctionChunk(targetModule, func: func, greenThreads: usage.usesGt, target: target, runtimeTier: project.libraryFacts.runtimeTier))

@@ -69,12 +69,12 @@ end 'queryTokens'
 // `tokenize` alone, so filtering inside it would bill conditional compilation to the lexer. This
 // has its own `CompilePhase.directives`.
 //
-// ⚠ The filtered stream is target-dependent and this memo's key is not, which is sound only because
-// a `Project` has exactly one target for its whole life (`Project.target` is a `let`, and re-aiming
-// a live `Project` does not compile). Two targets are therefore two `Project`s and two databases,
-// so this cache can never be asked about a target it was not filled for. The process-wide store
-// below has no such guarantee — it outlives every `Project` — and so already carries the target in
-// its key.
+// ⚠ The filtered stream depends on the target and on `debugStream`, and this memo's key carries
+// neither, which is sound only because a `Project` has exactly one of each for its whole life
+// (`Project.target` and `Project.debugStream` are `let`s, and re-aiming a live `Project` does not
+// compile). Two targets or two flag settings are therefore two `Project`s and two databases, so
+// this cache can never be asked about a build it was not filled for. The process-wide store below
+// has no such guarantee — it outlives every `Project` — and so carries both in its key.
 function queryActiveTokens(project Project, path FilePath) returns TokenArray throws CompileError
 	// ONE `sourceFiles` probe, validating and stamping from the same hash — see `sourceEntryOf`.
 	let entry = try sourceEntryOf(project, path: path)
@@ -93,14 +93,14 @@ function queryActiveTokens(project Project, path FilePath) returns TokenArray th
 	// CompileTimings' header is about.
 	let tokens = try queryTokens(project, path: path)
 
-	// This memo's key carries the target because a memo that outlives the `Project` has no guarantee
-	// of a single target for its life — see this function's header.
+	// This memo's key carries the target and the flag because a memo that outlives the `Project` has
+	// no guarantee of a single build for its life — see this function's header.
 	//
 	// Asked below `queryTokens`, not above it: a shared hit that skipped it would leave this project's
 	// `tokenCache` empty, so the next re-query of an unchanged file would miss.
-	let targetKey = targetKeyOf(project.target)
+	let buildKey = buildKeyOf(project)
 
-	if let shared = try sharedActiveTokensOf(project, contentHash: entry.contentHash, targetKey: targetKey) 'sharedHit'
+	if let shared = try sharedActiveTokensOf(project, contentHash: entry.contentHash, buildKey: buildKey) 'sharedHit'
 		project.db.activeTokenCache.upsert(path, value: TokenMemo.create(shared, keyHash: entry.contentHash))
 		return shared
 	end 'sharedHit'
@@ -120,7 +120,7 @@ function queryActiveTokens(project Project, path FilePath) returns TokenArray th
 	// the empty stream a directive fault produces is paired with a diagnostic on THIS compile's
 	// `project.diagnostics`, and a later compile that merely shares the bytes would have neither.
 	if filtered.filtered 'theFilterSucceeded'
-		shareActiveTokens(entry.contentHash, targetKey: targetKey, activeTokens: filtered.value)
+		shareActiveTokens(entry.contentHash, buildKey: buildKey, activeTokens: filtered.value)
 	end 'theFilterSucceeded'
 
 	return filtered.value
@@ -139,7 +139,7 @@ type FilteredTokens
 end 'FilteredTokens'
 
 function activeTokensOrReported(project Project, path FilePath, tokens TokenArray) returns FilteredTokens
-	let active = try filterConditionalTokens(tokens, target: project.target) otherwise (directiveErr) 'directiveFail'
+	let active = try filterConditionalTokens(tokens, facts: conditionFactsOf(project)) otherwise (directiveErr) 'directiveFail'
 		reportDirectiveError(project, path: path, error: directiveErr)
 		return FilteredTokens.create(TokenArray.create(), filtered: false)
 	end 'directiveFail'
@@ -414,14 +414,14 @@ function producerMaskFor(project Project, signatures ProgramSignatures, path Fil
 	end 'aNameIsContested'
 
 	let contentHash = (try sourceEntryOf(project, path: path)).contentHash
-	let targetKey = targetKeyOf(project.target)
+	let buildKey = buildKeyOf(project)
 
-	if let shared = try sharedProducerMaskOf(project, contentHash: contentHash, targetKey: targetKey) 'sharedHit'
+	if let shared = try sharedProducerMaskOf(project, contentHash: contentHash, buildKey: buildKey) 'sharedHit'
 		return shared
 	end 'sharedHit'
 
 	let mask = scanner.fileNamesProducerMask()
-	shareProducerMask(contentHash, targetKey: targetKey, mask: mask)
+	shareProducerMask(contentHash, buildKey: buildKey, mask: mask)
 	return mask
 end 'producerMaskFor'
 
@@ -1007,6 +1007,10 @@ export function queryParseOps(project Project, path FilePath) returns FileParseA
 	end 'memoized'
 
 	project.db.parseMisses = project.db.parseMisses + 1
+
+	if project.db.recordParseMissPaths 'probeArmed'
+		project.db.parseMissPaths.push(path.toString())
+	end 'probeArmed'
 
 	let tokens = try queryActiveTokens(project, path: path)
 

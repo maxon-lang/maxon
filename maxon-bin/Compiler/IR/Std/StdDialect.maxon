@@ -3165,6 +3165,144 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 	end 'k'
 end 'stdOpSyscallClassOf'
 
+// ⭐ **DOES THIS `StdOp` NAME A `.data` LABEL?** ONE variant does — `globalAddr` — for a read and a write
+// alike, since both open with it. Read by dead-function elimination to collect the labels the surviving
+// functions reference, which is what `GlobalDataTable.layOut` keeps a walked runtime word for.
+//
+// A scalar predicate plus a name getter rather than a payload union, for `maxonOpNamesAGlobalLabel`'s
+// measured reason: a union with a payload variant boxes on every ask, and this is asked once per live op of
+// every reached function.
+//
+// The arms NAME every variant, so a variant added later FAILS TO COMPILE here rather than being classified
+// by omission. `covPoint` addresses the coverage run by a label of its own and lowers to it directly, so it
+// names nothing a walked slot could depend on.
+export function stdOpNamesAGlobalLabel(op StdOp) returns bool
+	match op 'op'
+		const or
+			binOp or
+			unaryOp or
+			cmp or
+			binOpImm or
+			cmpImm or
+			div or
+			mod or
+			condBranch or
+			branch or
+			ret or
+			param or
+			call or
+			retVoid then return false
+		globalAddr then return true
+		loadIndirect or
+			storeIndirect or
+			osAllocPages or
+			osWriteStdout or
+			rdataAddr or
+			tryCall or
+			errorReturn or
+			osExit or
+			funcAddr or
+			callIndirect or
+			osPanic or
+			osReadClock or
+			osProcessSpawn or
+			osProcessExitCode or
+			osCloseHandle or
+			osWaitHandle or
+			osFreePages or
+			switch or
+			witnessCall or
+			osPipeCreate or
+			osEventCreate or
+			osThreadCreate or
+			osLockInit or
+			osLockEnter or
+			osLockLeave or
+			osReadOverlapped or
+			osLastError or
+			osProcessSpawnInherit or
+			osCancelIo or
+			osGetPid or
+			osPipeCreateOutbound or
+			osWriteFile or
+			osReadWallClock or
+			witnessTryCall or
+			osFileOpenRead or
+			osFileClose or
+			osReadFile or
+			osFileOpenWrite or
+			osFileSize or
+			osFileDelete or
+			osFileRename or
+			osFileFindFirst or
+			osFileFindClose or
+			osFileFindNext or
+			osDirCreate or
+			osDirCurrentPath or
+			osFileAttributes or
+			osPanicValue or
+			osCommandLine or
+			osStdHandle or
+			osExecutablePath or
+			osWriteStderr or
+			stackRecordAddr or
+			osOpenNamedSegment or
+			osMapNamedSegment or
+			osTickCountMs or
+			osHandleSetInherit or
+			osPipePeek or
+			osEnvRead or
+			osProcessTerminate or
+			osSocketStartup or
+			osSocketResolve or
+			osSocketFreeAddrInfo or
+			osSocketCreate or
+			osSocketConnect or
+			osSocketError or
+			osSocketSend or
+			osSocketRecv or
+			osSocketClose or
+			osSocketOverlapped or
+			osSocketServe or
+			osCpuCount or
+			osThreadCpuTicks or
+			osDecommitPages or
+			memFill or
+			osCommitPages or
+			osReservePages or
+			atomicCas or
+			atomicRmw or
+			currentThreadToken or
+			tlsAlloc or
+			tlsSetValue or
+			tlsSlotLoad or
+			osSetEvent or
+			osEnterBackgroundPriority or
+			osFileOpenWriteExecutable or
+			osEnvBlock or
+			osEnvBlockFree or
+			loadAcquire or
+			storeRelease or
+			osHandleFileType or
+			osCreateNamedSegment or
+			osUnmapNamedSegment or
+			osUnpublishNamedSegment or
+			covPoint or
+			osHostSample or
+			osNetpoll then return false
+	end 'op'
+end 'stdOpNamesAGlobalLabel'
+
+// The `.data` label an op names — asked only of an op `stdOpNamesAGlobalLabel` answered TRUE for, so every
+// other variant panics rather than returning an empty name: an empty `ByteArray` would be a sentinel, and a
+// caller that forgot the gate would silently keep "the slot named by the empty string".
+export function stdOpGlobalLabel(op StdOp) returns ByteArray
+	return match op 'op'
+		globalAddr(_, label) gives label
+		default panic("stdOpGlobalLabel: asked of an op that names no `.data` label — `stdOpNamesAGlobalLabel` answers false for it, and every caller gates on that")
+	end 'op'
+end 'stdOpGlobalLabel'
+
 // ⭐⭐ **WHICH ARITHMETIC SHAPE AN OP CARRIES — ONE ROSTER, READ BY ALL THREE ARITHMETIC PASSES.**
 // `foldConstOperands` (move a const OPERAND into an immediate), `foldConstants` (EVALUATE
 // `const <op> const`) and `eliminateCommonSubexpressions` (reuse a value the block already computed)

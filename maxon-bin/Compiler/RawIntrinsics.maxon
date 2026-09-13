@@ -86,26 +86,23 @@ export enum RawIntrinsic
 	// runtime lays out within reach of a runtime file — a wider privilege than any other row grants, and wider
 	// than any family needs — and would need a second closed roster beside this one to take it back. A row per
 	// readable word keeps the roster closed by construction, and the lowering's exhaustive match is what makes
-	// a row that exists name a LABEL. That the label is LAID OUT is a separate argument and the family's own:
-	// the `.data` slot rides a `RuntimeUsage` bit the call site sets, and that call site is also the edge dead
-	// function elimination keeps the body alive for.
+	// a row that exists name a LABEL. That the label is LAID OUT follows from the body surviving: a runtime
+	// word is kept exactly where a function dead-function elimination keeps names it (`DataReach.walked`).
 	schedNumProcsAddr
 	schedMaxActiveWorkersAddr
 
 	// The page layer's two words — the arena LIST head and the reverse map's L1 table pointer. Their zero
 	// initializer IS the initial state rather than a default: `list == 0` means "no arena mapped yet" and
 	// `map l1 == 0` means "nothing registered yet", and both are what the first call on each path tests for.
-	// They ride `RuntimeUsage.usesSlabArena`, whose one producer is `closeSlabNeeds` — declared off the same
-	// `usesHeap` the only minter of a call into the arena reads, so a body reading them never ships without
-	// its slots.
+	// Each is laid out where a surviving arena body names it, so a body reading them never ships without its
+	// slots.
 	slabArenaListAddr
 	slabArenaMapL1Addr
 
 	// The object layer's one word — the base of the allocator's lazily committed state region, or zero.
 	// `runtime/SlabRuntime.maxon`'s `__slab_state_base` is its only reader and its only writer, and the zero
-	// IS the initial state rather than a default. It rides `RuntimeUsage.usesHeap`, which
-	// `SlabRuntime.slabRuntimeGlobals` lays the slot out on and `SlabRuntime.installSlabRuntime` reads before
-	// minting any call into the file — so a surviving body cannot address a word the image omitted.
+	// IS the initial state rather than a default. `SlabRuntime.slabRuntimeGlobals` lays the slot out where
+	// that body survives — so a surviving body cannot address a word the image omitted.
 	slabStateAddr
 
 	loadWord

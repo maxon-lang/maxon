@@ -704,6 +704,19 @@ export union GoldenDrift
 			unrecorded gives false
 		end 'reference'
 	end 'isDrifted'
+
+	// Was a committed golden READ against this run's output? Held or not, a comparison happened; the other
+	// three arms are the three ways one did not. A run that compared nothing prints the same `N passed, 0
+	// failed` as one that compared everything, so this is the only number that tells them apart.
+	export function isCompared() returns bool
+		return match self 'reference'
+			matched or
+				drifted gives true
+			notPinned or
+				minted or
+				unrecorded gives false
+		end 'reference'
+	end 'isCompared'
 end 'GoldenDrift'
 
 // One test's verdict and its golden's, tagged with which spec it came from for the report.
@@ -1591,8 +1604,12 @@ export type ResultTally
 	// false red.
 	export let drifted as TestTally
 
-	export static function create(passed TestTally, failed TestTally, skipped TestTally, notRunHere TestTally, drifted TestTally) returns ResultTally
-		return Self{passed: passed, failed: failed, skipped: skipped, notRunHere: notRunHere, drifted: drifted}
+	// How many results a committed golden was read against — `drifted` is a subset. Outside `total()` for
+	// `drifted`'s reason.
+	export let compared as TestTally
+
+	export static function create(passed TestTally, failed TestTally, skipped TestTally, notRunHere TestTally, drifted TestTally, compared TestTally) returns ResultTally
+		return Self{passed: passed, failed: failed, skipped: skipped, notRunHere: notRunHere, drifted: drifted, compared: compared}
 	end 'create'
 
 	export function total() returns TestTally
@@ -1616,6 +1633,7 @@ export function tallyResults(results SpecTestResultArray) returns ResultTally
 	var skipped = 0 as TestTally
 	var notRunHere = 0 as TestTally
 	var driftedGoldens = 0 as TestTally
+	var comparedGoldens = 0 as TestTally
 
 	for result in results 'each'
 		match result.outcome 'tally'
@@ -1625,6 +1643,10 @@ export function tallyResults(results SpecTestResultArray) returns ResultTally
 			notRunHere then notRunHere = notRunHere + 1
 		end 'tally'
 
+		if result.golden.isCompared() 'aReferenceWasRead'
+			comparedGoldens = comparedGoldens + 1
+		end 'aReferenceWasRead'
+
 		if not result.golden.isDrifted() 'referenceStillDescribesIt'
 			continue
 		end 'referenceStillDescribesIt'
@@ -1632,7 +1654,7 @@ export function tallyResults(results SpecTestResultArray) returns ResultTally
 		driftedGoldens = driftedGoldens + 1
 	end 'each'
 
-	return ResultTally.create(passed, failed: failed, skipped: skipped, notRunHere: notRunHere, drifted: driftedGoldens)
+	return ResultTally.create(passed, failed: failed, skipped: skipped, notRunHere: notRunHere, drifted: driftedGoldens, compared: comparedGoldens)
 end 'tallyResults'
 
 // The words the golden-drift report is recognised by — its ONE spelling, carried by both channels the
@@ -5031,12 +5053,10 @@ function compareLinkedSection(pin SpecSectionPin, exePath FilePath, effectiveTar
 	end 'form'
 end 'compareLinkedSection'
 
-// ⚠ **A PREFIX FROM BYTE 0, NOT AN EQUALITY.** The data section may come to hold runtime globals
-// (green-thread scheduler state, say) after the user data. `.data` holds only user globals TODAY,
-// so a prefix check
-// and an equality check agree on every current case — but the runtime that grows into this
-// section (the green-thread scheduler) would break equality on every one of these six specs at once,
-// for a change that says nothing about the property they pin.
+// ⚠ **A PREFIX FROM BYTE 0, NOT AN EQUALITY.** The data section holds the runtime's words after the user's
+// (`BackendDispatch.dataSectionRoster`), laid out only where a surviving function names one — so which words
+// trail the user data is a fact about the program's reachability, and an equality check would redden every
+// one of these specs on a change that says nothing about the property they pin.
 //
 // ⚠ **A PREFIX PINS THE FIRST PAYLOAD REGISTERED, WHICH IS A REAL CONSTRAINT ON THE PROGRAMS THAT MAY USE
 // THIS FORM.** `.rdata` is a concatenation in REGISTRATION order (`GlobalDataTable.appendRdataPayload`), so

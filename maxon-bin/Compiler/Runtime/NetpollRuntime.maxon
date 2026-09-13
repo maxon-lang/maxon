@@ -110,19 +110,19 @@ let NetpollWakeSigLabel = b"__np_wake_sig"
 
 export function netpollRuntimeGlobals() returns DataSectionEntryArray
 	var out = DataSectionEntryArray.create()
-	pushRuntimeGlobal(out, label: NetpollPollerLabel, sharing: MultiMSharing.sealedBeforeWorkers)
-	pushRuntimeGlobal(out, label: NetpollBreakLabel, sharing: MultiMSharing.sealedBeforeWorkers)
-	pushRuntimeGlobal(out, label: NetpollWakeSigLabel, sharing: MultiMSharing.atomicStep)
+	pushRuntimeGlobal(out, label: NetpollPollerLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: NetpollBreakLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: NetpollWakeSigLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
 
 	// The poll-descriptor table's base and capacity — see that band's header for why both move in one hold.
-	pushRuntimeGlobal(out, label: NetpollPdTableLabel, sharing: MultiMSharing.underSchedLock)
-	pushRuntimeGlobal(out, label: NetpollPdCapLabel, sharing: MultiMSharing.underSchedLock)
-	pushRuntimeGlobal(out, label: NetpollWaitersLabel, sharing: MultiMSharing.underSchedLock)
+	pushRuntimeGlobal(out, label: NetpollPdTableLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: NetpollPdCapLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: NetpollWaitersLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
 
 	// The completion-port lane's source-key allocator — see `PdOffNextFreeKey`. Both words move inside ONE hold
 	// of `__sched_lock`, exactly as the table's base and capacity do.
-	pushRuntimeGlobal(out, label: NetpollSourceKeyFreeLabel, sharing: MultiMSharing.underSchedLock)
-	pushRuntimeGlobal(out, label: NetpollSourceKeyHighLabel, sharing: MultiMSharing.underSchedLock)
+	pushRuntimeGlobal(out, label: NetpollSourceKeyFreeLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: NetpollSourceKeyHighLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
 	return out
 end 'netpollRuntimeGlobals'
 

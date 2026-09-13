@@ -579,13 +579,14 @@ end 'appendGlobalCleanupGate'
 // to i64 first. Without the MM runtime the program cannot leak (nothing was allocated), so the gate
 // is skipped and the code passes straight through — keeping the non-heap path byte-identical.
 //
-// ⚠ **`checkLeaks` IS `RuntimeUsage.usesHeap` — THE SAME BIT THE NATIVE GATES READ, AND IT IS NOT
-// OPTIONAL HERE.** Whether a gate belongs and which func index to call are two different questions, and
+// ⚠ **`checkLeaks` IS `EntryStubCalls.checksLeaks` — THE SAME RECORD THE NATIVE GATES READ, AND IT IS
+// NOT OPTIONAL HERE.** Whether a gate belongs and which func index to call are two different questions, and
 // answering BOTH from a func-index lookup of `__mm_leak_check` makes a miss silently mean "no heap, no
 // gate". That is safe only while nothing can take an installed `__mm_leak_check` back out, and
 // dead-function elimination can. Because nothing CALLS the leak check, it survives DFE only by being an
 // explicit root; narrow that root and x64 and arm64 fail LOUD at their entry-stub `call`/`bl` fixup while
-// wasm alone silently emits no gate, turning every exit-101 leak test green on this target only. So installation is read from the one place it is decided, and a
+// wasm alone silently emits no gate, turning every exit-101 leak test green on this target only. So
+// installation is read from the one place it is decided, and a
 // missing function under `usesHeap` is an impossible state that PANICS.
 //
 // ⚠ The code it is handed is `main`'s only when the program has no managed global: the global-cleanup

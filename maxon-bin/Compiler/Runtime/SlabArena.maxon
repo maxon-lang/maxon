@@ -12,8 +12,8 @@
 // ⛔⛔ **THE ARENA'S BODIES ARE REACHED BY CALLS THE COMPILER MINTS, SO THE REACH IS DECLARED RATHER THAN
 // DISCOVERED** — `StdlibSource.runtimeTierFileIsCompilerCalled`, which is what stops the from-`main` walk
 // filing a body the installers below will call as `unreachedRuntimeTier`. ⚠ It credits REACH and nothing
-// else: the `.data` words below ride their own declared bit, so a program that cannot allocate carries
-// neither.
+// else: the `.data` words below are laid out where a surviving arena body names them, so a program that
+// cannot allocate carries neither.
 //
 // What follows is the PAGE LAYER's design, which decides the geometry this file checks and the tier file
 // writes: a bitmap-managed ARENA committed a granule at a time, a singly-linked list of them, and the
@@ -407,9 +407,9 @@ export let SlabAssertOsAllocName = b"__slab_assert_os_alloc"
 // "no arena mapped yet" and `map l1 == 0` means "nothing registered yet", and both are what the first call
 // on each path tests for.
 //
-// ⛔⛔ **THEY ARE LAID OUT ON A DECLARED BIT AND THERE IS NO DISCOVERED ONE, WHICH IS WHAT KEEPS A PROGRAM
-// THAT CANNOT ALLOCATE FROM CARRYING THEM.** `RuntimeUsage.usesSlabArena` has exactly one producer,
-// `closeSlabNeeds`, and the only minter of a call into this family reads the same `usesHeap` it does.
+// ⭐ **THEY ARE LAID OUT WHERE A SURVIVING ARENA BODY NAMES THEM** (`DataReach.walked`), which is what keeps
+// a program that cannot allocate from carrying them: dead-function elimination sweeps every arena body such
+// a program never calls, and the words go with them.
 //
 // ⚠ **THEY ARE EXPORTED BECAUSE A `__Raw` ADDRESS ROW NAMES THEM** — `slabArenaListAddr` and
 // `slabArenaMapL1Addr` lower to a `globalAddr` on these very constants (`LowerMaxonToStd`), so the label the
@@ -423,17 +423,14 @@ export let SlabArenaTierFileName = "SlabArena.maxon"
 export let SlabArenaListLabel = b"__slab_arena_list"
 export let SlabArenaMapL1Label = b"__slab_arena_map_l1"
 
-// The arena family's `.data` slots. The gate is asked HERE rather than at the call site, following
-// `SchedRuntime.schedRuntimeGlobals`: a condition spelled at both ends is a second place for the two to
-// disagree, and the loop over an empty array is exactly the no-op the absent `if` would have produced.
-export function slabArenaRuntimeGlobals(usage RuntimeUsage) returns DataSectionEntryArray
+// The arena family's `.data` slots. Both are read only by tier bodies, so each is laid out exactly where a
+// surviving body names it (`DataReach.walked`); no gate is asked here. They do not go through
+// `pushRuntimeGlobal` because their discipline is `__slab_lock`, held by the caller
+// (`runtime/SlabArena.maxon`'s header), which is no `MultiMSharing` class.
+export function slabArenaRuntimeGlobals() returns DataSectionEntryArray
 	var out = DataSectionEntryArray.create()
-
-	if usage.usesSlabArena 'arenaSlots'
-		out.push(DataSectionEntry.create(String.from(SlabArenaListLabel), valueType: StdType.i64, value: 0))
-		out.push(DataSectionEntry.create(String.from(SlabArenaMapL1Label), valueType: StdType.i64, value: 0))
-	end 'arenaSlots'
-
+	out.push(DataSectionEntry.create(String.from(SlabArenaListLabel), valueType: StdType.i64, value: 0, reach: DataReach.walked))
+	out.push(DataSectionEntry.create(String.from(SlabArenaMapL1Label), valueType: StdType.i64, value: 0, reach: DataReach.walked))
 	return out
 end 'slabArenaRuntimeGlobals'
 

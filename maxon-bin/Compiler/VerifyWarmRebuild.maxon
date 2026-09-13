@@ -219,8 +219,9 @@ function verifyCacheHit(inputPath FilePath, target Target) returns bool throws C
 	let actMissBefore = project.db.activeTokenMisses
 	let parMissBefore = project.db.parseMisses
 	let sigMissBefore = project.db.signatureMisses
+	let parMissRosterStart = project.db.parseMissPaths.count()
 
-	try probeRebuildCacheHits(project)
+	try probeRebuildCacheHitsNamingMisses(project)
 	let tokHitAfter = project.db.tokenHits
 	let actHitAfter = project.db.activeTokenHits
 	let parHitAfter = project.db.parseHits
@@ -252,7 +253,7 @@ function verifyCacheHit(inputPath FilePath, target Target) returns bool throws C
 	let activeTokensHitOnRebuild = assertCounterMove("rebuild active-token re-query hits (activeTokenHits)", before: actHitBefore, after: actHitAfter, expectedDelta: fileCount)
 	let activeTokensNotRecomputed = assertCounterMove("rebuild does not re-filter directives (activeTokenMisses)", before: actMissBefore, after: actMissAfter, expectedDelta: NoCounterMove)
 	let tokensNotRecomputed = assertCounterMove("rebuild does not recompute tokens (tokenMisses)", before: tokMissBefore, after: tokMissAfter, expectedDelta: NoCounterMove)
-	let parseNotRecomputed = assertCounterMove("rebuild does not recompute parse (parseMisses)", before: parMissBefore, after: parMissAfter, expectedDelta: NoCounterMove)
+	let parseNotRecomputed = assertParseMisses("rebuild does not recompute parse (parseMisses)", probe: ParseMissProbe.create(parMissAfter - parMissBefore, rosterStart: parMissRosterStart, rosterEnd: project.db.parseMissPaths.count()), expectedDelta: NoCounterMove, project: project)
 	let signaturesNotRecomputed = assertCounterMove("rebuild does not recompute signatures (signatureMisses)", before: sigMissBefore, after: sigMissAfter, expectedDelta: NoCounterMove)
 
 	let allOk = firstIsMiss and firstNoHit and secondIsHit and secondNoMiss and tokensHitOnRebuild and activeTokensHitOnRebuild and parseHitOnRebuild and signaturesHitOnRebuild and tokensNotRecomputed and activeTokensNotRecomputed and parseNotRecomputed and signaturesNotRecomputed
@@ -578,19 +579,19 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 
 	// `before: NoCounterMove` because each value above is already a DELTA — the misses that one edit
 	// caused. Routed through the same reporter as property 2 so a failure prints the same way.
-	let bytesEditIsLocal = assertCounterMove("a BYTES-ONLY edit re-parses only the edited file (parseMisses)", before: NoCounterMove, after: bytesEditMisses, expectedDelta: OneQuery)
-	let declarationEditInvalidatesEveryFile = assertCounterMove("a DECLARATION edit re-parses EVERY file (parseMisses)", before: NoCounterMove, after: declarationEditMisses, expectedDelta: fileCount)
-	let constantValueEditInvalidatesEveryFile = assertCounterMove("a top-level constant's VALUE edit re-parses EVERY file (parseMisses)", before: NoCounterMove, after: constantValueEditMisses, expectedDelta: fileCount)
+	let bytesEditIsLocal = assertParseMisses("a BYTES-ONLY edit re-parses only the edited file (parseMisses)", probe: bytesEditMisses, expectedDelta: OneQuery, project: project)
+	let declarationEditInvalidatesEveryFile = assertParseMisses("a DECLARATION edit re-parses EVERY file (parseMisses)", probe: declarationEditMisses, expectedDelta: fileCount, project: project)
+	let constantValueEditInvalidatesEveryFile = assertParseMisses("a top-level constant's VALUE edit re-parses EVERY file (parseMisses)", probe: constantValueEditMisses, expectedDelta: fileCount, project: project)
 
-	let arrayValueEditInvalidatesEveryFile = assertCounterMove("a top-level constant ARRAY's value edit re-parses EVERY file (parseMisses)", before: NoCounterMove, after: arrayValueEditMisses, expectedDelta: fileCount)
-	let structFieldEditInvalidatesEveryFile = assertCounterMove("an IMAGED struct constant's field edit re-parses EVERY file (parseMisses)", before: NoCounterMove, after: structFieldEditMisses, expectedDelta: fileCount)
+	let arrayValueEditInvalidatesEveryFile = assertParseMisses("a top-level constant ARRAY's value edit re-parses EVERY file (parseMisses)", probe: arrayValueEditMisses, expectedDelta: fileCount, project: project)
+	let structFieldEditInvalidatesEveryFile = assertParseMisses("an IMAGED struct constant's field edit re-parses EVERY file (parseMisses)", probe: structFieldEditMisses, expectedDelta: fileCount, project: project)
 
-	let globalValueEditIsLocal = assertCounterMove("a top-level VAR's value edit re-parses only the edited file (parseMisses)", before: NoCounterMove, after: globalValueEditMisses, expectedDelta: OneQuery)
-	let arrayGlobalValueEditIsLocal = assertCounterMove("a top-level VAR ARRAY's value edit re-parses only the edited file (parseMisses)", before: NoCounterMove, after: arrayGlobalValueEditMisses, expectedDelta: OneQuery)
-	let structGlobalFieldEditIsLocal = assertCounterMove("a STORED struct global's value edit re-parses only the edited file (parseMisses)", before: NoCounterMove, after: structGlobalFieldEditMisses, expectedDelta: OneQuery)
+	let globalValueEditIsLocal = assertParseMisses("a top-level VAR's value edit re-parses only the edited file (parseMisses)", probe: globalValueEditMisses, expectedDelta: OneQuery, project: project)
+	let arrayGlobalValueEditIsLocal = assertParseMisses("a top-level VAR ARRAY's value edit re-parses only the edited file (parseMisses)", probe: arrayGlobalValueEditMisses, expectedDelta: OneQuery, project: project)
+	let structGlobalFieldEditIsLocal = assertParseMisses("a STORED struct global's value edit re-parses only the edited file (parseMisses)", probe: structGlobalFieldEditMisses, expectedDelta: OneQuery, project: project)
 
-	let receiverKindEditInvalidatesEveryFile = assertCounterMove("an interface requirement's `static` FLAG edit re-parses EVERY file (parseMisses)", before: NoCounterMove, after: receiverKindEditMisses, expectedDelta: fileCount)
-	let methodReceiverKindEditInvalidatesEveryFile = assertCounterMove("a method's `static` FLAG edit re-parses EVERY file (parseMisses)", before: NoCounterMove, after: methodReceiverKindEditMisses, expectedDelta: fileCount)
+	let receiverKindEditInvalidatesEveryFile = assertParseMisses("an interface requirement's `static` FLAG edit re-parses EVERY file (parseMisses)", probe: receiverKindEditMisses, expectedDelta: fileCount, project: project)
+	let methodReceiverKindEditInvalidatesEveryFile = assertParseMisses("a method's `static` FLAG edit re-parses EVERY file (parseMisses)", probe: methodReceiverKindEditMisses, expectedDelta: fileCount, project: project)
 
 	let allOk = bytesEditIsLocal and declarationEditInvalidatesEveryFile and constantValueEditInvalidatesEveryFile and arrayValueEditInvalidatesEveryFile and structFieldEditInvalidatesEveryFile and globalValueEditIsLocal and arrayGlobalValueEditIsLocal and structGlobalFieldEditIsLocal and receiverKindEditInvalidatesEveryFile and methodReceiverKindEditInvalidatesEveryFile
 
@@ -605,11 +606,51 @@ end 'verifyInvalidation'
 
 // Re-query every file's parse and report how many RECOMPUTED. The miss DELTA is the whole
 // measurement: it names exactly which memos the preceding edit invalidated.
-function parseMissesOnRequery(project Project) returns QueryCount throws CompileError
+function parseMissesOnRequery(project Project) returns ParseMissProbe throws CompileError
 	let before = project.db.parseMisses
-	try probeRebuildCacheHits(project)
-	return project.db.parseMisses - before
+	let rosterStart = project.db.parseMissPaths.count()
+	try probeRebuildCacheHitsNamingMisses(project)
+	return ParseMissProbe.create(project.db.parseMisses - before, rosterStart: rosterStart, rosterEnd: project.db.parseMissPaths.count())
 end 'parseMissesOnRequery'
+
+// The probe with `parseMissPaths` armed for its span, so a miss it counts is also a miss it can name;
+// outside the span the roster is not written (`QueryDatabase.recordParseMissPaths`).
+function probeRebuildCacheHitsNamingMisses(project Project) throws CompileError
+	project.db.recordParseMissPaths = true
+	try probeRebuildCacheHits(project) otherwise (err) 'probeFailed'
+		project.db.recordParseMissPaths = false
+		throw err
+	end 'probeFailed'
+
+	project.db.recordParseMissPaths = false
+end 'probeRebuildCacheHitsNamingMisses'
+
+// What one re-query of every file missed: the count an assertion compares, and the span of
+// `parseMissPaths` holding its misses, so a failure can name them. The span is closed at both ends
+// because the roster keeps growing under later probes and the assertions run after all of them.
+type ParseMissProbe
+	export let misses as QueryCount
+	export let rosterStart as ElementIndex
+	export let rosterEnd as ElementIndex
+
+	static function create(misses QueryCount, rosterStart ElementIndex, rosterEnd ElementIndex) returns ParseMissProbe
+		return Self{misses: misses, rosterStart: rosterStart, rosterEnd: rosterEnd}
+	end 'create'
+end 'ParseMissProbe'
+
+// `assertCounterMove` over a parse-miss probe, naming the missed files on failure: a stale parse memo
+// is located by its path, which the count cannot carry.
+function assertParseMisses(label String, probe ParseMissProbe, expectedDelta QueryCount, project Project) returns bool
+	if assertCounterMove(label, before: NoCounterMove, after: probe.misses, expectedDelta: expectedDelta) 'held'
+		return true
+	end 'held'
+
+	for i in probe.rosterStart upto probe.rosterEnd 'eachMiss'
+		printError("  parse miss: {try project.db.parseMissPaths.get(i) otherwise panic("assertParseMisses: index {i} is below parseMissPaths.count()")}\n")
+	end 'eachMiss'
+
+	return false
+end 'assertParseMisses'
 
 // Assert a counter moved by exactly `expectedDelta`, printing the offending values
 // (before, delta, after) on failure so a violated assertion is self-describing.

@@ -112,17 +112,20 @@ end 'ModuleMemo'
 // else, so two files with the same bytes have the same tokens whatever they are called, and an
 // overlay stdlib staged at another path shares an entry exactly when it deserves to.
 
-// A build target reduced to ONE integer, so a memo shared across `Project`s can key on the target
-// without a second spelling of `Target`'s identity. See `QueryEngine.targetKeyOf`.
-export typealias TargetKey = bits(64)
+// Everything the `#if` filter reads — the build target AND the build flags a predicate can name — reduced
+// to ONE integer, so a memo shared across `Project`s can key on it without a second spelling of
+// `ConditionFacts`' identity. See `QueryEngine.buildKeyOf`.
+export typealias BuildKey = bits(64)
 
-// One target's view of one file, and it is per target because the `#if` filter is.
+// One build's view of one file, and it is per build because the `#if` filter is.
 // `queryActiveTokens`' per-`Project` memo gets that for free from "a `Project` has exactly one
-// target for its whole life"; a process-wide memo does not, and a shared stdlib entry that omitted
-// the target would bake the build machine's OS into a cross-compiled binary's stdlib. Both fields
-// below are functions of (these bytes, this target) and of nothing else.
-export type SharedTargetView
-	export let targetKey as TargetKey
+// target and one flag set for its whole life"; a process-wide memo does not. A shared stdlib entry
+// that omitted the target would bake the build machine's OS into a cross-compiled binary's stdlib,
+// and one that omitted `debugStream` would hand a traced build the untraced arm of every
+// `#if debugstream(true)` — a spec worker compiles both kinds in one process. Both fields below are
+// functions of (these bytes, this build key) and of nothing else.
+export type SharedBuildView
+	export let buildKey as BuildKey
 
 	// The `#if`-resolved stream. Only a SUCCEEDING filter is ever published here — see
 	// `Queries.queryActiveTokens`, whose per-`Project` memo may hold a failure (its diagnostic is
@@ -136,8 +139,8 @@ export type SharedTargetView
 	export var producerMask as ProducerMask
 	export var producerMaskComputed as bool
 
-	export static function create(targetKey TargetKey, activeTokens TokenArray) returns SharedTargetView
-		return Self{targetKey: targetKey, activeTokens: activeTokens, producerMask: 0, producerMaskComputed: false}
+	export static function create(buildKey BuildKey, activeTokens TokenArray) returns SharedBuildView
+		return Self{buildKey: buildKey, activeTokens: activeTokens, producerMask: 0, producerMaskComputed: false}
 	end 'create'
 
 	// ONE writer for the mask and the bit that says it is there, so a filled mask can never be
@@ -147,43 +150,44 @@ export type SharedTargetView
 		self.producerMask = mask
 		self.producerMaskComputed = true
 	end 'rememberProducerMask'
-end 'SharedTargetView'
+end 'SharedBuildView'
 
-export typealias SharedTargetViewArray = Array with SharedTargetView
+export typealias SharedBuildViewArray = Array with SharedBuildView
 
-// What one file's BYTES lex to, plus one view per target this process has been asked about.
+// What one file's BYTES lex to, plus one view per build key this process has been asked about.
 //
 // The views are an ARRAY walked linearly, not a map: a process compiles for ONE target in every
-// driver that exists today (`build` and `spec-test` both take a single `--target`), so the walk is
-// over one element and a `Map` would cost a hash to answer a question a compare answers.
+// driver that exists today (`build` and `spec-test` both take a single `--target`), and the only
+// other key component is the `debugStream` flag, so the walk is over at most two elements and a
+// `Map` would cost a hash to answer a question a compare answers.
 export type SharedFileMemo
-	// The RAW stream, target-independent: `tokenize` never sees a target.
+	// The RAW stream, build-independent: `tokenize` sees neither a target nor a flag.
 	export let tokens as TokenArray
-	export var views as SharedTargetViewArray
+	export var views as SharedBuildViewArray
 
 	export static function create(tokens TokenArray) returns SharedFileMemo
-		return Self{tokens: tokens, views: SharedTargetViewArray.create()}
+		return Self{tokens: tokens, views: SharedBuildViewArray.create()}
 	end 'create'
 
-	// This target's view, or nothing yet. A linear walk for the reason the field's comment gives:
-	// the array holds one element in every driver that exists.
-	export function viewOf(targetKey TargetKey) returns SharedTargetView throws SharedMemoMiss
+	// This build's view, or nothing yet. A linear walk for the reason the field's comment gives:
+	// the array holds at most two elements in every driver that exists.
+	export function viewOf(buildKey BuildKey) returns SharedBuildView throws SharedMemoMiss
 		for view in self.views 'eachView'
-			if view.targetKey == targetKey 'thisTarget'
+			if view.buildKey == buildKey 'thisBuild'
 				return view
-			end 'thisTarget'
+			end 'thisBuild'
 		end 'eachView'
 
 		throw SharedMemoMiss.notHeld
 	end 'viewOf'
 
-	export function addView(view SharedTargetView)
+	export function addView(view SharedBuildView)
 		self.views.push(view)
 	end 'addView'
 end 'SharedFileMemo'
 
 // Raised when the process-wide memo is not holding what it was asked for. An ANSWER — "nothing in
-// this process has lexed these bytes yet", or "not for this target" — never a compiler bug, exactly
+// this process has lexed these bytes yet", or "not for this build" — never a compiler bug, exactly
 // as `TypeNameInterner.idOf`'s `unknownName` is and unlike its `unknownId`.
 export union SharedMemoMiss implements Error
 	notHeld
@@ -237,6 +241,9 @@ export typealias FilePathArray = Array with FilePath
 // Running count of cache hits/misses. Wide range: unbounded over a long-lived
 // query session.
 export typealias QueryCount = int(0 to u64.max)
+
+// The paths `parseMisses` counted, in miss order.
+export typealias ParseMissPathRoster = Array with String
 
 export type QueryDatabase
 	// Source inputs (path -> content + hash) and insertion-ordered path list.
@@ -297,6 +304,13 @@ export type QueryDatabase
 	export var activeTokenMisses as QueryCount
 	export var parseHits as QueryCount
 	export var parseMisses as QueryCount
+
+	// WHICH files missed, beside HOW MANY: a warm-rebuild failure is located by the path of the stale
+	// memo, and the counter alone cannot name it. Recorded only while `recordParseMissPaths` holds, which
+	// `VerifyWarmRebuild` sets around each probe: a long-lived project (the LSP) misses on every edit for
+	// ever, and an unconditional roster would grow with it.
+	export var parseMissPaths as ParseMissPathRoster
+	export var recordParseMissPaths as bool
 	export var signatureHits as QueryCount
 	export var signatureMisses as QueryCount
 	export var allModuleHits as QueryCount
@@ -331,7 +345,7 @@ export type QueryDatabase
 			tokenHits: 0, tokenMisses: 0,
 			sharedTokenHits: 0, sharedActiveTokenHits: 0, sharedProducerMaskHits: 0,
 			activeTokenHits: 0, activeTokenMisses: 0,
-			parseHits: 0, parseMisses: 0,
+			parseHits: 0, parseMisses: 0, parseMissPaths: ParseMissPathRoster.create(), recordParseMissPaths: false,
 			signatureHits: 0, signatureMisses: 0,
 			allModuleHits: 0, allModuleMisses: 0
 		}

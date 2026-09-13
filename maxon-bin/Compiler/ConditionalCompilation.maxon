@@ -113,11 +113,28 @@ enum ConditionPredicate
 	testing
 	rcSanitize
 	leakReport
+	debugstream
 end 'ConditionPredicate'
 
-// The spelling `flag(false)` must carry for an absent build flag to satisfy it. See
-// `satisfyingArgument`.
+// The argument spellings a BUILD-FLAG predicate is satisfied by: `flag(true)` when the build carries the
+// flag, `flag(false)` when it does not. See `satisfyingArgument`.
+let TrueSpelling = b"true"
 let FalseSpelling = b"false"
+
+// ⭐ **EVERYTHING A CONDITION CAN ASK ABOUT — the build target and the build flags a predicate names.**
+//
+// Fixed for the life of a `Project` (`Project.target` and `Project.debugStream` are both `let`s), which is
+// what lets the per-`Project` active-token memo omit them from its key; the process-wide memo carries
+// both through `QueryEngine.buildKeyOf`. A predicate over a fact NOT in here cannot be added without
+// extending this type, so the memo key and the evaluator cannot drift apart silently.
+export type ConditionFacts
+	export let target as Target
+	export let debugStream as bool
+
+	export static function create(target Target, debugStream bool) returns ConditionFacts
+		return Self{target: target, debugStream: debugStream}
+	end 'create'
+end 'ConditionFacts'
 
 // ⭐ **THE FILTER: `tokens` minus every directive token and every inactive branch.**
 //
@@ -127,7 +144,7 @@ let FalseSpelling = b"false"
 //
 // Cost is one pass over the tokens plus one output array. The frame stack is O(nesting depth), which
 // is the source's own bracket depth and not a function of file size.
-export function filterConditionalTokens(tokens TokenArray, target Target) returns TokenArray throws DirectiveError
+export function filterConditionalTokens(tokens TokenArray, facts ConditionFacts) returns TokenArray throws DirectiveError
 	// ⭐ **THE COMMON CASE IS A FILE WITH NO DIRECTIVES AT ALL, AND IT MUST NOT PAY FOR A COPY.**
 	// Every file in the scale corpus and all but four in `stdlib/` are in it. The probe is one linear
 	// scan of a scalar field — cheaper than the array it would otherwise build, and it returns the
@@ -157,7 +174,7 @@ export function filterConditionalTokens(tokens TokenArray, target Target) return
 			// the same answer reached by the rule that was already there.
 			if regionLive 'liveParent'
 				let cursor = ConditionCursor.create((scan + 1) as TokenIndex)
-				let taken = try evaluateCondition(tokens, cursor: cursor, target: target)
+				let taken = try evaluateCondition(tokens, cursor: cursor, facts: facts)
 				try expectConditionEnd(tokens, cursor: cursor)
 				frames.push(DirectiveFrame.create(taken, takenAlready: taken, line: tok.line, column: tok.column))
 				scan = cursor.value
@@ -311,8 +328,8 @@ end 'ConditionCursor'
 // would leave the cursor mid-condition on exactly the inputs that took the fast path, and the filter
 // would resume its walk inside the condition's own tokens — emitting `os ( Linux )` into the program.
 // A condition has at most a handful of atoms and each is a scalar compare, so there is nothing to win.
-function evaluateCondition(tokens TokenArray, cursor ConditionCursor, target Target) returns bool throws DirectiveError
-	return try evaluateOr(tokens, cursor: cursor, target: target)
+function evaluateCondition(tokens TokenArray, cursor ConditionCursor, facts ConditionFacts) returns bool throws DirectiveError
+	return try evaluateOr(tokens, cursor: cursor, facts: facts)
 end 'evaluateCondition'
 
 // ⭐ **A CONDITION ENDS AT THE END OF ITS OWN LINE, AND NOTHING MAY FOLLOW IT THERE.**
@@ -350,40 +367,40 @@ function expectConditionEnd(tokens TokenArray, cursor ConditionCursor) throws Di
 	end 'trailing'
 end 'expectConditionEnd'
 
-function evaluateOr(tokens TokenArray, cursor ConditionCursor, target Target) returns bool throws DirectiveError
-	var result = try evaluateAnd(tokens, cursor: cursor, target: target)
+function evaluateOr(tokens TokenArray, cursor ConditionCursor, facts ConditionFacts) returns bool throws DirectiveError
+	var result = try evaluateAnd(tokens, cursor: cursor, facts: facts)
 
 	while acceptKind(tokens, cursor: cursor, kind: TokenKind.or) 'orLoop'
-		let rhs = try evaluateAnd(tokens, cursor: cursor, target: target)
+		let rhs = try evaluateAnd(tokens, cursor: cursor, facts: facts)
 		result = result or rhs
 	end 'orLoop'
 
 	return result
 end 'evaluateOr'
 
-function evaluateAnd(tokens TokenArray, cursor ConditionCursor, target Target) returns bool throws DirectiveError
-	var result = try evaluateUnary(tokens, cursor: cursor, target: target)
+function evaluateAnd(tokens TokenArray, cursor ConditionCursor, facts ConditionFacts) returns bool throws DirectiveError
+	var result = try evaluateUnary(tokens, cursor: cursor, facts: facts)
 
 	while acceptKind(tokens, cursor: cursor, kind: TokenKind.and) 'andLoop'
-		let rhs = try evaluateUnary(tokens, cursor: cursor, target: target)
+		let rhs = try evaluateUnary(tokens, cursor: cursor, facts: facts)
 		result = result and rhs
 	end 'andLoop'
 
 	return result
 end 'evaluateAnd'
 
-function evaluateUnary(tokens TokenArray, cursor ConditionCursor, target Target) returns bool throws DirectiveError
+function evaluateUnary(tokens TokenArray, cursor ConditionCursor, facts ConditionFacts) returns bool throws DirectiveError
 	if acceptKind(tokens, cursor: cursor, kind: TokenKind.not) 'isNot'
-		let inner = try evaluateUnary(tokens, cursor: cursor, target: target)
+		let inner = try evaluateUnary(tokens, cursor: cursor, facts: facts)
 		return not inner
 	end 'isNot'
 
-	return try evaluateAtom(tokens, cursor: cursor, target: target)
+	return try evaluateAtom(tokens, cursor: cursor, facts: facts)
 end 'evaluateUnary'
 
-function evaluateAtom(tokens TokenArray, cursor ConditionCursor, target Target) returns bool throws DirectiveError
+function evaluateAtom(tokens TokenArray, cursor ConditionCursor, facts ConditionFacts) returns bool throws DirectiveError
 	if acceptKind(tokens, cursor: cursor, kind: TokenKind.leftParen) 'isParen'
-		let inner = try evaluateCondition(tokens, cursor: cursor, target: target)
+		let inner = try evaluateCondition(tokens, cursor: cursor, facts: facts)
 		try expectKind(tokens, cursor: cursor, kind: TokenKind.rightParen)
 		return inner
 	end 'isParen'
@@ -401,7 +418,7 @@ function evaluateAtom(tokens TokenArray, cursor ConditionCursor, target Target) 
 	// the cursor still lands past the atom — the same order the two lists version had, and what keeps
 	// `error.unknown-predicate`'s golden pointing at the name rather than at the `(`.
 	let predicate = try predicateNamed(nameTok)
-	return equalsIgnoringAsciiCase(argTok.value, b: satisfyingArgument(predicate, target: target))
+	return equalsIgnoringAsciiCase(argTok.value, b: satisfyingArgument(predicate, facts: facts))
 end 'evaluateAtom'
 
 // The predicate a source spelling names, or E2064. Matched EXACTLY, unlike a predicate's ARGUMENT:
@@ -426,6 +443,7 @@ function predicateSpelling(predicate ConditionPredicate) returns ByteArray
 		testing gives b"testing"
 		rcSanitize gives b"rcSanitize"
 		leakReport gives b"leakReport"
+		debugstream gives b"debugstream"
 	end 'spelling'
 end 'predicateSpelling'
 
@@ -447,15 +465,19 @@ end 'predicateSpelling'
 // be true of. `rcSanitize` and `leakReport` gate an optional refcount sanitizer and leak census,
 // neither of which exists; the leak check is unconditional.
 //
-// One rule for all three, deliberately, and in the conservative direction: a nonsense argument never
+// `debugstream` names a flag this compiler DOES have (`--debugstream`, `Project.debugStream`), so it
+// is satisfied by `debugstream(true)` in a traced build and by `debugstream(false)` otherwise.
+//
+// One rule for every flag, deliberately, and in the conservative direction: a nonsense argument never
 // switches code ON.
-function satisfyingArgument(predicate ConditionPredicate, target Target) returns ByteArray
+function satisfyingArgument(predicate ConditionPredicate, facts ConditionFacts) returns ByteArray
 	return match predicate 'satisfying'
-		os gives osCanonicalName(target.os)
-		arch gives cpuCanonicalName(target.cpu)
+		os gives osCanonicalName(facts.target.os)
+		arch gives cpuCanonicalName(facts.target.cpu)
 		testing gives FalseSpelling
 		rcSanitize gives FalseSpelling
 		leakReport gives FalseSpelling
+		debugstream gives TrueSpelling if facts.debugStream else FalseSpelling
 	end 'satisfying'
 end 'satisfyingArgument'
 

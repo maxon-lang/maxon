@@ -429,16 +429,16 @@ end 'main'
 
 <!-- test: an-unreached-runtime-body-costs-the-program-nothing -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
-⚠ **THE PROPERTY IS TARGET-NEUTRAL AND THE CHANNEL IS NOT.** `RequiredData` is a PREFIX compare, so it can only catch a word inserted where something still TRAILS it — and the only globals laid out after a program's own are the x64-windows console probes. On a lane without them the pinned tail runs past the end of the section, and a shorter `.data` is all the gate can say. The bit this measures is set by a target-neutral walk; what is missing elsewhere is an anchor, not the behaviour.
+⚠ **THE PROPERTY IS TARGET-NEUTRAL AND THE CHANNEL IS NOT.** `RequiredData` is a PREFIX compare, so it can only catch a word inserted where something still TRAILS it — and the only globals laid out after a program's own are the x64-windows console probes. On a lane without them the pinned tail runs past the end of the section, and a shorter `.data` is all the gate can say. The reachability this measures is a target-neutral walk; what is missing elsewhere is an anchor, not the behaviour.
 ⛔⛔ **A TIER BODY THE PROGRAM CANNOT REACH MUST NOT SPEND ITS BUDGET.** A runtime name is never
 `unreachable` — the tier's bodies are built unconditionally, because no source call edge earns them — and
 `scanRuntimeUsage`'s only skip reads that same set. So a CALL inside a tier body is credited to EVERY
 program the tier is linked into, including the ones dead-function elimination sweeps the body out of.
 
 Here `probeWorkers` asks for the worker mark and `main` asks for nothing. The body is swept, so the
-program cannot observe the answer — but the call sets `usesSchedMaxActiveWorkers`, which is what lays the
-`.data` word out (`SchedRuntime.schedRuntimeGlobals`), so the word ships in an image that can never read
-it. The `.data` roster is the channel that shows it.
+program cannot observe the answer — and `.data` follows the sweep: a runtime word is laid out only where a
+SURVIVING function names it (`GlobalDataTable.layOut`, `DataReach.walked`), so no word ships for a body
+that is not there to read it. The `.data` roster is the channel that shows it.
 
 ⚠ The probe calls a RUNTIME ENTRY and not a `__Raw` row, and that is the whole point: a `rawIntrinsic`
 names no callee and records nothing, which is why every tier family before this one left the question
@@ -471,13 +471,18 @@ i8 0
 
 <!-- test: a-reached-runtime-entry-still-earns-its-word -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
-⚠ **THE PROPERTY IS TARGET-NEUTRAL AND THE CHANNEL IS NOT.** `RequiredData` is a PREFIX compare, so it can only catch a word inserted where something still TRAILS it — and the only globals laid out after a program's own are the x64-windows console probes. On a lane without them the pinned tail runs past the end of the section, and a shorter `.data` is all the gate can say. The bit this measures is set by a target-neutral walk; what is missing elsewhere is an anchor, not the behaviour.
+⚠ **THE PROPERTY IS TARGET-NEUTRAL AND THE CHANNEL IS NOT.** `RequiredData` is a PREFIX compare, so it can only catch a word inserted where something still TRAILS it — and the only globals laid out after a program's own are the x64-windows console probes. On a lane without them the pinned tail runs past the end of the section, and a shorter `.data` is all the gate can say. The reachability this measures is a target-neutral walk; what is missing elsewhere is an anchor, not the behaviour.
 ⭐⭐ **THE CONTROL ON THE CASE ABOVE, AND WITHOUT IT THE RULE COULD BE *"CREDIT NO TIER BODY, EVER"*.** That
-answer passes the unreached case and is the dangerous direction: a bit left UNSET while the body survives
-leaves `runtime/CpuParallel.maxon`'s query loading a `.data` word the image never laid out. So the same
-`Probe.maxon` stands here unchanged and `main` asks for the worker mark itself — a call the compiler mints
-is the only root a program can reach a tier entry through — and both halves of the bit's job are pinned: the
-word is in `.data`, and the body that reads it is in the image.
+answer passes the unreached case and is the dangerous direction: a body left uncredited while it survives
+is the disagreement the panic below refuses. So the same `Probe.maxon` stands here unchanged and `main`
+asks for the worker mark itself — a call the compiler mints is the only root a program can reach a tier
+entry through — and both halves are pinned: the word the body reads is in `.data`, and the body is in the
+image.
+
+⚠ **ONE WORD, NOT THE PAIR.** `__sched_max_active_workers` is the only word this body names;
+`__sched_active_workers` beside it is stepped by the scheduler's worker loop alone, which no program
+without a scheduler carries, so it is not laid out here — `.data` holds what a surviving function names,
+not a family's whole roster.
 
 ⚠ **WHAT ACTUALLY FIRES ON THE BAD ANSWER IS A PANIC, NOT A MISMATCH.** Uncredit this entry and it enters
 `LibraryFacts.unreachedRuntimeTier` while `main` still calls it, which is the disagreement
@@ -506,7 +511,6 @@ end 'main'
 ```RequiredData
 i64 42
 i64 1
-i64 1
 i8 0
 i8 0
 i8 0
@@ -517,10 +521,10 @@ __sched_max_active_workers
 
 <!-- test: reaching-one-family-does-not-credit-another-tier-body -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
-⚠ **THE PROPERTY IS TARGET-NEUTRAL AND THE CHANNEL IS NOT.** `RequiredData` is a PREFIX compare, so it can only catch a word inserted where something still TRAILS it — and the only globals laid out after a program's own are the x64-windows console probes. On a lane without them the pinned tail runs past the end of the section, and a shorter `.data` is all the gate can say. The bit this measures is set by a target-neutral walk; what is missing elsewhere is an anchor, not the behaviour.
+⚠ **THE PROPERTY IS TARGET-NEUTRAL AND THE CHANNEL IS NOT.** `RequiredData` is a PREFIX compare, so it can only catch a word inserted where something still TRAILS it — and the only globals laid out after a program's own are the x64-windows console probes. On a lane without them the pinned tail runs past the end of the section, and a shorter `.data` is all the gate can say. The reachability this measures is a target-neutral walk; what is missing elsewhere is an anchor, not the behaviour.
 ⭐ **REACHED IS PER ENTRY POINT, NOT PER TIER.** `main` reaches the process family and nothing else, so the
 precise walk runs and files `probeWorkers` unreached — and the worker counters stay out of `.data` even
-though a tier body, compiled into this very image, calls the query that lays them.
+though a tier body, compiled into this very image, holds the query that names them.
 
 ⚠ **THE SECOND FAMILY IS `__proc_pid` BECAUSE IT IS THE ONE THAT PINS HONESTLY HERE.** The other bits a tier
 body could set on this lane — `usesBackgroundPriority`, `usesCpuCount`, `usesWallClock` — reach only the PE
@@ -542,6 +546,34 @@ function main() returns ExitCode
 	end 'aRealProcess'
 
 	return 1
+end 'main'
+```
+```exitcode
+0
+```
+```RequiredData
+i64 42
+i8 0
+i8 0
+i8 0
+```
+
+<!-- test: a-word-only-a-dead-user-function-reads-is-not-laid-out -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
+⭐⭐ **`.data` FOLLOWS REACHABILITY, NOT THE PROGRAM'S VOCABULARY.** The word behind
+`schedMaxActiveWorkers()` is laid out only when a function that survives dead-function elimination reads
+it. `dormant` is a user function nothing calls, so its query reaches no body and lays out no word — the
+same answer the unreached tier probe above gets, now for the program's own dead code. The two sched words
+would land between `used` and the console probes, which is where a prefix compare can see them.
+```maxon
+var used = 42
+
+module function dormant() returns MachineWord
+	return __Builtins.schedMaxActiveWorkers()
+end 'dormant'
+
+function main() returns ExitCode
+	return used - 42
 end 'main'
 ```
 ```exitcode

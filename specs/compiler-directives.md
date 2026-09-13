@@ -22,7 +22,8 @@ Maxon supports conditional compilation via `#if` / `#else` / `#endif` directives
 **Supported predicates:**
 - `os(Name)` — matches the build target's OS (`Windows`, `Linux`, `Macos`, `Wasi`).
 - `arch(Name)` — matches the build target's CPU (`x64`, `arm64`, `wasm32`).
-- `testing(true|false)` — true when the compiler is running under the spec test harness.
+- `testing(true|false)`, `rcSanitize(true|false)`, `leakReport(true|false)` — build flags this compiler does not have; always false.
+- `debugstream(true|false)` — true when the build carries `--debugstream` (the DebugStream producer).
 
 **Boolean operators:** `and`, `or`, `not`, plus parentheses for grouping.
 
@@ -141,5 +142,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2064: <fragment>:3:6: Unknown conditional compilation function 'compiler'. Expected 'os', 'arch', 'testing', 'rcSanitize', or 'leakReport'.
+error E2064: <fragment>:3:6: Unknown conditional compilation function 'compiler'. Expected 'os', 'arch', 'testing', 'rcSanitize', 'leakReport', or 'debugstream'.
 ```

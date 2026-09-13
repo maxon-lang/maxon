@@ -1,0 +1,22 @@
+// Test: debugstream-predicate-drops-the-arm-untraced
+function main() returns ExitCode
+	#if debugstream(true)
+		let n = 7
+		let s = "traced {n}"
+		print(s)
+		return 1
+	#else
+		return 0
+	#endif
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

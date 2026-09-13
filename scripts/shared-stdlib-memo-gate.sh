@@ -407,11 +407,14 @@ done
 "$MAXON" spec-test "$AB_SPEC" --workers=1 > "$WORK/ab-warm.log" 2>&1
 ab_warm_rc=$?
 ab_summary=$(grep -E '^[0-9]+ passed, [0-9]+ failed' "$WORK/ab-warm.log" | tail -1)
-ab_note=$(grep -o '[0-9]* COMPARED against a committed reference ([0-9]* of them differ' "$WORK/ab-warm.log" | tail -1)
-ab_compared=$(echo "$ab_note" | grep -o '^[0-9]*')
-ab_differ=$(echo "$ab_note" | grep -o '([0-9]*' | grep -o '[0-9]*')
+# Two summary lines, each silent at zero: `N compared against a committed golden` says how many references
+# were READ, and `N committed golden(s) OF THE CASES THIS RUN COMPARED DRIFTED …` how many of those
+# disagreed. An absent line is a zero — which for the first is the failure below, and for the second the
+# clean answer.
+ab_compared=$(grep -o '^[0-9][0-9]* compared against a committed golden' "$WORK/ab-warm.log" | grep -o '^[0-9]*' | tail -1)
+ab_differ=$(grep -o '^[0-9][0-9]* committed golden(s) OF THE CASES THIS RUN COMPARED' "$WORK/ab-warm.log" | grep -o '^[0-9]*' | tail -1)
 ab_compared=${ab_compared:-0}
-ab_differ=${ab_differ:--1}
+ab_differ=${ab_differ:-0}
 
 if [ "$ab_cold_failed" -ne 0 ]; then
 	fail "CHECK 5: $ab_cold_failed of $AB_CASES cold reference mint(s) failed — there is nothing to compare warm against"

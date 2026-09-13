@@ -73,7 +73,7 @@ let MainThreadEntryFrameBytes = (ShadowSpaceBytes + StackWordBytes) as StackSize
 // scheduler and never calls `__gt_spawn`, so pruning that one function (correctly) would turn the chunk
 // gate off and the link would fail on `__gt_context_switch`. The fact is written down ONCE, where it is
 // decided, and read here.
-export function buildBackend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage) returns CodeResult throws CompileError
+export function buildBackend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage, userGlobals DataSectionEntryArray) returns CodeResult throws CompileError
 	let sugarProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.sugarGate)
 	assertNoSugarOps(stdModule)
 	recordPhase(project, phase: CompilePhase.sugarGate, probe: sugarProbe)
@@ -100,8 +100,23 @@ export function buildBackend(stdModule StdModule, target Target, globalData Glob
 	// the backends. So an index taken here describes the array all three backends will walk — which is what
 	// lets their per-callee maps take the INDEX as an argument instead of the module, and stop resting on a
 	// uniqueness guarantee none of them stated.
-	let funcNames = try eliminateDeadFunctions(stdModule, globalData: globalData, project: project)
+	let survivors = try eliminateDeadFunctions(stdModule, globalData: globalData, project: project)
+	let funcNames = survivors.funcNames
 	recordPhase(project, phase: CompilePhase.deadFunctions, probe: dfeProbe)
+
+	// ⭐⭐ **THE `.data` SECTION IS LAID OUT HERE, AFTER THE PRUNE, BECAUSE THE PRUNE IS WHAT SAYS WHICH
+	// RUNTIME WORDS ARE READ.** Nothing between here and the encoders asks for an offset — the three
+	// `dataSectionOffsetOf` readers are all encode-stage — and nothing after `compileToCodeResult` registers
+	// a run, so this is the earliest point that can answer with the survivors and the latest that still
+	// precedes every reader. Its own phase because it is the only step here whose cost is O(globals).
+	//
+	// The coverage counter image is reserved first: `layOut` is the single writer of every `.data` offset
+	// and refuses a run registered after it, and the point COUNT has been final since the merge.
+	let layoutProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.layOutGlobals)
+	reserveCoverageImage(project)
+	globalData.layOut(dataSectionRoster(userGlobals, usage: usage, target: target), referenced: survivors.referencedGlobals)
+	globalData.requireLaidOutCoversReferences(survivors.referencedGlobals)
+	recordPhase(project, phase: CompilePhase.layOutGlobals, probe: layoutProbe)
 
 	match target.cpu 'cpu'
 		x64 then return try buildX64Backend(stdModule, target: target, globalData: globalData, project: project, usage: usage, funcNames: funcNames)
@@ -109,6 +124,42 @@ export function buildBackend(stdModule StdModule, target Target, globalData Glob
 		wasm32 then return buildWasmBackend(stdModule, globalData: globalData, project: project, usage: usage, funcNames: funcNames)
 	end 'cpu'
 end 'buildBackend'
+
+// ⭐⭐ **THE `.data` ROSTER, IN LAYOUT ORDER: the user's globals, then every runtime family's words.** The
+// order is the `.data` order — `layOut` sorts by width and is stable — so a family's position here is a
+// contract with every golden's `data {` block and every `RequiredData` pin, and a word moved here moves
+// every program's section to say nothing new.
+//
+// A `walked` word is pushed for every program and `layOut` keeps it only where a surviving function names
+// it, so no usage gate is asked for one here; a `declared` word's producer asks the gate of the chunk or
+// stub that reads it, and asks the TARGET too where the answer depends on both (`DataReach`,
+// `pushRuntimeGlobal`). ⚠ **`ClockRuntime` CONTRIBUTES NO `.data` SLOT** — its host read takes FRAME
+// scratch, which is what a multi-M runtime requires.
+function dataSectionRoster(userGlobals DataSectionEntryArray, usage RuntimeUsage, target Target) returns DataSectionEntryArray
+	var roster = DataSectionEntryArray.create()
+	appendDataSectionEntries(roster, entries: userGlobals)
+	appendDataSectionEntries(roster, entries: runtimeGlobals())
+	appendDataSectionEntries(roster, entries: gtRuntimeGlobals(target))
+	appendDataSectionEntries(roster, entries: schedRuntimeGlobals(usage, target: target))
+	appendDataSectionEntries(roster, entries: commandLineRuntimeGlobals(usage, target: target))
+	appendDataSectionEntries(roster, entries: arm64LinuxRuntimeGlobals(usage, target: target))
+	appendDataSectionEntries(roster, entries: linuxEnvpGlobals(usage, target: target))
+	appendDataSectionEntries(roster, entries: linuxGreenThreadGlobals(usage, target: target))
+	appendDataSectionEntries(roster, entries: x64LinuxRuntimeGlobals(usage, target: target))
+	appendDataSectionEntries(roster, entries: x64WindowsRuntimeGlobals(target))
+	appendDataSectionEntries(roster, entries: ioRuntimeGlobals())
+	appendDataSectionEntries(roster, entries: subpRuntimeGlobals())
+	appendDataSectionEntries(roster, entries: slabArenaRuntimeGlobals())
+	appendDataSectionEntries(roster, entries: slabRuntimeGlobals())
+	appendDataSectionEntries(roster, entries: debugStreamRuntimeGlobals())
+	return roster
+end 'dataSectionRoster'
+
+function appendDataSectionEntries(roster DataSectionEntryArray, entries DataSectionEntryArray)
+	for entry in entries 'each'
+		roster.push(entry)
+	end 'each'
+end 'appendDataSectionEntries'
 
 // The wasm backend: Std → a WASI-Preview2 CORE module (bytes). Unlike x64/arm64 it consumes the
 // StdModule DIRECTLY — no register allocation, no prologue/epilogue, no Target dialect (see
@@ -121,12 +172,12 @@ end 'buildBackend'
 // the CodeResult's `wasmCoreModule` field; every machine-code field is empty (see
 // `CodeResult.forWasm`), and `writeWasm` wraps the bytes into a component. It takes no `target`: the
 // sole wasm target is wasm32-wasi, and `buildBackend` has already dispatched on it.
-// `usage` reaches it for the ONE reason the native backends need it: the leak gate. `usesHeap` is
-// where "was the MM runtime installed?" is decided, so wasm reads that bit rather than re-deriving it
-// from the module — see `StdToWasm.appendLeakGate`.
+// Its leak gate reads `Project.entryStubCalls.checksLeaks`, the same record the reachability roots kept
+// `__mm_leak_check` alive from, rather than re-deriving installation from the module — see
+// `StdToWasm.appendLeakGate`.
 function buildWasmBackend(module StdModule, globalData GlobalDataTable, project Project, usage RuntimeUsage, funcNames FunctionNameIndex) returns CodeResult
 	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
-	let coreModule = buildWasmCoreModule(module, globalData: globalData, checkLeaks: usage.usesHeap, initGlobals: usage.usesManagedGlobals, funcNames: funcNames, entryFunction: project.entryFunctionName)
+	let coreModule = buildWasmCoreModule(module, globalData: globalData, checkLeaks: project.entryStubCalls.checksLeaks, initGlobals: usage.usesManagedGlobals, funcNames: funcNames, entryFunction: project.entryFunctionName)
 	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
 
 	return CodeResult.forWasm(module, wasmCoreModule: coreModule)
@@ -168,10 +219,11 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 
 	let runtimeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.runtimeAugment)
 
-	// The stub's two producer calls ride the module's own armed flag (`buildCarriesDebugStream`, set at the
-	// install seam), never a second spelling of that conjunction: a stub calling a `__ds_init` the module
-	// never installed does not link.
-	augmentWithRuntime(targetModule, target: target, checkLeaks: usage.usesHeap, initGlobals: usage.usesManagedGlobals, drainGreenThreads: usage.usesGt, captureArgv: usage.usesCommandLine, captureEnvp: linuxReadsEnvironment(usage), debugStream: stdModule.debugStream, dumpCoverage: usage.usesCoverage, entryFunction: project.entryFunctionName)
+	// The stub's by-name calls read `Project.entryStubCalls`, the record the reachability roots and the
+	// inliner's census were built from — never a second spelling of those bits: a stub calling a `__ds_init`
+	// nothing installed, or one the roots did not keep alive, does not link.
+	let stub = project.entryStubCalls
+	augmentWithRuntime(targetModule, target: target, checkLeaks: stub.checksLeaks, initGlobals: usage.usesManagedGlobals, drainGreenThreads: stub.runsMainOnAGreenThread, captureArgv: usage.usesCommandLine, captureEnvp: linuxReadsEnvironment(usage), debugStream: stub.bracketsDebugStream, dumpCoverage: stub.dumpsCoverage, entryFunction: project.entryFunctionName)
 	recordPhase(project, phase: CompilePhase.runtimeAugment, probe: runtimeProbe)
 
 	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
@@ -296,14 +348,14 @@ end 'refuseDuplicateChunkName'
 // `Arm64Runtime`); arm64-linux shares that chunk, differing only in its exit route. So both non-wasi
 // non-windows arms answer the same thing and are consolidated into one.
 //
-// `checkLeaks` is `RuntimeUsage.usesHeap` — whether the MM runtime (and with it `__mm_leak_check`) was
+// `checkLeaks` is `EntryStubCalls.checksLeaks` — whether the MM runtime (and with it `__mm_leak_check`) was
 // installed. A program with no allocator cannot leak, so it carries no gate.
 //
 // `initGlobals` is `RuntimeUsage.usesManagedGlobals` — whether the program declares a managed top-level
 // `var`, and so carries `__module_init`/`__maxon_global_cleanup`. A program with none carries neither
 // call.
 //
-// `drainGreenThreads` is `RuntimeUsage.usesGt` — whether the green-thread scheduler was installed, and so
+// `drainGreenThreads` is `EntryStubCalls.runsMainOnAGreenThread` — whether the scheduler was installed, and so
 // whether `main` runs on a green thread (`__gt_run_main`, handed `MainThreadEntryName`) and
 // `__gt_drain_at_exit` exists to be called. It rides the INSTALLATION bit rather than a probe of the module for
 // this file's own recorded reason: dead-function elimination takes installed functions back out, so *"does

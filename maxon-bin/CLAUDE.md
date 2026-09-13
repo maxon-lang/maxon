@@ -59,10 +59,15 @@ OWES THE SAME TWO DOORS.**
 A runtime name is therefore never
 classified `LibraryFacts.unreachable`, and the exemption is by PROVENANCE rather than by reachability: no
 source call edge can earn a tier body, so a walk over them holds no evidence about whether one was BUILT
-(`StdlibSource.classifyLibraryReach`). Its bodies therefore lower and its range guards are inserted, while
-dead-function elimination still sweeps an entry nothing calls, so a program that reaches no runtime family
-carries none of it. **Whether the program REACHES one is a different question and the same walk does answer
-it** — `LibraryFacts.unreachedRuntimeTier`, below.
+(`StdlibSource.classifyLibraryReach`). **Whether the program REACHES one is a different question and the same
+walk does answer it** — `LibraryFacts.unreachedRuntimeTier`, below — and every pre-elimination pass reads
+the two answers as ONE predicate, `LibraryFacts.bodyIsSwept`: an unreached tier body is built but never
+lowered, guarded, scanned or call-checked, exactly like an unreachable stdlib body, and dead-function
+elimination sweeps it. ⛔ **THAT IS WHAT KEEPS ITS `.rdata` OUT OF A PROGRAM THAT CANNOT REACH IT** — DFE
+prunes functions and never `.rdata`, so a lowered-then-swept body would still leave its panic strings ahead
+of the program's own literals (`specs/stdlib-loading.md`'s
+`a-stdlib-modules-literals-cannot-reach-the-rdata-image` is the gate; the arena's five range-check strings
+and its shift-count panic are what it caught).
 
 ⚠ **THE TWO arm64-macos force-segfault GOLDENS OWE A RE-MINT ON A MAC, AND THE DRIFT IS EXPECTED.** A
 Mach-O runs only on macOS, so an x64 host reports `force-segfault-macos` and that lane's
@@ -82,15 +87,19 @@ the install guard was the only reader of each. `usesBackgroundPriority` is the n
 body declares nothing either, but the Windows OPTIONAL IMPORT band still reads it through
 `IrModule.usesBackgroundPriority`.
 
-⛔⛔ **AND A BIT CAN GAIN A SHARPER JOB THAN GATING AN INSTALL: IT CAN LAY OUT THE WORD THE SOURCED BODY
-READS.** `usesSchedMaxActiveWorkers` and `usesSchedProcessorCount` are `SchedRuntime.schedRuntimeGlobals`'s
-gates for `__sched_max_active_workers` and `__sched_num_procs`, and those are the words
-`runtime/CpuParallel.maxon`'s two queries load. Unset while the body survives, a query would `globalAddr` a
-slot the image never laid out. What keeps them in step is that ONE call site does both — `recordCallUsage`
-sets the bit from it, and it is also the edge dead-function elimination keeps the body alive for — so a
-surviving body implies a set bit. ⇒ **A tier body that reads a `.data` word owes that argument**, and the
-day something else can keep a tier body alive it stops holding. `usesCpuCount` keeps the ordinary kind of
-consumer: the Windows optional import band and the two hand-assembled `mrt_host_cpu_count` chunks.
+⛔⛔ **A BIT NEVER LAYS OUT A `.data` WORD A STD BODY READS — THE WORD FOLLOWS THE BODY.**
+`GlobalDataTable.layOut` runs in `buildBackend` AFTER dead-function elimination, and a runtime word pushed
+as `DataReach.walked` is kept only if a SURVIVING function names it in a `globalAddr` — the label set the
+prune collects in the same op walk that decides survival (`DeadFunctionSurvivors`). So
+`__sched_max_active_workers` and `__sched_num_procs` are laid out exactly where
+`runtime/CpuParallel.maxon`'s queries survive, and a query only a dead function asks lays out nothing
+(`specs/runtime-source-tier.md`'s `a-word-only-a-dead-user-function-reads-is-not-laid-out`). A word read by a
+hand-assembled chunk or the entry stub is `DataReach.declared` on that reader's own gate instead, because no
+Std walk sees the reader; `GlobalDataTable.requireLaidOutCoversReferences` panics by label on a surviving
+`globalAddr` the layout does not hold. `usesCpuCount` keeps the ordinary kind of consumer: the Windows
+optional import band and the two hand-assembled `mrt_host_cpu_count` chunks.
+⚠ **THE ORDER OF `BackendDispatch.dataSectionRoster` IS THE `.data` ORDER**, and filtering never reorders —
+so a program that reaches every word it names lays each out at the offset a gate would have given it.
 
 The fault probe's family predicate `isFaultProbeRuntimeCallee` outlived its bit, because
 `MmRuntime.reservedCalleeReasonOf` still routes the call refusal through it; it moved there with the two
@@ -143,8 +152,8 @@ IS THE DECLARATION DOOR, so a name admitted here owes a refusal in
 declarations stay module-scoped, which
 `specs/runtime-source-tier.md`'s `runtime-file-unreserved-declaration-is-still-module-scoped` measures.
 
-⭐⭐ **BUILT AND REACHED ARE TWO QUESTIONS FOR THE TIER, AND `scanRuntimeUsage` ASKS THE SECOND.** Every
-tier body is built, in every program; the scan credits a body's calls only where some root can reach it
+⭐⭐ **BUILT AND REACHED ARE TWO QUESTIONS FOR THE TIER, AND EVERY PRE-ELIMINATION PASS ASKS THE SECOND.**
+Every tier body is built, in every program; the scan credits a body's calls only where some root can reach it
 (`LibraryFacts.unreachedRuntimeTier`, filed by `StdlibSource.classifyLibraryReach` out of the SAME
 from-`main` walk that files `unreachable` — one derivation, two answers, so they cannot disagree). Without
 that split, a CALL inside a tier body sets its family's bit in every program DFE sweeps the body out of,
@@ -155,8 +164,8 @@ reaches the entry, and the program that reaches a DIFFERENT family.
 ⛔⛔ **OVER-APPROXIMATING IS SAFE AND THE OTHER DIRECTION IS A LINK FAILURE.** A bit set for a swept body
 costs BYTES and nothing else — never a wrong answer and never a refusal, because
 `SemanticCheck.blameTargetErrorsIn` skips the target gate inside library code and usage-installs /
-DFE-removes is a one-way composition. A bit UNSET while the body ships is
-`runtime/CpuParallel.maxon` loading a `.data` word nothing laid out. So a name enters the set only on the
+DFE-removes is a one-way composition. A bit UNSET while the body ships is a body calling into a runtime
+floor, a host chunk or an import band nothing installed. So a name enters the set only on the
 walk's positive evidence, every unmodelled edge resolves to "reached", and
 `DeadFunctionElimination.requireUnreachableLibraryStayedDead` panics on the unsafe direction.
 
@@ -175,9 +184,14 @@ evidence at all and would file every arena entry `unreachedRuntimeTier` while it
 the same one-walk derivation, and `classifyLibraryReach` reads it. **BY FILE rather than by NAME**, because
 an installer's call lands on an entry point whose body then reaches that file's module-scoped helpers — and
 the short-circuit path hands `classifyLibraryReach` an EMPTY reached set, so there is no walk there to close
-a name roster's difference. **UNCONDITIONAL**, because over-approximating costs the two `.data` words in
-every program and the other direction is a link failure. ⇒ **A NEW TIER FAMILY THE COMPILER REACHES BY
-MINTING A CALL OWES A LINE IN THAT ROSTER**; the panic above names the missing body.
+a name roster's difference. **UNCONDITIONAL AT THE WALK**, because the minter's gate — `usesHeap`, which
+`installSlabRuntime` returns without — is not final until after `scanRuntimeUsage`, and a name filed
+unreached while its body ships is a link failure. **SETTLED ONCE THE GATE IS**:
+`LibraryFacts.withCompilerCalledTierUnreached`, called from `compileToCodeResult` before lowering, files
+every name of those files `unreachedRuntimeTier` in a program the installer will mint no call for, so
+their bodies lower nothing there (`bodyIsSwept`). ⇒ **A NEW TIER FAMILY THE COMPILER REACHES BY MINTING A
+CALL OWES A LINE IN THAT ROSTER, AND ITS MINTER MUST RIDE THE SAME GATE**; the panic above names the missing
+body either way.
 ⭐ **`runtime/SlabRuntime.maxon`'s THIRD, FOURTH AND FIFTH ENTRY POINTS NEEDED NO NEW LINE**, because the
 roster is keyed by FILE and that file was already on it — which is the whole reason it is keyed that way.
 
@@ -274,12 +288,13 @@ Four doors are still standing open rather than shut:
   different road — so their isel evidence is the scheduler's and not the tier's.
   ⭐⭐ **AND THE ARENA'S TWO `.data` WORDS ARE ADDRESSED BY ROWS OF THEIR OWN** —
   `slabArenaListAddr` and `slabArenaMapL1Addr`, lowering to a `globalAddr` on
-  `SlabArena.SlabArenaListLabel`/`SlabArenaMapL1Label`. ⛔ **THEY DO NOT GET THE `usesSchedMaxActiveWorkers`
-  ARGUMENT BELOW, AND CANNOT**: the arena's callers are `StdOp.call` sites an INSTALLER mints, so there is
-  no Maxon call site to set the bit from. `RuntimeUsage.usesSlabArena` is DECLARED instead
-  (`closeSlabNeeds`), and what makes that sound is that the ONLY minter of a call into the family,
-  `installSlabRuntime`, returns before emitting anything unless `usesHeap` — the same bit the declaration
-  reads, and `closeSlabNeeds` runs after every producer of it.
+  `SlabArena.SlabArenaListLabel`/`SlabArenaMapL1Label`, and laid out as `DataReach.walked` words exactly
+  where a surviving arena body names them. `RuntimeUsage.usesSlabArena` still gates the one builder-built
+  entry (`installSlabArena`) and is DECLARED (`closeSlabNeeds`) because the arena's callers are `StdOp.call`
+  sites an INSTALLER mints, so there is no Maxon call site to discover it from; what makes that sound is
+  that the ONLY minter of a call into the family, `installSlabRuntime`, returns before emitting anything
+  unless `usesHeap` — the same bit the declaration reads, and `closeSlabNeeds` runs after every producer
+  of it.
   ⛔⛔ **THE FAMILY HAS NO DISCOVERED ARM, AND ADDING ONE BACK WOULD SET THE BIT IN EVERY PROGRAM.** Its
   entry points are tier SOURCE, so its bodies are in the walked Maxon module and call each other; no file
   outside the tier may name one, so a `__slab_arena_*` callee the walk can SEE is always the family talking

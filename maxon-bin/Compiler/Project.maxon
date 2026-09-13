@@ -7688,13 +7688,6 @@ export type Project
 	// holds a USER function, so no user-only program's checks change.
 	export var libraryFacts as LibraryFacts
 
-	// The `runtime/` bodies dead-function elimination will sweep out of THIS program
-	// (`sweptRuntimeTierNames`). It is a field of its own rather than a sixth `LibraryFacts` column
-	// because it cannot be derived when the rest are: it joins the walk's answer with whether the
-	// allocator is installed, which is settled only after the runtime-needs scan. Empty until then, which
-	// is the honest answer for every pass that runs before it.
-	export var sweptRuntimeTier as FunctionNameSet
-
 	// Declared function return types (the M1 parse-staging registry).
 	export var funcReturnTypes as FuncReturnTypeMap
 
@@ -7854,19 +7847,16 @@ export type Project
 	// it lives here beside `target` rather than on any artifact.
 	export var asyncTrace as bool
 
-	// ⭐ Whether this build emits the DebugStream producer (`--debugstream`). Set by the driver right after
-	// the project is loaded, exactly as `asyncTrace` is, and a per-BUILD switch for the same reason — it
-	// belongs beside `target`, not on any artifact. It is read at TWO seams and nowhere else: the LOWERING,
-	// which appends an allocation's trace tag to its `__mm_alloc` call, and `buildCarriesDebugStream`, which
-	// is where every later part — the `.data` slots, the producer install, the module flag the runtime
-	// builders read, and through it the entry stub's `__ds_init`/`__ds_shutdown` — takes its one answer from.
-	export var debugStream as bool
+	// ⭐ Whether this build emits the DebugStream producer (`--debugstream`). A per-BUILD switch, so it
+	// belongs beside `target` and not on any artifact — and a `let` fixed at creation for `target`'s reason:
+	// the `#if debugstream(...)` predicate reads it at the token tier, and `Queries.queryActiveTokens`' memo
+	// omits it from its key on the strength of its never changing.
+	export let debugStream as bool
 
 	// ⭐ Whether this build writes the `<output>.mxdbg` debug-info sidecar. Set by the driver right after
-	// the project is loaded, exactly as `asyncTrace` and `debugStream` are, and a per-BUILD switch for the
-	// same reason. It ARMS the span columns and nothing else: no pass reads a span and nothing branches on
-	// one, so the executable is byte-identical whichever way this is set — which is the whole reason the
-	// sidecar may exist at all.
+	// the project is loaded, exactly as `asyncTrace` is, and a per-BUILD switch for the same reason. It ARMS
+	// the span columns and nothing else: no pass reads a span and nothing branches on one, so the executable
+	// is byte-identical whichever way this is set — which is the whole reason the sidecar may exist at all.
 	export var debugInfo as bool
 
 	// The withheld bodies this build was asked to print (`--emit-ir-runtime=`, a ```RequiredRuntime golden's
@@ -7879,6 +7869,12 @@ export type Project
 	// before the thunk exists: a callee spliced away on the strength of its one visible site would leave
 	// the thunk calling an emptied body.
 	export var functionValueTargets as ByteArrayArray
+
+	// The calls the entry stub makes by name in THIS build (`DeadFunctionElimination.EntryStubCalls`), set
+	// once from the usage record before the lowering pipeline runs: the reachability roots and the
+	// inliner's called-once census both read it, and the census runs mid-pipeline where no usage record is
+	// in reach.
+	export var entryStubCalls as EntryStubCalls
 
 	// ⭐ Whether this build instruments for code coverage (`--coverage`). Set by the driver right after the
 	// project is loaded, exactly as `debugInfo` is, and a per-BUILD switch for the same reason.
@@ -8167,14 +8163,13 @@ export type Project
 	// day N compiles run at once.
 	export var traceUnit as TraceUnit
 
-	export static function create(db QueryDatabase, rootPath FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath) returns Project
+	export static function create(db QueryDatabase, rootPath FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath, debugStream bool) returns Project
 		return Self{
 			db: db,
 			stdlibDir: stdlibDir,
 			runtimeDir: runtimeDir,
 			librarySourcePaths: MaxonSourcePathArray.create(),
 			libraryFacts: LibraryFacts.empty(),
-			sweptRuntimeTier: FunctionNameSet.create(),
 			funcReturnTypes: FuncReturnTypeMap.create(),
 			funcSignatures: FuncSignatureMap.create(),
 			overloadSets: OverloadSetMap.create(),
@@ -8204,10 +8199,11 @@ export type Project
 			typeNames: TypeNameInterner.create(),
 			opRanges: SourceRangeTable.create(),
 			asyncTrace: false,
-			debugStream: false,
+			debugStream: debugStream,
 			debugInfo: false,
 			requestedRuntimeBodies: RuntimeFunctionNameArray.create(),
 			functionValueTargets: ByteArrayArray.create(),
+			entryStubCalls: EntryStubCalls.none(),
 			coverage: false,
 			covPoints: CovPointTable.create(),
 			coverageDataPath: "",
@@ -8245,8 +8241,8 @@ end 'Project'
 // Both library roots are passed IN rather than located here so the project is born
 // with valid ones: the library loader reads them before the first pass runs, and a
 // field that is briefly wrong is a field something can read while it is wrong.
-export function createProject(rootPath FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath) returns Project
-	return Project.create(QueryDatabase.create(target.os), rootPath: rootPath, target: target, stdlibDir: stdlibDir, runtimeDir: runtimeDir)
+export function createProject(rootPath FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath, debugStream bool) returns Project
+	return Project.create(QueryDatabase.create(target.os), rootPath: rootPath, target: target, stdlibDir: stdlibDir, runtimeDir: runtimeDir, debugStream: debugStream)
 end 'createProject'
 
 // ⭐⭐ **IS THE PROJECT ROOT ITSELF UNDER `stdlib/`? — ONE HOME, BECAUSE THREE RULES REST ON IT AND TWO

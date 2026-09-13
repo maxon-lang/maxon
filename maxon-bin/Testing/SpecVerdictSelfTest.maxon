@@ -161,12 +161,20 @@ function checkEveryOutcomeIsCounted(broken StringArray)
 	if tally.drifted != DriftedResultsSynthesized 'driftNotCounted'
 		broken.push("{DriftedResultsSynthesized} of the {results.count()} synthesized results carries a drifted golden and the tally counted {tally.drifted}. A committed reference that has stopped describing the compiler is reported from this number alone; uncounted, it is reported by nothing.\n")
 	end 'driftNotCounted'
+
+	if tally.compared != ComparedResultsSynthesized 'comparedNotCounted'
+		broken.push("{ComparedResultsSynthesized} of the {results.count()} synthesized results had a committed golden read against them (one matched, one drifted) and the tally counted {tally.compared}. A run that compared nothing is told apart from one that compared everything by this number alone.\n")
+	end 'comparedNotCounted'
 end 'checkEveryOutcomeIsCounted'
 
 // How many results a row synthesizes with a stale committed golden. Named because three assertions read
 // it: the drift count must equal it, `total()` must be blind to it, and the trailer must render one entry
 // for it.
 let DriftedResultsSynthesized = 1
+
+// How many results the row synthesizes with a committed golden read against them: the matched one and the
+// drifted one.
+let ComparedResultsSynthesized = 2
 
 // ⭐ ROW 4 — a verdict that was never established here may not WRITE a first golden, and one that was
 // must still be able to. This is the half the C# guard states as `TargetRunHost.MintRefusalFor`, and it

@@ -13546,13 +13546,22 @@ export type ProgramSignatures
 	// recording — so a second copy of these four lines would be two chances to forget the tally, and the tally
 	// is the half that carries the safe direction.
 	function recordSweptBodyFact(name ByteArray, marked DeclaredBodyFactNameSet, counts FunctionDeclarationCountMap, shape HashDigest)
+		self.publishSweptBodyFact(name, marked: marked, counts: counts)
+		self.hash = mixBytes(Hasher.combined(self.hash, value: shape), bytes: name)
+	end 'recordSweptBodyFact'
+
+	// The write and the tally without the hash — what `closeFreshReturnForwards` publishes. Its answer is a
+	// pure function of facts the fold already mixed (`recordFreshReturnForward` mixes every edge, the recorder
+	// above every unconditional publisher), so mixing it again would key the parse memo twice on one fact.
+	// ⛔ And it runs at the FIRST READ, which is inside a parse: a hash that moves there strands every parse
+	// memo stamped before it — `VerifyWarmRebuild` reports the stale files by path.
+	function publishSweptBodyFact(name ByteArray, marked DeclaredBodyFactNameSet, counts FunctionDeclarationCountMap)
 		if marked.contains(name) 'anotherSuchDeclarationOfThisName'
 			self.noteRepeatedDeclaration(counts, name: name)
 		end 'anotherSuchDeclarationOfThisName'
 
 		marked.insert(name)
-		self.hash = mixBytes(Hasher.combined(self.hash, value: shape), bytes: name)
-	end 'recordSweptBodyFact'
+	end 'publishSweptBodyFact'
 
 	// ⭐⭐ **DOES A CALL TO THIS NAME NEVER COME BACK? — the door `Parser.terminateAfterDivergingCall` asks
 	// before letting a bare-call STATEMENT end its block (G17).**
@@ -13666,7 +13675,7 @@ export type ProgramSignatures
 					continue
 				end 'notYet'
 
-				self.recordSweptBodyFact(name, marked: self.funcReturnsFreshRecord, counts: self.funcFreshReturningDeclarationCounts, shape: DeclShapeReturnsFreshRecord)
+				self.publishSweptBodyFact(name, marked: self.funcReturnsFreshRecord, counts: self.funcFreshReturningDeclarationCounts)
 				changed = true
 			end 'eachForwarder'
 		end 'sweepUntilStable'
@@ -17002,7 +17011,7 @@ export type ProgramSignatures
 			end 'noReachableSlot'
 
 			match decl.outcome 'state'
-				value(payload, tag, _) then entries.push(DataSectionEntry.create(String.from(self.dataLabelOf(decl)), valueType: globalStdType(tag, name: decl.name), value: payload))
+				value(payload, tag, _) then entries.push(DataSectionEntry.create(String.from(self.dataLabelOf(decl)), valueType: globalStdType(tag, name: decl.name), value: payload, reach: DataReach.declared))
 				failed or
 					poisoned then continue
 
@@ -17037,7 +17046,7 @@ export type ProgramSignatures
 	// `__module_init` writes before `main`. One function rather than one spelling per outcome arm, because
 	// the bytes are the same zero in every case.
 	function nullPointerSlot(decl TopLevelDecl, valueType MaxonType) returns DataSectionEntry
-		return DataSectionEntry.create(String.from(self.dataLabelOf(decl)), valueType: self.recordPointerSlotType(valueType, name: decl.name), value: ManagedGlobalInitialSlot)
+		return DataSectionEntry.create(String.from(self.dataLabelOf(decl)), valueType: self.recordPointerSlotType(valueType, name: decl.name), value: ManagedGlobalInitialSlot, reach: DataReach.declared)
 	end 'nullPointerSlot'
 
 	// ⭐⭐ **THE `StdType` A RECORD-VALUED GLOBAL'S SLOT OCCUPIES (S2j)** — the RECORD path's own door, and

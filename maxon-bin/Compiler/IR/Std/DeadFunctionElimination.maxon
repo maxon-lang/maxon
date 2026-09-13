@@ -19,9 +19,8 @@
 // DIFFERENT questions, in that order:
 //
 //   * `RuntimeUsage` owns INSTALLATION — *does this program carry the allocator / the GT scheduler /
-//     the child-pipe substrate / this `__destruct_<T>` at all?* It must run BEFORE lowering, because its
-//     `usesHeap`/`usesGt`/`usesChildPipes`/`usesStreaming` bits also gate the `.data` slots the backend
-//     resolves a `globalAddr` against, and a slot cannot be laid out after the fact.
+//     the child-pipe substrate / this `__destruct_<T>` at all?* It must run BEFORE lowering, because it
+//     decides which bodies are built and which hand-assembled chunks and import bands the image carries.
 //   * This pass owns REACHABILITY — *of what was installed, what can actually be reached from the
 //     program's roots?* It runs LAST, on the finished Std module, and it never installs anything.
 //
@@ -30,6 +29,14 @@
 // asymmetry is what makes an all-or-nothing install (`installManagedMemoryRuntime` installs the whole array
 // runtime as one closure, because the helpers call each other) both correct and cheap: the closure is
 // the safe over-approximation, and this pass takes the slack back.
+//
+// ⭐ **THE RUNTIME'S `.data` WORDS FOLLOW THIS PASS, NOT THE FLOOR.** `GlobalDataTable.layOut` runs after
+// it, in `buildBackend`, and keeps a walked runtime word only if a SURVIVING function names it in a
+// `globalAddr` — the label set this walk collects beside the reachability answer (`DeadFunctionSurvivors`).
+// A word installed but never reached costs nothing, which the floor alone cannot say: a dead user function
+// calling `__Builtins.schedMaxActiveWorkers()` keeps the query's body out of the image and its word with it.
+// A word a hand-assembled chunk or the entry stub reads is `declared` by its producer instead, because no
+// walk over Std ops sees that reader (`DataReach`).
 //
 // ⭐ **CONSERVATIVE BEATS CLEVER.** A missed prune costs bytes; a wrong prune is a link-time panic or,
 // worse, a silently missing side effect. Every reference this pass cannot SEE is therefore a ROOT, and
@@ -45,10 +52,10 @@
 // "is this label reachable?" never has to be asked. Dead-`.rdata` elimination is a
 // separate change with its own goldens (`.rdata` offsets move, so `RequiredData` moves with them).
 //
-// ⚠ **`.data` IS ALREADY DONE, AND DELIBERATELY NOT HERE**: a dead top-level global's slot
-// is never BUILT, by `IR/Maxon/DeadGlobalElimination` filtering the arena in `compileToCodeResult`. That is
-// upstream of this pass for the reason stated above — a `.data` slot cannot be laid out after the fact — so
-// the two never both answer for a global, and nothing here needs a `shouldKeepGlobal` list either.
+// ⚠ **A USER GLOBAL'S SLOT IS DECIDED UPSTREAM, AND DELIBERATELY NOT HERE**: a dead top-level global's slot
+// is never BUILT, by `IR/Maxon/DeadGlobalElimination` filtering the arena in `compileToCodeResult`, and it
+// reaches `layOut` as a `declared` entry. So the two never both answer for a user global, and nothing here
+// needs a `shouldKeepGlobal` list; the label set this pass collects decides runtime words alone.
 //
 // Orphaned blocks and ops are LEFT BEHIND, exactly as every block-rebuilding pass leaves them
 // (`IrModule.liveOpIndices`' header). `compactOps`/`compactBlocks` would reclaim them, but they cost
@@ -75,7 +82,10 @@
 // module without an index, and the index it is handed cannot describe a different array than the module
 // it accompanies. The map it replaces is `buildCalleeResultClasses`, which walked the same array to store
 // a value the index can already reach in two O(1) steps.
-export function eliminateDeadFunctions(module StdModule, globalData GlobalDataTable, project Project) returns FunctionNameIndex throws CompileError
+//
+// ⭐ **AND THE `.data` LABELS THE SURVIVORS NAME COME BACK WITH IT**, collected by the same op walk that
+// finds the call edges, so the layout that reads them cannot count a body this pass did not.
+export function eliminateDeadFunctions(module StdModule, globalData GlobalDataTable, project Project) returns DeadFunctionSurvivors throws CompileError
 	let index = try FunctionNameIndex.create(module.functions, project: project)
 	let byName = index.byName
 
@@ -84,13 +94,14 @@ export function eliminateDeadFunctions(module StdModule, globalData GlobalDataTa
 	var worklist = FuncIndexArray.create()
 
 	var reference = StdFunctionReference.create()
+	var referencedGlobals = ReferencedGlobalLabelSet.create()
 	try seedRoots(globalData, project: project, index: index, reached: reached, worklist: worklist)
 
 	while worklist.count() > 0 'walk'
 		let idx = try worklist.pop() otherwise panic("eliminateDeadFunctions: pop from a non-empty worklist")
 		let func = module.getFunc(idx)
 		requireNotSplicedAway(module, func: func, byName: byName, reached: reached)
-		markCalleesOf(module, func: func, byName: byName, reached: reached, worklist: worklist, reference: reference)
+		markReferencesOf(module, func: func, byName: byName, reached: reached, worklist: worklist, reference: reference, referencedGlobals: referencedGlobals)
 	end 'walk'
 
 	requireUnreachableLibraryStayedDead(project, byName: byName, reached: reached)
@@ -100,25 +111,57 @@ export function eliminateDeadFunctions(module StdModule, globalData GlobalDataTa
 	// cannot report one — it is here for the POSITIONS, which the sweep renumbered. It goes through the one
 	// door anyway rather than a subset-only shortcut: a second construction path is a second place the
 	// check could be skipped, which is the shape this whole mechanism exists to remove.
-	return try FunctionNameIndex.create(module.functions, project: project)
+	let funcNames = try FunctionNameIndex.create(module.functions, project: project)
+	return DeadFunctionSurvivors.create(funcNames, referencedGlobals: referencedGlobals)
 end 'eliminateDeadFunctions'
 
-// ⭐⭐ **THE PRE-ELIMINATION PASSES BET ON THIS PASS, AND THIS IS WHERE THE BET IS SETTLED.** Four passes
-// that run BEFORE the back end skip a function `LibraryFacts.unreachable` names — `lowerMaxonToStd` (its
+// What the prune leaves behind: the index over the surviving functions, and every `.data` label one of them
+// names in a `globalAddr` — the set `GlobalDataTable.layOut` keeps a walked runtime word for.
+export type DeadFunctionSurvivors
+	export let funcNames as FunctionNameIndex
+	export let referencedGlobals as ReferencedGlobalLabelSet
+
+	static function create(funcNames FunctionNameIndex, referencedGlobals ReferencedGlobalLabelSet) returns DeadFunctionSurvivors
+		return Self{funcNames: funcNames, referencedGlobals: referencedGlobals}
+	end 'create'
+end 'DeadFunctionSurvivors'
+
+// ⭐ **WHAT THE ENTRY STUB CALLS BY NAME, DERIVED ONCE.** The four stub calls that exist only in some builds
+// — the scheduler's `__gt_run_main`/`__gt_drain_at_exit`, the leak gate, the DebugStream bracket and the
+// coverage dump — are decided here and nowhere else: the reachability roots, the inliner's called-once census
+// and the three stub emitters (`augmentWithRuntime` for x64, `appendArm64RuntimeChunks`,
+// `buildWasmCoreModule`) all read this record, so what the roots keep alive and what a stub calls cannot
+// disagree. Built from the usage record in `compileToCodeResult` and held on the project, because the census
+// runs mid-pipeline where no usage record is in reach.
+export type EntryStubCalls
+	export let runsMainOnAGreenThread as bool
+	export let checksLeaks as bool
+	export let bracketsDebugStream as bool
+	export let dumpsCoverage as bool
+
+	export static function none() returns EntryStubCalls
+		return Self{runsMainOnAGreenThread: false, checksLeaks: false, bracketsDebugStream: false, dumpsCoverage: false}
+	end 'none'
+
+	export static function fromUsage(usage RuntimeUsage) returns EntryStubCalls
+		return Self{runsMainOnAGreenThread: usage.usesGt, checksLeaks: usage.usesHeap, bracketsDebugStream: usage.usesDebugStream, dumpsCoverage: usage.usesCoverage}
+	end 'fromUsage'
+end 'EntryStubCalls'
+
+// ⭐⭐ **THE PRE-ELIMINATION PASSES BET ON THIS PASS, AND THIS IS WHERE THE BET IS SETTLED.** Every pass
+// that runs BEFORE the back end skips a function `LibraryFacts.unreachable` names — `lowerMaxonToStd` (its
 // body, and therefore its `.rdata`), `insertRangeChecks` (its guards), `scanRuntimeUsage` (its runtime
-// floor) and `checkCalls` (its target refusal) — every one of them on the premise that THIS pass drops it.
+// floor) and `checkCalls` (its target refusal) among them — every one on the premise that THIS pass drops it.
 // The two derivations are independent: `LibraryFacts` walks the MAXON module from `main` alone, while this
 // walk starts from a strictly LARGER root set (the entry, the stub-called runtime symbols, and every
 // function an `.rdata` slot names) over the STD module. So the premise is a claim about two algorithms
 // agreeing, not a tautology, and it is checked rather than argued.
 //
-// ⭐ **AND `scanRuntimeUsage` BETS TWICE**, because it also skips a `runtime/` body no root reaches
-// (`LibraryFacts.unreachedRuntimeTier`) — built either way, but swept here. Same bet, different stake:
-// see the second loop.
-//
-// ⭐ **AND THE THREE `.rdata` DOORS BET ON A SHARPER SET AGAIN** — `Project.sweptRuntimeTier`, which adds
-// the tier files the compiler DECLARES it calls into for a program whose installer never mints those
-// calls. Same stake as the first loop's, since acting on it means lowering no body: see the third.
+// ⭐ **AND EVERY ONE OF THEM BETS TWICE**, because each also skips a `runtime/` body no root reaches
+// (`LibraryFacts.unreachedRuntimeTier`, through `bodyIsSwept`) — built either way, but swept here. That set
+// is widened once the allocator's gate is known (`withCompilerCalledTierUnreached`), so it also holds the
+// tier files the compiler DECLARES it calls into for a program whose installer mints no such call: see the
+// second loop.
 //
 // ⚠ **AND THE FAILURE IT CATCHES IS SILENT, WHICH IS WHY IT IS A PANIC AND NOT A COMMENT.** A function
 // whose body `lowerMaxonToStd` skipped is EMPTY; if this walk kept it, the program would link cleanly and
@@ -140,29 +183,18 @@ function requireUnreachableLibraryStayedDead(project Project, byName FuncIndexBy
 		end 'reachedAnyway'
 	end 'eachSkipped'
 
-	// ⛔⛔ **THE TIER'S HALF OF THE BET, AND IT FAILS THE OTHER WAY.** A tier body is BUILT whatever this
-	// set says, so nothing here is ever empty — what a name promised is that `scanRuntimeUsage` could skip
-	// it, and that skip decides `.data` words and hand-assembled host chunks. Kept by this walk, the body
-	// survives to `globalAddr` a slot the image never laid out: a link failure or a load of nothing, with
-	// no diagnostic. Over-approximating `unreachedRuntimeTier` is therefore the SAFE direction and this is
-	// where the unsafe one is caught.
+	// ⛔⛔ **THE TIER'S HALF OF THE BET, AND IT STAKES BOTH KINDS OF FAILURE.** A tier body is BUILT
+	// whatever this set says, so for a name the WALK proved unreached nothing here is empty — what that name
+	// promised is that `scanRuntimeUsage` could skip it, and that skip decides which runtime floor,
+	// hand-assembled host chunks and import bands the image carries; kept by this walk, the body survives to
+	// call into a floor nothing installed, a link failure with no diagnostic. For a name
+	// `withCompilerCalledTierUnreached` added the stake is the first loop's instead — the lowering skipped
+	// the body outright, so keeping it is an EMPTY function the program calls. Both are caught here.
 	for name in project.libraryFacts.unreachedRuntimeTier 'eachUncredited'
 		if thisWalkReached(name, byName: byName, reached: reached) 'reachedAnyway'
-			panic("requireUnreachableLibraryStayedDead: '{String.from(name)}' is in LibraryFacts.unreachedRuntimeTier — so `scanRuntimeUsage` skipped its body and none of the runtime its calls ask for was installed — yet this pass reached it from the root set and would keep it. The two reachability derivations disagree: this pass reached the tier entry along an edge the Maxon-tier walk in StdlibSource does not model. Keeping it would emit a body reading `.data` words and host chunks this image never laid out")
+			panic("requireUnreachableLibraryStayedDead: '{String.from(name)}' is in LibraryFacts.unreachedRuntimeTier — so `lowerMaxonToStd` lowered no body for it, `insertRangeChecks` emitted no guards, and `scanRuntimeUsage` credited none of its calls — yet this pass reached it from the root set and would keep it. The two reachability derivations disagree: this pass reached the tier entry along an edge the Maxon-tier walk in StdlibSource does not model, or an installer minted a call into a compiler-called tier file that `LibraryFacts.withCompilerCalledTierUnreached` filed unreached. Keeping it would emit an EMPTY body calling into a runtime floor this image never installed")
 		end 'reachedAnyway'
 	end 'eachUncredited'
-
-	// ⛔⛔ **AND THE SHARPER SET'S HALF, WHERE THE DIRECTION OF RISK IS THE FIRST LOOP'S RATHER THAN THE
-	// SECOND'S.** `Project.sweptRuntimeTier` is what the three pre-elimination `.rdata` doors act on, and
-	// acting on it means lowering NO BODY — so a name here that this walk keeps is an EMPTY function the
-	// program calls. It is a superset of `unreachedRuntimeTier`: the extra names are the compiler-called tier
-	// files in a program whose installer never mints their calls, and this is the only thing standing behind
-	// that join.
-	for name in project.sweptRuntimeTier 'eachSwept'
-		if thisWalkReached(name, byName: byName, reached: reached) 'reachedAnyway'
-			panic("requireUnreachableLibraryStayedDead: '{String.from(name)}' is in Project.sweptRuntimeTier — so `lowerMaxonToStd` lowered no body for it and `insertRangeChecks` emitted no guards — yet this pass reached it from the root set and would keep it. Either the Maxon-tier walk in StdlibSource missed an edge, or an installer minted a call into a compiler-called `runtime/` file for a program `sweptRuntimeTierNames` judged not to reach it. Keeping it would emit an EMPTY function the program calls")
-		end 'reachedAnyway'
-	end 'eachSwept'
 end 'requireUnreachableLibraryStayedDead'
 
 // Whether THIS pass's walk kept a library function, for a name the module may not define at all — the
@@ -242,9 +274,10 @@ end 'thisWalkReached'
 //        `__mm_leak_check`'s note above predicts.
 //      * `__gt_drain_at_exit` — the entry stub's scheduler teardown (`BackendDispatch.prependEntryStub`),
 //        in exactly `__mm_leak_check`'s position and for exactly its reason.
-//    They are rooted unconditionally: a name absent from this module is simply not found (a program
-//    with no heap has no `__mm_leak_check` to keep), so the root costs nothing where the runtime it
-//    belongs to was never installed.
+//    A chunk-called name is rooted on the target gate its chunk rides, and a stub-called one on the fact the
+//    stub emits its call from (`EntryStubCalls`) — while the REFUSAL below reads every name whatever the
+//    gate says (`compilerOwnedRoots`); a name absent from this module is simply not found, so a root costs
+//    nothing where the runtime it belongs to was never installed.
 //
 // 3. **Every function named by an `.rdata` slot** (`GlobalDataTable.pendingRdataRelocs`) — a layout
 //    descriptor's `destroyFunc@40`/`copyFunc@32` and every witness-table method slot. These are
@@ -275,8 +308,8 @@ function seedRoots(globalData GlobalDataTable, project Project, index FunctionNa
 	markLiveFunction(project.entryFunctionName, byName: index.byName, reached: reached, worklist: worklist)
 	seedTestRoots(index, reached: reached, worklist: worklist)
 
-	for name in compilerOwnedRootNames(project.target) 'eachOwnedRoot'
-		try markCompilerOwnedRoot(name, project: project, index: index, reached: reached, worklist: worklist)
+	for root in compilerOwnedRoots(project.target, stub: project.entryStubCalls) 'eachOwnedRoot'
+		try markCompilerOwnedRoot(root, project: project, index: index, reached: reached, worklist: worklist)
 	end 'eachOwnedRoot'
 
 	for reloc in globalData.pendingRdataRelocs 'eachRdataSlot'
@@ -306,36 +339,46 @@ end 'seedRoots'
 //   * `__gt_preempt` — the preemption's Std half, called only from the hand-assembled `__gt_guard_tripped`'s
 //     preempt arm.
 //   * `__ds_init` / `__ds_shutdown` and `__cov_dump` — the entry stub's debugstream and coverage brackets.
-module function compilerOwnedRootNames(target Target) returns ByteArrayArray
-	var names = ByteArrayArray.create()
-	names.push(ModuleInitName)
-	names.push(GlobalCleanupName)
-	names.push(MmLeakCheckName)
-	names.push(GtReadyLockedName)
-	names.push(SchedWakeOrSpawnName)
+//
+// ⭐⭐ **ONE ROSTER, AND THE GATE RIDES ON EACH ENTRY RATHER THAN FILTERING THE LIST.** The roster is the
+// VOCABULARY — every name the stub or a chunk can ever call, which is what makes each one the compiler's —
+// and `isCalledHere` is the per-build fact: a stub call is rooted on the stub's own facts
+// (`EntryStubCalls`), a chunk call on the TARGET gate its chunk rides. The two readers split on that flag:
+// a declaration under ANY name here is refused (the legality of a name must not turn on which runtime
+// floor this program carries — E4015's ruling), and only a name called HERE is rooted or kept out of the
+// called-once rule. A second, ungated list would be the same roster spelled twice.
+module function compilerOwnedRoots(target Target, stub EntryStubCalls) returns CompilerOwnedRootArray
+	var roots = CompilerOwnedRootArray.create()
+	roots.push(CompilerOwnedRoot.create(ModuleInitName, isCalledHere: true))
+	roots.push(CompilerOwnedRoot.create(GlobalCleanupName, isCalledHere: true))
+	roots.push(CompilerOwnedRoot.create(MmLeakCheckName, isCalledHere: stub.checksLeaks))
+	roots.push(CompilerOwnedRoot.create(GtReadyLockedName, isCalledHere: true))
+	roots.push(CompilerOwnedRoot.create(SchedWakeOrSpawnName, isCalledHere: true))
+	roots.push(CompilerOwnedRoot.create(SchedSyscallRegainName, isCalledHere: targetBracketsBlockingSyscalls(target)))
+	roots.push(CompilerOwnedRoot.create(SchedEnterSyscallName, isCalledHere: targetCallsTheSyscallBracket(target)))
+	roots.push(CompilerOwnedRoot.create(SchedExitSyscallName, isCalledHere: targetCallsTheSyscallBracket(target)))
+	roots.push(CompilerOwnedRoot.create(PreemptSafeName, isCalledHere: targetStopsThreadsForPreemption(target)))
+	roots.push(CompilerOwnedRoot.create(AsyncPreemptParkName, isCalledHere: targetStopsThreadsForPreemption(target)))
+	roots.push(CompilerOwnedRoot.create(GtDrainAtExitName, isCalledHere: stub.runsMainOnAGreenThread))
+	roots.push(CompilerOwnedRoot.create(GtRunMainName, isCalledHere: stub.runsMainOnAGreenThread))
+	roots.push(CompilerOwnedRoot.create(GtPreemptName, isCalledHere: true))
+	roots.push(CompilerOwnedRoot.create(DsInitName, isCalledHere: stub.bracketsDebugStream))
+	roots.push(CompilerOwnedRoot.create(DsShutdownName, isCalledHere: stub.bracketsDebugStream))
+	roots.push(CompilerOwnedRoot.create(CoverageDumpName, isCalledHere: stub.dumpsCoverage))
+	return roots
+end 'compilerOwnedRoots'
 
-	if targetBracketsBlockingSyscalls(target) 'theSyscallHandoffIsBuilt'
-		names.push(SchedSyscallRegainName)
-	end 'theSyscallHandoffIsBuilt'
+// One name the compiler owns, and whether this build's stub or chunks call it (`compilerOwnedRoots`).
+export type CompilerOwnedRoot
+	export let name as ByteArray
+	export let isCalledHere as bool
 
-	if targetCallsTheSyscallBracket(target) 'theBracketIsCalled'
-		names.push(SchedEnterSyscallName)
-		names.push(SchedExitSyscallName)
-	end 'theBracketIsCalled'
+	static function create(name ByteArray, isCalledHere bool) returns CompilerOwnedRoot
+		return Self{name: name, isCalledHere: isCalledHere}
+	end 'create'
+end 'CompilerOwnedRoot'
 
-	if targetStopsThreadsForPreemption(target) 'itCanStopAThread'
-		names.push(PreemptSafeName)
-		names.push(AsyncPreemptParkName)
-	end 'itCanStopAThread'
-
-	names.push(GtDrainAtExitName)
-	names.push(GtRunMainName)
-	names.push(GtPreemptName)
-	names.push(DsInitName)
-	names.push(DsShutdownName)
-	names.push(CoverageDumpName)
-	return names
-end 'compilerOwnedRootNames'
+export typealias CompilerOwnedRootArray = Array with CompilerOwnedRoot
 
 // ⭐⭐ **A FOURTH KIND OF ROOT: EVERY `test` DECLARATION.** Nothing CALLS a test — that is what a test IS,
 // a body the program reaches by no edge — so this walk would drop every one of them and the binary would
@@ -359,20 +402,24 @@ function seedTestRoots(index FunctionNameIndex, reached BoolArray, worklist Func
 	end 'eachFunction'
 end 'seedTestRoots'
 
-// Root one of the names the compiler owns, refusing a declaration that took it. The provenance test is
-// the SAME one `refuseDuplicateFunctionName` makes and reads the same field for the same reason: a parsed
-// function carries a `sourceFilePath` and a synthesized one cannot.
-function markCompilerOwnedRoot(name ByteArray, project Project, index FunctionNameIndex, reached BoolArray, worklist FuncIndexArray) throws CompileError
-	let func = try index.funcNamed(name) otherwise 'notAModuleFunction'
+// Refuse a declaration that took one of the names the compiler owns, and root the name where this build
+// calls it. The refusal reads the whole roster and the root reads the gate, so a name is the compiler's in
+// every program and kept alive only in the ones that call it. The provenance test is the SAME one
+// `refuseDuplicateFunctionName` makes and reads the same field for the same reason: a parsed function
+// carries a `sourceFilePath` and a synthesized one cannot.
+function markCompilerOwnedRoot(root CompilerOwnedRoot, project Project, index FunctionNameIndex, reached BoolArray, worklist FuncIndexArray) throws CompileError
+	let func = try index.funcNamed(root.name) otherwise 'notAModuleFunction'
 		return
 	end 'notAModuleFunction'
 
 	if not func.sourceFilePath.isEmpty() 'declared'
-		reportPositioned(project, code: ErrorCode.declarationTakesCompilerOwnedName, message: "declaration of '{String.from(name)}' takes a name the compiler owns: it roots that name into every program's reachability set, for a function it emits itself. This program installs no runtime under it, so the declaration is what the root would keep — with an EMPTY body, since the passes that lower bodies were told the name was unreachable. Rename the declaration", line: func.nameLine, column: func.nameColumn, filePath: func.sourceFilePath)
+		reportPositioned(project, code: ErrorCode.declarationTakesCompilerOwnedName, message: "declaration of '{String.from(root.name)}' takes a name the compiler owns: it roots that name into every program's reachability set, for a function it emits itself. This program installs no runtime under it, so the declaration is what the root would keep — with an EMPTY body, since the passes that lower bodies were told the name was unreachable. Rename the declaration", line: func.nameLine, column: func.nameColumn, filePath: func.sourceFilePath)
 		throw CompileError.compileError
 	end 'declared'
 
-	markLiveFunction(name, byName: index.byName, reached: reached, worklist: worklist)
+	if root.isCalledHere 'calledByThisBuild'
+		markLiveFunction(root.name, byName: index.byName, reached: reached, worklist: worklist)
+	end 'calledByThisBuild'
 end 'markCompilerOwnedRoot'
 
 // Mark `name` reachable and queue its body for the walk. A name this module does not define is not an
@@ -444,15 +491,20 @@ function referenceKeepingAlive(module StdModule, name ByteArray, byName FuncInde
 	return "a root (`seedRoots`) names it and no reached function does"
 end 'referenceKeepingAlive'
 
-// Every static callee edge out of one live function. Walks LIVE ops (`IrModule.liveOpIndices`), never
-// the flat `module.ops` array: that array is append-only and holds the ops every prior block-rebuilding
-// pass replaced, so scanning it would resurrect callees from IR that no longer exists.
-function markCalleesOf(module StdModule, func IrFunction, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, reference StdFunctionReference)
+// Every static callee edge out of one live function, and every `.data` label it names. Walks LIVE ops
+// (`IrModule.liveOpIndices`), never the flat `module.ops` array: that array is append-only and holds the
+// ops every prior block-rebuilding pass replaced, so scanning it would resurrect callees — and keep runtime
+// words alive — from IR that no longer exists.
+function markReferencesOf(module StdModule, func IrFunction, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, reference StdFunctionReference, referencedGlobals ReferencedGlobalLabelSet)
 	for opIdx in module.liveOpIndices(func) 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("eliminateDeadFunctions: live op index {opIdx} not in module.ops")
 		markCalleeOf(op, byName: byName, reached: reached, worklist: worklist, reference: reference)
+
+		if stdOpNamesAGlobalLabel(op) 'namesASlot'
+			referencedGlobals.insert(stdOpGlobalLabel(op))
+		end 'namesASlot'
 	end 'eachOp'
-end 'markCalleesOf'
+end 'markReferencesOf'
 
 // The static reachability edge one `StdOp` names, if any. Read here to walk the call graph and by the
 // inliner's called-once census, which counts the direct calls and refuses a callee anything else names.

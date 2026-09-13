@@ -82,6 +82,55 @@ mm_free ArrayRecord #5
 mm_free StringBuilder #2
 ```
 
+<!-- test: debugstream-predicate-selects-the-traced-arm -->
+⭐ **`#if debugstream` IS A BUILD PREDICATE, AND A TRACED BUILD TAKES ITS ARM.** The flag is decided
+before any token is filtered, so it is a token-tier predicate like `os` and `arch`, not a per-program
+usage bit. The arm allocates a string the untraced twin never does, and the trace shows it.
+<!-- MmTrace -->
+```maxon
+function main() returns ExitCode
+	#if debugstream(true)
+		let n = 7
+		let s = "traced {n}"
+		print(s)
+		return 1
+	#else
+		return 0
+	#endif
+end 'main'
+```
+```exitcode
+1
+```
+
+```mm-trace
+mm_alloc InterpolationScratch #1 size=21
+mm_alloc StringRecord #2 size=65
+mm_decref InterpolationScratch #1 rc=0
+mm_free InterpolationScratch #1
+mm_decref StringRecord #2 rc=0
+mm_free StringRecord #2
+```
+
+<!-- test: debugstream-predicate-drops-the-arm-untraced -->
+The untraced twin of the case above: the arm is filtered out at the token tier, so the program neither
+allocates nor prints, and the `#else` arm's exit code says which one ran.
+```maxon
+function main() returns ExitCode
+	#if debugstream(true)
+		let n = 7
+		let s = "traced {n}"
+		print(s)
+		return 1
+	#else
+		return 0
+	#endif
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: heap-alloc-free -->
 An interpolated `String` costs ONE record: one `mm_alloc`, one `mm_free`, and a balanced refcount
 column in between. That is what this pins — the allocation count, not the retain count.

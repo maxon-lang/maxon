@@ -238,9 +238,10 @@ end 'MultiMSharing'
 // orders `.data` by storage size descending, so a narrower runtime slot lands behind every user global of
 // every width instead of displacing the ones narrower than a word.
 //
-// ⚠ **THE `usage`/`--debugstream` GATES STAY AT THE CALL SITES.** Whether a slot is laid out at all is a
-// question about the PROGRAM; this door answers a question about the SLOT.
-export function pushRuntimeGlobal(out DataSectionEntryArray, label ByteArray, sharing MultiMSharing, seed ParsedInt = 0, valueType StdType = StdType.i64)
+// `reach` says who lays the slot out (`DataReach`): a `walked` slot only if a function surviving
+// dead-function elimination names it, a `declared` slot whenever this push runs — so a `declared` push sits
+// behind the gate of the chunk or stub that reads the word, and a `walked` push behind no gate at all.
+export function pushRuntimeGlobal(out DataSectionEntryArray, label ByteArray, sharing MultiMSharing, reach DataReach, seed ParsedInt = 0, valueType StdType = StdType.i64)
 	match sharing 'classified'
 		atomicStep or
 			underSchedLock or
@@ -250,7 +251,7 @@ export function pushRuntimeGlobal(out DataSectionEntryArray, label ByteArray, sh
 		unclassified then panic("pushRuntimeGlobal: '{String.from(label)}' is laid out with no multi-M sharing class. A `.data` word is reachable from every OS thread by construction, so it needs one of: atomicStep (every mutation is an atomicRmw/atomicCas wherever a second M can exist), underSchedLock (every read and write inside `__sched_lock`), sealedBeforeWorkers (written only during bring-up, which no worker M can race), monotoneApproximation (a plain RMW whose lost update is bounded and self-correcting), or lastWriterWins (one word whose contract never said which writer wins). Argue the choice at the site. See MultiMSharing.")
 	end 'classified'
 
-	out.push(DataSectionEntry.create(String.from(label), valueType: valueType, value: seed))
+	out.push(DataSectionEntry.create(String.from(label), valueType: valueType, value: seed, reach: reach))
 end 'pushRuntimeGlobal'
 
 // One machine word — the stride of the `P*` array `__sched_procs` points at, the width of every scalar field
@@ -1858,8 +1859,9 @@ let SchedArenaCarveName = b"__sched_arena_carve"
 // below takes every member.
 //
 // ⚠ **IT IS A NAME TEST AND NOT A PREFIX TEST**: the `__sched_` band also holds scheduler INTERNALS a program
-// never writes (`isSchedRuntimeCallee`), and one member is a `__slab_` name, because the number it reports is
-// the ALLOCATOR's (see `SlabRuntime.SlabRemoteFreeCountName`).
+// never writes and the two cpu-parallel queries that take no scheduler (`CpuParallelRuntime`), and one
+// member is a `__slab_` name, because the number it reports is the ALLOCATOR's (see
+// `SlabRuntime.SlabRemoteFreeCountName`).
 function isSchedPerProcSumCallee(callee ByteArray) returns bool
 	return callee.equals(SchedStealCountName) or callee.equals(SchedRetakeCountName) or callee.equals(SlabRemoteFreeCountName) or callee.equals(SchedGtRecycleCountName) or callee.equals(SchedPreemptCountName) or callee.equals(SchedSliceCountName) or callee.equals(SchedNetpollBlockCountName)
 end 'isSchedPerProcSumCallee'
@@ -2199,110 +2201,108 @@ let DarwinTsdArrayBase = 0 as ParsedInt
 // (`Arm64LinuxRuntime.buildArm64LinuxTlsAllocChunk`, `X64LinuxRuntime.buildX64LinuxTlsAllocChunk`).
 let LinuxThreadPointerBase = 0 as ParsedInt
 
-// The scheduler's `.data` slots. THREE gates rather than one, and the split is always the same question —
-// *can a program that never spawns a green thread read this word?* The worker COUNTERS can
-// (`__Builtins.schedMaxActiveWorkers()`) and so can the processor count
-// (`__Builtins.schedProcessorCount()`); the P machinery itself is meaningless without a scheduler.
+// The scheduler's `.data` slots, in the order the image lays them out. Every word a Std body reads is
+// `walked`: pushed for every program and kept only where a function surviving dead-function elimination
+// names it, so a program that asks `__Builtins.schedMaxActiveWorkers()` having spawned nothing carries the
+// two worker counters and nothing else of the scheduler. The four words a hand-assembled chunk reads
+// (`SchedTlsTebOffsetLabel`, `SchedLockLabel` and the two preemption words) are `declared` on `usesGt`, the
+// gate the chunks ride, because a chunk's relocation needs the word whether or not any body survived.
 export function schedRuntimeGlobals(usage RuntimeUsage, target Target) returns DataSectionEntryArray
 	var out = DataSectionEntryArray.create()
 
 	// ⭐ **SEEDED TO 1 IN `.data`, NOT BY AN INITIALIZER.** A program with no scheduler runs on exactly one M
 	// — its own — and never runs `__gt_init`, so the true answer must already be in the slot, and costs no code.
-	if usage.usesSchedMaxActiveWorkers or usage.usesGt 'workerCounters'
-		pushRuntimeGlobal(out, label: SchedActiveWorkersLabel, sharing: MultiMSharing.atomicStep, seed: 1)
-		pushRuntimeGlobal(out, label: SchedMaxActiveWorkersLabel, sharing: MultiMSharing.monotoneApproximation, seed: 1)
-	end 'workerCounters'
+	pushRuntimeGlobal(out, label: SchedActiveWorkersLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked, seed: 1)
+	pushRuntimeGlobal(out, label: SchedMaxActiveWorkersLabel, sharing: MultiMSharing.monotoneApproximation, reach: DataReach.walked, seed: 1)
 
-	if usage.usesGt 'procs'
-		// Written by `__sched_init_procs` and by nothing else.
-		pushRuntimeGlobal(out, label: SchedTlsIndexLabel, sharing: MultiMSharing.sealedBeforeWorkers)
-		pushRuntimeGlobal(out, label: SchedTlsTebOffsetLabel, sharing: MultiMSharing.sealedBeforeWorkers)
-		pushRuntimeGlobal(out, label: SchedProcsLabel, sharing: MultiMSharing.sealedBeforeWorkers)
+	// Written by `__sched_init_procs` and by nothing else.
+	pushRuntimeGlobal(out, label: SchedTlsIndexLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
 
-		// ⭐ **THE THREE INTRUSIVE HEADS, AND ALL THREE ARE `underSchedLock` FOR THE SAME REASON.** Each is
-		// the head of an intrusive list whose transaction spans TWO words — the head and the joining struct's
-		// own link — which is exactly what that class exists for and exactly what no atomic can make
-		// indivisible. ⚠ **NOT `sealedBeforeWorkers`, though the array beside them is**: `__sched_procs` is
-		// written once at bring-up and read for ever, while these three are mutated by every park and every
-		// wake for the life of the process.
-		pushRuntimeGlobal(out, label: SchedAllMLabel, sharing: MultiMSharing.underSchedLock)
-		pushRuntimeGlobal(out, label: SchedMidleLabel, sharing: MultiMSharing.underSchedLock)
-		pushRuntimeGlobal(out, label: SchedPidleLabel, sharing: MultiMSharing.underSchedLock)
+	if usage.usesGt 'tlsOffsetReadByTheChunks'
+		pushRuntimeGlobal(out, label: SchedTlsTebOffsetLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.declared)
+	end 'tlsOffsetReadByTheChunks'
 
-		// A fourth intrusive head, for the same reason, and the record arena's three words beside it.
-		pushRuntimeGlobal(out, label: SchedGtFreeHeadLabel, sharing: MultiMSharing.underSchedLock)
-		pushRuntimeGlobal(out, label: SchedArenaCursorLabel, sharing: MultiMSharing.underSchedLock)
-		pushRuntimeGlobal(out, label: SchedArenaLimitLabel, sharing: MultiMSharing.underSchedLock)
-		pushRuntimeGlobal(out, label: GtRecordsCarvedLabel, sharing: MultiMSharing.underSchedLock)
+	pushRuntimeGlobal(out, label: SchedProcsLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
 
-		// The three counts kept beside those structures, each stepped only inside the doors that mutate its
-		// structure and therefore under the same lock. `__sched_npidle`'s two unlocked reads are enumerated
-		// under `MultiMSharing.underSchedLock`.
-		pushRuntimeGlobal(out, label: SchedNpidleLabel, sharing: MultiMSharing.underSchedLock)
-		pushRuntimeGlobal(out, label: SchedRunqSizeLabel, sharing: MultiMSharing.underSchedLock)
-		pushRuntimeGlobal(out, label: SchedGlobalPushesLabel, sharing: MultiMSharing.underSchedLock)
-		pushRuntimeGlobal(out, label: SchedTimerScanStepsLabel, sharing: MultiMSharing.underSchedLock)
-		pushRuntimeGlobal(out, label: SchedMcountLabel, sharing: MultiMSharing.underSchedLock)
-		pushRuntimeGlobal(out, label: SchedNmidleLabel, sharing: MultiMSharing.underSchedLock)
+	// ⭐ **THE THREE LIST HEADS ARE `underSchedLock` FOR ONE REASON.** Each is the head of an intrusive list
+	// whose transaction spans TWO words — the head and the joining struct's own link — which is exactly what
+	// that class exists for and exactly what no atomic can make indivisible. ⚠ **NOT `sealedBeforeWorkers`,
+	// though the array beside them is**: `__sched_procs` is written once at bring-up and read for ever,
+	// while these three are mutated by every park and every wake for the life of the process.
+	pushRuntimeGlobal(out, label: SchedAllMLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: SchedMidleLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: SchedPidleLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
 
-		// The main machine, written once before any worker exists, and the process phase the deadlock check and
-		// the exit drain decide by.
-		pushRuntimeGlobal(out, label: SchedMainMLabel, sharing: MultiMSharing.sealedBeforeWorkers)
-		pushRuntimeGlobal(out, label: SchedPhaseLabel, sharing: MultiMSharing.underSchedLock)
+	// A fourth intrusive head, for the same reason, and the record arena's three words beside it.
+	pushRuntimeGlobal(out, label: SchedGtFreeHeadLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: SchedArenaCursorLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: SchedArenaLimitLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: GtRecordsCarvedLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
 
-		// The poller's claim and deadline, the machines waiting to regain a processor, and the poller itself.
-		// Each word's own declaration argues its class.
-		pushRuntimeGlobal(out, label: SchedLastPollLabel, sharing: MultiMSharing.underSchedLock)
-		pushRuntimeGlobal(out, label: SchedPollUntilLabel, sharing: MultiMSharing.underSchedLock)
-		pushRuntimeGlobal(out, label: SchedRegainHeadLabel, sharing: MultiMSharing.underSchedLock)
+	// The three counts kept beside those structures, each stepped only inside the doors that mutate its
+	// structure and therefore under the same lock. `__sched_npidle`'s two unlocked reads are enumerated
+	// under `MultiMSharing.underSchedLock`.
+	pushRuntimeGlobal(out, label: SchedNpidleLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: SchedRunqSizeLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: SchedGlobalPushesLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: SchedTimerScanStepsLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: SchedMcountLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: SchedNmidleLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
 
-		for entry in netpollRuntimeGlobals() 'poller'
-			out.push(entry)
-		end 'poller'
-	end 'procs'
+	// The main machine, written once before any worker exists, and the process phase the deadlock check and
+	// the exit drain decide by.
+	pushRuntimeGlobal(out, label: SchedMainMLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: SchedPhaseLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
 
-	// ⭐⭐ **THE THIRD GATE, AND IT IS THE ARRAY'S LENGTH WEARING A QUERY'S SECOND HAT.**
+	// The poller's claim and deadline, the machines waiting to regain a processor, and the poller itself.
+	// Each word's own declaration argues its class.
+	pushRuntimeGlobal(out, label: SchedLastPollLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: SchedPollUntilLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: SchedRegainHeadLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+
+	for entry in netpollRuntimeGlobals() 'poller'
+		out.push(entry)
+	end 'poller'
+
 	// `__sched_num_procs` is P machinery — the bound `__sched_steal_count` walks to — AND the whole answer
-	// `__Builtins.schedProcessorCount()` gives, which a program may ask having spawned nothing. So it rides the
-	// query's bit exactly as the worker counters ride theirs, rather than dragging the TLS slot, the `P*` array
-	// and the run-queue lock in behind a load.
+	// `__Builtins.schedProcessorCount()` gives, which a program may ask having spawned nothing; being walked,
+	// it costs that program one word and no scheduler.
 	//
 	// ⚠ It is pushed HERE, between the array it measures and the teardown flag, because the layout order is
 	// the `.data` order: moving it would re-lay every green-thread program's section to say nothing new.
-	if usage.usesSchedProcessorCount or usage.usesGt 'processorCount'
-		pushRuntimeGlobal(out, label: SchedNumProcsLabel, sharing: MultiMSharing.sealedBeforeWorkers)
-	end 'processorCount'
+	pushRuntimeGlobal(out, label: SchedNumProcsLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
 
-	if usage.usesGt 'procsTeardown'
-		// ⚠ `__sched_shutdown_flag`'s one writer is the teardown and therefore runs AFTER the workers — see
-		// its own declaration for why that makes it `lastWriterWins` rather than sealed. The lock is
-		// `__sched_init_procs`'s like the three above.
-		pushRuntimeGlobal(out, label: SchedShutdownFlagLabel, sharing: MultiMSharing.lastWriterWins)
-		pushRuntimeGlobal(out, label: SchedLockLabel, sharing: MultiMSharing.sealedBeforeWorkers)
-		pushRuntimeGlobal(out, label: SchedLockDepthSinkLabel, sharing: MultiMSharing.atomicStep)
+	// ⚠ `__sched_shutdown_flag`'s one writer is the teardown and therefore runs AFTER the workers — see
+	// its own declaration for why that makes it `lastWriterWins` rather than sealed.
+	pushRuntimeGlobal(out, label: SchedShutdownFlagLabel, sharing: MultiMSharing.lastWriterWins, reach: DataReach.walked)
 
-		// Every mutation is the `atomicRmw` in `emitSchedSpinningTransition` or the gate's `atomicCas`; see
-		// `SchedSpinningLabel` for what a lost update would cost (a permanently suppressed wakeup).
-		pushRuntimeGlobal(out, label: SchedSpinningLabel, sharing: MultiMSharing.atomicStep)
-		pushRuntimeGlobal(out, label: SchedNeedSpinningLabel, sharing: MultiMSharing.lastWriterWins)
+	// The lock is `__sched_init_procs`'s like the three above; the IOCP completion loop's chunk takes it.
+	if usage.usesGt 'lockReadByTheChunks'
+		pushRuntimeGlobal(out, label: SchedLockLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.declared)
+	end 'lockReadByTheChunks'
 
-		// ⛔ **GATE SITE 3 OF 4 — see `targetBracketsBlockingSyscalls`.** The monitor's event, its asleep flag and
-		// its timer-start count; a lane with no bracket builds no monitor, so there they would be `.data` slots
-		// nothing writes — lines in the `data {` block of every green-thread golden on a lane with no monitor.
-		if targetBracketsBlockingSyscalls(target) 'theMonitorExists'
-			pushRuntimeGlobal(out, label: SchedSysmonEventLabel, sharing: MultiMSharing.underSchedLock)
-			pushRuntimeGlobal(out, label: SchedSysmonWaitLabel, sharing: MultiMSharing.underSchedLock)
-			pushRuntimeGlobal(out, label: SchedTimerStartsLabel, sharing: MultiMSharing.underSchedLock)
-		end 'theMonitorExists'
+	pushRuntimeGlobal(out, label: SchedLockDepthSinkLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
 
-		// ⭐ **GATE SITE — the two words only a lane that SUSPENDS a thread has any writer for.** A signalling
-		// lane suspends nothing and reads no `CONTEXT`; on it these would be slots nothing touches, in the
-		// `data {` block of every green-thread golden.
-		if targetPreemptDelivery(target) == PreemptDelivery.threadSuspend 'theMonitorSuspendsThreads'
-			pushRuntimeGlobal(out, label: SchedPreemptExtLockLabel, sharing: MultiMSharing.atomicStep)
-			pushRuntimeGlobal(out, label: SchedPreemptContextLabel, sharing: MultiMSharing.sealedBeforeWorkers)
-		end 'theMonitorSuspendsThreads'
-	end 'procsTeardown'
+	// Every mutation is the `atomicRmw` in `emitSchedSpinningTransition` or the gate's `atomicCas`; see
+	// `SchedSpinningLabel` for what a lost update would cost (a permanently suppressed wakeup).
+	pushRuntimeGlobal(out, label: SchedSpinningLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: SchedNeedSpinningLabel, sharing: MultiMSharing.lastWriterWins, reach: DataReach.walked)
+
+	// ⛔ **GATE SITE 3 OF 4 — see `targetBracketsBlockingSyscalls`.** The monitor's event, its asleep flag and
+	// its timer-start count; a lane with no bracket builds no monitor, so there no body names them either.
+	if targetBracketsBlockingSyscalls(target) 'theMonitorExists'
+		pushRuntimeGlobal(out, label: SchedSysmonEventLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+		pushRuntimeGlobal(out, label: SchedSysmonWaitLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+		pushRuntimeGlobal(out, label: SchedTimerStartsLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+	end 'theMonitorExists'
+
+	// ⭐ **GATE SITE — the two words only a lane that SUSPENDS a thread has any writer for.** A signalling
+	// lane suspends nothing and reads no `CONTEXT`. Their readers are the monitor's hand-assembled sender and
+	// the trampoline, which ride `usesGt`, so the words are `declared` on it.
+	if usage.usesGt and targetPreemptDelivery(target) == PreemptDelivery.threadSuspend 'theMonitorSuspendsThreads'
+		pushRuntimeGlobal(out, label: SchedPreemptExtLockLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.declared)
+		pushRuntimeGlobal(out, label: SchedPreemptContextLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.declared)
+	end 'theMonitorSuspendsThreads'
 
 	return out
 end 'schedRuntimeGlobals'
@@ -5815,8 +5815,8 @@ function emitSchedSpinningTransition(module StdModule, block IrBlock, m ValueId,
 	// ⭐ **THE STEP GOES THROUGH `MmRuntime.emitGlobalAccumulate`, which is ALREADY the door for exactly this
 	// and is what the file header's audit item 2 names.** One `lock xadd`, whose LOCK prefix is also the
 	// StoreLoad barrier the dance at `SchedSpinningLabel` requires between a decrement and the re-check that
-	// follows it. `multiM: true` is not a choice: the word is laid out only under `usesGt`, and a
-	// green-thread program is precisely one where a second M can exist. The PRIOR value is discarded — Go
+	// follows it. `multiM: true` is not a choice: only scheduler bodies name the word, they exist only under
+	// `usesGt`, and a green-thread program is precisely one where a second M can exist. The PRIOR value is discarded — Go
 	// throws on a negative result here (`"wakep: negative nmspinning"`), and what stands in for that assert
 	// is that these three arms and the waker's give-back are the count's only writers, each stepping by what
 	// its own CAS decided.

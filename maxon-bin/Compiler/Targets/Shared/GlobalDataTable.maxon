@@ -351,15 +351,33 @@ export typealias DataSectionIndexMap = Map with (String, MachineWord)
 // disagree about what `i8 1` is; and the RequiredData gate reads the same pair the image
 // does, so a spec cannot pin a layout the writer does not emit.
 //
-// `offset` is assigned by `layOutDataSection`, which is also the only writer of it.
+// ⭐ **HOW A `.data` SLOT EARNS ITS PLACE IN THE IMAGE.** `layOut` runs after dead-function elimination, so
+// it can ask which labels a SURVIVING function names in a `globalAddr` — and a `walked` slot is laid out only
+// if one does. A `declared` slot is laid out whenever its producer pushed it, because its reader is one the
+// Std walk cannot see: the entry stub, a hand-assembled Target-tier chunk, or `DeadGlobalElimination`, which
+// already decided the user's globals on the Maxon tier.
+//
+// ⛔ A slot read by BOTH a Std body and a chunk is `declared`: the chunk's relocation needs the word whether
+// or not the body survived.
+export enum DataReach
+	walked
+	declared
+end 'DataReach'
+
+// The labels the surviving functions name in a `globalAddr`, collected by dead-function elimination in the
+// same walk that decides survival — so the two cannot disagree about which bodies were counted.
+export typealias ReferencedGlobalLabelSet = Set with ByteArray
+
+// `offset` is assigned by `layOut`, which is also the only writer of it.
 export type DataSectionEntry
 	export var label as String
 	export var valueType as StdType
 	export var value as ParsedInt
+	export var reach as DataReach
 	export var offset as ByteOffset
 
-	export static function create(label String, valueType StdType, value ParsedInt) returns DataSectionEntry
-		return Self{label: label, valueType: valueType, value: value, offset: 0}
+	export static function create(label String, valueType StdType, value ParsedInt, reach DataReach) returns DataSectionEntry
+		return Self{label: label, valueType: valueType, value: value, reach: reach, offset: 0}
 	end 'create'
 end 'DataSectionEntry'
 
@@ -942,8 +960,12 @@ export type GlobalDataTable
 	// pins three equal-sized slots in DECLARATION order (`i8 1`, `i8 0`, `i8 1` for `a`,`b`,`c`).
 	// An unstable sort would order them by whatever the algorithm did that day, and the layout
 	// of a program would stop being a function of its source.
-	export function layOut(declared DataSectionEntryArray)
-		self.dataSection = sortBySizeDescendingStable(declared)
+	//
+	// ⭐ **A `walked` SLOT NOBODY SURVIVING NAMES IS DROPPED BEFORE THE SORT**, and dropping keeps the
+	// survivors' relative order — so a program that reaches every word it names lays each out at the offset
+	// it would have had with nothing dropped (`DataReach`).
+	export function layOut(roster DataSectionEntryArray, referenced ReferencedGlobalLabelSet)
+		self.dataSection = sortBySizeDescendingStable(retainReachedSlots(roster, referenced: referenced))
 		self.dataIndex = DataSectionIndexMap.create()
 
 		// ⭐ **THE RESERVED RUNS GO FIRST, AND THE ZERO-PADDING CLAIM ABOVE SURVIVES IT EXACTLY**:
@@ -975,6 +997,23 @@ export type GlobalDataTable
 
 		self.dataLaidOut = true
 	end 'layOut'
+
+	// ⛔ **EVERY LABEL A SURVIVING `globalAddr` NAMES IS IN THE IMAGE** — a scalar slot or a reserved run —
+	// asked once, by name, right after `layOut`. A miss here is a runtime word whose producer never pushed
+	// it: a body kept alive by an edge no roster foresaw, reading a word its family's roster left out. The
+	// encoders' `dataSectionOffsetOf` would panic on the same label later; this names it at the pass that
+	// can say WHY, and it is the twin of `DeadFunctionElimination.requireUnreachableLibraryStayedDead`.
+	export function requireLaidOutCoversReferences(referenced ReferencedGlobalLabelSet)
+		for label in referenced 'eachReference'
+			let name = String.from(label)
+
+			if self.dataIndex.contains(name) or self.dataBlobIndex.contains(name) 'laidOut'
+				continue
+			end 'laidOut'
+
+			panic("GlobalDataTable.requireLaidOutCoversReferences: a function that survives dead-function elimination names '{name}' in a `globalAddr`, and no `.data` slot or reserved run carries that label — the runtime roster that owns the word did not push it (`BackendDispatch.dataSectionRoster`), or a `declared` word's gate is narrower than the readers that reach it")
+		end 'eachReference'
+	end 'requireLaidOutCoversReferences'
 
 	// The byte image of the `.data` section, in layout order: the reserved runs verbatim, then
 	// each scalar slot rendered from its `(value, valueType)`. Little-endian, matching every
@@ -1029,6 +1068,25 @@ end 'GlobalDataTable'
 // rests its zero-padding claim on, named here because `sortBySizeDescendingStable` is the code
 // that walks the size classes and would otherwise re-state the bound as a literal.
 let MaxDataSlotBytes = 8 as BytePos
+
+// The roster minus every `walked` slot no surviving function names; `declared` slots pass untouched. Order
+// is preserved, which is what keeps every kept slot at the offset it has in a program that drops nothing.
+function retainReachedSlots(roster DataSectionEntryArray, referenced ReferencedGlobalLabelSet) returns DataSectionEntryArray
+	var kept = DataSectionEntryArray.create()
+
+	for entry in roster 'each'
+		let isKept = match entry.reach 'reach'
+			declared gives true
+			walked gives referenced.contains(entry.label.toByteArray())
+		end 'reach'
+
+		if isKept 'kept'
+			kept.push(entry)
+		end 'kept'
+	end 'each'
+
+	return kept
+end 'retainReachedSlots'
 
 // `declared` ordered by storage size, LARGEST FIRST, preserving declaration order among equal
 // sizes — see `GlobalDataTable.layOut` for why both halves are load-bearing.
