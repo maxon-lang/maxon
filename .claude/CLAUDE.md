@@ -2,6 +2,9 @@ You do not care if an issue is pre-existing. Just debug and fix it.
 
 Do not use "cmd /c" to run commands
 
+Do not use heredocs. Write a file with the file-writing tool, and pass prose to a command from a file
+(`git commit -F <path>`) rather than inline. A heredoc breaks on the punctuation real prose contains.
+
 There are no time constraints. Complexity doesn't matter. If you are fixing an issue then fix it properly. No workarounds.
 
 ## Where the rules live
