@@ -145,10 +145,11 @@ beside every phase; these tables carry the raw counts it is taken from.
 | **the CPU rung-over-rung RATIO** | **The durable part, and it survives a busy box.** Absolute ticks do NOT: a fully CPU-loaded machine inflated every rung by **+49% to +52%** (cache and SMT contention — this counter ignores preemption, not contention). But it inflated them *uniformly*, so the growth reading came through nearly intact: **loaded ×1.90/×1.98 against idle ×1.86/×2.00.** Compare ratios across dates and boxes; compare absolutes only within one machine's own quiet runs. |
 | **wall time** | **Not measured, and never will be here.** It is machine-dependent in the way that matters: it counts every *other* process too, so a dated column of it would compare a loaded box in July against an idle one in August. Measured: one run read `phase:parse` at ×5.03 then ×1.78 across a doubling ladder — preemption, not a curve. For the milliseconds of one compile, use the compiler's own `--log=compiler:debug`, which now prints a `cpu%` column beside the wall `%`; a phase where the two disagree spent its wall time not running. |
 
-These are the compiler's own allocation counts and byte volumes while compiling that rung — **not**
-peak resident memory, which nothing currently measures.
+These are the compiler's own allocation counts and byte volumes while compiling that rung — the byte
+volume being every slab request's, **a box's header included**, in every phase — **not** peak resident
+memory, which nothing currently measures.
 
-> ### ⚠ THREE READING RULES. The first two are the 2026-07-14 Go-growth / raw-counter change; the third is about the CORPUS:
+> ### ⚠ FOUR READING RULES. The first two are the 2026-07-14 Go-growth / raw-counter change; the third is about the CORPUS; the fourth is the byte column's box headers:
 >
 > **1. ×2.1 — not ×2.00 — is the byte column's LINEAR reading.** `Array` grows by Go's `nextslicecap`
 > (double below 256 elements, then ease toward 1.25×), and that ratio is a *function of the buffer's
@@ -175,6 +176,14 @@ peak resident memory, which nothing currently measures.
 > compiler change: FloatsLivePerSpillLoop 4 -> 12"* opens with prose instead of the usual banner, yet
 > it is a full boundary — rung 5 goes 16,020,150 → 16,223,032 across two rows whose compiler is
 > byte-identical.
+>
+> **4. The `bytes` column counts each box's HEADER with its payload in every phase, and older rows'
+> main-thread phases do not.** `PhaseProbe` brackets a main-thread phase with the process-wide totals
+> (`__Builtins.processAllocBytes`), which count the whole slab request, exactly as a pool worker's
+> per-thread column (`threadAllocBytes`) always has. Rows minted before it read those totals summed the
+> header-free per-layer volumes for a main-thread phase instead, so the first row minted by a compiler
+> that reads them steps up once in `bytes` — one header per box — without the compiler doing more. The
+> `allocs` column and the frees did not move: both readings are the same raw columns.
 
 Frees are measured and reported but not tabulated here: they track allocations almost exactly, so a
 third table would be a near-duplicate paid for in width. They are in `--result-json` for anyone who

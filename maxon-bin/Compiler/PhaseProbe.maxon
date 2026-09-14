@@ -21,16 +21,15 @@
 // use, while CPU time cannot see preemption at all (see CompileTimings' header).
 //
 // This is not free the way the memory ordering is. A memory counter read allocates
-// nothing, so widening its interval changes the delta by exactly zero — which is why it
-// can sit outermost without comment. A CPU read COSTS ~302 ns (it is a syscall; the wall
-// clock is ~23 ns), so each probe adds roughly 600 ns of its own to the ENCLOSING phase's
-// CPU figure. The register allocator probes per FUNCTION, so that bill grows with function
-// count — which is LINEAR in program size, so it adds a linear term to every phase and
-// cannot manufacture a curve where there is none. It can only make a genuinely flat phase
-// look faintly linear, and it is measured rather than assumed.
+// nothing, so it bills the phase nothing of the probe's own wherever it sits. A CPU read is
+// a syscall, an order of magnitude dearer than the wall clock, so each probe adds two of its
+// own to the ENCLOSING phase's CPU figure. The register allocator probes per FUNCTION, so
+// that bill grows with function count — LINEAR in program size, so it adds a linear term to
+// every phase and cannot manufacture a curve where there is none. It can only make a
+// genuinely flat phase look faintly linear.
 
-// A count of heap allocations. A cumulative counter read out of the running process's own
-// allocator (see `__Builtins.mm*`), so it is monotonic and cannot go negative.
+// A count of heap allocations or frees. A cumulative counter read out of the running process's own
+// allocator (see `CounterSource`), so it only rises and cannot go negative.
 //
 // ITS BOUND IS ITS OWN. `AllocCountArray` and `ByteCountArray` are two instances because their
 // element aliases are two names, whatever their ranges say, so neither bound constrains the other
@@ -38,7 +37,7 @@
 //
 // Both stay FULL-RANGE UNSIGNED, deliberately. A cumulative counter read out of the allocator is
 // unsigned by nature and NOTHING HOSTILE ARRIVES AT IT: every value is minted by the runtime's own
-// `__Builtins.mm*` counters, never passed in by a caller, so there is no door here for a guard to
+// counters, never passed in by a caller, so there is no door here for a guard to
 // stand at and no computed negative to catch. That is the test — not "can it be negative?" but
 // "can a value this type did not mint reach it?". Contrast `Array`'s `ElementIndex`, which is
 // equally never-negative in principle and is NARROWED anyway, because `arr.get(-1)` is a thing a
@@ -58,7 +57,7 @@ export typealias ByteCountArray = Array with HeapByteCount
 // The phase spans this process has OPENED and not yet closed, innermost LAST.
 typealias TraceNameArray = Array with TraceName
 
-// ⚠ **THE REGISTER ALLOCATOR'S SUB-PHASES NO LONGER RIDE THIS STACK** — they bracket with
+// ⚠ **THE REGISTER ALLOCATOR'S SUB-PHASES DO NOT RIDE THIS STACK** — they bracket with
 // `PhaseProbe.beginCounters`, which opens no span, because a pool of workers cannot open seven
 // strictly-nesting spans at once. Only the `regalloc` phase itself has one, on the main thread.
 //
@@ -98,8 +97,6 @@ var openPhaseSpans = TraceNameArray.create()
 
 // What one phase consumed. The unit of attribution: every phase in the report is one of
 // these, and the report's job is to prove they sum to the whole compile.
-//
-// `frees` is DERIVED, never counted — see PhaseProbe.elapsed.
 export type PhaseDelta
 	export var nanos as DurationNanos
 	export var cpuTicks as CpuTicks
@@ -137,12 +134,21 @@ end 'PhaseDelta'
 // ⭐⭐ **WHICH COUNTERS A BRACKET READS — and the two are not interchangeable, which is why the probe
 // remembers its own.**
 //
-//   * `processWide` sums the allocator's own `.data` columns. Exact for a phase NOTHING ELSE IS RUNNING
-//     ALONGSIDE, which every main-thread phase is, and it is what the run total must be measured with:
-//     the totals are the process's.
+//   * `processWide` reads the allocator's totals over every thread. It is what a main-thread phase and the
+//     run total are measured with, because the totals are the process's — and a main-thread bracket DOES
+//     run alongside other threads: `stdFanOut` and `regalloc` wait inside their brackets while a pool's
+//     workers allocate, and a worker whose handle is dropped finishes on its own thread, into whatever
+//     bracket the main thread has opened since.
 //   * `callingThread` reads the columns the allocator keeps on the running GREEN THREAD. It is what a
-//     bracket opened inside a POOL WORKER must use — the register allocator's sub-phases are the only
-//     ones — because the process-wide words are being stepped by fifteen other workers at the same time.
+//     bracket opened inside a POOL WORKER must use, because the process-wide totals count every other
+//     worker too.
+//
+// ⛔⛔ **EVERY READING IS OF A QUANTITY THAT ONLY RISES, WHATEVER ELSE IS RUNNING, AND THAT IS WHAT MAKES
+// EACH DELTA A PLAIN SUBTRACTION.** A process-wide total is one cumulative column summed over every row
+// (`MmRuntime.MmCounterProcessAllocsName`); a per-thread column is a field only its own strand steps, and a
+// bracket on it opens and closes on that strand, a green thread at both ends. A figure DERIVED by
+// subtracting one walk from another — a total less a live count — is not such a quantity: an allocation
+// landing between the walks moves one term alone, and the closing reading can stand below the opening one.
 //
 // ⛔ **THE TWO MUST NOT BE MIXED WITHIN ONE BRACKET.** A probe opened on one source and closed on the
 // other subtracts two unrelated numbers, so the source travels in the probe and `elapsed` reads it back.
@@ -156,9 +162,7 @@ export type PhaseProbe
 	export var nanos as InstantNanos
 	export var cpuTicks as CpuTicks
 
-	// Cumulative allocations and cumulative FREES at the instant the phase opened. The process-wide source
-	// keeps no free counter — it keeps a LIVE one — so its cumulative frees are read as `total - live`,
-	// which is exact at every instant by definition. See `freesSoFar`.
+	// Cumulative allocations, frees and bytes at the instant the phase opened.
 	export var allocTotal as AllocCount
 	export var freeTotal as AllocCount
 	export var bytes as HeapByteCount
@@ -236,7 +240,7 @@ export type PhaseProbe
 		self.freeTotal = freesSoFar(self.source)
 		self.bytes = bytesSoFar(self.source)
 		self.nanos = Clock.nowNanos()
-		self.cpuTicks = threadCpuTicks()
+		self.cpuTicks = __Builtins.threadCpuTicks() as CpuTicks
 	end 'readCounters'
 
 	// Open a bracket around a pipeline phase. The name comes from the phase, so the span the
@@ -247,18 +251,9 @@ export type PhaseProbe
 
 	// Close the bracket. Clock first, counters after — see this file's header.
 	//
-	// FREES ARE DERIVED, NOT COUNTED. The allocator maintains a cumulative allocation
-	// count and a live one; it does not maintain a free count, and adding one would cost a
-	// locked add on the free path (see RuntimeEmitter.EmitMmGlobals). But
-	// `live = total - freed` holds at every
-	// instant by definition, so over any interval `freed = Δtotal - Δlive`, exactly. No
-	// counter is missing; one is redundant.
-	//
-	// A REGROWN BUFFER lands here as ONE ALLOCATION AND ONE FREE, and through that same
-	// identity rather than any special case: growing an array takes a fresh buffer off the
-	// slab (cumulative +1) and frees the old one (live unchanged), so `Δtotal - Δlive` bills
-	// the free with nobody counting it. Array growth IS reallocation, so this is the whole
-	// difference between an alloc column that can see a growth policy and one that cannot.
+	// A REGROWN BUFFER lands here as ONE ALLOCATION AND ONE FREE, with no special case: growing an array
+	// takes a fresh buffer off the slab and frees the old one. Array growth IS reallocation, so this is the
+	// whole difference between an alloc column that can see a growth policy and one that cannot.
 	export function elapsed() returns PhaseDelta
 		var delta = PhaseDelta.zero()
 		self.elapsedInto(delta)
@@ -267,21 +262,22 @@ export type PhaseProbe
 
 	// `elapsed` into a record the caller already holds — a bracket closed once per step per function
 	// (`PoolPhaseCosts.record`) then allocates nothing of its own.
+	//
+	// ⛔ **EVERY DIFFERENCE IS OF TWO READINGS OF A QUANTITY THAT ONLY RISES, SO NONE IS CLAMPED.** The wall
+	// clock is the monotonic one; the CPU clock is the calling green thread's, which its every switch keeps
+	// continuous across a move to another M (`GtRuntime.emitGtSwitchAway`); the counters are `CounterSource`'s.
+	// A reading below its opening one is therefore a broken source, and the non-negative range traps on it
+	// rather than reporting a quietly wrong number.
 	export function elapsedInto(delta PhaseDelta)
-		let endCpuTicks = threadCpuTicks()
-		let elapsedNanos = Clock.elapsedNanos(self.nanos)
+		let endCpuTicks = __Builtins.threadCpuTicks() as CpuTicks
+		let endNanos = Clock.nowNanos()
 
 		// CLOSED ON THE SOURCE IT WAS OPENED ON — see `CounterSource`.
 		let endAllocTotal = allocsSoFar(self.source)
 		let endFreeTotal = freesSoFar(self.source)
 		let endBytes = bytesSoFar(self.source)
 
-		delta.nanos = elapsedNanos
-
-		// The CPU counter is per-thread and monotonic, so this subtraction cannot go
-		// negative while the phase runs on the thread that opened it. If green threads ever
-		// migrate a compile across Ms, that stops being true and this is where it would
-		// surface — as a trap on the non-negative range, not as a quietly wrapped number.
+		delta.nanos = (endNanos - self.nanos) as DurationNanos
 		delta.cpuTicks = endCpuTicks - self.cpuTicks
 		delta.allocs = endAllocTotal - self.allocTotal
 		delta.frees = endFreeTotal - self.freeTotal
@@ -289,92 +285,31 @@ export type PhaseProbe
 	end 'elapsedInto'
 end 'PhaseProbe'
 
-// THE ALLOCATOR HAS TWO LAYERS, AND EVERY FIGURE THIS FILE REPORTS SUMS BOTH.
-//
-// TRACKED objects (a struct, an array's outer handle, a String) carry a refcount header. The
-// RAW buffers behind them (array elements, string bytes) are header-free. The runtime counts
-// them separately — it must, because only the raw live count can say whether a BUFFER leaked —
-// and it is the reader's job to add them up.
-//
-// It matters in both columns, for one reason: THE INTERESTING MEMORY IS RAW. The tracked layer
-// sees little but 8- and 24-byte handles, so a "bytes" figure that omitted the raw layer would
-// report a compiler's memory traffic as very nearly flat. And an "allocs" figure that omitted it
-// cannot see an array buffer being allocated or REGROWN at all — which is not a hypothetical:
-// with the raw count missing, a change of the Array growth policy moved the byte column 22% at
-// the top rung and this column, on the same runs, by exactly zero at every rung.
+// ⭐ **EVERY FIGURE COUNTS BOTH ALLOCATOR LAYERS** — the refcounted boxes and the header-free buffers
+// behind them — because THE INTERESTING MEMORY IS RAW: the tracked layer sees little but 8- and 24-byte
+// handles, so a figure without the raw layer reports a compiler's traffic as nearly flat and cannot see an
+// array buffer being allocated or REGROWN at all. Both sources' readers sum the layers themselves, and
+// both count a box's header in its bytes, so a pool worker's row and a main-thread row are one unit.
 function allocsSoFar(source CounterSource) returns AllocCount
 	return match source 'which'
-		processWide gives processWideAllocs()
-		callingThread gives callingThreadAllocs()
+		processWide gives __Builtins.processAllocTotal() as AllocCount
+		callingThread gives __Builtins.threadAllocTotal() as AllocCount
 	end 'which'
 end 'allocsSoFar'
 
-// ⭐ **THE CUMULATIVE FREE COUNT, AND THE TWO SOURCES REACH IT DIFFERENTLY.** The allocator reports a
-// process-wide (cumulative, live) pair — a live count is what the leak gate needs — so `freed = total -
-// live`. A green thread keeps no live count (it does not own the boxes it allocated), so its frees are
-// counted directly.
-//
-// ⛔ **THE SUBTRACTION IS GUARDED BECAUSE ITS TWO TERMS ARE FOUR SEPARATE READS.** Each reader walks the
-// allocator's rows on its own, so a thread allocating between two of the four walks can leave `live` above
-// `total` by the allocations in flight — and `AllocCount` is unsigned, so the difference would not read as
-// a small negative but as a range-check panic in whatever asked.
 function freesSoFar(source CounterSource) returns AllocCount
 	return match source 'which'
-		processWide gives freedProcessWide()
-		callingThread gives callingThreadFrees()
+		processWide gives __Builtins.processFreeTotal() as AllocCount
+		callingThread gives __Builtins.threadFreeTotal() as AllocCount
 	end 'which'
 end 'freesSoFar'
 
-function freedProcessWide() returns AllocCount
-	let total = processWideAllocs()
-	let live = processWideLive()
-
-	return (total - live) if total >= live else 0 as AllocCount
-end 'freedProcessWide'
-
 function bytesSoFar(source CounterSource) returns HeapByteCount
 	return match source 'which'
-		processWide gives processWideBytes()
-		callingThread gives callingThreadBytes()
+		processWide gives __Builtins.processAllocBytes() as HeapByteCount
+		callingThread gives __Builtins.threadAllocBytes() as HeapByteCount
 	end 'which'
 end 'bytesSoFar'
-
-function processWideAllocs() returns AllocCount
-	return (__Builtins.mmAllocTotal() + __Builtins.mmRawAllocTotal()) as AllocCount
-end 'processWideAllocs'
-
-function processWideLive() returns AllocCount
-	return __Builtins.mmAllocLive() + __Builtins.mmRawAllocLive()
-end 'processWideLive'
-
-function processWideBytes() returns HeapByteCount
-	return (__Builtins.mmAllocBytes() + __Builtins.mmRawAllocBytes()) as HeapByteCount
-end 'processWideBytes'
-
-// The only brackets that read the per-thread columns are the backend pool's — the isel and the
-// allocator's sub-phases, which run on `BackendPool` — so a bracket is only ever open while another
-// thread allocates when that pool is live.
-
-function callingThreadAllocs() returns AllocCount
-	return __Builtins.threadAllocTotal() as AllocCount
-end 'callingThreadAllocs'
-
-function callingThreadFrees() returns AllocCount
-	return __Builtins.threadFreeTotal() as AllocCount
-end 'callingThreadFrees'
-
-function callingThreadBytes() returns HeapByteCount
-	return __Builtins.threadAllocBytes() as HeapByteCount
-end 'callingThreadBytes'
-
-// CPU time consumed by the thread running this compile, in the platform's own unit.
-//
-// Named here rather than called inline at the three sites for the same reason the three
-// counter sums above are: the choice of WHICH counter answers "what did this phase cost"
-// is one decision, and it is made once.
-function threadCpuTicks() returns CpuTicks
-	return __Builtins.threadCpuTicks()
-end 'threadCpuTicks'
 
 // --- Recording a closed bracket against a phase ---
 //
@@ -496,14 +431,6 @@ typealias PoolPhaseIndex = int(0 to u64.max)
 // CALLING GREEN THREAD's (`PhaseProbe.beginCounters` opens on `CounterSource.callingThread`), so a
 // bracket counts what its own worker allocated and nothing else — the sum over workers is then the same
 // figure a one-processor run reports, which is what makes the two lanes comparable at all.
-//
-// ⛔⛔ **THEY READ THE PROCESS-WIDE COUNTERS UNTIL THIS RUNG, AND THE ROWS WERE FICTION ABOVE ONE
-// PROCESSOR.** MEASURED on a stage-2 self-compile: `regalloc:splitting` reported 1,207,232,853
-// allocations at sixteen processors against 77,890,562 at one, for the identical compile — every bracket
-// included the fifteen other workers' traffic for the whole of its span, silently, into `--metrics`,
-// `--log=compiler:debug`, `scale-test` and `docs/optimization-log.md`. The `regalloc` PHASE row and the
-// run total were right throughout: those brackets are the main thread's, and they still open on
-// `CounterSource.processWide` for exactly that reason.
 //
 // Five scalar columns rather than an `Array with PhaseDelta`, for `RegAllocStats.phaseNanos`' reason: a
 // boxed pair per sub-phase per function is thousands of allocations on the one pass the scale ladder
