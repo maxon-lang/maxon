@@ -859,7 +859,7 @@ let Arm64AddShiftedMulMin = 3 as Imm32
 // caller-owned record for that type's own measured reason, since this is asked at every constant
 // multiply the backend lowers.
 export function arm64MulImmForm(imm Imm32, scale MemoryIndexScaleMatch) returns Arm64MulImmForm
-	if log2OfPowerOfTwo(imm as ParsedInt) != NotAPowerOfTwo 'shiftLeft'
+	if isPowerOfTwo(imm as ParsedInt) 'shiftLeft'
 		return Arm64MulImmForm.shiftLeft
 	end 'shiftLeft'
 
@@ -871,19 +871,6 @@ export function arm64MulImmForm(imm Imm32, scale MemoryIndexScaleMatch) returns 
 
 	return Arm64MulImmForm.registerMultiply
 end 'arm64MulImmForm'
-
-// The `LSL` count the `shiftLeft` answer names — the same `log2OfPowerOfTwo` that classified the
-// multiplier, asked again where the operand is needed rather than carried on a record the other two
-// arms have no use for. The panic is the caller's obligation, not a reachable diagnostic.
-export function arm64MulImmShiftCount(imm Imm32) returns ShiftCount
-	let shift = log2OfPowerOfTwo(imm as ParsedInt)
-
-	if shift == NotAPowerOfTwo 'notAShift'
-		panic("arm64MulImmShiftCount: {imm} is not a power of two — ask `arm64MulImmForm` first, and read this only for its `shiftLeft` answer")
-	end 'notAShift'
-
-	return shift as ShiftCount
-end 'arm64MulImmShiftCount'
 
 // The MAGNITUDE of a signed ADD/SUB immediate — the number the imm12 fields actually carry, because
 // the SIGN rides the OPCODE here rather than the field: a negative literal on the ADD side is a SUB
