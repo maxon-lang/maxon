@@ -916,6 +916,26 @@ let ManagedGrownCapName = b"__managed_grown_cap"
 let ManagedGrowName = b"__managed_grow"
 let ManagedCowDetachName = b"__managed_cow_detach"
 
+// ⭐⭐ **THE THREE ELEMENT-GEOMETRY ENTRIES, WHOSE BODIES ARE `runtime/ManagedGeometry.maxon` SOURCE.** Each
+// declares `__Raw.splicedAtEverySite()`, so the inliner puts the body back at every one of these call sites
+// and the band pays no frame for arithmetic a builder used to emit inline.
+//
+// ⛔⛔ **THE BAND IS `__mg_` AND MUST NOT BE `__mm_`, WHICH IS A USAGE FACT RATHER THAN A NAMING TASTE.**
+// `MmRuntime.isRuntimeCallee` reads the `__mm_` prefix as *"this program uses the HEAP"*
+// (`RuntimeUsage.recordCallUsage`), and these bodies are credited REACHED in every program — the roster
+// below says so — so `scanRuntimeUsage` walks them and reads the call one makes to another. Named `__mm_`
+// they set `usesHeap` in a program that allocates nothing, which ships the allocator's `.data` state word
+// and shifts every other word past it. MEASURED as exactly that. Geometry is arithmetic over a stride; it
+// is not the allocator, and it owes a band of its own.
+let MgElementBitsName = b"__mg_element_bits"
+let MgBitsToBytesName = b"__mg_bits_to_bytes"
+let MgElementByteLenName = b"__mg_element_byte_len"
+
+// The tier file the three live in. `StdlibSource.runtimeTierFileIsCompilerCalled` reads it: the calls above
+// are minted into the appended band long after the reachability walk, so the edge is DECLARED or every one
+// of these bodies is filed unreached while the band still calls it.
+export let ManagedGeometryTierFileName = "ManagedGeometry.maxon"
+
 // ⭐ **THE `throws ArrayError` STAMP THE SEVEN THROWING ACCESSORS CARRY, AND WHAT A CALLER'S `otherwise (e)`
 // BINDING IS TYPED FROM** — `managedMemoryThrows`'s twin, exported for the same reason: `runtimeThrowsClause`
 // pairs each family's predicate with its clause speller, and two hand-written spellings of one enum's name is
@@ -1220,6 +1240,10 @@ function claimManagedMemoryOrdinals(project Project, declaration EnumLayout)
 end 'claimManagedMemoryOrdinals'
 
 export function installManagedMemoryRuntime(module StdModule, usage RuntimeUsage)
+	// Ahead of the gate, for `checkSlabRuntimeGeometry`'s reason: a rule that only runs for whichever
+	// program happens to use arrays is the check that never runs on the compile that breaks it.
+	checkManagedGeometry()
+
 	if not usage.usesManagedMemory 'noArray'
 		return
 	end 'noArray'
@@ -2048,6 +2072,41 @@ export let MachineWordBits = BitsPerByte * (MachineWordBytes as ParsedInt)
 let BitPosToByteShift = 3 as ParsedInt
 let BitPosWithinByteMask = BitsPerByte - 1
 
+// ⛔⛔ **`runtime/ManagedGeometry.maxon` RESTATES ALL THREE, AND THE TWO DRIFT DIRECTIONS ARE CAUGHT BY
+// DIFFERENT THINGS.** No name crosses the tier boundary, so that file derives a byte's bits, a word's bytes
+// and the bit-position shift for itself.
+//
+//   • **The OWNER moves and the tier does not** — `LayoutDescriptor.BitsPerByte` or `MachineWordBytes`
+//     changes, the tier file is not updated. Nothing at run time would notice, so `checkManagedGeometry`
+//     below is the gate: it compares the owner against the transcription on every compile.
+//   • **The TIER moves** — someone edits that file's own constants. This check cannot see it, because the
+//     transcription is a literal here rather than a read of that file. What catches it is the SUITE, and
+//     loudly: shifting the tier's `BitPosToByteShift` by one reddens 17 `array-` cases. It is a wrong
+//     ANSWER rather than a wrong diagnostic, which is what makes the suite the right gate for it.
+//
+// ⇒ **A READER OF THESE THREE LITERALS MUST NOT TREAT THEM AS THE TIER'S VALUES — they are a copy the
+// gate below measures the OWNER against.**
+let TierBitsPerByte = 8 as ParsedInt
+let TierMachineWordBytes = 8 as ParsedInt
+let TierBitPosToByteShift = 3 as ParsedInt
+
+// The tier's copies against this compiler's owners. It panics rather than reporting, for
+// `checkSlabRuntimeGeometry`'s reason: a disagreement here cannot produce a working program, so no caller
+// could sensibly continue.
+function checkManagedGeometry()
+	if BitsPerByte != TierBitsPerByte 'bitsPerByteDisagrees'
+		panic("managed geometry: a byte is {BitsPerByte} bits and `runtime/ManagedGeometry.maxon` derives {TierBitsPerByte} — update `BitsPerByte` there, and this constant")
+	end 'bitsPerByteDisagrees'
+
+	if (MachineWordBytes as ParsedInt) != TierMachineWordBytes 'machineWordBytesDisagree'
+		panic("managed geometry: a machine word is {MachineWordBytes} bytes and `runtime/ManagedGeometry.maxon` derives {TierMachineWordBytes} — update `MachineWordBytes` there, and this constant")
+	end 'machineWordBytesDisagree'
+
+	if BitPosToByteShift != TierBitPosToByteShift 'bitPosShiftDisagrees'
+		panic("managed geometry: a bit position becomes a byte index by shifting {BitPosToByteShift} and `runtime/ManagedGeometry.maxon` derives {TierBitPosToByteShift} — update `BitPosToByteShift` there, and this constant")
+	end 'bitPosShiftDisagrees'
+end 'checkManagedGeometry'
+
 // Every bit set — the `-1` the mask derivations start from. `(1 << bits) - 1` is the obvious spelling of a
 // width mask and is WRONG at the top of the range: `1 << 64` is undefined, and on x64 the shift count is
 // masked to 6 bits so it yields `1`, making a machine-word element's mask ZERO. `-1 >>logical (64 - bits)`
@@ -2058,33 +2117,18 @@ let AllBitsSet = -1 as ParsedInt
 // `es · 8` when it is positive. It is the join that lets every derivation below be one formula: a byte
 // stride of 8 becomes 64 bits, a stride of 1 becomes 8 bits, and a packed `-2` becomes 2.
 //
-// The sign mask `m = es >>arithmetic 63` is all-ones for a packed stamp and zero otherwise, so
-// `(-es & m) | ((es << 3) & ~m)` selects one arm without a branch. It costs six ALU ops with no memory
-// traffic and no control flow, which is why the byte paths can afford to be routed through it.
+// The formula is `runtime/ManagedGeometry.maxon`'s, spliced back into the caller at every site by the
+// `__Raw.splicedAtEverySite()` row it declares — so what lands in the band is the branchless sequence a
+// builder used to emit inline, and the tier owns the one spelling of it.
 function emitElementBits(module StdModule, block IrBlock, es ValueId, ids ValueMinter) returns ValueId
-	let signShift = emitConst(module, block: block, value: MachineWordBits - 1, ids: ids)
-	let signMask = emitBin(module, block: block, a: es, b: signShift, opcode: StdBinOpcode.shr, ids: ids)
-	let allOnes = emitConst(module, block: block, value: AllBitsSet, ids: ids)
-	let keepByteArm = emitBin(module, block: block, a: signMask, b: allOnes, opcode: StdBinOpcode.bitXor, ids: ids)
-
-	let zero = emitConst(module, block: block, value: 0, ids: ids)
-	let packedBits = emitBin(module, block: block, a: zero, b: es, opcode: StdBinOpcode.sub, ids: ids)
-	let toBits = emitConst(module, block: block, value: BitPosToByteShift, ids: ids)
-	let byteBits = emitBin(module, block: block, a: es, b: toBits, opcode: StdBinOpcode.shl, ids: ids)
-
-	let packedArm = emitBin(module, block: block, a: packedBits, b: signMask, opcode: StdBinOpcode.bitAnd, ids: ids)
-	let byteArm = emitBin(module, block: block, a: byteBits, b: keepByteArm, opcode: StdBinOpcode.bitAnd, ids: ids)
-	return emitBin(module, block: block, a: packedArm, b: byteArm, opcode: StdBinOpcode.bitOr, ids: ids)
+	return emitRuntimeCall(module, block: block, callee: MgElementBitsName, args: argsOf(es), ids: ids)
 end 'emitElementBits'
 
-// `ceil(totalBits / 8)` — the bytes a run of that many bits occupies. Split from the two callers below
-// because both need it and one of them (`emitReallocateToCapacity`) has already computed the bit total for
-// its own overflow check and must not compute it twice.
+// `ceil(totalBits / 8)` — the bytes a run of that many bits occupies. Named rather than spelled at its two
+// sites because one of them (`emitReallocateToCapacity`) has already computed the bit total for its own
+// overflow check and must not compute it twice. The body is `runtime/ManagedGeometry.maxon`'s.
 function emitBitsToBytes(module StdModule, block IrBlock, totalBits ValueId, ids ValueMinter) returns ValueId
-	let roundUp = emitConst(module, block: block, value: BitsPerByte - 1, ids: ids)
-	let raised = emitBin(module, block: block, a: totalBits, b: roundUp, opcode: StdBinOpcode.add, ids: ids)
-	let toBytes = emitConst(module, block: block, value: BitPosToByteShift, ids: ids)
-	return emitBin(module, block: block, a: raised, b: toBytes, opcode: StdBinOpcode.shrLogical, ids: ids)
+	return emitRuntimeCall(module, block: block, callee: MgBitsToBytesName, args: argsOf(totalBits), ids: ids)
 end 'emitBitsToBytes'
 
 // ⭐⭐ **THE BUFFER BYTE LENGTH OF `count` ELEMENTS — the ONE replacement for every `count · element_size`
@@ -2094,16 +2138,18 @@ end 'emitBitsToBytes'
 // copy length and every zero-fill extent goes through here, so no site can be left multiplying a NEGATIVE
 // stride by a count and asking the allocator for a wrapped size.
 //
-// ⚠ **IT IS EXPORTED BECAUSE THE FORMULA ESCAPED THIS FILE ONCE.** `ManagedFileRuntime.emitArrayByteExtent`
-// converts the same `element_size@24` for `__mf_read`/`__mf_write`, and a byte-only copy there would hand a
-// NEGATIVE extent to the OS length argument, where DWORD truncation turns it into an enormous unsigned
-// count. That site is unreachable with a packed record today — the front end gates both callers on
-// `isBytePackedArrayInstance` — but the guard is stated in two other files and nothing at the arithmetic
-// says so, which is precisely the shape that stops being true one rung later.
+// ⚠ **IT IS EXPORTED BECAUSE THE CONVERSION IS NEEDED OUTSIDE THIS FILE.**
+// `ManagedFileRuntime.emitArrayByteExtent` converts the same `element_size@24` for `__mf_read`/`__mf_write`,
+// and a byte-only copy there would hand a NEGATIVE extent to the OS length argument, where DWORD truncation
+// turns it into an enormous unsigned count. That site is unreachable with a packed record today — the front
+// end gates both callers on `isBytePackedArrayInstance` — but the guard is stated in two other files and
+// nothing at the arithmetic says so, which is precisely the shape that stops being true one rung later.
+//
+// ⚠ **IT SURVIVES AS A NAMED DOOR RATHER THAN A SPELLED-OUT CALL AT EACH SITE BECAUSE IT TAKES TWO
+// ARGUMENTS OF ONE TYPE.** Nine sites in four files pass a count and a stride as bare `ValueId`s; written
+// as an argument array at each, a swapped pair is a wrong answer nothing would report.
 export function emitElementByteLen(module StdModule, block IrBlock, count ValueId, es ValueId, ids ValueMinter) returns ValueId
-	let bits = emitElementBits(module, block: block, es: es, ids: ids)
-	let totalBits = emitBin(module, block: block, a: count, b: bits, opcode: StdBinOpcode.mul, ids: ids)
-	return emitBitsToBytes(module, block: block, totalBits: totalBits, ids: ids)
+	return emitRuntimeCall(module, block: block, callee: MgElementByteLenName, args: twoArgs(count, second: es), ids: ids)
 end 'emitElementByteLen'
 
 // ⭐ **WHERE ELEMENT `index` LIVES, AS THE FOUR NUMBERS EVERY ACCESS NEEDS.** Held together in a value

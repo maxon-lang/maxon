@@ -1066,14 +1066,19 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// census runs inside the pipeline below, where no usage record is in reach.
 	project.entryStubCalls = EntryStubCalls.fromUsage(usage)
 
-	// ⭐⭐ **THE MIRROR QUESTION, SETTLED HERE ON THE MINTER'S OWN GATE: WHICH TIER BODIES THIS PROGRAM
+	// ⭐⭐ **THE MIRROR QUESTION, SETTLED HERE ON THE MINTERS' COMMON GATE: WHICH TIER BODIES THIS PROGRAM
 	// SWEEPS.** The compiler-called tier files (`runtimeTierFileIsCompilerCalled`) were credited reached
-	// because no walk can see a call an installer mints; `installSlabRuntime` — the only minter of one —
-	// emits nothing without `usesHeap`, and that bit is final by this line. A program it will mint no call
-	// for files those bodies unreached, so every pre-elimination pass below skips them through
-	// `LibraryFacts.bodyIsSwept`: no `.rdata` blob of theirs leads the read-only image and no guard is
-	// inserted into code elimination sweeps. `requireUnreachableLibraryStayedDead` panics by name if one is
-	// kept after all.
+	// because no walk can see a call an installer mints, and `usesHeap` is what every one of those minters
+	// rides: `installSlabRuntime` returns without it, and the managed-memory band that mints the `__mg_*`
+	// element-geometry calls is installed only under `usesManagedMemory`/`usesManagedFile`/`usesManagedSocket`,
+	// each of which implies it (`isManagedMemoryRuntimeCallee`, and a file or socket entry takes a managed
+	// buffer). The bit is final by this line. A program no minter will mint a call for files those bodies
+	// unreached, so every pre-elimination pass below skips them through `LibraryFacts.bodyIsSwept`: no
+	// `.rdata` blob of theirs leads the read-only image and no guard is inserted into code elimination
+	// sweeps. `requireUnreachableLibraryStayedDead` panics by name if one is kept after all.
+	//
+	// ⛔ **A NEW MINTER ON A GATE `usesHeap` DOES NOT COVER WOULD BE A LINK FAILURE HERE**, not a missed
+	// optimization: its tier bodies would be filed unreached while the band still called them.
 	if not usage.usesHeap 'noInstallerCallsTheTier'
 		project.libraryFacts = project.libraryFacts.withCompilerCalledTierUnreached()
 	end 'noInstallerCallsTheTier'

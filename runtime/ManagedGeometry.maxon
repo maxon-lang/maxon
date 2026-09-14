@@ -1,0 +1,91 @@
+// ⭐⭐ **THE MANAGED BAND'S ELEMENT GEOMETRY — three derivations every array access, allocation, copy and
+// zero-fill in the language goes through.** A record's `element_size@24` is a RUNTIME field carrying two
+// ladders at once: a positive stamp is BYTES per element, a negative one is `(-stamp)` BITS per element for
+// a sub-byte-packed buffer. One compiled `__managed_get` serves every array in the program, so the split
+// cannot be a compile-time `if` — it has to survive into the emitted code, and these three are the
+// branchless formulas that do it.
+//
+// ⭐⭐ **EVERY BODY HERE DECLARES `__Raw.splicedAtEverySite()`, AND THAT IS WHAT MAKES THE FILE POSSIBLE
+// AT ALL.** Their callers are the compiler's own band bodies, which used to SPLICE this arithmetic inline;
+// a tier body reached by an ordinary call would pay a frame, the argument moves and a `ret` on the hottest
+// path in the language, several times per element access. The row hands the inliner the builder's own
+// contract back: straight-line code at every site, whatever the op budget says.
+//
+// ⛔ **THE CALLERS ARE ALL `__`-BAND BODIES AND THAT IS A PRECONDITION, NOT AN OBSERVATION.**
+// `InlineLeaves.splicingWouldWidenTheSafePoint` refuses to splice compiler scaffolding into a body the
+// compiler does not own, so a geometry helper reached from a primitive that expands into a USER function
+// would earn E3158 on every program that indexes an array. `emitSlotAddr` is exactly that helper and is
+// deliberately not here.
+//
+// ⛔⛔ **THE BAND IS `__mg_` AND MUST NOT BE `__mm_`.** These bodies are credited REACHED in every program
+// (`StdlibSource.runtimeTierFileIsCompilerCalled`), so `scanRuntimeUsage` walks them and reads the call one
+// makes to another — and `MmRuntime.isRuntimeCallee` reads a `__mm_` callee as *"this program uses the
+// HEAP"*. Under that prefix these three set `usesHeap` in a program that allocates nothing, shipping the
+// allocator's `.data` state word and shifting every word past it. MEASURED.
+//
+// ⛔⛔ **THE CONSTANTS BELOW ARE RESTATED BECAUSE NO NAME CROSSES THE TIER BOUNDARY**, the rule
+// `runtime/SlabRuntime.maxon` states for the allocator's state region. The two drift directions are caught
+// by different things, and `ManagedMemoryRuntime`'s `checkManagedGeometry` carries the full statement: it
+// gates the OWNER moving away from these copies, on every compile. A change to the values HERE is invisible
+// to it — what catches that is the suite, loudly, because it is a wrong ANSWER.
+
+// A byte's bits and a machine word's bytes — `IR/LayoutDescriptor.maxon` owns both, and everything below is
+// a RELATION over them rather than a second transcribed number.
+let BitsPerByte = 8
+let MachineWordBytes = 8
+
+// The shift that turns a bit position into a byte index (`shr 3` is `/ 8`) and its companion mask
+// (`and 7` is `mod 8`). The shift stays a named literal because it is `log2(BitsPerByte)` and there is no
+// arithmetic spelling of a logarithm to derive it from.
+let BitPosToByteShift = 3
+let BitPosWithinByteMask = BitsPerByte - 1
+
+// The sign bit of a stride, as a shift count. An arithmetic shift by it broadcasts that bit to all 64,
+// which is the whole of how the two ladders are selected without a branch.
+let ElementStrideSignShift = (BitsPerByte * MachineWordBytes) - 1
+
+// Every bit set — the complement source the byte arm's mask is built from. `xor` with it is a bitwise NOT.
+// SIGNED, because a `bits(64)` door refuses a negative literal and every use of it below is an operand of
+// the stride's own signed arithmetic.
+let AllBitsSet = -1 as ElementStride
+
+// ⭐ **THE BIT WIDTH OF ONE ELEMENT, FROM EITHER LADDER, BRANCHLESS** — `-es` when the stamp is negative,
+// `es · 8` when it is positive. It is the join that lets both derivations below be ONE formula: a byte
+// stride of 8 becomes 64 bits, a stride of 1 becomes 8, and a packed `-2` becomes 2.
+//
+// The sign mask is all-ones for a packed stamp and zero otherwise, so anding each arm with the mask and its
+// complement selects one without a branch — seven ALU ops, no memory traffic and no control flow, which is
+// why the byte-strided paths can afford to be routed through it.
+module function __mg_element_bits(es ElementStride) returns MachineWord
+	__Raw.splicedAtEverySite()
+
+	let signMask = es shr ElementStrideSignShift
+	let keepByteArm = signMask xor AllBitsSet
+	let packedBits = 0 - es
+	let byteBits = es shl BitPosToByteShift
+
+	return ((packedBits and signMask) or (byteBits and keepByteArm)) as MachineWord
+end '__mg_element_bits'
+
+// `ceil(totalBits / 8)` — the bytes a run of that many bits occupies.
+//
+// ⛔ **THE SHIFT IS LOGICAL AND A `MachineWord` IS WHAT MAKES IT SO.** `bits(64)` reads unsigned, so a bit
+// total whose top bit is set rounds DOWN to a huge byte count rather than to a negative one — which is what
+// lets a capacity bound above this file compare two extents and get a true answer. An arithmetic shift here
+// hands a caller a negative length and the OS a truncated one.
+module function __mg_bits_to_bytes(totalBits MachineWord) returns MachineWord
+	__Raw.splicedAtEverySite()
+
+	return (totalBits + BitPosWithinByteMask) shr BitPosToByteShift
+end '__mg_bits_to_bytes'
+
+// ⭐⭐ **THE BUFFER BYTE LENGTH OF `count` ELEMENTS — the one replacement for every `count · element_size`
+// anywhere.** A packed run is `ceil(count·bits / 8)`; a byte-strided one falls out of the identical formula
+// as exactly `count · es`, because `count · es · 8` bits rounded up to whole bytes IS `count · es`. Every
+// allocation size, every copy length and every zero-fill extent comes through here, so no site is left
+// multiplying a NEGATIVE stride by a count and asking the allocator for a wrapped size.
+module function __mg_element_byte_len(count BufferCoordinate, es ElementStride) returns MachineWord
+	__Raw.splicedAtEverySite()
+
+	return __mg_bits_to_bytes((count as MachineWord) * __mg_element_bits(es))
+end '__mg_element_byte_len'

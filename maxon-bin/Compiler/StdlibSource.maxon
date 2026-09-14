@@ -496,10 +496,19 @@ end 'collectOneLibraryFile'
 // `RuntimeUsage`'s rule 2 is what decides that this is a roster and not a walk — *"A CALL THE WALK CANNOT
 // SEE IS DECLARED; EVERY CALL IT CAN SEE IS DISCOVERED."* Every other tier family is kept alive by a call
 // the PARSER mints from user source (`__Builtins.cpuCount()` ⇒ `__cpu_count`), which is an ordinary edge in
-// an ordinary body and the from-`main` walk finds it. The slab arena's callers are `StdOp.call` sites an
+// an ordinary body and the from-`main` walk finds it. These files' callers are `StdOp.call` sites an
 // INSTALLER mints into the appended band (`Compiler.compileToCodeResult`), long after this derivation has
-// run and into a module that is not the Maxon one — so the walk holds no evidence about the arena at all,
-// and every one of its entries would be filed `unreachedRuntimeTier` while the bodies ship.
+// run and into a module that is not the Maxon one — so the walk holds no evidence about them at all, and
+// every one of their entries would be filed `unreachedRuntimeTier` while the bodies ship. The slab's two
+// are minted by `installSlabRuntime`; `ManagedGeometry.maxon`'s three are minted by the managed-memory,
+// file and socket builders, which emit a `__mg_*` call where they used to splice the arithmetic inline.
+//
+// ⛔⛔ **A FILE LISTED HERE IS WALKED BY `scanRuntimeUsage` IN EVERY PROGRAM, SO THE BAND ITS ENTRIES WEAR
+// IS A USAGE DECISION.** The scan reads a listed body's calls and sets the bits their NAMES ask for —
+// `MmRuntime.isRuntimeCallee` turns a `__mm_` callee into `usesHeap`. A geometry helper named `__mm_*`
+// therefore set `usesHeap` in a program that allocates nothing, shipping the allocator's `.data` state
+// word. MEASURED. ⇒ **A TIER FAMILY ADDED HERE MUST WEAR A BAND NO `recordCallUsage` ARM CLAIMS**, unless
+// it really does need what that arm installs.
 //
 // ⛔⛔ **IT IS BY FILE AND NOT BY NAME, AND THAT IS WHAT MAKES IT SOUND ON *BOTH* PATHS.** An installer's
 // call lands on an ENTRY POINT whose body then reaches that file's module-scoped helpers. On the precise
@@ -532,7 +541,7 @@ end 'collectOneLibraryFile'
 function runtimeTierFileIsCompilerCalled(path FilePath) returns bool
 	let filename = path.filename()
 
-	return filename == SlabArenaTierFileName or filename == SlabRuntimeTierFileName
+	return filename == SlabArenaTierFileName or filename == SlabRuntimeTierFileName or filename == ManagedGeometryTierFileName
 end 'runtimeTierFileIsCompilerCalled'
 
 // The two answers `classifyLibraryReach` splits one walk into. One record because they partition one

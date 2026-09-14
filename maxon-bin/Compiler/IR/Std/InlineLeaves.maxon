@@ -1748,6 +1748,18 @@ type CalledOnceCensus
 		for name in project.functionValueTargets 'eachValueTarget'
 			self.markReferenced(name, byName: byName)
 		end 'eachValueTarget'
+
+		// ⛔⛔ **A COMPILER-CALLED TIER BODY'S SITE COUNT IS NEVER FINAL HERE**
+		// (`StdlibSource.runtimeTierFileIsCompilerCalled`). Its callers are `StdOp.call` sites an INSTALLER
+		// mints into the appended band, so at the pipeline's run this module shows only the calls such a body
+		// gets from its OWN file — and one of those reads as "called once". Splicing it there and EMPTYING it
+		// leaves every band call naming a body that is gone, which
+		// `DeadFunctionElimination.requireNotSplicedAway` reports. Over-counting costs a called-once splice
+		// and nothing else: the LEAF rule still reaches these bodies, and a `__Raw.splicedAtEverySite()` one
+		// is still spliced at every site by the cascade.
+		for name in project.libraryFacts.compilerCalledTier 'eachCompilerCalledTierBody'
+			self.markReferenced(name, byName: byName)
+		end 'eachCompilerCalledTierBody'
 	end 'markRoots'
 
 	// A name the module does not define is a hand-assembled chunk or an uninstalled runtime: nothing to mark.

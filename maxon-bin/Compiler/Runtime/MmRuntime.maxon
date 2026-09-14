@@ -974,6 +974,15 @@ export function emitBin(module StdModule, block IrBlock, a ValueId, b ValueId, o
 	return v
 end 'emitBin'
 
+// `callee(args)` into a fresh value — a call the compiler MINTS into a body it is building, which is the
+// only way the appended band reaches a `runtime/` tier entry: no walk over source call edges can see one,
+// so the edge is declared (`StdlibSource.runtimeTierFileIsCompilerCalled`) and minted here.
+export function emitRuntimeCall(module StdModule, block IrBlock, callee ByteArray, args ValueIdArray, ids ValueMinter) returns ValueId
+	let v = ids.mint()
+	module.appendOp(block, op: StdOp.call(v, callee: callee, args: args))
+	return v
+end 'emitRuntimeCall'
+
 // `<op> operand` into a fresh value. `operandType` is the SOURCE's type, never the result's — the
 // distinction `StdUnaryOpcode`'s header makes in full, and the reason it is a required argument here
 // rather than defaulting to i64 the way `emitCmp`'s does: the ONE caller today
