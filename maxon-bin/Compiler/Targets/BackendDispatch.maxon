@@ -117,6 +117,14 @@ export function buildBackend(stdModule StdModule, target Target, globalData Glob
 	assertCallsMatchCalleeArity(stdModule, byName: funcNames)
 	recordPhase(project, phase: CompilePhase.callArityGate, probe: arityProbe)
 
+	// ⛔⛔ **THE `__Raw.splicedAtEverySite()` GATE, BESIDE THE ARITY ONE AND FOR ITS REASONS.** A body
+	// declaring that row promises to exist at no call site, and every correctness rule of the inliner may
+	// still refuse it — so the promise is checked where nothing can splice any more and the prune has said
+	// which functions are emitted. In a pass it would see only the sites that pass reached.
+	let splicedProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.alwaysSplicedGate)
+	try requireAlwaysSplicedBodiesAreGone(project, module: stdModule, byName: funcNames)
+	recordPhase(project, phase: CompilePhase.alwaysSplicedGate, probe: splicedProbe)
+
 	// ⭐⭐ **THE `.data` SECTION IS LAID OUT HERE, AFTER THE PRUNE, BECAUSE THE PRUNE IS WHAT SAYS WHICH
 	// RUNTIME WORDS ARE READ.** Nothing between here and the encoders asks for an offset — the three
 	// `dataSectionOffsetOf` readers are all encode-stage — and nothing after `compileToCodeResult` registers

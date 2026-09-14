@@ -130,12 +130,13 @@ end 'main'
 ```
 
 <!-- test: runtime-file-may-keep-its-own-frame -->
-**⭐⭐ A RUNTIME BODY WHOSE CONTRACT IS THE CALL ITSELF, AND THE ROW THAT SAYS SO.** Every other
-`__Raw` row is an operation; `ownFrame` is the one that is an INSTRUCTION TO THE COMPILER, and it earns
-that exception by being the only thing a runtime body cannot otherwise state. A tier body flows through
-the ordinary pipeline, so `InlineLeaves` splices a small one into each of its call sites and dead-function
-elimination then drops it — which is correct for a body that computes an answer and destroys a body whose
-whole product is a FRAME: a checkpoint a profile attaches to, a stack-walk entry a backtrace prints.
+**⭐⭐ A RUNTIME BODY WHOSE CONTRACT IS THE CALL ITSELF, AND THE ROW THAT SAYS SO.** Nearly every `__Raw`
+row is an operation; `ownFrame` is one of the two that are INSTRUCTIONS TO THE COMPILER (its opposite,
+`splicedAtEverySite`, is the case below), and each earns that exception by stating something a runtime body
+cannot otherwise say at all. A tier body flows through the ordinary pipeline, so `InlineLeaves` splices a
+small one into each of its call sites and dead-function elimination then drops it — which is correct for a
+body that computes an answer and destroys a body whose whole product is a FRAME: a checkpoint a profile
+attaches to, a stack-walk entry a backtrace prints.
 
 ⚠ It appends no Std op and costs no instruction. What it does is set a fact about the enclosing function
 (`IrFunction.keepsItsOwnFrame`), which `InlineLeaves.functionShape` refuses to splice for the reason it
@@ -156,6 +157,63 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: runtime-file-may-ask-to-be-spliced-at-every-site -->
+**⭐⭐ `ownFrame`'s OPPOSITE, AND THE SECOND DIRECTIVE.** `splicedAtEverySite` says this body has no frame
+worth keeping: the inliner must splice it into every one of its call sites whatever its size. It is what
+lets a family that a BUILDER used to emit inline live in `runtime/` source instead — a builder splices its
+code at each site, and a tier body reached by a call pays the frame, the argument moves and the `ret` the
+builder never paid.
+
+⚠ It appends no Std op either. What it does is set a fact about the enclosing function
+(`IrFunction.mustBeSplicedAtEverySite`), which waives the inliner's COST rules — the op budget, the
+called-once pressure budget, the inline-frame-record rule — and no correctness rule at all. A body a
+correctness rule then refuses ends the compile rather than quietly becoming a call again.
+
+Under test here is the DECLARATION door alone — that the row exists and a runtime file may spell it. That
+the body is then actually spliced past the budget is measured in `inline-leaves.md`.
+```maxon
+// --- runtime-file: Probe.maxon
+module function __probe_spliced(seed MachineWord) returns MachineWord
+	__Raw.splicedAtEverySite()
+
+	return seed + 1
+end '__probe_spliced'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-runtime-body-may-not-both-keep-and-disclaim-its-frame -->
+⛔⛔ **THE TWO DIRECTIVES CONTRADICT EACH OTHER, AND THE CONTRADICTION IS REFUSED AT THE DECLARATION THAT
+MAKES IT.** `ownFrame` says the frame IS this body's product and nothing may splice the body away;
+`splicedAtEverySite` says the body has no frame worth keeping and must exist at no call site. There is no
+body both can be true of.
+
+⚠ **RESOLVING IT BY PRECEDENCE IS THE ANSWER THAT MUST NOT BE GIVEN.** Whichever row won, the compiler
+would answer one of the two questions the author asked and say nothing at all about the other — and the
+row that lost is the one whose whole point is that it cannot lose silently. The position is the SECOND
+directive, which is the one that has to go.
+```maxon
+// --- runtime-file: Probe.maxon
+module function __probe_contradictory(seed MachineWord) returns MachineWord
+	__Raw.ownFrame()
+	__Raw.splicedAtEverySite()
+
+	return seed + 1
+end '__probe_contradictory'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3157: <fragment>:5:8: a runtime body may not spell both '__Raw.ownFrame()' and '__Raw.splicedAtEverySite()': the first says this function's frame is its product and nothing may splice the body away, the second that it has none worth keeping and the inliner must splice it into every call site
 ```
 
 <!-- test: runtime-file-may-ask-the-machine-for-its-cpu-count -->

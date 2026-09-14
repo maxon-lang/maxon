@@ -309,6 +309,21 @@ export type IrFunction
 	// says so, by calling `__Raw.ownFrame()`, and nothing infers it from a naming band.
 	export var keepsItsOwnFrame as bool
 
+	// ⭐⭐ **THIS FUNCTION HAS NO FRAME WORTH KEEPING, so the inliner must splice it into every one of its
+	// call sites whatever its size.** It is what lets a family that used to be emitted INLINE by a builder
+	// live in `runtime/` source instead: a builder spliced its code at each site, and a tier body reached by
+	// a call would pay the frame, the argument moves and the `ret` the builder never paid.
+	//
+	// ⭐ **IT OVERRIDES THE INLINER'S COST RULES AND NEVER ITS CORRECTNESS RULES.** What it overrules is a
+	// judgement about what inlining is WORTH — the op budget, the called-once pressure budget, the
+	// inline-frame-record rule. What still refuses is every judgement about what inlining would BREAK, this
+	// field's own neighbour above included, and a promise that cannot then be kept ends the compile
+	// (`InlineLeaves.requireAlwaysSplicedBodiesAreGone`).
+	//
+	// ⚠ A FIELD rather than a name test, for `keepsItsOwnFrame`'s reason: the body says so, by calling
+	// `__Raw.splicedAtEverySite()`, and nothing infers it from a naming band.
+	export var mustBeSplicedAtEverySite as bool
+
 	// --- Maxon-phase types (populated by parser, consumed by LowerMaxonToStd) ---
 	export var maxonReturnType as MaxonReturnType
 	export var maxonParamTypes as MaxonTypeArray
@@ -777,6 +792,7 @@ export type IrFunction
 			visibility: Visibility.file,
 			needsGreenThreadStackGuard: needsGreenThreadStackGuard,
 			keepsItsOwnFrame: false,
+			mustBeSplicedAtEverySite: false,
 			sourceFilePath: declaredAt.filePath,
 			paramCount: paramCount,
 			blockRefs: BlockRefArray.create(),
@@ -848,6 +864,7 @@ export type IrFunction
 			visibility: Visibility.global,
 			needsGreenThreadStackGuard: needsGreenThreadStackGuard,
 			keepsItsOwnFrame: false,
+			mustBeSplicedAtEverySite: false,
 			sourceFilePath: declaredAt.filePath,
 			paramCount: paramCount,
 			blockRefs: BlockRefArray.create(),
@@ -906,6 +923,7 @@ export type IrFunction
 			// re-decided here — exactly as `sourceFilePath` does one line down, and for the same reason.
 			needsGreenThreadStackGuard: src.needsGreenThreadStackGuard,
 			keepsItsOwnFrame: src.keepsItsOwnFrame,
+			mustBeSplicedAtEverySite: src.mustBeSplicedAtEverySite,
 			sourceFilePath: src.sourceFilePath,
 			paramCount: src.paramCount,
 			blockRefs: BlockRefArray.create(),

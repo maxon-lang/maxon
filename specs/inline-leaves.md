@@ -38,6 +38,34 @@ stands BEFORE any splice, and memoised:
 Only a direct `StdOp.call` site is ever rewritten. A `tryCall` is never touched: it is the throwing
 call's spelling AND the existential-returning call's, and neither is what a tiny leaf is.
 
+### ⭐⭐ `__Raw.splicedAtEverySite()` — a body that overrules the BUDGET and nothing that would break it
+
+A `runtime/` body may declare `__Raw.splicedAtEverySite()`. It says the body has no frame worth keeping:
+the inliner must splice it into every one of its call sites whatever its size. It exists so a family a
+BUILDER used to emit inline can live in tier source instead — a builder splices its code at each site and
+pays nothing, and a tier body reached by a call would pay the frame, the argument moves and the `ret` the
+builder never paid.
+
+**What it waives** is every judgement about what inlining is WORTH:
+
+- the 24-op budget above;
+- the called-once rule's register-pressure budget;
+- the inline-frame-record rule, on the ground that a builder's spliced code never carried a frame record
+  either — so a panic inside a copy prints the caller's frame on a target without them;
+- the leaf rule's *"no call of any kind"* for ONE edge: a call into another body that declares the row.
+  Those are spliced away callees-first, before either body is copied anywhere. It is this pass's only
+  exception to ONE ROUND, NO CASCADE, and it is bounded by the graph of declared rows being a DAG.
+
+**What it may never waive** is every judgement about what inlining would BREAK, and each still refuses:
+`splicingWouldWidenTheSafePoint`, a by-reference parameter, the green-thread stack guard, `ownFrame` (a
+contradiction, refused at the declaration as E3157), an `isUnsupportedInInlineBody` op, and a
+```RequiredRuntime request for the body itself.
+
+**A refusal is never silent.** `requireAlwaysSplicedBodiesAreGone` reads the SURVIVING module in
+`BackendDispatch.buildBackend` and reports **E3158** at the body's declaration, naming the reference that
+survived and the rule that refused — a cycle of declared rows among them. It is asked there rather than
+inside this pass because a check the pass performs can see only the sites the pass reached.
+
 The leaf rule is one of the inliner's TWO admission rules. The other — a function with exactly one
 direct call site in the program is spliced regardless of size — is `specs/inline-called-once.md`,
 which also holds the trace mechanism both rules share.
@@ -557,6 +585,234 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+<!-- test: a-runtime-body-that-asks-to-be-spliced-is-spliced-past-the-budget -->
+⭐⭐ **THE BUDGET IS A COST RULE, AND `__Raw.splicedAtEverySite()` OVERRULES IT.** `__probe_wide` is a
+runtime body far past `MaxInlinedLeafOps`, so the budget alone refuses it — and it has TWO call sites, so
+the called-once rule never looks at it either. The row is the whole difference: the golden below is
+`__probe_wide_caller` with both copies of the body spliced in and no `callDirect` left.
+
+⚠ **A COMPILER WITHOUT THE ROW RENDERS `call __probe_wide` TWICE HERE**, which is what this case exists
+to hold. It is the same shape the `tlsSlotLoad` case above uses, and for the same reason: a golden
+difference is a REFERENCE rather than a gate, so the reading that makes it evidence is the one taken from
+a compiler built without the change.
+
+⚠ **THE ROW OVERRIDES WHAT INLINING IS WORTH AND NEVER WHAT IT WOULD BREAK.** Both bodies here are tier
+source, which is what keeps `InlineLeaves.splicingWouldWidenTheSafePoint` — a correctness rule the row
+does not touch — out of the way; a tier callee spliced into a caller the compiler does not own is refused
+by it, and the row then ends the compile rather than falling back to a call.
+```maxon
+// --- runtime-file: Probe.maxon
+module function __probe_wide(seed MachineWord) returns MachineWord
+	__Raw.splicedAtEverySite()
+
+	var acc = seed + 1
+	acc = acc + 2
+	acc = acc + 3
+	acc = acc + 4
+	acc = acc + 5
+	acc = acc + 6
+	acc = acc + 7
+	acc = acc + 8
+	acc = acc + 9
+	acc = acc + 10
+	acc = acc + 11
+	acc = acc + 12
+	acc = acc + 13
+	acc = acc + 14
+
+	return acc
+end '__probe_wide'
+
+function __probe_wide_caller(seed ExitCode) returns ExitCode
+	let base = __probe_wide(seed as MachineWord)
+	let again = __probe_wide(base and 1)
+
+	return (base + again) as ExitCode
+end '__probe_wide_caller'
+// --- stdlib-overlay: Builtins.maxon
+export function probeWideSplice(seed ExitCode) returns ExitCode
+	return __probe_wide_caller(seed)
+end 'probeWideSplice'
+// --- file: main.maxon
+function main() returns ExitCode
+	return probeWideSplice(0)
+end 'main'
+```
+```exitcode
+211
+```
+```RequiredRuntime
+__probe_wide_caller
+```
+
+<!-- test: a-body-that-asks-to-be-spliced-may-call-another-that-does -->
+⭐⭐ **THE ONE CASCADE THE ROW BUYS, AND WHY IT IS NOT OPTIONAL.** A builder composes its emitters freely
+and pays nothing for it — `emitElementByteLen` calls `emitElementBits` and `emitBitsToBytes`, and all three
+land inline at every site. A tier family that could hold no helpers would be a family written in one
+function, so a body declaring the row may call another that does.
+
+⭐ **CALLEES FIRST, AND ONCE.** `__probe_inner` is spliced out of `__probe_outer` before `__probe_outer`
+is copied anywhere, so each body is copied exactly once per site and the work is bounded by the chain of
+DECLARED rows rather than by anything the program controls. The golden is `__probe_chain_caller` with both
+levels flattened into it and no `callDirect` left.
+
+⚠ **`__probe_outer` IS WHAT THIS CASE DISCRIMINATES ON, NOT `__probe_inner`.** The inner body holds no
+call and is an ordinary tiny leaf, which a compiler without the row inlines anyway; the outer body holds
+TWO calls, so the leaf rule refuses it outright and the called-once rule never sees it. Without the row a
+compiler renders `callDirect __probe_outer` twice here.
+```maxon
+// --- runtime-file: Probe.maxon
+module function __probe_inner(seed MachineWord) returns MachineWord
+	__Raw.splicedAtEverySite()
+
+	return seed + 1
+end '__probe_inner'
+
+module function __probe_outer(seed MachineWord) returns MachineWord
+	__Raw.splicedAtEverySite()
+
+	return __probe_inner(seed) + __probe_inner(seed + 1)
+end '__probe_outer'
+
+function __probe_chain_caller(seed ExitCode) returns ExitCode
+	let base = __probe_outer(seed as MachineWord)
+	let again = __probe_outer(base and 1)
+
+	return (base + again) as ExitCode
+end '__probe_chain_caller'
+// --- stdlib-overlay: Builtins.maxon
+export function probeSpliceChain(seed ExitCode) returns ExitCode
+	return __probe_chain_caller(seed)
+end 'probeSpliceChain'
+// --- file: main.maxon
+function main() returns ExitCode
+	return probeSpliceChain(0)
+end 'main'
+```
+```exitcode
+8
+```
+```RequiredRuntime
+__probe_chain_caller
+```
+
+<!-- test: error.a-body-that-asks-to-be-spliced-where-it-may-not-be-is-refused -->
+⛔⛔ **THE ROW OVERRIDES WHAT INLINING IS WORTH AND NEVER WHAT IT WOULD BREAK, AND THIS IS THE CASE THAT
+HOLDS THE SECOND HALF.** `__probe_unowned` is compiler-owned scaffolding and `probeUnowned` is not, so
+`InlineLeaves.splicingWouldWidenTheSafePoint` refuses the splice: `__symtable` carries ONE safe-point flag
+per SYMBOL, and the copied bytes would sit inside a symbol the predicate answers PREEMPTIBLE for. The row
+does not lift that, and must not.
+
+⛔⛔ **WHAT IS UNDER TEST IS THAT THE REFUSAL IS LOUD.** A compiler that quietly left the call would be
+green on every case in this file and every golden in the suite, and a family ported on the strength of the
+row would ship at exactly the cost the port was written to remove — with nothing anywhere saying so. The
+report names the body, the reference that survived and the rule that refused, and it is positioned at the
+declaration that has to change.
+
+⚠ **`probeUnowned` IS CALLED TWICE SO THE REPORT NAMES THE SAME CALLER ON EVERY LANE.** With one site the
+called-once rule moves it into `main` where the target records inline frames and leaves it where the target
+does not, and the sentence would then differ between x64 and wasm for a reason that has nothing to do with
+the row. The report reads the module as it IS rather than as it was written, which is the point of asking
+after the last round — so a case pinning it has to fix what that module looks like.
+
+⚠ **IT IS ASKED OF THE FINISHED MODULE** (`InlineLeaves.requireAlwaysSplicedBodiesAreGone`, called from
+`BackendDispatch.buildBackend` beside the emitted-call arity gate), not inside the inliner. A check the
+pass performs can see only the sites the pass reached, so the next narrowing of an optimization would take
+the detector away with it.
+```maxon
+// --- runtime-file: Probe.maxon
+module function __probe_unowned(seed ExitCode) returns ExitCode
+	__Raw.splicedAtEverySite()
+
+	return seed + 1
+end '__probe_unowned'
+// --- stdlib-overlay: Builtins.maxon
+export function probeUnowned(seed ExitCode) returns ExitCode
+	return __probe_unowned(seed)
+end 'probeUnowned'
+// --- file: main.maxon
+function main() returns ExitCode
+	return probeUnowned(0) + probeUnowned(1)
+end 'main'
+```
+```maxoncstderr
+error E3158: <fragment>:3:17: '__probe_unowned' declares '__Raw.splicedAtEverySite()', so it must be left at no call site, but 'probeUnowned' still calls it: it is the compiler's own scaffolding and its caller is not, so the spliced bytes could be stopped where the callee never may be. The row overrides the inliner's cost rules — the op budget, the pressure budget, the inline-frame-record rule — and never its correctness rules, so a body one of those refuses is a body that must not declare it
+```
+
+<!-- test: error.a-cycle-of-bodies-that-ask-to-be-spliced-is-refused -->
+⛔⛔ **THE ROW BUYS ONE CASCADE — A BODY DECLARING IT MAY CALL ANOTHER — AND A CYCLE IS WHERE THAT
+CASCADE HAS NO END.** Splicing any member of one would nest a body inside itself, so no member can be
+spliced away and every one of them keeps a call its author was promised would not exist.
+
+⛔ **IT IS DETECTED EXACTLY AND REFUSED, NEVER CAPPED.** A fixpoint with an iteration limit would splice
+some number of levels, leave a call standing at the boundary and report nothing — a silent wrong answer at
+precisely the edge this row cannot afford one. The search is over the graph of declared rows alone, which
+is the tier's own handful of bodies, and the report renders the ring.
+
+⚠ Neither body is called once, so the called-once rule does not collapse the pair ahead of the leaf rule
+and the cycle the report names is the one the source wrote.
+```maxon
+// --- runtime-file: Probe.maxon
+module function __probe_cycle_a(seed MachineWord) returns MachineWord
+	__Raw.splicedAtEverySite()
+
+	return __probe_cycle_b(seed) + __probe_cycle_b(seed + 1)
+end '__probe_cycle_a'
+
+module function __probe_cycle_b(seed MachineWord) returns MachineWord
+	__Raw.splicedAtEverySite()
+
+	return __probe_cycle_a(seed) + 2
+end '__probe_cycle_b'
+
+function __probe_cycle_entry(seed ExitCode) returns ExitCode
+	return __probe_cycle_a(seed as MachineWord) as ExitCode
+end '__probe_cycle_entry'
+// --- stdlib-overlay: Builtins.maxon
+export function probeCycle(seed ExitCode) returns ExitCode
+	return __probe_cycle_entry(seed)
+end 'probeCycle'
+// --- file: main.maxon
+function main() returns ExitCode
+	return probeCycle(0)
+end 'main'
+```
+```maxoncstderr
+error E3158: <fragment>:9:17: '__probe_cycle_b' declares '__Raw.splicedAtEverySite()', so it must be left at no call site, but '__probe_cycle_a' still calls it: it lies on a cycle of bodies declaring the row — '__probe_cycle_b' calls '__probe_cycle_a' calls '__probe_cycle_b' — so splicing any member would nest a body inside itself. The row overrides the inliner's cost rules — the op budget, the pressure budget, the inline-frame-record rule — and never its correctness rules, so a body one of those refuses is a body that must not declare it
+```
+
+<!-- test: error.a-body-holding-an-op-the-splice-cannot-copy-is-refused -->
+⛔ **THE THIRD CORRECTNESS RULE THE ROW DOES NOT LIFT: the dialect's own `isUnsupportedInInlineBody`.**
+`__Raw.scratch` lowers to a `stackRecordAddr`, which names a slot of the function that OWNS it — copied
+into a caller it would address the caller's frame instead. That is a wrong answer rather than a cost, so
+the splice refuses and the promise cannot be kept.
+
+⚠ The reason the report gives is the op's own refusal, not a generic one: the body is walked and the first
+op that puts it outside the rule is what the sentence names.
+```maxon
+// --- runtime-file: Probe.maxon
+module function __probe_unhonourable(seed MachineWord) returns MachineWord
+	__Raw.splicedAtEverySite()
+
+	return __Raw.loadWord(__Raw.scratch(8), offset: 0) + seed
+end '__probe_unhonourable'
+
+function __probe_unhonourable_entry(seed ExitCode) returns ExitCode
+	return __probe_unhonourable(seed as MachineWord) as ExitCode
+end '__probe_unhonourable_entry'
+// --- stdlib-overlay: Builtins.maxon
+export function probeUnhonourable(seed ExitCode) returns ExitCode
+	return __probe_unhonourable_entry(seed)
+end 'probeUnhonourable'
+// --- file: main.maxon
+function main() returns ExitCode
+	return probeUnhonourable(0)
+end 'main'
+```
+```maxoncstderr
+error E3158: <fragment>:3:17: '__probe_unhonourable' declares '__Raw.splicedAtEverySite()', so it must be left at no call site, but '__probe_unhonourable_entry' still calls it: it holds an op the splice cannot copy. The row overrides the inliner's cost rules — the op budget, the pressure budget, the inline-frame-record rule — and never its correctness rules, so a body one of those refuses is a body that must not declare it
 ```
 
 <!-- test: a-runtime-leaf-reading-its-machines-tls-slot-is-spliced -->

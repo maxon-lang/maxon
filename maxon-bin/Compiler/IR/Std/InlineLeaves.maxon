@@ -485,9 +485,16 @@ type LeafPlan
 	function recordEligible(funcIndex FuncIndex, module StdModule, func IrFunction)
 		self.eligibleCount = self.eligibleCount + 1
 		try self.eligibleFuncs.set(funcIndex, value: true) otherwise panic("LeafPlan.recordEligible: eligibleFuncs.set OOB at {funcIndex}")
-		try self.valueBounds.set(funcIndex, value: nextFreeValueId(module, func: func)) otherwise panic("LeafPlan.recordEligible: valueBounds.set OOB at {funcIndex}")
-		try self.blockCounts.set(funcIndex, value: func.blockRefs.count()) otherwise panic("LeafPlan.recordEligible: blockCounts.set OOB at {funcIndex}")
+		self.measure(funcIndex, module: module, func: func)
 	end 'recordEligible'
+
+	// The width of the value column a splice of this callee builds, and the block count it was admitted
+	// with. Re-taken for a body `spliceAlwaysSplicedCallees` grew, because `buildValueColumn` compares every
+	// copy against both and a body that grew since its measurement is not the body that was measured.
+	function measure(funcIndex FuncIndex, module StdModule, func IrFunction)
+		try self.valueBounds.set(funcIndex, value: nextFreeValueId(module, func: func)) otherwise panic("LeafPlan.measure: valueBounds.set OOB at {funcIndex}")
+		try self.blockCounts.set(funcIndex, value: func.blockRefs.count()) otherwise panic("LeafPlan.measure: blockCounts.set OOB at {funcIndex}")
+	end 'measure'
 
 	function recordTooManyOps(funcIndex FuncIndex, opCount OpCount)
 		self.tooManyOpsCount = self.tooManyOpsCount + 1
@@ -517,8 +524,9 @@ type LeafPlan
 	end 'blockCountOf'
 end 'LeafPlan'
 
-function buildLeafPlan(module StdModule, framesAreRecorded bool, namedByGolden BoolArray, meta StdOpMetaMemo, round SpliceRound, runtimeTier FunctionNameSet) returns LeafPlan
+function buildLeafPlan(module StdModule, framesAreRecorded bool, namedByGolden BoolArray, meta StdOpMetaMemo, round SpliceRound, runtimeTier FunctionNameSet, byName FunctionNameIndex) returns LeafPlan
 	var plan = LeafPlan.create(module.funcCount() as FuncIndex)
+	var reference = StdFunctionReference.create()
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		let func = module.getFunc(funcIndex)
@@ -526,7 +534,7 @@ function buildLeafPlan(module StdModule, framesAreRecorded bool, namedByGolden B
 		// Splicing every site of a golden-named leaf would drop the body the golden asks the printer for; a
 		// callee this round does not admit is not a leaf here either (`roundAdmitsCallee`).
 		let declined = isGoldenNamed(namedByGolden, funcIndex: funcIndex) or not roundAdmitsCallee(round, callee: func, runtimeTier: runtimeTier)
-		let scan = LeafBodyScan.create(LeafVerdict.notALeaf, opCount: 0) if declined else scanLeafBody(module, func: func, framesAreRecorded: framesAreRecorded, meta: meta)
+		let scan = LeafBodyScan.create(LeafVerdict.notALeaf, opCount: 0) if declined else scanLeafBody(module, func: func, framesAreRecorded: framesAreRecorded, meta: meta, byName: byName, reference: reference)
 		plan.record(funcIndex, scan: scan, module: module, func: func)
 	end 'eachFunc'
 
@@ -547,7 +555,11 @@ end 'buildLeafPlan'
 // helpers below are shared with `scanSpliceableShape`, which asks them of a called-once candidate and
 // nothing else. A leaf scan RETURNS at the first call — the commonest op there is — where the shape scan
 // has to read the whole body for its refusal reason.
-function scanLeafBody(module StdModule, func IrFunction, framesAreRecorded bool, meta StdOpMetaMemo) returns LeafBodyScan
+function scanLeafBody(module StdModule, func IrFunction, framesAreRecorded bool, meta StdOpMetaMemo, byName FunctionNameIndex, reference StdFunctionReference) returns LeafBodyScan
+	// The row's cost rules are waived here and nowhere else in this scan — see `leafOpRefusesTheBody` and
+	// the budget below.
+	let alwaysSpliced = func.mustBeSplicedAtEverySite
+
 	match functionShape(func) 'shape'
 		spliceable then break 'shape'
 		refused then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: 0)
@@ -566,25 +578,15 @@ function scanLeafBody(module StdModule, func IrFunction, framesAreRecorded bool,
 		for opIdx in block.opRefs 'eachOp'
 			// Bound ONCE: this runs on every op of every function in the module, and the role is a `match`
 			// over a union with ninety variants.
-			let role = inlineOpRole(module.getOp(opIdx), meta: meta)
+			let op = module.getOp(opIdx)
+			let role = inlineOpRole(op, meta: meta)
 
-			// A framed op is copyable only where the target records the frame it names.
-			if role == InlineOpRole.framed and not framesAreRecorded 'frameWouldBeLost'
+			// ⭐ **RETURNED FROM, NOT FLAGGED — a call is the commonest op there is, and this scan runs over
+			// the whole module.** Bailing at the first refusing op is what keeps a 5,000-op function from
+			// being walked to the end to learn something its second op already said.
+			if leafOpRefusesTheBody(role, op: op, module: module, framesAreRecorded: framesAreRecorded, alwaysSpliced: alwaysSpliced, byName: byName, reference: reference) 'theRuleRefusesThisOp'
 				return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: ops)
-			end 'frameWouldBeLost'
-
-			match role 'role'
-				// A parameter is the call's argument, not an instruction — it is neither counted nor copied.
-				parameter or
-					body or
-					framed then break 'role'
-
-				// ⭐ **RETURNED FROM, NOT FLAGGED — a call is the commonest op there is, and this scan runs
-				// over the whole module.** Bailing at the first one is what keeps a 5,000-op function from
-				// being walked to the end to learn something its second op already said.
-				calling or
-					refusing then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: ops)
-			end 'role'
+			end 'theRuleRefusesThisOp'
 
 			ops = ops + countedBodyOps(role)
 		end 'eachOp'
@@ -601,7 +603,7 @@ function scanLeafBody(module StdModule, func IrFunction, framesAreRecorded bool,
 		end 'terminated'
 	end 'eachBlock'
 
-	if ops > MaxInlinedLeafOps 'tooBig'
+	if ops > MaxInlinedLeafOps and not alwaysSpliced 'tooBig'
 		return LeafBodyScan.create(LeafVerdict.tooManyOps, opCount: ops)
 	end 'tooBig'
 
@@ -614,6 +616,44 @@ end 'scanLeafBody'
 function countedBodyOps(role InlineOpRole) returns OpCount
 	return 0 if role == InlineOpRole.parameter else 1
 end 'countedBodyOps'
+
+// ⭐⭐ **WHETHER ONE OP PUTS ITS BODY OUTSIDE THE LEAF RULE, AND THE TWO ANSWERS A
+// `__Raw.splicedAtEverySite()` BODY GETS DIFFERENTLY.**
+//
+//   • A `framed` op — a panic, or a divide that can fault — is copyable only where the target records the
+//     frame it names, because a trace raised inside the copy would otherwise print the caller's frame and
+//     not the callee's. That is TRACE FIDELITY, not correctness, and it is exactly what a BUILDER emitting
+//     the same code inline gives up, so the row overrides it.
+//   • A `calling` op refuses — which is what makes ownership free here, a retain, a release and a scope
+//     drop all being calls — UNLESS this body and the callee both declare the row. That edge is spliced
+//     away before this body is copied anywhere (`spliceAlwaysSplicedCallees`), and the cascade terminates
+//     because a cycle among those edges is refused rather than capped (`alwaysSplicedSpliceOrder`).
+//
+// ⛔ `refusing` is the dialect's own `isUnsupportedInInlineBody`, which no row overrides.
+function leafOpRefusesTheBody(role InlineOpRole, op StdOp, module StdModule, framesAreRecorded bool, alwaysSpliced bool, byName FunctionNameIndex, reference StdFunctionReference) returns bool
+	return match role 'role'
+		// A parameter is the call's argument, not an instruction — it is neither counted nor copied.
+		parameter or
+			body gives false
+		framed gives not framesAreRecorded and not alwaysSpliced
+		calling gives not (alwaysSpliced and callIsIntoAnAlwaysSplicedBody(op, module: module, byName: byName, reference: reference))
+		refusing gives true
+	end 'role'
+end 'leafOpRefusesTheBody'
+
+// Does this op directly call a body that declares the row? Asked through `DeadFunctionElimination`'s own
+// reference enumeration, so "which ops name a callee" stays the roster that walk already keeps rather than
+// a second one here — and a `tryCall`, a `callIndirect` and a witness call answer `false` from it, which
+// is the right answer: none of them is a site this pass rewrites.
+function callIsIntoAnAlwaysSplicedBody(op StdOp, module StdModule, byName FunctionNameIndex, reference StdFunctionReference) returns bool
+	stdFunctionReferenceOf(op, byName: byName.byName, into: reference)
+
+	return match reference.kind 'reference'
+		none or
+			otherReference gives false
+		directCall gives module.getFunc(reference.funcIndex).mustBeSplicedAtEverySite
+	end 'reference'
+end 'callIsIntoAnAlwaysSplicedBody'
 
 // Whether a body has the SHAPE the splice can copy at all, whichever rule admits it — or which refusal
 // names why not.
@@ -1022,13 +1062,254 @@ end 'goldenRequestedFunctions'
 // The leaf rule
 // ══════════════════════════════════════════════════════════════════════════
 
+// Where a three-colour walk of the must-splice call graph stands on one body: `onStack` is what makes a
+// cycle detectable — meeting a body the walk has entered and not left IS the cycle.
+enum AlwaysSplicedWalkState
+	unvisited
+	onStack
+	done
+end 'AlwaysSplicedWalkState'
+
+typealias AlwaysSplicedWalkStateColumn = Array with AlwaysSplicedWalkState
+
+// A cycle of declared rows, rendered, or none through the body asked about.
+union AlwaysSplicedCycle
+	none
+	found(text String)
+end 'AlwaysSplicedCycle'
+
+// ⭐⭐ **THE ROW'S ONE CASCADE: A `__Raw.splicedAtEverySite()` BODY MAY CALL ANOTHER, AND THE CALLEE IS
+// SPLICED OUT OF IT BEFORE IT IS COPIED ANYWHERE.** Without that, a family written as tier source could
+// hold no helpers at all — a builder composes its emitters freely and pays nothing for it, and that parity
+// is what the row exists to restore.
+//
+// ⛔⛔ **IT IS THIS PASS'S ONE EXCEPTION TO "ONE ROUND, NO CASCADE", AND WHAT BOUNDS IT IS A DAG.** The
+// depth is the length of a chain of DECLARED rows rather than anything a program controls, and a CYCLE is
+// refused where it is met rather than capped at a depth: a cap splices some levels, leaves a call standing
+// at the boundary and reports nothing, which is the silent wrong answer this row exists to make impossible.
+type AlwaysSplicedPlan
+	// Must-splice caller -> each must-splice callee it names. Only such a caller has outgoing edges: a call
+	// out of any other body is a call the splice never carries.
+	var calls as CsrGraph
+
+	// The must-splice bodies in post-order — a callee stands before every caller of it.
+	export var order as FuncIndexArray
+
+	static function of(module StdModule, byName FunctionNameIndex) returns AlwaysSplicedPlan
+		var callerCol = CsrColumn.create()
+		var calleeCol = CsrColumn.create()
+		var reference = StdFunctionReference.create()
+		let funcCount = module.funcCount() as FuncIndex
+
+		for funcIndex in 0 upto funcCount 'eachFunc'
+			if not module.getFunc(funcIndex).mustBeSplicedAtEverySite 'noRowToCarryACall'
+				continue
+			end 'noRowToCarryACall'
+
+			for opIdx in module.liveOpIndices(module.getFunc(funcIndex)) 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("AlwaysSplicedPlan.of: live op index {opIdx} not in module.ops")
+
+				// The predicate fills `reference` on its way to the answer, which is where the callee's index
+				// comes from — the `constIsKnown`/`constOf` discipline over a caller-owned sink.
+				if callIsIntoAnAlwaysSplicedBody(op, module: module, byName: byName, reference: reference) 'aCarriedEdge'
+					callerCol.push(funcIndex as CsrIndex)
+					calleeCol.push(reference.funcIndex as CsrIndex)
+				end 'aCarriedEdge'
+			end 'eachOp'
+		end 'eachFunc'
+
+		var plan = Self{calls: buildCsr(callerCol, to: calleeCol, nodeCount: funcCount as CsrIndex), order: FuncIndexArray.create()}
+
+		// ⭐ The ordering walk sizes a column by the whole module, and no program in the tree declares the
+		// row: with no edge to order there is nothing for it to answer and the allocation is skipped.
+		if callerCol.count() != 0 'somethingToOrder'
+			plan.orderCalleesFirst(module, funcCount: funcCount)
+		end 'somethingToOrder'
+
+		return plan
+	end 'of'
+
+	// Does this body hold a call the splice must carry out of it before the body is copied?
+	export function callsAnother(funcIndex FuncIndex) returns bool
+		return self.calls.degree(funcIndex as CsrIndex) != 0
+	end 'callsAnother'
+
+	// The cycle of declared rows through `start`, if there is one: a path of must-splice calls from it back
+	// to itself. EXACT rather than a depth cap — a cap would refuse a legal chain at some arbitrary length
+	// and let a cycle one link longer through, which is a wrong answer at exactly the boundary the row
+	// cannot afford one.
+	export function cycleThrough(module StdModule, start FuncIndex, funcCount FuncIndex) returns AlwaysSplicedCycle
+		var visited = BoolArray.create()
+		visited.resize(funcCount)
+		var path = FuncIndexArray.create()
+		var nextEdge = CsrColumn.create()
+		try visited.set(start, value: true) otherwise panic("AlwaysSplicedPlan.cycleThrough: function index {start} is outside the {funcCount}-function module")
+		path.push(start)
+		nextEdge.push(0)
+
+		while path.count() != 0 'search'
+			let top = path.count() - 1
+			let node = try path.get(top) otherwise panic("AlwaysSplicedPlan.cycleThrough: path.get OOB at {top}")
+			let k = try nextEdge.get(top) otherwise panic("AlwaysSplicedPlan.cycleThrough: nextEdge.get OOB at {top}")
+
+			if k >= self.calls.degree(node as CsrIndex) 'everyCalleeSearched'
+				_ = try path.pop() otherwise panic("AlwaysSplicedPlan.cycleThrough: pop from a non-empty path")
+				_ = try nextEdge.pop() otherwise panic("AlwaysSplicedPlan.cycleThrough: pop from a non-empty path")
+				continue
+			end 'everyCalleeSearched'
+
+			try nextEdge.set(top, value: k + 1) otherwise panic("AlwaysSplicedPlan.cycleThrough: nextEdge.set OOB at {top}")
+			let callee = self.calls.neighbour(node as CsrIndex, k: k) as FuncIndex
+
+			if callee == start 'closesTheCycle'
+				return AlwaysSplicedCycle.found(renderAlwaysSplicedCycle(module, path: path, closingAt: start))
+			end 'closesTheCycle'
+
+			let searched = try visited.get(callee) otherwise panic("AlwaysSplicedPlan.cycleThrough: visited.get OOB at {callee}")
+
+			if searched 'alreadySearched'
+				continue
+			end 'alreadySearched'
+
+			try visited.set(callee, value: true) otherwise panic("AlwaysSplicedPlan.cycleThrough: visited.set OOB at {callee}")
+			path.push(callee)
+			nextEdge.push(0)
+		end 'search'
+
+		return AlwaysSplicedCycle.none
+	end 'cycleThrough'
+
+	function orderCalleesFirst(module StdModule, funcCount FuncIndex)
+		var state = AlwaysSplicedWalkStateColumn.create()
+		state.growFilled(funcCount as ElementIndex, value: AlwaysSplicedWalkState.unvisited)
+		var stack = FuncIndexArray.create()
+		var nextEdge = CsrColumn.create()
+
+		for root in 0 upto funcCount 'eachRoot'
+			if not module.getFunc(root).mustBeSplicedAtEverySite or alwaysSplicedStateAt(state, funcIndex: root) != AlwaysSplicedWalkState.unvisited 'notARootToWalkFrom'
+				continue
+			end 'notARootToWalkFrom'
+
+			enterAlwaysSplicedBody(root, state: state, stack: stack, nextEdge: nextEdge)
+
+			while stack.count() != 0 'walk'
+				self.stepCalleesFirstWalk(state, stack: stack, nextEdge: nextEdge)
+			end 'walk'
+		end 'eachRoot'
+	end 'orderCalleesFirst'
+
+	// One step of the walk: take the next unwalked callee of the body on top, or file that body and leave it.
+	function stepCalleesFirstWalk(state AlwaysSplicedWalkStateColumn, stack FuncIndexArray, nextEdge CsrColumn)
+		let top = stack.count() - 1
+		let node = try stack.get(top) otherwise panic("AlwaysSplicedPlan.stepCalleesFirstWalk: stack.get OOB at {top}")
+		let k = try nextEdge.get(top) otherwise panic("AlwaysSplicedPlan.stepCalleesFirstWalk: nextEdge.get OOB at {top}")
+
+		if k >= self.calls.degree(node as CsrIndex) 'everyCalleeWalked'
+			try state.set(node, value: AlwaysSplicedWalkState.done) otherwise panic("AlwaysSplicedPlan.stepCalleesFirstWalk: state.set OOB at {node}")
+			self.order.push(node)
+			_ = try stack.pop() otherwise panic("AlwaysSplicedPlan.stepCalleesFirstWalk: pop from a non-empty stack")
+			_ = try nextEdge.pop() otherwise panic("AlwaysSplicedPlan.stepCalleesFirstWalk: pop from a non-empty stack")
+			return
+		end 'everyCalleeWalked'
+
+		try nextEdge.set(top, value: k + 1) otherwise panic("AlwaysSplicedPlan.stepCalleesFirstWalk: nextEdge.set OOB at {top}")
+		let callee = self.calls.neighbour(node as CsrIndex, k: k) as FuncIndex
+
+		// ⛔⛔ **A BACK EDGE IS A CYCLE, AND THE WALK STEPS OVER IT RATHER THAN REFUSING HERE.** Every
+		// member of a cycle keeps a call this pass cannot splice away, so each one is caught at the gate
+		// (`requireAlwaysSplicedBodiesAreGone`) — by the door that catches every other unhonourable body,
+		// with the cycle named as the reason. Refusing here instead would put one of the row's failures
+		// behind a different report from all the others, and this walk would be the only reader of it.
+		match alwaysSplicedStateAt(state, funcIndex: callee) 'calleeState'
+			done or
+				onStack then break 'calleeState'
+			unvisited then enterAlwaysSplicedBody(callee, state: state, stack: stack, nextEdge: nextEdge)
+		end 'calleeState'
+	end 'stepCalleesFirstWalk'
+end 'AlwaysSplicedPlan'
+
+function enterAlwaysSplicedBody(funcIndex FuncIndex, state AlwaysSplicedWalkStateColumn, stack FuncIndexArray, nextEdge CsrColumn)
+	try state.set(funcIndex, value: AlwaysSplicedWalkState.onStack) otherwise panic("enterAlwaysSplicedBody: state.set OOB at {funcIndex}")
+	stack.push(funcIndex)
+	nextEdge.push(0)
+end 'enterAlwaysSplicedBody'
+
+function alwaysSplicedStateAt(state AlwaysSplicedWalkStateColumn, funcIndex FuncIndex) returns AlwaysSplicedWalkState
+	return try state.get(funcIndex) otherwise panic("alwaysSplicedStateAt: function index {funcIndex} is outside the {state.count()}-function module this walk was built over")
+end 'alwaysSplicedStateAt'
+
+// The cycle a search closed, read off its path: every body on it in call order, and the body it started
+// from again to close the ring.
+function renderAlwaysSplicedCycle(module StdModule, path FuncIndexArray, closingAt FuncIndex) returns String
+	var text = ""
+
+	for node in path 'eachOnPath'
+		text.append("'{String.from(module.getFunc(node).name)}' calls ")
+	end 'eachOnPath'
+
+	text.append("'{String.from(module.getFunc(closingAt).name)}'")
+	return text
+end 'renderAlwaysSplicedCycle'
+
+// Splice every must-splice callee OUT of the must-splice bodies, callees first, so a body copied into an
+// ordinary caller below carries none of them. Answers the bodies the caller walk below must not visit — one
+// it rewrote has no site left to find, and one it deliberately left alone must not be grown by a later
+// splice.
+function spliceAlwaysSplicedCallees(project Project, module StdModule, byName FunctionNameIndex, plan LeafPlan, always AlwaysSplicedPlan, admission SpliceAdmission, origins ValueOriginRowIndex, stats InlineLeafStats, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, round SpliceRound) returns BoolArray
+	var closedToTheCallerWalk = BoolArray.create()
+	closedToTheCallerWalk.resize(module.funcCount())
+
+	for funcIndex in always.order 'eachBodyCalleesFirst'
+		if not always.callsAnother(funcIndex) 'nothingToSpliceOutOfIt'
+			continue
+		end 'nothingToSpliceOutOfIt'
+
+		// A body below this round's caller range was joined to its callees by the other round, and a swept
+		// body was never lowered — the same two skips the caller walk below makes.
+		if funcIndex < firstCallerOf(round) or project.libraryFacts.bodyIsSwept(module.getFunc(funcIndex).name) 'notThisRoundsToSplice'
+			continue
+		end 'notThisRoundsToSplice'
+
+		// ⛔⛔ **A BODY ON A CYCLE OF DECLARED ROWS IS LEFT EXACTLY AS WRITTEN, AND SHUT OUT OF THE CALLER
+		// WALK BELOW — WHICH IS THE LOAD-BEARING HALF.** Its calls cannot be spliced away, so it is the one
+		// kind of eligible callee a later splice could GROW: the walk below would copy some leaf into it, and
+		// the copy of it at its own call sites would then be built against a value space this plan measured
+		// before the growth (`buildValueColumn`'s tripwire). The gate refuses the compile and names the
+		// cycle; leaving the bodies untouched is what keeps everything between here and there truthful.
+		let onACycle = match always.cycleThrough(module, start: funcIndex, funcCount: module.funcCount() as FuncIndex) 'onACycle'
+			found gives true
+			none gives false
+		end 'onACycle'
+
+		if onACycle 'leftAsWritten'
+			try closedToTheCallerWalk.set(funcIndex, value: true) otherwise panic("spliceAlwaysSplicedCallees: closedToTheCallerWalk.set OOB at {funcIndex}")
+			continue
+		end 'leftAsWritten'
+
+		var splicer = SiteSplicer.create(project, module: module, func: module.getFunc(funcIndex), funcIndex: funcIndex, byName: byName, admission: admission, origins: origins, stats: stats, def: def, cloner: cloner, meta: meta, ids: sharedUnseededLeafMinter, seeded: false)
+		splicer.run()
+		plan.measure(funcIndex, module: module, func: module.getFunc(funcIndex))
+		try closedToTheCallerWalk.set(funcIndex, value: true) otherwise panic("spliceAlwaysSplicedCallees: closedToTheCallerWalk.set OOB at {funcIndex}")
+	end 'eachBodyCalleesFirst'
+
+	return closedToTheCallerWalk
+end 'spliceAlwaysSplicedCallees'
+
+function isClosedToTheCallerWalk(closed BoolArray, funcIndex FuncIndex) returns bool
+	return try closed.get(funcIndex) otherwise panic("isClosedToTheCallerWalk: function index {funcIndex} is outside the {closed.count()}-function module")
+end 'isClosedToTheCallerWalk'
+
 function spliceLeaves(project Project, module StdModule, byName FunctionNameIndex, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, namedByGolden BoolArray, round SpliceRound)
-	let plan = buildLeafPlan(module, framesAreRecorded: targetEmitsInlineFrameRecords(project.target), namedByGolden: namedByGolden, meta: meta, round: round, runtimeTier: project.libraryFacts.runtimeTier)
+	let plan = buildLeafPlan(module, framesAreRecorded: targetEmitsInlineFrameRecords(project.target), namedByGolden: namedByGolden, meta: meta, round: round, runtimeTier: project.libraryFacts.runtimeTier, byName: byName)
 
 	if plan.eligibleCount == 0 'nothingToInline'
 		logDebug(LogCategory.ir, message: function() gives "inlineLeaves: 0 site(s) inlined, 0 callee(s) eligible")
 		return
 	end 'nothingToInline'
+
+	// The graph of declared rows and the order that splices a callee out of its caller first. Built before
+	// any splice, because the order is about the bodies AS WRITTEN.
+	let always = AlwaysSplicedPlan.of(module, byName: byName)
 
 	// Built ONCE, over the eligible callees alone — see `ValueOriginTable.indexRowsOfFunctions` for why
 	// the alternative (`lookup` per copied value) is a quadratic against a table with one row per
@@ -1036,6 +1317,7 @@ function spliceLeaves(project Project, module StdModule, byName FunctionNameInde
 	let origins = project.valueOrigins.indexRowsOfFunctions(plan.eligibleFuncs, funcCount: module.funcCount() as FuncIndex)
 	var stats = InlineLeafStats.create()
 	let admission = SpliceAdmission.leaves(plan)
+	let closedToTheCallerWalk = spliceAlwaysSplicedCallees(project, module: module, byName: byName, plan: plan, always: always, admission: admission, origins: origins, stats: stats, def: def, cloner: cloner, meta: meta, round: round)
 
 	// ⭐ **THE ROUND'S CALLERS, NOT THE MODULE'S** — a pipeline function's sites were offered to the
 	// first run and are not offered again (`SpliceRound`).
@@ -1049,6 +1331,12 @@ function spliceLeaves(project Project, module StdModule, byName FunctionNameInde
 		if project.libraryFacts.bodyIsSwept(func.name) 'notInTheProgram'
 			continue
 		end 'notInTheProgram'
+
+		// The row's own cascade above either spliced its sites or deliberately left them; either way this
+		// walk must not touch it (`spliceAlwaysSplicedCallees`).
+		if isClosedToTheCallerWalk(closedToTheCallerWalk, funcIndex: funcIndex) 'theCascadeOwnsIt'
+			continue
+		end 'theCascadeOwnsIt'
 
 		var splicer = SiteSplicer.create(project, module: module, func: func, funcIndex: funcIndex, byName: byName, admission: admission, origins: origins, stats: stats, def: def, cloner: cloner, meta: meta, ids: sharedUnseededLeafMinter, seeded: false)
 		splicer.run()
@@ -1065,6 +1353,212 @@ function spliceLeaves(project Project, module StdModule, byName FunctionNameInde
 	let calleesWithinLargerBudget = plan.tooManyOpsWithinLargerBudget
 	logDebug(LogCategory.ir, message: function() gives "inlineLeaves: {inlined} site(s) inlined, {eligible} callee(s) eligible, {sizeRefusals} refused-by-size at {MaxInlinedLeafOps} ops ({calleesSizeRefused} callee(s)) of which {sizeRefusalsAtLargerBudget} site(s) / {calleesWithinLargerBudget} callee(s) a budget of {ReportedLargerLeafBudget} would admit, {selfCalls} self-call site(s), {safePointRefusals} site(s) refused as the compiler's own scaffolding spliced into code that is not, {declinedGuards} spliced parameter cascade(s) declined as provably dead")
 end 'spliceLeaves'
+
+// ⛔⛔ **THE ROW'S PROMISE, ASKED OF THE FINISHED MODULE — AND THAT PLACEMENT IS THE WHOLE OF WHAT MAKES
+// IT UNBYPASSABLE.** `__Raw.splicedAtEverySite()` is a body saying it must not exist as a function, and
+// every rule the row does NOT override still refuses it: the safe-point boundary, a by-reference parameter,
+// the green-thread stack guard, an op the dialect will not copy, a golden request for the body itself. What
+// must never happen is that one of them refuses QUIETLY — the family would then ship at exactly the cost
+// the port was written to remove, with a call where its author promised none and nothing anywhere saying so.
+//
+// ⭐⭐ A check inside the pass can only see the sites the pass reached, so a narrowing of the pass takes
+// the detector away with it. This one reads the SURVIVING module, after the last splice round and after the
+// prune, so a site no round was ever offered — one an installer minted below the band's round, one in a
+// body some future scoping rule skips — is caught by the same sentence.
+// `StdDialect.assertCallsMatchCalleeArity` stands beside it in `BackendDispatch.buildBackend` for this
+// reason exactly.
+//
+// ⚠ **IT COUNTS EVERY REFERENCE THIS TIER CAN SEE, NOT ONLY A DIRECT CALL** — a `tryCall`, a function
+// value's `funcAddr`, an `.rdata` slot and the function-value target list all keep the body alive as a real
+// function, which is the thing the row denies. The one door below this tier is a hand-assembled Target
+// chunk calling a name: there is no `IrFunction` behind a chunk and no op here to read it off, so a family
+// reached that way would owe its own statement.
+export function requireAlwaysSplicedBodiesAreGone(project Project, module StdModule, byName FunctionNameIndex) throws CompileError
+	if not moduleDeclaresAnAlwaysSplicedBody(module) 'noRowInThisProgram'
+		return
+	end 'noRowInThisProgram'
+
+	let always = AlwaysSplicedPlan.of(module, byName: byName)
+	var reference = StdFunctionReference.create()
+
+	for func in module.functions 'eachFunc'
+		for opIdx in module.liveOpIndices(func) 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("requireAlwaysSplicedBodiesAreGone: live op index {opIdx} not in module.ops")
+			stdFunctionReferenceOf(op, byName: byName.byName, into: reference)
+
+			match reference.kind 'reference'
+				none then break 'reference'
+				directCall or
+					otherReference then try requireReferenceIsNotToAnAlwaysSplicedBody(project, module: module, calleeIndex: reference.funcIndex, caller: func, byName: byName, always: always)
+			end 'reference'
+		end 'eachOp'
+	end 'eachFunc'
+
+	match alwaysSplicedBodyNamedByData(project, module: module, byName: byName) 'dataDoors'
+		none then break 'dataDoors'
+		found(funcIndex, door) then try refuseAlwaysSplicedBodyStillReached(project, module: module, calleeIndex: funcIndex, reachedBy: "{door} names it", reason: "a reference that is not a call keeps the body alive as a real function, which is what the row denies")
+	end 'dataDoors'
+end 'requireAlwaysSplicedBodiesAreGone'
+
+// A body declaring the row that a reference no op of the module spells still names. ANSWERED rather than
+// reported at the walk: the report writes to `project` and both rosters below are borrowed out of it.
+union AlwaysSplicedDataReference
+	none
+	found(funcIndex FuncIndex, door String)
+end 'AlwaysSplicedDataReference'
+
+function alwaysSplicedBodyNamedByData(project Project, module StdModule, byName FunctionNameIndex) returns AlwaysSplicedDataReference
+	for reloc in project.globalData.pendingRdataRelocs 'eachRdataSlot'
+		let slot = alwaysSplicedBodyNamed(module, name: reloc.funcName, byName: byName, door: "an .rdata slot")
+
+		match slot 'anRdataSlot'
+			none then break 'anRdataSlot'
+			found then return slot
+		end 'anRdataSlot'
+	end 'eachRdataSlot'
+
+	for name in project.functionValueTargets 'eachValueTarget'
+		let target = alwaysSplicedBodyNamed(module, name: name, byName: byName, door: "a function value")
+
+		match target 'aFunctionValue'
+			none then break 'aFunctionValue'
+			found then return target
+		end 'aFunctionValue'
+	end 'eachValueTarget'
+
+	return AlwaysSplicedDataReference.none
+end 'alwaysSplicedBodyNamedByData'
+
+// Does any body of this program declare the row? The gate's own door: without one there is nothing to
+// promise, and the walks above cost a program that never heard of the row one pass over its function list.
+function moduleDeclaresAnAlwaysSplicedBody(module StdModule) returns bool
+	for func in module.functions 'eachFunc'
+		if func.mustBeSplicedAtEverySite 'declaresTheRow'
+			return true
+		end 'declaresTheRow'
+	end 'eachFunc'
+
+	return false
+end 'moduleDeclaresAnAlwaysSplicedBody'
+
+function requireReferenceIsNotToAnAlwaysSplicedBody(project Project, module StdModule, calleeIndex FuncIndex, caller IrFunction, byName FunctionNameIndex, always AlwaysSplicedPlan) throws CompileError
+	if not module.getFunc(calleeIndex).mustBeSplicedAtEverySite 'ordinaryCallee'
+		return
+	end 'ordinaryCallee'
+
+	try refuseAlwaysSplicedBodyStillReached(project, module: module, calleeIndex: calleeIndex, reachedBy: "'{String.from(caller.name)}' still calls it", reason: whyTheSpliceWasRefused(project, module: module, calleeIndex: calleeIndex, caller: caller, byName: byName, always: always))
+end 'requireReferenceIsNotToAnAlwaysSplicedBody'
+
+// The body this name resolves to when it declares the row. `none` answers for both "not a function of this
+// module" — a hand-assembled chunk, an uninstalled runtime — and "an ordinary body", because there is
+// nothing for either to report.
+function alwaysSplicedBodyNamed(module StdModule, name ByteArray, byName FunctionNameIndex, door String) returns AlwaysSplicedDataReference
+	let funcIndex = try byName.byName.get(name) otherwise return AlwaysSplicedDataReference.none
+
+	if not module.getFunc(funcIndex).mustBeSplicedAtEverySite 'ordinaryBody'
+		return AlwaysSplicedDataReference.none
+	end 'ordinaryBody'
+
+	return AlwaysSplicedDataReference.found(funcIndex, door: door)
+end 'alwaysSplicedBodyNamed'
+
+// ⛔ The one report, positioned at the body's own declaration — which is what has to change, whichever
+// door found the reference.
+function refuseAlwaysSplicedBodyStillReached(project Project, module StdModule, calleeIndex FuncIndex, reachedBy String, reason String) throws CompileError
+	let callee = module.getFunc(calleeIndex)
+	reportPositioned(project, code: ErrorCode.alwaysSplicedBodyIsStillCalled, message: "'{String.from(callee.name)}' declares '__Raw.splicedAtEverySite()', so it must be left at no call site, but {reachedBy}: {reason}. The row overrides the inliner's cost rules — the op budget, the pressure budget, the inline-frame-record rule — and never its correctness rules, so a body one of those refuses is a body that must not declare it", line: callee.nameLine, column: callee.nameColumn, filePath: callee.sourceFilePath)
+	throw CompileError.compileError
+end 'refuseAlwaysSplicedBodyStillReached'
+
+// Why the leaf rule left this body's call standing. Asked of the FINISHED module, so every sentence it can
+// answer with names a fact a reader can check against the body in front of them; the refusals share
+// `calledOnceRefusalText`'s wording because they are the same rules under a second reader.
+function whyTheSpliceWasRefused(project Project, module StdModule, calleeIndex FuncIndex, caller IrFunction, byName FunctionNameIndex, always AlwaysSplicedPlan) returns String
+	// FIRST, because every other answer would be wrong about a cycle: its members refuse no rule at all
+	// — each one's call is into a body that declares the row, which is precisely the call the leaf rule
+	// carries — and the reason they are still standing is one another.
+	match always.cycleThrough(module, start: calleeIndex, funcCount: module.funcCount() as FuncIndex) 'cycle'
+		found(text) then return "it lies on a cycle of bodies declaring the row — {text} — so splicing any member would nest a body inside itself"
+		none then break 'cycle'
+	end 'cycle'
+
+	match functionShape(module.getFunc(calleeIndex)) 'shape'
+		refused(reason) then return calledOnceRefusalText(reason)
+		spliceable then break 'shape'
+	end 'shape'
+
+	if splicingWouldWidenTheSafePoint(module.getFunc(calleeIndex), caller: caller, runtimeTier: project.libraryFacts.runtimeTier) 'wouldWidenTheSafePoint'
+		return calledOnceRefusalText(CalledOnceRefusal.safePointProvenance)
+	end 'wouldWidenTheSafePoint'
+
+	if aGoldenRequestNames(project, name: module.getFunc(calleeIndex).name) 'aGoldenWantsTheBody'
+		return calledOnceRefusalText(CalledOnceRefusal.namedByGoldenRequest)
+	end 'aGoldenWantsTheBody'
+
+	return bodyOpRefusalText(module, calleeIndex: calleeIndex, byName: byName)
+end 'whyTheSpliceWasRefused'
+
+// The first op or block of the body the leaf rule will not copy, named.
+//
+// ⚠ `framesAreRecorded` and `alwaysSpliced` are both `true` here because both are what the row makes
+// them: an answer derived with either false would name a refusal that is not the one standing.
+function bodyOpRefusalText(module StdModule, calleeIndex FuncIndex, byName FunctionNameIndex) returns String
+	var meta = StdOpMetaMemo.create()
+	var reference = StdFunctionReference.create()
+
+	for blockIndex in 0 upto module.getFunc(calleeIndex).blockRefs.count() 'eachBlock'
+		let block = module.blockAtPosition(module.getFunc(calleeIndex), position: blockIndex)
+
+		match blockShape(block, blockIndex: blockIndex) 'blockShape'
+			spliceable then break 'blockShape'
+			refused(reason) then return calledOnceRefusalText(reason)
+		end 'blockShape'
+
+		for opIdx in block.opRefs 'eachOp'
+			let op = module.getOp(opIdx)
+
+			if leafOpRefusesTheBody(inlineOpRole(op, meta: meta), op: op, module: module, framesAreRecorded: true, alwaysSpliced: true, byName: byName, reference: reference) 'thisOpRefuses'
+				return refusedOpText(op, module: module, byName: byName, reference: reference)
+			end 'thisOpRefuses'
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'terminated'
+			let term = module.getOp(block.terminatorIndex())
+
+			match terminatorRole(term, func: module.getFunc(calleeIndex), meta: meta) 'termRole'
+				body then break 'termRole'
+				calling or
+					refusing then return calledOnceRefusalText(terminatorRefusal(term, meta: meta))
+			end 'termRole'
+		end 'terminated'
+	end 'eachBlock'
+
+	return "no rule of the inliner refuses it, so the site was minted after the last splice round"
+end 'bodyOpRefusalText'
+
+// Which op refused, said in the vocabulary a reader of the body has: a call names its callee, because the
+// fix for one is to give that callee the row too or to stop calling it.
+function refusedOpText(op StdOp, module StdModule, byName FunctionNameIndex, reference StdFunctionReference) returns String
+	stdFunctionReferenceOf(op, byName: byName.byName, into: reference)
+
+	return match reference.kind 'reference'
+		none gives calledOnceRefusalText(CalledOnceRefusal.unsupportedOp)
+		directCall gives "it calls '{String.from(module.getFunc(reference.funcIndex).name)}', which does not declare '__Raw.splicedAtEverySite()'"
+		otherReference gives "it holds an indirect or throwing call, which is not a site this pass rewrites"
+	end 'reference'
+end 'refusedOpText'
+
+// Does a ```RequiredRuntime request name this body? The same roster `goldenRequestedFunctions` builds its
+// column from, read the other way round for a one-off sentence.
+function aGoldenRequestNames(project Project, name ByteArray) returns bool
+	for requested in project.requestedRuntimeBodies 'eachRequested'
+		if requested.toByteArray().equals(name) 'named'
+			return true
+		end 'named'
+	end 'eachRequested'
+
+	return false
+end 'aGoldenRequestNames'
 
 // ══════════════════════════════════════════════════════════════════════════
 // The called-once rule

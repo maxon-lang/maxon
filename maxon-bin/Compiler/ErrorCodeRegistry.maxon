@@ -1852,6 +1852,24 @@ export enum ErrorCode
 	// resolved parameter types.
 	interfaceParameterInFunctionValueTarget = "E3156"
 
+	// A `runtime/` body spelled both frame directives — `__Raw.ownFrame()`, which says the frame IS the
+	// body's product and nothing may splice it away, and `__Raw.splicedAtEverySite()`, which says the body
+	// has no frame worth keeping and the inliner must splice it into every call site. The two cannot both
+	// hold, and neither is the obvious winner: resolving it by precedence would answer one of the two
+	// questions the author asked and say nothing about the other. Positioned at the second directive.
+	contradictoryFrameDirectives = "E3157"
+
+	// A body declaring `__Raw.splicedAtEverySite()` is still reached in the finished program. The row is the
+	// body's promise that it exists at no call site, and it overrides the inliner's COST rules alone: the
+	// safe-point boundary, a by-reference parameter, the green-thread stack guard, an op the splice cannot
+	// copy, a ```RequiredRuntime request for the body and a cycle of such bodies all still refuse it. This is
+	// what that refusal must never be allowed to be silent about — a family ported on the strength of the row
+	// would otherwise ship at exactly the cost the port was written to remove, behind a call its author was
+	// told would not exist. Asked of the SURVIVING module after the last splice round, so a site no round was
+	// offered is caught by the same sentence. Positioned at the body's own declaration, naming the reference
+	// that survived and the rule that refused.
+	alwaysSplicedBodyIsStillCalled = "E3158"
+
 	// A field access could not be lowered: the base is not a struct, or the field has no slot.
 	invalidFieldAccess = "E4006"
 

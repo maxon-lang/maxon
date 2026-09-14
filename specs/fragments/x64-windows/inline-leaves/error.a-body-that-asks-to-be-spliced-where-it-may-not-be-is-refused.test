@@ -1,0 +1,18 @@
+// Test: error.a-body-that-asks-to-be-spliced-where-it-may-not-be-is-refused
+// --- runtime-file: Probe.maxon
+module function __probe_unowned(seed ExitCode) returns ExitCode
+	__Raw.splicedAtEverySite()
+
+	return seed + 1
+end '__probe_unowned'
+// --- stdlib-overlay: Builtins.maxon
+export function probeUnowned(seed ExitCode) returns ExitCode
+	return __probe_unowned(seed)
+end 'probeUnowned'
+// --- file: main.maxon
+function main() returns ExitCode
+	return probeUnowned(0) + probeUnowned(1)
+end 'main'
+---
+CompilerError:
+error E3158: <fragment>:3:17: '__probe_unowned' declares '__Raw.splicedAtEverySite()', so it must be left at no call site, but 'probeUnowned' still calls it: it is the compiler's own scaffolding and its caller is not, so the spliced bytes could be stopped where the callee never may be. The row overrides the inliner's cost rules — the op budget, the pressure budget, the inline-frame-record rule — and never its correctness rules, so a body one of those refuses is a body that must not declare it

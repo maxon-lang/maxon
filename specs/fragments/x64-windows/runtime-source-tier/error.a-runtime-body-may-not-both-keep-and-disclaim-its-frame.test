@@ -1,0 +1,15 @@
+// Test: error.a-runtime-body-may-not-both-keep-and-disclaim-its-frame
+// --- runtime-file: Probe.maxon
+module function __probe_contradictory(seed MachineWord) returns MachineWord
+	__Raw.ownFrame()
+	__Raw.splicedAtEverySite()
+
+	return seed + 1
+end '__probe_contradictory'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E3157: <fragment>:5:8: a runtime body may not spell both '__Raw.ownFrame()' and '__Raw.splicedAtEverySite()': the first says this function's frame is its product and nothing may splice the body away, the second that it has none worth keeping and the inliner must splice it into every call site

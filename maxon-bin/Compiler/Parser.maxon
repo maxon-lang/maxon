@@ -1569,6 +1569,11 @@ export union ParseError implements Error
 	// rule. An UNLISTED `__Raw` member is the other fact and keeps the sibling arm, whichever file calls it.
 	rawIntrinsicOutsideRuntimeTier(callee String, line LineNumber, column ColumnNumber)
 
+	// ⭐ A runtime body spelling BOTH frame directives — `__Raw.ownFrame()` and
+	// `__Raw.splicedAtEverySite()`. Renders as **E3157**, positioned at the second of the two, which is the
+	// one that has to go.
+	contradictoryFrameDirectives(line LineNumber, column ColumnNumber)
+
 	// ⭐ A MANAGED value NAMED in a `runtime/` source file. Renders as **E3153**, positioned at the binding's
 	// own name: the reference-counting pass would emit `__mm_incref`/`__mm_decref` into the very tier that
 	// DEFINES them. At the name, so the legality of a runtime file never turns on which optimizations
@@ -83678,10 +83683,77 @@ export type Parser
 			constant = try self.reserveRawScratchSlot(func, bytes: constant, callee: callee, calleeTok: calleeTok)
 		end 'frameRecord'
 
+		try self.recordFrameDirective(func, intrinsic: intrinsic, calleeTok: calleeTok)
+
 		let result = self.mintValue(rawIntrinsicResultTag(intrinsic), nameId: UnnamedTypeId)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.rawIntrinsic(result, intrinsic: intrinsic, args: words, constant: constant), range: SourceRange.ofToken(calleeTok))
 		return result
 	end 'emitRawIntrinsic'
+
+	// ⭐⭐ **THE TWO DIRECTIVE ROWS ARE FACTS ABOUT THE ENCLOSING FUNCTION, AND THIS IS WHERE THEY ARE
+	// RECORDED** — on the very `IrFunction` the Maxon→Std transfer hands on as the Std function, so the
+	// claim needs no second carrier and the lowering appends nothing for either row.
+	//
+	// ⛔ **THE TWO CONTRADICT EACH OTHER AND THE CONTRADICTION IS REFUSED HERE**, at the declaration that
+	// makes it, rather than at the inliner: one says the frame is the body's whole product and the other
+	// that the body has no frame worth keeping, and a compiler resolving that by precedence would give a
+	// runtime author a silent answer to a question they asked twice.
+	function recordFrameDirective(func IrFunction, intrinsic RawIntrinsic, calleeTok Token) throws ParseError
+		match intrinsic 'row'
+			ownFrame then try self.claimOwnFrame(func, calleeTok: calleeTok)
+			splicedAtEverySite then try self.claimSplicedAtEverySite(func, calleeTok: calleeTok)
+			osTickCountMs or
+				osReadWallClock or
+				osThreadCpuTicks or
+				osCpuCount or
+				osGetPid or
+				osEnterBackgroundPriority or
+				osExit or
+				scratch or
+				schedNumProcsAddr or
+				schedMaxActiveWorkersAddr or
+				slabArenaListAddr or
+				slabArenaMapL1Addr or
+				slabStateAddr or
+				slabSizeToClass8Addr or
+				slabSizeToClass128Addr or
+				slabClassGeomAddr or
+				dsBaseAddr or
+				dsAllocIdAddr or
+				tlsSlotLoad or
+				loadWord or
+				storeWord or
+				loadByte or
+				storeByte or
+				atomicAddWord or
+				atomicCas or
+				memFill or
+				osAllocPages or
+				osReservePages or
+				osCommitPages or
+				osDecommitPages or
+				osFreePages or
+				osLockInit or
+				osLockEnter or
+				osLockLeave then break 'row'
+		end 'row'
+	end 'recordFrameDirective'
+
+	function claimOwnFrame(func IrFunction, calleeTok Token) throws ParseError
+		if func.mustBeSplicedAtEverySite 'bothSpelled'
+			throw ParseError.contradictoryFrameDirectives(calleeTok.line, column: calleeTok.column)
+		end 'bothSpelled'
+
+		func.keepsItsOwnFrame = true
+	end 'claimOwnFrame'
+
+	function claimSplicedAtEverySite(func IrFunction, calleeTok Token) throws ParseError
+		if func.keepsItsOwnFrame 'bothSpelled'
+			throw ParseError.contradictoryFrameDirectives(calleeTok.line, column: calleeTok.column)
+		end 'bothSpelled'
+
+		func.mustBeSplicedAtEverySite = true
+	end 'claimSplicedAtEverySite'
 
 	// ⭐ **`__Raw.scratch(bytes)` TAKES THE NEXT SLOTS OF THIS FUNCTION'S FRAME, and what the op carries is
 	// the SLOT, not the byte count** — `StdOp.stackRecordAddr` names a slot because the frame base is not

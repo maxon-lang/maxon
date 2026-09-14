@@ -1,0 +1,28 @@
+// Test: error.a-cycle-of-bodies-that-ask-to-be-spliced-is-refused
+// --- runtime-file: Probe.maxon
+module function __probe_cycle_a(seed MachineWord) returns MachineWord
+	__Raw.splicedAtEverySite()
+
+	return __probe_cycle_b(seed) + __probe_cycle_b(seed + 1)
+end '__probe_cycle_a'
+
+module function __probe_cycle_b(seed MachineWord) returns MachineWord
+	__Raw.splicedAtEverySite()
+
+	return __probe_cycle_a(seed) + 2
+end '__probe_cycle_b'
+
+function __probe_cycle_entry(seed ExitCode) returns ExitCode
+	return __probe_cycle_a(seed as MachineWord) as ExitCode
+end '__probe_cycle_entry'
+// --- stdlib-overlay: Builtins.maxon
+export function probeCycle(seed ExitCode) returns ExitCode
+	return __probe_cycle_entry(seed)
+end 'probeCycle'
+// --- file: main.maxon
+function main() returns ExitCode
+	return probeCycle(0)
+end 'main'
+---
+CompilerError:
+error E3158: <fragment>:9:17: '__probe_cycle_b' declares '__Raw.splicedAtEverySite()', so it must be left at no call site, but '__probe_cycle_a' still calls it: it lies on a cycle of bodies declaring the row — '__probe_cycle_b' calls '__probe_cycle_a' calls '__probe_cycle_b' — so splicing any member would nest a body inside itself. The row overrides the inliner's cost rules — the op budget, the pressure budget, the inline-frame-record rule — and never its correctness rules, so a body one of those refuses is a body that must not declare it

@@ -1,0 +1,102 @@
+// Test: a-body-that-asks-to-be-spliced-may-call-another-that-does
+// --- runtime-file: Probe.maxon
+module function __probe_inner(seed MachineWord) returns MachineWord
+	__Raw.splicedAtEverySite()
+
+	return seed + 1
+end '__probe_inner'
+
+module function __probe_outer(seed MachineWord) returns MachineWord
+	__Raw.splicedAtEverySite()
+
+	return __probe_inner(seed) + __probe_inner(seed + 1)
+end '__probe_outer'
+
+function __probe_chain_caller(seed ExitCode) returns ExitCode
+	let base = __probe_outer(seed as MachineWord)
+	let again = __probe_outer(base and 1)
+
+	return (base + again) as ExitCode
+end '__probe_chain_caller'
+// --- stdlib-overlay: Builtins.maxon
+export function probeSpliceChain(seed ExitCode) returns ExitCode
+	return __probe_chain_caller(seed)
+end 'probeSpliceChain'
+// --- file: main.maxon
+function main() returns ExitCode
+	return probeSpliceChain(0)
+end 'main'
+---
+ExitCode: 8
+---
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+  __rc_ok:
+    x64.callDirect __probe_chain_caller
+  __il_cont:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @__probe_chain_caller {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic#2
+  __rc_chk#3:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rcx, rax
+    x64.jcc greater, __rc_panic#2
+  __il_body#12:
+    x64.leaRegRegImm32 rax, rcx, 1
+  __il_body#13:
+    x64.leaRegRegImm32 rcx, rax, 1
+  __il_cont#10:
+    x64.leaRegRegReg rax, rax, rcx
+  __il_cont#8:
+    x64.movRegReg rcx, rax
+    x64.andRegImm32 rcx, rax, 1
+  __il_body#17:
+    x64.leaRegRegImm32 rcx, rcx, 1
+  __il_body#18:
+    x64.leaRegRegImm32 rdx, rcx, 1
+  __il_cont#15:
+    x64.leaRegRegReg rcx, rcx, rdx
+  __il_cont#7:
+    x64.leaRegRegReg r8, rax, rcx
+  __rc_chk#6:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic#5
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at Probe.maxon:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at Probe.maxon:17: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

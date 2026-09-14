@@ -4,9 +4,11 @@
 // (`Parser.requireCalleeIsNotReservedName`), because a raw machine operation in user code has no
 // runtime between it and the machine.
 //
-// ⚠ **ONE ROW IS A DIRECTIVE INSTEAD — `ownFrame`**, which emits nothing and states a fact about the
-// function that spells it. The table is the only vocabulary a runtime body has, so a thing a body must say
-// and cannot otherwise express belongs in it; see that row for why the exception stops at one.
+// ⚠ **TWO ROWS ARE DIRECTIVES INSTEAD — `ownFrame` and `splicedAtEverySite`**, which emit nothing and
+// state opposite facts about the function that spells them: its frame is its product, or it has none worth
+// keeping. The table is the only vocabulary a runtime body has, so a thing a body must say and cannot
+// otherwise express belongs in it; a body spelling both says two contradictory things and is refused at the
+// declaration.
 //
 // ⭐ **THE TABLE IS WHAT EVERY READER ASKS.** Recognition, the statement door, the argument shape check
 // and the lowering all read the four functions below, so "which intrinsics exist", "how is one written"
@@ -61,6 +63,7 @@ let RawOsLockInitName = b"__Raw.osLockInit"
 let RawOsLockEnterName = b"__Raw.osLockEnter"
 let RawOsLockLeaveName = b"__Raw.osLockLeave"
 let RawOwnFrameName = b"__Raw.ownFrame"
+let RawSplicedAtEverySiteName = b"__Raw.splicedAtEverySite"
 
 export enum RawIntrinsic
 	osTickCountMs
@@ -185,6 +188,23 @@ export enum RawIntrinsic
 	// a backtrace prints — has no other way to say so, and every alternative keys the fact on a NAME the
 	// compiler would have to remember instead of on the body that owns it.
 	ownFrame
+
+	// ⭐⭐ **`ownFrame`'s OPPOSITE, AND THE SECOND DIRECTIVE.** It states that this body has no frame worth
+	// keeping: the inliner must splice it into every one of its call sites whatever its size, so a family
+	// written as tier source is emitted the way a BUILDER emitted it — spliced inline at each site, with no
+	// call, no frame and no `ret` around it.
+	//
+	// ⭐ **IT OVERRIDES THE COMPILER'S COST RULES AND NEVER A CORRECTNESS RULE.** The op budget, the
+	// called-once pressure budget and the inline-frame-record rule are judgements about what inlining is
+	// WORTH, and a body that says its whole existence depends on being spliced overrules them. The safe-point
+	// provenance rule, a by-reference parameter, the green-thread stack guard and the
+	// `isUnsupportedInInlineBody` roster are judgements about what inlining would BREAK, and each still
+	// refuses — after which the promise cannot be kept and
+	// `InlineLeaves.requireAlwaysSplicedBodiesAreGone` ends the compile naming the body. A row that degraded
+	// quietly to a call would ship the family at the cost the port exists to remove, with nothing saying so.
+	//
+	// ⛔ Spelling it beside `ownFrame` is a contradiction and is refused at the declaration (E3157).
+	splicedAtEverySite
 end 'RawIntrinsic'
 
 // ⭐ **EVERY ARGUMENT SHAPE A ROW CAN WEAR, ENUMERATED RATHER THAN DERIVED from an arity plus a per-position
@@ -371,6 +391,10 @@ function rawIntrinsicLookupOf(callee ByteArray) returns RawIntrinsicLookup
 		return RawIntrinsicLookup.found(RawIntrinsic.ownFrame)
 	end 'ownFrame'
 
+	if callee.equals(RawSplicedAtEverySiteName) 'splicedAtEverySite'
+		return RawIntrinsicLookup.found(RawIntrinsic.splicedAtEverySite)
+	end 'splicedAtEverySite'
+
 	return RawIntrinsicLookup.absent
 end 'rawIntrinsicLookupOf'
 
@@ -432,6 +456,7 @@ export function rawIntrinsicCalleeName(intrinsic RawIntrinsic) returns ByteArray
 		osLockEnter gives RawOsLockEnterName
 		osLockLeave gives RawOsLockLeaveName
 		ownFrame gives RawOwnFrameName
+		splicedAtEverySite gives RawSplicedAtEverySiteName
 	end 'name'
 end 'rawIntrinsicCalleeName'
 
@@ -471,7 +496,8 @@ export function rawArgShapeOf(intrinsic RawIntrinsic) returns RawArgShape
 		osCommitPages or
 			osDecommitPages or
 			osFreePages gives RawArgShape.twoWords
-		ownFrame gives RawArgShape.nothing
+		ownFrame or
+			splicedAtEverySite gives RawArgShape.nothing
 	end 'shape'
 end 'rawArgShapeOf'
 
@@ -511,7 +537,8 @@ export function rawResultKindOf(intrinsic RawIntrinsic) returns RawResultKind
 			osLockInit or
 			osLockEnter or
 			osLockLeave or
-			ownFrame gives RawResultKind.nothing
+			ownFrame or
+			splicedAtEverySite gives RawResultKind.nothing
 	end 'result'
 end 'rawResultKindOf'
 
@@ -626,6 +653,7 @@ export function rawHostFacilityOf(intrinsic RawIntrinsic) returns RawHostFacilit
 			atomicAddWord or
 			atomicCas or
 			memFill or
-			ownFrame gives RawHostFacility.none
+			ownFrame or
+			splicedAtEverySite gives RawHostFacility.none
 	end 'facility'
 end 'rawHostFacilityOf'

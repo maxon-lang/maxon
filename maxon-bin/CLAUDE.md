@@ -314,13 +314,37 @@ Four doors are still standing open rather than shut:
   and `exit-with-code` on wasm32-wasi, where the program really did end at 93.
   ⛔ **`memcpy` IS NOT A ROW AND MUST NOT BECOME ONE.** The tree has no `memcpy` Std op; bulk copy is a
   hand-built loop over word and byte chunks, which in tier source is ordinary Maxon over the accessors.
-- **`ownFrame` is the one row that is a DIRECTIVE rather than an operation.** It appends no Std op and
-  instead sets `IrFunction.keepsItsOwnFrame`, which `InlineLeaves.functionShape` refuses to splice. Without
-  it a tier body small enough to inline is spliced into every call site and then swept, and a runtime entry
-  whose whole product is a FRAME ceases to exist. It is the checkpoint's, and
-  `builtins-parallel-boundary.md`'s `checkpoint-body-is-runtime-source` renders the body it protects —
-  though a ```RequiredRuntime block pins a body never-inline for its own compile, so what actually guards
-  the rule is the unchanged `call __parallel_boundary` in every other golden.
+- **`ownFrame` and `splicedAtEverySite` are the two rows that are DIRECTIVES rather than operations, and
+  they are opposites.** Neither appends a Std op; each sets a fact about the function that spells it, and
+  `Parser.recordFrameDirective` is the one writer of both — which is also where spelling BOTH earns
+  **E3157**, because there is no body they can both be true of.
+  - `ownFrame` sets `IrFunction.keepsItsOwnFrame`, which `InlineLeaves.functionShape` refuses to splice.
+    Without it a tier body small enough to inline is spliced into every call site and then swept, and a
+    runtime entry whose whole product is a FRAME ceases to exist. It is the checkpoint's, and
+    `builtins-parallel-boundary.md`'s `checkpoint-body-is-runtime-source` renders the body it protects —
+    though a ```RequiredRuntime block pins a body never-inline for its own compile, so what actually guards
+    the rule is the unchanged `call __parallel_boundary` in every other golden.
+  - `splicedAtEverySite` sets `IrFunction.mustBeSplicedAtEverySite`: the inliner must splice the body into
+    every call site whatever its size, so a family a BUILDER used to splice inline can live in tier source
+    and still be emitted the way the builder emitted it.
+    ⭐⭐ **IT OVERRIDES THE COMPILER'S COST RULES AND MAY NEVER OVERRIDE A CORRECTNESS RULE.** Waived:
+    `InlineLeaves.MaxInlinedLeafOps`, the called-once pressure budget, the inline-frame-record rule (a
+    builder's spliced code never had a frame record either), and the leaf rule's *"no call of any kind"*
+    for ONE edge — a call into another body that declares the row, spliced out callees-first before this
+    body is copied anywhere. Still refusing: `splicingWouldWidenTheSafePoint`, `reassignedParamMask != 0`,
+    `needsGreenThreadStackGuard`, `keepsItsOwnFrame`, the `isUnsupportedInInlineBody` roster, and a golden
+    request for the body itself.
+    ⛔⛔ **AND A REFUSAL IS NEVER SILENT.** `InlineLeaves.requireAlwaysSplicedBodiesAreGone` reads the
+    SURVIVING module in `BackendDispatch.buildBackend` — beside `assertCallsMatchCalleeArity`, after the
+    last splice round and after the prune — and reports **E3158** at the body's declaration, naming the
+    reference that survived and the rule that refused. A CYCLE of declared rows is one of those reasons,
+    detected exactly rather than capped. Asked there because a check inside the pass can only see the sites
+    the pass reached, and the next narrowing of an optimization would take it away.
+    ⇒ **PORTING A FAMILY ON THE STRENGTH OF THIS ROW MEANS ASKING WHO CALLS IT.** A tier body spliced into
+    code the compiler does NOT own is `splicingWouldWidenTheSafePoint`'s refusal, so a primitive
+    `InlineManagedPrimitives` expands into USER functions — `emitSlotAddr` and the four fast arms around it
+    — has no tier spelling at all. `emitElementBits` / `emitBitsToBytes` / `emitElementByteLen` are reached
+    only from builder-emitted `__`-band bodies and do not hit that wall.
 - **`__Raw.scratch` is the one door that materializes a frame ADDRESS in a register in a GT program, and
   the gate that protects the other such door does not cover it.** `PromoteStackRecords` promotes NOTHING in
   a program running green threads, because `__gt_stack_relocate` frees the old pages and a promoted address
