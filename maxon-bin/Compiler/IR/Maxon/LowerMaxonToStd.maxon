@@ -4712,8 +4712,10 @@ type MaxonToStdLowering
 	// `storeIndirect` per argument, the trampoline reading them back into the ABI argument registers. The
 	// callee's DIRECT `.text` address (`funcAddr`, NOT a `__fnref_` thunk: the trampoline calls it with user
 	// arguments only, its own `(userargs) -> R` shape) becomes `__gt_spawn(funcPtr)`, whose result is the Promise
-	// handle (the GT struct pointer). No float widening is possible — SemanticCheck refused a non-scalar
-	// parameter — so the slotted args pass through as i64 without `finalizeCallArgs`.
+	// handle (the GT struct pointer). No float widening is possible — a float parameter has no place in the
+	// trampoline's integer channel and `SemanticCheck.requireAsyncScalarParams` refuses it — so the slotted
+	// args pass through as i64 without `finalizeCallArgs`. A MANAGED argument is accepted and is one such
+	// i64: its box pointer.
 	function lowerAsyncCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argDefaultSlots ParamCountArray, dstBlock IrBlock)
 		let sig = try self.funcSignatures.get(callee) otherwise panic("lowerAsyncCall: async callee '{String.from(callee)}' has no signature — SemanticCheck must reject an unknown callee before lowering")
 
@@ -4800,12 +4802,11 @@ type MaxonToStdLowering
 	// deriving them at the parse would put the loop's symbol in a second place and the abandon callee in a
 	// third — and a `funcAddr` naming a symbol nothing built is a link failure with no line on it.
 	//
-	// ⭐⭐ **THE ABANDON CALLEE IS `<T>.__abandon` SINCE SV2, AND IT WAS THE REQUEST UNION'S BARE CASCADE.**
-	// `SERVICES_DESIGN.md` reserved such a function and SV1 argued it away — *"in the compiler that is the
-	// tag-conditional `__destruct_<U>` cascade P1.3 already emits"* — which was right while a dead message
-	// owed nothing but its payloads. A dead message now also owes its AWAITER an answer, and leaving one
-	// parked for a reply that will never come is a hang with no diagnostic; `Project.serviceAbandonSymbol`
-	// states the obligation, and `<T>.__abandon`'s own body still ends in that very cascade.
+	// ⭐⭐ **THE ABANDON CALLEE IS `<T>.__abandon`, AND THE REQUEST UNION'S BARE TAG-CONDITIONAL
+	// `__destruct_<U>` CASCADE CANNOT STAND IN FOR IT.** `specs/services.md` reserves such a function because
+	// a dead message owes more than its payloads: it owes its AWAITER an answer, and leaving one parked for a
+	// reply that will never come is a hang with no diagnostic. `Project.serviceAbandonSymbol` states the
+	// obligation, and `<T>.__abandon`'s own body still ends in that very cascade.
 	//
 	// ⚠ Both symbols are ROOTED by these two `funcAddr`s, which `DeadFunctionElimination` treats as static
 	// edges (`funcAddrCalleeEdge`). The loop is additionally reachable from

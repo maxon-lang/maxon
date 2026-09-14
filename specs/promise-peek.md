@@ -67,9 +67,9 @@ the field-read door.
 ### Targets — the peek itself is target-NEUTRAL; what gates these cases is the yield point
 
 `__gt_is_complete` is a load, a compare and a return. It names no Win32 import, allocates nothing and
-lowers on every backend, so it is deliberately **not** in `SemanticCheck.calleeNeedsWin32Substrate` —
-unlike `__proc_pid` or `__gt_resched`, adding it there would be a refusal on arm64 for a construct that
-target can serve perfectly well the moment its scheduler lands.
+lowers on every backend, so it deliberately names no `HostFacility` in `TargetFacilities.calleeHostFacility`
+— unlike `__proc_pid` or `__gt_resched`, giving it one would refuse it on a lane that can serve it perfectly
+well.
 
 What restricts the cases below is what restricts every async case in this suite: a legal `async` spawn
 needs a callee that YIELDS, and the only yield primitives are x64-windows-only at this rung. So the

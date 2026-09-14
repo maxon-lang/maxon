@@ -89,7 +89,7 @@ runtime entry point — `__mm_retain`, `__write_stdout`, the `__mf_*` band — w
 module slot and no route back into user code. Counting those as unknowns would mark every handler that prints
 or allocates as blind and refuse essentially every service program there is.
 
-⚠ **AND EVERY REFUSAL CARRIES THE `spawn` AS A NOTE**, on `SERVICES_DESIGN.md`'s standing requirement for a
+⚠ **AND EVERY REFUSAL CARRIES THE `spawn` AS A NOTE**, on `specs/services.md`'s standing requirement for a
 whole-program service rule and for its reason: whether `Counter` is a service is decided by a `spawn` that may
 be in another file entirely, so a diagnostic that named only the write would leave the reader with no way to
 find out why an ordinary-looking assignment became illegal. The primary line is the WRITE — the one place the

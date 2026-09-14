@@ -5893,9 +5893,10 @@ let BuiltinsParallelBoundaryName = b"__Builtins.parallelBoundary"
 // `usesGt`, so a name under that band would install the entire green-thread scheduler, the timer store and
 // the netpoll for a program whose only concession to concurrency is a marker in a function nobody spawns
 // (`specs/builtins-parallel-boundary.statement-position` is exactly that program). A checkpoint that costs a
-// scheduler is not a checkpoint. `__proc_` is wrong for the opposite reason: it is
-// `SemanticCheck.calleeNeedsWin32Substrate`'s host-only band, and an empty function lowers on every target
-// the compiler emits.
+// scheduler is not a checkpoint. `__proc_` is wrong for the opposite reason:
+// `TargetFacilities.calleeHostFacility` maps that band onto `HostFacility.processInfo`, so a lane without
+// one would refuse the marker with E3104 — and an empty function lowers on every target the compiler
+// emits.
 let ParallelBoundaryName = b"__parallel_boundary"
 
 // `__Builtins.parallelBoundary` takes NOTHING and returns void — there is no knob on a checkpoint. Stated
@@ -52553,7 +52554,7 @@ export type Parser
 		// A PARAMETER is the one arrival this fact is about the absence of: it crossed a frame boundary whose
 		// far side this compiler cannot read, which is exactly what `returnsFreshValue` answers for a RESULT and
 		// nothing answers for an argument. So the seed is also the final answer, and a send of a parameter is
-		// refused (E3138) — `SERVICES_DESIGN.md`'s known weakness 1, stated in a column.
+		// refused (E3138) — `specs/services.md`'s transferability rule, stated in a column.
 		self.valueFromFreshReturn.push(false)
 
 		// A parameter is never an async spawn's handle; the slot must exist so the column stays indexable.

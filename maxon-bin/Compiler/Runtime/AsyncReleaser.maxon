@@ -55,38 +55,32 @@
 // two arguments and so does not approach that gate — it is a guard against the spawn-site reference being
 // missing, not against arity.)
 //
-// ⭐ **MULTI-M: TWO OF THE THREE STEPS THIS BLOCK USED TO NAME ARE CLOSED (G2), AND THE THIRD IS NAMED
-// PRECISELY.**
-//   (1) **The `gt.releaser` load / clear pair** was a read-modify-write with the ENTIRE release inside it —
-//       two Ms could both observe the same non-null releaser and both run it, which is a DOUBLE FREE of every
-//       managed argument the spawn owned, not a lost count. It is a CAS now: whoever wins the swap to 0 is
-//       the one that calls. `GtRuntime.emitGtReleaserCall` carries the argument and the no-retry-loop proof.
-//   (3) **The refcounts the emitted drop callees touch** were made atomic here and are PLAIN again since
-//       EC10 — a releaser runs on the M of the green thread that owns the spawn, which is the only party
-//       that ever holds those boxes (`MmRuntime.emitAdjustRefcount`; `SchedRuntime.maxon` states the
-//       invariant). What survived the flip back is the half that was doing the work: the decref decides "am
-//       I the last owner?" from the value its own decrement displaced rather than from a prior read.
-//   (2) ✅ **The drop path's `threw`/`result` reads are CLOSED, and they were closed by the TEARDOWN
-//       RENDEZVOUS rather than by anything in this file.** This block used to read *"the one still open
-//       here"* and describe the hazard as `__gt_promise_drop` reading `gt.status`, picking an arm, and then
-//       reading `gt.threw`/`gt.result` while a completion on another M moved `status` in between — a torn
-//       VIEW across two words rather than a lost update. **RE-DERIVED AT THE CODE (A1-A6, 2026-08-31): the
-//       drop reads NEITHER WORD.** `buildGtPromiseDrop` loads `status`, `parkKind` and `owner`, and nothing
-//       else; the only reader of `threw`/`result` on this road is the releaser, and
-//       the releaser runs only inside `__gt_reclaim` — which is reached only by the party that
-//       `emitGtTeardownArrive` told was **SECOND**. The completing party writes both answer words and
-//       `status` and only THEN arrives, so a second arrival that reads them is reading behind a `lock xadd`
-//       that the writer has already passed. `GtRuntime.emitGtTeardownArrive`'s header states the same rule
-//       from its own end — *"every read of the struct must precede the caller's own arrival"* — and names
-//       this item as the thing it closes.
+// ⭐ **MULTI-M: THREE STEPS ON THIS ROAD, TWO OF THEM CLOSED BY CONSTRUCTION AND THE THIRD BY AN ORDERING
+// RULE.**
+//   (1) **The `gt.releaser` claim is a CAS.** A load / clear pair would be a read-modify-write with the
+//       ENTIRE release inside it — two Ms could both observe the same non-null releaser and both run it,
+//       which is a DOUBLE FREE of every managed argument the spawn owned, not a lost count. Whoever wins the
+//       swap to 0 is the one that calls. `GtRuntime.emitGtReleaserCall` carries the argument and the
+//       no-retry-loop proof.
+//   (2) **The refcounts the emitted drop callees touch are PLAIN** — a releaser runs on the M of the green
+//       thread that owns the spawn, which is the only party that ever holds those boxes
+//       (`MmRuntime.emitAdjustRefcount`; `SchedRuntime.maxon` states the invariant). The half that does the
+//       work is the order: the decref decides "am I the last owner?" from the value its own decrement
+//       displaced rather than from a prior read.
+//   (3) **The drop path never reads `threw`/`result`, and the TEARDOWN RENDEZVOUS is what keeps that safe.**
+//       `buildGtPromiseDrop` loads `status`, `parkKind` and `owner`, and nothing else; the only reader of
+//       `threw`/`result` on this road is the releaser, and the releaser runs only inside `__gt_reclaim` —
+//       which is reached only by the party that `emitGtTeardownArrive` told was **SECOND**. The completing
+//       party writes both answer words and `status` and only THEN arrives, so a second arrival that reads
+//       them is reading behind a `lock xadd` that the writer has already passed.
+//       `GtRuntime.emitGtTeardownArrive`'s header states the same rule from its own end — *"every read of
+//       the struct must precede the caller's own arrival"*.
 //
-//       ⚠ **AND THE CANCEL ROAD THIS ITEM WORRIED ABOUT IS GENUINELY REACHABLE NOW, WHICH IS WHY THE
-//       RE-DERIVATION MATTERED RATHER THAN THE CONCLUSION.** SV2's reply cell IS a promise, completed by
-//       `__gt_cell_complete` on the SERVICE's green thread while the CLIENT may drop or cancel it on
-//       another M — the first cross-M drop-versus-completion in the language, where per-await linearity had
-//       previously made the whole shape unreachable. `services.pending-reply-dropped-then-answered` and
-//       `services.completed-reply-dropped-is-reclaimed` are the two orders, committed. The hazard is absent
-//       because of the ordering rule, not because nobody can stand there.
+//       ⚠ **THE CROSS-M DROP-VERSUS-COMPLETION IS REACHABLE.** A reply cell IS a promise, completed by
+//       `__gt_cell_complete` on the SERVICE's green thread while the CLIENT may drop or cancel it on another
+//       M. `services.pending-reply-dropped-then-answered` and `services.completed-reply-dropped-is-reclaimed`
+//       are the two orders, committed. The hazard is absent because of the ordering rule, not because nobody
+//       can stand there.
 //
 //       ⛔ **SO THE RULE, NOT THE VERDICT, IS WHAT A LATER READER NEEDS:** a party on this road may read
 //       `gt.result` or `gt.threw` ONLY before its own `emitGtTeardownArrive`, and today only the second
@@ -192,7 +186,7 @@ export function asyncCalleeNeedsReleaser(callee ByteArray, funcSignatures FuncSi
 	return not asyncReleasePlanFor(callee, funcSignatures: funcSignatures, signatures: signatures, typeNames: typeNames).isInert()
 end 'asyncCalleeNeedsReleaser'
 
-// ⭐⭐ **THE REPLY CELL's RELEASER (SV2) — the SAME body, over a DIFFERENT plan.** A cell owes exactly one
+// ⭐⭐ **THE REPLY CELL's RELEASER — the SAME body, over a DIFFERENT plan.** A cell owes exactly one
 // release: the managed RESULT a message answered that nobody ever took, which the second arrival at the
 // teardown rendezvous (`__gt_reclaim`) frees with `ownedByThisDrop`. Its symbol is in its own namespace
 // because the plans differ in what they name: `__gt_release_<callee>` is the plan of a SPAWN of `<callee>`
@@ -594,7 +588,7 @@ end 'installAsyncReleasers'
 // result-or-error only when `resultConsumed` is 0. See this file's header for which caller passes which and
 // what each of the two mistakes costs.
 //
-// ⚠ **THE NAME IS A PARAMETER BECAUSE TWO FAMILIES SHARE THIS BODY (SV2)** — `__gt_release_<callee>` for an
+// ⚠ **THE NAME IS A PARAMETER BECAUSE TWO FAMILIES SHARE THIS BODY** — `__gt_release_<callee>` for an
 // `async` spawn and `__gt_reply_release_<message>` for a reply cell. They differ in their PLAN (see
 // `serviceReplyReleasePlanFor` for the three facts that differ) and in nothing this function does, so a
 // second copy of the guard order — arguments always, result under `resultConsumed`, success under

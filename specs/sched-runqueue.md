@@ -65,7 +65,7 @@ readied onto `main`'s strand, and the machine that fires a timer or reaps a chil
 strand's token itself rather than waking another. So a program whose only green thread is `main` keeps one
 M at every `MAXON_MAX_PROCS` (`SchedRuntime.maxon`'s header).
 
-⭐ **A `spawn` IS WHAT ADDS TOKENS** (`SERVICES_DESIGN.md`, *"Send is a MOVE"*). `__svc_spawn` calls
+⭐ **A `spawn` IS WHAT ADDS TOKENS** (`specs/services.md`, *"Sending MOVES"*). `__svc_spawn` calls
 `__gt_spawn_green` and publishes the new green thread's token to a P RING, which is exactly what a ring, a
 steal and a worker loop are for — so the five cases at the END of this file, which run services, are where
 the tiers carry more than `main`'s one token.

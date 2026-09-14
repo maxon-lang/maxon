@@ -4794,13 +4794,13 @@ export type StdToX64Lowering
 		end 'route'
 	end 'lowerTlsSetValue'
 
-	// ⭐⭐ Lower `tlsSlotLoad(result, tebOffset)` to ONE instruction: `mov result, gs:[tebOffset]`.
+	// ⭐⭐ Lower `tlsSlotLoad(result, tebOffset)` to ONE instruction: `mov result, <tp>:[tebOffset]`, where
+	// the thread-pointer segment is the encoder's `x64ThreadPointerSegment(target.os)`.
 	//
 	// ⚠ **IT IS NOT ROUTED THROUGH `x64OsCallKind`, AND THAT IS THE POINT OF THE OP.** Every other Win32
 	// lowering in this file asks that question because it makes an import CALL; this one reaches no OS at all
-	// — `gs:` is the ISA's segment override and the TEB is where Windows happens to put a thread's slots. The
-	// op is refused on the other lanes by `calleeNeedsWin32Substrate` at the CALL's own span, one tier up,
-	// exactly as `__cpu_count` is; a `syscall` arm here would be an unreachable second refusal.
+	// — a segment override is an ISA fact, and the one OS fact, WHICH segment holds a thread's slots, the
+	// encoder already carries. A `syscall` arm here would have nothing to call.
 	//
 	// ⚠ **THE OPERAND IS THE ADDRESSING BASE AND MAY BE COLOURED ANYWHERE, INCLUDING rbp/r13.** Pinning a
 	// fixed register here to dodge the mod=00/rm=101 RIP-relative encoding those two take is not needed:

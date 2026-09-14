@@ -51,7 +51,7 @@ export let ManagedSocketBoxBytes = 8 as ParsedInt
 // its reason: the box is allocated zeroed, so a box whose `socket()` never ran and one that has been closed
 // carry the same value and ONE guard covers both.
 //
-// ⚠ **THE SLOT HOLDS `socket + HandleSlotBias`, WHICH IS WHAT MAKES THAT SENTINEL TOTAL (MAC4).** A Win32
+// ⚠ **THE SLOT HOLDS `socket + HandleSlotBias`, WHICH IS WHAT MAKES THAT SENTINEL TOTAL.** A Win32
 // `SOCKET` is never 0, so the bias buys this family nothing TODAY — but the guard it reads
 // (`ManagedFileRuntime.emitLiveHandleOrClosedThrow`) is shared with two families where a descriptor of 0 is
 // ordinary, so the ENCODING has to be one encoding. A POSIX `socket(2)` answers the lowest free descriptor
@@ -94,13 +94,12 @@ export function emitSocketStatusFailed(module StdModule, block IrBlock, answer V
 	return emitCmp(module, block: block, a: answer, b: emitConst(module, block: block, value: WinsockCallOk, ids: ids), pred: StdCmpPred.ne, ids: ids)
 end 'emitSocketStatusFailed'
 
-// ⭐⭐ **THE IPv4/TCP PROTOCOL SELECTION — ONE HOME, TWO READERS, AND THE SECOND READER IS WHY IT MOVED HERE.**
-// These three values are `socket()`'s three arguments (spelled by `StdToX64Conversion.lowerOsSocketCreate`)
-// AND the three `addrinfo` fields `getaddrinfo` resolves against (`buildManagedSocketTcpConnect`'s `hints`,
-// below). They must AGREE: resolve for `AF_INET` and then create an `AF_INET6` socket and `connect` fails
-// with a family mismatch — a wrong answer with no diagnostic anywhere. The x64 lowering's own header used to
-// say these lived there "and nowhere else"; that was true only while nothing above the target tier had to
-// WRITE them into an OS structure, which building `hints` and `sockaddr_in` in Std now does.
+// ⭐⭐ **THE IPv4/TCP PROTOCOL SELECTION — ONE HOME, TWO READERS.** These three values are `socket()`'s
+// three arguments (spelled by `StdToX64Conversion.lowerOsSocketCreate`) AND the three `addrinfo` fields
+// `getaddrinfo` resolves against (`buildManagedSocketTcpConnect`'s `hints`, below). They must AGREE: resolve
+// for `AF_INET` and then create an `AF_INET6` socket and `connect` fails with a family mismatch — a wrong
+// answer with no diagnostic anywhere. They live HERE rather than in the target tier because Std is what
+// WRITES them into an OS structure, building `hints` and `sockaddr_in`.
 //
 // ⚠ **A POSIX OR WASI LANE STILL NAMES ITS OWN `socket()` ARGUMENTS — what it may not do is disagree with
 // the `hints` this builder fills.** These three happen to be portable (`AF_INET` is 2, `SOCK_STREAM` is 1
@@ -1549,8 +1548,8 @@ export function installManagedSocketRuntime(module StdModule, usage RuntimeUsage
 end 'installManagedSocketRuntime'
 
 // Every callee this file installs — what the drift guard iterates, what `scanRuntimeUsage` reads to set
-// `usesManagedSocket`, what `SemanticCheck.calleeNeedsWin32Substrate` refuses on a non-Windows target, and
-// what its yield roster reads. A PREFIX test rather than a five-way `or`: every entry point this file
+// `usesManagedSocket`, what `TargetFacilities.calleeHostFacility` maps onto `HostFacility.managedSocket` so
+// a lane without it refuses the call with E3104, and what its yield roster reads. A PREFIX test rather than a five-way `or`: every entry point this file
 // installs is `__ms_`-named by construction, so a sixth is covered without being remembered here as well as
 // declared above.
 export function isManagedSocketRuntimeCallee(callee ByteArray) returns bool

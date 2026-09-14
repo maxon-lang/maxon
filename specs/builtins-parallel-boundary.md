@@ -43,7 +43,7 @@ ruling, 2026-08-27), so a CPU-bound function marked with this and spawned with `
 completion on the machine running the caller's strand, when the strand reaches it — sequentially, exactly as
 a direct call would, plus a coroutine's stack and switch. What the marker does is satisfy E3073 for a
 function that neither waits nor yields, and that is ALL it does. ⇒ **its natural future is as the marker
-on a `spawn` target** (`SERVICES_DESIGN.md`), where a CPU-bound body really would run on another M and
+on a `spawn` target** (`specs/services.md`), where a CPU-bound body really would run on another M and
 the intent it spells becomes load-bearing. It is kept for that, and because `scripts/multicore-stress`'s
 torture programs need it today to make their CPU-bound tasks spawnable at all.
 

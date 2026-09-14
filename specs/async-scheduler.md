@@ -5,15 +5,16 @@ keywords: [async, await, green-threads, scheduler, concurrency, promise]
 category: concurrency
 ---
 
-# Async / Await — the cooperative green-thread scheduler (P1.5-B1a)
+# Async / Await — the green-thread scheduler
 
 ## Documentation
 
 `async f(args…)` creates a **coroutine** of the calling green thread, running `f`, and yields a `Promise`
-handle; `await p` parks the caller until `p`'s coroutine completes and hands back its result. The scheduling
-is **cooperative**: a coroutine runs on the machine that holds its green thread's strand, one member of the
-strand at a time, and gives that machine up only at a wait — an `await`, a `sleep`, a `Runtime.yield()` or an
-I/O point.
+handle; `await p` parks the caller until `p`'s coroutine completes and hands back its result. A coroutine runs
+on the machine that holds its green thread's strand, one member of the strand at a time, and hands over to a
+sibling only at a wait — an `await`, a `sleep`, a `Runtime.yield()` or an I/O point. The GREEN THREAD around
+them is preempted: one that has held its processor for 10 ms is stopped at its next function entry and put
+behind every other runnable one (`specs/sched-preempt.md`).
 
 ```text
 function compute() returns int
@@ -27,10 +28,15 @@ function main() returns ExitCode
 end 'main'
 ```
 
-The B1a slice is **scalar-only**: an async call's arguments and its awaited result must be integer/bool
-values. A managed (`String`/struct) or float argument or result is refused at compile time rather than
-leaked or miscompiled — the green-thread runtime moves scalars through the integer registers, and a managed
-or float value needs a channel a later slice builds.
+An async call's arguments and its awaited result ride the green thread's INTEGER channel, so each is an
+integer, a bool, or a managed value — a `String`, a struct, an array — which crosses as its one box pointer
+(`async-await.managed-args-many` and `async-await.managed-generic-result` pin that road). A `float` is
+refused at compile time with **E2015** in either position, because the trampoline is hand-written assembly
+that fills the integer argument registers and captures R8, and never touches XMM; so are a value held at an
+interface type and one at an opaque type parameter, which are released through a companion the green-thread
+struct does not carry. A float INSIDE an async'd function is ordinary — that is
+`a-float-argument-survives-a-stack-grow` below, whose subject is the stack grower's XMM save list rather
+than the async channel.
 
 ## Targets — the one statement of the green-thread gate
 

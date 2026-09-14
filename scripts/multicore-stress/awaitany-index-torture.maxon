@@ -1,48 +1,48 @@
-// AWAIT-ANY INDEX torture — the standing instrument for the driver's
-// UNINTERRUPTIBLE timed wait.
+// AWAIT-ANY INDEX torture — the standing instrument for whether a machine's
+// timed wait can be BROKEN by a reply that lands on another M.
 //
 // ⭐⭐⭐ WHAT IT MEASURES, AND WHY IT IS AN EXIT CODE AND NOT A PRINT. The
 // program is `specs/await-any.md`'s `over-service-replies` run in a loop
 // with the SELECT LATENCY encoded in the exit status. Two services are sent to
 // in each round: `Slow` sleeps and `Quick` answers at once, so
 // `__Builtins.awaitAny` must come back with index 1 within a millisecond. A
-// driver whose netpoll `sleepwait` arm is a plain `Sleep` on the timer delta
-// comes back with the SLEEP's duration instead — and, because both replies are
+// machine that waits out the whole timer delta instead of being woken by the
+// reply comes back with the SLEEP's duration — and, because both replies are
 // then complete, with index 0.
 //
 // ⛔⛔ `print`-BASED INSTRUMENTATION MAKES THIS BUG VANISH, MEASURED: a build
 // that printed each round's latency read 150/150 clean while the same tree read
-// 13/160 through the exit code. A `print` is a syscall on the driver's own M
+// 13/160 through the exit code. A `print` is a syscall on the M running `main`
 // and it perturbs exactly the window this program is about. ⇒ NOTHING here
 // prints. The whole reading is the exit status, and `awaitany-index-race.sh`
 // is what tabulates it.
 //
 //   exit 150 + min(worstMs, 99)    the worst SELECT LATENCY in ms — so a clean
-//                                  run is 150-152 and a driver that slept through
-//                                  the reply is ~175. Capped at 249.
+//                                  run is 150-152 and a machine that waited its
+//                                  timer out is ~175. Capped at 249.
 //   exit 250                       a round answered the WRONG INDEX (see below)
 //   exit 60                        a reply decoded wrong — the program itself is
 //                                  broken, not the scheduler
 //
 // ⛔ THE CAP IS 99 AND NOT 100, AND THAT IS THE WHOLE REASON THE TWO VERDICTS ARE
-// DISTINGUISHABLE. An earlier cut billed a wrong-index round a 100 ms "latency"
-// and capped latency at 100, so 250 meant *either* a wrong index *or* a round that
-// merely took 100 ms or more — while this file and the driver script both asserted
-// it meant the first. One code, two meanings, three places claiming one.
+// DISTINGUISHABLE. The latency scale stops at 249, so 250 can mean nothing but a
+// wrong index; a cap of 100 would let a round that merely took 100 ms or more
+// claim the same number, and one exit code with two meanings is a reading the
+// driver script cannot act on.
 //
 // ⭐ THE WRONG INDEX IS THE SHARPER HALF OF THE SAME DEFECT, and it is why this
-// program is named for the index rather than for the latency. When the driver
-// sleeps the whole timer delta, `Slow`'s deadline fires during that sleep, so by
+// program is named for the index rather than for the latency. When the machine
+// waits the whole timer delta out, `Slow`'s deadline fires during that wait, so by
 // the time the exit test runs BOTH replies are complete — and the scan answers
 // the FIRST completed slot it finds, which is slot 0. So a late select does not
 // merely arrive late: it returns the promise that finished SECOND. It is tracked
 // as its own flag rather than as a large latency, so it gets its own exit code
 // and cannot be confused with a slow but CORRECT answer.
 //
-// ⚠ IT IS A RACE AND A SINGLE RUN PROVES NOTHING. The window is main's driver
-// reaching the netpoll's timer park — nothing runnable, `Slow`'s timer pending —
-// BEFORE `Quick`'s reply lands, which needs worker Ms to have taken both handlers
-// off main. So the failure rate rises with `MAXON_MAX_PROCS` and is ~0 at 1,
+// ⚠ IT IS A RACE AND A SINGLE RUN PROVES NOTHING. The window is the machine
+// running `main` reaching its timed poller wait — nothing runnable, `Slow`'s timer
+// pending — BEFORE `Quick`'s reply lands, which needs worker Ms to have taken
+// both handlers off main. So the failure rate rises with `MAXON_MAX_PROCS` and is ~0 at 1,
 // which is why the driver script gates on 16.
 //
 // ⭐ THE NUMBERS LIVE IN `scripts/multicore-stress/README.md` ("W219's READINGS"), and
@@ -95,7 +95,7 @@ type Slow
 	end 'create'
 
 	// The sleep is what puts a TIMER in the store, which is the only reason
-	// main's driver reaches the netpoll arm this program is about.
+	// the machine running `main` reaches the timed wait this program is about.
 	export function value(ms Integer) returns Integer
 		self.replies = self.replies + 1
 		sleep(ms as Milliseconds)
@@ -112,7 +112,7 @@ type Quick
 
 	// Answers without yielding, so its reply cell is completed on whatever M
 	// picked the handler up — which for `MAXON_MAX_PROCS > 1` is a DIFFERENT M
-	// from the one main's driver is blocked on.
+	// from the one `main` is blocked on.
 	export function value() returns Integer
 		self.replies = self.replies + 1
 		return 2

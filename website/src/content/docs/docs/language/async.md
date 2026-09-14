@@ -1,15 +1,15 @@
 ---
 title: Async & Concurrency
-description: Green threads, awaiting results, parallel execution, and cancellation.
+description: Coroutines, awaiting results, overlapping waits, and cancellation.
 sidebar:
   order: 13
 ---
 
-Maxon supports concurrency via `async` and `await` with green threads scheduled across multiple OS worker threads. Each `async` call spawns a lightweight green thread with a growable stack (starting at 4KB). The runtime uses a GMP (Goroutine-Machine-Processor) scheduler with per-worker local queues, work stealing, and IOCP-based overlapped I/O.
+Maxon supports concurrency via `async` and `await`. An `async` call creates **no thread of any kind**: it starts the callee as a **coroutine of the green thread that called it**, on a growable stack (2KB to begin with, 8KB on x64-Windows) that doubles until the frame asking fits. So `async` overlaps **waiting**, not execution. The runtime underneath is a GMP (Goroutine-Machine-Processor) scheduler — per-processor run queues, work stealing, and a poller carrying timers, children, pipes and sockets — and `spawn`, which starts a **service**, is what publishes a green thread to it.
 
-### Spawning Green Threads
+### Starting a Coroutine
 
-Use `async` before a function call to spawn a green thread:
+Use `async` before a function call to start it as a coroutine of the current green thread:
 
 ```maxon
 var promise = async someFunction(arg1, arg2)
@@ -19,17 +19,17 @@ The `async` expression returns a promise value that can be awaited later.
 
 ### Awaiting Results
 
-Use `await` to wait for a green thread to complete and retrieve its result:
+Use `await` to wait for a coroutine to complete and retrieve its result:
 
 ```maxon
 var result = await promise
 ```
 
-If the green thread has already completed, `await` returns immediately. Otherwise, the current thread yields until the result is ready.
+If the coroutine has already completed, `await` returns immediately. Otherwise the awaiting green thread **parks**: it hands its machine back to the scheduler, which runs whatever else is runnable, and the completing coroutine readies the waiter. No wait ever runs another green thread on the waiter's stack.
 
-### Parallel Execution
+### Overlapping Waits
 
-Multiple green threads can run concurrently:
+Several coroutines can be in flight at once, and their WAITING overlaps:
 
 ```maxon
 var p1 = async taskA()
@@ -40,7 +40,7 @@ var r2 = await p2
 
 ### Void Functions
 
-Functions that return no value can also be spawned as green threads:
+Functions that return no value can also be started with `async`:
 
 ```maxon
 var p = async doWork()
@@ -72,7 +72,7 @@ var p = async longRunning()
 p.cancel()
 ```
 
-Cancelling a green thread stops it at its next yield point. The green thread's stack is freed.
+`.cancel()` **consumes** the promise and takes the same road an unawaited promise takes at scope exit: the coroutine is reclaimed and its stack freed. One that has not started never runs; a parked one is taken off whatever would have woken it — its `sleep` timer, its child, its poll descriptor. A coroutine already running is renounced rather than interrupted, so it runs its body out with nothing left to take its result. The promise is spent either way, so a later use of it is a compile error.
 
 ### Typed promises in collections
 
@@ -95,15 +95,15 @@ end 'join'
 ### Restrictions
 
 - `async` can only be used on direct function calls (not closures or indirect calls)
-- `async` can only target functions that yield (contain I/O operations or `await` points)
+- `async` can only target functions that yield (contain I/O operations, `sleep`, or `await` points)
 
 ### Key Properties
 
-- **Multi-threaded** -- green threads are distributed across OS worker threads (one per CPU core)
-- **Work stealing** -- idle workers steal from busy workers' local queues for load balancing
-- **Cooperative scheduling** -- context switches at `await` points and I/O operations
-- **Growable stacks** -- 4KB initial, doubles when needed
-- **Thread-safe memory** -- atomic reference counting and lock-protected shared state
-- **Fire-and-forget safe** -- unawaited green threads are drained at program exit
+- **One owner** -- a coroutine belongs to the green thread that created it and runs only where that green thread's work runs: a green thread and its coroutines are one **strand**, and at most one machine runs a strand's members at a time
+- **Every wait parks** -- the waiter hands its machine back to the scheduler and whoever completes the wait readies it; a coroutine hands over at `await` points, `sleep` calls, `Runtime.yield()` and I/O, never in between
+- **Green threads are preempted** -- one that has held its processor for 10 ms is stopped at its next function entry and put behind every other runnable green thread, and may resume on another OS thread
+- **Growable stacks** -- 2KB initial (8KB on x64-Windows), doubling until the frame asking fits, up to 1GB
+- **Plain reference counting** -- every refcount step on a box happens on the machine running that box's strand, one machine at a time, so it needs no atomic. The runtime's own shared counters and queues are protected separately
+- **An unawaited promise is dropped, not drained** -- at scope exit the coroutine is reclaimed: one that never started never runs, and a parked one's wait is cancelled in place
 
 ---

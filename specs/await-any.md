@@ -56,7 +56,8 @@ consume: a worker pool selecting over drains **awaits every drain eventually**.
 
 There is no separate "channel select" in this design. A handler reply is a `Promise`, so it goes into the
 same array and this same primitive picks the first one to answer — `over-service-replies` is that case, and
-it is why `SERVICES_DESIGN.md` chose a waiting primitive rather than a mailbox-specific one.
+it is why the design carries a waiting primitive rather than a mailbox-specific select: a reply is an
+ordinary promise (`specs/services.md`).
 
 The storage must be `Promise with (T, ServiceError)`: a reply ALWAYS carries `ServiceError`, because the
 service can be gone whatever the message declares. A message that itself THROWS has a two-member reply error
@@ -87,7 +88,7 @@ woken. The front end cannot produce that shape.
 
 Go orders channel locks by address so a K-way wait can hold them all. That is wrong here: both platform
 locks are **recursive on the wrong identity** (a Win32 `CRITICAL_SECTION` is recursive per OS THREAD) while
-green threads multiplex over one OS thread — so a green thread parking while holding one would let a
+several green threads share one — so a green thread parking while holding one would let a
 different green thread on the same M take the recursive path straight into the critical section. Not a
 deadlock; silent FIFO corruption.
 

@@ -925,10 +925,11 @@ error E3005: <fragment>:3:13: '__Builtins.runProcess' requires a String, but its
 (E3057) — the exact mirror of the throwing-array-accessor rule. A bare call would read only the exit code (R8)
 and silently drop the spawn-failure flag (R10), so the compiler forces a `try`.
 
-⚠ **THE RULE IS TARGET-NEUTRAL AND THE CASE IS NOT, WHICH IS A CONSEQUENCE OF THE SUBSTRATE GATE.** Since
-this entry joined `SemanticCheck.calleeNeedsWin32Substrate`, this program is refused on every other target
-FIRST, with E3104 naming `__gt_process_run` — a correct refusal about a different property, and one no
-single pinned text can express alongside this one. The twin below pins that half.
+⚠ **THE RULE IS TARGET-NEUTRAL AND THE CASE IS NOT, WHICH IS A CONSEQUENCE OF THE SUBSTRATE GATE.**
+`__gt_process_run` needs `HostFacility.subprocess` (`TargetFacilities.calleeHostFacility`), so on a lane that
+does not provide one this program is refused FIRST, with E3104 naming that entry — a correct refusal about a
+different property, and one no single pinned text can express alongside this one. The twin below pins that
+half.
 ```maxon
 function main() returns ExitCode
 	let code = __Builtins.runProcess("cmd /c exit 1")
@@ -942,9 +943,8 @@ error E3057: <fragment>:3:24: throwing subprocess call requires try: wrap `__Bui
 <!-- test: async-subprocess.error.rejected-on-wasm -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 The other half: it spawns a Windows child through `__gt_process_run`, so a program that reaches it
-on any other target is refused at the call's own span with **E3104**. ⚠ It was OUTSIDE that gate until the
-subprocess rung, and `SemanticCheck.calleeNeedsWin32Substrate`'s header recorded what that cost: *"on another
-target they still die as a BACKEND PANIC rather than a diagnostic — MEASURED"*.
+on any other target is refused at the call's own span with **E3104**. ⚠ Outside that gate the same program
+dies as a BACKEND PANIC three tiers down rather than as a diagnostic, which is what the gate buys.
 ```maxon
 function main() returns ExitCode
 	let code = try __Builtins.runProcess("cmd /c exit 1") otherwise return 9

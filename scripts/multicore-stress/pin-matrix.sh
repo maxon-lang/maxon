@@ -65,9 +65,9 @@
 # 2/242, 7/393 and 12/410). A gate nobody has seen move is not a gate.
 #
 # ⭐⭐ `spawn` HAS LANDED AND ASSERTION 4 HAS FLIPPED, EXACTLY WHERE THIS PARAGRAPH
-# SAID IT WOULD. A `spawn` (SERVICES_DESIGN.md §"Ownership — the spine", "Send is a
-# MOVE") creates REAL green threads, which are exactly what W212's ring, its
-# stealing and its worker loop schedule — all built before they had a producer.
+# SAID IT WOULD. A `spawn` (`specs/services.md`) creates REAL green threads, which
+# are exactly what the scheduler's ring, its stealing and its worker loop
+# schedule — all built before they had a producer.
 # `service-torture` and `service-fanin-torture` are that producer, and they are the
 # TWO programs here whose rows are asserted the other way; every other program stays
 # coroutine-only and stays 1/0.

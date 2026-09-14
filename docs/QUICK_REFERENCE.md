@@ -879,7 +879,7 @@ panic("expected {a}, got {b}")      // interpolated strings supported
 ## Async/Await
 
 ```maxon
-// Spawn a green thread
+// Start a coroutine of the current green thread
 var promise = async someFunction(arg1, arg2)
 
 // Wait for the result
@@ -899,7 +899,7 @@ await p
 var p = async mayFail(true)
 var result = try await p otherwise 0
 
-// Cancellation (currently a no-op; preemptive cancel not yet implemented)
+// Cancellation — consumes the promise; an unstarted coroutine never runs
 var p = async longRunning()
 p.cancel()
 
@@ -915,14 +915,15 @@ for q in arr 'each'
 end 'each'
 ```
 
-- `async` starts a coroutine of the CURRENT green thread — not a new thread. It overlaps waiting, not execution; `spawn` (reserved, not built) is what creates an independently scheduled green thread
-- Same semantics on every target; `wasm32-wasi` differs only in how it suspends (Binaryen Asyncify, no native stack switching)
-- Context switches at `await` points and I/O operations
-- Reference counting is plain, not atomic — one green thread owns everything its coroutines touch
+- `async` starts a coroutine of the CURRENT green thread — not a new thread. It overlaps waiting, not execution; `spawn` starts a **service**, which is what creates an independently scheduled green thread (`specs/services.md`)
+- Green threads run on the four native lanes; `wasm32-wasi` has none at all and refuses `async` and `sleep` with **E3104**
+- Every wait PARKS: the waiter gives its machine back to the scheduler and whoever completes the wait readies it. A coroutine hands over at `await` points, `sleep` calls, `Runtime.yield()` and I/O, never in between
+- A green thread that has held its processor for 10 ms is preempted at its next function entry and may resume on another OS thread
+- Reference counting is plain, not atomic — a green thread and its coroutines are one strand, and at most one machine runs a strand's members at a time
 - Growable stacks, `main` included (2KB initial, 8KB on x64-Windows; doubles until the frame fits, up to 1GB)
 - Throwing async functions require `try await` (not plain `await`)
 - `async` target must yield (contain I/O or `await` points)
-- Unawaited green threads are drained at program exit
+- An unawaited promise is DROPPED at scope exit — an unstarted coroutine never runs and a parked one's wait is cancelled
 
 ## Arrays
 

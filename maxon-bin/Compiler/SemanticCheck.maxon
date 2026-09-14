@@ -2990,9 +2990,10 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 					//   • `--target=x64-linux`   — `panic at StdToX64Conversion.maxon:3368: lowerTlsAlloc: TlsAlloc is x64-windows only`
 					// against the CONTROL one construct over: the same substrate reached by `sleep` answers
 					// `E3104 … 'sleep' lowers to the runtime entry '__gt_sleep', which has no <target>
-					// implementation` on all three. It is exactly the shape `calleeNeedsWin32Substrate`'s
-					// header records for the socket runtime — *"the surface without the floor is worse than
-					// neither"* — reached through the one door that carries no callee.
+					// implementation` on all three. It is the failure `TargetFacilities.targetProvidesFacility`'s
+					// header states — a surface claimed before the lowering exists stops the E3104 firing
+					// while the backend still panics three tiers down — reached through the one door that
+					// carries no callee.
 					//
 					// ⚠ It names the ENTRY the lowering will mint, through the one E3104 wire format, so a
 					// service refusal and a `sleep` refusal cannot become two spellings of one rejection.
@@ -5136,14 +5137,12 @@ function functionTypeDoorSite(door PendingFunctionTypeDoor) returns String
 	end 'd'
 end 'functionTypeDoorSite'
 
-// ⭐ **THE E3104 ROSTER AND THE CAPABILITY TABLE BOTH LIVE IN `Compiler/TargetFacilities.maxon`.**
-// This file used to hold `calleeNeedsWin32Substrate` — a callee test whose answer was the WHOLE verdict,
-// because there was only ever one target that could provide anything. That shape could not express a
-// LANDED family: the moment arm64-macOS grew a file surface, "does this callee need the substrate" stopped
-// being the question and "does THIS TARGET provide what this callee needs" became it. The roster (which
-// facility each callee needs, and why each family is on it) and the table (which targets provide it) are
-// two facts and now have two functions — `calleeHostFacility` and `targetProvidesFacility` — with the
-// per-family membership arguments carried beside the roster where they belong.
+// ⭐ **THE E3104 ROSTER AND THE CAPABILITY TABLE BOTH LIVE IN `Compiler/TargetFacilities.maxon`.** Which
+// facility each callee needs (and why each family is on the roster) and which targets provide it are two
+// facts, so they are two functions there — `calleeHostFacility` and `targetProvidesFacility` — with the
+// per-family membership arguments carried beside the roster. One callee test answering the whole verdict
+// cannot express a family that has landed on some lanes and not others, which is the ordinary state of
+// every family on that roster.
 
 // The SUBJECT of an E3104 raised against a COMPILER-OWNED runtime entry. The user wrote
 // `__Builtins.currentTimeMs()`, never `__gt_now_ns`, so there is no name of theirs to quote back at them —
@@ -5154,9 +5153,9 @@ let TargetUnsupportedUnnamedSubject = "this construct"
 // ⭐ **REFUSE A CONSTRUCT THE CHOSEN TARGET CANNOT LOWER (E3104), AT THE CALL'S OWN SPAN — OR, FOR A
 // SUBPROCESS CROSSING ON A TARGET WITH NO PROCESS-SPAWN PRIMITIVE, E3074 (see the second arm below).**
 //
-// The x64-windows-only ops behind these entries — `osReadClock`, `osReadWallClock` — are ones
-// `StdToArm64`/`StdToWasm` deliberately refuse rather than fake. TWO kinds of callee reach them, and this is
-// the one gate both go through:
+// The ops behind these entries — `osReadClock`, `osReadWallClock` — are ones a backend with no facility
+// for them deliberately refuses rather than fakes. TWO kinds of callee reach them, and this is the one gate
+// both go through:
 //
 //   • a COMPILER-OWNED runtime entry the parser emitted (`__Builtins.sleep(1)` → `__gt_sleep`). Each
 //     builtin lowers to ONE entry, so the callee name is the whole test.
@@ -5245,9 +5244,9 @@ function requireTargetSupportsCallee(project Project, func IrFunction, opIndex O
 		// SAID HERE, where the rule is, rather than left to be discovered at the predicate.**
 		// `isSubprocessRuntimeCallee` is the `__gt_subp_` prefix, and `__Builtins.runProcess`/`spawnReadLine` are
 		// subprocess surfaces whose entries live in the SCHEDULER band instead
-		// (`calleeNeedsWin32Substrate` names them individually for the same reason). Today no stdlib function
-		// wraps either, so the two sets agree on every crossing that exists; one that did would be a stdlib
-		// crossing answering E3104. That is the direction this fails in — a WEAKER, still-true diagnostic
+		// (`TargetFacilities.calleeHostFacility` names them individually for the same reason). Today no stdlib
+		// function wraps either, so the two sets agree on every crossing that exists; one that did would be a
+		// stdlib crossing answering E3104. That is the direction this fails in — a WEAKER, still-true diagnostic
 		// rather than a missing one — and the day a stdlib module wraps `__Builtins.runProcess`, this test becomes
 		// `is this entry a process spawn?` rather than `is it in the subprocess band?`.
 		//
@@ -5278,11 +5277,9 @@ function requireTargetSupportsServiceEntry(project Project, func IrFunction, opI
 		return
 	end 'nothingRefusableHere'
 
-	// ⭐⭐ **IT ASKS THE FACILITY TABLE NOW, AND IT USED TO REFUSE BLIND.** This door reported on EVERY target
-	// it was allowed to blame, without consulting `targetProvidesFacility` at all — which is precisely the
-	// target-blind shape `TargetFacilities` replaced everywhere else (see its header on
-	// `calleeNeedsWin32Substrate`). It read correctly only while x64-windows was the one lane providing
-	// anything.
+	// ⭐⭐ **IT ASKS THE FACILITY TABLE RATHER THAN REFUSING BLIND.** A door that reports on every target it
+	// is allowed to blame is right only while one lane provides anything, so the verdict comes from
+	// `targetProvidesFacility` here exactly as it does for every other E3104.
 	//
 	// ⭐ **`greenThreads` IS THE RIGHT QUESTION, AND IT IS THE WHOLE QUESTION.** A service is a green thread
 	// with a mailbox: `MailboxRuntime` and `ServiceLoop` reach **no `StdOp.os*` op whatsoever** — every OS
@@ -5306,18 +5303,11 @@ function reportTargetUnsupportedCallee(project Project, func IrFunction, opIndex
 	reportPositioned(project, code: ErrorCode.targetUnsupportedConstruct, message: "{subject} lowers to the runtime entry '{String.from(entry)}', which has no {targetToString(project.target)} implementation", line: callRange.line, column: callRange.column, filePath: func.sourceFilePath)
 end 'reportTargetUnsupportedCallee'
 
-// ⚠ **`targetHasWin32Substrate` STOOD HERE AND IS GONE.** It answered *"is this x64-windows?"* under a
-// capability's name, which was true only while x64-windows was the one target that provided anything.
-// `TargetFacilities.targetProvidesEveryFacility` is its replacement and asks the same question HONESTLY —
-// by walking the facility table rather than by naming a CPU and an OS — so the day a second lane completes
-// that table it becomes true by measurement instead of by someone remembering to widen a hard-coded pair.
-//
-// ⚠ Its own note is worth keeping: it was NOT EXPORTED, and it once was — the SPEC HARNESS paired it with
-// the callee roster to predict whether a case could run on a given target at all. That prediction is gone
-// (PLAN row `X2`): a callee-name pair can only answer for the callees it names, so it could neither see a
-// case reaching a substrate nobody thought to list nor express a PARTIAL landing. The harness now reads the
-// compiler's E3104 verdict itself, which is the table's own consequence rather than a second copy of it —
-// and a partial landing is exactly what arm64-macOS now is.
+// ⚠ **THE VERDICT ABOVE IS THE SPEC HARNESS'S ONLY ANSWER TO *"CAN THIS CASE RUN ON THIS TARGET?"*, AND
+// NOTHING MAY PREDICT IT FROM A CALLEE ROSTER INSTEAD.** A callee-name pair answers only for the callees it
+// names: it can neither see a case reaching a substrate nobody thought to list nor express a PARTIAL
+// landing, which is what arm64-macOS is. `Testing/SpecTestRunner.maxon`'s cross-target skip reads this
+// diagnostic itself, so an E3104 emitted wrongly here deletes coverage there while the suite reads green.
 
 // ⭐⭐ **WHICH OF TWO SUBSTRATE ENTRIES A STDLIB BODY REACHES IS THE ONE ITS CROSSING IS REPORTED FOR — AND
 // SINCE E3074 THAT IS A SEMANTIC CHOICE, NOT A TIE-BREAK.**
@@ -5343,10 +5333,10 @@ export function substrateEntryOutranks(candidate ByteArray, incumbent ByteArray)
 end 'substrateEntryOutranks'
 
 // ⭐ **CAN THIS TARGET HOST A CHILD PROCESS AT ALL?** A DIFFERENT question from the one above, and the
-// difference is what keeps E3074 and E3104 apart. `targetHasWin32Substrate` asks what the compiler has BUILT;
-// this asks what the platform CAN EVER OFFER. Windows, Linux and macOS all spawn children — the compiler lowers
-// the substrate on x64-windows alone, which is E3104's business and not this predicate's — while WASI
-// has no process-spawn primitive in the standard at all, so no rung can add one.
+// difference is what keeps E3074 and E3104 apart. `TargetFacilities.targetProvidesFacility` asks what the
+// compiler has BUILT; this asks what the platform CAN EVER OFFER. Windows, Linux and macOS all spawn
+// children — which of them the compiler has a lowering for is E3104's business and not this predicate's —
+// while WASI has no process-spawn primitive in the standard at all, so nothing can add one.
 //
 // Written as a `match` over the OS rather than as `!= wasi`, so an OS added later must be CLASSIFIED
 // here instead of silently inheriting an answer nobody chose for it.

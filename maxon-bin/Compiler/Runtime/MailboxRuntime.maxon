@@ -1,5 +1,6 @@
 // Runtime/MailboxRuntime.maxon — the MAILBOX a service receives on, and the four handle/lifetime doors
-// around it (SV1 wave 3). Designed in `SERVICES_DESIGN.md` §"Ownership — the spine" and §"Shutdown".
+// around it. The spec is `specs/services.md`: §"Sending MOVES, and that is load-bearing" for
+// the ownership rule, §"`ServiceError`" for the poison pill and the last-handle close.
 //
 // ⭐⭐ **A MAILBOX IS AN INTRUSIVE FIFO OF ENVELOPES PLUS TWO REFERENCE COUNTS, AND NOTHING ELSE.** A send
 // appends and returns; a receive pops or PARKS; a close makes the queue drainable and un-fillable. What
@@ -55,8 +56,7 @@ let MboxOffRefs = 0x28 as ByteOffset
 
 // The request union's DROP CASCADE, as an address. It is what makes a closed mailbox's queue droppable at
 // all: an envelope holds a `<T>.request` box whose live variant only the cascade knows the payload types of.
-// A closure-based mailbox could not know what to free, which is `SERVICES_DESIGN.md`'s own argument for the
-// synthesized union.
+// A closure-based mailbox could not know what to free, which is why the request is a synthesized union.
 let MboxOffAbandonFn = 0x30 as ByteOffset
 
 // ⭐⭐ **THE `__shutdown` PILL'S REPLY CELL, PARKED HERE UNTIL THE SERVICE HAS FINISHED, OR 0.** It is

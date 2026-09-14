@@ -1789,10 +1789,11 @@ export union StdOp
 	// `specs/managed-file.md`'s own note says so), and keeping it out of the backend means a future POSIX
 	// lane supplies only the OPEN, exactly as `osReadWallClock`'s comment argues for the clock.
 	//
-	// ⭐ x64-WINDOWS ONLY at this rung, by the R4.1 ruling. Every other target refuses at the CALL SITE with
-	// the existing E3104 (`targetHasWin32Substrate`), so no backend ever sees this op — which is why the
-	// three non-Windows lowerings are absent rather than stubbed. A stub would be a silent wrong answer on
-	// a lane nothing checks.
+	// ⭐ It needs `HostFacility.managedFile`, as the R4.2 band below does: a lane that does not provide it
+	// refuses the call site with E3104 (`TargetFacilities.calleeHostFacility` →
+	// `SemanticCheck.reportTargetUnsupportedCallee`), so that lane's arm panics as a backstop for a compiler
+	// bug rather than stubbing an answer nothing checks. Which lanes provide it is
+	// `targetProvidesFacility`'s to say and is not restated here.
 	osFileOpenRead(resultId ValueId, pathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// `osFileClose(handle)` = `CloseHandle(handle)`. No result: the BOOL is ignored, exactly as
@@ -1806,10 +1807,10 @@ export union StdOp
 	// --- R4.2: the rest of the file-IO primitives ---
 	//
 	// All seven carry `category: system`, placing them logically in the system band independent of this
-	// tail position, and all seven are ⭐ x64-WINDOWS ONLY by the R4.1 ruling: the call site is refused on
-	// every other target with the existing E3104 (`SemanticCheck.calleeNeedsWin32Substrate`), so the
-	// non-Windows arms panic as a backstop for a compiler bug rather than stubbing an answer nothing
-	// checks.
+	// tail position, and all seven need ⭐ `HostFacility.managedFile`: a lane that does not provide it
+	// refuses the call site with E3104 (`TargetFacilities.calleeHostFacility` →
+	// `SemanticCheck.reportTargetUnsupportedCallee`), so that lane's arm panics as a backstop for a compiler
+	// bug rather than stubbing an answer nothing checks.
 	//
 	// ⚠ **EVERY COMMENT BELOW NAMES THE ENTRY POINT THE LOWERING ACTUALLY EMITS.** `osFileOpenRead`'s said
 	// `CreateFileW` for a whole rung while the code emitted `CreateFileA`; the four `A`-suffixed imports
@@ -1869,9 +1870,10 @@ export union StdOp
 	// --- R4.3: the four primitives a DIRECTORY needs and a file does not ---
 	//
 	// All four carry `category: system`, placing them logically in the system band independent of this tail
-	// position, and all four are ⭐ x64-WINDOWS ONLY by the R4.1 ruling: the call site is refused on every
-	// other target with the existing E3104 (`SemanticCheck.calleeNeedsWin32Substrate`), so the non-Windows
-	// arms panic as a backstop for a compiler bug rather than stubbing an answer nothing checks.
+	// position, and all four need ⭐ `HostFacility.managedDirectory`: a lane that does not provide it
+	// refuses the call site with E3104 (`TargetFacilities.calleeHostFacility` →
+	// `SemanticCheck.reportTargetUnsupportedCallee`), so that lane's arm panics as a backstop for a compiler
+	// bug rather than stubbing an answer nothing checks.
 	//
 	// ⚠ **EVERY COMMENT BELOW NAMES THE ENTRY POINT THE LOWERING ACTUALLY EMITS**, the discipline the R4.2
 	// band above states: all four are the `A` variants, because a Maxon path is UTF-8 bytes.
@@ -2159,10 +2161,10 @@ export union StdOp
 	// --- The socket slice: the eight `ws2_32` primitives behind `__ManagedSocket` ---
 	//
 	//
-	// ⭐ ALL EIGHT ARE x64-WINDOWS ONLY, exactly as the file-IO family is: the CALL SITE is refused on every
-	// other target with the existing E3104 (`SemanticCheck.calleeNeedsWin32Substrate`), so no other backend
-	// ever sees these ops and the non-Windows arms panic as a backstop for a compiler bug rather than
-	// stubbing an answer nothing checks.
+	// ⭐ ALL EIGHT NEED `HostFacility.managedSocket`, exactly as the file-IO family needs its own: a lane
+	// that does not provide it refuses the CALL SITE with E3104 (`TargetFacilities.calleeHostFacility` →
+	// `SemanticCheck.reportTargetUnsupportedCallee`), so that backend never sees these ops and its arm panics
+	// as a backstop for a compiler bug rather than stubbing an answer nothing checks.
 	//
 	// ⭐ **THE CONSTANTS LIVE IN THE LOWERING, NOT IN THE OPERANDS** — `AF_INET`, `SOCK_STREAM`, `IPPROTO_TCP`,
 	// the `0` send/recv flags and `sizeof(sockaddr_in)` are Win32 facts, not Maxon ones, so they are spelled
@@ -2330,11 +2332,11 @@ export union StdOp
 	// word from its own stack `timespec` (`tv_sec * 1e9 + tv_nsec`), so no foreign struct layout enters the
 	// target-neutral tier and the op stays "put this thread's CPU time in that word".
 	//
-	// ⭐ x64-WINDOWS ONLY at this rung, like `osReadWallClock`. Every other target refuses at the CALL SITE
-	// with the existing E3104 (`SemanticCheck.calleeNeedsWin32Substrate`, by the `__thread_` prefix), so no
-	// backend ever sees this op — which is why the arm64 and wasm lowerings are absent rather than stubbed.
-	// A stub would be a silent wrong answer about a cost, on a lane that cannot ask for it. Full
-	// call-barrier metadata: it IS an indirect call once lowered.
+	// ⭐ It needs `HostFacility.threadCpuClock`, as `osReadWallClock` needs the calendar: a lane without it
+	// refuses at the CALL SITE with E3104 (`TargetFacilities.calleeHostFacility`, by the `__thread_` prefix,
+	// → `SemanticCheck.reportTargetUnsupportedCallee`), so that backend never sees this op — which is why
+	// the wasm lowering is absent rather than stubbed. A stub would be a silent wrong answer about a cost, on
+	// a lane that cannot ask for it. Full call-barrier metadata: it IS an indirect call once lowered.
 	osThreadCpuTicks(handleId ValueId, outPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// --- F1a: the DECOMMIT an OS-direct allocation and a scavenger need ---

@@ -2,7 +2,7 @@
 """Strip non-directive HTML comments from the compiler spec corpus.
 
 A spec file's `<!-- ... -->` comments are two populations. The HARNESS DIRECTIVES
-below are parsed by both spec parsers and are load-bearing. Everything else is
+below are parsed by the harness and are load-bearing. Everything else is
 prose a human left behind, and prose in a spec rots: it narrates a blocker that
 was cleared, a measurement whose date has passed, a rung that shipped. This
 strips the prose and leaves every directive byte-identical.
@@ -16,11 +16,8 @@ import argparse
 import pathlib
 import sys
 
-# The union of what BOTH spec parsers recognize — the compiler's marker constants
-# (Testing/SpecParser.maxon) and the bootstrap's regexes (Testing/SpecParser.cs).
-# A comment opening with one of these survives; anything else is prose. The union
-# rather than either half, because a directive only one compiler honours is still
-# a directive the other must not have deleted out from under it.
+# The marker constants the harness recognizes (`maxon-bin/Testing/SpecParser.maxon`).
+# A comment opening with one of these survives; anything else is prose.
 DIRECTIVES = (
     "test:",
     "disabled-test:",

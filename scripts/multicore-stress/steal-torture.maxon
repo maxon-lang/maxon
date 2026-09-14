@@ -38,12 +38,12 @@
 // `workers=1 steals=0` at N=1, `2 / 24` at N=2, `7 / 3997` at N=7 and `8 / 3996`
 // at N=12. `scripts/multicore-stress/pin-matrix.sh` is the driver that takes both.
 //
-// ⚠ **AND THE ASSERTION FLIPS BACK WHEN `spawn` LANDS.** A `spawn` primitive
-// (`SERVICES_DESIGN.md §"Ownership — the spine"`, *"Send is a MOVE"*) creates real green threads,
-// which are exactly what W212's ring, its stealing and its worker loop schedule —
-// all still built, none of it deleted. That rung re-points this program's
-// `producer` at `spawn` and restores `steals > 0`; until then the zero is what a
-// correct scheduler answers.
+// ⚠ **THE ZERO IS THIS PROGRAM'S SHAPE, NOT A SCHEDULER THAT CANNOT STEAL.** A
+// `spawn` (`specs/services.md`) creates real green threads, which are exactly
+// what the scheduler's ring, its stealing and its worker loop schedule — and
+// `service-torture` and `service-fanin-torture` are the two programs in
+// `pin-matrix.sh` that assert `steals > 0`. This `producer` stays coroutine-only,
+// so the zero is what a correct scheduler answers for it.
 
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer

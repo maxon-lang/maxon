@@ -4519,11 +4519,11 @@ See `specs/typealias-collision.md` and `specs/namespaces.md` for the canonical t
 
 ## Async/Await (Concurrency)
 
-Maxon supports concurrency via `async` and `await`. An `async` call does **not** create a new thread of any kind: it starts the callee as a **coroutine of the green thread that called it**, with a growable stack (starting at 2KB, doubling on demand). The coroutine runs until it reaches a blocking operation, at which point it yields the green thread and the green thread's other coroutines run; `await` resumes the caller and collects the result. "Parallel work" is therefore overlapped **waiting**, not parallel execution.
+Maxon supports concurrency via `async` and `await`. An `async` call does **not** create a new thread of any kind: it starts the callee as a **coroutine of the green thread that called it**, with a growable stack (starting at 2KB, doubling on demand). The coroutine runs until it reaches a blocking operation, at which point it parks and the machine takes up its green thread's other runnable work — its sibling coroutines first, then anything else; `await` resumes the caller and collects the result. "Parallel work" is therefore overlapped **waiting**, not parallel execution.
 
 The restriction that an `async` target must yield (`E3073`, below) is the rule this model *is*: `async` exists to overlap waiting, so spawning something that can never give up the green thread buys nothing.
 
-Creating a green thread that is scheduled independently is `spawn`, and `spawn` starts a **service** (see `SERVICES_DESIGN.md`). The runtime carries the whole GMP (Goroutine-Machine-Processor) substrate a `spawn` needs — per-processor local queues, work stealing, IOCP-based overlapped I/O — and `async` reaches none of it.
+Creating a green thread that is scheduled independently is `spawn`, and `spawn` starts a **service** (see `specs/services.md`). The runtime carries the whole GMP (Goroutine-Machine-Processor) substrate — per-processor run queues, work stealing, and a poller carrying timers, children, pipes and sockets. A `spawn` is what publishes a token to that substrate; an `async` coroutine publishes none, being readied onto its owner's strand instead, so an `async`-only program keeps one token and one machine at every processor count.
 
 `spawn` is a **contextual** keyword, not a reserved word: it is recognized as an identifier followed by a name, so `spawn` remains a perfectly good spelling for a function, a static, a parameter, a field or a local. A `spawn Calc.create()` anywhere in a program makes `Calc` a **service**, and the compiler synthesizes two companion types beside it — `Calc.request` (the message union) and `Calc.handle` (what a `spawn` yields, whose method surface is exactly `Calc`'s `export`/`public` INSTANCE methods). There is no bare `spawn f()` green thread: the target must be a static factory of a declared type returning that type, and anything else is **E3134**. A message's arguments are MOVED, so a parameter whose TYPE can never have exactly one owner on the far side — a `Promise`, a function value, a value held at an interface type — is **E3135**.
 
@@ -4547,7 +4547,7 @@ Use `await` to wait for a coroutine to complete and retrieve its result:
 var result = await promise
 ```
 
-If the coroutine has already completed, `await` returns immediately. Otherwise, the awaiting green thread drives its own coroutine queue until the result is ready.
+If the coroutine has already completed, `await` returns immediately. Otherwise the awaiting green thread **parks**: it hands its machine back to the scheduler, which runs whatever else is runnable, and the completing coroutine readies the waiter. No wait ever runs another green thread on the waiter's stack (`specs/sched-park.md`).
 
 ### Overlapping Waits
 
@@ -4639,7 +4639,7 @@ var p = async longRunning()
 p.cancel()
 ```
 
-Preemptive cancellation is not yet implemented: in the current cooperative scheduler `.cancel()` is a no-op (an `async` coroutine still runs to completion when awaited). Real cancellation lands with the IOCP-driven async-I/O work.
+`.cancel()` **consumes** the promise and takes the same road an unawaited promise takes at scope exit: the coroutine is reclaimed and cancelled. One that has not started never runs; a parked one is taken off whatever would have woken it — its `sleep` timer, its child, its poll descriptor — and its stack freed. A coroutine already running is renounced rather than interrupted, so it runs its body out with nothing left to take its result. The promise is spent either way, so a later use of it is **E3142** (`specs/async-promise-drop.md`).
 
 ### Typed promises in collections
 
@@ -4667,14 +4667,14 @@ end 'join'
 
 ### Key Properties
 
-- **One owner** -- an `async` coroutine belongs to the green thread that created it and is driven only by that green thread; it never leaves that green thread, and moves between OS threads only with it
+- **One owner** -- an `async` coroutine belongs to the green thread that created it and runs only where that green thread's work runs: a green thread and its coroutines are one **strand**, and at most one machine runs any member of a strand at a time. The owner's WAIT does not pin it — a coroutine started before a `sleep` runs during the sleep
 - **Coroutines switch only where they wait** -- a coroutine hands over to its siblings at `await` points, `sleep` calls, `Runtime.yield()` and I/O operations, never in between
 - **Green threads are preempted** -- a green thread (`main`'s included) that has held its processor for 10 ms is stopped at its next function entry and put behind every other runnable green thread, and may resume on another OS thread
 - **Growable stacks** -- every green thread, `main` included, starts on a 2KB stack (8KB on x64-Windows, which reserves 4KB of it for the OS's exception dispatch) that doubles until the frame asking fits, up to 1GB; past that the program aborts with exit 98
-- **Plain reference counting** -- because one green thread owns everything its coroutines touch, a retain or release has no second party and needs no atomic. Shared state that genuinely crosses OS threads (the runtime's own counters and queues) is a different question and is protected accordingly.
-- **Fire-and-forget safe** -- unawaited coroutines are drained at program exit
+- **Plain reference counting** -- every refcount step on a box happens on the machine running that box's strand, one machine at a time, so a retain or release has no second party and needs no atomic. Shared state that genuinely crosses OS threads (the runtime's own counters and queues) is a different question and is protected accordingly.
+- **An unawaited promise is dropped, not drained** -- at scope exit the compiler reclaims the coroutine: one that never started never runs, and a parked one's wait is cancelled in place. The runtime counts green threads and aborts with exit 75 if one is neither awaited nor dropped
 
-`wasm32-wasi` has one OS thread and no preemption: a green thread there runs until it waits. It also differs in the *mechanism* of suspension -- having no native stack switching, it implements it with Binaryen Asyncify, unwinding a live call stack into linear memory at an `await` and rewinding it on resume -- and not in the semantics of where a coroutine switches.
+`wasm32-wasi` has **no green threads at all**: a WASI component has no addressable call stack for a context switch to move, so `async`, `sleep` and every other green-thread entry are refused there with **E3104**. `specs/async-scheduler.md`'s *Targets* section is the one statement of that gate.
 
 A **service** is where these read differently: a `spawn`ed green thread is published to the P/M substrate from its first instruction, so it may run on another OS thread from the start, may be stolen from one processor to another, and is what fills the ring and keeps the worker loop busy. The single-owner guarantee is unchanged and is what a send being a MOVE buys — the box crosses, and only one green thread ever holds it.
 

@@ -1,4 +1,4 @@
-// Runtime/ManagedFileRuntime.maxon — the `__ManagedFile` box: one OS file HANDLE, closed on drop (R4.1).
+// Runtime/ManagedFileRuntime.maxon — the `__ManagedFile` box: one OS file HANDLE, closed on drop.
 //
 // ⭐ **THE ORACLE IS `specs/managed-file.md`, AND IT IS THE ONLY ORACLE AVAILABLE FOR THIS SUBSYSTEM.**
 // Its 11 committed cases are the whole of it, so a question the corpus does not already ask has nothing
@@ -8,10 +8,10 @@
 // EXERCISES on the host it runs on.** `TargetFacilities.targetProvidesFacility`'s `managedFile` row is the
 // one place that says which; every other target refuses at the call site with `E3104`.
 //
-// ⚠ **WHAT THE SECOND LANE DID *NOT* CHANGE IS THIS FILE.** The classification, the box, the sentinels and
-// the retry shapes are the same graph for both — `Arm64DarwinRuntime` translates Darwin's `errno` into the
-// Win32 numbers this file tests, exactly as it translates nanoseconds into a FILETIME — with ONE forced
-// exception, the handle-slot bias below, which was a latent defect rather than a porting cost.
+// ⚠ **THE TWO LANES SHARE THIS FILE ENTIRELY.** The classification, the box, the sentinels and the retry
+// shapes are the same graph for both — `Arm64DarwinRuntime` translates Darwin's `errno` into the Win32
+// numbers this file tests, exactly as it translates nanoseconds into a FILETIME — and the one place the two
+// platforms genuinely differ is the handle-slot bias below.
 //
 // ⚠ **THE REGISTERED HANDLE STRUCT AND THE RUNTIME BLOCK ARE HELD TOGETHER BY A CHECK, NEVER BY
 // INSPECTION.** A registered 8-byte handle struct beside a 40-byte runtime block is a type-checking
@@ -19,12 +19,10 @@
 // offsets and that layout disagree.
 
 // ⭐ **THE BOX'S FIELD OFFSET AND ITS SIZE** — asserted against the registered `StructLayout`
-// (`SignatureIndex.managedFileLayout`) rather than agreeing with it by inspection, exactly as
-// `CharSetCharsOffset`/`CharSetBoxBytes` did for the `CharacterSet` box until W129 retired that pair with
-// its runtime — **this is the LAST such pair, so the discipline has no second example left to copy**: the
-// SHAPE is stated for the front end by that layout and
-// written here by these constants, and two readers of one shape is the pair this project keeps finding
-// drifted.
+// (`SignatureIndex.managedFileLayout`) rather than agreeing with it by inspection — **the LAST such pair,
+// so the discipline has no second example left to copy**: the SHAPE is stated for the front end by that
+// layout and written here by these constants, and two readers of one shape is the pair this project keeps
+// finding drifted.
 //
 // One 8-byte slot holding the raw OS HANDLE. `specs/managed-file.md`'s "Type Structure" names the single
 // `_handle` field, and the corpus never reads it — direct construction is refused (E3072) so the handle
@@ -45,12 +43,11 @@ let ManagedFileClosedHandle = 0 as ParsedInt
 // ⭐⭐ **A HANDLE SLOT HOLDS `handle + 1`, AND THAT BIAS IS WHAT LETS A ZEROED BOX MEAN "CLOSED" ON A
 // PLATFORM WHOSE HANDLES START AT ZERO.**
 //
-// ⛔ **THIS PARAGRAPH USED TO READ "a handle the OS actually returns is never 0 for a file", AND THAT IS
-// TRUE OF A Win32 `HANDLE` AND FALSE OF A POSIX DESCRIPTOR.** `open(2)` is DEFINED to answer the lowest
-// free descriptor, so a process whose standard input has been closed gets fd 0 for its first file — and
-// the box would then read as CLOSED from the moment it was opened: every `size`/`read`/`write` throwing
-// `closed`, and `__mf_close`/`__mf_destruct` skipping the close, which is a descriptor LEAK with no
-// diagnostic anywhere. Found by inspection during MAC4; the failure is silent on every path.
+// ⛔ **"a handle the OS actually returns is never 0 for a file" IS TRUE OF A Win32 `HANDLE` AND FALSE OF A
+// POSIX DESCRIPTOR.** `open(2)` is DEFINED to answer the lowest free descriptor, so a process whose standard
+// input has been closed gets fd 0 for its first file — and an unbiased slot would read as CLOSED from the
+// moment it was opened: every `size`/`read`/`write` throwing `closed`, and `__mf_close`/`__mf_destruct`
+// skipping the close, which is a descriptor LEAK with no diagnostic anywhere, silent on every path.
 //
 // ⇒ The slot stores `handle + HandleSlotBias`, so the encoding is total: **every** handle value the OS can
 // answer — 0 included — maps to a non-zero slot, and the zero a fresh allocation leaves keeps its one
@@ -87,7 +84,7 @@ export let InvalidHandleValue = -1 as ParsedInt
 // Win32 `ERROR_FILE_NOT_FOUND` and POSIX `ENOENT` are BOTH 2 — which is why the errno→variant mapping is
 // builder-built Std here rather than backend code, and why a future POSIX lane reuses this arithmetic
 // unchanged and supplies only the OPEN.
-// ⚠ **EXPORTED FOR THE POSIX LANES (MAC4), WHICH MUST *PRODUCE* THESE NUMBERS.** The classification below
+// ⚠ **EXPORTED FOR THE POSIX LANES, WHICH MUST *PRODUCE* THESE NUMBERS.** The classification below
 // is target-neutral arithmetic over a Win32 code, so a lane whose OS answers `errno` has to translate —
 // and `Arm64DarwinRuntime.buildArm64DarwinLastErrorChunk` reads these three rather than transcribing them,
 // because a producer and a consumer of one number are exactly the pair this project keeps finding drifted.
@@ -97,8 +94,8 @@ export let ErrorAccessDenied = 5 as ParsedInt
 
 // ⭐ **THE `__ManagedFileError` ORDINALS, AS ERROR FLAGS (`ordinal + ErrorFlagOrdinalBias`).** DERIVED from
 // the bias rather than spelled 1…11, exactly as `ManagedMemoryRuntime.ArrayErrorIndexOutOfBoundsFlag` is — and the ordinals
-// themselves are positional facts about the case order of the enum DECLARED at `stdlib/Builtins.maxon:175`
-// (A1s). `verifyManagedFileOrdinals` below is what holds these literals to that declaration.
+// themselves are positional facts about the case order of the enum DECLARED at `stdlib/Builtins.maxon:175`.
+// `verifyManagedFileOrdinals` below is what holds these literals to that declaration.
 //
 // ⚠ `renameFailed` is ABSENT because the enum has no such case: a failed rename routes to `deleteFailed`,
 // and inventing a case here would put a variant in the enum that no `match` in the corpus can name.
@@ -111,14 +108,14 @@ let ManagedFileSizeFailedOrdinal = 5 as ParsedInt
 let ManagedFileDeleteFailedOrdinal = 6 as ParsedInt
 let ManagedFileStatFailedOrdinal = 7 as ParsedInt
 
-// ⚠ **8 AND 9 CARRY NO FLAG BECAUSE NOTHING THROWS THEM, AND THE ORDINALS ARE HERE ANYWAY (W135).**
+// ⚠ **8 AND 9 CARRY NO FLAG BECAUSE NOTHING THROWS THEM, AND THE ORDINALS ARE HERE ANYWAY.**
 // `invalidStatBuffer` and `invalidStatIndex` name the two ways a `statField`/`statFree` call can be handed
 // something impossible, and the compiler answers both with a runtime ABORT rather than a throw
 // (`buildManagedFileStatField`'s two guards → `RuntimeAbort.managedFileStatNullBuffer` /
 // `managedFileStatIndexOutOfRange`, and `buildManagedFileStatFree`'s → the first of those). The buffer is
 // the runtime's own; a corpus program never forges one, so a caller reaching either guard has a compiler
 // defect and not a recoverable failure. The two positions are transcribed regardless, because they are what
-// puts `closed` at 10 — and until W135 they were the gap a corpus reorder could move in silence.
+// puts `closed` at 10; left out, they are a gap a corpus reorder can move in silence.
 let ManagedFileInvalidStatBufferOrdinal = 8 as ParsedInt
 let ManagedFileInvalidStatIndexOrdinal = 9 as ParsedInt
 let ManagedFileClosedOrdinal = 10 as ParsedInt
@@ -133,7 +130,7 @@ let ManagedFileStatFailedFlag = ManagedFileStatFailedOrdinal + ErrorFlagOrdinalB
 let ManagedFileClosedFlag = ManagedFileClosedOrdinal + ErrorFlagOrdinalBias
 
 // ⭐ **`WIN32_FIND_DATAA` — the 320-byte record `FindFirstFileA` fills**, which `stat` and `exists` read the
-// filesystem through and which `__ManagedDirectory` iterates over (R4.3). The offsets are the Win32 struct's,
+// filesystem through and which `__ManagedDirectory` iterates over. The offsets are the Win32 struct's,
 // transcribed once. Three of them are NOT 8-aligned (`ftCreationTime` at 4, `ftLastAccessTime` at 12,
 // `ftLastWriteTime` at 20) because the record begins with a DWORD; x64 loads them unaligned without ceremony.
 //
@@ -142,9 +139,9 @@ let ManagedFileClosedFlag = ManagedFileClosedOrdinal + ErrorFlagOrdinalBias
 // directory search keeps its record for the LIFETIME of the search instead, inside its find block.
 //
 // ⚠ **THE SIZE AND THE OFFSETS ARE ONE FACT WITH TWO FAMILIES READING IT, WHICH IS WHY THEY ARE EXPORTED
-// FROM HERE RATHER THAN RE-TRANSCRIBED (R4.3).** A second copy of `cFileName is at 44` is a number nothing
+// FROM HERE RATHER THAN RE-TRANSCRIBED.** A second copy of `cFileName is at 44` is a number nothing
 // checks: get it wrong and `filename()` returns a slice of a timestamp, silently.
-// ⚠ **EXPORTED FOR THE LANE THAT MUST *FILL* THE RECORD (MAC4/5).** Win32 fills it through
+// ⚠ **EXPORTED FOR THE LANE THAT MUST *FILL* THE RECORD.** Win32 fills it through
 // `FindFirstFileA`; a POSIX lane synthesizes it from a `struct stat` and a `dirent`
 // (`Arm64DarwinRuntime.buildArm64DarwinFillFindDataChunk`), which needs the same offsets this file reads
 // them back with. `FindDataSizeLowOffset` stays private: the fill writes the two size DWORDs as ONE
@@ -158,7 +155,7 @@ export let FindDataSizeHighOffset = 28 as ByteOffset
 let FindDataSizeLowOffset = 32 as ByteOffset
 
 // `cFileName` — a NUL-terminated `char[MAX_PATH]` at the record's tail. Read only by `__ManagedDirectory`
-// (R4.3): `stat` and `exists` are told the path they asked about, so neither has any use for it.
+// alone: `stat` and `exists` are told the path they asked about, so neither has any use for it.
 export let FindDataFileNameOffset = 44 as ByteOffset
 
 // The two `dwFileAttributes` bits the corpus can observe: `exists` answers 0 for a DIRECTORY (the spec
@@ -239,12 +236,9 @@ export let Win32OutWordAnswerOffset = 0 as ByteOffset
 // compiler-INSERTED one — the drop a `__ManagedFile` box takes when its last owner goes away
 // (`SignatureIndex.managedNameDropCallee`), which is the whole of the RAII half of this type.
 //
-// ⭐⭐ **`__mf_open_write_exec` EXISTS AS OF MAC4, AND THIS BLOCK RECORDED ITS ABSENCE AS A DEFERRAL.** It
-// used to read: *"there is no `__mf_open_write_exec` … the parser's `openWriteExecutable` arm emits
-// `__mf_open_write` and the two are the same call. A POSIX lane splits them on the day it exists."* This is
-// that day. The two entry points differ in ONE constant — the permission mask their `StdOp` carries — and
-// on Windows they lower to the identical `CreateFileA`, which is a fact about NTFS having no execute bit
-// rather than about the two methods meaning the same thing.
+// ⭐⭐ **`openWrite` AND `openWriteExecutable` ARE TWO ENTRY POINTS, DIFFERING IN ONE CONSTANT** — the
+// permission mask their `StdOp` carries. On Windows they lower to the identical `CreateFileA`, which is a
+// fact about NTFS having no execute bit rather than about the two methods meaning the same thing.
 export let ManagedFileOpenReadName = b"__mf_open_read"
 export let ManagedFileOpenWriteName = b"__mf_open_write"
 export let ManagedFileOpenWriteExecutableName = b"__mf_open_write_exec"
@@ -282,31 +276,28 @@ export function isThrowingManagedFileRuntimeCallee(callee ByteArray) returns boo
 	return callee.equals(ManagedFileOpenReadName) or callee.equals(ManagedFileOpenWriteName) or callee.equals(ManagedFileOpenWriteExecutableName) or callee.equals(ManagedFileSizeName) or callee.equals(ManagedFileReadName) or callee.equals(ManagedFileWriteName) or callee.equals(ManagedFileDeleteName) or callee.equals(ManagedFileRenameName) or callee.equals(ManagedFileStatName)
 end 'isThrowingManagedFileRuntimeCallee'
 
-// ⭐ **WHAT THE USER ACTUALLY WROTE (D12)** — this family's `managedDirectorySourceMethodName`, and read
-// through the same composer (`GtRuntime.runtimeCalleeSourceMethod`). Until D12 an `__ManagedFile.openRead(p)`
-// written without a `try` was told it was a "throwing array accessor": the right E3057, naming a construct
-// the program does not contain.
+// ⭐ **WHAT THE USER ACTUALLY WROTE** — this family's `managedDirectorySourceMethodName`, and read through
+// the same composer (`GtRuntime.runtimeCalleeSourceMethod`). Without it an `__ManagedFile.openRead(p)`
+// written without a `try` is told it is a "throwing array accessor": the right E3057, naming a construct the
+// program does not contain.
 //
 // ⚠ **IT IS A MAP ONTO THE PARSER'S OWN CONSTANTS, NOT A SECOND SPELLING** — each arm answers with the very
 // `ManagedFile*Method` byte string `parseManagedFileStaticCall`/`dispatchManagedFileMethod` dispatched on, so
 // nothing here can disagree with what the source was matched against. Asked only on the COLD path, and only
 // behind `isThrowingManagedFileRuntimeCallee`, which is what the panic states rather than answers.
 //
-// ⚠⚠ **AS OF D11c IT HAS A SECOND READER, AND THE `delete`/`rename` ARMS ARE ITS ALONE (D11c review).**
+// ⚠⚠ **IT HAS A SECOND READER, AND THE `delete`/`rename` ARMS ARE ITS ALONE.**
 // `Parser`'s E3059 asks this same map for a VALUELESS `try`, and `__mf_delete`/`__mf_rename` are the family's
 // two void throwing members — so those arms have no E3057 case and E3059 is the only thing that can observe
 // them. `specs/void-call-result.md` pins both there rather than here, beside the other seven callees
-// E3059 can reach, because the roster is "throwing AND void" and that crosses every family. **MEASURED: with
-// the `delete` arm answering `stat`, the whole suite read 2897/0 while an author who wrote `delete` was told
-// about `'stat'`.** ⚠ It follows that this map is asked BEFORE `installManagedFileRuntime`'s drift guard can
+// E3059 can reach, because the roster is "throwing AND void" and that crosses every family. ⛔ **A WRONG ARM
+// IS INVISIBLE TO THE SUITE**: with the `delete` arm answering `stat`, every test passes while an author who
+// wrote `delete` is told about `'stat'`. ⚠ It follows that this map is asked BEFORE `installManagedFileRuntime`'s drift guard can
 // run on an E3059 path — the parse refuses the program first — so the guard covers a missing arm and the
 // spec cases cover a WRONG one.
 //
-// ⭐⭐ **`__mf_open_write` WAS A LOSSY KEY AND IS NOT ONE ANY MORE (MAC4), WHICH IS THE OUTCOME THE PREVIOUS
-// PARAGRAPH PREDICTED VERBATIM.** It read: *"a POSIX lane that splits the two entry points collapses this
-// arm back to a `found` at no extra cost, and nothing else here changes."* MAC4 split them — POSIX has a
-// permission mask and Windows has not — so each spelling now has an entry point of its own and every arm of
-// this map is injective again.
+// ⭐⭐ **EVERY ARM OF THIS MAP IS INJECTIVE**, because `openWrite` and `openWriteExecutable` have an entry
+// point each — POSIX has a permission mask and Windows has not.
 //
 // ⚠ **THE `sharedByTwoSpellings` CASE IS DELIBERATELY LEFT STANDING WITH NO PRODUCER.** It encodes a real
 // property of this map FAMILY — a runtime callee that two source spellings share carries no evidence of
@@ -354,19 +345,16 @@ export function managedFileSourceMethod(callee ByteArray) returns RuntimeCalleeS
 end 'managedFileSourceMethod'
 
 // ⭐ **THE ERROR TYPE A FILE CALLEE THROWS — the WHAT to the predicate's THAT.** `ProgramSignatures.throwsOf`
-// answers with it for a callee no file declares (R4.1), which is what types an `otherwise (e)` binding and
+// answers with it for a callee no file declares, which is what types an `otherwise (e)` binding and
 // therefore what makes `match e` see an enum instead of a scalar; the eight throwing builders stamp it as
 // their `throws` clause. ONE speller for one fact — kept beside the predicate deliberately, because the two
 // are halves of it and the drift guard in `installManagedFileRuntime` holds the predicate to the stamps.
 //
-// ⚠ It is EXPORTED and there is no `…RuntimeThrowsClause` wrapper beside it any more. R4.1 had one, returning
-// a `ThrowsClauseOption` — an optional over a type that ALREADY has a `none` arm — and review measured what
-// that cost when a second family joined it: composing two of those optionals put **+20 allocations at rung 0
-// DOUBLING to +640 at rung 5** on the ladder, one extra 16-byte union box per `try` in the program. The
-// composer (`GtRuntime.runtimeThrowsClause`) now asks the two PREDICATES and returns a `ThrowsClause`
-// directly, so exactly one clause value is built per ask, as before. (`docs/optimization-log.md` already
-// records the identical signature once — `joinCommaSeparated` in `checkEnumExhaustive`, same
-// +20-doubling-to-+640 — under the heading *a dedup that is correct can still be unscalable*.)
+// ⚠ It is EXPORTED, and there is no `…RuntimeThrowsClause` wrapper beside it: a wrapper returning an
+// optional over a type that ALREADY has a `none` arm costs one extra 16-byte union box per `try` in the
+// program, and composing two of them is **+20 allocations at rung 0, DOUBLING to +640 at rung 5** on the
+// ladder. The composer (`GtRuntime.runtimeThrowsClause`) asks the two PREDICATES and returns a
+// `ThrowsClause` directly, so exactly one clause value is built per ask.
 export function managedFileThrows() returns ThrowsClause
 	return ThrowsClause.throwing(String.from(ManagedFileErrorTypeName))
 end 'managedFileThrows'
@@ -379,8 +367,8 @@ end 'managedFileThrows'
 // exactly `length` bytes. Writing a NUL at `buffer[length]` in place would be a one-byte heap overflow
 // whenever capacity equals length — which is precisely what a freshly materialized view has.
 // ⇒ allocate `length + 1`, copy, terminate. The copy reuses `ManagedMemoryRuntime.emitForwardCopy` rather than
-// growing a second copy loop — which since EC3-G is a machine word per trip with a byte tail, not the byte
-// loop this line used to call it. **The caller owns the scratch and must `__mm_free` it on every path.**
+// growing a second copy loop — which is a machine word per trip with a byte tail. **The caller owns the
+// scratch and must `__mm_free` it on every path.**
 //
 // Emits into `cur`, routes the copy loop's exit into `join`, and writes the terminator in `join` — so the
 // caller carries on from `join` with the pointer this returns. `cur` dominates `join`, which is what lets
@@ -404,11 +392,10 @@ end 'emitPathToCString'
 // the destructor is always `TrivialDestructor` here — none of the three raw blocks this file allocates (a
 // path scratch, a `WIN32_FIND_DATAA`, a stat buffer) owns anything to cascade to.
 //
-// ⚠ **R4.1 CALLED IT WITH ONE ARGUMENT**, so the destructor slot of both its allocations was whatever
-// happened to be in the second argument register. Nothing reads that slot back TODAY (`__mm_free`'s
-// destructor cascade is deferred — see its comment), which is why a green suite never noticed; the day it
-// does, every `__ManagedFile` box would `callIndirect` through a garbage pointer. Stated once here so the
-// arity cannot be got wrong per call site.
+// ⚠ **CALLING `__mm_alloc` WITH ONE ARGUMENT LEAVES THE DESTRUCTOR SLOT HOLDING WHATEVER WAS IN THE SECOND
+// ARGUMENT REGISTER**, and nothing reads that slot back TODAY (`__mm_free`'s destructor cascade is deferred
+// — see its comment), so a green suite would not notice; the day it does, every `__ManagedFile` box would
+// `callIndirect` through a garbage pointer. Stated once here so the arity cannot be got wrong per call site.
 export function emitRawAlloc(module StdModule, block IrBlock, byteCount ValueId, ids ValueMinter) returns ValueId
 	let dtor = emitConst(module, block: block, value: TrivialDestructor, ids: ids)
 	let ptr = ids.mint()
@@ -423,10 +410,10 @@ end 'emitRawAlloc'
 //
 // ⚠ **IT LIVES HERE, WITH `emitPathToCString`, BECAUSE THIS FILE ALREADY OWNS THE CSTRING QUESTION** —
 // that one terminates a RUNTIME value in a scratch buffer, this one terminates a CONSTANT the compiler
-// embeds in `.rdata`, and both exist for the same OS contract. It was written twice (`DebugStreamRuntime`
-// for `MAXON_DEBUGSTREAM`, `TerminalRuntime` for `NO_COLOR`/`TERM`) before it was written once; two
-// file-private copies COMPILE — the flat-namespace check governs cross-file top-level names and a
-// private declaration is not one — which is exactly why the duplication could sit there unnoticed.
+// embeds in `.rdata`, and both exist for the same OS contract. ⚠ **TWO FILE-PRIVATE COPIES OF IT COMPILE**
+// — the flat-namespace check governs cross-file top-level names and a private declaration is not one — so a
+// second spelling in a caller sits there unnoticed. `DebugStreamRuntime` (`MAXON_DEBUGSTREAM`) and
+// `TerminalRuntime` (`NO_COLOR`/`TERM`) both reach this one.
 export function cStringBytes(text String) returns ByteArray
 	var bytes = text.toByteArray()
 	bytes.push(0)
@@ -485,7 +472,7 @@ end 'emitWin32BoolOutcome'
 // otherwise fall to the catch-all for a path whose parent does not exist. Anything else takes
 // `fallbackFlag` — the per-OPERATION catch-all (`openFailed` for an open, `readFailed` for a read, and so on).
 //
-// ⚠ **THE THREE FLAGS ARE ALL PARAMETERS, AND R4.3 IS WHY.** `__ManagedDirectory` runs the identical
+// ⚠ **THE THREE FLAGS ARE ALL PARAMETERS.** `__ManagedDirectory` runs the identical
 // classification into `__ManagedDirectoryError`, whose `notFound`/`accessDenied` happen to sit at the same
 // two ordinals `__ManagedFileError`'s do. Hard-coding this
 // file's two and letting the directory family inherit them would make that coincidence load-bearing and
@@ -526,9 +513,8 @@ function emitFileErrnoClassifiedThrow(module StdModule, func IrFunction, block I
 	emitErrnoClassifiedThrow(module, func: func, block: block, err: err, notFoundFlag: ManagedFileNotFoundFlag, deniedFlag: ManagedFileAccessDeniedFlag, fallbackFlag: fallbackFlag, ids: ids)
 end 'emitFileErrnoClassifiedThrow'
 
-// ⚠ The two throwing exits this file used to spell for itself (`emitManagedFileThrow`/`emitManagedFileOk`)
-// are `MmRuntime.emitErrorReturn`/`emitOkReturn` — the identical three-line bodies `ManagedMemoryRuntime` also had.
-// R4.3 would have been the third copy; see their header in `MmRuntime` for why they now have one home.
+// ⚠ This file's throwing exits are `MmRuntime.emitErrorReturn`/`emitOkReturn`, which every family shares —
+// see their header in `MmRuntime` for why they have one home.
 
 // ⭐⭐ **THE LIVE OS HANDLE OF A RECORD, OR THIS FAMILY'S `closed` THROW — ONE HOME FOR THE GUARD ITSELF.**
 // A handle-owning box carries its family's CLOSED SENTINEL both before an open and after a close (one
@@ -536,18 +522,17 @@ end 'emitFileErrnoClassifiedThrow'
 // closed", and operating on either is exactly what a `closed` case names. Emits the test into `entry` and
 // routes the live path to `join`; the handle is defined in `entry`, which dominates `join`.
 //
-// ⚠ **THE PROTOCOL IS WHAT IS SHARED, NOT THE CONSTANTS** (R4.3). `__ManagedFile`'s `size`/`read`/`write`
-// and `__ManagedDirectory`'s `next` had this same six-line body twice, differing only in which record the
-// handle sits in, which sentinel means closed, and which enum's `closed` flag to throw — all four now
-// parameters. The part that was copied is the part that is easy to get silently wrong: which way round the
-// `condBranch` goes, and that the throw block is a SEPARATE block dominated by `entry`. Swap the two edges
-// in one copy and the other keeps working, while that family's guard stops firing — measured, on the
-// directory side, as a **0xC0000005 access violation** from `FindNextFileA(NULL)`, not as a test that
-// merely returns the wrong number.
+// ⚠ **THE PROTOCOL IS WHAT IS SHARED, NOT THE CONSTANTS.** `__ManagedFile`'s `size`/`read`/`write` and
+// `__ManagedDirectory`'s `next` are one six-line body, differing only in which record the handle sits in,
+// which sentinel means closed, and which enum's `closed` flag to throw — all four parameters. What a second
+// copy gets silently wrong is which way round the `condBranch` goes, and that the throw block is a SEPARATE
+// block dominated by `entry`: swap the two edges in one copy and the other keeps working, while that
+// family's guard stops firing — on the directory side that is a **0xC0000005 access violation** from
+// `FindNextFileA(NULL)`, not a test that merely returns the wrong number.
 //
 // ⚠ The `closed` block's LABEL is deliberately family-neutral and NOT a parameter: labels are diagnostic
-// strings only (identity is `block.id`), and `emitErrnoClassifiedThrow` — shared by both families since
-// R4.3 — already emits `mf`-prefixed labels inside directory functions.
+// strings only (identity is `block.id`), and `emitErrnoClassifiedThrow` — shared by both families —
+// already emits `mf`-prefixed labels inside directory functions.
 export function emitLiveHandleOrClosedThrow(module StdModule, func IrFunction, entry IrBlock, join IrBlock, record ValueId, handleOffset ByteOffset, closedSentinel ParsedInt, closedFlag ParsedInt, ids ValueMinter) returns ValueId
 	let slot = emitLoadField(module, block: entry, record: record, offset: handleOffset, ids: ids)
 	let closedConst = emitConst(module, block: entry, value: closedSentinel, ids: ids)
@@ -699,7 +684,7 @@ function buildManagedFileClose(module StdModule)
 	module.functions.push(func)
 end 'buildManagedFileClose'
 
-// ⭐⭐ **`__mf_destruct(box)` — THE RAII DESTRUCTOR (R4.2), AND THE REASON A `__ManagedFile` MAY BE DROPPED
+// ⭐⭐ **`__mf_destruct(box)` — THE RAII DESTRUCTOR, AND THE REASON A `__ManagedFile` MAY BE DROPPED
 // AT ALL.** The refcount-checked teardown a `__ManagedFile` box takes instead of the generic `__mm_decref`:
 // last owner ⇒ CLOSE the handle, then free the eight bytes; otherwise lower the count and keep the box.
 //
@@ -708,8 +693,8 @@ end 'buildManagedFileClose'
 // type outright; and `emitNullGuardedDrop`'s shape — load the FIELD, call `callee(field)` — is wrong for a
 // close, which needs the BOX (it zeroes `_handle` to stay idempotent). Widening "managed field" to cover a
 // handle would be a lie every other reader of that predicate would then act on. So the drop ROUTER answers
-// this name (`SignatureIndex.managedNameDropCallee`, whose other arm is `__ManagedDirectory`'s — a
-// `CharacterSet` ⇒ `__cs_decref` arm stood beside them until W129) and the teardown lives here.
+// this name (`SignatureIndex.managedNameDropCallee`, whose other arm is `__ManagedDirectory`'s) and the
+// teardown lives here.
 //
 // ⭐ It reuses `__mf_close` rather than re-emitting the close, so idempotence is stated once: an explicit
 // `f.close()` followed by the scope-exit drop finds the sentinel already stored and does nothing —
@@ -923,7 +908,7 @@ function buildManagedFileExists(module StdModule)
 	module.setTerminator(missing, op: StdOp.ret(zeroAnswer))
 
 	// Read the attributes BEFORE the record is released; close the search handle either way — a leaked
-	// `FindFirstFileA` handle is the same class of leak the whole of R4.1 exists to avoid.
+	// `FindFirstFileA` handle is the same class of leak this whole family exists to avoid.
 	let attrs = emitLoadDword(module, block: found, record: findData, offset: FindDataAttributesOffset, ids: ids)
 	module.appendOp(found, op: StdOp.osFileFindClose(search))
 	emitRawFree(module, block: found, ptr: findData, ids: ids)
@@ -1095,8 +1080,8 @@ end 'buildManagedFileStat'
 // One unsigned DWORD out of a record — see `DwordMask` for why it is a word load and a mask rather than a
 // 4-byte access.
 //
-// ⚠ **EXPORTED WHEN THE SOCKET FAMILY BECAME THE FIRST SECOND CALLER THAT REALLY LOADS ONE.** R4.3 exported
-// it for the directory family and took it back: `__md_exists` masks a value `GetFileAttributesA` returned in
+// ⚠ **EXPORTED FOR THE SOCKET FAMILY, THE ONE OTHER CALLER THAT REALLY LOADS ONE.** The directory family
+// does not: `__md_exists` masks a value `GetFileAttributesA` returned in
 // a REGISTER, which is `DwordMask` and no load at all. `__ms_tcp_connect` reads `sin_addr` — a genuine
 // 4-byte FIELD inside a `sockaddr` the OS filled — so it needs exactly this pair, and a second copy would be
 // free to disagree about whether the mask or the load came first.
@@ -1222,18 +1207,17 @@ end 'buildManagedFileStatFree'
 // constant so the lookup's message and the claim's message name the same author.
 let ManagedFileOrdinalInstaller = b"the __ManagedFile runtime"
 
-// ⭐ **THE ORDINAL DRIFT GUARD FOR `__ManagedFileError` (7b, re-anchored at A1s)** — the enum's case ORDER is
+// ⭐ **THE ORDINAL DRIFT GUARD FOR `__ManagedFileError`** — the enum's case ORDER is
 // this family's wire format and the ordinals at the top of this file are transcribed literals of it, so the
 // two are asserted to agree on every compile. Drift is otherwise SILENT: every handler arm would name the
 // wrong case, with no crash and no wrong exit code.
 //
-// ⚠ **THE DECLARATION IT VERIFIES AGAINST IS `stdlib/Builtins.maxon`'s, AND THAT IS THE POINT OF A1s.** It
-// used to be a `Project.builtinManagedFileErrorEnum()` the compiler built — a second transcription of the
-// same enum, which the parsed declaration then displaced in both registries anyway, so the guard verified a
-// layout no handler arm was selected from. See `Project.BuiltinErrorOrdinalCheck`'s header for the
-// abort-instead-of-42 measurement that shows.
+// ⚠ **THE DECLARATION IT VERIFIES AGAINST IS `stdlib/Builtins.maxon`'s, AND THAT IS THE POINT.** A
+// compiler-built second transcription of the same enum is displaced in both registries by the parsed
+// declaration anyway, so a guard over it verifies a layout no handler arm was selected from. See
+// `Project.BuiltinErrorOrdinalCheck`'s header.
 //
-// ⚠ It is a FREE function rather than the head of `installManagedFileRuntime` because it now needs the
+// ⚠ It is a FREE function rather than the head of `installManagedFileRuntime` because it needs the
 // `Project` — both to read the declaration and to report E4016 — and because it must run whether or not the
 // program touches a file. `Compiler.compileToCodeResult` calls it beside its four siblings, ahead of the
 // pipeline's error gate.
@@ -1305,15 +1289,15 @@ export function installManagedFileRuntime(module StdModule, usage RuntimeUsage)
 			panic("installManagedFileRuntime: isThrowingManagedFileRuntimeCallee names '{String.from(func.name)}' as throwing but its builder stamps NO `throws` clause — the throwing-builder set and the predicate have drifted (R4.1)")
 		end 'namedNotStamped'
 
-		// ⭐ **THE THIRD LIST (D12 review): a throwing callee must also have a SOURCE-METHOD arm.** Asked, not
+		// ⭐ **THE THIRD LIST: a throwing callee must also have a SOURCE-METHOD arm.** Asked, not
 		// described — the answer is discarded and the CALL is the check, so a missing arm is
 		// `managedFileSourceMethod`'s own panic here at install rather than in front of a user who forgot a
 		// `try` on that one callee. `GtRuntime.runtimeCalleeSourceMethod`'s header holds the whole reasoning,
 		// including why there is no backward arm and no column of names.
-		// ⚠ This family's map answers the UNION (it owns the one non-injective callee), so the arms are named
-		// here rather than an answer being read as a name. `notFound` is unreachable — the map panics before
-		// it — and is a `panic` rather than a `break` for that reason: reaching it would mean the map grew a
-		// silent absent-state, which is what the union's `notFound` means for a family with NO map at all.
+		// ⚠ This family's map answers the UNION, so the arms are named here rather than an answer being read as
+		// a name. `notFound` is unreachable — the map panics before it — and is a `panic` rather than a
+		// `break` for that reason: reaching it would mean the map grew a silent absent-state, which is what
+		// the union's `notFound` means for a family with NO map at all.
 		if named 'hasSourceMethod'
 			match managedFileSourceMethod(func.name) 'spelling'
 				found(method) then requireQuotableSourceSpelling(method, callee: func.name)
@@ -1325,7 +1309,8 @@ export function installManagedFileRuntime(module StdModule, usage RuntimeUsage)
 end 'installManagedFileRuntime'
 
 // Every callee this file installs — what the drift guard iterates, what `scanRuntimeUsage` reads to set
-// `usesManagedFile`, and what `SemanticCheck.calleeNeedsWin32Substrate` refuses on a non-Windows target.
+// `usesManagedFile`, and what `TargetFacilities.calleeHostFacility` maps onto `HostFacility.managedFile`,
+// so a lane without that facility refuses the call with E3104.
 // A PREFIX test rather than a thirteen-way `or`: every entry point this file installs is `__mf_`-named by
 // construction, and a fourteenth would otherwise have to be remembered here as well as declared above.
 export function isManagedFileRuntimeCallee(callee ByteArray) returns bool

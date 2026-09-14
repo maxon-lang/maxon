@@ -1,9 +1,8 @@
 // ServiceCallCycleCheck.maxon — DEADLOCK FREEDOM BY CONSTRUCTION (E3139), the acyclic blocking graph.
 //
 // ⭐⭐ **MUTUAL REENTRANCY IS NOT DIAGNOSED AT RUN TIME, IT IS MADE UNREPRESENTABLE.**
-// `SERVICES_DESIGN.md` §"Deadlock freedom by construction": the compiler builds a directed graph over
-// service TYPES and refuses any cycle in it. An edge `A → B` exists iff a message of `A` **awaits a reply**
-// from a `B.handle`.
+// The compiler builds a directed graph over service TYPES and refuses any cycle in it: an edge `A → B`
+// exists iff a message of `A` **awaits a reply** from a `B.handle`. `specs/services.md` is the spec.
 //
 // **Why acyclicity is SUFFICIENT and not merely suggestive.** An acyclic graph has a topological order. The
 // service lowest in that order awaits nobody, so it always makes progress; when it replies, its callers
@@ -337,11 +336,12 @@ end 'opIsAServiceSend'
 // each step to know where to break the ring — and reporting one diagnostic PER HOP would say one defect
 // twice, which is the mistake `blameForTypeCycles` refuses one graph over. A `Diagnostic` carries at most one
 // note, so the path is rendered into the sentence, exactly as `TypeCycleGraph.renderCyclePath` renders its
-// own; `SERVICES_DESIGN.md`'s worked example is this shape.
+// own; `specs/services.md`'s E3139 cases pin that shape.
 //
 // ⚠ **A SELF-EDGE IS ONE HOP AND IS SAID PLAINLY**, because it is the case users hit most: two instances of
-// one service cannot await each other. The design document records that cost and asks that the diagnostic
-// name the WORKAROUND rather than just the cycle, which is what the closing sentence does.
+// one service cannot await each other. Edges are by TYPE — which is what makes them statically knowable at
+// all, and is also what refuses that pair — so the closing sentence names the WORKAROUND rather than just
+// the cycle.
 function reportServiceCallCycle(project Project, graph ServiceBlockingGraph, node CsrIndex)
 	let cycle = shortestCycleThrough(graph.adjacency(), start: node)
 	let anchor = graph.edgeSiteAt(graph.edgeIndexBetween(node, awaited: cycleStepAfter(cycle, index: 0, start: node)))

@@ -1,14 +1,9 @@
 // Compiler/TargetFacilities.maxon — WHICH HOST FACILITY A RUNTIME ENTRY NEEDS, AND WHICH TARGETS HAVE IT.
 //
-// ⭐⭐ **THIS FILE REPLACES A QUESTION THAT COULD NOT BE ASKED: `calleeNeedsWin32Substrate`.** That
-// predicate took a callee and answered a bool, and the bool meant *"x64-windows only"* — so the moment ONE
-// family landed on a SECOND target the name became a lie and the answer became wrong for every other
-// family at once. There was no seam to land a family through: the gate said `not
-// targetHasWin32Substrate(target)` and refused everything the roster named, on every lane but one.
-//
-// The question it could not ask is the one a port actually poses: **does THIS TARGET provide the facility
-// THIS CALLEE needs?** Two independent facts — a callee's requirement and a target's capability — which the
-// old shape had fused into one. They are separated here:
+// ⭐⭐ **THE QUESTION A PORT POSES IS *DOES THIS TARGET PROVIDE THE FACILITY THIS CALLEE NEEDS?*, AND IT IS
+// TWO INDEPENDENT FACTS** — a callee's requirement and a target's capability. Fused into one bool meaning
+// *"x64-windows only"* there is no seam to land a family through: one family landing on a second target
+// makes the answer wrong for every other family at once. They are separated here:
 //
 //   • `calleeHostFacility(callee)` — the callee's requirement, and the door to E3104. One `HostFacility` or
 //     `none`; the per-family predicates it consults still live with their runtimes, so a band added to one
@@ -25,9 +20,9 @@
 //
 // ⚠ **THE TABLE IS THE BACKEND'S CLAIM AND MUST BE KEPT HONEST BY THE BACKEND.** A `true` here promises that
 // the target's isel lowers every `StdOp` the facility's runtime bodies emit. Write one before the lowering
-// exists and the E3104 stops firing while the backend still panics three tiers down — which is exactly the
-// failure `SemanticCheck.requireTargetSupportsCallee`'s header records for the socket runtime, one level up.
-// The backends' own `panic` arms are the backstop for that mistake, never the user-facing rejection.
+// exists and the E3104 stops firing while the backend still panics three tiers down, which is a worse
+// answer than refusing the surface outright. The backends' own `panic` arms are the backstop for that
+// mistake, never the user-facing rejection.
 //
 // ⚠ **A FACILITY IS NAMED FOR WHAT THE HOST PROVIDES, NOT FOR THE API THAT PROVIDES IT.** `wallClock` rather
 // than `getSystemTimeAsFileTime`: two platforms answer the same question through different calls, and a
@@ -206,8 +201,7 @@ end 'CalleeFacility'
 
 // ⭐ **WHICH HOST FACILITY THIS CALLEE NEEDS — the roster the E3104 gate reads.**
 //
-// Membership is `SemanticCheck.calleeNeedsWin32Substrate`'s, unchanged, and its rule is unchanged with it:
-// **a name joins when SOURCE names it and the parser routes it here.** A compiler-INSERTED `__gt_*` call
+// **A NAME JOINS WHEN SOURCE NAMES IT AND THE PARSER ROUTES IT HERE.** A compiler-INSERTED `__gt_*` call
 // (`__gt_promise_drop` at a scope exit, `__gt_io_park` inside an `__mf_*` body) is deliberately absent,
 // because an E3104 against one of those names a runtime entry the user has never heard of at a span where
 // they wrote nothing. `SemanticCheck.requireTargetSupportsCallee`'s header carries that argument in full,
@@ -216,16 +210,14 @@ end 'CalleeFacility'
 // ⚠ **THE ORDER OF THE TESTS IS NOT ARBITRARY WHERE TWO COULD MATCH.** They cannot today — every family
 // predicate is a distinct prefix or an exact name — and the four individually-named scheduler entries are
 // tested FIRST so that a prefix band added later cannot silently swallow one of them.
-// ⭐⭐ **WHY EACH FAMILY IS ON THE ROSTER — PRESERVED VERBATIM FROM `calleeNeedsWin32Substrate`, WHOSE
-// MEMBERSHIP THIS IS.** Every paragraph below was written at the moment its family joined, and several
-// record a MEASUREMENT that is not re-derivable from the code. The one framing that has changed is the
-// conclusion: where these say "x64-windows only", read "needs a facility whose provider is named in
-// `targetProvidesFacility`" — the reasons for MEMBERSHIP are untouched, because a family is on the roster
-// for what it NEEDS, which no port changes.
+// ⭐⭐ **WHY EACH FAMILY IS ON THE ROSTER.** Several of the paragraphs below record a MEASUREMENT that is
+// not re-derivable from the code. Where one says "x64-windows only", read "needs a facility whose providers
+// are named in `targetProvidesFacility`": a family is on the roster for what it NEEDS, which no port
+// changes.
 //
 // ⭐ **THE RUNTIME ENTRIES A SOURCE-WRITTEN BUILTIN LOWERS TO THAT ONLY A HOST FACILITY CAN PROVIDE.** The
 // exact set `requireTargetSupportsCallee` refuses below (E3104), and the deliberate counterpart of
-// `targetHasWin32Substrate` below it: one says what a CALLEE needs, the other what a TARGET has. It is
+// `targetProvidesFacility` below it: one says what a CALLEE needs, the other what a TARGET has. It is
 // also what `stdlibSubstrateEntries` ASKS to seed its fixpoint — that fixpoint propagates this answer
 // through the stdlib call graph rather than keeping a second list of entries to drift from it.
 //
@@ -505,9 +497,8 @@ end 'calleeHostFacility'
 // callee need a facility this target does not provide?"*, which is the E3104 verdict itself.
 //
 // ⚠ It is a COMPOSITION and not a third fact: both halves come from the two functions above, so a family
-// that lands is recorded once, in the table, and this answer follows. The old `calleeNeedsWin32Substrate`
-// looked like this from the outside and could not be decomposed from the inside, which is precisely what
-// made a partial landing inexpressible.
+// that lands is recorded once, in the table, and this answer follows. A predicate shaped like this on the
+// outside but undecomposable on the inside is what makes a partial landing inexpressible.
 export function calleeNeedsFacilityTargetLacks(target Target, callee ByteArray) returns bool
 	return match calleeHostFacility(callee) 'f'
 		needs(facility) gives not targetProvidesFacility(target, facility: facility)
@@ -527,9 +518,8 @@ end 'calleeHasHostFacility'
 
 // ⭐⭐ **THE CAPABILITY TABLE — what each backend has actually landed.**
 //
-// Read as *"target T provides facility F"*, and written by the backend that made it true. x64-windows
-// provides everything, which is the historical shape: the whole OS substrate was built there first, and the
-// old gate's `targetHasWin32Substrate` was this table collapsed to its one full row.
+// Read as *"target T provides facility F"*, and written by the backend that made it true. x64-windows is
+// the one FULL row — it provides every facility, so its block answers `true` without asking which.
 //
 // ⚠ **arm64-macOS IS THE FIRST LANE TO GROW THIS TABLE A SECOND COLUMN**, and each `true` in its row is a
 // landed family with real libSystem lowerings behind it (`StdToArm64Conversion`, `MachOWriter`'s import
@@ -1068,10 +1058,9 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 end 'targetProvidesFacility'
 
 // ⭐ **DOES THIS TARGET PROVIDE EVERY FACILITY?** — the per-FUNCTION short-circuit
-// `SemanticCheck.checkCalls` settles once and hands to every call op, in place of the old
-// `targetHasWin32Substrate`. Written as a walk over `allCases` rather than as `x64 and windows` so that the
-// day a second lane completes the table it becomes true here by MEASUREMENT rather than by someone
-// remembering to widen a hard-coded pair.
+// `SemanticCheck.checkCalls` settles once and hands to every call op. Written as a walk over `allCases`
+// rather than as `x64 and windows` so that the day a second lane completes the table it becomes true here
+// by MEASUREMENT rather than by someone remembering to widen a hard-coded pair.
 // ⭐⭐ **CAN THIS TARGET CARRY THE DebugStream PRODUCER? — the ONE producer of that fact.** Two parties ask
 // it and they are in different trees: `Main.runBuild` refuses `--debugstream` at the command line, and the
 // spec harness skips a capture case rather than compiling one. Spelled at each, it was a target pair written

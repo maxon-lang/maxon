@@ -17,13 +17,13 @@
 #                                  scheduler)
 #
 # ⇒ a run PASSES when `exit - 150 <= LATE_MS` (default 10). A clean run reads
-# 150-152; a driver that slept through the reply reads ~175, or 250 if it also
+# 150-152; a machine that waited its timer out reads ~175, or 250 if it also
 # answered the losing slot.
 #
-# ⛔ THE BAR IS `procs=16`, AND THE COUNT MATTERS. The window is main's driver
-# reaching its netpoll `sleepwait` arm — nothing runnable, `Slow`'s timer
-# pending — before `Quick`'s reply lands, which needs worker Ms to have taken
-# both handlers off main. MEASURED on the UNFIXED tree, 10 runs: 9 red at 16
+# ⛔ THE BAR IS `procs=16`, AND THE COUNT MATTERS. The window is the machine
+# running `main` reaching its timed poller wait — nothing runnable, `Slow`'s
+# timer pending — before `Quick`'s reply lands, which needs worker Ms to have
+# taken both handlers off main. MEASURED on the UNFIXED tree, 10 runs: 9 red at 16
 # (six of them the wrong INDEX) against 0 red at 1. A driver pointed at one
 # processor measures nothing at all.
 #

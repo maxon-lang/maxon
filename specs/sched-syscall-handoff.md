@@ -82,9 +82,8 @@ at the first of the three cases, is what tells that ordering apart from a line t
 The claim at the head of this file — a green thread inside a genuinely blocking kernel call takes its M with
 it — is untouched, and now has a live example pointing at it. What has been withdrawn is one program's claim
 to *demonstrate* it, and the reason that program never could is that its wait is green. Every call that
-really does block (the standard-input read above, a synchronous read of a slow device, a `connect` to an
-unreachable host) still costs its processor for the duration, and `handoffp` is still what gives that
-processor to somebody else. **The
+really does block (the standard-input read above, a synchronous read of a slow device) still costs its
+processor for the duration, and `handoffp` is still what gives that processor to somebody else. **The
 correct reading of this file is that it has TWO passing cases and no committed timing evidence**, which is
 what the paragraph below already says the cases are for.
 
@@ -98,8 +97,8 @@ writer is itself a green thread on an occupied M — and that is a different pro
 
 ⇒ **what these two cases assert is COMPLETION AND THE ANSWER, not a timing.** Every reply arrives, the
 sentinel that was sent last still replies, and the aggregate is a fixed number. That is deliberately a
-claim a stopwatch cannot make and a flaky box cannot break: when the overlapped path lands, the shape
-these programs describe is the one that can regress into a genuine stall (a completion never delivered, a
+claim a stopwatch cannot make and a flaky box cannot break: the shape these programs describe is the one
+that can regress into a genuine stall (a completion never delivered, a
 P handed off and never handed back, a sysmon that retakes a P from an M that was about to return), and
 each of those is a **hang** here — which the harness reports as a clean per-test failure at 120 s
 (`SpecTestRunner.maxon:728`), not as a slow pass.

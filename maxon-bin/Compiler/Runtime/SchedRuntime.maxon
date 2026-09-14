@@ -1,5 +1,5 @@
 // Runtime/SchedRuntime.maxon — ⭐⭐ **THE MACHINE (M) AND THE PROCESSOR (P) — the GMP scheduler's structure,
-// and since W213-C1 they are TWO STRUCTS rather than one.**
+// as TWO STRUCTS rather than one.**
 //
 // `GtRuntime.maxon` beside this file owns the GREEN THREAD (G): its struct, its stack, its run queue, its
 // timers. This file owns the two things G alone cannot express — **which OS thread is running it (M)** and
@@ -40,50 +40,39 @@
 // itself rather than waking another. So a program whose only green thread is `main` keeps one M until the
 // monitor steps in or it yields alone, while a program that spawns services really does run on several.
 //
-// ⭐ **WHAT THE FLIP CHANGED IS WHETHER ANY OF IT RUNS BY DEFAULT.** G1 built the whole P/M substrate — the
-// CAS claim, the Dekker park, the wake, the per-thread system stack — and W212 built the run-queue hierarchy on
-// top of it; both were correct, shipped, and reachable only from a driver script that set the variable by
-// hand. `specs/sched-default-procs.md` is where that is stated as the rung's own subject.
+// `specs/sched-default-procs.md` states the default count as its own subject.
 //
 // ⚠ **A PIECE THAT IS STILL UNREACHED SAYS SO AT ITS OWN DECLARATION**, which is this file's idiom for
-// *"built, waiting for its producer"* (`POffRunnext`). G2's
-// audit below is unchanged and still discharged.
+// *"built, waiting for its producer"* (`POffRunnext`).
 //
-// ⭐⭐ **THE AUDIT IS NO LONGER PROSE — IT IS `MultiMSharing`, A REQUIRED ARGUMENT ON EVERY RUNTIME `.data`
-// SLOT'S BIRTH (`pushRuntimeGlobal`, below).** This paragraph used to BE the audit: a list derived by grepping
-// the tree for *"safe because single-M"*, which is what found its last four items — and exactly the property
-// a list in a comment cannot keep, because nothing makes the next slot join it. Every slot the six producers
-// in this runtime lay out now states its own class where it is created, and a slot whose author has not
-// decided does not compile. The classes and what each promises are on the enum.
+// ⭐⭐ **THE MULTI-M AUDIT IS NOT PROSE — IT IS `MultiMSharing`, A REQUIRED ARGUMENT ON EVERY RUNTIME `.data`
+// SLOT'S BIRTH (`pushRuntimeGlobal`, below).** A list in a comment cannot keep itself, because nothing makes
+// the next slot join it. Every slot the six producers in this runtime lay out states its own class where it
+// is created, and a slot whose author has not decided does not compile. The classes and what each promises
+// are on the enum.
 //
-// ✅ **THE PROSE SWEEP THIS PARAGRAPH TELLS YOU TO RUN WAS RUN AT THE DEFAULT FLIP, AND HERE IS WHAT IT
-// FOUND.** `MultiMSharing` covers the `.data` slots structurally; what it cannot cover is an ARGUMENT
-// somewhere else in the tree whose warrant is the machine count, and the grep turned up fourteen. Every
-// conclusion survived — none of them actually needed one machine — but the REASONS did not, and each now
-// states the one that holds: for the compiler's four module-level latches, `Diagnostics`' capture latch
-// (this compiler has no `spawn`, so its `async` frames are members of one strand, which runs one member at
-// a time at every count); for the spec harness, `SpecWorkerPool`'s one-M section. **The class of defect is a
-// comment that justifies a real property with a premise that has expired, and it is not caught by anything
-// the compiler runs.**
+// ⚠ **WHAT THE CLASS CANNOT REACH IS AN ARGUMENT ELSEWHERE IN THE TREE WHOSE WARRANT IS THE MACHINE COUNT.**
+// `MultiMSharing` covers the `.data` slots structurally and nothing else. The live ones are the compiler's
+// four module-level latches and `Diagnostics`' capture latch — this compiler has no `spawn`, so its `async`
+// frames are members of one strand, which runs one member at a time at every count — and, in the spec
+// harness, `SpecWorkerPool`'s one-M section. **A comment that justifies a real property with a premise that
+// has expired is caught by nothing the compiler runs.**
 //
-// ⚠⚠ **WHAT G2 FLIPPED, AND WHAT IT LEFT — THE SHORT FORM. The long form is at each slot.**
+// ⚠⚠ **WHAT EVERY SHARED WORD IN THIS RUNTIME RESTS ON — THE SHORT FORM. The long form is at each slot.**
 //
-//   1. **THE REFCOUNT READ-MODIFY-WRITE — G2 MADE IT ATOMIC AND ⭐ EC10 TOOK THE PREFIX BACK OFF**, because
-//      the invariant at the top of this file removed the second party rather than serialising against it.
-//      What SURVIVES from G2 is the half that was load-bearing: `emitRefcountCheckToLastOwner` DECREMENTS
-//      FIRST and picks its arm from the value the decrement displaced — *the order, not the prefix, is what
-//      makes it correct*, which G2's own note said and EC10 is the experiment for. `MmRuntime.
-//      emitAdjustRefcount` carries the argument and the measurement. ⚠ G2 cited its reproducer as
-//      `temp/g2/rc-field.maxon`; `temp/` is gitignored and swept, so that file no longer exists and the
-//      measurement is now `scripts/multicore-stress/refcount-torture.maxon`, COMMITTED, driven by
-//      `multicore-stress/refcount-race.sh`.
-//   2. **EVERY `.data` COUNTER**, through the one `MmRuntime.emitGlobalAccumulate`, which is what the six
-//      scheduler counters (`__gt_live_count`, `__gt_trace_counter`, `__io_pipe_seq`,
-//      `__sched_nmspinning` and `__sched_active_workers`) call instead of each spelling load/add/store by
-//      hand. ⚠ Since EC8 that door emits an `atomicRmw` only
-//      where a second OS thread can exist (`multiM`, which is `usage.usesGt`) — the six above are built
-//      only under `usesGt`, so THEY are always atomic; what stopped being atomic is the box layer's
-//      counters in a program that has one thread, where there is no second writer to serialise against.
+//   1. **THE REFCOUNT READ-MODIFY-WRITE IS PLAIN**, because the invariant at the top of this file removes the
+//      second party rather than serialising against it. What is load-bearing is the ORDER:
+//      `emitRefcountCheckToLastOwner` DECREMENTS FIRST and picks its arm from the value the decrement
+//      displaced. `MmRuntime.emitAdjustRefcount` carries the argument, and
+//      `scripts/multicore-stress/refcount-torture.maxon` under `multicore-stress/refcount-race.sh` is what
+//      measures it.
+//   2. **EVERY `.data` COUNTER**, through the one `MmRuntime.emitGlobalAccumulate`, which every scheduler
+//      counter (`__gt_live_count`, `__gt_trace_counter`, `__gt_stack_bytes_sum`, `__gt_stack_bytes_count`,
+//      `__io_pipe_seq`, `__sched_nmspinning`, `__sched_active_workers`) calls instead of each spelling
+//      load/add/store by hand. ⚠ That door emits an `atomicRmw` only where a second OS thread can exist
+//      (`multiM`, which is `usage.usesGt`) — every counter named above is built only under `usesGt`, so all
+//      of them are always atomic; the box layer's counters in a one-thread program are plain, where there is
+//      no second writer to serialise against.
 //      ⚠ **THE WORD "EVERY" IS LOAD-BEARING**, and a counter stepped far from its declaration is the one
 //      that escapes it — `__sched_active_workers` is stepped at a worker's birth and exit, inside
 //      `buildSchedLoop`. A list of what obeys a rule is worth
@@ -94,73 +83,54 @@
 //      outside the lock; `emitSchedEnqueueLocked` / `emitSchedWakeAnIdleM` carry that requirement in their
 //      names.
 //   4. **THE THREE OUT-PARAM SCRATCH REGIONS** (`__gt_trace_digits`, `__gt_clock_ticks`, `__gt_clock_freq`)
-//      are FRAME SLOTS now, not `.data` — per-call storage for a per-call need, which also deleted three
-//      globals and one `__slab_alloc`.
+//      are FRAME SLOTS rather than `.data` — per-call storage for a per-call need, so no shared word and no
+//      allocation.
 //   5. **THE ASYNC RELEASER's CLAIM** is a CAS (`GtRuntime.emitGtReleaserCall`), the one item on the list
-//      whose failure was a DOUBLE FREE rather than a lost count.
+//      whose failure would be a DOUBLE FREE rather than a lost count.
 //   6. **THE SUBPROCESS HANDLE TABLE** — its lazy creation under the lock, its per-slot claim by CAS.
 //
-// ✅ **THE TWO ITEMS THAT WERE STILL RACY ABOVE ONE M ARE BOTH CLOSED.**
-//   • **THE ALLOCATOR (S5).** It was ONE shard with no lock and no ownership gate, and
-//     `scripts/multicore-stress/alloc-torture.maxon` died at `MAXON_MAX_PROCS=2` and above with exit 86
-//     (`slabSpanExhaustedPastItsEnd`, INV-1) or a segfault. S5 sharded it PER P: each processor owns its own
-//     mcache row and is the sole writer of every span cached there, every span carries the P that owns it, a
-//     free by a P that does not own the span CAS-pushes onto the owner's remote-free queue, and an OS thread
-//     with no P uses a dedicated raw row behind a lock. `SlabRuntime.maxon`'s header records the mechanism
-//     and `specs/slab-sharding.md` pins the part one processor can reach.
-//     ⚠⚠ **THE PREMISE IS NOW *"A P HAS AT MOST ONE M AT ANY INSTANT"*, AND W213-C1 IS WHERE IT STOPPED
-//     BEING *"A P IS BOUND TO EXACTLY ONE M FOR THE M's LIFE"*.** The weaker sentence is the one the shard
-//     actually needs and always needed: only the M HOLDING a P allocates from that P's mcache row
-//     (`SlabRuntime.emitSlabShardRow` keys on `M->currentP->id`, and an M holding no P takes the raw shard
-//     under the lock), so the row still has exactly one writer at a time however many Ms hold the P over its
-//     life. ⭐⭐ **AND W213-C2 IS THE RUNG THAT CASHED THAT RESTATEMENT: A P NOW REALLY DOES MOVE.** C1 wrote
-//     *"nothing in C1 migrates a P — the policy is the NEXT rung"* and restated the invariant against the
-//     day it would; a parked worker releases its processor onto `__sched_pidle` and the next
-//     `__sched_startm` may hand it to a DIFFERENT machine. The weaker sentence is what carries it, with
-//     nothing in the shard needing to change: a processor on the idle list is held by nobody and is taken
-//     off it by exactly one machine, under `__sched_lock`, so *"at most one M at any instant"* holds
-//     across the move. **Writing the invariant down before the thing it guards arrived is what made this
-//     rung a no-op for the allocator.**
-//   • **`ClockRuntime`'s `__clock_wall_ticks` and `__thread_cpu_ticks_out` (W212)** — the same out-param
-//     scratch shape item 4 fixed here, in a file G2 did not own. The fix is item 4's, applied one file over:
-//     `func.stackSize` plus a `StdOp.stackRecordAddr` each, and the two `.data` words deleted.
+// ⭐⭐ **THE ALLOCATOR IS SHARDED PER P.** Each processor owns its own mcache row and is the sole writer of
+// every span cached there, every span carries the P that owns it, a free by a P that does not own the span
+// CAS-pushes onto the owner's remote-free queue, and an OS thread with no P uses a dedicated raw row behind a
+// lock. `SlabRuntime.maxon`'s header records the mechanism and `specs/slab-sharding.md` pins the part one
+// processor can reach.
+// ⚠⚠ **ITS PREMISE IS *"A P HAS AT MOST ONE M AT ANY INSTANT"*, WHICH IS WEAKER THAN A BINDING FOR AN M's
+// LIFE AND IS ALL THE SHARD NEEDS.** Only the M HOLDING a P allocates from that P's mcache row
+// (`SlabRuntime.emitSlabShardRow` keys on `M->currentP->id`, and an M holding no P takes the raw shard under
+// the lock), so the row has exactly one writer at a time however many Ms hold the P over its life. A
+// processor really does move between machines, and the weaker sentence is what carries it across the move: a
+// processor on the idle list is held by nobody and is taken off it by exactly one machine, under
+// `__sched_lock`.
 //
 // ⇒ **a green thread that allocates, retains, releases, sleeps, spawns a child, traces or reads any clock is
-// safe on a worker M.** ⚠ **AND "P MIGRATION IS NOT BUILT" IS NO LONGER THE RIGHT SENTENCE — W213-C2 BUILT
-// HALF OF IT.** A processor moves between machines at every park and wake; what is still missing is the
-// half that takes one away from a machine that is BUSY, so a green thread blocked in a kernel call holds
-// its processor for the duration. That is `entersyscall`/`handoffp`/`sysmon`, and it is W213's next rung.
+// safe on a worker M.**
 //
-// ⭐⭐⭐ **W213-C1 BUILT THE STRUCTURE THAT MIGRATION NEEDS AND DELIBERATELY CHANGED NO SCHEDULING.** TLS now
-// points at an **M** — see its section below — which owns the syscall stack, the running green thread and
-// the scheduler context that were on the P, and holds `currentP`, **a field that can read 0**. That zero is
-// the entire content of the rung: it is the state a handoff has to be able to write down, and until C1
-// nothing in this runtime could express *"an M with no processor"* because TLS pointed at the processor.
-// ⭐⭐⭐ **AND W213-C2 IS WHERE THAT ZERO ACQUIRED A PRODUCER.** C1's own sentence here read *"an M
-// still takes one P at birth and holds it until it dies; only the shape changed"*, and C2 is the change it
-// was waiting for: **the idle state moved off the P too**, so a worker that finds nothing to run RELEASES its
-// processor onto `__sched_pidle` and blocks on its OWN event with `M->currentP == 0`. A P can now sit idle
-// with no machine, a machine can sit idle with no processor, and `__sched_startm` binds one to the other —
-// **which is the door `handoffp` calls.** What has NOT changed is the syscall itself: a green thread inside a
-// kernel call still takes its processor in with it, because nothing yet takes one away from a RUNNING
-// machine. That is `entersyscall`, and it is the next rung.
+// ⭐⭐⭐ **A PROCESSOR MOVES BETWEEN MACHINES, INCLUDING AWAY FROM A MACHINE THAT IS BUSY.** TLS points at an
+// **M** — see its section below — which owns the syscall stack, the running green thread and the scheduler
+// context, and holds `currentP`, **a field that can read 0**. That zero is the state a handoff has to be able
+// to write down: an M with no processor. A worker that finds nothing to run releases its processor onto
+// `__sched_pidle` and blocks on its OWN event, so a P can sit idle with no machine and a machine can sit idle
+// with no processor; `__sched_startm` binds one to the other.
+// ⭐⭐⭐ **AND A GREEN THREAD BLOCKED IN A KERNEL CALL DOES NOT KEEP ITS PROCESSOR FOR THE DURATION.** The
+// syscall bracket (`MOffSyscallState` below, `entersyscall`/`exitsyscall`) lets `__sysmon`'s `__sched_retake`
+// PROVE a machine is still inside one call, take its processor and `__sched_handoffp` it to somebody who can
+// use it. `specs/sched-syscall-handoff.md` is the spec.
 //
 // ⭐ **WHY A SEPARATE FILE FROM `GtRuntime`.** Not tidiness: the two answer different questions, and one of
 // them is read by code the other cannot see. `emitLoadCurrentGt` below is called from the x64 SHIM and the
 // x64 PROLOGUE GUARD — hand-assembled Target-tier chunks — as well as from a dozen Std builders, so the P
-// layout is a contract shared across the tier boundary exactly as the GT layout is. Buried in `GtRuntime`'s
-// 5,900 lines it would read as one more green-thread field.
+// layout is a contract shared across the tier boundary exactly as the GT layout is. Buried in `GtRuntime` it
+// would read as one more green-thread field.
 
 // ==========================================================================
-// ⭐⭐⭐ THE MULTI-M SHARING CLASS OF A RUNTIME `.data` WORD (G2)
+// ⭐⭐⭐ THE MULTI-M SHARING CLASS OF A RUNTIME `.data` WORD
 // ==========================================================================
 //
 // ⛔⛔ **A `.data` WORD IS REACHABLE FROM EVERY OS THREAD BY CONSTRUCTION, SO EVERY ONE OF THEM OWES AN
-// ANSWER — AND THE ANSWER IS A REQUIRED ARGUMENT RATHER THAN A COMMENT.** G1 left the audit as the prose
-// list this file's header used to carry, derived by grepping the tree for *"safe because single-M"*; the
-// grep is what found its last four items, which is exactly the property a prose list cannot keep. G2 turns
-// it into `pushRuntimeGlobal`'s `sharing` parameter: a slot that nobody has classified is not a slot the
-// compiler will build, because the call that creates it does not compile without one.
+// ANSWER — AND THE ANSWER IS A REQUIRED ARGUMENT RATHER THAN A COMMENT.** An audit kept as prose cannot
+// keep itself: nothing makes the next slot join the list. `pushRuntimeGlobal`'s `sharing` parameter is the
+// answer instead — a slot that nobody has classified is not a slot the compiler will build, because the call
+// that creates it does not compile without one.
 //
 // ⚠ **THIS IS DELIBERATELY NOT A ROSTER + A CHECKER.** A table keyed by label would be a SECOND list of the
 // slots, kept in step with the producers by nothing, and its checker would have to run somewhere and could be
@@ -171,7 +141,7 @@ export enum MultiMSharing
 	// Every mutation is `StdOp.atomicRmw` or `StdOp.atomicCas` IN EVERY BUILD WHERE A SECOND M CAN EXIST.
 	// The counters (`MmRuntime.emitGlobalAccumulate`) and the claim words are here.
 	//
-	// ⚠ **THE QUALIFIER IS EC8's AND IT IS NOT A LOOPHOLE.** `emitGlobalAccumulate` emits a plain
+	// ⚠ **THE QUALIFIER IS NOT A LOOPHOLE.** `emitGlobalAccumulate` emits a plain
 	// load/add/store when `usage.usesGt` is false — a program with no green threads has ONE OS thread, so
 	// there is no second writer for an atomic to serialise against and the `lock` prefix is paid on every
 	// allocation in the language to guard a race that cannot occur. The class states the discipline a slot
@@ -256,8 +226,8 @@ end 'MultiMSharing'
 
 // ⭐⭐ **THE ONE DOOR A RUNTIME `.data` SLOT IS BORN THROUGH**, and the only place the
 // `DataSectionEntry.create(String.from(<label>), valueType: StdType.i64, value: 0)` incantation is spelled —
-// it was written out at thirty sites across six producers, which is thirty chances to get the type or the
-// seed wrong and, until this rung, thirty slots whose sharing nobody had to state.
+// six producers spell it through this one door, so there is one chance to get the type or the seed wrong
+// rather than one per slot.
 //
 // `seed` defaults to 0 because the zero image IS the initial state for almost every slot (see
 // `gtRuntimeGlobals`); the two worker counters, `__gt_timer_when` and `__gt_seed_bytes` are the exceptions and
@@ -288,12 +258,12 @@ end 'pushRuntimeGlobal'
 // word) and `GtArgSlotBytes` (an async ARGUMENT slot) though all three are 8: three facts, three names, so
 // moving one cannot move the others.
 //
-// ⚠ It is declared ABOVE both structs because both derive offsets from it — it used to sit in the middle of
-// the P, which read as though it were the P's own stride, and W213-C2's M tail needs the same number.
+// ⚠ It is declared ABOVE both structs because both derive offsets from it — inside either one it would read
+// as though it were that struct's own stride.
 let PointerSlotBytes = 8 as ParsedInt
 
 // ==========================================================================
-// ⭐⭐⭐ THE MACHINE (M) STRUCT — ONE PER OS THREAD THAT RUNS MAXON CODE (W213-C1)
+// ⭐⭐⭐ THE MACHINE (M) STRUCT — ONE PER OS THREAD THAT RUNS MAXON CODE
 // ==========================================================================
 //
 // ⭐⭐⭐ **WHAT AN M OWNS IS WHAT BELONGS TO A THREAD OF EXECUTION, AND THE TEST IS ONE QUESTION: *"if this
@@ -301,11 +271,11 @@ let PointerSlotBytes = 8 as ParsedInt
 // A syscall scratch stack, the green thread currently executing, and the scheduler context that thread was
 // switched in FROM all answer YES — they belong to the thread that is RUNNING, not to the processor it
 // happens to hold. A run queue, a ring, a steal counter and an allocator shard index answer NO — they belong
-// to the processor, and the whole point of W213 is that they can be handed to somebody else.
+// to the processor, and a processor can be handed to somebody else.
 //
-// ⛔⛔ **EVERY ONE OF THESE FIELDS WAS ON THE P UNTIL THIS RUNG, AND THREE OF THEM WOULD HAVE BEEN A SILENT
-// CORRUPTION THE DAY A HANDOFF LANDED.** The failure shape is identical in all three and it is the one
-// `POffReservedSystemStackSP` records from G1: two Ms writing one region, interleaved, with no fault.
+// ⛔⛔ **THREE OF THESE FIELDS ON THE P WOULD BE A SILENT CORRUPTION AT THE FIRST HANDOFF.** The failure
+// shape is identical in all three and it is the one `POffReservedSystemStackSP` records: two Ms writing one
+// region, interleaved, with no fault.
 //
 //   • **the 64 KB syscall stack** — two Ms inside shimmed kernel calls would set RSP to the same top.
 //   • **`currentGt`** — the green thread executing inside the kernel call is the BLOCKED M's; a second M
@@ -315,10 +285,8 @@ let PointerSlotBytes = 8 as ParsedInt
 //     from it, and those bounds are one OS THREAD's real stack. A second M adopting a P whose `g0` carries
 //     the first M's bounds would publish another thread's stack limits into its own TIB.
 //
-// ⭐ **C1 MOVED THE STATE AND CHANGED NO POLICY, AND ITS SENTENCE HERE IS NOW HISTORY.** It read *"an M
-// still takes one P at birth and holds it until it dies"*, which W213-C2 falsified one rung later: a worker
-// releases its processor at every park (`emitSchedReleaseProcLocked`) and takes one back through
-// `MOffNextP`. The fields C1 moved are the reason that was possible — a machine parked with no processor
+// ⭐ **A WORKER RELEASES ITS PROCESSOR AT EVERY PARK** (`emitSchedReleaseProcLocked`) and takes one back
+// through `MOffNextP`, and these fields are what make that possible: a machine parked with no processor
 // still owns the stack it is on, the green thread it was running and the context it runs its scheduler on.
 //
 // ⭐⭐⭐ **A QUESTION ABOUT MACHINES WALKS THE ROSTER, NOT THE P ARRAY.** An M parked with no P is on no P, so
@@ -331,31 +299,26 @@ let PointerSlotBytes = 8 as ParsedInt
 // pointer to it for ever, which is what makes the teardown join able to name a thread after that thread has
 // stopped touching anything.
 
-// ⭐⭐ **THE P THIS M CURRENTLY HOLDS, OR 0 — THE FIELD THIS WHOLE RUNG EXISTS TO CREATE.** Every P read in
-// the program now goes through it — `emitLoadCurrentP` where the walk starts at TLS, one `emitLoadField` at
-// the sites that already hold the M — so *"this thread has no processor"* is one load and one compare
-// rather than a state the runtime had no way to write down.
+// ⭐⭐ **THE P THIS M CURRENTLY HOLDS, OR 0.** Every P read in the program goes through it —
+// `emitLoadCurrentP` where the walk starts at TLS, one `emitLoadField` at the sites that already hold the M
+// — so *"this thread has no processor"* is one load and one compare.
 //
 // EXPORTED because `SlabRuntime`'s shard read walks it: the allocator's row is keyed on `P->id`, and the
 // thread that has no P is exactly the thread that must take the raw shard.
 export let MOffCurrentP = 0x00 as ByteOffset
 
-// ⭐⭐ **THE GREEN THREAD THIS M IS EXECUTING** — Go's `m.curg`, and it was `P->currentGt` from G1 until this
-// rung. It is read by the syscall shim and the prologue stack guard on every guarded call, which is why it
-// sits one word into the struct TLS already points at: the hot read is `gs:[tebOffset]` + one field load,
-// exactly the two it was before.
+// ⭐⭐ **THE GREEN THREAD THIS M IS EXECUTING** — Go's `m.curg`. It is read by the syscall shim and the
+// prologue stack guard on every guarded call, which is why it sits one word into the struct TLS points at:
+// the hot read is `gs:[tebOffset]` + one field load.
 //
 // EXPORTED because those readers span both tiers: builder-built Std here and in `GtRuntime`, and the
 // hand-assembled x64 and arm64 shims and prologue guards.
 export let MOffCurrentGt = 0x08 as ByteOffset
 
-// ⭐⭐ **THIS M's OWN SYSCALL STACK — the field whose two previous homes are both recorded as bugs.** Every
-// Win32 / libSystem call a green thread makes runs on a 64 KB scratch stack instead of the GT's tiny one
-// (the syscall shim). It was ONE `.data` GLOBAL until G1, whose safety invariant was the prose *"single-M
-// runs one thing at a time"*; G1 moved it to the P because multi-M falsified that. **This rung is the same
-// correction one level further, and the G1 argument applies verbatim to it**: a P handed to a second M while
-// the first is still inside a kernel call on that region puts two Ms on ONE stack, as silent interleaved
-// corruption rather than a fault.
+// ⭐⭐ **THIS M's OWN SYSCALL STACK.** Every Win32 / libSystem call a green thread makes runs on a 64 KB
+// scratch stack instead of the GT's tiny one (the syscall shim). It is per-MACHINE because a P handed to a
+// second M while the first is still inside a kernel call on that region would put two Ms on ONE stack, as
+// silent interleaved corruption rather than a fault.
 //
 // EXPORTED because the shim and the prologue guard's cold path (both hand-assembled) read it.
 export let MOffSystemStackSP = 0x10 as ByteOffset
@@ -416,13 +379,11 @@ export let MOffSchedulerContext = 0x18 as ByteOffset
 // That is a lap, not a lost wakeup.
 let MOffParkEvent = ((MOffSchedulerContext as ParsedInt) + GtStructSize) as ByteOffset
 
-// ⭐⭐ **THE `CreateThread` HANDLE OF *THIS* M — moved off the P, and the move is a CORRECTNESS FIX rather
-// than a tidying (W213-C2).** `POffOsThreadHandle` stored the handle of the M that originally claimed that
-// P, and `__sched_stop_workers` joined by walking `__sched_procs`. Both were true while a P belonged to one
-// M for that M's life. With a P released at every park and re-taken by whoever `startm` hands it to, the
-// P-keyed handle names a thread that has long since moved on — and joining it SUCCEEDS, because the handle
-// is still live, so the teardown would return with a different worker still running and `__mm_leak_check`
-// would read counters that are still moving. The join walks `__sched_allm` now.
+// ⭐⭐ **THE `CreateThread` HANDLE OF *THIS* M, AND IT SITS ON THE M FOR CORRECTNESS RATHER THAN TIDINESS.**
+// A P is released at every park and re-taken by whoever `startm` hands it to, so a handle keyed on the
+// PROCESSOR would name a thread that has long since moved on — and joining it SUCCEEDS, because the handle is
+// still live, so the teardown would return with a different worker still running and `__mm_leak_check` would
+// read counters that are still moving. `__sched_stop_workers` joins by walking `__sched_allm`.
 //
 // ⭐ **IT IS 0 FOR THE MAIN OS THREAD, WHICH THIS RUNTIME NEVER CREATED, AND THAT ZERO IS READ AS AN IDENTITY
 // BY TWO PARTIES.** The teardown's join skips it, which is why the roster walk needs no "except me" arm; and
@@ -431,8 +392,8 @@ let MOffParkEvent = ((MOffSchedulerContext as ParsedInt) + GtStructSize) as Byte
 // word before releasing `__sched_lock`, so no machine can observe its own zero after taking that lock.
 let MOffOsThreadHandle = MOffParkEvent + (PointerSlotBytes as ByteOffset)
 
-// ⭐⭐⭐ **THE P A `startm` HAS HANDED THIS M, OR 0 — Go's `m.nextp`, and the field item 4 of this rung is
-// about.** A waker takes a processor out of `__sched_pidle` and must give it to the M it is about to signal;
+// ⭐⭐⭐ **THE P A `startm` HAS HANDED THIS M, OR 0 — Go's `m.nextp`.** A waker takes a processor out of
+// `__sched_pidle` and must give it to the M it is about to signal;
 // the M is asleep and cannot take it itself, so the P is DELIVERED here and collected on the far side of the
 // wait. That is what *"bind an M to a P it is HANDED"* means, and it is the one primitive
 // `entersyscall`/`handoffp` needs that no amount of scanning could supply: `handoffp(pp)` names its P.
@@ -442,9 +403,9 @@ let MOffOsThreadHandle = MOffParkEvent + (PointerSlotBytes as ByteOffset)
 // `buildSchedLoop`'s `wafterwait` is the one reader, and it is written for both.
 let MOffNextP = MOffOsThreadHandle + (PointerSlotBytes as ByteOffset)
 
-// ⭐⭐ **DOES THIS M HOLD A UNIT OF `__sched_nmspinning`? — Go's `mp.spinning` (`proc.go:3228`), which is
-// where it always was and where `POffSpinning` said it belonged.** 1 means *"one unit of the global count
-// belongs to this M"*. See `SchedSpinningLabel` for what the count buys and `emitSchedSpinningTransition`
+// ⭐⭐ **DOES THIS M HOLD A UNIT OF `__sched_nmspinning`? — Go's `mp.spinning` (`proc.go:3228`).** 1 means
+// *"one unit of the global count belongs to this M"*. See `SchedSpinningLabel` for what the count buys and
+// `emitSchedSpinningTransition`
 // for the four things that can happen to a credit.
 //
 // `__sched_nmspinning` is a COUNT and a count alone cannot say WHO is counted, so a machine returning from a
@@ -462,10 +423,10 @@ let MOffNextP = MOffOsThreadHandle + (PointerSlotBytes as ByteOffset)
 // its own credit while the waker's becomes surplus and is given back, or the waker wins and the machine
 // silently inherits it.
 //
-// ⭐ **WHAT W213-C2 CHANGED IS ONLY WHICH STRUCT THE WORD SITS ON, AND IT MAKES THE RACE NARROWER RATHER THAN
-// WIDER**: a credit handed to a machine can no longer be inherited by a DIFFERENT machine through a P that
-// moved, and the hand-over now requires `mget` under `__sched_lock` rather than winning a lock-free flag.
-// `SpinningTransition.stopSpinning` carries which of MC1's two reclaim sites that closes by construction.
+// ⭐ **THE WORD SITS ON THE M, AND THAT IS WHAT KEEPS THE RACE THIS NARROW**: a credit handed to a machine
+// cannot be inherited by a DIFFERENT machine through a P that moved, and the hand-over requires `mget` under
+// `__sched_lock` rather than winning a lock-free flag. `SpinningTransition.stopSpinning` carries the reclaim
+// site that closes by construction.
 //
 // ⚠ **A `.data`-free slot, for `POffStealCount`'s reason** — a `.data` word appears in the `data {` section
 // of every green-thread golden in the corpus, and this is per-machine state, not program state.
@@ -497,7 +458,7 @@ let MOffAllNext = MOffSpinning + (PointerSlotBytes as ByteOffset)
 let MOffIdleNext = MOffAllNext + (PointerSlotBytes as ByteOffset)
 
 // ==========================================================================
-// ⭐⭐⭐ THE SYSCALL BRACKET'S WORDS (W213-C3) — "IS THIS MACHINE INSIDE A KERNEL CALL, AND MAY ITS PROCESSOR
+// ⭐⭐⭐ THE SYSCALL BRACKET'S WORDS — "IS THIS MACHINE INSIDE A KERNEL CALL, AND MAY ITS PROCESSOR
 // BE TAKEN AWAY?"
 // ==========================================================================
 //
@@ -511,10 +472,10 @@ let MOffIdleNext = MOffAllNext + (PointerSlotBytes as ByteOffset)
 // reads the triple off ONE struct, reaching it through the processor it holds (`POffM`, Go's `pp.m`).
 //
 // ⛔⛔⛔ **THE WORD CARRIES A GENERATION, AND THAT IS THE WHOLE OF WHY THE PROTOCOL IS SOUND — A BARE
-// `Active` IS NOT A UNIQUE TOKEN.** The first cut of this rung kept the state and the generation in two
-// words and had sysmon compare-and-swap `Active → Stolen`. **That is an ABA, and it was caught in review
-// before it shipped:** between sysmon reading the generation and reaching its CAS — a dozen instructions,
-// but sysmon is an ordinary preemptible OS thread on a ~15 ms quantum — the victim can leave call *N* on
+// `Active` IS NOT A UNIQUE TOKEN.** Keeping the state and the generation in two words and having sysmon
+// compare-and-swap `Active → Stolen` is an ABA: between sysmon reading the generation and reaching its CAS
+// — a dozen instructions, but sysmon is an ordinary preemptible OS thread on a ~15 ms quantum — the victim
+// can leave call *N* on
 // the fast path, find nothing runnable, `wpark`, RELEASE its processor onto `__sched_pidle`, have another
 // machine claim it, be handed a different processor, and enter call *N+1*. Its state word reads `Active`
 // again, so the CAS SUCCEEDS — against a different call, on a processor a second machine is now running.
@@ -616,9 +577,8 @@ export let MSyscallEnterDelta = MSyscallGenStep + MSyscallInCall
 // the word it was taken from.
 //
 // ⭐⭐ **IT RECORDS THE WHOLE WORD AND NOT A TICK, WHICH IS WHAT COLLAPSED TWO FIELDS INTO ONE.** With the
-// generation folded into the state word, *"the same call"* and *"the same word"* are ONE comparison — so the
-// separate tick this pair used to sit beside is gone, and with it the window in which the two could be read a
-// moment apart and describe different calls.
+// generation folded into the state word, *"the same call"* and *"the same word"* are ONE comparison — so there
+// is no separate tick to be read a moment apart from the word and describe a different call.
 //
 // ⛔⛔ **WITHOUT THE COMPARISON `print` WOULD BE INDISTINGUISHABLE FROM A ONE-SECOND READ.** `WriteFile` is
 // bracketed and is the hottest bracketed slot there is; a sysmon that saw the in-call bit on two consecutive
@@ -795,29 +755,24 @@ let POffReservedIdleFlag = 0x30 as ByteOffset
 let POffReservedWakeEvent = 0x38 as ByteOffset
 
 // ⭐⭐ **A RESERVED WORKER-THREAD-HANDLE SLOT — the handle lives on the M (`MOffOsThreadHandle`), AND THIS
-// SLOT IS A LANDMINE.** A handle here would name the M that CLAIMED this P, and `__sched_stop_workers`
-// would join by walking `__sched_procs`. Both facts hold only while a P belongs to one M for that M's life,
-// which is not true here — after which the walk
-// would join a thread that no longer has anything to do with this processor, succeed (the handle is still
-// live), and return while the worker it meant to wait for was still stepping the allocation counters
-// `__mm_leak_check` reads three calls later.
+// SLOT IS A LANDMINE.** A handle here would name the M that CLAIMED this P, and a teardown would join it by
+// walking `__sched_procs`. A P does not belong to one M for that M's life, so the walk would join a thread
+// that has nothing to do with this processor any more, succeed (the handle is still live), and return while
+// the worker it meant to wait for was still stepping the allocation counters `__mm_leak_check` reads three
+// calls later.
 let POffReservedOsThreadHandle = 0x40 as ByteOffset
 
 // ⭐⭐ **THE CLAIM WORD — `PStatusUnused` (0) or `PStatusActive` (1).** A P struct exists for every processor
 // the program may ever run on, so *"does this P exist"* and *"is an M running on it"* are different
 // questions and only this one answers the second.
 //
-// ⚠⚠ **IT WAS CLAIMED BY CAS UNTIL W213-C2 AND IS NOW A PLAIN STORE UNDER `__sched_lock`, AND THE CAS's
-// PREMISE IS WHAT WENT AWAY RATHER THAN ITS DANGER.** `emitSchedClaimProc` existed because the whole
-// wake/spawn phase ran with the run-queue lock DELIBERATELY RELEASED — the release being the StoreLoad
-// fence the `idleFlag` protocol depended on — so several Ms reached one unclaimed P at once, and a
-// read/test/store let two of them start workers on the SAME P: one allocator shard, two lockless writers,
-// the same slot handed to both threads. With the
-// idle state on the M there is no `idleFlag` protocol and therefore no fence to preserve, so `wakep` takes
-// `__sched_lock` and the claim is one of the things it does while holding it. ⛔ **The hazard is unchanged
-// and the discipline is not weaker: the word has exactly TWO writers, `emitSchedPidlePutLocked` and
-// `emitSchedPidleClaimLocked`, both of which assert the lock in their names and neither of which can be
-// reached without it. A third writer added outside the lock restores the bug in full.**
+// ⚠⚠ **A PLAIN STORE UNDER `__sched_lock`, AND THE HAZARD THE LOCK GUARDS IS THE WHOLE REASON.** Several Ms
+// can reach one unclaimed P at once, and a read/test/store outside the lock lets two of them start workers on
+// the SAME P: one allocator shard, two lockless writers, the same slot handed to both threads. `wakep` takes
+// `__sched_lock` and the claim is one of the things it does while holding it. ⛔ **The word has exactly TWO
+// writers, `emitSchedPidlePutLocked` and `emitSchedPidleClaimLocked`, both of which assert the lock in their
+// names and neither of which can be reached without it. A third writer added outside the lock restores the
+// bug in full.**
 //
 // ⭐ **AND IT IS NOT A SECOND COPY OF "IS THIS P ON `__sched_pidle`", THOUGH IT IS DERIVABLE FROM IT.** The
 // list is a structure with an order and a head; this is a per-P word two readers want without walking one —
@@ -857,28 +812,18 @@ let POffFreeListHead = 0x60 as ByteOffset
 let POffFreeListLen = 0x68 as ByteOffset
 
 // ⭐⭐ **A RESERVED SYSCALL-STACK SLOT — the scratch stack lives on the M (`MOffSystemStackSP`), AND THIS
-// SLOT IS THE WHOLE ARGUMENT FOR THAT.** ONE GLOBAL REGION
-// (`__gt_system_stack_top`) whose safety invariant was prose: *"single-M runs one thing at a time"*. Multi-M
-// falsified that by definition — two Ms inside shimmed calls would both set RSP to the same top and write the
-// same 64 KB — and the failure shape is silent interleaved corruption, not a clean fault. G1's cure was to
-// give each P its own, which makes the invariant *"an M can only reach its own P"*.
-//
-// ⛔ **THAT CURE IS EXACTLY AS SOUND AS THE SENTENCE UNDER IT, AND W213 IS THE RUNG THAT FALSIFIES THE
-// SENTENCE.** Once a P can be taken from an M blocked in a kernel call, "its own P" stops naming one M —
-// and the two Ms are back on one 64 KB region with G1's failure shape restored in full. The stack belongs to
-// the M that is EXECUTING, which is what C1 makes it. Reserved, not reused, for `POffReservedCurrentGt`'s
-// reason.
+// SLOT IS THE WHOLE ARGUMENT FOR THAT.** A per-P scratch stack is only as sound as *"an M can only reach its
+// own P"*, and a P taken from an M blocked in a kernel call makes "its own P" name two Ms: both set RSP to
+// the same top and write the same 64 KB, which is silent interleaved corruption rather than a clean fault.
+// The stack belongs to the M that is EXECUTING. Reserved, not reused, for `POffReservedCurrentGt`'s reason.
 let POffReservedSystemStackSP = 0x70 as ByteOffset
 
 // ⭐ **THE HEAD OF THIS P's MPSC REMOTE-FREE QUEUE — a Treiber stack, and it is LIVE.** An M that frees a
 // slot whose span another P owns CAS-pushes it here, and the owner drains it on its next slow path
 // (`SlabRuntime.maxon`'s header for the mechanism, and its two readers at the push and the drain).
 //
-// ⛔ **THIS NOTE SAID "RESERVED AND LEFT ZERO — the compiler's slab has one shard and no ownership gate" UNTIL THE
-// W212 REVIEW, AND S5 HAD FALSIFIED IT.** The sharding landed, gave the slot its two callers, and left the
-// sentence here saying the opposite of this file's own header three screens up — one fact written twice,
-// with the second copy rotting. A W213 author reading only this line would conclude a P carries no
-// cross-thread state at all, which is exactly the premise P migration must NOT be built on.
+// ⛔ **A P CARRIES CROSS-THREAD STATE AND THIS SLOT IS IT** — nothing reasoning about P migration may assume
+// otherwise.
 export let POffRemoteFreeHead = 0x78 as ByteOffset
 
 // ⭐ **THIS P's SCHEDULE COUNTER — Go's `schedtick`, and the reading `__Builtins.schedSliceCount()` sums.** One
@@ -901,7 +846,7 @@ let POffStealCount = POffSchedTick + (PointerSlotBytes as ByteOffset)
 
 // ⭐⭐ **HOW MANY TIMES THIS PROCESSOR HAS BEEN RETAKEN FROM A MACHINE STUCK IN A KERNEL CALL — the reading
 // `__Builtins.schedRetakeCount()` sums, and the one way a program can observe that a HANDOFF really happened
-// rather than that its output merely came out in a better order (W213-C3).**
+// rather than that its output merely came out in a better order.**
 //
 // ⚠ **A PER-P WORD AND NOT A `.data` COUNTER, FOR `POffStealCount`'s REASON EXACTLY** — a `.data` word appears
 // in the `data {` section of every green-thread golden in the corpus, and this is per-processor state. It sits
@@ -915,10 +860,10 @@ let POffRetakeCount = POffStealCount + (PointerSlotBytes as ByteOffset)
 // ⭐⭐⭐ **HOW MANY SLOTS HAVE BEEN FREED ONTO THIS PROCESSOR'S REMOTE-FREE QUEUE BY SOMEBODY ELSE — the
 // reading `__Builtins.slabRemoteFreeCount()` sums, and the ONE way a program can observe that the
 // cross-processor free road was TAKEN rather than merely built.** `multicore-stress/service-torture` and
-// `multicore-stress/service-fanin-torture` push thousands of heap boxes across machines in each direction, and until
-// this slot existed nothing anywhere read a number that would move if that road stopped being taken: the
-// sharded allocator's remote arm was EXERCISED but not OBSERVED, so a regression that quietly routed every
-// free down the local arm would have left both tortures and the whole suite green.
+// `multicore-stress/service-fanin-torture` push thousands of heap boxes across machines in each direction, and
+// without this slot nothing anywhere reads a number that would move if that road stopped being taken: the
+// sharded allocator's remote arm would be EXERCISED but not OBSERVED, so a regression that quietly routed
+// every free down the local arm would leave both tortures and the whole suite green.
 //
 // ⚠ **A PER-P WORD AND NOT A `.data` COUNTER, FOR `POffStealCount`'s REASON EXACTLY** — a `.data` word
 // appears in the `data {` section of every green-thread golden in the corpus, and this is per-processor
@@ -950,7 +895,7 @@ let POffRetakeCount = POffStealCount + (PointerSlotBytes as ByteOffset)
 export let POffRemoteFreeCount = POffRetakeCount + (PointerSlotBytes as ByteOffset)
 
 // ⭐⭐⭐ **`__sched_pidle`'s LINK — Go's `p.link` as `pidleput`/`pidleget` use it (`proc.go:7425`/`:7454`),
-// and the slot that makes *"a processor with no machine"* a state this runtime can write down (W213-C2).**
+// and the slot that makes *"a processor with no machine"* a state this runtime can write down.**
 //
 // ⛔⛔ **A PARKED MACHINE HOLDS NO PROCESSOR, AND `handoffp` CANNOT BE BUILT WITHOUT THAT.** `handoffp`'s last
 // step is literally `pidleput(pp, 0)` — *park the P, not the M* — so an idle processor has to be a state
@@ -1053,13 +998,9 @@ let POffRunqBase = POffRunnextStreak + (PointerSlotBytes as ByteOffset)
 
 // The portable header, the inline GT, the tail scalars and the ring. See the layout header.
 //
-// ⚠⚠ **AND THE BYTE COUNT THAT USED TO BE WRITTEN HERE IS GONE ON PURPOSE — IT HAD DRIFTED TWICE.** It read
-// *"0x990 = 2448"* from the day the compiler's GT struct was 0xF8, EC10 grew that struct to 0x118 and nothing here
-// moved, and it was corrected to *"0x9B8 = 2488"* — which A1's quiescence words then falsified one rung
-// later, and which W213-C2 falsified again by taking the whole idle tail off this struct.
-// Every offset above is derived from `GtStructSize`, so the CODE has been right the whole time: a prose
-// number beside a derived one is the same fact written twice, and this is the copy that rots. It is not
-// written down again.
+// ⚠⚠ **THE BYTE COUNT IS DELIBERATELY NOT WRITTEN HERE.** Every offset above is derived from
+// `GtStructSize`, so a prose number beside a derived one is the same fact written twice — and the prose is
+// the copy that rots.
 let PStructSize = ((POffRunqBase as ParsedInt) + RunqSlots * PointerSlotBytes) as ParsedInt
 
 // ⭐ **HOW OFTEN THE GLOBAL QUEUE IS CONSULTED FIRST — Go's 61 (`proc.go:3457`).** Without it two green
@@ -1140,7 +1081,7 @@ let SchedArenaChunkBytes = 65536 as ParsedInt
 // The `.data` slots
 // ==========================================================================
 
-// The `TlsAlloc` slot index, kept so a teardown rung can `TlsFree` it, and read once at adoption to publish
+// The `TlsAlloc` slot index, kept so a teardown can `TlsFree` it, and read once at adoption to publish
 // this OS thread's P. The per-read path never touches it — it reads the precomputed byte offset below.
 let SchedTlsIndexLabel = b"__sched_tls_index"
 
@@ -1158,7 +1099,7 @@ export let SchedTlsTebOffsetLabel = b"__sched_tls_teb_offset"
 // The base of the `P*` array — `numProcs` machine words, one pointer per processor.
 let SchedProcsLabel = b"__sched_procs"
 
-// ⭐⭐⭐ **THE M ROSTER — Go's `allm`, and the structure W213-C1 recorded as missing (W213-C2).** The head of
+// ⭐⭐⭐ **THE M ROSTER — Go's `allm`.** The head of
 // an append-only intrusive list threaded through `MOffAllNext`; every M pushes itself at birth
 // (`emitSchedAllocM`, under the lock, by whoever creates it) and nothing ever removes one, because an M is
 // never freed.
@@ -1168,11 +1109,9 @@ let SchedProcsLabel = b"__sched_procs"
 // every thread"*, *"how often has any thread woken"*. The P array cannot answer any of them: a worker parked
 // with no processor is on no P at all.
 //
-// ⭐ **A LIST AND NOT AN ARRAY, AND THAT IS THE POINT OF THE RUNG.** `SchedRuntime.maxon`'s two scans used
-// to start at index 1 bounded by `numProcs`, which capped the M count at the P count — measured as
-// `schedMaxActiveWorkers()` reading exactly 1/2/4 at `MAXON_MAX_PROCS` 1/2/4. `handoffp` must be able to
-// start an M **while the blocked M still exists**, which is more Ms than Ps, and an array sized by the
-// processor count is precisely the shape that cannot express it.
+// ⭐ **A LIST AND NOT AN ARRAY, AND THE HANDOFF IS WHY.** `handoffp` must be able to start an M **while the
+// blocked M still exists**, which is more Ms than Ps — and an array sized by the processor count is
+// precisely the shape that cannot express it.
 //
 // ⭐⭐ **`underSchedLock` NAMES THE WRITES; TWO WALKS READ IT UNLOCKED AND ARE THE CLASS'S ENUMERATED
 // EXCEPTION — see `MultiMSharing.underSchedLock`.** Every push is under the lock. `__sched_stop_workers`'s
@@ -1388,11 +1327,10 @@ let SchedNeedSpinningLabel = b"__sched_needspinning"
 // it TWICE, because the second read is half of the missed-wakeup argument rather than a duplicate of the
 // first. See `buildSchedLoop`.
 //
-// ⭐ **IT HAS A WRITER AS OF SV1 (`__sched_stop_workers`), WHICH IS WHY IT MOVED CLASS.** It was
-// `sealedBeforeWorkers` on the honest ground that NOTHING wrote it; the teardown does, and it writes it
-// AFTER the workers exist, so that class would now be a false statement. `lastWriterWins` is the true one
-// and the discipline it names is enough: a single monotone 0→1 store by the main thread, one aligned word,
-// and a reader that gets the stale 0 parks once more, and the teardown's signal ends that park.
+// ⭐ **IT IS `lastWriterWins` RATHER THAN `sealedBeforeWorkers` BECAUSE `__sched_stop_workers` WRITES IT
+// AFTER THE WORKERS EXIST.** The discipline that class names is enough here: a single monotone 0→1 store by
+// the main thread, one aligned word, and a reader that gets the stale 0 parks once more — a park the
+// teardown's signal ends.
 let SchedShutdownFlagLabel = b"__sched_shutdown_flag"
 
 // ⭐ **HOW LONG A MACHINE MUST HAVE BEEN INSIDE ONE KERNEL CALL BEFORE ITS PROCESSOR IS TAKEN — Go's 10 ms
@@ -1735,8 +1673,8 @@ let SchedWakePollerName = b"__sched_wake_poller"
 // ⭐ `__sched_stop_workers()` — seal the scheduler and JOIN every worker M out. Called once, from
 // `GtRuntime.__gt_drain_at_exit`, on the exit path: set `__sched_shutdown_flag`, signal every MACHINE's own
 // park event so a parked one leaves its `osWaitHandle`, then wait on each worker's thread handle. ⚠ **BOTH
-// WALKS ARE OVER `__sched_allm` SINCE W213-C2, WHERE THEY WERE OVER `__sched_procs`** — a parked machine is
-// on no processor, so the old walk could neither signal it nor join it. EXPORTED for that one cross-file
+// WALKS ARE OVER `__sched_allm` RATHER THAN `__sched_procs`** — a parked machine is on no processor, so a
+// walk of the processors could neither signal it nor join it. EXPORTED for that one cross-file
 // caller; the fields are this file's, so the function is here and the exit path merely asks for it.
 export let SchedStopWorkersName = b"__sched_stop_workers"
 
@@ -1780,13 +1718,11 @@ let SchedFindRunnableName = b"__sched_find_runnable"
 // `emitSchedPidlePutLocked`'s assertion.
 let SchedAnyWorkName = b"__sched_any_work"
 
-// `__sched_sweep_dropped()` — reclaim the dropped green threads sitting at the FRONT of this P's ring and of
-// the global queue.
+// `__sched_sweep_dropped()` — reclaim the dropped green threads sitting at the FRONT of the global queue.
 //
-// ⭐ **EXPORTED AGAIN AT SV1.** Its caller is `__gt_promise_drop`, which renounces a promise — and what a
-// promise names is a COROUTINE (tombstone in its owner's queue, swept by `__gt_coro_sweep_dropped`) or a
-// GREEN THREAD (tombstone in a ring or in the global queue, swept here). The drop asks which and calls one
-// of the two; EC10 could drop this half because nothing produced a green thread.
+// ⭐ **EXPORTED FOR ONE CALLER, `__gt_promise_drop`**, which renounces a promise — and what a promise names
+// is a COROUTINE (tombstone in its owner's queue, swept by `__gt_coro_sweep_dropped`) or a GREEN THREAD
+// (tombstone in the global queue, swept here). The drop asks which and calls one of the two.
 export let SchedSweepDroppedName = b"__sched_sweep_dropped"
 
 // ⭐ `__sched_steal_count() -> i64` — the sum of every P's steal counter, and the floor of
@@ -1943,7 +1879,7 @@ export function isSchedSubstrateQueryCallee(callee ByteArray) returns bool
 end 'isSchedSubstrateQueryCallee'
 
 // ⭐⭐⭐ **`__sched_handoffp(p)` — "THIS PROCESSOR HAS BEEN TAKEN FROM A BLOCKED MACHINE; GIVE IT TO SOMEBODY
-// WHO CAN USE IT" — Go's `handoffp` (`proc.go:3147`), minus every arm the compiler has no subject for (W213-C3).**
+// WHO CAN USE IT" — Go's `handoffp` (`proc.go:3147`), minus every arm the compiler has no subject for.**
 //
 // ⛔⛔ **ITS GOVERNING INVARIANT IS GO'S FIRST COMMENT AND IT IS THE THING TO GET RIGHT:** *"handoffp must
 // start an M in any situation where findRunnable would return a G to run on pp."* Every arm mirrors one work
@@ -2003,11 +1939,11 @@ export let SchedExitSyscallName = b"__sched_exit_syscall"
 // ⭐⭐ **THE M FOR THE CALLING OS THREAD, OR 0 — TWO LOADS AND NO CALL.** `globalAddr` + `loadIndirect` fetch
 // the precomputed TEB offset; `tlsSlotLoad` dereferences it through `gs:`.
 //
-// ⭐⭐ **THIS IS THE READ THAT USED TO ANSWER A P, AND IT COSTS EXACTLY WHAT IT COST (W213-C1).** TLS points
-// at the M now, so the two hot Target-tier readers — the syscall shim and the prologue stack guard, which
-// want `currentGt` and the syscall stack and nothing else — reach BOTH off this one pointer with the same
-// two loads they spent before. Only a caller that wants the PROCESSOR pays the extra field load, and every
-// such caller is scheduler-internal and per-schedule rather than per-call.
+// ⭐⭐ **TLS POINTS AT THE M RATHER THAN AT THE P, AND THAT IS WHAT KEEPS THE HOT READS AT TWO LOADS.** The
+// two hot Target-tier readers — the syscall shim and the prologue stack guard, which want `currentGt` and
+// the syscall stack and nothing else — reach BOTH off this one pointer. Only a caller that wants the
+// PROCESSOR pays the extra field load, and every such caller is scheduler-internal and per-schedule rather
+// than per-call.
 //
 // ⚠ **A ZERO ANSWER IS REAL AND IT IS NOT THE SAME ZERO AS THE OFFSET'S.** An OS thread can have no M; a
 // zero TEB OFFSET is *"the scheduler has not initialized"*.
@@ -2122,23 +2058,20 @@ end 'emitLoadCurrentGt'
 //   * a zero TEB OFFSET means `__sched_init_procs` has not run — and `gs:[0]` is `NT_TIB.ExceptionList`, a
 //     non-null pointer, so reading through it is a wild load rather than a null one.
 //   * a zero M means this OS thread has none, which the system monitor does for its whole life.
-//   * ⭐ **a zero `currentP` is the THIRD, it was W213-C1's own arm, and W213-C2 GAVE IT A PRODUCER**: an M
-//     that holds no processor is every parked worker, for the whole of its park. C1 built this arm against a
-//     state nothing could yet reach, on the ground that a walk reading `P->id` without asking would be the
-//     first thing a handoff broke; one rung later it is reached by any program whose workers go idle. It
-//     answers the green thread it really found beside a zero processor id.
+//   * ⭐ **a zero `currentP` is the THIRD**: an M that holds no processor is every parked worker, for the
+//     whole of its park, so any program whose workers go idle reaches this arm. A walk reading `P->id`
+//     without asking would fault there. It answers the green thread it really found beside a zero processor
+//     id.
 // The first two arms answer 0 for BOTH halves, which for the processor id is a stand-in rather than a truth
 // — a caller that cannot promise the scheduler exists cannot be told the id of a processor that does not
 // exist either.
 //
-// ⚠ **AND THE STAND-IN IS NOT SELF-IDENTIFYING — DO NOT BUILD A RULE ON IT.** An earlier version of this
-// paragraph argued that `P0` could not be mistaken for a real answer "because the same arm's green thread is
-// 0 and no real green thread ever is". That is false in the direction that matters: a REAL M holding P[0],
-// whose `MOffCurrentGt` is 0 — an M that exists but is running nothing at this instant — stamps exactly the
-// same `gt=0 P0`. The pair is therefore ambiguous between "no scheduler" and "a live, idle P0", and the only
-// reason nothing is wrong today is that its one consumer (`DebugStreamRuntime`) has its `gt=0x… P<n>` text
-// stripped by `normalizeTrace` before any golden sees it. A consumer that wanted to TELL THE TWO APART would
-// need a third answer here, not a cleverer reading of these two.
+// ⚠ **AND THE STAND-IN IS NOT SELF-IDENTIFYING — DO NOT BUILD A RULE ON IT.** A REAL M holding P[0] whose
+// `MOffCurrentGt` is 0 — an M that exists but is running nothing at this instant — stamps exactly the same
+// `gt=0 P0` as the no-scheduler arms. The pair is therefore ambiguous between "no scheduler" and "a live,
+// idle P0", and nothing is wrong today only because its one consumer (`DebugStreamRuntime`) has its
+// `gt=0x… P<n>` text stripped by `normalizeTrace` before any golden sees it. A consumer that wanted to TELL
+// THE TWO APART would need a third answer here, not a cleverer reading of these two.
 //
 // It terminates `cur` and returns the block to CONTINUE IN, whose two block args are the answers — the shape
 // every branching emit helper in this runtime uses, because the Std tier has no select.
@@ -2187,11 +2120,10 @@ end 'emitLoadCurrentGtAndProcIdOrZero'
 // `.data` and installation
 // ==========================================================================
 
-// ⛔ **THERE IS NO `DefaultMaxProcs` CONSTANT ANY MORE, AND ITS ABSENCE IS THE DECISION.** It was `1`, and
-// this is where that decision physically lived; the default is now the MACHINE'S OWN PROCESSOR COUNT, which
-// is not a number a compile-time constant can hold. It is read by `StdOp.osCpuCount` inside
-// `emitResolveMaxProcs`, once, at scheduler bring-up — so the default and the ceiling are one reading of one
-// machine rather than a constant and a clamp that could disagree.
+// ⛔ **THERE IS NO `DefaultMaxProcs` CONSTANT, AND ITS ABSENCE IS THE DECISION.** The default is the
+// MACHINE'S OWN PROCESSOR COUNT, which is not a number a compile-time constant can hold. It is read by
+// `StdOp.osCpuCount` inside `emitResolveMaxProcs`, once, at scheduler bring-up — so the default and the
+// ceiling are one reading of one machine rather than a constant and a clamp that could disagree.
 
 // The environment variable that SETS the processor count for a deliberate run.
 //
@@ -2287,7 +2219,7 @@ export function schedRuntimeGlobals(usage RuntimeUsage, target Target) returns D
 		pushRuntimeGlobal(out, label: SchedTlsTebOffsetLabel, sharing: MultiMSharing.sealedBeforeWorkers)
 		pushRuntimeGlobal(out, label: SchedProcsLabel, sharing: MultiMSharing.sealedBeforeWorkers)
 
-		// ⭐ **THE THREE HEADS W213-C2 ADDS, AND ALL THREE ARE `underSchedLock` FOR THE SAME REASON.** Each is
+		// ⭐ **THE THREE INTRUSIVE HEADS, AND ALL THREE ARE `underSchedLock` FOR THE SAME REASON.** Each is
 		// the head of an intrusive list whose transaction spans TWO words — the head and the joining struct's
 		// own link — which is exactly what that class exists for and exactly what no atomic can make
 		// indivisible. ⚠ **NOT `sealedBeforeWorkers`, though the array beside them is**: `__sched_procs` is
@@ -2978,27 +2910,26 @@ function buildSchedInitProcs(module StdModule, target Target)
 	var offered = emitSchedPidlePutLocked(module, func: func, cur: loopOffer, p: p, holdsWorkLabel: b"pofferheldwork", emptyLabel: b"poffered", ids: ids)
 	module.setTerminator(offered, op: StdOp.branch(loopNext.id))
 
-	// ⚠ **NO SYSCALL STACK IS COMMITTED HERE ANY MORE (W213-C1) — it is the M's, and it is committed by the
-	// OS thread that is about to BE one** (`emitSchedBecomeM`). That is not only a change of place: this loop
-	// runs once per PROCESSOR, so a 16-processor box used to commit 1 MB of scratch pages at bring-up for Ms
-	// that mostly never start, where it is now one 64 KB region per M that actually runs.
+	// ⚠ **NO SYSCALL STACK IS COMMITTED HERE — it is the M's, and the OS thread that is about to BE one
+	// commits it** (`emitSchedBecomeM`). This loop runs once per PROCESSOR, so committing here would cost a
+	// 16-processor box 1 MB of scratch pages at bring-up for Ms that mostly never start; per-M it is one
+	// 64 KB region per machine that actually runs.
 	let nextIter = emitBin(module, block: loopNext, a: iterId, b: emitConst(module, block: loopNext, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids)
 	module.setTerminator(loopNext, op: StdOp.branch(loopHdr.id))
 	loopNext.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: argsOf(nextIter)))
 
-	// ⭐⭐ **THE MAIN OS THREAD BECOMES AN M, AND THEN THAT M TAKES P[0] — two acts, in that order, and
-	// W213-C1 is the rung that made them two.** Becoming an M is what gives this thread a syscall stack, a
-	// scheduler context and a TLS identity; taking a P is what gives it a run queue and an allocator shard.
-	// Until C1 they were one store sequence because TLS pointed at the P, which is exactly the conflation a
-	// handoff has to undo.
+	// ⭐⭐ **THE MAIN OS THREAD BECOMES AN M, AND THEN THAT M TAKES P[0] — two acts, in that order.** Becoming
+	// an M is what gives this thread a syscall stack, a scheduler context and a TLS identity; taking a P is
+	// what gives it a run queue and an allocator shard. A handoff has to be able to undo the second without
+	// the first, so they cannot be one store sequence.
 	//
 	// ⚠ **THE M IS BUILT BEFORE THE P IS TAKEN, AND THE ALLOCATIONS INSIDE IT RUN WITH NO M AT ALL.**
 	// `__sched_tls_teb_offset` is already published by `entry` above while this thread's TLS slot still reads
 	// 0, so the `__slab_alloc` for the M struct itself takes `SlabRawShardRow` under the lock — reaching it
 	// through `emitSlabCurrentP`'s **no-M** arm (`emitSchedBecomeM` publishes the slot LAST), not through the
 	// P-less-M one. ⛔ **Do not read that as coverage of a P-less M**: this thread has no M yet, which is a
-	// different zero from an M that holds no processor. **W213-C2 does produce the second one** — a parked
-	// worker with `M->currentP == 0` running its timer poll — but not here.
+	// different zero from an M that holds no processor. A parked worker with `M->currentP == 0` running its
+	// timer poll is the second one, and it is not this.
 	//
 	// ⚠ **M0 IS ALLOCATED AND REGISTERED ON THE SAME THREAD THAT THEN BECOMES IT**, which is the one place
 	// the two halves of M creation are not two threads. It costs nothing and it keeps the roster's rule
@@ -3045,8 +2976,8 @@ function buildSchedInitProcs(module StdModule, target Target)
 	module.functions.push(func)
 end 'buildSchedInitProcs'
 
-// ⭐⭐⭐ **BUILDING AN M AND *BEING* ONE ARE TWO ACTS ON TWO THREADS SINCE W213-C2, AND ONE MEASURED FACT IS
-// WHAT SPLIT THEM: A THREAD CANNOT LEARN ITS OWN JOINABLE HANDLE.** `osThreadCreate` answers the handle to
+// ⭐⭐⭐ **BUILDING AN M AND *BEING* ONE ARE TWO ACTS ON TWO THREADS, AND ONE FACT IS WHAT SPLITS THEM: A
+// THREAD CANNOT LEARN ITS OWN JOINABLE HANDLE.** `osThreadCreate` answers the handle to
 // its CALLER — `CreateThread`'s return value on Windows, the tagged wait object `mrt_darwin_thread_create`
 // answers on arm64-macOS — and neither platform gives the new thread a way to fetch it (Windows'
 // `GetCurrentThread` is a pseudo-handle that names "whoever asks", which `WaitForSingleObject` cannot join).
@@ -3093,12 +3024,11 @@ end 'emitSchedAllocM'
 
 // ⭐⭐ **"THIS OS THREAD IS NOW THAT M" — the far half, run by the thread itself.** It commits the 64 KB
 // syscall stack, makes the M's inline scheduler GT its own current green thread, and publishes the M in this
-// thread's TLS slot. It says nothing at all about a PROCESSOR — `emitSchedAdoptProc` is that, and keeping
-// them apart is what W213-C1 was.
+// thread's TLS slot. It says nothing at all about a PROCESSOR — `emitSchedAdoptProc` is that, and the two
+// are kept apart so that a handoff can move a processor without disturbing any of this.
 //
 // ⭐ **THE SYSCALL STACK IS `osAllocPages` AND NOT `__slab_alloc`, so the region is its own PAGE-ALIGNED
-// commit** — the top is then 16-aligned, which the shim relies on to land RSP 16-aligned at the `call`. Every
-// home this region has had (a `.data` global, then the P, now the M) carried the same requirement.
+// commit** — the top is then 16-aligned, which the shim relies on to land RSP 16-aligned at the `call`.
 //
 // The inline GT arrives zeroed from the arena, and almost every one of those zeros is correct: `stackBase ==
 // 0` is what tells the syscall shim and the prologue guard that this context runs on a real OS-thread stack,
@@ -3167,9 +3097,8 @@ let MinimumProcessorCount = 1 as ParsedInt
 // every arm below terminates in a branch that supplies it.
 //
 // ⭐⭐ **THE MACHINE IS READ FIRST AND UNCONDITIONALLY, BECAUSE IT IS BOTH THE DEFAULT AND THE CEILING.**
-// It used to be read only on the one arm that had a value to clamp, since the default was the constant `1`;
-// with the default gone there is no arm that does not need it, and reading it once at the top is what keeps
-// *"the default"* and *"the ceiling"* the same number by construction rather than by two agreeing readings.
+// No arm does without it, and reading it once at the top is what keeps *"the default"* and *"the ceiling"*
+// the same number by construction rather than by two agreeing readings.
 // `osCpuCount` is read directly rather than through `__cpu_count`, which is a separate runtime entry a
 // program opts into and which a scheduler must not drag in.
 //
@@ -3178,10 +3107,9 @@ let MinimumProcessorCount = 1 as ParsedInt
 // `runtime/CpuParallel.maxon`'s `__cpu_count` clamps for exactly that reason. Nothing downstream re-checks
 // it: a `cpus` of 0 would become `numProcs`, `__slab_alloc(0)` would size the `P*` array, the build loop
 // would run zero times, and `adopt` would then read `__sched_procs[0]`
-// out of a zero-byte region and write three fields through whatever it found. A wild write, from a comment
-// that said the guard was unnecessary. ⭐ **AND THE FLOOR IS LOAD-BEARING IN A SECOND WAY NOW THAT THIS
-// READING IS THE DEFAULT** — before the flip a failed read could only lose a clamp on a variable almost
-// nobody set; today it decides the count of every program that runs.
+// out of a zero-byte region and write three fields through whatever it found: a wild write. ⭐ **AND THE
+// FLOOR CARRIES EVERY PROGRAM, NOT ONLY THE ONES THAT SET THE VARIABLE**, because this reading IS the
+// default count.
 //
 // ⚠ **A VALUE THAT IS NOT A PROCESSOR COUNT IS THE MACHINE'S COUNT, NEVER AN ERROR, AND THE THREE WAYS OF
 // NOT BEING ONE ARE THREE ARMS OF ONE ANSWER.** `osEnvRead` answers 0 for unset; a value too long for the
@@ -3245,8 +3173,7 @@ function emitResolveMaxProcs(module StdModule, func IrFunction, cur IrBlock, set
 	parsed.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(liveCpus)))
 
 	// ⭐ **THE CEILING, AND IT IS THE ONLY TEST LEFT — a request at or below the machine is taken EXACTLY, so
-	// `MAXON_MAX_PROCS=1` on a 16-way box builds one P.** That direction is what the variable gained with the
-	// flip: it used to be able only to raise a default of 1.
+	// `MAXON_MAX_PROCS=1` on a 16-way box builds one P.**
 	let overCpu = emitCmp(module, block: underCeiling, a: requested, b: liveCpus, pred: StdCmpPred.gt, ids: ids)
 	module.setTerminator(underCeiling, op: StdOp.condBranch(overCpu, thenBlockId: settled.id, elseBlockId: takeRequested.id))
 	underCeiling.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(liveCpus)))
@@ -3396,7 +3323,7 @@ end 'emitSchedAnyRunnable'
 // one answer, so a lane that reaches this function always has `__sysmon`.
 //
 // ⚠⚠ **ONLY THE OWNING P's M MAY PUSH A RING, which is what makes the tail a single-writer word and the
-// push three instructions — AND THE RULE IS NOW ENFORCED HERE RATHER THAN OWED BY EVERY CALLER (SV1).** The
+// push three instructions — AND THE RULE IS ENFORCED HERE RATHER THAN OWED BY EVERY CALLER.** The
 // system monitor has no M and therefore no P: `emitLoadCurrentMOrBail` answers 0 for it, and a ring push
 // through a null P would store `gt` at offset `POffRunqBase` of address 0. So the no-ring arm below routes a
 // publish to the GLOBAL queue — the tier that is everybody's and is behind a lock — and no caller has to
@@ -3522,12 +3449,12 @@ function buildSchedRunqPut(module StdModule)
 	let moved = emitCmp(module, block: moveHdr, a: moveIndex, b: batchCount, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(moveHdr, op: StdOp.condBranch(moved, thenBlockId: moveDone.id, elseBlockId: moveBody.id))
 
-	// ⛔⛔ **A TOMBSTONE IN THE BATCH MOVES LIKE A LIVE THREAD, AND THAT IS THE FIX RATHER THAN A
-	// SIMPLIFICATION (SV1).** This loop used to ask `emitGtIsDropped` of every slot and call
-	// `__gt_runner_done` on the ones that answered — **while holding `__sched_lock`**, which is the one thing
-	// that call may never be made under: it reaches `__gt_reclaim`'s releaser, and a releaser that reaches
-	// `__gt_promise_drop` spin-waits with a release that a recursive CRITICAL_SECTION turns into a no-op. See
-	// `GtRuntime.GtRunnerDoneName`, where the rule is written down.
+	// ⛔⛔ **A TOMBSTONE IN THE BATCH MOVES LIKE A LIVE THREAD, AND THAT IS NOT A SIMPLIFICATION.** Asking
+	// `emitGtIsDropped` of every slot and calling `__gt_runner_done` on the ones that answered would make that
+	// call **while holding `__sched_lock`**, which is the one thing it may never be made under: it reaches
+	// `__gt_reclaim`'s releaser, and a releaser that reaches `__gt_promise_drop` spin-waits with a release
+	// that a recursive CRITICAL_SECTION turns into a no-op. See `GtRuntime.GtRunnerDoneName`, where the rule
+	// is written down.
 	//
 	// ⚠ **NOTHING IS LEAKED BY MOVING ONE.** A tombstone on the global queue is refused and reclaimed by
 	// whoever pops it — `emitGtTombstoneHandback`, reached from `__sched_find_runnable` with the lock RELEASED,
@@ -3561,8 +3488,8 @@ end 'buildSchedRunqPut'
 // ring starts a slice of its own — so the two sources have to be distinguishable, and where Go returns a
 // second `inheritTime` result these are two calls whose identity IS the answer.
 //
-// ⛔⛔ **THE CAS ON THE HEAD IS WHAT MAKES A DOUBLE POP STRUCTURALLY IMPOSSIBLE, AND THAT IS THIS RUNG'S
-// WHOLE THESIS.** Without it a thief and the owner both pop the same head node — *"kind=local and
+// ⛔⛔ **THE CAS ON THE HEAD IS WHAT MAKES A DOUBLE POP STRUCTURALLY IMPOSSIBLE.** Without it a thief and
+// the owner both pop the same head node — *"kind=local and
 // kind=steal_first on the same gt within the same millisecond, immediately followed by SIGSEGV"* — which is
 // why a design without the CAS has to put each P's LOCAL queue under the GLOBAL lock.
 // Here the two contend on ONE word with a compare-and-swap, so exactly one of them can advance
@@ -4237,12 +4164,11 @@ function buildSchedFindRunnable(module StdModule)
 	// `false` on every program this tree can build, and a reader must not take its presence as evidence that
 	// a producer exists.
 	//
-	// ⭐ **IT IS KEPT, NOT DELETED, AND THAT IS A DIFFERENT JUDGEMENT FROM THE ONE `__sched_sweep_dropped`
-	// GOT.** The sweep's ring half was deleted because its peek DEREFERENCED AN UNCLAIMED THREAD — a fault,
-	// not merely dead weight. This one asks the same question of a candidate it has already popped, so it is
-	// safe at any processor count, it is two loads on a path that just took a lock, and it is the reaper the
-	// deleted half's own note points a future producer at. Dead weight with a live sibling is worth keeping;
-	// a latent access violation is not.
+	// ⭐ **IT IS KEPT, THOUGH `__sched_sweep_dropped` HAS NO RING WALK AT ALL.** A peek
+	// that DEREFERENCES AN UNCLAIMED THREAD is a fault and not merely dead weight; this one asks the same
+	// question of a candidate it has already popped, so it is safe at any processor count, it is two loads on
+	// a path that just took a lock, and it is the reaper a future ring-tombstone producer would need. Dead
+	// weight with a live sibling is worth keeping; a latent access violation is not.
 	//
 	// ⭐⭐⭐ **THE TICK IS CHARGED HERE, WHERE THE SOURCE IS KNOWN — Go's `execute`, which steps `schedtick` only
 	// when `!inheritTime`.** `tick - inherited` writes the incremented value for every other source and the
@@ -4316,25 +4242,24 @@ let SchedNoWorkFound = 0 as ParsedInt
 // `__sched_sweep_dropped`
 // ==========================================================================
 
-// ⭐⭐ **`__sched_sweep_dropped()` — RECLAIM THE DROPPED THREADS SITTING AT THE FRONT OF THIS P's RING AND OF
-// THE GLOBAL QUEUE.** Its one caller is `__gt_promise_drop`, which is what puts one there.
+// ⭐⭐ **`__sched_sweep_dropped()` — RECLAIM THE DROPPED THREADS SITTING AT THE FRONT OF THE GLOBAL QUEUE.**
+// Its one caller is `__gt_promise_drop`, which is what puts one there.
 //
 // ⛔⛔ **IT IS WHAT KEEPS A NEVER-SCHEDULED PROGRAM'S MEMORY BOUNDED, and without it the mark-and-skip
 // protocol would be a leak with a spec that still passed.** `__gt_promise_drop` hands back the half a
 // dropped thread's promise owns — its managed arguments and its slot in `__gt_live_count` — but its STACK
-// and STRUCT can only be freed by a party that is allowed to take it out of a queue, and in a ring that is
-// only the popper. A program that spawns and drops in a loop and never awaits anything (which is
+// and STRUCT can only be freed by a party that is allowed to take it out of a queue. A program that spawns
+// and drops in a loop and never awaits anything (which is
 // `async-promise-drop.spawn-drop-loop-bounded`, exactly) schedules NOTHING, so nothing would ever pop them.
 // Sweeping the FRONT at the drop reclaims them in that shape immediately: the thread just marked is normally
-// the newest AND the only one, so the ring is empty again by the time the loop comes round.
+// the newest AND the only one, so the queue is empty again by the time the loop comes round.
 //
-// ⛔⛔⛔ **THE RING HALF IS GONE (A3), AND THE REASON IS THAT IT WAS THE ONLY PLACE IN THIS RUNTIME THAT
-// DEREFERENCED A GREEN THREAD IT HAD NOT CLAIMED.** What stood here was a PEEK-then-CAS: it loaded
-// `slot[head]`, followed that pointer to read `GtOffTeardown` and `GtOffWaiter` — deciding whether it was a
-// tombstone — and only then CAS'd the head to take it. Every other slot read in this file discards a lost
-// race without following what it read (`__sched_runq_get` uses `g` only after winning, `__sched_steal`
-// copies pointers without dereferencing them), and `__sched_find_runnable` asks the very same tombstone
-// question of a thread it has ALREADY popped.
+// ⛔⛔⛔ **THERE IS NO RING HALF, AND ONE MUST NOT BE ADDED: A RING PEEK DEREFERENCES A GREEN THREAD IT HAS
+// NOT CLAIMED.** Loading `slot[head]`, following that pointer to read `GtOffTeardown` and `GtOffWaiter` to
+// decide whether it is a tombstone, and only then CAS-ing the head to take it, is the one shape this runtime
+// forbids. Every other slot read in this file discards a lost race without following what it read
+// (`__sched_runq_get` uses `g` only after winning, `__sched_steal` copies pointers without dereferencing
+// them), and `__sched_find_runnable` asks the very same tombstone question of a thread it has ALREADY popped.
 //
 // **THE HAZARD, STATED SO IT IS NOT REDISCOVERED:** between the slot load and the deref a thief can take the
 // thread, run it to completion and have it reclaimed — and the next spawn can take the struct off a free list
@@ -4342,33 +4267,31 @@ let SchedNoWorkFound = 0 as ParsedInt
 // stale answer still loses the CAS, because the head has moved; but it is a read of another thread's words,
 // which no other slot reader here makes and none needs to.
 //
-// ⭐⭐ **AND DELETING IT COSTS NOTHING, WHICH IS WHY IT IS A DELETION AND NOT A LOCK-FREE REWRITE.** Three
-// facts, each checkable at the code:
+// ⭐⭐ **AND A RING SWEEP WOULD BUY NOTHING ANYWAY.** Three facts, each checkable at the code:
 //
 //   1. **NO PRODUCER CAN PUT A TOMBSTONE IN A RING.** `emitGtIsDropped` is `teardown == consumerTicket and
 //      waiter == 0`, and the consumer ticket is added only by `__gt_owner_done` — reached only from an
 //      `await` or a `__gt_promise_drop`, both of which need a **Promise**. A `spawn` yields a `<T>.handle`
-//      and never a promise (SV1 verified this at the code); an `async` frame is a COROUTINE and is published
-//      to its owner's queue, never to a ring; and a reply cell has `owner != cell`, so
-//      `__gt_promise_drop` sends it down `sweepCoro`. ⇒ nothing that a ring can hold is a thing a promise
-//      can name, so this walk could only ever have found a live thread and stopped.
-//   2. **THE SHAPE IT WAS BUILT FOR NO LONGER ROUTES HERE.** Its motivating program was
-//      `async-promise-drop.spawn-drop-loop-bounded` — spawn and drop in a loop, schedule nothing — and since
-//      `EC10` those spawns are coroutines on the owner's FIFO. The GLOBAL half below, which is
-//      `__gt_coro_sweep_dropped`'s body, is what actually bounds that program, and it holds `__sched_lock`
-//      across its peek, under which the head cannot move and the thread therefore cannot be popped, run,
-//      reclaimed or scavenged. **That half is safe and stays.**
+//      and never a promise; an `async` frame is a COROUTINE and is published to its owner's queue, never to
+//      a ring; and a reply cell has `owner != cell`, so `__gt_promise_drop` sends it down `sweepCoro`.
+//      ⇒ nothing that a ring can hold is a thing a promise can name.
+//   2. **THE SHAPE SUCH A SWEEP WOULD SERVE DOES NOT ROUTE THERE.** `async-promise-drop.spawn-drop-loop-bounded`
+//      — spawn and drop in a loop, schedule nothing — makes coroutines on the owner's FIFO. The GLOBAL walk
+//      below, which is `__gt_coro_sweep_dropped`'s body, is what bounds that program, and it holds
+//      `__sched_lock` across its peek, under which the head cannot move and the thread therefore cannot be
+//      popped, run, reclaimed or scavenged.
 //   3. **A RING TOMBSTONE STILL HAS A REAPER THE DAY ONE CAN EXIST.** `__sched_find_runnable` pops the
 //      candidate and THEN asks `emitGtIsDropped` of it (`emitGtTombstoneHandback`), which is the same
-//      question asked of a thread the asker owns — the safe spelling, and the one this file should have had
-//      only one of. The bound the front-sweep bought was latency on one shape, never correctness.
+//      question asked of a thread the asker owns — the safe spelling. A front-sweep of a ring would buy
+//      latency on one shape, never correctness.
 //
-// ⇒ **IF A LATER RUNG GIVES A GREEN THREAD A PROMISE, DO NOT RESTORE THE PEEK.** Claim first — CAS the head,
+// ⇒ **IF A LATER CHANGE GIVES A GREEN THREAD A PROMISE, DO NOT ADD THE PEEK.** Claim first — CAS the head,
 // then dereference what you own, exactly as `__sched_find_runnable` does — or leave the reclamation to it.
 //
 // ⚠ This function is therefore the GLOBAL walk alone, and it is still worth its call: it is what reclaims a
 // dropped coroutine that reached the global queue, and its caller (`__gt_promise_drop`'s `sweepGreen` arm)
 // is what puts one there.
+
 function buildSchedSweepDropped(module StdModule)
 	var func = IrFunction.createFromStd(SchedSweepDroppedName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
@@ -4381,7 +4304,7 @@ function buildSchedSweepDropped(module StdModule)
 	// name one thread and no compare-and-swap is needed; that argument, the front-only bound and the reason
 	// the sweep exists at all live once, at `emitGtFifoSweepDropped`.
 	//
-	// ⚠ **NO LOCK HERE — the walk takes and releases its own, per iteration (SV1).** It has to: it calls
+	// ⚠ **NO LOCK HERE — the walk takes and releases its own, per iteration.** It has to: it calls
 	// `__gt_runner_done`, which must never run under `__sched_lock`. A bracket held by this caller would make
 	// the walk's release a recursive decrement that released nothing, which is exactly the latent hang
 	// `GtRuntime.GtRunnerDoneName` records.
@@ -5833,11 +5756,10 @@ function emitSchedWorkerExit(module StdModule, func IrFunction, exitBlock IrBloc
 	emitConstReturn(module, block: exitDone, value: 0, ids: ids)
 end 'emitSchedWorkerExit'
 
-// ⭐⭐⭐ **THE FOUR THINGS THAT CAN HAPPEN TO A SPINNING CREDIT (MC1) — and they are an enum rather than
-// four bodies because all four are the SAME two instructions with different constants**: one CAS on
+// ⭐⭐⭐ **THE FOUR THINGS THAT CAN HAPPEN TO A SPINNING CREDIT — and they are an enum rather than four
+// bodies because all four are the SAME two instructions with different constants**: one CAS on
 // `m.spinning`, then one atomic step of `__sched_nmspinning` by however much that CAS decided. See
-// `SchedSpinningLabel` for what the count is for and `MOffSpinning` for why the per-machine word exists —
-// and note that it IS per-machine since W213-C2, where this enum's text used to call it a fact about the P.
+// `SchedSpinningLabel` for what the count is for and `MOffSpinning` for why the per-MACHINE word exists.
 enum SpinningTransition
 	// A worker M that `__sched_find_runnable`'s spinner cap admits to the steal rounds (`frspinclaim`). Wins
 	// the word 0 -> 1 and counts itself in. A LOST CAS is not a failure: it means a waker already handed this M
@@ -5925,42 +5847,34 @@ end 'emitSchedRaiseHighWater'
 // `__sched_wake_or_spawn`
 // ==========================================================================
 
-// ⭐⭐⭐ **`__sched_wake_or_spawn()` — GO'S `wakep` (`proc.go:3228`), AND W213-C2 TURNED IT THE RIGHT WAY
-// ROUND.** Called once at the tail of every GREEN-THREAD publish, with the run-queue lock ALREADY RELEASED:
-// the GT is published, and this decides whether anybody needs waking for it.
+// ⭐⭐⭐ **`__sched_wake_or_spawn()` — GO'S `wakep` (`proc.go:3228`).** Called once at the tail of every
+// GREEN-THREAD publish, with the run-queue lock ALREADY RELEASED: the GT is published, and this decides
+// whether anybody needs waking for it.
 //
-// ⛔⛔ **IT USED TO SCAN FOR A MACHINE AND THEN LOOK FOR A PROCESSOR; IT NOW TAKES A PROCESSOR AND BINDS A
-// MACHINE TO IT.** The old body walked `P[1..numProcs)` for a `POffIdleFlag` of 1 and signalled that P's
-// event, then walked again for a P no M had claimed and started one there. Both walks found a parked machine
-// *through the processor it was still holding* — which is precisely the arrangement this rung ends. What is
-// left here is the GATE and nothing else; `__sched_startm` is the rest, and it is a separate function
-// because `handoffp` will call it with a processor of its own.
+// ⛔⛔ **IT TAKES A PROCESSOR AND BINDS A MACHINE TO IT, NEVER THE OTHER WAY ROUND.** Scanning the P array
+// for a parked machine finds one only *through the processor it is still holding*, which a parked machine
+// does not have. This function is the GATE and nothing else; `__sched_startm` is the rest, and it is a
+// separate function because `handoffp` calls it with a processor of its own.
 //
-// ⭐⭐⭐ **THE GATE IS UNCHANGED FROM MC1 AND IS WHERE THE MEASURED COST GOES.** Go's `wakep` opens with
-// exactly this pair: a plain load as the fast path, then a `CompareAndSwap(0, 1)` that RESERVES the one
-// spinning M this wakeup is allowed to create. Everything below is skipped outright when either answers no,
-// and in a program whose work is finer-grained than a park/unpark round trip that is almost every publish.
-// `SchedSpinningLabel` carries the reading that justified it: **172 ms of CPU at one processor against
-// 3,109 ms at sixteen**, before the gate existed.
+// ⭐⭐⭐ **THE GATE IS WHERE THE COST GOES.** Go's `wakep` opens with exactly this pair: a plain load as the
+// fast path, then a `CompareAndSwap(0, 1)` that RESERVES the one spinning M this wakeup is allowed to create.
+// Everything below is skipped outright when either answers no, and in a program whose work is finer-grained
+// than a park/unpark round trip that is almost every publish. `SchedSpinningLabel` carries the reading that
+// justifies it.
 //
-// ⚠⚠ **THE FENCE THIS READ NEEDS IS THE ONE THE OLD `idleFlag` SCAN NEEDED, AND BOTH ARMS STILL CARRY IT.**
-// The queue publish must be visible before the count is read, or a publisher can skip a wake on the strength
-// of a spinner whose search preceded its publish. The GLOBAL TAIL's fence is the caller's
+// ⚠⚠ **THE QUEUE PUBLISH MUST BE VISIBLE BEFORE THE COUNT IS READ, AND BOTH ARMS CARRY THE FENCE THAT MAKES
+// IT SO.** Otherwise a publisher can skip a wake on the strength of a spinner whose search preceded its
+// publish. The GLOBAL TAIL's fence is the caller's
 // `LeaveCriticalSection`; the LOCAL RING's is `emitRunqPublishTail`'s `lock xadd`, whose LOCK prefix is the
 // StoreLoad barrier — that function states it at the instruction and forbids the "optimisation" back to a
 // plain store, and this is the reader it protects. ⚠ A caller that already HELD the lock and pushed to the
 // ring inside it has neither: the `lock xadd` is what covers it, which is why `__gt_timer_check` and
 // the poller's readiness walk may publish inside their walk and wake once after it.
 //
-// ⭐ **AND `__sched_startm` TAKES `__sched_lock`, WHICH THIS FUNCTION DELIBERATELY DID NOT — MC1 MEASURED
-// THAT TRADE AND ITS PREMISE IS WHAT THIS RUNG REMOVED.** MC1 kept a lock-free linear scan against Go's
-// `pidleget`/`pidleput` on the ground that *"this scan runs with the run-queue lock deliberately RELEASED,
-// because the release IS the StoreLoad fence the `idleFlag` protocol depends on"*, and priced the list at
-// *"0.2% of the cost"* (**108,322 `idleFlag` loads for the whole of `service-torture` at 480,000 messages and
-// `MAXON_MAX_PROCS=16`**, against 953 ms of CPU). There is no `idleFlag` protocol any more — the park is one
-// critical section (`buildSchedLoop`) — so there is no fence to preserve by staying outside a lock, and
-// the O(1) list is now the cheaper option as well as the only one that can find a P-less machine. The gate
-// above still runs lock-free, so a publish that wakes nobody costs one load exactly as it did.
+// ⭐ **AND `__sched_startm` TAKES `__sched_lock` WHILE THIS FUNCTION DOES NOT.** The park is one critical
+// section (`buildSchedLoop`), so there is no fence to preserve by staying outside a lock, and the O(1) idle
+// list is both cheaper than a linear scan and the only thing that can find a P-less machine. The gate above
+// runs lock-free, so a publish that wakes nobody costs one load.
 function buildSchedWakeOrSpawn(module StdModule)
 	var func = IrFunction.createFromStd(SchedWakeOrSpawnName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
@@ -6124,7 +6038,7 @@ function buildSchedWakePoller(module StdModule)
 end 'buildSchedWakePoller'
 
 // ==========================================================================
-// ⭐⭐⭐ THE SYSCALL HANDOFF (W213-C3) — `__sched_handoffp`, `__sched_retake`, `__sysmon`,
+// ⭐⭐⭐ THE SYSCALL HANDOFF — `__sched_handoffp`, `__sched_retake`, `__sysmon`,
 // `__sched_syscall_regain`
 // ==========================================================================
 
@@ -7238,25 +7152,24 @@ end 'emitSchedRegainUnlinkLocked'
 // `__sched_stop_workers`
 // ==========================================================================
 
-// ⭐⭐⭐ **`__sched_stop_workers()` — SEAL THE SCHEDULER AND JOIN EVERY WORKER M OUT (SV1), AND W213-C2 MADE
-// IT WALK THE MACHINES.** Its one caller is `GtRuntime.__gt_drain_at_exit`, which has already run the
-// scheduler until no promise is outstanding; this is what makes the Ms that were servicing it STOP, and stop
-// before anything downstream reads a counter they can still step.
+// ⭐⭐⭐ **`__sched_stop_workers()` — SEAL THE SCHEDULER AND JOIN EVERY WORKER M OUT, WALKING THE
+// MACHINES.** Its one caller is `GtRuntime.__gt_drain_at_exit`, which has already run the scheduler until no
+// promise is outstanding; this is what makes the Ms that were servicing it STOP, and stop before anything
+// downstream reads a counter they can still step.
 //
-// ⛔⛔ **IT WALKED `__sched_procs` AND READ `POffOsThreadHandle`, AND THAT WAS A LANDMINE WITH A DATE ON
-// IT.** The handle stored on a P names the machine that CLAIMED that P. While a processor belonged to one
-// machine for that machine's life the two were the same thing; from this rung a processor is released at
-// every park and handed to whoever `__sched_startm` gives it to, so a P-keyed handle names a thread that has
-// moved on — and joining it **SUCCEEDS**, because the handle is still live. The teardown would return with a
-// worker still running, still stepping the allocation counters `__mm_leak_check` reads two calls later: an
-// intermittent exit 101 on a program with no leak. **Worse, a machine parked with no processor is on no P at
-// all, so the old walk could not have signalled it and would have blocked for ever on a thread nobody had
-// told to stop.** Both are why `__sched_allm` exists.
+// ⛔⛔ **WALKING `__sched_procs` AND READING `POffOsThreadHandle` INSTEAD WOULD BE A LANDMINE.** A handle
+// stored on a P names the machine that CLAIMED that P, and a processor is released at every park and handed
+// to whoever `__sched_startm` gives it to — so a P-keyed handle names a thread that has moved on, and
+// joining it **SUCCEEDS**, because the handle is still live. The teardown would return with a worker still
+// running, still stepping the allocation counters `__mm_leak_check` reads two calls later: an intermittent
+// exit 101 on a program with no leak. **Worse, a machine parked with no processor is on no P at all, so such
+// a walk could neither signal it nor stop blocking for ever on a thread nobody had told to stop.** Both are
+// why `__sched_allm` exists.
 //
 // Three steps, in this order and for these reasons:
 //
-//   1. **`__sched_shutdown_flag = 1` AND THE SIGNALS, BOTH INSIDE `__sched_lock`.** ⭐⭐ The lock is
-//      W213-C2's addition and it is what closes the last spawn race: `__sched_startm` reads the flag while
+//   1. **`__sched_shutdown_flag = 1` AND THE SIGNALS, BOTH INSIDE `__sched_lock`.** ⭐⭐ The lock is what
+//      closes the last spawn race: `__sched_startm` reads the flag while
 //      holding this same lock and registers a new machine on `__sched_allm` before releasing it, so the two
 //      orders are the only two there are — either it sees the flag and creates nothing, or its machine is on
 //      the roster before this walk reads the head. There is no interleaving in which a worker exists and is
@@ -7329,7 +7242,7 @@ function buildSchedStopWorkers(module StdModule)
 	let joinDone = emitCmp(module, block: joinHdr, a: joinCursor, b: joinEndZero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(joinHdr, op: StdOp.condBranch(joinDone, thenBlockId: doneBlock.id, elseBlockId: joinBody.id))
 
-	// ⛔⛔ **A MACHINE INSIDE A BLOCKING KERNEL CALL CANNOT BE WOKEN AND MUST NOT BE JOINED (W213-C3).** The
+	// ⛔⛔ **A MACHINE INSIDE A BLOCKING KERNEL CALL CANNOT BE WOKEN AND MUST NOT BE JOINED.** The
 	// signal walk above sets that machine's event, which it is not waiting on; `WaitInfinite` on its thread
 	// handle then blocks the exit path until the kernel call returns — and the whole subject of
 	// `specs/sched-syscall-handoff.md` is calls that block for a second or for ever. **Go does not join
@@ -7338,7 +7251,7 @@ function buildSchedStopWorkers(module StdModule)
 	// ⭐ **THE TEST IS THE SYSCALL BRACKET'S OWN STATE BITS, NOT A TIMEOUT, AND THAT IS WHAT KEEPS IT FROM
 	// MASKING A LIVE-BUT-SLOW WORKER.** A bounded wait would treat *"still finishing its last green thread"* and
 	// *"parked in the kernel"* as one state and would silently stop waiting for the first, which is exactly the
-	// class of bug `MOffOsThreadHandle` exists to have fixed: the teardown would return while a worker was still
+	// class of bug `MOffOsThreadHandle` guards against: the teardown would return while a worker was still
 	// stepping the counters `__mm_leak_check` reads. **State bits of zero is a machine running ordinary Maxon
 	// code, and every such machine is still joined with no timeout.**
 	//

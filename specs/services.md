@@ -3471,7 +3471,7 @@ error E3059: <fragment>:22:9: try propagates 'Calc.divide.errors' but enclosing 
 ```
 
 <!-- test: a-declared-throws-clause-names-a-replys-errors -->
-⭐ **THE SPELLING THE PREVIOUS CASE'S MISMATCH IMPLIES** (`SERVICES_DESIGN.md:583`). The fused pair is a
+⭐ **THE SPELLING THE PREVIOUS CASE'S MISMATCH IMPLIES** (§"`ServiceError`"). The fused pair is a
 nominal enum registered under `<Service>.<method>.errors`, so a `throws` clause can name it — and once it
 can, a bare `try` inside `fetch` re-publishes the flag VERBATIM to `fetch`'s own caller instead of being
 refused. The two members survive the hop: `main` catches at the call and still selects between transport and

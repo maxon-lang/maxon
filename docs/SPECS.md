@@ -7,7 +7,7 @@ This document describes the format for Maxon language specification files.
 Each language feature must have a spec file in the `specs/` directory that serves as the single source of truth. Spec files contain:
 
 1. **YAML Frontmatter** - Metadata about the feature
-2. **Documentation** - User-facing documentation (extracted to HTML)
+2. **Documentation** - User-facing prose and examples, read by people; nothing extracts it
 3. **Tests** - Test cases, generated into per-target fragment trees
    (`specs/fragments-<target>/<spec>/<test>.test`, and `specs/fragments/<target>/...`)
 
@@ -288,10 +288,8 @@ When no `// --- file:` markers are present, behavior is unchanged (single-file t
    - `` `mm-trace `` (memory-management trace assertion; see below)
    - `` `maxoncstderr `` (for compile/parse errors)
 
-3. **In Documentation section:**
-   - Examples WITHOUT `function main()` don't need output blocks
-   - Examples WITH `function main()` MUST have output blocks
-   - These are auto-named as `doc-example-1`, `doc-example-2`, etc.
+3. **In the Documentation section:** nothing is extracted and nothing is compiled. The runnable region
+   begins at the `## Tests` heading, so a `maxon` block above it needs no output block and is never a gate.
 
 4. **In Tests section:**
    - Use `<!-- test: test-name -->` comment before each test
@@ -300,32 +298,15 @@ When no `// --- file:` markers are present, behavior is unchanged (single-file t
 
 ## Documentation Examples
 
-Code examples in the **Documentation** section can be:
+Every code example in the **Documentation** section is illustrative: the parser's runnable region starts at
+the `## Tests` heading, so a ` ```maxon ` block above it is never extracted, compiled or run, and it needs
+no expected-output block.
 
-1. **Illustrative only** - No `output` block, not extracted as tests
-   ```markdown
-   ```maxon
-	 for i in numbers 'loop'
-			 print(i)
-	 end 'loop'
-   ```
-   ```
-   
-   **Note**: Small code snippets or pseudo-code that should not be executed (like desugared examples or intermediate representations) should be marked as ` ```text ` instead of ` ```maxon ` to prevent extraction.
+⚠ **A DOCUMENTATION EXAMPLE IS UNVERIFIED PROSE.** It rots exactly as a comment does, and no gate reports
+it. An example a reader is meant to be able to trust belongs under `## Tests`, where the harness runs it.
 
-2. **Executable examples** - With `output` block, extracted as tests
-   ```markdown
-   ```maxon
-	 function main() returns ExitCode
-			 return 42
-	 end 'main'
-   ```
-   ```output
-   ExitCode: 42
-   ```
-   ```
-
-Examples with `output` blocks are automatically numbered as `feature-name.doc-example-N.1` tests.
+Prefer ` ```text ` over ` ```maxon ` for pseudo-code, desugarings and intermediate representations, so a
+reader can tell at a glance what is not a program.
 
 ## Test Section
 
@@ -419,16 +400,13 @@ var x = -5.5
 var y = abs(x)  // Returns 5.5
 ```
 
-**Example (executable):**
+**Example (illustrative — the Documentation section runs nothing):**
 
 ```maxon
 function main() returns ExitCode
 		var x = abs(-5.0)
 		return trunc(x)
 end 'main'
-```
-```exitcode
-5
 ```
 
 ## Tests

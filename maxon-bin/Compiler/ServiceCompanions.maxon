@@ -1,5 +1,5 @@
 // ServiceCompanions — what the compiler synthesizes beside a SERVICE, and the rules that decide there is
-// one (SV1 wave 2). Designed in `SERVICES_DESIGN.md` §"Recommended design".
+// one. Specified in `specs/services.md` §"What the compiler synthesizes".
 //
 // ⭐⭐ **A `spawn T.create()` ANYWHERE IN THE PROGRAM MAKES `T` A SERVICE.** There is no `service` keyword
 // and no member keyword: a service is an ordinary `type`, and its message surface is exactly its
@@ -657,7 +657,7 @@ end 'serviceBorrowedTransferMessage'
 
 // The CO-OWNED half: this frame owns a reference, but not provably the only one. Both arrivals are named
 // because the cure differs between them — a second reference taken HERE is one the author can see and remove,
-// while a value that crossed a frame boundary is `SERVICES_DESIGN.md`'s known weakness 1 and needs the clone.
+// while a value that crossed a frame boundary cannot be proven sole from here at all and needs the clone.
 module function serviceSharedTransferMessage(blame String, source String) returns String
 	return "{blame} cannot be proven to have exactly one owner{serviceTransferSourceClause(source)}: this frame has either taken a SECOND reference to it — a container push, a closure capture, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). {ServiceTransferLesson}"
 end 'serviceSharedTransferMessage'

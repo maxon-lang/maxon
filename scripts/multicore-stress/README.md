@@ -20,7 +20,7 @@ inside a checkout: it locates `stdlib/` relative to itself.
 | `validate.sh` | is the emitted per-P sharded allocator + multi-M scheduler correct above one P? |
 | `pin-matrix.sh` | is an `async` frame pinned to its green thread — `workers=1`, `steals=0` at every `MAXON_MAX_PROCS` and at the default wherever the system monitor never stepped in (`monitor=0`) — while a SPAWNED one reaches a worker M? |
 | `refcount-race.sh` | does a contended refcount word survive, and can the pin be removed to break it? |
-| `awaitany-index-race.sh` | does a driver with nothing runnable OBSERVE a promise another M answered, or sleep through it — read as the SELECT LATENCY, in the exit code |
+| `awaitany-index-race.sh` | does a machine with nothing runnable OBSERVE a promise another M answered, or wait out its timer instead — read as the SELECT LATENCY, in the exit code |
 
 ```
 bash scripts/multicore-stress/validate.sh              # REPS=N, default 15
@@ -98,11 +98,11 @@ family a program is in decides what its rows mean**, so it is the first column h
   other's parked RSP and the first one out returns onto the other's stack. Its header carries the
   sabotage reading. ⚠ It writes scratch files into the cwd.
 - **`awaitany-index-torture.maxon`** — the only program here measuring a **LATENCY**, and the only one
-  whose subject is what a driver does with nothing to run. `Slow` sleeps 25 ms and `Quick` answers at
+  whose subject is what a machine does with nothing to run. `Slow` sleeps 25 ms and `Quick` answers at
   once, so `awaitAny` must come back with index 1 within a millisecond.
   ⛔ **IT PRINTS NOTHING, AND THAT IS MEASURED, NOT STYLISTIC**: a `print`-instrumented build of the
-  same tree read 150/150 clean while the exit code read 13/160. A print is a syscall on the driver's
-  own M and perturbs exactly the window the program is about. The reading is the exit code —
+  same tree read 150/150 clean while the exit code read 13/160. A print is a syscall on the M running
+  `main` and perturbs exactly the window the program is about. The reading is the exit code —
   `150 + min(worstMs, 99)`, or `250` for a wrong index.
 - **`scavenge-race-torture.maxon`** — the allocator's DECOMMIT running concurrently with the
   scheduler's queue walks. ⚠ **NO DRIVER RUNS IT.** The one offending site it was written for has
@@ -215,8 +215,8 @@ asserts it across processor counts.
   16-processor box), because neither does any IO and so neither starts a P-less OS thread whose frees
   would take the remote arm. At 2 and above the smallest reading was **72,016**
   (`service-fanin-torture` at 2), with `service-torture` at ~240,000 throughout.
-  ⚠ `alloc-torture` reads a floor of **1**: raw OS threads with no Maxon P (the IOCP completion loop /
-  sync worker) route their frees through the same branch. That is a constant of THAT program's shape,
+  ⚠ `alloc-torture` reads a floor of **1**: a free by a party that does not hold the slab's owning P
+  takes the remote arm whatever the processor count. That is a constant of THAT program's shape,
   not of the counter, and a program doing IO would read a small non-zero floor honestly.
 - **A real intermittent multi-core crash was found and fixed here.** The torture program surfaced a
   ~2.5% (worker-count-correlated) `NULL`-pointer crash in `__gt_enqueue` (`gt->next`, offset `0x38`),

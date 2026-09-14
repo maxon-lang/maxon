@@ -125,11 +125,10 @@ prefix is `os error` rather than `win32 error` because a caller sees one spellin
 ### Targets — the Win32 substrate gate
 
 `CreateProcessA` and three overlapped named pipes are a WINDOWS shape, and WASI has no
-process-spawn primitive at all. Every one of these intrinsics lowers into the `__gt_subp_` band,
-which `SemanticCheck.calleeNeedsWin32Substrate` refuses on any other target with **E3104** at the
-call's own span. ⚠ Before this rung that band was NOT in the gate and such a program died as a
-BACKEND PANIC three tiers down — `SemanticCheck`'s own header recorded the gap verbatim. The two
-`rejected-on-*` cases below are what hold it shut.
+process-spawn primitive at all. Every one of these intrinsics lowers into the `__gt_subp_` band, which
+`TargetFacilities.calleeHostFacility` maps onto `HostFacility.subprocess`, so a lane that does not provide
+one refuses the call with **E3104** at its own span. ⚠ Outside that gate such a program dies as a BACKEND
+PANIC three tiers down instead. The two `rejected-on-*` cases below are what hold it shut.
 
 ### ⭐ arm64-macOS HAS THE FACILITY, SO THE CASES COME IN PAIRS — AND WIDENING WAS NOT AN OPTION
 
@@ -1737,10 +1736,8 @@ error E3104: <fragment>:9:21: this construct lowers to the runtime entry '__gt_s
 
 <!-- test: subprocess-builtins.streaming-rejected-off-its-substrate -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-The bare-name streaming builtin is gated by the same band and names its own entry. ⚠ It was outside
-the gate until this rung, and `SemanticCheck.calleeNeedsWin32Substrate`'s header recorded the
-consequence: *"on another target they still die as a BACKEND PANIC rather than a diagnostic —
-MEASURED"*.
+The bare-name streaming builtin is gated by the same band and names its own entry. ⚠ Outside that gate it
+dies on such a target as a BACKEND PANIC rather than as a diagnostic.
 
 ⚠ **THE LANE IS `wasm32-wasi`, AND IT IS THE LAST ONE THAT CAN CARRY THIS RULE.** The case moved across
 the native lanes as each grew a child-process substrate — arm64-macOS at MAC8 (`posix_spawnp`, a

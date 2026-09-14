@@ -40,10 +40,11 @@
 // The context switch passes the `to` GT through in rdx / x1, so `__gt_trampoline` reads its own GT from there,
 // and its completion switch targets `GtOffWaiter`, which `emitGtExecute` stores before every switch-in.
 //
-// ⚠ SCALAR ONLY (B1a). An async call's arguments and its awaited result are integer/bool (GPR) values;
-// the parser REJECTS a managed (String/struct) or float async arg/result (E2015) rather than leak or
-// miscompile — the trampoline moves the result through R8 and the args through the GPR arg registers, so
-// a float (XMM) or a managed pointer would need a channel B1a does not build. Managed async is B1c.
+// ⚠ THE GPR CHANNEL. The trampoline moves an async call's arguments through the integer arg registers and
+// its result through R8, so what crosses is an integer, a bool, or a managed value as its one box pointer.
+// A `float` has no channel here and is refused at the call (E2015, `SemanticCheck.requireAsyncScalarParams`
+// for a parameter and `Parser.requireAsyncResult` for the result) rather than left to read the wrong
+// register file, which an argument check cannot catch because an int legally coerces to a float parameter.
 //
 // ⭐ RELOCATING STACKS. Each GT gets an `osAllocPages` seed stack of `__gt_seed_bytes`, which follows the stacks
 // recent threads finished with (`__gt_seed_adapt`, Go's `startingStackSize`); every guarded function's prologue
@@ -105,8 +106,8 @@ export let GtOffStackGuard = 0x50
 // EXPORTED for both lanes' guards and `__gt_guard_tripped`, and for the monitor.
 export let GtStackGuardPreempt = -1314 as ParsedInt
 
-// The dual-register ERROR FLAG the trampoline captures from R10 when a THROWING async thunk returns
-// (P1.5-B2b): 0 = success, non-zero = threw (a scalar error's `ordinal + ErrorFlagOrdinalBias`, or a boxed
+// The dual-register ERROR FLAG the trampoline captures from R10 when a THROWING async thunk returns:
+// 0 = success, non-zero = threw (a scalar error's `ordinal + ErrorFlagOrdinalBias`, or a boxed
 // union's box pointer — whatever the thunk left in R10). Read ONLY by `__gt_try_await`, which returns it as
 // the second register of its dual-register exit; `__gt_await` (a non-throwing await) never reads it, so a
 // non-throwing thunk leaving garbage in R10 here is harmless. Offset 0x58 sits above the stack guard at 0x50.
@@ -118,7 +119,7 @@ export let GtOffThrew = 0x58
 // the 0x60–0xA8 reserved window. EXPORTED because `NetpollRuntime` writes it.
 export let GtOffIoStatus = 0x80
 
-// The GT's OWN Windows TIB stack bounds, saved so the syscall shim (P1.5-B1a′) can repoint `gs:[0x08]`
+// The GT's OWN Windows TIB stack bounds, saved so the syscall shim can repoint `gs:[0x08]`
 // (NT_TIB.StackBase) / `gs:[0x10]` (NT_TIB.StackLimit) at the system stack for a kernel call and RESTORE
 // them to this GT's stack afterwards — heavy kernel calls probe the TIB and fault when RSP is outside its
 // bounds. `__gt_spawn` seeds them to the GT's own stack (`tibStackBase = stackBase + seed size`,
@@ -225,7 +226,7 @@ export let GtOffIoMode = 0xC0
 // there; a change that reused the region as scratch would be a wild free, not merely a mis-loaded argument.
 export let GtOffArgInline = 0xC8
 
-// ⭐⭐ **THE TEARDOWN RENDEZVOUS WORD (W212 follow-up) — the ONE place the two halves of a green thread's
+// ⭐⭐ **THE TEARDOWN RENDEZVOUS WORD — the ONE place the two halves of a green thread's
 // ownership meet, and the ONLY word in the struct that BOTH halves write.** Every green thread is owned by
 // exactly two parties and each of them finishes at a moment the other cannot observe:
 //
@@ -512,7 +513,7 @@ let GtTeardownRunnerTicket = 2 as ParsedInt
 let GtStatusReady = 0
 export let GtStatusCompleted = 2
 
-// EXPORTED since SV1 wave 3: `MailboxRuntime.emitMboxRegisterPark` stores it, being the mailbox park's own
+// EXPORTED because `MailboxRuntime.emitMboxRegisterPark` stores it, being the mailbox park's own
 // registration arm, and a second spelling of a status word is a thread parked in a state nothing wakes.
 export let GtStatusWaiting = 3
 
@@ -672,7 +673,7 @@ end 'gtStackGuardHeight'
 // dispatcher is standing on, so its room is `gtStackSystemBytes` on Windows and a signal stack elsewhere
 // (`FaultFrameHome`).
 //
-// ⭐⭐ **arm64 KEEPS THE SAME NUMBER, AND THAT IS A RE-DERIVATION RATHER THAN A COPY (MAC3).** The margin's two
+// ⭐⭐ **arm64 KEEPS THE SAME NUMBER, AND THAT IS A RE-DERIVATION RATHER THAN A COPY.** The margin's two
 // terms answer differently on the two ISAs and they go OPPOSITE ways, so the sum is re-argued rather than assumed:
 //   • **the guarded function's own un-projected stack.** On x64 `push rbp` and every callee-saved push sit
 //     OUTSIDE the `sub rsp` the guard projects, so that term is real there. On arm64 the frame RESERVATION
@@ -737,7 +738,7 @@ end 'gtAsyncPreemptMargin'
 // re-proves on every build.
 let GtAsyncPreemptMarginBytes = 0x400 as ParsedInt
 
-// The SYSTEM (scratch) stack a green thread's kernel calls run on (P1.5-B1a′ slice 1): a 64 KB region
+// The SYSTEM (scratch) stack a green thread's kernel calls run on: a 64 KB region
 // committed once PER M by `emitSchedBecomeM`, its TOP held in `M->systemStackSP`. The syscall shim switches
 // RSP here for a Win32 / libSystem call so the kernel's deep stack usage (RPC, TIB probes) never touches the
 // GT's own small stack — the infrastructure that makes the tiny GT stacks safe. EXPORTED because the shim
@@ -844,10 +845,10 @@ end 'emitTimerTagOfNetpollMode'
 // (`SchedRuntime.emitSchedPollerOwed`), which asks whether any timer is pending.
 export let TimerWhenEmpty = 0x7FFFFFFFFFFFFFFF as ParsedInt
 
-// --- Win32 wait / process constants (P1.5 subprocess seed) ---
+// --- Win32 wait / process constants ---
 // `WAIT_OBJECT_0` (0) is what `WaitForSingleObject` returns for a SIGNALED handle (an exited child); the
 // collect loop polls a handle with a zero timeout and tests for it.
-// EXPORTED since MAC3: the arm64-macOS lane EMULATES these waits over a pthread condition variable
+// EXPORTED because the arm64-macOS lane EMULATES these waits over a pthread condition variable
 // (`Arm64DarwinRuntime`'s `DarwinWaitObject`), so its chunk has to ANSWER the same two codes the Std tier
 // tests for. A second spelling on that side would be one fact written twice, in a place where the two
 // copies disagreeing means a poll that never sees a signalled handle.
@@ -883,12 +884,12 @@ let DwordMask = 0xFFFFFFFF as ParsedInt
 
 // The 8-byte slab slot `GetExitCodeProcess` writes the child's DWORD exit code into; the runtime reads it back
 // with a full i64 load, so the high dword must be clean. `GetExitCodeProcess` writes only the low DWORD, so the
-// slot must arrive with its high half already zero — which a fresh `__slab_alloc` slot does. #92's reused slot
-// needed an explicit `store 0` in `reap` to re-establish that; S3's per-call slot does not.
+// slot must arrive with its high half already zero — which a fresh `__slab_alloc` slot does. A slot REUSED
+// across calls would need an explicit `store 0` in `reap` to re-establish that; the per-call slot does not.
 let ExitCodeSlotBytes = 8
 export let TrailingNulBytes = 1  // the one extra byte for the cmdline's NUL terminator (slab-zeroed → free)
 
-// ⭐ **`runProcess` IS A THROWING BUILTIN (P1.5 #93) — its USER-REACHABLE failure path THROWS, it does not
+// ⭐ **`runProcess` IS A THROWING BUILTIN — its USER-REACHABLE failure path THROWS, it does not
 // ABORT.** A command the user typed is not a compiler invariant, so the failure hands the caller a
 // `RunProcessError` through the dual-register `errorReturn` ABI, exactly as a throwing array accessor hands
 // back an `ArrayError`: `try runProcess(cmd) otherwise <h>` catches it and the program RECOVERS.
@@ -937,7 +938,7 @@ let RunProcessSpawnFailedOrdinal = 0 as ParsedInt
 // read from its one declaration rather than re-spelled `0` here.
 let RunProcessSpawnFailedFlag = RunProcessSpawnFailedOrdinal + ErrorFlagOrdinalBias
 
-// --- Monotonic clock (P1.5 mid-body-yield) ---
+// --- Monotonic clock ---
 // `ns = ticks * 1e9 / freq`, evaluated as the OVERFLOW-SAFE split identity
 // `ns = (ticks/freq)*1e9 + ((ticks mod freq)*1e9)/freq` — see `buildGtNowNs`.
 let NanosPerSecond = 1000000000
@@ -993,7 +994,7 @@ let GtSeedAdaptName = b"__gt_seed_adapt"
 let GtInitName = b"__gt_init"
 export let GtSpawnName = b"__gt_spawn"
 
-// ⭐⭐⭐ **`__gt_spawn_green(funcPtr) -> gt` — CREATE A GREEN THREAD RATHER THAN A COROUTINE (SV1).** The
+// ⭐⭐⭐ **`__gt_spawn_green(funcPtr) -> gt` — CREATE A GREEN THREAD RATHER THAN A COROUTINE.** The
 // SAME body as `__gt_spawn` (`buildGtSpawn` builds both from it) differing in the owner stamp: a coroutine
 // copies its spawner's owner, a green thread is stamped with ITSELF and heads a strand of its own.
 //
@@ -1018,11 +1019,9 @@ let GtSpawnMainName = b"__gt_spawn_main"
 // the name for it.
 export let GtRunMainName = b"__gt_run_main"
 
-// ⭐⭐ **`__gt_ready(gt)` — PUBLISH A SPAWNED GT, AND IT IS A SEPARATE CALL FOR A MEASURED REASON (G1).**
-// With `MAXON_MAX_PROCS=12`, 600 spawned green threads reading one integer argument summed to `370613000`,
-// `390241000` and `381169000` on three runs against the right answer `722397000` when `__gt_spawn` published
-// the thread itself: a worker M ran each thread while the spawner was still storing its arguments. Splitting
-// CREATE from PUBLISH means nothing can observe the GT until every slot the trampoline loads is written.
+// ⭐⭐ **`__gt_ready(gt)` — PUBLISH A SPAWNED GT, AND IT IS A SEPARATE CALL SO THAT NOTHING CAN OBSERVE THE
+// GT UNTIL EVERY SLOT THE TRAMPOLINE LOADS IS WRITTEN.** Publishing inside `__gt_spawn` lets a worker M run
+// the thread while the spawner is still storing its arguments, which reads as arguments silently lost.
 export let GtReadyName = b"__gt_ready"
 
 // ⭐⭐⭐ **`__gt_ready_locked(gt) -> wakeDebt` — THE ONE WAKE DOOR, Go's `ready`.** The caller holds
@@ -1075,7 +1074,7 @@ export let GtRunStrandName = b"__gt_run_strand"
 export let GtAwaitName = b"__gt_await"
 export let GtTryAwaitName = b"__gt_try_await"
 
-// ⭐ **THE UN-AWAITED-PROMISE DROP (P1.5-B2 #88).** `__gt_promise_drop(gt)` reclaims + CANCELS a GT whose
+// ⭐ **THE UN-AWAITED-PROMISE DROP.** `__gt_promise_drop(gt)` reclaims + CANCELS a GT whose
 // promise reached scope exit (or a re-arm) WITHOUT being awaited — the ownership DUAL of the `__gt_await`
 // reclaim. The front-end enrols an `async` spawn's Promise as an owned value and emits this call on every path
 // that neither `await`s nor re-arms it. Named in the `__gt_` band so `isGtRuntimeCallee` catches it and
@@ -1123,7 +1122,7 @@ let GtReclaimName = b"__gt_reclaim"
 // `Testing/SpecWorkerPool`'s `findReadyDrain` (which SERVES on the answer) and `abortOnWedgedPool` (which
 // ACCUSES on it) ask it about the same slot and get the same answer.
 //
-// ⚠ **AND IT IS TARGET-NEUTRAL, so it is deliberately NOT in `SemanticCheck.calleeNeedsWin32Substrate`.** A
+// ⚠ **AND IT IS TARGET-NEUTRAL, so it deliberately names no `HostFacility` in `calleeHostFacility`.** A
 // load, a compare and a return; what restricts a peeking program elsewhere is its THUNK, and
 // `specs/promise-peek.md:rejected-on-wasm` pins that attribution.
 export let GtIsCompleteName = b"__gt_is_complete"
@@ -1131,8 +1130,8 @@ export let GtIsCompleteName = b"__gt_is_complete"
 // ⭐⭐⭐ **THE REPLY CELL — A GT THAT NEVER RUNS.** `__gt_cell_alloc(releaser) -> cell` takes a GT struct
 // through `__gt_free_get` and leaves it **UNPUBLISHED**: `stackBase = 0`, `funcPtr = 0`, `status = waiting`,
 // on no queue and in no store. It is a wait token plus a result slot, and it is a `Promise` to everything
-// above it — `SERVICES_DESIGN.md §"Reply channel"` — so `__gt_await`, `__gt_try_await`, `__gt_is_complete`
-// and E3100's linearity treat it as any other promise.
+// above it — `specs/services.md` states a reply is an ordinary `Promise` — so `__gt_await`,
+// `__gt_try_await`, `__gt_is_complete` and E3100's linearity treat it as any other promise.
 //
 // ⭐ **`funcPtr == 0` IS THE DISCRIMINATOR (`emitGtIsReplyCell`), AND IT IS A PREDICATE RATHER THAN A KIND
 // WORD**: `__gt_spawn` stores the callee's address into that word before it publishes anything, so *"nothing
@@ -1140,7 +1139,7 @@ export let GtIsCompleteName = b"__gt_is_complete"
 // `funcPtr == 0`, and no promise ever names one.
 export let GtCellAllocName = b"__gt_cell_alloc"
 
-// ⭐⭐ **`__gt_cell_complete(cell, result, threw)` — THE REPLIER's HALF (SV2).** Called from the SERVICE's
+// ⭐⭐ **`__gt_cell_complete(cell, result, threw)` — THE REPLIER's HALF.** Called from the SERVICE's
 // green thread (or from `__mbox_send`'s closed arm, on the sender's), it writes the two answer words and then
 // publishes `completed` — **in the trampoline's own order**, because an awaiter tests `status` and only then
 // loads `result`/`threw`.
@@ -1178,7 +1177,7 @@ export let GtAwaitAnyName = b"__gt_await_any"
 let GtAnyCompletedName = b"__gt_any_completed"
 
 // ⭐⭐ **`__gt_drain_at_exit(code) -> code` — RUN THE SCHEDULER OUT AND JOIN THE WORKER Ms, ON THE WAY TO
-// `ExitProcess` (SV1).** The entry stub calls it between `__gt_run_main` and the leak gate, in the exit-code
+// `ExitProcess`.** The entry stub calls it between `__gt_run_main` and the leak gate, in the exit-code
 // pass-through shape `__mm_leak_check` has.
 //
 // ⭐ **THE JOIN IS NOT OPTIONAL.** A worker M's `__gt_reclaim` runs releaser decrefs, which step the very
@@ -1483,7 +1482,7 @@ export let GtTimerCheckName = b"__gt_timer_check"
 // has returned — so the parking thread's registers are provably saved and any M may take it.
 let GtRegisterParkName = b"__gt_register_park"
 
-// P1.5 subprocess seed. `__gt_process_run` is the front-end target for `runProcess(cmd)`.
+// `__gt_process_run` is the front-end target for `runProcess(cmd)`.
 export let GtProcessRunName = b"__gt_process_run"
 
 // `__gt_io_read` is the front-end target for the `spawnReadLine` probe builtin. Named in the `__gt_` band so
@@ -1493,11 +1492,11 @@ export let IoReadName = b"__gt_io_read"
 // --- `.data` globals (all i64, zero-initialized) ---
 // The zero image IS the initial state: no current GT and an empty run queue — exactly as `__slab_state`'s
 // zero means "the allocator has committed no region yet". `__gt_run_main` brings the rest up before `main`.
-// ⚠ **THE `__gt_current_gt` `.data` WORD IS GONE (G1) AND THE RUNNING GT IS `M->currentGt` (W213-C1).** A
-// single global cannot express *"the green thread THIS M is running"* once there is more than one M: two Ms
-// would write the same word and each would read the other's answer. G1 put it on the P, which was right while
-// a P was bound to one M for life; C1 put it on the M itself, because the thread executing inside a kernel
-// call belongs to the M blocked there and not to the processor a handoff is about to take away. Every reader
+// ⚠ **THERE IS NO `__gt_current_gt` `.data` WORD: THE RUNNING GT IS `M->currentGt`.** A single global
+// cannot express *"the green thread THIS M is running"* once there is more than one M — two Ms would write
+// the same word and each would read the other's answer — and it sits on the MACHINE rather than on the
+// processor because the thread executing inside a kernel call belongs to the M blocked there and not to the
+// processor a handoff is about to take away. Every reader
 // — the eight in this file, the hand-assembled ones in `X64GtRuntime` and `Arm64GtRuntime`, and the
 // DebugStream event — goes through `SchedRuntime.emitLoadCurrentGt` / its Target-tier twins. `SchedRuntime`'s
 // `__sched_find_runnable` and `__sched_sweep_dropped` peek this word UNLOCKED, through `emitQueueLoadHead`,
@@ -1507,13 +1506,12 @@ export let IoReadName = b"__gt_io_read"
 let GtRunQueueHeadLabel = b"__gt_run_queue_head"
 let GtRunQueueTailLabel = b"__gt_run_queue_tail"
 
-// ⚠ **THE `__gt_system_stack_top` `.data` WORD IS GONE (G1) AND THE SYSCALL STACK IS `M->systemStackSP`
-// (W213-C1).** Its safety invariant was *"single-M runs one thing at a time"*, written down as prose in one
-// comment, and multi-M falsifies it by definition: two Ms inside shimmed calls would set RSP to the same top
-// and write the same 64 KB, as silent interleaved corruption rather than a fault. G1's per-P region replaced
-// that sentence with *"an M can only reach its own P"* — which is the sentence P migration falsifies in
-// turn, so C1 moved the region to the M that is EXECUTING. `SchedRuntime.MOffSystemStackSP` carries the
-// argument in full; `GtSystemStackSize` below is unchanged and is now the size of EACH M's region.
+// ⚠ **THERE IS NO `__gt_system_stack_top` `.data` WORD: THE SYSCALL STACK IS `M->systemStackSP`.** One
+// global region rests on *"single-M runs one thing at a time"* and a per-P one on *"an M can only reach its
+// own P"*; multi-M falsifies the first and P migration the second, and either way two Ms inside shimmed calls
+// set RSP to the same top and write the same 64 KB, as silent interleaved corruption rather than a fault. The
+// region belongs to the M that is EXECUTING. `SchedRuntime.MOffSystemStackSP` carries the argument in full;
+// `GtSystemStackSize` below is the size of EACH M's region.
 
 // ⭐ **A STACK IS ALLOCATED FRESH ON SPAWN AND FREED ON COMPLETION, NEVER RECYCLED.** Stacks are VARIABLE-SIZED
 // (a seed, doubled on demand, halved at a park), so a stack free list would hand `__gt_spawn` a stack of some
@@ -1595,15 +1593,14 @@ let GtTimerSeqLabel = b"__gt_timer_seq"
 // run 1, 2, 3 in SPAWN order and the very first spawned thread is `#1`. Slab-zeroed, so nothing seeds it.
 let GtTraceCounterLabel = b"__gt_trace_counter"
 
-// ⭐⭐ **THE THREE OUT-PARAM SCRATCH REGIONS ARE FRAME SLOTS AS OF G2 — THEY WERE `.data` WORDS, AND A
-// `.data` WORD IS SHARED BY EVERY M BY CONSTRUCTION.** The trace's digit buffer and the two
-// QueryPerformanceCounter/Frequency out-params were each one global that the function wrote and read straight
-// back, and each was safe by an argument about RE-ENTRY: *"straight-line with no yield point inside it, so it
-// cannot be re-entered mid-read"*. **That argument is about ONE thread of control, and two Ms do not need a
-// yield point to be inside the same function at once.** With `MAXON_MAX_PROCS>1` two green threads reading
-// `__gt_now_ns` on two Ms would hand each other's QPC samples back — a monotonic clock stepping BACKWARDS,
-// which is what the timer store's deadlines are compared against — and two tracing Ms would interleave digits
-// inside one line.
+// ⭐⭐ **THE THREE OUT-PARAM SCRATCH REGIONS ARE FRAME SLOTS, BECAUSE A `.data` WORD IS SHARED BY EVERY M
+// BY CONSTRUCTION.** The trace's digit buffer and the two QueryPerformanceCounter/Frequency out-params are
+// each written and read straight back by one function, which looks safe by an argument about RE-ENTRY:
+// *"straight-line with no yield point inside it, so it cannot be re-entered mid-read"*. **That argument is
+// about ONE thread of control, and two Ms do not need a yield point to be inside the same function at
+// once.** As globals, two green threads reading `__gt_now_ns` on two Ms would hand each other's QPC samples
+// back — a monotonic clock stepping BACKWARDS, which is what the timer store's deadlines are compared
+// against — and two tracing Ms would interleave digits inside one line.
 //
 // ⭐ **A FRAME SLOT IS THE FIX RATHER THAN AN ATOMIC OR A PER-P WORD, AND IT IS STRICTLY SMALLER THAN BOTH.**
 // The scratch is written and consumed inside ONE CALL, so what it wants is per-CALL storage, and that is what
@@ -1712,27 +1709,18 @@ let TopNibbleShift = 60  // (PipeNameHexDigits - 1) * NibbleBits — the highest
 let NibbleMask = 0xF
 
 // The global pipe-name uniquifier counter's `.data` slot. Stepped through `MmRuntime.emitGlobalAccumulate`,
-// which is an ATOMIC add (G2) — every M can reach a pipe-opening green thread, and a lost update here is not
+// which is an ATOMIC add — every M can reach a pipe-opening green thread, and a lost update here is not
 // a wrong count but a NAME COLLISION, which `FILE_FLAG_FIRST_PIPE_INSTANCE` turns into a failed open.
 let IoPipeSeqLabel = b"__io_pipe_seq"
 
-// ⛔⛔ **THE REUSABLE SUBPROCESS SCRATCH BUFFERS ARE GONE (S3) — `__gt_process_run` ALLOCATES ITS OWN AND
-// FREES THEM, WHICH IS WHAT #92 WANTED AND COULD NOT HAVE.** #92 found four PER-CALL `__slab_alloc`s that
-// reclaimed nothing (~150 B leaked per call) and answered with REUSE, because reuse was the only reclamation
-// a bump cursor could offer: the three fixed-size buffers (STARTUPINFOA 0x68, PROCESS_INFORMATION 0x18,
-// exit-code 8) moved into `__gt_init`, and the variable cmdline copy became a grow-on-demand global that
-// abandoned its predecessor whenever a longer command appeared.
-//
-// ⚠⚠ **AND REUSE BOUGHT AN OBLIGATION THE PROBE NEXT DOOR COULD NOT MEET.** Sharing one buffer across calls
-// is safe only under an argument about the code — that a call writes and consumes its scratch inside a window
-// with no yield in it — which `__gt_io_read` explicitly could NOT make (*"a read YIELDS, so a concurrent read
-// must not share scratch"*), so the two neighbours ended up with two different scratch disciplines for one
-// need. Per-call allocation is the discipline that needs no argument at all, and with a free path it costs
-// four slab requests against a `CreateProcessA`. It also deletes three re-zeroing stores that existed ONLY
-// because a reused buffer arrives dirty: `hProcess` (the spawn-failure sentinel), the exit-code slot's high
-// DWORD and the cmdline's NUL terminator are all supplied again by the allocator's zeroing contract, exactly
-// as they were before #92 — and each of those three was a place a reader could be handed the previous call's
-// answer. Five `.data` slots and ~30 lines of `__gt_init` go with them.
+// ⛔⛔ **`__gt_process_run` ALLOCATES ITS OWN SCRATCH AND FREES IT; NOTHING IS REUSED ACROSS CALLS.** Sharing
+// one buffer across calls is safe only under an argument about the code — that a call writes and consumes its
+// scratch inside a window with no yield in it — which the probe next door cannot make at all (`__gt_io_read`
+// YIELDS, so a concurrent read must not share scratch). Per-call allocation is the discipline that needs no
+// argument, and with a free path it costs four slab requests against a `CreateProcessA`. It also needs no
+// re-zeroing stores: `hProcess` (the spawn-failure sentinel), the exit-code slot's high DWORD and the
+// cmdline's NUL terminator come zeroed by the allocator's contract, where a reused buffer arrives dirty and
+// each is a place a reader could be handed the previous call's answer.
 
 // The prefix every GT runtime entry point shares — the "does this program spawn a green thread?" test.
 let GtRuntimeCallPrefix = b"__gt_"
@@ -1746,7 +1734,7 @@ export function isGtRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: GtRuntimeCallPrefix)
 end 'isGtRuntimeCallee'
 
-// The THROWING GT runtime callees (P1.5 #93). `__gt_process_run` returns via the dual-register `errorReturn` ABI
+// The THROWING GT runtime callees. `__gt_process_run` returns via the dual-register `errorReturn` ABI
 // and can throw `RunProcessError` (`spawnFailed`), so a `runProcess` call MUST become a `tryCall`
 // (under a `try`, which `rewriteLastCallToTryCall` converts). The GT-side twin of
 // `ManagedMemoryRuntime.isThrowingManagedMemoryRuntimeCallee`: the two are composed by `isThrowingRuntimeCallee`, read at the ONE
@@ -1772,18 +1760,14 @@ end 'isThrowingGtRuntimeCallee'
 // are expanded in place at the Std tier rather than called (`CheckedDivisionRuntime`'s header says why). That
 // changes nothing here: this predicate answers "must a `try` wrap it", which is a property of the OPERATION, and
 // both gates that read it run on the MAXON tier where the callee is still a call.
-// ⚠ **THE `Map` FAMILY WAS A DISJUNCT AND WENT WITH THE WHOLE SYNTHESIZED HASH TABLE (W105).**
-// `isThrowingMapRuntimeCallee` named `__map_get` (a miss) and `__map_insert` (a duplicate); both bodies are
-// deleted with `MapRuntime`, so no lowering path can mint either callee. The corpus `Map.get`/`Map.insert`
-// are DECLARED throwing functions — the user-signature registry answers for them, which is the route this
-// predicate exists to stand in for.
-// ⚠ **THE `String` FAMILY WAS A NINTH DISJUNCT AND WENT WITH ITS ONE CALLEE (W49 wave 7).**
-// `isThrowingStringRuntimeCallee`'s only term was `__str_byte_at`, minted only by `dispatchStringMethod`'s
-// `byteAt` arm; that member retired onto `stdlib/String.maxon:282`, so nothing can emit the callee and the
-// predicate could only ever answer `false`. The corpus body's `try managed.byteAt(index)` reaches
-// `isThrowingManagedMemoryRuntimeCallee` — the FIRST disjunct here — which is where a buffer byte read always
-// belonged: `managedMemorySourceMethodName` names `__ManagedMemory.byteAt`, and after the retirement that
-// IS the construct the author wrote.
+// ⚠ **THERE IS NO `Map` DISJUNCT AND THERE MUST NOT BE ONE.** No lowering path can mint a `__map_get` or
+// `__map_insert` callee, and the corpus `Map.get`/`Map.insert` are DECLARED throwing functions — the
+// user-signature registry answers for them, which is the route this predicate exists to stand in for.
+// ⚠ **THERE IS NO `String` DISJUNCT.** `String.byteAt` lives in `stdlib/String.maxon`, so nothing mints a
+// `__str_byte_at` callee and a disjunct for it could only answer `false`. The corpus body's
+// `try managed.byteAt(index)` reaches `isThrowingManagedMemoryRuntimeCallee` — the FIRST disjunct here —
+// which is where a buffer byte read belongs: `managedMemorySourceMethodName` names
+// `__ManagedMemory.byteAt`, which IS the construct the author wrote.
 export function isThrowingRuntimeCallee(callee ByteArray) returns bool
 	return isThrowingManagedMemoryRuntimeCallee(callee) or isThrowingGtRuntimeCallee(callee) or isThrowingManagedFileRuntimeCallee(callee) or isThrowingManagedDirectoryRuntimeCallee(callee) or isThrowingManagedSocketRuntimeCallee(callee) or isManagedListenerRuntimeCallee(callee) or isThrowingCharacterRuntimeCallee(callee) or isThrowingListRuntimeCallee(callee) or isThrowingDivisionRuntimeCallee(callee) or isEnumLookupRuntimeCallee(callee)
 end 'isThrowingRuntimeCallee'
@@ -1796,17 +1780,13 @@ end 'isThrowingRuntimeCallee'
 // ⚠ **A FAMILY THAT ANSWERS `none` IS A SCOPED STATEMENT, NOT AN OVERSIGHT**, and the reason is `throwsOf`'s
 // own: the GT and plain-`ArrayError` families throw too, but no committed case BINDS and discriminates their
 // error, so a clause for them would be an untested claim about their ordinals. Add the arm with the case that
-// needs it — which is what R4.1 did for the file family and what review did for the memory one.
+// needs it, as the file and memory families each did.
 //
-// ⚠⚠ **IT PAIRS EACH FAMILY'S PREDICATE WITH ITS CLAUSE SPELLER AND RETURNS A `ThrowsClause`, AND THAT SHAPE
-// IS A MEASUREMENT rather than a preference.** The first cut composed two per-family
-// `…RuntimeThrowsClause(callee) returns ThrowsClauseOption` functions — an optional over a type that ALREADY
-// has a `none` arm — and the ladder read **+20 allocations at rung 0 DOUBLING to +640 at rung 5**, one extra
-// 16-byte union box per `try` in the program, because two families meant two optionals built per ask.
-// `ThrowsClauseOption` is gone with it: `ThrowsClause.none` already says "this callee throws nothing", so the
-// wrapper said one thing twice and charged for the second. ⭐ **A DEDUP THAT IS CORRECT CAN STILL BE
-// UNSCALABLE** — `docs/optimization-log.md` records the same +20-doubling-to-+640 signature once already,
-// from `joinCommaSeparated` on `checkEnumExhaustive`'s success path.
+// ⚠⚠ **IT PAIRS EACH FAMILY'S PREDICATE WITH ITS CLAUSE SPELLER AND RETURNS A `ThrowsClause` RATHER THAN AN
+// OPTIONAL OVER ONE.** `ThrowsClause.none` already says *"this callee throws nothing"*, so an optional
+// wrapper says one thing twice and charges for the second: one extra 16-byte union box per `try` in the
+// program, per family asked. ⭐ **A DEDUP THAT IS CORRECT CAN STILL BE UNSCALABLE** —
+// `docs/optimization-log.md` carries that signature.
 export function runtimeThrowsClause(callee ByteArray) returns ThrowsClause
 	if isThrowingManagedFileRuntimeCallee(callee) 'fileFamily'
 		return managedFileThrows()
@@ -1883,7 +1863,7 @@ export function runtimeThrowsClause(callee ByteArray) returns ThrowsClause
 		return arrayErrorThrows()
 	end 'arrayFamily'
 
-	// ⭐ **THE DIVISION FAMILY (A1), ADDED WITH THE CASES THAT NEED IT** — exactly as the note above prescribes.
+	// ⭐ **THE DIVISION FAMILY, CARRIED BY THE CASES THAT NEED IT** — exactly as the note above prescribes.
 	// `specs/safety.md`'s `divide-by-zero-expression-form` and `float-divide-by-zero-expression-form` BIND
 	// the error and discriminate `divisionByZero` in a `match`, so this family's one ordinal is a checked claim
 	// rather than an untested one. Without this arm `throwsOf` answers `none`, `tryErrorEnumType` types the `(e)`
@@ -1896,9 +1876,8 @@ export function runtimeThrowsClause(callee ByteArray) returns ThrowsClause
 		return divisionByZeroThrows()
 	end 'divisionFamily'
 
-	// ⚠ **A MAP ARM STOOD HERE (`__map_get`/`__map_insert` → `MapError`) AND WENT WITH THE RUNTIME (W105).**
-	// The corpus `Map.get`/`Map.insert` declare `throws MapError` in `stdlib/Map.maxon` themselves, so their
-	// clause is read off the signature registry and never composed here.
+	// ⚠ **THERE IS NO MAP ARM.** The corpus `Map.get`/`Map.insert` declare `throws MapError` in
+	// `stdlib/Map.maxon` themselves, so their clause is read off the signature registry and never composed here.
 	// ⭐ **THE LIST FAMILY THROWS `ArrayError`, NOT AN ERROR OF ITS OWN — and that is `stdlib/List.maxon`'s
 	// OWN declaration rather than a shortcut.** `first`/`get`/`removeFirst` are each written
 	// `throws ArrayError` there (`:44`, `:73`, `:112`), and the case they raise is `indexOutOfBounds`. Minting
@@ -2067,9 +2046,8 @@ export function runtimeCalleeSourceMethod(callee ByteArray) returns RuntimeCalle
 	// an E3057 against it is raised on an ordinary DECLARED function whose name the diagnostic already has.
 	// What the corpus body calls IS `__ManagedMemory.byteAt`, which the `memoryFamily` arm above already
 	// names correctly — so this was the one family whose removal needed no replacement noun at all.
-	// ⚠ **A `Map` ARM STOOD HERE AND WENT THE SAME WAY AT W105.** It mapped `__map_get`/`__map_insert` onto
-	// the `get`/`insert` an author typed; both callees are deleted with `MapRuntime`, and the corpus
-	// `Map.get`/`Map.insert` are declared functions whose own name a diagnostic already has.
+	// ⚠ **THERE IS NO `Map` ARM EITHER.** No lowering mints a `__map_get`/`__map_insert` callee, and the
+	// corpus `Map.get`/`Map.insert` are declared functions whose own name a diagnostic already has.
 	// The `List` family answers through a map: three callees, three distinct spellings the author writes
 	// (`first`, `get`, `removeFirst`), so this is the several-names shape the five maps above have and not the
 	// `Character` family's one-name identity.
@@ -2125,7 +2103,7 @@ export function gtRuntimeGlobals(target Target) returns DataSectionEntryArray
 	pushRuntimeGlobal(out, label: GtRunQueueHeadLabel, sharing: MultiMSharing.underSchedLock)
 	pushRuntimeGlobal(out, label: GtRunQueueTailLabel, sharing: MultiMSharing.underSchedLock)
 
-	// P1.5 mid-body-yield: the timer store's count + heap base, and the clock out-param scratch words.
+	// The timer store's count + heap base, and the clock out-param scratch words.
 	pushRuntimeGlobal(out, label: GtTimerCountLabel, sharing: MultiMSharing.underSchedLock)
 	pushRuntimeGlobal(out, label: GtTimerHeapBaseLabel, sharing: MultiMSharing.underSchedLock)
 	pushRuntimeGlobal(out, label: GtTimerCapacityLabel, sharing: MultiMSharing.underSchedLock)
@@ -2257,7 +2235,7 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	// why it is unconditional where `__proc_pid` is bit-gated.
 	buildGtIsComplete(module)
 
-	// The reply cell's two doors (SV2), beside the rendezvous they step and the drop that renounces them.
+	// The reply cell's two doors, beside the rendezvous they step and the drop that renounces them.
 	buildGtCellAlloc(module)
 	buildGtCellComplete(module)
 	buildGtSleep(module, asyncTrace: asyncTrace, tags: tags)
@@ -3259,7 +3237,7 @@ function buildGtTimerAdd(module StdModule, rawFree ByteArray)
 	let deadline = 1 as ValueId
 	let tag = 2 as ValueId
 
-	// ⛔⛔ **THE WHOLE INSERT RUNS UNDER THE RUN-QUEUE LOCK (G2), AND THE GROW IS WHY IT MUST BE THE WHOLE OF
+	// ⛔⛔ **THE WHOLE INSERT RUNS UNDER THE RUN-QUEUE LOCK, AND THE GROW IS WHY IT MUST BE THE WHOLE OF
 	// IT RATHER THAN THE COUNT ALONE.** The store is five `.data` words plus a heap region, and a full store
 	// REPUBLISHES the base and `rawFree`s the old region — so a second M scanning it (`__gt_timer_check`,
 	// `__gt_promise_drop`'s unlink) would be walking freed memory, and two Ms inserting
@@ -3926,14 +3904,14 @@ end 'awaitExitTerminator'
 // composes with cancel — cancel reaches `__gt_promise_drop` by a road the parser's move analysis does not
 // walk. Both sites clear it, because the invariant is about the GT and not about which door released it.
 //
-// ⛔⛔ **THE CLAIM IS A CAS AS OF G2, AND THAT IS THE ONE ITEM ON THE MULTI-M AUDIT WHOSE FAILURE IS A DOUBLE
-// FREE RATHER THAN A LOST COUNT.** The load / call / clear this used to emit is a read-modify-write with the
-// entire release sitting inside it: two Ms can both observe the same non-null releaser, both call it, and
-// both drop every managed argument the spawn owned — one free too many per slot, on memory the other M may
-// already have handed back to the slab. The compile-time argument above does NOT close it, because it is an
-// argument about which SITES the parser emits and not about how many Ms reach one of them (`cancel`
-// specifically arrives by a road that analysis does not walk). Swapping the load-then-clear for
-// `CAS(releaser, observed -> 0)` makes the caller that WINS the swap the only one that calls, which is
+// ⛔⛔ **THE CLAIM IS A CAS, AND IT IS THE ONE ITEM ON THE MULTI-M AUDIT WHOSE FAILURE IS A DOUBLE FREE
+// RATHER THAN A LOST COUNT.** A load / call / clear is a read-modify-write with the entire release sitting
+// inside it: two Ms can both observe the same non-null releaser, both call it, and both drop every managed
+// argument the spawn owned — one free too many per slot, on memory the other M may already have handed back
+// to the slab. The compile-time argument above does NOT close it, because it is an argument about which
+// SITES the parser emits and not about how many Ms reach one of them (`cancel` specifically arrives by a road
+// that analysis does not walk). `CAS(releaser, observed -> 0)` makes the caller that WINS the swap the only
+// one that calls, which is
 // `SchedRuntime.POffStatus`'s shape one struct over and for the identical reason — that note carries the
 // heap corruption a read/test/store produced there, and names the emitter it cost.
 //
@@ -4134,7 +4112,7 @@ function emitGtIsDropped(module StdModule, block IrBlock, gt ValueId, ids ValueM
 end 'emitGtIsDropped'
 
 // ⭐⭐⭐ **IS THIS GT A GREEN THREAD, OR A COROUTINE? — `owner == gt`, and it is a PREDICATE rather than a
-// KIND WORD ON PURPOSE (SV1).** A green thread owns itself and a coroutine is owned by the green thread that
+// KIND WORD ON PURPOSE.** A green thread owns itself and a coroutine is owned by the green thread that
 // created it, so the relation `GtOffOwner` already carries answers the question exactly — where a second
 // field saying *"I am a green thread"* would be the same fact written twice, free to disagree with the owner
 // chain the whole invariant rests on, and wrong in exactly the program where it mattered.
@@ -4154,9 +4132,9 @@ end 'emitGtIsGreenThread'
 // ⚠ **IT TAKES THE LOADED WORD RATHER THAN THE GT**, so a caller asking two questions of one status loads it
 // once, and it pairs with `emitLoadField(record: gt, offset: GtOffStatus)`, which is the load.
 //
-// ⚠ **THE CONSTANT AND THE OFFSET WERE ALREADY SINGLE-HOMED (`GtStatusCompleted`, `GtOffStatus`); what was
-// not is the SHAPE.** Emitting `const` then `cmp` in that order, minting in that order, is what makes this
-// substitution byte-identical at both existing sites — which is the property that let it be made at all.
+// ⚠ **THE SHAPE IS THE SINGLE-HOMED FACT HERE, beside the constant and the offset (`GtStatusCompleted`,
+// `GtOffStatus`).** Emitting `const` then `cmp` in that order, minting in that order, is what keeps every
+// call site byte-identical to the sequence it stands for.
 // ⚠ NOT exported, and its three callers are all in this file. The scheduler's dropped-thread askers do NOT
 // come through here: `emitGtIsDropped` reads the TEARDOWN word, which is a different question about a
 // different field, and folding the two would put a status offset behind a name that no longer names one.
@@ -4221,8 +4199,7 @@ end 'emitGtLoadPublishedStatus'
 
 // ⭐⭐⭐ **THE CHECK — because "publish `completed` with a release" must not be a CONVENTION FOUR CALL SITES
 // ARE TRUSTED TO HONOUR.** That is this project's signature failure written at the scheduler's most
-// dangerous word: the shape that produced the bug this pass fixes was a fact stated in a comment, honoured
-// at three sites, and checked at none.
+// dangerous word — a fact stated in a comment, honoured at three sites and checked at none.
 //
 // It walks the functions `installGtRuntime` just built and REFUSES two spellings:
 //
@@ -4596,9 +4573,8 @@ end 'requireOrderedObservation'
 // floor of `__Builtins.gtIsComplete(promise.inner)`. See `GtIsCompleteName` for what it is for, why it must
 // have no side effect, and why it is target-neutral.
 //
-// **THE WHOLE BODY IS THE PREDICATE `emitGtStatusEquals` NAMES**, which is the point: the comparison already
-// existed inside the await and drop paths, and what was missing was a way to REACH it from a program. It
-// dereferences the handle and nothing else — no drive, no queue walk, no status write — so it composes with
+// **THE WHOLE BODY IS THE PREDICATE `emitGtStatusEquals` NAMES**, which is the point: the same comparison
+// the await and drop paths make, reachable from a program. It dereferences the handle and nothing else — no drive, no queue walk, no status write — so it composes with
 // `await`'s linearity for free (a peek is not an await, so E3100 counts none of them) and a caller may ask
 // it in a scan loop as often as it likes.
 //
@@ -4623,7 +4599,7 @@ function buildGtIsComplete(module StdModule)
 	module.functions.push(func)
 end 'buildGtIsComplete'
 
-// ⭐⭐⭐ **IS THIS PROMISE A REPLY CELL RATHER THAN A THREAD ANYTHING WILL RUN? — `funcPtr == 0` (SV2).** See
+// ⭐⭐⭐ **IS THIS PROMISE A REPLY CELL RATHER THAN A THREAD ANYTHING WILL RUN? — `funcPtr == 0`.** See
 // `GtCellAllocName` for why the discriminator is this word and not a kind field, and for the one population
 // that shares the zero and cannot reach this predicate.
 //
@@ -4636,11 +4612,11 @@ function emitGtIsReplyCell(module StdModule, block IrBlock, gt ValueId, ids Valu
 	return emitCmp(module, block: block, a: funcPtr, b: nothingToRun, pred: StdCmpPred.eq, ids: ids)
 end 'emitGtIsReplyCell'
 
-// ⭐⭐ **`__gt_cell_alloc(releaser) -> cell` — MINT A REPLY CELL (SV2).** See `GtCellAllocName` for what a
+// ⭐⭐ **`__gt_cell_alloc(releaser) -> cell` — MINT A REPLY CELL.** See `GtCellAllocName` for what a
 // cell is and why it is a `Promise`.
 //
-// ⚠ **IT IS NOT `__gt_spawn`, AND THE THREE DIFFERENCES ARE EACH LOAD-BEARING** (`SERVICES_DESIGN.md`
-// §"Reply channel" states all three): no STACK is committed (nothing runs on it), no `funcPtr` is stored
+// ⚠ **IT IS NOT `__gt_spawn`, AND THE THREE DIFFERENCES ARE EACH LOAD-BEARING**: no STACK is committed
+// (nothing runs on it), no `funcPtr` is stored
 // (that zero IS the discriminator), and it is never PUBLISHED to a queue — `__gt_spawn` takes `__sched_lock`
 // to publish, and a cell nobody schedules must not be discoverable by a scheduler at all.
 //
@@ -4678,7 +4654,7 @@ function buildGtCellAlloc(module StdModule)
 	module.functions.push(func)
 end 'buildGtCellAlloc'
 
-// ⭐⭐ **`__gt_cell_complete(cell, result, threw)` — ANSWER A REPLY (SV2).** See `GtCellCompleteName` for the
+// ⭐⭐ **`__gt_cell_complete(cell, result, threw)` — ANSWER A REPLY.** See `GtCellCompleteName` for the
 // store order and for why nothing may read the cell after the arrival below.
 function buildGtCellComplete(module StdModule)
 	var func = IrFunction.createFromStd(GtCellCompleteName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
@@ -4703,12 +4679,12 @@ function buildGtCellComplete(module StdModule)
 	module.functions.push(func)
 end 'buildGtCellComplete'
 
-// ⭐ **`__gt_promise_drop(gt)` — RENOUNCE AN UN-AWAITED GREEN THREAD (P1.5-B2 #88).** The ownership DUAL of
+// ⭐ **`__gt_promise_drop(gt)` — RENOUNCE AN UN-AWAITED GREEN THREAD.** The ownership DUAL of
 // the `__gt_await` reclaim: the front-end enrols an `async` spawn's Promise as an owned value and emits this
 // call on every path to scope exit / a re-arm that neither `await`s nor re-arms it, and `p.cancel()` arrives
 // by the same road.
 //
-// ⭐⭐⭐ **A REPLY CELL TAKES THE FIRST ARM, AND IT IS THE ONE POPULATION THIS FUNCTION MAY NEVER FREE (SV2).**
+// ⭐⭐⭐ **A REPLY CELL TAKES THE FIRST ARM, AND IT IS THE ONE POPULATION THIS FUNCTION MAY NEVER FREE.**
 // A cell is a `Promise` whose status is `waiting` for its whole life, so without this arm it would fall into
 // the `waiting` road below, miss both store scans, re-read `waiting` and take `soleOwner` — freeing a struct
 // the REPLIER is about to write three words into. ⇒ a cell adds **the consumer's ticket only, never a free**,
@@ -4919,7 +4895,7 @@ function buildGtPromiseDrop(module StdModule)
 	emitSchedLockEnter(module, block: waitingStores, ids: ids)
 	emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: waitingStores, gt: gt, tag: emitConst(module, block: waitingStores, value: TimerTagSleep, ids: ids), cont: waitingUnlock)
 
-	// ⭐⭐ **EVERY ARM ABOVE RUNS UNDER THE RUN-QUEUE LOCK (G2), AND THE VERDICT IS A RE-READ OF THE
+	// ⭐⭐ **EVERY ARM ABOVE RUNS UNDER THE RUN-QUEUE LOCK, AND THE VERDICT IS A RE-READ OF THE
 	// STATUS UNDER THAT SAME LOCK.** The timer removal is a scan-then-swap-remove over the `.data` store that
 	// `__gt_timer_add` appends to and `__gt_timer_check` compacts; the poller's drop rewrites a direction word
 	// any M can reach. The lock is what makes either one act.
@@ -5880,8 +5856,8 @@ end 'buildGtSeedAdapt'
 // ⭐ **IT ALLOCATES NOTHING AND RELEASES NOTHING, AND THAT IS WHY IT MAY SIT INSIDE THE SCHEDULER.** Turning
 // the id into digits reuses `__int_to_string`, which is correct for every i64 including `i64.min` and fills a
 // CALLER-OWNED buffer, returning the length it wrote — so this writes into 24 bytes of its OWN FRAME
-// (`GtTraceDigitsSlot`, which replaced a shared `.data` scratch and the `__gt_init` allocation behind it at
-// G2) and hands back no String for anybody to release. Writing a second digit loop here would be a second
+// (`GtTraceDigitsSlot`, which is per-call storage rather than shared `.data`) and hands back no String for
+// anybody to release. Writing a second digit loop here would be a second
 // implementation of a solved problem, in the runtime, where a wrong answer is hardest to see. An untraced
 // build never reaches this function at all.
 function buildGtTraceEmit(module StdModule, tags GtTraceTags)
@@ -6146,12 +6122,11 @@ export function emitIoPark(module StdModule, block IrBlock, operation GtIoOperat
 	// parameters to fill, so the call carries no arguments at all.
 	//
 	// ⛔ **THE ARITY IS DECIDED BY `tracesIoOperations()` AT BOTH ENDS — THE SAME QUESTION, NOT MERELY THE
-	// SAME FIELD.** This site used to branch on `tag.length != 0` while `buildGtIoPark` branched on
-	// `tracesIoOperations()`; reading one field is not asking one question, and those two agreed only for as
-	// long as every registered suffix text happened to be non-empty. A zero-length suffix would have put an
-	// argument-less call into a two-parameter park — a wrong FRAME, not a wrong trace. The coincidence is now
-	// an enforced precondition (`registerIoOperationTags` panics on an empty suffix) AND no longer relied on
-	// here.
+	// SAME FIELD.** Branching on `tag.length != 0` here while `buildGtIoPark` branches on
+	// `tracesIoOperations()` is not asking one question, and the two agree only for as long as every registered
+	// suffix text happens to be non-empty. A zero-length suffix would put an argument-less call into a
+	// two-parameter park — a wrong FRAME, not a wrong trace. `registerIoOperationTags` panics on an empty
+	// suffix, and this site asks the same question the park does rather than relying on that.
 	let tags = module.asyncTraceTags
 	var args = ValueIdArray.create()
 
@@ -6221,7 +6196,7 @@ end 'buildGtPreempt'
 // The command line is BORROWED: `strPtr` is the 56-byte String record, whose `buffer`/`length` this reads exactly
 // as `__print_string` does; ownership stays with the caller.
 //
-// ⭐ **A THROWING FUNCTION (P1.5 #93)** — its `throws RunProcessError` clause makes the x64/wasm backends give it
+// ⭐ **A THROWING FUNCTION** — its `throws RunProcessError` clause makes the x64/wasm backends give it
 // the dual-register `errorReturn` ABI (exit code in R8, error flag in R10), the same shape a throwing array
 // accessor uses. Every exit is an `errorReturn`: the reap path returns `(code, NoErrorFlag)`, a
 // `CreateProcessA` failure returns `(0, RunProcessSpawnFailedFlag)`. The front end recognizes `__gt_process_run` as a
@@ -6241,15 +6216,15 @@ function buildGtProcessRun(module StdModule, rawFree ByteArray, commandShape Sub
 	let cmdlineLen = ids.mint()
 	module.appendOp(entry, op: StdOp.loadIndirect(cmdlineLen, addrId: strPtr, offset: StringLengthOffset, valueType: StdType.i64))
 
-	// ⭐ **THE THREE PRE-SPAWN SCRATCH REGIONS, PER CALL (S3).** STARTUPINFOA, PROCESS_INFORMATION and the
+	// ⭐ **THE THREE PRE-SPAWN SCRATCH REGIONS, PER CALL.** STARTUPINFOA, PROCESS_INFORMATION and the
 	// MUTABLE NUL-terminated command line (CreateProcessA may write to `lpCommandLine`, and the `.rdata` String
 	// blob is neither writable nor NUL-terminated). All three are dead by `afterCopy`, which is where they are
 	// released — so nothing here survives the park, and two concurrent `__gt_process_run` calls share nothing.
 	//
-	// ⭐ **AND THREE RE-ZEROING STORES ARE GONE WITH THE REUSE THAT NEEDED THEM.** `startup.cb` is the only
+	// ⭐ **AND NO RE-ZEROING STORES, BECAUSE A FRESH SLOT ARRIVES ZEROED.** `startup.cb` is the only
 	// field CreateProcessA reads that is not zero; `procInfo.hProcess` is the spawn-failure sentinel and must be
-	// 0 going in; `cmBuf[cmdlineLen]` is the command line's terminator. A reused buffer arrives holding the
-	// previous call's bytes and had to have each of those written again — a fresh slot arrives zeroed and does
+	// 0 going in; `cmBuf[cmdlineLen]` is the command line's terminator. A REUSED buffer arrives holding the
+	// previous call's bytes and would need each of those written again — a fresh slot does
 	// not.
 	let startupSizeConst = ids.mint()
 	module.appendOp(entry, op: StdOp.const(startupSizeConst, value: StartupInfoSize, valueType: StdType.i64))
@@ -6283,11 +6258,11 @@ function buildGtProcessRun(module StdModule, rawFree ByteArray, commandShape Sub
 	// untouched, and this call's is a fresh, zeroed slot) → `spawnFailed` (throw, never park on a null handle).
 	// On success → `spawnOk`.
 	// `runProcess(cmd)` configures nothing: NULL `lpCurrentDirectory` inherits the parent's working directory
-	// and 0 `dwCreationFlags` asks for no special creation — the exact two values this op's isel used to hard-zero
-	// before `stdlib/Subprocess.maxon`'s `Configuration` gave a caller something to say there.
+	// and 0 `dwCreationFlags` asks for no special creation. `stdlib/Subprocess.maxon`'s `Configuration` is where
+	// a caller says anything else.
 	let spawnDefaultsConst = emitConst(module, block: afterCopy, value: 0, ids: ids)
 
-	// MAC8: `cmBuf` is a whole COMMAND LINE the caller wrote, so on a lane whose primitive takes a vector it
+	// `cmBuf` is a whole COMMAND LINE the caller wrote, so on a lane whose primitive takes a vector it
 	// becomes `/bin/sh -c <line>` — see `SubprocessRuntime.emitSubpCommandFromLine`, which emits nothing at
 	// all under the command-line shape.
 	let command = emitSubpCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, linePtr: cmBuf)
@@ -6312,7 +6287,7 @@ function buildGtProcessRun(module StdModule, rawFree ByteArray, commandShape Sub
 	module.appendOp(afterCopy, op: StdOp.cmp(spawnFailedCmp, lhs: hProcess, rhs: spawnZeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
 	module.setTerminator(afterCopy, op: StdOp.condBranch(spawnFailedCmp, thenBlockId: spawnFailed.id, elseBlockId: spawnOk.id))
 
-	// spawnFailed: the command names no runnable executable — THROW `RunProcessError.spawnFailed` (P1.5 #93) rather
+	// spawnFailed: the command names no runnable executable — THROW `RunProcessError.spawnFailed` rather
 	// than park on a null handle. The primary register carries a `0` sentinel the catcher ignores (the flag is
 	// non-zero), and the flag is `RunProcessSpawnFailedFlag`.
 	let spawnFailSentinel = ids.mint()
@@ -6346,7 +6321,7 @@ function buildGtProcessRun(module StdModule, rawFree ByteArray, commandShape Sub
 	module.setTerminator(renounced, op: StdOp.errorReturn(renouncedCode, errorFlagId: renouncedNoError))
 
 	// reapExit: the child has exited. Read its code and close the handle.
-	// ⭐ **THE EXIT-CODE SLOT IS TAKEN HERE, AFTER THE PARK, AND GIVEN BACK BEFORE THE RETURN (S3)** — so no
+	// ⭐ **THE EXIT-CODE SLOT IS TAKEN HERE, AFTER THE PARK, AND GIVEN BACK BEFORE THE RETURN** — so no
 	// scratch of this call's is alive while the green thread is suspended, and the slot cannot be shared with
 	// another call's reap. THE ZEROING IS WHY THE i64 READ IS CLEAN: GetExitCodeProcess writes only the low
 	// DWORD (4 bytes) of the 8-byte slot, so the high DWORD must already be zero for a full-word load to yield
@@ -6362,7 +6337,7 @@ function buildGtProcessRun(module StdModule, rawFree ByteArray, commandShape Sub
 	module.appendOp(reapExit, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(codePtr)))
 	module.appendOp(reapExit, op: StdOp.osCloseHandle(hProcess))
 
-	// A THROWING function's successful exit still writes BOTH registers (P1.5 #93) — the child's exit code in the
+	// A THROWING function's successful exit still writes BOTH registers — the child's exit code in the
 	// primary, `NoErrorFlag` in the flag — so the `try` caller reads flag 0 and takes the success path.
 	let reapNoError = ids.mint()
 	module.appendOp(reapExit, op: StdOp.const(reapNoError, value: NoErrorFlag, valueType: StdType.i64))
@@ -6508,17 +6483,16 @@ function buildPipeName(module StdModule, func IrFunction, ids ValueMinter, start
 	storeArm.branchEdges.push(BranchEdge.create(hexHdr.id, argIds: argsOf(iNext)))
 end 'buildPipeName'
 
-// ⭐ `__gt_io_read(strPtr) -> bytesRead` — THE YIELDING OVERLAPPED PIPE READ (P1.5 slice 1a-ii, the `spawnReadLine`
+// ⭐ `__gt_io_read(strPtr) -> bytesRead` — THE YIELDING OVERLAPPED PIPE READ (the `spawnReadLine`
 // probe). Spawns the Windows child named by the command String with its stdout redirected to a fresh overlapped pipe,
 // issues an overlapped ReadFile that YIELDS the green thread onto the poller when the read is pending,
 // and returns the byte count. The command String is BORROWED (buffer/length read like `__print_string`); ownership
 // stays with the caller. On any spawn/pipe failure the read returns 0 (an environment error the slice-1a probe treats
 // as EOF).
 //
-// ⭐⭐ **EVERY REGION IT TAKES, IT GIVES BACK (S3) — THE ~4.2 KB-PER-CALL DEBT.** Per-call allocation was
-// always the right shape here (a read YIELDS, so two concurrent reads must not share scratch, which is exactly
-// what `__gt_process_run`'s #92 reuse could not offer), and what was missing was the other half: nothing was
-// released, so N reads held N × ~4.2 KB for the process lifetime. The regions now split cleanly in two:
+// ⭐⭐ **EVERY REGION IT TAKES, IT GIVES BACK — ~4.2 KB PER CALL.** Per-call allocation is the only shape
+// that works here, because a read YIELDS and two concurrent reads must not share scratch; without the
+// release, N reads would hold N × ~4.2 KB for the process lifetime. The regions split cleanly in two:
 //
 //   • SIX are dead inside straight-line code — the pipe name, the SECURITY_ATTRIBUTES, the two-handle
 //     out-param block, the command line, the STARTUPINFOA and the PROCESS_INFORMATION. Each is freed at the
@@ -6613,7 +6587,7 @@ function buildGtIoRead(module StdModule, rawFree ByteArray, commandShape Subproc
 	// The one-shot read probe configures neither cwd nor creation flags — see `__gt_process_run`'s twin note.
 	let probeSpawnDefaults = emitConst(module, block: afterCopy, value: 0, ids: ids)
 
-	// MAC8: the probe's input is a command LINE too — `__gt_process_run`'s twin note carries the reason.
+	// The probe's input is a command LINE too — `__gt_process_run`'s twin note carries the reason.
 	let probeCommand = emitSubpCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, linePtr: cmBuf)
 	module.appendOp(afterCopy, op: StdOp.osProcessSpawnInherit(probeCommand, cwdPtrId: probeSpawnDefaults, creationFlagsId: probeSpawnDefaults, startupPtrId: startupPtr, procInfoPtrId: procInfoPtr, envPtrId: probeSpawnDefaults))
 	let hProcess = ids.mint()
@@ -6693,7 +6667,7 @@ function buildGtIoRead(module StdModule, rawFree ByteArray, commandShape Subproc
 end 'buildGtIoRead'
 
 // ============================================================================================
-// ⭐ STREAMING SUBPROCESS runtime (P1.5 dogfood slice 1b) — a long-lived child with caller-driven stdio.
+// ⭐ STREAMING SUBPROCESS runtime — a long-lived child with caller-driven stdio.
 // ============================================================================================
 //
 // Generalizes the one-shot `__gt_io_read` probe into a handle-table API. A `__subp_table` (.data) slot points at a
@@ -6703,12 +6677,10 @@ end 'buildGtIoRead'
 // test-then-allocate-then-store that two Ms would both win, losing a whole table and every handle given out of
 // it), and a SLOT is claimed by `CAS(inUse, 0 -> claimed)` at the scan rather than by a test whose write
 // landed after `CreateProcessA`. Everything INSIDE a claimed slot stays lock-free and GT-local, which is 1a's
-// rule and is what the claim makes true. A slot's OS handles are closed at release; its reusable buffers PERSIST across
+// the rule and is what the claim makes true. A slot's OS handles are closed at release; its reusable buffers PERSIST across
 // release+respawn (a spawn reuses a free slot's buffers), so a spawn/read/release loop is memory-bounded.
 //
-// ⚠⚠ **THAT PERSISTENCE IS NOT THE #92-STYLE WORKAROUND IT LOOKS LIKE, AND ITS OWN NOTE USED TO SAY IT WAS.**
-// The note read *"the compiler's slab has no free, so REUSE, not free, is the fix"*, and S3 retired every reuse
-// mechanism that rested on that — but not this one, because it rests on something else that is still true:
+// ⚠⚠ **THAT PERSISTENCE IS NOT A WORKAROUND FOR A MISSING FREE; IT RESTS ON WHAT RELEASE DOES NOT DO.**
 // **`__gt_subp_release` does NOT cancel or drain a parked overlapped read.** It closes the pipe handles and
 // clears `inUse`, and the slot GENERATION is what makes a still-parked reader harmless when the slot is
 // respawned. A reader parked at that moment has handed the KERNEL a pointer INTO `bufPtr`, so freeing the
@@ -6853,8 +6825,8 @@ export let SubpReleaseName = b"__gt_subp_release"
 let SubpStrFromBytesName = b"__gt_subp_str_from_bytes"
 
 // The prefix `scanRuntimeUsage` matches to turn on the whole subprocess runtime for any `__gt_subp_*` call,
-// and the one `SemanticCheck.calleeNeedsWin32Substrate` reads to refuse such a program on a target that
-// cannot lower it (E3104).
+// and the one `TargetFacilities.calleeHostFacility` maps onto `HostFacility.subprocess`, so a target that
+// cannot lower it refuses the call with E3104.
 let SubpCalleePrefix = b"__gt_subp_"
 
 // ⭐ **IS THIS CALLEE A SUBPROCESS RUNTIME ENTRY?** THE one test, read by `scanRuntimeUsage` and by
@@ -6914,14 +6886,13 @@ end 'emitSubpSlotAddr'
 // hand them `-1` directly, and `emitSubpSlotAddr` is bare arithmetic: `table + handle * SubpSlotBytes`. A
 // `-1` therefore names the 184 bytes BEFORE the table — inside the slab — so an unguarded entry reads a
 // garbage `inUse` and, believing the slot live, closes three garbage words as HANDLEs and zeroes memory it
-// does not own. That is corruption, not a wrong answer, and it was reachable in one line.
+// does not own. That is corruption, not a wrong answer, and one line of a program reaches it.
 //
-// ⛔ **IT WAS APPLIED PER SITE AND HALF THE DOORS DID NOT HAVE IT** — `get_pid`, `write_all`, `wait_exit` and
-// `wait_collect` did; `read_line`, `read_err_line`, `write_line`, `close_stdin`, `wait` and `release` did
-// not, and `__Builtins.subprocessReleaseHandle(-1)` was an ACCESS VIOLATION (0xC0000005) in a program that
-// compiled clean. The spec case that existed to prove the guard exercised exactly the four that had it.
+// ⛔ **APPLIED PER SITE, THE GUARD IS ONE A DOOR CAN BE ADDED WITHOUT**, and a door without it turns
+// `__Builtins.subprocessReleaseHandle(-1)` into an ACCESS VIOLATION in a program that compiled clean. A spec
+// case can only ever exercise the doors that have it.
 //
-// ⭐ **SO THE RULE IS NOW STRUCTURAL RATHER THAN REMEMBERED, AND IT IS GREPPABLE:**
+// ⭐ **SO THE RULE IS STRUCTURAL RATHER THAN REMEMBERED, AND IT IS GREPPABLE:**
 //
 //   * `emitSubpSlotAddr` (below) is the RAW arithmetic and is file-private. Its only callers are the spawn
 //     CORE's own slot scan — where the index is a number this compiler just produced, not a caller's — and
@@ -7349,10 +7320,9 @@ export let SubpStdinHold = 4 as ParsedInt
 // `specs/sched-syscall-handoff.md`'s ordering cases into programs with nothing to block on.
 let SubpStdinDelayed = 5 as ParsedInt
 
-// ⭐⭐ **WHICH STDIN KINDS WANT A PARENT↔CHILD PIPE — STATED ONCE, WHICH IS WHAT THE OLD SHAPE COULD NOT DO.**
-// The routing used to be a chain of equality tests, one per kind, ending in *"everything else gets the null
-// device"* — so a kind added to the stdlib and not to the chain SILENTLY got instant EOF, which is exactly how
-// `delayed` came to be broken here. This is that set, stated once.
+// ⭐⭐ **WHICH STDIN KINDS WANT A PARENT↔CHILD PIPE — STATED ONCE.** A chain of equality tests per kind
+// ending in *"everything else gets the null device"* gives a kind added to the stdlib and not to the chain
+// instant EOF, silently. This is the set instead.
 //
 // ⚠ **IT IS AN IR EMITTER AND NOT A COMPILE-TIME PREDICATE, BECAUSE THE KIND IS A RUNTIME VALUE.** It arrives
 // in the request struct from `stdlib/Subprocess.maxon`'s `StdioRuntimeTriple`, so the set is a `bitOr` of
@@ -7383,10 +7353,10 @@ end 'emitSubpKindIs'
 // The NUL device, as the bytes an `A` entry point reads. `none` (stdin) and `discard` (stdout/stderr) both open
 // it — a child whose stream is wired to NUL reads instant EOF and writes into nothing, which is exactly what
 // those two kinds promise, and it costs no pipe and no drain.
-// ⭐⭐ **THE NULL DEVICE IS NAMED DIFFERENTLY ON THE TWO PLATFORMS, AND MAC8 FOUND THAT AS A SPAWN FAILURE.**
+// ⭐⭐ **THE NULL DEVICE IS NAMED DIFFERENTLY ON THE TWO PLATFORMS, AND GETTING IT WRONG IS A SPAWN FAILURE.**
 // `InputSource.none` and `OutputDestination.discard` open this path for the child; `"NUL"` is a Windows
 // device name and `open("NUL")` on POSIX is an ordinary relative path that does not exist — so an
-// `InputSource.none` spawn (which is `Subprocess.run`'s DEFAULT) failed with `ENOENT` before it reached
+// `InputSource.none` spawn (which is `Subprocess.run`'s DEFAULT) fails with `ENOENT` before it reaches
 // `posix_spawnp` at all. It rides `SubprocessCommandShape` because it is the same platform split asked
 // about a different thing, and forking on it twice would be two answers to one question.
 let SubpWindowsNullDeviceName = b"NUL"
@@ -7402,8 +7372,8 @@ let SubpPosixNullDeviceName = b"/dev/null"
 // is stored STRAIGHT TO MEMORY (parent ends into the slot, child ends into a slab scratch) the instant it
 // exists, so the register-hungry pipe-name-formatting loops carry only the pointers to those regions.
 // ⚠ It is also why the command line is a field of the REQUEST rather than a String this function copies: the
-// copy loop used to live here and carried four values across itself; each caller now builds the buffer before
-// any handle exists.
+// copy loop would carry four values across itself here, so each caller builds the buffer before any handle
+// exists.
 function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShape, streamState EnumLayout)
 	var func = IrFunction.createFromStd(SubpSpawnCoreName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -7421,7 +7391,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	let req = 0 as ValueId
 	let negOne = emitConst(module, block: entry, value: -1, ids: ids)
 
-	// ⭐⭐ **THE LAZY CREATION RUNS UNDER THE RUN-QUEUE LOCK (G2), AND ONLY THE CREATION DOES.** Test-then-
+	// ⭐⭐ **THE LAZY CREATION RUNS UNDER THE RUN-QUEUE LOCK, AND ONLY THE CREATION DOES.** Test-then-
 	// allocate-then-store is a read-modify-write: two Ms both observing the null word would both
 	// `__slab_alloc` a 64-slot region and one of the two would be lost, along with every handle a caller had
 	// already been given out of it. The lock is released the moment the pointer is published — the SCAN below
@@ -7459,12 +7429,12 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	let atMax = emitCmp(module, block: slotHdr, a: slotIdx, b: maxConst, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(slotHdr, op: StdOp.condBranch(atMax, thenBlockId: noSlot.id, elseBlockId: slotCheck.id))
 
-	// ⛔⛔ **THE CLAIM IS A CAS, NOT A TEST (G2), AND THE WINDOW IT CLOSES IS THE WHOLE SPAWN.** `inUse` used
-	// to be written at the very END of this function — *"a failed spawn never reaches it and leaves the slot
-	// free"* — so a slot stayed readable as FREE across `CreateProcessA`, and two Ms scanning at once both took
-	// the same index and then wired two different children's pipe ends into one slot. `CAS(inUse, 0 -> claimed)`
-	// makes the SCAN the claim, so a loser simply walks on to the next index (`SchedRuntime.POffStatus`'s
-	// shape, one table over), and the one path out of here that produces no handle gives the claim back.
+	// ⛔⛔ **THE CLAIM IS A CAS, NOT A TEST, AND THE WINDOW IT CLOSES IS THE WHOLE SPAWN.** Writing `inUse` at
+	// the END of this function leaves a slot readable as FREE across `CreateProcessA`, so two Ms scanning at
+	// once take the same index and then wire two different children's pipe ends into one slot.
+	// `CAS(inUse, 0 -> claimed)` makes the SCAN the claim, so a loser simply walks on to the next index
+	// (`SchedRuntime.POffStatus`'s shape, one table over), and the one path out of here that produces no handle
+	// gives the claim back.
 	let probeSlot = emitSubpSlotAddr(module, block: slotCheck, ids: ids, table: table, handle: slotIdx)
 	let inUseAddr = emitFieldAddr(module, block: slotCheck, record: probeSlot, offset: SubpSlotInUse as ByteOffset, ids: ids)
 	let claimedValue = emitConst(module, block: slotCheck, value: SubpSlotClaimed, ids: ids)
@@ -7578,8 +7548,8 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 
 	// ⭐ Bump the generation so any reader still parked on the PREVIOUS occupant of this slot sees a mismatch
 	// on resume and writes nothing back (see `SubpSlotGeneration`). This is the point the slot becomes a live
-	// HANDLE — the SLOT itself was taken at the scan, by the CAS on `inUse`, which is also why nothing stores
-	// `inUse` here any more. A failed spawn releases that claim at `spawnfail`.
+	// HANDLE — the SLOT itself was taken at the scan, by the CAS on `inUse`, which is why nothing stores
+	// `inUse` here. A failed spawn releases that claim at `spawnfail`.
 	let slotC = emitSubpSlotAddr(module, block: afterBytesOut, ids: ids, table: table, handle: slotIdx)
 	let genPrev = emitLoadField(module, block: afterBytesOut, record: slotC, offset: SubpSlotGeneration, ids: ids)
 	let oneGen = emitConst(module, block: afterBytesOut, value: 1, ids: ids)
@@ -7597,10 +7567,9 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 
 	module.setTerminator(attached, op: StdOp.ret(slotIdx))
 
-	// ⚠ **THE PID IS READ BEFORE THE RELEASE, AND THE ORDER IS THE WHOLE POINT.** It used to be read AFTER,
-	// which worked only because `buildSubpRelease` happens not to zero `SubpSlotPid` — a coupling neither end
-	// stated, and one the next field the release path decides to clear would break silently. Reading first
-	// costs nothing and removes it.
+	// ⚠ **THE PID IS READ BEFORE THE RELEASE, AND THE ORDER IS THE WHOLE POINT.** Reading it AFTER would work
+	// only while `buildSubpRelease` happens not to zero `SubpSlotPid` — a coupling neither end states, which
+	// the next field the release path decides to clear breaks silently. Reading first costs nothing.
 	let slotP = emitSubpSlotAddr(module, block: detached, ids: ids, table: table, handle: slotIdx)
 	let detachedPid = emitLoadField(module, block: detached, record: slotP, offset: SubpSlotPid, ids: ids)
 	let releaseResult = ids.mint()
@@ -7667,12 +7636,12 @@ function emitSubpNonPipeChildHandle(module StdModule, func IrFunction, ids Value
 		module.appendOp(openArm, op: StdOp.osFileOpenRead(opened, pathPtrId: path))
 	end 'readEnd'
 
-	// ⚠⚠ **THE OPEN IS CHECKED, AND IT WAS NOT — WHICH MADE A FAILED OPEN A SILENT SUCCESS.** `CreateFileA`
+	// ⚠⚠ **THE OPEN IS CHECKED, BECAUSE AN UNCHECKED FAILED OPEN IS A SILENT SUCCESS.** `CreateFileA`
 	// answers `INVALID_HANDLE_VALUE` (-1), and -1 in a STARTUPINFO under `bInheritHandles=TRUE` does not stop
-	// `CreateProcessA`: MEASURED before this test existed, `InputSource.file("Z:/no/such/dir/nope.txt")`
-	// answered `spawn=0` with an EMPTY `lastErrorMessage()` and launched a child whose stdin was a dead
-	// handle. `InputSource.file` and `OutputDestination.file` are public corpus surface, so this was reachable
-	// from `Configuration` alone. Failing HERE also means the reason a caller reads is `CreateFileA`'s — "the
+	// `CreateProcessA`: `InputSource.file("Z:/no/such/dir/nope.txt")` would answer `spawn=0` with an EMPTY
+	// `lastErrorMessage()` and launch a child whose stdin was a dead handle. `InputSource.file` and
+	// `OutputDestination.file` are public corpus surface, so `Configuration` alone reaches it. Failing HERE
+	// also means the reason a caller reads is `CreateFileA`'s — "the
 	// file is not there" — rather than whatever `CreateProcessA` would have said about it afterwards.
 	let invalidHandle = emitConst(module, block: openArm, value: -1, ids: ids)
 	let openFailed = emitCmp(module, block: openArm, a: opened, b: invalidHandle, pred: StdCmpPred.eq, ids: ids)
@@ -7694,11 +7663,10 @@ end 'emitSubpNonPipeChildHandle'
 // or push a payload a fixed delay after the child's first stdout byte (`delayed`). Everything else is
 // `emitSubpNonPipeChildHandle`'s.
 //
-// ⛔⛔ **THE MEMBERSHIP TEST WAS A CHAIN OF EQUALITIES AND THAT IS WHAT LET `delayed` READ AS THE NULL DEVICE.**
-// Two `==` tests routed `bytes` and `hold` to the pipe and sent **everything else** — including the two kinds
-// the stdlib had since declared — down the non-pipe arm, where `none`'s NUL open gave the child instant EOF.
-// A kind the language can spell and this file cannot see is a WRONG ANSWER with no diagnostic anywhere;
-// `emitSubpStdinKindWantsPipe` is that set stated once.
+// ⛔⛔ **THE MEMBERSHIP TEST IS A SET AND NOT A CHAIN OF EQUALITIES.** Per-kind `==` tests routing to the
+// pipe and sending **everything else** down the non-pipe arm send a newly declared kind to `none`'s NUL open,
+// which gives the child instant EOF. A kind the language can spell and this file cannot see is a WRONG
+// ANSWER with no diagnostic anywhere; `emitSubpStdinKindWantsPipe` is that set stated once.
 function emitSubpStdinSetup(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, req ValueId, table ValueId, slotIdx ValueId, saPtr ValueId, childScratch ValueId, nulName ValueId, whenFailed IrBlock) returns IrBlock
 	var queueTest = module.addBlock(func, label: b"sinqtest", heat: BlockHeat.normal)
 	var queueArm = module.addBlock(func, label: b"sinqueue", heat: BlockHeat.normal)
@@ -7828,21 +7796,18 @@ function emitSubpOutputSetup(module StdModule, func IrFunction, ids ValueMinter,
 	return cont
 end 'emitSubpOutputSetup'
 
-// ⭐ `__gt_subp_spawn(cmdStrPtr) -> handle` — the bare-name `subpSpawn(cmd)` probe's entry (P1.5 slice 1b).
+// ⭐ `__gt_subp_spawn(cmdStrPtr) -> handle` — the bare-name `subpSpawn(cmd)` probe's entry.
 // Copies the BORROWED command String's bytes into a mutable NUL-terminated buffer (CreateProcessA writes to
 // its `lpCommandLine`), fills a spawn request asking for three pipes and nothing else, and hands it to the
-// core. It configures no working directory and no creation flags: NULL and 0 are exactly what the isel used to
-// hard-code for every spawn.
+// core. It configures no working directory and no creation flags: NULL and 0.
 //
-// ⛔ **IT IS THE THIRD DOOR THAT TAKES A COMMAND *LINE*, AND IT WAS THE ONE THAT DID NOT ASK THE SHAPE.**
-// `__gt_process_run` and `__gt_io_read` both route their line through `emitSubpCommandFromLine`; this one
-// stored the raw bytes into `SubpReqCmdline` and handed them to a core that, under
-// `SubprocessCommandShape.argumentVector`, reads that field as a `char *const argv[]`. MEASURED on
-// arm64-macOS before the fix: `subpSpawn("echo hello")` — and every one of the seven bare-name `subp*`
-// builtins above it — died with SIGSEGV (exit 139) at the spawn itself, because the first eight ASCII bytes
-// of the command were dereferenced as `argv[0]`. The facility table already said `subprocess gives true`
-// there, so nothing refused the program either; `streaming-subprocess`'s POSIX cases are what now hold this
-// door shut.
+// ⛔ **IT IS THE THIRD DOOR THAT TAKES A COMMAND *LINE*, AND IT MUST ASK THE SHAPE LIKE THE OTHER TWO.**
+// `__gt_process_run` and `__gt_io_read` both route their line through `emitSubpCommandFromLine`. Storing the
+// raw bytes into `SubpReqCmdline` instead hands them to a core that, under
+// `SubprocessCommandShape.argumentVector`, reads that field as a `char *const argv[]` — a SIGSEGV at the
+// spawn itself on arm64-macOS, because the first eight ASCII bytes of the command are dereferenced as
+// `argv[0]`. The facility table says `subprocess gives true` there, so nothing refuses the program;
+// `streaming-subprocess`'s POSIX cases are what hold this door shut.
 function buildSubpSpawn(module StdModule, commandShape SubprocessCommandShape)
 	var func = IrFunction.createFromStd(SubpSpawnName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -8129,10 +8094,9 @@ function buildSubpReadLine(module StdModule, name ByteArray, streamBase ByteOffs
 
 	// ⭐ **THE PER-LINE CAP IS THE CALLER'S, NOT A CONSTANT.** `__Builtins.subprocessReadStdoutLine(h, maxBytes)`
 	// promises that *"lines longer than maxBytes are truncated and the remainder is delivered on the next
-	// call"*, which is exactly what this reader's own coarse ceiling already did — so the ceiling became the
-	// argument rather than a second, differently-spelled truncation at the boundary. The bare-name
-	// `subpReadLine(h)` builtin passes `SubpMaxLineBytes`, which is the value that used to be baked in here,
-	// so its behaviour is unchanged to the byte.
+	// call"*, and this reader's ceiling IS that promise — one truncation rather than a second,
+	// differently-spelled one at the boundary. The bare-name `subpReadLine(h)` builtin passes
+	// `SubpMaxLineBytes`.
 	emitParams(module, block: entry, count: 2)
 	let handle = 0 as ValueId
 	let maxLineBytes = 1 as ValueId
@@ -8283,7 +8247,7 @@ function buildSubpReadExact(module StdModule, streamState EnumLayout)
 	// VACUOUSLY TRUE for a negative want, so the request would fall straight into the take with a negative
 	// length: a String record claiming a negative length, and — because the take publishes `bufLen - takeLen`
 	// — a stream buffer whose length has been driven UP past what it holds, corrupting the NEXT reader too.
-	// MEASURED before this guard existed: `readStdoutBytes(-1)` panicked in `String.byteLength`.
+	// Unguarded, `readStdoutBytes(-1)` panics in `String.byteLength`.
 	let zeroWant = emitConst(module, block: entry, value: 0, ids: ids)
 	let negativeWant = emitCmp(module, block: entry, a: want, b: zeroWant, pred: StdCmpPred.lt, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(negativeWant, thenBlockId: refused.id, elseBlockId: handleCheck.id))
@@ -8517,10 +8481,10 @@ function buildSubpRelease(module StdModule)
 
 	// ⭐ **THE HANDLE GUARD, AT THE ENTRY POINT.** See `emitSubpRequireHandle` for why it is here rather than
 	// at a wrapper, and for the grep that keeps the roster of these openings complete.
-	// ⭐ **THE GUARD SUBSUMES THIS ENTRY'S OWN `inUse` TEST**, which is what its documented IDEMPOTENCE was
-	// made of — and which used to run one load too late, AFTER an unchecked `table + handle * SubpSlotBytes`.
-	// A second release of a released handle still reaches `done` and still does nothing; a handle that was
-	// never live now reaches it too, instead of closing three garbage words as HANDLEs.
+	// ⭐ **THE GUARD SUBSUMES THIS ENTRY'S OWN `inUse` TEST**, which is what its documented IDEMPOTENCE is
+	// made of, and it runs BEFORE `table + handle * SubpSlotBytes` rather than after. A second release of a
+	// released handle reaches `done` and does nothing; so does a handle that was never live, instead of
+	// closing three garbage words as HANDLEs.
 	var live = emitSubpRequireHandle(module, func: func, ids: ids, cur: entry, handle: handle, whenBad: done)
 	let slot = emitSubpSlotOf(module, block: live, ids: ids, handle: handle)
 	module.setTerminator(live, op: StdOp.branch(doRelease.id))
@@ -8561,7 +8525,7 @@ function buildSubpRelease(module StdModule)
 	module.functions.push(func)
 end 'buildSubpRelease'
 
-// Install the streaming subprocess runtime (P1.5 slice 1b). Called from `installGtRuntime` when `usesStreaming`,
+// Install the streaming subprocess runtime. Called from `installGtRuntime` when `usesStreaming`,
 // which also implies `usesChildPipes` — so `buildSubpYieldRead` is installed under that bit alongside
 // `__gt_io_read`, and only the streaming API surface lives here.
 function installSubpRuntime(module StdModule, target Target, streamState EnumLayout)

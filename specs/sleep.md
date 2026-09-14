@@ -15,7 +15,7 @@ The `sleep` function suspends the current green thread for a specified number of
 sleep(500)  // sleep for 500 milliseconds
 ```
 
-`sleep` works in both async green threads and the main thread. It is a cooperative yield point — other green threads can execute while the current one sleeps.
+`sleep` works in an `async` coroutine and in `main` alike. It is a yield point — other green threads can execute while the current one sleeps.
 
 ## Tests
 

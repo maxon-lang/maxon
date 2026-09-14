@@ -1,5 +1,5 @@
-// Runtime/ServiceLoop.maxon — `<T>.__loop`, the dispatch loop the compiler synthesizes for every SERVICE
-// (SV1 wave 3). Designed in `SERVICES_DESIGN.md` §"What the compiler synthesizes".
+// Runtime/ServiceLoop.maxon — `<T>.__loop`, the dispatch loop the compiler synthesizes for every SERVICE.
+// Specified in `specs/services.md` §"What the compiler synthesizes".
 //
 // ⭐⭐ **IT IS BUILT AT THE MAXON TIER, ON `ModuleInit.SynthesizedFunction`, AND THE TIER IS THE WHOLE
 // WIRING.** The loop CALLS USER CODE — one handler per message, with the receiver, the argument slotting,
@@ -40,13 +40,11 @@
 // `SynthesizedFunction.open` (which stores parameter ids RAW — see the carrier), and the drop callee that
 // pairs with it. A `typeNames:` argument and the `MaxonType` beside it must always be one table.
 //
-// ⭐⭐ **NO `__do_<m>` TRAMPOLINES, AND THE DESIGN DOCUMENT SAYS OTHERWISE — SO READ THIS RATHER THAN IT.**
-// `SERVICES_DESIGN.md` reasoned that each dispatch arm had to be a single call because **E2049** admits only
-// one statement per `match` arm. That is a SOURCE rule (`Parser.parseArmBody`,
-// `Parser.isBlockOpeningStatement`) and this loop is not source: at the IR tier a `switch` arm is a BLOCK,
-// which holds as many ops as it likes. So there is ONE function per service and the handler call, the drops
-// and the shell decref all live in the arm — which is also what makes the un-consumed-payload drop
-// expressible at all.
+// ⭐⭐ **NO `__do_<m>` TRAMPOLINES, BECAUSE A DISPATCH ARM HERE IS NOT A `match` ARM.** **E2049**'s one
+// statement per arm is a SOURCE rule (`Parser.parseArmBody`, `Parser.isBlockOpeningStatement`) and this loop
+// is not source: at the IR tier a `switch` arm is a BLOCK, which holds as many ops as it likes. So there is
+// ONE function per service and the handler call, the drops and the shell decref all live in the arm — which
+// is also what makes the un-consumed-payload drop expressible at all.
 
 // ⭐⭐ **BUILD `<T>.__loop` FOR EVERY SERVICE IN THE PROGRAM.** Called from `Compiler.compileToCodeResult`
 // directly after `installManagedGlobalInit`, at the same tier and for the same reason — see this file's

@@ -1031,12 +1031,12 @@ The same `Subprocess.run` is callable from sync and async contexts. From a green
 
 ### `StreamingSubprocess` — long-lived child with caller-driven stdio
 
-Use when the parent needs interactive request/response with a long-lived child — e.g. a worker pool that handles many jobs over its lifetime. Unlike `Subprocess.run(...)` (which fires the process, drains both output streams via background threads, and returns a `CollectedOutput` when the child exits), `StreamingSubprocess` keeps the pipes open and exposes per-line operations.
+Use when the parent needs interactive request/response with a long-lived child — e.g. a worker pool that handles many jobs over its lifetime. Unlike `Subprocess.run(...)` (which fires the process, drains both output streams from the calling green thread — parking rather than holding an OS thread — and returns a `CollectedOutput` when the child exits), `StreamingSubprocess` keeps the pipes open and exposes per-line operations.
 
-⚠ **The read parks the green thread on Windows and blocks the OS thread on the POSIX lane.** Windows
-drives `FILE_FLAG_OVERLAPPED` pipes through IOCP, so a read in flight yields and other green threads keep
-running; there is no netpoll a pipe read can park on elsewhere yet, so a read there holds its thread until
-the child writes or exits. `specs/streaming-subprocess.md`'s *Targets* section is the one statement of
+⚠ **The read parks the green thread on every lane, and only the mechanism differs.** Windows hands the
+child's inbound pipes to the scheduler's poller and parks the reader on the READ itself; the POSIX lane
+makes the read end non-blocking and parks it on the DESCRIPTOR. Either way the poller resumes it and other
+green threads run meanwhile. `specs/streaming-subprocess.md`'s *Targets* section is the one statement of
 which lanes run these builtins at all.
 
 ```maxon

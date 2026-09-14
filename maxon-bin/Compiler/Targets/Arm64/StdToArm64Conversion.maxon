@@ -1054,11 +1054,11 @@ export type StdToArm64Lowering
 			osFileAttributes(resultId, pathPtrId) then self.lowerHostChunkValue(resultId, args: argsOf(pathPtrId), chunk: HostFileAttributesName, dstRef: dstRef)
 			osPanicValue(messagePtrId) then self.lowerPanicValue(messagePtrId, dstRef: dstRef)
 
-			// The command line is x64-windows only: `GetCommandLineA` is a Win32 import, and macOS hands argv to
-			// `mrt_start` in x0/x1 instead — a DIFFERENT SHAPE (a pre-split vector, not one string to split), so a
-			// lowering here would have to answer a question this op does not ask. SemanticCheck refuses such a
-			// program at its source span (E3104, `calleeNeedsWin32Substrate`'s `__cl_` prefix), so this is the
-			// backstop for a compiler bug rather than the user-facing rejection.
+			// The UNSPLIT command line is a Windows shape: `GetCommandLineA` is a Win32 import, and macOS hands
+			// argv to `mrt_start` in x0/x1 instead — a pre-split vector, not one string to split — so a lowering
+			// here would have to answer a question this op does not ask. This lane serves argv through the other
+			// Std graph (`CommandLineRuntime.commandLineShape`) and so provides `HostFacility.commandLine`, which
+			// leaves this op reachable only by a compiler bug.
 			osCommandLine then panic("StdToArm64Lowering: `osCommandLine` asks for ONE UNSPLIT COMMAND LINE, which is a Windows shape and not a missing lowering — MAC7 serves argv on this lane through a DIFFERENT Std graph (`CommandLineRuntime.commandLineShape`), which reads the vector `mrt_start` captured and never emits this op. Reaching here means the unsplit-string graph was installed for a target whose process start-up does not have one")
 
 			// W5's two ops, and they now go OPPOSITE WAYS — which is exactly what the shared paragraph they used
@@ -1132,10 +1132,6 @@ export type StdToArm64Lowering
 			// scratch pair, which is outside the allocatable pool.
 			covPoint(pointId) then self.emit(dstRef, op: TargetOp.covInc(pointId))
 
-			// ⛔ The four attached-subprocess host primitives are x64-windows only on the same terms as the
-			// spawn/wait/pipe band above, and `SemanticCheck.calleeNeedsWin32Substrate` refuses a program that
-			// reaches one at its own source span (E3104) — so this is the backstop for a compiler bug that got
-			// past that gate, never the user-facing rejection.
 			// ⭐⭐ **MAC8: `osHandleSetInherit` EMITS NOTHING HERE, AND THE REASON IS THAT DARWIN'S DEFAULT IS
 			// INVERTED.** On Windows a handle must be MARKED inheritable before `bInheritHandles=TRUE` will
 			// pass it to a child; here the spawn sets `POSIX_SPAWN_CLOEXEC_DEFAULT`, under which NOTHING

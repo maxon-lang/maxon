@@ -610,8 +610,9 @@ end 'loop'
 
 The `NetworkPort` type alias constrains port numbers to the valid TCP range:
 ```maxon
-typealias NetworkPort = int(1 to 65535)
+public typealias NetworkPort = int(0 to 65535)
 ```
+`0` is in range because it is what `TcpListener.bind` asks for when it wants whichever free port the kernel has. It is never the port of a live connection or of a bound listener, and `TcpClient.connect` is refused by the OS if it is given one.
 
 **NetworkError**
 
@@ -623,6 +624,9 @@ enum NetworkError implements Error
 		sendFailed          // OS-level send error
 		recvFailed          // OS-level recv error
 		connectionClosed    // peer closed the connection
+		timedOut            // a read or write deadline ended the wait
+		bindFailed          // the address or port could not be bound and listened on
+		acceptFailed        // no connection could be taken from the listener
 end 'NetworkError'
 ```
 
@@ -659,9 +663,29 @@ client.close()
 | Method | Returns | Throws | Description |
 |--------|---------|--------|-------------|
 | `TcpClient.connect(host String, port NetworkPort)` | `TcpClient` | `NetworkError` | Connect to a TCP server |
+| `TcpClient.adopt(socket __ManagedSocket)` | `TcpClient` | — | Wrap a socket `TcpListener.accept()` answered |
 | `send(data String)` | `ByteCount` | `NetworkError` | Send all bytes of a string |
 | `recv(bufferSize ByteCount)` | `String` | `NetworkError` | Receive up to bufferSize bytes |
 | `close()` | — | — | Close the connection (idempotent) |
+| `TcpListener.bind(host String, port NetworkPort)` | `TcpListener` | `NetworkError` | Bind a port and begin listening |
+| `port()` | `NetworkPort` | — | The port the kernel bound, for a `bind` of `0` |
+| `accept()` | `TcpClient` | `NetworkError` | Take the next connection, parking until one arrives |
+| `close()` | — | — | Stop listening and release the port (idempotent) |
+
+**Listening (TcpListener)**
+
+`TcpListener`, in `stdlib/TcpListener.maxon`, is the server side. It has no `send` and no `recv` — `accept()` is the only way to get something that does — and it closes automatically when the last reference goes out of scope. `accept()` suspends its green thread on the network poller until a connection arrives, so a waiting server holds no machine.
+
+Binding port `0` asks the kernel for whichever port is free and `port()` reports the one it gave, which is how two programs on one machine avoid choosing the same address:
+```maxon
+let listener = try TcpListener.bind("127.0.0.1", port: 0)
+print("listening on {listener.port()}\n")
+
+let conn = try listener.accept()
+let request = try conn.recv(1024)
+_ = try conn.send(request)
+```
+`SO_REUSEADDR` is not set, so a second `bind` onto a port a live listener already holds is refused with `bindFailed` rather than quietly splitting one backlog between two listeners.
 
 **Example: Simple TCP Client**
 ```maxon
@@ -1012,12 +1036,12 @@ The same `Subprocess.run` is callable from sync and async contexts. From a green
 
 ### `StreamingSubprocess` — long-lived child with caller-driven stdio
 
-Use when the parent needs interactive request/response with a long-lived child — e.g. a worker pool that handles many jobs over its lifetime. Unlike `Subprocess.run(...)` (which fires the process, drains both output streams via background threads, and returns a `CollectedOutput` when the child exits), `StreamingSubprocess` keeps the pipes open and exposes per-line operations.
+Use when the parent needs interactive request/response with a long-lived child — e.g. a worker pool that handles many jobs over its lifetime. Unlike `Subprocess.run(...)` (which fires the process, drains both output streams from the calling green thread — parking rather than holding an OS thread — and returns a `CollectedOutput` when the child exits), `StreamingSubprocess` keeps the pipes open and exposes per-line operations.
 
-⚠ **The read parks the green thread on Windows and blocks the OS thread on the POSIX lane.** Windows
-drives `FILE_FLAG_OVERLAPPED` pipes through IOCP, so a read in flight yields and other green threads keep
-running; there is no netpoll a pipe read can park on elsewhere yet, so a read there holds its thread until
-the child writes or exits. `specs/streaming-subprocess.md`'s *Targets* section is the one statement of
+⚠ **The read parks the green thread on every lane, and only the mechanism differs.** Windows hands the
+child's inbound pipes to the scheduler's poller and parks the reader on the READ itself; the POSIX lane
+makes the read end non-blocking and parks it on the DESCRIPTOR. Either way the poller resumes it and other
+green threads run meanwhile. `specs/streaming-subprocess.md`'s *Targets* section is the one statement of
 which lanes run these builtins at all.
 
 ```maxon

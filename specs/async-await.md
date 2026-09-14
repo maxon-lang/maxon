@@ -9,12 +9,10 @@ category: concurrency
 
 ## Documentation
 
-Maxon supports cooperative concurrency via `async` and `await`. ⚖ **An `async` call does NOT create a new green thread** (user ruling, 2026-08-27): it starts the callee as a **coroutine of the green thread that called it**, with a growable stack (starting at 2KB). The coroutine runs until it reaches a blocking operation, at which point it yields the green thread and that green thread's other coroutines run; `await` resumes the caller and collects the result. So "parallel work" below is overlapped **waiting**, not parallel execution, and a coroutine never leaves the OS thread its owner is running on. Creating a separately scheduled green thread is `spawn`, which is reserved and not built (`SERVICES_DESIGN.md`).
-
-⚠ The **bootstrap's** runtime still multiplexes each `async` onto a pool of OS worker threads; the self-hosted runtime does not. No case below distinguishes them, and the differential is recorded in `builtins-cpu-parallel.md`.
+Maxon supports cooperative concurrency via `async` and `await`. ⚖ **An `async` call does NOT create a new green thread** (user ruling, 2026-08-27): it starts the callee as a **coroutine of the green thread that called it**, with a growable stack (starting at 2KB). The coroutine runs until it reaches a blocking operation, at which point it yields the green thread and that green thread's other coroutines run; `await` resumes the caller and collects the result. So "parallel work" below is overlapped **waiting**, not parallel execution, and a coroutine never leaves the green thread that made it — it changes OS thread only when that green thread does. Creating a separately scheduled green thread is `spawn`, which starts a SERVICE (`specs/services.md`).
 
 ```text
-// Spawn a green thread
+// Start a coroutine of this green thread
 var promise = async someFunction(arg1, arg2)
 
 // Wait for the result
@@ -31,9 +29,10 @@ var r2 = await p2
 - One owner — a coroutine belongs to the green thread that created it, runs only where that green
   thread's strand runs, one member at a time, and is never itself put on a run queue. A coroutine spawned
   by a coroutine belongs to the same green thread, so every frame `async` creates, at any depth, has one owner.
-- Cooperative scheduling — a coroutine keeps the green thread until it reaches an `await`, a `sleep`
-  or an I/O point. What overlaps is the WAITING: N outstanding reads are in flight at once while their
-  coroutines are parked.
+- Coroutines switch only where they wait — a coroutine keeps the green thread until it reaches an
+  `await`, a `sleep` or an I/O point. What overlaps is the WAITING: N outstanding reads are in flight
+  at once while their coroutines are parked. The green thread around them is preempted at 10 ms
+  (`specs/sched-preempt.md`).
 - Growable stacks — 2KB initial, doubles when needed
 - Reference counting is PLAIN, not atomic — because one green thread owns every box its coroutines
   touch, a retain or release has no second party to race. That is a language guarantee rather than a
