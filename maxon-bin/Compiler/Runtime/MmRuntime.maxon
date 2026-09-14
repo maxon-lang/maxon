@@ -236,8 +236,8 @@ end 'emitRouteAwayFromImmortalBox'
 //
 // ⭐⭐ **TWO LAYERS, NESTED: EVERY BOX IS ALSO A SLAB REQUEST.** The RAW trio counts every request at the
 // slab doors, boxes included; the TRACKED trio counts boxes at the box doors. The public raw readers
-// answer raw − tracked (`buildMmCounterAccessors`), so what `PhaseProbe` sums are disjoint layers while
-// the allocator carries ONE door per shape. `__mm_alloc_bytes` records the PAYLOAD the caller asked for,
+// answer raw − tracked (`buildMmCounterAccessors`), so the layers they report are disjoint while the
+// allocator carries ONE door per shape. `__mm_alloc_bytes` records the PAYLOAD the caller asked for,
 // so the raw reader also subtracts the box prefix per box to keep its answer the header-free volume.
 
 export let MmIncrefName = b"__mm_incref"
@@ -256,14 +256,13 @@ export let MmFreeName = b"__mm_free"
 export let MmLeakCheckName = b"__mm_leak_check"
 
 // ⭐⭐ **THE SIX MEMORY-TRAFFIC COUNTER ACCESSORS — the floor of `__Builtins.mmAllocTotal()` and its five
-// siblings, and so of `PhaseProbe`'s `totalAllocs`/`liveAllocs`/`totalAllocBytes`.** Each walks one figure
-// over every row; the SUMMING of the two layers is the caller's job, because only the raw live count
-// can say whether a header-free BUFFER leaked.
+// siblings.** Each walks one figure over every row, PER LAYER, because only the raw live count can say
+// whether a header-free BUFFER leaked.
 //
-// ⭐ **WHY A LIVE READER AND NOT A FREES ONE: THE SIX ARE THE SURFACE, AND `frees` FALLS OUT OF THEM** —
-// `freed = Δtotal − Δlive` in each layer, which `PhaseProbe.elapsed` computes. The stored columns are the
-// other way round (`SlabRuntime.SlabTrafficColumn`), because a free stepping one column costs the hot path
-// less than an allocation stepping two.
+// ⛔ **FOUR OF THE SIX ARE DIFFERENCES, SO A BRACKET CANNOT BE TAKEN OVER THEM.** A live figure is a total
+// less its frees, and a raw figure is the raw column less the tracked one — two columns a box steps at two
+// different instants — so a reading taken while another thread allocates can stand below an earlier one.
+// The process-wide totals below are the figures a delta can be taken over while other threads run.
 //
 // ⭐ **THEY WEAR THE `__mm_` PREFIX ON PURPOSE, WHICH IS WHAT DECLARES THE HEAP DEPENDENCY.**
 // `isRuntimeCallee` matches them, so a program that reads a counter carries the allocator whose state that
@@ -277,24 +276,34 @@ export let MmCounterRawAllocTotalName = b"__mm_counter_raw_alloc_total"
 export let MmCounterRawAllocLiveName = b"__mm_counter_raw_alloc_live"
 export let MmCounterRawAllocBytesName = b"__mm_counter_raw_alloc_bytes"
 
-// ⭐⭐⭐ **THE THREE PER-THREAD COLUMNS — the same six words' worth of question asked of ONE GREEN THREAD.**
-// The six above are process-wide, which is exact while one thread allocates and worthless the moment a pool
-// does: a bracket opened inside a worker counts every other worker's traffic. `GtRuntime.GtOffThreadAllocs`
-// carries the measurement that forced them and the ownership argument that lets them be stepped unlocked.
+// ⭐⭐⭐ **THE THREE PER-THREAD COLUMNS — allocations, frees and bytes asked of ONE GREEN THREAD.** Every
+// process-wide figure counts every thread's traffic, so a bracket opened inside a pool worker would count
+// every other worker's. `GtRuntime.GtOffThreadAllocs` carries the ownership argument that lets them be
+// stepped unlocked.
 //
-// ⚠ **THEY SUM BOTH LAYERS, where the six above are per-layer**, because `PhaseProbe` adds tracked and raw
-// before it reports any figure — so a per-layer split here would be two more names and two more reads for a
-// distinction no caller of these makes.
-//
-// ⚠ **`frees` IS COUNTED, NOT DERIVED**, which is the one place the two families' shapes differ: `Δtotal −
-// Δlive` needs a LIVE column, and a live count per green thread would be meaningless (a thread does not own
-// the boxes it allocated, and it may exit with them alive and in use).
+// ⚠ **THEY SUM BOTH LAYERS, where the six above are per-layer**, because `PhaseProbe` reports no figure for
+// one layer alone. They count frees rather than a live figure because a live count per green thread would
+// be meaningless: a thread does not own the boxes it allocated, and it may exit with them alive and in use.
 //
 // They wear the `__mm_counter_` prefix for their siblings' reason: it is what turns on the allocation-path
 // maintenance those columns oblige, and what makes a program that reads one carry the allocator it reads.
 export let MmCounterThreadAllocsName = b"__mm_counter_thread_allocs"
 export let MmCounterThreadFreesName = b"__mm_counter_thread_frees"
 export let MmCounterThreadAllocBytesName = b"__mm_counter_thread_alloc_bytes"
+
+// ⭐⭐⭐ **THE THREE PROCESS-WIDE TOTALS — the per-thread three asked of the whole process.** Each is ONE
+// raw column summed over every row, with no subtraction anywhere: the raw columns count every slab request,
+// boxes included, so each already covers both layers. Every word summed only rises, and a later reading
+// loads each row after an earlier one did, so it is never below the earlier one whatever other threads are
+// doing — the difference of two cannot go negative.
+//
+// ⚠ **THE BYTE TOTAL COUNTS A BOX's HEADER WITH ITS PAYLOAD**, exactly as the per-thread byte column does.
+// The header-free volume (`mmAllocBytes + mmRawAllocBytes`) is not a total that only rises: a box credits its
+// whole request to the raw layer first and then subtracts the header back out at its tracked step, so a
+// reading between the two stands above one taken after.
+export let MmCounterProcessAllocsName = b"__mm_counter_process_allocs"
+export let MmCounterProcessFreesName = b"__mm_counter_process_frees"
+export let MmCounterProcessAllocBytesName = b"__mm_counter_process_alloc_bytes"
 
 // ⭐ **`__mm_is_null(ptr)` — IS THIS `__ManagedMemory` THE NULL SENTINEL?** The floor of
 // `__Builtins.managedIsNull(mm)`, whose only corpus caller is `stdlib/Subprocess.maxon:487` testing the
@@ -2276,13 +2285,9 @@ function buildMmFree(module StdModule, model MachineModel)
 	// events unambiguous now that a traced build recycles.
 	var entry = emitMmFreeEvent(module, func: func, block: start, ptr: ptr, ids: ids)
 
-	// Drop the live count — the one number the leak gate reads.
-	//
-	// ⚠ **THE CUMULATIVE COLUMNS ARE DELIBERATELY NOT TOUCHED HERE**, and their absence is what makes them
-	// mean anything: the tracked total and byte columns are MONOTONIC by construction, so they delta
-	// exactly across a phase boundary and `PhaseProbe` can derive frees as `Δtotal − Δlive`. A free path that
-	// walked them back would report a phase that allocated and released a million boxes as having done
-	// nothing.
+	// ⚠ **A FREE STEPS THE FREES COLUMN AND NOTHING ELSE.** The leak gate's live count is total less frees,
+	// and every column only rises, so each deltas exactly across a bracket. A free path that walked the
+	// total back would report a phase that allocated and released a million boxes as having done nothing.
 	entry = emitTrackedTrafficStep(module, func: func, cur: entry, model: model, event: SlabTrafficEvent.free, ids: ids)
 
 	// The payload size the alloc recorded in the header; the range to poison is exactly `[ptr, ptr + size)`.
@@ -2324,23 +2329,23 @@ function emitTrackedTrafficStep(module StdModule, func IrFunction, cur IrBlock, 
 	return done
 end 'emitTrackedTrafficStep'
 
-// ⭐⭐ **THE SIX TRAFFIC-COUNTER READERS AND THE THREE PER-THREAD ONES.** They are FUNCTIONS rather than
-// an inline walk at the call site because that is the door every argumentless intrinsic in this compiler
-// takes (`Parser.emitZeroArgIntrinsic`), and because the row walk stays one spelling
-// (`SlabRuntime.emitSlabTrafficRead`).
+// ⭐⭐ **THE SIX PER-LAYER READERS, THE THREE PER-THREAD COLUMNS AND THE THREE PROCESS-WIDE TOTALS.** They
+// are FUNCTIONS rather than an inline walk at the call site because that is the door every argumentless
+// intrinsic in this compiler takes (`Parser.emitZeroArgIntrinsic`), and because the row walk stays one
+// spelling (`SlabRuntime.emitSlabTrafficRead`).
 //
 // ⭐⭐ **THE RAW READERS ANSWER raw − tracked.** Every box is also a slab request, so the slab's raw
 // columns count boxes too; subtracting the tracked column at READ time keeps the two reported layers
-// disjoint, which is what `PhaseProbe`'s sum needs, while the allocator carries one door per shape. The
-// byte column subtracts the box prefix per box as well, because the tracked byte column records the
-// payload the caller asked for and the raw column the whole slot request.
+// disjoint while the allocator carries one door per shape. The byte column subtracts the box prefix per box
+// as well, because the tracked byte column records the payload the caller asked for and the raw column the
+// whole slot request.
 //
 // ⛔⛔ **EVERY ONE OF THEM IS ONE WALK, AND A LAYER'S SUBTRACTION HAPPENS INSIDE IT.** Each figure is a
-// `SlabTrafficFigure` — an expression over a SINGLE row — so a difference reads its two columns at one
-// instant. Two walks would sample them thousands of loads apart, and the allocation that lands between
-// them is credited to the subtrahend alone.
+// `SlabTrafficFigure` — an expression over a SINGLE row — so a difference reads its two columns together.
+// Two walks would sample them thousands of loads apart, and the allocation that lands between them is
+// credited to the subtrahend alone.
 //
-// All nine are installed in every heap program and `DeadFunctionElimination` drops the ones nothing calls.
+// All twelve are installed in every heap program and `DeadFunctionElimination` drops the ones nothing calls.
 function buildMmCounterAccessors(module StdModule, model MachineModel)
 	buildFigureReader(module, name: MmCounterAllocTotalName, figure: SlabTrafficFigure.column(SlabTrafficColumn.trackedTotal))
 	buildFigureReader(module, name: MmCounterAllocLiveName, figure: SlabTrafficFigure.live(SlabTrafficLayer.tracked))
@@ -2349,9 +2354,13 @@ function buildMmCounterAccessors(module StdModule, model MachineModel)
 	buildFigureReader(module, name: MmCounterRawAllocLiveName, figure: SlabTrafficFigure.disjointLive)
 	buildFigureReader(module, name: MmCounterRawAllocBytesName, figure: SlabTrafficFigure.disjoint(SlabTrafficColumn.rawBytes, tracked: SlabTrafficColumn.trackedBytes, prefixPerBox: boxPrefixBytes(module.debugStream)))
 
-	buildThreadCounterReader(module, name: MmCounterThreadAllocsName, offset: GtOffThreadAllocs, model: model, column: ThreadColumn.allocs)
-	buildThreadCounterReader(module, name: MmCounterThreadFreesName, offset: GtOffThreadFrees, model: model, column: ThreadColumn.frees)
-	buildThreadCounterReader(module, name: MmCounterThreadAllocBytesName, offset: GtOffThreadAllocBytes, model: model, column: ThreadColumn.bytes)
+	buildThreadCounterReader(module, name: MmCounterThreadAllocsName, model: model, count: CombinedCount.allocs)
+	buildThreadCounterReader(module, name: MmCounterThreadFreesName, model: model, count: CombinedCount.frees)
+	buildThreadCounterReader(module, name: MmCounterThreadAllocBytesName, model: model, count: CombinedCount.bytes)
+
+	buildFigureReader(module, name: MmCounterProcessAllocsName, figure: processWideFigure(CombinedCount.allocs))
+	buildFigureReader(module, name: MmCounterProcessFreesName, figure: processWideFigure(CombinedCount.frees))
+	buildFigureReader(module, name: MmCounterProcessAllocBytesName, figure: processWideFigure(CombinedCount.bytes))
 end 'buildMmCounterAccessors'
 
 // `name() -> i64` — one figure walked over every row.
@@ -2367,15 +2376,21 @@ function buildFigureReader(module StdModule, name ByteArray, figure SlabTrafficF
 	module.functions.push(func)
 end 'buildFigureReader'
 
-// ⭐⭐ **WHICH PER-THREAD COLUMN A READER ANSWERS — and it exists for the arm with NO GREEN THREAD.** With
-// one the answer is one field load and the offset says everything; without one the honest answer is the
-// process's own traffic, which is a different raw column per column. The offset cannot say that, so the
-// column does.
-union ThreadColumn
+// ⭐⭐ **WHICH BOTH-LAYER COUNT A READER ANSWERS** — the one fact that picks a green thread's field and the
+// process's raw column alike, so a reader cannot pair one count's field with another count's column.
+union CombinedCount
 	allocs
 	frees
 	bytes
-end 'ThreadColumn'
+end 'CombinedCount'
+
+function threadColumnOffset(count CombinedCount) returns ByteOffset
+	return match count 'which'
+		allocs gives GtOffThreadAllocs
+		frees gives GtOffThreadFrees
+		bytes gives GtOffThreadAllocBytes
+	end 'which'
+end 'threadColumnOffset'
 
 // ⭐⭐ **`__mm_counter_thread_*()` — WHAT THE CALLING GREEN THREAD HAS ALLOCATED OR FREED.**
 //
@@ -2386,14 +2401,14 @@ end 'ThreadColumn'
 //
 // A thread that has none of the three — no scheduler, no M, no running GT — is the one thread of
 // execution, so *"what has the calling thread allocated"* is *"what has this process allocated"*, and the
-// reader answers the row walk the six global readers answer. That is an ANSWER rather than a fallback, and
+// reader answers the walk the process-wide totals answer. That is an ANSWER rather than a fallback, and
 // a 0 here would be a sentinel for "not applicable" in a family whose whole contract is that it reports
 // numbers.
 //
 // ⛔ **AN UNCOMMITTED REGION TAKES THE PROCESS-WIDE ARM RATHER THAN COMMITTING ONE TO WALK.** The thread
 // walk reads the scheduler word out of the region, so it cannot run without one — and a program that has
 // never allocated has no scheduler either, which is the arm that answers 0 for every column.
-function buildThreadCounterReader(module StdModule, name ByteArray, offset ByteOffset, model MachineModel, column ThreadColumn)
+function buildThreadCounterReader(module StdModule, name ByteArray, model MachineModel, count CombinedCount)
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
@@ -2412,22 +2427,20 @@ function buildThreadCounterReader(module StdModule, name ByteArray, offset ByteO
 	let noThread = emitCmp(module, block: ready, a: thread, b: zero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(ready, op: StdOp.condBranch(noThread, thenBlockId: oneThreadOfExecution.id, elseBlockId: haveThread.id))
 
-	let field = emitLoadField(module, block: haveThread, record: thread, offset: offset, ids: ids)
+	let field = emitLoadField(module, block: haveThread, record: thread, offset: threadColumnOffset(count), ids: ids)
 	module.setTerminator(haveThread, op: StdOp.ret(field))
 
 	let processWide = ids.mint()
-	var walked = emitSlabTrafficRead(module, func: func, cur: oneThreadOfExecution, figure: processWideFigure(column), answerId: processWide, ids: ids, label: b"sum")
+	var walked = emitSlabTrafficRead(module, func: func, cur: oneThreadOfExecution, figure: processWideFigure(count), answerId: processWide, ids: ids, label: b"sum")
 	module.setTerminator(walked, op: StdOp.ret(processWide))
 
 	module.functions.push(func)
 end 'buildThreadCounterReader'
 
-// The one-thread arm's figure, per column — see `buildThreadCounterReader` for why the two arms differ in
-// shape and why this one is an answer rather than a stand-in. The raw columns count every request, boxes
-// included, so the process-wide figure is the raw column alone — which is exactly what the per-thread
-// columns record.
-function processWideFigure(column ThreadColumn) returns SlabTrafficFigure
-	return match column 'which'
+// The process's figure for one count. The raw columns count every request, boxes included, so each is the
+// raw column alone — which is exactly what the per-thread columns record, one green thread at a time.
+function processWideFigure(count CombinedCount) returns SlabTrafficFigure
+	return match count 'which'
 		allocs gives SlabTrafficFigure.column(SlabTrafficColumn.rawTotal)
 		frees gives SlabTrafficFigure.column(SlabTrafficColumn.rawFrees)
 		bytes gives SlabTrafficFigure.column(SlabTrafficColumn.rawBytes)

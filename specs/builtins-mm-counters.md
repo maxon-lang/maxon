@@ -31,29 +31,52 @@ counts every other worker's traffic:
 | `__Builtins.threadFreeTotal()` | cumulative frees by the calling green thread, both layers |
 | `__Builtins.threadAllocBytes()` | cumulative bytes handed to the calling green thread, both layers |
 
-They sum the two layers where the six are per-layer, because `PhaseProbe` adds them before it reports any
-figure. `frees` is COUNTED here and DERIVED there: `Δtotal − Δlive` needs a LIVE column, and a live count per
-green thread would mean nothing — a thread does not own the boxes it allocated and may exit with them alive.
-A program with no green threads answers all three from the process-wide words, which is not a fallback but
-the same fact: single-threaded, *"what did this thread allocate"* and *"what did this process allocate"* are
-one question.
+They sum the two layers where the six are per-layer, because `PhaseProbe` reports no figure for one layer
+alone. They count frees rather than a live figure, because a live count per green thread would mean nothing
+— a thread does not own the boxes it allocated and may exit with them alive. A program with no green threads
+answers all three from the process-wide totals below, which is not a fallback but the same fact:
+single-threaded, *"what did this thread allocate"* and *"what did this process allocate"* are one question.
 
-All six take no arguments and answer an `int`. Their caller in this tree is
-`maxon-bin/Compiler/PhaseProbe.maxon`, which sums the two layers into `totalAllocs()`,
-`liveAllocs()` and `totalAllocBytes()` — so `scale-test`, and every row of
-`docs/optimization-log.md`, bottoms out here.
+⭐⭐ **AND THREE THAT ASK IT OF THE WHOLE PROCESS, AS TOTALS THAT ONLY RISE:**
 
-### Why SIX: `frees` is DERIVED, not counted
+| Intrinsic | Meaning |
+|---|---|
+| `__Builtins.processAllocTotal()` | cumulative allocations by every thread, BOTH layers |
+| `__Builtins.processFreeTotal()` | cumulative frees by every thread, both layers |
+| `__Builtins.processAllocBytes()` | cumulative bytes requested from the slab by every thread, a box's header included |
 
-`freed = Δtotal − Δlive` over any interval, which needs a cumulative AND a live counter IN EACH
-LAYER. That is four of the six; the remaining two are the byte volumes, which have no live form —
-a free path that walked a cumulative counter back would report a phase that allocated and released
-a million boxes as having done nothing.
+Each is ONE raw column summed over the allocator's rows, with no subtraction anywhere: the raw columns count
+every slab request, boxes included, so each already covers both layers. Every word summed only rises, so a
+reading never stands below an earlier one whatever other threads are doing — which is the one property a
+bracket needs, because the difference of two readings is then never negative.
 
-The four cumulative counters are therefore MONOTONIC by construction — the two LIVE columns are the
-exception, and being non-monotonic is what they are for — so they delta exactly across a phase
-boundary and are bit-for-bit reproducible on the same input. That is what lets a suite gate on
-memory where it cannot gate on wall time.
+⚠ **THE SIX ABOVE CANNOT GIVE A BRACKET THAT PROPERTY.** Four of them are differences — a live figure is a
+total less its frees, and a raw figure is the raw column less the tracked one, which a box steps at two
+different instants. Read while another thread allocates, a sum or difference of them can stand below an
+earlier reading. MEASURED: `PhaseProbe` brackets a main-thread phase with the six, deriving its frees as
+*(total − live)* over four such walks, and a `spec-test --target=wasm32-wasi` worker died compiling
+`register-allocator/int-six-vars-alive` with `Range check failed: value outside typealias 'AllocCount'` in
+`PhaseProbe.elapsedInto` — the phase's closing reading stood below its opening one while other threads
+allocated — while the same file passed 60/60 alone.
+
+⚠ **THE BYTE TOTAL COUNTS A BOX's HEADER WITH ITS PAYLOAD**, which is what `threadAllocBytes()` counts too,
+so the process-wide and per-thread byte figures measure one quantity. The header-free volume
+(`mmAllocBytes() + mmRawAllocBytes()`) is not a total that only rises: a box credits its whole request to the
+raw layer first and subtracts its header back out at the tracked step, so a reading between the two stands
+above one taken after.
+
+All twelve take no arguments and answer an `int`. `maxon-bin/Compiler/PhaseProbe.maxon` sums the six
+per-layer figures for a main-thread phase and reads the three per-thread columns inside a pool worker — so
+`scale-test`, and every row of `docs/optimization-log.md`, bottoms out on those nine.
+
+### Why the six carry a LIVE column
+
+The per-layer six are (cumulative, live) in each layer plus the two byte volumes, because a live count is
+what a question about leaks asks, and only the RAW live count can say whether a header-free buffer leaked.
+In a program where one thread runs, `freed = Δtotal − Δlive` over any interval, and every figure is
+bit-for-bit reproducible on the same input — which is what lets a suite gate on memory where it cannot gate
+on wall time. A free path that walked a cumulative counter back would report a phase that allocated and
+released a million boxes as having done nothing, so no free touches a total.
 
 ### The two LAYERS
 
@@ -77,17 +100,18 @@ and only the sum is stable across a change to it.
 
 ### The layers NEST in the allocator and are made DISJOINT at the reader
 
-`PhaseProbe` SUMS them, and `__mm_alloc` is itself a `__slab_alloc` caller, so the slab's RAW columns
-count every box as well as every scratch buffer. The public raw readers therefore answer **raw −
-tracked**: `mmRawAllocTotal()` is the slab's request count less the box count, `mmRawAllocLive()` the
-same for live, and `mmRawAllocBytes()` the slab's byte volume less the tracked payload volume less the box
-header per box (`MmRuntime.buildMmCounterAccessors`). Counted naively — a reader that forgot the
-subtraction — every box would be reported in both columns and `totalAllocs()` would read exactly double,
-which is what `the-two-layers-are-disjoint` below catches. Its opposite,
+A caller asking about both layers SUMS them, and `__mm_alloc` is itself a `__slab_alloc` caller, so the
+slab's RAW columns count every box as well as every scratch buffer. The public raw readers therefore answer
+**raw − tracked**: `mmRawAllocTotal()` is the slab's request count less the box count, `mmRawAllocLive()`
+the same for live, and `mmRawAllocBytes()` the slab's byte volume less the tracked payload volume less the
+box header per box (`MmRuntime.buildMmCounterAccessors`). Counted naively — a reader that forgot the
+subtraction — every box would be reported in both columns and the sum would read exactly double, which is
+what `the-two-layers-are-disjoint` below catches. Its opposite,
 `raw-total-is-never-below-tracked-total-after-boxes`, catches the two ways the subtraction goes too far:
 answering NEGATIVE, and standing on a raw column nothing credits.
 
-⭐ **The layer split is a runtime's private business; the SUM is the number `PhaseProbe` reads.**
+⭐ **The layer split is a runtime's private business; the SUM is the contract**, and while one thread runs it
+is exactly what the process-wide totals answer (`process-totals-are-the-six-summed-while-one-thread-runs`).
 
 ### `mmRawAllocLive` and `mmRawAllocTotal` are TWO numbers
 
@@ -262,9 +286,9 @@ end 'main'
 ```
 
 <!-- test: builtins-mm-counters.the-two-layers-are-disjoint -->
-**THE CASE THAT PROVES `PhaseProbe`'s SUM DOES NOT DOUBLE-COUNT.** the compiler's `__mm_alloc` obtains its
-box from `__slab_alloc`, so the obvious implementation credits every allocation to BOTH columns and
-`totalAllocs()` reads exactly double. Here a program allocates 512 array elements and nothing else:
+**THE CASE THAT PROVES THE TWO LAYERS' SUM DOES NOT DOUBLE-COUNT.** the compiler's `__mm_alloc` obtains its
+box from `__slab_alloc`, so the obvious implementation credits every allocation to BOTH columns and the
+sum reads exactly double. Here a program allocates 512 array elements and nothing else:
 the TRACKED column moves and the RAW column does not, because the raw reader subtracts the boxes the
 slab counted on `__mm_alloc`'s behalf.
 
@@ -272,7 +296,7 @@ slab counted on `__mm_alloc`'s behalf.
 answering the raw column without the tracked subtraction, this case goes RED (exit **2** against the
 pinned 7 — the `tracked > 0` half holds and `raw == 0` does not) while `total-is-monotonic-and-moves`,
 `live-returns-to-its-floor`, `bytes-scale-with-the-request` and `total-is-never-below-live` stay
-GREEN. A suite without this case would report a compiler whose `totalAllocs()` reads exactly double as
+GREEN. A suite without this case would report a compiler whose layer sum reads exactly double as
 fully passing.
 ```maxon
 typealias Byte = int(0 to u8.max)
@@ -586,11 +610,200 @@ end 'main'
 7
 ```
 
+<!-- test: builtins-mm-counters.process-totals-are-the-six-summed-while-one-thread-runs -->
+⭐⭐ **THE CASE THAT SAYS WHAT EACH PROCESS-WIDE TOTAL IS.** With one thread running, the six per-layer
+figures are exact, so each total must equal the figure they sum to — to the digit. The allocation total is
+both layers' count; the free total is that count less both layers' live counts; and the byte total exceeds
+the header-free volume by exactly one header per box, which is asserted as a remainder because the header's
+width is the allocator's own business (a traced build widens it). Each half fails a reader wired to the
+wrong raw column, and the byte half fails one that answered the header-free volume.
+
+It spawns nothing, so it runs on every lane — including wasm32-wasi, which makes it the acceptance half of
+the target pair for these three as `all-six-run-on-wasm` is for the six.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias BoxCount = int(1 to i64.max)
+
+function fillAndDrop()
+	var buf = ByteArray.create()
+	for _ in 0 upto 64 'push'
+		buf.push(3)
+	end 'push'
+end 'fillAndDrop'
+
+function main() returns ExitCode
+	fillAndDrop()
+	let allocs = __Builtins.processAllocTotal()
+	let frees = __Builtins.processFreeTotal()
+	let bytes = __Builtins.processAllocBytes()
+	let boxes = __Builtins.mmAllocTotal() as BoxCount
+	let total = boxes + __Builtins.mmRawAllocTotal()
+	let live = __Builtins.mmAllocLive() + __Builtins.mmRawAllocLive()
+	let volume = __Builtins.mmAllocBytes() + __Builtins.mmRawAllocBytes()
+	var score = 0
+	if allocs > 0 and allocs == total 'allocsAreBothLayers'
+		score = score + 1
+	end 'allocsAreBothLayers'
+	if frees > 0 and frees == total - live 'freesAreTotalLessLive'
+		score = score + 2
+	end 'freesAreTotalLessLive'
+	if bytes > volume and (bytes - volume) mod boxes == 0 'bytesAddOneHeaderPerBox'
+		score = score + 4
+	end 'bytesAddOneHeaderPerBox'
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: builtins-mm-counters.process-totals-agree-with-the-calling-thread-while-it-is-the-only-one -->
+**THE PROCESS-WIDE TOTALS AND THE PER-THREAD COLUMNS ARE ONE QUANTITY**, so a reading of one sits beside
+a reading of the other in one table. While `main` is the only thread allocating, all three
+deltas must agree to the digit — the byte pair included, because both count a box's header with its payload.
+A process total that answered the header-free volume fails the byte half; one wired to a tracked column
+fails the count halves.
+
+⚠ The spawn comes FIRST so `main` runs on a green thread with columns of its own; the service is never sent
+a message until the window has closed, so it is parked on its mailbox throughout.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+typealias Bytes = Array with Byte
+
+type Idle
+	var calls as Integer
+
+	static function create() returns Self
+		return Self{calls: 0}
+	end 'create'
+
+	export function ping(n Integer) returns Integer
+		self.calls = self.calls + 1
+
+		return n + 1
+	end 'ping'
+end 'Idle'
+
+function fillAndDrop()
+	var buf = Bytes.create()
+	for _ in 0 upto 4096 'push'
+		buf.push(1)
+	end 'push'
+end 'fillAndDrop'
+
+function main() returns ExitCode
+	let h = spawn Idle.create()
+
+	let threadAllocsBefore = __Builtins.threadAllocTotal()
+	let threadFreesBefore = __Builtins.threadFreeTotal()
+	let threadBytesBefore = __Builtins.threadAllocBytes()
+	let allocsBefore = __Builtins.processAllocTotal()
+	let freesBefore = __Builtins.processFreeTotal()
+	let bytesBefore = __Builtins.processAllocBytes()
+	fillAndDrop()
+	let allocs = __Builtins.processAllocTotal() - allocsBefore
+	let frees = __Builtins.processFreeTotal() - freesBefore
+	let bytes = __Builtins.processAllocBytes() - bytesBefore
+	let threadAllocs = __Builtins.threadAllocTotal() - threadAllocsBefore
+	let threadFrees = __Builtins.threadFreeTotal() - threadFreesBefore
+	let threadBytes = __Builtins.threadAllocBytes() - threadBytesBefore
+
+	var score = try await h.ping(0) otherwise 0
+	if allocs > 0 and allocs == threadAllocs 'allocsAgree'
+		score = score + 2
+	end 'allocsAgree'
+	if frees > 0 and frees == threadFrees 'freesAgree'
+		score = score + 4
+	end 'freesAgree'
+	if bytes > allocs and bytes == threadBytes 'bytesAgree'
+		score = score + 8
+	end 'bytesAgree'
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+15
+```
+
+<!-- test: builtins-mm-counters.process-totals-only-rise-while-another-thread-allocates -->
+⭐⭐⭐ **THE PROPERTY A BRACKET RESTS ON: NO READING STANDS BELOW AN EARLIER ONE, WHATEVER ELSE IS RUNNING.**
+`main` reads all three totals over and over while a service allocates and frees a hundred thousand arrays
+on another thread, and counts every reading that came in below the one before it. The count must be 0, and
+the free total must have moved by at least the service's frees, so the watched traffic really was counted.
+
+⚠ **NO RUN CAN MAKE A REGRESSION HERE GO RED ON DEMAND.** A figure derived by subtracting two walks — the
+shape of the MEASURED crash under *AND THREE THAT ASK IT OF THE WHOLE PROCESS* above — goes backwards
+only when an allocation lands between its walks, which is timing. This case can catch that by chance and
+can never pass it by design; the deterministic definitions are pinned by the two cases above.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+typealias Bytes = Array with Byte
+
+type Churn
+	var rounds as Integer
+
+	static function create() returns Self
+		return Self{rounds: 0}
+	end 'create'
+
+	export function churn(n Integer) returns Integer
+		for _ in 0 upto n 'round'
+			var buf = Bytes.create()
+			buf.push(3)
+		end 'round'
+		self.rounds = self.rounds + 1
+
+		return n
+	end 'churn'
+end 'Churn'
+
+function main() returns ExitCode
+	let h = spawn Churn.create()
+	let freesBefore = __Builtins.processFreeTotal()
+	let reply = h.churn(100000)
+
+	var lastAllocs = __Builtins.processAllocTotal()
+	var lastFrees = __Builtins.processFreeTotal()
+	var lastBytes = __Builtins.processAllocBytes()
+	var backwards = 0
+
+	for _ in 0 upto 20000 'watch'
+		let allocs = __Builtins.processAllocTotal()
+		let frees = __Builtins.processFreeTotal()
+		let bytes = __Builtins.processAllocBytes()
+
+		if allocs < lastAllocs or frees < lastFrees or bytes < lastBytes 'wentBackwards'
+			backwards = backwards + 1
+		end 'wentBackwards'
+
+		lastAllocs = allocs
+		lastFrees = frees
+		lastBytes = bytes
+	end 'watch'
+
+	let rounds = try await reply otherwise 0
+	var score = 0
+	if backwards == 0 'onlyRose'
+		score = score + 1
+	end 'onlyRose'
+	if rounds == 100000 and __Builtins.processFreeTotal() - freesBefore >= rounds 'theServiceWasCounted'
+		score = score + 2
+	end 'theServiceWasCounted'
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+
 <!-- test: builtins-mm-counters.alloc-total-arity-checked -->
-Every one of the six takes no arguments. An intrinsic has no signature for the ordinary arity check
+Every one of the twelve takes no arguments. An intrinsic has no signature for the ordinary arity check
 to read, so each is refused by the same `builtinArity` check `currentProcessId`/`cpuCount` use —
 and each names ITSELF, which is what a copy-pasted dispatch arm carrying its neighbour's name would
-fail. These six cases are front-end only and target-neutral, so they carry no marker.
+fail. These cases are front-end only and target-neutral, so they carry no marker.
 ```maxon
 function main() returns ExitCode
 	return __Builtins.mmAllocTotal(1) as ExitCode
@@ -653,4 +866,70 @@ end 'main'
 ```
 ```maxoncstderr
 error E3036: <fragment>:3:20: '__Builtins.mmRawAllocBytes' takes exactly 0 argument, but 1 were given
+```
+
+<!-- test: builtins-mm-counters.thread-alloc-total-arity-checked -->
+The calling thread's allocation column, refused the same way and naming itself.
+```maxon
+function main() returns ExitCode
+	return __Builtins.threadAllocTotal(1) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3036: <fragment>:3:20: '__Builtins.threadAllocTotal' takes exactly 0 argument, but 1 were given
+```
+
+<!-- test: builtins-mm-counters.thread-free-total-arity-checked -->
+The calling thread's free column, refused the same way and naming itself.
+```maxon
+function main() returns ExitCode
+	return __Builtins.threadFreeTotal(1) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3036: <fragment>:3:20: '__Builtins.threadFreeTotal' takes exactly 0 argument, but 1 were given
+```
+
+<!-- test: builtins-mm-counters.thread-alloc-bytes-arity-checked -->
+The calling thread's byte column, refused the same way and naming itself.
+```maxon
+function main() returns ExitCode
+	return __Builtins.threadAllocBytes(1) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3036: <fragment>:3:20: '__Builtins.threadAllocBytes' takes exactly 0 argument, but 1 were given
+```
+
+<!-- test: builtins-mm-counters.process-alloc-total-arity-checked -->
+The process-wide allocation total, refused the same way and naming itself.
+```maxon
+function main() returns ExitCode
+	return __Builtins.processAllocTotal(1) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3036: <fragment>:3:20: '__Builtins.processAllocTotal' takes exactly 0 argument, but 1 were given
+```
+
+<!-- test: builtins-mm-counters.process-free-total-arity-checked -->
+The process-wide free total, refused the same way and naming itself.
+```maxon
+function main() returns ExitCode
+	return __Builtins.processFreeTotal(1) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3036: <fragment>:3:20: '__Builtins.processFreeTotal' takes exactly 0 argument, but 1 were given
+```
+
+<!-- test: builtins-mm-counters.process-alloc-bytes-arity-checked -->
+The process-wide byte total, refused the same way and naming itself.
+```maxon
+function main() returns ExitCode
+	return __Builtins.processAllocBytes(1) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3036: <fragment>:3:20: '__Builtins.processAllocBytes' takes exactly 0 argument, but 1 were given
 ```

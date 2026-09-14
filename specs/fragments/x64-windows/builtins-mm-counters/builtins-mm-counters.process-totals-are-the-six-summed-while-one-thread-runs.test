@@ -1,0 +1,169 @@
+// Test: builtins-mm-counters.process-totals-are-the-six-summed-while-one-thread-runs
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias BoxCount = int(1 to i64.max)
+
+function fillAndDrop()
+	var buf = ByteArray.create()
+	for _ in 0 upto 64 'push'
+		buf.push(3)
+	end 'push'
+end 'fillAndDrop'
+
+function main() returns ExitCode
+	fillAndDrop()
+	let allocs = __Builtins.processAllocTotal()
+	let frees = __Builtins.processFreeTotal()
+	let bytes = __Builtins.processAllocBytes()
+	let boxes = __Builtins.mmAllocTotal() as BoxCount
+	let total = boxes + __Builtins.mmRawAllocTotal()
+	let live = __Builtins.mmAllocLive() + __Builtins.mmRawAllocLive()
+	let volume = __Builtins.mmAllocBytes() + __Builtins.mmRawAllocBytes()
+	var score = 0
+	if allocs > 0 and allocs == total 'allocsAreBothLayers'
+		score = score + 1
+	end 'allocsAreBothLayers'
+	if frees > 0 and frees == total - live 'freesAreTotalLessLive'
+		score = score + 2
+	end 'freesAreTotalLessLive'
+	if bytes > volume and (bytes - volume) mod boxes == 0 'bytesAddOneHeaderPerBox'
+		score = score + 4
+	end 'bytesAddOneHeaderPerBox'
+	return score as ExitCode
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 56
+  __il_body:
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 0
+    x64.jmp forhdr
+  push:
+    x64.movRegImm32 rdx, 3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+  forstep:
+    x64.leaRegRegImm32 r12, r12, 1
+  forhdr:
+    x64.cmpRegImm32 r12, 64
+    x64.jcc less, push
+  forexit:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+  __il_cont:
+    x64.callDirect __mm_counter_process_allocs
+    x64.movRegReg rbx, r8
+    x64.callDirect __mm_counter_process_frees
+    x64.movRegReg r12, r8
+    x64.callDirect __mm_counter_process_alloc_bytes
+    x64.storeSlotReg slot1, r8
+    x64.callDirect __mm_counter_alloc_total
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot0, r13
+    x64.cmpRegImm32 r13, 1
+    x64.jcc less, __rc_panic
+  __rc_ok#13:
+    x64.callDirect __mm_counter_raw_alloc_total
+    x64.leaRegRegReg r13, r13, r8
+    x64.callDirect __mm_counter_alloc_live
+    x64.movRegReg r14, r8
+    x64.callDirect __mm_counter_raw_alloc_live
+    x64.leaRegRegReg r14, r14, r8
+    x64.callDirect __mm_counter_alloc_bytes
+    x64.movRegReg r15, r8
+    x64.callDirect __mm_counter_raw_alloc_bytes
+    x64.leaRegRegReg rax, r15, r8
+    x64.movRegImm32 rcx, 0
+    x64.cmpRegImm32 rbx, 0
+    x64.movRegImm32 rdx, 0
+    x64.jcc lessEqual, scmerge#2
+  andrhs#1:
+    x64.cmpRegReg rbx, r13
+    x64.setccReg equal, rdx
+  scmerge#2:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc equal, ifcont#4
+  allocsAreBothLayers:
+    x64.leaRegRegImm32 rcx, rcx, 1
+  ifcont#4:
+    x64.cmpRegImm32 r12, 0
+    x64.movRegImm32 rdx, 0
+    x64.jcc lessEqual, scmerge#6
+  andrhs#5:
+    x64.subRegReg r13, r13, r14
+    x64.cmpRegReg r12, r13
+    x64.setccReg equal, rdx
+  scmerge#6:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc equal, ifcont#8
+  freesAreTotalLessLive:
+    x64.leaRegRegImm32 rcx, rcx, 2
+  ifcont#8:
+    x64.loadRegSlot rdx, slot1
+    x64.cmpRegReg rdx, rax
+    x64.movRegImm32 rdx, 0
+    x64.jcc lessEqual, critsplit#27
+  andrhs#9:
+    x64.loadRegSlot rdx, slot1
+    x64.subRegReg rdx, rdx, rax
+    x64.loadRegSlot rsi, slot0
+    x64.movRegReg rax, rdx
+    x64.cqo
+    x64.idivReg rsi
+    x64.cmpRegImm32 rdx, 0
+    x64.setccReg equal, rax
+    x64.jmp scmerge#10
+  critsplit#27:
+    x64.movRegReg rax, rdx
+  scmerge#10:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, critsplit#28
+  bytesAddOneHeaderPerBox:
+    x64.leaRegRegImm32 r8, rcx, 4
+    x64.jmp __rc_ok#15
+  critsplit#28:
+    x64.movRegReg r8, rcx
+  __rc_ok#15:
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at builtins-mm-counters.process-totals-are-the-six-summed-while-one-thread-runs.test:18: Range check failed: value outside typealias 'BoxCount'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

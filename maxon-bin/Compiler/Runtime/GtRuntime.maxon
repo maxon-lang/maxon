@@ -313,32 +313,20 @@ export let GtOffParkArg = GtOffParkKind + PointerFieldBytes
 // A park of any other kind never reads this and never writes it.
 export let GtOffParkGen = GtOffParkArg + PointerFieldBytes
 
-// ⭐⭐⭐ **WHAT THIS GREEN THREAD HAS ALLOCATED AND FREED — the memory columns a POOL can be measured with,
-// and the process-wide ones structurally cannot.** `__mm_counter_alloc_total` and its five siblings sum every
-// row, so a bracket opened inside one worker counts every other worker's traffic too: MEASURED,
-// `regalloc:splitting` reported 1,207,232,853 allocations at sixteen processors against
-// 77,890,562 at one, for the identical compile. The `phase regalloc` row and the run total stayed right,
-// because those brackets are the main thread's and the main thread is the only one open at the time — only
-// the sub-phase rows lied, silently, into `--metrics`, `--log=compiler:debug`, `scale-test` and
-// `docs/optimization-log.md`.
+// ⭐⭐⭐ **WHAT THIS GREEN THREAD HAS ALLOCATED AND FREED — the memory columns a POOL is measured with.** Every
+// process-wide figure sums every row, so a bracket opened inside one worker would count every other worker's
+// traffic too.
 //
-// ⭐ **THEY SUM BOTH ALLOCATOR LAYERS, where the global columns are per-layer.** `PhaseProbe` adds tracked
-// and raw before it reports either number, so a per-thread column that could only answer for one of them
-// would need the reader to hold two of these and would still be missing the other layer's frees.
-//
-// ⭐ **`frees` IS COUNTED HERE AND DERIVED THERE, AND THAT IS NOT AN INCONSISTENCY.** The global pair is
-// (cumulative, live), from which `freed = Δtotal − Δlive` falls out exactly; that identity exists because a
-// LIVE count is what the leak gate needs anyway. Nothing needs a per-thread live count — a green thread does
-// not own the boxes it allocated — so counting frees directly is one word and one add rather than a second
-// column kept solely to be subtracted.
+// ⭐ **THEY SUM BOTH ALLOCATOR LAYERS**, stepped at the slab doors once per request, because `PhaseProbe`
+// reports no figure for one layer alone. Frees are a column of their own rather than a live count: a green
+// thread does not own the boxes it allocated, so a per-thread live count would mean nothing.
 //
 // ⚠ **THEY ARE STEPPED WITHOUT A LOCK AND WITHOUT AN ATOMIC, and the ownership model is what makes that
 // sound**: a strand runs on at most one M at a time, and hands over between machines under `__sched_lock`,
-// so the one party that can step these words is the one thread they belong to. (The global columns take
-// `MultiMSharing.atomicStep` for the opposite reason — every thread steps the same word.)
+// so the one party that can step these words is the one thread they belong to — and it only ever adds.
 //
-// EXPORTED because the allocator steps them and the readers below are reached from `MmRuntime`'s counter
-// family, which is where a caller looks for a memory column.
+// EXPORTED because the allocator steps them and their readers are built in `MmRuntime`'s counter family,
+// which is where a caller looks for a memory column.
 export let GtOffThreadAllocs = GtOffParkGen + PointerFieldBytes
 export let GtOffThreadFrees = GtOffThreadAllocs + PointerFieldBytes
 export let GtOffThreadAllocBytes = GtOffThreadFrees + PointerFieldBytes
