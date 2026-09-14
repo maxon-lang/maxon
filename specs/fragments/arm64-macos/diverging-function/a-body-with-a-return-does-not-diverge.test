@@ -1,5 +1,8 @@
 // Test: a-body-with-a-return-does-not-diverge
+var calls = 0 as Integer
+
 function maybeFatal(b bool) returns Integer
+	calls = calls + 1
 	if b 'y'
 		return 5
 	end 'y'
@@ -7,20 +10,46 @@ function maybeFatal(b bool) returns Integer
 end 'maybeFatal'
 
 function main() returns ExitCode
-	maybeFatal(true)
+	_ = maybeFatal(true)
 	print("back in main\n")
-	return 0
+	return calls - 1
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
+data {
+  __data_calls@0 = i64 0
+}
+
 func @main {
   entry:
     arm64.prologue 16
-  __il_cont:
+  __il_body#6:
+    arm64.leaGlobal x0, __data_calls
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x0, x0, 1
+    arm64.leaGlobal x1, __data_calls
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+  __il_cont#5:
     arm64.leaRdata x0, __str_rec_2  ; "back in main\x0a"
-    arm64.bl print
+  __il_body#9:
+    arm64.bl __write_stdout
+  __il_cont#4:
+    arm64.leaGlobal x0, __data_calls
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.sub x0, x0, 1
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at a-body-with-a-return-does-not-diverge.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret

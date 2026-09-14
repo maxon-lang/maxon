@@ -41,41 +41,61 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Bucket.create {
+func @main {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.leaRdata x0, __layout_Set_String
-    arm64.leaRdata x1, __witness_String.Hashable
-    arm64.leaRdata x2, __witness_String.Equatable
-    arm64.bl Set.create
-    arm64.movRegReg x20, x0
-    arm64.movImm x0, 16
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x20
-    arm64.storeBaseDispReg.word64 [x0 + 8], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @detached {
-  entry:
-    arm64.prologue 64
+    arm64.prologue 80
+    arm64.storeSlotReg slot7, x26
+    arm64.storeSlotReg slot6, x25
     arm64.storeSlotReg slot5, x24
     arm64.storeSlotReg slot4, x23
     arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, 5
-    arm64.bl Bucket.create
-    arm64.movRegReg x19, x0
-    arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
+  __il_body#75:
+    arm64.movImm x19, 5
+  __il_body#77:
+    arm64.leaRdata x0, __layout_Set_String
+    arm64.leaRdata x1, __witness_String.Hashable
+    arm64.leaRdata x1, __witness_String.Equatable
+  __il_body#83:
+    arm64.movImm x1, 8
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+  __il_body#84:
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x21, x0
+  __il_body#85:
+    arm64.movImm x0, 4
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x22, x0
+  __il_cont#80:
+    arm64.movImm x23, 0
+    arm64.movImm x24, 0
+    arm64.movImm x0, 40
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x25, x0
+    arm64.storeBaseDispReg.word64 [x25 + 0], x20
+    arm64.storeBaseDispReg.word64 [x25 + 8], x21
+    arm64.storeBaseDispReg.word64 [x25 + 16], x22
+    arm64.storeBaseDispReg.word64 [x25 + 24], x23
+    arm64.storeBaseDispReg.word64 [x25 + 32], x24
+  __il_cont#78:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x25
+    arm64.storeBaseDispReg.word64 [x20 + 8], x19
+  __il_cont#76:
+    arm64.loadRegBaseDisp.word64 x19, [x20 + 0]
     arm64.leaRdata x0, __str_rec_2  ; "a string long enough to force a heap allocation"
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
@@ -98,10 +118,10 @@ func @detached {
     arm64.leaRdata x2, __layout_Set_String
     arm64.leaRdata x3, __witness_String.Hashable
     arm64.leaRdata x4, __witness_String.Equatable
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x19
     arm64.movRegReg x1, x23
     arm64.bl Set.insert
-    arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x19, [x20 + 0]
     arm64.leaRdata x0, __str_rec_3  ; "a second string long enough to force a heap allocation"
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
@@ -124,49 +144,27 @@ func @detached {
     arm64.leaRdata x2, __layout_Set_String
     arm64.leaRdata x3, __witness_String.Hashable
     arm64.leaRdata x4, __witness_String.Equatable
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x19
     arm64.movRegReg x1, x23
     arm64.bl Set.insert
-    arm64.movRegReg x0, x19
-    arm64.bl __clone_Bucket
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __destruct_Bucket
     arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
-    arm64.ret
-}
-
-func @main {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.bl detached
+    arm64.bl __clone_Bucket
     arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Bucket
+  __il_cont#74:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.leaRdata x1, __witness_String.Hashable
-    arm64.leaRdata x2, __witness_String.Equatable
-  __il_body:
-    arm64.loadRegBaseDisp.word64 x3, [x0 + 24]
-    arm64.cmp x3, 0
-    arm64.b.lt __il_slow
-  __rc_chk#11:
-    arm64.movImm x4, 4611686018427387904
-    arm64.cmp x3, x4
-    arm64.b.le __rc_ok#10
-  __il_slow:
-    arm64.bl Set.count
-    arm64.b __il_cont
-  __rc_ok#10:
-    arm64.movRegReg x0, x3
-  __il_cont:
+    arm64.leaRdata x1, __witness_String.Equatable
+  __il_body#9:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 24]
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#11
+  __rc_chk#12:
+    arm64.movImm x1, 4611686018427387904
+    arm64.cmp x0, x1
+    arm64.b.gt __rc_panic#11
+  __il_cont#8:
     arm64.cmp x0, 2
     arm64.b.eq ifcont#2
   badCount:
@@ -176,15 +174,196 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
     arm64.ret
   ifcont#2:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.leaRdata x1, __str_rec_3  ; "a second string long enough to force a heap allocation"
-    arm64.leaRdata x2, __layout_Set_String
-    arm64.leaRdata x3, __witness_String.Hashable
-    arm64.leaRdata x4, __witness_String.Equatable
-    arm64.bl Set.contains
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
+    arm64.leaRdata x21, __str_rec_3  ; "a second string long enough to force a heap allocation"
+    arm64.leaRdata x0, __layout_Set_String
+    arm64.leaRdata x1, __witness_String.Hashable
+    arm64.leaRdata x22, __witness_String.Equatable
+  __il_body#14:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 32]
+    arm64.cmp x0, 0
+    arm64.b.ne ifcont#16
+  empty_check:
+    arm64.movImm x0, 0
+    arm64.b __il_cont#13
+  ifcont#16:
+    arm64.movRegReg x0, x21
+    arm64.loadRegBaseDisp.word64 x16, [x1 + 24]
+    arm64.blr x16
+    arm64.movRegReg x23, x0
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 32]
+    arm64.sub x24, x0, 1
+    arm64.movRegReg x0, x23
+    arm64.bl spreadHash
+    arm64.and x25, x0, x24
+    arm64.movImm x26, 0
+    arm64.b whilehdr
+  probe:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x25, 0
+    arm64.b.lt __rc_panic#52
+  __rc_ok#51:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 24]
+    arm64.cmp x1, 8
+    arm64.b.ne __im_stride#61
+  __im_word#59:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.cmp x25, x1
+    arm64.b.hs __im_slow#58
+  __im_load#63:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x25*8 + 0]
+    arm64.b trycont#22
+  __im_stride#61:
+    arm64.cmp x1, 1
+    arm64.b.ne __im_slow#58
+  __im_byte#60:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.cmp x25, x1
+    arm64.b.hs __im_slow#58
+  __im_load#64:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x0, x0, x25
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.b trycont#22
+  __im_slow#58:
+    arm64.movRegReg x1, x25
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.eq trycont#22
+  tryerr#21:
+    arm64.movImm x0, 0
+  trycont#22:
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.b.ne matchnext#27
+  matcharm#23:
+    arm64.movImm x2, 1
+    arm64.b matchcont#29
+  matchnext#27:
+    arm64.cmp x0, 1
+    arm64.b.ne matchnext#28
+  matcharm#24:
+    arm64.movImm x2, 0
+    arm64.b matchcont#29
+  matchnext#28:
+    arm64.cmp x0, 2
+    arm64.b.ne matchdead#26
+  matcharm#25:
+    arm64.movImm x2, 0
+  matchcont#29:
+    arm64.cbz x2, ifcont#31
+  empty:
+    arm64.movImm x0, 0
+    arm64.b __il_cont#13
+  ifcont#31:
+    arm64.cbz x1, matchnext#36
+  matcharm#33:
+    arm64.movImm x0, 0
+    arm64.b matchcont#38
+  matchnext#36:
+    arm64.cmp x0, 1
+    arm64.b.ne matchnext#37
+  matcharm#32:
+    arm64.movImm x0, 1
+    arm64.b matchcont#38
+  matchnext#37:
+    arm64.cmp x0, 2
+    arm64.b.ne matchdead#35
+  matcharm#34:
+    arm64.movImm x0, 0
+  matchcont#38:
+    arm64.cbz x0, ifcont#50
+  check_found:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 16]
+  __rc_ok#53:
+    arm64.movRegReg x1, x25
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.eq trycont#42
+  tryerr#41:
+    arm64.movRegReg x0, x23
+  trycont#42:
+    arm64.cmp x0, x23
+    arm64.b.ne ifcont#50
+  hash_match:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+  __rc_ok#55:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 24]
+    arm64.cmp x1, 8
+    arm64.b.ne __im_stride#69
+  __im_word#67:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.cmp x25, x1
+    arm64.b.hs __im_slow#66
+  __im_load#71:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseIndexScale.word64 x1, [x1 + x25*8 + 0]
+    arm64.b __im_loaded
+  __im_stride#69:
+    arm64.cmp x1, 1
+    arm64.b.ne __im_slow#66
+  __im_byte#68:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.cmp x25, x1
+    arm64.b.hs __im_slow#66
+  __im_load#72:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x1, x1, x25
+    arm64.loadRegBaseDisp.byte x1, [x1 + 0]
+  __im_loaded:
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 40]
+    arm64.cmp x3, 0
+    arm64.b.eq critsplit#87
+  __im_empty:
+    arm64.cmp x1, 0
+    arm64.b.eq __im_slow#66
+  critsplit#88:
+    arm64.movRegReg x0, x1
+    arm64.b __im_cont
+  critsplit#87:
+    arm64.movRegReg x0, x1
+    arm64.b __im_cont
+  __im_slow#66:
+    arm64.movRegReg x1, x25
+    arm64.bl __managed_get
+    arm64.movRegReg x2, x9
+  __im_cont:
+    arm64.cmp x2, 0
+    arm64.b.ne ifcont#50
+  get_existing:
+    arm64.movRegReg x1, x21
+    arm64.loadRegBaseDisp.word64 x16, [x22 + 24]
+    arm64.blr x16
+    arm64.cbz x0, ifcont#50
+  found:
+    arm64.movImm x0, 1
+    arm64.b __il_cont#13
+  ifcont#50:
+    arm64.add x0, x25, 1
+    arm64.and x0, x0, x24
+    arm64.add x26, x26, 1
+    arm64.movRegReg x25, x0
+  whilehdr:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 32]
+    arm64.cmp x26, x0
+    arm64.b.lt probe
+    arm64.b whileexit
+  matchdead#35:
+  matchdead#26:
+  whileexit:
+    arm64.movImm x0, 0
+  __il_cont#13:
     arm64.eor x0, x0, 1
     arm64.cbz x0, ifcont#4
   lostAMember:
@@ -194,29 +373,75 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
     arm64.ret
   ifcont#4:
     arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
-    arm64.movRegReg x0, x19
-    arm64.bl __destruct_Bucket
     arm64.cmp x20, 0
-    arm64.b.lt __rc_panic
+    arm64.b.lt __rc_panic#6
   __rc_chk#7:
     arm64.cmp x20, 255
-    arm64.b.le __rc_ok#5
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_21  ; "panic at a-struct-owning-a-set-instance-clones.test:32: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.b.gt __rc_panic#6
+  __rc_ok#5:
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Bucket
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  __rc_panic#11:
+    arm64.leaRdata x0, __str_blob_34  ; "panic at Set.maxon:312: Range check failed: value outside typealias 'MemberCount'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
     arm64.ret
-  __rc_ok#5:
-    arm64.movRegReg x0, x20
+  __rc_panic#52:
+    arm64.leaRdata x0, __str_blob_31  ; "panic at Set.maxon:212: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  __rc_panic#6:
+    arm64.leaRdata x0, __str_blob_22  ; "panic at a-struct-owning-a-set-instance-clones.test:32: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
     arm64.ret
 }

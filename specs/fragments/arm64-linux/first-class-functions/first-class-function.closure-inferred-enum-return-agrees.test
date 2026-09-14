@@ -26,7 +26,7 @@ end 'useEater'
 
 function main() returns ExitCode
 	let mk = function() gives Color.blue
-	let et = function(c Color) gives 40
+	let et = function(c Color) gives 40 if c == Color.green else 0
 	print("{useMaker(mk)} {useEater(et)}\n")
 	return 0
 end 'main'
@@ -38,52 +38,6 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
-}
-
-func @useMaker {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x1
-    arm64.blr x19
-    arm64.cmp x0, 0
-    arm64.b.ne matchnext#5
-  matcharm#1:
-    arm64.movImm x0, 1
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-  matchnext#5:
-    arm64.cmp x0, 1
-    arm64.b.ne matchnext#6
-  matcharm#2:
-    arm64.movImm x0, 2
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-  matchnext#6:
-    arm64.cmp x0, 2
-    arm64.b.ne matchdead
-  matcharm#3:
-    arm64.movImm x0, 3
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-  matchdead:
-  matchcont:
-}
-
-func @useEater {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 1
-    arm64.blr x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
 }
 
 func @main {
@@ -99,11 +53,28 @@ func @main {
     arm64.storeSlotReg slot4, x21
     arm64.storeSlotReg slot3, x20
     arm64.storeSlotReg slot2, x19
-    arm64.leaFuncAddr x0, main$closure_0
+    arm64.leaFuncAddr x1, main$closure_0
     arm64.leaFuncAddr x19, main$closure_1
-    arm64.movImm x1, 0
-    arm64.bl useMaker
-    arm64.movRegReg x20, x0
+    arm64.movImm x0, 0
+  __il_body#4:
+    arm64.blr x1
+    arm64.cmp x0, 0
+    arm64.b.ne matchnext#9
+  matcharm#5:
+    arm64.movImm x20, 1
+    arm64.b __il_cont#3
+  matchnext#9:
+    arm64.cmp x0, 1
+    arm64.b.ne matchnext#10
+  matcharm#6:
+    arm64.movImm x20, 2
+    arm64.b __il_cont#3
+  matchnext#10:
+    arm64.cmp x0, 2
+    arm64.b.ne matchdead
+  matcharm#7:
+    arm64.movImm x20, 3
+  __il_cont#3:
     arm64.movImm x0, 21
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -117,9 +88,11 @@ func @main {
     arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
     arm64.movImm x1, 0
-    arm64.movRegReg x0, x19
-    arm64.bl useEater
+  __il_body#12:
+    arm64.movImm x0, 1
+    arm64.blr x19
     arm64.movRegReg x19, x0
+  __il_cont#2:
     arm64.movImm x0, 21
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -171,8 +144,10 @@ func @main {
     arm64.bl __mm_decref
     arm64.movRegReg x0, x24
     arm64.bl __mm_decref
+  __il_body#13:
     arm64.movRegReg x0, x27
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont#1:
     arm64.movRegReg x0, x27
     arm64.bl __str_decref
     arm64.movImm x0, 0
@@ -188,6 +163,8 @@ func @main {
     arm64.loadRegSlot x28, slot11
     arm64.epilogue 112
     arm64.ret
+  matchdead:
+  matchcont:
 }
 
 func @main$closure_0 {
@@ -201,7 +178,14 @@ func @main$closure_0 {
 func @main$closure_1 {
   entry:
     arm64.prologue 16
+    arm64.cmp x0, 1
+    arm64.b.ne ternaryfalse
+  ternarytrue:
     arm64.movImm x0, 40
+    arm64.b matchcont
+  ternaryfalse:
+    arm64.movImm x0, 0
+  matchcont:
     arm64.epilogue 16
     arm64.ret
 }

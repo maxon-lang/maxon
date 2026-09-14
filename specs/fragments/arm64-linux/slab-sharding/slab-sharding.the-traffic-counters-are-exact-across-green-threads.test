@@ -66,39 +66,64 @@ data {
   __mm_raw_alloc_bytes@40 = i64 0
   __gt_run_queue_head@48 = i64 0
   __gt_run_queue_tail@56 = i64 0
-  __gt_init_done@64 = i64 0
-  __gt_timer_count@72 = i64 0
-  __gt_timer_heap_base@80 = i64 0
-  __gt_timer_capacity@88 = i64 0
-  __gt_timer_seq@96 = i64 0
+  __gt_timer_count@64 = i64 0
+  __gt_timer_heap_base@72 = i64 0
+  __gt_timer_capacity@80 = i64 0
+  __gt_timer_seq@88 = i64 0
+  __gt_timer_when@96 = i64 9223372036854775807
   __gt_trace_counter@104 = i64 0
-  __gt_proc_count@112 = i64 0
-  __gt_proc_handles_base@120 = i64 0
-  __gt_proc_gts_base@128 = i64 0
-  __gt_proc_wait_snapshot@136 = i64 0
-  __gt_proc_poller@144 = i64 0
-  __gt_live_count@152 = i64 0
-  __sched_progress@160 = i64 0
-  __sched_active_workers@168 = i64 1
-  __sched_max_active_workers@176 = i64 1
-  __sched_tls_index@184 = i64 0
-  __sched_tls_teb_offset@192 = i64 0
-  __sched_procs@200 = i64 0
-  __sched_allm@208 = i64 0
-  __sched_midle@216 = i64 0
-  __sched_pidle@224 = i64 0
-  __sched_num_procs@232 = i64 0
-  __sched_shutdown_flag@240 = i64 0
-  __sched_lock@248 = i64 0
-  __sched_nmspinning@256 = i64 0
-  __sched_parked_drivers@264 = i64 0
-  __sched_sysmon_started@272 = i64 0
-  __mrt_errno@280 = i64 0
-  __mrt_envp@288 = i64 0
-  __mrt_tls_next_key@296 = i64 0
-  __slab_arena_list@304 = i64 0
-  __slab_arena_map_l1@312 = i64 0
-  __slab_state@320 = i64 0
+  __gt_live_count@112 = i64 0
+  __gt_seed_bytes@120 = i64 2048
+  __gt_stack_bytes_sum@128 = i64 0
+  __gt_stack_bytes_count@136 = i64 0
+  __gt_seed_sum_seen@144 = i64 0
+  __gt_seed_count_seen@152 = i64 0
+  __sched_active_workers@160 = i64 1
+  __sched_max_active_workers@168 = i64 1
+  __sched_tls_index@176 = i64 0
+  __sched_tls_teb_offset@184 = i64 0
+  __sched_procs@192 = i64 0
+  __sched_allm@200 = i64 0
+  __sched_midle@208 = i64 0
+  __sched_pidle@216 = i64 0
+  __gt_gfree_head@224 = i64 0
+  __sched_arena_cursor@232 = i64 0
+  __sched_arena_limit@240 = i64 0
+  __gt_records_carved@248 = i64 0
+  __sched_npidle@256 = i64 0
+  __sched_runq_size@264 = i64 0
+  __sched_global_pushes@272 = i64 0
+  __sched_timer_scan_steps@280 = i64 0
+  __sched_mcount@288 = i64 0
+  __sched_nmidle@296 = i64 0
+  __sched_main_m@304 = i64 0
+  __sched_phase@312 = i64 0
+  __sched_lastpoll@320 = i64 0
+  __sched_poll_until@328 = i64 0
+  __sched_regain_head@336 = i64 0
+  __np_poller@344 = i64 0
+  __np_break@352 = i64 0
+  __np_wake_sig@360 = i64 0
+  __np_pd_table@368 = i64 0
+  __np_pd_cap@376 = i64 0
+  __np_waiters@384 = i64 0
+  __np_src_key_free@392 = i64 0
+  __np_src_key_high@400 = i64 0
+  __sched_num_procs@408 = i64 0
+  __sched_shutdown_flag@416 = i64 0
+  __sched_lock@424 = i64 0
+  __sched_lock_depth_sink@432 = i64 0
+  __sched_nmspinning@440 = i64 0
+  __sched_needspinning@448 = i64 0
+  __sched_sysmon_event@456 = i64 0
+  __sched_sysmon_wait@464 = i64 0
+  __sched_timer_starts@472 = i64 0
+  __mrt_errno@480 = i64 0
+  __mrt_envp@488 = i64 0
+  __mrt_tls_next_key@496 = i64 0
+  __slab_arena_list@504 = i64 0
+  __slab_arena_map_l1@512 = i64 0
+  __slab_state@520 = i64 0
 }
 
 func @churn {
@@ -119,31 +144,11 @@ func @churn {
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 65536
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_4  ; "panic at slab-sharding.the-traffic-counters-are-exact-across-green-threads.test:5: Range check failed: value outside typealias 'Count'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
-    arm64.ret
+    arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movImm x0, 0
     arm64.movImm x20, 0
-  forhdr:
-    arm64.storeSlotReg slot1, x0
-    arm64.storeSlotReg slot0, x20
-    arm64.cmp x20, 400
-    arm64.b.ge forexit
+    arm64.b forhdr
   alloc:
     arm64.leaRdata x0, __str_rec_2  ; "count-"
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
@@ -196,20 +201,25 @@ func @churn {
     arm64.movRegReg x2, x20
     arm64.bl __str_copy
     arm64.add x0, x21, x20
-    arm64.loadRegSlot x20, slot3
-    arm64.storeBaseDispReg.word64 [x20 + 0], x28
-    arm64.loadRegSlot x0, slot2
-    arm64.storeBaseDispReg.word64 [x20 + 8], x0
-    arm64.movImm x0, 18446744073709551613
-    arm64.storeBaseDispReg.word64 [x20 + 16], x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x20 + 24], x0
+    arm64.loadRegSlot x0, slot3
+    arm64.storeBaseDispReg.word64 [x0 + 0], x28
+    arm64.loadRegSlot x1, slot2
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.movImm x1, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x0 + 16], x1
+    arm64.movImm x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 24], x1
     arm64.movRegReg x0, x23
     arm64.bl __mm_decref
     arm64.movRegReg x0, x27
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl String.isEmpty
+  __il_body:
+    arm64.loadRegSlot x0, slot3
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+  __il_cont#12:
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+  __il_cont#10:
     arm64.eor x0, x0, 1
     arm64.cbz x0, critsplit
   nonEmpty:
@@ -225,9 +235,29 @@ func @churn {
     arm64.loadRegSlot x0, slot0
     arm64.add x0, x0, 1
     arm64.xchgRegReg x20, x0
-    arm64.b forhdr
+  forhdr:
+    arm64.storeSlotReg slot1, x0
+    arm64.storeSlotReg slot0, x20
+    arm64.cmp x20, 400
+    arm64.b.lt alloc
   forexit:
     arm64.loadRegSlot x0, slot1
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at slab-sharding.the-traffic-counters-are-exact-across-green-threads.test:5: Range check failed: value outside typealias 'Count'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot4
     arm64.loadRegSlot x20, slot5
     arm64.loadRegSlot x21, slot6
@@ -253,16 +283,7 @@ func @wave {
     arm64.b.lt __rc_panic#2
   __rc_chk#3:
     arm64.cmp x19, 65536
-    arm64.b.le __rc_ok#1
-  __rc_panic#2:
-    arm64.leaRdata x0, __str_blob_5  ; "panic at slab-sharding.the-traffic-counters-are-exact-across-green-threads.test:16: Range check failed: value outside typealias 'Count'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
+    arm64.b.gt __rc_panic#2
   __rc_ok#1:
     arm64.leaFuncAddr x0, churn
     arm64.bl __gt_spawn
@@ -271,20 +292,9 @@ func @wave {
     arm64.movRegReg x0, x20
     arm64.bl __gt_ready
     arm64.add x19, x19, 1
-    arm64.cmp x19, 0
-    arm64.b.lt __rc_panic#5
   __rc_chk#6:
     arm64.cmp x19, 65536
-    arm64.b.le __rc_ok#4
-  __rc_panic#5:
-    arm64.leaRdata x0, __str_blob_6  ; "panic at slab-sharding.the-traffic-counters-are-exact-across-green-threads.test:18: Range check failed: value outside typealias 'Count'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
+    arm64.b.gt __rc_panic#5
   __rc_ok#4:
     arm64.leaFuncAddr x0, churn
     arm64.bl __gt_spawn
@@ -298,6 +308,24 @@ func @wave {
     arm64.movRegReg x0, x21
     arm64.bl __gt_await
     arm64.add x0, x19, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at slab-sharding.the-traffic-counters-are-exact-across-green-threads.test:16: Range check failed: value outside typealias 'Count'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_7  ; "panic at slab-sharding.the-traffic-counters-are-exact-across-green-threads.test:18: Range check failed: value outside typealias 'Count'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -377,25 +405,9 @@ func @main {
     arm64.add x0, x0, 2
   ifcont#10:
     arm64.cmp x1, 0
-    arm64.b.le ifcont#12
+    arm64.b.le __rc_ok
   itMoved:
     arm64.add x0, x0, 4
-  ifcont#12:
-    arm64.cmp x0, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x0, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_7  ; "panic at slab-sharding.the-traffic-counters-are-exact-across-green-threads.test:55: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.ret
   __rc_ok:
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1

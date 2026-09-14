@@ -51,17 +51,10 @@ func @pick {
   entry:
     arm64.prologue 16
     arm64.cmp x0, 0
-    arm64.b.lt __rc_panic#4
-  __rc_chk#5:
+    arm64.b.lt __rc_panic
+  __rc_chk:
     arm64.cmp x0, 1000
-    arm64.b.le __rc_ok#3
-  __rc_panic#4:
-    arm64.leaRdata x0, __str_blob_4  ; "panic at main.maxon:7: Range check failed: value outside typealias 'Ms'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.movImm x9, 0
-    arm64.epilogue 16
-    arm64.ret
+    arm64.b.gt __rc_panic
   __rc_ok#3:
     arm64.cmp x0, 500
     arm64.b.le ifcont
@@ -73,19 +66,14 @@ func @pick {
   ifcont:
     arm64.add x0, x0, 7
     arm64.movImm x9, 0
-    arm64.cmp x0, 0
-    arm64.b.lt __rc_panic#7
-  __rc_chk#8:
-    arm64.cmp x0, 1000
-    arm64.b.le __rc_ok#6
-  __rc_panic#7:
-    arm64.leaRdata x0, __str_blob_5  ; "panic at main.maxon:11: Range check failed: value outside typealias 'Ms'\x0a"
+  __rc_ok#6:
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at main.maxon:7: Range check failed: value outside typealias 'Ms'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.movImm x9, 0
-    arm64.epilogue 16
-    arm64.ret
-  __rc_ok#6:
     arm64.epilogue 16
     arm64.ret
 }
@@ -170,8 +158,10 @@ func @main {
     arm64.storeBaseDispReg.word64 [x26 + 24], x0
     arm64.movRegReg x0, x22
     arm64.bl __mm_decref
+  __il_body:
     arm64.movRegReg x0, x26
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont:
     arm64.movRegReg x0, x26
     arm64.bl __str_decref
     arm64.movImm x0, 0

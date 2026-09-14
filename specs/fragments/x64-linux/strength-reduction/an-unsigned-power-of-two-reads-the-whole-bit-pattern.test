@@ -1,14 +1,14 @@
 // Test: an-unsigned-power-of-two-reads-the-whole-bit-pattern
-typealias Unsigned = int(0 to u64.max)
+typealias Unsigned = bits(64)
 typealias UnsignedArray = Array with Unsigned
 typealias UPosDivisor = int(2 to 1000000)
 
 function refUDiv(n Unsigned, d UPosDivisor) returns Unsigned
-	return n / d
+	return try (n / (d as Unsigned)) otherwise panic("d is never zero")
 end 'refUDiv'
 
 function refUMod(n Unsigned, d UPosDivisor) returns Unsigned
-	return n mod d
+	return try (n mod (d as Unsigned)) otherwise panic("d is never zero")
 end 'refUMod'
 
 function main() returns ExitCode
@@ -51,34 +51,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @refUDiv {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegReg rsi, rdx
-    x64.cmpRegImm32 rsi, 2
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 rsi, 1000000
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at an-unsigned-power-of-two-reads-the-whole-bit-pattern.test:6: Range check failed: value outside typealias 'UPosDivisor'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegReg rax, rcx
-    x64.movRegImm32 rdx, 0
-    x64.divReg rsi
-    x64.movRegReg r8, rax
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
 func @refUMod {
   entry:
     x64.pushReg rbp
@@ -89,19 +61,23 @@ func @refUMod {
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 rsi, 1000000
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at an-unsigned-power-of-two-reads-the-whole-bit-pattern.test:10: Range check failed: value outside typealias 'UPosDivisor'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
+    x64.jcc greater, __rc_panic
   __rc_ok:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.andRegReg rcx, rcx, rax
     x64.movRegReg rax, rcx
     x64.movRegImm32 rdx, 0
     x64.divReg rsi
+  tryok:
     x64.movRegReg r8, rdx
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at an-unsigned-power-of-two-reads-the-whole-bit-pattern.test:10: Range check failed: value outside typealias 'UPosDivisor'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -142,20 +118,15 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
     x64.movRegImm32 r12, 0
-  forhdr:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegReg r12, rax
-    x64.jcc greaterEqual, forexit
+    x64.jmp forhdr
   each:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseIndexScale.word64 r13, [rax + r12*8 + 0]
   __im_cont:
-    x64.movRegReg r14, r13
-    x64.shrRegImm8 r14, r13, 1
-    x64.movRegImm32 rdx, 2
-    x64.movRegReg rcx, r13
-    x64.callDirect refUDiv
-    x64.cmpRegReg r14, r8
+    x64.movRegReg rax, r13
+    x64.shrRegImm8 rax, r13, 1
+  __il_cont#30:
+    x64.cmpRegReg rax, rax
     x64.jcc equal, ifcont#6
   divTwo:
     x64.movRegImm32 r12, 1
@@ -190,12 +161,10 @@ func @main {
     x64.popReg rbp
     x64.ret
   ifcont#8:
-    x64.movRegReg r14, r13
-    x64.shrRegImm8 r14, r13, 5
-    x64.movRegImm32 rdx, 32
-    x64.movRegReg rcx, r13
-    x64.callDirect refUDiv
-    x64.cmpRegReg r14, r8
+    x64.movRegReg rax, r13
+    x64.shrRegImm8 rax, r13, 5
+  __il_cont#16:
+    x64.cmpRegReg rax, rax
     x64.jcc equal, ifcont#10
   divThirtyTwo:
     x64.movRegImm32 r12, 3
@@ -234,11 +203,14 @@ func @main {
     x64.movRegReg rax, r13
     x64.movRegImm32 rdx, 0
     x64.divReg rcx
-    x64.movRegReg r14, rax
-    x64.movRegImm32 rdx, 10
-    x64.movRegReg rcx, r13
-    x64.callDirect refUDiv
-    x64.cmpRegReg r14, r8
+    x64.movRegReg rcx, rax
+  __rc_ok:
+    x64.movRegImm32 rsi, 10
+    x64.movRegReg rax, r13
+    x64.movRegImm32 rdx, 0
+    x64.divReg rsi
+  __il_cont#23:
+    x64.cmpRegReg rcx, rax
     x64.jcc equal, forstep
   divTenIsRefused:
     x64.movRegImm32 r12, 5
@@ -254,7 +226,10 @@ func @main {
     x64.ret
   forstep:
     x64.leaRegRegImm32 r12, r12, 1
-    x64.jmp forhdr
+  forhdr:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg r12, rax
+    x64.jcc less, each
   forexit:
     x64.movRegImm32 r12, 0
     x64.movRegReg rcx, rbx

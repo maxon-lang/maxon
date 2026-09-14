@@ -52,77 +52,18 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Container.create {
+func @main {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movImm x1, 8
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
-    arm64.bl __managed_create
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @Container.push {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.bl __managed_push
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @Container.duplicate {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.bl Array.clone
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @Container.count {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.cmp x0, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x0, 1000
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_7  ; "panic at opaque-copy-of-a-nested-container-instantiation.test:24: Range check failed: value outside typealias 'Idx'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  __rc_ok:
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @makeDuplicate {
-  entry:
-    arm64.prologue 48
+    arm64.prologue 80
+    arm64.storeSlotReg slot7, x26
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
+  __il_body#9:
     arm64.movImm x0, 8
     arm64.leaFuncAddr x1, __str_decref
     arm64.bl __managed_create
@@ -138,68 +79,89 @@ func @makeDuplicate {
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
     arm64.leaRdata x0, __layout_Container_StringArray
-    arm64.bl Container.create
+  __il_body#12:
+    arm64.movImm x1, 8
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_create
     arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.leaRdata x2, __layout_Container_StringArray
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x19
-    arm64.bl Container.push
-    arm64.leaRdata x1, __layout_Container_StringArray
-    arm64.movRegReg x0, x20
-    arm64.bl Container.duplicate
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
     arm64.movRegReg x21, x0
-    arm64.movRegReg x0, x20
-    arm64.bl __destruct_Container_StringArray
+    arm64.storeBaseDispReg.word64 [x21 + 0], x20
+  __il_cont#11:
     arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
-    arm64.movRegReg x0, x21
+    arm64.bl __managed_retain
+    arm64.movRegReg x1, x0
+    arm64.leaRdata x0, __layout_Container_StringArray
+  __il_body#13:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.bl __managed_push
+  __il_cont#10:
+    arm64.leaRdata x3, __layout_Container_StringArray
+  __il_body#15:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+  __il_body#17:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.movImm x1, 0
+    arm64.bl __managed_slice_opaque
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok
+  tryerr:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at Array.maxon:172: Array.clone: slice OOB \xe2\x80\x94 0..len is always valid\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
     arm64.ret
-}
-
-func @main {
-  entry:
-    arm64.prologue 80
-    arm64.storeSlotReg slot7, x26
-    arm64.storeSlotReg slot6, x25
-    arm64.storeSlotReg slot5, x24
-    arm64.storeSlotReg slot4, x23
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.bl makeDuplicate
-    arm64.movRegReg x19, x0
-  __il_body:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
-    arm64.cmp x20, 0
-    arm64.b.lt __il_slow
-  __rc_chk:
-    arm64.cmp x20, 1000
-    arm64.b.le __il_cont
-  __il_slow:
-    arm64.movRegReg x0, x19
-    arm64.bl Container.count
+  tryok:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_retain
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+  __il_cont#16:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
-  __il_cont:
+    arm64.storeBaseDispReg.word64 [x20 + 0], x22
+  __il_cont#14:
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Container_StringArray
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+  __il_body#3:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x19, 1000
+    arm64.b.gt __rc_panic
+  __il_cont#2:
     arm64.movImm x0, 20
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x21, x0
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
     arm64.bl __uint_to_string
-    arm64.movRegReg x20, x0
+    arm64.movRegReg x19, x0
     arm64.leaRdata x0, __str_rec_5  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
-    arm64.add x24, x20, x23
+    arm64.add x24, x19, x23
     arm64.add x0, x24, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -207,14 +169,14 @@ func @main {
     arm64.add x26, x25, 56
     arm64.movRegReg x0, x26
     arm64.movRegReg x1, x21
-    arm64.movRegReg x2, x20
+    arm64.movRegReg x2, x19
     arm64.bl __str_copy
-    arm64.add x20, x26, x20
-    arm64.movRegReg x0, x20
+    arm64.add x19, x26, x19
+    arm64.movRegReg x0, x19
     arm64.movRegReg x1, x22
     arm64.movRegReg x2, x23
     arm64.bl __str_copy
-    arm64.add x0, x20, x23
+    arm64.add x0, x19, x23
     arm64.storeBaseDispReg.word64 [x25 + 0], x26
     arm64.storeBaseDispReg.word64 [x25 + 8], x24
     arm64.movImm x0, 18446744073709551613
@@ -223,14 +185,30 @@ func @main {
     arm64.storeBaseDispReg.word64 [x25 + 24], x0
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
+  __il_body#7:
     arm64.movRegReg x0, x25
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont#1:
     arm64.movRegReg x0, x25
     arm64.bl __str_decref
-    arm64.movImm x20, 0
-    arm64.movRegReg x0, x19
-    arm64.bl __destruct_Container_StringArray
+    arm64.movImm x19, 0
     arm64.movRegReg x0, x20
+    arm64.bl __destruct_Container_StringArray
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_8  ; "panic at opaque-copy-of-a-nested-container-instantiation.test:24: Range check failed: value outside typealias 'Idx'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

@@ -17,6 +17,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -30,33 +33,61 @@ func @main {
     x64.pushReg r15
     x64.prologue 88
     x64.leaRegRdata rbx, [rip + __str_rec_3]  ; "abcdef"
-    x64.movRegReg rcx, rbx
-    x64.callDirect String.startIndex
+  __il_body#9:
+    x64.movRegImm32 rcx, 0
+    x64.movRegImm32 rdx, 0
+    x64.callDirect StringIndex.create
     x64.movRegReg r12, r8
     x64.storeSlotReg slot1, r12
+  __il_cont#8:
     x64.leaRegRdata rdx, [rip + __str_rec_4]  ; "d"
     x64.movRegReg rcx, rbx
     x64.callDirect String.findFirst
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
-  tryerr:
+    x64.jcc equal, trycont
+  __il_body#31:
+    x64.loadRegBaseDisp.word64 r13, [rbx + 8]
+  __il_body#32:
+    x64.loadRegBaseDisp.byte rax, [rbx + 48]
+  __il_cont#29:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont
+  oneByteEach:
+    x64.movRegReg rcx, r13
+    x64.jmp __il_body#28
+  ifcont:
+    x64.movRegImm32 r14, 0
+    x64.movRegImm32 rdx, 0
+    x64.jmp whilehdr
+  countLoop:
     x64.movRegReg rcx, rbx
-    x64.callDirect String.endIndex
-    x64.movRegReg rax, r8
-    x64.jmp trycont
-  tryok:
-    x64.movRegReg rax, r8
+    x64.callDirect findGraphemeEnd
+    x64.leaRegRegImm32 r14, r14, 1
+    x64.movRegReg rdx, r8
+  whilehdr:
+    x64.cmpRegReg rdx, r13
+    x64.jcc less, countLoop
+  whileexit:
+    x64.cmpRegImm32 r14, 0
+    x64.jcc less, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, r14
+  __il_body#28:
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 8]
+  __il_cont#27:
+    x64.callDirect StringIndex.create
   trycont:
-    x64.storeSlotReg slot2, rax
+    x64.storeSlotReg slot2, r8
+  __il_body#11:
+    x64.loadRegBaseDisp.word64 rdx, [r12 + 8]
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.loadRegBaseDisp.byte r9, [rbx + 48]
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
-    x64.callDirect String.slice
+    x64.callDirect String.sliceBytes
     x64.movRegReg rbx, r8
+  __il_cont#10:
     x64.movRegImm32 r12, 0
-  forhdr:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegReg r12, rax
-    x64.jcc greaterEqual, forexit
+    x64.jmp forhdr
   loop:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
@@ -85,30 +116,35 @@ func @main {
     x64.movRegReg rax, r13
     x64.callDirect __str_copy
     x64.leaRegRegReg r12, r15, r13
+    x64.loadRegSlot rax, slot6
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r14
-    x64.loadRegSlot r13, slot6
-    x64.movRegReg rax, r13
     x64.callDirect __str_copy
-    x64.leaRegRegReg rax, r12, r13
-    x64.loadRegSlot r12, slot5
-    x64.storeBaseDispReg.word64 [r12 + 0], r15
-    x64.loadRegSlot rax, slot4
-    x64.storeBaseDispReg.word64 [r12 + 8], rax
-    x64.movRegImm rax, 18446744073709551613
-    x64.storeBaseDispReg.word64 [r12 + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r12 + 24], rax
-    x64.movRegReg rcx, r12
-    x64.callDirect print
-    x64.movRegReg rcx, r12
+    x64.loadRegSlot rax, slot6
+    x64.leaRegRegReg rax, r12, rax
+    x64.loadRegSlot rax, slot5
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot4
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+  __il_body#13:
+    x64.loadRegSlot rcx, slot5
+    x64.callDirect __write_stdout
+  __il_cont#12:
+    x64.loadRegSlot rcx, slot5
     x64.callDirect __str_decref
     x64.loadRegSlot rcx, slot3
     x64.callDirect __str_decref
   forstep:
     x64.loadRegSlot rax, slot0
     x64.movRegReg r12, rax
-    x64.jmp forhdr
+  forhdr:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg r12, rax
+    x64.jcc less, loop
   forexit:
     x64.movRegImm32 r12, 0
     x64.movRegReg rcx, rbx
@@ -118,6 +154,18 @@ func @main {
     x64.loadRegSlot rcx, slot1
     x64.callDirect __mm_decref
     x64.movRegReg r8, r12
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_30]  ; "panic at grapheme.maxon:404: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 88
     x64.popReg r15
     x64.popReg r14

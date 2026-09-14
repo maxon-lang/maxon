@@ -23,6 +23,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -52,16 +55,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_fill
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#1
-  tryerr#2:
-    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at fill-declines-a-managed-element-and-writes-nothing.test:8: fill: [0, 2) is exactly the live range\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc notEqual, tryerr#2
   tryok#1:
     x64.cmpRegImm32 r8, 0
     x64.jcc equal, ifcont#4
@@ -89,11 +83,7 @@ func @main {
     x64.jcc equal, critsplit#14
   __im_empty:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#15
-  __im_slow:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
-    x64.jmp __im_cont
+    x64.jcc equal, __im_slow
   critsplit#15:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rcx
@@ -134,4 +124,17 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  tryerr#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at fill-declines-a-managed-element-and-writes-nothing.test:8: fill: [0, 2) is exactly the live range\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.jmp __im_cont
 }

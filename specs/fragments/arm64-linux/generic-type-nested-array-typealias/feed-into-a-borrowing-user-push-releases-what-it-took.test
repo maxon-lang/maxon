@@ -8,7 +8,10 @@ type Sink uses S
 		return Self{ n: 0 }
 	end 'create'
 
+	// `Container.add` DISCARDS this result — the shape under test — so the method must have an effect, or
+	// the discard is E3064 (`discarded-results.md`).
 	export function push(x S) returns S
+		self.n = self.n + 1
 		return x
 	end 'push'
 end 'Sink'
@@ -49,67 +52,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Sink.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movImm x19, 0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @Sink.push {
-  entry:
-    arm64.prologue 16
-    arm64.movRegReg x0, x2
-    arm64.bl __retain_type_param
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @Container.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.bl Sink.create
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @Container.add {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x1
-    arm64.movRegReg x20, x2
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.movRegReg x1, x19
-    arm64.movRegReg x2, x20
-    arm64.bl Sink.push
-    arm64.movRegReg x1, x0
-    arm64.movRegReg x0, x20
-    arm64.bl __drop_type_param
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x19
-    arm64.bl __drop_type_param
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 112
@@ -123,13 +65,22 @@ func @main {
     arm64.storeSlotReg slot3, x21
     arm64.storeSlotReg slot2, x20
     arm64.storeSlotReg slot1, x19
-    arm64.bl Container.create
+  __il_body#9:
+    arm64.movImm x19, 0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+  __il_cont#8:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
     arm64.movRegReg x19, x0
+    arm64.storeBaseDispReg.word64 [x19 + 0], x20
+  __il_cont#6:
     arm64.movImm x20, 0
-  whilehdr:
-    arm64.storeSlotReg slot0, x20
-    arm64.cmp x20, 100
-    arm64.b.ge whileexit
+    arm64.b whilehdr
   addMany:
     arm64.leaRdata x0, __str_rec_3  ; "a string number "
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
@@ -175,21 +126,62 @@ func @main {
     arm64.storeBaseDispReg.word64 [x27 + 24], x0
     arm64.movRegReg x0, x23
     arm64.bl __mm_decref
-    arm64.leaRdata x2, __layout_Container_String
-    arm64.movRegReg x0, x19
+    arm64.leaRdata x20, __layout_Container_String
+  __il_body#11:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+  __il_body#13:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x1, x1, 1
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x1, 125
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.movRegReg x0, x20
     arm64.movRegReg x1, x27
-    arm64.bl Container.add
+    arm64.bl __retain_type_param
+    arm64.movRegReg x1, x0
+  __il_cont#12:
+    arm64.movRegReg x0, x20
+    arm64.bl __drop_type_param
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x27
+    arm64.bl __drop_type_param
+  __il_cont#10:
     arm64.loadRegSlot x0, slot0
     arm64.add x0, x0, 1
     arm64.movRegReg x20, x0
-    arm64.b whilehdr
+  whilehdr:
+    arm64.storeSlotReg slot0, x20
+    arm64.cmp x20, 100
+    arm64.b.lt addMany
   whileexit:
     arm64.leaRdata x0, __str_rec_5  ; "added\x0a"
-    arm64.bl print
+  __il_body#5:
+    arm64.bl __write_stdout
+  __il_cont#4:
     arm64.movImm x20, 0
     arm64.movRegReg x0, x19
     arm64.bl __destruct_Container_String
     arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.loadRegSlot x27, slot9
+    arm64.loadRegSlot x28, slot10
+    arm64.epilogue 112
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_7  ; "panic at feed-into-a-borrowing-user-push-releases-what-it-took.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
     arm64.loadRegSlot x21, slot3

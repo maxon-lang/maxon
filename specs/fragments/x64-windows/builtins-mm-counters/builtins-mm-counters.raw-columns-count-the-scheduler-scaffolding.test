@@ -1,23 +1,34 @@
 // Test: builtins-mm-counters.raw-columns-count-the-scheduler-scaffolding
-function work(n ExitCode) returns ExitCode
-	__Builtins.parallelBoundary()
-	return n + 1
-end 'work'
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	var calls as Integer
+
+	static function create() returns Self
+		return Self{calls: 0}
+	end 'create'
+
+	export function next(n Integer) returns Integer
+		self.calls = self.calls + 1
+
+		return n + 1
+	end 'next'
+end 'Counter'
 
 function main() returns ExitCode
 	let before = __Builtins.mmRawAllocTotal()
 	let bytesBefore = __Builtins.mmRawAllocBytes()
-	let p = async work(1)
-	let a = await p
+	let c = spawn Counter.create()
+	let a = try await c.next(1) otherwise 0
 	let after = __Builtins.mmRawAllocTotal()
 	let bytesAfter = __Builtins.mmRawAllocBytes()
 	var score = a
-	if before == 0 'nothingRawBeforeTheScheduler'
+	if before > 0 'theSchedulerIsInstalledBeforeMain'
 		score = score + 1
-	end 'nothingRawBeforeTheScheduler'
-	if after > before 'theSchedulerAllocatedRaw'
+	end 'theSchedulerIsInstalledBeforeMain'
+	if after > before 'theServiceAllocatedRaw'
 		score = score + 2
-	end 'theSchedulerAllocatedRaw'
+	end 'theServiceAllocatedRaw'
 	if bytesAfter - bytesBefore > after - before 'bytesAreBytesNotACount'
 		score = score + 3
 	end 'bytesAreBytesNotACount'
@@ -35,81 +46,66 @@ data {
   __mm_raw_alloc_bytes@40 = i64 0
   __gt_run_queue_head@48 = i64 0
   __gt_run_queue_tail@56 = i64 0
-  __gt_init_done@64 = i64 0
-  __gt_timer_count@72 = i64 0
-  __gt_timer_heap_base@80 = i64 0
-  __gt_timer_capacity@88 = i64 0
-  __gt_timer_seq@96 = i64 0
+  __gt_timer_count@64 = i64 0
+  __gt_timer_heap_base@72 = i64 0
+  __gt_timer_capacity@80 = i64 0
+  __gt_timer_seq@88 = i64 0
+  __gt_timer_when@96 = i64 9223372036854775807
   __gt_trace_counter@104 = i64 0
-  __gt_proc_count@112 = i64 0
-  __gt_proc_handles_base@120 = i64 0
-  __gt_proc_gts_base@128 = i64 0
-  __gt_proc_wait_snapshot@136 = i64 0
-  __gt_proc_poller@144 = i64 0
-  __gt_live_count@152 = i64 0
-  __sched_progress@160 = i64 0
-  __sched_active_workers@168 = i64 1
-  __sched_max_active_workers@176 = i64 1
-  __sched_tls_index@184 = i64 0
-  __sched_tls_teb_offset@192 = i64 0
-  __sched_procs@200 = i64 0
-  __sched_allm@208 = i64 0
-  __sched_midle@216 = i64 0
-  __sched_pidle@224 = i64 0
-  __sched_num_procs@232 = i64 0
-  __sched_shutdown_flag@240 = i64 0
-  __sched_lock@248 = i64 0
-  __sched_nmspinning@256 = i64 0
-  __sched_parked_drivers@264 = i64 0
-  __sched_sysmon_started@272 = i64 0
-  __slab_arena_list@280 = i64 0
-  __slab_arena_map_l1@288 = i64 0
-  __slab_state@296 = i64 0
-}
-
-func @work {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic#2
-  __rc_chk#3:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg rbx, rax
-    x64.jcc lessEqual, __rc_ok#1
-  __rc_panic#2:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at builtins-mm-counters.raw-columns-count-the-scheduler-scaffolding.test:2: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok#1:
-    x64.callDirect __parallel_boundary
-    x64.leaRegRegImm32 r8, rbx, 1
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic#5
-  __rc_chk#6:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
-    x64.jcc lessEqual, __rc_ok#4
-  __rc_panic#5:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at builtins-mm-counters.raw-columns-count-the-scheduler-scaffolding.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok#4:
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+  __gt_live_count@112 = i64 0
+  __gt_seed_bytes@120 = i64 8192
+  __gt_stack_bytes_sum@128 = i64 0
+  __gt_stack_bytes_count@136 = i64 0
+  __gt_seed_sum_seen@144 = i64 0
+  __gt_seed_count_seen@152 = i64 0
+  __sched_active_workers@160 = i64 1
+  __sched_max_active_workers@168 = i64 1
+  __sched_tls_index@176 = i64 0
+  __sched_tls_teb_offset@184 = i64 0
+  __sched_procs@192 = i64 0
+  __sched_allm@200 = i64 0
+  __sched_midle@208 = i64 0
+  __sched_pidle@216 = i64 0
+  __gt_gfree_head@224 = i64 0
+  __sched_arena_cursor@232 = i64 0
+  __sched_arena_limit@240 = i64 0
+  __gt_records_carved@248 = i64 0
+  __sched_npidle@256 = i64 0
+  __sched_runq_size@264 = i64 0
+  __sched_global_pushes@272 = i64 0
+  __sched_timer_scan_steps@280 = i64 0
+  __sched_mcount@288 = i64 0
+  __sched_nmidle@296 = i64 0
+  __sched_main_m@304 = i64 0
+  __sched_phase@312 = i64 0
+  __sched_lastpoll@320 = i64 0
+  __sched_poll_until@328 = i64 0
+  __sched_regain_head@336 = i64 0
+  __np_poller@344 = i64 0
+  __np_break@352 = i64 0
+  __np_wake_sig@360 = i64 0
+  __np_pd_table@368 = i64 0
+  __np_pd_cap@376 = i64 0
+  __np_waiters@384 = i64 0
+  __np_src_key_free@392 = i64 0
+  __np_src_key_high@400 = i64 0
+  __sched_num_procs@408 = i64 0
+  __sched_shutdown_flag@416 = i64 0
+  __sched_lock@424 = i64 0
+  __sched_lock_depth_sink@432 = i64 0
+  __sched_nmspinning@440 = i64 0
+  __sched_needspinning@448 = i64 0
+  __sched_sysmon_event@456 = i64 0
+  __sched_sysmon_wait@464 = i64 0
+  __sched_timer_starts@472 = i64 0
+  __sched_preempt_ext_lock@480 = i64 0
+  __sched_preempt_context@488 = i64 0
+  __slab_arena_list@496 = i64 0
+  __slab_arena_map_l1@504 = i64 0
+  __slab_state@512 = i64 0
+  __mrt_console_probe_stdin@520 = i8 0
+  __mrt_console_probe_stdout@521 = i8 0
+  __mrt_console_probe_stderr@522 = i8 0
 }
 
 func @main {
@@ -120,76 +116,149 @@ func @main {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.prologue 32
+    x64.pushReg r15
+    x64.prologue 40
     x64.callDirect __mm_counter_raw_alloc_total
     x64.movRegReg rbx, r8
     x64.callDirect __mm_counter_raw_alloc_bytes
     x64.movRegReg r12, r8
-    x64.movRegImm32 r13, 1
-    x64.leaRegFunc rcx, [rip + work]
-    x64.callDirect __gt_spawn
-    x64.movRegReg r14, r8
-    x64.storeBaseDispReg.word64 [r14 + 200], r13
-    x64.movRegReg rcx, r14
-    x64.callDirect __gt_ready
-    x64.movRegReg rcx, r14
-    x64.callDirect __gt_await
+  __il_body:
+    x64.movRegImm32 r13, 0
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], r13
+  __il_cont:
+    x64.leaRegFunc rcx, [rip + Counter.__loop]
+    x64.leaRegFunc rax, [rip + Counter.__abandon]
+    x64.movRegReg rdx, r8
+    x64.callDirect __svc_spawn
     x64.movRegReg r13, r8
-    x64.callDirect __mm_counter_raw_alloc_total
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
     x64.movRegReg r14, r8
+    x64.storeBaseDispReg.word64 [r14 + 0], r13
+    x64.movRegImm32 r13, 1
+    x64.movRegImm32 rcx, 0
+    x64.callDirect __gt_cell_alloc
+    x64.movRegReg r15, r8
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 8], r13
+    x64.storeBaseDispReg.word64 [r8 + 16], r15
+    x64.loadRegBaseDisp.word64 rcx, [r14 + 0]
+    x64.movRegReg rdx, r8
+    x64.callDirect __mbox_send
+    x64.movRegReg rcx, r15
+    x64.callDirect __gt_try_await
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 r13, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg r13, r8
+  trycont:
+    x64.callDirect __mm_counter_raw_alloc_total
+    x64.movRegReg r15, r8
     x64.callDirect __mm_counter_raw_alloc_bytes
     x64.cmpRegImm32 rbx, 0
-    x64.jcc notEqual, critsplit#13
-  nothingRawBeforeTheScheduler:
-    x64.leaRegRegImm32 rax, r13, 1
-    x64.jmp ifcont#2
-  critsplit#13:
-    x64.movRegReg rax, r13
-  ifcont#2:
-    x64.cmpRegReg r14, rbx
-    x64.jcc lessEqual, ifcont#4
-  theSchedulerAllocatedRaw:
-    x64.leaRegRegImm32 rax, rax, 2
-  ifcont#4:
-    x64.subRegReg r8, r8, r12
-    x64.subRegReg r14, r14, rbx
-    x64.cmpRegReg r8, r14
     x64.jcc lessEqual, critsplit#15
-  bytesAreBytesNotACount:
-    x64.leaRegRegImm32 r8, rax, 3
-    x64.jmp ifcont#6
+  theSchedulerIsInstalledBeforeMain:
+    x64.leaRegRegImm32 rax, r13, 1
+    x64.jmp ifcont#5
   critsplit#15:
-    x64.movRegReg r8, rax
-  ifcont#6:
-    x64.cmpRegImm32 r8, 0
-    x64.setccReg less, rax
-    x64.jcc less, __rc_panic#8
-  __rc_chk#9:
-    x64.movRegImm32 rcx, 4294967295
-    x64.cmpRegReg r8, rcx
-    x64.jcc lessEqual, __rc_ok#7
-  __rc_panic#8:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at builtins-mm-counters.raw-columns-count-the-scheduler-scaffolding.test:24: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok#7:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rc_panic#11
-  __rc_chk#12:
+    x64.movRegReg rax, r13
+  ifcont#5:
+    x64.cmpRegReg r15, rbx
+    x64.jcc lessEqual, ifcont#7
+  theServiceAllocatedRaw:
+    x64.leaRegRegImm32 rax, rax, 2
+  ifcont#7:
+    x64.subRegReg r8, r8, r12
+    x64.subRegReg r15, r15, rbx
+    x64.cmpRegReg r8, r15
+    x64.jcc lessEqual, critsplit#17
+  bytesAreBytesNotACount:
+    x64.leaRegRegImm32 rbx, rax, 3
+    x64.jmp ifcont#9
+  critsplit#17:
+    x64.movRegReg rbx, rax
+  ifcont#9:
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
     x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
-    x64.jcc lessEqual, __rc_ok#10
-  __rc_panic#11:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at builtins-mm-counters.raw-columns-count-the-scheduler-scaffolding.test:24: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.cmpRegReg rbx, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, r14
+    x64.callDirect __mbox_handle_drop_box
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at builtins-mm-counters.raw-columns-count-the-scheduler-scaffolding.test:35: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Counter.__loop {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+  serve:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mbox_recv
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, stopping
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_7
+  __shutdown:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.storeBaseDispReg.word64 [r12 + 56], rax
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+  stopping:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mbox_close
+  drain:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mbox_recv
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, abandon
+  finished:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __mbox_service_exit
+    x64.movRegReg rax, r8
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
@@ -197,11 +266,54 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok#10:
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
+  abandon:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __mbox_abandon
+    x64.jmp drain
+  next:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.loadRegBaseDisp.word64 r13, [r8 + 16]
+  __il_body:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.storeBaseDispReg.word64 [rbx + 0], rcx
+    x64.leaRegRegImm32 r14, rax, 1
+  __il_cont:
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegImm32 rax, 0
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r14
+    x64.callDirect __gt_cell_complete
+    x64.jmp serve
+}
+
+func @Counter.__abandon {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=next] @__jumptable_8
+  __shutdown:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 1
+    x64.callDirect __gt_cell_complete
+    x64.jmp abandondrop
+  next:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 1
+    x64.callDirect __gt_cell_complete
+  abandondrop:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret

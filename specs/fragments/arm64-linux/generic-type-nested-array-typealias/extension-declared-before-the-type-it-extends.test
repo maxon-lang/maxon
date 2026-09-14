@@ -41,14 +41,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Pair.firstIsVia {
-  entry:
-    arm64.prologue 16
-    arm64.bl Pair.firstIs
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @Pair.firstIs {
   entry:
     arm64.prologue 16
@@ -62,18 +54,25 @@ func @Pair.firstIs {
 func @main {
   entry:
     arm64.prologue 48
-    arm64.storeSlotReg slot2, x19
-    arm64.movImm x0, 1
-    arm64.movImm x1, 2
-    arm64.leaRdata x2, __witness_int.Equatable
-    arm64.leaRdata x2, __witness_int.Equatable
-    arm64.leaRegSlot x19, slot0
-    arm64.storeBaseDispReg.word64 [x19 + 0], x0
-    arm64.storeBaseDispReg.word64 [x19 + 8], x1
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 1
+    arm64.movImm x20, 2
+    arm64.leaRdata x0, __witness_int.Equatable
+    arm64.leaRdata x0, __witness_int.Equatable
+  __il_body#6:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 0], x19
+    arm64.storeBaseDispReg.word64 [x21 + 8], x20
+  __il_cont#5:
     arm64.movImm x1, 1
     arm64.leaRdata x2, __witness_int.Equatable
     arm64.leaRdata x3, __witness_int.Equatable
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x21
     arm64.bl Pair.firstIs
     arm64.cbz x0, ifcont#2
   a:
@@ -83,9 +82,11 @@ func @main {
     arm64.movImm x1, 1
     arm64.leaRdata x2, __witness_int.Equatable
     arm64.leaRdata x3, __witness_int.Equatable
-    arm64.leaRdata x4, __witness_int.Comparable
-    arm64.movRegReg x0, x19
-    arm64.bl Pair.firstIsVia
+    arm64.leaRdata x0, __witness_int.Comparable
+  __il_body#8:
+    arm64.movRegReg x0, x21
+    arm64.bl Pair.firstIs
+  __il_cont#7:
     arm64.cbz x0, ifcont#4
   c:
     arm64.leaRdata x0, __str_rec_4  ; "via=true\x0a"
@@ -93,8 +94,13 @@ func @main {
   ifcont#4:
     arm64.leaRdata x0, __str_rec_5  ; "done\x0a"
     arm64.bl print
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot2
+    arm64.movImm x19, 0
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
     arm64.epilogue 48
     arm64.ret
 }

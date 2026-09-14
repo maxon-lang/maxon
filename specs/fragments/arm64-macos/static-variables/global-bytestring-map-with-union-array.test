@@ -58,16 +58,7 @@ func @KeywordInfo.create {
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 100
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_30  ; "panic at global-bytestring-map-with-union-array.test:9: Range check failed: value outside typealias 'Kind'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
+    arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movImm x0, 16
     arm64.movImm x1, 0
@@ -80,6 +71,15 @@ func @KeywordInfo.create {
     arm64.movRegReg x0, x20
     arm64.bl __str_decref
     arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_31  ; "panic at global-bytestring-map-with-union-array.test:9: Range check failed: value outside typealias 'Kind'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -136,8 +136,9 @@ func @main {
     arm64.storeBaseDispReg.word64 [x21 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x21 + 24], x0
+    arm64.leaFuncAddr x1, __clone_Map_Array_Byte_KeywordInfo
     arm64.movRegReg x0, x20
-    arm64.bl __mm_retain
+    arm64.bl __mm_own_deep
     arm64.movRegReg x22, x0
     arm64.leaRdata x2, __layout_Map_Array_Byte_KeywordInfo
     arm64.leaRdata x3, __witness_Array_Byte.Hashable
@@ -208,26 +209,22 @@ func @main {
   andrhs:
     arm64.leaGlobal x0, __data_keywordMap
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
+    arm64.leaFuncAddr x1, __clone_Map_Array_Byte_KeywordInfo
     arm64.movRegReg x0, x21
-    arm64.bl __mm_retain
-    arm64.movRegReg x22, x0
+    arm64.bl __mm_own_deep
     arm64.leaRdata x1, __witness_Array_Byte.Hashable
-    arm64.leaRdata x2, __witness_Array_Byte.Equatable
+    arm64.leaRdata x1, __witness_Array_Byte.Equatable
   __il_body:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 32]
-    arm64.cmp x0, 0
-    arm64.b.lt __il_slow
-  __rc_chk#17:
-    arm64.movImm x3, 4611686018427387904
-    arm64.cmp x0, x3
-    arm64.b.le __il_cont
-  __il_slow:
-    arm64.movRegReg x0, x21
-    arm64.bl Map.count
+    arm64.loadRegBaseDisp.word64 x1, [x21 + 32]
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.movImm x2, 4611686018427387904
+    arm64.cmp x1, x2
+    arm64.b.gt __rc_panic
   __il_cont:
-    arm64.cmp x0, 2
+    arm64.cmp x1, 2
     arm64.cset x21, eq
-    arm64.movRegReg x0, x22
     arm64.bl __destruct_Map_Array_Byte_KeywordInfo
     arm64.movRegReg x0, x21
   scmerge:
@@ -242,15 +239,8 @@ func @main {
     arm64.bl __destruct_KeywordInfo
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.cmp x21, 0
-    arm64.b.lt __rc_panic
-  __rc_chk#13:
-    arm64.cmp x21, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_31  ; "panic at global-bytestring-map-with-union-array.test:36: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
+  __rc_ok:
+    arm64.movRegReg x0, x21
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -261,8 +251,10 @@ func @main {
     arm64.loadRegSlot x26, slot7
     arm64.epilogue 80
     arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x21
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_39  ; "panic at Map.maxon:190: Range check failed: value outside typealias 'EntryCount'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

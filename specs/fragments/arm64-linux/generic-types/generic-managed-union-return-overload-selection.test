@@ -38,31 +38,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Box.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @Box.get {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
-    arm64.bl __retain_type_param
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 96
@@ -79,30 +54,37 @@ func @main {
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.movImm x1, 0
-    arm64.storeBaseDispReg.word64 [x0 + 0], x1
-    arm64.storeBaseDispReg.word64 [x0 + 8], x19
-    arm64.bl Box.create
-    arm64.movRegReg x19, x0
-    arm64.leaRdata x1, __layout_Box_Shape
-    arm64.movRegReg x0, x19
-    arm64.bl Box.get
     arm64.movRegReg x20, x0
-  __il_body:
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.storeBaseDispReg.word64 [x20 + 8], x19
+  __il_body#5:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x19, x0
+    arm64.storeBaseDispReg.word64 [x19 + 0], x20
+  __il_cont#4:
+    arm64.leaRdata x0, __layout_Box_Shape
+  __il_body#6:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+    arm64.bl __retain_type_param
+    arm64.movRegReg x20, x0
+  __il_body#7:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.cmp x0, 0
     arm64.b.ne matchnext
-  matcharm#3:
+  matcharm#8:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.add x21, x0, 4
-    arm64.b __il_cont
+    arm64.b __il_cont#2
   matchnext:
     arm64.cmp x0, 1
     arm64.b.ne matchdead
-  matcharm#4:
+  matcharm#9:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.add x21, x0, 5
-  __il_cont:
+  __il_cont#2:
     arm64.movImm x0, 21
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -138,8 +120,10 @@ func @main {
     arm64.storeBaseDispReg.word64 [x26 + 24], x0
     arm64.movRegReg x0, x22
     arm64.bl __mm_decref
+  __il_body#13:
     arm64.movRegReg x0, x26
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont#1:
     arm64.movRegReg x0, x26
     arm64.bl __str_decref
     arm64.movRegReg x0, x20

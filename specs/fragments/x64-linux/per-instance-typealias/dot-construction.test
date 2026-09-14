@@ -40,25 +40,40 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 16
-    x64.movRegImm32 rax, 99
-    x64.movRegImm32 rcx, 42
-    x64.leaRegSlot rdx, slot0
-    x64.storeBaseDispReg.word64 [rdx + 0], rax
-    x64.storeBaseDispReg.word64 [rdx + 8], rcx
-  __il_body:
-    x64.loadRegBaseDisp.word64 rax, [rdx + 8]
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rbx, 99
+    x64.movRegImm32 r12, 42
+  __il_body#5:
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+  __il_body#6:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
   __il_cont:
     x64.cmpRegImm32 rax, 42
     x64.jcc notEqual, ifcont
   check:
-    x64.movRegImm32 r8, 0
-    x64.epilogue 16
+    x64.movRegImm32 rbx, 0
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.movRegImm32 r8, 1
-    x64.epilogue 16
+    x64.movRegImm32 rbx, 1
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }

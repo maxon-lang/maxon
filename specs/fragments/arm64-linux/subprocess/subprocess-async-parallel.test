@@ -2,6 +2,23 @@
 typealias SubP = Promise with (CollectedOutput, SubprocessError)
 typealias SubPArray = Array with SubP
 
+// One spelling, because the solo baseline must run the SAME work the four ran —
+// a second copy is a place for the two to drift apart, and the ratio is only a
+// measurement of overlap while they do not.
+function pingArgs() returns StringArray
+	var argv = StringArray.create()
+	#if os(Windows)
+	argv.push("/c")
+	argv.push("ping")
+	argv.push("127.0.0.1")
+	argv.push("-n")
+	argv.push("2")
+	#else
+	argv.push("1")
+	#endif
+	return argv
+end 'pingArgs'
+
 function main() returns ExitCode
 	#if os(Windows)
 	let exe = Executable.name("cmd")
@@ -14,17 +31,7 @@ function main() returns ExitCode
 	let start = Clock.nowMs()
 	var i = 0
 	while i < count 'spawn'
-		var argv = StringArray.create()
-		#if os(Windows)
-		argv.push("/c")
-		argv.push("ping")
-		argv.push("127.0.0.1")
-		argv.push("-n")
-		argv.push("2")
-		#else
-		argv.push("1")
-		#endif
-		promises.push(async Subprocess.run(exe, arguments: argv))
+		promises.push(async Subprocess.run(exe, arguments: pingArgs()))
 		i = i + 1
 	end 'spawn'
 	for p in promises 'drain'
@@ -35,10 +42,20 @@ function main() returns ExitCode
 	end 'drain'
 	let elapsed = Clock.elapsedMs(start)
 
-	// Sequential: ~4200ms. Parallel: ~2000-2200ms. 3500ms catches a
-	// regression to sequential dispatch (e.g. if subprocess_wait_internal
-	// stops yielding to the scheduler or work-stealing breaks).
-	if elapsed >= 3500 'check-parallel'
+	// The baseline, priced in this same run and through the same async/await
+	// pair, so the quotient below isolates the overlap from everything else
+	// the machine is doing.
+	let soloStart = Clock.nowMs()
+	let solo = try await (async Subprocess.run(exe, arguments: pingArgs())) otherwise return 5
+	if not solo.succeeded() 'check-solo'
+		return 6
+	end 'check-solo'
+	let single = Clock.elapsedMs(soloStart)
+
+	// Four overlapped cost about one; four in sequence cost four. Half way
+	// between is the widest bound that still refuses sequential dispatch,
+	// and it scales with the host instead of asserting one.
+	if elapsed >= single * 2 'check-parallel'
 		return 4
 	end 'check-parallel'
 	return 0
@@ -51,46 +68,86 @@ data {
   __mm_alloc_count@8 = i64 0
   __gt_run_queue_head@16 = i64 0
   __gt_run_queue_tail@24 = i64 0
-  __gt_init_done@32 = i64 0
-  __gt_timer_count@40 = i64 0
-  __gt_timer_heap_base@48 = i64 0
-  __gt_timer_capacity@56 = i64 0
-  __gt_timer_seq@64 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_timer_seq@56 = i64 0
+  __gt_timer_when@64 = i64 9223372036854775807
   __gt_trace_counter@72 = i64 0
-  __gt_proc_count@80 = i64 0
-  __gt_proc_handles_base@88 = i64 0
-  __gt_proc_gts_base@96 = i64 0
-  __gt_proc_wait_snapshot@104 = i64 0
-  __gt_proc_poller@112 = i64 0
-  __gt_live_count@120 = i64 0
-  __sched_progress@128 = i64 0
-  __sched_active_workers@136 = i64 1
-  __sched_max_active_workers@144 = i64 1
-  __sched_tls_index@152 = i64 0
-  __sched_tls_teb_offset@160 = i64 0
-  __sched_procs@168 = i64 0
-  __sched_allm@176 = i64 0
-  __sched_midle@184 = i64 0
-  __sched_pidle@192 = i64 0
-  __sched_num_procs@200 = i64 0
-  __sched_shutdown_flag@208 = i64 0
-  __sched_lock@216 = i64 0
-  __sched_nmspinning@224 = i64 0
-  __sched_parked_drivers@232 = i64 0
-  __sched_sysmon_started@240 = i64 0
-  __mrt_errno@248 = i64 0
-  __mrt_envp@256 = i64 0
-  __mrt_tls_next_key@264 = i64 0
-  __io_iocp@272 = i64 0
-  __io_done_event@280 = i64 0
-  __io_init_done@288 = i64 0
-  __io_pending@296 = i64 0
-  __io_pipe_seq@304 = i64 0
-  __subp_table@312 = i64 0
-  __subp_last_error@320 = i64 0
-  __slab_arena_list@328 = i64 0
-  __slab_arena_map_l1@336 = i64 0
-  __slab_state@344 = i64 0
+  __gt_live_count@80 = i64 0
+  __gt_seed_bytes@88 = i64 2048
+  __gt_stack_bytes_sum@96 = i64 0
+  __gt_stack_bytes_count@104 = i64 0
+  __gt_seed_sum_seen@112 = i64 0
+  __gt_seed_count_seen@120 = i64 0
+  __sched_active_workers@128 = i64 1
+  __sched_max_active_workers@136 = i64 1
+  __sched_tls_index@144 = i64 0
+  __sched_tls_teb_offset@152 = i64 0
+  __sched_procs@160 = i64 0
+  __sched_allm@168 = i64 0
+  __sched_midle@176 = i64 0
+  __sched_pidle@184 = i64 0
+  __gt_gfree_head@192 = i64 0
+  __sched_arena_cursor@200 = i64 0
+  __sched_arena_limit@208 = i64 0
+  __gt_records_carved@216 = i64 0
+  __sched_npidle@224 = i64 0
+  __sched_runq_size@232 = i64 0
+  __sched_global_pushes@240 = i64 0
+  __sched_timer_scan_steps@248 = i64 0
+  __sched_mcount@256 = i64 0
+  __sched_nmidle@264 = i64 0
+  __sched_main_m@272 = i64 0
+  __sched_phase@280 = i64 0
+  __sched_lastpoll@288 = i64 0
+  __sched_poll_until@296 = i64 0
+  __sched_regain_head@304 = i64 0
+  __np_poller@312 = i64 0
+  __np_break@320 = i64 0
+  __np_wake_sig@328 = i64 0
+  __np_pd_table@336 = i64 0
+  __np_pd_cap@344 = i64 0
+  __np_waiters@352 = i64 0
+  __np_src_key_free@360 = i64 0
+  __np_src_key_high@368 = i64 0
+  __sched_num_procs@376 = i64 0
+  __sched_shutdown_flag@384 = i64 0
+  __sched_lock@392 = i64 0
+  __sched_lock_depth_sink@400 = i64 0
+  __sched_nmspinning@408 = i64 0
+  __sched_needspinning@416 = i64 0
+  __sched_sysmon_event@424 = i64 0
+  __sched_sysmon_wait@432 = i64 0
+  __sched_timer_starts@440 = i64 0
+  __mrt_errno@448 = i64 0
+  __mrt_envp@456 = i64 0
+  __mrt_tls_next_key@464 = i64 0
+  __io_pipe_seq@472 = i64 0
+  __subp_table@480 = i64 0
+  __subp_last_error@488 = i64 0
+  __slab_arena_list@496 = i64 0
+  __slab_arena_map_l1@504 = i64 0
+  __slab_state@512 = i64 0
+}
+
+func @pingArgs {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __str_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __str_rec_28  ; "1"
+    arm64.bl __str_retain
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
 }
 
 func @main {
@@ -102,11 +159,11 @@ func @main {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.leaRdata x0, __str_rec_25  ; "/bin/sleep"
+    arm64.leaRdata x0, __str_rec_29  ; "/bin/sleep"
     arm64.bl FilePath.from
     arm64.movRegReg x19, x0
     arm64.cmp x9, 0
-    arm64.b.eq tryok#1
+    arm64.b.eq tryok
   tryerr#2:
     arm64.movImm x0, 7
     arm64.loadRegSlot x19, slot0
@@ -117,7 +174,7 @@ func @main {
     arm64.loadRegSlot x24, slot5
     arm64.epilogue 64
     arm64.ret
-  tryok#1:
+  tryok:
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -132,22 +189,11 @@ func @main {
     arm64.bl Clock.nowMs
     arm64.movRegReg x21, x0
     arm64.movImm x22, 0
-  whilehdr:
-    arm64.cmp x22, 4
-    arm64.b.ge whileexit
+    arm64.b whilehdr
   spawn:
-    arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __str_decref
-    arm64.bl __managed_create
+    arm64.bl pingArgs
     arm64.movRegReg x23, x0
-    arm64.leaRdata x0, __str_rec_26  ; "1"
-    arm64.bl __str_retain
-    arm64.movRegReg x1, x0
-    arm64.movRegReg x0, x23
-    arm64.bl __managed_push
     arm64.movRegReg x0, x20
-    arm64.bl __mm_incref
-    arm64.movRegReg x0, x23
     arm64.bl __mm_incref
     arm64.leaFuncAddr x0, Subprocess.run
     arm64.bl __gt_spawn
@@ -162,15 +208,12 @@ func @main {
     arm64.movRegReg x1, x24
     arm64.bl __managed_push
     arm64.add x22, x22, 1
-    arm64.movRegReg x0, x23
-    arm64.bl __managed_decref
-    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x22, 4
+    arm64.b.lt spawn
   whileexit:
     arm64.movImm x22, 0
-  forhdr:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x22, x0
-    arm64.b.ge forexit
+    arm64.b forhdr
   drain:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseIndexScale.word64 x23, [x0 + x22*8 + 0]
@@ -180,9 +223,8 @@ func @main {
     arm64.bl __managed_vacate
     arm64.movRegReg x0, x23
     arm64.bl __gt_try_await
-    arm64.movRegReg x23, x0
     arm64.cmp x9, 0
-    arm64.b.eq tryok#10
+    arm64.b.eq __il_body#22
   tryerr#11:
     arm64.movImm x21, 2
     arm64.movRegReg x0, x9
@@ -200,14 +242,27 @@ func @main {
     arm64.loadRegSlot x24, slot5
     arm64.epilogue 64
     arm64.ret
-  tryok#10:
-    arm64.movRegReg x0, x23
-    arm64.bl CollectedOutput.succeeded
-    arm64.eor x0, x0, 1
-    arm64.cbz x0, ifcont#13
+  __il_body#22:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+  __il_body#24:
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
+    arm64.cmp x2, 0
+    arm64.b.ne matchnext#28
+  matcharm#25:
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
+    arm64.cmp x1, 0
+    arm64.cset x1, eq
+    arm64.b __il_cont#21
+  matchnext#28:
+    arm64.cmp x2, 1
+    arm64.b.ne matchdead#27
+  matcharm#26:
+    arm64.movImm x1, 0
+  __il_cont#21:
+    arm64.eor x1, x1, 1
+    arm64.cbz x1, ifcont#13
   check-success:
     arm64.movImm x21, 3
-    arm64.movRegReg x0, x23
     arm64.bl __destruct_CollectedOutput
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
@@ -223,18 +278,102 @@ func @main {
     arm64.epilogue 64
     arm64.ret
   ifcont#13:
-    arm64.movRegReg x0, x23
     arm64.bl __destruct_CollectedOutput
   forstep:
     arm64.add x22, x22, 1
-    arm64.b forhdr
+  forhdr:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x22, x0
+    arm64.b.lt drain
+    arm64.b forexit
+  matchdead#27:
   forexit:
     arm64.movRegReg x0, x21
     arm64.bl Clock.elapsedMs
-    arm64.cmp x0, 3500
-    arm64.b.lt ifcont#15
+    arm64.movRegReg x21, x0
+    arm64.bl Clock.nowMs
+    arm64.movRegReg x22, x0
+    arm64.bl pingArgs
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.leaFuncAddr x0, Subprocess.run
+    arm64.bl __gt_spawn
+    arm64.movRegReg x24, x0
+    arm64.storeBaseDispReg.word64 [x24 + 200], x20
+    arm64.storeBaseDispReg.word64 [x24 + 208], x23
+    arm64.leaFuncAddr x0, __gt_release_Subprocess.run
+    arm64.storeBaseDispReg.word64 [x24 + 176], x0
+    arm64.movRegReg x0, x24
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x24
+    arm64.bl __gt_try_await
+    arm64.movRegReg x23, x0
+    arm64.cmp x9, 0
+    arm64.b.eq __il_body#31
+  tryerr#15:
+    arm64.movImm x21, 5
+    arm64.movRegReg x0, x9
+    arm64.bl __destruct_SubprocessError
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Executable
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  __il_body#31:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
+  __il_body#33:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, 0
+    arm64.b.ne matchnext#37
+  matcharm#34:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.b __il_cont#30
+  matchnext#37:
+    arm64.cmp x1, 1
+    arm64.b.ne matchdead#36
+  matcharm#35:
+    arm64.movImm x0, 0
+  __il_cont#30:
+    arm64.eor x0, x0, 1
+    arm64.cbz x0, ifcont#17
+  check-solo:
+    arm64.movImm x21, 6
+    arm64.movRegReg x0, x23
+    arm64.bl __destruct_CollectedOutput
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Executable
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  ifcont#17:
+    arm64.movRegReg x0, x22
+    arm64.bl Clock.elapsedMs
+    arm64.lsl x0, x0, 1
+    arm64.cmp x21, x0
+    arm64.b.lo ifcont#19
   check-parallel:
     arm64.movImm x21, 4
+    arm64.movRegReg x0, x23
+    arm64.bl __destruct_CollectedOutput
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
@@ -248,8 +387,10 @@ func @main {
     arm64.loadRegSlot x24, slot5
     arm64.epilogue 64
     arm64.ret
-  ifcont#15:
+  ifcont#19:
     arm64.movImm x21, 0
+    arm64.movRegReg x0, x23
+    arm64.bl __destruct_CollectedOutput
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
@@ -263,4 +404,5 @@ func @main {
     arm64.loadRegSlot x24, slot5
     arm64.epilogue 64
     arm64.ret
+  matchdead#36:
 }

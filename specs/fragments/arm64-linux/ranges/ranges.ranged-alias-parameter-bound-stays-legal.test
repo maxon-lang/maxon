@@ -26,49 +26,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @sumTo {
-  entry:
-    arm64.prologue 16
-    arm64.cmp x0, 0
-    arm64.b.lt __rc_panic#6
-  __rc_chk#7:
-    arm64.cmp x0, 63
-    arm64.b.le __rc_ok#5
-  __rc_panic#6:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at ranges.ranged-alias-parameter-bound-stays-legal.test:4: Range check failed: value outside typealias 'Row'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  __rc_ok#5:
-    arm64.movImm x1, 0
-    arm64.movImm x2, 0
-  forhdr:
-    arm64.cmp x2, x0
-    arm64.b.gt forexit
-  l:
-    arm64.add x1, x1, x2
-  forstep:
-    arm64.add x2, x2, 1
-    arm64.b forhdr
-  forexit:
-    arm64.cmp x1, 0
-    arm64.b.lt __rc_panic#9
-  __rc_chk#10:
-    arm64.cmp x1, 63
-    arm64.b.le __rc_ok#8
-  __rc_panic#9:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at ranges.ranged-alias-parameter-bound-stays-legal.test:9: Range check failed: value outside typealias 'Row'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  __rc_ok#8:
-    arm64.movRegReg x0, x1
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 32
@@ -76,35 +33,58 @@ func @main {
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 0
     arm64.movImm x20, 97
-  forhdr:
-    arm64.cmp x20, 101
-    arm64.b.gt forexit
+    arm64.b forhdr#1
   k:
     arm64.movRegReg x0, x20
     arm64.bl __char_from_cp
     arm64.add x19, x19, 1
     arm64.bl __str_decref
-  forstep:
+  forstep#3:
     arm64.add x20, x20, 1
-    arm64.b forhdr
+  forhdr#1:
+    arm64.cmp x20, 101
+    arm64.b.le k
+  __rc_ok#14:
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.b forhdr#10
+  l:
+    arm64.add x0, x0, x1
+  forstep#12:
+    arm64.add x1, x1, 1
+  forhdr#10:
+    arm64.cmp x1, 5
+    arm64.b.le l
   forexit:
-    arm64.movImm x0, 5
-    arm64.bl sumTo
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#18
+  __rc_chk#19:
+    arm64.cmp x0, 63
+    arm64.b.gt __rc_panic#18
+  __il_cont:
     arm64.add x0, x0, x19
     arm64.cmp x0, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
+    arm64.b.lt __rc_panic#6
+  __rc_chk#7:
     arm64.cmp x0, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at ranges.ranged-alias-parameter-bound-stays-legal.test:17: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.b.gt __rc_panic#6
+  __rc_ok#5:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic#18:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at ranges.ranged-alias-parameter-bound-stays-legal.test:9: Range check failed: value outside typealias 'Row'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  __rc_ok:
+  __rc_panic#6:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at ranges.ranged-alias-parameter-bound-stays-legal.test:17: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32

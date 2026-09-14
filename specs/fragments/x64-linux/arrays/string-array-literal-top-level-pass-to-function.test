@@ -25,27 +25,6 @@ data {
   __slab_state@32 = i64 0
 }
 
-func @useString {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.leaRegRdata rdx, [rip + __str_rec_1]  ; "hello"
-    x64.callDirect __str_eq
-    x64.cmpRegImm32 r8, 0
-    x64.jcc equal, ifcont
-  check:
-    x64.movRegImm32 r8, 42
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -61,8 +40,17 @@ func @main {
   loop:
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.loadRegBaseIndexScale.word64 rcx, [rax + rcx*8 + 0]
-  __im_cont:
-    x64.callDirect useString
+  __il_body:
+    x64.leaRegRdata rdx, [rip + __str_rec_1]  ; "hello"
+    x64.callDirect __str_eq
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont
+  check:
+    x64.movRegImm32 r8, 42
+    x64.jmp __il_cont
+  ifcont:
+    x64.movRegImm32 r8, 0
+  __il_cont:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

@@ -13,6 +13,12 @@ end 'main'
 ---
 ExitCode: 2
 ---
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+}
+
 func @main {
   entry:
     x64.pushReg rbp
@@ -20,9 +26,7 @@ func @main {
     x64.prologue 32
     x64.movRegImm32 r8, 1
     x64.movRegImm32 rax, 0
-  whilehdr:
-    x64.cmpRegImm32 rax, 3
-    x64.jcc greaterEqual, whileexit
+    x64.jmp whilehdr
   l:
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, critsplit
@@ -34,22 +38,21 @@ func @main {
   ifcont:
     x64.leaRegRegImm32 rax, rax, 1
     x64.movRegReg r8, rcx
-    x64.jmp whilehdr
-  whileexit:
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
+  whilehdr:
+    x64.cmpRegImm32 rax, 3
+    x64.jcc less, l
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc lessEqual, __rc_ok
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at while-loops.carried-var-assigned-only-inside-an-if.test:11: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

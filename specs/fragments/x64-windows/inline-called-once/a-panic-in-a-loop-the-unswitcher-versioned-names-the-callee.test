@@ -159,7 +159,9 @@ func @main {
   forhdr#18:
     x64.cmpRegImm32 rdx, 5
     x64.jcc less, __rc_ok#26
-    x64.jmp forexit
+  critsplit#74:
+    x64.movRegReg r12, rax
+    x64.jmp __il_cont
   __rc_ok#53:
     x64.cmpRegReg rdx, rcx
     x64.jcc aboveEqual, __im_slow#51
@@ -177,7 +179,7 @@ func @main {
   forhdr#39:
     x64.cmpRegImm32 rdx, 5
     x64.jcc less, __rc_ok#53
-  forexit:
+  critsplit#77:
     x64.movRegReg r12, rax
   __il_cont:
     x64.cmpRegImm32 r12, 0
@@ -249,8 +251,12 @@ func @main {
   tryerr#25:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-panic-in-a-loop-the-unswitcher-versioned-names-the-callee.test:10: scale: a is shorter than n\x0a"
     x64.callDirect mrt_panic
-    x64.movRegImm32 r12, 0
-    x64.jmp __il_cont
+    x64.movRegImm32 r8, 0
+    x64.epilogue 64
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   __im_slow#51:
     x64.storeSlotReg slot0, rax
     x64.storeSlotReg slot1, rcx
@@ -267,10 +273,14 @@ func @main {
   tryerr#23:
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-panic-in-a-loop-the-unswitcher-versioned-names-the-callee.test:9: scale: a is shorter than n\x0a"
     x64.callDirect mrt_panic
-    x64.movRegImm32 r12, 0
-    x64.jmp __il_cont
+    x64.movRegImm32 r8, 0
+    x64.epilogue 64
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at a-panic-in-a-loop-the-unswitcher-versioned-names-the-callee.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at a-panic-in-a-loop-the-unswitcher-versioned-names-the-callee.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 64

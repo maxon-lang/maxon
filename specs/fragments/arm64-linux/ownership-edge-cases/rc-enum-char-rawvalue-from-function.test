@@ -27,22 +27,16 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @getLetter {
-  entry:
-    arm64.prologue 16
-    arm64.bl __char_from_cp
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 32
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x0, 66
-    arm64.bl getLetter
+  __il_body:
+    arm64.bl __char_from_cp
     arm64.movRegReg x19, x0
+  __il_cont:
     arm64.leaRdata x1, __str_rec_1  ; "B"
     arm64.movRegReg x0, x19
     arm64.bl __str_eq

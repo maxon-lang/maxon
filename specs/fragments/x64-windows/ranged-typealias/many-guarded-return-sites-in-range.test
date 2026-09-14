@@ -39,6 +39,12 @@ end 'main'
 ---
 ExitCode: 40
 ---
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+}
+
 func @pick {
   entry:
     x64.pushReg rbp
@@ -48,14 +54,7 @@ func @pick {
     x64.jcc less, __rc_panic#12
   __rc_chk#13:
     x64.cmpRegImm32 rcx, 100000
-    x64.jcc lessEqual, __rc_ok#11
-  __rc_panic#12:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at many-guarded-return-sites-in-range.test:5: Range check failed: value outside typealias 'Wide'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
+    x64.jcc greater, __rc_panic#12
   __rc_ok#11:
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, ifcont#2
@@ -105,15 +104,22 @@ func @pick {
     x64.leaRegRegImm32 r8, rcx, 6
   __rc_chk#31:
     x64.cmpRegImm32 r8, 100
-    x64.jcc lessEqual, __rc_ok#29
-  __rc_panic#30:
-    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at many-guarded-return-sites-in-range.test:26: Range check failed: value outside typealias 'Small'\x0a"
+    x64.jcc greater, __rc_panic#30
+  __rc_ok#29:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#12:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at many-guarded-return-sites-in-range.test:5: Range check failed: value outside typealias 'Wide'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  __rc_ok#29:
+  __rc_panic#30:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at many-guarded-return-sites-in-range.test:26: Range check failed: value outside typealias 'Small'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -148,16 +154,16 @@ func @main {
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at many-guarded-return-sites-in-range.test:37: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.jcc greater, __rc_panic
+  __rc_ok:
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at many-guarded-return-sites-in-range.test:37: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp

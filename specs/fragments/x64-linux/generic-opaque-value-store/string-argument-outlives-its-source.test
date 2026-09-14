@@ -47,137 +47,7 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Holder.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.callDirect __fieldDefault#Holder#items
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Holder.add {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.callDirect __managed_push
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Holder.entryAt {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 32
-    x64.movRegReg rbx, rax
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc greaterEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at string-argument-outlives-its-source.test:20: Range check failed: value outside typealias 'ElementIndex'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.loadRegBaseDisp.word64 rax, [rcx + 24]
-    x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride
-  __im_word:
-    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
-    x64.cmpRegReg rdx, rax
-    x64.jcc aboveEqual, __im_slow
-  __im_load#11:
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
-    x64.jmp __im_loaded
-  __im_stride:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __im_slow
-  __im_byte:
-    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
-    x64.cmpRegReg rdx, rax
-    x64.jcc aboveEqual, __im_slow
-  __im_load#12:
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.leaRegRegReg rax, rax, rdx
-    x64.loadRegBaseDisp.byte rax, [rax + 0]
-  __im_loaded:
-    x64.movRegImm32 rsi, 0
-    x64.loadRegBaseDisp.word64 rdi, [rcx + 40]
-    x64.cmpRegImm32 rdi, 0
-    x64.jcc equal, critsplit#14
-  __im_empty:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __im_slow
-  critsplit#15:
-    x64.movRegReg r12, rax
-    x64.jmp __im_cont
-  critsplit#14:
-    x64.movRegReg r12, rax
-    x64.jmp __im_cont
-  __im_slow:
-    x64.callDirect __managed_get
-    x64.movRegReg r12, r8
-    x64.movRegReg rsi, r10
-  __im_cont:
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, tryok
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at string-argument-outlives-its-source.test:20: Holder.entryAt: out of range\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryok:
-    x64.movRegImm32 r13, 1
-    x64.movRegImm32 rcx, 16
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r14, r8
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
-    x64.callDirect __retain_type_param
-    x64.storeBaseDispReg.word64 [r14 + 0], r8
-    x64.storeBaseDispReg.word64 [r14 + 8], r13
-    x64.movRegReg r8, r14
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @pluck {
+func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
@@ -187,11 +57,22 @@ func @pluck {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 40
-    x64.leaRegRdata rcx, [rip + __layout_Holder_String]
-    x64.callDirect Holder.create
+  __il_body#26:
+    x64.leaRegRdata rax, [rip + __layout_Holder_String]
+  __il_body#47:
+    x64.movRegImm32 rcx, 8
+    x64.loadRegBaseDisp.word64 rdx, [rax + 40]
+    x64.callDirect __managed_create
     x64.movRegReg rbx, r8
+  __il_cont#46:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+  __il_cont#44:
     x64.leaRegRdata rax, [rip + __str_rec_2]  ; "the source is gone"
-    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
     x64.leaRegRegImm32 rcx, r13, 57
     x64.movRegImm32 rdx, 0
@@ -199,7 +80,7 @@ func @pluck {
     x64.movRegReg r14, r8
     x64.leaRegRegImm32 r15, r14, 56
     x64.movRegReg rcx, r15
-    x64.movRegReg rdx, r12
+    x64.movRegReg rdx, rbx
     x64.movRegReg rax, r13
     x64.callDirect __str_copy
     x64.leaRegRegReg rax, r15, r13
@@ -210,17 +91,125 @@ func @pluck {
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r14 + 24], rax
     x64.leaRegRdata rax, [rip + __layout_Holder_String]
+  __il_body#29:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.movRegReg rdx, r14
+    x64.callDirect __managed_push
+  __il_cont#28:
+    x64.movRegImm32 rdx, 0
+    x64.leaRegRdata rbx, [rip + __layout_Holder_String]
+  __rc_ok#33:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rcx + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow
+  __im_load#41:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp __im_loaded
+  __im_stride:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow
+  __im_byte:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow
+  __im_load#42:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+  __im_loaded:
+    x64.movRegImm32 rsi, 0
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 40]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc equal, critsplit#52
+  __im_empty:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_slow
+  critsplit#53:
+    x64.movRegReg r13, rax
+    x64.jmp __im_cont
+  critsplit#52:
+    x64.movRegReg r13, rax
+    x64.jmp __im_cont
+  __im_slow:
+    x64.callDirect __managed_get
+    x64.movRegReg r13, r8
+    x64.movRegReg rsi, r10
+  __im_cont:
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, tryerr#32
+  tryok#31:
+    x64.movRegImm32 r14, 1
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.storeSlotReg slot0, r15
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect __retain_type_param
+    x64.storeBaseDispReg.word64 [r15 + 0], r8
+    x64.storeBaseDispReg.word64 [r15 + 8], r14
+  __il_cont#27:
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Holder_String
+  __il_cont#25:
+    x64.loadRegBaseDisp.word64 rbx, [r15 + 0]
+    x64.leaRegRdata r12, [rip + __str_rec_2]  ; "the source is gone"
+  __il_body#50:
+    x64.loadRegBaseDisp.word64 r13, [rbx + 8]
+  __il_body#51:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+  __il_cont#48:
+    x64.cmpRegReg r13, rax
+    x64.jcc equal, __rc_ok#21
+  lenMismatch:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont#3
+  __rc_ok#21:
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic
+  __rc_ok#23:
+    x64.movRegImm32 r14, 0
+    x64.jmp forhdr
+  compare_loop:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r14
-    x64.callDirect Holder.add
-    x64.movRegImm32 rdx, 0
-    x64.leaRegRdata rax, [rip + __layout_Holder_String]
-    x64.movRegReg rcx, rbx
-    x64.callDirect Holder.entryAt
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect __destruct_Holder_String
-    x64.movRegReg r8, r12
+    x64.callDirect String.byteAt
+    x64.movRegReg r15, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#14
+  tryok#13:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.callDirect String.byteAt
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#16
+  tryok#15:
+    x64.cmpRegReg r15, r8
+    x64.jcc equal, forstep
+  byte_check:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont#3
+  forstep:
+    x64.leaRegRegImm32 r14, r14, 1
+  forhdr:
+    x64.cmpRegReg r14, r13
+    x64.jcc less, compare_loop
+  forexit:
+    x64.movRegImm32 rax, 1
+  __il_cont#3:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont
+  kept:
+    x64.movRegImm32 rbx, 42
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct___Tuple2.String.int
+    x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg r15
     x64.popReg r14
@@ -229,54 +218,65 @@ func @pluck {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-}
-
-func @main {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.callDirect pluck
-    x64.movRegReg rbx, r8
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.leaRegRdata rdx, [rip + __str_rec_2]  ; "the source is gone"
-    x64.callDirect String.equals
-    x64.cmpRegImm32 r8, 0
-    x64.jcc equal, ifcont
-  kept:
-    x64.movRegImm32 r12, 42
-    x64.movRegReg rcx, rbx
-    x64.callDirect __destruct___Tuple2.String.int
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
   ifcont:
-    x64.movRegImm32 r12, 1
-    x64.movRegReg rcx, rbx
+    x64.movRegImm32 rbx, 1
+    x64.loadRegSlot rcx, slot0
     x64.callDirect __destruct___Tuple2.String.int
-    x64.movRegReg r8, r12
-    x64.epilogue 32
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-}
-
-func @__fieldDefault#Holder#items {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm32 rax, 8
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 40]
-    x64.movRegReg rcx, rax
-    x64.callDirect __managed_create
-    x64.epilogue 32
+  tryerr#32:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at string-argument-outlives-its-source.test:20: Holder.entryAt: out of range\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at String.maxon:1019: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#14:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at String.maxon:1021: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees aOffset + len <= a.byteLength()\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#16:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at String.maxon:1022: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees bOffset + len <= b.byteLength()\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }

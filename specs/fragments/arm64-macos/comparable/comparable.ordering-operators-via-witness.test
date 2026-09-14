@@ -64,70 +64,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Pair.lt {
-  entry:
-    arm64.prologue 16
-    arm64.movRegReg x2, x1
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x3
-    arm64.loadRegBaseDisp.word64 x16, [x2 + 24]
-    arm64.blr x16
-    arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @Pair.le {
-  entry:
-    arm64.prologue 16
-    arm64.movRegReg x2, x1
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x3
-    arm64.loadRegBaseDisp.word64 x16, [x2 + 24]
-    arm64.blr x16
-    arm64.cmp x0, 2
-    arm64.cset x0, ne
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @Pair.gt {
-  entry:
-    arm64.prologue 16
-    arm64.movRegReg x2, x1
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x3
-    arm64.loadRegBaseDisp.word64 x16, [x2 + 24]
-    arm64.blr x16
-    arm64.cmp x0, 2
-    arm64.cset x0, eq
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @Pair.ge {
-  entry:
-    arm64.prologue 16
-    arm64.movRegReg x2, x1
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x3
-    arm64.loadRegBaseDisp.word64 x16, [x2 + 24]
-    arm64.blr x16
-    arm64.cmp x0, 0
-    arm64.cset x0, ne
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @Pair.mask {
   entry:
     arm64.prologue 48
@@ -137,52 +73,53 @@ func @Pair.mask {
     arm64.movRegReg x19, x0
     arm64.movRegReg x20, x1
     arm64.movImm x21, 0
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
-    arm64.bl Pair.lt
-    arm64.cbz x0, ifcont#2
+  __il_body#13:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
+    arm64.loadRegBaseDisp.word64 x16, [x20 + 24]
+    arm64.blr x16
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+  __il_cont#12:
+    arm64.cbz x0, __il_body#15
   a1:
     arm64.movImm x21, 1
-  ifcont#2:
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
-    arm64.bl Pair.le
-    arm64.cbz x0, ifcont#4
+  __il_body#15:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
+    arm64.loadRegBaseDisp.word64 x16, [x20 + 24]
+    arm64.blr x16
+    arm64.cmp x0, 2
+    arm64.cset x0, ne
+  __il_cont#14:
+    arm64.cbz x0, __il_body#17
   a2:
     arm64.add x21, x21, 2
-  ifcont#4:
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
-    arm64.bl Pair.gt
-    arm64.cbz x0, ifcont#6
+  __il_body#17:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
+    arm64.loadRegBaseDisp.word64 x16, [x20 + 24]
+    arm64.blr x16
+    arm64.cmp x0, 2
+    arm64.cset x0, eq
+  __il_cont#16:
+    arm64.cbz x0, __il_body#19
   a3:
     arm64.add x21, x21, 4
-  ifcont#6:
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
-    arm64.bl Pair.ge
+  __il_body#19:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
+    arm64.loadRegBaseDisp.word64 x16, [x20 + 24]
+    arm64.blr x16
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+  __il_cont#18:
     arm64.cbz x0, critsplit
   a4:
     arm64.add x0, x21, 8
-    arm64.b ifcont#8
+    arm64.b __rc_ok
   critsplit:
     arm64.movRegReg x0, x21
-  ifcont#8:
-    arm64.cmp x0, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.movImm x1, 4294967295
-    arm64.cmp x0, x1
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at comparable.ordering-operators-via-witness.test:36: Range check failed: value outside typealias 'Integer'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
   __rc_ok:
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1

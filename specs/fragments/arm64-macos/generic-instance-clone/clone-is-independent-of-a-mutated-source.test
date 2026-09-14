@@ -105,11 +105,37 @@ func @main {
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
-    arm64.leaRdata x1, __layout_Array_StrBox
+    arm64.leaRdata x3, __layout_Array_StrBox
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
+    arm64.movImm x1, 0
     arm64.movRegReg x0, x19
-    arm64.bl Array.clone
+    arm64.bl __managed_slice_opaque
     arm64.movRegReg x20, x0
-    arm64.movImm x21, 0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#33
+  tryerr#34:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at Array.maxon:172: Array.clone: slice OOB \xe2\x80\x94 0..len is always valid\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  tryok#33:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_retain
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+  __il_cont:
+    arm64.movImm x20, 0
     arm64.leaRdata x0, __str_rec_3  ; "replaced"
     arm64.movImm x22, 99
     arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
@@ -156,23 +182,17 @@ func @main {
     arm64.b.eq __im_store
   __im_slow#17:
     arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x21
+    arm64.movRegReg x1, x20
     arm64.bl __managed_set
-    arm64.b __im_cont#16
-  __im_store:
-    arm64.storeBaseDispReg.word64 [x0 + 0], x2
-    arm64.movImm x0, 0
-    arm64.movRegReg x9, x0
-  __im_cont#16:
     arm64.cmp x9, 0
     arm64.b.eq tryok#1
   tryerr#2:
-    arm64.movImm x21, 91
-    arm64.movRegReg x0, x20
+    arm64.movImm x20, 91
+    arm64.movRegReg x0, x21
     arm64.bl __managed_decref
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.movRegReg x0, x21
+    arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -183,6 +203,8 @@ func @main {
     arm64.loadRegSlot x26, slot7
     arm64.epilogue 80
     arm64.ret
+  __im_store:
+    arm64.storeBaseIndexScaleReg.word64 [x0 + x20*8 + 0], x2
   tryok#1:
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
@@ -194,29 +216,25 @@ func @main {
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
     arm64.cmp x3, 0
-    arm64.b.eq critsplit#31
+    arm64.b.eq critsplit#36
   __im_empty#26:
     arm64.cmp x0, 0
-    arm64.b.ne critsplit#32
-  __im_slow#24:
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_get
-    arm64.b __im_cont#23
-  critsplit#32:
+    arm64.b.eq __im_slow#24
+  critsplit#37:
     arm64.movRegReg x9, x2
     arm64.b __im_cont#23
-  critsplit#31:
+  critsplit#36:
     arm64.movRegReg x9, x2
   __im_cont#23:
     arm64.cmp x9, 0
     arm64.b.eq tryok#3
   tryerr#4:
-    arm64.movImm x21, 92
-    arm64.movRegReg x0, x20
+    arm64.movImm x20, 92
+    arm64.movRegReg x0, x21
     arm64.bl __managed_decref
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.movRegReg x0, x21
+    arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -232,12 +250,12 @@ func @main {
     arm64.cmp x1, 99
     arm64.b.eq ifcont#6
   sourceNotReplaced:
-    arm64.movImm x21, 93
-    arm64.movRegReg x0, x20
+    arm64.movImm x20, 93
+    arm64.movRegReg x0, x21
     arm64.bl __managed_decref
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.movRegReg x0, x21
+    arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -255,12 +273,12 @@ func @main {
     arm64.eor x0, x0, 1
     arm64.cbz x0, ifcont#8
   sourceStringNotReplaced:
-    arm64.movImm x21, 94
-    arm64.movRegReg x0, x20
+    arm64.movImm x20, 94
+    arm64.movRegReg x0, x21
     arm64.bl __managed_decref
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.movRegReg x0, x21
+    arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -273,39 +291,34 @@ func @main {
     arm64.ret
   ifcont#8:
     arm64.movImm x1, 0
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.cmp x0, 0
     arm64.b.ls __im_slow#28
   __im_load#29:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
-    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.movImm x0, 0
-    arm64.loadRegBaseDisp.word64 x2, [x20 + 40]
+    arm64.loadRegBaseDisp.word64 x2, [x21 + 40]
     arm64.cmp x2, 0
-    arm64.b.eq critsplit#33
+    arm64.b.eq critsplit#38
   __im_empty#30:
-    arm64.cmp x21, 0
-    arm64.b.ne critsplit#34
-  __im_slow#28:
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_get
-    arm64.movRegReg x21, x0
-    arm64.b __im_cont#27
-  critsplit#34:
+    arm64.cmp x20, 0
+    arm64.b.eq __im_slow#28
+  critsplit#39:
     arm64.movRegReg x9, x0
     arm64.b __im_cont#27
-  critsplit#33:
+  critsplit#38:
     arm64.movRegReg x9, x0
   __im_cont#27:
     arm64.cmp x9, 0
     arm64.b.eq tryok#9
   tryerr#10:
-    arm64.movImm x21, 95
-    arm64.movRegReg x0, x20
+    arm64.movImm x20, 95
+    arm64.movRegReg x0, x21
     arm64.bl __managed_decref
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.movRegReg x0, x21
+    arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -317,18 +330,18 @@ func @main {
     arm64.epilogue 80
     arm64.ret
   tryok#9:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.leaRdata x1, __str_rec_2  ; "original boxed string, long enough to live on the heap"
     arm64.bl String.equals
     arm64.eor x0, x0, 1
     arm64.cbz x0, ifcont#12
   cloneFollowedTheSource:
-    arm64.movImm x21, 96
-    arm64.movRegReg x0, x20
+    arm64.movImm x20, 96
+    arm64.movRegReg x0, x21
     arm64.bl __managed_decref
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.movRegReg x0, x21
+    arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -340,20 +353,18 @@ func @main {
     arm64.epilogue 80
     arm64.ret
   ifcont#12:
-    arm64.loadRegBaseDisp.word64 x21, [x21 + 8]
-    arm64.movRegReg x0, x20
+    arm64.loadRegBaseDisp.word64 x20, [x20 + 8]
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x21
     arm64.bl __managed_decref
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.cmp x21, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x21, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_7  ; "panic at clone-is-independent-of-a-mutated-source.test:37: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
+    arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -364,8 +375,19 @@ func @main {
     arm64.loadRegSlot x26, slot7
     arm64.epilogue 80
     arm64.ret
-  __rc_ok:
+  __im_slow#24:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.b __im_cont#23
+  __im_slow#28:
     arm64.movRegReg x0, x21
+    arm64.bl __managed_get
+    arm64.movRegReg x20, x0
+    arm64.b __im_cont#27
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_8  ; "panic at clone-is-independent-of-a-mutated-source.test:37: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

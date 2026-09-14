@@ -28,7 +28,9 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 32
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.leaRdata x19, __str_rec_2  ; "head, long enough to be a real heap allocation"
@@ -48,9 +50,23 @@ func @main {
     arm64.loadRegBaseDisp.word64 x19, [x20 + 8]
     arm64.movRegReg x0, x19
     arm64.bl __mm_incref
-    arm64.leaRdata x1, __str_rec_3  ; " tail"
+    arm64.leaRdata x21, __str_rec_3  ; " tail"
+  __il_body#12:
+    arm64.movRegReg x0, x21
+    arm64.bl __str_bytes_view
+    arm64.movRegReg x22, x0
     arm64.movRegReg x0, x19
-    arm64.bl String.append
+    arm64.movRegReg x1, x22
+    arm64.bl __managed_append
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_decref
+    arm64.loadRegBaseDisp.byte x0, [x21 + 48]
+    arm64.eor x0, x0, 1
+    arm64.cbz x0, __il_cont#11
+  clearFlag:
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.byte [x19 + 48], x0
+  __il_cont#11:
     arm64.movRegReg x0, x19
     arm64.bl __str_decref
   matchcont#5:
@@ -61,8 +77,10 @@ func @main {
     arm64.loadRegBaseDisp.word64 x19, [x20 + 8]
     arm64.movRegReg x0, x19
     arm64.bl __mm_incref
+  __il_body#16:
     arm64.movRegReg x0, x19
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont#15:
     arm64.movRegReg x0, x19
     arm64.bl __str_decref
   matchcont#10:
@@ -72,7 +90,9 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
     arm64.ret
   matchnext#9:
     arm64.cmp x0, 1
@@ -84,7 +104,9 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
     arm64.ret
   matchdead#8:
   matchnext#4:
@@ -97,7 +119,9 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
     arm64.ret
   matchdead#3:
 }

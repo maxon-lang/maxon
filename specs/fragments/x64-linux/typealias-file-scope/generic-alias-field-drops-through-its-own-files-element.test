@@ -33,7 +33,7 @@ end 'Nums'
 
 function main() returns ExitCode
 	let n = Nums.create()
-	return (try n.items.get(0) otherwise 0) + wordCount()
+	return ((try n.items.get(0) otherwise 0) + (wordCount() as Num)) as ExitCode
 end 'main'
 ---
 ExitCode: 8
@@ -45,75 +45,16 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Words.create {
+func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
     x64.prologue 32
-    x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __str_decref]
-    x64.callDirect __managed_create
-    x64.movRegReg rbx, r8
-    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "hi"
-    x64.callDirect __str_retain
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r8
-    x64.callDirect __managed_push
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_incref
-    x64.storeBaseDispReg.word64 [r12 + 0], rbx
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @wordCount {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.callDirect Words.create
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.loadRegBaseDisp.word64 rbx, [rax + 8]
-    x64.movRegReg rcx, r8
-    x64.callDirect __destruct_Words
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc greaterEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at words.maxon:15: Range check failed: value outside typealias 'ElementIndex'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegReg r8, rbx
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Nums.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
+  __il_body#11:
     x64.movRegImm32 rcx, 2
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
@@ -126,59 +67,87 @@ func @Nums.create {
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.movRegReg rcx, rbx
-    x64.callDirect __mm_incref
-    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.callDirect __managed_retain
+    x64.storeBaseDispReg.word64 [r12 + 0], r8
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @main {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.callDirect Nums.create
-    x64.movRegReg rbx, r8
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+  __il_cont#10:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
   tryerr:
-    x64.movRegImm32 r12, 0
-    x64.jmp trycont
+    x64.movRegImm32 rbx, 0
+    x64.jmp __il_body#15
   tryok:
-    x64.movRegReg r12, r8
-  trycont:
-    x64.callDirect wordCount
-    x64.leaRegRegReg r12, r12, r8
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rbx, r8
+  __il_body#15:
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __str_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg r13, r8
+    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "hi"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_retain
+    x64.storeBaseDispReg.word64 [r14 + 0], r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+  __il_cont#14:
+    x64.loadRegBaseDisp.word64 rax, [r14 + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_Words
+  __il_cont#12:
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic#5
+  __rc_chk#6:
+    x64.cmpRegImm32 r13, 1000
+    x64.jcc greater, __rc_panic#5
+  __rc_ok#4:
+    x64.leaRegRegReg rbx, rbx, r13
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic#8
+  __rc_chk#9:
+    x64.cmpRegImm32 rbx, 255
+    x64.jcc greater, __rc_panic#8
+  __rc_ok#7:
+    x64.movRegReg rcx, r12
     x64.callDirect __destruct_Nums
-    x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 r12, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at main.maxon:16: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.movRegReg r8, rbx
     x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg r8, r12
+  __rc_panic#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at main.maxon:16: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at main.maxon:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

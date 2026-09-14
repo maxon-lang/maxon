@@ -3,7 +3,7 @@
 // `NetworkError` variant a closed-under-it read can raise.
 typealias ReadOutcome = int(0 to 3)
 
-// The peer echoes and is sent nothing, so this read parks and stays parked until the owner closes under it.
+// Nothing on the far side can ever write, so this read parks and stays parked until the owner closes under it.
 function readUntilClosed(client TcpClient) returns ReadOutcome
 	var code = 0
 
@@ -20,7 +20,8 @@ function readUntilClosed(client TcpClient) returns ReadOutcome
 end 'readUntilClosed'
 
 function main() returns ExitCode
-	let client = try TcpClient.connect("tcpbin.com", port: 4242) otherwise return 1
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let client = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 1
 
 	let before = __Builtins.schedNetpollBlockCount()
 	let reader = async readUntilClosed(client)
@@ -162,17 +163,17 @@ func @main {
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 104
-    x64.leaRegRdata rcx, [rip + __str_rec_5]  ; "tcpbin.com"
-    x64.movRegImm32 rdx, 4242
-    x64.callDirect TcpClient.connect
+    x64.prologue 120
+    x64.leaRegRdata rcx, [rip + __str_rec_5]  ; "127.0.0.1"
+    x64.movRegImm32 rdx, 0
+    x64.callDirect TcpListener.bind
     x64.movRegReg rbx, r8
     x64.storeSlotReg slot0, rbx
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
-  tryerr:
+    x64.jcc equal, tryok#1
+  tryerr#2:
     x64.movRegImm32 r8, 1
-    x64.epilogue 104
+    x64.epilogue 120
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -180,10 +181,56 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
-    x64.callDirect __sched_netpoll_block_count
+  tryok#1:
+    x64.leaRegRdata r12, [rip + __str_rec_5]  ; "127.0.0.1"
+  __il_body#6:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect __ml_port
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#7
+  tryerr#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_15]  ; "panic at TcpListener.maxon:32: TcpListener.port: this listener is closed, so it holds no bound port to report\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 120
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#7:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 65535
+    x64.jcc greater, __rc_panic
+  __il_cont#5:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect TcpClient.connect
     x64.movRegReg r12, r8
+    x64.storeSlotReg slot1, r12
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#3
+  tryerr#4:
+    x64.movRegImm32 r12, 1
     x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_TcpListener
+    x64.movRegReg r8, r12
+    x64.epilogue 120
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#3:
+    x64.callDirect __sched_netpoll_block_count
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_own
     x64.movRegReg r13, r8
     x64.leaRegFunc rcx, [rip + readUntilClosed]
@@ -197,34 +244,34 @@ func @main {
     x64.movRegImm32 rcx, 200
   __rc_ok:
     x64.callDirect __gt_sleep
-  __il_cont#5:
+  __il_cont#14:
     x64.callDirect __sched_netpoll_block_count
     x64.movRegReg r13, r8
-    x64.subRegReg r13, r8, r12
-  __il_body#9:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.subRegReg r13, r8, rbx
+  __il_body#18:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.callDirect __ms_close
-  __il_cont#4:
+  __il_cont#13:
     x64.movRegReg rcx, r14
     x64.callDirect __gt_await
     x64.movRegReg rbx, r8
     x64.leaRegRdata rax, [rip + __str_rec_6]  ; "parked="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.storeSlotReg slot8, rcx
+    x64.storeSlotReg slot9, rcx
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
     x64.cmpRegImm32 r13, 0
     x64.setccReg greater, r13
     x64.movRegImm32 rcx, 5
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeSlotReg slot7, r8
+    x64.storeSlotReg slot8, r8
     x64.movRegReg rcx, r13
     x64.movRegReg rdx, r8
     x64.callDirect __bool_to_string
     x64.movRegReg r13, r8
     x64.leaRegRdata rax, [rip + __str_rec_7]  ; " code="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.storeSlotReg slot6, rcx
+    x64.storeSlotReg slot7, rcx
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
     x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
@@ -233,72 +280,86 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r15
     x64.callDirect __uint_to_string
-    x64.storeSlotReg slot5, r8
+    x64.storeSlotReg slot6, r8
     x64.leaRegRdata rax, [rip + __str_rec_8]  ; "\x0a"
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.storeSlotReg slot4, rcx
+    x64.storeSlotReg slot5, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.storeSlotReg slot3, rax
+    x64.storeSlotReg slot4, rax
     x64.leaRegRegReg rcx, r12, r13
     x64.leaRegRegReg rcx, rcx, r14
     x64.leaRegRegReg rcx, rcx, r8
     x64.leaRegRegReg rax, rcx, rax
-    x64.storeSlotReg slot1, rax
+    x64.storeSlotReg slot2, rax
     x64.leaRegRegImm32 rcx, rax, 57
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeSlotReg slot2, r8
+    x64.storeSlotReg slot3, r8
     x64.leaRegRegImm32 rbx, r8, 56
-    x64.loadRegSlot rdx, slot8
+    x64.loadRegSlot rdx, slot9
     x64.movRegReg rcx, rbx
     x64.movRegReg rax, r12
     x64.callDirect __str_copy
     x64.leaRegRegReg r12, rbx, r12
-    x64.loadRegSlot rdx, slot7
+    x64.loadRegSlot rdx, slot8
     x64.movRegReg rcx, r12
     x64.movRegReg rax, r13
     x64.callDirect __str_copy
     x64.leaRegRegReg r12, r12, r13
-    x64.loadRegSlot rdx, slot6
+    x64.loadRegSlot rdx, slot7
     x64.movRegReg rcx, r12
     x64.movRegReg rax, r14
     x64.callDirect __str_copy
     x64.leaRegRegReg r12, r12, r14
-    x64.loadRegSlot rax, slot5
+    x64.loadRegSlot rax, slot6
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r15
     x64.callDirect __str_copy
-    x64.loadRegSlot rax, slot5
+    x64.loadRegSlot rax, slot6
     x64.leaRegRegReg r12, r12, rax
-    x64.loadRegSlot rax, slot3
-    x64.loadRegSlot rdx, slot4
+    x64.loadRegSlot rax, slot4
+    x64.loadRegSlot rdx, slot5
     x64.movRegReg rcx, r12
     x64.callDirect __str_copy
-    x64.loadRegSlot rax, slot3
+    x64.loadRegSlot rax, slot4
     x64.leaRegRegReg rax, r12, rax
-    x64.loadRegSlot rax, slot2
+    x64.loadRegSlot rax, slot3
     x64.storeBaseDispReg.word64 [rax + 0], rbx
-    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rcx, slot2
     x64.storeBaseDispReg.word64 [rax + 8], rcx
     x64.movRegImm rcx, 18446744073709551613
     x64.storeBaseDispReg.word64 [rax + 16], rcx
     x64.movRegImm32 rcx, 1
     x64.storeBaseDispReg.word64 [rax + 24], rcx
-    x64.loadRegSlot rcx, slot7
+    x64.loadRegSlot rcx, slot8
     x64.callDirect __mm_decref
     x64.movRegReg rcx, r15
     x64.callDirect __mm_decref
-  __il_body#10:
-    x64.loadRegSlot rcx, slot2
+  __il_body#19:
+    x64.loadRegSlot rcx, slot3
     x64.callDirect __write_stdout
-  __il_cont#3:
-    x64.loadRegSlot rcx, slot2
+  __il_cont#12:
+    x64.loadRegSlot rcx, slot3
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
-    x64.loadRegSlot rcx, slot0
+    x64.loadRegSlot rcx, slot1
     x64.callDirect __destruct_TcpClient
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_TcpListener
     x64.movRegReg r8, rbx
-    x64.epilogue 104
+    x64.epilogue 120
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_22]  ; "panic at TcpListener.maxon:35: Range check failed: value outside typealias 'NetworkPort'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 120
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13

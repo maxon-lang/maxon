@@ -43,33 +43,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Pairs.create {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __fieldDefault#Pairs#keys
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __fieldDefault#Pairs#values
-    arm64.movRegReg x19, x0
-    arm64.movImm x21, 0
-    arm64.movImm x0, 24
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x20
-    arm64.storeBaseDispReg.word64 [x0 + 8], x19
-    arm64.storeBaseDispReg.word64 [x0 + 16], x21
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
-}
-
 func @Pairs.add {
   entry:
     arm64.prologue 32
@@ -82,9 +55,10 @@ func @Pairs.add {
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.movRegReg x1, x20
     arm64.bl __managed_push
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
-    arm64.add x0, x0, 1
-    arm64.storeBaseDispReg.word64 [x19 + 16], x0
+    arm64.movRegReg x1, x0
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 16]
+    arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x19 + 16], x1
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
@@ -93,73 +67,82 @@ func @Pairs.add {
 
 func @main {
   entry:
-    arm64.prologue 32
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.leaRdata x0, __layout_Pairs_Integer_Integer
-    arm64.bl Pairs.create
+    arm64.leaRdata x19, __layout_Pairs_Integer_Integer
+  __il_body#12:
+    arm64.movImm x0, 8
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 40]
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+  __il_body#13:
+    arm64.movImm x0, 8
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 112]
+    arm64.bl __managed_create
     arm64.movRegReg x19, x0
+  __il_cont#10:
+    arm64.movImm x21, 0
+    arm64.movImm x0, 24
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x20
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
+  __il_cont#8:
     arm64.movImm x1, 1
     arm64.movImm x2, 5
     arm64.leaRdata x3, __layout_Pairs_Integer_Integer
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x22
     arm64.bl Pairs.add
     arm64.movImm x1, 2
     arm64.movImm x2, 6
     arm64.leaRdata x3, __layout_Pairs_Integer_Integer
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x22
     arm64.bl Pairs.add
     arm64.movImm x1, 3
     arm64.movImm x2, 7
     arm64.leaRdata x3, __layout_Pairs_Integer_Integer
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x22
     arm64.bl Pairs.add
-  __il_body:
-    arm64.loadRegBaseDisp.word64 x20, [x19 + 16]
-  __il_cont:
-    arm64.movRegReg x0, x19
-    arm64.bl __destruct_Pairs_Integer_Integer
-    arm64.cmp x20, 0
-    arm64.b.lt __rc_panic
+  __il_body#5:
+    arm64.loadRegBaseDisp.word64 x19, [x22 + 16]
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic#7
   __rc_chk:
-    arm64.cmp x20, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at field-defaults.opaque-array-default-two-type-params.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.cmp x19, 255
+    arm64.b.gt __rc_panic#2
+  __rc_ok:
+    arm64.movRegReg x0, x22
+    arm64.bl __destruct_Pairs_Integer_Integer
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic#7:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at field-defaults.opaque-array-default-two-type-params.test:22: Range check failed: value outside typealias 'Count'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
     arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x20
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at field-defaults.opaque-array-default-two-type-params.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @__fieldDefault#Pairs#keys {
-  entry:
-    arm64.prologue 16
-    arm64.movImm x1, 8
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
-    arm64.bl __managed_create
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @__fieldDefault#Pairs#values {
-  entry:
-    arm64.prologue 16
-    arm64.movImm x1, 8
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 112]
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
-    arm64.bl __managed_create
-    arm64.epilogue 16
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
     arm64.ret
 }

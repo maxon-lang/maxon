@@ -40,6 +40,7 @@ func @fatal {
   more:
     arm64.sub x0, x19, 1
     arm64.bl fatal
+    arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
     arm64.loadRegSlot x21, slot3
@@ -128,7 +129,9 @@ func @main {
   entry:
     arm64.prologue 16
     arm64.leaRdata x0, __str_rec_7  ; "descending\x0a"
-    arm64.bl print
+  __il_body:
+    arm64.bl __write_stdout
+  __il_cont:
     arm64.movImm x0, 2
     arm64.bl fatal
     arm64.movImm x0, 0

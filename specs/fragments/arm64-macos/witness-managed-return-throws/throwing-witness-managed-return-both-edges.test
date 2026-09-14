@@ -61,41 +61,17 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Chunk.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @Backend.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @Backend.makeChunk {
   entry:
     arm64.prologue 32
     arm64.storeSlotReg slot0, x19
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
-    arm64.cmp x1, x2
-    arm64.b.ls ifcont
+    arm64.movRegReg x19, x1
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic
+  __rc_ok:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x19, x1
+    arm64.b.ls __il_body
   reject:
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.movImm x0, 16
@@ -110,9 +86,20 @@ func @Backend.makeChunk {
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
-  ifcont:
-    arm64.movRegReg x0, x1
-    arm64.bl Chunk.create
+  __il_body:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+  __il_cont:
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at throwing-witness-managed-return-both-edges.test:29: Range check failed: value outside typealias 'Payload'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.movImm x9, 0
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
@@ -121,10 +108,28 @@ func @Backend.makeChunk {
 
 func @obtainMaker {
   entry:
-    arm64.prologue 16
-    arm64.bl Backend.create
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic
+  __il_body:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+  __il_cont:
     arm64.leaRdata x9, __witness_Backend.ChunkMaker
-    arm64.epilogue 16
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at throwing-witness-managed-return-both-edges.test:39: Range check failed: value outside typealias 'Payload'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
     arm64.ret
 }
 
@@ -133,6 +138,12 @@ func @attempt {
     arm64.prologue 32
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x2
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic#4
+  __rc_ok#3:
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic#6
+  __rc_ok#5:
     arm64.loadRegBaseDisp.word64 x16, [x3 + 24]
     arm64.blr x16
     arm64.cmp x9, 0
@@ -148,6 +159,20 @@ func @attempt {
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.bl __mm_decref
     arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic#4:
+    arm64.leaRdata x0, __str_blob_7  ; "panic at throwing-witness-managed-return-both-edges.test:43: Range check failed: value outside typealias 'Payload'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic#6:
+    arm64.leaRdata x0, __str_blob_7  ; "panic at throwing-witness-managed-return-both-edges.test:43: Range check failed: value outside typealias 'Payload'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret

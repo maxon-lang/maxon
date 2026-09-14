@@ -99,12 +99,10 @@ func @main {
   tryok#3:
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
-  whilehdr:
-    x64.cmpRegImm32 r13, 8
-    x64.jcc greaterEqual, whileexit
+    x64.jmp whilehdr
   spin:
     x64.movRegReg rcx, rbx
-    x64.callDirect __mm_retain
+    x64.callDirect __managed_retain
     x64.movRegReg r14, r8
     x64.movRegImm32 rdx, 1
     x64.movRegReg rcx, r14
@@ -121,7 +119,7 @@ func @main {
     x64.movRegReg rcx, r14
     x64.callDirect __managed_decref
     x64.movRegReg rcx, rbx
-    x64.callDirect __mm_retain
+    x64.callDirect __managed_retain
     x64.movRegReg r14, r8
     x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, r14
@@ -138,7 +136,9 @@ func @main {
     x64.movRegReg rcx, r14
     x64.callDirect __managed_decref
     x64.leaRegRegImm32 r13, r13, 1
-    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 r13, 8
+    x64.jcc less, spin
   whileexit:
     x64.imulRegRegImm32 rax, r12, 10
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
@@ -147,11 +147,11 @@ func @main {
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 r12, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at an-unbound-adoption-is-dropped-when-the-callee-throws.test:26: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
@@ -159,10 +159,10 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-    x64.movRegReg r8, r12
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at an-unbound-adoption-is-dropped-when-the-callee-throws.test:26: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13

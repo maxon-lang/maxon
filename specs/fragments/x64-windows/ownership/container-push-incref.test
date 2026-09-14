@@ -32,6 +32,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @Node.create {
@@ -71,9 +74,9 @@ func @main {
     x64.callDirect Node.create
     x64.movRegReg r12, r8
     x64.movRegReg rcx, r12
-    x64.callDirect __mm_incref
+    x64.callDirect __mm_own
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
+    x64.movRegReg rdx, r8
     x64.callDirect __managed_push
     x64.loadRegBaseDisp.word64 r13, [rbx + 8]
     x64.movRegReg rcx, r12
@@ -104,12 +107,12 @@ func @main {
     x64.movRegReg rax, r13
     x64.callDirect __str_copy
     x64.leaRegRegReg r12, r15, r13
+    x64.loadRegSlot rax, slot8
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r14
-    x64.loadRegSlot r13, slot8
-    x64.movRegReg rax, r13
     x64.callDirect __str_copy
-    x64.leaRegRegReg rax, r12, r13
+    x64.loadRegSlot rax, slot8
+    x64.leaRegRegReg rax, r12, rax
     x64.loadRegSlot r12, slot6
     x64.storeBaseDispReg.word64 [r12 + 0], r15
     x64.loadRegSlot rax, slot3
@@ -137,12 +140,7 @@ func @main {
     x64.jcc equal, critsplit#10
   __im_empty:
     x64.cmpRegImm32 r12, 0
-    x64.jcc notEqual, critsplit#11
-  __im_slow:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
-    x64.movRegReg rbx, r8
-    x64.jmp __im_cont
+    x64.jcc equal, __im_slow
   critsplit#11:
     x64.movRegReg rbx, r12
     x64.movRegReg r10, rax
@@ -221,4 +219,9 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.movRegReg rbx, r8
+    x64.jmp __im_cont
 }

@@ -17,6 +17,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -24,7 +27,7 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 56
+    x64.prologue 40
     x64.movRegImm32 rcx, 48
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -49,11 +52,65 @@ func @main {
     x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, __im_slow#20
-  __im_viewed#23:
+  __im_viewed:
     x64.leaRegRegImm32 rsi, rcx, -24
     x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, __im_store#24
+    x64.jcc notEqual, __im_slow#20
+  __im_store#24:
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+  tryok#1:
+    x64.movRegImm32 rdx, 1
+    x64.movRegImm32 rax, 2
+  __im_bounds#27:
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 8]
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc belowEqual, __im_slow#26
+  __im_buffer#28:
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
+  __im_store#30:
+    x64.leaRegRegImm32 rcx, rcx, 8
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+  tryok#3:
+    x64.movRegImm32 rdx, 2
+    x64.movRegImm32 rax, 3
+  __im_bounds#33:
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 8]
+    x64.cmpRegImm32 rcx, 2
+    x64.jcc belowEqual, __im_slow#32
+  __im_buffer#34:
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
+  __im_store#36:
+    x64.leaRegRegImm32 rcx, rcx, 16
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+  __im_load#39:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+  __im_load#42:
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
+    x64.leaRegRegImm32 rcx, rcx, 8
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+  __im_load#45:
+    x64.loadRegBaseDisp.word64 rdx, [r8 + 0]
+    x64.leaRegRegImm32 rdx, rdx, 16
+    x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
+  trycont:
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegReg rbx, rax, rdx
+    x64.movRegReg rcx, r8
+    x64.callDirect __managed_decref
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   __im_slow#20:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r8
@@ -66,31 +123,10 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at multiple-assignments.test:4: test invariant: set OOB\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_store#24:
-    x64.storeBaseDispReg.word64 [rcx + 0], rax
-  tryok#1:
-    x64.movRegImm32 rdx, 1
-    x64.movRegImm32 rax, 2
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __im_slow#26
-  __im_bounds#27:
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 8]
-    x64.cmpRegImm32 rcx, 1
-    x64.jcc belowEqual, __im_slow#26
-  __im_buffer#28:
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, __im_slow#26
-  __im_viewed#29:
-    x64.leaRegRegImm32 rsi, rcx, -24
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, __im_store#30
   __im_slow#26:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r8
@@ -103,32 +139,10 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at multiple-assignments.test:5: test invariant: set OOB\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_store#30:
-    x64.leaRegRegImm32 rcx, rcx, 8
-    x64.storeBaseDispReg.word64 [rcx + 0], rax
-  tryok#3:
-    x64.movRegImm32 rdx, 2
-    x64.movRegImm32 rax, 3
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __im_slow#32
-  __im_bounds#33:
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 8]
-    x64.cmpRegImm32 rcx, 2
-    x64.jcc belowEqual, __im_slow#32
-  __im_buffer#34:
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, __im_slow#32
-  __im_viewed#35:
-    x64.leaRegRegImm32 rsi, rcx, -24
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, __im_store#36
   __im_slow#32:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r8
@@ -136,105 +150,20 @@ func @main {
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#5
+    x64.jcc equal, __im_load#39
   tryerr#6:
     x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at multiple-assignments.test:6: test invariant: set OOB\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_store#36:
-    x64.leaRegRegImm32 rcx, rcx, 16
-    x64.storeBaseDispReg.word64 [rcx + 0], rax
-  tryok#5:
-    x64.movRegImm32 rdx, 0
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc above, __im_load#39
-  __im_slow#38:
-    x64.storeSlotReg slot0, r8
-    x64.movRegReg rcx, r8
-    x64.callDirect __managed_get
-    x64.movRegReg rax, r8
-    x64.loadRegSlot r8, slot0
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, trycont#9
-  tryerr#8:
-    x64.movRegImm32 rax, 0
-    x64.jmp trycont#9
-  __im_load#39:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-  trycont#9:
-    x64.movRegImm32 rdx, 1
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 8]
-    x64.cmpRegImm32 rcx, 1
-    x64.jcc above, __im_load#42
-  __im_slow#41:
-    x64.storeSlotReg slot1, rax
-    x64.storeSlotReg slot0, r8
-    x64.movRegReg rcx, r8
-    x64.callDirect __managed_get
-    x64.movRegReg rcx, r8
-    x64.loadRegSlot rax, slot1
-    x64.loadRegSlot r8, slot0
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, trycont#12
-  tryerr#11:
-    x64.movRegImm32 rcx, 0
-    x64.jmp trycont#12
-  __im_load#42:
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
-    x64.leaRegRegImm32 rcx, rcx, 8
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-  trycont#12:
-    x64.movRegImm32 rdx, 2
-    x64.loadRegBaseDisp.word64 rsi, [r8 + 8]
-    x64.cmpRegImm32 rsi, 2
-    x64.jcc above, __im_load#45
-  __im_slow#44:
-    x64.storeSlotReg slot1, rax
-    x64.storeSlotReg slot2, rcx
-    x64.storeSlotReg slot0, r8
-    x64.movRegReg rcx, r8
-    x64.callDirect __managed_get
-    x64.movRegReg rdx, r8
-    x64.loadRegSlot rax, slot1
-    x64.loadRegSlot rcx, slot2
-    x64.loadRegSlot r8, slot0
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, trycont#15
-  tryerr#14:
-    x64.movRegImm32 rdx, 0
-    x64.jmp trycont#15
-  __im_load#45:
-    x64.loadRegBaseDisp.word64 rdx, [r8 + 0]
-    x64.leaRegRegImm32 rdx, rdx, 16
-    x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
-  trycont#15:
-    x64.leaRegRegReg rax, rax, rcx
-    x64.leaRegRegReg rbx, rax, rdx
-    x64.movRegReg rcx, r8
-    x64.callDirect __managed_decref
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg rbx, rax
-    x64.jcc lessEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at multiple-assignments.test:10: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at multiple-assignments.test:10: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 56
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegReg r8, rbx
-    x64.epilogue 56
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret

@@ -40,9 +40,7 @@ func @main {
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 0
     arm64.movImm x20, 0
-  forhdr:
-    arm64.cmp x20, 4
-    arm64.b.ge forexit
+    arm64.b forhdr
   eachCycle:
     arm64.leaRdata x0, __str_rec_3  ; "maxon-spec-shm-name-"
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
@@ -84,7 +82,7 @@ func @main {
     arm64.bl SharedSegment.create
     arm64.movRegReg x21, x0
     arm64.cmp x9, 0
-    arm64.b.eq tryok
+    arm64.b.eq __il_body#13
   tryerr:
     arm64.movImm x0, 3
     arm64.loadRegSlot x19, slot0
@@ -98,33 +96,43 @@ func @main {
     arm64.loadRegSlot x27, slot8
     arm64.epilogue 96
     arm64.ret
-  tryok:
-    arm64.movRegReg x0, x21
-    arm64.bl SharedSegment.segmentName
-    arm64.movRegReg x22, x0
-  __il_body:
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-    arm64.cmp x0, 0
-    arm64.b.ge __il_cont
-  __il_slow:
-    arm64.movRegReg x0, x22
-    arm64.bl String.byteLength
-  __il_cont:
-    arm64.cmp x0, 0
-    arm64.cset x23, gt
-    arm64.movRegReg x0, x22
+  __il_body#13:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 24]
+    arm64.bl __str_retain
+  __il_body#14:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+  __il_cont#11:
+    arm64.cmp x1, 0
+    arm64.cset x22, hi
     arm64.bl __str_decref
-    arm64.cbz x23, ifcont
+    arm64.cbz x22, __il_body#16
   published:
     arm64.add x19, x19, 1
-  ifcont:
-    arm64.movRegReg x0, x21
-    arm64.bl SharedSegment.close
+  __il_body#16:
+    arm64.loadRegBaseDisp.byte x0, [x21 + 32]
+    arm64.eor x0, x0, 1
+    arm64.cbz x0, __il_cont#15
+  stillOpen:
+    arm64.loadRegBaseDisp.word64 x22, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x21 + 8]
+    arm64.loadRegBaseDisp.word64 x24, [x21 + 16]
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 24]
+    arm64.bl String.cstr
+    arm64.movRegReg x3, x0
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x24
+    arm64.bl __shm_close
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.byte [x21 + 32], x0
+  __il_cont#15:
     arm64.movRegReg x0, x21
     arm64.bl __destruct_SharedSegment
   forstep:
     arm64.add x20, x20, 1
-    arm64.b forhdr
+  forhdr:
+    arm64.cmp x20, 4
+    arm64.b.lt eachCycle
   forexit:
     arm64.leaRdata x0, __str_rec_4  ; "named="
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
@@ -170,8 +178,10 @@ func @main {
     arm64.storeBaseDispReg.word64 [x26 + 24], x0
     arm64.movRegReg x0, x22
     arm64.bl __mm_decref
+  __il_body#10:
     arm64.movRegReg x0, x26
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont#9:
     arm64.movRegReg x0, x26
     arm64.bl __str_decref
     arm64.movImm x0, 0

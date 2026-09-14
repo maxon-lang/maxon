@@ -18,18 +18,431 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 64
+    arm64.prologue 80
+    arm64.storeSlotReg slot7, x26
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
     arm64.storeSlotReg slot4, x23
     arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.bl CharacterSet.letters
+  __il_body#3:
+    arm64.leaGlobal x0, __data_CharacterSet.cachedLetters
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.leaFuncAddr x1, __clone_CharacterSet
+    arm64.bl __mm_own_deep
     arm64.movRegReg x19, x0
-    arm64.leaRdata x1, __str_rec_2  ; "\xe4\xb8\x80"
-    arm64.movRegReg x0, x19
-    arm64.bl CharacterSet.contains
+  __il_cont#2:
+    arm64.leaRdata x20, __str_rec_2  ; "\xe4\xb8\x80"
+  __il_body#6:
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 0]
+    arm64.leaRdata x0, __layout_Set_Character
+    arm64.leaRdata x1, __witness_Character.Hashable
+    arm64.leaRdata x22, __witness_Character.Equatable
+  __il_body#14:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 32]
+    arm64.cmp x0, 0
+    arm64.b.ne ifcont#16
+  empty_check:
+    arm64.movImm x0, 0
+    arm64.b __il_cont#13
+  ifcont#16:
+    arm64.movRegReg x0, x20
+    arm64.loadRegBaseDisp.word64 x16, [x1 + 24]
+    arm64.blr x16
+    arm64.movRegReg x23, x0
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 32]
+    arm64.sub x24, x0, 1
+    arm64.movRegReg x0, x23
+    arm64.bl spreadHash
+    arm64.and x25, x0, x24
+    arm64.movImm x26, 0
+    arm64.b whilehdr#17
+  probe:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
+    arm64.cmp x25, 0
+    arm64.b.lt __rc_panic#52
+  __rc_ok#51:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 24]
+    arm64.cmp x1, 8
+    arm64.b.ne __im_stride#61
+  __im_word#59:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.cmp x25, x1
+    arm64.b.hs __im_slow#58
+  __im_load#63:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x25*8 + 0]
+    arm64.b trycont#22
+  __im_stride#61:
+    arm64.cmp x1, 1
+    arm64.b.ne __im_slow#58
+  __im_byte#60:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.cmp x25, x1
+    arm64.b.hs __im_slow#58
+  __im_load#64:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x0, x0, x25
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.b trycont#22
+  __im_slow#58:
+    arm64.movRegReg x1, x25
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.eq trycont#22
+  tryerr#21:
+    arm64.movImm x0, 0
+  trycont#22:
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.b.ne matchnext#27
+  matcharm#23:
+    arm64.movImm x2, 1
+    arm64.b matchcont#29
+  matchnext#27:
+    arm64.cmp x0, 1
+    arm64.b.ne matchnext#28
+  matcharm#24:
+    arm64.movImm x2, 0
+    arm64.b matchcont#29
+  matchnext#28:
+    arm64.cmp x0, 2
+    arm64.b.ne matchdead#26
+  matcharm#25:
+    arm64.movImm x2, 0
+  matchcont#29:
+    arm64.cbz x2, ifcont#31
+  empty:
+    arm64.movImm x0, 0
+    arm64.b __il_cont#13
+  ifcont#31:
+    arm64.cbz x1, matchnext#36
+  matcharm#33:
+    arm64.movImm x0, 0
+    arm64.b matchcont#38
+  matchnext#36:
+    arm64.cmp x0, 1
+    arm64.b.ne matchnext#37
+  matcharm#32:
+    arm64.movImm x0, 1
+    arm64.b matchcont#38
+  matchnext#37:
+    arm64.cmp x0, 2
+    arm64.b.ne matchdead#35
+  matcharm#34:
+    arm64.movImm x0, 0
+  matchcont#38:
+    arm64.cbz x0, ifcont#50
+  check_found:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 16]
+  __rc_ok#53:
+    arm64.movRegReg x1, x25
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.eq trycont#42
+  tryerr#41:
+    arm64.movRegReg x0, x23
+  trycont#42:
+    arm64.cmp x0, x23
+    arm64.b.ne ifcont#50
+  hash_match:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+  __rc_ok#55:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 24]
+    arm64.cmp x1, 8
+    arm64.b.ne __im_stride#69
+  __im_word#67:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.cmp x25, x1
+    arm64.b.hs __im_slow#66
+  __im_load#71:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseIndexScale.word64 x1, [x1 + x25*8 + 0]
+    arm64.b __im_loaded
+  __im_stride#69:
+    arm64.cmp x1, 1
+    arm64.b.ne __im_slow#66
+  __im_byte#68:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.cmp x25, x1
+    arm64.b.hs __im_slow#66
+  __im_load#72:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x1, x1, x25
+    arm64.loadRegBaseDisp.byte x1, [x1 + 0]
+  __im_loaded:
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 40]
+    arm64.cmp x3, 0
+    arm64.b.eq critsplit#125
+  __im_empty:
+    arm64.cmp x1, 0
+    arm64.b.eq __im_slow#66
+  critsplit#126:
+    arm64.movRegReg x0, x1
+    arm64.b __im_cont
+  critsplit#125:
+    arm64.movRegReg x0, x1
+    arm64.b __im_cont
+  __im_slow#66:
+    arm64.movRegReg x1, x25
+    arm64.bl __managed_get
+    arm64.movRegReg x2, x9
+  __im_cont:
+    arm64.cmp x2, 0
+    arm64.b.ne ifcont#50
+  get_existing:
+    arm64.movRegReg x1, x20
+    arm64.loadRegBaseDisp.word64 x16, [x22 + 24]
+    arm64.blr x16
+    arm64.cbz x0, ifcont#50
+  found:
+    arm64.movImm x0, 1
+    arm64.b __il_cont#13
+  ifcont#50:
+    arm64.add x0, x25, 1
+    arm64.and x0, x0, x24
+    arm64.add x26, x26, 1
+    arm64.movRegReg x25, x0
+  whilehdr#17:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 32]
+    arm64.cmp x26, x0
+    arm64.b.lt probe
+    arm64.b whileexit#19
+  matchdead#35:
+  matchdead#26:
+  whileexit#19:
+    arm64.movImm x0, 0
+  __il_cont#13:
+    arm64.cbz x0, ifcont#8
+  exact:
+    arm64.movImm x20, 1
+    arm64.b __il_cont#5
+  ifcont#8:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.b.eq ifcont#12
+  __il_body#76:
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_byte_at
+    arm64.movRegReg x21, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#77
+  tryerr#78:
+    arm64.leaRdata x0, __str_blob_16  ; "panic at Character.maxon:144: Character.codepoint: empty character \xe2\x80\x94 invariant violation\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  tryok#77:
+    arm64.cmp x21, 128
+    arm64.b.ge ifcont#80
+  ascii:
+    arm64.cmp x21, 0
+    arm64.b.lt __rc_panic#92
+    arm64.b __il_body#103
+  ifcont#80:
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_byte_at
+    arm64.movRegReg x22, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#81
+  tryerr#82:
+    arm64.leaRdata x0, __str_blob_17  ; "panic at Character.maxon:152: Character.codepoint: 2+ byte char missing continuation byte\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  tryok#81:
+    arm64.cmp x21, 224
+    arm64.b.ge ifcont#84
+  two_byte:
+    arm64.and x0, x21, 31
+    arm64.lsl x0, x0, 6
+    arm64.and x1, x22, 63
+    arm64.orr x20, x0, x1
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic#95
+  __rc_chk#96:
+    arm64.movImm x16, 1114111
+    arm64.cmp x20, x16
+    arm64.b.gt __rc_panic#95
+  __rc_ok#94:
+    arm64.movRegReg x21, x20
+    arm64.b __il_body#103
+  ifcont#84:
+    arm64.movImm x1, 2
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_byte_at
+    arm64.movRegReg x23, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#85
+  tryerr#86:
+    arm64.leaRdata x0, __str_blob_18  ; "panic at Character.maxon:160: Character.codepoint: 3+ byte char missing byte 2\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  tryok#85:
+    arm64.cmp x21, 240
+    arm64.b.ge ifcont#88
+  three_byte:
+    arm64.and x0, x21, 15
+    arm64.lsl x0, x0, 12
+    arm64.and x1, x22, 63
+    arm64.lsl x1, x1, 6
+    arm64.orr x0, x0, x1
+    arm64.and x1, x23, 63
+    arm64.orr x20, x0, x1
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic#98
+  __rc_chk#99:
+    arm64.movImm x16, 1114111
+    arm64.cmp x20, x16
+    arm64.b.gt __rc_panic#98
+  __rc_ok#97:
+    arm64.movRegReg x21, x20
+    arm64.b __il_body#103
+  ifcont#88:
+    arm64.movImm x1, 3
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_byte_at
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#89
+  tryerr#90:
+    arm64.leaRdata x0, __str_blob_19  ; "panic at Character.maxon:168: Character.codepoint: 4-byte char missing byte 3\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  tryok#89:
+    arm64.and x1, x21, 7
+    arm64.lsl x1, x1, 18
+    arm64.and x2, x22, 63
+    arm64.lsl x2, x2, 12
+    arm64.orr x1, x1, x2
+    arm64.and x2, x23, 63
+    arm64.lsl x2, x2, 6
+    arm64.orr x1, x1, x2
+    arm64.and x0, x0, 63
+    arm64.orr x20, x1, x0
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic#101
+  __rc_chk#102:
+    arm64.movImm x16, 1114111
+    arm64.cmp x20, x16
+    arm64.b.gt __rc_panic#101
+  __rc_ok#100:
+    arm64.movRegReg x21, x20
+  __il_body#103:
+    arm64.cmp x21, 0
+    arm64.b.lt __rc_panic#116
+  __rc_chk#117:
+    arm64.movImm x16, 1114111
+    arm64.cmp x21, x16
+    arm64.b.gt __rc_panic#116
+  __rc_ok#115:
+    arm64.cmp x21, 65536
+    arm64.b.ge ifcont#105
+  bmp:
+    arm64.movRegReg x0, x21
+    arm64.bl __ucd_bmp_at
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#119
+  __rc_chk#120:
+    arm64.cmp x0, 29
+    arm64.b.gt __rc_panic#119
+    arm64.b __il_cont#74
+  ifcont#105:
+    arm64.movImm x20, 0
+    arm64.movImm x22, 805
+    arm64.b whilehdr#106
+  bsearch:
+    arm64.add x0, x20, x22
+    arm64.asr x23, x0, 1
+    arm64.movRegReg x0, x23
+    arm64.bl __ucd_supp_at
+    arm64.and x1, x0, 2097151
+    arm64.asr x2, x0, 21
+    arm64.and x2, x2, 2097151
+    arm64.cmp x21, x1
+    arm64.b.ge ifelse#110
+  left:
+    arm64.sub x0, x23, 1
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x20
+    arm64.b ifcont#114
+  ifelse#110:
+    arm64.cmp x21, x2
+    arm64.b.le ifelse#112
+  right:
+    arm64.add x0, x23, 1
+  ifcont#113:
+    arm64.movRegReg x1, x22
+  ifcont#114:
     arm64.movRegReg x20, x0
+    arm64.movRegReg x22, x1
+  whilehdr#106:
+    arm64.cmp x20, x22
+    arm64.b.le bsearch
+    arm64.b whileexit#108
+  ifelse#112:
+    arm64.asr x0, x0, 42
+    arm64.and x0, x0, 31
+  __rc_chk#123:
+    arm64.cmp x0, 29
+    arm64.b.gt __rc_panic#122
+    arm64.b __il_cont#74
+  whileexit#108:
+    arm64.movImm x0, 0
+  __il_cont#74:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
+    arm64.lsrv x0, x1, x0
+    arm64.and x0, x0, 1
+    arm64.cmp x0, 1
+    arm64.b.ne ifcont#12
+  match:
+    arm64.movImm x20, 1
+    arm64.b __il_cont#5
+  ifcont#12:
+    arm64.movImm x20, 0
+  __il_cont#5:
     arm64.movImm x0, 5
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -56,8 +469,10 @@ func @main {
     arm64.storeBaseDispReg.word64 [x22 + 24], x0
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
+  __il_body#4:
     arm64.movRegReg x0, x22
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont#1:
     arm64.movRegReg x0, x22
     arm64.bl __str_decref
     arm64.movImm x20, 0
@@ -69,6 +484,121 @@ func @main {
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  __rc_panic#52:
+    arm64.leaRdata x0, __str_blob_34  ; "panic at Set.maxon:212: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  __rc_panic#92:
+    arm64.leaRdata x0, __str_blob_56  ; "panic at Character.maxon:148: Range check failed: value outside typealias 'Codepoint'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  __rc_panic#95:
+    arm64.leaRdata x0, __str_blob_57  ; "panic at Character.maxon:156: Range check failed: value outside typealias 'Codepoint'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  __rc_panic#98:
+    arm64.leaRdata x0, __str_blob_58  ; "panic at Character.maxon:164: Range check failed: value outside typealias 'Codepoint'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  __rc_panic#101:
+    arm64.leaRdata x0, __str_blob_59  ; "panic at Character.maxon:171: Range check failed: value outside typealias 'Codepoint'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  __rc_panic#116:
+    arm64.leaRdata x0, __str_blob_65  ; "panic at unicodeCategory.maxon:53: Range check failed: value outside typealias 'Codepoint'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  __rc_panic#119:
+    arm64.leaRdata x0, __str_blob_66  ; "panic at unicodeCategory.maxon:55: Range check failed: value outside typealias 'GeneralCategory'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
+    arm64.ret
+  __rc_panic#122:
+    arm64.leaRdata x0, __str_blob_67  ; "panic at unicodeCategory.maxon:73: Range check failed: value outside typealias 'GeneralCategory'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.epilogue 80
     arm64.ret
 }

@@ -49,68 +49,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Alpha.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 rbx, 125
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at generic-managed-return-routed-through-a-try-block.test:8: Range check failed: value outside typealias 'Integer'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Box.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 rbx, 125
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at generic-managed-return-routed-through-a-try-block.test:14: Range check failed: value outside typealias 'Integer'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @Box.echo {
   entry:
     x64.pushReg rbp
@@ -144,44 +82,42 @@ func @run {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 88
-    x64.cmpRegImm32 rcx, 0
+    x64.movRegReg rbx, rcx
+    x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
-    x64.cmpRegImm32 rcx, 125
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at generic-managed-return-routed-through-a-try-block.test:25: Range check failed: value outside typealias 'Integer'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 88
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.callDirect Box.create
-    x64.movRegReg rbx, r8
-    x64.storeSlotReg slot0, rbx
-    x64.movRegImm32 rcx, 9
-    x64.callDirect Alpha.create
+    x64.cmpRegImm32 rbx, 125
+    x64.jcc greater, __rc_panic
+  __il_body:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
+    x64.storeSlotReg slot0, r12
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+  __il_cont#12:
+    x64.movRegImm32 rbx, 9
+  __rc_ok:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.storeBaseDispReg.word64 [r13 + 0], rbx
+  __il_cont#11:
     x64.leaRegRdata rax, [rip + __layout_Box_Alpha]
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
     x64.callDirect Box.echo
     x64.movRegReg rbx, r8
     x64.storeSlotReg slot1, rbx
-    x64.movRegReg r13, r10
-    x64.cmpRegImm32 r13, 0
+    x64.movRegReg r12, r10
+    x64.cmpRegImm32 r12, 0
     x64.jcc equal, tryblkok
   tryblkthrow:
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
   tryblkerr:
-    x64.leaRegRegImm32 rax, r13, -1
+    x64.leaRegRegImm32 rax, r12, -1
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, matchdead
   matcharm:
@@ -190,7 +126,7 @@ func @run {
     x64.jmp tryblkcont
   matchdead:
   tryblkok:
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
     x64.leaRegRdata rax, [rip + __str_rec_3]  ; "ok="
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
@@ -227,12 +163,12 @@ func @run {
     x64.movRegReg rax, rbx
     x64.callDirect __str_copy
     x64.leaRegRegReg rbx, r12, rbx
-    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rax, slot4
     x64.loadRegSlot rdx, slot5
-    x64.loadRegSlot r12, slot4
-    x64.movRegReg rax, r12
+    x64.movRegReg rcx, rbx
     x64.callDirect __str_copy
-    x64.leaRegRegReg rax, rbx, r12
+    x64.loadRegSlot rax, slot4
+    x64.leaRegRegReg rax, rbx, rax
     x64.loadRegSlot rbx, slot3
     x64.storeBaseDispReg.word64 [rbx + 0], r15
     x64.loadRegSlot rax, slot2
@@ -262,6 +198,18 @@ func @run {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at generic-managed-return-routed-through-a-try-block.test:25: Range check failed: value outside typealias 'Integer'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
 }
 
 func @main {
@@ -280,16 +228,16 @@ func @main {
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at generic-managed-return-routed-through-a-try-block.test:40: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.jcc greater, __rc_panic
+  __rc_ok:
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at generic-managed-return-routed-through-a-try-block.test:40: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp

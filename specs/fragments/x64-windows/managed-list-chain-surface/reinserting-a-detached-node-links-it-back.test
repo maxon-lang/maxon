@@ -26,6 +26,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -61,9 +64,7 @@ func @main {
     x64.movRegReg rcx, r13
     x64.callDirect __mm_incref
     x64.movRegImm32 r14, 0
-  forhdr:
-    x64.cmpRegImm32 r14, 8
-    x64.jcc greaterEqual, forexit
+    x64.jmp forhdr
   churn:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
@@ -79,7 +80,9 @@ func @main {
     x64.callDirect __list_reinsert_last
   forstep:
     x64.leaRegRegImm32 r14, r14, 1
-    x64.jmp forhdr
+  forhdr:
+    x64.cmpRegImm32 r14, 8
+    x64.jcc less, churn
   forexit:
     x64.movRegReg rcx, rbx
     x64.callDirect __list_count
@@ -143,34 +146,34 @@ func @main {
     x64.movRegReg rax, rbx
     x64.callDirect __str_copy
     x64.leaRegRegReg rbx, r13, rbx
-    x64.movRegReg rcx, rbx
     x64.loadRegSlot rdx, slot16
+    x64.movRegReg rcx, rbx
     x64.movRegReg rax, r15
     x64.callDirect __str_copy
     x64.leaRegRegReg rbx, rbx, r15
-    x64.movRegReg rcx, rbx
     x64.loadRegSlot rdx, slot14
+    x64.movRegReg rcx, rbx
     x64.movRegReg rax, r12
     x64.callDirect __str_copy
     x64.leaRegRegReg rbx, rbx, r12
-    x64.movRegReg rcx, rbx
     x64.loadRegSlot rdx, slot12
-    x64.loadRegSlot r12, slot18
-    x64.movRegReg rax, r12
-    x64.callDirect __str_copy
-    x64.leaRegRegReg rbx, rbx, r12
+    x64.loadRegSlot rax, slot18
     x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot18
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.loadRegSlot rax, slot10
     x64.loadRegSlot rdx, slot11
-    x64.loadRegSlot r12, slot10
-    x64.movRegReg rax, r12
-    x64.callDirect __str_copy
-    x64.leaRegRegReg rbx, rbx, r12
     x64.movRegReg rcx, rbx
-    x64.loadRegSlot rdx, slot6
-    x64.loadRegSlot r12, slot4
-    x64.movRegReg rax, r12
     x64.callDirect __str_copy
-    x64.leaRegRegReg rax, rbx, r12
+    x64.loadRegSlot rax, slot10
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.loadRegSlot rax, slot4
+    x64.loadRegSlot rdx, slot6
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot4
+    x64.leaRegRegReg rax, rbx, rax
     x64.loadRegSlot rbx, slot9
     x64.storeBaseDispReg.word64 [rbx + 0], r13
     x64.loadRegSlot rax, slot5

@@ -35,6 +35,12 @@ typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+}
+
 func @permutePressure {
   entry:
     x64.pushReg rbp
@@ -62,13 +68,13 @@ func @permutePressure {
     x64.movRegReg r14, rdx
     x64.movRegReg r15, rcx
     x64.movRegReg rcx, rax
-  whilehdr:
-    x64.cmpRegImm32 r15, 3
-    x64.jcc greaterEqual, whileexit
+    x64.jmp whilehdr
   loop:
     x64.leaRegRegImm32 r15, r15, 1
     x64.xchgRegReg rcx, r14
-    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 r15, 3
+    x64.jcc less, loop
   whileexit:
     x64.imulRegRegImm32 rcx, rcx, 100
     x64.imulRegRegImm32 r14, r14, 10

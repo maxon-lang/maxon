@@ -45,7 +45,7 @@ func @main {
     arm64.leaRdata x0, __str_rec_3  ; "a fallback literal long enough to be a real heap string"
     arm64.bl __str_retain
     arm64.movRegReg x19, x0
-    arm64.b matchcont
+    arm64.b __il_body
   matchnext:
     arm64.cmp x0, 1
     arm64.b.ne matchdead
@@ -53,9 +53,10 @@ func @main {
     arm64.loadRegBaseDisp.word64 x19, [x20 + 8]
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x20 + 8], x0
-  matchcont:
+  __il_body:
     arm64.movRegReg x0, x19
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont:
     arm64.movImm x21, 0
     arm64.movRegReg x0, x19
     arm64.bl __str_decref

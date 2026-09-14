@@ -33,7 +33,7 @@ func @name {
     arm64.ret
 }
 
-func @callIt {
+func @main {
   entry:
     arm64.prologue 80
     arm64.storeSlotReg slot7, x26
@@ -44,9 +44,10 @@ func @callIt {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x1
-    arm64.blr x19
+    arm64.leaFuncAddr x1, __fnref_name
+    arm64.movImm x0, 0
+  __il_body#2:
+    arm64.blr x1
     arm64.movRegReg x19, x0
     arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
@@ -75,13 +76,16 @@ func @callIt {
     arm64.storeBaseDispReg.word64 [x25 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x25 + 24], x0
+  __il_body#4:
     arm64.movRegReg x0, x25
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont#3:
     arm64.movRegReg x0, x25
     arm64.bl __str_decref
     arm64.movImm x20, 3
     arm64.movRegReg x0, x19
     arm64.bl __str_decref
+  __il_cont#1:
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -92,15 +96,5 @@ func @callIt {
     arm64.loadRegSlot x25, slot6
     arm64.loadRegSlot x26, slot7
     arm64.epilogue 80
-    arm64.ret
-}
-
-func @main {
-  entry:
-    arm64.prologue 16
-    arm64.leaFuncAddr x0, __fnref_name
-    arm64.movImm x1, 0
-    arm64.bl callIt
-    arm64.epilogue 16
     arm64.ret
 }

@@ -64,7 +64,7 @@ func @Holder.create {
     arm64.ret
 }
 
-func @Holder.pair {
+func @Holder.second {
   entry:
     arm64.prologue 48
     arm64.storeSlotReg slot3, x22
@@ -72,6 +72,7 @@ func @Holder.pair {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x1
+  __il_body:
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
     arm64.movImm x0, 16
@@ -86,65 +87,19 @@ func @Holder.pair {
     arm64.movRegReg x1, x21
     arm64.bl __retain_type_param
     arm64.storeBaseDispReg.word64 [x22 + 8], x0
-    arm64.movRegReg x0, x22
+  __il_cont:
+    arm64.loadRegBaseDisp.word64 x1, [x22 + 8]
+    arm64.add x0, x19, 72
+    arm64.bl __retain_type_param
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.bl __destruct_dict___Tuple2.T2895309e84f3e993.T28f7bc9e8547a1d2
+    arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.ret
-}
-
-func @Holder.second {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x1
-    arm64.movRegReg x1, x19
-    arm64.bl Holder.pair
-    arm64.movRegReg x20, x0
-    arm64.loadRegBaseDisp.word64 x1, [x20 + 8]
-    arm64.add x0, x19, 72
-    arm64.bl __retain_type_param
-    arm64.movRegReg x21, x0
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
-    arm64.bl __destruct_dict___Tuple2.Ta895309e84f3e993.Ta8f7bc9e8547a1d2
-    arm64.movRegReg x0, x21
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
-}
-
-func @heapString {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-    arm64.bl StringBuilder.create
-    arm64.movRegReg x21, x0
-    arm64.movRegReg x0, x21
-    arm64.movRegReg x1, x19
-    arm64.bl StringBuilder.append
-    arm64.movRegReg x0, x21
-    arm64.movRegReg x1, x20
-    arm64.bl StringBuilder.append
-    arm64.movRegReg x0, x21
-    arm64.bl StringBuilder.build
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x21
-    arm64.bl __destruct_StringBuilder
-    arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
     arm64.epilogue 48
     arm64.ret
 }
@@ -162,10 +117,55 @@ func @main {
     arm64.storeSlotReg slot8, x21
     arm64.storeSlotReg slot7, x20
     arm64.storeSlotReg slot6, x19
-    arm64.leaRdata x0, __str_rec_5  ; "a heap key "
-    arm64.leaRdata x1, __str_rec_6  ; "long enough to allocate"
-    arm64.bl heapString
+    arm64.leaRdata x19, __str_rec_5  ; "a heap key "
+    arm64.leaRdata x20, __str_rec_6  ; "long enough to allocate"
+  __il_body#6:
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x21, x0
+    arm64.movImm x22, 1
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.storeBaseDispReg.word64 [x23 + 0], x21
+    arm64.storeBaseDispReg.byte [x23 + 8], x22
+  __il_cont#5:
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x19
+    arm64.bl StringBuilder.append
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x20
+    arm64.bl StringBuilder.append
+  __il_body#8:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
+    arm64.loadRegBaseDisp.byte x19, [x23 + 8]
+  __il_body#10:
+    arm64.bl __managed_retain
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl __str_of_buffer
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+  __il_cont#9:
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
+    arm64.bl __managed_decref
+    arm64.storeBaseDispReg.word64 [x23 + 0], x20
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.byte [x23 + 8], x0
+  __il_cont#7:
+    arm64.movRegReg x0, x23
+    arm64.bl __destruct_StringBuilder
+  __il_cont#3:
     arm64.movImm x1, 7
+    arm64.movRegReg x0, x19
     arm64.bl Holder.create
     arm64.storeSlotReg slot2, x0
     arm64.movImm x1, 5
@@ -236,27 +236,29 @@ func @main {
     arm64.movRegReg x2, x19
     arm64.bl __str_copy
     arm64.add x19, x20, x19
+    arm64.loadRegSlot x2, slot5
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x27
-    arm64.loadRegSlot x20, slot5
-    arm64.movRegReg x2, x20
     arm64.bl __str_copy
-    arm64.add x0, x19, x20
-    arm64.loadRegSlot x19, slot4
-    arm64.storeBaseDispReg.word64 [x19 + 0], x28
-    arm64.loadRegSlot x0, slot3
-    arm64.storeBaseDispReg.word64 [x19 + 8], x0
-    arm64.movImm x0, 18446744073709551613
-    arm64.storeBaseDispReg.word64 [x19 + 16], x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x19 + 24], x0
+    arm64.loadRegSlot x0, slot5
+    arm64.add x0, x19, x0
+    arm64.loadRegSlot x0, slot4
+    arm64.storeBaseDispReg.word64 [x0 + 0], x28
+    arm64.loadRegSlot x1, slot3
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.movImm x1, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x0 + 16], x1
+    arm64.movImm x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 24], x1
     arm64.movRegReg x0, x23
     arm64.bl __mm_decref
     arm64.movRegReg x0, x26
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x19
-    arm64.bl print
-    arm64.movRegReg x0, x19
+  __il_body#2:
+    arm64.loadRegSlot x0, slot4
+    arm64.bl __write_stdout
+  __il_cont#1:
+    arm64.loadRegSlot x0, slot4
     arm64.bl __str_decref
     arm64.movImm x19, 4
     arm64.loadRegSlot x0, slot2

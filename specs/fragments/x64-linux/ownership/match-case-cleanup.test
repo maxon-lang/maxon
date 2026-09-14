@@ -36,23 +36,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Paint.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -67,11 +50,11 @@ func @main {
     x64.leaRegSlot rcx, slot0
     x64.storeBaseDispReg.word64 [rcx + 0], rax
   matcharm:
-    x64.movRegImm32 rcx, 7
-    x64.callDirect Paint.create
+    x64.movRegImm32 rax, 7
+    x64.leaRegSlot rcx, slot1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
   matchcont:
-    x64.storeSlotReg slot1, r8
-    x64.loadRegBaseDisp.word64 rbx, [r8 + 0]
+    x64.loadRegBaseDisp.word64 rbx, [rcx + 0]
     x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -101,24 +84,23 @@ func @main {
     x64.movRegReg rax, r14
     x64.callDirect __str_copy
     x64.leaRegRegReg rax, rbx, r14
-    x64.loadRegSlot rbx, slot4
-    x64.storeBaseDispReg.word64 [rbx + 0], r15
-    x64.loadRegSlot rax, slot3
-    x64.storeBaseDispReg.word64 [rbx + 8], rax
-    x64.movRegImm rax, 18446744073709551613
-    x64.storeBaseDispReg.word64 [rbx + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rax, slot4
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot3
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
     x64.loadRegSlot rcx, slot2
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, rbx
-    x64.callDirect print
-    x64.movRegReg rcx, rbx
+  __il_body:
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect __write_stdout
+  __il_cont:
+    x64.loadRegSlot rcx, slot4
     x64.callDirect __str_decref
-    x64.movRegImm32 rbx, 0
-    x64.loadRegSlot rcx, slot1
-    x64.callDirect __mm_decref
-    x64.movRegReg r8, rbx
+    x64.movRegImm32 r8, 0
     x64.epilogue 72
     x64.popReg r15
     x64.popReg r14

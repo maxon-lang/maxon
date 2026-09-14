@@ -7,7 +7,7 @@ end 'R'
 function first(r R) returns String
 	return match r 's'
 		one(a) gives a
-		three(a, b, c) gives a
+		three(a, b, c) gives a if b.byteLength() > 0 and c.byteLength() > 0 else ""
 	end 's'
 end 'first'
 
@@ -26,59 +26,17 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @first {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.cmp x0, 0
-    arm64.b.ne matchnext
-  matcharm#1:
-    arm64.loadRegBaseDisp.word64 x19, [x19 + 8]
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.movRegReg x0, x19
-    arm64.b matchcont
-  matchnext:
-    arm64.cmp x0, 1
-    arm64.b.ne matchdead
-  matcharm#2:
-    arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_incref
-    arm64.loadRegBaseDisp.word64 x21, [x19 + 16]
-    arm64.movRegReg x0, x21
-    arm64.bl __mm_incref
-    arm64.loadRegBaseDisp.word64 x19, [x19 + 24]
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.movRegReg x0, x19
-    arm64.bl __str_decref
-    arm64.movRegReg x0, x21
-    arm64.bl __str_decref
-    arm64.movRegReg x0, x20
-  matchcont:
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
-  matchdead:
-}
-
 func @main {
   entry:
-    arm64.prologue 48
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
     arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.leaRdata x19, __str_rec_3  ; "a first payload string long enough to heap"
-    arm64.leaRdata x20, __str_rec_4  ; "a second payload string long enough to heap"
-    arm64.leaRdata x21, __str_rec_5  ; "a third payload string long enough to heap"
+    arm64.leaRdata x19, __str_rec_5  ; "a first payload string long enough to heap"
+    arm64.leaRdata x20, __str_rec_6  ; "a second payload string long enough to heap"
+    arm64.leaRdata x21, __str_rec_7  ; "a third payload string long enough to heap"
     arm64.movImm x0, 32
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -94,11 +52,62 @@ func @main {
     arm64.movRegReg x0, x21
     arm64.bl __str_retain
     arm64.storeBaseDispReg.word64 [x22 + 24], x0
-    arm64.movRegReg x0, x22
-    arm64.bl first
-    arm64.movRegReg x19, x0
+  __il_body#3:
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
+    arm64.cmp x0, 0
+    arm64.b.ne matchnext
+  matcharm#4:
+    arm64.loadRegBaseDisp.word64 x19, [x22 + 8]
     arm64.movRegReg x0, x19
-    arm64.bl print
+    arm64.bl __mm_incref
+    arm64.b __il_body#14
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.b.ne matchdead
+  matcharm#5:
+    arm64.loadRegBaseDisp.word64 x19, [x22 + 8]
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.loadRegBaseDisp.word64 x20, [x22 + 16]
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.loadRegBaseDisp.word64 x21, [x22 + 24]
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_incref
+  __il_body#16:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+  __il_cont#15:
+    arm64.cmp x0, 0
+    arm64.movImm x0, 0
+    arm64.b.ls scmerge
+  __il_body#18:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
+  __il_cont#17:
+    arm64.cmp x0, 0
+    arm64.cset x0, hi
+  scmerge:
+    arm64.cbz x0, ternaryfalse
+  ternarytrue:
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.movRegReg x23, x19
+    arm64.b matchcont
+  ternaryfalse:
+    arm64.leaRdata x0, __str_rec_4  ; ""
+    arm64.bl __str_retain
+    arm64.movRegReg x23, x0
+  matchcont:
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __str_decref
+    arm64.movRegReg x19, x23
+  __il_body#14:
+    arm64.movRegReg x0, x19
+    arm64.bl __write_stdout
+  __il_cont#1:
     arm64.movRegReg x0, x19
     arm64.bl __str_decref
     arm64.movImm x19, 6
@@ -109,6 +118,8 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
     arm64.ret
+  matchdead:
 }

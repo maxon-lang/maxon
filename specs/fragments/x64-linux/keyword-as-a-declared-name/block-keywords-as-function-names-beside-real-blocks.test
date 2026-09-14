@@ -73,63 +73,46 @@ func @main {
     x64.prologue 32
     x64.movRegImm32 rax, 0
     x64.movRegImm32 rcx, 0
-  whilehdr:
-    x64.cmpRegImm32 rcx, 3
-    x64.jcc greaterEqual, whileexit
+    x64.jmp whilehdr
   __il_body#20:
     x64.imulRegRegImm32 rdx, rcx, 2
   __il_cont#19:
     x64.leaRegRegReg rax, rax, rdx
     x64.leaRegRegImm32 rcx, rcx, 1
-    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 rcx, 3
+    x64.jcc less, __il_body#20
   whileexit:
     x64.movRegImm32 rcx, 0
-  forhdr:
-    x64.cmpRegImm32 rcx, 3
-    x64.jcc greaterEqual, forexit
+    x64.jmp forhdr
   __il_body#22:
     x64.leaRegRegImm32 rdx, rcx, 3
   __il_cont#21:
     x64.leaRegRegReg rax, rax, rdx
   forstep:
     x64.leaRegRegImm32 rcx, rcx, 1
-    x64.jmp forhdr
+  forhdr:
+    x64.cmpRegImm32 rcx, 3
+    x64.jcc less, __il_body#22
   forexit:
     x64.cmpRegImm32 rax, 0
     x64.jcc lessEqual, ifelse
   __il_cont#23:
     x64.leaRegRegImm32 rax, rax, 9
-    x64.jmp big
+    x64.jmp matchcont
   ifelse:
     x64.leaRegRegImm32 rax, rax, -1
-  big:
-    x64.movRegImm32 rcx, 2
-  __il_body#30:
-    x64.cmpRegImm32 rcx, 1
-    x64.jcc lessEqual, ifcont
-  high:
-    x64.movRegImm32 rcx, 1
-    x64.jmp __il_cont#25
-  ifcont:
-    x64.movRegImm32 rcx, 0
-  __il_cont#25:
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, matchnext
-  matcharm#11:
-    x64.movRegImm32 rcx, 5
-    x64.jmp matchcont
-  matchnext:
-    x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, matchdead
-  matcharm#12:
-    x64.movRegImm32 rcx, 15
   matchcont:
-    x64.leaRegRegReg r8, rax, rcx
+    x64.leaRegRegImm32 r8, rax, 15
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc lessEqual, __rc_ok
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at block-keywords-as-function-names-beside-real-blocks.test:64: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
@@ -137,9 +120,4 @@ func @main {
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  matchdead:
 }

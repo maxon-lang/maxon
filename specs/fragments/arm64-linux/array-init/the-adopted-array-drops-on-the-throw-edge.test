@@ -48,34 +48,16 @@ func @adoptThenThrow {
     arm64.bl __managed_mem_create
     arm64.movRegReg x20, x0
     arm64.cmp x9, 0
-    arm64.b.eq tryok#1
-  tryerr#2:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at the-adopted-array-drops-on-the-throw-edge.test:10: create failed\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.movImm x9, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
+    arm64.b.ne tryerr#2
   tryok#1:
     arm64.movImm x1, 2
     arm64.movRegReg x0, x20
     arm64.bl __managed_set_length
     arm64.cmp x9, 0
-    arm64.b.eq tryok#3
-  tryerr#4:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at the-adopted-array-drops-on-the-throw-edge.test:11: setLength failed\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.movImm x9, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
+    arm64.b.ne tryerr#4
   tryok#3:
     arm64.movRegReg x0, x20
-    arm64.bl __mm_retain
+    arm64.bl __managed_retain
     arm64.cbz x19, ifcont
   boom:
     arm64.bl __managed_decref
@@ -98,6 +80,24 @@ func @adoptThenThrow {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
+  tryerr#2:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at the-adopted-array-drops-on-the-throw-edge.test:10: create failed\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryerr#4:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at the-adopted-array-drops-on-the-throw-edge.test:11: setLength failed\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
 }
 
 func @main {
@@ -107,9 +107,7 @@ func @main {
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 0
     arm64.movImm x20, 0
-  whilehdr:
-    arm64.cmp x20, 8
-    arm64.b.ge whileexit
+    arm64.b whilehdr
   spin:
     arm64.movImm x0, 1
     arm64.bl adoptThenThrow
@@ -128,23 +126,25 @@ func @main {
   trycont#9:
     arm64.add x19, x19, x0
     arm64.add x20, x20, 1
-    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x20, 8
+    arm64.b.lt spin
   whileexit:
     arm64.cmp x19, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at the-adopted-array-drops-on-the-throw-edge.test:27: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x19
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at the-adopted-array-drops-on-the-throw-edge.test:27: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32

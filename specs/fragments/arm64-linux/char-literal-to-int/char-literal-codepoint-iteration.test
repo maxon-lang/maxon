@@ -20,15 +20,44 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
     arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 0
     arm64.leaRdata x0, __str_rec_1  ; "a-b-c"
-    arm64.bl String.codepoints
+  __il_body#15:
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
+    arm64.add x0, x21, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.add x23, x22, 56
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x0, x23, x21
+    arm64.storeBaseDispReg.word64 [x22 + 0], x23
+    arm64.storeBaseDispReg.word64 [x22 + 8], x21
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x22 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x22 + 24], x0
+  __il_body#17:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+  __il_cont#14:
     arm64.movRegReg x0, x20
     arm64.bl CodepointView.createIterator
     arm64.movRegReg x21, x0
@@ -37,13 +66,11 @@ func @main {
     arm64.bl __destruct_CodepointView
     arm64.movImm x0, 0
     arm64.cmp x22, 0
-    arm64.b.ne forempty
-  forhdr:
-    arm64.cmp x0, 0
-    arm64.b.ne forexit
-  __il_body:
+    arm64.b.eq forhdr
+    arm64.b forempty
+  __il_body#13:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 16]
-  __il_cont:
+  __il_cont#12:
     arm64.cmp x0, 45
     arm64.b.ne forstep
   dash:
@@ -52,7 +79,9 @@ func @main {
     arm64.movRegReg x0, x21
     arm64.bl CodepointIterator.advance
     arm64.movRegReg x0, x9
-    arm64.b forhdr
+  forhdr:
+    arm64.cmp x0, 0
+    arm64.b.eq __il_body#13
   forexit:
     arm64.movRegReg x0, x21
     arm64.bl __destruct_CodepointIterator
@@ -65,22 +94,24 @@ func @main {
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.b.le __rc_ok
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_10  ; "panic at char-literal-codepoint-iteration.test:9: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_11  ; "panic at char-literal-codepoint-iteration.test:9: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.ret
-  __rc_ok:
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
     arm64.ret
 }

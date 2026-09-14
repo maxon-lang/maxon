@@ -33,21 +33,14 @@ data {
   __data_counter@0 = i64 10
 }
 
-func @shadowing {
+func @main {
   entry:
     arm64.prologue 16
   matcharm:
     arm64.movImm x0, 2
-  __il_cont:
+  __il_cont#6:
     arm64.add x0, x0, 101
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @main {
-  entry:
-    arm64.prologue 16
-    arm64.bl shadowing
+  __il_cont#4:
     arm64.leaGlobal x1, __data_counter
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.add x0, x0, x1
@@ -55,14 +48,14 @@ func @main {
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.b.le __rc_ok
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at closer-case-member-and-the-declaration-sweep.test:26: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  __rc_ok:
     arm64.epilogue 16
     arm64.ret
 }

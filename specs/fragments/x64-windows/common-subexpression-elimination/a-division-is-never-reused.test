@@ -1,11 +1,11 @@
 // Test: a-division-is-never-reused
 typealias Word = int(i64.min to i64.max)
-// A divisor whose type EXCLUDES ZERO, so the divisions do not throw and the case can be about CSE
-// rather than about `try`. The op is still `StdOp.div`/`StdOp.mod` and still `isPure: false`.
+// The divisor's type excludes zero, but a NEGATIVE dividend needs a signed division, which is spelled only
+// through a `Word` divisor the compiler must treat as possibly zero — hence the `try`. The op is still impure.
 typealias NonZeroWord = int(1 to i64.max)
 
 function halves(a Word, b NonZeroWord) returns Word
-	return (a / b) + (a / b) + (a mod b) + (a mod b)
+	return (try (a / (b as Word)) otherwise panic("b is never zero")) + (try (a / (b as Word)) otherwise panic("b is never zero")) + (try (a mod (b as Word)) otherwise panic("b is never zero")) + (try (a mod (b as Word)) otherwise panic("b is never zero"))
 end 'halves'
 
 function main() returns ExitCode
@@ -20,6 +20,12 @@ end 'main'
 ---
 ExitCode: 0
 ---
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+}
+
 func @halves {
   entry:
     x64.pushReg rbp
@@ -27,31 +33,39 @@ func @halves {
     x64.prologue 32
     x64.movRegReg rsi, rdx
     x64.cmpRegImm32 rsi, 1
-    x64.jcc greaterEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-division-is-never-reused.test:7: Range check failed: value outside typealias 'NonZeroWord'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
+    x64.jcc less, __rc_panic
   __rc_ok:
     x64.movRegReg rax, rcx
     x64.cqo
     x64.idivReg rsi
     x64.movRegReg rdi, rax
+  tryok#1:
     x64.movRegReg rax, rcx
     x64.cqo
     x64.idivReg rsi
+  tryok#3:
     x64.leaRegRegReg rdi, rdi, rax
-    x64.movRegReg rax, rcx
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.andRegReg rax, rax, rcx
     x64.cqo
     x64.idivReg rsi
+  tryok#5:
     x64.leaRegRegReg rdi, rdi, rdx
-    x64.movRegReg rax, rcx
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.andRegReg rax, rax, rcx
     x64.cqo
     x64.idivReg rsi
+  tryok#7:
     x64.leaRegRegReg r8, rdi, rdx
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-division-is-never-reused.test:7: Range check failed: value outside typealias 'NonZeroWord'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

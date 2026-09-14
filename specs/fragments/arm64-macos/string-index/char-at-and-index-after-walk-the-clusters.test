@@ -36,26 +36,76 @@ func @main {
     arm64.storeSlotReg slot3, x20
     arm64.storeSlotReg slot2, x19
     arm64.leaRdata x19, __str_rec_4  ; "a\xc3\xa9b\xf0\x9f\x91\xa8\xe2\x80\x8d\xf0\x9f\x91\xa9\xe2\x80\x8d\xf0\x9f\x91\xa7cd"
-    arm64.movRegReg x0, x19
-    arm64.bl String.startIndex
+  __il_body#8:
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.bl StringIndex.create
+  __il_cont#7:
     arm64.movImm x1, 0
     arm64.movRegReg x20, x0
-  whilehdr:
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x1
-    arm64.cmp x1, 6
-    arm64.b.ge whileexit
-  walk:
+    arm64.b whilehdr#1
+  __il_body#10:
+    arm64.loadRegBaseDisp.word64 x21, [x20 + 8]
     arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
-    arm64.bl String.charAt
+    arm64.movRegReg x1, x21
+    arm64.bl findGraphemeEnd
+    arm64.sub x0, x0, x21
+  __il_body#12:
+    arm64.cmp x21, 0
+    arm64.b.lt __rc_panic#14
+  __rc_ok#13:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#16
+  __rc_ok#15:
+    arm64.add x2, x21, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.bl __char_at
     arm64.movRegReg x21, x0
+  __il_body#18:
     arm64.movRegReg x0, x21
-    arm64.bl Character.toString
+    arm64.bl __str_bytes_view
     arm64.movRegReg x22, x0
+  __il_body#22:
+    arm64.loadRegBaseDisp.word64 x23, [x22 + 8]
+    arm64.movImm x24, 0
+    arm64.b forhdr
+  scan:
     arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x24
+    arm64.bl __managed_byte_at
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr
+  tryok#27:
+    arm64.cmp x0, 128
+    arm64.movImm x1, 1
+    arm64.b.ge scmerge
+  orrhs:
+    arm64.cmp x0, 13
+    arm64.cset x0, eq
+    arm64.movRegReg x1, x0
+  scmerge:
+    arm64.cbz x1, forstep
+  notSingleByte:
+    arm64.movImm x1, 0
+    arm64.b __il_cont#21
+  forstep:
+    arm64.add x24, x24, 1
+  forhdr:
+    arm64.cmp x24, x23
+    arm64.b.lt scan
+  forexit:
+    arm64.movImm x1, 1
+  __il_cont#21:
+    arm64.movRegReg x0, x22
+    arm64.bl __str_of_buffer
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_decref
+  __il_cont#17:
+    arm64.movRegReg x0, x23
     arm64.bl print
-    arm64.movRegReg x0, x22
+    arm64.movRegReg x0, x23
     arm64.bl __str_decref
     arm64.movRegReg x0, x21
     arm64.bl __str_decref
@@ -148,29 +198,125 @@ func @main {
     arm64.bl print
     arm64.movRegReg x0, x27
     arm64.bl __str_decref
-    arm64.movRegReg x0, x19
     arm64.loadRegSlot x1, slot1
+    arm64.movRegReg x0, x19
     arm64.bl String.indexAfter
     arm64.cmp x9, 0
-    arm64.b.eq tryok
-  tryerr:
+    arm64.b.eq tryok#4
+  __il_body#51:
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
+  __il_body#47:
+    arm64.loadRegBaseDisp.byte x0, [x19 + 48]
+  __il_cont#46:
+    arm64.cbz x0, ifcont
+  oneByteEach:
+    arm64.movRegReg x0, x20
+    arm64.b __il_body#49
+  ifcont:
+    arm64.movImm x21, 0
+    arm64.movImm x1, 0
+    arm64.b whilehdr#41
+  countLoop:
     arm64.movRegReg x0, x19
-    arm64.bl String.endIndex
+    arm64.bl findGraphemeEnd
+    arm64.add x21, x21, 1
+    arm64.movRegReg x1, x0
+  whilehdr#41:
+    arm64.cmp x1, x20
+    arm64.b.lt countLoop
+  whileexit#43:
+    arm64.cmp x21, 0
+    arm64.b.lt __rc_panic#45
+  __rc_ok#44:
+    arm64.movRegReg x0, x21
+  __il_body#49:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
+  __il_cont#48:
+    arm64.bl StringIndex.create
+  __il_cont#33:
     arm64.movRegReg x20, x0
     arm64.b trycont
-  tryok:
+  tryok#4:
     arm64.movRegReg x20, x0
   trycont:
     arm64.loadRegSlot x0, slot1
     arm64.bl __mm_decref
     arm64.loadRegSlot x0, slot0
     arm64.add x1, x0, 1
-    arm64.b whilehdr
-  whileexit:
+  whilehdr#1:
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x1
+    arm64.cmp x1, 6
+    arm64.b.lt __il_body#10
+  whileexit#3:
     arm64.movImm x19, 0
     arm64.loadRegSlot x0, slot1
     arm64.bl __mm_decref
     arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+  __rc_panic#14:
+    arm64.leaRdata x0, __str_blob_23  ; "panic at String.maxon:329: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+  __rc_panic#16:
+    arm64.leaRdata x0, __str_blob_23  ; "panic at String.maxon:329: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+  tryerr:
+    arm64.leaRdata x0, __str_blob_8  ; "panic at String.maxon:1136: scanSingleByteGraphemes: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+  __rc_panic#45:
+    arm64.leaRdata x0, __str_blob_40  ; "panic at grapheme.maxon:404: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot2
     arm64.loadRegSlot x20, slot3
     arm64.loadRegSlot x21, slot4

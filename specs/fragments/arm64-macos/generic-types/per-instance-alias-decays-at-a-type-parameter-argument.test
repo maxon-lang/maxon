@@ -33,9 +33,9 @@ end 'takesPlain'
 function main() returns ExitCode
 	let a = WA.create(1, tag: 5)
 	let t = a.getTag()
-	let b = IntBox.create(t)
+	let b = IntBox.create(t as Integer)
 	print("{b.value}")
-	return takesPlain(a.getTag())
+	return takesPlain(a.getTag() as Integer)
 end 'main'
 ---
 ExitCode: 0
@@ -49,63 +49,64 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 80
-    arm64.storeSlotReg slot7, x23
-    arm64.storeSlotReg slot6, x22
-    arm64.storeSlotReg slot5, x21
-    arm64.storeSlotReg slot4, x20
-    arm64.storeSlotReg slot3, x19
-    arm64.movImm x0, 1
-    arm64.movImm x1, 5
-    arm64.leaRegSlot x19, slot0
-    arm64.storeBaseDispReg.word64 [x19 + 0], x0
-    arm64.storeBaseDispReg.word64 [x19 + 8], x1
-  __il_body#4:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 5
+  __il_body#6:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
   __il_cont#3:
-    arm64.leaRegSlot x1, slot2
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.loadRegBaseDisp.word64 x20, [x1 + 0]
+    arm64.loadRegBaseDisp.word64 x19, [x20 + 0]
     arm64.movImm x0, 21
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x21, x0
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
     arm64.bl __int_to_string
-    arm64.movRegReg x20, x0
-    arm64.add x0, x20, 57
+    arm64.movRegReg x19, x0
+    arm64.add x0, x19, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x22, x0
     arm64.add x23, x22, 56
     arm64.movRegReg x0, x23
     arm64.movRegReg x1, x21
-    arm64.movRegReg x2, x20
+    arm64.movRegReg x2, x19
     arm64.bl __str_copy
-    arm64.add x0, x23, x20
+    arm64.add x0, x23, x19
     arm64.storeBaseDispReg.word64 [x22 + 0], x23
-    arm64.storeBaseDispReg.word64 [x22 + 8], x20
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
     arm64.movImm x0, 18446744073709551613
     arm64.storeBaseDispReg.word64 [x22 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x22 + 24], x0
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
+  __il_body#7:
     arm64.movRegReg x0, x22
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont#2:
     arm64.movRegReg x0, x22
     arm64.bl __str_decref
-  __il_body#5:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-  __il_body#6:
-    arm64.movImm x0, 0
+  __il_body#8:
+    arm64.movImm x19, 0
   __il_cont#1:
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.loadRegSlot x21, slot5
-    arm64.loadRegSlot x22, slot6
-    arm64.loadRegSlot x23, slot7
-    arm64.epilogue 80
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
     arm64.ret
 }

@@ -51,7 +51,50 @@ func @main {
     x64.callDirect Array.slice
     x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#1
+    x64.jcc notEqual, tryerr#2
+  tryok#1:
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 99
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_set_byte
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#4
+  tryok#3:
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#13
+  __im_load#14:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegReg r8, rax
+  tryok#5:
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#16
+  __im_load#17:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+  tryok#7:
+    x64.leaRegRegReg r13, r8, rax
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r13, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   tryerr#2:
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at set-byte-through-a-viewed-owner-detaches-first.test:10: slice: 0..2 of a length-3 array\x0a"
     x64.callDirect mrt_panic
@@ -62,13 +105,6 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#1:
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 99
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_set_byte
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#3
   tryerr#4:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at set-byte-through-a-viewed-owner-detaches-first.test:11: setByte: offset 0 of a length-3 buffer\x0a"
     x64.callDirect mrt_panic
@@ -79,32 +115,9 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#3:
-    x64.movRegImm32 rdx, 0
-    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc belowEqual, __im_slow#13
-  __im_load#14:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
-    x64.loadRegBaseDisp.word64 r13, [rax + 0]
-    x64.movRegImm32 rax, 0
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 40]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, critsplit#20
-  __im_empty#15:
-    x64.cmpRegImm32 r13, 0
-    x64.jcc notEqual, critsplit#21
   __im_slow#13:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_get
-    x64.movRegReg r13, r8
-    x64.jmp __im_cont#12
-  critsplit#21:
-    x64.movRegReg r10, rax
-    x64.jmp __im_cont#12
-  critsplit#20:
-    x64.movRegReg r10, rax
-  __im_cont#12:
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#5
   tryerr#6:
@@ -117,33 +130,12 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#5:
-    x64.movRegImm32 rdx, 0
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc belowEqual, __im_slow#17
-  __im_load#18:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.movRegImm32 rcx, 0
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, critsplit#22
-  __im_empty#19:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#23
-  __im_slow#17:
+  __im_slow#16:
+    x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
-    x64.jmp __im_cont#16
-  critsplit#23:
-    x64.movRegReg r8, rax
-    x64.movRegReg r10, rcx
-    x64.jmp __im_cont#16
-  critsplit#22:
-    x64.movRegReg r8, rax
-    x64.movRegReg r10, rcx
-  __im_cont#16:
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#7
   tryerr#8:
@@ -156,29 +148,10 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#7:
-    x64.leaRegRegReg r13, r13, r8
-    x64.cmpRegImm32 r13, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 r13, 255
-    x64.jcc lessEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at set-byte-through-a-viewed-owner-detaches-first.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at set-byte-through-a-viewed-owner-detaches-first.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_decref
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-    x64.movRegReg r8, r13
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12

@@ -62,10 +62,7 @@ func @getFirst {
     arm64.b.eq critsplit#7
   __im_empty:
     arm64.cmp x2, 0
-    arm64.b.ne critsplit#8
-  __im_slow:
-    arm64.bl __managed_get
-    arm64.b __im_cont
+    arm64.b.eq __im_slow
   critsplit#8:
     arm64.movRegReg x0, x2
     arm64.b __im_cont
@@ -83,6 +80,9 @@ func @getFirst {
     arm64.movImm x9, 0
     arm64.epilogue 16
     arm64.ret
+  __im_slow:
+    arm64.bl __managed_get
+    arm64.b __im_cont
 }
 
 func @main {
@@ -112,20 +112,20 @@ func @main {
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at rc-error-propagation-cleans-refs.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
+    arm64.b.gt __rc_panic
   __rc_ok:
     arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at rc-error-propagation-cleans-refs.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32

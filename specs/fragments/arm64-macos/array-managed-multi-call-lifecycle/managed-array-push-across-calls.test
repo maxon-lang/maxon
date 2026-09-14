@@ -99,50 +99,27 @@ func @Dependency.create {
     arm64.ret
 }
 
-func @Database.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.storeBaseDispReg.word64 [x20 + 0], x19
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @addDep {
   entry:
     arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x1
-    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.leaFuncAddr x2, __clone_Dependency
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_own_deep
+    arm64.movRegReg x1, x0
     arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x19
     arm64.bl __managed_push
+    arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
 }
 
 func @clearAllModule {
   entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x23
+    arm64.prologue 48
     arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
@@ -154,56 +131,57 @@ func @clearAllModule {
     arm64.movRegReg x20, x0
     arm64.loadRegBaseDisp.word64 x21, [x19 + 0]
     arm64.movImm x22, 0
-  forhdr:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
-    arm64.cmp x22, x0
-    arm64.b.ge forexit
+    arm64.b forhdr
   scan:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
-    arm64.loadRegBaseIndexScale.word64 x23, [x0 + x22*8 + 0]
+    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x22*8 + 0]
   __im_cont:
-    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.jumpTable x0, default=matchdead [[0]=matcharm#5, [1]=matcharm#6, [2]=forstep, [3]=matcharm#8] @__jumptable_7
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.jumpTable x1, default=matchdead [[0]=matcharm#5, [1]=matcharm#6, [2]=forstep, [3]=matcharm#8] @__jumptable_13
   matchdead:
   matcharm#5:
-    arm64.movRegReg x0, x23
-    arm64.bl __mm_incref
+    arm64.leaFuncAddr x1, __clone_Dependency
+    arm64.bl __mm_own_deep
+    arm64.movRegReg x1, x0
     arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x23
     arm64.bl __managed_push
     arm64.b forstep
   matcharm#6:
-    arm64.movRegReg x0, x23
-    arm64.bl __mm_incref
+    arm64.leaFuncAddr x1, __clone_Dependency
+    arm64.bl __mm_own_deep
+    arm64.movRegReg x1, x0
     arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x23
     arm64.bl __managed_push
     arm64.b forstep
   matcharm#8:
-    arm64.movRegReg x0, x23
-    arm64.bl __mm_incref
+    arm64.leaFuncAddr x1, __clone_Dependency
+    arm64.bl __mm_own_deep
+    arm64.movRegReg x1, x0
     arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x23
     arm64.bl __managed_push
   forstep:
     arm64.add x22, x22, 1
-    arm64.b forhdr
+  forhdr:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
+    arm64.cmp x22, x0
+    arm64.b.lt scan
   forexit:
     arm64.loadRegBaseDisp.word64 x21, [x19 + 0]
     arm64.movRegReg x0, x20
-    arm64.bl __mm_incref
+    arm64.bl __managed_retain
+    arm64.movRegReg x22, x0
     arm64.movRegReg x0, x21
     arm64.bl __managed_decref
-    arm64.storeBaseDispReg.word64 [x19 + 0], x20
+    arm64.storeBaseDispReg.word64 [x19 + 0], x22
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref
+    arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
+    arm64.epilogue 48
     arm64.ret
 }
 
@@ -217,47 +195,57 @@ func @main {
     arm64.movImm x0, 8
     arm64.leaFuncAddr x1, __destruct_Dependency
     arm64.bl __managed_create
-    arm64.bl Database.create
     arm64.movRegReg x19, x0
-    arm64.leaRdata x20, __str_rec_3  ; "a.maxon long enough for heap"
+  __il_body:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_retain
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+  __il_cont:
+    arm64.leaRdata x19, __str_rec_3  ; "a.maxon long enough for heap"
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x21, x0
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x21 + 0], x0
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x19
     arm64.bl __str_retain
     arm64.storeBaseDispReg.word64 [x21 + 8], x0
-    arm64.leaRdata x20, __str_rec_3  ; "a.maxon long enough for heap"
+    arm64.leaRdata x19, __str_rec_3  ; "a.maxon long enough for heap"
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x22, x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x22 + 0], x0
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x19
     arm64.bl __str_retain
     arm64.storeBaseDispReg.word64 [x22 + 8], x0
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x22
     arm64.bl Dependency.create
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
-    arm64.bl addDep
+    arm64.movRegReg x19, x0
     arm64.movRegReg x0, x20
-    arm64.bl __destruct_Dependency
+    arm64.movRegReg x1, x19
+    arm64.bl addDep
     arm64.movRegReg x0, x19
+    arm64.bl __destruct_Dependency
+    arm64.movRegReg x0, x20
     arm64.bl clearAllModule
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
+    arm64.movRegReg x19, x0
     arm64.movImm x0, 2
-    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
     arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x20 + 8], x0
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
     arm64.leaRdata x21, __str_rec_4  ; "b.maxon long enough for heap"
     arm64.movImm x0, 16
     arm64.movImm x1, 0
@@ -268,25 +256,25 @@ func @main {
     arm64.movRegReg x0, x21
     arm64.bl __str_retain
     arm64.storeBaseDispReg.word64 [x22 + 8], x0
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x19
     arm64.movRegReg x1, x22
     arm64.bl Dependency.create
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
-    arm64.bl addDep
+    arm64.movRegReg x19, x0
     arm64.movRegReg x0, x20
-    arm64.bl __destruct_Dependency
+    arm64.movRegReg x1, x19
+    arm64.bl addDep
     arm64.movRegReg x0, x19
+    arm64.bl __destruct_Dependency
+    arm64.movRegReg x0, x20
     arm64.bl clearAllModule
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
+    arm64.movRegReg x19, x0
     arm64.movImm x0, 2
-    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
     arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x20 + 8], x0
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
     arm64.leaRdata x21, __str_rec_5  ; "c.maxon long enough for heap"
     arm64.movImm x0, 16
     arm64.movImm x1, 0
@@ -297,38 +285,38 @@ func @main {
     arm64.movRegReg x0, x21
     arm64.bl __str_retain
     arm64.storeBaseDispReg.word64 [x22 + 8], x0
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x19
     arm64.movRegReg x1, x22
     arm64.bl Dependency.create
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
-    arm64.bl addDep
+    arm64.movRegReg x19, x0
     arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl addDep
+    arm64.movRegReg x0, x19
     arm64.bl __destruct_Dependency
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.bl clearAllModule
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
-    arm64.movRegReg x0, x19
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
+    arm64.movRegReg x0, x20
     arm64.bl __destruct_Database
-    arm64.cmp x20, 0
+    arm64.cmp x19, 0
     arm64.b.lt __rc_panic
   __rc_chk:
-    arm64.cmp x20, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_6  ; "panic at managed-array-push-across-calls.test:60: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
+    arm64.cmp x19, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x20
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_7  ; "panic at managed-array-push-across-calls.test:60: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

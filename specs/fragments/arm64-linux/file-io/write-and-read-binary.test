@@ -52,39 +52,64 @@ data {
   __mm_alloc_count@8 = i64 0
   __gt_run_queue_head@16 = i64 0
   __gt_run_queue_tail@24 = i64 0
-  __gt_init_done@32 = i64 0
-  __gt_timer_count@40 = i64 0
-  __gt_timer_heap_base@48 = i64 0
-  __gt_timer_capacity@56 = i64 0
-  __gt_timer_seq@64 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_timer_seq@56 = i64 0
+  __gt_timer_when@64 = i64 9223372036854775807
   __gt_trace_counter@72 = i64 0
-  __gt_proc_count@80 = i64 0
-  __gt_proc_handles_base@88 = i64 0
-  __gt_proc_gts_base@96 = i64 0
-  __gt_proc_wait_snapshot@104 = i64 0
-  __gt_proc_poller@112 = i64 0
-  __gt_live_count@120 = i64 0
-  __sched_progress@128 = i64 0
-  __sched_active_workers@136 = i64 1
-  __sched_max_active_workers@144 = i64 1
-  __sched_tls_index@152 = i64 0
-  __sched_tls_teb_offset@160 = i64 0
-  __sched_procs@168 = i64 0
-  __sched_allm@176 = i64 0
-  __sched_midle@184 = i64 0
-  __sched_pidle@192 = i64 0
-  __sched_num_procs@200 = i64 0
-  __sched_shutdown_flag@208 = i64 0
-  __sched_lock@216 = i64 0
-  __sched_nmspinning@224 = i64 0
-  __sched_parked_drivers@232 = i64 0
-  __sched_sysmon_started@240 = i64 0
-  __mrt_errno@248 = i64 0
-  __mrt_envp@256 = i64 0
-  __mrt_tls_next_key@264 = i64 0
-  __slab_arena_list@272 = i64 0
-  __slab_arena_map_l1@280 = i64 0
-  __slab_state@288 = i64 0
+  __gt_live_count@80 = i64 0
+  __gt_seed_bytes@88 = i64 2048
+  __gt_stack_bytes_sum@96 = i64 0
+  __gt_stack_bytes_count@104 = i64 0
+  __gt_seed_sum_seen@112 = i64 0
+  __gt_seed_count_seen@120 = i64 0
+  __sched_active_workers@128 = i64 1
+  __sched_max_active_workers@136 = i64 1
+  __sched_tls_index@144 = i64 0
+  __sched_tls_teb_offset@152 = i64 0
+  __sched_procs@160 = i64 0
+  __sched_allm@168 = i64 0
+  __sched_midle@176 = i64 0
+  __sched_pidle@184 = i64 0
+  __gt_gfree_head@192 = i64 0
+  __sched_arena_cursor@200 = i64 0
+  __sched_arena_limit@208 = i64 0
+  __gt_records_carved@216 = i64 0
+  __sched_npidle@224 = i64 0
+  __sched_runq_size@232 = i64 0
+  __sched_global_pushes@240 = i64 0
+  __sched_timer_scan_steps@248 = i64 0
+  __sched_mcount@256 = i64 0
+  __sched_nmidle@264 = i64 0
+  __sched_main_m@272 = i64 0
+  __sched_phase@280 = i64 0
+  __sched_lastpoll@288 = i64 0
+  __sched_poll_until@296 = i64 0
+  __sched_regain_head@304 = i64 0
+  __np_poller@312 = i64 0
+  __np_break@320 = i64 0
+  __np_wake_sig@328 = i64 0
+  __np_pd_table@336 = i64 0
+  __np_pd_cap@344 = i64 0
+  __np_waiters@352 = i64 0
+  __np_src_key_free@360 = i64 0
+  __np_src_key_high@368 = i64 0
+  __sched_num_procs@376 = i64 0
+  __sched_shutdown_flag@384 = i64 0
+  __sched_lock@392 = i64 0
+  __sched_lock_depth_sink@400 = i64 0
+  __sched_nmspinning@408 = i64 0
+  __sched_needspinning@416 = i64 0
+  __sched_sysmon_event@424 = i64 0
+  __sched_sysmon_wait@432 = i64 0
+  __sched_timer_starts@440 = i64 0
+  __mrt_errno@448 = i64 0
+  __mrt_envp@456 = i64 0
+  __mrt_tls_next_key@464 = i64 0
+  __slab_arena_list@472 = i64 0
+  __slab_arena_map_l1@480 = i64 0
+  __slab_state@488 = i64 0
 }
 
 func @main {
@@ -101,8 +126,12 @@ func @main {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.leaRdata x0, __str_rec_23  ; "test_binary.bin"
-    arm64.bl FilePath.init
+  __il_body#24:
+    arm64.bl FilePath.create
     arm64.movRegReg x19, x0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#26
+  __il_cont#23:
     arm64.movImm x0, 1
     arm64.movImm x1, 0
     arm64.bl __managed_create
@@ -116,9 +145,9 @@ func @main {
     arm64.movImm x1, 67
     arm64.movRegReg x0, x20
     arm64.bl __managed_push
-  __il_body:
+  __il_body#27:
     arm64.movImm x2, 0
-  __il_cont:
+  __il_cont#22:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
     arm64.bl File.writeBinary
@@ -257,7 +286,7 @@ func @main {
   __im_load#20:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.b __im_loaded
+    arm64.b tryok#10
   __im_stride:
     arm64.cmp x0, 1
     arm64.b.ne __im_slow
@@ -268,20 +297,11 @@ func @main {
   __im_load#21:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-  __im_loaded:
-    arm64.movImm x2, 0
-    arm64.loadRegBaseDisp.word64 x3, [x21 + 40]
-    arm64.cmp x3, 0
-    arm64.b.eq __im_cont
-  __im_empty:
-    arm64.cmp x0, 0
-    arm64.b.ne __im_cont
+    arm64.b tryok#10
   __im_slow:
     arm64.movRegReg x0, x21
     arm64.bl __managed_get
-    arm64.movRegReg x2, x9
-  __im_cont:
-    arm64.cmp x2, 0
+    arm64.cmp x9, 0
     arm64.b.eq tryok#10
   tryerr#11:
     arm64.movImm x22, 10
@@ -341,6 +361,22 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __destruct_FilePath
     arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.loadRegSlot x28, slot9
+    arm64.epilogue 96
+    arm64.ret
+  tryerr#26:
+    arm64.leaRdata x0, __str_blob_38  ; "panic at FilePath.maxon:31: FilePath: invalid path\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

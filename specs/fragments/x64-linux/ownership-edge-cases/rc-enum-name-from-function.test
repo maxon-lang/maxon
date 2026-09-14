@@ -28,36 +28,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @getName {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.cmpRegImm32 rcx, 0
-    x64.setccReg equal, rax
-    x64.leaRegRdata rdx, [rip + __str_rec_4]  ; "north"
-    x64.imulRegReg rax, rax, rdx
-    x64.cmpRegImm32 rcx, 1
-    x64.setccReg equal, rdx
-    x64.leaRegRdata rsi, [rip + __str_rec_5]  ; "south"
-    x64.imulRegReg rdx, rdx, rsi
-    x64.leaRegRegReg rax, rax, rdx
-    x64.cmpRegImm32 rcx, 2
-    x64.setccReg equal, rdx
-    x64.leaRegRdata rsi, [rip + __str_rec_6]  ; "east"
-    x64.imulRegReg rdx, rdx, rsi
-    x64.leaRegRegReg rax, rax, rdx
-    x64.cmpRegImm32 rcx, 3
-    x64.setccReg equal, rcx
-    x64.leaRegRdata rdx, [rip + __str_rec_7]  ; "west"
-    x64.imulRegReg rcx, rcx, rdx
-    x64.leaRegRegReg rcx, rax, rcx
-    x64.callDirect __str_retain
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -65,9 +35,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 32
-    x64.movRegImm32 rcx, 3
-    x64.callDirect getName
+  __il_body:
+    x64.leaRegRdata rax, [rip + __str_rec_4]  ; "north"
+    x64.imulRegRegImm32 rax, rax, 0
+    x64.leaRegRdata rcx, [rip + __str_rec_5]  ; "south"
+    x64.imulRegRegImm32 rcx, rcx, 0
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRdata rcx, [rip + __str_rec_6]  ; "east"
+    x64.imulRegRegImm32 rcx, rcx, 0
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRdata rcx, [rip + __str_rec_7]  ; "west"
+    x64.leaRegRegReg rcx, rax, rcx
+    x64.callDirect __str_retain
     x64.movRegReg rbx, r8
+  __il_cont:
     x64.leaRegRdata rdx, [rip + __str_rec_7]  ; "west"
     x64.movRegReg rcx, rbx
     x64.callDirect __str_eq

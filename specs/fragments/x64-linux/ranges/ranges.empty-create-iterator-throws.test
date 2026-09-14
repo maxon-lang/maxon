@@ -19,51 +19,61 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
-    x64.movRegImm32 rcx, 5
-    x64.movRegImm32 rdx, 5
-    x64.callDirect OpenRange.create
-    x64.movRegReg rbx, r8
-    x64.movRegReg rcx, rbx
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rbx, 5
+    x64.movRegImm32 r12, 5
+  __il_body#7:
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.storeBaseDispReg.word64 [r13 + 0], rbx
+    x64.storeBaseDispReg.word64 [r13 + 8], r12
+  __il_cont#6:
+    x64.movRegReg rcx, r13
     x64.callDirect OpenRange.createIterator
-    x64.movRegReg r12, r8
+    x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
   tryerr:
-    x64.movRegImm32 r12, 7
-    x64.movRegReg rcx, rbx
+    x64.movRegImm32 rbx, 7
+    x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   tryok:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
-  __il_body:
-    x64.loadRegBaseDisp.word64 rbx, [r12 + 16]
-  __il_cont:
-    x64.cmpRegImm32 rbx, 0
+  __il_body#9:
+    x64.loadRegBaseDisp.word64 r12, [rbx + 16]
+  __il_cont#8:
+    x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
   __rc_chk:
-    x64.cmpRegImm32 rbx, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at ranges.empty-create-iterator-throws.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.cmpRegImm32 r12, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_decref
-    x64.movRegReg r8, rbx
-    x64.epilogue 32
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at ranges.empty-create-iterator-throws.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

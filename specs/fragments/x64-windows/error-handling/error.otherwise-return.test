@@ -26,6 +26,12 @@ end 'main'
 ---
 ExitCode: 99
 ---
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+}
+
 func @mayFail {
   entry:
     x64.pushReg rbp
@@ -36,31 +42,16 @@ func @mayFail {
     x64.ret
 }
 
-func @runIt {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect mayFail
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
-  tryerr:
-    x64.movRegImm r8, 18446744073709551615
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  tryok:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.callDirect runIt
+  __il_body:
+    x64.callDirect mayFail
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, check
+  tryok:
     x64.cmpRegImm32 r8, -1
     x64.jcc notEqual, ifcont
   check:

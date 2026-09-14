@@ -16,7 +16,7 @@ function both(o Outer, i Inner) returns Integer
 		blank gives 0
 		holds(label) gives match i 'y'
 			quiet gives 1
-			loud(word) gives 2
+			loud(word) gives 2 if word.byteLength() > 0 and label.byteLength() > 0 else 0
 		end 'y'
 	end 'x'
 end 'both'
@@ -47,46 +47,64 @@ func @both {
     arm64.movRegReg x19, x1
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 0
-    arm64.b.ne matchnext#9
+    arm64.b.ne matchnext#14
   matcharm#1:
     arm64.movImm x0, 0
-    arm64.b matchcont#10
-  matchnext#9:
+    arm64.b matchcont#15
+  matchnext#14:
     arm64.cmp x1, 1
-    arm64.b.ne matchdead#8
+    arm64.b.ne matchdead#13
   matcharm#2:
     arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
     arm64.movRegReg x0, x20
     arm64.bl __mm_incref
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.b.ne matchnext#6
+    arm64.b.ne matchnext#11
   matcharm#3:
     arm64.movImm x19, 1
-    arm64.b matchcont#7
-  matchnext#6:
+    arm64.b matchcont#12
+  matchnext#11:
     arm64.cmp x0, 1
-    arm64.b.ne matchdead#5
+    arm64.b.ne matchdead#10
   matcharm#4:
     arm64.loadRegBaseDisp.word64 x19, [x19 + 8]
     arm64.movRegReg x0, x19
     arm64.bl __mm_incref
+  __il_body#17:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+  __il_cont#16:
+    arm64.cmp x0, 0
+    arm64.movImm x0, 0
+    arm64.b.ls scmerge
+  __il_body#19:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+  __il_cont#18:
+    arm64.cmp x0, 0
+    arm64.cset x0, hi
+  scmerge:
+    arm64.cbz x0, ternaryfalse
+  ternarytrue:
     arm64.movImm x21, 2
+    arm64.b matchcont#9
+  ternaryfalse:
+    arm64.movImm x21, 0
+  matchcont#9:
     arm64.movRegReg x0, x19
     arm64.bl __str_decref
     arm64.movRegReg x19, x21
-  matchcont#7:
+  matchcont#12:
     arm64.movRegReg x0, x20
     arm64.bl __str_decref
     arm64.movRegReg x0, x19
-  matchcont#10:
+  matchcont#15:
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.epilogue 48
     arm64.ret
-  matchdead#5:
-  matchdead#8:
+  matchdead#10:
+  matchdead#13:
 }
 
 func @main {
@@ -127,22 +145,22 @@ func @main {
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_4  ; "panic at nested-matches-of-two-borrowed-unions.test:29: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
+    arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x21
     arm64.bl __destruct_Inner
     arm64.movRegReg x0, x20
     arm64.bl __destruct_Outer
     arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at nested-matches-of-two-borrowed-unions.test:29: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

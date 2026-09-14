@@ -138,19 +138,7 @@ func @main {
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 rbx, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_17]  ; "panic at a-caller-may-rebind-what-a-consuming-callee-wrote-through-its-cell.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 72
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc greater, __rc_panic
   __rc_ok:
     x64.loadRegSlot rcx, slot0
     x64.callDirect __destruct_Wrap
@@ -160,6 +148,18 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_18]  ; "panic at a-caller-may-rebind-what-a-consuming-callee-wrote-through-its-cell.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 72
     x64.popReg r15
     x64.popReg r14

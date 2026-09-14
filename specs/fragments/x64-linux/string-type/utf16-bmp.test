@@ -26,9 +26,37 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 72
-    x64.leaRegRdata rcx, [rip + __str_rec_2]  ; "\xce\xb1\xce\xb2\xce\xb3"
-    x64.callDirect String.utf16
+    x64.leaRegRdata rax, [rip + __str_rec_2]  ; "\xce\xb1\xce\xb2\xce\xb3"
+  __il_body#10:
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.leaRegRegImm32 rcx, r12, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.leaRegRegImm32 r14, r13, 56
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r14, r12
+    x64.storeBaseDispReg.word64 [r13 + 0], r14
+    x64.storeBaseDispReg.word64 [r13 + 8], r12
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r13 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r13 + 24], rax
+  __il_body#12:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
     x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [rbx + 0], r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+  __il_cont#9:
     x64.movRegReg rcx, rbx
     x64.callDirect UTF16View.createIterator
     x64.movRegReg r12, r8
@@ -37,14 +65,53 @@ func @main {
     x64.callDirect __destruct_UTF16View
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r13, 0
-    x64.jcc notEqual, forjoin
-  forhdr:
+    x64.jcc equal, forhdr
+    x64.jmp forjoin
+  __il_body#14:
+    x64.loadRegBaseDisp.byte rax, [r12 + 32]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, forexit
-  loop:
-    x64.movRegReg rcx, r12
-    x64.callDirect UTF16Iterator.current
-    x64.movRegReg rbx, r8
+    x64.jcc equal, ifcont#16
+  trail:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 16]
+  __il_body#23:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic#25
+  __rc_chk#26:
+    x64.cmpRegImm32 rax, 1114111
+    x64.jcc greater, __rc_panic#25
+  __rc_ok#24:
+    x64.leaRegRegImm32 rax, rax, -65536
+    x64.andRegImm32 rax, rax, 1023
+    x64.leaRegRegImm32 rbx, rax, 56320
+    x64.jmp __il_cont#13
+  ifcont#16:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 16]
+    x64.cmpRegImm32 rax, 65536
+    x64.jcc greaterEqual, ifcont#18
+  bmp:
+    x64.loadRegBaseDisp.word64 rbx, [r12 + 16]
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic#20
+  __rc_chk#21:
+    x64.cmpRegImm32 rbx, 65535
+    x64.jcc greater, __rc_panic#20
+    x64.jmp __il_cont#13
+  ifcont#18:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 16]
+  __il_body#31:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic#33
+  __rc_chk#34:
+    x64.cmpRegImm32 rax, 1114111
+    x64.jcc greater, __rc_panic#33
+  __rc_ok#32:
+    x64.leaRegRegImm32 rax, rax, -65536
+    x64.shrRegImm8 rax, rax, 10
+    x64.leaRegRegImm32 rbx, rax, 55296
+  __rc_chk#37:
+    x64.cmpRegImm32 rbx, 65535
+    x64.jcc greater, __rc_panic#36
+  __il_cont#13:
     x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -70,35 +137,87 @@ func @main {
     x64.movRegReg rax, rbx
     x64.callDirect __str_copy
     x64.leaRegRegReg rbx, r15, rbx
+    x64.loadRegSlot rax, slot3
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r14
-    x64.loadRegSlot r13, slot3
-    x64.movRegReg rax, r13
     x64.callDirect __str_copy
-    x64.leaRegRegReg rax, rbx, r13
-    x64.loadRegSlot rbx, slot2
-    x64.storeBaseDispReg.word64 [rbx + 0], r15
-    x64.loadRegSlot rax, slot1
-    x64.storeBaseDispReg.word64 [rbx + 8], rax
-    x64.movRegImm rax, 18446744073709551613
-    x64.storeBaseDispReg.word64 [rbx + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rax, slot3
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rax, slot2
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot1
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
     x64.loadRegSlot rcx, slot0
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, rbx
-    x64.callDirect print
-    x64.movRegReg rcx, rbx
+  __il_body#8:
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __write_stdout
+  __il_cont#7:
+    x64.loadRegSlot rcx, slot2
     x64.callDirect __str_decref
   forstep:
     x64.movRegReg rcx, r12
     x64.callDirect UTF16Iterator.advance
     x64.movRegReg rax, r10
-    x64.jmp forhdr
+  forhdr:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __il_body#14
   forexit:
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_UTF16Iterator
   forjoin:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#25:
+    x64.leaRegRdata rcx, [rip + __str_blob_15]  ; "panic at utf16.maxon:58: Range check failed: value outside typealias 'Codepoint'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#20:
+    x64.leaRegRdata rcx, [rip + __str_blob_24]  ; "panic at views.maxon:214: Range check failed: value outside typealias 'CodeUnit16'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#33:
+    x64.leaRegRdata rcx, [rip + __str_blob_13]  ; "panic at utf16.maxon:50: Range check failed: value outside typealias 'Codepoint'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#36:
+    x64.leaRegRdata rcx, [rip + __str_blob_14]  ; "panic at utf16.maxon:52: Range check failed: value outside typealias 'CodeUnit16'\x0a"
+    x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 72
     x64.popReg r15

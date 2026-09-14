@@ -64,7 +64,7 @@ function firstOf(b IntBag) returns Integer
 end 'firstOf'
 
 function main() returns ExitCode
-	return (firstOf(GoodBag.create(7)) + BadBag.create(1).cursor().item().byteLength()) as ExitCode
+	return (firstOf(GoodBag.create(7)) + (BadBag.create(1).cursor().item().byteLength() as Integer)) as ExitCode
 end 'main'
 ---
 ExitCode: 11
@@ -84,195 +84,134 @@ func @IntCur.item {
     arm64.ret
 }
 
-func @IntCur.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @TextCur.item {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.bl __str_retain
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @TextCur.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __str_retain
-    arm64.storeBaseDispReg.word64 [x20 + 0], x0
-    arm64.movRegReg x0, x19
-    arm64.bl __str_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @GoodBag.cursor {
   entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.bl IntCur.create
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @GoodBag.create {
-  entry:
     arm64.prologue 32
     arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+  __il_body:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.storeBaseDispReg.word64 [x0 + 0], x19
+  __il_cont:
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
-    arm64.ret
-}
-
-func @BadBag.cursor {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.leaRdata x0, __str_rec_1  ; "nope"
-    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
-    arm64.add x0, x20, 57
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x21, x0
-    arm64.add x22, x21, 56
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x19
-    arm64.movRegReg x2, x20
-    arm64.bl __str_copy
-    arm64.add x0, x22, x20
-    arm64.storeBaseDispReg.word64 [x21 + 0], x22
-    arm64.storeBaseDispReg.word64 [x21 + 8], x20
-    arm64.movImm x0, 18446744073709551613
-    arm64.storeBaseDispReg.word64 [x21 + 16], x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x21 + 24], x0
-    arm64.movRegReg x0, x21
-    arm64.bl TextCur.create
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.ret
-}
-
-func @firstOf {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.loadRegBaseDisp.word64 x2, [x1 + 40]
-    arm64.add x19, x1, x2
-    arm64.loadRegBaseDisp.word64 x16, [x1 + 24]
-    arm64.blr x16
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x20
-    arm64.loadRegBaseDisp.word64 x16, [x19 + 24]
-    arm64.blr x16
-    arm64.movRegReg x21, x0
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
-    arm64.bl __drop_existential
-    arm64.movRegReg x0, x21
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
     arm64.ret
 }
 
 func @main {
   entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x22
-    arm64.storeSlotReg slot3, x21
-    arm64.storeSlotReg slot2, x20
-    arm64.storeSlotReg slot1, x19
-    arm64.movImm x0, 7
-    arm64.bl GoodBag.create
-    arm64.movRegReg x19, x0
-    arm64.leaRdata x1, __witness_GoodBag.Bag
-    arm64.movRegReg x0, x19
-    arm64.bl firstOf
+    arm64.prologue 80
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 7
+  __il_body#9:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
-    arm64.movImm x0, 1
-    arm64.leaRegSlot x1, slot0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.movRegReg x0, x1
-    arm64.bl BadBag.cursor
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+  __il_cont#8:
+    arm64.leaRdata x1, __witness_GoodBag.Bag
+  __il_body#10:
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 40]
+    arm64.add x19, x1, x0
+    arm64.movRegReg x0, x20
+    arm64.loadRegBaseDisp.word64 x16, [x1 + 24]
+    arm64.blr x16
     arm64.movRegReg x21, x0
     arm64.movRegReg x0, x21
-    arm64.bl TextCur.item
+    arm64.loadRegBaseDisp.word64 x16, [x19 + 24]
+    arm64.blr x16
     arm64.movRegReg x22, x0
-  __il_body:
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-    arm64.cmp x0, 0
-    arm64.b.ge __il_cont
-  __il_slow:
-    arm64.movRegReg x0, x22
-    arm64.bl String.byteLength
-  __il_cont:
-    arm64.add x20, x20, x0
-    arm64.cmp x20, 0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.bl __drop_existential
+  __il_cont#7:
+    arm64.movImm x19, 1
+  __il_body#11:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 0], x19
+  __il_body#15:
+    arm64.leaRdata x0, __str_rec_1  ; "nope"
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
+    arm64.add x0, x23, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x24, x0
+    arm64.add x25, x24, 56
+    arm64.movRegReg x0, x25
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x0, x25, x23
+    arm64.storeBaseDispReg.word64 [x24 + 0], x25
+    arm64.storeBaseDispReg.word64 [x24 + 8], x23
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x24 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x24 + 24], x0
+  __il_body#17:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x24
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.movRegReg x0, x24
+    arm64.bl __str_decref
+  __il_body#12:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.bl __str_retain
+  __il_body#13:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+  __il_cont#4:
+    arm64.add x22, x22, x1
+    arm64.cmp x22, 0
     arm64.b.lt __rc_panic
   __rc_chk:
-    arm64.cmp x20, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at associated-types.a-held-position-carries-its-own-with-arguments-through-the-dispatch.test:67: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.epilogue 64
-    arm64.ret
+    arm64.cmp x22, 255
+    arm64.b.gt __rc_panic
   __rc_ok:
-    arm64.movRegReg x0, x22
     arm64.bl __str_decref
-    arm64.movRegReg x0, x21
-    arm64.bl __destruct_TextCur
     arm64.movRegReg x0, x19
+    arm64.bl __destruct_TextCur
+    arm64.movRegReg x0, x21
     arm64.bl __mm_decref
     arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.epilogue 64
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at associated-types.a-held-position-carries-its-own-with-arguments-through-the-dispatch.test:67: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
     arm64.ret
 }

@@ -56,7 +56,6 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
     x64.leaRegGlobal rax, __data_big
     x64.loadRegBaseDisp.word64 xmm0, [rax + 0]
     x64.movsdRegRip xmm1, [rip + __fconst_10]
@@ -67,7 +66,6 @@ func @main {
     x64.jcc belowEqual, ifcont#3
   lt:
     x64.movRegImm32 r8, 21
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifcont#3:
@@ -75,7 +73,6 @@ func @main {
     x64.jcc below, ifcont#6
   le:
     x64.movRegImm32 r8, 22
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifcont#6:
@@ -83,7 +80,6 @@ func @main {
     x64.jcc belowEqual, ifcont#9
   gt:
     x64.movRegImm32 r8, 23
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifcont#9:
@@ -91,7 +87,6 @@ func @main {
     x64.jcc below, ifcont#12
   ge:
     x64.movRegImm32 r8, 24
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifcont#12:
@@ -101,7 +96,6 @@ func @main {
     x64.jcc notEqual, ifcont#15
   eq:
     x64.movRegImm32 r8, 25
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifcont#15:
@@ -111,26 +105,11 @@ func @main {
     x64.jcc equal, ifelse
   ternarytrue:
     x64.movRegImm32 r8, 0
-  matchcont:
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 r8, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at an-inverted-float-branch-still-refuses-a-nan.test:46: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
   __rc_ok:
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifelse:
     x64.movRegImm32 r8, 26
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

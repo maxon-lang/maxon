@@ -44,86 +44,54 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Inner.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @Outer.callIt {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-  __il_body:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-  __il_cont:
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @Outer.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.storeBaseDispReg.word64 [x20 + 0], x19
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 32
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, 20
-    arm64.bl Inner.create
-    arm64.bl Outer.create
+    arm64.movImm x19, 20
+  __il_body#7:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+  __il_body#8:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
     arm64.movRegReg x19, x0
-  __il_body:
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_own
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+  __il_body#9:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+  __il_body#11:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+  __il_body#13:
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
   __il_cont:
-    arm64.movRegReg x0, x19
-    arm64.bl Outer.callIt
-    arm64.add x20, x20, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __destruct_Outer
+    arm64.add x20, x0, x1
     arm64.cmp x20, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at constructible-field-read.test:35: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Outer
+    arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x20
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at constructible-field-read.test:35: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32

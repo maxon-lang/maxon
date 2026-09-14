@@ -42,17 +42,94 @@ func @main {
     x64.storeBaseDispReg.word64 [r13 + 16], rax
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r13 + 24], rax
+  __il_body#30:
+    x64.loadRegBaseDisp.word64 rbx, [r13 + 8]
+  __il_cont#29:
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc notEqual, ifcont
+  __il_body#28:
+    x64.movRegImm32 rdx, 0
+  __il_body#32:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
+  __il_cont#31:
+    x64.loadRegBaseDisp.byte r9, [r13 + 48]
     x64.movRegReg rcx, r13
-    x64.callDirect String.toLower
+    x64.callDirect String.sliceBytes
+  __il_cont#27:
     x64.movRegReg rbx, r8
+    x64.jmp __il_body#2
+  ifcont:
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.byte r9, [r13 + 48]
+    x64.movRegReg rcx, r13
+    x64.movRegReg rax, rbx
+    x64.callDirect String.sliceBytes
+    x64.movRegReg r12, r8
+    x64.movRegImm32 r14, 0
+    x64.jmp forhdr
+  convert:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.callDirect String.byteAt
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#14
+  tryok:
+    x64.cmpRegImm32 r8, 65
+    x64.movRegImm32 rax, 0
+    x64.jcc less, scmerge
+  andrhs:
+    x64.cmpRegImm32 r8, 90
+    x64.setccReg lessEqual, rax
+  scmerge:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, forstep
+  inRange:
+    x64.movRegReg rax, r8
+    x64.xorRegImm32 rax, r8, 32
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.callDirect String.setByte
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#19
+  forstep:
+    x64.leaRegRegImm32 r14, r14, 1
+  forhdr:
+    x64.cmpRegReg r14, rbx
+    x64.jcc less, convert
+  forexit:
+    x64.movRegReg rbx, r12
+  __il_body#2:
     x64.movRegReg rcx, rbx
-    x64.callDirect print
+    x64.callDirect __write_stdout
+  __il_cont#1:
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
     x64.movRegReg rcx, r13
     x64.callDirect __str_decref
     x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#14:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at String.maxon:697: String.mapAsciiCase: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#19:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at String.maxon:700: String.mapAsciiCase: setByte OOB \xe2\x80\x94 i < len invariant\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13

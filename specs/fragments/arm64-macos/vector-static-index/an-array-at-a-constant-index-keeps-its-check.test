@@ -37,31 +37,13 @@ func @main {
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 0
     arm64.b.ls __im_slow
-  __im_load:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.movImm x2, 0
-    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
-    arm64.cmp x3, 0
-    arm64.b.eq critsplit#8
-  __im_empty:
-    arm64.cmp x0, 0
-    arm64.b.ne critsplit#9
-  __im_slow:
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_get
-    arm64.b __im_cont
-  critsplit#9:
-    arm64.movRegReg x9, x2
-    arm64.b __im_cont
-  critsplit#8:
-    arm64.movRegReg x9, x2
-  __im_cont:
-    arm64.cmp x9, 0
-    arm64.b.eq tryok
+    arm64.b __im_load
   tryerr:
     arm64.movImm x20, 18446744073709551613
     arm64.b trycont
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
   tryok:
     arm64.movRegReg x20, x0
   trycont:
@@ -100,8 +82,10 @@ func @main {
     arm64.storeBaseDispReg.word64 [x25 + 24], x0
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
+  __il_body:
     arm64.movRegReg x0, x25
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont:
     arm64.movRegReg x0, x25
     arm64.bl __str_decref
     arm64.movImm x20, 0
@@ -118,4 +102,10 @@ func @main {
     arm64.loadRegSlot x26, slot7
     arm64.epilogue 80
     arm64.ret
+  __im_slow:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr
+    arm64.b tryok
 }

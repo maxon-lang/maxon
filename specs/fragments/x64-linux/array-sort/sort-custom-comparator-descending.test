@@ -88,17 +88,17 @@ func @main {
     x64.movRegImm32 rdx, 8
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
-    x64.leaRegFunc rdx, [rip + __fnref_descending]
-    x64.movRegImm32 rax, 0
-    x64.leaRegRdata r9, [rip + __layout_Array_Integer]
+    x64.leaRegFunc r9, [rip + __fnref_descending]
+    x64.movRegImm32 rsi, 0
+    x64.leaRegRdata rdi, [rip + __layout_Array_Integer]
+  __il_body:
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.movRegReg rcx, rbx
-    x64.callDirect Array.sort#Array.SortComparator
+    x64.callDirect Array.driftsortRange
+  __il_cont:
     x64.movRegImm32 rax, 0
-  forhdr:
-    x64.storeSlotReg slot0, rax
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
-    x64.cmpRegReg rax, rcx
-    x64.jcc greaterEqual, forexit
+    x64.jmp forhdr
   p:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.loadRegBaseIndexScale.word64 r12, [rcx + rax*8 + 0]
@@ -128,12 +128,12 @@ func @main {
     x64.movRegReg rax, r12
     x64.callDirect __str_copy
     x64.leaRegRegReg r12, r15, r12
+    x64.loadRegSlot rax, slot4
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r14
-    x64.loadRegSlot r13, slot4
-    x64.movRegReg rax, r13
     x64.callDirect __str_copy
-    x64.leaRegRegReg rax, r12, r13
+    x64.loadRegSlot rax, slot4
+    x64.leaRegRegReg rax, r12, rax
     x64.loadRegSlot r12, slot3
     x64.storeBaseDispReg.word64 [r12 + 0], r15
     x64.loadRegSlot rax, slot2
@@ -151,7 +151,11 @@ func @main {
   forstep:
     x64.loadRegSlot rax, slot0
     x64.leaRegRegImm32 rax, rax, 1
-    x64.jmp forhdr
+  forhdr:
+    x64.storeSlotReg slot0, rax
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.cmpRegReg rax, rcx
+    x64.jcc less, p
   forexit:
     x64.leaRegRdata rcx, [rip + __str_rec_20]  ; "\x0a"
     x64.callDirect print

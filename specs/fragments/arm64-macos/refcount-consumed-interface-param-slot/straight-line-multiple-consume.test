@@ -55,20 +55,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Desc.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @Desc.tag {
   entry:
     arm64.prologue 16
@@ -117,88 +103,72 @@ func @Holder.run {
     arm64.ret
 }
 
-func @twice {
+func @main {
   entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x23
+    arm64.prologue 48
     arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-    arm64.movRegReg x21, x2
-    arm64.movRegReg x0, x21
-    arm64.movRegReg x1, x20
-    arm64.bl __retain_existential
-    arm64.movRegReg x1, x21
-    arm64.bl Holder.create
-    arm64.movRegReg x22, x0
-    arm64.movRegReg x0, x22
-    arm64.bl Holder.run
-    arm64.movRegReg x23, x0
-    arm64.movRegReg x0, x21
-    arm64.movRegReg x1, x20
-    arm64.bl __retain_existential
-    arm64.movRegReg x1, x21
-    arm64.bl Holder.create
+  __il_body#5:
+    arm64.movImm x19, 9
+  __il_body#8:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x20
-    arm64.bl Holder.run
-    arm64.add x0, x23, x0
-    arm64.add x19, x0, x19
-    arm64.movRegReg x0, x20
-    arm64.bl __destruct_Holder
-    arm64.movRegReg x0, x22
-    arm64.bl __destruct_Holder
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+  __il_cont#7:
+    arm64.leaRdata x19, __witness_Desc.Payload
+  __il_body#9:
     arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __retain_existential
+    arm64.movRegReg x1, x19
+    arm64.bl Holder.create
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x21
+    arm64.bl Holder.run
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __retain_existential
+    arm64.movRegReg x1, x19
+    arm64.bl Holder.create
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl Holder.run
+    arm64.add x0, x22, x0
+    arm64.add x22, x0, 4
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Holder
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Holder
+  __il_cont#6:
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+  __il_cont#4:
+    arm64.cmp x22, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x22, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
+    arm64.epilogue 48
     arm64.ret
-}
-
-func @driver {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, 9
-    arm64.bl Desc.create
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 4
-    arm64.leaRdata x2, __witness_Desc.Payload
-    arm64.movRegReg x1, x19
-    arm64.bl twice
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @main {
-  entry:
-    arm64.prologue 16
-    arm64.bl driver
-    arm64.cmp x0, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x0, 255
-    arm64.b.le __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at straight-line-multiple-consume.test:46: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_1  ; "panic at straight-line-multiple-consume.test:46: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  __rc_ok:
-    arm64.epilogue 16
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
     arm64.ret
 }

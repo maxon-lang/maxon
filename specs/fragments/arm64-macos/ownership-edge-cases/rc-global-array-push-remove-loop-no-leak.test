@@ -40,20 +40,6 @@ data {
   __slab_state@32 = i64 0
 }
 
-func @Item.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 64
@@ -63,33 +49,32 @@ func @main {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 0
-  whilehdr#1:
-    arm64.cmp x19, 10
-    arm64.b.ge whileexit#3
+    arm64.b whilehdr#1
   push:
     arm64.leaGlobal x0, __data_globalArr
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
-    arm64.movRegReg x0, x19
-    arm64.bl Item.create
+  __il_body:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+  __il_cont:
     arm64.movRegReg x0, x20
     arm64.bl __managed_push
     arm64.add x19, x19, 1
-    arm64.b whilehdr#1
+  whilehdr#1:
+    arm64.cmp x19, 10
+    arm64.b.lt push
   whileexit#3:
     arm64.movImm x20, 0
-  whilehdr#4:
-    arm64.leaGlobal x0, __data_globalArr
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.cmp x0, 0
-    arm64.b.le whileexit#6
+    arm64.b whilehdr#4
   remove:
     arm64.leaGlobal x0, __data_globalArr
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.movImm x22, 0
     arm64.movRegReg x0, x21
-    arm64.bl __mm_retain
+    arm64.bl __managed_retain
     arm64.movRegReg x23, x0
     arm64.leaRdata x2, __layout_Array_Item
     arm64.movRegReg x0, x21
@@ -118,17 +103,20 @@ func @main {
     arm64.add x19, x19, 1
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
-    arm64.b whilehdr#4
+  whilehdr#4:
+    arm64.leaGlobal x0, __data_globalArr
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.cmp x0, 0
+    arm64.b.gt remove
   whileexit#6:
     arm64.cmp x20, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at rc-global-array-push-remove-loop-no-leak.test:30: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -136,8 +124,10 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x20
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at rc-global-array-push-remove-loop-no-leak.test:30: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

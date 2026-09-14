@@ -81,9 +81,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
     arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-  forhdr:
-    arm64.cmp x0, x1
-    arm64.b.ge forexit
+    arm64.b forhdr
   loop:
     arm64.loadRegBaseIndexScale.word64 x3, [x2 + x0*8 + 0]
   __im_cont:
@@ -91,7 +89,9 @@ func @main {
     arm64.add x20, x20, x3
   forstep:
     arm64.add x0, x0, 1
-    arm64.b forhdr
+  forhdr:
+    arm64.cmp x0, x1
+    arm64.b.lt loop
   forexit:
     arm64.movImm x0, 21
     arm64.movImm x1, 0
@@ -128,8 +128,10 @@ func @main {
     arm64.storeBaseDispReg.word64 [x25 + 24], x0
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
+  __il_body:
     arm64.movRegReg x0, x25
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont:
     arm64.movRegReg x0, x25
     arm64.bl __str_decref
     arm64.movImm x20, 0

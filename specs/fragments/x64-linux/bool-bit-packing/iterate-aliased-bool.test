@@ -91,29 +91,27 @@ func @main {
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
     x64.movRegImm32 r14, 0
-    x64.movRegImm32 r15, 0
-  forhdr:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegReg r15, rax
-    x64.jcc greaterEqual, forexit
+    x64.movRegImm32 rdx, 0
+  __us_test:
+    x64.loadRegBaseDisp.word64 r15, [rbx + 8]
+    x64.jmp forhdr
   scan:
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r15
     x64.callDirect __managed_get_unchecked
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, critsplit#14
+    x64.jcc equal, critsplit#15
   hit:
     x64.leaRegRegImm32 rax, r12, 1
     x64.leaRegRegImm32 rcx, r13, 1
     x64.cmpRegReg rcx, r14
-    x64.jcc lessEqual, critsplit#15
+    x64.jcc lessEqual, critsplit#16
   grow:
     x64.movRegReg rdx, rcx
     x64.jmp ifcont
-  critsplit#15:
+  critsplit#16:
     x64.movRegReg rdx, r14
     x64.jmp ifcont
-  critsplit#14:
+  critsplit#15:
     x64.movRegReg rax, r12
     x64.movRegReg rcx, r13
     x64.movRegReg rdx, r14
@@ -124,11 +122,16 @@ func @main {
   miss:
     x64.movRegImm32 rcx, 0
   forstep:
-    x64.leaRegRegImm32 r15, r15, 1
+    x64.loadRegSlot rsi, slot0
+    x64.leaRegRegImm32 rsi, rsi, 1
     x64.movRegReg r12, rax
     x64.movRegReg r13, rcx
     x64.movRegReg r14, rdx
-    x64.jmp forhdr
+    x64.movRegReg rdx, rsi
+  forhdr:
+    x64.storeSlotReg slot0, rdx
+    x64.cmpRegReg rdx, r15
+    x64.jcc less, scan
   forexit:
     x64.imulRegRegImm32 rax, r12, 10
     x64.leaRegRegReg r12, rax, r14
@@ -138,11 +141,9 @@ func @main {
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 r12, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at iterate-aliased-bool.test:38: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg r8, r12
     x64.epilogue 40
     x64.popReg r15
     x64.popReg r14
@@ -151,8 +152,10 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg r8, r12
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at iterate-aliased-bool.test:38: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg r15
     x64.popReg r14

@@ -64,7 +64,8 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 88
+    x64.pushReg r14
+    x64.prologue 112
     x64.movRegImm32 rbx, 5
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
@@ -82,21 +83,21 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_resize
     x64.movRegImm32 rax, 0
-  __us_test#163:
+  __us_test#185:
     x64.loadRegBaseDisp.word64 rcx, [r12 + 16]
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, forhdr#1
-  __us_test#164:
+  __us_test#186:
     x64.loadRegBaseDisp.word64 rcx, [r12 + 8]
     x64.loadRegBaseDisp.word64 rdx, [r12 + 0]
     x64.cmpRegImm32 rdx, 0
     x64.jcc equal, forhdr#1
-  __us_test#165:
+  __us_test#187:
     x64.leaRegRegImm32 rsi, rdx, -24
     x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
     x64.cmpRegImm32 rsi, 0
     x64.jcc notEqual, forhdr#1
-    x64.jmp forhdr#153
+    x64.jmp forhdr#175
   fill:
     x64.loadRegBaseDisp.word64 rcx, [r12 + 16]
     x64.cmpRegImm32 rcx, 0
@@ -122,213 +123,241 @@ func @main {
     x64.cmpRegImm32 rax, 5
     x64.jcc less, fill
     x64.jmp forexit#4
-  __im_bounds#161:
+  __im_bounds#183:
     x64.cmpRegReg rax, rcx
-    x64.jcc aboveEqual, __im_slow#157
-  __im_store#158:
+    x64.jcc aboveEqual, __im_slow#179
+  __im_store#180:
     x64.storeBaseIndexScaleReg.word64 [rdx + rax*8 + 0], rax
-  forstep#154:
+  forstep#176:
     x64.leaRegRegImm32 rax, rax, 1
-  forhdr#153:
+  forhdr#175:
     x64.cmpRegImm32 rax, 5
-    x64.jcc less, __im_bounds#161
+    x64.jcc less, __im_bounds#183
   forexit#4:
-    x64.movRegImm32 r13, 0
-    x64.movRegImm32 rax, 1
-    x64.jmp forhdr#7
-  rounds:
-    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rsi, 1
+  __us_test#166:
     x64.loadRegBaseDisp.word64 rcx, [r12 + 16]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __im_slow#25
-  __im_bounds#26:
+    x64.jcc less, __us_slow
+  __us_test#167:
     x64.loadRegBaseDisp.word64 rcx, [r12 + 8]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc belowEqual, __im_slow#25
-  __im_buffer#27:
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, __im_slow#25
-  __im_viewed#28:
-    x64.leaRegRegImm32 rsi, rcx, -24
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __im_slow#25
-  __im_store#29:
-    x64.storeBaseDispReg.word64 [rcx + 0], rax
-  __il_body:
-    x64.movRegImm32 rdx, 0
-  __us_test#148:
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 8]
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 16]
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc less, forhdr#32
-  __us_test#149:
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 16]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __us_slow
+  __us_test#168:
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 8]
     x64.loadRegBaseDisp.word64 rdi, [rbx + 0]
     x64.cmpRegImm32 rdi, 0
-    x64.jcc equal, forhdr#32
-  __us_test#150:
+    x64.jcc equal, __us_slow
+  __us_test#169:
     x64.leaRegRegImm32 r8, rdi, -24
     x64.loadRegBaseDisp.word64 r8, [r8 + 16]
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, forhdr#32
-    x64.jmp __us_test#151
+    x64.jcc notEqual, __us_slow
+  __us_test#170:
+    x64.loadRegBaseDisp.word64 r8, [r12 + 0]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc belowEqual, __us_slow
+  __us_test#171:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc belowEqual, __us_slow
+  __us_test#172:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, __us_slow
+  __us_test#173:
+    x64.leaRegRegImm32 r9, r8, -24
+    x64.loadRegBaseDisp.word64 r9, [r9 + 16]
+    x64.cmpRegImm32 r9, 0
+    x64.jcc equal, forhdr#100
+  __us_slow:
+    x64.movRegReg rcx, rax
+    x64.movRegReg rax, rsi
+    x64.jmp forhdr#7
+  rounds:
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rsi, [r12 + 16]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc less, __im_slow#25
+  __im_bounds#26:
+    x64.loadRegBaseDisp.word64 rsi, [r12 + 8]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc belowEqual, __im_slow#25
+  __im_buffer#27:
+    x64.loadRegBaseDisp.word64 rsi, [r12 + 0]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, __im_slow#25
+  __im_viewed#28:
+    x64.leaRegRegImm32 rdi, rsi, -24
+    x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc notEqual, __im_slow#25
+  __im_store#29:
+    x64.storeBaseDispReg.word64 [rsi + 0], rax
+  __il_body#31:
+    x64.movRegImm32 rdx, 0
+    x64.jmp forhdr#32
   __rc_ok#55:
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 8]
-    x64.cmpRegReg rdx, rcx
+    x64.loadRegBaseDisp.word64 rsi, [r12 + 8]
+    x64.cmpRegReg rdx, rsi
     x64.jcc aboveEqual, __im_slow#74
   __im_load#75:
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.loadRegBaseIndexScale.word64 rsi, [rcx + rdx*8 + 0]
+    x64.loadRegBaseDisp.word64 rsi, [r12 + 0]
+    x64.loadRegBaseIndexScale.word64 rsi, [rsi + rdx*8 + 0]
     x64.movRegReg r8, rsi
   __rc_ok#57:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
-    x64.cmpRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 16]
+    x64.cmpRegImm32 rsi, 0
     x64.jcc less, __im_slow#77
   __im_bounds#78:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
-    x64.cmpRegReg rdx, rcx
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 8]
+    x64.cmpRegReg rdx, rsi
     x64.jcc aboveEqual, __im_slow#77
   __im_buffer#79:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.cmpRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
+    x64.cmpRegImm32 rsi, 0
     x64.jcc equal, __im_slow#77
   __im_viewed#80:
-    x64.leaRegRegImm32 rsi, rcx, -24
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
-    x64.cmpRegImm32 rsi, 0
+    x64.leaRegRegImm32 rdi, rsi, -24
+    x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
+    x64.cmpRegImm32 rdi, 0
     x64.jcc notEqual, __im_slow#77
   __im_store#81:
-    x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], r8
+    x64.storeBaseIndexScaleReg.word64 [rsi + rdx*8 + 0], r8
   forstep#34:
     x64.leaRegRegImm32 rdx, rdx, 1
   forhdr#32:
     x64.cmpRegImm32 rdx, 5
     x64.jcc less, __rc_ok#55
-    x64.jmp forexit#35
-  __us_test#151:
-    x64.loadRegBaseDisp.word64 r8, [r12 + 0]
-    x64.jmp forhdr#132
-  __rc_ok#146:
-    x64.cmpRegReg rdx, rcx
-    x64.jcc aboveEqual, __im_slow#144
-  __im_load#145:
-    x64.loadRegBaseIndexScale.word64 r9, [r8 + rdx*8 + 0]
-  __im_bounds#140:
-    x64.cmpRegReg rdx, rsi
-    x64.jcc aboveEqual, __im_slow#136
-  __im_store#137:
-    x64.storeBaseIndexScaleReg.word64 [rdi + rdx*8 + 0], r9
-  forstep#133:
-    x64.leaRegRegImm32 rdx, rdx, 1
-  forhdr#132:
-    x64.cmpRegImm32 rdx, 5
-    x64.jcc less, __rc_ok#146
   forexit#35:
     x64.movRegImm32 rdx, 0
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
-    x64.cmpRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 8]
+    x64.cmpRegImm32 rsi, 0
     x64.jcc belowEqual, __im_slow#68
   __im_load#69:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.movRegReg r8, rcx
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
+    x64.movRegReg r8, rdx
   tryok#40:
     x64.movRegImm32 rdx, 0
-  __us_test#128:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 16]
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc less, whilehdr#42
-  __us_test#129:
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, whilehdr#42
-  __us_test#130:
-    x64.leaRegRegImm32 rdi, rsi, -24
-    x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
-    x64.cmpRegImm32 rdi, 0
-    x64.jcc notEqual, whilehdr#42
-    x64.jmp whilehdr#100
+    x64.jmp whilehdr#42
   __rc_ok#59:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
-    x64.cmpRegReg rdx, rcx
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 8]
+    x64.cmpRegReg rdx, rsi
     x64.jcc aboveEqual, __im_slow#83
   __im_load#84:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.loadRegBaseIndexScale.word64 rsi, [rcx + rdx*8 + 0]
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
+    x64.loadRegBaseIndexScale.word64 rsi, [rsi + rdx*8 + 0]
   __rc_ok#61:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
-    x64.cmpRegReg r8, rcx
+    x64.loadRegBaseDisp.word64 rdi, [rbx + 8]
+    x64.cmpRegReg r8, rdi
     x64.jcc aboveEqual, __im_slow#86
   __im_load#87:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.loadRegBaseIndexScale.word64 rdi, [rcx + r8*8 + 0]
+    x64.loadRegBaseDisp.word64 rdi, [rbx + 0]
+    x64.loadRegBaseIndexScale.word64 rdi, [rdi + r8*8 + 0]
   __rc_ok#63:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
-    x64.cmpRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 r9, [rbx + 16]
+    x64.cmpRegImm32 r9, 0
     x64.jcc less, __im_slow#89
   __im_bounds#90:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
-    x64.cmpRegReg rdx, rcx
+    x64.loadRegBaseDisp.word64 r9, [rbx + 8]
+    x64.cmpRegReg rdx, r9
     x64.jcc aboveEqual, __im_slow#89
   __im_buffer#91:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.cmpRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 r9, [rbx + 0]
+    x64.cmpRegImm32 r9, 0
     x64.jcc equal, __im_slow#89
   __im_viewed#92:
-    x64.leaRegRegImm32 r9, rcx, -24
-    x64.loadRegBaseDisp.word64 r9, [r9 + 16]
-    x64.cmpRegImm32 r9, 0
+    x64.leaRegRegImm32 r10, r9, -24
+    x64.loadRegBaseDisp.word64 r10, [r10 + 16]
+    x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, __im_slow#89
   __im_store#93:
-    x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], rdi
+    x64.storeBaseIndexScaleReg.word64 [r9 + rdx*8 + 0], rdi
   __im_bounds#96:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
-    x64.cmpRegReg r8, rcx
+    x64.loadRegBaseDisp.word64 rdi, [rbx + 8]
+    x64.cmpRegReg r8, rdi
     x64.jcc aboveEqual, __im_slow#95
   __im_buffer#97:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rdi, [rbx + 0]
   __im_store#99:
-    x64.storeBaseIndexScaleReg.word64 [rcx + r8*8 + 0], rsi
+    x64.storeBaseIndexScaleReg.word64 [rdi + r8*8 + 0], rsi
   tryok#51:
     x64.leaRegRegImm32 rdx, rdx, 1
     x64.leaRegRegImm32 r8, r8, -1
   whilehdr#42:
     x64.cmpRegReg rdx, r8
     x64.jcc less, __rc_ok#59
-    x64.jmp __im_load#72
-  __rc_ok#126:
-    x64.cmpRegReg rdx, rcx
-    x64.jcc aboveEqual, __im_slow#124
-  __im_load#125:
-    x64.loadRegBaseIndexScale.word64 rdi, [rsi + rdx*8 + 0]
-  __rc_ok#121:
-    x64.cmpRegReg r8, rcx
-    x64.jcc aboveEqual, __im_slow#119
-  __im_load#120:
-    x64.loadRegBaseIndexScale.word64 r9, [rsi + r8*8 + 0]
-  __im_store#112:
-    x64.storeBaseIndexScaleReg.word64 [rsi + rdx*8 + 0], r9
-  __im_store#104:
-    x64.storeBaseIndexScaleReg.word64 [rsi + r8*8 + 0], rdi
-  tryok#101:
-    x64.leaRegRegImm32 rdx, rdx, 1
-    x64.leaRegRegImm32 r8, r8, -1
-  whilehdr#100:
-    x64.cmpRegReg rdx, r8
-    x64.jcc less, __rc_ok#126
   __im_load#72:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-  __il_cont:
-    x64.leaRegRegReg r13, r13, rcx
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
+  __il_cont#30:
+    x64.leaRegRegReg rcx, rcx, rdx
   forstep#9:
     x64.leaRegRegImm32 rax, rax, 1
   forhdr#7:
     x64.cmpRegImm32 rax, 2
     x64.jcc lessEqual, rounds
+  critsplit#189:
+    x64.movRegReg r13, rcx
+    x64.jmp forexit#10
+  __im_store#161:
+    x64.storeBaseDispReg.word64 [r8 + 0], rsi
+  __il_body#142:
+    x64.movRegImm32 r9, 0
+    x64.jmp forhdr#141
+  __rc_ok#156:
+    x64.cmpRegReg r9, rcx
+    x64.jcc aboveEqual, __im_slow#154
+  __im_load#155:
+    x64.loadRegBaseIndexScale.word64 r10, [r8 + r9*8 + 0]
+    x64.movRegReg r11, r10
+  __im_bounds#150:
+    x64.cmpRegReg r9, rdx
+    x64.jcc aboveEqual, __im_slow#146
+  __im_store#147:
+    x64.storeBaseIndexScaleReg.word64 [rdi + r9*8 + 0], r11
+  forstep#143:
+    x64.leaRegRegImm32 r9, r9, 1
+  forhdr#141:
+    x64.cmpRegImm32 r9, 5
+    x64.jcc less, __rc_ok#156
+  __im_load#139:
+    x64.loadRegBaseDisp.word64 r9, [rdi + 0]
+  tryok#109:
+    x64.movRegImm32 r10, 0
+    x64.jmp whilehdr#108
+  __rc_ok#135:
+    x64.cmpRegReg r10, rdx
+    x64.jcc aboveEqual, __im_slow#133
+  __im_load#134:
+    x64.loadRegBaseIndexScale.word64 r11, [rdi + r10*8 + 0]
+  __rc_ok#130:
+    x64.cmpRegReg r9, rdx
+    x64.jcc aboveEqual, __im_slow#128
+  __im_load#129:
+    x64.loadRegBaseIndexScale.word64 r13, [rdi + r9*8 + 0]
+  __im_store#121:
+    x64.storeBaseIndexScaleReg.word64 [rdi + r10*8 + 0], r13
+  __im_store#113:
+    x64.storeBaseIndexScaleReg.word64 [rdi + r9*8 + 0], r11
+  tryok#110:
+    x64.leaRegRegImm32 r10, r10, 1
+    x64.leaRegRegImm32 r9, r9, -1
+  whilehdr#108:
+    x64.cmpRegReg r10, r9
+    x64.jcc less, __rc_ok#135
+  __im_load#106:
+    x64.loadRegBaseDisp.word64 r9, [rdi + 0]
+  __il_cont#102:
+    x64.leaRegRegReg rax, rax, r9
+  forstep#101:
+    x64.leaRegRegImm32 rsi, rsi, 1
+  forhdr#100:
+    x64.cmpRegImm32 rsi, 2
+    x64.jcc lessEqual, __im_store#161
+  critsplit#199:
+    x64.movRegReg r13, rax
   forexit#10:
     x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic
@@ -342,7 +371,8 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
     x64.movRegReg r8, r13
-    x64.epilogue 88
+    x64.epilogue 112
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -357,7 +387,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#6
     x64.jmp forstep#3
-  __im_slow#157:
+  __im_slow#179:
     x64.storeSlotReg slot0, rax
     x64.storeSlotReg slot1, rcx
     x64.storeSlotReg slot2, rdx
@@ -368,12 +398,13 @@ func @main {
     x64.loadRegSlot rcx, slot1
     x64.loadRegSlot rdx, slot2
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, forstep#154
+    x64.jcc equal, forstep#176
   tryerr#6:
     x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at a-panic-inside-a-spliced-body-names-the-callee.test:35: main: i < n = current.count()\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 88
+    x64.epilogue 112
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -381,16 +412,19 @@ func @main {
     x64.ret
   __im_slow#25:
     x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
     x64.movRegReg rcx, r12
     x64.callDirect __managed_set
     x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, __il_body
+    x64.jcc equal, __il_body#31
   tryerr#12:
     x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at a-panic-inside-a-spliced-body-names-the-callee.test:41: main: n >= 1\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 88
+    x64.epilogue 112
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -398,216 +432,280 @@ func @main {
     x64.ret
   __im_slow#74:
     x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
     x64.storeSlotReg slot2, rdx
     x64.movRegReg rcx, r12
     x64.callDirect __managed_get
     x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
     x64.loadRegSlot rdx, slot2
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#37
     x64.jmp __rc_ok#57
   __im_slow#77:
     x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
     x64.storeSlotReg slot2, rdx
     x64.movRegReg rcx, rbx
     x64.movRegReg rax, r8
     x64.callDirect __managed_set
     x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
     x64.loadRegSlot rdx, slot2
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#39
     x64.jmp forstep#34
-  __im_slow#144:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rcx
-    x64.storeSlotReg slot2, rdx
-    x64.storeSlotReg slot3, rsi
-    x64.storeSlotReg slot4, rdi
-    x64.storeSlotReg slot5, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_get
-    x64.movRegReg r9, r8
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rcx, slot1
-    x64.loadRegSlot rdx, slot2
-    x64.loadRegSlot rsi, slot3
-    x64.loadRegSlot rdi, slot4
-    x64.loadRegSlot r8, slot5
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, __im_bounds#140
-  tryerr#37:
-    x64.storeSlotReg slot0, rax
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-panic-inside-a-spliced-body-names-the-callee.test:7: flipOnce: current is shorter than n\x0a"
-    x64.callDirect mrt_panic
-    x64.loadRegSlot rax, slot0
-    x64.movRegImm32 rcx, 0
-    x64.jmp __il_cont
-  __im_slow#136:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rcx
-    x64.storeSlotReg slot2, rdx
-    x64.storeSlotReg slot3, rsi
-    x64.storeSlotReg slot4, rdi
-    x64.storeSlotReg slot5, r8
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rax, r9
-    x64.callDirect __managed_set
-    x64.movRegReg r9, r8
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rcx, slot1
-    x64.loadRegSlot rdx, slot2
-    x64.loadRegSlot rsi, slot3
-    x64.loadRegSlot rdi, slot4
-    x64.loadRegSlot r8, slot5
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, forstep#133
-  tryerr#39:
-    x64.storeSlotReg slot0, rax
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-panic-inside-a-spliced-body-names-the-callee.test:8: flipOnce: temp is shorter than n\x0a"
-    x64.callDirect mrt_panic
-    x64.loadRegSlot rax, slot0
-    x64.movRegImm32 rcx, 0
-    x64.jmp __il_cont
   __im_slow#68:
     x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#40
   tryerr#41:
-    x64.storeSlotReg slot0, rax
     x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-panic-inside-a-spliced-body-names-the-callee.test:11: flipOnce: n >= 1\x0a"
     x64.callDirect mrt_panic
-    x64.loadRegSlot rax, slot0
-    x64.movRegImm32 rcx, 0
-    x64.jmp __il_cont
+    x64.movRegImm32 r8, 0
+    x64.epilogue 112
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   __im_slow#83:
     x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
     x64.storeSlotReg slot2, rdx
-    x64.storeSlotReg slot5, r8
+    x64.storeSlotReg slot3, r8
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.movRegReg rsi, r8
     x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
     x64.loadRegSlot rdx, slot2
-    x64.loadRegSlot r8, slot5
+    x64.loadRegSlot r8, slot3
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#46
     x64.jmp __rc_ok#61
   __im_slow#86:
     x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
     x64.storeSlotReg slot2, rdx
-    x64.storeSlotReg slot3, rsi
-    x64.storeSlotReg slot5, r8
+    x64.storeSlotReg slot4, rsi
+    x64.storeSlotReg slot3, r8
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
     x64.callDirect __managed_get
     x64.movRegReg rdi, r8
     x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
     x64.loadRegSlot rdx, slot2
-    x64.loadRegSlot rsi, slot3
-    x64.loadRegSlot r8, slot5
+    x64.loadRegSlot rsi, slot4
+    x64.loadRegSlot r8, slot3
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#48
     x64.jmp __rc_ok#63
   __im_slow#89:
     x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
     x64.storeSlotReg slot2, rdx
-    x64.storeSlotReg slot3, rsi
-    x64.storeSlotReg slot5, r8
+    x64.storeSlotReg slot4, rsi
+    x64.storeSlotReg slot3, r8
     x64.movRegReg rcx, rbx
     x64.movRegReg rax, rdi
     x64.callDirect __managed_set
-    x64.movRegReg rcx, r8
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rdx, slot2
-    x64.loadRegSlot rsi, slot3
-    x64.loadRegSlot r8, slot5
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, __im_bounds#96
-  tryerr#50:
-    x64.storeSlotReg slot0, rax
-    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at a-panic-inside-a-spliced-body-names-the-callee.test:18: flipOnce: low < n\x0a"
-    x64.callDirect mrt_panic
-    x64.loadRegSlot rax, slot0
-    x64.movRegImm32 rcx, 0
-    x64.jmp __il_cont
-  __im_slow#95:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot2, rdx
-    x64.storeSlotReg slot5, r8
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r8
-    x64.movRegReg rax, rsi
-    x64.callDirect __managed_set
-    x64.movRegReg rcx, r8
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rdx, slot2
-    x64.loadRegSlot r8, slot5
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#51
-  tryerr#52:
-    x64.storeSlotReg slot0, rax
-    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at a-panic-inside-a-spliced-body-names-the-callee.test:19: flipOnce: high < n\x0a"
-    x64.callDirect mrt_panic
-    x64.loadRegSlot rax, slot0
-    x64.movRegImm32 rcx, 0
-    x64.jmp __il_cont
-  __im_slow#124:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rcx
-    x64.storeSlotReg slot2, rdx
-    x64.storeSlotReg slot3, rsi
-    x64.storeSlotReg slot5, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
     x64.movRegReg rdi, r8
     x64.loadRegSlot rax, slot0
     x64.loadRegSlot rcx, slot1
     x64.loadRegSlot rdx, slot2
-    x64.loadRegSlot rsi, slot3
-    x64.loadRegSlot r8, slot5
+    x64.loadRegSlot rsi, slot4
+    x64.loadRegSlot r8, slot3
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, __rc_ok#121
-  tryerr#46:
-    x64.storeSlotReg slot0, rax
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-panic-inside-a-spliced-body-names-the-callee.test:16: flipOnce: low < high <= firstValue < n\x0a"
+    x64.jcc equal, __im_bounds#96
+  tryerr#50:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at a-panic-inside-a-spliced-body-names-the-callee.test:18: flipOnce: low < n\x0a"
     x64.callDirect mrt_panic
-    x64.loadRegSlot rax, slot0
-    x64.movRegImm32 rcx, 0
-    x64.jmp __il_cont
-  __im_slow#119:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 112
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#95:
     x64.storeSlotReg slot0, rax
     x64.storeSlotReg slot1, rcx
     x64.storeSlotReg slot2, rdx
-    x64.storeSlotReg slot3, rsi
-    x64.storeSlotReg slot4, rdi
-    x64.storeSlotReg slot5, r8
+    x64.storeSlotReg slot3, r8
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
-    x64.callDirect __managed_get
-    x64.movRegReg r9, r8
+    x64.movRegReg rax, rsi
+    x64.callDirect __managed_set
+    x64.movRegReg rsi, r8
     x64.loadRegSlot rax, slot0
     x64.loadRegSlot rcx, slot1
     x64.loadRegSlot rdx, slot2
-    x64.loadRegSlot rsi, slot3
-    x64.loadRegSlot rdi, slot4
-    x64.loadRegSlot r8, slot5
+    x64.loadRegSlot r8, slot3
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, __im_store#112
-  tryerr#48:
-    x64.storeSlotReg slot0, rax
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at a-panic-inside-a-spliced-body-names-the-callee.test:17: flipOnce: high <= firstValue < n\x0a"
-    x64.callDirect mrt_panic
-    x64.loadRegSlot rax, slot0
-    x64.movRegImm32 rcx, 0
-    x64.jmp __il_cont
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_17]  ; "panic at a-panic-inside-a-spliced-body-names-the-callee.test:45: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.jcc equal, tryok#51
+  tryerr#52:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at a-panic-inside-a-spliced-body-names-the-callee.test:19: flipOnce: high < n\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 88
+    x64.epilogue 112
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#154:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.storeSlotReg slot4, rsi
+    x64.storeSlotReg slot5, rdi
+    x64.storeSlotReg slot3, r8
+    x64.storeSlotReg slot6, r9
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r9
+    x64.callDirect __managed_get
+    x64.movRegReg r11, r8
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
+    x64.loadRegSlot rsi, slot4
+    x64.loadRegSlot rdi, slot5
+    x64.loadRegSlot r8, slot3
+    x64.loadRegSlot r9, slot6
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __im_bounds#150
+  tryerr#37:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-panic-inside-a-spliced-body-names-the-callee.test:7: flipOnce: current is shorter than n\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 112
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#146:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.storeSlotReg slot4, rsi
+    x64.storeSlotReg slot5, rdi
+    x64.storeSlotReg slot3, r8
+    x64.storeSlotReg slot6, r9
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r9
+    x64.movRegReg rax, r11
+    x64.callDirect __managed_set
+    x64.movRegReg r11, r8
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
+    x64.loadRegSlot rsi, slot4
+    x64.loadRegSlot rdi, slot5
+    x64.loadRegSlot r8, slot3
+    x64.loadRegSlot r9, slot6
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, forstep#143
+  tryerr#39:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-panic-inside-a-spliced-body-names-the-callee.test:8: flipOnce: temp is shorter than n\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 112
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#133:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.storeSlotReg slot4, rsi
+    x64.storeSlotReg slot5, rdi
+    x64.storeSlotReg slot3, r8
+    x64.storeSlotReg slot6, r9
+    x64.storeSlotReg slot7, r10
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r10
+    x64.callDirect __managed_get
+    x64.movRegReg r11, r8
+    x64.movRegReg r13, r10
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
+    x64.loadRegSlot rsi, slot4
+    x64.loadRegSlot rdi, slot5
+    x64.loadRegSlot r8, slot3
+    x64.loadRegSlot r9, slot6
+    x64.loadRegSlot r10, slot7
+    x64.cmpRegImm32 r13, 0
+    x64.jcc equal, __rc_ok#130
+  tryerr#46:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-panic-inside-a-spliced-body-names-the-callee.test:16: flipOnce: low < high <= firstValue < n\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 112
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#128:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.storeSlotReg slot4, rsi
+    x64.storeSlotReg slot5, rdi
+    x64.storeSlotReg slot3, r8
+    x64.storeSlotReg slot6, r9
+    x64.storeSlotReg slot7, r10
+    x64.storeSlotReg slot8, r11
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r9
+    x64.callDirect __managed_get
+    x64.movRegReg r13, r8
+    x64.movRegReg r14, r10
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
+    x64.loadRegSlot rsi, slot4
+    x64.loadRegSlot rdi, slot5
+    x64.loadRegSlot r8, slot3
+    x64.loadRegSlot r9, slot6
+    x64.loadRegSlot r10, slot7
+    x64.loadRegSlot r11, slot8
+    x64.cmpRegImm32 r14, 0
+    x64.jcc equal, __im_store#121
+  tryerr#48:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at a-panic-inside-a-spliced-body-names-the-callee.test:17: flipOnce: high <= firstValue < n\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 112
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_18]  ; "panic at a-panic-inside-a-spliced-body-names-the-callee.test:45: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 112
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx

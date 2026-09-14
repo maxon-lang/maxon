@@ -109,43 +109,43 @@ data {
   __gt_timer_seq@48 = i64 0
   __gt_timer_when@56 = i64 9223372036854775807
   __gt_trace_counter@64 = i64 0
-  __gt_proc_count@72 = i64 0
-  __gt_proc_handles_base@80 = i64 0
-  __gt_proc_gts_base@88 = i64 0
-  __gt_live_count@96 = i64 0
-  __gt_seed_bytes@104 = i64 8192
-  __gt_stack_bytes_sum@112 = i64 0
-  __gt_stack_bytes_count@120 = i64 0
-  __gt_seed_sum_seen@128 = i64 0
-  __gt_seed_count_seen@136 = i64 0
-  __sched_active_workers@144 = i64 1
-  __sched_max_active_workers@152 = i64 1
-  __sched_tls_index@160 = i64 0
-  __sched_tls_teb_offset@168 = i64 0
-  __sched_procs@176 = i64 0
-  __sched_allm@184 = i64 0
-  __sched_midle@192 = i64 0
-  __sched_pidle@200 = i64 0
-  __gt_gfree_head@208 = i64 0
-  __sched_arena_cursor@216 = i64 0
-  __sched_arena_limit@224 = i64 0
-  __gt_records_carved@232 = i64 0
-  __sched_npidle@240 = i64 0
-  __sched_runq_size@248 = i64 0
-  __sched_global_pushes@256 = i64 0
-  __sched_mcount@264 = i64 0
-  __sched_nmidle@272 = i64 0
-  __sched_main_m@280 = i64 0
-  __sched_phase@288 = i64 0
-  __sched_lastpoll@296 = i64 0
-  __sched_poll_until@304 = i64 0
-  __sched_regain_head@312 = i64 0
-  __np_poller@320 = i64 0
-  __np_break@328 = i64 0
-  __np_wake_sig@336 = i64 0
-  __np_pd_table@344 = i64 0
-  __np_pd_cap@352 = i64 0
-  __np_waiters@360 = i64 0
+  __gt_live_count@72 = i64 0
+  __gt_seed_bytes@80 = i64 8192
+  __gt_stack_bytes_sum@88 = i64 0
+  __gt_stack_bytes_count@96 = i64 0
+  __gt_seed_sum_seen@104 = i64 0
+  __gt_seed_count_seen@112 = i64 0
+  __sched_active_workers@120 = i64 1
+  __sched_max_active_workers@128 = i64 1
+  __sched_tls_index@136 = i64 0
+  __sched_tls_teb_offset@144 = i64 0
+  __sched_procs@152 = i64 0
+  __sched_allm@160 = i64 0
+  __sched_midle@168 = i64 0
+  __sched_pidle@176 = i64 0
+  __gt_gfree_head@184 = i64 0
+  __sched_arena_cursor@192 = i64 0
+  __sched_arena_limit@200 = i64 0
+  __gt_records_carved@208 = i64 0
+  __sched_npidle@216 = i64 0
+  __sched_runq_size@224 = i64 0
+  __sched_global_pushes@232 = i64 0
+  __sched_timer_scan_steps@240 = i64 0
+  __sched_mcount@248 = i64 0
+  __sched_nmidle@256 = i64 0
+  __sched_main_m@264 = i64 0
+  __sched_phase@272 = i64 0
+  __sched_lastpoll@280 = i64 0
+  __sched_poll_until@288 = i64 0
+  __sched_regain_head@296 = i64 0
+  __np_poller@304 = i64 0
+  __np_break@312 = i64 0
+  __np_wake_sig@320 = i64 0
+  __np_pd_table@328 = i64 0
+  __np_pd_cap@336 = i64 0
+  __np_waiters@344 = i64 0
+  __np_src_key_free@352 = i64 0
+  __np_src_key_high@360 = i64 0
   __sched_num_procs@368 = i64 0
   __sched_shutdown_flag@376 = i64 0
   __sched_lock@384 = i64 0
@@ -986,7 +986,7 @@ func @Spinner.__loop {
     x64.jcc equal, stopping
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=spin#5, [2]=endedAt] @__jumptable_24
+    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=spin#5, [2]=endedAt] @__jumptable_30
   __shutdown:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.storeBaseDispReg.word64 [r12 + 56], rax
@@ -1085,7 +1085,7 @@ func @Spinner.__loop {
     x64.callDirect __gt_cell_complete
     x64.jmp serve
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_17]  ; "panic at sched-preempt.as-many-spinners-as-processors-cannot-starve-another.test:26: Range check failed: value outside typealias 'InstantMs'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_18]  ; "panic at sched-preempt.as-many-spinners-as-processors-cannot-starve-another.test:26: Range check failed: value outside typealias 'InstantMs'\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 56
     x64.popReg r15
@@ -1105,7 +1105,7 @@ func @Spinner.__abandon {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=spin, [2]=endedAt] @__jumptable_25
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=spin, [2]=endedAt] @__jumptable_31
   __shutdown:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 0
@@ -1151,7 +1151,7 @@ func @Bystander.__loop {
     x64.jcc equal, stopping
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=ping] @__jumptable_26
+    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=ping] @__jumptable_32
   __shutdown:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.storeBaseDispReg.word64 [r12 + 56], rax
@@ -1205,7 +1205,7 @@ func @Bystander.__abandon {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=ping] @__jumptable_27
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=ping] @__jumptable_33
   __shutdown:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 0

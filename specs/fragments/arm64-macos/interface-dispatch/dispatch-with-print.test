@@ -59,20 +59,6 @@ func @Widget.describe {
     arm64.ret
 }
 
-func @Widget.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @Gadget.describe {
   entry:
     arm64.prologue 16
@@ -80,20 +66,6 @@ func @Gadget.describe {
     arm64.movImm x16, 10
     arm64.mul x0, x0, x16
     arm64.epilogue 16
-    arm64.ret
-}
-
-func @Gadget.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
     arm64.ret
 }
 
@@ -145,10 +117,13 @@ func @showDescription {
     arm64.storeBaseDispReg.word64 [x24 + 24], x0
     arm64.movRegReg x0, x20
     arm64.bl __mm_decref
+  __il_body:
     arm64.movRegReg x0, x24
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont:
     arm64.movRegReg x0, x24
     arm64.bl __str_decref
+    arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -166,24 +141,34 @@ func @main {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, 5
-    arm64.bl Widget.create
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 3
-    arm64.bl Gadget.create
+    arm64.movImm x19, 5
+  __il_body#3:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+  __il_cont#2:
+    arm64.movImm x19, 3
+  __il_body#4:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 0], x19
+  __il_cont#1:
     arm64.leaRdata x1, __witness_Widget.Describable
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.bl showDescription
     arm64.leaRdata x1, __witness_Gadget.Describable
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x21
     arm64.bl showDescription
-    arm64.movImm x21, 0
+    arm64.movImm x19, 0
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x20
     arm64.bl __mm_decref
     arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x21
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

@@ -189,34 +189,10 @@ func @main {
     arm64.movImm x1, 5
   __il_cont#64:
     arm64.cmp x1, 0
-    arm64.b.ne ifcont
+    arm64.b.ne __rc_ok
   f:
     arm64.add x0, x0, 1
-  ifcont:
-    arm64.cmp x0, 0
-    arm64.cset x1, lt
-    arm64.b.lt __rc_panic#14
-  __rc_chk#15:
-    arm64.cmp x0, 255
-    arm64.cset x2, gt
-    arm64.b.le __rc_ok#13
-  __rc_panic#14:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at dispatch.negative-biased-dense.test:35: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  __rc_ok#13:
-    arm64.cbnz x1, __rc_panic#17
-  __rc_chk#18:
-    arm64.cbz x2, __rc_ok#16
-  __rc_panic#17:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at dispatch.negative-biased-dense.test:35: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  __rc_ok#16:
+  __rc_ok:
     arm64.epilogue 16
     arm64.ret
 }

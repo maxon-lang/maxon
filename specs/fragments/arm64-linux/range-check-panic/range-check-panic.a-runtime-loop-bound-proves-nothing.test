@@ -39,35 +39,17 @@ func @main {
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 0
     arm64.movImm x0, 0
-  forhdr:
-    arm64.cmp x0, 100
-    arm64.b.ge forexit
-  scan:
-    arm64.cmp x0, 0
-    arm64.b.lt __rc_panic
+    arm64.b forhdr
   __rc_chk:
     arm64.cmp x0, 63
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_4  ; "panic at range-check-panic.a-runtime-loop-bound-proves-nothing.test:12: Range check failed: value outside typealias 'RegNum'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.loadRegSlot x25, slot6
-    arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot x27, slot8
-    arm64.epilogue 96
-    arm64.ret
+    arm64.b.gt __rc_panic
   __rc_ok:
     arm64.add x19, x19, x0
   forstep:
     arm64.add x0, x0, 1
-    arm64.b forhdr
+  forhdr:
+    arm64.cmp x0, 100
+    arm64.b.lt __rc_chk
   forexit:
     arm64.leaRdata x0, __str_rec_2  ; "total="
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
@@ -113,10 +95,27 @@ func @main {
     arm64.storeBaseDispReg.word64 [x26 + 24], x0
     arm64.movRegReg x0, x22
     arm64.bl __mm_decref
+  __il_body:
     arm64.movRegReg x0, x26
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont:
     arm64.movRegReg x0, x26
     arm64.bl __str_decref
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at range-check-panic.a-runtime-loop-bound-proves-nothing.test:12: Range check failed: value outside typealias 'RegNum'\x0a"
+    arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1

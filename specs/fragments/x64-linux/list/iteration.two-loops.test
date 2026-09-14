@@ -34,78 +34,86 @@ func @main {
     x64.pushReg r14
     x64.prologue 32
     x64.movRegImm32 rbx, 1
-    x64.leaRegRdata rcx, [rip + __layout_List_int]
-    x64.callDirect List.create
-    x64.movRegReg r12, r8
     x64.leaRegRdata rax, [rip + __layout_List_int]
-    x64.movRegReg rcx, r12
+  __il_body:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 40]
+    x64.callDirect __list_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.storeBaseDispReg.word64 [r13 + 0], r12
+  __il_cont:
+    x64.leaRegRdata rax, [rip + __layout_List_int]
+    x64.movRegReg rcx, r13
     x64.movRegReg rdx, rbx
     x64.callDirect List.append
     x64.movRegImm32 rdx, 2
     x64.leaRegRdata rax, [rip + __layout_List_int]
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
     x64.callDirect List.append
     x64.movRegImm32 rdx, 3
     x64.leaRegRdata rax, [rip + __layout_List_int]
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
     x64.callDirect List.append
     x64.movRegImm32 rbx, 0
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
     x64.callDirect List.createIterator
-    x64.movRegReg r13, r8
+    x64.movRegReg r12, r8
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, forjoin#6
-  forhdr#1:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, forexit#5
+    x64.jcc equal, forhdr#1
+    x64.jmp forjoin#6
   loop1:
     x64.leaRegRdata rdx, [rip + __layout_ListIterator_int]
-    x64.movRegReg rcx, r13
+    x64.movRegReg rcx, r12
     x64.callDirect ListIterator.current
     x64.leaRegRegReg rbx, rbx, r8
   forstep#4:
-    x64.movRegReg rcx, r13
+    x64.movRegReg rcx, r12
     x64.callDirect ListIterator.advance
     x64.movRegReg rax, r10
-    x64.jmp forhdr#1
+  forhdr#1:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, loop1
   forexit#5:
-    x64.movRegReg rcx, r13
+    x64.movRegReg rcx, r12
     x64.callDirect __destruct_ListIterator_int
   forjoin#6:
-    x64.movRegImm32 r13, 0
-    x64.movRegReg rcx, r12
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, r13
     x64.callDirect List.createIterator
     x64.movRegReg r14, r8
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, forempty
-  forhdr#7:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, forexit#11
+    x64.jcc equal, forhdr#7
+    x64.jmp forempty
   loop2:
     x64.leaRegRdata rdx, [rip + __layout_ListIterator_int]
     x64.movRegReg rcx, r14
     x64.callDirect ListIterator.current
-    x64.leaRegRegReg r13, r13, r8
+    x64.leaRegRegReg r12, r12, r8
   forstep#10:
     x64.movRegReg rcx, r14
     x64.callDirect ListIterator.advance
     x64.movRegReg rax, r10
-    x64.jmp forhdr#7
+  forhdr#7:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, loop2
   forexit#11:
     x64.movRegReg rcx, r14
     x64.callDirect __destruct_ListIterator_int
-    x64.movRegReg rax, r13
+    x64.movRegReg rax, r12
     x64.jmp forjoin#12
   forempty:
-    x64.movRegReg rax, r13
+    x64.movRegReg rax, r12
   forjoin#12:
     x64.cmpRegReg rbx, rax
     x64.jcc notEqual, ifcont
   check:
     x64.movRegImm32 rbx, 0
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
     x64.callDirect __destruct_List_int
     x64.movRegReg r8, rbx
     x64.epilogue 32
@@ -117,7 +125,7 @@ func @main {
     x64.ret
   ifcont:
     x64.movRegImm32 rbx, 1
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
     x64.callDirect __destruct_List_int
     x64.movRegReg r8, rbx
     x64.epilogue 32

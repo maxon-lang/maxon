@@ -26,6 +26,12 @@ typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 20
 ---
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+}
+
 func @main {
   entry:
     x64.pushReg rbp
@@ -33,30 +39,28 @@ func @main {
     x64.prologue 32
     x64.movRegImm32 rax, 0
     x64.movRegImm32 r8, 0
-  matcharm:
-    x64.movRegImm32 rcx, 2
-  __il_cont:
-    x64.cmpRegReg rax, rcx
-    x64.jcc greaterEqual, whileexit
+    x64.jmp __il_cont
   spin:
     x64.leaRegRegImm32 r8, r8, 10
     x64.leaRegRegImm32 rax, rax, 1
-    x64.jmp matcharm
+  __il_cont:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc less, spin
   whileexit:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc lessEqual, __rc_ok
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at closer-case-member-in-while-condition.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

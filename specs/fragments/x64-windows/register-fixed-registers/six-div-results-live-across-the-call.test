@@ -32,179 +32,95 @@ typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
-func @divsAcross {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.leaRegRegImm32 rsi, rcx, 100
-    x64.leaRegRegImm32 rdi, rcx, 45
-    x64.leaRegRegImm32 r8, rcx, 23
-    x64.leaRegRegImm32 r9, rcx, 12
-    x64.leaRegRegImm32 r10, rcx, 7
-    x64.leaRegRegImm32 rcx, rcx, 9
-    x64.cmpRegImm32 r9, 0
-    x64.setccReg equal, r11
-    x64.movRegReg rbx, r9
-    x64.orRegReg rbx, r9, r11
-    x64.movRegReg rax, rsi
-    x64.cqo
-    x64.idivReg rbx
-    x64.movRegReg r12, rax
-    x64.cmpRegImm32 r11, 0
-    x64.setccReg notEqual, r11
-    x64.jcc equal, tryok#1
-  tryerr#2:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at six-div-results-live-across-the-call.test:14: d1 is never zero\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryok#1:
-    x64.cmpRegImm32 r9, -1
-    x64.setccReg equal, rax
-    x64.leaRegRegImm32 rax, rax, -1
-    x64.andRegReg rax, rax, rsi
-    x64.cqo
-    x64.idivReg rbx
-    x64.movRegReg rsi, rdx
-    x64.cmpRegImm32 r11, 0
-    x64.jcc equal, tryok#3
-  tryerr#4:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at six-div-results-live-across-the-call.test:15: d1 is never zero\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryok#3:
-    x64.cmpRegImm32 r10, 0
-    x64.setccReg equal, r9
-    x64.movRegReg r11, r10
-    x64.orRegReg r11, r10, r9
-    x64.movRegReg rax, rdi
-    x64.cqo
-    x64.idivReg r11
-    x64.movRegReg rbx, rax
-    x64.cmpRegImm32 r9, 0
-    x64.setccReg notEqual, r9
-    x64.jcc equal, tryok#5
-  tryerr#6:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at six-div-results-live-across-the-call.test:16: d2 is never zero\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryok#5:
-    x64.cmpRegImm32 r10, -1
-    x64.setccReg equal, rax
-    x64.leaRegRegImm32 rax, rax, -1
-    x64.andRegReg rax, rax, rdi
-    x64.cqo
-    x64.idivReg r11
-    x64.movRegReg rdi, rdx
-    x64.cmpRegImm32 r9, 0
-    x64.jcc equal, tryok#7
-  tryerr#8:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at six-div-results-live-across-the-call.test:17: d2 is never zero\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryok#7:
-    x64.cmpRegImm32 rcx, 0
-    x64.setccReg equal, r9
-    x64.movRegReg r10, rcx
-    x64.orRegReg r10, rcx, r9
-    x64.movRegReg rax, r8
-    x64.cqo
-    x64.idivReg r10
-    x64.movRegReg r11, rax
-    x64.cmpRegImm32 r9, 0
-    x64.setccReg notEqual, r9
-    x64.jcc equal, tryok#9
-  tryerr#10:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at six-div-results-live-across-the-call.test:18: d3 is never zero\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryok#9:
-    x64.cmpRegImm32 rcx, -1
-    x64.setccReg equal, rax
-    x64.leaRegRegImm32 rax, rax, -1
-    x64.andRegReg rax, rax, r8
-    x64.cqo
-    x64.idivReg r10
-    x64.cmpRegImm32 r9, 0
-    x64.jcc equal, __il_body
-  tryerr#12:
-    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at six-div-results-live-across-the-call.test:19: d3 is never zero\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __il_body:
-    x64.imulRegRegImm32 rax, r12, 100000
-    x64.imulRegRegImm32 rcx, rsi, 10000
-    x64.leaRegRegReg rsi, rax, rcx
-    x64.imulRegRegImm32 r8, rbx, 1000
-    x64.leaRegRegReg rsi, rsi, r8
-    x64.imulRegRegImm32 rdi, rdi, 100
-    x64.leaRegRegReg rsi, rsi, rdi
-    x64.imulRegRegImm32 r9, r11, 10
-    x64.leaRegRegReg rsi, rsi, r9
-    x64.leaRegRegReg rsi, rsi, rdx
-  __il_cont:
-    x64.leaRegRegReg rax, rsi, rax
-    x64.leaRegRegReg rax, rax, rcx
-    x64.leaRegRegReg rax, rax, r8
-    x64.leaRegRegReg rax, rax, rdi
-    x64.leaRegRegReg rax, rax, r9
-    x64.leaRegRegReg r8, rax, rdx
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
 }
 
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm32 rcx, 0
-    x64.callDirect divsAcross
-    x64.cmpRegImm32 r8, 1692650
+  __il_body#4:
+    x64.movRegImm32 rcx, 100
+    x64.movRegImm32 rsi, 45
+    x64.movRegImm32 rdi, 23
+    x64.movRegImm rax, 3074457345618258603
+    x64.imulHighReg rcx
+    x64.sarRegImm8 rdx, rdx, 1
+    x64.movRegReg rax, rdx
+    x64.shrRegImm8 rax, rdx, 63
+    x64.leaRegRegReg rcx, rdx, rax
+  tryok#5:
+    x64.movRegImm32 r8, 100
+    x64.movRegImm rax, 3074457345618258603
+    x64.imulHighReg r8
+    x64.sarRegImm8 rdx, rdx, 1
+    x64.movRegReg rax, rdx
+    x64.shrRegImm8 rax, rdx, 63
+    x64.leaRegRegReg rax, rdx, rax
+    x64.imulRegRegImm32 rax, rax, 12
+    x64.subRegReg r8, r8, rax
+  tryok#7:
+    x64.movRegImm rax, 5270498306774157605
+    x64.imulHighReg rsi
+    x64.sarRegImm8 rdx, rdx, 1
+    x64.movRegReg rax, rdx
+    x64.shrRegImm8 rax, rdx, 63
+    x64.leaRegRegReg rsi, rdx, rax
+  tryok#9:
+    x64.movRegImm32 r9, 45
+    x64.movRegImm rax, 5270498306774157605
+    x64.imulHighReg r9
+    x64.sarRegImm8 rdx, rdx, 1
+    x64.movRegReg rax, rdx
+    x64.shrRegImm8 rax, rdx, 63
+    x64.leaRegRegReg rax, rdx, rax
+    x64.imulRegRegImm32 rax, rax, 7
+    x64.subRegReg r9, r9, rax
+  tryok#11:
+    x64.movRegImm rax, 2049638230412172402
+    x64.imulHighReg rdi
+    x64.movRegReg rax, rdx
+    x64.shrRegImm8 rax, rdx, 63
+    x64.leaRegRegReg rdi, rdx, rax
+  tryok#13:
+    x64.movRegImm32 r10, 23
+    x64.movRegImm rax, 2049638230412172402
+    x64.imulHighReg r10
+    x64.movRegReg rax, rdx
+    x64.shrRegImm8 rax, rdx, 63
+    x64.leaRegRegReg rax, rdx, rax
+    x64.imulRegRegImm32 rax, rax, 9
+    x64.subRegReg r10, r10, rax
+  __il_body#18:
+    x64.imulRegRegImm32 rax, rcx, 100000
+    x64.imulRegRegImm32 rcx, r8, 10000
+    x64.leaRegRegReg rdx, rax, rcx
+    x64.imulRegRegImm32 rsi, rsi, 1000
+    x64.leaRegRegReg rdx, rdx, rsi
+    x64.imulRegRegImm32 r8, r9, 100
+    x64.leaRegRegReg rdx, rdx, r8
+    x64.imulRegRegImm32 rdi, rdi, 10
+    x64.leaRegRegReg rdx, rdx, rdi
+    x64.leaRegRegReg rdx, rdx, r10
+  __il_cont#17:
+    x64.leaRegRegReg rax, rdx, rax
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegReg rax, rax, rsi
+    x64.leaRegRegReg rax, rax, r8
+    x64.leaRegRegReg rax, rax, rdi
+    x64.leaRegRegReg rax, rax, r10
+  __il_cont#3:
+    x64.cmpRegImm32 rax, 1692650
     x64.jcc notEqual, ifcont
   ok:
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 r8, 99
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

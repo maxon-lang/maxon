@@ -50,53 +50,6 @@ func @Item.create {
     x64.ret
 }
 
-func @getFirst {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegImm32 rdx, 0
-    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc belowEqual, __im_slow
-  __im_load:
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
-    x64.movRegImm32 rax, 0
-    x64.loadRegBaseDisp.word64 rsi, [rcx + 40]
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, critsplit#8
-  __im_empty:
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc notEqual, critsplit#9
-  __im_slow:
-    x64.callDirect __managed_get
-    x64.movRegReg rbx, r8
-    x64.jmp __im_cont
-  critsplit#9:
-    x64.movRegReg r10, rax
-    x64.jmp __im_cont
-  critsplit#8:
-    x64.movRegReg r10, rax
-  __im_cont:
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
-  tryerr:
-    x64.movRegImm rcx, 18446744073709551615
-    x64.callDirect Item.create
-    x64.jmp trycont
-  tryok:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_incref
-    x64.movRegReg r8, rbx
-  trycont:
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -117,9 +70,42 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
     x64.callDirect __managed_push
+  __il_body#3:
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 40]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, critsplit#12
+  __im_empty:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc equal, __im_slow
+  critsplit#13:
+    x64.movRegReg rbx, r12
+    x64.movRegReg r10, rax
+    x64.jmp __im_cont
+  critsplit#12:
+    x64.movRegReg rbx, r12
+    x64.movRegReg r10, rax
+  __im_cont:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm rcx, 18446744073709551615
+    x64.callDirect Item.create
+    x64.jmp trycont
+  tryok:
     x64.movRegReg rcx, rbx
-    x64.callDirect getFirst
+    x64.callDirect __mm_incref
+    x64.movRegReg r8, rbx
+  trycont:
     x64.storeSlotReg slot1, r8
+  __il_cont#2:
     x64.loadRegBaseDisp.word64 rbx, [r8 + 0]
     x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
@@ -150,19 +136,21 @@ func @main {
     x64.movRegReg rax, r14
     x64.callDirect __str_copy
     x64.leaRegRegReg rax, rbx, r14
-    x64.loadRegSlot rbx, slot4
-    x64.storeBaseDispReg.word64 [rbx + 0], r15
-    x64.loadRegSlot rax, slot3
-    x64.storeBaseDispReg.word64 [rbx + 8], rax
-    x64.movRegImm rax, 18446744073709551613
-    x64.storeBaseDispReg.word64 [rbx + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rax, slot4
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot3
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
     x64.loadRegSlot rcx, slot2
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, rbx
-    x64.callDirect print
-    x64.movRegReg rcx, rbx
+  __il_body#11:
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect __write_stdout
+  __il_cont#1:
+    x64.loadRegSlot rcx, slot4
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
     x64.loadRegSlot rcx, slot1
@@ -178,4 +166,9 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.movRegReg rbx, r8
+    x64.jmp __im_cont
 }

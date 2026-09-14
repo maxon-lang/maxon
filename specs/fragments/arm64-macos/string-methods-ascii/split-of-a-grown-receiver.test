@@ -85,12 +85,12 @@ func @main {
     arm64.movRegReg x2, x26
     arm64.bl __str_copy
     arm64.add x19, x19, x26
-    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x2, slot2
     arm64.loadRegSlot x1, slot4
-    arm64.loadRegSlot x20, slot2
-    arm64.movRegReg x2, x20
+    arm64.movRegReg x0, x19
     arm64.bl __str_copy
-    arm64.add x0, x19, x20
+    arm64.loadRegSlot x0, slot2
+    arm64.add x0, x19, x0
     arm64.storeBaseDispReg.word64 [x27 + 0], x28
     arm64.loadRegSlot x0, slot0
     arm64.storeBaseDispReg.word64 [x27 + 8], x0
@@ -143,11 +143,7 @@ func @main {
     arm64.movRegReg x0, x25
     arm64.bl __str_decref
     arm64.movImm x0, 0
-  forhdr:
-    arm64.storeSlotReg slot3, x0
-    arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
-    arm64.cmp x0, x1
-    arm64.b.ge forexit
+    arm64.b forhdr
   loop:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.loadRegBaseIndexScale.word64 x0, [x1 + x0*8 + 0]
@@ -195,7 +191,11 @@ func @main {
   forstep:
     arm64.loadRegSlot x0, slot3
     arm64.add x0, x0, 1
-    arm64.b forhdr
+  forhdr:
+    arm64.storeSlotReg slot3, x0
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
+    arm64.cmp x0, x1
+    arm64.b.lt loop
   forexit:
     arm64.leaRdata x0, __str_rec_11  ; "\x0a"
     arm64.bl print
@@ -218,9 +218,23 @@ func @main {
     arm64.storeBaseDispReg.word64 [x22 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x22 + 24], x0
-    arm64.leaRdata x1, __str_rec_15  ; "x,y"
+    arm64.leaRdata x20, __str_rec_15  ; "x,y"
+  __il_body:
+    arm64.movRegReg x0, x20
+    arm64.bl __str_bytes_view
+    arm64.movRegReg x21, x0
     arm64.movRegReg x0, x22
-    arm64.bl String.append
+    arm64.movRegReg x1, x21
+    arm64.bl __managed_append
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.loadRegBaseDisp.byte x0, [x20 + 48]
+    arm64.eor x0, x0, 1
+    arm64.cbz x0, __il_cont
+  clearFlag:
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.byte [x22 + 48], x0
+  __il_cont:
     arm64.leaRdata x1, __str_rec_10  ; ","
     arm64.movRegReg x0, x22
     arm64.bl String.split

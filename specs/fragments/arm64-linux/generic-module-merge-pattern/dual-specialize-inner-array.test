@@ -86,6 +86,7 @@ func @GenContainer.push {
     arm64.prologue 16
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.bl __managed_push
+    arm64.movRegReg x1, x0
     arm64.epilogue 16
     arm64.ret
 }
@@ -174,34 +175,34 @@ func @main {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-  forhdr#1:
-    arm64.storeSlotReg slot1, x21
-    arm64.cmp x1, x2
-    arm64.b.ge forexit#4
+    arm64.b forhdr#1
   intLoop:
     arm64.loadRegBaseIndexScale.word64 x3, [x0 + x1*8 + 0]
   __im_cont#17:
     arm64.add x21, x21, x3
   forstep#3:
     arm64.add x1, x1, 1
-    arm64.b forhdr#1
+  forhdr#1:
+    arm64.storeSlotReg slot1, x21
+    arm64.cmp x1, x2
+    arm64.b.lt intLoop
   forexit#4:
     arm64.movImm x22, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-  forhdr#5:
-    arm64.storeSlotReg slot0, x22
-    arm64.cmp x1, x2
-    arm64.b.ge forexit#8
+    arm64.b forhdr#5
   strLoop:
     arm64.loadRegBaseIndexScale.word64 x3, [x0 + x1*8 + 0]
   __im_cont#18:
     arm64.add x22, x22, 1
   forstep#7:
     arm64.add x1, x1, 1
-    arm64.b forhdr#5
+  forhdr#5:
+    arm64.storeSlotReg slot0, x22
+    arm64.cmp x1, x2
+    arm64.b.lt strLoop
   forexit#8:
     arm64.leaRdata x0, __str_rec_9  ; "ints="
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
@@ -264,12 +265,12 @@ func @main {
     arm64.movRegReg x2, x21
     arm64.bl __str_copy
     arm64.add x19, x19, x21
-    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x2, slot8
     arm64.loadRegSlot x1, slot10
-    arm64.loadRegSlot x20, slot8
-    arm64.movRegReg x2, x20
+    arm64.movRegReg x0, x19
     arm64.bl __str_copy
-    arm64.add x0, x19, x20
+    arm64.loadRegSlot x0, slot8
+    arm64.add x0, x19, x0
     arm64.loadRegSlot x19, slot6
     arm64.storeBaseDispReg.word64 [x19 + 0], x28
     arm64.loadRegSlot x0, slot4
@@ -347,12 +348,12 @@ func @main {
     arm64.movRegReg x2, x22
     arm64.bl __str_copy
     arm64.add x19, x19, x22
+    arm64.loadRegSlot x2, slot9
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x27
-    arm64.loadRegSlot x20, slot9
-    arm64.movRegReg x2, x20
     arm64.bl __str_copy
-    arm64.add x0, x19, x20
+    arm64.loadRegSlot x0, slot9
+    arm64.add x0, x19, x0
     arm64.loadRegSlot x19, slot7
     arm64.storeBaseDispReg.word64 [x19 + 0], x28
     arm64.loadRegSlot x0, slot5

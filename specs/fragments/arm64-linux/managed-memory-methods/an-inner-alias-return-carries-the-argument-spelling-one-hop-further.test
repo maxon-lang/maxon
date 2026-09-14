@@ -41,62 +41,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Cell.make {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @Cell.get {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
-    arm64.bl __retain_type_param
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @Holder.make {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.storeBaseDispReg.word64 [x20 + 0], x19
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @Holder.inner {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.bl __mm_retain
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 48
@@ -104,30 +48,17 @@ func @main {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.leaRdata x0, __str_rec_1  ; "hello"
-    arm64.bl String.toByteArray
+  __il_body#13:
+    arm64.movImm x1, 0
+  __il_body#17:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+  __il_cont#16:
+    arm64.bl __managed_slice
     arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.movRegReg x0, x19
-    arm64.bl Cell.make
-    arm64.bl Holder.make
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
-    arm64.movRegReg x0, x20
-    arm64.bl Holder.inner
-    arm64.movRegReg x19, x0
-    arm64.leaRdata x1, __layout_Cell___ManagedMemory
-    arm64.movRegReg x0, x19
-    arm64.bl Cell.get
-    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
-    arm64.cmp x21, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x21, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_3  ; "panic at an-inner-alias-return-carries-the-argument-spelling-one-hop-further.test:32: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.cmp x9, 0
+    arm64.b.eq tryok
+  tryerr:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at String.maxon:157: String.toByteArray: slice 0..byteLength() is in bounds by construction\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -135,13 +66,67 @@ func @main {
     arm64.loadRegSlot x21, slot2
     arm64.epilogue 48
     arm64.ret
+  tryok:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_retain
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+  __il_cont#12:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_retain
+    arm64.movRegReg x19, x0
+  __il_body#8:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 0], x19
+  __il_body#9:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x19 + 0], x21
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+  __il_cont#6:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+  __il_body#10:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.bl __mm_retain
+    arm64.movRegReg x20, x0
+  __il_cont#5:
+    arm64.leaRdata x0, __layout_Cell___ManagedMemory
+  __il_body#11:
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
+    arm64.bl __retain_type_param
+  __il_cont#4:
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
+    arm64.cmp x21, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x21, 255
+    arm64.b.gt __rc_panic
   __rc_ok:
     arm64.bl __managed_decref
-    arm64.movRegReg x0, x19
-    arm64.bl __destruct_Cell___ManagedMemory
     arm64.movRegReg x0, x20
+    arm64.bl __destruct_Cell___ManagedMemory
+    arm64.movRegReg x0, x19
     arm64.bl __destruct_Holder___ManagedMemory
     arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at an-inner-alias-return-carries-the-argument-spelling-one-hop-further.test:32: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

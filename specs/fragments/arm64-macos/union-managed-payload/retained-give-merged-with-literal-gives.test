@@ -8,7 +8,7 @@ end 'M'
 function pick(m M) returns String
 	return match m 'k'
 		one(a) gives a
-		two(b) gives "a rebuilt literal give long enough to be a heap string"
+		two gives "a rebuilt literal give long enough to be a heap string"
 		none gives "a third literal give also long enough to be a heap string"
 	end 'k'
 end 'pick'
@@ -33,7 +33,6 @@ data {
 func @pick {
   entry:
     arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 0
@@ -48,15 +47,8 @@ func @pick {
     arm64.cmp x1, 1
     arm64.b.ne matchnext#6
   matcharm#2:
-    arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
     arm64.leaRdata x0, __str_rec_4  ; "a rebuilt literal give long enough to be a heap string"
     arm64.bl __str_retain
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __str_decref
-    arm64.movRegReg x0, x20
     arm64.b matchcont
   matchnext#6:
     arm64.cmp x1, 2
@@ -66,7 +58,6 @@ func @pick {
     arm64.bl __str_retain
   matchcont:
     arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
   matchdead:

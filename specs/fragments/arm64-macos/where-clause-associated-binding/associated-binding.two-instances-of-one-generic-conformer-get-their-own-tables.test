@@ -62,39 +62,11 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Leaf.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @Leaf.size {
   entry:
     arm64.prologue 16
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.epilogue 16
-    arm64.ret
-}
-
-func @Twig.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
     arm64.ret
 }
 
@@ -155,14 +127,16 @@ func @main {
     arm64.storeSlotReg slot8, x21
     arm64.storeSlotReg slot7, x20
     arm64.storeSlotReg slot6, x19
-    arm64.movImm x0, 7
-    arm64.bl Leaf.create
-    arm64.movRegReg x19, x0
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
+    arm64.movImm x19, 7
+  __il_body#4:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeSlotReg slot0, x0
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+  __il_cont#3:
+    arm64.bl __mm_own
     arm64.leaRdata x1, __witness_Leaf.Sized
-    arm64.movRegReg x0, x19
     arm64.bl Box.create
     arm64.storeSlotReg slot1, x0
     arm64.leaRdata x1, __witness_Box_Leaf.Sized
@@ -180,14 +154,16 @@ func @main {
     arm64.leaRdata x0, __str_rec_2  ; ":"
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
-    arm64.movImm x0, 7
-    arm64.bl Twig.create
-    arm64.movRegReg x23, x0
-    arm64.storeSlotReg slot2, x23
-    arm64.movRegReg x0, x23
-    arm64.bl __mm_incref
+    arm64.movImm x23, 7
+  __il_body#5:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeSlotReg slot2, x0
+    arm64.storeBaseDispReg.word64 [x0 + 0], x23
+  __il_cont#2:
+    arm64.bl __mm_own
     arm64.leaRdata x1, __witness_Twig.Sized
-    arm64.movRegReg x0, x23
     arm64.bl Box.create
     arm64.storeSlotReg slot3, x0
     arm64.leaRdata x1, __witness_Box_Twig.Sized
@@ -244,8 +220,10 @@ func @main {
     arm64.bl __mm_decref
     arm64.movRegReg x0, x24
     arm64.bl __mm_decref
+  __il_body#6:
     arm64.movRegReg x0, x27
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont#1:
     arm64.movRegReg x0, x27
     arm64.bl __str_decref
     arm64.loadRegSlot x0, slot3

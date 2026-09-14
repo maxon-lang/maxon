@@ -30,35 +30,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @stripTrailingCR#struct {
-  entry:
-    arm64.prologue 16
-    arm64.bl __mm_retain
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @byteCount {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.bl stripTrailingCR#struct
-    arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
-    arm64.bl __managed_decref
-    arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @stripTrailingCR#String {
-  entry:
-    arm64.prologue 16
-    arm64.bl __str_retain
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 80
@@ -82,9 +53,13 @@ func @main {
     arm64.storeBaseDispReg.word64 [x19 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
+  __il_body#6:
     arm64.movRegReg x0, x19
-    arm64.bl byteCount
-    arm64.movRegReg x20, x0
+    arm64.bl __managed_retain
+  __il_cont#5:
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
+    arm64.bl __managed_decref
+  __il_cont#3:
     arm64.movImm x0, 21
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -127,8 +102,10 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.leaRdata x0, __str_rec_4  ; "xy"
-    arm64.bl stripTrailingCR#String
+  __il_body#2:
+    arm64.bl __str_retain
     arm64.movRegReg x19, x0
+  __il_cont#1:
     arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
     arm64.leaRdata x0, __str_rec_3  ; "\x0a"

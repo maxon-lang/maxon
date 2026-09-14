@@ -49,21 +49,21 @@ func @firstSpace {
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 rbx, 1000
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_21]  ; "panic at a-user-declared-string-error-shadows-the-library-one.test:11: Range check failed: value outside typealias 'Num'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.movRegImm32 r10, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r8
     x64.callDirect __mm_decref
     x64.movRegImm32 r10, 0
     x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_22]  ; "panic at a-user-declared-string-error-shadows-the-library-one.test:11: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
@@ -101,16 +101,16 @@ func @main {
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_22]  ; "panic at a-user-declared-string-error-shadows-the-library-one.test:17: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.jcc greater, __rc_panic
+  __rc_ok:
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_23]  ; "panic at a-user-declared-string-error-shadows-the-library-one.test:17: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp

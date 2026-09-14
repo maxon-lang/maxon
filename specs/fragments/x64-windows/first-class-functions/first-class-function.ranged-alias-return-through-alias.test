@@ -16,6 +16,12 @@ end 'main'
 ---
 ExitCode: 9
 ---
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+}
+
 func @nine {
   entry:
     x64.pushReg rbp
@@ -25,29 +31,16 @@ func @nine {
     x64.ret
 }
 
-func @callThunk {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.movRegReg rcx, rdx
-    x64.callReg rbx
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.leaRegFunc rcx, [rip + __fnref_nine]
-    x64.movRegImm32 rdx, 0
-    x64.callDirect callThunk
+    x64.leaRegFunc rax, [rip + __fnref_nine]
+    x64.movRegImm32 rcx, 0
+  __il_body:
+    x64.callReg rax
+  __il_cont:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

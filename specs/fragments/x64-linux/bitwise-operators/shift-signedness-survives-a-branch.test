@@ -1,5 +1,5 @@
 // Test: shift-signedness-survives-a-branch
-typealias Wide = int(0 to u64.max)
+typealias Wide = bits(64)
 typealias Num = int(i64.min to i64.max)
 
 function afterBranch(v Wide, flag bool) returns Wide
@@ -35,26 +35,17 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-  taken:
-    x64.movRegImm32 rax, 15
-  __il_cont#5:
-    x64.cmpRegImm32 rax, 15
-    x64.jcc equal, __il_body
-  branch:
-    x64.movRegImm32 r8, 1
-    x64.popReg rbp
-    x64.ret
   __il_body:
     x64.movRegImm32 rax, 0
     x64.movRegImm32 rcx, 0
-  whilehdr:
-    x64.cmpRegImm32 rcx, 3
-    x64.jcc greaterEqual, __il_cont#9
+    x64.jmp whilehdr
   each:
     x64.movRegImm32 rax, 15
     x64.leaRegRegImm32 rcx, rcx, 1
-    x64.jmp whilehdr
-  __il_cont#9:
+  whilehdr:
+    x64.cmpRegImm32 rcx, 3
+    x64.jcc less, each
+  __il_cont:
     x64.cmpRegImm32 rax, 15
     x64.jcc equal, ifcont
   loop:

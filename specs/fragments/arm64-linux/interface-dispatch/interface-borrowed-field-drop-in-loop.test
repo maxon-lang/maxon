@@ -75,20 +75,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @ConcreteQuery.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @ConcreteQuery.score {
   entry:
     arm64.prologue 16
@@ -99,24 +85,38 @@ func @ConcreteQuery.score {
     arm64.ret
 }
 
-func @Allocator.create {
+func @main {
   entry:
-    arm64.prologue 96
-    arm64.storeSlotReg slot8, x27
-    arm64.storeSlotReg slot7, x26
-    arm64.storeSlotReg slot6, x25
-    arm64.storeSlotReg slot5, x24
-    arm64.storeSlotReg slot4, x23
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
+    arm64.prologue 112
+    arm64.storeSlotReg slot11, x28
+    arm64.storeSlotReg slot10, x27
+    arm64.storeSlotReg slot9, x26
+    arm64.storeSlotReg slot8, x25
+    arm64.storeSlotReg slot7, x24
+    arm64.storeSlotReg slot6, x23
+    arm64.storeSlotReg slot5, x22
+    arm64.storeSlotReg slot4, x21
+    arm64.storeSlotReg slot3, x20
+    arm64.storeSlotReg slot2, x19
+    arm64.movImm x19, 7
+  __rc_ok#11:
     arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __str_decref
-    arm64.bl __managed_create
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+  __il_cont#9:
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.b whilehdr
+  loop:
+    arm64.leaRdata x19, __witness_ConcreteQuery.Query
+  __il_body#14:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __retain_existential
     arm64.movRegReg x21, x0
+  __il_body#17:
     arm64.movImm x0, 8
     arm64.leaFuncAddr x1, __str_decref
     arm64.bl __managed_create
@@ -137,138 +137,97 @@ func @Allocator.create {
     arm64.leaFuncAddr x1, __str_decref
     arm64.bl __managed_create
     arm64.movRegReg x26, x0
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __str_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x27, x0
     arm64.movImm x0, 64
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.movRegReg x27, x0
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x19
+    arm64.movRegReg x28, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
     arm64.bl __retain_existential
-    arm64.storeBaseDispReg.word64 [x27 + 0], x0
-    arm64.storeBaseDispReg.word64 [x27 + 8], x20
-    arm64.storeBaseDispReg.word64 [x27 + 16], x21
-    arm64.storeBaseDispReg.word64 [x27 + 24], x22
-    arm64.storeBaseDispReg.word64 [x27 + 32], x23
-    arm64.storeBaseDispReg.word64 [x27 + 40], x24
-    arm64.storeBaseDispReg.word64 [x27 + 48], x25
-    arm64.storeBaseDispReg.word64 [x27 + 56], x26
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x19
+    arm64.storeBaseDispReg.word64 [x28 + 0], x0
+    arm64.storeBaseDispReg.word64 [x28 + 8], x19
+    arm64.storeBaseDispReg.word64 [x28 + 16], x22
+    arm64.storeBaseDispReg.word64 [x28 + 24], x23
+    arm64.storeBaseDispReg.word64 [x28 + 32], x24
+    arm64.storeBaseDispReg.word64 [x28 + 40], x25
+    arm64.storeBaseDispReg.word64 [x28 + 48], x26
+    arm64.storeBaseDispReg.word64 [x28 + 56], x27
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
     arm64.bl __drop_existential
-    arm64.movRegReg x0, x27
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.loadRegSlot x25, slot6
-    arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot x27, slot8
-    arm64.epilogue 96
-    arm64.ret
-}
-
-func @Allocator.run {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
+  __il_body#18:
+    arm64.loadRegBaseDisp.word64 x0, [x28 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x28 + 8]
     arm64.loadRegBaseDisp.word64 x16, [x1 + 24]
     arm64.blr x16
-    arm64.movImm x1, 0
-    arm64.cbz x0, critsplit
+    arm64.movImm x19, 0
+    arm64.cbz x0, __il_cont#15
   andrhs:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.loadRegBaseDisp.word64 x0, [x28 + 16]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.b scmerge
-  critsplit:
-    arm64.movRegReg x0, x1
-  scmerge:
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @allocateFor {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x2, x0
-    arm64.movRegReg x19, x1
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x2
-    arm64.bl __retain_existential
-    arm64.movRegReg x1, x19
-    arm64.bl Allocator.create
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x19
-    arm64.bl Allocator.run
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x19
+    arm64.cset x19, eq
+  __il_cont#15:
+    arm64.movRegReg x0, x28
     arm64.bl __destruct_Allocator
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @main {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, 7
-    arm64.bl ConcreteQuery.create
-    arm64.movRegReg x19, x0
-    arm64.movImm x20, 0
-    arm64.movImm x21, 0
-  whilehdr:
-    arm64.cmp x21, 4
-    arm64.b.ge whileexit
-  loop:
-    arm64.leaRdata x1, __witness_ConcreteQuery.Query
-    arm64.movRegReg x0, x19
-    arm64.bl allocateFor
-    arm64.cbz x0, critsplit
+  __il_cont#13:
+    arm64.cbz x19, critsplit
   ok:
-    arm64.add x0, x20, 1
+    arm64.loadRegSlot x0, slot1
+    arm64.add x0, x0, 1
     arm64.b ifcont
   critsplit:
-    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x0, slot1
   ifcont:
-    arm64.add x21, x21, 1
-    arm64.movRegReg x20, x0
-    arm64.b whilehdr
+    arm64.loadRegSlot x1, slot0
+    arm64.add x1, x1, 1
+  whilehdr:
+    arm64.storeSlotReg slot1, x0
+    arm64.storeSlotReg slot0, x1
+    arm64.cmp x1, 4
+    arm64.b.lt loop
   whileexit:
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.bl __mm_decref
-    arm64.cmp x20, 0
+    arm64.loadRegSlot x0, slot1
+    arm64.cmp x0, 0
     arm64.b.lt __rc_panic
   __rc_chk:
-    arm64.cmp x20, 255
-    arm64.b.le __rc_ok
+    arm64.loadRegSlot x0, slot1
+    arm64.cmp x0, 255
+    arm64.b.gt __rc_panic
+  __rc_ok#6:
+    arm64.loadRegSlot x0, slot1
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at interface-borrowed-field-drop-in-loop.test:66: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_2  ; "panic at interface-borrowed-field-drop-in-loop.test:66: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
     arm64.ret
 }

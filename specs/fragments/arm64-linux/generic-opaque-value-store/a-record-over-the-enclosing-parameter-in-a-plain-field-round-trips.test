@@ -52,99 +52,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Box.value {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
-    arm64.bl __retain_type_param
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @Box.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-    arm64.movImm x0, 16
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.storeBaseDispReg.word64 [x0 + 8], x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @Bag.first {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.bl Box.value
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @Bag.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x3, x0
-    arm64.movRegReg x19, x1
-    arm64.movRegReg x0, x2
-    arm64.movRegReg x1, x3
-    arm64.bl __retain_type_param
-    arm64.movRegReg x1, x19
-    arm64.bl Box.create
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @fill {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.bl StringBuilder.create
-    arm64.movRegReg x19, x0
-    arm64.leaRdata x1, __str_rec_3  ; "hello "
-    arm64.movRegReg x0, x19
-    arm64.bl StringBuilder.append
-    arm64.leaRdata x1, __str_rec_4  ; "heap world"
-    arm64.movRegReg x0, x19
-    arm64.bl StringBuilder.append
-    arm64.movRegReg x0, x19
-    arm64.bl StringBuilder.build
-    arm64.movRegReg x20, x0
-    arm64.movImm x1, 7
-    arm64.leaRdata x2, __layout_Bag_String
-    arm64.movRegReg x0, x20
-    arm64.bl Bag.create
-    arm64.movRegReg x21, x0
-    arm64.movRegReg x0, x20
-    arm64.bl __str_decref
-    arm64.movRegReg x0, x19
-    arm64.bl __destruct_StringBuilder
-    arm64.movRegReg x0, x21
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 96
@@ -157,14 +64,83 @@ func @main {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.bl fill
+  __il_body#10:
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
     arm64.movRegReg x19, x0
-    arm64.leaRdata x1, __layout_Bag_String
-    arm64.movRegReg x0, x19
-    arm64.bl Bag.first
+    arm64.movImm x20, 1
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 0], x19
+    arm64.storeBaseDispReg.byte [x21 + 8], x20
+  __il_cont#9:
+    arm64.leaRdata x1, __str_rec_3  ; "hello "
+    arm64.movRegReg x0, x21
+    arm64.bl StringBuilder.append
+    arm64.leaRdata x1, __str_rec_4  ; "heap world"
+    arm64.movRegReg x0, x21
+    arm64.bl StringBuilder.append
+  __il_body#13:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.loadRegBaseDisp.byte x19, [x21 + 8]
+  __il_body#15:
+    arm64.bl __managed_retain
     arm64.movRegReg x20, x0
-    arm64.loadRegBaseDisp.word64 x21, [x20 + 0]
-    arm64.loadRegBaseDisp.word64 x22, [x20 + 8]
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl __str_of_buffer
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+  __il_cont#14:
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.bl __managed_decref
+    arm64.storeBaseDispReg.word64 [x21 + 0], x20
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.byte [x21 + 8], x0
+  __il_cont#12:
+    arm64.movImm x20, 7
+    arm64.leaRdata x0, __layout_Bag_String
+  __il_body#16:
+    arm64.movRegReg x1, x19
+    arm64.bl __retain_type_param
+    arm64.movRegReg x22, x0
+  __il_body#18:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.storeBaseDispReg.word64 [x23 + 0], x22
+    arm64.storeBaseDispReg.word64 [x23 + 8], x20
+  __il_cont#17:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x23
+  __il_cont#11:
+    arm64.movRegReg x0, x19
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_StringBuilder
+  __il_cont#7:
+    arm64.leaRdata x0, __layout_Bag_String
+  __il_body#4:
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
+  __il_body#6:
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.bl __retain_type_param
+    arm64.movRegReg x19, x0
+  __il_cont#3:
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x19 + 8]
     arm64.leaRdata x0, __str_rec_5  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
@@ -190,16 +166,18 @@ func @main {
     arm64.storeBaseDispReg.word64 [x26 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x26 + 24], x0
+  __il_body#2:
     arm64.movRegReg x0, x26
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont#1:
     arm64.movRegReg x0, x26
     arm64.bl __str_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __str_decref
-    arm64.movImm x20, 0
     arm64.movRegReg x0, x19
-    arm64.bl __destruct_Bag_String
+    arm64.bl __str_decref
+    arm64.movImm x19, 0
     arm64.movRegReg x0, x20
+    arm64.bl __destruct_Bag_String
+    arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

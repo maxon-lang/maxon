@@ -24,36 +24,61 @@ data {
   __mm_alloc_count@0 = i64 0
   __gt_run_queue_head@8 = i64 0
   __gt_run_queue_tail@16 = i64 0
-  __gt_init_done@24 = i64 0
-  __gt_timer_count@32 = i64 0
-  __gt_timer_heap_base@40 = i64 0
-  __gt_timer_capacity@48 = i64 0
-  __gt_timer_seq@56 = i64 0
+  __gt_timer_count@24 = i64 0
+  __gt_timer_heap_base@32 = i64 0
+  __gt_timer_capacity@40 = i64 0
+  __gt_timer_seq@48 = i64 0
+  __gt_timer_when@56 = i64 9223372036854775807
   __gt_trace_counter@64 = i64 0
-  __gt_proc_count@72 = i64 0
-  __gt_proc_handles_base@80 = i64 0
-  __gt_proc_gts_base@88 = i64 0
-  __gt_proc_wait_snapshot@96 = i64 0
-  __gt_proc_poller@104 = i64 0
-  __gt_live_count@112 = i64 0
-  __sched_progress@120 = i64 0
-  __sched_active_workers@128 = i64 1
-  __sched_max_active_workers@136 = i64 1
-  __sched_tls_index@144 = i64 0
-  __sched_tls_teb_offset@152 = i64 0
-  __sched_procs@160 = i64 0
-  __sched_allm@168 = i64 0
-  __sched_midle@176 = i64 0
-  __sched_pidle@184 = i64 0
-  __sched_num_procs@192 = i64 0
-  __sched_shutdown_flag@200 = i64 0
-  __sched_lock@208 = i64 0
-  __sched_nmspinning@216 = i64 0
-  __sched_parked_drivers@224 = i64 0
-  __sched_sysmon_started@232 = i64 0
-  __slab_arena_list@240 = i64 0
-  __slab_arena_map_l1@248 = i64 0
-  __slab_state@256 = i64 0
+  __gt_live_count@72 = i64 0
+  __gt_seed_bytes@80 = i64 2048
+  __gt_stack_bytes_sum@88 = i64 0
+  __gt_stack_bytes_count@96 = i64 0
+  __gt_seed_sum_seen@104 = i64 0
+  __gt_seed_count_seen@112 = i64 0
+  __sched_active_workers@120 = i64 1
+  __sched_max_active_workers@128 = i64 1
+  __sched_tls_index@136 = i64 0
+  __sched_tls_teb_offset@144 = i64 0
+  __sched_procs@152 = i64 0
+  __sched_allm@160 = i64 0
+  __sched_midle@168 = i64 0
+  __sched_pidle@176 = i64 0
+  __gt_gfree_head@184 = i64 0
+  __sched_arena_cursor@192 = i64 0
+  __sched_arena_limit@200 = i64 0
+  __gt_records_carved@208 = i64 0
+  __sched_npidle@216 = i64 0
+  __sched_runq_size@224 = i64 0
+  __sched_global_pushes@232 = i64 0
+  __sched_timer_scan_steps@240 = i64 0
+  __sched_mcount@248 = i64 0
+  __sched_nmidle@256 = i64 0
+  __sched_main_m@264 = i64 0
+  __sched_phase@272 = i64 0
+  __sched_lastpoll@280 = i64 0
+  __sched_poll_until@288 = i64 0
+  __sched_regain_head@296 = i64 0
+  __np_poller@304 = i64 0
+  __np_break@312 = i64 0
+  __np_wake_sig@320 = i64 0
+  __np_pd_table@328 = i64 0
+  __np_pd_cap@336 = i64 0
+  __np_waiters@344 = i64 0
+  __np_src_key_free@352 = i64 0
+  __np_src_key_high@360 = i64 0
+  __sched_num_procs@368 = i64 0
+  __sched_shutdown_flag@376 = i64 0
+  __sched_lock@384 = i64 0
+  __sched_lock_depth_sink@392 = i64 0
+  __sched_nmspinning@400 = i64 0
+  __sched_needspinning@408 = i64 0
+  __sched_sysmon_event@416 = i64 0
+  __sched_sysmon_wait@424 = i64 0
+  __sched_timer_starts@432 = i64 0
+  __slab_arena_list@440 = i64 0
+  __slab_arena_map_l1@448 = i64 0
+  __slab_state@456 = i64 0
 }
 
 func @value {
@@ -61,7 +86,9 @@ func @value {
     arm64.prologue 32
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.bl Runtime.yield
+  __il_body:
+    arm64.bl __gt_resched
+  __il_cont:
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
@@ -71,9 +98,9 @@ func @value {
 func @main {
   entry:
     arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
     arm64.movImm x0, 8
     arm64.leaFuncAddr x1, __gt_promise_drop
     arm64.bl __managed_create
@@ -100,38 +127,23 @@ func @main {
     arm64.bl __managed_push
     arm64.movRegReg x0, x19
     arm64.bl __gt_await_any
-    arm64.movRegReg x20, x0
-    arm64.cmp x20, 0
-    arm64.b.ge __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at await-any.the-losers-are-dropped-when-the-array-dies.test:16: Range check failed: value outside typealias 'ElementIndex'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
+    arm64.movRegReg x1, x0
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic
   __rc_ok:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x20, x0
+    arm64.cmp x1, x0
     arm64.b.hs __im_slow
   __im_load:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseIndexScale.word64 x21, [x0 + x20*8 + 0]
+    arm64.loadRegBaseIndexScale.word64 x20, [x0 + x1*8 + 0]
     arm64.movImm x0, 0
-    arm64.loadRegBaseDisp.word64 x1, [x19 + 40]
-    arm64.cmp x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
+    arm64.cmp x2, 0
     arm64.b.eq critsplit#9
   __im_empty:
-    arm64.cmp x21, 0
-    arm64.b.ne critsplit#10
-  __im_slow:
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
-    arm64.bl __managed_get
-    arm64.movRegReg x21, x0
-    arm64.b __im_cont
+    arm64.cmp x20, 0
+    arm64.b.eq __im_slow
   critsplit#10:
     arm64.movRegReg x9, x0
     arm64.b __im_cont
@@ -139,29 +151,44 @@ func @main {
     arm64.movRegReg x9, x0
   __im_cont:
     arm64.cmp x9, 0
-    arm64.b.eq tryok
-  tryerr:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at await-any.the-losers-are-dropped-when-the-array-dies.test:16: awaitAny named a slot that is in range\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
+    arm64.b.ne tryerr
   tryok:
     arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
     arm64.bl __managed_vacate
-    arm64.movRegReg x0, x21
+    arm64.movRegReg x0, x20
     arm64.bl __gt_await
     arm64.movImm x20, 0
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at await-any.the-losers-are-dropped-when-the-array-dies.test:16: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __im_slow:
+    arm64.storeSlotReg slot0, x1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.loadRegSlot x1, slot0
+    arm64.movRegReg x20, x0
+    arm64.b __im_cont
+  tryerr:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at await-any.the-losers-are-dropped-when-the-array-dies.test:16: awaitAny named a slot that is in range\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
     arm64.epilogue 48
     arm64.ret
 }

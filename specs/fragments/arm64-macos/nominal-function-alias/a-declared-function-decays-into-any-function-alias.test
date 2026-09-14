@@ -37,30 +37,6 @@ func @addOne {
     arm64.ret
 }
 
-func @runHandler {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 10
-    arm64.blr x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @runCallback {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 20
-    arm64.blr x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 96
@@ -73,10 +49,13 @@ func @main {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.leaFuncAddr x0, __fnref_addOne
+    arm64.leaFuncAddr x2, __fnref_addOne
     arm64.movImm x1, 0
-    arm64.bl runHandler
+  __il_body#4:
+    arm64.movImm x0, 10
+    arm64.blr x2
     arm64.movRegReg x19, x0
+  __il_cont#3:
     arm64.movImm x0, 21
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -88,10 +67,13 @@ func @main {
     arm64.leaRdata x0, __str_rec_1  ; " "
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
-    arm64.leaFuncAddr x0, __fnref_addOne
+    arm64.leaFuncAddr x2, __fnref_addOne
     arm64.movImm x1, 0
-    arm64.bl runCallback
+  __il_body#5:
+    arm64.movImm x0, 20
+    arm64.blr x2
     arm64.movRegReg x23, x0
+  __il_cont#2:
     arm64.movImm x0, 21
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -132,8 +114,10 @@ func @main {
     arm64.bl __mm_decref
     arm64.movRegReg x0, x24
     arm64.bl __mm_decref
+  __il_body#6:
     arm64.movRegReg x0, x26
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont#1:
     arm64.movRegReg x0, x26
     arm64.bl __str_decref
     arm64.movImm x0, 0

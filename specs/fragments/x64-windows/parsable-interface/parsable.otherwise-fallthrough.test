@@ -14,7 +14,7 @@ type Value implements Parsable
 		if input.startsWith("x") 'check'
 			throw ParseError.Invalid
 		end 'check'
-		return Value{n: input.byteLength()}
+		return Value{n: input.byteLength() as Integer}
 	end 'fromString'
 
 	static function create(n Integer) returns Self
@@ -47,6 +47,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @Value.fromString {
@@ -55,39 +58,119 @@ func @Value.fromString {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
     x64.movRegReg rbx, rcx
-    x64.leaRegRdata rdx, [rip + __str_rec_4]  ; "x"
+    x64.leaRegRdata r12, [rip + __str_rec_4]  ; "x"
+  __il_body#29:
+    x64.loadRegBaseDisp.word64 r13, [r12 + 8]
+  __il_body#30:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+  __il_cont#27:
+    x64.cmpRegReg r13, rax
+    x64.jcc belowEqual, __rc_ok#21
+  tooLong:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont#3
+  __rc_ok#21:
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic
+  __rc_ok#23:
+    x64.movRegImm32 r14, 0
+    x64.jmp forhdr
+  compare_loop:
     x64.movRegReg rcx, rbx
-    x64.callDirect String.startsWith
-    x64.cmpRegImm32 r8, 0
-    x64.jcc equal, __il_body
+    x64.movRegReg rdx, r14
+    x64.callDirect String.byteAt
+    x64.movRegReg r15, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#14
+  tryok#13:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.callDirect String.byteAt
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#16
+  tryok#15:
+    x64.cmpRegReg r15, r8
+    x64.jcc equal, forstep
+  byte_check:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont#3
+  forstep:
+    x64.leaRegRegImm32 r14, r14, 1
+  forhdr:
+    x64.cmpRegReg r14, r13
+    x64.jcc less, compare_loop
+  forexit:
+    x64.movRegImm32 rax, 1
+  __il_cont#3:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __il_body#26
   check:
     x64.movRegImm32 r10, 2
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __il_body:
-    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
-    x64.cmpRegImm32 r12, 0
-    x64.jcc greaterEqual, __rc_ok
-  __il_slow:
-    x64.movRegReg rcx, rbx
-    x64.callDirect String.byteLength
-    x64.movRegReg rbx, r8
-    x64.jmp __il_cont
-  __rc_ok:
-    x64.movRegReg rbx, r12
-  __il_cont:
+  __il_body#26:
+    x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
+  __il_cont#25:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.storeBaseDispReg.word64 [r8 + 0], rbx
     x64.movRegImm32 r10, 0
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_14]  ; "panic at String.maxon:1019: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#14:
+    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at String.maxon:1021: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees aOffset + len <= a.byteLength()\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#16:
+    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at String.maxon:1022: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees bOffset + len <= b.byteLength()\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -170,19 +253,19 @@ func @main {
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r12, rax
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at parsable.otherwise-fallthrough.test:40: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg r8, r12
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg r8, r12
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at parsable.otherwise-fallthrough.test:40: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12

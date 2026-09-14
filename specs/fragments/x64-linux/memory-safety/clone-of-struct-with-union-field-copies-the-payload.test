@@ -49,80 +49,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Item.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect __str_retain
-    x64.storeBaseDispReg.word64 [r12 + 0], r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect __str_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Decl.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_incref
-    x64.storeBaseDispReg.word64 [r12 + 0], rbx
-    x64.movRegReg rcx, rbx
-    x64.callDirect __destruct_Op
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @mutate {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.leaRegRdata rcx, [rip + __str_rec_4]  ; "MUTATED"
-    x64.loadRegBaseDisp.word64 r12, [rbx + 0]
-    x64.callDirect __str_retain
-    x64.movRegReg r13, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect __str_decref
-    x64.storeBaseDispReg.word64 [rbx + 0], r13
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -152,19 +78,36 @@ func @main {
     x64.storeBaseDispReg.word64 [r13 + 16], rax
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r13 + 24], rax
-    x64.movRegReg rcx, r13
-    x64.callDirect Item.create
+  __il_body#13:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
     x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [rbx + 0], r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+  __il_cont#12:
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
     x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.movRegReg rcx, r8
-    x64.callDirect Decl.create
+    x64.storeBaseDispReg.word64 [r12 + 0], rax
+    x64.storeBaseDispReg.word64 [r12 + 8], rbx
+  __il_body#14:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
     x64.movRegReg rbx, r8
     x64.storeSlotReg slot0, rbx
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [rbx + 0], r12
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Op
+  __il_cont#11:
     x64.movRegReg rcx, rbx
     x64.callDirect __clone_Decl
     x64.storeSlotReg slot1, r8
@@ -176,8 +119,15 @@ func @main {
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
     x64.movRegReg rcx, r12
     x64.callDirect __mm_incref
-    x64.movRegReg rcx, r12
-    x64.callDirect mutate
+  __il_body#16:
+    x64.leaRegRdata rcx, [rip + __str_rec_4]  ; "MUTATED"
+    x64.loadRegBaseDisp.word64 r13, [r12 + 0]
+    x64.callDirect __str_retain
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.storeBaseDispReg.word64 [r12 + 0], r14
+  __il_cont#15:
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_Item
   matchcont#5:
@@ -219,23 +169,25 @@ func @main {
     x64.movRegReg rax, r14
     x64.callDirect __str_copy
     x64.leaRegRegReg rbx, r12, r14
-    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rax, slot5
     x64.loadRegSlot rdx, slot6
-    x64.loadRegSlot r12, slot5
-    x64.movRegReg rax, r12
+    x64.movRegReg rcx, rbx
     x64.callDirect __str_copy
-    x64.leaRegRegReg rax, rbx, r12
-    x64.loadRegSlot rbx, slot4
-    x64.storeBaseDispReg.word64 [rbx + 0], r15
-    x64.loadRegSlot rax, slot3
-    x64.storeBaseDispReg.word64 [rbx + 8], rax
-    x64.movRegImm rax, 18446744073709551613
-    x64.storeBaseDispReg.word64 [rbx + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [rbx + 24], rax
-    x64.movRegReg rcx, rbx
-    x64.callDirect print
-    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rax, slot5
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rax, slot4
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot3
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+  __il_body#18:
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect __write_stdout
+  __il_cont#17:
+    x64.loadRegSlot rcx, slot4
     x64.callDirect __str_decref
     x64.loadRegSlot rcx, slot2
     x64.callDirect __destruct_Item

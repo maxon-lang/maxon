@@ -63,9 +63,9 @@ func @main {
     x64.callDirect Node.create
     x64.movRegReg r12, r8
     x64.movRegReg rcx, r12
-    x64.callDirect __mm_incref
+    x64.callDirect __mm_own
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
+    x64.movRegReg rdx, r8
     x64.callDirect __managed_push
     x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
@@ -83,12 +83,7 @@ func @main {
     x64.jcc equal, critsplit#13
   __im_empty:
     x64.cmpRegImm32 r12, 0
-    x64.jcc notEqual, critsplit#14
-  __im_slow:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
-    x64.movRegReg r12, r8
-    x64.jmp __im_cont
+    x64.jcc equal, __im_slow
   critsplit#14:
     x64.movRegReg r10, rax
     x64.jmp __im_cont
@@ -108,25 +103,30 @@ func @main {
     x64.movRegReg rcx, r12
   trycont:
     x64.loadRegBaseDisp.word64 r12, [rcx + 0]
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 r12, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at rc-container-push-incref.test:21: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg r8, r12
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.movRegReg r12, r8
+    x64.jmp __im_cont
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at rc-container-push-incref.test:21: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx

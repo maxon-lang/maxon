@@ -5,19 +5,19 @@ typealias PosDivisor = int(2 to 1000000)
 typealias NegDivisor = int(-1000000 to -2)
 
 function refDiv(n Word, d PosDivisor) returns Word
-	return n / d
+	return try (n / (d as Word)) otherwise panic("d is never zero")
 end 'refDiv'
 
 function refMod(n Word, d PosDivisor) returns Word
-	return n mod d
+	return try (n mod (d as Word)) otherwise panic("d is never zero")
 end 'refMod'
 
 function refDivNeg(n Word, d NegDivisor) returns Word
-	return n / d
+	return try (n / (d as Word)) otherwise panic("d is never zero")
 end 'refDivNeg'
 
 function refModNeg(n Word, d NegDivisor) returns Word
-	return n mod d
+	return try (n mod (d as Word)) otherwise panic("d is never zero")
 end 'refModNeg'
 
 function edgeDividends() returns WordArray
@@ -103,34 +103,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
-}
-
-func @refDiv {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegReg rsi, rdx
-    x64.cmpRegImm32 rsi, 2
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 rsi, 1000000
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-constant-divisor-gives-the-same-answer-as-a-runtime-one.test:7: Range check failed: value outside typealias 'PosDivisor'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegReg rax, rcx
-    x64.cqo
-    x64.idivReg rsi
-    x64.movRegReg r8, rax
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @refMod {
@@ -143,47 +118,23 @@ func @refMod {
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 rsi, 1000000
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-constant-divisor-gives-the-same-answer-as-a-runtime-one.test:11: Range check failed: value outside typealias 'PosDivisor'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
+    x64.jcc greater, __rc_panic
   __rc_ok:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.andRegReg rcx, rcx, rax
     x64.movRegReg rax, rcx
     x64.cqo
     x64.idivReg rsi
+  tryok:
     x64.movRegReg r8, rdx
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-}
-
-func @refDivNeg {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegReg rsi, rdx
-    x64.cmpRegImm32 rsi, -1000000
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 rsi, -2
-    x64.jcc lessEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-constant-divisor-gives-the-same-answer-as-a-runtime-one.test:15: Range check failed: value outside typealias 'NegDivisor'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at a-constant-divisor-gives-the-same-answer-as-a-runtime-one.test:11: Range check failed: value outside typealias 'PosDivisor'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegReg rax, rcx
-    x64.cqo
-    x64.idivReg rsi
-    x64.movRegReg r8, rax
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -199,30 +150,38 @@ func @refModNeg {
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 rsi, -2
-    x64.jcc lessEqual, __rc_ok
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.andRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.cqo
+    x64.idivReg rsi
+  tryok:
+    x64.movRegReg r8, rdx
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-constant-divisor-gives-the-same-answer-as-a-runtime-one.test:19: Range check failed: value outside typealias 'NegDivisor'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at a-constant-divisor-gives-the-same-answer-as-a-runtime-one.test:19: Range check failed: value outside typealias 'NegDivisor'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg rax, rcx
-    x64.cqo
-    x64.idivReg rsi
-    x64.movRegReg r8, rdx
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
-func @edgeDividends {
+func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 40
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+  __il_body:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
@@ -263,29 +222,9 @@ func @edgeDividends {
     x64.movRegImm rdx, 18446744072709551609
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
-    x64.movRegReg r8, rbx
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @main {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 32
-    x64.callDirect edgeDividends
-    x64.movRegReg rbx, r8
+  __il_cont#40:
     x64.movRegImm32 r12, 0
-  forhdr:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegReg r12, rax
-    x64.jcc greaterEqual, forexit
+    x64.jmp forhdr
   each:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseIndexScale.word64 r13, [rax + r12*8 + 0]
@@ -293,12 +232,10 @@ func @main {
     x64.movRegReg rax, r13
     x64.sarRegImm8 rax, r13, 63
     x64.shrRegImm8 rax, rax, 63
-    x64.leaRegRegReg r14, r13, rax
-    x64.sarRegImm8 r14, r14, 1
-    x64.movRegImm32 rdx, 2
-    x64.movRegReg rcx, r13
-    x64.callDirect refDiv
-    x64.cmpRegReg r14, r8
+    x64.leaRegRegReg rax, r13, rax
+    x64.sarRegImm8 rax, rax, 1
+  __il_cont#105:
+    x64.cmpRegReg rax, rax
     x64.jcc equal, ifcont#6
   divTwo:
     x64.movRegImm32 r12, 1
@@ -313,11 +250,6 @@ func @main {
     x64.popReg rbp
     x64.ret
   ifcont#6:
-    x64.movRegReg rax, r13
-    x64.sarRegImm8 rax, r13, 63
-    x64.shrRegImm8 rax, rax, 63
-    x64.leaRegRegReg rax, r13, rax
-    x64.sarRegImm8 rax, rax, 1
     x64.imulRegRegImm32 rax, rax, 2
     x64.movRegReg r14, r13
     x64.subRegReg r14, r13, rax
@@ -342,12 +274,10 @@ func @main {
     x64.movRegReg rax, r13
     x64.sarRegImm8 rax, r13, 63
     x64.shrRegImm8 rax, rax, 61
-    x64.leaRegRegReg r14, r13, rax
-    x64.sarRegImm8 r14, r14, 3
-    x64.movRegImm32 rdx, 8
-    x64.movRegReg rcx, r13
-    x64.callDirect refDiv
-    x64.cmpRegReg r14, r8
+    x64.leaRegRegReg rax, r13, rax
+    x64.sarRegImm8 rax, rax, 3
+  __il_cont#42:
+    x64.cmpRegReg rax, rax
     x64.jcc equal, ifcont#10
   divEight:
     x64.movRegImm32 r12, 3
@@ -362,11 +292,6 @@ func @main {
     x64.popReg rbp
     x64.ret
   ifcont#10:
-    x64.movRegReg rax, r13
-    x64.sarRegImm8 rax, r13, 63
-    x64.shrRegImm8 rax, rax, 61
-    x64.leaRegRegReg rax, r13, rax
-    x64.sarRegImm8 rax, rax, 3
     x64.imulRegRegImm32 rax, rax, 8
     x64.movRegReg r14, r13
     x64.subRegReg r14, r13, rax
@@ -393,11 +318,16 @@ func @main {
     x64.sarRegImm8 rdx, rdx, 2
     x64.movRegReg rax, rdx
     x64.shrRegImm8 rax, rdx, 63
-    x64.leaRegRegReg r14, rdx, rax
-    x64.movRegImm32 rdx, 10
-    x64.movRegReg rcx, r13
-    x64.callDirect refDiv
-    x64.cmpRegReg r14, r8
+    x64.leaRegRegReg rcx, rdx, rax
+  __rc_ok#53:
+    x64.movRegImm rax, 7378697629483820647
+    x64.imulHighReg r13
+    x64.sarRegImm8 rdx, rdx, 2
+    x64.movRegReg rax, rdx
+    x64.shrRegImm8 rax, rdx, 63
+    x64.leaRegRegReg rax, rdx, rax
+  __il_cont#49:
+    x64.cmpRegReg rcx, rax
     x64.jcc equal, ifcont#14
   divTen:
     x64.movRegImm32 r12, 5
@@ -444,11 +374,16 @@ func @main {
     x64.sarRegImm8 rdx, rdx, 1
     x64.movRegReg rax, rdx
     x64.shrRegImm8 rax, rdx, 63
-    x64.leaRegRegReg r14, rdx, rax
-    x64.movRegImm32 rdx, 7
-    x64.movRegReg rcx, r13
-    x64.callDirect refDiv
-    x64.cmpRegReg r14, r8
+    x64.leaRegRegReg rcx, rdx, rax
+  __rc_ok#60:
+    x64.movRegImm rax, 5270498306774157605
+    x64.imulHighReg r13
+    x64.sarRegImm8 rdx, rdx, 1
+    x64.movRegReg rax, rdx
+    x64.shrRegImm8 rax, rdx, 63
+    x64.leaRegRegReg rax, rdx, rax
+  __il_cont#56:
+    x64.cmpRegReg rcx, rax
     x64.jcc equal, ifcont#18
   divSeven:
     x64.movRegImm32 r12, 7
@@ -495,11 +430,16 @@ func @main {
     x64.sarRegImm8 rdx, rdx, 7
     x64.movRegReg rax, rdx
     x64.shrRegImm8 rax, rdx, 63
-    x64.leaRegRegReg r14, rdx, rax
-    x64.movRegImm32 rdx, 1000
-    x64.movRegReg rcx, r13
-    x64.callDirect refDiv
-    x64.cmpRegReg r14, r8
+    x64.leaRegRegReg rcx, rdx, rax
+  __rc_ok#67:
+    x64.movRegImm rax, 2361183241434822607
+    x64.imulHighReg r13
+    x64.sarRegImm8 rdx, rdx, 7
+    x64.movRegReg rax, rdx
+    x64.shrRegImm8 rax, rdx, 63
+    x64.leaRegRegReg rax, rdx, rax
+  __il_cont#63:
+    x64.cmpRegReg rcx, rax
     x64.jcc equal, ifcont#22
   divThousand:
     x64.movRegImm32 r12, 9
@@ -520,11 +460,17 @@ func @main {
     x64.sarRegImm8 rax, rax, 3
     x64.movRegReg rcx, rax
     x64.shrRegImm8 rcx, rax, 63
-    x64.leaRegRegReg r14, rax, rcx
-    x64.movRegImm32 rdx, 15
-    x64.movRegReg rcx, r13
-    x64.callDirect refDiv
-    x64.cmpRegReg r14, r8
+    x64.leaRegRegReg rcx, rax, rcx
+  __rc_ok#74:
+    x64.movRegImm rax, 9838263505978427529
+    x64.imulHighReg r13
+    x64.leaRegRegReg rax, rdx, r13
+    x64.sarRegImm8 rax, rax, 3
+    x64.movRegReg rdx, rax
+    x64.shrRegImm8 rdx, rax, 63
+    x64.leaRegRegReg rax, rax, rdx
+  __il_cont#70:
+    x64.cmpRegReg rcx, rax
     x64.jcc equal, ifcont#24
   divFifteen:
     x64.movRegImm32 r12, 10
@@ -573,11 +519,17 @@ func @main {
     x64.sarRegImm8 rax, rax, 6
     x64.movRegReg rcx, rax
     x64.shrRegImm8 rcx, rax, 63
-    x64.leaRegRegReg r14, rax, rcx
-    x64.movRegImm32 rdx, 100
-    x64.movRegReg rcx, r13
-    x64.callDirect refDiv
-    x64.cmpRegReg r14, r8
+    x64.leaRegRegReg rcx, rax, rcx
+  __rc_ok#81:
+    x64.movRegImm rax, 11805916207174113035
+    x64.imulHighReg r13
+    x64.leaRegRegReg rax, rdx, r13
+    x64.sarRegImm8 rax, rax, 6
+    x64.movRegReg rdx, rax
+    x64.shrRegImm8 rdx, rax, 63
+    x64.leaRegRegReg rax, rax, rdx
+  __il_cont#77:
+    x64.cmpRegReg rcx, rax
     x64.jcc equal, ifcont#28
   divHundred:
     x64.movRegImm32 r12, 12
@@ -596,12 +548,17 @@ func @main {
     x64.imulHighReg r13
     x64.movRegReg rax, rdx
     x64.shrRegImm8 rax, rdx, 63
-    x64.leaRegRegReg r14, rdx, rax
-    x64.negReg r14, r14
-    x64.movRegImm rdx, 18446744073709551613
-    x64.movRegReg rcx, r13
-    x64.callDirect refDivNeg
-    x64.cmpRegReg r14, r8
+    x64.leaRegRegReg rcx, rdx, rax
+    x64.negReg rcx, rcx
+  __rc_ok#88:
+    x64.movRegImm rax, 6148914691236517206
+    x64.imulHighReg r13
+    x64.movRegReg rax, rdx
+    x64.shrRegImm8 rax, rdx, 63
+    x64.leaRegRegReg rax, rdx, rax
+    x64.negReg rax, rax
+  __il_cont#84:
+    x64.cmpRegReg rcx, rax
     x64.jcc equal, ifcont#30
   divMinusThree:
     x64.movRegImm32 r12, 13
@@ -648,12 +605,19 @@ func @main {
     x64.sarRegImm8 rax, rax, 3
     x64.movRegReg rcx, rax
     x64.shrRegImm8 rcx, rax, 63
-    x64.leaRegRegReg r14, rax, rcx
-    x64.negReg r14, r14
-    x64.movRegImm rdx, 18446744073709551601
-    x64.movRegReg rcx, r13
-    x64.callDirect refDivNeg
-    x64.cmpRegReg r14, r8
+    x64.leaRegRegReg rcx, rax, rcx
+    x64.negReg rcx, rcx
+  __rc_ok#95:
+    x64.movRegImm rax, 9838263505978427529
+    x64.imulHighReg r13
+    x64.leaRegRegReg rax, rdx, r13
+    x64.sarRegImm8 rax, rax, 3
+    x64.movRegReg rdx, rax
+    x64.shrRegImm8 rdx, rax, 63
+    x64.leaRegRegReg rax, rax, rdx
+    x64.negReg rax, rax
+  __il_cont#91:
+    x64.cmpRegReg rcx, rax
     x64.jcc equal, ifcont#34
   divMinusFifteen:
     x64.movRegImm32 r12, 15
@@ -673,12 +637,10 @@ func @main {
     x64.shrRegImm8 rax, rax, 61
     x64.leaRegRegReg rax, r13, rax
     x64.sarRegImm8 rax, rax, 3
-    x64.movRegReg r14, rax
-    x64.negReg r14, rax
-    x64.movRegImm rdx, 18446744073709551608
-    x64.movRegReg rcx, r13
-    x64.callDirect refDivNeg
-    x64.cmpRegReg r14, r8
+    x64.movRegReg rcx, rax
+    x64.negReg rcx, rax
+  __il_cont#98:
+    x64.cmpRegReg rcx, rcx
     x64.jcc equal, ifcont#36
   divMinusEight:
     x64.movRegImm32 r12, 16
@@ -693,11 +655,6 @@ func @main {
     x64.popReg rbp
     x64.ret
   ifcont#36:
-    x64.movRegReg rax, r13
-    x64.sarRegImm8 rax, r13, 63
-    x64.shrRegImm8 rax, rax, 61
-    x64.leaRegRegReg rax, r13, rax
-    x64.sarRegImm8 rax, rax, 3
     x64.imulRegRegImm32 rax, rax, 8
     x64.movRegReg r14, r13
     x64.subRegReg r14, r13, rax
@@ -720,7 +677,10 @@ func @main {
     x64.ret
   forstep:
     x64.leaRegRegImm32 r12, r12, 1
-    x64.jmp forhdr
+  forhdr:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg r12, rax
+    x64.jcc less, each
   forexit:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref

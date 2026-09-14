@@ -66,11 +66,7 @@ func @main {
     arm64.storeSlotReg slot0, x19
     arm64.movImm x20, 0
     arm64.movImm x0, 0
-  forhdr#1:
-    arm64.storeSlotReg slot13, x0
-    arm64.storeSlotReg slot7, x20
-    arm64.cmp x0, 50
-    arm64.b.ge forexit#4
+    arm64.b forhdr#1
   headSpin:
     arm64.movRegReg x0, x19
     arm64.bl __list_head_checked
@@ -127,15 +123,15 @@ func @main {
     arm64.add x1, x1, 1
     arm64.movRegReg x20, x0
     arm64.movRegReg x0, x1
-    arm64.b forhdr#1
+  forhdr#1:
+    arm64.storeSlotReg slot13, x0
+    arm64.storeSlotReg slot7, x20
+    arm64.cmp x0, 50
+    arm64.b.lt headSpin
   forexit#4:
     arm64.movImm x0, 0
     arm64.loadRegSlot x20, slot7
-  forhdr#7:
-    arm64.storeSlotReg slot12, x0
-    arm64.storeSlotReg slot6, x20
-    arm64.cmp x0, 50
-    arm64.b.ge forexit#10
+    arm64.b forhdr#7
   tailSpin:
     arm64.movRegReg x0, x19
     arm64.bl __list_tail_checked
@@ -192,7 +188,11 @@ func @main {
     arm64.add x1, x1, 1
     arm64.movRegReg x20, x0
     arm64.movRegReg x0, x1
-    arm64.b forhdr#7
+  forhdr#7:
+    arm64.storeSlotReg slot12, x0
+    arm64.storeSlotReg slot6, x20
+    arm64.cmp x0, 50
+    arm64.b.lt tailSpin
   forexit#10:
     arm64.leaFuncAddr x0, __str_decref
     arm64.bl __list_create
@@ -209,11 +209,7 @@ func @main {
     arm64.bl __mm_incref
     arm64.movImm x0, 0
     arm64.loadRegSlot x20, slot6
-  forhdr#13:
-    arm64.storeSlotReg slot11, x0
-    arm64.storeSlotReg slot5, x20
-    arm64.cmp x0, 50
-    arm64.b.ge forexit#16
+    arm64.b forhdr#13
   nextSpin:
     arm64.movRegReg x0, x19
     arm64.bl __list_node_next_checked
@@ -270,15 +266,15 @@ func @main {
     arm64.add x1, x1, 1
     arm64.movRegReg x20, x0
     arm64.movRegReg x0, x1
-    arm64.b forhdr#13
+  forhdr#13:
+    arm64.storeSlotReg slot11, x0
+    arm64.storeSlotReg slot5, x20
+    arm64.cmp x0, 50
+    arm64.b.lt nextSpin
   forexit#16:
     arm64.movImm x0, 0
     arm64.loadRegSlot x20, slot5
-  forhdr#19:
-    arm64.storeSlotReg slot10, x0
-    arm64.storeSlotReg slot4, x20
-    arm64.cmp x0, 50
-    arm64.b.ge forexit#22
+    arm64.b forhdr#19
   prevSpin:
     arm64.movRegReg x0, x19
     arm64.bl __list_node_prev_checked
@@ -335,7 +331,11 @@ func @main {
     arm64.add x1, x1, 1
     arm64.movRegReg x20, x0
     arm64.movRegReg x0, x1
-    arm64.b forhdr#19
+  forhdr#19:
+    arm64.storeSlotReg slot10, x0
+    arm64.storeSlotReg slot4, x20
+    arm64.cmp x0, 50
+    arm64.b.lt prevSpin
   forexit#22:
     arm64.movImm x0, 21
     arm64.movImm x1, 0

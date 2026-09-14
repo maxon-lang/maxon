@@ -67,6 +67,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @Bag.create {
@@ -97,6 +100,7 @@ func @Bag.add {
     x64.prologue 32
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.callDirect __managed_push
+    x64.movRegReg rax, r8
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -108,13 +112,7 @@ func @Bag.put {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.cmpRegImm32 rdx, 0
-    x64.jcc greaterEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-shared-generic-body-keeps-the-runtime-fork.test:18: Range check failed: value outside typealias 'Idx'\x0a"
-    x64.callDirect mrt_panic
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
+    x64.jcc less, __rc_panic
   __rc_ok:
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.loadRegBaseDisp.word64 rsi, [rcx + 24]
@@ -175,14 +173,20 @@ func @Bag.put {
   __im_slow:
     x64.callDirect __managed_set
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-shared-generic-body-keeps-the-runtime-fork.test:19: Bag.put: index out of range\x0a"
+    x64.jcc notEqual, tryerr
+  tryok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-shared-generic-body-keeps-the-runtime-fork.test:18: Range check failed: value outside typealias 'Idx'\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-shared-generic-body-keeps-the-runtime-fork.test:19: Bag.put: index out of range\x0a"
+    x64.callDirect mrt_panic
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -196,16 +200,7 @@ func @Bag.at {
     x64.prologue 40
     x64.movRegReg rbx, rax
     x64.cmpRegImm32 rdx, 0
-    x64.jcc greaterEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-shared-generic-body-keeps-the-runtime-fork.test:22: Range check failed: value outside typealias 'Idx'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.movRegImm32 r10, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc less, __rc_panic
   __rc_ok:
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.loadRegBaseDisp.word64 rax, [rcx + 24]
@@ -259,6 +254,15 @@ func @Bag.at {
   tryok:
     x64.movRegReg rcx, rbx
     x64.callDirect __retain_type_param
+    x64.movRegImm32 r10, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-shared-generic-body-keeps-the-runtime-fork.test:22: Range check failed: value outside typealias 'Idx'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
     x64.epilogue 40
     x64.popReg rbx
@@ -461,12 +465,8 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rax, [r13 + 8]
     x64.cmpRegImm32 rax, 0
-    x64.jcc above, __im_load
-  __im_slow:
-    x64.movRegReg rcx, r13
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#17
+    x64.jcc belowEqual, __im_slow
+    x64.jmp __im_load
   tryerr#18:
     x64.movRegImm32 r14, 1
     x64.movRegReg rcx, r13
@@ -522,4 +522,10 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __im_slow:
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#18
+    x64.jmp tryok#17
 }

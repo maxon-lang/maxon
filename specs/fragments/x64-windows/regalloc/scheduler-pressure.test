@@ -40,7 +40,7 @@ end 'kernel'
 
 function main() returns ExitCode
 	let args = CommandLine.args()
-	let seed = try int.fromString(try args.get(1) otherwise "0") otherwise 0
+	let seed = (try int.fromString(try args.get(1) otherwise "0") otherwise 0) as Integer
 	let result = kernel(seed)
 	// Mask to 0..127 so the value fits both POSIX (0..255) and wasi
 	// (0..125 strict) exit-code ranges. The test gates on the
@@ -57,57 +57,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
-}
-
-func @kernel {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegReg rax, rcx
-    x64.xorRegImm32 rax, rcx, 305419896
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.movRegImm32 rdx, 2271560481
-    x64.movRegReg rsi, rcx
-    x64.xorRegReg rsi, rcx, rdx
-    x64.leaRegRegImm32 rdx, rsi, 2
-    x64.movRegImm32 rsi, 3735928559
-    x64.movRegReg rdi, rcx
-    x64.xorRegReg rdi, rcx, rsi
-    x64.leaRegRegImm32 rsi, rdi, 3
-    x64.movRegImm32 rdi, 4275878552
-    x64.movRegReg r8, rcx
-    x64.xorRegReg r8, rcx, rdi
-    x64.leaRegRegImm32 rdi, r8, 4
-    x64.leaRegRegImm32 rcx, rcx, 17
-    x64.xorRegImm32 rcx, rcx, 11
-    x64.imulRegRegImm32 rcx, rcx, 3
-    x64.leaRegRegImm32 rcx, rcx, 5
-    x64.xorRegImm32 rcx, rcx, 12345
-    x64.leaRegRegImm32 rcx, rcx, 7
-    x64.imulRegRegImm32 rcx, rcx, 5
-    x64.leaRegRegImm32 rcx, rcx, 9
-    x64.xorRegImm32 rcx, rcx, 54321
-    x64.leaRegRegImm32 rcx, rcx, 11
-    x64.imulRegRegImm32 rcx, rcx, 7
-    x64.leaRegRegImm32 rcx, rcx, 13
-    x64.xorRegImm32 rcx, rcx, 98765
-    x64.leaRegRegImm32 rcx, rcx, 15
-    x64.imulRegRegImm32 rcx, rcx, 11
-    x64.leaRegRegImm32 rcx, rcx, 17
-    x64.xorRegImm32 rcx, rcx, 13579
-    x64.leaRegRegImm32 rcx, rcx, 19
-    x64.imulRegRegImm32 rcx, rcx, 13
-    x64.leaRegRegImm32 rcx, rcx, 21
-    x64.xorRegImm32 rcx, rcx, 24680
-    x64.leaRegRegImm32 rcx, rcx, 23
-    x64.imulRegRegImm32 rcx, rcx, 17
-    x64.leaRegRegImm32 rcx, rcx, 25
-    x64.leaRegRegReg rax, rax, rdx
-    x64.leaRegRegReg rax, rax, rsi
-    x64.leaRegRegReg rax, rax, rdi
-    x64.leaRegRegReg r8, rax, rcx
-    x64.popReg rbp
-    x64.ret
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -116,33 +68,94 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
-    x64.callDirect CommandLine.args
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 56
+  __il_body#17:
+    x64.callDirect __cl_count
     x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __str_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rcx, 0
+    x64.jmp forhdr#18
+  loop:
+    x64.callDirect __cl_arg
+    x64.storeSlotReg slot1, r8
+    x64.movRegReg rcx, r8
+    x64.callDirect __managed_retain
+    x64.movRegReg r13, r8
+  __il_body#25:
+    x64.loadRegBaseDisp.word64 r14, [r13 + 8]
+    x64.movRegImm32 r15, 0
+    x64.jmp forhdr#26
+  scan:
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r15
+    x64.callDirect __managed_byte_at
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#31
+  tryok#30:
+    x64.cmpRegImm32 r8, 128
+    x64.movRegImm32 rax, 1
+    x64.jcc greaterEqual, scmerge
+  orrhs:
+    x64.cmpRegImm32 r8, 13
+    x64.setccReg equal, rax
+  scmerge:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, forstep#28
+  notSingleByte:
+    x64.movRegImm32 rdx, 0
+    x64.jmp __il_cont#24
+  forstep#28:
+    x64.leaRegRegImm32 r15, r15, 1
+  forhdr#26:
+    x64.cmpRegReg r15, r14
+    x64.jcc less, scan
+  forexit:
     x64.movRegImm32 rdx, 1
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+  __il_cont#24:
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_of_buffer
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+  __il_cont#22:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.callDirect __managed_push
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __managed_decref
+  forstep#20:
+    x64.loadRegSlot rax, slot0
+    x64.leaRegRegImm32 rcx, rax, 1
+  forhdr#18:
+    x64.storeSlotReg slot0, rcx
+    x64.cmpRegReg rcx, rbx
+    x64.jcc less, loop
+  __il_cont#16:
+    x64.movRegImm32 rdx, 1
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.cmpRegImm32 rax, 1
     x64.jcc belowEqual, __im_slow
   __im_load:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.leaRegRegImm32 rax, rax, 8
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
     x64.movRegImm32 rcx, 0
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
+    x64.loadRegBaseDisp.word64 rsi, [r12 + 40]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, critsplit#14
+    x64.jcc equal, critsplit#36
   __im_empty:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#15
-  __im_slow:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
-    x64.jmp __im_cont
-  critsplit#15:
+    x64.jcc equal, __im_slow
+  critsplit#37:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rcx
     x64.jmp __im_cont
-  critsplit#14:
+  critsplit#36:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rcx
   __im_cont:
@@ -150,44 +163,90 @@ func @main {
     x64.jcc equal, tryok#1
   tryerr#2:
     x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "0"
-    x64.jmp trycont#3
+    x64.jmp trycont
   tryok#1:
     x64.movRegReg rcx, r8
-  trycont#3:
+  trycont:
     x64.callDirect __int_fromString
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#4
   tryerr#5:
-    x64.movRegImm32 rcx, 0
-    x64.jmp trycont#6
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_body#15
   tryok#4:
-    x64.movRegReg rcx, r8
-  trycont#6:
-    x64.callDirect kernel
-    x64.movRegReg r12, r8
-    x64.andRegImm32 r12, r8, 127
-    x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r12, rax
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at scheduler-pressure.test:49: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.movRegReg rax, r8
+  __il_body#15:
+    x64.movRegReg rcx, rax
+    x64.xorRegImm32 rcx, rax, 305419896
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.movRegImm32 rdx, 2271560481
+    x64.movRegReg rsi, rax
+    x64.xorRegReg rsi, rax, rdx
+    x64.leaRegRegImm32 rdx, rsi, 2
+    x64.movRegImm32 rsi, 3735928559
+    x64.movRegReg rdi, rax
+    x64.xorRegReg rdi, rax, rsi
+    x64.leaRegRegImm32 rsi, rdi, 3
+    x64.movRegImm32 rdi, 4275878552
+    x64.movRegReg r8, rax
+    x64.xorRegReg r8, rax, rdi
+    x64.leaRegRegImm32 rdi, r8, 4
+    x64.leaRegRegImm32 rax, rax, 17
+    x64.xorRegImm32 rax, rax, 11
+    x64.imulRegRegImm32 rax, rax, 3
+    x64.leaRegRegImm32 rax, rax, 5
+    x64.xorRegImm32 rax, rax, 12345
+    x64.leaRegRegImm32 rax, rax, 7
+    x64.imulRegRegImm32 rax, rax, 5
+    x64.leaRegRegImm32 rax, rax, 9
+    x64.xorRegImm32 rax, rax, 54321
+    x64.leaRegRegImm32 rax, rax, 11
+    x64.imulRegRegImm32 rax, rax, 7
+    x64.leaRegRegImm32 rax, rax, 13
+    x64.xorRegImm32 rax, rax, 98765
+    x64.leaRegRegImm32 rax, rax, 15
+    x64.imulRegRegImm32 rax, rax, 11
+    x64.leaRegRegImm32 rax, rax, 17
+    x64.xorRegImm32 rax, rax, 13579
+    x64.leaRegRegImm32 rax, rax, 19
+    x64.imulRegRegImm32 rax, rax, 13
+    x64.leaRegRegImm32 rax, rax, 21
+    x64.xorRegImm32 rax, rax, 24680
+    x64.leaRegRegImm32 rax, rax, 23
+    x64.imulRegRegImm32 rax, rax, 17
+    x64.leaRegRegImm32 rax, rax, 25
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rcx, rcx, rsi
+    x64.leaRegRegReg rcx, rcx, rdi
+    x64.leaRegRegReg rbx, rcx, rax
+  __il_cont#14:
+    x64.andRegImm32 rbx, rbx, 127
+  __rc_ok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#31:
+    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at String.maxon:1136: scanSingleByteGraphemes: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+  __im_slow:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_get
+    x64.jmp __im_cont
 }

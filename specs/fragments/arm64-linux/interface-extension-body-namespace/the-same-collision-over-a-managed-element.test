@@ -55,31 +55,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @BagIter.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @BagIter.current {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
-    arm64.bl __retain_type_param
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @BagIter.advance {
   entry:
     arm64.prologue 16
@@ -89,34 +64,24 @@ func @BagIter.advance {
     arm64.ret
 }
 
-func @Bag.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x20, 0
-    arm64.movImm x0, 16
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.storeBaseDispReg.word64 [x0 + 8], x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @Bag.createIterator {
   entry:
-    arm64.prologue 16
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x2
     arm64.bl __retain_type_param
-    arm64.bl BagIter.create
+    arm64.movRegReg x19, x0
+  __il_body:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+  __il_cont:
     arm64.movImm x9, 0
-    arm64.epilogue 16
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
     arm64.ret
 }
 
@@ -124,24 +89,19 @@ func @isLong {
   entry:
     arm64.prologue 16
   __il_body:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.cmp x1, 0
-    arm64.b.ge __rc_ok
-  __il_slow:
-    arm64.bl String.byteLength
-    arm64.b __il_cont
-  __rc_ok:
-    arm64.movRegReg x0, x1
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
   __il_cont:
     arm64.cmp x0, 5
-    arm64.cset x0, gt
+    arm64.cset x0, hi
     arm64.epilogue 16
     arm64.ret
 }
 
 func @main {
   entry:
-    arm64.prologue 48
+    arm64.prologue 64
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
     arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
@@ -165,39 +125,94 @@ func @main {
     arm64.storeBaseDispReg.word64 [x21 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x21 + 24], x0
-    arm64.movRegReg x0, x21
-    arm64.bl Bag.create
-    arm64.movRegReg x19, x0
-    arm64.leaFuncAddr x1, __fnref_isLong
-    arm64.movImm x2, 0
-    arm64.leaRdata x3, __layout_Bag_String
+  __il_body#4:
+    arm64.movImm x19, 0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x21
+    arm64.storeBaseDispReg.word64 [x20 + 8], x19
+  __il_cont#3:
+    arm64.leaFuncAddr x19, __fnref_isLong
+    arm64.movImm x21, 0
+    arm64.leaRdata x22, __layout_Bag_String
+  __il_body#6:
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x22
+    arm64.bl Bag.createIterator
+    arm64.movRegReg x23, x0
+    arm64.movImm x0, 0
+    arm64.cmp x9, 0
+    arm64.b.eq forhdr
+    arm64.b forjoin
+  __il_body#16:
+    arm64.loadRegBaseDisp.word64 x1, [x23 + 0]
+    arm64.movRegReg x0, x22
+    arm64.bl __retain_type_param
+    arm64.movRegReg x24, x0
+  __il_cont#15:
+    arm64.movRegReg x0, x24
+    arm64.movRegReg x1, x21
+    arm64.blr x19
+    arm64.cbz x0, ifcont#13
+  match:
+    arm64.movImm x19, 1
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x24
+    arm64.bl __drop_type_param
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x23
+    arm64.bl __destruct_dict_BagIter_T779624e88745be2b
     arm64.movRegReg x0, x19
-    arm64.bl Bag.contains
-    arm64.cbz x0, ifcont
+    arm64.b __il_cont#5
+  ifcont#13:
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x24
+    arm64.bl __drop_type_param
+  forstep:
+    arm64.movRegReg x0, x23
+    arm64.bl BagIter.advance
+    arm64.movRegReg x0, x9
+  forhdr:
+    arm64.cmp x0, 0
+    arm64.b.eq __il_body#16
+  forexit:
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x23
+    arm64.bl __destruct_dict_BagIter_T779624e88745be2b
+  forjoin:
+    arm64.movImm x0, 0
+  __il_cont#5:
+    arm64.cbz x0, ifcont#2
   long:
     arm64.leaRdata x0, __str_rec_4  ; "long\x0a"
     arm64.bl print
-    arm64.movImm x20, 1
-    arm64.movRegReg x0, x19
-    arm64.bl __destruct_Bag_String
+    arm64.movImm x19, 1
     arm64.movRegReg x0, x20
+    arm64.bl __destruct_Bag_String
+    arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
     arm64.ret
-  ifcont:
+  ifcont#2:
     arm64.leaRdata x0, __str_rec_5  ; "short\x0a"
     arm64.bl print
-    arm64.movImm x20, 0
-    arm64.movRegReg x0, x19
-    arm64.bl __destruct_Bag_String
+    arm64.movImm x19, 0
     arm64.movRegReg x0, x20
+    arm64.bl __destruct_Bag_String
+    arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
     arm64.ret
 }

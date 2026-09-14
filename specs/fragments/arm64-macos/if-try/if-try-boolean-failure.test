@@ -48,22 +48,9 @@ func @main {
     arm64.b.ne ifelse
   check:
     arm64.movImm x0, 1
-    arm64.b ifcont
+    arm64.b __rc_ok
   ifelse:
     arm64.movRegReg x0, x19
-  ifcont:
-    arm64.cmp x0, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x0, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at if-try-boolean-failure.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
   __rc_ok:
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32

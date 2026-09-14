@@ -1,44 +1,32 @@
 // Test: error.member-call-on-an-unsubstituted-element-payload-is-diagnosed
 typealias Integer = int(i64.min to i64.max)
 
-type Box uses T
-	export var v as T
-	export var tag as Integer
-
-	export static function create(x T, tag Integer) returns Self
-		return Self{v: x, tag: tag}
-	end 'create'
-end 'Box'
-
 type Bag uses Element
-	typealias EBox = Box with Element
-	typealias EBoxArray = Array with EBox
+	typealias EArr = Array with Element
 
-	var items as EBoxArray
+	var items as EArr
 
 	export static function create() returns Self
-		return Self{items: EBoxArray.create()}
+		return Self{items: EArr.create()}
 	end 'create'
 
-	export function add(x Element, tag Integer)
-		self.items.push(EBox.create(x, tag: tag))
+	export function add(x Element)
+		self.items.push(x)
 	end 'add'
 
-	export function copy() returns EBoxArray
-		return self.items.clone()
-	end 'copy'
+	export function holdsNinetyOne() returns bool
+		let e = try self.items.get(0) otherwise return false
+		return e.equals(91)
+	end 'holdsNinetyOne'
 end 'Bag'
 
 typealias IntBag = Bag with Integer
 
 function main() returns ExitCode
 	var b = IntBag.create()
-	b.add(91, tag: 4)
-
-	let c = b.copy()
-	let e = try c.get(0) otherwise return 90
-	return 4 as ExitCode if e.v.equals(91) else 70 as ExitCode
+	b.add(91)
+	return 4 as ExitCode if b.holdsNinetyOne() else 70 as ExitCode
 end 'main'
 ---
 CompilerError:
-error E2015: <fragment>:40:30: Unsupported: no requirement named 'equals' is provided by the constraints on type parameter 'Element' — a method call on a value whose type is an interface, or on a constrained type parameter, dispatches through a witness table, so the method has to be one that interface declares
+error E2015: <fragment>:19:12: Unsupported: no requirement named 'equals' is provided by the constraints on type parameter 'Element' — a method call on a value whose type is an interface, or on a constrained type parameter, dispatches through a witness table, so the method has to be one that interface declares

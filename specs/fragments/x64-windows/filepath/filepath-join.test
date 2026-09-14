@@ -14,6 +14,9 @@ data {
   __slab_arena_list@16 = i64 0
   __slab_arena_map_l1@24 = i64 0
   __slab_state@32 = i64 0
+  __mrt_console_probe_stdin@40 = i8 0
+  __mrt_console_probe_stdout@41 = i8 0
+  __mrt_console_probe_stderr@42 = i8 0
 }
 
 func @main {
@@ -27,15 +30,21 @@ func @main {
     x64.pushReg r15
     x64.prologue 72
     x64.leaRegRdata rcx, [rip + __str_rec_18]  ; "C:\\Users"
-    x64.callDirect FilePath.init
+  __il_body#4:
+    x64.callDirect FilePath.create
     x64.storeSlotReg slot0, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+  __il_cont#3:
     x64.leaRegRdata rdx, [rip + __str_rec_19]  ; "test"
     x64.movRegReg rcx, r8
     x64.callDirect FilePath.join
     x64.storeSlotReg slot1, r8
-    x64.movRegReg rcx, r8
-    x64.callDirect FilePath.toString
+  __il_body#7:
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
+    x64.callDirect __str_retain
     x64.storeSlotReg slot2, r8
+  __il_cont#2:
     x64.loadRegBaseDisp.word64 rbx, [r8 + 0]
     x64.loadRegBaseDisp.word64 r12, [r8 + 8]
     x64.leaRegRdata rax, [rip + __str_rec_20]  ; "\x0a"
@@ -58,17 +67,19 @@ func @main {
     x64.movRegReg rax, r14
     x64.callDirect __str_copy
     x64.leaRegRegReg rax, rbx, r14
-    x64.loadRegSlot rbx, slot4
-    x64.storeBaseDispReg.word64 [rbx + 0], r15
-    x64.loadRegSlot rax, slot3
-    x64.storeBaseDispReg.word64 [rbx + 8], rax
-    x64.movRegImm rax, 18446744073709551613
-    x64.storeBaseDispReg.word64 [rbx + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [rbx + 24], rax
-    x64.movRegReg rcx, rbx
-    x64.callDirect print
-    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rax, slot4
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot3
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+  __il_body#8:
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect __write_stdout
+  __il_cont#1:
+    x64.loadRegSlot rcx, slot4
     x64.callDirect __str_decref
     x64.loadRegSlot rcx, slot2
     x64.callDirect __str_decref
@@ -78,6 +89,18 @@ func @main {
     x64.loadRegSlot rcx, slot0
     x64.callDirect __destruct_FilePath
     x64.movRegReg r8, rbx
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_32]  ; "panic at FilePath.maxon:31: FilePath: invalid path\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 72
     x64.popReg r15
     x64.popReg r14

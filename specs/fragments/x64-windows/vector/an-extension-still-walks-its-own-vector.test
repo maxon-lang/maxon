@@ -30,120 +30,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
-}
-
-func @Vector.walkedTwoWays {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.pushReg r15
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-    x64.movRegReg r13, rax
-    x64.movRegImm32 r14, 0
-    x64.movRegReg rcx, rbx
-    x64.callDirect Vector.createIterator
-    x64.movRegReg r15, r8
-    x64.movRegImm32 rax, 0
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, forjoin
-  forhdr#1:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, forexit#5
-  eachOwn:
-    x64.movRegReg rcx, r15
-    x64.movRegReg rdx, r12
-    x64.callDirect ArrayIterator.current
-    x64.movRegReg rax, r8
-    x64.subRegReg rax, r8, r8
-    x64.leaRegRegReg rax, r14, rax
-    x64.leaRegRegImm32 r14, rax, 1
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __drop_type_param
-  forstep#4:
-    x64.movRegReg rcx, r15
-    x64.callDirect ArrayIterator.advance
-    x64.movRegReg rax, r10
-    x64.jmp forhdr#1
-  forexit#5:
-    x64.movRegReg rcx, r15
-    x64.callDirect __destruct_ArrayIterator_T4b39db24a89d29c9
-  forjoin:
-    x64.movRegImm32 r15, 0
-    x64.movRegImm32 rdx, 0
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rax, r13
-    x64.movRegReg r9, r12
-    x64.callDirect __managed_slice_opaque
-    x64.movRegReg rbx, r8
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at an-extension-still-walks-its-own-vector.test:13: slice\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryok:
-    x64.movRegImm32 r12, 0
-  forhdr#9:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegReg r12, rax
-    x64.jcc greaterEqual, forexit#12
-  eachSliced:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
-    x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride
-  __im_word:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseIndexScale.word64 rax, [rax + r12*8 + 0]
-    x64.jmp __im_cont
-  __im_stride:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __im_slow
-  __im_byte:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.leaRegRegReg rax, rax, r12
-    x64.loadRegBaseDisp.byte rax, [rax + 0]
-    x64.jmp __im_cont
-  __im_slow:
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
-    x64.callDirect __managed_get_unchecked
-    x64.movRegReg rax, r8
-  __im_cont:
-    x64.subRegReg rax, rax, rax
-    x64.leaRegRegReg rax, r15, rax
-    x64.leaRegRegImm32 rax, rax, 1
-  forstep#11:
-    x64.leaRegRegImm32 r12, r12, 1
-    x64.movRegReg r15, rax
-    x64.jmp forhdr#9
-  forexit#12:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-    x64.imulRegRegImm32 rax, r14, 10
-    x64.leaRegRegReg r8, rax, r15
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -152,36 +41,153 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
-    x64.leaRegRdata rcx, [rip + __layout_Vector_N3_Int]
-    x64.movRegImm32 rdx, 3
-    x64.callDirect Vector.create
-    x64.movRegReg rbx, r8
-    x64.leaRegRdata rdx, [rip + __layout_Vector_N3_Int]
-    x64.movRegImm32 rax, 3
-    x64.movRegReg rcx, rbx
-    x64.callDirect Vector.walkedTwoWays
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 56
+    x64.leaRegRdata rax, [rip + __layout_Vector_N3_Int]
+    x64.movRegImm32 rbx, 3
+  __il_body#5:
+    x64.movRegImm32 rcx, 8
+    x64.loadRegBaseDisp.word64 rdx, [rax + 40]
+    x64.callDirect __managed_create
     x64.movRegReg r12, r8
-    x64.cmpRegImm32 r12, 0
+    x64.storeSlotReg slot0, r12
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect __managed_resize
+  __il_cont#4:
+    x64.leaRegRdata rbx, [rip + __layout_Vector_N3_Int]
+    x64.movRegImm32 r13, 3
+  __il_body#7:
+    x64.movRegImm32 r14, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect Vector.createIterator
+    x64.movRegReg r15, r8
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, forhdr#8
+    x64.jmp forempty
+  __il_body#26:
+    x64.loadRegBaseDisp.word64 rcx, [r15 + 0]
+    x64.callDirect __managed_cursor_current
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __retain_type_param
+  __il_cont#25:
+    x64.movRegReg rax, r8
+    x64.subRegReg rax, r8, r8
+    x64.leaRegRegReg rax, r14, rax
+    x64.leaRegRegImm32 r14, rax, 1
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __drop_type_param
+  forstep#11:
+    x64.movRegReg rcx, r15
+    x64.callDirect ArrayIterator.advance
+    x64.movRegReg rax, r10
+  forhdr#8:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __il_body#26
+  forexit#12:
+    x64.movRegReg rcx, r15
+    x64.callDirect __destruct_ArrayIterator_T4b39db24a89d29c9
+    x64.movRegReg rax, r14
+    x64.jmp forjoin
+  forempty:
+    x64.movRegReg rax, r14
+  forjoin:
+    x64.storeSlotReg slot1, rax
+    x64.movRegImm32 r14, 0
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, r12
+    x64.movRegReg rax, r13
+    x64.movRegReg r9, rbx
+    x64.callDirect __managed_slice_opaque
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+  tryok:
+    x64.movRegImm32 rdx, 0
+  __us_test:
+    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
+    x64.loadRegBaseDisp.word64 r13, [rbx + 24]
+    x64.loadRegBaseDisp.word64 r15, [rbx + 0]
+    x64.jmp forhdr#16
+  eachSliced:
+    x64.cmpRegImm32 r13, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
+    x64.loadRegBaseIndexScale.word64 rax, [r15 + rdx*8 + 0]
+    x64.jmp __im_cont
+  __im_stride:
+    x64.cmpRegImm32 r13, 1
+    x64.jcc notEqual, __im_slow
+  __im_byte:
+    x64.leaRegRegReg rax, r15, rdx
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.jmp __im_cont
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get_unchecked
+    x64.movRegReg rax, r8
+  __im_cont:
+    x64.subRegReg rax, rax, rax
+    x64.leaRegRegReg rax, r14, rax
+    x64.leaRegRegImm32 rax, rax, 1
+  forstep#18:
+    x64.loadRegSlot rcx, slot2
+    x64.leaRegRegImm32 rdx, rcx, 1
+    x64.movRegReg r14, rax
+  forhdr#16:
+    x64.storeSlotReg slot2, rdx
+    x64.cmpRegReg rdx, r12
+    x64.jcc less, eachSliced
+  forexit#19:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rax, slot1
+    x64.imulRegRegImm32 rax, rax, 10
+    x64.leaRegRegReg rbx, rax, r14
+  __il_cont#6:
+    x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r12, rax
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at an-extension-still-walks-its-own-vector.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.cmpRegReg rbx, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at an-extension-still-walks-its-own-vector.test:13: slice\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at an-extension-still-walks-its-own-vector.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

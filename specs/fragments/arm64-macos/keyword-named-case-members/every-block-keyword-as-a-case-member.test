@@ -62,7 +62,7 @@ func @main {
     arm64.movImm x1, 64
   __il_cont#6:
     arm64.cmp x1, 1
-    arm64.b.ne ifcont
+    arm64.b.ne __rc_chk
   guard:
     arm64.movImm x0, 0
   __il_body#24:
@@ -245,19 +245,16 @@ func @main {
     arm64.movImm x1, 64
   __il_cont#17:
     arm64.add x0, x0, x1
-  ifcont:
-    arm64.cmp x0, 0
-    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.b.le __rc_ok
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at every-block-keyword-as-a-case-member.test:29: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  __rc_ok:
     arm64.epilogue 16
     arm64.ret
 }

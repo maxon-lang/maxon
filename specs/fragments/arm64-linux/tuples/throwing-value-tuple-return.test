@@ -41,31 +41,13 @@ func @pairThrows {
     arm64.b.lt __rc_panic#4
   __rc_chk#5:
     arm64.cmp x0, 1000
-    arm64.b.le __rc_ok#3
-  __rc_panic#4:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at throwing-value-tuple-return.test:8: Range check failed: value outside typealias 'Num'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.movImm x9, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
+    arm64.b.gt __rc_panic#4
   __rc_ok#3:
     arm64.cmp x1, 0
     arm64.b.lt __rc_panic#7
   __rc_chk#8:
     arm64.cmp x1, 1000
-    arm64.b.le __rc_ok#6
-  __rc_panic#7:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at throwing-value-tuple-return.test:8: Range check failed: value outside typealias 'Num'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.movImm x9, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
+    arm64.b.gt __rc_panic#7
   __rc_ok#6:
     arm64.cmp x0, 900
     arm64.b.le ifcont
@@ -89,6 +71,24 @@ func @pairThrows {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
+  __rc_panic#4:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at throwing-value-tuple-return.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic#7:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at throwing-value-tuple-return.test:8: Range check failed: value outside typealias 'Num'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
 }
 
 func @run {
@@ -99,15 +99,7 @@ func @run {
     arm64.b.lt __rc_panic#4
   __rc_chk#5:
     arm64.cmp x0, 1000
-    arm64.b.le __rc_ok#3
-  __rc_panic#4:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at throwing-value-tuple-return.test:15: Range check failed: value outside typealias 'Num'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.movImm x9, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
+    arm64.b.gt __rc_panic#4
   __rc_ok#3:
     arm64.movImm x1, 20
     arm64.bl pairThrows
@@ -128,17 +120,25 @@ func @run {
     arm64.b.lt __rc_panic#7
   __rc_chk#8:
     arm64.cmp x19, 1000
-    arm64.b.le __rc_ok#6
-  __rc_panic#7:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at throwing-value-tuple-return.test:17: Range check failed: value outside typealias 'Num'\x0a"
+    arm64.b.gt __rc_panic#7
+  __rc_ok#6:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic#4:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at throwing-value-tuple-return.test:15: Range check failed: value outside typealias 'Num'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.movImm x9, 0
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
-  __rc_ok#6:
-    arm64.movRegReg x0, x19
+  __rc_panic#7:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at throwing-value-tuple-return.test:17: Range check failed: value outside typealias 'Num'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
@@ -170,15 +170,15 @@ func @main {
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_3  ; "panic at throwing-value-tuple-return.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
+    arm64.b.gt __rc_panic
+  __rc_ok:
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
-  __rc_ok:
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at throwing-value-tuple-return.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret

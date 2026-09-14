@@ -108,15 +108,7 @@ func @main {
     x64.jcc less, __rc_panic#6
   __rc_chk#7:
     x64.cmpRegImm32 rbx, 255
-    x64.jcc lessEqual, __rc_ok#5
-  __rc_panic#6:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at error.discard-managed-result.test:26: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc greater, __rc_panic#6
   __rc_ok#5:
     x64.movRegReg r8, rbx
     x64.epilogue 40
@@ -128,16 +120,24 @@ func @main {
     x64.jcc less, __rc_panic#9
   __rc_chk#10:
     x64.cmpRegImm32 r8, 255
-    x64.jcc lessEqual, __rc_ok#8
-  __rc_panic#9:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at error.discard-managed-result.test:27: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.jcc greater, __rc_panic#9
+  __rc_ok#8:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at error.discard-managed-result.test:26: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok#8:
+  __rc_panic#9:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at error.discard-managed-result.test:27: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp

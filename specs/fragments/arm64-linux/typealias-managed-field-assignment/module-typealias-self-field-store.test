@@ -55,37 +55,16 @@ func @Blk.create {
     arm64.ret
 }
 
-func @Blk.setArgs {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-    arm64.loadRegBaseDisp.word64 x21, [x19 + 0]
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_incref
-    arm64.movRegReg x0, x21
-    arm64.bl __managed_decref
-    arm64.storeBaseDispReg.word64 [x19 + 0], x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
-}
-
 func @main {
   entry:
-    arm64.prologue 48
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 0
-  whilehdr:
-    arm64.cmp x19, 3000
-    arm64.b.ge whileexit
+    arm64.b whilehdr
   l:
     arm64.bl Blk.create
     arm64.movRegReg x20, x0
@@ -94,22 +73,34 @@ func @main {
     arm64.bl __managed_push
     arm64.bl Blk.create
     arm64.movRegReg x21, x0
-    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
-    arm64.movRegReg x0, x21
-    arm64.bl Blk.setArgs
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+  __il_body#5:
+    arm64.loadRegBaseDisp.word64 x22, [x21 + 0]
+    arm64.bl __managed_retain
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_decref
+    arm64.storeBaseDispReg.word64 [x21 + 0], x23
+  __il_cont#4:
     arm64.add x19, x19, 1
     arm64.movRegReg x0, x21
     arm64.bl __destruct_Blk
     arm64.movRegReg x0, x20
     arm64.bl __destruct_Blk
-    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x19, 3000
+    arm64.b.lt l
   whileexit:
     arm64.leaRdata x0, __str_rec_1  ; "done"
-    arm64.bl print
+  __il_body#7:
+    arm64.bl __write_stdout
+  __il_cont#6:
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
     arm64.ret
 }

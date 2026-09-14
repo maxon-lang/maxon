@@ -24,18 +24,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @litOnly {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.leaRegRdata rcx, [rip + __str_rec_2]  ; "\xc3\xa9"
-    x64.callDirect __str_retain
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -48,12 +36,12 @@ func @main {
     x64.prologue 56
     x64.movRegImm32 rbx, 0
     x64.movRegImm32 r12, 0
-  whilehdr:
-    x64.cmpRegImm32 rbx, 50
-    x64.jcc greaterEqual, whileexit
-  rep:
-    x64.callDirect litOnly
+    x64.jmp whilehdr
+  __il_body#8:
+    x64.leaRegRdata rcx, [rip + __str_rec_2]  ; "\xc3\xa9"
+    x64.callDirect __str_retain
     x64.movRegReg r13, r8
+  __il_cont#7:
     x64.movRegReg rcx, r13
     x64.movRegReg rdx, r13
     x64.callDirect __str_eq
@@ -65,7 +53,9 @@ func @main {
     x64.leaRegRegImm32 rbx, rbx, 1
     x64.movRegReg rcx, r13
     x64.callDirect __str_decref
-    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 rbx, 50
+    x64.jcc less, __il_body#8
   whileexit:
     x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
@@ -96,19 +86,21 @@ func @main {
     x64.movRegReg rax, r14
     x64.callDirect __str_copy
     x64.leaRegRegReg rax, rbx, r14
-    x64.loadRegSlot rbx, slot2
-    x64.storeBaseDispReg.word64 [rbx + 0], r15
-    x64.loadRegSlot rax, slot1
-    x64.storeBaseDispReg.word64 [rbx + 8], rax
-    x64.movRegImm rax, 18446744073709551613
-    x64.storeBaseDispReg.word64 [rbx + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rax, slot2
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot1
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
     x64.loadRegSlot rcx, slot0
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, rbx
-    x64.callDirect print
-    x64.movRegReg rcx, rbx
+  __il_body#10:
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __write_stdout
+  __il_cont#9:
+    x64.loadRegSlot rcx, slot2
     x64.callDirect __str_decref
     x64.movRegImm32 r8, 0
     x64.epilogue 56

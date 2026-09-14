@@ -57,23 +57,14 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
     x64.leaRegRegReg rbx, rax, rcx
-    x64.movRegReg rcx, r8
-    x64.callDirect __mm_decref
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic#9
   __rc_chk#10:
     x64.cmpRegImm32 rbx, 255
-    x64.jcc lessEqual, __rc_ok#8
-  __rc_panic#9:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at union-backing-basic.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc greater, __rc_panic#9
   __rc_ok#8:
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 32
     x64.popReg r12
@@ -87,23 +78,14 @@ func @main {
     x64.loadRegBaseDisp.word64 rbx, [r8 + 8]
     x64.loadRegBaseDisp.word64 rax, [r8 + 16]
     x64.imulRegReg rbx, rbx, rax
-    x64.movRegReg rcx, r8
-    x64.callDirect __mm_decref
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic#12
   __rc_chk#13:
     x64.cmpRegImm32 rbx, 255
-    x64.jcc lessEqual, __rc_ok#11
-  __rc_panic#12:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at union-backing-basic.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc greater, __rc_panic#12
   __rc_ok#11:
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 32
     x64.popReg r12
@@ -125,4 +107,22 @@ func @main {
     x64.ret
   matchdead:
   matchcont:
+  __rc_panic#9:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at union-backing-basic.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#12:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at union-backing-basic.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
 }

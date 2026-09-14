@@ -27,49 +27,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Rec.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __str_retain
-    arm64.storeBaseDispReg.word64 [x20 + 0], x0
-    arm64.movRegReg x0, x19
-    arm64.bl __str_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @copyName {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
-    arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
-    arm64.bl __str_retain
-    arm64.movRegReg x21, x0
-    arm64.movRegReg x0, x20
-    arm64.bl __str_decref
-    arm64.storeBaseDispReg.word64 [x19 + 0], x21
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 80
@@ -100,12 +57,25 @@ func @main {
     arm64.storeBaseDispReg.word64 [x21 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x21 + 24], x0
-    arm64.movRegReg x0, x21
-    arm64.bl Rec.create
+  __il_body#4:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
     arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x19
-    arm64.bl copyName
+    arm64.movRegReg x0, x21
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+  __il_body#5:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
+    arm64.bl __str_retain
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __str_decref
+    arm64.storeBaseDispReg.word64 [x19 + 0], x21
+  __il_cont#2:
     arm64.leaRdata x0, __str_rec_3  ; "name="
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
@@ -134,8 +104,10 @@ func @main {
     arm64.storeBaseDispReg.word64 [x25 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x25 + 24], x0
+  __il_body#6:
     arm64.movRegReg x0, x25
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont#1:
     arm64.movRegReg x0, x25
     arm64.bl __str_decref
     arm64.movImm x20, 0

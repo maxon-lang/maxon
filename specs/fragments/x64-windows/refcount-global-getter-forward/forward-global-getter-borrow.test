@@ -87,6 +87,9 @@ data {
   __slab_state@40 = i64 0
   __data_baseLoaded@48 = i1 0
   __data_mergedDone@49 = i1 0
+  __mrt_console_probe_stdin@50 = i8 0
+  __mrt_console_probe_stdout@51 = i8 0
+  __mrt_console_probe_stderr@52 = i8 0
 }
 
 func @Item.create {
@@ -120,8 +123,13 @@ func @Box.create {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.prologue 40
-    x64.callDirect __fieldDefault#Box#items
+  __il_body:
+    x64.movRegImm32 rax, 8
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 40]
+    x64.movRegReg rcx, rax
+    x64.callDirect __managed_create
     x64.movRegReg rbx, r8
+  __il_cont:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -139,37 +147,13 @@ func @Box.add {
     x64.prologue 32
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.callDirect __managed_push
+    x64.movRegReg rax, r8
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }
 
-func @Box.size {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.loadRegBaseDisp.word64 r8, [rax + 8]
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 r8, 1000
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at forward-global-getter-borrow.test:26: Range check failed: value outside typealias 'Count'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @loadBase {
+func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
@@ -179,6 +163,7 @@ func @loadBase {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 40
+  __il_body#15:
     x64.leaRegGlobal rax, __data_baseLoaded
     x64.loadRegBaseDisp.byte rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
@@ -186,15 +171,10 @@ func @loadBase {
   hit:
     x64.leaRegGlobal rax, __data_cachedBase
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.callDirect __mm_retain
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.leaRegFunc rdx, [rip + __clone_Box_Item]
+    x64.callDirect __mm_own_deep
+    x64.movRegReg rcx, r8
+    x64.jmp __il_body#4
   ifcont:
     x64.leaRegRdata rcx, [rip + __layout_Box_Item]
     x64.callDirect Box.create
@@ -274,72 +254,37 @@ func @loadBase {
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
     x64.callDirect Box.add
+    x64.leaRegFunc rdx, [rip + __clone_Box_Item]
     x64.movRegReg rcx, rbx
-    x64.callDirect __mm_incref
+    x64.callDirect __mm_own_deep
+    x64.movRegReg r12, r8
     x64.leaRegGlobal rax, __data_cachedBase
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.callDirect __destruct_Box_Item
     x64.leaRegGlobal rax, __data_cachedBase
-    x64.storeBaseDispReg.word64 [rax + 0], rbx
+    x64.storeBaseDispReg.word64 [rax + 0], r12
     x64.movRegImm32 rax, 1
     x64.leaRegGlobal rcx, __data_baseLoaded
     x64.storeBaseDispReg.byte [rcx + 0], rax
     x64.leaRegGlobal rax, __data_cachedBase
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.callDirect __mm_retain
+    x64.leaRegFunc rdx, [rip + __clone_Box_Item]
+    x64.callDirect __mm_own_deep
     x64.movRegReg r12, r8
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Box_Item
-    x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @buildFor {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.pushReg r15
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.callDirect loadBase
-    x64.movRegReg r12, r8
-    x64.storeSlotReg slot0, r12
-    x64.xorRegImm32 rbx, rbx, 1
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc equal, ifcont#2
-  native:
-    x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  ifcont#2:
-    x64.leaRegGlobal rax, __data_mergedDone
-    x64.loadRegBaseDisp.byte rax, [rax + 0]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#4
-  cached:
-    x64.leaRegGlobal rax, __data_cachedMerged
-    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.callDirect __mm_retain
-    x64.movRegReg rbx, r8
     x64.movRegReg rcx, r12
+  __il_body#4:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rbx, [rax + 8]
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 1000
+    x64.jcc greater, __rc_panic
+  __il_cont#3:
     x64.callDirect __destruct_Box_Item
+  __il_cont#1:
     x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg r15
@@ -349,118 +294,16 @@ func @buildFor {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont#4:
-    x64.leaRegRdata rcx, [rip + __layout_Box_Item]
-    x64.callDirect Box.create
-    x64.movRegReg rbx, r8
-    x64.leaRegRdata rax, [rip + __str_rec_7]  ; "merged item"
-    x64.loadRegBaseDisp.word64 r12, [rax + 0]
-    x64.loadRegBaseDisp.word64 r13, [rax + 8]
-    x64.leaRegRegImm32 rcx, r13, 57
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r14, r8
-    x64.leaRegRegImm32 r15, r14, 56
-    x64.movRegReg rcx, r15
-    x64.movRegReg rdx, r12
-    x64.movRegReg rax, r13
-    x64.callDirect __str_copy
-    x64.leaRegRegReg rax, r15, r13
-    x64.storeBaseDispReg.word64 [r14 + 0], r15
-    x64.storeBaseDispReg.word64 [r14 + 8], r13
-    x64.movRegImm rax, 18446744073709551613
-    x64.storeBaseDispReg.word64 [r14 + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r14 + 24], rax
-    x64.movRegReg rcx, r14
-    x64.callDirect Item.create
-    x64.leaRegRdata rax, [rip + __layout_Box_Item]
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r8
-    x64.callDirect Box.add
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_incref
-    x64.leaRegGlobal rax, __data_cachedMerged
-    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.callDirect __destruct_Box_Item
-    x64.leaRegGlobal rax, __data_cachedMerged
-    x64.storeBaseDispReg.word64 [rax + 0], rbx
-    x64.movRegImm32 rax, 1
-    x64.leaRegGlobal rcx, __data_mergedDone
-    x64.storeBaseDispReg.byte [rcx + 0], rax
-    x64.leaRegGlobal rax, __data_cachedMerged
-    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.callDirect __mm_retain
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect __destruct_Box_Item
-    x64.loadRegSlot rcx, slot0
-    x64.callDirect __destruct_Box_Item
-    x64.movRegReg r8, r12
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at forward-global-getter-borrow.test:26: Range check failed: value outside typealias 'Count'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @augment {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.callDirect buildFor
-    x64.movRegReg rbx, r8
-  __il_body:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseDisp.word64 r12, [rax + 8]
-    x64.cmpRegImm32 r12, 0
-    x64.jcc less, __il_slow
-  __rc_chk:
-    x64.cmpRegImm32 r12, 1000
-    x64.jcc lessEqual, __il_cont
-  __il_slow:
-    x64.movRegReg rcx, rbx
-    x64.callDirect Box.size
-    x64.movRegReg r12, r8
-  __il_cont:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __destruct_Box_Item
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @main {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm32 rcx, 0
-    x64.callDirect augment
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @__fieldDefault#Box#items {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm32 rax, 8
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 40]
-    x64.movRegReg rcx, rax
-    x64.callDirect __managed_create
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

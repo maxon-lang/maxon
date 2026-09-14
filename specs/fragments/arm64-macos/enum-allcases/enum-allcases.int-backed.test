@@ -48,11 +48,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
     arm64.movImm x1, 0
-  forhdr:
-    arm64.storeSlotReg slot0, x1
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x1, x0
-    arm64.b.ge forexit
+    arm64.b forhdr
   loop:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get_unchecked
@@ -116,24 +112,30 @@ func @main {
     arm64.movRegReg x2, x27
     arm64.bl __str_copy
     arm64.add x0, x20, x27
-    arm64.loadRegSlot x20, slot2
-    arm64.storeBaseDispReg.word64 [x20 + 0], x28
-    arm64.loadRegSlot x0, slot1
-    arm64.storeBaseDispReg.word64 [x20 + 8], x0
-    arm64.movImm x0, 18446744073709551613
-    arm64.storeBaseDispReg.word64 [x20 + 16], x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x20 + 24], x0
+    arm64.loadRegSlot x0, slot2
+    arm64.storeBaseDispReg.word64 [x0 + 0], x28
+    arm64.loadRegSlot x1, slot1
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.movImm x1, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x0 + 16], x1
+    arm64.movImm x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 24], x1
     arm64.movRegReg x0, x25
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl print
-    arm64.movRegReg x0, x20
+  __il_body:
+    arm64.loadRegSlot x0, slot2
+    arm64.bl __write_stdout
+  __il_cont:
+    arm64.loadRegSlot x0, slot2
     arm64.bl __str_decref
   forstep:
     arm64.loadRegSlot x0, slot0
     arm64.add x1, x0, 1
-    arm64.b forhdr
+  forhdr:
+    arm64.storeSlotReg slot0, x1
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x1, x0
+    arm64.b.lt loop
   forexit:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref

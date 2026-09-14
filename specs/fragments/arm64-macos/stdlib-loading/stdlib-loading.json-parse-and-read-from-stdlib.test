@@ -25,7 +25,7 @@ function main() returns ExitCode
 	print("{name} count={count} tags={n} second={second} ok={ok}\n")
 	let absent = try doc.getInt(doc.root, key: "missing") otherwise 'absent'
 		print("absent key refused\n")
-		return (count + n + second) as ExitCode
+		return (count + (n as JsonInt) + second) as ExitCode
 	end 'absent'
 	print("UNREACHED {absent}\n")
 	return 0
@@ -299,61 +299,58 @@ func @main {
     arm64.bl __mm_alloc
     arm64.storeSlotReg slot6, x0
     arm64.add x22, x0, 56
-    arm64.movRegReg x0, x22
     arm64.loadRegSlot x1, slot17
+    arm64.movRegReg x0, x22
     arm64.movRegReg x2, x21
     arm64.bl __str_copy
     arm64.add x21, x22, x21
-    arm64.movRegReg x0, x21
     arm64.loadRegSlot x1, slot16
+    arm64.movRegReg x0, x21
     arm64.movRegReg x2, x23
     arm64.bl __str_copy
     arm64.add x21, x21, x23
+    arm64.loadRegSlot x1, slot15
     arm64.movRegReg x0, x21
-    arm64.loadRegSlot x23, slot15
-    arm64.movRegReg x1, x23
     arm64.movRegReg x2, x20
     arm64.bl __str_copy
     arm64.add x20, x21, x20
-    arm64.movRegReg x0, x20
     arm64.loadRegSlot x1, slot14
+    arm64.movRegReg x0, x20
     arm64.movRegReg x2, x25
     arm64.bl __str_copy
     arm64.add x20, x20, x25
+    arm64.loadRegSlot x1, slot13
     arm64.movRegReg x0, x20
-    arm64.loadRegSlot x21, slot13
-    arm64.movRegReg x1, x21
     arm64.movRegReg x2, x24
     arm64.bl __str_copy
     arm64.add x20, x20, x24
-    arm64.movRegReg x0, x20
     arm64.loadRegSlot x1, slot12
+    arm64.movRegReg x0, x20
     arm64.movRegReg x2, x26
     arm64.bl __str_copy
     arm64.add x20, x20, x26
+    arm64.loadRegSlot x1, slot11
     arm64.movRegReg x0, x20
-    arm64.loadRegSlot x24, slot11
-    arm64.movRegReg x1, x24
     arm64.movRegReg x2, x19
     arm64.bl __str_copy
     arm64.add x19, x20, x19
-    arm64.movRegReg x0, x19
     arm64.loadRegSlot x1, slot10
+    arm64.movRegReg x0, x19
     arm64.movRegReg x2, x27
     arm64.bl __str_copy
     arm64.add x19, x19, x27
+    arm64.loadRegSlot x2, slot9
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x28
-    arm64.loadRegSlot x20, slot9
-    arm64.movRegReg x2, x20
     arm64.bl __str_copy
-    arm64.add x19, x19, x20
-    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x0, slot9
+    arm64.add x19, x19, x0
+    arm64.loadRegSlot x2, slot7
     arm64.loadRegSlot x1, slot8
-    arm64.loadRegSlot x20, slot7
-    arm64.movRegReg x2, x20
+    arm64.movRegReg x0, x19
     arm64.bl __str_copy
-    arm64.add x0, x19, x20
+    arm64.loadRegSlot x0, slot7
+    arm64.add x0, x19, x0
     arm64.loadRegSlot x19, slot6
     arm64.storeBaseDispReg.word64 [x19 + 0], x22
     arm64.loadRegSlot x0, slot5
@@ -362,11 +359,11 @@ func @main {
     arm64.storeBaseDispReg.word64 [x19 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
-    arm64.movRegReg x0, x23
+    arm64.loadRegSlot x0, slot15
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x0, slot13
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x24
+    arm64.loadRegSlot x0, slot11
     arm64.bl __mm_decref
     arm64.movRegReg x0, x28
     arm64.bl __mm_decref
@@ -393,23 +390,7 @@ func @main {
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_63  ; "panic at stdlib-loading.json-parse-and-read-from-stdlib.test:28: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot18
-    arm64.loadRegSlot x20, slot19
-    arm64.loadRegSlot x21, slot20
-    arm64.loadRegSlot x22, slot21
-    arm64.loadRegSlot x23, slot22
-    arm64.loadRegSlot x24, slot23
-    arm64.loadRegSlot x25, slot24
-    arm64.loadRegSlot x26, slot25
-    arm64.loadRegSlot x27, slot26
-    arm64.loadRegSlot x28, slot27
-    arm64.epilogue 240
-    arm64.ret
+    arm64.b.gt __rc_panic
   __rc_ok:
     arm64.loadRegSlot x0, slot0
     arm64.bl __str_decref
@@ -483,6 +464,22 @@ func @main {
     arm64.loadRegSlot x0, slot4
     arm64.bl __destruct_JsonDoc
     arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot18
+    arm64.loadRegSlot x20, slot19
+    arm64.loadRegSlot x21, slot20
+    arm64.loadRegSlot x22, slot21
+    arm64.loadRegSlot x23, slot22
+    arm64.loadRegSlot x24, slot23
+    arm64.loadRegSlot x25, slot24
+    arm64.loadRegSlot x26, slot25
+    arm64.loadRegSlot x27, slot26
+    arm64.loadRegSlot x28, slot27
+    arm64.epilogue 240
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_64  ; "panic at stdlib-loading.json-parse-and-read-from-stdlib.test:28: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot18
     arm64.loadRegSlot x20, slot19
     arm64.loadRegSlot x21, slot20

@@ -1,15 +1,20 @@
 // Test: a-borrowed-parameter-may-be-sent-as-a-fresh-interpolation
 type Store
 	var n as Integer
+	var last as String
 
 	static function create() returns Self
-		return Self{n: 0}
+		return Self{n: 0, last: ""}
 	end 'create'
 
 	export function keep(s String)
 		self.n = self.n + 1
-		print("kept {s} ({self.n})\n")
+		self.last = s
 	end 'keep'
+
+	export function report() returns String
+		return "kept {self.last} ({self.n})"
+	end 'report'
 end 'Store'
 
 function forward(h Store.handle, buf String)
@@ -20,7 +25,9 @@ function main() returns ExitCode
 	let h = spawn Store.create()
 	let s = "hello"
 	forward(h, buf: s)
+	let kept = try await h.report() otherwise panic("the service holds the value and must answer for it")
 	print("caller still has {s}\n")
+	print("{kept}\n")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -31,236 +38,158 @@ data {
   __mm_alloc_count@0 = i64 0
   __gt_run_queue_head@8 = i64 0
   __gt_run_queue_tail@16 = i64 0
-  __gt_init_done@24 = i64 0
-  __gt_timer_count@32 = i64 0
-  __gt_timer_heap_base@40 = i64 0
-  __gt_timer_capacity@48 = i64 0
-  __gt_timer_seq@56 = i64 0
+  __gt_timer_count@24 = i64 0
+  __gt_timer_heap_base@32 = i64 0
+  __gt_timer_capacity@40 = i64 0
+  __gt_timer_seq@48 = i64 0
+  __gt_timer_when@56 = i64 9223372036854775807
   __gt_trace_counter@64 = i64 0
-  __gt_proc_count@72 = i64 0
-  __gt_proc_handles_base@80 = i64 0
-  __gt_proc_gts_base@88 = i64 0
-  __gt_proc_wait_snapshot@96 = i64 0
-  __gt_proc_poller@104 = i64 0
-  __gt_live_count@112 = i64 0
-  __sched_progress@120 = i64 0
-  __sched_active_workers@128 = i64 1
-  __sched_max_active_workers@136 = i64 1
-  __sched_tls_index@144 = i64 0
-  __sched_tls_teb_offset@152 = i64 0
-  __sched_procs@160 = i64 0
-  __sched_allm@168 = i64 0
-  __sched_midle@176 = i64 0
-  __sched_pidle@184 = i64 0
-  __gt_gfree_head@192 = i64 0
-  __sched_num_procs@200 = i64 0
-  __sched_shutdown_flag@208 = i64 0
-  __sched_lock@216 = i64 0
-  __sched_nmspinning@224 = i64 0
-  __sched_parked_drivers@232 = i64 0
-  __sched_sysmon_started@240 = i64 0
-  __mrt_errno@248 = i64 0
-  __mrt_envp@256 = i64 0
-  __mrt_tls_next_key@264 = i64 0
-  __slab_arena_list@272 = i64 0
-  __slab_arena_map_l1@280 = i64 0
-  __slab_state@288 = i64 0
-}
-
-func @Store.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movImm x19, 0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @Store.keep {
-  entry:
-    arm64.prologue 128
-    arm64.storeSlotReg slot12, x28
-    arm64.storeSlotReg slot11, x27
-    arm64.storeSlotReg slot10, x26
-    arm64.storeSlotReg slot9, x25
-    arm64.storeSlotReg slot8, x24
-    arm64.storeSlotReg slot7, x23
-    arm64.storeSlotReg slot6, x22
-    arm64.storeSlotReg slot5, x21
-    arm64.storeSlotReg slot4, x20
-    arm64.storeSlotReg slot3, x19
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x0 + 0], x2
-    arm64.leaRdata x2, __str_rec_6  ; "kept "
-    arm64.loadRegBaseDisp.word64 x19, [x2 + 0]
-    arm64.loadRegBaseDisp.word64 x20, [x2 + 8]
-    arm64.loadRegBaseDisp.word64 x21, [x1 + 0]
-    arm64.loadRegBaseDisp.word64 x22, [x1 + 8]
-    arm64.leaRdata x1, __str_rec_7  ; " ("
-    arm64.loadRegBaseDisp.word64 x23, [x1 + 0]
-    arm64.loadRegBaseDisp.word64 x24, [x1 + 8]
-    arm64.loadRegBaseDisp.word64 x25, [x0 + 0]
-    arm64.movImm x0, 21
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x26, x0
-    arm64.movRegReg x0, x25
-    arm64.movRegReg x1, x26
-    arm64.bl __int_to_string
-    arm64.movRegReg x25, x0
-    arm64.leaRdata x0, __str_rec_8  ; ")\x0a"
-    arm64.loadRegBaseDisp.word64 x27, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeSlotReg slot2, x0
-    arm64.add x1, x20, x22
-    arm64.add x1, x1, x24
-    arm64.add x1, x1, x25
-    arm64.add x0, x1, x0
-    arm64.storeSlotReg slot0, x0
-    arm64.add x0, x0, 57
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeSlotReg slot1, x0
-    arm64.add x28, x0, 56
-    arm64.movRegReg x0, x28
-    arm64.movRegReg x1, x19
-    arm64.movRegReg x2, x20
-    arm64.bl __str_copy
-    arm64.add x19, x28, x20
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x21
-    arm64.movRegReg x2, x22
-    arm64.bl __str_copy
-    arm64.add x19, x19, x22
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x23
-    arm64.movRegReg x2, x24
-    arm64.bl __str_copy
-    arm64.add x19, x19, x24
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x26
-    arm64.movRegReg x2, x25
-    arm64.bl __str_copy
-    arm64.add x19, x19, x25
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x27
-    arm64.loadRegSlot x20, slot2
-    arm64.movRegReg x2, x20
-    arm64.bl __str_copy
-    arm64.add x0, x19, x20
-    arm64.loadRegSlot x19, slot1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x28
-    arm64.loadRegSlot x0, slot0
-    arm64.storeBaseDispReg.word64 [x19 + 8], x0
-    arm64.movImm x0, 18446744073709551613
-    arm64.storeBaseDispReg.word64 [x19 + 16], x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x19 + 24], x0
-    arm64.movRegReg x0, x26
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x19
-    arm64.bl print
-    arm64.movRegReg x0, x19
-    arm64.bl __str_decref
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.loadRegSlot x21, slot5
-    arm64.loadRegSlot x22, slot6
-    arm64.loadRegSlot x23, slot7
-    arm64.loadRegSlot x24, slot8
-    arm64.loadRegSlot x25, slot9
-    arm64.loadRegSlot x26, slot10
-    arm64.loadRegSlot x27, slot11
-    arm64.loadRegSlot x28, slot12
-    arm64.epilogue 128
-    arm64.ret
-}
-
-func @forward {
-  entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x23
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.loadRegBaseDisp.word64 x20, [x1 + 0]
-    arm64.loadRegBaseDisp.word64 x21, [x1 + 8]
-    arm64.add x0, x21, 57
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x22, x0
-    arm64.add x23, x22, 56
-    arm64.movRegReg x0, x23
-    arm64.movRegReg x1, x20
-    arm64.movRegReg x2, x21
-    arm64.bl __str_copy
-    arm64.add x0, x23, x21
-    arm64.storeBaseDispReg.word64 [x22 + 0], x23
-    arm64.storeBaseDispReg.word64 [x22 + 8], x21
-    arm64.movImm x0, 18446744073709551613
-    arm64.storeBaseDispReg.word64 [x22 + 16], x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x22 + 24], x0
-    arm64.movImm x0, 16
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x22
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.bl __mbox_send
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
-    arm64.ret
+  __gt_live_count@72 = i64 0
+  __gt_seed_bytes@80 = i64 2048
+  __gt_stack_bytes_sum@88 = i64 0
+  __gt_stack_bytes_count@96 = i64 0
+  __gt_seed_sum_seen@104 = i64 0
+  __gt_seed_count_seen@112 = i64 0
+  __sched_active_workers@120 = i64 1
+  __sched_max_active_workers@128 = i64 1
+  __sched_tls_index@136 = i64 0
+  __sched_tls_teb_offset@144 = i64 0
+  __sched_procs@152 = i64 0
+  __sched_allm@160 = i64 0
+  __sched_midle@168 = i64 0
+  __sched_pidle@176 = i64 0
+  __gt_gfree_head@184 = i64 0
+  __sched_arena_cursor@192 = i64 0
+  __sched_arena_limit@200 = i64 0
+  __gt_records_carved@208 = i64 0
+  __sched_npidle@216 = i64 0
+  __sched_runq_size@224 = i64 0
+  __sched_global_pushes@232 = i64 0
+  __sched_timer_scan_steps@240 = i64 0
+  __sched_mcount@248 = i64 0
+  __sched_nmidle@256 = i64 0
+  __sched_main_m@264 = i64 0
+  __sched_phase@272 = i64 0
+  __sched_lastpoll@280 = i64 0
+  __sched_poll_until@288 = i64 0
+  __sched_regain_head@296 = i64 0
+  __np_poller@304 = i64 0
+  __np_break@312 = i64 0
+  __np_wake_sig@320 = i64 0
+  __np_pd_table@328 = i64 0
+  __np_pd_cap@336 = i64 0
+  __np_waiters@344 = i64 0
+  __np_src_key_free@352 = i64 0
+  __np_src_key_high@360 = i64 0
+  __sched_num_procs@368 = i64 0
+  __sched_shutdown_flag@376 = i64 0
+  __sched_lock@384 = i64 0
+  __sched_lock_depth_sink@392 = i64 0
+  __sched_nmspinning@400 = i64 0
+  __sched_needspinning@408 = i64 0
+  __sched_sysmon_event@416 = i64 0
+  __sched_sysmon_wait@424 = i64 0
+  __sched_timer_starts@432 = i64 0
+  __mrt_errno@440 = i64 0
+  __mrt_envp@448 = i64 0
+  __mrt_tls_next_key@456 = i64 0
+  __slab_arena_list@464 = i64 0
+  __slab_arena_map_l1@472 = i64 0
+  __slab_state@480 = i64 0
 }
 
 func @main {
   entry:
-    arm64.prologue 96
-    arm64.storeSlotReg slot9, x28
-    arm64.storeSlotReg slot8, x27
-    arm64.storeSlotReg slot7, x26
-    arm64.storeSlotReg slot6, x25
-    arm64.storeSlotReg slot5, x24
-    arm64.storeSlotReg slot4, x23
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.bl Store.create
-    arm64.movRegReg x1, x0
+    arm64.prologue 112
+    arm64.storeSlotReg slot10, x28
+    arm64.storeSlotReg slot9, x27
+    arm64.storeSlotReg slot8, x26
+    arm64.storeSlotReg slot7, x25
+    arm64.storeSlotReg slot6, x24
+    arm64.storeSlotReg slot5, x23
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+  __il_body#5:
+    arm64.movImm x19, 0
+    arm64.leaRdata x20, __str_rec_7  ; ""
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 0], x19
+    arm64.movRegReg x0, x20
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x21 + 8], x0
+  __il_cont#4:
+    arm64.movRegReg x0, x21
+    arm64.bl __sole_Store
     arm64.leaFuncAddr x0, Store.__loop
     arm64.leaFuncAddr x2, Store.__abandon
+    arm64.movRegReg x1, x21
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
+    arm64.storeSlotReg slot0, x20
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
-    arm64.leaRdata x19, __str_rec_9  ; "hello"
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x19
-    arm64.bl forward
-    arm64.leaRdata x0, __str_rec_10  ; "caller still has "
+    arm64.leaRdata x19, __str_rec_11  ; "hello"
+  __il_body#6:
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x19 + 8]
+    arm64.add x0, x22, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.add x24, x23, 56
+    arm64.movRegReg x0, x24
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x0, x24, x22
+    arm64.storeBaseDispReg.word64 [x23 + 0], x24
+    arm64.storeBaseDispReg.word64 [x23 + 8], x22
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x23 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x23 + 24], x0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.storeBaseDispReg.word64 [x1 + 8], x23
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.bl __mbox_send
+  __il_cont#3:
+    arm64.leaFuncAddr x0, __gt_reply_release_Store.report
+    arm64.bl __gt_cell_alloc
+    arm64.movRegReg x21, x0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.movImm x0, 2
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.storeBaseDispReg.word64 [x1 + 8], x21
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.bl __mbox_send
+    arm64.movRegReg x0, x21
+    arm64.bl __gt_try_await
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr
+  tryok:
+    arm64.leaRdata x0, __str_rec_12  ; "caller still has "
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x23, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x19, [x19 + 8]
-    arm64.leaRdata x0, __str_rec_11  ; "\x0a"
+    arm64.leaRdata x0, __str_rec_13  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
     arm64.add x0, x22, x19
@@ -295,42 +224,98 @@ func @main {
     arm64.bl print
     arm64.movRegReg x0, x27
     arm64.bl __str_decref
+    arm64.loadRegBaseDisp.word64 x19, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x20 + 8]
+    arm64.leaRdata x0, __str_rec_13  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
+    arm64.add x24, x21, x23
+    arm64.add x0, x24, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x25, x0
+    arm64.add x26, x25, 56
+    arm64.movRegReg x0, x26
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x19, x26, x21
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x0, x19, x23
+    arm64.storeBaseDispReg.word64 [x25 + 0], x26
+    arm64.storeBaseDispReg.word64 [x25 + 8], x24
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x25 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x25 + 24], x0
+    arm64.movRegReg x0, x25
+    arm64.bl print
+    arm64.movRegReg x0, x25
+    arm64.bl __str_decref
     arm64.movImm x19, 0
     arm64.movRegReg x0, x20
+    arm64.bl __str_decref
+    arm64.loadRegSlot x0, slot0
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.loadRegSlot x25, slot6
-    arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot x27, slot8
-    arm64.loadRegSlot x28, slot9
-    arm64.epilogue 96
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.loadRegSlot x27, slot9
+    arm64.loadRegSlot x28, slot10
+    arm64.epilogue 112
+    arm64.ret
+  tryerr:
+    arm64.leaRdata x0, __str_blob_14  ; "panic at a-borrowed-parameter-may-be-sent-as-a-fresh-interpolation.test:28: the service holds the value and must answer for it\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.loadRegSlot x27, slot9
+    arm64.loadRegSlot x28, slot10
+    arm64.epilogue 112
     arm64.ret
 }
 
 func @Store.__loop {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 160
+    arm64.storeSlotReg slot16, x28
+    arm64.storeSlotReg slot15, x27
+    arm64.storeSlotReg slot14, x26
+    arm64.storeSlotReg slot13, x25
+    arm64.storeSlotReg slot12, x24
+    arm64.storeSlotReg slot11, x23
+    arm64.storeSlotReg slot10, x22
+    arm64.storeSlotReg slot9, x21
+    arm64.storeSlotReg slot8, x20
+    arm64.storeSlotReg slot7, x19
     arm64.movRegReg x19, x0
     arm64.movRegReg x20, x1
   serve:
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.movRegReg x21, x0
+    arm64.storeSlotReg slot1, x21
     arm64.cmp x21, 0
     arm64.b.eq stopping
   dispatch:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
-    arm64.jumpTable x0, default=stopping [[0]=__shutdown, [1]=keep] @__jumptable_12
+    arm64.jumpTable x0, default=stopping [[0]=__shutdown, [1]=keep, [2]=report] @__jumptable_21
   __shutdown:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.storeBaseDispReg.word64 [x20 + 56], x0
@@ -347,14 +332,21 @@ func @Store.__loop {
     arm64.b.ne abandon
   finished:
     arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
+    arm64.bl __destruct_Store
     arm64.movRegReg x0, x20
     arm64.bl __mbox_service_exit
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot7
+    arm64.loadRegSlot x20, slot8
+    arm64.loadRegSlot x21, slot9
+    arm64.loadRegSlot x22, slot10
+    arm64.loadRegSlot x23, slot11
+    arm64.loadRegSlot x24, slot12
+    arm64.loadRegSlot x25, slot13
+    arm64.loadRegSlot x26, slot14
+    arm64.loadRegSlot x27, slot15
+    arm64.loadRegSlot x28, slot16
+    arm64.epilogue 160
     arm64.ret
   abandon:
     arm64.movRegReg x0, x20
@@ -362,13 +354,104 @@ func @Store.__loop {
     arm64.b drain
   keep:
     arm64.loadRegBaseDisp.word64 x22, [x21 + 8]
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x22
-    arm64.bl Store.keep
+  __il_body#11:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.add x0, x0, 1
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.loadRegBaseDisp.word64 x23, [x19 + 8]
+    arm64.movRegReg x0, x22
+    arm64.bl __str_retain
+    arm64.movRegReg x24, x0
+    arm64.movRegReg x0, x23
+    arm64.bl __str_decref
+    arm64.storeBaseDispReg.word64 [x19 + 8], x24
+  __il_cont#10:
     arm64.movRegReg x0, x22
     arm64.bl __str_decref
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
+    arm64.b serve
+  report:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
+    arm64.storeSlotReg slot0, x0
+  __il_body#13:
+    arm64.leaRdata x0, __str_rec_8  ; "kept "
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
+    arm64.leaRdata x0, __str_rec_9  ; " ("
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x26, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x27, [x19 + 0]
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x28, x0
+    arm64.movRegReg x0, x27
+    arm64.movRegReg x1, x28
+    arm64.bl __int_to_string
+    arm64.storeSlotReg slot6, x0
+    arm64.leaRdata x1, __str_rec_10  ; ")"
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
+    arm64.storeSlotReg slot5, x2
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
+    arm64.storeSlotReg slot4, x1
+    arm64.add x2, x22, x24
+    arm64.add x2, x2, x26
+    arm64.add x0, x2, x0
+    arm64.add x0, x0, x1
+    arm64.storeSlotReg slot2, x0
+    arm64.add x0, x0, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeSlotReg slot3, x0
+    arm64.add x27, x0, 56
+    arm64.movRegReg x0, x27
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x21, x27, x22
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x24
+    arm64.bl __str_copy
+    arm64.add x21, x21, x24
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x25
+    arm64.movRegReg x2, x26
+    arm64.bl __str_copy
+    arm64.add x21, x21, x26
+    arm64.loadRegSlot x2, slot6
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x28
+    arm64.bl __str_copy
+    arm64.loadRegSlot x0, slot6
+    arm64.add x21, x21, x0
+    arm64.loadRegSlot x2, slot4
+    arm64.loadRegSlot x1, slot5
+    arm64.movRegReg x0, x21
+    arm64.bl __str_copy
+    arm64.loadRegSlot x0, slot4
+    arm64.add x0, x21, x0
+    arm64.loadRegSlot x0, slot3
+    arm64.storeBaseDispReg.word64 [x0 + 0], x27
+    arm64.loadRegSlot x1, slot2
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.movImm x1, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x0 + 16], x1
+    arm64.movImm x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 24], x1
+    arm64.movRegReg x0, x28
+    arm64.bl __mm_decref
+  __il_cont#12:
+    arm64.loadRegSlot x0, slot1
+    arm64.bl __mm_decref
+    arm64.movImm x2, 0
+    arm64.loadRegSlot x0, slot0
+    arm64.loadRegSlot x1, slot3
+    arm64.bl __gt_cell_complete
     arm64.b serve
 }
 
@@ -378,8 +461,14 @@ func @Store.__abandon {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=abandondrop] @__jumptable_13
+    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=abandondrop, [2]=report] @__jumptable_22
   __shutdown:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.movImm x1, 0
+    arm64.movImm x2, 1
+    arm64.bl __gt_cell_complete
+    arm64.b abandondrop
+  report:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.movImm x1, 0
     arm64.movImm x2, 1
@@ -387,6 +476,7 @@ func @Store.__abandon {
   abandondrop:
     arm64.movRegReg x0, x19
     arm64.bl __destruct_Store.request
+    arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret

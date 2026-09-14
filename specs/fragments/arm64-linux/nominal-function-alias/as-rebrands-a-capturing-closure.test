@@ -31,13 +31,11 @@ data {
 
 func @runCallback {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
+    arm64.prologue 16
+    arm64.movRegReg x2, x0
     arm64.movImm x0, 20
-    arm64.blr x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
+    arm64.blr x2
+    arm64.epilogue 16
     arm64.ret
 }
 
@@ -69,9 +67,9 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x21, x0
     arm64.storeBaseDispReg.word64 [x21 + 0], x19
-  __il_body:
+  __il_body#3:
     arm64.leaFuncAddr x19, pickHandler$closure_0
-  __il_cont:
+  __il_cont#2:
     arm64.movRegReg x0, x20
     arm64.movRegReg x1, x21
     arm64.bl runCallback
@@ -131,8 +129,10 @@ func @main {
     arm64.bl __mm_decref
     arm64.movRegReg x0, x25
     arm64.bl __mm_decref
+  __il_body#4:
     arm64.movRegReg x0, x27
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont#1:
     arm64.movRegReg x0, x27
     arm64.bl __str_decref
     arm64.movImm x19, 0

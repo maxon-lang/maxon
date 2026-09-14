@@ -33,15 +33,7 @@ func @getString {
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 rcx, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at try-otherwise-value-flow.nested-try-in-arg.test:6: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.movRegImm32 r10, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
+    x64.jcc greater, __rc_panic
   __rc_ok:
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, ifcont
@@ -57,6 +49,14 @@ func @getString {
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at try-otherwise-value-flow.nested-try-in-arg.test:6: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }
 
 func @consume {
@@ -68,15 +68,7 @@ func @consume {
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 rcx, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at try-otherwise-value-flow.nested-try-in-arg.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.movRegImm32 r10, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
+    x64.jcc greater, __rc_panic
   __rc_ok:
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, ifcont
@@ -89,6 +81,14 @@ func @consume {
   ifcont:
     x64.movRegImm32 r10, 0
     x64.movRegReg r8, rcx
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at try-otherwise-value-flow.nested-try-in-arg.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

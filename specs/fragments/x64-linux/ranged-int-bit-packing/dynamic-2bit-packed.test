@@ -75,22 +75,7 @@ func @main {
   ifcont:
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
-  whilehdr:
-    x64.cmpRegImm32 r13, 5
-    x64.jcc greaterEqual, whileexit
-  read:
-    x64.cmpRegImm32 r13, 0
-    x64.jcc greaterEqual, __rc_ok#9
-  __rc_panic#10:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at dynamic-2bit-packed.test:18: Range check failed: value outside typealias 'ElementIndex'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jmp whilehdr
   __rc_ok#9:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
@@ -105,27 +90,29 @@ func @main {
   trycont:
     x64.leaRegRegReg r12, r12, rax
     x64.leaRegRegImm32 r13, r13, 1
-    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 r13, 5
+    x64.jcc less, __rc_ok#9
   whileexit:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic#12
+    x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 r12, 255
-    x64.jcc lessEqual, __rc_ok#11
-  __rc_panic#12:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at dynamic-2bit-packed.test:21: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.jcc greater, __rc_panic
+  __rc_ok#11:
+    x64.movRegReg r8, r12
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok#11:
-    x64.movRegReg r8, r12
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at dynamic-2bit-packed.test:21: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12

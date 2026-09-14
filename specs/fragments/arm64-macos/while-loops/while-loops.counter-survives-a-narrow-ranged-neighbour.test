@@ -57,14 +57,20 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @liveCount {
+func @main {
   entry:
-    arm64.prologue 48
+    arm64.prologue 96
+    arm64.storeSlotReg slot8, x27
+    arm64.storeSlotReg slot7, x26
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
     arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
+    arm64.movImm x19, 0
+  __il_body:
     arm64.movImm x20, 0
     arm64.movImm x0, 1
     arm64.movImm x1, 0
@@ -77,95 +83,63 @@ func @liveCount {
     arm64.movRegReg x0, x21
     arm64.bl __managed_push
     arm64.movImm x22, 0
-  forhdr:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
-    arm64.cmp x22, x0
-    arm64.b.ge forexit
+  __us_test#41:
+    arm64.loadRegBaseDisp.word64 x23, [x21 + 8]
+    arm64.loadRegBaseDisp.word64 x24, [x21 + 24]
+    arm64.loadRegBaseDisp.word64 x25, [x21 + 0]
+    arm64.b forhdr#24
   walk:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 24]
-    arm64.cmp x0, 8
-    arm64.b.ne __im_stride
-  __im_word:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
-    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x22*8 + 0]
-    arm64.b __im_cont
-  __im_stride:
-    arm64.cmp x0, 1
-    arm64.b.ne __im_slow
-  __im_byte:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
-    arm64.add x0, x0, x22
+    arm64.cmp x24, 8
+    arm64.b.ne __im_stride#39
+  __im_word#37:
+    arm64.loadRegBaseIndexScale.word64 x0, [x25 + x22*8 + 0]
+    arm64.b __im_cont#35
+  __im_stride#39:
+    arm64.cmp x24, 1
+    arm64.b.ne __im_slow#36
+  __im_byte#38:
+    arm64.add x0, x25, x22
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b __im_cont
-  __im_slow:
+    arm64.b __im_cont#35
+  __im_slow#36:
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x22
     arm64.bl __managed_get_unchecked
-  __im_cont:
+  __im_cont#35:
     arm64.cmp x0, 0
     arm64.movImm x0, 1
     arm64.b.eq scmerge
   orrhs:
     arm64.movRegReg x0, x19
   scmerge:
-    arm64.cbz x0, critsplit
+    arm64.cbz x0, critsplit#43
   live:
     arm64.add x0, x20, 1
-    arm64.b forstep
-  critsplit:
+    arm64.b forstep#26
+  critsplit#43:
     arm64.movRegReg x0, x20
-  forstep:
+  forstep#26:
     arm64.add x22, x22, 1
     arm64.movRegReg x20, x0
-    arm64.b forhdr
-  forexit:
+  forhdr#24:
+    arm64.cmp x22, x23
+    arm64.b.lt walk
+  forexit#27:
     arm64.movRegReg x0, x21
     arm64.bl __managed_decref
     arm64.cmp x20, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
+    arm64.b.lt __rc_panic#33
+  __rc_chk#34:
     arm64.cmp x20, 16
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at while-loops.counter-survives-a-narrow-ranged-neighbour.test:16: Range check failed: value outside typealias 'SlotTally'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.ret
-}
-
-func @main {
-  entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot5, x24
-    arm64.storeSlotReg slot4, x23
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, 0
-    arm64.bl liveCount
-    arm64.add x0, x0, 1
+    arm64.b.gt __rc_panic#33
+  __il_cont:
+    arm64.add x0, x20, 1
     arm64.movImm x16, 20
     arm64.mul x0, x0, x16
     arm64.add x19, x0, 100
     arm64.movImm x20, 0
     arm64.movImm x21, 0
-  whilehdr:
-    arm64.cmp x21, 2
-    arm64.b.ge whileexit
+    arm64.b whilehdr
   passes:
     arm64.movImm x0, 1
     arm64.movImm x1, 0
@@ -178,47 +152,47 @@ func @main {
     arm64.movRegReg x0, x22
     arm64.bl __managed_push
     arm64.movImm x23, 0
-    arm64.movRegReg x24, x19
-  forhdr:
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-    arm64.cmp x23, x0
-    arm64.b.ge forexit
+  __us_test#40:
+    arm64.loadRegBaseDisp.word64 x24, [x22 + 8]
+    arm64.loadRegBaseDisp.word64 x25, [x22 + 24]
+    arm64.loadRegBaseDisp.word64 x26, [x22 + 0]
+    arm64.movRegReg x27, x19
+    arm64.b forhdr#4
   inner:
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 24]
-    arm64.cmp x0, 8
-    arm64.b.ne __im_stride
-  __im_word:
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
-    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x23*8 + 0]
-    arm64.b __im_cont
-  __im_stride:
-    arm64.cmp x0, 1
-    arm64.b.ne __im_slow
-  __im_byte:
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
-    arm64.add x0, x0, x23
+    arm64.cmp x25, 8
+    arm64.b.ne __im_stride#21
+  __im_word#19:
+    arm64.loadRegBaseIndexScale.word64 x0, [x26 + x23*8 + 0]
+    arm64.b __im_cont#17
+  __im_stride#21:
+    arm64.cmp x25, 1
+    arm64.b.ne __im_slow#18
+  __im_byte#20:
+    arm64.add x0, x26, x23
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b __im_cont
-  __im_slow:
+    arm64.b __im_cont#17
+  __im_slow#18:
     arm64.movRegReg x0, x22
     arm64.movRegReg x1, x23
     arm64.bl __managed_get_unchecked
-  __im_cont:
+  __im_cont#17:
     arm64.cmp x0, 0
-    arm64.b.ne critsplit
+    arm64.b.ne critsplit#42
   one:
-    arm64.add x0, x24, 1
-    arm64.b forstep
-  critsplit:
-    arm64.movRegReg x0, x24
-  forstep:
+    arm64.add x0, x27, 1
+    arm64.b forstep#6
+  critsplit#42:
+    arm64.movRegReg x0, x27
+  forstep#6:
     arm64.add x23, x23, 1
-    arm64.movRegReg x24, x0
-    arm64.b forhdr
-  forexit:
+    arm64.movRegReg x27, x0
+  forhdr#4:
+    arm64.cmp x23, x24
+    arm64.b.lt inner
+  forexit#7:
     arm64.movRegReg x0, x22
     arm64.bl __managed_decref
-    arm64.cmp x24, 141
+    arm64.cmp x27, 141
     arm64.b.eq ifcont
   paddingLeakedIn:
     arm64.movImm x0, 98
@@ -228,13 +202,20 @@ func @main {
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
     arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
     arm64.ret
   ifcont:
-    arm64.add x20, x20, x24
+    arm64.add x20, x20, x27
     arm64.add x21, x21, 1
     arm64.cmp x20, 2000
-    arm64.b.le whilehdr
+    arm64.b.gt runaway
+  whilehdr:
+    arm64.cmp x21, 2
+    arm64.b.lt passes
+    arm64.b __rc_chk#16
   runaway:
     arm64.movImm x0, 99
     arm64.loadRegSlot x19, slot0
@@ -243,26 +224,14 @@ func @main {
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
     arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
     arm64.ret
-  whileexit:
-    arm64.cmp x21, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
+  __rc_chk#16:
     arm64.cmp x21, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at while-loops.counter-survives-a-narrow-ranged-neighbour.test:48: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
-    arm64.ret
+    arm64.b.gt __rc_panic#15
   __rc_ok:
     arm64.movRegReg x0, x21
     arm64.loadRegSlot x19, slot0
@@ -271,6 +240,39 @@ func @main {
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
     arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+  __rc_panic#33:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at while-loops.counter-survives-a-narrow-ranged-neighbour.test:16: Range check failed: value outside typealias 'SlotTally'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+  __rc_panic#15:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at while-loops.counter-survives-a-narrow-ranged-neighbour.test:48: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
     arm64.ret
 }

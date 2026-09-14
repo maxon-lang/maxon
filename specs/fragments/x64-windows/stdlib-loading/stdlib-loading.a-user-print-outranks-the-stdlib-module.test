@@ -15,9 +15,12 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
-func @print {
+func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
@@ -27,11 +30,13 @@ func @print {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 56
-    x64.leaRegRdata rax, [rip + __str_rec_2]  ; "mine: "
-    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
-    x64.loadRegBaseDisp.word64 r12, [rax + 8]
-    x64.loadRegBaseDisp.word64 r13, [rcx + 0]
-    x64.loadRegBaseDisp.word64 r14, [rcx + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_3]  ; "x\x0a"
+  __il_body#2:
+    x64.leaRegRdata rcx, [rip + __str_rec_2]  ; "mine: "
+    x64.loadRegBaseDisp.word64 rbx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 r12, [rcx + 8]
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
     x64.leaRegRegReg rax, r12, r14
     x64.storeSlotReg slot0, rax
     x64.leaRegRegImm32 rcx, rax, 57
@@ -49,37 +54,28 @@ func @print {
     x64.movRegReg rax, r14
     x64.callDirect __str_copy
     x64.leaRegRegReg rax, rbx, r14
-    x64.loadRegSlot rbx, slot1
-    x64.storeBaseDispReg.word64 [rbx + 0], r15
-    x64.loadRegSlot rax, slot0
-    x64.storeBaseDispReg.word64 [rbx + 8], rax
-    x64.movRegImm rax, 18446744073709551613
-    x64.storeBaseDispReg.word64 [rbx + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [rbx + 24], rax
-    x64.movRegReg rcx, rbx
-    x64.callDirect printError
-    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rax, slot1
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot0
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+  __il_body#4:
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __write_stderr
+  __il_cont#3:
+    x64.loadRegSlot rcx, slot1
     x64.callDirect __str_decref
+  __il_cont#1:
+    x64.movRegImm32 r8, 0
     x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @main {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.leaRegRdata rcx, [rip + __str_rec_3]  ; "x\x0a"
-    x64.callDirect print
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

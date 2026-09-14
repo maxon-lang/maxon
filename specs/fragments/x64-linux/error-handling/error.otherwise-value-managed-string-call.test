@@ -64,18 +64,6 @@ func @tryIt {
     x64.ret
 }
 
-func @fallback {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.leaRegRdata rcx, [rip + __str_rec_3]  ; "fb"
-    x64.callDirect __str_retain
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
 func @pick {
   entry:
     x64.pushReg rbp
@@ -84,8 +72,9 @@ func @pick {
     x64.callDirect tryIt
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, trycont
-  tryerr:
-    x64.callDirect fallback
+  __il_body:
+    x64.leaRegRdata rcx, [rip + __str_rec_3]  ; "fb"
+    x64.callDirect __str_retain
   trycont:
     x64.epilogue 32
     x64.popReg rbp

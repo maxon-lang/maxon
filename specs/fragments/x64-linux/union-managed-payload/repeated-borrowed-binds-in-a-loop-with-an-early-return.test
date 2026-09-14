@@ -13,7 +13,7 @@ function scan(m M) returns Integer
 	while i < 5 'spin'
 		let n = match m 'k'
 			silent gives 0
-			text(s) gives 1
+			text(s) gives 1 if s.byteLength() > 0 else 0
 		end 'k'
 		if n == 0 'stop'
 			return 0
@@ -40,70 +40,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @scan {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.pushReg r15
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.movRegImm32 r12, 0
-    x64.movRegImm32 r13, 0
-  whilehdr:
-    x64.cmpRegImm32 r12, 5
-    x64.jcc greaterEqual, whileexit
-  spin:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, matchnext
-  matcharm#4:
-    x64.movRegImm32 rax, 0
-    x64.jmp matchcont
-  matchnext:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, matchdead
-  matcharm#5:
-    x64.loadRegBaseDisp.word64 r14, [rbx + 8]
-    x64.movRegReg rcx, r14
-    x64.callDirect __mm_incref
-    x64.movRegImm32 r15, 1
-    x64.movRegReg rcx, r14
-    x64.callDirect __str_decref
-    x64.movRegReg rax, r15
-  matchcont:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, ifcont
-  stop:
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.leaRegRegReg r13, r13, rax
-    x64.leaRegRegImm32 r12, r12, 1
-    x64.jmp whilehdr
-  matchdead:
-  whileexit:
-    x64.movRegReg r8, r13
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -125,9 +61,55 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __str_retain
     x64.storeBaseDispReg.word64 [r12 + 8], r8
-    x64.movRegReg rcx, r12
-    x64.callDirect scan
-    x64.movRegReg rbx, r8
+  __il_body#7:
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r13, 0
+    x64.jmp whilehdr
+  spin:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matchnext
+  matcharm#11:
+    x64.movRegImm32 rax, 0
+    x64.jmp matchcont#18
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, matchdead
+  matcharm#12:
+    x64.loadRegBaseDisp.word64 r14, [r12 + 8]
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_incref
+  __il_body#22:
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+  __il_cont#21:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 r15, 1
+    x64.jmp matchcont#15
+  ternaryfalse:
+    x64.movRegImm32 r15, 0
+  matchcont#15:
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_decref
+    x64.movRegReg rax, r15
+  matchcont#18:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, ifcont
+  stop:
+    x64.movRegImm32 rbx, 0
+    x64.jmp __il_cont#6
+  ifcont:
+    x64.leaRegRegReg r13, r13, rax
+    x64.leaRegRegImm32 rbx, rbx, 1
+  whilehdr:
+    x64.cmpRegImm32 rbx, 5
+    x64.jcc less, spin
+    x64.jmp whileexit
+  matchdead:
+  whileexit:
+    x64.movRegReg rbx, r13
+  __il_cont#6:
     x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -154,19 +136,21 @@ func @main {
     x64.storeBaseDispReg.word64 [r14 + 24], rax
     x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
+  __il_body#5:
     x64.movRegReg rcx, r14
-    x64.callDirect print
+    x64.callDirect __write_stdout
+  __il_cont#4:
     x64.movRegReg rcx, r14
     x64.callDirect __str_decref
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 rbx, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at repeated-borrowed-binds-in-a-loop-with-an-early-return.test:31: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_M
+    x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg r15
     x64.popReg r14
@@ -175,10 +159,10 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.loadRegSlot rcx, slot0
-    x64.callDirect __destruct_M
-    x64.movRegReg r8, rbx
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at repeated-borrowed-binds-in-a-loop-with-an-early-return.test:31: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg r15
     x64.popReg r14

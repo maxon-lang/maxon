@@ -12,11 +12,12 @@ union M
 end 'M'
 
 function show(m M) returns Integer throws Boom
+	var seen = 0 as Integer
 	match m 'k'
-		silent then return 0
-		text(s) then throw Boom.bad
+		text(s) then seen = s.byteLength() and fallthrough
+		silent then throw Boom.bad
 	end 'k'
-	return 3
+	return 3 if seen > 0 else 0
 end 'show'
 
 function main() returns ExitCode
@@ -42,35 +43,45 @@ data {
 func @show {
   entry:
     arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.cmp x1, 0
-    arm64.b.ne matchnext
-  matcharm#1:
-    arm64.movImm x0, 0
-    arm64.movImm x9, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.cmp x2, 0
+    arm64.b.eq matcharm#2
   matchnext:
-    arm64.cmp x1, 1
+    arm64.cmp x2, 1
     arm64.b.ne matchdead
-  matcharm#2:
+  matcharm#1:
     arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
     arm64.movRegReg x0, x19
     arm64.bl __mm_incref
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
+  __il_cont:
     arm64.movRegReg x0, x19
     arm64.bl __str_decref
+    arm64.movRegReg x1, x20
+  matcharm#2:
     arm64.movImm x9, 1
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
   matchdead:
-  matchcont:
+  matchcont#5:
+    arm64.cmp x1, 0
+    arm64.b.le ternaryfalse
+  ternarytrue:
     arm64.movImm x0, 3
+    arm64.b matchcont#8
+  ternaryfalse:
+    arm64.movImm x0, 0
+  matchcont#8:
     arm64.movImm x9, 0
     arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
 }
@@ -93,9 +104,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x20 + 8], x0
     arm64.movImm x19, 0
     arm64.movImm x21, 0
-  whilehdr:
-    arm64.cmp x19, 200
-    arm64.b.ge whileexit
+    arm64.b whilehdr
   spin:
     arm64.movRegReg x0, x20
     arm64.bl show
@@ -106,26 +115,28 @@ func @main {
   trycont:
     arm64.add x19, x19, 1
     arm64.movRegReg x21, x0
-    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x19, 200
+    arm64.b.lt spin
   whileexit:
     arm64.cmp x21, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x21, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at borrowed-bind-in-an-arm-that-throws.test:30: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_M
+    arm64.movRegReg x0, x21
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.epilogue 48
     arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x20
-    arm64.bl __destruct_M
-    arm64.movRegReg x0, x21
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at borrowed-bind-in-an-arm-that-throws.test:31: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

@@ -25,10 +25,18 @@ func @main {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.leaRdata x0, __layout_List_String
-    arm64.bl List.create
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
+    arm64.bl __list_create
     arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+  __il_cont:
     arm64.leaRdata x0, __str_rec_1  ; "hello"
-    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
     arm64.add x0, x21, 57
     arm64.movImm x1, 0
@@ -36,7 +44,7 @@ func @main {
     arm64.movRegReg x22, x0
     arm64.add x23, x22, 56
     arm64.movRegReg x0, x23
-    arm64.movRegReg x1, x20
+    arm64.movRegReg x1, x19
     arm64.movRegReg x2, x21
     arm64.bl __str_copy
     arm64.add x0, x23, x21
@@ -47,13 +55,13 @@ func @main {
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x22 + 24], x0
     arm64.leaRdata x2, __layout_List_String
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.movRegReg x1, x22
     arm64.bl List.append
-    arm64.movImm x20, 0
-    arm64.movRegReg x0, x19
-    arm64.bl __destruct_List_String
+    arm64.movImm x19, 0
     arm64.movRegReg x0, x20
+    arm64.bl __destruct_List_String
+    arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

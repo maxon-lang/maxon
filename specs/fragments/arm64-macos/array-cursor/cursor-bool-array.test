@@ -103,9 +103,14 @@ func @main {
     arm64.ret
   tryok:
     arm64.movImm x21, 0
-    arm64.leaRdata x1, __layout_ArrayIterator_bool
-    arm64.movRegReg x0, x20
-    arm64.bl ArrayIterator.current
+    arm64.leaRdata x22, __layout_ArrayIterator_bool
+  __il_body#26:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.bl __managed_cursor_current
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __retain_type_param
+  __il_cont#25:
     arm64.cbz x0, ifcont#4
   c0:
     arm64.movImm x21, 1
@@ -197,8 +202,10 @@ func @main {
     arm64.storeBaseDispReg.word64 [x26 + 24], x0
     arm64.movRegReg x0, x22
     arm64.bl __mm_decref
+  __il_body#28:
     arm64.movRegReg x0, x26
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont#27:
     arm64.movRegReg x0, x26
     arm64.bl __str_decref
     arm64.movImm x21, 0

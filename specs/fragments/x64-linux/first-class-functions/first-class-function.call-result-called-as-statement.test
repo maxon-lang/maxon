@@ -40,36 +40,33 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
+    x64.prologue 32
   __il_body#6:
-    x64.leaRegFunc rbx, [rip + __fnref_bump]
+    x64.leaRegFunc rax, [rip + __fnref_bump]
   __il_cont#5:
     x64.movRegImm32 rcx, 0
-    x64.callReg rbx
+    x64.callReg rax
   __il_body#7:
-    x64.leaRegFunc rbx, [rip + __fnref_bump]
+    x64.leaRegFunc rax, [rip + __fnref_bump]
   __il_cont#4:
     x64.movRegImm32 rcx, 0
-    x64.callReg rbx
+    x64.callReg rax
     x64.leaRegGlobal rax, __data_sideEffect
     x64.loadRegBaseDisp.word64 r8, [rax + 0]
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc lessEqual, __rc_ok
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at first-class-function.call-result-called-as-statement.test:17: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

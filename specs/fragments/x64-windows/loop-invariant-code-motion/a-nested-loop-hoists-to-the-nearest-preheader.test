@@ -36,6 +36,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @grid {
@@ -45,16 +48,12 @@ func @grid {
     x64.movRegImm32 r8, 0
     x64.movRegImm32 rsi, 0
     x64.imulRegRegImm32 rax, rax, 5
-  forhdr#1:
-    x64.cmpRegReg rsi, rdx
-    x64.jcc greaterEqual, forexit
+    x64.jmp forhdr#1
   outer:
     x64.movRegImm32 rdi, 0
     x64.loadRegBaseDisp.word64 r9, [rcx + 8]
     x64.loadRegBaseDisp.word64 r10, [rcx + 0]
-  forhdr#5:
-    x64.cmpRegReg rdi, r9
-    x64.jcc greaterEqual, forstep#3
+    x64.jmp forhdr#5
   inner:
     x64.loadRegBaseIndexScale.word64 r11, [r10 + rdi*8 + 0]
   __im_cont:
@@ -62,10 +61,14 @@ func @grid {
     x64.leaRegRegReg r8, r8, rax
   forstep#7:
     x64.leaRegRegImm32 rdi, rdi, 1
-    x64.jmp forhdr#5
+  forhdr#5:
+    x64.cmpRegReg rdi, r9
+    x64.jcc less, inner
   forstep#3:
     x64.leaRegRegImm32 rsi, rsi, 1
-    x64.jmp forhdr#1
+  forhdr#1:
+    x64.cmpRegReg rsi, rdx
+    x64.jcc less, outer
   forexit:
     x64.popReg rbp
     x64.ret

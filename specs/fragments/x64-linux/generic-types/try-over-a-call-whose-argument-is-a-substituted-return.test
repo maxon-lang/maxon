@@ -41,68 +41,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Alpha.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 rbx, 125
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at try-over-a-call-whose-argument-is-a-substituted-return.test:8: Range check failed: value outside typealias 'Integer'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Box.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Box.get {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.movRegReg rcx, rdx
-    x64.movRegReg rdx, rax
-    x64.callDirect __retain_type_param
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
 func @consume {
   entry:
     x64.pushReg rbp
@@ -132,21 +70,33 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 72
-    x64.movRegImm32 rcx, 9
-    x64.callDirect Alpha.create
-    x64.movRegReg rbx, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_incref
-    x64.movRegReg rcx, rbx
-    x64.callDirect Box.create
+    x64.movRegImm32 rbx, 9
+  __rc_ok:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
-    x64.storeSlotReg slot0, r12
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.leaRegRdata rdx, [rip + __layout_Box_Alpha]
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+  __il_cont#6:
     x64.movRegReg rcx, r12
-    x64.callDirect Box.get
+    x64.callDirect __mm_own
     x64.movRegReg rbx, r8
+  __il_body#11:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot0, r13
+    x64.storeBaseDispReg.word64 [r13 + 0], rbx
+  __il_cont#5:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.leaRegRdata rcx, [rip + __layout_Box_Alpha]
+  __il_body#12:
+    x64.loadRegBaseDisp.word64 rdx, [r13 + 0]
+    x64.callDirect __retain_type_param
+    x64.movRegReg rbx, r8
+  __il_cont#4:
     x64.movRegReg rcx, rbx
     x64.callDirect consume
     x64.cmpRegImm32 r10, 0
@@ -193,25 +143,27 @@ func @main {
     x64.movRegReg rax, r12
     x64.callDirect __str_copy
     x64.leaRegRegReg rbx, rbx, r12
-    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rax, slot3
     x64.loadRegSlot rdx, slot4
-    x64.loadRegSlot r12, slot3
-    x64.movRegReg rax, r12
+    x64.movRegReg rcx, rbx
     x64.callDirect __str_copy
-    x64.leaRegRegReg rax, rbx, r12
-    x64.loadRegSlot rbx, slot2
-    x64.storeBaseDispReg.word64 [rbx + 0], r15
-    x64.loadRegSlot rax, slot1
-    x64.storeBaseDispReg.word64 [rbx + 8], rax
-    x64.movRegImm rax, 18446744073709551613
-    x64.storeBaseDispReg.word64 [rbx + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rax, slot3
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rax, slot2
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot1
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
     x64.movRegReg rcx, r14
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, rbx
-    x64.callDirect print
-    x64.movRegReg rcx, rbx
+  __il_body#14:
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __write_stdout
+  __il_cont#13:
+    x64.loadRegSlot rcx, slot2
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
     x64.loadRegSlot rcx, slot0

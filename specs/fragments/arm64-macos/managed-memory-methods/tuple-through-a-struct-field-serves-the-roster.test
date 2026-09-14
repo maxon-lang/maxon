@@ -23,64 +23,81 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Holder.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.storeBaseDispReg.word64 [x20 + 0], x19
-    arm64.movRegReg x0, x19
-    arm64.bl __destruct___Tuple2.Array_Byte.int
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @main {
   entry:
-    arm64.prologue 32
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.leaRdata x0, __str_rec_1  ; "hello"
-    arm64.bl String.toByteArray
-    arm64.movRegReg x19, x0
-    arm64.movImm x20, 7
-    arm64.movImm x0, 16
+  __il_body#7:
     arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.storeBaseDispReg.word64 [x0 + 8], x20
-    arm64.bl Holder.create
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
-    arm64.loadRegBaseDisp.word64 x19, [x1 + 8]
-    arm64.cmp x19, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x19, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_3  ; "panic at tuple-through-a-struct-field-serves-the-roster.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
+  __il_body#11:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+  __il_cont#10:
+    arm64.bl __managed_slice
+    arm64.movRegReg x19, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok
+  tryerr:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at String.maxon:157: String.toByteArray: slice 0..byteLength() is in bounds by construction\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
-  __rc_ok:
-    arm64.bl __destruct_Holder
+  tryok:
     arm64.movRegReg x0, x19
+    arm64.bl __managed_retain
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+  __il_cont#6:
+    arm64.movImm x19, 7
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 0], x20
+    arm64.storeBaseDispReg.word64 [x21 + 8], x19
+  __il_body#5:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x19, x0
+    arm64.leaFuncAddr x1, __clone___Tuple2.Array_Byte.int
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_own_deep
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct___Tuple2.Array_Byte.int
+  __il_cont#4:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Holder
+    arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at tuple-through-a-struct-field-serves-the-roster.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
 }

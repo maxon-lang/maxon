@@ -42,16 +42,16 @@ func @total {
     arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
   __us_test:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-  forhdr:
-    arm64.cmp x2, x3
-    arm64.b.ge forexit
+    arm64.b forhdr
   __im_load:
     arm64.loadRegBaseIndexScale.word64 x4, [x0 + x2*8 + 0]
   tryok:
     arm64.add x1, x1, x4
   forstep:
     arm64.add x2, x2, 1
-    arm64.b forhdr
+  forhdr:
+    arm64.cmp x2, x3
+    arm64.b.lt __im_load
   forexit:
     arm64.movRegReg x0, x1
     arm64.epilogue 16
@@ -69,16 +69,16 @@ func @main {
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.movImm x20, 0
-  forhdr:
-    arm64.cmp x20, 6
-    arm64.b.ge forexit
+    arm64.b forhdr
   seed:
     arm64.mul x1, x20, x20
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
   forstep:
     arm64.add x20, x20, 1
-    arm64.b forhdr
+  forhdr:
+    arm64.cmp x20, 6
+    arm64.b.lt seed
   forexit:
     arm64.movRegReg x0, x19
     arm64.bl total

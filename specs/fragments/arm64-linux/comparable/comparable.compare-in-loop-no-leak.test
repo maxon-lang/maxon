@@ -51,82 +51,57 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Pair.isLess {
-  entry:
-    arm64.prologue 16
-    arm64.movRegReg x2, x1
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x3
-    arm64.loadRegBaseDisp.word64 x16, [x2 + 24]
-    arm64.blr x16
-    arm64.cmp x0, 0
-    arm64.b.ne matchnext#5
-  matcharm#1:
-    arm64.movImm x0, 1
-    arm64.b matchcont
-  matchnext#5:
-    arm64.cmp x0, 1
-    arm64.b.ne matchnext#6
-  matcharm#2:
-    arm64.movImm x0, 0
-    arm64.b matchcont
-  matchnext#6:
-    arm64.cmp x0, 2
-    arm64.b.ne matchdead
-  matcharm#3:
-    arm64.movImm x0, 0
-  matchcont:
-    arm64.epilogue 16
-    arm64.ret
-  matchdead:
-}
-
-func @Pair.opLess {
-  entry:
-    arm64.prologue 16
-    arm64.movRegReg x2, x1
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x3
-    arm64.loadRegBaseDisp.word64 x16, [x2 + 24]
-    arm64.blr x16
-    arm64.cmp x0, 0
-    arm64.cset x0, eq
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x21
-    arm64.storeSlotReg slot3, x20
-    arm64.storeSlotReg slot2, x19
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 0
     arm64.movImm x20, 0
-  whilehdr:
-    arm64.cmp x19, 100
-    arm64.b.ge whileexit
+    arm64.b whilehdr
   loop:
-    arm64.movImm x0, 3
-    arm64.movImm x1, 9
+    arm64.movImm x21, 3
+    arm64.movImm x22, 9
+    arm64.leaRdata x0, __witness_int.Comparable
+  __il_cont#11:
     arm64.leaRdata x2, __witness_int.Comparable
-    arm64.leaRegSlot x21, slot0
-    arm64.storeBaseDispReg.word64 [x21 + 0], x0
-    arm64.storeBaseDispReg.word64 [x21 + 8], x1
-    arm64.leaRdata x1, __witness_int.Comparable
+  __il_body#13:
     arm64.movRegReg x0, x21
-    arm64.bl Pair.isLess
+    arm64.movRegReg x1, x22
+    arm64.loadRegBaseDisp.word64 x16, [x2 + 24]
+    arm64.blr x16
+    arm64.cmp x0, 0
+    arm64.b.ne matchnext#18
+  matcharm#14:
+    arm64.movImm x0, 1
+    arm64.b __il_cont#10
+  matchnext#18:
+    arm64.cmp x0, 1
+    arm64.b.ne matchnext#19
+  matcharm#15:
+    arm64.movImm x0, 0
+    arm64.b __il_cont#10
+  matchnext#19:
+    arm64.cmp x0, 2
+    arm64.b.ne matchdead
+  matcharm#16:
+    arm64.movImm x0, 0
+  __il_cont#10:
     arm64.cbz x0, ifcont#5
   ok:
     arm64.add x20, x20, 1
   ifcont#5:
-    arm64.leaRdata x1, __witness_int.Comparable
+    arm64.leaRdata x2, __witness_int.Comparable
+  __il_body#22:
     arm64.movRegReg x0, x21
-    arm64.bl Pair.opLess
+    arm64.movRegReg x1, x22
+    arm64.loadRegBaseDisp.word64 x16, [x2 + 24]
+    arm64.blr x16
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+  __il_cont#21:
     arm64.cbz x0, critsplit
   ok2:
     arm64.add x0, x20, 1
@@ -136,22 +111,28 @@ func @main {
   ifcont#7:
     arm64.add x19, x19, 1
     arm64.movRegReg x20, x0
-    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x19, 100
+    arm64.b.lt loop
+    arm64.b whileexit
+  matchdead:
   whileexit:
     arm64.cmp x20, 200
     arm64.b.ne ifcont#9
   all:
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot2
-    arm64.loadRegSlot x20, slot3
-    arm64.loadRegSlot x21, slot4
-    arm64.epilogue 64
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
     arm64.ret
   ifcont#9:
     arm64.movImm x0, 1
-    arm64.loadRegSlot x19, slot2
-    arm64.loadRegSlot x20, slot3
-    arm64.loadRegSlot x21, slot4
-    arm64.epilogue 64
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
     arm64.ret
 }

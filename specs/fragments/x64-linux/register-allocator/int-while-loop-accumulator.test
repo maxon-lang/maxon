@@ -18,13 +18,13 @@ func @main {
     x64.prologue 32
     x64.movRegImm32 rax, 0
     x64.movRegImm32 rcx, 0
-  whilehdr:
-    x64.cmpRegImm32 rcx, 10
-    x64.jcc greaterEqual, whileexit
+    x64.jmp whilehdr
   loop:
     x64.leaRegRegReg rax, rax, rcx
     x64.leaRegRegImm32 rcx, rcx, 1
-    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 rcx, 10
+    x64.jcc less, loop
   whileexit:
     x64.movRegReg rcx, rax
     x64.sarRegImm8 rcx, rax, 63
@@ -38,15 +38,15 @@ func @main {
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc lessEqual, __rc_ok
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at int-while-loop-accumulator.test:9: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

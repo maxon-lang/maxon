@@ -28,40 +28,65 @@ data {
   __mm_alloc_count@8 = i64 0
   __gt_run_queue_head@16 = i64 0
   __gt_run_queue_tail@24 = i64 0
-  __gt_init_done@32 = i64 0
-  __gt_timer_count@40 = i64 0
-  __gt_timer_heap_base@48 = i64 0
-  __gt_timer_capacity@56 = i64 0
-  __gt_timer_seq@64 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_timer_seq@56 = i64 0
+  __gt_timer_when@64 = i64 9223372036854775807
   __gt_trace_counter@72 = i64 0
-  __gt_proc_count@80 = i64 0
-  __gt_proc_handles_base@88 = i64 0
-  __gt_proc_gts_base@96 = i64 0
-  __gt_proc_wait_snapshot@104 = i64 0
-  __gt_proc_poller@112 = i64 0
-  __gt_live_count@120 = i64 0
-  __sched_progress@128 = i64 0
-  __sched_active_workers@136 = i64 1
-  __sched_max_active_workers@144 = i64 1
-  __sched_tls_index@152 = i64 0
-  __sched_tls_teb_offset@160 = i64 0
-  __sched_procs@168 = i64 0
-  __sched_allm@176 = i64 0
-  __sched_midle@184 = i64 0
-  __sched_pidle@192 = i64 0
-  __sched_num_procs@200 = i64 0
-  __sched_shutdown_flag@208 = i64 0
-  __sched_lock@216 = i64 0
-  __sched_nmspinning@224 = i64 0
-  __sched_parked_drivers@232 = i64 0
-  __sched_sysmon_started@240 = i64 0
-  __mrt_envp@248 = i64 0
-  __mrt_tls_next_key@256 = i64 0
-  __mrt_errno@264 = i64 0
-  __mrt_tls_ready@272 = i64 0
-  __slab_arena_list@280 = i64 0
-  __slab_arena_map_l1@288 = i64 0
-  __slab_state@296 = i64 0
+  __gt_live_count@80 = i64 0
+  __gt_seed_bytes@88 = i64 2048
+  __gt_stack_bytes_sum@96 = i64 0
+  __gt_stack_bytes_count@104 = i64 0
+  __gt_seed_sum_seen@112 = i64 0
+  __gt_seed_count_seen@120 = i64 0
+  __sched_active_workers@128 = i64 1
+  __sched_max_active_workers@136 = i64 1
+  __sched_tls_index@144 = i64 0
+  __sched_tls_teb_offset@152 = i64 0
+  __sched_procs@160 = i64 0
+  __sched_allm@168 = i64 0
+  __sched_midle@176 = i64 0
+  __sched_pidle@184 = i64 0
+  __gt_gfree_head@192 = i64 0
+  __sched_arena_cursor@200 = i64 0
+  __sched_arena_limit@208 = i64 0
+  __gt_records_carved@216 = i64 0
+  __sched_npidle@224 = i64 0
+  __sched_runq_size@232 = i64 0
+  __sched_global_pushes@240 = i64 0
+  __sched_timer_scan_steps@248 = i64 0
+  __sched_mcount@256 = i64 0
+  __sched_nmidle@264 = i64 0
+  __sched_main_m@272 = i64 0
+  __sched_phase@280 = i64 0
+  __sched_lastpoll@288 = i64 0
+  __sched_poll_until@296 = i64 0
+  __sched_regain_head@304 = i64 0
+  __np_poller@312 = i64 0
+  __np_break@320 = i64 0
+  __np_wake_sig@328 = i64 0
+  __np_pd_table@336 = i64 0
+  __np_pd_cap@344 = i64 0
+  __np_waiters@352 = i64 0
+  __np_src_key_free@360 = i64 0
+  __np_src_key_high@368 = i64 0
+  __sched_num_procs@376 = i64 0
+  __sched_shutdown_flag@384 = i64 0
+  __sched_lock@392 = i64 0
+  __sched_lock_depth_sink@400 = i64 0
+  __sched_nmspinning@408 = i64 0
+  __sched_needspinning@416 = i64 0
+  __sched_sysmon_event@424 = i64 0
+  __sched_sysmon_wait@432 = i64 0
+  __sched_timer_starts@440 = i64 0
+  __mrt_envp@448 = i64 0
+  __mrt_tls_next_key@456 = i64 0
+  __mrt_errno@464 = i64 0
+  __mrt_tls_ready@472 = i64 0
+  __slab_arena_list@480 = i64 0
+  __slab_arena_map_l1@488 = i64 0
+  __slab_state@496 = i64 0
 }
 
 func @makeText {
@@ -79,25 +104,25 @@ func @makeText {
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 rbx, 100
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_90]  ; "panic at async-await.linear.await-aliased-loop-element.test:6: Range check failed: value outside typealias 'Idx'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 56
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc greater, __rc_panic
   __rc_ok:
     x64.leaRegRdata rcx, [rip + __str_rec_19]  ; "noyield.txt"
-    x64.callDirect FilePath.init
+  __il_body#6:
+    x64.callDirect FilePath.create
     x64.movRegReg r12, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect File.exists
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+  __il_body#9:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.callDirect String.addressableBytes
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mf_exists
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.cmpRegImm32 r14, 0
+  __il_cont:
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_FilePath
     x64.leaRegRdata rax, [rip + __str_rec_20]  ; "t"
@@ -147,6 +172,30 @@ func @makeText {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_90]  ; "panic at async-await.linear.await-aliased-loop-element.test:6: Range check failed: value outside typealias 'Idx'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_33]  ; "panic at FilePath.maxon:31: FilePath: invalid path\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
 }
 
 func @main {
@@ -164,9 +213,7 @@ func @main {
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 r12, 0
-  forhdr#1:
-    x64.cmpRegImm32 r12, 3
-    x64.jcc greaterEqual, forexit#4
+    x64.jmp forhdr#1
   spawn:
     x64.leaRegFunc rcx, [rip + makeText]
     x64.callDirect __gt_spawn
@@ -181,14 +228,12 @@ func @main {
     x64.callDirect __managed_push
   forstep#3:
     x64.leaRegRegImm32 r12, r12, 1
-    x64.jmp forhdr#1
+  forhdr#1:
+    x64.cmpRegImm32 r12, 3
+    x64.jcc less, spawn
   forexit#4:
     x64.movRegImm32 rdx, 0
-  forhdr#5:
-    x64.storeSlotReg slot0, rdx
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegReg rdx, rax
-    x64.jcc greaterEqual, forexit#8
+    x64.jmp forhdr#5
   await:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseIndexScale.word64 r12, [rax + rdx*8 + 0]
@@ -216,30 +261,36 @@ func @main {
     x64.movRegReg rax, r13
     x64.callDirect __str_copy
     x64.leaRegRegReg r12, r15, r13
+    x64.loadRegSlot rax, slot4
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r14
-    x64.loadRegSlot r13, slot4
-    x64.movRegReg rax, r13
     x64.callDirect __str_copy
-    x64.leaRegRegReg rax, r12, r13
-    x64.loadRegSlot r12, slot3
-    x64.storeBaseDispReg.word64 [r12 + 0], r15
-    x64.loadRegSlot rax, slot2
-    x64.storeBaseDispReg.word64 [r12 + 8], rax
-    x64.movRegImm rax, 18446744073709551613
-    x64.storeBaseDispReg.word64 [r12 + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r12 + 24], rax
-    x64.movRegReg rcx, r12
-    x64.callDirect print
-    x64.movRegReg rcx, r12
+    x64.loadRegSlot rax, slot4
+    x64.leaRegRegReg rax, r12, rax
+    x64.loadRegSlot rax, slot3
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot2
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+  __il_body:
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __write_stdout
+  __il_cont:
+    x64.loadRegSlot rcx, slot3
     x64.callDirect __str_decref
     x64.loadRegSlot rcx, slot1
     x64.callDirect __str_decref
   forstep#7:
     x64.loadRegSlot rax, slot0
     x64.leaRegRegImm32 rdx, rax, 1
-    x64.jmp forhdr#5
+  forhdr#5:
+    x64.storeSlotReg slot0, rdx
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg rdx, rax
+    x64.jcc less, await
   forexit#8:
     x64.movRegImm32 r12, 0
     x64.movRegReg rcx, rbx

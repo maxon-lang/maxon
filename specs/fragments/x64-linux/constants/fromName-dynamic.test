@@ -27,18 +27,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @getName {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "green"
-    x64.callDirect __str_retain
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -46,19 +34,17 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 32
-    x64.callDirect getName
+  __il_body:
+    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "green"
+    x64.callDirect __str_retain
     x64.movRegReg rbx, r8
+  __il_cont:
     x64.movRegReg rcx, rbx
     x64.callDirect __enum_from_name_Color
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
-  tryerr:
-    x64.movRegImm32 rax, 0
-    x64.jmp trycont
+    x64.jcc notEqual, ifcont
   tryok:
-    x64.movRegReg rax, r8
-  trycont:
-    x64.cmpRegImm32 rax, 1
+    x64.cmpRegImm32 r8, 1
     x64.jcc notEqual, ifcont
   check:
     x64.movRegImm32 r12, 1

@@ -42,26 +42,12 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Bag.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.bl List.create
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @Bag.add {
   entry:
     arm64.prologue 16
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.bl List.append
+    arm64.movRegReg x1, x0
     arm64.epilogue 16
     arm64.ret
 }
@@ -92,15 +78,6 @@ func @Bag.drainOne {
     arm64.ret
 }
 
-func @Bag.size {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.bl List.count
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 64
@@ -110,8 +87,22 @@ func @main {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.leaRdata x0, __layout_Bag_String
-    arm64.bl Bag.create
+  __il_body#9:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
+    arm64.bl __list_create
     arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+  __il_cont#8:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x19, x0
+    arm64.storeBaseDispReg.word64 [x19 + 0], x20
+  __il_cont#6:
     arm64.leaRdata x0, __str_rec_2  ; "alpha"
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
@@ -162,7 +153,29 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl Bag.drainOne
     arm64.cmp x9, 0
-    arm64.b.eq tryok
+    arm64.b.ne tryerr
+  __il_body#11:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+  __il_body#13:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl __list_count
+    arm64.movRegReg x20, x0
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic#15
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.b.gt __rc_panic#4
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Bag_String
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
   tryerr:
     arm64.leaRdata x0, __str_blob_4  ; "panic at removing-an-opaque-element-from-a-chain-releases-it.test:32: drain\x0a"
     arm64.bl mrt_panic
@@ -174,17 +187,8 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  tryok:
-    arm64.movRegReg x0, x19
-    arm64.bl Bag.size
-    arm64.movRegReg x20, x0
-    arm64.cmp x20, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x20, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_5  ; "panic at removing-an-opaque-element-from-a-chain-releases-it.test:33: Range check failed: value outside typealias 'ExitCode'\x0a"
+  __rc_panic#15:
+    arm64.leaRdata x0, __str_blob_7  ; "panic at List.maxon:39: Range check failed: value outside typealias 'NodeCount'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -194,10 +198,10 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x19
-    arm64.bl __destruct_Bag_String
-    arm64.movRegReg x0, x20
+  __rc_panic#4:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at removing-an-opaque-element-from-a-chain-releases-it.test:33: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

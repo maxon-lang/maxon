@@ -34,23 +34,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Holder.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @Holder.get {
   entry:
     x64.pushReg rbp
@@ -94,15 +77,16 @@ func @main {
     x64.storeBaseDispReg.word64 [r13 + 16], rax
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r13 + 24], rax
-    x64.movRegReg rcx, r13
-    x64.callDirect Holder.create
+  __il_body:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
     x64.movRegReg rbx, r8
     x64.storeSlotReg slot0, rbx
+    x64.storeBaseDispReg.word64 [rbx + 0], r13
+  __il_cont:
     x64.movRegImm32 rax, 0
-  whilehdr:
-    x64.storeSlotReg slot5, rax
-    x64.cmpRegImm32 rax, 100
-    x64.jcc greaterEqual, whileexit
+    x64.jmp whilehdr
   spin:
     x64.leaRegRdata rdx, [rip + __layout_Holder_String]
     x64.movRegReg rcx, rbx
@@ -135,7 +119,10 @@ func @main {
     x64.loadRegSlot rcx, slot3
     x64.callDirect __str_decref
     x64.movRegReg rax, r12
-    x64.jmp whilehdr
+  whilehdr:
+    x64.storeSlotReg slot5, rax
+    x64.cmpRegImm32 rax, 100
+    x64.jcc less, spin
   whileexit:
     x64.leaRegRdata rdx, [rip + __layout_Holder_String]
     x64.movRegReg rcx, rbx

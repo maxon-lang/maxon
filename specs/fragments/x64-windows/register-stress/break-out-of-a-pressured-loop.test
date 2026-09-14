@@ -35,6 +35,12 @@ typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+}
+
 func @breakUnderPressure {
   entry:
     x64.pushReg rbp
@@ -58,14 +64,15 @@ func @breakUnderPressure {
     x64.leaRegRegImm32 rcx, rcx, 12
     x64.movRegImm32 r14, 0
     x64.movRegImm32 r15, 0
-  whilehdr:
-    x64.cmpRegImm32 r15, 100
-    x64.jcc greaterEqual, whileexit
+    x64.jmp whilehdr
   loop:
     x64.leaRegRegReg r14, r14, r15
     x64.leaRegRegImm32 r15, r15, 1
     x64.cmpRegImm32 r14, 6
-    x64.jcc lessEqual, whilehdr
+    x64.jcc greater, whileexit
+  whilehdr:
+    x64.cmpRegImm32 r15, 100
+    x64.jcc less, loop
   whileexit:
     x64.leaRegRegReg rax, r14, rax
     x64.leaRegRegReg rax, rax, rdx

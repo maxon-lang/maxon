@@ -44,21 +44,21 @@ func @make {
     arm64.bl __managed_create
     arm64.movRegReg x21, x0
     arm64.movImm x22, 0
-  forhdr:
-    arm64.cmp x22, x19
-    arm64.b.ge forexit
+    arm64.b forhdr
   fill:
     arm64.movImm x1, 1
     arm64.movRegReg x0, x21
     arm64.bl __managed_push
   forstep:
     arm64.add x22, x22, 1
-    arm64.b forhdr
+  forhdr:
+    arm64.cmp x22, x19
+    arm64.b.lt fill
   forexit:
     arm64.movRegReg x0, x21
-    arm64.bl __mm_incref
+    arm64.bl __managed_retain
+    arm64.movRegReg x1, x0
     arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x21
     arm64.bl __managed_push
     arm64.movRegReg x0, x21
     arm64.bl __managed_decref
@@ -94,12 +94,7 @@ func @main {
     arm64.b.eq critsplit#18
   __im_empty#13:
     arm64.cmp x20, 0
-    arm64.b.ne critsplit#19
-  __im_slow#11:
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_get
-    arm64.movRegReg x20, x0
-    arm64.b __im_cont#10
+    arm64.b.eq __im_slow#11
   critsplit#19:
     arm64.movRegReg x9, x0
     arm64.b __im_cont#10
@@ -116,7 +111,7 @@ func @main {
     arm64.b trycont#3
   tryok#1:
     arm64.movRegReg x0, x20
-    arm64.bl __mm_incref
+    arm64.bl __managed_incref
   trycont#3:
     arm64.movImm x0, 3
     arm64.bl make
@@ -134,12 +129,7 @@ func @main {
     arm64.b.eq critsplit#20
   __im_empty#17:
     arm64.cmp x22, 0
-    arm64.b.ne critsplit#21
-  __im_slow#15:
-    arm64.movRegReg x0, x21
-    arm64.bl __managed_get
-    arm64.movRegReg x22, x0
-    arm64.b __im_cont#14
+    arm64.b.eq __im_slow#15
   critsplit#21:
     arm64.movRegReg x9, x0
     arm64.b __im_cont#14
@@ -155,7 +145,7 @@ func @main {
     arm64.b trycont#6
   tryok#4:
     arm64.movRegReg x0, x22
-    arm64.bl __mm_incref
+    arm64.bl __managed_incref
     arm64.movRegReg x0, x22
   trycont#6:
     arm64.loadRegBaseDisp.word64 x1, [x20 + 8]
@@ -172,19 +162,29 @@ func @main {
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x22, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at two-borrows-out-of-two-temporaries-in-one-statement.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x22
+  __im_slow#11:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.movRegReg x20, x0
+    arm64.b __im_cont#10
+  __im_slow#15:
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_get
+    arm64.movRegReg x22, x0
+    arm64.b __im_cont#14
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at two-borrows-out-of-two-temporaries-in-one-statement.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

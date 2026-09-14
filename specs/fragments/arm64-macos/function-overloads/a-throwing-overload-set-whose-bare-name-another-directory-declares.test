@@ -31,7 +31,7 @@ end 'want'
 function main() returns ExitCode
 	let a = try alpha.want(1) otherwise 0
 	let b = try alpha.want(false) otherwise 0
-	return (a + b + beta.want(3)) as ExitCode
+	return ((a + b) as ExitCode) + (beta.want(3) as ExitCode)
 end 'main'
 ---
 ExitCode: 18
@@ -43,14 +43,7 @@ func @alpha.want {
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 1000
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at x.maxon:7: Range check failed: value outside typealias 'Num'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.movImm x9, 0
-    arm64.epilogue 16
-    arm64.ret
+    arm64.b.gt __rc_panic
   __rc_ok:
     arm64.cmp x0, 0
     arm64.b.ge ifcont
@@ -61,6 +54,13 @@ func @alpha.want {
     arm64.ret
   ifcont:
     arm64.movImm x0, 5
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at x.maxon:7: Range check failed: value outside typealias 'Num'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.movImm x9, 0
     arm64.epilogue 16
     arm64.ret
@@ -104,23 +104,31 @@ func @main {
     arm64.movImm x0, 0
   trycont#6:
     arm64.add x0, x19, x0
-  __rc_ok#12:
-    arm64.movImm x1, 4
-  __il_cont:
-    arm64.add x0, x0, x1
     arm64.cmp x0, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
+    arm64.b.lt __rc_panic#8
+  __rc_chk#9:
     arm64.cmp x0, 255
-    arm64.b.le __rc_ok#7
-  __rc_panic:
+    arm64.b.gt __rc_panic#8
+  __rc_ok#10:
+    arm64.add x0, x0, 4
+  __rc_chk#15:
+    arm64.cmp x0, 255
+    arm64.b.gt __rc_panic#14
+  __rc_ok#13:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic#8:
     arm64.leaRdata x0, __str_blob_3  ; "panic at main.maxon:4: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
-  __rc_ok#7:
+  __rc_panic#14:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at main.maxon:4: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret

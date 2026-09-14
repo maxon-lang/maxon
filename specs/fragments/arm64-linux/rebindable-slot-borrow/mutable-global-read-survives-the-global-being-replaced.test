@@ -52,7 +52,7 @@ func @main {
     arm64.bl __managed_push
     arm64.leaGlobal x0, __data_G
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.bl __mm_retain
+    arm64.bl __managed_retain
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
@@ -62,70 +62,28 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __managed_push
     arm64.movRegReg x0, x20
-    arm64.bl __mm_incref
+    arm64.bl __managed_retain
+    arm64.movRegReg x21, x0
     arm64.leaGlobal x0, __data_G
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.bl __managed_decref
     arm64.leaGlobal x0, __data_G
-    arm64.storeBaseDispReg.word64 [x0 + 0], x20
+    arm64.storeBaseDispReg.word64 [x0 + 0], x21
     arm64.movImm x21, 0
-    arm64.movImm x22, 0
-    arm64.loadRegBaseDisp.word64 x23, [x19 + 8]
-  forhdr:
-    arm64.cmp x22, x23
-    arm64.b.ge forexit
-  walk:
-    arm64.cmp x22, 0
-    arm64.b.ge __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at mutable-global-read-survives-the-global-being-replaced.test:17: Range check failed: value outside typealias 'ElementIndex'\x0a"
-    arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.loadRegSlot x25, slot6
-    arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot x27, slot8
-    arm64.epilogue 96
-    arm64.ret
-  __rc_ok:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x22, x0
-    arm64.b.hs __im_slow
-  __im_load:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x22*8 + 0]
-    arm64.movImm x1, 0
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
-    arm64.cmp x2, 0
-    arm64.b.eq critsplit#14
-  __im_empty:
-    arm64.cmp x0, 0
-    arm64.b.ne critsplit#15
-  __im_slow:
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x22
-    arm64.bl __managed_get
-    arm64.b __im_cont
-  critsplit#15:
-    arm64.movRegReg x9, x1
-    arm64.b __im_cont
-  critsplit#14:
-    arm64.movRegReg x9, x1
-  __im_cont:
-    arm64.cmp x9, 0
-    arm64.b.eq trycont
-  tryerr:
-    arm64.movImm x0, 0
-  trycont:
-    arm64.add x21, x21, x0
-  forstep:
-    arm64.add x22, x22, 1
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
+  __us_test:
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
     arm64.b forhdr
+  __im_load:
+    arm64.loadRegBaseIndexScale.word64 x3, [x2 + x0*8 + 0]
+  trycont:
+    arm64.add x21, x21, x3
+  forstep:
+    arm64.add x0, x0, 1
+  forhdr:
+    arm64.cmp x0, x1
+    arm64.b.lt __im_load
   forexit:
     arm64.leaRdata x0, __str_rec_1  ; "sum "
     arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
@@ -162,8 +120,10 @@ func @main {
     arm64.storeBaseDispReg.word64 [x26 + 24], x0
     arm64.movRegReg x0, x24
     arm64.bl __mm_decref
+  __il_body:
     arm64.movRegReg x0, x26
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont:
     arm64.movRegReg x0, x26
     arm64.bl __str_decref
     arm64.movImm x21, 0

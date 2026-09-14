@@ -68,6 +68,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @Module.create {
@@ -83,8 +86,8 @@ func @Module.create {
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.movRegReg rcx, rbx
-    x64.callDirect __mm_incref
-    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.callDirect __managed_retain
+    x64.storeBaseDispReg.word64 [r12 + 0], r8
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
@@ -109,9 +112,10 @@ func @Memo.create {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r13, r8
+    x64.leaRegFunc rdx, [rip + __clone_Module]
     x64.movRegReg rcx, rbx
-    x64.callDirect __mm_incref
-    x64.storeBaseDispReg.word64 [r13 + 0], rbx
+    x64.callDirect __mm_own_deep
+    x64.storeBaseDispReg.word64 [r13 + 0], r8
     x64.storeBaseDispReg.word64 [r13 + 8], r12
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Module
@@ -138,12 +142,13 @@ func @Database.create {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r13, r8
+    x64.leaRegFunc rdx, [rip + __clone_Memo]
     x64.movRegReg rcx, rbx
-    x64.callDirect __mm_incref
-    x64.storeBaseDispReg.word64 [r13 + 0], rbx
+    x64.callDirect __mm_own_deep
+    x64.storeBaseDispReg.word64 [r13 + 0], r8
     x64.movRegReg rcx, r12
-    x64.callDirect __mm_incref
-    x64.storeBaseDispReg.word64 [r13 + 8], r12
+    x64.callDirect __managed_retain
+    x64.storeBaseDispReg.word64 [r13 + 8], r8
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
     x64.movRegReg rcx, rbx
@@ -157,7 +162,7 @@ func @Database.create {
     x64.ret
 }
 
-func @Project.create {
+func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
@@ -165,159 +170,102 @@ func @Project.create {
     x64.pushReg r12
     x64.pushReg r13
     x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rcx, r8
+    x64.callDirect Module.create
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, r8
+    x64.callDirect Memo.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect Database.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 0
+  __il_body#6:
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r13, r8
+    x64.leaRegFunc rdx, [rip + __clone_Database]
     x64.movRegReg rcx, rbx
-    x64.callDirect __mm_incref
-    x64.storeBaseDispReg.word64 [r13 + 0], rbx
+    x64.callDirect __mm_own_deep
+    x64.storeBaseDispReg.word64 [r13 + 0], r8
     x64.storeBaseDispReg.byte [r13 + 8], r12
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Database
-    x64.movRegReg r8, r13
+  __il_body#9:
+    x64.loadRegBaseDisp.byte rax, [r13 + 8]
+    x64.xorRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __il_body#7
+  __il_body#13:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rcx, r8
+    x64.callDirect Module.create
+  __il_cont#12:
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, r8
+    x64.callDirect Memo.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect Database.create
+    x64.movRegReg rbx, r8
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
+    x64.callDirect __destruct_Database
+    x64.storeBaseDispReg.word64 [r13 + 0], rbx
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.byte [r13 + 8], rax
+  __il_body#7:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 8]
+    x64.movRegImm32 rdx, 1
+    x64.callDirect __managed_push
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 8]
+    x64.movRegImm32 rdx, 2
+    x64.callDirect __managed_push
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 8]
+    x64.movRegImm32 rdx, 3
+    x64.callDirect __managed_push
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.loadRegBaseDisp.word64 rbx, [rax + 8]
+  __il_cont#4:
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_Project
+    x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-}
-
-func @createModule {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __managed_create
-    x64.movRegReg rcx, r8
-    x64.callDirect Module.create
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @initProject {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.loadRegBaseDisp.byte rax, [rbx + 8]
-    x64.xorRegImm32 rax, rax, 1
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont
-  init:
-    x64.callDirect createModule
-    x64.movRegImm32 rdx, 0
-    x64.movRegReg rcx, r8
-    x64.callDirect Memo.create
-    x64.movRegReg r12, r8
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __managed_create
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect Database.create
-    x64.movRegReg r12, r8
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.callDirect __destruct_Database
-    x64.storeBaseDispReg.word64 [rbx + 0], r12
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.byte [rbx + 8], rax
-  ifcont:
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @useProject {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseDisp.word64 rcx, [rax + 8]
-    x64.movRegImm32 rdx, 1
-    x64.callDirect __managed_push
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseDisp.word64 rcx, [rax + 8]
-    x64.movRegImm32 rdx, 2
-    x64.callDirect __managed_push
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseDisp.word64 rcx, [rax + 8]
-    x64.movRegImm32 rdx, 3
-    x64.callDirect __managed_push
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.loadRegBaseDisp.word64 r8, [rax + 8]
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @main {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __managed_create
-    x64.movRegReg rcx, r8
-    x64.callDirect Module.create
-    x64.movRegImm32 rdx, 0
-    x64.movRegReg rcx, r8
-    x64.callDirect Memo.create
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __managed_create
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r8
-    x64.callDirect Database.create
-    x64.movRegImm32 rdx, 0
-    x64.movRegReg rcx, r8
-    x64.callDirect Project.create
-    x64.movRegReg rbx, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect initProject
-    x64.movRegReg rcx, rbx
-    x64.callDirect useProject
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect __destruct_Project
-    x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r12, rax
-    x64.jcc lessEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at field-assign-with-func-call-in-struct.test:61: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at field-assign-with-func-call-in-struct.test:61: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegReg r8, r12
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

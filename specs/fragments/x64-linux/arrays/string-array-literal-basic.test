@@ -52,11 +52,7 @@ func @main {
     x64.jcc equal, critsplit#10
   __im_empty:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#11
-  __im_slow:
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_get
-    x64.jmp __im_cont
+    x64.jcc equal, __im_slow
   critsplit#11:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rcx
@@ -97,4 +93,8 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __im_slow:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_get
+    x64.jmp __im_cont
 }

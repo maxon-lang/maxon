@@ -25,6 +25,12 @@ end 'main'
 ---
 ExitCode: 22
 ---
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+}
+
 func @mayFail {
   entry:
     x64.pushReg rbp
@@ -42,26 +48,24 @@ func @main {
     x64.prologue 32
     x64.callDirect mayFail
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, ifcont#6
+    x64.jcc equal, ifcont
   two:
-    x64.movRegImm32 rax, 22
-  ifcont#5:
-    x64.movRegReg r8, rax
-  ifcont#6:
+    x64.movRegImm32 r8, 22
+  ifcont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc lessEqual, __rc_ok
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at if-try-else-if-plain-after-binding.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

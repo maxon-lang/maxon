@@ -48,126 +48,10 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Inner.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __str_retain
-    arm64.storeBaseDispReg.word64 [x20 + 0], x0
-    arm64.movRegReg x0, x19
-    arm64.bl __str_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @Outer.setViaAlias {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
-    arm64.movRegReg x0, x1
-    arm64.bl __str_retain
-    arm64.movRegReg x21, x0
-    arm64.movRegReg x0, x20
-    arm64.bl __str_decref
-    arm64.storeBaseDispReg.word64 [x19 + 0], x21
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
-}
-
-func @Outer.setViaSelf {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
-    arm64.movRegReg x0, x1
-    arm64.bl __str_retain
-    arm64.movRegReg x21, x0
-    arm64.movRegReg x0, x20
-    arm64.bl __str_decref
-    arm64.storeBaseDispReg.word64 [x19 + 0], x21
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
-}
-
-func @Outer.lenViaAlias {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-  __il_body:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.cmp x1, 0
-    arm64.b.ge __rc_ok#6
-  __il_slow:
-    arm64.bl String.byteLength
-    arm64.b __il_cont
-  __rc_ok#6:
-    arm64.movRegReg x0, x1
-  __il_cont:
-    arm64.cmp x0, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x0, 1000
-    arm64.b.le __rc_ok#1
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_6  ; "panic at managed-field-write-through-the-base.test:25: Range check failed: value outside typealias 'Small'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  __rc_ok#1:
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @Outer.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.storeBaseDispReg.word64 [x20 + 0], x19
-    arm64.movRegReg x0, x19
-    arm64.bl __destruct_Inner
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @main {
   entry:
-    arm64.prologue 48
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
     arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
@@ -191,47 +75,117 @@ func @main {
     arm64.storeBaseDispReg.word64 [x21 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x21 + 24], x0
-    arm64.movRegReg x0, x21
-    arm64.bl Inner.create
-    arm64.bl Outer.create
+  __il_body#8:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
     arm64.movRegReg x19, x0
-    arm64.leaRdata x1, __str_rec_4  ; "hello world"
-    arm64.movRegReg x0, x19
-    arm64.bl Outer.setViaAlias
-    arm64.movRegReg x0, x19
-    arm64.bl Outer.lenViaAlias
+    arm64.movRegReg x0, x21
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+  __il_body#9:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
-    arm64.leaRdata x1, __str_rec_5  ; "hi"
     arm64.movRegReg x0, x19
-    arm64.bl Outer.setViaSelf
+    arm64.bl __mm_own
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
     arm64.movRegReg x0, x19
-    arm64.bl Outer.lenViaAlias
+    arm64.bl __destruct_Inner
+  __il_cont#6:
+    arm64.leaRdata x0, __str_rec_4  ; "hello world"
+  __il_body#10:
+    arm64.loadRegBaseDisp.word64 x19, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 0]
+    arm64.bl __str_retain
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+    arm64.storeBaseDispReg.word64 [x19 + 0], x22
+  __il_body#20:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+  __il_body#25:
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
+  __il_cont#24:
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic#22
+  __rc_chk#23:
+    arm64.cmp x19, 1000
+    arm64.b.gt __rc_panic#22
+  __il_cont#19:
+    arm64.leaRdata x0, __str_rec_5  ; "hi"
+  __il_body#11:
+    arm64.loadRegBaseDisp.word64 x21, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x21 + 0]
+    arm64.bl __str_retain
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+    arm64.storeBaseDispReg.word64 [x21 + 0], x23
+  __il_body#13:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+  __il_body#18:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+  __il_cont#17:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#15
+  __rc_chk#16:
+    arm64.cmp x0, 1000
+    arm64.b.gt __rc_panic#15
+  __il_cont#12:
     arm64.movImm x16, 10
-    arm64.mul x1, x20, x16
-    arm64.add x20, x1, x0
-    arm64.movRegReg x0, x19
+    arm64.mul x1, x19, x16
+    arm64.add x19, x1, x0
+  __rc_chk#3:
+    arm64.cmp x19, 255
+    arm64.b.gt __rc_panic#2
+  __rc_ok:
+    arm64.movRegReg x0, x20
     arm64.bl __destruct_Outer
-    arm64.cmp x20, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x20, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_7  ; "panic at managed-field-write-through-the-base.test:39: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  __rc_panic#22:
+    arm64.leaRdata x0, __str_blob_7  ; "panic at managed-field-write-through-the-base.test:25: Range check failed: value outside typealias 'Small'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
     arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x20
+  __rc_panic#15:
+    arm64.leaRdata x0, __str_blob_7  ; "panic at managed-field-write-through-the-base.test:25: Range check failed: value outside typealias 'Small'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_8  ; "panic at managed-field-write-through-the-base.test:39: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
     arm64.ret
 }

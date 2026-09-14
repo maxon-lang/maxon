@@ -17,6 +17,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -44,39 +47,7 @@ func @main {
     x64.jcc belowEqual, __im_slow
   __im_load:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.movRegImm32 rcx, 0
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, critsplit#10
-  __im_empty:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#11
-  __im_slow:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
-    x64.movRegReg rdx, r8
-    x64.jmp __im_cont
-  critsplit#11:
-    x64.movRegReg rdx, rax
-    x64.movRegReg r10, rcx
-    x64.jmp __im_cont
-  critsplit#10:
-    x64.movRegReg rdx, rax
-    x64.movRegReg r10, rcx
-  __im_cont:
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at void-method-statement-with-forking-argument.test:9: src holds one element\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.loadRegBaseDisp.word64 rdx, [rax + 0]
   tryok:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_push
@@ -91,9 +62,22 @@ func @main {
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r13, rax
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at void-method-statement-with-forking-argument.test:10: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, critsplit
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at void-method-statement-with-forking-argument.test:9: src holds one element\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -102,8 +86,13 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg r8, r13
+  critsplit:
+    x64.movRegReg rdx, r8
+    x64.jmp tryok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at void-method-statement-with-forking-argument.test:10: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12

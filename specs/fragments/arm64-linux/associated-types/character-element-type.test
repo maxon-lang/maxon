@@ -34,37 +34,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @SingleChar.getChar {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.bl __str_retain
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @SingleChar.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __str_retain
-    arm64.storeBaseDispReg.word64 [x20 + 0], x0
-    arm64.movRegReg x0, x19
-    arm64.bl __str_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 64
@@ -92,43 +61,118 @@ func @main {
     arm64.storeBaseDispReg.word64 [x21 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x21 + 24], x0
-    arm64.movRegReg x0, x21
-    arm64.bl SingleChar.create
+  __il_body#12:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
     arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x19
-    arm64.bl SingleChar.getChar
+    arm64.movRegReg x0, x21
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+  __il_body#13:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.bl __str_retain
     arm64.movRegReg x20, x0
+  __il_body#21:
     arm64.movRegReg x0, x20
-    arm64.bl Character.codepoints
+    arm64.bl __str_bytes_view
     arm64.movRegReg x21, x0
+  __il_body#25:
+    arm64.loadRegBaseDisp.word64 x22, [x21 + 8]
+    arm64.movImm x23, 0
+    arm64.b forhdr
+  scan:
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x23
+    arm64.bl __managed_byte_at
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr
+  tryok:
+    arm64.cmp x0, 128
+    arm64.movImm x1, 1
+    arm64.b.ge scmerge
+  orrhs:
+    arm64.cmp x0, 13
+    arm64.cset x0, eq
+    arm64.movRegReg x1, x0
+  scmerge:
+    arm64.cbz x1, forstep
+  notSingleByte:
+    arm64.movImm x1, 0
+    arm64.b __il_cont#24
+  forstep:
+    arm64.add x23, x23, 1
+  forhdr:
+    arm64.cmp x23, x22
+    arm64.b.lt scan
+  forexit:
+    arm64.movImm x1, 1
+  __il_cont#24:
+    arm64.movRegReg x0, x21
+    arm64.bl __str_of_buffer
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+  __il_body#19:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+  __il_cont#16:
     arm64.movRegReg x0, x21
     arm64.bl CodepointView.createIterator
     arm64.movRegReg x22, x0
     arm64.movRegReg x23, x9
     arm64.movRegReg x0, x21
     arm64.bl __destruct_CodepointView
-    arm64.movImm x0, 0
     arm64.cmp x23, 0
     arm64.b.ne forjoin
-  forhdr:
-    arm64.cmp x0, 0
-    arm64.b.ne forexit
-  __il_body:
+  __il_body#15:
     arm64.loadRegBaseDisp.word64 x21, [x22 + 16]
-  __il_cont:
+  __il_cont#14:
+    arm64.cmp x21, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x21, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
     arm64.movRegReg x0, x22
     arm64.bl __destruct_CodepointIterator
     arm64.movRegReg x0, x20
     arm64.bl __str_decref
     arm64.movRegReg x0, x19
     arm64.bl __destruct_SingleChar
-    arm64.cmp x21, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x21, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_11  ; "panic at character-element-type.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  forjoin:
+    arm64.movImm x21, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_SingleChar
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryerr:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at String.maxon:1136: scanSingleByteGraphemes: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -138,25 +182,10 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x21
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
-    arm64.ret
-  forexit:
-    arm64.movRegReg x0, x22
-    arm64.bl __destruct_CodepointIterator
-  forjoin:
-    arm64.movImm x21, 0
-    arm64.movRegReg x0, x20
-    arm64.bl __str_decref
-    arm64.movRegReg x0, x19
-    arm64.bl __destruct_SingleChar
-    arm64.movRegReg x0, x21
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_12  ; "panic at character-element-type.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

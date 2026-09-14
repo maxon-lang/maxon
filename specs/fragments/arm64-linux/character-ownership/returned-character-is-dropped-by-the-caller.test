@@ -24,15 +24,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @litOnly {
-  entry:
-    arm64.prologue 16
-    arm64.leaRdata x0, __str_rec_2  ; "\xc3\xa9"
-    arm64.bl __str_retain
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 80
@@ -45,12 +36,12 @@ func @main {
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 0
     arm64.movImm x20, 0
-  whilehdr:
-    arm64.cmp x19, 50
-    arm64.b.ge whileexit
-  rep:
-    arm64.bl litOnly
+    arm64.b whilehdr
+  __il_body#8:
+    arm64.leaRdata x0, __str_rec_2  ; "\xc3\xa9"
+    arm64.bl __str_retain
     arm64.movRegReg x21, x0
+  __il_cont#7:
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x21
     arm64.bl __str_eq
@@ -61,7 +52,9 @@ func @main {
     arm64.add x19, x19, 1
     arm64.movRegReg x0, x21
     arm64.bl __str_decref
-    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x19, 50
+    arm64.b.lt __il_body#8
   whileexit:
     arm64.movImm x0, 21
     arm64.movImm x1, 0
@@ -98,8 +91,10 @@ func @main {
     arm64.storeBaseDispReg.word64 [x24 + 24], x0
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
+  __il_body#10:
     arm64.movRegReg x0, x24
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont#9:
     arm64.movRegReg x0, x24
     arm64.bl __str_decref
     arm64.movImm x0, 0

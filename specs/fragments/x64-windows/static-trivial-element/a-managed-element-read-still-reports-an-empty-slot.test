@@ -21,6 +21,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -34,16 +37,20 @@ func @main {
     x64.leaRegFunc rdx, [rip + __str_decref]
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
-    x64.movRegImm32 rdx, 2
+    x64.movRegImm32 r12, 2
+  __rc_ok:
     x64.movRegReg rcx, rbx
-    x64.callDirect Array.reserve
-    x64.movRegImm32 rdx, 2
+    x64.callDirect __managed_capacity
+    x64.cmpRegImm32 r8, 2
+    x64.jcc greaterEqual, __il_cont
+  grow:
     x64.movRegReg rcx, rbx
-    x64.callDirect __managed_set_length
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_mem_grow
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#1
-  tryerr#2:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-managed-element-read-still-reports-an-empty-slot.test:7: setLength: capacity just reserved for 2\x0a"
+    x64.jcc equal, __il_cont
+  tryerr#18:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at Array.maxon:415: Array.reserve: grow failed \xe2\x80\x94 minCapacity > cap guaranteed\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -51,6 +58,12 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __il_cont:
+    x64.movRegImm32 rdx, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_set_length
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#2
   tryok#1:
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
@@ -62,18 +75,14 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, critsplit#14
+    x64.jcc equal, critsplit#22
   __im_empty:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#15
-  __im_slow:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
-    x64.jmp __im_cont
-  critsplit#15:
+    x64.jcc equal, __im_slow
+  critsplit#23:
     x64.movRegReg r10, rcx
     x64.jmp __im_cont
-  critsplit#14:
+  critsplit#22:
     x64.movRegReg r10, rcx
   __im_cont:
     x64.cmpRegImm32 r10, 0
@@ -116,4 +125,17 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  tryerr#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-managed-element-read-still-reports-an-empty-slot.test:7: setLength: capacity just reserved for 2\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.jmp __im_cont
 }

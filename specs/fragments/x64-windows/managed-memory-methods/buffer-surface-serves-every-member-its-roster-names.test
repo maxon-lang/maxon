@@ -34,6 +34,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -99,12 +102,8 @@ func @main {
     x64.leaRegRegImm32 rsi, rcx, -24
     x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, __im_store#41
-  __im_slow#37:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_mem_set
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#5
+    x64.jcc notEqual, __im_slow#37
+    x64.jmp __im_store#41
   tryerr#6:
     x64.movRegImm32 r12, 3
     x64.movRegReg rcx, rbx
@@ -138,12 +137,8 @@ func @main {
     x64.leaRegRegImm32 rsi, rcx, -24
     x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, __im_store#47
-  __im_slow#43:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_mem_set
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#7
+    x64.jcc notEqual, __im_slow#43
+    x64.jmp __im_store#47
   tryerr#8:
     x64.movRegImm32 r12, 4
     x64.movRegReg rcx, rbx
@@ -201,12 +196,8 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 0
-    x64.jcc above, __im_load#50
-  __im_slow#49:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit
+    x64.jcc belowEqual, __im_slow#49
+    x64.jmp __im_load#50
   tryerr#14:
     x64.movRegImm32 r12, 7
     x64.movRegReg rcx, rbx
@@ -220,9 +211,6 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  critsplit:
-    x64.movRegReg r12, r8
-    x64.jmp tryok#13
   __im_load#50:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
@@ -251,12 +239,8 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rax, [r13 + 8]
     x64.cmpRegImm32 rax, 0
-    x64.jcc above, __im_load#53
-  __im_slow#52:
-    x64.movRegReg rcx, r13
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#17
+    x64.jcc belowEqual, __im_slow#52
+    x64.jmp __im_load#53
   tryerr#18:
     x64.movRegImm32 r12, 9
     x64.movRegReg rcx, r13
@@ -342,12 +326,8 @@ func @main {
     x64.leaRegRegImm32 rsi, rcx, -24
     x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, __im_store#59
-  __im_slow#55:
-    x64.movRegReg rcx, r14
-    x64.callDirect __managed_mem_set
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#23
+    x64.jcc notEqual, __im_slow#55
+    x64.jmp __im_store#59
   tryerr#24:
     x64.movRegImm32 r12, 12
     x64.movRegReg rcx, r14
@@ -483,19 +463,7 @@ func @main {
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r12, rax
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at buffer-surface-serves-every-member-its-roster-names.test:27: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r15
     x64.callDirect __managed_decref
@@ -506,6 +474,50 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#37:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_mem_set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#6
+    x64.jmp tryok#5
+  __im_slow#43:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_mem_set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#8
+    x64.jmp tryok#7
+  __im_slow#49:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#14
+  critsplit:
+    x64.movRegReg r12, r8
+    x64.jmp tryok#13
+  __im_slow#52:
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#18
+    x64.jmp tryok#17
+  __im_slow#55:
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_mem_set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#24
+    x64.jmp tryok#23
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at buffer-surface-serves-every-member-its-roster-names.test:27: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg r15
     x64.popReg r14

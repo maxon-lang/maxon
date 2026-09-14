@@ -1,8 +1,8 @@
 // Test: mod-by-a-ranged-divisor-below-minus-one-is-a-bare-idiv
 typealias BelowMinusOne = int(i64.min to -2)
 
-function remainder(n Integer, d BelowMinusOne) returns Integer
-	return n mod d
+function remainder(n BelowMinusOne, d BelowMinusOne) returns Integer
+	return (n mod d) as Integer
 end 'remainder'
 
 function main() returns ExitCode
@@ -18,24 +18,6 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
-}
-
-func @remainder {
-  entry:
-    arm64.prologue 16
-    arm64.cmp x1, -2
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_4  ; "panic at mod-by-a-ranged-divisor-below-minus-one-is-a-bare-idiv.test:4: Range check failed: value outside typealias 'BelowMinusOne'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  __rc_ok:
-    arm64.sdiv x16, x0, x1
-    arm64.msub x0, x16, x1, x0
-    arm64.epilogue 16
-    arm64.ret
 }
 
 func @main {
@@ -54,9 +36,15 @@ func @main {
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
     arm64.movImm x0, 18446744073709551603
-    arm64.movImm x1, 18446744073709551611
-    arm64.bl remainder
-    arm64.movRegReg x21, x0
+  __rc_ok:
+    arm64.movImm x1, 7378697629483820647
+    arm64.smulh x1, x1, x0
+    arm64.asr x1, x1, 1
+    arm64.lsr x2, x1, 63
+    arm64.add x1, x1, x2
+    arm64.arm64AddLsl x1, x1, x1, lsl #2
+    arm64.sub x21, x0, x1
+  __il_cont#2:
     arm64.movImm x0, 21
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -98,8 +86,10 @@ func @main {
     arm64.storeBaseDispReg.word64 [x26 + 24], x0
     arm64.movRegReg x0, x22
     arm64.bl __mm_decref
+  __il_body:
     arm64.movRegReg x0, x26
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont#1:
     arm64.movRegReg x0, x26
     arm64.bl __str_decref
     arm64.movImm x0, 0

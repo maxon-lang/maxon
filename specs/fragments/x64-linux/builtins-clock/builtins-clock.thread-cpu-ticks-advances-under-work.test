@@ -29,14 +29,14 @@ func @main {
     x64.movRegReg rbx, r8
     x64.movRegImm32 r12, 0
     x64.movRegImm32 rax, 0
-  forhdr:
-    x64.cmpRegImm32 rax, 2000000
-    x64.jcc greaterEqual, forexit
+    x64.jmp forhdr
   spin:
     x64.leaRegRegReg r12, r12, rax
   forstep:
     x64.leaRegRegImm32 rax, rax, 1
-    x64.jmp forhdr
+  forhdr:
+    x64.cmpRegImm32 rax, 2000000
+    x64.jcc less, spin
   forexit:
     x64.callDirect __thread_cpu_ticks
     x64.movRegImm32 rax, 0
@@ -57,17 +57,17 @@ func @main {
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at builtins-clock.thread-cpu-ticks-advances-under-work.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.jcc greater, __rc_panic
+  __rc_ok:
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at builtins-clock.thread-cpu-ticks-advances-under-work.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx

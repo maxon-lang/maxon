@@ -13,6 +13,7 @@ function main() returns ExitCode
 	var acc = spawnAndAwait(0)
 	let totalBefore = __Builtins.mmRawAllocTotal()
 	let liveBefore = __Builtins.mmRawAllocLive()
+	let recycledBefore = __Builtins.schedGtRecycleCount()
 	acc = spawnAndAwait(acc)
 	acc = spawnAndAwait(acc)
 	acc = spawnAndAwait(acc)
@@ -23,16 +24,17 @@ function main() returns ExitCode
 	acc = spawnAndAwait(acc)
 	let totalGrew = __Builtins.mmRawAllocTotal() - totalBefore
 	let liveGrew = __Builtins.mmRawAllocLive() - liveBefore
+	let recycled = __Builtins.schedGtRecycleCount() - recycledBefore
 	var score = 0
 	if acc == 9 'everyThreadRanExactlyOnce'
 		score = score + 1
 	end 'everyThreadRanExactlyOnce'
-	if totalGrew >= 8 'eachSpawnTookAStruct'
+	if totalGrew == 0 and recycled == 8 'everySpawnReusedAStruct'
 		score = score + 2
-	end 'eachSpawnTookAStruct'
-	if liveGrew <= 1 'andEachAwaitGaveItBack'
+	end 'everySpawnReusedAStruct'
+	if liveGrew == 0 'andNothingWasLeftLive'
 		score = score + 4
-	end 'andEachAwaitGaveItBack'
+	end 'andNothingWasLeftLive'
 	return score as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -48,40 +50,65 @@ data {
   __mm_raw_alloc_bytes@40 = i64 0
   __gt_run_queue_head@48 = i64 0
   __gt_run_queue_tail@56 = i64 0
-  __gt_init_done@64 = i64 0
-  __gt_timer_count@72 = i64 0
-  __gt_timer_heap_base@80 = i64 0
-  __gt_timer_capacity@88 = i64 0
-  __gt_timer_seq@96 = i64 0
+  __gt_timer_count@64 = i64 0
+  __gt_timer_heap_base@72 = i64 0
+  __gt_timer_capacity@80 = i64 0
+  __gt_timer_seq@88 = i64 0
+  __gt_timer_when@96 = i64 9223372036854775807
   __gt_trace_counter@104 = i64 0
-  __gt_proc_count@112 = i64 0
-  __gt_proc_handles_base@120 = i64 0
-  __gt_proc_gts_base@128 = i64 0
-  __gt_proc_wait_snapshot@136 = i64 0
-  __gt_proc_poller@144 = i64 0
-  __gt_live_count@152 = i64 0
-  __sched_progress@160 = i64 0
-  __sched_active_workers@168 = i64 1
-  __sched_max_active_workers@176 = i64 1
-  __sched_tls_index@184 = i64 0
-  __sched_tls_teb_offset@192 = i64 0
-  __sched_procs@200 = i64 0
-  __sched_allm@208 = i64 0
-  __sched_midle@216 = i64 0
-  __sched_pidle@224 = i64 0
-  __sched_num_procs@232 = i64 0
-  __sched_shutdown_flag@240 = i64 0
-  __sched_lock@248 = i64 0
-  __sched_nmspinning@256 = i64 0
-  __sched_parked_drivers@264 = i64 0
-  __sched_sysmon_started@272 = i64 0
-  __mrt_envp@280 = i64 0
-  __mrt_tls_next_key@288 = i64 0
-  __mrt_errno@296 = i64 0
-  __mrt_tls_ready@304 = i64 0
-  __slab_arena_list@312 = i64 0
-  __slab_arena_map_l1@320 = i64 0
-  __slab_state@328 = i64 0
+  __gt_live_count@112 = i64 0
+  __gt_seed_bytes@120 = i64 2048
+  __gt_stack_bytes_sum@128 = i64 0
+  __gt_stack_bytes_count@136 = i64 0
+  __gt_seed_sum_seen@144 = i64 0
+  __gt_seed_count_seen@152 = i64 0
+  __sched_active_workers@160 = i64 1
+  __sched_max_active_workers@168 = i64 1
+  __sched_tls_index@176 = i64 0
+  __sched_tls_teb_offset@184 = i64 0
+  __sched_procs@192 = i64 0
+  __sched_allm@200 = i64 0
+  __sched_midle@208 = i64 0
+  __sched_pidle@216 = i64 0
+  __gt_gfree_head@224 = i64 0
+  __sched_arena_cursor@232 = i64 0
+  __sched_arena_limit@240 = i64 0
+  __gt_records_carved@248 = i64 0
+  __sched_npidle@256 = i64 0
+  __sched_runq_size@264 = i64 0
+  __sched_global_pushes@272 = i64 0
+  __sched_timer_scan_steps@280 = i64 0
+  __sched_mcount@288 = i64 0
+  __sched_nmidle@296 = i64 0
+  __sched_main_m@304 = i64 0
+  __sched_phase@312 = i64 0
+  __sched_lastpoll@320 = i64 0
+  __sched_poll_until@328 = i64 0
+  __sched_regain_head@336 = i64 0
+  __np_poller@344 = i64 0
+  __np_break@352 = i64 0
+  __np_wake_sig@360 = i64 0
+  __np_pd_table@368 = i64 0
+  __np_pd_cap@376 = i64 0
+  __np_waiters@384 = i64 0
+  __np_src_key_free@392 = i64 0
+  __np_src_key_high@400 = i64 0
+  __sched_num_procs@408 = i64 0
+  __sched_shutdown_flag@416 = i64 0
+  __sched_lock@424 = i64 0
+  __sched_lock_depth_sink@432 = i64 0
+  __sched_nmspinning@440 = i64 0
+  __sched_needspinning@448 = i64 0
+  __sched_sysmon_event@456 = i64 0
+  __sched_sysmon_wait@464 = i64 0
+  __sched_timer_starts@472 = i64 0
+  __mrt_envp@480 = i64 0
+  __mrt_tls_next_key@488 = i64 0
+  __mrt_errno@496 = i64 0
+  __mrt_tls_ready@504 = i64 0
+  __slab_arena_list@512 = i64 0
+  __slab_arena_map_l1@520 = i64 0
+  __slab_state@528 = i64 0
 }
 
 func @work {
@@ -130,7 +157,8 @@ func @main {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.prologue 32
+    x64.pushReg r15
+    x64.prologue 40
     x64.movRegImm32 rcx, 0
     x64.callDirect spawnAndAwait
     x64.movRegReg rbx, r8
@@ -138,6 +166,8 @@ func @main {
     x64.movRegReg r12, r8
     x64.callDirect __mm_counter_raw_alloc_live
     x64.movRegReg r13, r8
+    x64.callDirect __sched_gt_recycle_count
+    x64.movRegReg r14, r8
     x64.movRegReg rcx, rbx
     x64.callDirect spawnAndAwait
     x64.movRegReg rcx, r8
@@ -156,47 +186,41 @@ func @main {
     x64.callDirect spawnAndAwait
     x64.movRegReg rbx, r8
     x64.callDirect __mm_counter_raw_alloc_total
-    x64.movRegReg r14, r8
-    x64.subRegReg r14, r8, r12
+    x64.movRegReg r15, r8
+    x64.subRegReg r15, r8, r12
     x64.callDirect __mm_counter_raw_alloc_live
-    x64.subRegReg r8, r8, r13
+    x64.movRegReg r12, r8
+    x64.subRegReg r12, r8, r13
+    x64.callDirect __sched_gt_recycle_count
+    x64.subRegReg r8, r8, r14
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 rbx, 9
     x64.jcc notEqual, ifcont#2
   everyThreadRanExactlyOnce:
     x64.movRegImm32 rax, 1
   ifcont#2:
-    x64.cmpRegImm32 r14, 8
-    x64.jcc less, ifcont#4
-  eachSpawnTookAStruct:
+    x64.cmpRegImm32 r15, 0
+    x64.movRegImm32 rcx, 0
+    x64.jcc notEqual, scmerge
+  andrhs:
+    x64.cmpRegImm32 r8, 8
+    x64.setccReg equal, rcx
+  scmerge:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, ifcont#6
+  everySpawnReusedAStruct:
     x64.leaRegRegImm32 rax, rax, 2
-  ifcont#4:
-    x64.cmpRegImm32 r8, 1
-    x64.jcc greater, critsplit
-  andEachAwaitGaveItBack:
+  ifcont#6:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc notEqual, critsplit
+  andNothingWasLeftLive:
     x64.leaRegRegImm32 r8, rax, 4
-    x64.jmp ifcont#6
+    x64.jmp __rc_ok
   critsplit:
     x64.movRegReg r8, rax
-  ifcont#6:
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 r8, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at runtime-scratch-reclaim.spawn-await-loop-is-bounded.test:36: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
   __rc_ok:
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12

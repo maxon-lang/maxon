@@ -55,18 +55,14 @@ func @main {
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x20 + 40]
     arm64.cmp x3, 0
-    arm64.b.eq critsplit#14
+    arm64.b.eq critsplit#12
   __im_empty:
     arm64.cmp x0, 0
-    arm64.b.ne critsplit#15
-  __im_slow:
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_get
-    arm64.b __im_cont
-  critsplit#15:
+    arm64.b.eq __im_slow
+  critsplit#13:
     arm64.movRegReg x9, x2
     arm64.b __im_cont
-  critsplit#14:
+  critsplit#12:
     arm64.movRegReg x9, x2
   __im_cont:
     arm64.cmp x9, 0
@@ -78,14 +74,9 @@ func @main {
     arm64.movRegReg x19, x0
   __il_body:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x0, 0
-    arm64.b.ge __il_cont
-  __il_slow:
-    arm64.movRegReg x0, x19
-    arm64.bl String.byteLength
   __il_cont:
     arm64.cmp x0, 0
-    arm64.b.le ifcont
+    arm64.b.ls ifcont
   inner:
     arm64.movImm x0, 8
     arm64.leaFuncAddr x1, __str_decref
@@ -195,4 +186,8 @@ func @main {
     arm64.loadRegSlot x28, slot9
     arm64.epilogue 96
     arm64.ret
+  __im_slow:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_get
+    arm64.b __im_cont
 }

@@ -5,7 +5,7 @@ typealias NonZero = int(1 to i64.max)
 
 function modLive(a Integer, b NonZero, x Integer) returns Integer
 	let preserved = x + 1
-	let result = a mod b
+	let result = try (a mod (b as Integer)) otherwise panic("b is never zero")
 	return result + preserved
 end 'modLive'
 
@@ -15,45 +15,32 @@ end 'main'
 ---
 ExitCode: 7
 ---
-func @modLive {
-  entry:
-    arm64.prologue 16
-    arm64.cmp x1, 1
-    arm64.b.ge __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at mod-live-values.test:6: Range check failed: value outside typealias 'NonZero'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  __rc_ok:
-    arm64.add x2, x2, 1
-    arm64.sdiv x16, x0, x1
-    arm64.msub x0, x16, x1, x0
-    arm64.add x0, x0, x2
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 16
+  __rc_ok#8:
     arm64.movImm x0, 10
-    arm64.movImm x1, 3
-    arm64.movImm x2, 5
-    arm64.bl modLive
+    arm64.movImm x1, 6148914691236517206
+    arm64.smulh x1, x1, x0
+    arm64.lsr x2, x1, 63
+    arm64.add x1, x1, x2
+    arm64.arm64AddLsl x1, x1, x1, lsl #1
+    arm64.sub x0, x0, x1
+  tryok:
+    arm64.add x0, x0, 6
+  __il_cont:
     arm64.cmp x0, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at mod-live-values.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
+    arm64.b.gt __rc_panic
+  __rc_ok#1:
     arm64.epilogue 16
     arm64.ret
-  __rc_ok:
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at mod-live-values.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
 }

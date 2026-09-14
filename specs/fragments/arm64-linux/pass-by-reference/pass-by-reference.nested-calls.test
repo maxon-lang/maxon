@@ -29,8 +29,9 @@ data {
 func @inner {
   entry:
     arm64.prologue 16
-    arm64.movImm x1, 77
-    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.movRegReg x1, x0
+    arm64.movImm x2, 77
+    arm64.storeBaseDispReg.word64 [x1 + 0], x2
     arm64.epilogue 16
     arm64.ret
 }
@@ -39,6 +40,7 @@ func @outer {
   entry:
     arm64.prologue 16
     arm64.bl inner
+    arm64.movRegReg x1, x0
     arm64.epilogue 16
     arm64.ret
 }
@@ -86,8 +88,10 @@ func @main {
     arm64.storeBaseDispReg.word64 [x22 + 24], x0
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
+  __il_body:
     arm64.movRegReg x0, x22
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont:
     arm64.movRegReg x0, x22
     arm64.bl __str_decref
     arm64.movImm x19, 0

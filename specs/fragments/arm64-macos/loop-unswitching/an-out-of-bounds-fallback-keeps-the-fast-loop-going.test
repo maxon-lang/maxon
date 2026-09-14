@@ -38,106 +38,181 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @walk {
+func @main {
   entry:
     arm64.prologue 64
-    arm64.movImm x2, 0
-    arm64.movImm x3, 0
-  __us_test#44:
-    arm64.loadRegBaseDisp.word64 x4, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x5, [x0 + 16]
-    arm64.cmp x5, 0
-    arm64.b.lt forhdr#1
-  __us_test#45:
-    arm64.loadRegBaseDisp.word64 x5, [x0 + 0]
-    arm64.cmp x5, 0
-    arm64.b.eq forhdr#1
-  __us_test#46:
-    arm64.sub x6, x5, 24
-    arm64.loadRegBaseDisp.word64 x6, [x6 + 16]
-    arm64.cmp x6, 0
-    arm64.b.ne forhdr#1
-  __us_test#47:
-    arm64.loadRegBaseDisp.word64 x6, [x0 + 40]
-    arm64.movImm x7, 0
-    arm64.cmp x6, x7
-    arm64.b.eq forhdr#24
-  forhdr#1:
-    arm64.cmp x3, x1
-    arm64.b.ge critsplit#49
-  __rc_ok#11:
-    arm64.loadRegBaseDisp.word64 x4, [x0 + 8]
-    arm64.cmp x3, x4
-    arm64.b.hs __im_slow#16
-    arm64.b __im_load#17
-  tryerr#6:
-    arm64.movImm x4, 99
-    arm64.b trycont#7
-  __im_load#17:
-    arm64.loadRegBaseDisp.word64 x4, [x0 + 0]
-    arm64.loadRegBaseIndexScale.word64 x4, [x4 + x3*8 + 0]
-  trycont#7:
-    arm64.add x2, x2, x4
-    arm64.lsl x4, x3, 1
-  __rc_ok#13:
-    arm64.loadRegBaseDisp.word64 x5, [x0 + 16]
-    arm64.cmp x5, 0
-    arm64.b.lt __im_slow#19
-  __im_bounds#20:
-    arm64.loadRegBaseDisp.word64 x5, [x0 + 8]
-    arm64.cmp x3, x5
-    arm64.b.hs __im_slow#19
-  __im_buffer:
-    arm64.loadRegBaseDisp.word64 x5, [x0 + 0]
-    arm64.cmp x5, 0
-    arm64.b.eq __im_slow#19
-  __im_viewed:
-    arm64.sub x6, x5, 24
-    arm64.loadRegBaseDisp.word64 x6, [x6 + 16]
-    arm64.cmp x6, 0
-    arm64.b.ne __im_slow#19
-  __im_store#23:
-    arm64.storeBaseIndexScaleReg.word64 [x5 + x3*8 + 0], x4
-  forstep#3:
-    arm64.add x3, x3, 1
+    arm64.storeSlotReg slot5, x20
+    arm64.storeSlotReg slot4, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 0
     arm64.b forhdr#1
-  critsplit#49:
-    arm64.movRegReg x0, x2
-    arm64.b forexit
-  forhdr#24:
-    arm64.cmp x3, x1
-    arm64.b.ge critsplit#52
-  __rc_ok#38:
-    arm64.cmp x3, x4
-    arm64.b.hs __im_slow#37
-    arm64.b __im_load#41
-  tryerr#36:
-    arm64.movImm x6, 99
-    arm64.b trycont#34
-  __im_load#41:
-    arm64.loadRegBaseIndexScale.word64 x6, [x5 + x3*8 + 0]
-  trycont#34:
-    arm64.add x2, x2, x6
-    arm64.lsl x6, x3, 1
-  __im_bounds#31:
-    arm64.cmp x3, x4
-    arm64.b.hs __im_slow#29
-  __im_store#43:
-    arm64.storeBaseIndexScaleReg.word64 [x5 + x3*8 + 0], x6
-  forstep#25:
-    arm64.add x3, x3, 1
-    arm64.b forhdr#24
-  critsplit#52:
-    arm64.movRegReg x0, x2
-  forexit:
+  seed:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __managed_push
+  forstep#3:
+    arm64.add x20, x20, 1
+  forhdr#1:
+    arm64.cmp x20, 5
+    arm64.b.lt seed
+  __il_body:
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+  __us_test#59:
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 16]
+    arm64.cmp x3, 0
+    arm64.b.lt forhdr#16
+  __us_test#60:
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 0]
+    arm64.cmp x3, 0
+    arm64.b.eq forhdr#16
+  __us_test#61:
+    arm64.sub x4, x3, 24
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 16]
+    arm64.cmp x4, 0
+    arm64.b.ne forhdr#16
+    arm64.b forhdr#39
+  __rc_ok#26:
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
+    arm64.cmp x1, x2
+    arm64.b.hs __im_slow#31
+    arm64.b __im_load#32
+  tryerr#21:
+    arm64.movImm x2, 99
+    arm64.b trycont#22
+  __im_load#32:
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
+    arm64.loadRegBaseIndexScale.word64 x2, [x2 + x1*8 + 0]
+  trycont#22:
+    arm64.add x0, x0, x2
+    arm64.lsl x2, x1, 1
+  __rc_ok#28:
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 16]
+    arm64.cmp x3, 0
+    arm64.b.lt __im_slow#34
+  __im_bounds#35:
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 8]
+    arm64.cmp x1, x3
+    arm64.b.hs __im_slow#34
+  __im_buffer:
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 0]
+    arm64.cmp x3, 0
+    arm64.b.eq __im_slow#34
+  __im_viewed:
+    arm64.sub x4, x3, 24
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 16]
+    arm64.cmp x4, 0
+    arm64.b.ne __im_slow#34
+  __im_store#38:
+    arm64.storeBaseIndexScaleReg.word64 [x3 + x1*8 + 0], x2
+  forstep#18:
+    arm64.add x1, x1, 1
+  forhdr#16:
+    arm64.cmp x1, 9
+    arm64.b.lt __rc_ok#26
+    arm64.b __il_cont
+  __rc_ok#53:
+    arm64.cmp x1, x2
+    arm64.b.hs __im_slow#52
+    arm64.b __im_load#56
+  tryerr#51:
+    arm64.movImm x4, 99
+    arm64.b trycont#49
+  __im_load#56:
+    arm64.loadRegBaseIndexScale.word64 x4, [x3 + x1*8 + 0]
+  trycont#49:
+    arm64.add x0, x0, x4
+    arm64.lsl x4, x1, 1
+  __im_bounds#46:
+    arm64.cmp x1, x2
+    arm64.b.hs __im_slow#44
+  __im_store#58:
+    arm64.storeBaseIndexScaleReg.word64 [x3 + x1*8 + 0], x4
+  forstep#40:
+    arm64.add x1, x1, 1
+  forhdr#39:
+    arm64.cmp x1, 9
+    arm64.b.lt __rc_ok#53
+  __il_cont:
+    arm64.cmp x0, 406
+    arm64.b.eq ifcont#6
+  sum:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
     arm64.epilogue 64
     arm64.ret
-  __im_slow#16:
+  ifcont#6:
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 0]
+    arm64.b forhdr#7
+  check:
+    arm64.loadRegBaseIndexScale.word64 x4, [x3 + x1*8 + 0]
+  __im_cont:
+    arm64.add x0, x0, x4
+  forstep#9:
+    arm64.add x1, x1, 1
+  forhdr#7:
+    arm64.cmp x1, x2
+    arm64.b.lt check
+  forexit:
+    arm64.cmp x0, 20
+    arm64.b.eq ifcont#12
+  rewritten:
+    arm64.movImm x20, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.epilogue 64
+    arm64.ret
+  ifcont#12:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.epilogue 64
+    arm64.ret
+  __im_slow#31:
+    arm64.storeSlotReg slot0, x0
+    arm64.storeSlotReg slot1, x1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.movRegReg x2, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.loadRegSlot x1, slot1
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#21
+    arm64.b trycont#22
+  __im_slow#34:
+    arm64.storeSlotReg slot0, x0
+    arm64.storeSlotReg slot1, x1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_set
+    arm64.movRegReg x2, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.loadRegSlot x1, slot1
+    arm64.cmp x9, 0
+    arm64.b.ne forstep#18
+    arm64.b forstep#18
+  __im_slow#52:
     arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot1, x1
     arm64.storeSlotReg slot2, x2
     arm64.storeSlotReg slot3, x3
-    arm64.movRegReg x1, x3
+    arm64.movRegReg x0, x19
     arm64.bl __managed_get
     arm64.movRegReg x4, x0
     arm64.loadRegSlot x0, slot0
@@ -145,14 +220,14 @@ func @walk {
     arm64.loadRegSlot x2, slot2
     arm64.loadRegSlot x3, slot3
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#6
-    arm64.b trycont#7
-  __im_slow#19:
+    arm64.b.ne tryerr#51
+    arm64.b trycont#49
+  __im_slow#44:
     arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot1, x1
     arm64.storeSlotReg slot2, x2
     arm64.storeSlotReg slot3, x3
-    arm64.movRegReg x1, x3
+    arm64.movRegReg x0, x19
     arm64.movRegReg x2, x4
     arm64.bl __managed_set
     arm64.movRegReg x4, x0
@@ -161,118 +236,6 @@ func @walk {
     arm64.loadRegSlot x2, slot2
     arm64.loadRegSlot x3, slot3
     arm64.cmp x9, 0
-    arm64.b.ne forstep#3
-    arm64.b forstep#3
-  __im_slow#37:
-    arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot1, x1
-    arm64.storeSlotReg slot2, x2
-    arm64.storeSlotReg slot3, x3
-    arm64.storeSlotReg slot4, x4
-    arm64.storeSlotReg slot5, x5
-    arm64.movRegReg x1, x3
-    arm64.bl __managed_get
-    arm64.movRegReg x6, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x1, slot1
-    arm64.loadRegSlot x2, slot2
-    arm64.loadRegSlot x3, slot3
-    arm64.loadRegSlot x4, slot4
-    arm64.loadRegSlot x5, slot5
-    arm64.cmp x9, 0
-    arm64.b.ne tryerr#36
-    arm64.b trycont#34
-  __im_slow#29:
-    arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot1, x1
-    arm64.storeSlotReg slot2, x2
-    arm64.storeSlotReg slot3, x3
-    arm64.storeSlotReg slot4, x4
-    arm64.storeSlotReg slot5, x5
-    arm64.movRegReg x1, x3
-    arm64.movRegReg x2, x6
-    arm64.bl __managed_set
-    arm64.movRegReg x6, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x1, slot1
-    arm64.loadRegSlot x2, slot2
-    arm64.loadRegSlot x3, slot3
-    arm64.loadRegSlot x4, slot4
-    arm64.loadRegSlot x5, slot5
-    arm64.cmp x9, 0
-    arm64.b.ne forstep#25
-    arm64.b forstep#25
-}
-
-func @main {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __managed_create
-    arm64.movRegReg x19, x0
-    arm64.movImm x20, 0
-  forhdr#1:
-    arm64.cmp x20, 5
-    arm64.b.ge forexit#4
-  seed:
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
-    arm64.bl __managed_push
-  forstep#3:
-    arm64.add x20, x20, 1
-    arm64.b forhdr#1
-  forexit#4:
-    arm64.movImm x1, 9
-    arm64.movRegReg x0, x19
-    arm64.bl walk
-    arm64.cmp x0, 406
-    arm64.b.eq ifcont#6
-  sum:
-    arm64.movImm x20, 1
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-  ifcont#6:
-    arm64.movImm x0, 0
-    arm64.movImm x1, 0
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
-    arm64.loadRegBaseDisp.word64 x3, [x19 + 0]
-  forhdr#7:
-    arm64.cmp x1, x2
-    arm64.b.ge forexit#10
-  check:
-    arm64.loadRegBaseIndexScale.word64 x4, [x3 + x1*8 + 0]
-  __im_cont:
-    arm64.add x0, x0, x4
-  forstep#9:
-    arm64.add x1, x1, 1
-    arm64.b forhdr#7
-  forexit#10:
-    arm64.cmp x0, 20
-    arm64.b.eq ifcont#12
-  rewritten:
-    arm64.movImm x20, 2
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-  ifcont#12:
-    arm64.movImm x20, 0
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
+    arm64.b.ne forstep#40
+    arm64.b forstep#40
 }

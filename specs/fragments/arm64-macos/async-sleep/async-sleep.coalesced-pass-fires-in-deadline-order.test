@@ -5,7 +5,7 @@ typealias Millis = int(0 to u64.max)
 var order = 0
 
 function sleeper(ms Millis, tag Integer) returns Integer
-	sleep(ms)
+	sleep(ms as Milliseconds)
 	order = order * 10 + tag
 	return tag
 end 'sleeper'
@@ -41,36 +41,61 @@ data {
   __mm_alloc_count@8 = i64 0
   __gt_run_queue_head@16 = i64 0
   __gt_run_queue_tail@24 = i64 0
-  __gt_init_done@32 = i64 0
-  __gt_timer_count@40 = i64 0
-  __gt_timer_heap_base@48 = i64 0
-  __gt_timer_capacity@56 = i64 0
-  __gt_timer_seq@64 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_timer_seq@56 = i64 0
+  __gt_timer_when@64 = i64 9223372036854775807
   __gt_trace_counter@72 = i64 0
-  __gt_proc_count@80 = i64 0
-  __gt_proc_handles_base@88 = i64 0
-  __gt_proc_gts_base@96 = i64 0
-  __gt_proc_wait_snapshot@104 = i64 0
-  __gt_proc_poller@112 = i64 0
-  __gt_live_count@120 = i64 0
-  __sched_progress@128 = i64 0
-  __sched_active_workers@136 = i64 1
-  __sched_max_active_workers@144 = i64 1
-  __sched_tls_index@152 = i64 0
-  __sched_tls_teb_offset@160 = i64 0
-  __sched_procs@168 = i64 0
-  __sched_allm@176 = i64 0
-  __sched_midle@184 = i64 0
-  __sched_pidle@192 = i64 0
-  __sched_num_procs@200 = i64 0
-  __sched_shutdown_flag@208 = i64 0
-  __sched_lock@216 = i64 0
-  __sched_nmspinning@224 = i64 0
-  __sched_parked_drivers@232 = i64 0
-  __sched_sysmon_started@240 = i64 0
-  __slab_arena_list@248 = i64 0
-  __slab_arena_map_l1@256 = i64 0
-  __slab_state@264 = i64 0
+  __gt_live_count@80 = i64 0
+  __gt_seed_bytes@88 = i64 2048
+  __gt_stack_bytes_sum@96 = i64 0
+  __gt_stack_bytes_count@104 = i64 0
+  __gt_seed_sum_seen@112 = i64 0
+  __gt_seed_count_seen@120 = i64 0
+  __sched_active_workers@128 = i64 1
+  __sched_max_active_workers@136 = i64 1
+  __sched_tls_index@144 = i64 0
+  __sched_tls_teb_offset@152 = i64 0
+  __sched_procs@160 = i64 0
+  __sched_allm@168 = i64 0
+  __sched_midle@176 = i64 0
+  __sched_pidle@184 = i64 0
+  __gt_gfree_head@192 = i64 0
+  __sched_arena_cursor@200 = i64 0
+  __sched_arena_limit@208 = i64 0
+  __gt_records_carved@216 = i64 0
+  __sched_npidle@224 = i64 0
+  __sched_runq_size@232 = i64 0
+  __sched_global_pushes@240 = i64 0
+  __sched_timer_scan_steps@248 = i64 0
+  __sched_mcount@256 = i64 0
+  __sched_nmidle@264 = i64 0
+  __sched_main_m@272 = i64 0
+  __sched_phase@280 = i64 0
+  __sched_lastpoll@288 = i64 0
+  __sched_poll_until@296 = i64 0
+  __sched_regain_head@304 = i64 0
+  __np_poller@312 = i64 0
+  __np_break@320 = i64 0
+  __np_wake_sig@328 = i64 0
+  __np_pd_table@336 = i64 0
+  __np_pd_cap@344 = i64 0
+  __np_waiters@352 = i64 0
+  __np_src_key_free@360 = i64 0
+  __np_src_key_high@368 = i64 0
+  __sched_num_procs@376 = i64 0
+  __sched_shutdown_flag@384 = i64 0
+  __sched_lock@392 = i64 0
+  __sched_lock_depth_sink@400 = i64 0
+  __sched_nmspinning@408 = i64 0
+  __sched_needspinning@416 = i64 0
+  __sched_sysmon_event@424 = i64 0
+  __sched_sysmon_wait@432 = i64 0
+  __sched_timer_starts@440 = i64 0
+  __slab_arena_list@448 = i64 0
+  __slab_arena_map_l1@456 = i64 0
+  __slab_state@464 = i64 0
 }
 
 func @sleeper {
@@ -78,7 +103,15 @@ func @sleeper {
     arm64.prologue 32
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x1
-    arm64.bl sleep
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#2
+  __rc_chk:
+    arm64.movImm x1, 4294967295
+    arm64.cmp x0, x1
+    arm64.b.gt __rc_panic#4
+  __rc_ok:
+    arm64.bl __gt_sleep
+  __il_cont:
     arm64.leaGlobal x0, __data_order
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.movImm x16, 10
@@ -87,6 +120,20 @@ func @sleeper {
     arm64.leaGlobal x1, __data_order
     arm64.storeBaseDispReg.word64 [x1 + 0], x0
     arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at async-sleep.coalesced-pass-fires-in-deadline-order.test:7: Range check failed: value outside typealias 'Millis'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic#4:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at async-sleep.coalesced-pass-fires-in-deadline-order.test:8: Range check failed: value outside typealias 'Milliseconds'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
@@ -100,9 +147,40 @@ func @hog {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.cmp x19, 0
-    arm64.b.ge __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at async-sleep.coalesced-pass-fires-in-deadline-order.test:13: Range check failed: value outside typealias 'DurationNanos'\x0a"
+    arm64.b.lt __rc_panic#5
+  __rc_ok#4:
+    arm64.bl Clock.nowNanos
+    arm64.movRegReg x20, x0
+    arm64.movImm x21, 0
+  __il_body:
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic#11
+  __rc_ok#10:
+    arm64.bl Clock.nowNanos
+    arm64.cmp x0, x20
+    arm64.b.hs ifcont
+  clockSkew:
+    arm64.movImm x0, 0
+    arm64.b __il_cont
+  ifcont:
+    arm64.sub x0, x0, x20
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#13
+  __il_cont:
+    arm64.cmp x0, x19
+    arm64.b.hs whileexit
+  spin:
+    arm64.add x21, x21, 1
+    arm64.b __il_body
+  whileexit:
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at async-sleep.coalesced-pass-fires-in-deadline-order.test:13: Range check failed: value outside typealias 'DurationNanos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -110,20 +188,19 @@ func @hog {
     arm64.loadRegSlot x21, slot2
     arm64.epilogue 48
     arm64.ret
-  __rc_ok:
-    arm64.bl Clock.nowNanos
-    arm64.movRegReg x20, x0
-    arm64.movImm x21, 0
-  whilehdr:
-    arm64.movRegReg x0, x20
-    arm64.bl Clock.elapsedNanos
-    arm64.cmp x0, x19
-    arm64.b.ge whileexit
-  spin:
-    arm64.add x21, x21, 1
-    arm64.b whilehdr
-  whileexit:
-    arm64.movRegReg x0, x21
+  __rc_panic#11:
+    arm64.leaRdata x0, __str_blob_8  ; "panic at Clock.maxon:57: Range check failed: value outside typealias 'InstantNanos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic#13:
+    arm64.leaRdata x0, __str_blob_9  ; "panic at Clock.maxon:64: Range check failed: value outside typealias 'DurationNanos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -231,8 +308,10 @@ func @main {
     arm64.storeBaseDispReg.word64 [x24 + 24], x0
     arm64.movRegReg x0, x22
     arm64.bl __mm_decref
+  __il_body:
     arm64.movRegReg x0, x24
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont:
     arm64.movRegReg x0, x24
     arm64.bl __str_decref
     arm64.movImm x0, 0

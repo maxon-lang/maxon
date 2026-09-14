@@ -78,23 +78,6 @@ func @AlphaBackend.compute {
     x64.ret
 }
 
-func @AlphaBackend.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegImm32 rbx, 0
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @BetaBackend.compute {
   entry:
     x64.pushReg rbp
@@ -104,47 +87,26 @@ func @BetaBackend.compute {
     x64.ret
 }
 
-func @BetaBackend.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegImm32 rbx, 0
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @helperThatThrows {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
+    x64.prologue 32
     x64.movRegReg rsi, rcx
-    x64.movRegReg rbx, rax
     x64.movRegReg rcx, rdx
     x64.movRegReg rdx, rsi
-    x64.callMem [rbx + 24]
+    x64.callMem [rax + 24]
     x64.cmpRegImm32 r8, 0
     x64.jcc greaterEqual, ifcont
   bad:
     x64.movRegImm32 r10, 1
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 r10, 0
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }
@@ -160,22 +122,27 @@ func @dispatchWithReturnTry {
     x64.movRegReg rbx, rdx
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, matchnext
-  matcharm#1:
-    x64.callDirect AlphaBackend.create
-    x64.movRegReg r12, r8
+  __il_body#11:
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.storeBaseDispReg.word64 [r13 + 0], r12
+  __il_cont#10:
     x64.leaRegRdata rax, [rip + __witness_AlphaBackend.Backend]
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
+    x64.movRegReg rdx, r13
     x64.callDirect helperThatThrows
     x64.movRegReg rbx, r8
-    x64.movRegReg r13, r10
-    x64.cmpRegImm32 r13, 0
+    x64.movRegReg r12, r10
+    x64.cmpRegImm32 r12, 0
     x64.jcc equal, tryok#2
   tryerr#3:
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
     x64.movRegImm32 r8, 0
-    x64.movRegReg r10, r13
+    x64.movRegReg r10, r12
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
@@ -183,7 +150,7 @@ func @dispatchWithReturnTry {
     x64.popReg rbp
     x64.ret
   tryok#2:
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
     x64.movRegImm32 r10, 0
     x64.movRegReg r8, rbx
@@ -196,22 +163,27 @@ func @dispatchWithReturnTry {
   matchnext:
     x64.cmpRegImm32 rcx, 1
     x64.jcc notEqual, matchdead
-  matcharm#4:
-    x64.callDirect BetaBackend.create
-    x64.movRegReg r12, r8
+  __il_body#13:
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.storeBaseDispReg.word64 [r13 + 0], r12
+  __il_cont#12:
     x64.leaRegRdata rax, [rip + __witness_BetaBackend.Backend]
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
+    x64.movRegReg rdx, r13
     x64.callDirect helperThatThrows
     x64.movRegReg rbx, r8
-    x64.movRegReg r13, r10
-    x64.cmpRegImm32 r13, 0
+    x64.movRegReg r12, r10
+    x64.cmpRegImm32 r12, 0
     x64.jcc equal, tryok#5
   tryerr#6:
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
     x64.movRegImm32 r8, 0
-    x64.movRegReg r10, r13
+    x64.movRegReg r10, r12
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
@@ -219,7 +191,7 @@ func @dispatchWithReturnTry {
     x64.popReg rbp
     x64.ret
   tryok#5:
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
     x64.movRegImm32 r10, 0
     x64.movRegReg r8, rbx
@@ -266,16 +238,16 @@ func @main {
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at interface-dispatch-throws-in-match.test:60: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.jcc greater, __rc_panic
+  __rc_ok:
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at interface-dispatch-throws-in-match.test:60: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp

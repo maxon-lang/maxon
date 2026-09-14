@@ -34,13 +34,7 @@ func @scale {
   __rc_chk#3:
     arm64.fpLoadRdata d1, [rdata + __fconst_10]
     arm64.fcmp d0, d1
-    arm64.b.le __rc_ok#1
-  __rc_panic#2:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at narrow-ranged-float-byref-param-guards-the-pointee.test:4: Range check failed: value outside typealias 'Ratio'\x0a"
-    arm64.bl mrt_panic
-    arm64.fpLoadRdata d0, [rdata + __fconst_0]
-    arm64.epilogue 16
-    arm64.ret
+    arm64.b.gt __rc_panic#2
   __rc_ok#1:
     arm64.loadRegBaseDisp.word64 d0, [x0 + 0]
     arm64.fpLoadRdata d1, [rdata + __fconst_2]
@@ -53,14 +47,20 @@ func @scale {
   __rc_chk#6:
     arm64.fpLoadRdata d1, [rdata + __fconst_10]
     arm64.fcmp d0, d1
-    arm64.b.le __rc_ok#4
-  __rc_panic#5:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at narrow-ranged-float-byref-param-guards-the-pointee.test:6: Range check failed: value outside typealias 'Ratio'\x0a"
+    arm64.b.gt __rc_panic#5
+  __rc_ok#4:
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at narrow-ranged-float-byref-param-guards-the-pointee.test:4: Range check failed: value outside typealias 'Ratio'\x0a"
     arm64.bl mrt_panic
     arm64.fpLoadRdata d0, [rdata + __fconst_0]
     arm64.epilogue 16
     arm64.ret
-  __rc_ok#4:
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at narrow-ranged-float-byref-param-guards-the-pointee.test:6: Range check failed: value outside typealias 'Ratio'\x0a"
+    arm64.bl mrt_panic
+    arm64.fpLoadRdata d0, [rdata + __fconst_0]
     arm64.epilogue 16
     arm64.ret
 }

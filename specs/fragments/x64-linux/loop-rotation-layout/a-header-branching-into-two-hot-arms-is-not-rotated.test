@@ -40,15 +40,13 @@ func @stepTo {
     x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, ifelse
   evenStep:
-    x64.leaRegRegImm32 rax, rax, 3
-    x64.jmp ifcont
+    x64.leaRegRegImm32 r8, rax, 3
+    x64.jmp ifcont#6
   ifelse:
-    x64.leaRegRegImm32 rax, rax, 1
-  ifcont:
-    x64.cmpRegReg rax, rcx
-    x64.jcc less, spin
-  done:
-    x64.movRegReg r8, rax
+    x64.leaRegRegImm32 r8, rax, 1
+  ifcont#6:
+    x64.cmpRegReg r8, rcx
+    x64.jcc less, ifcont#8
   whileexit:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic#13
@@ -59,6 +57,9 @@ func @stepTo {
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
+  ifcont#8:
+    x64.movRegReg rax, r8
+    x64.jmp spin
   __rc_panic#10:
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-header-branching-into-two-hot-arms-is-not-rotated.test:4: Range check failed: value outside typealias 'Small'\x0a"
     x64.callDirect mrt_panic

@@ -19,59 +19,21 @@ typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
-func @keepAll {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-  __il_body:
-    x64.imulRegRegImm32 r8, rdi, 100000
-    x64.imulRegRegImm32 r10, rsi, 10000
-    x64.leaRegRegReg r8, r8, r10
-    x64.imulRegRegImm32 r10, r9, 1000
-    x64.leaRegRegReg r8, r8, r10
-    x64.imulRegRegImm32 r10, rax, 100
-    x64.leaRegRegReg r8, r8, r10
-    x64.imulRegRegImm32 r10, rdx, 10
-    x64.leaRegRegReg r8, r8, r10
-    x64.leaRegRegReg r8, r8, rcx
-  __il_cont:
-    x64.imulRegRegImm32 rcx, rcx, 100000
-    x64.leaRegRegReg rcx, r8, rcx
-    x64.imulRegRegImm32 rdx, rdx, 10000
-    x64.leaRegRegReg rcx, rcx, rdx
-    x64.imulRegRegImm32 rax, rax, 1000
-    x64.leaRegRegReg rax, rcx, rax
-    x64.imulRegRegImm32 rcx, r9, 100
-    x64.leaRegRegReg rax, rax, rcx
-    x64.imulRegRegImm32 rcx, rsi, 10
-    x64.leaRegRegReg rax, rax, rcx
-    x64.leaRegRegReg r8, rax, rdi
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm32 rcx, 1
-    x64.movRegImm32 rdx, 2
-    x64.movRegImm32 rax, 3
-    x64.movRegImm32 r9, 4
-    x64.movRegImm32 rsi, 5
-    x64.movRegImm32 rdi, 6
-    x64.callDirect keepAll
-    x64.cmpRegImm32 r8, 777777
-    x64.jcc notEqual, ifcont
+  __il_body:
+    x64.movRegImm32 rax, 654321
+  __il_cont:
+    x64.leaRegRegImm32 rax, rax, 100000
+    x64.leaRegRegImm32 rax, rax, 20000
+    x64.leaRegRegImm32 rax, rax, 3000
+    x64.leaRegRegImm32 rax, rax, 400
+    x64.leaRegRegImm32 rax, rax, 50
+    x64.leaRegRegImm32 rax, rax, 6
   ok:
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.movRegImm32 r8, 99
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

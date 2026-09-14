@@ -26,27 +26,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @pick {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, ifcont
-  u:
-    x64.leaRegRdata rcx, [rip + __str_rec_5]  ; "_"
-    x64.callDirect __str_retain
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.leaRegRdata rcx, [rip + __str_rec_6]  ; "x"
-    x64.callDirect __str_retain
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -75,9 +54,11 @@ func @main {
     x64.storeBaseDispReg.word64 [r13 + 16], rax
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r13 + 24], rax
-    x64.movRegImm32 rcx, 1
-    x64.callDirect pick
+  u:
+    x64.leaRegRdata rcx, [rip + __str_rec_5]  ; "_"
+    x64.callDirect __str_retain
     x64.movRegReg rbx, r8
+  __il_cont:
     x64.movRegReg rcx, r13
     x64.callDirect __str_decref
     x64.leaRegRdata rdx, [rip + __str_rec_5]  ; "_"

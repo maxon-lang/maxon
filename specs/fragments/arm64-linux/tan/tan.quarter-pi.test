@@ -16,19 +16,148 @@ func @main {
   entry:
     arm64.prologue 16
     arm64.fpLoadRdata d0, [rdata + __fconst_0.785398163]
-    arm64.bl Math.tan
+  __il_body:
+    arm64.movRegReg d1, d0
+    arm64.b whilehdr#33
+  reduce_pos#34:
+    arm64.fpLoadRdata d2, [rdata + __fconst_6.283185307179586]
+    arm64.fsub d1, d1, d2
+  whilehdr#33:
+    arm64.fpLoadRdata d2, [rdata + __fconst_3.141592653589793]
+    arm64.fcmp d1, d2
+    arm64.b.gt reduce_pos#34
+    arm64.b whilehdr#36
+  reduce_neg#37:
+    arm64.fpLoadRdata d2, [rdata + __fconst_6.283185307179586]
+    arm64.fadd d1, d1, d2
+  whilehdr#36:
+    arm64.fpLoadRdata d2, [rdata + __fconst_-3.141592653589793]
+    arm64.fcmp d1, d2
+    arm64.b.mi reduce_neg#37
+  __il_cont#31:
+    arm64.fmul d2, d1, d1
+    arm64.fpLoadRdata d3, [rdata + __fconst_1]
+    arm64.fpLoadRdata d4, [rdata + __fconst_12]
+    arm64.fneg d2, d2
+    arm64.movRegReg d5, d3
+    arm64.movRegReg d3, d1
+    arm64.b whilehdr#18
+  series#19:
+    arm64.fpLoadRdata d6, [rdata + __fconst_2]
+    arm64.fmul d6, d6, d5
+    arm64.fmul d1, d1, d2
+    arm64.fpLoadRdata d7, [rdata + __fconst_1]
+    arm64.fadd d7, d6, d7
+    arm64.fmul d6, d6, d7
+    arm64.fpLoadRdata d7, [rdata + __fconst_0]
+    arm64.fcmp d6, d7
+    arm64.cset x0, eq
+    arm64.fdiv d1, d1, d6
+    arm64.cmp x0, 0
+    arm64.b.ne tryerr#22
+  tryok#21:
+    arm64.fadd d3, d3, d1
+    arm64.fpLoadRdata d6, [rdata + __fconst_1]
+    arm64.fadd d5, d5, d6
+  whilehdr#18:
+    arm64.fcmp d5, d4
+    arm64.b.mi series#19
+    arm64.b whilehdr#41
+  reduce_pos#42:
+    arm64.fpLoadRdata d1, [rdata + __fconst_6.283185307179586]
+    arm64.fsub d0, d0, d1
+  whilehdr#41:
+    arm64.fpLoadRdata d1, [rdata + __fconst_3.141592653589793]
+    arm64.fcmp d0, d1
+    arm64.b.gt reduce_pos#42
+    arm64.b whilehdr#44
+  reduce_neg#45:
+    arm64.fpLoadRdata d1, [rdata + __fconst_6.283185307179586]
+    arm64.fadd d0, d0, d1
+  whilehdr#44:
+    arm64.fpLoadRdata d1, [rdata + __fconst_-3.141592653589793]
+    arm64.fcmp d0, d1
+    arm64.b.mi reduce_neg#45
+  __il_cont#39:
+    arm64.fmul d0, d0, d0
+    arm64.fpLoadRdata d1, [rdata + __fconst_1]
+    arm64.fpLoadRdata d2, [rdata + __fconst_1]
+    arm64.fpLoadRdata d4, [rdata + __fconst_1]
+    arm64.fpLoadRdata d5, [rdata + __fconst_12]
+    arm64.fneg d0, d0
+    arm64.b whilehdr#26
+  series#27:
+    arm64.fpLoadRdata d6, [rdata + __fconst_2]
+    arm64.fmul d6, d6, d4
+    arm64.fmul d1, d1, d0
+    arm64.fpLoadRdata d7, [rdata + __fconst_1]
+    arm64.fsub d7, d6, d7
+    arm64.fmul d6, d7, d6
+    arm64.fpLoadRdata d7, [rdata + __fconst_0]
+    arm64.fcmp d6, d7
+    arm64.cset x0, eq
+    arm64.fdiv d1, d1, d6
+    arm64.cmp x0, 0
+    arm64.b.ne tryerr#30
+  tryok#29:
+    arm64.fadd d2, d2, d1
+    arm64.fpLoadRdata d6, [rdata + __fconst_1]
+    arm64.fadd d4, d4, d6
+  whilehdr#26:
+    arm64.fcmp d4, d5
+    arm64.b.mi series#27
+  __il_cont#13:
+    arm64.fpLoadRdata d0, [rdata + __fconst_0]
+    arm64.fcmp d2, d0
+    arm64.b.ne ifcont#10
+  div_zero:
+    arm64.fpLoadRdata d0, [rdata + __fconst_0]
+    arm64.fcmp d3, d0
+    arm64.b.le ifcont#9
+  positive:
+    arm64.fpLoadRdata d0, [rdata + __fconst_1000000000]
+    arm64.b __il_cont#3
+  ifcont#9:
+    arm64.fpLoadRdata d0, [rdata + __fconst_-1000000000]
+    arm64.b __il_cont#3
+  ifcont#10:
+    arm64.fpLoadRdata d0, [rdata + __fconst_0]
+    arm64.fcmp d2, d0
+    arm64.cset x0, eq
+    arm64.fdiv d0, d3, d2
+    arm64.cmp x0, 0
+    arm64.b.ne tryerr#12
+  __il_cont#3:
     arm64.fpLoadRdata d1, [rdata + __fconst_1]
     arm64.fsub d0, d0, d1
     arm64.fabs d0, d0
     arm64.fpLoadRdata d1, [rdata + __fconst_0.01]
     arm64.fcmp d0, d1
-    arm64.b.pl ifcont
+    arm64.b.pl ifcont#2
   check:
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
-  ifcont:
+  ifcont#2:
     arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  tryerr#22:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at Math.maxon:128: sin series divisor (2n)(2n+1) is >= 6\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  tryerr#30:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at Math.maxon:166: cos series divisor (2n-1)(2n) is >= 2\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  tryerr#12:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at Math.maxon:505: tan: cos(x) is guarded non-zero above\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
 }

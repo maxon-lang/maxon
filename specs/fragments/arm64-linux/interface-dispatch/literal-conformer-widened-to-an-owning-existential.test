@@ -1,5 +1,12 @@
 // Test: literal-conformer-widened-to-an-owning-existential
+typealias Tally = int(0 to 100)
+
+var widenings = 0 as Tally
+
+// The discard below is the whole shape, so `widen` must have an effect — discarding a PURE result is
+// E3064 (`discarded-results.md`) and the program would never reach the retain this case is about.
 function widen(h Hashable) returns Hashable
+	widenings = widenings + 1
 	return h
 end 'widen'
 
@@ -7,16 +14,17 @@ function main() returns ExitCode
 	print("A")
 	_ = widen("abc")
 	print("B")
-	return 0
+	return widenings - 1
 end 'main'
 ---
 ExitCode: 0
 ---
 data {
-  __mm_alloc_count@0 = i64 0
-  __slab_arena_list@8 = i64 0
-  __slab_arena_map_l1@16 = i64 0
-  __slab_state@24 = i64 0
+  __data_widenings@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @widen {
@@ -25,6 +33,11 @@ func @widen {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x2, x0
     arm64.movRegReg x19, x1
+    arm64.leaGlobal x0, __data_widenings
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x0, x0, 1
+    arm64.leaGlobal x1, __data_widenings
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x2
     arm64.bl __retain_existential
@@ -47,6 +60,20 @@ func @main {
     arm64.bl __drop_existential
     arm64.leaRdata x0, __str_rec_5  ; "B"
     arm64.bl print
+    arm64.leaGlobal x0, __data_widenings
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.sub x0, x0, 1
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_16  ; "panic at literal-conformer-widened-to-an-owning-existential.test:17: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret

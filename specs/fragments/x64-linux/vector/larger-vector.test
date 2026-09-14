@@ -30,51 +30,49 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 32
-    x64.leaRegRdata rcx, [rip + __layout_Vector_N10_Int]
-    x64.movRegImm32 rdx, 10
-    x64.callDirect Vector.create
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 r12, 0
-  whilehdr:
-    x64.cmpRegImm32 r12, 10
-    x64.jcc greaterEqual, whileexit
+    x64.leaRegRdata rax, [rip + __layout_Vector_N10_Int]
+    x64.movRegImm32 rbx, 10
+  __il_body:
+    x64.movRegImm32 rcx, 8
+    x64.loadRegBaseDisp.word64 rdx, [rax + 40]
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect __managed_resize
+  __il_cont:
+    x64.movRegImm32 rbx, 0
+    x64.jmp whilehdr
   fill:
-    x64.imulRegRegImm32 rax, r12, 10
+    x64.imulRegRegImm32 rax, rbx, 10
     x64.leaRegRdata r9, [rip + __layout_Vector_N10_Int]
     x64.movRegImm32 rsi, 10
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
     x64.callDirect Vector.set
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#4
-  tryerr#5:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at larger-vector.test:9: test invariant: set OOB\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc notEqual, tryerr#5
   tryok#4:
-    x64.leaRegRegImm32 r12, r12, 1
-    x64.jmp whilehdr
+    x64.leaRegRegImm32 rbx, rbx, 1
+  whilehdr:
+    x64.cmpRegImm32 rbx, 10
+    x64.jcc less, fill
   whileexit:
     x64.movRegImm32 rdx, 0
     x64.leaRegRdata rax, [rip + __layout_Vector_N10_Int]
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect Vector.get
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#6
   tryerr#7:
-    x64.movRegImm r12, 18446744073709551615
+    x64.movRegImm rbx, 18446744073709551615
     x64.jmp trycont#8
   tryok#6:
-    x64.movRegReg r12, r8
+    x64.movRegReg rbx, r8
   trycont#8:
     x64.movRegImm32 rdx, 9
     x64.leaRegRdata rax, [rip + __layout_Vector_N10_Int]
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect Vector.get
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#9
@@ -84,16 +82,23 @@ func @main {
   tryok#9:
     x64.movRegReg rax, r8
   trycont#11:
-    x64.leaRegRegReg r12, r12, rax
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-    x64.cmpRegImm32 r12, 0
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
-    x64.cmpRegImm32 r12, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at larger-vector.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.cmpRegImm32 rbx, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at larger-vector.test:9: test invariant: set OOB\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -101,8 +106,10 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg r8, r12
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at larger-vector.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx

@@ -1,6 +1,6 @@
 // Test: div-both-operands-non-negative-stays-unsigned
 typealias Integer = int(i64.min to i64.max)
-typealias MachineWord = int(0 to u64.max)
+typealias MachineWord = bits(64)
 typealias HalfRadix = int(1 to 8)
 
 function ident(v Integer) returns Integer
@@ -8,7 +8,7 @@ function ident(v Integer) returns Integer
 end 'ident'
 
 function quotient(w MachineWord, halfRadix HalfRadix) returns MachineWord
-	return w / halfRadix
+	return try (w / (halfRadix as MachineWord)) otherwise panic("halfRadix is never zero")
 end 'quotient'
 
 function main() returns ExitCode
@@ -26,26 +26,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @quotient {
-  entry:
-    arm64.prologue 16
-    arm64.cmp x1, 1
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x1, 8
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_4  ; "panic at div-both-operands-non-negative-stays-unsigned.test:10: Range check failed: value outside typealias 'HalfRadix'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  __rc_ok:
-    arm64.udiv x0, x0, x1
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 112
@@ -59,12 +39,11 @@ func @main {
     arm64.storeSlotReg slot4, x21
     arm64.storeSlotReg slot3, x20
     arm64.storeSlotReg slot2, x19
-  __il_cont:
+  __il_cont#3:
     arm64.movImm x19, 18446744073709551615
-    arm64.movImm x1, 8
-    arm64.movRegReg x0, x19
-    arm64.bl quotient
-    arm64.movRegReg x20, x0
+  __rc_ok:
+    arm64.lsr x20, x19, 3
+  __il_cont#2:
     arm64.movImm x0, 20
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -74,19 +53,19 @@ func @main {
     arm64.movRegReg x1, x21
     arm64.bl __uint_to_string
     arm64.movRegReg x20, x0
-    arm64.leaRdata x0, __str_rec_2  ; " "
+    arm64.leaRdata x0, __str_rec_3  ; " "
     arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
     arm64.lsr x19, x19, 3
-    arm64.movImm x0, 21
+    arm64.movImm x0, 20
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x24, x0
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x24
-    arm64.bl __int_to_string
+    arm64.bl __uint_to_string
     arm64.movRegReg x19, x0
-    arm64.leaRdata x0, __str_rec_3  ; "\x0a"
+    arm64.leaRdata x0, __str_rec_4  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x25, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x26, [x0 + 8]
     arm64.add x0, x20, x23
@@ -129,8 +108,10 @@ func @main {
     arm64.bl __mm_decref
     arm64.movRegReg x0, x24
     arm64.bl __mm_decref
+  __il_body:
     arm64.movRegReg x0, x27
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont#1:
     arm64.movRegReg x0, x27
     arm64.bl __str_decref
     arm64.movImm x0, 0

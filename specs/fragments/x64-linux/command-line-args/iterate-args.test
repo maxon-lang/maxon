@@ -31,74 +31,143 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
-    x64.callDirect CommandLine.args
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 56
+  __il_body#14:
+    x64.callDirect __cl_count
     x64.movRegReg rbx, r8
-    x64.movRegImm32 r12, 1
-  whilehdr:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegReg r12, rax
-    x64.jcc greaterEqual, whileexit
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __str_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rcx, 0
+    x64.jmp forhdr#15
   loop:
-    x64.cmpRegImm32 r12, 0
-    x64.jcc greaterEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at iterate-args.test:7: Range check failed: value outside typealias 'ElementIndex'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.callDirect __cl_arg
+    x64.storeSlotReg slot1, r8
+    x64.movRegReg rcx, r8
+    x64.callDirect __managed_retain
+    x64.movRegReg r13, r8
+  __il_body#22:
+    x64.loadRegBaseDisp.word64 r14, [r13 + 8]
+    x64.movRegImm32 r15, 0
+    x64.jmp forhdr#23
+  scan:
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r15
+    x64.callDirect __managed_byte_at
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#28
+  tryok#27:
+    x64.cmpRegImm32 r8, 128
+    x64.movRegImm32 rax, 1
+    x64.jcc greaterEqual, scmerge
+  orrhs:
+    x64.cmpRegImm32 r8, 13
+    x64.setccReg equal, rax
+  scmerge:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, forstep#25
+  notSingleByte:
+    x64.movRegImm32 rdx, 0
+    x64.jmp __il_cont#21
+  forstep#25:
+    x64.leaRegRegImm32 r15, r15, 1
+  forhdr#23:
+    x64.cmpRegReg r15, r14
+    x64.jcc less, scan
+  forexit:
+    x64.movRegImm32 rdx, 1
+  __il_cont#21:
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_of_buffer
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+  __il_cont#19:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.callDirect __managed_push
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __managed_decref
+  forstep#17:
+    x64.loadRegSlot rax, slot0
+    x64.leaRegRegImm32 rcx, rax, 1
+  forhdr#15:
+    x64.storeSlotReg slot0, rcx
+    x64.cmpRegReg rcx, rbx
+    x64.jcc less, loop
+  __il_cont#13:
+    x64.movRegImm32 rbx, 1
+    x64.jmp whilehdr
   __rc_ok:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegReg r12, rax
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegReg rbx, rax
     x64.jcc aboveEqual, __im_slow
   __im_load:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseIndexScale.word64 rax, [rax + r12*8 + 0]
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rax + rbx*8 + 0]
     x64.movRegImm32 rcx, 0
-    x64.loadRegBaseDisp.word64 rdx, [rbx + 40]
+    x64.loadRegBaseDisp.word64 rdx, [r12 + 40]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, critsplit#13
+    x64.jcc equal, critsplit#33
   __im_empty:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#14
-  __im_slow:
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
-    x64.callDirect __managed_get
-    x64.jmp __im_cont
-  critsplit#14:
+    x64.jcc equal, __im_slow
+  critsplit#34:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rcx
     x64.jmp __im_cont
-  critsplit#13:
+  critsplit#33:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rcx
   __im_cont:
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
-  tryerr:
+    x64.jcc equal, tryok#4
+  tryerr#5:
     x64.leaRegRdata rcx, [rip + __str_rec_2]  ; ""
     x64.jmp trycont
-  tryok:
+  tryok#4:
     x64.movRegReg rcx, r8
   trycont:
     x64.callDirect print
     x64.leaRegRdata rcx, [rip + __str_rec_3]  ; "\x0a"
     x64.callDirect print
-    x64.leaRegRegImm32 r12, r12, 1
-    x64.jmp whilehdr
+    x64.leaRegRegImm32 rbx, rbx, 1
+  whilehdr:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegReg rbx, rax
+    x64.jcc less, __rc_ok
   whileexit:
-    x64.movRegImm32 r12, 0
-    x64.movRegReg rcx, rbx
+    x64.movRegImm32 rbx, 0
+    x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
+    x64.movRegReg r8, rbx
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  tryerr#28:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at String.maxon:1136: scanSingleByteGraphemes: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect __managed_get
+    x64.jmp __im_cont
 }

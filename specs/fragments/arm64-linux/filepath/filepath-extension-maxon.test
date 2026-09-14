@@ -28,13 +28,171 @@ func @main {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.leaRdata x0, __str_rec_17  ; "Compiler.maxon"
-    arm64.bl FilePath.init
+  __il_body#3:
+    arm64.bl FilePath.create
     arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x19
-    arm64.bl FilePath.fileExtension
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#5
+  __il_body#25:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+  __il_body#42:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+  __il_cont#41:
+    arm64.cmp x0, 0
+    arm64.b.ne ifcont#27
+  empty:
+    arm64.movImm x20, 0
+    arm64.b __il_cont#24
+  ifcont#27:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+  __il_body#44:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.b whilehdr#28
+  scan#29:
+    arm64.sub x20, x0, 1
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.movRegReg x1, x20
+    arm64.bl String.byteAtOrPanic
+    arm64.cmp x0, 47
+    arm64.b.ne ifcont#32
+  isSep:
+    arm64.add x20, x20, 1
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic
+    arm64.b __il_cont#24
+  ifcont#32:
+    arm64.movRegReg x0, x20
+  whilehdr#28:
+    arm64.cmp x0, 0
+    arm64.b.hi scan#29
+  whileexit#30:
+    arm64.movImm x20, 0
+  __il_cont#24:
+    arm64.cmp x20, 0
+    arm64.b.ne ifcont#21
+  noSep:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.bl __str_retain
     arm64.movRegReg x20, x0
-    arm64.loadRegBaseDisp.word64 x21, [x20 + 0]
-    arm64.loadRegBaseDisp.word64 x22, [x20 + 8]
+    arm64.b __il_body#38
+  ifcont#21:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+  __il_body#40:
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
+  __il_cont#39:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.bl String.addressableBytes
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __managed_slice
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#22
+  tryerr#23:
+    arm64.leaRdata x0, __str_blob_31  ; "panic at FilePath.maxon:343: FilePath.filename: slice \xe2\x80\x94 sepPlusOne from lastSepPlusOne, always <= len\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+  tryok#22:
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_retain
+    arm64.bl String.init
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x20, x21
+  __il_body#38:
+    arm64.loadRegBaseDisp.word64 x21, [x20 + 8]
+  __il_cont#37:
+    arm64.cmp x21, 1
+    arm64.b.hi ifcont#10
+  tooShort:
+    arm64.leaRdata x0, __str_rec_32  ; ""
+    arm64.bl __str_retain
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __str_decref
+    arm64.b __il_cont#7
+  ifcont#10:
+    arm64.movRegReg x0, x20
+    arm64.bl String.addressableBytes
+    arm64.movRegReg x22, x0
+  __il_body#36:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.b whilehdr#11
+  scan#12:
+    arm64.sub x23, x0, 1
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x23
+    arm64.bl String.byteAtOrPanic
+    arm64.cmp x0, 46
+    arm64.b.ne ifcont#17
+  isDot:
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x21
+    arm64.bl __managed_slice
+    arm64.movRegReg x21, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#15
+  tryerr#16:
+    arm64.leaRdata x0, __str_blob_33  ; "panic at FilePath.maxon:368: FilePath.fileExtension: slice \xe2\x80\x94 i from backwards scan, always <= nameLen\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+  tryok#15:
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_retain
+    arm64.bl String.init
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __str_decref
+    arm64.movRegReg x21, x23
+    arm64.b __il_cont#7
+  ifcont#17:
+    arm64.movRegReg x0, x23
+  whilehdr#11:
+    arm64.cmp x0, 1
+    arm64.b.hi scan#12
+  whileexit#13:
+    arm64.leaRdata x0, __str_rec_32  ; ""
+    arm64.bl __str_retain
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __str_decref
+  __il_cont#7:
+    arm64.loadRegBaseDisp.word64 x20, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x21 + 8]
     arm64.leaRdata x0, __str_rec_18  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
@@ -45,31 +203,63 @@ func @main {
     arm64.movRegReg x26, x0
     arm64.add x27, x26, 56
     arm64.movRegReg x0, x27
-    arm64.movRegReg x1, x21
+    arm64.movRegReg x1, x20
     arm64.movRegReg x2, x22
     arm64.bl __str_copy
-    arm64.add x21, x27, x22
-    arm64.movRegReg x0, x21
+    arm64.add x20, x27, x22
+    arm64.movRegReg x0, x20
     arm64.movRegReg x1, x23
     arm64.movRegReg x2, x24
     arm64.bl __str_copy
-    arm64.add x0, x21, x24
+    arm64.add x0, x20, x24
     arm64.storeBaseDispReg.word64 [x26 + 0], x27
     arm64.storeBaseDispReg.word64 [x26 + 8], x25
     arm64.movImm x0, 18446744073709551613
     arm64.storeBaseDispReg.word64 [x26 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x26 + 24], x0
+  __il_body#6:
     arm64.movRegReg x0, x26
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont#1:
     arm64.movRegReg x0, x26
     arm64.bl __str_decref
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x21
     arm64.bl __str_decref
     arm64.movImm x20, 0
     arm64.movRegReg x0, x19
     arm64.bl __destruct_FilePath
     arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+  tryerr#5:
+    arm64.leaRdata x0, __str_blob_27  ; "panic at FilePath.maxon:31: FilePath: invalid path\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_112  ; "panic at FilePath.maxon:326: Range check failed: value outside typealias 'PathByteOffset'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

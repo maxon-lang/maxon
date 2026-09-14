@@ -130,60 +130,7 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Blk.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @Module.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mm_decref
-    arm64.bl __managed_create
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @Module.addBlock {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x1
-    arm64.bl Blk.create
-    arm64.movRegReg x20, x0
-    arm64.loadRegBaseDisp.word64 x19, [x19 + 0]
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_incref
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
-    arm64.bl __managed_push
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @Parser.create {
   entry:
     arm64.prologue 48
     arm64.storeSlotReg slot2, x21
@@ -191,21 +138,31 @@ func @Parser.create {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.movRegReg x20, x1
-    arm64.movImm x0, 16
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic
+  __il_body:
+    arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x21, x0
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_incref
     arm64.storeBaseDispReg.word64 [x21 + 0], x20
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.storeBaseDispReg.word64 [x21 + 8], x19
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x19
-    arm64.bl __destruct_Module
+  __il_cont:
+    arm64.loadRegBaseDisp.word64 x19, [x19 + 0]
     arm64.movRegReg x0, x21
+    arm64.bl __mm_own
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at consumed-arg-scalar-borrow-survives-throwing-call.test:29: Range check failed: value outside typealias 'Num'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -215,7 +172,8 @@ func @Parser.create {
 
 func @Parser.parseIdentifierExpr {
   entry:
-    arm64.prologue 48
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
     arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
@@ -225,10 +183,11 @@ func @Parser.parseIdentifierExpr {
     arm64.movRegReg x21, x2
     arm64.loadRegBaseDisp.word64 x22, [x19 + 0]
     arm64.movRegReg x0, x20
-    arm64.bl __mm_incref
+    arm64.bl __mm_own
+    arm64.movRegReg x23, x0
     arm64.movRegReg x0, x22
     arm64.bl __mm_decref
-    arm64.storeBaseDispReg.word64 [x19 + 0], x20
+    arm64.storeBaseDispReg.word64 [x19 + 0], x23
     arm64.loadRegBaseDisp.word64 x22, [x20 + 0]
     arm64.cbz x21, critsplit
   callArgs:
@@ -243,7 +202,8 @@ func @Parser.parseIdentifierExpr {
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
     arm64.ret
   tryok:
     arm64.add x0, x22, x0
@@ -254,17 +214,34 @@ func @Parser.parseIdentifierExpr {
     arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
     arm64.add x0, x0, x1
     arm64.movImm x9, 0
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_ok:
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at consumed-arg-scalar-borrow-survives-throwing-call.test:59: Range check failed: value outside typealias 'Num'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
 func @Parser.parseCallArgsRaw {
   entry:
     arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
@@ -272,10 +249,11 @@ func @Parser.parseCallArgsRaw {
     arm64.movRegReg x20, x1
     arm64.loadRegBaseDisp.word64 x21, [x19 + 0]
     arm64.movRegReg x0, x20
-    arm64.bl __mm_incref
+    arm64.bl __mm_own
+    arm64.movRegReg x22, x0
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
-    arm64.storeBaseDispReg.word64 [x19 + 0], x20
+    arm64.storeBaseDispReg.word64 [x19 + 0], x22
     arm64.movImm x2, 0
     arm64.movImm x3, 0
     arm64.movRegReg x0, x19
@@ -288,22 +266,39 @@ func @Parser.parseCallArgsRaw {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   tryok:
     arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
     arm64.add x0, x0, x1
     arm64.movImm x9, 0
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_ok:
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at consumed-arg-scalar-borrow-survives-throwing-call.test:65: Range check failed: value outside typealias 'Num'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
 }
 
 func @Parser.parsePrimary {
   entry:
-    arm64.prologue 48
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
     arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
@@ -313,10 +308,11 @@ func @Parser.parsePrimary {
     arm64.movRegReg x21, x2
     arm64.loadRegBaseDisp.word64 x22, [x19 + 0]
     arm64.movRegReg x0, x20
-    arm64.bl __mm_incref
+    arm64.bl __mm_own
+    arm64.movRegReg x23, x0
     arm64.movRegReg x0, x22
     arm64.bl __mm_decref
-    arm64.storeBaseDispReg.word64 [x19 + 0], x20
+    arm64.storeBaseDispReg.word64 [x19 + 0], x23
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
     arm64.movRegReg x2, x21
@@ -329,23 +325,41 @@ func @Parser.parsePrimary {
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
     arm64.ret
   tryok:
     arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
     arm64.add x0, x0, x1
     arm64.movImm x9, 0
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_ok:
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_7  ; "panic at consumed-arg-scalar-borrow-survives-throwing-call.test:71: Range check failed: value outside typealias 'Num'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
 func @Parser.parseUnary {
   entry:
-    arm64.prologue 48
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
     arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
@@ -355,10 +369,11 @@ func @Parser.parseUnary {
     arm64.movRegReg x21, x2
     arm64.loadRegBaseDisp.word64 x22, [x19 + 0]
     arm64.movRegReg x0, x20
-    arm64.bl __mm_incref
+    arm64.bl __mm_own
+    arm64.movRegReg x23, x0
     arm64.movRegReg x0, x22
     arm64.bl __mm_decref
-    arm64.storeBaseDispReg.word64 [x19 + 0], x20
+    arm64.storeBaseDispReg.word64 [x19 + 0], x23
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
     arm64.movRegReg x2, x21
@@ -371,17 +386,34 @@ func @Parser.parseUnary {
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
     arm64.ret
   tryok:
     arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
     arm64.add x0, x0, x1
     arm64.movImm x9, 0
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_ok:
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_8  ; "panic at consumed-arg-scalar-borrow-survives-throwing-call.test:77: Range check failed: value outside typealias 'Num'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -397,15 +429,19 @@ func @Parser.parseExpressionBP {
     arm64.movRegReg x19, x0
     arm64.movRegReg x20, x2
     arm64.movRegReg x21, x3
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic#9
+  __rc_ok#8:
     arm64.movRegReg x0, x1
     arm64.bl __mm_retain
     arm64.movRegReg x22, x0
     arm64.loadRegBaseDisp.word64 x23, [x19 + 0]
     arm64.movRegReg x0, x22
-    arm64.bl __mm_incref
+    arm64.bl __mm_own
+    arm64.movRegReg x24, x0
     arm64.movRegReg x0, x23
     arm64.bl __mm_decref
-    arm64.storeBaseDispReg.word64 [x19 + 0], x22
+    arm64.storeBaseDispReg.word64 [x19 + 0], x24
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x22
     arm64.movRegReg x2, x21
@@ -433,9 +469,7 @@ func @Parser.parseExpressionBP {
     arm64.movRegReg x23, x0
     arm64.movRegReg x0, x22
     arm64.bl __mm_decref
-  whilehdr:
-    arm64.cmp x20, 0
-    arm64.b.ls whileexit
+    arm64.b whilehdr
   prattLoop:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x23
@@ -466,12 +500,43 @@ func @Parser.parseExpressionBP {
     arm64.add x21, x21, x22
     arm64.sub x20, x20, 1
     arm64.movRegReg x23, x24
-    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x20, 0
+    arm64.b.hi prattLoop
   whileexit:
     arm64.movRegReg x0, x23
     arm64.bl __mm_decref
     arm64.movImm x9, 0
+    arm64.cmp x21, 0
+    arm64.b.lt __rc_panic#11
+  __rc_ok#10:
     arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  __rc_panic#9:
+    arm64.leaRdata x0, __str_blob_9  ; "panic at consumed-arg-scalar-borrow-survives-throwing-call.test:80: Range check failed: value outside typealias 'Num'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  __rc_panic#11:
+    arm64.leaRdata x0, __str_blob_10  ; "panic at consumed-arg-scalar-borrow-survives-throwing-call.test:92: Range check failed: value outside typealias 'Num'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -484,7 +549,8 @@ func @Parser.parseExpressionBP {
 
 func @Parser.emitShortCircuit {
   entry:
-    arm64.prologue 64
+    arm64.prologue 80
+    arm64.storeSlotReg slot6, x25
     arm64.storeSlotReg slot5, x24
     arm64.storeSlotReg slot4, x23
     arm64.storeSlotReg slot3, x22
@@ -500,10 +566,11 @@ func @Parser.emitShortCircuit {
     arm64.loadRegBaseDisp.word64 x22, [x21 + 0]
     arm64.loadRegBaseDisp.word64 x23, [x19 + 0]
     arm64.movRegReg x0, x21
-    arm64.bl __mm_incref
+    arm64.bl __mm_own
+    arm64.movRegReg x24, x0
     arm64.movRegReg x0, x23
     arm64.bl __mm_decref
-    arm64.storeBaseDispReg.word64 [x19 + 0], x21
+    arm64.storeBaseDispReg.word64 [x19 + 0], x24
     arm64.movImm x2, 0
     arm64.movImm x3, 1
     arm64.movRegReg x0, x19
@@ -524,7 +591,8 @@ func @Parser.emitShortCircuit {
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
     arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
     arm64.ret
   tryok:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
@@ -534,21 +602,28 @@ func @Parser.emitShortCircuit {
   __il_body:
     arm64.loadRegBaseDisp.word64 x0, [x24 + 0]
     arm64.add x0, x0, 1
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#8
+  __rc_ok#7:
     arm64.storeBaseDispReg.word64 [x24 + 0], x0
   __il_cont:
     arm64.add x20, x22, x20
     arm64.loadRegBaseDisp.word64 x22, [x19 + 0]
     arm64.movRegReg x0, x24
-    arm64.bl __mm_incref
+    arm64.bl __mm_own
+    arm64.movRegReg x25, x0
     arm64.movRegReg x0, x22
     arm64.bl __mm_decref
-    arm64.storeBaseDispReg.word64 [x19 + 0], x24
+    arm64.storeBaseDispReg.word64 [x19 + 0], x25
     arm64.add x19, x23, x20
     arm64.movRegReg x0, x24
     arm64.bl __mm_decref
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
     arm64.movImm x9, 0
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic#4
+  __rc_ok#3:
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -556,62 +631,116 @@ func @Parser.emitShortCircuit {
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
     arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
+    arm64.ret
+  __rc_panic#8:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at consumed-arg-scalar-borrow-survives-throwing-call.test:16: Range check failed: value outside typealias 'Num'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
+    arm64.ret
+  __rc_panic#4:
+    arm64.leaRdata x0, __str_blob_11  ; "panic at consumed-arg-scalar-borrow-survives-throwing-call.test:105: Range check failed: value outside typealias 'Num'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
     arm64.ret
 }
 
 func @main {
   entry:
-    arm64.prologue 48
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
     arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.bl Module.create
+  __il_body#9:
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __mm_decref
+    arm64.bl __managed_create
     arm64.movRegReg x19, x0
-    arm64.movImm x1, 1
-    arm64.movRegReg x0, x19
-    arm64.bl Module.addBlock
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+  __il_cont#8:
+    arm64.movImm x1, 1
     arm64.movRegReg x0, x20
-    arm64.bl __mm_incref
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
-    arm64.bl Parser.create
+    arm64.bl Module.addBlock
+    arm64.movRegReg x19, x0
+    arm64.leaFuncAddr x1, __clone_Module
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_own_deep
     arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_own
+    arm64.movRegReg x22, x0
+  __il_body#10:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_own
+    arm64.storeBaseDispReg.word64 [x23 + 0], x0
+    arm64.leaFuncAddr x1, __clone_Module
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_own_deep
+    arm64.storeBaseDispReg.word64 [x23 + 8], x0
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Module
+  __il_cont#7:
     arm64.movImm x2, 1
     arm64.movImm x3, 1
-    arm64.movRegReg x0, x21
-    arm64.movRegReg x1, x20
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x19
     arm64.bl Parser.parseExpressionBP
     arm64.cmp x9, 0
-    arm64.b.eq __il_body
+    arm64.b.eq __il_body#12
   tryerr:
-    arm64.movImm x22, 3
-    arm64.movRegReg x0, x21
+    arm64.movImm x21, 3
+    arm64.movRegReg x0, x23
     arm64.bl __destruct_Parser
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
     arm64.bl __destruct_Module
-    arm64.movRegReg x0, x22
+    arm64.movRegReg x0, x21
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
     arm64.ret
-  __il_body:
+  __il_body#12:
     arm64.movImm x1, 0
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x20 + 0]
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x4, [x2 + 8]
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
-  forhdr:
-    arm64.cmp x3, x4
-    arm64.b.ge __il_cont
+    arm64.b forhdr
   each:
     arm64.loadRegBaseIndexScale.word64 x5, [x2 + x3*8 + 0]
   __im_cont:
@@ -619,56 +748,75 @@ func @main {
     arm64.add x1, x1, x5
   forstep:
     arm64.add x3, x3, 1
-    arm64.b forhdr
-  __il_cont:
+  forhdr:
+    arm64.cmp x3, x4
+    arm64.b.lt each
+  forexit:
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic
+  __il_cont#11:
     arm64.cmp x1, 205
     arm64.b.eq ifcont#4
   corrupt:
-    arm64.movImm x22, 1
-    arm64.movRegReg x0, x21
+    arm64.movImm x21, 1
+    arm64.movRegReg x0, x23
     arm64.bl __destruct_Parser
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
     arm64.bl __destruct_Module
-    arm64.movRegReg x0, x22
+    arm64.movRegReg x0, x21
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
     arm64.ret
   ifcont#4:
     arm64.cmp x0, 0
     arm64.b.ne ifcont#6
   noResult:
-    arm64.movImm x22, 2
-    arm64.movRegReg x0, x21
+    arm64.movImm x21, 2
+    arm64.movRegReg x0, x23
     arm64.bl __destruct_Parser
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
     arm64.bl __destruct_Module
-    arm64.movRegReg x0, x22
+    arm64.movRegReg x0, x21
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
     arm64.ret
   ifcont#6:
-    arm64.movImm x22, 0
-    arm64.movRegReg x0, x21
+    arm64.movImm x21, 0
+    arm64.movRegReg x0, x23
     arm64.bl __destruct_Parser
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
     arm64.bl __destruct_Module
-    arm64.movRegReg x0, x22
+    arm64.movRegReg x0, x21
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at consumed-arg-scalar-borrow-survives-throwing-call.test:40: Range check failed: value outside typealias 'Num'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
     arm64.ret
 }

@@ -47,47 +47,10 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @MultiManaged.create {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-    arm64.movRegReg x21, x2
-    arm64.movImm x0, 24
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x22, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.storeBaseDispReg.word64 [x22 + 0], x19
-    arm64.movRegReg x0, x20
-    arm64.bl __str_retain
-    arm64.storeBaseDispReg.word64 [x22 + 8], x0
-    arm64.movRegReg x0, x21
-    arm64.bl __str_retain
-    arm64.storeBaseDispReg.word64 [x22 + 16], x0
-    arm64.movRegReg x0, x21
-    arm64.bl __str_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __str_decref
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
-    arm64.movRegReg x0, x22
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.ret
-}
-
 func @mayFail {
   entry:
-    arm64.prologue 64
+    arm64.prologue 80
+    arm64.storeSlotReg slot6, x25
     arm64.storeSlotReg slot5, x24
     arm64.storeSlotReg slot4, x23
     arm64.storeSlotReg slot3, x22
@@ -105,7 +68,8 @@ func @mayFail {
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
     arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
     arm64.ret
   ifcont:
     arm64.movImm x0, 8
@@ -121,48 +85,65 @@ func @mayFail {
     arm64.leaRdata x20, __str_rec_2  ; "hello"
     arm64.leaRdata x21, __str_rec_3  ; "world"
     arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.loadRegBaseDisp.word64 x22, [x20 + 0]
+    arm64.bl __managed_retain
+    arm64.movRegReg x22, x0
+    arm64.loadRegBaseDisp.word64 x23, [x20 + 0]
     arm64.loadRegBaseDisp.word64 x20, [x20 + 8]
     arm64.add x0, x20, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.movRegReg x23, x0
-    arm64.add x24, x23, 56
-    arm64.movRegReg x0, x24
-    arm64.movRegReg x1, x22
+    arm64.movRegReg x24, x0
+    arm64.add x25, x24, 56
+    arm64.movRegReg x0, x25
+    arm64.movRegReg x1, x23
     arm64.movRegReg x2, x20
     arm64.bl __str_copy
-    arm64.add x0, x24, x20
-    arm64.storeBaseDispReg.word64 [x23 + 0], x24
-    arm64.storeBaseDispReg.word64 [x23 + 8], x20
+    arm64.add x0, x25, x20
+    arm64.storeBaseDispReg.word64 [x24 + 0], x25
+    arm64.storeBaseDispReg.word64 [x24 + 8], x20
     arm64.movImm x0, 18446744073709551613
-    arm64.storeBaseDispReg.word64 [x23 + 16], x0
+    arm64.storeBaseDispReg.word64 [x24 + 16], x0
     arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x23 + 24], x0
+    arm64.storeBaseDispReg.word64 [x24 + 24], x0
     arm64.loadRegBaseDisp.word64 x20, [x21 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x21 + 8]
     arm64.add x0, x21, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.movRegReg x22, x0
-    arm64.add x24, x22, 56
-    arm64.movRegReg x0, x24
+    arm64.movRegReg x23, x0
+    arm64.add x25, x23, 56
+    arm64.movRegReg x0, x25
     arm64.movRegReg x1, x20
     arm64.movRegReg x2, x21
     arm64.bl __str_copy
-    arm64.add x0, x24, x21
-    arm64.storeBaseDispReg.word64 [x22 + 0], x24
-    arm64.storeBaseDispReg.word64 [x22 + 8], x21
+    arm64.add x0, x25, x21
+    arm64.storeBaseDispReg.word64 [x23 + 0], x25
+    arm64.storeBaseDispReg.word64 [x23 + 8], x21
     arm64.movImm x0, 18446744073709551613
-    arm64.storeBaseDispReg.word64 [x22 + 16], x0
+    arm64.storeBaseDispReg.word64 [x23 + 16], x0
     arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x22 + 24], x0
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x23
-    arm64.movRegReg x2, x22
-    arm64.bl MultiManaged.create
+    arm64.storeBaseDispReg.word64 [x23 + 24], x0
+  __il_body:
+    arm64.movImm x0, 24
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_retain
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.movRegReg x0, x24
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x20 + 8], x0
+    arm64.movRegReg x0, x23
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x20 + 16], x0
+    arm64.movRegReg x0, x23
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x24
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_decref
+  __il_cont:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movImm x9, 0
@@ -173,61 +154,39 @@ func @mayFail {
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
     arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
     arm64.ret
 }
 
 func @main {
   entry:
     arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
     arm64.movImm x19, 0
     arm64.movImm x20, 0
-  whilehdr:
-    arm64.cmp x20, 3
-    arm64.b.ge whileexit
+    arm64.b whilehdr
   loop:
     arm64.movImm x0, 1
     arm64.bl mayFail
-    arm64.movRegReg x21, x0
     arm64.cmp x9, 0
     arm64.b.ne ifelse
   check:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
-    arm64.movImm x1, 0
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
-    arm64.cmp x2, 0
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
+    arm64.cmp x3, 0
     arm64.b.ls __im_slow
-  __im_load:
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
-    arm64.movImm x3, 0
-    arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
-    arm64.cmp x4, 0
-    arm64.b.eq critsplit#17
-  __im_empty:
-    arm64.cmp x2, 0
-    arm64.b.ne critsplit#18
-  __im_slow:
-    arm64.bl __managed_get
-    arm64.b __im_cont
-  critsplit#18:
-    arm64.movRegReg x0, x2
-    arm64.movRegReg x9, x3
-    arm64.b __im_cont
-  critsplit#17:
-    arm64.movRegReg x0, x2
-    arm64.movRegReg x9, x3
-  __im_cont:
-    arm64.cmp x9, 0
-    arm64.b.eq trycont
+    arm64.b __im_load
   tryerr:
-    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.b trycont
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
   trycont:
-    arm64.add x19, x19, x0
-    arm64.movRegReg x0, x21
+    arm64.add x19, x19, x1
     arm64.bl __destruct_MultiManaged
     arm64.movRegReg x0, x19
     arm64.b ifcont
@@ -236,27 +195,37 @@ func @main {
   ifcont:
     arm64.add x20, x20, 1
     arm64.movRegReg x19, x0
-    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x20, 3
+    arm64.b.lt loop
   whileexit:
     arm64.cmp x19, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_4  ; "panic at if-try-binding-struct-multiple-managed-fields.test:38: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
+    arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __im_slow:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_get
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr
+    arm64.b trycont
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at if-try-binding-struct-multiple-managed-fields.test:38: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
     arm64.epilogue 48
     arm64.ret
 }

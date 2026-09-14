@@ -173,95 +173,33 @@ func @Item.create {
     arm64.ret
 }
 
-func @Item.clone {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @Block.create {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.leaRdata x0, __layout_List_Integer
-    arm64.bl List.create
-    arm64.movRegReg x20, x0
-    arm64.movImm x0, 16
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.storeBaseDispReg.word64 [x0 + 8], x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @GenModule.merge {
-  entry:
-    arm64.prologue 80
-    arm64.storeSlotReg slot6, x25
-    arm64.storeSlotReg slot5, x24
-    arm64.storeSlotReg slot4, x23
-    arm64.storeSlotReg slot3, x22
+    arm64.prologue 48
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-    arm64.movRegReg x21, x2
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
-    arm64.movRegReg x2, x21
-    arm64.bl GenModule.appendOps
-    arm64.movImm x22, 0
+    arm64.leaRdata x0, __layout_List_Integer
   __il_body:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
-    arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
-  forhdr:
-    arm64.cmp x22, x23
-    arm64.b.ge forexit
-  eachFunc:
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x22
-    arm64.movRegReg x2, x21
-    arm64.bl GenModule.getFunc
-    arm64.movRegReg x24, x0
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x24
-    arm64.movRegReg x2, x21
-    arm64.bl GenModule.cloneFunc
-    arm64.movRegReg x25, x0
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x25
-    arm64.movRegReg x2, x21
-    arm64.bl GenModule.pushFunc
-    arm64.movRegReg x0, x25
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x24
-    arm64.bl __mm_decref
-  forstep:
-    arm64.add x22, x22, 1
-    arm64.b forhdr
-  forexit:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
+    arm64.bl __list_create
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 0], x20
+  __il_cont:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x21
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.loadRegSlot x25, slot6
-    arm64.epilogue 80
+    arm64.epilogue 48
     arm64.ret
 }
 
@@ -297,94 +235,6 @@ func @GenModule.create {
     arm64.ret
 }
 
-func @GenModule.appendOps {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
-    arm64.bl __managed_append_opaque
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @GenModule.getFunc {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.cmp x1, 0
-    arm64.b.ge __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_17  ; "panic at generic-module-merge.test:88: Range check failed: value outside typealias 'ElementIndex'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  __rc_ok:
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
-    arm64.cmp x1, x2
-    arm64.b.hs __im_slow
-  __im_load:
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
-    arm64.loadRegBaseIndexScale.word64 x2, [x2 + x1*8 + 0]
-    arm64.movImm x3, 0
-    arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
-    arm64.cmp x4, 0
-    arm64.b.eq critsplit#9
-  __im_empty:
-    arm64.cmp x2, 0
-    arm64.b.ne critsplit#10
-  __im_slow:
-    arm64.bl __managed_get
-    arm64.b __im_cont
-  critsplit#10:
-    arm64.movRegReg x0, x2
-    arm64.movRegReg x9, x3
-    arm64.b __im_cont
-  critsplit#9:
-    arm64.movRegReg x0, x2
-    arm64.movRegReg x9, x3
-  __im_cont:
-    arm64.cmp x9, 0
-    arm64.b.eq tryok
-  tryerr:
-    arm64.leaRdata x0, __str_blob_8  ; "panic at generic-module-merge.test:89: getFunc: out of bounds\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  tryok:
-    arm64.bl __mm_retain
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @GenModule.pushFunc {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x1
-    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x19
-    arm64.bl __managed_push
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @GenModule.cloneFunc {
-  entry:
-    arm64.prologue 16
-    arm64.movRegReg x0, x1
-    arm64.bl Item.clone
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @GenModule.appendOp {
   entry:
     arm64.prologue 32
@@ -400,6 +250,7 @@ func @GenModule.appendOp {
     arm64.leaRdata x2, __layout_List_Integer
     arm64.movRegReg x1, x20
     arm64.bl List.append
+    arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
@@ -477,9 +328,9 @@ func @main {
     arm64.bl GenModule.appendOp
     arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
     arm64.movRegReg x0, x20
-    arm64.bl __mm_incref
+    arm64.bl __mm_own
+    arm64.movRegReg x1, x0
     arm64.movRegReg x0, x21
-    arm64.movRegReg x1, x20
     arm64.bl __managed_push
     arm64.loadRegBaseDisp.word64 x21, [x19 + 0]
     arm64.movImm x0, 1
@@ -521,9 +372,9 @@ func @main {
     arm64.bl GenModule.appendOp
     arm64.loadRegBaseDisp.word64 x23, [x21 + 8]
     arm64.movRegReg x0, x22
-    arm64.bl __mm_incref
+    arm64.bl __mm_own
+    arm64.movRegReg x1, x0
     arm64.movRegReg x0, x23
-    arm64.movRegReg x1, x22
     arm64.bl __managed_push
     arm64.loadRegBaseDisp.word64 x22, [x21 + 0]
     arm64.movImm x0, 2
@@ -531,46 +382,121 @@ func @main {
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x22
     arm64.bl __managed_push
-  __il_body#17:
+  __il_body#39:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
-  __il_body#18:
+  __il_body#40:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
-  __il_cont#15:
+  __il_cont#37:
     arm64.leaRdata x2, __layout_GenModule_String
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x21
-    arm64.bl GenModule.merge
-  __il_body#19:
+  __il_body#20:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.loadRegBaseDisp.word64 x1, [x21 + 16]
+    arm64.bl __managed_append_opaque
+  __il_cont#19:
+    arm64.movImm x24, 0
+  __il_body#46:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.b forhdr#15
+  __rc_ok:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.cmp x24, x1
+    arm64.b.hs __im_slow
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseIndexScale.word64 x1, [x1 + x24*8 + 0]
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 40]
+    arm64.cmp x3, 0
+    arm64.b.eq critsplit#49
+  __im_empty:
+    arm64.cmp x1, 0
+    arm64.b.eq __im_slow
+  critsplit#50:
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont
+  critsplit#49:
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x9, x2
+  __im_cont:
+    arm64.cmp x9, 0
+    arm64.b.eq tryok
+  tryerr:
+    arm64.leaRdata x0, __str_blob_8  ; "panic at generic-module-merge.test:89: getFunc: out of bounds\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot13
+    arm64.loadRegSlot x20, slot14
+    arm64.loadRegSlot x21, slot15
+    arm64.loadRegSlot x22, slot16
+    arm64.loadRegSlot x23, slot17
+    arm64.loadRegSlot x24, slot18
+    arm64.loadRegSlot x25, slot19
+    arm64.loadRegSlot x26, slot20
+    arm64.loadRegSlot x27, slot21
+    arm64.loadRegSlot x28, slot22
+    arm64.epilogue 208
+    arm64.ret
+  tryok:
+    arm64.bl __mm_retain
+    arm64.movRegReg x26, x0
+  __il_body#36:
+    arm64.loadRegBaseDisp.word64 x27, [x26 + 0]
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x28, x0
+    arm64.storeBaseDispReg.word64 [x28 + 0], x27
+  __il_body#32:
+    arm64.loadRegBaseDisp.word64 x27, [x19 + 0]
+    arm64.movRegReg x0, x28
+    arm64.bl __mm_own
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x27
+    arm64.bl __managed_push
+  __il_cont#21:
+    arm64.movRegReg x0, x28
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x26
+    arm64.bl __mm_decref
+  forstep#17:
+    arm64.add x24, x24, 1
+  forhdr#15:
+    arm64.cmp x24, x25
+    arm64.b.lt __rc_ok
+  __il_body#43:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.storeSlotReg slot6, x0
-  __il_body#20:
+  __il_body#44:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.storeSlotReg slot5, x0
-  __il_cont#13:
+  __il_cont#41:
     arm64.movImm x19, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.bl List.createIterator
     arm64.movRegReg x20, x0
     arm64.movImm x0, 0
     arm64.cmp x9, 0
-    arm64.b.ne forempty
-  forhdr:
-    arm64.cmp x0, 0
-    arm64.b.ne forexit
+    arm64.b.eq forhdr#1
+    arm64.b forempty
   eachRef:
     arm64.leaRdata x1, __layout_ListIterator_Integer
     arm64.movRegReg x0, x20
     arm64.bl ListIterator.current
     arm64.add x19, x19, x0
-  forstep:
+  forstep#4:
     arm64.movRegReg x0, x20
     arm64.bl ListIterator.advance
     arm64.movRegReg x0, x9
-    arm64.b forhdr
+  forhdr#1:
+    arm64.cmp x0, 0
+    arm64.b.eq eachRef
   forexit:
     arm64.movRegReg x0, x20
     arm64.bl __destruct_ListIterator_Integer
@@ -636,12 +562,12 @@ func @main {
     arm64.movRegReg x2, x23
     arm64.bl __str_copy
     arm64.add x19, x19, x23
+    arm64.loadRegSlot x2, slot11
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x27
-    arm64.loadRegSlot x20, slot11
-    arm64.movRegReg x2, x20
     arm64.bl __str_copy
-    arm64.add x0, x19, x20
+    arm64.loadRegSlot x0, slot11
+    arm64.add x0, x19, x0
     arm64.loadRegSlot x19, slot9
     arm64.storeBaseDispReg.word64 [x19 + 0], x28
     arm64.loadRegSlot x0, slot7
@@ -714,12 +640,12 @@ func @main {
     arm64.movRegReg x2, x26
     arm64.bl __str_copy
     arm64.add x19, x19, x26
+    arm64.loadRegSlot x2, slot12
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x27
-    arm64.loadRegSlot x20, slot12
-    arm64.movRegReg x2, x20
     arm64.bl __str_copy
-    arm64.add x0, x19, x20
+    arm64.loadRegSlot x0, slot12
+    arm64.add x0, x19, x0
     arm64.loadRegSlot x19, slot10
     arm64.storeBaseDispReg.word64 [x19 + 0], x28
     arm64.loadRegSlot x0, slot8
@@ -794,13 +720,13 @@ func @main {
     arm64.cset x0, eq
   scmerge#8:
     arm64.movImm x1, 0
-    arm64.cbz x0, critsplit
+    arm64.cbz x0, critsplit#48
   andrhs#9:
     arm64.loadRegSlot x0, slot4
     arm64.cmp x0, 1
     arm64.cset x0, eq
     arm64.b scmerge#10
-  critsplit:
+  critsplit#48:
     arm64.movRegReg x0, x1
   scmerge#10:
     arm64.cbz x0, ifcont
@@ -850,4 +776,8 @@ func @main {
     arm64.loadRegSlot x28, slot22
     arm64.epilogue 208
     arm64.ret
+  __im_slow:
+    arm64.movRegReg x1, x24
+    arm64.bl __managed_get
+    arm64.b __im_cont
 }

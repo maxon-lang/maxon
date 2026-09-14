@@ -16,6 +16,12 @@ typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 244
 ---
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+}
+
 func @main {
   entry:
     x64.pushReg rbp
@@ -23,41 +29,33 @@ func @main {
     x64.prologue 32
     x64.movRegImm32 r8, 0
     x64.movRegImm32 rcx, 1
-  whilehdr:
-    x64.cmpRegImm32 rcx, 6
-    x64.jcc greater, whileexit
+    x64.jmp whilehdr
   loop:
     x64.movRegImm32 rax, 100
   __il_cont:
-    x64.cmpRegImm32 rcx, 0
-    x64.setccReg equal, rsi
-    x64.movRegReg rdi, rcx
-    x64.orRegReg rdi, rcx, rsi
     x64.cqo
-    x64.idivReg rdi
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, trycont
-  tryerr:
-    x64.movRegImm32 rax, 0
+    x64.idivReg rcx
   trycont:
     x64.leaRegRegReg r8, r8, rax
     x64.leaRegRegImm32 rcx, rcx, 1
-    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 rcx, 6
+    x64.jcc lessEqual, loop
   whileexit:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc lessEqual, __rc_ok
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at checked-divide-in-a-loop.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

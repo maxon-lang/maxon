@@ -22,75 +22,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @takes {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x1, 0
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_get
-    arm64.cmp x9, 0
-    arm64.b.eq tryok
-  tryerr#2:
-    arm64.movImm x20, 0
-    arm64.b trycont#3
-  tryok:
-    arm64.movRegReg x20, x0
-  trycont#3:
-    arm64.movImm x1, 1
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_get
-    arm64.cmp x9, 0
-    arm64.b.eq trycont#6
-  tryerr#5:
-    arm64.movImm x0, 0
-  trycont#6:
-    arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
-    arm64.cmp x1, 2
-    arm64.movImm x1, 0
-    arm64.b.ne scmerge#8
-  andrhs#7:
-    arm64.cmp x20, 195
-    arm64.cset x1, eq
-  scmerge#8:
-    arm64.movImm x2, 0
-    arm64.cbz x1, critsplit
-  andrhs#9:
-    arm64.cmp x0, 159
-    arm64.cset x0, eq
-    arm64.b scmerge#10
-  critsplit:
-    arm64.movRegReg x0, x2
-  scmerge#10:
-    arm64.cbz x0, ternaryfalse
-  ternarytrue:
-    arm64.movImm x0, 0
-    arm64.b matchcont
-  ternaryfalse:
-    arm64.movImm x0, 1
-  matchcont:
-    arm64.cmp x0, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x0, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at a-wide-byte-still-materializes-a-byte-view.test:8: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-  __rc_ok:
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 32
@@ -104,9 +35,50 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
     arm64.bl __str_to_bytes
+  __il_body:
+    arm64.movImm x1, 0
     arm64.movRegReg x0, x20
-    arm64.bl takes
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.eq tryok
+  tryerr#4:
+    arm64.movImm x19, 0
+    arm64.b trycont#5
+  tryok:
     arm64.movRegReg x19, x0
+  trycont#5:
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.eq trycont#8
+  tryerr#7:
+    arm64.movImm x0, 0
+  trycont#8:
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 8]
+    arm64.cmp x1, 2
+    arm64.movImm x1, 0
+    arm64.b.ne scmerge#10
+  andrhs#9:
+    arm64.cmp x19, 195
+    arm64.cset x1, eq
+  scmerge#10:
+    arm64.movImm x2, 0
+    arm64.cbz x1, critsplit
+  andrhs#11:
+    arm64.cmp x0, 159
+    arm64.cset x0, eq
+    arm64.b scmerge#12
+  critsplit:
+    arm64.movRegReg x0, x2
+  scmerge#12:
+    arm64.cbz x0, ternaryfalse
+  ternarytrue:
+    arm64.movImm x19, 0
+    arm64.b __il_cont
+  ternaryfalse:
+    arm64.movImm x19, 1
+  __il_cont:
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref
     arm64.movRegReg x0, x19

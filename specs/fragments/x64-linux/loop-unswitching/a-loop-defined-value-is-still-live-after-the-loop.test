@@ -56,14 +56,7 @@ func @lastDoubled {
     x64.loadRegBaseDisp.word64 r9, [r9 + 16]
     x64.cmpRegImm32 r9, 0
     x64.jcc notEqual, forhdr#1
-  __us_test#41:
-    x64.loadRegBaseDisp.word64 r9, [rcx + 40]
-    x64.movRegImm32 r10, 0
-    x64.cmpRegReg r9, r10
-    x64.jcc equal, forhdr#22
-  forhdr#1:
-    x64.cmpRegReg rsi, rdx
-    x64.jcc greaterEqual, critsplit#43
+    x64.jmp forhdr#22
   __rc_ok#9:
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegReg rsi, rax
@@ -95,13 +88,12 @@ func @lastDoubled {
     x64.storeBaseIndexScaleReg.word64 [rdi + rsi*8 + 0], rax
   forstep#3:
     x64.leaRegRegImm32 rsi, rsi, 1
-    x64.jmp forhdr#1
-  critsplit#43:
+  forhdr#1:
+    x64.cmpRegReg rsi, rdx
+    x64.jcc less, __rc_ok#9
+  critsplit#42:
     x64.movRegReg r8, rax
     x64.jmp forexit
-  forhdr#22:
-    x64.cmpRegReg rsi, rdx
-    x64.jcc greaterEqual, critsplit#46
   __rc_ok#36:
     x64.cmpRegReg rsi, rdi
     x64.jcc aboveEqual, __im_slow#34
@@ -113,8 +105,10 @@ func @lastDoubled {
     x64.storeBaseIndexScaleReg.word64 [r8 + rsi*8 + 0], rax
   forstep#23:
     x64.leaRegRegImm32 rsi, rsi, 1
-    x64.jmp forhdr#22
-  critsplit#46:
+  forhdr#22:
+    x64.cmpRegReg rsi, rdx
+    x64.jcc less, __rc_ok#36
+  critsplit#45:
     x64.movRegReg r8, rax
   forexit:
     x64.epilogue 80
@@ -189,16 +183,16 @@ func @main {
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 r12, 0
-  forhdr:
-    x64.cmpRegImm32 r12, 4
-    x64.jcc greaterEqual, forexit
+    x64.jmp forhdr
   seed:
     x64.leaRegRegImm32 rdx, r12, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
   forstep:
     x64.leaRegRegImm32 r12, r12, 1
-    x64.jmp forhdr
+  forhdr:
+    x64.cmpRegImm32 r12, 4
+    x64.jcc less, seed
   forexit:
     x64.movRegImm32 rdx, 4
     x64.movRegReg rcx, rbx

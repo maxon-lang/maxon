@@ -28,26 +28,84 @@ data {
 func @main {
   entry:
     arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.leaRdata x0, __layout_Vector_N3_Int
-    arm64.movImm x1, 3
-    arm64.bl Vector.create
-    arm64.movRegReg x19, x0
-    arm64.movImm x20, 0
-  whilehdr:
-    arm64.cmp x20, 3
-    arm64.b.ge whileexit
+    arm64.movImm x19, 3
+  __il_body#16:
+    arm64.movImm x1, 8
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl __managed_resize
+  __il_cont#15:
+    arm64.movImm x19, 0
+    arm64.b whilehdr
   fill:
     arm64.movImm x2, 4
     arm64.leaRdata x3, __layout_Vector_N3_Int
     arm64.movImm x4, 3
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
     arm64.bl Vector.set
     arm64.cmp x9, 0
-    arm64.b.eq tryok
+    arm64.b.ne tryerr
+  tryok:
+    arm64.add x19, x19, 1
+  whilehdr:
+    arm64.cmp x19, 3
+    arm64.b.lt fill
+  whileexit:
+    arm64.movImm x19, 0
+    arm64.movRegReg x0, x20
+    arm64.bl Vector.createIterator
+    arm64.movRegReg x21, x0
+    arm64.movImm x0, 0
+    arm64.cmp x9, 0
+    arm64.b.eq forhdr
+    arm64.b forjoin
+  sum:
+    arm64.leaRdata x22, __layout_ArrayIterator_Int
+  __il_body#18:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.bl __managed_cursor_current
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __retain_type_param
+  __il_cont#17:
+    arm64.add x19, x19, x0
+  forstep:
+    arm64.movRegReg x0, x21
+    arm64.bl ArrayIterator.advance
+    arm64.movRegReg x0, x9
+  forhdr:
+    arm64.cmp x0, 0
+    arm64.b.eq sum
+  forexit:
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_ArrayIterator_Int
+  forjoin:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
   tryerr:
     arm64.leaRdata x0, __str_blob_0  ; "panic at a-variable-index-write-round-trips.test:9: test invariant: set OOB\x0a"
     arm64.bl mrt_panic
@@ -55,57 +113,17 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
-  tryok:
-    arm64.add x20, x20, 1
-    arm64.b whilehdr
-  whileexit:
-    arm64.movImm x20, 0
-    arm64.movRegReg x0, x19
-    arm64.bl Vector.createIterator
-    arm64.movRegReg x21, x0
-    arm64.movImm x0, 0
-    arm64.cmp x9, 0
-    arm64.b.ne forjoin
-  forhdr:
-    arm64.cmp x0, 0
-    arm64.b.ne forexit
-  sum:
-    arm64.leaRdata x1, __layout_ArrayIterator_Int
-    arm64.movRegReg x0, x21
-    arm64.bl ArrayIterator.current
-    arm64.add x20, x20, x0
-  forstep:
-    arm64.movRegReg x0, x21
-    arm64.bl ArrayIterator.advance
-    arm64.movRegReg x0, x9
-    arm64.b forhdr
-  forexit:
-    arm64.movRegReg x0, x21
-    arm64.bl __destruct_ArrayIterator_Int
-  forjoin:
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
-    arm64.cmp x20, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x20, 255
-    arm64.b.le __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at a-variable-index-write-round-trips.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_3  ; "panic at a-variable-index-write-round-trips.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
 }

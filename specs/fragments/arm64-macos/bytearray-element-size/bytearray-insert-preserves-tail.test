@@ -19,7 +19,9 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
@@ -35,14 +37,198 @@ func @main {
     arm64.storeBaseDispReg.word64 [x19 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
-    arm64.movImm x1, 1
-    arm64.movImm x2, 88
-    arm64.leaRdata x3, __layout_Array_Byte
+    arm64.movImm x20, 1
+    arm64.movImm x21, 88
+    arm64.leaRdata x0, __layout_Array_Byte
+  __rc_ok#35:
+    arm64.loadRegBaseDisp.word64 x22, [x19 + 8]
+    arm64.cmp x22, 1
+    arm64.b.ge ifcont#26
+  clampHigh:
+    arm64.movRegReg x20, x22
+  ifcont#26:
+    arm64.add x23, x22, 1
+  __il_body#53:
+    arm64.cmp x23, 0
+    arm64.b.lt __rc_panic
+  __rc_ok#58:
     arm64.movRegReg x0, x19
-    arm64.bl Array.insert
+    arm64.bl __managed_capacity
+    arm64.cmp x23, x0
+    arm64.b.le __il_cont#52
+  __il_body#68:
+    arm64.add x1, x0, x0
+    arm64.cmp x23, x1
+    arm64.b.le ifcont#62
+  __rc_ok#77:
+    arm64.cmp x23, 4
+    arm64.b.hs ifcont#76
+  raise#75:
+    arm64.movImm x0, 4
+    arm64.b __il_cont#73
+  ifcont#76:
+    arm64.movRegReg x0, x23
+  __il_cont#73:
+    arm64.movRegReg x1, x0
+    arm64.b __il_cont#60
+  ifcont#62:
+    arm64.cmp x0, 256
+    arm64.b.ge whilehdr
+  __rc_ok#83:
+    arm64.cmp x1, 4
+    arm64.b.hs ifcont#82
+  raise#81:
+    arm64.movImm x0, 4
+    arm64.b __il_cont#79
+  ifcont#82:
+    arm64.movRegReg x0, x1
+  __il_cont#79:
+    arm64.movRegReg x1, x0
+    arm64.b __il_cont#60
+  ease:
+    arm64.add x1, x0, 768
+    arm64.asr x2, x1, 63
+    arm64.lsr x2, x2, 62
+    arm64.add x1, x1, x2
+    arm64.asr x1, x1, 2
+    arm64.add x0, x0, x1
+  whilehdr:
+    arm64.cmp x0, x23
+    arm64.b.lt ease
+  __rc_ok#71:
+    arm64.movRegReg x1, x0
+  __il_cont#60:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_mem_grow
+    arm64.cmp x9, 0
+    arm64.b.eq __il_cont#52
+  tryerr#56:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at Array.maxon:304: Array.ensureCapacity: grow failed \xe2\x80\x94 grownCapacity never returns below the current capacity\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  __il_cont#52:
+    arm64.cmp x20, x22
+    arm64.b.ge ifcont#30
+  shift:
+    arm64.sub x2, x22, x20
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __managed_mem_shift_right
+    arm64.cmp x9, 0
+    arm64.b.eq ifcont#30
+  tryerr#29:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at Array.maxon:382: Array.insert: shiftRight OOB \xe2\x80\x94 index and count are within ensured capacity\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  ifcont#30:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
+    arm64.cmp x0, 8
+    arm64.b.ne __im_stride
+  __im_word:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
+    arm64.cmp x0, 0
+    arm64.b.ne __im_slow
+  __im_owned#42:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.cmp x0, 0
+    arm64.b.lt __im_slow
+  __im_bounds#43:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.cmp x20, x0
+    arm64.b.hs __im_slow
+  __im_buffer#44:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.cmp x0, 0
+    arm64.b.eq __im_slow
+  __im_viewed#45:
+    arm64.sub x1, x0, 24
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
+    arm64.cmp x1, 0
+    arm64.b.ne __im_slow
+  __im_store#46:
+    arm64.storeBaseIndexScaleReg.word64 [x0 + x20*8 + 0], x21
+    arm64.b tryok#31
+  __im_stride:
+    arm64.cmp x0, 1
+    arm64.b.ne __im_slow
+  __im_byte:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
+    arm64.cmp x0, 0
+    arm64.b.ne __im_slow
+  __im_owned#47:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.cmp x0, 0
+    arm64.b.lt __im_slow
+  __im_bounds#48:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.cmp x20, x0
+    arm64.b.hs __im_slow
+  __im_buffer#49:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.cmp x0, 0
+    arm64.b.eq __im_slow
+  __im_viewed#50:
+    arm64.sub x1, x0, 24
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
+    arm64.cmp x1, 0
+    arm64.b.ne __im_slow
+  __im_store#51:
+    arm64.add x0, x0, x20
+    arm64.storeBaseDispReg.byte [x0 + 0], x21
+    arm64.b tryok#31
+  __im_slow:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __managed_mem_set
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#31
+  tryerr#32:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at Array.maxon:387: Array.insert: set OOB \xe2\x80\x94 index clamped to [0, len] and capacity ensured\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryok#31:
+    arm64.add x1, x22, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_set_length
+    arm64.cmp x9, 0
+    arm64.b.eq __il_cont#23
+  tryerr#34:
+    arm64.leaRdata x0, __str_blob_7  ; "panic at Array.maxon:391: Array.insert: setLength OOB \xe2\x80\x94 capacity ensured for len+1\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  __il_cont#23:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 4
-    arm64.b.eq ifcont
+    arm64.b.eq __il_body#10
   cnt:
     arm64.movImm x20, 1
     arm64.movRegReg x0, x19
@@ -51,19 +237,63 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
     arm64.ret
-  ifcont:
+  __il_body#10:
     arm64.movRegReg x0, x19
-    arm64.bl String.from
+    arm64.bl __managed_retain
     arm64.movRegReg x20, x0
-    arm64.leaRdata x1, __str_rec_2  ; "hXey"
-    arm64.movRegReg x0, x20
-    arm64.bl __str_eq
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_retain
     arm64.movRegReg x21, x0
+  __il_body#12:
+    arm64.loadRegBaseDisp.word64 x22, [x21 + 8]
+    arm64.movImm x23, 0
+    arm64.b forhdr
+  scan:
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x23
+    arm64.bl __managed_byte_at
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#18
+  tryok#17:
+    arm64.cmp x0, 128
+    arm64.movImm x1, 1
+    arm64.b.ge scmerge
+  orrhs:
+    arm64.cmp x0, 13
+    arm64.cset x0, eq
+    arm64.movRegReg x1, x0
+  scmerge:
+    arm64.cbz x1, forstep
+  notSingleByte:
+    arm64.movImm x1, 0
+    arm64.b __il_cont#11
+  forstep:
+    arm64.add x23, x23, 1
+  forhdr:
+    arm64.cmp x23, x22
+    arm64.b.lt scan
+  forexit:
+    arm64.movImm x1, 1
+  __il_cont#11:
     arm64.movRegReg x0, x20
+    arm64.bl __str_of_buffer
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+  __il_cont#9:
+    arm64.leaRdata x1, __str_rec_2  ; "hXey"
+    arm64.movRegReg x0, x22
+    arm64.bl __str_eq
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x22
     arm64.bl __str_decref
-    arm64.cbz x21, ternaryfalse
+    arm64.cbz x20, ternaryfalse
   ternarytrue:
     arm64.movImm x20, 0
     arm64.b matchcont
@@ -72,25 +302,35 @@ func @main {
   matchcont:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.cmp x20, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x20, 255
-    arm64.b.le __rc_ok
+  __rc_ok#6:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_8  ; "panic at bytearray-insert-preserves-tail.test:8: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_14  ; "panic at Array.maxon:299: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
     arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x20
+  tryerr#18:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at String.maxon:1136: scanSingleByteGraphemes: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
     arm64.ret
 }

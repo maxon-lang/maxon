@@ -54,23 +54,7 @@ func @fetch {
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 125
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_10  ; "panic at routed-call-managed-result-ok-path.test:8: Range check failed: value outside typealias 'Code'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.movImm x9, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.loadRegSlot x25, slot6
-    arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot x27, slot8
-    arm64.epilogue 96
-    arm64.ret
+    arm64.b.gt __rc_panic
   __rc_ok:
     arm64.cmp x19, 1
     arm64.b.ge ifcont
@@ -146,9 +130,25 @@ func @fetch {
     arm64.loadRegSlot x27, slot8
     arm64.epilogue 96
     arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_11  ; "panic at routed-call-managed-result-ok-path.test:8: Range check failed: value outside typealias 'Code'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
 }
 
-func @run {
+func @main {
   entry:
     arm64.prologue 96
     arm64.storeSlotReg slot9, x28
@@ -161,27 +161,7 @@ func @run {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.cmp x0, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x0, 125
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_11  ; "panic at routed-call-managed-result-ok-path.test:15: Range check failed: value outside typealias 'Code'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.loadRegSlot x25, slot6
-    arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot x27, slot8
-    arm64.loadRegSlot x28, slot9
-    arm64.epilogue 96
-    arm64.ret
+    arm64.movImm x0, 1
   __rc_ok:
     arm64.bl fetch
     arm64.movRegReg x19, x0
@@ -241,6 +221,7 @@ func @run {
     arm64.bl __str_decref
   tryblkcont:
     arm64.movImm x0, 0
+  __il_cont:
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -252,14 +233,5 @@ func @run {
     arm64.loadRegSlot x27, slot8
     arm64.loadRegSlot x28, slot9
     arm64.epilogue 96
-    arm64.ret
-}
-
-func @main {
-  entry:
-    arm64.prologue 16
-    arm64.movImm x0, 1
-    arm64.bl run
-    arm64.epilogue 16
     arm64.ret
 }

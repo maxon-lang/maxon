@@ -1,5 +1,5 @@
 // Test: a-merged-count-is-not-proven-through-a-fallback
-typealias Num = int(i64.min to i64.max)
+var wide = 90
 typealias Bits = int(0 to 63)
 
 union Missing implements Error
@@ -17,7 +17,6 @@ end 'firstBit'
 function main() returns ExitCode
 	// Stepped so the fallback is not a literal: `requireOtherwiseInRangedReturn` refuses an
 	// out-of-range LITERAL fallback outright, which is the only fallback shape that is checked.
-	var wide = 90 as Num
 	wide = wide + 10
 
 	let n = try firstBit(false) otherwise wide
@@ -39,6 +38,13 @@ end 'main'
 ---
 ExitCode: 42
 ---
+data {
+  __data_wide@0 = i64 90
+  __mrt_console_probe_stdin@8 = i8 0
+  __mrt_console_probe_stdout@9 = i8 0
+  __mrt_console_probe_stderr@10 = i8 0
+}
+
 func @firstBit {
   entry:
     x64.pushReg rbp
@@ -62,15 +68,19 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegImm32 rbx, 100
+    x64.prologue 32
+    x64.leaRegGlobal rax, __data_wide
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegRegImm32 rax, rax, 10
+    x64.leaRegGlobal rcx, __data_wide
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
     x64.movRegImm32 rcx, 0
     x64.callDirect firstBit
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
   tryerr:
-    x64.movRegReg rax, rbx
+    x64.leaRegGlobal rax, __data_wide
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.jmp trycont
   tryok:
     x64.movRegReg rax, r8
@@ -79,12 +89,12 @@ func @main {
     x64.jcc equal, ifcont#5
   reached:
     x64.movRegImm32 r8, 1
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifcont#5:
     x64.movRegImm32 rdx, 1
+  shiftok#7:
     x64.movRegReg rcx, rax
     x64.andRegImm32 rcx, rax, -64
     x64.movRegReg rsi, rcx
@@ -97,30 +107,28 @@ func @main {
     x64.notReg rdi, rsi
     x64.andRegReg rdx, rdx, rdi
     x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, ifcont#7
+    x64.jcc equal, ifcont#9
   shl:
     x64.movRegImm32 r8, 2
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  ifcont#7:
+  ifcont#9:
     x64.movRegImm rdx, 18446744073709551612
+  shiftok#11:
     x64.movRegReg rcx, rax
     x64.orRegReg rcx, rax, rsi
     x64.sarRegCl rdx, rdx
     x64.cmpRegImm32 rdx, -1
-    x64.jcc equal, ifcont#9
+    x64.jcc equal, ifcont#13
   shrSign:
     x64.movRegImm32 r8, 3
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  ifcont#9:
+  ifcont#13:
     x64.movRegImm32 r8, 42
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

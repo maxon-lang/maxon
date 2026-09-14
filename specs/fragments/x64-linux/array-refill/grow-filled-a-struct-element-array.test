@@ -55,7 +55,9 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 104
     x64.movRegImm32 rcx, 8
     x64.leaRegFunc rdx, [rip + __mm_decref]
     x64.callDirect __managed_create
@@ -68,52 +70,321 @@ func @main {
     x64.movRegImm32 r12, 3
     x64.movRegImm32 rcx, 7
     x64.callDirect Slot.create
+    x64.storeSlotReg slot7, r8
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_own
     x64.movRegReg r13, r8
-    x64.movRegReg rcx, r13
-    x64.callDirect __mm_incref
-    x64.leaRegRdata r9, [rip + __layout_Array_Slot]
+    x64.leaRegRdata r14, [rip + __layout_Array_Slot]
+  __rc_ok#15:
+    x64.loadRegBaseDisp.word64 r15, [rbx + 8]
+    x64.cmpRegImm32 r15, 3
+    x64.jcc less, __il_body#51
+  nothingAdded:
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r13
+    x64.callDirect __drop_type_param
+    x64.jmp __il_cont#9
+  __il_body#51:
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
-    x64.movRegReg rax, r13
-    x64.callDirect Array.growFilled
-    x64.movRegImm32 r12, 0
-    x64.movRegImm32 rax, 0
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
-    x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
-  forhdr:
-    x64.cmpRegReg rax, rcx
-    x64.jcc greaterEqual, forexit
-  sum:
-    x64.loadRegBaseIndexScale.word64 rsi, [rdx + rax*8 + 0]
-  __im_cont:
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 0]
-    x64.leaRegRegReg r12, r12, rsi
-  forstep:
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.jmp forhdr
-  forexit:
-    x64.movRegReg rcx, r13
-    x64.callDirect __mm_decref
+    x64.callDirect __managed_capacity
+    x64.cmpRegImm32 r8, 3
+    x64.jcc greaterEqual, __il_cont#46
+  __il_body#60:
+    x64.leaRegRegReg rax, r8, r8
+    x64.cmpRegImm32 rax, 3
+    x64.jcc greaterEqual, __rc_ok#75
+  raise#67:
+    x64.movRegImm32 rdx, 4
+    x64.jmp __il_cont#52
+  __rc_ok#75:
+    x64.cmpRegImm32 rax, 4
+    x64.jcc aboveEqual, __il_cont#71
+  raise#73:
+    x64.movRegImm32 rax, 4
+  __il_cont#71:
+    x64.movRegReg rdx, rax
+  __il_cont#52:
     x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-    x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 r12, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at grow-filled-a-struct-element-array.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect __managed_mem_grow
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __il_cont#46
+  tryerr#49:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at Array.maxon:304: Array.ensureCapacity: grow failed \xe2\x80\x94 grownCapacity never returns below the current capacity\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __il_cont#46:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_set_length
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#13
+  tryerr#14:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at Array.maxon:506: Array.growFilled: setLength OOB \xe2\x80\x94 capacity just ensured for newLength\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#13:
+    x64.subRegReg r12, r12, r15
+  __il_body#28:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic#30
+  __rc_ok#29:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r15
+    x64.movRegReg rax, r12
+    x64.movRegReg r9, r13
+    x64.callDirect __managed_fill
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#18
+  tryerr#19:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at Array.maxon:541: Array.fillPublished: fill OOB \xe2\x80\x94 the window is inside the length the caller just published\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#18:
+    x64.xorRegImm32 r8, r8, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont
+  aManagedElement:
+    x64.leaRegRegReg r12, r15, r12
+    x64.jmp forhdr#21
+  fill:
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r13
+    x64.callDirect __retain_type_param
+    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 40]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __im_slow
+  __im_owned#36:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __im_slow
+  __im_bounds#37:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.cmpRegReg r15, rax
+    x64.jcc aboveEqual, __im_slow
+  __im_buffer#38:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_slow
+  __im_viewed#39:
+    x64.leaRegRegImm32 rcx, rax, -24
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, __im_slow
+  __im_store#40:
+    x64.storeBaseIndexScaleReg.word64 [rax + r15*8 + 0], r8
+    x64.jmp forstep#23
+  __im_stride:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow
+  __im_byte:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 40]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __im_slow
+  __im_owned#41:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __im_slow
+  __im_bounds#42:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.cmpRegReg r15, rax
+    x64.jcc aboveEqual, __im_slow
+  __im_buffer#43:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_slow
+  __im_viewed#44:
+    x64.leaRegRegImm32 rcx, rax, -24
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, __im_slow
+  __im_store#45:
+    x64.leaRegRegReg rax, rax, r15
+    x64.storeBaseDispReg.byte [rax + 0], r8
+    x64.jmp forstep#23
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r15
+    x64.movRegReg rax, r8
+    x64.callDirect __managed_mem_set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, forstep#23
+  tryerr#26:
+    x64.leaRegRdata rax, [rip + __str_rec_7]  ; "panic at Array.maxon:547: "
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_8]  ; "Array.fillPublished: set OOB at "
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot8, rcx
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r14
+    x64.callDirect __uint_to_string
+    x64.storeSlotReg slot6, r8
+    x64.leaRegRdata rax, [rip + __str_rec_9]  ; " \xe2\x80\x94 the window is inside the published length"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot5, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot4, rax
+    x64.leaRegRdata rcx, [rip + __str_rec_10]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.storeSlotReg slot3, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.storeSlotReg slot2, rcx
+    x64.leaRegRegReg rdx, r12, r13
+    x64.leaRegRegReg rdx, rdx, r8
+    x64.leaRegRegReg rax, rdx, rax
+    x64.leaRegRegReg rax, rax, rcx
+    x64.storeSlotReg slot0, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot1, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, r12
+    x64.loadRegSlot rdx, slot8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r13
+    x64.loadRegSlot rax, slot6
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot6
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.loadRegSlot rax, slot4
+    x64.loadRegSlot rdx, slot5
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot4
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.loadRegSlot rax, slot2
+    x64.loadRegSlot rdx, slot3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot2
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rbx, slot1
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot0
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  forstep#23:
+    x64.leaRegRegImm32 r15, r15, 1
+  forhdr#21:
+    x64.cmpRegReg r15, r12
+    x64.jcc below, fill
+  ifcont:
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r13
+    x64.callDirect __drop_type_param
+  __il_cont#9:
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
+    x64.jmp forhdr#1
+  sum:
+    x64.loadRegBaseIndexScale.word64 rsi, [rdx + rax*8 + 0]
+  __im_cont:
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 0]
+    x64.leaRegRegReg r12, r12, rsi
+  forstep#3:
+    x64.leaRegRegImm32 rax, rax, 1
+  forhdr#1:
+    x64.cmpRegReg rax, rcx
+    x64.jcc less, sum
+  forexit:
+    x64.loadRegSlot rcx, slot7
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic#6
+  __rc_chk:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc greater, __rc_panic#6
+  __rc_ok#5:
     x64.movRegReg r8, r12
-    x64.epilogue 40
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#30:
+    x64.leaRegRdata rcx, [rip + __str_blob_19]  ; "panic at Array.maxon:539: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_12]  ; "panic at grow-filled-a-struct-element-array.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx

@@ -20,36 +20,66 @@ data {
   __mm_alloc_count@0 = i64 0
   __gt_run_queue_head@8 = i64 0
   __gt_run_queue_tail@16 = i64 0
-  __gt_init_done@24 = i64 0
-  __gt_timer_count@32 = i64 0
-  __gt_timer_heap_base@40 = i64 0
-  __gt_timer_capacity@48 = i64 0
-  __gt_timer_seq@56 = i64 0
+  __gt_timer_count@24 = i64 0
+  __gt_timer_heap_base@32 = i64 0
+  __gt_timer_capacity@40 = i64 0
+  __gt_timer_seq@48 = i64 0
+  __gt_timer_when@56 = i64 9223372036854775807
   __gt_trace_counter@64 = i64 0
-  __gt_proc_count@72 = i64 0
-  __gt_proc_handles_base@80 = i64 0
-  __gt_proc_gts_base@88 = i64 0
-  __gt_proc_wait_snapshot@96 = i64 0
-  __gt_proc_poller@104 = i64 0
-  __gt_live_count@112 = i64 0
-  __sched_progress@120 = i64 0
-  __sched_active_workers@128 = i64 1
-  __sched_max_active_workers@136 = i64 1
-  __sched_tls_index@144 = i64 0
-  __sched_tls_teb_offset@152 = i64 0
-  __sched_procs@160 = i64 0
-  __sched_allm@168 = i64 0
-  __sched_midle@176 = i64 0
-  __sched_pidle@184 = i64 0
-  __sched_num_procs@192 = i64 0
-  __sched_shutdown_flag@200 = i64 0
-  __sched_lock@208 = i64 0
-  __sched_nmspinning@216 = i64 0
-  __sched_parked_drivers@224 = i64 0
-  __sched_sysmon_started@232 = i64 0
-  __slab_arena_list@240 = i64 0
-  __slab_arena_map_l1@248 = i64 0
-  __slab_state@256 = i64 0
+  __gt_live_count@72 = i64 0
+  __gt_seed_bytes@80 = i64 8192
+  __gt_stack_bytes_sum@88 = i64 0
+  __gt_stack_bytes_count@96 = i64 0
+  __gt_seed_sum_seen@104 = i64 0
+  __gt_seed_count_seen@112 = i64 0
+  __sched_active_workers@120 = i64 1
+  __sched_max_active_workers@128 = i64 1
+  __sched_tls_index@136 = i64 0
+  __sched_tls_teb_offset@144 = i64 0
+  __sched_procs@152 = i64 0
+  __sched_allm@160 = i64 0
+  __sched_midle@168 = i64 0
+  __sched_pidle@176 = i64 0
+  __gt_gfree_head@184 = i64 0
+  __sched_arena_cursor@192 = i64 0
+  __sched_arena_limit@200 = i64 0
+  __gt_records_carved@208 = i64 0
+  __sched_npidle@216 = i64 0
+  __sched_runq_size@224 = i64 0
+  __sched_global_pushes@232 = i64 0
+  __sched_timer_scan_steps@240 = i64 0
+  __sched_mcount@248 = i64 0
+  __sched_nmidle@256 = i64 0
+  __sched_main_m@264 = i64 0
+  __sched_phase@272 = i64 0
+  __sched_lastpoll@280 = i64 0
+  __sched_poll_until@288 = i64 0
+  __sched_regain_head@296 = i64 0
+  __np_poller@304 = i64 0
+  __np_break@312 = i64 0
+  __np_wake_sig@320 = i64 0
+  __np_pd_table@328 = i64 0
+  __np_pd_cap@336 = i64 0
+  __np_waiters@344 = i64 0
+  __np_src_key_free@352 = i64 0
+  __np_src_key_high@360 = i64 0
+  __sched_num_procs@368 = i64 0
+  __sched_shutdown_flag@376 = i64 0
+  __sched_lock@384 = i64 0
+  __sched_lock_depth_sink@392 = i64 0
+  __sched_nmspinning@400 = i64 0
+  __sched_needspinning@408 = i64 0
+  __sched_sysmon_event@416 = i64 0
+  __sched_sysmon_wait@424 = i64 0
+  __sched_timer_starts@432 = i64 0
+  __sched_preempt_ext_lock@440 = i64 0
+  __sched_preempt_context@448 = i64 0
+  __slab_arena_list@456 = i64 0
+  __slab_arena_map_l1@464 = i64 0
+  __slab_state@472 = i64 0
+  __mrt_console_probe_stdin@480 = i8 0
+  __mrt_console_probe_stdout@481 = i8 0
+  __mrt_console_probe_stderr@482 = i8 0
 }
 
 func @deepRecurse {
@@ -59,7 +89,9 @@ func @deepRecurse {
     x64.pushReg rbx
     x64.prologue 40
     x64.movRegReg rbx, rcx
-    x64.callDirect Runtime.yield
+  __il_body:
+    x64.callDirect __gt_resched
+  __il_cont:
     x64.cmpRegImm32 rbx, 0
     x64.jcc notEqual, ifcont
   base:
@@ -99,17 +131,17 @@ func @main {
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at stack-growth-chunk.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.jcc greater, __rc_panic
+  __rc_ok:
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at stack-growth-chunk.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
@@ -119,33 +151,26 @@ func @main {
 
 chunk @__gt_morestack {
     0000: 49 89 62 f8 49 8d 62 f8 55 53 41 54 41 55 41 56
-    0010: 41 57 51 52 41 50 41 51 56 57 50 48 83 ec 50 f2
-    0020: 0f 11 44 24 20 f2 0f 11 4c 24 28 f2 0f 11 54 24
-    0030: 30 f2 0f 11 5c 24 38 f2 0f 11 64 24 40 f2 0f 11
-    0040: 6c 24 48 4c 89 db 65 4c 89 14 25 08 00 00 00 49
-    0050: 81 ea 00 00 01 00 65 4c 89 14 25 10 00 00 00 4c
-    0060: 8b 63 18 4c 8b 6b 20 4d 89 ee 4d 01 f6 48 31 c9
-    0070: 4c 89 f2 41 b8 00 30 00 00 41 b9 04 00 00 00 ff
-    0080: 15 00 00 00 00 49 89 c7 fc 4c 89 ff 4c 01 f7 4c
-    0090: 29 ef 4c 89 e6 4c 89 e9 f3 a4 4c 89 f8 4c 01 f0
-    00a0: 4c 29 e8 4c 29 e0 4c 89 e1 4c 01 e9 4c 39 e5 0f
-    00b0: 82 0c 00 00 00 48 39 cd 0f 83 03 00 00 00 48 01
-    00c0: c5 48 89 ac 24 b0 00 00 00 48 89 e9 4d 89 f8 4d
-    00d0: 01 f0 4d 29 e8 4d 89 f9 4d 01 f1 48 85 c9 0f 84
-    00e0: 3b 00 00 00 4c 39 c1 0f 82 32 00 00 00 4c 39 c9
-    00f0: 0f 83 29 00 00 00 4c 8b 19 4d 39 e3 0f 82 15 00
-    0100: 00 00 4d 89 e2 4d 01 ea 4d 39 d3 0f 83 06 00 00
-    0110: 00 49 01 c3 4c 89 19 48 8b 09 e9 bc ff ff ff 4c
-    0120: 89 7b 18 4c 89 73 20 4c 89 f9 48 81 c1 a0 03 00
-    0130: 00 48 89 4b 50 4c 89 f9 4c 01 f1 48 89 8b 90 00
-    0140: 00 00 4c 89 bb 98 00 00 00 48 89 c5 4c 89 e1 ba
-    0150: 00 00 00 00 41 b8 00 80 00 00 ff 15 00 00 00 00
-    0160: 48 89 e8 48 8b 8b 90 00 00 00 65 48 89 0c 25 08
-    0170: 00 00 00 48 8b 8b 98 00 00 00 65 48 89 0c 25 10
-    0180: 00 00 00 f2 0f 10 44 24 20 f2 0f 10 4c 24 28 f2
-    0190: 0f 10 54 24 30 f2 0f 10 5c 24 38 f2 0f 10 64 24
-    01a0: 40 f2 0f 10 6c 24 48 48 83 c4 50 4c 8b 54 24 68
-    01b0: 49 01 c2 58 5f 5e 41 59 41 58 5a 59 41 5f 41 5e
-    01c0: 41 5d 41 5c 5b 5d 48 81 c4 08 00 00 00 4c 89 d4
-    01d0: c3
+    0010: 41 57 51 52 50 41 51 56 57 48 83 ec 58 f2 0f 11
+    0020: 44 24 20 f2 0f 11 4c 24 28 f2 0f 11 54 24 30 f2
+    0030: 0f 11 5c 24 38 f2 0f 11 64 24 40 f2 0f 11 6c 24
+    0040: 48 4c 89 db 65 4c 89 14 25 08 00 00 00 49 81 ea
+    0050: 00 00 01 00 65 4c 89 14 25 10 00 00 00 4c 8b 63
+    0060: 18 4c 8b 6b 20 4d 89 e7 4d 01 ef 4d 29 c7 49 81
+    0070: c7 a0 13 00 00 4d 89 ee 4d 01 f6 49 81 fe 00 00
+    0080: 00 40 0f 87 c9 00 00 00 4d 39 fe 0f 82 e7 ff ff
+    0090: ff 48 31 c9 4c 89 f2 41 b8 00 30 00 00 41 b9 04
+    00a0: 00 00 00 ff 15 00 00 00 00 48 85 c0 0f 8e a9 00
+    00b0: 00 00 49 89 c7 48 8b 8c 24 b8 00 00 00 48 89 0b
+    00c0: 48 89 6b 08 48 89 d9 4c 89 fa 4c 89 f0 e8 00 00
+    00d0: 00 00 b9 03 00 00 00 48 89 8b 80 01 00 00 48 8b
+    00e0: 4b 08 48 89 8c 24 b0 00 00 00 48 8b 8b 90 00 00
+    00f0: 00 65 48 89 0c 25 08 00 00 00 48 8b 8b 98 00 00
+    0100: 00 65 48 89 0c 25 10 00 00 00 4c 8b 13 f2 0f 10
+    0110: 44 24 20 f2 0f 10 4c 24 28 f2 0f 10 54 24 30 f2
+    0120: 0f 10 5c 24 38 f2 0f 10 64 24 40 f2 0f 10 6c 24
+    0130: 48 48 83 c4 58 5f 5e 41 59 58 5a 59 41 5f 41 5e
+    0140: 41 5d 41 5c 5b 5d 48 81 c4 08 00 00 00 4c 89 d4
+    0150: c3 b9 62 00 00 00 e8 00 00 00 00 b9 63 00 00 00
+    0160: e8 00 00 00 00
 }

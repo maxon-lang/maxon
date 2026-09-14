@@ -26,6 +26,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -68,19 +71,12 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_resize
     x64.movRegImm32 rdx, 0
-  whilehdr:
-    x64.storeSlotReg slot1, rdx
-    x64.cmpRegImm32 rdx, 3
-    x64.jcc greaterEqual, whileexit
+    x64.jmp whilehdr
   __rc_ok#10:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg rdx, rax
-    x64.jcc below, __im_load
-  __im_slow:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#7
+    x64.jcc aboveEqual, __im_slow
+    x64.jmp __im_load
   tryerr#8:
     x64.movRegImm r12, 18446744073709551615
     x64.jmp trycont#9
@@ -122,23 +118,28 @@ func @main {
     x64.callDirect __str_copy
     x64.loadRegSlot rax, slot5
     x64.leaRegRegReg rax, r12, rax
-    x64.loadRegSlot r12, slot4
-    x64.storeBaseDispReg.word64 [r12 + 0], r15
-    x64.loadRegSlot rax, slot3
-    x64.storeBaseDispReg.word64 [r12 + 8], rax
-    x64.movRegImm rax, 18446744073709551613
-    x64.storeBaseDispReg.word64 [r12 + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r12 + 24], rax
+    x64.loadRegSlot rax, slot4
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot3
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
     x64.loadRegSlot rcx, slot2
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect print
-    x64.movRegReg rcx, r12
+  __il_body:
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect __write_stdout
+  __il_cont:
+    x64.loadRegSlot rcx, slot4
     x64.callDirect __str_decref
     x64.loadRegSlot rax, slot1
     x64.leaRegRegImm32 rdx, rax, 1
-    x64.jmp whilehdr
+  whilehdr:
+    x64.storeSlotReg slot1, rdx
+    x64.cmpRegImm32 rdx, 3
+    x64.jcc less, __rc_ok#10
   whileexit:
     x64.loadRegSlot rax, slot0
     x64.cmpRegImm32 rax, 0
@@ -147,11 +148,11 @@ func @main {
     x64.movRegImm32 rax, 4294967295
     x64.loadRegSlot rcx, slot0
     x64.cmpRegReg rcx, rax
-    x64.jcc lessEqual, __rc_ok#12
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at remove-then-resize-scalar-reads-zero.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.jcc greater, __rc_panic
+  __rc_ok#12:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.loadRegSlot r8, slot0
     x64.epilogue 88
     x64.popReg r15
     x64.popReg r14
@@ -160,10 +161,16 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok#12:
+  __im_slow:
     x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-    x64.loadRegSlot r8, slot0
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#8
+    x64.jmp tryok#7
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at remove-then-resize-scalar-reads-zero.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 88
     x64.popReg r15
     x64.popReg r14

@@ -49,10 +49,7 @@ func @main {
     arm64.movRegReg x0, x21
     arm64.bl __managed_push
     arm64.movImm x20, 0
-  forhdr:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
-    arm64.cmp x20, x0
-    arm64.b.ge forexit
+    arm64.b forhdr
   each:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.loadRegBaseIndexScale.word64 x0, [x0 + x20*8 + 0]
@@ -70,7 +67,10 @@ func @main {
   forstep:
     arm64.add x20, x20, 1
     arm64.movRegReg x19, x0
-    arm64.b forhdr
+  forhdr:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
+    arm64.cmp x20, x0
+    arm64.b.lt each
   forexit:
     arm64.movRegReg x0, x21
     arm64.bl __managed_decref
@@ -78,18 +78,18 @@ func @main {
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_6  ; "panic at match-break.string-scrutinee-chain-dispatch.test:12: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.epilogue 48
     arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x19
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_7  ; "panic at match-break.string-scrutinee-chain-dispatch.test:12: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

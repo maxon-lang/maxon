@@ -64,9 +64,7 @@ func @main {
     arm64.movRegReg x0, x21
     arm64.bl __mm_incref
     arm64.movImm x22, 0
-  forhdr:
-    arm64.cmp x22, 8
-    arm64.b.ge forexit
+    arm64.b forhdr
   churn:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
@@ -82,7 +80,9 @@ func @main {
     arm64.bl __list_reinsert_last
   forstep:
     arm64.add x22, x22, 1
-    arm64.b forhdr
+  forhdr:
+    arm64.cmp x22, 8
+    arm64.b.lt churn
   forexit:
     arm64.movRegReg x0, x19
     arm64.bl __list_count
@@ -155,18 +155,18 @@ func @main {
     arm64.movRegReg x2, x27
     arm64.bl __str_copy
     arm64.add x19, x19, x27
+    arm64.loadRegSlot x2, slot10
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x28
-    arm64.loadRegSlot x20, slot10
-    arm64.movRegReg x2, x20
     arm64.bl __str_copy
-    arm64.add x19, x19, x20
-    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x0, slot10
+    arm64.add x19, x19, x0
+    arm64.loadRegSlot x2, slot8
     arm64.loadRegSlot x1, slot9
-    arm64.loadRegSlot x20, slot8
-    arm64.movRegReg x2, x20
+    arm64.movRegReg x0, x19
     arm64.bl __str_copy
-    arm64.add x0, x19, x20
+    arm64.loadRegSlot x0, slot8
+    arm64.add x0, x19, x0
     arm64.loadRegSlot x19, slot7
     arm64.storeBaseDispReg.word64 [x19 + 0], x21
     arm64.loadRegSlot x0, slot6

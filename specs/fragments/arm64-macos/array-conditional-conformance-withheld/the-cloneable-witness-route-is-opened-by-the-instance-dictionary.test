@@ -58,9 +58,9 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __managed_push
     arm64.movRegReg x0, x20
-    arm64.bl __mm_incref
+    arm64.bl __managed_retain
+    arm64.movRegReg x1, x0
     arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
     arm64.bl __managed_push
     arm64.leaRdata x1, __witness_Array_StrArr.Cloneable
     arm64.movRegReg x0, x19
@@ -69,7 +69,9 @@ func @main {
     arm64.movRegReg x0, x9
     arm64.bl __drop_existential
     arm64.leaRdata x0, __str_rec_3  ; "cloned\x0a"
-    arm64.bl print
+  __il_body:
+    arm64.bl __write_stdout
+  __il_cont:
     arm64.movImm x21, 0
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref

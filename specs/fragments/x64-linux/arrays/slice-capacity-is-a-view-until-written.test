@@ -66,10 +66,6 @@ func @main {
     x64.movRegReg r13, r8
     x64.movRegImm32 rdx, 0
     x64.movRegImm32 rax, 99
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 40]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow
-  __im_owned:
     x64.loadRegBaseDisp.word64 rcx, [r12 + 16]
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __im_slow
@@ -85,28 +81,9 @@ func @main {
     x64.leaRegRegImm32 rsi, rcx, -24
     x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, __im_store
-  __im_slow:
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_set
-    x64.jmp __im_cont
+    x64.jcc notEqual, __im_slow
   __im_store:
     x64.storeBaseDispReg.word64 [rcx + 0], rax
-    x64.movRegImm32 rax, 0
-    x64.movRegReg r10, rax
-  __im_cont:
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#3
-  tryerr#4:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at slice-capacity-is-a-view-until-written.test:7: index 0 is in bounds\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
   tryok#3:
     x64.movRegReg rcx, r12
     x64.callDirect Array.capacity
@@ -139,6 +116,21 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#3
+  tryerr#4:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at slice-capacity-is-a-view-until-written.test:7: index 0 is in bounds\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12

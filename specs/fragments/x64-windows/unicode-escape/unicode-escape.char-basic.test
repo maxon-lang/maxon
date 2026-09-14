@@ -9,6 +9,12 @@ end 'main'
 ---
 ExitCode: 0
 ---
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+}
+
 func @main {
   entry:
     x64.pushReg rbp
@@ -21,7 +27,8 @@ func @main {
     x64.jcc equal, ifcont
   check:
     x64.leaRegRdata rcx, [rip + __str_rec_3]  ; "PASS"
-    x64.callDirect print
+  __il_body:
+    x64.callDirect __write_stdout
   ifcont:
     x64.movRegImm32 r8, 0
     x64.epilogue 32

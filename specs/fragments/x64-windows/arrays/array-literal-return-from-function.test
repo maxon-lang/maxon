@@ -25,14 +25,19 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
-func @makeNumbers {
+func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 40
+    x64.pushReg r12
+    x64.prologue 48
+  __il_body:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
@@ -46,106 +51,101 @@ func @makeNumbers {
     x64.movRegImm32 rdx, 30
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
-    x64.movRegReg r8, rbx
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @main {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 56
-    x64.callDirect makeNumbers
+  __il_cont:
     x64.movRegImm32 rdx, 0
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 0
-    x64.jcc above, __im_load#15
-  __im_slow#14:
-    x64.storeSlotReg slot0, r8
-    x64.movRegReg rcx, r8
-    x64.callDirect __managed_get
-    x64.movRegReg rax, r8
-    x64.loadRegSlot r8, slot0
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, trycont#3
+    x64.jcc belowEqual, __im_slow#14
+    x64.jmp __im_load#15
   tryerr#2:
     x64.movRegImm32 rax, 0
     x64.jmp trycont#3
   __im_load#15:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
+    x64.movRegReg r8, rax
+  tryok#1:
+    x64.movRegReg rax, r8
   trycont#3:
     x64.movRegImm32 rdx, 1
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.cmpRegImm32 rcx, 1
-    x64.jcc above, __im_load#18
-  __im_slow#17:
-    x64.storeSlotReg slot1, rax
-    x64.storeSlotReg slot0, r8
-    x64.movRegReg rcx, r8
-    x64.callDirect __managed_get
-    x64.movRegReg rcx, r8
-    x64.loadRegSlot rax, slot1
-    x64.loadRegSlot r8, slot0
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, trycont#6
+    x64.jcc belowEqual, __im_slow#17
+    x64.jmp __im_load#18
   tryerr#5:
     x64.movRegImm32 rcx, 0
     x64.jmp trycont#6
   __im_load#18:
-    x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.leaRegRegImm32 rcx, rcx, 8
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.movRegReg r8, rcx
+  tryok#4:
+    x64.movRegReg rcx, r8
   trycont#6:
     x64.movRegImm32 rdx, 2
-    x64.loadRegBaseDisp.word64 rsi, [r8 + 8]
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 8]
     x64.cmpRegImm32 rsi, 2
-    x64.jcc above, __im_load#21
-  __im_slow#20:
-    x64.storeSlotReg slot1, rax
-    x64.storeSlotReg slot2, rcx
-    x64.storeSlotReg slot0, r8
-    x64.movRegReg rcx, r8
-    x64.callDirect __managed_get
-    x64.movRegReg rdx, r8
-    x64.loadRegSlot rax, slot1
-    x64.loadRegSlot rcx, slot2
-    x64.loadRegSlot r8, slot0
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, trycont#9
+    x64.jcc belowEqual, __im_slow#20
+    x64.jmp __im_load#21
   tryerr#8:
     x64.movRegImm32 rdx, 0
     x64.jmp trycont#9
   __im_load#21:
-    x64.loadRegBaseDisp.word64 rdx, [r8 + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
     x64.leaRegRegImm32 rdx, rdx, 16
     x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
+    x64.movRegReg r8, rdx
+  tryok#7:
+    x64.movRegReg rdx, r8
   trycont#9:
     x64.leaRegRegReg rax, rax, rcx
-    x64.leaRegRegReg rbx, rax, rdx
-    x64.cmpRegImm32 rbx, 0
+    x64.leaRegRegReg r12, rax, rdx
+    x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg rbx, rax
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at array-literal-return-from-function.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 56
+    x64.cmpRegReg r12, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 48
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg rcx, r8
-    x64.callDirect __managed_decref
-    x64.movRegReg r8, rbx
-    x64.epilogue 56
+  __im_slow#14:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#2
+    x64.jmp tryok#1
+  __im_slow#17:
+    x64.storeSlotReg slot0, rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.loadRegSlot rax, slot0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#5
+    x64.jmp tryok#4
+  __im_slow#20:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#8
+    x64.jmp tryok#7
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at array-literal-return-from-function.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 48
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret

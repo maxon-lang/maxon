@@ -33,6 +33,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @pick {
@@ -44,14 +47,7 @@ func @pick {
     x64.jcc less, __rc_panic#8
   __rc_chk:
     x64.cmpRegImm32 rcx, 100000
-    x64.jcc lessEqual, __rc_ok#7
-  __rc_panic#8:
-    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at fourth-guarded-return-site-fires-at-its-own-site.test:5: Range check failed: value outside typealias 'Wide'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
+    x64.jcc greater, __rc_panic#8
   __rc_ok#7:
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, ifcont#2
@@ -81,8 +77,16 @@ func @pick {
     x64.ret
   ifcont#6:
     x64.imulRegRegImm32 rax, rcx, 60
+    x64.jmp __rc_panic#20
+  __rc_panic#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at fourth-guarded-return-site-fires-at-its-own-site.test:5: Range check failed: value outside typealias 'Wide'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
   __rc_panic#20:
-    x64.leaRegRdata rcx, [rip + __str_blob_14]  ; "panic at fourth-guarded-return-site-fires-at-its-own-site.test:18: Range check failed: value outside typealias 'Small'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_15]  ; "panic at fourth-guarded-return-site-fires-at-its-own-site.test:18: Range check failed: value outside typealias 'Small'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

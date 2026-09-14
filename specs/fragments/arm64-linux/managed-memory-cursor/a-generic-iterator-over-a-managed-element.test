@@ -138,7 +138,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
     arm64.movRegReg x0, x19
-    arm64.bl __mm_retain
+    arm64.bl __managed_retain
     arm64.movRegReg x20, x0
     arm64.movRegReg x0, x20
     arm64.bl SeqIterator.create
@@ -274,11 +274,9 @@ func @main {
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_6  ; "panic at a-generic-iterator-over-a-managed-element.test:33: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -291,8 +289,10 @@ func @main {
     arm64.loadRegSlot x28, slot9
     arm64.epilogue 96
     arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x20
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_7  ; "panic at a-generic-iterator-over-a-managed-element.test:33: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

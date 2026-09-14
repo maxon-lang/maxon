@@ -19,6 +19,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -33,29 +36,17 @@ func @main {
     x64.prologue 72
     x64.movRegImm32 rbx, 0
     x64.movRegImm32 rax, 0
-  forhdr:
-    x64.cmpRegImm32 rax, 64
-    x64.jcc greater, forexit
+    x64.jmp forhdr
   __rc_chk:
     x64.cmpRegImm32 rax, 63
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at range-check-panic.an-inclusive-counted-loop-one-past-its-top-bound-still-panics.test:8: Range check failed: value outside typealias 'RegNum'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 72
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc greater, __rc_panic
   __rc_ok:
     x64.leaRegRegReg rbx, rbx, rax
   forstep:
     x64.leaRegRegImm32 rax, rax, 1
-    x64.jmp forhdr
+  forhdr:
+    x64.cmpRegImm32 rax, 64
+    x64.jcc lessEqual, __rc_chk
   forexit:
     x64.leaRegRdata rax, [rip + __str_rec_2]  ; "total="
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
@@ -97,20 +88,34 @@ func @main {
     x64.callDirect __str_copy
     x64.loadRegSlot rax, slot2
     x64.leaRegRegReg rax, rbx, rax
-    x64.loadRegSlot rbx, slot1
-    x64.storeBaseDispReg.word64 [rbx + 0], r15
-    x64.loadRegSlot rax, slot0
-    x64.storeBaseDispReg.word64 [rbx + 8], rax
-    x64.movRegImm rax, 18446744073709551613
-    x64.storeBaseDispReg.word64 [rbx + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rax, slot1
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot0
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
     x64.movRegReg rcx, r14
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, rbx
-    x64.callDirect print
-    x64.movRegReg rcx, rbx
+  __il_body:
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __write_stdout
+  __il_cont:
+    x64.loadRegSlot rcx, slot1
     x64.callDirect __str_decref
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at range-check-panic.an-inclusive-counted-loop-one-past-its-top-bound-still-panics.test:8: Range check failed: value outside typealias 'RegNum'\x0a"
+    x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 72
     x64.popReg r15

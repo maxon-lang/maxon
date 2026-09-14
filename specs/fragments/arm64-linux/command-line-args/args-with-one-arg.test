@@ -19,26 +19,121 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 32
+    arm64.prologue 80
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.bl CommandLine.args
-    arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
+  __il_body#5:
+    arm64.bl __cl_count
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __str_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movImm x21, 0
+    arm64.b forhdr#6
+  loop:
+    arm64.movRegReg x0, x21
+    arm64.bl __cl_arg
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_retain
+    arm64.movRegReg x23, x0
+  __il_body#13:
+    arm64.loadRegBaseDisp.word64 x24, [x23 + 8]
+    arm64.movImm x25, 0
+    arm64.b forhdr#14
+  scan:
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x25
+    arm64.bl __managed_byte_at
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr
+  tryok:
+    arm64.cmp x0, 128
+    arm64.movImm x1, 1
+    arm64.b.ge scmerge
+  orrhs:
+    arm64.cmp x0, 13
+    arm64.cset x0, eq
+    arm64.movRegReg x1, x0
+  scmerge:
+    arm64.cbz x1, forstep#16
+  notSingleByte:
+    arm64.movImm x1, 0
+    arm64.b __il_cont#12
+  forstep#16:
+    arm64.add x25, x25, 1
+  forhdr#14:
+    arm64.cmp x25, x24
+    arm64.b.lt scan
+  forexit:
+    arm64.movImm x1, 1
+  __il_cont#12:
+    arm64.movRegReg x0, x23
+    arm64.bl __str_of_buffer
+    arm64.movRegReg x24, x0
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_decref
+  __il_cont#10:
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x24
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_decref
+  forstep#8:
+    arm64.add x21, x21, 1
+  forhdr#6:
+    arm64.cmp x21, x19
+    arm64.b.lt loop
+  __il_cont#4:
+    arm64.loadRegBaseDisp.word64 x19, [x20 + 8]
+    arm64.movRegReg x0, x20
     arm64.bl __managed_decref
     arm64.cmp x19, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at args-with-one-arg.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
+    arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
+    arm64.ret
+  tryerr:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at String.maxon:1136: scanSingleByteGraphemes: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at args-with-one-arg.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
     arm64.ret
 }

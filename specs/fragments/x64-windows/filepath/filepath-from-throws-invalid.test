@@ -16,6 +16,9 @@ data {
   __slab_arena_list@16 = i64 0
   __slab_arena_map_l1@24 = i64 0
   __slab_state@32 = i64 0
+  __mrt_console_probe_stdin@40 = i8 0
+  __mrt_console_probe_stdout@41 = i8 0
+  __mrt_console_probe_stderr@42 = i8 0
 }
 
 func @main {
@@ -32,7 +35,7 @@ func @main {
     x64.callDirect FilePath.from
     x64.storeSlotReg slot0, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
+    x64.jcc equal, __il_body
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_rec_20]  ; "caught error\x0a"
     x64.callDirect print
@@ -45,10 +48,11 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
-    x64.movRegReg rcx, r8
-    x64.callDirect FilePath.toString
+  __il_body:
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
+    x64.callDirect __str_retain
     x64.storeSlotReg slot1, r8
+  __il_cont:
     x64.loadRegBaseDisp.word64 rbx, [r8 + 0]
     x64.loadRegBaseDisp.word64 r12, [r8 + 8]
     x64.leaRegRdata rax, [rip + __str_rec_19]  ; "\x0a"

@@ -32,13 +32,7 @@ func @classify {
     arm64.b.lt __rc_panic#9
   __rc_chk#10:
     arm64.cmp x0, 255
-    arm64.b.le __rc_ok#8
-  __rc_panic#9:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at terminator-ends-its-own-block.test:2: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
+    arm64.b.gt __rc_panic#9
   __rc_ok#8:
     arm64.cmp x0, 5
     arm64.b.le ifcont#2
@@ -49,29 +43,35 @@ func @classify {
   ifcont#2:
     arm64.movImm x0, 0
     arm64.movImm x1, 0
-  whilehdr:
-    arm64.cmp x1, 4
-    arm64.b.ge whileexit
+    arm64.b whilehdr
   scan:
     arm64.add x1, x1, 1
     arm64.cmp x1, 2
     arm64.b.eq whilehdr
   ifcont#7:
     arm64.add x0, x0, 1
-    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x1, 4
+    arm64.b.lt scan
   whileexit:
     arm64.cmp x0, 0
     arm64.b.lt __rc_panic#12
   __rc_chk#13:
     arm64.cmp x0, 255
-    arm64.b.le __rc_ok#11
-  __rc_panic#12:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at terminator-ends-its-own-block.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.b.gt __rc_panic#12
+  __rc_ok#11:
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic#9:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at terminator-ends-its-own-block.test:2: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
-  __rc_ok#11:
+  __rc_panic#12:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at terminator-ends-its-own-block.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
 }

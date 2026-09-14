@@ -36,6 +36,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -64,9 +67,7 @@ func @main {
     x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
     x64.loadRegBaseDisp.word64 rdi, [rbx + 8]
     x64.loadRegBaseDisp.word64 r8, [rbx + 0]
-  forhdr#1:
-    x64.cmpRegReg rcx, rdx
-    x64.jcc greaterEqual, forexit
+    x64.jmp forhdr#1
   outer:
     x64.loadRegBaseIndexScale.word64 r9, [rsi + rcx*8 + 0]
   __im_cont#7:
@@ -74,21 +75,23 @@ func @main {
   __il_body:
     x64.movRegImm32 r9, 0
     x64.movRegImm32 r10, 0
-  forhdr#10:
-    x64.cmpRegReg r10, rdi
-    x64.jcc greaterEqual, __il_cont
+    x64.jmp forhdr#10
   inner:
     x64.loadRegBaseIndexScale.word64 r11, [r8 + r10*8 + 0]
   __im_cont#14:
     x64.leaRegRegReg r9, r9, r11
   forstep#12:
     x64.leaRegRegImm32 r10, r10, 1
-    x64.jmp forhdr#10
+  forhdr#10:
+    x64.cmpRegReg r10, rdi
+    x64.jcc less, inner
   __il_cont:
     x64.leaRegRegReg rax, rax, r9
   forstep#3:
     x64.leaRegRegImm32 rcx, rcx, 1
-    x64.jmp forhdr#1
+  forhdr#1:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc less, outer
   forexit:
     x64.cmpRegImm32 rax, 24
     x64.jcc notEqual, ifcont

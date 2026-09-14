@@ -42,63 +42,58 @@ func @sum14 {
     arm64.ret
 }
 
-func @callIt {
+func @main {
   entry:
     arm64.prologue 80 record@56
     arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 1
+    arm64.leaFuncAddr x8, __fnref_sum14
+    arm64.movImm x0, 0
+  __il_body:
+    arm64.movImm x1, 1
     arm64.movImm x2, 2
     arm64.movImm x3, 3
     arm64.movImm x4, 4
     arm64.movImm x5, 5
     arm64.movImm x6, 6
     arm64.movImm x7, 7
-    arm64.movImm x8, 8
-    arm64.movImm x9, 9
-    arm64.movImm x10, 10
-    arm64.movImm x11, 11
-    arm64.movImm x12, 12
-    arm64.movImm x13, 13
-    arm64.movImm x14, 14
-    arm64.storeOutgoingArg [sp + arg0], x9
-    arm64.storeOutgoingArg [sp + arg1], x10
-    arm64.storeOutgoingArg [sp + arg2], x11
-    arm64.storeOutgoingArg [sp + arg3], x12
-    arm64.storeOutgoingArg [sp + arg4], x13
-    arm64.storeOutgoingArg [sp + arg5], x14
-    arm64.storeOutgoingArg [sp + arg6], x1
+    arm64.movImm x9, 8
+    arm64.movImm x10, 9
+    arm64.movImm x11, 10
+    arm64.movImm x12, 11
+    arm64.movImm x13, 12
+    arm64.movImm x14, 13
+    arm64.movImm x19, 14
+    arm64.storeOutgoingArg [sp + arg0], x10
+    arm64.storeOutgoingArg [sp + arg1], x11
+    arm64.storeOutgoingArg [sp + arg2], x12
+    arm64.storeOutgoingArg [sp + arg3], x13
+    arm64.storeOutgoingArg [sp + arg4], x14
+    arm64.storeOutgoingArg [sp + arg5], x19
+    arm64.storeOutgoingArg [sp + arg6], x0
+    arm64.movRegReg x0, x1
     arm64.movRegReg x1, x2
     arm64.movRegReg x2, x3
     arm64.movRegReg x3, x4
     arm64.movRegReg x4, x5
     arm64.movRegReg x5, x6
     arm64.movRegReg x6, x7
-    arm64.movRegReg x7, x8
-    arm64.blr x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 80 record@56
-    arm64.ret
-}
-
-func @main {
-  entry:
-    arm64.prologue 16
-    arm64.leaFuncAddr x0, __fnref_sum14
-    arm64.movImm x1, 0
-    arm64.bl callIt
+    arm64.movRegReg x7, x9
+    arm64.blr x8
+  __il_cont:
     arm64.cmp x0, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.b.le __rc_ok
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 80 record@56
+    arm64.ret
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at first-class-function.indirect-call-arity-14.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  __rc_ok:
-    arm64.epilogue 16
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 80 record@56
     arm64.ret
 }

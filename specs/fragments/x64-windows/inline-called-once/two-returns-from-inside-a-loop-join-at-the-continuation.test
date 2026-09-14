@@ -141,19 +141,16 @@ func @main {
     x64.loadRegBaseIndexScale.word64 r9, [r8 + rsi*8 + 0]
   tryok:
     x64.cmpRegReg r9, rdx
-    x64.jcc notEqual, forstep#27
-  hit:
-    x64.movRegReg rdx, rsi
-    x64.jmp __il_cont
+    x64.jcc equal, __il_cont
   forstep#27:
     x64.leaRegRegImm32 rsi, rsi, 1
   forhdr#25:
     x64.cmpRegImm32 rsi, 4
     x64.jcc less, __rc_ok#33
   forexit#28:
-    x64.movRegReg rdx, rbx
+    x64.movRegReg rsi, rbx
   __il_cont:
-    x64.leaRegRegReg rax, rax, rdx
+    x64.leaRegRegReg rax, rax, rsi
   forstep#9:
     x64.leaRegRegImm32 rcx, rcx, 1
   forhdr#7:
@@ -225,16 +222,16 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
   tryerr#30:
-    x64.storeSlotReg slot1, rax
-    x64.storeSlotReg slot2, rcx
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at two-returns-from-inside-a-loop-join-at-the-continuation.test:7: firstIndexOf: i < n = a.count()\x0a"
     x64.callDirect mrt_panic
-    x64.loadRegSlot rax, slot1
-    x64.loadRegSlot rcx, slot2
-    x64.movRegImm32 rdx, 0
-    x64.jmp __il_cont
+    x64.movRegImm32 r8, 0
+    x64.epilogue 80
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at two-returns-from-inside-a-loop-join-at-the-continuation.test:33: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at two-returns-from-inside-a-loop-join-at-the-continuation.test:33: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 80

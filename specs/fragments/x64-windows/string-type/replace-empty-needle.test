@@ -13,6 +13,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -21,19 +24,264 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
-    x64.leaRegRdata rcx, [rip + __str_rec_3]  ; "hello"
-    x64.leaRegRdata rdx, [rip + __str_rec_4]  ; ""
-    x64.leaRegRdata rax, [rip + __str_rec_5]  ; "x"
-    x64.callDirect String.replace
-    x64.movRegReg rbx, r8
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 88
+    x64.leaRegRdata rbx, [rip + __str_rec_3]  ; "hello"
+    x64.storeSlotReg slot4, rbx
+    x64.leaRegRdata r12, [rip + __str_rec_4]  ; ""
+    x64.storeSlotReg slot2, r12
+    x64.leaRegRdata r13, [rip + __str_rec_5]  ; "x"
+    x64.storeSlotReg slot1, r13
+  __il_body#52:
+    x64.loadRegBaseDisp.word64 r14, [r12 + 8]
+  __il_cont#51:
+    x64.cmpRegImm32 r14, 0
+    x64.jcc notEqual, __il_body#54
+  empty_old:
     x64.movRegReg rcx, rbx
-    x64.callDirect print
+    x64.callDirect String.clone
+    x64.movRegReg rbx, r8
+    x64.jmp __il_body#2
+  __il_body#54:
+    x64.loadRegBaseDisp.word64 r15, [rbx + 8]
+  __il_cont#53:
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rdx, 0
+    x64.jmp whilehdr#7
+  count_loop:
+    x64.movRegReg rax, r15
+    x64.subRegReg rax, r15, rdx
+    x64.movRegReg rcx, rbx
+    x64.movRegReg r9, r12
+    x64.callDirect findIn
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, whileexit#9
+  try_count:
+    x64.loadRegSlot rax, slot5
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.loadRegSlot rcx, slot3
+    x64.leaRegRegReg rcx, rcx, r8
+    x64.leaRegRegReg rdx, rcx, r14
+  whilehdr#7:
+    x64.storeSlotReg slot5, rax
+    x64.storeSlotReg slot3, rdx
+    x64.movRegReg rax, r15
+    x64.subRegReg rax, r15, r14
+    x64.cmpRegReg rdx, rax
+    x64.jcc lessEqual, count_loop
+  whileexit#9:
+    x64.loadRegSlot rax, slot5
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __il_body#56
+  no_matches:
+    x64.movRegReg rcx, rbx
+    x64.callDirect String.clone
+    x64.movRegReg rbx, r8
+    x64.jmp __il_body#2
+  __il_body#56:
+    x64.loadRegBaseDisp.word64 rbx, [r13 + 8]
+  __il_body#30:
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.storeBaseDispReg.word64 [r13 + 0], r12
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.byte [r13 + 8], rax
+  __il_cont#29:
+    x64.loadRegSlot rax, slot5
+    x64.movRegReg rcx, rax
+    x64.imulRegReg rcx, rax, rbx
+    x64.leaRegRegReg rbx, r15, rcx
+    x64.imulRegReg rax, rax, r14
+    x64.subRegReg rbx, rbx, rax
+  __il_body#40:
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_ok#41:
+    x64.loadRegBaseDisp.word64 r12, [r13 + 0]
+  __rc_ok#49:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_capacity
+    x64.cmpRegReg rbx, r8
+    x64.jcc lessEqual, __il_cont#39
+  grow:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect __managed_mem_grow
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __il_cont#39
+  tryerr#47:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at Array.maxon:415: Array.reserve: grow failed \xe2\x80\x94 minCapacity > cap guaranteed\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __il_cont#39:
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect String.addressableBytes
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 0
+    x64.jmp whilehdr#15
+  search:
+    x64.movRegReg rax, r15
+    x64.subRegReg rax, r15, r12
+    x64.loadRegSlot r9, slot2
+    x64.loadRegSlot rcx, slot4
+    x64.movRegReg rdx, r12
+    x64.callDirect findIn
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, whileexit#17
+  try_find:
+    x64.leaRegRegReg rax, r12, r8
+    x64.storeSlotReg slot0, rax
+    x64.cmpRegReg rax, r12
+    x64.jcc lessEqual, __il_body#32
+  has_prefix:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_slice
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#20
+  tryerr#21:
+    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at String.maxon:578: String.replace: prefix slice \xe2\x80\x94 pos and matchPos within bounds from findIn\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#20:
+    x64.loadRegSlot rax, slot4
+    x64.loadRegBaseDisp.byte rax, [rax + 48]
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r12
+    x64.callDirect StringBuilder.appendBytes
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+  __il_body#32:
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect String.addressableBytes
+    x64.movRegReg r12, r8
+  __il_body#34:
+    x64.loadRegSlot rax, slot1
+    x64.loadRegBaseDisp.byte rax, [rax + 48]
+  __il_cont#33:
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r12
+    x64.callDirect StringBuilder.appendBytes
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+  __il_cont#31:
+    x64.loadRegSlot rax, slot0
+    x64.leaRegRegReg rax, rax, r14
+  ifcont:
+    x64.movRegReg r12, rax
+  whilehdr#15:
+    x64.movRegReg rax, r15
+    x64.subRegReg rax, r15, r14
+    x64.cmpRegReg r12, rax
+    x64.jcc lessEqual, search
+  whileexit#17:
+    x64.cmpRegReg r12, r15
+    x64.jcc greaterEqual, __il_body#36
+  has_suffix:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r15
+    x64.callDirect __managed_slice
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#26
+  tryerr#27:
+    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at String.maxon:594: String.replace: suffix slice \xe2\x80\x94 pos < selfLen guaranteed\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#26:
+    x64.loadRegSlot rax, slot4
+    x64.loadRegBaseDisp.byte rax, [rax + 48]
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r12
+    x64.callDirect StringBuilder.appendBytes
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+  __il_body#36:
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
+    x64.loadRegBaseDisp.byte r12, [r13 + 8]
+  __il_body#38:
+    x64.callDirect __managed_retain
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r12
+    x64.callDirect __str_of_buffer
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+  __il_cont#37:
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r14, r8
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
+    x64.callDirect __managed_decref
+    x64.storeBaseDispReg.word64 [r13 + 0], r14
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.byte [r13 + 8], rax
+  __il_cont#35:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_StringBuilder
+    x64.movRegReg rbx, r12
+  __il_body#2:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __write_stdout
+  __il_cont#1:
     x64.movRegImm32 r12, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_19]  ; "panic at String.maxon:872: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

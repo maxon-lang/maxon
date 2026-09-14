@@ -224,6 +224,7 @@ end 'main'
 0
 ```
 ```mm-trace
+
 ```
 
 <!-- test: module-let-scalar-struct-costs-no-allocation -->
@@ -274,6 +275,7 @@ end 'main'
 16
 ```
 ```mm-trace
+
 ```
 
 <!-- test: module-let-string-array-costs-no-allocation -->
@@ -316,6 +318,7 @@ end 'main'
 21
 ```
 ```mm-trace
+
 ```
 
 <!-- test: module-let-empty-map-and-set-cost-no-allocation -->
@@ -361,6 +364,7 @@ end 'main'
 0
 ```
 ```mm-trace
+
 ```
 
 <!-- test: a-payload-free-union-case-let-costs-no-allocation -->
@@ -409,6 +413,7 @@ end 'main'
 0
 ```
 ```mm-trace
+
 ```
 
 <!-- test: a-payload-carrying-union-case-let-still-allocates -->
@@ -507,6 +512,7 @@ end 'main'
 0
 ```
 ```mm-trace
+
 ```
 
 <!-- test: module-var-struct-of-empty-containers-still-allocates -->

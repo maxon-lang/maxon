@@ -1,5 +1,12 @@
 // Test: literal-conformer-widened-to-an-owning-existential
+typealias Tally = int(0 to 100)
+
+var widenings = 0 as Tally
+
+// The discard below is the whole shape, so `widen` must have an effect — discarding a PURE result is
+// E3064 (`discarded-results.md`) and the program would never reach the retain this case is about.
 function widen(h Hashable) returns Hashable
+	widenings = widenings + 1
 	return h
 end 'widen'
 
@@ -7,16 +14,17 @@ function main() returns ExitCode
 	print("A")
 	_ = widen("abc")
 	print("B")
-	return 0
+	return widenings - 1
 end 'main'
 ---
 ExitCode: 0
 ---
 data {
-  __mm_alloc_count@0 = i64 0
-  __slab_arena_list@8 = i64 0
-  __slab_arena_map_l1@16 = i64 0
-  __slab_state@24 = i64 0
+  __data_widenings@0 = i64 0
+  __mm_alloc_count@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @widen {
@@ -27,6 +35,11 @@ func @widen {
     x64.prologue 40
     x64.movRegReg rax, rcx
     x64.movRegReg rbx, rdx
+    x64.leaRegGlobal rcx, __data_widenings
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.leaRegGlobal rdx, __data_widenings
+    x64.storeBaseDispReg.word64 [rdx + 0], rcx
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, rax
     x64.callDirect __retain_existential
@@ -52,6 +65,21 @@ func @main {
     x64.callDirect __drop_existential
     x64.leaRegRdata rcx, [rip + __str_rec_5]  ; "B"
     x64.callDirect print
+    x64.leaRegGlobal rax, __data_widenings
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegRegImm32 r8, rax, -1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_16]  ; "panic at literal-conformer-widened-to-an-owning-existential.test:17: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp

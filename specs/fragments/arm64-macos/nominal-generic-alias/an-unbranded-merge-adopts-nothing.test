@@ -52,31 +52,31 @@ func @main {
     arm64.movImm x0, 48
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.leaRdata x1, __barr_blob_0
-    arm64.storeBaseDispReg.word64 [x0 + 0], x1
-    arm64.movImm x1, 1
-    arm64.storeBaseDispReg.word64 [x0 + 8], x1
-    arm64.movImm x1, 18446744073709551614
-    arm64.storeBaseDispReg.word64 [x0 + 16], x1
-    arm64.movImm x1, 8
-    arm64.storeBaseDispReg.word64 [x0 + 24], x1
     arm64.movRegReg x19, x0
-  __il_body#6:
+    arm64.leaRdata x0, __barr_blob_0
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.movImm x0, 18446744073709551614
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
+    arm64.movImm x0, 8
+    arm64.storeBaseDispReg.word64 [x19 + 24], x0
+  __il_body#7:
     arm64.movImm x20, 0
     arm64.movImm x0, 0
     arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
     arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-  forhdr#7:
-    arm64.cmp x0, x1
-    arm64.b.ge __il_cont#5
-  each#8:
+    arm64.b forhdr#8
+  each#9:
     arm64.loadRegBaseIndexScale.word64 x3, [x2 + x0*8 + 0]
-  __im_cont#11:
+  __im_cont#12:
     arm64.add x20, x20, x3
-  forstep#9:
+  forstep#10:
     arm64.add x0, x0, 1
-    arm64.b forhdr#7
-  __il_cont#5:
+  forhdr#8:
+    arm64.cmp x0, x1
+    arm64.b.lt each#9
+  __il_cont#6:
     arm64.movImm x0, 21
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -88,22 +88,22 @@ func @main {
     arm64.leaRdata x0, __str_rec_3  ; " "
     arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
-  __il_body#12:
+  __il_body#13:
     arm64.movImm x24, 0
     arm64.movImm x0, 0
     arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
     arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
-  forhdr#13:
-    arm64.cmp x0, x1
-    arm64.b.ge __il_cont#4
-  each#14:
+    arm64.b forhdr#14
+  each#15:
     arm64.loadRegBaseIndexScale.word64 x3, [x2 + x0*8 + 0]
-  __im_cont#17:
+  __im_cont#18:
     arm64.add x24, x24, x3
-  forstep#15:
+  forstep#16:
     arm64.add x0, x0, 1
-    arm64.b forhdr#13
-  __il_cont#4:
+  forhdr#14:
+    arm64.cmp x0, x1
+    arm64.b.lt each#15
+  __il_cont#5:
     arm64.movImm x0, 21
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -144,8 +144,10 @@ func @main {
     arm64.bl __mm_decref
     arm64.movRegReg x0, x25
     arm64.bl __mm_decref
+  __il_body#19:
     arm64.movRegReg x0, x27
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont#4:
     arm64.movRegReg x0, x27
     arm64.bl __str_decref
     arm64.movImm x20, 0

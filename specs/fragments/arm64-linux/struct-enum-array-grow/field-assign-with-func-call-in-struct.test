@@ -81,8 +81,8 @@ func @Module.create {
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+    arm64.bl __managed_retain
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
@@ -104,9 +104,10 @@ func @Memo.create {
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x21, x0
+    arm64.leaFuncAddr x1, __clone_Module
     arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.storeBaseDispReg.word64 [x21 + 0], x19
+    arm64.bl __mm_own_deep
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
     arm64.storeBaseDispReg.word64 [x21 + 8], x20
     arm64.movRegReg x0, x19
     arm64.bl __destruct_Module
@@ -130,12 +131,13 @@ func @Database.create {
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x21, x0
+    arm64.leaFuncAddr x1, __clone_Memo
     arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.storeBaseDispReg.word64 [x21 + 0], x19
+    arm64.bl __mm_own_deep
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
     arm64.movRegReg x0, x20
-    arm64.bl __mm_incref
-    arm64.storeBaseDispReg.word64 [x21 + 8], x20
+    arm64.bl __managed_retain
+    arm64.storeBaseDispReg.word64 [x21 + 8], x0
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref
     arm64.movRegReg x0, x19
@@ -148,146 +150,102 @@ func @Database.create {
     arm64.ret
 }
 
-func @Project.create {
+func @main {
   entry:
     arm64.prologue 48
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.bl Module.create
+    arm64.movImm x1, 0
+    arm64.bl Memo.create
     arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl Database.create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 0
+  __il_body#6:
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x21, x0
+    arm64.leaFuncAddr x1, __clone_Database
     arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.storeBaseDispReg.word64 [x21 + 0], x19
+    arm64.bl __mm_own_deep
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
     arm64.storeBaseDispReg.byte [x21 + 8], x20
     arm64.movRegReg x0, x19
     arm64.bl __destruct_Database
+  __il_body#9:
+    arm64.loadRegBaseDisp.byte x0, [x21 + 8]
+    arm64.eor x0, x0, 1
+    arm64.cbz x0, __il_body#7
+  __il_body#13:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.bl Module.create
+  __il_cont#12:
+    arm64.movImm x1, 0
+    arm64.bl Memo.create
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl Database.create
+    arm64.movRegReg x19, x0
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.bl __destruct_Database
+    arm64.storeBaseDispReg.word64 [x21 + 0], x19
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.byte [x21 + 8], x0
+  __il_body#7:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.movImm x1, 1
+    arm64.bl __managed_push
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.movImm x1, 2
+    arm64.bl __managed_push
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.movImm x1, 3
+    arm64.bl __managed_push
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
+  __il_cont#4:
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
     arm64.movRegReg x0, x21
+    arm64.bl __destruct_Project
+    arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.epilogue 48
     arm64.ret
-}
-
-func @createModule {
-  entry:
-    arm64.prologue 16
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __managed_create
-    arm64.bl Module.create
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @initProject {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.loadRegBaseDisp.byte x0, [x19 + 8]
-    arm64.eor x0, x0, 1
-    arm64.cbz x0, ifcont
-  init:
-    arm64.bl createModule
-    arm64.movImm x1, 0
-    arm64.bl Memo.create
-    arm64.movRegReg x20, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __managed_create
-    arm64.movRegReg x1, x0
-    arm64.movRegReg x0, x20
-    arm64.bl Database.create
-    arm64.movRegReg x20, x0
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.bl __destruct_Database
-    arm64.storeBaseDispReg.word64 [x19 + 0], x20
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.byte [x19 + 8], x0
-  ifcont:
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @useProject {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 1
-    arm64.bl __managed_push
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 2
-    arm64.bl __managed_push
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 3
-    arm64.bl __managed_push
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @main {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __managed_create
-    arm64.bl Module.create
-    arm64.movImm x1, 0
-    arm64.bl Memo.create
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __managed_create
-    arm64.movRegReg x1, x0
-    arm64.movRegReg x0, x19
-    arm64.bl Database.create
-    arm64.movImm x1, 0
-    arm64.bl Project.create
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x19
-    arm64.bl initProject
-    arm64.movRegReg x0, x19
-    arm64.bl useProject
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __destruct_Project
-    arm64.cmp x20, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x20, 255
-    arm64.b.le __rc_ok
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at field-assign-with-func-call-in-struct.test:61: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_1  ; "panic at field-assign-with-func-call-in-struct.test:61: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
 }

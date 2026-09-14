@@ -79,8 +79,7 @@ func @HoldA.create {
     arm64.b.ne __im_slow
   __im_store#12:
     arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.movImm x0, 0
-    arm64.b __im_cont
+    arm64.b tryok
   __im_stride:
     arm64.cmp x0, 1
     arm64.b.ne __im_slow
@@ -107,16 +106,28 @@ func @HoldA.create {
     arm64.b.ne __im_slow
   __im_store#17:
     arm64.storeBaseDispReg.byte [x0 + 0], x19
-    arm64.movImm x0, 0
-    arm64.b __im_cont
+    arm64.b tryok
   __im_slow:
     arm64.movRegReg x0, x20
     arm64.movRegReg x2, x19
     arm64.bl __managed_set
-    arm64.movRegReg x0, x9
-  __im_cont:
-    arm64.cmp x0, 0
-    arm64.b.eq tryok
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr
+  tryok:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_retain
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   tryerr:
     arm64.leaRdata x0, __str_blob_1  ; "panic at an-inner-alias-field-crosses-into-a-parameter-of-its-own-instance.test:10: seeded slot 0 must exist after resize(1)\x0a"
     arm64.bl mrt_panic
@@ -125,47 +136,12 @@ func @HoldA.create {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  tryok:
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_incref
-    arm64.storeBaseDispReg.word64 [x19 + 0], x20
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_decref
-    arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @HoldA.adopt {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-    arm64.loadRegBaseDisp.word64 x21, [x19 + 0]
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_incref
-    arm64.movRegReg x0, x21
-    arm64.bl __managed_decref
-    arm64.storeBaseDispReg.word64 [x19 + 0], x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
 }
 
 func @main {
   entry:
     arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
@@ -177,10 +153,15 @@ func @main {
     arm64.leaRdata x1, __layout_HoldA_Num
     arm64.bl HoldA.create
     arm64.movRegReg x20, x0
-    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
-    arm64.movRegReg x0, x20
-    arm64.bl HoldA.adopt
-  __il_body:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+  __il_body#5:
+    arm64.loadRegBaseDisp.word64 x21, [x20 + 0]
+    arm64.bl __managed_retain
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.storeBaseDispReg.word64 [x20 + 0], x22
+  __il_body#6:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.cmp x0, 1
@@ -189,7 +170,8 @@ func @main {
     arm64.cbz x0, ifcont
   ok:
     arm64.leaRdata x0, __str_rec_2  ; "ok\x0a"
-    arm64.bl print
+  __il_body#8:
+    arm64.bl __write_stdout
   ifcont:
     arm64.movImm x21, 0
     arm64.movRegReg x0, x20
@@ -200,6 +182,7 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
 }

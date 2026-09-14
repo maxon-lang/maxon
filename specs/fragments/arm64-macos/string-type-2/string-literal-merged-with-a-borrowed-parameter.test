@@ -25,18 +25,11 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @grow {
-  entry:
-    arm64.prologue 16
-    arm64.leaRdata x1, __str_rec_6  ; "XY"
-    arm64.bl String.append
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @pick {
   entry:
-    arm64.prologue 32
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.cbnz x1, matchcont
   ternaryfalse:
@@ -44,12 +37,31 @@ func @pick {
   matchcont:
     arm64.bl __str_retain
     arm64.movRegReg x19, x0
+  __il_body#5:
+    arm64.leaRdata x20, __str_rec_6  ; "XY"
+  __il_body#7:
+    arm64.movRegReg x0, x20
+    arm64.bl __str_bytes_view
+    arm64.movRegReg x21, x0
     arm64.movRegReg x0, x19
-    arm64.bl grow
+    arm64.movRegReg x1, x21
+    arm64.bl __managed_append
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.loadRegBaseDisp.byte x0, [x20 + 48]
+    arm64.eor x0, x0, 1
+    arm64.cbz x0, __il_cont
+  clearFlag:
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.byte [x19 + 48], x0
+  __il_cont:
     arm64.movRegReg x0, x19
     arm64.bl __str_decref
+    arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
 }
 

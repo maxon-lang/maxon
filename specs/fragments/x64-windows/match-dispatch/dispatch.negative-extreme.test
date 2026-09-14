@@ -46,6 +46,12 @@ end 'main'
 ---
 ExitCode: 9
 ---
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+}
+
 func @band {
   entry:
     x64.pushReg rbp
@@ -54,18 +60,10 @@ func @band {
     x64.jcc greaterEqual, matchhi
   matchlo:
     x64.cmpRegImm32 rcx, -100
-    x64.jcc greater, matchnext#9
+    x64.jcc greater, matcharm#2
   matcharm#1:
     x64.movRegImm32 r8, 1
     x64.jmp matchcont
-  matchnext#9:
-    x64.cmpRegImm32 rcx, -99
-    x64.setccReg greaterEqual, rax
-    x64.cmpRegImm32 rcx, -1
-    x64.setccReg lessEqual, rcx
-    x64.andRegReg rax, rax, rcx
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matchdefault
   matcharm#2:
     x64.movRegImm32 r8, 2
     x64.jmp matchcont
@@ -76,11 +74,9 @@ func @band {
     x64.movRegImm32 r8, 3
     x64.jmp matchcont
   matchnext#10:
-    x64.cmpRegImm32 rcx, 1
-    x64.setccReg greaterEqual, rax
     x64.cmpRegImm32 rcx, 100
-    x64.setccReg lessEqual, rdx
-    x64.andRegReg rax, rax, rdx
+    x64.setccReg lessEqual, rax
+    x64.andRegImm32 rax, rax, 1
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, matchnext#11
   matcharm#4:
@@ -168,24 +164,9 @@ func @main {
     x64.jcc notEqual, critsplit
   i:
     x64.leaRegRegImm32 r8, rbx, 1
-    x64.jmp ifcont#18
+    x64.jmp __rc_ok
   critsplit:
     x64.movRegReg r8, rbx
-  ifcont#18:
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at dispatch.negative-extreme.test:44: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
   __rc_ok:
     x64.epilogue 40
     x64.popReg rbx

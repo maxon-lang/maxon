@@ -39,28 +39,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Holder.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.storeBaseDispReg.word64 [x20 + 0], x19
-    arm64.movRegReg x0, x19
-    arm64.bl __destruct_M
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 80
@@ -82,14 +60,20 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __str_retain
     arm64.storeBaseDispReg.word64 [x20 + 8], x0
-    arm64.movRegReg x0, x20
-    arm64.bl Holder.create
+  __il_body#10:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
     arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x19 + 0], x20
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_M
+  __il_cont#9:
     arm64.movImm x20, 0
     arm64.movImm x21, 0
-  whilehdr:
-    arm64.cmp x20, 200
-    arm64.b.ge whileexit
+    arm64.b whilehdr
   spin:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
@@ -105,14 +89,9 @@ func @main {
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
     arm64.movRegReg x0, x22
     arm64.bl __mm_incref
-  __il_body:
+  __il_body#14:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-    arm64.cmp x0, 0
-    arm64.b.ge __il_cont
-  __il_slow:
-    arm64.movRegReg x0, x22
-    arm64.bl String.byteLength
-  __il_cont:
+  __il_cont#13:
     arm64.add x21, x21, x0
     arm64.movRegReg x0, x22
     arm64.bl __str_decref
@@ -120,7 +99,10 @@ func @main {
   matchcont:
     arm64.add x20, x20, 1
     arm64.movRegReg x21, x0
-    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x20, 200
+    arm64.b.lt spin
+    arm64.b whileexit
   matchdead:
   whileexit:
     arm64.leaRdata x0, __str_rec_3  ; "n="
@@ -158,8 +140,10 @@ func @main {
     arm64.storeBaseDispReg.word64 [x25 + 24], x0
     arm64.movRegReg x0, x23
     arm64.bl __mm_decref
+  __il_body#12:
     arm64.movRegReg x0, x25
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont#11:
     arm64.movRegReg x0, x25
     arm64.bl __str_decref
     arm64.movImm x20, 0

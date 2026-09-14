@@ -42,33 +42,14 @@ func @pick {
     x64.prologue 32
     x64.cmpRegImm32 rcx, 0
     x64.jcc less, __rc_panic#8
-  __rc_chk#9:
+  __rc_chk:
     x64.cmpRegImm32 rcx, 100000
-    x64.jcc lessEqual, __rc_ok#7
-  __rc_panic#8:
-    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at fourth-guarded-return-site-fires-at-its-own-site.test:5: Range check failed: value outside typealias 'Wide'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
+    x64.jcc greater, __rc_panic#8
   __rc_ok#7:
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, ifcont#2
   a:
     x64.leaRegRegImm32 r8, rcx, 1
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic#11
-  __rc_chk#12:
-    x64.cmpRegImm32 r8, 100
-    x64.jcc lessEqual, __rc_ok#10
-  __rc_panic#11:
-    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at fourth-guarded-return-site-fires-at-its-own-site.test:7: Range check failed: value outside typealias 'Small'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
   __rc_ok#10:
     x64.epilogue 32
     x64.popReg rbp
@@ -78,18 +59,6 @@ func @pick {
     x64.jcc notEqual, ifcont#4
   b:
     x64.leaRegRegImm32 r8, rcx, 2
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic#14
-  __rc_chk#15:
-    x64.cmpRegImm32 r8, 100
-    x64.jcc lessEqual, __rc_ok#13
-  __rc_panic#14:
-    x64.leaRegRdata rcx, [rip + __str_blob_12]  ; "panic at fourth-guarded-return-site-fires-at-its-own-site.test:11: Range check failed: value outside typealias 'Small'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
   __rc_ok#13:
     x64.epilogue 32
     x64.popReg rbp
@@ -99,37 +68,24 @@ func @pick {
     x64.jcc notEqual, ifcont#6
   c:
     x64.leaRegRegImm32 r8, rcx, 3
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic#17
-  __rc_chk#18:
-    x64.cmpRegImm32 r8, 100
-    x64.jcc lessEqual, __rc_ok#16
-  __rc_panic#17:
-    x64.leaRegRdata rcx, [rip + __str_blob_13]  ; "panic at fourth-guarded-return-site-fires-at-its-own-site.test:15: Range check failed: value outside typealias 'Small'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
   __rc_ok#16:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifcont#6:
-    x64.imulRegRegImm32 r8, rcx, 60
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic#20
-  __rc_chk#21:
-    x64.cmpRegImm32 r8, 100
-    x64.jcc lessEqual, __rc_ok#19
-  __rc_panic#20:
-    x64.leaRegRdata rcx, [rip + __str_blob_14]  ; "panic at fourth-guarded-return-site-fires-at-its-own-site.test:18: Range check failed: value outside typealias 'Small'\x0a"
+    x64.imulRegRegImm32 rax, rcx, 60
+    x64.jmp __rc_panic#20
+  __rc_panic#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at fourth-guarded-return-site-fires-at-its-own-site.test:5: Range check failed: value outside typealias 'Wide'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  __rc_ok#19:
+  __rc_panic#20:
+    x64.leaRegRdata rcx, [rip + __str_blob_15]  ; "panic at fourth-guarded-return-site-fires-at-its-own-site.test:18: Range check failed: value outside typealias 'Small'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -182,12 +138,12 @@ func @main {
     x64.movRegReg rax, r13
     x64.callDirect __str_copy
     x64.leaRegRegReg rbx, rbx, r13
-    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rax, slot8
     x64.loadRegSlot rdx, slot12
-    x64.loadRegSlot r12, slot8
-    x64.movRegReg rax, r12
+    x64.movRegReg rcx, rbx
     x64.callDirect __str_copy
-    x64.leaRegRegReg rax, rbx, r12
+    x64.loadRegSlot rax, slot8
+    x64.leaRegRegReg rax, rbx, rax
     x64.loadRegSlot rbx, slot4
     x64.storeBaseDispReg.word64 [rbx + 0], r15
     x64.loadRegSlot rax, slot0
@@ -239,12 +195,12 @@ func @main {
     x64.movRegReg rax, r13
     x64.callDirect __str_copy
     x64.leaRegRegReg rbx, rbx, r13
-    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rax, slot9
     x64.loadRegSlot rdx, slot13
-    x64.loadRegSlot r12, slot9
-    x64.movRegReg rax, r12
+    x64.movRegReg rcx, rbx
     x64.callDirect __str_copy
-    x64.leaRegRegReg rax, rbx, r12
+    x64.loadRegSlot rax, slot9
+    x64.leaRegRegReg rax, rbx, rax
     x64.loadRegSlot rbx, slot5
     x64.storeBaseDispReg.word64 [rbx + 0], r15
     x64.loadRegSlot rax, slot1
@@ -296,12 +252,12 @@ func @main {
     x64.movRegReg rax, r13
     x64.callDirect __str_copy
     x64.leaRegRegReg rbx, rbx, r13
-    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rax, slot10
     x64.loadRegSlot rdx, slot14
-    x64.loadRegSlot r12, slot10
-    x64.movRegReg rax, r12
+    x64.movRegReg rcx, rbx
     x64.callDirect __str_copy
-    x64.leaRegRegReg rax, rbx, r12
+    x64.loadRegSlot rax, slot10
+    x64.leaRegRegReg rax, rbx, rax
     x64.loadRegSlot rbx, slot6
     x64.storeBaseDispReg.word64 [rbx + 0], r15
     x64.loadRegSlot rax, slot2
@@ -353,12 +309,12 @@ func @main {
     x64.movRegReg rax, r13
     x64.callDirect __str_copy
     x64.leaRegRegReg rbx, rbx, r13
-    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rax, slot11
     x64.loadRegSlot rdx, slot15
-    x64.loadRegSlot r12, slot11
-    x64.movRegReg rax, r12
+    x64.movRegReg rcx, rbx
     x64.callDirect __str_copy
-    x64.leaRegRegReg rax, rbx, r12
+    x64.loadRegSlot rax, slot11
+    x64.leaRegRegReg rax, rbx, rax
     x64.loadRegSlot rbx, slot7
     x64.storeBaseDispReg.word64 [rbx + 0], r15
     x64.loadRegSlot rax, slot3

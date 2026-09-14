@@ -121,30 +121,6 @@ func @exprType {
   matchdead:
 }
 
-func @makeDirect {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 24
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
-    arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x20 + 0], x0
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.storeBaseDispReg.word64 [x20 + 8], x19
-    arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x20 + 16], x0
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @tyLen {
   entry:
     arm64.prologue 32
@@ -156,7 +132,7 @@ func @tyLen {
   matcharm#1:
     arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
     arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
+    arm64.bl __managed_incref
     arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
@@ -168,70 +144,34 @@ func @tyLen {
   matcharm#2:
     arm64.movImm x0, 0
   matchcont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_ok:
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
   matchdead:
-}
-
-func @makeFresh {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.cmp x0, 0
-    arm64.b.ne ifcont
-  z:
-    arm64.movImm x0, 24
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movImm x1, 2
-    arm64.storeBaseDispReg.word64 [x0 + 0], x1
-    arm64.movImm x1, 0
-    arm64.storeBaseDispReg.word64 [x0 + 8], x1
-    arm64.movImm x1, 0
-    arm64.storeBaseDispReg.word64 [x0 + 16], x1
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-  ifcont:
-    arm64.leaRdata x0, __str_rec_1  ; "hello"
-    arm64.bl String.toByteArray
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 16
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at inlined-accessor-field-return-order.test:32: Range check failed: value outside typealias 'TokenId'\x0a"
+    arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x20 + 0], x0
-    arm64.storeBaseDispReg.word64 [x20 + 8], x19
-    arm64.movImm x0, 24
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movImm x1, 0
-    arm64.storeBaseDispReg.word64 [x0 + 0], x1
-    arm64.storeBaseDispReg.word64 [x0 + 8], x20
-    arm64.movImm x1, 0
-    arm64.storeBaseDispReg.word64 [x0 + 16], x1
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
 }
 
-func @walk {
+func @main {
   entry:
-    arm64.prologue 80
-    arm64.storeSlotReg slot6, x25
+    arm64.prologue 64
     arm64.storeSlotReg slot5, x24
     arm64.storeSlotReg slot4, x23
     arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
+  __rc_ok#12:
     arm64.movImm x0, 24
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -241,103 +181,134 @@ func @walk {
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 16], x1
-    arm64.movImm x20, 0
-    arm64.movImm x21, 1
-    arm64.movRegReg x22, x20
-    arm64.movRegReg x20, x0
-  forhdr:
-    arm64.cmp x21, x19
-    arm64.b.gt forexit
-  loop:
-    arm64.movRegReg x0, x21
-    arm64.bl makeFresh
-    arm64.movRegReg x23, x0
-    arm64.cmp x22, 888
-    arm64.b.ne ifcont
-  ret:
-    arm64.movRegReg x0, x20
-    arm64.bl __destruct_Expr
-    arm64.movRegReg x0, x23
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.loadRegSlot x25, slot6
-    arm64.epilogue 80
-    arm64.ret
-  ifcont:
-    arm64.movRegReg x0, x23
-    arm64.bl exprType
-    arm64.movRegReg x24, x0
-    arm64.movRegReg x0, x24
-    arm64.bl tyLen
-    arm64.add x22, x22, x0
-    arm64.movRegReg x0, x24
-    arm64.bl makeDirect
-    arm64.movRegReg x25, x0
-    arm64.movRegReg x0, x20
-    arm64.bl __destruct_Expr
-    arm64.movRegReg x0, x24
-    arm64.bl __destruct_Ty
-    arm64.movRegReg x0, x23
-    arm64.bl __destruct_Expr
-  forstep:
-    arm64.add x21, x21, 1
-    arm64.movRegReg x20, x25
-    arm64.b forhdr
-  forexit:
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.loadRegSlot x25, slot6
-    arm64.epilogue 80
-    arm64.ret
-}
-
-func @main {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, 5
-    arm64.bl walk
+    arm64.movImm x19, 0
+    arm64.movImm x20, 1
+    arm64.movRegReg x21, x19
     arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x19
-    arm64.bl exprType
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x20
-    arm64.bl tyLen
-    arm64.movRegReg x21, x0
-    arm64.movRegReg x0, x20
-    arm64.bl __destruct_Ty
-    arm64.movRegReg x0, x19
-    arm64.bl __destruct_Expr
-    arm64.cmp x21, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x21, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_3  ; "panic at inlined-accessor-field-return-order.test:72: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.b forhdr
+  ifcont#19:
+    arm64.leaRdata x0, __str_rec_1  ; "hello"
+  __il_body#23:
+    arm64.movImm x1, 0
+  __il_body#27:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+  __il_cont#26:
+    arm64.bl __managed_slice
+    arm64.movRegReg x22, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok
+  tryerr:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at String.maxon:157: String.toByteArray: slice 0..byteLength() is in bounds by construction\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
     arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x21
+  tryok:
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_retain
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_decref
+  __il_cont#22:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x23
+    arm64.movImm x0, 24
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x23 + 0], x0
+    arm64.storeBaseDispReg.word64 [x23 + 8], x22
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x23 + 16], x0
+  __il_cont#16:
+    arm64.cmp x21, 888
+    arm64.b.ne ifcont#11
+  ret:
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Expr
+    arm64.b __il_cont#4
+  ifcont#11:
+    arm64.movRegReg x0, x23
+    arm64.bl exprType
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x22
+    arm64.bl tyLen
+    arm64.add x21, x21, x0
+  __il_body#15:
+    arm64.movImm x0, 24
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x24, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x24 + 0], x0
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x24 + 8], x22
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x24 + 16], x0
+  __il_cont#14:
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Expr
+    arm64.movRegReg x0, x22
+    arm64.bl __destruct_Ty
+    arm64.movRegReg x0, x23
+    arm64.bl __destruct_Expr
+  forstep:
+    arm64.add x20, x20, 1
+    arm64.movRegReg x19, x24
+  forhdr:
+    arm64.cmp x20, 5
+    arm64.b.le ifcont#19
+  forexit:
+    arm64.movRegReg x23, x19
+  __il_cont#4:
+    arm64.movRegReg x0, x23
+    arm64.bl exprType
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl tyLen
+    arm64.movRegReg x20, x0
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.b.gt __rc_panic
+  __rc_ok#1:
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Ty
+    arm64.movRegReg x0, x23
+    arm64.bl __destruct_Expr
+    arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_7  ; "panic at inlined-accessor-field-return-order.test:72: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
     arm64.ret
 }

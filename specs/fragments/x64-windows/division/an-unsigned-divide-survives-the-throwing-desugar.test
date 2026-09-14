@@ -1,5 +1,5 @@
 // Test: an-unsigned-divide-survives-the-throwing-desugar
-typealias Word = int(0 to u64.max)
+typealias Word = bits(64)
 typealias Any64 = int(i64.min to i64.max)
 
 function ident(v Any64) returns Any64
@@ -22,6 +22,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -41,26 +44,17 @@ func @main {
     x64.leaRegRdata rdx, [rip + __str_rec_4]  ; "q="
     x64.loadRegBaseDisp.word64 rbx, [rdx + 0]
     x64.loadRegBaseDisp.word64 r12, [rdx + 8]
-    x64.cmpRegImm32 rcx, 0
-    x64.setccReg equal, rsi
-    x64.orRegReg rcx, rcx, rsi
     x64.movRegImm32 rdx, 0
     x64.divReg rcx
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, tryok#1
-  tryerr#2:
-    x64.movRegImm32 r13, 0
-    x64.jmp trycont#3
-  tryok#1:
     x64.movRegReg r13, rax
   trycont#3:
-    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r14, r8
     x64.movRegReg rcx, r13
     x64.movRegReg rdx, r14
-    x64.callDirect __int_to_string
+    x64.callDirect __uint_to_string
     x64.movRegReg r13, r8
     x64.leaRegRdata rax, [rip + __str_rec_5]  ; "\x0a"
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
@@ -85,12 +79,12 @@ func @main {
     x64.movRegReg rax, r13
     x64.callDirect __str_copy
     x64.leaRegRegReg rbx, rbx, r13
-    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rax, slot8
     x64.loadRegSlot rdx, slot11
-    x64.loadRegSlot r12, slot8
-    x64.movRegReg rax, r12
+    x64.movRegReg rcx, rbx
     x64.callDirect __str_copy
-    x64.leaRegRegReg rax, rbx, r12
+    x64.loadRegSlot rax, slot8
+    x64.leaRegRegReg rax, rbx, rax
     x64.loadRegSlot rbx, slot5
     x64.storeBaseDispReg.word64 [rbx + 0], r15
     x64.loadRegSlot rax, slot2
@@ -108,32 +102,20 @@ func @main {
     x64.leaRegRdata rax, [rip + __str_rec_6]  ; "r="
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
-    x64.movRegImm32 rax, 3
-    x64.cmpRegImm32 rax, 0
-    x64.setccReg equal, rcx
-    x64.movRegImm32 rax, 3
-    x64.cmpRegImm32 rax, -1
-    x64.setccReg equal, rax
+    x64.movRegImm32 rax, 0
     x64.leaRegRegImm32 rax, rax, -1
-    x64.movRegImm32 rsi, 3
-    x64.orRegReg rsi, rsi, rcx
     x64.movRegImm32 rdx, 0
-    x64.divReg rsi
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, tryok#4
-  tryerr#5:
-    x64.movRegImm32 r13, 0
-    x64.jmp trycont#6
-  tryok#4:
+    x64.movRegImm32 rcx, 3
+    x64.divReg rcx
     x64.movRegReg r13, rdx
   trycont#6:
-    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r14, r8
     x64.movRegReg rcx, r13
     x64.movRegReg rdx, r14
-    x64.callDirect __int_to_string
+    x64.callDirect __uint_to_string
     x64.movRegReg r13, r8
     x64.leaRegRdata rax, [rip + __str_rec_5]  ; "\x0a"
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
@@ -158,12 +140,12 @@ func @main {
     x64.movRegReg rax, r13
     x64.callDirect __str_copy
     x64.leaRegRegReg rbx, rbx, r13
-    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rax, slot7
     x64.loadRegSlot rdx, slot10
-    x64.loadRegSlot r12, slot7
-    x64.movRegReg rax, r12
+    x64.movRegReg rcx, rbx
     x64.callDirect __str_copy
-    x64.leaRegRegReg rax, rbx, r12
+    x64.loadRegSlot rax, slot7
+    x64.leaRegRegReg rax, rbx, rax
     x64.loadRegSlot rbx, slot4
     x64.storeBaseDispReg.word64 [rbx + 0], r15
     x64.loadRegSlot rax, slot1
@@ -186,16 +168,16 @@ func @main {
     x64.movRegImm rax, 18446744073709551615
     x64.movRegImm32 rdx, 0
     x64.divReg rcx
-  tryerr#8:
+  tryerr:
     x64.movRegImm32 r13, 111
   trycont#9:
-    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r14, r8
     x64.movRegReg rcx, r13
     x64.movRegReg rdx, r14
-    x64.callDirect __int_to_string
+    x64.callDirect __uint_to_string
     x64.movRegReg r13, r8
     x64.leaRegRdata rax, [rip + __str_rec_5]  ; "\x0a"
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
@@ -220,12 +202,12 @@ func @main {
     x64.movRegReg rax, r13
     x64.callDirect __str_copy
     x64.leaRegRegReg rbx, rbx, r13
-    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rax, slot6
     x64.loadRegSlot rdx, slot9
-    x64.loadRegSlot r12, slot6
-    x64.movRegReg rax, r12
+    x64.movRegReg rcx, rbx
     x64.callDirect __str_copy
-    x64.leaRegRegReg rax, rbx, r12
+    x64.loadRegSlot rax, slot6
+    x64.leaRegRegReg rax, rbx, rax
     x64.loadRegSlot rbx, slot3
     x64.storeBaseDispReg.word64 [rbx + 0], r15
     x64.loadRegSlot rax, slot0

@@ -10,7 +10,7 @@ function consume(argv StrArray, n Integer) returns Integer throws Boom
 	if n > 100 'big'
 		throw Boom.bad
 	end 'big'
-	return argv.count() + n
+	return (argv.count() as Integer) + n
 end 'consume'
 
 function run(n Integer) returns Integer
@@ -23,7 +23,7 @@ function run(n Integer) returns Integer
 end 'run'
 
 function main() returns ExitCode
-	return run(900) + run(200) + run(1) as ExitCode
+	return (run(900) + run(200) + run(1)) as ExitCode
 end 'main'
 ---
 ExitCode: 9
@@ -123,35 +123,21 @@ func @main {
     x64.leaRegRegReg rbx, rbx, r8
     x64.movRegImm32 rcx, 1
     x64.callDirect run
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic#2
-  __rc_chk#3:
-    x64.cmpRegImm32 r8, 255
-    x64.jcc lessEqual, __rc_ok#1
-  __rc_panic#2:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at an-inner-return-in-a-fell-through-handler-releases-them.test:26: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok#1:
     x64.leaRegRegReg r8, rbx, r8
     x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic#5
-  __rc_chk#6:
+    x64.jcc less, __rc_panic
+  __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc lessEqual, __rc_ok#4
-  __rc_panic#5:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at an-inner-return-in-a-fell-through-handler-releases-them.test:26: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.jcc greater, __rc_panic
+  __rc_ok:
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok#4:
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at an-inner-return-in-a-fell-through-handler-releases-them.test:26: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp

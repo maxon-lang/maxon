@@ -24,6 +24,7 @@ data {
 func @main {
   entry:
     arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
@@ -31,36 +32,83 @@ func @main {
     arm64.bl __cl_arg
     arm64.movRegReg x19, x0
     arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.movRegReg x0, x19
-    arm64.bl String.init
+    arm64.bl __managed_retain
     arm64.movRegReg x20, x0
-    arm64.leaRdata x1, __str_rec_1  ; ""
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x21, [x20 + 8]
+    arm64.movImm x22, 0
+    arm64.b forhdr
+  scan:
     arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x22
+    arm64.bl __managed_byte_at
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr
+  tryok:
+    arm64.cmp x0, 128
+    arm64.movImm x1, 1
+    arm64.b.ge scmerge
+  orrhs:
+    arm64.cmp x0, 13
+    arm64.cset x0, eq
+    arm64.movRegReg x1, x0
+  scmerge:
+    arm64.cbz x1, forstep
+  notSingleByte:
+    arm64.movImm x1, 0
+    arm64.b __il_cont#5
+  forstep:
+    arm64.add x22, x22, 1
+  forhdr:
+    arm64.cmp x22, x21
+    arm64.b.lt scan
+  forexit:
+    arm64.movImm x1, 1
+  __il_cont#5:
+    arm64.movRegReg x0, x20
+    arm64.bl __str_of_buffer
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+  __il_cont#3:
+    arm64.leaRdata x1, __str_rec_1  ; ""
+    arm64.movRegReg x0, x21
     arm64.bl __str_eq
     arm64.cbz x0, ifcont
   check:
-    arm64.movImm x21, 0
-    arm64.movRegReg x0, x20
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x21
     arm64.bl __str_decref
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.movRegReg x0, x21
+    arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   ifcont:
-    arm64.movImm x21, 1
-    arm64.movRegReg x0, x20
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x21
     arm64.bl __str_decref
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.movRegReg x0, x21
+    arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  tryerr:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at String.maxon:1136: scanSingleByteGraphemes: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
 }

@@ -26,43 +26,6 @@ data {
   __mm_alloc_id@72 = i64 0
 }
 
-func @pair {
-  entry:
-    arm64.prologue 16
-    arm64.cmp x0, 0
-    arm64.b.lt __rc_panic#2
-  __rc_chk#3:
-    arm64.cmp x0, 1000
-    arm64.b.le __rc_ok#1
-  __rc_panic#2:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at small-tuple-return-allocates-nothing.test:4: Range check failed: value outside typealias 'Num'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x1, 0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x9, x1
-    arm64.epilogue 16
-    arm64.ret
-  __rc_ok#1:
-    arm64.cmp x1, 0
-    arm64.b.lt __rc_panic#5
-  __rc_chk#6:
-    arm64.cmp x1, 1000
-    arm64.b.le __rc_ok#4
-  __rc_panic#5:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at small-tuple-return-allocates-nothing.test:4: Range check failed: value outside typealias 'Num'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x1, 0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x9, x1
-    arm64.epilogue 16
-    arm64.ret
-  __rc_ok#4:
-    arm64.add x0, x0, 1
-    arm64.add x9, x1, 2
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 96
@@ -75,11 +38,10 @@ func @main {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, 10
-    arm64.movImm x1, 20
-    arm64.bl pair
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x9
+  __rc_ok:
+    arm64.movImm x19, 11
+    arm64.movImm x20, 22
+  __il_cont#2:
     arm64.movImm x0, 21
     arm64.movImm x1, 0
     arm64.movImm x2, 10
@@ -134,8 +96,10 @@ func @main {
     arm64.bl __mm_decref
     arm64.movRegReg x0, x24
     arm64.bl __mm_decref
+  __il_body:
     arm64.movRegReg x0, x26
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont#1:
     arm64.movRegReg x0, x26
     arm64.bl __str_decref
     arm64.movImm x0, 0

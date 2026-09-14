@@ -27,32 +27,25 @@ typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
-func @swapAcrossCall {
-  entry:
-    arm64.prologue 16
-    arm64.add x1, x0, 1
-    arm64.add x0, x0, 2
-    arm64.movImm x2, 0
-  whilehdr:
-    arm64.cmp x2, 3
-    arm64.b.ge whileexit
-  __il_cont:
-    arm64.add x2, x2, 1
-    arm64.xchgRegReg x1, x0
-    arm64.b whilehdr
-  whileexit:
-    arm64.movImm x16, 10
-    arm64.mul x1, x1, x16
-    arm64.add x0, x1, x0
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 16
-    arm64.movImm x0, 0
-    arm64.bl swapAcrossCall
+  __il_body:
+    arm64.movImm x0, 1
+    arm64.movImm x1, 2
+    arm64.movImm x2, 0
+    arm64.b whilehdr
+  __il_cont#8:
+    arm64.add x2, x2, 1
+    arm64.xchgRegReg x0, x1
+  whilehdr:
+    arm64.cmp x2, 3
+    arm64.b.lt __il_cont#8
+  whileexit:
+    arm64.movImm x16, 10
+    arm64.mul x0, x0, x16
+    arm64.add x0, x0, x1
+  __il_cont#3:
     arm64.cmp x0, 21
     arm64.b.ne ifcont
   ok:

@@ -14,6 +14,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -22,6 +25,8 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
     x64.prologue 32
     x64.leaRegRdata rbx, [rip + __str_rec_4]  ; "apple"
     x64.movRegImm32 rcx, 8
@@ -43,12 +48,51 @@ func @main {
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r8
     x64.callDirect __managed_push
-    x64.leaRegRdata rdx, [rip + __str_rec_7]  ; "grape"
+    x64.leaRegRdata rbx, [rip + __str_rec_7]  ; "grape"
     x64.leaRegRdata rax, [rip + __layout_Array_String]
-    x64.leaRegRdata r9, [rip + __witness_String.Equatable]
+    x64.leaRegRdata r13, [rip + __witness_String.Equatable]
+  __il_body:
+    x64.movRegImm32 r14, 0
+    x64.jmp forhdr
+  scan:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseIndexScale.word64 rcx, [rax + r14*8 + 0]
+    x64.jmp __im_cont
+  __im_stride:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow
+  __im_byte:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.leaRegRegReg rax, rax, r14
+    x64.loadRegBaseDisp.byte rcx, [rax + 0]
+    x64.jmp __im_cont
+  __im_slow:
     x64.movRegReg rcx, r12
-    x64.callDirect Array.contains#type parameter
+    x64.movRegReg rdx, r14
+    x64.callDirect __managed_get_unchecked
+    x64.movRegReg rcx, r8
+  __im_cont:
+    x64.movRegReg rdx, rbx
+    x64.callMem [r13 + 24]
     x64.cmpRegImm32 r8, 0
+    x64.jcc equal, forstep
+  found:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_cont
+  forstep:
+    x64.leaRegRegImm32 r14, r14, 1
+  forhdr:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegReg r14, rax
+    x64.jcc less, scan
+  forexit:
+    x64.movRegImm32 rax, 0
+  __il_cont:
+    x64.cmpRegImm32 rax, 0
     x64.jcc equal, ifcont
   check:
     x64.movRegImm32 rbx, 1
@@ -56,6 +100,8 @@ func @main {
     x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
     x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -66,6 +112,8 @@ func @main {
     x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
     x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

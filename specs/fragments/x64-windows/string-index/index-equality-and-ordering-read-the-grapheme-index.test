@@ -28,6 +28,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -37,7 +40,8 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 32
     x64.leaRegRdata rbx, [rip + __str_rec_8]  ; "abcdefghijklm"
     x64.movRegReg rcx, rbx
     x64.callDirect String.startIndex
@@ -47,9 +51,38 @@ func @main {
     x64.callDirect String.findFirst
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
-  tryerr:
+  __il_body#30:
+    x64.loadRegBaseDisp.word64 r13, [rbx + 8]
+  __il_body#31:
+    x64.loadRegBaseDisp.byte rax, [rbx + 48]
+  __il_cont#28:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont#20
+  oneByteEach:
+    x64.movRegReg rcx, r13
+    x64.jmp __il_body#27
+  ifcont#20:
+    x64.movRegImm32 r14, 0
+    x64.movRegImm32 rdx, 0
+    x64.jmp whilehdr
+  countLoop:
     x64.movRegReg rcx, rbx
-    x64.callDirect String.endIndex
+    x64.callDirect findGraphemeEnd
+    x64.leaRegRegImm32 r14, r14, 1
+    x64.movRegReg rdx, r8
+  whilehdr:
+    x64.cmpRegReg rdx, r13
+    x64.jcc less, countLoop
+  whileexit:
+    x64.cmpRegImm32 r14, 0
+    x64.jcc less, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, r14
+  __il_body#27:
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 8]
+  __il_cont#26:
+    x64.callDirect StringIndex.create
+  __il_cont#13:
     x64.movRegReg r13, r8
     x64.jmp trycont
   tryok:
@@ -58,7 +91,7 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
     x64.cmpRegReg rax, rcx
-    x64.jcc greaterEqual, ifelse#5
+    x64.jcc aboveEqual, ifelse#5
   ordered:
     x64.leaRegRdata rcx, [rip + __str_rec_10]  ; "lt\x0a"
     x64.callDirect print
@@ -103,7 +136,19 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_39]  ; "panic at grapheme.maxon:404: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx

@@ -13,6 +13,9 @@ data {
   __slab_arena_list@16 = i64 0
   __slab_arena_map_l1@24 = i64 0
   __slab_state@32 = i64 0
+  __mrt_console_probe_stdin@40 = i8 0
+  __mrt_console_probe_stdout@41 = i8 0
+  __mrt_console_probe_stderr@42 = i8 0
 }
 
 func @main {
@@ -26,22 +29,180 @@ func @main {
     x64.pushReg r15
     x64.prologue 88
     x64.leaRegRdata rcx, [rip + __str_rec_18]  ; "file"
-    x64.callDirect FilePath.init
-    x64.storeSlotReg slot0, r8
+  __il_body#3:
+    x64.callDirect FilePath.create
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#5
+  __il_cont#2:
     x64.leaRegRdata rax, [rip + __str_rec_19]  ; "'"
-    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
-    x64.loadRegBaseDisp.word64 r12, [rax + 8]
-    x64.movRegReg rcx, r8
-    x64.callDirect FilePath.fileExtension
-    x64.storeSlotReg slot1, r8
-    x64.loadRegBaseDisp.word64 r13, [r8 + 0]
-    x64.loadRegBaseDisp.word64 r14, [r8 + 8]
-    x64.leaRegRdata rax, [rip + __str_rec_20]  ; "'\x0a"
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot5, rcx
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+  __il_body#25:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+  __il_body#42:
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+  __il_cont#41:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, ifcont#27
+  empty:
+    x64.movRegImm32 r13, 0
+    x64.jmp __il_cont#24
+  ifcont#27:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+  __il_body#44:
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.jmp whilehdr#28
+  scan#29:
+    x64.leaRegRegImm32 r13, rax, -1
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.movRegReg rdx, r13
+    x64.callDirect String.byteAtOrPanic
+    x64.cmpRegImm32 r8, 92
+    x64.jcc notEqual, ifcont#32
+  isSep:
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __il_cont#24
+  ifcont#32:
+    x64.movRegReg rax, r13
+  whilehdr#28:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc above, scan#29
+  whileexit#30:
+    x64.movRegImm32 r13, 0
+  __il_cont#24:
+    x64.cmpRegImm32 r13, 0
+    x64.jcc notEqual, ifcont#21
+  noSep:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect __str_retain
+    x64.movRegReg rbx, r8
+    x64.jmp __il_body#38
+  ifcont#21:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+  __il_body#40:
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+  __il_cont#39:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect String.addressableBytes
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __managed_slice
+    x64.movRegReg r13, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#22
+  tryerr#23:
+    x64.leaRegRdata rcx, [rip + __str_blob_36]  ; "panic at FilePath.maxon:343: FilePath.filename: slice \xe2\x80\x94 sepPlusOne from lastSepPlusOne, always <= len\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#22:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_retain
+    x64.movRegReg rcx, r8
+    x64.callDirect String.init
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+  __il_body#38:
+    x64.loadRegBaseDisp.word64 r13, [rbx + 8]
+  __il_cont#37:
+    x64.cmpRegImm32 r13, 1
+    x64.jcc above, ifcont#10
+  tooShort:
+    x64.leaRegRdata rcx, [rip + __str_rec_37]  ; ""
+    x64.callDirect __str_retain
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegReg rax, r13
+    x64.jmp __il_cont#7
+  ifcont#10:
+    x64.movRegReg rcx, rbx
+    x64.callDirect String.addressableBytes
+    x64.movRegReg r14, r8
+  __il_body#36:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.jmp whilehdr#11
+  scan#12:
+    x64.leaRegRegImm32 r15, rax, -1
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r15
+    x64.callDirect String.byteAtOrPanic
+    x64.cmpRegImm32 r8, 46
+    x64.jcc notEqual, ifcont#17
+  isDot:
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r15
+    x64.movRegReg rax, r13
+    x64.callDirect __managed_slice
+    x64.movRegReg r13, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#15
+  tryerr#16:
+    x64.leaRegRdata rcx, [rip + __str_blob_38]  ; "panic at FilePath.maxon:368: FilePath.fileExtension: slice \xe2\x80\x94 i from backwards scan, always <= nameLen\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#15:
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_retain
+    x64.movRegReg rcx, r8
+    x64.callDirect String.init
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegReg rax, r15
+    x64.jmp __il_cont#7
+  ifcont#17:
+    x64.movRegReg rax, r15
+  whilehdr#11:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc above, scan#12
+  whileexit#13:
+    x64.leaRegRdata rcx, [rip + __str_rec_37]  ; ""
+    x64.callDirect __str_retain
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegReg rax, r13
+  __il_cont#7:
+    x64.storeSlotReg slot1, rax
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_20]  ; "'\x0a"
+    x64.loadRegBaseDisp.word64 r14, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.storeSlotReg slot4, rax
-    x64.leaRegRegReg rcx, r12, r14
+    x64.leaRegRegReg rcx, r12, r13
     x64.leaRegRegReg rax, rcx, rax
     x64.storeSlotReg slot2, rax
     x64.leaRegRegImm32 rcx, rax, 57
@@ -49,33 +210,35 @@ func @main {
     x64.callDirect __mm_alloc
     x64.storeSlotReg slot3, r8
     x64.leaRegRegImm32 r15, r8, 56
-    x64.movRegReg rcx, r15
-    x64.movRegReg rdx, rbx
-    x64.movRegReg rax, r12
-    x64.callDirect __str_copy
-    x64.leaRegRegReg rbx, r15, r12
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r13
-    x64.movRegReg rax, r14
-    x64.callDirect __str_copy
-    x64.leaRegRegReg rbx, rbx, r14
-    x64.movRegReg rcx, rbx
     x64.loadRegSlot rdx, slot5
-    x64.loadRegSlot r12, slot4
+    x64.movRegReg rcx, r15
     x64.movRegReg rax, r12
     x64.callDirect __str_copy
-    x64.leaRegRegReg rax, rbx, r12
-    x64.loadRegSlot rbx, slot3
-    x64.storeBaseDispReg.word64 [rbx + 0], r15
-    x64.loadRegSlot rax, slot2
-    x64.storeBaseDispReg.word64 [rbx + 8], rax
-    x64.movRegImm rax, 18446744073709551613
-    x64.storeBaseDispReg.word64 [rbx + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.leaRegRegReg r12, r15, r12
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r12, r13
+    x64.loadRegSlot rax, slot4
     x64.movRegReg rcx, rbx
-    x64.callDirect print
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot4
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rax, slot3
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot2
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+  __il_body#6:
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __write_stdout
+  __il_cont#1:
+    x64.loadRegSlot rcx, slot3
     x64.callDirect __str_decref
     x64.loadRegSlot rcx, slot1
     x64.callDirect __str_decref
@@ -83,6 +246,30 @@ func @main {
     x64.loadRegSlot rcx, slot0
     x64.callDirect __destruct_FilePath
     x64.movRegReg r8, rbx
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_32]  ; "panic at FilePath.maxon:31: FilePath: invalid path\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_98]  ; "panic at FilePath.maxon:326: Range check failed: value outside typealias 'PathByteOffset'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 88
     x64.popReg r15
     x64.popReg r14

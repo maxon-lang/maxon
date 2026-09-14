@@ -100,13 +100,13 @@ func @main {
   critsplit:
     arm64.movRegReg x9, x1
   tryblkerr:
-    arm64.leaFuncAddr x19, main$closure_0
+    arm64.leaFuncAddr x2, main$closure_0
     arm64.cmp x9, 1
     arm64.b.ne matchnext
   matcharm#4:
     arm64.movImm x0, 1
     arm64.movImm x1, 0
-    arm64.blr x19
+    arm64.blr x2
     arm64.b tryblkcont
   matchnext:
     arm64.cmp x9, 2
@@ -114,7 +114,7 @@ func @main {
   matcharm#5:
     arm64.movImm x0, 0
     arm64.movImm x1, 0
-    arm64.blr x19
+    arm64.blr x2
     arm64.b tryblkcont
   matchdead:
   tryblkok#3:
@@ -124,15 +124,15 @@ func @main {
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.b.le __rc_ok
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
   __rc_panic:
     arm64.leaRdata x0, __str_blob_0  ; "panic at try-block-shadowed-binding.closure-inside-a-handler-matches-its-own-binding.test:48: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-  __rc_ok:
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret

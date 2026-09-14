@@ -18,6 +18,12 @@ end 'main'
 ---
 ExitCode: 72
 ---
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+}
+
 func @main {
   entry:
     x64.pushReg rbp
@@ -26,9 +32,7 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.movRegImm32 rdx, 0
     x64.movRegImm32 rsi, 0
-  whilehdr:
-    x64.cmpRegImm32 rsi, 20
-    x64.jcc greaterEqual, whileexit
+    x64.jmp whilehdr
   loop:
     x64.movRegReg rdi, rsi
     x64.sarRegImm8 rdi, rsi, 63
@@ -48,7 +52,9 @@ func @main {
     x64.leaRegRegReg rcx, rcx, rsi
   ifcont:
     x64.leaRegRegImm32 rsi, rsi, 1
-    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 rsi, 20
+    x64.jcc less, loop
   whileexit:
     x64.leaRegRegReg rax, rax, rcx
     x64.leaRegRegReg r8, rax, rdx

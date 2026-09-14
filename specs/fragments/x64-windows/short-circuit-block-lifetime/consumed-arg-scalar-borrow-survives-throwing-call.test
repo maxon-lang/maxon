@@ -128,71 +128,12 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
-}
-
-func @Blk.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Module.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mm_decref]
-    x64.callDirect __managed_create
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @Module.addBlock {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg rcx, rdx
-    x64.callDirect Blk.create
-    x64.movRegReg r12, r8
-    x64.loadRegBaseDisp.word64 rbx, [rbx + 0]
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_incref
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
-    x64.callDirect __managed_push
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Parser.create {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
@@ -202,21 +143,32 @@ func @Parser.create {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
-    x64.movRegImm32 rcx, 16
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __il_body:
+    x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r13, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_incref
     x64.storeBaseDispReg.word64 [r13 + 0], r12
+  __il_cont:
+    x64.loadRegBaseDisp.word64 rbx, [rbx + 0]
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_own
     x64.movRegReg rcx, rbx
-    x64.callDirect __mm_incref
-    x64.storeBaseDispReg.word64 [r13 + 8], rbx
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, rbx
-    x64.callDirect __destruct_Module
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
     x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at consumed-arg-scalar-borrow-survives-throwing-call.test:29: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
@@ -233,16 +185,18 @@ func @Parser.parseIdentifierExpr {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.prologue 32
+    x64.pushReg r15
+    x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
     x64.movRegReg r13, rax
     x64.loadRegBaseDisp.word64 r14, [rbx + 0]
     x64.movRegReg rcx, r12
-    x64.callDirect __mm_incref
+    x64.callDirect __mm_own
+    x64.movRegReg r15, r8
     x64.movRegReg rcx, r14
     x64.callDirect __mm_decref
-    x64.storeBaseDispReg.word64 [rbx + 0], r12
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
     x64.loadRegBaseDisp.word64 r14, [r12 + 0]
     x64.cmpRegImm32 r13, 0
     x64.jcc equal, critsplit
@@ -254,7 +208,8 @@ func @Parser.parseIdentifierExpr {
     x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -270,7 +225,24 @@ func @Parser.parseIdentifierExpr {
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.leaRegRegReg r8, rax, rcx
     x64.movRegImm32 r10, 0
-    x64.epilogue 32
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_ok:
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at consumed-arg-scalar-borrow-survives-throwing-call.test:59: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 40
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -286,64 +258,22 @@ func @Parser.parseCallArgsRaw {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 32
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
     x64.loadRegBaseDisp.word64 r13, [rbx + 0]
     x64.movRegReg rcx, r12
-    x64.callDirect __mm_incref
+    x64.callDirect __mm_own
+    x64.movRegReg r14, r8
     x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
-    x64.storeBaseDispReg.word64 [rbx + 0], r12
+    x64.storeBaseDispReg.word64 [rbx + 0], r14
     x64.movRegImm32 rax, 0
     x64.movRegImm32 r9, 0
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.callDirect Parser.parseExpressionBP
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
-  tryerr:
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryok:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
-    x64.leaRegRegReg r8, r8, rax
-    x64.movRegImm32 r10, 0
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Parser.parsePrimary {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-    x64.movRegReg r13, rax
-    x64.loadRegBaseDisp.word64 r14, [rbx + 0]
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_incref
-    x64.movRegReg rcx, r14
-    x64.callDirect __mm_decref
-    x64.storeBaseDispReg.word64 [rbx + 0], r12
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
-    x64.movRegReg rax, r13
-    x64.callDirect Parser.parseIdentifierExpr
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
   tryerr:
@@ -359,7 +289,88 @@ func @Parser.parsePrimary {
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.leaRegRegReg r8, r8, rax
     x64.movRegImm32 r10, 0
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_ok:
     x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at consumed-arg-scalar-borrow-survives-throwing-call.test:65: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Parser.parsePrimary {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg r13, rax
+    x64.loadRegBaseDisp.word64 r14, [rbx + 0]
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_own
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect Parser.parseIdentifierExpr
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.leaRegRegReg r8, r8, rax
+    x64.movRegImm32 r10, 0
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_ok:
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at consumed-arg-scalar-borrow-survives-throwing-call.test:71: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 40
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -376,16 +387,18 @@ func @Parser.parseUnary {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.prologue 32
+    x64.pushReg r15
+    x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
     x64.movRegReg r13, rax
     x64.loadRegBaseDisp.word64 r14, [rbx + 0]
     x64.movRegReg rcx, r12
-    x64.callDirect __mm_incref
+    x64.callDirect __mm_own
+    x64.movRegReg r15, r8
     x64.movRegReg rcx, r14
     x64.callDirect __mm_decref
-    x64.storeBaseDispReg.word64 [rbx + 0], r12
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.movRegReg rax, r13
@@ -394,7 +407,8 @@ func @Parser.parseUnary {
     x64.jcc equal, tryok
   tryerr:
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -405,7 +419,24 @@ func @Parser.parseUnary {
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.leaRegRegReg r8, r8, rax
     x64.movRegImm32 r10, 0
-    x64.epilogue 32
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_ok:
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at consumed-arg-scalar-borrow-survives-throwing-call.test:77: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 40
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -425,26 +456,59 @@ func @Parser.parseExpressionBP {
     x64.pushReg r15
     x64.prologue 56
     x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rax
-    x64.movRegReg r13, r9
+    x64.storeSlotReg slot2, rax
+    x64.movRegReg r12, r9
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic#9
+  __rc_ok#8:
     x64.movRegReg rcx, rdx
     x64.callDirect __mm_retain
-    x64.movRegReg r14, r8
-    x64.loadRegBaseDisp.word64 r15, [rbx + 0]
+    x64.movRegReg r13, r8
+    x64.loadRegBaseDisp.word64 r14, [rbx + 0]
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_own
+    x64.movRegReg r15, r8
     x64.movRegReg rcx, r14
-    x64.callDirect __mm_incref
-    x64.movRegReg rcx, r15
     x64.callDirect __mm_decref
-    x64.storeBaseDispReg.word64 [rbx + 0], r14
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r12
+    x64.callDirect Parser.parseUnary
+    x64.movRegReg r12, r8
+    x64.movRegReg r14, r10
+    x64.cmpRegImm32 r14, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegImm32 r8, 0
+    x64.movRegReg r10, r14
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#1:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect __mm_retain
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.loadRegSlot rax, slot2
+    x64.jmp whilehdr
+  prattLoop:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r14
-    x64.movRegReg rax, r13
-    x64.callDirect Parser.parseUnary
+    x64.callDirect Parser.emitShortCircuit
     x64.movRegReg r13, r8
     x64.movRegReg r15, r10
     x64.cmpRegImm32 r15, 0
-    x64.jcc equal, tryok#1
-  tryerr#2:
+    x64.jcc equal, tryok#6
+  tryerr#7:
     x64.movRegReg rcx, r14
     x64.callDirect __mm_decref
     x64.movRegImm32 r8, 0
@@ -457,30 +521,29 @@ func @Parser.parseExpressionBP {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#1:
+  tryok#6:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.callDirect __mm_retain
-    x64.movRegReg r15, r8
+    x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r14
     x64.callDirect __mm_decref
-    x64.movRegReg rax, r12
+    x64.leaRegRegReg r12, r12, r13
+    x64.loadRegSlot rax, slot1
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.loadRegSlot rcx, slot0
+    x64.movRegReg r14, rcx
   whilehdr:
     x64.storeSlotReg slot1, rax
     x64.cmpRegImm32 rax, 0
-    x64.jcc belowEqual, whileexit
-  prattLoop:
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r15
-    x64.callDirect Parser.emitShortCircuit
-    x64.movRegReg r12, r8
-    x64.movRegReg r14, r10
-    x64.cmpRegImm32 r14, 0
-    x64.jcc equal, tryok#6
-  tryerr#7:
-    x64.movRegReg rcx, r15
+    x64.jcc above, prattLoop
+  whileexit:
+    x64.movRegReg rcx, r14
     x64.callDirect __mm_decref
-    x64.movRegImm32 r8, 0
-    x64.movRegReg r10, r14
+    x64.movRegImm32 r10, 0
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic#11
+  __rc_ok#10:
+    x64.movRegReg r8, r12
     x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
@@ -489,23 +552,24 @@ func @Parser.parseExpressionBP {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#6:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.callDirect __mm_retain
-    x64.storeSlotReg slot0, r8
-    x64.movRegReg rcx, r15
-    x64.callDirect __mm_decref
-    x64.leaRegRegReg r13, r13, r12
-    x64.loadRegSlot rax, slot1
-    x64.leaRegRegImm32 rax, rax, -1
-    x64.loadRegSlot rcx, slot0
-    x64.movRegReg r15, rcx
-    x64.jmp whilehdr
-  whileexit:
-    x64.movRegReg rcx, r15
-    x64.callDirect __mm_decref
+  __rc_panic#9:
+    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at consumed-arg-scalar-borrow-survives-throwing-call.test:80: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
-    x64.movRegReg r8, r13
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#11:
+    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at consumed-arg-scalar-borrow-survives-throwing-call.test:92: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
     x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
@@ -527,30 +591,32 @@ func @Parser.emitShortCircuit {
     x64.pushReg r15
     x64.prologue 56
     x64.movRegReg rbx, rcx
-    x64.loadRegBaseDisp.word64 r12, [rdx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rdx + 0]
+    x64.storeSlotReg slot2, rax
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 101
     x64.callDirect Module.addBlock
-    x64.movRegReg r13, r8
-    x64.storeSlotReg slot0, r13
-    x64.loadRegBaseDisp.word64 r14, [r13 + 0]
-    x64.loadRegBaseDisp.word64 r15, [rbx + 0]
-    x64.movRegReg rcx, r13
-    x64.callDirect __mm_incref
-    x64.movRegReg rcx, r15
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot0, r12
+    x64.loadRegBaseDisp.word64 r13, [r12 + 0]
+    x64.loadRegBaseDisp.word64 r14, [rbx + 0]
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_own
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r14
     x64.callDirect __mm_decref
-    x64.storeBaseDispReg.word64 [rbx + 0], r13
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
     x64.movRegImm32 rax, 0
     x64.movRegImm32 r9, 1
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r13
+    x64.movRegReg rdx, r12
     x64.callDirect Parser.parseExpressionBP
-    x64.storeSlotReg slot1, r8
+    x64.movRegReg r14, r8
     x64.movRegReg r15, r10
     x64.cmpRegImm32 r15, 0
     x64.jcc equal, tryok
   tryerr:
-    x64.movRegReg rcx, r13
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
     x64.movRegImm32 r8, 0
     x64.movRegReg r10, r15
@@ -566,27 +632,60 @@ func @Parser.emitShortCircuit {
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 102
     x64.callDirect Module.addBlock
-    x64.movRegReg r13, r8
+    x64.storeSlotReg slot1, r8
   __il_body:
-    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.leaRegRegImm32 rax, rax, 1
-    x64.storeBaseDispReg.word64 [r13 + 0], rax
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic#8
+  __rc_ok#7:
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
   __il_cont:
-    x64.leaRegRegReg r12, r14, r12
-    x64.loadRegBaseDisp.word64 r14, [rbx + 0]
+    x64.loadRegSlot rax, slot2
+    x64.leaRegRegReg r12, r13, rax
+    x64.loadRegBaseDisp.word64 r13, [rbx + 0]
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_own
+    x64.movRegReg r15, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __mm_incref
-    x64.movRegReg rcx, r14
     x64.callDirect __mm_decref
-    x64.storeBaseDispReg.word64 [rbx + 0], r13
-    x64.loadRegSlot rax, slot1
-    x64.leaRegRegReg rbx, rax, r12
-    x64.movRegReg rcx, r13
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.leaRegRegReg rbx, r14, r12
+    x64.loadRegSlot rcx, slot1
     x64.callDirect __mm_decref
     x64.loadRegSlot rcx, slot0
     x64.callDirect __mm_decref
     x64.movRegImm32 r10, 0
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic#4
+  __rc_ok#3:
     x64.movRegReg r8, rbx
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at consumed-arg-scalar-borrow-survives-throwing-call.test:16: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#4:
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at consumed-arg-scalar-borrow-survives-throwing-call.test:105: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
     x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
@@ -605,53 +704,78 @@ func @main {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.prologue 32
-    x64.callDirect Module.create
+    x64.pushReg r15
+    x64.prologue 40
+  __il_body#9:
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __mm_decref]
+    x64.callDirect __managed_create
     x64.movRegReg rbx, r8
-    x64.movRegImm32 rdx, 1
-    x64.movRegReg rcx, rbx
-    x64.callDirect Module.addBlock
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+  __il_cont#8:
+    x64.movRegImm32 rdx, 1
     x64.movRegReg rcx, r12
-    x64.callDirect __mm_incref
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
-    x64.callDirect Parser.create
+    x64.callDirect Module.addBlock
+    x64.movRegReg rbx, r8
+    x64.leaRegFunc rdx, [rip + __clone_Module]
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_own_deep
     x64.movRegReg r13, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_own
+    x64.movRegReg r14, r8
+  __il_body#10:
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_own
+    x64.storeBaseDispReg.word64 [r15 + 0], r8
+    x64.leaRegFunc rdx, [rip + __clone_Module]
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_own_deep
+    x64.storeBaseDispReg.word64 [r15 + 8], r8
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_Module
+  __il_cont#7:
     x64.movRegImm32 rax, 1
     x64.movRegImm32 r9, 1
-    x64.movRegReg rcx, r13
-    x64.movRegReg rdx, r12
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
     x64.callDirect Parser.parseExpressionBP
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, __il_body
+    x64.jcc equal, __il_body#12
   tryerr:
-    x64.movRegImm32 r14, 3
-    x64.movRegReg rcx, r13
+    x64.movRegImm32 r13, 3
+    x64.movRegReg rcx, r15
     x64.callDirect __destruct_Parser
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_decref
     x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
     x64.callDirect __destruct_Module
-    x64.movRegReg r8, r14
-    x64.epilogue 32
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __il_body:
+  __il_body#12:
     x64.movRegImm32 rax, 0
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-  forhdr:
-    x64.cmpRegReg rdx, rsi
-    x64.jcc greaterEqual, __il_cont
+    x64.jmp forhdr
   each:
     x64.loadRegBaseIndexScale.word64 rdi, [rcx + rdx*8 + 0]
   __im_cont:
@@ -659,20 +783,26 @@ func @main {
     x64.leaRegRegReg rax, rax, rdi
   forstep:
     x64.leaRegRegImm32 rdx, rdx, 1
-    x64.jmp forhdr
-  __il_cont:
+  forhdr:
+    x64.cmpRegReg rdx, rsi
+    x64.jcc less, each
+  forexit:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic
+  __il_cont#11:
     x64.cmpRegImm32 rax, 205
     x64.jcc equal, ifcont#4
   corrupt:
-    x64.movRegImm32 r14, 1
-    x64.movRegReg rcx, r13
+    x64.movRegImm32 r13, 1
+    x64.movRegReg rcx, r15
     x64.callDirect __destruct_Parser
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_decref
     x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
     x64.callDirect __destruct_Module
-    x64.movRegReg r8, r14
-    x64.epilogue 32
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -683,15 +813,16 @@ func @main {
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, ifcont#6
   noResult:
-    x64.movRegImm32 r14, 2
-    x64.movRegReg rcx, r13
+    x64.movRegImm32 r13, 2
+    x64.movRegReg rcx, r15
     x64.callDirect __destruct_Parser
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_decref
     x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
     x64.callDirect __destruct_Module
-    x64.movRegReg r8, r14
-    x64.epilogue 32
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -699,15 +830,28 @@ func @main {
     x64.popReg rbp
     x64.ret
   ifcont#6:
-    x64.movRegImm32 r14, 0
-    x64.movRegReg rcx, r13
+    x64.movRegImm32 r13, 0
+    x64.movRegReg rcx, r15
     x64.callDirect __destruct_Parser
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_decref
     x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
     x64.callDirect __destruct_Module
-    x64.movRegReg r8, r14
-    x64.epilogue 32
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at consumed-arg-scalar-borrow-survives-throwing-call.test:40: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12

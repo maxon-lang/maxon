@@ -60,54 +60,7 @@ func @Inner.create {
     arm64.ret
 }
 
-func @Container.replaceChild {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-    arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_incref
-    arm64.movRegReg x0, x21
-    arm64.bl __mm_decref
-    arm64.storeBaseDispReg.word64 [x19 + 8], x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
-}
-
-func @Container.create {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-    arm64.movImm x0, 16
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x21, x0
-    arm64.storeBaseDispReg.word64 [x21 + 0], x19
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_incref
-    arm64.storeBaseDispReg.word64 [x21 + 8], x20
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x21
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
-}
-
-func @testAssign {
+func @main {
   entry:
     arm64.prologue 80
     arm64.storeSlotReg slot7, x26
@@ -118,66 +71,86 @@ func @testAssign {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
+  __il_body#2:
     arm64.movImm x19, 1
     arm64.movImm x0, 10
     arm64.bl Inner.create
-    arm64.movRegReg x1, x0
-    arm64.movRegReg x0, x19
-    arm64.bl Container.create
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 20
-    arm64.bl Inner.create
     arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
-    arm64.bl Container.replaceChild
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_decref
-  __il_body:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
-  __il_cont:
-    arm64.movImm x0, 21
+  __il_body#7:
+    arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 0], x19
     arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x21
-    arm64.bl __int_to_string
+    arm64.bl __mm_own
+    arm64.storeBaseDispReg.word64 [x21 + 8], x0
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+  __il_cont#6:
+    arm64.movImm x0, 20
+    arm64.bl Inner.create
+    arm64.movRegReg x19, x0
+  __il_body#8:
+    arm64.loadRegBaseDisp.word64 x20, [x21 + 8]
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_own
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.storeBaseDispReg.word64 [x21 + 8], x22
+  __il_cont#5:
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+  __il_body#9:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+  __il_cont#4:
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __int_to_string
+    arm64.movRegReg x19, x0
     arm64.leaRdata x0, __str_rec_1  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
-    arm64.add x24, x20, x23
+    arm64.add x24, x19, x23
     arm64.add x0, x24, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x25, x0
     arm64.add x26, x25, 56
     arm64.movRegReg x0, x26
-    arm64.movRegReg x1, x21
-    arm64.movRegReg x2, x20
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x19
     arm64.bl __str_copy
-    arm64.add x20, x26, x20
-    arm64.movRegReg x0, x20
+    arm64.add x19, x26, x19
+    arm64.movRegReg x0, x19
     arm64.movRegReg x1, x22
     arm64.movRegReg x2, x23
     arm64.bl __str_copy
-    arm64.add x0, x20, x23
+    arm64.add x0, x19, x23
     arm64.storeBaseDispReg.word64 [x25 + 0], x26
     arm64.storeBaseDispReg.word64 [x25 + 8], x24
     arm64.movImm x0, 18446744073709551613
     arm64.storeBaseDispReg.word64 [x25 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x25 + 24], x0
-    arm64.movRegReg x0, x21
+    arm64.movRegReg x0, x20
     arm64.bl __mm_decref
+  __il_body#10:
     arm64.movRegReg x0, x25
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont#3:
     arm64.movRegReg x0, x25
     arm64.bl __str_decref
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x21
     arm64.bl __destruct_Container
+  __il_cont#1:
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -187,14 +160,5 @@ func @testAssign {
     arm64.loadRegSlot x25, slot6
     arm64.loadRegSlot x26, slot7
     arm64.epilogue 80
-    arm64.ret
-}
-
-func @main {
-  entry:
-    arm64.prologue 16
-    arm64.bl testAssign
-    arm64.movImm x0, 0
-    arm64.epilogue 16
     arm64.ret
 }

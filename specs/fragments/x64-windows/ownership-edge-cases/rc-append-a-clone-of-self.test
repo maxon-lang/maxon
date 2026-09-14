@@ -16,6 +16,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -51,11 +54,32 @@ func @main {
     x64.leaRegRdata rdx, [rip + __str_rec_4]  ; "+"
     x64.movRegReg rcx, r13
     x64.callDirect String.append
+  __il_body#2:
+    x64.movRegImm32 rdx, 0
+  __il_body#14:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
+  __il_cont#13:
+    x64.loadRegBaseDisp.byte rbx, [r13 + 48]
+  __rc_ok#7:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic
+  __rc_ok#9:
     x64.movRegReg rcx, r13
-    x64.callDirect String.clone
-    x64.storeSlotReg slot1, r8
+    x64.callDirect __managed_slice
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+  tryok:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect __str_of_buffer
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot1, rbx
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+  __il_cont#1:
     x64.movRegReg rcx, r13
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, rbx
     x64.callDirect String.append
     x64.loadRegBaseDisp.word64 rbx, [r13 + 0]
     x64.loadRegBaseDisp.word64 r12, [r13 + 8]
@@ -75,12 +99,12 @@ func @main {
     x64.movRegReg rax, r12
     x64.callDirect __str_copy
     x64.leaRegRegReg rbx, r15, r12
+    x64.loadRegSlot rax, slot7
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r14
-    x64.loadRegSlot r12, slot7
-    x64.movRegReg rax, r12
     x64.callDirect __str_copy
-    x64.leaRegRegReg rax, rbx, r12
+    x64.loadRegSlot rax, slot7
+    x64.leaRegRegReg rax, rbx, rax
     x64.loadRegSlot rbx, slot5
     x64.storeBaseDispReg.word64 [rbx + 0], r15
     x64.loadRegSlot rax, slot2
@@ -93,15 +117,9 @@ func @main {
     x64.callDirect print
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
-  __il_body:
+  __il_body#12:
     x64.loadRegBaseDisp.word64 rbx, [r13 + 8]
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc greaterEqual, __il_cont
-  __il_slow:
-    x64.movRegReg rcx, r13
-    x64.callDirect String.byteLength
-    x64.movRegReg rbx, r8
-  __il_cont:
+  __il_cont#11:
     x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -151,6 +169,30 @@ func @main {
     x64.loadRegSlot rcx, slot0
     x64.callDirect __str_decref
     x64.movRegReg r8, rbx
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at String.maxon:363: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at String.maxon:364: String.sliceBytes: caller guarantees 0 <= start <= end <= byteLength()\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 104
     x64.popReg r15
     x64.popReg r14

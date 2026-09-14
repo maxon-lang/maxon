@@ -24,6 +24,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -32,8 +35,7 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
+    x64.prologue 48
     x64.movRegImm32 rcx, 8
     x64.leaRegFunc rdx, [rip + __str_decref]
     x64.callDirect __managed_create
@@ -56,8 +58,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 48
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -76,11 +77,7 @@ func @main {
     x64.jcc equal, critsplit#17
   __im_empty#12:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#18
-  __im_slow#10:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
-    x64.jmp __im_cont#9
+    x64.jcc equal, __im_slow#10
   critsplit#18:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rcx
@@ -92,10 +89,10 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#3
   tryerr#4:
-    x64.leaRegRdata r12, [rip + __str_rec_5]  ; ""
+    x64.leaRegRdata rcx, [rip + __str_rec_5]  ; ""
     x64.jmp trycont#5
   tryok#3:
-    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r8
   trycont#5:
     x64.movRegImm32 rdx, 1
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
@@ -105,45 +102,49 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.leaRegRegImm32 rax, rax, 8
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.movRegImm32 rcx, 0
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
-    x64.cmpRegImm32 rsi, 0
+    x64.movRegImm32 rsi, 0
+    x64.loadRegBaseDisp.word64 rdi, [rbx + 40]
+    x64.cmpRegImm32 rdi, 0
     x64.jcc equal, critsplit#19
   __im_empty#16:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#20
-  __im_slow#14:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
-    x64.jmp __im_cont#13
+    x64.jcc equal, __im_slow#14
   critsplit#20:
     x64.movRegReg r8, rax
-    x64.movRegReg r10, rcx
+    x64.movRegReg r10, rsi
     x64.jmp __im_cont#13
   critsplit#19:
     x64.movRegReg r8, rax
-    x64.movRegReg r10, rcx
+    x64.movRegReg r10, rsi
   __im_cont#13:
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#6
   tryerr#7:
-    x64.leaRegRdata r13, [rip + __str_rec_5]  ; ""
+    x64.leaRegRdata r12, [rip + __str_rec_5]  ; ""
     x64.jmp trycont#8
   tryok#6:
-    x64.movRegReg r13, r8
+    x64.movRegReg r12, r8
   trycont#8:
-    x64.movRegReg rcx, r12
     x64.callDirect print
-    x64.movRegReg rcx, r13
+    x64.movRegReg rcx, r12
     x64.callDirect print
     x64.movRegImm32 r12, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 48
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __im_slow#10:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.jmp __im_cont#9
+  __im_slow#14:
+    x64.storeSlotReg slot0, rcx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.loadRegSlot rcx, slot0
+    x64.jmp __im_cont#13
 }

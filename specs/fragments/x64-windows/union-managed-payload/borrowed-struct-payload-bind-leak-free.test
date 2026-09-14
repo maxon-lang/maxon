@@ -43,56 +43,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
-}
-
-func @Body.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @massOf {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, matchnext
-  matcharm#1:
-    x64.movRegImm32 r8, 1
-    x64.jmp matchcont
-  matchnext:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, matchdead
-  matcharm#2:
-    x64.loadRegBaseDisp.word64 rbx, [rcx + 8]
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_incref
-    x64.loadRegBaseDisp.word64 r12, [rbx + 0]
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg r8, r12
-  matchcont:
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  matchdead:
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -102,48 +55,77 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
     x64.prologue 40
-    x64.movRegImm32 rcx, 3
-    x64.callDirect Body.create
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rbx, 3
+  __il_body#7:
+    x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+  __il_cont#6:
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg rbx, r8
     x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r12 + 0], rax
-    x64.storeBaseDispReg.word64 [r12 + 8], rbx
-    x64.movRegImm32 rbx, 0
+    x64.storeBaseDispReg.word64 [rbx + 0], rax
+    x64.storeBaseDispReg.word64 [rbx + 8], r12
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
-  whilehdr:
-    x64.cmpRegImm32 rbx, 300
-    x64.jcc greaterEqual, whileexit
-  spin:
-    x64.movRegReg rcx, r12
-    x64.callDirect massOf
-    x64.leaRegRegReg r13, r13, r8
-    x64.leaRegRegImm32 rbx, rbx, 1
     x64.jmp whilehdr
+  __il_body#9:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matchnext
+  matcharm#10:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_cont#8
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, matchdead
+  matcharm#11:
+    x64.loadRegBaseDisp.word64 r14, [rbx + 8]
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_incref
+    x64.loadRegBaseDisp.word64 r15, [r14 + 0]
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r15
+  __il_cont#8:
+    x64.leaRegRegReg r13, r13, rax
+    x64.leaRegRegImm32 r12, r12, 1
+  whilehdr:
+    x64.cmpRegImm32 r12, 300
+    x64.jcc less, __il_body#9
+    x64.jmp whileexit
+  matchdead:
   whileexit:
     x64.cmpRegImm32 r13, 900
     x64.jcc equal, ifcont
   wrong:
-    x64.movRegImm32 rbx, 1
-    x64.movRegReg rcx, r12
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Shape
-    x64.movRegReg r8, rbx
+    x64.movRegReg r8, r12
     x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.movRegImm32 rbx, 7
-    x64.movRegReg rcx, r12
+    x64.movRegImm32 r12, 7
+    x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Shape
-    x64.movRegReg r8, rbx
+    x64.movRegReg r8, r12
     x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx

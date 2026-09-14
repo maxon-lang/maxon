@@ -34,11 +34,18 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Bag.create {
+func @main {
   entry:
-    arm64.prologue 32
+    arm64.prologue 80
+    arm64.storeSlotReg slot7, x26
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
+  __il_body#7:
     arm64.leaRdata x19, __str_rec_2  ; "hello world this is a long string for heap allocation"
     arm64.movImm x0, 8
     arm64.leaFuncAddr x1, __str_decref
@@ -52,61 +59,31 @@ func @Bag.create {
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @wipe {
-  entry:
-    arm64.prologue 16
-    arm64.bl Array.clear
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @main {
-  entry:
-    arm64.prologue 80
-    arm64.storeSlotReg slot7, x26
-    arm64.storeSlotReg slot6, x25
-    arm64.storeSlotReg slot5, x24
-    arm64.storeSlotReg slot4, x23
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.bl Bag.create
     arm64.movRegReg x19, x0
+    arm64.storeBaseDispReg.word64 [x19 + 0], x20
+  __il_cont#6:
     arm64.movImm x20, 0
-    arm64.loadRegBaseDisp.word64 x21, [x19 + 0]
-    arm64.movImm x22, 0
-  forhdr:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
-    arm64.cmp x22, x0
-    arm64.b.ge forexit
-  scan:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
-    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x22*8 + 0]
-  __il_body:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.cmp x1, 0
-    arm64.b.ge __rc_ok
-  __il_slow:
-    arm64.bl String.byteLength
-    arm64.b __il_cont
-  __rc_ok:
-    arm64.movRegReg x0, x1
-  __il_cont:
-    arm64.add x20, x20, x0
-  forstep:
-    arm64.add x22, x22, 1
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.b forhdr
+  scan:
+    arm64.loadRegBaseIndexScale.word64 x3, [x0 + x1*8 + 0]
+  __il_body#11:
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 8]
+  __il_cont#10:
+    arm64.add x20, x20, x3
+  forstep:
+    arm64.add x1, x1, 1
+  forhdr:
+    arm64.cmp x1, x2
+    arm64.b.lt scan
   forexit:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.bl wipe
+  __il_body#15:
+    arm64.bl __managed_clear
+  __il_cont#12:
     arm64.movImm x0, 21
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -142,8 +119,10 @@ func @main {
     arm64.storeBaseDispReg.word64 [x25 + 24], x0
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
+  __il_body#9:
     arm64.movRegReg x0, x25
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont#8:
     arm64.movRegReg x0, x25
     arm64.bl __str_decref
     arm64.movImm x20, 0

@@ -30,28 +30,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @pick#String {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect __str_retain
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @useA {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect pick#String
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -63,8 +41,10 @@ func @main {
     x64.pushReg r15
     x64.prologue 88
     x64.leaRegRdata rcx, [rip + __str_rec_2]  ; "hi"
-    x64.callDirect useA
+  __il_body:
+    x64.callDirect __str_retain
     x64.storeSlotReg slot0, r8
+  __il_cont#6:
     x64.loadRegBaseDisp.word64 rbx, [r8 + 0]
     x64.loadRegBaseDisp.word64 r12, [r8 + 8]
     x64.leaRegRdata rax, [rip + __str_rec_3]  ; "\x0a"
@@ -102,7 +82,7 @@ func @main {
     x64.loadRegSlot rcx, slot0
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 1
-  __il_cont:
+  __il_cont#1:
     x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc

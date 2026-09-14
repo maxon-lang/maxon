@@ -59,23 +59,15 @@ func @tryIt {
     arm64.ret
 }
 
-func @fallback {
-  entry:
-    arm64.prologue 16
-    arm64.leaRdata x0, __str_rec_3  ; "fb"
-    arm64.bl __str_retain
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @pick {
   entry:
     arm64.prologue 16
     arm64.bl tryIt
     arm64.cmp x9, 0
     arm64.b.eq trycont
-  tryerr:
-    arm64.bl fallback
+  __il_body:
+    arm64.leaRdata x0, __str_rec_3  ; "fb"
+    arm64.bl __str_retain
   trycont:
     arm64.epilogue 16
     arm64.ret

@@ -21,90 +21,63 @@ data {
 func @main {
   entry:
     arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
     arm64.leaGlobal x0, __data_xs
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x2, 0
     arm64.b.ls __im_slow#11
-  __im_load#12:
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
-    arm64.movImm x3, 0
-    arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
-    arm64.cmp x4, 0
-    arm64.b.eq critsplit#18
-  __im_empty#13:
-    arm64.cmp x2, 0
-    arm64.b.ne critsplit#19
-  __im_slow#11:
-    arm64.bl __managed_get
-    arm64.b __im_cont#10
-  critsplit#19:
-    arm64.movRegReg x0, x2
-    arm64.movRegReg x9, x3
-    arm64.b __im_cont#10
-  critsplit#18:
-    arm64.movRegReg x0, x2
-    arm64.movRegReg x9, x3
-  __im_cont#10:
-    arm64.cmp x9, 0
-    arm64.b.eq tryok
+    arm64.b __im_load#12
   tryerr#2:
-    arm64.movImm x19, 0
-    arm64.b trycont#3
-  tryok:
-    arm64.movRegReg x19, x0
-  trycont#3:
-    arm64.leaGlobal x0, __data_xs
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.movImm x1, 1
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
-    arm64.cmp x2, 1
-    arm64.b.ls __im_slow#15
-  __im_load#16:
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
-    arm64.add x2, x2, 8
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
-    arm64.movImm x3, 0
-    arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
-    arm64.cmp x4, 0
-    arm64.b.eq critsplit#20
-  __im_empty#17:
-    arm64.cmp x2, 0
-    arm64.b.ne critsplit#21
-  __im_slow#15:
-    arm64.bl __managed_get
-    arm64.b __im_cont#14
-  critsplit#21:
-    arm64.movRegReg x0, x2
-    arm64.movRegReg x9, x3
-    arm64.b __im_cont#14
-  critsplit#20:
-    arm64.movRegReg x0, x2
-    arm64.movRegReg x9, x3
-  __im_cont#14:
-    arm64.cmp x9, 0
-    arm64.b.eq trycont#6
-  tryerr#5:
     arm64.movImm x0, 0
+    arm64.b trycont#3
+  __im_load#12:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+  trycont#3:
+    arm64.leaGlobal x1, __data_xs
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.movImm x2, 1
+    arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
+    arm64.cmp x3, 1
+    arm64.b.ls __im_slow#14
+    arm64.b __im_load#15
+  tryerr#5:
+    arm64.movImm x1, 0
+    arm64.b trycont#6
+  __im_load#15:
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.add x1, x1, 8
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
   trycont#6:
-    arm64.add x0, x19, x0
+    arm64.add x0, x0, x1
     arm64.cmp x0, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at top-level-array-const-element.test:8: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
+    arm64.b.gt __rc_panic
+  __rc_ok:
     arm64.epilogue 32
     arm64.ret
-  __rc_ok:
-    arm64.loadRegSlot x19, slot0
+  __im_slow#11:
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#2
+    arm64.b trycont#3
+  __im_slow#14:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_get
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#5
+    arm64.b trycont#6
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at top-level-array-const-element.test:8: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.epilogue 32
     arm64.ret
 }

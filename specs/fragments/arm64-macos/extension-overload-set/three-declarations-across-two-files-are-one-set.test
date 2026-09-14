@@ -39,13 +39,13 @@ end 'Weight'
 
 export extension Counted
 	export function score(x Weight) returns Amount
-		return base() * x.w
+		return (base() as Amount) * x.w
 	end 'score'
 end 'Counted'
 
 function main() returns ExitCode
 	let u = Unit.make()
-	return u.score(4) + u.score(true) + u.score(Weight.of(7))
+	return (u.score(4) as Amount) + (u.score(true) as Amount) + u.score(Weight.of(7))
 end 'main'
 ---
 ExitCode: 23
@@ -57,90 +57,59 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Unit.score#Integer {
-  entry:
-    arm64.prologue 16
-  __il_cont:
-    arm64.add x0, x1, 1
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @Unit.score#bool {
-  entry:
-    arm64.prologue 16
-  __il_cont:
-    arm64.cbz x1, ternaryfalse
-  ternarytrue:
-    arm64.movImm x0, 10
-    arm64.b matchcont
-  ternaryfalse:
-    arm64.movImm x0, 0
-  matchcont:
-    arm64.add x0, x0, 1
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @Unit.make {
-  entry:
-    arm64.prologue 16
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @Unit.score#Weight {
-  entry:
-    arm64.prologue 16
-  __il_cont:
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 48
-    arm64.storeSlotReg slot2, x20
-    arm64.storeSlotReg slot1, x19
-    arm64.bl Unit.make
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+  __il_body#9:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
     arm64.movRegReg x19, x0
-    arm64.movImm x1, 4
-    arm64.movRegReg x0, x19
-    arm64.bl Unit.score#Integer
-    arm64.movRegReg x20, x0
-    arm64.movImm x1, 1
-    arm64.movRegReg x0, x19
-    arm64.bl Unit.score#bool
-    arm64.add x20, x20, x0
-    arm64.movImm x0, 7
-    arm64.leaRegSlot x1, slot0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.movRegReg x0, x19
-    arm64.bl Unit.score#Weight
-    arm64.add x20, x20, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
+  __il_body#18:
+    arm64.movImm x0, 1
+  __il_cont#17:
+    arm64.add x0, x0, 4
+  ternarytrue:
+    arm64.movImm x1, 10
+  matchcont:
+    arm64.add x1, x1, 1
+  __il_cont#6:
+    arm64.add x20, x0, x1
+    arm64.movImm x21, 7
+  __il_body#15:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x21
+  __il_cont#21:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+  __il_cont#4:
+    arm64.add x20, x20, x1
     arm64.cmp x20, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at b.maxon:19: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
     arm64.epilogue 48
     arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at b.maxon:19: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
     arm64.epilogue 48
     arm64.ret
 }

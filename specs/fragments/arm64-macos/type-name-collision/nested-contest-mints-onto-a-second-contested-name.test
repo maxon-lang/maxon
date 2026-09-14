@@ -66,55 +66,10 @@ func @Box.create {
     arm64.ret
 }
 
-func @Box_String.make {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.leaRdata x19, __str_rec_5  ; "aa"
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __str_retain
-    arm64.storeBaseDispReg.word64 [x20 + 0], x0
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @Box___Box_String.make {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.leaRdata x19, __str_rec_6  ; "bb"
-    arm64.leaRdata x20, __str_rec_7  ; "cc"
-    arm64.movImm x0, 16
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x21, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __str_retain
-    arm64.storeBaseDispReg.word64 [x21 + 0], x0
-    arm64.movRegReg x0, x20
-    arm64.bl __str_retain
-    arm64.storeBaseDispReg.word64 [x21 + 8], x0
-    arm64.movRegReg x0, x21
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 64
+    arm64.storeSlotReg slot5, x24
     arm64.storeSlotReg slot4, x23
     arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
@@ -165,47 +120,52 @@ func @main {
     arm64.bl Box.create
     arm64.bl Box.create
     arm64.movRegReg x20, x0
-    arm64.bl Box_String.make
-    arm64.movRegReg x21, x0
-    arm64.bl Box___Box_String.make
-  __il_body:
-    arm64.movImm x1, 1
-  __il_cont#6:
-    arm64.add x1, x1, 1
-  __il_cont#5:
-    arm64.add x1, x1, 2
-  __il_cont#4:
-    arm64.add x22, x1, 4
-    arm64.bl __destruct_Box___Box_String
+  __il_body#8:
+    arm64.leaRdata x21, __str_rec_5  ; "aa"
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
     arm64.movRegReg x0, x21
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+  __il_body#9:
+    arm64.leaRdata x21, __str_rec_6  ; "bb"
+    arm64.leaRdata x23, __str_rec_7  ; "cc"
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x24, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x24 + 0], x0
+    arm64.movRegReg x0, x23
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x24 + 8], x0
+  __il_body#14:
+    arm64.movImm x0, 1
+  __il_cont#12:
+    arm64.add x0, x0, 1
+  __il_cont#5:
+    arm64.add x0, x0, 2
+  __il_cont#4:
+    arm64.add x21, x0, 4
+  __rc_ok:
+    arm64.movRegReg x0, x24
+    arm64.bl __destruct_Box___Box_String
+    arm64.movRegReg x0, x22
     arm64.bl __destruct_Box_String
     arm64.movRegReg x0, x20
     arm64.bl __destruct___Box___Box_String
     arm64.movRegReg x0, x19
     arm64.bl __destruct___Box_String
-    arm64.cmp x22, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x22, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_10  ; "panic at nested-contest-mints-onto-a-second-contested-name.test:43: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
+    arm64.movRegReg x0, x21
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
-    arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x22
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
     arm64.epilogue 64
     arm64.ret
 }

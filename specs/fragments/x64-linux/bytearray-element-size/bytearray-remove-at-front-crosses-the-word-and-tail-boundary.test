@@ -27,6 +27,8 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
     x64.prologue 40
     x64.movRegImm32 rcx, 48
     x64.movRegImm32 rdx, 0
@@ -45,57 +47,93 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect Array.remove
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at bytearray-remove-at-front-crosses-the-word-and-tail-boundary.test:4: test invariant: index 0 is in bounds\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryok:
+    x64.jcc notEqual, tryerr#2
+  tryok#1:
     x64.cmpRegImm32 r8, 97
-    x64.jcc equal, ifcont#4
+    x64.jcc equal, ifcont
   first:
     x64.movRegImm32 r12, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
     x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont#4:
+  ifcont:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 20
-    x64.jcc equal, ifcont#6
+    x64.jcc equal, __il_body#14
   cnt:
     x64.movRegImm32 r12, 2
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
     x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont#6:
+  __il_body#14:
     x64.movRegReg rcx, rbx
-    x64.callDirect String.from
+    x64.callDirect __managed_retain
     x64.movRegReg r12, r8
-    x64.leaRegRdata rdx, [rip + __str_rec_3]  ; "bcdefghijklmnopqrstu"
-    x64.movRegReg rcx, r12
-    x64.callDirect __str_eq
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_retain
     x64.movRegReg r13, r8
+  __il_body#16:
+    x64.loadRegBaseDisp.word64 r14, [r13 + 8]
+    x64.movRegImm32 r15, 0
+    x64.jmp forhdr
+  scan:
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r15
+    x64.callDirect __managed_byte_at
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#22
+  tryok#21:
+    x64.cmpRegImm32 r8, 128
+    x64.movRegImm32 rax, 1
+    x64.jcc greaterEqual, scmerge
+  orrhs:
+    x64.cmpRegImm32 r8, 13
+    x64.setccReg equal, rax
+  scmerge:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, forstep
+  notSingleByte:
+    x64.movRegImm32 rdx, 0
+    x64.jmp __il_cont#15
+  forstep:
+    x64.leaRegRegImm32 r15, r15, 1
+  forhdr:
+    x64.cmpRegReg r15, r14
+    x64.jcc less, scan
+  forexit:
+    x64.movRegImm32 rdx, 1
+  __il_cont#15:
     x64.movRegReg rcx, r12
+    x64.callDirect __str_of_buffer
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+  __il_cont#13:
+    x64.leaRegRdata rdx, [rip + __str_rec_3]  ; "bcdefghijklmnopqrstu"
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_eq
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r14
     x64.callDirect __str_decref
-    x64.cmpRegImm32 r13, 0
+    x64.cmpRegImm32 r12, 0
     x64.jcc equal, ternaryfalse
   ternarytrue:
     x64.movRegImm32 r12, 0
@@ -105,24 +143,35 @@ func @main {
   matchcont:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 r12, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at bytearray-remove-at-front-crosses-the-word-and-tail-boundary.test:11: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+  __rc_ok:
+    x64.movRegReg r8, r12
     x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg r8, r12
+  tryerr#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at bytearray-remove-at-front-crosses-the-word-and-tail-boundary.test:4: test invariant: index 0 is in bounds\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#22:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at String.maxon:1136: scanSingleByteGraphemes: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx

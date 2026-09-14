@@ -80,11 +80,7 @@ func @main {
     x64.jcc equal, critsplit#20
   __im_empty#15:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#21
-  __im_slow#13:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
-    x64.jmp __im_cont#12
+    x64.jcc equal, __im_slow#13
   critsplit#21:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rcx
@@ -96,49 +92,45 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#3
   tryerr#4:
-    x64.leaRegRdata r12, [rip + __str_rec_6]  ; "missing"
+    x64.leaRegRdata rax, [rip + __str_rec_6]  ; "missing"
     x64.jmp trycont#5
   tryok#3:
-    x64.movRegReg r12, r8
+    x64.movRegReg rax, r8
   trycont#5:
     x64.movRegImm32 rdx, 1
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 1
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.cmpRegImm32 rcx, 1
     x64.jcc belowEqual, __im_slow#17
   __im_load#18:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.leaRegRegImm32 rax, rax, 8
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.movRegImm32 rcx, 0
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
-    x64.cmpRegImm32 rsi, 0
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.leaRegRegImm32 rcx, rcx, 8
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.movRegImm32 rsi, 0
+    x64.loadRegBaseDisp.word64 rdi, [rbx + 40]
+    x64.cmpRegImm32 rdi, 0
     x64.jcc equal, critsplit#22
   __im_empty#19:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#23
-  __im_slow#17:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
-    x64.jmp __im_cont#16
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_slow#17
   critsplit#23:
-    x64.movRegReg r8, rax
-    x64.movRegReg r10, rcx
+    x64.movRegReg r8, rcx
+    x64.movRegReg r10, rsi
     x64.jmp __im_cont#16
   critsplit#22:
-    x64.movRegReg r8, rax
-    x64.movRegReg r10, rcx
+    x64.movRegReg r8, rcx
+    x64.movRegReg r10, rsi
   __im_cont#16:
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#6
   tryerr#7:
-    x64.leaRegRdata rax, [rip + __str_rec_6]  ; "missing"
+    x64.leaRegRdata rcx, [rip + __str_rec_6]  ; "missing"
     x64.jmp trycont#8
   tryok#6:
-    x64.movRegReg rax, r8
+    x64.movRegReg rcx, r8
   trycont#8:
-    x64.storeSlotReg slot1, rax
-    x64.loadRegBaseDisp.word64 rbx, [r12 + 0]
-    x64.loadRegBaseDisp.word64 r12, [r12 + 8]
+    x64.storeSlotReg slot1, rcx
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
     x64.leaRegRdata rax, [rip + __str_rec_7]  ; "\x0a"
     x64.loadRegBaseDisp.word64 r13, [rax + 0]
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
@@ -213,11 +205,9 @@ func @main {
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 rbx, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at swap-managed-elements-keeps-both-alive.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg r8, rbx
     x64.epilogue 88
     x64.popReg r15
     x64.popReg r14
@@ -226,8 +216,20 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg r8, rbx
+  __im_slow#13:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.jmp __im_cont#12
+  __im_slow#17:
+    x64.storeSlotReg slot6, rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.loadRegSlot rax, slot6
+    x64.jmp __im_cont#16
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at swap-managed-elements-keeps-both-alive.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 88
     x64.popReg r15
     x64.popReg r14

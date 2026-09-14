@@ -20,20 +20,96 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.leaRegRdata rcx, [rip + __str_rec_2]  ; "hello world"
-    x64.leaRegRdata rdx, [rip + __str_rec_3]  ; "o"
-    x64.callDirect String.contains#Character
-    x64.cmpRegImm32 r8, 0
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.leaRegRdata rbx, [rip + __str_rec_2]  ; "hello world"
+    x64.leaRegRdata rcx, [rip + __str_rec_3]  ; "o"
+  __il_body#22:
+    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
+  __il_body#6:
+    x64.callDirect __str_bytes_view
+    x64.movRegReg r13, r8
+  __il_body#10:
+    x64.loadRegBaseDisp.word64 r14, [r13 + 8]
+    x64.movRegImm32 r15, 0
+    x64.jmp forhdr
+  scan:
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r15
+    x64.callDirect __managed_byte_at
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+  tryok:
+    x64.cmpRegImm32 r8, 128
+    x64.movRegImm32 rax, 1
+    x64.jcc greaterEqual, scmerge
+  orrhs:
+    x64.cmpRegImm32 r8, 13
+    x64.setccReg equal, rax
+  scmerge:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, forstep
+  notSingleByte:
+    x64.movRegImm32 rdx, 0
+    x64.jmp __il_cont#9
+  forstep:
+    x64.leaRegRegImm32 r15, r15, 1
+  forhdr:
+    x64.cmpRegReg r15, r14
+    x64.jcc less, scan
+  forexit:
+    x64.movRegImm32 rdx, 1
+  __il_cont#9:
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_of_buffer
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+  __il_cont#5:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r14
+    x64.callDirect needleOccursIn
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_decref
+  __il_cont#3:
+    x64.cmpRegImm32 rbx, 0
     x64.jcc equal, ifcont
   check:
     x64.movRegImm32 r8, 1
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at String.maxon:1136: scanSingleByteGraphemes: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }

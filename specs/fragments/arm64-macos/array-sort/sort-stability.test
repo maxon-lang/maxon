@@ -131,16 +131,29 @@ func @main {
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
-    arm64.leaRdata x1, __layout_Array_KeyTag
-    arm64.leaRdata x2, __witness_KeyTag.Comparable
+    arm64.leaRdata x20, __layout_Array_KeyTag
+    arm64.leaRdata x21, __witness_KeyTag.Comparable
+  __il_body:
+    arm64.movImm x22, 0
+    arm64.loadRegBaseDisp.word64 x23, [x19 + 8]
+    arm64.leaFuncAddr x24, Array.sort$closure_0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x25, x0
+    arm64.storeBaseDispReg.word64 [x25 + 0], x21
     arm64.movRegReg x0, x19
-    arm64.bl Array.sort
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.movRegReg x3, x24
+    arm64.movRegReg x4, x25
+    arm64.movRegReg x5, x20
+    arm64.bl Array.driftsortRange
+    arm64.movRegReg x0, x25
+    arm64.bl __mm_decref
+  __il_cont:
     arm64.movImm x0, 0
-  forhdr:
-    arm64.storeSlotReg slot0, x0
-    arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
-    arm64.cmp x0, x1
-    arm64.b.ge forexit
+    arm64.b forhdr
   p:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.loadRegBaseIndexScale.word64 x20, [x1 + x0*8 + 0]
@@ -204,12 +217,12 @@ func @main {
     arm64.movRegReg x2, x20
     arm64.bl __str_copy
     arm64.add x20, x21, x20
-    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x2, slot3
     arm64.loadRegSlot x1, slot4
-    arm64.loadRegSlot x21, slot3
-    arm64.movRegReg x2, x21
+    arm64.movRegReg x0, x20
     arm64.bl __str_copy
-    arm64.add x0, x20, x21
+    arm64.loadRegSlot x0, slot3
+    arm64.add x0, x20, x0
     arm64.loadRegSlot x20, slot2
     arm64.storeBaseDispReg.word64 [x20 + 0], x28
     arm64.loadRegSlot x0, slot1
@@ -229,7 +242,11 @@ func @main {
   forstep:
     arm64.loadRegSlot x0, slot0
     arm64.add x0, x0, 1
-    arm64.b forhdr
+  forhdr:
+    arm64.storeSlotReg slot0, x0
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
+    arm64.cmp x0, x1
+    arm64.b.lt p
   forexit:
     arm64.leaRdata x0, __str_rec_24  ; "\x0a"
     arm64.bl print

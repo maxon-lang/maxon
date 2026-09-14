@@ -56,40 +56,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @classify {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, matchnext#5
-  matcharm#1:
-    x64.leaRegRdata rcx, [rip + __str_rec_3]  ; "eq"
-    x64.jmp matchcont
-  matchnext#5:
-    x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, matchnext#6
-  matcharm#2:
-    x64.leaRegRdata rcx, [rip + __str_rec_4]  ; "ne"
-    x64.jmp matchcont
-  matchnext#6:
-    x64.cmpRegImm32 rcx, 2
-    x64.setccReg greaterEqual, rax
-    x64.cmpRegImm32 rcx, 5
-    x64.setccReg lessEqual, rcx
-    x64.andRegReg rax, rax, rcx
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matchdead
-  matcharm#3:
-    x64.leaRegRdata rcx, [rip + __str_rec_5]  ; "ord"
-  matchcont:
-    x64.callDirect __str_retain
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  matchdead:
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -97,12 +63,18 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 32
-    x64.movRegImm32 rcx, 4
-    x64.callDirect classify
+  matcharm:
+    x64.leaRegRdata rcx, [rip + __str_rec_5]  ; "ord"
+  matchcont#17:
+    x64.callDirect __str_retain
     x64.movRegReg rbx, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect String.isEmpty
-    x64.cmpRegImm32 r8, 0
+  __il_body:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+  __il_cont#20:
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg equal, rax
+  __il_cont#18:
+    x64.cmpRegImm32 rax, 0
     x64.jcc equal, ifcont
   empty:
     x64.movRegImm32 r12, 2
@@ -122,26 +94,12 @@ func @main {
     x64.jcc equal, ternaryfalse
   ternarytrue:
     x64.movRegImm32 r12, 0
-    x64.jmp matchcont
+    x64.jmp matchcont#5
   ternaryfalse:
     x64.movRegImm32 r12, 1
-  matchcont:
+  matchcont#5:
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
-    x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 r12, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at or-chain.case-name-collision.test:47: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
   __rc_ok:
     x64.movRegReg r8, r12
     x64.epilogue 32

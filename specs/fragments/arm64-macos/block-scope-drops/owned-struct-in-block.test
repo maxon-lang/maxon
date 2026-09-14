@@ -1,6 +1,6 @@
 // Test: owned-struct-in-block
 type Box
-	var v as Integer
+	export var v as Integer
 
 	static function create(v Integer) returns Box
 		return Self{v: v}
@@ -9,13 +9,15 @@ end 'Box'
 
 function main() returns ExitCode
 	var i = 0
+	var seen = 0
 	while i < 3 'loop'
 		if i < 2 'b'
-			_ = Box.create(i)
+			let b = Box.create(i)
+			seen = seen + b.v
 		end 'b'
 		i = i + 1
 	end 'loop'
-	return 0
+	return 0 if seen == 1 else 1
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ---
@@ -31,21 +33,44 @@ data {
 func @main {
   entry:
     arm64.prologue 32
-    arm64.movImm x0, 0
-  whilehdr:
-    arm64.cmp x0, 3
-    arm64.b.ge whileexit
-  loop:
-    arm64.cmp x0, 2
-    arm64.b.ge ifcont
-  b:
-    arm64.leaRegSlot x1, slot0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-  ifcont:
-    arm64.add x0, x0, 1
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.b whilehdr
+  loop:
+    arm64.cmp x19, 2
+    arm64.b.ge critsplit
+  __il_body:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+  __il_cont:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x20, x20, x1
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.b ifcont
+  critsplit:
+    arm64.movRegReg x0, x20
+  ifcont:
+    arm64.add x19, x19, 1
+    arm64.movRegReg x20, x0
+  whilehdr:
+    arm64.cmp x19, 3
+    arm64.b.lt loop
   whileexit:
+    arm64.cmp x20, 1
+    arm64.b.ne ternaryfalse
+  ternarytrue:
     arm64.movImm x0, 0
+    arm64.b __rc_ok
+  ternaryfalse:
+    arm64.movImm x0, 1
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
 }

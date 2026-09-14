@@ -32,6 +32,12 @@ typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 0
 ---
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+}
+
 func @loopReuse {
   entry:
     x64.pushReg rbp
@@ -58,15 +64,15 @@ func @loopReuse {
     x64.movRegImm32 r13, 0
     x64.movRegReg r14, r13
     x64.movRegReg r13, r8
-  whilehdr:
-    x64.cmpRegImm32 r14, 3
-    x64.jcc greaterEqual, whileexit
+    x64.jmp whilehdr
   loop:
     x64.movRegReg r15, rcx
     x64.subRegReg r15, rcx, r13
     x64.leaRegRegImm32 r14, r14, 1
     x64.movRegReg r13, r15
-    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 r14, 3
+    x64.jcc less, loop
   whileexit:
     x64.leaRegRegReg rax, r13, rax
     x64.leaRegRegReg rax, rax, rdx

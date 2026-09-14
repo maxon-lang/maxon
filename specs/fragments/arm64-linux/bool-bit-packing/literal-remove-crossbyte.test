@@ -46,10 +46,7 @@ func @printBits {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.movImm x20, 0
-  forhdr:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x20, x0
-    arm64.b.ge forexit
+    arm64.b forhdr
   each:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
@@ -64,7 +61,10 @@ func @printBits {
     arm64.bl print
   forstep:
     arm64.add x20, x20, 1
-    arm64.b forhdr
+  forhdr:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x20, x0
+    arm64.b.lt each
   forexit:
     arm64.leaRdata x0, __str_rec_6  ; " len="
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
@@ -115,6 +115,7 @@ func @printBits {
     arm64.bl print
     arm64.movRegReg x0, x26
     arm64.bl __str_decref
+    arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -151,16 +152,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl Array.remove
     arm64.cmp x9, 0
-    arm64.b.eq tryok#1
-  tryerr#2:
-    arm64.leaRdata x0, __str_blob_10  ; "panic at literal-remove-crossbyte.test:17: test invariant: remove OOB\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
+    arm64.b.ne tryerr#2
   tryok#1:
     arm64.movRegReg x0, x19
     arm64.bl printBits
@@ -181,16 +173,7 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl Array.remove
     arm64.cmp x9, 0
-    arm64.b.eq tryok#3
-  tryerr#4:
-    arm64.leaRdata x0, __str_blob_11  ; "panic at literal-remove-crossbyte.test:21: test invariant: remove OOB\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
+    arm64.b.ne tryerr#4
   tryok#3:
     arm64.movRegReg x0, x20
     arm64.bl printBits
@@ -200,6 +183,24 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryerr#2:
+    arm64.leaRdata x0, __str_blob_10  ; "panic at literal-remove-crossbyte.test:17: test invariant: remove OOB\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryerr#4:
+    arm64.leaRdata x0, __str_blob_11  ; "panic at literal-remove-crossbyte.test:21: test invariant: remove OOB\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

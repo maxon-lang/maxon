@@ -28,6 +28,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -50,11 +53,13 @@ func @main {
     x64.movRegImm32 rdx, 30
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
+  __il_body#6:
     x64.movRegReg rcx, rbx
-    x64.callDirect Array.clear
+    x64.callDirect __managed_clear
+  __il_cont#5:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __il_body
+    x64.jcc equal, __il_body#8
   cnt:
     x64.movRegImm32 r12, 1
     x64.movRegReg rcx, rbx
@@ -65,11 +70,11 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __il_body:
+  __il_body#8:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 0
     x64.setccReg equal, rax
-  __il_cont:
+  __il_cont#7:
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, ifcont
   empty:

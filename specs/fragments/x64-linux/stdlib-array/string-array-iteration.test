@@ -49,18 +49,18 @@ func @main {
     x64.movRegReg rdx, r8
     x64.callDirect __managed_push
     x64.movRegImm32 r12, 0
-  forhdr:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegReg r12, rax
-    x64.jcc greaterEqual, forexit
+    x64.jmp forhdr
   loop:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseIndexScale.word64 rcx, [rax + r12*8 + 0]
-  __im_cont:
-    x64.callDirect print
+  __il_body:
+    x64.callDirect __write_stdout
   forstep:
     x64.leaRegRegImm32 r12, r12, 1
-    x64.jmp forhdr
+  forhdr:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg r12, rax
+    x64.jcc less, loop
   forexit:
     x64.movRegImm32 r12, 0
     x64.movRegReg rcx, rbx

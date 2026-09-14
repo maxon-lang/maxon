@@ -1,8 +1,6 @@
 // Test: partition-merge-direct-correctness
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
-typealias ScratchArr = Array with Integer
-typealias Idx = int(0 to u64.max)
 
 function ascending(x Integer, y Integer) returns Ordering
 	return x.compare(y)
@@ -16,11 +14,10 @@ function main() returns ExitCode
 	for j in 0 upto 20 'r'
 		a.push(j * 2 + 2)
 	end 'r'
-	var scratch = ScratchArr.create()
-	let cap = 4 as Idx
-	scratch.resize(cap)
+	var scratch = IntArray.create()
+	scratch.resize(4)
 	Log.startCapture()
-	a.mergePartition(0, mid: 20, hi: 40, scratch: scratch, scratchCap: cap, cmp: ascending)
+	a.mergePartition(0, mid: 20, hi: 40, scratch: scratch, scratchCap: 4, cmp: ascending)
 	let keys = Log.stopCapture()
 	if Log.fired(keys, key: "partitionMerge.fire") 'pf'
 		print("partitionMerge.fire ")
@@ -81,9 +78,7 @@ func @main {
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 r12, 0
-  forhdr#1:
-    x64.cmpRegImm32 r12, 20
-    x64.jcc greaterEqual, forexit#4
+    x64.jmp forhdr#1
   l:
     x64.imulRegRegImm32 rax, r12, 2
     x64.leaRegRegImm32 rdx, rax, 1
@@ -91,12 +86,12 @@ func @main {
     x64.callDirect __managed_push
   forstep#3:
     x64.leaRegRegImm32 r12, r12, 1
-    x64.jmp forhdr#1
+  forhdr#1:
+    x64.cmpRegImm32 r12, 20
+    x64.jcc less, l
   forexit#4:
     x64.movRegImm32 r12, 0
-  forhdr#5:
-    x64.cmpRegImm32 r12, 20
-    x64.jcc greaterEqual, forexit#8
+    x64.jmp forhdr#5
   r:
     x64.imulRegRegImm32 rax, r12, 2
     x64.leaRegRegImm32 rdx, rax, 2
@@ -104,53 +99,131 @@ func @main {
     x64.callDirect __managed_push
   forstep#7:
     x64.leaRegRegImm32 r12, r12, 1
-    x64.jmp forhdr#5
+  forhdr#5:
+    x64.cmpRegImm32 r12, 20
+    x64.jcc less, r
   forexit#8:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
     x64.movRegReg r12, r8
     x64.storeSlotReg slot0, r12
-    x64.movRegImm32 r13, 4
-  __rc_ok:
+    x64.movRegImm32 rdx, 4
     x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r13
     x64.callDirect __managed_resize
-    x64.callDirect Log.startCapture
+  __il_body#18:
+    x64.leaRegGlobal rax, __data_captured
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_retain
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect Array.clear
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+    x64.movRegImm32 rax, 1
+    x64.leaRegGlobal rcx, __data_capturing
+    x64.storeBaseDispReg.byte [rcx + 0], rax
+  __il_cont#17:
     x64.movRegImm32 rdx, 0
     x64.movRegImm32 rax, 20
     x64.movRegImm32 r9, 40
+    x64.movRegImm32 rdi, 4
     x64.leaRegFunc rcx, [rip + __fnref_ascending]
     x64.movRegImm32 rsi, 0
-    x64.leaRegRdata rdi, [rip + __layout_Array_Integer]
+    x64.leaRegRdata r8, [rip + __layout_Array_Integer]
     x64.storeBaseDispReg.word64 [rsp + 32], rcx
     x64.storeBaseDispReg.word64 [rsp + 40], rsi
-    x64.storeBaseDispReg.word64 [rsp + 48], rdi
+    x64.storeBaseDispReg.word64 [rsp + 48], r8
     x64.movRegReg rcx, rbx
     x64.movRegReg rsi, r12
-    x64.movRegReg rdi, r13
     x64.callDirect Array.mergePartition
-    x64.callDirect Log.stopCapture
-    x64.storeSlotReg slot1, r8
-    x64.leaRegRdata rdx, [rip + __str_rec_7]  ; "partitionMerge.fire"
-    x64.movRegReg rcx, r8
-    x64.callDirect Log.fired
+  __il_body#28:
+    x64.movRegImm32 rax, 0
+    x64.leaRegGlobal rcx, __data_capturing
+    x64.storeBaseDispReg.byte [rcx + 0], rax
+    x64.leaRegGlobal rax, __data_captured
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_retain
+    x64.movRegReg r13, r8
+    x64.leaRegRdata r9, [rip + __layout_Array_String]
+  __il_body#30:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_slice_opaque
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at Array.maxon:172: Array.clone: slice OOB \xe2\x80\x94 0..len is always valid\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 120
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_retain
+    x64.movRegReg r14, r8
+    x64.storeSlotReg slot1, r14
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+  __il_cont#29:
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.leaRegGlobal rax, __data_captured
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_retain
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect Array.clear
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+  __il_cont#27:
+    x64.leaRegRdata r12, [rip + __str_rec_7]  ; "partitionMerge.fire"
+  __il_body#19:
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr#20
+  scan:
+    x64.loadRegBaseDisp.word64 rax, [r14 + 0]
+    x64.loadRegBaseIndexScale.word64 rcx, [rax + r13*8 + 0]
+  __im_cont#26:
+    x64.movRegReg rdx, r12
+    x64.callDirect __str_eq
     x64.cmpRegImm32 r8, 0
+    x64.jcc equal, forstep#22
+  match:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_cont#16
+  forstep#22:
+    x64.leaRegRegImm32 r13, r13, 1
+  forhdr#20:
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.cmpRegReg r13, rax
+    x64.jcc less, scan
+  forexit#23:
+    x64.movRegImm32 rax, 0
+  __il_cont#16:
+    x64.cmpRegImm32 rax, 0
     x64.jcc equal, ifcont
   pf:
     x64.leaRegRdata rcx, [rip + __str_rec_8]  ; "partitionMerge.fire "
     x64.callDirect print
   ifcont:
     x64.movRegImm32 rax, 0
-  forhdr#11:
-    x64.storeSlotReg slot2, rax
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
-    x64.cmpRegReg rax, rcx
-    x64.jcc greaterEqual, forexit#14
+    x64.jmp forhdr#11
   p:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.loadRegBaseIndexScale.word64 r12, [rcx + rax*8 + 0]
-  __im_cont:
+  __im_cont#15:
     x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -176,12 +249,12 @@ func @main {
     x64.movRegReg rax, r12
     x64.callDirect __str_copy
     x64.leaRegRegReg r12, r15, r12
+    x64.loadRegSlot rax, slot6
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r14
-    x64.loadRegSlot r13, slot6
-    x64.movRegReg rax, r13
     x64.callDirect __str_copy
-    x64.leaRegRegReg rax, r12, r13
+    x64.loadRegSlot rax, slot6
+    x64.leaRegRegReg rax, r12, rax
     x64.loadRegSlot r12, slot5
     x64.storeBaseDispReg.word64 [r12 + 0], r15
     x64.loadRegSlot rax, slot4
@@ -199,7 +272,11 @@ func @main {
   forstep#13:
     x64.loadRegSlot rax, slot2
     x64.leaRegRegImm32 rax, rax, 1
-    x64.jmp forhdr#11
+  forhdr#11:
+    x64.storeSlotReg slot2, rax
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.cmpRegReg rax, rcx
+    x64.jcc less, p
   forexit#14:
     x64.leaRegRdata rcx, [rip + __str_rec_10]  ; "\x0a"
     x64.callDirect print

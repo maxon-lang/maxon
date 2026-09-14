@@ -23,31 +23,57 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
+    arm64.prologue 64
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.leaRdata x19, __str_rec_2  ; "a"
     arm64.leaGlobal x0, __data_m
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.leaFuncAddr x1, __clone_Map_String_String
     arm64.movRegReg x0, x20
-    arm64.bl __mm_retain
+    arm64.bl __mm_own_deep
     arm64.movRegReg x21, x0
-    arm64.leaRdata x2, __layout_Map_String_String
-    arm64.leaRdata x3, __witness_String.Hashable
-    arm64.leaRdata x4, __witness_String.Equatable
+    arm64.leaRdata x22, __layout_Map_String_String
+    arm64.leaRdata x23, __witness_String.Hashable
+    arm64.leaRdata x24, __witness_String.Equatable
+  __il_body#7:
+    arm64.movRegReg x0, x19
+    arm64.loadRegBaseDisp.word64 x16, [x23 + 24]
+    arm64.blr x16
+    arm64.movRegReg x2, x0
     arm64.movRegReg x0, x20
     arm64.movRegReg x1, x19
-    arm64.bl Map.contains
+    arm64.movRegReg x3, x22
+    arm64.movRegReg x4, x23
+    arm64.movRegReg x5, x24
+    arm64.bl Map.findSlot
+    arm64.movRegReg x1, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#8
+  tryerr#9:
+    arm64.movImm x20, 0
+    arm64.b __il_cont#6
+  tryok#8:
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x2, x22
+    arm64.movRegReg x3, x23
+    arm64.movRegReg x4, x24
+    arm64.bl Map.slotHoldsKey
     arm64.movRegReg x20, x0
+  __il_cont#6:
     arm64.movRegReg x0, x21
     arm64.bl __destruct_Map_String_String
     arm64.cbz x20, ifcont
   has:
     arm64.leaGlobal x0, __data_m
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.leaFuncAddr x1, __clone_Map_String_String
     arm64.movRegReg x0, x20
-    arm64.bl __mm_retain
+    arm64.bl __mm_own_deep
     arm64.movRegReg x21, x0
     arm64.leaRdata x2, __layout_Map_String_String
     arm64.leaRdata x3, __witness_String.Hashable
@@ -56,17 +82,18 @@ func @main {
     arm64.movRegReg x1, x19
     arm64.bl Map.get
     arm64.cmp x9, 0
-    arm64.b.eq tryok
-  tryerr:
+    arm64.b.eq tryok#2
+  tryerr#3:
     arm64.leaRdata x0, __str_rec_3  ; "?"
     arm64.bl __str_retain
     arm64.movRegReg x19, x0
-    arm64.b trycont
-  tryok:
+    arm64.b __il_body#11
+  tryok#2:
     arm64.movRegReg x19, x0
-  trycont:
+  __il_body#11:
     arm64.movRegReg x0, x19
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont#10:
     arm64.movRegReg x0, x19
     arm64.bl __str_decref
     arm64.movRegReg x0, x21
@@ -76,6 +103,9 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
     arm64.ret
 }

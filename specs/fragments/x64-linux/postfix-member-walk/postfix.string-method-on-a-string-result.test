@@ -20,57 +20,113 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 32
     x64.leaRegRdata rbx, [rip + __str_rec_2]  ; "hello"
     x64.leaRegRdata rcx, [rip + __str_rec_3]  ; "ab"
-    x64.callDirect String.toUpper
+  __il_body#33:
+    x64.loadRegBaseDisp.word64 r12, [rcx + 8]
+  __il_cont#32:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc notEqual, ifcont
+  empty:
+    x64.callDirect String.clone
     x64.movRegReg r12, r8
-  __il_body#6:
-    x64.loadRegBaseDisp.word64 r13, [r12 + 8]
-    x64.cmpRegImm32 r13, 0
-    x64.jcc greaterEqual, __il_cont#5
-  __il_slow#8:
-    x64.movRegReg rcx, r12
-    x64.callDirect String.byteLength
+    x64.jmp __il_body#30
+  ifcont:
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.byte r9, [rcx + 48]
+    x64.movRegReg rax, r12
+    x64.callDirect String.sliceBytes
     x64.movRegReg r13, r8
-  __il_cont#5:
+    x64.movRegImm32 r14, 0
+    x64.jmp forhdr
+  convert:
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r14
+    x64.callDirect String.byteAt
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#15
+  tryok:
+    x64.cmpRegImm32 r8, 97
+    x64.movRegImm32 rax, 0
+    x64.jcc less, scmerge
+  andrhs:
+    x64.cmpRegImm32 r8, 122
+    x64.setccReg lessEqual, rax
+  scmerge:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, forstep
+  inRange:
+    x64.movRegReg rax, r8
+    x64.xorRegImm32 rax, r8, 32
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r14
+    x64.callDirect String.setByte
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#20
+  forstep:
+    x64.leaRegRegImm32 r14, r14, 1
+  forhdr:
+    x64.cmpRegReg r14, r12
+    x64.jcc less, convert
+  forexit:
+    x64.movRegReg r12, r13
+  __il_body#30:
+    x64.loadRegBaseDisp.word64 r13, [r12 + 8]
+  __il_cont#29:
     x64.movRegReg rcx, rbx
     x64.callDirect String.clone
-    x64.movRegReg rbx, r8
-  __il_body#9:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc greaterEqual, __rc_ok#10
-  __il_slow#11:
-    x64.movRegReg rcx, rbx
-    x64.callDirect String.byteLength
-    x64.jmp __il_cont#4
-  __rc_ok#10:
-    x64.movRegReg r8, rax
-  __il_cont#4:
-    x64.leaRegRegReg r13, r13, r8
-    x64.movRegReg rcx, rbx
+  __il_body#31:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+  __il_cont#28:
+    x64.leaRegRegReg rbx, r13, rax
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, r8
     x64.callDirect __str_decref
     x64.movRegReg rcx, r12
     x64.callDirect __str_decref
-    x64.cmpRegImm32 r13, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 r13, 255
-    x64.jcc lessEqual, __rc_ok#1
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at postfix.string-method-on-a-string-result.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok#1:
-    x64.movRegReg r8, r13
-    x64.epilogue 40
+  tryerr#15:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at String.maxon:697: String.mapAsciiCase: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#20:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at String.maxon:700: String.mapAsciiCase: setByte OOB \xe2\x80\x94 i < len invariant\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at postfix.string-method-on-a-string-result.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx

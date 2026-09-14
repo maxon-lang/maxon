@@ -28,35 +28,30 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movRegImm32 rax, 0
+    x64.jmp __il_body
+  loop:
+    x64.leaRegRegImm32 rax, rax, 1
   __il_body:
     x64.cmpRegImm32 rax, 3
     x64.setccReg less, rcx
-  __il_cont#9:
+  __il_cont:
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, __il_cont#11
-  loop:
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.jmp __il_body
-  __il_cont#11:
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, ifcont
-  lbl:
-    x64.movRegImm32 rax, 99
+    x64.jcc notEqual, loop
   ifcont:
     x64.imulRegRegImm32 r8, rax, 14
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc lessEqual, __rc_ok
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-keyword-named-METHOD-CALL-ending-a-block-HEADER.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

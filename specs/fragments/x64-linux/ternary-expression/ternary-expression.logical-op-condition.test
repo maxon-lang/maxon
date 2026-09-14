@@ -29,85 +29,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Flags.make {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-    x64.movRegImm32 rcx, 16
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.byte [r8 + 0], rbx
-    x64.storeBaseDispReg.byte [r8 + 8], r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @pick {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.byte rax, [rcx + 0]
-    x64.movRegImm32 rdx, 1
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, scmerge#2
-  orrhs:
-    x64.loadRegBaseDisp.byte rax, [rcx + 8]
-    x64.movRegReg rdx, rax
-  scmerge#2:
-    x64.loadRegBaseDisp.byte rax, [rcx + 0]
-    x64.movRegImm32 rsi, 0
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, critsplit
-  andrhs:
-    x64.loadRegBaseDisp.byte rax, [rcx + 8]
-    x64.jmp scmerge#4
-  critsplit:
-    x64.movRegReg rax, rsi
-  scmerge#4:
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, ternaryfalse#6
-  ternarytrue#5:
-    x64.movRegImm32 rcx, 4
-    x64.jmp matchcont#7
-  ternaryfalse#6:
-    x64.movRegImm32 rcx, 0
-  matchcont#7:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ternaryfalse#9
-  ternarytrue#8:
-    x64.movRegImm32 rax, 1
-    x64.jmp matchcont#10
-  ternaryfalse#9:
-    x64.movRegImm32 rax, 0
-  matchcont#10:
-    x64.leaRegRegReg r8, rcx, rax
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 r8, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at ternary-expression.logical-op-condition.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -115,16 +36,54 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 32
-    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rbx, 1
+    x64.movRegImm32 r12, 0
+  __il_body#3:
+    x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
-    x64.callDirect Flags.make
-    x64.movRegReg rbx, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect pick
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.byte [r8 + 0], rbx
+    x64.storeBaseDispReg.byte [r8 + 8], r12
+  __il_body#4:
+    x64.loadRegBaseDisp.byte rax, [r8 + 0]
+    x64.movRegImm32 rcx, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, scmerge#6
+  orrhs:
+    x64.loadRegBaseDisp.byte rax, [r8 + 8]
+    x64.movRegReg rcx, rax
+  scmerge#6:
+    x64.loadRegBaseDisp.byte rax, [r8 + 0]
+    x64.movRegImm32 rdx, 0
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, critsplit
+  andrhs:
+    x64.loadRegBaseDisp.byte rax, [r8 + 8]
+    x64.jmp scmerge#8
+  critsplit:
+    x64.movRegReg rax, rdx
+  scmerge#8:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, ternaryfalse#10
+  ternarytrue#9:
+    x64.movRegImm32 rcx, 4
+    x64.jmp matchcont#11
+  ternaryfalse#10:
+    x64.movRegImm32 rcx, 0
+  matchcont#11:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ternaryfalse#13
+  ternarytrue#12:
+    x64.movRegImm32 rax, 1
+    x64.jmp matchcont#14
+  ternaryfalse#13:
+    x64.movRegImm32 rax, 0
+  matchcont#14:
+    x64.leaRegRegReg rbx, rcx, rax
+  __il_cont:
+    x64.movRegReg rcx, r8
     x64.callDirect __mm_decref
-    x64.movRegReg r8, r12
+    x64.movRegReg r8, rbx
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx

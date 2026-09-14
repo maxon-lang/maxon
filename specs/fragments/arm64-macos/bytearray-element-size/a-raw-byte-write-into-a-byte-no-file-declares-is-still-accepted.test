@@ -36,8 +36,8 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_set_byte
     arm64.cmp x9, 0
-    arm64.b.eq tryok
-  tryerr#2:
+    arm64.b.eq tryok#1
+  tryerr:
     arm64.movImm x20, 3
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
@@ -46,15 +46,13 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  tryok:
+  tryok#1:
     arm64.movImm x1, 0
     arm64.movRegReg x0, x19
     arm64.bl __managed_byte_at
     arm64.cmp x9, 0
-    arm64.b.eq trycont
-  tryerr#4:
-    arm64.movImm x0, 0
-  trycont:
+    arm64.b.ne ternaryfalse
+  tryok#3:
     arm64.cmp x0, 223
     arm64.b.ne ternaryfalse
   ternarytrue:
@@ -65,19 +63,6 @@ func @main {
   matchcont:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.cmp x20, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x20, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at a-raw-byte-write-into-a-byte-no-file-declares-is-still-accepted.test:5: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
   __rc_ok:
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0

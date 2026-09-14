@@ -73,8 +73,8 @@ func @Func.create {
     arm64.bl __str_retain
     arm64.storeBaseDispReg.word64 [x21 + 0], x0
     arm64.movRegReg x0, x20
-    arm64.bl __mm_incref
-    arm64.storeBaseDispReg.word64 [x21 + 8], x20
+    arm64.bl __managed_retain
+    arm64.storeBaseDispReg.word64 [x21 + 8], x0
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref
     arm64.movRegReg x0, x19
@@ -87,36 +87,30 @@ func @Func.create {
     arm64.ret
 }
 
-func @Module.create {
+func @createModule {
   entry:
     arm64.prologue 32
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __destruct_Func
+    arm64.bl __managed_create
     arm64.movRegReg x19, x0
+  __il_body:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+    arm64.bl __managed_retain
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
+  __il_cont:
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
-}
-
-func @createModule {
-  entry:
-    arm64.prologue 16
-    arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __destruct_Func
-    arm64.bl __managed_create
-    arm64.bl Module.create
-    arm64.epilogue 16
     arm64.ret
 }
 
@@ -170,6 +164,7 @@ func @parseAndMerge {
     arm64.bl __managed_append_managed
     arm64.movRegReg x0, x21
     arm64.bl __destruct_Module
+    arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -231,11 +226,7 @@ func @main {
     arm64.b.eq critsplit#12
   __im_empty:
     arm64.cmp x20, 0
-    arm64.b.ne critsplit#13
-  __im_slow:
-    arm64.bl __managed_get
-    arm64.movRegReg x20, x0
-    arm64.b __im_cont
+    arm64.b.eq __im_slow
   critsplit#13:
     arm64.movRegReg x9, x2
     arm64.b __im_cont
@@ -311,4 +302,8 @@ func @main {
     arm64.loadRegSlot x24, slot5
     arm64.epilogue 64
     arm64.ret
+  __im_slow:
+    arm64.bl __managed_get
+    arm64.movRegReg x20, x0
+    arm64.b __im_cont
 }

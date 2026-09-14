@@ -33,77 +33,13 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @oddSum {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 80
-    x64.movRegImm32 r8, 0
-    x64.movRegImm32 rax, 0
-  __us_test:
-    x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
-    x64.loadRegBaseDisp.word64 rdi, [rcx + 0]
-    x64.jmp whilehdr
-  __rc_ok:
-    x64.cmpRegReg rax, rsi
-    x64.jcc aboveEqual, __im_slow
-  __im_load:
-    x64.loadRegBaseIndexScale.word64 r9, [rdi + rax*8 + 0]
-  tryok:
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.movRegReg r10, r9
-    x64.sarRegImm8 r10, r9, 63
-    x64.shrRegImm8 r10, r10, 63
-    x64.leaRegRegReg r10, r9, r10
-    x64.sarRegImm8 r10, r10, 1
-    x64.imulRegRegImm32 r10, r10, 2
-    x64.movRegReg r11, r9
-    x64.subRegReg r11, r9, r10
-    x64.cmpRegImm32 r11, 0
-    x64.jcc equal, whilehdr
-  ifcont:
-    x64.leaRegRegReg r8, r8, r9
-  whilehdr:
-    x64.cmpRegReg rax, rdx
-    x64.jcc less, __rc_ok
-  whileexit:
-    x64.epilogue 80
-    x64.popReg rbp
-    x64.ret
-  __im_slow:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rcx
-    x64.storeSlotReg slot2, rdx
-    x64.storeSlotReg slot3, rsi
-    x64.storeSlotReg slot4, rdi
-    x64.storeSlotReg slot5, r8
-    x64.movRegReg rdx, rax
-    x64.callDirect __managed_get
-    x64.movRegReg r9, r8
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rcx, slot1
-    x64.loadRegSlot rdx, slot2
-    x64.loadRegSlot rsi, slot3
-    x64.loadRegSlot rdi, slot4
-    x64.loadRegSlot r8, slot5
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-while-with-continue-keeps-both-latches.test:9: oddSum: i < n = a.count()\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 80
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
+    x64.prologue 64
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
@@ -119,30 +55,76 @@ func @main {
   forhdr:
     x64.cmpRegImm32 r12, 8
     x64.jcc lessEqual, seed
-  forexit:
-    x64.movRegImm32 rdx, 8
-    x64.movRegReg rcx, rbx
-    x64.callDirect oddSum
-    x64.movRegReg r12, r8
+  __il_body:
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 rdx, 0
+  __us_test:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.jmp whilehdr
+  __rc_ok#17:
+    x64.cmpRegReg rdx, rax
+    x64.jcc aboveEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseIndexScale.word64 rsi, [rcx + rdx*8 + 0]
+    x64.movRegReg r8, rsi
+  tryok:
+    x64.leaRegRegImm32 rdx, rdx, 1
+    x64.movRegReg rsi, r8
+    x64.sarRegImm8 rsi, r8, 63
+    x64.shrRegImm8 rsi, rsi, 63
+    x64.leaRegRegReg rsi, r8, rsi
+    x64.sarRegImm8 rsi, rsi, 1
+    x64.imulRegRegImm32 rsi, rsi, 2
+    x64.movRegReg rdi, r8
+    x64.subRegReg rdi, r8, rsi
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc equal, whilehdr
+  ifcont:
+    x64.leaRegRegReg r12, r12, r8
+  whilehdr:
+    x64.cmpRegImm32 rdx, 8
+    x64.jcc less, __rc_ok#17
+  __il_cont:
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 r12, 255
     x64.jcc greater, __rc_panic
-  __rc_ok:
+  __rc_ok#5:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
+    x64.epilogue 64
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-while-with-continue-keeps-both-latches.test:9: oddSum: i < n = a.count()\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-while-with-continue-keeps-both-latches.test:24: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-while-with-continue-keeps-both-latches.test:24: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

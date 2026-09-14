@@ -57,6 +57,10 @@ func @main {
   __us_test:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
+    x64.jmp whilehdr
+  walk:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.leaRegRegImm32 rdx, rdx, 1
   whilehdr:
     x64.cmpRegImm32 rdx, 0
     x64.jcc less, __rc_panic
@@ -68,11 +72,7 @@ func @main {
     x64.movRegReg r8, rdi
   tryok:
     x64.cmpRegImm32 r8, 0
-    x64.jcc lessEqual, whileexit
-  walk:
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.leaRegRegImm32 rdx, rdx, 1
-    x64.jmp whilehdr
+    x64.jcc greater, walk
   whileexit:
     x64.cmpRegImm32 rax, 3
     x64.jcc equal, ifcont
@@ -97,7 +97,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-condition-form-in-a-while-header.test:13: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-condition-form-in-a-while-header.test:13: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 64

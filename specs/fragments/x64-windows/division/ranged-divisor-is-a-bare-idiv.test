@@ -1,8 +1,8 @@
 // Test: ranged-divisor-is-a-bare-idiv
 typealias NonZero = int(1 to 1000)
 
-function divide(n Integer, d NonZero) returns Integer
-	return n / d + n mod d
+function divide(n NonZero, d NonZero) returns Integer
+	return (n / d + n mod d) as Integer
 end 'divide'
 
 function main() returns ExitCode
@@ -12,36 +12,10 @@ typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 16
 ---
-func @divide {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegReg rsi, rdx
-    x64.cmpRegImm32 rsi, 1
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 rsi, 1000
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at ranged-divisor-is-a-bare-idiv.test:4: Range check failed: value outside typealias 'NonZero'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegReg rax, rcx
-    x64.cqo
-    x64.idivReg rsi
-    x64.movRegReg rdi, rax
-    x64.movRegReg rax, rcx
-    x64.cqo
-    x64.idivReg rsi
-    x64.leaRegRegReg r8, rdi, rdx
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
 }
 
 func @main {
@@ -50,22 +24,31 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movRegImm32 rcx, 100
-    x64.movRegImm32 rdx, 7
-    x64.callDirect divide
+    x64.movRegImm32 rsi, 7
+  __rc_ok#9:
+    x64.movRegReg rax, rcx
+    x64.movRegImm32 rdx, 0
+    x64.divReg rsi
+    x64.movRegReg rdi, rax
+    x64.movRegReg rax, rcx
+    x64.movRegImm32 rdx, 0
+    x64.divReg rsi
+    x64.leaRegRegReg r8, rdi, rdx
+  __il_cont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc lessEqual, __rc_ok
+    x64.jcc greater, __rc_panic
+  __rc_ok#1:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at ranged-divisor-is-a-bare-idiv.test:9: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

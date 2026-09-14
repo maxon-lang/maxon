@@ -22,6 +22,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -33,9 +36,7 @@ func @main {
     x64.prologue 32
     x64.movRegImm32 rbx, 0
     x64.movRegImm32 r12, 0
-  whilehdr:
-    x64.cmpRegImm32 r12, 50
-    x64.jcc greaterEqual, whileexit
+    x64.jmp whilehdr
   reads:
     x64.callDirect __proc_exe_path
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
@@ -47,7 +48,9 @@ func @main {
     x64.leaRegRegImm32 r12, r12, 1
     x64.movRegReg rcx, r8
     x64.callDirect __managed_decref
-    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 r12, 50
+    x64.jcc less, reads
   whileexit:
     x64.cmpRegImm32 rbx, 50
     x64.jcc notEqual, ifcont#7

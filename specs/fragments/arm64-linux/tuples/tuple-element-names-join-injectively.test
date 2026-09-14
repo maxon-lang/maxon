@@ -55,98 +55,63 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @A_B.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @A.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @C.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @B_C.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, 1
-    arm64.bl A_B.create
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 2
-    arm64.bl C.create
+    arm64.movImm x19, 1
+  __il_body#10:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
-    arm64.movImm x0, 16
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+  __il_cont#9:
+    arm64.movImm x19, 2
+  __il_body#11:
+    arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x21, x0
     arm64.storeBaseDispReg.word64 [x21 + 0], x19
-    arm64.storeBaseDispReg.word64 [x21 + 8], x20
-    arm64.movImm x0, 3
-    arm64.bl A.create
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 4
-    arm64.bl B_C.create
-    arm64.movRegReg x20, x0
+  __il_cont#8:
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.storeBaseDispReg.word64 [x0 + 8], x20
-  __il_body#6:
-    arm64.loadRegBaseDisp.word64 x1, [x21 + 0]
+    arm64.movRegReg x19, x0
+    arm64.storeBaseDispReg.word64 [x19 + 0], x20
+    arm64.storeBaseDispReg.word64 [x19 + 8], x21
+    arm64.movImm x20, 3
+  __il_body#12:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 0], x20
+  __il_cont#7:
+    arm64.movImm x20, 4
+  __il_body#13:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x20
+  __il_cont#6:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x21
+    arm64.storeBaseDispReg.word64 [x0 + 8], x22
+  __il_body#14:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
-    arm64.loadRegBaseDisp.word64 x2, [x21 + 8]
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
     arm64.add x1, x1, x2
-  __il_body#7:
+  __il_body#15:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
     arm64.movImm x16, 10
@@ -154,30 +119,32 @@ func @main {
     arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x3, [x3 + 0]
     arm64.add x2, x2, x3
-  __il_cont:
-    arm64.add x19, x1, x2
-    arm64.bl __destruct___Tuple2.A.B_C
-    arm64.movRegReg x0, x21
-    arm64.bl __destruct___Tuple2.A_B.C
-    arm64.cmp x19, 0
+  __il_cont#4:
+    arm64.add x20, x1, x2
+    arm64.cmp x20, 0
     arm64.b.lt __rc_panic
   __rc_chk:
-    arm64.cmp x19, 255
-    arm64.b.le __rc_ok
+    arm64.cmp x20, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.bl __destruct___Tuple2.A.B_C
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct___Tuple2.A_B.C
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at tuple-element-names-join-injectively.test:45: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_1  ; "panic at tuple-element-names-join-injectively.test:45: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
 }

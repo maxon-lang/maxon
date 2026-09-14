@@ -68,90 +68,61 @@ data {
   __mm_raw_alloc_bytes@40 = i64 0
   __gt_run_queue_head@48 = i64 0
   __gt_run_queue_tail@56 = i64 0
-  __gt_init_done@64 = i64 0
-  __gt_timer_count@72 = i64 0
-  __gt_timer_heap_base@80 = i64 0
-  __gt_timer_capacity@88 = i64 0
-  __gt_timer_seq@96 = i64 0
+  __gt_timer_count@64 = i64 0
+  __gt_timer_heap_base@72 = i64 0
+  __gt_timer_capacity@80 = i64 0
+  __gt_timer_seq@88 = i64 0
+  __gt_timer_when@96 = i64 9223372036854775807
   __gt_trace_counter@104 = i64 0
-  __gt_proc_count@112 = i64 0
-  __gt_proc_handles_base@120 = i64 0
-  __gt_proc_gts_base@128 = i64 0
-  __gt_proc_wait_snapshot@136 = i64 0
-  __gt_proc_poller@144 = i64 0
-  __gt_live_count@152 = i64 0
-  __sched_progress@160 = i64 0
-  __sched_active_workers@168 = i64 1
-  __sched_max_active_workers@176 = i64 1
-  __sched_tls_index@184 = i64 0
-  __sched_tls_teb_offset@192 = i64 0
-  __sched_procs@200 = i64 0
-  __sched_allm@208 = i64 0
-  __sched_midle@216 = i64 0
-  __sched_pidle@224 = i64 0
-  __sched_num_procs@232 = i64 0
-  __sched_shutdown_flag@240 = i64 0
-  __sched_lock@248 = i64 0
-  __sched_nmspinning@256 = i64 0
-  __sched_parked_drivers@264 = i64 0
-  __sched_sysmon_started@272 = i64 0
-  __slab_arena_list@280 = i64 0
-  __slab_arena_map_l1@288 = i64 0
-  __slab_state@296 = i64 0
-}
-
-func @Churn.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movImm x19, 0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @Churn.churn {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-    arm64.movImm x0, 1
-    arm64.movImm x1, 0
-    arm64.bl __managed_create
-    arm64.movRegReg x21, x0
-    arm64.movImm x22, 0
-  forhdr:
-    arm64.cmp x22, x20
-    arm64.b.ge forexit
-  push:
-    arm64.movImm x1, 3
-    arm64.movRegReg x0, x21
-    arm64.bl __managed_push
-  forstep:
-    arm64.add x22, x22, 1
-    arm64.b forhdr
-  forexit:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.add x0, x0, 1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x0
-    arm64.loadRegBaseDisp.word64 x19, [x21 + 8]
-    arm64.movRegReg x0, x21
-    arm64.bl __managed_decref
-    arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.ret
+  __gt_live_count@112 = i64 0
+  __gt_seed_bytes@120 = i64 2048
+  __gt_stack_bytes_sum@128 = i64 0
+  __gt_stack_bytes_count@136 = i64 0
+  __gt_seed_sum_seen@144 = i64 0
+  __gt_seed_count_seen@152 = i64 0
+  __sched_active_workers@160 = i64 1
+  __sched_max_active_workers@168 = i64 1
+  __sched_tls_index@176 = i64 0
+  __sched_tls_teb_offset@184 = i64 0
+  __sched_procs@192 = i64 0
+  __sched_allm@200 = i64 0
+  __sched_midle@208 = i64 0
+  __sched_pidle@216 = i64 0
+  __gt_gfree_head@224 = i64 0
+  __sched_arena_cursor@232 = i64 0
+  __sched_arena_limit@240 = i64 0
+  __gt_records_carved@248 = i64 0
+  __sched_npidle@256 = i64 0
+  __sched_runq_size@264 = i64 0
+  __sched_global_pushes@272 = i64 0
+  __sched_timer_scan_steps@280 = i64 0
+  __sched_mcount@288 = i64 0
+  __sched_nmidle@296 = i64 0
+  __sched_main_m@304 = i64 0
+  __sched_phase@312 = i64 0
+  __sched_lastpoll@320 = i64 0
+  __sched_poll_until@328 = i64 0
+  __sched_regain_head@336 = i64 0
+  __np_poller@344 = i64 0
+  __np_break@352 = i64 0
+  __np_wake_sig@360 = i64 0
+  __np_pd_table@368 = i64 0
+  __np_pd_cap@376 = i64 0
+  __np_waiters@384 = i64 0
+  __np_src_key_free@392 = i64 0
+  __np_src_key_high@400 = i64 0
+  __sched_num_procs@408 = i64 0
+  __sched_shutdown_flag@416 = i64 0
+  __sched_lock@424 = i64 0
+  __sched_lock_depth_sink@432 = i64 0
+  __sched_nmspinning@440 = i64 0
+  __sched_needspinning@448 = i64 0
+  __sched_sysmon_event@456 = i64 0
+  __sched_sysmon_wait@464 = i64 0
+  __sched_timer_starts@472 = i64 0
+  __slab_arena_list@480 = i64 0
+  __slab_arena_map_l1@488 = i64 0
+  __slab_state@496 = i64 0
 }
 
 func @processWide {
@@ -163,15 +134,15 @@ func @processWide {
     arm64.bl __mm_counter_raw_alloc_total
     arm64.add x0, x19, x0
     arm64.cmp x0, 0
-    arm64.b.ge __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at builtins-mm-counters.a-thread-is-billed-only-its-own-allocations.test:25: Range check failed: value outside typealias 'Tally'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
+    arm64.b.lt __rc_panic
+  __rc_ok:
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
-  __rc_ok:
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at builtins-mm-counters.a-thread-is-billed-only-its-own-allocations.test:25: Range check failed: value outside typealias 'Tally'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
@@ -188,8 +159,14 @@ func @main {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.bl Churn.create
+  __il_body:
+    arm64.movImm x19, 0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+  __il_cont:
     arm64.leaFuncAddr x0, Churn.__loop
     arm64.leaFuncAddr x2, Churn.__abandon
     arm64.bl __svc_spawn
@@ -208,16 +185,16 @@ func @main {
     arm64.bl __managed_create
     arm64.movRegReg x22, x0
     arm64.movImm x23, 0
-  forhdr:
-    arm64.cmp x23, 4096
-    arm64.b.ge forexit
+    arm64.b forhdr
   warm:
     arm64.movImm x1, 1
     arm64.movRegReg x0, x22
     arm64.bl __managed_push
   forstep:
     arm64.add x23, x23, 1
-    arm64.b forhdr
+  forhdr:
+    arm64.cmp x23, 4096
+    arm64.b.lt warm
   forexit:
     arm64.bl __mm_counter_thread_allocs
     arm64.sub x19, x0, x19
@@ -279,29 +256,9 @@ func @main {
     arm64.cmp x0, 0
     arm64.cset x0, gt
   scmerge#15:
-    arm64.cbz x0, ifcont#17
+    arm64.cbz x0, __rc_ok
   theOtherTwoColumnsMove:
     arm64.add x19, x19, 4
-  ifcont#17:
-    arm64.cmp x19, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x19, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at builtins-mm-counters.a-thread-is-billed-only-its-own-allocations.test:57: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.loadRegSlot x25, slot6
-    arm64.loadRegSlot x26, slot7
-    arm64.epilogue 80
-    arm64.ret
   __rc_ok:
     arm64.movRegReg x0, x22
     arm64.bl __managed_decref
@@ -322,7 +279,9 @@ func @main {
 
 func @Churn.__loop {
   entry:
-    arm64.prologue 64
+    arm64.prologue 80
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
     arm64.storeSlotReg slot4, x23
     arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
@@ -338,7 +297,7 @@ func @Churn.__loop {
     arm64.b.eq stopping
   dispatch:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
-    arm64.jumpTable x0, default=stopping [[0]=__shutdown, [1]=churn] @__jumptable_2
+    arm64.jumpTable x0, default=stopping [[0]=__shutdown, [1]=churn] @__jumptable_8
   __shutdown:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.storeBaseDispReg.word64 [x20 + 56], x0
@@ -358,28 +317,52 @@ func @Churn.__loop {
     arm64.bl __mm_decref
     arm64.movRegReg x0, x20
     arm64.bl __mbox_service_exit
+    arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
     arm64.ret
   abandon:
     arm64.movRegReg x0, x20
     arm64.bl __mbox_abandon
     arm64.b drain
   churn:
-    arm64.loadRegBaseDisp.word64 x1, [x21 + 8]
-    arm64.loadRegBaseDisp.word64 x22, [x21 + 16]
-    arm64.movRegReg x0, x19
-    arm64.bl Churn.churn
-    arm64.movRegReg x23, x0
+    arm64.loadRegBaseDisp.word64 x22, [x21 + 8]
+    arm64.loadRegBaseDisp.word64 x23, [x21 + 16]
+  __il_body:
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x24, x0
+    arm64.movImm x25, 0
+    arm64.b forhdr
+  push:
+    arm64.movImm x1, 3
+    arm64.movRegReg x0, x24
+    arm64.bl __managed_push
+  forstep:
+    arm64.add x25, x25, 1
+  forhdr:
+    arm64.cmp x25, x22
+    arm64.b.lt push
+  forexit:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.add x0, x0, 1
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.loadRegBaseDisp.word64 x22, [x24 + 8]
+    arm64.movRegReg x0, x24
+    arm64.bl __managed_decref
+  __il_cont:
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
     arm64.movImm x2, 0
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x23
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x22
     arm64.bl __gt_cell_complete
     arm64.b serve
 }
@@ -390,7 +373,7 @@ func @Churn.__abandon {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=churn] @__jumptable_3
+    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=churn] @__jumptable_9
   __shutdown:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.movImm x1, 0
@@ -405,6 +388,7 @@ func @Churn.__abandon {
   abandondrop:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret

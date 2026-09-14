@@ -33,33 +33,63 @@ func @main {
     arm64.storeSlotReg slot3, x20
     arm64.storeSlotReg slot2, x19
     arm64.leaRdata x19, __str_rec_3  ; "abcdef"
-    arm64.movRegReg x0, x19
-    arm64.bl String.startIndex
+  __il_body#9:
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+    arm64.bl StringIndex.create
     arm64.movRegReg x20, x0
     arm64.storeSlotReg slot1, x20
+  __il_cont#8:
     arm64.leaRdata x1, __str_rec_4  ; "d"
     arm64.movRegReg x0, x19
     arm64.bl String.findFirst
     arm64.cmp x9, 0
     arm64.b.eq tryok
-  tryerr:
+  __il_body#31:
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
+  __il_body#32:
+    arm64.loadRegBaseDisp.byte x0, [x19 + 48]
+  __il_cont#29:
+    arm64.cbz x0, ifcont
+  oneByteEach:
+    arm64.movRegReg x0, x21
+    arm64.b __il_body#28
+  ifcont:
+    arm64.movImm x22, 0
+    arm64.movImm x1, 0
+    arm64.b whilehdr
+  countLoop:
     arm64.movRegReg x0, x19
-    arm64.bl String.endIndex
+    arm64.bl findGraphemeEnd
+    arm64.add x22, x22, 1
+    arm64.movRegReg x1, x0
+  whilehdr:
+    arm64.cmp x1, x21
+    arm64.b.lt countLoop
+  whileexit:
+    arm64.cmp x22, 0
+    arm64.b.lt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x22
+  __il_body#28:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
+  __il_cont#27:
+    arm64.bl StringIndex.create
+  __il_cont#14:
     arm64.movRegReg x21, x0
-    arm64.b trycont
+    arm64.b __il_body#11
   tryok:
     arm64.movRegReg x21, x0
-  trycont:
+  __il_body#11:
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 8]
+    arm64.loadRegBaseDisp.word64 x2, [x21 + 8]
+    arm64.loadRegBaseDisp.byte x3, [x19 + 48]
     arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
-    arm64.movRegReg x2, x21
-    arm64.bl String.slice
+    arm64.bl String.sliceBytes
     arm64.movRegReg x19, x0
+  __il_cont#10:
     arm64.movImm x20, 0
-  forhdr:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x20, x0
-    arm64.b.ge forexit
+    arm64.b forhdr
   loop:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
@@ -97,8 +127,10 @@ func @main {
     arm64.storeBaseDispReg.word64 [x27 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x27 + 24], x0
+  __il_body#13:
     arm64.movRegReg x0, x27
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont#12:
     arm64.movRegReg x0, x27
     arm64.bl __str_decref
     arm64.movRegReg x0, x20
@@ -106,7 +138,10 @@ func @main {
   forstep:
     arm64.loadRegSlot x0, slot0
     arm64.movRegReg x20, x0
-    arm64.b forhdr
+  forhdr:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x20, x0
+    arm64.b.lt loop
   forexit:
     arm64.movImm x20, 0
     arm64.movRegReg x0, x19
@@ -116,6 +151,22 @@ func @main {
     arm64.loadRegSlot x0, slot1
     arm64.bl __mm_decref
     arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_47  ; "panic at grapheme.maxon:404: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot2
     arm64.loadRegSlot x20, slot3
     arm64.loadRegSlot x21, slot4

@@ -117,6 +117,7 @@ func @widen {
     arm64.bl print
     arm64.movRegReg x0, x26
     arm64.bl __str_decref
+    arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -191,6 +192,7 @@ func @narrow {
     arm64.bl print
     arm64.movRegReg x0, x26
     arm64.bl __str_decref
+    arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -206,8 +208,7 @@ func @narrow {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
+    arm64.prologue 32
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x0, 8
@@ -227,21 +228,21 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
     arm64.movImm x20, 0
-  forhdr:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x20, x0
-    arm64.b.ge forexit
+    arm64.b forhdr
   drive:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseIndexScale.word64 x0, [x0 + x20*8 + 0]
   __im_cont:
-    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.movImm x0, 7
     arm64.movImm x1, 0
-    arm64.blr x21
+    arm64.blr x2
   forstep:
     arm64.add x20, x20, 1
-    arm64.b forhdr
+  forhdr:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x20, x0
+    arm64.b.lt drive
   forexit:
     arm64.movImm x20, 0
     arm64.movRegReg x0, x19
@@ -249,7 +250,6 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.epilogue 32
     arm64.ret
 }

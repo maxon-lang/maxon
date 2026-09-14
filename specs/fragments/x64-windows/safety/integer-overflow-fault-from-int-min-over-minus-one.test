@@ -9,45 +9,25 @@ end 'ident'
 // The divisor's range excludes 0, so this is the unguarded `idiv` again — the `DivisionByZero` a
 // possibly-zero divisor would have raised is about the DIVISOR, and says nothing about a quotient
 // that does not fit. `i64.min / -1` is `i64.max + 1`, so `idiv` raises `#DE` with a divisor of -1.
-function divide(n Integer, d NegativeOne) returns Integer
-	return n / d
+function divide(d NegativeOne) returns Integer
+	return (dividend / d) as Integer
 end 'divide'
 
 function main() returns ExitCode
-	let n = ident(i64.min)
+	dividend = ident(i64.min)
 	// Opaque, so the divide cannot be strength-reduced to a negation — which would not trap.
 	let d = ident(-1)
-	return divide(n, d: d)
+	return divide(d as NegativeOne) as ExitCode
 end 'main'
+var dividend = 0
 ---
 ExitCode: 1
 ---
-func @divide {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegReg rsi, rdx
-    x64.cmpRegImm32 rsi, -1
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 rsi, -1
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at integer-overflow-fault-from-int-min-over-minus-one.test:12: Range check failed: value outside typealias 'NegativeOne'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegReg rax, rcx
-    x64.cqo
-    x64.idivReg rsi
-    x64.movRegReg r8, rax
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
+data {
+  __data_dividend@0 = i64 0
+  __mrt_console_probe_stdin@8 = i8 0
+  __mrt_console_probe_stdout@9 = i8 0
+  __mrt_console_probe_stderr@10 = i8 0
 }
 
 func @main {
@@ -55,25 +35,32 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm rcx, 9223372036854775808
-  __il_cont#5:
-    x64.movRegImm rdx, 18446744073709551615
-  __il_cont#4:
-    x64.callDirect divide
-    x64.cmpRegImm32 r8, 0
+    x64.movRegImm rax, 9223372036854775808
+  __il_cont#13:
+    x64.leaRegGlobal rcx, __data_dividend
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.movRegImm rcx, 18446744073709551615
+  __rc_ok#9:
+    x64.leaRegGlobal rax, __data_dividend
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.cqo
+    x64.idivReg rcx
+  __il_cont#7:
+    x64.cmpRegImm32 rax, 0
     x64.jcc less, __rc_panic
   __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at integer-overflow-fault-from-int-min-over-minus-one.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.movRegImm32 rcx, 4294967295
+    x64.cmpRegReg rax, rcx
+    x64.jcc greater, __rc_panic
+  __rc_ok#4:
+    x64.movRegReg r8, rax
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at integer-overflow-fault-from-int-min-over-minus-one.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

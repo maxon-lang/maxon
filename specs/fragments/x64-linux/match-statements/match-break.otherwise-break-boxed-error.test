@@ -45,17 +45,7 @@ func @risky {
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 rcx, 1000
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at match-break.otherwise-break-boxed-error.test:8: Range check failed: value outside typealias 'Count'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.movRegImm32 r10, 0
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc greater, __rc_panic
   __rc_ok:
     x64.cmpRegImm32 rcx, 1
     x64.jcc notEqual, ifcont
@@ -85,6 +75,16 @@ func @risky {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at match-break.otherwise-break-boxed-error.test:8: Range check failed: value outside typealias 'Count'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
 }
 
 func @pick {
@@ -97,15 +97,7 @@ func @pick {
     x64.jcc less, __rc_panic#8
   __rc_chk#9:
     x64.cmpRegImm32 rcx, 1000
-    x64.jcc lessEqual, __rc_ok#7
-  __rc_panic#8:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at match-break.otherwise-break-boxed-error.test:15: Range check failed: value outside typealias 'Count'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc greater, __rc_panic#8
   __rc_ok#7:
     x64.movRegImm32 rbx, 0
     x64.cmpRegImm32 rcx, 1
@@ -130,16 +122,24 @@ func @pick {
     x64.jcc less, __rc_panic#11
   __rc_chk#12:
     x64.cmpRegImm32 r8, 1000
-    x64.jcc lessEqual, __rc_ok#10
-  __rc_panic#11:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at match-break.otherwise-break-boxed-error.test:21: Range check failed: value outside typealias 'Count'\x0a"
+    x64.jcc greater, __rc_panic#11
+  __rc_ok#10:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at match-break.otherwise-break-boxed-error.test:15: Range check failed: value outside typealias 'Count'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok#10:
+  __rc_panic#11:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at match-break.otherwise-break-boxed-error.test:21: Range check failed: value outside typealias 'Count'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
@@ -162,16 +162,16 @@ func @main {
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at match-break.otherwise-break-boxed-error.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.jcc greater, __rc_panic
+  __rc_ok:
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at match-break.otherwise-break-boxed-error.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp

@@ -15,7 +15,10 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 32
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x0, 48
@@ -30,33 +33,93 @@ func @main {
     arm64.storeBaseDispReg.word64 [x19 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
+  __il_body#7:
     arm64.movRegReg x0, x19
-    arm64.bl String.from
+    arm64.bl __managed_retain
     arm64.movRegReg x20, x0
     arm64.movRegReg x0, x19
+    arm64.bl __managed_retain
+    arm64.movRegReg x21, x0
+  __il_body#9:
+    arm64.loadRegBaseDisp.word64 x22, [x21 + 8]
+    arm64.movImm x23, 0
+    arm64.b forhdr
+  scan:
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x23
+    arm64.bl __managed_byte_at
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr
+  tryok:
+    arm64.cmp x0, 128
+    arm64.movImm x1, 1
+    arm64.b.ge scmerge
+  orrhs:
+    arm64.cmp x0, 13
+    arm64.cset x0, eq
+    arm64.movRegReg x1, x0
+  scmerge:
+    arm64.cbz x1, forstep
+  notSingleByte:
+    arm64.movImm x1, 0
+    arm64.b __il_cont#8
+  forstep:
+    arm64.add x23, x23, 1
+  forhdr:
+    arm64.cmp x23, x22
+    arm64.b.lt scan
+  forexit:
+    arm64.movImm x1, 1
+  __il_cont#8:
+    arm64.movRegReg x0, x20
+    arm64.bl __str_of_buffer
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x21
     arm64.bl __managed_decref
-  __il_body:
-    arm64.loadRegBaseDisp.word64 x19, [x20 + 8]
-  __il_cont:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+  __il_cont#6:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+  __il_body#5:
+    arm64.loadRegBaseDisp.word64 x19, [x22 + 8]
+  __il_cont#4:
     arm64.cmp x19, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at from-takes-a-bare-literal.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
+    arm64.b.gt __rc_panic
   __rc_ok:
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x22
     arm64.bl __str_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryerr:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at String.maxon:1136: scanSingleByteGraphemes: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at from-takes-a-bare-literal.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
     arm64.ret
 }

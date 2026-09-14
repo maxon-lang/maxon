@@ -19,6 +19,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -45,11 +48,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
     x64.movRegImm32 rdx, 0
-  forhdr:
-    x64.storeSlotReg slot0, rdx
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegReg rdx, rax
-    x64.jcc greaterEqual, forexit
+    x64.jmp forhdr
   loop:
     x64.loadRegBaseDisp.word64 rax, [rbx + 24]
     x64.cmpRegImm32 rax, 8
@@ -91,8 +90,10 @@ func @main {
     x64.storeBaseDispReg.word64 [r14 + 16], rax
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r14 + 24], rax
+  __il_body:
     x64.movRegReg rcx, r14
-    x64.callDirect print
+    x64.callDirect __write_stdout
+  __il_cont:
     x64.movRegReg rcx, r14
     x64.callDirect __str_decref
     x64.loadRegSlot rcx, slot1
@@ -100,7 +101,11 @@ func @main {
   forstep:
     x64.loadRegSlot rax, slot0
     x64.leaRegRegImm32 rdx, rax, 1
-    x64.jmp forhdr
+  forhdr:
+    x64.storeSlotReg slot0, rdx
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg rdx, rax
+    x64.jcc less, loop
   forexit:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref

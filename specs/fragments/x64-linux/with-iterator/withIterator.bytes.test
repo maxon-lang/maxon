@@ -28,10 +28,38 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 56
-    x64.leaRegRdata rcx, [rip + __str_rec_2]  ; "abc"
+    x64.leaRegRdata rax, [rip + __str_rec_2]  ; "abc"
     x64.movRegImm32 rbx, 0
-    x64.callDirect String.bytes
+  __il_body#12:
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.leaRegRegImm32 rcx, r13, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.leaRegRegImm32 r15, r14, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r13
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+  __il_body#14:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r12 + 0], r8
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_decref
+  __il_cont#11:
     x64.movRegReg rcx, r12
     x64.callDirect ByteView.createIterator
     x64.movRegReg r13, r8
@@ -40,19 +68,19 @@ func @main {
     x64.callDirect __destruct_ByteView
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r14, 0
-    x64.jcc notEqual, forjoin
-  forhdr:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, forexit
-  __il_body:
+    x64.jcc equal, forhdr
+    x64.jmp forjoin
+  __il_body#8:
     x64.loadRegBaseDisp.word64 rax, [r13 + 16]
-  __il_cont:
+  __il_cont#7:
     x64.leaRegRegReg rbx, rbx, rax
   forstep:
     x64.movRegReg rcx, r13
     x64.callDirect ByteIterator.advance
     x64.movRegReg rax, r10
-    x64.jmp forhdr
+  forhdr:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __il_body#8
   forexit:
     x64.movRegReg rcx, r13
     x64.callDirect __destruct_ByteIterator
@@ -86,19 +114,21 @@ func @main {
     x64.movRegReg rax, r14
     x64.callDirect __str_copy
     x64.leaRegRegReg rax, rbx, r14
-    x64.loadRegSlot rbx, slot2
-    x64.storeBaseDispReg.word64 [rbx + 0], r15
-    x64.loadRegSlot rax, slot1
-    x64.storeBaseDispReg.word64 [rbx + 8], rax
-    x64.movRegImm rax, 18446744073709551613
-    x64.storeBaseDispReg.word64 [rbx + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rax, slot2
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot1
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
     x64.loadRegSlot rcx, slot0
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, rbx
-    x64.callDirect print
-    x64.movRegReg rcx, rbx
+  __il_body#10:
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __write_stdout
+  __il_cont#9:
+    x64.loadRegSlot rcx, slot2
     x64.callDirect __str_decref
     x64.movRegImm32 r8, 0
     x64.epilogue 56

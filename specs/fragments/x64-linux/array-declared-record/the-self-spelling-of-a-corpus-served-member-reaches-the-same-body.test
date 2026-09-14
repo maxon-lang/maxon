@@ -52,15 +52,7 @@ func @Array.at {
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 rdx, 1000
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at the-self-spelling-of-a-corpus-served-member-reaches-the-same-body.test:17: Range check failed: value outside typealias 'Num'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc greater, __rc_panic
   __rc_ok:
     x64.loadRegBaseDisp.word64 rax, [rcx + 24]
     x64.cmpRegImm32 rax, 8
@@ -104,15 +96,7 @@ func @Array.at {
     x64.movRegReg rsi, r10
   __im_cont:
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, tryok
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at the-self-spelling-of-a-corpus-served-member-reaches-the-same-body.test:18: at: the caller checked the bound\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc notEqual, tryerr
   tryok:
     x64.movRegReg rcx, rbx
     x64.callDirect __retain_type_param
@@ -120,47 +104,19 @@ func @Array.at {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-}
-
-func @Array.headPlusTail {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-    x64.movRegImm32 rdx, 0
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rax, r12
-    x64.callDirect Array.at
-    x64.movRegReg r13, r8
-    x64.movRegImm32 rdx, 1
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rax, r12
-    x64.callDirect Array.at
-    x64.leaRegRegReg r8, r13, r8
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 r8, 1000
-    x64.jcc lessEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at the-self-spelling-of-a-corpus-served-member-reaches-the-same-body.test:22: Range check failed: value outside typealias 'Num'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at the-self-spelling-of-a-corpus-served-member-reaches-the-same-body.test:17: Range check failed: value outside typealias 'Num'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at the-self-spelling-of-a-corpus-served-member-reaches-the-same-body.test:18: at: the caller checked the bound\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -172,7 +128,8 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
+    x64.pushReg r13
+    x64.prologue 40
     x64.movRegImm32 rcx, 2
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
@@ -183,29 +140,52 @@ func @main {
     x64.movRegImm32 rdx, 12
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
-    x64.leaRegRdata rdx, [rip + __layout_Array_Num]
+    x64.leaRegRdata r12, [rip + __layout_Array_Num]
+  __il_body:
+    x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, rbx
-    x64.callDirect Array.headPlusTail
-    x64.movRegReg r12, r8
+    x64.movRegReg rax, r12
+    x64.callDirect Array.at
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect Array.at
+    x64.leaRegRegReg r12, r13, r8
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic#7
+  __rc_chk#8:
+    x64.cmpRegImm32 r12, 1000
+    x64.jcc greater, __rc_panic#7
+  __rc_chk#3:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc greater, __rc_panic#2
+  __rc_ok:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 r12, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at the-self-spelling-of-a-corpus-served-member-reaches-the-same-body.test:32: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg r8, r12
-    x64.epilogue 32
+  __rc_panic#7:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at the-self-spelling-of-a-corpus-served-member-reaches-the-same-body.test:22: Range check failed: value outside typealias 'Num'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at the-self-spelling-of-a-corpus-served-member-reaches-the-same-body.test:32: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

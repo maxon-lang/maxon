@@ -24,16 +24,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
-}
-
-func @pick {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-  __rc_ok:
-    x64.movRegImm r8, 18446744073709551516
-    x64.popReg rbp
-    x64.ret
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -77,15 +70,14 @@ func @main {
     x64.leaRegRdata rax, [rip + __str_rec_6]  ; " c="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot5, rcx
-    x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.storeSlotReg slot11, rax
-    x64.callDirect pick
-    x64.movRegReg r15, r8
+    x64.loadRegBaseDisp.word64 r15, [rax + 8]
+    x64.storeSlotReg slot11, r15
+  __il_cont#8:
     x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.storeSlotReg slot10, r8
-    x64.movRegReg rcx, r15
+    x64.movRegImm rcx, 18446744073709551516
     x64.movRegReg rdx, r8
     x64.callDirect __int_to_string
     x64.storeSlotReg slot4, r8
@@ -97,8 +89,7 @@ func @main {
     x64.leaRegRegReg rcx, r13, rbx
     x64.leaRegRegReg rcx, rcx, r14
     x64.leaRegRegReg rcx, rcx, r12
-    x64.loadRegSlot rdx, slot11
-    x64.leaRegRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rcx, rcx, r15
     x64.leaRegRegReg rcx, rcx, r8
     x64.leaRegRegReg rax, rcx, rax
     x64.storeSlotReg slot1, rax
@@ -145,23 +136,25 @@ func @main {
     x64.callDirect __str_copy
     x64.loadRegSlot rax, slot0
     x64.leaRegRegReg rax, rbx, rax
-    x64.loadRegSlot rbx, slot3
-    x64.storeBaseDispReg.word64 [rbx + 0], r15
-    x64.loadRegSlot rax, slot1
-    x64.storeBaseDispReg.word64 [rbx + 8], rax
-    x64.movRegImm rax, 18446744073709551613
-    x64.storeBaseDispReg.word64 [rbx + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rax, slot3
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot1
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
     x64.loadRegSlot rcx, slot8
     x64.callDirect __mm_decref
     x64.loadRegSlot rcx, slot6
     x64.callDirect __mm_decref
     x64.loadRegSlot rcx, slot10
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, rbx
-    x64.callDirect print
-    x64.movRegReg rcx, rbx
+  __il_body:
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __write_stdout
+  __il_cont#7:
+    x64.loadRegSlot rcx, slot3
     x64.callDirect __str_decref
     x64.movRegImm32 r8, 0
     x64.epilogue 136

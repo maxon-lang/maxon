@@ -18,24 +18,19 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @g {
-  entry:
-    arm64.prologue 16
-    arm64.leaRdata x0, __str_rec_1  ; "hi"
-    arm64.bl __str_retain
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 32
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.bl g
+  __il_body#3:
+    arm64.leaRdata x0, __str_rec_1  ; "hi"
+    arm64.bl __str_retain
     arm64.movRegReg x19, x0
+  __il_body#4:
     arm64.movRegReg x0, x19
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont:
     arm64.movImm x20, 0
     arm64.movRegReg x0, x19
     arm64.bl __str_decref

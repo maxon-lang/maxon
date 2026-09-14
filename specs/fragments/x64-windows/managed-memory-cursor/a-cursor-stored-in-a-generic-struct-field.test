@@ -39,7 +39,7 @@ function main() returns ExitCode
 	total = total + it.current()
 	try it.advance() otherwise return 97
 	total = total + it.current()
-	return total + it.index()
+	return ((total as Integer) + it.index()) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ---
@@ -50,6 +50,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @SeqIterator.create {
@@ -108,18 +111,6 @@ func @SeqIterator.current {
     x64.ret
 }
 
-func @SeqIterator.index {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.callDirect __managed_cursor_index
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
 func @SeqIterator.advance {
   entry:
     x64.pushReg rbp
@@ -165,7 +156,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
     x64.movRegReg rcx, rbx
-    x64.callDirect __mm_retain
+    x64.callDirect __managed_retain
     x64.movRegReg r12, r8
     x64.movRegReg rcx, r12
     x64.callDirect SeqIterator.create
@@ -236,31 +227,33 @@ func @main {
     x64.movRegReg rcx, r13
     x64.callDirect SeqIterator.current
     x64.leaRegRegReg r12, r12, r8
-    x64.movRegReg rcx, r13
-    x64.callDirect SeqIterator.index
+  __il_body:
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
+    x64.callDirect __managed_cursor_index
+  __il_cont:
     x64.leaRegRegReg r12, r12, r8
-    x64.movRegReg rcx, r13
-    x64.callDirect __destruct_SeqIterator_Byte
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r12, rax
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-cursor-stored-in-a-generic-struct-field.test:42: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_SeqIterator_Byte
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg r8, r12
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-cursor-stored-in-a-generic-struct-field.test:42: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12

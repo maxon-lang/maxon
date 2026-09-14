@@ -79,6 +79,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @exprType {
@@ -124,33 +127,6 @@ func @exprType {
   matchdead:
 }
 
-func @makeDirect {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegImm32 rcx, 24
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r12, r8
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r12 + 0], rax
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_incref
-    x64.storeBaseDispReg.word64 [r12 + 8], rbx
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r12 + 16], rax
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @tyLen {
   entry:
     x64.pushReg rbp
@@ -164,7 +140,7 @@ func @tyLen {
   matcharm#1:
     x64.loadRegBaseDisp.word64 rbx, [rcx + 8]
     x64.movRegReg rcx, rbx
-    x64.callDirect __mm_incref
+    x64.callDirect __managed_incref
     x64.loadRegBaseDisp.word64 r12, [rbx + 8]
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
@@ -176,139 +152,20 @@ func @tyLen {
   matcharm#2:
     x64.movRegImm32 r8, 0
   matchcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_ok:
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   matchdead:
-}
-
-func @makeFresh {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, ifcont
-  z:
-    x64.movRegImm32 rcx, 24
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegImm32 rax, 2
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r8 + 8], rax
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r8 + 16], rax
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at inlined-accessor-field-return-order.test:32: Range check failed: value outside typealias 'TokenId'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "hello"
-    x64.callDirect String.toByteArray
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 16
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r12, r8
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r12 + 0], rax
-    x64.storeBaseDispReg.word64 [r12 + 8], rbx
-    x64.movRegImm32 rcx, 24
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], r12
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r8 + 16], rax
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @walk {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.pushReg r15
-    x64.prologue 56
-    x64.movRegReg rbx, rcx
-    x64.movRegImm32 rcx, 24
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegImm32 rax, 2
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r8 + 8], rax
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r8 + 16], rax
-    x64.movRegImm32 r12, 0
-    x64.movRegImm32 rcx, 1
-    x64.movRegReg r13, r12
-    x64.movRegReg r12, r8
-  forhdr:
-    x64.storeSlotReg slot1, rcx
-    x64.cmpRegReg rcx, rbx
-    x64.jcc greater, forexit
-  loop:
-    x64.callDirect makeFresh
-    x64.movRegReg r14, r8
-    x64.cmpRegImm32 r13, 888
-    x64.jcc notEqual, ifcont
-  ret:
-    x64.movRegReg rcx, r12
-    x64.callDirect __destruct_Expr
-    x64.movRegReg r8, r14
-    x64.epilogue 56
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.movRegReg rcx, r14
-    x64.callDirect exprType
-    x64.movRegReg r15, r8
-    x64.movRegReg rcx, r15
-    x64.callDirect tyLen
-    x64.leaRegRegReg rax, r13, r8
-    x64.storeSlotReg slot0, rax
-    x64.movRegReg rcx, r15
-    x64.callDirect makeDirect
-    x64.movRegReg r13, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect __destruct_Expr
-    x64.movRegReg rcx, r15
-    x64.callDirect __destruct_Ty
-    x64.movRegReg rcx, r14
-    x64.callDirect __destruct_Expr
-  forstep:
-    x64.loadRegSlot rax, slot1
-    x64.leaRegRegImm32 rcx, rax, 1
-    x64.loadRegSlot rax, slot0
-    x64.movRegReg r12, r13
-    x64.movRegReg r13, rax
-    x64.jmp forhdr
-  forexit:
-    x64.movRegReg r8, r12
-    x64.epilogue 56
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -322,39 +179,148 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
     x64.prologue 40
-    x64.movRegImm32 rcx, 5
-    x64.callDirect walk
+  __rc_ok#12:
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 2
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 8], rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 16], rax
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 1
+    x64.movRegReg r13, rbx
     x64.movRegReg rbx, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect exprType
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect tyLen
-    x64.movRegReg r13, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect __destruct_Ty
-    x64.movRegReg rcx, rbx
-    x64.callDirect __destruct_Expr
-    x64.cmpRegImm32 r13, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r13, rax
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at inlined-accessor-field-return-order.test:72: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.jmp forhdr
+  ifcont#19:
+    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "hello"
+  __il_body#23:
+    x64.movRegImm32 rdx, 0
+  __il_body#27:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+  __il_cont#26:
+    x64.callDirect __managed_slice
+    x64.movRegReg r14, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at String.maxon:157: String.toByteArray: slice 0..byteLength() is in bounds by construction\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg r8, r13
+  tryok:
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_retain
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+  __il_cont#22:
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], r15
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r15 + 0], rax
+    x64.storeBaseDispReg.word64 [r15 + 8], r14
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r15 + 16], rax
+  __il_cont#16:
+    x64.cmpRegImm32 r13, 888
+    x64.jcc notEqual, ifcont#11
+  ret:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Expr
+    x64.jmp __il_cont#4
+  ifcont#11:
+    x64.movRegReg rcx, r15
+    x64.callDirect exprType
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect tyLen
+    x64.leaRegRegReg rax, r13, r8
+    x64.storeSlotReg slot0, rax
+  __il_body#15:
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r13 + 0], rax
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r13 + 8], r14
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r13 + 16], rax
+  __il_cont#14:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Expr
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_Ty
+    x64.movRegReg rcx, r15
+    x64.callDirect __destruct_Expr
+  forstep:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.loadRegSlot rax, slot0
+    x64.movRegReg rbx, r13
+    x64.movRegReg r13, rax
+  forhdr:
+    x64.cmpRegImm32 r12, 5
+    x64.jcc lessEqual, ifcont#19
+  forexit:
+    x64.movRegReg r15, rbx
+  __il_cont#4:
+    x64.movRegReg rcx, r15
+    x64.callDirect exprType
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect tyLen
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok#1:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Ty
+    x64.movRegReg rcx, r15
+    x64.callDirect __destruct_Expr
+    x64.movRegReg r8, r12
     x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at inlined-accessor-field-return-order.test:72: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx

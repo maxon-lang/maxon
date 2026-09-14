@@ -51,6 +51,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @Item.create {
@@ -70,69 +73,18 @@ func @Item.create {
     x64.ret
 }
 
-func @churn {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.pushReg r15
-    x64.prologue 16
-    x64.leaRegRegImm32 rax, rcx, 1
-    x64.leaRegRegImm32 rdx, rcx, 2
-    x64.leaRegRegImm32 rsi, rcx, 3
-    x64.leaRegRegImm32 rdi, rcx, 4
-    x64.leaRegRegImm32 r8, rcx, 5
-    x64.leaRegRegImm32 r9, rcx, 6
-    x64.leaRegRegImm32 r10, rcx, 7
-    x64.leaRegRegImm32 r11, rcx, 8
-    x64.leaRegRegImm32 rbx, rcx, 9
-    x64.leaRegRegImm32 r12, rcx, 10
-    x64.leaRegRegImm32 r13, rcx, 11
-    x64.leaRegRegImm32 r14, rcx, 12
-    x64.leaRegRegImm32 r15, rcx, 13
-    x64.storeSlotReg slot0, r15
-    x64.leaRegRegImm32 r15, rcx, 14
-    x64.storeSlotReg slot1, r15
-    x64.leaRegRegImm32 r15, rcx, 15
-    x64.leaRegRegImm32 rcx, rcx, 16
-    x64.leaRegRegReg rax, rax, rdx
-    x64.leaRegRegReg rax, rax, rsi
-    x64.leaRegRegReg rax, rax, rdi
-    x64.leaRegRegReg rax, rax, r8
-    x64.leaRegRegReg rax, rax, r9
-    x64.leaRegRegReg rax, rax, r10
-    x64.leaRegRegReg rax, rax, r11
-    x64.leaRegRegReg rax, rax, rbx
-    x64.leaRegRegReg rax, rax, r12
-    x64.leaRegRegReg rax, rax, r13
-    x64.leaRegRegReg rax, rax, r14
-    x64.loadRegSlot rdx, slot0
-    x64.leaRegRegReg rax, rax, rdx
-    x64.loadRegSlot rdx, slot1
-    x64.leaRegRegReg rax, rax, rdx
-    x64.leaRegRegReg rax, rax, r15
-    x64.leaRegRegReg r8, rax, rcx
-    x64.epilogue 16
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @fill {
+func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 32
-    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __mm_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+  __il_body:
     x64.movRegImm32 rcx, 42
     x64.callDirect Item.create
     x64.movRegReg r12, r8
@@ -143,53 +95,25 @@ func @fill {
     x64.callDirect __managed_push
     x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @main {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
-    x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mm_decref]
-    x64.callDirect __managed_create
-    x64.movRegReg rbx, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect fill
-    x64.movRegImm32 rcx, 1000
-    x64.callDirect churn
-    x64.movRegReg r12, r8
+  __il_cont:
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 0
     x64.jcc belowEqual, __im_slow
   __im_load:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseIndexScale.word64 r12, [rax + rdx*8 + 0]
     x64.movRegImm32 rax, 0
     x64.loadRegBaseDisp.word64 rcx, [rbx + 40]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, critsplit#14
+    x64.jcc equal, critsplit#18
   __im_empty:
-    x64.cmpRegImm32 r13, 0
-    x64.jcc notEqual, critsplit#15
-  __im_slow:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
-    x64.movRegReg r13, r8
-    x64.jmp __im_cont
-  critsplit#15:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc equal, __im_slow
+  critsplit#19:
     x64.movRegReg r10, rax
     x64.jmp __im_cont
-  critsplit#14:
+  critsplit#18:
     x64.movRegReg r10, rax
   __im_cont:
     x64.cmpRegImm32 r10, 0
@@ -198,43 +122,40 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect Item.create
     x64.movRegReg rcx, r8
-    x64.jmp trycont
+    x64.jmp ternarytrue
   tryok:
-    x64.movRegReg rcx, r13
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_incref
-    x64.movRegReg rcx, r13
-  trycont:
-    x64.cmpRegImm32 r12, 0
-    x64.jcc lessEqual, ternaryfalse
+    x64.movRegReg rcx, r12
   ternarytrue:
     x64.loadRegBaseDisp.word64 r12, [rcx + 0]
-    x64.jmp matchcont
-  ternaryfalse:
-    x64.movRegImm32 r12, 1
   matchcont:
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r12, rax
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at escape-into-a-container.test:44: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc greater, __rc_panic
   __rc_ok:
     x64.callDirect __mm_decref
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.movRegReg r12, r8
+    x64.jmp __im_cont
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at escape-into-a-container.test:44: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

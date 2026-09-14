@@ -50,53 +50,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Cell.make {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @Cell.get {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
-    arm64.bl __retain_type_param
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @Holder.make {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.storeBaseDispReg.word64 [x20 + 0], x19
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @Holder.holds {
   entry:
     arm64.prologue 48
@@ -108,9 +61,12 @@ func @Holder.holds {
     arm64.movRegReg x20, x2
     arm64.movRegReg x21, x3
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.movRegReg x1, x20
-    arm64.bl Cell.get
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.movRegReg x0, x20
+    arm64.bl __retain_type_param
     arm64.movRegReg x22, x0
+  __il_cont:
     arm64.movRegReg x0, x22
     arm64.movRegReg x1, x19
     arm64.loadRegBaseDisp.word64 x16, [x21 + 24]
@@ -133,11 +89,26 @@ func @main {
     arm64.prologue 32
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, 7
-    arm64.bl Cell.make
-    arm64.leaRdata x1, __witness_int.Equatable
-    arm64.bl Holder.make
+    arm64.movImm x19, 7
+  __il_body#7:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+  __il_cont#6:
+    arm64.leaRdata x0, __witness_int.Equatable
+  __il_body#8:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
     arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x19 + 0], x20
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+  __il_cont#5:
     arm64.movImm x1, 7
     arm64.leaRdata x2, __layout_Holder_Num
     arm64.leaRdata x3, __witness_int.Equatable

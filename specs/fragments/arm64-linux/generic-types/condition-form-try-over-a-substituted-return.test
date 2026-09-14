@@ -23,7 +23,7 @@ function main() returns ExitCode
 	let bx = AlphaBox.create(Alpha.create(9))
 	if let got = try bx.fetch() 'ok'
 		print("v={got.a}\n")
-	end 'ok' else (e) 'bad'
+	end 'ok' else 'bad'
 		print("boom\n")
 	end 'bad'
 	return 0
@@ -36,47 +36,6 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
-}
-
-func @Alpha.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.cmp x19, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x19, 125
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_6  ; "panic at condition-form-try-over-a-substituted-return.test:8: Range check failed: value outside typealias 'Integer'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-  __rc_ok:
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @Box.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
 }
 
 func @Box.fetch {
@@ -104,19 +63,29 @@ func @main {
     arm64.storeSlotReg slot3, x21
     arm64.storeSlotReg slot2, x20
     arm64.storeSlotReg slot1, x19
-    arm64.movImm x0, 9
-    arm64.bl Alpha.create
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.movRegReg x0, x19
-    arm64.bl Box.create
+    arm64.movImm x19, 9
+  __rc_ok:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
-    arm64.storeSlotReg slot0, x20
-    arm64.movRegReg x0, x19
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+  __il_cont#5:
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_own
+    arm64.movRegReg x19, x0
+  __il_body:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.storeSlotReg slot0, x21
+    arm64.storeBaseDispReg.word64 [x21 + 0], x19
+  __il_cont#4:
+    arm64.movRegReg x0, x20
     arm64.bl __mm_decref
     arm64.leaRdata x1, __layout_Box_Alpha
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x21
     arm64.bl Box.fetch
     arm64.movRegReg x19, x0
     arm64.cmp x9, 0
@@ -175,7 +144,6 @@ func @main {
     arm64.bl __mm_decref
     arm64.b ifcont
   ifelse:
-    arm64.sub x0, x9, 1
     arm64.leaRdata x0, __str_rec_5  ; "boom\x0a"
     arm64.bl print
   ifcont:

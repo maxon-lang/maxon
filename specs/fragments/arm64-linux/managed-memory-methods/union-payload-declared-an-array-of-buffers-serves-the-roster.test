@@ -28,18 +28,41 @@ data {
 func @main {
   entry:
     arm64.prologue 48
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
     arm64.movImm x0, 8
     arm64.leaFuncAddr x1, __managed_decref
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.leaRdata x0, __str_rec_1  ; "hello"
-    arm64.bl String.toByteArray
-    arm64.movRegReg x1, x0
+  __il_body#16:
+    arm64.movImm x1, 0
+  __il_body#20:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+  __il_cont#19:
+    arm64.bl __managed_slice
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#17
+  tryerr#18:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at String.maxon:157: String.toByteArray: slice 0..byteLength() is in bounds by construction\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.epilogue 48
+    arm64.ret
+  tryok#17:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_retain
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+  __il_cont#15:
     arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
     arm64.bl __managed_push
     arm64.movImm x0, 16
     arm64.movImm x1, 0
@@ -48,85 +71,69 @@ func @main {
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x20 + 0], x0
     arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.storeBaseDispReg.word64 [x20 + 8], x19
+    arm64.bl __managed_retain
+    arm64.storeBaseDispReg.word64 [x20 + 8], x0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.cmp x0, 0
     arm64.b.ne matchnext
   matcharm#1:
-    arm64.loadRegBaseDisp.word64 x21, [x20 + 8]
-    arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x20 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.movImm x1, 0
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
-    arm64.cmp x0, 0
+    arm64.storeBaseDispReg.word64 [x20 + 8], x1
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x2, 0
     arm64.b.ls __im_slow
   __im_load:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.movImm x2, 0
-    arm64.loadRegBaseDisp.word64 x3, [x21 + 40]
-    arm64.cmp x3, 0
-    arm64.b.eq critsplit#15
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.movImm x3, 0
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
+    arm64.cmp x4, 0
+    arm64.b.eq critsplit#21
   __im_empty:
-    arm64.cmp x0, 0
-    arm64.b.ne critsplit#16
-  __im_slow:
-    arm64.movRegReg x0, x21
-    arm64.bl __managed_get
+    arm64.cmp x2, 0
+    arm64.b.eq __im_slow
+  critsplit#22:
+    arm64.movRegReg x1, x2
+    arm64.movRegReg x9, x3
     arm64.b __im_cont
-  critsplit#16:
-    arm64.movRegReg x9, x2
-    arm64.b __im_cont
-  critsplit#15:
-    arm64.movRegReg x9, x2
+  critsplit#21:
+    arm64.movRegReg x1, x2
+    arm64.movRegReg x9, x3
   __im_cont:
     arm64.cmp x9, 0
-    arm64.b.eq tryok
-  tryerr:
-    arm64.movImm x22, 1
-    arm64.movRegReg x0, x21
+    arm64.b.eq tryok#2
+  tryerr#3:
+    arm64.movImm x21, 1
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
     arm64.bl __destruct_Held
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.movRegReg x0, x22
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
     arm64.epilogue 48
     arm64.ret
-  tryok:
-    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
-    arm64.cmp x22, 0
+  tryok#2:
+    arm64.loadRegBaseDisp.word64 x21, [x1 + 8]
+    arm64.cmp x21, 0
     arm64.b.lt __rc_panic
   __rc_chk:
-    arm64.cmp x22, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_3  ; "panic at union-payload-declared-an-array-of-buffers-serves-the-roster.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.ret
+    arm64.cmp x21, 255
+    arm64.b.gt __rc_panic
   __rc_ok:
-    arm64.movRegReg x0, x21
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
     arm64.bl __destruct_Held
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.movRegReg x0, x22
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
     arm64.epilogue 48
     arm64.ret
   matchnext:
@@ -139,12 +146,26 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x21
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
     arm64.epilogue 48
     arm64.ret
   matchdead:
   matchcont:
+  __im_slow:
+    arm64.storeSlotReg slot0, x0
+    arm64.bl __managed_get
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.b __im_cont
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at union-payload-declared-an-array-of-buffers-serves-the-roster.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.epilogue 48
+    arm64.ret
 }

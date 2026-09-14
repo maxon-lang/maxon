@@ -52,16 +52,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Opaque.create {
-  entry:
-    arm64.prologue 16
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @Holder.create {
   entry:
     arm64.prologue 32
@@ -76,18 +66,6 @@ func @Holder.create {
     arm64.ret
 }
 
-func @Holder.beats {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x16, [x2 + 24]
-    arm64.blr x16
-    arm64.cmp x0, 2
-    arm64.cset x0, eq
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 48
@@ -97,11 +75,14 @@ func @main {
     arm64.movImm x0, 7
     arm64.leaRegSlot x19, slot0
     arm64.storeBaseDispReg.word64 [x19 + 0], x0
-    arm64.bl Opaque.create
+  __il_body#10:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
+  __il_cont#9:
     arm64.movRegReg x0, x20
-    arm64.bl __mm_incref
-    arm64.movRegReg x0, x20
+    arm64.bl __mm_own
     arm64.bl Holder.create
     arm64.movRegReg x21, x0
     arm64.movRegReg x0, x20
@@ -109,11 +90,16 @@ func @main {
     arm64.movImm x20, 0
     arm64.movImm x1, 3
     arm64.leaRdata x2, __witness_int.Comparable
-    arm64.movRegReg x0, x19
-    arm64.bl Holder.beats
+  __il_body#11:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x16, [x2 + 24]
+    arm64.blr x16
+    arm64.cmp x0, 2
+    arm64.cset x0, eq
+  __il_cont#8:
     arm64.cbz x0, critsplit
   cmp:
-    arm64.movImm x0, 1
+    arm64.add x0, x20, 1
     arm64.b fb
   critsplit:
     arm64.movRegReg x0, x20
@@ -122,20 +108,6 @@ func @main {
   ifcont:
     arm64.movRegReg x0, x21
     arm64.bl __destruct_Holder_Opaque
-    arm64.cmp x19, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x19, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at an-unconstrained-overload-of-a-conditional-extension-method-is-reachable.test:43: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.epilogue 48
-    arm64.ret
   __rc_ok:
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1

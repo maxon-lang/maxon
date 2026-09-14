@@ -13,9 +13,9 @@ type Inner uses T
 end 'Inner'
 
 type Outer uses T
-	typealias OArr = Array with T
-	var items as OArr
-	export static function create(items OArr) returns Self
+	typealias TArr = Array with T
+	var items as TArr
+	export static function create(items TArr) returns Self
 		return Self{items: items}
 	end 'create'
 	export function wrap() returns Inner
@@ -41,31 +41,6 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
-}
-
-func @Inner.make {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_incref
-    x64.storeBaseDispReg.word64 [r12 + 0], rbx
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
 }
 
 func @Inner.first {
@@ -134,48 +109,6 @@ func @Inner.first {
     x64.ret
 }
 
-func @Outer.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_incref
-    x64.storeBaseDispReg.word64 [r12 + 0], rbx
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Outer.wrap {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.loadRegBaseDisp.word64 rbx, [rcx + 0]
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_incref
-    x64.movRegReg rcx, rbx
-    x64.callDirect Inner.make
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -193,33 +126,57 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
     x64.movRegReg rcx, rbx
-    x64.callDirect __mm_incref
-    x64.movRegReg rcx, rbx
-    x64.callDirect Outer.create
+    x64.callDirect __managed_retain
     x64.movRegReg r12, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect Outer.wrap
+  __il_body#8:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
     x64.movRegReg r13, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_retain
+    x64.storeBaseDispReg.word64 [r13 + 0], r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+  __il_body#10:
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
+    x64.callDirect __managed_retain
+    x64.movRegReg r12, r8
+  __il_body#12:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_retain
+    x64.storeBaseDispReg.word64 [r14 + 0], r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+  __il_cont:
     x64.leaRegRdata rdx, [rip + __layout_Inner_Integer]
-    x64.movRegReg rcx, r13
+    x64.movRegReg rcx, r14
     x64.callDirect Inner.first
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
   tryerr:
-    x64.movRegImm32 r14, 0
+    x64.movRegImm32 r12, 0
     x64.jmp trycont
   tryok:
-    x64.movRegReg r14, r8
+    x64.movRegReg r12, r8
   trycont:
-    x64.cmpRegImm32 r14, 0
+    x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
   __rc_chk:
-    x64.cmpRegImm32 r14, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at bare-generic-name-in-a-generic-body.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.cmpRegImm32 r12, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_Inner_Integer
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_Outer_Integer
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
@@ -227,14 +184,10 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg rcx, r13
-    x64.callDirect __destruct_Inner_Integer
-    x64.movRegReg rcx, r12
-    x64.callDirect __destruct_Outer_Integer
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-    x64.movRegReg r8, r14
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at bare-generic-name-in-a-generic-body.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13

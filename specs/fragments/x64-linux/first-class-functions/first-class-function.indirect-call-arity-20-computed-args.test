@@ -81,7 +81,7 @@ func @sum20 {
     x64.ret
 }
 
-func @callIt {
+func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
@@ -90,40 +90,27 @@ func @callIt {
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 216
-    x64.storeSlotReg slot0, rcx
-    x64.storeSlotReg slot7, rax
-    x64.leaRegRegImm32 rax, rdx, 1
-    x64.storeSlotReg slot6, rax
-    x64.leaRegRegImm32 rax, rdx, 2
-    x64.storeSlotReg slot5, rax
-    x64.leaRegRegImm32 rax, rdx, 3
-    x64.storeSlotReg slot4, rax
-    x64.leaRegRegImm32 rax, rdx, 4
-    x64.storeSlotReg slot3, rax
-    x64.leaRegRegImm32 rax, rdx, 5
-    x64.storeSlotReg slot2, rax
-    x64.leaRegRegImm32 rax, rdx, 6
-    x64.storeSlotReg slot1, rax
-    x64.leaRegRegImm32 rax, rdx, 7
-    x64.leaRegRegImm32 rcx, rdx, 8
-    x64.leaRegRegImm32 rsi, rdx, 9
-    x64.leaRegRegImm32 rdi, rdx, 10
-    x64.leaRegRegImm32 r8, rdx, 11
-    x64.leaRegRegImm32 r9, rdx, 12
-    x64.leaRegRegImm32 r10, rdx, 13
-    x64.leaRegRegImm32 r11, rdx, 14
-    x64.leaRegRegImm32 rbx, rdx, 15
-    x64.leaRegRegImm32 r12, rdx, 16
-    x64.leaRegRegImm32 r13, rdx, 17
-    x64.leaRegRegImm32 r14, rdx, 18
-    x64.leaRegRegImm32 r15, rdx, 19
-    x64.leaRegRegImm32 rdx, rdx, 20
+    x64.prologue 152
+    x64.leaRegFunc r8, [rip + __fnref_sum20]
+  __il_body:
+    x64.movRegImm32 rax, 7
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 9
+    x64.movRegImm32 rsi, 10
+    x64.movRegImm32 rdi, 11
+    x64.movRegImm32 r9, 12
+    x64.movRegImm32 r10, 13
+    x64.movRegImm32 r11, 14
+    x64.movRegImm32 rbx, 15
+    x64.movRegImm32 r12, 16
+    x64.movRegImm32 r13, 17
+    x64.movRegImm32 r14, 18
+    x64.movRegImm32 r15, 19
     x64.storeBaseDispReg.word64 [rsp + 32], rax
     x64.storeBaseDispReg.word64 [rsp + 40], rcx
-    x64.storeBaseDispReg.word64 [rsp + 48], rsi
-    x64.storeBaseDispReg.word64 [rsp + 56], rdi
-    x64.storeBaseDispReg.word64 [rsp + 64], r8
+    x64.storeBaseDispReg.word64 [rsp + 48], rdx
+    x64.storeBaseDispReg.word64 [rsp + 56], rsi
+    x64.storeBaseDispReg.word64 [rsp + 64], rdi
     x64.storeBaseDispReg.word64 [rsp + 72], r9
     x64.storeBaseDispReg.word64 [rsp + 80], r10
     x64.storeBaseDispReg.word64 [rsp + 88], r11
@@ -132,18 +119,25 @@ func @callIt {
     x64.storeBaseDispReg.word64 [rsp + 112], r13
     x64.storeBaseDispReg.word64 [rsp + 120], r14
     x64.storeBaseDispReg.word64 [rsp + 128], r15
-    x64.storeBaseDispReg.word64 [rsp + 136], rdx
-    x64.loadRegSlot rax, slot7
+    x64.movRegImm32 rax, 20
+    x64.storeBaseDispReg.word64 [rsp + 136], rax
+    x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rsp + 144], rax
-    x64.loadRegSlot rcx, slot6
-    x64.loadRegSlot rdx, slot5
-    x64.loadRegSlot rax, slot4
-    x64.loadRegSlot r9, slot3
-    x64.loadRegSlot rsi, slot2
-    x64.loadRegSlot rdi, slot1
-    x64.loadRegSlot rbx, slot0
-    x64.callReg rbx
-    x64.epilogue 216
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 2
+    x64.movRegImm32 rax, 3
+    x64.movRegImm32 r9, 4
+    x64.movRegImm32 rsi, 5
+    x64.movRegImm32 rdi, 6
+    x64.callReg r8
+  __il_cont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 152
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -151,31 +145,16 @@ func @callIt {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-}
-
-func @main {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.leaRegFunc rcx, [rip + __fnref_sum20]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 0
-    x64.callDirect callIt
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 r8, 255
-    x64.jcc lessEqual, __rc_ok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at first-class-function.indirect-call-arity-20-computed-args.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.epilogue 32
+    x64.epilogue 152
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }

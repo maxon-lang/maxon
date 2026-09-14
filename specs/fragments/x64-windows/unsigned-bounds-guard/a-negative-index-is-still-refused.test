@@ -51,6 +51,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -76,13 +79,7 @@ func @main {
     x64.movRegImm rdx, 18446744073709551615
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, -1
-    x64.jcc above, __im_load#34
-  __im_slow#33:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, ifcont#5
-    x64.jmp tryok#1
+    x64.jcc belowEqual, __im_slow#33
   __im_load#34:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.leaRegRegImm32 rax, rax, -8
@@ -145,23 +142,13 @@ func @main {
     x64.leaRegRegImm32 rsi, rcx, -24
     x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, __im_store
-  __im_slow#36:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_mem_set
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#13
+    x64.jcc notEqual, __im_slow#36
+    x64.jmp __im_store
   tryerr#14:
     x64.movRegImm rdx, 18446744073709551614
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, -2
-    x64.jcc above, __im_load#43
-  __im_slow#42:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, ifcont#19
-    x64.jmp tryok#15
+    x64.jcc belowEqual, __im_slow#42
   __im_load#43:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.leaRegRegImm32 rax, rax, -16
@@ -198,13 +185,7 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 0
-    x64.jcc above, __im_load#46
-  __im_slow#45:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, firstUnchanged
-    x64.jmp tryok#22
+    x64.jcc belowEqual, __im_slow#45
   __im_load#46:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -226,13 +207,7 @@ func @main {
     x64.movRegImm32 rdx, 2
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 2
-    x64.jcc above, __im_load#49
-  __im_slow#48:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, lastUnchanged
-    x64.jmp tryok#27
+    x64.jcc belowEqual, __im_slow#48
   __im_load#49:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.leaRegRegImm32 rax, rax, 16
@@ -284,4 +259,34 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __im_slow#33:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, ifcont#5
+    x64.jmp tryok#1
+  __im_slow#36:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_mem_set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#14
+    x64.jmp tryok#13
+  __im_slow#42:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, ifcont#19
+    x64.jmp tryok#15
+  __im_slow#45:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, firstUnchanged
+    x64.jmp tryok#22
+  __im_slow#48:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, lastUnchanged
+    x64.jmp tryok#27
 }

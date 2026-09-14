@@ -22,7 +22,7 @@ end 'B'
 function both(a A, b B) returns Integer
 	let x = match a 'x'
 		none gives 0
-		one(s) gives 5
+		one(s) gives 5 if s.byteLength() > 0 else 0
 	end 'x'
 	let y = match b 'y'
 		none gives 0
@@ -48,20 +48,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Body.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @both {
   entry:
     arm64.prologue 48
@@ -71,32 +57,42 @@ func @both {
     arm64.movRegReg x19, x1
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 0
-    arm64.b.ne matchnext#4
+    arm64.b.ne matchnext#7
   matcharm#1:
     arm64.movImm x20, 0
-    arm64.b matchcont#5
-  matchnext#4:
+    arm64.b matchcont#8
+  matchnext#7:
     arm64.cmp x1, 1
-    arm64.b.ne matchdead#3
+    arm64.b.ne matchdead#6
   matcharm#2:
     arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
     arm64.movRegReg x0, x20
     arm64.bl __mm_incref
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+  __il_cont:
+    arm64.cmp x0, 0
+    arm64.b.ls ternaryfalse
+  ternarytrue:
     arm64.movImm x21, 5
+    arm64.b matchcont#5
+  ternaryfalse:
+    arm64.movImm x21, 0
+  matchcont#5:
     arm64.movRegReg x0, x20
     arm64.bl __str_decref
     arm64.movRegReg x20, x21
-  matchcont#5:
+  matchcont#8:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.b.ne matchnext#9
-  matcharm#6:
+    arm64.b.ne matchnext#12
+  matcharm#9:
     arm64.movImm x0, 0
-    arm64.b matchcont#10
-  matchnext#9:
+    arm64.b matchcont#13
+  matchnext#12:
     arm64.cmp x0, 1
-    arm64.b.ne matchdead#8
-  matcharm#7:
+    arm64.b.ne matchdead#11
+  matcharm#10:
     arm64.loadRegBaseDisp.word64 x19, [x19 + 8]
     arm64.movRegReg x0, x19
     arm64.bl __mm_incref
@@ -104,15 +100,15 @@ func @both {
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
     arm64.movRegReg x0, x21
-  matchcont#10:
+  matchcont#13:
     arm64.add x0, x20, x0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.epilogue 48
     arm64.ret
-  matchdead#8:
-  matchdead#3:
+  matchdead#11:
+  matchdead#6:
 }
 
 func @main {
@@ -131,44 +127,49 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __str_retain
     arm64.storeBaseDispReg.word64 [x20 + 8], x0
-    arm64.movImm x0, 9
-    arm64.bl Body.create
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 16
+    arm64.movImm x19, 9
+  __il_body:
+    arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x21, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x21 + 0], x0
-    arm64.storeBaseDispReg.word64 [x21 + 8], x19
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x21
-    arm64.bl both
+    arm64.storeBaseDispReg.word64 [x21 + 0], x19
+  __il_cont:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
     arm64.movRegReg x19, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.storeBaseDispReg.word64 [x19 + 8], x21
     arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x21
+    arm64.movRegReg x1, x19
     arm64.bl both
-    arm64.add x19, x19, x0
-    arm64.cmp x19, 0
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl both
+    arm64.add x21, x21, x0
+    arm64.cmp x21, 0
     arm64.b.lt __rc_panic
   __rc_chk:
-    arm64.cmp x19, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at two-borrowed-unions-a-string-one-and-a-struct-one.test:39: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
+    arm64.cmp x21, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_B
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_A
+    arm64.movRegReg x0, x21
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.epilogue 48
     arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x21
-    arm64.bl __destruct_B
-    arm64.movRegReg x0, x20
-    arm64.bl __destruct_A
-    arm64.movRegReg x0, x19
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at two-borrowed-unions-a-string-one-and-a-struct-one.test:39: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

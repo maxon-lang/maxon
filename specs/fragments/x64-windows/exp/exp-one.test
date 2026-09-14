@@ -6,28 +6,87 @@ end 'main'
 ---
 ExitCode: 2
 ---
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+}
+
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movsdRegRip xmm0, [rip + __fconst_1]
-    x64.callDirect Math.exp
-    x64.cvttsd2siRegReg r8, xmm0
+  ifcont:
+    x64.movRegImm32 rax, 0
+    x64.jmp whilehdr#14
+  reduce:
+    x64.movsdRegRip xmm1, [rip + __fconst_2]
+    x64.divsdRegReg xmm0, xmm0, xmm1
+    x64.leaRegRegImm32 rax, rax, 1
+  whilehdr#14:
+    x64.movsdRegRip xmm1, [rip + __fconst_1]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc above, reduce
+  whileexit#16:
+    x64.movsdRegRip xmm1, [rip + __fconst_1]
+    x64.movsdRegRip xmm2, [rip + __fconst_1]
+    x64.movsdRegRip xmm3, [rip + __fconst_1]
+    x64.movsdRegRip xmm4, [rip + __fconst_20]
+    x64.jmp whilehdr#17
+  series:
+    x64.mulsdRegReg xmm1, xmm1, xmm0
+    x64.movsdRegRip xmm5, [rip + __fconst_0]
+    x64.ucomisdRegReg xmm3, xmm5
+    x64.setccReg notEqual, rcx
+    x64.setccReg parity, rdx
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg equal, rsi
+    x64.divsdRegReg xmm1, xmm1, xmm3
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, tryerr
+  tryok:
+    x64.addsdRegReg xmm2, xmm2, xmm1
+    x64.movsdRegRip xmm5, [rip + __fconst_1]
+    x64.addsdRegReg xmm3, xmm3, xmm5
+  whilehdr#17:
+    x64.ucomisdRegReg xmm4, xmm3
+    x64.jcc above, series
+  whileexit#19:
+    x64.movRegImm32 rcx, 0
+    x64.jmp forhdr
+  square:
+    x64.mulsdRegReg xmm2, xmm2, xmm2
+  forstep:
+    x64.leaRegRegImm32 rcx, rcx, 1
+  forhdr:
+    x64.cmpRegReg rcx, rax
+    x64.jcc less, square
+  __il_cont:
+    x64.cvttsd2siRegReg r8, xmm2
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at exp-one.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at Math.maxon:234: exp series divisor k is >= 1\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at exp-one.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

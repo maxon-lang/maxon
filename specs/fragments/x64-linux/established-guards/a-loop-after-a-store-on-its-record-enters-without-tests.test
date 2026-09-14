@@ -61,31 +61,30 @@ func @carry {
     x64.leaRegRegImm32 rax, rdi, 8
     x64.storeBaseDispReg.word64 [rax + 0], rsi
   tryok#1:
-    x64.movRegImm32 rax, 0
-    x64.movRegImm32 rsi, 1
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 rax, 1
   __us_test#46:
-    x64.loadRegBaseDisp.word64 rdi, [rcx + 8]
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
   __us_test#47:
-    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdi, [rcx + 0]
     x64.jmp forhdr
   __rc_ok:
-    x64.cmpRegReg rsi, rdi
+    x64.cmpRegReg rax, rsi
     x64.jcc aboveEqual, __im_slow#42
   __im_load:
-    x64.loadRegBaseIndexScale.word64 r9, [r8 + rsi*8 + 0]
+    x64.loadRegBaseIndexScale.word64 r9, [rdi + rax*8 + 0]
   tryok#40:
-    x64.leaRegRegReg rax, rax, r9
-    x64.leaRegRegImm32 rax, rax, 1
+    x64.leaRegRegReg r8, r8, r9
+    x64.leaRegRegImm32 r8, r8, 1
     x64.leaRegRegImm32 r9, r9, 1
   __im_store#35:
-    x64.storeBaseIndexScaleReg.word64 [r8 + rsi*8 + 0], r9
+    x64.storeBaseIndexScaleReg.word64 [rdi + rax*8 + 0], r9
   forstep:
-    x64.leaRegRegImm32 rsi, rsi, 1
+    x64.leaRegRegImm32 rax, rax, 1
   forhdr:
-    x64.cmpRegReg rsi, rdx
+    x64.cmpRegReg rax, rdx
     x64.jcc less, __rc_ok
   forexit:
-    x64.movRegReg r8, rax
     x64.epilogue 80
     x64.popReg rbp
     x64.ret
@@ -113,7 +112,7 @@ func @carry {
     x64.storeSlotReg slot3, rsi
     x64.storeSlotReg slot4, rdi
     x64.storeSlotReg slot5, r8
-    x64.movRegReg rdx, rsi
+    x64.movRegReg rdx, rax
     x64.callDirect __managed_get
     x64.movRegReg r9, r8
     x64.loadRegSlot rax, slot2

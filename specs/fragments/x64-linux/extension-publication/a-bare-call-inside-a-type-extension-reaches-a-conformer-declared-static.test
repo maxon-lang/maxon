@@ -29,22 +29,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Box.twin {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 16
-    x64.movRegImm32 rax, 7
-    x64.leaRegSlot rdx, slot0
-    x64.storeBaseDispReg.word64 [rdx + 0], rax
-    x64.loadRegBaseDisp.word64 rax, [rdx + 0]
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.leaRegRegReg r8, rax, rcx
-    x64.epilogue 16
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -53,20 +37,27 @@ func @main {
     x64.movRegImm32 rax, 4
     x64.leaRegSlot rcx, slot0
     x64.storeBaseDispReg.word64 [rcx + 0], rax
-    x64.callDirect Box.twin
+  __il_body:
+    x64.movRegImm32 rax, 7
+    x64.leaRegSlot rdx, slot1
+    x64.storeBaseDispReg.word64 [rdx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [rdx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.leaRegRegReg r8, rax, rcx
+  __il_cont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-bare-call-inside-a-type-extension-reaches-a-conformer-declared-static.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.jcc greater, __rc_panic
+  __rc_ok:
     x64.epilogue 48
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-bare-call-inside-a-type-extension-reaches-a-conformer-declared-static.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 48
     x64.popReg rbp
     x64.ret

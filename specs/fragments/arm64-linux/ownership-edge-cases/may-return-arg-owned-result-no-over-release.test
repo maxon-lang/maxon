@@ -44,45 +44,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @pickOr {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x16, 999999
-    arm64.cmp x19, x16
-    arm64.b.ls ifcont#2
-  never:
-    arm64.movImm x0, 16
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movImm x1, 0
-    arm64.storeBaseDispReg.word64 [x0 + 0], x1
-    arm64.movImm x1, 0
-    arm64.storeBaseDispReg.word64 [x0 + 8], x1
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-  ifcont#2:
-    arm64.cbz x1, ifcont#4
-  named:
-    arm64.movImm x0, 16
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movImm x1, 2
-    arm64.storeBaseDispReg.word64 [x0 + 0], x1
-    arm64.storeBaseDispReg.word64 [x0 + 8], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-  ifcont#4:
-    arm64.movRegReg x0, x2
-    arm64.bl __mm_retain
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @tagCode {
   entry:
     arm64.prologue 48
@@ -91,6 +52,9 @@ func @tagCode {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.movRegReg x20, x1
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic#9
+  __rc_ok#8:
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -99,11 +63,36 @@ func @tagCode {
     arm64.storeBaseDispReg.word64 [x21 + 0], x0
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x21 + 8], x0
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
-    arm64.movRegReg x2, x21
-    arm64.bl pickOr
+  __il_body:
+    arm64.movImm x16, 999999
+    arm64.cmp x19, x16
+    arm64.b.ls ifcont#14
+  never:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.movRegReg x19, x0
+    arm64.b __il_cont
+  ifcont#14:
+    arm64.cbz x20, ifcont#16
+  named:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movImm x1, 2
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.storeBaseDispReg.word64 [x0 + 8], x19
+    arm64.movRegReg x19, x0
+    arm64.b __il_cont
+  ifcont#16:
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_retain
+    arm64.movRegReg x19, x0
+  __il_cont:
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
@@ -126,6 +115,9 @@ func @tagCode {
   matchcont:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic#11
+  __rc_ok#10:
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -133,6 +125,24 @@ func @tagCode {
     arm64.epilogue 48
     arm64.ret
   matchdead:
+  __rc_panic#9:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at may-return-arg-owned-result-no-over-release.test:20: Range check failed: value outside typealias 'N'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic#11:
+    arm64.leaRdata x0, __str_blob_7  ; "panic at may-return-arg-owned-result-no-over-release.test:22: Range check failed: value outside typealias 'N'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
 }
 
 func @main {
@@ -203,8 +213,10 @@ func @main {
     arm64.storeBaseDispReg.word64 [x26 + 24], x0
     arm64.movRegReg x0, x22
     arm64.bl __mm_decref
+  __il_body:
     arm64.movRegReg x0, x26
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont:
     arm64.movRegReg x0, x26
     arm64.bl __str_decref
     arm64.movImm x0, 0

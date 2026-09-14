@@ -45,7 +45,12 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
+    arm64.prologue 96
+    arm64.storeSlotReg slot8, x27
+    arm64.storeSlotReg slot7, x26
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
     arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
@@ -62,10 +67,9 @@ func @main {
     arm64.bl __managed_push
     arm64.movImm x20, 0
     arm64.movImm x21, 0
-  forhdr#1:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x21, x0
-    arm64.b.ge forexit#4
+  __us_test:
+    arm64.loadRegBaseDisp.word64 x22, [x19 + 8]
+    arm64.b forhdr#1
   ownLoop:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
@@ -73,53 +77,99 @@ func @main {
     arm64.add x20, x20, x0
   forstep#3:
     arm64.add x21, x21, 1
-    arm64.b forhdr#1
+  forhdr#1:
+    arm64.cmp x21, x22
+    arm64.b.lt ownLoop
   forexit#4:
-    arm64.leaRdata x0, __str_rec_2  ; "a,bb,ccc"
-    arm64.leaRdata x1, __str_rec_3  ; ","
-    arm64.bl String.split
-    arm64.movRegReg x21, x0
-    arm64.movImm x22, 0
-  forhdr#5:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
-    arm64.cmp x22, x0
-    arm64.b.ge forexit#8
-  librarysLoop:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
-    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x22*8 + 0]
-  __il_body:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.cmp x1, 0
-    arm64.b.ge __rc_ok#15
-  __il_slow:
-    arm64.bl String.byteLength
-    arm64.b __il_cont
-  __rc_ok#15:
-    arm64.movRegReg x0, x1
-  __il_cont:
-    arm64.add x20, x20, x0
-  forstep#7:
-    arm64.add x22, x22, 1
-    arm64.b forhdr#5
-  forexit#8:
+    arm64.leaRdata x21, __str_rec_2  ; "a,bb,ccc"
+    arm64.leaRdata x22, __str_rec_3  ; ","
+  __il_body#14:
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __str_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x23, x0
+  __il_body#28:
+    arm64.loadRegBaseDisp.word64 x24, [x22 + 8]
+  __il_cont#27:
+    arm64.cmp x24, 0
+    arm64.b.ne __il_body#30
+  __il_body#24:
+    arm64.movImm x1, 0
+  __il_body#32:
+    arm64.loadRegBaseDisp.word64 x2, [x21 + 8]
+  __il_cont#31:
+    arm64.loadRegBaseDisp.byte x3, [x21 + 48]
     arm64.movRegReg x0, x21
+    arm64.bl String.sliceBytes
+    arm64.movRegReg x1, x0
+  __il_cont#23:
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_push
+    arm64.b __il_cont#13
+  __il_body#30:
+    arm64.loadRegBaseDisp.word64 x25, [x21 + 8]
+  __il_cont#29:
+    arm64.movImm x26, 0
+    arm64.b whilehdr
+  search:
+    arm64.sub x2, x25, x26
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x26
+    arm64.movRegReg x3, x22
+    arm64.bl findIn
+    arm64.cmp x9, 0
+    arm64.b.ne whileexit
+  try_find:
+    arm64.add x27, x26, x0
+    arm64.loadRegBaseDisp.byte x3, [x21 + 48]
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x26
+    arm64.movRegReg x2, x27
+    arm64.bl String.sliceBytes
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_push
+    arm64.add x0, x27, x24
+  ifcont:
+    arm64.movRegReg x26, x0
+  whilehdr:
+    arm64.sub x0, x25, x24
+    arm64.cmp x26, x0
+    arm64.b.le search
+  whileexit:
+    arm64.loadRegBaseDisp.byte x3, [x21 + 48]
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x26
+    arm64.movRegReg x2, x25
+    arm64.bl String.sliceBytes
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_push
+  __il_cont#13:
+    arm64.movImm x0, 0
+    arm64.loadRegBaseDisp.word64 x1, [x23 + 8]
+    arm64.loadRegBaseDisp.word64 x2, [x23 + 0]
+    arm64.b forhdr#5
+  librarysLoop:
+    arm64.loadRegBaseIndexScale.word64 x3, [x2 + x0*8 + 0]
+  __il_body#26:
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 8]
+  __il_cont#25:
+    arm64.add x20, x20, x3
+  forstep#7:
+    arm64.add x0, x0, 1
+  forhdr#5:
+    arm64.cmp x0, x1
+    arm64.b.lt librarysLoop
+  forexit#8:
+    arm64.movRegReg x0, x23
     arm64.bl __managed_decref
     arm64.cmp x20, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.b.le __rc_ok#9
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_9  ; "panic at for-in-walks-both-arrays-in-one-program.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.ret
-  __rc_ok#9:
+    arm64.b.gt __rc_panic
+  __rc_ok:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
@@ -127,6 +177,26 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_10  ; "panic at for-in-walks-both-arrays-in-one-program.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
     arm64.ret
 }

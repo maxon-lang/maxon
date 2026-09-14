@@ -86,9 +86,9 @@ func @List.pushFront {
     arm64.movRegReg x20, x0
     arm64.loadRegBaseDisp.word64 x21, [x19 + 0]
     arm64.movRegReg x0, x20
-    arm64.bl __mm_incref
+    arm64.bl __mm_own
+    arm64.movRegReg x1, x0
     arm64.movRegReg x0, x21
-    arm64.movRegReg x1, x20
     arm64.bl __managed_push
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
@@ -96,100 +96,7 @@ func @List.pushFront {
     arm64.storeBaseDispReg.word64 [x19 + 8], x0
     arm64.movRegReg x0, x20
     arm64.bl __mm_decref
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
-}
-
-func @List.walk {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
-  whilehdr:
-    arm64.cmp x1, -1
-    arm64.b.eq whileexit
-  w:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.cmp x1, 0
-    arm64.b.ge __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at struct-array-get-survives-scope.test:28: Range check failed: value outside typealias 'ElementIndex'\x0a"
-    arm64.bl mrt_panic
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-  __rc_ok:
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
-    arm64.cmp x1, x2
-    arm64.b.hs __im_slow
-  __im_load:
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
-    arm64.loadRegBaseIndexScale.word64 x20, [x2 + x1*8 + 0]
-    arm64.movImm x2, 0
-    arm64.loadRegBaseDisp.word64 x3, [x0 + 40]
-    arm64.cmp x3, 0
-    arm64.b.eq critsplit#13
-  __im_empty:
-    arm64.cmp x20, 0
-    arm64.b.ne critsplit#14
-  __im_slow:
-    arm64.bl __managed_get
-    arm64.movRegReg x20, x0
-    arm64.b __im_cont
-  critsplit#14:
-    arm64.movRegReg x9, x2
-    arm64.b __im_cont
-  critsplit#13:
-    arm64.movRegReg x9, x2
-  __im_cont:
-    arm64.cmp x9, 0
-    arm64.b.eq tryok
-  tryerr:
-    arm64.movImm x0, 0
-    arm64.movImm x1, 18446744073709551615
-    arm64.bl Node.create
-    arm64.b trycont
-  tryok:
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_incref
-    arm64.movRegReg x0, x20
-  trycont:
-    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
-    arm64.bl __mm_decref
-    arm64.movRegReg x1, x20
-    arm64.b whilehdr
-  whileexit:
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @List.create {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x20, x1
-    arm64.movImm x0, 16
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x21, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.storeBaseDispReg.word64 [x21 + 0], x19
-    arm64.storeBaseDispReg.word64 [x21 + 8], x20
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
-    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -199,85 +106,155 @@ func @List.create {
 
 func @main {
   entry:
-    arm64.prologue 32
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x0, 8
     arm64.leaFuncAddr x1, __mm_decref
     arm64.bl __managed_create
-    arm64.movImm x1, 18446744073709551615
-    arm64.bl List.create
     arm64.movRegReg x19, x0
-    arm64.movImm x1, 10
+    arm64.movImm x20, 18446744073709551615
+  __il_body#13:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
     arm64.movRegReg x0, x19
+    arm64.bl __managed_retain
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.storeBaseDispReg.word64 [x21 + 8], x20
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+  __il_cont#12:
+    arm64.movImm x1, 10
+    arm64.movRegReg x0, x21
     arm64.bl List.pushFront
     arm64.movImm x1, 20
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x21
     arm64.bl List.pushFront
-    arm64.movRegReg x0, x19
-    arm64.bl List.walk
-    arm64.movImm x1, 30
-    arm64.movRegReg x0, x19
-    arm64.bl List.pushFront
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.movImm x1, 1
+  __il_body#14:
+    arm64.loadRegBaseDisp.word64 x1, [x21 + 8]
+    arm64.b whilehdr
+  w:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic#22
+  __rc_ok#21:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
-    arm64.cmp x2, 1
-    arm64.b.ls __im_slow
-  __im_load:
+    arm64.cmp x1, x2
+    arm64.b.hs __im_slow#24
+  __im_load#25:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
-    arm64.add x2, x2, 8
-    arm64.loadRegBaseDisp.word64 x20, [x2 + 0]
+    arm64.loadRegBaseIndexScale.word64 x19, [x2 + x1*8 + 0]
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x0 + 40]
     arm64.cmp x3, 0
-    arm64.b.eq critsplit#11
-  __im_empty:
-    arm64.cmp x20, 0
-    arm64.b.ne critsplit#12
-  __im_slow:
-    arm64.bl __managed_get
-    arm64.movRegReg x20, x0
-    arm64.b __im_cont
-  critsplit#12:
+    arm64.b.eq critsplit#29
+  __im_empty#26:
+    arm64.cmp x19, 0
+    arm64.b.eq __im_slow#24
+  critsplit#30:
     arm64.movRegReg x9, x2
-    arm64.b __im_cont
-  critsplit#11:
+    arm64.b __im_cont#23
+  critsplit#29:
     arm64.movRegReg x9, x2
-  __im_cont:
+  __im_cont#23:
     arm64.cmp x9, 0
-    arm64.b.eq tryok
-  tryerr:
+    arm64.b.eq tryok#18
+  tryerr#19:
     arm64.movImm x0, 0
     arm64.movImm x1, 18446744073709551615
     arm64.bl Node.create
-    arm64.b trycont
-  tryok:
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_incref
-    arm64.movRegReg x0, x20
-  trycont:
-    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
-    arm64.bl __mm_decref
+    arm64.b trycont#20
+  tryok#18:
     arm64.movRegReg x0, x19
-    arm64.bl __destruct_List
-    arm64.cmp x20, 0
-    arm64.b.lt __rc_panic
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x19
+  trycont#20:
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x19
+  whilehdr:
+    arm64.cmp x1, -1
+    arm64.b.ne w
+  __il_cont#11:
+    arm64.movImm x1, 30
+    arm64.movRegReg x0, x21
+    arm64.bl List.pushFront
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.movImm x1, 1
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x2, 1
+    arm64.b.ls __im_slow#8
+  __im_load#9:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseIndexScale.word64 x19, [x2 + x1*8 + 0]
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 40]
+    arm64.cmp x3, 0
+    arm64.b.eq critsplit#27
+  __im_empty#10:
+    arm64.cmp x19, 0
+    arm64.b.eq __im_slow#8
+  critsplit#28:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont#7
+  critsplit#27:
+    arm64.movRegReg x9, x2
+  __im_cont#7:
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#1
+  tryerr#2:
+    arm64.movImm x0, 0
+    arm64.movImm x1, 18446744073709551615
+    arm64.bl Node.create
+    arm64.b trycont#3
+  tryok#1:
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x19
+  trycont#3:
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic#5
   __rc_chk:
-    arm64.cmp x20, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at struct-array-get-survives-scope.test:45: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.cmp x19, 255
+    arm64.b.gt __rc_panic#5
+  __rc_ok#4:
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_List
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic#22:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at struct-array-get-survives-scope.test:28: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x20
+  __im_slow#24:
+    arm64.bl __managed_get
+    arm64.movRegReg x19, x0
+    arm64.b __im_cont#23
+  __im_slow#8:
+    arm64.bl __managed_get
+    arm64.movRegReg x19, x0
+    arm64.b __im_cont#7
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at struct-array-get-survives-scope.test:45: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
 }

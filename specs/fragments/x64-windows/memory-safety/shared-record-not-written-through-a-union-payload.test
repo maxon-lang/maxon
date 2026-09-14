@@ -20,6 +20,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -50,9 +53,24 @@ func @main {
     x64.loadRegBaseDisp.word64 rbx, [r12 + 8]
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_incref
-    x64.leaRegRdata rdx, [rip + __str_rec_4]  ; "!"
+    x64.leaRegRdata r12, [rip + __str_rec_4]  ; "!"
+  __il_body#5:
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_bytes_view
+    x64.movRegReg r13, r8
     x64.movRegReg rcx, rbx
-    x64.callDirect String.append
+    x64.movRegReg rdx, r13
+    x64.callDirect __managed_append
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.loadRegBaseDisp.byte rax, [r12 + 48]
+    x64.xorRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __il_cont#4
+  clearFlag:
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.byte [rbx + 48], rax
+  __il_cont#4:
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
   matchcont:
@@ -79,17 +97,19 @@ func @main {
     x64.movRegReg rax, r14
     x64.callDirect __str_copy
     x64.leaRegRegReg rax, rbx, r14
-    x64.loadRegSlot rbx, slot2
-    x64.storeBaseDispReg.word64 [rbx + 0], r15
-    x64.loadRegSlot rax, slot1
-    x64.storeBaseDispReg.word64 [rbx + 8], rax
-    x64.movRegImm rax, 18446744073709551613
-    x64.storeBaseDispReg.word64 [rbx + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [rbx + 24], rax
-    x64.movRegReg rcx, rbx
-    x64.callDirect print
-    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rax, slot2
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot1
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+  __il_body#9:
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __write_stdout
+  __il_cont#8:
+    x64.loadRegSlot rcx, slot2
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
     x64.loadRegSlot rcx, slot0

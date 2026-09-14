@@ -42,22 +42,14 @@ func @main {
     x64.jcc notEqual, matchnext
   matcharm#1:
     x64.loadRegBaseDisp.word64 rbx, [r8 + 8]
-    x64.movRegReg rcx, r8
-    x64.callDirect __mm_decref
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic#7
   __rc_chk#8:
     x64.cmpRegImm32 rbx, 255
-    x64.jcc lessEqual, __rc_ok#6
-  __rc_panic#7:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at match-enum-binding-multiple.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc greater, __rc_panic#7
   __rc_ok#6:
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg rbx
@@ -68,22 +60,14 @@ func @main {
     x64.jcc notEqual, matchdead
   matcharm#2:
     x64.loadRegBaseDisp.word64 rbx, [r8 + 8]
-    x64.movRegReg rcx, r8
-    x64.callDirect __mm_decref
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic#10
   __rc_chk#11:
     x64.cmpRegImm32 rbx, 255
-    x64.jcc lessEqual, __rc_ok#9
-  __rc_panic#10:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at match-enum-binding-multiple.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc greater, __rc_panic#10
   __rc_ok#9:
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg rbx
@@ -91,4 +75,20 @@ func @main {
     x64.ret
   matchdead:
   matchcont:
+  __rc_panic#7:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at match-enum-binding-multiple.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#10:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at match-enum-binding-multiple.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
 }

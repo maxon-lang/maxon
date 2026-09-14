@@ -32,82 +32,98 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
-    x64.leaRegRdata rcx, [rip + __layout_Vector_N3_Int]
-    x64.movRegImm32 rdx, 3
-    x64.callDirect Vector.create
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 r12, 0
-  whilehdr:
-    x64.cmpRegImm32 r12, 3
-    x64.jcc greaterEqual, whileexit
+    x64.pushReg r14
+    x64.prologue 32
+    x64.leaRegRdata rax, [rip + __layout_Vector_N3_Int]
+    x64.movRegImm32 rbx, 3
+  __il_body#16:
+    x64.movRegImm32 rcx, 8
+    x64.loadRegBaseDisp.word64 rdx, [rax + 40]
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect __managed_resize
+  __il_cont#15:
+    x64.movRegImm32 rbx, 0
+    x64.jmp whilehdr
   fill:
     x64.movRegImm32 rax, 4
     x64.leaRegRdata r9, [rip + __layout_Vector_N3_Int]
     x64.movRegImm32 rsi, 3
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
     x64.callDirect Vector.set
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-variable-index-write-round-trips.test:9: test invariant: set OOB\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc notEqual, tryerr
   tryok:
-    x64.leaRegRegImm32 r12, r12, 1
-    x64.jmp whilehdr
+    x64.leaRegRegImm32 rbx, rbx, 1
+  whilehdr:
+    x64.cmpRegImm32 rbx, 3
+    x64.jcc less, fill
   whileexit:
-    x64.movRegImm32 r12, 0
-    x64.movRegReg rcx, rbx
+    x64.movRegImm32 rbx, 0
+    x64.movRegReg rcx, r12
     x64.callDirect Vector.createIterator
     x64.movRegReg r13, r8
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, forjoin
-  forhdr:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, forexit
+    x64.jcc equal, forhdr
+    x64.jmp forjoin
   sum:
-    x64.leaRegRdata rdx, [rip + __layout_ArrayIterator_Int]
-    x64.movRegReg rcx, r13
-    x64.callDirect ArrayIterator.current
-    x64.leaRegRegReg r12, r12, r8
+    x64.leaRegRdata r14, [rip + __layout_ArrayIterator_Int]
+  __il_body#18:
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
+    x64.callDirect __managed_cursor_current
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r8
+    x64.callDirect __retain_type_param
+  __il_cont#17:
+    x64.leaRegRegReg rbx, rbx, r8
   forstep:
     x64.movRegReg rcx, r13
     x64.callDirect ArrayIterator.advance
     x64.movRegReg rax, r10
-    x64.jmp forhdr
+  forhdr:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, sum
   forexit:
     x64.movRegReg rcx, r13
     x64.callDirect __destruct_ArrayIterator_Int
   forjoin:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
-    x64.cmpRegImm32 r12, 0
+    x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
-    x64.cmpRegImm32 r12, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-variable-index-write-round-trips.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.cmpRegImm32 rbx, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg r8, r12
-    x64.epilogue 40
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-variable-index-write-round-trips.test:9: test invariant: set OOB\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-variable-index-write-round-trips.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx

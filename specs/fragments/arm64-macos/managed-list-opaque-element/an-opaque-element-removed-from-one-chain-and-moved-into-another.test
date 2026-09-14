@@ -43,34 +43,12 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Bag.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x19
-    arm64.bl List.create
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x19
-    arm64.bl List.create
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 16
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x20
-    arm64.storeBaseDispReg.word64 [x0 + 8], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @Bag.add {
   entry:
     arm64.prologue 16
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.bl List.append
+    arm64.movRegReg x1, x0
     arm64.epilogue 16
     arm64.ret
 }
@@ -106,24 +84,6 @@ func @Bag.shift {
     arm64.ret
 }
 
-func @Bag.total {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.bl List.count
-    arm64.movRegReg x20, x0
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.bl List.count
-    arm64.add x0, x20, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 64
@@ -132,60 +92,95 @@ func @main {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.leaRdata x0, __layout_Bag_String
-    arm64.bl Bag.create
+    arm64.leaRdata x19, __layout_Bag_String
+  __il_body#7:
+    arm64.movRegReg x0, x19
+    arm64.bl List.create
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl List.create
     arm64.movRegReg x19, x0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 0], x20
+    arm64.storeBaseDispReg.word64 [x21 + 8], x19
+  __il_cont:
     arm64.leaRdata x0, __str_rec_2  ; "alpha"
-    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
-    arm64.add x0, x21, 57
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
+    arm64.add x0, x20, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x22, x0
     arm64.add x23, x22, 56
     arm64.movRegReg x0, x23
-    arm64.movRegReg x1, x20
-    arm64.movRegReg x2, x21
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x20
     arm64.bl __str_copy
-    arm64.add x0, x23, x21
+    arm64.add x0, x23, x20
     arm64.storeBaseDispReg.word64 [x22 + 0], x23
-    arm64.storeBaseDispReg.word64 [x22 + 8], x21
+    arm64.storeBaseDispReg.word64 [x22 + 8], x20
     arm64.movImm x0, 18446744073709551613
     arm64.storeBaseDispReg.word64 [x22 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x22 + 24], x0
     arm64.leaRdata x2, __layout_Bag_String
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x21
     arm64.movRegReg x1, x22
     arm64.bl Bag.add
     arm64.leaRdata x0, __str_rec_3  ; "beta"
-    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
-    arm64.add x0, x21, 57
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
+    arm64.add x0, x20, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x22, x0
     arm64.add x23, x22, 56
     arm64.movRegReg x0, x23
-    arm64.movRegReg x1, x20
-    arm64.movRegReg x2, x21
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x20
     arm64.bl __str_copy
-    arm64.add x0, x23, x21
+    arm64.add x0, x23, x20
     arm64.storeBaseDispReg.word64 [x22 + 0], x23
-    arm64.storeBaseDispReg.word64 [x22 + 8], x21
+    arm64.storeBaseDispReg.word64 [x22 + 8], x20
     arm64.movImm x0, 18446744073709551613
     arm64.storeBaseDispReg.word64 [x22 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x22 + 24], x0
     arm64.leaRdata x2, __layout_Bag_String
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x21
     arm64.movRegReg x1, x22
     arm64.bl Bag.add
     arm64.leaRdata x1, __layout_Bag_String
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x21
     arm64.bl Bag.shift
     arm64.cmp x9, 0
-    arm64.b.eq tryok
+    arm64.b.ne tryerr
+  __il_body#9:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.bl List.count
+    arm64.movRegReg x19, x0
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
+    arm64.bl List.count
+    arm64.add x19, x19, x0
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic#11
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.b.gt __rc_panic#4
+  __rc_ok:
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Bag_String
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
   tryerr:
     arm64.leaRdata x0, __str_blob_4  ; "panic at an-opaque-element-removed-from-one-chain-and-moved-into-another.test:33: shift\x0a"
     arm64.bl mrt_panic
@@ -197,17 +192,8 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  tryok:
-    arm64.movRegReg x0, x19
-    arm64.bl Bag.total
-    arm64.movRegReg x20, x0
-    arm64.cmp x20, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x20, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_5  ; "panic at an-opaque-element-removed-from-one-chain-and-moved-into-another.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
+  __rc_panic#11:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at an-opaque-element-removed-from-one-chain-and-moved-into-another.test:23: Range check failed: value outside typealias 'Count'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -217,10 +203,10 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x19
-    arm64.bl __destruct_Bag_String
-    arm64.movRegReg x0, x20
+  __rc_panic#4:
+    arm64.leaRdata x0, __str_blob_7  ; "panic at an-opaque-element-removed-from-one-chain-and-moved-into-another.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

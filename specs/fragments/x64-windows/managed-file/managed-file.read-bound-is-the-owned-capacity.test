@@ -43,36 +43,66 @@ data {
   __mm_alloc_count@0 = i64 0
   __gt_run_queue_head@8 = i64 0
   __gt_run_queue_tail@16 = i64 0
-  __gt_init_done@24 = i64 0
-  __gt_timer_count@32 = i64 0
-  __gt_timer_heap_base@40 = i64 0
-  __gt_timer_capacity@48 = i64 0
-  __gt_timer_seq@56 = i64 0
+  __gt_timer_count@24 = i64 0
+  __gt_timer_heap_base@32 = i64 0
+  __gt_timer_capacity@40 = i64 0
+  __gt_timer_seq@48 = i64 0
+  __gt_timer_when@56 = i64 9223372036854775807
   __gt_trace_counter@64 = i64 0
-  __gt_proc_count@72 = i64 0
-  __gt_proc_handles_base@80 = i64 0
-  __gt_proc_gts_base@88 = i64 0
-  __gt_proc_wait_snapshot@96 = i64 0
-  __gt_proc_poller@104 = i64 0
-  __gt_live_count@112 = i64 0
-  __sched_progress@120 = i64 0
-  __sched_active_workers@128 = i64 1
-  __sched_max_active_workers@136 = i64 1
-  __sched_tls_index@144 = i64 0
-  __sched_tls_teb_offset@152 = i64 0
-  __sched_procs@160 = i64 0
-  __sched_allm@168 = i64 0
-  __sched_midle@176 = i64 0
-  __sched_pidle@184 = i64 0
-  __sched_num_procs@192 = i64 0
-  __sched_shutdown_flag@200 = i64 0
-  __sched_lock@208 = i64 0
-  __sched_nmspinning@216 = i64 0
-  __sched_parked_drivers@224 = i64 0
-  __sched_sysmon_started@232 = i64 0
-  __slab_arena_list@240 = i64 0
-  __slab_arena_map_l1@248 = i64 0
-  __slab_state@256 = i64 0
+  __gt_live_count@72 = i64 0
+  __gt_seed_bytes@80 = i64 8192
+  __gt_stack_bytes_sum@88 = i64 0
+  __gt_stack_bytes_count@96 = i64 0
+  __gt_seed_sum_seen@104 = i64 0
+  __gt_seed_count_seen@112 = i64 0
+  __sched_active_workers@120 = i64 1
+  __sched_max_active_workers@128 = i64 1
+  __sched_tls_index@136 = i64 0
+  __sched_tls_teb_offset@144 = i64 0
+  __sched_procs@152 = i64 0
+  __sched_allm@160 = i64 0
+  __sched_midle@168 = i64 0
+  __sched_pidle@176 = i64 0
+  __gt_gfree_head@184 = i64 0
+  __sched_arena_cursor@192 = i64 0
+  __sched_arena_limit@200 = i64 0
+  __gt_records_carved@208 = i64 0
+  __sched_npidle@216 = i64 0
+  __sched_runq_size@224 = i64 0
+  __sched_global_pushes@232 = i64 0
+  __sched_timer_scan_steps@240 = i64 0
+  __sched_mcount@248 = i64 0
+  __sched_nmidle@256 = i64 0
+  __sched_main_m@264 = i64 0
+  __sched_phase@272 = i64 0
+  __sched_lastpoll@280 = i64 0
+  __sched_poll_until@288 = i64 0
+  __sched_regain_head@296 = i64 0
+  __np_poller@304 = i64 0
+  __np_break@312 = i64 0
+  __np_wake_sig@320 = i64 0
+  __np_pd_table@328 = i64 0
+  __np_pd_cap@336 = i64 0
+  __np_waiters@344 = i64 0
+  __np_src_key_free@352 = i64 0
+  __np_src_key_high@360 = i64 0
+  __sched_num_procs@368 = i64 0
+  __sched_shutdown_flag@376 = i64 0
+  __sched_lock@384 = i64 0
+  __sched_lock_depth_sink@392 = i64 0
+  __sched_nmspinning@400 = i64 0
+  __sched_needspinning@408 = i64 0
+  __sched_sysmon_event@416 = i64 0
+  __sched_sysmon_wait@424 = i64 0
+  __sched_timer_starts@432 = i64 0
+  __sched_preempt_ext_lock@440 = i64 0
+  __sched_preempt_context@448 = i64 0
+  __slab_arena_list@456 = i64 0
+  __slab_arena_map_l1@464 = i64 0
+  __slab_state@472 = i64 0
+  __mrt_console_probe_stdin@480 = i8 0
+  __mrt_console_probe_stdout@481 = i8 0
+  __mrt_console_probe_stderr@482 = i8 0
 }
 
 func @TestFile.openWrite {
@@ -100,8 +130,8 @@ func @TestFile.openWrite {
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.movRegReg rcx, rbx
-    x64.callDirect __mm_incref
-    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.callDirect __mm_own
+    x64.storeBaseDispReg.word64 [r12 + 0], r8
     x64.movRegReg rcx, rbx
     x64.callDirect __mf_destruct
     x64.movRegImm32 r10, 0
@@ -138,8 +168,8 @@ func @TestFile.openRead {
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.movRegReg rcx, rbx
-    x64.callDirect __mm_incref
-    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.callDirect __mm_own
+    x64.storeBaseDispReg.word64 [r12 + 0], r8
     x64.movRegReg rcx, rbx
     x64.callDirect __mf_destruct
     x64.movRegImm32 r10, 0
@@ -170,19 +200,7 @@ func @main {
     x64.movRegReg r13, r8
     x64.storeSlotReg slot0, r13
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#1
-  tryerr#2:
-    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at managed-file.read-bound-is-the-owned-capacity.test:22: openWrite: the runner's working directory is writable\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 136
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc notEqual, tryerr#2
   tryok#1:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
@@ -194,19 +212,7 @@ func @main {
     x64.movRegReg rdx, r14
     x64.callDirect __mf_write
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#3
-  tryerr#4:
-    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at managed-file.read-bound-is-the-owned-capacity.test:23: write: 10 bytes to a freshly opened file\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 136
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc notEqual, tryerr#4
   tryok#3:
     x64.movRegReg rcx, r14
     x64.callDirect __managed_decref
@@ -220,19 +226,7 @@ func @main {
     x64.movRegReg r13, r8
     x64.storeSlotReg slot1, r13
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#5
-  tryerr#6:
-    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at managed-file.read-bound-is-the-owned-capacity.test:26: openRead: the file just written\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 136
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc notEqual, tryerr#6
   tryok#5:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
@@ -242,19 +236,7 @@ func @main {
     x64.movRegReg r12, r8
     x64.storeSlotReg slot2, r12
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#7
-  tryerr#8:
-    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at managed-file.read-bound-is-the-owned-capacity.test:27: create: a 4-byte owned buffer\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 136
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc notEqual, tryerr#8
   tryok#7:
     x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
     x64.movRegImm32 rax, 4
@@ -286,38 +268,14 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __managed_set_length
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#15
-  tryerr#16:
-    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at managed-file.read-bound-is-the-owned-capacity.test:32: setLength: 4 bytes of a capacity-4 buffer\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 136
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc notEqual, tryerr#16
   tryok#15:
     x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, r12
     x64.callDirect __managed_byte_at
     x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#17
-  tryerr#18:
-    x64.leaRegRdata rcx, [rip + __str_blob_12]  ; "panic at managed-file.read-bound-is-the-owned-capacity.test:33: byteAt: offset 0 of a 4-byte live range\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 136
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc notEqual, tryerr#18
   tryok#17:
     x64.movRegReg rcx, rbx
     x64.callDirect String.toByteArray
@@ -325,19 +283,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __mf_delete
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#19
-  tryerr#20:
-    x64.leaRegRdata rcx, [rip + __str_blob_16]  ; "panic at managed-file.read-bound-is-the-owned-capacity.test:34: delete: the file this case created\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 136
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc notEqual, tryerr#20
   tryok#19:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
@@ -390,57 +336,57 @@ func @main {
     x64.callDirect __mm_alloc
     x64.storeSlotReg slot4, r8
     x64.leaRegRegImm32 r15, r8, 56
-    x64.movRegReg rcx, r15
     x64.loadRegSlot rdx, slot10
+    x64.movRegReg rcx, r15
     x64.movRegReg rax, rbx
     x64.callDirect __str_copy
     x64.leaRegRegReg rbx, r15, rbx
-    x64.movRegReg rcx, rbx
     x64.loadRegSlot rdx, slot9
+    x64.movRegReg rcx, rbx
     x64.movRegReg rax, r13
     x64.callDirect __str_copy
     x64.leaRegRegReg rbx, rbx, r13
-    x64.movRegReg rcx, rbx
     x64.loadRegSlot rdx, slot8
+    x64.movRegReg rcx, rbx
     x64.movRegReg rax, r14
     x64.callDirect __str_copy
     x64.leaRegRegReg rbx, rbx, r14
+    x64.loadRegSlot rdx, slot7
     x64.movRegReg rcx, rbx
-    x64.loadRegSlot r13, slot7
-    x64.movRegReg rdx, r13
     x64.movRegReg rax, r12
     x64.callDirect __str_copy
     x64.leaRegRegReg rbx, rbx, r12
-    x64.movRegReg rcx, rbx
     x64.loadRegSlot rdx, slot6
-    x64.loadRegSlot r12, slot12
-    x64.movRegReg rax, r12
-    x64.callDirect __str_copy
-    x64.leaRegRegReg rbx, rbx, r12
+    x64.loadRegSlot rax, slot12
     x64.movRegReg rcx, rbx
-    x64.loadRegSlot r12, slot11
-    x64.movRegReg rdx, r12
-    x64.loadRegSlot r14, slot5
-    x64.movRegReg rax, r14
     x64.callDirect __str_copy
-    x64.leaRegRegReg rax, rbx, r14
-    x64.loadRegSlot rbx, slot4
-    x64.storeBaseDispReg.word64 [rbx + 0], r15
-    x64.loadRegSlot rax, slot3
-    x64.storeBaseDispReg.word64 [rbx + 8], rax
-    x64.movRegImm rax, 18446744073709551613
-    x64.storeBaseDispReg.word64 [rbx + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rax, slot12
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.loadRegSlot rax, slot5
+    x64.loadRegSlot rdx, slot11
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot5
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rax, slot4
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot3
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
     x64.loadRegSlot rcx, slot9
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r13
+    x64.loadRegSlot rcx, slot7
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
+    x64.loadRegSlot rcx, slot11
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, rbx
-    x64.callDirect print
-    x64.movRegReg rcx, rbx
+  __il_body:
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect __write_stdout
+  __il_cont:
+    x64.loadRegSlot rcx, slot4
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 42
     x64.loadRegSlot rcx, slot2
@@ -450,6 +396,90 @@ func @main {
     x64.loadRegSlot rcx, slot0
     x64.callDirect __destruct_TestFile
     x64.movRegReg r8, rbx
+    x64.epilogue 136
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at managed-file.read-bound-is-the-owned-capacity.test:22: openWrite: the runner's working directory is writable\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 136
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#4:
+    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at managed-file.read-bound-is-the-owned-capacity.test:23: write: 10 bytes to a freshly opened file\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 136
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at managed-file.read-bound-is-the-owned-capacity.test:26: openRead: the file just written\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 136
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at managed-file.read-bound-is-the-owned-capacity.test:27: create: a 4-byte owned buffer\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 136
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#16:
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at managed-file.read-bound-is-the-owned-capacity.test:32: setLength: 4 bytes of a capacity-4 buffer\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 136
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#18:
+    x64.leaRegRdata rcx, [rip + __str_blob_12]  ; "panic at managed-file.read-bound-is-the-owned-capacity.test:33: byteAt: offset 0 of a 4-byte live range\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 136
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#20:
+    x64.leaRegRdata rcx, [rip + __str_blob_16]  ; "panic at managed-file.read-bound-is-the-owned-capacity.test:34: delete: the file this case created\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 136
     x64.popReg r15
     x64.popReg r14

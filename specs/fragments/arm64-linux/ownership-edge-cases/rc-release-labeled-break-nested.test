@@ -45,9 +45,7 @@ func @main {
     arm64.prologue 48
     arm64.movImm x0, 0
     arm64.movImm x1, 0
-  whilehdr#1:
-    arm64.cmp x1, 3
-    arm64.b.ge whileexit#3
+    arm64.b whilehdr#1
   outer:
     arm64.movImm x16, 10
     arm64.mul x2, x1, x16
@@ -55,9 +53,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x3 + 0], x1
     arm64.storeBaseDispReg.word64 [x3 + 8], x2
     arm64.movImm x2, 0
-  whilehdr#4:
-    arm64.cmp x2, 3
-    arm64.b.ge whileexit#6
+    arm64.b whilehdr#4
   inner:
     arm64.movImm x16, 10
     arm64.mul x4, x2, x16
@@ -78,23 +74,27 @@ func @main {
     arm64.b whileexit#3
   ifcont:
     arm64.add x2, x2, 1
-    arm64.b whilehdr#4
+  whilehdr#4:
+    arm64.cmp x2, 3
+    arm64.b.lt inner
   whileexit#6:
     arm64.add x1, x1, 1
-    arm64.b whilehdr#1
+  whilehdr#1:
+    arm64.cmp x1, 3
+    arm64.b.lt outer
   whileexit#3:
     arm64.cmp x0, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x0, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at rc-release-labeled-break-nested.test:31: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
+    arm64.b.gt __rc_panic
+  __rc_ok:
     arm64.epilogue 48
     arm64.ret
-  __rc_ok:
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at rc-release-labeled-break-nested.test:31: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.epilogue 48
     arm64.ret
 }

@@ -56,6 +56,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @Bag.create {
@@ -86,6 +89,7 @@ func @Bag.add {
     x64.prologue 32
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.callDirect __managed_push
+    x64.movRegReg rax, r8
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -97,13 +101,7 @@ func @Bag.put {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.cmpRegImm32 rdx, 0
-    x64.jcc greaterEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at a-substituted-container-field-keeps-its-element-answer.test:17: Range check failed: value outside typealias 'Idx'\x0a"
-    x64.callDirect mrt_panic
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
+    x64.jcc less, __rc_panic
   __rc_ok:
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.loadRegBaseDisp.word64 rsi, [rcx + 24]
@@ -164,14 +162,20 @@ func @Bag.put {
   __im_slow:
     x64.callDirect __managed_set
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at a-substituted-container-field-keeps-its-element-answer.test:18: Bag.put: index out of range\x0a"
+    x64.jcc notEqual, tryerr
+  tryok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at a-substituted-container-field-keeps-its-element-answer.test:17: Range check failed: value outside typealias 'Idx'\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at a-substituted-container-field-keeps-its-element-answer.test:18: Bag.put: index out of range\x0a"
+    x64.callDirect mrt_panic
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -185,16 +189,7 @@ func @Bag.at {
     x64.prologue 40
     x64.movRegReg rbx, rax
     x64.cmpRegImm32 rdx, 0
-    x64.jcc greaterEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at a-substituted-container-field-keeps-its-element-answer.test:21: Range check failed: value outside typealias 'Idx'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.movRegImm32 r10, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc less, __rc_panic
   __rc_ok:
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.loadRegBaseDisp.word64 rax, [rcx + 24]
@@ -253,6 +248,15 @@ func @Bag.at {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at a-substituted-container-field-keeps-its-element-answer.test:21: Range check failed: value outside typealias 'Idx'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
 }
 
 func @main {
@@ -300,11 +304,8 @@ func @main {
     x64.leaRegRegImm32 rdi, rsi, -24
     x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
     x64.cmpRegImm32 rdi, 0
-    x64.jcc equal, __im_store#22
-  __im_slow#18:
-    x64.callDirect __managed_set
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#1
+    x64.jcc notEqual, __im_slow#18
+    x64.jmp __im_store#22
   tryerr#2:
     x64.movRegImm32 r12, 1
     x64.movRegReg rcx, rbx
@@ -345,14 +346,8 @@ func @main {
     x64.movRegImm32 rdx, 1
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegImm32 rax, 1
-    x64.jcc above, __im_load#25
-  __im_slow#24:
-    x64.storeSlotReg slot1, r8
-    x64.callDirect __managed_get
-    x64.movRegReg rax, r8
-    x64.loadRegSlot r8, slot1
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#5
+    x64.jcc belowEqual, __im_slow#24
+    x64.jmp __im_load#25
   tryerr#6:
     x64.movRegImm32 r12, 1
     x64.movRegReg rcx, rbx
@@ -548,13 +543,7 @@ func @main {
     x64.jcc equal, critsplit#44
   __im_empty:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#45
-  __im_slow#34:
-    x64.storeSlotReg slot1, r8
-    x64.callDirect __managed_get
-    x64.movRegReg rax, r8
-    x64.loadRegSlot r8, slot1
-    x64.jmp __im_cont
+    x64.jcc equal, __im_slow#34
   critsplit#45:
     x64.movRegReg r10, rsi
     x64.jmp __im_cont
@@ -622,4 +611,23 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __im_slow#18:
+    x64.callDirect __managed_set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#2
+    x64.jmp tryok#1
+  __im_slow#24:
+    x64.storeSlotReg slot1, r8
+    x64.callDirect __managed_get
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot1
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#6
+    x64.jmp tryok#5
+  __im_slow#34:
+    x64.storeSlotReg slot1, r8
+    x64.callDirect __managed_get
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot1
+    x64.jmp __im_cont
 }

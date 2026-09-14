@@ -93,6 +93,7 @@ func @Bag.add {
     arm64.prologue 16
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.bl __managed_push
+    arm64.movRegReg x1, x0
     arm64.epilogue 16
     arm64.ret
 }
@@ -100,15 +101,10 @@ func @Bag.add {
 func @Bag.put {
   entry:
     arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.cmp x1, 0
-    arm64.b.ge __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at a-shared-generic-body-keeps-the-runtime-fork.test:19: Range check failed: value outside typealias 'ElementIndex'\x0a"
-    arm64.bl mrt_panic
-    arm64.epilogue 16
-    arm64.ret
+    arm64.b.lt __rc_panic
   __rc_ok:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x3, [x0 + 24]
     arm64.cmp x3, 8
     arm64.b.ne __im_stride
@@ -135,8 +131,7 @@ func @Bag.put {
     arm64.b.ne __im_slow
   __im_store#14:
     arm64.storeBaseIndexScaleReg.word64 [x3 + x1*8 + 0], x2
-    arm64.movImm x0, 0
-    arm64.b __im_cont
+    arm64.b tryok
   __im_stride:
     arm64.cmp x3, 1
     arm64.b.ne __im_slow
@@ -164,20 +159,22 @@ func @Bag.put {
   __im_store#19:
     arm64.add x0, x3, x1
     arm64.storeBaseDispReg.byte [x0 + 0], x2
-    arm64.movImm x0, 0
-    arm64.b __im_cont
+    arm64.b tryok
   __im_slow:
     arm64.bl __managed_set
-    arm64.movRegReg x0, x9
-  __im_cont:
-    arm64.cmp x0, 0
-    arm64.b.eq tryok
-  tryerr:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at a-shared-generic-body-keeps-the-runtime-fork.test:19: Bag.put: index out of range\x0a"
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr
+  tryok:
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at a-shared-generic-body-keeps-the-runtime-fork.test:18: Range check failed: value outside typealias 'Idx'\x0a"
     arm64.bl mrt_panic
     arm64.epilogue 16
     arm64.ret
-  tryok:
+  tryerr:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-shared-generic-body-keeps-the-runtime-fork.test:19: Bag.put: index out of range\x0a"
+    arm64.bl mrt_panic
     arm64.epilogue 16
     arm64.ret
 }
@@ -187,18 +184,10 @@ func @Bag.at {
     arm64.prologue 32
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x2
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.cmp x1, 0
-    arm64.b.ge __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at a-shared-generic-body-keeps-the-runtime-fork.test:23: Range check failed: value outside typealias 'ElementIndex'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.movImm x9, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
+    arm64.b.lt __rc_panic
   __rc_ok:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 24]
     arm64.cmp x2, 8
     arm64.b.ne __im_stride
@@ -249,6 +238,14 @@ func @Bag.at {
   tryok:
     arm64.movRegReg x0, x19
     arm64.bl __retain_type_param
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at a-shared-generic-body-keeps-the-runtime-fork.test:22: Range check failed: value outside typealias 'Idx'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.movImm x9, 0
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
@@ -443,28 +440,7 @@ func @main {
     arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.cmp x0, 0
     arm64.b.ls __im_slow
-  __im_load:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.movImm x2, 0
-    arm64.loadRegBaseDisp.word64 x3, [x21 + 40]
-    arm64.cmp x3, 0
-    arm64.b.eq critsplit#25
-  __im_empty:
-    arm64.cmp x0, 0
-    arm64.b.ne critsplit#26
-  __im_slow:
-    arm64.movRegReg x0, x21
-    arm64.bl __managed_get
-    arm64.b __im_cont
-  critsplit#26:
-    arm64.movRegReg x9, x2
-    arm64.b __im_cont
-  critsplit#25:
-    arm64.movRegReg x9, x2
-  __im_cont:
-    arm64.cmp x9, 0
-    arm64.b.eq tryok#17
+    arm64.b __im_load
   tryerr#18:
     arm64.movImm x22, 1
     arm64.movRegReg x0, x21
@@ -480,6 +456,9 @@ func @main {
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
   tryok#17:
     arm64.cmp x0, 9
     arm64.b.eq ifcont#20
@@ -513,4 +492,10 @@ func @main {
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
+  __im_slow:
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#18
+    arm64.b tryok#17
 }

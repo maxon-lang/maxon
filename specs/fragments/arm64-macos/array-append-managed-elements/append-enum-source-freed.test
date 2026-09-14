@@ -43,13 +43,27 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @appendOps {
+func @main {
   entry:
     arm64.prologue 48
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __mm_decref
+    arm64.bl __managed_create
     arm64.movRegReg x19, x0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.movImm x0, 2
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+  __il_body:
     arm64.movImm x0, 8
     arm64.leaFuncAddr x1, __mm_decref
     arm64.bl __managed_create
@@ -90,34 +104,7 @@ func @appendOps {
     arm64.bl __managed_append_managed
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
-}
-
-func @main {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mm_decref
-    arm64.bl __managed_create
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 16
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 2
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x0
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_push
-    arm64.movRegReg x0, x19
-    arm64.bl appendOps
+  __il_cont:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 4
     arm64.b.eq ifcont
@@ -128,7 +115,8 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
   ifcont:
     arm64.movImm x1, 1
@@ -142,19 +130,14 @@ func @main {
     arm64.movImm x0, 0
     arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
     arm64.cmp x2, 0
-    arm64.b.eq critsplit#20
+    arm64.b.eq critsplit#22
   __im_empty:
     arm64.cmp x20, 0
-    arm64.b.ne critsplit#21
-  __im_slow:
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_get
-    arm64.movRegReg x20, x0
-    arm64.b __im_cont
-  critsplit#21:
+    arm64.b.eq __im_slow
+  critsplit#23:
     arm64.movRegReg x9, x0
     arm64.b __im_cont
-  critsplit#20:
+  critsplit#22:
     arm64.movRegReg x9, x0
   __im_cont:
     arm64.cmp x9, 0
@@ -178,27 +161,20 @@ func @main {
     arm64.b.ne matchnext#10
   matcharm#6:
     arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
     arm64.cmp x20, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at append-enum-source-freed.test:31: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
+    arm64.b.gt __rc_panic
   __rc_ok:
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
   matchnext#10:
     arm64.cmp x1, 1
@@ -211,7 +187,8 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
   matchnext#11:
     arm64.cmp x1, 2
@@ -224,8 +201,23 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
   matchdead:
   matchcont:
+  __im_slow:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.movRegReg x20, x0
+    arm64.b __im_cont
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at append-enum-source-freed.test:31: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
 }

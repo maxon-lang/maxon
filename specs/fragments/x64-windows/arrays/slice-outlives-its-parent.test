@@ -30,14 +30,19 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
-func @makeParent {
+func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 40
+    x64.pushReg r12
+    x64.prologue 48
+  __il_body#24:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
@@ -54,63 +59,36 @@ func @makeParent {
     x64.movRegImm32 rdx, 40
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
-    x64.movRegReg r8, rbx
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @tail {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
+  __il_body#25:
     x64.movRegImm32 rdx, 1
     x64.movRegImm32 rax, 4
     x64.leaRegRdata r9, [rip + __layout_Array_Integer]
+    x64.movRegReg rcx, rbx
     x64.callDirect Array.slice
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, trycont
-  tryerr:
+    x64.jcc equal, tryok#26
+  tryerr#27:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
-  trycont:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @main {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 48
-    x64.callDirect makeParent
-    x64.movRegReg rbx, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect tail
     x64.movRegReg r12, r8
+    x64.jmp __il_cont
+  tryok#26:
+    x64.movRegReg r12, r8
+  __il_cont:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.cmpRegImm32 rax, 0
-    x64.jcc above, __im_load#15
-  __im_slow#14:
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#1
+    x64.jcc belowEqual, __im_slow#14
+    x64.jmp __im_load#15
   tryerr#2:
     x64.movRegImm32 rax, 0
     x64.jmp trycont#3
   __im_load#15:
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
     x64.movRegReg r8, rax
   tryok#1:
     x64.movRegReg rax, r8
@@ -118,14 +96,8 @@ func @main {
     x64.movRegImm32 rdx, 1
     x64.loadRegBaseDisp.word64 rcx, [r12 + 8]
     x64.cmpRegImm32 rcx, 1
-    x64.jcc above, __im_load#18
-  __im_slow#17:
-    x64.storeSlotReg slot0, rax
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_get
-    x64.loadRegSlot rax, slot0
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#4
+    x64.jcc belowEqual, __im_slow#17
+    x64.jmp __im_load#18
   tryerr#5:
     x64.movRegImm32 rcx, 0
     x64.jmp trycont#6
@@ -140,16 +112,8 @@ func @main {
     x64.movRegImm32 rdx, 2
     x64.loadRegBaseDisp.word64 rsi, [r12 + 8]
     x64.cmpRegImm32 rsi, 2
-    x64.jcc above, __im_load#21
-  __im_slow#20:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rcx
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_get
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rcx, slot1
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#7
+    x64.jcc belowEqual, __im_slow#20
+    x64.jmp __im_load#21
   tryerr#8:
     x64.movRegImm32 rdx, 0
     x64.jmp trycont#9
@@ -168,20 +132,44 @@ func @main {
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at slice-outlives-its-parent.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __im_slow#14:
     x64.movRegReg rcx, r12
-    x64.callDirect __managed_decref
-    x64.movRegReg r8, rbx
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#2
+    x64.jmp tryok#1
+  __im_slow#17:
+    x64.storeSlotReg slot0, rax
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_get
+    x64.loadRegSlot rax, slot0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#5
+    x64.jmp tryok#4
+  __im_slow#20:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_get
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#8
+    x64.jmp tryok#7
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at slice-outlives-its-parent.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 48
     x64.popReg r12
     x64.popReg rbx

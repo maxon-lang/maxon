@@ -74,39 +74,64 @@ data {
   __mm_alloc_count@0 = i64 0
   __gt_run_queue_head@8 = i64 0
   __gt_run_queue_tail@16 = i64 0
-  __gt_init_done@24 = i64 0
-  __gt_timer_count@32 = i64 0
-  __gt_timer_heap_base@40 = i64 0
-  __gt_timer_capacity@48 = i64 0
-  __gt_timer_seq@56 = i64 0
+  __gt_timer_count@24 = i64 0
+  __gt_timer_heap_base@32 = i64 0
+  __gt_timer_capacity@40 = i64 0
+  __gt_timer_seq@48 = i64 0
+  __gt_timer_when@56 = i64 9223372036854775807
   __gt_trace_counter@64 = i64 0
-  __gt_proc_count@72 = i64 0
-  __gt_proc_handles_base@80 = i64 0
-  __gt_proc_gts_base@88 = i64 0
-  __gt_proc_wait_snapshot@96 = i64 0
-  __gt_proc_poller@104 = i64 0
-  __gt_live_count@112 = i64 0
-  __sched_progress@120 = i64 0
-  __sched_active_workers@128 = i64 1
-  __sched_max_active_workers@136 = i64 1
-  __sched_tls_index@144 = i64 0
-  __sched_tls_teb_offset@152 = i64 0
-  __sched_procs@160 = i64 0
-  __sched_allm@168 = i64 0
-  __sched_midle@176 = i64 0
-  __sched_pidle@184 = i64 0
-  __sched_num_procs@192 = i64 0
-  __sched_shutdown_flag@200 = i64 0
-  __sched_lock@208 = i64 0
-  __sched_nmspinning@216 = i64 0
-  __sched_parked_drivers@224 = i64 0
-  __sched_sysmon_started@232 = i64 0
-  __mrt_errno@240 = i64 0
-  __mrt_envp@248 = i64 0
-  __mrt_tls_next_key@256 = i64 0
-  __slab_arena_list@264 = i64 0
-  __slab_arena_map_l1@272 = i64 0
-  __slab_state@280 = i64 0
+  __gt_live_count@72 = i64 0
+  __gt_seed_bytes@80 = i64 2048
+  __gt_stack_bytes_sum@88 = i64 0
+  __gt_stack_bytes_count@96 = i64 0
+  __gt_seed_sum_seen@104 = i64 0
+  __gt_seed_count_seen@112 = i64 0
+  __sched_active_workers@120 = i64 1
+  __sched_max_active_workers@128 = i64 1
+  __sched_tls_index@136 = i64 0
+  __sched_tls_teb_offset@144 = i64 0
+  __sched_procs@152 = i64 0
+  __sched_allm@160 = i64 0
+  __sched_midle@168 = i64 0
+  __sched_pidle@176 = i64 0
+  __gt_gfree_head@184 = i64 0
+  __sched_arena_cursor@192 = i64 0
+  __sched_arena_limit@200 = i64 0
+  __gt_records_carved@208 = i64 0
+  __sched_npidle@216 = i64 0
+  __sched_runq_size@224 = i64 0
+  __sched_global_pushes@232 = i64 0
+  __sched_timer_scan_steps@240 = i64 0
+  __sched_mcount@248 = i64 0
+  __sched_nmidle@256 = i64 0
+  __sched_main_m@264 = i64 0
+  __sched_phase@272 = i64 0
+  __sched_lastpoll@280 = i64 0
+  __sched_poll_until@288 = i64 0
+  __sched_regain_head@296 = i64 0
+  __np_poller@304 = i64 0
+  __np_break@312 = i64 0
+  __np_wake_sig@320 = i64 0
+  __np_pd_table@328 = i64 0
+  __np_pd_cap@336 = i64 0
+  __np_waiters@344 = i64 0
+  __np_src_key_free@352 = i64 0
+  __np_src_key_high@360 = i64 0
+  __sched_num_procs@368 = i64 0
+  __sched_shutdown_flag@376 = i64 0
+  __sched_lock@384 = i64 0
+  __sched_lock_depth_sink@392 = i64 0
+  __sched_nmspinning@400 = i64 0
+  __sched_needspinning@408 = i64 0
+  __sched_sysmon_event@416 = i64 0
+  __sched_sysmon_wait@424 = i64 0
+  __sched_timer_starts@432 = i64 0
+  __mrt_errno@440 = i64 0
+  __mrt_envp@448 = i64 0
+  __mrt_tls_next_key@456 = i64 0
+  __slab_arena_list@464 = i64 0
+  __slab_arena_map_l1@472 = i64 0
+  __slab_state@480 = i64 0
 }
 
 func @writeFile {
@@ -502,44 +527,80 @@ func @main {
   loop:
     arm64.movRegReg x0, x21
     arm64.bl __md_filename
-    arm64.bl String.init
     arm64.movRegReg x23, x0
-    arm64.leaRdata x1, __str_rec_19  ; ".gitignore"
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x24, [x23 + 8]
+    arm64.movImm x25, 0
+    arm64.b forhdr
+  scan:
     arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x25
+    arm64.bl __managed_byte_at
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#55
+  tryok#54:
+    arm64.cmp x0, 128
+    arm64.movImm x1, 1
+    arm64.b.ge scmerge
+  orrhs:
+    arm64.cmp x0, 13
+    arm64.cset x0, eq
+    arm64.movRegReg x1, x0
+  scmerge:
+    arm64.cbz x1, forstep
+  notSingleByte:
+    arm64.movImm x1, 0
+    arm64.b __il_cont#48
+  forstep:
+    arm64.add x25, x25, 1
+  forhdr:
+    arm64.cmp x25, x24
+    arm64.b.lt scan
+  forexit:
+    arm64.movImm x1, 1
+  __il_cont#48:
+    arm64.movRegReg x0, x23
+    arm64.bl __str_of_buffer
+    arm64.movRegReg x24, x0
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_decref
+  __il_cont#46:
+    arm64.leaRdata x1, __str_rec_19  ; ".gitignore"
+    arm64.movRegReg x0, x24
     arm64.bl __str_eq
     arm64.cbz x0, ifcont#24
   hidden:
     arm64.add x20, x20, 1
   ifcont#24:
     arm64.leaRdata x1, __str_rec_20  ; "..config"
-    arm64.movRegReg x0, x23
+    arm64.movRegReg x0, x24
     arm64.bl __str_eq
     arm64.cbz x0, ifcont#26
   doubleLeading:
     arm64.add x20, x20, 1
   ifcont#26:
     arm64.leaRdata x1, __str_rec_21  ; "plain.txt"
-    arm64.movRegReg x0, x23
+    arm64.movRegReg x0, x24
     arm64.bl __str_eq
     arm64.cbz x0, ifcont#28
   ordinary:
     arm64.add x20, x20, 1
   ifcont#28:
     arm64.leaRdata x1, __str_rec_22  ; "."
-    arm64.movRegReg x0, x23
+    arm64.movRegReg x0, x24
     arm64.bl __str_eq
     arm64.cbz x0, ifcont#30
   singleDot:
     arm64.add x22, x22, 1
   ifcont#30:
     arm64.leaRdata x1, __str_rec_23  ; ".."
-    arm64.movRegReg x0, x23
+    arm64.movRegReg x0, x24
     arm64.bl __str_eq
     arm64.cbz x0, ifcont#32
   doubleDot:
     arm64.add x22, x22, 1
   ifcont#32:
-    arm64.movRegReg x0, x23
+    arm64.movRegReg x0, x24
     arm64.bl __str_decref
     arm64.b whilehdr
   whileexit:
@@ -774,9 +835,23 @@ func @main {
   __rc_chk:
     arm64.loadRegSlot x0, slot0
     arm64.cmp x0, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_26  ; "panic at managed-directory.dotfiles-are-entries-not-dot-pseudo-entries.test:68: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.loadRegSlot x0, slot0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.loadRegSlot x27, slot9
+    arm64.loadRegSlot x28, slot10
+    arm64.epilogue 112
+    arm64.ret
+  tryerr#55:
+    arm64.leaRdata x0, __str_blob_25  ; "panic at String.maxon:1136: scanSingleByteGraphemes: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -791,8 +866,10 @@ func @main {
     arm64.loadRegSlot x28, slot10
     arm64.epilogue 112
     arm64.ret
-  __rc_ok:
-    arm64.loadRegSlot x0, slot0
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_27  ; "panic at managed-directory.dotfiles-are-entries-not-dot-pseudo-entries.test:68: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
     arm64.loadRegSlot x21, slot3

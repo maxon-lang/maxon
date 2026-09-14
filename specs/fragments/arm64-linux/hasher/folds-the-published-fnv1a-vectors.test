@@ -24,29 +24,101 @@ data {
 
 func @digestOf {
   entry:
-    arm64.prologue 32
+    arm64.prologue 80
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.bl Hasher.create
     arm64.movRegReg x20, x0
+  __il_body#2:
+    arm64.movImm x1, 0
+  __il_body#19:
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
+  __il_cont#18:
     arm64.movRegReg x0, x19
-    arm64.bl String.toByteArray
+    arm64.bl __managed_slice
     arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x19
-    arm64.bl Hasher.combine#struct
+    arm64.cmp x9, 0
+    arm64.b.eq tryok
+  tryerr:
+    arm64.leaRdata x0, __str_blob_37  ; "panic at String.maxon:157: String.toByteArray: slice 0..byteLength() is in bounds by construction\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
+    arm64.ret
+  tryok:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_retain
+    arm64.movRegReg x21, x0
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-  __il_body:
+  __il_body#6:
     arm64.loadRegBaseDisp.word64 x19, [x20 + 0]
-  __il_cont:
+  __il_body#8:
+    arm64.movImm x22, 0
+  __us_test:
+    arm64.loadRegBaseDisp.word64 x23, [x21 + 8]
+    arm64.loadRegBaseDisp.word64 x24, [x21 + 24]
+    arm64.loadRegBaseDisp.word64 x25, [x21 + 0]
+    arm64.b forhdr
+  each:
+    arm64.cmp x24, 8
+    arm64.b.ne __im_stride
+  __im_word:
+    arm64.loadRegBaseIndexScale.word64 x0, [x25 + x22*8 + 0]
+    arm64.b __il_body#23
+  __im_stride:
+    arm64.cmp x24, 1
+    arm64.b.ne __im_slow
+  __im_byte:
+    arm64.add x0, x25, x22
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.b __il_body#23
+  __im_slow:
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x22
+    arm64.bl __managed_get_unchecked
+  __il_body#23:
+    arm64.eor x0, x19, x0
+    arm64.movImm x1, 1099511628211
+    arm64.mul x0, x0, x1
+  forstep:
+    arm64.add x22, x22, 1
+    arm64.movRegReg x19, x0
+  forhdr:
+    arm64.cmp x22, x23
+    arm64.b.lt each
+  __il_cont#7:
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+  __il_cont#5:
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+  __il_body#21:
+    arm64.loadRegBaseDisp.word64 x19, [x20 + 0]
+  __il_cont#20:
     arm64.movRegReg x0, x20
     arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
     arm64.ret
 }
 

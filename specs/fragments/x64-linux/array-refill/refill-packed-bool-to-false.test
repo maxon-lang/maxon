@@ -30,7 +30,8 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 32
     x64.movRegImm rcx, 18446744073709551615
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
@@ -47,10 +48,9 @@ func @main {
     x64.callDirect Array.refill
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
-  forhdr:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegReg r13, rax
-    x64.jcc greaterEqual, forexit
+  __us_test:
+    x64.loadRegBaseDisp.word64 r14, [rbx + 8]
+    x64.jmp forhdr
   count:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
@@ -65,7 +65,9 @@ func @main {
   forstep:
     x64.leaRegRegImm32 r13, r13, 1
     x64.movRegReg r12, rax
-    x64.jmp forhdr
+  forhdr:
+    x64.cmpRegReg r13, r14
+    x64.jcc less, count
   forexit:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.leaRegRegReg r12, r12, rax
@@ -75,20 +77,22 @@ func @main {
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 r12, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at refill-packed-bool-to-false.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg r8, r12
-    x64.epilogue 40
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at refill-packed-bool-to-false.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx

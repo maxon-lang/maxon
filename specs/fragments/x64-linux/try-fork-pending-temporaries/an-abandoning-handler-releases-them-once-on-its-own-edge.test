@@ -24,7 +24,7 @@ end 'Conf'
 
 function main() returns ExitCode
 	let c = try Conf.create(900) otherwise return 9
-	return c.n + c.argv.count() as ExitCode
+	return (c.n + (c.argv.count() as Integer)) as ExitCode
 end 'main'
 ---
 ExitCode: 0
@@ -132,38 +132,24 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
     x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __rc_panic#4
-  __rc_chk#5:
-    x64.cmpRegImm32 rcx, 255
-    x64.jcc lessEqual, __rc_ok#3
-  __rc_panic#4:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at an-abandoning-handler-releases-them-once-on-its-own-edge.test:27: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok#3:
     x64.leaRegRegReg rbx, rax, rcx
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok:
     x64.movRegReg rcx, r8
     x64.callDirect __destruct_Conf
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic#7
-  __rc_chk#8:
-    x64.cmpRegImm32 rbx, 255
-    x64.jcc lessEqual, __rc_ok#6
-  __rc_panic#7:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at an-abandoning-handler-releases-them-once-on-its-own-edge.test:27: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok#6:
-    x64.movRegReg r8, rbx
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at an-abandoning-handler-releases-them-once-on-its-own-edge.test:27: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp

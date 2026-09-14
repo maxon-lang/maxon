@@ -13,7 +13,7 @@ end 'Expr'
 
 function tyLen(ty Ty) returns Integer
 	return match ty 'l'
-		concrete(name) gives name.byteLength()
+		concrete(name) gives name.byteLength() as Integer
 		stringy gives 0
 	end 'l'
 end 'tyLen'
@@ -27,7 +27,7 @@ function main() returns ExitCode
 	end 'write'
 
 	return match e 'read'
-		direct(ty) gives tyLen(ty)
+		direct(ty) gives tyLen(ty) as ExitCode
 		unresolved gives 99
 	end 'read'
 end 'main'
@@ -39,44 +39,6 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
-}
-
-func @tyLen {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.cmp x1, 0
-    arm64.b.ne matchnext
-  matcharm#1:
-    arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-  __il_body:
-    arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
-    arm64.cmp x20, 0
-    arm64.b.ge __il_cont
-  __il_slow:
-    arm64.movRegReg x0, x19
-    arm64.bl String.byteLength
-    arm64.movRegReg x20, x0
-  __il_cont:
-    arm64.movRegReg x0, x19
-    arm64.bl __str_decref
-    arm64.movRegReg x0, x20
-    arm64.b matchcont
-  matchnext:
-    arm64.cmp x1, 1
-    arm64.b.ne matchdead
-  matcharm#2:
-    arm64.movImm x0, 0
-  matchcont:
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-  matchdead:
 }
 
 func @main {
@@ -108,8 +70,8 @@ func @main {
     arm64.b.ne matchnext#4
   matcharm#1:
     arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
-    arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
     arm64.leaRdata x21, __str_rec_4  ; "the second one, also a real heap allocation"
     arm64.movImm x0, 16
     arm64.movImm x1, 0
@@ -124,6 +86,8 @@ func @main {
     arm64.bl __destruct_Ty
     arm64.movRegReg x0, x22
     arm64.bl __mm_incref
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.bl __destruct_Ty
     arm64.storeBaseDispReg.word64 [x19 + 8], x22
     arm64.movRegReg x0, x22
     arm64.bl __destruct_Ty
@@ -133,47 +97,57 @@ func @main {
     arm64.b.ne matchdead#3
   matcharm#2:
     arm64.leaRdata x0, __str_rec_5  ; "none"
-    arm64.bl print
+  __il_body#15:
+    arm64.bl __write_stdout
   matchcont#5:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
     arm64.b.ne matchnext#9
   matcharm#6:
     arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
-    arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x19 + 8], x0
     arm64.movRegReg x0, x20
-    arm64.bl tyLen
-    arm64.movRegReg x21, x0
+    arm64.bl __mm_incref
+  __il_body#17:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.cmp x0, 0
+    arm64.b.ne matchnext#21
+  matcharm#18:
+    arm64.loadRegBaseDisp.word64 x21, [x20 + 8]
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_incref
+  __il_body#24:
+    arm64.loadRegBaseDisp.word64 x22, [x21 + 8]
+  __il_cont#23:
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+    arm64.b __il_cont#16
+  matchnext#21:
+    arm64.cmp x0, 1
+    arm64.b.ne matchdead#20
+  matcharm#19:
+    arm64.movImm x21, 0
+    arm64.movRegReg x22, x21
+  __il_cont#16:
+    arm64.cmp x22, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x22, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
     arm64.movRegReg x0, x20
     arm64.bl __destruct_Ty
     arm64.b matchcont#10
+  matchdead#20:
   matchnext#9:
     arm64.cmp x0, 1
     arm64.b.ne matchdead#8
   matcharm#7:
     arm64.movImm x20, 99
-    arm64.movRegReg x21, x20
+    arm64.movRegReg x22, x20
   matchcont#10:
     arm64.movRegReg x0, x19
     arm64.bl __destruct_Expr
-    arm64.cmp x21, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x21, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_6  ; "panic at nested-union-payload-write-back.test:29: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x21
+    arm64.movRegReg x0, x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -182,4 +156,14 @@ func @main {
     arm64.ret
   matchdead#8:
   matchdead#3:
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_7  ; "panic at nested-union-payload-write-back.test:30: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
 }

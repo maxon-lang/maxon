@@ -29,11 +29,12 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Plain.make {
+func @main {
   entry:
     arm64.prologue 32
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
+  __il_body:
     arm64.movImm x0, 1
     arm64.movImm x1, 0
     arm64.bl __managed_create
@@ -44,25 +45,19 @@ func @Plain.make {
     arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.movRegReg x0, x20
+  __il_cont:
+    arm64.cmp x20, 4
+    arm64.b.ne ifcont
+  ok:
+    arm64.movImm x0, 4
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-}
-
-func @main {
-  entry:
-    arm64.prologue 16
-    arm64.bl Plain.make
-    arm64.cmp x0, 4
-    arm64.b.ne ifcont
-  ok:
-    arm64.movImm x0, 4
-    arm64.epilogue 16
-    arm64.ret
   ifcont:
     arm64.movImm x0, 1
-    arm64.epilogue 16
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
     arm64.ret
 }

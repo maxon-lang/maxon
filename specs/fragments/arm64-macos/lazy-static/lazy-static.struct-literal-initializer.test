@@ -28,17 +28,6 @@ data {
   __slab_state@32 = i64 0
 }
 
-func @Pair.get {
-  entry:
-    arm64.prologue 16
-    arm64.bl __lazy_init#__data_Pair.origin
-    arm64.leaGlobal x0, __data_Pair.origin
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.bl __mm_retain
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 96
@@ -52,8 +41,12 @@ func @main {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.bl Pair.get
+  __il_body#3:
+    arm64.leaGlobal x0, __data_Pair.origin
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl __mm_retain
     arm64.movRegReg x19, x0
+  __il_cont#2:
     arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
     arm64.movImm x0, 20
     arm64.movImm x1, 0
@@ -107,8 +100,10 @@ func @main {
     arm64.bl __mm_decref
     arm64.movRegReg x0, x25
     arm64.bl __mm_decref
+  __il_body#4:
     arm64.movRegReg x0, x27
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont#1:
     arm64.movRegReg x0, x27
     arm64.bl __str_decref
     arm64.movImm x20, 0

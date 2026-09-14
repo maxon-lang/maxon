@@ -35,57 +35,74 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x19
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
     arm64.movImm x0, 48
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.leaRdata x1, __barr_blob_0
-    arm64.storeBaseDispReg.word64 [x0 + 0], x1
-    arm64.movImm x1, 5
-    arm64.storeBaseDispReg.word64 [x0 + 8], x1
-    arm64.movImm x1, 18446744073709551614
-    arm64.storeBaseDispReg.word64 [x0 + 16], x1
-    arm64.movImm x1, 8
-    arm64.storeBaseDispReg.word64 [x0 + 24], x1
-    arm64.movImm x19, 0
-    arm64.movImm x1, 0
-  forhdr:
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
-    arm64.cmp x1, x2
-    arm64.b.ge forexit
-  search:
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
-    arm64.loadRegBaseIndexScale.word64 x2, [x2 + x1*8 + 0]
-  __im_cont:
-    arm64.leaRegSlot x3, slot0
-    arm64.storeBaseDispReg.word64 [x3 + 0], x2
-    arm64.loadRegBaseDisp.word64 x2, [x3 + 0]
-    arm64.cmp x2, 30
-    arm64.b.ne forstep
-  found:
-    arm64.loadRegBaseDisp.word64 x19, [x3 + 0]
-    arm64.b forexit
-  forstep:
-    arm64.add x1, x1, 1
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __barr_blob_0
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.movImm x0, 5
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.movImm x0, 18446744073709551614
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
+    arm64.movImm x0, 8
+    arm64.storeBaseDispReg.word64 [x19 + 24], x0
+    arm64.movImm x20, 0
+    arm64.movImm x21, 0
     arm64.b forhdr
+  search:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseIndexScale.word64 x22, [x0 + x21*8 + 0]
+  __il_body:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x22
+  __il_cont:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, 30
+    arm64.b.ne ifcont
+  found:
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.bl __mm_decref
+    arm64.b forexit
+  ifcont:
+    arm64.bl __mm_decref
+  forstep:
+    arm64.add x21, x21, 1
+  forhdr:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x21, x0
+    arm64.b.lt search
   forexit:
+    arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.cmp x19, 0
+    arm64.cmp x20, 0
     arm64.b.lt __rc_panic
   __rc_chk:
-    arm64.cmp x19, 255
-    arm64.b.le __rc_ok
+    arm64.cmp x20, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at rc-release-break-for-in.test:24: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_2  ; "panic at rc-release-break-for-in.test:24: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.epilogue 32
-    arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
     arm64.ret
 }

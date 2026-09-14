@@ -44,50 +44,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @pickOr {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.cmpRegImm32 rbx, 999999
-    x64.jcc belowEqual, ifcont#2
-  never:
-    x64.movRegImm32 rcx, 16
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r8 + 8], rax
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  ifcont#2:
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, ifcont#4
-  named:
-    x64.movRegImm32 rcx, 16
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegImm32 rax, 2
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  ifcont#4:
-    x64.movRegReg rcx, rax
-    x64.callDirect __mm_retain
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @tagCode {
   entry:
     x64.pushReg rbp
@@ -98,6 +54,9 @@ func @tagCode {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic#9
+  __rc_ok#8:
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -106,11 +65,36 @@ func @tagCode {
     x64.storeBaseDispReg.word64 [r13 + 0], rax
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r13 + 8], rax
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
-    x64.movRegReg rax, r13
-    x64.callDirect pickOr
+  __il_body:
+    x64.cmpRegImm32 rbx, 999999
+    x64.jcc belowEqual, ifcont#14
+  never:
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 8], rax
     x64.movRegReg rbx, r8
+    x64.jmp __il_cont
+  ifcont#14:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc equal, ifcont#16
+  named:
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 2
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 8], rbx
+    x64.movRegReg rbx, r8
+    x64.jmp __il_cont
+  ifcont#16:
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_retain
+    x64.movRegReg rbx, r8
+  __il_cont:
     x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
@@ -133,6 +117,9 @@ func @tagCode {
   matchcont:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic#11
+  __rc_ok#10:
     x64.movRegReg r8, r12
     x64.epilogue 40
     x64.popReg r13
@@ -141,6 +128,26 @@ func @tagCode {
     x64.popReg rbp
     x64.ret
   matchdead:
+  __rc_panic#9:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at may-return-arg-owned-result-no-over-release.test:20: Range check failed: value outside typealias 'N'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#11:
+    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at may-return-arg-owned-result-no-over-release.test:22: Range check failed: value outside typealias 'N'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
 }
 
 func @main {
@@ -199,25 +206,27 @@ func @main {
     x64.movRegReg rax, rbx
     x64.callDirect __str_copy
     x64.leaRegRegReg rbx, r12, rbx
-    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rax, slot2
     x64.loadRegSlot rdx, slot3
-    x64.loadRegSlot r12, slot2
-    x64.movRegReg rax, r12
+    x64.movRegReg rcx, rbx
     x64.callDirect __str_copy
-    x64.leaRegRegReg rax, rbx, r12
-    x64.loadRegSlot rbx, slot1
-    x64.storeBaseDispReg.word64 [rbx + 0], r15
-    x64.loadRegSlot rax, slot0
-    x64.storeBaseDispReg.word64 [rbx + 8], rax
-    x64.movRegImm rax, 18446744073709551613
-    x64.storeBaseDispReg.word64 [rbx + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rax, slot2
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rax, slot1
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot0
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
     x64.movRegReg rcx, r14
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, rbx
-    x64.callDirect print
-    x64.movRegReg rcx, rbx
+  __il_body:
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __write_stdout
+  __il_cont:
+    x64.loadRegSlot rcx, slot1
     x64.callDirect __str_decref
     x64.movRegImm32 r8, 0
     x64.epilogue 72

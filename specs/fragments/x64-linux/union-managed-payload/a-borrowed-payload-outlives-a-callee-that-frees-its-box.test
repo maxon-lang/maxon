@@ -41,87 +41,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Cell.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_incref
-    x64.storeBaseDispReg.word64 [r12 + 0], rbx
-    x64.movRegReg rcx, rbx
-    x64.callDirect __destruct_Slot
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Cell.replaceThenMeasure {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-    x64.movRegImm32 r13, 7
-    x64.movRegImm32 rcx, 16
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r14, r8
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r14 + 0], rax
-    x64.storeBaseDispReg.word64 [r14 + 8], r13
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.callDirect __destruct_Slot
-    x64.storeBaseDispReg.word64 [rbx + 0], r14
-    x64.leaRegRdata rbx, [rip + __str_rec_3]  ; "a fresh allocation of its own, reusing the freed record"
-  __il_body#3:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc greaterEqual, __rc_ok#4
-  __il_slow#5:
-    x64.movRegReg rcx, r12
-    x64.callDirect String.byteLength
-    x64.jmp __il_cont#2
-  __rc_ok#4:
-    x64.movRegReg r8, rax
-  __il_cont#2:
-    x64.imulRegRegImm32 r12, r8, 1000
-  __il_body#6:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc greaterEqual, __rc_ok#7
-  __il_slow#8:
-    x64.movRegReg rcx, rbx
-    x64.callDirect String.byteLength
-    x64.jmp __il_cont#1
-  __rc_ok#7:
-    x64.movRegReg r8, rax
-  __il_cont#1:
-    x64.leaRegRegReg r8, r12, r8
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -142,10 +61,18 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __str_retain
     x64.storeBaseDispReg.word64 [r12 + 8], r8
-    x64.movRegReg rcx, r12
-    x64.callDirect Cell.create
+  __il_body#7:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
     x64.movRegReg rbx, r8
     x64.storeSlotReg slot0, rbx
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [rbx + 0], r12
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Slot
+  __il_cont#6:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.cmpRegImm32 rcx, 0
@@ -154,10 +81,28 @@ func @main {
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
     x64.movRegReg rcx, r12
     x64.callDirect __mm_incref
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
-    x64.callDirect Cell.replaceThenMeasure
-    x64.movRegReg rbx, r8
+  __il_body#9:
+    x64.movRegImm32 r13, 7
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect __destruct_Slot
+    x64.storeBaseDispReg.word64 [rbx + 0], r14
+    x64.leaRegRdata rax, [rip + __str_rec_3]  ; "a fresh allocation of its own, reusing the freed record"
+  __il_body#14:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 8]
+  __il_cont#13:
+    x64.imulRegRegImm32 rcx, rcx, 1000
+  __il_body#15:
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+  __il_cont#12:
+    x64.leaRegRegReg rbx, rcx, rax
+  __il_cont#8:
     x64.movRegReg rcx, r12
     x64.callDirect __str_decref
     x64.jmp matchcont
@@ -195,19 +140,21 @@ func @main {
     x64.movRegReg rax, rbx
     x64.callDirect __str_copy
     x64.leaRegRegReg rax, r12, rbx
-    x64.loadRegSlot rbx, slot2
-    x64.storeBaseDispReg.word64 [rbx + 0], r15
-    x64.loadRegSlot rax, slot1
-    x64.storeBaseDispReg.word64 [rbx + 8], rax
-    x64.movRegImm rax, 18446744073709551613
-    x64.storeBaseDispReg.word64 [rbx + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rax, slot2
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot1
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
     x64.movRegReg rcx, r14
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, rbx
-    x64.callDirect print
-    x64.movRegReg rcx, rbx
+  __il_body#11:
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __write_stdout
+  __il_cont#10:
+    x64.loadRegSlot rcx, slot2
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
     x64.loadRegSlot rcx, slot0

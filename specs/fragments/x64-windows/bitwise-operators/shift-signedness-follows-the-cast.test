@@ -1,5 +1,5 @@
 // Test: shift-signedness-follows-the-cast
-typealias Wide = int(0 to u64.max)
+typealias Wide = bits(64)
 typealias Num = int(i64.min to i64.max)
 
 function viaCast(p Num) returns Wide
@@ -26,37 +26,16 @@ end 'main'
 ---
 ExitCode: 42
 ---
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+}
+
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-  __il_body#8:
-    x64.movRegImm32 rax, 15
-  __il_cont#7:
-    x64.cmpRegImm32 rax, 15
-    x64.jcc equal, __il_body#10
-  declaredParam:
-    x64.movRegImm32 r8, 1
-    x64.popReg rbp
-    x64.ret
-  __il_body#10:
-    x64.movRegImm32 rax, 15
-  __il_cont#9:
-    x64.cmpRegImm32 rax, 15
-    x64.jcc equal, __il_body#13
-  castLocal:
-    x64.movRegImm32 r8, 2
-    x64.popReg rbp
-    x64.ret
-  __il_body#13:
-    x64.movRegImm32 rax, 15
-  __il_cont#11:
-    x64.cmpRegImm32 rax, 15
-    x64.jcc equal, ifcont
-  twoRoutesOneType:
-    x64.movRegImm32 r8, 3
-    x64.popReg rbp
-    x64.ret
   ifcont:
     x64.movRegImm32 r8, 42
     x64.popReg rbp

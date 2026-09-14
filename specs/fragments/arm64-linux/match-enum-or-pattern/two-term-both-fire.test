@@ -8,8 +8,10 @@ end 'E'
 
 function isMid(v E) returns bool
 	return match v 'm'
-		c1 or c2 gives true
-		c0 or c3 gives false
+		c1 or
+			c2 gives true
+		c0 or
+			c3 gives false
 	end 'm'
 end 'isMid'
 
@@ -59,11 +61,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
     arm64.movImm x1, 0
-  forhdr:
-    arm64.storeSlotReg slot0, x1
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x1, x0
-    arm64.b.ge forexit
+    arm64.b forhdr
   e:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
     arm64.cmp x0, 8
@@ -87,36 +85,44 @@ func @main {
     arm64.cmp x0, 0
     arm64.cset x1, eq
     arm64.leaRdata x2, __str_rec_6  ; "c0"
-    arm64.mul x1, x1, x2
+    arm64.mul x2, x1, x2
     arm64.cmp x0, 1
-    arm64.cset x2, eq
-    arm64.leaRdata x3, __str_rec_7  ; "c1"
-    arm64.mul x2, x2, x3
-    arm64.add x1, x1, x2
+    arm64.cset x3, eq
+    arm64.leaRdata x4, __str_rec_7  ; "c1"
+    arm64.mul x3, x3, x4
+    arm64.add x2, x2, x3
     arm64.cmp x0, 2
-    arm64.cset x2, eq
-    arm64.leaRdata x3, __str_rec_8  ; "c2"
-    arm64.mul x2, x2, x3
-    arm64.add x1, x1, x2
+    arm64.cset x3, eq
+    arm64.leaRdata x4, __str_rec_8  ; "c2"
+    arm64.mul x3, x3, x4
+    arm64.add x2, x2, x3
     arm64.cmp x0, 3
-    arm64.cset x2, eq
-    arm64.leaRdata x3, __str_rec_9  ; "c3"
-    arm64.mul x2, x2, x3
-    arm64.add x1, x1, x2
-    arm64.loadRegBaseDisp.word64 x20, [x1 + 0]
-    arm64.loadRegBaseDisp.word64 x21, [x1 + 8]
-    arm64.leaRdata x1, __str_rec_10  ; "="
-    arm64.loadRegBaseDisp.word64 x22, [x1 + 0]
-    arm64.loadRegBaseDisp.word64 x23, [x1 + 8]
-  __il_body:
-    arm64.jumpTable x0, default=matchdead [[0]=matcharm#13, [1..2]=matcharm#12, [3]=matcharm#13] @__jumptable_12
-  matchdead:
+    arm64.cset x3, eq
+    arm64.leaRdata x4, __str_rec_9  ; "c3"
+    arm64.mul x4, x3, x4
+    arm64.add x2, x2, x4
+    arm64.loadRegBaseDisp.word64 x20, [x2 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x2 + 8]
+    arm64.leaRdata x2, __str_rec_10  ; "="
+    arm64.loadRegBaseDisp.word64 x22, [x2 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x2 + 8]
+  __il_body#12:
+    arm64.cbnz x1, matcharm#14
+  matchnext#16:
+    arm64.cmp x0, 1
+    arm64.cset x1, ge
+    arm64.cmp x0, 2
+    arm64.cset x0, le
+    arm64.and x0, x1, x0
+    arm64.cbz x0, matchnext#17
   matcharm#13:
-    arm64.movImm x24, 0
-    arm64.b __il_cont
-  matcharm#12:
     arm64.movImm x24, 1
-  __il_cont:
+    arm64.b __il_cont#11
+  matchnext#17:
+    arm64.cbz x3, matchdead
+  matcharm#14:
+    arm64.movImm x24, 0
+  __il_cont#11:
     arm64.movImm x0, 5
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -157,24 +163,32 @@ func @main {
     arm64.movRegReg x2, x27
     arm64.bl __str_copy
     arm64.add x0, x20, x27
-    arm64.loadRegSlot x20, slot2
-    arm64.storeBaseDispReg.word64 [x20 + 0], x28
-    arm64.loadRegSlot x0, slot1
-    arm64.storeBaseDispReg.word64 [x20 + 8], x0
-    arm64.movImm x0, 18446744073709551613
-    arm64.storeBaseDispReg.word64 [x20 + 16], x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x20 + 24], x0
+    arm64.loadRegSlot x0, slot2
+    arm64.storeBaseDispReg.word64 [x0 + 0], x28
+    arm64.loadRegSlot x1, slot1
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.movImm x1, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x0 + 16], x1
+    arm64.movImm x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 24], x1
     arm64.movRegReg x0, x25
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
-    arm64.bl print
-    arm64.movRegReg x0, x20
+  __il_body#19:
+    arm64.loadRegSlot x0, slot2
+    arm64.bl __write_stdout
+  __il_cont#10:
+    arm64.loadRegSlot x0, slot2
     arm64.bl __str_decref
   forstep:
     arm64.loadRegSlot x0, slot0
     arm64.add x1, x0, 1
-    arm64.b forhdr
+  forhdr:
+    arm64.storeSlotReg slot0, x1
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x1, x0
+    arm64.b.lt e
+    arm64.b forexit
+  matchdead:
   forexit:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref

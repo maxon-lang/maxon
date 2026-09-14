@@ -86,8 +86,8 @@ func @IntCursor.create {
     arm64.bl __mm_alloc
     arm64.movRegReg x21, x0
     arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.storeBaseDispReg.word64 [x21 + 0], x19
+    arm64.bl __managed_retain
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
     arm64.storeBaseDispReg.word64 [x21 + 8], x20
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
@@ -97,57 +97,6 @@ func @IntCursor.create {
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.epilogue 48
-    arm64.ret
-}
-
-func @IntCursor.current {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
-    arm64.cmp x2, 0
-    arm64.b.ge __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at for-in-iterable.walks-the-cursor-the-factory-returns.test:17: Range check failed: value outside typealias 'ElementIndex'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  __rc_ok:
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 8]
-    arm64.cmp x2, x0
-    arm64.b.hs __im_slow
-  __im_load:
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
-    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x2*8 + 0]
-    arm64.movImm x3, 0
-    arm64.loadRegBaseDisp.word64 x4, [x1 + 40]
-    arm64.cmp x4, 0
-    arm64.b.eq critsplit#9
-  __im_empty:
-    arm64.cmp x0, 0
-    arm64.b.ne critsplit#10
-  __im_slow:
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
-    arm64.bl __managed_get
-    arm64.b __im_cont
-  critsplit#10:
-    arm64.movRegReg x9, x3
-    arm64.b __im_cont
-  critsplit#9:
-    arm64.movRegReg x9, x3
-  __im_cont:
-    arm64.cmp x9, 0
-    arm64.b.eq tryok
-  tryerr:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at for-in-iterable.walks-the-cursor-the-factory-returns.test:17: oob\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  tryok:
-    arm64.epilogue 16
     arm64.ret
 }
 
@@ -175,48 +124,21 @@ func @IntCursor.advance {
     arm64.ret
 }
 
-func @IntSeq.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.storeBaseDispReg.word64 [x20 + 0], x19
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @IntSeq.createIterator {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.movRegReg x0, x19
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl __managed_retain
     arm64.bl IntCursor.create
     arm64.cmp x9, 0
     arm64.b.eq tryok
   tryerr:
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
+    arm64.epilogue 16
     arm64.ret
   tryok:
     arm64.movImm x9, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
+    arm64.epilogue 16
     arm64.ret
 }
 
@@ -241,44 +163,71 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
     arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.movRegReg x0, x19
-    arm64.bl IntSeq.create
+    arm64.bl __managed_retain
     arm64.movRegReg x20, x0
-    arm64.movImm x21, 0
+  __il_body#11:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
     arm64.movRegReg x0, x20
+    arm64.bl __managed_retain
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+  __il_cont#10:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x21
     arm64.bl IntSeq.createIterator
     arm64.movRegReg x22, x0
     arm64.movImm x0, 0
     arm64.cmp x9, 0
-    arm64.b.ne forjoin
-  forhdr:
-    arm64.cmp x0, 0
-    arm64.b.ne forexit
-  each:
-    arm64.movRegReg x0, x22
-    arm64.bl IntCursor.current
-    arm64.add x21, x21, x0
+    arm64.b.eq forhdr
+    arm64.b forjoin
+  __il_body#13:
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x22 + 8]
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic#17
+  __rc_ok#16:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x1, x2
+    arm64.b.hs __im_slow
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
+  __il_cont#12:
+    arm64.add x20, x20, x0
   forstep:
     arm64.movRegReg x0, x22
     arm64.bl IntCursor.advance
     arm64.movRegReg x0, x9
-    arm64.b forhdr
+  forhdr:
+    arm64.cmp x0, 0
+    arm64.b.eq __il_body#13
   forexit:
     arm64.movRegReg x0, x22
     arm64.bl __destruct_IntCursor
   forjoin:
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x21
     arm64.bl __destruct_IntSeq
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.cmp x21, 0
-    arm64.b.lt __rc_panic
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic#8
   __rc_chk:
-    arm64.cmp x21, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at for-in-iterable.walks-the-cursor-the-factory-returns.test:50: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.cmp x20, 255
+    arm64.b.gt __rc_panic#8
+  __rc_ok#7:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic#17:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at for-in-iterable.walks-the-cursor-the-factory-returns.test:17: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -287,8 +236,24 @@ func @main {
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x21
+  __im_slow:
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.eq __il_cont#12
+  tryerr:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at for-in-iterable.walks-the-cursor-the-factory-returns.test:17: oob\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic#8:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at for-in-iterable.walks-the-cursor-the-factory-returns.test:50: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

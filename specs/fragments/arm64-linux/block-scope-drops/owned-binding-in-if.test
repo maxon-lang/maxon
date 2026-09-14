@@ -23,7 +23,7 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @build {
+func @main {
   entry:
     arm64.prologue 80
     arm64.storeSlotReg slot6, x25
@@ -33,7 +33,8 @@ func @build {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
+    arm64.movImm x19, 1
+  __il_body#5:
     arm64.leaRdata x0, __str_rec_1  ; "v"
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
@@ -69,7 +70,14 @@ func @build {
     arm64.storeBaseDispReg.word64 [x24 + 24], x0
     arm64.movRegReg x0, x22
     arm64.bl __mm_decref
+  __il_body#6:
     arm64.movRegReg x0, x24
+    arm64.bl __write_stdout
+  __il_cont:
+    arm64.movRegReg x0, x24
+    arm64.bl __str_decref
+  ifcont:
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -78,24 +86,5 @@ func @build {
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
     arm64.epilogue 80
-    arm64.ret
-}
-
-func @main {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, 1
-  b:
-    arm64.bl build
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x19
-    arm64.bl print
-    arm64.movRegReg x0, x19
-    arm64.bl __str_decref
-  ifcont:
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
     arm64.ret
 }

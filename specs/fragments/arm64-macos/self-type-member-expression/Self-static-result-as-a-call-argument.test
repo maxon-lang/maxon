@@ -30,25 +30,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @take {
-  entry:
-    arm64.prologue 16
-    arm64.cmp x0, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x0, 1000
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at Self-static-result-as-a-call-argument.test:4: Range check failed: value outside typealias 'Num'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  __rc_ok:
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @Gate.make {
   entry:
     arm64.prologue 32
@@ -58,14 +39,7 @@ func @Gate.make {
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 1000
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at Self-static-result-as-a-call-argument.test:11: Range check failed: value outside typealias 'Num'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
+    arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
@@ -74,35 +48,11 @@ func @Gate.make {
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
-}
-
-func @Gate.arg {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, 42
-    arm64.bl Gate.make
-    arm64.movRegReg x19, x0
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-  __il_body:
-    arm64.cmp x0, 0
-    arm64.b.lt __il_slow
-  __rc_chk:
-    arm64.cmp x0, 1000
-    arm64.b.le __rc_ok
-  __il_slow:
-    arm64.bl take
-    arm64.movRegReg x20, x0
-    arm64.b __il_cont
-  __rc_ok:
-    arm64.movRegReg x20, x0
-  __il_cont:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at Self-static-result-as-a-call-argument.test:11: Range check failed: value outside typealias 'Num'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
 }
@@ -115,26 +65,41 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl Gate.make
     arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x19
-    arm64.bl Gate.arg
-    arm64.movRegReg x20, x0
+  __il_body#5:
+    arm64.movImm x0, 42
+    arm64.bl Gate.make
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+  __il_body#7:
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic#9
+  __rc_chk#10:
+    arm64.cmp x20, 1000
+    arm64.b.gt __rc_panic#9
+  __il_cont:
+    arm64.bl __mm_decref
+  __rc_chk#3:
+    arm64.cmp x20, 255
+    arm64.b.gt __rc_panic#2
+  __rc_ok:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
-    arm64.cmp x20, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x20, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at Self-static-result-as-a-call-argument.test:21: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic#9:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at Self-static-result-as-a-call-argument.test:4: Range check failed: value outside typealias 'Num'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x20
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at Self-static-result-as-a-call-argument.test:21: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32

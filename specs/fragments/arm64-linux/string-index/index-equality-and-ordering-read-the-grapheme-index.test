@@ -33,6 +33,7 @@ data {
 func @main {
   entry:
     arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
@@ -45,9 +46,37 @@ func @main {
     arm64.bl String.findFirst
     arm64.cmp x9, 0
     arm64.b.eq tryok
-  tryerr:
+  __il_body#30:
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
+  __il_body#31:
+    arm64.loadRegBaseDisp.byte x0, [x19 + 48]
+  __il_cont#28:
+    arm64.cbz x0, ifcont#20
+  oneByteEach:
+    arm64.movRegReg x0, x21
+    arm64.b __il_body#27
+  ifcont#20:
+    arm64.movImm x22, 0
+    arm64.movImm x1, 0
+    arm64.b whilehdr
+  countLoop:
     arm64.movRegReg x0, x19
-    arm64.bl String.endIndex
+    arm64.bl findGraphemeEnd
+    arm64.add x22, x22, 1
+    arm64.movRegReg x1, x0
+  whilehdr:
+    arm64.cmp x1, x21
+    arm64.b.lt countLoop
+  whileexit:
+    arm64.cmp x22, 0
+    arm64.b.lt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x22
+  __il_body#27:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
+  __il_cont#26:
+    arm64.bl StringIndex.create
+  __il_cont#13:
     arm64.movRegReg x21, x0
     arm64.b trycont
   tryok:
@@ -56,7 +85,7 @@ func @main {
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x21 + 0]
     arm64.cmp x0, x1
-    arm64.b.ge ifelse#5
+    arm64.b.hs ifelse#5
   ordered:
     arm64.leaRdata x0, __str_rec_10  ; "lt\x0a"
     arm64.bl print
@@ -102,6 +131,17 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_54  ; "panic at grapheme.maxon:404: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
 }

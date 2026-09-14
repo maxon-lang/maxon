@@ -3,8 +3,15 @@
 // this can only have come from the deadline itself.
 let promptMs = 3000
 
-function readPastTheDeadline() returns ExitCode throws NetworkError
-	let client = try TcpClient.connect("tcpbin.com", port: 4242)
+function holdSilently(listener TcpListener) returns ExitCode
+	let conn = try listener.accept() otherwise return 1
+	try conn.recv(1024) otherwise ignore
+
+	return 0
+end 'holdSilently'
+
+function readPastTheDeadline(listener TcpListener) returns ExitCode throws NetworkError
+	let client = try TcpClient.connect("127.0.0.1", port: listener.port())
 	try client.setReadDeadline(300)
 
 	var fired = false
@@ -18,12 +25,23 @@ function readPastTheDeadline() returns ExitCode throws NetworkError
 	end 'readErr'
 
 	let tookMs = Clock.elapsedMs(start)
+	client.close()
+
 	print("timedOut={fired} prompt={tookMs < promptMs}\n")
 	return 0
 end 'readPastTheDeadline'
 
 function main() returns ExitCode
-	let result = try readPastTheDeadline() otherwise 1
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+
+	let peer = async holdSilently(listener)
+	let result = try readPastTheDeadline(listener) otherwise 1
+	let held = await peer
+
+	if held != 0 'peer'
+		panic("unreachable: the connection whose read ran out of time was accepted by this peer")
+	end 'peer'
+
 	return result
 end 'main'
 ---
@@ -95,6 +113,45 @@ data {
   __mrt_console_probe_stderr@482 = i8 0
 }
 
+func @holdSilently {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.callDirect TcpListener.accept
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#1:
+    x64.movRegImm32 rdx, 1024
+    x64.movRegReg rcx, rbx
+    x64.callDirect TcpClient.recv
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, trycont
+  tryok#3:
+    x64.movRegReg rcx, r8
+    x64.callDirect __str_decref
+  trycont:
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_TcpClient
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
 func @readPastTheDeadline {
   entry:
     x64.pushReg rbp
@@ -105,8 +162,34 @@ func @readPastTheDeadline {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 104
-    x64.leaRegRdata rcx, [rip + __str_rec_4]  ; "tcpbin.com"
-    x64.movRegImm32 rdx, 4242
+    x64.leaRegRdata rbx, [rip + __str_rec_4]  ; "127.0.0.1"
+  __il_body#12:
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callDirect __ml_port
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#13
+  tryerr#14:
+    x64.leaRegRdata rcx, [rip + __str_blob_16]  ; "panic at TcpListener.maxon:32: TcpListener.port: this listener is closed, so it holds no bound port to report\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#13:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#16
+  __rc_chk:
+    x64.cmpRegImm32 r8, 65535
+    x64.jcc greater, __rc_panic#16
+  __il_cont#11:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
     x64.callDirect TcpClient.connect
     x64.movRegReg rbx, r8
     x64.storeSlotReg slot0, rbx
@@ -156,10 +239,10 @@ func @readPastTheDeadline {
     x64.cmpRegImm32 rax, 5
     x64.jcc notEqual, matchdefault
   matcharm:
-    x64.movRegImm32 rbx, 1
-    x64.jmp __il_body#13
+    x64.movRegImm32 r12, 1
+    x64.jmp __il_body#21
   matchdefault:
-    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at netpoll-socket.a-read-deadline-fires.test:16: unreachable: nothing was sent, so only the read deadline can end this recv\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at netpoll-socket.a-read-deadline-fires.test:23: unreachable: nothing was sent, so only the read deadline can end this recv\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
@@ -174,47 +257,49 @@ func @readPastTheDeadline {
   tryok#5:
     x64.movRegReg rcx, r8
     x64.callDirect __str_decref
-    x64.movRegReg rbx, r12
-  __il_body#13:
+  __il_body#21:
     x64.cmpRegImm32 r13, 0
-    x64.jcc less, __rc_panic#17
-  __rc_ok#16:
+    x64.jcc less, __rc_panic#25
+  __rc_ok#24:
     x64.callDirect Clock.nowMs
     x64.cmpRegReg r8, r13
     x64.jcc aboveEqual, ifcont
   clockSkew:
-    x64.movRegImm32 r12, 0
-    x64.jmp __il_cont#12
+    x64.movRegImm32 r13, 0
+    x64.jmp __il_body#28
   ifcont:
     x64.subRegReg r8, r8, r13
     x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic#19
-  __rc_ok#18:
-    x64.movRegReg r12, r8
-  __il_cont#12:
+    x64.jcc less, __rc_panic#27
+  __rc_ok#26:
+    x64.movRegReg r13, r8
+  __il_body#28:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect __ms_close
+  __il_cont#19:
     x64.leaRegRdata rax, [rip + __str_rec_6]  ; "timedOut="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot8, rcx
-    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.loadRegBaseDisp.word64 rbx, [rax + 8]
     x64.movRegImm32 rcx, 5
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.storeSlotReg slot7, r8
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.movRegReg rdx, r8
     x64.callDirect __bool_to_string
-    x64.movRegReg rbx, r8
+    x64.movRegReg r12, r8
     x64.leaRegRdata rax, [rip + __str_rec_7]  ; " prompt="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot6, rcx
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
-    x64.cmpRegImm32 r12, 3000
-    x64.setccReg below, r12
+    x64.cmpRegImm32 r13, 3000
+    x64.setccReg below, r13
     x64.movRegImm32 rcx, 5
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r15, r8
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
     x64.movRegReg rdx, r15
     x64.callDirect __bool_to_string
     x64.storeSlotReg slot5, r8
@@ -223,7 +308,7 @@ func @readPastTheDeadline {
     x64.storeSlotReg slot4, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.storeSlotReg slot3, rax
-    x64.leaRegRegReg rcx, r13, rbx
+    x64.leaRegRegReg rcx, rbx, r12
     x64.leaRegRegReg rcx, rcx, r14
     x64.leaRegRegReg rcx, rcx, r8
     x64.leaRegRegReg rax, rcx, rax
@@ -232,17 +317,17 @@ func @readPastTheDeadline {
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.storeSlotReg slot2, r8
-    x64.leaRegRegImm32 r12, r8, 56
+    x64.leaRegRegImm32 r13, r8, 56
     x64.loadRegSlot rdx, slot8
-    x64.movRegReg rcx, r12
-    x64.movRegReg rax, r13
-    x64.callDirect __str_copy
-    x64.leaRegRegReg r13, r12, r13
-    x64.loadRegSlot rdx, slot7
     x64.movRegReg rcx, r13
     x64.movRegReg rax, rbx
     x64.callDirect __str_copy
     x64.leaRegRegReg rbx, r13, rbx
+    x64.loadRegSlot rdx, slot7
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r12
     x64.loadRegSlot rdx, slot6
     x64.movRegReg rcx, rbx
     x64.movRegReg rax, r14
@@ -261,7 +346,7 @@ func @readPastTheDeadline {
     x64.loadRegSlot rax, slot3
     x64.leaRegRegReg rax, rbx, rax
     x64.loadRegSlot rax, slot2
-    x64.storeBaseDispReg.word64 [rax + 0], r12
+    x64.storeBaseDispReg.word64 [rax + 0], r13
     x64.loadRegSlot rcx, slot1
     x64.storeBaseDispReg.word64 [rax + 8], rcx
     x64.movRegImm rcx, 18446744073709551613
@@ -272,10 +357,10 @@ func @readPastTheDeadline {
     x64.callDirect __mm_decref
     x64.movRegReg rcx, r15
     x64.callDirect __mm_decref
-  __il_body#20:
+  __il_body#29:
     x64.loadRegSlot rcx, slot2
     x64.callDirect __write_stdout
-  __il_cont#11:
+  __il_cont#18:
     x64.loadRegSlot rcx, slot2
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
@@ -291,8 +376,8 @@ func @readPastTheDeadline {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic#17:
-    x64.leaRegRdata rcx, [rip + __str_blob_17]  ; "panic at Clock.maxon:32: Range check failed: value outside typealias 'InstantMs'\x0a"
+  __rc_panic#16:
+    x64.leaRegRdata rcx, [rip + __str_blob_25]  ; "panic at TcpListener.maxon:35: Range check failed: value outside typealias 'NetworkPort'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
@@ -304,8 +389,21 @@ func @readPastTheDeadline {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic#19:
-    x64.leaRegRdata rcx, [rip + __str_blob_18]  ; "panic at Clock.maxon:39: Range check failed: value outside typealias 'DurationMs'\x0a"
+  __rc_panic#25:
+    x64.leaRegRdata rcx, [rip + __str_blob_19]  ; "panic at Clock.maxon:32: Range check failed: value outside typealias 'InstantMs'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#27:
+    x64.leaRegRdata rcx, [rip + __str_blob_20]  ; "panic at Clock.maxon:39: Range check failed: value outside typealias 'DurationMs'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
@@ -323,14 +421,68 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.leaRegRdata rcx, [rip + __str_rec_4]  ; "127.0.0.1"
+    x64.movRegImm32 rdx, 0
+    x64.callDirect TcpListener.bind
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#1:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_own
+    x64.movRegReg r12, r8
+    x64.leaRegFunc rcx, [rip + holdSilently]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r13, r8
+    x64.storeBaseDispReg.word64 [r13 + 200], r12
+    x64.leaRegFunc rax, [rip + __gt_release_holdSilently]
+    x64.storeBaseDispReg.word64 [r13 + 176], rax
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_ready
+    x64.movRegReg rcx, rbx
     x64.callDirect readPastTheDeadline
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, trycont
-  tryerr:
-    x64.movRegImm32 r8, 1
+    x64.jcc equal, tryok#3
+  tryerr#4:
+    x64.movRegImm32 r12, 1
+    x64.jmp trycont
+  tryok#3:
+    x64.movRegReg r12, r8
   trycont:
-    x64.epilogue 32
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_await
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont
+  peer:
+    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at netpoll-socket.a-read-deadline-fires.test:42: unreachable: the connection whose read ran out of time was accepted by this peer\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_TcpListener
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }

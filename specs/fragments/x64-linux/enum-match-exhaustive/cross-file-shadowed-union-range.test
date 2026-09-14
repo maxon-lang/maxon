@@ -18,13 +18,18 @@ typealias Code = int(0 to 125)
 
 function classify(op SpanOp) returns Code
 	return match op 'check'
-		condBr to br gives 7
+		condBr or
+			br gives 7
 	end 'check'
 end 'classify'
 
 function describeBig(op BigSpan) returns Code
 	return match op 'check'
-		condBr to ret gives 3
+		condBr or
+			cmp or
+			call or
+			br or
+			ret gives 3
 	end 'check'
 end 'describeBig'
 
@@ -43,18 +48,9 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-  matcharm#6:
+  matcharm:
     x64.movRegImm32 r8, 7
-  matcharm#13:
-    x64.movRegImm32 rax, 3
-  __il_cont:
-    x64.cmpRegImm32 rax, 3
-    x64.jcc notEqual, ifcont
   bigOk:
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.movRegImm32 r8, 99
     x64.popReg rbp
     x64.ret
 }

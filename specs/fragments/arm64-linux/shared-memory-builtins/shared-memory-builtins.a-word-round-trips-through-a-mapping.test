@@ -74,14 +74,33 @@ func @main {
   tryok:
     arm64.movImm x1, 0
     arm64.movImm x2, 1234567
-    arm64.movRegReg x0, x19
-    arm64.bl SharedSegment.writeWord
+  __rc_ok#8:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.bl __shm_write_word
+  __il_cont#6:
     arm64.movImm x1, 0
-    arm64.movRegReg x0, x19
-    arm64.bl SharedSegment.readWord
+  __rc_ok#12:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.bl __shm_read_word
     arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x19
-    arm64.bl SharedSegment.close
+  __il_body#15:
+    arm64.loadRegBaseDisp.byte x0, [x19 + 32]
+    arm64.eor x0, x0, 1
+    arm64.cbz x0, __il_cont#4
+  stillOpen:
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x19 + 8]
+    arm64.loadRegBaseDisp.word64 x23, [x19 + 16]
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
+    arm64.bl String.cstr
+    arm64.movRegReg x3, x0
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __shm_close
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.byte [x19 + 32], x0
+  __il_cont#4:
     arm64.leaRdata x0, __str_rec_4  ; "stored="
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
@@ -126,8 +145,10 @@ func @main {
     arm64.storeBaseDispReg.word64 [x27 + 24], x0
     arm64.movRegReg x0, x23
     arm64.bl __mm_decref
+  __il_body#18:
     arm64.movRegReg x0, x27
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont#3:
     arm64.movRegReg x0, x27
     arm64.bl __str_decref
     arm64.movImm x20, 0

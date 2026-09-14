@@ -25,191 +25,10 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @swapFirstTwo {
+func @main {
   entry:
     arm64.prologue 48
     arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.cbz x1, ifcont
-  swap:
-    arm64.movImm x1, 0
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x0, 0
-    arm64.b.ls __im_slow#12
-  __im_load#13:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.movImm x2, 0
-    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
-    arm64.cmp x3, 0
-    arm64.b.eq critsplit#33
-  __im_empty#14:
-    arm64.cmp x0, 0
-    arm64.b.ne critsplit#34
-  __im_slow#12:
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_get
-    arm64.b __im_cont#11
-  critsplit#34:
-    arm64.movRegReg x9, x2
-    arm64.b __im_cont#11
-  critsplit#33:
-    arm64.movRegReg x9, x2
-  __im_cont#11:
-    arm64.cmp x9, 0
-    arm64.b.eq tryok#2
-  tryerr#3:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at try-otherwise-value-flow.chained-method-on-try-receiver.test:4: oob\x0a"
-    arm64.bl mrt_panic
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
-  tryok#2:
-    arm64.bl String.clone
-    arm64.movRegReg x20, x0
-    arm64.movImm x21, 0
-    arm64.movImm x1, 1
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x0, 1
-    arm64.b.ls __im_slow#16
-  __im_load#17:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.add x0, x0, 8
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.movImm x2, 0
-    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
-    arm64.cmp x3, 0
-    arm64.b.eq critsplit#35
-  __im_empty#18:
-    arm64.cmp x0, 0
-    arm64.b.ne critsplit#36
-  __im_slow#16:
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_get
-    arm64.b __im_cont#15
-  critsplit#36:
-    arm64.movRegReg x9, x2
-    arm64.b __im_cont#15
-  critsplit#35:
-    arm64.movRegReg x9, x2
-  __im_cont#15:
-    arm64.cmp x9, 0
-    arm64.b.eq tryok#4
-  tryerr#5:
-    arm64.leaRdata x0, __str_blob_3  ; "panic at try-otherwise-value-flow.chained-method-on-try-receiver.test:5: oob\x0a"
-    arm64.bl mrt_panic
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
-  tryok#4:
-    arm64.bl __str_retain
-    arm64.movRegReg x2, x0
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
-    arm64.cmp x0, 0
-    arm64.b.ne __im_slow#20
-  __im_owned#21:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
-    arm64.cmp x0, 0
-    arm64.b.lt __im_slow#20
-  __im_bounds#22:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x0, 0
-    arm64.b.ls __im_slow#20
-  __im_buffer#23:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.cmp x0, 0
-    arm64.b.eq __im_slow#20
-  __im_viewed#24:
-    arm64.sub x1, x0, 24
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
-    arm64.cmp x1, 0
-    arm64.b.eq __im_store#25
-  __im_slow#20:
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x21
-    arm64.bl __managed_set
-    arm64.b __im_cont#19
-  __im_store#25:
-    arm64.storeBaseDispReg.word64 [x0 + 0], x2
-    arm64.movImm x0, 0
-    arm64.movRegReg x9, x0
-  __im_cont#19:
-    arm64.cmp x9, 0
-    arm64.b.eq tryok#6
-  tryerr#7:
-    arm64.leaRdata x0, __str_blob_3  ; "panic at try-otherwise-value-flow.chained-method-on-try-receiver.test:5: oob\x0a"
-    arm64.bl mrt_panic
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
-  tryok#6:
-    arm64.movImm x21, 1
-    arm64.movRegReg x0, x20
-    arm64.bl __str_retain
-    arm64.movRegReg x2, x0
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
-    arm64.cmp x0, 0
-    arm64.b.ne __im_slow#27
-  __im_owned#28:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
-    arm64.cmp x0, 0
-    arm64.b.lt __im_slow#27
-  __im_bounds#29:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x0, 1
-    arm64.b.ls __im_slow#27
-  __im_buffer#30:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.cmp x0, 0
-    arm64.b.eq __im_slow#27
-  __im_viewed#31:
-    arm64.sub x1, x0, 24
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
-    arm64.cmp x1, 0
-    arm64.b.eq __im_store#32
-  __im_slow#27:
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x21
-    arm64.bl __managed_set
-    arm64.b __im_cont#26
-  __im_store#32:
-    arm64.add x0, x0, 8
-    arm64.storeBaseDispReg.word64 [x0 + 0], x2
-    arm64.movImm x0, 0
-    arm64.movRegReg x9, x0
-  __im_cont#26:
-    arm64.cmp x9, 0
-    arm64.b.eq tryok#8
-  tryerr#9:
-    arm64.leaRdata x0, __str_blob_4  ; "panic at try-otherwise-value-flow.chained-method-on-try-receiver.test:6: oob\x0a"
-    arm64.bl mrt_panic
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
-  tryok#8:
-    arm64.movRegReg x0, x20
-    arm64.bl __str_decref
-  ifcont:
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
-}
-
-func @main {
-  entry:
-    arm64.prologue 32
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x0, 8
@@ -226,70 +45,266 @@ func @main {
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
-    arm64.movImm x1, 1
-    arm64.movRegReg x0, x19
-    arm64.bl swapFirstTwo
+  swap:
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 0
-    arm64.b.ls __im_slow
-  __im_load:
+    arm64.b.ls __im_slow#23
+  __im_load#24:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
     arm64.cmp x3, 0
-    arm64.b.eq critsplit#14
-  __im_empty:
+    arm64.b.eq critsplit#60
+  __im_empty#25:
     arm64.cmp x0, 0
-    arm64.b.ne critsplit#15
-  __im_slow:
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_get
-    arm64.b __im_cont
-  critsplit#15:
+    arm64.b.eq __im_slow#23
+  critsplit#61:
     arm64.movRegReg x9, x2
-    arm64.b __im_cont
-  critsplit#14:
+    arm64.b __im_cont#22
+  critsplit#60:
     arm64.movRegReg x9, x2
-  __im_cont:
+  __im_cont#22:
     arm64.cmp x9, 0
-    arm64.b.eq __il_body
-  tryerr:
-    arm64.leaRdata x0, __str_blob_7  ; "panic at try-otherwise-value-flow.chained-method-on-try-receiver.test:15: oob\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-  __il_body:
-    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
-    arm64.cmp x20, 0
-    arm64.b.ge __il_cont
-  __il_slow:
-    arm64.bl String.byteLength
+    arm64.b.ne tryerr#14
+  __il_body#45:
+    arm64.movImm x1, 0
+  __il_body#57:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+  __il_cont#56:
+    arm64.loadRegBaseDisp.byte x20, [x0 + 48]
+  __rc_ok#50:
+    arm64.cmp x2, 0
+    arm64.b.lt __rc_panic#53
+  __rc_ok#52:
+    arm64.bl __managed_slice
+    arm64.movRegReg x21, x0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#49
+  tryok#48:
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x20
+    arm64.bl __str_of_buffer
     arm64.movRegReg x20, x0
-  __il_cont:
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+  __il_cont#44:
+    arm64.movImm x21, 0
+    arm64.movImm x1, 1
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 1
+    arm64.b.ls __im_slow#27
+  __im_load#28:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
+    arm64.cmp x3, 0
+    arm64.b.eq critsplit#62
+  __im_empty#29:
+    arm64.cmp x0, 0
+    arm64.b.eq __im_slow#27
+  critsplit#63:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont#26
+  critsplit#62:
+    arm64.movRegReg x9, x2
+  __im_cont#26:
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#16
+  tryok#15:
+    arm64.bl __str_retain
+    arm64.movRegReg x2, x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
+    arm64.cmp x0, 0
+    arm64.b.ne __im_slow#31
+  __im_owned#32:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.cmp x0, 0
+    arm64.b.lt __im_slow#31
+  __im_bounds#33:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.b.ls __im_slow#31
+  __im_buffer#34:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.cmp x0, 0
+    arm64.b.eq __im_slow#31
+  __im_viewed#35:
+    arm64.sub x1, x0, 24
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
+    arm64.cmp x1, 0
+    arm64.b.eq __im_store#36
+  __im_slow#31:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.bl __managed_set
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#18
+    arm64.b tryok#17
+  __im_store#36:
+    arm64.storeBaseIndexScaleReg.word64 [x0 + x21*8 + 0], x2
+  tryok#17:
+    arm64.movImm x21, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __str_retain
+    arm64.movRegReg x2, x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
+    arm64.cmp x0, 0
+    arm64.b.ne __im_slow#38
+  __im_owned#39:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.cmp x0, 0
+    arm64.b.lt __im_slow#38
+  __im_bounds#40:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 1
+    arm64.b.ls __im_slow#38
+  __im_buffer#41:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.cmp x0, 0
+    arm64.b.eq __im_slow#38
+  __im_viewed#42:
+    arm64.sub x1, x0, 24
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
+    arm64.cmp x1, 0
+    arm64.b.eq __im_store#43
+  __im_slow#38:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.bl __managed_set
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#20
+    arm64.b tryok#19
+  __im_store#43:
+    arm64.add x0, x0, 8
+    arm64.storeBaseDispReg.word64 [x0 + 0], x2
+  tryok#19:
+    arm64.movRegReg x0, x20
+    arm64.bl __str_decref
+  __il_cont#10:
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.b.ls __im_slow#7
+  __im_load#8:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
+    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
+    arm64.cmp x3, 0
+    arm64.b.eq critsplit#58
+  __im_empty#9:
+    arm64.cmp x0, 0
+    arm64.b.eq __im_slow#7
+  critsplit#59:
+    arm64.movRegReg x9, x2
+    arm64.b __im_cont#6
+  critsplit#58:
+    arm64.movRegReg x9, x2
+  __im_cont#6:
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#2
+  __il_body#55:
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
+  __il_cont#54:
     arm64.cmp x20, 0
-    arm64.b.lt __rc_panic
+    arm64.b.lt __rc_panic#4
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_9  ; "panic at try-otherwise-value-flow.chained-method-on-try-receiver.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-  __rc_ok:
+    arm64.b.gt __rc_panic#4
+  __rc_ok#3:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __im_slow#23:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.b __im_cont#22
+  tryerr#14:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at try-otherwise-value-flow.chained-method-on-try-receiver.test:4: oob\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic#53:
+    arm64.leaRdata x0, __str_blob_11  ; "panic at String.maxon:363: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryerr#49:
+    arm64.leaRdata x0, __str_blob_8  ; "panic at String.maxon:364: String.sliceBytes: caller guarantees 0 <= start <= end <= byteLength()\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __im_slow#27:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.b __im_cont#26
+  tryerr#16:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at try-otherwise-value-flow.chained-method-on-try-receiver.test:5: oob\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryerr#18:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at try-otherwise-value-flow.chained-method-on-try-receiver.test:5: oob\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryerr#20:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at try-otherwise-value-flow.chained-method-on-try-receiver.test:6: oob\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __im_slow#7:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.b __im_cont#6
+  tryerr#2:
+    arm64.leaRdata x0, __str_blob_7  ; "panic at try-otherwise-value-flow.chained-method-on-try-receiver.test:15: oob\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic#4:
+    arm64.leaRdata x0, __str_blob_10  ; "panic at try-otherwise-value-flow.chained-method-on-try-receiver.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
 }

@@ -30,22 +30,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @pick#String {
-  entry:
-    arm64.prologue 16
-    arm64.bl __str_retain
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @useA {
-  entry:
-    arm64.prologue 16
-    arm64.bl pick#String
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 80
@@ -58,8 +42,10 @@ func @main {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.leaRdata x0, __str_rec_2  ; "hi"
-    arm64.bl useA
+  __il_body:
+    arm64.bl __str_retain
     arm64.movRegReg x19, x0
+  __il_cont#6:
     arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
     arm64.leaRdata x0, __str_rec_3  ; "\x0a"
@@ -94,7 +80,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __str_decref
     arm64.movImm x19, 1
-  __il_cont:
+  __il_cont#1:
     arm64.movImm x0, 20
     arm64.movImm x1, 0
     arm64.bl __mm_alloc

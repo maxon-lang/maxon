@@ -48,11 +48,16 @@ typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 9
 ---
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+}
+
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
     x64.movRegImm32 rax, 0
     x64.movRegImm32 rcx, 0
   __il_body#26:
@@ -287,40 +292,10 @@ func @main {
     x64.jcc notEqual, critsplit
   i:
     x64.leaRegRegImm32 r8, rax, 1
-    x64.jmp ifcont#18
+    x64.jmp __rc_ok
   critsplit:
     x64.movRegReg r8, rax
-  ifcont#18:
-    x64.cmpRegImm32 r8, 0
-    x64.setccReg less, rax
-    x64.jcc less, __rc_panic#20
-  __rc_chk#21:
-    x64.movRegImm32 rcx, 4294967295
-    x64.cmpRegReg r8, rcx
-    x64.jcc lessEqual, __rc_ok#19
-  __rc_panic#20:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at dispatch.dense-scalar-range-arm.test:45: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok#19:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __rc_panic#23
-  __rc_chk#24:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
-    x64.jcc lessEqual, __rc_ok#22
-  __rc_panic#23:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at dispatch.dense-scalar-range-arm.test:45: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok#22:
-    x64.epilogue 32
+  __rc_ok:
     x64.popReg rbp
     x64.ret
 }

@@ -49,35 +49,40 @@ func @main {
     x64.storeBaseDispReg.word64 [r13 + 24], rax
     x64.leaRegRdata rbx, [rip + __str_rec_3]  ; "x"
     x64.movRegImm32 r12, 0
+    x64.jmp whilehdr
+  __il_body#8:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_bytes_view
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r14
+    x64.callDirect __managed_append
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+    x64.loadRegBaseDisp.byte rax, [rbx + 48]
+    x64.xorRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __il_cont#7
+  clearFlag:
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.byte [r13 + 48], rax
+  __il_cont#7:
+    x64.leaRegRegImm32 r12, r12, 1
   whilehdr:
     x64.cmpRegImm32 r12, 5
-    x64.jcc greaterEqual, __il_body
-  loop:
-    x64.movRegReg rcx, r13
-    x64.movRegReg rdx, rbx
-    x64.callDirect String.append
-    x64.leaRegRegImm32 r12, r12, 1
-    x64.jmp whilehdr
-  __il_body:
+    x64.jcc less, __il_body#8
+  __il_body#12:
     x64.loadRegBaseDisp.word64 rbx, [r13 + 8]
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc greaterEqual, __il_cont
-  __il_slow:
-    x64.movRegReg rcx, r13
-    x64.callDirect String.byteLength
-    x64.movRegReg rbx, r8
-  __il_cont:
-    x64.movRegReg rcx, r13
-    x64.callDirect __str_decref
+  __il_cont#11:
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 rbx, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at rc-string-concat-loop-no-leak.test:10: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.movRegReg r8, rbx
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
@@ -85,8 +90,10 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg r8, rbx
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at rc-string-concat-loop-no-leak.test:10: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13

@@ -19,6 +19,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -32,29 +35,37 @@ func @main {
     x64.pushReg r15
     x64.prologue 168
     x64.movRegImm32 rbx, 10
-    x64.leaRegRdata rcx, [rip + __layout_List_int]
-    x64.callDirect List.create
-    x64.movRegReg r12, r8
-    x64.storeSlotReg slot0, r12
     x64.leaRegRdata rax, [rip + __layout_List_int]
-    x64.movRegReg rcx, r12
+  __il_body:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 40]
+    x64.callDirect __list_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot0, r13
+    x64.storeBaseDispReg.word64 [r13 + 0], r12
+  __il_cont:
+    x64.leaRegRdata rax, [rip + __layout_List_int]
+    x64.movRegReg rcx, r13
     x64.movRegReg rdx, rbx
     x64.callDirect List.append
     x64.movRegImm32 rdx, 20
     x64.leaRegRdata rax, [rip + __layout_List_int]
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
     x64.callDirect List.append
     x64.movRegImm32 rdx, 30
     x64.leaRegRdata rax, [rip + __layout_List_int]
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
     x64.callDirect List.append
     x64.movRegImm32 rdx, 40
     x64.leaRegRdata rax, [rip + __layout_List_int]
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
     x64.callDirect List.append
     x64.movRegImm32 rdx, 0
     x64.leaRegRdata rax, [rip + __layout_List_int]
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
     x64.callDirect List.get
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#1
@@ -66,7 +77,7 @@ func @main {
   trycont#3:
     x64.movRegImm32 rdx, 1
     x64.leaRegRdata rax, [rip + __layout_List_int]
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
     x64.callDirect List.get
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#4
@@ -79,7 +90,7 @@ func @main {
     x64.storeSlotReg slot3, rax
     x64.movRegImm32 rdx, 2
     x64.leaRegRdata rax, [rip + __layout_List_int]
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
     x64.callDirect List.get
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#7
@@ -92,7 +103,7 @@ func @main {
     x64.storeSlotReg slot2, rax
     x64.movRegImm32 rdx, 3
     x64.leaRegRdata rax, [rip + __layout_List_int]
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
     x64.callDirect List.get
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#10

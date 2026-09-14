@@ -33,33 +33,49 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @sumBytes {
+func @main {
   entry:
-    arm64.prologue 48
+    arm64.prologue 64
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.movImm x20, 0
+    arm64.b forhdr#1
+  seed:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __managed_push
+  forstep#3:
+    arm64.add x20, x20, 1
+  forhdr#1:
+    arm64.cmp x20, 10
+    arm64.b.lt seed
+  __il_body:
+    arm64.movImm x20, 0
     arm64.movImm x21, 0
-  forhdr:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x21, x0
-    arm64.b.ge forexit
+  __us_test:
+    arm64.loadRegBaseDisp.word64 x22, [x19 + 8]
+    arm64.loadRegBaseDisp.word64 x23, [x19 + 24]
+    arm64.loadRegBaseDisp.word64 x24, [x19 + 0]
+    arm64.b forhdr#11
   loop:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
-    arm64.cmp x0, 8
+    arm64.cmp x23, 8
     arm64.b.ne __im_stride
   __im_word:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x21*8 + 0]
+    arm64.loadRegBaseIndexScale.word64 x0, [x24 + x21*8 + 0]
     arm64.b __im_cont
   __im_stride:
-    arm64.cmp x0, 1
+    arm64.cmp x23, 1
     arm64.b.ne __im_slow
   __im_byte:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.add x0, x0, x21
+    arm64.add x0, x24, x21
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
     arm64.b __im_cont
   __im_slow:
@@ -68,42 +84,16 @@ func @sumBytes {
     arm64.bl __managed_get_unchecked
   __im_cont:
     arm64.add x20, x20, x0
-  forstep:
+  forstep#13:
     arm64.add x21, x21, 1
-    arm64.b forhdr
+  forhdr#11:
+    arm64.cmp x21, x22
+    arm64.b.lt loop
   forexit:
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
-}
-
-func @main {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, 1
-    arm64.movImm x1, 0
-    arm64.bl __managed_create
-    arm64.movRegReg x19, x0
-    arm64.movImm x20, 0
-  forhdr:
-    arm64.cmp x20, 10
-    arm64.b.ge forexit
-  seed:
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
-    arm64.bl __managed_push
-  forstep:
-    arm64.add x20, x20, 1
-    arm64.b forhdr
-  forexit:
-    arm64.movRegReg x0, x19
-    arm64.bl sumBytes
-    arm64.cmp x0, 45
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic
+  __il_cont:
+    arm64.cmp x20, 45
     arm64.b.eq ifcont#6
   sum:
     arm64.movImm x20, 1
@@ -112,7 +102,11 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
     arm64.ret
   ifcont#6:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
@@ -125,7 +119,11 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
     arm64.ret
   ifcont#8:
     arm64.movImm x20, 0
@@ -134,6 +132,22 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-byte-strided-element-keeps-its-scale-1-address.test:10: Range check failed: value outside typealias 'Total'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
     arm64.ret
 }

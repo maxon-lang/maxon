@@ -25,20 +25,50 @@ func @main {
     x64.pushReg r12
     x64.prologue 32
     x64.leaRegRdata rcx, [rip + __str_rec_18]  ; "\\\\server\\share"
-    x64.callDirect FilePath.init
+  __il_body#5:
+    x64.callDirect FilePath.create
     x64.movRegReg rbx, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect FilePath.isAbsolute
-    x64.cmpRegImm32 r8, 0
-    x64.jcc equal, ifcont
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+  __il_body#8:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+  __il_body#16:
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+  __il_cont#15:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc below, ifcont#12
+  checkSlash:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.movRegImm32 rdx, 0
+    x64.callDirect String.byteAtOrPanic
+    x64.cmpRegImm32 r8, 47
+    x64.jcc notEqual, ifcont#12
+  isAbsUnix:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_cont#3
+  ifcont#12:
+    x64.movRegImm32 rax, 0
+  __il_cont#3:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont#2
   abs:
     x64.leaRegRdata rcx, [rip + __str_rec_19]  ; "absolute\x0a"
-    x64.callDirect print
-  ifcont:
+  __il_body#14:
+    x64.callDirect __write_stdout
+  ifcont#2:
     x64.movRegImm32 r12, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_FilePath
     x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_31]  ; "panic at FilePath.maxon:31: FilePath: invalid path\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx

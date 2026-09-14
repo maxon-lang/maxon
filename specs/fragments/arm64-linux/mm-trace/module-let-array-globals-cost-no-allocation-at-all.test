@@ -35,31 +35,13 @@ func @main {
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x2, 0
     arm64.b.ls __im_slow
-  __im_load:
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
-    arm64.movImm x3, 0
-    arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
-    arm64.cmp x4, 0
-    arm64.b.eq critsplit#17
-  __im_empty:
-    arm64.cmp x2, 0
-    arm64.b.ne critsplit#18
-  __im_slow:
-    arm64.bl __managed_get
-    arm64.b __im_cont
-  critsplit#18:
-    arm64.movRegReg x0, x2
-    arm64.movRegReg x9, x3
-    arm64.b __im_cont
-  critsplit#17:
-    arm64.movRegReg x0, x2
-    arm64.movRegReg x9, x3
-  __im_cont:
-    arm64.cmp x9, 0
-    arm64.b.eq trycont
+    arm64.b __im_load
   tryerr:
     arm64.movImm x0, 0
+    arm64.b trycont
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
   trycont:
     arm64.leaRdata x1, __barr_empty_2_trivial
     arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
@@ -73,22 +55,15 @@ func @main {
     arm64.cbz x0, ternaryfalse
   ternarytrue:
     arm64.movImm x0, 0
-    arm64.b matchcont
+    arm64.b __rc_ok
   ternaryfalse:
     arm64.movImm x0, 1
-  matchcont:
-    arm64.cmp x0, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x0, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_3  ; "panic at module-let-array-globals-cost-no-allocation-at-all.test:11: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
   __rc_ok:
     arm64.epilogue 16
     arm64.ret
+  __im_slow:
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr
+    arm64.b trycont
 }

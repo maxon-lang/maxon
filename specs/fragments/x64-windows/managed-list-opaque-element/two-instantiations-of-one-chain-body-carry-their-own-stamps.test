@@ -42,6 +42,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @Bag.create {
@@ -70,6 +73,7 @@ func @Bag.add {
     x64.prologue 32
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.callDirect __list_append
+    x64.movRegReg rax, r8
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -82,6 +86,16 @@ func @Bag.size {
     x64.prologue 32
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.callDirect __list_count
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at two-instantiations-of-one-chain-body-carry-their-own-stamps.test:18: Range check failed: value outside typealias 'Count'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -172,11 +186,13 @@ func @main {
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r13, rax
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at two-instantiations-of-one-chain-body-carry-their-own-stamps.test:35: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Bag_Small
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Bag_String
+    x64.movRegReg r8, r13
     x64.epilogue 40
     x64.popReg r15
     x64.popReg r14
@@ -185,12 +201,10 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg rcx, r12
-    x64.callDirect __destruct_Bag_Small
-    x64.movRegReg rcx, rbx
-    x64.callDirect __destruct_Bag_String
-    x64.movRegReg r8, r13
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at two-instantiations-of-one-chain-body-carry-their-own-stamps.test:35: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg r15
     x64.popReg r14

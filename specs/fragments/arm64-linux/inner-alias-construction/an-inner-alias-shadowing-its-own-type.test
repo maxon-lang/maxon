@@ -32,12 +32,19 @@ data {
 func @main {
   entry:
     arm64.prologue 32
-    arm64.leaRegSlot x0, slot0
-    arm64.movImm x1, 4
-    arm64.storeBaseDispReg.word64 [x0 + 0], x1
-  __il_body:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.storeSlotReg slot0, x19
+  __il_body#3:
+    arm64.movImm x19, 4
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+  __il_body#4:
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
   __il_cont:
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
 }

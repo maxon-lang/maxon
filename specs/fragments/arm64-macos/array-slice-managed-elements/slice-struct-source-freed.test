@@ -249,12 +249,7 @@ func @main {
     arm64.b.eq critsplit#15
   __im_empty:
     arm64.cmp x20, 0
-    arm64.b.ne critsplit#16
-  __im_slow:
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_get
-    arm64.movRegReg x20, x0
-    arm64.b __im_cont
+    arm64.b.eq __im_slow
   critsplit#16:
     arm64.movRegReg x9, x0
     arm64.b __im_cont
@@ -294,18 +289,16 @@ func @main {
     arm64.movRegReg x0, x20
   trycont:
     arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
-    arm64.bl __destruct_Item
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
     arm64.cmp x20, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_8  ; "panic at slice-struct-source-freed.test:32: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.bl __destruct_Item
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -314,8 +307,15 @@ func @main {
     arm64.loadRegSlot x24, slot5
     arm64.epilogue 64
     arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x20
+  __im_slow:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.movRegReg x20, x0
+    arm64.b __im_cont
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_9  ; "panic at slice-struct-source-freed.test:32: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

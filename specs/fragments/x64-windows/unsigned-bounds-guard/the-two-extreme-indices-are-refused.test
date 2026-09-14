@@ -32,6 +32,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -55,15 +58,7 @@ func @main {
     x64.movRegImm rax, 9223372036854775808
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.cmpRegReg rdx, rcx
-    x64.jcc below, __im_load#20
-  __im_slow#19:
-    x64.storeSlotReg slot0, rax
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
-    x64.loadRegSlot rax, slot0
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, ifcont#5
-    x64.jmp tryok#1
+    x64.jcc aboveEqual, __im_slow#19
   __im_load#20:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.leaRegRegImm32 rcx, rcx, -8
@@ -85,16 +80,7 @@ func @main {
   ifcont#5:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.cmpRegReg rax, rcx
-    x64.jcc below, __im_load#23
-  __im_slow#22:
-    x64.storeSlotReg slot0, rax
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, rax
-    x64.callDirect __managed_get
-    x64.loadRegSlot rax, slot0
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, ifcont#10
-    x64.jmp tryok#6
+    x64.jcc aboveEqual, __im_slow#22
   __im_load#23:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
@@ -155,4 +141,21 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __im_slow#19:
+    x64.storeSlotReg slot0, rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.loadRegSlot rax, slot0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, ifcont#5
+    x64.jmp tryok#1
+  __im_slow#22:
+    x64.storeSlotReg slot0, rax
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, rax
+    x64.callDirect __managed_get
+    x64.loadRegSlot rax, slot0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, ifcont#10
+    x64.jmp tryok#6
 }

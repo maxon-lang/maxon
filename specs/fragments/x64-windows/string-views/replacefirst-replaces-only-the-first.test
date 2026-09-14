@@ -12,6 +12,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -23,23 +26,195 @@ func @main {
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 56
-    x64.leaRegRdata rcx, [rip + __str_rec_4]  ; "aXbXc"
-    x64.leaRegRdata rdx, [rip + __str_rec_5]  ; "X"
-    x64.leaRegRdata rax, [rip + __str_rec_6]  ; "--"
-    x64.callDirect String.replaceFirst
+    x64.prologue 104
+    x64.leaRegRdata rbx, [rip + __str_rec_4]  ; "aXbXc"
+    x64.storeSlotReg slot7, rbx
+    x64.leaRegRdata r9, [rip + __str_rec_5]  ; "X"
+    x64.leaRegRdata r12, [rip + __str_rec_6]  ; "--"
+    x64.storeSlotReg slot3, r12
+  __il_body#36:
+    x64.loadRegBaseDisp.word64 r13, [r9 + 8]
+  __il_cont#35:
+    x64.cmpRegImm32 r13, 0
+    x64.jcc notEqual, __il_body#38
+  empty_old:
+    x64.movRegReg rcx, rbx
+    x64.callDirect String.clone
+    x64.jmp __il_cont#3
+  __il_body#38:
+    x64.loadRegBaseDisp.word64 r14, [rbx + 8]
+    x64.storeSlotReg slot1, r14
+  __il_cont#37:
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r14
+    x64.callDirect findIn
+    x64.storeSlotReg slot5, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __il_body#40
+  tryerr#8:
+    x64.movRegReg rcx, rbx
+    x64.callDirect String.clone
+    x64.jmp __il_cont#3
+  __il_body#40:
+    x64.loadRegBaseDisp.word64 rbx, [r12 + 8]
+  __il_body#14:
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.storeBaseDispReg.word64 [r15 + 0], r12
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.byte [r15 + 8], rax
+  __il_cont#13:
+    x64.subRegReg r14, r14, r13
+    x64.leaRegRegReg rbx, r14, rbx
+  __il_body#24:
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_ok#25:
+    x64.loadRegBaseDisp.word64 r12, [r15 + 0]
+  __rc_ok#33:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_capacity
+    x64.cmpRegReg rbx, r8
+    x64.jcc lessEqual, __il_cont#23
+  grow:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect __managed_mem_grow
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __il_cont#23
+  tryerr#31:
+    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at Array.maxon:415: Array.reserve: grow failed \xe2\x80\x94 minCapacity > cap guaranteed\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __il_cont#23:
+    x64.loadRegSlot rcx, slot7
+    x64.callDirect String.addressableBytes
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 0
+    x64.loadRegSlot rax, slot5
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_slice
     x64.storeSlotReg slot0, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#9
+  tryerr#10:
+    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at String.maxon:627: String.replaceFirst: head slice \xe2\x80\x94 idx from findIn, always in bounds\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#9:
+    x64.loadRegSlot rax, slot7
+    x64.loadRegBaseDisp.byte rax, [rax + 48]
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r8
+    x64.callDirect StringBuilder.appendBytes
+  __il_body#16:
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect String.addressableBytes
+    x64.movRegReg r12, r8
+  __il_body#18:
+    x64.loadRegSlot rax, slot3
+    x64.loadRegBaseDisp.byte rax, [rax + 48]
+  __il_cont#17:
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.callDirect StringBuilder.appendBytes
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+  __il_cont#15:
+    x64.loadRegSlot rax, slot5
+    x64.leaRegRegReg rdx, rax, r13
+    x64.loadRegSlot rax, slot1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_slice
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#11
+  tryerr#12:
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at String.maxon:635: String.replaceFirst: tail slice \xe2\x80\x94 idx+oldLen <= selfLen guaranteed\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#11:
+    x64.loadRegSlot rax, slot7
+    x64.loadRegBaseDisp.byte rax, [rax + 48]
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.callDirect StringBuilder.appendBytes
+  __il_body#20:
+    x64.loadRegBaseDisp.word64 rcx, [r15 + 0]
+    x64.loadRegBaseDisp.byte r13, [r15 + 8]
+  __il_body#22:
+    x64.callDirect __managed_retain
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r13
+    x64.callDirect __str_of_buffer
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+  __il_cont#21:
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r14, r8
+    x64.loadRegBaseDisp.word64 rcx, [r15 + 0]
+    x64.callDirect __managed_decref
+    x64.storeBaseDispReg.word64 [r15 + 0], r14
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.byte [r15 + 8], rax
+  __il_cont#19:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r15
+    x64.callDirect __destruct_StringBuilder
+    x64.movRegReg r8, r13
+  __il_cont#3:
+    x64.storeSlotReg slot2, r8
     x64.loadRegBaseDisp.word64 rbx, [r8 + 0]
     x64.loadRegBaseDisp.word64 r12, [r8 + 8]
     x64.leaRegRdata rax, [rip + __str_rec_7]  ; "\x0a"
     x64.loadRegBaseDisp.word64 r13, [rax + 0]
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
     x64.leaRegRegReg rax, r12, r14
-    x64.storeSlotReg slot1, rax
+    x64.storeSlotReg slot4, rax
     x64.leaRegRegImm32 rcx, rax, 57
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeSlotReg slot2, r8
+    x64.storeSlotReg slot6, r8
     x64.leaRegRegImm32 r15, r8, 56
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, rbx
@@ -51,22 +226,36 @@ func @main {
     x64.movRegReg rax, r14
     x64.callDirect __str_copy
     x64.leaRegRegReg rax, rbx, r14
-    x64.loadRegSlot rbx, slot2
-    x64.storeBaseDispReg.word64 [rbx + 0], r15
-    x64.loadRegSlot rax, slot1
-    x64.storeBaseDispReg.word64 [rbx + 8], rax
-    x64.movRegImm rax, 18446744073709551613
-    x64.storeBaseDispReg.word64 [rbx + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [rbx + 24], rax
-    x64.movRegReg rcx, rbx
-    x64.callDirect print
-    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rax, slot6
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot4
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+  __il_body#2:
+    x64.loadRegSlot rcx, slot6
+    x64.callDirect __write_stdout
+  __il_cont#1:
+    x64.loadRegSlot rcx, slot6
     x64.callDirect __str_decref
-    x64.loadRegSlot rcx, slot0
+    x64.loadRegSlot rcx, slot2
     x64.callDirect __str_decref
     x64.movRegImm32 r8, 0
-    x64.epilogue 56
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_21]  ; "panic at String.maxon:872: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 104
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13

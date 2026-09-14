@@ -38,9 +38,55 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl String.clone
     arm64.movRegReg x21, x0
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x22, [x20 + 8]
+  __il_cont#25:
+    arm64.cmp x22, 0
+    arm64.b.ne ifcont
+  empty:
     arm64.movRegReg x0, x20
-    arm64.bl String.toLower
+    arm64.bl String.clone
     arm64.movRegReg x22, x0
+    arm64.b __il_cont#1
+  ifcont:
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.byte x3, [x20 + 48]
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x2, x22
+    arm64.bl String.sliceBytes
+    arm64.movRegReg x23, x0
+    arm64.movImm x24, 0
+    arm64.b forhdr
+  convert:
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x24
+    arm64.bl String.byteAt
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#12
+  tryok:
+    arm64.cmp x0, 65
+    arm64.movImm x1, 0
+    arm64.b.lt scmerge
+  andrhs:
+    arm64.cmp x0, 90
+    arm64.cset x1, le
+  scmerge:
+    arm64.cbz x1, forstep
+  inRange:
+    arm64.eor x2, x0, 32
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x24
+    arm64.bl String.setByte
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#17
+  forstep:
+    arm64.add x24, x24, 1
+  forhdr:
+    arm64.cmp x24, x22
+    arm64.b.lt convert
+  forexit:
+    arm64.movRegReg x22, x23
+  __il_cont#1:
     arm64.movRegReg x0, x20
     arm64.bl __str_decref
     arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
@@ -142,6 +188,36 @@ func @main {
     arm64.movRegReg x0, x22
     arm64.bl __str_decref
     arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+  tryerr#12:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at String.maxon:697: String.mapAsciiCase: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+  tryerr#17:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at String.maxon:700: String.mapAsciiCase: setByte OOB \xe2\x80\x94 i < len invariant\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

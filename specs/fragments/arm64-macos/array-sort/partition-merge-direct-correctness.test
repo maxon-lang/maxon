@@ -1,8 +1,6 @@
 // Test: partition-merge-direct-correctness
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
-typealias ScratchArr = Array with Integer
-typealias Idx = int(0 to u64.max)
 
 function ascending(x Integer, y Integer) returns Ordering
 	return x.compare(y)
@@ -16,11 +14,10 @@ function main() returns ExitCode
 	for j in 0 upto 20 'r'
 		a.push(j * 2 + 2)
 	end 'r'
-	var scratch = ScratchArr.create()
-	let cap = 4 as Idx
-	scratch.resize(cap)
+	var scratch = IntArray.create()
+	scratch.resize(4)
 	Log.startCapture()
-	a.mergePartition(0, mid: 20, hi: 40, scratch: scratch, scratchCap: cap, cmp: ascending)
+	a.mergePartition(0, mid: 20, hi: 40, scratch: scratch, scratchCap: 4, cmp: ascending)
 	let keys = Log.stopCapture()
 	if Log.fired(keys, key: "partitionMerge.fire") 'pf'
 		print("partitionMerge.fire ")
@@ -83,9 +80,7 @@ func @main {
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.movImm x20, 0
-  forhdr#1:
-    arm64.cmp x20, 20
-    arm64.b.ge forexit#4
+    arm64.b forhdr#1
   l:
     arm64.lsl x0, x20, 1
     arm64.add x1, x0, 1
@@ -93,12 +88,12 @@ func @main {
     arm64.bl __managed_push
   forstep#3:
     arm64.add x20, x20, 1
-    arm64.b forhdr#1
+  forhdr#1:
+    arm64.cmp x20, 20
+    arm64.b.lt l
   forexit#4:
     arm64.movImm x20, 0
-  forhdr#5:
-    arm64.cmp x20, 20
-    arm64.b.ge forexit#8
+    arm64.b forhdr#5
   r:
     arm64.lsl x0, x20, 1
     arm64.add x1, x0, 2
@@ -106,61 +101,231 @@ func @main {
     arm64.bl __managed_push
   forstep#7:
     arm64.add x20, x20, 1
-    arm64.b forhdr#5
+  forhdr#5:
+    arm64.cmp x20, 20
+    arm64.b.lt r
   forexit#8:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __managed_create
     arm64.movRegReg x20, x0
     arm64.storeSlotReg slot0, x20
-    arm64.movImm x21, 4
-  __rc_ok:
+    arm64.movImm x1, 4
     arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x21
     arm64.bl __managed_resize
-    arm64.bl Log.startCapture
+  __il_body#19:
+    arm64.leaGlobal x0, __data_captured
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_retain
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x21
+    arm64.bl Array.clear
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_decref
+    arm64.movImm x0, 1
+    arm64.leaGlobal x1, __data_capturing
+    arm64.storeBaseDispReg.byte [x1 + 0], x0
+  __il_cont#18:
+    arm64.movImm x21, 0
+    arm64.movImm x22, 20
+    arm64.movImm x23, 40
+    arm64.movImm x24, 4
+    arm64.leaFuncAddr x25, __fnref_ascending
+    arm64.movImm x26, 0
+    arm64.leaRdata x27, __layout_Array_Integer
+  __il_body#20:
+    arm64.leaRdata x0, __str_rec_7  ; "partitionMerge.fire"
+    arm64.bl Log.trace
+    arm64.movImm x0, 20
+  pickLeft:
+    arm64.asr x0, x0, 63
+    arm64.lsr x0, x0, 63
+    arm64.add x0, x0, 20
+    arm64.asr x28, x0, 1
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
+    arm64.cmp x0, 8
+    arm64.b.ne __im_stride
+  __im_word:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x28, x0
+    arm64.b.hs __im_slow
+  __im_load#34:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x28*8 + 0]
+    arm64.b __im_loaded
+  __im_stride:
+    arm64.cmp x0, 1
+    arm64.b.ne __im_slow
+  __im_byte:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x28, x0
+    arm64.b.hs __im_slow
+  __im_load#35:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.add x0, x0, x28
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+  __im_loaded:
     arm64.movImm x1, 0
-    arm64.movImm x2, 20
-    arm64.movImm x3, 40
-    arm64.leaFuncAddr x6, __fnref_ascending
-    arm64.movImm x7, 0
-    arm64.leaRdata x0, __layout_Array_Integer
-    arm64.storeOutgoingArg [sp + arg0], x0
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
+    arm64.cmp x2, 0
+    arm64.b.eq critsplit#60
+  __im_empty:
+    arm64.cmp x0, 0
+    arm64.b.eq __im_slow
+  critsplit#61:
+    arm64.movRegReg x3, x0
+    arm64.b __im_cont#28
+  critsplit#60:
+    arm64.movRegReg x3, x0
+    arm64.b __im_cont#28
+  __im_slow:
     arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x28
+    arm64.bl __managed_get
+    arm64.movRegReg x3, x0
+    arm64.movRegReg x1, x9
+  __im_cont#28:
+    arm64.cmp x1, 0
+    arm64.b.ne tryerr#23
+  tryok#22:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.movRegReg x4, x25
+    arm64.movRegReg x5, x26
+    arm64.movRegReg x6, x27
+    arm64.bl Array.lowerBound
+    arm64.movRegReg x23, x0
+  ifcont#27:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x28
+    arm64.movRegReg x2, x22
+    arm64.movRegReg x3, x23
+    arm64.bl Array.rotateRange
+    arm64.sub x0, x23, 20
+    arm64.add x23, x28, x0
+    arm64.sub x0, x22, x28
+    arm64.add x22, x23, x0
+    arm64.storeOutgoingArg [sp + arg0], x27
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x28
+    arm64.movRegReg x3, x23
     arm64.movRegReg x4, x20
-    arm64.movRegReg x5, x21
-    arm64.bl Array.mergePartition
-    arm64.bl Log.stopCapture
-    arm64.movRegReg x20, x0
-    arm64.leaRdata x1, __str_rec_7  ; "partitionMerge.fire"
+    arm64.movRegReg x5, x24
+    arm64.movRegReg x6, x25
+    arm64.movRegReg x7, x26
+    arm64.bl Array.mergeAdaptive
+    arm64.storeOutgoingArg [sp + arg0], x27
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x22
+    arm64.movImm x3, 40
+    arm64.movRegReg x4, x20
+    arm64.movRegReg x5, x24
+    arm64.movRegReg x6, x25
+    arm64.movRegReg x7, x26
+    arm64.bl Array.mergeAdaptive
+  __il_body#55:
+    arm64.movImm x0, 0
+    arm64.leaGlobal x1, __data_capturing
+    arm64.storeBaseDispReg.byte [x1 + 0], x0
+    arm64.leaGlobal x0, __data_captured
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.movRegReg x0, x20
-    arm64.bl Log.fired
-    arm64.cbz x0, ifcont
+    arm64.bl __managed_retain
+    arm64.movRegReg x21, x0
+    arm64.leaRdata x3, __layout_Array_String
+  __il_body#57:
+    arm64.loadRegBaseDisp.word64 x2, [x20 + 8]
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_slice_opaque
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#58
+  tryerr#59:
+    arm64.leaRdata x0, __str_blob_11  ; "panic at Array.maxon:172: Array.clone: slice OOB \xe2\x80\x94 0..len is always valid\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.loadRegSlot x27, slot9
+    arm64.loadRegSlot x28, slot10
+    arm64.epilogue 112 record@8
+    arm64.ret
+  tryok#58:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_retain
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+  __il_cont#56:
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.leaGlobal x0, __data_captured
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_retain
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x20
+    arm64.bl Array.clear
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+  __il_cont#54:
+    arm64.leaRdata x20, __str_rec_7  ; "partitionMerge.fire"
+  __il_body#46:
+    arm64.movImm x21, 0
+    arm64.b forhdr#47
+  scan:
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
+    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x21*8 + 0]
+  __im_cont#53:
+    arm64.movRegReg x1, x20
+    arm64.bl __str_eq
+    arm64.cbz x0, forstep#49
+  match:
+    arm64.movImm x0, 1
+    arm64.b __il_cont#16
+  forstep#49:
+    arm64.add x21, x21, 1
+  forhdr#47:
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.cmp x21, x0
+    arm64.b.lt scan
+  forexit#50:
+    arm64.movImm x0, 0
+  __il_cont#16:
+    arm64.cbz x0, ifcont#10
   pf:
     arm64.leaRdata x0, __str_rec_8  ; "partitionMerge.fire "
     arm64.bl print
-  ifcont:
-    arm64.movImm x21, 0
-  forhdr#11:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x21, x0
-    arm64.b.ge forexit#14
+  ifcont#10:
+    arm64.movImm x20, 0
+    arm64.b forhdr#11
   p:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseIndexScale.word64 x22, [x0 + x21*8 + 0]
-  __im_cont:
+    arm64.loadRegBaseIndexScale.word64 x21, [x0 + x20*8 + 0]
+  __im_cont#15:
     arm64.movImm x0, 21
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x23, x0
-    arm64.movRegReg x0, x22
+    arm64.movRegReg x0, x21
     arm64.movRegReg x1, x23
     arm64.bl __int_to_string
-    arm64.movRegReg x22, x0
+    arm64.movRegReg x21, x0
     arm64.leaRdata x0, __str_rec_9  ; " "
     arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
-    arm64.add x26, x22, x25
+    arm64.add x26, x21, x25
     arm64.add x0, x26, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -168,14 +333,14 @@ func @main {
     arm64.add x28, x27, 56
     arm64.movRegReg x0, x28
     arm64.movRegReg x1, x23
-    arm64.movRegReg x2, x22
+    arm64.movRegReg x2, x21
     arm64.bl __str_copy
-    arm64.add x22, x28, x22
-    arm64.movRegReg x0, x22
+    arm64.add x21, x28, x21
+    arm64.movRegReg x0, x21
     arm64.movRegReg x1, x24
     arm64.movRegReg x2, x25
     arm64.bl __str_copy
-    arm64.add x0, x22, x25
+    arm64.add x0, x21, x25
     arm64.storeBaseDispReg.word64 [x27 + 0], x28
     arm64.storeBaseDispReg.word64 [x27 + 8], x26
     arm64.movImm x0, 18446744073709551613
@@ -189,19 +354,38 @@ func @main {
     arm64.movRegReg x0, x27
     arm64.bl __str_decref
   forstep#13:
-    arm64.add x21, x21, 1
-    arm64.b forhdr#11
+    arm64.add x20, x20, 1
+  forhdr#11:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x20, x0
+    arm64.b.lt p
   forexit#14:
     arm64.leaRdata x0, __str_rec_10  ; "\x0a"
     arm64.bl print
-    arm64.movImm x21, 0
-    arm64.movRegReg x0, x20
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x22
     arm64.bl __managed_decref
     arm64.loadRegSlot x0, slot0
     arm64.bl __managed_decref
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.movRegReg x0, x21
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.loadRegSlot x27, slot9
+    arm64.loadRegSlot x28, slot10
+    arm64.epilogue 112 record@8
+    arm64.ret
+  tryerr#23:
+    arm64.leaRdata x0, __str_blob_33  ; "panic at mergeSort.maxon:355: mergePartition: get OOB at pivot (left)\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
     arm64.loadRegSlot x21, slot3

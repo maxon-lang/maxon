@@ -27,10 +27,32 @@ data {
 
 func @grow {
   entry:
-    arm64.prologue 16
-    arm64.leaRdata x1, __str_rec_6  ; "XY"
-    arm64.bl String.append
-    arm64.epilogue 16
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x20, __str_rec_6  ; "XY"
+  __il_body:
+    arm64.movRegReg x0, x20
+    arm64.bl __str_bytes_view
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.bl __managed_append
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.loadRegBaseDisp.byte x0, [x20 + 48]
+    arm64.eor x0, x0, 1
+    arm64.cbz x0, __il_cont
+  clearFlag:
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.byte [x19 + 48], x0
+  __il_cont:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
     arm64.ret
 }
 
@@ -69,11 +91,7 @@ func @main {
     arm64.b.eq critsplit#21
   __im_empty#12:
     arm64.cmp x0, 0
-    arm64.b.ne critsplit#22
-  __im_slow#10:
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_get
-    arm64.b __im_cont#9
+    arm64.b.eq __im_slow#10
   critsplit#22:
     arm64.movRegReg x9, x2
     arm64.b __im_cont#9
@@ -104,11 +122,7 @@ func @main {
     arm64.b.eq critsplit#23
   __im_empty#16:
     arm64.cmp x0, 0
-    arm64.b.ne critsplit#24
-  __im_slow#14:
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_get
-    arm64.b __im_cont#13
+    arm64.b.eq __im_slow#14
   critsplit#24:
     arm64.movRegReg x9, x2
     arm64.b __im_cont#13
@@ -116,23 +130,7 @@ func @main {
     arm64.movRegReg x9, x2
   __im_cont#13:
     arm64.cmp x9, 0
-    arm64.b.eq tryok
-  tryerr#5:
-    arm64.leaRdata x0, __str_blob_11  ; "panic at string-literal-through-a-try-otherwise-fallback.test:12: get\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.loadRegSlot x25, slot6
-    arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot x27, slot8
-    arm64.loadRegSlot x28, slot9
-    arm64.epilogue 96
-    arm64.ret
+    arm64.b.ne tryerr#5
   tryok:
     arm64.leaRdata x1, __str_rec_9  ; "t="
     arm64.loadRegBaseDisp.word64 x20, [x1 + 0]
@@ -188,11 +186,7 @@ func @main {
     arm64.b.eq critsplit#25
   __im_empty#20:
     arm64.cmp x0, 0
-    arm64.b.ne critsplit#26
-  __im_slow#18:
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_get
-    arm64.b __im_cont#17
+    arm64.b.eq __im_slow#18
   critsplit#26:
     arm64.movRegReg x9, x2
     arm64.b __im_cont#17
@@ -228,4 +222,32 @@ func @main {
     arm64.loadRegSlot x28, slot9
     arm64.epilogue 96
     arm64.ret
+  __im_slow#10:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.b __im_cont#9
+  __im_slow#14:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.b __im_cont#13
+  tryerr#5:
+    arm64.leaRdata x0, __str_blob_11  ; "panic at string-literal-through-a-try-otherwise-fallback.test:12: get\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.loadRegSlot x28, slot9
+    arm64.epilogue 96
+    arm64.ret
+  __im_slow#18:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.b __im_cont#17
 }

@@ -40,6 +40,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @tryIt {
@@ -64,18 +67,6 @@ func @tryIt {
     x64.ret
 }
 
-func @fallback {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.leaRegRdata rcx, [rip + __str_rec_3]  ; "fb"
-    x64.callDirect __str_retain
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
 func @pick {
   entry:
     x64.pushReg rbp
@@ -84,8 +75,9 @@ func @pick {
     x64.callDirect tryIt
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, trycont
-  tryerr:
-    x64.callDirect fallback
+  __il_body:
+    x64.leaRegRdata rcx, [rip + __str_rec_3]  ; "fb"
+    x64.callDirect __str_retain
   trycont:
     x64.epilogue 32
     x64.popReg rbp

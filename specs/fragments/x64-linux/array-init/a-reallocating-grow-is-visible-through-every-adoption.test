@@ -53,21 +53,21 @@ func @main {
     x64.ret
   tryok#1:
     x64.movRegReg rcx, rbx
-    x64.callDirect __mm_retain
+    x64.callDirect __managed_retain
     x64.movRegReg r12, r8
     x64.movRegReg rcx, rbx
-    x64.callDirect __mm_retain
+    x64.callDirect __managed_retain
     x64.movRegReg r13, r8
     x64.movRegImm32 r14, 0
-  whilehdr:
-    x64.cmpRegImm32 r14, 200
-    x64.jcc greaterEqual, whileexit
+    x64.jmp whilehdr
   fill:
     x64.movRegImm32 rdx, 1
     x64.movRegReg rcx, r12
     x64.callDirect __managed_push
     x64.leaRegRegImm32 r14, r14, 1
-    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 r14, 200
+    x64.jcc less, fill
   whileexit:
     x64.loadRegBaseDisp.word64 rax, [r13 + 8]
     x64.cmpRegImm32 rax, 200
@@ -101,7 +101,7 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.leaRegRegImm32 rax, rax, 1592
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.jmp __im_loaded
+    x64.jmp tryok#8
   __im_stride:
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow
@@ -113,22 +113,12 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.leaRegRegImm32 rax, rax, 199
     x64.loadRegBaseDisp.byte rax, [rax + 0]
-  __im_loaded:
-    x64.movRegImm32 rcx, 0
-    x64.loadRegBaseDisp.word64 rsi, [r13 + 40]
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, __im_cont
-  __im_empty:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __im_cont
+    x64.jmp tryok#8
   __im_slow:
     x64.movRegReg rcx, r13
     x64.callDirect __managed_get
-    x64.movRegReg rax, r8
-    x64.movRegReg rcx, r10
-  __im_cont:
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, tryok#8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, critsplit
   tryerr#9:
     x64.movRegImm32 r14, 3
     x64.movRegReg rcx, r13
@@ -145,6 +135,8 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  critsplit:
+    x64.movRegReg rax, r8
   tryok#8:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.leaRegRegReg rax, rax, rcx
@@ -153,18 +145,7 @@ func @main {
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 r14, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-reallocating-grow-is-visible-through-every-adoption.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r13
     x64.callDirect __managed_decref
@@ -173,6 +154,17 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-reallocating-grow-is-visible-through-every-adoption.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13

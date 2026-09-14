@@ -26,29 +26,21 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @getInvalidName {
-  entry:
-    arm64.prologue 16
-    arm64.leaRdata x0, __str_rec_1  ; "invalid"
-    arm64.bl __str_retain
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 32
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.bl getInvalidName
+  __il_body:
+    arm64.leaRdata x0, __str_rec_1  ; "invalid"
+    arm64.bl __str_retain
     arm64.movRegReg x19, x0
+  __il_cont:
     arm64.movRegReg x0, x19
     arm64.bl __enum_from_name_Direction
     arm64.cmp x9, 0
-    arm64.b.eq trycont
-  tryerr:
-    arm64.movImm x0, 0
-  trycont:
+    arm64.b.ne check
+  tryok:
     arm64.cmp x0, 0
     arm64.b.ne ifcont
   check:

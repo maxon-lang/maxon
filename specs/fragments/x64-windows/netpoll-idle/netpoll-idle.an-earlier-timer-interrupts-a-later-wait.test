@@ -22,6 +22,15 @@ function main() returns ExitCode
 	let s = spawn Sleeper.create()
 	let r = s.nap()
 	sleep(20)
+	// Busy, so this machine does not go idle: the other machine settles into the poller on the 600 ms
+	// deadline first, and only an interrupt can end that wait at 50.
+	let spinFrom = Clock.nowMs()
+	var spins = 0
+
+	while Clock.elapsedMs(spinFrom) < 10 'spin'
+		spins = spins + 1
+	end 'spin'
+
 	let start = Clock.nowMs()
 	sleep(50)
 	let tookMs = Clock.elapsedMs(start) as Integer
@@ -42,67 +51,60 @@ data {
   __gt_timer_seq@48 = i64 0
   __gt_timer_when@56 = i64 9223372036854775807
   __gt_trace_counter@64 = i64 0
-  __gt_proc_count@72 = i64 0
-  __gt_proc_handles_base@80 = i64 0
-  __gt_proc_gts_base@88 = i64 0
-  __gt_live_count@96 = i64 0
-  __sched_active_workers@104 = i64 1
-  __sched_max_active_workers@112 = i64 1
-  __sched_tls_index@120 = i64 0
-  __sched_tls_teb_offset@128 = i64 0
-  __sched_procs@136 = i64 0
-  __sched_allm@144 = i64 0
-  __sched_midle@152 = i64 0
-  __sched_pidle@160 = i64 0
-  __gt_gfree_head@168 = i64 0
-  __sched_npidle@176 = i64 0
-  __sched_runq_size@184 = i64 0
-  __sched_mcount@192 = i64 0
-  __sched_nmidle@200 = i64 0
-  __sched_main_m@208 = i64 0
-  __sched_phase@216 = i64 0
-  __sched_num_procs@224 = i64 0
-  __sched_shutdown_flag@232 = i64 0
-  __sched_lock@240 = i64 0
-  __sched_nmspinning@248 = i64 0
-  __sched_needspinning@256 = i64 0
-  __sched_sysmon_started@264 = i64 0
-  __slab_arena_list@272 = i64 0
-  __slab_arena_map_l1@280 = i64 0
-  __slab_state@288 = i64 0
-  __mrt_console_probe_stdin@296 = i8 0
-  __mrt_console_probe_stdout@297 = i8 0
-  __mrt_console_probe_stderr@298 = i8 0
-}
-
-func @Sleeper.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegImm32 rbx, 0
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Sleeper.nap {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm32 rcx, 600
-    x64.callDirect sleep
-    x64.movRegImm32 r8, 1
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
+  __gt_live_count@72 = i64 0
+  __gt_seed_bytes@80 = i64 8192
+  __gt_stack_bytes_sum@88 = i64 0
+  __gt_stack_bytes_count@96 = i64 0
+  __gt_seed_sum_seen@104 = i64 0
+  __gt_seed_count_seen@112 = i64 0
+  __sched_active_workers@120 = i64 1
+  __sched_max_active_workers@128 = i64 1
+  __sched_tls_index@136 = i64 0
+  __sched_tls_teb_offset@144 = i64 0
+  __sched_procs@152 = i64 0
+  __sched_allm@160 = i64 0
+  __sched_midle@168 = i64 0
+  __sched_pidle@176 = i64 0
+  __gt_gfree_head@184 = i64 0
+  __sched_arena_cursor@192 = i64 0
+  __sched_arena_limit@200 = i64 0
+  __gt_records_carved@208 = i64 0
+  __sched_npidle@216 = i64 0
+  __sched_runq_size@224 = i64 0
+  __sched_global_pushes@232 = i64 0
+  __sched_timer_scan_steps@240 = i64 0
+  __sched_mcount@248 = i64 0
+  __sched_nmidle@256 = i64 0
+  __sched_main_m@264 = i64 0
+  __sched_phase@272 = i64 0
+  __sched_lastpoll@280 = i64 0
+  __sched_poll_until@288 = i64 0
+  __sched_regain_head@296 = i64 0
+  __np_poller@304 = i64 0
+  __np_break@312 = i64 0
+  __np_wake_sig@320 = i64 0
+  __np_pd_table@328 = i64 0
+  __np_pd_cap@336 = i64 0
+  __np_waiters@344 = i64 0
+  __np_src_key_free@352 = i64 0
+  __np_src_key_high@360 = i64 0
+  __sched_num_procs@368 = i64 0
+  __sched_shutdown_flag@376 = i64 0
+  __sched_lock@384 = i64 0
+  __sched_lock_depth_sink@392 = i64 0
+  __sched_nmspinning@400 = i64 0
+  __sched_needspinning@408 = i64 0
+  __sched_sysmon_event@416 = i64 0
+  __sched_sysmon_wait@424 = i64 0
+  __sched_timer_starts@432 = i64 0
+  __sched_preempt_ext_lock@440 = i64 0
+  __sched_preempt_context@448 = i64 0
+  __slab_arena_list@456 = i64 0
+  __slab_arena_map_l1@464 = i64 0
+  __slab_state@472 = i64 0
+  __mrt_console_probe_stdin@480 = i8 0
+  __mrt_console_probe_stdout@481 = i8 0
+  __mrt_console_probe_stderr@482 = i8 0
 }
 
 func @main {
@@ -115,7 +117,13 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 104
-    x64.callDirect Sleeper.create
+  __il_body#8:
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+  __il_cont#7:
     x64.leaRegFunc rcx, [rip + Sleeper.__loop]
     x64.leaRegFunc rax, [rip + Sleeper.__abandon]
     x64.movRegReg rdx, r8
@@ -141,6 +149,18 @@ func @main {
     x64.callDirect __mbox_send
     x64.movRegImm32 rcx, 20
     x64.callDirect sleep
+    x64.callDirect Clock.nowMs
+    x64.movRegReg r12, r8
+    x64.movRegImm32 r13, 0
+    x64.jmp whilehdr
+  spin:
+    x64.leaRegRegImm32 r13, r13, 1
+  whilehdr:
+    x64.movRegReg rcx, r12
+    x64.callDirect Clock.elapsedMs
+    x64.cmpRegImm32 r8, 10
+    x64.jcc below, spin
+  whileexit:
     x64.callDirect Clock.nowMs
     x64.movRegReg r12, r8
     x64.movRegImm32 rcx, 50
@@ -199,48 +219,50 @@ func @main {
     x64.callDirect __mm_alloc
     x64.storeSlotReg slot2, r8
     x64.leaRegRegImm32 rbx, r8, 56
-    x64.movRegReg rcx, rbx
     x64.loadRegSlot rdx, slot8
+    x64.movRegReg rcx, rbx
     x64.movRegReg rax, r13
     x64.callDirect __str_copy
     x64.leaRegRegReg r13, rbx, r13
-    x64.movRegReg rcx, r13
     x64.loadRegSlot rdx, slot7
+    x64.movRegReg rcx, r13
     x64.movRegReg rax, r12
     x64.callDirect __str_copy
     x64.leaRegRegReg r12, r13, r12
-    x64.movRegReg rcx, r12
     x64.loadRegSlot rdx, slot6
+    x64.movRegReg rcx, r12
     x64.movRegReg rax, r14
     x64.callDirect __str_copy
     x64.leaRegRegReg r12, r12, r14
+    x64.loadRegSlot rax, slot5
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r15
-    x64.loadRegSlot r13, slot5
-    x64.movRegReg rax, r13
     x64.callDirect __str_copy
-    x64.leaRegRegReg r12, r12, r13
-    x64.movRegReg rcx, r12
+    x64.loadRegSlot rax, slot5
+    x64.leaRegRegReg r12, r12, rax
+    x64.loadRegSlot rax, slot3
     x64.loadRegSlot rdx, slot4
-    x64.loadRegSlot r13, slot3
-    x64.movRegReg rax, r13
+    x64.movRegReg rcx, r12
     x64.callDirect __str_copy
-    x64.leaRegRegReg rax, r12, r13
-    x64.loadRegSlot r12, slot2
-    x64.storeBaseDispReg.word64 [r12 + 0], rbx
-    x64.loadRegSlot rax, slot1
-    x64.storeBaseDispReg.word64 [r12 + 8], rax
-    x64.movRegImm rax, 18446744073709551613
-    x64.storeBaseDispReg.word64 [r12 + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r12 + 24], rax
+    x64.loadRegSlot rax, slot3
+    x64.leaRegRegReg rax, r12, rax
+    x64.loadRegSlot rax, slot2
+    x64.storeBaseDispReg.word64 [rax + 0], rbx
+    x64.loadRegSlot rcx, slot1
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
     x64.loadRegSlot rcx, slot7
     x64.callDirect __mm_decref
     x64.movRegReg rcx, r15
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect print
-    x64.movRegReg rcx, r12
+  __il_body#10:
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __write_stdout
+  __il_cont#9:
+    x64.loadRegSlot rcx, slot2
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
     x64.loadRegSlot rcx, slot0
@@ -276,7 +298,7 @@ func @Sleeper.__loop {
     x64.jcc equal, stopping
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=nap] @__jumptable_10
+    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=nap] @__jumptable_16
   __shutdown:
     x64.loadRegBaseDisp.word64 rax, [r13 + 8]
     x64.storeBaseDispReg.word64 [r12 + 56], rax
@@ -295,6 +317,7 @@ func @Sleeper.__loop {
     x64.callDirect __mm_decref
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_service_exit
+    x64.movRegReg rax, r8
     x64.epilogue 40
     x64.popReg r15
     x64.popReg r14
@@ -310,9 +333,11 @@ func @Sleeper.__loop {
     x64.jmp drain
   nap:
     x64.loadRegBaseDisp.word64 r14, [r13 + 8]
-    x64.movRegReg rcx, rbx
-    x64.callDirect Sleeper.nap
-    x64.movRegReg r15, r8
+  __il_body:
+    x64.movRegImm32 rcx, 600
+    x64.callDirect sleep
+    x64.movRegImm32 r15, 1
+  __il_cont:
     x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
     x64.movRegImm32 rax, 0
@@ -330,7 +355,7 @@ func @Sleeper.__abandon {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=nap] @__jumptable_11
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=nap] @__jumptable_17
   __shutdown:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 0
@@ -345,6 +370,7 @@ func @Sleeper.__abandon {
   abandondrop:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp

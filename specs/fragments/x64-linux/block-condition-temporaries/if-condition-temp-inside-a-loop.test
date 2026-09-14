@@ -32,9 +32,7 @@ func @main {
     x64.prologue 40
     x64.movRegImm32 rbx, 0
     x64.movRegImm32 r12, 0
-  whilehdr:
-    x64.cmpRegImm32 r12, 500
-    x64.jcc greaterEqual, whileexit
+    x64.jmp whilehdr
   loop:
     x64.movRegImm32 rcx, 48
     x64.movRegImm32 rdx, 0
@@ -62,7 +60,9 @@ func @main {
   ifcont:
     x64.leaRegRegImm32 r12, r12, 1
     x64.movRegReg rbx, rax
-    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 r12, 500
+    x64.jcc less, loop
   whileexit:
     x64.movRegImm rax, 11805916207174113035
     x64.imulHighReg rbx
@@ -75,18 +75,18 @@ func @main {
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at if-condition-temp-inside-a-loop.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.jcc greater, __rc_panic
+  __rc_ok:
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at if-condition-temp-inside-a-loop.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12

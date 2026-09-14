@@ -24,18 +24,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
-}
-
-func @getInvalidName {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "invalid"
-    x64.callDirect __str_retain
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -45,19 +36,17 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 32
-    x64.callDirect getInvalidName
+  __il_body:
+    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "invalid"
+    x64.callDirect __str_retain
     x64.movRegReg rbx, r8
+  __il_cont:
     x64.movRegReg rcx, rbx
     x64.callDirect __enum_from_name_Direction
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
-  tryerr:
-    x64.movRegImm32 rax, 0
-    x64.jmp trycont
+    x64.jcc notEqual, check
   tryok:
-    x64.movRegReg rax, r8
-  trycont:
-    x64.cmpRegImm32 rax, 0
+    x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, ifcont
   check:
     x64.movRegImm32 r12, 1

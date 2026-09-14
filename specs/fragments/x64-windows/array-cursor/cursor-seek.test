@@ -24,6 +24,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -73,10 +76,15 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, trycont
   trycont:
-    x64.leaRegRdata rdx, [rip + __layout_ArrayIterator_Byte]
-    x64.movRegReg rcx, r12
-    x64.callDirect ArrayIterator.current
+    x64.leaRegRdata r13, [rip + __layout_ArrayIterator_Byte]
+  __il_body:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.callDirect __managed_cursor_current
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r8
+    x64.callDirect __retain_type_param
     x64.movRegReg r13, r8
+  __il_cont:
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_ArrayIterator_Byte
     x64.movRegReg rcx, rbx

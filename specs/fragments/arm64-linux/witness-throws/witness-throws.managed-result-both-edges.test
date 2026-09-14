@@ -61,19 +61,19 @@ func @Point.create {
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 1000
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at witness-throws.managed-result-both-edges.test:14: Range check failed: value outside typealias 'Count'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
+    arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at witness-throws.managed-result-both-edges.test:14: Range check failed: value outside typealias 'Count'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
@@ -115,50 +115,38 @@ func @Box.create {
 func @Box.itemNameLength {
   entry:
     arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x16, [x1 + 24]
     arm64.blr x16
-    arm64.movRegReg x19, x0
     arm64.cmp x9, 0
     arm64.b.eq __il_body
   tryerr:
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
   __il_body:
-    arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
-    arm64.cmp x20, 0
-    arm64.b.ge __il_cont
-  __il_slow:
-    arm64.movRegReg x0, x19
-    arm64.bl String.byteLength
-    arm64.movRegReg x20, x0
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
   __il_cont:
-    arm64.cmp x20, 0
+    arm64.cmp x19, 0
     arm64.b.lt __rc_panic
   __rc_chk:
-    arm64.cmp x20, 1000
-    arm64.b.le __rc_ok
+    arm64.cmp x19, 1000
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.bl __str_decref
+    arm64.movImm x9, 0
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_3  ; "panic at witness-throws.managed-result-both-edges.test:32: Range check failed: value outside typealias 'Count'\x0a"
+    arm64.leaRdata x0, __str_blob_4  ; "panic at witness-throws.managed-result-both-edges.test:32: Range check failed: value outside typealias 'Count'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.movImm x9, 0
     arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x19
-    arm64.bl __str_decref
-    arm64.movImm x9, 0
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
 }
@@ -173,9 +161,8 @@ func @main {
     arm64.bl Point.create
     arm64.movRegReg x19, x0
     arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
+    arm64.bl __mm_own
     arm64.leaRdata x1, __witness_Point.Namer
-    arm64.movRegReg x0, x19
     arm64.bl Box.create
     arm64.movRegReg x20, x0
     arm64.movRegReg x0, x19
@@ -184,9 +171,8 @@ func @main {
     arm64.bl Point.create
     arm64.movRegReg x19, x0
     arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
+    arm64.bl __mm_own
     arm64.leaRdata x1, __witness_Point.Namer
-    arm64.movRegReg x0, x19
     arm64.bl Box.create
     arm64.movRegReg x21, x0
     arm64.movRegReg x0, x19
@@ -215,22 +201,22 @@ func @main {
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_4  ; "panic at witness-throws.managed-result-both-edges.test:43: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
+    arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x21
     arm64.bl __destruct_Box_Point
     arm64.movRegReg x0, x20
     arm64.bl __destruct_Box_Point
     arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at witness-throws.managed-result-both-edges.test:43: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

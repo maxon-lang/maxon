@@ -39,23 +39,9 @@ data {
   __slab_arena_list@16 = i64 0
   __slab_arena_map_l1@24 = i64 0
   __slab_state@32 = i64 0
-}
-
-func @State.makeDefault {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegImm32 rbx, 0
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+  __mrt_console_probe_stdin@40 = i8 0
+  __mrt_console_probe_stdout@41 = i8 0
+  __mrt_console_probe_stderr@42 = i8 0
 }
 
 func @State.get {
@@ -67,42 +53,6 @@ func @State.get {
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.callDirect __mm_retain
     x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @State.set {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.callDirect __mm_own
-    x64.movRegReg rbx, r8
-    x64.leaRegGlobal rax, __data_State.current
-    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.callDirect __mm_decref
-    x64.leaRegGlobal rax, __data_State.current
-    x64.storeBaseDispReg.word64 [rax + 0], rbx
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @State.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.epilogue 40
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }
@@ -163,12 +113,24 @@ func @main {
     x64.callDirect print
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
-    x64.movRegImm32 rcx, 99
-    x64.callDirect State.create
+    x64.movRegImm32 rbx, 99
+  __rc_ok:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+  __il_body:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_own
     x64.movRegReg rbx, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect State.set
-    x64.movRegReg rcx, rbx
+    x64.leaRegGlobal rax, __data_State.current
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.callDirect __mm_decref
+    x64.leaRegGlobal rax, __data_State.current
+    x64.storeBaseDispReg.word64 [rax + 0], rbx
+  __il_cont:
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
     x64.callDirect State.get
     x64.movRegReg rbx, r8

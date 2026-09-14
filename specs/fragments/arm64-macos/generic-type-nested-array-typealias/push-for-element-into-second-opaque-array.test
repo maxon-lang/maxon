@@ -78,61 +78,8 @@ func @Container.push {
     arm64.prologue 16
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.bl __managed_push
+    arm64.movRegReg x1, x0
     arm64.epilogue 16
-    arm64.ret
-}
-
-func @Container.copyInto {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x1
-    arm64.movRegReg x20, x2
-    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
-    arm64.movImm x22, 0
-  forhdr:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
-    arm64.cmp x22, x0
-    arm64.b.ge forexit
-  each:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 24]
-    arm64.cmp x0, 8
-    arm64.b.ne __im_stride
-  __im_word:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
-    arm64.loadRegBaseIndexScale.word64 x1, [x0 + x22*8 + 0]
-    arm64.b __im_cont
-  __im_stride:
-    arm64.cmp x0, 1
-    arm64.b.ne __im_slow
-  __im_byte:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
-    arm64.add x0, x0, x22
-    arm64.loadRegBaseDisp.byte x1, [x0 + 0]
-    arm64.b __im_cont
-  __im_slow:
-    arm64.movRegReg x0, x21
-    arm64.movRegReg x1, x22
-    arm64.bl __managed_get_unchecked
-    arm64.movRegReg x1, x0
-  __im_cont:
-    arm64.movRegReg x0, x20
-    arm64.bl __retain_type_param
-    arm64.movRegReg x1, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_push
-  forstep:
-    arm64.add x22, x22, 1
-    arm64.b forhdr
-  forexit:
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
     arm64.ret
 }
 
@@ -141,18 +88,10 @@ func @Container.at {
     arm64.prologue 32
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x2
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.cmp x1, 0
-    arm64.b.ge __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_6  ; "panic at push-for-element-into-second-opaque-array.test:29: Range check failed: value outside typealias 'ElementIndex'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.movImm x9, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
+    arm64.b.lt __rc_panic
   __rc_ok:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 24]
     arm64.cmp x2, 8
     arm64.b.ne __im_stride
@@ -203,6 +142,14 @@ func @Container.at {
   tryok:
     arm64.movRegReg x0, x19
     arm64.bl __retain_type_param
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_7  ; "panic at push-for-element-into-second-opaque-array.test:28: Range check failed: value outside typealias 'Count'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.movImm x9, 0
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
@@ -275,10 +222,46 @@ func @main {
     arm64.leaRdata x0, __layout_Container_String
     arm64.bl Container.create
     arm64.movRegReg x20, x0
-    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
-    arm64.leaRdata x2, __layout_Container_String
-    arm64.movRegReg x0, x19
-    arm64.bl Container.copyInto
+    arm64.loadRegBaseDisp.word64 x21, [x20 + 0]
+    arm64.leaRdata x22, __layout_Container_String
+  __il_body#9:
+    arm64.loadRegBaseDisp.word64 x23, [x19 + 0]
+    arm64.movImm x24, 0
+    arm64.b forhdr
+  each:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 24]
+    arm64.cmp x0, 8
+    arm64.b.ne __im_stride
+  __im_word:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
+    arm64.loadRegBaseIndexScale.word64 x1, [x0 + x24*8 + 0]
+    arm64.b __im_cont
+  __im_stride:
+    arm64.cmp x0, 1
+    arm64.b.ne __im_slow
+  __im_byte:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
+    arm64.add x0, x0, x24
+    arm64.loadRegBaseDisp.byte x1, [x0 + 0]
+    arm64.b __im_cont
+  __im_slow:
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x24
+    arm64.bl __managed_get_unchecked
+    arm64.movRegReg x1, x0
+  __im_cont:
+    arm64.movRegReg x0, x22
+    arm64.bl __retain_type_param
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_push
+  forstep:
+    arm64.add x24, x24, 1
+  forhdr:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
+    arm64.cmp x24, x0
+    arm64.b.lt each
+  __il_cont#8:
     arm64.movImm x1, 1
     arm64.leaRdata x2, __layout_Container_String
     arm64.movRegReg x0, x20
@@ -397,19 +380,25 @@ func @main {
     arm64.bl print
     arm64.movRegReg x0, x27
     arm64.bl __str_decref
-  __il_body:
+  __il_body#20:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
-  __il_cont:
+  __il_cont#19:
     arm64.cmp x19, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 125
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_7  ; "panic at push-for-element-into-second-opaque-array.test:45: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Container_String
+    arm64.loadRegSlot x0, slot0
+    arm64.bl __destruct_Container_String
+    arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
     arm64.loadRegSlot x21, slot3
@@ -422,16 +411,10 @@ func @main {
     arm64.loadRegSlot x28, slot10
     arm64.epilogue 112
     arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x22
-    arm64.bl __str_decref
-    arm64.movRegReg x0, x21
-    arm64.bl __str_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __destruct_Container_String
-    arm64.loadRegSlot x0, slot0
-    arm64.bl __destruct_Container_String
-    arm64.movRegReg x0, x19
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_8  ; "panic at push-for-element-into-second-opaque-array.test:45: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
     arm64.loadRegSlot x21, slot3

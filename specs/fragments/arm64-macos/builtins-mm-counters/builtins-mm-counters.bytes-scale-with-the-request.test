@@ -3,8 +3,8 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 typealias PushCount = int(0 to 65536)
 
-function volume() returns ByteCount
-	return (__Builtins.mmAllocBytes() + __Builtins.mmRawAllocBytes()) as ByteCount
+function volume() returns BytePos
+	return (__Builtins.mmAllocBytes() + __Builtins.mmRawAllocBytes()) as BytePos
 end 'volume'
 
 function fill(n PushCount)
@@ -55,15 +55,15 @@ func @volume {
     arm64.bl __mm_counter_raw_alloc_bytes
     arm64.add x0, x19, x0
     arm64.cmp x0, 0
-    arm64.b.ge __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at builtins-mm-counters.bytes-scale-with-the-request.test:7: Range check failed: value outside typealias 'ByteCount'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
+    arm64.b.lt __rc_panic
+  __rc_ok:
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
-  __rc_ok:
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at builtins-mm-counters.bytes-scale-with-the-request.test:7: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
@@ -80,34 +80,35 @@ func @fill {
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 65536
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at builtins-mm-counters.bytes-scale-with-the-request.test:10: Range check failed: value outside typealias 'PushCount'\x0a"
-    arm64.bl mrt_panic
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
+    arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movImm x0, 1
     arm64.movImm x1, 0
     arm64.bl __managed_create
     arm64.movRegReg x20, x0
     arm64.movImm x21, 0
-  forhdr:
-    arm64.cmp x21, x19
-    arm64.b.ge forexit
+    arm64.b forhdr
   push:
     arm64.movImm x1, 3
     arm64.movRegReg x0, x20
     arm64.bl __managed_push
   forstep:
     arm64.add x21, x21, 1
-    arm64.b forhdr
+  forhdr:
+    arm64.cmp x21, x19
+    arm64.b.lt push
   forexit:
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at builtins-mm-counters.bytes-scale-with-the-request.test:10: Range check failed: value outside typealias 'PushCount'\x0a"
+    arm64.bl mrt_panic
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -133,34 +134,20 @@ func @main {
     arm64.sub x0, x0, x20
     arm64.movImm x2, 0
     arm64.cmp x0, x1
-    arm64.b.le critsplit#8
+    arm64.b.ls critsplit#8
   bytesScaleWithTheRequest:
     arm64.movImm x1, 2
-    arm64.b ifcont#2
+    arm64.b ifcont
   critsplit#8:
     arm64.movRegReg x1, x2
-  ifcont#2:
+  ifcont:
     arm64.cmp x0, 1024
-    arm64.b.lt critsplit#9
+    arm64.b.lo critsplit#9
   atLeastThePayloadAsked:
     arm64.add x0, x1, 3
-    arm64.b ifcont#4
+    arm64.b __rc_ok
   critsplit#9:
     arm64.movRegReg x0, x1
-  ifcont#4:
-    arm64.cmp x0, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x0, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at builtins-mm-counters.bytes-scale-with-the-request.test:32: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
   __rc_ok:
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1

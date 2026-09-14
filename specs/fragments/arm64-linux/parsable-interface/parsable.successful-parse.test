@@ -11,7 +11,7 @@ type Value implements Parsable
 	export var n as Integer
 
 	static function fromString(input String) returns Self throws ParseError
-		return Value{n: input.byteLength()}
+		return Value{n: input.byteLength() as Integer}
 	end 'fromString'
 end 'Value'
 
@@ -37,11 +37,6 @@ func @Value.fromString {
     arm64.storeSlotReg slot0, x19
   __il_body:
     arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
-    arm64.cmp x19, 0
-    arm64.b.ge __il_cont
-  __il_slow:
-    arm64.bl String.byteLength
-    arm64.movRegReg x19, x0
   __il_cont:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
@@ -68,21 +63,21 @@ func @main {
     arm64.ret
   tryok:
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
-    arm64.bl __mm_decref
     arm64.cmp x19, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at parsable.successful-parse.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x19
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at parsable.successful-parse.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret

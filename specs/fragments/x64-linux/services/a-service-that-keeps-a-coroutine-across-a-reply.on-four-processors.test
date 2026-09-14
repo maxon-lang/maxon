@@ -42,14 +42,14 @@ data {
   __gt_timer_heap_base@32 = i64 0
   __gt_timer_capacity@40 = i64 0
   __gt_timer_seq@48 = i64 0
-  __gt_trace_counter@56 = i64 0
-  __gt_proc_count@64 = i64 0
-  __gt_proc_handles_base@72 = i64 0
-  __gt_proc_gts_base@80 = i64 0
-  __gt_proc_wait_snapshot@88 = i64 0
-  __gt_proc_poller@96 = i64 0
-  __gt_live_count@104 = i64 0
-  __sched_progress@112 = i64 0
+  __gt_timer_when@56 = i64 9223372036854775807
+  __gt_trace_counter@64 = i64 0
+  __gt_live_count@72 = i64 0
+  __gt_seed_bytes@80 = i64 2048
+  __gt_stack_bytes_sum@88 = i64 0
+  __gt_stack_bytes_count@96 = i64 0
+  __gt_seed_sum_seen@104 = i64 0
+  __gt_seed_count_seen@112 = i64 0
   __sched_active_workers@120 = i64 1
   __sched_max_active_workers@128 = i64 1
   __sched_tls_index@136 = i64 0
@@ -59,21 +59,44 @@ data {
   __sched_midle@168 = i64 0
   __sched_pidle@176 = i64 0
   __gt_gfree_head@184 = i64 0
-  __sched_npidle@192 = i64 0
-  __sched_runq_size@200 = i64 0
-  __sched_mcount@208 = i64 0
-  __sched_num_procs@216 = i64 0
-  __sched_shutdown_flag@224 = i64 0
-  __sched_lock@232 = i64 0
-  __sched_nmspinning@240 = i64 0
-  __sched_sysmon_started@248 = i64 0
-  __mrt_envp@256 = i64 0
-  __mrt_tls_next_key@264 = i64 0
-  __mrt_errno@272 = i64 0
-  __mrt_tls_ready@280 = i64 0
-  __slab_arena_list@288 = i64 0
-  __slab_arena_map_l1@296 = i64 0
-  __slab_state@304 = i64 0
+  __sched_arena_cursor@192 = i64 0
+  __sched_arena_limit@200 = i64 0
+  __gt_records_carved@208 = i64 0
+  __sched_npidle@216 = i64 0
+  __sched_runq_size@224 = i64 0
+  __sched_global_pushes@232 = i64 0
+  __sched_timer_scan_steps@240 = i64 0
+  __sched_mcount@248 = i64 0
+  __sched_nmidle@256 = i64 0
+  __sched_main_m@264 = i64 0
+  __sched_phase@272 = i64 0
+  __sched_lastpoll@280 = i64 0
+  __sched_poll_until@288 = i64 0
+  __sched_regain_head@296 = i64 0
+  __np_poller@304 = i64 0
+  __np_break@312 = i64 0
+  __np_wake_sig@320 = i64 0
+  __np_pd_table@328 = i64 0
+  __np_pd_cap@336 = i64 0
+  __np_waiters@344 = i64 0
+  __np_src_key_free@352 = i64 0
+  __np_src_key_high@360 = i64 0
+  __sched_num_procs@368 = i64 0
+  __sched_shutdown_flag@376 = i64 0
+  __sched_lock@384 = i64 0
+  __sched_lock_depth_sink@392 = i64 0
+  __sched_nmspinning@400 = i64 0
+  __sched_needspinning@408 = i64 0
+  __sched_sysmon_event@416 = i64 0
+  __sched_sysmon_wait@424 = i64 0
+  __sched_timer_starts@432 = i64 0
+  __mrt_envp@440 = i64 0
+  __mrt_tls_next_key@448 = i64 0
+  __mrt_errno@456 = i64 0
+  __mrt_tls_ready@464 = i64 0
+  __slab_arena_list@472 = i64 0
+  __slab_arena_map_l1@480 = i64 0
+  __slab_state@488 = i64 0
 }
 
 func @work {
@@ -82,53 +105,11 @@ func @work {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movRegImm32 rcx, 1
-    x64.callDirect sleep
+  __rc_ok:
+    x64.callDirect __gt_sleep
+  __il_cont:
     x64.movRegImm32 r8, 5
     x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Svc.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __gt_promise_drop]
-    x64.callDirect __managed_create
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Svc.start {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rbx, [rcx + 0]
-    x64.leaRegFunc rcx, [rip + work]
-    x64.callDirect __gt_spawn
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect __gt_ready
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
-    x64.callDirect __managed_push
-    x64.movRegImm32 r8, 1
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }
@@ -141,13 +122,22 @@ func @main {
     x64.pushReg r12
     x64.pushReg r13
     x64.prologue 40
-    x64.callDirect Svc.create
+  __il_body:
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __gt_promise_drop]
+    x64.callDirect __managed_create
     x64.movRegReg rbx, r8
-    x64.movRegReg rcx, rbx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+  __il_cont:
+    x64.movRegReg rcx, r12
     x64.callDirect __sole_Svc
     x64.leaRegFunc rcx, [rip + Svc.__loop]
     x64.leaRegFunc rax, [rip + Svc.__abandon]
-    x64.movRegReg rdx, rbx
+    x64.movRegReg rdx, r12
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -204,21 +194,21 @@ func @main {
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 rbx, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-service-that-keeps-a-coroutine-across-a-reply.on-four-processors.test:32: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mbox_handle_drop_box
+    x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
-    x64.movRegReg r8, rbx
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-service-that-keeps-a-coroutine-across-a-reply.on-four-processors.test:32: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
@@ -247,7 +237,7 @@ func @Svc.__loop {
     x64.jcc equal, stopping
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=start, [2]=finish] @__jumptable_2
+    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=start, [2]=finish] @__jumptable_8
   __shutdown:
     x64.loadRegBaseDisp.word64 rax, [r13 + 8]
     x64.storeBaseDispReg.word64 [r12 + 56], rax
@@ -266,6 +256,7 @@ func @Svc.__loop {
     x64.callDirect __destruct_Svc
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_service_exit
+    x64.movRegReg rax, r8
     x64.epilogue 40
     x64.popReg r15
     x64.popReg r14
@@ -280,23 +271,33 @@ func @Svc.__loop {
     x64.callDirect __mbox_abandon
     x64.jmp drain
   start:
-    x64.loadRegBaseDisp.word64 r14, [r13 + 8]
-    x64.movRegReg rcx, rbx
-    x64.callDirect Svc.start
+    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
+    x64.storeSlotReg slot0, rax
+  __il_body#11:
+    x64.loadRegBaseDisp.word64 r14, [rbx + 0]
+    x64.leaRegFunc rcx, [rip + work]
+    x64.callDirect __gt_spawn
     x64.movRegReg r15, r8
+    x64.movRegReg rcx, r15
+    x64.callDirect __gt_ready
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r15
+    x64.callDirect __managed_push
+    x64.movRegImm32 r14, 1
+  __il_cont#10:
     x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
     x64.movRegImm32 rax, 0
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r15
+    x64.loadRegSlot rcx, slot0
+    x64.movRegReg rdx, r14
     x64.callDirect __gt_cell_complete
     x64.jmp serve
   finish:
     x64.loadRegBaseDisp.word64 r14, [r13 + 8]
-  __il_body:
+  __il_body#13:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 r15, [rax + 8]
-  __il_cont:
+  __il_cont#12:
     x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
     x64.movRegImm32 rax, 0
@@ -314,7 +315,7 @@ func @Svc.__abandon {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=start, [2]=finish] @__jumptable_3
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=start, [2]=finish] @__jumptable_9
   __shutdown:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 0
@@ -335,6 +336,7 @@ func @Svc.__abandon {
   abandondrop:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp

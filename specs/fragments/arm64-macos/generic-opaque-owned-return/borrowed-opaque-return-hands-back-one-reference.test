@@ -34,20 +34,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Holder.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @Holder.get {
   entry:
     arm64.prologue 16
@@ -90,13 +76,15 @@ func @main {
     arm64.storeBaseDispReg.word64 [x21 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x21 + 24], x0
-    arm64.movRegReg x0, x21
-    arm64.bl Holder.create
+  __il_body:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
     arm64.movRegReg x19, x0
+    arm64.storeBaseDispReg.word64 [x19 + 0], x21
+  __il_cont:
     arm64.movImm x20, 0
-  whilehdr:
-    arm64.cmp x20, 100
-    arm64.b.ge whileexit
+    arm64.b whilehdr
   spin:
     arm64.leaRdata x1, __layout_Holder_String
     arm64.movRegReg x0, x19
@@ -127,7 +115,9 @@ func @main {
     arm64.add x20, x20, 1
     arm64.movRegReg x0, x21
     arm64.bl __str_decref
-    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x20, 100
+    arm64.b.lt spin
   whileexit:
     arm64.leaRdata x1, __layout_Holder_String
     arm64.movRegReg x0, x19

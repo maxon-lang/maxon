@@ -53,203 +53,108 @@ func @main {
     arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
     arm64.cmp x0, 8
     arm64.b.ne __im_stride#15
-  __im_word#13:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
-    arm64.cmp x0, 0
-    arm64.b.ne __im_slow#12
-  __im_owned#16:
+  __im_word:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
     arm64.b.lt __im_slow#12
-  __im_bounds#17:
+  __im_bounds#16:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 0
     arm64.b.ls __im_slow#12
-  __im_buffer#18:
+  __im_buffer#17:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
     arm64.b.eq __im_slow#12
-  __im_viewed#19:
+  __im_viewed#18:
     arm64.sub x3, x0, 24
     arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
     arm64.cmp x3, 0
     arm64.b.ne __im_slow#12
-  __im_store#20:
+  __im_store#19:
     arm64.storeBaseDispReg.word64 [x0 + 0], x2
-    arm64.movImm x0, 0
-    arm64.b __im_cont#11
+    arm64.b tryok#1
   __im_stride#15:
     arm64.cmp x0, 1
     arm64.b.ne __im_slow#12
-  __im_byte#14:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
-    arm64.cmp x0, 0
-    arm64.b.ne __im_slow#12
-  __im_owned#21:
+  __im_byte:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
     arm64.b.lt __im_slow#12
-  __im_bounds#22:
+  __im_bounds#20:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 0
     arm64.b.ls __im_slow#12
-  __im_buffer#23:
+  __im_buffer#21:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
     arm64.b.eq __im_slow#12
-  __im_viewed#24:
+  __im_viewed#22:
     arm64.sub x3, x0, 24
     arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
     arm64.cmp x3, 0
     arm64.b.ne __im_slow#12
-  __im_store#25:
+  __im_store#23:
     arm64.storeBaseDispReg.byte [x0 + 0], x2
-    arm64.movImm x0, 0
-    arm64.b __im_cont#11
+    arm64.b tryok#1
   __im_slow#12:
     arm64.movRegReg x0, x19
     arm64.bl __managed_set
-    arm64.movRegReg x0, x9
-  __im_cont#11:
-    arm64.cmp x0, 0
-    arm64.b.eq tryok#1
-  tryerr#2:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at byte-string-literal.empty-literal-detaches.test:5: test invariant: index 0 is in bounds\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot5
-    arm64.loadRegSlot x20, slot6
-    arm64.loadRegSlot x21, slot7
-    arm64.loadRegSlot x22, slot8
-    arm64.loadRegSlot x23, slot9
-    arm64.loadRegSlot x24, slot10
-    arm64.loadRegSlot x25, slot11
-    arm64.loadRegSlot x26, slot12
-    arm64.loadRegSlot x27, slot13
-    arm64.loadRegSlot x28, slot14
-    arm64.epilogue 144
-    arm64.ret
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#2
   tryok#1:
     arm64.movImm x1, 1
     arm64.movImm x2, 66
     arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
     arm64.cmp x0, 8
-    arm64.b.ne __im_stride#30
-  __im_word#28:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
-    arm64.cmp x0, 0
-    arm64.b.ne __im_slow#27
-  __im_owned#31:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
-    arm64.cmp x0, 0
-    arm64.b.lt __im_slow#27
-  __im_bounds#32:
+    arm64.b.ne __im_stride#28
+  __im_bounds#29:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 1
-    arm64.b.ls __im_slow#27
-  __im_buffer#33:
+    arm64.b.ls __im_slow#25
+  __im_buffer#30:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.cmp x0, 0
-    arm64.b.eq __im_slow#27
-  __im_viewed#34:
-    arm64.sub x3, x0, 24
-    arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
-    arm64.cmp x3, 0
-    arm64.b.ne __im_slow#27
-  __im_store#35:
+  __im_store#32:
     arm64.add x0, x0, 8
     arm64.storeBaseDispReg.word64 [x0 + 0], x2
-    arm64.movImm x0, 0
-    arm64.b __im_cont#26
-  __im_stride#30:
+    arm64.b tryok#3
+  __im_stride#28:
     arm64.cmp x0, 1
-    arm64.b.ne __im_slow#27
-  __im_byte#29:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
-    arm64.cmp x0, 0
-    arm64.b.ne __im_slow#27
-  __im_owned#36:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
-    arm64.cmp x0, 0
-    arm64.b.lt __im_slow#27
-  __im_bounds#37:
+    arm64.b.ne __im_slow#25
+  __im_bounds#33:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 1
-    arm64.b.ls __im_slow#27
-  __im_buffer#38:
+    arm64.b.ls __im_slow#25
+  __im_buffer#34:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.cmp x0, 0
-    arm64.b.eq __im_slow#27
-  __im_viewed#39:
-    arm64.sub x3, x0, 24
-    arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
-    arm64.cmp x3, 0
-    arm64.b.ne __im_slow#27
-  __im_store#40:
+  __im_store#36:
     arm64.add x0, x0, 1
     arm64.storeBaseDispReg.byte [x0 + 0], x2
-    arm64.movImm x0, 0
-    arm64.b __im_cont#26
-  __im_slow#27:
+    arm64.b tryok#3
+  __im_slow#25:
     arm64.movRegReg x0, x19
     arm64.bl __managed_set
-    arm64.movRegReg x0, x9
-  __im_cont#26:
-    arm64.cmp x0, 0
-    arm64.b.eq tryok#3
-  tryerr#4:
-    arm64.leaRdata x0, __str_blob_3  ; "panic at byte-string-literal.empty-literal-detaches.test:6: test invariant: index 1 is in bounds\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot5
-    arm64.loadRegSlot x20, slot6
-    arm64.loadRegSlot x21, slot7
-    arm64.loadRegSlot x22, slot8
-    arm64.loadRegSlot x23, slot9
-    arm64.loadRegSlot x24, slot10
-    arm64.loadRegSlot x25, slot11
-    arm64.loadRegSlot x26, slot12
-    arm64.loadRegSlot x27, slot13
-    arm64.loadRegSlot x28, slot14
-    arm64.epilogue 144
-    arm64.ret
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#4
   tryok#3:
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
     arm64.cmp x0, 8
-    arm64.b.ne __im_stride#45
-  __im_word#43:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x0, 0
-    arm64.b.ls __im_slow#42
-  __im_load#47:
+    arm64.b.ne __im_stride#41
+  __im_load#43:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.b __im_loaded#46
-  __im_stride#45:
+    arm64.b tryok#5
+  __im_stride#41:
     arm64.cmp x0, 1
-    arm64.b.ne __im_slow#42
-  __im_byte#44:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x0, 0
-    arm64.b.ls __im_slow#42
-  __im_load#48:
+    arm64.b.ne __im_slow#38
+  __im_load#44:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-  __im_loaded#46:
-    arm64.movImm x2, 0
-    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
-    arm64.cmp x3, 0
-    arm64.b.eq __im_cont#41
-  __im_empty#49:
-    arm64.cmp x0, 0
-    arm64.b.ne __im_cont#41
-  __im_slow#42:
+    arm64.b tryok#5
+  __im_slow#38:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
-    arm64.movRegReg x2, x9
-  __im_cont#41:
-    arm64.cmp x2, 0
+    arm64.cmp x9, 0
     arm64.b.eq tryok#5
   tryerr#6:
     arm64.movImm x20, 0
@@ -260,41 +165,24 @@ func @main {
     arm64.movImm x1, 1
     arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
     arm64.cmp x0, 8
-    arm64.b.ne __im_stride#54
-  __im_word#52:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x0, 1
-    arm64.b.ls __im_slow#51
-  __im_load#56:
+    arm64.b.ne __im_stride#49
+  __im_load#51:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.add x0, x0, 8
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.b __im_loaded#55
-  __im_stride#54:
+    arm64.b tryok#8
+  __im_stride#49:
     arm64.cmp x0, 1
-    arm64.b.ne __im_slow#51
-  __im_byte#53:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x0, 1
-    arm64.b.ls __im_slow#51
-  __im_load#57:
+    arm64.b.ne __im_slow#46
+  __im_load#52:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.add x0, x0, 1
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-  __im_loaded#55:
-    arm64.movImm x2, 0
-    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
-    arm64.cmp x3, 0
-    arm64.b.eq __im_cont#50
-  __im_empty#58:
-    arm64.cmp x0, 0
-    arm64.b.ne __im_cont#50
-  __im_slow#51:
+    arm64.b tryok#8
+  __im_slow#46:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
-    arm64.movRegReg x2, x9
-  __im_cont#50:
-    arm64.cmp x2, 0
+    arm64.cmp x9, 0
     arm64.b.eq tryok#8
   tryerr#9:
     arm64.movImm x21, 0
@@ -364,34 +252,68 @@ func @main {
     arm64.movRegReg x2, x27
     arm64.bl __str_copy
     arm64.add x19, x19, x27
+    arm64.loadRegSlot x2, slot4
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x28
-    arm64.loadRegSlot x20, slot4
-    arm64.movRegReg x2, x20
     arm64.bl __str_copy
-    arm64.add x0, x19, x20
-    arm64.loadRegSlot x19, slot3
-    arm64.storeBaseDispReg.word64 [x19 + 0], x21
-    arm64.loadRegSlot x0, slot2
-    arm64.storeBaseDispReg.word64 [x19 + 8], x0
-    arm64.movImm x0, 18446744073709551613
-    arm64.storeBaseDispReg.word64 [x19 + 16], x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x19 + 24], x0
+    arm64.loadRegSlot x0, slot4
+    arm64.add x0, x19, x0
+    arm64.loadRegSlot x0, slot3
+    arm64.storeBaseDispReg.word64 [x0 + 0], x21
+    arm64.loadRegSlot x1, slot2
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.movImm x1, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x0 + 16], x1
+    arm64.movImm x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 24], x1
     arm64.loadRegSlot x0, slot1
     arm64.bl __mm_decref
     arm64.movRegReg x0, x25
     arm64.bl __mm_decref
     arm64.movRegReg x0, x28
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x19
-    arm64.bl print
-    arm64.movRegReg x0, x19
+  __il_body:
+    arm64.loadRegSlot x0, slot3
+    arm64.bl __write_stdout
+  __il_cont:
+    arm64.loadRegSlot x0, slot3
     arm64.bl __str_decref
     arm64.movImm x19, 0
     arm64.loadRegSlot x0, slot0
     arm64.bl __managed_decref
     arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
+    arm64.ret
+  tryerr#2:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at byte-string-literal.empty-literal-detaches.test:5: test invariant: index 0 is in bounds\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
+    arm64.ret
+  tryerr#4:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at byte-string-literal.empty-literal-detaches.test:6: test invariant: index 1 is in bounds\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot5
     arm64.loadRegSlot x20, slot6
     arm64.loadRegSlot x21, slot7

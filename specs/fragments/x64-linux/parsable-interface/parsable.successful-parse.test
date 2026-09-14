@@ -11,7 +11,7 @@ type Value implements Parsable
 	export var n as Integer
 
 	static function fromString(input String) returns Self throws ParseError
-		return Value{n: input.byteLength()}
+		return Value{n: input.byteLength() as Integer}
 	end 'fromString'
 end 'Value'
 
@@ -39,11 +39,6 @@ func @Value.fromString {
     x64.prologue 40
   __il_body:
     x64.loadRegBaseDisp.word64 rbx, [rcx + 8]
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc greaterEqual, __il_cont
-  __il_slow:
-    x64.callDirect String.byteLength
-    x64.movRegReg rbx, r8
   __il_cont:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
@@ -74,23 +69,23 @@ func @main {
     x64.ret
   tryok:
     x64.loadRegBaseDisp.word64 rbx, [r8 + 0]
-    x64.movRegReg rcx, r8
-    x64.callDirect __mm_decref
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 rbx, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at parsable.successful-parse.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg r8, rbx
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at parsable.successful-parse.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp

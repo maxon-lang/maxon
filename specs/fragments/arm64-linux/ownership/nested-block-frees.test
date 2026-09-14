@@ -32,23 +32,26 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @testNestedBlock {
+func @main {
   entry:
     arm64.prologue 80
-    arm64.storeSlotReg slot7, x25
-    arm64.storeSlotReg slot6, x24
-    arm64.storeSlotReg slot5, x23
-    arm64.storeSlotReg slot4, x22
-    arm64.storeSlotReg slot3, x21
-    arm64.storeSlotReg slot2, x20
-    arm64.storeSlotReg slot1, x19
-    arm64.movImm x19, 0
-    arm64.cbz x0, ifcont
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
   check:
-    arm64.movImm x0, 42
-    arm64.leaRegSlot x1, slot0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.loadRegBaseDisp.word64 x19, [x1 + 0]
+    arm64.movImm x19, 42
+  __il_body#6:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+  __il_cont#5:
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.bl __mm_decref
   ifcont:
     arm64.movImm x0, 21
     arm64.movImm x1, 0
@@ -85,27 +88,21 @@ func @testNestedBlock {
     arm64.storeBaseDispReg.word64 [x24 + 24], x0
     arm64.movRegReg x0, x20
     arm64.bl __mm_decref
+  __il_body#8:
     arm64.movRegReg x0, x24
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont#7:
     arm64.movRegReg x0, x24
     arm64.bl __str_decref
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.loadRegSlot x23, slot5
-    arm64.loadRegSlot x24, slot6
-    arm64.loadRegSlot x25, slot7
-    arm64.epilogue 80
-    arm64.ret
-}
-
-func @main {
-  entry:
-    arm64.prologue 16
-    arm64.movImm x0, 1
-    arm64.bl testNestedBlock
+  __il_cont#1:
     arm64.movImm x0, 0
-    arm64.epilogue 16
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
     arm64.ret
 }

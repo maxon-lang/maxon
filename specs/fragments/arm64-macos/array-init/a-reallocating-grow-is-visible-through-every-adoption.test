@@ -50,21 +50,21 @@ func @main {
     arm64.ret
   tryok#1:
     arm64.movRegReg x0, x19
-    arm64.bl __mm_retain
+    arm64.bl __managed_retain
     arm64.movRegReg x20, x0
     arm64.movRegReg x0, x19
-    arm64.bl __mm_retain
+    arm64.bl __managed_retain
     arm64.movRegReg x21, x0
     arm64.movImm x22, 0
-  whilehdr:
-    arm64.cmp x22, 200
-    arm64.b.ge whileexit
+    arm64.b whilehdr
   fill:
     arm64.movImm x1, 1
     arm64.movRegReg x0, x20
     arm64.bl __managed_push
     arm64.add x22, x22, 1
-    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x22, 200
+    arm64.b.lt fill
   whileexit:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.cmp x0, 200
@@ -97,7 +97,7 @@ func @main {
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.add x0, x0, 1592
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.b __im_loaded
+    arm64.b tryok#8
   __im_stride:
     arm64.cmp x0, 1
     arm64.b.ne __im_slow
@@ -109,20 +109,11 @@ func @main {
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.add x0, x0, 199
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-  __im_loaded:
-    arm64.movImm x2, 0
-    arm64.loadRegBaseDisp.word64 x3, [x21 + 40]
-    arm64.cmp x3, 0
-    arm64.b.eq __im_cont
-  __im_empty:
-    arm64.cmp x0, 0
-    arm64.b.ne __im_cont
+    arm64.b tryok#8
   __im_slow:
     arm64.movRegReg x0, x21
     arm64.bl __managed_get
-    arm64.movRegReg x2, x9
-  __im_cont:
-    arm64.cmp x2, 0
+    arm64.cmp x9, 0
     arm64.b.eq tryok#8
   tryerr#9:
     arm64.movImm x22, 3
@@ -147,17 +138,7 @@ func @main {
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x22, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at a-reallocating-grow-is-visible-through-every-adoption.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.ret
+    arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x21
     arm64.bl __managed_decref
@@ -166,6 +147,16 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-reallocating-grow-is-visible-through-every-adoption.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

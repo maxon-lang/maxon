@@ -48,20 +48,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Sorter.compareAndSwap {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x3
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
-    arm64.movRegReg x2, x4
-    arm64.blr x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @pickLarger {
   entry:
     arm64.prologue 16
@@ -79,23 +65,42 @@ func @pickLarger {
 func @main {
   entry:
     arm64.prologue 32
-    arm64.leaRegSlot x0, slot0
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+  __il_body#5:
+    arm64.movImm x19, 0
+    arm64.movImm x0, 8
     arm64.movImm x1, 0
-    arm64.storeBaseDispReg.word64 [x0 + 0], x1
-    arm64.movImm x1, 10
-    arm64.movImm x2, 25
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+  __il_cont#4:
+    arm64.movImm x0, 10
+    arm64.movImm x1, 25
     arm64.leaFuncAddr x3, __fnref_pickLarger
-    arm64.movImm x4, 0
-    arm64.leaRdata x5, __layout_Sorter_Number
-    arm64.bl Sorter.compareAndSwap
+    arm64.movImm x2, 0
+    arm64.leaRdata x4, __layout_Sorter_Number
+  __il_body#6:
+    arm64.blr x3
+  __il_cont#3:
     arm64.cmp x0, 25
     arm64.b.ne ifcont
   check:
-    arm64.movImm x0, 0
+    arm64.movImm x19, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
   ifcont:
-    arm64.movImm x0, 1
+    arm64.movImm x19, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
 }

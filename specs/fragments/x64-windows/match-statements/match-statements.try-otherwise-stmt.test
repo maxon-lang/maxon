@@ -24,6 +24,12 @@ end 'main'
 ---
 ExitCode: 7
 ---
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+}
+
 func @leaf {
   entry:
     x64.pushReg rbp
@@ -34,56 +40,21 @@ func @leaf {
     x64.ret
 }
 
-func @dispatch {
+func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 rcx, 100
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at match-statements.try-otherwise-stmt.test:10: Range check failed: value outside typealias 'Tally'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, matchdefault
   matcharm:
     x64.callDirect leaf
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, matchcont
   tryerr:
     x64.movRegImm32 r8, 7
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
+    x64.jmp __il_cont
   matchcont:
     x64.movRegImm32 r8, 99
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  matchdefault:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at match-statements.try-otherwise-stmt.test:13: unreachable\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @main {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm32 rcx, 1
-    x64.callDirect dispatch
+  __il_cont:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

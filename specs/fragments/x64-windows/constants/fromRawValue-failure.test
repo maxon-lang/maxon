@@ -22,6 +22,12 @@ end 'main'
 ---
 ExitCode: 1
 ---
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+}
+
 func @main {
   entry:
     x64.pushReg rbp
@@ -32,14 +38,9 @@ func @main {
   __il_cont:
     x64.callDirect __enum_from_raw_HttpStatus
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
-  tryerr:
-    x64.movRegImm32 rax, 200
-    x64.jmp trycont
+    x64.jcc notEqual, check
   tryok:
-    x64.movRegReg rax, r8
-  trycont:
-    x64.cmpRegImm32 rax, 200
+    x64.cmpRegImm32 r8, 200
     x64.jcc notEqual, ifcont
   check:
     x64.movRegImm32 r8, 1

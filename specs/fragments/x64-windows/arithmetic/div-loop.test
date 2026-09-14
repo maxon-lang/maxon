@@ -18,41 +18,10 @@ end 'main'
 ---
 ExitCode: 113
 ---
-func @divLoop {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm32 r8, 0
-    x64.movRegImm32 rsi, 1
-  whilehdr:
-    x64.cmpRegReg rsi, rcx
-    x64.jcc greater, whileexit
-  loop:
-    x64.movRegImm32 rax, 50
-    x64.cmpRegImm32 rsi, 0
-    x64.setccReg equal, rdi
-    x64.movRegReg r9, rsi
-    x64.orRegReg r9, rsi, rdi
-    x64.cqo
-    x64.idivReg r9
-    x64.cmpRegImm32 rdi, 0
-    x64.jcc equal, tryok
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at div-loop.test:9: divLoop: i was 0\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  tryok:
-    x64.leaRegRegReg r8, r8, rax
-    x64.leaRegRegImm32 rsi, rsi, 1
-    x64.jmp whilehdr
-  whileexit:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
 }
 
 func @main {
@@ -60,22 +29,35 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rcx, 5
-    x64.callDirect divLoop
+  __il_body:
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 rcx, 1
+    x64.jmp whilehdr
+  loop:
+    x64.movRegImm32 rax, 50
+    x64.cqo
+    x64.idivReg rcx
+  tryok:
+    x64.leaRegRegReg r8, r8, rax
+    x64.leaRegRegImm32 rcx, rcx, 1
+  whilehdr:
+    x64.cmpRegImm32 rcx, 5
+    x64.jcc lessEqual, loop
+  __il_cont:
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r8, rax
-    x64.jcc lessEqual, __rc_ok
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at div-loop.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

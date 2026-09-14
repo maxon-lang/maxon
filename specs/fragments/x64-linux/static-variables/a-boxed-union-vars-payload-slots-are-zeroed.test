@@ -10,7 +10,8 @@ var sentinel = Counter.none
 
 function valueOf(c Counter) returns Integer
 	return match c 'k'
-		none or some(n) gives n
+		none or
+			some(n) gives n
 	end 'k'
 end 'valueOf'
 
@@ -41,10 +42,12 @@ func @main {
   __il_body:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm
-  matchnext:
+    x64.setccReg greaterEqual, rcx
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, matchdead
+    x64.setccReg lessEqual, rax
+    x64.andRegReg rcx, rcx, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, matchdead
   matcharm:
     x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
   __il_cont:
@@ -52,15 +55,7 @@ func @main {
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 rbx, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-boxed-union-vars-payload-slots-are-zeroed.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r8
     x64.callDirect __mm_decref
@@ -70,4 +65,12 @@ func @main {
     x64.popReg rbp
     x64.ret
   matchdead:
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-boxed-union-vars-payload-slots-are-zeroed.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
 }

@@ -21,33 +21,30 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movRegImm32 rax, 0
-  whilehdr:
-    x64.cmpRegImm32 rax, 10
-    x64.jcc greaterEqual, critsplit
+    x64.jmp whilehdr
   outer:
     x64.leaRegRegImm32 r8, rax, 1
   inner:
     x64.cmpRegImm32 r8, 3
-    x64.jcc equal, whileexit#3
-  whileexit#6:
+    x64.jcc equal, __rc_chk
+  whileexit:
     x64.movRegReg rax, r8
-    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 rax, 10
+    x64.jcc less, outer
   critsplit:
     x64.movRegReg r8, rax
-  whileexit#3:
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc lessEqual, __rc_ok
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at break.labeled-break-outer.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

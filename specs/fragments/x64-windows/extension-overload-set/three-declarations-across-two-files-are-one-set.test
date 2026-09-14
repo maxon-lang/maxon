@@ -39,13 +39,13 @@ end 'Weight'
 
 export extension Counted
 	export function score(x Weight) returns Amount
-		return base() * x.w
+		return (base() as Amount) * x.w
 	end 'score'
 end 'Counted'
 
 function main() returns ExitCode
 	let u = Unit.make()
-	return u.score(4) + u.score(true) + u.score(Weight.of(7))
+	return (u.score(4) as Amount) + (u.score(true) as Amount) + u.score(Weight.of(7))
 end 'main'
 ---
 ExitCode: 23
@@ -55,57 +55,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
-}
-
-func @Unit.score#Integer {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-  __il_cont:
-    x64.leaRegRegImm32 r8, rdx, 1
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Unit.score#bool {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-  __il_cont:
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, ternaryfalse
-  ternarytrue:
-    x64.movRegImm32 rax, 10
-    x64.jmp matchcont
-  ternaryfalse:
-    x64.movRegImm32 rax, 0
-  matchcont:
-    x64.leaRegRegImm32 r8, rax, 1
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Unit.make {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @Unit.score#Weight {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-  __il_cont:
-    x64.loadRegBaseDisp.word64 r8, [rdx + 0]
-    x64.popReg rbp
-    x64.ret
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -114,43 +66,57 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 48
-    x64.callDirect Unit.make
+    x64.pushReg r13
+    x64.prologue 40
+  __il_body#9:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
     x64.movRegReg rbx, r8
-    x64.movRegImm32 rdx, 4
-    x64.movRegReg rcx, rbx
-    x64.callDirect Unit.score#Integer
-    x64.movRegReg r12, r8
-    x64.movRegImm32 rdx, 1
-    x64.movRegReg rcx, rbx
-    x64.callDirect Unit.score#bool
-    x64.leaRegRegReg r12, r12, r8
-    x64.movRegImm32 rax, 7
-    x64.leaRegSlot rdx, slot0
-    x64.storeBaseDispReg.word64 [rdx + 0], rax
-    x64.movRegReg rcx, rbx
-    x64.callDirect Unit.score#Weight
-    x64.leaRegRegReg r12, r12, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
+  __il_body#18:
+    x64.movRegImm32 rax, 1
+  __il_cont#17:
+    x64.leaRegRegImm32 rax, rax, 4
+  ternarytrue:
+    x64.movRegImm32 rcx, 10
+  matchcont:
+    x64.leaRegRegImm32 rcx, rcx, 1
+  __il_cont#6:
+    x64.leaRegRegReg r12, rax, rcx
+    x64.movRegImm32 r13, 7
+  __il_body#15:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], r13
+  __il_cont#21:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+  __il_cont#4:
+    x64.leaRegRegReg r12, r12, rax
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r12, rax
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at b.maxon:19: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 48
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg r8, r12
-    x64.epilogue 48
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at b.maxon:19: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

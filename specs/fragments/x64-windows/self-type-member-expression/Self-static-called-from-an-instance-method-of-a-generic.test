@@ -26,6 +26,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @Holder.make {
@@ -45,7 +48,7 @@ func @Holder.make {
     x64.ret
 }
 
-func @Holder.twin {
+func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
@@ -53,7 +56,11 @@ func @Holder.twin {
     x64.pushReg r12
     x64.pushReg r13
     x64.prologue 40
-    x64.movRegReg rbx, rdx
+    x64.movRegImm32 rax, 42
+    x64.leaRegSlot rcx, slot0
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.leaRegRdata rbx, [rip + __layout_Holder_Num]
+  __il_body:
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.callDirect Holder.make
     x64.movRegReg r12, r8
@@ -64,26 +71,12 @@ func @Holder.twin {
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.callDirect __destruct_dict_Holder
+  __il_cont:
     x64.movRegReg r8, r13
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @main {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 48
-    x64.movRegImm32 rax, 42
-    x64.leaRegSlot rcx, slot0
-    x64.storeBaseDispReg.word64 [rcx + 0], rax
-    x64.leaRegRdata rdx, [rip + __layout_Holder_Num]
-    x64.callDirect Holder.twin
-    x64.epilogue 48
     x64.popReg rbp
     x64.ret
 }

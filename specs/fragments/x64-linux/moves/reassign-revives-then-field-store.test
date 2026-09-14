@@ -65,8 +65,10 @@ func @main {
     x64.storeBaseDispReg.word64 [r13 + 24], rax
     x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
+  __il_body:
     x64.movRegReg rcx, r13
-    x64.callDirect print
+    x64.callDirect __write_stdout
+  __il_cont:
     x64.movRegReg rcx, r13
     x64.callDirect __str_decref
     x64.movRegImm32 rax, 3
@@ -79,11 +81,8 @@ func @main {
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at reassign-revives-then-field-store.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.jcc greater, __rc_panic
+  __rc_ok:
     x64.epilogue 48
     x64.popReg r14
     x64.popReg r13
@@ -91,7 +90,10 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at reassign-revives-then-field-store.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 48
     x64.popReg r14
     x64.popReg r13

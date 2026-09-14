@@ -29,20 +29,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Item.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 112
@@ -59,14 +45,17 @@ func @main {
     arm64.leaFuncAddr x0, __mm_decref
     arm64.bl __list_create
     arm64.movRegReg x19, x0
-    arm64.movImm x0, 99
-    arm64.bl Item.create
-    arm64.movRegReg x20, x0
-    arm64.storeSlotReg slot0, x20
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_incref
+    arm64.movImm x20, 99
+  __il_body:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeSlotReg slot0, x0
+    arm64.storeBaseDispReg.word64 [x0 + 0], x20
+  __il_cont:
+    arm64.bl __mm_own
+    arm64.movRegReg x1, x0
     arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
     arm64.bl __list_prepend
     arm64.movRegReg x20, x0
     arm64.movRegReg x0, x20

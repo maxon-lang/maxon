@@ -50,6 +50,7 @@ data {
 func @main {
   entry:
     arm64.prologue 64
+    arm64.storeSlotReg slot5, x24
     arm64.storeSlotReg slot4, x23
     arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
@@ -90,44 +91,45 @@ func @main {
     arm64.movImm x21, 0
     arm64.movImm x22, 0
     arm64.movImm x23, 0
-  forhdr:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x23, x0
-    arm64.b.ge forexit
+  __us_test:
+    arm64.loadRegBaseDisp.word64 x24, [x19 + 8]
+    arm64.b forhdr
   scan:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x23
     arm64.bl __managed_get_unchecked
-    arm64.cbz x0, critsplit#14
+    arm64.cbz x0, critsplit#15
   hit:
     arm64.add x1, x20, 1
     arm64.add x2, x21, 1
     arm64.cmp x2, x22
-    arm64.b.le critsplit#15
+    arm64.b.le critsplit#16
   grow:
     arm64.movRegReg x3, x2
     arm64.b ifcont
-  critsplit#15:
+  critsplit#16:
     arm64.movRegReg x3, x22
     arm64.b ifcont
-  critsplit#14:
+  critsplit#15:
     arm64.movRegReg x1, x20
     arm64.movRegReg x2, x21
     arm64.movRegReg x3, x22
   ifcont:
     arm64.eor x0, x0, 1
-    arm64.cbz x0, critsplit#16
+    arm64.cbz x0, critsplit#17
   miss:
     arm64.movImm x0, 0
     arm64.b forstep
-  critsplit#16:
+  critsplit#17:
     arm64.movRegReg x0, x2
   forstep:
     arm64.add x23, x23, 1
     arm64.movRegReg x20, x1
     arm64.movRegReg x21, x0
     arm64.movRegReg x22, x3
-    arm64.b forhdr
+  forhdr:
+    arm64.cmp x23, x24
+    arm64.b.lt scan
   forexit:
     arm64.movImm x16, 10
     arm64.mul x0, x20, x16
@@ -138,18 +140,7 @@ func @main {
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at iterate-aliased-bool.test:38: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
-    arm64.ret
+    arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
@@ -157,6 +148,19 @@ func @main {
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at iterate-aliased-bool.test:38: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
     arm64.epilogue 64
     arm64.ret
 }

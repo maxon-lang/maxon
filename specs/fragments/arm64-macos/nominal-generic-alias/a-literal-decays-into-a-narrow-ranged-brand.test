@@ -48,16 +48,16 @@ data {
 func @totalXs {
   entry:
     arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.movImm x20, 0
     arm64.movImm x21, 0
-  forhdr:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x21, x0
-    arm64.b.ge forexit
+  __us_test:
+    arm64.loadRegBaseDisp.word64 x22, [x19 + 8]
+    arm64.b forhdr
   each:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
@@ -65,79 +65,39 @@ func @totalXs {
     arm64.add x20, x20, x0
   forstep:
     arm64.add x21, x21, 1
-    arm64.b forhdr
-  forexit:
-    arm64.cmp x20, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x20, 1000
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at a-literal-decays-into-a-narrow-ranged-brand.test:11: Range check failed: value outside typealias 'Count'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
-}
-
-func @totalYs {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.movImm x20, 0
-    arm64.movImm x21, 0
   forhdr:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x21, x0
-    arm64.b.ge forexit
-  each:
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x21
-    arm64.bl __managed_get_unchecked
-    arm64.add x20, x20, x0
-  forstep:
-    arm64.add x21, x21, 1
-    arm64.b forhdr
+    arm64.cmp x21, x22
+    arm64.b.lt each
   forexit:
     arm64.cmp x20, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 1000
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at a-literal-decays-into-a-narrow-ranged-brand.test:19: Range check failed: value outside typealias 'Count'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
-    arm64.ret
+    arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at a-literal-decays-into-a-narrow-ranged-brand.test:11: Range check failed: value outside typealias 'Count'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
 }
 
 func @main {
   entry:
-    arm64.prologue 48
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
     arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
@@ -171,51 +131,83 @@ func @main {
     arm64.storeBaseDispReg.word64 [x19 + 16], x0
     arm64.movImm x0, 2
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
+  __il_body:
+    arm64.movImm x21, 0
+    arm64.movImm x22, 0
+  __us_test:
+    arm64.loadRegBaseDisp.word64 x23, [x19 + 8]
+    arm64.b forhdr
+  each:
     arm64.movRegReg x0, x19
-    arm64.bl totalYs
-    arm64.movRegReg x21, x0
+    arm64.movRegReg x1, x22
+    arm64.bl __managed_get_unchecked
+    arm64.add x21, x21, x0
+  forstep:
+    arm64.add x22, x22, 1
+  forhdr:
+    arm64.cmp x22, x23
+    arm64.b.lt each
+  forexit:
+    arm64.cmp x21, 0
+    arm64.b.lt __rc_panic#12
+  __rc_chk#13:
+    arm64.cmp x21, 1000
+    arm64.b.gt __rc_panic#12
+  __il_cont#5:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.movImm x19, 3
-  __il_cont:
+  __il_cont#4:
     arm64.movImm x0, 2
     arm64.movImm x1, 0
     arm64.bl __managed_create
-    arm64.movRegReg x22, x0
+    arm64.movRegReg x19, x0
     arm64.movImm x1, 1
-    arm64.movRegReg x0, x22
+    arm64.movRegReg x0, x19
     arm64.bl __managed_push
     arm64.movImm x1, 2
-    arm64.movRegReg x0, x22
+    arm64.movRegReg x0, x19
     arm64.bl __managed_push
-    arm64.movRegReg x0, x22
+    arm64.movRegReg x0, x19
     arm64.bl totalXs
     arm64.add x1, x20, x21
-    arm64.add x1, x1, x19
-    arm64.add x19, x1, x0
-    arm64.cmp x19, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x19, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_4  ; "panic at a-literal-decays-into-a-narrow-ranged-brand.test:36: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.add x1, x1, 3
+    arm64.add x20, x1, x0
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic#2
+  __rc_chk#3:
+    arm64.cmp x20, 255
+    arm64.b.gt __rc_panic#2
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  __rc_panic#12:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at a-literal-decays-into-a-narrow-ranged-brand.test:19: Range check failed: value outside typealias 'Count'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
     arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x22
-    arm64.bl __managed_decref
-    arm64.movRegReg x0, x19
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at a-literal-decays-into-a-narrow-ranged-brand.test:36: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
     arm64.ret
 }

@@ -21,6 +21,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -34,24 +37,14 @@ func @main {
     x64.pushReg r15
     x64.prologue 72
     x64.movRegImm rbx, 9223372036854775808
-  __il_cont#5:
-    x64.movRegImm r12, 18446744073709551615
-  __il_cont#4:
+  __il_cont:
     x64.leaRegRdata rcx, [rip + __str_rec_3]  ; "before\x0a"
     x64.callDirect print
-    x64.cmpRegImm32 r12, 0
-    x64.setccReg equal, rcx
-    x64.movRegReg rsi, rcx
-    x64.orRegImm32 rsi, rcx, -1
+    x64.movRegImm32 rcx, 0
+    x64.orRegImm32 rcx, rcx, -1
     x64.movRegReg rax, rbx
     x64.cqo
-    x64.idivReg rsi
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, tryok
-  tryerr:
-    x64.movRegImm32 rbx, 77
-    x64.jmp trycont
-  tryok:
+    x64.idivReg rcx
     x64.movRegReg rbx, rax
   trycont:
     x64.leaRegRdata rax, [rip + __str_rec_4]  ; "q="
@@ -88,12 +81,12 @@ func @main {
     x64.movRegReg rax, rbx
     x64.callDirect __str_copy
     x64.leaRegRegReg rbx, r12, rbx
-    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rax, slot2
     x64.loadRegSlot rdx, slot3
-    x64.loadRegSlot r12, slot2
-    x64.movRegReg rax, r12
+    x64.movRegReg rcx, rbx
     x64.callDirect __str_copy
-    x64.leaRegRegReg rax, rbx, r12
+    x64.loadRegSlot rax, slot2
+    x64.leaRegRegReg rax, rbx, rax
     x64.loadRegSlot rbx, slot1
     x64.storeBaseDispReg.word64 [rbx + 0], r15
     x64.loadRegSlot rax, slot0

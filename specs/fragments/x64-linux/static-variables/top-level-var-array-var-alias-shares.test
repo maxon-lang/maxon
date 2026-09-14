@@ -26,7 +26,7 @@ func @main {
     x64.prologue 32
     x64.leaRegGlobal rax, __data_A
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.callDirect __mm_retain
+    x64.callDirect __managed_retain
     x64.movRegReg rbx, r8
     x64.movRegImm32 rdx, 9
     x64.movRegReg rcx, rbx
@@ -40,18 +40,18 @@ func @main {
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 r12, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at top-level-var-array-var-alias-shares.test:7: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg r8, r12
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg r8, r12
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at top-level-var-array-var-alias-shares.test:7: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx

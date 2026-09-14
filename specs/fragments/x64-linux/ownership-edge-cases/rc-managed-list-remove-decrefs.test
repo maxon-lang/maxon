@@ -27,23 +27,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Token.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -56,8 +39,13 @@ func @main {
     x64.leaRegFunc rcx, [rip + __mm_decref]
     x64.callDirect __list_create
     x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 9
-    x64.callDirect Token.create
+    x64.movRegImm32 r12, 9
+  __il_body:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
+  __il_cont:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
     x64.callDirect __list_prepend
@@ -72,21 +60,19 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __list_count
     x64.leaRegRegReg r14, r14, r8
+    x64.cmpRegImm32 r14, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r14, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok:
     x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
     x64.movRegReg rcx, r12
     x64.callDirect __list_node_decref
     x64.movRegReg rcx, rbx
     x64.callDirect __list_decref
-    x64.cmpRegImm32 r14, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 r14, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at rc-managed-list-remove-decrefs.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.movRegReg r8, r14
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
@@ -94,8 +80,10 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg r8, r14
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at rc-managed-list-remove-decrefs.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13

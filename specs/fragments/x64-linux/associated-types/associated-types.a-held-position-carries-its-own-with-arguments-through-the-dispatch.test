@@ -64,7 +64,7 @@ function firstOf(b IntBag) returns Integer
 end 'firstOf'
 
 function main() returns ExitCode
-	return (firstOf(GoodBag.create(7)) + BadBag.create(1).cursor().item().byteLength()) as ExitCode
+	return (firstOf(GoodBag.create(7)) + (BadBag.create(1).cursor().item().byteLength() as Integer)) as ExitCode
 end 'main'
 ---
 ExitCode: 11
@@ -85,151 +85,20 @@ func @IntCur.item {
     x64.ret
 }
 
-func @IntCur.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @TextCur.item {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.callDirect __str_retain
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @TextCur.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect __str_retain
-    x64.storeBaseDispReg.word64 [r12 + 0], r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect __str_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @GoodBag.cursor {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.callDirect IntCur.create
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @GoodBag.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.prologue 40
-    x64.movRegReg rbx, rcx
+    x64.loadRegBaseDisp.word64 rbx, [rcx + 0]
+  __il_body:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.storeBaseDispReg.word64 [r8 + 0], rbx
+  __il_cont:
     x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @BadBag.cursor {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 32
-    x64.leaRegRdata rax, [rip + __str_rec_1]  ; "nope"
-    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
-    x64.loadRegBaseDisp.word64 r12, [rax + 8]
-    x64.leaRegRegImm32 rcx, r12, 57
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r13, r8
-    x64.leaRegRegImm32 r14, r13, 56
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, rbx
-    x64.movRegReg rax, r12
-    x64.callDirect __str_copy
-    x64.leaRegRegReg rax, r14, r12
-    x64.storeBaseDispReg.word64 [r13 + 0], r14
-    x64.storeBaseDispReg.word64 [r13 + 8], r12
-    x64.movRegImm rax, 18446744073709551613
-    x64.storeBaseDispReg.word64 [r13 + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r13 + 24], rax
-    x64.movRegReg rcx, r13
-    x64.callDirect TextCur.create
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @firstOf {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
-    x64.movRegReg rbx, rdx
-    x64.loadRegBaseDisp.word64 rax, [rbx + 40]
-    x64.leaRegRegReg r12, rbx, rax
-    x64.callMem [rbx + 24]
-    x64.movRegReg rbx, r8
-    x64.movRegReg rcx, rbx
-    x64.callMem [r12 + 24]
-    x64.movRegReg r13, r8
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, rbx
-    x64.callDirect __drop_existential
-    x64.movRegReg r8, r13
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -243,59 +112,103 @@ func @main {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.prologue 48
-    x64.movRegImm32 rcx, 7
-    x64.callDirect GoodBag.create
-    x64.movRegReg rbx, r8
-    x64.leaRegRdata rdx, [rip + __witness_GoodBag.Bag]
-    x64.movRegReg rcx, rbx
-    x64.callDirect firstOf
+    x64.pushReg r15
+    x64.prologue 56
+    x64.movRegImm32 rbx, 7
+  __il_body#9:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot0, r8
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+  __il_cont#8:
+    x64.leaRegRdata rax, [rip + __witness_GoodBag.Bag]
+  __il_body#10:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 40]
+    x64.leaRegRegReg rbx, rax, rcx
+    x64.movRegReg rcx, r8
+    x64.callMem [rax + 24]
     x64.movRegReg r12, r8
-    x64.movRegImm32 rax, 1
-    x64.leaRegSlot rcx, slot0
-    x64.storeBaseDispReg.word64 [rcx + 0], rax
-    x64.callDirect BadBag.cursor
+    x64.movRegReg rcx, r12
+    x64.callMem [rbx + 24]
     x64.movRegReg r13, r8
-    x64.movRegReg rcx, r13
-    x64.callDirect TextCur.item
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __drop_existential
+  __il_cont#7:
+    x64.movRegImm32 rbx, 1
+  __il_body#11:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot1, r8
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+  __il_body#15:
+    x64.leaRegRdata rax, [rip + __str_rec_1]  ; "nope"
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.leaRegRegImm32 rcx, r12, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
     x64.movRegReg r14, r8
-  __il_body:
-    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc greaterEqual, __rc_ok#6
-  __il_slow:
+    x64.leaRegRegImm32 r15, r14, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r12
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r12
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+  __il_body#17:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg rbx, r8
     x64.movRegReg rcx, r14
-    x64.callDirect String.byteLength
-    x64.jmp __il_cont
-  __rc_ok#6:
-    x64.movRegReg r8, rax
-  __il_cont:
-    x64.leaRegRegReg r12, r12, r8
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [rbx + 0], r8
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_decref
+  __il_body#12:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect __str_retain
+  __il_body#13:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+  __il_cont#4:
+    x64.leaRegRegReg r12, r13, rax
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 r12, 255
-    x64.jcc lessEqual, __rc_ok#1
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at associated-types.a-held-position-carries-its-own-with-arguments-through-the-dispatch.test:67: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 48
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, r8
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_TextCur
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __mm_decref
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 56
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok#1:
-    x64.movRegReg rcx, r14
-    x64.callDirect __str_decref
-    x64.movRegReg rcx, r13
-    x64.callDirect __destruct_TextCur
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 48
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at associated-types.a-held-position-carries-its-own-with-arguments-through-the-dispatch.test:67: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12

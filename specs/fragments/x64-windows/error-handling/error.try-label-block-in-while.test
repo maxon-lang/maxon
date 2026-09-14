@@ -23,6 +23,12 @@ end 'main'
 ---
 ExitCode: 4
 ---
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+}
+
 func @risky {
   entry:
     x64.pushReg rbp
@@ -42,9 +48,7 @@ func @main {
     x64.prologue 32
     x64.movRegImm32 rbx, 0
     x64.movRegImm32 r12, 0
-  whilehdr:
-    x64.cmpRegImm32 r12, 4
-    x64.jcc greaterEqual, whileexit
+    x64.jmp whilehdr
   loop:
     x64.movRegReg rcx, r12
     x64.callDirect risky
@@ -58,25 +62,27 @@ func @main {
   trycont:
     x64.leaRegRegImm32 r12, r12, 1
     x64.movRegReg rbx, rax
-    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 r12, 4
+    x64.jcc less, loop
   whileexit:
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at error.try-label-block-in-while.test:21: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg r8, rbx
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg r8, rbx
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at error.try-label-block-in-while.test:21: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx

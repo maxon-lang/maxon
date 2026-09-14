@@ -1,5 +1,5 @@
 // Test: shift-signedness-survives-a-branch
-typealias Wide = int(0 to u64.max)
+typealias Wide = bits(64)
 typealias Num = int(i64.min to i64.max)
 
 function afterBranch(v Wide, flag bool) returns Wide
@@ -34,26 +34,17 @@ ExitCode: 42
 func @main {
   entry:
     arm64.prologue 16
-  taken:
-    arm64.movImm x0, 15
-  __il_cont#5:
-    arm64.cmp x0, 15
-    arm64.b.eq __il_body
-  branch:
-    arm64.movImm x0, 1
-    arm64.epilogue 16
-    arm64.ret
   __il_body:
     arm64.movImm x0, 0
     arm64.movImm x1, 0
-  whilehdr:
-    arm64.cmp x1, 3
-    arm64.b.ge __il_cont#9
+    arm64.b whilehdr
   each:
     arm64.movImm x0, 15
     arm64.add x1, x1, 1
-    arm64.b whilehdr
-  __il_cont#9:
+  whilehdr:
+    arm64.cmp x1, 3
+    arm64.b.lt each
+  __il_cont:
     arm64.cmp x0, 15
     arm64.b.eq ifcont
   loop:

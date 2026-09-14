@@ -49,22 +49,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @checkLeaf {
-  entry:
-    arm64.prologue 16
-    arm64.leaRdata x1, __str_rec_2  ; "first leaf node name long enough for heap"
-    arm64.bl __str_eq
-    arm64.cbz x0, ifcont
-  correct:
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  ifcont:
-    arm64.movImm x0, 1
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @makeSlice {
   entry:
     arm64.prologue 48
@@ -164,7 +148,7 @@ func @main {
   tryok#1:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 2
-    arm64.b.eq ifcont
+    arm64.b.eq ifcont#4
   badCount:
     arm64.movImm x20, 99
     arm64.movRegReg x0, x19
@@ -176,7 +160,7 @@ func @main {
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
-  ifcont:
+  ifcont#4:
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 0
@@ -187,19 +171,14 @@ func @main {
     arm64.movImm x0, 0
     arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
     arm64.cmp x2, 0
-    arm64.b.eq critsplit#19
+    arm64.b.eq critsplit#23
   __im_empty:
     arm64.cmp x20, 0
-    arm64.b.ne critsplit#20
-  __im_slow:
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_get
-    arm64.movRegReg x20, x0
-    arm64.b __im_cont
-  critsplit#20:
+    arm64.b.eq __im_slow
+  critsplit#24:
     arm64.movRegReg x9, x0
     arm64.b __im_cont
-  critsplit#19:
+  critsplit#23:
     arm64.movRegReg x9, x0
   __im_cont:
     arm64.cmp x9, 0
@@ -225,9 +204,17 @@ func @main {
     arm64.loadRegBaseDisp.word64 x21, [x20 + 8]
     arm64.movRegReg x0, x21
     arm64.bl __mm_incref
+  __il_body:
+    arm64.leaRdata x1, __str_rec_2  ; "first leaf node name long enough for heap"
     arm64.movRegReg x0, x21
-    arm64.bl checkLeaf
-    arm64.movRegReg x22, x0
+    arm64.bl __str_eq
+    arm64.cbz x0, ifcont#22
+  correct:
+    arm64.movImm x22, 0
+    arm64.b __il_cont
+  ifcont#22:
+    arm64.movImm x22, 1
+  __il_cont:
     arm64.movRegReg x0, x21
     arm64.bl __str_decref
     arm64.movRegReg x0, x20
@@ -275,4 +262,9 @@ func @main {
     arm64.ret
   matchdead:
   matchcont:
+  __im_slow:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.movRegReg x20, x0
+    arm64.b __im_cont
 }

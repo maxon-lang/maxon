@@ -26,22 +26,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @pick {
-  entry:
-    arm64.prologue 16
-    arm64.cbz x0, ifcont
-  u:
-    arm64.leaRdata x0, __str_rec_5  ; "_"
-    arm64.bl __str_retain
-    arm64.epilogue 16
-    arm64.ret
-  ifcont:
-    arm64.leaRdata x0, __str_rec_6  ; "x"
-    arm64.bl __str_retain
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 48
@@ -68,9 +52,11 @@ func @main {
     arm64.storeBaseDispReg.word64 [x21 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x21 + 24], x0
-    arm64.movImm x0, 1
-    arm64.bl pick
+  u:
+    arm64.leaRdata x0, __str_rec_5  ; "_"
+    arm64.bl __str_retain
     arm64.movRegReg x19, x0
+  __il_cont:
     arm64.movRegReg x0, x21
     arm64.bl __str_decref
     arm64.leaRdata x1, __str_rec_5  ; "_"

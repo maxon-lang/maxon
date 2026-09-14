@@ -37,7 +37,7 @@ func @main {
     arm64.bl URL.parse
     arm64.movRegReg x19, x0
     arm64.cmp x9, 0
-    arm64.b.eq tryok#1
+    arm64.b.eq __il_body
   tryerr#2:
     arm64.movImm x0, 1
     arm64.loadRegSlot x19, slot0
@@ -51,10 +51,11 @@ func @main {
     arm64.loadRegSlot x27, slot8
     arm64.epilogue 96
     arm64.ret
-  tryok#1:
-    arm64.movRegReg x0, x19
-    arm64.bl URL.scheme
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.bl __str_retain
     arm64.movRegReg x20, x0
+  __il_cont:
     arm64.loadRegBaseDisp.word64 x21, [x20 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x20 + 8]
     arm64.leaRdata x0, __str_rec_15  ; "\x0a"
@@ -92,7 +93,7 @@ func @main {
     arm64.bl URL.host
     arm64.movRegReg x20, x0
     arm64.cmp x9, 0
-    arm64.b.eq tryok#3
+    arm64.b.eq tryok
   tryerr#4:
     arm64.movImm x20, 2
     arm64.movRegReg x0, x19
@@ -109,7 +110,7 @@ func @main {
     arm64.loadRegSlot x27, slot8
     arm64.epilogue 96
     arm64.ret
-  tryok#3:
+  tryok:
     arm64.loadRegBaseDisp.word64 x21, [x20 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x20 + 8]
     arm64.leaRdata x0, __str_rec_15  ; "\x0a"

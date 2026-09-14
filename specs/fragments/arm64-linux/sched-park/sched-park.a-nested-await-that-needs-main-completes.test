@@ -56,135 +56,58 @@ data {
   __gt_timer_seq@56 = i64 0
   __gt_timer_when@64 = i64 9223372036854775807
   __gt_trace_counter@72 = i64 0
-  __gt_proc_count@80 = i64 0
-  __gt_proc_handles_base@88 = i64 0
-  __gt_proc_gts_base@96 = i64 0
-  __gt_live_count@104 = i64 0
-  __sched_active_workers@112 = i64 1
-  __sched_max_active_workers@120 = i64 1
-  __sched_tls_index@128 = i64 0
-  __sched_tls_teb_offset@136 = i64 0
-  __sched_procs@144 = i64 0
-  __sched_allm@152 = i64 0
-  __sched_midle@160 = i64 0
-  __sched_pidle@168 = i64 0
-  __gt_gfree_head@176 = i64 0
-  __sched_npidle@184 = i64 0
-  __sched_runq_size@192 = i64 0
-  __sched_mcount@200 = i64 0
-  __sched_nmidle@208 = i64 0
-  __sched_main_m@216 = i64 0
-  __sched_phase@224 = i64 0
-  __sched_num_procs@232 = i64 0
-  __sched_shutdown_flag@240 = i64 0
-  __sched_lock@248 = i64 0
-  __sched_nmspinning@256 = i64 0
-  __sched_needspinning@264 = i64 0
-  __sched_sysmon_started@272 = i64 0
-  __mrt_errno@280 = i64 0
-  __mrt_envp@288 = i64 0
-  __mrt_tls_next_key@296 = i64 0
-  __slab_arena_list@304 = i64 0
-  __slab_arena_map_l1@312 = i64 0
-  __slab_state@320 = i64 0
-}
-
-func @Waiter.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movImm x19, 0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @Waiter.waitForFile {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-  whilehdr:
-    arm64.leaRdata x0, __str_rec_20  ; "sched-park-flag-one.txt"
-    arm64.bl FilePath.init
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x19
-    arm64.bl File.exists
-    arm64.eor x20, x0, 1
-    arm64.movRegReg x0, x19
-    arm64.bl __destruct_FilePath
-    arm64.cbz x20, whileexit
-  poll:
-    arm64.movImm x0, 1
-    arm64.bl sleep
-    arm64.b whilehdr
-  whileexit:
-    arm64.movImm x0, 1
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @Middle.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.bl Waiter.create
-    arm64.movRegReg x1, x0
-    arm64.leaFuncAddr x0, Waiter.__loop
-    arm64.leaFuncAddr x2, Waiter.__abandon
-    arm64.bl __svc_spawn
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
-    arm64.storeBaseDispReg.word64 [x20 + 0], x19
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @Middle.go {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
-    arm64.movImm x0, 0
-    arm64.bl __gt_cell_alloc
-    arm64.movRegReg x20, x0
-    arm64.movImm x0, 16
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x20
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.bl __mbox_send
-    arm64.movRegReg x0, x20
-    arm64.bl __gt_try_await
-    arm64.cmp x9, 0
-    arm64.b.eq trycont
-  tryerr:
-    arm64.movImm x0, 0
-  trycont:
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
-    arm64.ret
+  __gt_live_count@80 = i64 0
+  __gt_seed_bytes@88 = i64 2048
+  __gt_stack_bytes_sum@96 = i64 0
+  __gt_stack_bytes_count@104 = i64 0
+  __gt_seed_sum_seen@112 = i64 0
+  __gt_seed_count_seen@120 = i64 0
+  __sched_active_workers@128 = i64 1
+  __sched_max_active_workers@136 = i64 1
+  __sched_tls_index@144 = i64 0
+  __sched_tls_teb_offset@152 = i64 0
+  __sched_procs@160 = i64 0
+  __sched_allm@168 = i64 0
+  __sched_midle@176 = i64 0
+  __sched_pidle@184 = i64 0
+  __gt_gfree_head@192 = i64 0
+  __sched_arena_cursor@200 = i64 0
+  __sched_arena_limit@208 = i64 0
+  __gt_records_carved@216 = i64 0
+  __sched_npidle@224 = i64 0
+  __sched_runq_size@232 = i64 0
+  __sched_global_pushes@240 = i64 0
+  __sched_timer_scan_steps@248 = i64 0
+  __sched_mcount@256 = i64 0
+  __sched_nmidle@264 = i64 0
+  __sched_main_m@272 = i64 0
+  __sched_phase@280 = i64 0
+  __sched_lastpoll@288 = i64 0
+  __sched_poll_until@296 = i64 0
+  __sched_regain_head@304 = i64 0
+  __np_poller@312 = i64 0
+  __np_break@320 = i64 0
+  __np_wake_sig@328 = i64 0
+  __np_pd_table@336 = i64 0
+  __np_pd_cap@344 = i64 0
+  __np_waiters@352 = i64 0
+  __np_src_key_free@360 = i64 0
+  __np_src_key_high@368 = i64 0
+  __sched_num_procs@376 = i64 0
+  __sched_shutdown_flag@384 = i64 0
+  __sched_lock@392 = i64 0
+  __sched_lock_depth_sink@400 = i64 0
+  __sched_nmspinning@408 = i64 0
+  __sched_needspinning@416 = i64 0
+  __sched_sysmon_event@424 = i64 0
+  __sched_sysmon_wait@432 = i64 0
+  __sched_timer_starts@440 = i64 0
+  __mrt_errno@448 = i64 0
+  __mrt_envp@456 = i64 0
+  __mrt_tls_next_key@464 = i64 0
+  __slab_arena_list@472 = i64 0
+  __slab_arena_map_l1@480 = i64 0
+  __slab_state@488 = i64 0
 }
 
 func @main {
@@ -210,8 +133,29 @@ func @main {
   trycont#3:
     arm64.movRegReg x0, x19
     arm64.bl __destruct_FilePath
-    arm64.bl Middle.create
+  __il_body#18:
+    arm64.movImm x19, 0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+  __il_cont#17:
+    arm64.leaFuncAddr x0, Waiter.__loop
+    arm64.leaFuncAddr x2, Waiter.__abandon
+    arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x19, x0
+    arm64.storeBaseDispReg.word64 [x19 + 0], x20
+  __il_cont#15:
     arm64.movRegReg x0, x19
     arm64.bl __sole_Middle
     arm64.leaFuncAddr x0, Middle.__loop
@@ -244,9 +188,9 @@ func @main {
     arm64.bl FilePath.init
     arm64.movRegReg x21, x0
     arm64.leaRdata x1, __str_rec_22  ; "x"
-  __il_body:
+  __il_body#14:
     arm64.movImm x2, 0
-  __il_cont:
+  __il_cont#13:
     arm64.movRegReg x0, x21
     arm64.bl File.writeText
     arm64.cmp x9, 0
@@ -342,7 +286,9 @@ func @main {
 
 func @Waiter.__loop {
   entry:
-    arm64.prologue 64
+    arm64.prologue 80
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
     arm64.storeSlotReg slot4, x23
     arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
@@ -358,7 +304,7 @@ func @Waiter.__loop {
     arm64.b.eq stopping
   dispatch:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
-    arm64.jumpTable x0, default=stopping [[0]=__shutdown, [1]=waitForFile] @__jumptable_180
+    arm64.jumpTable x0, default=stopping [[0]=__shutdown, [1]=waitForFile] @__jumptable_186
   __shutdown:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.storeBaseDispReg.word64 [x20 + 56], x0
@@ -378,12 +324,15 @@ func @Waiter.__loop {
     arm64.bl __mm_decref
     arm64.movRegReg x0, x20
     arm64.bl __mbox_service_exit
+    arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
     arm64.ret
   abandon:
     arm64.movRegReg x0, x20
@@ -391,9 +340,33 @@ func @Waiter.__loop {
     arm64.b drain
   waitForFile:
     arm64.loadRegBaseDisp.word64 x22, [x21 + 8]
-    arm64.movRegReg x0, x19
-    arm64.bl Waiter.waitForFile
+    arm64.b whilehdr
+  poll:
+    arm64.movImm x0, 1
+    arm64.bl sleep
+  whilehdr:
+    arm64.leaRdata x0, __str_rec_20  ; "sched-park-flag-one.txt"
+    arm64.bl FilePath.init
     arm64.movRegReg x23, x0
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
+    arm64.bl String.addressableBytes
+    arm64.movRegReg x24, x0
+    arm64.movRegReg x0, x24
+    arm64.bl __mf_exists
+    arm64.movRegReg x25, x0
+    arm64.movRegReg x0, x24
+    arm64.bl __managed_decref
+    arm64.cmp x25, 0
+    arm64.cset x0, ne
+  __il_cont#14:
+    arm64.eor x24, x0, 1
+    arm64.movRegReg x0, x23
+    arm64.bl __destruct_FilePath
+    arm64.cbnz x24, poll
+  whileexit:
+    arm64.movImm x23, 1
+  __il_cont#9:
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
     arm64.movImm x2, 0
@@ -409,7 +382,7 @@ func @Waiter.__abandon {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=waitForFile] @__jumptable_181
+    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=waitForFile] @__jumptable_187
   __shutdown:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.movImm x1, 0
@@ -424,6 +397,7 @@ func @Waiter.__abandon {
   abandondrop:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
@@ -432,6 +406,7 @@ func @Waiter.__abandon {
 func @Middle.__loop {
   entry:
     arm64.prologue 64
+    arm64.storeSlotReg slot5, x24
     arm64.storeSlotReg slot4, x23
     arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
@@ -447,7 +422,7 @@ func @Middle.__loop {
     arm64.b.eq stopping
   dispatch:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
-    arm64.jumpTable x0, default=stopping [[0]=__shutdown, [1]=go] @__jumptable_182
+    arm64.jumpTable x0, default=stopping [[0]=__shutdown, [1]=go] @__jumptable_188
   __shutdown:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.storeBaseDispReg.word64 [x20 + 56], x0
@@ -467,11 +442,13 @@ func @Middle.__loop {
     arm64.bl __destruct_Middle
     arm64.movRegReg x0, x20
     arm64.bl __mbox_service_exit
+    arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
     arm64.epilogue 64
     arm64.ret
   abandon:
@@ -480,9 +457,30 @@ func @Middle.__loop {
     arm64.b drain
   go:
     arm64.loadRegBaseDisp.word64 x22, [x21 + 8]
-    arm64.movRegReg x0, x19
-    arm64.bl Middle.go
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x23, [x19 + 0]
+    arm64.movImm x0, 0
+    arm64.bl __gt_cell_alloc
+    arm64.movRegReg x24, x0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.storeBaseDispReg.word64 [x1 + 8], x24
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
+    arm64.bl __mbox_send
+    arm64.movRegReg x0, x24
+    arm64.bl __gt_try_await
+    arm64.cmp x9, 0
+    arm64.b.eq tryok
+  tryerr:
+    arm64.movImm x23, 0
+    arm64.b __il_cont
+  tryok:
     arm64.movRegReg x23, x0
+  __il_cont:
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
     arm64.movImm x2, 0
@@ -498,7 +496,7 @@ func @Middle.__abandon {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=go] @__jumptable_183
+    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=go] @__jumptable_189
   __shutdown:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.movImm x1, 0
@@ -513,6 +511,7 @@ func @Middle.__abandon {
   abandondrop:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret

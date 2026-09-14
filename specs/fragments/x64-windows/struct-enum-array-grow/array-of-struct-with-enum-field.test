@@ -39,6 +39,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @Entry.create {
@@ -83,9 +86,7 @@ func @main {
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 r12, 0
-  whilehdr:
-    x64.cmpRegImm32 r12, 10
-    x64.jcc greaterEqual, whileexit
+    x64.jmp whilehdr
   fill:
     x64.imulRegRegImm32 r13, r12, 10
     x64.movRegImm32 rcx, 16
@@ -98,15 +99,18 @@ func @main {
     x64.movRegReg rdx, r8
     x64.callDirect Entry.create
     x64.movRegReg r13, r8
+    x64.leaRegFunc rdx, [rip + __clone_Entry]
     x64.movRegReg rcx, r13
-    x64.callDirect __mm_incref
+    x64.callDirect __mm_own_deep
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r13
+    x64.movRegReg rdx, r8
     x64.callDirect __managed_push
     x64.leaRegRegImm32 r12, r12, 1
     x64.movRegReg rcx, r13
     x64.callDirect __destruct_Entry
-    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 r12, 10
+    x64.jcc less, fill
   whileexit:
     x64.movRegImm32 rdx, 9
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
@@ -122,12 +126,7 @@ func @main {
     x64.jcc equal, critsplit#19
   __im_empty:
     x64.cmpRegImm32 r12, 0
-    x64.jcc notEqual, critsplit#20
-  __im_slow:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
-    x64.movRegReg r12, r8
-    x64.jmp __im_cont
+    x64.jcc equal, __im_slow
   critsplit#20:
     x64.movRegReg r10, rax
     x64.jmp __im_cont
@@ -161,26 +160,16 @@ func @main {
     x64.jcc notEqual, matchnext
   matcharm#7:
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
-    x64.callDirect __destruct_Entry
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r12, rax
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at array-of-struct-with-enum-field.test:30: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc greater, __rc_panic
   __rc_ok:
+    x64.callDirect __destruct_Entry
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
     x64.movRegReg r8, r12
     x64.epilogue 40
     x64.popReg r13
@@ -205,4 +194,19 @@ func @main {
     x64.ret
   matchdead:
   matchcont:
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.movRegReg r12, r8
+    x64.jmp __im_cont
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at array-of-struct-with-enum-field.test:30: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
 }

@@ -16,7 +16,7 @@ type Bag
 	function ok() returns Integer
 		let s = try items.get(0) otherwise ""
 		let n = self.size()
-		return s.byteLength() + n
+		return (s.byteLength() as Integer) + n
 	end 'ok'
 end 'Bag'
 
@@ -36,77 +36,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @Bag.create {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __str_decref
-    arm64.bl __managed_create
-    arm64.movRegReg x19, x0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
-func @Bag.ok {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.movImm x1, 0
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
-    arm64.cmp x2, 0
-    arm64.b.ls __im_slow
-  __im_load:
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
-    arm64.movImm x3, 0
-    arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
-    arm64.cmp x4, 0
-    arm64.b.eq critsplit#14
-  __im_empty:
-    arm64.cmp x2, 0
-    arm64.b.ne critsplit#15
-  __im_slow:
-    arm64.bl __managed_get
-    arm64.b __im_cont
-  critsplit#15:
-    arm64.movRegReg x0, x2
-    arm64.movRegReg x9, x3
-    arm64.b __im_cont
-  critsplit#14:
-    arm64.movRegReg x0, x2
-    arm64.movRegReg x9, x3
-  __im_cont:
-    arm64.cmp x9, 0
-    arm64.b.eq __il_body#10
-  tryerr:
-    arm64.leaRdata x0, __str_rec_3  ; ""
-  __il_body#10:
-    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x19, [x1 + 8]
-  __il_body#11:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.cmp x1, 0
-    arm64.b.ge __rc_ok
-  __il_slow:
-    arm64.bl String.byteLength
-    arm64.b __il_cont
-  __rc_ok:
-    arm64.movRegReg x0, x1
-  __il_cont:
-    arm64.add x0, x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 80
@@ -118,29 +47,71 @@ func @main {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.bl Bag.create
+  __il_body#3:
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __str_decref
+    arm64.bl __managed_create
     arm64.movRegReg x19, x0
-    arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+  __il_cont#2:
+    arm64.loadRegBaseDisp.word64 x19, [x20 + 0]
     arm64.leaRdata x0, __str_rec_4  ; "alpha string long enough for heap allocation"
     arm64.bl __str_retain
     arm64.movRegReg x1, x0
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_push
     arm64.movRegReg x0, x19
-    arm64.bl Bag.ok
-    arm64.movRegReg x20, x0
+    arm64.bl __managed_push
+  __il_body#6:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.cmp x2, 0
+    arm64.b.ls __im_slow
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.movImm x3, 0
+    arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
+    arm64.cmp x4, 0
+    arm64.b.eq critsplit#18
+  __im_empty:
+    arm64.cmp x2, 0
+    arm64.b.eq __im_slow
+  critsplit#19:
+    arm64.movRegReg x0, x2
+    arm64.movRegReg x9, x3
+    arm64.b __im_cont
+  critsplit#18:
+    arm64.movRegReg x0, x2
+    arm64.movRegReg x9, x3
+  __im_cont:
+    arm64.cmp x9, 0
+    arm64.b.eq __il_body#16
+  tryerr:
+    arm64.leaRdata x0, __str_rec_3  ; ""
+  __il_body#16:
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
+  __il_body#17:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+  __il_cont#14:
+    arm64.add x19, x0, x1
+  __il_cont#5:
     arm64.movImm x0, 21
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x21, x0
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
     arm64.bl __int_to_string
-    arm64.movRegReg x20, x0
+    arm64.movRegReg x19, x0
     arm64.leaRdata x0, __str_rec_5  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
-    arm64.add x24, x20, x23
+    arm64.add x24, x19, x23
     arm64.add x0, x24, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -148,14 +119,14 @@ func @main {
     arm64.add x26, x25, 56
     arm64.movRegReg x0, x26
     arm64.movRegReg x1, x21
-    arm64.movRegReg x2, x20
+    arm64.movRegReg x2, x19
     arm64.bl __str_copy
-    arm64.add x20, x26, x20
-    arm64.movRegReg x0, x20
+    arm64.add x19, x26, x19
+    arm64.movRegReg x0, x19
     arm64.movRegReg x1, x22
     arm64.movRegReg x2, x23
     arm64.bl __str_copy
-    arm64.add x0, x20, x23
+    arm64.add x0, x19, x23
     arm64.storeBaseDispReg.word64 [x25 + 0], x26
     arm64.storeBaseDispReg.word64 [x25 + 8], x24
     arm64.movImm x0, 18446744073709551613
@@ -164,14 +135,16 @@ func @main {
     arm64.storeBaseDispReg.word64 [x25 + 24], x0
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
+  __il_body#4:
     arm64.movRegReg x0, x25
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont#1:
     arm64.movRegReg x0, x25
     arm64.bl __str_decref
-    arm64.movImm x20, 0
-    arm64.movRegReg x0, x19
-    arm64.bl __destruct_Bag
+    arm64.movImm x19, 0
     arm64.movRegReg x0, x20
+    arm64.bl __destruct_Bag
+    arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -182,4 +155,7 @@ func @main {
     arm64.loadRegSlot x26, slot7
     arm64.epilogue 80
     arm64.ret
+  __im_slow:
+    arm64.bl __managed_get
+    arm64.b __im_cont
 }

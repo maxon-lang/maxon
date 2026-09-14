@@ -25,22 +25,6 @@ data {
   __slab_state@32 = i64 0
 }
 
-func @useString {
-  entry:
-    arm64.prologue 16
-    arm64.leaRdata x1, __str_rec_1  ; "hello"
-    arm64.bl __str_eq
-    arm64.cbz x0, ifcont
-  check:
-    arm64.movImm x0, 42
-    arm64.epilogue 16
-    arm64.ret
-  ifcont:
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @main {
   entry:
     arm64.prologue 16
@@ -54,8 +38,16 @@ func @main {
   loop:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
-  __im_cont:
-    arm64.bl useString
+  __il_body:
+    arm64.leaRdata x1, __str_rec_1  ; "hello"
+    arm64.bl __str_eq
+    arm64.cbz x0, ifcont
+  check:
+    arm64.movImm x0, 42
+    arm64.b __il_cont
+  ifcont:
+    arm64.movImm x0, 0
+  __il_cont:
     arm64.epilogue 16
     arm64.ret
   forexit:

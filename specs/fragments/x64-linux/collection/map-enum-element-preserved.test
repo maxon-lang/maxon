@@ -84,16 +84,55 @@ func @main {
     x64.movRegImm32 rdx, 2
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
-    x64.leaRegFunc rdx, [rip + __fnref_good]
-    x64.movRegImm32 rax, 0
-    x64.leaRegRdata r9, [rip + __layout_Array_Color]
+    x64.leaRegFunc r12, [rip + __fnref_good]
+    x64.movRegImm32 r13, 0
+    x64.leaRegRdata rax, [rip + __layout_Array_Color]
+  __il_body:
+    x64.movRegImm32 rcx, 8
+    x64.loadRegBaseDisp.word64 rdx, [rax + 40]
+    x64.callDirect __managed_create
+    x64.movRegReg r14, r8
+    x64.storeSlotReg slot1, r14
+    x64.movRegImm32 r15, 0
+    x64.jmp forhdr
+  loop:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseIndexScale.word64 rcx, [rax + r15*8 + 0]
+    x64.jmp __im_cont
+  __im_stride:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow
+  __im_byte:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.leaRegRegReg rax, rax, r15
+    x64.loadRegBaseDisp.byte rcx, [rax + 0]
+    x64.jmp __im_cont
+  __im_slow:
     x64.movRegReg rcx, rbx
-    x64.callDirect Array.map
-    x64.storeSlotReg slot1, r8
+    x64.movRegReg rdx, r15
+    x64.callDirect __managed_get_unchecked
+    x64.movRegReg rcx, r8
+  __im_cont:
+    x64.movRegReg rdx, r13
+    x64.callReg r12
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+  forstep:
+    x64.leaRegRegImm32 r15, r15, 1
+  forhdr:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg r15, rax
+    x64.jcc less, loop
+  __il_cont:
     x64.leaRegRdata rax, [rip + __str_rec_8]  ; "n="
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
-    x64.loadRegBaseDisp.word64 r13, [r8 + 8]
+    x64.loadRegBaseDisp.word64 r13, [r14 + 8]
     x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -125,12 +164,12 @@ func @main {
     x64.movRegReg rax, r13
     x64.callDirect __str_copy
     x64.leaRegRegReg rbx, rbx, r13
-    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rax, slot4
     x64.loadRegSlot rdx, slot5
-    x64.loadRegSlot r12, slot4
-    x64.movRegReg rax, r12
+    x64.movRegReg rcx, rbx
     x64.callDirect __str_copy
-    x64.leaRegRegReg rax, rbx, r12
+    x64.loadRegSlot rax, slot4
+    x64.leaRegRegReg rax, rbx, rax
     x64.loadRegSlot rbx, slot3
     x64.storeBaseDispReg.word64 [rbx + 0], r15
     x64.loadRegSlot rax, slot2

@@ -1,8 +1,8 @@
 // Test: character-set-dropped-unused
 function main() returns ExitCode
-	_ = CharacterSet.punctuation()
-	_ = CharacterSet.whitespacesAndNewlines()
-	print("ok")
+	let punctuation = CharacterSet.punctuation()
+	let blanks = CharacterSet.whitespacesAndNewlines()
+	print("ok" if punctuation.contains('!') and blanks.contains('	') else "no")
 	return 0
 end 'main'
 ---
@@ -15,23 +15,66 @@ data {
   __slab_arena_list@24 = i64 0
   __slab_arena_map_l1@32 = i64 0
   __slab_state@40 = i64 0
+  __mrt_console_probe_stdin@48 = i8 0
+  __mrt_console_probe_stdout@49 = i8 0
+  __mrt_console_probe_stderr@50 = i8 0
 }
 
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.callDirect CharacterSet.punctuation
-    x64.movRegReg rcx, r8
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+  __il_body#8:
+    x64.leaRegGlobal rax, __data_CharacterSet.cachedPunctuation
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.leaRegFunc rdx, [rip + __clone_CharacterSet]
+    x64.callDirect __mm_own_deep
+    x64.movRegReg rbx, r8
+  __il_body#9:
+    x64.leaRegGlobal rax, __data_CharacterSet.cachedWhitespacesAndNewlines
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.leaRegFunc rdx, [rip + __clone_CharacterSet]
+    x64.callDirect __mm_own_deep
+    x64.movRegReg r12, r8
+  __il_cont#6:
+    x64.leaRegRdata rdx, [rip + __str_rec_10]  ; "!"
+    x64.movRegReg rcx, rbx
+    x64.callDirect CharacterSet.contains
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, critsplit
+  andrhs:
+    x64.leaRegRdata rdx, [rip + __str_rec_11]  ; "\x09"
+    x64.movRegReg rcx, r12
+    x64.callDirect CharacterSet.contains
+    x64.jmp scmerge
+  critsplit:
+    x64.movRegReg r8, rax
+  scmerge:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ternaryfalse
+  ternarytrue:
+    x64.leaRegRdata rcx, [rip + __str_rec_12]  ; "ok"
+    x64.jmp __il_body#11
+  ternaryfalse:
+    x64.leaRegRdata rcx, [rip + __str_rec_13]  ; "no"
+  __il_body#11:
+    x64.callDirect __write_stdout
+  __il_cont#10:
+    x64.movRegImm32 r13, 0
+    x64.movRegReg rcx, r12
     x64.callDirect __destruct_CharacterSet
-    x64.callDirect CharacterSet.whitespacesAndNewlines
-    x64.movRegReg rcx, r8
+    x64.movRegReg rcx, rbx
     x64.callDirect __destruct_CharacterSet
-    x64.leaRegRdata rcx, [rip + __str_rec_9]  ; "ok"
-    x64.callDirect print
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }

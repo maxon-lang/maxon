@@ -32,88 +32,58 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @halves {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 80
-    x64.movRegReg rax, rcx
-    x64.movRegReg rsi, rdx
-    x64.movsdRegRip xmm0, [rip + __fconst_0.5]
-    x64.movRegImm32 rdi, 0
-  __us_test:
-    x64.loadRegBaseDisp.word64 r8, [rax + 8]
-    x64.loadRegBaseDisp.word64 r9, [rax + 0]
-  forhdr:
-    x64.cmpRegReg rdi, rsi
-    x64.jcc greaterEqual, forexit
-  __rc_ok:
-    x64.cmpRegReg rdi, r8
-    x64.jcc below, __im_load
-  __im_slow:
-    x64.movRegReg rcx, rax
-    x64.movRegReg rdx, rdi
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rsi
-    x64.storeSlotReg slot2, rdi
-    x64.storeSlotReg slot3, r8
-    x64.storeSlotReg slot4, r9
-    x64.storeSlotReg slot5, xmm0
-    x64.callDirect __managed_get
-    x64.movRegReg rcx, r8
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rsi, slot1
-    x64.loadRegSlot rdi, slot2
-    x64.loadRegSlot r8, slot3
-    x64.loadRegSlot r9, slot4
-    x64.loadRegSlot xmm0, slot5
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, trycont
-  tryerr:
-    x64.movRegImm32 rcx, 8
-    x64.jmp trycont
-  __im_load:
-    x64.loadRegBaseIndexScale.word64 rcx, [r9 + rdi*8 + 0]
-  trycont:
-    x64.cvtsi2sdRegReg xmm1, rcx
-    x64.movsdRegRip xmm2, [rip + __fconst_0.5]
-    x64.mulsdRegReg xmm1, xmm1, xmm2
-    x64.addsdRegReg xmm0, xmm0, xmm1
-  forstep:
-    x64.leaRegRegImm32 rdi, rdi, 1
-    x64.jmp forhdr
-  forexit:
-    x64.epilogue 80
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
+    x64.prologue 64
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 r12, 0
-  forhdr:
-    x64.cmpRegImm32 r12, 4
-    x64.jcc greaterEqual, forexit
+    x64.jmp forhdr#1
   seed:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.callDirect __managed_push
-  forstep:
+  forstep#3:
     x64.leaRegRegImm32 r12, r12, 1
-    x64.jmp forhdr
-  forexit:
-    x64.movRegImm32 rdx, 8
-    x64.movRegReg rcx, rbx
-    x64.callDirect halves
+  forhdr#1:
+    x64.cmpRegImm32 r12, 4
+    x64.jcc less, seed
+  __il_body:
+    x64.movsdRegRip xmm0, [rip + __fconst_0.5]
+    x64.movRegImm32 rdx, 0
+  __us_test:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.jmp forhdr#9
+  __rc_ok:
+    x64.cmpRegReg rdx, rax
+    x64.jcc aboveEqual, __im_slow
+    x64.jmp __im_load
+  tryerr:
+    x64.movRegImm32 rsi, 8
+    x64.jmp trycont
+  __im_load:
+    x64.loadRegBaseIndexScale.word64 rsi, [rcx + rdx*8 + 0]
+    x64.movRegReg r8, rsi
+  tryok:
+    x64.movRegReg rsi, r8
+  trycont:
+    x64.cvtsi2sdRegReg xmm1, rsi
+    x64.movsdRegRip xmm2, [rip + __fconst_0.5]
+    x64.mulsdRegReg xmm1, xmm1, xmm2
+    x64.addsdRegReg xmm0, xmm0, xmm1
+  forstep#11:
+    x64.leaRegRegImm32 rdx, rdx, 1
+  forhdr#9:
+    x64.cmpRegImm32 rdx, 8
+    x64.jcc less, __rc_ok
+  __il_cont:
     x64.movsdRegRip xmm1, [rip + __fconst_19.5]
     x64.ucomisdRegReg xmm0, xmm1
     x64.jcc parity, sum
@@ -124,7 +94,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -134,9 +104,23 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 32
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  __im_slow:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.storeSlotReg slot3, xmm0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
+    x64.loadRegSlot xmm0, slot3
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
 }

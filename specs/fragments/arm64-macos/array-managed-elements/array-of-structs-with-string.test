@@ -135,19 +135,14 @@ func @main {
     arm64.movImm x0, 0
     arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
     arm64.cmp x2, 0
-    arm64.b.eq critsplit#11
+    arm64.b.eq critsplit#13
   __im_empty:
     arm64.cmp x20, 0
-    arm64.b.ne critsplit#12
-  __im_slow:
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_get
-    arm64.movRegReg x20, x0
-    arm64.b __im_cont
-  critsplit#12:
+    arm64.b.eq __im_slow
+  critsplit#14:
     arm64.movRegReg x9, x0
     arm64.b __im_cont
-  critsplit#11:
+  critsplit#13:
     arm64.movRegReg x9, x0
   __im_cont:
     arm64.cmp x9, 0
@@ -210,24 +205,24 @@ func @main {
     arm64.storeBaseDispReg.word64 [x26 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x26 + 24], x0
+  __il_body:
     arm64.movRegReg x0, x26
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont:
     arm64.movRegReg x0, x26
     arm64.bl __str_decref
     arm64.loadRegBaseDisp.word64 x21, [x20 + 8]
-    arm64.movRegReg x0, x20
-    arm64.bl __destruct_Item
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
     arm64.cmp x21, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x21, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_8  ; "panic at array-of-structs-with-string.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Item
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -239,8 +234,15 @@ func @main {
     arm64.loadRegSlot x27, slot8
     arm64.epilogue 96
     arm64.ret
-  __rc_ok:
-    arm64.movRegReg x0, x21
+  __im_slow:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.movRegReg x20, x0
+    arm64.b __im_cont
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_9  ; "panic at array-of-structs-with-string.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

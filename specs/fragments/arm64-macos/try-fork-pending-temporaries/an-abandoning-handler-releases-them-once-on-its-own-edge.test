@@ -24,7 +24,7 @@ end 'Conf'
 
 function main() returns ExitCode
 	let c = try Conf.create(900) otherwise return 9
-	return c.n + c.argv.count() as ExitCode
+	return (c.n + (c.argv.count() as Integer)) as ExitCode
 end 'main'
 ---
 ExitCode: 0
@@ -123,35 +123,22 @@ func @main {
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x2 + 8]
-    arm64.cmp x2, 0
-    arm64.b.lt __rc_panic#4
-  __rc_chk#5:
-    arm64.cmp x2, 255
-    arm64.b.le __rc_ok#3
-  __rc_panic#4:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at an-abandoning-handler-releases-them-once-on-its-own-edge.test:27: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-  __rc_ok#3:
     arm64.add x19, x1, x2
-    arm64.bl __destruct_Conf
     arm64.cmp x19, 0
-    arm64.b.lt __rc_panic#7
-  __rc_chk#8:
+    arm64.b.lt __rc_panic
+  __rc_chk:
     arm64.cmp x19, 255
-    arm64.b.le __rc_ok#6
-  __rc_panic#7:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at an-abandoning-handler-releases-them-once-on-its-own-edge.test:27: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.bl __destruct_Conf
+    arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
-  __rc_ok#6:
-    arm64.movRegReg x0, x19
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at an-abandoning-handler-releases-them-once-on-its-own-edge.test:27: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret

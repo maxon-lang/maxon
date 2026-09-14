@@ -24,7 +24,7 @@ function main() returns ExitCode
 	row.push(40)
 	g.push(row)
 	let back = try g.get(0) otherwise Slots.create()
-	return (fromHigh() / 100) + (try back.get(0) otherwise 0)
+	return (((fromHigh() / 100) as Low) + (try back.get(0) otherwise 0)) as ExitCode
 end 'main'
 ---
 ExitCode: 55
@@ -36,95 +36,6 @@ data {
   __slab_state@24 = i64 0
 }
 
-func @fromHigh {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 32
-    x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __managed_decref]
-    x64.callDirect __managed_create
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 2
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __managed_create
-    x64.movRegReg r12, r8
-    x64.movRegImm32 rdx, 1500
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_push
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_incref
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
-    x64.callDirect __managed_push
-    x64.movRegImm32 rdx, 0
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc belowEqual, __im_slow
-  __im_load:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseDisp.word64 r13, [rax + 0]
-    x64.movRegImm32 rax, 0
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 40]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, critsplit#11
-  __im_empty:
-    x64.cmpRegImm32 r13, 0
-    x64.jcc notEqual, critsplit#12
-  __im_slow:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
-    x64.movRegReg r13, r8
-    x64.jmp __im_cont
-  critsplit#12:
-    x64.movRegReg r10, rax
-    x64.jmp __im_cont
-  critsplit#11:
-    x64.movRegReg r10, rax
-  __im_cont:
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#1
-  tryerr#2:
-    x64.movRegImm32 rcx, 2
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __managed_create
-    x64.movRegReg r13, r8
-    x64.jmp trycont#3
-  tryok#1:
-    x64.movRegReg rcx, r13
-    x64.callDirect __mm_incref
-  trycont#3:
-    x64.movRegImm32 rdx, 0
-    x64.movRegReg rcx, r13
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#4
-  tryerr#5:
-    x64.movRegImm32 r14, 1000
-    x64.jmp trycont#6
-  tryok#4:
-    x64.movRegReg r14, r8
-  trycont#6:
-    x64.movRegReg rcx, r13
-    x64.callDirect __managed_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_decref
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-    x64.movRegReg r8, r14
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
@@ -133,133 +44,221 @@ func @main {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.prologue 32
+    x64.pushReg r15
+    x64.prologue 56
     x64.movRegImm32 rcx, 8
     x64.leaRegFunc rdx, [rip + __managed_decref]
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
     x64.movRegImm32 rcx, 1
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
     x64.movRegReg r12, r8
+    x64.storeSlotReg slot1, r12
     x64.movRegImm32 rdx, 40
     x64.movRegReg rcx, r12
     x64.callDirect __managed_push
     x64.movRegReg rcx, r12
-    x64.callDirect __mm_incref
+    x64.callDirect __managed_retain
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
+    x64.movRegReg rdx, r8
     x64.callDirect __managed_push
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 0
-    x64.jcc belowEqual, __im_slow#11
-  __im_load#12:
+    x64.jcc belowEqual, __im_slow#14
+  __im_load#15:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.movRegImm32 rax, 0
     x64.loadRegBaseDisp.word64 rcx, [rbx + 40]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, critsplit#23
-  __im_empty#13:
-    x64.cmpRegImm32 r13, 0
-    x64.jcc notEqual, critsplit#24
-  __im_slow#11:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
-    x64.movRegReg r13, r8
-    x64.jmp __im_cont#10
-  critsplit#24:
+    x64.jcc equal, critsplit#37
+  __im_empty#16:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc equal, __im_slow#14
+  critsplit#38:
+    x64.movRegReg rbx, r12
     x64.movRegReg r10, rax
-    x64.jmp __im_cont#10
-  critsplit#23:
+    x64.jmp __im_cont#13
+  critsplit#37:
+    x64.movRegReg rbx, r12
     x64.movRegReg r10, rax
-  __im_cont#10:
+  __im_cont#13:
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
+    x64.jcc equal, tryok#1
   tryerr#2:
     x64.movRegImm32 rcx, 1
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.jmp __il_body
+  tryok#1:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_incref
+  __il_body:
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __managed_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rcx, 2
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
     x64.movRegReg r13, r8
-    x64.jmp trycont#3
-  tryok:
+    x64.movRegImm32 rdx, 1500
     x64.movRegReg rcx, r13
-    x64.callDirect __mm_incref
-  trycont#3:
-    x64.callDirect fromHigh
-    x64.movRegImm32 rcx, 100
-    x64.movRegReg rax, r8
-    x64.movRegImm32 rdx, 0
-    x64.divReg rcx
-    x64.movRegReg r14, rax
-    x64.movRegImm32 rdx, 0
-    x64.loadRegBaseDisp.word64 rax, [r13 + 24]
-    x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride
-  __im_word:
-    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc belowEqual, __im_slow#15
-  __im_load#20:
-    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.jmp __im_loaded
-  __im_stride:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __im_slow#15
-  __im_byte:
-    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc belowEqual, __im_slow#15
-  __im_load#21:
-    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
-    x64.loadRegBaseDisp.byte rax, [rax + 0]
-  __im_loaded:
-    x64.movRegImm32 rcx, 0
-    x64.loadRegBaseDisp.word64 rsi, [r13 + 40]
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, __im_cont#14
-  __im_empty#22:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __im_cont#14
-  __im_slow#15:
+    x64.callDirect __managed_push
     x64.movRegReg rcx, r13
-    x64.callDirect __managed_get
-    x64.movRegReg rax, r8
-    x64.movRegReg rcx, r10
-  __im_cont#14:
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, trycont#6
-  tryerr#5:
+    x64.callDirect __managed_retain
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#34
+  __im_load#35:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseDisp.word64 r14, [rax + 0]
     x64.movRegImm32 rax, 0
-  trycont#6:
-    x64.leaRegRegReg r14, r14, rax
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 40]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, critsplit#40
+  __im_empty#36:
+    x64.cmpRegImm32 r14, 0
+    x64.jcc equal, __im_slow#34
+  critsplit#41:
+    x64.movRegReg r10, rax
+    x64.jmp __im_cont#33
+  critsplit#40:
+    x64.movRegReg r10, rax
+  __im_cont#33:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#27
+  tryerr#28:
+    x64.movRegImm32 rcx, 2
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r14, r8
+    x64.jmp trycont#29
+  tryok#27:
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_incref
+  trycont#29:
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#30
+  tryerr#31:
+    x64.movRegImm32 r15, 1000
+    x64.jmp trycont#32
+  tryok#30:
+    x64.movRegReg r15, r8
+  trycont#32:
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
     x64.movRegReg rcx, r13
     x64.callDirect __managed_decref
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
+  __il_cont:
+    x64.movRegImm32 rcx, 100
+    x64.movRegReg rax, r15
+    x64.movRegImm32 rdx, 0
+    x64.divReg rcx
+    x64.movRegReg r12, rax
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic#8
+  __rc_chk#9:
+    x64.cmpRegImm32 r12, 100
+    x64.jcc greater, __rc_panic#8
+  __rc_ok#7:
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#18
+  __im_load#23:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp trycont#6
+  __im_stride:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow#18
+  __im_byte:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#18
+  __im_load#24:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.jmp trycont#6
+  __im_slow#18:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, critsplit#39
+  tryerr#5:
+    x64.movRegImm32 rax, 0
+    x64.jmp trycont#6
+  critsplit#39:
+    x64.movRegReg rax, r8
+  trycont#6:
+    x64.leaRegRegReg r12, r12, rax
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic#11
+  __rc_chk#12:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc greater, __rc_panic#11
+  __rc_ok#10:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.cmpRegImm32 r14, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 r14, 255
-    x64.jcc lessEqual, __rc_ok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at main.maxon:11: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 56
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_ok:
-    x64.movRegReg r8, r14
-    x64.epilogue 32
+  __im_slow#14:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.movRegReg rbx, r8
+    x64.jmp __im_cont#13
+  __im_slow#34:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_get
+    x64.movRegReg r14, r8
+    x64.jmp __im_cont#33
+  __rc_panic#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at main.maxon:11: Range check failed: value outside typealias 'Low'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#11:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at main.maxon:11: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12

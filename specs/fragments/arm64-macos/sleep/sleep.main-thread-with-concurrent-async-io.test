@@ -32,63 +32,114 @@ data {
   __mm_alloc_count@8 = i64 0
   __gt_run_queue_head@16 = i64 0
   __gt_run_queue_tail@24 = i64 0
-  __gt_init_done@32 = i64 0
-  __gt_timer_count@40 = i64 0
-  __gt_timer_heap_base@48 = i64 0
-  __gt_timer_capacity@56 = i64 0
-  __gt_timer_seq@64 = i64 0
+  __gt_timer_count@32 = i64 0
+  __gt_timer_heap_base@40 = i64 0
+  __gt_timer_capacity@48 = i64 0
+  __gt_timer_seq@56 = i64 0
+  __gt_timer_when@64 = i64 9223372036854775807
   __gt_trace_counter@72 = i64 0
-  __gt_proc_count@80 = i64 0
-  __gt_proc_handles_base@88 = i64 0
-  __gt_proc_gts_base@96 = i64 0
-  __gt_proc_wait_snapshot@104 = i64 0
-  __gt_proc_poller@112 = i64 0
-  __gt_live_count@120 = i64 0
-  __sched_progress@128 = i64 0
-  __sched_active_workers@136 = i64 1
-  __sched_max_active_workers@144 = i64 1
-  __sched_tls_index@152 = i64 0
-  __sched_tls_teb_offset@160 = i64 0
-  __sched_procs@168 = i64 0
-  __sched_allm@176 = i64 0
-  __sched_midle@184 = i64 0
-  __sched_pidle@192 = i64 0
-  __sched_num_procs@200 = i64 0
-  __sched_shutdown_flag@208 = i64 0
-  __sched_lock@216 = i64 0
-  __sched_nmspinning@224 = i64 0
-  __sched_parked_drivers@232 = i64 0
-  __sched_sysmon_started@240 = i64 0
-  __slab_arena_list@248 = i64 0
-  __slab_arena_map_l1@256 = i64 0
-  __slab_state@264 = i64 0
+  __gt_live_count@80 = i64 0
+  __gt_seed_bytes@88 = i64 2048
+  __gt_stack_bytes_sum@96 = i64 0
+  __gt_stack_bytes_count@104 = i64 0
+  __gt_seed_sum_seen@112 = i64 0
+  __gt_seed_count_seen@120 = i64 0
+  __sched_active_workers@128 = i64 1
+  __sched_max_active_workers@136 = i64 1
+  __sched_tls_index@144 = i64 0
+  __sched_tls_teb_offset@152 = i64 0
+  __sched_procs@160 = i64 0
+  __sched_allm@168 = i64 0
+  __sched_midle@176 = i64 0
+  __sched_pidle@184 = i64 0
+  __gt_gfree_head@192 = i64 0
+  __sched_arena_cursor@200 = i64 0
+  __sched_arena_limit@208 = i64 0
+  __gt_records_carved@216 = i64 0
+  __sched_npidle@224 = i64 0
+  __sched_runq_size@232 = i64 0
+  __sched_global_pushes@240 = i64 0
+  __sched_timer_scan_steps@248 = i64 0
+  __sched_mcount@256 = i64 0
+  __sched_nmidle@264 = i64 0
+  __sched_main_m@272 = i64 0
+  __sched_phase@280 = i64 0
+  __sched_lastpoll@288 = i64 0
+  __sched_poll_until@296 = i64 0
+  __sched_regain_head@304 = i64 0
+  __np_poller@312 = i64 0
+  __np_break@320 = i64 0
+  __np_wake_sig@328 = i64 0
+  __np_pd_table@336 = i64 0
+  __np_pd_cap@344 = i64 0
+  __np_waiters@352 = i64 0
+  __np_src_key_free@360 = i64 0
+  __np_src_key_high@368 = i64 0
+  __sched_num_procs@376 = i64 0
+  __sched_shutdown_flag@384 = i64 0
+  __sched_lock@392 = i64 0
+  __sched_lock_depth_sink@400 = i64 0
+  __sched_nmspinning@408 = i64 0
+  __sched_needspinning@416 = i64 0
+  __sched_sysmon_event@424 = i64 0
+  __sched_sysmon_wait@432 = i64 0
+  __sched_timer_starts@440 = i64 0
+  __slab_arena_list@448 = i64 0
+  __slab_arena_map_l1@456 = i64 0
+  __slab_state@464 = i64 0
 }
 
 func @probe {
   entry:
-    arm64.prologue 32
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 0
-  forhdr:
-    arm64.cmp x19, 20
-    arm64.b.ge forexit
+    arm64.b forhdr
   each:
     arm64.leaRdata x0, __str_rec_19  ; "noyield.txt"
-    arm64.bl FilePath.init
+  __il_body#7:
+    arm64.bl FilePath.create
     arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x20
-    arm64.bl File.exists
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr
+  __il_body#10:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.bl String.addressableBytes
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mf_exists
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.cmp x22, 0
+  __il_cont:
     arm64.movRegReg x0, x20
     arm64.bl __destruct_FilePath
   forstep:
     arm64.add x19, x19, 1
-    arm64.b forhdr
+  forhdr:
+    arm64.cmp x19, 20
+    arm64.b.lt each
   forexit:
     arm64.movImm x0, 7
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  tryerr:
+    arm64.leaRdata x0, __str_blob_31  ; "panic at FilePath.maxon:31: FilePath: invalid path\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
     arm64.ret
 }
 
@@ -113,22 +164,35 @@ func @main {
     arm64.bl Clock.nowMs
     arm64.movRegReg x20, x0
     arm64.movImm x0, 300
-    arm64.bl sleep
-    arm64.movRegReg x0, x20
-    arm64.bl Clock.elapsedMs
-    arm64.movRegReg x20, x0
+  __rc_ok#8:
+    arm64.bl __gt_sleep
+  __il_body#10:
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic#14
+  __rc_ok#13:
+    arm64.bl Clock.nowMs
+    arm64.cmp x0, x20
+    arm64.b.hs ifcont#12
+  clockSkew:
+    arm64.movImm x20, 0
+    arm64.b __il_cont#5
+  ifcont#12:
+    arm64.sub x20, x0, x20
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic#16
+  __il_cont#5:
     arm64.movRegReg x0, x19
     arm64.bl __gt_await
     arm64.movRegReg x19, x0
     arm64.movImm x0, 0
     arm64.cmp x20, 250
-    arm64.b.lt ifcont#2
+    arm64.b.lo ifcont#2
   slept:
-    arm64.movImm x0, 1
+    arm64.add x0, x0, 1
   ifcont#2:
     arm64.movImm x16, 10000
     arm64.cmp x20, x16
-    arm64.b.ge critsplit
+    arm64.b.hs critsplit
   bounded:
     arm64.add x20, x0, 1
     arm64.b ifcont#4
@@ -191,28 +255,62 @@ func @main {
     arm64.movRegReg x2, x19
     arm64.bl __str_copy
     arm64.add x19, x20, x19
+    arm64.loadRegSlot x2, slot2
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x27
-    arm64.loadRegSlot x20, slot2
-    arm64.movRegReg x2, x20
     arm64.bl __str_copy
-    arm64.add x0, x19, x20
-    arm64.loadRegSlot x19, slot1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x28
-    arm64.loadRegSlot x0, slot0
-    arm64.storeBaseDispReg.word64 [x19 + 8], x0
-    arm64.movImm x0, 18446744073709551613
-    arm64.storeBaseDispReg.word64 [x19 + 16], x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x19 + 24], x0
+    arm64.loadRegSlot x0, slot2
+    arm64.add x0, x19, x0
+    arm64.loadRegSlot x0, slot1
+    arm64.storeBaseDispReg.word64 [x0 + 0], x28
+    arm64.loadRegSlot x1, slot0
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.movImm x1, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x0 + 16], x1
+    arm64.movImm x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 24], x1
     arm64.movRegReg x0, x23
     arm64.bl __mm_decref
     arm64.movRegReg x0, x26
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x19
-    arm64.bl print
-    arm64.movRegReg x0, x19
+  __il_body#18:
+    arm64.loadRegSlot x0, slot1
+    arm64.bl __write_stdout
+  __il_cont#17:
+    arm64.loadRegSlot x0, slot1
     arm64.bl __str_decref
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot3
+    arm64.loadRegSlot x20, slot4
+    arm64.loadRegSlot x21, slot5
+    arm64.loadRegSlot x22, slot6
+    arm64.loadRegSlot x23, slot7
+    arm64.loadRegSlot x24, slot8
+    arm64.loadRegSlot x25, slot9
+    arm64.loadRegSlot x26, slot10
+    arm64.loadRegSlot x27, slot11
+    arm64.loadRegSlot x28, slot12
+    arm64.epilogue 128
+    arm64.ret
+  __rc_panic#14:
+    arm64.leaRdata x0, __str_blob_180  ; "panic at Clock.maxon:32: Range check failed: value outside typealias 'InstantMs'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot3
+    arm64.loadRegSlot x20, slot4
+    arm64.loadRegSlot x21, slot5
+    arm64.loadRegSlot x22, slot6
+    arm64.loadRegSlot x23, slot7
+    arm64.loadRegSlot x24, slot8
+    arm64.loadRegSlot x25, slot9
+    arm64.loadRegSlot x26, slot10
+    arm64.loadRegSlot x27, slot11
+    arm64.loadRegSlot x28, slot12
+    arm64.epilogue 128
+    arm64.ret
+  __rc_panic#16:
+    arm64.leaRdata x0, __str_blob_181  ; "panic at Clock.maxon:39: Range check failed: value outside typealias 'DurationMs'\x0a"
+    arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot3
     arm64.loadRegSlot x20, slot4

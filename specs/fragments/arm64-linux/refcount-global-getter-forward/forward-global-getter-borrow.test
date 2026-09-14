@@ -115,8 +115,14 @@ func @Box.create {
   entry:
     arm64.prologue 32
     arm64.storeSlotReg slot0, x19
-    arm64.bl __fieldDefault#Box#items
+  __il_body:
+    arm64.movImm x1, 8
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __managed_create
     arm64.movRegReg x19, x0
+  __il_cont:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -131,32 +137,12 @@ func @Box.add {
     arm64.prologue 16
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.bl __managed_push
+    arm64.movRegReg x1, x0
     arm64.epilogue 16
     arm64.ret
 }
 
-func @Box.size {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.cmp x0, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x0, 1000
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_8  ; "panic at forward-global-getter-borrow.test:26: Range check failed: value outside typealias 'Count'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
-  __rc_ok:
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @loadBase {
+func @main {
   entry:
     arm64.prologue 64
     arm64.storeSlotReg slot4, x23
@@ -164,20 +150,16 @@ func @loadBase {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
+  __il_body#18:
     arm64.leaGlobal x0, __data_baseLoaded
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
     arm64.cbz x0, ifcont
   hit:
     arm64.leaGlobal x0, __data_cachedBase
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.bl __mm_retain
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
-    arm64.ret
+    arm64.leaFuncAddr x1, __clone_Box_Item
+    arm64.bl __mm_own_deep
+    arm64.b __il_body#7
   ifcont:
     arm64.leaRdata x0, __layout_Box_Item
     arm64.bl Box.create
@@ -257,192 +239,68 @@ func @loadBase {
     arm64.leaRdata x2, __layout_Box_Item
     arm64.movRegReg x0, x19
     arm64.bl Box.add
+    arm64.leaFuncAddr x1, __clone_Box_Item
     arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
+    arm64.bl __mm_own_deep
+    arm64.movRegReg x20, x0
     arm64.leaGlobal x0, __data_cachedBase
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.bl __destruct_Box_Item
     arm64.leaGlobal x0, __data_cachedBase
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 0], x20
     arm64.movImm x0, 1
     arm64.leaGlobal x1, __data_baseLoaded
     arm64.storeBaseDispReg.byte [x1 + 0], x0
     arm64.leaGlobal x0, __data_cachedBase
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.bl __mm_retain
+    arm64.leaFuncAddr x1, __clone_Box_Item
+    arm64.bl __mm_own_deep
     arm64.movRegReg x20, x0
     arm64.movRegReg x0, x19
     arm64.bl __destruct_Box_Item
     arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
-    arm64.ret
-}
-
-func @buildFor {
-  entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot5, x24
-    arm64.storeSlotReg slot4, x23
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.bl loadBase
-    arm64.movRegReg x20, x0
-    arm64.eor x0, x19, 1
-    arm64.cbz x0, ifcont#2
-  native:
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
-    arm64.ret
-  ifcont#2:
-    arm64.leaGlobal x0, __data_mergedDone
-    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.cbz x0, ifcont#4
-  cached:
-    arm64.leaGlobal x0, __data_cachedMerged
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.bl __mm_retain
-    arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x20
-    arm64.bl __destruct_Box_Item
-    arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
-    arm64.ret
-  ifcont#4:
-    arm64.leaRdata x0, __layout_Box_Item
-    arm64.bl Box.create
-    arm64.movRegReg x19, x0
-    arm64.leaRdata x0, __str_rec_7  ; "merged item"
-    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
-    arm64.add x0, x22, 57
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x23, x0
-    arm64.add x24, x23, 56
-    arm64.movRegReg x0, x24
-    arm64.movRegReg x1, x21
-    arm64.movRegReg x2, x22
-    arm64.bl __str_copy
-    arm64.add x0, x24, x22
-    arm64.storeBaseDispReg.word64 [x23 + 0], x24
-    arm64.storeBaseDispReg.word64 [x23 + 8], x22
-    arm64.movImm x0, 18446744073709551613
-    arm64.storeBaseDispReg.word64 [x23 + 16], x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x23 + 24], x0
-    arm64.movRegReg x0, x23
-    arm64.bl Item.create
-    arm64.movRegReg x1, x0
-    arm64.leaRdata x2, __layout_Box_Item
-    arm64.movRegReg x0, x19
-    arm64.bl Box.add
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.leaGlobal x0, __data_cachedMerged
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.bl __destruct_Box_Item
-    arm64.leaGlobal x0, __data_cachedMerged
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.movImm x0, 1
-    arm64.leaGlobal x1, __data_mergedDone
-    arm64.storeBaseDispReg.byte [x1 + 0], x0
-    arm64.leaGlobal x0, __data_cachedMerged
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.bl __mm_retain
-    arm64.movRegReg x21, x0
-    arm64.movRegReg x0, x19
-    arm64.bl __destruct_Box_Item
-    arm64.movRegReg x0, x20
-    arm64.bl __destruct_Box_Item
-    arm64.movRegReg x0, x21
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
-    arm64.ret
-}
-
-func @augment {
-  entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.bl buildFor
-    arm64.movRegReg x19, x0
-  __il_body:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
-    arm64.cmp x20, 0
-    arm64.b.lt __il_slow
-  __rc_chk:
-    arm64.cmp x20, 1000
-    arm64.b.le __il_cont
-  __il_slow:
-    arm64.movRegReg x0, x19
-    arm64.bl Box.size
-    arm64.movRegReg x20, x0
+  __il_body#7:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x19, [x1 + 8]
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic#9
+  __rc_chk#10:
+    arm64.cmp x19, 1000
+    arm64.b.gt __rc_panic#9
   __il_cont:
-    arm64.movRegReg x0, x19
     arm64.bl __destruct_Box_Item
-    arm64.movRegReg x0, x20
+  __rc_chk#3:
+    arm64.cmp x19, 255
+    arm64.b.gt __rc_panic#2
+  __rc_ok:
+    arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
     arm64.ret
-}
-
-func @main {
-  entry:
-    arm64.prologue 16
-    arm64.movImm x0, 0
-    arm64.bl augment
-    arm64.cmp x0, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x0, 255
-    arm64.b.le __rc_ok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_9  ; "panic at forward-global-getter-borrow.test:76: Range check failed: value outside typealias 'ExitCode'\x0a"
+  __rc_panic#9:
+    arm64.leaRdata x0, __str_blob_9  ; "panic at forward-global-getter-borrow.test:26: Range check failed: value outside typealias 'Count'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.epilogue 16
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
     arm64.ret
-  __rc_ok:
-    arm64.epilogue 16
-    arm64.ret
-}
-
-func @__fieldDefault#Box#items {
-  entry:
-    arm64.prologue 16
-    arm64.movImm x1, 8
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
-    arm64.bl __managed_create
-    arm64.epilogue 16
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_10  ; "panic at forward-global-getter-borrow.test:76: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
     arm64.ret
 }

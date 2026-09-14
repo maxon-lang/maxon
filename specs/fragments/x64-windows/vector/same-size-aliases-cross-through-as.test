@@ -20,24 +20,9 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
-}
-
-func @first {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.movRegImm32 rdx, 0
-    x64.leaRegRdata rax, [rip + __layout_Vector_N3_Int]
-    x64.callDirect Vector.get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, trycont
-  tryerr:
-    x64.movRegImm32 r8, 0
-  trycont:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -47,19 +32,55 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 32
-    x64.leaRegRdata rcx, [rip + __layout_Vector_N3_Int]
-    x64.movRegImm32 rdx, 3
-    x64.callDirect Vector.create
-    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __layout_Vector_N3_Int]
+    x64.movRegImm32 rbx, 3
+  __il_body#7:
+    x64.movRegImm32 rcx, 8
+    x64.loadRegBaseDisp.word64 rdx, [rax + 40]
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect __managed_resize
+  __il_cont#6:
     x64.movRegImm32 rdx, 0
     x64.movRegImm32 rax, 21
     x64.leaRegRdata r9, [rip + __layout_Vector_N3_Int]
     x64.movRegImm32 rsi, 3
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect Vector.set
     x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#2
+  __il_body#9:
+    x64.movRegImm32 rdx, 0
+    x64.leaRegRdata rax, [rip + __layout_Vector_N3_Int]
+    x64.movRegReg rcx, r12
+    x64.callDirect Vector.get
+    x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
-  tryerr:
+  tryerr#11:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont#13
+  tryok:
+    x64.movRegReg rax, r8
+  __il_cont#13:
+    x64.leaRegRegImm32 rbx, rax, 3
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#2:
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at same-size-aliases-cross-through-as.test:12: test invariant: set OOB\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -68,31 +89,10 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
-    x64.movRegReg rcx, rbx
-    x64.callDirect first
-    x64.movRegImm32 rax, 3
-  __il_cont:
-    x64.leaRegRegReg r12, r8, rax
-    x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r12, rax
-    x64.jcc lessEqual, __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at same-size-aliases-cross-through-as.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at same-size-aliases-cross-through-as.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_ok:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-    x64.movRegReg r8, r12
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx

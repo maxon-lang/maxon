@@ -50,9 +50,7 @@ func @main {
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x21 + 24], x0
     arm64.movImm x19, 0
-  whilehdr:
-    arm64.cmp x19, 5
-    arm64.b.ge whileexit
+    arm64.b whilehdr
   loop:
     arm64.movImm x0, 21
     arm64.movImm x1, 0
@@ -80,13 +78,28 @@ func @main {
     arm64.storeBaseDispReg.word64 [x23 + 24], x0
     arm64.movRegReg x0, x20
     arm64.bl __mm_decref
+  __il_body#5:
+    arm64.movRegReg x0, x23
+    arm64.bl __str_bytes_view
+    arm64.movRegReg x20, x0
     arm64.movRegReg x0, x21
-    arm64.movRegReg x1, x23
-    arm64.bl String.append
+    arm64.movRegReg x1, x20
+    arm64.bl __managed_append
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.loadRegBaseDisp.byte x0, [x23 + 48]
+    arm64.eor x0, x0, 1
+    arm64.cbz x0, __il_cont#4
+  clearFlag:
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.byte [x21 + 48], x0
+  __il_cont#4:
     arm64.movRegReg x0, x23
     arm64.bl __str_decref
     arm64.add x19, x19, 1
-    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x19, 5
+    arm64.b.lt loop
   whileexit:
     arm64.loadRegBaseDisp.word64 x19, [x21 + 0]
     arm64.loadRegBaseDisp.word64 x20, [x21 + 8]
@@ -115,8 +128,10 @@ func @main {
     arm64.storeBaseDispReg.word64 [x25 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x25 + 24], x0
+  __il_body#9:
     arm64.movRegReg x0, x25
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont#8:
     arm64.movRegReg x0, x25
     arm64.bl __str_decref
     arm64.movImm x19, 0

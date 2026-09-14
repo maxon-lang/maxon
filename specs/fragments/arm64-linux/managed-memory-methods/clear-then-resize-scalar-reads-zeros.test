@@ -52,75 +52,36 @@ func @main {
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.movImm x20, 0
-  whilehdr#1:
-    arm64.cmp x20, 8
-    arm64.b.ge whileexit#3
+    arm64.b whilehdr#1
   fill:
     arm64.movImm x1, 77
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
     arm64.add x20, x20, 1
-    arm64.b whilehdr#1
-  whileexit#3:
+  whilehdr#1:
+    arm64.cmp x20, 8
+    arm64.b.lt fill
+  __il_body#21:
     arm64.movRegReg x0, x19
-    arm64.bl Array.clear
+    arm64.bl __managed_clear
+  __il_cont#20:
     arm64.movImm x1, 8
     arm64.movRegReg x0, x19
     arm64.bl __managed_resize
     arm64.movImm x20, 0
     arm64.movImm x1, 0
-  whilehdr#4:
-    arm64.storeSlotReg slot0, x1
-    arm64.cmp x1, 8
-    arm64.b.ge whileexit#6
-  read:
-    arm64.cmp x1, 0
-    arm64.b.ge __rc_ok#12
-  __rc_panic#13:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at clear-then-resize-scalar-reads-zeros.test:18: Range check failed: value outside typealias 'ElementIndex'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.loadRegSlot x23, slot5
-    arm64.loadRegSlot x24, slot6
-    arm64.loadRegSlot x25, slot7
-    arm64.loadRegSlot x26, slot8
-    arm64.loadRegSlot x27, slot9
-    arm64.loadRegSlot x28, slot10
-    arm64.epilogue 112
-    arm64.ret
+    arm64.b whilehdr#4
   __rc_ok#12:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x1, x0
     arm64.b.hs __im_slow
-  __im_load:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
-    arm64.movImm x2, 0
-    arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
-    arm64.cmp x3, 0
-    arm64.b.eq critsplit#22
-  __im_empty:
-    arm64.cmp x0, 0
-    arm64.b.ne critsplit#23
-  __im_slow:
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_get
-    arm64.b __im_cont
-  critsplit#23:
-    arm64.movRegReg x9, x2
-    arm64.b __im_cont
-  critsplit#22:
-    arm64.movRegReg x9, x2
-  __im_cont:
-    arm64.cmp x9, 0
-    arm64.b.eq tryok
+    arm64.b __im_load
   tryerr:
     arm64.movImm x21, 18446744073709551615
     arm64.b trycont
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
   tryok:
     arm64.movRegReg x21, x0
   trycont:
@@ -159,32 +120,37 @@ func @main {
     arm64.storeBaseDispReg.word64 [x27 + 24], x0
     arm64.movRegReg x0, x22
     arm64.bl __mm_decref
+  __il_body#23:
     arm64.movRegReg x0, x27
-    arm64.bl print
+    arm64.bl __write_stdout
+  __il_cont#22:
     arm64.movRegReg x0, x27
     arm64.bl __str_decref
     arm64.cmp x21, 0
-    arm64.b.eq critsplit#21
+    arm64.b.eq critsplit
   garbage:
     arm64.add x0, x20, 1
     arm64.b ifcont
-  critsplit#21:
+  critsplit:
     arm64.movRegReg x0, x20
   ifcont:
     arm64.loadRegSlot x1, slot0
     arm64.add x1, x1, 1
     arm64.movRegReg x20, x0
-    arm64.b whilehdr#4
-  whileexit#6:
+  whilehdr#4:
+    arm64.storeSlotReg slot0, x1
+    arm64.cmp x1, 8
+    arm64.b.lt __rc_ok#12
+  whileexit:
     arm64.cmp x20, 0
-    arm64.b.lt __rc_panic#15
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.b.le __rc_ok#14
-  __rc_panic#15:
-    arm64.leaRdata x0, __str_blob_3  ; "panic at clear-then-resize-scalar-reads-zeros.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
+    arm64.b.gt __rc_panic
+  __rc_ok#14:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
     arm64.loadRegSlot x21, slot3
@@ -197,10 +163,16 @@ func @main {
     arm64.loadRegSlot x28, slot10
     arm64.epilogue 112
     arm64.ret
-  __rc_ok#14:
+  __im_slow:
     arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
-    arm64.movRegReg x0, x20
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr
+    arm64.b tryok
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at clear-then-resize-scalar-reads-zeros.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
     arm64.loadRegSlot x21, slot3
