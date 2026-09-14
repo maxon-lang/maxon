@@ -1841,6 +1841,22 @@ export union TargetOp
 	// here would give every instrumented leaf shadow space, an outgoing-argument region and a call-clobber
 	// barrier at every statement.
 	covInc(pointId CovPointId) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0}
+
+	// --- The memory-destination band: one instruction for a `load → step → store` of one word ---
+	//
+	// `<alu> qword [base + disp], src` (`REX.W 01/29/21/09/31 /r`). Selected by `MemoryDestinationFolds`,
+	// never written by hand. Two reads and NO def — `x64LockAdd`'s shape without the prefix, which is
+	// correct only because the census proved nothing else writes the word inside the step.
+	//
+	// ⚠ **IT WRITES EFLAGS, WHERE THE `storeIndirect` IT IS SELECTED FOR DECLARES THAT IT DOES NOT.** The
+	// census refuses it past a fused compare in the same block, which is what keeps
+	// `StdOpMeta.clobbersFlags` the one flags fact the compare/branch fusion reads.
+	x64AluBaseDispReg(base TargetVReg, disp Imm32, src TargetVReg, alu MemoryDestinationAlu) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0}
+
+	// `<alu> qword [base + disp], imm32` (`REX.W 81 /ext id`) — the immediate twin, for a `binOpImm` step.
+	// The imm32 is SIGN-EXTENDED, which is what every register form of a `binOpImm` already does with it.
+	// One read, no def.
+	x64AluBaseDispImm32(base TargetVReg, disp Imm32, imm Imm32, alu MemoryDestinationAlu) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0}
 end 'TargetOp'
 
 // ⭐ **THE ONE `.data` LABEL EVERY COUNTER LIVES INSIDE.** The whole counter image — the `.mxcov` header
@@ -1939,12 +1955,14 @@ export function memoryIndexScaleIsAccessWidth(scale MemoryIndexScale, width X64A
 	return memoryIndexScaleFactor(scale) == accessWidthBytes(width) as MemoryIndexScaleFactor
 end 'memoryIndexScaleIsAccessWidth'
 
-// The scale a `binOpImm(mul, index, multiplier)` denotes, or `notAScale` — the ISEL's admission test
-// and its conversion in ONE answer, so the two cannot come to disagree about which multipliers the
-// hardware carries. The case list is walked rather than re-spelled as four comparisons: the set lives
-// in the enum, and a case added there is admitted here with no edit at all.
+// Whether a `binOpImm(mul, index, multiplier)` is a scale, writing which one to `scale.value` — the ISEL's
+// admission test and its conversion in ONE answer, so the two cannot come to disagree about which
+// multipliers the hardware carries. The case list is walked rather than re-spelled as four comparisons:
+// the set lives in the enum, and a case added there is admitted here with no edit at all.
 export function memoryIndexScaleOfFactor(multiplier Imm32, scale MemoryIndexScaleMatch) returns bool
-	for candidate in MemoryIndexScale.allCases 'eachScale'
+	let cases = scale.cases
+
+	for candidate in cases 'eachScale'
 		if multiplier == memoryIndexScaleFactor(candidate) as Imm32 'isThisOne'
 			scale.value = candidate
 			return true
@@ -1954,19 +1972,70 @@ export function memoryIndexScaleOfFactor(multiplier Imm32, scale MemoryIndexScal
 	return false
 end 'memoryIndexScaleOfFactor'
 
-// The out-parameter `memoryIndexScaleOfFactor` writes through. A RECORD the caller owns rather than a
-// returned union, for `StdArithOperands`' reason: the admission test runs on every `binOpImm` of every
-// function the backend lowers, and a fresh heap object per op is what `fuseIfDefines`' header records
-// costing ~3,500 allocations on the smallest scale rung.
+// The out-parameter `memoryIndexScaleOfFactor` writes through, and the case list it walks. Both are the
+// caller's, built once, because the admission test runs at every constant multiply the backend lowers: a
+// returned union would be a heap object per op, and so is every read of `allCases`, which builds a fresh
+// array.
 //
 // ⚠ `value` IS MEANINGLESS UNTIL A CALL RETURNS `true` — `byOne` is a real scale, not a sentinel.
 export type MemoryIndexScaleMatch
 	export var value as MemoryIndexScale
+	export let cases as MemoryIndexScaleArray
 
 	export static function create() returns MemoryIndexScaleMatch
-		return Self{value: MemoryIndexScale.byOne}
+		return Self{value: MemoryIndexScale.byOne, cases: MemoryIndexScale.allCases}
 	end 'create'
 end 'MemoryIndexScaleMatch'
+
+// ⭐ **THE STEPS A MEMORY-DESTINATION INSTRUCTION CARRIES** — the group-1 operations whose `r/m, r` and
+// `r/m, imm32` forms compute on a word exactly what the Std `binOp` of the same name computes on it. Each is
+// exact at any signedness: the low 64 bits of a sum, a difference or a bitwise result depend on the low 64
+// bits of the operands alone.
+export enum MemoryDestinationAlu
+	add
+	sub
+	bitAnd
+	bitOr
+	bitXor
+end 'MemoryDestinationAlu'
+
+export typealias MemoryDestinationAluArray = Array with MemoryDestinationAlu
+
+function memoryDestinationAluOpcode(alu MemoryDestinationAlu) returns StdBinOpcode
+	return match alu 'a'
+		add gives StdBinOpcode.add
+		sub gives StdBinOpcode.sub
+		bitAnd gives StdBinOpcode.bitAnd
+		bitOr gives StdBinOpcode.bitOr
+		bitXor gives StdBinOpcode.bitXor
+	end 'a'
+end 'memoryDestinationAluOpcode'
+
+// The step a Std opcode is, or `false` — the admission test and the conversion in ONE answer,
+// `memoryIndexScaleOfFactor`'s shape and for its reason: the set lives in the enum's case list.
+export function memoryDestinationAluOf(opcode StdBinOpcode, alu MemoryDestinationAluMatch) returns bool
+	let cases = alu.cases
+
+	for candidate in cases 'eachAlu'
+		if memoryDestinationAluOpcode(candidate) == opcode 'isThisOne'
+			alu.value = candidate
+			return true
+		end 'isThisOne'
+	end 'eachAlu'
+
+	return false
+end 'memoryDestinationAluOf'
+
+// The out-parameter `memoryDestinationAluOf` writes through and the case list it walks, the caller's and
+// built once for `MemoryIndexScaleMatch`'s reason. ⚠ `value` IS MEANINGLESS UNTIL A CALL RETURNS `true`.
+export type MemoryDestinationAluMatch
+	export var value as MemoryDestinationAlu
+	export let cases as MemoryDestinationAluArray
+
+	export static function create() returns MemoryDestinationAluMatch
+		return Self{value: MemoryDestinationAlu.add, cases: MemoryDestinationAlu.allCases}
+	end 'create'
+end 'MemoryDestinationAluMatch'
 
 // ⭐ THE ROUNDING DIRECTION a `roundsd`/`frint` performs — the operand carried by x64's
 // `roundsdRegReg` and arm64's `arm64Frint`, and the ONE place the three directions the language

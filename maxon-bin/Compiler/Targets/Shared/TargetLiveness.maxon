@@ -1571,6 +1571,10 @@ function opIsCondBranch(op TargetOp) returns bool
 
 		// A coverage counter is a body op, not a branch.
 		covInc gives false
+
+		// So is a read-modify-write of memory.
+		x64AluBaseDispReg or
+			x64AluBaseDispImm32 gives false
 	end 'check'
 end 'opIsCondBranch'
 
@@ -1758,7 +1762,9 @@ export function unconditionalBranchTargetOf(module TargetModule, block IrBlock) 
 		arm64LoadAcquire or
 			arm64StoreRelease gives UnconditionalBranchTarget.none
 		arm64Smulh or
-			covInc gives UnconditionalBranchTarget.none
+			covInc or
+			x64AluBaseDispReg or
+			x64AluBaseDispImm32 gives UnconditionalBranchTarget.none
 	end 'check'
 end 'unconditionalBranchTargetOf'
 
@@ -1950,6 +1956,8 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 				arm64StoreRelease then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has an ordered load/store body op as its terminator")
 			arm64Smulh then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a high multiply body op as its terminator")
 			covInc then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a coverage counter body op as its terminator")
+			x64AluBaseDispReg or
+				x64AluBaseDispImm32 then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a read-modify-write of memory body op as its terminator")
 		end 'termCtrl'
 	end 'hasTerm'
 end 'collectBlockSuccessorIds'
@@ -3894,6 +3902,10 @@ function collectEntryParamCaptures(module TargetModule, topo FuncTopology, param
 
 			// A coverage counter is not a `movRegReg`, so never an entry param capture.
 			covInc then break 'capture'
+
+			// Nor is a read-modify-write of memory.
+			x64AluBaseDispReg or
+				x64AluBaseDispImm32 then break 'capture'
 		end 'capture'
 	end 'eachOp'
 
@@ -5218,6 +5230,10 @@ function deriveSlotRole(op TargetOp) returns OpSlotRole
 
 		// A coverage counter touches no SLOT — its address is a link-time constant, not a frame offset.
 		covInc gives OpSlotRole.touchesNoSlot
+
+		// Its word is addressed through a base register, `storeBaseDispReg`'s answer.
+		x64AluBaseDispReg or
+			x64AluBaseDispImm32 gives OpSlotRole.touchesNoSlot
 	end 'k'
 end 'deriveSlotRole'
 

@@ -1625,20 +1625,35 @@ type FusedPredColumn
 	var fused as BoolArray
 	var preds as StdCmpPredArray
 
+	// Where the fused compare sits in its block's body — the start of the window whose flags the branch
+	// reads, which `MemoryDestinationFolds` must not write into.
+	var positions as BodyOpPositionArray
+
 	static function create() returns FusedPredColumn
-		return Self{fused: BoolArray.create(), preds: StdCmpPredArray.create()}
+		return Self{fused: BoolArray.create(), preds: StdCmpPredArray.create(), positions: BodyOpPositionArray.create()}
 	end 'create'
 
-	// Emptied over the module's block refs. The predicate column's fill is never read: `fused` gates it.
+	// Emptied over the module's block refs. The predicate and position fills are never read: `fused` gates
+	// them.
 	function reset(blockCount ElementIndex)
 		self.fused.refill(blockCount, value: false)
 		self.preds.refill(blockCount, value: StdCmpPred.eq)
+		self.positions.refill(blockCount, value: 0)
 	end 'reset'
 
-	function set(blockRef BlockRef, pred StdCmpPred)
+	function set(blockRef BlockRef, pred StdCmpPred, position BodyOpPosition)
 		try self.fused.set(blockRef, value: true) otherwise panic("FusedPredColumn.set: block ref {blockRef} is past the {self.fused.count()} blocks the column was reset over")
 		try self.preds.set(blockRef, value: pred) otherwise panic("FusedPredColumn.set: preds.set OOB at {blockRef} beside a fused column of {self.fused.count()}")
+		try self.positions.set(blockRef, value: position) otherwise panic("FusedPredColumn.set: positions.set OOB at {blockRef} beside a fused column of {self.fused.count()}")
 	end 'set'
+
+	function positionOf(blockRef BlockRef) returns BodyOpPosition
+		if not self.contains(blockRef) 'notFused'
+			panic("CompareFusionCensus.fusedComparePositionOf: block ref {blockRef} fuses no compare — ask `blockFusesCompare` first")
+		end 'notFused'
+
+		return try self.positions.get(blockRef) otherwise panic("FusedPredColumn.positionOf: positions.get OOB at {blockRef} beside a fused column of {self.fused.count()}")
+	end 'positionOf'
 
 	function contains(blockRef BlockRef) returns bool
 		return try self.fused.get(blockRef) otherwise panic("FusedPredColumn.contains: block ref {blockRef} is past the {self.fused.count()} blocks the column was reset over")
@@ -1659,6 +1674,10 @@ end 'FusedPredColumn'
 
 typealias StdCmpPredArray = Array with StdCmpPred
 
+// An op's index in its block's `opRefs` — the order the flags are written in.
+typealias BodyOpPosition = int(0 to u64.max)
+typealias BodyOpPositionArray = Array with BodyOpPosition
+
 // Record `condId` as fusable, but only when `pred`'s compare is the one that DEFINES it.
 //
 // NO `Optional`-shaped return anywhere in this analysis, and that is a MEASURED constraint
@@ -1672,7 +1691,7 @@ typealias StdCmpPredArray = Array with StdCmpPred
 // Both columns are written HERE, by this one call, which is what keeps them in lockstep — the
 // predicate and the float-ness of the compare carrying it can never disagree, because nothing
 // can write one without the other.
-function fuseIfDefines(fused FusedPredColumn, floatCmps StdValueUseSet, unsignedCmps StdValueUseSet, blockRef BlockRef, defId ValueId, condId ValueId, pred StdCmpPred, operandType StdType)
+function fuseIfDefines(fused FusedPredColumn, floatCmps StdValueUseSet, unsignedCmps StdValueUseSet, blockRef BlockRef, position BodyOpPosition, defId ValueId, condId ValueId, pred StdCmpPred, operandType StdType)
 	if defId != condId 'someOtherCompare'
 		return
 	end 'someOtherCompare'
@@ -1691,7 +1710,7 @@ function fuseIfDefines(fused FusedPredColumn, floatCmps StdValueUseSet, unsigned
 	//
 	// ⚠ THE TWO ARE DISJOINT BY CONSTRUCTION, not by a rule anyone maintains: `stdTypeIsUnsigned` is
 	// false for every float `StdType`, and `comparisonSignedness` never routes a float here at all.
-	fused.set(blockRef, pred: pred)
+	fused.set(blockRef, pred: pred, position: position)
 
 	if stdTypeIsFloat(operandType) 'float'
 		floatCmps.insert(condId)
@@ -1711,12 +1730,14 @@ end 'fuseIfDefines'
 // instructions, which is correct because `setcc` and `cset` READ the flags rather than writing them.
 //
 // ⛔⛔ **THE ONE PRECONDITION, AND IT BINDS EVERY BACKEND THAT READS THIS: A LOWERING THAT WRITES THE
-// CONDITION FLAGS MUST SIT ON A STD OP DECLARING `clobbersFlags: true`.** The backward scan below stops at
-// the first flag-clobbering op it meets and fuses only if that op IS the compare — so an op that writes
-// flags while declaring it does not is INVISIBLE here, and the branch would read flags that op had since
-// destroyed. The declaration is a UNION over the backends (see `StdOpMeta.clobbersFlags`), which is what
-// lets one census serve two ISAs whose instructions clobber differently: over-declaring costs a missed
-// fusion, under-declaring is a silent wrong answer.
+// CONDITION FLAGS MUST SIT ON A STD OP DECLARING `clobbersFlags: true`** — or be a selection whose own
+// census refuses it past the compare this one fused (`fusedComparePositionOf`), which is
+// `MemoryDestinationFolds`' contract. The backward scan below stops at the first flag-clobbering op it
+// meets and fuses only if that op IS the compare — so an op that writes flags while declaring it does not
+// is INVISIBLE here, and the branch would read flags that op had since destroyed. The declaration is a
+// UNION over the backends (see `StdOpMeta.clobbersFlags`), which is what lets one census serve two ISAs
+// whose instructions clobber differently: over-declaring costs a missed fusion, under-declaring is a silent
+// wrong answer.
 //
 // ⚠ Both isels also depend on every op a POST-ISEL pass can splice into the fused window being
 // flag-neutral — see `computeFusedCmps` for the x64 list and `lowerCondBranch` in `StdToArm64Conversion`
@@ -1788,6 +1809,12 @@ export type CompareFusionCensus
 	export function fusedPredicateOf(blockRef BlockRef) returns StdCmpPred
 		return self.fusedPreds.predOf(blockRef)
 	end 'fusedPredicateOf'
+
+	// … and where that compare sits in the block's body. Every op after it runs inside the window whose
+	// flags the branch reads.
+	function fusedComparePositionOf(blockRef BlockRef) returns BodyOpPosition
+		return self.fusedPreds.positionOf(blockRef)
+	end 'fusedComparePositionOf'
 
 	// Whether the fused compare defining `valueId` compared FLOATS, which selects the NaN-safe condition
 	// family. Only ever asked after a `blockFusesCompare` hit — see `floatCmps`.
@@ -2030,29 +2057,30 @@ export type CompareFusionCensus
 			// The first flag-clobbering op found walking backward IS the one whose flags the
 			// branch will read. If it is not the compare being tested, nothing is fusable —
 			// and the scan stops HERE rather than looking further back, because whatever was
-			// there had its flags overwritten by this very op. The two compare variants answer
-			// identically: `foldConstOperands` moved the right operand into an immediate, which
-			// changed the instruction, not what the compare means.
+			// there had its flags overwritten by this very op.
+			//
 			// ⭐ **`isCmp` IS THE QUESTION THIS ASKS**, and it is declared on `cmp` and `cmpImm` and on nothing
 			// else — so one test answers for every other variant instead of 105 arms naming themselves only to
 			// say "not the compare". The two compare variants answer identically: `foldConstOperands` moved the
 			// right operand into an immediate, which changed the instruction, not what the compare means.
 			//
-			// ⚠ **THE DAY A FLAG-WRITING MEMORY OP EXISTS, THIS QUESTION IS STILL ASKED — at its DECLARATION.**
-			// A new op states `isCmp` there, which is the one place that fact belongs; reaching this gate with
-			// `isCmp: true` and no arm below panics by name rather than answering quietly.
+			// ⚠ **A FLAG-WRITING MEMORY INSTRUCTION THIS SCAN CANNOT SEE EXISTS, AND IT IS KEPT OUT OF THE
+			// WINDOW RATHER THAN DECLARED.** x64 selects `add [mem]` for a `storeIndirect`, which declares
+			// `clobbersFlags: false`; `MemoryDestinationFolds` refuses every such store past the position
+			// recorded here. A new Std op that writes flags states `clobbersFlags` and `isCmp` at its
+			// declaration, and reaching this gate with `isCmp: true` and no arm below panics by name.
 			if not op.rawValue.isCmp 'notTheCompare'
 				return
 			end 'notTheCompare'
 
 			match op 'isTheCompare'
-				cmp(defId, _, _, pred, operandType) then fuseIfDefines(fused, floatCmps: floatCmps, unsignedCmps: unsignedCmps, blockRef: blockRef, defId: defId, condId: condId, pred: pred, operandType: operandType)
+				cmp(defId, _, _, pred, operandType) then fuseIfDefines(fused, floatCmps: floatCmps, unsignedCmps: unsignedCmps, blockRef: blockRef, position: i, defId: defId, condId: condId, pred: pred, operandType: operandType)
 
 				// `cmpImm` is INTEGER BY CONSTRUCTION — no SSE form takes an immediate, so
 				// `foldConstOperands` refuses a float rhs and a float compare can never reach this
 				// variant. The width is still ASKED of the op's own `operandType` rather than assumed
 				// from that: naming a type here would be a second answer to a question the op carries.
-				cmpImm(defId, _, _, pred, operandType) then fuseIfDefines(fused, floatCmps: floatCmps, unsignedCmps: unsignedCmps, blockRef: blockRef, defId: defId, condId: condId, pred: pred, operandType: operandType)
+				cmpImm(defId, _, _, pred, operandType) then fuseIfDefines(fused, floatCmps: floatCmps, unsignedCmps: unsignedCmps, blockRef: blockRef, position: i, defId: defId, condId: condId, pred: pred, operandType: operandType)
 				default panic("recordFusableCompare: `isCmp: true` on an op this match does not name — StdOpMeta's isCmp and this match have come apart")
 			end 'isTheCompare'
 
@@ -2116,6 +2144,373 @@ export type CompareFusionCensus
 		collectStdOpUses(term, referenced: readAsValue)
 	end 'collectTerminatorValueUses'
 end 'CompareFusionCensus'
+
+// ==========================================================================
+// Memory-destination steps — which `load → binOp → store` of ONE word is one
+// read-modify-write instruction
+// ==========================================================================
+
+// ⭐⭐ **`slot = slot + n` AS `add qword [slot], n`, WHEREVER THAT IS THE SAME PROGRAM**
+// (specs/memory-destination-add.md). A fact about the Std graph, so it lives beside the other two
+// censuses; x64 is the one ISA with the instruction, and the only isel that computes it.
+//
+// ⛔ **EVERY CONDITION BELOW IS A WAY FOR ONE INSTRUCTION TO COMPUTE WHAT THE THREE DID NOT:**
+//   1. **ONE WORD.** The store's address is the load's — the same value, or two `globalAddr` of one label
+//      (user code does not share one address between a read and a write) — at the same displacement.
+//   2. **ONE WIDTH.** The load, the step and the store are each a qword integer, the fused operand size.
+//   3. **ONE READER EACH.** The loaded value is read only by the step and the step's result only by the
+//      store, as its VALUE: a second reader needs a register the instruction never writes. `+`, `and`,
+//      `or` and `xor` commute, so a step reading the word as its right operand is the same step.
+//   4. **NO WRITE BETWEEN.** The load and the store are in one block and no op between them may write
+//      memory (`stdOpMayWriteMemory`). The instruction reads the word at the STORE's position, so an intervening
+//      write would be added to; an intervening READ still sees the old word, as it did.
+//   5. **NOT IN A FUSED COMPARE'S WINDOW.** The instruction writes EFLAGS where the `mov` it replaces did
+//      not, and `storeIndirect` declares `clobbersFlags: false`, so the compare/branch fusion walks
+//      straight past it. A store after its block's fused compare (`fusedComparePositionOf`) is refused.
+//
+// ⛔ **A STEP `ScaledIndexFolds` TOOK AS A `base + index*scale` ADDRESS IS REFUSED.** That fold lowers the
+// sum to one `lea` and emits its multiply nowhere, so the instruction would read a source no op defined.
+//
+// ⭐ PRESSURE-NEUTRAL: the step's source register lives to the store where the step's result used to, and
+// the loaded value lives nowhere. The load, the step and a `globalAddr` only the load read emit nothing.
+//
+// Every operand a condition reads is read off its defining op, through `StdValueDefs`, when the store asks.
+export type MemoryDestinationFolds
+	// The loads of the current block that no op able to write memory has followed yet — condition 4, and the
+	// one fact here no op records. Emptied at each block's start and at each such op, which costs what was
+	// inserted since, so the walk stays linear.
+	var unwrittenLoads as StdValueUseSet
+
+	// The answers: each step whose store emits the whole instruction, and what emits nothing because of it.
+	var foldedSteps as StdValueUseSet
+	var loadsOnTheRight as StdValueUseSet
+	var retiredLoads as StdValueUseSet
+	var retiredAddresses as StdValueUseSet
+
+	// Scratch each question refills: the step and the load it reads, classified off their defining ops, and
+	// the opcode admission's answer (`memoryDestinationAluOf`).
+	var step as StdArithOperands
+	var load as StdLoadOperands
+	var aluMatch as MemoryDestinationAluMatch
+
+	// Created ONCE per lowering and reset per function, for `ScaledIndexFolds.create`'s reason.
+	export static function create() returns MemoryDestinationFolds
+		return Self{unwrittenLoads: StdValueUseSet.createRecordingIds(), foldedSteps: StdValueUseSet.create(), loadsOnTheRight: StdValueUseSet.create(), retiredLoads: StdValueUseSet.create(), retiredAddresses: StdValueUseSet.create(), step: StdArithOperands.create(), load: StdLoadOperands.create(), aluMatch: MemoryDestinationAluMatch.create()}
+	end 'create'
+
+	// Re-decide every fold for `func`. `defs` must index `func`; `uses` must have been computed for it — its
+	// reader census is condition 3 — and `compareFusion` too, for condition 5.
+	export function computeForFunction(module StdModule, func IrFunction, defs StdValueDefs, uses ScaledIndexFolds, compareFusion CompareFusionCensus)
+		self.foldedSteps.clear()
+		self.loadsOnTheRight.clear()
+		self.retiredLoads.clear()
+		self.retiredAddresses.clear()
+
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("MemoryDestinationFolds: blockRef from func.blockRefs not in module.blocks")
+			self.unwrittenLoads.clear()
+			var position = 0 as BodyOpPosition
+
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("MemoryDestinationFolds: opIdx {opIdx} not in module.ops")
+				self.recordOp(op, module: module, defs: defs, blockRef: blockRef, position: position, uses: uses, compareFusion: compareFusion)
+
+				if stdOpMayWriteMemory(op) 'mayWriteMemory'
+					self.unwrittenLoads.clear()
+				end 'mayWriteMemory'
+
+				position = position + 1
+			end 'eachOp'
+		end 'eachBlock'
+	end 'computeForFunction'
+
+	// --- What the ISEL asks ---
+
+	// Whether this step emits nothing and its store emits the whole read-modify-write.
+	export function stepFoldsIntoItsStore(valueId ValueId) returns bool
+		return self.foldedSteps.contains(valueId)
+	end 'stepFoldsIntoItsStore'
+
+	export function retiresLoad(valueId ValueId) returns bool
+		return self.retiredLoads.contains(valueId)
+	end 'retiresLoad'
+
+	export function retiresAddress(valueId ValueId) returns bool
+		return self.retiredAddresses.contains(valueId)
+	end 'retiresAddress'
+
+	// The four below read a folded step back off its op, through the `module` and `defs` the fold was decided with.
+	export function stepTakesImmediate(valueId ValueId, module StdModule, defs StdValueDefs) returns bool
+		self.classifyFoldedStep(valueId, module: module, defs: defs, what: "stepTakesImmediate")
+		return self.step.isBinaryArithImm()
+	end 'stepTakesImmediate'
+
+	export function aluOf(valueId ValueId, module StdModule, defs StdValueDefs) returns MemoryDestinationAlu
+		self.classifyFoldedStep(valueId, module: module, defs: defs, what: "aluOf")
+
+		if not memoryDestinationAluOf(self.step.opcode, alu: self.aluMatch) 'noInstruction'
+			panic("MemoryDestinationFolds.aluOf: step {valueId} folded under an opcode no memory-destination instruction carries — `stepDefining` admits none")
+		end 'noInstruction'
+
+		return self.aluMatch.value
+	end 'aluOf'
+
+	export function immediateOf(valueId ValueId, module StdModule, defs StdValueDefs) returns Imm32
+		if not self.stepTakesImmediate(valueId, module: module, defs: defs) 'registerStep'
+			panic("MemoryDestinationFolds.immediateOf: step {valueId} reads a register — ask `stepTakesImmediate` first")
+		end 'registerStep'
+
+		return self.step.imm
+	end 'immediateOf'
+
+	// The operand that is not the word: the step's right one, or its left where the word was read on the right.
+	export function sourceOf(valueId ValueId, module StdModule, defs StdValueDefs) returns ValueId
+		if self.stepTakesImmediate(valueId, module: module, defs: defs) 'immediateStep'
+			panic("MemoryDestinationFolds.sourceOf: step {valueId} carries an immediate — ask `stepTakesImmediate` first")
+		end 'immediateStep'
+
+		if self.loadsOnTheRight.contains(valueId) 'wordOnTheRight'
+			return self.step.lhs
+		end 'wordOnTheRight'
+
+		return self.step.rhs
+	end 'sourceOf'
+
+	function classifyFoldedStep(valueId ValueId, module StdModule, defs StdValueDefs, what String)
+		if not self.foldedSteps.contains(valueId) 'notFolded'
+			panic("MemoryDestinationFolds.{what}: value {valueId} folds into no store — ask `stepFoldsIntoItsStore` first")
+		end 'notFolded'
+
+		if not defs.arithDefining(valueId, module: module, arith: self.step) 'notArithmetic'
+			panic("MemoryDestinationFolds.{what}: folded step {valueId} has no arithmetic defining op — `defs` indexes a function other than the one the fold was decided for")
+		end 'notArithmetic'
+	end 'classifyFoldedStep'
+
+	// --- The walk ---
+
+	// The two ops a fold is decided at. Every other `StdOp` is named so that an op appended to the union
+	// fails to compile here until somebody decides whether it is one of them.
+	function recordOp(op StdOp, module StdModule, defs StdValueDefs, blockRef BlockRef, position BodyOpPosition, uses ScaledIndexFolds, compareFusion CompareFusionCensus)
+		match op 'part'
+			loadIndirect(resultId, _, _, _) then self.unwrittenLoads.insert(resultId)
+			storeIndirect(addrId, offset, valueId, valueType) then self.foldAtStore(addrId, offset: offset, valueId: valueId, valueType: valueType, module: module, defs: defs, blockRef: blockRef, position: position, uses: uses, compareFusion: compareFusion)
+
+			// `loadAcquire`/`storeRelease` are among these: the ordering they promise is the op's, and a fold
+			// would erase which access carried it.
+			const or
+				binOp or
+				unaryOp or
+				cmp or
+				binOpImm or
+				cmpImm or
+				div or
+				mod or
+				condBranch or
+				branch or
+				ret or
+				param or
+				call or
+				retVoid or
+				globalAddr or
+				osAllocPages or
+				osWriteStdout or
+				rdataAddr or
+				tryCall or
+				errorReturn or
+				osExit or
+				funcAddr or
+				callIndirect or
+				osPanic or
+				osReadClock or
+				osProcessSpawn or
+				osProcessExitCode or
+				osCloseHandle or
+				osWaitHandle or
+				osFreePages or
+				switch or
+				witnessCall or
+				osPipeCreate or
+				osEventCreate or
+				osThreadCreate or
+				osLockInit or
+				osLockEnter or
+				osLockLeave or
+				osReadOverlapped or
+				osLastError or
+				osProcessSpawnInherit or
+				osCancelIo or
+				osGetPid or
+				osPipeCreateOutbound or
+				osWriteFile or
+				osReadWallClock or
+				witnessTryCall or
+				osFileOpenRead or
+				osFileClose or
+				osReadFile or
+				osFileOpenWrite or
+				osFileSize or
+				osFileDelete or
+				osFileRename or
+				osFileFindFirst or
+				osFileFindClose or
+				osFileFindNext or
+				osDirCreate or
+				osDirCurrentPath or
+				osFileAttributes or
+				osPanicValue or
+				osCommandLine or
+				osStdHandle or
+				osExecutablePath or
+				osWriteStderr or
+				stackRecordAddr or
+				osOpenNamedSegment or
+				osMapNamedSegment or
+				osTickCountMs or
+				osHandleSetInherit or
+				osPipePeek or
+				osEnvRead or
+				osProcessTerminate or
+				osSocketStartup or
+				osSocketResolve or
+				osSocketFreeAddrInfo or
+				osSocketCreate or
+				osSocketConnect or
+				osSocketSend or
+				osSocketError or
+				osSocketRecv or
+				osSocketClose or
+				osCpuCount or
+				osThreadCpuTicks or
+				osDecommitPages or
+				memFill or
+				osCommitPages or
+				osReservePages or
+				atomicCas or
+				atomicRmw or
+				currentThreadToken or
+				tlsAlloc or
+				tlsSetValue or
+				tlsSlotLoad or
+				osSetEvent or
+				osEnterBackgroundPriority or
+				osFileOpenWriteExecutable or
+				osEnvBlock or
+				osEnvBlockFree or
+				loadAcquire or
+				storeRelease or
+				osHandleFileType or
+				osCreateNamedSegment or
+				osUnmapNamedSegment or
+				osUnpublishNamedSegment or
+				covPoint or
+				osHostSample or
+				osNetpoll or
+				osSocketOverlapped or
+				osSocketServe then break 'part'
+		end 'part'
+	end 'recordOp'
+
+	function foldAtStore(addrId ValueId, offset ByteOffset, valueId ValueId, valueType StdType, module StdModule, defs StdValueDefs, blockRef BlockRef, position BodyOpPosition, uses ScaledIndexFolds, compareFusion CompareFusionCensus)
+		if not isMemoryDestinationWord(valueType) or uses.valueHasASecondReader(valueId) 'notTheStepsAlone'
+			return
+		end 'notTheStepsAlone'
+
+		if uses.isIndexedAddress(valueId) 'anAddressFoldsTheStep'
+			return
+		end 'anAddressFoldsTheStep'
+
+		// The instruction names a base register, which an address the access carries in its SIB byte has not got.
+		if uses.fusesIntoMemoryOp(addrId) 'noBaseRegister'
+			return
+		end 'noBaseRegister'
+
+		if compareFusion.blockFusesCompare(blockRef) and position > compareFusion.fusedComparePositionOf(blockRef) 'insideTheFusedWindow'
+			return
+		end 'insideTheFusedWindow'
+
+		if not self.stepDefining(valueId, module: module, defs: defs) 'notAStep'
+			return
+		end 'notAStep'
+
+		// The load questions below refill `load` and never `step`, so the step's operands are read after them.
+		if self.loadIsOfTheStoredWord(self.step.lhs, addrId: addrId, offset: offset, module: module, defs: defs, uses: uses) 'wordOnTheLeft'
+			self.retire(valueId, loadId: self.step.lhs, loadAddrId: self.load.addrId, storeAddrId: addrId, uses: uses)
+			return
+		end 'wordOnTheLeft'
+
+		if self.step.isBinaryArithImm() or not binOpcodeIsCommutative(self.step.opcode) 'noOtherSpelling'
+			return
+		end 'noOtherSpelling'
+
+		if self.loadIsOfTheStoredWord(self.step.rhs, addrId: addrId, offset: offset, module: module, defs: defs, uses: uses) 'wordOnTheRight'
+			self.loadsOnTheRight.insert(valueId)
+			self.retire(valueId, loadId: self.step.rhs, loadAddrId: self.load.addrId, storeAddrId: addrId, uses: uses)
+		end 'wordOnTheRight'
+	end 'foldAtStore'
+
+	// Whether `valueId` is a qword `binOp`/`binOpImm` whose opcode an instruction carries, filling `step`.
+	function stepDefining(valueId ValueId, module StdModule, defs StdValueDefs) returns bool
+		if not defs.arithDefining(valueId, module: module, arith: self.step) 'notArithmetic'
+			return false
+		end 'notArithmetic'
+
+		if not self.step.isBinaryArith() and not self.step.isBinaryArithImm() 'notABinaryStep'
+			return false
+		end 'notABinaryStep'
+
+		return isMemoryDestinationWord(self.step.operandType) and memoryDestinationAluOf(self.step.opcode, alu: self.aluMatch)
+	end 'stepDefining'
+
+	// Whether `loadId` reads the word the store writes, filling `load`. `unwrittenLoads` is what makes
+	// condition 4 exact: a load leaves it at the first op after it that may write memory, and at its block's end.
+	function loadIsOfTheStoredWord(loadId ValueId, addrId ValueId, offset ByteOffset, module StdModule, defs StdValueDefs, uses ScaledIndexFolds) returns bool
+		if not self.unwrittenLoads.contains(loadId) or uses.valueHasASecondReader(loadId) 'notTheStepsAlone'
+			return false
+		end 'notTheStepsAlone'
+
+		if not defs.loadDefining(loadId, module: module, load: self.load) 'notALoad'
+			panic("MemoryDestinationFolds.loadIsOfTheStoredWord: {loadId} is in `unwrittenLoads`, which only a `loadIndirect` inserts into, yet no load defines it")
+		end 'notALoad'
+
+		if not isMemoryDestinationWord(self.load.valueType) or self.load.offset != offset 'anotherWord'
+			return false
+		end 'anotherWord'
+
+		return addressesAgree(self.load.addrId, storeAddrId: addrId, module: module, defs: defs)
+	end 'loadIsOfTheStoredWord'
+
+	// A load address that is not the store's is a second `globalAddr` of the label, dead once its load is.
+	function retire(valueId ValueId, loadId ValueId, loadAddrId ValueId, storeAddrId ValueId, uses ScaledIndexFolds)
+		self.foldedSteps.insert(valueId)
+		self.retiredLoads.insert(loadId)
+
+		if loadAddrId != storeAddrId and not uses.valueHasASecondReader(loadAddrId) 'readOnlyByTheLoad'
+			self.retiredAddresses.insert(loadAddrId)
+		end 'readOnlyByTheLoad'
+	end 'retire'
+end 'MemoryDestinationFolds'
+
+function addressesAgree(loadAddrId ValueId, storeAddrId ValueId, module StdModule, defs StdValueDefs) returns bool
+	if loadAddrId == storeAddrId 'oneValue'
+		return true
+	end 'oneValue'
+
+	if not namesAGlobalLabel(loadAddrId, module: module, defs: defs) or not namesAGlobalLabel(storeAddrId, module: module, defs: defs) 'notTwoGlobals'
+		return false
+	end 'notTwoGlobals'
+
+	return stdOpGlobalLabel(module.getOp(defs.definingOp(loadAddrId))).equals(stdOpGlobalLabel(module.getOp(defs.definingOp(storeAddrId))))
+end 'addressesAgree'
+
+function namesAGlobalLabel(valueId ValueId, module StdModule, defs StdValueDefs) returns bool
+	return defs.isDefinedByAnOp(valueId) and stdOpNamesAGlobalLabel(module.getOp(defs.definingOp(valueId)))
+end 'namesAGlobalLabel'
+
+// The fused instruction's one operand size is a qword, so each of the three must be exactly that wide; a
+// float never rides the integer ALU.
+function isMemoryDestinationWord(t StdType) returns bool
+	return not stdTypeIsFloat(t) and stdTypeStorageBytes(t) == accessWidthBytes(X64AccessWidth.word64) as BytePos
+end 'isMemoryDestinationWord'
 
 // Operand `index` of an `osNetpoll`, as the isels carry them: the op's five in order.
 export function netpollOperand(operands ValueIdArray, index ParamCount) returns ValueId

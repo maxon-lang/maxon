@@ -1829,6 +1829,10 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffse
 		// differ only in an opcode-word field.
 		arm64Smulh(dest, lhs, rhs) then emitArm64Rrr(code, opcode: Arm64OpSmulh, rd: arm64GprField(dest), rn: arm64GprField(lhs), rm: arm64GprField(rhs))
 		covInc(pointId) then arm64EmitCovInc(code, rdataRelocs: rdataRelocs, covOffsets: covOffsets, pointId: pointId)
+
+		// AArch64 is load/store: no ALU instruction takes a memory destination, so its isel never selects one.
+		x64AluBaseDispReg or
+			x64AluBaseDispImm32 then panic("emitArm64TargetOp: an x64 memory-destination read-modify-write reached the arm64 encoder — AArch64 has no such instruction, and `StdToArm64Conversion` lowers the step as a load, an ALU op and a store")
 	end 'emit'
 end 'emitArm64TargetOp'
 

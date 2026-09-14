@@ -349,7 +349,7 @@ export let GtOffThreadAllocBytes = GtOffThreadFrees + PointerFieldBytes
 // the counter of the OS thread it is on PLUS this offset, and every switch that can move it
 // (`emitGtSwitchAway`) reads the clock on both sides and folds the difference in here, so the clock stands
 // still while the thread is switched out and never runs backwards. Only a program that reads the clock
-// (`IrModule.usesThreadCpuTicks`) pays for the two reads. Written only by the thread itself.
+// (`GtKeepsCpuClockLabel`) pays for the two reads. Written only by the thread itself.
 let GtOffCpuOffset = GtOffThreadAllocBytes + PointerFieldBytes
 
 // ⭐⭐ **1 FOR `main`'s THREAD, 0 FOR EVERY OTHER.** Stamped by `__gt_spawn_main`; read by `__gt_runner_done`,
@@ -1562,6 +1562,14 @@ let GtStackBytesCountLabel = b"__gt_stack_bytes_count"
 let GtSeedSumSeenLabel = b"__gt_seed_sum_seen"
 let GtSeedCountSeenLabel = b"__gt_seed_count_seen"
 
+// ⭐⭐ **WHETHER A PARK KEEPS THE GREEN THREAD's CPU CLOCK (`GtOffCpuOffset`).** A RUN-TIME word rather than a
+// build-time fork of `__gt_park`, so the park's body is one function of nothing; the program's answer rides
+// the word's SEED, `GtCpuClockKept` exactly where the program reads `__Builtins.threadCpuTicks()`. Nothing
+// writes it after the image is loaded.
+let GtKeepsCpuClockLabel = b"__gt_keeps_cpu_clock"
+let GtCpuClockUnkept = 0 as ParsedInt
+let GtCpuClockKept = 1 as ParsedInt
+
 // The timer store: the live entry COUNT and the base address of the `__slab_alloc`'d heap region (both 0
 // until `__gt_init` allocates the region and seeds the base). The count is read under the lock, by the store's
 // own walks and by `__sched_checkdead` (`emitGtStoresPending`).
@@ -2101,7 +2109,7 @@ end 'requireQuotableSharedSpellings'
 // Empty on a target with no green-thread stack: the seed of `GtSeedBytesLabel` is that stack's size,
 // which `gtSeedStackBytes` refuses to compute where the facility is denied, and no body there can name
 // a slot anyway.
-export function gtRuntimeGlobals(target Target) returns DataSectionEntryArray
+export function gtRuntimeGlobals(usage RuntimeUsage, target Target) returns DataSectionEntryArray
 	var out = DataSectionEntryArray.create()
 
 	if not targetProvidesFacility(target, facility: HostFacility.greenThreads) 'noGreenThreadStack'
@@ -2131,6 +2139,7 @@ export function gtRuntimeGlobals(target Target) returns DataSectionEntryArray
 	pushRuntimeGlobal(out, label: GtStackBytesCountLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: GtSeedSumSeenLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: GtSeedCountSeenLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: GtKeepsCpuClockLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked, seed: GtCpuClockKept if usage.usesThreadCpuTicks else GtCpuClockUnkept)
 	return out
 end 'gtRuntimeGlobals'
 
@@ -2158,8 +2167,8 @@ end 'ioRuntimeGlobals'
 // readable. Both arms are live; what differs is WHAT the thread is waiting on.
 //
 // ⚠ **THIS IS NOT `usesChildPipes`, AND CONFLATING THE TWO IS WHAT THE SPLIT FIXES.** `usesChildPipes` asks *"does this
-// module read a pipe?"* and gates the reader itself (`__gt_io_read`, `__gt_subp_yield_read`); this asks
-// *"does a read on this target complete somewhere else?"*, and only the second one is about the target.
+// program read a pipe?"*; this asks *"does a read on this target complete somewhere else?"*, and only the
+// second one is about the target.
 export enum IoCompletionShape
 	// Windows: the read is handed to a completion port and finishes as a packet on it.
 	completionPort
@@ -2179,7 +2188,7 @@ export function ioCompletionShape(target Target) returns IoCompletionShape
 	end 'os'
 end 'ioCompletionShape'
 
-export function installGtRuntime(module StdModule, globalData GlobalDataTable, asyncTrace bool, usesChildPipes bool, usesStreaming bool, target Target, streamState EnumLayout)
+export function installGtRuntime(module StdModule, globalData GlobalDataTable, asyncTrace bool, target Target, streamState EnumLayout)
 	// The first function index this install owns — the range `assertCompletedPublicationIsOrdered` checks at
 	// the end. Taken from the module rather than assumed to be zero: the runtime installs run after the whole
 	// user program is already lowered into this module.
@@ -2260,16 +2269,12 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	// whose spawn primitive takes a vector. Beside its callers, for the reason its own header carries.
 	installSubpShellCommandBuilder(module, target: target)
 
-	if usesChildPipes 'io'
-		buildSubpYieldRead(module, target: target)
-		buildGtIoRead(module, commandShape: subprocessCommandShape(target))
-	end 'io'
-
-	// The streaming subprocess API rides the same pipe substrate (`usesStreaming` implies `usesChildPipes`), so
-	// `__gt_subp_yield_read` is already installed above; only the API surface is added here.
-	if usesStreaming 'streaming'
-		installSubpRuntime(module, target: target, streamState: streamState)
-	end 'streaming'
+	// The pipe readers and the whole child-process API, for the spawn doors' reason: the only edges into them
+	// are calls lowered from the program's own source, so `DeadFunctionElimination` keeps exactly the ones it
+	// reaches, and an install gate here would be a second reachability analysis.
+	buildSubpYieldRead(module, target: target)
+	buildGtIoRead(module, commandShape: subprocessCommandShape(target))
+	installSubpRuntime(module, target: target, streamState: streamState)
 
 	// ⭐ **THE MAILBOX RIDES `usesGt` EXACTLY AS THE SCHEDULER DOES, AND FOR THE SAME REASON: there is no
 	// program that wants one without the other.** `__svc_spawn` calls `__gt_spawn_green` and every mailbox
@@ -5330,29 +5335,35 @@ function buildGtPark(module StdModule)
 	emitStoreField(module, block: entry, record: selfGt, offset: GtOffParkKind, value: kind)
 	emitStoreField(module, block: entry, record: selfGt, offset: GtOffParkArg, value: arg)
 	let waiter = emitLoadField(module, block: entry, record: selfGt, offset: GtOffWaiter, ids: ids)
-	emitGtSwitchAway(module, block: entry, selfGt: selfGt, to: waiter, ids: ids)
-	module.setTerminator(entry, op: StdOp.retVoid)
+	emitGtSwitchAway(module, func: func, cur: entry, selfGt: selfGt, to: waiter, ids: ids)
 
 	module.functions.push(func)
 end 'buildGtPark'
 
-// Switch from the running green thread `selfGt` to the scheduler context `to`, from a park or a yield it will
-// resume from — on whichever machine runs it next — keeping its CPU clock continuous across the gap
-// (`GtOffCpuOffset`). The two clock reads bracket the switch as tightly as they can.
-function emitGtSwitchAway(module StdModule, block IrBlock, selfGt ValueId, to ValueId, ids ValueMinter)
-	if not module.usesThreadCpuTicks 'noClockToKeep'
-		module.appendOp(block, op: StdOp.call(ids.mint(), callee: GtContextSwitchName, args: twoArgs(selfGt, second: to)))
-		return
-	end 'noClockToKeep'
+// Switch from the running green thread `selfGt` to the scheduler context `to`, from a park it will resume from
+// — on whichever machine runs it next — and return. Where the program reads its thread CPU clock
+// (`GtKeepsCpuClockLabel`) the switch keeps that clock continuous across the gap (`GtOffCpuOffset`), with the
+// two reads bracketing it as tightly as they can; elsewhere the switch is all there is.
+function emitGtSwitchAway(module StdModule, func IrFunction, cur IrBlock, selfGt ValueId, to ValueId, ids ValueMinter)
+	var clockKept = module.addBlock(func, label: b"parkclock", heat: BlockHeat.normal)
+	var switchOnly = module.addBlock(func, label: b"parknoclock", heat: BlockHeat.normal)
+
+	let unkept = emitConst(module, block: cur, value: GtCpuClockUnkept, ids: ids)
+	let keeps = emitCmp(module, block: cur, a: emitLoadGlobalWord(module, block: cur, label: GtKeepsCpuClockLabel, ids: ids), b: unkept, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(keeps, thenBlockId: clockKept.id, elseBlockId: switchOnly.id))
+
+	module.appendOp(switchOnly, op: StdOp.call(ids.mint(), callee: GtContextSwitchName, args: twoArgs(selfGt, second: to)))
+	module.setTerminator(switchOnly, op: StdOp.retVoid)
 
 	let before = ids.mint()
-	module.appendOp(block, op: StdOp.call(before, callee: ThreadCpuTicksName, args: ValueIdArray.create()))
-	module.appendOp(block, op: StdOp.call(ids.mint(), callee: GtContextSwitchName, args: twoArgs(selfGt, second: to)))
+	module.appendOp(clockKept, op: StdOp.call(before, callee: ThreadCpuTicksName, args: ValueIdArray.create()))
+	module.appendOp(clockKept, op: StdOp.call(ids.mint(), callee: GtContextSwitchName, args: twoArgs(selfGt, second: to)))
 	let after = ids.mint()
-	module.appendOp(block, op: StdOp.call(after, callee: ThreadCpuTicksName, args: ValueIdArray.create()))
-	let gap = emitBin(module, block: block, a: before, b: after, opcode: StdBinOpcode.sub, ids: ids)
-	let offset = emitLoadField(module, block: block, record: selfGt, offset: GtOffCpuOffset, ids: ids)
-	emitStoreField(module, block: block, record: selfGt, offset: GtOffCpuOffset, value: emitBin(module, block: block, a: offset, b: gap, opcode: StdBinOpcode.add, ids: ids))
+	module.appendOp(clockKept, op: StdOp.call(after, callee: ThreadCpuTicksName, args: ValueIdArray.create()))
+	let gap = emitBin(module, block: clockKept, a: before, b: after, opcode: StdBinOpcode.sub, ids: ids)
+	let offset = emitLoadField(module, block: clockKept, record: selfGt, offset: GtOffCpuOffset, ids: ids)
+	emitStoreField(module, block: clockKept, record: selfGt, offset: GtOffCpuOffset, value: emitBin(module, block: clockKept, a: offset, b: gap, opcode: StdBinOpcode.add, ids: ids))
+	module.setTerminator(clockKept, op: StdOp.retVoid)
 end 'emitGtSwitchAway'
 
 // The running green thread's CPU-clock offset (`GtOffCpuOffset`). EXPORTED for its one reader,
@@ -6833,9 +6844,9 @@ export let SubpWaitName = b"__gt_subp_wait"
 export let SubpReleaseName = b"__gt_subp_release"
 let SubpStrFromBytesName = b"__gt_subp_str_from_bytes"
 
-// The prefix `scanRuntimeUsage` matches to turn on the whole subprocess runtime for any `__gt_subp_*` call,
-// and the one `TargetFacilities.calleeHostFacility` maps onto `HostFacility.subprocess`, so a target that
-// cannot lower it refuses the call with E3104.
+// The prefix `recordCallUsage` credits with what a reached child-process body needs, and the one
+// `TargetFacilities.calleeHostFacility` maps onto `HostFacility.subprocess`, so a target that cannot lower
+// it refuses the call with E3104.
 let SubpCalleePrefix = b"__gt_subp_"
 
 // ⭐ **IS THIS CALLEE A SUBPROCESS RUNTIME ENTRY?** THE one test, read by `scanRuntimeUsage` and by
@@ -8535,9 +8546,8 @@ function buildSubpRelease(module StdModule)
 	module.functions.push(func)
 end 'buildSubpRelease'
 
-// Install the streaming subprocess runtime. Called from `installGtRuntime` when `usesStreaming`,
-// which also implies `usesChildPipes` — so `buildSubpYieldRead` is installed under that bit alongside
-// `__gt_io_read`, and only the streaming API surface lives here.
+// The streaming subprocess API's surface. `__gt_subp_yield_read`, the read it rides, is built beside
+// `__gt_io_read` in `installGtRuntime`.
 function installSubpRuntime(module StdModule, target Target, streamState EnumLayout)
 	buildSubpStrFromBytes(module)
 	buildSubpSpawnCore(module, commandShape: subprocessCommandShape(target), streamState: streamState)

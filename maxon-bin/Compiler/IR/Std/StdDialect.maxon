@@ -715,8 +715,7 @@ export type StdOpMeta
 	//
 	// ⇒ **The values are held by REVIEW for every variant outside the arith band.**
 	// That is why each variant's value is argued at its own line rather than asserted.
-	// Five siblings are read NOWHERE (`role`, `isUnsupportedInInlineBody`, `isMemory`,
-	// `isStore`, `isCmp`); only `category`, `isCall` and `clobbersFlags` have a reader.
+	// One sibling, `isMemory`, is read nowhere.
 	//
 	// Declared PER VARIANT, which is the flat union's payoff: a CATEGORY-wide
 	// answer has no way to say a trapping op is impure, and an integer `div`
@@ -791,6 +790,12 @@ export type StdOpMeta
 	// must survive as metadata rather than being re-derived per target.
 	export let isCmp as bool
 end 'StdOpMeta'
+
+// ⭐ **WHETHER `op` MAY WRITE MEMORY** — a store, or a call, which may modify any location. The one
+// spelling of the question every pass asks before it lets a read stand for the location across `op`.
+export function stdOpMayWriteMemory(op StdOp) returns bool
+	return op.rawValue.isStore or op.rawValue.isCall
+end 'stdOpMayWriteMemory'
 
 // --- StdOp: the flat op union ---
 //
@@ -1266,7 +1271,11 @@ export union StdOp
 
 	// Write `valueId` as `valueType` bytes to `addrId + offset`. `isStore: true` (it writes
 	// memory, so it must order against every later load — the metadata contract's own words),
-	// `isPure: false`. APPENDED at the END of the memory band, after `loadIndirect`.
+	// `isPure: false`.
+	//
+	// ⚠ `clobbersFlags: false` is its `mov`'s. x64 may select a flag-writing `add [mem]` for it
+	// (`MemoryDestinationFolds`), and never past a fused compare in the same block — which is what
+	// keeps this declaration the one the compare/branch fusion can read.
 	storeIndirect(addrId ValueId, offset ByteOffset, valueId ValueId, valueType StdType) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: false, clobbersFlags: false, isCmp: false}
 
 	// --- band: system — the allocator's page source ---
@@ -4323,31 +4332,42 @@ export type StdValueDefs
 	var opOf as OpIndexArray
 	var hasOp as BoolArray
 
+	// Scratch the walk refills per op and per function.
+	var def as StdDefinedValues
+	var liveOps as OpIndexArray
+
+	export static function create() returns StdValueDefs
+		return Self{opOf: OpIndexArray.create(), hasOp: BoolArray.create(), def: StdDefinedValues.create(), liveOps: OpIndexArray.create()}
+	end 'create'
+
 	export static function build(module StdModule, func IrFunction) returns StdValueDefs
-		let bound = nextFreeValueId(module, func: func)
-		var opOf = OpIndexArray.create()
-		opOf.resize(bound)
-		var hasOp = BoolArray.create()
-		hasOp.resize(bound)
-		var defs = Self{opOf: opOf, hasOp: hasOp}
-		var def = StdDefinedValues.create()
+		var defs = StdValueDefs.create()
+		defs.rebuild(module, func: func)
+		return defs
+	end 'build'
 
-		for opIdx in module.liveOpIndices(func) 'eachOp'
-			stdOpDefinedValue(module.getOp(opIdx), def: def)
+	// Re-index for `func`, keeping every column's capacity — what a scratch held across the functions of a
+	// compile calls, so it allocates only when a function outgrows every one before it.
+	export function rebuild(module StdModule, func IrFunction)
+		let bound = nextFreeValueId(module, func: func) as ElementIndex
+		self.opOf.refill(bound, value: 0)
+		self.hasOp.refill(bound, value: false)
+		module.collectLiveOpIndices(func, into: self.liveOps)
 
-			if def.definesNothing() 'noDef'
+		for opIdx in self.liveOps 'eachOp'
+			stdOpDefinedValue(module.getOp(opIdx), def: self.def)
+
+			if self.def.definesNothing() 'noDef'
 				continue
 			end 'noDef'
 
-			defs.record(def.first, opIdx: opIdx)
+			self.record(self.def.first, opIdx: opIdx)
 
-			if def.definesPair() 'twoDefs'
-				defs.record(def.second, opIdx: opIdx)
+			if self.def.definesPair() 'twoDefs'
+				self.record(self.def.second, opIdx: opIdx)
 			end 'twoDefs'
 		end 'eachOp'
-
-		return defs
-	end 'build'
+	end 'rebuild'
 
 	function record(valueId ValueId, opIdx OpIndex)
 		try self.opOf.set(valueId, value: opIdx) otherwise panic("StdValueDefs.record: value {valueId} is outside the column sized by nextFreeValueId")
@@ -4376,6 +4396,27 @@ export type StdValueDefs
 
 		return try self.opOf.get(valueId) otherwise panic("StdValueDefs.definingOp: opOf.get OOB at {valueId}")
 	end 'definingOp'
+
+	// Whether an op defines `valueId` and it is a `loadIndirect`, filling `load`. The module is handed in
+	// rather than held, so a scratch kept across a compile's units keeps no unit alive.
+	export function loadDefining(valueId ValueId, module StdModule, load StdLoadOperands) returns bool
+		if not self.isDefinedByAnOp(valueId) 'notAnOpResult'
+			return false
+		end 'notAnOpResult'
+
+		classifyLoadOperands(module.getOp(self.definingOp(valueId)), load: load)
+		return load.isLoad()
+	end 'loadDefining'
+
+	// Whether an op defines `valueId` and it is in the arithmetic band, filling `arith`.
+	export function arithDefining(valueId ValueId, module StdModule, arith StdArithOperands) returns bool
+		if not self.isDefinedByAnOp(valueId) 'notAnOpResult'
+			return false
+		end 'notAnOpResult'
+
+		classifyArithOperands(module.getOp(self.definingOp(valueId)), operands: arith)
+		return arith.isArithmetic()
+	end 'arithDefining'
 end 'StdValueDefs'
 
 // The answer a shape recogniser gives when a value is not defined the way the emitter it reads back
@@ -4401,24 +4442,14 @@ export type StdShapeReader
 		return Self{module: module, defs: StdValueDefs.build(module, func: func), arith: StdArithOperands.create(), load: StdLoadOperands.create()}
 	end 'create'
 
-	// Whether an op defines `valueId` and it is a `loadIndirect`, filling `load`.
+	// `StdValueDefs.loadDefining` over this reader's module, filling `load`.
 	export function loadDefining(valueId ValueId) returns bool
-		if not self.defs.isDefinedByAnOp(valueId) 'notAnOpResult'
-			return false
-		end 'notAnOpResult'
-
-		classifyLoadOperands(self.module.getOp(self.defs.definingOp(valueId)), load: self.load)
-		return self.load.isLoad()
+		return self.defs.loadDefining(valueId, module: self.module, load: self.load)
 	end 'loadDefining'
 
-	// Whether an op defines `valueId` and it is in the arithmetic band, filling `arith`.
+	// `StdValueDefs.arithDefining` over this reader's module, filling `arith`.
 	export function arithDefining(valueId ValueId) returns bool
-		if not self.defs.isDefinedByAnOp(valueId) 'notAnOpResult'
-			return false
-		end 'notAnOpResult'
-
-		classifyArithOperands(self.module.getOp(self.defs.definingOp(valueId)), operands: self.arith)
-		return self.arith.isArithmetic()
+		return self.defs.arithDefining(valueId, module: self.module, arith: self.arith)
 	end 'arithDefining'
 
 	// Whether `valueId` is `cmpImm <pred> x, imm` — a runtime guard's compare against a constant once

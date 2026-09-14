@@ -2117,7 +2117,7 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 		chunks.push(buildArm64DarwinWallClockChunk())
 	end 'wallClock'
 
-	if usage.usesThreadCpuTicks 'threadCpu'
+	if threadCpuTicksShips(usage) 'threadCpu'
 		chunks.push(buildArm64DarwinThreadCpuChunk())
 	end 'threadCpu'
 
@@ -2189,9 +2189,10 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 		chunks.push(buildArm64PosixProcExitCodeChunk())
 	end 'schedulerClocks'
 
-	// ⭐ **THE PIPE SURFACE, WHICH REALLY IS NARROWER.** `usesChildPipes` is the bit `installGtRuntime` builds the
-	// pipe substrate under (`__gt_io_read` and `__gt_subp_yield_read`), and `usesStreaming` implies it — so a
-	// program that spawns a child WITHOUT reading from it pays for none of these. `osPipePeek` and
+	// ⭐ **THE PIPE SURFACE, WHICH REALLY IS NARROWER.** `usesChildPipes` says the program reaches a pipe reader
+	// (`__gt_io_read` or the `__gt_subp_*` family). Those Std bodies ship in every scheduler program and survive
+	// only where reached, but no dead-function elimination sees a chunk here, so these ride the bit — and a
+	// program that spawns a child WITHOUT reading from it pays for none of them. `osPipePeek` and
 	// `osProcessTerminate` have producers only inside that band.
 	if usage.usesChildPipes 'childPipes'
 		chunks.push(buildArm64PosixPipeChunk(PosixHostCall.importCall(OsImportSlot.pipe), flags: DarwinPipeNoFlags))

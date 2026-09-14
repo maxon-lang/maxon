@@ -309,6 +309,10 @@ function resolveArm64IncomingArgs(module TargetModule, func IrFunction, frameSiz
 				// A coverage counter names no operand and no coloured register: it reaches its address through
 				// the reserved x16/x17 pair and a stack-borrowed word it gives straight back.
 				covInc then break 'o'
+
+				// x64-only, and it names no frame fact — a coloured base and a displacement off it.
+				x64AluBaseDispReg or
+					x64AluBaseDispImm32 then break 'o'
 			end 'o'
 		end 'eachOp'
 
@@ -629,6 +633,10 @@ function arm64OpPhysicalRegs(op TargetOp, buf OperandList) returns RegMask
 		// A coverage counter names no operand, so the shared derivation answers 0 — the same route every
 		// arm here takes.
 		covInc gives arm64MaskFromOperands(op, buf: buf)
+
+		// x64-only, answered through the same derivation as the other x64 forms.
+		x64AluBaseDispReg or
+			x64AluBaseDispImm32 gives arm64MaskFromOperands(op, buf: buf)
 	end 'p'
 end 'arm64OpPhysicalRegs'
 
@@ -857,5 +865,9 @@ function blockEndsWithArm64Return(module TargetModule, block IrBlock) returns bo
 
 		// A coverage counter is a body op, never an `arm64Ret`.
 		covInc gives false
+
+		// x64-only body ops.
+		x64AluBaseDispReg or
+			x64AluBaseDispImm32 gives false
 	end 'check'
 end 'blockEndsWithArm64Return'

@@ -22,8 +22,8 @@
 // ══ RULE 1 — WHEN A LOAD IS INVARIANT: THE LOOP WRITES NOTHING ══
 //
 // **A load in a loop whose blocks contain no op that writes memory reads a location the loop cannot
-// change.** "Writes memory" is asked of the dialect as `isStore or isCall` — which is every op except
-// the arithmetic band, the pure ADDRESS ops, the branches, the RETURNS, `div`/`mod` and the two loads
+// change.** "Writes memory" is asked of the dialect as `stdOpMayWriteMemory` — which is every op except
+// the arithmetic band, the pure ADDRESS ops, the branches, the RETURNS, `div`/`mod` and the three reads
 // (the exact census is at `scanLoopEffects`, where it is measured rather than recalled) — so a loop
 // holding a call, a store, an atomic, an OS primitive or a `memFill` is refused outright and no load in
 // it moves.
@@ -358,7 +358,7 @@ end 'blockLeavesTheLoop'
 // What one loop's ops say about the two questions this pass asks of them, filled by ONE walk because
 // they are answered from the same two metadata flags and a second walk would read the same ops twice.
 type LoopEffects
-	// Any op declaring `isStore` or `isCall` — i.e. anything that can change a location. Rule 1.
+	// Any op that may write memory (`stdOpMayWriteMemory`) — anything that can change a location. Rule 1.
 	var writesMemory as bool
 
 	// Any op declaring `isCall`. Rule 3.
@@ -384,7 +384,7 @@ type LoopEffects
 	end 'admitsAnyHoist'
 
 	function note(op StdOp)
-		self.writesMemory = self.writesMemory or op.rawValue.isStore or op.rawValue.isCall
+		self.writesMemory = self.writesMemory or stdOpMayWriteMemory(op)
 		self.holdsACall = self.holdsACall or op.rawValue.isCall
 	end 'note'
 end 'LoopEffects'
@@ -392,17 +392,17 @@ end 'LoopEffects'
 // Fill `scratch.effects` from every op of the loop, asking the DIALECT's own metadata rather than a list
 // of op names inside this pass.
 //
-// ⭐ **RULE 1 — `isStore or isCall` IS EXACTLY "CAN CHANGE A LOCATION".** MEASURED against the union:
-// **20 of the 99 variants declare neither flag**, and every one of them is either pure
-// arithmetic (`const`, `binOp`, `unaryOp`, `cmp`, the two `Imm` forms), a pure ADDRESS (`globalAddr`,
-// `rdataAddr`, `funcAddr`, `stackRecordAddr`), a branch (`branch`, `condBranch`, `switch`), a RETURN
-// (`ret`, `retVoid`, `errorReturn`), a trapping division (`div`, `mod`) or a READ (`loadIndirect`,
+// ⭐ **RULE 1 — `stdOpMayWriteMemory` IS EXACTLY "CAN CHANGE A LOCATION".** MEASURED against the union:
+// every variant declaring neither `isStore` nor `isCall` is pure arithmetic (`const`, `binOp`,
+// `unaryOp`, `cmp`, the two `Imm` forms), a pure ADDRESS (`globalAddr`, `rdataAddr`, `funcAddr`,
+// `stackRecordAddr`), a branch (`branch`, `condBranch`, `switch`), a RETURN (`ret`, `retVoid`,
+// `errorReturn`), a trapping division (`div`, `mod`) or a READ (`loadIndirect`, `loadAcquire`,
 // `tlsSlotLoad`). None writes anything, so the test admits precisely the loops in which no location can
 // change.
 //
-// ⛔ **A CENSUS THAT NAMES ONLY THE IMPURE SEVEN IS WRONG** — it omits the thirteen pure variants and,
-// worse, tells a reader that a loop containing a `return` is refused here. It is not, and the reason it
-// is safe anyway is the paragraph below.
+// ⛔ **A CENSUS THAT NAMES ONLY THE IMPURE ONES IS WRONG** — it omits the pure variants and, worse, tells
+// a reader that a loop containing a `return` is refused here. It is not, and the reason it is safe anyway
+// is the paragraph below.
 //
 // ⭐⭐ **A `return` INSIDE THE LOOP IS SAFE, AND NOT BECAUSE THIS SCAN REFUSES IT.** A block ending in
 // `ret`/`retVoid`/`errorReturn` has NO CFG successors, so it cannot be on a path to a latch, so

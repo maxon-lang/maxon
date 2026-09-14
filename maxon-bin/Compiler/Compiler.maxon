@@ -1141,32 +1141,16 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// with no `__ds_init` to ever write the word it reads.
 	pipeline.stdModule.debugStream = buildCarriesDebugStream(project, usage: usage)
 
-	// ⭐ **AND THE SUBPROCESS BIT, AT THE SAME SEAM AND FOR THE SAME REASON.** The PE writer needs it for the
-	// optional trailing import band (`PeWriter.isOptionalTrailingImport`) — `PeekNamedPipe` and
-	// `TerminateProcess` are referenced by the attached-collect runtime and by nothing else, so a program
-	// that spawns no child must not import them.
-	//
-	// ⚠⚠ **IT MUST BE SET *AFTER* `pipeline.run()`, AND SETTING IT BEFORE WAS A MEASURED SEGFAULT.**
-	// `lowerMaxonToStd` REPLACES `pipeline.stdModule` with a fresh module (`PassPipeline.maxon:335`), so a
-	// flag written beside the `.data` declarations above lands on a module that is then thrown away — the
-	// backend then emitted `iatCall`s at slot indices past the end of an import table that had dropped the
-	// band, and the first `GetEnvironmentVariableA` jumped through garbage. `debugStream` sits here for
-	// exactly this reason and its header says so; the second flag needed the same seam, not the same
-	// paragraph one screen earlier.
-	pipeline.stdModule.usesSubprocess = usage.usesStreaming
-
-	// ⭐ **AND THE ws2_32 IMPORT DIRECTORY, ON THE SAME SEAM AND FOR THE SAME MEASURED REASON.** It gates a
-	// WHOLE DLL rather than a trailing band (see `IrModule.usesSockets`), and it must be written AFTER
-	// `pipeline.run()` for the paragraph above's reason: `lowerMaxonToStd` REPLACES `pipeline.stdModule`, so a
-	// flag set any earlier lands on a module that is thrown away — and the symptom is not a missing import but
-	// `iatCall`s at slot indices past the end of the table that was actually emitted.
+	// ⭐ **AND THE ws2_32 IMPORT DIRECTORY, ON THE SAME SEAM.** It gates a WHOLE DLL rather than a trailing
+	// band (see `IrModule.usesSockets`), and like every import flag below it must be written AFTER
+	// `pipeline.run()`: `lowerMaxonToStd` REPLACES `pipeline.stdModule`, so a flag set any earlier lands on a
+	// module that is thrown away — and the symptom is not a missing import but `iatCall`s at slot indices past
+	// the end of the table that was actually emitted.
 	pipeline.stdModule.usesSockets = usage.usesManagedSocket
 
-	// ⭐ **AND THE THIRD PRODUCER OF THE OPTIONAL TRAILING IMPORT BAND**, on the same seam and for the same
-	// measured reason as its two neighbours: `lowerMaxonToStd` REPLACES `pipeline.stdModule`, so a flag set
-	// any earlier lands on a module that is thrown away, and the symptom is `iatCall`s at slot indices past
-	// the end of the table that was actually emitted. `__cpu_count` needs `GetActiveProcessorCount`, which
-	// lives at the end of kernel32's run (see `isOptionalTrailingImport`).
+	// ⭐ **AND A PRODUCER OF THE OPTIONAL TRAILING IMPORT BAND**, on the same seam and for the same reason as
+	// its neighbours. `__cpu_count` needs `GetActiveProcessorCount`, which lives at the end of kernel32's run
+	// (see `isOptionalTrailingImport`).
 	pipeline.stdModule.usesCpuCount = usage.usesCpuCount
 
 	// ⭐ **AND ANOTHER PRODUCER OF THAT BAND**, on the same seam and for the same measured reason as its
@@ -1193,10 +1177,10 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// (`PeWriter.ImportGates.threadWalk`).
 	pipeline.stdModule.usesProcessSampling = usage.usesProcessSampling
 
-	// ⭐ **AND THE FOURTH PRODUCER OF THAT BAND**, on the same seam and for the same measured reason as its
-	// three neighbours. `__thread_cpu_ticks` needs `QueryThreadCycleTime`, which lives at the end of
-	// kernel32's run (see `isOptionalTrailingImport`).
-	pipeline.stdModule.usesThreadCpuTicks = usage.usesThreadCpuTicks
+	// ⭐ **AND ANOTHER PRODUCER OF THAT BAND**, on the same seam and for the same reason as its neighbours.
+	// `__thread_cpu_ticks` needs `QueryThreadCycleTime`, which lives at the end of kernel32's run (see
+	// `isOptionalTrailingImport`) — asked of where the body SHIPS, not of whether the program reads it.
+	pipeline.stdModule.carriesThreadCpuTicks = threadCpuTicksShips(usage)
 
 	// ⭐ **AND ANOTHER PRODUCER OF THAT BAND**, on the same seam and for the same measured reason as its
 	// neighbours. `__uptime_ms` needs `GetTickCount64`, which lives at the end of kernel32's run (see
@@ -1204,10 +1188,12 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// does not already answer for it.
 	pipeline.stdModule.usesUptimeClock = usage.usesUptimeClock
 
-	// ⭐ **AND THE FIFTH PRODUCER OF THAT BAND (G1)**, on the same seam and for the same measured reason as
-	// its four neighbours. The scheduler's per-P init reads `MAXON_MAX_PROCS` (`GetEnvironmentVariableA`) and
-	// the machine's processor count (`GetActiveProcessorCount`), and its `TlsAlloc`/`TlsSetValue` pair sits at
-	// the end of kernel32's run too — three separate reasons a green-thread image needs the whole band.
+	// ⭐ **AND ANOTHER PRODUCER OF THAT BAND**, on the same seam and for the same reason as its neighbours.
+	// The scheduler's per-P init reads `MAXON_MAX_PROCS` (`GetEnvironmentVariableA`) and the machine's
+	// processor count (`GetActiveProcessorCount`), and its `TlsAlloc`/`TlsSetValue` pair sits at the end of
+	// kernel32's run too — three separate reasons a green-thread image needs the whole band. It also answers
+	// for a spawning image: the child-process bodies that import `PeekNamedPipe`, `TerminateProcess` and the
+	// environment-block pair are installed only with the scheduler.
 	pipeline.stdModule.usesGt = usage.usesGt
 
 	// ⭐⭐ **AND WHETHER A RESERVATION IS FREE ON THIS TARGET**, which is what picks the slab arena's
@@ -1265,7 +1251,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	//
 	// ⛔ **THE INSTALLERS CANNOT SIMPLY MOVE ABOVE `pipeline.run` INSTEAD.** `scanRuntimeUsage` must walk the
 	// LOWERED module to decide which families to install at all, and the lowering happens inside that run —
-	// and three of the module flags above are MEASURED to require this seam (`usesSubprocess`' note).
+	// and the module flags above require this seam (`usesSockets`' note).
 	//
 	// ⚠ **ONE PASS CHANGES CHARACTER HERE AND IT IS `promoteStackRecords`.** It runs LAST of the pipeline's
 	// passes, so the band's `inlineLeaves` round is the first inliner run that can meet a `stackRecordAddr` —
@@ -1297,7 +1283,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// what runs over the appended band). Its two hand-assembled chunks (`__gt_context_switch`/`__gt_trampoline`) are appended separately at the
 	// Target tier (BackendDispatch), because they are bytes rather than Std ops.
 	if usage.usesGt 'installGt'
-		installGtRuntime(pipeline.stdModule, globalData: project.globalData, asyncTrace: project.asyncTrace, usesChildPipes: usage.usesChildPipes, usesStreaming: usage.usesStreaming, target: project.target, streamState: subprocessStreamStateEnum)
+		installGtRuntime(pipeline.stdModule, globalData: project.globalData, asyncTrace: project.asyncTrace, target: project.target, streamState: subprocessStreamStateEnum)
 	end 'installGt'
 
 	// The String runtime (`__print_string`/`__str_eq`) is installed the SAME way and for the same

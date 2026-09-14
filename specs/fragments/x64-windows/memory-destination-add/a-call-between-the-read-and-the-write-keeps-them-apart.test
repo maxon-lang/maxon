@@ -1,0 +1,100 @@
+// Test: a-call-between-the-read-and-the-write-keeps-them-apart
+typealias Depth = int(0 to 3)
+
+var slot = 5
+
+function reset(depth Depth)
+	if depth > 0 'deeper'
+		reset(depth - 1)
+		return
+	end 'deeper'
+
+	slot = 100
+end 'reset'
+
+function main() returns ExitCode
+	let seen = slot
+	reset(3)
+	slot = seen + 1
+	return slot
+end 'main'
+---
+ExitCode: 6
+---
+data {
+  __data_slot@0 = i64 5
+  __mrt_console_probe_stdin@8 = i8 0
+  __mrt_console_probe_stdout@9 = i8 0
+  __mrt_console_probe_stderr@10 = i8 0
+}
+
+func @reset {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rcx, 3
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc lessEqual, ifcont
+  deeper:
+    x64.leaRegRegImm32 rcx, rcx, -1
+    x64.callDirect reset
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rax, 100
+    x64.leaRegGlobal rcx, __data_slot
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-call-between-the-read-and-the-write-keeps-them-apart.test:6: Range check failed: value outside typealias 'Depth'\x0a"
+    x64.callDirect mrt_panic
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.leaRegGlobal rax, __data_slot
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.movRegImm32 rcx, 3
+    x64.callDirect reset
+    x64.leaRegRegImm32 rax, rbx, 1
+    x64.leaRegGlobal rcx, __data_slot
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.leaRegGlobal rax, __data_slot
+    x64.loadRegBaseDisp.word64 r8, [rax + 0]
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-call-between-the-read-and-the-write-keeps-them-apart.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

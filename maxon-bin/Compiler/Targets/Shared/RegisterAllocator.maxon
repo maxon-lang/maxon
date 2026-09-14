@@ -1900,6 +1900,10 @@ function collectOpHints(op TargetOp, hints ColorHints)
 
 		// A coverage counter names no register at all, so there is nothing to hint.
 		covInc then break 'hint'
+
+		// A read-modify-write of memory defines no register, so there is no move to coalesce.
+		x64AluBaseDispReg or
+			x64AluBaseDispImm32 then break 'hint'
 	end 'hint'
 end 'collectOpHints'
 
@@ -3008,6 +3012,8 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		arm64StoreRelease(base, src, width) then return TargetOp.arm64StoreRelease(colorVRegWith(base, alloc: alloc), src: colorVRegWith(src, alloc: alloc), width: width)
 		arm64Smulh(dest, lhs, rhs) then return TargetOp.arm64Smulh(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
 		covInc(pointId) then return TargetOp.covInc(pointId)
+		x64AluBaseDispReg(base, disp, src, alu) then return TargetOp.x64AluBaseDispReg(colorVRegWith(base, alloc: alloc), disp: disp, src: colorVRegWith(src, alloc: alloc), alu: alu)
+		x64AluBaseDispImm32(base, disp, imm, alu) then return TargetOp.x64AluBaseDispImm32(colorVRegWith(base, alloc: alloc), disp: disp, imm: imm, alu: alu)
 	end 'rewrite'
 end 'colorTargetOp'
 

@@ -987,6 +987,8 @@ function opIsArm64Band(op TargetOp) returns bool
 		// so `true` here would make a pure-x64 module holding one report as arm64 and print every op in it
 		// against the wrong register file.
 		covInc gives false
+		x64AluBaseDispReg or
+			x64AluBaseDispImm32 gives false
 	end 'p'
 end 'opIsArm64Band'
 
@@ -1261,6 +1263,10 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalD
 		arm64StoreRelease(base, src, width) gives "stlr.{accessWidthName(width)} [{arm64VregName(base)}], {arm64VregName(src)}"
 		arm64Smulh(dest, lhs, rhs) gives "smulh {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
 		covInc(pointId) gives "covInc {pointId}"
+
+		// Rendered as the word it rewrites, so the step and its address read at a glance in a golden.
+		x64AluBaseDispReg(base, disp, src, alu) gives "aluBaseDispReg.{alu.name} [{vregName(base)} + {disp}], {vregName(src)}"
+		x64AluBaseDispImm32(base, disp, imm, alu) gives "aluBaseDispImm32.{alu.name} [{vregName(base)} + {disp}], {imm}"
 	end 'op'
 end 'formatTargetOp'
 

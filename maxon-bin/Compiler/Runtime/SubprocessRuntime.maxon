@@ -2920,8 +2920,7 @@ function emitSubpBuildCandidate(module StdModule, func IrFunction, ids ValueMint
 end 'emitSubpBuildCandidate'
 
 // Install the attached-subprocess runtime. Called from `installSubpRuntime` — the streaming half's installer —
-// because the two halves share one handle table, one spawn core and one release, and a program that reaches
-// either reaches both through the same `__gt_subp_` prefix scan.
+// because the two halves share one handle table, one spawn core and one release.
 export function installSubprocessRuntime(module StdModule, target Target)
 	// ⭐ **THE ONE PLACE THE SHAPE IS ASKED.** Each arm builds a complete body under the SAME entry-point
 	// name, so every caller below is written once and none of them knows there are two.
@@ -2961,11 +2960,9 @@ export function installSubprocessRuntime(module StdModule, target Target)
 	buildSubpResolvePath(module, shape: pathSearchShape(target))
 end 'installSubprocessRuntime'
 
-// ⭐ **THE SHELL WRAPPER IS INSTALLED ONE TIER UP, WITH `__gt_process_run`, AND NOT HERE.** Its callers are
-// `__gt_process_run` and the one-shot read probe, which `installGtRuntime` builds for every green-thread
-// program — where the ATTACHED family this function installs rides `usesStreaming`. Building it here would
-// leave `runProcess(cmd)` branching to a symbol nothing laid out, which is a link failure rather than a
-// diagnostic (MEASURED, as `bl to unknown function '__gt_subp_shell_command'`).
+// The shell wrapper, built by `installGtRuntime` beside its callers — `__gt_process_run` and the one-shot
+// read probe — rather than with the attached family above, so the image lays it out next to the code that
+// calls it.
 export function installSubpShellCommandBuilder(module StdModule, target Target)
 	match subprocessCommandShape(target) 'shape'
 		commandLine then break 'shape'

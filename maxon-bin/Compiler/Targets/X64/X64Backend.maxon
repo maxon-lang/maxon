@@ -731,9 +731,8 @@ export function encodeGrp1RegImm32(code ByteArray, ext MachineWord, reg X64Regis
 	writeImm32Signed(code, value: imm)
 end 'encodeGrp1RegImm32'
 
-// The same GROUP-1 immediate forms on a 64-bit MEMORY operand — `REX.W 81 /ext [base + disp], id`. The GT stack
-// guard's cold path compares its guard word against the preemption request with it, which leaves every register
-// the guard does not already clobber untouched.
+// The same GROUP-1 immediate forms on a 64-bit MEMORY operand — `REX.W 81 /ext [base + disp], id`, which names
+// no register but its base.
 export function encodeGrp1BaseDispImm32(code ByteArray, ext MachineWord, base X64Register, disp Imm32, imm Imm32)
 	encodeModRmExtBaseDisp(code, opcode: OpcodeGrp1Imm32, ext: ext, base: base, disp: disp, wide: true)
 	writeImm32Signed(code, value: imm)
@@ -1228,21 +1227,21 @@ export function encodeCmpRegBaseDisp(code ByteArray, destReg X64Register, base X
 	encodeModRmBaseDisp(code, twoByteEscape: false, opcode: OpcodeCmpRegRm, regField: destReg, base: base, disp: disp, wide: true)
 end 'encodeCmpRegBaseDisp'
 
-// ⭐⭐ **`lock <op> [base + disp], reg` — `encodeLockedMemReg`'s DISPLACED TWIN, and the displacement is the
-// whole difference between them.** That one serves `StdOp.atomicCas`/`atomicRmw`, whose operand is a bare
-// ADDRESS (`AtomicWordDisp` is 0, because those ops carry no field offset at the Std tier). The syscall
-// bracket (`X64GtRuntime.emitGtEnterSyscall`/`emitGtExitSyscall`) names a FIELD of the M struct from
-// hand-assembly, and flattening the offset would cost a `lea` on the hottest bracketed path there is.
+// ⭐⭐ **`lock <op> [base + disp], reg` — every locked read-modify-write the compiler emits.** The IR atomics
+// (`x64LockCmpxchg`/`x64LockXadd`/`x64LockAdd`) name a bare ADDRESS and pass `AtomicWordDisp`; hand-assembly
+// (the syscall bracket, the futex and signal words) names a FIELD, and flattening the offset would cost a `lea`
+// on the hottest bracketed path there is. `cmpxchg` and `xadd` live behind the two-byte escape and `add` does
+// not, which is the whole of `twoByteEscape`.
 //
-// ⛔ **THE PREFIX IS NOT OPTIONAL HERE AND IS NOT A PARAMETER.** `SchedRuntime.MOffSyscallState` has TWO
-// writers — the machine itself and `__sched_retake`'s compare-and-swap — so an unlocked read-modify-write
-// could lose the thief's mark and leave a machine believing it still owns a processor that has been handed to
-// somebody else. An encoder that could be asked for the unlocked form would be an encoder somebody could ask
-// wrongly; the unlocked `add r/m, r` has no caller in this compiler and is deliberately not spelled.
+// ⛔ **THE PREFIX IS NOT OPTIONAL HERE AND IS NOT A PARAMETER.** Without it `xadd`/`add` are read-modify-writes
+// another core can interleave with and `cmpxchg`'s compare-and-store is not one indivisible step —
+// `SchedRuntime.MOffSyscallState`, written by the machine and by `__sched_retake`'s compare-and-swap, would lose
+// the thief's mark. The UNLOCKED form is `x64AluBaseDispReg`, selected only for a plain `load → binOp → store`
+// `MemoryDestinationFolds` proved is one step, and it never comes through here.
 //
-// ⭐ It routes through `encodeModRmBaseDisp` for `encodeLockedMemReg`'s stated reason — the rsp/r12 SIB and
-// rbp/r13 zero-disp8 traps come for free, and an address register coloured into rbp would otherwise encode as
-// RIP-RELATIVE and read a constant out of the code stream.
+// ⭐ It routes through `encodeModRmBaseDisp`, which is what buys the rsp/r12 SIB and rbp/r13 zero-disp8 traps
+// for free — an address register coloured into rbp would otherwise encode as RIP-RELATIVE and read a constant
+// out of the code stream.
 export function encodeLockedRmwBaseDispReg(code ByteArray, twoByteEscape bool, opcode MachineWord, base X64Register, disp Imm32, reg X64Register)
 	code.push(LockPrefix)
 	encodeModRmBaseDisp(code, twoByteEscape: twoByteEscape, opcode: opcode, regField: reg, base: base, disp: disp, wide: true)
@@ -2027,29 +2026,6 @@ export function encodeX64Syscall(code ByteArray, number MachineWord)
 	code.push(OpcodeSyscallSecondByte)
 end 'encodeX64Syscall'
 
-// ==========================================================================
-// The atomics, and the Windows per-thread identity word
-// ==========================================================================
-
-// `lock <op> [addrReg], srcReg` — the ONE byte shape all three x64 atomics share: the LOCK prefix, then
-// an ordinary `r/m64, r64` memory form whose r/m is a bare `[base]`. `cmpxchg` and `xadd` live behind the
-// two-byte escape and `add` does not, which is the whole of `twoByteEscape`.
-//
-// ⭐ It goes through `encodeModRmBaseDisp` rather than assembling its own ModR/M, which is what buys the
-// rsp/r12 SIB and rbp/r13 zero-disp8 traps for free — an address operand coloured into rbp would
-// otherwise encode as RIP-RELATIVE and read a constant from the code stream instead of the word the
-// program named. A displacement of 0 is the only one these ops have: an atomic names an ADDRESS, and
-// `StdOp.atomicCas`/`atomicRmw` carry no field offset (unlike `loadIndirect`/`storeIndirect`).
-//
-// ⚠ **THE LOCK PREFIX IS NOT DECORATION AND IT IS NOT AN OPTIMIZATION TO DROP.** Without it `xadd`/`add`
-// are read-modify-write sequences another core can interleave with, and `cmpxchg`'s compare-and-store is
-// not one indivisible step. On a single-core machine the difference is invisible; the day multi-M lands it
-// is a lost counter or a lost queue node.
-function encodeLockedMemReg(code ByteArray, twoByteEscape bool, opcode MachineWord, addrReg X64Register, srcReg X64Register)
-	code.push(LockPrefix)
-	encodeModRmBaseDisp(code, twoByteEscape: twoByteEscape, opcode: opcode, regField: srcReg, base: addrReg, disp: AtomicWordDisp, wide: true)
-end 'encodeLockedMemReg'
-
 // Resolve a colored operand to its physical register. A virtual reg here is an
 // allocator bug (register allocation must run before emission).
 //
@@ -2365,12 +2341,12 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 		// The three locked memory forms and the TEB read. The CAS's comparand is NOT an operand here:
 		// x86 pins it to RAX, and the isel's `movRegReg rax, expected` put it there (see
 		// `TargetDialect.x64LockCmpxchg`'s implicit pair).
-		x64LockCmpxchg(addrReg, srcReg) then encodeLockedMemReg(code, twoByteEscape: true, opcode: OpcodeCmpxchgRmReg, addrReg: resolveGpr(addrReg), srcReg: resolveGpr(srcReg))
+		x64LockCmpxchg(addrReg, srcReg) then encodeLockedRmwBaseDispReg(code, twoByteEscape: true, opcode: OpcodeCmpxchgRmReg, base: resolveGpr(addrReg), disp: AtomicWordDisp, reg: resolveGpr(srcReg))
 
 		// `lock xadd`'s register operand is BOTH its addend and its result, so the byte shape names `dest` —
 		// which the reuse-def has already put in `src`'s register.
-		x64LockXadd(dest, _, addrReg) then encodeLockedMemReg(code, twoByteEscape: true, opcode: OpcodeXaddRmReg, addrReg: resolveGpr(addrReg), srcReg: resolveGpr(dest))
-		x64LockAdd(addrReg, srcReg) then encodeLockedMemReg(code, twoByteEscape: false, opcode: OpcodeAddRmReg, addrReg: resolveGpr(addrReg), srcReg: resolveGpr(srcReg))
+		x64LockXadd(dest, _, addrReg) then encodeLockedRmwBaseDispReg(code, twoByteEscape: true, opcode: OpcodeXaddRmReg, base: resolveGpr(addrReg), disp: AtomicWordDisp, reg: resolveGpr(dest))
+		x64LockAdd(addrReg, srcReg) then encodeLockedRmwBaseDispReg(code, twoByteEscape: false, opcode: OpcodeAddRmReg, base: resolveGpr(addrReg), disp: AtomicWordDisp, reg: resolveGpr(srcReg))
 
 		// The TEB self-pointer read IS `encodeMovRegGsAbs` at the self-pointer's offset — the SAME absolute
 		// GS form the GT context switch reads NT_TIB StackBase/StackLimit through, so the segment-addressing
@@ -2408,8 +2384,35 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 			arm64StoreRelease then panic("emitTargetOp: an arm64 `LDAR`/`STLR` reached the x64 encoder — x64 is TSO, so `StdToX64Conversion` lowers the ordered pair to the ordinary `mov` forms and never mints these")
 		arm64Smulh then panic("emitTargetOp: an arm64 `SMULH` reached the x64 encoder — x64 spells the high half of a signed product as the one-operand `imulHighReg`, which reads RAX and writes RDX:RAX")
 		covInc(pointId) then encodeCovInc(code, rdataRelocs: rdataRelocs, covOffsets: covOffsets, pointId: pointId)
+
+		// The unlocked read-modify-writes. Both forms reach `emitBaseDispModRmBits`, which answers the rsp/r12
+		// SIB and rbp/r13 disp8 traps.
+		x64AluBaseDispReg(base, disp, src, alu) then encodeModRmBaseDisp(code, twoByteEscape: false, opcode: memoryDestinationRmRegOpcode(alu), regField: resolveGpr(src), base: resolveGpr(base), disp: disp, wide: true)
+		x64AluBaseDispImm32(base, disp, imm, alu) then encodeGrp1BaseDispImm32(code, ext: memoryDestinationGrp1Ext(alu), base: resolveGpr(base), disp: disp, imm: imm)
 	end 'emit'
 end 'emitTargetOp'
+
+// The `r/m, r` opcode of a memory-destination step — the register is the SOURCE, the word the destination.
+function memoryDestinationRmRegOpcode(alu MemoryDestinationAlu) returns MachineWord
+	return match alu 'a'
+		add gives OpcodeAddRmReg
+		sub gives OpcodeSubRmReg
+		bitAnd gives OpcodeAndRmReg
+		bitOr gives OpcodeOrRmReg
+		bitXor gives OpcodeXorRmReg
+	end 'a'
+end 'memoryDestinationRmRegOpcode'
+
+// The group-1 `/ext` of the same step's immediate form.
+function memoryDestinationGrp1Ext(alu MemoryDestinationAlu) returns MachineWord
+	return match alu 'a'
+		add gives Grp1ExtAdd
+		sub gives Grp1ExtSub
+		bitAnd gives Grp1ExtAnd
+		bitOr gives Grp1ExtOr
+		bitXor gives Grp1ExtXor
+	end 'a'
+end 'memoryDestinationGrp1Ext'
 
 // ==========================================================================
 // The JCC erratum: no jump crosses or ends on a 32-byte boundary
@@ -2642,7 +2645,9 @@ function branchWindowRoleOf(op TargetOp) returns BranchWindowRole
 			arm64LoadAcquire or
 			arm64StoreRelease or
 			arm64Smulh or
-			covInc gives BranchWindowRole.other
+			covInc or
+			x64AluBaseDispReg or
+			x64AluBaseDispImm32 gives BranchWindowRole.other
 	end 'role'
 end 'branchWindowRoleOf'
 
@@ -3092,7 +3097,9 @@ function x64OpFrameBytes(op TargetOp) returns StackSize
 			arm64LoadAcquire or
 			arm64StoreRelease or
 			arm64Smulh or
-			covInc gives 0
+			covInc or
+			x64AluBaseDispReg or
+			x64AluBaseDispImm32 gives 0
 	end 'frame'
 end 'x64OpFrameBytes'
 

@@ -87,15 +87,11 @@ export type RuntimeUsage
 	export var usesGt as bool
 
 	// The program reads a CHILD's pipe — a YIELDING read (`__gt_io_read`, `__gt_subp_yield_read`). A SUPERSET of
-	// `usesGt` (a read parks the green thread, so it needs the whole scheduler), plus the pipe substrate: the
-	// readers themselves, the pipe-name uniquifier's `.data` slot, and each lane's host chunks for opening,
-	// peeking at and terminating a child. Set by `recordCallUsage` on a `__gt_io_read` or `__gt_subp_*` call.
+	// `usesGt` (a read parks the green thread, so it needs the whole scheduler). The readers are Std bodies
+	// every scheduler program carries and dead-function elimination keeps only where reached; what this bit
+	// gates is each lane's HAND-ASSEMBLED chunks for opening, peeking at and terminating a child, which no
+	// such elimination sees. Set by `recordCallUsage` on a `__gt_io_read` or `__gt_subp_*` call.
 	export var usesChildPipes as bool
-
-	// The STREAMING subprocess API — the handle table + `__gt_subp_*` functions. A SUPERSET of
-	// `usesChildPipes` (the line reader IS the yielding read), set by `recordCallUsage` on any `__gt_subp_*`
-	// call. Drives `installSubpRuntime` + the `__subp_table` `.data` slot.
-	export var usesStreaming as bool
 
 	// W35: the two stream writers, each with its OWN bit under this file's one-bit-per-entry-point
 	// discipline — a program that only prints must not carry the stderr writer, and neither declares any
@@ -457,12 +453,13 @@ export type RuntimeUsage
 	// `__thread_cpu_ticks`). Its own bit rather than `usesWallClock`'s: the two share a file and a shape but
 	// reach different Win32 imports, so a program that reads the calendar must not import
 	// `QueryThreadCycleTime` and a program that measures its own cost must not import
-	// `GetSystemTimeAsFileTime`. Like the wall clock it declares NO transitive dependency — one import call,
-	// one `.data` word, no heap and no scheduler.
+	// `GetSystemTimeAsFileTime`. Like the wall clock it declares NO transitive dependency — one import call
+	// into frame scratch, no heap and no scheduler.
 	//
-	// ⚠ **IT IS THE ONE BIT HERE THAT COSTS AN IMPORT BESIDE `usesCpuCount`**, and for the same reason it must
-	// stay its own: it is the sole producer of `QueryThreadCycleTime`, whose OPTIONAL TRAILING BAND
-	// (`PeWriter.isOptionalTrailingImport`) is emitted when it is set.
+	// ⚠ **IT ANSWERS "IS THE CLOCK READ", NOT "DOES THE BODY SHIP".** It seeds the word that tells every park
+	// to keep a green thread's clock (`GtRuntime.GtKeepsCpuClockLabel`); the park names the body in every
+	// scheduler program whatever the word holds, so the body, its host chunk and its import follow
+	// `ClockRuntime.threadCpuTicksShips` instead.
 	export var usesThreadCpuTicks as bool
 
 	// The program asks how long the MACHINE has been up (`__Builtins.tickCountMs` ⇒ `__uptime_ms`). Its own
@@ -554,7 +551,7 @@ export type RuntimeUsage
 	export var parksOnIo as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesChildPipes: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesManagedListener: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesBackgroundPriority: false, usesTerminalDetection: false, usesCpuCount: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSlabArena: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, parksOnIo: true}
+		return Self{usesHeap: false, usesGt: false, usesChildPipes: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesManagedListener: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesBackgroundPriority: false, usesTerminalDetection: false, usesCpuCount: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSlabArena: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, parksOnIo: true}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -779,8 +776,9 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		recordGtUsage(usage)
 	end 'gt'
 
-	// A `__gt_io_read` call (the `spawnReadLine` probe) additionally carries the pipe substrate. `usesGt` is
-	// already set by the `__gt_` prefix above; this bit installs the pipe-only pieces.
+	// A `__gt_io_read` call (the `spawnReadLine` probe) additionally reads a pipe. `usesGt` is already set by
+	// the `__gt_` prefix above. It is evidence about the PROGRAM: only a call the parser lowered from source
+	// names the reader, and this scan walks no builder body.
 	if callee.equals(IoReadName) 'ioread'
 		usage.usesChildPipes = true
 	end 'ioread'
@@ -798,19 +796,19 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesDebugStreamLog = true
 	end 'debugStreamLog'
 
-	// A `__gt_subp_*` call (the P1.5 streaming subprocess API, slice 1b) carries the whole streaming runtime: the
-	// handle table + the `__gt_subp_*` functions, which ride the pipe substrate (`usesChildPipes`) and build owned Strings
-	// from raw bytes (`__mm_alloc`/`__str_copy` inside their bodies — `usesHeap`/`usesStrCopy`, declared here because
-	// this Maxon-module scan cannot see those transitive calls). `usesGt`/`usesHeap` are already set by the `__gt_`
-	// prefix above; these bits install the streaming-only pieces.
+	// A `__gt_subp_*` call reaches the child-process API. Its bodies are installed with the scheduler, so what
+	// the call owes is what a REACHED body needs: the pipe chunks (`usesChildPipes`) and the String copy an
+	// owned line is built with (`__str_copy`, declared here because this Maxon-module scan cannot see a
+	// builder body's calls). `usesGt`/`usesHeap` are already set by the `__gt_` prefix above. Like the
+	// reader's arm, it is evidence about the PROGRAM: every `__gt_subp_*` call this scan sees was lowered
+	// from source.
 	if isSubprocessRuntimeCallee(callee) 'streaming'
-		usage.usesStreaming = true
 		usage.usesChildPipes = true
 		usage.usesStrCopy = true
 
-		// ⭐ **THE ATTACHED HALF ADDS THREE MORE TRANSITIVE BITS**, declared here for the reason the three
-		// above are: this Maxon-module scan sees only the callee the PARSER emitted, never what that entry's
-		// hand-built Std body calls one tier down. `__gt_subp_read_out_bytes` and the two result-buffer
+		// ⭐ **THE ATTACHED HALF ADDS THREE MORE TRANSITIVE BITS**, declared here for `usesStrCopy`'s reason:
+		// this Maxon-module scan sees only the callee the PARSER emitted, never what that entry's hand-built
+		// Std body calls one tier down. `__gt_subp_read_out_bytes` and the two result-buffer
 		// readers build byte-element `Array` records (`__managed_create`/`__managed_reserve`), the readers
 		// drop the String the line reader answers (`__str_decref`), and `__gt_subp_last_error` renders the
 		// Win32 error number with `__int_to_string`.

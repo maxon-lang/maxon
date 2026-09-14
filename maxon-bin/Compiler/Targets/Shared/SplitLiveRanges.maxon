@@ -5789,6 +5789,10 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 
 		// A coverage counter defines no value, so it is never a rematerialization candidate.
 		covInc gives false
+
+		// A read-modify-write of memory defines no register either.
+		x64AluBaseDispReg or
+			x64AluBaseDispImm32 gives false
 	end 'k'
 end 'opIsConstMaterialization'
 
@@ -6895,7 +6899,9 @@ function constDefInfo(module TargetModule, opIdx OpIndex) returns (MachineWord, 
 		arm64LoadAcquire or
 			arm64StoreRelease panic("constDefInfo: def is not a constant materialization")
 		arm64Smulh or
-			covInc panic("constDefInfo: def is not a constant materialization")
+			covInc or
+			x64AluBaseDispReg or
+			x64AluBaseDispImm32 panic("constDefInfo: def is not a constant materialization")
 	end 'k'
 end 'constDefInfo'
 
@@ -7189,6 +7195,8 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		arm64StoreRelease(base, src, width) then return TargetOp.arm64StoreRelease(substituteVReg(base, from: from, to: to), src: substituteVReg(src, from: from, to: to), width: width)
 		arm64Smulh(dest, lhs, rhs) then return TargetOp.arm64Smulh(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
 		covInc(pointId) then return TargetOp.covInc(pointId)
+		x64AluBaseDispReg(base, disp, src, alu) then return TargetOp.x64AluBaseDispReg(substituteVReg(base, from: from, to: to), disp: disp, src: substituteVReg(src, from: from, to: to), alu: alu)
+		x64AluBaseDispImm32(base, disp, imm, alu) then return TargetOp.x64AluBaseDispImm32(substituteVReg(base, from: from, to: to), disp: disp, imm: imm, alu: alu)
 	end 'rewrite'
 end 'substituteValueInOp'
 

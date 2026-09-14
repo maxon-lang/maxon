@@ -575,6 +575,11 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// link-time constant and its scratch registers are outside every allocatable pool, so it names nothing
 		// the allocator decides. It is what lets one shared arm serve both ISAs.
 		covInc then break 'operands'
+
+		// A read-modify-write of memory DEFINES no register: the result is the word. The register form is
+		// `x64LockAdd`'s two reads, the immediate form reads its base alone.
+		x64AluBaseDispReg(base, _, src, _) then pushCmpOperands(buf, lhs: base, rhs: src)
+		x64AluBaseDispImm32(base, _, _, _) then pushUse(buf, vreg: base)
 	end 'operands'
 end 'targetOpOperands'
 

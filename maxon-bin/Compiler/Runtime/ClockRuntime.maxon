@@ -102,15 +102,23 @@ export function isUptimeRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: UptimeRuntimeCallPrefix)
 end 'isUptimeRuntimeCallee'
 
+// ⭐⭐ **WHERE `__thread_cpu_ticks` SHIPS, WHICH IS WIDER THAN WHERE IT IS READ.** Every scheduler program's
+// `__gt_park` names it, behind a run-time word (`GtRuntime.GtKeepsCpuClockLabel`), so the body — and with it
+// each lane's host chunk and the Windows import — follows the scheduler as well as the program's own reads.
+// Every gate on any of the three asks this, because a narrower one is a call into something nothing laid out.
+export function threadCpuTicksShips(usage RuntimeUsage) returns bool
+	return usage.usesThreadCpuTicks or usage.usesGt
+end 'threadCpuTicksShips'
+
 // Install the host-clock runtime into the lowered Std module. ONE entry point is left to install, and it
-// keeps its own bit for the reason the three bands exist: the import it costs is not the import its two
+// keeps its own gate for the reason the three bands exist: the import it costs is not the import its two
 // source-tier siblings cost.
 //
 // Appended AFTER the pipeline (like every other runtime install), and already-lowered Std so it still
 // flows through the whole backend. What runs over that appended band is stated once, in
 // `Compiler.compileToCodeResult`'s install block.
 export function installClockRuntime(module StdModule, usage RuntimeUsage)
-	if usage.usesThreadCpuTicks 'threadCpu'
+	if threadCpuTicksShips(usage) 'threadCpu'
 		buildThreadCpuTicks(module, greenThreads: usage.usesGt)
 	end 'threadCpu'
 end 'installClockRuntime'

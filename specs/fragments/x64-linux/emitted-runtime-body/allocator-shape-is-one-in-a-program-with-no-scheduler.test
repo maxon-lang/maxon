@@ -100,12 +100,8 @@ func @__mm_alloc {
     x64.leaRegRegReg rax, rax, rcx
     x64.movRegReg rdx, rax
   shard#2:
-    x64.loadRegBaseDisp.word64 rax, [rdx + 8]
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.storeBaseDispReg.word64 [rdx + 8], rax
-    x64.loadRegBaseDisp.word64 rax, [rdx + 16]
-    x64.leaRegRegReg rax, rax, rbx
-    x64.storeBaseDispReg.word64 [rdx + 16], rax
+    x64.aluBaseDispImm32.add [rdx + 8], 1
+    x64.aluBaseDispReg.add [rdx + 16], rbx
   counted:
     x64.leaRegRegImm32 r8, r8, 24
     x64.epilogue 32
@@ -148,9 +144,7 @@ func @__mm_free {
     x64.leaRegRegReg rax, rax, rdx
     x64.movRegReg rsi, rax
   shard#2:
-    x64.loadRegBaseDisp.word64 rax, [rsi + 0]
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.storeBaseDispReg.word64 [rsi + 0], rax
+    x64.aluBaseDispImm32.add [rsi + 0], 1
   counted:
     x64.leaRegRegImm32 rsi, rcx, -24
     x64.loadRegBaseDisp.word64 rax, [rsi + 8]
@@ -224,12 +218,8 @@ func @__slab_alloc {
     x64.jcc equal, shard#15
   shard#14:
     x64.loadRegBaseDisp.word64 rdi, [rdi + 256]
-    x64.loadRegBaseDisp.word64 r9, [rdi + 304]
-    x64.leaRegRegImm32 r9, r9, 1
-    x64.storeBaseDispReg.word64 [rdi + 304], r9
-    x64.loadRegBaseDisp.word64 r9, [rdi + 320]
-    x64.leaRegRegReg r9, r9, rcx
-    x64.storeBaseDispReg.word64 [rdi + 320], r9
+    x64.aluBaseDispImm32.add [rdi + 304], 1
+    x64.aluBaseDispReg.add [rdi + 320], rcx
   shard#15:
     x64.loadRegBaseDisp.word64 r13, [rax + 0]
     x64.cmpRegImm32 r13, 0
@@ -268,12 +258,8 @@ func @__slab_alloc {
     x64.movRegReg rdx, r13
   shard#7:
     x64.movRegImm32 r8, 0
-    x64.loadRegBaseDisp.word64 rdi, [rsi + 24]
-    x64.leaRegRegImm32 rdi, rdi, 1
-    x64.storeBaseDispReg.word64 [rsi + 24], rdi
-    x64.loadRegBaseDisp.word64 rdi, [rsi + 40]
-    x64.leaRegRegReg rcx, rdi, rcx
-    x64.storeBaseDispReg.word64 [rsi + 40], rcx
+    x64.aluBaseDispImm32.add [rsi + 24], 1
+    x64.aluBaseDispReg.add [rsi + 40], rcx
     x64.movRegReg rsi, rax
     x64.movRegReg rax, rdx
   routed:
@@ -377,12 +363,8 @@ func @__slab_alloc {
     x64.jcc equal, shard#45
   shard#44:
     x64.loadRegBaseDisp.word64 rsi, [rsi + 256]
-    x64.loadRegBaseDisp.word64 rdi, [rsi + 304]
-    x64.leaRegRegImm32 rdi, rdi, 1
-    x64.storeBaseDispReg.word64 [rsi + 304], rdi
-    x64.loadRegBaseDisp.word64 rdi, [rsi + 320]
-    x64.leaRegRegReg rdi, rdi, rcx
-    x64.storeBaseDispReg.word64 [rsi + 320], rdi
+    x64.aluBaseDispImm32.add [rsi + 304], 1
+    x64.aluBaseDispReg.add [rsi + 320], rcx
   shard#45:
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
@@ -404,12 +386,8 @@ func @__slab_alloc {
     x64.leaRegRegReg rax, rdx, rax
     x64.movRegReg rdx, rax
   shard#37:
-    x64.loadRegBaseDisp.word64 rax, [rdx + 24]
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.storeBaseDispReg.word64 [rdx + 24], rax
-    x64.loadRegBaseDisp.word64 rax, [rdx + 40]
-    x64.leaRegRegReg rax, rax, rcx
-    x64.storeBaseDispReg.word64 [rdx + 40], rax
+    x64.aluBaseDispImm32.add [rdx + 24], 1
+    x64.aluBaseDispReg.add [rdx + 40], rcx
   oscall:
     x64.callDirect __slab_os_direct_alloc
     x64.epilogue 80
@@ -544,9 +522,7 @@ func @__slab_free {
     x64.jcc equal, shard#15
   shard#14:
     x64.loadRegBaseDisp.word64 r8, [r8 + 256]
-    x64.loadRegBaseDisp.word64 r9, [r8 + 312]
-    x64.leaRegRegImm32 r9, r9, 1
-    x64.storeBaseDispReg.word64 [r8 + 312], r9
+    x64.aluBaseDispImm32.add [r8 + 312], 1
   shard#15:
     x64.loadRegBaseDisp.word64 rdi, [rdi + 0]
     x64.cmpRegImm32 rdi, 0
@@ -569,9 +545,7 @@ func @__slab_free {
     x64.movRegReg rsi, rax
     x64.movRegReg rdx, rdi
   shard#7:
-    x64.loadRegBaseDisp.word64 rax, [rsi + 32]
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.storeBaseDispReg.word64 [rsi + 32], rax
+    x64.aluBaseDispImm32.add [rsi + 32], 1
   routed:
     x64.loadRegBaseDisp.word64 rax, [r12 + 48]
     x64.cmpRegImm32 rax, 0
@@ -640,9 +614,7 @@ func @__slab_free {
     x64.jcc equal, shard#40
   shard#39:
     x64.loadRegBaseDisp.word64 rsi, [rsi + 256]
-    x64.loadRegBaseDisp.word64 rdi, [rsi + 312]
-    x64.leaRegRegImm32 rdi, rdi, 1
-    x64.storeBaseDispReg.word64 [rsi + 312], rdi
+    x64.aluBaseDispImm32.add [rsi + 312], 1
   shard#40:
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.cmpRegImm32 rcx, 0
@@ -662,9 +634,7 @@ func @__slab_free {
     x64.leaRegRegReg rax, rax, rcx
     x64.movRegReg rdx, rax
   shard#32:
-    x64.loadRegBaseDisp.word64 rax, [rdx + 32]
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.storeBaseDispReg.word64 [rdx + 32], rax
+    x64.aluBaseDispImm32.add [rdx + 32], 1
   oscall:
     x64.movRegReg rcx, rbx
     x64.callDirect __slab_os_direct_free

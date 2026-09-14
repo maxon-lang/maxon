@@ -957,6 +957,15 @@ export type StdToX64Lowering
 	// Created ONCE and RESET per function, unlike the three tables above — see the type's `create`.
 	var scaledIndexFolds as ScaledIndexFolds
 
+	// The `load → binOp → store` steps of one word this function emits as one memory-destination
+	// instruction (`MemoryDestinationFolds`). Created once and reset per function, like the folds above,
+	// and computed after both censuses it reads.
+	var memoryDestinationFolds as MemoryDestinationFolds
+
+	// Which op defines each of the function's values — what `memoryDestinationFolds` reads a step and its
+	// load back through, and whose bound seeds `fresh`. Rebuilt per function, keeping its capacity.
+	var valueDefs as StdValueDefs
+
 	// Every callee's declared ABI (`CalleeAbiTable`): which arguments a call routes to an XMM register, and
 	// whether its result comes back in XMM0 or R8 (`callResultRegister`). The one table the value-class
 	// column reads too, so a float result's CAPTURE register and its allocation CLASS are the one fact.
@@ -970,7 +979,7 @@ export type StdToX64Lowering
 	let usesGt as bool
 
 	export static function create(target Target, abi CalleeAbiTable, usesGt bool) returns StdToX64Lowering
-		return Self{stdModule: StdModule.create(), target: target, rdata: RdataRequestLog.create(), targetModule: TargetModule.create(), compareFusion: CompareFusionCensus.create(), orderedBlockIds: OrderedBlockRoster.create(), scaledIndexFolds: ScaledIndexFolds.create(), abi: abi, usesGt: usesGt, fresh: ValueMinter.create(0)}
+		return Self{stdModule: StdModule.create(), target: target, rdata: RdataRequestLog.create(), targetModule: TargetModule.create(), compareFusion: CompareFusionCensus.create(), orderedBlockIds: OrderedBlockRoster.create(), scaledIndexFolds: ScaledIndexFolds.create(), memoryDestinationFolds: MemoryDestinationFolds.create(), valueDefs: StdValueDefs.create(), abi: abi, usesGt: usesGt, fresh: ValueMinter.create(0)}
 	end 'create'
 
 	// ⭐ **ONE UNIT THROUGH THE WHOLE CONVERSION**: the skeleton, the function's blocks, and its class
@@ -1341,9 +1350,11 @@ export type StdToX64Lowering
 	// compare is lowered long before the branch or the phi edge that decides what it must produce.
 	function prepareFunctionTables(funcIdx FuncIndex)
 		let srcFunc = self.stdModule.getFunc(funcIdx)
+		self.valueDefs.rebuild(self.stdModule, func: srcFunc)
 		self.compareFusion.computeForFunction(self.stdModule, func: srcFunc)
 		self.scaledIndexFolds.computeForFunction(self.stdModule, func: srcFunc, memoryForm: IndexedMemoryForm.anyScaleAndDisplacement)
-		self.fresh = ValueMinter.create(nextFreeValueId(self.stdModule, func: srcFunc) as ParamCount)
+		self.memoryDestinationFolds.computeForFunction(self.stdModule, func: srcFunc, defs: self.valueDefs, uses: self.scaledIndexFolds, compareFusion: self.compareFusion)
+		self.fresh = ValueMinter.create(self.valueDefs.valueBound() as ParamCount)
 	end 'prepareFunctionTables'
 
 	// The function's block count as the STD module knows it — a scoped read, so the caller holds
@@ -1924,6 +1935,11 @@ export type StdToX64Lowering
 	// ORDER matters for the non-commutative `sub`: `subRegReg(dest, lhs, rhs)` computes
 	// lhs − rhs (e.g. `20 - 8` → 12).
 	function lowerBinOp(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, operandType StdType, dstBlock IrBlock)
+		// The step of a memory-destination read-modify-write: its store emits the whole instruction.
+		if self.memoryDestinationFolds.stepFoldsIntoItsStore(resultId) 'foldedIntoTheStore'
+			return
+		end 'foldedIntoTheStore'
+
 		if stdTypeIsFloat(operandType) 'float'
 			self.lowerFloatBinOp(resultId, lhs: lhs, rhs: rhs, opcode: opcode, operandType: operandType, dstBlock: dstBlock)
 			return
@@ -2211,6 +2227,10 @@ export type StdToX64Lowering
 			return
 		end 'foldedIntoAddress'
 
+		if self.memoryDestinationFolds.stepFoldsIntoItsStore(resultId) 'foldedIntoTheStore'
+			return
+		end 'foldedIntoTheStore'
+
 		let dest = TargetVReg.virtual(resultId)
 		let base = TargetVReg.virtual(lhs)
 
@@ -2253,19 +2273,27 @@ export type StdToX64Lowering
 
 	// --- The data-section band ---
 	//
-	// All three lower 1:1 — the Std memory band and the x64 data-section band are the same three
-	// ops, because x64 has exactly these three instructions. The only real work is the WIDTH
-	// decision (the shared `accessWidthFor`), which is the tier boundary doing its job.
+	// Each of the three lowers to one instruction or to none: `ScaledIndexFolds` and
+	// `MemoryDestinationFolds` hand an op's work to the access that carries it. The WIDTH decision is
+	// the shared `accessWidthFor`, which is the tier boundary doing its job.
 
 	// `globalAddr` → `lea dest, [rip + <label>]`. The address is computed, not loaded; the PE
 	// writer supplies the displacement once `.data` has an RVA.
 	function lowerGlobalAddr(resultId ValueId, label ByteArray, dstBlock IrBlock)
+		if self.memoryDestinationFolds.retiresAddress(resultId) 'readOnlyByAFoldedLoad'
+			return
+		end 'readOnlyByAFoldedLoad'
+
 		self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegGlobal(TargetVReg.virtual(resultId), label: label))
 	end 'lowerGlobalAddr'
 
 	// `loadIndirect` → `mov dest, [base + disp]` / `movzx dest, byte [base + disp]`. The width and
 	// displacement doors (`accessWidthFor`, `memoryDisplacement`) are shared with the arm64 lowering.
 	function lowerLoadIndirect(resultId ValueId, addrId ValueId, offset ByteOffset, valueType StdType, dstBlock IrBlock)
+		if self.memoryDestinationFolds.retiresLoad(resultId) 'foldedIntoTheStore'
+			return
+		end 'foldedIntoTheStore'
+
 		// The address is a `base + index*scale` chain nothing else reads, so the SIB operand
 		// carries it and the `imul`/`lea` that computed it emitted nothing. The op's own `offset`
 		// rides the displacement field, so a field read off an indexed element is still ONE `mov`.
@@ -2277,8 +2305,14 @@ export type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.loadRegBaseDisp(TargetVReg.virtual(resultId), base: TargetVReg.virtual(addrId), disp: memoryDisplacement(offset), width: accessWidthFor(valueType)))
 	end 'lowerLoadIndirect'
 
-	// `storeIndirect` → `mov [base + disp], src`.
+	// `storeIndirect` → `mov [base + disp], src`, or the whole read-modify-write when `valueId` is a folded
+	// step — emitted HERE, at the write's position, so every read between the load and it sees the old word.
 	function lowerStoreIndirect(addrId ValueId, offset ByteOffset, valueId ValueId, valueType StdType, dstBlock IrBlock)
+		if self.memoryDestinationFolds.stepFoldsIntoItsStore(valueId) 'readModifyWrite'
+			self.lowerMemoryDestinationStep(addrId, disp: memoryDisplacement(offset), stepId: valueId, dstBlock: dstBlock)
+			return
+		end 'readModifyWrite'
+
 		// The store mirror of the indexed load above.
 		if self.scaledIndexFolds.fusesIntoMemoryOp(addrId) 'indexed'
 			self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseIndexScaleReg(TargetVReg.virtual(self.scaledIndexFolds.baseOf(addrId)), index: TargetVReg.virtual(self.scaledIndexFolds.indexOf(addrId)), scale: self.scaledIndexFolds.scaleOf(addrId), disp: memoryDisplacement(offset), src: TargetVReg.virtual(valueId), width: accessWidthFor(valueType)))
@@ -2287,6 +2321,18 @@ export type StdToX64Lowering
 
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(TargetVReg.virtual(addrId), disp: memoryDisplacement(offset), src: TargetVReg.virtual(valueId), width: accessWidthFor(valueType)))
 	end 'lowerStoreIndirect'
+
+	function lowerMemoryDestinationStep(addrId ValueId, disp Imm32, stepId ValueId, dstBlock IrBlock)
+		let base = TargetVReg.virtual(addrId)
+		let alu = self.memoryDestinationFolds.aluOf(stepId, module: self.stdModule, defs: self.valueDefs)
+
+		if self.memoryDestinationFolds.stepTakesImmediate(stepId, module: self.stdModule, defs: self.valueDefs) 'immediate'
+			self.targetModule.appendOp(dstBlock, op: TargetOp.x64AluBaseDispImm32(base, disp: disp, imm: self.memoryDestinationFolds.immediateOf(stepId, module: self.stdModule, defs: self.valueDefs), alu: alu))
+			return
+		end 'immediate'
+
+		self.targetModule.appendOp(dstBlock, op: TargetOp.x64AluBaseDispReg(base, disp: disp, src: TargetVReg.virtual(self.memoryDestinationFolds.sourceOf(stepId, module: self.stdModule, defs: self.valueDefs)), alu: alu))
+	end 'lowerMemoryDestinationStep'
 
 	// Emit a matched `base + index*scale` address: NOTHING when the one memory op reading it
 	// carries the address itself, else the single `lea` that replaces the `imul`+`lea` pair.

@@ -1798,12 +1798,11 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	// Both the table builder and the relocation patcher must answer these two questions the SAME way — the
 	// builder decides where each thunk lands and the patcher points call sites at it, so a disagreement
 	// would aim every call at the wrong import. Read once, passed to both.
-	// ⚠ `usesGt` joins the four producers: the scheduler's per-P init reads `MAXON_MAX_PROCS` through
+	// ⚠ `usesGt` is a producer in its own right: the scheduler's per-P init reads `MAXON_MAX_PROCS` through
 	// `GetEnvironmentVariableA` and the machine's processor count through `GetActiveProcessorCount`, and its
-	// TLS pair lives in this band too — so a green-thread program needs the whole band, exactly as a traced or
-	// spawning one does. A program with no green threads is unaffected, which is what keeps a non-async
-	// binary byte-identical across this rung.
-	let optionalImports = codeResult.stdModule.debugStream or codeResult.stdModule.usesSubprocess or codeResult.stdModule.usesCpuCount or codeResult.stdModule.usesThreadCpuTicks or codeResult.stdModule.usesGt or codeResult.stdModule.usesBackgroundPriority or codeResult.stdModule.usesTerminalDetection or codeResult.stdModule.usesSharedMemory or codeResult.stdModule.usesUptimeClock or codeResult.stdModule.usesProcessSampling
+	// TLS pair lives in this band too. It also answers for a spawning image, whose child-process bodies are
+	// installed only with the scheduler.
+	let optionalImports = codeResult.stdModule.debugStream or codeResult.stdModule.usesCpuCount or codeResult.stdModule.carriesThreadCpuTicks or codeResult.stdModule.usesGt or codeResult.stdModule.usesBackgroundPriority or codeResult.stdModule.usesTerminalDetection or codeResult.stdModule.usesSharedMemory or codeResult.stdModule.usesUptimeClock or codeResult.stdModule.usesProcessSampling
 
 	// ⭐ **THE SAMPLER IS ntdll's ONLY PRODUCER**, and it feeds BOTH gates: the suspend/context/read/resume
 	// family, the timer pair and the module walk ride the optional kernel32 band above, while

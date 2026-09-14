@@ -587,6 +587,10 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		// A coverage counter names no register on either lane: `lock inc [rip+d32]` on x64, and arm64's
 		// reserved x16/x17 pair plus a stack-borrowed word it gives straight back.
 		covInc gives 0
+
+		// Ordinary coloured registers, counted for the atomics' reason above.
+		x64AluBaseDispReg(b, _, s, _) gives physRegBit(b) or physRegBit(s)
+		x64AluBaseDispImm32(b, _, _, _) gives physRegBit(b)
 	end 'p'
 end 'opPhysicalRegs'
 
@@ -896,5 +900,9 @@ function blockEndsWithReturn(module TargetModule, block IrBlock) returns bool
 
 		// A coverage counter is a body op, never a `ret`.
 		covInc gives false
+
+		// So is a read-modify-write of memory.
+		x64AluBaseDispReg or
+			x64AluBaseDispImm32 gives false
 	end 'check'
 end 'blockEndsWithReturn'
