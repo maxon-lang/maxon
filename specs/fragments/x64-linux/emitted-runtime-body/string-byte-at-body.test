@@ -64,7 +64,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at hash.maxon:27: hashString: byteAt OOB \xe2\x80\x94 i < s.byteLength() invariant\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at hash.maxon:24: hashString: byteAt OOB \xe2\x80\x94 i < s.byteLength() invariant\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -96,6 +96,7 @@ func @__managed_byte_at {
   chkhigh:
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.loadRegBaseDisp.word64 rsi, [rcx + 24]
+  __il_body#8:
     x64.movRegReg rdi, rsi
     x64.sarRegImm8 rdi, rsi, 63
     x64.movRegReg r8, rdi
@@ -106,9 +107,12 @@ func @__managed_byte_at {
     x64.andRegReg r9, r9, rdi
     x64.andRegReg rsi, rsi, r8
     x64.orRegReg r9, r9, rsi
+  __il_cont#7:
     x64.imulRegReg rax, rax, r9
+  __il_body#9:
     x64.leaRegRegImm32 rax, rax, 7
     x64.shrRegImm8 rax, rax, 3
+  __il_cont#4:
     x64.cmpRegReg rdx, rax
     x64.jcc less, load
   badrange:
