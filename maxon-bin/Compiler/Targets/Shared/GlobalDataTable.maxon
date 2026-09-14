@@ -26,16 +26,15 @@ export typealias GlobalDedupMap = Map with (ByteArray, String)
 // PAYLOAD'S OFFSET A MULTIPLE OF IT TOO**, by induction from zero, in `appendRdataPayload`: the one
 // writer of a slot's offset is the one place the discipline can live.
 //
-// ⚠ **IT USED TO BE ONE PRODUCER'S RULE ABOUT THE WHOLE SECTION, AND THAT IS THE BUG IT CLOSES.**
-// `StringRuntime.stringBlobBytes` padded ITS blobs to 8 and its comment claimed the consequence for
-// everyone — *"once blobs are 8-multiples the rdata cursor stays 8-aligned across the whole section"* —
-// while `installSlabRuntime` registered a 129-byte and a 249-byte table through the same door. 129 + 249
-// = 378 ≡ 2 (mod 8), so from that point the cursor was PERMANENTLY 2 mod 8 and every String record
-// registered afterwards (`installEnumLookupHelpers`, which runs later) landed misaligned. On arm64-macOS
-// a record's `buffer@0` is a dyld chained-fixup rebase whose chain links by a 4-byte-granular delta, so
-// `MachOWriter.writeMachoRdataRebases` panicked and killed the spec worker; on x64 the same image was
-// emitted misaligned-but-working and NOTHING SAID SO. A whole-section invariant cannot be one
-// registrant's habit — it has to be the table's, enforced where slots are appended.
+// ⚠ **A WHOLE-SECTION INVARIANT CANNOT BE ONE PRODUCER'S RULE.** Padding one producer's blobs to 8 —
+// `StringRuntime.stringBlobBytes` — buys nothing for the rest: `installSlabRuntime` registers a 129-byte
+// and a 249-byte table through the same door, and 129 + 249 = 378 ≡ 2 (mod 8), so from that point the
+// cursor is PERMANENTLY 2 mod 8 and every String record registered afterwards
+// (`installEnumLookupHelpers`, which runs later) lands misaligned. On arm64-macOS a record's `buffer@0`
+// is a dyld chained-fixup rebase whose chain links by a 4-byte-granular delta, so
+// `MachOWriter.writeMachoRdataRebases` panics and kills the spec worker; on x64 the same image is
+// emitted misaligned-but-working and NOTHING SAYS SO. The invariant has to be the table's, enforced
+// where slots are appended.
 //
 // ⚠ **8 AND NOT 4**, though the chained-fixup stride that catches the break is 4: the slots being aligned
 // are POINTERS (a String record's `buffer@0`, a witness table's method slots, a layout descriptor's), so
@@ -93,13 +92,12 @@ end 'floatConstantLabel'
 // jump table, from a witness table's zero-filled blob.
 //
 // ⚠ **IT IS NOT DERIVED FROM THE LABEL, AND THAT IS THE WHOLE POINT.** Routing by name is a rule this
-// compiler has already refused once: the section a payload lands in is decided by its RELOCATION KIND —
+// compiler refuses: the section a payload lands in is decided by its RELOCATION KIND —
 // `RdataRelocKind.ripRelDisp32` for an island, `dataSectionRipRelDisp32` for a global — and the label's
 // TEXT is never consulted on the way. `SignatureIndex.DataLabelPrefix` carries the MEASUREMENT that
 // settled it (set to `"zzz_"`, the suite's globals still land in `.data` and still answer right) and the
-// `classifyGlobalLabel` that was deleted over it. ⚠ That argument used to be stated a second time, in the
-// two isels' own float-prefix headers, and those went with the prefix constants — so it lives HERE now,
-// which is also where the kind it justifies is declared.
+// `classifyGlobalLabel` that stands in its place. ⚠ It is stated HERE, beside the kind it justifies,
+// rather than a second time in the two isels' own float-prefix headers.
 //
 // A prefix test would also fail OPEN: a payload registered under a structural label
 // (`__layout_Sizer_bool`, a witness table) wears no prefix a matcher could enumerate, and a NEW producer
@@ -232,10 +230,10 @@ export typealias PendingRdataAbsRelocArray = Array with PendingRdataAbsReloc
 
 // ⭐ THE DATA→TEXT SIBLING of `PendingRdataAbsReloc`: a slot INSIDE a `.rdata` blob must hold the ABSOLUTE VA
 // of a `.text` function, and no `.text` VA exists until the writer lays out the code section. THREE slots
-// need it — a WITNESS-TABLE method slot (P1.7a slice 2a, one per interface method per conformance, and by far
-// the most numerous), and a managed-opaque-`T` layout descriptor's `destroyFunc@40` (slice 3b-ii) and
-// `copyFunc@32` (slice 3b-vi-b-β) — so the type is named for the CHANNEL and not for any one of them; a
-// comment naming only the descriptor sent readers hunting for a managed opaque array in programs that had
+// need it — a WITNESS-TABLE method slot (one per interface method per conformance, and by far the most
+// numerous), and a managed-opaque-`T` layout descriptor's `destroyFunc@40` and `copyFunc@32` — so the
+// type is named for the CHANNEL and not for any one of them; a comment naming only the descriptor sends
+// readers hunting for a managed opaque array in programs that have
 // none. The emitter (`ensureWitnessTable` / `ensureLayoutDescriptor`) leaves the slot 0 and records this triple;
 // EVERY writer patches the 8 bytes at
 // `rdataOffsetOf(rdataLabel) + offsetInLabel` with `funcName`'s runtime address once `.text`'s base is
@@ -286,7 +284,7 @@ export typealias PendingRdataRelocArray = Array with PendingRdataReloc
 // ⚠ **THE DISTANCE IS SIGNED AND BOTH DIRECTIONS GENUINELY OCCUR, so it is written as a 64-bit two's
 // complement and the reader's add WRAPS.** Which blob is registered first is a fact about mint ORDER, not
 // about the program: a nested table minted by this very call lands after its referrer, and one an earlier
-// conformance already minted lands before it. Forcing the order was considered and cannot be done — two
+// conformance already minted lands before it. Forcing the order cannot be done — two
 // interfaces may hold each other's positions, and the mint's own memo (which is what stops that recursing
 // forever) is exactly what leaves the second reference pointing forward.
 type PendingRdataSelfRelReloc
@@ -338,7 +336,7 @@ export function bytesStartWith(bytes ByteArray, prefix ByteArray) returns bool
 	return true
 end 'bytesStartWith'
 
-// --- The `.data` section: writable globals (P1.0d.5b) ---
+// --- The `.data` section: writable globals ---
 
 // `dataIndex`: a data-section label → its index in `dataSection`. The O(1) membership +
 // lookup twin of `nameIndex`, and it exists for that field's reason: answering "where does this
@@ -487,17 +485,16 @@ export type GlobalDataTable
 	// +0.046% with it). Keyed on the BITS rather than on the rendered label, because the bits are what a
 	// caller holds and the label is the expensive half.
 	//
-	// ⚠ **THE FIRST READING OF THIS COST WAS WRONG BY 70x, AND THE REASON IS WORTH THE LINE:** it was taken
-	// against the last row of `docs/optimization-log.md` rather than against a build. That row is a TREND
-	// ENTRY, not a control — it was minted from a different tree at a different time — and it read +5.0%
-	// where a real control reads +0.046%. Everything a scale delta is attributed to has to be A/B’d against a
-	// binary you built.
+	// ⚠ **A READING TAKEN AGAINST `docs/optimization-log.md`'s LAST ROW RATHER THAN AGAINST A BUILD IS
+	// WRONG BY 70x HERE:** that row is a TREND ENTRY, not a control — minted from a different tree at a
+	// different time — and it reads +5.0% where a real control reads +0.046%. Every scale delta has to be
+	// A/B’d against a binary you built.
 	export var floatConstantLabels as FloatConstantLabelMap
 
 	// The `(funcName, rdataLabel, offsetInLabel)` triples the x64 writers patch to bake a `.rdata` slot with a
 	// `.text` function's VA — a witness-table method slot, or a managed-opaque-`T` descriptor's
 	// `destroyFunc@40`/`copyFunc@32`. See PendingRdataReloc. Empty for a program that conforms nothing to an
-	// interface and holds no managed-opaque-`T` array (all but the P1.7-generics corpus).
+	// interface and holds no managed-opaque-`T` array (all but the generics corpus).
 	export var pendingRdataRelocs as PendingRdataRelocArray
 
 	// Every  slot holding a distance to ANOTHER  blob — see PendingRdataSelfRelReloc.
@@ -505,7 +502,7 @@ export type GlobalDataTable
 
 	// ⭐ **THE `.symtab` IMAGE — the FOURTH emitted section this table renders**, beside `.rdata`, `.data`
 	// and the string fixups. EMPTY for every ordinary build, and the section is then omitted entirely by
-	// the PE writer, so a normal program's binary is byte-for-byte what it was before this field existed.
+	// the PE writer, so a normal program's binary carries no trace of it.
 	//
 	// Its one payload today is the DebugStream `MXDS_TAGS` name blob, which `maxon monitor` finds by
 	// scanning the executable (see `DebugStreamRuntime`). It is a whole IMAGE rather than a registry of
@@ -545,10 +542,10 @@ export type GlobalDataTable
 	// ⭐ REGISTER a read-only constant payload, returning the label that names it — the `.rdata`
 	// twin of the `.data` half below.
 	//
-	// ⚠ **THE FLOAT ISLANDS NO LONGER COME THROUGH HERE, and this line used to say they did.** They are
-	// named by their VALUE now (`registerFloatConstant`) and take the LABELLED door below, which is what stops
-	// their label being a build-order artifact — and what stopped the byte-dedup below handing a float island
-	// a `__str_blob_` label, which it was measurably doing.
+	// ⚠ **THE FLOAT ISLANDS DO NOT COME THROUGH HERE.** They are named by their VALUE
+	// (`registerFloatConstant`) and take the LABELLED door below, which is what stops their label being a
+	// build-order artifact — and what stops the byte-dedup below handing a float island a `__str_blob_`
+	// label.
 	//
 	// IDENTICAL CONTENT RETURNS THE EXISTING LABEL, in O(1), through `valueDedup`. That is not a
 	// micro-optimization: a program mentioning `3.14` in fifty places gets ONE 8-byte island and
@@ -558,17 +555,16 @@ export type GlobalDataTable
 	// The offset is assigned HERE, as `rdataSizeSoFar` — the running total of everything registered
 	// before it, advanced by this payload's own length AS it is pushed. That keeps both
 	// `rdataOffsetOf` AND the registration itself O(1): re-deriving the offset by summing every prior
-	// payload made the build of N distinct constants Θ(N²), which the field this replaces flagged as
-	// debt to pay "if `.rdata` ever holds thousands of entries (P1.2 strings)" — and a String literal
-	// registers TWO constants (blob + record) with literals-per-program unbounded, so P1.2 is that
-	// moment. `rdataImage` walks the same array in the same order and ASSERTS the recorded offset
+	// payload would make the build of N distinct constants Θ(N²), and `.rdata` does hold thousands of
+	// entries: a String literal registers TWO constants (blob + record), with literals-per-program
+	// unbounded. `rdataImage` walks the same array in the same order and ASSERTS the recorded offset
 	// agrees with the image position, so the running total and the bytes it names cannot drift.
 	//
 	// ⚠ **ON THE DEDUP PATH THE CALLER'S `kind` IS DISCARDED, AND THAT IS CORRECT**: the slot already
 	// exists and is already what its first registrant made it. Two producers whose bytes coincide share ONE
 	// payload — that is what dedup means — and the kind describes the payload, not the request. (A producer
 	// that must keep its own slot regardless of content has the labelled door below instead, which is how the
-	// float islands stopped being handed a `__str_blob_` label.)
+	// float islands are never handed a `__str_blob_` label.)
 	//
 	// ⛔⛔ **`labelAt` IS NOT DISCARDED, BECAUSE IT IS THE ONE THING A POOL HIT CANNOT BE WRONG ABOUT.** It
 	// says where inside the payload the label points, so a hit whose incumbent disagrees would hand this
@@ -653,17 +649,17 @@ export type GlobalDataTable
 	// it is one function and not two identical three-line sequences.
 	//
 	// ⭐ **IT TAKES THE BITS AND NOTHING ELSE — the PAYLOAD is minted here too, and that is the rest of the
-	// mirror the label prefix used to be half of.** Each isel used to render the island's eight bytes
-	// itself, x64 through `stdTypeStorageBytes(valueType)` and arm64 through an `Arm64DoubleBytes` of its
-	// own, so "an f64 island is eight little-endian IEEE bytes" was written twice and the width three
-	// times. It is derived once here, from the one type table (`stdTypeStorageBytes(StdType.f64)`), so the
+	// mirror the label prefix is half of.** Rendering the island's eight bytes in each isel — x64 through
+	// `stdTypeStorageBytes(valueType)`, arm64 through an `Arm64DoubleBytes` of its own — writes "an f64
+	// island is eight little-endian IEEE bytes" twice and the width three times. It is derived once here, from the one type table (`stdTypeStorageBytes(StdType.f64)`), so the
 	// two targets agree by construction rather than by two files staying in step. What each isel keeps is
 	// the part that is genuinely its own: the `requireScalarDouble` check and which load op carries the
 	// label.
 	//
 	// ⚠ Minting inside `firstSighting` — not at the call — is also what makes the `floatConstantLabels`
-	// memo cover the WHOLE cost: a repeated float used to re-render its bytes into a fresh `ByteArray` at
-	// every occurrence and then have them ignored, since the memo hit returns before any payload is read.
+	// memo cover the WHOLE cost: a repeated float would otherwise re-render its bytes into a fresh
+	// `ByteArray` at every occurrence and have them ignored, since the memo hit returns before any payload
+	// is read.
 	//
 	// ⚠ **IT TAKES THE LABELLED DOOR, NOT `registerRdataConstant`, and the difference is load-bearing twice
 	// over.** That door does not advance the shared counter — which is the whole point of a value-named
@@ -677,8 +673,8 @@ export type GlobalDataTable
 	//
 	// ⚠ **LEAVING THE POOL HAS A PRICE AND IT IS MEASURED: `phase:encode` +19,701 allocations at rung 5,
 	// +5.2% of that phase** — the WHOLE of what this change costs, and it is unrelated to the memo above (it
-	// is identical with the memo on and off). A float payload that used to be answered by a byte-identical
-	// String blob now gets its own `.rdata` slot, so there are more payloads and more relocations to resolve.
+	// is identical with the memo on and off). A float payload a byte-identical String blob could answer
+	// gets its own `.rdata` slot instead, so there are more payloads and more relocations to resolve.
 	// That is the cost of the wrong reading it removes, and it does not grow: the change is +0.148% of the
 	// whole compile at rung 0 DECAYING to +0.046% at rung 5, its delta growing ×1.12…×1.68 per doubling
 	// (below ×2 ⇒ sublinear), with CPU −0.7%…−3.3% and `codeBytes` IDENTICAL at all six rungs.
@@ -691,7 +687,7 @@ export type GlobalDataTable
 	end 'registerFloatConstant'
 
 	// ⭐ REGISTER a read-only constant under an EXACT, caller-supplied label — the layout-descriptor
-	// twin of `registerRdataConstant` (P1.6-B1). A descriptor's label is STRUCTURAL
+	// twin of `registerRdataConstant`. A descriptor's label is STRUCTURAL
 	// (`__layout_Sizer_bool`, from the instance's base + argument names), so it must be the label
 	// verbatim — not a `{prefix}{nextStringId}` mint, whose numeric suffix is a build-order artifact the
 	// golden fragments and `verify-warm-rebuild` would see move. Idempotent by LABEL: a second call for
@@ -1106,8 +1102,8 @@ end 'dataBlobStoredRun'
 //
 // ⚠ **THE ALREADY-ALIGNED PATH RETURNS THE ARGUMENT UNTOUCHED, AND IT IS THE COMMON ONE** — a String
 // record is 56 bytes, a float island 8, a jump table `4 × slotCount` for an even slot count — so the
-// discipline costs no copy for the payloads that already satisfied it, and the ones it does copy are the
-// handful of odd-length tables that broke the cursor in the first place.
+// discipline costs no copy for the payloads that already satisfy it, and the ones it does copy are the
+// handful of odd-length tables that would otherwise break the cursor.
 //
 // ⚠ The padding is invisible to every consumer by construction: a text payload is read to its NUL
 // (`TargetPrinter.quotedPayloadText`, and `length@8` for a String), and a structural payload is decoded by

@@ -37,8 +37,7 @@ end 'EdgePlacement'
 
 // One edge's parallel copy, sequenced into ordered physical moves. `moveDsts[i]` ←
 // `moveSrcs[i]` is a `mov` unless `moveIsSwap[i]` (a SWAP breaking a cycle). All values are
-// physical register NUMBERS (0..31 — GPRs at 0-15, XMMs at 16-31; the width moved with
-// `RegisterFileSize` at P1.0d.4).
+// physical register NUMBERS (0..31 — GPRs at 0-15, XMMs at 16-31; the width is `RegisterFileSize`'s).
 //
 // ⭐ THIS PLAN IS CLASS-AGNOSTIC AND STAYS THAT WAY. A move is a move and a swap is a swap
 // whichever file the register names; which INSTRUCTION each becomes is decided far below, by the
@@ -526,7 +525,7 @@ export function isCaptureMove(op TargetOp) returns bool
 			arm64Syscall or
 			arm64Fcsel gives false
 
-		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are not a `movRegReg`, so none is a
+		// `leaRegFunc`/`callReg` and the Linux `x64Syscall` are not a `movRegReg`, so none is a
 		// call-result capture move — the same `false` every non-`movRegReg` op gets here.
 		leaRegFunc or
 			callReg or
@@ -550,11 +549,11 @@ export function isCaptureMove(op TargetOp) returns bool
 		// A frame address is not a `movRegReg`, so it is not a call-result capture move.
 		leaRegSlot gives false
 
-		// F1b: a fill ladder is not a `movRegReg`, so it is not a call-result capture move.
+		// A fill ladder is not a `movRegReg`, so it is not a call-result capture move.
 		x64MemFill or
 			arm64MemFill gives false
 
-		// F2: no atomic is a `movRegReg`, so none is a call-result capture move.
+		// No atomic is a `movRegReg`, so none is a call-result capture move.
 		x64LockCmpxchg or
 			x64LockXadd or
 			x64LockAdd or
@@ -564,23 +563,23 @@ export function isCaptureMove(op TargetOp) returns bool
 			arm64AtomicRmw or
 			arm64ThreadPointer gives false
 
-		// EC16: no scaled-index form is a `movRegReg`, so none is a call-result capture move.
+		// No scaled-index form is a `movRegReg`, so none is a call-result capture move.
 		leaRegBaseIndexScale or
 			loadRegBaseIndexScale or
 			storeBaseIndexScaleReg or
 			arm64AddLsl gives false
 
-		// EC18: the high multiply is not a `movRegReg`, so it is not a call-result capture move.
+		// The high multiply is not a `movRegReg`, so it is not a call-result capture move.
 		imulHighReg gives false
 
 		// arm64 `fneg` is not a `movRegReg`, so it is not a call-result capture move.
 		arm64Fneg gives false
 
-		// G3: an ordered access is not a `movRegReg`, so it is not a call-result capture move.
+		// An ordered access is not a `movRegReg`, so it is not a call-result capture move.
 		arm64LoadAcquire or
 			arm64StoreRelease gives false
 
-		// EC18: `SMULH` is not a `movRegReg`, so it is not a call-result capture move.
+		// `SMULH` is not a `movRegReg`, so it is not a call-result capture move.
 		arm64Smulh gives false
 
 		// A coverage counter is not a `movRegReg`, so never a call-result capture move.
@@ -749,7 +748,7 @@ function isPhysicalSelfMove(op TargetOp) returns bool
 			arm64Syscall or
 			arm64Fcsel then return false
 
-		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are not register-to-register moves
+		// `leaRegFunc`/`callReg` and the Linux `x64Syscall` are not register-to-register moves
 		// (a `lea`, a call, a syscall), so none can be a `mov r, r` self-move.
 		leaRegFunc or
 			callReg or
@@ -789,11 +788,11 @@ function isPhysicalSelfMove(op TargetOp) returns bool
 		// Not a move at all, so never a physical self-move.
 		leaRegSlot then return false
 
-		// F1b: not a move at all, so never a physical self-move.
+		// Not a move at all, so never a physical self-move.
 		x64MemFill or
 			arm64MemFill then return false
 
-		// F2: not a move at all, so never a physical self-move.
+		// Not a move at all, so never a physical self-move.
 		x64LockCmpxchg or
 			x64LockXadd or
 			x64LockAdd or
@@ -803,23 +802,23 @@ function isPhysicalSelfMove(op TargetOp) returns bool
 			arm64AtomicRmw or
 			arm64ThreadPointer then return false
 
-		// EC16: not a move at all, so never a physical self-move.
+		// Not a move at all, so never a physical self-move.
 		leaRegBaseIndexScale or
 			loadRegBaseIndexScale or
 			storeBaseIndexScaleReg or
 			arm64AddLsl then return false
 
-		// EC18: not a move at all, so never a physical self-move.
+		// Not a move at all, so never a physical self-move.
 		imulHighReg then return false
 
 		// arm64 `fneg` is not a move at all, so never a physical self-move.
 		arm64Fneg then return false
 
-		// G3: an ordered access is not a move at all, so never a physical self-move.
+		// An ordered access is not a move at all, so never a physical self-move.
 		arm64LoadAcquire or
 			arm64StoreRelease then return false
 
-		// EC18: `SMULH` is not a move at all, so never a physical self-move.
+		// `SMULH` is not a move at all, so never a physical self-move.
 		arm64Smulh then return false
 
 		// A coverage counter is not a move at all, so never a physical self-move.
@@ -1050,8 +1049,8 @@ end 'buildFuncTopologyByIndex'
 // included, so a caller cannot silently miss an edge.
 //
 // Both branches are addressed DIRECTLY, off the block's own `condBranch` / `terminator`
-// indices — the `jcc` used to be found by scanning every op of the predecessor, the same
-// O(ops-in-block) search the CFG builder paid (see `CondBranch`). The rewrite is in place at
+// indices: finding the `jcc` by scanning every op of the predecessor is the same O(ops-in-block)
+// search the CFG builder avoids (see `CondBranch`). The rewrite is in place at
 // the op's existing index, so the recorded index stays valid and there is no cached target
 // to invalidate.
 export function retargetControlOp(module TargetModule, predRef BlockRef, oldTarget BlockId, newTarget BlockId)
@@ -1062,13 +1061,13 @@ export function retargetControlOp(module TargetModule, predRef BlockRef, oldTarg
 	// across them is refused, and rightly: the block record belongs to the array being written through.
 	// Everything this function needs from it is three values that outlive the borrow — the two terminator
 	// slots (scalar-payload unions, copied out) and the id the conditional half's panic cites. That id
-	// REPLACES the label that panic used to quote, which was a borrowed `ByteArray` and could not be held
-	// either; it is also the better citation, since a block's label is not its identity.
+	// is cited rather than the block's LABEL, which is a borrowed `ByteArray` that could not be held
+	// either — and is the worse citation anyway, since a block's label is not its identity.
 	//
-	// ⭐ The two halves moved into functions of their own at the same time, and not for tidiness: a `match`
+	// ⭐ The two halves are functions of their own, and not for tidiness: a `match`
 	// arm takes ONE statement, so reading the slot as the union it is — rather than through a
 	// `hasCondBranchOp()`/`condBranchIndex()` pair whose second half panics if the first was not asked —
-	// needs the arm's work to be a call. The pair is now unspellable in the wrong order here.
+	// needs the arm's work to be a call. The pair is unspellable in the wrong order here.
 	let predBlock = try module.blocks.get(predRef) otherwise panic("retargetControlOp: predRef not in module.blocks")
 	let condBranch = predBlock.condBranch
 	let terminator = predBlock.terminator
@@ -1110,7 +1109,7 @@ function retargetCondBranchOp(module TargetModule, opIdx OpIndex, predBlockId Bl
 end 'retargetCondBranchOp'
 
 // The TERMINATOR half — the block's terminator op. Every arm that is not a real terminator panics, which is
-// the roster the caller used to carry inline.
+// the roster the caller would otherwise carry inline.
 function retargetTerminatorOp(module TargetModule, opIdx OpIndex, oldTarget BlockId, newTarget BlockId) returns bool
 	let op = try module.ops.get(opIdx) otherwise panic("retargetTerminatorOp: terminator not in module.ops")
 
@@ -1231,7 +1230,7 @@ function retargetTerminatorOp(module TargetModule, opIdx OpIndex, oldTarget Bloc
 			arm64Syscall or
 			arm64Fcsel then panic("retargetTerminatorOp: an arm64 non-terminator op reached as a terminator")
 
-		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are value-producing x64 body
+		// `leaRegFunc`/`callReg` and the Linux `x64Syscall` are value-producing x64 body
 		// ops, never a terminator — the same non-terminator panic the x64 ALU/data bands above raise.
 		leaRegFunc or
 			callReg or

@@ -41,7 +41,7 @@
 // picks a slot, so no key ORDER can cluster. But a dense ascending id run is the case an identity
 // hash gets PERFECT — every key at its home slot, zero collisions — and spreading it trades that for
 // the ordinary open-addressing average at a 3/4 load factor. Replaying the real key sequences of a
-// 2,808-function corpus through the `Map` algorithm both ways (optimizer, 2026-07-26):
+// 2,808-function corpus through the `Map` algorithm both ways:
 //
 //        Std-tier blockRefs → block.id, 2,808 functions, largest 19,201 blocks
 //          identity hash            1.000 probes/insert
@@ -121,8 +121,8 @@ export type BlockKeyedTable uses Value
 
 		// ⭐ **`value` REACHES EXACTLY ONE STORE, AND THAT IS AN OWNERSHIP RULE RATHER THAN A TIDY-UP.** An
 		// extension fills `[count, needed)` and `id` IS `needed - 1`, so when the column grows `growFilled`
-		// has ALREADY written slot `id` — the `set` that used to follow it unconditionally wrote the same
-		// value into the same slot a second time. For a concrete element that is merely redundant; for the
+		// has ALREADY written slot `id` — an unconditional `set` after it would write the same value into
+		// the same slot a second time. For a concrete element that is merely redundant; for the
 		// type parameter `Value` it is refused (E3102), because the shared generic body compiles once for
 		// every instantiation and a store of an opaque `T` may INHERIT this frame's one reference rather
 		// than take its own, which two stores would then release twice. So `set` is the arm for an id

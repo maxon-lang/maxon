@@ -32,7 +32,7 @@
 // that shadows a loop-carried `var` would carry the SHADOW's value to the loop's
 // exit phi — a silent miscompile.
 //
-// OWNERSHIP SCAFFOLD (M1, inert): the Own tier (M6) places `own.drop`/`own.release`
+// OWNERSHIP SCAFFOLD (inert): the Own tier places `own.drop`/`own.release`
 // at scope exit for every NON-trivial (owned/borrow/shared) binding a frame declared
 // — a deterministic static-drop mechanism. `popScope` is where that happens,
 // and it needs no side list to
@@ -40,36 +40,24 @@
 // `VarInfo` being torn down, and that record carries both the `ownership` kind to test
 // and the type + slot a drop has to name. A parallel "owned names" array would be a
 // strict projection of `vars` kept in lockstep by hand — state that can drift, buying
-// nothing. At M1 every binding is `trivial`, so the hook never fires.
+// nothing. Every binding is `trivial`, so the hook never fires.
 //
 // ⚠⚠ **THE SLOT HALF OF THIS API HAS NO CALLERS, AND SAYING SO IS THE POINT OF THIS PARAGRAPH.**
-// Measured at P1.1a wave 3: `declare`, `declareShadowing`, `bindExistingSlot`, `installVerbatim`,
-// `lookup`, `getType`, `allVars`, `nextSlot` and `setNextSlot` are called from nowhere outside this
-// file. Everything the parser actually binds goes through `declareValueBinding` (the M2
-// SSA-substitution model), its payload/parameter siblings, or `declareSelfField` (which is slotless by
-// construction).
+// `declare`, `declareShadowing`, `bindExistingSlot`, `installVerbatim`, `lookup`, `getType`,
+// `allVars`, `nextSlot` and `setNextSlot` are called from nowhere outside this file. Everything the
+// parser actually binds goes through `declareValueBinding` (the SSA-substitution model), its
+// payload/parameter siblings, or `declareSelfField` (which is slotless by construction).
 //
 // **The consumers, named rather than implied:** all of them are the mutable/`mem2reg` model, whose
-// rung is not scheduled and whose shape is not settled.
+// shape is not settled.
 //
-// ⚠ **AND THAT GROUP IS OWED A HARDER LOOK THAN "IT WILL BE USED LATER", BECAUSE TWO RUNGS HAVE NOW
-// DISPROVED ITS SIBLINGS.** `VarInfo.fieldOffset` was scaffolded beside these at M1, for the
-// self-field alias, with a comment explaining why an offset was the right thing to carry. When the
-// consumer finally arrived — P1.1b — the right answer turned out to be the field's INDEX, and
-// the scaffold was not extended but DELETED: an offset would have forced a second emit site and
-// left the mutability check no home. **`declarePayloadBinding`/`declarePayloadBindingShadowing` went
-// the same way, and they were the ones this paragraph named a consumer for**: the rung that finally
-// wrote to a payload (`mutable-enums`) needed a VALUE binding keyed on the scrutinee's `ValueId`, not
-// a SLOT binding keyed on its name, so the scaffold was deleted rather than called and
-// `declarePayloadValueBinding` written against the model the compiler actually has. The scaffold did not save
-// either rung any work; both had to undo it first. That is the `mintPhi` trap's other face, and it is
-// direct evidence about THESE members, not an analogy — they were guessed at by the same commit, for
-// the same tier, on the same reasoning. Deleting them is real work with a real diff (it reaches
-// `VarInfo.slot`,
-// `IrFunction.varSlotCount` and the Maxon→Std lowering's comments) and is deliberately NOT smuggled
-// into a review commit; it is its own change, with the full suite as its gate. Until it lands, no
-// one should read this API as a design that has been agreed — it is a guess that is still waiting to
-// find out whether it was right, and its sibling was not.
+// ⚠ **AND THAT GROUP IS OWED A HARDER LOOK THAN "IT WILL BE USED LATER".** A scaffold guessed ahead
+// of its consumer is not free: the consumer that finally arrives asks for the shape the compiler
+// actually has, and the guess has to be undone before it can be written. So no one should read this
+// API as a design that has been agreed — it is a guess still waiting to find out whether it was
+// right. Deleting it is real work with a real diff (it reaches `VarInfo.slot`,
+// `IrFunction.varSlotCount` and the Maxon→Std lowering's comments) and belongs in its own change,
+// with the full suite as its gate.
 
 export union ScopeLookupError implements Error
 	// String, not the raw slice: this arm exists only to be FORMATTED into a diagnostic.
@@ -150,11 +138,9 @@ export type Scope
 	// Allocate a slot for `name` without the self-field-shadow guard — the shared slot-allocating
 	// core for `declare`.
 	//
-	// ⚠ It also called itself "the error-recovery path after a caller reported E3006" until P1.1a
-	// wave 3's review, and there is no such caller and never has been: the E3006 that exists is
-	// `declareValueBinding`'s, and the parser turns it into a `ParseError` and stops rather than
-	// recovering. Saying so mattered because that sentence was the only thing making this member
-	// look consumed. See the header — it is not.
+	// ⚠ It is NOT an error-recovery path: no caller recovers from E3006. The E3006 that exists is
+	// `declareValueBinding`'s, and the parser turns it into a `ParseError` and stops. Nothing
+	// consumes this member — see the header.
 	export function declareShadowing(name ByteArray, varType MaxonType, mutable bool) returns VarSlot
 		let slot = nextSlot
 		nextSlot = nextSlot + 1
@@ -203,7 +189,7 @@ export type Scope
 		return try self.declareBinding(VarInfo.createPayloadBinding(name, varType: varType, mutable: mutable, boundValue: value, scrutBox: scrutBox, slotOffset: slotOffset, storage: storage))
 	end 'declarePayloadValueBinding'
 
-	// Declare a value binding (M2's SSA-substitution model): bind `name` to the SSA
+	// Declare a value binding (the SSA-substitution model): bind `name` to the SSA
 	// value `value`, so a later reference resolves to it via `lookupValue`. No slot
 	// is allocated — value bindings need no stack storage (contrast the slot-based
 	// `declare*` paths that back the future mutable/mem2reg model).
@@ -280,7 +266,7 @@ export type Scope
 		vars.upsert(info.name, value: info)
 	end 'install'
 
-	// Rebind an ALREADY-DECLARED name to a new SSA value (M4b's on-the-fly SSA): a
+	// Rebind an ALREADY-DECLARED name to a new SSA value (on-the-fly SSA): a
 	// `var` reassignment (`x = expr`). Reads (`lookupValue`) resolve to this current
 	// value, so a read after a reassignment sees the new value — `boundValue` IS the
 	// variable's current SSA version, not the initializer's. Written THROUGH the
@@ -348,10 +334,8 @@ export type Scope
 	// whether a new binding would displace an alias (E3006). Those are the same question wearing
 	// two grammatical moods, not two questions.
 	//
-	// ⚠ It was written TWICE until this rung's review: a private `wouldShadowSelfField` with a
-	// byte-identical body sat 180 lines above, serving the writers while this one served the
-	// reader. Nothing made them agree — and had they drifted, NEITHER side would have failed to
-	// compile: a writer answering `false` lets a local silently displace the field, so every later
+	// ⚠ A second copy serving one side would be a rule nothing makes agree, and NEITHER divergence
+	// fails to compile: a writer answering `false` lets a local silently displace the field, so every later
 	// read in the method resolves to the local and the field's reads and writes simply stop
 	// happening; a reader answering `false` sends the bare name to `lookupValue`, which hands back
 	// an alias's unset `boundValue` of 0 — the RECEIVER. Both are wrong answers with no diagnostic.
@@ -388,9 +372,9 @@ export type Scope
 	// unwinds a name declared twice in one frame through its own shadow chain).
 	// O(declarations-in-this-frame).
 	//
-	// THE OWNERSHIP HOOK LIVES HERE (M6): each iteration already holds the `VarInfo`
+	// THE OWNERSHIP HOOK LIVES HERE: each iteration already holds the `VarInfo`
 	// being torn down, so `ownedInFrame` classifies it in place and the Own tier emits
-	// its `own.drop`/`own.release` at exactly this point. At M1 every binding is
+	// its `own.drop`/`own.release` at exactly this point. Every binding is
 	// `trivial`, so the classifier is always false and nothing is emitted.
 	export function popScope()
 		let mark = try frameMarks.pop() otherwise panic("Scope.popScope: frameMarks is empty (unmatched popScope)")
@@ -417,7 +401,7 @@ export type Scope
 	end 'popScope'
 end 'Scope'
 
-// A stack of `Scope`s — held by the parser as it detects closure captures (P1.5-A2a; see
+// A stack of `Scope`s — held by the parser as it detects closure captures (see
 // `Parser.closureCaptureScopes`). A `Scope` is a reference type, so this stack holds pointers to the
 // live enclosing scopes a closure body is checked against, never copies of them.
 export typealias ScopeArray = Array with Scope

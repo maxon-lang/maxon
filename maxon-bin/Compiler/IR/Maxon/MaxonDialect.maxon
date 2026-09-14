@@ -5,36 +5,31 @@
 // of width unification. Width/signedness collapse happens only in
 // lowerMaxonToStd.
 //
-// THIN for maxon M1: this carries exactly the shapes the `return 42` slice
-// needs — the `literal` and `ret` ops, and a MaxonType with the primitive +
-// named + unresolved arms (enough to type `int` and `ExitCode`). Later
-// milestones GROW MaxonType (string/character/function/generic/interface arms),
-// MaxonOp (variables, arithmetic, calls, control flow, …), and the ownership
-// signature modes. `MaxonOpMeta{category}` per-variant tagging means a new op
-// cannot be added without declaring its category.
+// `MaxonOpMeta{category}` per-variant tagging means a new op cannot be added
+// without declaring its category.
 
-// --- Ownership lattice (the M1 ownership scaffold) ---
+// --- Ownership lattice ---
 //
 // The 4-value ownership lattice, born at the Maxon tier (per PLAN.md: ownership
 // is a first-class Maxon-dialect concept, resolved before lowerMaxonToStd). It
 // has three first-class homes and ZERO sidetables:
-//   1. an OwnershipKind attribute on every binding/value (this enum) — carried
-//      on `VarInfo.ownership` today; on Std/Own-tier values from M6;
+//   1. an OwnershipKind attribute on every binding/value (this enum), carried
+//      on `VarInfo.ownership`;
 //   2. signature ownership modes in the function type (param consume/borrow/copy,
-//      return owned/borrow) — added at M5/M6;
-//   3. explicit `own.*` ops in the block stream (the Own dialect) — added at M6.
+//      return owned/borrow);
+//   3. explicit `own.*` ops in the block stream (the Own dialect).
 //
 // Kinds:
 //   - trivial — scalar / no destructor; never dropped, never refcounted.
 //   - owned   — unique heap value; dropped exactly once unless moved.
-//   - borrow  — non-owning view; never dropped; carries a lifetime (M7).
+//   - borrow  — non-owning view; never dropped; carries a lifetime.
 //   - shared  — escape-promoted to runtime refcounting (the ONLY place
-//               refcounts survive — emitted solely for `shared`, M8).
+//               refcounts survive — emitted solely for `shared`).
 //
-// PRESENT-BUT-INERT AT M1: every binding/value is `trivial`; the Own tier
+// PRESENT BUT INERT: every binding/value is `trivial`; the Own tier
 // (OwnershipInfer / OwnershipCheck / EscapeAnalysis / InsertDrops) that reads
-// and mutates this is stubbed until M6. This is what "designed in from the
-// first commit" means — M6 activates the scaffold, it is not retrofitted.
+// and mutates this is stubbed. The scaffold is designed in rather than
+// retrofitted.
 export enum OwnershipKind
 	trivial
 	owned
@@ -42,7 +37,7 @@ export enum OwnershipKind
 	shared
 end 'OwnershipKind'
 
-// True for the M1 default kind (no drop, no refcount). Lifted out so the Own
+// True for the default kind (no drop, no refcount). Lifted out so the Own
 // tier and Scope's per-frame owned-values gate share one classifier instead of
 // re-spelling the `== OwnershipKind.trivial` compare at each site.
 export function isTrivialOwnership(kind OwnershipKind) returns bool
@@ -55,14 +50,14 @@ end 'isTrivialOwnership'
 // unbounded (one entry per distinct named reference seen in source).
 export typealias TypeNameId = int(0 to u64.max)
 
-// ⭐⭐ **A GENERIC TYPE'S TYPE-PARAMETER REFERENCE (P1.6-A): `T` in `type Box uses T`. THE ID IS A
-// DIGEST OF `(declaring type name, parameter name)` — NOT A POSITION (W14).**
+// ⭐⭐ **A GENERIC TYPE'S TYPE-PARAMETER REFERENCE: `T` in `type Box uses T`. THE ID IS A
+// DIGEST OF `(declaring type name, parameter name)` — NOT A POSITION.**
 //
-// ⛔ **IT WAS A POSITION, AND A POSITION IS NOT AN IDENTITY.** `typeParameter(0)` was the same value
+// ⛔ **A POSITION IS NOT AN IDENTITY.** `typeParameter(0)` is the same value
 // for EVERY generic type's first parameter, so `Array with U` inside `type HoldA uses U` and
-// `Array with V` inside `type HoldB uses V` built the same `GenericInstanceRegistry.instanceKey` and
-// interned as ONE instance. Two different types, one key. MEASURED, on two programs byte-identical
-// apart from which type is declared first: `b.items` — a `HoldB`'s field — was cited as
+// `Array with V` inside `type HoldB uses V` build the same `GenericInstanceRegistry.instanceKey` and
+// intern as ONE instance. Two different types, one key. MEASURED under a positional id, on two programs
+// byte-identical apart from which type is declared first: `b.items` — a `HoldB`'s field — was cited as
 // `HoldA.Items` in one order and `HoldB.Items` in the other, because `deriveInstanceDisplayNames`
 // settles "two names for one instance" by FIRST DECLARATION and the collision had made the two
 // names true of one instance. See `specs/generic-types.md`'s
@@ -79,8 +74,8 @@ export typealias TypeNameId = int(0 to u64.max)
 // union by `maxonTypeOfTag(tag, ONE nameId)` below. `ValueTypeTag`'s own header carries the A/B for
 // widening that column: **+4,165 allocations on the smallest scale rung**, and +5,540 for the
 // reconstruct-on-read variant. A digest is one int, so the column, `maxonTypeOfTag` and
-// `Parser.mintSelfReturnedWitnessResult` (which rebuilds this arm from a raw column int) are all
-// unchanged by W14.
+// `Parser.mintSelfReturnedWitnessResult` (which rebuilds this arm from a raw column int) all read
+// it as one int.
 //
 // A digest, masked to 63 bits at its one minter (`typeParamTokenFor`) so it fits this column as a
 // QUANTITY. It rides the `nameId` column exactly as `named`/`structRef` do, alongside the interned
@@ -88,19 +83,18 @@ export typealias TypeNameId = int(0 to u64.max)
 export typealias TypeParamId = int(0 to u64.max)
 
 // ⭐ **A TYPE PARAMETER'S POSITION IN ITS DECLARING TYPE'S `uses` LIST — a DIFFERENT number from
-// `TypeParamId` since W14, and that is the whole point of naming it apart.** `Box with X` binds
+// `TypeParamId`, and that is the whole point of naming it apart.** `Box with X` binds
 // argument 0 to the parameter at position 0, so the position is what indexes an instance's
 // `argTypes`, a `where` clause's witness slot and a `StructLayout.typeParamNames` entry.
 //
-// ⛔ **THE TWO USED TO BE ONE NUMBER, AND THAT IS EXACTLY HOW A LOSSY KEY BECAME AN IDENTITY.** With
-// the id spelled as the position, `constraint.typeParamIndex == valueNameId(receiver)` compared a
-// POSITION against an IDENTITY and read as correct code (`Parser.findWitnessDispatchCandidates`).
-// Named apart, every such site has to say which it means. They share an underlying range because
-// both are unbounded counts, so the compiler cannot catch a mix-up — the NAMES are what make one
-// readable.
+// ⛔ **SPELL THE ID AS THE POSITION AND A LOSSY KEY BECOMES AN IDENTITY.** One number for both makes
+// `constraint.typeParamIndex == valueNameId(receiver)` compare a POSITION against an IDENTITY and
+// read as correct code (`Parser.findWitnessDispatchCandidates`). Named apart, every such site has to
+// say which it means. They share an underlying range because both are unbounded counts, so the
+// compiler cannot catch a mix-up — the NAMES are what make one readable.
 export typealias TypeParamPosition = int(0 to u64.max)
 
-// A generic INSTANCE `Base with Args` (P1.6-A): `Box with Integer`. The id keys the
+// A generic INSTANCE `Base with Args`: `Box with Integer`. The id keys the
 // `GenericInstanceRegistry` (SignatureIndex), which holds the `(baseId, argTypes)` payload OUT OF
 // LINE — inlining it into the union would make `MaxonType` recursively aggregate (E4014). Same
 // underlying range as `TypeNameId` for the reason `TypeParamId` is.
@@ -119,30 +113,28 @@ export typealias GenericInstanceId = int(0 to u64.max)
 // `unresolved` with a concrete type. Lowering must never see it.
 //
 // `exitCode` is the RESOLVED form of the `ExitCode` builtin alias — the one
-// named alias TypeResolution knows without loading the stdlib (M1 shortcut; see
+// named alias TypeResolution knows without loading the stdlib (see
 // TypeResolution.maxon). It is a width-FREE tag exactly like `boolean` /
 // `integer`: it carries no width itself, and its width (unsigned 32-bit) is
 // assigned only at the Maxon→Std boundary by `maxonTypeToStdType`. So the
 // invariant "MaxonType has no concept of width; width collapse happens only in
 // lowering" is preserved — `exitCode` is just another primitive tag the parser
-// never writes and the resolver produces. More resolved builtin-alias arms (or
-// a general `builtinAlias(kind)` arm) grow at M9/M10 when user types + the
-// ranged-typealias registry land.
+// never writes and the resolver produces.
 //
 // `structRef` is a reference to a DECLARED STRUCT TYPE (`type Point`) — an 8-byte pointer to a
-// heap-allocated, refcounted box (P1.0r). It is a SEPARATE ARM FROM `named`, and that separation
-// is the whole reason this rung could add structs without breaking six rules at once.
+// heap-allocated, refcounted box. It is a SEPARATE ARM FROM `named`, and that separation
+// is what lets a struct reference obey the struct rules without bending the alias ones.
 //
 // ⭐ **`named` MEANS "A RANGED NUMERIC ALIAS", AND FIVE PLACES READ IT.**
 // `TypeRules.typeClassOf` calls a `named` type `numeric`; `tagIsIntegral` calls it integral;
 // `typeTagName` prints it as `int`; `notOperatorFor` gives it the BITWISE `not`; and
-// `valueTagToStdType` collapses it to i64. As of F1 `Parser.readTypeAliasDeclaration` accepts an
-// `int(low to high)` OR a `float(low to high)` alias, so only `typeClassOf` is still a theorem (both
+// `valueTagToStdType` collapses it to i64. `Parser.readTypeAliasDeclaration` accepts an
+// `int(low to high)` OR a `float(low to high)` alias, so only `typeClassOf` is a theorem (both
 // aliases are numeric); the other four treat a `named` value as an INT — correct for an int alias and
 // DELIBERATELY approximate for a float one, because a float alias is tagged `named` only in the
-// param/field positions F1 defers to the float ABI (F2), where the int reading yields a type error or
+// param/field positions deferred to the float ABI, where the int reading yields a type error or
 // an x64 ABI panic, never a wrong answer (each of those four says so in its own words and names the
-// alias-registry resolution F2 needs). Filing a struct under `named` would instead have made all five
+// alias-registry resolution it wants). Filing a struct under `named` would instead have made all five
 // FALSE at once and silently: `p + 1` would compile to pointer arithmetic, `return p` from an
 // `ExitCode` function would hand back the box's address, and `not p` would complement it. The tag is
 // what the rules read, so the tag is where the distinction has to live.
@@ -156,7 +148,7 @@ export typealias GenericInstanceId = int(0 to u64.max)
 //
 // Void is NOT a MaxonType — a non-value can't be a value-type. Function return
 // types use MaxonReturnType (below).
-// `string` is the `String` BUILTIN — a POINTER to a fused 56-byte record (P1.2 wave A). It is its
+// `string` is the `String` BUILTIN — a POINTER to a fused 56-byte record. It is its
 // OWN arm, NEVER `named`, for the identical reason `structRef` is: the five rules that read `named`
 // (`typeClassOf`, `tagIsIntegral`, `typeTagName`, `notOperatorFor`, `valueTagToStdType`) all treat it
 // as a ranged INT, and filing String under `named` would make `s + t`, `not s` and `return s` from an
@@ -181,7 +173,7 @@ export union MaxonType
 	structRef(id TypeNameId)
 	string
 
-	// A non-capturing FUNCTION VALUE (P1.5-A1) — a bare code pointer, no environment. `id` is the
+	// A non-capturing FUNCTION VALUE — a bare code pointer, no environment. `id` is the
 	// interned name that GOVERNS the value's signature: the FUNCTION's own name for a `functionRef`
 	// (`let f = double` → `function(intern("double"))`), or a function-TYPEALIAS name for a declared
 	// place (`f UnaryOp` → `function(intern("UnaryOp"))`). An indirect call recovers the return type
@@ -203,11 +195,11 @@ export union MaxonType
 	//
 	function(id TypeNameId)
 
-	// A TYPE-PARAMETER reference (P1.6-A) — `T` inside `type Box uses T`. It is OPAQUE: a trivial
+	// A TYPE-PARAMETER reference — `T` inside `type Box uses T`. It is OPAQUE: a trivial
 	// type parameter lowers to an 8-byte machine word (`valueTagToStdType` → i64) exactly as
 	// `structRef`/`string`/`function` do, so a generic type's method bodies compile ONCE against `T`
 	// and are byte-identical to the equivalent monomorphic struct. `id` is a DIGEST of the pair
-	// `(declaring type name, parameter name)` (see `TypeParamId`, and W14 for the collision a bare
+	// `(declaring type name, parameter name)` (see `TypeParamId` for the collision a bare
 	// position was) — there is no substitution in the shared body, so `Box.get() returns T` binds an
 	// opaque value the use site compares as an i64. It agrees with any concrete type
 	// (`TypeClass.typeParameter`), the deferral that lets a concrete argument meet a `T` parameter
@@ -215,14 +207,14 @@ export union MaxonType
 	//
 	typeParameter(id TypeParamId)
 
-	// A generic INSTANCE `Base with Args` (P1.6-A) — `Box with Integer`, the resolved form of a
+	// A generic INSTANCE `Base with Args` — `Box with Integer`, the resolved form of a
 	// generic-instance typealias. It is a POINTER to the base struct's box (a machine word, i64), so
 	// a value of an instance type is a struct reference like any other. `id` keys the
 	// `GenericInstanceRegistry` for its `(baseId, argTypes)` payload (OUT OF LINE — see
 	// `GenericInstanceId`).
 	genericInstance(id GenericInstanceId)
 
-	// ⭐ **A `Character` — ONE EXTENDED GRAPHEME CLUSTER (P1.8 slice B).** Represented by the SAME fused
+	// ⭐ **A `Character` — ONE EXTENDED GRAPHEME CLUSTER.** Represented by the SAME fused
 	// 56-byte record a `String` is (`StringRuntime`'s layout), holding the cluster's UTF-8 bytes: a
 	// Character IS an owned byte range with a length, and the compiler has exactly one of those. That is why it
 	// drops through `__str_decref`, clones through `__str_clone` and promotes by the fused-record blit —
@@ -240,7 +232,7 @@ export union MaxonType
 	//
 	character
 
-	// ⭐⭐ **AN EXISTENTIAL — A VALUE HELD AT ITS INTERFACE TYPE (P1.7a-existentials slice 1).** `id` is the
+	// ⭐⭐ **AN EXISTENTIAL — A VALUE HELD AT ITS INTERFACE TYPE.** `id` is the
 	// interned INTERFACE name (`Backend`), which is what the dispatch resolves its method slot against and
 	// what a widening checks conformance to.
 	//
@@ -255,10 +247,10 @@ export union MaxonType
 	// ⚠ **THE WITNESS HALF IS A BARE `.rdata` ADDRESS AND IS NEVER REFCOUNTED.** Only the value half can own
 	// heap; a witness table is immortal.
 	//
-	// ⚠ **IT IS ITS OWN ARM AND NOT `named`, and that is the whole of what this rung repairs.** An interface
-	// name in a type position used to fall through `parseTypeReference` to `named` — where `TypeRules.typeClassOf`
-	// reads every `named` as a ranged INT alias (the theorem its comment states, which this arm is the first
-	// counter-example to) and `typeTagName` renders it `int`. MEASURED before this arm existed: a field
+	// ⚠ **IT IS ITS OWN ARM AND NOT `named`.** Routed to `named`, an interface name in a type position
+	// would meet `TypeRules.typeClassOf`, which reads every `named` as a ranged INT alias (the theorem
+	// its comment states, which this arm is the first counter-example to), and `typeTagName` would
+	// render it `int`. MEASURED: a field
 	// declared `as Backend` was refused `E3005: cannot assign 'struct' to variable 'b' of type 'int'`, and a
 	// method call on such a parameter was `E3011: Unknown type 'Backend'` for an interface declared three
 	// lines above.
@@ -282,7 +274,7 @@ end 'MaxonType'
 export typealias MaxonTypeArray = Array with MaxonType
 
 // A generic instance's argument list is a `MaxonTypeArray`, and the `GenericInstanceRegistry`
-// (SignatureIndex) keeps one per interned instance (P1.6-A) — hence an array OF them.
+// (SignatureIndex) keeps one per interned instance — hence an array OF them.
 export typealias MaxonTypeArrayArray = Array with MaxonTypeArray
 
 // --- ValueTypeTag: MaxonType's discriminant, WITHOUT its payload ---
@@ -295,11 +287,11 @@ export typealias MaxonTypeArrayArray = Array with MaxonTypeArray
 // That column may NOT be an `Array with MaxonType`, and the reason is measured, not
 // aesthetic. **A Maxon union value is a heap object — every case, not just the ones with a
 // payload.** So each `MaxonType.integer` a type rule *constructs* is an allocation, and the
-// per-op type plumbing (`what type does this binOp yield?`, `is this operand a bool?`) put
-// one on the compiler's single hottest path. `scale-test` charged the first cut of it
+// per-op type plumbing (`what type does this binOp yield?`, `is this operand a bool?`) puts
+// one on the compiler's single hottest path. `scale-test` charges a `MaxonType` column
 // **+4,165 allocations on the smallest rung**, and an A/B that replaced the column with a
-// freshly-constructed `MaxonType.integer` at every read made it WORSE (+5,540) — which is
-// what proved that CONSTRUCTING a union costs and READING a stored one does not.
+// freshly-constructed `MaxonType.integer` at every read measured WORSE (+5,540) — which is
+// what proves that CONSTRUCTING a union costs and READING a stored one does not.
 //
 // An `enum` is a scalar. So the column is a `ValueTypeTag` plus a parallel `TypeNameId`, two
 // DENSE INT ARRAYS that allocate nothing per value, and a `MaxonType` is materialized only
@@ -310,11 +302,10 @@ export typealias MaxonTypeArrayArray = Array with MaxonTypeArray
 // discriminant of a `MaxonType`; `void` is the tag of a ValueId that names NO VALUE — the
 // result slot of a call to a void function, which `MaxonOp.call` must carry an id for (the op
 // shape has one) even though there is nothing in it. It exists because the alternative is a
-// SENTINEL, and that sentinel was a real wrong answer: `calleeResultType` used to report a void
-// callee as `unresolved` — the "I could not pin this type" tag, which `TypeRules.typeClassOf`
-// maps to `unknown`, which AGREES WITH EVERYTHING. So `let x = noop()` then `x + 4` compiled,
-// and returned whatever was in RAX. One sentinel, two meanings, and the rules could not tell
-// them apart because nothing distinguished them.
+// SENTINEL, and a sentinel here is a real wrong answer: a void callee reported as `unresolved`
+// — the "I could not pin this type" tag, which `TypeRules.typeClassOf` maps to `unknown`, which
+// AGREES WITH EVERYTHING — lets `let x = noop()` then `x + 4` compile and return whatever was in
+// RAX. One sentinel, two meanings, and the rules cannot tell them apart.
 //
 // A `void`-tagged value is WRITE-ONLY, by construction: the only one minted is the result of a
 // call in STATEMENT position (`Parser.parseCall`, `resultUsed: false`), whose ValueId is
@@ -323,8 +314,7 @@ export typealias MaxonTypeArrayArray = Array with MaxonTypeArray
 // and every rule that could be says so with a panic rather than an answer.
 //
 // `structRef` is the tag of a reference to a declared struct type — see MaxonType's `structRef`
-// arm for why it is not `named`. It is Appending past the tail is the one placement the compiler
-// reports on.
+// arm for why it is not `named`.
 export enum ValueTypeTag
 	boolean
 	integer
@@ -343,11 +333,11 @@ export enum ValueTypeTag
 	// `function` arm for why it is not `named`).
 	function
 
-	// The tag of a TYPE-PARAMETER value (P1.6-A) — a reference to `T` inside a generic type (see
+	// The tag of a TYPE-PARAMETER value — a reference to `T` inside a generic type (see
 	// MaxonType's `typeParameter` arm). Opaque: it lowers to an i64 and agrees with any concrete type.
 	typeParameter
 
-	// The tag of a generic-INSTANCE value (P1.6-A) — a pointer to the base struct's box (see MaxonType's
+	// The tag of a generic-INSTANCE value — a pointer to the base struct's box (see MaxonType's
 	// `genericInstance` arm). APPENDED AT THE END, past `typeParameter`.
 	genericInstance
 
@@ -410,7 +400,7 @@ export function typeNameIdOf(t MaxonType) returns TypeNameId
 		function(id) gives id
 
 		// A type-parameter reference and a generic instance both carry an id (a `(declaring type,
-		// parameter name)` DIGEST and a GenericInstanceId respectively, P1.6-A/W14); both ride the name
+		// parameter name)` DIGEST and a GenericInstanceId respectively); both ride the name
 		// column so a value of that type round-trips through `maxonTypeOfTag` — which is what makes the
 		// digest's ONE-int width load-bearing rather than incidental. NOT collapsed into a range: other
 		// arms sit between.
@@ -493,7 +483,7 @@ export let NoTypeParamId = 0 as TypeParamId
 export let NoGenericInstance = i64.max as GenericInstanceId
 
 // ⭐⭐ **HOW MANY OF THESE DECLARED PARAMETERS CARRY `tag` — THE RESERVE/SUPPLY COUNT, AND IT HAS EXACTLY
-// ONE HOME (P1.7a-existentials slice 1 review).**
+// ONE HOME.**
 //
 // Two hidden-parameter blocks are sized by it, and each is counted TWICE — once by the PARSER, deciding how
 // many slots a declaration RESERVES, and once by the LOWERING, deciding how many arguments a call SUPPLIES:
@@ -522,7 +512,7 @@ export function countParamsWithTag(paramTypes MaxonTypeArray, tag ValueTypeTag) 
 	return n
 end 'countParamsWithTag'
 
-// ⭐⭐ **WHERE THE TWO OPTIONAL HIDDEN SLOTS SIT, WRITTEN ONCE (found at review of W190).** The ABI is
+// ⭐⭐ **WHERE THE TWO OPTIONAL HIDDEN SLOTS SIT, WRITTEN ONCE.** The ABI is
 // `[user][env][existentialWitness][layout][count][witness_0..k]`, and both optional blocks are addressed
 // FROM THE END — so each slot's ValueId is arithmetic on `paramCount` and the counts trailing it. That
 // arithmetic was spelled out twice per slot: once where the parser RESERVES it (`Parser.parseFunction`,
@@ -579,10 +569,10 @@ export function maxonTypeOfTag(tag ValueTypeTag, nameId TypeNameId) returns Maxo
 		function then return MaxonType.function(nameId)
 
 		// A type-parameter reference / generic instance rebuilds from the id column exactly as `named`
-		// does (P1.6-A) — the id is a `(declaring type, parameter name)` DIGEST / a GenericInstanceId
-		// (see MaxonType). A binding of a `T`-typed value (`let v = b.get()`) types from this. ⚠ W14
-		// changed WHAT the digest means and not its WIDTH, which is why this arm needed no change: the
-		// arm is rebuilt from ONE column int, and a digest is one column int.
+		// does — the id is a `(declaring type, parameter name)` DIGEST / a GenericInstanceId
+		// (see MaxonType). A binding of a `T`-typed value (`let v = b.get()`) types from this. ⚠ What the
+		// digest MEANS is free to change while its WIDTH does not: the arm is rebuilt from ONE column
+		// int, and a digest is one column int.
 		typeParameter then return MaxonType.typeParameter(nameId as TypeParamId)
 		genericInstance then return MaxonType.genericInstance(nameId as GenericInstanceId)
 
@@ -687,8 +677,8 @@ enum OpCategory
 	awaiting
 	closureProducer
 
-	// The `own.*` ownership ops (`move` / `borrow` / `drop` / `retain` / `release`,
-	// M6). They are a BAND OF `MaxonOp`, not a separate dialect or tier: `IrModule`
+	// The `own.*` ownership ops (`move` / `borrow` / `drop` / `retain` / `release`).
+	// They are a BAND OF `MaxonOp`, not a separate dialect or tier: `IrModule`
 	// is generic over exactly ONE op type, so an op living in the Maxon block stream
 	// IS a `MaxonOp`. Do NOT introduce a nested `MaxonOp.own(OwnOp)` — Maxon boxes
 	// every payload-carrying union case, so nesting would cost a second heap object
@@ -721,18 +711,15 @@ type MaxonOpMeta
 	export let category as OpCategory
 end 'MaxonOpMeta'
 
-// The binary operators the Maxon tier represents. M2 landed `add` (`+`); M3 grew
-// the non-trapping integer ALU set — `sub` (`-`) and `mul` (`*`) — when the Pratt
-// precedence climber replaced M2's `+`-only expression parser. M5.4 grew the
-// TRAPPING division family — `div` (`/`) and `mod` — now that x64 `idiv`'s fixed
-// RAX/RDX pair has the real register allocator to honor it. `add`/`sub`/`mul` share
-// the two-operand `binOp` shape AND lower to a `StdOp.binOp` opcode; `div`/`mod`
-// share the `binOp` shape here but lower to their OWN Std variants (`StdOp.div`/`mod`)
-// because idiv traps and needs `isPure: false` metadata a shared opcode cannot carry
-// — the same reason a comparison splits into `StdOp.cmp`. Appended at the END of the
-// enum (band-append) so `add to mul` still names the non-trapping arithmetic set.
+// The binary operators the Maxon tier represents. `add`/`sub`/`mul` share the
+// two-operand `binOp` shape AND lower to a `StdOp.binOp` opcode; the TRAPPING
+// `div`/`mod` share the `binOp` shape here but lower to their OWN Std variants
+// (`StdOp.div`/`mod`) because idiv traps and needs `isPure: false` metadata a shared
+// opcode cannot carry — the same reason a comparison splits into `StdOp.cmp`. The
+// trapping pair sits past the others so `add to mul` names the non-trapping
+// arithmetic set.
 //
-// P1.0d.2 appends the WORD-OPERATOR band — `and` / `or` / `xor` / `shl` / `shr`
+// The WORD-OPERATOR band is `and` / `or` / `xor` / `shl` / `shr`
 // (specs/bitwise-operators.md). Maxon spells these as KEYWORDS, not as `&`/`|`/`^`/
 // `<<`/`>>`, and `and`/`or`/`xor` are CONTEXT-DEPENDENT: bitwise on integers, LOGICAL
 // on bools. That duality is resolved entirely in the PARSER (which is the only tier
@@ -780,7 +767,7 @@ end 'MaxonOpMeta'
 // shifts, and neither of these is in any of them, so each `match` over this enum names them
 // explicitly.
 //
-// ⭐⭐ **X10 APPENDS THE UNSIGNED DIVISION PAIR, FOR `shrLogical`'s REASON, WORD FOR WORD.**
+// ⭐⭐ **THE UNSIGNED DIVISION PAIR STANDS APART FOR `shrLogical`'s REASON, WORD FOR WORD.**
 // `divUnsigned`/`modUnsigned` are the SAME source operators as `div`/`mod` — `/` and `mod`. Which one
 // the parser emits is decided by BOTH operands' declared ranges and by nothing else (TypeRules' ⭐⭐
 // THE DIVISION SIGNEDNESS RULE): a divide is unsigned when neither operand can be negative and at
@@ -814,13 +801,13 @@ export enum MaxonBinOp
 	modUnsigned
 end 'MaxonBinOp'
 
-// The unary (prefix) operators the Maxon tier represents. M3 lands `neg` (the
-// prefix `-`) only. A unary op carries ONE operand (unlike MaxonBinOp's two), so
-// it rides its own `MaxonOp.unaryOp` variant rather than being folded into `binOp`
-// — the operand shapes differ, and a shared variant could not carry both.
+// The unary (prefix) operators the Maxon tier represents, starting with `neg` (the
+// prefix `-`). A unary op carries ONE operand (unlike MaxonBinOp's two), so it rides
+// its own `MaxonOp.unaryOp` variant rather than being folded into `binOp` — the
+// operand shapes differ, and a shared variant could not carry both.
 //
-// P1.0d.2 appends the two readings of the prefix keyword `not`, which — like
-// `and`/`or`/`xor` — is context-dependent on its operand's type:
+// The prefix keyword `not` has two readings, and — like `and`/`or`/`xor` — is
+// context-dependent on its operand's type:
 //   • `bitNot`     — INTEGER `not` (`not 5` == -6): flip every bit.
 //   • `logicalNot` — BOOL `not` (`not true` == false): flip bit 0 only.
 // They are two ENUM ARMS rather than one `not` resolved later because the choice is a
@@ -829,27 +816,25 @@ end 'MaxonBinOp'
 // by operand type anyway — a bool one is control flow — so classifying `not` in the same place costs
 // nothing and keeps ONE type oracle.
 //
-// P1.0d.4 appends the CONVERSION PAIR — the two ops that move a value BETWEEN the integer and
-// float domains, and the reason a float can be computed with at all. They are unary ops rather
+// THE CONVERSION PAIR moves a value BETWEEN the integer and float domains, and is the reason a
+// float can be computed with at all. They are unary ops rather
 // than a dedicated `MaxonOp.convert` variant because a conversion has a unary op's exact shape
 // (one operand in, one result out, non-trapping), and the dialect's rule is that shape decides.
 //
 // ⭐ THEY ARE THE ONLY UNARY OPS WHOSE RESULT TYPE DIFFERS FROM THEIR OPERAND'S. `neg`/`bitNot`/
-// `logicalNot` all answer in the type they were given, which is why `emitUnaryOp` could take the
-// operand's own tag as the result tag and nothing ever noticed. These cannot — so their result
-// tag is passed EXPLICITLY at the emit site, and the Std tier says the same thing a tier down
+// `logicalNot` all answer in the type they were given, so `emitUnaryOp` can take the operand's own
+// tag as the result tag. These cannot — so their result tag is passed EXPLICITLY at the emit site, and the Std tier says the same thing a tier down
 // (StdUnaryOpcode: "`operandType` is always the SOURCE, and the OPCODE names the result").
 //
 //   • `trunc`          — SOURCE-LEVEL, the `trunc(x)` builtin: f64 → int, TRUNCATING TOWARD ZERO
 //                        (x64 `cvttsd2si`; the rounding `cvtsd2si` would answer 4 for
-//                        `trunc(3.99)`). The one bridge out of the float domain the language has
-//                        at this rung, and what nearly every case in specs/float-type.md
-//                        ends on.
+//                        `trunc(3.99)`). The one bridge out of the float domain the language has,
+//                        and what nearly every case in specs/float-type.md ends on.
 //   • `promoteToFloat` — COMPILER-INSERTED, never written by a user: int → f64 (x64 `cvtsi2sd`).
 //                        It is what makes `5 + 2.0` mean 7.0, and `TypeRules.arithResultTag`
 //                        answering `float` is the promise this op keeps.
 //
-// P1.0d.4-C appends the ARITY-1 FLOAT MATH INTRINSICS — `floor`, `ceil`, `round`, `sqrt`, and (with
+// THE ARITY-1 FLOAT MATH INTRINSICS are `floor`, `ceil`, `round`, `sqrt`, and (with
 // specs/abs.md) `abs`, FIVE in all (specs/{floor,ceil,round,sqrt,abs}.md). They are unary ops for the
 // dialect's own reason: one operand in, one result out, non-trapping, so the SHAPE decides.
 //
@@ -981,12 +966,11 @@ end 'signExtendSlotOf'
 
 // ⭐⭐ **FROM A NARROW SIGNED SLOT'S WIDTH TO THE OP THAT RESTORES ITS SIGN — AND IT CARRIES NO WIDTHS OF ITS
 // OWN.** It names the three OPS (it has to; they are what it returns) and asks `signExtendSlotOf` what each
-// one extends from, so the numbers 1/2/4 exist in exactly one place. That asymmetry is deliberate: the two
-// directions were briefly two `1/2/4 ↔ I8/I16/I32` tables under a header claiming to be "the ONE map", and
-// only one of them was exhaustive by construction — so a divergence between them would not have been a
-// compile error, it would have been a sign extension from the WRONG BIT, which is a silently wrong NUMBER
-// and the exact failure this family exists to prevent. An op roster written twice cannot do that; a width
-// roster written twice can.
+// one extends from, so the numbers 1/2/4 exist in exactly one place. That asymmetry is deliberate: two
+// `1/2/4 ↔ I8/I16/I32` tables, one per direction, are not both exhaustive by construction — so a divergence
+// between them is no compile error but a sign extension from the WRONG BIT, a silently wrong NUMBER and the
+// exact failure this family exists to prevent. An op roster written twice cannot do that; a width roster
+// written twice can.
 //
 // It PANICS on any other width for `slotUnsignedMax`'s reason: reaching one means a caller sized a slot from
 // something other than `LayoutDescriptor.signedSlotBytes`'s ladder.
@@ -1017,12 +1001,12 @@ function signExtendsFromSlot(op MaxonUnaryOp, slotBytes ByteOffset) returns bool
 	end 'slot'
 end 'signExtendsFromSlot'
 
-// The comparison operators the Maxon tier represents (M4). A comparison SPLITS OUT
-// of `MaxonBinOp` — even though it also takes two operands — because it produces a
+// The comparison operators the Maxon tier represents. A comparison SPLITS OUT of
+// `MaxonBinOp` — even though it also takes two operands — because it produces a
 // boolean (i1) and lowers to Std's separate `cmp` op (which sets the `isCmp`
-// metadata the arithmetic `binOp` does not). Keeping it a distinct op family from
-// its first commit mirrors the Std tier's `binOp`/`cmp` split, so nothing downstream
-// has to re-derive "this two-operand op is a compare, not arithmetic".
+// metadata the arithmetic `binOp` does not). A distinct op family here mirrors the
+// Std tier's `binOp`/`cmp` split, so nothing downstream has to re-derive "this
+// two-operand op is a compare, not arithmetic".
 export enum MaxonCmpOp
 	eq
 	ne
@@ -1040,20 +1024,18 @@ end 'MaxonCmpOp'
 // an arm names the cases it covers, so a variant no arm names is E2026 at that match.
 // Band position is an organizing choice, not a rule reviewers enforce by hand; `StdOp`
 // carries the same one, for the same reason.
-// ⭐⭐ **WAS THIS CALL SITE'S CALLEE MINTED BY THE `<primitive>.<method>` REWRITE (A1s-prim)?** — the ONE
+// ⭐⭐ **WAS THIS CALL SITE'S CALLEE MINTED BY THE `<primitive>.<method>` REWRITE?** — the ONE
 // fact about a call that its CALLEE BYTES cannot carry, and the reason it rides the op rather than being
 // re-derived downstream.
 //
 // `int.fromString(s)` links to `__int_fromString`, a name that shares not one byte with what the author
 // wrote. Every diagnostic naming that callee — E3036's arity, E3037's label, E3057's missing `try` — would
-// otherwise quote a symbol the program does not contain, which is the defect class the compiler already ruled on at
-// D11c and fixed in its own compiler.
+// otherwise quote a symbol the program does not contain.
 //
-// ⚠⚠ **AND IT CANNOT BE ANSWERED FROM THE NAME, WHICH IS D12's WHOLE LESSON.** `stdlib/Builtins.maxon`
+// ⚠⚠ **AND IT CANNOT BE ANSWERED FROM THE NAME.** `stdlib/Builtins.maxon`
 // declares `__int_fromString` and CALLS it (`__byte_fromString`'s first line), having genuinely written
 // those bytes — so a name-keyed answer would rename the author's own call in their own file. A callee two
-// spellings share is a LOSSY KEY used as an identity, and D12 is on the board because that shape shipped
-// once already. The site knows; the name does not; so the site says.
+// spellings share is a LOSSY KEY used as an identity. The site knows; the name does not; so the site says.
 //
 // ⭐ **IT IS DELIBERATELY NOT FOLDED INTO `GtRuntime.runtimeCalleeSourceMethod`**, which is the ONE home of
 // *"what did the author call this RUNTIME callee?"*. That map is keyed by NAME and may be, because a
@@ -1061,7 +1043,7 @@ end 'MaxonCmpOp'
 // questions that read alike and have different keys — keep them apart.
 //
 // ⚡ An ENUM, not a union: a payload-free union CASE still heap-allocates, and this rides every parsed
-// call (the same measurement that reverted the math-intrinsic resolver, `Parser.parseCallNamed`).
+// call — the same per-call cost `Parser.parseCallNamed` measures for the math-intrinsic resolver.
 export enum CalleeMint
 	// The callee names itself. A free call's identifier, a `Type.method` mangle, a compiler-emitted runtime
 	// entry — for all three, a diagnostic's noun is a question about the NAME, answered by the name-keyed
@@ -1073,8 +1055,8 @@ export enum CalleeMint
 	// drift; every consumer asks THAT rather than decoding the name for itself.
 	primitiveStatic
 
-	// `greet()` → `greet(name: __paramDefault#greet#0())`, minted by `Parser.fillArgsFromParamDefaults`
-	// (BATCH2 slice 4). The call is entirely the compiler's — the author wrote NO argument at all, let
+	// `greet()` → `greet(name: __paramDefault#greet#0())`, minted by `Parser.fillArgsFromParamDefaults`.
+	// The call is entirely the compiler's — the author wrote NO argument at all, let
 	// alone this callee — which is exactly the fact `requireCalleeIsNotReservedName` cannot read off a
 	// `__` name, since a `__` callee is otherwise something the author typed.
 	paramDefaultHelper
@@ -1091,7 +1073,7 @@ export enum CalleeMint
 	stringLiteralInit
 
 	// ⭐ `Bag.create()`'s `Self{}` → `Self{items: __fieldDefault#Bag#items()}`, minted by
-	// `Parser.fillFieldDefaultFromHelper` (S2f). It is `paramDefaultHelper` one door over and carries that arm's
+	// `Parser.fillFieldDefaultFromHelper`. It is `paramDefaultHelper` one door over and carries that arm's
 	// exact reason: the author
 	// wrote NO call at all — they wrote a struct literal that omitted a field — so `requireCalleeIsNotReservedName`
 	// cannot read "the compiler owns this `__` name" off the name, and a diagnostic quoting the callee would
@@ -1178,7 +1160,7 @@ export typealias ImmortalBoxNodeArray = Array with ImmortalBoxNode
 export union MaxonOp
 	// --- band: callFree ---
 	// A free-function call `callee(args…)` whose result is a freshly-minted ValueId.
-	// M5's first call op. Declared in its OWN band rather than inside `plain`, because its category is
+	// Declared in its OWN band rather than inside `plain`, because its category is
 	// what every classifier reads. `callFree` is the FIRST `OpCategory`, so this band leads the union.
 	//
 	// `callee` is identifier TEXT (a name, not a value) — a `ByteArray` slice of the
@@ -1252,19 +1234,18 @@ export union MaxonOp
 	retVoid = MaxonOpMeta{category: OpCategory.plain}
 
 	// Binary operation over two already-materialized SSA values:
-	// `result = lhs <op> rhs`. M2 emitted this only for `+`; M3 also carries `-`
-	// and `*` (MaxonBinOp.add/sub/mul). It stands alone (matched by variant), so
-	// category `plain` — declared at the end of the plain band.
+	// `result = lhs <op> rhs`. It stands alone (matched by variant), so category
+	// `plain` — declared at the end of the plain band.
 	binOp(result ValueId, lhs ValueId, rhs ValueId, op MaxonBinOp) = MaxonOpMeta{category: OpCategory.plain}
 
 	// Unary operation over one already-materialized SSA value: `result = <op> operand`.
-	// M3 emits this for prefix `-` (MaxonUnaryOp.neg). Like `binOp` it stands alone
+	// Emitted for prefix `-` (MaxonUnaryOp.neg). Like `binOp` it stands alone
 	// (matched by variant), so category `plain` — declared at the end of the plain band, after
 	// `binOp`.
 	unaryOp(result ValueId, operand ValueId, op MaxonUnaryOp) = MaxonOpMeta{category: OpCategory.plain}
 
 	// Comparison over two already-materialized SSA values: `result = lhs <op> rhs`,
-	// producing a boolean (i1). M4 emits this for `==`/`!=`/`<`/`>`/`<=`/`>=`. Its
+	// producing a boolean (i1), for `==`/`!=`/`<`/`>`/`<=`/`>=`. Its
 	// result feeds an `if`'s `condBranch`; the Std→x64 lowering FUSES the pair into
 	// `cmp` + `jcc` rather than materializing the bool. Category `plain` (it stands
 	// alone, matched by variant); appended at the END of the plain band after `unaryOp`.
@@ -1287,7 +1268,7 @@ export union MaxonOp
 	compare(result ValueId, lhs ValueId, rhs ValueId, op MaxonCmpOp, signedness IntegerSignedness) = MaxonOpMeta{category: OpCategory.plain}
 
 	// Two-way conditional branch terminator: if `cond` (an i1) holds, transfer to
-	// `thenBlockId`, else to `elseBlockId`. M4's `if` sets this as a block's
+	// `thenBlockId`, else to `elseBlockId`. An `if` sets this as a block's
 	// terminator (via emitTerminator). `cond` is the SSA value a `compare` defined;
 	// the block ids are the function-local BlockIds of the successor blocks. Category
 	// `plain`, matching the other terminators `ret`/`retVoid` (the Maxon-tier
@@ -1299,20 +1280,18 @@ export union MaxonOp
 	// block falls through to the merge (continuation) block rather than returning.
 	branch(targetBlockId BlockId) = MaxonOpMeta{category: OpCategory.plain}
 
-	// --- band: varAccess (P1.0d.5b — top-level `var`) ---
+	// --- band: varAccess ---
 	//
-	// The FIRST occupants of the `varAccess` band, which has been declared and empty since
-	// M1. They are the Maxon-tier twins of the Std memory band and lower to it 1:1
-	// (`lowerGlobalAddr`/`lowerLoadIndirect`/`lowerStoreIndirect`) — the same THREE-op split
-	// (address, then load or store) rather than a fused `globalLoad`, for the reason
-	// StdDialect's memory band gives: it is the general pair P1.1's field access and P1.2's
-	// heap access already need.
+	// The `varAccess` band's whole membership. They are the Maxon-tier twins of the Std memory
+	// band and lower to it 1:1 (`lowerGlobalAddr`/`lowerLoadIndirect`/`lowerStoreIndirect`) — the
+	// same THREE-op split (address, then load or store) rather than a fused `globalLoad`, for the
+	// reason StdDialect's memory band gives: it is the general pair a field access and a heap
+	// access already need.
 	//
-	// ⚠ APPENDED AT THE END OF THE UNION — past `branch`, the old last variant — NOT into
-	// the middle of the `varAccess` band's nominal position between `panicking` and
-	// `awaiting`. The band ORDER in `OpCategory` is the declaration's intent, and the bands stay
-	// category-contiguous because `varAccess` was EMPTY: these three are its whole membership, so they
-	// are contiguous wherever they sit.
+	// ⚠ DECLARED AT THE END OF THE UNION, NOT in the middle of the `varAccess` band's nominal
+	// position between `panicking` and `awaiting`. The band ORDER in `OpCategory` is the
+	// declaration's intent, and the bands stay category-contiguous because these three are
+	// `varAccess`'s whole membership, so they are contiguous wherever they sit.
 	//
 	// ⭐ NO PLACEHOLDER OP AND NO REWRITE PASS. `SignatureIndex` has the whole-program answer to whether
 	// a bare name is a local, a constant or a global before any file is parsed, so the parser emits the
@@ -1332,7 +1311,7 @@ export union MaxonOp
 	// result, so unlike its two band-mates it mints no ValueId.
 	storeIndirect(addr ValueId, offset ByteOffset, value ValueId, valueType MaxonType) = MaxonOpMeta{category: OpCategory.varAccess}
 
-	// A `String` LITERAL (P1.2 wave A): `result` is a pointer to an IMMORTAL 56-byte rdata record.
+	// A `String` LITERAL: `result` is a pointer to an IMMORTAL 56-byte rdata record.
 	// `bytes` is the literal's DECODED UTF-8 payload — the parser has already resolved every escape
 	// (`decodeEscapes`), so what rides here is the exact byte sequence the record's blob will hold.
 	//
@@ -1347,7 +1326,7 @@ export union MaxonOp
 	// `plain` (it stands alone, matched by variant).
 	stringLiteral(result ValueId, bytes ByteArray) = MaxonOpMeta{category: OpCategory.plain}
 
-	// --- P1.4b: scalar error handling (dual-register `(value, errorFlag)` ABI) ---
+	// --- scalar error handling (dual-register `(value, errorFlag)` ABI) ---
 	//
 	// Their `OpCategory` is metadata independent of this tail position.
 	//
@@ -1381,8 +1360,7 @@ export union MaxonOp
 	// ends on (including an `otherwise panic(…)` handler and a match `default panic(…)`). It is a BODY op,
 	// not a terminator: the parser emits it followed by a dead return terminator (control never returns, so
 	// the return is unreachable but keeps the block well-formed). `lowerMaxonToStd` interns the bytes as an
-	// immortal `.rdata` cstr and emits `StdOp.osPanic(label)` — the first occupant of the `panicking` band,
-	// which had been declared and empty since M1.
+	// immortal `.rdata` cstr and emits `StdOp.osPanic(label)` — the `panicking` band's own op.
 	//
 	// ⭐ **`message` IS BAKED BYTES, NOT A `ValueId`, AND THAT IS THE WHOLE OP.** The full line the runtime
 	// prints — `panic at <file>:<line>: <text>\n` — is assembled in the PARSER (`panicMessageLine`), because
@@ -1399,7 +1377,7 @@ export union MaxonOp
 	// carries the very same prefix as its first fragment.
 	panicAbort(message ByteArray) = MaxonOpMeta{category: OpCategory.panicking}
 
-	// --- P1.5-A1: non-capturing function values ---
+	// --- non-capturing function values ---
 	//
 	// Their `OpCategory` metadata places each variant
 	// logically, independent of this tail position.
@@ -1408,7 +1386,7 @@ export union MaxonOp
 	// NAME, looked up — not a value), per the MaxonOp header's value/name split. It has NO env, NO heap
 	// and NO effect: a bare code pointer, allocation-free. It lands in `plain` (matched by variant,
 	// standing alone) exactly as `literal`/`stringLiteral` do — NOT in the reserved `closureProducer`
-	// band, which is for A2's `closureCreate`, the op that allocates a heap environment block and is what
+	// band, which is for `closureCreate`, the op that allocates a heap environment block and is what
 	// a coarse "does this produce a heap closure?" membership test will want. functionRef allocates
 	// nothing, so it is not that.
 	functionRef(result ValueId, funcName ByteArray) = MaxonOpMeta{category: OpCategory.plain}
@@ -1427,7 +1405,7 @@ export union MaxonOp
 	//
 	// ⚠ **NO SIGNATURE RIDES THIS OP EITHER, and both consumers recover the same one the same way.** The Std
 	// `callIndirect` it lowers to carries the function value's register-file signature
-	// (`resultType`/`argFloatMask` — P1.5 #78), and both the argument validation and the argument WIDENING
+	// (`resultType`/`argFloatMask`), and both the argument validation and the argument WIDENING
 	// resolve it from the callee VALUE's governing name through `declaredFunctionShapeOf` — the declared type,
 	// which is the authority a call site derives its ABI from.
 	//
@@ -1437,10 +1415,9 @@ export union MaxonOp
 	// decref). A design fact about how this op is CONSUMED, recorded where it is DECLARED.
 	indirectCall(result ValueId, callee ValueId, args ValueIdArray) = MaxonOpMeta{category: OpCategory.callFree}
 
-	// --- P1.5-B1a: async / await (green-thread scheduler) ---
+	// --- async / await (green-thread scheduler) ---
 	//
-	// Their `OpCategory.awaiting` (the band declared and empty since
-	// M1) is metadata independent of this tail position.
+	// Their `OpCategory.awaiting` is metadata independent of this tail position.
 	//
 	// SPAWN a green thread running `callee(args…)` and yield a Promise handle. The Maxon-tier twin of `call`
 	// — same (callee NAME, args, `name:` labels, ranges) shape, so lowering slots the labelled args into
@@ -1460,7 +1437,7 @@ export union MaxonOp
 	// `result` is the awaited scalar. Lowers to `__gt_await(promise)`.
 	await(result ValueId, promise ValueId) = MaxonOpMeta{category: OpCategory.awaiting}
 
-	// --- P1.5-B2b: error-carrying `try await` ---
+	// --- error-carrying `try await` ---
 	//
 	// Its `OpCategory.awaiting` (shared with `await`) is metadata
 	// independent of this tail position.
@@ -1474,7 +1451,7 @@ export union MaxonOp
 	// plus the flag def.
 	tryAwait(result ValueId, errorFlag ValueId, promise ValueId) = MaxonOpMeta{category: OpCategory.awaiting}
 
-	// --- P1.6-B1: `sizeof(Type)` ---
+	// --- `sizeof(Type)` ---
 	//
 	// Its `OpCategory.plain` (it stands alone, matched by variant — like
 	// `literal`) is metadata independent of this tail position.
@@ -1486,7 +1463,7 @@ export union MaxonOp
 	// dictionary-passing model — see LayoutDescriptor). `result` is the integer it defines.
 	sizeofType(result ValueId, targetType MaxonType) = MaxonOpMeta{category: OpCategory.plain}
 
-	// --- P1.7 slice 2: `b"…"` byte-string literals ---
+	// --- `b"…"` byte-string literals ---
 	//
 	// Its `OpCategory.plain` (it stands alone, matched by variant — like `stringLiteral`) is metadata
 	// independent of this tail position.
@@ -1498,13 +1475,12 @@ export union MaxonOp
 	// through `__managed_decref` (which skips the rdata buffer on the `capacity < 0` sentinel). `result` is the
 	// record pointer. Category `plain` (stands alone).
 	//
-	// ⭐ **TWO PRODUCERS, ONE OP, AND THE SECOND IS WHY IT CARRIES ITS STAMPS.** It was `byteStringLiteral`,
-	// serving `b"…"` alone with `element_size` and `length` HARDCODED to 1 and `bytes.count()`. A packed
-	// constant array literal (`[0 as Q, 1 as Q, 2 as Q, 3 as Q]`, `ranged-int-bit-packing`) is the identical
-	// record over an identical immortal blob and differs in exactly those two numbers — its blob is
-	// `ceil(count·bits/8)` bytes and its stride is a NEGATIVE bit width — so the honest fix was to let the op
-	// carry them rather than to grow a second lowering that would drift from this one. A `b"…"` passes 1 and
-	// `bytes.count()` and emits byte-for-byte what it always did.
+	// ⭐ **TWO PRODUCERS, ONE OP, AND THE SECOND IS WHY IT CARRIES ITS STAMPS.** A packed constant array
+	// literal (`[0 as Q, 1 as Q, 2 as Q, 3 as Q]`, `ranged-int-bit-packing`) is the identical record over
+	// an identical immortal blob and differs from a `b"…"` in exactly two numbers — its blob is
+	// `ceil(count·bits/8)` bytes and its stride is a NEGATIVE bit width. Hardcoding `element_size` to 1
+	// and `length` to `bytes.count()` would force a second lowering that drifts from this one; a `b"…"`
+	// simply passes those two values.
 	//
 	// ⚠ `bytes` stays the TAIL field, and that is deliberate: the two stamps are appended BEFORE it, not
 	// after, so the union variant's only managed Array field keeps the slot it had (the tail-slot trap
@@ -1515,7 +1491,7 @@ export union MaxonOp
 	// For a packed literal it is the LSB-first bit image `Parser.packConstantElements` lays down.
 	constArrayLiteral(result ValueId, elementSize ElementStride, elementCount ParsedInt, bytes ByteArray) = MaxonOpMeta{category: OpCategory.plain}
 
-	// --- P1.1b slice 2: the DENSE-match jump table ---
+	// --- the DENSE-match jump table ---
 	//
 	// Its `OpCategory.plain` is metadata independent of this tail position — like the other
 	// terminators (`ret`/`condBranch`/`branch`), the Maxon-tier `OpCategory` classifies call/effect shape,
@@ -1536,7 +1512,7 @@ export union MaxonOp
 	// `indirectCall` documents.
 	switch(subject ValueId, denseTargetBlockIds BlockIdArray, defaultBlockId BlockId) = MaxonOpMeta{category: OpCategory.plain}
 
-	// --- P1.7a slice 2a: constrained-type-parameter interface DISPATCH ---
+	// --- constrained-type-parameter interface DISPATCH ---
 	//
 	// Its `OpCategory.callFree` (shared with `call`/`indirectCall` — it
 	// IS a call, with full call-barrier semantics) is metadata independent of this tail position, exactly as
@@ -1551,18 +1527,18 @@ export union MaxonOp
 	// `StdOp.witnessCall` over exactly those two operands and resolves nothing further.
 	//
 	// ⭐⭐ **ONE OP SERVES BOTH RECEIVERS THE LANGUAGE HAS, AND `witness` BEING A *VALUE* IS WHAT DOES IT
-	// (P1.7a-existentials slice 1).** For a constrained type parameter it is the enclosing generic body's
+	// For a constrained type parameter it is the enclosing generic body's
 	// hidden witness PARAMETER for that constraint (the parser resolves its own reservation —
 	// `Parser.witnessParamValueId`); for an EXISTENTIAL it is the fat pointer's witness half
-	// (`Parser.witnessOfValue`). It used to be a `constraintIndex` the lowering turned into a parameter id,
-	// which an existential has no honest value for — see `WitnessDispatchTarget.witnessValue`. `isVoid` records whether the method returns nothing (no result
+	// (`Parser.witnessOfValue`). A `constraintIndex` the lowering turned into a parameter id would leave an
+	// existential with no honest value — see `WitnessDispatchTarget.witnessValue`. `isVoid` records whether the method returns nothing (no result
 	// register to capture). `result` is the value it defines (a `void`-tagged discard when `isVoid`).
 	//
 	// ⚠ Its `args` (an `Array with ValueId`) is bound only in a SMALL match (`lowerWitnessDispatch`), never
 	// destructured by `lowerMaxonToStd.lowerOp`'s big one — the same tail-slot-`Array`-corrupts-the-decref trap
 	// `indirectCall`/`switch` document.
 	//
-	// ⭐ **`isThrowing` IS THE E3057 EVIDENCE, AND IT HAS TO RIDE THE OP (P1.7a slice 2b-v).** A bare `call` to
+	// ⭐ **`isThrowing` IS THE E3057 EVIDENCE, AND IT HAS TO RIDE THE OP.** A bare `call` to
 	// a throwing callee is caught by `SemanticCheck.validatePlainCall` asking `throwsMap` about the callee's
 	// NAME; a witness dispatch has no name to ask about — the method is resolved against the enclosing type's
 	// `where` constraints, which only the parser holds. So the parser stamps the interface method's
@@ -1578,7 +1554,7 @@ export union MaxonOp
 	// rather than from whatever the actuals happen to be typed.
 	witnessDispatch(result ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, isVoid bool, isThrowing bool) = MaxonOpMeta{category: OpCategory.callFree}
 
-	// --- P1.7a slice 2b-v: the THROWING witness dispatch ---
+	// --- the THROWING witness dispatch ---
 	//
 	// `OpCategory.callFree` places it logically beside
 	// `call`/`tryCall`/`witnessDispatch`, independent of this tail position.
@@ -1594,7 +1570,7 @@ export union MaxonOp
 	// `witnessDispatch`'s trap, unchanged.
 	witnessTryDispatch(result ValueId, errorFlag ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, isVoid bool) = MaxonOpMeta{category: OpCategory.callFree}
 
-	// --- A3n: a panic whose message is RENDERED AT RUN TIME ---
+	// --- a panic whose message is RENDERED AT RUN TIME ---
 	//
 	// `OpCategory.panicking` places it logically
 	// with `panicAbort`, independent of this tail position.
@@ -1627,7 +1603,7 @@ export union MaxonOp
 	// had: spelling `ordinal + ErrorFlagOrdinalBias` in the parser would be the ABI written at two tiers.
 	errorFlagEncode(result ValueId, errorValue ValueId, errorIsBoxed bool) = MaxonOpMeta{category: OpCategory.plain}
 
-	// --- SV1 wave 3: the two ops a SERVICE is made of ---
+	// --- the two ops a SERVICE is made of ---
 	//
 	// `OpCategory.awaiting` places both logically beside `asyncCall`/`await` — the band of ops that hand
 	// work to a green thread — independent of this tail position.
@@ -1650,12 +1626,12 @@ export union MaxonOp
 	// the handle box, `request` the request-union BOX the parser built at the send site exactly as
 	// `emitEnumBox` builds any other.
 	//
-	// ⚠ **`result` IS `void`, AND THAT IS SV1's SCOPE STATED IN THE TYPE RATHER THAN IN A FLAG.** A
+	// ⚠ **`result` IS `void`, AND THAT IS THE SCOPE STATED IN THE TYPE RATHER THAN IN A FLAG.** A
 	// fire-and-forget send delivers no reply, so there is nothing to bind and no `hasReply` bit any site could
 	// set to `true` — a constant no producer can emit is a dead claim (`GtRuntime`'s park kinds carry the same
 	// rule). It still DEFINES a value, because a void `call` does: every value-producing op in this dialect
 	// names its result, and an op that named none would be the one shape `ValueOrigin`'s walk and the
-	// expression parser each need a special case for. SV2's awaitable form gives the same slot a real type.
+	// expression parser each need a special case for. The awaitable form gives the same slot a real type.
 	//
 	// ⭐ **THE REQUEST IS ONE VALUE AND NOT AN ARGUMENT ARRAY, DELIBERATELY.** An array-typed field in an
 	// op's tail slot destructured by `lowerOp`'s big match is a live miscompile (documented at
@@ -1670,7 +1646,7 @@ export union MaxonOp
 	serviceSend(result ValueId, callee ByteArray, handle ValueId, request ValueId) = MaxonOpMeta{category: OpCategory.awaiting}
 
 	// ⭐⭐⭐ **`serviceReplyCell(result, messageName)` — MINT THE REPLY CELL ONE AWAITABLE SEND WILL RESOLVE
-	// THROUGH (SV2).** `result` is the cell POINTER, an integer, and it is a `Promise` to everything above:
+	// THROUGH.** `result` is the cell POINTER, an integer, and it is a `Promise` to everything above:
 	// the parser marks it (`markValuePromise`), slots it into the request union's `__reply` payload as an
 	// ordinary integer argument, and `await` / `try await` / `gtIsComplete` / E3100 all take it unchanged.
 	//
@@ -1690,7 +1666,7 @@ export union MaxonOp
 	// name here may be `<T>.shutdown` — the compiler's pill, which no file declares.
 	serviceReplyCell(result ValueId, messageName ByteArray) = MaxonOpMeta{category: OpCategory.awaiting}
 
-	// --- W197: a module-level `let` holding a constructed struct of scalars ---
+	// --- a module-level `let` holding a constructed struct of scalars ---
 	//
 	// `OpCategory.plain` places it beside `stringLiteral` — it takes the address
 	// of a constant and allocates nothing.
@@ -1792,7 +1768,7 @@ export function witnessDispatchReceiver(args ValueIdArray) returns ValueId
 	return try args.get(0) otherwise panic("witnessDispatchReceiver: a witness dispatch's argument list is empty — `Parser.withWitnessReceiver` puts the borrowed receiver at position 0 ahead of every actual")
 end 'witnessDispatchReceiver'
 
-// The dual-register error-flag ABI BIAS (P1.4b). The error flag is `0` for "no error in flight" and
+// The dual-register error-flag ABI BIAS. The error flag is `0` for "no error in flight" and
 // `errorOrdinal + ErrorFlagOrdinalBias` when a scalar error is thrown — the bias is what reserves `0`.
 // This is ONE fact read from BOTH sides of a tier boundary and they MUST agree: the Std-tier lowering
 // ENCODES a throw (`lowerThrowError`: ordinal + bias) and the Maxon-tier parser DECODES an `(e)` binding
@@ -1802,21 +1778,17 @@ export let ErrorFlagOrdinalBias = 1 as ParsedInt
 
 // ⭐ **THE OTHER HALF OF THAT ONE FACT: the flag value that means "no error in flight".** It is what the
 // bias RESERVES, so it belongs beside the bias and not in whichever runtime family happens to need it —
-// it had been re-declared three times over (`ManagedMemoryRuntime.NoErrorFlag`, `GtRuntime.RunProcessNoError`,
-// and a fourth spelling that arrived with the `StringIndex` searches), each a private `0` describing the
-// same ABI register. Every THROWING Std graph's success edge reads THIS one, so a change to the encoding
-// reaches all of them or none.
+// a private `0` per runtime family would be several spellings of the same ABI register. Every THROWING
+// Std graph's success edge reads THIS one, so a change to the encoding reaches all of them or none.
 export let NoErrorFlag = 0 as ParsedInt
 
 // ⭐ **WHICH NAME, IF ANY, AN OP BINDS A CALLEE BY — the dialect's own answer to the one question overload
-// resolution asks of every op** (D7). It lives here, beside the op set, because the answer is a property of
+// resolution asks of every op**. It lives here, beside the op set, because the answer is a property of
 // the OP SET: a new callee-carrying variant is added to `MaxonOp` and classified for this question in one
 // edit, rather than a consumer in another file inferring it from op ranges it does not own.
 //
-// ⚠ Proximity is NOT what makes that safe, and it was originally credited with doing so — see
-// `maxonOpCalleeKind`, which asserted a band-range resolver would be the unsafe spelling while itself using
-// three band ranges. What makes it safe is that the classifier names EVERY arm, so the compiler refuses a
-// new op until it has an answer here.
+// ⚠ Proximity is NOT what makes that safe. What makes it safe is that the classifier names EVERY arm, so
+// the compiler refuses a new op until it has an answer here.
 export enum MaxonCalleeKind
 	// A DIRECT call's callee name — the one overload resolution may REWRITE (`withRewrittenCallee`).
 	direct
@@ -1830,26 +1802,26 @@ export enum MaxonCalleeKind
 	noCallee
 end 'MaxonCalleeKind'
 
-// ⭐⭐ **A SCALAR ENUM, NOT A UNION — AND THAT IS A MEASURED CORRECTION, NOT A STYLE PREFERENCE (BATCH2
-// slice 3).** This was a `union MaxonOpCallee{direct(ByteArray), functionValue(ByteArray), none}`, which
-// **allocates one box per op asked** — a payload-free `none` included. The cost was affordable because of a
-// premise written down right here: its ONE caller (`SemanticCheck.resolveOverloadedCalls`) returns
-// immediately unless the program declares an overload, and *"the overwhelming program declares no overload"*.
+// ⭐⭐ **A SCALAR ENUM, NOT A UNION — AND THAT IS MEASURED, NOT A STYLE PREFERENCE.** A
+// `union MaxonOpCallee{direct(ByteArray), functionValue(ByteArray), none}` **allocates one box per op
+// asked** — a payload-free `none` included. That cost would be affordable only under the premise that its
+// ONE caller (`SemanticCheck.resolveOverloadedCalls`) returns immediately unless the program declares an
+// overload, and *"the overwhelming program declares no overload"*.
 //
-// ⚠⚠ **LOADING `stdlib/FilePath.maxon` FALSIFIED THAT PREMISE FOR EVERY PROGRAM, PERMANENTLY.** It is
-// the first stdlib module the loader took that OVERLOADS a name (`join(component String)` / `join(component FilePath)`),
-// so `project.overloadSets` is non-empty in every compile from that day onward, the gate stops firing, and
-// the resolver walks every live op of every function boxing one union each. MEASURED on the scale ladder,
-// per-phase against the parent binary: `phase:semanticCheck` **+14,609 / +24,134 / +43,172 / +81,201 /
+// ⚠⚠ **THAT PREMISE IS FALSE FOR EVERY PROGRAM, PERMANENTLY.** The loader takes `stdlib/FilePath.maxon`,
+// which OVERLOADS a name (`join(component String)` / `join(component FilePath)`), so `project.overloadSets`
+// is non-empty in every compile, the gate never fires, and the resolver walks every live op of every
+// function boxing one union each. MEASURED on the scale ladder, per-phase, with the union:
+// `phase:semanticCheck` **+14,609 / +24,134 / +43,172 / +81,201 /
 // +157,253 / +309,305** allocations across the six rungs — ×1.97 per doubling, i.e. dead LINEAR in the user's
-// program, 1.9% of the whole compile at rung 5 and growing with it forever. Every OTHER phase moved by a flat
+// program, 1.9% of the whole compile at rung 5 and growing with it forever. Every OTHER phase moves by a flat
 // constant (the module's own load/lex/parse cost), which is what identifies this one exactly.
 //
-// ⇒ **SPLIT THE KIND FROM THE NAME.** The old comment said *"an allocation-free `bool` twin would answer the
-// wrong question: the resolver needs the NAME"* — true, and the answer is not a bool but this enum: the KIND
+// ⇒ **THE KIND IS SPLIT FROM THE NAME.** An allocation-free `bool` twin would answer the wrong question —
+// the resolver needs the NAME — and this enum answers both halves: the KIND
 // is a scalar and costs nothing, and the NAME is fetched only for the two kinds that HAVE one, which is a
-// handful of ops rather than all of them. There is still exactly ONE arm-per-variant table (below) — it was
-// 27 arms when this paragraph was written and grows with the union, which is the whole property being
+// handful of ops rather than all of them. There is exactly ONE arm-per-variant table (below), naming every
+// variant and growing with the union, which is the whole property being
 // claimed; `maxonOpCalleeName` needs only the callee-carrying arms and is floored by a `default panic`, the
 // same shape `withRewrittenCallee` and SemanticCheck's `overloadCallArgs`/`overloadResultValue` already have.
 //
@@ -1858,12 +1830,11 @@ end 'MaxonCalleeKind'
 // (there is no callee name anywhere on the op). Neither can be an overload set's member.
 //
 // ⚠⚠ **EVERY ARM IS NAMED, AND NOT ONE IS A RANGE — because a RANGE ARM IS EXACTLY HOW THIS ANSWER GOES
-// SILENTLY WRONG.** It was once written with three (`literal to stringLiteral`, `throwError to panicAbort`,
-// `await to witnessTryDispatch`) while claiming that living beside the union is what stops a new
-// callee-carrying variant being classified as callee-free. It is not: `MaxonOp`'s own growth convention is
-// to APPEND AT THE END (every one of its last six arms says so in its comment), and an appended arm lands
-// INSIDE `await to witnessTryDispatch`, which would answer `noCallee` for it without a word — no compile
-// error, no panic, just an overload that stops being resolvable at that op kind. Naming all 27 is the only
+// SILENTLY WRONG.** Living beside the union does not stop a new callee-carrying variant being classified
+// as callee-free: `MaxonOp`'s own growth convention is to APPEND AT THE END (every one of its last six
+// arms says so in its comment), and an appended arm lands INSIDE a range like
+// `await to witnessTryDispatch`, which would answer `noCallee` for it without a word — no compile error,
+// no panic, just an overload that stops being resolvable at that op kind. Naming every variant is the only
 // spelling under which adding an op cannot compile until someone classifies it — the same argument
 // `TypeRules.tagIsIntegral` records for `ValueTypeTag`.
 export function maxonOpCalleeKind(op MaxonOp) returns MaxonCalleeKind
@@ -2033,8 +2004,8 @@ end 'withRewrittenCallee'
 // project. The caller pairs this with `module.ops.set`, which replaces only the merged module's slot.
 //
 // ⚠ `asyncCall` is deliberately absent where `withRewrittenCallee` admits it, and the reason is NOT that a
-// spawn has no managed argument — that claim is stale. `SemanticCheck.requireAsyncScalarParams` has accepted
-// a managed `async` PARAMETER since A2 and refuses only a CONSUMED managed one, and
+// spawn has no managed argument: `SemanticCheck.requireAsyncScalarParams` ACCEPTS
+// a managed `async` PARAMETER and refuses only a CONSUMED managed one, and
 // `multicore-stress/refcount-torture.maxon` hands one `String` to twelve tasks. What is actually absent is a REASON to
 // substitute: `LiteralArgPromotion` swaps an immortal or merged record for a writable one where a callee
 // WRITES its argument, and a spawn's arguments are transferred through `transferAsyncSpawnArgs`, which

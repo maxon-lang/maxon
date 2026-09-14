@@ -97,22 +97,22 @@ export let X64LinuxSyscallWrite = 1
 export let X64LinuxSyscallMmap = 9
 export let X64LinuxSyscallExitGroup = 231
 
-// F1a — the page-LIFECYCLE half of the mapping ABI: `munmap` releases a mapping, `madvise` drops its physical
+// The page-LIFECYCLE half of the mapping ABI: `munmap` releases a mapping, `madvise` drops its physical
 // backing while keeping the mapping. Both carry the arch prefix for the reason above: they are 215 and 233 on
-// AArch64 (`Arm64Runtime`'s twin block), so an unprefixed name is the collision that already miscompiled this
-// backend once. There is deliberately NO recommit number — a `MADV_DONTNEED`ed page refaults on the next touch,
+// AArch64 (`Arm64Runtime`'s twin block), so an unprefixed name is a collision that silently miscompiles
+// this backend. There is deliberately NO recommit number — a `MADV_DONTNEED`ed page refaults on the next touch,
 // so re-backing one is a Windows-only call (see `lowerOsRecommitPages`).
 export let X64LinuxSyscallMunmap = 11
 export let X64LinuxSyscallMadvise = 28
 
-// F2 — the per-thread identity word. `gettid` answers the calling thread's kernel thread id, which is
+// The per-thread identity word. `gettid` answers the calling thread's kernel thread id, which is
 // per-thread stable and never 0, i.e. exactly `StdOp.currentThreadToken`'s contract. It is asked instead of
 // reading `fs:[0]` because the compiler's Linux lane is a raw static binary with no libc, so nothing has set FS base
 // and that load would dereference address 0 — the op's own header carries the full argument. 186 on x86-64,
 // 178 on AArch64 (`Arm64Runtime`'s twin), which is exactly why these numbers wear the arch prefix.
 export let X64LinuxSyscallGettid = 186
 
-// --- L3/L4: the clocks, the identity, the machine query and the green-thread floor ---
+// --- The clocks, the identity, the machine query and the green-thread floor ---
 //
 // ⚠⚠ **MEASURED ON THIS LANE, not transcribed.** Each was invoked BY NUMBER from a hand-assembled static
 // x86-64 ELF run under Rosetta inside the aarch64 guest, and checked against the behaviour it is supposed to
@@ -176,7 +176,7 @@ let X64LinuxSyscallExit = 60
 let X64LinuxArchSetFs = 0x1002
 let X64LinuxArchGetFs = 0x1003
 
-// --- L5: the child-process band ---
+// --- The child-process band ---
 //
 // ⚠⚠ **MEASURED ON THIS LANE, each with a negative control that produced a DIFFERENT observable**: `pipe2`
 // round-tripped a byte and answered exit 90 as 292; `dup3(w, 7, 0)` answered 7 and 91 as 291; `execve` ran
@@ -216,14 +216,11 @@ let X64LinuxSyscallFcntl = 72
 // emits on Linux — the raw-syscall twin of the Windows `VirtualAlloc(NULL, size, MEM_COMMIT|MEM_RESERVE,
 // PAGE_READWRITE)`. The ABI constants (`MmapKernelChoosesBase`/`MmapProtReadWrite`/`MmapAnonPrivateLinux`/
 // `MmapAnonFd`/`MmapNoOffset`) live in `Targets/Shared/PosixMmap.maxon`, shared with the arm64 isel so
-// the mmap ABI is one fact, not two copies (OPEN #83).
+// the mmap ABI is one fact, not two copies.
 
-// STDOUT_FILENO used to be spelled HERE as well, as `WriteStdoutFd`, read by this backend's stdout
-// write. W35 gave that write a stderr twin and moved the descriptor to the ONE door both POSIX isels
-// ask (`StdLoweringShared.posixStreamFd`), which left this declaration exported and read by nothing —
-// a second spelling of a number whose only remaining purpose was to be able to disagree with the
-// first. Removed at that rung's review. It now sits beside its stderr sibling as
-// `StdLoweringShared.PosixStdoutFd`/`StderrFd`, both POSIX facts rather than x64-Linux ones for the
+// STDOUT_FILENO is NOT spelled here. Both POSIX isels ask ONE door for it
+// (`StdLoweringShared.posixStreamFd`), and the two descriptors sit beside each other as
+// `StdLoweringShared.PosixStdoutFd`/`StderrFd` — POSIX facts rather than x64-Linux ones, for the
 // reason the note below `X64LinuxSyscallRtSigaction` gives.
 
 // --- Linux fault runtime (the SIGFPE handler for a divide-by-zero) ---
@@ -235,8 +232,8 @@ let X64LinuxSyscallFcntl = 72
 // `BackendDispatch.prependLinuxEntryStub` (which calls `mrt_runtime_init` before `main`).
 // These two are ROWS OF THE SAME x86-64 syscall table as `X64LinuxSyscall{Write,Mmap,ExitGroup}` above
 // and carry the arch prefix for the same reason — they are 134 and 139 on AArch64, so an arm64 fault
-// runtime would declare its own, and an unprefixed name here is the collision that already miscompiled
-// this backend once. The signal NUMBER is not one of them: `LinuxSignalFpe` is arch-neutral and lives in
+// runtime would declare its own, and an unprefixed name here is a collision that silently miscompiles
+// this backend. The signal NUMBER is not one of them: `LinuxSignalFpe` is arch-neutral and lives in
 // `Targets/Shared/LinuxRuntime` beside `LinuxSigsetBytes`, which is the same case.
 export let X64LinuxSyscallRtSigaction = 13
 export let X64LinuxSyscallRtSigreturn = 15
@@ -296,7 +293,7 @@ export let X64LinuxUContextRspOffset = 160  // 40 + REG_RSP(15)*8 — the faulti
 // stream, `newfstatat`/`fstat` a `st_mode` of `0100644` and the file's real size, `readlinkat` the running
 // image's path, and the `mkdirat`/`renameat`/`unlinkat`/`fsync` quartet created, renamed, synced and
 // removed a real directory and file. That is the discipline `X64LinuxOpenDirectoryFlags` below exists to
-// enforce, and it is why the arch prefix is on every name (see the F1a block above).
+// enforce, and it is why the arch prefix is on every name (see the page-lifecycle block above).
 let X64LinuxSyscallRead = 0
 export let X64LinuxSyscallClose = 3
 let X64LinuxSyscallFstat = 5
@@ -539,8 +536,8 @@ end 'x64LinuxEmitStashIfFailed'
 
 // ⭐ **ONE `EINTR` TEST, SHARED BY EVERY CALL IN THIS FILE THAT OWES ONE** — the netpoll wait, the pipe
 // peek and the read/write transfer pair. A raw `syscall` answers the NEGATED number in rax itself, so there
-// is no accessor to call and the whole test is a compare and a branch; written three times it was three
-// chances to compare against the wrong sign.
+// is no accessor to call and the whole test is a compare and a branch; written three times it would be
+// three chances to compare against the wrong sign.
 //
 // ⚠ **`whenInterrupted` IS NOT ALWAYS A LOOP**: the transfer pair aims it BACKWARD at its own syscall to
 // re-issue it, and the peek and the netpoll wait aim it FORWARD at a different answer.
@@ -709,7 +706,7 @@ function x64LinuxEmitSecondsToFileTime(asm X64RuntimeAsm, reg X64Register, scrat
 end 'x64LinuxEmitSecondsToFileTime'
 
 // ==========================================================================
-// L3 — the `timespec`, the two non-scheduler clocks, the image path and the machine query
+// The `timespec`, the two non-scheduler clocks, the image path and the machine query
 // ==========================================================================
 
 // `struct timespec` — `tv_sec` then `tv_nsec`, two 64-bit words on x86-64, which is exactly two of this
@@ -2052,10 +2049,10 @@ function buildX64LinuxEnvReadChunk() returns FunctionCodeChunk
 end 'buildX64LinuxEnvReadChunk'
 
 // ==========================================================================
-// L4 — THE GREEN-THREAD FLOOR'S HOST OBJECTS
+// THE GREEN-THREAD FLOOR'S HOST OBJECTS
 // ==========================================================================
 //
-// ⭐⭐⭐ **THE x86-64 TWIN OF `Arm64LinuxRuntime`'s L4/L5 BANDS, AGAINST THE SAME KERNEL AND THE SAME
+// ⭐⭐⭐ **THE x86-64 TWIN OF `Arm64LinuxRuntime`'s GREEN-THREAD AND CHILD-PROCESS BANDS, AGAINST THE SAME KERNEL AND THE SAME
 // PROTOCOL.** Every number these bodies read — the wait object's six fields, the handle tag, the futex
 // operations, the clone flags, a worker M's stack geometry, `poll`'s bits and the wait-status decode — is
 // `Targets/Shared/{Posix,Linux}Runtime`'s and is READ from there. What is genuinely x86-64's is the syscall
@@ -2256,8 +2253,8 @@ end 'buildX64LinuxSleepChunk'
 //
 // ⛔ **IT TAKES AN OWNED COPY OF `amount` IN ITS FIRST INSTRUCTION, AND THAT IS NOT TIDINESS.** `div` destroys
 // rax and rdx and needs its divisor in a third register, so a caller passing any of the three would have its
-// timeout overwritten before it was read — which on the other lane was MEASURED as every bounded wait on
-// both POSIX lanes sleeping for exactly 1.000 s whatever it asked for.
+// timeout overwritten before it was read — MEASURED on the other lane as every bounded wait on both
+// POSIX lanes sleeping for exactly 1.000 s whatever it asked for.
 //
 // ⚠ It clobbers rax, rcx, rdx and r8.
 function x64LinuxEmitToTimespec(asm X64RuntimeAsm, amount X64Register, unit PosixTimeUnit, firstSlot StackSize)
@@ -2887,7 +2884,7 @@ let X64LinuxTlsPublishFailedMessage = b"panic: the green-thread scheduler could 
 let X64LinuxTlsNoBlockMessage = b"panic: an OS thread asked to write a scheduler slot before any slot block existed -- on x64-linux the FS base is the block base and only mrt_host_tls_alloc sets it\n"
 
 // ==========================================================================
-// L5 — THE CHILD-PROCESS BAND
+// THE CHILD-PROCESS BAND
 // ==========================================================================
 //
 // ⭐⭐ **THE ALGORITHMS ARE `Arm64PosixRuntime`'s AND THE INSTRUCTIONS ARE NOT.** `waitpid` and `wait4` decode
@@ -3758,7 +3755,7 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 
 	let usesFilesystem = usage.usesManagedFile or usage.usesManagedDirectory
 
-	// ⭐ **L3 — FOUR CHUNKS ON FOUR INDEPENDENT BITS, EACH THE Std TIER'S OWN.** `usesWallClock` says the
+	// ⭐ **FOUR CHUNKS ON FOUR INDEPENDENT BITS, EACH THE Std TIER'S OWN.** `usesWallClock` says the
 	// program reads the calendar, which is what keeps `runtime/Clock.maxon`'s `__clock_now_unix_s` alive;
 	// `installClockRuntime` builds `__thread_cpu_ticks` under `usesThreadCpuTicks`;
 	// `installProcessRuntime` builds `__proc_exe_path` under `usesExecutablePath`; `usesCpuCount` keeps
@@ -3812,7 +3809,7 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 		chunks.push(buildX64LinuxLockLeaveChunk())
 	end 'hostLock'
 
-	// ⭐ **L4 — THE GREEN-THREAD FLOOR, ON ONE BIT.** `usesGt` is the bit `installGtRuntime` itself was gated
+	// ⭐ **THE GREEN-THREAD FLOOR, ON ONE BIT.** `usesGt` is the bit `installGtRuntime` itself was gated
 	// on, so every body that can `call` one of these is built under exactly the same condition — one bit, two
 	// tiers, which is what makes a call into an absent chunk unreachable rather than merely unlikely. They are
 	// NOT split finer: the P's wake event, the per-thread slot, the OS-thread park and the `MAXON_MAX_PROCS`
@@ -3827,7 +3824,7 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 		chunks.push(buildX64LinuxTlsAllocChunk())
 		chunks.push(buildX64LinuxTlsSetChunk())
 
-		// ⭐⭐ **L5's CHILD-PROCESS CORE RIDES `usesGt`, NOT A SUBPROCESS BIT, BECAUSE `installGtRuntime` BUILDS
+		// ⭐⭐ **THE CHILD-PROCESS CORE RIDES `usesGt`, NOT A SUBPROCESS BIT, BECAUSE `installGtRuntime` BUILDS
 		// `__gt_process_run` UNCONDITIONALLY.** Every green-thread program statically contains a spawn, a
 		// bounded await and an exit-code read — a program that never runs a child simply never reaches them —
 		// so a narrower gate here is a call to a symbol nothing laid out, which is a link failure rather than a
@@ -3921,8 +3918,8 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 	end 'managedDirectory'
 
 	// The mode→attribute-mask decoder is called by BOTH `mrt_host_fill_find_data` (the filesystem cluster
-	// above) and `mrt_host_file_attributes` (below), so its gate is the union of theirs — which is what lifts
-	// it out of the cluster it used to sit inside.
+	// above) and `mrt_host_file_attributes` (below), so its gate is the union of theirs rather than either
+	// cluster's.
 	if usesFilesystem or usage.usesChildPipes 'attrsFromMode'
 		chunks.push(buildX64LinuxAttrsFromModeChunk(x64LinuxStatLayout()))
 	end 'attrsFromMode'

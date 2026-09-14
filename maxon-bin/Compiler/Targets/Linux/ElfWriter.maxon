@@ -406,11 +406,10 @@ function writeElfTrailingSections(elf ByteArray, codeResult CodeResult, textVAdd
 	let hasSymbols = symbolCount > 0
 	let hasSymdata = symdataSize > 0
 
-	// ⛔ **THE SECTION HEADER TABLE IS NO LONGER CONDITIONAL, AND THAT IS WHAT MAKES `.comment` WORTH
-	// EMITTING.** It used to be written only when there were debug symbols to describe, so a RELEASE
-	// build — the one that ships — carried no section headers at all and any producer string in it
-	// would have been invisible to `readelf`. A few hundred bytes of headers is the price of a binary
-	// that can say what built it.
+	// ⛔ **THE SECTION HEADER TABLE IS UNCONDITIONAL, AND THAT IS WHAT MAKES `.comment` WORTH
+	// EMITTING.** Gating it on having debug symbols to describe would leave a RELEASE build — the one
+	// that ships — with no section headers at all, and any producer string in it invisible to
+	// `readelf`. A few hundred bytes of headers is the price of a binary that can say what built it.
 
 	let hasRodata = rdataSize > 0
 

@@ -9,12 +9,12 @@
 //
 // It goes both ways, and only one of the two directions ever gets noticed:
 //
-//   * a false RED — measured during rung A1, exactly 4 tests, and that oddly specific number is what
-//     identified it as staleness rather than a regression;
+//   * a false RED — MEASURED at exactly 4 tests, and that oddly specific number is what identified it
+//     as staleness rather than a regression;
 //   * a false GREEN — the same lie, in the direction nobody re-checks.
 //
-// And it is not only the suite: the incident that filed this rung was a whole scaling LADDER read off
-// the previous binary after `maxon error-codes check` had failed the build. `scale-test` refuses on
+// And it is not only the suite: a whole scaling LADDER has been read off
+// the previous binary after `maxon error-codes check` failed the build. `scale-test` refuses on
 // exactly these terms for that reason.
 //
 // ============================================================================================
@@ -74,7 +74,7 @@
 // arm64 reads `st_mtime`'s seconds field, `ARM64CodeEmitter.Runtime`) — so an edit landing in the same
 // second the binary was written TIES, and a tie is not "newer". That biases the check toward MISSING a
 // staleness rather than inventing one, which is the safe direction here: a false refusal has no
-// workaround, and a miss leaves things exactly as they were before this file.
+// workaround, and a miss leaves things exactly as no check at all would.
 //
 // ⚠ The repo's OTHER in-binary staleness check breaks that same tie the OTHER way, on purpose, and the
 // two must not be read as an accident: `maxon-dev-mcp/mcp/Staleness.serverFreshness` compares `>=`
@@ -120,10 +120,9 @@ end 'StalenessVerdict'
 // binaries — `spec-test` about the harness-and-compiler it runs on, `scale-test` about the compiler it
 // drives — and "which binary is stale" is the first thing the reader needs.
 //
-// ⛔ **`spec-test` USED TO ASK IT TWICE, AND THAT PAIR IS GONE (G20).** `refuseIfSpecTestStale` asked
-// about the harness AND, when `--compiler=<path>` named a different file, about the compiler under
-// test. An in-process compile has exactly one binary to be stale, so there is one question again — and
-// the second one had, by its own admission, nothing to ask in an in-tree run.
+// ⛔ **IT IS ASKED ONCE, NOT TWICE.** An in-process compile has exactly one binary that can be stale —
+// the harness IS the compiler — so a second question about a `--compiler=<path>` under test would have
+// nothing to ask.
 export function refuseIfStale(binary FilePath, role String) returns ExitCode
 	return match stalenessOf(binary) 'verdict'
 		mayProceed gives 0
@@ -220,7 +219,7 @@ end 'isCompiledInto'
 //
 // A question about a file's ANCESTORS rather than about the file, hence the upward walk. It is the one
 // exclusion left that `collectMaxonSources` does not apply itself: that walk recurses into a `.maxon/`
-// output directory (PLAN.md A2z), so a `.maxon` file the compiler WROTE still reaches this filter and
+// output directory, so a `.maxon` file the compiler WROTE still reaches this filter and
 // must be stopped here — a file the compiler produced is not a source it was built from.
 //
 // The walk stops at `sourceRoot`, which is where a file that came out of `collectMaxonSources(sourceRoot)`

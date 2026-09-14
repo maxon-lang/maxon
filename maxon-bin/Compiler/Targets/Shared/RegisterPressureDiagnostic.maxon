@@ -43,8 +43,8 @@
 // genuinely NO user ancestry after all four is a compiler DEFECT, so `defRangeOf` PANICS naming it
 // rather than emitting a misleading location.
 //
-// ⛔⛔ **THE FOUR ROUTES COVER EVERY VALUE OF A FUNCTION THAT WAS PARSED, AND NOTHING MORE — THIS NOTE
-// USED TO SAY "unreachable at M5" AND IT WAS REACHED.** Every one of them ends in a table only the
+// ⛔⛔ **THE FOUR ROUTES COVER EVERY VALUE OF A FUNCTION THAT WAS PARSED, AND NOTHING MORE — SO THIS
+// PANIC IS REACHABLE.** Every one of them ends in a table only the
 // parser fills (`ParamOriginTable`, `ValueOriginTable`, `project.opRanges`), so for a function the
 // COMPILER emitted they ALL answer nothing and the panic fires on the FIRST live value, whatever it is.
 // MEASURED: a four-line `sleep(1)` program, where `__gt_timer_check`'s heap walk holds 18 GPRs against
@@ -54,7 +54,7 @@
 // relieved by the forced bracket instead of refused (`relievePressure`'s `noAuthorToRefuse`), and
 // `noVictimAtPeak` panics as a splitter bug rather than calling in here if it ever is not.
 //
-// ⚠ **THE PANIC IS A BACKSTOP, NOT THE ENFORCEMENT, AND IT NEVER WAS.** Reaching this file at all is
+// ⚠ **THE PANIC IS A BACKSTOP, NOT THE ENFORCEMENT.** Reaching this file at all is
 // already the decision that the author must act; a value the author cannot act on has to be relieved
 // BEFORE that, by the splitter, which is the only party that can still emit code. The one class this
 // has actually cost — a hidden dictionary parameter held across a loop in a generic body — is relieved
@@ -65,17 +65,16 @@
 // (fewer reads in it => fewer reloads after the array rewrite). A count of READS, so it is neither
 // a `UseOrdinal` (which use, of one value) nor a `UseRecordIndex` (which record, of the function).
 //
-// ⚠⚠ **IT COUNTS OP OPERANDS AND NOT BRANCH-EDGE ARGS, AND THE PRINTED WORD USED TO BE "used" —
-// WHICH IS A DIFFERENT CLAIM, AND A FALSE ONE.** A loop-carried `var` — one the loop only ASSIGNS,
+// ⚠⚠ **IT COUNTS OP OPERANDS AND NOT BRANCH-EDGE ARGS, WHICH IS WHY THE PRINTED WORD IS `read` AND
+// NOT "used" — a different claim, and a false one.** A loop-carried `var` — one the loop only ASSIGNS,
 // read after it — is a block ARG at the loop header and is handed on at every join inside the loop,
 // so ALL of its in-loop uses are EDGE uses and this count is 0. Printed as "used 0 times in the
 // loop" that told the author the loop does not touch a value they can see being assigned further
 // down in that same loop, and an agent told to remove such a value cannot converge — the one failure the
-// message exists to avoid. MEASURED on the spec harness's own `MaxonArgs.parse` (BATCH43): eleven
-// of thirty-three blocking values printed "used 0 times in the loop", and every one of them was a
-// loop-header phi for a `var` that loop assigns. The NUMBER is right for what it ranks — after the
-// array rewrite the phi web is gone and only the reads come back as loads — so what was wrong was
-// the word, and the word is now `read`.
+// message exists to avoid. MEASURED on the spec harness's own `MaxonArgs.parse`: eleven of thirty-three
+// blocking values print "used 0 times in the loop", and every one of them is a loop-header phi for a
+// `var` that loop assigns. The NUMBER is right for what it ranks — after the array rewrite the phi web
+// is gone and only the reads come back as loads — so it is the WORD that has to be exact.
 typealias RegionReadCount = int(0 to u64.max)
 
 // One blocking value the user must consider removing from the region: its id, the SOURCE span
@@ -130,7 +129,7 @@ function buildRegisterPressureMessage(project Project, module TargetModule, func
 	// so the witness is always the full pool and `available` is always 14.
 	//
 	// That equality is the point, not an accident to be optimized away: reading the pool off the peak
-	// OP instead — `pool ∖ op.implicitDefs`, which is what this used to do — reports 5 whenever a
+	// OP instead — `pool ∖ op.implicitDefs` — reports 5 whenever a
 	// full-pool overflow happens to land on a call, and the deficit computed from it asks the author
 	// to remove NINE MORE VALUES THAN THE PROGRAM NEEDS. Measuring an E5001 against a reduced pool is
 	// the documented false-positive class (ARCHITECTURE, "Known limits" #2); the witness is what makes
@@ -240,8 +239,8 @@ end 'candidateList'
 // spill, a call or a control op that defines no origin-carrying value, and a region can consist of such
 // ops alone; `firstOriginLineOfOp` answers 0 for each. Both then fall back to the earliest blocking
 // value's def site, which RULE 3 guarantees is real user source. Reporting `:0` — a source position that
-// does not exist — is exactly the old loopless behaviour this replaces, so the guard is stated once here
-// rather than in each route.
+// does not exist — is the one answer neither route may give, so the guard is stated once here rather
+// than in each route.
 function pressureAnchorLine(module TargetModule, project Project, funcIndex FuncIndex, peak PressurePeak, peakInLoop bool, candidates PressureCandidateArray, regionOps OpIndexArray) returns LineNumber
 	var scanned = 0 as LineNumber
 

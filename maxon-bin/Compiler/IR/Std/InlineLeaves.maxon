@@ -246,7 +246,7 @@ function inlineOpRole(op StdOp, meta StdOpMetaMemo) returns InlineOpRole
 			osFileAttributes then break 'kind'
 		osPanicValue then return InlineOpRole.framed
 
-		// The allocator's page/fill/atomic band and the scheduler's thread/TLS band (F1, F2, G1) are placed
+		// The allocator's page/fill/atomic band and the scheduler's thread/TLS band are placed
 		// here consciously: none is a call site, a terminator or a `param`, so each one's own
 		// `isUnsupportedInInlineBody` answers below — a fill and the two atomics are body ops a body may
 		// hold, the import calls refuse.
@@ -695,7 +695,7 @@ type InlineLeafStats
 	// `splicingWouldWidenTheSafePoint`.
 	export var sitesRefusedBySafePoint as SiteCount
 
-	// EC7 — how many spliced parameter cascades this compile proved dead and did not copy. Reported for
+	// How many spliced parameter cascades this compile proved dead and did not copy. Reported for
 	// `ReportedLargerLeafBudget`'s reason: it is the number the row is graded on, and it should come from the
 	// compile being asked about rather than be re-derived from a corpus later.
 	export var declinedParamGuards as SiteCount
@@ -729,7 +729,7 @@ type InlineLeafStats
 	end 'noteSizeRefusal'
 end 'InlineLeafStats'
 
-// ⭐⭐ **WHICH OF THE CALLEE'S PARAMETER CASCADES *THIS* CALL SITE PROVES DEAD (EC7) — AND THE TWO SHAPES
+// ⭐⭐ **WHICH OF THE CALLEE'S PARAMETER CASCADES *THIS* CALL SITE PROVES DEAD — AND THE TWO SHAPES
 // THE SPLICE NEEDS THAT ANSWER IN.**
 //
 // A narrowed parameter's entry cascade stands in front of EVERY caller, which is what makes it emittable at
@@ -847,7 +847,7 @@ type SpliceBlocks
 	// them up positionally with the same skip rather than by a second id lookup.
 	export var copiedRefs as BlockRefArray
 
-	// EC7 — the cascades this site declined. It rides here so the MINT walk and the COPY walk skip the same
+	// The cascades this site declined. It rides here so the MINT walk and the COPY walk skip the same
 	// blocks off the same column rather than each re-deciding it; that pairing is positional
 	// (`copiedRefs`), and two answers to "is this block copied?" would silently pair a body with the wrong
 	// fresh block.
@@ -2853,7 +2853,7 @@ type SiteSplicer
 	// **PROOF ONE: THE ARGUMENT IS ONE OF THIS FUNCTION'S OWN NARROWED PARAMETERS.** Its cascade stands at
 	// this function's entry, which dominates every call the body makes, so the value in hand has already
 	// passed a range — and if that range lies inside the callee's, the callee's cascade cannot fail either.
-	// This is the shape EC6's survey measured at 3 of `regMaskContains`' 14 sites (`hintIsTakeable`
+	// This is the shape MEASURED at 3 of `regMaskContains`' 14 sites (`hintIsTakeable`
 	// forwarding a `RegNum` parameter to two more calls, and `assertOneCallClobber`).
 	//
 	// ⚠ **A REASSIGNED PARAMETER IS EXCLUDED, AND IT IS NOT A CORNER CASE.** `reassignedParamMask` names
@@ -2884,7 +2884,7 @@ type SiteSplicer
 		return false
 	end 'callerParamProves'
 
-	// **PROOF TWO: SOMETHING RECORDED AN INTERVAL FOR IT (EC7 layer 1).** `for r in 0 upto RegisterFileSize`
+	// **PROOF TWO: SOMETHING RECORDED AN INTERVAL FOR IT.** `for r in 0 upto RegisterFileSize`
 	// gives its counter a range nothing NAMES — as does a `.count()` result, which is no loop's counter —
 	// which the parser records against this
 	// function's own `ValueId` numbering and `LowerMaxonToStd` carries across verbatim (that pass does not
@@ -2919,7 +2919,7 @@ type SiteSplicer
 			let calleeBlockRef = try calleeFunc.blockRefs.get(i) otherwise panic("SiteSplicer.mintCopiedBlocks: blockRefs.get OOB at {i}")
 			let calleeBlock = try self.module.blocks.get(calleeBlockRef) otherwise panic("SiteSplicer.mintCopiedBlocks: blockRef {calleeBlockRef} of '{String.from(calleeFunc.name)}' is not in module.blocks")
 
-			// ⭐ **A DECLINED CASCADE'S BLOCKS ARE NOT COPIED** (EC7): its `__rc_panic` is one of them, and a
+			// ⭐ **A DECLINED CASCADE'S BLOCKS ARE NOT COPIED**: its `__rc_panic` is one of them, and a
 			// copied panic nothing can reach would be a dead block holding a call to `mrt_panic`.
 			if guards.isDeclined(calleeBlock.id) 'insideADeclinedCascade'
 				continue

@@ -169,11 +169,10 @@ let ExpectRefusalMarker = "<!-- expect-refusal:"
 // no test to fail and nothing downstream that could act on it. It PANICS, naming the fixture and what
 // its sub-run actually did.
 //
-// `harnessExe` is what a fixture sub-run IS — this harness, which since G20 is also the compiler each
-// fixture's cases are built with. ⛔ **IT USED TO FORWARD `--compiler=` AS WELL**, so that the two
-// PRINTER refusals were asked of the compiler under test rather than of whatever compiler this harness
-// happened to be. That flag is gone with the in-process compile (an in-process compile has no second
-// binary to name), and the distinction it protected went with it: one binary is both halves.
+// `harnessExe` is what a fixture sub-run IS — this harness, which is also the compiler each fixture's
+// cases are built with. ⛔ **THERE IS NO `--compiler=` TO FORWARD**: an in-process compile has no second
+// binary to name, so "the compiler under test" and "whatever compiler this harness is" are one binary,
+// and the two PRINTER refusals cannot be asked of one without being asked of the other.
 //
 // ⚠ The sub-runs deliberately do NOT inherit the run's `--target`. What a fixture asks is whether the
 // HARNESS refuses a malformed directive, which no target changes — and two of the fixtures reach a
@@ -290,11 +289,11 @@ end 'harnessCorpusRoots'
 // took 0.575s against the guarded 0.061s — the self-test running inside what is structurally a
 // sub-run.)
 //
-// ⚠ **A TRAILING SEPARATOR IS STRIPPED FIRST, AND SINCE THE TREE LOCK THAT MATTERS.** `a/b/c/` and
+// ⚠ **A TRAILING SEPARATOR IS STRIPPED FIRST, AND THE TREE LOCK IS WHAT MAKES IT MATTER.** `a/b/c/` and
 // `a/b/c` name one directory, but the empty last component IS a component: `parent()` answers `a/b/c`
 // for the first and `a/b` for the second (measured), so the unstripped spelling asks the question one
 // level too shallow and every fixture dir stops recognising itself. Shell tab completion produces that
-// spelling by default. The miss used to cost only the fan-out below; now it costs a REFUSAL — an
+// spelling by default. A miss costs a REFUSAL, not merely the fan-out below — an
 // unrecognised sub-run takes the tree lock and is turned away by the parent that spawned it
 // (measured: `spec-test <fixture>/` exited 2 saying the checkout was BUSY, while the same path without
 // the slash ran the fixture). A path that is nothing BUT separators has no case name and is not one.

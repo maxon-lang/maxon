@@ -131,8 +131,8 @@ end 'divisionKindOf'
 //
 // Every name that is not one of the two unsigned ones is `signed`, including `notCheckedDivision`'s
 // non-division callees — this is asked only of a name already classified as an expanded division, and
-// `signed` is what the whole language emitted before X10, so a name that ever fell through would fall
-// through to the old behaviour rather than to a wrong instruction.
+// `signed` is what a division emits unless it is one of the two unsigned names, so a name that ever fell
+// through would fall through to the language's default rather than to a wrong instruction.
 export function divisionCalleeSignedness(callee ByteArray) returns IntegerSignedness
 	if callee.equals(UnsignedCheckedDivideName) or callee.equals(UnsignedCheckedModuloName) 'unsigned'
 		return IntegerSignedness.unsigned
@@ -337,13 +337,12 @@ export let OverflowingDivisorPattern = -1 as ParsedInt
 // `install…` because this family installs nothing — the caller is `Compiler.maxon`, beside the four installs
 // whose own claims run there transitively.
 export function verifyDivisionByZeroOrdinals(project Project)
-	// `overSynthesized`, and it is the honest word rather than the old neutral `create`: `__DivisionByZeroError`
-	// is declared in no stdlib file at all, so the compiler still builds this layout and only the compiler's
-	// own source can make it disagree — which is what keeps this family's verdict a `panic` (A1s).
-	// ⚠ **THE INSTALLER IS `lowerDivisionExpansion`, AND THIS STRING IS A CLAIM NOTHING CHECKS.** A1x
-	// renamed it from `lowerCheckedDivision` when the TOTAL remainder expansion joined the fallible ones,
-	// so the name A1s's rebase carried named a function that no longer exists — a dead claim in a string,
-	// which is exactly the shape `error-codes check` exists to refuse for codes. Integrated by hand.
+	// `overSynthesized`, and it is the honest word rather than a neutral `create`: `__DivisionByZeroError`
+	// is declared in no stdlib file at all, so the compiler builds this layout and only the compiler's
+	// own source can make it disagree — which is what keeps this family's verdict a `panic`.
+	// ⚠ **THE INSTALLER IS `lowerDivisionExpansion`, AND THIS STRING IS A CLAIM NOTHING CHECKS.** Rename that
+	// function and the string names a function that does not exist — a dead claim, which is exactly the shape
+	// `error-codes check` exists to refuse for codes. Keep the two in step by hand.
 	var divisionErrors = BuiltinErrorOrdinalCheck.overSynthesized(project, declaration: builtinDivisionByZeroErrorEnum(), installer: b"lowerDivisionExpansion")
 	divisionErrors.claim(DivisionByZeroCaseName, ordinal: DivisionByZeroOrdinal)
 

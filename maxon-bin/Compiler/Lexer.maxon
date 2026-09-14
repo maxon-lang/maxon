@@ -381,9 +381,9 @@ export let EmptySourceText = b""
 //
 // ⚠ It is ONE definition because `EmptySourceText`'s contract — "an empty value means the kind
 // says the text" — is a fact about `Token`, and a second copy of it does not fail loudly if it
-// drifts: it quietly names the offending token something the source never wrote. It had two
-// readers before it had a name (`tokenTextFrom`'s span renderer, and the E2001 `unexpected
-// token: '<x>'` sites, whose `got` field this fills).
+// drifts: it quietly names the offending token something the source never wrote. Its readers are
+// `tokenTextFrom`'s span renderer and the E2001 `unexpected token: '<x>'` sites, whose `got` field
+// this fills.
 export function tokenDisplayText(token Token) returns String
 	if token.value.isEmpty() 'kindImpliesTheText'
 		return token.kind.rawValue
@@ -398,7 +398,7 @@ end 'tokenDisplayText'
 // exactly wrong for a diagnostic that reproduces a SPAN of source. `'a' upto 'b'` would read
 // `a upto b`, naming bounds the reader will not find in the file, which is the very failure
 // `tokenDisplayText`'s header names; and a span laid out by COLUMN drifts by the two characters the
-// spelling did not write (`tokenTextFrom` used to carry that under-advance as a known inexactness).
+// spelling did not write.
 //
 // ⚠ It is a SECOND function rather than a widening of `tokenDisplayText`, for the reason
 // `expressionOperandDisplayText` is one too: the QUESTION differs, not the answer. That one names a
@@ -685,12 +685,13 @@ type Lexer
 	// newline consumed as ordinary text is counted whoever consumed it, and the next scanner someone
 	// adds has nothing to remember.
 	//
-	// ⚠⚠ **IT USED TO BE THE CALLERS' JOB AND ONLY TWO OF THEM DID IT** — the `newline` token and the
-	// block-comment body — while `tryAdvance` moved only the column. TWO bodies already walked past a
-	// `\n` without either: `scanSingleQuoteString` does it on an unterminated char literal, and
-	// `scanByteStringLiteralBody` now does it BY DESIGN, because a multi-line `b"…"` is a real
+	// ⚠⚠ **IT MAY NOT BE THE CALLERS' JOB, BECAUSE NOT EVERY CALLER DOES IT** — a `tryAdvance` that moves
+	// only the column leaves the `newline` token and the block-comment body to count lines, and TWO bodies
+	// walk past a
+	// `\n` doing neither: `scanSingleQuoteString` on an unterminated char literal, and
+	// `scanByteStringLiteralBody` BY DESIGN, because a multi-line `b"…"` is a real
 	// construct this compiler's OWN source uses (`Runtime/GtRuntime.maxon:568`, a byte string holding
-	// one newline). Either way `line` fell short by however many newlines were eaten, and stayed short
+	// one newline). Either way `line` falls short by however many newlines are eaten, and stays short
 	// for the rest of the file.
 	//
 	// ⛔ With the newlines uncounted, EVERY diagnostic after such a literal names a line too low by
@@ -783,8 +784,7 @@ type Lexer
 
 	// Emit a number-shaped token (intLiteral/floatLiteral) capturing its source byte
 	// range and byte slice. Serves the decimal scanner AND the hex/binary/octal
-	// prefixed forms, which previously emitted through a value-only path and so
-	// carried neither a slice nor a source range.
+	// prefixed forms, so every numeric token carries both.
 	function emitNumber(kind TokenKind, numStart ByteOffset, startLine LineNumber, startCol ColumnNumber)
 		let endByte = sliceNumberEndByte()
 		let value = try bytes.slice(numStart as ElementIndex, endIndex: endByte as ElementIndex) otherwise panic("Lexer.emitNumber: invariant violated")
@@ -1262,25 +1262,22 @@ type Lexer
 	// would have opened such a construct is the one already excluded by the depth test that got us
 	// here.
 	//
-	// ⛔⛔ **AND SO DOES A NEWLINE, WHICH IS THE ONE THING THIS SCANNER MUST NOT LEAVE OUT.** This one
-	// did not, and the cost is measured below. ⚠ **THE SENTENCE THAT USED TO STAND HERE — *"every
-	// other byte-consuming body in this lexer stops at `Ascii.lf`"*, naming `scanDoubleQuoteString`,
-	// `scanSingleQuoteString` and `scanByteStringLiteralBody` — WAS ALREADY FALSE OF ONE OF ITS OWN
-	// THREE**: `scanSingleQuoteString` has never had a newline test and walks past one on an
-	// unterminated char literal. It is now false of a second by design (a multi-line `b"…"` is a real
-	// construct — see `scanByteStringLiteralBody`). `scanDoubleQuoteString` alone still stops. The
-	// rule that survives is about THIS scanner and rests on its own reason: a format specifier is the
-	// tail of one interpolation on one line. MEASURED before
-	// the fix: `print("a{x:")` on one line followed by `print("b{y}")` on the next COMPILED CLEAN and
-	// printed `a1`. The specifier body had eaten `")`, the newline and `print("b{y`, stopping at the
-	// NEXT LINE's `}`; the following `"` then closed the string tidily and the whole second statement
-	// was gone, with no diagnostic from either the lexer or the parser. Silently deleting a statement
-	// is the worst answer a compiler can give, and one missing `}` was enough to get it.
+	// ⛔⛔ **AND SO DOES A NEWLINE, WHICH IS THE ONE THING THIS SCANNER MUST NOT LEAVE OUT.** ⚠ It does
+	// NOT rest on *"every other byte-consuming body in this lexer stops at `Ascii.lf`"*: that is false of
+	// `scanSingleQuoteString`, which has no newline test and walks past one on an
+	// unterminated char literal, and of `scanByteStringLiteralBody` by design (a multi-line `b"…"` is a
+	// real construct — see there). `scanDoubleQuoteString` alone stops. The
+	// rule rests on its own reason instead: a format specifier is the
+	// tail of one interpolation on one line. MEASURED without the newline test:
+	// `print("a{x:")` on one line followed by `print("b{y}")` on the next COMPILES CLEAN and
+	// prints `a1` — the specifier body eats `")`, the newline and `print("b{y`, stopping at the
+	// NEXT LINE's `}`; the following `"` then closes the string tidily and the whole second statement
+	// is gone, with no diagnostic from either the lexer or the parser. Silently deleting a statement
+	// is the worst answer a compiler can give, and one missing `}` is enough to get it.
 	//
-	// ⚠ It USED to be the line counter's protection as well, and it is not any more: `countConsumed`
-	// moves `line` for whichever mover steps over the newline byte, so a body that swallows newlines no
-	// longer leaves `line` short. That was the second reason to stop here; the statement-deleting one above
-	// is the first, it is unaffected, and it is on its own now.
+	// ⚠ It is NOT the line counter's protection: `countConsumed`
+	// moves `line` for whichever mover steps over the newline byte, so a body that swallows newlines
+	// leaves `line` correct. The statement-deleting reason above is the only one, and it stands alone.
 	//
 	// `failInterp` is what both exits take, and it needs no case of its own here: it scans the
 	// consumed body for a `"` and reports the unescaped-brace reading when it finds one — which is
@@ -1575,8 +1572,7 @@ type Lexer
 	//
 	// Refusing here rather than in the reader is what keeps the diagnostic honest: an `e` that is not
 	// an exponent is an IDENTIFIER, so `1.5e` becomes `1.5` followed by `e` and the parser reports an
-	// unexpected token AT the `e`. It also improves `1.5exp`, which used to eat the `e` and complain
-	// about a stray `xp`.
+	// unexpected token AT the `e`.
 	function exponentDigitFollows() returns bool
 		let afterE = try cursor.peek(1) otherwise 0
 

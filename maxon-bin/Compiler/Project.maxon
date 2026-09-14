@@ -40,10 +40,8 @@ export typealias BoolArray = Array with bool
 // hash (`SignatureIndex.tierOrdinal`, `mixDeclaration`). Inserting a case mid-enum renumbers `global` and
 // silently invalidates every cached signature under a name that still looks current.
 //
-// ⚠ **`export` USED TO MINT `Visibility.module`**, back when the enum had three cases and the
-// language had two: every reader asked `!= Visibility.file` and the middle case merely happened to
-// be the one `export` produced. It now means what its name says, and the ONE place a tier is turned
-// into an answer is `ProgramSignatures.isVisibleFrom`.
+// ⚠ **EACH CASE MEANS WHAT ITS NAME SAYS, AND THE ONE PLACE A TIER IS TURNED INTO AN ANSWER IS
+// `ProgramSignatures.isVisibleFrom`** — never a reader's own `!= Visibility.file`.
 //
 // ⚠ **A FIELD'S `file` TIER MEANS ITS DECLARING TYPE, NOT ITS DECLARING FILE**, and that asymmetry
 // is measured rather than chosen — see `Parser.requireFieldAccessible`, whose gate is the TYPE.
@@ -303,8 +301,8 @@ end 'qualifiedCandidateName'
 //     file's bare reference has two candidates that both spell `api.Score`. A message reading
 //     *"Candidates: api.Score, api.Score"* would offer a fix that is not one: the qualified form is
 //     contested between those same two files, so writing it changes nothing. Deduped, the count falls to
-//     one, no ambiguity is claimed, and resolution proceeds exactly as it did before this rung — a case
-//     this rung leaves where it found it rather than lying about.
+//     one, no ambiguity is claimed, and resolution proceeds unchanged — a case left where it is rather
+//     than lied about.
 //   • **E3095** — a name contested across directories that is ALSO declared twice inside one of them files
 //     that directory's spelling once per declaration. Whether it did so depended on the order the two
 //     files were swept in, which is the filesystem's.
@@ -382,13 +380,13 @@ export let sharedEmptyCandidateNames = StringArray.create()
 // directory genuinely NAMED `stdlib/` is therefore read as the library layer; the alternative (a
 // per-file provenance bit threaded to every candidate) buys nothing the anchor does not already
 // give: `Queries.namespaceAnchorFor` puts the real stdlib at `stdlib`.
-// ⚠ **IT IS NO LONGER "AND NOWHERE ELSE", AND THAT SENTENCE WAS EDITED RATHER THAN LEFT TO ROT.** Since
-// the anchor became a PATH fact (`livesUnderStdlibDirectory`) rather than a VISIBILITY one, a
-// `build stdlib/File.maxon` anchors its ROOT FILE at stdlib's parent too — so that file's module
-// directory is `stdlib` while the compiler still classifies it as the USER's (A1t bar 2). It is the
-// price of the repair and it is the right way round: the two files in one directory are now measured
-// from one root, which is what stopped `String.addressableBytes` being refused as invisible from its own
-// neighbour. The single consumer, `SignatureIndex.candidateIsReachable`, is unmoved — a compile rooted
+// ⚠ **IT IS NOT "AND NOWHERE ELSE".** The anchor is a PATH fact (`livesUnderStdlibDirectory`) rather
+// than a VISIBILITY one, so a
+// `build stdlib/File.maxon` anchors its ROOT FILE at stdlib's parent too — that file's module
+// directory is `stdlib` while the compiler classifies it as the USER's. That is the right way
+// round: the two files in one directory are measured
+// from ONE root, which is what keeps `String.addressableBytes` from being refused as invisible from its
+// own neighbour. The single consumer, `SignatureIndex.candidateIsReachable`, is unaffected — a compile rooted
 // under `stdlib/` has every other file under `stdlib/` too, so the reachable-candidate count it gates on
 // does not cross its `< 2` threshold either way.
 export function isStdlibModuleDirectory(moduleDirectory String) returns bool
@@ -1669,12 +1667,12 @@ export type RangedAliasRegistry
 	// integer`) and has nowhere to put a RANGE.
 	//
 	// ⚠ **AND A RANGE IT HAD TO HAVE, because `insertRangeChecks` guards a RETURN through a ranged alias
-	// and can only find a range a registry holds.** MEASURED before this seed, inside ONE stdlib module:
+	// and can only find a range a registry holds.** MEASURED without this seed, inside ONE stdlib module:
 	// `utf16LeadSurrogate(1000000000)` — declared `returns CodeUnit16`, an ordinary registry alias
-	// declared in `utf16.maxon` — panicked correctly, while `utf16DecodeSurrogates(0, low: 0)` — declared
-	// `returns Codepoint` — returned **-56613888**, a negative number wearing a type whose declared range
-	// starts at 0. Two behaviours for one kind of precondition violation, and the difference was an
-	// implementation detail of how the compiler came by the name.
+	// declared in `utf16.maxon` — panics correctly, while `utf16DecodeSurrogates(0, low: 0)` — declared
+	// `returns Codepoint` — returns **-56613888**, a negative number wearing a type whose declared range
+	// starts at 0. Two behaviours for one kind of precondition violation, and the difference is an
+	// implementation detail of how the compiler comes by the name.
 	//
 	// ⭐ **SEEDED HERE, IN THE ONE CONSTRUCTOR, so there is ONE home for the fact and no per-file loop to
 	// forget.** All three registries in the compiler are built through this function — `ProgramSignatures`'
@@ -1834,8 +1832,8 @@ export type RangedAliasRegistry
 	// entry that proved it contested, keyed by the reader's path with no composite key to build.
 	//
 	// ⭐⭐ **AND A THIRD FILE — one that names a CONTESTED alias and declares none of it — RESOLVES TO A
-	// DECLARATION IT MAY ACTUALLY NAME.** This used to fall straight through to the bare `byName` door,
-	// which is LAST-WINS, so whichever declaration merged last decided what a stranger's parameter,
+	// DECLARATION IT MAY ACTUALLY NAME.** Falling through to the bare `byName` door is LAST-WINS, so
+	// whichever declaration merged last would decide what a stranger's parameter,
 	// return type and cast meant. It is not a tie between equals: a plain `typealias` is FILE-LOCAL, so a
 	// declaration the third file is forbidden to write down cannot be the one it meant.
 	//
@@ -2023,17 +2021,17 @@ export type RangedAliasRegistry
 	// ⭐ **IT HANDS BACK `underlying` AND NOT THE ALIAS, and that is a CONTRACT, not a convenience.**
 	// All four readers want the `int`/`float` keyword and none may read the RANGE — the range is
 	// per-file and enforced where the file is known (`InsertRangeChecks`), so a reader with no file
-	// reading it would be reading a stranger's bounds. Each of them used to say so in a comment;
-	// now none of them CAN.
+	// reading it would be reading a stranger's bounds. The contract is stated HERE rather than once
+	// per reader.
 	//
 	// ⭐ **AND THE ANSWER IT GIVES IS FILE-INDEPENDENT, BY CONSTRUCTION — see `record`'s E3105.** The
 	// only way two declarations of one name could disagree about the `int`/`float` keyword is a
 	// cross-file `int`/`float` pair, and `record` refuses to accept one. So this door's answer is the
 	// SAME answer a scoped lookup would give, for every reader, in every program that compiles.
-	// It was once merely true of `stdlib/` and the corpus, which is a bet and not a contract: while
-	// it was only that, a user program declaring `Measure` as `int` in one file and `float` in
-	// another made the parser (scoped) and this door (bare) disagree, and the x64 emitter panicked on
-	// an xmm value in a gpr slot rather than diagnosing anything.
+	// It rests on that refusal and not on a survey of `stdlib/` and the corpus, which would be a bet
+	// and not a contract: without it, a user program declaring `Measure` as `int` in one file and
+	// `float` in another makes the parser (scoped) and this door (bare) disagree, and the x64 emitter
+	// panics on an xmm value in a gpr slot rather than diagnosing anything.
 	//
 	// ⚠ It also costs NOTHING, where a `DeclaredAlias` answer cost one allocation per call: a union
 	// with an associated value is HEAP-BOXED, and `resolveNamedType` asks this once per named TYPE
@@ -2321,11 +2319,11 @@ export type RangedAliasRegistry
 		var mints = RangedTypeAliasArray.create()
 
 		// ⚠ **BUILT OWNED, AND THE SHARED EMPTY HANDLE IS WHAT THE FIELD KEEPS WHEN NOTHING IS CONTESTED.**
-		// This used to start AS `sharedEmptyRangeContests` and copy-on-write on the first contest, guarded by
-		// an `is`-identity test. That is a mutable name reaching a module-level `let`'s record, which single
-		// ownership refuses (E3019 at the `upsert`) — the guard that made it safe is invisible to the rule,
-		// and the rule is about what the name CAN reach. The publish below is already gated on `count() > 0`,
-		// so an uncontested program still never touches the field; what it now costs is one empty map.
+		// Starting AS `sharedEmptyRangeContests` and copying on write at the first contest, guarded by an
+		// `is`-identity test, is a mutable name reaching a module-level `let`'s record, which single
+		// ownership refuses (E3019 at the `upsert`) — the guard that would make it safe is invisible to the
+		// rule, and the rule is about what the name CAN reach. The publish below is gated on `count() > 0`,
+		// so an uncontested program never touches the field; the cost is one empty map.
 		var settled = RangeContestedAliasMap.create()
 
 		for (name, _) in self.multiplyDeclared 'eachMultiplyDeclaredName'
@@ -2626,8 +2624,7 @@ end 'isTypeAliasDecl'
 // it: the MERGE-time duplicate check (`TypeNameRegistry`), which also needs the name and the position
 // it blames, and the SWEEP-time contest table (`ProgramSignatures.crossKindContests`), which needs
 // neither — it reports nothing, and it is keyed by the name. One record for the facts is what keeps
-// `typeNamePairMayCoexist` a single function instead of one predicate per consumer, which is what the
-// two used to be in every compiler that had this rule.
+// `typeNamePairMayCoexist` a single function instead of one predicate per consumer.
 //
 // It carries NO POSITION on purpose. The sweep's declaration arrays do not all hold one
 // (`StructLayout` and `EnumLayout` deliberately hold a `declFilePath` and nothing more — see
@@ -2695,8 +2692,8 @@ typealias CoexistingTypeNameDeclMap = Map with (ByteArray, TypeNameDeclArray)
 // beyond its kind, its tier and its layer — so this value is a declaration's entire future refusing power,
 // and two declarations sharing it refuse exactly the same newcomers.
 //
-// TWO readers turn that into a bound, and both of them used to be quadratic sweeps over every declaration
-// of a name: `TypeNameRegistry.coexisting` (which keeps one declaration per value, so a newcomer is
+// TWO readers turn that into a bound, each of which would otherwise be a quadratic sweep over every
+// declaration of a name: `TypeNameRegistry.coexisting` (which keeps one declaration per value, so a newcomer is
 // measured against at most four instead of against all n) and `ProgramSignatures.everyClaimMayCoexist`
 // (which counts values instead of testing every pair). Each states its own equivalence argument.
 //
@@ -2751,8 +2748,8 @@ end 'TypeNameRecordOutcome'
 // consumer reads it (`ProgramSignatures.crossKindContests`, which decides which of two coexisting
 // declarations a given file MEANS).
 //
-// ⛔⛔ **IT USED TO ASK WHETHER THE TWO WERE THE SAME ALIAS *FORM*, AND THAT IS A PROXY THAT FAILS IN
-// BOTH DIRECTIONS.** The form test was reached for because `stdlib/` needs the legal half — SEVEN
+// ⛔⛔ **ASKING WHETHER THE TWO ARE THE SAME ALIAS *FORM* IS A PROXY THAT FAILS IN
+// BOTH DIRECTIONS.** The form test is tempting because `stdlib/` needs the legal half — SEVEN
 // stdlib files declare `Byte = int(0 to u8.max)` and FIVE declare `ByteArray = Array with Byte` — but
 // sameness of form is not what makes those legal; UNREACHABILITY is. MEASURED, both directions:
 //
@@ -2792,15 +2789,13 @@ export type TypeNameRegistry
 	// name twice IN SILENCE whenever any OTHER file also declared it: each of the two was compared
 	// against the far file, found legal-repeated-alias, and accepted. That is `stdlib/`'s own shape —
 	// seven files declare `Byte` — so the hole was open for every name the rule was written to protect.
-	// It is the induction `RangedAliasRegistry` makes with `sole` + `byFile.contains(declPath)`, which
-	// is where this check used to live.
+	// It is the induction `RangedAliasRegistry` makes with `sole` + `byFile.contains(declPath)`.
 	//
 	// ⚠ **THE INDUCTION STILL CARRIES THE SAME-FILE CHECK, AND IT IS THE *ONLY* HALF IT CARRIES.** Once two
 	// declarations of one name may both stand, the most recent one is not the one a newcomer must be
 	// measured against for the CROSS-file half — `coexisting` below answers that, and the two together are
-	// the whole rule. (This paragraph briefly claimed the induction had stopped holding at all, which is a
-	// stronger statement than the code ever needed: contiguity is what it rests on, and coexistence does
-	// not touch contiguity.) For an uncontested name this slot is also the cheap first probe, and the only
+	// the whole rule. The induction rests on CONTIGUITY, and coexistence does not touch contiguity.
+	// For an uncontested name this slot is also the cheap first probe, and the only
 	// one such a name ever makes.
 	//
 	// A REJECTED declaration never displaces: the build is failing either way, and every later
@@ -3201,7 +3196,7 @@ export type RangeCheckArgSite
 
 	// ⭐⭐ **WHICH CALL THIS SITE CAME FROM — the name the SOURCE wrote, and the one field of the pair that is
 	// never rewritten.** `callee` below is RETARGETED to the resolved overload member
-	// (`SemanticCheck.retargetArgRangeSites`), so after the first retarget it no longer answers *"whose call
+	// (`SemanticCheck.retargetArgRangeSites`), so after a retarget it no longer answers *"whose call
 	// was this?"* — and that retarget finds its sites by matching the argument's `value`, which a `let`
 	// binding passed to two different calls shares.
 	//
@@ -3296,9 +3291,9 @@ export type ProvenIntRange
 	end 'create'
 end 'ProvenIntRange'
 
-// ⭐ Per-function map from a value's function-local `ValueId` to the interval above. SPARSE, but no longer
-// rare: one entry per counted-loop counter AND one per `.count()`/`.length()` call site, so a function that
-// merely reads a collection's size files a record where it once filed none.
+// ⭐ Per-function map from a value's function-local `ValueId` to the interval above. SPARSE but not rare:
+// one entry per counted-loop counter AND one per `.count()`/`.length()` call site, so a function that
+// merely reads a collection's size files a record.
 // It rides `FunctionRangeChecks` because that is the ONE per-function side
 // table the parser fills and `mergeArtifact` copies whole, and ValueIds pass through `LowerMaxonToStd`
 // VERBATIM, so the Std tier reads the parser's own numbering with no remap.
@@ -3675,12 +3670,12 @@ export type FunctionShape
 
 	// ⭐⭐ **THE ONE IDENTITY `paramTypes` CANNOT CARRY — a boxed union/enum parameter's NAME — parallel to
 	// `paramTypes`, `EmptySourceText` everywhere else.** It is `FuncSignature.paramAggregateNames` at the
-	// function-TYPE tier, and it exists because a shape assembled from either registry was previously the one
-	// currency in the compiler that could not answer *"which enum is this parameter?"*: `resolveType` collapses
+	// function-TYPE tier, and it exists because `paramTypes` alone cannot answer *"which enum is this
+	// parameter?"*: `resolveType` collapses
 	// a `named` union/enum to bare `integer`, so `function(Color)` and `function(Shade)` are the SAME
-	// `paramTypes`. **MEASURED (BATCH18 review): `<Array with Color>.map(function(c Shade) gives Color.red)`
-	// compiled clean and died `STATUS_STACK_OVERFLOW` — a 3-case ordinal matched against a 2-case `match` —
-	// and the identical mismatch through a function ALIAS died `ACCESS_VIOLATION`.**
+	// `paramTypes`. **MEASURED without it: `<Array with Color>.map(function(c Shade) gives Color.red)`
+	// compiles clean and dies `STATUS_STACK_OVERFLOW` — a 3-case ordinal matched against a 2-case `match` —
+	// and the identical mismatch through a function ALIAS dies `ACCESS_VIOLATION`.**
 	//
 	// ⚠ **A STRUCT PARAMETER IS DELIBERATELY EMPTY HERE, AND THAT IS NOT AN OMISSION** — the rule
 	// `FuncSignature.paramAggregateNames` states one tier down. A struct keeps its `structRef(id)` through
@@ -3849,8 +3844,8 @@ let EmptyStructBytes = FieldSlotBytes
 // to be WIDENED before it fills the slot (`Parser.fillFieldDefault`), and the only fact that can
 // decide that is what the source WROTE.
 //
-// It used to carry the payload alone, on the argument that "the default's type IS the field's declared
-// type, so a default cannot come to disagree with the slot it fills". That argument had one silent
+// The payload alone will not do, though "the default's type IS the field's declared type, so a default
+// cannot come to disagree with the slot it fills" makes it look so. That argument has one silent
 // hole and it is the reason for this field: the declaration SWEEP that records a layout may not read
 // the alias registry it is still building (`Queries.queryProgramSignatures`), so a field declared with
 // a ranged FLOAT alias reaches this record with its type still an unresolved NAME — and a name reads
@@ -4140,10 +4135,10 @@ export type StructLayout
 	// already travels whole-program) so the instantiation-site arity check reads it straight off `structOf`,
 	// needing no separate registry.
 	//
-	// ⚠ **THE ORDER IS THE BINDING AND IT IS NOT THE IDENTITY — THAT SENTENCE WAS HERE AND IT WAS THE BUG
-	// (W14).** A `T` in a field or method type used to be `typeParameter(POSITION)`, which made every generic
-	// type's first parameter ONE value; it now carries a digest of `(this type's name, the parameter's name)`
-	// — see `ProgramSignatures.typeParamTokenFor`. This list is still what a position is READ OUT OF (a token
+	// ⚠ **THE ORDER IS THE BINDING AND IT IS NOT THE IDENTITY.** A `T` in a field or method type spelled
+	// `typeParameter(POSITION)` makes every generic type's first parameter ONE value; it carries a digest of
+	// `(this type's name, the parameter's name)` instead
+	// — see `ProgramSignatures.typeParamTokenFor`. This list is what a position is READ OUT OF (a token
 	// re-spells against it at `typeParamPositionIn`, and `recordStruct` files the pairing at the fold), which
 	// is why it stays in declaration order and why it stays on the layout.
 	export var typeParamNames as ByteArrayArray
@@ -4183,11 +4178,11 @@ export type StructLayout
 	// empty list standing at each position that bound nothing. A column that could be SHORT would make the
 	// pairing a search over two lengths, which is the shape that answers with a neighbour's binding.
 	//
-	// ⚠ **IT USED TO BE ONE LIST BELONGING TO THE LAST NAME, BECAUSE THE READER COULD RECORD ONLY ONE (W95).**
-	// `readOptionalImplementsClause` stopped the interface list at the first `with`, so one clause contributed
-	// at most one bindings list — and the interfaces after that `with` were lost along with their extensions.
-	// The reader now runs a second time, whole-program, where the arity that ends a `with` is known
-	// (`Queries.foldConformanceClauses`), and a clause can contribute a binding at every name.
+	// ⚠ **IT IS A LIST PER NAME AND NOT ONE LIST BELONGING TO THE LAST NAME.** A reader that stops the
+	// interface list at the first `with` contributes at most one bindings list per clause — and the
+	// interfaces after that `with` are lost along with their extensions.
+	// `readOptionalImplementsClause` therefore runs a second time, whole-program, where the arity that ends a
+	// `with` is known (`Queries.foldConformanceClauses`), so a clause contributes a binding at every name.
 	export var conformanceBindings as ConformanceBindingArray
 
 	// ⭐⭐ **THE TYPE'S MESSAGE ROSTER — its `export`/`public` INSTANCE methods, IN DECLARATION ORDER (SV1).**
@@ -4491,8 +4486,8 @@ export type StructLayout
 
 	// ⭐ **REPLACE THE WHOLE DECLARED-TYPE COLUMN — the merge's door, and the reason it is a METHOD.**
 	// `TypeNameInterner.remapStructLayoutFieldTypes` rewrites every field type through an id remap when a
-	// file's layouts are folded into a bigger table, and it used to assign `layout.fieldTypes` directly from
-	// outside this type, leaving the derived geometry stale. Nothing about a remap FORBIDS a tag change — it
+	// file's layouts are folded into a bigger table, and assigning `layout.fieldTypes` from
+	// outside this type leaves the derived geometry stale. Nothing about a remap FORBIDS a tag change — it
 	// only happens not to make one today — so the rebuild belongs on this side of the boundary, where the
 	// columns are, rather than resting on a caller remembering. See `fieldOffsets`.
 	//
@@ -4678,8 +4673,8 @@ export type EnumBackingField
 	export let name as ByteArray
 
 	// ⭐ **WHICH ARGUMENT SLOT OF ITS OWN GROUP THIS ENTRY IS** — the number an unlabelled entry's field is
-	// looked up by. It is WRITTEN DOWN rather than read off the entry's index in the array, which is what
-	// it used to be and stopped being the moment every group of a case shared one array.
+	// looked up by. It is WRITTEN DOWN rather than read off the entry's index in the array, because every
+	// group of a case shares one array.
 	export let position as FieldIndex
 	export let group as EnumBackingGroupId
 	export let value as EnumBackingFieldValue
@@ -4947,7 +4942,7 @@ let UnionTagBytes = 8 as ByteOffset
 // an `EnumLayout` — could not see it and each spelled `ByteArrayArray.create()` instead. Three spellings of
 // "this enum declares nothing", one of them in the file that owns the field.
 //
-// ⚠ It is no longer the ENUM's alone: `StructLayout.conformsTo` (interface extensions) is the same column on
+// ⚠ It is not the ENUM's alone: `StructLayout.conformsTo` (interface extensions) is the same column on
 // the other declaration kind, filled by the same reader, and its absence is the same fact.
 export let sharedEmptyDeclaredConformances = ByteArrayArray.create()
 
@@ -5178,8 +5173,8 @@ export let EnumFromNameMemberName = b"fromName"
 // the writer AND the reader.
 //
 // ⚠ **IT IS SYNTHESIZED ONLY FOR A UNION WITH ASSOCIATED VALUES.** The gate is
-// `appendUnionCasesCompanion`'s and so is its reason — stated there once, INCLUDING what the reason is not,
-// because this sentence used to carry a false version of it and being the second copy is how it survived.
+// `appendUnionCasesCompanion`'s and so is its reason — stated there once, INCLUDING what the reason is not.
+// A second copy here would be free to go wrong without anything failing.
 export let UnionCasesMemberName = b"unionCases"
 
 // ⭐ **THE COMPANION'S REGISTERED NAME — `<Union>.unionCases`, the spelling the author writes.** A DOTTED
@@ -5281,13 +5276,13 @@ module let ServiceErrorStoppedCaseName = b"stopped"
 // ⭐ **THE MEMBER HALF OF A TWO-MEMBER REPLY ERROR TYPE'S NAME (SV2)** — `Calc.divide.errors`,
 // `specs/services.md`'s own spelling.
 //
-// ⛔ **IT USED TO BE A DIAGNOSTIC STRING AND NOTHING ELSE, AND IT IS A REGISTERED TYPE NOW (SV4).** This
-// header read *"no registry holds it, nothing resolves it, and that is exactly what makes a bare `try` over
-// such a reply E3059 — there is no `throws` clause an author could write that names it."* All three clauses
-// are false: `ServiceCompanions.synthesizeServiceCompanions`' third pass mints a nominal enum under this
+// ⛔ **IT IS A REGISTERED TYPE AND NOT MERELY A DIAGNOSTIC STRING** — so *"no registry holds it, nothing
+// resolves it, and that is what makes a bare `try` over such a reply E3059 — there is no `throws` clause an
+// author could write that names it"* is false in every clause.
+// `ServiceCompanions.synthesizeServiceCompanions`' third pass mints a nominal enum under this
 // name for every THROWING message and registers it through the same `recordEnum` door every author-written
 // enum takes, so `function fetch(…) throws Calc.divide.errors` resolves and
-// `Promise with (Integer, Calc.divide.errors)` interns. E3059 is still what a bare `try` earns when the
+// `Promise with (Integer, Calc.divide.errors)` interns. E3059 is what a bare `try` earns when the
 // enclosing clause names the HANDLER half alone — a name mismatch, which is a different sentence for a
 // different mistake.
 let ServiceReplyErrorSuffix = b"errors"
@@ -5980,34 +5975,29 @@ export typealias EnumLayoutMap = Map with (ByteArray, EnumLayout)
 // Once `stdlib/Builtins.maxon` is loaded, its parsed declarations reach BOTH enum registries through
 // `upsertDeclaredEnum`, which is a last-wins upsert — so the PARSED layout displaced the seed and every
 // handler arm was already being selected from it, while `BuiltinErrorOrdinalCheck` went on verifying the
-// synthesized copy. MEASURED before this change: swapping `notFound` and `accessDenied` in
-// `stdlib/Builtins.maxon` made `managed-directory.open-search-not-found-variant` abort (for an expected 42)
-// with the drift guard SILENT — the guard was checking a layout the program did not use.
+// synthesized copy. MEASURED with the guard anchored to that copy: swapping `notFound` and `accessDenied` in
+// `stdlib/Builtins.maxon` makes `managed-directory.open-search-not-found-variant` abort (for an expected 42)
+// with the drift guard SILENT — a guard checking a layout the program does not use.
 //
-// ⚠ **THE ABORT'S EXIT CODE IN THAT MEASUREMENT WAS 134 AND IS NOW `PanicExitCode` (1).** The abort is a
-// stdlib `panic(…)`, which used to exit 134 with no output at all; since it was wired to the `mrt_panic`
-// runtime it prints `panic at <file>:<line>: …` plus a backtrace and exits 1. Re-running the measurement
-// today reproduces the same DEFECT with a different, louder number — the record is what was seen then.
+// ⚠ **THE ABORT EXITS `PanicExitCode` (1)**, printing `panic at <file>:<line>: …` and a backtrace: it is a
+// stdlib `panic(…)` on the `mrt_panic` runtime.
 //
-// ⇒ There is now ONE declaration of each, in `stdlib/Builtins.maxon`, and the compiler READS it
-// (`declaredBuiltinErrorEnum`). The three constructors are gone; the case-NAME constants stay in
+// ⇒ There is ONE declaration of each, in `stdlib/Builtins.maxon`, and the compiler READS it
+// (`declaredBuiltinErrorEnum`). No constructor synthesizes one; the case-NAME constants stay in
 // `SignatureIndex.maxon`, because the runtime still has to name the case it throws.
 //
-// ⚠⚠ **`ArrayError`, `StringError` AND `MapError` HAVE NOW MOVED TOO, AND THE ENTRY THAT PREDICTED IT IS THE
-// ONE THAT PAID IT.** This paragraph used to read *"TWO FAMILIES DO NOT MOVE … `ArrayError` is declared in
-// `stdlib/Array.maxon:6`, which the stdlib loader does not LIST … `ArrayError` moves the day
-// `stdlib/Array.maxon` is listed"*. That day is `land-the-listing`, and the same sentence had already come
-// due UNNOTICED for the other two — `stdlib/String.maxon` and `stdlib/Map.maxon` were listed by W17 and W41,
-// and each left its seed standing. All three constructors are gone; only `__DivisionByZeroError` keeps one,
+// ⚠⚠ **`ArrayError`, `StringError` AND `MapError` ARE DECLARED BY LISTED MODULES TOO** —
+// `stdlib/Array.maxon:6`, `stdlib/String.maxon` and `stdlib/Map.maxon` — so none of them carries a
+// synthesized constructor either. Only `__DivisionByZeroError` does,
 // because it is declared in NO stdlib file at all and would move only if `stdlib/` grew a
 // declaration for it.
 //
 // ⛔⛔ **A SEED THAT SURVIVES ITS DECLARATION IS NOT INERT — IT DISARMS THE DRIFT GUARD, MEASURED.** The three
-// constants are BARE names (`SignatureIndex.ArrayErrorTypeName` is `b"ArrayError"`, not `__ArrayError` — the
-// old header here said otherwise and was wrong), so the parsed declaration and the seed land on ONE registry
-// key and `upsertDeclaredEnum`'s last-wins upsert hands the program the CORPUS layout. Meanwhile
-// `verifyManagedMemoryRuntimeOrdinals` went on checking `builtinArrayErrorEnum()`'s freshly-rebuilt copy — a layout
-// nothing uses — so it agreed with itself whatever the corpus said. This is the `Builtins.maxon` defect
+// constants are BARE names (`SignatureIndex.ArrayErrorTypeName` is `b"ArrayError"`, not `__ArrayError`), so
+// the parsed declaration and a seed land on ONE registry
+// key and `upsertDeclaredEnum`'s last-wins upsert hands the program the CORPUS layout, while
+// `verifyManagedMemoryRuntimeOrdinals` checks `builtinArrayErrorEnum()`'s freshly-rebuilt copy — a layout
+// nothing uses — and so agrees with itself whatever the corpus says. This is the `Builtins.maxon` defect
 // verbatim, one paragraph up: *"the guard was checking a layout the program did not use."*
 //
 // ⚠ **MEASURED RED BEFORE THE FIX**, by the same experiment that caught it for `__ManagedDirectoryError`:
@@ -6085,13 +6075,12 @@ end 'addBuiltinEnumCase'
 // crash, no wrong exit code, just a program that reports `accessDenied` where the OS said
 // `openSearchFailed`.
 //
-// ⚠ **MEASURED, NOT ARGUED, TWICE.** Before this guard existed, swapping two cases and leaving the runtime
-// alone left the suite **2758/0 GREEN**. And at A1s — with the guard in place, but anchored to the
-// COMPILER's transcribed copy while the program already resolved its handler arms from the PARSED one —
-// swapping `notFound` and `accessDenied` in `stdlib/Builtins.maxon` made
+// ⚠ **MEASURED, NOT ARGUED, TWICE.** Without this guard, swapping two cases and leaving the runtime
+// alone leaves the suite **2758/0 GREEN**. And with the guard in place but anchored to the
+// COMPILER's transcribed copy while the program resolves its handler arms from the PARSED one,
+// swapping `notFound` and `accessDenied` in `stdlib/Builtins.maxon` makes
 // `managed-directory.open-search-not-found-variant` **abort (for an expected 42) with this guard
-// SILENT** — see this file's `declaredBuiltinErrorEnum` header for what the abort's exit code was then and
-// is now. A guard anchored to a copy the program does not use is not a guard. Correspondence is
+// SILENT**. A guard anchored to a copy the program does not use is not a guard. Correspondence is
 // well-checked only by coincidence of coverage — three directory ordinals happen to be pinned by committed
 // `match` arms, and the rest need an OS failure mid-iteration that no test can provoke.
 //
@@ -6113,13 +6102,12 @@ end 'addBuiltinEnumCase'
 // out of existence, and APPENDING a ninth case to `__ManagedDirectoryError` — in the one place whose own
 // sentence two arms down is *"the enum's case ORDER is the wire format"*.
 //
-// ⇒ **THE CURE IS TOTALITY, NOT FIVE MORE CLAIMS.** Five more `claim` lines would have closed those gaps
-// and reopened the identical hole at the next case anyone adds, because the defect is that the check was a
-// SUBSET check at all. A declared case is now accounted for EITHER WAY — `claim` (the runtime throws it at
+// ⇒ **THE CURE IS TOTALITY, NOT FIVE MORE CLAIMS.** Five more `claim` lines would close those gaps
+// and reopen the identical hole at the next case anyone adds, because the defect is a
+// SUBSET check at all. A declared case is accounted for EITHER WAY — `claim` (the runtime throws it at
 // that ordinal) or `neverThrown` (the runtime never produces it, and its POSITION is transcribed anyway) —
-// and `requireTotal` refuses the third answer that used to be available for free: silence. The old
-// paragraph's premise survives intact; it is simply WRITTEN DOWN per case now, rather than inferred from an
-// omission that reads identically to a forgotten line.
+// and `requireTotal` refuses the third answer a subset check leaves free: silence. The premise is WRITTEN
+// DOWN per case rather than inferred from an omission that reads identically to a forgotten line.
 //
 // ⭐ **AN EXEMPT CASE IS TRANSCRIBED *AT AN ORDINAL*, WHICH IS NOT OBVIOUS AND IS THE STRONGER HALF.** A
 // bare `neverThrown(caseName)` would make the check total over the NAME SET and leave it partial over the
@@ -6359,13 +6347,12 @@ module type BuiltinErrorOrdinalCheck
 		match self.source 'origin'
 			synthesized then panic("BuiltinErrorOrdinalCheck: {reason}")
 
-			// ⚠ **THE DECLARING MODULE IS NOT NAMED, AND IT USED TO BE.** This read
-			// "stdlib/Builtins.maxon's `enum …`", which was true while that module declared every family
-			// this arm could reach. `land-the-listing` moved three more onto their own modules
-			// (`stdlib/Array.maxon`, `stdlib/String.maxon`, `stdlib/Map.maxon`), and the literal became a
-			// diagnostic that names the wrong file — MEASURED, on the very drift this rung provoked to
-			// prove the guard works. The enum's NAME already locates it and the loader is the one place
-			// that knows which module declares what, so the sentence states the fact it actually holds.
+			// ⚠ **THE DECLARING MODULE IS NOT NAMED.** A literal "stdlib/Builtins.maxon's `enum …`" is a
+			// diagnostic that names the wrong file: the families this arm reaches are declared across
+			// several modules (`stdlib/Array.maxon`, `stdlib/String.maxon`, `stdlib/Map.maxon`) — MEASURED,
+			// on the very drift provoked to prove the guard works. The enum's NAME already locates it and
+			// the loader is the one place that knows which module declares what, so the sentence states
+			// only the fact it holds.
 			declared then reportDiagnostic(self.project, diagnostic: Diagnostic.create(ErrorCode.builtinErrorEnumMismatch, message: "the corpus's `{self.declaration.kindWord()} {String.from(self.declaration.name)}` disagrees with this compiler's runtime: {reason}"))
 		end 'origin'
 	end 'refuse'
@@ -6384,21 +6371,18 @@ end 'DeclaredBuiltinErrorEnum'
 //
 // ⚠ **ITS ABSENCE IS A DIAGNOSTIC, NOT A PANIC AND NOT A SILENTLY-EMPTY ENUM** — the coupling this rung's
 // ruling deliberately buys is that the builtin error families now depend on a stdlib module being LOADED.
-// ⛔ **AND THERE IS NO LONGER AN EARLIER, MORE PRECISE GUARD IN FRONT OF IT.** While the loader carried a
-// whitelist, a NAMED-but-absent module threw `fileNotFound` before anything reached here; the loader now
+// ⛔ **AND NO EARLIER, MORE PRECISE GUARD STANDS IN FRONT OF IT.** The loader
 // enumerates `stdlib/` and simply does not find a file that is not there, so a module DELETED from the
-// checkout arrives here as this diagnostic and nowhere sooner. That widens what reaches this arm from
-// "listed but no longer declaring the enum" to "the declaration is not in this compile, for any reason" —
-// all of them edits to this checkout, and all of them would otherwise produce a compiler that throws
-// ordinals no handler arm can name.
+// checkout arrives here as this diagnostic and nowhere sooner. What reaches this arm is therefore
+// "the declaration is not in this compile, for any reason" and not merely "listed but declaring no such
+// enum" — all of them edits to this checkout, and all of them would otherwise produce a compiler that
+// throws ordinals no handler arm can name.
 module function declaredBuiltinErrorEnum(project Project, typeName ByteArray, installer ByteArray) returns DeclaredBuiltinErrorEnum
 	let layout = try project.enumTypes.get(typeName) otherwise 'notDeclared'
 		// ⚠ Names no module either, for `BuiltinErrorOrdinalCheck.refuse`'s reason directly above: SEVERAL
-		// families reach this and they are declared across several different files. It said "six families
-		// across four different files" and both numbers were stale in the SHRINKING direction — they counted
-		// `StringError` and `MapError`, which left this door at W49 and W105 when the corpus became their only
-		// producer (`Compiler.compileToCodeResult` records both retirements). Counted again it would go stale
-		// again, and in either direction: the set is a consequence of which runtimes still transcribe an
+		// families reach this and they are declared across several different files. No COUNT of either is
+		// written here, and one would go stale in either direction: the set is a consequence of which
+		// runtimes still transcribe an
 		// ordinal and which modules `stdlib/` holds, neither of which is read from here. The roster that DOES
 		// know is the call block in `Compiler.compileToCodeResult`; this sentence only needs the fact that
 		// makes naming a module wrong, which is that more than one declares one.
@@ -6422,8 +6406,8 @@ end 'declaredBuiltinErrorEnum'
 // inventing one. The entry cannot be missing in a sound checkout — `StdlibLoader` loads every module under
 // `stdlib/`, so a checkout that has `stdlib/Interfaces.maxon` compiles its `enum Ordering` — and what
 // reaches here is that declaration deleted, or the file itself gone. ⚠ Neither is caught any earlier: the
-// loader stopped naming individual modules when its whitelist went, so a missing FILE is no longer a
-// `fileNotFound` in front of this panic. It is the same class of checkout edit `EnumLayout.tagOfCase`
+// loader names no individual module, so a missing FILE raises no `fileNotFound` in front of this
+// panic. It is the same class of checkout edit `EnumLayout.tagOfCase`
 // panics on, and the panic names what is absent.
 export function requireCorpusDeclaredEnum(registry EnumLayoutMap, typeName ByteArray, reader String) returns EnumLayout
 	return try registry.get(typeName) otherwise panic("requireCorpusDeclaredEnum: {reader} needs the case tags of `enum {String.from(typeName)}`, and this compile declares no enum of that name — the compiler reads that declaration out of the corpus rather than transcribing it, so the module declaring it must be present under `stdlib/` and must still declare it")
@@ -6448,18 +6432,15 @@ end 'requireCorpusDeclaredEnum'
 // deliberate price of "every reader, no arm": demand-gating the seed would put the "is it registered yet?"
 // question back at each reader, which is the shape this exists to remove.
 //
-// ⭐⭐ **WHAT IS SEEDED IS EXACTLY WHAT NO LISTED MODULE DECLARES — AND W3 MOVED TWO OFF THIS LIST.**
-// `Ordering` and `IterationError` were transcribed here from `stdlib/Interfaces.maxon:28-38`; that module is
-// now LISTED, so both arrive through the ordinary declaration path (`upsertDeclaredEnum`) exactly as the
-// three `__Managed*Error` families do, and the compiler READS the case order it used to restate
-// (`requireCorpusDeclaredEnum`). What remains below is the set with no corpus declaration to read.
+// ⭐⭐ **WHAT IS SEEDED IS EXACTLY WHAT NO LISTED MODULE DECLARES, AND THAT SET IS ONE.**
+// `Ordering` and `IterationError` are declared by `stdlib/Interfaces.maxon:28-38`, and `ArrayError`,
+// `StringError` and `MapError` by `stdlib/Array.maxon:6`, `stdlib/String.maxon:6` and `stdlib/Map.maxon:6`
+// — all LISTED, so each arrives through the ordinary declaration path (`upsertDeclaredEnum`) exactly as the
+// three `__Managed*Error` families do, and the compiler READS the case order rather than restating it
+// (`requireCorpusDeclaredEnum`). None of them is seeded here.
 //
-// ⚠⚠ **AND `land-the-listing` MOVED THREE MORE, LEAVING A SET OF ONE.** This paragraph read *"`Array`,
-// `String` and `Map` are SYNTHESIZED rather than loaded, so their error enums have no listed declaring
-// file"* — every clause of which is now stale: all three modules are LISTED and all three declare their
-// enum (`stdlib/Array.maxon:6`, `stdlib/String.maxon:6`, `stdlib/Map.maxon:6`). Their seeds are retired,
-// and the ⛔⛔ block above `declaredBuiltinErrorEnum`'s neighbours records what a seed that outlives its
-// declaration actually costs: not a harmless duplicate, but a disarmed drift guard, measured.
+// ⚠⚠ **A SEED THAT OUTLIVES ITS DECLARATION IS NOT A HARMLESS DUPLICATE** — the ⛔⛔ block above
+// `declaredBuiltinErrorEnum`'s neighbours records what it costs: a disarmed drift guard, measured.
 export function createEnumRegistry() returns EnumLayoutMap
 	var registry = EnumLayoutMap.create()
 
@@ -6489,15 +6470,15 @@ end 'createEnumRegistry'
 // ⚠ **THE PARSE-TIME REJECT ALONE DOES NOT KEEP THAT OUT, AND A REVIEW PROBE PROVED IT.** The
 // whole-program DECLARATION SWEEP is deliberately not a validator (`Parser.recordScannedType`), so it folds a
 // user `enum Ordering` into `ProgramSignatures.enumTypes` BEFORE the real parse gets to refuse it — measured by
-// making this function panic, which fired from `ProgramSignatures.recordEnum` on `enum Ordering … end`. The
-// claim held only because such a program never reaches codegen; it was a comment, not an invariant.
+// making this function panic, which fires from `ProgramSignatures.recordEnum` on `enum Ordering … end`. The
+// claim holds only because such a program never reaches codegen — a comment, not an invariant.
 //
-// ⭐⭐ **W3 TURNED THE DROP INTO A PROVENANCE TEST, BECAUSE THE COMPILER NOW *READS* TWO OF THESE NAMES.**
-// `Ordering` and `IterationError` are declared in `stdlib/Interfaces.maxon` and are no longer transcribed
+// ⭐⭐ **THE DROP IS A PROVENANCE TEST, BECAUSE THE COMPILER *READS* TWO OF THESE NAMES.**
+// `Ordering` and `IterationError` are declared in `stdlib/Interfaces.maxon` and are not transcribed
 // into this file (`declaredBuiltinEnum`); dropping every compiler-owned layout would drop the very
-// declarations the compare cascade and the cursor protocol are built from. So the rule is now the one
-// sentence it always meant: **a compiler-owned type name may be declared by the CORPUS and by nothing else.**
-// A user declaration is still dropped at this single write — the collision stays unrepresentable rather than
+// declarations the compare cascade and the cursor protocol are built from. So the rule is the one
+// sentence it means: **a compiler-owned type name may be declared by the CORPUS and by nothing else.**
+// A user declaration is dropped at this single write — the collision stays unrepresentable rather than
 // merely diagnosed, which is what keeps the E2015 (`Parser.requireTypeNameNotCompilerOwned`) a message to the
 // author rather than the only thing standing between two numberings of one enum.
 //
@@ -6528,12 +6509,12 @@ end 'upsertDeclaredEnum'
 // The bit is the FILE's (`Queries.livesUnderStdlibDirectory`), never `isStdlibSource` — computed once per
 // file by each caller, so the readiness probe `maxon build stdlib/<M>.maxon` records exactly what the
 // loaded module records. See `Parser.requireTypeNameNotCompilerOwned` for why the two bits differ.
-// ⭐⭐ **A CONTEST IS A *DISAGREEMENT*, NOT A REPEAT** (spec-port `lazy-static`). The rule used to end at
-// "and not declaredByTheCorpus", which refused a user declaration that says exactly what the compiler
+// ⭐⭐ **A CONTEST IS A *DISAGREEMENT*, NOT A REPEAT** (spec-port `lazy-static`). A rule ending at
+// "and not declaredByTheCorpus" refuses a user declaration that says exactly what the compiler
 // already says — including `typealias CharSet = Set with Character`, which is byte-identical to
 // `stdlib/CharacterSet.maxon:19` and which `specs/lazy-static.md` writes verbatim. Such a declaration
 // OVERWRITES NOTHING, so it cannot produce the wrong-meaning defect the reservation exists to prevent (see
-// `DeclaredTypeMeaning`, which carries the measurement), and refusing it was a false reject.
+// `DeclaredTypeMeaning`, which carries the measurement), and refusing it is a false reject.
 //
 // ⚠ **THE NARROWING IS EXPRESSED ONCE, FOR THE WHOLE OWNED SET, AS A COMPARISON OF MEANINGS** — never as a
 // per-name exception. `compilerOwnedTypeMeaning` answers `nominalIdentity` for every owned name but
@@ -6751,9 +6732,9 @@ export typealias FuncSignatureMap = Map with (ByteArray, FuncSignature)
 // It is EMPTY for every program that overloads nothing, which is what keeps the resolver a single
 // `isEmpty()` test on that overwhelming majority.
 //
-// ⚠⚠ **IT IS A UNION ACROSS FILES, AND SO IT IS IN `resetMergeTargets` — WHICH THIS HEADER USED TO ARGUE
-// AGAINST (X-contains).** The argument was sound for what the map then held: one file declared every member
-// of a set, so `commitOverloadSets` could UPSERT the whole value and a re-merge would REPLACE it. A
+// ⚠⚠ **IT IS A UNION ACROSS FILES, AND SO IT IS IN `resetMergeTargets`.** Keeping it out would be sound
+// only if one file declared every member of a set, so that `commitOverloadSets` could UPSERT the whole
+// value and a re-merge would REPLACE it. A
 // cross-file set has no such file. Three files each declaring one member each know only their own, so the
 // members have to ACCUMULATE — and the moment they accumulate, a warm rebuild that re-merges the same files
 // would append every member a second time. `commitOverloadSets` dedups by name, so the doubling itself is
@@ -6778,7 +6759,7 @@ export let noOverloadSets = OverloadSetTable.unwritten
 // `ConformanceCheck` accepted for that requirement. `LowerMaxonToStd.ensureWitnessTable` stamps the slot's
 // `funcAbs64InRdata` relocation from this, instead of re-joining `<Type>.<method>` for itself.
 //
-// ⚠ **THE TWO SITES USED TO MINT THAT JOIN INDEPENDENTLY, AND THEY AGREED ONLY BY BOTH BEING WRONG.** Under
+// ⚠ **TWO SITES MINTING THAT JOIN INDEPENDENTLY AGREE ONLY BY BOTH BEING WRONG.** Under
 // D7 a later overload registers as `Type.method#Suffix` while the un-suffixed join spells the FIRST
 // declaration, so a conformance satisfied by a later overload and a slot stamped with the bare name name
 // DIFFERENT functions — a wrong `.text` address in the dictionary, no diagnostic, at runtime. Recording the
@@ -6786,9 +6767,9 @@ export let noOverloadSets = OverloadSetTable.unwritten
 // falling back to a second derivation (the one exception being a builtin conformer, which declares no
 // `implements` and so has no conformance decision to record — see `ensureWitnessTable`).
 //
-// ⚠⚠ **IT IS IN `resetMergeTargets`, AND THE HEADER THAT SAID IT NEED NOT BE WAS DESCRIBING A DIFFERENT
-// FUNCTION (found at the R10c review).** The claim was *"an UPSERT … so re-running REPLACES"*, which is
-// `OverloadSetMap`'s property and not this map's: `ConformanceCheck.recordWitnessSlotImpl` does the
+// ⚠⚠ **IT IS IN `resetMergeTargets`, AND *"an UPSERT … so re-running REPLACES"* IS NOT AN ARGUMENT AGAINST
+// THAT — it describes a different function.** That is `OverloadSetMap`'s property and not this map's:
+// `ConformanceCheck.recordWitnessSlotImpl` does the
 // opposite — it RETURNS EARLY when a key is already filed, because two routes reaching one slot must AGREE
 // (that is what E3111 detects). So a stale entry is not inert, it WINS: on a warm rebuild whose sources
 // changed which member satisfies a requirement, the previous compile's answer either contradicts the new
@@ -6859,10 +6840,10 @@ let StaticMemberNameSuffix = "__static"
 // `ProgramSignatures.memberRegistrationKey`'s — THE one composition of the contest and this mint, and the only
 // caller that should reach here. Everything else asks that.
 //
-// ⚠ **MINTED ON CONTEST ONLY, which is what leaves every emitted symbol in the tree exactly where it was.** A
-// static whose name no instance member shares registers under the bytes it always did — and a static/instance
-// pair is a shape that could not COMPILE before this rung (both declarations rendered one registration name
-// and collided as E3006), so no program that has ever built holds one.
+// ⚠ **MINTED ON CONTEST ONLY, which is what keeps every uncontested emitted symbol where it is.** A
+// static whose name no instance member shares registers under its plain bytes — and without the mint a
+// static/instance pair does not COMPILE at all (both declarations render one registration name and collide
+// as E3006), so no program built without it holds one.
 //
 // It joins through `overloadRegistrationName` because the `#` separator has one speller, and it keeps the
 // SOURCE name as its head so `overloadRegistrationBaseName` (which a duplicate diagnostic reads) still
@@ -7946,11 +7927,10 @@ export type Project
 	export var debugSpanTable as DebugSpanTable
 
 	// ⭐⭐ **THE FUNCTION THIS BUILD ENTERS AT — `main` for every ordinary build, and the ONE place that
-	// name is now written down for a compile to read.** Before this field the answer was spelled three
-	// times in three tiers — `BackendDispatch.UserEntryName`, `SemanticCheck.MainFunctionName` and
-	// `StdToWasm.WasmMainFunctionName` — which is this project's signature bug wearing an entry point's
-	// clothes: the entry stub, the two reachability walks, E3001 and the unused-export audit could each
-	// have come to mean a different function.
+	// name is written down for a compile to read.** Spelled once per tier instead — a constant in the
+	// backend, one in `SemanticCheck`, one in the wasm lowering — it is this project's signature bug
+	// wearing an entry point's clothes: the entry stub, the two reachability walks, E3001 and the
+	// unused-export audit could each come to mean a different function.
 	//
 	// ⭐ **IT IS A PER-BUILD SWITCH, EXACTLY AS `asyncTrace` AND `debugStream` ARE** — set by the driver
 	// right after the project is loaded and never per file, so it lives here beside `target`.
@@ -8090,13 +8070,11 @@ export type Project
 	// (which moves `opRefs`, never ops). ⇒ every op index recorded here still names the very call the
 	// lowering appended.
 	//
-	// ⭐ **EC17 SHORTENED THAT LIST RATHER THAN LENGTHENING IT.** `inlineLeaves` used to sit between the
-	// write and the read as well, and what covered it was that **a leaf holds no call BY RULE**
-	// (`LeafOpRole.calling` refuses the callee outright), so it could neither clone nor re-issue a managed
-	// primitive. EC17 moved it to run AFTER `inlineManagedPrimitives` — i.e. after this table has been read
-	// and spent — so a splice cannot reach a live key at all. The leaf rule still holds and is still what
-	// makes the reorder safe in the OTHER direction (see `PassPipeline`'s `inlineManagedPrimitives` entry);
-	// it is simply no longer this key's argument.
+	// ⭐ **`inlineLeaves` IS NOT ON THAT LIST: IT RUNS AFTER `inlineManagedPrimitives`** — i.e. after this
+	// table has been read and spent — so a splice cannot reach a live key at all. **A leaf holds no call BY
+	// RULE** (`LeafOpRole.calling` refuses the callee outright), so it could neither clone nor re-issue a
+	// managed primitive either; that rule is what makes the ordering safe in the OTHER direction (see
+	// `PassPipeline`'s `inlineManagedPrimitives` entry), not what protects this key.
 	//
 	// ⚠⚠ **A STAMP IS RECORDED, NOT A VERDICT — AND THE STAMP IS NOT ALWAYS THE RECORD'S.** What may be
 	// concluded from it is `strideDispatchPlanForStamp`'s to say, and the answer is not simply "this width":
@@ -8149,8 +8127,8 @@ export type Project
 	// TARGET-DEPENDENT token stream under a key that is only the file's content hash, which is sound
 	// exactly because a `Project` is aimed once and never re-aimed — two targets are two `Project`s
 	// and two `QueryDatabase`s, so one cache can never be asked about a target it was not filled for.
-	// It had been a `var` with no writer but `create`, which made the argument a survey of the
-	// current source rather than a property of the type. Re-aiming a live `Project` now does not
+	// As a `var` with no writer but `create`, that argument would be a survey of the current source
+	// rather than a property of the type. Re-aiming a live `Project` does not
 	// compile; if it ever must, mix the target into that memo's key rather than deleting this word.
 	export let target as Target
 
@@ -8274,7 +8252,7 @@ end 'createProject'
 // ⭐⭐ **IS THE PROJECT ROOT ITSELF UNDER `stdlib/`? — ONE HOME, BECAUSE THREE RULES REST ON IT AND TWO
 // OF THEM ARE EACH OTHER'S PROOF.** The question is `maxon build stdlib/URL.maxon`: the user named
 // a file inside the toolchain's own `stdlib/` as their project. Three separate rules turn on it, and
-// each one used to spell it out for itself:
+// one home is what keeps them from each spelling it out for themselves:
 //
 //   * `StdlibLoader.registeredPathsWhenTheRootIsInsideStdlib` — do not load a file the project already
 //     registered, or every function in it collides with itself.

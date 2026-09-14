@@ -1,4 +1,4 @@
-// InsertRangeChecks — the P1.9 ranged-typealias guard pass. A Std→Std pass that turns the parser's
+// InsertRangeChecks — the ranged-typealias guard pass. A Std→Std pass that turns the parser's
 // recorded range-check sites (`project.rangeChecks`) into the compile-time E3005s and runtime panics a
 // ranged typealias promises at EVERY position a value meets one: a narrowing `as` cast, a ranged
 // `return`, a struct-literal field, a field store, a field's declared default, an array element and a
@@ -12,18 +12,18 @@
 // compiled once and knows no range — so it records an ordinary alias-named site and takes both halves here
 // (ARRR, `Parser.recordOpaqueArgRangeChecks`).
 //
-// ⭐ **A CALL ARGUMENT USED TO BE ON THAT LIST, AND A1f TOOK IT OFF — BY MOVING THE GUARD, NOT BY
-// DEFEATING THE OBSTACLE.** The obstacle is real and unchanged: a check is a BRANCH, so a guard emitted
-// where the argument is WRITTEN lands past the call with the callee already run. The cure is that the
-// argument door's runtime half belongs to the CALLEE'S ENTRY — one guard per narrowed parameter per
-// function, in front of every caller including the indirect ones — so the argument site keeps owing only
-// the compile-time half and the premise is enforced all the same. See `guardRangedParams`.
+// ⭐ **A CALL ARGUMENT IS OFF THAT LIST BECAUSE THE GUARD SITS ELSEWHERE, NOT BECAUSE THE OBSTACLE WAS
+// DEFEATED.** The obstacle is real: a check is a BRANCH, so a guard emitted where the argument is
+// WRITTEN lands past the call with the callee already run. The cure is that the argument door's runtime
+// half belongs to the CALLEE'S ENTRY — one guard per narrowed parameter per function, in front of every
+// caller including the indirect ones — so the argument site owes only the compile-time half and the
+// premise is enforced all the same. See `guardRangedParams`.
 //
 // ⭐ WHY STD-TIER, AND NOT THE MAXON-TIER MARKER OP THE PLAN SKETCHED. The narrowing guard needs a
 // primitive the Maxon dialect does not have — "abort with a symbolized backtrace and exit 1" — and the
 // only way to add one at the Maxon tier is a new `MaxonOp` variant, which forces a fresh arm into EVERY
 // exhaustive `MaxonOp` match, including the escape-analysis functions in `SemanticCheck.maxon` /
-// `FnRefThunk.maxon` that the closures/async rung owns and is actively editing. So the guard is emitted
+// `FnRefThunk.maxon`. So the guard is emitted
 // HERE instead, where the panic is a PLAIN `StdOp.call` to the `mrt_panic` runtime chunk (no new op in
 // any dialect) and the compare cascade is the ordinary `cmp`/`condBranch` the tier already carries. The
 // cast alias name and source spans — which the Std tier's ops do not carry — ride the parser's
@@ -36,16 +36,16 @@
 // facts. The cascade is because the Std tier has no `setcc`: a bound's verdict can only be a `cmp` fused
 // into a `condBranch`, one block per bound, never a `cmp`+`cmp`+`or` over materialized bools.
 //
-// ⛔ **THE "SIGNED" HALF USED TO SAY "the compiler's Std tier has NO UNSIGNED INTEGER COMPARE (`StdCmpPred` is
-// signed only)", AND THAT IS FALSE.** `StdCmpPred` carries no signedness either way; the compare's
-// `operandType` does, since upstream's X11 (`StdDialect.stdTypeIsUnsigned` / `unsignedStdTypeOf`), and
+// ⛔ **THE STD TIER DOES HAVE AN UNSIGNED INTEGER COMPARE — "`StdCmpPred` is signed only" IS FALSE.**
+// `StdCmpPred` carries no signedness either way; the compare's
+// `operandType` does (`StdDialect.stdTypeIsUnsigned` / `unsignedStdTypeOf`), and
 // all three backends read it. What is true is that the checks below CHOOSE signed, and the choice is
 // deliberate — see the paragraph after next for the `int(N>0 to u64.max)` shape that depends on it.
 //
 // ⚠ **AND THAT MAKES A ONE-COMPARE FORM POSSIBLE FOR THE ORDINARY SHAPE, WHICH THIS PASS DOES NOT TAKE
 // AND WHICH IS FILED RATHER THAN ASSUMED.** For a range whose bounds are both representable,
 // `(value - lo) >u (hi - lo)` is the whole two-bound test in one unsigned compare — the same idiom
-// `ManagedMemoryRuntime.BoundsCompareOperandType` took for the array guard (row `A2`), which measured
+// `ManagedMemoryRuntime.BoundsCompareOperandType` uses for the array guard, which measured
 // 7 x64 instructions down to 2 there. It is NOT a comment-only change here: the subtraction is an extra
 // op, the `u64` relabelling has a precondition of its own (`hi - lo` must not wrap, which needs the
 // bound ARITHMETIC checked and not just the bounds), and the unsigned-max-upper shape below must be
@@ -114,7 +114,7 @@ end 'GuardSite'
 // alias-named guard may have moved its `ret` onto) and does not extend it — and that asymmetry is what
 // makes "this block's `ret` is already guarded" derivable rather than tracked: the split leaves a
 // CONDITIONAL BRANCH where the `ret` was, so a second site naming the same block finds no `ret` of its
-// own — a program E3071 has refused at the parse since W118 (see `RetBlockLookup`).
+// own — a program E3071 refuses at the parse (see `RetBlockLookup`).
 union GuardChain
 	blockChain(blockId BlockId)
 	retChain
@@ -133,14 +133,14 @@ end 'RangeGuardVerdict'
 //
 // A parameter its callee REASSIGNS arrives as the ADDRESS of a caller-owned cell (PBR-2 —
 // `IrFunction.reassignedParamMask`, and `LowerMaxonToStd`'s `stdTypeOf` types that slot `i64` for exactly
-// this reason). Its `param` op's ValueId therefore holds a POINTER, and the entry guard was comparing THAT
-// against the declared bounds: `function bump(n Int)` over `typealias Int = int(0 to 1000000)` panicked
-// *"value outside typealias 'Int'"* on every call, because a heap address is not in `0 to 1000000`. The
-// bounds describe what the CALLER passed, which lives one dereference away.
+// this reason). Its `param` op's ValueId therefore holds a POINTER, so comparing THAT against the
+// declared bounds is the wrong question: `function bump(n Int)` over `typealias Int = int(0 to 1000000)`
+// would panic *"value outside typealias 'Int'"* on every call, because a heap address is not in
+// `0 to 1000000`. The bounds describe what the CALLER passed, which lives one dereference away.
 //
-// ⚠ **A FULL-RANGE ALIAS HID IT, AND THAT IS WHY IT READ AS A TYPE PROBLEM RATHER THAN AN ABI ONE.** A
+// ⚠ **A FULL-RANGE ALIAS HIDES THAT, WHICH IS WHY IT READS AS A TYPE PROBLEM RATHER THAN AN ABI ONE.** An
 // `int(i64.min to i64.max)` parameter is `noGuard` (`rangeIsFull`), so the identical program with a wide
-// alias ran correctly — the split was never between two types, it was between guarded and unguarded.
+// alias runs correctly — the split is not between two types, it is between guarded and unguarded.
 //
 // It is a union rather than a bool beside a ValueId because the two carry different things: `asIs` names
 // the value to compare, while `pointeeOf` names an address whose loaded contents do not exist yet and are
@@ -152,23 +152,23 @@ end 'GuardedOperand'
 
 // The block whose terminator is this site's own `ret` — the return site to guard.
 //
-// ⭐⭐ **W118 CLOSED TWO OF `notFound`'s CAUSES AND MEASURED A FOURTH THAT IS STILL OPEN.** `notFound`
-// means "this site's `ret` is not there any more". Two of its causes were the same program shape — a
-// second `return` in ONE block, which compiled only because the compiler did not emit E3071, a block holding ONE
+// ⭐⭐ **TWO OF `notFound`'s CAUSES ARE SHUT AT THE PARSE, AND A FOURTH IS STILL OPEN.** `notFound`
+// means "this site's `ret` is not there any more". Two of its causes are one program shape — a
+// second `return` in ONE block, which reaches here only where E3071 is not raised, a block holding ONE
 // terminator in a slot `setTerminator` overwrites:
 //
-//   * `return n` twice ⇒ the second `setTerminator` overwrote the first with an identical `ret(n)`, the
-//     FIRST site guarded it, and that guard left a conditional branch where the `ret` stood — so the
-//     second site found no `ret`.
-//   * `return a` then `return b` ⇒ the block's terminator was `ret(b)`, so site `a` found a `ret` naming
-//     a value that was not its own.
+//   * `return n` twice ⇒ the second `setTerminator` overwrites the first with an identical `ret(n)`, the
+//     FIRST site guards it, and that guard leaves a conditional branch where the `ret` stood — so the
+//     second site finds no `ret`.
+//   * `return a` then `return b` ⇒ the block's terminator is `ret(b)`, so site `a` finds a `ret` naming
+//     a value that is not its own.
 //
 // **Both are refused at the parse** (`ParseError.unreachableCode`, plus the structural backstop in
-// `ParseStaging.emitTerminator`). Neither can reach here again.
+// `ParseStaging.emitTerminator`). Neither can reach here.
 //
-// ⛔⛔ **BUT THE SKIP STAYS, BECAUSE TURNING IT INTO A PANIC IMMEDIATELY FOUND A FOURTH CAUSE ON ORDINARY
-// SOURCE — A RETURN WHOSE VALUE IS *PROMOTED* AT THE HAND-OFF.** MEASURED: with the panic in place the
-// whole `specs` suite raised it exactly once, on
+// ⛔⛔ **THE SKIP STAYS, BECAUSE A PANIC IN ITS PLACE FIRES ON ORDINARY SOURCE — A RETURN WHOSE VALUE IS
+// *PROMOTED* AT THE HAND-OFF.** MEASURED: with a panic in place the
+// whole `specs` suite raises it exactly once, on
 // `array-declared-record/the-self-spelling-of-a-corpus-served-member-reaches-the-same-body`, in a
 // corpus-declared `Array.at` whose `returns Num` body hands back an opaque `Element`.
 // `parseCheckedValueReturn` records the site's ValueId BEFORE calling `emitOwnedValueReturn`, which
@@ -185,19 +185,19 @@ end 'GuardedOperand'
 // MEASURED: a `Holder uses Element` whose `narrowedAt(i) returns Num` reads `try managed.get(i)`, held as
 // `Holder with Wide` (`Num = int(0 to 1000)`, `Wide = int(0 to 100000)`), pushed `5000` and PRINTED
 // `5000` — where every non-promoted spelling of the same narrowing panics *"Range check failed: value
-// outside typealias 'Num'"*. **Its fix is its own rung**, because it is not one line: recording what the
+// outside typealias 'Num'"*. **Its fix is its own change**, because it is not one line: recording what the
 // `ret` actually carries is the mechanical half, and the other half is a design question with a cost —
 // whether an opaque `T`'s range is provable from the enclosing instance, or whether every corpus generic
-// body gains a cascade that can never fire. Reported to the coordinator, not fixed here.
+// body gains a cascade that can never fire. Not fixed here.
 //
-// ⚠ **G14 IS WHY THE SKIP IS THE COST IT IS, NOT A REASON TO KEEP IT COMFORTABLY.** A `throws` function's
-// `return` leaves through `errorReturn`, `retMatchesValue` did not recognise it as a return, and so EVERY
-// ranged return in EVERY throwing function came back `notFound` and was dropped here — a wrong answer on
+// ⚠ **WHAT THE SKIP COSTS IS MEASURED, AND IT IS NOT A REASON TO KEEP IT COMFORTABLY.** A `throws`
+// function's `return` leaves through `errorReturn`; unrecognised as a return by `retMatchesValue`, EVERY
+// ranged return in EVERY throwing function comes back `notFound` and is dropped here — a wrong answer on
 // ordinary source, absorbed in silence. The set of Std terminators that RETURN A VALUE is still written
 // twice — here in `retMatchesValue`'s arms, and in `StdOpMeta.role` (`OpRole.ret` / `OpRole.errorReturn`,
 // which has no reader in the compiler) — and the two are held in agreement by hand. `retMatchesValue`'s
-// match is exhaustive, so a NEW variant is a compile error there; what defeated it was a variant that
-// already existed being swept into a RANGE arm, which exhaustiveness cannot see. ⇒ **The panic is the
+// match is exhaustive, so a NEW variant is a compile error there; what defeats it is an EXISTING variant
+// swept into a RANGE arm, which exhaustiveness cannot see. ⇒ **The panic is the
 // right end state and the fourth cause is the one thing standing between here and it.**
 union RetBlockLookup
 	notFound
@@ -443,14 +443,13 @@ type RangeCheckEmitter
 	end 'runtimeHalfOf'
 
 	// An alias-named site: the site's own `stdOpPos` is where in its block the guard goes. Every one of them
-	// owes the RUNTIME half — the array element was the last that did not, and `A1f-arrayelem` moved its
-	// guard to the store, which is why the site no longer carries a `RangeCheckGuard` to be asked for.
+	// owes the RUNTIME half, so no site carries a `RangeCheckGuard` to be asked for.
 	//
-	// ⛔ **THE TWO FILES ARE NOT ALWAYS ONE HERE, AND THIS SITE ASSUMED THEY WERE.** It read *"both files are
-	// this function's own (every door here resolved its alias where it wrote it)"* and passed `filePath`
-	// for both — true of the cast, the field store, the struct-literal field and the array element, and
-	// FALSE of the arm-served index, whose alias is the CALLEE's (`Parser.recordArmServedIndexRangeCheck`).
-	// The site now carries the declaration it resolved; `RangeCheckSite.aliasFilePath` holds the measurement.
+	// ⛔ **THE TWO FILES ARE NOT ALWAYS ONE HERE.** *"Both files are this function's own (every door here
+	// resolved its alias where it wrote it)"* is true of the cast, the field store, the struct-literal field
+	// and the array element, and FALSE of the arm-served index, whose alias is the CALLEE's
+	// (`Parser.recordArmServedIndexRangeCheck`). So the site carries the declaration it resolved, in
+	// `RangeCheckSite.aliasFilePath`.
 	function processSite(site RangeCheckSite, filePath FilePath)
 		match self.guardVerdict(site.value, aliasName: site.aliasName, guard: RangeCheckGuard.runtime, line: site.line, column: site.column, aliasFilePath: site.aliasFilePath, filePath: filePath) 'verdict'
 			noGuard then return
@@ -458,7 +457,7 @@ type RangeCheckEmitter
 		end 'verdict'
 	end 'processSite'
 
-	// ---- narrowed PARAMETERS: the runtime half of the call-argument door (A1f) ----
+	// ---- narrowed PARAMETERS: the runtime half of the call-argument door ----
 
 	// ⭐⭐ **THE GUARD GOES AT THE CALLEE'S ENTRY, NOT AT THE CALL.** A call argument is the one door whose
 	// check cannot be emitted where it is written: a check is a BRANCH, and an argument is evaluated
@@ -511,12 +510,11 @@ type RangeCheckEmitter
 	// written, and the panic points at the parameter itself.
 	//
 	// ⚠ **"THE ONE VISIBLE WHERE THE FUNCTION WAS WRITTEN" IS ONLY AS GOOD AS `RangedAliasRegistry.lookup`.**
-	// Handing it the callee's path is right and is all this site can do; what the registry then does with a
-	// name the callee's file does not itself declare used to be LAST-WINS, and a user
-	// `typealias Codepoint = int(0 to 100)` therefore made `stdlib/helpers/string/utf16.maxon`'s
-	// `utf16LeadSurrogate(codepoint Codepoint)` panic on a legal `70000` against a range from a file it has
-	// never seen. ✅ **CLOSED (A1f-aliasclash): a third file now resolves to a declaration it MAY NAME**, so
-	// this site gets the callee's own exported/stdlib alias. What remains open, and is E3063's rung, is a
+	// Handing it the callee's path is right and is all this site can do. **A name the callee's file does not
+	// itself declare resolves to a declaration that file MAY NAME**, so this site gets the callee's own
+	// exported/stdlib alias — LAST-WINS there lets a user `typealias Codepoint = int(0 to 100)` make
+	// `stdlib/helpers/string/utf16.maxon`'s `utf16LeadSurrogate(codepoint Codepoint)` panic on a legal
+	// `70000` against a range from a file it has never seen. What remains open, and is E3063's, is a
 	// contest between two declarations the reader may BOTH name.
 	//
 	// ⚠ A parameter is never a folded constant (its ValueId is defined by a `param` op, not a `const`), so
@@ -527,8 +525,8 @@ type RangeCheckEmitter
 	// already forks the entire cascade on `aliasIsFloat` for the `as` and `return` doors, so a float
 	// parameter needs nothing of its own — and guarding only the integer half would replace *five doors of
 	// which four guard* with *parameters of which only the int ones guard*, which is a fresh instance of
-	// the very defect this rung exists to delete. `rangedParamSites` records a float alias for the same
-	// reason `rangedReturnAliasName` stopped excluding one when #19 closed: the domain is decided where
+	// the very defect this pass exists to delete. `rangedParamSites` records a float alias for the same
+	// reason `rangedReturnAliasName` excludes none: the domain is decided where
 	// the BOUNDS are read, never where the site is recorded.
 	//
 	// ⭐ **A `function f(x T) returns T … return x` GUARDS THE VALUE ONCE — HERE.** The `return` site's
@@ -549,12 +547,12 @@ type RangeCheckEmitter
 		end 'verdict'
 	end 'guardRangedParam'
 
-	// ⭐⭐ **THE CASCADE, AND THE RECORD OF WHERE IT LANDED (EC7).** A parameter guard is the ONE guard this
+	// ⭐⭐ **THE CASCADE, AND THE RECORD OF WHERE IT LANDED.** A parameter guard is the ONE guard this
 	// pass emits that a LATER pass can prove dead, because it is the one whose premise belongs to somebody
 	// else: the caller. `InlineLeaves` splices this body into a frame that may already know the argument is
 	// in range — from its own entry guard, or from a counted loop's interval — and a cascade it can identify
-	// is a cascade it can decline to copy. Identifying it is what nothing recorded before this row: once
-	// emitted, a guard is a compare, a branch and a panicking block, which is also what a hand-written
+	// is a cascade it can decline to copy. Identifying it needs this record, because once emitted a guard is
+	// a compare, a branch and a panicking block — which is also what a hand-written
 	// `if x < 0 'bad' panic(…) end` is.
 	//
 	// ⚠ **THE HEAD IS READ BEFORE THE EMIT AND THE OK BLOCK AFTER IT, and neither is `entryId`.** A second
@@ -595,17 +593,16 @@ type RangeCheckEmitter
 		self.func.recordParamGuard(site.index, alias: alias, headBlockId: headId, okBlockId: ok.id, ownedBlockIds: owned)
 	end 'emitParamGuard'
 
-	// ⛔⛔ **THE OPS THE CASCADE'S HEAD KEEPS MUST BE `param` OPS AND NOTHING ELSE — AND SINCE EC7 A BREACH
-	// IS A DELETION RATHER THAN A MISPLACEMENT.** `guardSiteAt` anchors at `paramCount`, which is exactly
+	// ⛔⛔ **THE OPS THE CASCADE'S HEAD KEEPS MUST BE `param` OPS AND NOTHING ELSE, AND A BREACH IS A
+	// DELETION RATHER THAN A MISPLACEMENT.** `guardSiteAt` anchors at `paramCount`, which is exactly
 	// past the incoming-register captures `LowerMaxonToStd.emitParams` appends before any body op, so the
 	// head this split leaves holds precisely those. `InlineLeaves` DECLINES to copy that head when it can
 	// prove the cascade dead, and a `param` op is the one op a splice does not need copied (it becomes the
-	// call's argument). Anything ELSE that ever ends up in front of the guard would previously have been a
-	// guard placed one op late; it is now an op the splice silently drops. This says so where the assumption
-	// is made instead of leaving it to the shape of another pass.
+	// call's argument). Anything ELSE that ends up in front of the guard is an op the splice silently
+	// drops. This says so where the assumption is made instead of leaving it to the shape of another pass.
 	//
 	// ⚠ It walks only the guard's OWN prefix (`site.position`), which is `paramCount` for the first cascade
-	// in a block and 0 for every chained one — the k-th guard splits the (k-1)-th's continuation, which was
+	// in a block and 0 for every chained one — the k-th guard splits the (k-1)-th's continuation, which is
 	// minted empty. So the cost is one arity-bounded walk per guarded function, not per op.
 	function requireGuardHeadHoldsOnlyParams(site GuardSite)
 		for pos in 0 upto site.position 'eachPrefixOp'
@@ -847,11 +844,11 @@ type RangeCheckEmitter
 		end 'eachSite'
 	end 'guardReturns'
 
-	// ⭐⭐ **IS THIS `return`'S VALUE ALREADY STANDING BEHIND THIS FUNCTION'S OWN ENTRY GUARD (A1f-dupguard)?**
-	// `function f(x T) returns T … return x` emitted the entry cascade and an identical return cascade over
-	// the same `ValueId` against the same alias. The second is elided — and because A1f exists BECAUSE a
-	// guard was elided on a premise nothing enforced, the premise is spelled out and pinned rather than
-	// asserted. **Four clauses, and `specs/range-check-panic.md` has a case for each:**
+	// ⭐⭐ **IS THIS `return`'S VALUE ALREADY STANDING BEHIND THIS FUNCTION'S OWN ENTRY GUARD?**
+	// `function f(x T) returns T … return x` would otherwise emit the entry cascade and an identical return
+	// cascade over the same `ValueId` against the same alias. The second is elided — and a guard elided on a
+	// premise nothing enforces is how a range check goes missing, so the premise is spelled out and pinned
+	// rather than asserted. **Four clauses, and `specs/range-check-panic.md` has a case for each:**
 	//
 	//   1. **THE SAME VALUE.** Dense SSA numbers a value once, and a parameter's `ValueId` is defined by its
 	//      `param` op — so `site.value == rangedParamValue(paramSite)` is an IDENTITY, not an inference. A
@@ -920,9 +917,9 @@ type RangeCheckEmitter
 			return false
 		end 'literal'
 
-		// ⭐⭐ **`int(0 to u64.max)` NO LONGER LANDS HERE, AND THAT IS THE WHOLE CHANGE.** It spans every
-		// 64-bit pattern as a SET, which is why `rangeIsFull` used to discard its guard — but it is a
-		// QUANTITY, and a quantity's door refuses a value that arrived from a SIGNED domain. What still
+		// ⭐⭐ **`int(0 to u64.max)` DOES NOT LAND HERE.** It spans every
+		// 64-bit pattern as a SET, which is all `rangeIsFull` sees — but it is a
+		// QUANTITY, and a quantity's door refuses a value that arrived from a SIGNED domain. What
 		// tests nothing is `bits(64)` (every pattern IS one of its values), the signed-full range, and a
 		// full-range float; `aliasAdmitsEveryValue` is the three of them and nothing else.
 		if aliasAdmitsEveryValue(alias) 'admitsEveryValue'
@@ -940,7 +937,7 @@ type RangeCheckEmitter
 	// was emitted and the site's own head block when both bounds elided — the true answer in either case, not
 	// a presence flag wearing a block's clothes. Two of the three callers have no use for it; `emitParamGuard`
 	// is the one that does, because *where the cascade ends* is half of the record `InlineLeaves` needs to
-	// skip it (EC7).
+	// skip it.
 	function emitGuardAt(site GuardSite, operand GuardedOperand, alias RangedTypeAlias, message ByteArray, chain GuardChain) returns IrBlock
 		let isFloat = aliasIsFloat(alias)
 		let checks = boundChecks(alias.low, high: alias.high, isFloat: isFloat)
@@ -1033,15 +1030,15 @@ type RangeCheckEmitter
 	// this chain would only carve a prefix off it again, and `materializeChainTails` places what remains
 	// once the loop is over.
 	//
-	// ⚠ **THIS IS THE DIFFERENCE BETWEEN LINEAR AND QUADRATIC BYTES, MEASURED.** The split used to
-	// partition the chain-end block's own list into two FRESH arrays, which moved everything after the
-	// cut on every guard: k guards in a source block of B ops copied Σ(B − pₖ) ≈ k·B/2 op refs, and the
+	// ⚠ **THIS IS THE DIFFERENCE BETWEEN LINEAR AND QUADRATIC BYTES, MEASURED.** Partitioning the
+	// chain-end block's own list into two FRESH arrays moves everything after the
+	// cut on every guard: k guards in a source block of B ops copy Σ(B − pₖ) ≈ k·B/2 op refs, and the
 	// generated `scaleDivide` — 1,024 `as ScaleDivisor` casts in ONE straight-line block, doubling per
-	// scale rung — read `phase:insertRangeChecks` at ×2.83 ×2.82 ×3.73 ×4.11 ×4.32 bytes per DOUBLING
-	// ladder rung, 13.0% of everything the compiler allocated at rung 5, with the ratio still climbing.
-	// Allocations were dead flat at ×2.00 throughout: a fixed number of arrays per site, each one bigger
-	// — which is the whole signature of this bug and is why the byte column, not the allocation column,
-	// is the one that found it.
+	// scale rung — reads `phase:insertRangeChecks` at ×2.83 ×2.82 ×3.73 ×4.11 ×4.32 bytes per DOUBLING
+	// ladder rung, 13.0% of everything the compiler allocates at rung 5, with the ratio still climbing.
+	// Allocations stay dead flat at ×2.00 throughout: a fixed number of arrays per site, each one bigger
+	// — which is the whole signature of that bug and is why the byte column, not the allocation column,
+	// is the one that finds it.
 	//
 	// The asymmetry that makes it work: an array can give up its BACK for free but not its FRONT, and a
 	// chain cuts left to right. Carving forward out of one stable list makes every copy a segment nobody
@@ -1148,21 +1145,21 @@ type RangeCheckEmitter
 	// ever read — but the block still has to LEAVE the function the way the function's ABI says, because a
 	// verifying backend reads the shape whether or not the path runs.
 	//
-	// ⛔⛔ **IT WROTE ONE REGISTER IN A FUNCTION WHOSE ABI RETURNS TWO, AND wasm REFUSED THE MODULE (X6).**
+	// ⛔⛔ **WRITING ONE REGISTER IN A FUNCTION WHOSE ABI RETURNS TWO MAKES wasm REFUSE THE MODULE.**
 	// A function that uses the SECONDARY RETURN SLOT leaves through `errorReturn` — the primary value AND
 	// the second word — which `LowerMaxonToStd.emitRetOrErrorReturn` calls *"the ONE place the ABI decides
-	// ret-vs-errorReturn"*. It was not: this pass appends its blocks AFTER lowering has run, so it is a
-	// second decider. On x64 the missing second register is invisible (the path aborts); on wasm the
-	// functype is multi-value and `wasm-tools component new` rejected the whole component with
+	// ret-vs-errorReturn"*. It is not the only one: this pass appends its blocks AFTER lowering has run, so
+	// it is a second decider. On x64 the missing second register is invisible (the path aborts); on wasm the
+	// functype is multi-value and `wasm-tools component new` rejects the whole component with
 	// `type mismatch: expected i64, found i32`.
 	//
 	// ⚠ **THE QUESTION IS `functionUsesSecondaryReturnSlot`'S, NOT `throwsClauseIsThrowing`'S**, and asking
-	// the narrow one left the INTERFACE-RETURNING disjunct — whose second word is the witness half of the
+	// the narrow one leaves the INTERFACE-RETURNING disjunct — whose second word is the witness half of the
 	// fat pointer — writing one register under a two-register type. One predicate, so a third writer of
 	// that slot cannot reach here without this door already knowing about it.
 	//
 	// ⭐ The zero's TYPE is `stdDefaultPrimaryReturnType`'s, which is also lowering's THROW-edge answer —
-	// one rule for one fact, in the dialect both passes already read (X6 review).
+	// one rule for one fact, in the dialect both passes already read.
 	// Emit the compare cascade, `head` first: each check is `const bound; cmp value <pred> bound;
 	// condBranch (predicate TRUE) -> trueTarget, (FALSE) -> next`. The TRUE target is `panicId` for an
 	// out-of-range check and `okId` for an in-range one (see `RangeCheckEdge`); the FALSE edge falls
@@ -1442,7 +1439,7 @@ type RangeCheckEmitter
 				// The wall-clock read produces no ranged-typealias value to range-check.
 				osReadWallClock then break 'c'
 
-				// R4.1 + R4.2: a raw OS handle, a Win32 BOOL and a byte count are not ranged-typealias values.
+				// A raw OS handle, a Win32 BOOL and a byte count are not ranged-typealias values.
 				osFileOpenRead or
 					osFileClose or
 					osReadFile or
@@ -1457,15 +1454,15 @@ type RangeCheckEmitter
 					osDirCurrentPath or
 					osFileAttributes then break 'c'
 
-				// A3n: the RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
+				// The RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
 				osPanicValue then break 'c'
 				osCommandLine then break 'c'
 
-				// W5: a raw OS handle and a character count are not ranged-typealias values.
+				// A raw OS handle and a character count are not ranged-typealias values.
 				osStdHandle then break 'c'
 				osExecutablePath then break 'c'
 
-				// W35: the byte count the OS reports for a stream write is not a ranged-typealias value.
+				// The byte count the OS reports for a stream write is not a ranged-typealias value.
 				osWriteStderr then break 'c'
 
 				// A frame address is not a ranged-typealias value.
@@ -1498,11 +1495,11 @@ type RangeCheckEmitter
 				// F1b: a fill defines nothing, so it can never define a negated int constant.
 				memFill then break 'c'
 
-				// F1c: a reserve and a commit define a page base the OS chose, never a negated int constant.
+				// A reserve and a commit define a page base the OS chose, never a negated int constant.
 				osCommitPages or
 					osReservePages then break 'c'
 
-				// F2 + G1: every value-defining member of this range answers something the machine produces at run
+				// Every value-defining member of this range answers something the machine produces at run
 				// time, never a negated int constant.
 				atomicCas or
 					atomicRmw or
@@ -1576,7 +1573,7 @@ let RangeCheckOkLabel = b"__rc_ok"
 // the outgoing edge arguments, leaving the head un-terminated for the caller to finish. Miss any one of
 // those three and the result is a block with two exits or a successor whose phis lose their incoming
 // values, neither of which any gate reads back. `InsertRangeChecks` needed it first and
-// `InlineManagedPrimitives` (EC1) needs the identical thing, so it is a free function over `(module,
+// `InlineManagedPrimitives` needs the identical thing, so it is a free function over `(module,
 // func)` rather than a method: a second copy would be that one rule written twice, in two passes that
 // split for different reasons and would learn about a change to it separately.
 //
@@ -1592,11 +1589,11 @@ let RangeCheckOkLabel = b"__rc_ok"
 // because it repeats on the SAME source block, and that is exactly where moving the ops past the cut
 // becomes Θ(guards × block).
 //
-// ⛔⛔ **`InlineManagedPrimitives` TAKES THIS HALF, AND THE REASON WRITTEN HERE UNTIL 2026-08-25 DID NOT
-// FOLLOW.** It said that pass "splits at ONE position per call site and never repeats on a block it has
-// already split — its continuation is what it scans next — so the quadratic that argument is about
-// cannot arise there". The premise is true and the conclusion does not come from it: the continuation IS
-// the rest of that block, so K carve sites in a block of B ops would copy the tail K times,
+// ⛔⛔ **`InlineManagedPrimitives` TAKES THIS HALF, AND THE OBVIOUS ARGUMENT FOR WHY THAT IS SAFE DOES
+// NOT FOLLOW.** That pass splits at ONE position per call site and never repeats on a block it has
+// already split — its continuation is what it scans next — but the quadratic does NOT follow from that
+// premise: the continuation IS the rest of that block, so K carve sites in a block of B ops copy the
+// tail K times,
 // Σ(B − pₖ) ≈ K·B/2 — the very shape `splitChainEnd` above exists to avoid, arrived at by a different
 // route. **A rationale that does not hold is worse than none: it is what a sixth primitive's author
 // would read as a licence.**
@@ -1733,9 +1730,9 @@ end 'recordConstNeg'
 // `return` put its terminator in — so a `false` says the site's own `ret` is gone (or carries a value the
 // hand-off promoted out from under the site), which is the whole of `RetBlockLookup.notFound`.
 //
-// ⚠ IT ANSWERS A `bool` AND NOT A UNION, AND THAT IS MEASURED. A1h tried a payload-carrying
-// `RetTarget` union in a loop over every ret-bearing block; a payload case is a heap box, so it cost +2
-// allocations per return site (+805 at N=400) against a phase this work leaves allocation-identical.
+// ⚠ IT ANSWERS A `bool` AND NOT A UNION, AND THAT IS MEASURED. A payload-carrying
+// `RetTarget` union in a loop over every ret-bearing block costs +2 allocations per return site
+// (+805 at N=400) — a payload case is a heap box — against a phase that is otherwise allocation-identical.
 // One exhaustive `StdOp` match, in the one place the question is asked, so a new variant is a compile
 // error here rather than a `ret` this silently stops recognizing — `collectConsts` reads the same ops
 // the same way for the same reason.
@@ -1766,7 +1763,7 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 			tryCall gives false
 
 		// ⭐⭐ **A THROWING FUNCTION LEAVES THROUGH `errorReturn`, NOT `ret`, AND READING ONLY `ret` HERE
-		// UNGUARDED EVERY RANGED RETURN IN EVERY `throws` FUNCTION (G14).** `LowerMaxonToStd.emitRetOrErrorReturn`
+		// UNGUARDED EVERY RANGED RETURN IN EVERY `throws` FUNCTION.** `LowerMaxonToStd.emitRetOrErrorReturn`
 		// picks the terminator off the THROWS clause — *"the ONE place the ABI decides ret-vs-errorReturn"* — so
 		// a `returns ExitCode throws E` function's `return v` lands here as `errorReturn(v, flag)` and was swept
 		// up by the arm below as "not a `ret`". `retBlockOf` then answers `notFound` and the site is dropped
@@ -1815,7 +1812,7 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 		// The wall-clock read is a body op, never a `ret`.
 		osReadWallClock gives false
 
-		// R4.1 + R4.2: every file op is a body op, never a `ret`.
+		// Every file op is a body op, never a `ret`.
 		osFileOpenRead or
 			osFileClose or
 			osReadFile or
@@ -1830,15 +1827,15 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 			osDirCurrentPath or
 			osFileAttributes gives false
 
-		// A3n: the RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
+		// The RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
 		osPanicValue gives false
 		osCommandLine gives false
 
-		// W5: both are body ops, never a `ret`.
+		// Both are body ops, never a `ret`.
 		osStdHandle gives false
 		osExecutablePath gives false
 
-		// W35: a stream write is a body op, never a `ret`.
+		// A stream write is a body op, never a `ret`.
 		osWriteStderr gives false
 
 		// A promoted record's address is a body op, never a `ret`.
@@ -1871,11 +1868,11 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 		// F1b: a fill is a body op, never the `ret` this asks about.
 		memFill gives false
 
-		// F1c: a reserve and a commit are body ops too, never the `ret` this asks about.
+		// A reserve and a commit are body ops too, never the `ret` this asks about.
 		osCommitPages or
 			osReservePages gives false
 
-		// F2 + G1: every member of this range is a body op, never the `ret` this asks about.
+		// Every member of this range is a body op, never the `ret` this asks about.
 		atomicCas or
 			atomicRmw or
 			currentThreadToken or
@@ -1903,7 +1900,7 @@ end 'retMatchesValue'
 
 // The literal-const map this pass reads is `ConstValueMap` (FoldConstOperands) — each `const` result id
 // to the literal it materializes, so a cast/return of a literal is a compile-time decision (E3005 or
-// nothing) rather than a runtime guard. It was a byte-identical private copy here (`RangeConstMap`);
-// it is now the ONE exported container both Std passes share. Only the POPULATE walk stays this pass's
+// nothing) rather than a runtime guard. ONE exported container, shared by both Std passes rather than
+// copied privately here. Only the POPULATE walk stays this pass's
 // own — `collectConsts`, which keeps ONE MAP PER DOMAIN (a float payload is a bit pattern) and
 // additionally folds a `neg` of a `const` (`recordConstNeg`) that FoldConstOperands has no reason to.

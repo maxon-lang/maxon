@@ -16,10 +16,9 @@
 // `elapsed` reads CPU FIRST, then the clock, then the memory counters. So the intervals
 // nest: cpu ⊂ wall ⊂ memory, and the probe's own cost falls outside the tightest one.
 //
-// It used to be the CLOCK that was innermost, because the clock was the only cost signal
-// there was. CPU time displaced it: wall time counts every other process on the box, so it
-// is the number the scaling ladder cannot use, while CPU time cannot see preemption at all
-// (see CompileTimings' header). The tightest bracket belongs to the number people act on.
+// The tightest bracket belongs to the number people act on, and that is CPU: wall time
+// counts every other process on the box, so it is the number the scaling ladder cannot
+// use, while CPU time cannot see preemption at all (see CompileTimings' header).
 //
 // This is not free the way the memory ordering is. A memory counter read allocates
 // nothing, so widening its interval changes the delta by exactly zero — which is why it
@@ -63,8 +62,8 @@ typealias TraceNameArray = Array with TraceName
 // `PhaseProbe.beginCounters`, which opens no span, because a pool of workers cannot open seven
 // strictly-nesting spans at once. Only the `regalloc` phase itself has one, on the main thread.
 //
-// ⭐⭐ **A TRACE SPAN IS OPENED IN ONE PLACE AND CLOSED IN ONE PLACE, AND NEITHER OF THEM IS A THROW SITE
-// (A1v).** `begin` emits the BEGIN; the two `record*Delta` writers emit the END. A stage that THROWS
+// ⭐⭐ **A TRACE SPAN IS OPENED IN ONE PLACE AND CLOSED IN ONE PLACE, AND NEITHER OF THEM IS A THROW
+// SITE.** `begin` emits the BEGIN; the two `record*Delta` writers emit the END. A stage that THROWS
 // between them never reaches its writer, so the span stays open for the rest of the trace and every event
 // after it reads as nested inside a phase that has finished — the monitor's whole nesting model, wrong from
 // that point on.
@@ -74,9 +73,9 @@ typealias TraceNameArray = Array with TraceName
 //
 // **The cure is a STACK drained at the compile boundary, not an END at each throw site.** There are four
 // throwing stages inside brackets today (`load`'s project load, `deadFunctions`' E4015, `regalloc`'s E5001,
-// and the chunk-label refusal in `link`) and the fourth was added by this very batch — which is the
+// and the chunk-label refusal in `link`), and the set GROWS — which is the
 // argument: an END per throw site is one fact written once per site, and the NEXT throwing exit forgets it
-// in exactly the way the third and fourth did. A closure-based bracket would be the other shape, and this
+// in exactly the way the last two did. A closure-based bracket would be the other shape, and this
 // language has no throwing function type, so the body could not be passed. The stack costs one push and one
 // pop per probe and no allocation once it has reached its depth.
 //
@@ -84,17 +83,17 @@ typealias TraceNameArray = Array with TraceName
 // timing or memory tables. An aborted phase consumed a time and a byte count that describe half a stage, and
 // a table whose rows must sum to the whole compile has no honest place to put them (see CompileTimings).
 //
-// ⚠⚠ **THE STACK IS PROCESS-WIDE, AND SINCE G20 A PROCESS RUNS THOUSANDS OF COMPILES.** `spec-test`
-// compiles every case in this process, so a failed compile that left a span open no longer merely
-// mis-nests the rest of ITS OWN trace — it mis-nests every compile after it, for the life of the
-// worker. That is why the drain hangs off `Compiler.compileToProduct`, the entry EVERY whole build
-// goes through, rather than off the command-line entry it used to be enough to guard.
+// ⚠⚠ **THE STACK IS PROCESS-WIDE, AND ONE PROCESS RUNS THOUSANDS OF COMPILES.** `spec-test` compiles
+// every case in this process, so a failed compile that leaves a span open mis-nests not merely the
+// rest of ITS OWN trace but every compile after it, for the life of the worker. That is why the drain
+// hangs off `Compiler.compileToProduct`, the entry EVERY whole build goes through, rather than off the
+// command-line entry.
 //
 // A process-wide stack is exact here for the same reason the diagnostic-capture latch is (see
 // Diagnostics.maxon, which carries that reason for all four latches that rest on it): a compile is
 // SERIAL, so two compiles cannot interleave their brackets. ⛔ NOT because the scheduler is single-M —
-// that premise expired at the `DefaultMaxProcs` flip and what replaced it is stated there. Compiling
-// two programs at once in one process needs a per-compile home for this, not a lock around it.
+// it is not, and `DefaultMaxProcs` states what holds instead. Compiling two programs at once in one
+// process needs a per-compile home for this, not a lock around it.
 var openPhaseSpans = TraceNameArray.create()
 
 // What one phase consumed. The unit of attribution: every phase in the report is one of
@@ -249,9 +248,9 @@ export type PhaseProbe
 	// Close the bracket. Clock first, counters after — see this file's header.
 	//
 	// FREES ARE DERIVED, NOT COUNTED. The allocator maintains a cumulative allocation
-	// count and a live one; it does not maintain a free count, and adding one would have
-	// cost a locked add on the free path (the measurement that shaped the runtime side of
-	// this — see RuntimeEmitter.EmitMmGlobals). But `live = total - freed` holds at every
+	// count and a live one; it does not maintain a free count, and adding one would cost a
+	// locked add on the free path (see RuntimeEmitter.EmitMmGlobals). But
+	// `live = total - freed` holds at every
 	// instant by definition, so over any interval `freed = Δtotal - Δlive`, exactly. No
 	// counter is missing; one is redundant.
 	//

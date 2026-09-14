@@ -33,19 +33,19 @@ typealias ModuleVarAccessSiteArray = Array with ModuleVarAccessSite
 // signed-negative.
 module let NoAwaitRow = i64.max as CsrIndex
 
-// ⭐⭐⭐ **EVERY (FUNCTION, AWAITED SERVICE) PAIR IN THE PROGRAM — ONE ROW PER `await`, NOT ONE PER FUNCTION
-// (SV2 review).** A message that awaits replies from TWO services owes an edge to BOTH, and a single site
+// ⭐⭐⭐ **EVERY (FUNCTION, AWAITED SERVICE) PAIR IN THE PROGRAM — ONE ROW PER `await`, NOT ONE PER
+// FUNCTION.** A message that awaits replies from TWO services owes an edge to BOTH, and a single site
 // per function can carry only one of them.
 //
-// ⛔⛔ **MEASURED AT REVIEW, WITH ITS POSITIVE CONTROL.** The walk used to return ONE site and kept the LAST
-// one its op sweep saw, so `A.ping` awaiting `B` and then `C` seeded `C` alone and the `A → B` edge was
-// never built: the ring `A.ping → B.pong → A.ack` COMPILED CLEAN, exit 0, with one unrelated `await` added
-// to `A.ping` — and the very same program without that await is E3139. A dropped edge is a MISSED refusal,
+// ⛔⛔ **MEASURED, WITH ITS POSITIVE CONTROL.** Keeping ONE site per function — the last an op sweep sees
+// — seeds `C` alone for an `A.ping` that awaits `B` and then `C`, and the `A → B` edge is never built:
+// the ring `A.ping → B.pong → A.ack` COMPILES CLEAN, exit 0, with one unrelated `await` added to
+// `A.ping`, while the very same program without that await is E3139. A dropped edge is a MISSED refusal,
 // which is exactly the deadlock `ServiceCallCycleCheck` exists to make unrepresentable.
 //
-// ⭐ **AND THERE IS NO "AWAITS NOTHING" SITE ANY MORE.** Absence is the absence of a ROW, so the empty-name
-// sentinel site and the parallel `BoolArray` that had to guard it are both gone: a function that awaits no
-// reply simply appears in no row, and nothing has to remember not to read its fields.
+// ⭐ **AND THERE IS NO "AWAITS NOTHING" SITE.** Absence is the absence of a ROW: a function that awaits
+// no reply simply appears in no row, so no empty-name sentinel site and no parallel `BoolArray` guarding
+// one exist, and nothing has to remember not to read its fields.
 module type ServiceAwaitRoster
 	// Row ⇒ the function whose own body holds the `await`.
 	var funcIndices as FuncIndexArray
@@ -178,9 +178,9 @@ module type ServiceProgramSurvey
 	// witness slot, whose accepted member `ConformanceCheck.recordWitnessSlotImpl` files by name. A function
 	// that appears in neither has no address anywhere in the image, so nothing can call it indirectly.
 	//
-	// ⛔⛔ **THIS IS WHAT MAKES E3143's WIDENING USABLE, AND WITHOUT IT THE RULE REFUSED THE STDLIB.** The
-	// widening used to mark EVERY function, so one ordinary interface dispatch anywhere in a handler's cone
-	// implicated `Log.startCapture` — a function in a file the author does not own, with a cure
+	// ⛔⛔ **THIS IS WHAT MAKES E3143's WIDENING USABLE, AND WITHOUT IT THE RULE REFUSES THE STDLIB.** A
+	// widening that marked EVERY function lets one ordinary interface dispatch anywhere in a handler's cone
+	// implicate `Log.startCapture` — a function in a file the author does not own, with a cure
 	// (*"make `capturing` a `let`"*) they cannot apply. MEASURED: a six-line service whose handler calls one
 	// interface method and then `Log.trace` was refused outright, and the same program without the interface
 	// compiled. `Log.startCapture` is neither address-taken nor a conformance member, so it is not in this

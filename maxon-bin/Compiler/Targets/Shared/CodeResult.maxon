@@ -122,8 +122,7 @@ end 'buildDebugSymbolIndex'
 // `bakeElfRdataAbsRelocs` share their shape.
 //
 // ⚠ **THREE MECHANISMS RIDE THIS ONE CHANNEL, AND THE MESSAGES BELOW MUST NAME ALL THREE.** A
-// managed-opaque-`T` `Array` descriptor's `destroyFunc@40` (P1.7 slice 3b-ii) and its `copyFunc@32` (slice
-// 3b-vi-b-β) are two of them; the third — and the one a cross-target program is FAR likelier to hit, because
+// managed-opaque-`T` `Array` descriptor's `destroyFunc@40` and its `copyFunc@32` are two of them; the third — and the one a cross-target program is FAR likelier to hit, because
 // it needs no generics at all beyond a `where` clause — is a WITNESS-TABLE METHOD SLOT
 // (`LowerMaxonToStd.ensureWitnessTable`), where every interface method of every conformance is stamped this
 // way. A diagnostic that names only the descriptor sends a reader hunting for a managed opaque array in a
@@ -132,9 +131,9 @@ end 'buildDebugSymbolIndex'
 // ⭐ **THIS FUNCTION IS THE FIXED-BASE BAKE** (PE + ELF): it writes an absolute `.text` VA, so it is correct
 // exactly when the image LOADS WHERE IT SAYS IT DOES. That is a property of the FORMAT, not of the CPU — a PE
 // with a fixed `ImageBase` and a static `ET_EXEC` ELF both qualify on either CPU, which is why this is
-// CPU-invariant and both x64 and arm64 route through it unchanged. (It read `target.cpu != x64` until P1.7a
-// slice 2b-iv-C, which was over-broad in the one direction that costs a target: arm64-LINUX writes the same
-// static ELF x64-linux does and had always been able to take this bake.)
+// CPU-invariant and both x64 and arm64 route through it unchanged. (A `target.cpu != x64` test is
+// over-broad in the one direction that costs a target: arm64-LINUX writes the same static ELF x64-linux
+// does and can take this bake.)
 //
 // The two backends that are NOT fixed-base bake the same slots with a different VALUE, since the blob layout
 // is target-agnostic: wasm writes the callee's funcref-TABLE INDEX (`StdToWasm.bakeFuncTableIndexRelocs`,
@@ -156,7 +155,7 @@ export function bakeFuncAbs64Relocs(rdata ByteArray, globalData GlobalDataTable,
 end 'bakeFuncAbs64Relocs'
 
 // ⭐ **WHERE a `funcAbs64InRdata` relocation's 8 bytes LIVE in the `.rdata` image — ONE fact, read by ALL
-// THREE FILLERS.** The thesis of the filler split (P1.7a slices 2b-iv-B and 2b-iv-C) is that only the VALUE
+// THREE FILLERS.** The thesis of the filler split is that only the VALUE
 // in the slot is format-specific: `bakeFuncAbs64Relocs` writes an absolute `.text` VA (fixed-base PE/ELF),
 // `StdToWasm.bakeFuncTableIndexRelocs` a funcref-table index, and `MachOWriter.writeMachoRdataRebases` a
 // dyld chained-fixup rebase holding an image-base-relative offset. The DESTINATION is not, so spelling it

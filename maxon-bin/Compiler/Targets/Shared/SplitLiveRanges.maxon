@@ -67,16 +67,16 @@
 // A victim whose live range the eviction-point split does NOT cut — a loop-invariant a call inside
 // the loop reads on BOTH sides of itself, so it is live across the call around the back edge no matter
 // how its after-peak uses are rewritten — is relieved at a CONFINED peak by rewriting EVERY use
-// instead (`SplitScope`). That is the case `noVictimAtPeak`'s confined panic used to hit.
+// instead (`SplitScope`). That is the case `noVictimAtPeak`'s confined panic otherwise hits.
 //
 // "OVERFLOWS ITS POOL" is per-point AND per-VALUE, because a clobber SHRINKS a value's pool: a value
 // live across a call is forbidden all 9 caller-saved registers, so its only home is one of the 5
 // callee-saved; one live across an `idiv` is confined to `pool ∖ {RAX,RDX}`. Values at one point can
 // therefore be shopping in differently sized register sets, and no single number decides whether they
 // fit. `analyzePressure` tests HALL'S CONDITION on those per-value pools (`HallCondition`): no
-// register subset may have more values CONFINED to it than it has registers. That subsumes the old
-// "compare the live count against `pool ∖ op.implicitDefs` AT the clobber op" check and additionally
-// sees what that check structurally could not — values confined by DIFFERENT calls, colliding at a
+// register subset may have more values CONFINED to it than it has registers. That subsumes a "compare
+// the live count against `pool ∖ op.implicitDefs` AT the clobber op" check, and additionally sees what
+// such a check structurally cannot — values confined by DIFFERENT calls, colliding at a
 // point that is not itself a call. `maxPressure ≤ pool` is NECESSARY but far from SUFFICIENT.
 //
 // ==========================================================================
@@ -86,7 +86,7 @@
 // `chooseVictim` asks the same handful of questions — "where is it defined?", "where is it
 // used?", "is it a phi?", "is it edge-passed?", "is it already stored?", "does it touch a
 // loop?" — of EVERY value crossing the peak. Answering each with its own walk of the function
-// made the splitter O(candidates × blocks × ops) PER SPLIT, and it was 61% of register
+// makes the splitter O(candidates × blocks × ops) PER SPLIT, MEASURED at 61% of register
 // allocation whenever it ran. The function's `UseIndex` (TargetLiveness) answers all of them in O(1) (or O(uses of the one
 // value)) from dense columns + a CSR use list keyed by value id, built in ONE pass over the
 // function — the same counting-sort idiom as `TargetLiveness.buildUseIndex`, and for the same
@@ -98,9 +98,9 @@
 // THE DRIVER IS INCREMENTAL: A SPLIT COSTS WHAT IT CHANGED, NOT WHAT THE FUNCTION IS
 // ==========================================================================
 //
-// The driver used to rebuild liveness AND re-sweep the whole function for pressure after every split.
-// K splits × O(function) is O(function × splits), and K grows with the function, so it was a genuine
-// QUADRATIC — and pure waste. The scale suite's `pressuredLoops` shape says why: ONE function with N
+// Rebuilding liveness AND re-sweeping the whole function for pressure after every split is K splits ×
+// O(function) = O(function × splits), and K grows with the function, so it is a genuine QUADRATIC —
+// and pure waste. The scale suite's `pressuredLoops` shape says why: ONE function with N
 // loops, each holding 8 accumulators live across a call, each needing ~5 forced spills. Loop i's
 // accumulators are live ONLY inside loop i — they are disjoint from loop j's — so spilling one in loop
 // 3 cannot change the pressure anywhere in loops 0..2 or 4..63. The old driver re-read all 64 loops
@@ -156,8 +156,8 @@
 // ==========================================================================
 //
 // Everything the per-split path touches has to be proportional to the dirty region, so NOTHING on it
-// may be sized by the function — including the buffers. SIX costs were superlinear and none of them
-// was the traversal:
+// may be sized by the function — including the buffers. SIX costs are superlinear here and none of
+// them is the traversal:
 //
 //  • `hallVerdictAt` HEAP-ALLOCATED its five working columns on every call, two of them PER LIVE VALUE
 //    — and it is called at nearly every op of a pressured loop, because a value confined by a call is
@@ -168,9 +168,9 @@
 //  • `EffectivePools`, `defLiveAfter` and the sweep's working row are all sized by the VALUE SPACE,
 //    which itself grows with every split — so re-initializing them per iteration is Θ(splits × values).
 //    They are now GROWN (only the added entries are written) and MAINTAINED per value.
-//  • `defLiveAfter`'s "no store anchor" sentinel used to be `valueCount + 1`, which changes whenever a
-//    split mints an id — so the whole column had to be re-stamped. It is a constant
-//    (`NoStoreAnchorPressure`), and nothing reads it: see there.
+//  • `defLiveAfter`'s "no store anchor" sentinel is a CONSTANT (`NoStoreAnchorPressure`) and not
+//    `valueCount + 1`, which changes whenever a split mints an id and would force the whole column to
+//    be re-stamped. Nothing reads it: see there.
 //  • `materializePeak` took a FRESH `wordsPerRow` row per analysis to carry the peak's live-before set,
 //    and `refreshPeak` materializes a peak after EVERY split — O(splits × values) BYTES per function.
 //    (`SplitScratch.peakLiveBefore`; `usesAtPeakOp`'s row is the same shape and shares `zeroRow`.)
@@ -180,8 +180,7 @@
 //
 // ⚠ THE LAST TWO HID BEHIND A LINEAR ALLOCATION COUNT, which is why they outlived the four above them:
 // one allocation per split IS linear, and only the BYTES carry the value space it is multiplied by. So
-// they are visible in `scale-test`'s byte column and in nothing else. MEASURED on the P1.7a-era corpus,
-// 8 rungs: together they took `regalloc:splitting` bytes from ×192.1 over a ×128 ladder (per-rung ratio
+// they are visible in `scale-test`'s byte column and in nothing else. MEASURED over 8 rungs: together they took `regalloc:splitting` bytes from ×192.1 over a ×128 ladder (per-rung ratio
 // climbing monotonically 1.77 → 2.61, allocations linear at ×2.03) to ×111.7 (per-rung 2.04, flat) —
 // the peak row 48.5 MB of the saving at rung 7, the worklist 104.2 MB. The old corpus could not see
 // either: its splits were confined to small functions, so splits and values did not grow together.
@@ -260,7 +259,7 @@ export type PressurePeak
 	// The peak op's `module.ops` index, resolved once when the peak is materialized. `peakSeq` cannot
 	// stand in for it: sequence numbers are block-relative and SPARSE (`seqAt`), so there is no dense
 	// seq -> op map to look one up in — and there should not be, because maintaining one is exactly
-	// the whole-function rebuild an insert used to force. The ops array is append-only, so an op's
+	// the whole-function rebuild an insert would force. The ops array is append-only, so an op's
 	// index never moves and this stays valid across the mutations the split then makes.
 	export var peakOpIdx as OpIndex
 
@@ -353,8 +352,8 @@ end 'RegAllocRefusalSite'
 // `peakOutranks` REPLACES on an exact tie (it is how the tie-break is implemented), so every op that
 // merely MATCHES the running best becomes a new best. In a loop holding N accumulators across a call
 // those values are confined at every op of the loop, so Hall reports the same `tight` everywhere and
-// EVERY op of the loop ties — and the old code took a fresh heap row plus a `wordsPerRow` copy at each
-// one, on every splitter iteration, to hold a snapshot all but the last of them would discard.
+// EVERY op of the loop ties — and taking a fresh heap row plus a `wordsPerRow` copy at each one, on
+// every splitter iteration, holds a snapshot all but the last of them discards.
 //
 // The row is derived ONCE, for the winner, by `fillLiveBeforeOp` — from the same backward transfer
 // function the sweep steps with, so it is bit-for-bit the row the snapshot would have taken.
@@ -398,7 +397,7 @@ type PeakRank
 	// looks at it (`rankOutranks` rejects an unfound candidate outright; `peakOutranks` takes its
 	// `firstPeak` exit against an unfound incumbent), so the block sweep passes the pool it is measuring
 	// against and the tournament passes the empty set its own empty rank has always carried — and the
-	// two stay byte-identical to what each used to mint by hand.
+	// two stay byte-identical to what each would mint by hand.
 	export function clear(atBlock CfgIndex, pool RegMask)
 		self.found = false
 		self.pressure = 0
@@ -568,7 +567,7 @@ end 'SpillChoice'
 // an op nor carries as a phi. `storeFitsPool` is its only reader, and reads it as "no register-free
 // store anchor", so it need only EXCEED any pool.
 //
-// It is a CONSTANT, and it used to be `valueCount + 1`. The value space GROWS with every split, so a
+// It is a CONSTANT rather than `valueCount + 1`. The value space GROWS with every split, so a
 // sentinel derived from it goes stale the moment an id is minted, and keeping it current means
 // re-stamping the whole column — O(values) per split, which is exactly the term the incremental driver
 // exists to remove.
@@ -588,7 +587,7 @@ let NoStoreAnchorPressure = RegisterFileSize + 1
 // use ACROSS the peak and flip which side of the split it lands on.
 //
 // THE SPLICES THEMSELVES ARE HELD BACK TOO, and that is what makes this the whole edit log rather than
-// a repair log. Three separate Θ(block) costs used to be paid on EVERY op a split inserted: the search
+// a repair log. Three separate Θ(block) costs would otherwise be paid on EVERY op a split inserted: the search
 // for its anchor op's position, the suffix shift `Array.insert` does, and the walk of the block's use
 // thread that restates the sequence numbers past it. A split placing K ops into a block of M ops cost
 // Θ(K × M) — invisible to `scale-test`, because none of the three ALLOCATES. Held back, the batch costs
@@ -606,8 +605,7 @@ let NoStoreAnchorPressure = RegisterFileSize + 1
 // backward pass would otherwise place an op silently in the wrong slot.
 //
 // THE REMOVAL is a scalar rather than a list entry: a split removes at most ONE op — a fully
-// rematerialized constant's def, which nothing reads any more — and it is applied AFTER the splices,
-// exactly where it was applied when it was applied by hand.
+// rematerialized constant's def, which nothing reads — and it is applied AFTER the splices.
 export type SplitEdits
 	var blocks as CfgIndexArray
 	var positions as BlockOpPosArray
@@ -791,8 +789,7 @@ export type SplitEdits
 	// ⚠ A RE-SPACE INVALIDATES THEM, and one CAN happen between the seat and this read: `insertOp`
 	// re-spaces whenever the gap it wants is used up, which is mid-batch as soon as a batch puts a second
 	// op into one gap. So the column is handed to every re-space and REPAIRED there
-	// (`PressureRelayoutScratch.applyMoves`). It used to say instead that a re-space "re-derived" them,
-	// which nothing did — see that function for what the missing repair actually cost.
+	// (`PressureRelayoutScratch.applyMoves`) — see that function for what the missing repair costs.
 	export function appendInsertedSlots(out DenseColumn)
 		out.append(self.insertedSlots)
 	end 'appendInsertedSlots'
@@ -854,9 +851,9 @@ type PeakTree
 	var winner as CfgIndexArray
 
 	// The two ranks ONE combine compares, refilled from the columns above at every combine and never
-	// re-minted. `betterBlock` used to materialize a fresh `PeakRank` for each side — two 72-byte heap
-	// objects to read four fields — and `promote` runs O(log blocks) combines for every dirty block of
-	// every split, so that was a per-split allocation term proportional to the FUNCTION rather than to
+	// re-minted. Materializing a fresh `PeakRank` for each side in `betterBlock` is two 72-byte heap
+	// objects to read four fields, and `promote` runs O(log blocks) combines for every dirty block of
+	// every split, so that is a per-split allocation term proportional to the FUNCTION rather than to
 	// what the split changed. Two objects per tree instead, for the same reason the leaves are columns.
 	var leftRank as PeakRank
 	var rightRank as PeakRank
@@ -1128,7 +1125,7 @@ end 'BlockPeakSlot'
 //
 // ⚠ THE ONE STATEMENT OF THE TIE, AND IT HAS TWO CALLERS THAT MAY NOT DIFFER. `combine` folds it into
 // `nodeBest`, which is the PRESSURE the peak-finder reads; `blockPeak`'s descent re-asks it at every
-// level to recover the SLOT that pressure sits at. Written twice — which it was — a later edit to one
+// level to recover the SLOT that pressure sits at. Written twice, a later edit to one
 // would hand back a peak whose slot is not where its own value is: a different victim, no crash, no
 // failing assertion, and nothing outside `VerifyIncrementalSplit` to notice.
 //
@@ -1363,8 +1360,8 @@ export type PressureIndex
 	//
 	// ⚠ TWO CALLERS, ONE STATEMENT. `rebuild` publishes it from the row it seeds its own backward sweep
 	// with; `refreshExitLeaves` publishes it from `seedClassLive` over the same list, after a split has
-	// re-marked the live sets. Written out at both sites — which it was, one of them re-tallying the
-	// list by hand rather than through `seedClassLive` — the two are free to drift, and a block's whole
+	// re-marked the live sets. Written out at both sites — one of them re-tallying the list by hand
+	// rather than through `seedClassLive` — the two are free to drift, and a block's whole
 	// pressure profile moves by the difference.
 	export function setExitPopulation(blockLocal CfgIndex, population RegCountColumn)
 		let exit = self.exitSlotOf(blockLocal)
@@ -2062,9 +2059,9 @@ export type PressureRelayoutScratch
 	// Rewrite every slot in `pending` this re-space MOVED — the slots `SplitEdits` has already recorded
 	// for the ops it seated earlier in the same batch. A slot outside the window is left alone.
 	//
-	// ⚠ THIS REPAIR USED TO BE A COMMENT INSTEAD OF A FUNCTION. `appendInsertedSlots` asserted that a
-	// re-space "re-derived" the slots already returned in the batch; nothing did, and the second op of any
-	// batch whose first op had triggered a re-space was read back from a slot the re-space had emptied.
+	// ⚠ THIS REPAIR IS A FUNCTION AND NOT A COMMENT. Asserting instead that a re-space "re-derives" the
+	// slots already returned in the batch leaves the second op of any batch whose first op triggered a
+	// re-space read back from a slot the re-space had emptied.
 	// (Measured with `SlotGap` at 2, which brings the gap's tolerance down to one nested insertion:
 	// `PressureIndex.opAtSlot: slot 315 holds no op` out of `reindexSplitValues`.)
 	export function applyMoves(pending DenseColumn)
@@ -2279,22 +2276,20 @@ end 'applyOneUseToPressure'
 // `opTransientDefOf`. The only thing that
 // legitimately differs between the full build and a repair is HOW "is `v` live after this point?" is
 // answered — off a swept live row there, off the USE INDEX here, because a repair has no live row —
-// and that is now the only thing this function does.
+// and that is the only thing this function does.
 //
-// ⚠ IT USED TO RE-DERIVE THE DECISION ITSELF, and that is a fact written down twice, in two files,
-// where nothing made the copies agree: the same question ("is the def dead? does the op free a
-// register?") asked once against a bitset and once against the index. `VerifyIncrementalSplit` exists
-// to CATCH that divergence, but it is compiled out by default, so a clause added to one copy and not
-// the other ships as a wrong pressure figure and a colorer panic. The class filter on "frees a
-// register" had to be applied to both copies on the day it was found, which is the divergence
-// arriving on schedule.
+// ⚠ RE-DERIVING THE DECISION HERE writes one fact down twice, in two files, where nothing makes the
+// copies agree: the same question ("is the def dead? does the op free a register?") asked once against
+// a bitset and once against the index. `VerifyIncrementalSplit` exists to CATCH that divergence, but it
+// is compiled out by default, so a clause added to one copy and not the other ships as a wrong pressure
+// figure and a colorer panic — the class filter on "frees a register" has to reach both.
 //
 // The row is materialized for THIS OP'S OPERANDS ONLY — every value the decision can consult (the def,
 // the reuse input, the virtual uses) is an operand of this op — and cleared again the same way, so it
 // stays O(operands) and the shared scratch row is zero on the way in and on the way out, exactly as
 // `sweepBlockPressure` requires and leaves it.
 //
-// ⚠ IT IS RE-DERIVED UNCONDITIONALLY, and the narrowing that used to stand here would now be WRONG. The
+// ⚠ IT IS RE-DERIVED UNCONDITIONALLY, and a narrowing here would be WRONG. The
 // reuse-copy transient depends on ONE value (the reuse input), so an op whose reuse input the split
 // never named could be skipped; the DEAD-DEF transient depends on the op's def AND on every one of its
 // virtual uses — which is exactly the set of values that makes `refreshTransientsNaming` visit this op
@@ -2432,7 +2427,7 @@ function refreshTransientsNaming(module TargetModule, liveness LivenessResult, p
 end 'refreshTransientsNaming'
 
 // ==========================================================================
-// THE THREE THINGS THE DIRTY-BLOCK SWEEP USED TO PRODUCE
+// THE THREE THINGS THE DIRTY-BLOCK SWEEP PRODUCES
 // ==========================================================================
 //
 // `sweepBlockPressure` re-ran a whole block, op by op, to restate three facts about a split — and only
@@ -2763,14 +2758,14 @@ end 'roundUpToRunBoundary'
 
 // Every buffer the per-split pressure sweep and victim choice need, allocated ONCE per FUNCTION and
 // reused by every iteration of the driver's loop. See the file header for why per-iteration
-// allocation was the cost.
+// allocation is the cost.
 //
 // THE RULE THAT MAKES REUSE SAFE IS ABOUT VALUES, NOT ABOUT ZEROES. Every buffer here is either fully
 // re-filled over the extent that iteration reads (`Array.refill`, `EffectivePools.fillAll`), GROWN with
 // its added entries explicitly initialised (`Array.growFilled`, `PressureSweepScratch.widenRow`), or
 // `clear()`ed before its first push — so no reader ever inherits a value from the previous iteration.
 //
-// It is NOT, as this comment used to claim, that a lengthening `resize` hands back the previous
+// It is NOT that a lengthening `resize` hands back the previous
 // occupant's bytes. It does not: THE CAPACITY-SLOT INVARIANT (stdlib/Internals.maxon) zeroes a slot on
 // the way OUT of the live range, so what `resize` exposes always reads zero. Verified — see
 // `zeroColumn` in TargetLiveness.maxon. The reason these buffers are refilled is that most of them want
@@ -2829,8 +2824,8 @@ type SplitScratch
 	// rows the confined sweep and the positional index's repair write into, allocated once per function
 	// like every other buffer here.
 	//
-	// (A third, one block's DEMAND, went with the per-split block sweep: the demand is now read off the
-	// index in O(1) and written straight into `LivenessResult.blockPressure`, with no row in between.)
+	// (A third, one block's DEMAND, needs no buffer: it is read off the index in O(1) and written
+	// straight into `LivenessResult.blockPressure`, with no row in between.)
 	export var opEffective as RegCountColumn
 	export var exitPopulation as RegCountColumn
 
@@ -2844,9 +2839,9 @@ type SplitScratch
 	export var rank as PeakRank
 
 	// THE MUTATORS' buffers: one flag per use site of the victim (does that use start a fresh reload —
-	// `markRunStarts`), and the operand list the use-rewriter fills. Both used to be allocated per
-	// SPLIT (`OperandList.create()` inside `spillOneValue` / `rematerializeConstant`), which is the same
-	// per-split allocation term the rest of this type exists to remove.
+	// `markRunStarts`), and the operand list the use-rewriter fills. Allocating both per SPLIT
+	// (`OperandList.create()` inside `spillOneValue` / `rematerializeConstant`) is the same per-split
+	// allocation term the rest of this type exists to remove.
 	export var runStarts as BoolArray
 	export var splitOperands as OperandList
 
@@ -2965,7 +2960,7 @@ export type SplitDriver
 	// `refreshPeak` reads its answers off — and hand back the peak its seeding pass found.
 	//
 	// TWO whole-function walks, so it is deferred until the function turns out to need a split at all
-	// (the overwhelming majority never do) and run at most ONCE. It now has TWO triggers rather than one:
+	// (the overwhelming majority never do) and run at most ONCE. It has TWO triggers:
 	// the relief loop's first over-pool point, and a colorer repair on a function that never had one.
 	function buildSplitIndex(module TargetModule) returns PressurePeak
 		if self.indexBuilt 'alreadyBuilt'
@@ -3183,8 +3178,8 @@ export type SplitDriver
 	// before a single op moves. It mirrors `commitSplit`, and it is one function for the same reason:
 	// three callers make the same mutation and owe the same preparation.
 	//
-	// ⛔ IT IS ALSO AN ORDER, NOT JUST A LIST, AND THE ORDER WAS THE DUPLICATION WORTH REMOVING. Written
-	// out at each call site the two copies drifted into two different step orders, which was sound only
+	// ⛔ IT IS ALSO AN ORDER, NOT JUST A LIST, AND THE ORDER IS THE DUPLICATION WORTH REMOVING. Written
+	// out at each call site the copies drift into different step orders, which is sound only
 	// because `UseIndex` is not rebuilt until `refreshAfterSplit` — so `isSlotResident` answers the same
 	// before and after the mutation. The day that stops being true, the symptom is TWO VALUES SHARING A
 	// SPILL SLOT: one store silently overwriting the other, no crash, wrong answer.
@@ -3243,7 +3238,7 @@ export type SplitDriver
 	// **(b) always has a candidate**, which is what makes the pair total: `A(v)` cannot be empty (a value
 	// allowed no register cannot be matched, so Hall would have said OVERFLOW), and every register in it
 	// is held by a live value. So "nothing can be done" is not a state this can reach — see
-	// `repairStuckValues`, whose panic now stands only for a contradiction.
+	// `repairStuckValues`, whose panic stands only for a contradiction.
 	//
 	// ⭐ **TERMINATION — ONE potential for both cures.** Φ = Σ_v |{ ops `v` is live ACROSS that are not
 	// themselves the `storeSlotReg`/`loadRegSlot` a split SPLICES }|. Two properties make it work:
@@ -3331,7 +3326,8 @@ export type SplitDriver
 	// cure (a), which leaves the whole suite green on this cure alone. What could not be built is a
 	// program that reaches it with cure (a) still enabled.
 	//
-	// ⭐ **THE REASON IS THAT THE MECHANISM CAUSING A5g WORKS AGAINST REPRODUCING ITS RESIDUE.** The one
+	// ⭐ **THE REASON IS THAT THE MECHANISM CAUSING THE EXHAUSTION WORKS AGAINST REPRODUCING ITS
+	// RESIDUE.** The one
 	// forbid family that confines a value without any clobber in its live range is `ParamCrossForbid` —
 	// a parameter capture forbidden its SIBLINGS' incoming registers. To reach here it would have to be
 	// stuck with all eleven registers it IS allowed held and the three sibling registers left FREE. But
@@ -3446,8 +3442,8 @@ export type SplitDriver
 		end 'kind'
 	end 'failingPointOf'
 
-	// WHY a whole ROUND could relieve nothing — for `repairStuckValues`'s panic, which is now the report
-	// of a contradiction rather than of a shortfall. Both cures are named, because both must have failed.
+	// WHY a whole ROUND could relieve nothing — for `repairStuckValues`'s panic, which reports a
+	// contradiction rather than a shortfall. Both cures are named, because both must have failed.
 	export function describeUnrepairable(v ValueId, free RegMask, occupants ColumnLength) returns String
 		let established = try self.liveness.establishedAtDef.get(v) otherwise panic("SplitDriver.describeUnrepairable: establishedAtDef.get OOB for value {v}")
 		return "value {v}: (a) it is live across NO clobber that takes a register of its own file, so there is nothing to cut to widen its allowed set — its forbid is {self.liveness.forbiddenOf(v)}, of which {self.paramCross.maskFor(v)} comes from a SIBLING PARAMETER's incoming register (`ParamCrossForbid`) and {established} from registers ESTABLISHED at its def (`establishedAtDef`), and whatever remains came from an op that names {v} as an OPERAND (`forbidOperandsFromImplicit`) — none of the three is a clobber inside a live range. And (b) all {occupants} occupant(s) of the registers it IS allowed were refused, which happens only when the failing point itself NAMES every one of them — the op reads it, or the op defines it, or its last use is at or before the point. All three say the same thing: that occupant is live AT the point, so evicting it frees nothing there. Free registers at the point were {free}."
@@ -3826,7 +3822,7 @@ function refreshAfterSplit(module TargetModule, cfg FuncCfg, liveness LivenessRe
 		sweepEstablishedRegisters(module, topo: topo, blockLocal: dirty.at(k), establishedAtDef: liveness.establishedAtDef, scratch: scratch.sweep, opFacts: liveness.opFacts)
 	end 'eachDirtyBlock'
 
-	// The three things the dirty-block sweep used to produce, each restated against what actually moved.
+	// The three things the dirty-block sweep produces, each restated against what actually moved.
 	rebuildForbiddenOf(module, liveness: liveness, pressure: scratch.pressure, w: split.victim, paramCross: paramCross, dirty: dirty, buf: scratch.splitOperands)
 
 	for f in split.freshFrom upto split.freshTo 'eachFresh'
@@ -3856,9 +3852,9 @@ end 'refreshAfterSplit'
 // is only ever the function's peak when NO op anywhere overflows its full pool. The exact Hall
 // confirmation that produces one is a maximum bipartite matching — MEASURED at ~80,000 CPU ticks a call
 // against ~2,900 for the entire rest of an op's step — and the screen that gates it fires at roughly
-// half the ops of a call-heavy block. Computed eagerly it was 86% of `analyzeBlockPressure` and 75% of
-// the whole per-split cost on a block carrying Θ(block) splits, and the tournament DISCARDED every one
-// of those calls in the same iteration that paid for them.
+// half the ops of a call-heavy block. Computed eagerly it MEASURES 86% of `analyzeBlockPressure` and
+// 75% of the whole per-split cost on a block carrying Θ(block) splits, with the tournament DISCARDING
+// every one of those calls in the same iteration that paid for them.
 //
 // So the function runs in one of two MODES, and `SplitScratch.confinedMode` is the whole state. It sits
 // on the scratch because it is a fact about the FUNCTION rather than about one split — the same place
@@ -3880,7 +3876,7 @@ end 'refreshAfterSplit'
 // re-sweep it costs: a split never RAISES any op's pressure (the termination argument's premise), so
 // once no op overflows its full pool none ever does again. CORRECTNESS DOES NOT REST ON THAT — a
 // function that somehow re-entered full-pool mode would sweep both halves from then on, which is merely
-// the old cost — only the bound does.
+// the eager cost — only the bound does.
 function refreshPeak(module TargetModule, liveness LivenessResult, pool RegMask, scratch SplitScratch) returns PressurePeak
 	let dirty = scratch.dirty
 
@@ -4030,15 +4026,15 @@ end 'choiceFound'
 //     in it, so at least six values are confined there; an op names at most two virtual registers, so
 //     at least four candidates remain.
 //
-//     ⚠ THAT COUNTING ARGUMENT DOES NOT HOLD FOR AN EMPTY WITNESS, and this file used to state it as
-//     though it did. A value confined to ∅ puts the bound at "more than zero", so a tight set of
-//     exactly TWO satisfies it, and ONE op can read both. That was not hypothetical: it was
+//     ⚠ THAT COUNTING ARGUMENT DOES NOT HOLD FOR AN EMPTY WITNESS. A value confined to ∅ puts the
+//     bound at "more than zero", so a tight set of exactly TWO satisfies it, and ONE op can read both.
+//     That is not hypothetical: MEASURED on
 //     `register-spill.two-floats-multiplied-between-calls`, where a stranded reload and the stranded
 //     original met at the `mulsd` that reads them both and this panic fired on a program that fits
-//     the machine many times over. At the time a float live across a call WAS confined to ∅, because
-//     Wave 1 took every XMM as caller-saved.
+//     the machine many times over — on a pool that took every XMM as caller-saved, so a float live
+//     across a call was confined to ∅.
 //
-//     What closed it is upstream, not here: a reload is no longer BORN with an empty allowed set
+//     What closes it is upstream, not here: a reload is never BORN with an empty allowed set
 //     (`markRunStarts`), so the values confined to ∅ at any peak are originals only, and the call
 //     that confines them outranks the op that reads them. ⇒ REACHING HERE WITH AN EMPTY WITNESS
 //     POINTS AT THE RUN-BREAK, not at `hasStoreAnchor` / `storeFitsPool` / `killsValueAtPeak`.
@@ -4209,9 +4205,9 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
 
 	// ⚠ EXACTLY ONE OF THE TWO ANSWERS IS COMPUTED, AND IT IS THE ONE THAT WILL BE READ. The fold and
 	// the tournament are two mechanisms for one question — "which block holds the function's peak?" —
-	// and this call used to run BOTH and return the FOLD's, after which every `refreshPeak` returned
-	// the TREE's. Nothing compared them, so a disagreement would have moved the peak silently between
-	// the first split and the second. Whenever a tree is being seeded it is also the answer from here
+	// running BOTH here and returning the FOLD's, while every `refreshPeak` returns the TREE's, compares
+	// them nowhere — so a disagreement would move the peak silently between the first split and the
+	// second. Whenever a tree is being seeded it is also the answer from here
 	// on, so it answers this call too; the fold exists only for the pass that seeds no tree (the
 	// driver's first analysis, and `verifyIncremental`'s independent rebuild).
 	//
@@ -4282,7 +4278,7 @@ end 'rankOutranks'
 //     callee-saved registers, one live across an `idiv` to `pool ∖ {rax,rdx}` — so values at one
 //     point can be shopping in differently sized register sets, and no single number decides
 //     whether they fit. The test is: no register subset may have more values CONFINED to it than it
-//     has registers. That subsumes the old `raw > popcount(pool ∖ op.implicitDefs)` check (at a
+//     has registers. That subsumes a `raw > popcount(pool ∖ op.implicitDefs)` check (at a
 //     call, every live-across value is confined to the callee-saved subset, so the witness is that
 //     subset and the count is the same `raw`) AND catches what that check structurally could not —
 //     values confined by DIFFERENT calls, colliding at a point that is not itself a call, where the
@@ -4365,7 +4361,7 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
 	//    pre-move — `EffectivePools.anyConstrained`), so Hall's condition cannot fail against a proper
 	//    subset of the pool and the answer is already known.
 	//  • AND THE FUNCTION HOLDS NO FLOAT (`anyXmm`), so the XMM half of every figure is identically
-	//    zero and the two files cannot disagree — exactly as it was when there was one register file.
+	//    zero and the two files cannot disagree — exactly as with one register file.
 	let censusNeeded = wantConfined and (scratch.effPools.anyConstrained() or scratch.effPools.anyXmm())
 	var census = scratch.census
 	var censusIds = scratch.censusIds
@@ -4413,7 +4409,7 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
 
 	// A per-block constant added to every op's effective pressure — the colorer holds a
 	// register for each dead block-arg across the WHOLE block. Read from the column the
-	// liveness sweep already filled; recomputing it here meant re-sweeping the whole block and
+	// liveness sweep already filled; recomputing it here means re-sweeping the whole block and
 	// heap-allocating two arrays, once per block, on every splitter iteration.
 	// PER CLASS: a dead phi reserves a register of ITS OWN file and competes for nothing in the other.
 	var liveByClass = scratch.sweep.liveByClass
@@ -4618,7 +4614,7 @@ end 'materializePeak'
 // excluded as victims) and the mutators, so it is a different victim and different code, never a crash.
 //
 // The ONE statement of a block's execution order is `blockOpAt` — body `opRefs`, then the terminator —
-// and `collectBlockOps` is now BUILT from it rather than spelling it out a second time. So reading the
+// and `collectBlockOps` is BUILT from it rather than spelling it out a second time. So reading the
 // suffix positionally here is the same statement the list-building consumers read, which is what makes
 // it safe to skip building the list at all: this walk usually wants a fraction of a block, and on a
 // function that is one basic block `collectBlockOps` was Θ(the function) once per split before the
@@ -4820,8 +4816,8 @@ end 'opIsFixedRegisterPoint'
 // in ASCENDING local index and, within a block, ops in DECREASING forward position), that resolves an
 // exact tie to **the EARLIEST op of the HIGHEST-INDEXED tying block**.
 //
-// This comment used to say "ties resolve toward the EARLIER op", which is true WITHIN ONE BLOCK and
-// false across blocks — and it is not a harmless imprecision. A confined value is confined at every op
+// "Ties resolve toward the EARLIER op" is true WITHIN ONE BLOCK and false across blocks — and that is
+// not a harmless imprecision. A confined value is confined at every op
 // it is live at, so in a pressured loop Hall reports the same `tight` at every op the confined values
 // span, across several blocks: nearly every op is an exact tie, and a peak-finder rewritten from the
 // old wording (an argmax over descending GLOBAL sequence, say) would pick a different op, hence a
@@ -4880,7 +4876,7 @@ end 'recordDefLiveAfter'
 // the CURRENT value space with nothing left in it from the previous split.
 //
 // ⚠ GROWN WITH `growFilled`, WHICH IS NOT INTERCHANGEABLE WITH `resize`/`refill` HERE — and `refill` is
-// what this used to be. The value space widens with every split (each mints reload ids), so this row is
+// what `refill` would give. The value space widens with every split (each mints reload ids), so this row is
 // a column that is EXTENDED, and `resize` goes through `reserve`, which takes the ask at FACE VALUE: a
 // row extended a word at a time is reallocated and copied IN FULL at every tick of `wordsPerRow`. That is
 // Θ(wordsPerRow²) words — one whole-row realloc per 64 ids minted, NOT one per split — so it is still
@@ -5078,8 +5074,8 @@ end 'chooseVictim'
 
 // The best victim offered to ONE tier so far, under Belady/MIN. Four tiers each run this same
 // tournament, so it is one type rather than four copies of an `id`/`nextUse`/"is it set?" triple —
-// and `found` is a field rather than an `id == valueCount` sentinel, which the tiers previously each
-// had to spell out (and which only works while `valueCount` happens to be in scope).
+// and `found` is a field rather than an `id == valueCount` sentinel, which every tier would have to
+// spell out (and which only works while `valueCount` happens to be in scope).
 type BeladyBest
 	export var found as bool
 	export var valueId as ValueId
@@ -5163,7 +5159,7 @@ end 'nextUseAfterPeak'
 // AND NOT FOR THE ONE `confinedOverflowAtPeak` SYNTHESIZES. That peak is asked for precisely because a
 // full-pool point still exists, so a def point CAN still be over-pool and this gate CAN refuse there.
 // That is not a hole: it is why the driver treats an unrelievable synthesized peak as "no relief
-// available" and reports the FULL-POOL overflow it originally ranked, rather than letting it reach
+// available" and reports the FULL-POOL overflow it ranked, rather than letting it reach
 // `noVictimAtPeak`'s confined panic, which asserts an invariant only a ranked peak carries.
 function storeFitsPool(liveness LivenessResult, pressure PressureIndex, valueId ValueId, poolSize RegCount) returns bool
 	return defPointPressure(liveness, pressure: pressure, valueId: valueId) <= (poolSize as PressureDelta)
@@ -5331,11 +5327,10 @@ end 'isRematVictim'
 //                          resident, so the emitted code is the reloads-only bracket either way.
 //  2. `isSpillable`      — its shape suits the peak's PLACEMENT (cold needs a value whose def and
 //                          every use — op operand, PHI block entry and branch-edge arg alike — are at
-//                          loop depth 0; forced needs only a store anchor). ⚠ It said "non-phi,
-//                          non-edge-passed" until BATCH2 removed those two blanket bars: both were
-//                          over-approximations of "inside a loop" made while no depth was recorded for
-//                          a phi or an edge, and both were FALSE-E5001 generators. The fact is a
-//                          DEPTH — see `isColdSpillable`.
+//                          loop depth 0; forced needs only a store anchor). ⚠ NOT "non-phi,
+//                          non-edge-passed": those two blanket bars are over-approximations of
+//                          "inside a loop" for want of a depth on a phi or an edge, and both are
+//                          FALSE-E5001 generators. The fact is a DEPTH — see `isColdSpillable`.
 //  3. `storeFitsPool`    — its def point is not itself over-pool, so the store lands somewhere a later
 //                          iteration need not revisit. A PREFERENCE, and the one tier 5 spends last.
 //  4. `killsValueAtPeak` — the eviction-point split actually makes it DEAD at the peak. Without this
@@ -5383,15 +5378,15 @@ end 'isFullRematVictim'
 //  • at a COLD peak, a value with no slot yet — that is exactly what TIER 2 is, and tier 2 has already
 //    declined it.
 //
-// ⭐⭐ **THE RE-RELIEF ARM SERVES BOTH KINDS OF PEAK, AND THE "CONFINED PEAKS ONLY" RULE THAT USED TO
-// COVER THIS WHOLE TIER WAS TOO WIDE BY ITS OWN ARGUMENT.** That rule's reason is tier 3's: *"at a
+// ⭐⭐ **THE RE-RELIEF ARM SERVES BOTH KINDS OF PEAK, AND A "CONFINED PEAKS ONLY" RULE OVER THIS WHOLE
+// TIER IS TOO WIDE BY ITS OWN ARGUMENT.** That rule's reason is tier 3's: *"at a
 // FULL-pool peak, reloading a value the LOOP uses at every one of its uses is exactly the
 // per-iteration cost E5001 refuses to pay silently."* A COLD-spillable value has its def and EVERY use
 // at loop depth 0 (`isColdSpillable`) — there is no loop and so no per-iteration cost, and Rule 2 holds
-// for the same reason it holds for tier 2. What the wider rule actually refused was a second split of a
-// value tier 2 had already spilled, which is not "the machine is too small" at all:
+// for the same reason it holds for tier 2. What the wider rule refuses is a second split of a value
+// tier 2 has already spilled, which is not "the machine is too small" at all:
 //
-//   MEASURED (P1.9, 16 guarded values live across their own guard chain). `chooseVictim` resolves an
+//   MEASURED, on 16 guarded values live across their own guard chain. `chooseVictim` resolves an
 //   exact pressure tie to the HIGHEST-INDEXED tying block (`peakOutranks`), so the driver relieved the
 //   LAST cascade first and walked backwards. Each `afterPeakUses` split rewrote only the uses after
 //   THAT peak, leaving the value's earlier guard `cmp` holding the original in a register — so every
@@ -5509,28 +5504,28 @@ end 'isSpillable'
 // a loop's hot path is deliberately excluded HERE — at a FULL-pool overflow it is the loop's genuine
 // working set, and if that exceeds the machine the answer is E5001, not a reload at every use.
 //
-// ⚠⚠ **THERE USED TO BE A THIRD BAR — "not passed on ANY branch edge" — AND IT WAS A FALSE-E5001
-// GENERATOR.** It was the only safe reading available while `touchesHotLoop` saw op operands only: with
-// no depth recorded for an edge use, "edge-passed" was the closest available over-approximation of
+// ⚠⚠ **THERE IS NO THIRD BAR — "not passed on ANY branch edge" — BECAUSE IT IS A FALSE-E5001
+// GENERATOR.** It is the only safe reading available while `touchesHotLoop` sees op operands only: with
+// no depth recorded for an edge use, "edge-passed" is the closest available over-approximation of
 // "edge-passed inside a loop". But an edge arg is how EVERY `var` assigned in one arm of an `if`
-// reaches the join, so the bar refused values that had nothing to do with any loop. MEASURED on
+// reaches the join, so such a bar refuses values that have nothing to do with any loop. MEASURED on
 // `stdlib/URL.maxon`'s `URL.parse`: E5001 against a loop with 23 values live, **nineteen of them used
 // ZERO times in it** — every one a result field set after the loop and merely handed across a depth-0
 // join. The program fits the machine easily; the splitter was forbidden from relieving it.
-// `indexBlockEdgeUses` now records the depth of an edge use like any other, so the question is asked
-// once, as a depth, and the blanket bar is gone. `spillOneValue` has always rewritten branch-edge args
-// alongside op uses (see its header and `hasStoreAnchor`'s), so nothing else had to change for a
-// depth-0 edge use to be relievable — the capability was there and the gate was refusing to reach it.
+// `indexBlockEdgeUses` records the depth of an edge use like any other, so the question is asked once,
+// as a depth, and no blanket bar is needed. `spillOneValue` rewrites branch-edge args alongside op uses
+// (see its header and `hasStoreAnchor`'s), so a depth-0 edge use is relievable with nothing else to
+// change.
 //
-// ⚠⚠ **THE PHI BAR WAS THE SAME OVER-APPROXIMATION, MEASURED ON THE SAME FUNCTION, AND IT IS GONE
-// TOO.** A phi HAS a sound store anchor — the top of its own block, which dominates every use of it —
+// ⚠⚠ **A PHI BAR IS THE SAME OVER-APPROXIMATION, MEASURED ON THE SAME FUNCTION, AND THERE IS NONE
+// EITHER.** A phi HAS a sound store anchor — the top of its own block, which dominates every use of it —
 // and `insertStore` has always used it (`hasStoreAnchor`'s `phiDef` arm, the FORCED path's victim of
 // choice). What made a phi look unspillable is that the phis which matter are usually LOOP-HEADER
 // phis, and those must never be cold-spilled; but a phi of a depth-0 `if` join is not one, and in
 // straight-line code nearly EVERY merged `var` is one. MEASURED on `URL.parse` after the edge bar came
 // off: E5001 at the 12-field `URL{…}` literal, 15 values live, **twelve of them depth-0 join phis**
-// each carrying one result field. `indexBlockArgDefs` now records a phi block's depth, so the loop
-// header is still refused — by the depth, which is the fact that mattered all along.
+// each carrying one result field. `indexBlockArgDefs` records a phi block's depth, so a loop header is
+// still refused — by the depth, which is the fact that matters.
 //
 // NOTE this is the FULL-POOL gate only. A fixed-register (clobber-only) peak uses
 // `hasStoreAnchor` instead: there the value is NOT over the machine's capacity, so refusing to
@@ -5629,7 +5624,7 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 		// generalizing remat from "a constant value" to "an op with no register inputs". Not this
 		// rung's, and recorded here rather than silently ranged over.
 		//
-		// ⚠ `movsdRegRip` (P1.0d.4) is the SECOND instance of that exact `false`, for that exact
+		// ⚠ `movsdRegRip` is the SECOND instance of that exact `false`, for that exact
 		// reason. An f64 constant reads no register and cannot change, but it lives behind a
 		// RIP-relative relocation into `.rdata`, so rebuilding it needs the `movsd` AND a fresh
 		// relocation — and there is no `movsd xmm, imm64` to rebuild it with even if the IEEE bits
@@ -5727,7 +5722,7 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 			arm64Syscall or
 			arm64Fcsel gives false
 
-		// The P1.5-A1 function-value band (x64). `leaRegFunc` is the third instance of the
+		// The function-value band (x64). `leaRegFunc` is the third instance of the
 		// `leaRegGlobal`/`leaRegRdata`/`movsdRegRip` `false`: it reads no register and its `.text` address
 		// cannot change, but it lives behind a relocation, not an integer `constValueOfDef` holds, so this
 		// integer-remat predicate answers `false`. `callReg` reads its callee register and is a call —
@@ -5756,11 +5751,11 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 		// immediate it carries, and this op carries a slot index, not the value it produces.
 		leaRegSlot gives false
 
-		// F1b: a fill ladder DEFINES NOTHING, so there is no def for this pass to rematerialize.
+		// A fill ladder DEFINES NOTHING, so there is no def for this pass to rematerialize.
 		x64MemFill or
 			arm64MemFill gives false
 
-		// F2: every atomic READS MEMORY (or, for the two thread-token reads, the OS thread's own state), so no
+		// Every atomic READS MEMORY (or, for the two thread-token reads, the OS thread's own state), so no
 		// def here can be rebuilt from an immediate this pass carries. Not rematerializable.
 		x64LockCmpxchg or
 			x64LockXadd or
@@ -5771,25 +5766,25 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 			arm64AtomicRmw or
 			arm64ThreadPointer gives false
 
-		// EC16: every scaled-index form READS registers the pass cannot reconstruct — its immediates are a
+		// Every scaled-index form READS registers the pass cannot reconstruct — its immediates are a
 		// scale and a displacement, not the value it produces. Not rematerializable.
 		leaRegBaseIndexScale or
 			loadRegBaseIndexScale or
 			storeBaseIndexScaleReg or
 			arm64AddLsl gives false
 
-		// EC18: the high multiply DEFINES NOTHING EXPLICIT — its product lands in the implicit RAX/RDX
+		// The high multiply DEFINES NOTHING EXPLICIT — its product lands in the implicit RAX/RDX
 		// pair — and it reads a register besides. `divideReg`'s answer, for both halves of the reason.
 		imulHighReg gives false
 
 		// arm64 `fneg` reads a register. Not rematerializable.
 		arm64Fneg gives false
 
-		// G3: an ordered load reads MEMORY another thread writes — the opposite of rematerializable.
+		// An ordered load reads MEMORY another thread writes — the opposite of rematerializable.
 		arm64LoadAcquire or
 			arm64StoreRelease gives false
 
-		// EC18: `SMULH` reads two registers the pass cannot reconstruct. Not rematerializable.
+		// `SMULH` reads two registers the pass cannot reconstruct. Not rematerializable.
 		arm64Smulh gives false
 
 		// A coverage counter defines no value, so it is never a rematerialization candidate.
@@ -5877,7 +5872,7 @@ end 'killsValueAtPeak'
 // clear of the matrix and a refill of `rowOf` per peak would cost `rows × numBlocks` and `numBlocks`, and
 // the peaks a function relieves grow with it.
 //
-// `retargetTo` is the one thing that invalidates them, and `reachableFromPeak` ASSERTS it was called:
+// `retargetTo` is the one thing that invalidates them, and `reachableFromPeak` ASSERTS it has been called:
 // serving a row walked from a DIFFERENT peak would flip `killsValueAtPeak`, change the victim's tier,
 // and silently emit a different split.
 type ReachCache
@@ -6071,9 +6066,8 @@ end 'markBlocksReachableFromPeak'
 // guaranteed to DOMINATE every reload, and a reload reading a slot its store does not dominate is a
 // garbage read.
 //
-// The store used to be placed after the value's LAST use BEFORE the peak, on the reasoning that "it
-// precedes the peak, the reloads follow it". LAYOUT ORDER IS NOT DOMINANCE, and that reasoning is
-// wrong in two ways at once:
+// Placing the store after the value's LAST use BEFORE the peak, on the reasoning that "it precedes the
+// peak, the reloads follow it", is wrong in two ways at once — LAYOUT ORDER IS NOT DOMINANCE:
 //
 //  • A before-peak use can sit in a block that does NOT dominate the reload sites — the `then` arm
 //    of an `if`, whose store never runs on the `else` path, leaving the slot unwritten under the
@@ -6087,7 +6081,7 @@ end 'markBlocksReachableFromPeak'
 // STRICTLY BETTER code: a value defined outside a loop and used inside it before the loop's peak
 // would have anchored its store at that in-loop use and re-executed it every iteration; anchored at
 // the def it runs ONCE. And it is what `storeFitsPool` already measures — that gate reads
-// `defLiveAfter[v]`, the pressure at the DEF point, which is now exactly the point the store lands.
+// `defLiveAfter[v]`, the pressure at the DEF point, which is exactly the point the store lands.
 //
 // Nothing about the SPLIT changes: only the after-peak uses are rewritten to reloads, so the value
 // is still dead across the peak and the pressure there still drops by one. The store merely writes
@@ -6240,8 +6234,8 @@ end 'spillOneValue'
 // ⚠ THAT IS A CASCADE, AND IT IS QUADRATIC. Each re-split's dirty region is the fresh value's live
 // range, which still reaches the end of the run — so N such ops cost N splits of Θ(function) each
 // while the emitted code grows only linearly. MEASURED on a straight-line function holding two f64
-// locals read after each of N calls (Wave 1 makes every XMM caller-saved, so a float live across a
-// call is forbidden its ENTIRE file): `regalloc:splitting` bytes grew x3.84 and x3.98 per doubling
+// locals read after each of N calls, on a pool that makes every XMM caller-saved, so a float live
+// across a call is forbidden its ENTIRE file: `regalloc:splitting` bytes grew x3.84 and x3.98 per doubling
 // at N=128/256/512 — 19.4 MB, 74.6 MB, 296.6 MB — against x2.02/x1.95 for the same program with the
 // two locals declared `int`. `valuesSplit` was 2 per call site, and every one of them re-split the
 // PREVIOUS reload, storing it to a FRESH slot each time (3 calls: six slots and six stores for two
@@ -6249,7 +6243,7 @@ end 'spillOneValue'
 //
 // The REMAT path never had this problem: it re-emits the constant before EVERY use, so its fresh ids
 // live one op each. The spill path grouped uses into per-block runs, and that asymmetry IS the
-// cascade. Breaking the run removes it at the root: one split of the ORIGINAL value now mints every
+// cascade. Breaking the run removes it at the root: one split of the ORIGINAL value mints every
 // reload the value needs, none of them able to become a victim, so `valuesSplit` is 2 whatever N is.
 // Same reload count, ONE store instead of N, ONE slot instead of N — and 39% less emitted code.
 //
@@ -6261,11 +6255,11 @@ end 'spillOneValue'
 //    re-picked, and there is no cascade to break. Breaking there would emit a reload per call for
 //    every spilled int in the program and buy nothing — MEASURED at 112 moved goldens, almost all of
 //    them a reload that merely moved from a callee-saved register to a caller-saved one.
-//  • ⚠ AND IT USED TO MISCOMPILE. Call arguments are plain physical pre-moves (`mov rcx, a; mov rdx,
-//    b; call`) with no parallel-copy sequencer, and the allocator kept them apart ONLY by forbidding a
+//  • ⚠ AND IT MISCOMPILES. Call arguments are plain physical pre-moves (`mov rcx, a; mov rdx,
+//    b; call`) with no parallel-copy sequencer, and the allocator keeps them apart ONLY by forbidding a
 //    pre-move's register to every value live ACROSS it. A value DEFINED BETWEEN two pre-moves is live
-//    across neither, so it was forbidden nothing and could be coloured into an argument register an
-//    EARLIER pre-move had already loaded. Breaking a GPR run at a pre-move puts a `loadRegSlot`
+//    across neither, so it is forbidden nothing and can be coloured into an argument register an
+//    EARLIER pre-move already loaded. Breaking a GPR run at a pre-move puts a `loadRegSlot`
 //    exactly there. MEASURED: all nine `streaming-subprocess` tests returned the wrong answer (a
 //    `ReadFile` handed a clobbered argument reads 0 bytes and reports EOF), with the golden gate
 //    silent because the runtime's own IR is not pinned.
@@ -6304,7 +6298,7 @@ end 'spillOneValue'
 // split, Θ(splits × block) over a function — on a straight-line function with M distinct f64 locals
 // all read after one call, ~M × 2M `opStrandsClass` calls whose results were all discarded. It
 // allocates nothing, so `scale-test` cannot see it and neither can the memory column of
-// `--metrics`; it was found by reading, and removing it left both of those columns unmoved.
+// `--metrics`; only reading finds it, and removing it leaves both of those columns unmoved.
 function markRunStarts(module TargetModule, index UseIndex, topo FuncTopology, valueId ValueId, class RegClass, pool RegMask, file RegisterFile, runStarts BoolArray, buf OperandList, opFacts OpVariantFacts)
 	let useSites = index.useCount(valueId)
 	runStarts.refill(useSites as ElementIndex, value: false)
@@ -6526,7 +6520,7 @@ end 'insertStoreAtBlockEntry'
 // The position a use sits at in `collectBlockOps` order — read straight out of the use record that
 // names it, because a sequence number IS `block × SeqStride + position` (`UseIndex.usePosAt`) and
 // nothing has moved yet (`SplitEdits`). Searching the block for the anchor op instead was O(block) at
-// EVERY insertion, which is the Θ(insertions × block) a split used to pay.
+// EVERY insertion, which is the Θ(insertions × block) a split would pay.
 //
 // ⚠ AND IT PROVES THE IDENTITY IT RESTS ON, FOR ONE COMPARE. Two separate rules keep a sequence
 // number equal to `block × SeqStride + position`: `spliceOpRefs` MOVES an op by the number of splices
@@ -6565,11 +6559,11 @@ end 'usePositionIn'
 // reload goes where an EDGE use's does, at the end of the body and ahead of a conditional branch if the
 // block has one. That position dominates the terminator, which is the whole requirement.
 //
-// ⛔⛔ **IT WAS A PANIC, AND THE COMPILER'S OWN SOURCE IS WHERE IT FIRED** — *"use record 122 is anchored at
-// position 4 of block 'tryok', whose body holds 4 op(s) — that position is the block's TERMINATOR, and a
-// spill op cannot be spliced after one"*. The message was right that a spill may not go AFTER a terminator
-// and wrong that the position implied one: `beforeBranchPosition` is the answer to where it goes instead,
-// and it already existed one arm over. `bodyPositionOfUse` keeps its refusal for the caller that genuinely
+// ⛔⛔ **A PANIC HERE FIRES ON THE COMPILER'S OWN SOURCE** — *"use record 122 is anchored at position 4
+// of block 'tryok', whose body holds 4 op(s) — that position is the block's TERMINATOR, and a spill op
+// cannot be spliced after one"*. A spill may not go AFTER a terminator, but the position does not imply
+// one: `beforeBranchPosition` is the answer to where it goes instead. `bodyPositionOfUse` keeps its
+// refusal for the caller that genuinely
 // needs a body op (`rematerializeConstant` re-emits a constant BEFORE the op that reads it, and a
 // terminator has no "before" inside the body).
 function opUseReloadPosition(index UseIndex, block IrBlock, record UseRecordIndex) returns BlockOpPos
@@ -6585,8 +6579,8 @@ end 'opUseReloadPosition'
 // The `opRefs` position of an OP use, which must name a BODY op. The one position a record can carry
 // that `opRefs` does not hold is the block's TERMINATOR — `collectBlockOps` numbers it one past the
 // body, and every EDGE use is anchored there — so reaching here with one is a caller that should have
-// gone to `beforeBranchPosition`. That is the same bug the search used to report when it ran off the
-// end of the body.
+// gone to `beforeBranchPosition`. That is the same bug a search reports when it runs off the end of
+// the body.
 function bodyPositionOfUse(index UseIndex, block IrBlock, record UseRecordIndex) returns BlockOpPos
 	let pos = usePositionIn(index, block: block, record: record)
 
@@ -6657,7 +6651,7 @@ end 'spliceOp'
 // — dead across the peak, which is what `killsValueAtPeak` established before choosing it. An
 // `everyUse` remat rewrites all of them, which is the ONLY thing that kills a constant kept alive
 // across the peak by a before-peak use AROUND A BACK EDGE. Either way the original def is dropped
-// exactly when nothing reads it any more.
+// exactly when nothing reads it.
 function rematerializeConstant(module TargetModule, index UseIndex, topo FuncTopology, valueId ValueId, peakSeq OpSeq, scope SplitScope, nextValueId ValueId, counters RegAllocCounters, lineage SplitLineage, scratch SplitScratch, opFacts OpVariantFacts) returns ValueId
 	let defOpIdx = index.requireDefOp(valueId)
 
@@ -6853,7 +6847,7 @@ function constDefInfo(module TargetModule, opIdx OpIndex) returns (MachineWord, 
 			arm64Syscall or
 			arm64Fcsel panic("constDefInfo: def is not a constant materialization")
 
-		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are not const materializations —
+		// `leaRegFunc`/`callReg` and the Linux `x64Syscall` are not const materializations —
 		// `opIsConstMaterialization` answers false for all, so none reaches here; named rather than swallowed.
 		leaRegFunc or
 			callReg or
@@ -6913,9 +6907,9 @@ function freshConstOp(isArm64 bool, freshId ValueId, value MachineWord) returns 
 	return TargetOp.arm64MovImm(dest, value: value) if isArm64 else constMaterializationOp(dest, value: value)
 end 'freshConstOp'
 
-// Log the removal of the original constant def's op ref from its block (it is now dead — every use was
-// rewritten to a rematerialized copy). Applied with the split's splices, after them, exactly where it
-// landed when it was removed by hand (see `SplitEdits`). The op stays in `module.ops` but unreferenced
+// Log the removal of the original constant def's op ref from its block (it is dead — every use has been
+// rewritten to a rematerialized copy). Applied with the split's splices, after them (see `SplitEdits`).
+// The op stays in `module.ops` but unreferenced
 // (harmless, exactly like the reuse-copy/edge-move ops SsaDestruction appends).
 function dropOriginalDef(module TargetModule, topo FuncTopology, defOpIdx OpIndex, blockLocal CfgIndex, edits SplitEdits)
 	var block = blockAt(module, topo: topo, local: blockLocal)
@@ -7049,7 +7043,7 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		cvtsi2sdRegReg(dest, src) then return TargetOp.cvtsi2sdRegReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		cvttsd2siRegReg(dest, src) then return TargetOp.cvttsd2siRegReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 
-		// The MATH INTRINSICS (P1.0d.4-C) — two XMM operands each; the rounding MODE is not a register
+		// The MATH INTRINSICS — two XMM operands each; the rounding MODE is not a register
 		// and passes through, exactly as an immediate or a cond code does.
 		sqrtsdRegReg(dest, src) then return TargetOp.sqrtsdRegReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		roundsdRegReg(dest, src, mode) then return TargetOp.roundsdRegReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to), mode: mode)
@@ -7067,7 +7061,7 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		// the operand model's business, not this rename's.
 		absF64RegReg(dest, src) then return TargetOp.absF64RegReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 
-		// The `.rdata` address `lea` (P1.2 wave A) — substitutes its GPR dest, exactly like `leaRegGlobal`.
+		// The `.rdata` address `lea` — substitutes its GPR dest, exactly like `leaRegGlobal`.
 		leaRegRdata(dest, label) then return TargetOp.leaRegRdata(substituteVReg(dest, from: from, to: to), label: label)
 
 		// `minsd`/`maxsd` substitute all three XMM operands, keeping `lhs` and `rhs` in their own slots:
@@ -7142,7 +7136,7 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		// `ifFalse` keep their own slots — exchanging them turns `min` into `max`.
 		arm64Fcsel(dest, ifTrue, ifFalse, cond) then return TargetOp.arm64Fcsel(substituteVReg(dest, from: from, to: to), ifTrue: substituteVReg(ifTrue, from: from, to: to), ifFalse: substituteVReg(ifFalse, from: from, to: to), cond: cond)
 
-		// P1.5-A1 (x64): `leaRegFunc` has one def to rewrite (like `leaRegRdata`); `callReg` has one use,
+		// The function-value band (x64): `leaRegFunc` has one def to rewrite (like `leaRegRdata`); `callReg` has one use,
 		// the callee register (unlike `callDirect`/`iatCall`, which have no explicit operand and `return op`).
 		leaRegFunc(dest, funcName) then return TargetOp.leaRegFunc(substituteVReg(dest, from: from, to: to), funcName: funcName)
 		callReg(reg) then return TargetOp.callReg(substituteVReg(reg, from: from, to: to))
@@ -7167,11 +7161,11 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		arm64FmovFpGpr(dest, src) then return TargetOp.arm64FmovFpGpr(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		leaRegSlot(destReg, slot) then return TargetOp.leaRegSlot(substituteVReg(destReg, from: from, to: to), slot: slot)
 
-		// F1b: a fill ladder carries no virtual register, so there is nothing to substitute — returned verbatim.
+		// A fill ladder carries no virtual register, so there is nothing to substitute — returned verbatim.
 		x64MemFill or
 			arm64MemFill then return op
 
-		// F2: every virtual operand of every atomic substitutes; the RMW's opcode is not a register and rides
+		// Every virtual operand of every atomic substitutes; the RMW's opcode is not a register and rides
 		// through, exactly as a jump table's block-id table does.
 		x64LockCmpxchg(addrReg, srcReg) then return TargetOp.x64LockCmpxchg(substituteVReg(addrReg, from: from, to: to), srcReg: substituteVReg(srcReg, from: from, to: to))
 		x64LockXadd(dest, src, addrReg) then return TargetOp.x64LockXadd(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to), addrReg: substituteVReg(addrReg, from: from, to: to))
@@ -7182,13 +7176,13 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		arm64AtomicRmw(dest, addrReg, operandReg, opcode) then return TargetOp.arm64AtomicRmw(substituteVReg(dest, from: from, to: to), addrReg: substituteVReg(addrReg, from: from, to: to), operandReg: substituteVReg(operandReg, from: from, to: to), opcode: opcode)
 		arm64ThreadPointer(dest, source) then return TargetOp.arm64ThreadPointer(substituteVReg(dest, from: from, to: to), source: source)
 
-		// EC16 — the scaled-index band. Register operands substitute; the scale/disp/width immediates ride through.
+		// The scaled-index band. Register operands substitute; the scale/disp/width immediates ride through.
 		leaRegBaseIndexScale(dest, base, index, scale) then return TargetOp.leaRegBaseIndexScale(substituteVReg(dest, from: from, to: to), base: substituteVReg(base, from: from, to: to), index: substituteVReg(index, from: from, to: to), scale: scale)
 		loadRegBaseIndexScale(dest, base, index, scale, disp, width) then return TargetOp.loadRegBaseIndexScale(substituteVReg(dest, from: from, to: to), base: substituteVReg(base, from: from, to: to), index: substituteVReg(index, from: from, to: to), scale: scale, disp: disp, width: width)
 		storeBaseIndexScaleReg(base, index, scale, disp, src, width) then return TargetOp.storeBaseIndexScaleReg(substituteVReg(base, from: from, to: to), index: substituteVReg(index, from: from, to: to), scale: scale, disp: disp, src: substituteVReg(src, from: from, to: to), width: width)
 		arm64AddLsl(dest, base, index, scale) then return TargetOp.arm64AddLsl(substituteVReg(dest, from: from, to: to), base: substituteVReg(base, from: from, to: to), index: substituteVReg(index, from: from, to: to), scale: scale)
 
-		// EC18 — one register operand to substitute, exactly as `divideReg` has.
+		// One register operand to substitute, exactly as `divideReg` has.
 		imulHighReg(src) then return TargetOp.imulHighReg(substituteVReg(src, from: from, to: to))
 		arm64Fneg(dest, src) then return TargetOp.arm64Fneg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		arm64LoadAcquire(dest, base, width) then return TargetOp.arm64LoadAcquire(substituteVReg(dest, from: from, to: to), base: substituteVReg(base, from: from, to: to), width: width)
@@ -7204,7 +7198,7 @@ end 'substituteValueInOp'
 // It is O(block), so it is only for the anchors the `UseIndex` cannot answer for: a DEF site, which
 // carries no use record, and a block's conditional branch. Both are asked at most once per split. A
 // reload's anchor is a USE, and a use record already knows its own position — see `bodyPositionOfUse`,
-// which is what a per-insertion search here used to cost.
+// which is what a per-insertion search here would cost.
 function positionInBlock(block IrBlock, opIdx OpIndex) returns BlockOpPos
 	for pos in 0 upto block.opRefs.count() 'each'
 		if (try block.opRefs.get(pos) otherwise panic("positionInBlock: opRefs.get OOB")) == opIdx 'match'
@@ -7508,8 +7502,8 @@ function useIsOnEdge(index UseIndex, record UseRecordIndex) returns bool
 end 'useIsOnEdge'
 
 // The KIND, and — behind it — every part of the def site that kind has: an op def's own op and block,
-// a phi's block. ONE function rather than the per-arm family it replaces, because the payload is now
-// read through accessors that are only legal once the tag has been asked.
+// a phi's block. ONE function rather than a per-arm family, because the payload is read through
+// accessors that are only legal once the tag has been asked.
 function sameDefSite(index UseIndex, fresh UseIndex, v ValueId) returns bool
 	let kind = index.defKindOf(v)
 

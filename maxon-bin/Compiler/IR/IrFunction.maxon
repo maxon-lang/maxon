@@ -71,7 +71,7 @@ end 'throwsClauseIsThrowing'
 export typealias ThrowsClauseArray = Array with ThrowsClause
 
 // ⭐⭐ **A PER-FUNCTION MAP FROM AN SSA VALUE HELD AT AN INTERFACE TO THE `Base with Args` INSTANCE ITS
-// DECLARED TYPE NAMED (W57)** — the `with` arguments `ProgramSignatures.instanceDenotedType` drops on the way
+// DECLARED TYPE NAMED** — the `with` arguments `ProgramSignatures.instanceDenotedType` drops on the way
 // to `interfaceRef(Base)`, kept BESIDE the type rather than on it.
 //
 // ⭐ **WHY BESIDE AND NOT ON IT.** That door's header states the design and it still holds: an interface this
@@ -84,8 +84,8 @@ export typealias ThrowsClauseArray = Array with ThrowsClause
 // collide with every other site's) and read only where a dispatch on THAT value needs it.
 //
 // A value with NO entry — a bare `interface`-typed parameter, a field load, a merge phi — resolves an
-// associated type exactly as it did before this column existed: from the whole-program fold, which
-// `ConformanceCheck` keeps unambiguous for exactly those positions (E3119, W59).
+// associated type from the whole-program fold, which `ConformanceCheck` keeps unambiguous for exactly
+// those positions (E3119).
 //
 // It is homed in the IR tier rather than in the parser because THREE tiers read it — see
 // `IrFunction.valueExistentialInstances`.
@@ -101,7 +101,7 @@ export typealias ValueExistentialInstanceMap = Map with (ValueId, GenericInstanc
 //
 // ⇒ `Parser.publishExistentialInstances` unwraps the state and hands over the map, or hands over nothing.
 
-// ⭐ **THE VALUES OF ONE FUNCTION THAT MAY ALIAS A `let`-DECLARED GLOBAL'S RECORD (W117)** — see
+// ⭐ **THE VALUES OF ONE FUNCTION THAT MAY ALIAS A `let`-DECLARED GLOBAL'S RECORD** — see
 // `IrFunction.immutableGlobalAliasValues`. A SET rather than a list for the reason the parser's own mark is
 // one: both populations grow with the function, and a linear scan over one of them at every call argument is
 // the quadratic `Parser.immutableGlobalReads`' header records in full.
@@ -200,7 +200,7 @@ export typealias DebugValueLocationArray = Array with DebugValueLocation
 let sharedEmptyDebugLocals = DebugLocalDeclArray.create()
 let sharedEmptyDebugValueLocations = DebugValueLocationArray.create()
 
-// The per-function counter that names lifted NON-CAPTURING closure literals (P1.5-A2a). A count with
+// The per-function counter that names lifted NON-CAPTURING closure literals. A count with
 // no meaningful upper bound (a function may hold arbitrarily many closures), so the range is wide by
 // the ranged-type convention rather than pinned to a false ceiling.
 export typealias ClosureSubIndex = int(0 to u64.max)
@@ -341,11 +341,11 @@ export type IrFunction
 	// read (the tag gates it — see MaxonDialect's `typeNameIdOf`).
 	//
 	// It IS published, for the reason `valueTags` is: the ONE call-argument identity rule that cannot
-	// live in the parser (the callee may be in another file) now needs an argument's aggregate NAME,
+	// live in the parser (the callee may be in another file) needs an argument's aggregate NAME,
 	// not just its class. Two DIFFERENT structs share the `structRef` tag, so `checkArgTypes` cannot
 	// tell a `BoxA` argument from a `BoxB` one off `valueTags` alone — a wrong-struct argument would
-	// pass and, at a consuming position, be dropped under the parameter's destructor: a wild free
-	// (OPEN #54 Slice B). SemanticCheck reads THIS column, resolved against `project.typeNames`
+	// pass and, at a consuming position, be dropped under the parameter's destructor: a wild free.
+	// SemanticCheck reads THIS column, resolved against `project.typeNames`
 	// (`mergeArtifact` remaps it project-global), to reject the mismatch.
 	//
 	// Empty on a Std-phase function (`createFromStd`), exactly like `valueTags`.
@@ -358,7 +358,7 @@ export type IrFunction
 	// ids, remapped at merge exactly as `valueNameIds` is.
 	export var valueBrandIds as TypeNameIdArray
 
-	// ⭐ **THE PER-VALUE CLOSURE-ENVIRONMENT COLUMN (P1.5-A2b-2), DENSE by ValueId in lockstep with
+	// ⭐ **THE PER-VALUE CLOSURE-ENVIRONMENT COLUMN, DENSE by ValueId in lockstep with
 	// `valueTags`.** The environment a function VALUE carries, or 0 when it carries none. A real environment
 	// is always a minted value id (`>= 1` — a heap env block, a companion-env parameter, or a const-0 op is
 	// never id 0, the first parameter), so a stored 0 unambiguously means "no environment". PUBLISHED here
@@ -370,7 +370,7 @@ export type IrFunction
 	// lowering reads it. Empty on a Std-phase function (`createFromStd`).
 	export var valueClosureEnv as ValueIdArray
 
-	// ⭐ **THE CAPTURING-CLOSURE-LITERAL MARK (P1.5-A2b-2), DENSE by ValueId in lockstep with `valueTags`.**
+	// ⭐ **THE CAPTURING-CLOSURE-LITERAL MARK, DENSE by ValueId in lockstep with `valueTags`.**
 	// True iff a value is a capturing closure LITERAL born in this function (its env is this frame's — see
 	// `Parser.markCapturingClosure`). PUBLISHED (like `valueClosureEnv`) because the INTERPROCEDURAL escape
 	// check runs at SemanticCheck (`buildEscapeSummary`/`checkArgTypes`), the first whole-program point that
@@ -380,7 +380,7 @@ export type IrFunction
 	// not refused, because the refusal lands at the site that passes the literal. Empty on a Std-phase function.
 	export var valueIsCapturingClosure as BoolArray
 
-	// ⭐⭐ **THE PER-VALUE WITNESS-PAIRING COLUMN (P1.7a-existentials slice 1), DENSE by ValueId.** For a
+	// ⭐⭐ **THE PER-VALUE WITNESS-PAIRING COLUMN, DENSE by ValueId.** For a
 	// value tagged `interfaceRef` it holds the ValueId of the fat pointer's OTHER half — the
 	// `__witness_<Type>.<Iface>` address; for every other value it holds 0. This column IS the second half of
 	// the fat pointer: The compiler has no aggregate here and no slot to spill one into, so an existential is two SSA
@@ -402,14 +402,14 @@ export type IrFunction
 	// Empty on a Std-phase function (`createFromStd`).
 	export var valueWitnessIds as ValueIdArray
 
-	// ⭐⭐ **THE PER-VALUE EXISTENTIAL-INSTANCE COLUMN (W57), SPARSE by ValueId** — see
+	// ⭐⭐ **THE PER-VALUE EXISTENTIAL-INSTANCE COLUMN, SPARSE by ValueId** — see
 	// `ValueExistentialInstanceMap` above for what a `Base with Args` instance is doing beside a value whose
 	// type says only `interfaceRef(Base)`.
 	//
-	// PUBLISHED for `valueWitnessIds`' reason, one fact over (W59). W57 built it as a PARSE-TIME column
-	// because the only reader was the parser's own associated-RESULT typing. The associated FORMAL of that
-	// same dispatch is decided at LOWERING (`LowerMaxonToStd.witnessFormalType`) and the refusal that used to
-	// make the formal decidable whole-program is decided at `ConformanceCheck` — two later tiers asking the
+	// PUBLISHED for `valueWitnessIds`' reason, one fact over. It is minted at PARSE time for the parser's own
+	// associated-RESULT typing. The associated FORMAL of that
+	// same dispatch is decided at LOWERING (`LowerMaxonToStd.witnessFormalType`), and the refusal that
+	// makes the formal decidable whole-program is decided at `ConformanceCheck` — two later tiers asking the
 	// SAME question about the SAME receiver, and neither can re-derive the answer: the `with` arguments live
 	// on no type and in no signature the callee's own body can reach. So the parser hands the column on
 	// instead of dropping it, exactly as it hands on the witness pairing.
@@ -420,8 +420,8 @@ export type IrFunction
 	// anchor: `Parser.recordValueExistentialInstance` REPLACES the field with a fresh map on the first write
 	// (the shared empty is never mutated), so the reference `create` was handed is the EMPTY one for exactly
 	// the functions that have something to say. `Parser.publishExistentialInstances` fills it once the body is
-	// complete instead. MEASURED before that existed: `stdlib/Array.maxon`'s `from` published nothing, so
-	// every reader below fell back to the whole-program fold and E3119 still refused the corpus.
+	// complete instead. MEASURED: without that, `stdlib/Array.maxon`'s `from` publishes nothing, every reader
+	// below falls back to the whole-program fold, and E3119 refuses the corpus.
 	//
 	// Empty on a Std-phase function (`createFromStd`) and on a function that declared no parameterized
 	// existential, which is very nearly all of them.
@@ -452,7 +452,7 @@ export type IrFunction
 	// overflow the register file.
 	export var outgoingArgSize as StackSize
 
-	// ⭐ **THE PER-FUNCTION CLOSURE COUNTER (P1.5-A2a).** The k-th non-capturing closure literal in this
+	// ⭐ **THE PER-FUNCTION CLOSURE COUNTER.** The k-th non-capturing closure literal in this
 	// function's body lifts to a top-level function named `<name>$closure_<k>`; `parseClosureExpression`
 	// reads this value for `k` and post-increments it. Source-deterministic — the same source mints the
 	// same closure names regardless of how many sibling functions parsed before it. Zero for a function
@@ -488,14 +488,14 @@ export type IrFunction
 	// (`/specs/managed-list.md:core.insert-first-multiple`). ⚠ **Do not "simplify" E3019's call-site check to
 	// read the storage column** — it would silently stop diagnosing those rows, with no compile error anywhere.
 	//
-	// ⛔⛔ **AND THE THIRD ROW IS WHY THE STORAGE COLUMN IS NO LONGER SEEDED WHERE E3019's IS.** Both used to
-	// be set by `Parser.noteReceiverWrite` off ONE flag — *"does this method write its receiver"* — so a
-	// surface whose two answers differ got E3019's answer for E3070 as well. `__ManagedList` is that surface,
-	// and the gap was a measured 0xC0000005 across a call. The storage column is now seeded by
+	// ⛔⛔ **AND THE THIRD ROW IS WHY THE STORAGE COLUMN IS NOT SEEDED WHERE E3019's IS.** Setting both from
+	// `Parser.noteReceiverWrite`'s ONE flag — *"does this method write its receiver"* — hands a
+	// surface whose two answers differ E3019's answer for E3070 as well. `__ManagedList` is that surface,
+	// and the gap is a MEASURED 0xC0000005 across a call. The storage column is seeded by
 	// `Parser.noteBorrowSubjectWrite`, which is E3070's OWN door and already takes E3070's own answer, so the
-	// same-body half and the cross-function half cannot come apart again.
+	// same-body half and the cross-function half cannot come apart.
 	//
-	// ⭐⭐ **THE FIRST ROW HAS AN EXCEPTION AS OF W49 WAVE 8, AND IT IS THE ONE SELF-FIELD THAT IS NOT A
+	// ⭐⭐ **THE FIRST ROW HAS AN EXCEPTION, AND IT IS THE ONE SELF-FIELD THAT IS NOT A
 	// FIELD OF ANYTHING**: the inline `managed` of a fused builtin wrapper (`String`, `Character`, `Array`,
 	// `Vector`) is the receiver's record EMBEDDED WHOLE at offset 0, so `managed.append(…)` inside
 	// `String.append` writes the caller's own record and answers **yes / yes**. It is keyed on
@@ -538,9 +538,9 @@ export type IrFunction
 	// of its own receiver included. It is NOT a superset of `writtenParamMask` above and not a subset either;
 	// the table there enumerates every divergence and why each one is the answer it is.
 	//
-	// ⚠ **"ARRAY STORAGE" IS WHAT THIS SENTENCE SAID, AND THE WORD WAS A USE-AFTER-FREE THREE TIMES OVER
-	// (W-BORROW).** Two of the compiler's write doors gated themselves on the field or receiver being an `Array`
-	// INSTANCE, which was true of the language only while the `Array` was the sole surface handing out
+	// ⚠ **"ARRAY STORAGE" IS THE WRONG WIDTH, AND NARROWING TO IT IS A USE-AFTER-FREE THREE TIMES OVER.**
+	// A write door gated on the field or receiver being an `Array`
+	// INSTANCE would be correct only if the `Array` were the sole surface handing out
 	// borrows. It is not: a `List` and a `Vector` mint element borrows through the same
 	// `emitContainerElementAccessor`, a `__ManagedList` mints a node handle, a buffer mints a cursor — and a
 	// STORE does not free an element at all, it drops the whole RECORD and cascades into everything that
@@ -566,7 +566,7 @@ export type IrFunction
 	// the `Array` retirement chain strikes moves onto it.
 	export var storageWrittenParamMask as ParamPositionMask
 
-	// ⭐⭐ **THE PARAMETERS THIS BODY WRITES THROUGH BY *ANY* MEANS (W117) — A FOURTH QUESTION OVER THE SAME
+	// ⭐⭐ **THE PARAMETERS THIS BODY WRITES THROUGH BY *ANY* MEANS — A FOURTH QUESTION OVER THE SAME
 	// TERRITORY, AND ITS OWN COLUMN FOR THE REASON THE THIRD ONE IS.**
 	//
 	// | question | column |
@@ -574,7 +574,7 @@ export type IrFunction
 	// | "does passing an immutable BINDING here make it an error?" | `writtenParamMask` (E3019) |
 	// | "does this body FREE borrowable storage this parameter points at?" | `storageWrittenParamMask` (E3070) |
 	// | "does this body write a field of a box it did not just build?" | `assignsIntoAnExistingAggregate` (E3064) |
-	// | **"does this body write the record this parameter denotes, at all?"** | **this** (W117) |
+	// | **"does this body write the record this parameter denotes, at all?"** | **this** |
 	//
 	// ⛔⛔ **IT EXISTS BECAUSE THE FIRST COLUMN CANNOT BE WIDENED TO ANSWER IT.** `function bump(b Box) b.n =
 	// 99 end` called as `bump(a)` on a `let a` compiles and prints `n 99` — a direct field store through a
@@ -592,7 +592,7 @@ export type IrFunction
 	// scope byte-identical. Zero for a Std-phase function.
 	export var writesThroughParamMask as ParamPositionMask
 
-	// ⭐⭐ **WHICH OF THIS FUNCTION'S SSA VALUES MAY ALIAS A `let`-DECLARED GLOBAL'S RECORD (W117)** — the
+	// ⭐⭐ **WHICH OF THIS FUNCTION'S SSA VALUES MAY ALIAS A `let`-DECLARED GLOBAL'S RECORD** — the
 	// parser's per-value mark, published so the call-site half of the rule can read it. The PARSER decides it
 	// (a global load, an owned promotion of one, a merge that joined one, and the result of a call to a
 	// function the sweep published as returning one); the CALL-SITE check is SemanticCheck's, because only it
@@ -712,7 +712,7 @@ export type IrFunction
 	// it is upstream.
 	export var borrowFacts as BorrowFacts
 
-	// ⭐⭐ **THE ENTRY CASCADES `InsertRangeChecks` EMITTED FOR THIS FUNCTION'S NARROWED PARAMETERS (EC7)** —
+	// ⭐⭐ **THE ENTRY CASCADES `InsertRangeChecks` EMITTED FOR THIS FUNCTION'S NARROWED PARAMETERS** —
 	// see `RangeCheckParamGuard`. EMPTY until that pass runs, and empty afterwards for every function with no
 	// narrowed parameter; it therefore survives `shallowCopy`/`relocateFunction` as the shared empty by
 	// construction, since every relocation happens at or before the lowering and this column is filled after
@@ -757,7 +757,7 @@ export type IrFunction
 	//     scaffolding.
 	//   * `FunctionNameIndex.refuseDuplicateFunctionName` tells an author's declaration (E4015) apart from
 	//     an installer that ran twice (a panic).
-	//   * `DeadFunctionElimination.markCompilerOwnedRoot` tells those same two apart (A1w) for a name the
+	//   * `DeadFunctionElimination.markCompilerOwnedRoot` tells those same two apart for a name the
 	//     compiler ROOTS rather than emits — the half of that rule with no pair to count.
 	//   * `SplitLiveRanges.relievePressure` relieves a full-pool register overflow here instead of REFUSING
 	//     it (E5001), because that refusal is an instruction to an author and this function has none — and
@@ -765,10 +765,10 @@ export type IrFunction
 	//     ⚠ It is the ONE reader that wants the WIDE set rather than `isRuntimeFunction`'s conjunction: a
 	//     synthesized builtin body wearing no `__` prefix has no author either.
 	//
-	// None of the three can be satisfied by a caller's good intentions: this used to hardcode an empty path
-	// and leave every caller to overwrite it a few lines later, so a caller that forgot would have made a
-	// PARSED function read as synthesized at ALL THREE — silently, as a wrong answer rather than a compile
-	// error, and the stack-guard one is the SIGSEGV the A1r review measured. Passing the position in means a
+	// None of the four can be satisfied by a caller's good intentions: hardcoding an empty path here and
+	// leaving every caller to overwrite it a few lines later lets a caller that forgets make a
+	// PARSED function read as synthesized at ALL FOUR — silently, as a wrong answer rather than a compile
+	// error, and the stack-guard one is a MEASURED SIGSEGV. Passing the position in means a
 	// caller cannot forget it; it can only decide it, and `SourcePosition.synthesized` is how a synthesizing
 	// caller says so out loud.
 	export static function create(name ByteArray, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, valueTags ValueTypeTagArray, valueNameIds TypeNameIdArray, valueBrandIds TypeNameIdArray, valueClosureEnv ValueIdArray, valueIsCapturingClosure BoolArray, valueWitnessIds ValueIdArray, returnLine LineNumber, declaredAt SourcePosition, throwsTypeName ThrowsClause = ThrowsClause.none, needsGreenThreadStackGuard bool = false) returns IrFunction

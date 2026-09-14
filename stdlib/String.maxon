@@ -45,25 +45,22 @@ let AsciiLimit = 128 as Byte
 // cross-file call per byte is worse than the second WALK that measured +90% on that path. What holds
 // the two together is a CHECK, not a comment — `specs/string-type-2`'s
 // `crlf-is-one-grapheme-when-iterating` goes red if either side stops treating CR specially. Verify
-// it by sabotage before trusting it, as this rung's review did.
+// it by sabotage before trusting it.
 let CarriageReturnByte = 13 as Byte
 
 public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterable with (Character, StringIterator), Cloneable
 	typealias ByteMemory = __ManagedMemory with Byte
 
-	/// The raw bytes. Since the envelope collapse a `String` IS its `__ManagedMemory`, so this is not
-	/// a view of the string, it is the string — which is exactly why nobody outside `String` may hold
-	/// it. Reaching the bytes from elsewhere in the stdlib goes through `addressableBytes()`.
+	/// The raw bytes. A `String` IS its `__ManagedMemory`, so this is not a view of the string, it is
+	/// the string — which is exactly why nobody outside `String` may hold it. Reaching the bytes from
+	/// elsewhere in the stdlib goes through `addressableBytes()`.
 	///
-	/// This was `export var` until Stage 4c. Exported, it was a WRITE door that reached past every
-	/// guarantee this type makes: it was the one way to break `toByteArray`'s independence, since a
-	/// view that has not yet been written is still sharing these bytes and a write here would show
-	/// through it. Unexporting removed the spelling a caller would reach for by accident, and left
-	/// `toByteArray()` — which copies on write — as the route user code is offered.
-	///
-	/// The field is now genuinely unreachable from user code (E3014), and `addressableBytes()` —
-	/// the stdlib's replacement door — is genuinely internal (E3008). Both took removing the
-	/// stdlib force-export; see that method's doc.
+	/// ⛔ NOT exported, and it may not become so. An exported field is a WRITE door that reaches past
+	/// every guarantee this type makes: it is the one way to break `toByteArray`'s independence,
+	/// since a view that has not yet been written is still sharing these bytes and a write here would
+	/// show through it. `toByteArray()` — which copies on write — is the route user code is offered.
+	/// The field is unreachable from user code (E3014) and `addressableBytes()`, the stdlib's door to
+	/// the same bytes, is internal (E3008).
 	///
 	/// The field STAYS, and stays first: field order is the ABI, and literal initialization writes
 	/// these two fields directly.
@@ -71,11 +68,11 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 	/// EVERY GRAPHEME IN THIS STRING IS EXACTLY ONE BYTE — ASCII-only AND free of CR.
 	///
-	/// This field used to say only "is ASCII", and ten methods read THAT as "one byte per
-	/// character". They are not the same statement: CR+LF is a single cluster under UAX #29 GB3, so
-	/// an all-ASCII string is not necessarily one byte per character, and all ten split the cluster.
-	/// The field now carries the fact its readers actually want, so there is nothing left for them
-	/// to re-derive — and `findGraphemeEnd` stays the only thing that decides where a cluster ends,
+	/// "Is ASCII" is NOT the same statement: CR+LF is a single cluster under UAX #29 GB3, so an
+	/// all-ASCII string is not necessarily one byte per character, and a method reading an is-ASCII
+	/// answer as "one byte per character" splits that cluster. This field carries the fact its
+	/// readers actually want, so there is nothing left for them to re-derive — and `findGraphemeEnd`
+	/// stays the only thing that decides where a cluster ends,
 	/// including for the strings this flag is false for.
 	///
 	/// CR-FREE rather than CRLF-free, and that is what makes it composable: "no CR" is a property of
@@ -132,10 +129,9 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	// Not exported: "take these bytes and trust me about them" is not a promise the stdlib can let
 	// arbitrary code make.
 	//
-	// And the compiler holds us to it: E3008. It did not until the static-call path learned to
-	// re-apply a function's own visibility — a type-qualified name skips the filter on purpose, so
-	// that a hidden TYPE reports E4006 rather than a confusing not-exported about its method, and
-	// only the instance path had been re-checking afterwards.
+	// And the compiler holds us to it: E3008. The static-call path re-applies a function's own
+	// visibility — a type-qualified name skips the filter on purpose, so that a hidden TYPE reports
+	// E4006 rather than a confusing not-exported about its method.
 	static function fromOwnedBytes(bytes ByteArray, singleByteGraphemes bool) returns String
 		return String{managed: bytes.managed, singleByteGraphemesFlag: singleByteGraphemes}
 	end 'fromOwnedBytes'
@@ -179,15 +175,7 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// load-bearing already, and not decoration: `helpers/http` and `helpers/url` live in
 	/// SUBDIRECTORIES of `stdlib/` and reach this, which file-private visibility would refuse.
 	///
-	/// This is ENFORCED. It was not, when this method was first written: `StdlibLoader` used to
-	/// force-export EVERY stdlib function after the stdlib's own compile, so no stdlib function
-	/// could be internal whatever it declared, and this door was de-facto public — the raw-write
-	/// hole rebuilt under a new name. Removing that force-export cost exactly TEN visibility keywords
-	/// across the whole stdlib — `Iterable.map`/`filter`/`contains`, `Stdin.readLine`, and six
-	/// `JsonDoc` accessors — all genuine public API that had been riding it rather than declaring
-	/// itself. Nothing else in the stdlib wanted to be public. No single gate saw them all: the C#
-	/// suite found three, `build the compiler` found one, the MCP server found six.
-	///
+	/// This is ENFORCED: a caller outside `stdlib/` gets E3008.
 	module function addressableBytes() returns ByteMemory
 		return managed
 	end 'addressableBytes'
@@ -245,27 +233,24 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// other. The copy-on-write view behind it is an optimisation — see `toByteArray`, which makes
 	/// the same promise the same way.
 	///
-	/// ALSO THE ANSWER TO "return self, unchanged". Nine places used to spell out
-	/// `String{managed: managed, singleByteGraphemesFlag: singleByteGraphemesFlag}` for that —
-	/// `replace` with no match,
-	/// `split` on an empty delimiter, each `trim` of an empty string — and every one of them was
-	/// this method, written out. They call it now.
+	/// ALSO THE ANSWER TO "return self, unchanged" — `replace` with no match, `split` on an empty
+	/// delimiter, each `trim` of an empty string. Every one of them calls this rather than spelling
+	/// `String{managed: managed, singleByteGraphemesFlag: singleByteGraphemesFlag}` out.
 	///
 	/// It cannot be `return self`, and that is not a subtlety to optimise away later: `self` is the
-	/// same record, so the caller's `append` would mutate the original. That was the Stage 0 bug —
-	/// `let b = a.toLower()` lowercased `a`.
+	/// same record, so the caller's `append` would mutate the original — `let b = a.toLower()` would
+	/// lowercase `a`.
 	///
 	/// ⚠ IT GOES THROUGH `sliceBytes`, AND THE EXTRA RECORD IS THE POINT — DO NOT "OPTIMISE" IT BACK.
-	/// It once constructed `String{managed: managed, ...}` straight, on the grounds that a slice
-	/// record plus a String viewing it was two allocations for "the same thing". It is not the same
-	/// thing. `String{managed: X, ...}` builds a capacity=-1 VIEW of X's buffer whatever X is, while
+	/// Constructing `String{managed: managed, ...}` straight saves the slice record, on the grounds
+	/// that the two are "the same thing". They are not the same thing. `String{managed: X, ...}` builds a capacity=-1 VIEW of X's buffer whatever X is, while
 	/// `managed.slice` COPIES when the source OWNS its buffer (capacity >= 0) and only views an
 	/// rdata/slice source. That copy is the entire invariant behind an owned buffer: nothing outside
 	/// the owner may hold a pointer into it, because the owner's next `append` calls
-	/// `maxon_string_ensure_cap`, which mm_raw_free's the block. Straight construction broke it, and
-	/// the clone read freed memory the moment the original grew — measured, `var a = <owned>;
-	/// let c = a.clone(); a.append("TAIL")` left `c` reading the freed block (eight zeroed bytes then
-	/// stale contents), exit 0. `a.append(a.clone())` corrupted the appended half the same way.
+	/// `maxon_string_ensure_cap`, which mm_raw_free's the block. Straight construction breaks it: the
+	/// clone reads freed memory the moment the original grows — measured, `var a = <owned>;
+	/// let c = a.clone(); a.append("TAIL")` leaves `c` reading the freed block (eight zeroed bytes
+	/// then stale contents), exit 0. `a.append(a.clone())` corrupts the appended half the same way.
 	///
 	/// A literal is rdata, so it still costs one view and no copy — the shape that dominates the
 	/// stdlib's own `clone()` calls (the `return self, unchanged` early-outs below).
@@ -314,9 +299,8 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// `byteAt` for a caller that has ALREADY bounds-checked and has no meaningful answer to an
 	/// out-of-range index — which is every byte-walker in the stdlib outside this file.
 	///
-	/// This existed THREE times before this rung — `fpByteAt` in `FilePath`, `urlByteAt` in `URL`,
-	/// `safeByteAt` in `helpers/url` — each an identical `try managed.byteAt(i) otherwise panic`.
-	/// Three copies of a wrapper is the tell that the wrapper belonged next to the thing it wraps.
+	/// It lives next to what it wraps: `FilePath`, `URL` and `helpers/url` would each otherwise carry
+	/// an identical `try managed.byteAt(i) otherwise panic` of its own.
 	///
 	/// It exists rather than `try s.byteAt(i) otherwise panic(...)` at each site because those sites
 	/// read bytes inside NESTED CONDITIONS (`if s.byteAtOrPanic(pos) == 46`), and a `try` cannot go
@@ -371,9 +355,9 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// whatever the source was. (`String.from` pays that scan; `fromOwnedBytes` exists precisely to
 	/// let a caller who knows skip it.)
 	///
-	/// THE ONLY `managed.slice` LEFT INSIDE `String`, and deliberately so: FOURTEEN sites used to
-	/// spell this out, which meant fourteen separate reach-throughs for Stage 4b-2 to teach the
-	/// discriminant. Now there is one. Under 4b-2 a range of 15 bytes or fewer becomes a SMALL String
+	/// THE ONLY `managed.slice` INSIDE `String`, and deliberately so: every site that spells one out
+	/// is another reach-through for Stage 4b-2 to teach the discriminant.
+	/// Under 4b-2 a range of 15 bytes or fewer becomes a SMALL String
 	/// with those bytes copied inline and no reference to `self` at all — which is exactly why
 	/// "always build large" was refused: `split` and `trim` are how strings get short.
 	function sliceBytes(start BytePos, endPos BytePos, singleByteGraphemes bool) returns String
@@ -498,7 +482,8 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	end 'contains'
 
 	/// The `StringIndex` naming the grapheme that STARTS at `byteIdx` — the one thing both searches
-	/// have to do with the byte offset they find, and the one both used to shortcut identically.
+	/// have to do with the byte offset they find, and the one both would otherwise shortcut
+	/// identically.
 	function indexAtByte(byteIdx BytePos) returns StringIndex
 		return StringIndex.create(byteIndexToGraphemeIndex(self, byteIdx: byteIdx), bytePos: byteIdx)
 	end 'indexAtByte'
@@ -630,8 +615,7 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		// `replace`'s three-piece build, with the counting pass it does not need: there is exactly one
 		// match, so the final size is known outright — the match trades `oldLen` bytes for `with`'s —
 		// and a builder that is told the answer allocates once and never grows. Growing the head slice
-		// by two exact appends instead (what this used to do) reallocated and recopied the whole
-		// result twice.
+		// by two exact appends instead reallocates and recopies the whole result twice.
 		let withLen = with.byteLength()
 		var out = StringBuilder.create()
 		out.reserve(selfLen - oldLen + withLen)
@@ -692,8 +676,8 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	// runs on an independent copy of the bytes. `sliceBytes` hands back a String whose buffer is
 	// either already private (an owned source is copied eagerly) or shares the source's bytes until
 	// the first `setByte`, at which point COW detaches it — so a literal, a slice, or a buffer some
-	// other String is aliasing is never written through. Returning `managed` after mutating it, as
-	// this used to, made `let b = a.toLower()` silently lowercase `a` as well.
+	// other String is aliasing is never written through. Returning `managed` after mutating it would
+	// make `let b = a.toLower()` silently lowercase `a` as well.
 	//
 	// `work` is a String and is mapped through `byteAt`/`setByte`, NOT a `__ManagedMemory` reached
 	// through `addressableBytes()`. That is what keeps SSO: under 4b-2 a short `toLower()` is a small
@@ -734,11 +718,12 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// `byteLength()` when every grapheme matches.
 	///
 	/// This and `scanTrimEnd` are one scan each because the three `trim`s ask exactly two questions
-	/// between them. They used to be SIX loops: each `trim` carried a grapheme-correct copy plus a
-	/// byte-at-a-time "ASCII" copy that assumed one ASCII byte is one grapheme. That assumption is
-	/// false for CR+LF (UAX #29 GB3), and the whitespace sets hid it — CR and LF are independently
-	/// whitespace, so splitting the cluster reached the right answer by coincidence. A set holding
-	/// one and not the other separates them; `specs/string-type-2` pins that shape now.
+	/// between them, and each `trim` asks them rather than carrying a loop of its own. A
+	/// byte-at-a-time "ASCII" copy beside the grapheme-correct one assumes one ASCII byte is one
+	/// grapheme, which is false for CR+LF (UAX #29 GB3) — and the whitespace sets hide it, since CR
+	/// and LF are independently whitespace, so splitting the cluster reaches the right answer by
+	/// coincidence. A set holding one and not the other separates them; `specs/string-type-2` pins
+	/// that shape.
 	function scanTrimStart(chars CharacterSet) returns BytePos
 		let len = byteLength()
 		var start = 0
@@ -944,14 +929,14 @@ end 'StringBuilder'
 /// is where `findGraphemeEnd` said that grapheme stops. current() returns it without recomputing
 /// boundaries; advance() steps to graphemeEnd and asks again.
 ///
-/// The field holds the AUTHORITY'S ANSWER, not a length derived from it, because this iterator used
-/// to derive it a second way: an `singleByteGraphemesFlag` shortcut returned 1 for every ASCII byte, which is
-/// wrong for CR+LF (UAX #29 GB3) and made `for c in "a\r\nb"` take four steps where `count()` said
-/// three. There is one function that knows where a cluster ends, and this asks it.
+/// The field holds the AUTHORITY'S ANSWER, not a length derived from it: a
+/// `singleByteGraphemesFlag` shortcut answering 1 for every ASCII byte is wrong for CR+LF (UAX #29
+/// GB3) and makes `for c in "a\r\nb"` take four steps where `count()` says three. There is one
+/// function that knows where a cluster ends, and this asks it.
 ///
-/// IT HOLDS THE `String`, NOT ITS BYTES, and that is what Stage 4b-1b came here for. This field
-/// used to be `var managed as ByteMemory` — a record reference that ESCAPES THE FRAME, since the
-/// iterator outlives the `createIterator()` that built it. Under 4b-2 a small String is a 16-byte
+/// IT HOLDS THE `String`, NOT ITS BYTES. A `var managed as ByteMemory` field is a record reference
+/// that ESCAPES THE FRAME, since the iterator outlives the `createIterator()` that built it.
+/// Under 4b-2 a small String is a 16-byte
 /// VALUE with no record to store, and the caller-frame spill that lets `byteAt` reach a register's
 /// bytes cannot help: there is no frame here to spill into that outlives the iterator. A `String`
 /// field is the value itself — 16 bytes, copied in, nothing allocated, nothing to keep alive.
@@ -1024,15 +1009,13 @@ public type StringIndex implements Equatable, Comparable
 end 'StringIndex'
 
 /// THE byte-range comparison. `equals`, `startsWith`, `endsWith` and both searches are all one
-/// question — "are these `len` bytes the same?" — asked at different offsets, and each used to carry
-/// its own copy of this loop. Four copies, plus a fifth that had rotted: `helpers/string/hash.maxon`
-/// exported an `equalsManagedString` with this exact body and NOBODY had called it since `equals`
-/// grew its own inline duplicate.
+/// question — "are these `len` bytes the same?" — asked at different offsets, and they ask it here
+/// rather than each carrying a copy of this loop.
 ///
-/// The `otherwise panic` is the point of the rewrite, not decoration. Every copy of this loop used
-/// to answer an out-of-range byte with a bare `break`, which fell out of the loop and returned
-/// TRUE — an OOB read would have reported a MATCH. The length checks above every caller made it
-/// unreachable, so it was a silent wrong answer waiting for the first caller that got them wrong.
+/// The `otherwise panic` is not decoration. Answering an out-of-range byte with a bare `break` falls
+/// out of the loop and returns TRUE — an OOB read reported as a MATCH. The length checks above every
+/// caller make that unreachable, so it is a silent wrong answer waiting for the first caller that
+/// gets them wrong.
 function bytesEqual(a String, aOffset BytePos, b String, bOffset BytePos, len BytePos) returns bool
 	for i in 0 upto len 'compare_loop'
 		let ab = try a.byteAt(aOffset + i) otherwise panic("bytesEqual: byteAt OOB — caller guarantees aOffset + len <= a.byteLength()")
@@ -1048,8 +1031,7 @@ end 'bytesEqual'
 
 /// Search a WINDOW of `haystack` — `offset` and `len` are load-bearing here and only here:
 /// `replace`, `replaceFirst` and `split` walk a string by re-searching the tail after each match.
-/// (`startsWith`, `endsWith` and `findLastIn` only ever wanted the whole string, and each used to
-/// pass `offset: 0, len: length()` at every call site to say so.)
+/// (`startsWith`, `endsWith` and `findLastIn` only ever want the whole string.)
 ///
 /// The FIRST-BYTE CHECK before `bytesEqual` is not a micro-optimisation, it is what pays for the
 /// shared compare loop. `bytesEqual` is a CALL at every candidate position and nearly every one
@@ -1084,8 +1066,7 @@ end 'findIn'
 /// The scan asked as `contains` asks it, and the ONE place that translation is made — both overloads
 /// ask exactly this, and a second copy is a second place the two answers could be swapped.
 ///
-/// ⚠ **`try … otherwise`, NOT `if try …` — and the difference is the whole of the rung that wrote this
-/// line.** The bare `if try findIn(…)` both overloads used to spell is now E3124: it DROPPED the byte
+/// ⚠ **`try … otherwise`, NOT `if try …`.** A bare `if try findIn(…)` is E3124: it DROPS the byte
 /// position while reading as though the position were what the `if` tested. `if let _ = try findIn(…)`
 /// does not rescue it either — `findIn` is PURE, and a pure call's result may not be discarded (E3064),
 /// because a pure call whose answer nobody wants is the wrong call. What is left, and what is right, is

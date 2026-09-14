@@ -2,23 +2,16 @@
 // each of those in turn needs. ⭐ **ONE walk of the Maxon module, one bit per entry point, and the
 // closures that declare what a SYNTHESIZED body calls that a walk of the Maxon module cannot see.**
 //
-// ⚠⚠ **THIS FILE IS A RELOCATION, NOT A NEW MECHANISM (W49 wave 9), AND THE RELOCATION IS THE POINT.**
-// Every line below lived in `Runtime/StringRuntime.maxon` — 760 of that file's 2,229 — where it decided
-// the install of the green-thread scheduler, the IOCP substrate, the streaming subprocess API, the array,
-// set, map and list runtimes, the descriptor and existential drops, the incref/retain helpers, the union
-// destructors and struct cloners, the wall clock, the UCD tables, the grapheme family, managed
-// files, managed directories, the command line, standard input and process introspection.
+// ⚠⚠ **EVERY FAMILY'S BITS LIVE HERE, INCLUDING THE STRING ONES.** This file decides the install of the
+// green-thread scheduler, the IOCP substrate, the streaming subprocess API, the array, set, map and list
+// runtimes, the descriptor and existential drops, the incref/retain helpers, the union destructors and
+// struct cloners, the wall clock, the UCD tables, the grapheme family, managed files, managed directories,
+// the command line, standard input and process introspection.
 //
-// **A String is one tenant of that list and was never its landlord.** The file's name said otherwise, and
-// a name that lies is the cheapest kind of wrong fact to leave lying around: it tells the next reader that
-// `usesChildPipes` is a String concern and that a new runtime family's bit belongs in a String file. The two
-// String-specific arms (`recordStringMethodUsage`/`closeStringMethodNeeds`) stay here with their siblings
-// rather than going back, because what makes them work is that every family follows ONE discipline —
-// declared here, checked against each other here, and ORDERED against each other here.
-//
-// ⚠ **NOTHING ABOUT THE BEHAVIOUR MOVED WITH IT.** No bit was added, removed, renamed or reordered, and
-// no closure's arms changed. The compiler suite reads the same 4,789 and the golden drift the same 1,323
-// fragments, by NAME, across the move.
+// **A String is one tenant of that list and not its landlord.** The two String-specific arms
+// (`recordStringMethodUsage`/`closeStringMethodNeeds`) sit here with their siblings rather than in a String
+// file, because what makes them work is that every family follows ONE discipline — declared here, checked
+// against each other here, and ORDERED against each other here.
 //
 // The three rules the whole file rests on, stated once here rather than re-argued per family:
 //
@@ -131,11 +124,6 @@ export type RuntimeUsage
 	// heap-touching program carry this runtime too. See `ManagedMemoryRuntime`'s header.
 	export var usesManagedMemory as bool
 
-	// ⚠ **`usesSet` AND `usesMap` STOOD HERE AND WENT WITH THE RUNTIMES THEY DROVE (W105).** Each turned on
-	// its container's whole install and `usesHeap` beside it; both installs are deleted, so the bits had no
-	// consumer left. Their one surviving reader was the `CharacterSet` family's closure, which stated the
-	// `usesHeap` half in its own arms rather than borrowing theirs — and that family went at W129 too, so
-	// nothing is left holding a bit on either's behalf.
 	// The program touches a `List`. Any `__list_*` call turns this on — and, like `usesManagedMemory`, turns on
 	// `usesHeap` too, because the list helpers `__mm_alloc` the chain header and every node and `__mm_free`
 	// them again inside their Std bodies, which this Maxon-module scan cannot see. It drives
@@ -284,10 +272,6 @@ export type RuntimeUsage
 	// `usesManagedMemory`/`usesHeap` in `closeStringMethodNeeds` — it calls `__managed_create` and `__mm_incref` inside
 	// its synthesized body, which this Maxon-module scan cannot see.
 	//
-	// ⚠ **`usesStrByteAt` AND `usesStrByteAtOrPanic` SAT BESIDE IT AND WENT WITH THEIR ENTRY POINTS (W49
-	// wave 7)** — see the byte-door header at the head of this file. They were the file's example of two bits
-	// for two near-identical graphs (so a program reaching only the throwing read did not carry the other's
-	// `mrt_panic` call site); with both members retired onto the corpus, neither bit had a writer.
 	export var usesStrBytesView as bool
 
 	// The program copies a MANAGED-element array (`__managed_slice_managed`/`__managed_clone_managed`/
@@ -360,42 +344,24 @@ export type RuntimeUsage
 
 	// `__str_to_bytes` PUSHES into a caller-created `Array with Byte`, so it declares the managed-memory runtime
 	// (and the heap under it) in `closeGraphemeNeeds`. It is the LAST entry point that fills an array the
-	// parser built — `__str_split` was the other, and retired at W49 wave 5.
+	// parser built.
 	export var usesStrToBytes as bool
 
-	// ⚠ **`usesStrToCodepoints`/`usesStrToUtf16` STOOD HERE AND WENT AT W49 WAVE 6** with the two decoding
-	// views, onto the corpus's lazy `CodepointView`/`UTF16View`. They were separate bits under this file's
-	// one-bit-per-entry-point discipline — a program asking for the bytes must not carry a UTF-8 decoder, and
-	// one asking for the codepoints must not carry the surrogate encoder — and that discipline is why their
-	// removal takes nothing else with it: `usesStrToBytes` never stood for any of the three.
-	// ⚠ **THE P1.8 SLICE B2 `StringIndex` FAMILY HAS NO BITS LEFT, AND NO FILE EITHER.** Six went with the
-	// five members that retired onto `stdlib/String.maxon` at W49 wave 3; the last two
-	// (`usesStrIndexAdvance`/`usesStrIndexSlice`) went at wave 4 with `String.slice`, which was the only
-	// caller `__strix_advance` and `__strix_slice` had. `Runtime/StringIndexRuntime.maxon` is deleted, not
-	// emptied — the corpus bodies behind every one of them are ordinary Maxon call edges now, which the
-	// reachability walk FINDS rather than being told.
-	// ⭐ **THE UNICODE `General_Category` TABLES (P1.8 Slice D, R2; the two raw loads W64).** Its own bit, and
+	// ⚠ **A CORPUS BODY NEEDS NO BIT AT ALL**: the `CodepointView`/`UTF16View` decoders, the `StringIndex`
+	// members and the trims are ordinary Maxon call edges, which the reachability walk FINDS rather than
+	// being told. A bit is owed only by a SYNTHESIZED body's callee.
+	// ⭐ **THE UNICODE `General_Category` TABLES.** Its own bit, and
 	// DECOUPLED from every String bit: `__ucd_bmp_at`/`__ucd_supp_at` are LEAVES that read a `.rdata` blob and
 	// do integer arithmetic — no heap, no copy loop, no segmenter — so a program that classifies a codepoint
 	// carries nothing else, and a program that never does carries neither the 65,536-byte BMP table nor the
 	// supplementary one. Set by `recordCallUsage` on any `__ucd_` reference, which is what the corpus
 	// `unicodeGeneralCategory` lowers to (`Parser.parseUcdTableLoad`).
 	//
-	// ⚠ **A THIRD ENTRY POINT, `__ucd_cat`, FED THIS BIT UNTIL W129** — the whole lookup as one synthesized
-	// graph, emitted by `__cs_contains` and by nothing else. Both went together; the corpus writes the same
-	// algorithm out of the two raw reads.
 	export var usesUcdCategory as bool
 
-	// ⚠⚠ **THE P1.8 SLICE D `CharacterSet` FAMILY HELD THREE BITS HERE — `usesCharSetMake`/`Decref`/`Contains`
-	// — AND ALL THREE WENT WITH THE `__cs_*` RUNTIME (W129).** `W115` listed `stdlib/CharacterSet.maxon`, after
-	// which nothing could emit any of the three callees, so no arm could set any of the three bits. Two facts
-	// from that family are worth keeping, because neither is visible from the corpus:
-	//
-	//   * a fourth bit, `usesStrTrim`, went at W49 wave 4 with the three trims. It was the one bit here that
-	//     reached into all THREE sibling families, which is what fixed the recording ORDER `recordCallUsage`
-	//     still keeps — that order is a rule about families, not about the arm that first needed it;
-	//   * the family's closure was the last reader of `usesSet`/`usesMap` (see those bits' note above), and it
-	//     carried the `usesHeap` those two used to declare.
+	// ⚠⚠ **`recordCallUsage`'s RECORDING ORDER IS A RULE ABOUT FAMILIES, NOT ABOUT THE ARM THAT NEEDS IT.**
+	// One arm can reach into three sibling families at once, and the order is what keeps such an arm correct
+	// wherever it is added.
 	// R4.1: the program opens a file. Unlike the wall clock it DOES declare a transitive dependency —
 	// `__mf_open_read` allocates a NUL-terminated scratch copy of the path and the handle box through
 	// `__mm_alloc`/`__mm_free`, so it carries `usesHeap` too (set together below).
@@ -415,9 +381,9 @@ export type RuntimeUsage
 	// cstring, the `WSADATA`, the `addrinfo` hints, the out word, the `sockaddr_in` and the box are all
 	// `__mm_alloc`'d) and the whole SCHEDULER, because every `__ms_*` that makes a kernel call opens with
 	// `__gt_io_park` — a `__gt_` call one tier down that this Maxon-module scan cannot see.
-	// ⛔ It does NOT carry `usesManagedMemory`, and this line used to claim the directory family's pair: the
-	// socket family never BUILDS an `Array` record, it fills one the caller already owns. `recordCallUsage`
-	// is where the three families' bits are actually set, and it has always said so.
+	// ⛔ It does NOT carry `usesManagedMemory` — the directory family's pair is not this one's: the socket
+	// family never BUILDS an `Array` record, it fills one the caller already owns. `recordCallUsage` is where
+	// the three families' bits are actually set.
 	export var usesManagedSocket as bool
 
 	// ⭐ **THE SERVER HALF OF THE SOCKET BAND HAS ITS OWN BIT, AND IT IMPLIES THE PEER HALF'S.** A program
@@ -1188,14 +1154,9 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	// Any `__list_*` call carries the whole list runtime, and the heap under it — the `__managed_*` arm above
 	// over a CHAIN instead of a buffer: `__list_create` and every insertion `__mm_alloc` (the header, then one
 	// node each) and `__list_decref` `__mm_free`s all of them, none of which this Maxon-module scan sees.
-	// ⛔⛔ **`usesIncref` RIDES HERE AGAIN (`BATCH37`), AND THE REASON IT WAS REMOVED HAS EXPIRED RATHER
-	// THAN BEEN WRONG.** `W138` deleted it correctly: its own justification named a synthesized
-	// `__list_node_handle` body that the second ruling had already deleted, and at that tick EVERY node
-	// handle's `__mm_incref` was emitted by the PARSER — an ordinary `MaxonOp.call` this very scan walks,
-	// declared by the `__mm_incref` arm above. The removal was even sabotage-checked and the suite stayed
-	// green, which was a true measurement of the tree it was taken on.
-	//
-	// ⛔ **`BATCH37` MADE IT FALSE AGAIN: THE FOUR THROWING NAVIGATORS INCREF INSIDE THEIR OWN Std BODIES.**
+	// ⛔⛔ **`usesIncref` RIDES HERE, BECAUSE THE FOUR THROWING NAVIGATORS INCREF INSIDE THEIR OWN Std
+	// BODIES** — not every node handle's `__mm_incref` is emitted by the PARSER as an ordinary `MaxonOp.call`
+	// this scan walks.
 	// `__list_head_checked` and its three siblings take the handle's `+1` on their ok path because the parser
 	// structurally cannot (see `Parser.emitManagedListNodeHandle`), and `__list_reinsert_*` increfs a DETACHED
 	// node it adopts — three `__mm_incref` call sites this Maxon-module scan cannot see, exactly like the
@@ -1239,10 +1200,9 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesDropExistential = true
 	end 'dropexistential'
 
-	// The existential's CO-OWNERSHIP (P1.7a-existentials slice 2). Its body names NO callee — since slice 2b it
-	// `callIndirect`s the witness's `retainFunc@16`, exactly as its drop twin `callIndirect`s `destroyFunc@8` —
-	// so what it reaches is declared by the RELOCATIONS that fill those words (`noteRelocatedFunctionUsage`),
-	// not here. It used to declare `usesIncref` for a hardcoded `__mm_incref` that no longer exists.
+	// The existential's CO-OWNERSHIP. Its body names NO callee — it `callIndirect`s the witness's
+	// `retainFunc@16`, exactly as its drop twin `callIndirect`s `destroyFunc@8` — so what it reaches is
+	// declared by the RELOCATIONS that fill those words (`noteRelocatedFunctionUsage`), not here.
 	// ⚠ **`usesHeap` STILL RIDES, AND IT IS THE ONE BIT THE RELOCATION SCAN CANNOT SUPPLY**: that scan runs
 	// after `globalData.layOut`, so a program whose heap is first declared there PANICS
 	// (`noteRelocatedFunctionUsage`'s `heapArrivedTooLate` gate) with a `.data` image short by the allocator's
@@ -1406,17 +1366,15 @@ end 'recordGraphemeUsage'
 // rather than discovered, exactly as `closeStringMethodNeeds` declares the String family's. Run as a
 // CLOSURE after every record (rather than each arm listing its own transitive set) so the answer cannot
 // depend on the order in which the module happens to name its entry points.
-// ⚠ **THE SEGMENTER'S OWN NEEDS ARE NO LONGER CLOSED HERE, BECAUSE IT IS NO LONGER SYNTHESIZED.** This
-// closure used to walk `__gr_count` → `__gr_end` → `__utf8_cp_at` / `__gr_break` → `__ext_pict` / `__gbp`,
-// which is exactly the chain now living in `stdlib/helpers/string/grapheme.maxon`. Those are ORDINARY Maxon
-// call edges, so the query spine follows them without being told: what a corpus function needs is found, not
-// declared. What is left here is the residue with no corpus counterpart — the `Character` mint and the three
-// array-filling views.
-// ⚠ **AND THE EDGE *FROM* THESE Std BODIES *INTO* THE CORPUS IS NO LONGER ONE OF THEM.** It was the one thing
-// a scan of the Maxon module could not see, declared by `StdlibSource.markCorpusCalleesOfSynthesizedRuntime`;
-// every body that had such an edge has retired (the last, `__cs_contains`, at W129) and that seed is deleted.
-// A body added here that CALLS a corpus function brings it back — this closure declares runtime-usage BITS
-// and cannot declare a stdlib function's REACHABILITY, which is why the two were never one place.
+// ⚠ **THE SEGMENTER'S OWN NEEDS ARE NOT CLOSED HERE, BECAUSE IT IS NOT SYNTHESIZED.** The
+// `__gr_count` → `__gr_end` → `__utf8_cp_at` / `__gr_break` → `__ext_pict` / `__gbp` chain lives in
+// `stdlib/helpers/string/grapheme.maxon` as ORDINARY Maxon call edges, so the query spine follows them
+// without being told: what a corpus function needs is found, not declared. What this closure holds is the
+// residue with no corpus counterpart — the `Character` mint and the three array-filling views.
+// ⚠ **AND NO Std BODY HERE CALLS INTO THE CORPUS.** Such an edge is the one thing a scan of the Maxon module
+// cannot see, and it would have to be declared by `StdlibSource.markCorpusCalleesOfSynthesizedRuntime` — a
+// body added here that CALLS a corpus function needs that seed, because this closure declares runtime-usage
+// BITS and cannot declare a stdlib function's REACHABILITY, which is why the two are not one place.
 function closeGraphemeNeeds(usage RuntimeUsage)
 	// `__char_at` builds a fresh owned inline record: one `__mm_alloc` plus a `__str_copy` blit.
 	if usage.usesCharAt 'mintsCharacters'
@@ -1446,9 +1404,7 @@ end 'closeGraphemeNeeds'
 
 // The String-building and byte-viewing entry points' own arm of the callee → usage-bit map, split out so
 // `recordCallUsage` stays a readable list of families rather than growing four more inline arms. Direct
-// references only; what each referenced body in turn needs is closed by `closeStringMethodNeeds`. (It was
-// NINE arms until the P1.8 Slice C family retired onto the corpus, and SIX until wave 7 took the two byte
-// READS with `byteAt`/`byteAtOrPanic` — see the grave at the head of this file.)
+// references only; what each referenced body in turn needs is closed by `closeStringMethodNeeds`.
 function recordStringMethodUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(StrFromBytesName) 'frombytes'
 		usage.usesStrFromBytes = true
@@ -1482,23 +1438,17 @@ function closeStringMethodNeeds(usage RuntimeUsage)
 	// Every string-BUILDING entry point allocates a fused record and blits bytes into it
 	// (`emitBuildOwnedInlineString` ⇒ `__mm_alloc` + `__str_copy`).
 	//
-	// ⚠ **A RETIREMENT SHEDS A TERM; ONLY THE LAST TERM SHEDS THE CLAUSE — AND THIS FILE HAS NOW DONE BOTH.**
-	// `usesStrMapCase`/`usesStrReplace`/`usesStrReplaceFirst` left this clause as TERMS at W49 wave 2 and
-	// `usesStrSplit` at wave 5, each time leaving the surviving terms to keep it alive. Two SIBLING clauses
-	// did not survive wave 5, because `split` was their only term: `clonesReceiver` (`split` answered a
-	// degenerate empty delimiter with `__str_clone` of the receiver) and `pushesSegments` (it pushed into the
-	// array the parser created for it), plus the `needsFind`/`needsRangeEq` pair that installed the search
-	// underneath. Deleting a clause while any term could still be true is what would leave a callee
-	// uninstalled and a call landing on nothing; deleting it only when nothing can set its last term is what
-	// keeps this function from listing conditions no program can meet. What the retired members need instead
-	// is declared where a corpus body's needs always are — by the ordinary reachability of what it calls.
+	// ⚠ **A RETIREMENT SHEDS A TERM; ONLY THE LAST TERM SHEDS THE CLAUSE.** Deleting a clause while any term
+	// can still be true leaves a callee uninstalled and a call landing on nothing; deleting it only when
+	// nothing can set its last term is what keeps this function from listing conditions no program can meet.
+	// What a member that leaves needs instead is declared where a corpus body's needs always are — by the
+	// ordinary reachability of what it calls.
 	if usage.usesStrFromBytes or usage.usesStrOfBuffer 'buildsStrings'
 		usage.usesHeap = true
 		usage.usesStrCopy = true
 	end 'buildsStrings'
 
-	// ⚠ **`usesMmToCString` WAS A TERM IN THE CLAUSE ABOVE AND IS NOW A CLAUSE OF ITS OWN, BECAUSE WHAT IT
-	// NEEDS CHANGED.** `__mm_to_cstring` used to blit into a fresh block through `__str_copy`; it now grows
+	// ⚠ **`usesMmToCString` IS A CLAUSE OF ITS OWN, BECAUSE IT NEEDS SOMETHING ELSE.** `__mm_to_cstring` grows
 	// the RECEIVER by one byte and terminates it in place, which is `__managed_reserve` — and that is the
 	// managed-memory runtime's, not the string runtime's. `usesManagedMemory` is what installs the reserve
 	// and everything under it (`__managed_grow`, `__managed_cow_detach`, and through `installMmRuntime`'s
@@ -1525,10 +1475,6 @@ function closeStringMethodNeeds(usage RuntimeUsage)
 	// `__managed_decref`. `usesManagedMemory` is what installs the managed-memory runtime AND (through
 	// `installMmRuntime`'s `usesIncref or usesManagedMemory`) the incref helper, so the two bits below are the
 	// whole of its transitive floor.
-	//
-	// ⚠ **IT PUBLISHED A FRESH `Array` RECORD THROUGH `__managed_create` UNTIL W157**, which is where this
-	// clause's `usesManagedMemory` originally came from. The bit is still owed — `__managed_decref` is in that
-	// runtime — so what changed is the REASON and not the answer, which is exactly why it is written down.
 	if usage.usesStrBytesView 'publishesAView'
 		usage.usesManagedMemory = true
 		usage.usesHeap = true

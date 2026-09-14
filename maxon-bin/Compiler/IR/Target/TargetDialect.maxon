@@ -1,20 +1,10 @@
-// Target Dialect — target-specific (x64) machine instructions, the lowest IR
-// tier before machine-code emission. The Std→Target lowering (StdToX64Conversion)
-// emits these ops; the register allocator colors their virtual registers into
-// physical GPRs.
+// Target Dialect — target-specific machine instructions, the lowest IR tier before
+// machine-code emission. The Std→Target lowerings (StdToX64Conversion / StdToArm64Conversion)
+// emit these ops; the register allocator colors their virtual registers into physical registers.
 //
-// THIN for maxon M1: carries exactly the x64 ops the `return 42` slice
-// needs — materialize a constant into a register (movRegImm / movRegImm32),
-// move a value between registers (movRegReg, for the R8 return move + regalloc
-// copies), the frame/return control ops (prologue / epilogue / ret), and the
-// three ops the runtime entry stub `mrt_start` is built from: a direct call to
-// the user entry (callDirect), the custom-ABI→Win64 bridge move (movReg32Reg32,
-// `mov ecx, r8d`), and an IAT-relative indirect call (iatCall, `call ExitProcess`
-// through the import table). Later milestones GROW `TargetOp` with the ALU /
-// compare-branch / general call / memory / FP (XMM) ops as features land, and
-// GROW the register representation with the XMM register file. arm64 support
-// arrives at its own milestone; M1 is x64-windows only, so `TargetModule`
-// currently carries only x64 ops.
+// `TargetOp` carries BOTH ISAs' instructions, in per-ISA bands, and a new op is APPENDED at the end
+// of its band: the range arms elsewhere that bracket a band swallow a variant inserted INSIDE one
+// silently. `TargetPrinter.opIsArm64Band` is what routes an op to its ISA, and it does so by NAME.
 //
 // Every variant carries `TargetOpMeta`, so a new op cannot be added without
 // declaring its memory/store/call/flags semantics.
@@ -101,7 +91,7 @@ end 'RegClass'
 // ⭐⭐ IT IS PRODUCED BY THE LOWERING, NOT DERIVED IN THE BACKEND, and that direction is
 // the whole design. A value's class is fixed by its Std TYPE (`stdTypeIsFloat`), and
 // `StdToX64Conversion` is the last pass that can see a type at all — the Target tier
-// carries none. `lowerConst`'s own comment has said so since M3: *"The op's own StdType
+// carries none, and `lowerConst`'s own comment says so: *"The op's own StdType
 // picks the register file (GP vs XMM)"*. So the lowering writes this column at the moment
 // it mints each virtual register, and Std ValueIds pass through unchanged, which is what
 // lets one dense array serve both tiers.
@@ -126,14 +116,14 @@ export typealias ValueClassColumn = Array with RegClass
 // the register allocator rewrites each into a `physical` during coloring.
 //
 // ⭐ THE PHYSICAL PAYLOAD IS A `RegNum`, NOT AN `X64Register`, AND THAT IS THE WHOLE
-// NEUTRALIZATION. One allocator serves both ISAs (USER RULING 2026-07-17), so the
+// NEUTRALIZATION. One allocator serves both ISAs (USER RULING), so the
 // ops it produces and rewrites — `movRegReg`, the edge copies, the spill/reload —
 // must name registers in a number the allocator understands and NEITHER encoder is
 // bound to. x64's `RegNum`s ARE its `X64Register.rawValue`s (0..31); arm64's are its
 // `Arm64Register.rawValue`s (x0..x30 = 0..30, d0..d31 = 31..62). The colorer works
 // in `RegNum`, and each ENCODER maps a resolved `RegNum` back to its own file
-// (`X64Backend.resolvePhysical` / the arm64 encoder). This is why an `X64Register`
-// no longer appears on a lowered op: it belongs to the encoder, one tier below.
+// (`X64Backend.resolvePhysical` / the arm64 encoder). This is why NO `X64Register`
+// appears on a lowered op: it belongs to the encoder, one tier below.
 export union TargetVReg
 	physical(reg RegNum)
 	virtual(id ValueId)
@@ -414,28 +404,26 @@ export type TargetOpMeta
 	//
 	// ⇒ The flags fact lives ONCE, at the Std tier, as `StdOpMeta.clobbersFlags`. If a
 	// TARGET-tier pass ever genuinely needs per-instruction flag behaviour (a peephole, an
-	// instruction scheduler), add it back THEN, WITH its reader. Never speculatively: this
-	// field was written 40 times and read 0, and that is precisely how it got to be wrong
-	// without anyone noticing.
+	// instruction scheduler), add it back THEN, WITH its reader. Never speculatively: a field written at
+	// every variant and read by nobody is free to be wrong and nothing notices — MEASURED here at 40
+	// writes and 0 reads.
 	//
-	// Registers this op READS without naming them as an explicit operand: R8 for
-	// `ret` today; the volatile set a `call` reads/clobbers grows in when M5
-	// colors calls. Liveness folds these into `forbiddenPhys`.
+	// Registers this op READS without naming them as an explicit operand — R8 for `ret`,
+	// RAX for `cqo` and `divideReg`. Liveness folds these into `forbiddenPhys`.
 	export let implicitUses as RegMask
 
-	// Registers this op WRITES without an explicit operand — a `call`'s
-	// caller-saved clobber set (M5). 0 for every op the M5.1 spine colors, so a
-	// value live across such an op must avoid these registers.
+	// Registers this op WRITES without an explicit operand — a `call`'s caller-saved
+	// clobber set, an encoder's scratch registers. A value live across such an op must
+	// avoid these registers.
 	export let implicitDefs as RegMask
 end 'TargetOpMeta'
 
 export union TargetOp
 	// Frame setup: reserve `stackSize` bytes of stack (`sub rsp, stackSize`).
-	// The compiler M1 uses a frame-pointer-omitted (rsp-only) frame — no `push rbp` — so
+	// The compiler uses a frame-pointer-omitted (rsp-only) frame — no `push rbp` — so
 	// the entry stub's `sub rsp, 0x28` shadow-space reservation IS a `prologue`.
-	// Writes EFLAGS (it is a `sub`). Callee-saved pushes GROW in when the register
-	// allocator first promotes into callee-saved regs (none at M1). Inserted by B2's
-	// prologue/epilogue pass at a function's entry block.
+	// Writes EFLAGS (it is a `sub`). Inserted by `insertPrologueEpilogue` at a function's
+	// entry block, which also emits the callee-saved `pushReg`s.
 	prologue(stackSize StackSize) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
 	// Frame teardown (`add rsp, stackSize`), the exact mirror of `prologue`.
@@ -466,18 +454,17 @@ export union TargetOp
 	movRegImm(dest TargetVReg, value MachineWord) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
 	// Materialize a 32-bit immediate into `dest` (`mov reg32, imm32`, which
-	// zero-extends to the full 64-bit register). B2 picks this over movRegImm
-	// for values that fit 32 bits (e.g. the literal 42) — the encoding is shorter.
+	// zero-extends to the full 64-bit register). The lowering picks this over `movRegImm`
+	// for values that fit 32 bits — the encoding is shorter.
 	movRegImm32(dest TargetVReg, value MachineWord) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
-	// 64-bit register-to-register move (`mov dest, src`). B2 emits this for the
-	// primary-return move (value → R8) and for register-allocation copies.
+	// 64-bit register-to-register move (`mov dest, src`). The lowering emits it for the
+	// primary-return move (value → R8); the allocator emits it for coloring copies.
 	movRegReg(destReg TargetVReg, srcReg TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
 	// 32-bit register-to-register move (`mov dest32, src32`, zero-extending to
-	// 64 bits). B2 emits exactly one at M1: the custom-ABI→Win64 bridge in
-	// `mrt_start` (`mov ecx, r8d`) that hands main's R8 return value to
-	// ExitProcess's ECX argument slot.
+	// 64 bits). The custom-ABI→Win64 bridge in `mrt_start` (`mov ecx, r8d`) hands
+	// main's R8 return value to ExitProcess's ECX argument slot.
 	movReg32Reg32(destReg TargetVReg, srcReg TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
 	// 64-bit register-to-register subtract (`sub dest, rhs`, i.e. `dest = lhs - rhs`).
@@ -486,8 +473,8 @@ export union TargetOp
 	// when `lhs` dies here (no copy — the common case), else materializes `mov dest, lhs`
 	// before the op. The encoder emits only `sub dest, rhs` (dest already holds lhs). The
 	// three explicit operands `(dest, lhs, rhs)` let liveness see that `lhs` is read here
-	// even when it also outlives — the old two-field `subRegReg(destReg, srcReg)` hid the
-	// pre-emitted seed `mov` and assumed distinct registers, false under reuse.
+	// even when it also outlives — a two-field `(destReg, srcReg)` shape would hide the
+	// copy and assume distinct registers, which is false under reuse.
 	// SUB writes EFLAGS. ALU band; appended before `cmpRegReg`.
 	subRegReg(dest TargetVReg, lhs TargetVReg, rhs TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
@@ -600,15 +587,12 @@ export union TargetOp
 	// `slotIndex` names the IAT entry the PE writer patches to. `mrt_start` uses
 	// this to `call ExitProcess`; `lowerOsAllocPages` uses it to `call VirtualAlloc`.
 	//
-	// ⚠⚠ **THE SAME CLOBBER MASK AS `callDirect`, AND IT MUST STAY THAT WAY.** This field read 0
-	// until P1.0r while the line above it said "full call-barrier semantics" — the sentence and
-	// the mask were one fact written twice, and they disagreed. It was INERT only because the
-	// single `iatCall` in the tree was `mrt_start`'s `ExitProcess`, a hand-built stub with no
-	// virtual register live across anything. `osAllocPages` put an `iatCall` inside a REGISTER-
-	// ALLOCATED function (`__slab_alloc`'s grow block) and the zero became a miscompile the same
-	// day: `size` coloured RAX and `total` coloured R10, both clobbered by `VirtualAlloc`, so
-	// `__slab_cursor` was published as `base + base` and the bump path was never taken again —
-	// 64 KiB committed per allocation, measured at 133 MB for 2,000 Points.
+	// ⚠⚠ **THE SAME CLOBBER MASK AS `callDirect`, AND IT MUST STAY THAT WAY.** MEASURED: with this
+	// field 0, an `iatCall` inside a REGISTER-ALLOCATED function miscompiles — in `__slab_alloc`'s
+	// grow block `size` colours RAX and `total` colours R10, both clobbered by `VirtualAlloc`, so
+	// `__slab_cursor` is published as `base + base`, the bump path is never taken again, and 64 KiB
+	// is committed per allocation (133 MB for 2,000 Points). A hand-built stub with no virtual
+	// register live across anything, like `mrt_start`'s `ExitProcess`, hides a zero here entirely.
 	//
 	// The mask is the CUSTOM ABI's caller-saved set, not Win64's, and that is deliberate rather
 	// than sloppy: Win64's volatile GPRs {rax, rcx, rdx, r8–r11} are a strict SUBSET of the custom
@@ -643,11 +627,11 @@ export union TargetOp
 	// path uses to keep every value live across the divide, AND the divisor operand itself,
 	// out of RAX/RDX. It TRAPS (#DE) on divide-by-zero, and — the SIGNED form only —
 	// on INT_MIN / -1; the trap is a
-	// runtime-fault-handler concern (Workstream-R / M6), so there is no compiler guard.
+	// runtime-fault-handler concern, so there is no compiler guard.
 	// It leaves EFLAGS UNDEFINED — a "may clobber", which is why `StdOp.div`/`mod`
 	// declare `clobbersFlags: true`. APPENDED at the END of the union, after `cqo`.
 	//
-	// ⭐ **ONE OP CARRYING THE SIGNEDNESS, NOT TWO OPS (X10).** `idiv` and `div` share every fact
+	// ⭐ **ONE OP CARRYING THE SIGNEDNESS, NOT TWO OPS.** `idiv` and `div` share every fact
 	// this union records — the fixed RDX:RAX pair, the implicit masks, the encoding shape — and
 	// differ only in the group-3 extension. A second variant would have had to be added to the
 	// eight `… to divideReg` RANGE ARMS that bracket this one (liveness, the splitter, SSA
@@ -670,7 +654,7 @@ export union TargetOp
 	popReg(reg X64Register) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0}
 
 	// Spill a register to a stack slot (`mov [rsp + slotDisp], srcReg`, REX.W 89 /r,
-	// SIB base=rsp). The cold-spill live-range splitter (SplitLiveRanges, M5.3) inserts
+	// SIB base=rsp). The cold-spill live-range splitter (SplitLiveRanges) inserts
 	// it right after a spilled value's def; it USES `srcReg`, so — unlike pushReg/popReg —
 	// it carries a VIRTUAL register the allocator colors. `slot` is a dense per-function
 	// SpillSlot index the encoder turns into a `[rsp + disp]` displacement. `isMemory`/
@@ -689,7 +673,7 @@ export union TargetOp
 	// `storeSlotReg`, at the END of the union.
 	loadRegSlot(destReg TargetVReg, slot SpillSlot) = TargetOpMeta{isMemory: true, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
-	// --- P1.0d.2: the BIT band (specs/bitwise-operators.md) ---
+	// --- The BIT band (specs/bitwise-operators.md) ---
 	//
 	// ⚠ **THIS BAND SITS AT THE END OF THE UNION RATHER THAN BESIDE THE ALU OPS IT BELONGS
 	// WITH SEMANTICALLY, AND NOTHING REQUIRES THAT ANY MORE.** An arm names the cases it
@@ -773,7 +757,7 @@ export union TargetOp
 	// `cmp` and the `jcc` cannot disturb what the `jcc` reads.
 	setccReg(dest TargetVReg, cond X64CondCode) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
-	// --- P1.0d.5b: the DATA-SECTION band (specs/static-variables.md) ---
+	// --- The DATA-SECTION band (specs/static-variables.md) ---
 	//
 	// `lea dest, [rip + disp32]` to a `.data` global — the address of `label`'s slot. The
 	// disp32 is emitted ZERO and an `RdataRelocation` of kind `dataSectionRipRelDisp32` is
@@ -804,7 +788,7 @@ export union TargetOp
 	// `isStore: true`. APPENDED at the END of the union, after `loadRegBaseDisp`.
 	storeBaseDispReg(base TargetVReg, disp Imm32, src TargetVReg, width X64AccessWidth) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0}
 
-	// --- P1.0d.4: the SSE band (specs/float-type.md, specs/float-compare-branch.md) ---
+	// --- The SSE band (specs/float-type.md, specs/float-compare-branch.md) ---
 	//
 	//
 	// ⭐⭐ THIS BAND IS SMALL FOR A REASON, AND THE REASON IS THE ONE-ENUM DESIGN.
@@ -815,7 +799,7 @@ export union TargetOp
 	// (and `xchg` vs a triple-`xorpd`) from `regClassOf` of the RESOLVED register.
 	// ⇒ **CLASS-AGNOSTIC OPS, CLASS-DISPATCHED ENCODERS.** That one rule is why SSA
 	// destruction needs no float case, the splitter needs no float spill op, and the
-	// allocator's spill/reload machinery is untouched by this rung. A spill slot is 8 bytes
+	// allocator's spill/reload machinery needs no float variant. A spill slot is 8 bytes
 	// and an f64 is 8 bytes, so even the frame layout is unchanged.
 	//
 	// ⚠⚠ AND HERE IS WHAT THAT DESIGN COSTS — A NEW SILENT-WRONG-ANSWER SITE.
@@ -864,7 +848,7 @@ export union TargetOp
 	// it to `constValueOfDef`, which would PANIC.
 	// ⇒ It is a real missed optimization, and it is the SAME one `leaRegGlobal` already prices:
 	// taking either means generalizing remat from "a constant value" to "an op with no register
-	// inputs". Not this rung's. Recorded here rather than silently ranged over.
+	// inputs". Not taken here. Recorded rather than silently ranged over.
 	movsdRegRip(dest TargetVReg, label ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
 	// ⚠⚠ TWO OF THE DIALECT'S THREE CROSS-CLASS OPS — they read one file and write the other.
@@ -881,7 +865,7 @@ export union TargetOp
 	cvtsi2sdRegReg(dest TargetVReg, src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	cvttsd2siRegReg(dest TargetVReg, src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
-	// P1.0d.4-C: the MATH INTRINSICS (`specs/{floor,ceil,round,sqrt}.md`), APPENDED AT THE END OF
+	// The MATH INTRINSICS (`specs/{floor,ceil,round,sqrt}.md`), APPENDED AT THE END OF
 	// THIS SSE BAND — before `leaRegRdata`, not at the end of the union.
 	//
 	// ⚠⚠ THE END OF THE **UNION** WOULD BE THE WRONG PLACE. The union's tail
@@ -909,7 +893,7 @@ export union TargetOp
 	// field without either backend restating the other's encoding.
 	roundsdRegReg(dest TargetVReg, src TargetVReg, mode FloatRoundMode) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
-	// ⭐ P1.7a's LAST SLICE: `movq r64, xmm` (`66 REX.W 0F 7E /r`) — the f64 → i64 BIT
+	// ⭐ `movq r64, xmm` (`66 REX.W 0F 7E /r`) — the f64 → i64 BIT
 	// REINTERPRETATION `float.hash` is built on, and the THIRD cross-class op in this dialect.
 	//
 	// ⚠⚠ `emitRegRegMove`'s CROSS-CLASS PANIC IS WHY THIS IS AN OP AND NOT A MOVE, and that panic is
@@ -967,7 +951,7 @@ export union TargetOp
 	absF64RegReg(dest TargetVReg, src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
 	// `lea dest, [rip + disp32]` to an `.rdata` constant — the address of a String literal's 56-byte
-	// record (P1.2 wave A). The `.rdata` twin of `leaRegGlobal` (which targets `.data`), and it shares
+	// record. The `.rdata` twin of `leaRegGlobal` (which targets `.data`), and it shares
 	// that op's every property: ONE plain def, NO uses, reads no allocatable register at all (RIP is
 	// not allocatable), sets no flags. The disp32 is emitted ZERO and an `RdataRelocation` of kind
 	// `ripRelDisp32` is recorded; the PE writer patches it once `.rdata`'s RVA is known. `label` is a
@@ -1040,7 +1024,7 @@ export union TargetOp
 	// ⭐⭐ **f64 NEGATE — THE SECOND OP IN THIS DIALECT THAT IS NOT A SINGLE MACHINE INSTRUCTION**, and
 	// `absF64RegReg`'s twin: that CLEARS the IEEE-754 sign bit, this FLIPS it, which is negation for every
 	// f64 pattern — ±0, ±inf and NaN included (`StdUnaryOpcode.fneg`). It is what a source `-x` over a
-	// float lowers to; until 2026-08-30 that was `0.0 - x`, which is `+0.0` for a positive zero.
+	// float lowers to — NOT `0.0 - x`, which answers `+0.0` for a positive zero.
 	//
 	// ⚠⚠ **A SIGN FLIP HAS NO IN-PLACE SHIFT TRICK.** `abs` shifts the bit out and back with one register
 	// and no constant; a FLIP needs a mask, and both textbook homes for one are the ones `absF64RegReg`
@@ -1076,10 +1060,10 @@ export union TargetOp
 	// Declared at the end of the x64 SSE band, where every float op before it went.
 	negF64RegReg(dest TargetVReg, src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0x200000}
 
-	// --- arm64-macOS SCALAR-CORE band (USER RULING 2026-07-17) ---
+	// --- arm64-macOS SCALAR-CORE band (USER RULING) ---
 	//
 	// One allocator, one op union (USER RULING): these arms carry the NEUTRAL `TargetVReg` and the
-	// neutral `RegNum`, exactly as the x64 arms do — the arm64 ENCODER (wave 1) maps a resolved
+	// neutral `RegNum`, exactly as the x64 arms do — the arm64 ENCODER maps a resolved
 	// `RegNum` to `Arm64Register`. arm64 is a 3-ADDRESS ISA, so its ALU ops take three INDEPENDENT
 	// operands (plain defs, NO two-address `Reuse` — cleaner than x64). Reg-reg moves, the
 	// spill/reload SLOT ops and base+disp loads/stores are CLASS- and ISA-AGNOSTIC and are REUSED
@@ -1087,11 +1071,9 @@ export union TargetOp
 	// `storeBaseDispReg`), so they do not reappear here — the arm64 encoder gives `movRegReg` a
 	// `mov`/`fmov`, `storeSlotReg` a `str`, and so on.
 	//
-	// ⭐ NOW EXERCISED. The arm64 isel produces these ops and the full pipeline runs on arm64-macOS
-	// (the scalar-core backend + M2 runtime floor): the operand model (TargetOperands), the printer
-	// (TargetPrinter), and the allocator's rewrite/hint/self-move passes all carry real arm64 arms
-	// (see `colorTargetOp`) — no longer the range-PANICs the wave-1 stub left before arm64 ran the
-	// allocator.
+	// ⭐ The arm64 isel produces these ops and the full pipeline runs on arm64-macOS: the operand
+	// model (TargetOperands), the printer (TargetPrinter), and the allocator's rewrite/hint/self-move
+	// passes all carry real arm64 arms (see `colorTargetOp`).
 
 	// `ret` — return to caller. implicitUses = 0x1 (the x0 bit): arm64 returns its primary value in
 	// x0, which is what lets the allocator admit x0 into the pool (nothing is live across
@@ -1137,7 +1119,7 @@ export union TargetOp
 
 	// Signed / unsigned divide. ⚠ arm64 `sdiv`/`udiv` do NOT trap on divide-by-zero (they return 0),
 	// unlike x64 `idiv` (#DE) — the isel emits an explicit `cmp rhs,#0; b.ne; bl panic` guard (a
-	// KNOWN DIVERGENCE, M1 design notes). Both are plain 3-address defs.
+	// KNOWN DIVERGENCE). Both are plain 3-address defs.
 	arm64Sdiv(dest TargetVReg, lhs TargetVReg, rhs TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	arm64Udiv(dest TargetVReg, lhs TargetVReg, rhs TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
@@ -1210,7 +1192,7 @@ export union TargetOp
 	arm64Scvtf(dest TargetVReg, src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	arm64Fcvtzs(dest TargetVReg, src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
-	// P1.0d.4-C: the MATH INTRINSICS, APPENDED AT THE END OF THIS arm64 FLOAT BAND — for the reason
+	// The MATH INTRINSICS, APPENDED AT THE END OF THIS arm64 FLOAT BAND — for the reason
 	// the x64 pair above states in full. Both are 2-address plain defs (`dest` independent of `src`)
 	// reading and writing the FP file, so the existing float arms answer for them unchanged.
 	arm64Fsqrt(dest TargetVReg, src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
@@ -1249,7 +1231,7 @@ export union TargetOp
 
 	// A GOT-indirect libSystem import call (`adrp x16, GOTPAGE; ldr x16, [x16, GOTOFF]; blr x16`) — the
 	// macOS twin of x64's `iatCall`, used by the arm64 isel to lower `osAllocPages`→`mmap` and
-	// `osWriteStdout`→`write` (the M2 runtime floor).
+	// `osWriteStdout`→`write`.
 	//
 	// ⚠⚠ IT CANNOT REUSE `iatCall`, AND THE REASON IS THE CLOBBER. `iatCall`'s single `TargetOpMeta`
 	// carries the x64 caller-saved mask (0x003F0FC7), whose bits name x64 `RegNum`s — a DIFFERENT numbering
@@ -1316,12 +1298,12 @@ export union TargetOp
 	// sources, so no seed copy. `cond` is an operand, not a separate op per condition, exactly as
 	// `arm64Frint` carries its rounding mode.
 	//
-	// ⚠ APPENDED AT THE END OF THE ARM64 BAND — after `arm64Syscall`, before the P1.5-A1 x64 ops, so the
+	// ⚠ APPENDED AT THE END OF THE ARM64 BAND — after `arm64Syscall`, before the x64 ops, so the
 	// band reads as one run. `opIsArm64Band` NAMES its ops rather than reading a span, so routing does not
 	// depend on that contiguity — it is there for the reader, and an op it does not name is E2026.
 	arm64Fcsel(dest TargetVReg, ifTrue TargetVReg, ifFalse TargetVReg, cond Arm64CondCode) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
-	// --- P1.5-A1: x64 non-capturing function values ---
+	// --- x64 non-capturing function values ---
 	//
 	// These are x64 ops (the isel produces them only for x64); their position after the arm64
 	// band is inherited, not a claim they belong to it.
@@ -1375,7 +1357,7 @@ export union TargetOp
 	// inline.
 	x64Syscall(number MachineWord) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0x003F0FC7}
 
-	// --- P1.1b slice 2: the DENSE-match jump table (x64 + arm64) ---
+	// --- The DENSE-match jump table (x64 + arm64) ---
 	//
 	// Both are TERMINATORS (multiway indexed branches) that expand in the encoder to the full
 	// bounds-check + table-load + indirect-jump sequence, so they carry no `isMemory`/`isCall` flags — the
@@ -1405,7 +1387,7 @@ export union TargetOp
 	// the arm64 allocatable pool. Inline for the same union-literal reason (guarded by `assertEncoderScratchMasks`).
 	arm64JumpTable(indexReg TargetVReg, defaultTarget BlockId, caseTargets BlockIdArray, tableLabel ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0x30000}
 
-	// --- P1.7a slice 2a: the fused witness call's memory-indirect call (x64) ---
+	// --- The fused witness call's memory-indirect call (x64) ---
 	//
 	//
 	// Memory-indirect call `call qword [baseReg + disp]` (`FF /2`, mod=01/10) — the memory-operand twin of
@@ -1455,7 +1437,7 @@ export union TargetOp
 	// `assertNoSugarOps` states for the Std sugar band.
 	arm64LoadIncomingArg(dest TargetVReg, slot SpillSlot) = TargetOpMeta{isMemory: true, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
-	// --- P1.7a's LAST SLICE: the arm64 half of the f64 → i64 BIT REINTERPRETATION ---
+	// --- The arm64 half of the f64 → i64 BIT REINTERPRETATION ---
 	//
 	//
 	// `FMOV Xd, Dn` (`0x9E660000 | Rn<<5 | Rd`) — move a 64-bit vector register's low half into a general
@@ -1698,14 +1680,14 @@ export union TargetOp
 	// alone. `isMemory: false` — a system-register read touches no memory.
 	arm64ThreadPointer(dest TargetVReg, source Arm64ThreadPointerSource) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
-	// --- EC16: the SCALED-INDEX addressing band (docs/emitted-code-roadmap.md) ---
+	// --- The SCALED-INDEX addressing band (docs/emitted-code-roadmap.md) ---
 	//
 	//
-	// ⭐⭐ **WHAT THESE EXIST FOR.** Until EC16 the dialect could express exactly `[base + disp]` and
-	// `[base + index]` at scale 1, so EVERY indexed element access paid a separate multiply to scale the
+	// ⭐⭐ **WHAT THESE EXIST FOR.** Without them the dialect expresses exactly `[base + disp]` and
+	// `[base + index]` at scale 1, so EVERY indexed element access pays a separate multiply to scale the
 	// index: `imul rcx, idx, 8` / `lea rax, [buf + rcx]` / `mov rax, [rax]`, three instructions for what
-	// x64 addresses in one. `InlineManagedPrimitives` (EC1) puts one of those at every array read and
-	// write in every program, which is why 36 of nbody's 40 `imul`-by-immediate were `×8`.
+	// x64 addresses in one. `InlineManagedPrimitives` puts one of those at every array read and
+	// write in every program — MEASURED at 36 of nbody's 40 `imul`-by-immediate.
 	//
 	// ⚠ **THE SCALE IS AN ENUM, NOT A SHIFT COUNT** — see `MemoryIndexScale`. Four values, because the
 	// hardware carries four.
@@ -1735,8 +1717,8 @@ export union TargetOp
 	// a load is a load.
 	//
 	// ⚠ **THE DISPLACEMENT IS CORRECT BY CONSTRUCTION AND CURRENTLY DEAD, AND THAT IS WORTH SAYING
-	// PLAINLY** — an earlier draft of this comment claimed it "subsumes the `+ field` of a struct field
-	// read off an indexed element", and that was MEASURED FALSE: every `loadRegBaseIndexScale` and
+	// PLAINLY.** It does NOT subsume the `+ field` of a struct field read off an indexed element —
+	// MEASURED FALSE: every `loadRegBaseIndexScale` and
 	// `storeBaseIndexScaleReg` in the committed goldens carries `+ 0`, without exception. An element
 	// slot of a struct-typed array holds a POINTER, so the field read is a separate `loadRegBaseDisp`
 	// off the loaded pointer and never a displacement on this operand. The field costs nothing (it
@@ -1766,7 +1748,7 @@ export union TargetOp
 	arm64AddLsl(dest TargetVReg, base TargetVReg, index TargetVReg, scale MemoryIndexScale) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
 	// ⭐⭐ **`imul r/m64` — the ONE-OPERAND group-3 signed multiply (`REX.W F7 /5`): RDX:RAX ⟸ RAX × src,
-	// and this op is the half of it a division-by-constant needs, the HIGH one in RDX (EC18).**
+	// and this op is the half of it a division-by-constant needs, the HIGH one in RDX.**
 	//
 	// ⚠ **ITS REGISTER MODEL IS `divideReg`'s, EXACTLY, AND FOR THE SAME REASON.** RAX is an implicit
 	// USE (the other multiplicand) and RAX+RDX are implicit DEFS (the 128-bit product), so the masks
@@ -1778,8 +1760,8 @@ export union TargetOp
 	// ⚠ It carries NO `DivideSignedness`, unlike `divideReg`, and the asymmetry is deliberate rather
 	// than an oversight: `divideReg` carries one because BOTH group-3 divides are reachable from
 	// `StdOp.div`'s own signedness field, while `StdBinOpcode` has only `mulHighSigned` today. The
-	// unsigned form is `F7 /4` (`mul`), and the rung that needs it (the unsigned magic sequence, which
-	// wants a 65-bit multiplier and an "add indicator" fixup) is the rung that gives this op a
+	// unsigned form is `F7 /4` (`mul`), and the change that needs it (the unsigned magic sequence, which
+	// wants a 65-bit multiplier and an "add indicator" fixup) is the change that gives this op a
 	// signedness field — at which point the two arms are two extensions of one encoder, as the divide's
 	// already are.
 	//
@@ -1795,7 +1777,7 @@ export union TargetOp
 	// Each of those matches gained an explicit `arm64Fneg` arm instead.
 	arm64Fneg(dest TargetVReg, src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
-	// --- G3: the ORDERED accesses, arm64's half of `StdOp.storeRelease` / `StdOp.loadAcquire` ---
+	// --- The ORDERED accesses, arm64's half of `StdOp.storeRelease` / `StdOp.loadAcquire` ---
 	//
 	//
 	// `STLR Xt, [Xn]` (0xC89FFC00) and `LDAR Xt, [Xn]` (0xC8DFFC00) — a store-RELEASE and a load-ACQUIRE.
@@ -1829,7 +1811,7 @@ export union TargetOp
 	arm64StoreRelease(base TargetVReg, src TargetVReg, width X64AccessWidth) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0}
 
 	// ⭐ `SMULH Xd, Xn, Xm` — the high 64 bits of the 128-bit signed product, arm64's answer to the same
-	// question `imulHighReg` answers on x64 (EC18's magic multiply).
+	// question `imulHighReg` answers on x64 (the magic multiply).
 	//
 	// ⚠ **IT CARRIES NO IMPLICIT MASKS, AND THAT IS THE WHOLE DIFFERENCE FROM `imulHighReg`.** x64's
 	// one-operand `imul` is a group-3 form wired to RAX/RDX, so its op declares those as implicit uses
@@ -1903,7 +1885,7 @@ export function accessWidthBytes(width X64AccessWidth) returns AccessWidthBytes
 end 'accessWidthBytes'
 
 // ⭐ **THE INDEX SCALE OF A `[base + index*scale]` ADDRESS — the four multipliers a hardware
-// addressing mode carries for free, and the ONE place they are named (EC16).**
+// addressing mode carries for free, and the ONE place they are named.**
 //
 // TARGET-NEUTRAL for `FloatRoundMode`'s reason: x64's SIB scale field (00/01/10/11) and AArch64's
 // `LSL #amount` are two ENCODINGS of one decision, and the decision is the ISEL's. Each encoder maps

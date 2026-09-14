@@ -1,4 +1,4 @@
-// LayoutDescriptor (P1.6-B1) — the per-generic-instance runtime "dictionary".
+// LayoutDescriptor — the per-generic-instance runtime "dictionary".
 //
 // ⭐ **The compiler does NOT monomorphize a generic body.** `Sizer.typeSize` compiles ONCE against an
 // opaque `T` (an i64), and everything the body needs to know about the concrete `T` at a given
@@ -9,42 +9,41 @@
 //
 // ⚠ **The byte shape is an ABI between two ends** — `LowerMaxonToStd` WRITES the blob
 // (`encodeLayoutDescriptor`) and READS it back (`sizeof(T)` → a load at a constant offset). Its first
-// EIGHT words are FROZEN, and B2/P1.7 (managed args,
-// drop-through-`destroyFunc@40`, Array copy-thunks) populate the once-zero slots without moving
-// anything:
+// EIGHT words are FROZEN, and managed args, drop-through-`destroyFunc@40` and Array copy-thunks
+// populate the zero slots without moving anything:
 //
 //   +0   size               u64   base generic type's own box byteSize (`StructLayout.sizeBytes`)
 //   +8   alignment          u64   8 (the machine word every trivial box is aligned to)
 //   +16  elementSize        u64   storage width of the single type arg in the box (an opaque
 //                                 8-byte `T` slot); DISTINCT from elementLogicalSize below
-//   +24  flags              u64   0 in B1 (bit0=hasHeapRefs, bit1=bitPacked — B2/P1.7)
-//   +32  copyFunc           u64   0 in B1 (a trivial instance has no copy thunk — B2)
-//   +40  destroyFunc        u64   0 in B1 (a trivial instance has no destroy thunk — B2/drop)
-//   +48  fieldOffsetsPtr    u64   0 in B1 (no per-field-offset blob — P1.7)
+//   +24  flags              u64   bit0=hasHeapRefs, bit1=bitPacked
+//   +32  copyFunc           u64   0 for a trivial instance (no copy thunk)
+//   +40  destroyFunc        u64   0 for a trivial instance (no destroy thunk)
+//   +48  fieldOffsetsPtr    u64   0 (no per-field-offset blob)
 //   +56  elementLogicalSize u64   source-level `sizeof` of the single type arg (bool=1, a 2-int
 //                                 Pair=16); the ONE slot `sizeof(T)` reads
 //   +64  retainFunc         u64   0 when the type ARGUMENT owns nothing; how a shared body takes a
-//                                 REFERENCE to a borrowed opaque `T` it stores (W41-opaque)
+//                                 REFERENCE to a borrowed opaque `T` it stores
 //
-// ⭐⭐ **THE NINTH WORD IS APPENDED, NOT SLOTTED INTO A RESERVED ONE, AND THAT IS DELIBERATE (W41-opaque).**
+// ⭐⭐ **THE NINTH WORD IS APPENDED, NOT SLOTTED INTO A RESERVED ONE, AND THAT IS DELIBERATE.**
 // `flags@24` and `fieldOffsetsPtr@48` are both still 0 and both still MEAN something; taking one
 // would make the field-offset blob's arrival a migration. Appending is the band-append discipline
 // one tier down: every existing offset
 // keeps its meaning and its number, so no reader and no committed golden's descriptor PREFIX moves. It costs
 // eight `.rdata` bytes per type parameter per instance that gets a descriptor at all.
 //
-// ⚠ **A B1 DESCRIPTOR IS PURE DATA — every function-pointer slot is 0, so NO relocation is emitted
-// or needed.** The moment a slot at +32/+40 must hold a `.text` address, that is B2's
-// `funcAbs64InRdata` machinery, not B1's.
+// ⚠ **A DESCRIPTOR WHOSE FUNCTION-POINTER SLOTS ARE ALL 0 IS PURE DATA, so NO relocation is emitted
+// or needed.** The moment a slot at +32/+40 must hold a `.text` address, that is the
+// `funcAbs64InRdata` machinery.
 //
-// ⭐⭐ **AND THE BLOB IS ONE SUCH BLOCK PER TYPE PARAMETER (W43b).** The two function-pointer slots
+// ⭐⭐ **AND THE BLOB IS ONE SUCH BLOCK PER TYPE PARAMETER.** The two function-pointer slots
 // describe ONE type argument, so a `Map with (Key, Value)` needs two of each — see
-// `layoutDescriptorBytesFor` for the wild free a single shared pair caused, and `layoutBlockOffsetFor`
+// `layoutDescriptorBytesFor` for the wild free a single shared pair causes, and `layoutBlockOffsetFor`
 // for how a reader addresses parameter `i`'s block. A ONE-parameter instance is one block and is
 // byte-identical to everything above.
 //
-// ⚠ `elementLogicalSize@56` still answers only for a SOLE parameter (`LAYOUT_NO_SOLE_ELEMENT`), even
-// though block `i` now has somewhere to put parameter `i`'s size: filling it would be a widening of
+// ⚠ `elementLogicalSize@56` answers only for a SOLE parameter (`LAYOUT_NO_SOLE_ELEMENT`), even
+// though block `i` has somewhere to put parameter `i`'s size: filling it would be a widening of
 // what `sizeof(T)` means in a multi-parameter body, which `parseSizeof` refuses today. The slot and the
 // refusal are named in each other's comments precisely so that pair moves together or not at all.
 
@@ -53,15 +52,14 @@
 let LAYOUT_DESCRIPTOR_BYTE_SIZE = 72 as ByteOffset
 
 // The byte offset of the `elementLogicalSize` slot — the source-level `sizeof` of the single type
-// arg. `sizeof(T)` inside a shared generic body lowers to a load of `[descriptor + this]`. It is the
-// ONE offset a reader needs at this slice, so it is the only one exported; B2 exports `destroyFunc@40`
-// when the drop path reads it.
+// arg. `sizeof(T)` inside a shared generic body lowers to a load of `[descriptor + this]`. `module`
+// rather than `export`: its one reader, `LowerMaxonToStd`, is inside this directory.
 module let LAYOUT_OFFSET_ELEMENT_LOGICAL_SIZE = 56 as ByteOffset
 
 // The byte offset of the `copyFunc` slot — the DEEP-CLONE function for the instance's single type
 // argument (the "dictionary" entry a shared generic body reads to COPY an opaque `T`). It is the exact
 // dual of `destroyFunc@40`: an opaque-`T` `Array with T` field copied inside a generic body
-// (`Container with String`, `.clone()`/`.slice()`/`.append()`, P1.7 slice 3b-vi-b) reads this slot at run
+// (`Container with String`, `.clone()`/`.slice()`/`.append()`) reads this slot at run
 // time and `callIndirect`s it per element, so the ONE compiled copy serves every concrete instance. The
 // slot is 0 on disk for a TRIVIAL type argument (no cloner — the opaque-copy wrapper then takes the
 // byte-blit/COW path, never `callIndirect(0)`); a `funcAbs64InRdata` relocation fills it with the element
@@ -72,16 +70,16 @@ export let LAYOUT_OFFSET_COPY_FUNC = 32 as ByteOffset
 // The byte offset of the `destroyFunc` slot — the destroy function for the instance's single type
 // argument (the "dictionary" entry a shared generic body reads to release an opaque `T`). An opaque-`T`
 // `Array with T` created inside a generic body stamps its record's `element_destroy@40` from a runtime
-// load of `[descriptor + this]` (P1.7 slice 3b-i): the shared body compiles ONCE and reads the element's
+// load of `[descriptor + this]`: the shared body compiles ONCE and reads the element's
 // destructor at run time, so the ONE compiled create serves every concrete instance. The slot is 0 on
 // disk for an argument that owns no record at all (a scalar, a ranged alias, a payload-free enum), so
 // the load yields 0 and the array's drop walk is skipped; a `funcAbs64InRdata` relocation fills it with
-// that argument's destructor for every argument that DOES own one (P1.7 slice 3b-ii).
+// that argument's destructor for every argument that DOES own one.
 // `encodeLayoutDescriptor` already zero-fills it.
 export let LAYOUT_OFFSET_DESTROY_FUNC = 40 as ByteOffset
 
 // ⭐⭐ **The byte offset of the `retainFunc` slot — HOW A SHARED GENERIC BODY TAKES A REFERENCE TO A BORROWED
-// OPAQUE `T` IT IS ABOUT TO STORE (W41-opaque).** A body compiled ONCE cannot name the protocol its type
+// OPAQUE `T` IT IS ABOUT TO STORE.** A body compiled ONCE cannot name the protocol its type
 // argument owes: a `String` read out of a container and stored into a tuple must be COPIED (an immortal
 // `.rdata` record cannot be increfed), a managed aggregate must be INCREFED (its alias is observable through
 // a field write, so a copy would be a different thing), and a trivial argument must be stored raw. So the
@@ -93,7 +91,7 @@ export let LAYOUT_OFFSET_DESTROY_FUNC = 40 as ByteOffset
 // question about a type the emitted code cannot name — see `IrInterface.WitnessRetainFuncOffset` for the two
 // access violations the shortcuts to it measured.
 //
-// ⛔ **IT IS NOT `copyFunc@32`, AND THAT WAS THE OTHER CANDIDATE.** `copyFunc` is a DEEP CLONE, which is
+// ⛔ **IT IS NOT `copyFunc@32`, WHICH IS THE OTHER CANDIDATE.** `copyFunc` is a DEEP CLONE, which is
 // semantically wrong for an aggregate rather than merely slower: Maxon is single-ownership and everything is
 // a reference, so a cloned struct in the slot is a DIFFERENT struct from the one the container holds — a
 // write through one would not show through the other, and their identities would differ. That is an
@@ -107,25 +105,25 @@ export let LAYOUT_OFFSET_DESTROY_FUNC = 40 as ByteOffset
 // `__destruct_Box_String`) and the COLUMN's element walk for an opaque `Array with T`, and the second of
 // those reads `destroyFunc@40` directly.
 //
-// ⚠⚠ **THEY HAVE COME APART TWICE, IN TWO DIFFERENT HALVES, AND A COMMENT HERE DEFENDED BOTH.** First on
-// the ARGUMENT question: this word was stamped whenever the argument owned heap (`typeIsManaged`) while that
-// one was stamped only when the argument was CONSUMED (`typeArgIsOwned`) — boundaries that differ on exactly
-// the co-owned trivial aggregate, so `Map.grow()` retained every rehashed all-scalar-struct key and released
-// none. Then on the INSTANCE question, which the fix for the first left standing: this word was stamped off
-// the ARGUMENT while that one was still gated on the base declaring an `Array with T` or bare `T` FIELD, so a
-// generic with no `T`-typed field at all — one that merely BUILDS a record out of a borrowed `T` — retained
-// through a live word and released through a zero. MEASURED at review: `type Pack uses T` with only
-// `var n as Integer`, at `Pack with String`, printed the right answer and exited **101** where 0 is
+// ⚠⚠ **THEY COME APART IN TWO DIFFERENT HALVES, AND A COMMENT ASSERTING THEY AGREE DEFENDS NEITHER.** On
+// the ARGUMENT question: stamping this word whenever the argument owns heap (`typeIsManaged`) while stamping
+// that one only when the argument is CONSUMED (`typeArgIsOwned`) gives boundaries that differ on exactly
+// the co-owned trivial aggregate, so `Map.grow()` retains every rehashed all-scalar-struct key and releases
+// none. On the INSTANCE question: stamping this word off the ARGUMENT while gating that one on the base
+// declaring an `Array with T` or bare `T` FIELD leaves a generic with no `T`-typed field at all — one that
+// merely BUILDS a record out of a borrowed `T` — retaining through a live word and releasing through a
+// zero. MEASURED: `type Pack uses T` with only
+// `var n as Integer`, at `Pack with String`, prints the right answer and exits **101** where 0 is
 // correct. ⇒ **Neither half of "one answer" is optional, and a claim in this comment
 // that they read one predicate is worth nothing unless the code has one expression for it.** See
-// `ProgramSignatures.typeParamOwnershipProtocol`, which is now that expression.
+// `ProgramSignatures.typeParamOwnershipProtocol`, which IS that expression.
 export let LAYOUT_OFFSET_RETAIN_FUNC = 64 as ByteOffset
 
 // The number of little-endian bytes in one descriptor field.
 let LAYOUT_FIELD_BYTES = 8 as ByteOffset
 
-// The alignment (`alignment@8`) every trivial-arg generic box takes — one machine word. A B1 box is a
-// row of 8-byte slots (`StructLayout` lays fields out at 8-byte strides), so the box aligns to 8.
+// The alignment (`alignment@8`) every trivial-arg generic box takes — one machine word. The box is a
+// row of 8-byte slots (`StructLayout` lays fields out at 8-byte strides), so it aligns to 8.
 module let LAYOUT_MIN_ALIGNMENT = 8 as MachineWord
 
 // The storage width of the single type argument in the box (`elementSize@16`) — an opaque `T` slot is
@@ -244,23 +242,21 @@ end 'unsignedSlotBytes'
 // range admits**, and the SINGLE producer of a narrow element stride for an alias. `Byte = int(0 to u8.max)`
 // ⇒ 1; `HashValue = int(0 to u32.max)` ⇒ 4; `int(i64.min to i64.max)` ⇒ 8.
 //
-// ⚠⚠ **AN ALIAS TAKES THE UNSIGNED HALF OF THE LADDER ONLY, AND SINCE `enum-narrow-storage` THAT IS A
-// SCOPE FACT AND NO LONGER A CAPABILITY ONE.** This function used to carry the whole argument for why a
-// negative lower bound cannot narrow — the shared element load ZERO-EXTENDS, so `int(-5 to 5)` storing
-// `-5` read back `251` (measured) — and that argument is now answered: a signed narrow slot's reads are
+// ⚠⚠ **AN ALIAS TAKES THE UNSIGNED HALF OF THE LADDER ONLY, AND THAT IS A SCOPE FACT RATHER THAN A
+// CAPABILITY ONE.** The load is not what stops it: a signed narrow slot's reads are
 // sign-extended at the ONE element-read door (`Parser.emitContainerElementAccessor`, off
 // `ProgramSignatures.narrowSignedSlotOf`), which is how a narrow signed ENUM survives its round
-// trip. Two things still hold an alias back, and neither is the load:
+// trip. Two things hold an alias back, and neither is the load:
 //
 //   • **`ProgramSignatures.elementAdmitsEverySlotValue` (E3118) rests on the slot's value set being
 //     UNSIGNED** — it is what makes a raw-byte write into a declared element comparable at all. A signed
 //     alias slot would falsify that premise silently, in the accepting direction. An enum is REFUSED at
-//     that door whatever its slot (it has no integer value set to compare), which is why the enum ladder
-//     could land without touching it.
+//     that door whatever its slot (it has no integer value set to compare), which is why a narrow enum
+//     slot never reaches it.
 //   • **`element_size@24` IS LANGUAGE-VISIBLE** (`arr.managed.elementSize()`), so moving every negative-
 //     ranged alias's array from 8 to 1 is a corpus-wide representation change, not an internal one.
 //
-// ⇒ narrowing an alias is a rung with those two as its work, and it is deliberately not this one's.
+// ⇒ narrowing an alias means settling those two first, and this function deliberately does not.
 export function rangedAliasStorageBytes(low ParsedInt, high ParsedInt) returns ByteOffset
 	if low < 0 'anAliasDoesNotTakeTheSignedHalf'
 		return MachineWordBytes
@@ -355,8 +351,8 @@ end 'elementsByteLen'
 // ⭐ **THE BITS IN A BYTE — ONE DECLARATION FOR BOTH ENDS OF THE PACKED ARITHMETIC.** Named rather than an
 // `8` beside a `4` and a `1`, none of which mean the same thing.
 //
-// ⚠ **IT IS EXPORTED BECAUSE `ManagedMemoryRuntime` COUNTS THE SAME BITS**, and briefly did so from a second private
-// `let` of its own (found in review of this rung). That is the shape this file exists to remove: the
+// ⚠ **IT IS EXPORTED BECAUSE `ManagedMemoryRuntime` COUNTS THE SAME BITS**, and a second private `let` of
+// its own is the shape this file exists to remove: the
 // compile-time `elementsByteLen` above and the emitted `emitElementByteLen` are documented as having to
 // agree TO THE BYTE, and two declarations of the divisor is exactly how they would come not to. It lives
 // here rather than in the runtime because the layout tier is the lower of the two.
@@ -492,7 +488,7 @@ end 'packConstantElements'
 // set: the two are the same number for different reasons, and a slot's reason is the loader's.
 export let SlotUnsignedMin = 0 as ParsedInt
 
-// ⭐⭐ **THE LARGEST UNSIGNED VALUE A `slotBytes`-WIDE SLOT HOLDS — the LADDER ABOVE READ BACKWARDS (A4c).**
+// ⭐⭐ **THE LARGEST UNSIGNED VALUE A `slotBytes`-WIDE SLOT HOLDS — the LADDER ABOVE READ BACKWARDS.**
 // `rangedAliasStorageBytes` picks the SMALLEST slot whose unsigned value set contains a range; this one
 // names the value set it picked, which is what a rule asking *"does the element admit every bit pattern of
 // its slot?"* has to compare against (`ProgramSignatures.elementAdmitsEverySlotValue`) and what that rule's
@@ -553,10 +549,10 @@ export let BytePrimitiveSizeBytes = 1
 // 8. The two doors are the two questions, exactly as they are for a ranged alias.
 //
 // ⭐ A managed `String` is its FULL record, NOT its 8-byte pointer: `sizeof(managed T)` is the value
-// record, which B2's managed args inherit unchanged. ⚠ **THE NUMBER IS
-// `StringRuntime.StringRecordBytes` AND WAS A BARE `48` UNTIL W157**, which made it a second, unchecked
+// record. ⚠ **THE NUMBER IS `StringRuntime.StringRecordBytes` AND NEVER A BARE `48`**, which would be a
+// second, unchecked
 // statement of a width the record's own producer already fixes — so growing the record (a sixth buffer slot
-// plus the flag) would have left `sizeof(String)` answering for the old one.
+// plus the flag) would leave `sizeof(String)` answering for the narrower one.
 //
 // It PANICS on the aggregate and non-value tags (`structRef`/`genericInstance` are the caller's to size by
 // layout; `typeParameter` is the descriptor-read path; `unresolved`/`void` are never valid `sizeof`
@@ -583,9 +579,8 @@ export function primitiveTypeByteSize(tag ValueTypeTag) returns ByteOffset
 		// ⭐ AN EXISTENTIAL IS THE ONE TAG WHOSE STORAGE IS NOT ONE MACHINE WORD — it is the fat pointer
 		// `{value, witness}`, two adjacent words (see MaxonType's `interfaceRef` arm). `sizeof(Iface)` answers
 		// it here and a struct field's two-slot carve-out DIVIDES it by the slot size
-		// (`Project.fieldSlotCount`), so both readers move together off the one constant. ⚠ That sentence
-		// used to claim they already did while the carve-out was a literal `2`; it is true now because the
-		// division landed, not because it was asserted.
+		// (`Project.fieldSlotCount`), so both readers move together off the one constant. ⚠ A literal `2`
+		// for the carve-out would break that, however firmly a comment asserted otherwise.
 		interfaceRef then return InterfaceValueBytes
 
 		// A `cstring` is a raw ADDRESS — one machine word, in a GPR, like every other pointer here.
@@ -625,7 +620,7 @@ export function primitiveTypeTagName(tag ValueTypeTag) returns String
 end 'primitiveTypeTagName'
 
 // The number of zero-filled slots between `elementSize@16` and `elementLogicalSize@56`: flags@24,
-// copyFunc@32, destroyFunc@40, fieldOffsetsPtr@48. All four are 0 for a B1 (pure-data) descriptor.
+// copyFunc@32, destroyFunc@40, fieldOffsetsPtr@48. All four are 0 for a pure-data descriptor.
 let LAYOUT_ZERO_SLOTS_MID = 4 as ByteOffset
 
 // The zero-filled slots that FOLLOW `elementLogicalSize@56`: `retainFunc@64` alone. Named beside the
@@ -633,11 +628,11 @@ let LAYOUT_ZERO_SLOTS_MID = 4 as ByteOffset
 // number covering both would have to be read against the field order to be understood.
 let LAYOUT_ZERO_SLOTS_TAIL = 1 as ByteOffset
 
-// The data model for one instance's descriptor. Only the four slots B1 populates are fields; the
-// four zero slots are supplied by the encoder (they carry no B1 information, and inventing fields to
+// The data model for one instance's descriptor. Only the four slots carrying a value are fields; the
+// four zero slots are supplied by the encoder (they carry no information, and inventing fields to
 // hold a constant 0 would be a place for the encoder and the model to disagree).
 //
-// ⚠ `elementSize` and `elementLogicalSize` are DISTINCT and must stay so through B2/P1.7: the first
+// ⚠ `elementSize` and `elementLogicalSize` are DISTINCT and must stay so: the first
 // is the arg's STORAGE width in the box (8 for an opaque `T` slot, whatever the arg), the second is
 // the arg's full SOURCE size (bool=1, Pair=16). For a trivial arg they diverge (8 vs 1) exactly where
 // the header says they must.
@@ -654,7 +649,7 @@ end 'LayoutDescriptor'
 
 // Encode a LayoutDescriptor into its fixed 72-byte `.rdata` image — nine little-endian machine
 // words. The three function-pointer slots (+32 copyFunc, +40 destroyFunc, +64 retainFunc) and the
-// field-offsets slot (+48) are zero on disk in B1: a trivial instance has no thunk, owes no reference and
+// field-offsets slot (+48) are zero on disk for a trivial instance: it has no thunk, owes no reference and
 // has no field-offset blob, so nothing patches them and the blob needs no relocation.
 module function encodeLayoutDescriptor(d LayoutDescriptor, typeParamCount TypeParamPosition) returns ByteArray
 	var buf = ByteArray.create()
@@ -680,22 +675,22 @@ module function encodeLayoutDescriptor(d LayoutDescriptor, typeParamCount TypePa
 end 'encodeLayoutDescriptor'
 
 // ⭐⭐ **A DESCRIPTOR IS ONE 72-BYTE BLOCK PER TYPE PARAMETER, AND BLOCK 0 IS THE WHOLE OF A
-// SINGLE-PARAMETER INSTANCE'S (W43b).** The three function-pointer slots — `copyFunc@32`,
+// SINGLE-PARAMETER INSTANCE'S.** The three function-pointer slots — `copyFunc@32`,
 // `destroyFunc@40` and `retainFunc@64` — describe ONE type argument, so a `Map with (Key, Value)` needs two
 // of each: its
 // `keys as Array with Key` and its `values as Array with Value` are two independently managed columns
 // created by ONE shared body.
 //
-// ⛔⛔ **WITH A SINGLE PAIR THEY SHARED ONE SLOT, AND THAT WAS A WILD FREE.** The stamp took the FIRST
-// managed opaque field's destructor, and every opaque `Array.create()` in the body then read it —
+// ⛔⛔ **A SINGLE PAIR SHARED ACROSS THE PARAMETERS IS A WILD FREE.** The stamp takes the FIRST
+// managed opaque field's destructor, and every opaque `Array.create()` in the body reads it —
 // **MEASURED on `type Pairs uses Key, Value` with `Array with Key` and `Array with Value` instantiated
-// `(String, Integer)`: the program printed the right answer and exited 139 (SIGSEGV) at teardown**,
-// because the `Integer` column's array had been stamped `__str_decref` and freed its ints as Strings.
-// That is what ruled `stdlib/Map.maxon` uncompilable and made `Map` a synthesized builtin.
+// `(String, Integer)`: the program prints the right answer and exits 139 (SIGSEGV) at teardown**,
+// because the `Integer` column's array is stamped `__str_decref` and frees its ints as Strings.
+// That is what rules `stdlib/Map.maxon` uncompilable and makes `Map` a synthesized builtin.
 //
 // ⭐ **THE BLOCK REPEATS RATHER THAN A TABLE BEING APPENDED, AND THAT IS WHAT KEEPS THE ABI STILL.**
 // Every reader addresses a dictionary by `descriptor + i * LAYOUT_DESCRIPTOR_BYTE_SIZE` and then uses
-// the SAME field offsets it always used — so the runtime graphs that take a descriptor POINTER
+// the SAME field offsets — so the runtime graphs that take a descriptor POINTER
 // (`__drop_type_param`, `__retain_type_param`, the `__managed_*_opaque` copy wrappers) need no signature change
 // and no second offset argument; the caller, which knows `i` statically, hands them the right block. A
 // ONE-parameter instance has one block at offset 0.

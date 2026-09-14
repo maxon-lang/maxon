@@ -5,11 +5,11 @@
 // from 16 can mint.
 typealias MemberCount = int(0 to 4611686018427387904)
 
-// The slot vocabulary is `helpers/hashtable/slotScan.maxon`'s, shared with `Map` (W93). This file used to
-// declare its own `SetSlotState`, byte-identical to that module's `SlotState`, and its own
-// `findNextOccupiedSet`, byte-identical to that module's `findNextOccupied` — two spellings of one
-// three-state space, whose failure mode was a state added to ONE of them: a compile error there and
-// SILENCE here, i.e. a wrong iteration answer from a container that still compiles.
+// The slot vocabulary is `helpers/hashtable/slotScan.maxon`'s, shared with `Map`. A private
+// `SetSlotState` beside that module's `SlotState`, or a private `findNextOccupiedSet` beside its
+// `findNextOccupied`, would be two spellings of one three-state space: a state added to ONE of them
+// is a compile error there and SILENCE here, i.e. a wrong iteration answer from a container that
+// still compiles.
 
 public type Set uses Element implements InitableFromArrayLiteral with Element, Iterable with (Element, SetIter) where Element is Hashable and Equatable
 	typealias ElementArray = Array with Element
@@ -183,10 +183,10 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 		end 'fallback'
 
 		// ⛔ **FALLING THROUGH MEANS EVERY SLOT IS Occupied — `count == capacity` — WHICH THE 75%
-		// LOAD-FACTOR GROW ABOVE FORBIDS.** This used to be a bare `end 'fallback'` that simply
-		// returned: `insert` reported success, `count` did not move and the element was silently
-		// DROPPED, so the very next `contains` answered false about a value the caller had just
-		// added. That is a broken invariant rather than a runtime condition a caller could handle,
+		// LOAD-FACTOR GROW ABOVE FORBIDS.** Returning quietly here would report success while `count`
+		// did not move and the element was silently DROPPED, so the very next `contains` answers
+		// false about a value the caller had just added. That is a broken invariant rather than a
+		// runtime condition a caller could handle,
 		// so it panics — the same call `Map.findSlot` makes at the identical point of the identical
 		// probe.
 		panic("Set.insert: probed every slot and found neither the element nor a vacancy — the 75% load-factor invariant is broken")

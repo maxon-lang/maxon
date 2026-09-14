@@ -56,7 +56,7 @@ export let Arm64IntReturnReg = Arm64Register.x0
 // The primary FLOAT return register (AAPCS64) — a float result returns in d0, not x0.
 let Arm64FloatReturnReg = Arm64Register.d0
 
-// The dual-register ERROR-FLAG return register (P1.4b) — the arm64 twin of x64's R10. x9 is an AAPCS64
+// The dual-register ERROR-FLAG return register — the arm64 twin of x64's R10. x9 is an AAPCS64
 // caller-saved TEMPORARY (x9–x15) and NOT an argument register (x0–x7), mirroring R10's "caller-saved,
 // not an argument register, so no return/argument conflict" choice. A `tryCall` reads the callee's flag
 // from here; an `errorReturn` writes it here. ⚠ arm64 error tests are per-target gated OUT of this
@@ -66,7 +66,7 @@ export let Arm64FlagReturnReg = Arm64Register.x9
 // The `mmap` call shape `lowerOsAllocPages` emits: `mmap(NULL, size, PROT_READ|PROT_WRITE,
 // MAP_ANON|MAP_PRIVATE, -1, 0)`. The POSIX-shared parameters (`MmapKernelChoosesBase`/`MmapProtReadWrite`/
 // `MmapAnonPrivateLinux`/`MmapAnonFd`/`MmapNoOffset`) live in `Targets/Shared/PosixMmap.maxon`, one fact
-// shared with the x64 isel (OPEN #83).
+// shared with the x64 isel.
 //
 // ⚠ THE FLAG WORD IS THE ONE NUMBER THAT DIFFERS BETWEEN THE TWO OSes this backend serves — everything
 // else about the call is POSIX-universal. `MAP_ANON` is 0x1000 on Darwin (`MAP_ANONYMOUS` is 0x20 on
@@ -101,7 +101,7 @@ let DarwinScNprocessorsOnln = 58
 // unqualified on that lane.
 let DarwinMsgNoSignal = 0x80000
 
-// The `madvise` advice that DECOMMITS a range on Darwin (F1a). Here rather than in `PosixMmap` for exactly
+// The `madvise` advice that DECOMMITS a range on Darwin. Here rather than in `PosixMmap` for exactly
 // `MmapAnonPrivateMacos`'s reason one line up: arm64 is the only backend that targets macOS.
 //
 // ⚠⚠ **IT IS A DIFFERENT ADVICE FROM LINUX'S, NOT A DIFFERENT NUMBER FOR THE SAME ONE, AND IT IS WEAKER.**
@@ -223,10 +223,10 @@ end 'arm64RegisterArgCapacity'
 //
 // ⭐ THE ONE HOME OF THAT DERIVATION. THREE arm64 encoder fields are relied on to hold this region — the
 // frame record's signed STP/LDP imm7 (504 bytes), `add x29, sp, #imm`'s 12-bit field (4095), and the
-// outgoing store's SCALED imm12 (4095 units = 32760 bytes) — and each of the three used to re-derive
-// `448` in its own prose. One fact written three times is the bug this project keeps naming, so it is
-// COMPUTED here and quoted by each assertion: raising `MaxAbiArgs` moves all three at once instead of
-// leaving three comments claiming a number that has stopped being true.
+// outgoing store's SCALED imm12 (4095 units = 32760 bytes) — and each would otherwise re-derive `448`
+// in its own prose. One fact written three times is the bug this project keeps naming, so it is COMPUTED
+// here and quoted by each assertion: raising `MaxAbiArgs` moves all three at once instead of leaving three
+// comments to go stale.
 //
 // The ceiling is the LANGUAGE's rather than this target's, and it is DIAGNOSED rather than assumed —
 // `Parser.requireAbiParamCount` refuses a signature past `MaxAbiArgs` (E2015, pinned by
@@ -266,7 +266,7 @@ function arm64FpArgRegisterAt(index ParamCount) returns Arm64Register
 end 'arm64FpArgRegisterAt'
 
 // The physical register a callIndirect captures its result from — **d0** for a float-returning function
-// value, **x0** otherwise (P1.5 #78). The indirect twin of `callResultRegister`, keyed on the `resultType`
+// value, **x0** otherwise. The indirect twin of `callResultRegister`, keyed on the `resultType`
 // the op carries rather than a callee name (an indirect callee has none). It must agree with the value-class
 // column, which classes the result via the SAME `stdTypeIsFloat(resultType)`, so the capture `movRegReg`
 // sees two same-file ends (an `fmov` for a float) instead of a cross-file move.
@@ -428,7 +428,7 @@ export type StdToArm64Lowering
 	// Fresh virtuals for the function being lowered (`mintVirtual`).
 	var fresh as ValueMinter
 
-	// EC16 — the `base + index*scale` chains this function's element accesses spell (`ScaledIndexFolds`,
+	// The `base + index*scale` chains this function's element accesses spell (`ScaledIndexFolds`,
 	// in the shared lowering). arm64 answers `accessWidthScaleAtZeroOffset`: `LDR Xt, [Xn, Xm, LSL #3]`
 	// carries the whole address, but its `S` bit selects a shift of 0 or exactly log2(the access size)
 	// and the register-offset encoding has no displacement field — so the memory fold lands here for the
@@ -661,7 +661,7 @@ export type StdToArm64Lowering
 				osWriteFile or
 				osReadWallClock gives 0
 
-			// ⭐ MAC4/5: the file and directory bands DO lower here now, and they still reserve nothing — every
+			// ⭐ The file and directory bands DO lower here, and they reserve nothing — every
 			// one passes at most FOUR arguments (`ReadFile`'s handle/buffer/length/out-param is the widest),
 			// inside AAPCS64's x0..x7, so nothing overflows onto the outgoing-argument stack.
 			osFileOpenRead or
@@ -684,16 +684,16 @@ export type StdToArm64Lowering
 			// x64-windows only, like the file-IO band above and for the same ruling.
 			osCommandLine gives 0
 
-			// ⭐ MAC6: the standard handle lowers here and CALLS NOTHING — a selector becomes a descriptor by
+			// ⭐ The standard handle lowers here and CALLS NOTHING — a selector becomes a descriptor by
 			// arithmetic — so it reserves nothing for a stronger reason than a refused op does.
 			osStdHandle gives 0
 
-			// MAC2: its W5 band-mate DOES lower here, and still reserves nothing — `lowerOsExecutablePath`
+			// Its band-mate DOES lower here, and also reserves nothing — `lowerOsExecutablePath`
 			// hands the chunk two arguments, inside AAPCS64's x0..x7, so nothing overflows onto the
 			// outgoing-argument stack.
 			osExecutablePath gives 0
 
-			// W35: an all-register `write` — no stack argument on either stream.
+			// An all-register `write` — no stack argument on either stream.
 			osWriteStderr gives 0
 
 			// A frame address computes an address; it calls nothing and so passes no outgoing argument.
@@ -707,7 +707,7 @@ export type StdToArm64Lowering
 				osMapNamedSegment or
 				osTickCountMs gives 0
 
-			// The rest of the appended band, and it now answers 0 for TWO different reasons rather than one.
+			// The rest of the appended band, which answers 0 for TWO different reasons rather than one.
 			// The four attached-subprocess host primitives and the `ws2_32` socket band are x64-windows only and
 			// never reach an arm64 frame, so they reserve nothing exactly as every other refused op does. The
 			// machine query and the thread-CPU read DO lower here (`lowerOsCpuCount`, `lowerOsThreadCpuTicks`) and
@@ -734,44 +734,44 @@ export type StdToArm64Lowering
 				osCpuCount or
 				osThreadCpuTicks gives 0
 
-			// F1a: unlike the band above, this one DOES lower here — and it still reserves nothing, because
+			// Unlike the band above, this one DOES lower here — and it still reserves nothing, because
 			// `madvise` takes three register arguments, inside AAPCS64's x0..x7. Nothing overflows onto the
 			// outgoing-argument stack.
 			osDecommitPages gives 0
 
-			// F1b: the byte fill calls nothing at all — it is a store ladder emitted inline — so there is no
+			// The byte fill calls nothing at all — it is a store ladder emitted inline — so there is no
 			// outgoing-argument region for it to reserve.
 			memFill gives 0
 
-			// F1c: both lower here too, and both are `mmap` — six arguments, which AAPCS64 passes in x0..x5 and
+			// Both lower here too, and both are `mmap` — six arguments, which AAPCS64 passes in x0..x5 and
 			// Linux's `svc` reads from the same six. Nothing reaches the stack.
 			osCommitPages or
 				osReservePages gives 0
 
-			// F2: the two atomics are inline instruction sequences and reserve nothing; the thread token is a
+			// The two atomics are inline instruction sequences and reserve nothing; the thread token is a
 			// system-register read on macOS and a ZERO-argument syscall on Linux, and a syscall never touches the
 			// stack. So none of the three needs an outgoing-argument region.
 			atomicCas or
 				atomicRmw or
 				currentThreadToken gives 0
 
-			// G1: the three TLS ops and the event signal are x64-windows only and are REFUSED below rather than
+			// The three TLS ops and the event signal are x64-windows only and are REFUSED below rather than
 			// lowered, so no frame is reserved for arguments that will never be marshalled here.
 			tlsAlloc or
 				tlsSetValue or
 				tlsSlotLoad or
 				osSetEvent gives 0
 
-			// MAC2: the priority door lowers here, and reserves nothing — `setpriority` takes three register
+			// The priority door lowers here, and reserves nothing — `setpriority` takes three register
 			// arguments and `getpriority` two, all inside AAPCS64's x0..x7.
 			osEnterBackgroundPriority gives 0
 
-			// MAC4: two register arguments through the shared `creat`, exactly as `osFileOpenWrite` above.
+			// Two register arguments through the shared `creat`, exactly as `osFileOpenWrite` above.
 			osFileOpenWriteExecutable gives 0
 			osEnvBlock or
 				osEnvBlockFree gives 0
 
-			// G3: an ordered access marshals nothing — one `add` into the IP scratch and one instruction.
+			// An ordered access marshals nothing — one `add` into the IP scratch and one instruction.
 			loadAcquire or
 				storeRelease gives 0
 
@@ -881,16 +881,16 @@ export type StdToArm64Lowering
 			unaryOp(resultId, operand, opcode, operandType) then self.lowerUnaryOp(resultId, operand: operand, opcode: opcode, operandType: operandType, dstRef: dstRef)
 			cmp(resultId, lhs, rhs, pred, operandType) then self.lowerCmp(resultId, lhs: lhs, rhs: rhs, pred: pred, operandType: operandType, dstRef: dstRef)
 
-			// The immediate forms' `operandType` (X5) is a WIDTH, and every integer instruction this
+			// The immediate forms' `operandType` is a WIDTH, and every integer instruction this
 			// backend selects is the 64-bit `X`-register form whatever the Std type says (`Arm64OpAddImm`
 			// 0x91…, `Arm64OpSubImm` 0xD1…, `Arm64OpSubsImm` (the `cmp` alias) 0xF1…, `Arm64OpMul` 0x9B…, `Arm64OpSdiv`
 			// 0x9AC…, every one with `sf` set) — so `binOpImm` drops it for the reason the x64 arm states,
 			// not overlooked.
 			//
 			// ⚠ `cmpImm` THREADS it, exactly as the x64 arm does and for the same reason: `lowerCmpImm`
-			// has to answer "is this a float compare?" for the condition code, and it answered with a
-			// hardcoded `isFloat: false` — the third spelling of a fact `foldConstOperands`'s float guard
-			// already owns and the op now carries.
+			// has to answer "is this a float compare?" for the condition code, and a hardcoded
+			// `isFloat: false` would be a third spelling of a fact `foldConstOperands`'s float guard
+			// already owns and the op carries.
 			binOpImm(resultId, lhs, imm, opcode, _) then self.lowerBinOpImm(resultId, lhs: lhs, imm: imm, opcode: opcode, dstRef: dstRef)
 			cmpImm(resultId, lhs, imm, pred, operandType) then self.lowerCmpImm(resultId, lhs: lhs, imm: imm, pred: pred, operandType: operandType, dstRef: dstRef)
 			div(resultId, lhs, rhs, signedness) then self.lowerDivMod(resultId, lhs: lhs, rhs: rhs, isRemainder: false, signedness: signedness, dstRef: dstRef)
@@ -905,7 +905,7 @@ export type StdToArm64Lowering
 			loadIndirect(resultId, addrId, offset, valueType) then self.lowerLoadIndirect(resultId, addrId: addrId, offset: offset, valueType: valueType, dstRef: dstRef)
 			storeIndirect(addrId, offset, valueId, valueType) then self.lowerStoreIndirect(addrId, offset: offset, valueId: valueId, valueType: valueType, dstRef: dstRef)
 
-			// G3: `LDAR`/`STLR` — the ordered pair, whose address the fold above has to materialise because
+			// `LDAR`/`STLR` — the ordered pair, whose address the fold above has to materialise because
 			// neither instruction has a displacement field. This is the lane the ops exist for.
 			loadAcquire(resultId, addrId, offset, valueType) then self.lowerLoadAcquire(resultId, addrId: addrId, offset: offset, valueType: valueType, dstRef: dstRef)
 			storeRelease(addrId, offset, valueId, valueType) then self.lowerStoreRelease(addrId, offset: offset, valueId: valueId, valueType: valueType, dstRef: dstRef)
@@ -916,7 +916,7 @@ export type StdToArm64Lowering
 			errorReturn(retValId, errorFlagId) then self.lowerErrorReturn(retValId, errorFlagId: errorFlagId, dstRef: dstRef, returnType: returnType, asTerminator: false)
 			osExit(codeId) then self.lowerOsExit(codeId, dstRef: dstRef)
 
-			// P1.5-A1: a function's address (ADRP+ADD via `arm64LeaFuncAddr`), and a call THROUGH a function
+			// A function's address (ADRP+ADD via `arm64LeaFuncAddr`), and a call THROUGH a function
 			// value (`blr` via `arm64BranchLinkReg`). Both halves are COMPLETE on arm64 and both encoders are
 			// real: `emitArm64TargetOp`'s `arm64BranchLinkReg` arm emits `Arm64OpBlr`, and
 			// `arm64EmitLeaFuncAddr` emits the mandated ADRP+ADD pair, filing ONE `Arm64FuncAdrpReloc` at the
@@ -932,7 +932,7 @@ export type StdToArm64Lowering
 
 			osReadClock(ticksPtrId, freqPtrId) then self.lowerOsReadClock(ticksPtrId, freqPtrId: freqPtrId, dstRef: dstRef)
 
-			// ⭐⭐ **MAC8: THE TWO OPS THAT SPAWN AND REAP A CHILD LOWER HERE.** Both go through
+			// ⭐⭐ **THE TWO OPS THAT SPAWN AND REAP A CHILD LOWER HERE.** Both go through
 			// `Arm64DarwinRuntime` chunks, for the structural reason every out-param op in this file does: the
 			// PROCESS_INFORMATION and the exit-code word must be written after a call that answers in a
 			// register. `osProcessSpawn` and `osProcessSpawnInherit` share ONE chunk, because the flag that
@@ -941,19 +941,19 @@ export type StdToArm64Lowering
 			osProcessSpawn(commandId, cwdPtrId, creationFlagsId, startupPtrId, procInfoPtrId, envPtrId) then self.lowerOsProcessSpawn(commandId, cwdPtrId: cwdPtrId, creationFlagsId: creationFlagsId, startupPtrId: startupPtrId, procInfoPtrId: procInfoPtrId, envPtrId: envPtrId, dstRef: dstRef)
 			osProcessExitCode(handleId, codePtrId) then self.emitHostChunkCall(dstRef, chunk: HostProcExitCodeName, args: twoArgs(handleId, second: codePtrId))
 
-			// ⭐ **MAC3: THE WAIT AND THE CLOSE ARE BOTH EXERCISED FOR REAL** — the worker park and the join go
+			// ⭐ **THE WAIT AND THE CLOSE ARE BOTH EXERCISED FOR REAL** — the worker park and the join go
 			// through `osWaitHandle`, and every handle this lane mints is given back through `osCloseHandle`.
 			osCloseHandle(handleId) then self.lowerOsCloseHandle(handleId, dstRef: dstRef)
 			osWaitHandle(resultId, handleId, timeoutMsId) then self.lowerOsWaitHandle(resultId, handleId: handleId, timeoutMsId: timeoutMsId, dstRef: dstRef)
 
-			// F1a + F1c: the four PAGE-LIFECYCLE ops all lower here — `munmap`, `madvise`, and two spellings of
+			// The four PAGE-LIFECYCLE ops all lower here — `munmap`, `madvise`, and two spellings of
 			// `mmap`. They are the one OS family on this backend that is NOT x64-windows-gated, and `osAllocPages`
 			// above is why: the allocator's page SOURCE already runs on every lane, so its free, decommit, reserve
 			// and commit twins must too.
 			osFreePages(addrId, sizeId) then self.lowerOsFreePages(addrId, sizeId: sizeId, dstRef: dstRef)
 			osDecommitPages(addrId, sizeId) then self.lowerOsDecommitPages(addrId, sizeId: sizeId, dstRef: dstRef)
 
-			// F1b: the byte fill's size ladder — two pre-moves and the macro-op that IS the dispatch.
+			// The byte fill's size ladder — two pre-moves and the macro-op that IS the dispatch.
 			memFill(destId, byteCountId, value) then self.lowerMemFill(destId, byteCountId: byteCountId, value: value, dstRef: dstRef)
 			osCommitPages(resultId, addrId, sizeId) then self.lowerOsCommitPages(resultId, addrId: addrId, sizeId: sizeId, dstRef: dstRef)
 			osReservePages(resultId, sizeId) then self.lowerOsReservePages(resultId, sizeId: sizeId, dstRef: dstRef)
@@ -961,23 +961,23 @@ export type StdToArm64Lowering
 			// The dense-match jump table is ALWAYS a block terminator, never a body op — see `lowerTerminatorOp`.
 			switch then panic("StdToArm64Lowering: a `switch` op appeared as a body op (lowering bug — the jump table is always a block terminator)")
 
-			// P1.7a slice 2b-iv-C: constrained-type-parameter dispatch, the third and last target to get it.
-			// Both writers now fill the witness table's `funcAbs64InRdata` slots — ELF bakes an absolute `.text`
+			// Constrained-type-parameter dispatch. Both writers fill the witness table's `funcAbs64InRdata`
+			// slots — ELF bakes an absolute `.text`
 			// VA (the image is static/ET_EXEC, so the x64 bake is CPU-invariant) and Mach-O threads each slot
 			// into its dyld chained-fixup chain as a PIE rebase, the same channel a String `buffer@0` rides.
 			witnessCall(resultId, witnessAddr, methodIndex, resultType, argFloatMask, args) then self.lowerWitnessCall(resultId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask, dstRef: dstRef)
 			witnessTryCall(resultId, errorFlagId, witnessAddr, methodIndex, resultType, argFloatMask, args) then self.lowerWitnessTryCall(resultId, errorFlagId: errorFlagId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask, dstRef: dstRef)
 
-			// ⭐ **MAC8: A PIPE IS A PIPE; A COMPLETION PORT IS NOT.** `osPipeCreate`'s name, security
+			// ⭐ **A PIPE IS A PIPE; A COMPLETION PORT IS NOT.** `osPipeCreate`'s name, security
 			// attributes, port and sync-silencing operands are Windows shapes with nothing to bind to here — see
 			// `Arm64DarwinRuntime.buildArm64DarwinPipeChunk` — so only the two out-params are passed on. A read
 			// here completes in its caller, so the caller's seeded silencing answer is already true.
 			osPipeCreate(_, _, _, readPtrId, writePtrId, _) then self.emitHostChunkCall(dstRef, chunk: HostPipeName, args: twoArgs(readPtrId, second: writePtrId))
 
-			// ⭐⭐ **MAC3: the P/M tier's own five ops, which sit INSIDE the IOCP band by declaration order and
+			// ⭐⭐ **The P/M tier's own five ops, which sit INSIDE the IOCP band by declaration order and
 			// have nothing to do with IOCP.** `__sched_init_procs` builds them unconditionally under `usesGt`,
 			// so every one is reachable in a plain `async` program: the run-queue lock, each MACHINE's own
-			// park event (it was each P's wake event until W213-C2) and a worker M's birth. See
+			// park event and a worker M's birth. See
 			// `Arm64DarwinRuntime`'s `DarwinWaitObject` for why an event is a condition variable here and why
 			// one object serves both kinds of handle.
 			osEventCreate(resultId) then self.lowerOsEventCreate(resultId, dstRef: dstRef)
@@ -986,7 +986,7 @@ export type StdToArm64Lowering
 			osLockEnter(lockPtrId) then self.lowerOsLockImport(lockPtrId, importSlot: OsImportSlot.pthreadMutexLock, chunk: LinuxLockEnterName, dstRef: dstRef)
 			osLockLeave(lockPtrId) then self.lowerOsLockImport(lockPtrId, importSlot: OsImportSlot.pthreadMutexUnlock, chunk: LinuxLockLeaveName, dstRef: dstRef)
 
-			// ⭐⭐ **MAC8: AN "OVERLAPPED" READ ON THIS LANE IS A PLAIN `read`, AND ITS OVERLAPPED OPERAND IS
+			// ⭐⭐ **AN "OVERLAPPED" READ ON THIS LANE IS A PLAIN `read`, AND ITS OVERLAPPED OPERAND IS
 			// DEAD.** The op's contract is *"answer TRUE with the count in `bytesOutPtr` if the read completed
 			// SYNCHRONOUSLY, FALSE with `ERROR_IO_PENDING` if it is in flight"*. It is `osReadFile`'s chunk
 			// verbatim, because it is the same four arguments and the same answer.
@@ -998,7 +998,7 @@ export type StdToArm64Lowering
 			// means to the two sites that consume one.
 			osReadOverlapped(resultId, handleId, bufId, capId, bytesOutPtrId, _) then self.lowerHostChunkValue(resultId, args: fourArgs(handleId, second: bufId, third: capId, fourth: bytesOutPtrId), chunk: HostReadFileName, dstRef: dstRef)
 
-			// ⭐⭐ **MAC4: `GetLastError` SITS INSIDE THE IOCP BAND BY DECLARATION ORDER AND BELONGS TO THE
+			// ⭐⭐ **`GetLastError` SITS INSIDE THE IOCP BAND BY DECLARATION ORDER AND BELONGS TO THE
 			// FILESYSTEM.** It is the op every failing file and directory call is classified through, so it
 			// lands here with them rather than with the overlapped reads it was declared beside.
 			osLastError(resultId) then self.lowerHostChunkValue(resultId, args: ValueIdArray.create(), chunk: HostLastErrorName, dstRef: dstRef)
@@ -1012,17 +1012,17 @@ export type StdToArm64Lowering
 			// A silent no-op would turn "this promise was dropped mid-read" into a read nobody cancelled.
 			osCancelIo then self.lowerRuntimeAbort(dstRef, message: Arm64NoCancelIoMessage)
 
-			// ⭐ MAC2: the PROCESS ID. It sits inside the IOCP band because the pipe-name uniquifier minted it
+			// ⭐ The PROCESS ID. It sits inside the IOCP band because the pipe-name uniquifier minted it
 			// (`GtRuntime.emitGtPipeNameUniquifier`), but the question it asks is the OS's and not the
 			// scheduler's — `getpid()` here, `GetCurrentProcessId()` there.
 			osGetPid(resultId) then self.lowerOsGetPid(resultId, dstRef: dstRef)
 
-			// MAC8: the same `pipe` as its inbound twin. Win32 needs two calls because one end must be a
+			// The same `pipe` as its inbound twin. Win32 needs two calls because one end must be a
 			// SYNCHRONOUS handle and the other an overlapped one; POSIX makes no such distinction, so the two
 			// ops share one chunk and differ only in which out-param is which end.
 			osPipeCreateOutbound(_, _, childReadPtrId, parentWritePtrId) then self.emitHostChunkCall(dstRef, chunk: HostPipeName, args: twoArgs(childReadPtrId, second: parentWritePtrId))
 
-			// ⭐ MAC4: `WriteFile` is a `write` here, and it is the SAME chunk shape `osReadFile` takes one band
+			// ⭐ `WriteFile` is a `write` here, and it is the SAME chunk shape `osReadFile` takes one band
 			// down — a descriptor, a buffer, a length and the out-param the count is published through.
 			osWriteFile(resultId, handleId, bufId, lenId, bytesOutPtrId) then self.lowerHostChunkValue(resultId, args: fourArgs(handleId, second: bufId, third: lenId, fourth: bytesOutPtrId), chunk: HostWriteFileName, dstRef: dstRef)
 
@@ -1031,9 +1031,8 @@ export type StdToArm64Lowering
 			// this is the backstop for a compiler bug rather than the user-facing rejection.
 			osReadWallClock(ftPtrId) then self.lowerOsReadWallClock(ftPtrId, dstRef: dstRef)
 
-			// ⭐⭐ **MAC4/5: THE WHOLE FILE AND DIRECTORY BAND LOWERS HERE.** This arm was one range and one
-			// panic — *"file IO is x64-windows-gated at R4.1/R4.2"* — and the ruling it named is discharged on
-			// this lane rather than deferred. Two shapes: the three that are a bare libSystem call with nothing
+			// ⭐⭐ **THE WHOLE FILE AND DIRECTORY BAND LOWERS HERE.**
+			// Two shapes: the three that are a bare libSystem call with nothing
 			// to outlive it lower INLINE, and the rest branch to a chunk in `Arm64DarwinRuntime`, for that
 			// file's structural reason (an out-param must survive a call that answers in a register).
 			osFileOpenRead(resultId, pathPtrId) then self.lowerOsFileOpen(resultId, pathPtrId: pathPtrId, importSlot: OsImportSlot.open, darwinArgument: PosixOpenReadOnly, linuxFlags: PosixOpenReadOnly, linuxMode: PosixNoFileMode as MachineWord, dstRef: dstRef)
@@ -1061,28 +1060,24 @@ export type StdToArm64Lowering
 			// leaves this op reachable only by a compiler bug.
 			osCommandLine then panic("StdToArm64Lowering: `osCommandLine` asks for ONE UNSPLIT COMMAND LINE, which is a Windows shape and not a missing lowering — MAC7 serves argv on this lane through a DIFFERENT Std graph (`CommandLineRuntime.commandLineShape`), which reads the vector `mrt_start` captured and never emits this op. Reaching here means the unsplit-string graph was installed for a target whose process start-up does not have one")
 
-			// W5's two ops, and they now go OPPOSITE WAYS — which is exactly what the shared paragraph they used
-			// to carry could not express. ⛔ It read "Both are x64-windows only … Serving them is a rung, not a
-			// lowering", and half of that stopped being true at MAC2; a claim about two ops is a claim that can
-			// only be half-corrected.
+			// The band's two ops go OPPOSITE WAYS, which is why each carries its own note rather than a shared
+			// one: a claim about two ops is a claim that can only be half-corrected.
 			//
-			// ⭐⭐ **MAC6: `osStdHandle` LOWERS, AND THE PARAGRAPH THAT REFUSED IT OVERSTATED THE PROBLEM.** It
-			// read: *"there is no `GetStdHandle` at all under POSIX — fd 0 IS the handle, so the op would have
-			// no work to do and its callers would want a different graph … a rung rather than a lowering."*
-			// The first half is right and the conclusion does not follow: an op with no work to do is an op
-			// whose lowering is the IDENTITY on the value, and the three selectors map onto the three
-			// descriptors by one subtraction. The graph above it is untouched, and `SubprocessRuntime`'s
+			// ⭐⭐ **`osStdHandle` LOWERS, EVEN THOUGH POSIX HAS NO `GetStdHandle` AT ALL.** fd 0 IS the
+			// handle, so the op has no work to do — and an op with no work to do is an op whose lowering is the
+			// IDENTITY on the value, with the three selectors mapping onto the three descriptors by one
+			// subtraction. The graph above it is untouched, and `SubprocessRuntime`'s
 			// `inherit` stdio kind gets the right descriptors for free the day that band lands here.
 			osStdHandle(resultId, whichId) then self.lowerOsStdHandle(resultId, whichId: whichId, dstRef: dstRef)
 
-			// ⭐ MAC2: the executable path DOES lower here, through a chunk. The three platforms genuinely
+			// ⭐ The executable path DOES lower here, through a chunk. The three platforms genuinely
 			// disagree (`GetModuleFileNameA`, `_NSGetExecutablePath` + `realpath`, `/proc/self/exe` —
 			// `stdlib/Process.maxon:26-27` names all three), and that disagreement is DISCHARGED on this lane
 			// rather than left as a refusal: `Arm64DarwinRuntime.buildArm64DarwinExePathChunk` writes Darwin's
 			// protocol out, and the target-neutral doubling loop above it is untouched.
 			osExecutablePath(resultId, bufLenId, bufPtrId) then self.lowerOsExecutablePath(resultId, bufLenId: bufLenId, bufPtrId: bufPtrId, dstRef: dstRef)
 
-			// W35: the same graph as the stdout write, one descriptor over. Unlike its W5 neighbours above this
+			// The same graph as the stdout write, one descriptor over. Unlike its neighbours above, this
 			// is NOT x64-windows-gated — a POSIX `write` serves both streams, so `printError` runs here.
 			osWriteStderr(resultId, bufId, lenId) then self.lowerOsWriteStream(resultId, bufId: bufId, lenId: lenId, stream: OsOutputStream.standardError, dstRef: dstRef)
 
@@ -1103,7 +1098,7 @@ export type StdToArm64Lowering
 			// only in how it reaches the kernel.
 			osMapNamedSegment(resultId, handleId, sizeId) then self.lowerHostChunkValue(resultId, args: twoArgs(handleId, second: sizeId), chunk: HostShmMapName, dstRef: dstRef)
 
-			// MAC8: `GetTickCount64` — the same `CLOCK_UPTIME_RAW` the scheduler's own clock reads, in
+			// `GetTickCount64` — the same `CLOCK_UPTIME_RAW` the scheduler's own clock reads, in
 			// milliseconds. It sits in the DebugStream band by declaration order and belongs to the subprocess
 			// family, whose deadlines are the only thing that measures with it.
 			osTickCountMs(resultId) then self.lowerHostChunkValue(resultId, args: ValueIdArray.create(), chunk: HostTickMsName, dstRef: dstRef)
@@ -1132,7 +1127,7 @@ export type StdToArm64Lowering
 			// scratch pair, which is outside the allocatable pool.
 			covPoint(pointId) then self.emit(dstRef, op: TargetOp.covInc(pointId))
 
-			// ⭐⭐ **MAC8: `osHandleSetInherit` EMITS NOTHING HERE, AND THE REASON IS THAT DARWIN'S DEFAULT IS
+			// ⭐⭐ **`osHandleSetInherit` EMITS NOTHING HERE, AND THE REASON IS THAT DARWIN'S DEFAULT IS
 			// INVERTED.** On Windows a handle must be MARKED inheritable before `bInheritHandles=TRUE` will
 			// pass it to a child; here the spawn sets `POSIX_SPAWN_CLOEXEC_DEFAULT`, under which NOTHING
 			// crosses the exec except the descriptors the file actions name — so there is no per-handle mark to
@@ -1141,7 +1136,7 @@ export type StdToArm64Lowering
 			osHandleSetInherit then break 'lower'
 			osPipePeek(resultId, handleId, availPtrId) then self.lowerHostChunkValue(resultId, args: twoArgs(handleId, second: availPtrId), chunk: HostPipePeekName, dstRef: dstRef)
 
-			// ⭐ MAC3: the ENVIRONMENT READ sits inside the attached-subprocess band by declaration order and is
+			// ⭐ The ENVIRONMENT READ sits inside the attached-subprocess band by declaration order and is
 			// not a subprocess op at all — `__sched_init_procs` reads `MAXON_MAX_PROCS` through it on every
 			// green-thread program. `getenv` answers a POINTER where `GetEnvironmentVariableA` fills a buffer,
 			// so the copy is the chunk's work; see `buildArm64DarwinEnvReadChunk`.
@@ -1181,46 +1176,39 @@ export type StdToArm64Lowering
 			// call and an isel cannot hold it there (`Arm64DarwinRuntime`'s header carries the argument).
 			osThreadCpuTicks(_, outPtrId) then self.lowerOsThreadCpuTicks(outPtrId, dstRef: dstRef)
 
-			// F2: the atomics and the per-thread identity word. Neither atomic is OS-routed — LDAXR/STLXR are ISA
+			// The atomics and the per-thread identity word. Neither atomic is OS-routed — LDAXR/STLXR are ISA
 			// facts — while the token IS, because only one of the two OSes here has a thread-pointer register a raw
 			// static binary may read (see `lowerCurrentThreadToken`).
 			atomicCas(resultId, addrId, expectedId, replacementId) then self.lowerAtomicCas(resultId, addrId: addrId, expectedId: expectedId, replacementId: replacementId, dstRef: dstRef)
 			atomicRmw(resultId, addrId, operandId, opcode) then self.lowerAtomicRmw(resultId, addrId: addrId, operandId: operandId, opcode: opcode, dstRef: dstRef)
 			currentThreadToken(resultId) then self.lowerCurrentThreadToken(resultId, dstRef: dstRef)
 
-			// G1: the multi-M substrate is x64-windows only, exactly like the IOCP ops above it — `TlsAlloc` /
-			// `TlsSetValue` / the `gs:`-relative slot read / `SetEvent` are Win32 shapes with no AAPCS64 analogue
-			// (Darwin's is `pthread_getspecific` + a libc this lane does not link), so a lowering here would be
-			// untested dead code no test could reach.
-			// ⭐⭐ **MAC3: the per-OS-thread slot and the event signal. The old note here said a lowering would
-			// be "untested dead code no test could reach" and named `pthread_getspecific` + "a libc this lane
-			// does not link"; BOTH halves have stopped being true.** arm64-macOS links libSystem for every
-			// other host family already, and the READ needs no libc call at all — Darwin's TSD array is at the
-			// masked thread pointer, so `pthread_getspecific(key)` IS a base-plus-index load
-			// (`lowerTlsSlotLoad` carries the measurement). What remains x64-windows-only is the LINUX route,
+			// ⭐⭐ **The per-OS-thread slot and the event signal lower on arm64-macOS.** That lane links
+			// libSystem for every other host family already, and the READ needs no libc call at all — Darwin's
+			// TSD array is at the masked thread pointer, so `pthread_getspecific(key)` IS a base-plus-index load
+			// (`lowerTlsSlotLoad` carries the measurement). What is x64-windows-only is the LINUX route,
 			// which each of these arms refuses on its own terms.
 			tlsAlloc(resultId) then self.lowerTlsAlloc(resultId, dstRef: dstRef)
 			tlsSetValue(indexId, valueId) then self.lowerTlsSetValue(indexId, valueId: valueId, dstRef: dstRef)
 			tlsSlotLoad(resultId, tebOffsetId) then self.lowerTlsSlotLoad(resultId, tebOffsetId: tebOffsetId, dstRef: dstRef)
 			osSetEvent(handleId) then self.lowerOsSetEvent(handleId, dstRef: dstRef)
 
-			// ⚠ ITS OWN ARM, NOT THE SCHEDULER'S, and that separation is what let MAC2 land it while the multi-M
-			// substrate above stays refused: `SetPriorityClass`/`GetPriorityClass` on Windows,
-			// `setpriority`/`getpriority` here. ⭐ The THREAD-INHERITANCE half of the old note is DISCHARGED on
-			// this lane rather than deferred — Darwin scopes nice to the PROCESS — and still stands for Linux,
-			// which scopes it to the THREAD; `PosixPrioProcess` carries that asymmetry.
+			// ⚠ ITS OWN ARM, NOT THE SCHEDULER'S, which is what lets it lower while the multi-M substrate above
+			// stays refused: `SetPriorityClass`/`GetPriorityClass` on Windows, `setpriority`/`getpriority` here.
+			// ⭐ THREAD INHERITANCE is owed on Linux, which scopes nice to the THREAD, and not on Darwin, which
+			// scopes it to the PROCESS; `PosixPrioProcess` carries that asymmetry.
 			osEnterBackgroundPriority(resultId) then self.lowerOsEnterBackgroundPriority(resultId, dstRef: dstRef)
 
-			// MAC4: `openWriteExecutable` is `openWrite` with the execute bits — the same `creat`, a different
+			// `openWriteExecutable` is `openWrite` with the execute bits — the same `creat`, a different
 			// mode. On Windows the two are one `CreateFileA`; here the mode is the whole difference, which is
 			// why they are two ops (`StdOp.osFileOpenWriteExecutable`).
 			osFileOpenWriteExecutable(resultId, pathPtrId) then self.lowerOsFileOpen(resultId, pathPtrId: pathPtrId, importSlot: OsImportSlot.creat, darwinArgument: PosixCreateExecutableFileMode, linuxFlags: LinuxOpenCreateTruncateFlags, linuxMode: PosixCreateExecutableFileMode as MachineWord, dstRef: dstRef)
 
-			// ⭐ **`osEnvBlock` IS SERVED HERE, AND THE PANIC THAT USED TO STAND IN ITS PLACE RESTED ON A FALSE
-			// PREMISE.** It claimed the whole attached-subprocess substrate was refused on this lane; the
-			// facility table says `subprocess gives true` for arm64-macOS, so `buildSubpEnvEntry` was built,
-			// nothing dropped it, and every program that so much as named `runConfiguration` panicked the
-			// compiler — with the DEFAULT `Environment.inherit`, which reads no environment at all.
+			// ⭐ **`osEnvBlock` IS SERVED HERE, BECAUSE THE ATTACHED-SUBPROCESS SUBSTRATE IS NOT REFUSED ON
+			// THIS LANE.** The facility table says `subprocess gives true` for arm64-macOS, so `buildSubpEnvEntry`
+			// is built and nothing drops it — and a refusal here would reach every program that so much as names
+			// `runConfiguration`, including one with the DEFAULT `Environment.inherit`, which reads no
+			// environment at all.
 			osEnvBlock(resultId) then self.lowerOsEnvBlock(resultId, dstRef: dstRef)
 
 			// ⛔ `osEnvBlockFree` HAS NO COUNTERPART ON EITHER POSIX LANE, AND ITS ABSENCE IS A FACT ABOUT
@@ -1336,22 +1324,22 @@ export type StdToArm64Lowering
 			osCpuCount then panic("StdToArm64Lowering: an `osCpuCount` op appeared as a block terminator (lowering bug — a machine query is a value-producing body op)")
 			osThreadCpuTicks then panic("StdToArm64Lowering: an `osThreadCpuTicks` op appeared as a block terminator (lowering bug — a thread-CPU read is a body op writing through an out-param)")
 
-			// F1a: a decommit is a body op, exactly as `osFreePages` above is — a page-lifecycle op transfers
+			// A decommit is a body op, exactly as `osFreePages` above is — a page-lifecycle op transfers
 			// control nowhere.
 			osDecommitPages then panic("StdToArm64Lowering: an `osDecommitPages` op appeared as a block terminator (lowering bug — a decommit is a body op, like the page release above)")
 
-			// F1c: a reserve and a commit are value-producing body ops, for the decommit's reason.
+			// A reserve and a commit are value-producing body ops, for the decommit's reason.
 			osCommitPages or
 				osReservePages then panic("StdToArm64Lowering: a page reserve or commit appeared as a block terminator (lowering bug — both are value-producing body ops, like the page allocation above)")
 			memFill then panic("StdToArm64Lowering: a `memFill` op appeared as a block terminator (lowering bug — a byte fill is a body op; its size dispatch branches INSIDE one macro-op's encoder, never between IR blocks)")
 
-			// F2: all three are value-producing body ops. The CAS/RMW retry loop branches, but inside one macro-op's
+			// All three are value-producing body ops. The CAS/RMW retry loop branches, but inside one macro-op's
 			// encoder — never between IR blocks, exactly as the fill ladder above.
 			atomicCas or
 				atomicRmw or
 				currentThreadToken then panic("StdToArm64Lowering: an atomic or a thread-token read appeared as a block terminator (lowering bug — all three are value-producing body ops)")
 
-			// G1: none of the four terminates a block; two produce a value and two are void side effects.
+			// None of the four terminates a block; two produce a value and two are void side effects.
 			tlsAlloc or
 				tlsSetValue or
 				tlsSlotLoad or
@@ -1419,7 +1407,7 @@ export type StdToArm64Lowering
 			return
 		end 'float'
 
-		// EC16 — this `+` is the second half of a `base + index*scale` element address: NOTHING when its
+		// This `+` is the second half of a `base + index*scale` element address: NOTHING when its
 		// one memory reader carries the whole address, else the single `ADD Xd, Xn, Xm, LSL #k` that
 		// replaces the scaling multiply.
 		if self.scaledIndexFolds.isIndexedAddress(resultId) 'scaledIndexAddress'
@@ -1448,14 +1436,14 @@ export type StdToArm64Lowering
 				min or
 				max then panic("lowerBinOp: `binOp({opcode.name})` with an INTEGER operand type — all three are FLOAT-ONLY (`stdBinOpcodeIsFloatOnly`). Integer division is `StdOp.div` (it can fault); `min`/`max` have no integer form and their operands are promoted by the parser")
 
-			// ⭐ EC18 — ONE instruction, and no pre-move. x64's `lowerMulHighSigned` needs three ops because
+			// ⭐ ONE instruction, and no pre-move. x64's `lowerMulHighSigned` needs three ops because
 			// its `imul r/m64` reads RAX and writes RDX:RAX; `SMULH` names all three registers, so the
 			// magic multiply costs arm64 exactly what an ordinary `MUL` costs.
 			mulHighSigned then self.emit(dstRef, op: TargetOp.arm64Smulh(dest, lhs: lhsReg, rhs: rhsReg))
 		end 'op'
 	end 'lowerBinOp'
 
-	// EC16 — emit a matched `base + index*scale` address: NOTHING when the one memory op reading it
+	// Emit a matched `base + index*scale` address: NOTHING when the one memory op reading it
 	// carries the address itself, else the single shifted-register `add` that replaces the separate
 	// scaling instruction and the `add` it fed. It is pressure-neutral even in that case — `index` was
 	// live to the scaling op and its RESULT live from there to the `add`; now `index` is live to the
@@ -1606,7 +1594,7 @@ export type StdToArm64Lowering
 	// and all three fall back the same way: materialise the constant into the IP scratch, use the
 	// register form.
 	function lowerBinOpImm(resultId ValueId, lhs ValueId, imm Imm32, opcode StdBinOpcode, dstRef BlockRef)
-		// EC16 — an element-index scaling the shifted-register `ADD` above carries. Neither the scratch
+		// An element-index scaling the shifted-register `ADD` above carries. Neither the scratch
 		// materialisation nor the `MUL` is emitted.
 		if self.scaledIndexFolds.retiresScaleDef(resultId) 'foldedIntoAddress'
 			return
@@ -1736,7 +1724,7 @@ export type StdToArm64Lowering
 	function lowerLoadIndirect(resultId ValueId, addrId ValueId, offset ByteOffset, valueType StdType, dstRef BlockRef)
 		let width = accessWidthFor(valueType)
 
-		// EC16 — the address is a `base + index*scale` chain nothing else reads, and it is one the
+		// The address is a `base + index*scale` chain nothing else reads, and it is one the
 		// register-offset form can hold, so the access carries the whole address and the `add` that
 		// computed it emitted nothing.
 		if self.scaledIndexFolds.fusesIntoMemoryOp(addrId) 'indexed'
@@ -1751,7 +1739,7 @@ export type StdToArm64Lowering
 	function lowerStoreIndirect(addrId ValueId, offset ByteOffset, valueId ValueId, valueType StdType, dstRef BlockRef)
 		let width = accessWidthFor(valueType)
 
-		// EC16 — the store mirror of the indexed load above.
+		// The store mirror of the indexed load above.
 		if self.scaledIndexFolds.fusesIntoMemoryOp(addrId) 'indexed'
 			self.emit(dstRef, op: TargetOp.storeBaseIndexScaleReg(TargetVReg.virtual(self.scaledIndexFolds.baseOf(addrId)), index: TargetVReg.virtual(self.scaledIndexFolds.indexOf(addrId)), scale: self.scaledIndexFolds.scaleOf(addrId), disp: memoryDisplacement(offset), src: TargetVReg.virtual(valueId), width: width))
 			return
@@ -1761,7 +1749,7 @@ export type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.storeBaseDispReg(mem.base, disp: mem.disp, src: TargetVReg.virtual(valueId), width: width))
 	end 'lowerStoreIndirect'
 
-	// ⭐⭐⭐ **G3 — THE ADDRESS AN ORDERED ACCESS NEEDS: A BARE BASE REGISTER, WITH THE FIELD OFFSET ALREADY
+	// ⭐⭐⭐ **THE ADDRESS AN ORDERED ACCESS NEEDS: A BARE BASE REGISTER, WITH THE FIELD OFFSET ALREADY
 	// FOLDED IN.** `LDAR`/`STLR` are load/store-EXCLUSIVE-group encodings, whose only addressing form is
 	// `[Xn]` — there is no displacement field to put `offset` in. So an ordered access at a non-zero field
 	// offset costs one extra `add` into the IP scratch, and at offset 0 costs nothing.
@@ -1803,10 +1791,10 @@ export type StdToArm64Lowering
 	// adopts that — `a / 0` is 0, and the divide/modulo-by-zero tests are gated to x64-windows (see the
 	// file header / safety.md). So the division lowers straight into `dstRef` and never splits the block.
 	//
-	// ⭐ **THE SIGNEDNESS IS THE OP'S, NOT AN OPERAND'S** (X10, `IntegerSignedness`). arm64 was the target
-	// where the SIGNED reading happened to be harmless for the sibling operators — a "32-bit" binop is
-	// emitted at 64 bits here — but a divide's signedness is real on every target, and `udiv` was already
-	// declared, printed, coloured and encoded with only this isel never reaching for it.
+	// ⭐ **THE SIGNEDNESS IS THE OP'S, NOT AN OPERAND'S** (`IntegerSignedness`). Reading it off an operand
+	// is harmless for the sibling operators on this target — a "32-bit" binop is emitted at 64 bits here —
+	// but a divide's signedness is real on every target, and `udiv` is declared, printed, coloured and
+	// encoded for exactly that reason.
 	//
 	// `mod` is `x − (x/y)*y` via the divide then `msub`, and the SAME `msub` serves both signednesses:
 	// the subtraction and the multiply are two's-complement identical, so only the quotient's instruction
@@ -1864,10 +1852,9 @@ export type StdToArm64Lowering
 
 	// Lower a Std `cmpImm` (constant right operand) to `cmp reg, #imm` + `cset`. `cmpImm` is INTEGER by
 	// construction (no NEON form takes an immediate, so `foldConstOperands` refuses a float rhs) — which
-	// is why the condition code is ASKED of the op's own `operandType` (X5 review) rather than told
-	// `isFloat: false`. The derived answer is that same `false`, by that same guard; what changes is that
-	// it can no longer be a stale copy of it. `lowerCmp` next door already reads its `operandType` this
-	// way, and the pair now spells the question once.
+	// is why the condition code is ASKED of the op's own `operandType` rather than told `isFloat: false`.
+	// The derived answer is that same `false`, by that same guard, and cannot be a stale copy of it.
+	// `lowerCmp` next door reads its `operandType` the same way, so the pair spells the question once.
 	//
 	// ⚠ AND AN IMMEDIATE OPERAND IS NOT AUTOMATICALLY AN IMMEDIATE FORM, for `lowerBinOpImm`'s reason at
 	// a NARROWER band. A compare-immediate is one imm12 field, plain or shifted by 12 — it cannot use the
@@ -1875,10 +1862,10 @@ export type StdToArm64Lowering
 	// half of the subtraction. So `x + 16777215` has an immediate form and `x == 16777215` does not, and
 	// the selector asks `arm64ImmIsEncodableCmp` — the ENCODER's own band — before selecting one.
 	//
-	// The fallback is the materialisation every other "no immediate form fits" arm in this file uses. It
-	// used to happen inside `arm64EmitCmpImm`, i.e. AFTER register allocation, where a write of x16 is
-	// invisible to the allocator, to the liveness model and to the emitted IR — safe only because nothing
-	// happened to place such an op between an ISel-minted `movz`/consumer pair, which nothing checked.
+	// The fallback is the materialisation every other "no immediate form fits" arm in this file uses, and
+	// it happens HERE rather than inside `arm64EmitCmpImm`: a write of x16 AFTER register allocation is
+	// invisible to the allocator, to the liveness model and to the emitted IR, and nothing would check
+	// that no op had landed between an ISel-minted `movz` and its consumer.
 	function lowerCmpImm(resultId ValueId, lhs ValueId, imm Imm32, pred StdCmpPred, operandType StdType, dstRef BlockRef)
 		let lhsReg = TargetVReg.virtual(lhs)
 
@@ -2032,11 +2019,11 @@ export type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(self.callResultRegister(callee))))
 	end 'lowerCall'
 
-	// Lower a Std `callIndirect` (P1.5-A1): move each argument into its ABI register, `blr` THROUGH the
+	// Lower a Std `callIndirect`: move each argument into its ABI register, `blr` THROUGH the
 	// callee register (`arm64BranchLinkReg` carries `calleeReg` as an explicit USE, so the allocator keeps
 	// the callee address live to the call), then capture the return value into the result. The mirror of
 	// `lowerCall`: there is no callee NAME to class the result or arguments against, so both come from the
-	// function value's SIGNATURE carried on the op (P1.5 #78) — a float result is captured from **d0** (else
+	// function value's SIGNATURE carried on the op — a float result is captured from **d0** (else
 	// **x0**), and each argument is routed by its own type (a float to d0..d7, else x0..x7).
 	function lowerCallIndirect(resultId ValueId, calleeReg ValueId, args ValueIdArray, resultType StdReturnType, argFloatMask ArgFloatMask, dstRef BlockRef)
 		self.emitArgMovesByFloatMask(args, argFloatMask: argFloatMask, dstRef: dstRef)
@@ -2056,7 +2043,7 @@ export type StdToArm64Lowering
 		end 'r'
 	end 'captureIndirectResult'
 
-	// ⭐ **LOWER THE FUSED `witnessCall` (P1.7a slice 2b-iv-C).** arm64 has no memory-operand call, so where
+	// ⭐ **LOWER THE FUSED `witnessCall`.** arm64 has no memory-operand call, so where
 	// x64 emits one `call qword [witnessAddr + 24 + 8*i]` (`callMem`), arm64 spells the same thing in two:
 	// `ldr x16, [witnessAddr, #slotOffset]` then `blr x16`. This is the SAME shape the GOT-indirect import
 	// call already uses (`arm64EmitImportCall`: `adrp x16` / `ldr x16, [x16]` / `blr x16`), so the idiom is
@@ -2112,7 +2099,7 @@ export type StdToArm64Lowering
 	// twin of x64's `emitArgMovesByFloatMask` — into its file's ABI register (d0..d7 for a float, x0..x7
 	// otherwise) while that file has one, else into this frame's outgoing STACK region at `[SP + slot*8]`,
 	// the AAPCS64 layout. Every placement decision comes from the shared rule, the SAME calls the callee's
-	// `lowerParam` makes; this routine used to run its own gpr/fp counters, a second spelling of it.
+	// `lowerParam` makes.
 	// The ONE slotting+emit path a DIRECT call (`emitCallArgMoves`, mask from the callee's declared param
 	// files), an INDIRECT call (`lowerCallIndirect`) and a witness call all route through.
 	//
@@ -2169,12 +2156,13 @@ export type StdToArm64Lowering
 
 	// The arm64 dual-register `errorReturn`: write the value to its return register (**d0** for a float
 	// return, else **x0** — through the SAME `emitReturnValueMove` the ordinary `ret` uses) and the SECOND
-	// WORD to **x9** — the error flag for a THROWING function, the WITNESS half for an interface-returning one
-	// (P1.7a slice 2), a difference this emitter cannot see and does not need to — then the return terminator (which `Arm64PrologueEpilogue` recognizes exactly as an ordinary
+	// WORD to **x9** — the error flag for a THROWING function, the WITNESS half for an interface-returning
+	// one, a difference this emitter cannot see and does not need to — then the return terminator (which
+	// `Arm64PrologueEpilogue` recognizes exactly as an ordinary
 	// return's, since this emits the same `arm64Ret`). Both moves unconditional, mirroring x64's
 	// `lowerErrorReturn`; a void return type targets x0, where the family-default zero belongs.
 	//
-	// A THROWING FLOAT function's THROW path IS handled (F3b / OPEN #60, same fix as x64's `lowerErrorReturn`):
+	// A THROWING FLOAT function's THROW path IS handled (the same fix as x64's `lowerErrorReturn`):
 	// `lowerThrowError` (LowerMaxonToStd) types the throw-edge primary default to the return type via
 	// `emitZeroConstOfReturnType` — a d0-classed float zero for a float return — so both the OK path (real
 	// float → d0) and the throw path (a dead d0 zero the caller ignores) reach `emitReturnValueMove` correctly classed.
@@ -2207,7 +2195,7 @@ export type StdToArm64Lowering
 		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.exit, syscallNumber: Arm64LinuxSyscallExitGroup)
 	end 'lowerOsExit'
 
-	// Lower `osPanic <label>` — a violated P1.9 range guard, or a user `panic("…")` — to `mrt_panic`,
+	// Lower `osPanic <label>` — a violated range guard, or a user `panic("…")` — to `mrt_panic`,
 	// which prints the baked `panic at …` line plus a symbolized backtrace and exits `PanicExitCode`. The
 	// message address goes in x0 (AAPCS64's first argument) and the `bl` follows; `functionMakesCall`
 	// sees the branch-with-link and frames the caller accordingly.
@@ -2215,14 +2203,13 @@ export type StdToArm64Lowering
 	// ⭐ NO OS SPLIT HERE, exactly as x64's `lowerPanic` has none: x0 is not an OS fact, and the ONE
 	// genuine per-OS difference — how the process finally exits — lives INSIDE the chunk, where
 	// `Arm64PanicRuntime` derives it from the same `arm64OsCallKind` door this file consults for every
-	// other primitive. This used to be a BARE EXIT, printing nothing on either arm64 lane, because
-	// nobody had written an arm64 `mrt_panic`; `Arm64PanicRuntime` is that runtime.
+	// other primitive.
 	function lowerPanic(label ByteArray, dstRef BlockRef)
 		self.emit(dstRef, op: TargetOp.arm64LeaRdata(arm64PhysReg(Arm64Register.x0), label: label))
 		self.emit(dstRef, op: TargetOp.arm64BranchLink(PanicName))
 	end 'lowerPanic'
 
-	// The RENDERED twin (A3n). The message is a runtime POINTER — an interpolation assembled the whole
+	// The RENDERED twin. The message is a runtime POINTER — an interpolation assembled the whole
 	// `panic at …\n` line, NUL terminator included — so it MOVES into x0 where the baked form materializes
 	// a label address there. Everything after is identical: one `mrt_panic`, one cstr contract, two ways
 	// of producing the bytes.
@@ -2299,16 +2286,16 @@ export type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.arm64ImportCall(osImportSlotIndex(OsImportSlot.sysconf)))
 	end 'lowerOsCpuCountDarwin'
 
-	// ⭐⭐ **`osGetPid(result)` — THE SIMPLEST OS LOWERING IN THIS FILE, AND SINCE L3 IT NEEDS NO ROUTE ARM OF
+	// ⭐⭐ **`osGetPid(result)` — THE SIMPLEST OS LOWERING IN THIS FILE, AND IT NEEDS NO ROUTE ARM OF
 	// ITS OWN.** It has no operands, no out-param and nothing that must outlive the call, so it is
-	// `lowerOsExit`'s shape with a result — and both lanes now HAVE the primitive, libSystem's `getpid`
+	// `lowerOsExit`'s shape with a result — and both lanes HAVE the primitive, libSystem's `getpid`
 	// through the GOT and AArch64's syscall 172, which is exactly the pair `emitOsPrimitiveCall` exists to
 	// choose between. Its band-mate `osExecutablePath` IS a chunk, because it must still hold the caller's
 	// buffer pointer after a call that answers in a register — the split runs along that line and not along
 	// which family an op is in.
 	//
 	// ⚠ **THE ROUTE IS STILL ASKED, JUST NOT HERE.** `emitOsPrimitiveCall` asks it, which is strictly better
-	// than the `match` this used to carry: a lowering that names BOTH routes' identity cannot be wired to the
+	// than a `match` here would be: a lowering that names BOTH routes' identity cannot be wired to the
 	// right import slot and the wrong syscall number. That matters most for this op of the three, because
 	// builder-built Std emits one ITSELF in `GtRuntime.emitGtPipeNameUniquifier`, where no callee-name gate
 	// can see it.
@@ -2365,12 +2352,8 @@ export type StdToArm64Lowering
 	// 64-bit word, so widening it would be a second opinion about a value the kernel has already settled —
 	// the same reason `mmap` and `write` are not widened three functions up.
 	//
-	// ⛔⛔ **THE SCOPE OBJECTION THIS ARM USED TO PANIC WITH IS ANSWERED BY INHERITANCE, AND THE ONE CASE
-	// INHERITANCE CANNOT REACH IS NAMED RATHER THAN CLAIMED AWAY.** It read: *"POSIX scopes a nice value to
-	// the THREAD on Linux and to the PROCESS on Darwin, so a Linux lane owes the thread-inheritance work at
-	// `StdOp.osThreadCreate` as well as a call here."* Its first answer was *"there are no other threads:
-	// `osThreadCreate` is a runtime abort here"*, and the worker-M `clone` falsified that. What still holds
-	// is the second: `clone` inherits its creator's nice value at birth, so every M started AFTER this call
+	// ⛔⛔ **POSIX SCOPES A NICE VALUE TO THE THREAD ON LINUX, AND INHERITANCE IS WHAT CARRIES IT TO THE
+	// OTHER Ms.** `clone` inherits its creator's nice value at birth, so every M started AFTER this call
 	// starts at background priority with nothing emitted for it.
 	//
 	// ⛔ **AN M THAT ALREADY EXISTED KEEPS THE DEFAULT NICE**, which is a real difference from the two lanes
@@ -2467,7 +2450,7 @@ export type StdToArm64Lowering
 	//
 	// ⚠ **IT IS THE ONE OF THE FIVE THAT STILL BRANCHES TO A LANE-PRIVATE SYMBOL**, because arm64-linux has
 	// no body for it: `monotonicClock` is reached only through `__gt_now_ns`, a SCHEDULER entry, so it lands
-	// with the green-thread floor rather than with the two clocks L3 brought over. The name changes to
+	// with the green-thread floor rather than with the two clocks beside it. The name changes to
 	// `mrt_host_monotonic_clock` on the day a second lane builds one, exactly as the three around it did.
 	function lowerOsReadClock(ticksPtrId ValueId, freqPtrId ValueId, dstRef BlockRef)
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(ticksPtrId)))
@@ -2483,7 +2466,7 @@ export type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.arm64BranchLink(HostThreadCpuName))
 	end 'lowerOsThreadCpuTicks'
 
-	// ⭐⭐ **MAC2: the executable path, and THIS IS WHERE THE OP'S FIELD ORDER MEETS THE C ONE.** The op reads
+	// ⭐⭐ **The executable path, and THIS IS WHERE THE OP'S FIELD ORDER MEETS THE C ONE.** The op reads
 	// `(result, bufLen, bufPtr)` because that is `osDirCurrentPath`'s shape and one shape is better than two
 	// at the target-neutral tier; `_NSGetExecutablePath` takes the BUFFER first and the size second, exactly
 	// as `GetModuleFileNameA` does, and `readlinkat` takes them third and fourth after a dirfd and a path.
@@ -2501,7 +2484,7 @@ export type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
 	end 'lowerOsExecutablePath'
 
-	// ⭐⭐ **MAC4/5: A HOST-SURFACE CHUNK CALL — MOVE THE OPERANDS INTO x0.. IN ORDER, THEN `bl`.** Thirteen
+	// ⭐⭐ **A HOST-SURFACE CHUNK CALL — MOVE THE OPERANDS INTO x0.. IN ORDER, THEN `bl`.** Thirteen
 	// filesystem ops take this shape and differ only in their arity, in whether there is an answer, and (for
 	// the working directory) in the ORDER the op names its operands versus the order C does. Written once,
 	// because thirteen hand-written argument sequences are thirteen chances to transpose a buffer and a
@@ -2860,7 +2843,7 @@ export type StdToArm64Lowering
 	// already reports it; libSystem reports -1 in a 32-bit `int` and keeps the reason in `*__error()`, so the
 	// Darwin route goes through a chunk that widens the answer and, for a negative one, fetches and negates the
 	// errno. The Std tier has to TELL `EAGAIN` and `EINPROGRESS` from a real failure — two of the three are the
-	// descriptor saying *"not yet"* — which is why nothing folds them together any more.
+	// descriptor saying *"not yet"* — which is why nothing folds them together.
 	function emitSocketIntResult(resultId ValueId, dstRef BlockRef)
 		match arm64OsCallKind(self.target.os) 'route'
 			importCall then self.emitDarwinSocketChunk(resultId, chunk: HostSocketIntStatusName, dstRef: dstRef)
@@ -2885,7 +2868,7 @@ export type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
 	end 'emitDarwinSocketChunk'
 
-	// ⭐⭐ **MAC6: `GetStdHandle(which)` ⇒ THE DESCRIPTOR ITSELF, WITH NO CALL AT ALL.** Win32 numbers its
+	// ⭐⭐ **`GetStdHandle(which)` ⇒ THE DESCRIPTOR ITSELF, WITH NO CALL AT ALL.** Win32 numbers its
 	// three selectors DOWNWARDS from `(DWORD)-10` while POSIX numbers its three descriptors UPWARDS from 0,
 	// so the whole map is one subtraction from the input selector: `fd = StdInputHandleSelector - which`.
 	//
@@ -2909,9 +2892,9 @@ export type StdToArm64Lowering
 	// `emitOsPrimitiveCall` exists to decide. The `int` it answers in x0 is NOT captured: `osFreePages` defines no
 	// value, because a failed unmap leaves a caller nothing to do.
 	//
-	// ⭐ **THIS ARM USED TO PANIC, AND THE VOCABULARY IS WHY.** `osFreePages` carried the BASE ALONE, and there
-	// is no `munmap` spelling that takes one — so the refusal here was forced by the op's shape rather than by
-	// anything arm64 cannot do. F1a gave the op its length; this is the lowering that was always available.
+	// ⭐ **THE OP CARRIES ITS LENGTH, AND THAT IS WHAT MAKES THIS LOWERABLE AT ALL.** There is no `munmap`
+	// spelling that takes a BASE alone, so an `osFreePages` without a length could only be refused here —
+	// by the op's shape rather than by anything arm64 cannot do.
 	function lowerOsFreePages(addrId ValueId, sizeId ValueId, dstRef BlockRef)
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(addrId)))
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(sizeId)))
@@ -3007,7 +2990,7 @@ export type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
 	end 'lowerOsWriteStream'
 
-	// Lower `atomicCas`/`atomicRmw` (F2) — ONE macro-op each, operands left VIRTUAL. Unlike every OS
+	// Lower `atomicCas`/`atomicRmw` — ONE macro-op each, operands left VIRTUAL. Unlike every OS
 	// primitive above, and unlike `lowerMemFill`'s pre-moves into fixed registers, there is nothing to
 	// marshal: the LL/SC loop reads its three (or two) operands wherever the allocator put them and keeps
 	// its own working state in the x16/x17 IP scratch pair, which is outside the allocatable pool. The
@@ -3025,22 +3008,21 @@ export type StdToArm64Lowering
 	end 'lowerAtomicRmw'
 
 	// ==========================================================================
-	// MAC3 — the green-thread floor's host lowerings
+	// The green-thread floor's host lowerings
 	// ==========================================================================
 
-	// ⭐⭐ **THIS BLOCK USED TO OPEN WITH ONE BLANKET REFUSAL FOR ELEVEN OPS, AND L4 DELETED IT.**
-	// `requireDarwinSchedulerRoute` said the scheduler's host objects "are libSystem objects … and a raw
-	// static Linux image links no libc to provide any of them". That was the whole of the gap and it is
-	// closed: `Arm64LinuxRuntime` builds a `futex`-based twin of every one, under the SAME `mrt_host_*`
-	// symbol, so nine of the eleven lowerings below are now unconditional — the isel branches to a name and
-	// exactly one lane's body is laid out beside it (`Arm64PosixRuntime`'s header).
+	// ⭐⭐ **NINE OF THE ELEVEN LOWERINGS BELOW ARE UNCONDITIONAL, BECAUSE BOTH LANES HAVE A BODY.** A raw
+	// static Linux image links no libc, so the scheduler's host objects cannot be the libSystem objects
+	// Darwin's are; `Arm64LinuxRuntime` builds a `futex`-based twin of every one under the SAME
+	// `mrt_host_*` symbol, and the isel branches to a name with exactly one lane's body laid out beside it
+	// (`Arm64PosixRuntime`'s header).
 	//
 	// ⚠ **TWO ARE NOT, AND EACH SAYS WHY AT ITS OWN SITE**, because their difference is structural rather
 	// than a missing body: `osLockEnter`/`osLockLeave` are a bare import call on macOS and a chunk here, and
 	// `tlsSetValue` is one `pthread_setspecific` there and a guarded store through `TPIDR_EL0` here. A third,
 	// `osThreadCreate`, refuses on this lane for a reason that is not "unimplemented" at all — see its arm.
 	//
-	// ⚠ **THE STANDING HAZARD THE OLD DOOR EXISTED FOR IS UNCHANGED**: an unpatched import relocation SHIPS
+	// ⚠ **THE STANDING HAZARD**: an unpatched import relocation SHIPS
 	// SILENTLY on ELF (`ElfWriter` has no import-relocation consumer at all), so a lowering that emits
 	// `arm64ImportCall` on a Linux lane jumps through the first word of its own `.text` page rather than
 	// failing to link. That is why every arm below that still emits one asks the route first.
@@ -3144,10 +3126,8 @@ export type StdToArm64Lowering
 	// pair of registers for the same reason. On Windows the identical op needs the `DWORD(*)(LPVOID)` shape
 	// and gets it the same way.
 	//
-	// ⛔ **THIS WAS A ROUTE WITH A RUNTIME ABORT ON THE LINUX ARM, AND THE ABORT DID ITS JOB.** L4 refused to
-	// write a `clone` nothing could reach — `SchedRuntime.emitSchedWakeOrSpawn`'s worker M had no producer.
-	// `spawn` plus a default processor count that is the machine's gave it one, and the panic named the gap by
-	// name on the first such program built for this lane rather than leaving it to a hang or a wrong answer.
+	// ⛔ **THE LINUX ARM IS REACHABLE, SO IT LOWERS RATHER THAN ABORTS.** `spawn` plus a default processor
+	// count that is the machine's gives `SchedRuntime.emitSchedWakeOrSpawn`'s worker M a producer.
 	function lowerOsThreadCreate(resultId ValueId, entryPtrId ValueId, argId ValueId, dstRef BlockRef)
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(entryPtrId)))
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(argId)))
@@ -3251,9 +3231,8 @@ export type StdToArm64Lowering
 	// A RUNTIME abort naming an op that is statically reachable and dynamically unreachable — `osCancelIo`'s
 	// shape on BOTH POSIX lanes, and `osThreadCreate`'s on the Linux one.
 	//
-	// ⚠ **IT ASKS NO ROUTE, AND IT USED TO ASK ONE WITH A HARD-CODED OP NAME INSIDE IT.** The old
-	// `lowerDarwinRuntimeAbort` named `"osCancelIo"` inside itself, so a second caller would have been refused
-	// under the FIRST one's name. A route is the caller's question; this is only the abort.
+	// ⚠ **IT ASKS NO ROUTE AND NAMES NO OP.** A message baked in here would refuse a second caller under
+	// the FIRST one's name. A route is the caller's question; this is only the abort.
 	function lowerRuntimeAbort(dstRef BlockRef, message ByteArray)
 		self.lowerPanic(self.rdata.stringBlob(message), dstRef: dstRef)
 	end 'lowerRuntimeAbort'
@@ -3281,8 +3260,8 @@ export type StdToArm64Lowering
 	// ⚠ **macOS REACHES A LIBRARY CALL AND LINUX A CHUNK, WHICH IS WHY THIS PAIR KEEPS A ROUTE SPLIT.** There
 	// the region is a `pthread_mutex_t` and the op is one `bl` through the GOT; here it is three words and
 	// a `futex` protocol with a loop in it (`Arm64LinuxRuntime.buildArm64LinuxLockEnterChunk`), and a loop
-	// needs a body. Both are RECURSIVE by the owning thread, which is `InitializeCriticalSection`'s contract
-	// and was measured as a hang when it was not.
+	// needs a body. Both are RECURSIVE by the owning thread, which is `InitializeCriticalSection`'s contract;
+	// a non-recursive one MEASURED as a hang.
 	function lowerOsLockImport(lockPtrId ValueId, importSlot OsImportSlot, chunk ByteArray, dstRef BlockRef)
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(lockPtrId)))
 
@@ -3292,7 +3271,7 @@ export type StdToArm64Lowering
 		end 'route'
 	end 'lowerOsLockImport'
 
-	// Lower `currentThreadToken(result)` (F2) — the one member of this family with a genuine OS split on
+	// Lower `currentThreadToken(result)` — the one member of this family with a genuine OS split on
 	// arm64, so it is routed through the same `arm64OsCallKind` door `mmapAnonPrivateFlags` and
 	// `madviseDecommitAdvice` already use rather than through a second `match os`.
 	//

@@ -153,10 +153,9 @@ let TableMarkerPrefix = "<!-- scale-history:"
 //
 // EACH COLUMN'S HEADING, ITS INDEX AND THE COUNT ARE ONE FACT, so they are written to derive from each
 // other rather than to agree by hand. The count is the last index plus one, and `assertLeadingHeadings`
-// CHECKS the document's own header row against the headings at those indices — this went from two to
-// three when `minted at` landed, and a reader that had taken the new width but kept the old indices
-// would have read the note as a path and rung 0's count as the note, silently, off a log whose header
-// says otherwise.
+// CHECKS the document's own header row against the headings at those indices: a reader that takes a new
+// width but keeps the old indices reads the note as a path and rung 0's count as the note, silently,
+// off a log whose header says otherwise.
 let DateColumnHeading = "date"
 let MintedAtColumnHeading = "minted at"
 let NoteColumnHeading = "change"
@@ -285,8 +284,7 @@ end 'byteComparabilityOfPaths'
 //
 // IT CARRIES THE TWO THINGS EVERY REFUSAL ABOUT IT HAS TO NAME — the document it was read out of and
 // the marker that closes it — rather than having each of them handed back in beside it at every call.
-// `lastRowOf` used to take the marker as a second argument that could only ever be the one the table
-// was read with; a table that knows which table it is cannot be described as a different one.
+// A table that knows which table it is cannot be described as a different one.
 type LogTable
 	export let source as String
 	export let marker as String
@@ -306,11 +304,11 @@ end 'LogTableRow'
 // Read the trend: the last row of the two memory tables, which are written together and must
 // therefore describe the same run.
 //
-// NOTHING IS READ BACK BUT NUMBERS AND PROVENANCE. The exponents table is closed, so there is no longer
-// a cell to parse into a fitted value, no `n/a` token to round-trip, and no table header whose columns
-// have to be checked against the phases this compiler happens to have. Every one of those was a way for
-// a document to be written in a shape it could not be read in — the class of bug that produced a
-// write-only log — and they are gone because the thing they carried is gone. The `minted at` cell is
+// NOTHING IS READ BACK BUT NUMBERS AND PROVENANCE. The exponents table is closed, so there is no
+// cell to parse into a fitted value, no `n/a` token to round-trip, and no table header whose columns
+// have to be checked against the phases this compiler happens to have. Each of those is a way for
+// a document to be written in a shape it cannot be read in — the class of bug that produces a
+// write-only log. The `minted at` cell is
 // read back because it decides whether one of the two columns may be differenced at all, which is a
 // question about THIS document rather than about a curve.
 export function loadScaleTrend() returns LoggedMemory throws ScaleError
@@ -336,12 +334,12 @@ end 'loadScaleTrend'
 // the copy under test and the original unwatched. The log has exactly one parser; what the caller
 // supplies is the text and its NAME.
 //
-// `source` is that name, and it is a parameter rather than the constant every message used to
-// interpolate: a refusal raised over a fixture must not tell its reader that `docs/optimization-log.md`
-// is broken when that file is fine.
+// `source` is that name, and it is a parameter rather than a constant every message interpolates: a
+// refusal raised over a fixture must not tell its reader that `docs/optimization-log.md` is broken when
+// that file is fine.
 export function parseScaleTrend(text String, source String) returns LoggedMemory throws ScaleError
-	// SPLIT ONCE. The three markers are three anchors in ONE document, and each table used to re-split
-	// the whole file to find its own.
+	// SPLIT ONCE. The three markers are three anchors in ONE document, so a per-table split would walk
+	// the whole file three times to find them.
 	let lines = text.split("\n")
 
 	let allocations = try readTable(lines, marker: AllocationsTableMarker, source: source)
@@ -562,10 +560,10 @@ end 'memoryRowFrom'
 
 // One table's last row against the allocations table's, on the three leading cells.
 //
-// ⭐ **IT NAMES THE CELL THAT DIFFERS, AND SHOWS BOTH OF THAT CELL'S VALUES.** This message used to
-// interpolate the date and the minting path of both rows — and never the NOTE, which is the third cell
-// it COMPARES and by far the likeliest of the three to have been hand-edited. So the one failure it was
-// most often raised by printed two byte-identical descriptors and told the reader they described
+// ⭐ **IT NAMES THE CELL THAT DIFFERS, AND SHOWS BOTH OF THAT CELL'S VALUES.** A message that
+// interpolated the date and the minting path of both rows — and never the NOTE, which is the third cell
+// it COMPARES and by far the likeliest of the three to be hand-edited — prints two byte-identical
+// descriptors for the failure it is most often raised by, and tells the reader they described
 // different runs. (Reproduced: appending ` (hand-edited tail)` to the bytes table's note produced two
 // parentheticals the reader could not tell apart, and no sight of the text that had actually moved.)
 //
@@ -787,17 +785,17 @@ end 'parseGroupedCount'
 // for a run that changed nothing — and this reading decides the sentence that tells the operator exactly
 // that. When bytes are withheld the question is asked of the allocation column alone.
 //
-// ⚠ AND THAT IS THE BEST ANSWER AVAILABLE, NOT A CLEAN ONE — this comment said "which is path-independent
-// and can answer it" until that was measured and refused. Across two minting paths the allocation column
-// carries a CONSTANT offset, so it too can report a compiler that did not move. It is still the column to
+// ⚠ AND THAT IS THE BEST ANSWER AVAILABLE, NOT A CLEAN ONE — the allocation column is NOT
+// path-independent, which was measured: across two minting paths it carries a CONSTANT offset, so it
+// too can report a compiler that did not move. It is still the column to
 // ask: it is the only one left, and what it gets wrong is bounded — a flat per-rung delta may be the path,
 // a delta that GROWS per rung cannot be. The report does not resolve that for the reader and must not
 // pretend to; `printMintedElsewhere` prints the bound immediately above the sentence this decides.
 //
-// ⚠ AND IT IS ASKED IN EXACTLY ONE PLACE. The delta report used to accumulate its own `moved` flag from
-// its own per-cell comparison while this function answered the same question for the recording sentence,
-// so the withheld rule was written twice, in two files, and nothing made the two agree — they already
-// disagreed about a run whose ladder is shorter than the log's. One run, one answer.
+// ⚠ AND IT IS ASKED IN EXACTLY ONE PLACE. A delta report accumulating its own `moved` flag from its own
+// per-cell comparison, while this function answers the same question for the recording sentence, writes
+// the withheld rule twice in two files with nothing to make them agree — and they disagree about a run
+// whose ladder is shorter than the log's. One run, one answer.
 export function anyMemoryMoved(trend LoggedMemory, results RungResultArray, bytes ByteDelta) returns bool
 	return match trend 'm'
 		absent gives true

@@ -1,5 +1,5 @@
 // Arm64DarwinRuntime — the arm64-macOS HOST SURFACE, hand-assembled into `.text`: the libSystem
-// sequences that stand behind the `os*` Std ops whose only implementation used to be x64-windows's.
+// sequences that stand behind the `os*` Std ops on this lane.
 //
 // ⭐⭐ **WHY CHUNKS AND NOT INLINE ISEL CODE — THE REASON IS A REGISTER LIFETIME, AND IT IS STRUCTURAL.**
 // Several of these ops are OUT-PARAM shaped: `osReadWallClock(ftPtr)` means *"write the host's calendar
@@ -289,7 +289,7 @@ end 'buildArm64DarwinSleepChunk'
 // ⛔ **`realpath(path, buf)` INTO THE CALLER'S BUFFER IS A BUFFER OVERRUN AND IS NOT AVAILABLE.** That form
 // writes up to POSIX `PATH_MAX` (1024) with no length to bound it, while the Std loop's first buffer is 260
 // bytes. `RealpathAllocatesResult` above carries the arithmetic; the consequence here is `malloc`'d memory
-// this chunk must release, which is why `free` is one of the six imports MAC2 added.
+// this chunk must release, which is why `free` is one of this band's six imports.
 //
 // ⚠ **`free(NULL)` IS A NO-OP, AND EVERY EXIT USES THAT.** `SlotFreeMe` is zeroed before the first call and
 // holds `realpath`'s answer afterwards, so the one closing sequence — free, then load the answer — serves
@@ -353,8 +353,7 @@ function buildArm64DarwinExePathChunk() returns FunctionCodeChunk
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotSrc)
 
 	// len = strlen(src) — a C string carries no length and `*bufsize` did not answer one. The walk is
-	// `arm64EmitCStringLength`, shared with `mrt_host_env_read` and MAC4's two users since it was
-	// written out twice here (MAC4 would have made it four).
+	// `arm64EmitCStringLength`, shared with `mrt_host_env_read` and the filesystem band's two users.
 	asm.placeLabel(measure)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotSrc)
 	arm64EmitCStringLength(asm, src: Arm64Register.x0, dest: Arm64Register.x2, cursor: Arm64Register.x1, scratch: Arm64Register.x2)
@@ -389,7 +388,7 @@ function buildArm64DarwinExePathChunk() returns FunctionCodeChunk
 end 'buildArm64DarwinExePathChunk'
 
 // ==========================================================================
-// MAC3 — the green-thread floor's HOST OBJECTS: `DarwinWaitObject`
+// The green-thread floor's HOST OBJECTS: `DarwinWaitObject`
 // ==========================================================================
 
 // ⭐⭐⭐ **ONE HEAP OBJECT SERVES BOTH THINGS WIN32 CALLS A "HANDLE" IN THIS SCHEDULER, AND IT HAS TO,
@@ -432,8 +431,7 @@ let DarwinWaitObjectBytes = DarwinWaitOffCond + DarwinPthreadCondBytes
 // mistaken for any of them — the object is fully initialised by `mrt_host_wait_new` before any wait sees
 // it, and this is the belt that says so.
 //
-// ⭐⭐ **`process` JOINED THEM AT MAC8 AND IS `Arm64PosixRuntime.PosixWaitKindProcess` SINCE L5, BECAUSE
-// BOTH LANES MINT ONE. IT IS THE SAME ARGUMENT ONE FAMILY FURTHER ON.** A child process
+// ⭐⭐ **`process` IS `Arm64PosixRuntime.PosixWaitKindProcess`, BECAUSE BOTH LANES MINT ONE. IT IS THE SAME ARGUMENT ONE FAMILY FURTHER ON.** A child process
 // handle reaches `StdOp.osWaitHandle` and `StdOp.osCloseHandle` exactly as a wake event and a worker thread
 // do, and POSIX answers it with a THIRD primitive again — `waitpid` — that has nothing in common with a
 // condvar or a join. So it becomes a third kind of the one object the wait dispatches on rather than a
@@ -444,8 +442,8 @@ let DarwinWaitObjectBytes = DarwinWaitOffCond + DarwinPthreadCondBytes
 // a PROCESS that has exited is signalled FOR EVER, so its arm never clears it — which is Win32's own
 // distinction between the two handle types, not a liberty taken here.
 //
-// ⭐ **`thread` LEFT THIS FILE THE DAY THE OTHER LANE COULD MINT ONE**, exactly as `process` did at L5: it is
-// `Arm64PosixRuntime.PosixWaitKindThread` now, and that constant carries the move.
+// ⭐ **`thread` LIVES IN `Arm64PosixRuntime` TOO**, exactly as `process` does and for the same reason:
+// it is `Arm64PosixRuntime.PosixWaitKindThread`, and that constant carries the layout.
 
 // Darwin's opaque sizes, MEASURED on this host and stated here because the layout above is derived from
 // them — a reader checking the offsets should not have to rediscover why the mutex is 0x40 wide.
@@ -527,7 +525,7 @@ function buildArm64DarwinWaitNewChunk(globalData GlobalDataTable) returns Functi
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: PosixWaitOffSignal)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: PosixWaitOffThread)
 
-	// MAC8's three: a process object's pid, the status it will report, and whether a kill already chose that
+	// The child-process three: a process object's pid, the status it will report, and whether a kill chose that
 	// status. Written for EVERY kind, because `malloc` does not zero and a garbage `childKilled` would make an
 	// ordinary child report whatever the heap held.
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: PosixWaitOffChildPid)
@@ -543,7 +541,7 @@ function buildArm64DarwinWaitNewChunk(globalData GlobalDataTable) returns Functi
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DarwinDefaultAttributes)
 	arm64DarwinCallImport(asm, slot: OsImportSlot.pthreadCondInit)
 
-	// The HANDLE is the pointer plus its kind tag (MAC8) — minted here, at the one place an object handle
+	// The HANDLE is the pointer plus its kind tag — minted here, at the one place an object handle
 	// comes into existence, so nothing downstream has to remember to tag one.
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
 	arm64PosixTagObject(asm, reg: Arm64Register.x0, scratch: Arm64Register.x1)
@@ -566,7 +564,7 @@ function buildArm64DarwinEventSetChunk() returns FunctionCodeChunk
 	let SlotObj = 0 as StackSize
 	var asm = Arm64RuntimeAsm.beginFunction(1)
 
-	// The slot holds the UNTAGGED object, because every use below is a field address (MAC8's handle tag).
+	// The slot holds the UNTAGGED object, because every use below is a field address, not the handle tag.
 	arm64PosixUntagHandle(asm, reg: Arm64Register.x0)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
 	arm64DarwinLockObject(asm, objSlot: SlotObj, importSlot: OsImportSlot.pthreadMutexLock)
@@ -662,7 +660,7 @@ function buildArm64DarwinWaitOneChunk(globalData GlobalDataTable) returns Functi
 	let unlock = asm.newLabel()
 	let finish = asm.newLabel()
 
-	// ⛔ **A DESCRIPTOR IS NOT WAITABLE, AND SAYING SO LOUDLY IS THE POINT (MAC8).** Every reachable
+	// ⛔ **A DESCRIPTOR IS NOT WAITABLE, AND SAYING SO LOUDLY IS THE POINT.** Every reachable
 	// `osWaitHandle` names an object this file minted — a P's wake event, a worker M, or a child process — so
 	// a descriptor or a NULL here means the Std tier reached this op with something it never should have.
 	// Dereferencing it for a kind field would be a wild load; answering `WAIT_TIMEOUT` would be a caller
@@ -773,10 +771,9 @@ end 'arm64DarwinCondArgs'
 // `CloseHandle` — the ONE op that closes everything Win32 calls a handle, dispatching on the kind the value
 // carries (see `Arm64PosixRuntime.PosixHandleKindShift` for why it carries one at all).
 //
-// ⚠ **THIS HEADER USED TO SAY A WAIT OBJECT WAS "THE ONLY HANDLE KIND THIS LANE CAN MINT", AND MAC8 IS
-// EXACTLY THE RUNG THAT FALSIFIED IT.** Its argument was that `osProcessSpawn` did not lower here, so the
-// netpoll registered no child at all. It lowers now, and with it come three pipe ends and any file a
-// redirected stream opened — so the close has three arms rather than one.
+// ⚠ **A WAIT OBJECT IS NOT THE ONLY HANDLE KIND THIS LANE MINTS.** `osProcessSpawn` lowers here, and
+// with it come three pipe ends and any file a redirected stream opened — so the close has three arms
+// rather than one.
 //
 // ⭐ **A ZERO DESCRIPTOR IS A NO-OP, AND THAT IS LOAD-BEARING RATHER THAN DEFENSIVE.**
 // `SubprocessRuntime.emitSubpCloseSlotHandles` closes every slot field unconditionally and says so in its
@@ -1010,7 +1007,7 @@ function buildArm64DarwinHandleFileTypeChunk() returns FunctionCodeChunk
 end 'buildArm64DarwinHandleFileTypeChunk'
 
 // ==========================================================================
-// MAC4/5/6/7 — the filesystem, standard-input and argv surface
+// The filesystem, standard-input and argv surface
 // ==========================================================================
 
 // ⭐⭐ **Darwin's `struct stat`, MEASURED ON THIS HOST WITH A C PROBE.** Every one of these is a silent
@@ -1073,7 +1070,7 @@ let DarwinSearchBytes = 16
 let DarwinSearchAllocFailedMessage = b"panic: out of memory opening a directory search (malloc failed)\n"
 
 // ==========================================================================
-// Shared emit fragments (MAC4/5/6/7)
+// Shared emit fragments
 // ==========================================================================
 
 // A libSystem `0`/`-1` STATUS IN x0 BECOMING THE Win32 BOOL THE Std TIER TESTS — the shared conversion
@@ -1135,7 +1132,7 @@ function buildArm64DarwinTransferChunk(name ByteArray, importSlot OsImportSlot) 
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x3, slot: SlotOutPtr)
 
-	// MAC8: a subprocess PIPE END reaches this chunk as a tagged handle (`StdOp.osWriteFile` on the child's
+	// A subprocess PIPE END reaches this chunk as a tagged handle (`StdOp.osWriteFile` on the child's
 	// stdin, `StdOp.osReadOverlapped` on either output pipe). Masking the kind bits off is a no-op for the
 	// untagged descriptors `osFileOpenRead`/`osStdHandle` answer, so one mask serves every producer.
 	arm64PosixUntagHandle(asm, reg: Arm64Register.x0)
@@ -1771,10 +1768,10 @@ function buildArm64DarwinDirFindCloseChunk() returns FunctionCodeChunk
 end 'buildArm64DarwinDirFindCloseChunk'
 
 // ==========================================================================
-// MAC8 — the CHILD PROCESS substrate: the SPAWN, and nothing else
+// The CHILD PROCESS substrate: the SPAWN, and nothing else
 // ==========================================================================
 
-// ⭐⭐ **EVERY OTHER MEMBER OF THIS BAND MOVED TO `Arm64PosixRuntime` WHEN arm64-LINUX GREW ONE (L5).** The
+// ⭐⭐ **EVERY OTHER MEMBER OF THIS BAND MOVED TO `Arm64PosixRuntime` WHEN arm64-LINUX GREW ONE.** The
 // pipe, its peek, the deadline tick, the reap, the bounded await, the exit-code read and the kill are ONE
 // body each now — `waitpid` and `wait4` decode the same status word, `poll` and `ppoll` fill the same
 // `struct pollfd`, and the loops among them make no OS call at all. Each takes this lane's libSystem door
@@ -2124,7 +2121,7 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 		chunks.push(buildArm64DarwinThreadCpuChunk())
 	end 'threadCpu'
 
-	// MAC2. The bit is `installProcessRuntime`'s own — `usesExecutablePath` builds `__proc_exe_path`, whose
+	// The bit is `installProcessRuntime`'s own — `usesExecutablePath` builds `__proc_exe_path`, whose
 	// `osExecutablePath` op is the ONLY producer of a `bl` to this symbol — so the chunk and its caller are
 	// still one bit across two tiers. ⚠ The band's other two ops need NO chunk: `osGetPid` and
 	// `osEnterBackgroundPriority` have no out-param and nothing that must outlive a call, so the isel lowers
@@ -2171,11 +2168,10 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 		chunks.push(buildArm64DarwinNetpollUserEventChunk(HostNetpollRaiseBreakName, flags: 0, fflags: DarwinNoteTrigger, queue: Arm64Register.x1, answersQueue: false))
 		chunks.push(buildArm64DarwinSleepChunk(HostNetpollSleepName, unit: PosixTimeUnit.microseconds))
 
-		// MAC3's host objects, on the same bit and for the same reason: `installSchedRuntime` builds the P/M
+		// The green-thread floor's host objects, on the same bit and for the same reason: `installSchedRuntime` builds the P/M
 		// tier whenever `installGtRuntime` runs, and every one of these chunks is the target-side body of an op
-		// that tier emits UNCONDITIONALLY — the TLS slot, the run-queue lock, each MACHINE's own park event
-		// (it was each P's wake event until W213-C2 moved the idle state onto the M), the worker spawn and
-		// join, and the `MAXON_MAX_PROCS` read. One bit, two tiers, so a `bl` to an absent symbol is not
+		// that tier emits UNCONDITIONALLY — the TLS slot, the run-queue lock, each MACHINE's own park event,
+		// the worker spawn and join, and the `MAXON_MAX_PROCS` read. One bit, two tiers, so a `bl` to an absent symbol is not
 		// merely unlikely but unreachable.
 		chunks.push(buildArm64DarwinWaitNewChunk(globalData))
 		chunks.push(buildArm64DarwinEventSetChunk())
@@ -2183,7 +2179,7 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 		chunks.push(buildArm64DarwinWaitOneChunk(globalData))
 		chunks.push(buildArm64DarwinTlsAllocChunk(globalData))
 
-		// ⭐⭐ **MAC8's CHILD-PROCESS CORE RIDES `usesGt`, NOT THE SUBPROCESS BIT, BECAUSE `installGtRuntime`
+		// ⭐⭐ **THE CHILD-PROCESS CORE RIDES `usesGt`, NOT THE SUBPROCESS BIT, BECAUSE `installGtRuntime`
 		// BUILDS `__gt_process_run` UNCONDITIONALLY.** Every green-thread program statically contains a spawn,
 		// a bounded await and an exit-code read — a program that never runs a child simply never reaches them —
 		// so a narrower gate here is a `bl` to a symbol nothing laid out, which is a link failure rather than a
@@ -2218,7 +2214,7 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 		chunks.push(buildArm64PosixShmUnmapChunk(PosixHostCall.importCall(OsImportSlot.munmap)))
 	end 'namedSection'
 
-	// ⭐⭐ **MAC4/5/6/7 — THE FILESYSTEM, STANDARD-INPUT AND argv SURFACE.** Four `RuntimeUsage` bits, and
+	// ⭐⭐ **THE FILESYSTEM, STANDARD-INPUT AND argv SURFACE.** Four `RuntimeUsage` bits, and
 	// the gates below are DERIVED from which Std bodies emit which ops rather than from which family a
 	// chunk's name reads like — which is why two of them are unions.
 	//
@@ -2229,7 +2225,7 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 	// `__md_open_search` opens one on a glob.
 	let usesFilesystem = usage.usesManagedFile or usage.usesManagedDirectory
 
-	// ⚠ **`GetLastError` HAS A PRODUCER OUTSIDE THE FILESYSTEM AS OF MAC8**, so it is gated one bit wider
+	// ⚠ **`GetLastError` HAS A PRODUCER OUTSIDE THE FILESYSTEM**, so it is gated one bit wider
 	// than the cluster below it: `__gt_subp_yield_read` classifies a failed read with it and every spawn
 	// failure publishes through it. Splitting it out of the cluster is what keeps the cluster's own
 	// "these call each other, so gate them as one" argument intact.
@@ -2248,7 +2244,7 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 		chunks.push(buildArm64DarwinDirFindCloseChunk())
 	end 'filesystem'
 
-	// ⚠ MAC8: `__gt_subp_write_all` and the collect loop's stdin push emit `StdOp.osWriteFile` on the child's
+	// ⚠ `__gt_subp_write_all` and the collect loop's stdin push emit `StdOp.osWriteFile` on the child's
 	// stdin pipe, so the write half rides the same union its read twin does.
 	if usage.usesManagedFile or usage.usesChildPipes 'managedFileWrite'
 		chunks.push(buildArm64DarwinTransferChunk(HostWriteFileName, importSlot: OsImportSlot.write))
@@ -2264,7 +2260,7 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 	// `__con_read_stdin` emit the identical op — standard input is a descriptor like any other on this
 	// platform — so gating it on `usesManagedFile` alone would leave a stdin-only program branching to a
 	// symbol nothing emitted, and pushing it under both bits would lay the same symbol out twice.
-	// ⚠ MAC8 adds a THIRD producer of the same op shape: `StdOp.osReadOverlapped` lowers to this very chunk
+	// ⚠ A THIRD producer emits the same op shape: `StdOp.osReadOverlapped` lowers to this very chunk
 	// on a lane where a read completes in its caller, so a streaming-subprocess program that touches no file
 	// and no stdin still needs it laid out.
 	if usage.usesManagedFile or usage.usesConsoleStdin or usage.usesChildPipes 'transferIn'
@@ -2285,13 +2281,12 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 	end 'managedSocket'
 
 	// The mode→attribute-mask decoder is called by BOTH `mrt_darwin_fill_find_data` (the cluster above) and
-	// `mrt_darwin_file_attributes` (below), so its gate is the union of theirs — which is what lifted it out
-	// of the cluster it used to sit inside.
+	// `mrt_darwin_file_attributes` (below), so its gate is the union of theirs rather than either cluster's.
 	if usesFilesystem or usage.usesChildPipes 'attrsFromMode'
 		chunks.push(buildArm64PosixAttrsFromModeChunk(darwinStatLayout()))
 	end 'attrsFromMode'
 
-	// ⚠ **`GetFileAttributesA` HAS A SECOND PRODUCER AS OF MAC8, AND IT IS NOT A DIRECTORY OP.**
+	// ⚠ **`GetFileAttributesA` HAS A SECOND PRODUCER, AND IT IS NOT A DIRECTORY OP.**
 	// `__gt_subp_resolve_path` walks `PATH` testing each candidate with `StdOp.osFileAttributes`, so the
 	// executable lookup needs this chunk with no `Directory` call anywhere in the program. It is split out of
 	// the directory cluster rather than the cluster widened, because the other two members really are
@@ -2300,7 +2295,7 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 		chunks.push(buildArm64DarwinFileAttributesChunk())
 	end 'fileAttributes'
 
-	// ⚠ **MAC7 CONTRIBUTES NO CHUNK AT ALL, WHICH IS THE POINT OF ITS DESIGN.** On this platform argv is
+	// ⚠ **THE argv SURFACE CONTRIBUTES NO CHUNK AT ALL, WHICH IS THE POINT OF ITS DESIGN.** On this platform argv is
 	// already a vector, so `__cl_count` is a `.data` load and `__cl_arg` is a bounds check and an indexed
 	// load — builder-built Std that every backend lowers. What is target-specific is only WHO FILLS the two
 	// `.data` words, and that is the entry stub (`Arm64Runtime.buildArm64EntryStubChunk`).

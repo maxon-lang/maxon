@@ -24,20 +24,16 @@
 // call (`Parser.CorpusFindGraphemeEnd`) and `String.count()` is a corpus body calling a corpus body, so
 // every edge is one the reachability walk follows for itself.
 //
-// ⚠⚠ **IT DID NEED ONE MECHANISM AND NO LONGER DOES, WHICH IS THE STATE TO KNOW BEFORE ADDING A BODY HERE.**
-// The Std bodies that walked clusters — the trim, the `StringIndex` walks, `__cs_contains` — named a corpus
-// callee from inside a graph no Maxon module contains, so their edges did not exist when reachability was
-// computed and `StdlibSource.markCorpusCalleesOfSynthesizedRuntime` declared them. Every one of those bodies
-// has since retired (W49 waves 3–6, then W129) and that seed is DELETED. ⇒ **No body in this file names a
-// corpus function**, and one that did would need the seed rebuilt — see the paragraph `StdlibSource`
-// keeps where it stood, which records the two things it paid for.
+// ⚠⚠ **NO BODY IN THIS FILE NAMES A CORPUS FUNCTION, WHICH IS THE STATE TO KNOW BEFORE ADDING ONE.** A Std
+// body naming a corpus callee does it from inside a graph no Maxon module contains, so the edge does not
+// exist when reachability is computed and it has to be declared —
+// `StdlibSource.markCorpusCalleesOfSynthesizedRuntime` is the seed that would have to be rebuilt; see the
+// paragraph `StdlibSource` keeps where it stood, which records the two things it paid for.
 //
-// ⚠ **THE TWO DIVERGENCES THE PORT DOCUMENTED ARE NOT LOST — ONE WAS NEVER REAL AND THE OTHER MOVED.**
-// The CRLF divergence was against the reference's `computeGraphemeLen` shortcut, which the port declined
-// to copy; the corpus's own `countGraphemes` → `findGraphemeEnd` honours GB3 and answers **1** for
-// a CR followed by an LF, which is the answer the compiler already gave and
-// `grapheme-clusters/grapheme-boundary-crlf` still
-// pins. The Extend-block gap is the corpus's own and is now simply the corpus's to own.
+// ⚠ **NEITHER OF THE PORT'S TWO DOCUMENTED DIVERGENCES IS THIS FILE'S.** The CRLF one is against the
+// reference's `computeGraphemeLen` shortcut, which the port declines to copy: the corpus's own
+// `countGraphemes` → `findGraphemeEnd` honours GB3 and answers **1** for a CR followed by an LF, which is
+// what `grapheme-clusters/grapheme-boundary-crlf` pins. The Extend-block gap is the corpus's to own.
 //
 // ⚠ **AND ONE DIVERGENCE WAS REAL, UNDOCUMENTED, AND THE PORT WAS THE CORRECT SIDE.** A truncated UTF-8
 // sequence made the corpus `panic` where the port decoded the lead byte and advanced one. Converging
@@ -139,14 +135,12 @@ let Utf8FourByteLength = 4 as ParsedInt
 //     byte, or is one byte that is not ASCII (`stdlib/Character.maxon:154-166`). It BORROWS its record.
 //   * `__str_to_bytes(charRec, arr)` — fill a caller-created `Array with Byte` with the record's bytes,
 //     i.e. `Character.bytes()`. The array is created by the PARSER through `emitArrayCreateOp` (the one
-//     array-creation door); this only pushes. It is the LAST such entry point — `__str_split` was the
-//     other, and retired onto the corpus at W49 wave 5.
+//     array-creation door); this only pushes. It is the ONLY such entry point.
 //
-// ⚠ **`__str_to_codepoints` AND `__str_to_utf16` STOOD BESIDE IT AND WENT AT W49 WAVE 6**, with
-// `String.codepoints()`/`String.utf16()`, onto the corpus's LAZY `CodepointView`/`UTF16View`
-// (`stdlib/helpers/string/views.maxon`). `__str_to_bytes` outlived them because its `String` half retired
-// too and its `Character` half did not — see `Parser.parseByteView` for why that receiver is a different
-// trade rather than an oversight.
+// ⚠ **A `String`'s codepoint and UTF-16 views are the corpus's LAZY `CodepointView`/`UTF16View`**
+// (`stdlib/helpers/string/views.maxon`), and so is its byte view; only the `Character` receiver fills an
+// array here — see `Parser.parseByteView` for why that receiver is a different trade rather than an
+// oversight.
 export let CharAtName = b"__char_at"
 export let CharFromCodepointName = b"__char_from_cp"
 export let CharCmpName = b"__char_cmp"
@@ -486,19 +480,13 @@ end 'buildCharAscii'
 // and no cursor protocol to build one on, which is the same reason `for x in <array>` is an index counter.
 // Materializing into the one collection that does exist keeps `.bytes().count()` and `for b in x.bytes()`
 // working through machinery already present, at the cost of one allocation and a copy — O(n) on a String.
-// ⚠⚠ **THE COUNTED BYTE WALK WAS `emitStringWalkSkeleton`, SHARED BY THREE BUILDERS, AND IT IS BACK INLINE
-// (W49 wave 6).** It was extracted at the P1.8 Slice E review because `__str_to_bytes`,
-// `__str_to_codepoints` and `__str_to_utf16` had written it out three times byte for byte, and the failure
-// mode was a WRONG ANSWER rather than a compile error: nothing made the three agree that the bound test is
-// `>=` against the BYTE length, so a `>` in one copy would have run one iteration past the end of that view
-// alone, silently. Wave 6 retired `String.codepoints()`/`String.utf16()` onto the corpus's lazy
-// `CodepointView`/`UTF16View`, which took both decoding builders with them. **A shared description with one
-// subject is not a shared description — it is a hop**, and the invariant it protected cannot be broken by an
-// edit to a copy that no longer exists. `StringWalkCursor` went with it: with the decoders gone nothing read
-// its `length` at all, so the struct was carrying one live field to one caller.
+// ⚠⚠ **THE COUNTED BYTE WALK IS INLINE HERE, BECAUSE THIS IS ITS ONLY SUBJECT.** **A shared description
+// with one subject is not a shared description — it is a hop**, and the invariant such a helper protects —
+// that the bound test is `>=` against the BYTE length, where a `>` in one copy runs one iteration past the
+// end of that view alone, silently — cannot be broken by an edit to a copy that does not exist.
 //
-// ⇒ The day a second counted byte walk is synthesized, extract it again — and note that the extraction was
-// worth its keep while it had three subjects (sabotage reds 27).
+// ⇒ The day a second counted byte walk is synthesized, extract it again: over three subjects the shared
+// skeleton measured 27 sabotage reds and was worth its keep.
 function buildStrToBytes(module StdModule)
 	var func = IrFunction.createFromStd(StrToBytesName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)

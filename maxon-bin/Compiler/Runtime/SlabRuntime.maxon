@@ -1,24 +1,23 @@
 // Runtime/SlabRuntime.maxon — ⭐⭐ **THE OBJECT LAYER: SIZE CLASSES, SPANS, AND THE HYBRID FREE LIST.**
 // `SlabArena.maxon` beneath this file answers *"where does an 8 KiB chunk come from?"*; this file answers
-// *"which slot of which span serves a 37-byte request, and where does it go when it dies?"*. Together they
-// replace the bump allocator `MmRuntime.buildSlabAlloc` used to be — a cursor that never reclaimed a byte.
+// *"which slot of which span serves a 37-byte request, and where does it go when it dies?"*.
 //
-// ⭐⭐ **S5 TOOK THE THREE ITEMS THIS HEADER USED TO LIST AS "NOT TAKEN" — the global lock, the per-P
-// remote-free MPSC queues and the `owning_p` gate — BECAUSE G1 BUILT REAL Ps AND THE SLAB WAS MEASURED
-// BREAKING UNDER THEM.** `scripts/multicore-stress/alloc-torture.maxon` at `MAXON_MAX_PROCS=2` died with **exit 86,
+// ⭐⭐ **THE GLOBAL LOCK, THE PER-P REMOTE-FREE MPSC QUEUES AND THE `owning_p` GATE ARE NOT OPTIONAL ONCE
+// REAL Ps EXIST, AND THE SLAB WAS MEASURED BREAKING WITHOUT THEM.**
+// `scripts/multicore-stress/alloc-torture.maxon` at `MAXON_MAX_PROCS=2` died with **exit 86,
 // `slabSpanExhaustedPastItsEnd`** — INV-1 below, tripped because two OS threads were popping slots out of
 // ONE unsharded mcache row. At 7 it segfaulted outright. The allocator naming its own invariant is what
-// localised that to this file rather than leaving a mystery fault in the scheduler.
+// localises such a fault to this file rather than leaving a mystery fault in the scheduler.
 //
-// ⭐⭐⭐ **THE INVARIANT THE SHARDING RESTS ON, RESTATED AT W213-C1 AND WEAKER THAN THE ONE S5 WROTE:**
+// ⭐⭐⭐ **THE INVARIANT THE SHARDING RESTS ON:**
 //
 // > **A P HAS AT MOST ONE M AT ANY INSTANT, AND ONLY THE M *HOLDING* A P ALLOCATES FROM THAT P's ROW. AN M
 // > THAT HOLDS NO P TAKES `SlabRawShardRow`, WHICH IS SERIALISED UNDER THE LOCK.**
 //
-// S5 wrote *"a P is bound to exactly one M for the M's life"*, which was true and is about to stop being:
-// W213 hands a P from an M blocked in a kernel call to another M. The row does not care about the M's LIFE —
-// it cares that at any instant one thread writes it, which the sentence above says and the stronger one only
-// implied. `SlabRawShardRow` carries how the P-less arm is made true rather than assumed, and
+// It is weaker than *"a P is bound to exactly one M for the M's life"*, which does not hold: a P is handed
+// from an M blocked in a kernel call to another M. The row does not care about the M's LIFE — it cares that
+// at any instant one thread writes it, which the sentence above says and the stronger one only implied.
+// `SlabRawShardRow` carries how the P-less arm is made true rather than assumed, and
 // `SchedRuntime`'s header carries the scheduler's half.
 //
 // **THE SHAPE, IN FOUR SENTENCES.** Each P owns its own mcache ROW (`emitSlabCurrentP` answers the P, the row
@@ -107,11 +106,11 @@ let WordBytes = 8
 // down beside the fact it derives from. Only `class_idx` is stored and the geometry is read from the
 // `.rdata` table below.
 //
-// ⚠ **THAT IS A TRADE TO MEASURE, NOT A WIN.** The hot path used to reach `slot_size` with ONE load from a
-// record it already holds; it now costs one load of `class_idx` plus one indexed `.rdata` load — and the
-// `.rdata` line is shared by every span of every class, so it is the same cache line for the whole program
-// where the per-span copies were not. Which of those dominates is a measurement nobody here has taken; what
-// IS certain is that two numbers that cannot disagree have replaced three that could.
+// ⚠ **THAT IS A TRADE TO MEASURE, NOT A WIN.** A per-span `slot_size` reaches the hot path in ONE load from
+// a record it already holds, where this shape costs one load of `class_idx` plus one indexed `.rdata` load
+// — but the `.rdata` line is shared by every span of every class, so it is the same cache line for the whole
+// program where per-span copies are not. Which of those dominates is a measurement nobody here has taken;
+// what IS certain is that two numbers that cannot disagree stand where three that could would.
 let MspanBaseAddrOffset = 0 as ByteOffset
 let MspanFreeListOffset = 8 as ByteOffset
 let MspanFreeCountOffset = 16 as ByteOffset
@@ -157,12 +156,11 @@ let MspanScavStateOffset = 56 as ByteOffset
 let MspanScavActive = 0
 let MspanScavSeenFree = 1
 
-// ⭐ **THE RECORD'S WIDTH, DERIVED FROM ITS LAST FIELD — and it is stated here because the check that reads
-// it had ALREADY gone stale.** `checkSlabRuntimeGeometry` computed the record as
-// `MspanCachedShardOffset + WordBytes`, which was the last field when it was written and stopped being one
-// the moment S6 appended `MspanScavStateOffset` a word past it: the guard against overlapping headers was
-// silently measuring 56 bytes of a 64-byte record. Naming the width once, beside the field that determines
-// it, is what makes the next appended field move it.
+// ⭐ **THE RECORD'S WIDTH, DERIVED FROM ITS LAST FIELD — and stated HERE rather than at the check that
+// reads it.** A width spelled over there as `<last field> + WordBytes` stops being the width the moment a
+// field is appended past it, and the guard against overlapping headers then silently measures 56 bytes of a
+// 64-byte record. Naming the width once, beside the field that determines it, is what makes the next
+// appended field move it.
 let MspanRecordBytes = (MspanScavStateOffset as ParsedInt) + WordBytes
 
 // One mspan header's slot in the metadata slab. The record occupies 0x00..0x40 exactly, and 64 keeps
@@ -221,10 +219,9 @@ let SlabMaxShards = 256
 // arm of its own and so cannot be forgotten when it first becomes reachable.
 //
 // ⭐ **AND WHAT THE ROW BUYS IS THE ALLOCATOR'S HALF OF THE RESTATED SHARD INVARIANT.** `emitSlabShardRow`
-// keys `mcache[row]` on `P->id` and every span carries `MspanOwningPOffset`, and that used to rest on *"a P
-// is bound to one M for life"*. It now rests on the weaker and truer **"a P has at most one M at any
-// instant, and only the M HOLDING a P allocates from that P's row"** — which is what the lockless pop
-// actually needs. A thread between Ps has no row of its own to race; it comes here, where the rule is the
+// keys `mcache[row]` on `P->id` and every span carries `MspanOwningPOffset`, and that rests on **"a P has
+// at most one M at any instant, and only the M HOLDING a P allocates from that P's row"** — weaker than
+// *"a P is bound to one M for life"*, and what the lockless pop actually needs. A thread between Ps has no row of its own to race; it comes here, where the rule is the
 // LOCK rather than single ownership.
 let SlabRawShardRow = SlabMaxShards - 1
 
@@ -499,8 +496,6 @@ end 'installSlabRuntime'
 // `slabArenaRuntimeGlobals` and `SchedRuntime.schedRuntimeGlobals`: a condition spelled at both ends is a
 // second place for the two to disagree, and the loop over an empty array is the no-op the absent `if` would
 // have produced.
-// ⚠ It used to name `clockRuntimeGlobals` first, which W212 DELETED — that file's two words became frame
-// slots, so it lays out no `.data` at all and there is no producer left to follow.
 export function slabRuntimeGlobals(usage RuntimeUsage) returns DataSectionEntryArray
 	var out = DataSectionEntryArray.create()
 
@@ -747,7 +742,7 @@ end 'emitMcacheSlotAddr'
 // OS thread with no M"* and *"an M holding no P"* are three different facts, but the allocator's question is
 // only *"is there a P whose row I may own"* — and for all three the answer is no. ⚠ The third needs NO ARM
 // at all: `emitSlabShardRow` already tests `<= MspanOwningPNone`, so a `currentP` of 0 falls into the raw
-// row through a predicate that was total before this rung and stayed total. That is why this caller adds
+// row through a predicate that is total. That is why this caller adds
 // nothing to the shared walk — it is the only one of the three that does not. The one place the difference
 // matters is whether another thread can EXIST, which is a separate predicate (`emitSlabSchedulerExists`)
 // asked only where the lock decision needs it.
@@ -757,9 +752,9 @@ function emitSlabCurrentP(module StdModule, func IrFunction, cur IrBlock, sharde
 		return cur
 	end 'noScheduler'
 
-	// ⚠ Three DISTINCT labels: they used to share one caller-supplied name, which put three identically
-	// named blocks in every IR dump of an allocation. The name was the same at both call sites anyway, so
-	// there was never a parameter's worth of information in it.
+	// ⚠ Three DISTINCT labels: one caller-supplied name for all three puts three identically named blocks in
+	// every IR dump of an allocation, and the name is the same at both call sites anyway — there is not a
+	// parameter's worth of information in it.
 	var haveOffset = module.addBlock(func, label: b"mypoffset", heat: BlockHeat.normal)
 	var haveMachine = module.addBlock(func, label: b"mypmachine", heat: BlockHeat.normal)
 	var merge = module.addBlock(func, label: b"myp", heat: BlockHeat.normal)
@@ -1165,12 +1160,12 @@ end 'buildSlabRefill'
 // **POP A SLOT FROM `row`'s CACHED SPAN — the hot path**, emitted INTO the caller's blocks and answering in
 // `slotId`, the returned block's single argument.
 //
-// ⭐⭐ **IT WAS `__slab_alloc_class(classIdx, myP, row)`, A FUNCTION, UNTIL EC8 — AND WITH IT WENT THE LAST
-// FRAME ON THE HIT PATH.** One allocation used to be FIVE nested frames (`__mm_alloc` → `__slab_alloc` →
-// `__slab_class_index_for` → `__slab_alloc_class` → `__slab_state_base`, plus `__slab_shard_p` on a sharded
-// build); it is now two, and only the first is a call the box layer makes. What is emitted is the same ops
-// in the same order — the probe, the two arms, the INV-1 trap, the consume, the eviction — so every
-// argument below is unchanged. `zeroed` and `sharded` are still BUILD-time, so neither costs a branch.
+// ⭐⭐ **IT IS EMITTED INLINE RATHER THAN BEING AN `__slab_alloc_class(classIdx, myP, row)` FUNCTION, WHICH
+// IS WHY THE HIT PATH CARRIES NO FRAME OF ITS OWN.** As a function an allocation is FIVE nested frames
+// (`__mm_alloc` → `__slab_alloc` → `__slab_class_index_for` → `__slab_alloc_class` → `__slab_state_base`,
+// plus `__slab_shard_p` on a sharded build); inline it is two, and only the first is a call the box layer
+// makes. The ops and their order are the same either way — the probe, the two arms, the INV-1 trap, the
+// consume, the eviction. `zeroed` and `sharded` are still BUILD-time, so neither costs a branch.
 //
 // ⚠ **THE CALLER OWES `state`.** It is hoisted out because a SHARDED entry needs the state region's address
 // BEFORE this body runs — that is where `__slab_lock` lives — so fetching it here as well would be the same

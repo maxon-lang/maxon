@@ -70,8 +70,8 @@ export typealias CascadeSymbolSet = Set with ByteArray
 // ⭐ **THE SHARED NEEDS-CLOSURE WORKLIST.** Registration is the whole node space; the queue is only what
 // the program actually references. See the file header for why the two are separate.
 export type CascadeWorklist
-	// Every registered node, in registration order — which is the order each closure's own scan used
-	// before this engine existed, so the expansion order is unchanged from the fixpoint's first pass.
+	// Every registered node, in registration order — the order a closure's own scan of the declarations
+	// would take, so the expansion order is the declaration order.
 	var nodes as CascadeNodeArray
 
 	// Symbol ⇒ the node positions it names — the only direction
@@ -79,9 +79,8 @@ export type CascadeWorklist
 	// that produced it has already discarded which declaration it came from). A BUCKET, not a single
 	// position, because two declarations CAN mint one symbol — a `type Box_String` alongside a
 	// `Box with String` whose mangling is also `Box_String`. That collision is a pre-existing
-	// duplicate-symbol problem at synthesis time and not this engine's to adjudicate; expanding every
-	// claimant is exactly what the old all-types re-scan did, so the bucket keeps the behaviour
-	// identical instead of silently picking one.
+	// duplicate-symbol problem at synthesis time and not this engine's to adjudicate; the bucket expands
+	// every claimant, as a re-scan of all types would, instead of silently picking one.
 	var bySymbol as CascadeNodeIndexBucketMap
 
 	// FIFO of node positions discovered but not yet expanded; `head` is the read cursor. Never
@@ -118,9 +117,9 @@ export type CascadeWorklist
 
 	// Enqueue the nodes the ALREADY-referenced symbols name — the closure's seeds.
 	//
-	// Driven from the NEEDED SET, not from the node space: the old fixpoint's first pass asked the
-	// question the other way round, probing the set once for every declared type, which is O(types) even
-	// for a program that drops one thing. A seed is by definition a symbol already in the set, so asking
+	// Driven from the NEEDED SET, not from the node space: asking it the other way round — probing the set
+	// once for every declared type — is O(types) even for a program that drops one thing. A seed is by
+	// definition a symbol already in the set, so asking
 	// each of THOSE what it names is the same answer for O(referenced) work — and it is the same question
 	// `discovered` answers, so it is asked in one place rather than two.
 	export function seed(needed CascadeSymbolSet)
@@ -133,8 +132,7 @@ export type CascadeWorklist
 	// no registered node adds nothing — that is an ANSWER, not an unhandled case: the drop/clone
 	// classifiers hand back leaf callees (`__str_decref`, `__mm_decref`, `__managed_clone`) and over-rooted
 	// element cascades alike, and only a symbol belonging to a declaration in THIS node space has a body
-	// with nested cascades to close over. The old fixpoint ignored such a symbol the same way, by never
-	// finding a type whose symbol matched it.
+	// with nested cascades to close over.
 	export function discovered(symbol ByteArray)
 		if let claimants = try self.bySymbol.get(symbol) 'known'
 			for at in claimants 'eachClaimant'

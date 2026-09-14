@@ -13,11 +13,11 @@
 // it was assigned, which the merge then applies to the file's ops and registry
 // contributions. For M1 (one file, one named type `ExitCode`) the project
 // interner starts empty, so the fold assigns identical ids and the remap is the
-// identity — but the machinery is real from commit one, per PLAN.md.
+// identity — but the machinery is real, not a placeholder.
 
 // Wide range: the interner is unbounded (one id per distinct named reference).
-// `TypeNameIdArray` is declared beside `TypeNameId` itself, in `IR/Maxon/MaxonDialect.maxon`; this
-// file used to redeclare it identically, which the flat namespace check refuses.
+// `TypeNameIdArray` is declared beside `TypeNameId` itself, in `IR/Maxon/MaxonDialect.maxon`; the flat
+// namespace check refuses a second identical declaration here.
 export typealias TypeNameIdMap = Map with (ByteArray, TypeNameId)
 
 // Raised when a `TypeNameId` is looked up that this interner never assigned —
@@ -148,17 +148,16 @@ export function remapMaxonType(t MaxonType, remap TypeNameRemap) returns MaxonTy
 		// `named`/`structRef` do, so it moves through a merge by the same rule — remap the id.
 		function(id) gives MaxonType.function(remap.apply(id))
 
-		// A type-parameter reference and a generic instance (P1.6-A) carry GLOBAL ids — a param TOKEN and a
+		// A type-parameter reference and a generic instance carry GLOBAL ids — a param TOKEN and a
 		// `GenericInstanceId` keyed on the whole-program registry, NOT a per-file interner id — so a
 		// merge's id remap has nothing to rewrite: they pass through unchanged, like a primitive.
 		// Remapping the id (as `named` does) would corrupt the token / instance key.
 		//
-		// ⚠ **THE REASON THE TOKEN IS GLOBAL CHANGED AT W14, AND THE CONCLUSION DID NOT.** It used to be a
-		// POSITION, global because every declaration numbers its parameters from zero — which is also why
-		// two declarations' first parameters were one value, the defect W14 removed. It is now a DIGEST of
-		// `(declaringTypeName, paramName)` (`ProgramSignatures.typeParamTokenFor`), global because it is a
-		// pure function of source text and so is computed identically by every file, the tolerant sweep and
-		// the real parse alike. Both spellings are interner-independent; only the second is injective.
+		// ⚠ **THE TOKEN IS A DIGEST, NOT A POSITION.** `ProgramSignatures.typeParamTokenFor` digests
+		// `(declaringTypeName, paramName)`; it is global because it is a pure function of source text, so
+		// every file computes it identically — the tolerant sweep and the real parse alike. A position
+		// would be interner-independent too, and would NOT be injective: every declaration numbers its
+		// parameters from zero, so all their first parameters would be one value.
 		typeParameter gives t
 		genericInstance gives t
 
@@ -231,9 +230,9 @@ end 'remapMaxonReturnType'
 // and names travel (see SignatureIndex's header on the id problem).
 //
 // ⚠ **THE HAND-OFF IS `StructLayout.replaceFieldTypes` AND NOT A BARE ASSIGNMENT, BECAUSE THE LAYOUT NOW
-// CACHES GEOMETRY DERIVED FROM THIS COLUMN** (`fieldOffsets`/`slotBytes`, the two-slot prefix sum of
-// P1.7a-existentials slice 2). This function is the THIRD writer of `fieldTypes` — the header over those
-// columns asserted there were only two — and it wrote the column without rebuilding them. It was harmless
+// CACHES GEOMETRY DERIVED FROM THIS COLUMN** (`fieldOffsets`/`slotBytes`, the existential two-slot
+// prefix sum). This function is a THIRD writer of `fieldTypes` — the header over those
+// columns names only two — and writing the column without rebuilding them is harmless
 // only because `remapMaxonType` is TAG-PRESERVING in every arm, which is a property of the function above
 // that nothing here states and nothing checks; a single arm that changed a tag would move a field's slot
 // count and every later field in that struct would read one slot short, silently. Handing the column back

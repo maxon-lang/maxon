@@ -56,21 +56,21 @@
 // A RUNG DIRECTORY HOLDS EXACTLY THE GENERATED SOURCES, AND NOTHING ELSE
 // ===========================================================================================
 //
-// This is not tidiness. It is the reproducibility the whole instrument rests on, and it was BROKEN.
+// This is not tidiness. It is the reproducibility the whole instrument rests on.
 //
 // `build <dir>` LISTS that directory, and every entry it finds costs the compiler a `FilePath` and a
-// `String` — measured, exactly, at +13 allocations and +459 bytes per extra file, at every rung. The
-// runner used to write each rung's EXECUTABLE and its METRICS TSV into the rung's own source
-// directory, and `.scale-tmp/` is never cleaned. So the first run on a fresh checkout compiled a
-// ten-file directory and every run after it compiled a twelve-file one, and the two disagreed by 26
+// `String` — measured, exactly, at +13 allocations and +459 bytes per extra file, at every rung.
+// Writing a rung's EXECUTABLE and its METRICS TSV into the rung's own source
+// directory, with `.scale-tmp/` never cleaned, makes the first run on a fresh checkout compile a
+// ten-file directory and every run after it a twelve-file one — the two disagreeing by 26
 // allocations and 945 bytes per rung.
 //
-// The numbers were therefore "bit-for-bit reproducible" only if you never deleted your temp
-// directory — which is to say they were not reproducible at all, and the committed goldens that
-// gated on them would have failed on any machine that had never run the suite before. (Found by
-// exactly the delta report this instrument now prints, on a run that changed no compiler code.)
+// Numbers like that are "bit-for-bit reproducible" only if you never delete your temp
+// directory, which is to say not reproducible at all, and committed goldens
+// gating on them fail on any machine that has never run the suite before. (Found by
+// exactly the delta report this instrument prints, on a run that changed no compiler code.)
 //
-// The outputs now live in the corpus ROOT, outside every rung (see ScaleTestRunner), and
+// The outputs live in the corpus ROOT, outside every rung (see ScaleTestRunner), and
 // `pruneRungDir` guarantees the invariant holds even for a `.scale-tmp` left behind by an older
 // build. ⚠ It DELETES: `<root>/rung<N>/` is owned by this generator, including under
 // `--emit-corpus=<dir>`.
@@ -96,38 +96,38 @@
 // outside it (and the codegen change to it that would be invisible) is NAMED rather than silently absent.
 //
 // ⚠ THE SUBSET AND THE CORPUS ARE TWO DIFFERENT SETS, AND THE GAP BETWEEN THEM IS WHERE BUGS LIVE.
-// This is the file's most durable defect, and it has now recurred SEVEN times:
+// This is the file's most durable defect, and the eight bullets below are its recurrences:
 //   • `float` was in the subset for a full rung before one line of this file generated any. See
 //     `FloatOpsBase` for what that cost (a panicking emitter, shipped).
-//   • integer `/` and `mod` were in it since P1.0d.3 — the entire `idiv` fixed-register path — and
+//   • integer `/` and `mod` were in it — the entire `idiv` fixed-register path — while
 //     every `/` the corpus emitted was a FLOAT `/`. See `IntDivideBase`.
 //   • top-level `let` and `var` were in it for TWO rungs, 36 spec tests' worth. See `GlobalConstsBase`.
-//   • `type` declarations were in it from P1.0r, the rung that gave the compiler a HEAP. See `StructTypesBase`.
+//   • `type` declarations were in it from the rung that gave the compiler a HEAP. See `StructTypesBase`.
 //   • ⭐ AND THEN TEN RUNGS AT ONCE. `match`, `enum`, `String`, `Array`, generics and interfaces —
-//     everything from P1.1b to P1.7a — were in the subset and the corpus generated NOT ONE of them.
+//     the whole middle of the language — were in the subset and the corpus generated NOT ONE of them.
 //     Measured on the ladder this file shipped with: `match` 0, `enum` 0, `String` 0, `Array with` 0,
 //     `type ... uses` 0, `interface` 0, `implements` 0, `print(` 0, ` or ` 0, ` xor ` 0, struct field
 //     WRITE 0 — at rung 0 AND at rung 5, in 109,697 lines. So the one artifact that answers *"what has
 //     this compiler's cost actually done, change by change"* was measuring the compiler roughly as it
-//     stood at P1.1a, and rung after rung of PLAN.md recorded `scale allocsΔ0 … the corpus is
+//     stood a dozen rungs back, and rung after rung of PLAN.md records `scale allocsΔ0 … the corpus is
 //     generics-free / Set-free / conformance-free` — which is not evidence of anything. Every optimizer
 //     instead built a throwaway ladder of its own and discarded it. See `EnumTypesBase` onwards.
 //   • ⭐ AND THE SIXTH IS THE ONE THE FIFTH'S OWN FIX WALKED PAST. `Array` moved to CONSTRUCTS GENERATED
 //     with two knobs behind it, and the `__ManagedMemory` BUFFER SURFACE over that same record — a second
 //     member roster on one type, eight `markBufferSurface` call sites in seven parser functions — was in
 //     neither list. Measured on the ladder as it stood: `.managed` 0, `ByteArray` 0, `toByteArray` 0,
-//     `addressableBytes` 0, `__ManagedMemory` 0, at rung 0 and rung 5 alike, so BATCH2 slice 6 shipped the
-//     value-position mechanism against a ladder that read Δ0 and could not have read anything else. See
+//     `addressableBytes` 0, `__ManagedMemory` 0, at rung 0 and rung 5 alike, so the value-position
+//     mechanism shipped against a ladder that read Δ0 and could not have read anything else. See
 //     `BufferSurfaceSitesBase`. ⚠ **A FAMILY WHOSE NEIGHBOUR IS COVERED IS THE HARDEST KIND TO SEE** — the
 //     same shape as `RangedReturnSitesBase`, where the cast door was priced and the `return` door was not,
 //     and the manifest line above it read as covering both.
 //   • ⭐ AND THE SEVENTH IS THE ONE NO KNOB COULD HAVE CLOSED, BECAUSE IT WAS THE DIRECTORY LAYOUT
 //     ITSELF. Every rung's files went into ONE FLAT DIRECTORY, so `deriveModuleDirectory` answered `""`
-//     for every source file in every rung and the ENTIRE namespace mechanism — N1a's `module` visibility
-//     tier, N1b's qualified-alias mirror, its namespace-qualified function set, its dotted-chain
-//     recognizer and its multi-segment walk — ran zero times at rung 0 and zero times at rung 5. This one
-//     was NAMED BY ITS OWN IMPLEMENTER before it shipped ("the ladder is structurally blind to the USER
-//     half of this rung"), which is why it is the first that cost nothing to find. See
+//     for every source file in every rung and the ENTIRE namespace mechanism — the `module` visibility
+//     tier, the qualified-alias mirror, the namespace-qualified function set, the dotted-chain
+//     recognizer and the multi-segment walk — ran zero times at rung 0 and zero times at rung 5. This
+//     one was NAMED BY ITS OWN IMPLEMENTER before it shipped ("the ladder is structurally blind to the
+//     USER half of this rung"), which is why it is the one that cost nothing to find. See
 //     `NamespacedModulesBase`.
 //   • ⭐ AND THE EIGHTH IS THE ONE THAT LOOKED COVERED, WHICH IS THE HARDEST KIND. There WAS a String
 //     knob — the fifth recurrence's own fix — and it generated a literal, an interpolation, `.append`,
@@ -137,18 +137,16 @@
 //     live spec cases, and every one is being RETIRED onto `stdlib/String.maxon`'s bodies one wave at a
 //     time — so every wave would have read Δ0 in all three columns off a knob whose name says "String".
 //     A knob is not coverage of the TYPE it is named for; it is coverage of the members it spells. See
-//     `StringSearchOpsBase`, and note that the very first ladder run after the four knobs landed found a
-//     cost nobody had priced: `CharacterSet.whitespacesAndNewlines()` is materialized INLINE at every
+//     `StringSearchOpsBase`, whose first ladder run found a cost nobody had priced:
+//     `CharacterSet.whitespacesAndNewlines()` is materialized INLINE at every
 //     trim site, 194 ops a call, enough to take the register allocator out of memory at rung 4.
 //
-// The manifest named the first two as blind spots the whole time and they were read as footnotes. It
-// did not name the third and fourth AT ALL. And for the fifth it did worse than either: it named the
-// families under NOT GENERATED while also making two CLAIMS THAT HAD STOPPED BEING TRUE — that struct
-// field writes were "P1.1a wave 2 and NOT IMPLEMENTED" and a struct crossing a call "P1.4, deferred on
-// the borrow-vs-consume ruling". Both had shipped; `specs/challenge-struct-field-assign.md` and
-// `struct-managed-field.md` had live tests for them. A manifest that names a gap with the WRONG reason
-// is worse than one that omits it, because the reason is what a reader uses to decide whether to close
-// it. See `printCorpusManifest`, which is the load-bearing half of this file rather than its
+// ⚠ A manifest that names a gap with the WRONG reason is worse than one that omits it, because the
+// reason is what a reader uses to decide whether to close it: a family listed under NOT GENERATED
+// with a justification that has stopped being true — "NOT IMPLEMENTED", "deferred on the
+// borrow-vs-consume ruling" — reads as closed business while live tests for it sit in `specs/`. A
+// blind spot read as a footnote is the milder version of the same failure.
+// See `printCorpusManifest`, which is the load-bearing half of this file rather than its
 // documentation.
 //
 // For the SIXTH the manifest was silent in all three headings at once — `__ManagedMemory` appeared under
@@ -236,7 +234,8 @@ let LongIfsBase = 100 as KnobSize
 
 // ONE function, a huge BLOCK count. Each `if`/`else` contributes three blocks (then, else,
 // continuation), so this is ~3x its knob: at rung 5, 200 << 5 = 6,400 if/elses = ~19,200 blocks —
-// the shape that used to SIGSEGV, and the reason "no CFG traversal may recurse" is a rule. It is
+// the shape that SIGSEGVs a recursive CFG traversal, and the reason "no CFG traversal may recurse" is
+// a rule. It is
 // separate from `longFunction` because that one grows OPS in a mostly-straight line and this one
 // grows the CFG.
 let DeepBlocksBase = 200 as KnobSize
@@ -245,37 +244,30 @@ let DeepBlocksBase = 200 as KnobSize
 // spill bracket knob, not merely a call-depth knob.
 let CallChainBase = 8 as KnobSize
 
-// ONE function, N pressured loops. Its base is the smallest of the six because its cost used to
-// overtake everything else as the ladder climbed — TWICE, from two different sources, both now fixed.
+// ONE function, N pressured loops. Its base is the smallest of the six because its cost can overtake
+// everything else as the ladder climbs.
 //
-// THIS KNOB IS LINEAR NOW, and the history is worth keeping because the comment here was WRONG in two
-// successive ways, each naming a real bug that was then fixed elsewhere:
-//
-//   1. It read "KNOWN SUPERLINEAR: the splitter's driver recomputes liveness from scratch after every
-//      split… regalloc:liveness grows x3.69 per doubling." True until that driver became
-//      INCREMENTAL. `regalloc:liveness` reads x1.99 now.
-//   2. Then the real bend was the PARSER: `parseWhileStatement` minted one header phi per mutable var
-//      IN SCOPE, so a function whose `var`s accumulate paid Σk ≈ L²/2 phis — minted, carried through
-//      four passes inflating every dense column sized by the block-arg id space, and then deleted by
-//      `pruneDeadBlockArgs`. Fixed: a loop now carries a phi only for the vars its
-//      extent ASSIGNS. `pruneDeadBlockArgs` reads x1.99, `elimTrivialBlockArgs` x1.97, and
-//      `phase:parse` x1.99 — the tail is gone at the source, not subtracted from the reading.
+// ⚠ **IT IS LINEAR, AND IT MUST NOT CARRY A CLAIM ABOUT WHICH PASS IS SLOW.** Twice such a claim has
+// outlived the bug it named: first the split driver's from-scratch liveness recompute, which is
+// INCREMENTAL today (`regalloc:liveness` reads x1.99); then `parseWhileStatement` minting one header
+// phi per mutable var IN SCOPE, so a function whose `var`s accumulate paid Σk ≈ L²/2 phis — carried
+// through four passes inflating every dense column sized by the block-arg id space, then deleted by
+// `pruneDeadBlockArgs`. A loop carries a phi only for the vars its extent ASSIGNS
+// (`pruneDeadBlockArgs` x1.99, `elimTrivialBlockArgs` x1.97, `phase:parse` x1.99).
 //
 // THE KNOB IS RIGHT TO STAY AS IT IS. A function with many loops and many mutable vars in scope is
-// ordinary code, and this knob held the front end honest until the front end earned it: it is what
-// made the O(V×B) SSA-construction cost visible, and it is what will catch the next thing that inflates
-// the block-arg id space. What it must NOT carry is a claim about which pass is slow — twice that claim
-// outlived the bug it named. If this knob bends again, MEASURE which phase, do not read this comment.
+// ordinary code, and this knob is what
+// makes the O(V×B) SSA-construction cost visible and what will catch the next thing that inflates
+// the block-arg id space. If it bends again, MEASURE which phase; do not read this comment.
 let PressuredLoopsBase = 2 as KnobSize
 
 // ⭐⭐ ONE function, N straight-line groups, each one the shape that makes the **COLORER** — not the
 // splitter — run out of registers, so that `SplitDriver.repairAtExhaustion` runs on this ladder at all.
 //
-// ⚠⚠ **IT EXISTS BECAUSE THE LADDER READ Δ0 FOR THE WHOLE OF THE A5g CURE, AND THAT Δ0 WAS THE
-// INSTRUMENT'S BLIND SPOT RATHER THAN THE COST.** No other knob reaches the colorer's exhaustion path at
-// any rung, so every column — allocations, bytes AND cpu — would have reported "nothing moved" about a
-// mechanism that never ran. That is the failure this file's `floatSpill` knob was caught in at four
-// (a count too small to force a single spill), stated once more in a new file rather than re-learned.
+// ⚠⚠ **IT EXISTS BECAUSE NO OTHER KNOB REACHES THE COLORER'S EXHAUSTION PATH AT ANY RUNG, SO A LADDER
+// WITHOUT IT READS Δ0 ABOUT A MECHANISM THAT NEVER RAN — the instrument's BLIND SPOT rather than the
+// cost.** Every column — allocations, bytes AND cpu — would report "nothing moved". That is the failure
+// this file's `floatSpill` knob sat in at a count too small to force a single spill.
 //
 // THE SHAPE, and every part of it is load-bearing — `specs/register-pressure.md`'s
 // `confined-reuse-defs-*` cases are the same program written by hand:
@@ -331,17 +323,15 @@ let LoopNestBase = 2 as KnobSize
 
 // ONE function, N float ARITHMETIC/COMPARE groups — the float twin of `longFunction`.
 //
-// ⚠ THE CORPUS GENERATED NO FLOAT AT ALL UNTIL 2026-07-15, AND THAT IS THE FIFTH CONSECUTIVE RUNG
-// THIS LADDER WAS BLIND TO WHAT LANDED. P1.0d.4 built an entire SSE backend — a second register
-// FILE, a second pool, a conversion band, a NaN-correct compare lowering — and every float number
-// this instrument printed was byte-identical BY CONSTRUCTION, because nothing in the ladder emitted
-// one float instruction. The manifest even SAID so, in plain text, under NOT GENERATED. It was read
-// five times as a footnote about the reader's own measurement instead of a defect in the tool, and
-// the corpus finds only bugs someone already thought to generate.
+// ⚠ **A CORPUS THAT EMITS NO FLOAT IS BLIND TO AN ENTIRE SSE BACKEND** — a second register
+// FILE, a second pool, a conversion band, a NaN-correct compare lowering — because every float number
+// the instrument prints is then byte-identical BY CONSTRUCTION. The manifest SAYS so, in plain text,
+// under NOT GENERATED, and such a line reads as a footnote about the reader's own measurement instead
+// of a defect in the tool: the corpus finds only bugs someone already thought to generate.
 //
-// WHAT IT COST: `float-phi-*` in specs/float-type.md. A float `var` mutated in a branch or a
+// WHAT THAT COSTS: `float-phi-*` in specs/float-type.md. A float `var` mutated in a branch or a
 // loop — `var f = 0.0` — PANICKED the x64 emitter, because `Parser.mintPhi` hardcoded every phi's
-// `argType` to `i64` and P1.0d.4 turned that field into the phi's REGISTER FILE. The commonest float
+// `argType` to `i64` while that field IS the phi's REGISTER FILE. The commonest float
 // idiom there is, and both the suite and this ladder were blind to it. This knob generates float
 // phis by construction, so that class of bug cannot hide here again.
 let FloatOpsBase = 64 as KnobSize
@@ -435,8 +425,8 @@ end 'confinedCrossCallDefs'
 // ONE file, N top-level `let` constants — the constant ARENA, the initializer DFS and its memo.
 //
 // ⚠ TWO WHOLE RUNGS WERE INVISIBLE HERE, AND THE MANIFEST DID NOT MERELY MISS THEM — IT REPORTED THEM
-// AS COVERED. P1.0d.5a landed top-level `let` (the suite went 281 -> 295) and P1.0d.5b landed
-// top-level `var` (295 -> 317). This corpus generated NEITHER, at any rung. The float case at least
+// AS COVERED. Top-level `let` and top-level `var` each landed a rung's worth of spec cases
+// (281 -> 295, then 295 -> 317), and this corpus generated NEITHER, at any rung. The float case at least
 // printed "no float" in plain text under NOT GENERATED for five rungs, and was read as a footnote
 // about the reader's own measurement. This one was worse: the manifest listed `let / var` under
 // CONSTRUCTS GENERATED — meaning the BODY-LOCAL kind, the only kind the corpus had — and named the
@@ -471,10 +461,10 @@ let GlobalVarSeedModulus = 7
 
 // ONE file, N `type` declarations — the PER-TYPE cost: the type table and the layout descriptor.
 //
-// ⚠ P1.0r GAVE THE COMPILER A HEAP AND THIS LADDER GENERATED NO `type` AT ALL. The tell was printed on every
-// run and read six times as a flat line: `phase:runtimeAugment` went 54 -> 58 across the WHOLE
-// ladder. That was never a runtime that scaled beautifully — it was a runtime that was never
-// INSTALLED, because nothing in the corpus allocated.
+// ⚠ A LADDER THAT GENERATES NO `type` AT ALL SEES NOTHING OF THE HEAP, and the tell prints on every
+// run as a flat line: `phase:runtimeAugment` 54 -> 58 across the WHOLE
+// ladder. That is not a runtime that scales beautifully — it is a runtime that is never
+// INSTALLED, because nothing in the corpus allocates.
 //
 // ⚠ AND THAT PHASE STILL WILL NOT MOVE WITH THIS KNOB — it is fixed-cost BY CONSTRUCTION, so do not
 // read it as this knob's report card. `phase:runtimeAugment` times `augmentWithRuntime` only, which is
@@ -489,7 +479,7 @@ let StructTypesBase = 8 as KnobSize
 // field store per field, and the release the value's death forces.
 //
 // ⚠ NOT `structTypes` WITH A BIGGER NUMBER. One knob grows how many types the compiler must LAY OUT;
-// this one grows how many times a type is BUILT. P1.1a wave 2 (field writes) moves this one and not
+// this one grows how many times a type is BUILT. A change to field WRITES moves this one and not
 // that one; a change to the layout descriptor moves that one and not this one. Same rule as
 // `globalVars` above, and as `floatSpill` against `pressuredLoops`.
 let StructAllocsBase = 32 as KnobSize
@@ -502,14 +492,14 @@ let AllocStructTypeCount = 4 as KnobSize
 // ONE file, N `/` and `mod` groups — `StdOp.div`, and the x64 `idiv` path whose RAX/RDX pinning is the
 // only HARD fixed-physical-register constraint in the language.
 //
-// ⚠ P1.0d.3 BUILT THAT WHOLE PATH — `cqo`, and the implicit-def masks that keep the divisor and every
-// value live across the `idiv` out of RAX and RDX — and the corpus measured none of it. It was not
-// even an obvious zero: the corpus was FULL of `/`, and every one of them was a FLOAT `/`, which is a
+// ⚠ A CORPUS CAN MEASURE NONE OF THAT PATH — `cqo`, and the implicit-def masks that keep the divisor
+// and every value live across the `idiv` out of RAX and RDX — without it being
+// an obvious zero: a corpus FULL of `/` where every one is a FLOAT `/` measures a
 // different Std op entirely (`binOp(div)` — no fixed registers, no trap, a different register file).
 // Counting the operator would have said "covered"; only counting its TYPE says otherwise.
 let IntDivideBase = 32 as KnobSize
 
-// ⭐ **THE CHECKED-DIVIDE knob (A1) — the OTHER divide shape the language now has.** A divisor the
+// ⭐ **THE CHECKED-DIVIDE knob — the OTHER divide shape the language has.** A divisor the
 // compiler cannot prove non-zero makes `/` and `mod` THROWING, and the shape that lowers to is
 // genuinely different from the bare one: three extra ops per site (`cmp`/`setcc`/`or`) plus the `try`
 // fork's THREE BLOCKS, which every block-walking pass downstream then pays for.
@@ -524,13 +514,12 @@ let CheckedDivideBase = 16 as KnobSize
 // Masks the opaque seed into a divisor whose value is in 1..8: `(acc and DivisorMask) + 1`.
 //
 // BOTH HALVES ARE LOAD-BEARING. A CONSTANT divisor folds to a shift and measures no `idiv` at all, so
-// it must derive from the seed. And it must not reach ZERO — which since BATCH10 is not a matter of
-// taste: the rungs are RUN, so a `#DE` here would crash the run rather than pass unnoticed. It was
-// worth excluding even when nothing observed it, and now something does. A
+// it must derive from the seed. And it must not reach ZERO, which is not a matter of
+// taste: the rungs are RUN, so a `#DE` here crashes the run rather than passing unnoticed. A
 // corpus is a claim about the shape of real code, and real code does not divide by zero. Being
 // non-negative also keeps it clear of `i64.min / -1`, the `idiv` path's other trap.
 //
-// ⚠⚠ **THE MASK IS NO LONGER SUFFICIENT BY ITSELF (A1).** `(acc and 7) + 1` is in 1..8 to a READER, and
+// ⚠⚠ **THE MASK IS NOT SUFFICIENT BY ITSELF.** `(acc and 7) + 1` is in 1..8 to a READER, and
 // to the compiler it is an ordinary runtime value — so after division became fallible, every group in
 // this knob was **E3057** and the corpus stopped generating. The value being non-zero was never the
 // question; the compiler being able to SEE it non-zero is, and the language's answer to that is a
@@ -571,36 +560,35 @@ end 'corpusSeedRemainder'
 // one extra `cmp` per group that the ladder measures along with everything else.
 let ScaleDivisorAlias = "ScaleDivisor"
 
-// ⭐ **THE RANGED-`return` KNOB (A2a): ONE function, N `return` sites guarded against a NARROWED alias.**
+// ⭐ **THE RANGED-`return` KNOB: ONE function, N `return` sites guarded against a NARROWED alias.**
 //
-// ⚠ **THE CORPUS REACHED EVERY GUARD DOOR BUT THIS ONE**, and the precision matters, because the two
-// nearest write-ups of it were BOTH WRONG in the direction that reads as less coverage than there is.
-// `tests/ladders/genrangesites.sh` said "the rung0 and rung5 binaries each contain exactly ONE
-// range-check panic blob" and the ladders README repeated it; MEASURED on the corpus as it stood the day
-// this knob was written, the two binaries held **33 and 1,025** — 32 and 1,024 of them `ScaleDivisor`,
-// the A1 divide knob's `((acc and DivisorMask) + 1) as ScaleDivisor`, which is an ALIAS-NAMED cast site
-// that DOUBLES with `IntDivideBase`, plus the one fixed `CoverageNarrowAlias` cast. So the cast door,
-// `guardSiteAt` and the guard CHAIN have been priced here since A1. (Both write-ups are corrected; the
-// count is now stated there as the COMMAND that re-derives it: `grep -c "Range check failed"`.)
+// ⚠ **THE CORPUS REACHES EVERY GUARD DOOR BUT THIS ONE**, and the precision matters: a write-up
+// claiming "the rung0 and rung5 binaries each contain exactly ONE range-check panic blob" reads as far
+// less coverage than there is. MEASURED, the two binaries hold **33 and 1,025** — 32 and 1,024 of them
+// `ScaleDivisor`, the divide knob's `((acc and DivisorMask) + 1) as ScaleDivisor`, which is an
+// ALIAS-NAMED cast site that DOUBLES with `IntDivideBase`, plus the one fixed `CoverageNarrowAlias`
+// cast. So the cast door, `guardSiteAt` and the guard CHAIN are priced here.
+// ⛔ Never write that count down anywhere: state the COMMAND that re-derives it,
+// `grep -c "Range check failed"`.
 //
-// What was absent is the OTHER door. Not one generated function DECLARED a narrowed RETURN type — the
+// What is NOT reached is the OTHER door. Not one generated function DECLARES a narrowed RETURN type — the
 // alias that reaches every other `return` is `ScaleInt`, which is `int(i64.min to i64.max)` and which
 // `rangeIsFull` discards before a site can be recorded, and the
 // per-instance `GenericInstanceElemPrefix` aliases are only ever generic TYPE ARGUMENTS, erased before
-// any door sees them. So `InsertRangeChecks.processReturnSites` — and `retBlockOf` and
-// `splitBlockInPlace` behind it — ran exactly ZERO times at every rung of a 32x ladder, which is the
-// `FloatSpillHeadroom` failure again in its hardest form: not a family nobody thought of, but one whose
-// NEIGHBOUR was covered, so the manifest line above it read as covering both.
+// any door sees them. So without this knob `InsertRangeChecks.processReturnSites` — and `retBlockOf`
+// and `splitBlockInPlace` behind it — run exactly ZERO times at every rung of a 32x ladder, which is
+// the `FloatSpillHeadroom` failure again in its hardest form: not a family nobody thought of, but one
+// whose NEIGHBOUR is covered, so the manifest line above it reads as covering both.
 //
-// ⚠ **AND THE COST THAT HID THERE WAS REAL.** A1h found `findRetBlock` walking every `func.blockRefs`
-// entry once per site, over a set each guard it emits GROWS by three: MEASURED on the hand ladder
+// ⚠ **AND THE COST THAT HIDES THERE IS REAL.** `findRetBlock` walking every `func.blockRefs`
+// entry once per site, over a set each guard it emits GROWS by three, MEASURED on the hand ladder
 // (`tests/ladders/genretsites.sh`, n = 50/100/200/400) at **x2.21 x2.53 x3.20 CPU per doubling** — a
 // RISING ratio — while allocations and bytes read a dead-flat x1.99, because a scan allocates nothing.
-// The cure (resolve the site's own block through the existing `guardChainTail` index) reads x1.96 x1.94
+// Resolving the site's own block through the existing `guardChainTail` index reads x1.96 x1.94
 // x2.03. Both numbers live in a script nothing re-runs, so nothing re-checks that the cure holds; this
 // knob is what puts that axis under the standing instrument.
 //
-// ⚠ **ONE FUNCTION RATHER THAN N, BECAUSE THE CONCENTRATION *IS* THE AXIS.** The term A1h found is
+// ⚠ **ONE FUNCTION RATHER THAN N, BECAUSE THE CONCENTRATION *IS* THE AXIS.** The term is
 // sites x blocks-in-this-function, so it is invisible to a shape that spreads one site per function
 // however many sites there are. `genretsites.sh`'s `spread` mode is the CONTROL that separates the
 // product term from the per-site cost, and it stays there: a control answers a question that is only
@@ -615,18 +603,18 @@ let RangedReturnSitesBase = 8 as KnobSize
 
 // How many SCOPE-FILLER locals a long generated function carries — the V DIMENSION, and it DOUBLES.
 //
-// ⚠ THIS DOUBLES BECAUSE THE CORPUS WAS BLIND, AND IT WAS BLIND IN THE ONE DIMENSION IT NAMED ITSELF
-// FOR. The parser builds SSA on the fly at a cost O(vars-in-scope) per branch — and until each was
-// fixed, that cost was in BYTES: every `ParseExpression` snapshotted the variable registry (fixed with
-// the ternary work), and every `if` snapshotted the whole mutable-var set. Both
-// hid because `longFunction` and `deepBlocks` carried a FIXED handful of locals, so V never grew and no
-// O(V·anything) cost could surface. **A fixed V is a V dimension the ladder cannot climb.** The comment
-// that used to sit here defended the constant as "realistic, and that is the whole point" — and a review
-// DISPROVED exactly that reasoning: real IS the shape, but the MAGNITUDE must be scaled past real, or
+// ⚠ THIS DOUBLES BECAUSE A CORPUS WITH A FIXED V IS BLIND IN THE ONE DIMENSION IT NAMES ITSELF FOR.
+// The parser builds SSA on the fly at a cost O(vars-in-scope) per branch, and a snapshot taken per
+// `ParseExpression` (of the variable registry) or per `if` (of the whole mutable-var set) puts that
+// cost in BYTES. Both such costs hide behind a `longFunction` or `deepBlocks` carrying a FIXED handful
+// of locals: V never grows, so no
+// O(V·anything) cost can surface. **A fixed V is a V dimension the ladder cannot climb**, and
+// "realistic, and that is the whole point" is no defence of one:
+// real IS the shape, but the MAGNITUDE must be scaled past real, or
 // the instrument sees nothing. `longFunction` already does this with 3,200 `if`s; this does it with locals.
 //
 // So V doubles, and the base is picked so the TOP rung reaches ~4,096 locals — into the thousands,
-// which is where the deleted `ParseExpression` snapshot's O(V) cost actually bit (~4,000). Real
+// which is where a per-`ParseExpression` snapshot's O(V) cost actually bites (~4,000). Real
 // functions top out near ~30 locals (measured across maxon + stdlib: p99 = 16, max = 44), so
 // this is deliberately super-realistic in magnitude and realistic in shape.
 //
@@ -801,28 +789,28 @@ let PressuredValuesPerLoop = 8 as KnobSize
 let GeneratedLoopTrips = 4
 
 // ===========================================================================================
-// THE RUNGS ARE RUN, AND EVERY DRIVER WITNESSES ITSELF (BATCH10 A2n)
+// THE RUNGS ARE RUN, AND EVERY DRIVER WITNESSES ITSELF
 // ===========================================================================================
 //
-// ⭐⭐ **THE SITE EXPRESSION CHANGED SHAPE, FROM *FOLD-INTO-`acc`* TO *COMPARE-AGAINST-A-CONSTRUCTED
-// RELATION*, AND IT IS THE WHOLE OF THIS SECTION.** Every knob used to end a site by folding the
+// ⭐⭐ **A SITE COMPARES AGAINST A CONSTRUCTED RELATION; IT DOES NOT FOLD INTO `acc` — AND THAT IS THE
+// WHOLE OF THIS SECTION.** Ending a site by folding the
 // construct's value into the threaded accumulator — `acc = acc + s.x + s.y`, `acc = acc + gv{v}`,
-// `acc = acc + uv.probe() + uv.scaleBy(3)`. Every one of those is MULTIPLICATIVE in `acc` (each reads
-// `acc` two or three times and adds the readings back), so `acc` did not grow, it COMPOUNDED: measured
+// `acc = acc + uv.probe() + uv.scaleBy(3)` — is MULTIPLICATIVE in `acc` (each reads
+// `acc` two or three times and adds the readings back), so `acc` does not grow, it COMPOUNDS: measured
 // on this ladder's own rung 0, `7^N` for the struct knobs, `2^N` for the globals knob, `2^(N/6)` for
 // `longFunction`'s coupled `w{q} = w{q} + w{r}`.
 //
-// **What that cost, all four MEASURED on the rung-0 binary before this change:**
-//   • `acc` left i64 and came back NEGATIVE by the seventh driver (`scaleShifts`, at -8.98e18).
-//   • ⭐ **NINE DRIVERS WERE RUNTIME NO-OPS, SEVEN OF THEM FOR THIS FILE'S OWN THESIS.**
-//     `ownedSiteBlock`'s guard is `if acc > 0`; once `acc` wrapped negative EVERY heap-creating site in
-//     the corpus was SKIPPED — the array knobs, both generic knobs, both interface knobs, the buffer
-//     surface knob. They were still COMPILED, so no compile-cost trend is affected, but not one of them
-//     ever EXECUTED. A guard that cannot fail, inside the ladder, for as long as it has had heap.
-//   • `scaleNested` ran ZERO iterations at rung 0 (`acc` was already past `NestedLoopLimit`) and did not
-//     TERMINATE at rung 1 (`acc` arrived at -4.87e18, so `while acc < 1000000` had 4.87e18/D trips left).
-//     That is the hang this rung was filed for, and the loop-nest bound was innocent.
-//   • `scaleFloats` returned `i64.min` — `trunc()` of a double outside i64.
+// **What that costs, all four MEASURED on the rung-0 binary:**
+//   • `acc` leaves i64 and comes back NEGATIVE by the seventh driver (`scaleShifts`, at -8.98e18).
+//   • ⭐ **NINE DRIVERS BECOME RUNTIME NO-OPS, SEVEN OF THEM FOR THIS FILE'S OWN THESIS.**
+//     `ownedSiteBlock`'s guard is `if acc > 0`; once `acc` wraps negative EVERY heap-creating site in
+//     the corpus is SKIPPED — the array knobs, both generic knobs, both interface knobs, the buffer
+//     surface knob. They are still COMPILED, so no compile-cost trend is affected, but not one of them
+//     ever EXECUTES. A guard that cannot fail, inside the ladder, for as long as it has had heap.
+//   • `scaleNested` runs ZERO iterations at rung 0 (`acc` already past `NestedLoopLimit`) and does not
+//     TERMINATE at rung 1 (`acc` arrives at -4.87e18, so `while acc < 1000000` has 4.87e18/D trips
+//     left) — a hang the loop-nest bound is innocent of.
+//   • `scaleFloats` returns `i64.min` — `trunc()` of a double outside i64.
 //
 // ⭐⭐ **AND A SITE'S DATA COMES FROM THE PARAMETER `a`, NEVER FROM THE RUNNING `acc` — WHICH IS NOT A
 // TIDINESS POINT, IT IS WHAT MAKES THE WITNESS DISCRIMINATE.** MEASURED, while sabotaging this rung's own
@@ -862,10 +850,10 @@ typealias TrackedValue = int(i64.min to i64.max)
 typealias TrackedValueArray = Array with TrackedValue
 
 // ⭐ **THE FULL-RANGE INT ALIAS THE GENERATED CORPUS NAMES**, and the declaration `writeRungFile` prepends
-// to every generated file that mentions it. The corpus used to write the bare `int` keyword in its emitted
-// `returns`, parameter and field positions; the ranged-typealias rule makes that illegal, so the generated
-// programs need a name for the same domain. Full-range and SIGNED, so the corpus's arithmetic, shift fill
-// and division signedness are byte-for-byte what they were when it wrote `int`.
+// to every generated file that mentions it. The ranged-typealias rule makes the bare `int` keyword
+// illegal in an emitted `returns`, parameter or field position, so the generated
+// programs need a name for the same domain. Full-range and SIGNED, so the corpus's arithmetic, shift
+// fill and division signedness are byte-for-byte `int`'s.
 //
 // ⚠ **DECLARED PER FILE, BY THE WRITER, AND ONLY WHERE IT IS USED** — a typealias is file-scoped, so every
 // generated file that names it must declare it; and an unused one is E3062, so a file that does not name it
@@ -1026,11 +1014,10 @@ function neutralizeText(contribution TrackedValue) returns String
 end 'neutralizeText'
 
 // ===========================================================================================
-// The ten knobs for what the language gained between P1.1b and P1.7a
+// The ten knobs for the middle of the language
 // ===========================================================================================
 //
-// ⚠ THIS IS THE FIFTH — AND LARGEST — RECURRENCE OF THIS FILE'S FOUNDING DEFECT, AND IT WAS TEN RUNGS
-// DEEP. See the header for the measurement: `match`, `enum`, `String`, `Array`, generics, interfaces,
+// ⚠ THIS IS THE LARGEST RECURRENCE OF THIS FILE'S FOUNDING DEFECT — TEN RUNGS DEEP. See the header for the measurement: `match`, `enum`, `String`, `Array`, generics, interfaces,
 // `print`, `or`/`xor`, and struct field WRITES were all in the subset and the corpus generated ZERO of
 // each, at every rung. The knobs below close it.
 //
@@ -1092,11 +1079,10 @@ let MatchSparseCaseStride = 100
 let StringOpsBase = 8 as KnobSize
 
 // ===========================================================================================
-// THE FOUR KNOBS FOR THE REST OF `String`'S MEMBER SURFACE (P1.8 slices B, B2, C, D, E)
+// THE FOUR KNOBS FOR THE REST OF `String`'S MEMBER SURFACE
 // ===========================================================================================
 //
-// ⚠ **THIS FILE'S FOUNDING DEFECT, FOR THE EIGHTH TIME, AND IT IS ABOUT TO BE PAID FOR ONE WAVE AT A
-// TIME.** `stringOps` above generates a literal, an interpolation, `.append`, `.byteLength()` and `==`.
+// ⚠ **THIS FILE'S FOUNDING DEFECT AGAIN, AND IT IS PAID FOR ONE WAVE AT A TIME.** `stringOps` above generates a literal, an interpolation, `.append`, `.byteLength()` and `==`.
 // It generates NOT ONE of the twenty-odd other members `dispatchStringMethod` answers — no predicate, no
 // case conversion, no `replace`/`split`, no trim, no `StringIndex` producer or consumer, no materializer,
 // no `isEmpty`/`clone`. Every one of them is in the subset (each has live, enabled cases in
@@ -1179,13 +1165,13 @@ let StringViewOpsBase = 8 as KnobSize
 
 // ONE file, M `Character` operation groups — the per-SITE cost of the OTHER byte record.
 //
-// ⚠ **IT EXISTS BECAUSE A WHOLE LANGUAGE MODEL LANDED INTO A CORPUS THAT COULD NOT SPELL IT.** BATCH23
-// made every character literal a `Character` (it had been an `int` whenever it fitted in one byte), gave
-// `Character` an ORDERING through `__char_cmp`, and taught an integer position to convert a literal to
-// its codepoint by REWRITING the emitted op in place. This generator emitted **not one character
-// literal** at any rung — `grep -c "'" rung5/*.maxon` over a dumped corpus found none — so all three
-// read a flat delta of zero in allocations, in bytes AND in CPU ticks. That is the blind spot this file's
-// header calls its founding defect, arriving for the sixth time; the reading is only worth what the
+// ⚠ **IT EXISTS BECAUSE A CORPUS THAT CANNOT SPELL A CONSTRUCT READS A FLAT ZERO ABOUT IT.** Every
+// character literal is a `Character`, `Character` carries an ORDERING through `__char_cmp`, and an
+// integer position converts a literal to its codepoint by REWRITING the emitted op in place. A
+// generator that emits **not one character
+// literal** at any rung — `grep -c "'" rung5/*.maxon` over a dumped corpus finds none — reads a flat
+// delta of zero for all three, in allocations, in bytes AND in CPU ticks. That is the blind spot this
+// file's header calls its founding defect; the reading is only worth what the
 // corpus can express.
 //
 // ⚠ **NOT `stringOps` WITH A NARROWER LITERAL.** The two types share the 56-byte record and every rule
@@ -1235,8 +1221,8 @@ let GenericBasesBase = 4 as KnobSize
 
 // The two ARITY shapes `genericBasesSource` alternates over: `uses T` and `uses A, B`.
 //
-// Named for `MatchDispatchShapeCount`'s reason, and it used to be a bare `2` written at BOTH of that
-// knob's loops. The count and the branches that realize it are one fact stated twice, so the `else` at
+// Named for `MatchDispatchShapeCount`'s reason: a bare `2` at BOTH of that
+// knob's loops states one fact twice. The count and the branches that realize it are one fact, so the `else` at
 // each of those loops panics rather than falling through — raise this without adding a branch and the
 // ladder stops loudly instead of silently generating fewer arities than the manifest claims.
 let GenericBaseArityShapeCount = 2 as KnobSize
@@ -1258,17 +1244,17 @@ let GenericInstancesBase = 8 as KnobSize
 // cascade). Both must scale, because they are different ownership paths through the same base.
 let GenericInstanceArgShapeCount = 2 as KnobSize
 
-// ⭐⭐ **M `try` SITES OVER A SUBSTITUTED *MANAGED* `T` RETURN — the shape BATCH25 built, and the shape
-// this corpus could not spell on the day it shipped.**
+// ⭐⭐ **M `try` SITES OVER A SUBSTITUTED *MANAGED* `T` RETURN — a shape this corpus has to be able to
+// spell.**
 //
-// A shared generic body cannot classify its `T` return, so BATCH25's shape handed one back as a BORROW and
-// the CALLER took the `+1` (`coOwnSubstitutedCallResult`) — necessarily after the call. Under a `try` that
-// `+1` may not sit in the block the fork splits, where the error edge would run it against a result register
-// the throw never wrote; BATCH25 LIFTS the promotion's ops off that block and re-attaches them at the head
+// A shared generic body cannot classify its `T` return, so a caller-side shape hands one back as a BORROW
+// and the CALLER takes the `+1` (`coOwnSubstitutedCallResult`) — necessarily after the call. Under a `try`
+// that `+1` may not sit in the block the fork splits, where the error edge would run it against a result
+// register the throw never wrote; the promotion's ops are LIFTED off that block and re-attached at the head
 // of the ok edge. **Every op of that mechanism is per-SITE**, which is what this knob doubles.
 //
-// ⚠⚠ **THE CALLER-SIDE HALF OF THAT MECHANISM IS GONE, SO PART OF WHAT THIS KNOB WAS BUILT TO SEE IS NO
-// LONGER THERE TO SEE.** The `+1` sits in the CALLEE (P1.7 slice 3b-vi-a:
+// ⚠⚠ **THE CALLER-SIDE HALF OF THAT MECHANISM IS ABSENT, SO PART OF WHAT THIS KNOB WAS BUILT TO SEE IS
+// NOT THERE TO SEE.** The `+1` sits in the CALLEE (
 // `Parser.emitOwnedValueReturn` → `coOwnBorrowedOpaque` → `__retain_type_param`) and not in any caller-side
 // `coOwnSubstitutedCallResult`, so a
 // substituted `T` return leaves NOTHING trailing the call and the lift finds nothing to relocate — measured
@@ -1327,21 +1313,21 @@ let IfaceDispatchBase = 8 as KnobSize
 let IfaceDispatchTypeCount = 4 as KnobSize
 
 // ===========================================================================================
-// The `__ManagedMemory` BUFFER SURFACE knob (BATCH9 G7)
+// The `__ManagedMemory` BUFFER SURFACE knob
 // ===========================================================================================
 //
-// ⚠ **THE SIXTH RECURRENCE OF THIS FILE'S FOUNDING DEFECT, AND THE MANIFEST DID NOT EVEN NAME IT.**
+// ⚠ **A RECURRENCE OF THIS FILE'S FOUNDING DEFECT THAT THE MANIFEST DID NOT EVEN NAME.**
 // MEASURED on the ladder this knob was written against: `.managed`, `ByteArray`, `toByteArray`,
-// `addressableBytes` and `__ManagedMemory` appeared **zero** times in the generated corpus, at rung 0 and
+// `addressableBytes` and `__ManagedMemory` appear **zero** times in a corpus without it, at rung 0 and
 // at rung 5 alike. So `Parser.bufferSurfaceOf` and `Parser.markBufferSurface` — the whole surface
-// mechanism, eight call sites in seven functions — ran EXACTLY ZERO TIMES on every rung, and the Δ0 the
-// BATCH2 slice-6 rung recorded measured the instrument's blind spot rather than the cost.
+// mechanism, eight call sites in seven functions — run EXACTLY ZERO TIMES on every rung, and a Δ0 read
+// over them measures the instrument's blind spot rather than the cost.
 //
 // ⭐⭐ **THE READ SIDE IS SHORT-CIRCUITED TO NOTHING IN A FILE THAT HAS NO MARKS, WHICH IS WHY "the corpus
-// already dispatches array methods" WAS NOT COVERAGE.** `Parser.valueIsBufferSurface` is asked once per
+// already dispatches array methods" IS NOT COVERAGE.** `Parser.valueIsBufferSurface` is asked once per
 // array-method dispatch, and on the shared zero-capacity set it "returns before it hashes anything" (its
-// own note) — so all 134 array-method call sites the old ladder held at rung 0, and all 4,288 at rung 5,
-// took the free path every time. `bufferSurfaceValues` is PER-PARSER, i.e. per FILE, so the product a
+// own note) — so all 134 array-method call sites a marks-free ladder holds at rung 0, and all 4,288 at
+// rung 5, take the free path every time. `bufferSurfaceValues` is PER-PARSER, i.e. per FILE, so the product a
 // linear-column regression would cost is (marks in this file) x (array dispatches in this file). Both
 // live in this knob's own file, and both double.
 //
@@ -1384,23 +1370,23 @@ let BufferSurfaceElementSize = 1
 let BufferSurfaceByteMask = 255
 
 // ===========================================================================================
-// The NAMESPACE knob (N1b) — SUBDIRECTORIES, and references written `dir.fn()` / `dir.Name`
+// The NAMESPACE knob — SUBDIRECTORIES, and references written `dir.fn()` / `dir.Name`
 // ===========================================================================================
 //
-// ⚠ **THE SEVENTH RECURRENCE OF THIS FILE'S FOUNDING DEFECT, AND THIS TIME THE RUNG'S OWN IMPLEMENTER
-// NAMED IT BEFORE SHIPPING.** N1a taught the compiler that a file's DIRECTORY is its namespace and N1b
-// taught it to resolve `dir.Name` / `dir.fn()` against it — and this generator wrote every rung's files
-// into ONE FLAT DIRECTORY. So `deriveModuleDirectory` answered `""` for every source file in every rung,
-// `Parser.namespace` was empty everywhere, and the whole user half of both rungs — the qualified-alias
-// MIRROR, the namespace-qualified FUNCTION set, the dotted-chain recognizer, the multi-segment walk —
-// ran EXACTLY ZERO TIMES on every rung of the ladder. N1b's own A/B measured −22,639 allocations at
-// rung 5 and every one of them came from `splitQualifiedName` and the stdlib's mirrors; not one came
-// from a user declaration or a user reference, because the corpus could not spell either.
+// ⚠ **A RECURRENCE OF THIS FILE'S FOUNDING DEFECT.** A file's DIRECTORY is its namespace, and
+// `dir.Name` / `dir.fn()` resolve against it — but a generator writing every rung's files
+// into ONE FLAT DIRECTORY makes `deriveModuleDirectory` answer `""` for every source file in every rung,
+// leaves `Parser.namespace` empty everywhere, and runs the whole user half of that work — the
+// qualified-alias MIRROR, the namespace-qualified FUNCTION set, the dotted-chain recognizer, the
+// multi-segment walk —
+// EXACTLY ZERO TIMES on every rung of the ladder. An A/B over it measured −22,639 allocations at
+// rung 5, and every one of them came from `splitQualifiedName` and the stdlib's mirrors; not one
+// from a user declaration or a user reference, because a flat corpus can spell neither.
 //
 // ⭐⭐ **THIS KNOB IS A WIDENING OF WHAT THE INSTRUMENT CAN EXPRESS, WHICH IS THE OPPOSITE OF TUNING IT.**
 // Nothing here makes a number look better; it makes a dimension VISIBLE that read a structural zero
 // before. ⚠ It therefore changes the ladder's ABSOLUTES — every rung compiles more files and more
-// declarations than it did — so `docs/optimization-log.md` rows minted before this knob are NOT
+// declarations — so `docs/optimization-log.md` rows minted before this knob are NOT
 // comparable to rows minted after it. That is the price of curing a blind spot and it is paid once.
 //
 // ⭐ **IT IS A DIRECTORY KNOB, WHICH IS WHY IT GROWS FILES — AND IT IS THE THIRD THAT DOES** (after
@@ -1606,14 +1592,14 @@ function generateRung(root FilePath, rung RungIndex) returns ScaleRung throws Sc
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "o_sallocs", source: structAllocsSource(knobAt(StructAllocsBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(StructAllocsDriver))
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "p_divide", source: intDivideSource(knobAt(IntDivideBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(DivideDriver))
 
-	// Its A1 twin — the THROWING divide shape, on its own knob for the reason `CheckedDivideBase` gives.
+	// Its twin — the THROWING divide shape, on its own knob for the reason `CheckedDivideBase` gives.
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "p_cdivide", source: checkedDivideSource(knobAt(CheckedDivideBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(CheckedDivideDriver))
 
 	// Beside the two divide knobs because it is the third door whose per-site cost is BLOCKS rather than
-	// ops — and the only one in the corpus that reaches a ranged-`return` guard at all (A2a).
+	// ops — and the only one in the corpus that reaches a ranged-`return` guard at all.
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "p_rreturn", source: rangedReturnSource(knobAt(RangedReturnSitesBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(RangedReturnDriver))
 
-	// The ten knobs for what the language gained between P1.1b and P1.7a. Every one is
+	// The ten knobs for the middle of the language. Every one is
 	// cross-target-safe: no `where` clause, no witness dispatch, no `Set` — see their section header.
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "q_enums", source: enumTypesSource(knobAt(EnumTypesBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(EnumTypesDriver))
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "r_match", source: matchSitesSource(knobAt(MatchSitesBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(MatchSitesDriver))
@@ -1635,7 +1621,7 @@ function generateRung(root FilePath, rung RungIndex) returns ScaleRung throws Sc
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "x_ginst", source: genericInstancesSource(knobAt(GenericInstancesBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(GenericInstancesDriver))
 
 	// Beside the two generic knobs because it shares their base emitter, and separate from them because
-	// it is a per-SITE dimension over FIXED instances (BATCH25): the `try` sites where a substituted
+	// it is a per-SITE dimension over FIXED instances: the `try` sites where a substituted
 	// managed `T` result's co-own is lifted onto the ok edge. Nothing in this corpus reached that
 	// mechanism before it — the rung that built the lift measured Δ0 in all three columns and said so.
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "x_trycoown", source: tryCoOwnSource(knobAt(TryCoOwnSitesBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(TryCoOwnDriver))
@@ -1646,19 +1632,19 @@ function generateRung(root FilePath, rung RungIndex) returns ScaleRung throws Sc
 	sourceBytes = sourceBytes + try writeInterfaceTypes(dir, count: knobAt(InterfaceTypesBase, rung: rung), written: written, drivers: drivers)
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "y_ifdisp", source: ifaceDispatchSource(knobAt(IfaceDispatchBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(IfaceDispatchDriver))
 
-	// The `__ManagedMemory` BUFFER SURFACE (BATCH9 G7). Its marks and the array-method dispatches that ASK
+	// The `__ManagedMemory` BUFFER SURFACE. Its marks and the array-method dispatches that ASK
 	// about them share this ONE file deliberately: `bufferSurfaceValues` is per-PARSER, i.e. per file, so the
 	// product a value-keyed regression would cost only exists where both halves are.
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "y_bufsurf", source: bufferSurfacesSource(knobAt(BufferSurfaceSitesBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(BufferSurfacesDriver))
 
-	// The NAMESPACE knob (N1b) — the only one that creates DIRECTORIES, because a namespace IS a
+	// The NAMESPACE knob — the only one that creates DIRECTORIES, because a namespace IS a
 	// directory. It writes and registers itself, and registers ONE driver for M modules; see there.
 	sourceBytes = sourceBytes + try writeNamespacedModules(dir, moduleCount: knobAt(NamespacedModulesBase, rung: rung), written: written, drivers: drivers)
 
 	// `z_`, not `k_`, so `main` sorts last however many knobs are added above it. The prefixes are
 	// cosmetic (The compiler merges in listing order and the merge is order-independent), but a `main` wedged
-	// mid-alphabet would have to be renamed by every future knob, and `pruneRungDir` deletes the old
-	// `k_main.maxon` from a stale rung directory rather than leaving it to join the measurement.
+	// mid-alphabet would have to be renamed by every future knob, and `pruneRungDir` deletes whatever a
+	// stale rung directory holds rather than leaving it to join the measurement.
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "z_main", source: mainSource(drivers), written: written, drivers: drivers, driver: RungDriver.threadsNothing)
 
 	try pruneRungDir(dir, generated: written)
@@ -1669,12 +1655,12 @@ end 'generateRung'
 // WHAT `main` CALLS IN ONE GENERATED FILE — the question every `writeRungFile` must answer, so that a
 // knob CANNOT be added without deciding it.
 //
-// It is a REQUIRED parameter rather than a convention because the failure it prevents is silent. The
-// call list used to be re-spelled by hand in `mainSource`, one line per knob; a knob whose author
-// forgot the line still compiled, still generated its file, and still measured — right up until a DCE
-// pass lands, at which point its now-uncalled function is legitimately deleted and that knob's
+// It is a REQUIRED parameter rather than a convention because the failure it prevents is silent. A
+// call list re-spelled by hand in `mainSource`, one line per knob, lets a knob whose author
+// forgot the line still compile, still generate its file, and still measure — right up until a DCE
+// pass lands, at which point its uncalled function is legitimately deleted and that knob's
 // dimension vanishes from the ladder while the numbers go on looking perfectly linear. There is no
-// DCE today, which is exactly why this had to be fixed before there is.
+// DCE today, which is exactly why this must hold before there is.
 union RungDriver
 	// The file's single entry point, which `main` threads the accumulator through: `acc = name(acc)`.
 	threads(name String)
@@ -1691,7 +1677,7 @@ union RungDriver
 	//  • The two files `main` does not thread at all — `a_seed`, whose `scaleSeed()` SEEDS the
 	//    accumulator rather than taking it, and `z_main`, which IS `main`.
 	//  • ⭐ A file whose functions are reached TRANSITIVELY, through another file's driver, because the
-	//    REFERENCE SHAPE is what that knob measures (N1b). `main` threads only `writeNamespacedModules`'
+	//    REFERENCE SHAPE is what that knob measures. `main` threads only `writeNamespacedModules`'
 	//    root consumer; every module's own functions hang off it by a QUALIFIED reference, and a driver
 	//    entry for them would make `main` call them BARE — measuring precisely what the knob exists to
 	//    stop measuring. The DCE property `RungDriver` defends is unaffected: reachable from `main` is
@@ -1704,7 +1690,7 @@ end 'RungDriver'
 // there, and registering its entry point so `main` can call it without re-spelling the name.
 //
 // ⭐ **`name` MAY CARRY A RUNG-RELATIVE DIRECTORY PREFIX (`"ns3/mod"`), WHICH IS HOW THE NAMESPACE KNOB
-// WRITES INTO A SUBDIRECTORY (N1b).** `FilePath.join` normalizes the separator to the host's, so the
+// WRITES INTO A SUBDIRECTORY.** `FilePath.join` normalizes the separator to the host's, so the
 // PATH is right on either host, while `written` records the `/`-joined RELATIVE spelling — which is
 // exactly the key `pruneRungDir` rebuilds as it walks. Nothing else about this routine changes, and no
 // flat-directory call site moves: a name with no separator IS its own relative path.
@@ -1739,7 +1725,7 @@ end 'writeRungFile'
 // executable an older version of the runner wrote there — is compiled or listed by `build <dir>`, and
 // so is part of the measurement, silently and unreproducibly.
 //
-// ⭐ **IT RECURSES, BECAUSE A RUNG NOW HAS SUBDIRECTORIES AND A NAMESPACE IS A DIRECTORY (N1b).** The
+// ⭐ **IT RECURSES, BECAUSE A RUNG HAS SUBDIRECTORIES AND A NAMESPACE IS A DIRECTORY.** The
 // invariant is unchanged and now covers the whole tree: every `.maxon` file under the rung is one this
 // run wrote. `generated` therefore holds `/`-joined RUNG-RELATIVE paths (`"ns3/mod.maxon"`) rather than
 // bare filenames, and names each generated DIRECTORY with a trailing separator (`"ns3/"`) — a directory
@@ -1805,7 +1791,7 @@ let OpaqueCoreCalleeName = "scaleOpaqueCore"
 //
 // This is the same trick `specs/register-pressure.md` uses to hold 17 values live without the
 // folder eating them.
-// ⭐⭐ **THE HEADER OF A FUNCTION `z_main` CALLS — AND `z_main` IS IN ANOTHER FILE (N1a).** A cross-file
+// ⭐⭐ **THE HEADER OF A FUNCTION `z_main` CALLS — AND `z_main` IS IN ANOTHER FILE.** A cross-file
 // call to a file-private callee is E3008, so every name that lands in `drivers` (plus the seed, which
 // `mainSource` calls directly) has to be `export`ed. Spelled ONCE, beside the array that decides
 // membership, so a knob added later cannot forget it — the failure it prevents is a corpus that does not
@@ -1861,7 +1847,7 @@ function seedSource() returns String
 	// is what forces the spills the splitter is measured on. A single-level `scaleOpaque` is a tiny LEAF
 	// (a branch and two returns, no call at all), so `inlineLeaves` splices it into every one of those
 	// loops and the pressure it was there to create disappears — the ladder would go on reporting a
-	// spill knob that no longer spills. That is this file's own recorded failure story, arriving for an
+	// spill knob that does not spill — this file's own founding defect, arriving for an
 	// INLINER instead of for a DCE.
 	//
 	// The cure keeps the knob honest without adding one: `scaleOpaque` CALLS `scaleOpaqueCore`, which
@@ -1964,8 +1950,7 @@ end 'writeManyFunctions'
 // and `k >= 1`, `c > a` is `2a + 3k > 0` and `b < c` is `2a + 2k > 0` — both true for every `a >= 0`,
 // and `a` is the seed. So the guard's arm is known, `c - a` is `2a + 3k`, and the path that returns the
 // failure offset is the one that cannot be reached: this single site witnesses the short-circuit `and`'s
-// OUTCOME and the arithmetic behind it at once. (The old fall-through `return c + a` is what the
-// failure path replaces; nothing else about the body moves.)
+// OUTCOME and the arithmetic behind it at once.
 function smallFunctionSource(fileIndex KnobIndex, slot KnobIndex, salt KnobIndex) returns String
 	let name = smallFunctionName(fileIndex, slot: slot)
 
@@ -2008,7 +1993,7 @@ let LongIfDriver = "scaleLongIf"
 //
 //   • `localCount` SCOPE-FILLERS, so V climbs and the parser's per-branch O(vars-in-scope) snapshot
 //     has something to climb WITH. Every filler is in scope at every `if` below it, and there are V of
-//     them at the top rung. It used to be a fixed handful.
+//     them at the top rung.
 //   • Each branch mutates a ROTATING SUBSET of the bounded WORKING set, never the whole thing. A branch
 //     that wrote every var in scope would make "cost O(vars in scope)" and "cost O(vars assigned)" the
 //     same number, and the corpus could not tell the two apart — precisely the distinction that
@@ -2057,7 +2042,7 @@ let DeepBlocksDriver = "scaleDeepBlocks"
 
 // The `deepBlocks` knob: ONE function whose BLOCK count is huge. Each if/else is three blocks (then,
 // else, continuation), so this lands near 3x its knob — ~19,200 blocks at rung 5, which is the
-// shape that used to SIGSEGV and the reason "no CFG traversal may recurse" is a rule rather than a
+// shape that SIGSEGVs a recursive CFG traversal and the reason "no CFG traversal may recurse" is a rule rather than a
 // preference. Distinct from `longFunction`: that grows ops along a chain, this grows the CFG. It
 // carries the same `localCount` scope-fillers, so the V dimension is measured against a DIAMOND CFG
 // here and a straight chain there.
@@ -2116,13 +2101,13 @@ end 'chainLinkName'
 // is READ OFF THE GENERATOR rather than recomputed from the knob's size. `topName` is literally the
 // last link this loop emitted.
 //
-// This used to be a `callChainSource` + `chainTopName(length)` pair returning `chainLinkName(length
-// - 1)`, which was the file's own signature bug: "the links are numbered 0..length-1" was written
+// A separate `chainTopName(length)` returning `chainLinkName(length - 1)` would be the file's own
+// signature bug: "the links are numbered 0..length-1" written
 // TWICE — once as this loop's bound, once as that subtraction — with nothing making the copies
-// agree. The failure was SILENT, which is what made it worth closing: a stale `chainTopName` names a
+// agree. The failure is SILENT, which is what makes it worth closing: a stale `chainTopName` names a
 // MIDDLE link, `main` still calls a real function, everything still compiles, and the knob quietly
-// measures a shorter chain than the ladder says it does. Now the two cannot disagree, because there
-// is only one of them.
+// measures a shorter chain than the ladder says it does. There is only one spelling here, so the two
+// cannot disagree.
 // ⭐ **THE BASE LINK IS THE ONE FUNCTION HERE THAT DOES NOT WITNESS ITSELF, AND THAT IS THE POINT.**
 // `scaleChain0` is a single `a + 1`; a witness on it would compare `a + 1` against `a + 1`, which is two
 // spellings of one expression and catches nothing — a check that cannot fail, in the rung that exists to
@@ -2316,8 +2301,8 @@ function confinedDefsSource(groupCount KnobSize) returns String
 end 'confinedDefsSource'
 
 // The condition every nested loop tests. Large enough that the loop is not trivially one iteration.
-// The bound is irrelevant to what is MEASURED — only the loop's SHAPE is compiled — but since BATCH10
-// it is also what the nest actually executes, ~10^6 additions, which costs microseconds. It is
+// The bound is irrelevant to what is MEASURED — only the loop's SHAPE is compiled — but it is also
+// what the nest actually executes, ~10^6 additions, which costs microseconds. It is
 // compared against the opaque `acc`, so the folder cannot see through it.
 let NestedLoopLimit = 1000000
 
@@ -2352,9 +2337,9 @@ let NestedDriver = "scaleNested"
 // a different one. `depth` tops out at 256 on an eight-rung ladder, so the descent is at most ~33,000
 // against a limit of a million; the check below is what keeps that true if either constant moves.
 //
-// ⚠ **`NestedLoopLimit` IS DELIBERATELY NOT LOWERED.** Now that the rungs are RUN, the 10^6 trips cost
-// microseconds — and lowering it would shrink an `imm32` to an `imm8` and move every byte column in the
-// ladder for nothing. The old hang was never this bound; it was an accumulator that arrived negative.
+// ⚠ **`NestedLoopLimit` IS DELIBERATELY NOT LOWERED.** The rungs are RUN and the 10^6 trips cost
+// microseconds — while lowering it would shrink an `imm32` to an `imm8` and move every byte column in
+// the ladder for nothing. ⛔ A hang here is an accumulator arriving negative, never this bound.
 function nestedLoopsSource(depth KnobSize) returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: the loop-nest knob — one chain of {depth} loops nested to depth {depth}, all carrying one accumulator.\n")
@@ -2430,23 +2415,22 @@ end 'trackedFloatSet'
 
 // The multiplier a float group applies, as a value and as the source text of the same literal.
 //
-// ⭐⭐ **THE THREE MULTIPLIERS MOVED FROM 2.5 / 3.5 / 4.5 TO 0.75 / 0.85 / 0.95, AND IT IS THE ONE PLACE
-// IN THIS RUNG WHERE A KNOB'S CONTENT CHANGED. MEASURED, on this knob's own recurrence:** at the old
-// constants `fsum` left i64 range at rung 1 (3.3e22), and was **NaN from rung 5** — the DEFAULT top rung
-// — so the program `trunc`ed a NaN. That was invisible while the corpus was only ever compiled; the
-// moment the rungs are RUN it is a wrong answer, and a target-dependent one (x64's `cvttsd2si` answers
-// `i64.min` for NaN where arm64's `fcvtzs` answers 0), so it would have made the ladder's exit code a
-// property of the host.
+// ⭐⭐ **THE THREE MULTIPLIERS ARE SUB-UNIT — 0.75 / 0.85 / 0.95 — AND THAT IS LOAD-BEARING. MEASURED:**
+// at 2.5 / 3.5 / 4.5, `fsum` leaves i64 range at rung 1 (3.3e22) and is **NaN from rung 5** — the
+// DEFAULT top rung — so the program `trunc`s a NaN. That is invisible while the corpus is only
+// compiled; the rungs are RUN, so it is a wrong answer, and a target-dependent one (x64's `cvttsd2si`
+// answers `i64.min` for NaN where arm64's `fcvtzs` answers 0), which would make the ladder's exit code
+// a property of the host.
 //
-// The blow-up is the ADDITIVE coupling (`f{p} = f{p} + f{q}`), not the multiply: candidates keeping the
-// old multipliers overflow whichever accumulator is divided, and every multiplier above ~1 does too. A
+// The blow-up is the ADDITIVE coupling (`f{p} = f{p} + f{q}`), not the multiply: any multiplier above
+// ~1 overflows whichever accumulator is divided. A
 // sub-unit multiplier is the smallest change that bounds it — measured finite and identical at every
 // rung from 0 to 7, settling near 7.6/8.4.
 //
-// **WHAT IT COST, exactly: nothing in what the knob PRICES.** Same four arithmetic ops in the same
+// **WHAT IT COSTS, exactly: nothing in what the knob PRICES.** Same four arithmetic ops in the same
 // order, same two compares, same two float phis, same THREE distinct `.rdata` constants, same site
-// count, same live-value count. Only the numbers in them are smaller. What it did cost is DYNAMIC RANGE:
-// the accumulators now reach a fixed point, so at the top rungs `fsum` no longer varies with the seed.
+// count, same live-value count. Only the numbers in them are smaller. What it DOES cost is DYNAMIC
+// RANGE: the accumulators reach a fixed point, so at the top rungs `fsum` does not vary with the seed.
 // That is invisible to the compiler either way — there is no SCCP and `a` is an opaque parameter — so
 // the witness stays a live runtime compare; but it does mean this knob's RUNTIME check is weaker than
 // the others, and it is the one place that is true.
@@ -2749,8 +2733,8 @@ let GlobalVarsDriver = "scaleGlobalVars"
 // `acc`, and the load reads a location the folder must assume anything could have written.
 //
 // That opacity is a PROPERTY, not an accident, and `specs/global-load-not-hoisted.md` verifies the
-// ANSWER a program gets. ⚠ **This comment used to name `StdOp.loadIndirect`'s `isPure: false` as the
-// mechanism. IT IS NOT: `StdOpMeta.isPure` has ZERO readers (OPEN.md #27)**, so it holds nothing off —
+// ANSWER a program gets. ⚠ **`StdOp.loadIndirect`'s `isPure: false` IS NOT THE MECHANISM:
+// `StdOpMeta.isPure` has ZERO readers**, so it holds nothing off —
 // the folder is stopped by the match arm named above, and nothing HOISTS because no pass hoists.
 //
 // The knob must still never be "fixed" by making the load pure to tidy up a number: that declaration
@@ -2804,9 +2788,9 @@ end 'globalVarsSource'
 // how many of them exist, and how many times one is built.
 //
 // It also emits the per-type READER — a free function taking the struct BY PARAMETER and reading its
-// fields, which is a struct crossing a CALL BOUNDARY. That shape shipped (`specs/structs.md`'s
-// `struct-literal-as-arg`, `struct-managed-field.md`'s `param-consumed-into-field`) while this file's
-// manifest went on calling it "P1.4, deferred on the borrow-vs-consume ruling" — see `printCorpusManifest`.
+// fields, which is a struct crossing a CALL BOUNDARY. That shape is LIVE (`specs/structs.md`'s
+// `struct-literal-as-arg`, `struct-managed-field.md`'s `param-consumed-into-field`), so the manifest
+// must not go on calling it deferred — see `printCorpusManifest`.
 function structTypeDecl(name String) returns String
 	var out = StringBuilder.create()
 	out.append("\ntype {name}\n")
@@ -2849,21 +2833,20 @@ end 'structReaderName'
 //
 // ⚠ IT DOES NOT DEPEND ON THE `closeBlock` LEAK, WHICH IS THE FIRST THING A READER WILL SUSPECT.
 // `closeBlock` (Parser.maxon:2270) drains the binding and deliberately emits NO drop, so a struct in
-// a block was STATED to leak (exit 101, a P1.4 gap this instrument could not observe while it only
-// COMPILED these programs — it now RUNS them, so a leak in a rung would surface here as a non-zero exit).
+// a block is STATED to leak (exit 101) — and the rungs are RUN, so a leak in one would surface here as
+// a non-zero exit.
 //
-// ⚠⚠ **THAT CONSEQUENCE DID NOT REPRODUCE WHEN SOMEBODY FINALLY WENT AND RAN IT, 2026-08-02.** BATCH9's
-// review BUILT and RAN two shapes — a struct with a `String` field created inside an `if`, and an
+// ⚠⚠ **THAT CONSEQUENCE DOES NOT REPRODUCE. MEASURED 2026-08-02:** two shapes BUILT and RAN — a struct
+// with a `String` field created inside an `if`, and an
 // `Array with String` plus a heap `String` across two blocks — and both exit **0**, with
-// `___mm_leak_check` confirmed present in each entry stub by `otool -tV`, so the gate was live and
-// silent rather than absent. Either P1.4 closed it, or the claim was always narrower than its wording.
-// It is QUALIFIED here rather than deleted because two probes are not a proof of absence, and the
-// measurement is recorded at the one moment it is known.
+// `___mm_leak_check` confirmed present in each entry stub by `otool -tV`, so the gate is live and
+// silent rather than absent. The claim is QUALIFIED here rather than deleted because two probes are not
+// a proof of absence.
 //
-// ⇒ **AND NOTHING BELOW DEPENDS ON WHICH WAY IT WENT**, which is the point of the paragraph: that leak
+// ⇒ **AND NOTHING BELOW DEPENDS ON WHICH WAY IT GOES**, which is the point of the paragraph: that leak
 // is not what bounds the live range, and the knob does not want it to be. When the drop is emitted at
-// the block's END, the live range is bounded by the block either way. Correct before the fix and after
-// it — which is the only reason it is safe to lean on a construct carrying a claimed gap.
+// the block's END, the live range is bounded by the block either way — which is the only reason it is
+// safe to lean on a construct carrying a claimed gap.
 //
 // The `if` is SCOPE SCAFFOLDING, not a CFG dimension — `deepBlocks` owns that one, and this adds ~1
 // branch per site against its ~3 blocks per if/else. `pressuredLoops` uses `while` the same way, for
@@ -2875,9 +2858,9 @@ end 'structReaderName'
 // ⭐⭐ **AND IT MARKS THAT IT RAN, WHICH IS THE ONE THING NEUTRALIZING THE FOLDS COULD NOT CATCH.**
 // Every site inside this block subtracts what it contributed, so the block leaves `acc` exactly as it
 // found it — which means a block that NEVER EXECUTED leaves `acc` exactly as it found it too, and the
-// two are indistinguishable. That is not a hypothetical: MEASURED on the rung-0 binary before this rung,
-// `acc > 0` was FALSE for seven consecutive knobs (the accumulator had wrapped negative), so every array,
-// generic, interface and buffer site in the corpus was skipped at run time and no reading could tell.
+// two are indistinguishable. That is not a hypothetical: MEASURED on the rung-0 binary, with the
+// accumulator wrapped negative, `acc > 0` reads FALSE for seven consecutive knobs, so every array,
+// generic, interface and buffer site in the corpus is skipped at run time and no reading can tell.
 //
 // The mark closes it: added INSIDE the guard, taken off OUTSIDE it. A block that did not run is short by
 // exactly `SiteEnteredMark`, and the driver's witness fails. It is one `add` and one `sub` per site — the
@@ -3021,7 +3004,7 @@ end 'genericBoxDecl'
 
 // The throwing sibling of `get`: the same substituted `T` return, and a `throws` clause that is the
 // whole difference. It is what puts the caller's `+1` for a substituted managed result under a `try` —
-// the promotion BATCH25 lifts onto the ok edge.
+// the promotion lifted onto the ok edge.
 //
 // ⭐ **THE `live` FLAG IS WHAT MAKES THE ERROR EDGE RUN, and a corpus whose error edge never runs cannot
 // check the half of this rung that emits NOTHING.** The lift's rule is that the promotion goes on the ok
@@ -3078,7 +3061,7 @@ let StructTypesDriver = "scaleStructTypes"
 //
 // ⚠ NO `__destruct_<T>` CASCADE RIDES THIS KNOB, and that is a property of the TYPE it emits, not of the
 // compiler: `structTypeDecl` declares two `int` fields, so the type owns nothing and its drop is trivial.
-// The SYNTHESIZED cascade does exist (`installStructDestructors`, P1.4a wave 2 — one `__destruct_<T>` body
+// The SYNTHESIZED cascade does exist (`installStructDestructors` — one `__destruct_<T>` body
 // per managed-field type, rooted and installed), and the knob that doubles it is `managedStructTypes`,
 // whose types own a `String`. Keep the two apart: a change to destructor synthesis must move that column
 // and leave this one flat, which is the whole reason both knobs exist.
@@ -3114,7 +3097,7 @@ let StructAllocsDriver = "scaleStructAllocs"
 // The per-SITE cost is the point — an `__mm_alloc` call, a field store per field, and the release the
 // value's death forces — so what doubles is the number of ALLOCATION SITES while the number of types
 // stays put. That is the whole of the difference from `structTypes`, and the reason the two are not one
-// knob with a bigger number: this is the column that moves when P1.1a wave 2 changes what a `create`
+// knob with a bigger number: this is the column that moves when a change to field WRITES changes what a `create`
 // emits, and that one is the column that moves when the layout descriptor changes.
 //
 // Every create is block-scoped for the reason `structCreateInBlock` states — measured at x3.96 per
@@ -3174,7 +3157,7 @@ function intDivideSource(groupCount KnobSize) returns String
 	// this witness see the RAX/RDX split it exists for: a lowering that read the quotient out of the
 	// remainder's register moves one fold and not the other.
 	for i in 0 upto groupCount 'eachGroup'
-		// The CAST is what keeps this the BARE `idiv` knob after A1 — see `DivisorMask`'s second ⚠.
+		// The CAST is what keeps this the BARE `idiv` knob — see `DivisorMask`'s second ⚠.
 		out.append("\tlet d{i} = ((a and {DivisorMask}) + 1) as {ScaleDivisorAlias}\n")
 		out.append("\tacc = acc + {asScaleInt("({DivideDividendGlobal} / d{i})")}{neutralizeText(corpusSeedQuotient())}\n")
 		out.append(accProbe("\t"))
@@ -3188,13 +3171,13 @@ end 'intDivideSource'
 
 let CheckedDivideDriver = "scaleCheckedDivide"
 
-// ⭐ **THE `checkedDivide` KNOB (A1): N `try (a / d) otherwise …` / `try (a mod d) otherwise …` groups.**
+// ⭐ **THE `checkedDivide` KNOB: N `try (a / d) otherwise …` / `try (a mod d) otherwise …` groups.**
 //
 // The divisor is derived from the seed and DELIBERATELY NOT CAST, which is the whole difference from
 // `intDivideSource` above: uncast it is `possiblyZero`, so each group becomes a checked divide — three
 // extra ops and a three-block `try` fork — and the accumulator is live across every one of them.
 //
-// ⚠ **WITHOUT THIS KNOB THE LADDER COULD NOT SEE THE CONSTRUCT A1 ADDED AT ALL**, and a flat reading
+// ⚠ **WITHOUT THIS KNOB THE LADDER CANNOT SEE THE THROWING DIVIDE AT ALL**, and a flat reading
 // would have meant nothing: `docs/optimization-log.md` already carries the lesson under its own name —
 // "'0 corpus hits' measured the instrument's blind spot, not the cost". The cost this exposes is not the
 // three ops (a constant per site); it is the BLOCKS, which every block-walking pass downstream — the
@@ -3227,7 +3210,7 @@ let RangedReturnDriver = "scaleRangedReturns"
 let RangedReturnPickName = "scaleRangedReturnPick"
 let RangedReturnNarrowAlias = "ScaleRetNarrow"
 
-// ⭐ **THE RANGED-`return` KNOB (A2a): N guarded `return` sites, all in ONE function and all returning
+// ⭐ **THE RANGED-`return` KNOB: N guarded `return` sites, all in ONE function and all returning
 // the SAME parameter.** See `RangedReturnSitesBase` for what this axis is and why the corpus had none of
 // it; this is the shape `tests/ladders/genretsites.sh` generates in its `onefunc` mode, so a reading
 // here and a reading there are about the same construct.
@@ -3241,7 +3224,7 @@ let RangedReturnNarrowAlias = "ScaleRetNarrow"
 //     recorded, which is exactly why the corpus's existing aliases reach no guard.
 //   * EVERY SITE RETURNS THE SAME PARAMETER, so all N share ONE ValueId. That is the shape a value-keyed
 //     lookup must CONSUME rather than merely answer, and it is what an ordinary wide `match` returning a
-//     ranged alias looks like — it is also the shape A1h's first, reverted cure got WRONG.
+//     ranged alias looks like — it is also the shape the first attempt at that cure got WRONG.
 function rangedReturnSource(siteCount KnobSize) returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: the ranged-`return` knob — {siteCount} guarded `return` sites in ONE function, every one returning the SAME parameter through a NARROWED alias.\n")
@@ -3304,8 +3287,8 @@ let ShiftCountMask = 63
 let ShiftsDriver = "scaleShifts"
 
 // The shift COVERAGE shapes. These do NOT scale — they are about COVERAGE, not the ladder: their
-// value is that a future codegen change to shifts is no longer invisible, the way the `const`-flags
-// fix was invisible because the corpus had no `and`/`or`. A shift codegen change moves these functions'
+// value is that a codegen change to shifts is not invisible — the way a `const`-flags change is
+// invisible to a corpus with no `and`/`or`. A shift codegen change moves these functions'
 // emitted bytes, and the trend delta reports ANY movement, constant or not.
 //
 // Four axes are covered that the corpus had at ZERO before:
@@ -3364,11 +3347,11 @@ function shiftCoverageSource() returns String
 	// witnessed against the same shift this generator wrote, applied to the pinned seed with the same
 	// operators. The paragraph above is still true of what is MEASURED.
 	//
-	// ⛔⛔ **BUT THE FILL IS NOT AMONG WHAT THESE SIX WITNESS, AND THIS COMMENT CLAIMED IT WAS** (BATCH10
-	// review). It said a shift "which filled with sign where it should have filled with zero changes one of
-	// these six numbers", naming the `const=0` vs `dyn=-4294967296` defect — and then said, four lines
-	// down, that the seed is non-negative and small so the logical and arithmetic forms AGREE on it. Both
-	// cannot be true, and it is the second one: with the seed at 19, arithmetic and logical `shr` answer
+	// ⛔⛔ **BUT THE FILL IS NOT AMONG WHAT THESE SIX WITNESS.** It is tempting to claim that a shift
+	// "which filled with sign where it should have filled with zero changes one of these six numbers",
+	// naming the `const=0` vs `dyn=-4294967296` defect — and it contradicts the fact four lines
+	// down that the seed is non-negative and small, so the logical and arithmetic forms AGREE on it. The
+	// second is the true one: with the seed at 19, arithmetic and logical `shr` answer
 	// identically on every operand here, so **no fill disagreement is representable in this block.**
 	//
 	// ⚠ **WORSE, FOUR OF THE SIX ARE DEGENERATE AT THIS SEED, AND THE EMITTED CORPUS SHOWS IT.** `19 shr 60`
@@ -3411,7 +3394,7 @@ function shiftCoverageSource() returns String
 	// its value because the seed is pinned. Fed to BOTH constant-count callees below, whose bodies are
 	// identical but for the operand's declared RANGE — so `scaleShiftWideConst` must answer 15 and
 	// `scaleShiftSignedConst` must answer -1, and a compiler that picked one fill for both is caught by
-	// whichever it got wrong. On the old non-negative `a` the two agreed and neither could be wrong.
+	// whichever it got wrong. A non-negative `a` would make the two agree, and neither could then be wrong.
 	out.append("\tlet hi = a - {ShiftHighBitOffset}\n")
 
 	// Two INDEPENDENT dynamic counts — see `scaleShiftDyn`. Both are runtime values derived from the
@@ -3487,9 +3470,8 @@ let ShiftSecondCountMask = 7
 // so the only requirement is that the result is below zero — which is what the seed guard enforces, and
 // why this is larger than the seed rather than any particular bit pattern.
 //
-// ⚠ It replaced `ShiftRoundTripHeadroom`, which existed so that `(v shl c) shr c` returned `v`. That
-// round trip is gone on purpose: returning `v` is precisely the property that let a defect moving both
-// shifts cancel, so there is no longer a round trip to leave headroom for.
+// ⚠ There is deliberately NO round trip: `(v shl c) shr c` returning `v` is precisely the property that
+// lets a defect moving both shifts cancel, so there is no round trip to leave headroom for.
 let ShiftHighBitOffset = 100
 
 // The remaining SCALAR coverage shapes, and the one aggregate shape whose COUNT is not interesting.
@@ -3679,7 +3661,7 @@ function coverageBreakValue(argument TrackedValue) returns TrackedValue
 end 'coverageBreakValue'
 
 // ===========================================================================================
-// The ten knobs for P1.1b..P1.7a, as source
+// The ten knobs for the middle of the language, as source
 // ===========================================================================================
 
 // The names each of the ten knobs below declares and then reads back — spelled in a DECLARATION and in a
@@ -4045,7 +4027,7 @@ end 'matchExpressionSite'
 // underneath it.
 //
 // ⚠ THE INTERPOLATION IS NOT INSIDE A LOOP. A 14-GPR pool refuses a 16-live-value interpolation in a loop
-// body with E5001 (PLAN.md #76) — a FATAL compile error that would take the whole ladder down, not a
+// body with E5001 — a FATAL compile error that would take the whole ladder down, not a
 // warning. Each group here is straight-line inside a single `if`, so peak pressure is a handful.
 function stringOpsSource(groupCount KnobSize) returns String
 	var out = StringBuilder.create()
@@ -4061,7 +4043,7 @@ function stringOpsSource(groupCount KnobSize) returns String
 	//
 	// ⭐ AND THE `==` IS FALSE BY CONSTRUCTION, so its arm is the witness. `sv{i}` had `st{i}` appended to
 	// it one line above and `st{i}` is never empty, so a `__str_eq` answering true is a defect — and the
-	// arm says so by adding the failure offset rather than the `+ 1` it used to.
+	// arm says so by adding the failure offset.
 	for i in 0 upto groupCount 'eachGroup'
 		let literal = "scale string payload segment number {i} long enough to reach the heap"
 		var body = StringBuilder.create()
@@ -4328,8 +4310,7 @@ let TrimDigitPad = "123"
 
 // ⭐ **THE CORE OPENS AND CLOSES ON A MULTI-BYTE CLUSTER, WHICH IS WHERE A TRIM ACTUALLY WORKS.** Both
 // trims stop at the FIRST KEPT cluster — the property that keeps a no-op trim from costing a full walk,
-// stated by the synthesized `__str_trim`'s `stopsAtFirstKept` until W49 wave 4 and owned by
-// `stdlib/String.maxon`'s trims ever since (the runtime file that held it went at W129) — so the only
+// owned by `stdlib/String.maxon`'s trims — so the only
 // cluster either one has to CLASSIFY rather
 // than skip is the one at the boundary. An all-ASCII core would settle that decision on a single byte and
 // never decode a sequence.
@@ -4558,10 +4539,9 @@ end 'CharSample'
 // exist. A corpus with one character per site would be measuring the interner instead.
 let CharSampleCount = 4 as KnobIndex
 
-// ⭐ **THE ROSTER SPANS BOTH RECORD WIDTHS, AND THAT IS THE ONE DISTINCTION THE OLD WIDTH RULE TURNED
-// ON.** Until BATCH23 a one-byte literal was an `int` and a wider one was a `Character`, so a roster of
-// ASCII would exercise exactly the half that USED to be trivial and none of the half that always was a
-// record. `é` is `C3 A9` and `ü` is `C3 BC`: two bytes each, sharing a first byte, so the interval below
+// ⭐ **THE ROSTER SPANS BOTH RECORD WIDTHS.** A roster of ASCII exercises only the one-byte half, and a
+// width rule that treats a one-byte literal differently from a wider one would then go unmeasured.
+// `é` is `C3 A9` and `ü` is `C3 BC`: two bytes each, sharing a first byte, so the interval below
 // tests the byte loop past its first step rather than settling on it.
 //
 // ⚠ **EVERY ORDERING FACT HERE IS BYTE-LEXICOGRAPHIC, WHICH IS WHAT `__char_cmp` IMPLEMENTS** — never
@@ -4594,18 +4574,18 @@ let CharRangeHit = "c"
 
 // The `charOps` knob: M `Character` operation groups, each in its own block for `ownedSiteBlock`'s reason.
 //
-// The five shapes are the five distinct things BATCH23 gave a character literal to do, and each reaches a
+// The five shapes are the five distinct things a character literal can do, each reaching a
 // different piece of the compiler:
 //
 //   • a `let` BINDING off an immortal `.rdata` byte record, then `==` against the same literal — the
-//     `__str_eq` content compare a `Character` equality now lowers to, where a one-byte literal used to be
-//     an immediate integer compare. This is the shape the rung's implementer flagged as a cost and
-//     deliberately did not act on; it is measurable here for the first time.
+//     `__str_eq` content compare a `Character` equality lowers to, rather than the immediate integer
+//     compare a one-byte literal would take. That is a KNOWN cost nobody has acted on, and this knob is
+//     what makes it measurable.
 //   • `>` against a known-lower character — `__char_cmp` plus `emitOrderingVerdict`'s `Ordering` test,
 //     the ONE operation where `Character` and `String` part company.
 //   • the literal in an INTEGER position (`acc + 'a'`), which is `integerizedOperand` finding a lone
 //     `charLiteral` token and `retypeCharLiteralAsCodepoint` REWRITING the emitted `stringLiteral` op in
-//     place. It is also the only site that fills `Parser.charLiteralOps`, the map BATCH23 added — so this
+//     place. It is also the only site that fills `Parser.charLiteralOps` — so this
 //     knob is what makes that map's growth a column rather than a claim.
 //   • a `match` with a character INTERVAL arm — the linear compare chain a Character scrutinee keeps
 //     (an integer-like scrutinee would get a binary search or a jump table, which the enum knob owns).
@@ -5036,7 +5016,7 @@ end 'tryCoOwnPayloadText'
 //     `tryok`;
 //   • the CONDITION form (`if let x = try box.fetch(…) 'ok' … end 'ok' else (e) 'bad' … end 'bad'`),
 //     which reaches the same fork by a different road — `parseCatchingCondition`, not `desugarTry` —
-//     and whose ok edge is the THEN block. This is the arm BATCH25's review found releasing the fork's
+//     and whose ok edge is the THEN block — the arm whose defect is releasing the fork's
 //     temporaries into the block that dominates BOTH edges;
 //   • the ARGUMENT position (`try consume(box.get(), …)`), where a substituted `T` result is co-owned
 //     too and the promotion must NOT move: it belongs to a value the callee is handed, on the
@@ -5133,7 +5113,7 @@ type TryCoOwnSpelling
 end 'TryCoOwnSpelling'
 
 // The AGGREGATE spelling: `T` is a struct owning a String, so the caller's promotion is the single
-// `__mm_retain` call the try-rewrite used to claim as its target. Its value rides in a field, so the ok
+// `__mm_retain` call a try-rewrite would claim as its target. Its value rides in a field, so the ok
 // edge is worth the seed the holder was built from.
 function tryCoOwnAggregateSpelling(index KnobIndex) returns TryCoOwnSpelling
 	let payload = "{TryCoOwnHolderName}.create(\"try co-own holder {index}\", value: a)"
@@ -5198,7 +5178,7 @@ function tryCoOwnPick(throwsHere bool, taken TrackedValue, untaken TrackedValue)
 	return untaken
 end 'tryCoOwnPick'
 
-// ⭐⭐ **THE NAMESPACE KNOB (N1b): M module DIRECTORIES, and one root consumer that names every one of
+// ⭐⭐ **THE NAMESPACE KNOB: M module DIRECTORIES, and one root consumer that names every one of
 // them with a QUALIFIER.** See `NamespacedModulesBase` for why the corpus had none of this and what it
 // meant. This is the only knob that creates directories, because a namespace IS a directory.
 //
@@ -5211,7 +5191,7 @@ end 'tryCoOwnPick'
 // from inside a namespaced file) `ns{m-1}.nsHelper{m-1}`. So a future DCE deletes nothing, which is the
 // property `RungDriver` exists to defend.
 //
-// **WHAT EACH MODULE `ns{m}/` GENERATES, and every line of it is a door the flat corpus could not open:**
+// **WHAT EACH MODULE `ns{m}/` GENERATES, and every line of it is a door a flat corpus cannot open:**
 //
 //   `ns{m}/mod.maxon` (namespace `ns{m}`)
 //     • `export typealias {NsSharedAliasName}` — M-way CONTESTED, mirrored under `ns{m}.{NsSharedAliasName}`.
@@ -5220,7 +5200,7 @@ end 'tryCoOwnPick'
 //       declaration that gets NO mirror (`pushNamespaceQualifiedAlias` gates on `visibility != file`),
 //       so the corpus prices the gate's false arm as well as its true one.
 //     • `module function nsShared{m}` — the `Visibility.module` SUBTREE tier, which this corpus generated
-//       ZERO of before this knob (`grep -c 'module ' ` read 0). Reached bare from `ns{m}/inner/`, so the
+//       ZERO of without this knob (`grep -c 'module ' ` reads 0). Reached bare from `ns{m}/inner/`, so the
 //       expensive subtree-prefix arm of `isVisibleFrom` runs at every rung.
 //     • `export function nsHelper{m}` and a FILE-PRIVATE `nsHidden{m}` — and BOTH get an entry in
 //       `ProgramSignatures.namespaceQualifiedFunctions`, because the function side deliberately does not
@@ -5237,11 +5217,11 @@ end 'tryCoOwnPick'
 //       and the PREVIOUS module's export by QUALIFIER — a qualified reference written from INSIDE a
 //       namespaced file, which is not the same parser state as one written from the root.
 //
-// ⚠ **N1a's INTENT IS PRESERVED, NOT REPLACED.** That rung exported only `driverHeader` and left every
-// other generated function file-private ON PURPOSE, so the ladder exercises `isVisibleFrom`'s expensive
-// `file` arm rather than only the cheap `global` one. Every file-private declaration in the flat corpus
-// is untouched, and this knob ADDS a private free function and a private alias per module — so the
-// `file` arm gets MORE traffic here, not less, and the `module` arm gets its first.
+// ⚠ **THE FLAT CORPUS'S OWN INTENT IS PRESERVED, NOT REPLACED.** It exports only `driverHeader` and
+// leaves every other generated function file-private ON PURPOSE, so the ladder exercises
+// `isVisibleFrom`'s expensive `file` arm rather than only the cheap `global` one. Every file-private
+// declaration there is untouched, and this knob ADDS a private free function and a private alias per
+// module — so the `file` arm gets MORE traffic here, not less, and the `module` arm gets its first.
 function writeNamespacedModules(dir FilePath, moduleCount KnobSize, written StringArray, drivers StringArray) returns SourceByteCount throws ScaleError
 	var total = 0 as SourceByteCount
 	var consumer = StringBuilder.create()
@@ -5370,7 +5350,7 @@ function namespacedInnerSource(m KnobIndex) returns String
 	out.append(driverHeader("{NsDeepFuncPrefix}{m}"))
 
 	// The enclosing directory's `module` declaration, named BARE from a file one level DOWN — the subtree
-	// prefix compare, which is `isVisibleFrom`'s most expensive arm and had no traffic at all before N1b.
+	// prefix compare, which is `isVisibleFrom`'s most expensive arm and gets no traffic at all without this knob.
 	// Split for `fillerLocalsDecl`'s reason: module 0 has no predecessor, so its `acc` would be a `var`
 	// nothing reassigns — E3077 — while the rest of the ladder reassigns it one line down.
 	out.append("\tvar acc = 0\n")
@@ -5573,7 +5553,7 @@ function ifaceDispatchSource(siteCount KnobSize) returns String
 	return out.build()
 end 'ifaceDispatchSource'
 
-// ⭐⭐ **THE FOUR `.managed`-IN-VALUE-POSITION DOORS, ON ONE BINDING-OWNED ARRAY (BATCH9 G7).** Every one
+// ⭐⭐ **THE FOUR `.managed`-IN-VALUE-POSITION DOORS, ON ONE BINDING-OWNED ARRAY.** Every one
 // of them is the CO-OWNED arm of `Parser.bufferSurfaceOf` (`Parser.maxon:28901-29151`): `ba{index}` is a
 // BINDING, so somebody else already owes the record a drop and the surface value must become a SECOND
 // owner through `coOwnAggregateAsTemp` — a `__mm_retain`, a tracked temp and the mark. That is the
@@ -5703,8 +5683,8 @@ let BufferElementPushCount = 1
 //     `String.addressableBytes()` — a `module function` no file outside `stdlib/` may call, and reachable
 //     only from a type implementing one of `stdlib/Builtins.maxon`'s literal markers, which a generated rung
 //     cannot declare either. No knob can close this; it is a property of the door, not of the corpus.
-//     ⚠ It was `dispatchStringMethod`'s own `addressableBytes` arm until W49 wave 7 retired that member;
-//     the arm's site died and this one took the mint, so the COUNT is unchanged and the NAME is not.
+//     ⚠ The mint sits on the FUSED WRAPPER rather than on a `dispatchStringMethod` arm, so a roster
+//     counted by NAME and one counted by SITE disagree about which door it is, never about how many.
 //   • `__ManagedDirectory.filename` / `currentPath` (`Parser.emitOwnedManagedMemoryResult`) lowers to the
 //     `__md_*` runtime entries. ⚠ This one is a CORPUS GAP rather than a door the generator cannot reach:
 //     every lane that can HOST a compile provides `managedDirectory`, and `compileRung` spawns `build` with
@@ -5773,10 +5753,8 @@ end 'bufferSurfacesSource'
 //
 // ⭐ EVERY name comes from `drivers`, the exact list the generators registered as they wrote each
 // file — so NO enumeration is written down a second time here and none can drift from the names on
-// disk. It used to be true of the `manyFunctions` loop alone, and this comment said so while the
-// thirteen lines directly beneath it re-spelled every other knob's driver by hand: a comment
-// contradicted by the code it sat on. Those thirteen are now `RungDriver.threads(...)` arguments at
-// the site that writes each file, which is a place the compiler makes you fill in.
+// disk. Each knob's driver arrives as a `RungDriver.threads(...)` argument at the site that writes its
+// file, which is a place the compiler makes you fill in — never as a hand-spelled line here.
 function mainSource(drivers StringArray) returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: threads the opaque seed through every generated function.\n")
@@ -5880,14 +5858,14 @@ end 'codeGrowthAt'
 // `let / var` under CONSTRUCTS GENERATED and meant the BODY-LOCAL kind — the only kind the corpus had.
 // Top-level `let` and `var` were named under NEITHER heading, so two landed rungs and 36 spec tests
 // read as covered by a reader doing exactly what this manifest asks of them. `structs` sat under NOT
-// GENERATED for a rung after P1.0r implemented them, and integer `/` and `mod` sat there for three
-// after P1.0d.3 built the entire idiv path.
+// GENERATED for a rung after they were implemented, and integer `/` and `mod` sat there for three
+// after the entire idiv path was built.
 //
 // ⚠⚠ AND IT CAN LIE A THIRD WAY, WHICH IS THE WORST OF THE THREE: BY NAMING A GAP WITH A REASON THAT
-// HAS STOPPED BEING TRUE. The struct entry said field WRITES were "P1.1a wave 2 and NOT IMPLEMENTED"
-// and a struct crossing a CALL was "P1.4, deferred on the borrow-vs-consume ruling". Both had shipped
-// — `specs/challenge-struct-field-assign.md`'s `struct-field-reassignment` and
-// `struct-managed-field.md`'s `param-consumed-into-field` were live, non-disabled tests — and the file
+// HAS STOPPED BEING TRUE. A struct entry calling field WRITES "NOT IMPLEMENTED"
+// and a struct crossing a CALL "deferred on the borrow-vs-consume ruling" outlived both:
+// `specs/challenge-struct-field-assign.md`'s `struct-field-reassignment` and
+// `struct-managed-field.md`'s `param-consumed-into-field` were live, non-disabled tests while the file
 // went ten rungs without either. An omission stops a reader from KNOWING; a stale reason stops them
 // from LOOKING, because the reason is what they use to decide whether the gap is theirs to close.
 //
@@ -5903,12 +5881,11 @@ end 'codeGrowthAt'
 //
 // THREE of these are STRUCTURAL — no knob can close them, so they are stated as blind spots rather
 // than filed as TODOs:
-//   • NO WALL TIME — and this one is HALF-CURED, so it is stated at its new width rather than at its
-//     old one. scale-test used to measure allocations and bytes and nothing else, which made a
-//     time-only superlinearity invisible by construction; it now also measures per-phase CPU TICKS,
+//   • NO WALL TIME — and this one is only HALF a blind spot. Allocations and bytes alone would make a
+//     time-only superlinearity invisible by construction; scale-test also measures per-phase CPU TICKS,
 //     the compiling thread's own time, and that column sees exactly that cost. The loop-nest knob's
 //     scan remains the worked example — of a cost ONE column can see and another cannot. What is
-//     still structurally absent is WALL time, which counts every other process on the box and
+//     structurally absent is WALL time, which counts every other process on the box and
 //     therefore cannot be trended at all. And the CPU column is not exact: it carries a few percent
 //     of noise, so a movement inside that band is not a datapoint.
 //   • THE SUBSET. The compiler compiles a fragment of Maxon, so whole language features generate nothing at

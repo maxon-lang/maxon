@@ -7,9 +7,9 @@
 // ⭐ **THE CASCADE BELOW IS `denotedNamedType`, AND IT HAS THREE READERS, NOT ONE.** "What does this
 // name denote?" is asked by this pass (whose `unknown` verdict IS its E3011) AND by the two places a
 // program writes an `as`-cast target — `Parser.applyCast` for a body cast and `Parser.applyConstCast`
-// for a top-level `let`'s. Those two used to ask nothing at all: `parseTypeReference` hands back a
-// bare `MaxonType.named` for every type it cannot answer syntactically, `maxonTypeTag` reads all of
-// them as one tag, and so `5 as CompletelyMadeUpNameXyz` compiled and returned 5. The cure is the ONE
+// for a top-level `let`'s. A door that asks nothing accepts anything: `parseTypeReference` hands back
+// a bare `MaxonType.named` for every type it cannot answer syntactically, `maxonTypeTag` reads all of
+// them as one tag, and so `5 as CompletelyMadeUpNameXyz` compiles and returns 5. The cure is the ONE
 // list, asked from all three — never a second cascade in the parser, which is this project's
 // signature bug (one fact written down twice) aimed at the question where the two copies would look
 // most alike.
@@ -91,9 +91,9 @@ let ExitCodeBuiltinName = b"ExitCode"
 // ⇒ **The rule is stated ONCE, here, and asked by all three doors** — `Parser.interfaceReturnMaxonType`,
 // `Parser.functionAliasReturnType`, and this file's own `functionAliasReturnType`/`functionAliasParamType`
 // twin (which rebuild against the project's merged interner where the parser's rebuilds against the FILE's).
-// It had been spelled at the first of the three and nowhere else, which is exactly why the other two dropped
-// the width; a fourth hand-written `ExitCode` arm would have passed the same test and left standing the
-// arrangement that produced the trap.
+// Spelling it at one door and nowhere else is exactly how the other two drop the width; a fourth
+// hand-written `ExitCode` arm would pass the same test and leave the arrangement that produces the trap
+// standing.
 //
 // ⚠ **`named` IS THE ANSWER FOR EVERY OTHER NAME, AND IT IS A CLASSIFICATION RATHER THAN A SENTINEL**: it
 // says the name denotes a NAMED type, which is precisely what `maxonTypeOfTag`'s own `named` arm rebuilds
@@ -115,17 +115,16 @@ let ExitCodeBuiltinName = b"ExitCode"
 // they mean the builtin. That is why `denotedNamedType` admits only the `exitCode` answer and not every
 // non-`named` one; a new caller must decide the same question before it may read past the `exitCode` arm.
 //
-// ⛔ **THIS PARAGRAPH USED TO REST THAT ON "a user `enum String` is legal (measured: it compiles and runs),
-// and its `Self` arrives as `named("String")`", AND BOTH HALVES ARE NOW FALSE (W17-b).** RE-MEASURED:
-// `enum String` is **`E2015 … a declaration of the type name 'String', which the compiler owns`** —
-// `Parser.requireTypeNameNotCompilerOwned` refuses it, because `String` and `Character` joined
-// `isCompilerOwnedTypeName` (BATCH2 slice 2) after that sentence was written. And a `Self` inside the one
-// body that MAY wear the name — the corpus's own `type String` — is now the builtin tag rather than any
-// `named` reference (`Parser.enclosingSelfType`, which asks `byteRecordTagOfTypeName`). So the restriction
-// above stands on the STRUCTURAL fact instead, which is stronger than the counter-example was: neither name
+// ⛔ **IT DOES NOT REST ON "a user `enum String` is legal, and its `Self` arrives as `named("String")`" —
+// BOTH HALVES ARE FALSE.** MEASURED: `enum String` is
+// **`E2015 … a declaration of the type name 'String', which the compiler owns`** —
+// `Parser.requireTypeNameNotCompilerOwned` refuses it, because `String` and `Character` are on
+// `isCompilerOwnedTypeName`. And a `Self` inside the one
+// body that MAY wear the name — the corpus's own `type String` — is the builtin tag rather than any
+// `named` reference (`Parser.enclosingSelfType`, which asks `byteRecordTagOfTypeName`). The restriction
+// above stands on the STRUCTURAL fact, which is stronger than any counter-example: neither name
 // can wear a `named` tag at all, in any program, so the answers past `exitCode` are unreachable here rather
-// than merely risky. A negative claim that ages is exactly what this file's own header warns a
-// re-derivation costs.
+// than merely risky.
 //
 // ⚠ **`Character` IS DELIBERATELY ABSENT, and admitting it would be a FEATURE rather than a re-spelling.**
 // The set here is exactly the set the interface door already answered for, because this rung single-sources
@@ -357,9 +356,7 @@ end 'UnknownTypeName'
 // the project's `funcReturnTypes` registry (SemanticCheck's source of truth).
 module function resolveTypes(project Project, module MaxonModule)
 	// Fetched ONCE for the whole pass, not per named type: `denotedNamedType` reads it for every
-	// reference, and the memoized query is a map probe that has no business being on that path. (It
-	// used to be fetched inside `resolveNamedType`, on the rare qualified-alias arm only — this is
-	// strictly fewer fetches, not more.)
+	// reference, and the memoized query is a map probe that has no business being on that path.
 	let signatures = try queryProgramSignatures(project) otherwise panic("resolveTypes: queryProgramSignatures failed — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
 
 	// FIRST in the first pass — before a single name is erased. Two of them name a TYPEALIAS, and
@@ -516,12 +513,11 @@ function resolveFunctionAliasShapes(project Project, signatures ProgramSignature
 			// and nowhere else, so a name it spells means what that file means by it.
 			resolvedParams.push(resolveType(project, signatures: signatures, t: maxonTypeOfStoredAliasParam(param, typeNames: project.typeNames), readerFilePath: alias.declFilePath))
 
-			// ⚠ **READ, NOT DERIVED — and it used to be derived, differently.** This tier once asked
-			// `signatures.containsEnumInAnyFile(param.typeName)` while the declared-function tier asked
-			// `Parser.aggregateNameOf`, so one parameter got two classifications: a per-instance ranged alias
-			// carried an identity on one side and none on the other. The identity is now extracted ONCE, at the
-			// parse, by the extraction both tiers fill through (`Parser.erasedAggregateNameOf`) — a shared
-			// comparison over two different classifications would only have made the disagreement a refusal.
+			// ⚠ **READ, NOT DERIVED.** Deriving it here classifies one parameter a second time — the
+			// declared-function tier asks `Parser.aggregateNameOf` — and a per-instance ranged alias then
+			// carries an identity on one side and none on the other. The identity is extracted ONCE, at the
+			// parse, by the extraction both tiers fill through (`Parser.erasedAggregateNameOf`); a shared
+			// comparison over two different classifications would only make the disagreement a refusal.
 			preErasedNames.push(param.aggregateName)
 		end 'eachParam'
 
@@ -1038,19 +1034,17 @@ end 'resolveType'
 // the SOLE writers of them. (A RANGED typealias over one is still legal — it erases to the same primitive
 // the builtin does, so it cannot disagree; see that function.)
 //
-// ⭐ **`CharacterSet` AND `CharSet` JOIN THE LIST AT P1.8 SLICE D, AND THEIR SEED IS A DIFFERENT SHAPE —
-// WHICH IS WHY THEY BELONG HERE RATHER THAN IN A CHECK OF THEIR OWN.** The three above are seeded by
+// ⭐ **`CharacterSet` AND `CharSet` HAVE A SEED OF A DIFFERENT SHAPE — WHICH IS WHY THEY BELONG HERE
+// RATHER THAN IN A CHECK OF THEIR OWN.** The three above are seeded by
 // `resolveNamedType`'s arms and by `createEnumRegistry`; these two are seeded by a DECLARATION —
 // `stdlib/CharacterSet.maxon`'s own `type CharacterSet` and `typealias CharSet = Set with Character`, the
 // second of which fills the `CharSet` entry of the SAME `genericAliases` map a user `typealias` folds into.
-// (The compiler wrote its own unconditional upsert of that entry until W129; the seed moved, the reservation
-// did not.) A map entry is OVERWRITTEN rather than contested, so
-// before this line a user declaration was not refused — it was silently taken, and the author was
-// then blamed at the first USE of the name the compiler had taken from them. MEASURED, on
-// `typealias CharSet = Set with String` + `s.insert("a")`:
+// A map entry is OVERWRITTEN rather than contested, so without this line a user declaration is not
+// refused — it is silently taken, and the author is then blamed at the first USE of the name the compiler
+// took from them. MEASURED, on `typealias CharSet = Set with String` + `s.insert("a")`:
 // *"`Set with Character` requires a Character key — got a 'String' value"*, reported at line 5 for a
 // declaration written on line 1. The rule the author broke is stated on line 1, so that is where it is
-// now reported.
+// reported.
 //
 // ⚠ **THE RANGED CARVE-OUT IS INHERITED UNCHANGED, AND IT IS SOUND FOR THESE TWO FOR A DIFFERENT REASON.**
 // A `typealias CharSet = int(0 to 5)` carries a nominal identity of its own, and it still cannot contest
@@ -1059,57 +1053,55 @@ end 'resolveType'
 // alias registry. MEASURED: both readings coexist and each answers for its own syntax (a
 // `CharSet from ['x']` still builds the member set, `true`, exit 0). So the argument here is a
 // DISJOINTNESS one rather than the erasure one above, and the answer is the same — legal.
-// ⭐ **`Codepoint` JOINS THE LIST AT P1.8 SLICE E, AND IT JOINS FOR `HashValue`'S EXACT REASON.** It is the
+// ⭐ **`Codepoint` IS ON THE LIST FOR `HashValue`'S EXACT REASON.** It is the
 // second name `isSynthesizedIntAliasName` erases to `integer` without a registry entry, so
 // `denotedNamedType`'s synthesized-alias arm answers for it BEFORE `containsStruct` is consulted — which is
 // precisely the disagreement the `HashValue` measurement records: the AUTHORITY would erase a user
 // `type Codepoint` to `integer` while the PARSER's own `named` resolution followed the declaration and
-// tagged the value `structRef`. Adding the name to `isSynthesizedIntAliasName` without adding it here would
-// have re-opened that hole under a new name.
+// tagged the value `structRef`. Adding a name to `isSynthesizedIntAliasName` without adding it here
+// re-opens that hole under a new name.
 //
 // The RANGED carve-out applies to it unchanged and is what the corpus needs: a user
 // `typealias Codepoint = int(0 to 1114111)` — the very declaration `stdlib/Character.maxon` makes — erases
 // to the same `integer` the builtin does, so the two answers agree and there is nothing to refuse.
 //
-// ⭐⭐ **`ArrayError` JOINS THE LIST AT R4.4's REVIEW, AND IT JOINS FOR `Ordering`'S EXACT REASON — IT IS
-// SEEDED BY `createEnumRegistry` UNDER A BARE NAME.** R4.4 registered a THIRD compiler-owned enum there
-// (`Project.builtinArrayErrorEnum`) and could not give it the `__` prefix its two `__ManagedMemoryError` /
-// `__ManagedFileError` siblings wear, because user source already spells the bare name in a `throws` clause
-// (see `SignatureIndex.ArrayErrorTypeName`). A bare seed and no entry here is precisely the hole this
-// function's header describes, and it was not hypothetical.
-// ⚠ **MEASURED, before this line existed:** a program declaring `enum ArrayError` with cases
-// `somethingElse`/`another` COMPILED, `upsertDeclaredEnum` let the declaration displace the seed, and
-// `try arr.get(5) otherwise (e) … match e` routed the runtime's `indexOutOfBounds` (ordinal 0) into the
+// ⭐⭐ **`ArrayError` IS ON THE LIST FOR `Ordering`'S EXACT REASON — IT IS SEEDED BY `createEnumRegistry`
+// UNDER A BARE NAME.** `Project.builtinArrayErrorEnum` is a compiler-owned enum registered there that
+// cannot wear the `__` prefix its two `__ManagedMemoryError` / `__ManagedFileError` siblings do, because
+// user source already spells the bare name in a `throws` clause (see `SignatureIndex.ArrayErrorTypeName`).
+// A bare seed and no entry here is precisely the hole this function's header describes, and it is not
+// hypothetical.
+// ⚠ **MEASURED, without this line:** a program declaring `enum ArrayError` with cases
+// `somethingElse`/`another` COMPILES, `upsertDeclaredEnum` lets the declaration displace the seed, and
+// `try arr.get(5) otherwise (e) … match e` routes the runtime's `indexOutOfBounds` (ordinal 0) into the
 // user's `somethingElse` arm — exit 11, no diagnostic anywhere. One error type under two meanings, decided
 // by whichever write landed last: the wrong answer the seed is supposed to be undisplaceable against.
 // ⇒ The reservation is only over a DECLARATION. `throws ArrayError` is a type REFERENCE and stays legal —
 // which is the whole reason the name is bare — and the four committed cases that write it are unaffected.
 //
-// ⭐⭐ **`String` AND `Character` JOIN THE LIST AT BATCH2 SLICE 2, AND THEY JOIN FOR A REASON NONE OF THE
-// SEVEN ABOVE HAS: THEIR COLLISION IS OVER A *SYMBOL*, NOT OVER A TYPE.** Every name above collides because
+// ⭐⭐ **`String` AND `Character` ARE ON THE LIST FOR A REASON NONE OF THE SEVEN ABOVE HAS: THEIR COLLISION
+// IS OVER A *SYMBOL*, NOT OVER A TYPE.** Every name above collides because
 // two answers to *"what does this name denote?"* disagree. These two denote the builtin under every syntax
 // there is — `Parser.parseTypeReference` settles both SYNTACTICALLY, so a user `type String` can never be
 // named at a parameter, `String{…}` is E3076 and `String.create(…)` is E2015 at the member
-// (`Parser.requireCompilerOwnedStaticIsResolvable`, which took that refusal over from the
-// `parseStringStaticCall` door W55 retired) —
-// which made the declaration look harmless, and is exactly why the hole survived. What it captures is the
+// (`Parser.requireCompilerOwnedStaticIsResolvable`) —
+// which makes the declaration look harmless, and is exactly why the hole is easy to miss. What it captures is the
 // METHOD SYMBOL: `Parser.declaredMethodName` joins its `hash()` into `String.hash`, the very bytes
 // `qualifiedMethodName(StringConformerName, HashMethodName)` spells for the impl
 // `BuiltinConformanceRuntime` synthesizes — and that installer builds an impl only when the module does not
 // already DEFINE the name (`undefinedImplNames`), so the user's inert declaration does not collide with the
 // builtin, it silently REPLACES it.
 //
-// ⚠⚠ **TWO WRONG ANSWERS, BOTH MEASURED ON THE UNCHANGED TREE, NEITHER WITH ANY DIAGNOSTIC ANYWHERE:**
-//   • `Box uses T where T is Hashable`, `Box with String`, `.itemHash()` of `""` returned **7** — the user's
-//     `hash()` body — where djb2 answers **5381**. The `__witness_String.Hashable` slot was stamped with a
-//     `funcAbs64` reloc naming `String.hash`, and the user owned that symbol.
+// ⚠⚠ **TWO WRONG ANSWERS, BOTH MEASURED WITHOUT THIS RESERVATION, NEITHER WITH ANY DIAGNOSTIC ANYWHERE:**
+//   • `Box uses T where T is Hashable`, `Box with String`, `.itemHash()` of `""` returns **7** — the user's
+//     `hash()` body — where djb2 answers **5381**. The `__witness_String.Hashable` slot is stamped with a
+//     `funcAbs64` reloc naming `String.hash`, and the user owns that symbol.
 //   • `Set with String` probes through the same two slots, so `insert("alice"); insert("bob");
-//     insert("alice")` counted **3** against a control's **2** — a duplicate key stored twice, because the
-//     user's `equals` answered `false`.
-// A third door — the direct `s.hash()` / `s.equals(t)` dispatch — opened in the same rung, which is what
-// forced the fact to be enforced rather than merely asserted: the tree already SAID in prose that `String`
-// and `Character` are names the compiler owns, while nothing checked it.
-// `IrInterface.isBuiltinConformanceImplName` now DEPENDS on this line: it declares every `String.`-qualified
+//     insert("alice")` counts **3** against a control's **2** — a duplicate key stored twice, because the
+//     user's `equals` answers `false`.
+// A third door — the direct `s.hash()` / `s.equals(t)` dispatch — reaches the same two symbols, which is
+// why the fact is ENFORCED here rather than merely asserted in prose.
+// `IrInterface.isBuiltinConformanceImplName` DEPENDS on this line: it declares every `String.`-qualified
 // callee to be the compiler's own, which is true only while no USER declaration can mint one.
 //
 // ⛔⛔ **THE RESERVATION IS OVER *WHOSE* DECLARATION, NOT OVER WHETHER ONE EXISTS.** Holding `String` as
@@ -1127,15 +1119,15 @@ end 'resolveType'
 // ⚠ Neither name costs a program anything it could use. `Character` is the same case in every particular,
 // including the same two synthesized impls under `Character.hash`/`Character.equals`; it is reserved with
 // `String` rather than after the next measurement, because the two are one fact and finding out which of a
-// pair is enforced by measuring the other is how this list grew in the first place.
+// pair is enforced by measuring the other is how this list grows.
 // ⛔⛔ **`StringError` AND `MapError` ARE NOT ON THIS LIST, AND THEY ARE THE CASE THAT SHOWS A RESERVATION
-// CAN OUTLIVE ITS REASON.** Both joined for `ArrayError`'s — each was SEEDED by `createEnumRegistry` under a
-// bare name, and a bare seed a user declaration can displace is the hole the paragraph above measured. Both
-// seeds are gone: `stdlib/String.maxon:6` and `stdlib/Map.maxon:6` are the declarations now, no runtime
-// transcribes either enum's ordinals (`Compiler.compileToCodeResult` retired both claims at W49 wave 3 and
-// W105), and `Project.builtinStringErrorEnum`/`builtinMapErrorEnum` no longer exist. What was left was a
-// reservation with nothing behind it, refusing an ordinary program — `enum StringError … end` in a user
-// file — for a collision the compiler can no longer have.
+// CAN OUTLIVE ITS REASON.** Each would belong for `ArrayError`'s reason — a bare seed
+// `createEnumRegistry` writes and a user declaration can displace, the hole the paragraph above measures.
+// Neither is seeded: `stdlib/String.maxon:6` and `stdlib/Map.maxon:6` are the declarations, no runtime
+// transcribes either enum's ordinals (`Compiler.compileToCodeResult` claims neither), and there is no
+// `builtinStringErrorEnum`/`builtinMapErrorEnum`. An entry here would be a reservation with nothing behind
+// it, refusing an ordinary program — `enum StringError … end` in a user file — for a collision the compiler
+// cannot have.
 // ⇒ **A LIBRARY NOMINAL NAME A USER CONTESTS IS ALREADY ANSWERED, AND NOT BY THIS LIST**:
 // `SignatureIndex.contestStdlibTypeName` moves the library's declaration to `__Name`, which is the third of
 // `Project.typeNamePairMayCoexist`'s four coexistence routes. That door SKIPS a compiler-owned name, so an
@@ -1145,18 +1137,16 @@ end 'resolveType'
 // under this name are the ones a user's OWN `throw IterationError.exhausted` and the `match` that catches it
 // are both resolved against, so a displaceable entry would let one program hold two numberings of one enum.
 //
-// ⭐⭐ **`StringIndex` JOINS AT W49 WAVE 3, AND IT IS THE FIRST NAME THAT ARRIVED BY GIVING ONE UP.** The compiler
-// held its own layout for that type under the RESERVED spelling `__StringIndex`, whose whole argument was
-// this one — *"a user program declaring its own `type StringIndex` would land in the same bucket, and
-// whichever write ran last would win"*. The reservation was right and the second declaration was not: it
-// made the corpus's `charAt(idx StringIndex)` unsatisfiable (`E3005 … expected 'StringIndex', got
-// '__StringIndex'`) by a value any program could actually produce. Wave 3 retires the producers onto the
-// corpus and the bare name becomes the one declaration — so the argument moves HERE, where `String` and
-// `Character`'s already live, and buys the identical property with no second layout behind it. MEASURED
-// before the move: `type StringIndex  var a as int  end` COMPILED, and `specs/string-index.md`'s
+// ⭐⭐ **`StringIndex` IS ON THE LIST FOR THE ARGUMENT A RESERVED `__StringIndex` SPELLING WOULD CARRY:** a
+// user program declaring its own `type StringIndex` lands in the same bucket, and whichever write runs last
+// wins. The corpus holds the ONE declaration, so the reservation sits HERE, where `String` and
+// `Character`'s live, and buys that property with no second layout behind it — a second, `__`-prefixed
+// layout would instead make the corpus's `charAt(idx StringIndex)` unsatisfiable (`E3005 … expected
+// 'StringIndex', got '__StringIndex'`) by a value any program can actually produce. MEASURED without this
+// entry: `type StringIndex  var a as int  end` COMPILES, and `specs/string-index.md`'s
 // `error.a-user-may-not-declare-the-string-index-type` is that program.
 //
-// ⛔⛔ **`CharacterError` JOINS AT W135's REVIEW, AND IT IS THE ONE THAT SHOWS THE MEMBERSHIP TEST IS NOT
+// ⛔⛔ **`CharacterError` IS THE ONE THAT SHOWS THE MEMBERSHIP TEST IS NOT
 // "IS IT SEEDED?".** Every paragraph above reaches this list through a SEED — a bare name
 // `createEnumRegistry` writes, which a user declaration could displace. This name is seeded by nothing:
 // `stdlib/Character.maxon:15-17` is its only declaration. It belongs anyway, because the property the list
@@ -1165,17 +1155,17 @@ end 'resolveType'
 // `Runtime/GraphemeRuntime.buildCharAscii` returns `notAscii`'s ordinal as `__char_ascii`'s error flag, so a
 // user `enum CharacterError` displacing the corpus one in `upsertDeclaredEnum` leaves the runtime emitting 0
 // into whichever case that user wrote first — `IterationError`'s stake, arrived at from the other direction.
-// MEASURED: that program compiled clean before this entry, and `specs/character-type.md`'s
+// MEASURED: without this entry that program compiles clean, and `specs/character-type.md`'s
 // `error.declare-character-error-enum` is it.
 //
-// ⭐⭐ **AND TWO OF THESE NAMES ARE NO LONGER SEEDED AT ALL — THEY ARE READ FROM THE CORPUS (W3).**
-// `Ordering` and `IterationError` are DECLARED by `stdlib/Interfaces.maxon`, which the loader now lists, so
+// ⭐⭐ **AND TWO OF THESE NAMES ARE NOT SEEDED AT ALL — THEY ARE READ FROM THE CORPUS.**
+// `Ordering` and `IterationError` are DECLARED by `stdlib/Interfaces.maxon`, which the loader lists, so
 // what they hold is the corpus's own layout rather than a transcription of it (`Project.createEnumRegistry`,
 // `Project.requireCorpusDeclaredEnum`). **That does not take them off this list, and the distinction is what
 // the list is FOR**: `Project.upsertDeclaredEnum` admits a compiler-owned name from the CORPUS and drops it
 // from a USER file, so this function is what tells the two apart — a reservation over *whose* declaration,
 // not over whether one exists. `HashValue` is the same shape one registry over: `stdlib/Interfaces.maxon:6`
-// declares the ranged alias and its bounds are now the program's, while the name stays reserved here.
+// declares the ranged alias and its bounds are the program's, while the name stays reserved here.
 export function isCompilerOwnedTypeName(name ByteArray) returns bool
 	return name.equals(ExitCodeBuiltinName) or name.equals(HashValueTypeName) or name.equals(CodepointTypeName) or name.equals(OrderingTypeName) or name.equals(CharacterSetBuiltinName) or name.equals(CharacterMemberSetAliasName) or name.equals(ArrayErrorTypeName) or name.equals(IterationErrorTypeName) or name.equals(CharacterErrorTypeName) or name.equals(StringConformerName) or name.equals(CharacterConformerName) or name.equals(StringIndexTypeName)
 end 'isCompilerOwnedTypeName'
@@ -1198,10 +1188,10 @@ end 'isCompilerOwnedTypeName'
 // the author never opened. The reader for a stored DECLARATION's type is its DECLARING file, never the
 // caller's — see `resolveNamedType`, which is where each of the three is obtained.
 export function denotedNamedType(signatures ProgramSignatures, name ByteArray, id TypeNameId, readerFilePath FilePath) returns MaxonType throws UnknownTypeName
-	// ⭐⭐ **THE NAME *AND* THE ANSWER ARE `builtinTypeNameTag`'S — THIS ARM OWNS NEITHER (W1 review).** This
-	// used to spell `ExitCode` and `MaxonType.exitCode` itself, which made the AUTHORITY for what a type name
-	// denotes and the TABLE the interner-free doors re-derive from two independent lists of which builtin
-	// names carry a sub-64 width. They agreed; nothing made them. Adding the next such name here — the
+	// ⭐⭐ **THE NAME *AND* THE ANSWER ARE `builtinTypeNameTag`'S — THIS ARM OWNS NEITHER.** Spelling
+	// `ExitCode` and `MaxonType.exitCode` here instead makes the AUTHORITY for what a type name
+	// denotes and the TABLE the interner-free doors re-derive two independent lists of which builtin
+	// names carry a sub-64 width, agreeing only by luck. Adding the next such name here — the
 	// natural place, since without an arm here the name is E3011 everywhere — and forgetting the table is
 	// precisely the arrangement that dropped `ExitCode`'s width at the function-typealias door: silent on
 	// every register target, a `wasm trap: indirect call type mismatch` on wasm. Sourced from the table, the
@@ -1215,20 +1205,17 @@ export function denotedNamedType(signatures ProgramSignatures, name ByteArray, i
 	// `Parser.parseTypeReference`, so a `named` reference never carries one of those names from a type
 	// position at all.
 	//
-	// ⛔ **THIS PARAGRAPH USED TO REST ON A PROGRAM THAT CAN NO LONGER BE WRITTEN, AND W16 RE-MEASURED IT.**
-	// It argued the bound from a user `enum String` — "`String` is deliberately not in
+	// ⛔ **IT DOES NOT REST ON A USER `enum String`.** That argument — "`String` is not in
 	// `isCompilerOwnedTypeName`", so `Self` inside such an enum arrives here as `named("String")` and
 	// admitting the table's `string` answer would resolve it to the managed builtin instead of its i64 tag —
-	// and it carried a MEASUREMENT saying that enum "compiles and runs on the host and on wasm". **Both
-	// halves went stale at BATCH2 slice 2**, which added `String` and `Character` to
-	// `isCompilerOwnedTypeName` for the method-SYMBOL capture the function's own header records. RE-MEASURED
-	// at W16 on this tree: that exact program — `enum String` with an `export function flip() returns Self` —
-	// is now **E2015** (`Parser.requireTypeNameNotCompilerOwned`, which every nominal declaration door asks),
-	// so there is no user declaration left that can route one of these names into a `named` reference.
-	// ⇒ The BOUND is unchanged and is now the stronger of the two arguments standing alone: a name settled
+	// is false in both halves: `String` and `Character` ARE on `isCompilerOwnedTypeName`, for the
+	// method-SYMBOL capture the function's own header records, and MEASURED, that exact program —
+	// `enum String` with an `export function flip() returns Self` —
+	// is **E2015** (`Parser.requireTypeNameNotCompilerOwned`, which every nominal declaration door asks),
+	// so no user declaration can route one of these names into a `named` reference.
+	// ⇒ The BOUND rests on the structural argument alone, which is the stronger one: a name settled
 	// syntactically never reaches this door, so admitting it here could only ever answer for a reference that
-	// cannot arrive. The stale copy is kept visible rather than deleted because it is the second time this
-	// file's own header has had to record that a reservation moved and a justification elsewhere did not.
+	// cannot arrive.
 	let builtinTag = builtinTypeNameTag(name)
 
 	if builtinTag == ValueTypeTag.exitCode 'isExitCode'
@@ -1259,11 +1246,11 @@ export function denotedNamedType(signatures ProgramSignatures, name ByteArray, i
 	// `structOf`), and two structs with identical fields are still two types. So the id survives,
 	// carried by `structRef`.
 	//
-	// ⛔⛔ **IT USED TO BE TESTED BEFORE THE ALIAS REGISTRY "only for readability", ON THE CLAIM THAT A NAME
-	// CANNOT BE BOTH — and that claim was already false when it was written.** A `typealias Box` and a
-	// `type Box` of one name IS diagnosed (E3006, `TypeNameRegistry`), so the paragraph that stood here was
-	// stale in one direction; and since `typeNamePairMayCoexist` a pair whose two declarations cannot see
-	// each other is LEGAL, so it is stale in the other. The order is therefore load-bearing after all, and
+	// ⛔⛔ **THE NOMINAL TEST COMES BEFORE THE ALIAS REGISTRY, AND NOT "only for readability" — "a name
+	// cannot be both" IS FALSE IN BOTH DIRECTIONS.** A `typealias Box` and a
+	// `type Box` of one name IS diagnosed (E3006, `TypeNameRegistry`), and under
+	// `typeNamePairMayCoexist` a pair whose two declarations cannot see
+	// each other is LEGAL. The order is therefore load-bearing, and
 	// what makes it right is the guard rather than the position: a nominal arm claims a contested name only
 	// for a reader the nominal declaration actually answers for. `crossKindContested` is an empty-map probe
 	// for every program that contests nothing, so the hot path is what it was.
@@ -1354,10 +1341,10 @@ export function denotedNamedType(signatures ProgramSignatures, name ByteArray, i
 	// VALUE column, where the front-end identity checks read it; a signature carries no identity. Reached only
 	// for a name that is NEITHER a plain alias nor an aggregate — a rare, dotted name — so the qualified-name
 	// split never touches the plain-alias hot path.
-	// ⚠ It is asked from the READER's file, not `CompilerOwnedDeclFilePath`. It used to pass the latter on the
-	// grounds that "this arm wants only `underlying`" and that a `StructLayout`'s field types arrive with no
-	// declaring file — the second half of which is no longer true (`checkStructFieldTypes` reads
-	// `layout.declFilePath`), and the first was never a reason to hand a per-instance lookup the wrong file.
+	// ⚠ It is asked from the READER's file, not `CompilerOwnedDeclFilePath`: a per-instance lookup handed the
+	// wrong file answers for the wrong program, and "this arm wants only `underlying`" is no reason to hand
+	// it one. A `StructLayout`'s field types do carry a declaring file (`checkStructFieldTypes` reads
+	// `layout.declFilePath`).
 	match signatures.qualifiedAliasOf(name, readerFilePath: readerFilePath) 'qualified'
 		declared(alias) then return alias.underlying
 		undeclared then break 'qualified'

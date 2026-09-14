@@ -74,7 +74,7 @@ let ExitCodeParam = 0 as ValueId
 // "was it installed?".
 //
 // A program with no managed global builds NOTHING — no functions, no ops, no `.data` — which is what keeps
-// this rung byte-neutral for the entire existing corpus.
+// the entire existing corpus byte-neutral.
 export function installManagedGlobalInit(module MaxonModule, project Project, globals ManagedGlobalArray) returns bool
 	if globals.count() == 0 'noManagedGlobals'
 		return false
@@ -116,8 +116,8 @@ end 'buildModuleInit'
 // or whatever a user factory RETURNS.
 //
 // ⭐ **BOTH ARMS CAN RUN THE PROGRAM'S OWN CODE** — the factory call outright (spec-port
-// `map-struct-bytearray`), and, since W41, a container record whose `create` is a DECLARED generic's static
-// rather than a runtime entry. That is exactly what `DeadGlobalElimination`'s header filed against the day an
+// `map-struct-bytearray`), and a container record whose `create` is a DECLARED generic's static rather than
+// a runtime entry. That is exactly what `DeadGlobalElimination`'s header filed against the day an
 // initializer may call.
 //
 // ⭐ **THE PROGRAM'S OWN global whose initializer calls is kept alive by `contributesStorage` whatever
@@ -144,14 +144,13 @@ end 'initialRecordOf'
 //     `.rdata` blob (`lowerConstArrayLiteral`), which is precisely what the slot must hold — so there is
 //     nothing to clone. Its first receiver-writing method detaches the buffer off `.rdata`
 //     (`byte-string-literal.push-grows-off-rdata`), which is what makes a MUTABLE one work.
-//   • a **container** with no constant image has no literal record at all (P1.7 slice 2b): the record is
+//   • a **container** with no constant image has no literal record at all: the record is
 //     BUILT here, exactly as `Parser`'s body emitters build one — this instance's `create` with the stamps
 //     it fixes, then one `__managed_push` per folded element.
 //
-// ⚠ **A FOURTH ARM, A `CharacterSet` PRESET, WENT AT W129** with the `__cs_*` runtime it sealed its member set
-// into. It was the container arm plus one `__cs_make`; `stdlib/CharacterSet.maxon` declares the eleven presets
-// now (W115), so a preset at module scope is an ordinary static calling ordinary declared code, and there
-// is no compiler-owned record left for a global to hold.
+// ⚠ **A `CharacterSet` PRESET NEEDS NO ARM OF ITS OWN.** `stdlib/CharacterSet.maxon` declares the eleven
+// presets, so a preset at module scope is an ordinary static calling ordinary declared code, and there is no
+// compiler-owned record for a global to hold.
 function builtRecord(fn SynthesizedFunction, build ManagedGlobalRecord, valueType MaxonType, range SourceRange) returns ValueId
 	return match build 'build'
 		stringRecord(bytes) gives clonedStringRecord(fn, bytes: bytes, valueType: valueType, range: range)
@@ -219,7 +218,7 @@ end 'ownedConstArrayRecord'
 // is typed by — so the strides this record is born with and the type every use loads through cannot
 // disagree, and each column's destructor equals the one a body's `create()` of the same instance stamps.
 //
-// ⭐⭐ **A DECLARED GENERIC'S `create()` ARRIVES AS THAT SAME DESCRIPTION WITH AN EMPTY STAMP LIST (W41)**, so
+// ⭐⭐ **A DECLARED GENERIC'S `create()` ARRIVES AS THAT SAME DESCRIPTION WITH AN EMPTY STAMP LIST**, so
 // the loop below emits nothing and the call is a bare `Map.create()`. Its HIDDEN arguments — the layout
 // descriptor and one witness per `where` constraint — are not this function's to supply and deliberately are
 // not in the description: `LowerMaxonToStd.finalizeCallArgsWithLayout` appends them, sourcing both from the
@@ -250,15 +249,13 @@ function builtContainerRecord(fn SynthesizedFunction, create ContainerCreateCall
 end 'builtContainerRecord'
 
 // The EMPTY record a container description is born as — the `create` callee with its stamps, and nothing
-// else. Split out when the map literal arrived, because the two container builders differ ONLY in how an
-// element joins: a one-column container pushes a value, a map upserts a labelled pair, and every fact about
-// the BIRTH — which callee, which stamps, which tag the result is minted at — is one answer both read.
+// else. ONE home, because the two container builders differ ONLY in how an element joins: a one-column
+// container pushes a value, a map upserts a labelled pair, and every fact about the BIRTH — which callee,
+// which stamps, which tag the result is minted at — is one answer both read.
 //
-// ⚠ **A SECOND CALL STOOD IN THIS SEQUENCE — `__managed_resize`, SIZING A FIXED-SIZE CONTAINER'S RECORD
-// (W190).** A vector was the one container whose elements are addressable from birth, and its global record
-// was born through the runtime `__managed_create` and then grown. `stdlib/Vector.maxon`'s own `create()`
-// publishes those slots now, so the sizing rides inside the callee this function emits and the description
-// carries no `sizing` field at all.
+// ⚠ **NO SIZING CALL STANDS IN THIS SEQUENCE.** A fixed-size container whose elements are addressable from
+// birth publishes those slots from its own `create()` (`stdlib/Vector.maxon`), so the sizing rides inside the
+// callee this function emits and the description carries no `sizing` field at all.
 function bornContainerRecord(fn SynthesizedFunction, create ContainerCreateCall, valueType MaxonType, range SourceRange) returns ValueId
 	var args = ValueIdArray.create()
 
@@ -341,8 +338,8 @@ function emitMapEntryUpsert(fn SynthesizedFunction, add ByteArray, record ValueI
 end 'emitMapEntryUpsert'
 
 // The callee one element joins this container through — asked only when there IS an element, so a container
-// that names none (a `List`, a declared generic's bare `create()`) is not required to have one. ⚠ A `Map` no
-// longer belongs on that list: since the top-level map literal it names a KEYED add, which is the arm below. A
+// that names none (a `List`, a declared generic's bare `create()`) is not required to have one. ⚠ A `Map` is
+// NOT on that list: it names a KEYED add, which is the arm below. A
 // description that arrives holding elements and naming no callee is an INVARIANT BREAK, never a case: it
 // means an initializer form was opened without teaching the router what its container adds through, and
 // dropping the elements silently is the wrong answer to that.
@@ -383,7 +380,7 @@ function containerStampValue(fn SynthesizedFunction, stamp ContainerCreateStamp,
 end 'containerStampValue'
 
 // ⭐⭐ **THE THREE WAYS AN ARENA NODE PRODUCES ITS RECORD — the program's own code RETURNS one, the compiler
-// BUILDS the box itself, or a CONTAINER is created and then filled** (spec-port `map-struct-bytearray`; W116;
+// BUILDS the box itself, or a CONTAINER is created and then filled** (spec-port `map-struct-bytearray`;
 // the top-level map and record-array literals, which are the filled case one column apart).
 //
 // ⭐⭐ **AN ARGUMENT OR A FIELD MAY BE ANOTHER NODE, AND THEN THIS IS THE RECURSION** (spec-port
@@ -435,7 +432,7 @@ function calledFactoryRecord(fn SynthesizedFunction, callee ByteArray, args Glob
 	return record
 end 'calledFactoryRecord'
 
-// ⭐⭐ **`Pair{a: 1, b: 2}` OR `Op.add(7)` AT MODULE SCOPE — THE BOX, THEN ONE STORE PER SLOT (W116)** — the
+// ⭐⭐ **`Pair{a: 1, b: 2}` OR `Op.add(7)` AT MODULE SCOPE — THE BOX, THEN ONE STORE PER SLOT** — the
 // same shape `Parser.emitStructLiteral` and `Parser.emitEnumBox` emit inside a function, for the same
 // constructs written in a top-level initializer. Every layout fact it needs was resolved where the layout
 // lives (`ProgramSignatures.globalStructConstruct`, `globalUnionCaseConstruct`), so nothing here reads a
@@ -483,7 +480,7 @@ end 'dropBorrowedArguments'
 // enclosing one is — which is what makes "an argument is anything an initializer may be" a fact about the
 // emitted code and not only about the grammar.
 //
-// ⭐ **AN ARGUMENT AND A STRUCT FIELD COME THROUGH HERE ALIKE (W116)**, which is what makes `Outer{inner:
+// ⭐ **AN ARGUMENT AND A STRUCT FIELD COME THROUGH HERE ALIKE**, which is what makes `Outer{inner:
 // Inner.create(7)}` fall out of the arena rather than needing an emitter of its own. It takes the value and
 // its type rather than the enclosing `GlobalInitArgument` for exactly that reason: a field carries no label
 // and no cleanup, and a producer that could read them would be a producer only one caller could use.
@@ -503,7 +500,7 @@ end 'materializedValue'
 // ⭐ **THE TYPE A SCALAR LITERAL'S OP CARRIES — ITS STORAGE, WHICH IS NOT ITS IDENTITY.** Every scalar type
 // is its own storage except a `named` one: a payload-free enum case and a ranged alias are both an i64, and
 // the tier below has no `named` to lower. See `emitTypedLiteral` for the two ways the missing distinction
-// showed up.
+// bites.
 function literalStorageType(valueType MaxonType) returns MaxonType
 	return MaxonType.integer if maxonTypeTag(valueType) == ValueTypeTag.named else valueType
 end 'literalStorageType'
@@ -577,8 +574,8 @@ end 'anchorRange'
 // It records into `project.opRanges` and `project.valueOrigins` in the same lockstep
 // `FileParseArtifact.emitOp` uses — the span table is keyed by op index and asserts it is appended in
 // step, so a synthesized op that skipped it would misattribute every later span by one.
-// ⭐ EXPORTED since SV1 wave 3, whose `Runtime/ServiceLoop.maxon` is the second producer of Maxon-tier
-// functions the compiler builds — the FIRST outside this file. Everything the carrier's header says is why
+// ⭐ EXPORTED for `Runtime/ServiceLoop.maxon`, the second producer of Maxon-tier functions the compiler
+// builds and the only one outside this file. Everything the carrier's header says is why
 // it exists holds for that producer word for word: a `<T>.__loop` needs the dense per-value type columns
 // `LowerMaxonToStd` reads, and a second carrier would be a second place they could fall out of lockstep.
 export type SynthesizedFunction
@@ -672,7 +669,7 @@ export type SynthesizedFunction
 	// carrier gets its type columns, and a door list is what rots.
 	//
 	// ⛔⛔ **SO A `mint` TAKES AN INDEX-SPACE ID AND `open` TAKES A PROJECT-SPACE ONE, AND THE TWO HALVES OF
-	// THIS CARRIER GENUINELY DISAGREE (SV1 wave 4).** `open` pushes `typeNameIdOf(paramType)` RAW, because the
+	// THIS CARRIER GENUINELY DISAGREE.** `open` pushes `typeNameIdOf(paramType)` RAW, because the
 	// same `paramTypes` array is stored on the `IrFunction` for the merged module to read, and the module
 	// speaks the project's table. There is no crossing that could satisfy both, so the contract is:
 	//
@@ -680,11 +677,11 @@ export type SynthesizedFunction
 	//   • **`nameId` handed to `mint` / `mintOfType` / `emitPositionalCall(resultNameId:)` is INDEX-space**,
 	//     and is crossed here.
 	//
-	// ⚠ It hid inside this file because `__module_init` and `__maxon_global_cleanup` take one `int` parameter
-	// between them, so `open`'s half was never exercised with a NAMED type. **It cost the second producer a
-	// wrong answer**: `Runtime/ServiceLoop.maxon` resolved its payload types through `project.typeNames` and
-	// minted from them, and the double crossing refused a correct program — that file's header carries the
-	// reading. A third producer should read this box before it writes a `mint`.
+	// ⚠ The split is INVISIBLE from inside this file: `__module_init` and `__maxon_global_cleanup` take one
+	// `int` parameter between them, so `open`'s half is never exercised with a NAMED type. A producer that
+	// resolves its types through `project.typeNames` and then mints from them crosses twice, and a double
+	// crossing REFUSES a correct program — `Runtime/ServiceLoop.maxon`'s header carries that reading. A third
+	// producer should read this box before it writes a `mint`.
 	function projectScopedNameId(tag ValueTypeTag, nameId TypeNameId) returns TypeNameId
 		if not tagNamesAnIndexInternedType(tag) 'carriesNoNameToCross'
 			return nameId
@@ -747,8 +744,7 @@ export type SynthesizedFunction
 	end 'terminateBlock'
 
 	// Terminate the block ops are CURRENTLY landing in. It is `terminateBlock` over `self.block` and nothing
-	// else; it was a byte-identical second copy of those three lines until the §6 review (finding 5), and
-	// what must not be written twice is how a terminator joins the op tables.
+	// else, because how a terminator joins the op tables must not be written twice.
 	export function terminate(op MaxonOp, range SourceRange)
 		self.terminateBlock(self.block, op: op, range: range)
 	end 'terminate'
@@ -764,8 +760,8 @@ export type SynthesizedFunction
 		end 'result'
 	end 'recordOpTables'
 
-	// ⭐ **A `literal`** — an element's number, an `element_size` stride, a null `element_destroy` (P1.7 slice
-	// 2b), a fixed element count, or a scalar argument of a top-level factory call. `MaxonType.integer` for
+	// ⭐ **A `literal`** — an element's number, an `element_size` stride, a null `element_destroy`, a fixed
+	// element count, or a scalar argument of a top-level factory call. `MaxonType.integer` for
 	// all but the last, because the Maxon tier has no pointer or size type: a machine word is an integer
 	// here, the same reading `emitSlotAddr` above gives an ADDRESS. A factory argument carries its own folded
 	// type instead, which is how a `bool` or a `float` argument reaches the call at the width it was written
@@ -790,7 +786,7 @@ export type SynthesizedFunction
 		return result
 	end 'emitTypedLiteral'
 
-	// ⭐ **THE HEAP RECORD A STRUCT-SHAPED LITERAL LIVES IN (W116)** — `Parser.emitBoxAlloc`'s twin on this
+	// ⭐ **THE HEAP RECORD A STRUCT-SHAPED LITERAL LIVES IN** — `Parser.emitBoxAlloc`'s twin on this
 	// carrier, and the ONE genuinely new emit primitive this file needed: the size, the trivial destructor and
 	// the `__mm_alloc` are one sequence, so a change to what a record COSTS — a header, an alignment, another
 	// allocator door — reaches both producers or neither.
@@ -834,19 +830,18 @@ export type SynthesizedFunction
 
 	// ⭐ **A CALL WHOSE ARGUMENTS ARE ALL POSITIONAL** — every runtime entry point (`__str_clone`,
 	// `__str_decref`, `__managed_create`, `__managed_push`), because the runtime has no parameter names for a label to
-	// match, AND a DECLARED generic's `create()` (W41), because the door that admits one admits no arguments at
+	// match, AND a DECLARED generic's `create()`, because the door that admits one admits no arguments at
 	// all (`Parser.evalConstContainerCreate`). It is named for that property rather than for the runtime,
-	// because since W41 the runtime is no longer the only thing it serves: a user factory taking ARGUMENTS goes
+	// because the runtime is not the only thing it serves: a user factory taking ARGUMENTS goes
 	// to `emitCall` directly, its labels being what `LowerMaxonToStd.lowerCall` reorders against the signature.
 	export function emitPositionalCall(callee ByteArray, args ValueIdArray, resultTag ValueTypeTag, resultNameId TypeNameId, range SourceRange) returns ValueId
 		return self.emitCall(callee, args: args, argLabels: emptyArgLabels(args), resultTag: resultTag, resultNameId: resultNameId, range: range)
 	end 'emitPositionalCall'
 
 	// ⭐ **A POSITIONAL CALL WHOSE RESULT NOBODY READS** — a drop, a runtime step, a mailbox close. It is
-	// `emitPositionalCall` with `void`/`UnnamedTypeId` and the result discarded, which is one spelling of a
-	// three-part incantation that was written out at every void site: the `_ =`, the `ValueTypeTag.void` and
-	// the `UnnamedTypeId` are one fact — *this call answers nothing* — and `Runtime/ServiceLoop.maxon` makes
-	// eight more of them.
+	// `emitPositionalCall` with `void`/`UnnamedTypeId` and the result discarded, which keeps a three-part
+	// incantation in ONE spelling: the `_ =`, the `ValueTypeTag.void` and the `UnnamedTypeId` are one fact —
+	// *this call answers nothing* — and `Runtime/ServiceLoop.maxon` makes eight more of them.
 	export function emitPositionalCallDiscarding(callee ByteArray, args ValueIdArray, range SourceRange)
 		_ = self.emitPositionalCall(callee, args: args, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'emitPositionalCallDiscarding'

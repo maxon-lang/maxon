@@ -26,9 +26,9 @@
 // from the name `checkMainFunction` looks the entry point up by.
 export let MainFunctionName = b"main"
 
-// ⚠ **E3001's AND E3002's TEXT USED TO BE TWO `let`s HERE AND IS NOW BUILT AT ITS ONE SITE
-// (`checkMainFunction`), BECAUSE THE SENTENCES NAME THE ENTRY AND THE ENTRY IS A PER-BUILD FACT.** They
-// are still spec-gated text (`specs/basics.md`) and still byte-identical to what they always said for
+// ⚠ **E3001's AND E3002's TEXT IS BUILT AT ITS ONE SITE (`checkMainFunction`) RATHER THAN HELD IN A
+// CONSTANT HERE, BECAUSE THE SENTENCES NAME THE ENTRY AND THE ENTRY IS A PER-BUILD FACT.** It
+// is spec-gated text (`specs/basics.md`) and byte-identical for
 // every build that enters at `main` — which is every build a person types. A generated-entry build
 // (`maxon test`) would otherwise report a missing `main` for a project whose entry is
 // `__maxon_test_main`, naming the one function it was never going to look for. A constant cannot say that,
@@ -73,8 +73,8 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 
 	// The interprocedural PARAMETER-MUTATION summary (E3019, the call-site half) — built once, read at every
 	// call site to refuse an immutable binding handed to a parameter the callee writes. It reads the same
-	// index the two summaries above do; a duplicate function name was refused where that index was BUILT,
-	// which is now before this pass runs at all (`PassPipeline.run`, A2l) rather than in the middle of it.
+	// index the two summaries above do; a duplicate function name is refused where that index is BUILT,
+	// which is before this pass runs at all (`PassPipeline.run`).
 	// ⭐ **AND THE STORAGE COLUMN IS CLOSED OVER A WIDER SET** — the edges above plus the parser's
 	// `StorageReachEdge`s, which say "the caller's parameter owns the ARRAY this call's receiver denotes".
 	// Built off the same walk's result rather than by a second one, and IDENTICAL to it (same object) for a
@@ -172,12 +172,11 @@ end 'semanticCheck'
 function resolveOverloadedCalls(project Project, module MaxonModule)
 	// A program that declares no overload has nothing here to do and does not walk.
 	//
-	// ⚠⚠ **THAT GATE USED TO CARRY THE WHOLE COST ARGUMENT, AND IT NO LONGER CAN — `stdlib/FilePath.maxon`
-	// OVERLOADS `join`, so EVERY compile now has a non-empty `overloadSets` and takes this walk** (BATCH2
-	// slice 3; the measurement is at `maxonOpCalleeKind`, which was a per-op union box until this made it
-	// linear in every program). The gate is kept because it is still exactly right for a compile that loads
-	// no stdlib, but the walk below is now the common path and is written to cost nothing per op that is not
-	// a call: `maxonOpCalleeKind` is a scalar enum, and the NAME — the only part that ever allocated — is
+	// ⚠⚠ **THAT GATE CANNOT CARRY THE COST ARGUMENT — `stdlib/FilePath.maxon` OVERLOADS `join`, so EVERY
+	// compile has a non-empty `overloadSets` and takes this walk** (the measurement is at
+	// `maxonOpCalleeKind`). The gate is kept because it is exactly right for a compile that loads
+	// no stdlib, but the walk below is the common path and is written to cost nothing per op that is not
+	// a call: `maxonOpCalleeKind` is a scalar enum, and the NAME — the only part that ever allocates — is
 	// fetched for the two kinds that have one.
 	if project.overloadSets.count() == 0 'noOverloadInThisProgram'
 		return
@@ -317,8 +316,8 @@ function resolveOneOverloadedCall(project Project, module MaxonModule, func IrFu
 	match selectOverload(project, func: func, op: op, candidates: candidates) 'pick'
 		chosen(member) then bindOverloadChoice(project, module: module, func: func, opIndex: opIndex, callee: callee, member: member, defaultArgOrigins: defaultArgOrigins)
 
-		// ⛔⛔ **AN AMBIGUOUS CALL IS *ALSO* LEFT ON A DECLARED MEMBER, AND UNTIL THIS RUNG IT WAS NOT —
-		// WHICH EARNED THE AUTHOR A SECOND, WRONG DIAGNOSTIC.** A CONTESTED set has no member under the bare
+		// ⛔⛔ **AN AMBIGUOUS CALL IS *ALSO* LEFT ON A DECLARED MEMBER, AND LEAVING IT ON THE BARE NAME
+		// EARNS THE AUTHOR A SECOND, WRONG DIAGNOSTIC.** A CONTESTED set has no member under the bare
 		// name (`Parser.overloadRegistrationNameFor`), so an op left naming it reaches `validateCall` and is
 		// reported **`E3004: call to undefined function 'f'`** — about a name declared twice over — under the
 		// E3007 that has just explained the real fault. MEASURED on two root-level files each declaring
@@ -655,7 +654,7 @@ end 'overloadArgTypeFit'
 // `Parser.recordConstantArgRangeChecks` files a `RangeCheckArgSite` carrying the callee NAME the source wrote;
 // `InsertRangeChecks` then reads that callee's `paramSites` to decide whether the constant fits. When the
 // call resolves to a member registered under a MANGLED name, a site left naming the bare one aims the check at
-// the FIRST declaration's parameter list. MEASURED before this retarget existed, with `Small = int(0 to 10)`
+// the FIRST declaration's parameter list. MEASURED without this retarget, with `Small = int(0 to 10)`
 // and `f(x String)` declared first:
 //
 //     function f(x String) returns ExitCode … end 'f'
@@ -673,12 +672,11 @@ end 'overloadArgTypeFit'
 // first. The cure for that residual is to key the site by its call's op index, which is a change to the P1.9
 // record and its pass, not to this one.
 function bindOverloadChoice(project Project, module MaxonModule, func IrFunction, opIndex OpIndex, callee ByteArray, member ByteArray, defaultArgOrigins DefaultArgOrigins)
-	// ⛔⛔ **THE ARGUMENT COLUMNS ARE READ OFF THE OP BEFORE THE COMMIT, AND THEY USED TO BE READ AFTER IT —
-	// A USE-AFTER-FREE.** `commitOverloadChoice` stores a rewritten op at this index, which RELEASES the
-	// record `overloadCallArgs` reads its `args`/`defaultSlots` columns out of. It survived because a freed
-	// box still holds its bytes; E3070 refused the shape when the compiler compiled itself, and reading the op first
-	// is the fix rather than a rearrangement. The commit is now the LAST thing this function does, which is
-	// also what keeps the borrow dead at the write.
+	// ⛔⛔ **THE ARGUMENT COLUMNS ARE READ OFF THE OP BEFORE THE COMMIT, AND READING THEM AFTER IT IS A
+	// USE-AFTER-FREE.** `commitOverloadChoice` stores a rewritten op at this index, which RELEASES the
+	// record `overloadCallArgs` reads its `args`/`defaultSlots` columns out of — and a freed box still holds
+	// its bytes, so the read looks correct while E3070 refuses the shape when the compiler compiles itself.
+	// The commit is the LAST thing this function does, which is what keeps the borrow dead at the write.
 	let op = try module.ops.get(opIndex) otherwise panic("bindOverloadChoice: ops.get({opIndex}) OOB — the index came from liveOpIndices")
 
 	match overloadCallArgs(op) 'args'
@@ -810,13 +808,13 @@ end 'repointDefaultedArgHelpers'
 // `block.opRefs` indexes that array, so appending a replacement instead would orphan every reference to it —
 // and then reconcile the RESULT's type.
 //
-// `disagreement` names what the reconcile is ABOUT, because this routine now serves two ops of one call: the
+// `disagreement` names what the reconcile is ABOUT, because this routine serves two ops of one call: the
 // call itself, and the synthesized helper behind an argument it omitted. The two need one rule and two
 // sentences — see `OverloadDisagreementSubject`.
-// ⛔⛔ **THE RECONCILE READS THE PRE-REWRITE OP AND USED TO RUN AFTER THE STORE THAT RELEASES IT.** Same
+// ⛔⛔ **THE RECONCILE READS THE PRE-REWRITE OP, SO IT MUST RUN BEFORE THE STORE THAT RELEASES IT.** Same
 // use-after-free as `bindOverloadChoice`'s, one frame down: `module.ops.set` drops the old element, and
-// `reconcileOverloadResultType`'s `overloadResultValue(op)` then read a released record. The op is read
-// here rather than handed in for the reason `resolveOneOverloadedCall`'s header states.
+// `reconcileOverloadResultType`'s `overloadResultValue(op)` would then read a released record. The op is
+// read here rather than handed in for the reason `resolveOneOverloadedCall`'s header states.
 function commitOverloadChoice(project Project, module MaxonModule, func IrFunction, opIndex OpIndex, member ByteArray, disagreement OverloadDisagreementSubject)
 	let op = try module.ops.get(opIndex) otherwise panic("commitOverloadChoice: ops.get({opIndex}) OOB — the index came from liveOpIndices")
 	let rewritten = withRewrittenCallee(op, callee: member)
@@ -870,8 +868,7 @@ let sharedCallResultSubject = OverloadDisagreementSubject.theCallsResult
 // ⚠ **The narrow residual, stated where it lives:** if the divergence IS scalar-to-scalar, the parser may
 // already have rejected or reshaped an expression using the stale tag (`if <int-tagged>`, `<bool> + 1`). That
 // is a false diagnostic, not a wrong answer, and it cannot arise for a set whose members agree on their
-// return type, nor for one the parse-time decider settled — which is now the common case, and which is what
-// the "real cure is per-member return types in the declaration sweep" this note used to end on turned into.
+// return type, nor for one the parse-time decider settled — which is the common case.
 // What is left is the decider's own boundary: a compound parameter type it does not read, and a tie.
 function reconcileOverloadResultType(project Project, func IrFunction, opIndex OpIndex, op MaxonOp, member ByteArray, disagreement OverloadDisagreementSubject)
 	match overloadResultValue(op) 'result'
@@ -889,13 +886,13 @@ function reconcileOverloadResultTag(project Project, func IrFunction, opIndex Op
 	end 'declared'
 end 'reconcileOverloadResultTag'
 
-// ⭐⭐ **THE VOID SIDE OF THE SAME DISAGREEMENT, AND IT IS THE ONE QUADRANT NOTHING GUARDED (W49 wave 4).**
+// ⭐⭐ **THE VOID SIDE OF THE SAME DISAGREEMENT, AND IT IS THE EASY QUADRANT TO LEAVE UNGUARDED.**
 //
-// This arm used to `break` on the stated grounds that *"a VOID member cannot have been chosen for a call
+// It is tempting to `break` here on the grounds that *"a VOID member cannot have been chosen for a call
 // whose result is read: the parser refuses a void call in value position, and in statement position the
 // result tag is `void` already"*. **Both halves assume the SWEEP recorded the void member**, and the sweep
 // is LAST-WINS over one entry per NAME wherever the parse-time decider declines — so when the VALUE member
-// is the one it recorded, such a call was typed from it: the result carries that member's tag, and
+// is the one it recorded, such a call is typed from it: the result carries that member's tag, and
 // `enrolOwnedCallTemp` has already enrolled the scope-exit drop a managed return owes. A call that then resolves HERE, to the void member,
 // spends that drop on a register the callee never wrote.
 //
@@ -1152,10 +1149,9 @@ end 'reportThrowsClauseViolation'
 // The throws clauses of every THROWING function in the program, keyed by (mangled) name. A non-throwing
 // function is absent — the same "absence is the answer" the parser's `ProgramSignatures.funcThrows` uses.
 //
-// ⭐ **IT TAKES THE CHECKED INDEX, NOT THE MODULE (A2l).** The map is keyed by NAME and read at every call
+// ⭐ **IT TAKES THE CHECKED INDEX, NOT THE MODULE.** The map is keyed by NAME and read at every call
 // site to decide whether a plain call needs a `try`; two functions of one name would collapse to one entry
-// and a call could be validated against the OTHER one's clause. This used to be a bare last-wins `upsert`
-// running BEFORE the pass that built the checking index — right on this rule and unable to say why.
+// and a call could be validated against the OTHER one's clause.
 function buildThrowsMap(funcNames FunctionNameIndex) returns FuncThrowsMap
 	var throwsMap = FuncThrowsMap.create()
 
@@ -1182,22 +1178,21 @@ end 'buildThrowsMap'
 // the map has no escaping parameter — the same "absence is the answer" `buildThrowsMap` uses, so the
 // overwhelming first-order function costs no entry.
 //
-// ⭐⭐ **PASSING IT ON IS AN EDGE, NOT AN ESCAPE — AND UNTIL W58 IT WAS AN ESCAPE, WHICH BLOCKED
-// `arr.sort()`.** This function's own header used to say the conservative answer "may over-refuse an exotic
-// pass-through-that-only-calls chain, sound and with no corpus coverage". The corpus has coverage now, and
-// the chain is not exotic: it is how a sort is written. `stdlib/Array.maxon`'s `sort()` hands the comparator
+// ⭐⭐ **PASSING IT ON IS AN EDGE, NOT AN ESCAPE, AND CALLING IT AN ESCAPE BLOCKS `arr.sort()`.** A
+// pass-through-that-only-calls chain is not exotic: it is how a sort is written. `stdlib/Array.maxon`'s
+// `sort()` hands the comparator
 // to `Array.driftsortRange`, which hands it to `createRun` / `stableQuicksortRange` / `mergeAdaptive` /
 // `smallSortRange`, none of which does anything with it but CALL it — and `sort()`'s comparator is a
 // capturing closure (it captures the enclosing extension's `where Element is Comparable` witness through the
-// closure env), so the one-hop answer refused it: **`E3099: cannot pass a closure that captures to
+// closure env), so a one-hop answer refuses it: **`E3099: cannot pass a closure that captures to
 // 'Array.driftsortRange', which stores or returns it`** — about a function that does neither. MEASURED
 // against `stdlib/Array.maxon` listed; it is `specs/array-sort.md`'s whole suite.
 //
-// The RUNTIME had no such limit and never did: `LowerMaxonToStd.appendCalleeEnvArgs` threads a function
+// The RUNTIME has no such limit: `LowerMaxonToStd.appendCalleeEnvArgs` threads a function
 // argument's environment as a companion at every direct call, and `Parser.bindClosureEnvParams` gives a
 // function-typed PARAMETER its own companion, so `valueClosureEnv` is non-zero for a parameter too and the
-// environment rides an arbitrarily deep pass-DOWN chain. The refusal was the analysis being unable to say
-// what the lowering already did.
+// environment rides an arbitrarily deep pass-DOWN chain. A one-hop refusal is the analysis being unable to
+// say what the lowering already does.
 //
 // ⭐ **SO IT IS A FIXPOINT, over the SAME call-graph edges, CSR and worklist the parameter-MUTATION summary
 // closes over** (`collectCallParamEdges` / `propagateParamMasks`): a caller's parameter escapes if the callee
@@ -1205,7 +1200,7 @@ end 'buildThrowsMap'
 // under the call graph" is exactly what `buildParamMutationSummary`'s header forbids. Termination is the same
 // argument: a mask only ever GAINS bits and a function has at most `MaxAbiArgs` of them.
 //
-// ⚠⚠ **THERE IS NOW A SECOND ESCAPE ANALYSIS IN THE COMPILER, AND IT IS DELIBERATE — SEE
+// ⚠⚠ **THERE IS A SECOND ESCAPE ANALYSIS IN THE COMPILER, AND IT IS DELIBERATE — SEE
 // `IR/Std/PromoteStackRecords.buildParamEscapeMasks`.** It asks the same-shaped question of the same call
 // graph and it is NOT this idiom a third time. Two things separate them, and both are load-bearing:
 //
@@ -2618,31 +2613,31 @@ end 'scanBlockForReawait'
 // Classify `op` against the tracked promise: an `await`/`tryAwait` OF it is a re-await, and an op that
 // DEFINES it is the re-arm.
 //
-// ⭐⭐ **THE RE-ARM IS "THE OP THAT DEFINES Vp", NOT "AN `asyncCall` THAT DEFINES Vp" (P1.5-B2c).** The rule
-// this walk's header states has always been the general one — *"a path is KILLED when it re-passes the SSA
-// DEFINITION of Vp"* — and the implementation read only the `asyncCall` arm, which was the same thing for
-// exactly as long as a promise could only come from a spawn in this frame. Storage ended that: a promise
+// ⭐⭐ **THE RE-ARM IS "THE OP THAT DEFINES Vp", NOT "AN `asyncCall` THAT DEFINES Vp".** The rule
+// this walk's header states is the general one — *"a path is KILLED when it re-passes the SSA
+// DEFINITION of Vp"* — and reading only the `asyncCall` arm is the same thing only while a promise can come
+// from nothing but a spawn in this frame. STORAGE breaks that: a promise
 // pulled out of a container is defined by the element accessor's `call`/`tryCall`, so
 //
 //     for p in promises 'await' … await p … end 'await'
 //
-// re-passed no `asyncCall` and the single `await p` was reported as a second await of itself — E3100 on the
+// re-passes no `asyncCall` and the single `await p` reads as a second await of itself — E3100 on the
 // central idiom `specs/async-await.md` names in its own prose (*"which is exactly what makes `for p in
 // promises … await p … end` one await per promise"*). Reading the DEFINITION through the exhaustive
-// `maxonOpResultValue` restores the stated rule and takes the op enumeration with it: a new op variant is a
+// `maxonOpResultValue` keeps the stated rule and takes the op enumeration with it: a new op variant is a
 // compile error THERE rather than a silently-unrecognized definition here.
 //
 // ⚠ **THE RE-AWAIT TEST COMES FIRST, BECAUSE AN `await` OP IS BOTH.** It defines its result and reads its
 // promise, and the walk starts AT an await — asking "does it define Vp?" first would classify the tracked
 // await's own successors by the wrong role the moment an await's result ever became a promise.
 //
-// ⛔ **AND THAT IS ONLY TRUE IF THE await ARMS FALL THROUGH WHEN THE AWAITED VALUE IS NOT Vp, WHICH THEY DO —
-// THEY USED TO RETURN UNCONDITIONALLY.** A `roleIfEqual(...)` returned straight out answers `unrelated` for an
+// ⛔ **AND THAT IS ONLY TRUE BECAUSE THE await ARMS FALL THROUGH WHEN THE AWAITED VALUE IS NOT Vp.**
+// A `roleIfEqual(...)` returned straight out answers `unrelated` for an
 // await of a DIFFERENT promise and so never reaches the definition test, which is the exact opposite of the
 // robustness the paragraph above claims: the day an await's result could itself be a promise, an `await q`
 // DEFINING the tracked `p` would be filed `unrelated` and the re-arm would be lost. Nothing can produce that
-// shape today (an async body cannot return a `Promise`), so this changes no current answer — it makes the
-// stated rule the one the code actually follows, which is cheaper than a comment explaining why it does not.
+// shape today (an async body cannot return a `Promise`), so the fall-through changes no answer — it makes
+// the stated rule the one the code follows, which is cheaper than a comment explaining why it does not.
 function classifyOpForPromise(op MaxonOp, promise ValueId) returns OpAwaitRole
 	match op 'op'
 		// A `call` is the ONE op that can be either role, so its arm asks both — see `callRoleForPromise`.
@@ -3075,9 +3070,9 @@ end 'validateAsyncCall'
 // scalar and carries no aggregate name. An undeclared callee is E3004 (reported by `validateCall`); its
 // absent signature simply skips this check.
 //
-// ⭐ **A MANAGED PARAMETER IS ACCEPTED SINCE A2** — a heap pointer is one GPR word, and the spawn hands the
-// thread its own reference (`Parser.transferAsyncSpawnArgs`) which `__gt_release_<callee>` gives back. That
-// is why a boxed union parameter is no longer refused merely for carrying an aggregate name: `aggName` now
+// ⭐ **A MANAGED PARAMETER IS ACCEPTED** — a heap pointer is one GPR word, and the spawn hands the
+// thread its own reference (`Parser.transferAsyncSpawnArgs`) which `__gt_release_<callee>` gives back. So a
+// boxed union parameter is not refused merely for carrying an aggregate name: `aggName`
 // decides WHICH DROP the releaser needs, not whether the spawn is legal.
 //
 // ⛔ **A CONSUMED MANAGED PARAMETER IS STILL REFUSED, AND IT IS AN OWNERSHIP BOUNDARY RATHER THAN A CHANNEL
@@ -3085,8 +3080,8 @@ end 'validateAsyncCall'
 // callee drops it when it runs — while the releaser drops it too, because the releaser is what discharges
 // the reference the spawn took. Pairing them correctly needs the release to be conditional on whether the
 // thread ever RAN, which is a per-arm decision `__gt_promise_drop` could make and `__gt_await` could not
-// state without knowing it. Nothing in the tree spawns such a callee and every one of them is refused today
-// (the whole managed family was), so this narrows an existing refusal rather than opening a hole: a double
+// state without knowing it. Nothing in the tree spawns such a callee and every one of them is refused
+// today, so this narrows a refusal rather than opening a hole: a double
 // free is the alternative, and a diagnostic is the honest boundary. **The transitive-consume fixpoint is
 // what would decide it properly; that is the slice this waits on.**
 function requireAsyncScalarParams(project Project, func IrFunction, signatures ProgramSignatures, opIndex OpIndex, callee ByteArray)
@@ -3426,31 +3421,26 @@ end 'throwingCallRequiresTryMessage'
 // `__md_next`, so the sentence has to name the construct they DID write; a family that falls through to
 // another family's wording gets the right code and the wrong noun.
 //
-// ⚠ **THE SELECTION USED TO BE A BINARY GT-else-ARRAY EXPRESSION**, and its own comment said a third family
-// must add an arm here. Three joined it without one (`__strix_*` at P1.8, `__mf_*` at R4.1/R4.2, and
-// `__ManagedMemory`'s members at R4.2), so a `s.findFirst(n)` or a `f.openRead(p)` written without `try` was
-// told it was a "throwing array accessor". R4.3 recast the chain and claimed a new family would now "fall to
-// the LAST arm, which names the callee rather than pretending to know what it is" — but the last arm WAS the
-// array wording, so it pretended exactly, and a sentence asserting a guard that does not exist is worse than
-// no sentence at all.
+// ⚠ **THE SELECTION IS A LOOKUP AND NOT A CHAIN OF FAMILY TESTS, BECAUSE A CHAIN NEEDS AN ARM PER FAMILY
+// AND A NEW FAMILY DOES NOT BRING ONE.** A family with no arm falls to whatever the last arm says, so an
+// `s.findFirst(n)` or an `f.openRead(p)` written without `try` is told it is a "throwing array accessor".
 //
-// ⇒ D12 makes that claim true. The families with a source-method map answer through ONE composed lookup
+// ⇒ The families with a source-method map answer through ONE composed lookup
 // (`GtRuntime.runtimeCalleeSourceMethod`), so this function holds WORDING and not family knowledge; the array
 // arm became EXPLICIT; and what falls past everything now names the callee, which is honest about being the
 // only name it has. A sixth family that adds no map gets that fallback rather than another family's noun.
 //
-// ⭐⭐ **THE ARRAY ARM MOVED ABOVE THE LOOKUP AT D11c, AND THAT IS A NARROWING OF THIS FUNCTION'S CLAIM, NOT
-// A CHANGE OF ITS ANSWER.** It used to sit BELOW, with a note saying it had to: `isThrowingManagedMemoryRuntimeCallee`
-// COMPOSES the seven `__ManagedMemory` members (one record, one runtime, all `__managed_`-prefixed), so a wide
-// array test above the lookup would have swallowed every buffer member and answered it with the array word —
-// the very defect D12 removed. The ordering was the separator, and a required ordering is a test nobody wrote.
+// ⭐⭐ **THE ARRAY ARM SITS ABOVE THE LOOKUP, AND ONLY A NARROW TEST MAY.** A WIDE array test there swallows
+// every `__ManagedMemory` buffer member — `isThrowingManagedMemoryRuntimeCallee` COMPOSES all seven (one
+// record, one runtime, all `__managed_`-prefixed) — and answers it with the array word. Separating them by
+// ARM ORDER alone is a required ordering nobody can test.
 //
-// ⇒ It now asks `isThrowingArrayAccessorCallee`, the NARROW factoring of that same union, which holds none but
+// ⇒ It asks `isThrowingArrayAccessorCallee`, the NARROW factoring of that same union, which holds none but
 // the nine genuine `Array`-surface accessors — so the arm is correct wherever it sits and sits here because the array
-// family is the one family whose SENTENCE is not built from a method name. The map below became total over
-// those nine at the same commit (E3059 needs the noun this sentence cannot supply), and without this move the
-// per-method sentence would have displaced the family one. **`try-postfix-target.error.two-throwing-calls-in-
-// one-chain` pins this wording, on `__managed_slice`, and is the check that the move changed no answer.**
+// family is the one family whose SENTENCE is not built from a method name. The map below is total over
+// those nine (E3059 needs the noun this sentence cannot supply), so without the narrow test the per-method
+// sentence would displace the family one. **`try-postfix-target.error.two-throwing-calls-in-one-chain` pins
+// this wording, on `__managed_slice`.**
 function throwingRuntimeCalleeMessage(callee ByteArray) returns String
 	// The subprocess family words itself from the CALL rather than from a method name: `__Builtins.runProcess`
 	// is a compiler intrinsic with no source method to name, and what a bare one drops is a spawn failure,
@@ -3554,7 +3544,8 @@ function validatePlainCall(project Project, func IrFunction, signatures ProgramS
 		let callRange = project.opRanges.get(opIndex)
 
 		// ⚠ The NOUN, not the callee: a bare `int.fromString(s)` is the shape an author most often writes by
-		// mistake, and it used to be told about `'__int_fromString'` — see `callDiagnosticNoun`.
+		// mistake, and quoting `'__int_fromString'` back names a callee they did not write — see
+		// `callDiagnosticNoun`.
 		reportPositioned(project, code: ErrorCode.throwingFunctionRequiresTry, message: throwingCallRequiresTryMessage(signatures.diagnosticCalleeSpelling(callDiagnosticNoun(callee, mint: mint))), line: callRange.line, column: callRange.column, filePath: func.sourceFilePath)
 	end 'throwing'
 end 'validatePlainCall'
@@ -3585,14 +3576,14 @@ function validateCall(project Project, func IrFunction, signatures ProgramSignat
 	// signature's.
 	//
 	// ⚠ The early return is SOUND ONLY BECAUSE THE PARSER REFUSES A SOURCE-WRITTEN `__` CALLEE
-	// (`Parser.requireCalleeIsNotReservedName`, E3004). Its stated premise used to be "no user name can be
-	// DECLARED with this prefix, so a `__` CALLEE is provably compiler-owned" — which is about
-	// DECLARATIONS, and a callee need not be declared anywhere. Three panics rode through that gap. What
+	// (`Parser.requireCalleeIsNotReservedName`, E3004). It is NOT sound on "no user name can be
+	// DECLARED with this prefix, so a `__` CALLEE is provably compiler-owned" — that is about
+	// DECLARATIONS, and a callee need not be declared anywhere; three panics ride through that gap. What
 	// makes the premise true is the closed door, not the reservation; do not remove one without the other.
 	//
-	// ⚠ **AND THE DOOR IS NOW AJAR FOR ONE FILE, WHICH IS WHY THE TEST IS `isSignaturelessCompilerCallee`
-	// AND NOT THE PREFIX (A1r).** `stdlib/Builtins.maxon` may CALL the `__` names it declares, so a `__`
-	// callee is no longer provably absent from `funcSignatures` — and one that is PRESENT is an ordinary
+	// ⚠ **AND THE DOOR IS AJAR FOR ONE FILE, WHICH IS WHY THE TEST IS `isSignaturelessCompilerCallee`
+	// AND NOT THE PREFIX.** `stdlib/Builtins.maxon` may CALL the `__` names it declares, so a `__`
+	// callee is not provably absent from `funcSignatures` — and one that is PRESENT is an ordinary
 	// declared function that owes every check below: the arity that MEASURABLY went unreported for
 	// `__int_fromString()` with its argument omitted, the argument LABELS (which is also what keeps a
 	// labelled argument out of `lowerRuntimeCall`, whose positional guard would panic on one), and the
@@ -4167,7 +4158,7 @@ end 'reportSpawnOfNonYielding'
 //
 // ⚠ MEASURED, both directions: without the guard, `await-any.md`'s and `promise-peek.md`'s wasm refusal
 // cases — each of which pins the ONE E3104 its own construct earns — grew a second line about the spawn
-// beneath it; with it, `async compute()` on `--target=x64-linux` still answers E3104 where it used to die
+// beneath it; with it, `async compute()` on `--target=x64-linux` answers E3104 rather than dying
 // at `StdToX64Conversion.lowerTlsAlloc`.
 function requireTargetHostsSpawn(project Project, func IrFunction, opIndex OpIndex)
 	if projectHasErrors(project) 'alreadyRefused'
@@ -4387,14 +4378,14 @@ end 'calleeIsChainable'
 // target is chosen at run time, a spawn, an await, a throw, a panic, a touch of module storage. The cost is
 // missed diagnostics, which is the direction that cannot break anything.
 //
-// ⛔⛔ **A FIELD ASSIGNMENT IS ON THAT LIST THROUGH A COLUMN OF THIS RULE'S OWN, AND THE FIRST VERSION GOT IT
-// WRONG BY BORROWING E3070's.** The seed below reads `IrFunction.assignsIntoAnExistingAggregate`, set at the
-// two assignment emitters (`Parser.emitFieldWrite`, `Parser.writeBackPayload`). It used to read the two
-// PARAMETER masks alone — both of which their own doors deliberately narrow to ARRAY-instance fields, because
-// only an array write can free an array element — so `self.n = self.n + 1` on an int field set neither, a
-// method doing exactly that was classified effect-free, and a legal program was REFUSED. A fact recorded for
+// ⛔⛔ **A FIELD ASSIGNMENT IS ON THAT LIST THROUGH A COLUMN OF THIS RULE'S OWN, AND BORROWING E3070's IS
+// WRONG.** The seed below reads `IrFunction.assignsIntoAnExistingAggregate`, set at the
+// two assignment emitters (`Parser.emitFieldWrite`, `Parser.writeBackPayload`). The two
+// PARAMETER masks will not serve — their own doors deliberately narrow them to ARRAY-instance fields, because
+// only an array write can free an array element — so `self.n = self.n + 1` on an int field sets neither, a
+// method doing exactly that classifies effect-free, and a legal program is REFUSED. A fact recorded for
 // one consumer, reused as the floor for another, where the first one's deliberate narrowing is the second
-// one's hole; the two doors could not know a second consumer had come to lean on them being wide.
+// one's hole; the two doors cannot know a second consumer has come to lean on them being wide.
 //
 // ⚠ **ALL THREE MUTATING SPELLINGS ARE ACCEPTED** — a bare `n = n + 1` inside a method,
 // `self.n = self.n + 1` inside a method, and `c.n = 7` through a `c Counter` PARAMETER. A method that
@@ -4798,7 +4789,7 @@ end 'recordCallGraphEdge'
 // answers "yields" for the same three anyway.
 //
 // ⛔⛔ **THIS ROSTER IS BELT-AND-BRACES: `calleeYields`'s UNKNOWN-CALLEE FALLBACK ALREADY ANSWERS `true` FOR
-// EVERY NAME ON IT, AND TWO FILES USED TO EXPLAIN THE SOCKET BAND'S BEHAVIOUR BY ITS MEMBERSHIP HERE.**
+// EVERY NAME ON IT — SO NO BAND'S BEHAVIOUR MAY BE EXPLAINED BY ITS MEMBERSHIP HERE.**
 // `checkAsyncYielding` walks the **Maxon**-tier module, so `funcIndexByName` holds the functions this program
 // DECLARES. `__gt_sleep`, `__gt_resched`, `__gt_process_run` and the whole `__mf_*`/`__md_*`/`__ms_*` band are
 // **Std**-tier runtime entry points, installed after lowering and declared in no source at all
@@ -4950,9 +4941,9 @@ function opShowsAnEffect(op MaxonOp, func IrFunction, funcIndexByName FuncIndexB
 		// `IrFunction.writesModuleStorage` by the seed above.
 		globalAddr gives false
 
-		// ⛔ **A STORE THROUGH A POINTER IS NOT DECIDED HERE, AND THIS ARM ONCE CLAIMED IT WAS.** It read "a
-		// store into a heap box the function itself built is not observable outside it", deferring the rest to
-		// the `globalAddr` arm — and neither half held: `self.n = 5` and `p.n = 5` both lower to a
+		// ⛔ **A STORE THROUGH A POINTER IS NOT DECIDED HERE.** Neither "a store into a heap box the function
+		// itself built is not observable outside it" nor a deferral of the rest to
+		// the `globalAddr` arm holds: `self.n = 5` and `p.n = 5` both lower to a
 		// `storeIndirect` through a box the function was HANDED, which `globalAddr` never sees. Telling "a box
 		// this frame allocated" from "a box it was handed" needs provenance this op does not carry, so the OP
 		// cannot answer it.
@@ -5030,7 +5021,7 @@ end 'opShowsAnEffect'
 //
 // ⛔⛔ **A `runtime/` CALLEE IS OPAQUE TO THIS WALK, FOR `calleeYields`' REASON AND WITH THE SAME FORCE.**
 // The roster above is the whole positive side, so every unlisted runtime entry must read as an effect —
-// and that used to follow from the entry being declared in no source. A migrated family's entry point IS
+// and "declared in no source" does not deliver that. A migrated family's entry point IS
 // declared, so without this arm the edge is recorded and the closure hands the caller the tier body's own
 // verdict: a pure `module function` helper in a runtime file would classify effect-free, propagate that to
 // any user function whose only effect is calling it, and earn E3064 on a legal program. The roster is
@@ -5173,9 +5164,9 @@ let TargetUnsupportedUnnamedSubject = "this construct"
 // on. This gets MORE important as stdlib grows: a program built on `Map` and `String` crosses into stdlib on
 // nearly every line, and every leaf down there ends in an intrinsic.
 //
-// ⚠ It replaces a PANIC, not a diagnostic: before it, such a program crashed the compiler three tiers down
+// ⚠ It replaces a PANIC, not a diagnostic: without it such a program crashes the compiler three tiers down
 // (`StdToWasm.maxon: 'osReadClock' is x64-windows only`) with no file and no line. Those panics stay as
-// BACKSTOPS for a compiler bug that gets one past this gate; they are no longer the user-facing rejection.
+// BACKSTOPS for a compiler bug that gets one past this gate; they are not the user-facing rejection.
 //
 // ⚠ **IT IS REACHABILITY-BLIND FOR USER CODE, AND REACHABILITY-AWARE FOR STDLIB SOURCE** — an asymmetry
 // worth stating because retiring a bare-name builtin turns one into the other. An `__Builtins.sleep(1)`
@@ -5186,12 +5177,11 @@ let TargetUnsupportedUnnamedSubject = "this construct"
 // has no `substrateEntries` entry and no crossing to it can be refused. Clock shows both halves: a
 // `Clock.nowMs()` in code `main` never calls compiles clean for wasm while a reached one is refused.
 //
-// ⭐ **THE BARE-NAME `sleep` BUILTIN WAS RETIRED THAT WAY, AND MOVED A PROGRAM ACROSS THE ASYMMETRY** — the
-// decision this note was written to force, taken rather than discovered. `sleep(1)` used to BE a
-// `__gt_sleep` in user code, so an unreached one was refused; it is now a call into `stdlib/Sleep.maxon`,
-// so an unreached one COMPILES (`async-sleep.unreached-compiles-on-wasm`, against
-// `builtins-sleep.rejected-on-wasm-when-unreached`, which keeps the property at the intrinsic spelling that
-// still has it). That is the correct direction: the entry genuinely is stdlib's, and a program with no path
+// ⭐ **RETIRING A BARE-NAME BUILTIN ONTO STDLIB MOVES A PROGRAM ACROSS THE ASYMMETRY, AND THAT IS THE
+// CORRECT DIRECTION.** `sleep(1)` is a call into `stdlib/Sleep.maxon`, so an unreached one COMPILES
+// (`async-sleep.unreached-compiles-on-wasm`), while a `__gt_sleep` in user code refuses an unreached one
+// (`builtins-sleep.rejected-on-wasm-when-unreached`, which keeps the property at the intrinsic spelling).
+// The entry genuinely is stdlib's, and a program with no path
 // to it does not contain it. Every builtin retired this way moves the same way.
 // `callee` is the KEY (the registry is keyed by the EMITTED name) and `noun` is what the message QUOTES —
 // the two part company for a primitive-static mint, and the caller has already resolved which is which
@@ -5310,13 +5300,13 @@ end 'reportTargetUnsupportedCallee'
 // diagnostic itself, so an E3104 emitted wrongly here deletes coverage there while the suite reads green.
 
 // ⭐⭐ **WHICH OF TWO SUBSTRATE ENTRIES A STDLIB BODY REACHES IS THE ONE ITS CROSSING IS REPORTED FOR — AND
-// SINCE E3074 THAT IS A SEMANTIC CHOICE, NOT A TIE-BREAK.**
+// THAT IS A SEMANTIC CHOICE, NOT A TIE-BREAK.**
 //
-// `StdlibSource.SubstrateFixpoint` records ONE entry per stdlib function, and its `seed` used to say that the
-// first a body names wins because *"a body naming two is refused for either, and both are equally true of
-// it"*. That was true while every entry produced the same E3104 differing only in the name it quoted. It
-// stopped being true the moment `requireTargetSupportsCallee` began reading the entry to CHOOSE THE
-// DIAGNOSTIC: a subprocess entry on WASI answers E3074 (*subprocess can NEVER exist here*, with a `#if`
+// `StdlibSource.SubstrateFixpoint` records ONE entry per stdlib function, and *"the first a body names wins,
+// because a body naming two is refused for either and both are equally true of it"* holds only while every
+// entry produces the same E3104 differing in the name it quotes. It does not:
+// `requireTargetSupportsCallee` reads the entry to CHOOSE THE
+// DIAGNOSTIC — a subprocess entry on WASI answers E3074 (*subprocess can NEVER exist here*, with a `#if`
 // to write) and every other answers E3104 (*x64-windows only AT THIS RUNG*). Those are different claims with
 // different advice, so a body reaching both must not have its code decided by which seed the worklist
 // drained first.
@@ -5559,10 +5549,10 @@ function checkTypeParameterArgs(project Project, func IrFunction, result ValueId
 		return
 	end 'noOpaqueParams'
 
-	// ⭐ The instance is read off a VALUE this pass already holds, so the answer costs no heap object. It
-	// used to be a `CallGenericInstance` union — and a Maxon union value IS a heap box, minted once per call
+	// ⭐ The instance is read off a VALUE this pass already holds, so the answer costs no heap object. A
+	// `CallGenericInstance` union would not: a Maxon union value IS a heap box, minted once per call
 	// into a shared generic body just to be matched and dropped (measured: 1 allocation / 16 bytes per such
-	// call, on a path that becomes every array operation at P1.7 Array). A `ValueId` is a scalar.
+	// call, on a path that is every array operation). A `ValueId` is a scalar.
 	let subject = callInstanceSubject(sig, result: result, argIds: argIds)
 
 	// ⚠ **PANIC, NOT `otherwise return`.** `subject` is an SSA value of THIS function — a call's `result`
@@ -5669,10 +5659,10 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 
 		// ⭐ **SUBSTITUTED AND RESOLVED ONCE, READ THREE TIMES.** A `MaxonType` is a heap box, and this type is
 		// wanted for its nominal identity, for the (tag, nameId) pair the shared rule compares with, and — on
-		// the scalar path below — for the declared tag. It used to be substituted separately for each, and the
-		// alias resolution (`canonicalTypeArg`) lived inside the identity read alone, where the pair could not
-		// see it: `Box with Bytes`'s argument then read `Array_Byte` as its identity while its tag stayed
-		// `named`, and the byte boundary was asked about a name id that is not an instance id.
+		// the scalar path below — for the declared tag. Substituting separately for each puts the
+		// alias resolution (`canonicalTypeArg`) inside the identity read alone, where the pair cannot
+		// see it: `Box with Bytes`'s argument then reads `Array_Byte` as its identity while its tag stays
+		// `named`, and the byte boundary is asked about a name id that is not an instance id.
 		// ⚠ `functionAliasResolved` and `floatAliasResolved` are the LAST steps and not the first:
 		// canonicalization works on the interned leaf, and a function alias is only a `function` place — a
 		// float alias only a `float` one — once nothing else is going to read either as a name. See those two
@@ -6100,8 +6090,8 @@ function closureEscapeReason(op MaxonOp) returns String
 
 		// PART 3: a witness dispatch picks its concrete method at RUN TIME from the witness table, so there is
 		// no callee name to key an escape summary on and `checkCapturingClosureEscape` never sees the call.
-		// Refused rather than delegated to a decider that cannot run — before this arm it reached lowering and
-		// PANICKED (`maxonTypeToStdType`) on the environment it could not thread.
+		// Refused rather than delegated to a decider that cannot run — without this arm it reaches lowering
+		// and PANICS (`maxonTypeToStdType`) on the environment it cannot thread.
 		witnessDispatch or
 			witnessTryDispatch then return "cannot pass a closure that captures to an interface method dispatched through a witness: the concrete method is chosen at run time, so the compiler cannot tell whether it stores the closure, and its environment cannot be threaded to it. {CapturingClosureEscapeSuffix}"
 
@@ -6173,16 +6163,16 @@ function checkArgTypes(project Project, func IrFunction, result ValueId, callee 
 		let paramType = paramTypeThroughCallInstance(project, func: func, subject: instanceSubject, paramType: try sig.paramTypes.get(i) otherwise panic("checkArgTypes: paramTypes.get OOB at {i} — slotCallArgs returned {argIds.count()} slots for a {sig.paramCount()}-parameter signature"))
 		let paramName = try sig.paramNames.get(i) otherwise panic("checkArgTypes: paramNames.get OOB at {i}")
 
-		// ⛔⛔ **THE RECEIVER ARGUMENT (`__self`, position 0) IS JUDGED LIKE EVERY OTHER PARAMETER, AND THE
-		// EXEMPTION IT USED TO HAVE WAS A SILENT MEMORY-SAFETY HOLE.** The exemption's premise was that a
-		// receiver is *compatible by construction* — the callee was mangled FROM the receiver's own type
+		// ⛔⛔ **THE RECEIVER ARGUMENT (`__self`, position 0) IS JUDGED LIKE EVERY OTHER PARAMETER, AND AN
+		// EXEMPTION FOR IT IS A SILENT MEMORY-SAFETY HOLE.** Such an exemption rests on a
+		// receiver being *compatible by construction* — the callee is mangled FROM the receiver's own type
 		// (`dispatchMethodOnBase`), so a method declared on `Sizer` is only ever reached through a `Sizer`.
 		// **That is true of `a.bump()` and false of `Adder.bump(7)`**, where the author NAMED the type and
 		// the parser therefore built the call with no receiver at all (`ReceiverArg.none`): the first
 		// argument the author wrote lands in slot 0 because that is where an unlabelled argument goes, and
-		// slot 0 is `SelfParamName`. `parseQualifiedCall` believed arity refused that shape, which holds
+		// slot 0 is `SelfParamName`. Arity does not refuse that shape either, which holds
 		// only while the counts differ — and they COINCIDE for every zero-parameter instance method called
-		// with one argument. MEASURED on the unchanged tree, all three COMPILED CLEAN and then faulted
+		// with one argument. MEASURED without this check, all three COMPILE CLEAN and then fault
 		// `0xC0000005` dereferencing an `int` as a record pointer: `String.byteLength(3)`,
 		// `Character.hash(3)`, and `Adder.bump(7)` on a plain user type.
 		//
@@ -6191,8 +6181,8 @@ function checkArgTypes(project Project, func IrFunction, result ValueId, callee 
 		// distinguishes the two is exactly what this check answers, the ARGUMENT'S TYPE, and nothing here
 		// needs to know which spelling the author used.
 		//
-		// ⚠ **WHAT THE EXEMPTION WAS PROTECTING IS `paramTypeThroughCallInstance`'s JOB, AND IT WAS ALREADY
-		// DOING IT ONE LINE ABOVE.** A generic INSTANCE receiver (P1.6-B1) is tagged `genericInstance` while
+		// ⚠ **WHAT SUCH AN EXEMPTION WOULD PROTECT IS `paramTypeThroughCallInstance`'s JOB, AND IT IS ALREADY
+		// DONE ONE LINE ABOVE.** A generic INSTANCE receiver is tagged `genericInstance` while
 		// the shared body's `__self` param is the base `structRef`, which a raw comparison would read as a
 		// spurious mismatch — but `paramType` above has ALREADY been resolved through the call's instance,
 		// and that substitution's `maybeSelf` arm maps precisely a base-named `structRef` onto the subject's
@@ -6333,14 +6323,14 @@ end 'paramTypeThroughCallInstance'
 // returns …'`** — one type named twice, in two views, which is `paramTypeThroughCallInstance`'s own argument
 // one tier down.
 //
-// ⚠ **THE PRE-ERASURE IDENTITY COLUMNS ARE CARRIED THROUGH UNCHANGED FOR EVERY SLOT BUT ONE, AND THAT
-// EXCEPTION IS F3's.** They hold the names resolution DESTROYS — a boxed union/enum, a per-instance ranged
-// alias — and `FunctionShape.paramAggregateNames` is deliberately EMPTY for exactly the shapes this
-// substitution used to move (a struct, a tuple, a nested instance keep their identity live in `paramTypes`).
-// This header used to close *"a type argument cannot turn a position from one kind into the other: the
-// substitution replaces a type parameter or an instance argument, never the enum-ness of a slot"*, and a bare
-// `T` slot is precisely where that stops being true — its identity column was captured at the PARSE, where
-// the slot was an opaque parameter with no identity at all, and the instance may bind it to an ENUM.
+// ⚠ **THE PRE-ERASURE IDENTITY COLUMNS ARE CARRIED THROUGH UNCHANGED FOR EVERY SLOT BUT ONE.** They hold
+// the names resolution DESTROYS — a boxed union/enum, a per-instance ranged
+// alias — and `FunctionShape.paramAggregateNames` is deliberately EMPTY for the shapes this
+// substitution moves (a struct, a tuple, a nested instance keep their identity live in `paramTypes`).
+// *"A type argument cannot turn a position from one kind into the other: the
+// substitution replaces a type parameter or an instance argument, never the enum-ness of a slot"* is false
+// for a bare `T` slot — its identity column is captured at the PARSE, where
+// the slot is an opaque parameter with no identity at all, and the instance may bind it to an ENUM.
 // ⛔ MEASURED on `typealias Transform = function(Element) returns Element` at a `Holder with Shade`:
 // **`E3005 … expected 'fn(int) returns int', got 'fn(Shade) returns Shade'`** — a legal program refused,
 // because the arriving side carried `Shade` and the declared side carried the opaque slot's empty column.
@@ -6714,16 +6704,16 @@ function existentialSiteClaimAgainst(project Project, signatures ProgramSignatur
 		// argument must agree with is checked whole-program instead — the holding by E3125, and every
 		// conformer's binding against it by E3126.
 		//
-		// ⚠⚠ **WHAT IS EXEMPT IS THE ARGUMENT ITSELF, NOT THE ARGUMENTS *IT* CARRIES (W59).** `Bag with
+		// ⚠⚠ **WHAT IS EXEMPT IS THE ARGUMENT ITSELF, NOT THE ARGUMENTS *IT* CARRIES.** `Bag with
 		// (Integer, Cursor with Integer)` says two things: that `Iter` is held at `Cursor`, which is E3126's, and
 		// that whatever cursor arrives binds `Cursor`'s OWN associated type to `Integer` — a claim no other door
 		// checks. E3125 DEFERS it whenever the nested argument is the declaring type's parameter, which is the
-		// shape `stdlib/Array.maxon`'s `Iterable with (Element, Iterator with Element)` has, and this deferral
-		// used to be discharged by nothing at all. It cost nothing while E3119 forbade two `Iterator` conformers
-		// from disagreeing; W59 lifts that for exactly the sites that make a claim, so the claim is now load-
-		// bearing and is checked here. **MEASURED with it missing: a conformer binding `Iterable.Element` to
-		// `Integer` and `Iter` to an iterator binding `Iterator.Element` to `String` compiled clean, and the
-		// `String` came back through a slot typed `Integer` — exit 101 on the leak gate.**
+		// shape `stdlib/Array.maxon`'s `Iterable with (Element, Iterator with Element)` has, so the deferred
+		// claim is discharged HERE. E3119 does not forbid two `Iterator` conformers from disagreeing at the
+		// sites that make such a claim, which is what makes the claim load-bearing. **MEASURED with this check
+		// missing: a conformer binding `Iterable.Element` to `Integer` and `Iter` to an iterator binding
+		// `Iterator.Element` to `String` compiles clean, and the `String` comes back through a slot typed
+		// `Integer` — exit 101 on the leak gate.**
 		if signatures.associatedTypeIsHeldAt(iface.name, position: position) 'heldAtAnInterface'
 			let nested = heldPositionNestedClaim(project, signatures: signatures, siteInstance: siteInstance, conformerTag: conformerTag, conformerNameId: conformerNameId, iface: iface, position: position)
 
@@ -6984,8 +6974,8 @@ end 'floatHasNoValueHalfReason'
 // the shape and this pass takes the verdict, through the SAME door the argument position asks.
 //
 // ⚠ **WITHOUT IT A NON-CONFORMER REACHES `ensureWitnessTable` AND PANICS THE COMPILER** in `witnessSlotImpl`,
-// naming a slot no conformance ever filled: the parse-time tag check that used to refuse EVERY concrete
-// return is exactly what this replaces, so nothing else is left standing between the two.
+// naming a slot no conformance ever filled. Nothing else stands between the two: a parse-time tag check
+// cannot refuse the non-conformer without refusing EVERY concrete return.
 //
 // The per-function gate is the DECLARED RETURN TYPE, tested before anything walks a body — an
 // interface-returning function is a vanishing fraction of any program, and `liveOpIndices` builds an array
@@ -7164,9 +7154,9 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 		expectedAggregate = preErasedAggregate
 	end 'erasedUnionParam'
 
-	// ⚠ The ask is NOT gated on the DECLARED side being an aggregate. It used to be, and that skipped the
+	// ⚠ The ask is NOT gated on the DECLARED side being an aggregate: that skips the
 	// quadrant where a SCALAR parameter meets an AGGREGATE argument — which the tag check cannot refuse
-	// either, so `takesInt(x Integer)` accepted a boxed union and did arithmetic on its payload word.
+	// either, so `takesInt(x Integer)` accepts a boxed union and does arithmetic on its payload word.
 	// `tagAdmitsNoAggregate` is what keeps that safe for a `T` parameter, and `argAggregateCannotDecay` what
 	// keeps it off a byte enum or a per-instance alias, both of which legitimately coerce to an int.
 	if not expectedAggregate.isEmpty() or (tagAdmitsNoAggregate(paramTag) and argAggregateCannotDecay(project, tag: argTag, nameId: argNameId)) 'aggregateComparable'

@@ -63,8 +63,8 @@ export typealias RuntimeFunctionNameArray = Array with String
 // FAILING TEST with a reviewable diff rather than a silent difference in a program's starting state
 // — which no exit code can see until the one path that reads that global happens to run.
 //
-// ⚠ It is NOT what a ```RequiredData block is checked against, and an earlier draft of this comment
-// said it was. `SpecTestRunner.checkRequiredSections` parses that block into BYTES and compares them
+// ⚠ It is NOT what a ```RequiredData block is checked against.
+// `SpecTestRunner.checkRequiredSections` parses that block into BYTES and compares them
 // against the `.data` section read back out of the linked PE (`PeSectionReader`) — this text is
 // never consulted. That independence is deliberate and is the gate's whole value: a spec checked
 // against the printer would only ever prove the compiler agrees with itself, and could not catch a
@@ -80,8 +80,7 @@ export typealias RuntimeFunctionNameArray = Array with String
 // diff"*, rendering the one field a reviewer cannot review. `scalarConstantText` is the shared renderer,
 // the same one an E3005 range bound goes through, so the two cannot disagree about what `3.14` is.
 //
-// A program with no global prints NOTHING here, not an empty header: the section does not exist, and
-// every pre-existing golden is unchanged by this rung as a result.
+// A program with no global prints NOTHING here, not an empty header: the section does not exist.
 function printDataSection(globalData GlobalDataTable) returns String
 	if globalData.dataSection.count() == 0 'noGlobals'
 		return ""
@@ -121,18 +120,16 @@ end 'printDataSection'
 // ⭐⭐ **`runtimeNames` IS THE ONLY WAY A WITHHELD BODY REACHES A GOLDEN, AND IT IS OPT-IN
 // PER BUILD.** The emitted-runtime/entry functions (`mrt_start`, `__slab_*`/`__mm_*`/`__destruct_*`,
 // the `__str_*`/`__managed_*` families) are skipped by default because the shared scaffolding is
-// identical in every test and would be pure noise in all of them — and, until BATCH8, "by default"
-// meant "always": this function's one caller (`Compiler.compileMeasured`, which was
-// `Compiler.writeTargetIr` when BATCH8 was written — G20 split the RENDER from the WRITE) passed the
-// old `includeRuntime: false` unconditionally and nothing anywhere passed `true`, so those bodies
-// carried **no golden at all**. The miss was
-// measured, not feared: `__str_bytes_view`'s owed-base arm holds an incref whose loss is a
-// use-after-free that BALANCES (the matching release disappears with it), and the exit codes, the
-// leak gate and every committed fragment stayed green over exactly that edit, together.
+// identical in every test and would be pure noise in all of them.
+//
+// ⚠ MEASURED: a runtime body carrying **no golden at all** is invisible to every other gate.
+// `__str_bytes_view`'s owed-base arm holds an incref whose loss is a use-after-free that BALANCES
+// (the matching release disappears with it), so the exit codes, the leak gate and every committed
+// fragment stay green over exactly that edit, together.
 //
 // So the axis is a NAME LIST rather than a boolean. A boolean has only a useless second state here —
-// "render all of it", into every fragment at once — while a list renders exactly the body a rung has
-// just written into exactly the test that is about it, and leaves all 3,198 other goldens byte-
+// "render all of it", into every fragment at once — while a list renders exactly the body a change
+// has just written into exactly the test that is about it, and leaves all 3,198 other goldens byte-
 // identical. A name that RENDERED nothing is REFUSED (`requireEveryNameRendered`), because a
 // misspelling that quietly rendered nothing would leave a test claiming a gate it does not have.
 //
@@ -144,14 +141,14 @@ end 'printDataSection'
 //
 // ⭐⭐ **AND THE LIST REACHES THE HAND-ASSEMBLED CHUNKS TOO — they are not `module.functions`, but they
 // ARE addressable.** `mrt_panic`, the green-thread pieces and (on arm64) the entry stub are raw bytes
-// rather than `TargetOp`s, so there is no IR body to print for them — and the block used to be REFUSED
-// on that ground, which confused *"has no IR body"* with *"cannot be pinned"*. Every one of them
+// rather than `TargetOp`s, so there is no IR body to print for them — but *"has no IR body"* is not
+// *"cannot be pinned"*. Every one of them
 // carries its NAME on its `FunctionCodeChunk`, so a requested name that no FUNCTION answered is
 // offered to `codeChunks`, and the chunk bearing it renders its ASSEMBLED BYTES. That is the entire
 // difference: two RENDERINGS of one selection rule, not two selection rules. What it buys is measured
 // rather than hoped for — the panic runtime, the scheduler's context switch and the stack-growth
-// trampoline had no gate of ANY kind, being the one part of an emitted program that neither an exit
-// code, nor the leak gate, nor a section pin, nor a fragment could see.
+// trampoline have no OTHER gate of ANY kind, being the one part of an emitted program that neither an
+// exit code, nor the leak gate, nor a section pin, nor a fragment can see.
 //
 // The printed text grows with the PROGRAM, so both accumulators here are `StringBuilder`s: a `String`
 // owns exactly the bytes it holds and its `append` recopies all of them (stdlib/String.maxon), which
@@ -171,13 +168,12 @@ export function printTargetModule(module TargetModule, globalData GlobalDataTabl
 
 	// ⭐⭐ **THE REFUSAL IS DERIVED FROM THE RENDER, not computed beside it.** One flag per requested
 	// name, and the ONLY thing that raises a flag is the very test the loop below uses to decide
-	// whether to print a function. An earlier draft asked the question twice — a `requireRuntimeNames-
-	// Renderable` pre-pass that scanned the module for each name, and a `namesFunction` predicate the
-	// print loop consulted — which is this project's signature bug in miniature: two readers of one
-	// question, nothing making them agree, and a divergence that reports a WRONG ANSWER rather than a
-	// compile error: the check says the name will render, the skip rule renders nothing, the golden is
-	// recorded without the body, and the test claiming the gate goes green for ever. A future edit to
-	// the skip rule now cannot bypass the refusal, because there is no second rule left to bypass.
+	// whether to print a function. Asking the question twice — a pre-pass that scans the module for each
+	// name, plus a predicate the print loop consults — is this project's signature bug in miniature: two
+	// readers of one question, nothing making them agree, and a divergence that reports a WRONG ANSWER
+	// rather than a compile error: the check says the name will render, the skip rule renders nothing, the
+	// golden is recorded without the body, and the test claiming the gate goes green for ever. An edit to
+	// the skip rule cannot bypass the refusal, because there is no second rule to bypass.
 	var rendered = BoolArray.create()
 	rendered.resize(runtimeNames.count())
 
@@ -335,7 +331,7 @@ end 'hexOffset'
 // --- The one spelling of a byte in hex ---
 //
 // ⚠ **DECLARED HERE, IN THE COMPILER TIER, AND CONSUMED BY THE HARNESS ABOVE IT.** `Testing`'s section
-// gates render a `.data` mismatch in bytes and used to carry their own `hexByte`/`hexDigit`; a chunk
+// gates render a `.data` mismatch in bytes; a chunk
 // dump is the same rendering in the compiler, and a second copy of "a byte, in hex" is a second copy
 // whichever direction it faces. The harness may call down into the compiler (it already does, for
 // `targetToString` and `emitsTargetIr`); the compiler may not call up. So the shared spelling lives on
@@ -346,8 +342,7 @@ end 'hexOffset'
 let BitsPerHexDigit = 4
 
 // The low nibble those shifts then select — the SAME fact as `BitsPerHexDigit`, read as a mask instead
-// of a width, and it was written as a bare `0xF` at all three shift sites plus a fourth time in
-// `hexDigit`'s panic text. Widen one and the others silently index past the digit table.
+// of a width. Widen one without the other and the shift sites silently index past the digit table.
 let HexDigitMask = 0xF
 
 export function hexByte(b MachineWord) returns String
@@ -516,12 +511,10 @@ end 'escapedPayloadByte'
 // only from a program that trims. (The other way to name nothing — naming a function the fragment
 // already shows — is caught inside the render loop, where the function is in hand.)
 //
-// ⚠ **"IT IS A HAND-ASSEMBLED CHUNK" USED TO BE LISTED HERE AS A THIRD, UNFIXABLE CAUSE. IT IS NOT A
-// CAUSE AT ALL ANY MORE**, and the message must not send a reader after a spelling that will never
-// work: a chunk has no IR body, which is still true, but it is rendered as BYTES instead of being
-// refused (see `printChunkBytes`). Every remaining reason a name renders nothing is repairable — a
-// different spelling, or a program whose runtime includes the piece — which is exactly what this text
-// now says.
+// ⚠ **"IT IS A HAND-ASSEMBLED CHUNK" IS NOT A CAUSE.** A chunk has no IR body, but it is rendered as
+// BYTES rather than refused (see `printChunkBytes`). Every reason a name renders nothing is repairable
+// — a different spelling, or a program whose runtime includes the piece — and the message must not
+// send a reader after a spelling that will never work.
 //
 // It panics rather than reporting a diagnostic: the list arrives on a `--emit-ir-runtime=` command
 // line, which is the spec runner's own instrument rather than a program's source, and a panic
@@ -540,37 +533,36 @@ end 'requireEveryNameRendered'
 // `mrt_start`, the emitted `__`-prefixed runtime (`__slab_*`, `__mm_*`, `__destruct_*`, …), the
 // `__fnref_` env-thunks and `__module_init`/`__module_cleanup`.
 //
-// EXPORTED because it is the SAME set the P1.5-B1a′ GT stack guard EXEMPTS (X64Backend's
+// EXPORTED because it is the SAME set the GT stack guard EXEMPTS (X64Backend's
 // `emitFunctionChunk`): a runtime function must never trigger `__gt_morestack` — the scheduler core
-// runs the grower, and its own kernel calls are already shimmed onto the system stack (slice 1) — so
+// runs the grower, and its own kernel calls are already shimmed onto the system stack — so
 // "which functions are compiler-emitted runtime" is one predicate, shared by the golden-skip here and
 // the guard exemption there, not two copies free to drift.
 //
-// ⚠⚠ **THE NAME SHAPE ALONE WAS A REACHABLE SEGFAULT, AND PROVENANCE IS THE SECOND CLAUSE THAT FIXES IT
-// (A1r review).** This read the two prefixes and nothing else, on the stated premise *"Maxon reserves `__`
-// for compiler-internal names, so a user function can never collide"* — which **D6 falsified**:
-// `stdlib/Builtins.maxon` may DECLARE `__`-prefixed names, and A1r made them CALLABLE. A user function
-// wearing the prefix was therefore handed the SCHEDULER's exemption. MEASURED on x64-windows: a
-// `__probeDeep` declared in that module, recursing 4000 deep inside an `async` worker, **SIGSEGVs (exit
-// 139)** because no guard ever called `__gt_morestack`; the identical program with the `__` dropped from
-// the name exits **42**. A safety exemption keyed on a naming convention is only as sound as the
-// convention, and this convention had acquired an exemption of its own.
+// ⚠⚠ **THE NAME SHAPE ALONE IS A REACHABLE SEGFAULT, AND PROVENANCE IS THE SECOND CLAUSE THAT CLOSES
+// IT.** The premise *"Maxon reserves `__` for compiler-internal names, so a user function can never
+// collide"* is FALSE: `stdlib/Builtins.maxon` may DECLARE `__`-prefixed names, and they are CALLABLE. On
+// the name shape alone a user function wearing the prefix is handed the SCHEDULER's exemption. MEASURED
+// on x64-windows: a `__probeDeep` declared in that module, recursing 4000 deep inside an `async` worker,
+// **SIGSEGVs (exit 139)** because no guard ever calls `__gt_morestack`; the identical program with the
+// `__` dropped from the name exits **42**. A safety exemption keyed on a naming convention is only as
+// sound as the convention, and this convention carries an exemption of its own.
 //
 // **`sourceFilePath` is the fact, and it is recorded at CONSTRUCTION by the only party that knows it**: the
 // parser stamps it on every function it builds (`parseFunction`, and `parseClosureExpression` for a lifted
 // closure), and `IrFunction.createFromStd` / `ModuleInit`'s `IrFunction.create` — the two doors a synthesized
 // function comes through — leave it empty. So it is derived rather than guessed, and no name can fool it:
 // not a declared `__int_fromString`, and not a lifted closure inside one (`__int_fromString$closure_0`),
-// which the prefix test also exempted.
+// which the prefix test alone would exempt too.
 //
 // ⚠ **IT NARROWS THE NAME TEST AND DOES NOT REPLACE IT, and that is not conservatism — MEASURED, replacing
 // it fails 118 spec tests.** An empty `sourceFilePath` is a strictly WIDER set than this one: it also holds
 // the SYNTHESIZED BUILTIN bodies — `int.compare`, `String.hash`, the runtime families — which
 // are compiler-built but deliberately wear NO prefix (a witness reloc must name a real `.text` symbol; see
 // `IrInterface.isBuiltinConformanceImplName`). Those are exactly the bodies the `set`/`string-trim`/
-// `character-set`/`primitive-comparable` goldens exist to pin — ⚠ **and in the first and third that is now
-// the KEY's conformance impls (`Character.hash`/`Character.equals`) rather than a container runtime**, whose
-// synthesized bodies went at W105 and W129; the spec directories still reach the same naming band, by the
+// `character-set`/`primitive-comparable` goldens exist to pin — ⚠ **and in the first and third that is
+// the KEY's conformance impls (`Character.hash`/`Character.equals`) rather than a container runtime**;
+// the spec directories reach the same naming band, by the
 // corpus route. On the GT side they are ordinary frames a
 // green thread runs and MUST grow for. Both readers want *"the invariant scaffolding"*, and a BUILDER-BUILT
 // body can only prove it is that by the CONJUNCTION: the runtime's own naming band, and no source file.
@@ -743,9 +735,8 @@ end 'blockNameFor'
 //
 // A target that is not one of the function's own blocks is BROKEN IR (a branch names a block of its
 // own function, and `printTargetFunction` builds the table from exactly those blocks), so it panics
-// rather than rendering the `block_<id>` placeholder the old resolver returned. That placeholder was
-// a sentinel wearing a name: it reads like a block that exists, and it never appeared in any of the
-// 16,250 committed goldens, so nothing was relying on it.
+// rather than rendering a `block_<id>` placeholder. Such a placeholder is a sentinel wearing a name:
+// it reads like a block that exists, and it appears in none of the 16,250 committed goldens.
 function blockPrintName(blockId BlockId, names BlockPrintNames) returns String
 	return try names.get(blockId) otherwise panic("blockPrintName: branch target block {blockId} is not a block of the function being printed — a branch can only name a block of its own function")
 end 'blockPrintName'
@@ -930,7 +921,7 @@ function opIsArm64Band(op TargetOp) returns bool
 			arm64Syscall or
 			arm64Fcsel gives true
 
-		// P1.5-A1: the x64 `leaRegFunc`/`callReg`, and the x64-linux `x64Syscall`, are appended past the
+		// The x64 `leaRegFunc`/`callReg`, and the x64-linux `x64Syscall`, are appended past the
 		// arm64 band (band-append), but they are x64 ops, so `false` — a module is NOT arm64 for holding them.
 		leaRegFunc or
 			callReg or
@@ -941,7 +932,7 @@ function opIsArm64Band(op TargetOp) returns bool
 		x64JumpTable gives false
 		arm64JumpTable gives true
 
-		// The memory-indirect witness call is an x64 op (P1.7a slice 2a).
+		// The memory-indirect witness call is an x64 op.
 		callMem gives false
 
 		// The stack-argument pair IS arm64-specific (see their dialect header for why x64 needs no op).
@@ -950,20 +941,20 @@ function opIsArm64Band(op TargetOp) returns bool
 
 		// The arm64 halves of the two bit reinterpretations, so a module holding either IS arm64. Their
 		// x64 twins `movqGprXmm`/`movqXmmGpr` both sit inside the leading `prologue to negF64RegReg` arm
-		// and are correctly `false` there — that range's endpoint is the x64 band's last member and it
-		// MOVED when `movqXmmGpr`, then `negF64RegReg`, were appended to it.
+		// and are correctly `false` there — that range's endpoint is the x64 band's last member, so
+		// appending to that band moves it.
 		arm64FmovGprFp gives true
 		arm64FmovFpGpr gives true
 
 		// SHARED by both CPUs, like `storeSlotReg`/`loadRegSlot` — not an arm64-band op.
 		leaRegSlot gives false
 
-		// F1b: the fill ladders are per-ISA, exactly as the jump tables above are — same question, same
+		// The fill ladders are per-ISA, exactly as the jump tables above are — same question, same
 		// answer, and written as two arms rather than a range for that reason.
 		x64MemFill gives false
 		arm64MemFill gives true
 
-		// F2: per-ISA, exactly as the fill ladders and jump tables above — the four x64 forms are x64's, the
+		// Per-ISA, exactly as the fill ladders and jump tables above — the four x64 forms are x64's, the
 		// three arm64 forms are arm64's. Two ranges rather than seven arms, which the band-append order makes
 		// exact: the x64 four are contiguous and the arm64 three follow them.
 		x64LockCmpxchg or
@@ -975,14 +966,14 @@ function opIsArm64Band(op TargetOp) returns bool
 			arm64AtomicRmw or
 			arm64ThreadPointer gives true
 
-		// EC16: the scaled-index band splits by ISA exactly as the atomics above do — the three x64 forms
+		// The scaled-index band splits by ISA exactly as the atomics above do — the three x64 forms
 		// are x64's, the shifted-register `add` is arm64's.
 		leaRegBaseIndexScale or
 			loadRegBaseIndexScale or
 			storeBaseIndexScaleReg gives false
 		arm64AddLsl gives true
 
-		// EC18's high multiply is one value with two instructions: x64's one-operand `imul` and arm64's
+		// The high multiply is one value with two instructions: x64's one-operand `imul` and arm64's
 		// three-address `SMULH`, each its own op.
 		imulHighReg gives false
 
@@ -1247,7 +1238,7 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalD
 		arm64AtomicRmw(dest, addrReg, operandReg, opcode) gives "arm64AtomicRmw.{opcode.name} {arm64VregName(dest)}, [{arm64VregName(addrReg)}], {arm64VregName(operandReg)}"
 		arm64ThreadPointer(dest, source) gives "arm64ThreadPointer {arm64VregName(dest)}, {source.name}"
 
-		// --- EC16: the scaled-index band ---
+		// --- The scaled-index band ---
 		//
 		// Rendered in the SOURCE shape `[base + index*scale + disp]` rather than as the op's field list,
 		// which is the choice `loadRegBaseDisp`/`storeBaseDispReg` already make one band up: a golden is

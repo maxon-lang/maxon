@@ -21,13 +21,9 @@ public type CommandLine
 	/// Returns EVERYTHING after the first "=" sign, including any further "=".
 	/// Throws StringError.notFound if "=" is not present.
 	///
-	/// It used to `split("=")` and return part 1 — which is the text between the
-	/// FIRST and SECOND "=", not the value. So any option value containing an "="
-	/// was SILENTLY TRUNCATED at the second one, and the caller could not tell.
-	/// It cost a committed row of `docs/optimization-log.md`: a `--note` explaining
-	/// why an allocation count moved was cut off mid-sentence at "N=128", so a
-	/// record whose entire job is to say WHY quietly stopped saying it. The doc
-	/// comment here was right all along; the code was not.
+	/// ⚠ NOT `split("=")` part 1: that is the text between the FIRST and SECOND
+	/// "=", so an option value containing an "=" — `--note "why N=128 moved"` —
+	/// is SILENTLY TRUNCATED at the second one and the caller cannot tell.
 	public static function optionValue(arg String) returns String throws StringError
 		// Only the FIRST "=" separates; every later one belongs to the value.
 		let optionSeparator = "="

@@ -13,8 +13,8 @@
 //
 // EVERY RULE IS STATED OVER `ValueTypeTag`, NEVER `MaxonType`. A Maxon union value is a heap
 // object, so a rule that took or returned a `MaxonType` would ALLOCATE on the per-operator path
-// — see MaxonDialect's ValueTypeTag header, where `scale-test` charged the first cut of exactly
-// that +4,165 allocations on the smallest rung. A tag is a scalar.
+// — see MaxonDialect's ValueTypeTag header, where `scale-test` charges exactly that shape
+// +4,165 allocations on the smallest rung. A tag is a scalar.
 //
 // THE RULES ARE ASKED AT THE PARSER. It is already the tier that must know a value's source
 // type (a bool `and` is CONTROL FLOW — see Parser.emitShortCircuit — and no later pass can
@@ -33,19 +33,18 @@
 //   • `boolean` — `bool`, and nothing else. **A bool converts to nothing, and nothing converts
 //     to a bool.** That single sentence is the whole rule this file enforces; `takeInt(flag)`,
 //     `4 + flag`, `4 < flag` and `if 4` are one error wearing four syntaxes.
-//   • `unknown` — a type the parser could not pin. Since the whole-program signature index
-//     landed (`Queries.queryProgramSignatures`), it is reachable for exactly one thing: a call
+//   • `unknown` — a type the parser could not pin. The whole-program signature index
+//     (`Queries.queryProgramSignatures`) leaves it reachable for exactly one thing: a call
 //     to a function **NO FILE IN THE PROGRAM DECLARES**. It agrees with EVERYTHING — that is a
-//     DEFERRAL, not a contradiction — and that deferral is now SAFE rather than merely
+//     DEFERRAL, not a contradiction — and the deferral is SAFE rather than merely
 //     conservative: such a call is reported by `SemanticCheck.validateCall` (E3004, "call to
 //     undefined function"), which reads the post-parse registry, so a program carrying an
-//     `unknown` NEVER reaches codegen. Before the index, `unknown` was also the answer for a
-//     callee declared in ANOTHER FILE — a perfectly good program — and THAT is what made the
-//     deferral unsound: `isReady()` from a second file typed as unknown, agreed with `int`, and
-//     `x + 41` returned 42 off a bool's payload.
+//     `unknown` NEVER reaches codegen. ⚠ Widen it to cover a callee declared in ANOTHER FILE — a
+//     perfectly good program — and the deferral is unsound: `isReady()` from a second file typed
+//     as unknown agrees with `int`, and `x + 41` returns 42 off a bool's payload.
 //   • `noValue` — the class of the `void` tag: a ValueId that names no value at all. It agrees
 //     with NOTHING, not even itself, which is the exact opposite of `unknown` and the reason
-//     the two must never share a tag again (they did: see `ValueTypeTag.void`).
+//     the two must never share a tag (see `ValueTypeTag.void`).
 //   • `structRef` — a reference to a declared struct type. It converts to nothing and nothing
 //     converts to it, which is what keeps `p + 1`, `return p` from an `ExitCode` function, `if p`
 //     and `takeInt(p)` out of the language: all four are one error, and all four would have
@@ -57,10 +56,10 @@
 //     prescribes for its own eventual break: the rules are stated over a TAG, which is a scalar
 //     and carries no name, so telling two structs apart needs the parser's `valueNameIds` column
 //     PUBLISHED alongside `valueTags` and read here. That is a change to every rule's signature
-//     and it buys nothing at P1.0r — no program can put two struct values at one site, because a
-//     struct cannot yet be a parameter (P1.4's ownership ruling), a return type, or a field. **The
+//     and it buys nothing today — no program can put two struct values at one site, because a
+//     struct cannot yet be a parameter (the ownership ruling), a return type, or a field. **The
 //     day any of those lands, this arm is the bug.**
-//   • `text` — the class of a `String` (P1.2 wave A). Like `structRef`, it converts to nothing and
+//   • `text` — the class of a `String`. Like `structRef`, it converts to nothing and
 //     nothing converts to it: a String is a pointer to a byte record, not a number and not a bool, so
 //     `s + 1`, `return s` from an `ExitCode` function, `if s` and `takeInt(s)` are all one error and
 //     all rejected here. Its ONLY operators are `==`/`!=` (a runtime byte compare, handled in
@@ -76,16 +75,16 @@ export enum TypeClass
 	structRef
 	text
 
-	// The class of a non-capturing FUNCTION VALUE (P1.5-A1). Like `structRef`/`text`, it converts to
+	// The class of a non-capturing FUNCTION VALUE. Like `structRef`/`text`, it converts to
 	// nothing and nothing converts to it — a function value is a code pointer, not a number and not a
 	// bool, so `f + 1`, `return f` from an `ExitCode` function and `if f` are all one error. It AGREES
 	// with another `function` and nothing else, which is exactly the type rule the spec states: "a
 	// function value is only usable where a function type declared with 'typealias' is expected." Two
-	// function types agreeing at the class level is A1's assignability (tag-level, not structural — the
-	// arity/param-type identity a function-to-function mismatch would need arrives with a later rung).
+	// function types agreeing at the class level is assignability at the TAG level and not structurally —
+	// the arity/param-type identity a function-to-function mismatch would need is not carried by a tag.
 	function
 
-	// The class of a TYPE-PARAMETER value (P1.6-A) — `T` inside a generic type. It is OPAQUE: at this
+	// The class of a TYPE-PARAMETER value — `T` inside a generic type. It is OPAQUE: at this
 	// trivial slice `T` is never substituted, so a `T` value may hold ANY concrete type (an int, a
 	// bool, a trivial struct), and a concrete value may meet a `T` place. So it AGREES WITH ANYTHING,
 	// exactly like `unknown` — a DEFERRAL, not a contradiction. Unlike `unknown` it is not "a callee no
@@ -94,19 +93,19 @@ export enum TypeClass
 	// a `T` parameter and `b.get() == 42` compare a `T` result as an i64.
 	typeParameter
 
-	// The class of a `Character` — one extended grapheme cluster (P1.8 slice B). Its OWN class, NOT
+	// The class of a `Character` — one extended grapheme cluster. Its OWN class, NOT
 	// `text`, even though a Character and a String share a record: a class is what AGREES with what, and
 	// `s == c` must be a type error rather than a byte compare. Like `text` it converts to nothing and
 	// nothing converts to it.
 	//
-	// ⭐ **UNLIKE `text` IT IS ORDERED (A5m-c).** `stdlib/Character.maxon:19` declares
+	// ⭐ **UNLIKE `text` IT IS ORDERED.** `stdlib/Character.maxon:19` declares
 	// `implements … Comparable` and `:80-104` writes the order out — byte-lexicographic, shorter-prefix
 	// first — while `stdlib/String.maxon:49` declares no such thing. So the two byte-record types part
 	// company at exactly this rule and nowhere else: two Characters `comparableOperands`, two Strings
 	// still do not. `c < d` is the `Character.compare` cascade, NOT a pointer compare.
 	character
 
-	// ⭐ **The class of an EXISTENTIAL — a value held at its INTERFACE type (P1.7a-existentials slice 1).**
+	// ⭐ **The class of an EXISTENTIAL — a value held at its INTERFACE type.**
 	// Its OWN class, and it agrees with NOTHING but another existential — deliberately, including with the
 	// `structRef` of a conforming type. A conformer reaching an interface-typed place is a WIDENING (the
 	// value gains a witness half), not an agreement. Admitting `structRef` here would let one through with
@@ -176,7 +175,7 @@ function typeClassOf(tag ValueTypeTag) returns TypeClass
 		// function-typed place (both `function`) and nothing else (E3005 everywhere else).
 		function gives TypeClass.function
 
-		// A type parameter is OPAQUE and agrees with anything (P1.6-A) — its own deferral class.
+		// A type parameter is OPAQUE and agrees with anything — its own deferral class.
 		typeParameter gives TypeClass.typeParameter
 
 		// A generic INSTANCE is a struct pointer, so it shares the `structRef` class (a reference that
@@ -216,21 +215,19 @@ function typeClassesAgree(left TypeClass, right TypeClass) returns bool
 		return true
 	end 'deferred'
 
-	// A TYPE PARAMETER agrees with anything (P1.6-A) — the same deferral `unknown` gets, for the
+	// A TYPE PARAMETER agrees with anything — the same deferral `unknown` gets, for the
 	// different reason that `T` is a real, opaque type that ANY concrete type may inhabit at this
 	// trivial slice (no substitution). Tested after `noValue` so a `T` never meets a non-value.
 	//
 	// ⚠ **A COMPARISON NEVER REACHES THIS DEFERRAL FOR A VALUE OF AN *ENCLOSING* TYPE PARAMETER.** All six
 	// comparison operators on such a value are intercepted upstream and dispatched through the parameter's
-	// `Equatable`/`Comparable` witness (`Parser.emitCompare`, P1.7a slice 2b/2b-ii) — because letting them
+	// `Equatable`/`Comparable` witness (`Parser.emitCompare`) — because letting them
 	// through here would compare two opaque WORDS, i.e. two POINTERS for a struct `T`, a silent wrong answer.
-	// ⛔⛔ **AND A COERCION SITE NO LONGER REACHES IT WITH A CONCRETE AGGREGATE ON THE OTHER SIDE EITHER
-	// (W179).** This header used to end *"the deferral is still right for … every non-comparison agreement
-	// question (an argument, a `return`, an assignment)"*, and that sentence named the exact case it was wrong
-	// about: `checkDeclaredType` now refuses an opaque value meeting a declared `String`/struct/function/
-	// `Character` BEFORE asking anything here, because the answer is DIRECTIONAL and a symmetric rule cannot
-	// carry a direction. The reason lives on that guard; what belongs here is only that the deferral below is
-	// no longer the last word for those pairs.
+	// ⛔⛔ **AND A COERCION SITE DOES NOT REACH IT WITH A CONCRETE AGGREGATE ON THE OTHER SIDE EITHER.**
+	// `checkDeclaredType` refuses an opaque value meeting a declared `String`/struct/function/`Character`
+	// BEFORE asking anything here, because the answer is DIRECTIONAL and a symmetric rule cannot carry a
+	// direction. The reason lives on that guard; what belongs here is only that the deferral below is not
+	// the last word for those pairs.
 	//
 	// The deferral is still right for what DOES reach it: a concrete generic-method result in a non-generic
 	// caller, a `T` meeting a `T`, a concrete value meeting an opaque PLACE (the reverse direction, which the
@@ -266,20 +263,20 @@ end 'typeClassAdmits'
 // String drop run on a struct box, a DOUBLE FREE that faults the runtime MM) or surfaced only downstream
 // at the next type-checked position.
 //
-// ⭐⭐ **AND IT IS ALSO THE RULE FOR THE TWO SCALAR CLASSES, WHICH IT ONCE WAVED THROUGH.** Its own header
-// used to claim *"different concrete classes convert ONLY when both are scalars (int↔float, bool↔int)"*,
-// and that premise is FALSE against `specs/type-casting.md`: **a `bool` converts to nothing and nothing
-// converts to a `bool`** — the very sentence `TypeClass`'s `boolean` arm states — so `true as Integer`,
-// `true as Float`, `0 as bool` and `0.0 as bool` are all E3009. MEASURED before the fix: `b as Integer`
-// for a `let b = true` PRINTED `true`, because the cast was a complete no-op that left a bool payload
-// wearing an integer type; `7 as bool` printed `7`. A silent wrong answer, in the one place a cast is
-// supposed to be the type check.
+// ⭐⭐ **AND IT IS ALSO THE RULE FOR THE TWO SCALAR CLASSES, WHICH ARE NOT INTERCHANGEABLE.** *"Different
+// concrete classes convert ONLY when both are scalars (int↔float, bool↔int)"* is FALSE against
+// `specs/type-casting.md`: **a `bool` converts to nothing and nothing converts to a `bool`** — the very
+// sentence `TypeClass`'s `boolean` arm states — so `true as Integer`, `true as Float`, `0 as bool` and
+// `0.0 as bool` are all E3009. MEASURED: without this refusal `b as Integer` for a `let b = true` PRINTS
+// `true`, because the cast is a complete no-op that leaves a bool payload wearing an integer type, and
+// `7 as bool` prints `7`. A silent wrong answer, in the one place a cast is supposed to be the type
+// check.
 //
 // ⭐⭐ **AND ONE PAIR INSIDE THE `numeric` CLASS IS LOSSY: `float → int`.** A class cannot see it — the two
 // are deliberately one class, or `5 + 2.0` would not compile — so it is asked of the TAGS, through
 // `isLossyFloatToInt`: the SAME call `checkDeclaredType` makes for the implicit doors, so the explicit `as`
-// and every implicit conversion cannot come to disagree about it (that header records the two times they
-// did). `5.9 as Integer` SILENTLY TRUNCATED to 5 before this call existed. The other direction —
+// and every implicit conversion cannot come to disagree about it (that header records what a second copy
+// costs). MEASURED: without this call `5.9 as Integer` truncates SILENTLY to 5. The other direction —
 // `int → float` — is a WIDENING and stays legal: it is what `int-to-float` and `byte-to-float` pin.
 //
 // It is the ONE cast-legality rule, and it is bounded to what a TAG can decide:
@@ -287,7 +284,7 @@ end 'typeClassAdmits'
 //     (`typeParameter`) or an unresolved type (`unknown`/`noValue`) is left to the existing rules — NOT
 //     rejected here.
 //   • DIFFERENT concrete classes never convert. Symmetric in the two ends — a cast is symmetric in what it
-//     may cross — and that now covers `boolean` against `numeric` as well as anything against an aggregate.
+//     may cross — and that covers `boolean` against `numeric` as well as anything against an aggregate.
 //   • The SAME class is an identity or a real conversion, EXCEPT the lossy `float → int` above. The
 //     `structRef` COARSENESS a tag cannot yet split rides the same arm — two different structs share
 //     `structRef`, so `Point as Rect` is not caught here (that needs the `valueNameIds` publication
@@ -406,15 +403,13 @@ export enum DeclaredTypeMatch
 	// trunc/round/floor/ceil instead", and `trunc(x)` EXISTS as a builtin for exactly this. A
 	// language that makes you say `trunc` when you write `as`, and then truncates silently when
 	// you write nothing at all, has two rules for one conversion and one of them is invisible.
-	// (`specs/implicit-type-conversion.md` used to be the invisible one: `float → int: Truncate
-	// toward zero`. P1.0d.4 deleted that row.)
 	//
 	// ⚠ THE OTHER DIRECTION IS FINE AND IS NOT HERE. `int → float` is WIDENING and loses nothing,
 	// `type-casting.md` blesses even the explicit `100 as float`, and `arithResultTag` promotes on
 	// it. Only the lossy direction is a lie.
 	narrowsFloatToInt
 
-	// ⭐ **A FUNCTION VALUE MEETING A DECLARED NON-FUNCTION TYPE** (P1.5-A1) — `loc = dbl`, `slot = dbl`,
+	// ⭐ **A FUNCTION VALUE MEETING A DECLARED NON-FUNCTION TYPE** — `loc = dbl`, `slot = dbl`,
 	// `return dbl` from a `returns int` function, a function arg to an int parameter. Its OWN verdict, not
 	// `mismatch`, because the spec's E3005 for it has SPECIFIC advice ("a function value is only usable
 	// where a function type declared with 'typealias' is expected"), and — the reason it lives HERE rather
@@ -447,14 +442,14 @@ export function isFunctionTypeDoor(declared ValueTypeTag, got ValueTypeTag) retu
 end 'isFunctionTypeDoor'
 
 export function checkDeclaredType(value ValueTypeTag, declared ValueTypeTag) returns DeclaredTypeMatch
-	// A function value fits a function-typed place and nothing else (P1.5-A1). Tested FIRST, so a function
+	// A function value fits a function-typed place and nothing else. Tested FIRST, so a function
 	// value meeting a non-function place gets its specific verdict rather than the generic class
 	// `mismatch` (both would be E3005, but the function one carries the "use a function typealias" advice).
 	// A function into a FUNCTION place falls through to agree below; a NON-function into a function place is
 	// an ordinary class `mismatch`, which is why the guard is one-sided.
 	//
 	// ⭐ **AN OPAQUE TYPE-PARAMETER PLACE IS NOT "A NON-FUNCTION PLACE" — IT IS A PLACE WHOSE TYPE IS
-	// DECIDED SOMEWHERE ELSE (W43b).** `T` is one machine word and a function code pointer is one machine
+	// DECIDED SOMEWHERE ELSE.** `T` is one machine word and a function code pointer is one machine
 	// word (`ProgramSignatures.slotTypeFitsOneWord` admits "a function alias" by name), so whether a
 	// function value belongs there is settled by the INSTANTIATION — `Map with (String, UnaryOp)` binds
 	// `Value` to a function alias and `Map with (String, int)` does not — and `checkTypeParameterArgsAt`
@@ -466,7 +461,7 @@ export function checkDeclaredType(value ValueTypeTag, declared ValueTypeTag) ret
 		return DeclaredTypeMatch.functionIntoNonFunction
 	end 'functionValue'
 
-	// ⭐⭐ **AN OPAQUE TYPE PARAMETER MEETING A CONCRETE AGGREGATE PLACE (W179).** A generic body compiles ONCE,
+	// ⭐⭐ **AN OPAQUE TYPE PARAMETER MEETING A CONCRETE AGGREGATE PLACE.** A generic body compiles ONCE,
 	// for the DECLARATION VIEW, where a `T` is one machine word whose representation no `with` has fixed. A
 	// concrete aggregate place is the claim that the word is a POINTER to a particular record — it will be
 	// dereferenced, stored under that type, and DROPPED by that type's destructor — and a shared body has
@@ -563,12 +558,11 @@ end 'widensIntToFloat'
 // `castHasNoLegalConversion` turns it into E3009 for the EXPLICIT `as`. The language's answer in both is
 // `trunc`/`round`/`floor`/`ceil`.
 //
-// ⚠ **IT IS ONE FUNCTION BECAUSE THE TWO DOORS DISAGREEING ABOUT ONE CONVERSION IS A DEFECT THIS FILE HAS
-// ALREADY SHIPPED — TWICE, IN OPPOSITE DIRECTIONS.** `specs/implicit-type-conversion.md` once carried a
-// `float → int: Truncate toward zero` row while `specs/type-casting.md` rejected the explicit `5.0 as int`
-// (deleted at P1.0d.4); then the explicit door was the silent one — `5.9 as Integer` truncated to 5 while
-// `takeInt(5.9)` was refused. Both were one rule with two copies. A cross-reference in prose is not a
-// mechanism; a shared call is.
+// ⚠ **IT IS ONE FUNCTION BECAUSE TWO DOORS THAT DECIDE ONE CONVERSION SEPARATELY COME TO DISAGREE ABOUT
+// IT, IN EITHER DIRECTION.** Either the implicit door truncates `takeInt(5.9)` silently while
+// `specs/type-casting.md` rejects the explicit `5.0 as int`, or the explicit door is the silent one and
+// `5.9 as Integer` truncates to 5 while `takeInt(5.9)` is refused. Both are one rule with two copies. A
+// cross-reference in prose is not a mechanism; a shared call is.
 //
 // ⚠⚠ **PRECONDITION: BOTH TAGS MUST BE FLOAT-RESOLVED** — a ranged FLOAT alias must arrive as `float`, not
 // as `named`. `tagIsIntegral` answers `true` for EVERY `named` alias (its own header says why it cannot do
@@ -588,7 +582,7 @@ end 'isLossyFloatToInt'
 // explicit `5.0 as int`.
 //
 // `round`/`floor`/`ceil` are named because they are the LANGUAGE's answer (type-casting.md lists
-// all four) — and as of P1.0d.4-C all four are the compiler's too (specs/{floor,ceil,round,sqrt}.md), so
+// all four) — and all four are the compiler's too (specs/{floor,ceil,round,sqrt}.md), so
 // every function this message names is one the reader can call. `trunc` is named first because it
 // is the one that answers the question the rejection actually asked. (`abs` is a fifth intrinsic of
 // the same family but is deliberately NOT named here: it is not a narrowing, so it answers nothing
@@ -597,25 +591,25 @@ export function implicitNarrowingMessage(sourceType String, targetType String) r
 	return "cannot implicitly convert '{sourceType}' to '{targetType}': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)"
 end 'implicitNarrowingMessage'
 
-// ⭐ **THE ONE EXPLANATION OF THE FUNCTION-VALUE TYPE RULE** (P1.5-A1), written once. It is the tail of
+// ⭐ **THE ONE EXPLANATION OF THE FUNCTION-VALUE TYPE RULE**, written once. It is the tail of
 // every E3005 a function value provokes — an assignment, a global store, a return, a call argument — and
 // those sites must not phrase one rule several ways. It names WHERE a function value IS legal (a
 // function-typed place declared with `typealias`), which is the whole content of the rule the spec
 // states: "a function value is only usable where a function type declared with 'typealias' is expected."
 export let FunctionValueMisuseSuffix = "a function value is only usable where a function type declared with 'typealias' is expected"
 
-// ⭐⭐ **THE ONE EXPLANATION OF THE OPAQUE-VALUE RULE `checkDeclaredType` DECIDES ABOVE (W179)**, written once
+// ⭐⭐ **THE ONE EXPLANATION OF THE OPAQUE-VALUE RULE `checkDeclaredType` DECIDES ABOVE**, written once
 // beside the verdict for `FunctionValueMisuseSuffix`'s reason. It exists because this refusal is the one in
 // this file a CORRECT-LOOKING program provokes: `Outer with String` binds `T` to the very type the place
 // declares, and it is still refused — so a bare "expected 'String', got 'type parameter'" leaves the reader
 // with a contradiction rather than a cure. The tail states the fact (the body is checked once, against a view
-// no `with` has reached) and then offers the two cures, BOTH MEASURED on the rung's own reproducer: declaring
+// no `with` has reached) and then offers the two cures, BOTH MEASURED: declaring
 // the callee's parameter at the type parameter too compiles and runs, and so does making the call from a
 // concrete instantiation.
 //
 // ⚠ **ONLY THE ARGUMENT DOOR QUOTES IT TODAY.** The verdict is shared by four doors, but the sentences for
 // the `return` and the global/local store are rendered in `Queries.renderParseError` and the field store's in
-// `Parser.slotMismatchError` — outside this rung's file set — so those three still say only the head. That is
+// `Parser.slotMismatchError`, so those three say only the head. That is
 // a sentence owed, not a second rule: the tail lives here precisely so adopting it there is a reference and
 // never a re-authoring.
 export let OpaqueValueMisuseSuffix = "a generic body is compiled ONCE, against the declaration view, so a type parameter is an opaque machine word here and nothing has fixed what it points at — this is refused even where every 'with' in the program binds it to that very type. Declare the place at the type parameter too, or make the call from a concrete instantiation, where the type argument is known"
@@ -628,7 +622,7 @@ export let OpaqueValueMisuseSuffix = "a generic body is compiled ONCE, against t
 export let ConcreteValueAtOpaquePlaceSuffix = "one body serves every instantiation, so a concrete type named here is claimed of every 'with' in the program — true of at most one of them. Pass a value of the parameter's own type, or make the call from a concrete instantiation, where the type argument is known"
 
 // ⭐ **TWO NAMED AGGREGATES ARE THE SAME TYPE IFF THEIR INTERNED NAMES ARE EQUAL** — the ONE
-// name-comparison every site that meets a value against a declared aggregate shares (OPEN #54): the
+// name-comparison every site that meets a value against a declared aggregate shares: the
 // parser's coercion sites (`return`, reassignment, `otherwise` value, struct-literal field,
 // union payload) AND SemanticCheck's call ARGUMENT (the one rule that needs a callee's whole-program
 // signature, so it cannot live in the parser). A struct is never a subtype of another, so a value of the
@@ -642,7 +636,7 @@ export let ConcreteValueAtOpaquePlaceSuffix = "one body serves every instantiati
 // registered union/enum): the parser's `aggregateNameOf` and SemanticCheck's `aggregateNameFor` are
 // full twins. A union PARAMETER is the one place a name is unrecoverable at the SemanticCheck tier
 // (`resolveTypes` erased its `named` to `integer`), so the parser stashes it pre-erasure on the
-// signature (`FuncSignature.paramAggregateNames`, OPEN #54 Slice B2). The COMPARISON RULE is this one
+// signature (`FuncSignature.paramAggregateNames`). The COMPARISON RULE is this one
 // function, called by both.
 //
 // `expected`/`got` are aggregate-name results, so an EMPTY one means "not a named aggregate". Two
@@ -656,9 +650,9 @@ export let ConcreteValueAtOpaquePlaceSuffix = "one body serves every instantiati
 // be mistaken for disagreement.** The value's tag was minted PRE-resolution and the member's return type is
 // read POST-resolution, so the two spell one type two ways all the time: a `returns ExitCode` call is tagged
 // `named`/`exitCode` at the parse and `exitCode` in the registry, and a ranged alias is `named` against
-// `integer`. Comparing them literally — or by storage width, which was the first attempt — reports every
-// alias-returning overload as a disagreement (measured: `closure-capture.block-local-overload-arg`, whose two
-// overloads BOTH return `ExitCode`, was refused with "'int' and 'int'").
+// `integer`. Comparing them literally — or by storage width — reports every alias-returning overload as a
+// disagreement (MEASURED: `closure-capture.block-local-overload-arg`, whose two overloads BOTH return
+// `ExitCode`, is refused with "'int' and 'int'").
 //
 // ⭐⭐ **TWO ASKERS, AND THEY ASK IT AT OPPOSITE ENDS OF THE SAME PASS BOUNDARY.**
 // `SemanticCheck.requireOverloadResultTagAgrees` asks it of a value the parser already typed against the
@@ -686,16 +680,16 @@ export function brandsConflict(expected ByteArray, got ByteArray) returns bool
 	return not expected.isEmpty() and not got.isEmpty() and not got.equals(expected)
 end 'brandsConflict'
 
-// ⭐⭐ **CAN THIS DECLARED TAG HOLD A NAMED AGGREGATE AT ALL? — the half of the rule above that its
-// callers were SKIPPING, and the reason an aggregate reached a scalar parameter in silence.**
+// ⭐⭐ **CAN THIS DECLARED TAG HOLD A NAMED AGGREGATE AT ALL? — the half of the rule above a caller must
+// not skip, and what keeps an aggregate out of a scalar parameter.**
 //
 // `namedAggregatesConflict` answers all four quadrants correctly, including "exactly one empty", which is
-// the aggregate-meets-scalar case its own header calls the one a tag check cannot see. But both callers
-// gated the ASK on the DECLARED side being an aggregate (`if not expected.isEmpty()`), so the quadrant
-// where the declared side is a SCALAR and the value is an AGGREGATE was never asked — and the tag check
-// cannot refuse it either, because `resolveTypes` erases a boxed-union PARAMETER to `integer` while the
-// ARGUMENT keeps its `named` tag, and `checkDeclaredType(named, integer)` is a legal widening (that is how
-// a ranged alias reaches an `int`). MEASURED, with no overload in the program at all:
+// the aggregate-meets-scalar case its own header calls the one a tag check cannot see. But a caller that
+// gates the ASK on the DECLARED side being an aggregate (`if not expected.isEmpty()`) never asks the
+// quadrant where the declared side is a SCALAR and the value is an AGGREGATE — and the tag check cannot
+// refuse it either, because `resolveTypes` erases a boxed-union PARAMETER to `integer` while the ARGUMENT
+// keeps its `named` tag, and `checkDeclaredType(named, integer)` is a legal widening (that is how a ranged
+// alias reaches an `int`). MEASURED, with no overload in the program at all:
 //
 //     union Shape circle(r Integer) square(s Integer) end 'Shape'
 //     function takesInt(x Integer) returns Integer  return x + 1  end 'takesInt'
@@ -706,7 +700,7 @@ end 'brandsConflict'
 // ⚠ **IT IS DELIBERATELY THE FOUR DEFINITE SCALARS AND NOTHING ELSE.** Answering `true` for a tag that
 // legitimately admits an aggregate turns this into a FALSE REJECTION of a valid program, and three tags
 // do admit one: `typeParameter` (a generic's `T` takes any concrete type — `Box.create(v T)` handed a
-// struct is the whole point of P1.6), `unresolved` (agrees with everything by deferral) and `named`
+// struct is the whole point of generics), `unresolved` (agrees with everything by deferral) and `named`
 // (whose aggregate name comes back empty only when `aggregateNameFor` did not RECOGNIZE it, which is not
 // the same fact as "it is a scalar"). `structRef`/`genericInstance`/`string`/`character`/`function` are
 // already decided by the non-empty branch or by their own rules. So the narrow four is the only set that
@@ -755,14 +749,14 @@ export function tagIsIntegral(tag ValueTypeTag) returns bool
 		integer gives true
 		float gives false
 
-		// A `named` type is a ranged alias — as of F1 an `int(low to high)` OR a `float(low to high)`
-		// one (`Parser.readTypeAliasDeclaration`). A float alias is NOT integral, so unlike `typeClassOf`
-		// (where both aliases are numeric) this arm is no longer a theorem. It stays `true` deliberately:
+		// A `named` type is a ranged alias — an `int(low to high)` OR a `float(low to high)` one
+		// (`Parser.readTypeAliasDeclaration`). A float alias is NOT integral, so unlike `typeClassOf`
+		// (where both aliases are numeric) this arm is not a theorem. It stays `true` deliberately:
 		// a float-alias value carries a `named` tag ONLY in a param/field position, every one of which
-		// F1 defers to the float ABI (F2), and the int reading here is what turns a float op on such a
+		// defers to the float ABI, and the int reading here is what turns a float op on such a
 		// value into a type error (or an x64 ABI panic) rather than a wrong answer — while keeping
 		// `takeInt(x Integer)` an integer parameter. Reporting `false` for a float alias needs `named`
-		// resolved through the alias registry, which is that F2 work.
+		// resolved through the alias registry.
 		named gives true
 		exitCode gives true
 
@@ -785,7 +779,7 @@ export function tagIsIntegral(tag ValueTypeTag) returns bool
 		// Nothing narrows to a function, so `false` here is the statement "a function is not an integer".
 		function gives false
 
-		// A type parameter is OPAQUE (P1.6-A): nothing narrows INTO a `T`, so `false` keeps a
+		// A type parameter is OPAQUE: nothing narrows INTO a `T`, so `false` keeps a
 		// `float`-into-`T` from reading as a lossy conversion (`checkDeclaredType`). A generic instance
 		// is a struct pointer, not an integer.
 		typeParameter gives false
@@ -816,9 +810,9 @@ export function typeTagName(tag ValueTypeTag) returns String
 		float gives "float"
 
 		// Both render as `int`: `ExitCode` is an unsigned 32-bit ranged int, and a `named` alias is a
-		// ranged int — or, as of F1, a ranged float, which this arm also prints as `int` (the same int
-		// reading `tagIsIntegral`/`valueTagToStdType` give a `named` value in the param/field cases F1
-		// defers to the float ABI at F2). A `return <bool>` from a `returns ExitCode` function reports
+		// ranged int — or a ranged float, which this arm also prints as `int` (the same int reading
+		// `tagIsIntegral`/`valueTagToStdType` give a `named` value in the param/field cases that defer
+		// to the float ABI). A `return <bool>` from a `returns ExitCode` function reports
 		// "declared to return 'int'".
 		named gives "int"
 		exitCode gives "int"
@@ -826,15 +820,14 @@ export function typeTagName(tag ValueTypeTag) returns String
 		// A type the parser could not pin — today, only a call to a function no file declares
 		// (see TypeClass). It AGREES with everything, so it is never the side that FAILS a rule —
 		// but it can be the OTHER side of one (`f() + flag`, where the bool is what is wrong), and
-		// that message still has to name it. "unknown" is the honest word: The compiler genuinely does not
+		// that message still has to name it. "unknown" is the honest word: the compiler genuinely does not
 		// know, and the program is being rejected anyway (E3004, at the call site).
 		unresolved gives "unknown"
 
 		// A call to a VOID function, used where a value belongs. `Parser.parseCall` rejects that at
 		// the call site with "Function 'noop' does not return a value".
-		// ⚠ The SECOND route this arm was written against has since appeared, so it is no longer
-		// unreachable: `SemanticCheck.requireOverloadVoidResult` prints it for an overload set whose
-		// members disagree about whether they return a value at all (W49 wave 4).
+		// ⚠ A SECOND route reaches this arm: `SemanticCheck.requireOverloadVoidResult` prints it for an
+		// overload set whose members disagree about whether they return a value at all.
 		void gives "void"
 
 		// ⚠ It names the KIND, not the type: `return p` from an `ExitCode` function reports "got
@@ -853,7 +846,7 @@ export function typeTagName(tag ValueTypeTag) returns String
 		// header), so it names the KIND, not a specific signature — which is all the type rule needs.
 		function gives "function"
 
-		// A type parameter and a generic instance (P1.6-A). A tag carries no name, so these name the
+		// A type parameter and a generic instance. A tag carries no name, so these name the
 		// KIND: "type parameter" for an opaque `T`, "struct" for a generic instance (which IS a struct
 		// pointer, matching what a plain `structRef` prints).
 		typeParameter gives "type parameter"
@@ -883,7 +876,7 @@ end 'typeTagName'
 // tier-bound is the LOOKUP that produces `aggregate` (`Parser.aggregateNameOf` reads the file's interner,
 // `SemanticCheck.aggregateNameFor` the whole-program one) and the `genericInstance` arm each takes first.
 // This tail takes neither an interner nor a tier: it takes a tag and an already-resolved name, so a second
-// copy of it would be a rule with two homes and nothing forcing it. It was exactly that for one tick.
+// copy of it would be a rule with two homes and nothing forcing it.
 //
 // An aggregate meeting a SCALAR is a real conflict both tiers report, and the scalar is named there
 // ("got 'int'"), so an empty aggregate name must print the tag word and never a bare `''`.
@@ -1019,12 +1012,12 @@ end 'tagIsInteger'
 // whose NAME is part of its type (`Array with Score` is not `Array with int`), so a door that means the
 // plain integer must not absorb it.
 //
-// ⚠ **IT EXISTS BECAUSE THE SET WAS ALREADY WRITTEN DOWN TWICE, IN TWO SPELLINGS** —
-// `Parser.enumBackingFieldDomainOf` (`resolved == ValueTypeTag.integer or resolved == ValueTypeTag.exitCode`)
-// and `Parser.giveIsPromotableToFloat` (`tagIsInteger(tag) or tag == ValueTypeTag.exitCode`), each labelling
-// its branch `integerDomain`/`plainInteger` for the same fact. `literalColumnTypeFor` needed it as a THIRD,
-// which is the point at which one fact with several writings becomes this repo's signature bug rather than a
-// coincidence.
+// ⚠ **THE SET HAS THREE ASKERS AND THEREFORE ONE HOME** — `Parser.enumBackingFieldDomainOf`,
+// `Parser.giveIsPromotableToFloat` and `literalColumnTypeFor`. Spelled inline it reads
+// `resolved == ValueTypeTag.integer or resolved == ValueTypeTag.exitCode` at one site and
+// `tagIsInteger(tag) or tag == ValueTypeTag.exitCode` at the next, under branch labels
+// `integerDomain`/`plainInteger` for the same fact: one fact with several writings, which is this
+// repo's signature bug rather than a coincidence.
 //
 // ⚠ **NOT `tagIsIntegral`, AND THAT IS MEASURED, NOT STYLISTIC.** That predicate answers TRUE for `named`,
 // and a literal's element column reads a `named` element through `namedElementType` to keep the alias's
@@ -1054,7 +1047,7 @@ end 'tagIsFloat'
 
 // ⭐ **THE TAGS A BARE NUMERIC KEYWORD IS MINTED UNDER** — `int` and `float`, the two spellings
 // `Parser.parseTypeReference` answers with a CONCRETE numeric arm rather than a `named` one. The
-// The compiler twin of the oracle's `IrType.IsBarePrimitive`, which likewise names only the numerics.
+// compiler twin of the oracle's `IrType.IsBarePrimitive`, which likewise names only the numerics.
 //
 // ⚠ **`boolean` IS DELIBERATELY OUT.** A `bool` is minted concrete by the very same routine, so
 // "was this spelled as a keyword?" would sweep it in — but it is already a constrained type with no
@@ -1072,29 +1065,24 @@ end 'tagIsBareNumericKeyword'
 // ⭐ **DOES A BINDING OF THIS TAG OWN NO HEAP?** — asked by `Parser.requireBindingLive` of a MOVE bit, and
 // the whole of what it means there: `movedFrom`/`partiallyMoved` forbid a read because a moved HEAP value
 // now belongs to another owner, so on a value that owns no heap the bit must mean something else and the
-// read is safe. The case that remains is a promise binding REASSIGNED to a bare scalar (P1.5-B2 #88),
+// read is safe. The case that remains is a promise binding REASSIGNED to a bare scalar,
 // whose bit means "owns nothing droppable".
 //
-// ⛔ **IT NO LONGER ADMITS A PROMISE HANDLE, AND THE CALLER IS WHERE THAT IS SAID — NOT HERE (W232).** This
-// header used to name a consumed promise as the other case, on the strength of the handle being
-// integer-tagged; W230 typed a spawn's handle at `Promise with (T[, E])` while a service reply's cell stayed
-// integer (SV4 typed that one too), so the tag stopped answering the question. `requireBindingLive` excludes a promise
-// explicitly — read its own header there for WHICH predicate it asks and why; naming the mechanism twice is
-// how the two copies come to disagree. A TAG cannot tell a promise from an `int` and this function should not
-// pretend to — which is exactly why the exclusion lives at the door and not in this predicate.
+// ⛔ **IT DOES NOT ADMIT A PROMISE HANDLE, AND THE CALLER IS WHERE THAT IS SAID — NOT HERE.** A TAG cannot
+// tell a promise from an `int`: a spawn's handle is typed `Promise with (T[, E])` while a service reply's
+// cell is integer, so no tag answers the question. `requireBindingLive` excludes a promise explicitly —
+// read its own header there for WHICH predicate it asks and why; naming the mechanism twice is how the two
+// copies come to disagree, which is why the exclusion lives at the door and not in this predicate.
 //
-// ⚠ **IT WAS `tagIsAsyncScalar`, AND THE RENAME IS THE POINT.** Under that name it was the async CHANNEL
-// predicate, shared by the argument, parameter and result doors — and its header said so. A2 replaced all
-// three with `tagRidesAsyncGprChannel` (a managed pointer rides the integer channel; a `float` does not),
-// leaving one caller that had only ever spelled its own question in the async predicate's words because the
-// two sets happened to coincide. Left named for the callers it no longer has, it was a header asserting a
-// property nothing tested — and the next reader to "reunify" the two would have handed the async doors a
-// rule about move bits.
+// ⚠ **IT IS NOT THE ASYNC CHANNEL PREDICATE.** That is `tagRidesAsyncGprChannel` below, asked by the
+// argument, parameter and result doors (a managed pointer rides the integer channel; a `float` does not).
+// The two sets coincide on the scalars and answer different questions, so a reader who "reunifies" them
+// hands the async doors a rule about move bits.
 export function tagOwnsNoHeapValue(tag ValueTypeTag) returns bool
 	return tag == ValueTypeTag.integer or tag == ValueTypeTag.boolean or tag == ValueTypeTag.float
 end 'tagOwnsNoHeapValue'
 
-// ⭐⭐ **DOES THIS TAG RIDE THE GREEN THREAD'S GPR CHANNEL? — the A2 widening of the question above, and the
+// ⭐⭐ **DOES THIS TAG RIDE THE GREEN THREAD'S GPR CHANNEL? — a WIDER question than the one above, and the
 // question the three async doors actually ask.** A spawn's arguments travel in the GT struct's inline
 // argument region (`GtOffArgInline`, i64 words the hand-assembled trampoline loads into the ABI's INTEGER
 // argument registers) and its result comes back in R8. **A managed value is a heap POINTER and is therefore
@@ -1234,7 +1222,7 @@ export function shiftOperator(op MaxonBinOp) returns bool
 	end 'k'
 end 'shiftOperator'
 
-// ⭐ **THE TWO OPERATORS WHOSE DIVISOR MIGHT BE ZERO** — and so the two the fallible-division rule (A1)
+// ⭐ **THE TWO OPERATORS WHOSE DIVISOR MIGHT BE ZERO** — and so the two the fallible-division rule
 // governs. `Parser.emitDivOrMod` is the one emitter behind this gate, exactly as `emitShift` is behind
 // `shiftOperator`, and for the same reason: `/` and `mod` have a LEGALITY question (`a / 0` is E3103) and a
 // FALLIBILITY question (a possibly-zero divisor throws) that no other arithmetic operator has, so they get
@@ -1321,12 +1309,11 @@ end 'divisionIsUnsigned'
 // ⭐⭐ **WHAT ONE INTEGER VALUE'S DECLARED TYPE SAYS ABOUT ITS SIGNEDNESS** — three answers, and
 // the middle one is the whole reason this is not a boolean.
 //
-// ⚠ **IT IS A PROPERTY OF THE VALUE, NOT OF THE OPERATION, AND ITS NAME SAYS SO ONLY SINCE X11.** It
-// was named for the division operand while the divide was its only consumer; the DECIMAL RENDERER
-// (`Parser.materializeInterpExpr`) is the second, and it asks the identical question — *does this
-// value's declared type admit a negative?* — of the identical walk. A second spelling of that
-// question is exactly what this family has cost three times over (`X8` the range, `X10` the divide,
-// `X11` the rendering), so the noun is the value's and both consumers read it.
+// ⚠ **IT IS A PROPERTY OF THE VALUE, NOT OF THE OPERATION, AND ITS NAME SAYS SO.** The divide is one
+// consumer and the DECIMAL RENDERER (`Parser.materializeInterpExpr`) is the other, and both ask the
+// identical question — *does this value's declared type admit a negative?* — of the identical walk. A
+// second spelling of that question has cost this family three times over, so the noun is the value's
+// and both consumers read it.
 export enum IntegerValueDomain
 	// A DECLARED ranged type whose every value is non-negative (`rangeIsUnsigned`) — `int(0 to u64.max)`,
 	// `int(1 to 8)`, `ExitCode`. The only answer that ASKS for an unsigned reading.
@@ -1408,7 +1395,7 @@ end 'comparisonOperandsAreUnsigned'
 // `declaredNonNegative` one ASKS for it (its declaration is the only thing that can). A pair of
 // `provablyNonNegative` constants neither refuses nor asks: both readings answer identically for them,
 // so the rule has nothing to say and the existing signed instruction stands — which is what keeps
-// `7 / 2` and `3 < 4` emitting exactly the code they emitted before either rule existed.
+// `7 / 2` and `3 < 4` on the signed instruction.
 function operandPairAsksForUnsigned(left IntegerValueDomain, right IntegerValueDomain) returns bool
 	if left == IntegerValueDomain.signed or right == IntegerValueDomain.signed 'eitherAdmitsANegative'
 		return false
@@ -1451,7 +1438,7 @@ export function divisionOpcodeFor(op MaxonBinOp, unsigned bool) returns MaxonBin
 	panic("divisionOpcodeFor: {op.rawValue} is not a SOURCE division operator — only `/` and `mod` reach here from `infixMaxonOp`, and the unsigned pair is this function's OUTPUT, never its input")
 end 'divisionOpcodeFor'
 
-// ⭐⭐ **CAN A VALUE OF THIS RANGE BE ZERO?** — the type-level half of the fallible-division rule (A1), and
+// ⭐⭐ **CAN A VALUE OF THIS RANGE BE ZERO?** — the type-level half of the fallible-division rule, and
 // the reason `int(1 to 1000)` is the language's escape hatch from a checked divide. A range excludes 0 iff it
 // lies WHOLLY above it or WHOLLY below it; anything spanning 0 admits it and its divides are throwing.
 //
@@ -1476,7 +1463,7 @@ export function rangeExcludesZero(low ParsedInt, high ParsedInt, isFloat bool) r
 end 'rangeExcludesZero'
 
 // ⭐⭐ **CAN A VALUE OF THIS RANGE BE `-1`?** — `idiv`'s SECOND hazard, and the type-level half of the
-// `mod` overflow rule (A1x), sitting beside the zero test because a division's divisor is asked BOTH.
+// `mod` overflow rule, sitting beside the zero test because a division's divisor is asked BOTH.
 // `x64`'s `idiv` raises `#DE` for two unrelated reasons, and the fallible-division rule only ever
 // covered one of them: `int(i64.min to -1)` excludes 0 — so it earns a BARE divide — and is `-1` on
 // every value it admits, which is exactly the pair that faulted. Wholly above `-1` or wholly below it
@@ -1559,8 +1546,8 @@ export let ShiftCountBits = 64 as ParsedInt
 // unguarded `shl`/`sar`. Anything above it must be saturated by the compiler, never handed to the
 // hardware, which would mask it back into range.
 //
-// ⭐ DERIVED, NOT SPELLED. It was a literal `63` beside a literal `64`, which is ONE hardware fact —
-// the operand width — written down twice with nothing making the copies agree. The two are not
+// ⭐ DERIVED, NOT SPELLED. A literal `63` beside a literal `64` is ONE hardware fact — the operand
+// width — written down twice with nothing making the copies agree. The two are not
 // independently choosable: the hardware masks a count to `ShiftCountBits - 1`, so any other value
 // here admits a count the mask would fold back into range, which is the `a shl -1 → a shl 63` class
 // of silent wrong answer E2054 exists to close. Stating the width once and subtracting makes that
@@ -1601,12 +1588,12 @@ end 'shiftCountIsUnguarded'
 // slots, and 1/2/4 are `rangedAliasPackedBits`' sub-byte widths, which DIVIDE a byte so a packed field
 // never straddles one. A width outside the set has nowhere to be stored.
 // ⭐⭐ **DOES A DOOR INTO THIS ALIAS HAVE NOTHING TO TEST? — the whole of what an unguarded door means,
-// and it is NOT "the range is full" any more.**
+// and it is NOT "the range is full".**
 //
-// Two shapes admit every 64-bit value and one of them USED to: `int(0 to u64.max)` spans every pattern
-// as a SET, but it is a QUANTITY, and a quantity's door refuses a value that arrived from a signed
-// domain — a negative is not a quantity, whatever the bit pattern would be read as. What is left here
-// is the pattern that genuinely tests nothing:
+// Two shapes admit every 64-bit value and only one of them tests nothing. `int(0 to u64.max)` spans
+// every pattern as a SET, but it is a QUANTITY, and a quantity's door refuses a value that arrived from
+// a signed domain — a negative is not a quantity, whatever the bit pattern would be read as. What is
+// left is the pattern that genuinely tests nothing:
 //
 //   • `bits(64)` — every pattern IS a value of it, so no comparison can fail.
 //   • the signed-full `int(i64.min to i64.max)` — likewise, and it is a quantity that happens to admit
@@ -1680,7 +1667,7 @@ end 'rangeIsWithinSignedNonNegative'
 //
 //   • **low > 0** — `1 and 2` is `0`, below the bound. An `int(1 to 100)` pair produces values the
 //     alias forbids, and `Parser.divisorProof` would then read a `neverZero` that is false: the
-//     UNCATCHABLE hardware fault G14's withhold exists to prevent.
+//     UNCATCHABLE hardware fault a withheld proof exists to prevent.
 //   • **low < 0** — a signed range is not closed either: `-3 and -9` is `-11`, below both operands.
 //
 // ⚠ `or`/`xor` carry NOTHING at any low bound, and for a different reason rather than a stricter
@@ -1690,7 +1677,7 @@ export function rangeIsClosedUnderBitAnd(low ParsedInt) returns bool
 	return low == 0
 end 'rangeIsClosedUnderBitAnd'
 
-// --- Ranged-typealias narrowing checks (P1.9) ---
+// --- Ranged-typealias narrowing checks ---
 //
 // A ranged alias's bounds are stored INCLUSIVE as i64 bit patterns on `RangedTypeAlias`
 // (`upto` normalized to `high - 1` at parse; an unsigned upper such as `u64.max` rides as
@@ -1751,11 +1738,8 @@ export let F32MinBound = -4039728866288205824 as ParsedInt  // 0xC7EF_FFFF_E000_
 // predicate below forks on it and the fork is not cosmetic: an integer alias's `low`/`high` are
 // NUMBERS, a float alias's are IEEE-754 BIT PATTERNS, and the two do not compare the same way.
 //
-// It reads `underlying` — the `int`/`float` keyword the alias was declared over — which
-// `RangedTypeAlias` has always carried and which the guard emitter simply never asked. Until this
-// rung the question had no second asker: the parser filtered float aliases out before a check site
-// could be recorded, so `InsertRangeChecks` never met one. That filter is gone, and this is what
-// replaced it.
+// It reads `underlying` — the `int`/`float` keyword the alias was declared over, the one field that
+// carries the domain. `InsertRangeChecks` meets float aliases, so the guard emitter has to ask.
 export function aliasIsFloat(alias RangedTypeAlias) returns bool
 	return tagIsFloat(maxonTypeTag(alias.underlying))
 end 'aliasIsFloat'
@@ -1768,9 +1752,9 @@ end 'aliasIsFloat'
 // ⚠ **IT IS ASKED OF EVERY `as`, AND WHAT IS BOUNDED IS THE ANSWER'S COST — NOT THE QUESTION.** Both callers
 // reach `Parser.storageDiffersFromAlias`: the array-literal element door asks it of an instance's slot, and
 // `Parser.mayRetypeForNarrowerStorage` asks it of an `as` target on every cast. That is safe only because a
-// yes now RENAMES the value in place (`retypeValue`, no op) instead of minting a second one. It was briefly a
-// sixth arm of `applyCast`'s MINT list, and that broke two programs outright — see
-// `Parser.castChangesTheElementPacking`'s ⛔⛔ block for the measurement.
+// yes RENAMES the value in place (`retypeValue`, no op) instead of minting a second one — a sixth arm of
+// `applyCast`'s MINT list breaks two programs outright; see `Parser.castChangesTheElementPacking`'s ⛔⛔
+// block for the measurement.
 //
 // ⚠ **THE FLOAT ARM IS `aliasChangesTheDivisionProof`'s, for its reason and not a rounding of it:** a ranged
 // FLOAT alias's `low`/`high` are IEEE-754 BIT PATTERNS, which `rangedAliasStorageBytes` would read as
@@ -1811,17 +1795,17 @@ end 'floatOrderKey'
 // True when the alias covers every 64-bit PATTERN its underlying type can hold, so no RUNTIME guard is
 // needed.
 //
-// ⚠⚠ **IT DOES NOT EXEMPT THE COMPILE-TIME LITERAL CHECK, AND IT USED TO — WHICH IS HOW A WRITTEN `-1`
-// GOT INTO AN `int(0 to u64.max)` DOOR.** "Every pattern is admissible" is a statement about VALUES the
+// ⚠⚠ **IT DOES NOT EXEMPT THE COMPILE-TIME LITERAL CHECK, AND CONFLATING THE TWO LETS A WRITTEN `-1`
+// THROUGH AN `int(0 to u64.max)` DOOR.** "Every pattern is admissible" is a statement about VALUES the
 // machine can hold, and a written `-1` is not refused for its pattern: it is refused because the source
-// wrote a number below a declared lower bound of 0. The two questions were conflated in one predicate,
-// so `needsRuntimeGuard` returned before it could look at the literal at all and `take(-1)` printed
-// 18446744073709551615 with no diagnostic. `needsRuntimeGuard` now asks the literal FIRST and this
-// second; see `literalInRange`'s `writtenNegative`.
+// wrote a number below a declared lower bound of 0. Answered in one predicate, `needsRuntimeGuard`
+// returns before it can look at the literal at all and `take(-1)` prints 18446744073709551615 with no
+// diagnostic. `needsRuntimeGuard` asks the literal FIRST and this second; see `literalInRange`'s
+// `writtenNegative`.
 //
 // INTEGER: two spans cover the whole 64-bit space — the signed-full `int(i64.min to i64.max)` and
 // the unsigned-full `int(0 to u64.max)` (whose upper rides as the signed `-1`). A byte/u16/u32
-// sub-range is NOT full here: The compiler flows every ranged value at the i64 base with no per-alias
+// sub-range is NOT full here: the compiler flows every ranged value at the i64 base with no per-alias
 // storage width, so only the two 64-bit spans are unconditionally safe. `ExitCode`/`Byte`-style
 // sub-ranges therefore still take a check for a NON-literal value — every enabled case that casts
 // into one uses a literal, so the compile-time path elides it and no runtime code differs.
@@ -1829,8 +1813,8 @@ end 'floatOrderKey'
 // FLOAT: the full span is `float(f64.min to f64.max)`, compared against the f64 BIT PATTERNS — the
 // integer test would answer `false` for it (`F64MinBound` is a small negative i64, nowhere near
 // `i64.min`) and every full-range float alias would then carry a pointless guard whose signed
-// compares would REJECT ordinary values. `float(f32.min to f32.max)` is deliberately NOT full: it is
-// exactly the narrowing #19 is about.
+// compares would REJECT ordinary values. `float(f32.min to f32.max)` is deliberately NOT full: an f64
+// outside the f32 span is exactly the narrowing its guard must reject.
 function rangeIsFull(low ParsedInt, high ParsedInt, isFloat bool) returns bool
 	if isFloat 'float'
 		return low == F64MinBound and high == F64MaxBound
@@ -1858,14 +1842,14 @@ export function rangeIsUnsignedMaxUpper(low ParsedInt, high ParsedInt) returns b
 	return high == UnsignedFullUpperPattern and rangeIsUnsigned(low)
 end 'rangeIsUnsignedMaxUpper'
 
-// ⭐⭐ **DOES AN *INCLUSIVE* COUNTED LOOP'S TOP BOUND MAKE ITS STEP WRAP INSTEAD OF ITS TEST FAIL? (EC7)**
+// ⭐⭐ **DOES AN *INCLUSIVE* COUNTED LOOP'S TOP BOUND MAKE ITS STEP WRAP INSTEAD OF ITS TEST FAIL?**
 // `for i in a to b` runs the body AT `b`, steps past it, and tests again — so at the top of the domain the
 // test reads, that step wraps to the domain's BOTTOM, the test passes, and the loop never leaves. The
 // counter then takes values no interval over `[a, b]` contains, which is why `Parser.mintCountedBodyCounter`
 // states no interval for such a loop rather than one that stops being true after a wrap.
 //
 // ⚠⚠ **THERE ARE TWO TOPS, BECAUSE THE TEST HAS TWO READINGS — AND REFUSING ONLY THE SIGNED ONE WAS A
-// MEASURED WRONG ANSWER (EC7 review).** `Parser.comparisonSignedness` picks a signedness valid for both
+// MEASURED WRONG ANSWER.** `Parser.comparisonSignedness` picks a signedness valid for both
 // operands, so `i64.max` is the top under the SIGNED reading and `u64.max` — riding as the same `-1` pattern
 // this file's unsigned-upper shape is recognized by — is the top under the UNSIGNED one. MEASURED with only
 // `i64.max` refused: `for i in ((0 - 5) as int(0 to u64.max)) to u64.max` compiled its test as `jcc above`,
@@ -1901,19 +1885,18 @@ end 'rangeNeedsLowerCheck'
 // is a REAL one rather than the wrapped `u64.max`, which is unbounded in signed space and whose
 // compare `boundChecks` replaces with the sign-plus-lower cascade (see `rangeIsUnsignedMaxUpper`).
 //
-// ⚠⚠ **A NEGATIVE STORED UPPER IS THE `u64.max` SENTINEL IN EXACTLY ONE SHAPE, AND THIS ASKED ONLY THE
-// BOUND'S SIGN — so a WHOLLY NEGATIVE range got no upper compare at all.** The old rule was
-// `high >= 0 and high < i64.max`, which elided the compare for `int(-100 to -1)` and
-// `int(i64.min to -2)` — ranges whose
-// upper is ordinary: `-1` is the largest value `int(-100 to -1)` admits and `0` is outside it.
-// `int(i64.min to -2)` was the total case, because its `low == i64.min` needs no compare either, so the
-// range carried an EMPTY check list and a plain `as` cast admitted anything. **MEASURED: `0 as
-// int(-100 to -1)` was admitted at runtime while the LITERAL `0 as int(-100 to -1)` was E3005** — the two
+// ⚠⚠ **A NEGATIVE STORED UPPER IS THE `u64.max` SENTINEL IN EXACTLY ONE SHAPE, SO A RULE THAT ASKS ONLY
+// THE BOUND'S SIGN GIVES A WHOLLY NEGATIVE RANGE NO UPPER COMPARE AT ALL.** A `high >= 0 and high <
+// i64.max` test elides the compare for `int(-100 to -1)` and `int(i64.min to -2)` — ranges whose upper
+// is ordinary: `-1` is the largest value `int(-100 to -1)` admits and `0` is outside it.
+// `int(i64.min to -2)` is the total case, because its `low == i64.min` needs no compare either, so the
+// range carries an EMPTY check list and a plain `as` cast admits anything. **MEASURED: `0 as
+// int(-100 to -1)` admitted at runtime while the LITERAL `0 as int(-100 to -1)` was E3005** — the two
 // halves of one rule disagreeing about one alias, because `literalInRange` asks
-// `rangeIsUnsignedMaxUpper` and this asked the sign. The consequences reached past the binding into
+// `rangeIsUnsignedMaxUpper` and a sign test does not. The consequences reach past the binding into
 // `Parser.divisorProof`, which trusts a declared range: `int(-100 to -1)` excludes 0 so `100 / d` is a
 // bare `idiv` (an uncatchable `integer divide by zero`), and `int(i64.min to -2)` excludes -1 so
-// `i64.min mod d` is one too (`integer overflow` — the very fault A1x removes). Pinned by
+// `i64.min mod d` is one too (`integer overflow`). Pinned by
 // `ranged-typealias.md`'s `negative-upper-bound-cast-is-checked` and `safety.md`'s two
 // `negative-range-cast-guard-fires-before-the-*` cases.
 //
@@ -1928,9 +1911,9 @@ end 'rangeNeedsLowerCheck'
 // arm in front would elide `int(5 to u64.max)`'s cascade or emit a compare that rejects what the range
 // admits.
 //
-// FLOAT: only below the largest finite double. The sign test the integer rule made is meaningless
-// on a bit pattern — `float(-1.0 to -0.5)`'s upper is a NEGATIVE i64 and is a perfectly real bound
-// that must be checked — which is the same mistake one domain over, and the float arm never made it.
+// FLOAT: only below the largest finite double. A sign test is meaningless on a bit pattern —
+// `float(-1.0 to -0.5)`'s upper is a NEGATIVE i64 and is a perfectly real bound that must be checked —
+// which is the same mistake one domain over.
 export function rangeNeedsUpperCheck(low ParsedInt, high ParsedInt, isFloat bool) returns bool
 	if isFloat 'float'
 		return high != F64MaxBound
@@ -1986,7 +1969,7 @@ export function literalInRange(value ParsedInt, low ParsedInt, high ParsedInt, i
 end 'literalInRange'
 
 // ⭐⭐ **DOES THE TARGET ALIAS ADMIT EVERY VALUE THE SOURCE ALIAS DOES? — the whole content of E3010,
-// AND the whole content of the range guard's elision (A4f).** A cast that cannot lose a value contributes
+// AND the whole content of the range guard's elision.** A cast that cannot lose a value contributes
 // nothing (`Parser.reportUnneededCastBetween`): the language already widens into the target implicitly, so
 // writing the `as` says something that was true anyway. Both ends are DECLARED ranged aliases by the time
 // this is asked — a source with no alias name is not an unneeded cast but an ordinary one, which is what
@@ -1997,9 +1980,9 @@ end 'literalInRange'
 // behind that same proof tests a value that cannot fail it. (Written out, that cascade reads
 // `0 ≤ x ≤ 4294967295` on WINDOWS only — `ExitCode`'s high bound is platform-shaped, see
 // `Project.exitCodeAliasHigh` — and which number it carries is beside the point: what makes it dead is the
-// CONTAINMENT, which holds on every target.) Before A4f the two halves were decided in different places
-// from different facts — `InsertRangeChecks.needsRuntimeGuard` never saw a source range at all — so
-// removing an unneeded cast ADDED a provably-dead guard.
+// CONTAINMENT, which holds on every target.) Decide the two halves in different places from different
+// facts — a guard rule that never sees a source range at all — and removing an unneeded cast ADDS a
+// provably-dead guard.
 // `rangeCoversDenotedRange` below is the spelling the guard doors ask, and it ends here.
 //
 // CROSS-DOMAIN: only `int → float` covers, and it covers ALWAYS — an f64 spans every i64 the corpus can
@@ -2020,30 +2003,28 @@ end 'literalInRange'
 export function rangeCoversRange(target RangedTypeAlias, source RangedTypeAlias) returns bool
 	let targetIsFloat = aliasIsFloat(target)
 
-	// ⛔⛔ **THIS ARM USED TO ANSWER `true` FOR EVERY int→float PAIR, WHATEVER THE FLOAT'S RANGE — SO A
-	// GENUINELY NARROWING CONVERSION WAS REPORTED AS AN UNNEEDED ONE.** It rested on *"the declared float
-	// alias is the full `float(f64.min to f64.max)` in every use"* — a statement about the aliases the CORPUS
-	// happens to declare, not about the types. Its own sibling `rangeCoversIntBounds` already declined a float
-	// target rather than inherit that premise, and said so.
+	// ⛔⛔ **THE FLOAT TARGET'S RANGE DECIDES: A BLANKET `true` FOR EVERY int→float PAIR REPORTS A GENUINELY
+	// NARROWING CONVERSION AS AN UNNEEDED ONE.** That answer rests on *"the declared float alias is the full
+	// `float(f64.min to f64.max)` in every use"* — a statement about the aliases the CORPUS happens to
+	// declare, not about the types. Its own sibling `rangeCoversIntBounds` declines a float target outright
+	// rather than inherit that premise, and says so.
 	//
 	// ⚠ **THE FULL-RANGE ANSWER IS A LANGUAGE RULE AND IS KEPT.** `docs/LANGUAGE_REFERENCE.md:414-418`:
 	// *"The compiler auto-widens at use sites, so any explicit cast must actually narrow or refine."* An
 	// int→float widening into a full-range float IS reachable without writing the cast, so writing it is
 	// redundant — and `specs/type-casting.md`'s `error.unneeded.widening-int-to-float` pins exactly that
-	// (`Integer as JsonFloat` ⇒ E3010), in the CANONICAL corpus the oracle runs. What was wrong was applying
+	// (`Integer as JsonFloat` ⇒ E3010), in the CANONICAL corpus the oracle runs. What is wrong is applying
 	// that answer to a float alias the value provably does NOT fit in.
 	//
-	// ⚠ **WHAT MADE IT WORTH FIXING NOW: the ranged-typealias rule removed the last spelling that dodged it.**
-	// While `y as float` could be written bare the source named no alias, so E3010 stayed silent and every
-	// int→float conversion was spellable. With the bare keyword refused in every type position both ends
-	// necessarily name aliases, so a blanket `true` here left NO WAY AT ALL to write an explicit int→float
-	// conversion. MEASURED on `specs/register-pressure.md`'s
+	// ⚠ **AND NO SPELLING DODGES THE QUESTION.** The bare keyword is refused in every type position, so both
+	// ends of an explicit int→float cast necessarily name aliases and a blanket `true` here would leave NO
+	// WAY AT ALL to write one. MEASURED on `specs/register-pressure.md`'s
 	// `dead-def-inherits-only-its-own-register-file-float`, whose whole subject is the dead XMM def a
 	// `cvtsi2sd` produces: `let unused = y as Real` ⇒ *"unneeded cast: 'Integer' already fits in 'Real'"*.
 	//
-	// ⚠ Its OTHER reader is the guard elision (`valueIsProvablyInRange`), and the narrower answer is right
-	// there too: a full-range float target still elides, while one the source overflows now takes the check it
-	// always needed.
+	// ⚠ Its OTHER reader is the guard elision (`valueIsProvablyInRange`), and the range-sensitive answer is
+	// right there too: a full-range float target elides, while one the source overflows takes the check it
+	// needs.
 	if targetIsFloat != aliasIsFloat(source) 'crossDomain'
 		return targetIsFloat and rangeIsFull(target.low, high: target.high, isFloat: true)
 	end 'crossDomain'
@@ -2056,7 +2037,7 @@ export function rangeCoversRange(target RangedTypeAlias, source RangedTypeAlias)
 end 'rangeCoversRange'
 
 // ⭐⭐ **THE INTEGER HALF OF THE CONTAINMENT ABOVE, ASKED WHERE THE SOURCE IS AN INTERVAL NOTHING
-// NAMES (EC7).** A counted `for i in a upto b` gives its counter a range the program never wrote down as a
+// NAMES.** A counted `for i in a upto b` gives its counter a range the program never wrote down as a
 // typealias, so there is no `RangedTypeAlias` to hand `rangeCoversRange` — only two bounds. The arithmetic
 // is identical and lives here once; `rangeCoversRange` is this function plus the float and cross-domain
 // forks, which are the only parts an ALIAS adds.
@@ -2085,8 +2066,8 @@ export function rangeCoversIntBounds(target RangedTypeAlias, low ParsedInt, high
 		return true
 	end 'targetAdmitsEveryValue'
 
-	// ⚠ **THE CLAUSE IS ABOUT A SOURCE THE TARGET CANNOT SPAN, AND IT IS NOT SYMMETRIC ANY MORE.** The
-	// pair it still refuses is a SIGNED source into an unsigned-topped target: a negative is not a value
+	// ⚠ **THE CLAUSE IS ABOUT A SOURCE THE TARGET CANNOT SPAN, AND IT IS NOT SYMMETRIC.** The pair it
+	// refuses is a SIGNED source into an unsigned-topped target: a negative is not a value
 	// that target holds as a quantity, so the door guards. The reverse — an unsigned-topped source into a
 	// signed-full target — is answered `true` above, because there the target really does span the source.
 	let targetIsUnsignedMaxUpper = rangeIsUnsignedMaxUpper(target.low, high: target.high)
@@ -2094,9 +2075,8 @@ export function rangeCoversIntBounds(target RangedTypeAlias, low ParsedInt, high
 	// ⭐⭐ **AN UNSIGNED-TOPPED TARGET SPANS EVERY WHOLLY NON-NEGATIVE SOURCE, AND SAYING SO IS WHAT KEEPS
 	// THE SHAPE TEST FROM OVER-REFUSING.** `int(0 to 65535)` is plainly inside `int(0 to u64.max)`, but the
 	// two disagree about carrying the unsigned-max upper, so the clause below would call them mixed and
-	// refuse a containment that is simply true. That was harmless while the wide shape was rare; it stopped
-	// being harmless the moment every non-negative quantity was spelled that way, and it showed up as three
-	// cross-alias comparisons in this compiler that had always been legal.
+	// refuse a containment that is simply true. Every non-negative quantity is spelled that way, so the
+	// over-refusal reaches ordinary cross-alias comparisons — three of them in this compiler.
 	//
 	// The source must be non-negative at BOTH ends: that is what makes its whole value set a subset of
 	// `target.low … u64.max`, with no reading of either bound under which it is not.
@@ -2116,7 +2096,7 @@ export function rangeCoversIntBounds(target RangedTypeAlias, low ParsedInt, high
 end 'rangeCoversIntBounds'
 
 // ⭐⭐ **THE SAME CONTAINMENT, ASKED WHERE THE SOURCE MAY NAME NO ALIAS AT ALL — what a range-check DOOR
-// holds, and the one thing that decides whether its runtime guard is provably dead (A4f).** Every door
+// holds, and the one thing that decides whether its runtime guard is provably dead.** Every door
 // that records a site has already resolved its DESTINATION alias (it needs the name for the site), and
 // faces a SOURCE expression that may or may not denote one — which is exactly the pair E3010 is reported
 // from, one end already unwrapped. This adds that one unwrap and nothing else, so a door reaches no
@@ -2131,7 +2111,7 @@ end 'rangeCoversIntBounds'
 // at the callee's entry, a `return` before its `ret`, a field or element at its store — so a value handed
 // on under `A` has already passed `A`'s cascade or been refused by E3005. The one producer that breaks it
 // is `Array.resize`, which EXPOSES zero-initialized slots crossing no door at all (`specs/safety.md`'s
-// `divide-by-zero-fault-through-a-resized-array-slot`); a wider door downstream used to catch such a slot
+// `divide-by-zero-fault-through-a-resized-array-slot`); a wider door downstream catches such a slot only
 // BY COINCIDENCE — it fires only where the exposed `0` also falls outside the SECOND range — and a
 // coincidence is not a guarantee this elision may be written against. That hole is `resize`'s to close.
 export function rangeCoversDenotedRange(target RangedTypeAlias, source DeclaredAlias) returns bool
@@ -2147,7 +2127,7 @@ end 'rangeCoversDenotedRange'
 // report the same defect from different tiers and must not phrase it two ways; the alias and its
 // bounds spell through `rangedAliasValueSetDisplay`, the one place that pair renders.
 //
-// ⚠ **THE ALIAS IS QUOTED AS *SOURCE* SPELLS IT (N2 review), because a RANGE-CONTESTED name reaches here
+// ⚠ **THE ALIAS IS QUOTED AS *SOURCE* SPELLS IT, because a RANGE-CONTESTED name reaches here
 // wearing the compiler's mint.** `sourceSpelledAliasName` is applied at this one site rather than at each
 // tier, so neither can quote a declaration the program does not contain — MEASURED as
 // `outside the range of 'Byte$0_1000' (int(0 to 1000))`, which names no line the author wrote and prints
@@ -2162,12 +2142,11 @@ end 'literalOutOfRangeMessage'
 // `rangedAliasValueSetDisplay`, so neither half can be printed two ways depending on which E3005 a value
 // meets.
 //
-// ⛔ **THE MINT LEAKED THROUGH THIS ONE (found while landing N3).** `literalOutOfRangeMessage` had the strip
-// and this arm — rendered inline in `Queries.reportParseError` — did not, so a program declaring
-// `typealias Byte = int(300 to 1000)` beside another file's `Byte` was told `otherwise value 0 is outside
-// the range of 'Byte$300_1000' (int(300 to 1000))`: a declaration the program does not contain, with the
-// real bounds printed in the same sentence. One alias, two spellings, decided by which of two E3005s the
-// value happened to meet.
+// ⛔ **THE MINT LEAKS THROUGH ANY SITE THAT RENDERS THE PAIR ITSELF.** Rendered inline in
+// `Queries.reportParseError` without the strip, a program declaring `typealias Byte = int(300 to 1000)`
+// beside another file's `Byte` is told `otherwise value 0 is outside the range of 'Byte$300_1000'
+// (int(300 to 1000))`: a declaration the program does not contain, with the real bounds printed in the
+// same sentence. One alias, two spellings, decided by which of two E3005s the value happens to meet.
 //
 // ⚠ The VALUE is spelled plainly and deliberately NOT through `scalarConstantText`: an `otherwise`
 // default is an integer LITERAL the author wrote, never the wrapped `u64.max` sentinel that helper exists
@@ -2176,7 +2155,7 @@ export function otherwiseOutOfRangeMessage(value ParsedInt, aliasName String, lo
 	return "otherwise value {value} is outside the range of {rangedAliasValueSetDisplay(aliasName, low: low, high: high, isFloat: false, rawBitWidth: rawBitWidth)}"
 end 'otherwiseOutOfRangeMessage'
 
-// ⭐ **THE E3005 A `b"…"` BYTE-STRING LITERAL'S OWN BYTE REPORTS (A3r)** — the third subject of the one
+// ⭐ **THE E3005 A `b"…"` BYTE-STRING LITERAL'S OWN BYTE REPORTS** — the third subject of the one
 // range fact, worded here for the reason its `otherwise` sibling above is: the name-plus-bounds pair spells
 // through `rangedAliasValueSetDisplay`, so no site can print an alias or a range two ways, while the subject
 // stays the site's own.
@@ -2193,7 +2172,7 @@ export function byteStringByteOutOfRangeMessage(value ParsedInt, offset ParsedIn
 	return "byte {value} at offset {offset} of a `b\"…\"` byte-string literal is outside the range of {rangedAliasValueSetDisplay(aliasName, low: low, high: high, isFloat: isFloat, rawBitWidth: rawBitWidth)}"
 end 'byteStringByteOutOfRangeMessage'
 
-// ⭐ **THE E3117 A RAW-BYTE FILL REPORTS (A4a)** — the fourth subject of the one range fact, and the only
+// ⭐ **THE E3117 A RAW-BYTE FILL REPORTS** — the fourth subject of the one range fact, and the only
 // one of the four that names NO value, because there is none to name: the bytes arrive at run time.
 //
 // ⚠ **IT IS A STATEMENT ABOUT THE ELEMENT, NOT ABOUT A VALUE, AND THAT IS WHAT SEPARATES IT FROM ITS
@@ -2202,17 +2181,17 @@ end 'byteStringByteOutOfRangeMessage'
 // cannot hold every value a byte has. Naming the CONSTRUCT is what replaces naming the value — three of them
 // reach this rule and an author needs to know which of their lines is the fill.
 //
-// ⚠ **IT NAMES THE ELEMENT AND NEVER THE ARRAY, AND THE FIRST DRAFT DID THE OPPOSITE AND WAS FALSE.** It
-// said *"fills an 'Array with Byte'"*, which is true only of the byte view's own instance: the suite caught
-// it printing that sentence about an `Array with Int` (`managed-memory-methods`). Every one of the three
-// sites is a store into an ELEMENT, and that is the one subject all of them share.
+// ⚠ **IT NAMES THE ELEMENT AND NEVER THE ARRAY.** *"fills an 'Array with Byte'"* is true only of the byte
+// view's own instance — the suite catches that sentence printed about an `Array with Int`
+// (`managed-memory-methods`). Every one of the three sites is a store into an ELEMENT, and that is the one
+// subject all of them share.
 //
 // The name-plus-bounds pair spells through `rangedAliasValueSetDisplay`, for its siblings' reason: no site
 // may print an alias or a range two ways. `isFloat` rides along for the reason it does on every other member
 // of this family — the payloads cannot say whether they are numbers or IEEE-754 bit patterns. **A BYTE'S OWN
 // value set is `Project.ByteValueSetLow`/`High`** and not a hand-spelled `0 to 255`, for the identical
 // reason one door up: `rangeHoldsEveryByte` is the predicate this sentence reports, and a message that
-// stated the bounds itself would be a second definition of what a byte is (A4c review).
+// stated the bounds itself would be a second definition of what a byte is.
 // ⚠ **IT NAMES THE CURE AND THE CURE IS THE SAME AT ALL THREE SITES**, which is what lets one sentence carry
 // it: widen the element. E3109 names a replacement SPELLING because its refusal has an exact one; this
 // refusal has none — there is no other way to ask for a String's bytes, or to read a file into a buffer —
@@ -2222,7 +2201,7 @@ export function rawByteFillNarrowElementMessage(member String, aliasName String,
 	return "'{member}' stores RAW bytes into an element declared {rangedAliasValueSetDisplay(aliasName, low: low, high: high, isFloat: isFloat)}, which does not hold every byte value {ByteValueSetLow} to {ByteValueSetHigh} — widen the element's declared range to store raw bytes through it"
 end 'rawByteFillNarrowElementMessage'
 
-// ⭐⭐ **E3118 — A RAW-BYTE WRITE INTO A SLOT ITS ELEMENT DOES NOT FILL (A4c).** The sibling above's neighbour,
+// ⭐⭐ **E3118 — A RAW-BYTE WRITE INTO A SLOT ITS ELEMENT DOES NOT FILL.** The sibling above's neighbour,
 // and the wording is what keeps the two rules from reading as one: this one is about the SLOT, so it states
 // the slot's width AND the value set that width has, and only then says the element does not cover it. A
 // reader who sees `1-byte slot — every value 0 to 255` beside an element declared `int(0 to 100)` has the
@@ -2241,7 +2220,7 @@ end 'rawByteFillNarrowElementMessage'
 // the comparison this sentence makes cannot come to disagree — and it renders through the very
 // `formatRangeDisplay` the element's own half uses, which is what makes `int(0 to 65535)` beside
 // `int(0 to 1000)` the whole argument. That renderer is also the ONE party that knows a raw `-1` upper means
-// `u64.max`, which the machine-word rung is: printed straight it read *"every value 0 to -1"*.
+// `u64.max`: printed straight it reads *"every value 0 to -1"*.
 //
 // ⚠⚠ **A SUB-BYTE-PACKED ELEMENT GETS THE OTHER HALF OF THE SENTENCE, AND IT IS A DIFFERENT FACT RATHER
 // THAN A NARROWER ONE.** Every clause above presumes the element HAS a byte of its own to be measured
@@ -2261,12 +2240,10 @@ export function rawByteWriteSlotDomainMessage(member String, elementDisplay Stri
 end 'rawByteWriteSlotDomainMessage'
 
 // ⭐⭐ **A RANGED ALIAS PLUS ITS DECLARED VALUE SET — `'Wide' (int(0 to 1000))` — AND EVERY SENTENCE IN THIS
-// FAMILY IS BUILT ON IT (A4c review).** Five diagnostics say *"this alias, whose range is this"* and each of
-// them used to compose the pair itself out of `quotedAliasName` and `formatRangeDisplay`. Their headers all
-// argued that *no site may print an alias or a range two ways* — and then wrote the composition down five
-// times, so nothing but that argument kept the quoting, the spacing and the parentheses in step. A4c added
-// the fifth copy while introducing this function for E3118 alone; it is now the one spelling, and a change
-// to how an element's value set reads moves all five together or none.
+// FAMILY IS BUILT ON IT.** Five diagnostics say *"this alias, whose range is this"*, and each composing
+// the pair out of `quotedAliasName` and `formatRangeDisplay` for itself leaves nothing but an argument in
+// five headers to keep the quoting, the spacing and the parentheses in step. It is the one spelling, so a
+// change to how an element's value set reads moves all five together or none.
 //
 // ⚠ It stays a NAME plus BOUNDS and nothing more, because the five subjects differ in everything else — a
 // narrowing's value, an `otherwise` default, a blob byte's offset, the construct that fills, E3118's slot.
@@ -2291,12 +2268,11 @@ function quotedAliasName(aliasName String) returns String
 	return String.from(sourceSpelledAliasName(aliasName.toByteArray()))
 end 'quotedAliasName'
 
-// ⚠⚠ **THE `u64.max` SENTINEL IS SPELLED HERE AND NOWHERE BELOW, AND MOVING IT UP WAS A FIX.**
-// `scalarConstantText` used to render ANY `-1` as `18446744073709551615`, which is the same one-shape
-// fact `rangeNeedsUpperCheck` got wrong: a stored `-1` means `u64.max` only in the
-// `rangeIsUnsignedMaxUpper` shape. A renderer holding ONE number cannot tell which it has, so it
-// produced sentences that contradicted themselves — `int(-1 to -1)` reported as
-// `int(18446744073709551615 to 18446744073709551615)` (a declaration nobody wrote), and a `-1` VALUE
+// ⚠⚠ **THE `u64.max` SENTINEL IS SPELLED HERE AND NOWHERE BELOW.** Rendering ANY `-1` as
+// `18446744073709551615` is the same one-shape mistake a sign test makes in `rangeNeedsUpperCheck`: a
+// stored `-1` means `u64.max` only in the `rangeIsUnsignedMaxUpper` shape. A renderer holding ONE number
+// cannot tell which it has, so it produces sentences that contradict themselves — `int(-1 to -1)` reported
+// as `int(18446744073709551615 to 18446744073709551615)` (a declaration nobody wrote), and a `-1` VALUE
 // reported as `Value 18446744073709551615` beside signed bounds on the same line. This function holds
 // BOTH bounds and is the only party that can ask, so the reinterpretation lives here and the offending
 // VALUE — which is a signed i64 the author wrote — never receives it.
@@ -2453,13 +2429,13 @@ export function foldIntBinOp(op MaxonBinOp, lhs ParsedInt, rhs ParsedInt) return
 end 'foldIntBinOp'
 
 // `div`/`mod`, which are the only binary integer operators that can FAIL — and they do not fail on the
-// same inputs, which is A1x's whole thesis arriving in the constant folder.
+// same inputs.
 //
 // A ZERO divisor has no answer for either: `a / 0` and `a mod 0` are E3103, and folding one would be
 // writing down a value the program is about to be refused for.
 //
-// ⭐⭐ **`i64.min / -1` HAS NO ANSWER; `i64.min mod -1` HAS ONE, AND IT IS `0` (A1x).** This function used
-// to refuse the pair for BOTH operators — the same false generalization the specs carried, one tier down.
+// ⭐⭐ **`i64.min / -1` HAS NO ANSWER; `i64.min mod -1` HAS ONE, AND IT IS `0`.** Refusing the pair for
+// BOTH operators is one false generalization serving two operators.
 // The quotient `i64.max + 1` is unrepresentable, so `div` still declines. The REMAINDER is `0` for every
 // dividend, so declining it here would leave the folder disagreeing with the language it folds for: the
 // runtime answers `0` (the `mod` overflow guard), and a constant domain that called the same expression
@@ -2500,9 +2476,9 @@ end 'foldIntDivision'
 // same two bit patterns are two different numbers under the two readings, so a signed fold of an
 // operator the backend emits UNSIGNED is a constant that contradicts the instruction beside it:
 // `-1 / 8` is `0` read signed and `2305843009213693951` read unsigned, and the second is what the
-// emitted `div` computes. MEASURED before this existed — `let c = -1 as int(0 to u64.max)` then
-// `c / 8` — and a constant-folded division disagreeing with a runtime one is worse than the bug the
-// signedness rule fixes, because only one of the two answers is ever visible in a given program.
+// emitted `div` computes. MEASURED without this: `let c = -1 as int(0 to u64.max)` then `c / 8` — and a
+// constant-folded division disagreeing with a runtime one is worse than the bug the signedness rule
+// fixes, because only one of the two answers is ever visible in a given program.
 //
 // ⚠ **NEITHER `i64.min / -1` CASE EXISTS HERE, and that is not an omission.** Read unsigned those two
 // patterns are `2^63 / (2^64 - 1)`, whose quotient is `0` and whose remainder is `2^63` — both
@@ -2548,7 +2524,7 @@ end 'foldUnsignedIntDivision'
 // the runtime that runs this compiler faults f64 `/ 0`, so a zero divisor surfaces as a throw
 // and becomes `notFoldable` — the constant is then rejected as div-by-zero, symmetric with the integer
 // path. (A documented divergence from the compiler's emitted `divsd`, which yields ±inf/nan: a constant cannot,
-// because the host gives no float `/0` value and this rung does not reimplement IEEE division in
+// because the host gives no float `/0` value and the compiler does not reimplement IEEE division in
 // software.)
 export function foldFloatBinOp(op MaxonBinOp, lhs ParsedInt, rhs ParsedInt) returns FoldedInt
 	let a = __Builtins.bitsToFloat(lhs)
@@ -2673,7 +2649,7 @@ end 'foldSiToFp'
 // the day someone reordered it a NaN would sail through into a host `trunc`. Both bounds are exactly
 // representable doubles (`±2^63`), so neither comparison rounds.
 //
-// ⛔ **SABOTAGE-MEASURED 2026-08-30, AND NO SUITE SEES IT.** With this test removed, `trunc(1.0e300)`
+// ⛔ **SABOTAGE-MEASURED, AND NO SUITE SEES IT.** With this test removed, `trunc(1.0e300)`
 // compiled to `wasm32-wasi` prints `-9223372036854775808` and exits 0 — the compiling x64 HOST's
 // `cvttsd2si` answer, emitted as an `i64.const` into a binary for a machine that would have TRAPPED
 // (wasmtime: `wasm trap: integer overflow`, exit 3). Every `specs` case stays green through that,
@@ -2779,13 +2755,12 @@ end 'foldIntUnaryOp'
 // "either operand is a bool" does NOT imply "both operands are bools". The bool-first order
 // therefore answers `boolean` for a pair whose right operand it could not type.
 //
-// **THAT USED TO BE A WRONG ANSWER, AND IS NOT ONE ANY MORE — because of what `unresolved` now
-// MEANS, not because of anything in this function.** `flag and crossFileInt()` minted a merge phi
-// tagged `boolean` carrying the int 7, and `if m` then branched on 7: a value the compiler
-// believed was a bool and was not. The fix was UPWARD — the whole-program signature index
-// (`Queries.queryProgramSignatures`) — after which a callee some file declares is never
-// `unresolved`. What remains reachable is a callee NO file declares, and that program is rejected
-// (E3004) before it can run, so the false tag has nothing left to lie to.
+// **THE OPTIMISM IS SAFE BECAUSE OF WHAT `unresolved` MEANS, NOT BECAUSE OF ANYTHING IN THIS FUNCTION.**
+// A callee some file declares is never `unresolved` (`Queries.queryProgramSignatures`), so the only pair
+// that reaches the guess carries a callee NO file declares — a program E3004 rejects before it can run.
+// ⚠ Let `unresolved` mean anything else and the false tag is a wrong ANSWER: `flag and crossFileInt()`
+// mints a merge phi tagged `boolean` carrying the int 7, and `if m` then branches on 7, a value the
+// compiler believes is a bool and is not.
 //
 // Deferring here instead — checking `unresolved` FIRST — would make the tag honest, and is STILL
 // DELIBERATELY NOT DONE: it would type `flag and crossFileBool()` as unknown, and `not` refuses an
@@ -2821,11 +2796,10 @@ end 'wordOpResultTag'
 // missing feature. `Parser.emitBinOp` is the emitter, and it is what gates on this.
 //
 // The `unresolved` case is deliberately NOT deferred to, and this is the one asymmetry with
-// `wordOpResultTag` (whose header argues the same trade at length): `integer` has been the answer
-// for a mixed `(integer, unresolved)` pair since M3, an `unresolved` operand can only be a call
-// no file declares (E3004, which gates the pipeline before codegen), and widening the deferral
-// here would buy an honest tag on a program that is already rejected at the cost of moving a
-// live rule.
+// `wordOpResultTag` (whose header argues the same trade at length): `integer` is the answer for a mixed
+// `(integer, unresolved)` pair, an `unresolved` operand can only be a call no file declares (E3004,
+// which gates the pipeline before codegen), and widening the deferral here would buy an honest tag on a
+// program that is already rejected at the cost of moving a live rule.
 function arithResultTag(left ValueTypeTag, right ValueTypeTag) returns ValueTypeTag
 	if operandsAreFloat(left, right: right) 'promote'
 		return ValueTypeTag.float
@@ -2855,10 +2829,6 @@ end 'arithResultTag'
 // declared int is rejected in ONE direction (int → float is fine, being lossless). Here NEITHER
 // direction converts. They look alike and unifying them would silently re-legalise `f > i` or
 // re-break `takeFloat(5)`.
-//
-// P1.0d.4 INTRODUCED this bug and this is the fix: before floats, a mixed compare was unreachable,
-// and the promotion added for arithmetic reached `emitCompare` because both went through one
-// helper.
 export function comparableOperands(left ValueTypeTag, right ValueTypeTag) returns bool
 	if not typesAgree(left, right: right) 'disagree'
 		return false
@@ -2909,10 +2879,9 @@ export function comparableOperands(left ValueTypeTag, right ValueTypeTag) return
 	// ORDERING one (which has no meaning on a byte pointer) or a `string`-vs-non-`string` mismatch
 	// (already rejected by the agreement gate above). Both are `false`.
 	//
-	// ⚠⚠ **IT ASKS `operandsAreText`, NOT `operandsAreByteRecord`, AND THAT NARROWING IS THE WHOLE OF
-	// A5m-c'S TYPE RULE.** The two predicates were one until a `Character` gained its ordering, and asking
-	// the REPRESENTATION question here would refuse `c < d` for a type the corpus declares `Comparable`;
-	// asking it in `lacksIntegralReading` is still right, because neither byte record is a MAGNITUDE.
+	// ⚠⚠ **IT ASKS `operandsAreText`, NOT `operandsAreByteRecord`, AND THAT NARROWING IS THE TYPE RULE.**
+	// Asking the REPRESENTATION question here would refuse `c < d` for a type the corpus declares
+	// `Comparable`; asking it in `lacksIntegralReading` is right, because neither byte record is a MAGNITUDE.
 	// **A rule keyed on the representation and a rule keyed on the type are two questions, and this is the
 	// pair that proves it** — see `tagIsByteRecord`, which says the same thing about the memory sites.
 	if operandsAreText(left, right: right) 'noStringOrdering'
@@ -2952,12 +2921,11 @@ end 'tagIsText'
 // (`StringRuntime`'s 56-byte layout: `buffer@0`, `length@8`, `capacity@16`, `parent@32`, `singleByteGraphemes@48`),
 // which a `String` and a `Character` BOTH are.
 //
-// ⚠ **THIS IS A QUESTION ABOUT REPRESENTATION, AND `tagIsText` IS A QUESTION ABOUT TYPE. THEY WERE ONE
-// PREDICATE, AND THAT WAS THE DEFECT.** Before P1.8 slice B there was exactly one byte-record type, so
-// `tagIsText` answered both and nothing could tell that it was two questions wearing one name. Adding a
-// second byte-record type is what separated them — and it separated them SILENTLY, because
+// ⚠ **THIS IS A QUESTION ABOUT REPRESENTATION, AND `tagIsText` IS A QUESTION ABOUT TYPE. ONE PREDICATE
+// FOR BOTH IS THE DEFECT.** With a single byte-record type the two coincide and nothing can tell that it
+// is two questions wearing one name — and a second byte-record type separates them SILENTLY, because
 // `tagIsText` is a one-line `tag == ValueTypeTag.string` that simply answers "no" for a new tag. Three
-// of its 29 call sites would have been a LEAK (`Parser.valueIsManagedHeap` — the one owned-temp
+// of its 29 call sites would be a LEAK (`Parser.valueIsManagedHeap` — the one owned-temp
 // adoption test, so every `Character` temporary is never dropped), a WRONG DROP CALLEE
 // (`Parser.decrefCalleeFor`), and a POINTER COMPARE for `c1 == c2` (`Parser.emitCompare`). All three
 // are measured by sabotage — see `specs/character-ownership.md`.
@@ -2966,9 +2934,9 @@ end 'tagIsText'
 // to the MEMORY — is it dropped (`__str_decref`), cloned (`__str_clone`), promoted by a fused-record
 // blit, moved into durable storage, or blitted into an interpolation. Ask `tagIsText` when the answer
 // decides what the TYPE may do — may this be `print`ed, may it be a `panic` message, is this Set's key
-// a String, is this array literal's element a String, **may this be ORDERED** (`operandsAreText`, A5m-c:
+// a String, is this array literal's element a String, **may this be ORDERED** (`operandsAreText`:
 // a Character is, a String is not). A site that is asking "is the memory mine?" and spells it
-// `tagIsText` is the bug this comment exists to prevent recurring.
+// `tagIsText` is the bug this comment exists to prevent.
 export function tagIsByteRecord(tag ValueTypeTag) returns bool
 	return tagIsText(tag) or tag == ValueTypeTag.character
 end 'tagIsByteRecord'
@@ -3015,13 +2983,13 @@ end 'tagIdentityIsNominal'
 // **DOES EITHER OPERAND NAME A `String`?** `operandsAreStructRef`'s twin, and it exists for the same
 // reason: an operator with no reading for a String on one side has none with it on the other.
 //
-// ⚠ **IT ASKS THE TYPE QUESTION (`tagIsText`), NOT THE REPRESENTATION ONE, AND IT USED TO ASK THE OTHER.**
-// It was `operandsAreByteRecord` — `tagIsByteRecord` on either side — with `lacksIntegralReading` and
-// `comparableOperands` reading it as one sentence, which was exact only while NEITHER byte record was
-// ordered. `stdlib/Character.maxon:19` declares `Comparable` and `stdlib/String.maxon:49` does not, so the
-// two rules now differ and each asks its own: ORDERING is a fact about the TYPE (one byte record has it,
-// the other does not), while an INTEGRAL READING is a fact about the REPRESENTATION (a pointer to a record
-// is not a magnitude, whichever type it is) and stays on `tagIsByteRecord` in `lacksIntegralReading`.
+// ⚠ **IT ASKS THE TYPE QUESTION (`tagIsText`), NOT THE REPRESENTATION ONE.** A `tagIsByteRecord` on either
+// side — read as one sentence by `lacksIntegralReading` and `comparableOperands` alike — is exact only
+// while NEITHER byte record is ordered. `stdlib/Character.maxon:19` declares `Comparable` and
+// `stdlib/String.maxon:49` does not, so the two rules differ and each asks its own: ORDERING is a fact
+// about the TYPE (one byte record has it, the other does not), while an INTEGRAL READING is a fact about
+// the REPRESENTATION (a pointer to a record is not a magnitude, whichever type it is) and stays on
+// `tagIsByteRecord` in `lacksIntegralReading`.
 //
 // Equality is the one operator BOTH byte records have, and it never reaches either rule —
 // `Parser.emitCompare` intercepts a matching byte-record pair at its top.
@@ -3046,8 +3014,7 @@ end 'tagIsInterfaceRef'
 // are not the same shape and the difference is the point: an existential against an `int` is a genuine
 // TYPE MISMATCH and already reads as one, while a PAIR of them agrees perfectly and still cannot be
 // compared. Asking `or` here would work only because `typesAgree` runs first — one fact resting on another
-// function's ordering — and it would give the mixed pair the wrong explanation at the parser's door, which
-// is exactly what it did before this was one predicate rather than two spellings.
+// function's ordering — and it would give the mixed pair the wrong explanation at the parser's door.
 export function operandsAreInterfaceRef(left ValueTypeTag, right ValueTypeTag) returns bool
 	return tagIsInterfaceRef(left) and tagIsInterfaceRef(right)
 end 'operandsAreInterfaceRef'
@@ -3157,7 +3124,7 @@ end 'BinOpOperands'
 function operatorIsIntegral(op MaxonBinOp) returns bool
 	return match op 'k'
 		// `+` `-` `*` `/` all have a direct SSE form (`addsd`/`subsd`/`mulsd`/`divsd`), so a float
-		// is not merely allowed here — it is the whole point of the rung.
+		// is not merely allowed here — it is what those four operators are for.
 		add or
 			sub or
 			mul or
@@ -3165,7 +3132,7 @@ function operatorIsIntegral(op MaxonBinOp) returns bool
 
 		// `mod` does NOT, and it is the one arm that looks like it belongs with its neighbours and
 		// does not. x64 has no `fmod` instruction: an IEEE remainder is a RUNTIME CALL, which is a
-		// stdlib cone this rung does not have — but the reason to
+		// stdlib cone the compiler does not have — but the reason to
 		// reject it is the LANGUAGE's, not the schedule's, so this arm does not move when the cone
 		// lands.
 		mod gives true
@@ -3254,10 +3221,10 @@ end 'integralOperandsFor'
 // ADDRESS of its record, which is the same objection one type further on. None is a bit pattern the
 // source meant to mask or shift.
 //
-// ⚠ **THIS IS THE ONE RULE THAT STAYED ON `tagIsByteRecord` WHEN `comparableOperands` LEFT IT** (A5m-c),
-// and the split is the point: a `Character` gained an ORDERING (`stdlib/Character.maxon:80-104`) and gained
-// no arithmetic with it, because `c - 1` and `c shl 1` would be reading a record pointer as a number
-// whether or not the type is orderable, so `c - 1` is refused.
+// ⚠ **THIS RULE ASKS `tagIsByteRecord` WHERE `comparableOperands` ASKS `operandsAreText`**, and the split
+// is the point: a `Character` has an ORDERING (`stdlib/Character.maxon:80-104`) and no arithmetic with it,
+// because `c - 1` and `c shl 1` would be reading a record pointer as a number whether or not the type is
+// orderable, so `c - 1` is refused.
 //
 // ⚠ Written as the union of the two DOMAINS rather than as `not tagIsIntegral(tag)`, per
 // `tagIsIntegral`'s own warning: the negated form is TRUE for `unresolved`, which agrees with
@@ -3270,12 +3237,11 @@ end 'lacksIntegralReading'
 // **WHICH OPERAND THE `nonIntegralOperands` DIAGNOSTIC MUST NAME** — the first one with no
 // integral reading, left before right.
 //
-// ⭐ It exists because the raise site used to GUESS, and the guess went stale the moment the rule
-// grew: `Parser.requireBinOpOperands` hardcoded `float` under a comment calling it "the only tag
-// that can trip this rule", and P1.0r admitted `structRef` to the very same rule — so `p and q`
-// reported "but this one is float" about two structs. A rule and the message that reports it are
-// one fact, so they are answered from one predicate (`lacksIntegralReading`) rather than from a
-// theorem restated at the raise site.
+// ⭐ It exists so that the raise site never GUESSES, because a guess goes stale the moment the rule grows:
+// a `Parser.requireBinOpOperands` that hardcodes `float` as "the only tag that can trip this rule" reports
+// "but this one is float" about two structs the day `structRef` joins the rule. A rule and the message
+// that reports it are one fact, so they are answered from one predicate (`lacksIntegralReading`) rather
+// than from a theorem restated at the raise site.
 //
 // It is asked ONLY on the failure path, which is why the verdict stays a payload-free `enum` (see
 // `BinOpOperands`): the hot path must not allocate to carry a tag that only a diagnostic reads.
@@ -3311,12 +3277,11 @@ end 'nonIntegralOperandOf'
 // diagnostic. Deferring the choice to lowering is not available: the Std tier keeps no per-value
 // source type (see MaxonUnaryOp).
 //
-// **The project-wide callee signature query this comment used to ask for has LANDED**
-// (`Queries.queryProgramSignatures`), and it drained the case that used to be common: `not
-// crossFileBool()` — a correct program — is now typed exactly and compiles. What is left is `not
-// bogus()`, a call to a function no file declares, and refusing it is right: `not`'s two readings
-// disagree about the VALUE (the bitwise complement of `false` is -1, which reads as TRUE), so
-// there is nothing safe to emit, and the program is being rejected anyway.
+// The project-wide callee signature query (`Queries.queryProgramSignatures`) drains the common case: `not
+// crossFileBool()` — a correct program — is typed exactly and compiles. What is left is `not bogus()`, a
+// call to a function no file declares, and refusing it is right: `not`'s two readings disagree about the
+// VALUE (the bitwise complement of `false` is -1, which reads as TRUE), so there is nothing safe to emit,
+// and the program is being rejected anyway.
 export union NotOperator
 	op(kind MaxonUnaryOp, resultTag ValueTypeTag)
 
@@ -3330,20 +3295,19 @@ export union NotOperator
 	nonIntegralOperand
 end 'NotOperator'
 
-// A `match`, not an if-chain, so the tag space is covered EXHAUSTIVELY: the fall-through form
-// silently answered `bitNot` for any tag it had not been told about, which is the shape of every
-// bug this file exists to prevent.
+// A `match`, not an if-chain, so the tag space is covered EXHAUSTIVELY: the fall-through form silently
+// answers `bitNot` for any tag it has not been told about, which is the shape of every bug this file
+// exists to prevent.
 //
 // ⚠⚠ **AN ARM THAT ANSWERS FOR A WHOLE SPAN PUTS THE FALL-THROUGH STRAIGHT BACK.** `float` sits
-// BETWEEN `integer` and `exitCode` in `ValueTypeTag`, and an arm covering that span answered `bitNot`
-// for it — the exact bug the paragraph above credits this function with fixing, in the function that
-// fixed it. A `match` is exhaustive over the tags you NAME, which is why every tag here is named.
+// BETWEEN `integer` and `exitCode` in `ValueTypeTag`, so an arm covering that span answers `bitNot`
+// for it — the exact bug the paragraph above describes, inside the function that closes it. A `match` is
+// exhaustive over the tags you NAME, which is why every tag here is named.
 //
-// The old comment was not even wrong about the CLASS — `typeClassOf` really does map `float` to
-// `numeric`, and that is the point: **`numeric` licenses arithmetic, it does not license
-// bit-complementing an IEEE pattern.** `not 3.14` would have flipped all 64 bits of a
-// sign/exponent/mantissa triple and called the result an `integer`. Caught before a float could
-// reach it; it was unreachable only because no float literal parsed.
+// A span arm is not even wrong about the CLASS — `typeClassOf` really does map `float` to `numeric`, and
+// that is the point: **`numeric` licenses arithmetic, it does not license bit-complementing an IEEE
+// pattern.** `not 3.14` would flip all 64 bits of a sign/exponent/mantissa triple and call the result an
+// `integer`.
 export function notOperatorFor(operand ValueTypeTag) returns NotOperator
 	return match operand 'k'
 		boolean gives NotOperator.op(MaxonUnaryOp.logicalNot, resultTag: ValueTypeTag.boolean)
@@ -3351,20 +3315,20 @@ export function notOperatorFor(operand ValueTypeTag) returns NotOperator
 		// Every INTEGER takes the bitwise reading (`not 5` is -6).
 		integer gives NotOperator.op(MaxonUnaryOp.bitNot, resultTag: ValueTypeTag.integer)
 
-		// A FLOAT has NEITHER reading, and this is the arm the range used to swallow. It is not a
+		// A FLOAT has NEITHER reading, and this is the arm a span arm swallows. It is not a
 		// missing feature waiting on an instruction: `not` on a double is meaningless in the
 		// source language, exactly as `3.14 and 2.0` is (see `BinOpOperands.nonIntegralOperands`),
 		// and no hardware would help.
 		float gives NotOperator.nonIntegralOperand
 
-		// `named` is a ranged typealias. As of F1 (`Parser.readTypeAliasDeclaration`) it may be a
-		// `float(low to high)` one, for which the bitwise reading is WRONG — a double has no `not`,
-		// exactly as the `float` arm above records — so this is no longer the theorem `typeClassOf`'s
-		// is. It stays bitwise because a float alias is tagged `named` only in a param/field position F1
-		// defers to the float ABI (F2): a `not` on such a value crosses register files and the x64
+		// `named` is a ranged typealias. It may be a `float(low to high)` one
+		// (`Parser.readTypeAliasDeclaration`), for which the bitwise reading is WRONG — a double has no `not`,
+		// exactly as the `float` arm above records — so this is not the theorem `typeClassOf`'s
+		// is. It stays bitwise because a float alias is tagged `named` only in a param/field position that
+		// defers to the float ABI: a `not` on such a value crosses register files and the x64
 		// allocator PANICS before any wrong answer, rather than complementing a double. `exitCode` is
 		// `int(0 to u32.max)`, an integer for real. Making a float alias take the `float` arm's answer
-		// needs `named` resolved through the alias registry — that F2 work.
+		// needs `named` resolved through the alias registry.
 		named or
 			exitCode gives NotOperator.op(MaxonUnaryOp.bitNot, resultTag: ValueTypeTag.integer)
 
@@ -3387,10 +3351,10 @@ export function notOperatorFor(operand ValueTypeTag) returns NotOperator
 		string gives NotOperator.nonIntegralOperand
 
 		// A FUNCTION value — rejected for the struct/String arm's reason: `not` has no reading on a code
-		// pointer (P1.5-A1). Complementing a `.text` address is not a question.
+		// pointer. Complementing a `.text` address is not a question.
 		function gives NotOperator.nonIntegralOperand
 
-		// A TYPE PARAMETER / GENERIC INSTANCE (P1.6-A) — `not` has no reading on an opaque `T` or a struct
+		// A TYPE PARAMETER / GENERIC INSTANCE — `not` has no reading on an opaque `T` or a struct
 		// pointer, rejected for the struct/function arm's reason. A `T` agrees with anything for AGREEMENT,
 		// but agreement is not an operator: `not t` is refused here exactly as `t + 1` is elsewhere.
 		typeParameter gives NotOperator.nonIntegralOperand
@@ -3412,7 +3376,7 @@ end 'notOperatorFor'
 // their refusals differently (each names the type it is), but the RULE must not fork, which is why only the
 // verdict lives here.
 //
-// ⚠ **IT IS THE TAG HALF ONLY, AND NO HASH-TABLE COLUMN CALLS IT DIRECTLY ANY MORE.** Every one of them
+// ⚠ **IT IS THE TAG HALF ONLY, AND NO HASH-TABLE COLUMN CALLS IT DIRECTLY.** Every one of them
 // reaches it through `elementTypePreserved` below, so a column with a NOMINAL identity (a `Map` value
 // declared as a struct or an enum) is settled by that identity and never falls to a tag comparison that
 // cannot see one. Two enums are both integral here, which is why calling in directly is a wrong answer
@@ -3475,10 +3439,9 @@ function columnValueTagMatches(valueTag ValueTypeTag, declared ValueTypeTag) ret
 	// COMPILER CRASH, and the `insert(1)` spelling of the same program would lose its E2062 (the honest
 	// diagnostic, on the type argument) to it. So the residual must ANSWER, not crash.
 	//
-	// ⛔ **BUT WHAT IT ANSWERS FOR A FLOAT IS NOW A WRONG REFUSAL, AND THE ARGUMENT THAT USED TO EXCUSE IT IS
-	// RETRACTED.** That argument was *"a nonsense sentence, but on a program that is refused either way"* —
-	// true only while `float` was no container's legal element. The `Array with float` work made a float array
-	// FIRST-CLASS, so `[1.5, 2.5].map(function(v float) gives v * 2.0)` — a program that must COMPILE — comes
+	// ⛔ **BUT WHAT IT ANSWERS FOR A FLOAT IS A WRONG REFUSAL.** *"A nonsense sentence, but on a program that
+	// is refused either way"* excuses it only where `float` is no container's legal element, and a float array
+	// is FIRST-CLASS: `[1.5, 2.5].map(function(v float) gives v * 2.0)` — a program that must COMPILE — comes
 	// down `requireElementTransform` -> `elementTransformAnswersElement` -> here, reads FALSE off this arm and
 	// is refused as *"`map`'s transform answers a float value where the container's element is a float"*: a
 	// sentence that refutes itself, on a legal program. FILED AS ITS OWN RUNG — the fix is a FLOAT arm
@@ -3489,8 +3452,8 @@ function columnValueTagMatches(valueTag ValueTypeTag, declared ValueTypeTag) ret
 	// A further ADMITTED HASH-TABLE column type must likewise be answered ABOVE this arm — by the
 	// agrees-only-with-itself roster if it is its own type, by a class test of its own if it is a family — and
 	// its gate is not what will stop you forgetting. `function` and `boolean` are the two that have been: a
-	// `Map`'s VALUE column is no longer held to the key's three-name whitelist, so what may reach here as
-	// `declared` is now the whole one-machine-word set. An AGGREGATE one never does — a nominal identity on
+	// `Map`'s VALUE column is not held to the key's three-name whitelist, so what may reach here as
+	// `declared` is the whole one-machine-word set. An AGGREGATE one never does — a nominal identity on
 	// either side settles the question in `elementTypePreserved` before this predicate is consulted at all.
 	return tagIsIntegral(valueTag)
 end 'columnValueTagMatches'
@@ -3509,13 +3472,13 @@ end 'columnValueTagMatches'
 //     reason: a ranged-int alias carries `named` where the element carries `integer`, and refusing that pair
 //     would reject `[1,2,3].map(function(x Integer) gives x * 2)`, the construct itself.
 //
-// ⚠⚠ **"THE ELEMENT DECIDES WHICH QUESTION IS ASKED, NOT THE OTHER SIDE" STOOD HERE AND WAS A MEASURED
-// CRASH (BATCH18 review).** Under it a structural element admitted *everything the container's own column
-// would*, and a boxed enum's column answer is `integral` — so `[1,2,3].map(function(c Color) gives show(c))`
-// over an INT array compiled clean and died `STATUS_STACK_OVERFLOW`, the ordinals 1..3 matched against a
-// two-case `match`. **The identical call by DIRECT dispatch was already `E3005: expected 'Color', got
-// 'int'`** — one compiler answering one question two ways, which is the defect this whole batch exists to
-// close, reproduced inside its own cure. An identity on EITHER side is a fact the tag rule cannot see, so it
+// ⚠⚠ **A RULE WHERE THE ELEMENT ALONE DECIDES WHICH QUESTION IS ASKED IS A MEASURED CRASH.** Under it a
+// structural element admits *everything the container's own column would*, and a boxed enum's column
+// answer is `integral` — so `[1,2,3].map(function(c Color) gives show(c))` over an INT array compiles
+// clean and dies `STATUS_STACK_OVERFLOW`, the ordinals 1..3 matched against a two-case `match`. **The
+// identical call by DIRECT dispatch is `E3005: expected 'Color', got 'int'`** — one compiler answering one
+// question two ways. An identity on EITHER side is a fact the tag rule cannot see, so it
+// is the tag rule that must stand aside, not the identity. This is the same widening
 // is the tag rule that must stand aside, not the identity. This is the same widening
 // `SemanticCheck.checkOneArgType` already made for the mirror quadrant (a SCALAR parameter meeting an
 // AGGREGATE argument, which `tagAdmitsNoAggregate` guards) and for the same reason.

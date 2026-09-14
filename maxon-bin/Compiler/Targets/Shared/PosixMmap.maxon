@@ -1,7 +1,7 @@
 // PosixMmap — the `mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, -1, 0)`
 // parameters `osAllocPages` bottoms out in on every POSIX target. Written ONCE and consumed by BOTH
 // Linux isels (x64's `X64LinuxRuntime`/`StdToX64Conversion` and arm64's `StdToArm64Conversion`), so the
-// ABI is one fact rather than two copies with nothing checking them (OPEN #83).
+// ABI is one fact rather than two copies with nothing checking them.
 //
 // Four of these are POSIX-UNIVERSAL — identical on Darwin and Linux (base, prot, fd, offset). The fifth,
 // `MmapAnonPrivateLinux`, is the LINUX flag word; Darwin's differs (`MAP_ANON` is 0x1000 there, 0x20 on
@@ -18,7 +18,7 @@ export let MmapAnonPrivateLinux = 0x22  // Linux: MAP_ANONYMOUS (0x20) | MAP_PRI
 export let MmapAnonFd = 0xFFFFFFFFFFFFFFFF  // fd = -1 (two's-complement): MAP_ANON names no file.
 export let MmapNoOffset = 0x0  // offset = 0 (ignored for an anonymous mapping).
 
-// --- F1a: the `madvise` advice that DECOMMITS a range (drops its physical backing, keeps the mapping) ---
+// --- The `madvise` advice that DECOMMITS a range (drops its physical backing, keeps the mapping) ---
 //
 // ⭐ **THE ADVICE NUMBER IS A LINUX FACT AND IS ARCH-INVARIANT, WHICH IS WHY IT SITS BESIDE THE MMAP FLAGS
 // RATHER THAN IN EITHER BACKEND.** Linux defines the whole `madvise` advice table in `asm-generic`, so
@@ -33,7 +33,7 @@ export let MmapNoOffset = 0x0  // offset = 0 (ignored for an anonymous mapping).
 // two would hide a semantic difference behind a numeric one; see `osDecommitPages` for what rests on it.
 export let MadviseDontNeedLinux = 0x4  // Linux: MADV_DONTNEED — drop the pages; the next touch refaults a ZERO page.
 
-// --- F1c: the two `mmap` parameters that turn one page source into RESERVE and COMMIT ---
+// --- The two `mmap` parameters that turn one page source into RESERVE and COMMIT ---
 //
 // ⭐⭐ **POSIX HAS NO COMMIT CALL, SO BOTH HALVES OF THE SPLIT ARE `mmap` WITH DIFFERENT ARGUMENTS.** A
 // reservation is `mmap(NULL, size, PROT_NONE, MAP_ANON|MAP_PRIVATE, -1, 0)` — the kernel records the range and

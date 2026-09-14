@@ -15,19 +15,11 @@
 //
 // Ops that SYNTHESIZE new values (the 1:N desugarings) must not collide with the parser's ids: they
 // mint from `nextValueId`, a per-function counter seeded at the parser's dense id count (the next free
-// id). P1.4b's error lowering is the first to synthesize — the `+1` flag re-encode, the zero flag of a
-// throwing return — and the Std passes downstream grow their dense columns
-// to fit, so a monotonic counter is all that is needed (no per-function object).
-//
-// THIN for maxon M1: lowers exactly the `return 42` slice —
-//   maxon.literal -> StdOp.const
-//   maxon.ret     -> StdOp.ret
-// Later milestones GROW `lowerOp`/`lowerTerminator` with the var / arith / call
-// / control-flow arms (and the throwing / fat-interface return arms of
-// `emitRetOrErrorReturn`) as the Maxon and Std dialects grow.
+// id). The error lowering synthesizes — the `+1` flag re-encode, the zero flag of a throwing return —
+// and the Std passes downstream grow their dense columns to fit, so a monotonic counter is all that is
+// needed (no per-function object).
 
-// Collapse a source-level MaxonType to its width/ABI-resolved StdType. M1
-// handles only the primitive arms. `named` and `unresolved` are a
+// Collapse a source-level MaxonType to its width/ABI-resolved StdType. `named` and `unresolved` are a
 // TypeResolution (Chunk C) responsibility: that pass replaces every
 // `named(alias)` with the primitive it resolves to (consulting the typealias
 // registry for its width) and eliminates every `unresolved` BEFORE lowering
@@ -77,7 +69,7 @@ export function maxonTypeToStdType(ref MaxonType) returns StdType
 		// code pointer), assigned one line down by the same table every arm's comes from.
 		function then break 'residue'
 
-		// A type parameter and a generic instance are NOT residues (P1.6-A) — the parser produces them
+		// A type parameter and a generic instance are NOT residues — the parser produces them
 		// directly and `resolveType` leaves them alone (they are already concrete: an opaque i64 and a
 		// struct pointer). Their width is a machine word, assigned one line down by the same table.
 		typeParameter then break 'residue'
@@ -108,8 +100,8 @@ end 'maxonTypeToStdType'
 //
 // It takes a TAG, and the reason is measured rather than aesthetic: the alternative spelling —
 // `maxonTypeToStdType(maxonTypeOfTag(tag, …))` — REBUILDS A `MaxonType`, and **a Maxon union
-// value is a heap object** (MaxonDialect's ValueTypeTag header has the measurement: the first cut
-// of exactly this shape cost +4,165 allocations on scale-test's smallest rung). `operandType` is
+// value is a heap object** (MaxonDialect's ValueTypeTag header has the measurement: exactly this
+// shape costs +4,165 allocations on scale-test's smallest rung). `operandType` is
 // read for every operand of every arithmetic op in the program — the compiler's hottest path — so
 // the answer has to be a scalar computed from a scalar.
 //
@@ -118,11 +110,11 @@ end 'maxonTypeToStdType'
 // perfectly ordinary, because `TypeResolution.resolveTypes` rewrites function SIGNATURES and
 // never the parser's `valueTags` column — so a parameter declared with a ranged alias still
 // carries a `named` tag right here. It collapses to i64 because a `named` value is an INT in every
-// position F1 can reach one: as of F1 a `float(low to high)` alias is also legal
+// position it can reach one: a `float(low to high)` alias is also legal
 // (`Parser.readTypeAliasDeclaration`), but a float alias is tagged `named` only as a param/field, all
-// deferred to the float ABI (F2), and the i64 collapse there forces a cross-file move the x64
+// deferred to the float ABI, and the i64 collapse there forces a cross-file move the x64
 // allocator PANICS on rather than passing a double in a GPR — never a wrong answer. Classing a float
-// alias as f64 needs `named` resolved through the alias registry, which is that F2 work (TypeRules'
+// alias as f64 needs `named` resolved through the alias registry, which is unbuilt (TypeRules'
 // `typeClassOf`/`tagIsIntegral`/`notOperatorFor` all cite the same resolution).
 export function valueTagToStdType(tag ValueTypeTag) returns StdType
 	match tag 'collapse'
@@ -156,7 +148,7 @@ export function valueTagToStdType(tag ValueTypeTag) returns StdType
 		// MaxonType stays width-free and the machine word is named exactly once, here.
 		function then return StdType.i64
 
-		// ⭐ A TYPE PARAMETER IS AN OPAQUE MACHINE WORD (P1.6-A). `T` in `type Box uses T` lowers to an
+		// ⭐ A TYPE PARAMETER IS AN OPAQUE MACHINE WORD. `T` in `type Box uses T` lowers to an
 		// i64, which is the WHOLE of what makes a generic type's method bodies compile ONCE and be
 		// byte-identical to the equivalent monomorphic struct: a trivial type argument is passed in a
 		// GPR and stored in an 8-byte slot like any other scalar. Nothing above this line knows the
@@ -190,13 +182,13 @@ export function maxonReturnTypeToStdReturnType(ref MaxonReturnType) returns StdR
 end 'maxonReturnTypeToStdReturnType'
 
 // ⭐⭐ **DOES THIS FUNCTION'S ABI USE THE SECONDARY RETURN SLOT? — THE ONE DEFINITION, AND THERE MUST ONLY
-// EVER BE ONE (P1.7a slice 2, the return ABI).**
+// EVER BE ONE.**
 //
 // The compiler returns ONE value in the primary register (R8 / x0 / the wasm result), plus — for some functions — a
 // SECOND machine word in a fixed secondary register (R10 / x9 / a second wasm result). `StdOp.errorReturn`
 // writes that pair and `StdOp.tryCall` captures it; the slot is the same one whichever fact put it there:
 //
-//   • the function THROWS, and the second word is the error flag (P1.4b);
+//   • the function THROWS, and the second word is the error flag;
 //   • the function RETURNS AN INTERFACE, and the second word is the WITNESS half of the fat pointer it
 //     hands back.
 //
@@ -342,7 +334,7 @@ function assertUnaryOperandDomain(opcode StdUnaryOpcode, operandType StdType)
 	panic("lowerUnaryOp: Std unary opcode {opcode.name} reads a {required} operand and was handed Std type {operandType.name} — the parser owns this precondition (promoteToFloat/emitTrunc/emitMathIntrinsic), so a mismatch here is a front-end bug, not a lowering one")
 end 'assertUnaryOperandDomain'
 
-// Map a source-level comparison operator to its Std predicate. M4 is a 1:1 mapping;
+// Map a source-level comparison operator to its Std predicate — a 1:1 mapping,
 // exhaustive by construction (every MaxonCmpOp arm is named). The x64 tier turns the
 // predicate into a signed jcc condition when it fuses the compare with its branch.
 function maxonCmpOpToStdPred(op MaxonCmpOp) returns StdCmpPred
@@ -383,14 +375,12 @@ export function maxonBinOpOfStdOpcode(opcode StdBinOpcode) returns MaxonBinOp
 		// The three FLOAT-ONLY opcodes (`stdBinOpcodeIsFloatOnly`). They have a `MaxonBinOp` twin and it
 		// is named here, because the round trip below is only a check when every arm answers: an arm that
 		// panicked "float-only" would be this file deciding what a CALLER may fold, which is the caller's
-		// own rule. ⚠ That reasoning used to rest on `foldConstants` refusing every float before it asked;
-		// since 2026-08-31 it does not, and these three arms are the LIVE path for every folded float
-		// `div`/`min`/`max`. The argument is better for it — the arms were right when nothing used them.
+		// own rule. These three arms are the LIVE path for every folded float `div`/`min`/`max`.
 		div gives MaxonBinOp.div
 		min gives MaxonBinOp.min
 		max gives MaxonBinOp.max
 
-		// ⭐ EC18's HIGH MULTIPLY HAS NO `MaxonBinOp` TWIN, and that is a property of the LANGUAGE
+		// ⭐ THE HIGH MULTIPLY HAS NO `MaxonBinOp` TWIN, and that is a property of the LANGUAGE
 		// rather than an omission here: no source operator spells "bits 64..127 of a 128-bit product".
 		// It is minted by `StrengthReduceDivision` at the Std tier and lowered to one instruction, so
 		// nothing ever needs to carry it BACK to an operator. Unlike the float-only three above there is
@@ -435,13 +425,11 @@ end 'maxonCmpOpOfStdPred'
 // unary opcode has a source-level twin (the forward map is a 1:1 rename in every arm), so every arm
 // answers and the round trip checks all of them.
 //
-// ⚠ **WHO DECLINES WHAT MOVED ON 2026-08-31 AND THIS COMMENT USED TO SAY OTHERWISE.** It said the FOLDER
-// declines the conversions, the intrinsics and the reinterpretations. Since float folding landed, the
-// intrinsics are folded (`TypeRules.foldFloatUnaryOp`, reached through this map), and the two
-// conversions and the two reinterpretations are decided by the PASS — `foldConstants` answers them from
-// `valueType` and never asks a folder at all, because only the Std tier knows which domain a
-// `ParsedInt` is in. What is unchanged is this map's own job: it renames, it checks its inverse, and it
-// decides nothing.
+// ⚠ **WHO DECLINES WHAT.** The intrinsics ARE folded (`TypeRules.foldFloatUnaryOp`, reached through
+// this map); the two conversions and the two reinterpretations are decided by the PASS — `foldConstants`
+// answers them from `valueType` and never asks a folder at all, because only the Std tier knows which
+// domain a `ParsedInt` is in. This map's own job is narrower still: it renames, it checks its inverse,
+// and it decides nothing.
 export function maxonUnaryOpOfStdOpcode(opcode StdUnaryOpcode) returns MaxonUnaryOp
 	let op = match opcode 'map'
 		neg gives MaxonUnaryOp.neg
@@ -482,8 +470,8 @@ end 'maxonUnaryOpOfStdOpcode'
 // Bit k set iff DECLARED parameter k is a float — the per-argument register-file mask an indirect call
 // carries, read off the CALLEE's declared types and never off the argument values. Both indirect shapes come
 // through here now: a function value hands it the declared `FunctionShape`'s parameters
-// (`appendCallIndirect`), a witness call the requirement's declared formals (`witnessFormalTypes`), and the
-// second of those used to read the actuals instead — see that function for the wasm trap it cost. The
+// (`appendCallIndirect`), a witness call the requirement's declared formals (`witnessFormalTypes`) —
+// DECLARED, never the actuals, for the wasm trap that function records. The
 // trailing uniform-ABI env pointer is an i64 no parameter describes, so the walk over the parameters alone
 // leaves its bit clear, which is exactly right; a witness call's RECEIVER is covered the same way, by the
 // `integer` its formal list is seeded with.
@@ -532,22 +520,21 @@ function signatureHasFunctionParam(sig FuncSignature) returns bool
 end 'signatureHasFunctionParam'
 
 // Public entry: lower a whole MaxonModule to a fresh StdModule. Takes the whole `Project`, because the
-// lowering now needs three things off it: the `funcSignatures` registry (label→positional argument
-// slotting), the `.rdata` table (`globalData`, where string literals and — P1.6-B1 — layout descriptors
-// register), and the whole-program `ProgramSignatures` (`queryProgramSignatures`, memoized before the
-// pipeline) whose `genericInstances`/`structTypes` size and mangle a generic instance's layout descriptor.
+// lowering needs three things off it: the `funcSignatures` registry (label→positional argument
+// slotting), the `.rdata` table (`globalData`, where string literals and layout descriptors register),
+// and the whole-program `ProgramSignatures` (`queryProgramSignatures`, memoized before the pipeline)
+// whose `genericInstances`/`structTypes` size and mangle a generic instance's layout descriptor.
 //
-// ⚠ **`project` is a P1.6-B1 addition** — the pre-B1 lowering took only `funcSignatures` + `globalData`
-// and never touched the project. Dictionary-passing forced it: a `sizeof(T)` call site must materialise
-// the receiver instance's descriptor, which needs the whole-program `(baseId, args)` payload that lives
-// only on `ProgramSignatures`, and that is reachable only through the project.
+// ⚠ **DICTIONARY-PASSING IS WHAT FORCES THE WHOLE `project` IN.** A `sizeof(T)` call site must
+// materialise the receiver instance's descriptor, which needs the whole-program `(baseId, args)`
+// payload that lives only on `ProgramSignatures`, and that is reachable only through the project.
 
 // The set of qualified function names whose body reads `sizeof(T)` and therefore carries a hidden
-// trailing layout-descriptor parameter (P1.6-B1). Built once per lowering by an op-scan; read at a call
+// trailing layout-descriptor parameter. Built once per lowering by an op-scan; read at a call
 // site to decide whether to append the descriptor argument, and per callee to bind the descriptor param.
 export typealias LayoutNeedingFuncSet = Map with (ByteArray, bool)
 
-// The set of witness-table `.rdata` labels already emitted (P1.7a slice 2a) — the blob, its method-slot
+// The set of witness-table `.rdata` labels already emitted — the blob, its method-slot
 // relocations, and the DCE-rooting of each impl are recorded ONCE per `(Type, Interface)`, even though a
 // concrete dispatch may reference the table at many call sites. `registerRdataConstantLabeled` is idempotent
 // by label on its own, but the relocations and the root are not, so this dedup gate guards them.
@@ -577,7 +564,7 @@ export typealias ImmortalStringTableLabelSet = Set with String
 // all, and a container's box owes one per column slot.
 export typealias ImmortalStructBoxLabelSet = Set with String
 
-// The set of witness-slot ABI adapters already REQUESTED (WASM3) — keyed on the adapter's symbol, which is
+// The set of witness-slot ABI adapters already REQUESTED — keyed on the adapter's symbol, which is
 // the `(conformer, interface, method)` triple by construction (`witnessSlotAdapterSymbol`). One conformer's
 // slot can be reached from several tables — a requirement inherited through `extends` sits in the derived
 // interface's table AND in the base's — and each table stamps its own relocation, so the dedup has to be on
@@ -585,7 +572,7 @@ export typealias ImmortalStructBoxLabelSet = Set with String
 typealias WitnessAdapterNameSet = Set with ByteArray
 
 // ⭐⭐ **WHICH TABLE A WITNESS MINT IS FOR — the conformer's ONE SHARED table, or the table of ONE CONCRETE
-// INSTANCE of it (G19).**
+// INSTANCE of it.**
 //
 // The compiler keys a generic conformer's table by its BASE name, and that reduction is what lets one compiled impl
 // and one table serve every instantiation (`ProgramSignatures.conformerNameOfType`). Its premise, stated at
@@ -600,7 +587,7 @@ typealias WitnessAdapterNameSet = Set with ByteArray
 // does an instance that is not CONCRETE (an instance over the enclosing body's own parameters has no
 // descriptor to name, exactly as `emitInstanceDescriptorAddr` records one mechanism over).
 //
-// ⚠⚠ **THOSE TWO REDUCTIONS ARE NOT ONE FACT, AND A CALL SITE HAS TO TELL THEM APART (BATCH43).** The first
+// ⚠⚠ **THOSE TWO REDUCTIONS ARE NOT ONE FACT, AND A CALL SITE HAS TO TELL THEM APART.** The first
 // is served correctly by the shared table; the second is served by NOTHING, and sending it here anyway is
 // what made `stdlib/Interfaces.maxon`'s `extension Iterable.withIterator` refuse with E3128 for a witness
 // its callee never reads. The constraint-argument door asks `constraintArgumentHasNoTable` FIRST and passes
@@ -620,7 +607,7 @@ end 'WitnessTableInstance'
 typealias DictionaryCarryingConformanceMap = Map with (String, bool)
 
 // ⭐ **ONE DEFERRED WITNESS-SLOT ABI ADAPTER — recorded while a table is stamped, built after the function
-// walk (WASM3).** A table is stamped from inside a BODY's lowering, and the body walk iterates
+// walk.** A table is stamped from inside a BODY's lowering, and the body walk iterates
 // `stdModule.functions`; pushing the adapter there would be appending to the array being iterated. So the
 // stamp records what it needs and `installWitnessSlotAdapters` drains the list once the walk is done —
 // the same "synthesize after, not during" shape `Runtime/FnRefThunk.installFnRefThunks` uses, one phase
@@ -641,7 +628,7 @@ type WitnessAdapterRequest
 	// How many arguments a `witnessCall` through this slot passes — the adapter's whole parameter list.
 	export let slotArity as ParamCount
 
-	// WHICH table stamped this slot, and therefore WHERE the dictionary the adapter passes comes from (G19):
+	// WHICH table stamped this slot, and therefore WHERE the dictionary the adapter passes comes from:
 	// `perInstance` names the instance whose descriptor and witnesses the adapter materializes, `shared` is
 	// the null dictionary `requireWitnessSlotImplIgnoresDictionary` proves nothing reads.
 	export let instance as WitnessTableInstance
@@ -663,7 +650,7 @@ end 'WitnessAdapterRequest'
 typealias WitnessAdapterRequestArray = Array with WitnessAdapterRequest
 
 // ⭐⭐ **ONE CALL THAT PASSED A ZERO WHERE A `where` CONSTRAINT'S WITNESS TABLE BELONGS, RECORDED WHILE THE
-// BODY IS LOWERED AND PROVED SOUND AFTER THE WALK (BATCH43).**
+// BODY IS LOWERED AND PROVED SOUND AFTER THE WALK.**
 //
 // A constraint's type argument may be a generic instance written over the CALLING body's own type
 // parameters — `stdlib/Interfaces.maxon`'s `extension Iterable.withIterator` builds
@@ -672,7 +659,7 @@ typealias WitnessAdapterRequestArray = Array with WitnessAdapterRequest
 // its dictionary-carrying slots point at adapters that must supply the instantiation's descriptor, and the
 // descriptor is a run-time fact of the enclosing frame (`emitInstanceDescriptorAddr` records the same wall
 // one dictionary column over). `witnessTableInstanceFor` reduces such a request to the SHARED table, whose
-// adapters then hand the impl a null dictionary — and G19's `requireWitnessSlotImplIgnoresDictionary`
+// adapters then hand the impl a null dictionary — and `requireWitnessSlotImplIgnoresDictionary`
 // refuses it with E3128, which is the right answer about the TABLE and the wrong place to ask it: the
 // question the ARGUMENT poses is whether the callee reads this witness at all.
 //
@@ -715,7 +702,7 @@ typealias RangeSiteIndex = int(0 to u64.max)
 typealias RangeSiteIndexArray = Array with RangeSiteIndex
 
 // ⭐⭐ **HANDS EACH OF ONE FUNCTION'S RANGE-CHECK SITES THE STD `opRefs` POSITION ITS VALUE COMES TO
-// REST AT (P1.9) — the translation only this pass can make.** The parser records a site's position as a
+// REST AT — the translation only this pass can make.** The parser records a site's position as a
 // MAXON ordinal (`RangeCheckSite.maxonOpPos`), because at the Maxon tier a narrowing cast may emit no op
 // at all and an ordinal is the only anchor there is. `InsertRangeChecks` runs one pass later, at the Std
 // tier, where each of those Maxon ops has become N and the ordinal means nothing. This lowering stands on
@@ -725,7 +712,7 @@ typealias RangeSiteIndexArray = Array with RangeSiteIndex
 // ⚠ **THE GROUPING IS A COUNTING SORT, NOT A PER-BLOCK SCAN OF THE SITE LIST.** A scan is
 // O(sites x blocks), which is precisely the product `tests/ladders/genrangesites.sh`'s `onefunc` mode
 // was written to catch — N sites concentrated in ONE function is the shape that turns it into a
-// quadratic, and `InsertRangeChecks.guardSiteAt`'s own header records the last time this rung paid one.
+// quadratic, and `InsertRangeChecks.guardSiteAt`'s own header records what such a product costs.
 // `runEnd` is counted, then accumulated into one-past-the-end of each block's run; the placement pass
 // then walks the sites BACKWARDS, which both keeps each run in ascending source order (a stable sort)
 // and leaves `cursor` sitting exactly at its run's START. So the two columns that sorted the sites ARE
@@ -877,7 +864,7 @@ end 'lowerMaxonToStd'
 // label this minted — the identical call, returning the identical answer. Nothing is built twice and no
 // second blob-shaping path exists to drift.
 //
-// ⚠ **WHAT IT DOES COST: one additional traversal of the module's ops, and it was not foldable.** The two
+// ⚠ **WHAT IT DOES COST: one additional traversal of the module's ops, foldable into no existing walk.** The two
 // existing walks at this point in the pipeline cannot carry it — `scanRuntimeUsage` is a pure analysis
 // whose whole contract is to compute a usage struct (threading a mutable `.rdata` sink through it would
 // make every `record*Usage` helper a potential mutator), and `collectFnRefThunkTargets` harvests function
@@ -1009,13 +996,13 @@ function requireRuntimeCallPositional(callee ByteArray, argLabels ByteArrayArray
 end 'requireRuntimeCallPositional'
 
 // ⭐⭐ **WHICH DIVISION IS BEING EXPANDED, AND — WHERE THERE IS ONE — THE ERROR-FLAG REGISTER IT WRITES.**
-// The flag is the ONE thing that differs between the fallible divisions (A1) and the total remainder
-// (A1x), which is why `lowerDivisionExpansion` is one function and not two near-copies of a four-op guard.
+// The flag is the ONE thing that differs between the fallible divisions and the total remainder
+// which is why `lowerDivisionExpansion` is one function and not two near-copies of a four-op guard.
 //
 // ⭐ **THE FLAG RIDES THE VARIANT SO A MISMATCH IS UNREPRESENTABLE, NOT MERELY CHECKED.** The register is
 // minted by `lowerTryCall` from the `tryCall`'s second result and a total division has no such register,
 // so "which division" and "does it write a flag" would otherwise be two copies of one fact travelling as
-// two parameters — and this file's first draft did exactly that, with a `panic` holding them together.
+// two parameters held together by a `panic`.
 // **DERIVE > CHECK:** there is nothing left to check, because `guardedRemainder` cannot be spelled WITH a
 // flag and neither checked arm can be spelled without one. `divisionExpansionKind` reads the kind back
 // out, so everything downstream still asks `CheckedDivisionKind` and no second classification exists.
@@ -1027,11 +1014,11 @@ union DivisionExpansion
 	// on an OR'd divisor so it never sees the zero it reported. Integer or float.
 	checkedQuotient(errorFlag ValueId)
 
-	// `__checked_mod`: the same, plus A1x's overflow guard — a divisor the compiler could not prove
+	// `__checked_mod`: the same, plus the overflow guard — a divisor the compiler could not prove
 	// non-zero is one it could not prove is not `-1` either.
 	checkedRemainder(errorFlag ValueId)
 
-	// `__guarded_mod` (A1x): the divisor is PROVEN non-zero, so there is no flag to write and no divisor to
+	// `__guarded_mod`: the divisor is PROVEN non-zero, so there is no flag to write and no divisor to
 	// repair — only the overflow guard, which answers `0` and raises nothing.
 	guardedRemainder
 end 'DivisionExpansion'
@@ -1062,7 +1049,7 @@ type MaxonToStdLowering
 	// `create` like every other registry here, so the lowering still holds no `Project`.
 	var functionTypes as FunctionTypeRegistry
 
-	// The whole-program signature index (`queryProgramSignatures`) — P1.6-B1's source for a generic
+	// The whole-program signature index (`queryProgramSignatures`) — the source for a generic
 	// instance's `(baseId, args)` payload: `ensureLayoutDescriptor` sizes and mangles a descriptor
 	// through `genericInstanceBoxSize` / `genericInstanceSoleArgLogicalSize` / `mangleGenericInstance`.
 	var signatures as ProgramSignatures
@@ -1073,24 +1060,24 @@ type MaxonToStdLowering
 	var currentByRefParams as ParamPositionMask
 	var currentParamCount as ParamCount
 
-	// The Maxon module's CHECKED name index (`FunctionNameIndex`, A2l), built once for the whole pipeline
+	// The Maxon module's CHECKED name index (`FunctionNameIndex`), built once for the whole pipeline
 	// and threaded in. `buildLayoutNeedingFuncs` derives its FILTERED set by walking `funcNames.functions`,
 	// so that set's key space is provably the duplicate-free one rather than whatever the module happened to
-	// hold — the same argument `SemanticCheck`'s throws map and escape summary now stand on.
+	// hold — the same argument `SemanticCheck`'s throws map and escape summary stand on.
 	let funcNames as FunctionNameIndex
 
-	// The qualified names of functions that carry a hidden layout-descriptor parameter (P1.6-B1) — built
+	// The qualified names of functions that carry a hidden layout-descriptor parameter — built
 	// once by `buildLayoutNeedingFuncs` (a PARAMETER-COUNT scan, never an op-scan: see its header for the
 	// transitive reservations an op-scan would miss), then read at every call site (append the descriptor
 	// argument?) and per callee (bind the descriptor param?).
 	var layoutNeedingFuncs as LayoutNeedingFuncSet
 
-	// `GenericInstanceId` ⇒ the `.rdata` label of its emitted descriptor blob (P1.6-B1). Filled lazily by
+	// `GenericInstanceId` ⇒ the `.rdata` label of its emitted descriptor blob. Filled lazily by
 	// `ensureLayoutDescriptor` — one blob per instance actually used as a `sizeof(T)` receiver — so a
 	// program pays for exactly the descriptors it references.
 	var layoutDescriptors as LayoutDescriptorRegistry
 
-	// The whole-program user interface registry (P1.7a slice 2a), from `project.interfaces` — resolved (with
+	// The whole-program user interface registry, from `project.interfaces` — resolved (with
 	// the synthesized builtins) to read an interface's method LIST when building a witness table blob (one slot
 	// per method, in decl order). Fully merged by lowering time, so a cross-file interface resolves here.
 	var interfaces as IrInterfaceMap
@@ -1105,7 +1092,7 @@ type MaxonToStdLowering
 	// first use — see `witnessSlotsOf` for why it is memoized rather than re-walked per dispatch op.
 	var witnessSlotMemo as WitnessSlotListMemo
 
-	// The witness tables already emitted (P1.7a slice 2a) — the dedup gate for the blob's relocations + root.
+	// The witness tables already emitted — the dedup gate for the blob's relocations + root.
 	var emittedWitnessTables as WitnessTableLabelSet
 
 	// The immortal EMPTY-container records already registered — see `ImmortalEmptyArrayLabelSet`.
@@ -1117,7 +1104,7 @@ type MaxonToStdLowering
 	// The imaged struct boxes whose column slots are already relocated — see `ImmortalStructBoxLabelSet`.
 	var emittedImmortalStructBoxes as ImmortalStructBoxLabelSet
 
-	// The witness-slot ABI adapters already requested (WASM3) — see `WitnessAdapterNameSet`.
+	// The witness-slot ABI adapters already requested — see `WitnessAdapterNameSet`.
 	var emittedWitnessAdapters as WitnessAdapterNameSet
 
 	// The adapters whose bodies are still to be built — see `WitnessAdapterRequest`. Drained ONCE, after the
@@ -1131,13 +1118,13 @@ type MaxonToStdLowering
 	// Which conformances hold a dictionary-carrying impl — see `DictionaryCarryingConformanceMap`.
 	var dictionaryCarryingConformances as DictionaryCarryingConformanceMap
 
-	// Which member `checkConformance` accepted for each witness slot (R10), from `project.witnessSlotImpls` —
+	// Which member `checkConformance` accepted for each witness slot, from `project.witnessSlotImpls` —
 	// what `ensureWitnessTable` stamps a slot's relocation FROM, instead of re-deriving the impl symbol by a
 	// second un-suffixed join of the same two names. See `witnessSlotImpl`.
 	var witnessSlotImpls as WitnessSlotImplMap
 
 	// The backend's `.rdata` table — where `stringLiteral` registers its immortal 56-byte record and
-	// its NUL-terminated byte blob (P1.2 wave A). It is the SAME table the backend later resolves the
+	// its NUL-terminated byte blob. It is the SAME table the backend later resolves the
 	// emitted `rdataAddr` label against, and the one that carries the buffer fixups to the PE writer.
 	// Threaded here rather than a field on some later pass because this is the FIRST tier that turns a
 	// source literal into rdata bytes.
@@ -1151,20 +1138,20 @@ type MaxonToStdLowering
 	// value's source-level type (it must — a bool `and` is control flow), and it publishes the
 	// column precisely so a later pass need not re-derive one. The alternative — recovering an
 	// operand's type by walking back to its defining op — is a SECOND TYPE SYSTEM in the tier
-	// furthest from the source, which is the exact thing `operandType` was added to prevent (see
+	// furthest from the source, which is the exact thing `operandType` prevents (see
 	// StdDialect's `binOp` header).
 	//
 	// It is a per-function BINDING rather than a parameter threaded through `lowerOp`, because
 	// every op in a function shares one column and the walk is already per-function.
 	var valueTags as ValueTypeTagArray
 
-	// The per-value closure-environment column of the function CURRENTLY being lowered (P1.5-A2b-2) —
+	// The per-value closure-environment column of the function CURRENTLY being lowered —
 	// re-pointed per function like `valueTags`, from the SAME `IrFunction.valueClosureEnv` the parser
 	// published. `appendCalleeEnvArgs` reads it to thread a function-value ARGUMENT's environment to a callee.
 	var valueClosureEnv as ValueIdArray
 
 	// The per-value WITNESS-PAIRING column of the function CURRENTLY being lowered
-	// (P1.7a-existentials slice 1) — re-pointed per function like `valueTags`, from the SAME
+	// — re-pointed per function like `valueTags`, from the SAME
 	// `IrFunction.valueWitnessIds` the parser published. `witnessForExistentialValue` reads it to FORWARD an
 	// already-existential value's witness half rather than re-resolving a table that does not exist, and
 	// `lowerCall` reads it for the WITNESS an interface-returning call defines (the parser reserved that id;
@@ -1197,7 +1184,7 @@ type MaxonToStdLowering
 	// (`project.immortalConstArraySites`). Read by `lowerConstArrayLiteral` and by nothing else.
 	let immortalConstArraySites as ImmortalConstArraySiteMap
 
-	// ⭐⭐ **WHERE THIS TIER WRITES DOWN WHAT IT KNOWS ABOUT AN ELEMENT STRIDE (EC15)** — the container stamp
+	// ⭐⭐ **WHERE THIS TIER WRITES DOWN WHAT IT KNOWS ABOUT AN ELEMENT STRIDE** — the container stamp
 	// of every runtime call whose first argument is a CONCRETE `Array with T`, keyed by the Std op index the
 	// call is about to occupy (`project.stdOpElementStrides`). Written by `recordStaticElementFacts` and read
 	// only by `inlineManagedPrimitives`, the very next pass but one — `insertRangeChecks` is the only thing
@@ -1219,7 +1206,7 @@ type MaxonToStdLowering
 
 	// The per-value EXISTENTIAL-INSTANCE column of the function CURRENTLY being lowered — re-pointed per
 	// function like `valueTags`, from `IrFunction.valueExistentialInstances`. `witnessFormalType` reads the
-	// RECEIVER's entry to resolve an associated formal at the SITE that declared it (W59).
+	// RECEIVER's entry to resolve an associated formal at the SITE that declared it.
 	var currentExistentialInstances as ValueExistentialInstanceMap
 
 	// ⭐ The whole-program type-name interner (`project.typeNames`), which `valueNameIds` indexes into and
@@ -1250,7 +1237,7 @@ type MaxonToStdLowering
 	// give the whole-program counter slot. Re-stamped per function beside `currentFuncName`.
 	var currentCovPointBase as CovPointId
 
-	// The ValueId of the CURRENT function's hidden layout-descriptor parameter (P1.6-B1), or an unused 0
+	// The ValueId of the CURRENT function's hidden layout-descriptor parameter, or an unused 0
 	// when it carries none — `hasImplicitLayout` is the authoritative "does it carry one?" bit, because a
 	// zero-user-parameter generic method's descriptor slot is legitimately ValueId 0 (no sentinel).
 	var implicitLayoutValueId as ValueId
@@ -1259,7 +1246,7 @@ type MaxonToStdLowering
 	// `implicitLayoutValueId` — read by `sizeof(T)` lowering and `forwardCallerLayout`.
 	var hasImplicitLayout as bool
 
-	// The ValueId of the CURRENT function's hidden fixed-element-count parameter (W190) — the slot between
+	// The ValueId of the CURRENT function's hidden fixed-element-count parameter — the slot between
 	// the layout descriptor and the constraint witnesses. Read only to FORWARD it, by
 	// `emitFixedElementCountOf`: `countof(Self)` itself needs nothing here, because the parser resolved its
 	// own reservation and the expression simply IS this parameter.
@@ -1269,23 +1256,23 @@ type MaxonToStdLowering
 	// legitimate slot for a nullary method, exactly as it is for the descriptor.
 	var hasImplicitFixedElementCount as bool
 
-	// The number of hidden WITNESS parameters the CURRENT function carries (P1.7a slice 2a) — one per `where`
+	// The number of hidden WITNESS parameters the CURRENT function carries — one per `where`
 	// constraint of its enclosing type, for an instance method of a constrained generic type (0 otherwise).
 	// The witness parameters occupy the FINAL `currentWitnessCount` ValueIds, so witness slot `i` is
 	// `witnessParamBase + i`. `bindImplicitParams` sets both from the type's constraint count.
 	var currentWitnessCount as ParamCount
 
-	// The ValueId of the CURRENT function's FIRST witness parameter (P1.7a slice 2a) — `paramCount -
+	// The ValueId of the CURRENT function's FIRST witness parameter — `paramCount -
 	// currentWitnessCount`. Read by `lowerWitnessDispatch` to forward the caller's own witness slot to a
 	// dispatch. Meaningless (and unread) when `currentWitnessCount` is 0.
 	var witnessParamBase as ValueId
 
-	// The `throws` clause of the function CURRENTLY being lowered (P1.4b) — re-pointed per function like
+	// The `throws` clause of the function CURRENTLY being lowered — re-pointed per function like
 	// `valueTags`. `emitRetOrErrorReturn` reads it to decide whether a normal `ret`/`retVoid` becomes the
 	// dual-register `errorReturn` (a THROWING function writes both the value AND a zero error flag).
 	var currentThrows as ThrowsClause
 
-	// The Std RETURN TYPE of the function CURRENTLY being lowered (F3b) — re-pointed per function like
+	// The Std RETURN TYPE of the function CURRENTLY being lowered — re-pointed per function like
 	// `currentThrows`, from the SAME `IrFunction.returnType` the backend reads. A throwing function's
 	// throw-edge primary value is a family-default the caller ignores, so only its REGISTER FILE matters;
 	// `emitZeroConstOfReturnType` reads this to class that default as the return type's file (an XMM zero
@@ -1293,7 +1280,7 @@ type MaxonToStdLowering
 	// register off, so the throw-edge default and the return register cannot come to disagree.
 	var currentReturnType as StdReturnType
 
-	// The MAXON return type of the function CURRENTLY being lowered (P1.7a slice 2, the return ABI) —
+	// The MAXON return type of the function CURRENTLY being lowered —
 	// re-pointed per function like `currentThrows`. It is carried BESIDE the collapsed `currentReturnType`
 	// and not instead of it, because the two answer different questions and only one of them survives the
 	// collapse: `StdReturnType` is `void | value(StdType)`, and an interface collapses to a bare `i64` there
@@ -1302,7 +1289,7 @@ type MaxonToStdLowering
 	// `functionUsesSecondaryReturnSlot`, and reads the interface NAME out of it to materialize the witness.
 	var currentMaxonReturnType as MaxonReturnType
 
-	// The whole-program range-check plan (P1.9), from `project.rangeChecks` — the SAME table
+	// The whole-program range-check plan, from `project.rangeChecks` — the SAME table
 	// `InsertRangeChecks` reads its sites from one pass later, held here so this pass can answer the one
 	// question that table cannot ask for itself: which STD op position each site's Maxon ordinal became.
 	// See `RangeSiteWalk`.
@@ -1414,7 +1401,7 @@ type MaxonToStdLowering
 		// info, and then every writer on that column returns before touching it.
 		self.stdModule.spans.armed = project.debugInfo
 
-		// Which functions carry a hidden layout-descriptor parameter (P1.6-B1) — computed ONCE, up front,
+		// Which functions carry a hidden layout-descriptor parameter — computed ONCE, up front,
 		// so both directions of the ABI (a callee binding its slot, a caller appending the argument) read
 		// one whole-program answer. An op-scan over the Maxon module; O(total ops), linear.
 		self.buildLayoutNeedingFuncs()
@@ -1465,7 +1452,7 @@ type MaxonToStdLowering
 				stdParams.push(StdType.i64 if maskHasParam(func.reassignedParamMask, param: k) else maxonTypeToStdType(paramType))
 			end 'eachParam'
 
-			// The uniform ABI's companion environment parameters (P1.5-A2b-2) sit PAST the user parameters:
+			// The uniform ABI's companion environment parameters sit PAST the user parameters:
 			// `paramCount` counts them, `maxonParamTypes` does not (each is an i64 pointer with no source type).
 			// Grow the Std parameter list to `paramCount` so `emitParams` materializes every incoming register and
 			// the wasm functype covers every slot.
@@ -1482,7 +1469,7 @@ type MaxonToStdLowering
 		// ids need no per-function reset — the parser already numbered them densely
 		// per function, and this pass passes them through untouched.
 		// An INDEX loop, not `for … in`: the element is a BORROW of `stdModule`, and the call below is
-		// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
+		// recorded as writing that same storage. ⚖ Canonical note at
 		// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 		for fnIndex in 0 upto self.stdModule.functions.count() 'eachFunc'
 			let srcFunc = try self.stdModule.functions.get(fnIndex) otherwise panic("lowerFunctionBodies: fnIndex {fnIndex} is below self.stdModule.functions.count()")
@@ -1517,26 +1504,26 @@ type MaxonToStdLowering
 			self.currentByRefParams = srcFunc.reassignedParamMask
 			self.currentParamCount = srcFunc.paramCount
 
-			// The closure-environment column travels with it (P1.5-A2b-2): `appendCalleeEnvArgs` threads a
+			// The closure-environment column travels with it: `appendCalleeEnvArgs` threads a
 			// function-value argument's env from here.
 			self.valueClosureEnv = srcFunc.valueClosureEnv
 
-			// The witness-pairing column travels with it too (P1.7a-existentials slice 1): an existential
+			// The witness-pairing column travels with it too: an existential
 			// argument's witness half is FORWARDED from here rather than re-resolved.
 			self.valueWitnessIds = srcFunc.valueWitnessIds
 
-			// The existential-instance column travels with it as well (W59): a dispatch's associated FORMAL is
+			// The existential-instance column travels with it as well: a dispatch's associated FORMAL is
 			// resolved from the RECEIVER's own `with` arguments, which live only here.
 			self.currentExistentialInstances = srcFunc.valueExistentialInstances
 
-			// The name column travels with it too (P1.6-B1): `materializeLayoutArg` reads a `genericInstance`
+			// The name column travels with it too: `materializeLayoutArg` reads a `genericInstance`
 			// receiver's `GenericInstanceId` out of it.
 			self.valueNameIds = srcFunc.valueNameIds
 			self.currentFuncName = srcFunc.name
 			self.currentKeepsItsOwnFrame = false
 			self.bindCovPointBase(srcFunc)
 
-			// Bind this function's hidden implicit parameters (P1.6-B1 layout + P1.7a slice 2a witnesses).
+			// Bind this function's hidden implicit parameters (layout + witnesses).
 			self.bindImplicitParams(srcFunc)
 			self.currentThrows = srcFunc.throwsTypeName
 
@@ -1544,7 +1531,7 @@ type MaxonToStdLowering
 			// so it is final here — read it, don't re-collapse `maxonReturnType`.
 			self.currentReturnType = srcFunc.returnType
 
-			// The UNCOLLAPSED return type travels with it (P1.7a slice 2): the collapse above erased whether
+			// The UNCOLLAPSED return type travels with it: the collapse above erased whether
 			// this function hands back a fat pointer, and `emitRetOrErrorReturn` needs exactly that.
 			self.currentMaxonReturnType = srcFunc.maxonReturnType
 
@@ -1552,7 +1539,7 @@ type MaxonToStdLowering
 			self.nextValueId = srcFunc.valueTags.count()
 
 			// Point the range-check site walk at THIS function, so the block walk below can hand each of its
-			// sites the Std position the parser's Maxon ordinal became (P1.9). See `RangeSiteWalk`.
+			// sites the Std position the parser's Maxon ordinal became. See `RangeSiteWalk`.
 			self.bindRangeSiteWalk(srcFunc)
 			self.emitParams(srcFunc)
 
@@ -1641,7 +1628,7 @@ type MaxonToStdLowering
 		return self.stdModule
 	end 'lower'
 
-	// Point `rangeSites` at THIS function's recorded range-check sites (P1.9). A function with no
+	// Point `rangeSites` at THIS function's recorded range-check sites. A function with no
 	// `rangeChecks` entry — or, far more often, one whose entry records no SITE, because an entry is filed
 	// for a function that merely passes a constant argument or constructs a generic instance
 	// (`Parser.commitRangeChecks`) — shares the inactive walk and allocates nothing.
@@ -1713,12 +1700,12 @@ type MaxonToStdLowering
 			tryCall(result, errorFlag, callee, args, argLabels, _, _, argDefaultSlots, _) then self.lowerTryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots, dstBlock: dstBlock)
 			panicAbort(message) then self.lowerPanicAbort(message, dstBlock: dstBlock)
 
-			// A function VALUE — a `.text` code address (P1.5-A1). Lowers to the Std `funcAddr`, the
+			// A function VALUE — a `.text` code address. Lowers to the Std `funcAddr`, the
 			// `.text` twin of `globalAddr`; a PLAIN function routes through its `__fnref_` env-thunk so the
-			// materialized address has the uniform `(userargs, env) -> R` shape (P1.5-A2b-2).
+			// materialized address has the uniform `(userargs, env) -> R` shape.
 			functionRef(result, funcName) then self.lowerFunctionRef(result, funcName: funcName, dstBlock: dstBlock)
 
-			// A call THROUGH a function value (P1.5-A1) — lowers to the Std `callIndirect`, the callee value
+			// A call THROUGH a function value — lowers to the Std `callIndirect`, the callee value
 			// passing through as the register the call goes through. Positional args, no labels to slot.
 			indirectCall then self.lowerIndirectCall(hlOp, dstBlock: dstBlock)
 
@@ -1726,48 +1713,48 @@ type MaxonToStdLowering
 			throwError or
 				propagateError then panic("lowerMaxonToStd: an error terminator appeared as a body op (parser bug — throwError/propagateError are always block terminators)")
 
-			// P1.5-B1a: `async f(…)` spills its scalar args into a slab argument buffer and spawns a green
+			// `async f(…)` spills its scalar args into a slab argument buffer and spawns a green
 			// thread; `await p` drives the scheduler until the promise completes. `args` is safe to bind in
 			// this big match because a later field (`argLabels`/`argRanges`) follows it — see lowerIndirectCall.
 			asyncCall(result, callee, args, argLabels, _, _, argDefaultSlots) then self.lowerAsyncCall(result, callee: callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots, dstBlock: dstBlock)
 			await (result, promise) then self.lowerAwait(result, promise: promise, dstBlock: dstBlock)
 			tryAwait(result, errorFlag, promise) then self.lowerTryAwait(result, errorFlag: errorFlag, promise: promise, dstBlock: dstBlock)
 
-			// `sizeof(T)` — a runtime read of the enclosing instance's layout descriptor (P1.6-B1). The
+			// `sizeof(T)` — a runtime read of the enclosing instance's layout descriptor. The
 			// parser folds every CONCRETE sizeof to a literal, so this op only ever carries a typeParameter.
 			sizeofType(result, targetType) then self.lowerSizeofType(result, targetType: targetType, dstBlock: dstBlock)
 
-			// P1.7 slice 2: a `b"…"` literal — an owned heap `Array with Byte` record over an immortal rdata blob.
+			// A `b"…"` literal — an owned heap `Array with Byte` record over an immortal rdata blob.
 			constArrayLiteral(result, elementSize, elementCount, bytes) then self.lowerConstArrayLiteral(result, elementSize: elementSize, elementCount: elementCount, bytes: bytes, dstBlock: dstBlock)
 
 			// The dense-match jump table is ALWAYS a block terminator, never a body op — see `lowerTerminator`.
 			switch then panic("lowerMaxonToStd: a `switch` op appeared as a body op (parser bug — the jump table is always a block terminator)")
 
-			// A constrained-type-parameter dispatch (P1.7a slice 2a) — materialize/forward the witness address
+			// A constrained-type-parameter dispatch — materialize/forward the witness address
 			// and emit the fused `StdOp.witnessCall`. Routed through a helper that RE-MATCHES the op in a SMALL
 			// match rather than binding `args` in this big one — the tail-slot-Array corruption `lowerIndirectCall`
 			// documents.
 			witnessDispatch then self.lowerWitnessDispatch(hlOp, dstBlock: dstBlock)
 
-			// The THROWING twin (P1.7a slice 2b-v) — the same dispatch plus the second `errorFlag` result, so it
+			// The THROWING twin — the same dispatch plus the second `errorFlag` result, so it
 			// goes through its own small re-match for the same tail-slot-`Array` reason.
 			witnessTryDispatch then self.lowerWitnessTryDispatch(hlOp, dstBlock: dstBlock)
 
-			// A panic whose message was ASSEMBLED at run time (A3n) — the pointer passes through verbatim.
+			// A panic whose message was ASSEMBLED at run time — the pointer passes through verbatim.
 			panicAbortValue(messagePtr) then self.stdModule.appendOp(dstBlock, op: StdOp.osPanicValue(messagePtr))
 
 			// The error flag a routed bare `throw` carries to its block handler — `throwError`'s encode,
 			// as a value rather than as a terminator's side effect.
 			errorFlagEncode(result, errorValue, errorIsBoxed) then self.lowerErrorFlagEncode(result, errValue: errorValue, errIsBoxed: errorIsBoxed, dstBlock: dstBlock)
 
-			// The three service ops (SV1 wave 3, SV2). All go through a SMALL re-match for
+			// The three service ops. All go through a SMALL re-match for
 			// `lowerWitnessDispatch`'s reason — an arm here binds nothing, so a field added to any of them
 			// cannot be dropped by this match while another reader keeps it.
 			serviceSpawn then self.lowerServiceSpawn(hlOp, dstBlock: dstBlock)
 			serviceSend then self.lowerServiceSend(hlOp, dstBlock: dstBlock)
 			serviceReplyCell then self.lowerServiceReplyCell(hlOp, dstBlock: dstBlock)
 
-			// W197: a module-level `let` holding a constructed struct of scalars — its box IS the image.
+			// A module-level `let` holding a constructed struct of scalars — its box IS the image.
 			immortalStructRecord then self.lowerImmortalStructRecord(hlOp, dstBlock: dstBlock)
 
 			// A module-level `let` holding an array of string literals. Routed through a SMALL re-match so
@@ -1992,7 +1979,7 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.const(result, value: value, valueType: stdType))
 	end 'lowerLiteral'
 
-	// ⭐ **A STRING LITERAL BECOMES IMMORTAL RDATA + A `lea`** (P1.2 wave A). Two `.rdata` entries are
+	// ⭐ **A STRING LITERAL BECOMES IMMORTAL RDATA + A `lea`**. Two `.rdata` entries are
 	// registered — the NUL-terminated byte blob, and the 56-byte record whose `buffer@0` points at it —
 	// and the result is the RIP-relative ADDRESS of the record. `registerRdataConstant` DEDUPES both by
 	// bytes, so every occurrence of the same literal shares one blob and one record.
@@ -2073,7 +2060,7 @@ type MaxonToStdLowering
 	//
 	// ⭐ **`element_size@24` AND `length@8` ARE THE OP'S, NOT THIS FUNCTION'S**, which is what lets one
 	// emission serve both producers: a `b"…"` passes 1 and its byte count, a PACKED literal passes a NEGATIVE
-	// bit width and its ELEMENT count — a number that is no longer `bytes.count()`, because four 2-bit
+	// bit width and its ELEMENT count — a number that is NOT `bytes.count()`, because four 2-bit
 	// elements share one byte. Hardcoding either here is what would fork this into two lowerings.
 	//
 	// Only the FOUR non-zero fields are stamped: `parent@32` and `element_destroy@40` come pre-zeroed from
@@ -2146,7 +2133,7 @@ type MaxonToStdLowering
 	// and Mach-O's chained-rebase list does not.
 	//
 	// ⭐ **THE RELOCATION IS ALSO WHAT ROOTS THE DESTRUCTOR.** Imaging the global deletes its `__module_init`
-	// construction, and with it the `functionRef` that used to be the callee's only compile-time mention —
+	// construction, and with it the `functionRef` that would otherwise be the callee's only compile-time mention —
 	// `MmRuntime.noteRelocatedFunctionUsage` installs every callee an `.rdata` relocation names, so recording
 	// one here is what keeps the symbol the writer resolves against in the program at all.
 	function ensureImmortalEmptyArrayRecord(elementSize ElementStride, elementDestroy ByteArray) returns String
@@ -2163,8 +2150,8 @@ type MaxonToStdLowering
 
 	// Store `value` into the constant array record's `offset` field (an 8-byte slot). The one store shape the
 	// four field stamps share, so the record layout is written in one place. Named for the RECORD rather than
-	// for the `b"…"` literal that was once its only producer: a PACKED array literal stamps the same four
-	// fields through it, and two of the four now carry a value a byte string never had.
+	// for the `b"…"` literal: a PACKED array literal stamps the same four
+	// fields through it, and two of the four carry a value a byte string never has.
 	function emitConstArrayField(record ValueId, offset ByteOffset, value ValueId, dstBlock IrBlock)
 		self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(record, offset: offset, valueId: value, valueType: StdType.i64))
 	end 'emitConstArrayField'
@@ -2188,16 +2175,16 @@ type MaxonToStdLowering
 		end 'eachParam'
 	end 'emitParams'
 
-	// --- Dictionary-passing substrate (P1.6-B1) ---
+	// --- Dictionary-passing substrate ---
 
-	// Build `layoutNeedingFuncs`: every function that carries the hidden layout-descriptor parameter (P1.6-B1)
+	// Build `layoutNeedingFuncs`: every function that carries the hidden layout-descriptor parameter
 	// — which the PARSER reserved, as the LAST param, for every method whose TRANSITIVE need
 	// (`Queries.foldDescriptorNeeds`: direct `sizeof(T)` or a self-call to a sibling that needs one) was set. So
 	// a method like `indirectSize` that only does `return self.directSize()` carries the param even though it
 	// has no `sizeofType` op of its own — which is exactly why detection is by PARAM COUNT here, not an op-scan:
 	// the reserved slot is the whole-program fact a caller reads to decide whether to append the descriptor arg.
 	function buildLayoutNeedingFuncs()
-		// Walks the CHECKED index's own array rather than the module's (A2l): this set is keyed by function
+		// Walks the CHECKED index's own array rather than the module's: this set is keyed by function
 		// NAME, so two functions of one name would silently collapse into one entry and a caller would read
 		// the wrong one's descriptor need. `FunctionNameIndex` has already refused that pair.
 		for func in self.funcNames.functions 'eachFunc'
@@ -2207,30 +2194,30 @@ type MaxonToStdLowering
 		end 'eachFunc'
 	end 'buildLayoutNeedingFuncs'
 
-	// Does `func` carry a layout-descriptor parameter (P1.6-B1)? The parser reserves it after the user + env +
+	// Does `func` carry a layout-descriptor parameter? The parser reserves it after the user + env +
 	// EXISTENTIAL-WITNESS companions and BEFORE the fixed-element count and any constraint-witness parameters
-	// (`[user][env][existentialWitness][layout][count][witness_0..k]`, P1.7a slice 2a + P1.7a-existentials
-	// slice 1 + W190), so a `paramCount` above every OTHER hidden block means the layout slot is present. Each of the three
+	// (`[user][env][existentialWitness][layout][count][witness_0..k]`), so a `paramCount` above every
+	// OTHER hidden block means the layout slot is present. Each of the three
 	// counts is derived from a whole-program fact the parser reserved by — the declared parameter TYPES for
 	// the env and existential blocks, the enclosing type's `where` constraints for the witness block — so
 	// caller and callee agree without a per-function field.
 	//
-	// ⚠ **A COUNT MISSING FROM THIS SUM READS AS A LAYOUT SLOT THAT IS NOT THERE.** Measured while the
-	// existential block was absent from it: the first `function callGreet(g Greeter)` in the corpus made
-	// `layoutNeedingFuncs` claim a free function needs a descriptor, and the caller then panicked in
-	// `materializeStaticConstructorLayout` looking for a generic instance to source one from.
+	// ⚠ **A COUNT MISSING FROM THIS SUM READS AS A LAYOUT SLOT THAT IS NOT THERE.** MEASURED with the
+	// existential block absent from it: `function callGreet(g Greeter)` makes `layoutNeedingFuncs` claim a
+	// free function needs a descriptor, and the caller then panics in `materializeStaticConstructorLayout`
+	// looking for a generic instance to source one from.
 	function functionHasDescriptorParam(func IrFunction) returns bool
 		return func.paramCount > func.maxonParamTypes.count() + countParamsWithTag(func.maxonParamTypes, tag: ValueTypeTag.function) + countParamsWithTag(func.maxonParamTypes, tag: ValueTypeTag.interfaceRef) + self.fixedElementCountParamCountFor(func.name) + self.witnessParamCountForFunc(func)
 	end 'functionHasDescriptorParam'
 
-	// ⭐⭐ **DOES `callee` CARRY THE HIDDEN FIXED-ELEMENT-COUNT PARAMETER (W190)?** — asked BY NAME, of the
+	// ⭐⭐ **DOES `callee` CARRY THE HIDDEN FIXED-ELEMENT-COUNT PARAMETER?** — asked BY NAME, of the
 	// same whole-program fixpoint `Parser.parseFunction` reserved the slot from, at BOTH ends of the ABI.
 	//
 	// ⚠ **THE LAYOUT SLOT IS RECOVERED FROM THE PARAMETER COUNT AND THIS ONE CANNOT BE, AND THE REASON IS
 	// ARITHMETIC RATHER THAN TASTE.** `functionHasDescriptorParam` works by subtracting every OTHER hidden
 	// block from `paramCount` and testing what is left over, which decides the question only while ONE
-	// optional slot is unaccounted for. With two, `base + 1` is ambiguous between them. So the newer slot
-	// states itself by name — and the older one goes on being derived, from a total this now subtracts.
+	// optional slot is unaccounted for. With two, `base + 1` is ambiguous between them. So the count slot
+	// states itself BY NAME, and the layout slot goes on being derived from a total this one subtracts.
 	//
 	// ⚠ **AND IT IS ASKED WITHOUT THE `anyFunction…` PRE-GATE `Parser.parseFunction` OPENS WITH, DELIBERATELY.**
 	// That gate exists because asking the question there needs the qualified name BUILT — an allocation per
@@ -2241,7 +2228,7 @@ type MaxonToStdLowering
 		return 1 if self.signatures.functionReadsFixedElementCount(callee) else 0
 	end 'fixedElementCountParamCountFor'
 
-	// Bind the CURRENT function's hidden implicit parameters (P1.6-B1 layout + W190 count + P1.7a slice 2a
+	// Bind the CURRENT function's hidden implicit parameters (layout + count +
 	// witnesses). The witness parameters occupy the FINAL `currentWitnessCount` ValueIds; the fixed-element
 	// count (when present) sits just before them, and the layout descriptor (when present) one further in. `hasImplicitLayout` is the authoritative layout-presence bit (a zero-user-param
 	// generic method's descriptor slot is legitimately ValueId 0, so the id cannot double as the presence flag);
@@ -2251,7 +2238,7 @@ type MaxonToStdLowering
 		self.witnessParamBase = valueIdAtParamPosition(func.paramCount - self.currentWitnessCount)
 
 		// ⭐ `[user][env][existentialWitness][layout][count][witness_0..k]` — read back from the END, so the
-		// count slot is found first and the descriptor sits one further in (W190). BOTH offsets come from
+		// count slot is found first and the descriptor sits one further in. BOTH offsets come from
 		// `MaxonDialect`'s two slot functions, which is where `Parser.parseFunction` RESERVED them: the order
 		// is one fact and a second spelling of it is a wrong register, never a compile error.
 		let countSlots = self.fixedElementCountParamCountFor(func.name)
@@ -2272,7 +2259,7 @@ type MaxonToStdLowering
 		self.implicitLayoutValueId = layoutDescriptorSlotValueId(func.paramCount, witnessParamCount: self.currentWitnessCount, fixedElementCountSlots: countSlots)
 	end 'bindImplicitParams'
 
-	// The number of hidden witness parameters `func` carries (P1.7a slice 2a) — the witness twin of
+	// The number of hidden witness parameters `func` carries — the witness twin of
 	// `functionHasDescriptorParam`. Derived from the function's own signature (`takesReceiver`) and its
 	// enclosing type's `where`-constraint count, so the count is a pure function of whole-program facts and
 	// needs no per-function field. A synthesized function with no signature (a closure/thunk) carries none.
@@ -2281,7 +2268,7 @@ type MaxonToStdLowering
 		return self.witnessParamCountForCallee(func.name, sig: sig)
 	end 'witnessParamCountForFunc'
 
-	// The number of witness parameters the CALLEE `callee` carries (P1.7a slice 2a): its witness-constraint
+	// The number of witness parameters the CALLEE `callee` carries: its witness-constraint
 	// count for an INSTANCE method, zero for a static or a free function. Both the callee side (append witness
 	// arguments) and the current-function side (bind witness parameters) read this ONE rule, so they cannot
 	// drift on how many witnesses a call passes — and it is the count OF the very list `appendWitnessArgs`
@@ -2296,8 +2283,8 @@ type MaxonToStdLowering
 	end 'witnessParamCountForCallee'
 
 	// `finalizeCallArgs` (float widening + companion env args) PLUS the hidden IMPLICIT arguments a
-	// dictionary-passing call carries: the layout descriptor (P1.6-B1), THEN the fixed element count (W190),
-	// THEN one witness pointer per `where` constraint (P1.7a slice 2a) — in the
+	// dictionary-passing call carries: the layout descriptor, THEN the fixed element count,
+	// THEN one witness pointer per `where` constraint — in the
 	// `[user][env][existentialWitness][layout][count][witness_0..k]` order the parser reserved them at, so the
 	// caller's argument registers and the callee's `param` ops meet. That ORDER's arithmetic has one home,
 	// `MaxonDialect`'s two slot functions; this list is the same order expressed as push order.
@@ -2343,7 +2330,7 @@ type MaxonToStdLowering
 		return out
 	end 'finalizeCallArgsWithLayout'
 
-	// ⭐⭐ **APPEND THE WITNESS HALF OF EVERY EXISTENTIAL ARGUMENT (P1.7a-existentials slice 1)** — one per
+	// ⭐⭐ **APPEND THE WITNESS HALF OF EVERY EXISTENTIAL ARGUMENT** — one per
 	// interface-typed parameter of `callee`, in parameter order, which is the order
 	// `Parser.bindExistentialWitnessParams` reserved the companions in.
 	//
@@ -2375,7 +2362,7 @@ type MaxonToStdLowering
 	// `appendExistentialWitnessArgs` documents, and the same split `materializeWitnessArg` makes for a
 	// constraint witness one mechanism over.
 	//
-	// ⭐ **IT SERVES BOTH WIDENING POSITIONS, WHICH IS WHY IT NAMES NEITHER (P1.7a slice 2).** An ARGUMENT's
+	// ⭐ **IT SERVES BOTH WIDENING POSITIONS, WHICH IS WHY IT NAMES NEITHER.** An ARGUMENT's
 	// witness travels in an adjacent hidden argument and a RETURN's in the secondary return register, but
 	// WHICH TABLE to name is one question with one answer, and a returned existential must be
 	// indistinguishable downstream from a parameter-borne one. `site` is the name a refusal quotes — the
@@ -2415,12 +2402,12 @@ type MaxonToStdLowering
 		return self.signatures.conformerNameOfType(maxonTypeOfTag(self.valueTagOf(value), nameId: try self.valueNameIds.get(value) otherwise panic("conformerNameOf: value v{value} has no recorded type name — the two type columns are minted in lockstep")), idsFrom: self.typeNames).toByteArray()
 	end 'conformerNameOf'
 
-	// Append the hidden WITNESS arguments a dictionary-passing call to `callee` carries (P1.7a slice 2a) — one
+	// Append the hidden WITNESS arguments a dictionary-passing call to `callee` carries — one
 	// per `where` constraint of the callee's enclosing type, in constraint (source) order, AFTER any layout
 	// descriptor. `out` is the fresh argument array `finalizeCallArgsWithLayout` built (never `argIds`), so
 	// pushing is safe.
 	//
-	// ⭐ **THE SOURCE VALUE IS THE RECEIVER, OR — FOR A `Self`-RETURNING STATIC — THE RESULT (W43b).** It is
+	// ⭐ **THE SOURCE VALUE IS THE RECEIVER, OR — FOR A `Self`-RETURNING STATIC — THE RESULT.** It is
 	// `materializeLayoutArgFor`'s split exactly, one dictionary column over, and the two are decided by the
 	// same predicate (`sig.takesReceiver()`) so a call can never take its descriptor from one value and its
 	// witnesses from another.
@@ -2435,7 +2422,7 @@ type MaxonToStdLowering
 	end 'appendWitnessArgs'
 
 	// The value a call's witness tables are read off — the RECEIVER for an instance method, the RESULT for a
-	// `Self`-returning static (W43b). It is `materializeLayoutArgFor`'s split, decided by the same
+	// `Self`-returning static. It is `materializeLayoutArgFor`'s split, decided by the same
 	// `sig.takesReceiver()`, so a call cannot take its layout descriptor from one value and its witnesses
 	// from another. A receiverless callee that is NOT a generic constructor carries no witness block at all
 	// (`witnessParamCountForCallee`), so it never reaches here.
@@ -2447,7 +2434,7 @@ type MaxonToStdLowering
 		return try argIds.get(0) otherwise panic("witnessSourceValue: witness-carrying instance method '{String.from(callee)}' has no receiver argument — its first parameter is `self`")
 	end 'witnessSourceValue'
 
-	// The witness-table address to pass for ONE constraint (P1.7a slice 2a). A CONCRETE generic-instance
+	// The witness-table address to pass for ONE constraint. A CONCRETE generic-instance
 	// receiver → the RIP-relative address of `__witness_<ConcreteArg>.<Iface>` (`rdataAddr`), emitting the
 	// table on first reference; a receiver that is the enclosing generic body's OWN `self` (`structRef`) or a
 	// value of its type parameter → FORWARD the caller's own witness slot for the same constraint index (a
@@ -2459,7 +2446,7 @@ type MaxonToStdLowering
 			let gid = try self.valueNameIds.get(receiver) otherwise panic("materializeWitnessArg: genericInstance receiver v{receiver} has no name-id (its GenericInstanceId)")
 
 			// ⭐⭐ **AN INSTANCE OVER THE ENCLOSING BODY'S OWN TYPE PARAMETER FORWARDS, IT DOES NOT MATERIALIZE
-			// (W41).** The receiver IS a concrete `genericInstance` — but the argument at the constrained
+			// The receiver IS a concrete `genericInstance` — but the argument at the constrained
 			// position may be an OPAQUE parameter of the function we are lowering: `Map.createIterator` building
 			// a `MapIterator with (Key, Value)` while `Key` is still `Map`'s own parameter. There is no table to
 			// name (`conformerTypeArgName` answers a mangled `T<digest>` that no conformance is filed under, and
@@ -2469,7 +2456,7 @@ type MaxonToStdLowering
 			// ⚠ **THE SLOT COMES FROM THE SHARED VERDICT, NEVER FROM `constraintIndex`.** The two constraint
 			// lists here belong to DIFFERENT declarations (`Map`'s and `MapIterator`'s), so the prefix-alignment
 			// that lets the `structRef`/`typeParameter` arm below forward slot `i` to slot `i` does not hold and
-			// must not be assumed — that is exactly the wrong forwarding index this rung exists to avoid.
+			// must not be assumed — a wrong forwarding index here is a witness read out of the wrong slot.
 			// `opaqueParamDischarge` is the same answer `checkWhereConstraints` accepted the program on, so the
 			// slot placed here is the slot the check verified.
 			let typeArg = self.signatures.substitutedInstanceArg(gid as GenericInstanceId, position: constraint.typeParamIndex)
@@ -2482,7 +2469,7 @@ type MaxonToStdLowering
 			// table label (`__witness_int.Hashable`) and its slot reloc (`int.hash`) name the synthesized primitive
 			// impl — the SAME reducer the E3017 check keys its conformance lookup by, never a second spelling.
 			//
-			// ⭐ **AND THE ARGUMENT'S OWN INSTANCE TRAVELS BESIDE THAT NAME (G19)**: the reduction answers WHICH
+			// ⭐ **AND THE ARGUMENT'S OWN INSTANCE TRAVELS BESIDE THAT NAME**: the reduction answers WHICH
 			// conformance, and where that conformance's impls carry a dictionary the table has to be keyed by the
 			// instantiation as well. `witnessTableInstanceFor` decides; a `Box with Integer` still names
 			// `__witness_int.Hashable` because `int` is no instance at all.
@@ -2490,7 +2477,7 @@ type MaxonToStdLowering
 			let argInstance = self.constraintArgumentInstance(gid as GenericInstanceId, position: constraint.typeParamIndex)
 
 			// ⭐⭐ **AND AN INSTANCE THAT IS STILL PARAMETRIC HAS NO TABLE AT ALL, SO THE CALL PASSES A ZERO AND
-			// OWES A PROOF (BATCH43)** — see `NullWitnessArgRequest` for why no `.rdata` blob can serve it and
+			// OWES A PROOF** — see `NullWitnessArgRequest` for why no `.rdata` blob can serve it and
 			// why a proved zero is never a conceded runtime fault. The arm above catches
 			// a BARE opaque argument by forwarding a slot the caller was handed; this one is the argument that
 			// is a whole INSTANCE over the caller's parameters, for which no caller ever held a slot.
@@ -2514,14 +2501,13 @@ type MaxonToStdLowering
 		panic("materializeWitnessArg: call to witness-carrying '{String.from(callee)}' has a receiver of tag {tag.name} — an instance method's receiver is a concrete generic instance, the enclosing self (structRef), or a type parameter")
 	end 'materializeWitnessArg'
 
-	// Forward the CURRENT (generic) function's own witness slot for `constraintIndex` to a callee (P1.7a slice
+	// Forward the CURRENT (generic) function's own witness slot for `constraintIndex` to a callee (the
 	// 2a) — a generic body driving another generic method on `self` (or a value of its type parameter), both of
 	// the same type, so the slot index aligns.
 	// The witness twin of `forwardCallerLayout`: the caller MUST carry witnesses (an instance method of a
 	// constrained type always does), so a missing slot is an internal invariant break, not a user error.
 	//
-	// ⚠ **THE TWO LISTS ARE PREFIX-ALIGNED, NOT IDENTICAL, AND THIS HEADER SAID "IDENTICAL" (corrected at
-	// review — W23 made it false).** A TYPE EXTENSION's method carries the type's constraints FOLLOWED by the
+	// ⚠ **THE TWO LISTS ARE PREFIX-ALIGNED, NOT IDENTICAL.** A TYPE EXTENSION's method carries the type's constraints FOLLOWED by the
 	// extension's extras (`ProgramSignatures.typeExtensionWitnessConstraints`), so an extension body forwarding
 	// to a plain method of the same type has a STRICTLY LONGER list than its callee. Alignment survives because
 	// the type's own constraints come FIRST — that ordering is the whole reason the union appends rather than
@@ -2534,7 +2520,7 @@ type MaxonToStdLowering
 	// position, so reaching here means that refusal did not fire; testing only `== 0` let every non-zero
 	// mismatch through in silence.
 	// ⭐⭐ **FORWARD THE SLOT THE ENCLOSING DECLARATION'S OWN `where` CLAUSE PROMISED FOR AN OPAQUE ARGUMENT
-	// (W41)** — the cross-declaration case `forwardCallerWitness` deliberately does not cover, because there
+	// — the cross-declaration case `forwardCallerWitness` deliberately does not cover, because there
 	// the two constraint lists belong to one type and align by index, and here they do not.
 	//
 	// ⚠⚠ **THE OWNER GUARD IS THE WHOLE SAFETY ARGUMENT AND IT IS CHECKED, NOT ASSUMED.**
@@ -2579,13 +2565,13 @@ type MaxonToStdLowering
 		return self.witnessParamBase + (constraintIndex as ValueId)
 	end 'forwardCallerWitness'
 
-	// ⭐ **THE `.rdata` WITNESS-TABLE BLOB for `typeName` conforming to `interfaceName` (P1.7a slice 2a).** The
+	// ⭐ **THE `.rdata` WITNESS-TABLE BLOB for `typeName` conforming to `interfaceName`.** The
 	// `24 + 8*methodCount`-byte blob (`methodCount@0`, `destroyFunc@8`, `flags@16`=0, `methods[N]@24`) is
 	// registered zero-filled under `__witness_<Type>.<Iface>`; each method slot is stamped by a
 	// `funcAbs64InRdata` relocation whose target is the member `checkConformance` ACCEPTED for that
-	// requirement (`witnessSlotImpl` — NOT a second `<Type>.<method>` join of this pass's own, see R10) with
-	// the SAME reloc that bakes a layout descriptor's `destroyFunc@40`. Every writer bakes it now — the PE one, the
-	// Mach-O/ELF arm64 one (slice 2b-iv-C) and the wasm one as a funcref-table index (slice 2b-iv-B).
+	// requirement (`witnessSlotImpl` — NOT a second `<Type>.<method>` join of this pass's own) with
+	// the SAME reloc that bakes a layout descriptor's `destroyFunc@40`. Every writer bakes it — the PE one, the
+	// Mach-O/ELF arm64 one and the wasm one as a funcref-table index.
 	// Each impl is DCE-ROOTED (`recordCallUsage`) so the reloc never names a `.text` VA that
 	// was pruned — the noteDestructorUsage/noteCascadeUsage rooting pattern for a slot named nowhere the module
 	// call graph can see. Idempotent by label: a table referenced at many sites registers ONE blob, ONE set of
@@ -2625,10 +2611,10 @@ type MaxonToStdLowering
 		_ = self.globalData.registerRdataConstantLabeled(label, bytes: blob, kind: RdataPayloadKind.witnessTable)
 
 		// ⭐ **`destroyFunc@8` — HOW AN OWNED EXISTENTIAL OF THIS CONFORMER IS RELEASED — and `retainFunc@16`,
-		// HOW A SECOND OWNER OF ONE IS TAKEN (P1.7a-existentials slices 2 and 2b).** Both are derived from
+		// HOW A SECOND OWNER OF ONE IS TAKEN.** Both are derived from
 		// ONE ownership-protocol answer, so they are non-zero together and cannot disagree about a conformer.
 		//
-		// ⭐⭐ **A PER-INSTANCE TABLE ASKS THE INSTANCE, WHICH IS THE WHOLE POINT OF HAVING ONE (G19)** — see
+		// ⭐⭐ **A PER-INSTANCE TABLE ASKS THE INSTANCE, WHICH IS THE WHOLE POINT OF HAVING ONE** — see
 		// `ProgramSignatures.instanceDropCallee` for the leak the conformer-name answer produced on a nested
 		// container. A shared table has no instance to ask and keeps the conformer's answer, byte for byte.
 		self.stampOwnershipWord(self.witnessDestroyCallee(typeName, instance: table), label: label, offsetInLabel: WitnessDestroyFuncOffset)
@@ -2648,7 +2634,7 @@ type MaxonToStdLowering
 	end 'ensureWitnessTable'
 
 	// ⭐⭐ **THE VERDICT BEHIND `WitnessTableInstance` — a caller states which instance it holds, and this
-	// decides whether the table is keyed by it (G19).** Two independent reasons reduce a stated instance back
+	// decides whether the table is keyed by it.** Two independent reasons reduce a stated instance back
 	// to the shared table, and both are about what the ADAPTER would have to build:
 	//
 	//   • the conformance's impls carry NO hidden dictionary, so a per-instance table would name the identical
@@ -2765,7 +2751,7 @@ type MaxonToStdLowering
 		end 'table'
 	end 'instanceIsFullyConcrete'
 
-	// ⭐⭐ **CAN THIS CONSTRAINT ARGUMENT BE GIVEN A WITNESS TABLE AT ALL (BATCH43)?** — the question a CALL
+	// ⭐⭐ **CAN THIS CONSTRAINT ARGUMENT BE GIVEN A WITNESS TABLE AT ALL?** — the question a CALL
 	// SITE has to ask that `witnessTableInstanceFor` deliberately does not, because that one decides which of
 	// two tables to mint and this one decides whether either exists.
 	//
@@ -2775,7 +2761,7 @@ type MaxonToStdLowering
 	// compiled impl answers for every instantiation), while a PARAMETRIC instance of one that DOES carry a
 	// dictionary is served by nothing — its adapter would have to name a descriptor the enclosing frame holds
 	// at run time. Reading both as "shared" is right for the mint and wrong for the argument: it sent the
-	// second shape into a table whose adapter then hands the impl a null dictionary, and G19's
+	// second shape into a table whose adapter then hands the impl a null dictionary, and
 	// `requireWitnessSlotImplIgnoresDictionary` refused it with E3128 — the right refusal about the TABLE,
 	// asked one mechanism away from the call the author wrote.
 	//
@@ -2817,8 +2803,8 @@ type MaxonToStdLowering
 	//
 	// ⚠ **THE REDUCTION ITSELF IS `ProgramSignatures.conformerTypeArgInstance`'s, and it has to be**: a stored
 	// argument's ids are the SIGNATURE index's, not the project's, so resolving a declared name here would
-	// read the wrong interner. See there for the alias spelling this used to answer `shared` for and for the
-	// legal program that refused.
+	// read the wrong interner. See there for the alias spelling a project-interner read answers `shared` for,
+	// and for the legal program it refuses.
 	function constraintArgumentInstance(gid GenericInstanceId, position TypeParamPosition) returns WitnessTableInstance
 		if let instance = try self.signatures.conformerTypeArgInstance(gid, position: position) 'namesAnInstance'
 			return WitnessTableInstance.perInstance(instance)
@@ -2838,13 +2824,13 @@ type MaxonToStdLowering
 		return WitnessTableInstance.shared
 	end 'witnessInstanceOfDeclaredName'
 
-	// ⭐⭐ **WHAT A WITNESS SLOT ACTUALLY POINTS AT — the impl, or an ABI ADAPTER over it (WASM3).**
+	// ⭐⭐ **WHAT A WITNESS SLOT ACTUALLY POINTS AT — the impl, or an ABI ADAPTER over it.**
 	//
 	// A `witnessCall` passes exactly what the REQUIREMENT declares: a receiver plus one argument per formal
 	// (`witnessFormalTypes`). An impl reached through that slot may declare MORE, because dictionary-passing
 	// gives a generic method hidden trailing parameters the caller normally supplies from what it statically
-	// knows — the enclosing instance's LAYOUT DESCRIPTOR (P1.6-B1) and one WITNESS TABLE per `where`
-	// constraint (P1.7a slice 2a). A witness dispatch knows neither: it holds a table address and a slot
+	// knows — the enclosing instance's LAYOUT DESCRIPTOR and one WITNESS TABLE per `where`
+	// constraint. A witness dispatch knows neither: it holds a table address and a slot
 	// index, and the number of hidden parameters varies per conformer, so the arity cannot be folded into the
 	// call site. An ADAPTER can bridge it, because the arity is fixed once the table is: it is a real function
 	// of the requirement's own shape, and the slot points at it instead of at the impl.
@@ -2875,7 +2861,7 @@ type MaxonToStdLowering
 			return implName
 		end 'theImplNeedsNoAdapter'
 
-		// ⭐ **THE ADAPTER IS NAMED OFF THE TABLE'S OWN LABEL COMPONENT, NEVER OFF THE CONFORMER (G19)** —
+		// ⭐ **THE ADAPTER IS NAMED OFF THE TABLE'S OWN LABEL COMPONENT, NEVER OFF THE CONFORMER** —
 		// two instances of one generic conformer share the impl and must NOT share the adapter, because the
 		// adapter is exactly where the two dictionaries differ. A shared table's component IS the conformer,
 		// so no existing adapter's symbol moves.
@@ -2992,11 +2978,11 @@ type MaxonToStdLowering
 		self.stdModule.functions.push(adapter)
 	end 'synthesizeWitnessSlotAdapter'
 
-	// ⭐⭐ **WHERE A WITNESS SLOT'S DICTIONARY COMES FROM — THE TABLE'S OWN INSTANCE, OR NOWHERE (WASM3, G19).**
+	// ⭐⭐ **WHERE A WITNESS SLOT'S DICTIONARY COMES FROM — THE TABLE'S OWN INSTANCE, OR NOWHERE.**
 	//
 	// A hidden dictionary parameter describes the conformer's TYPE ARGUMENT: the layout descriptor of the
-	// instance (P1.6-B1), the fixed element count (W190) and one witness table per `where` constraint (P1.7a
-	// slice 2a). Which of the two answers applies is decided ONCE, at the table (`witnessTableInstanceFor`),
+	// instance, the fixed element count and one witness table per `where` constraint.
+	// Which of the two answers applies is decided ONCE, at the table (`witnessTableInstanceFor`),
 	// and travels on the request — never re-derived here, because the LABEL the slot was stamped with is what
 	// the caller jumped through and a second opinion about it is a wrong dictionary with no diagnostic.
 	//
@@ -3010,14 +2996,12 @@ type MaxonToStdLowering
 	//   • a **PER-INSTANCE** table names exactly one instantiation, so every word is a compile-time constant
 	//     of it, and the proof is unnecessary because the values are real.
 	//
-	// Before adapters existed the same parameters read whatever the ABI registers held — the identical
-	// unsoundness, with no check and no diagnostic.
 	//
 	// ⛔ **THE OTHER TWO HIDDEN BLOCKS ARE NOT NULLABLE ON EITHER PATH, AND THE PANIC SAYS SO RATHER THAN
 	// GUESSING.** A `function`-typed parameter carries a companion ENVIRONMENT and an interface-typed one
 	// carries a WITNESS half; both are facts about the ARGUMENT, which only the caller has, and both are READ.
 	// A requirement declaring such a formal has no ABI a witness dispatch can satisfy — the call site passes
-	// one word where the impl reads two — and it was already broken before an adapter existed, silently.
+	// one word where the impl reads two — so the panic is the only honest answer, adapter or not.
 	function appendWitnessAdapterDictionary(args ValueIdArray, request WitnessAdapterRequest, impl IrFunction, entry IrBlock, project Project)
 		let sig = try self.funcSignatures.get(request.implName) otherwise panic("appendWitnessAdapterDictionary: '{String.from(request.implName)}' has no signature — `witnessSlotCallee` returned the impl unchanged for exactly that case")
 		let companionCount = countParamsWithTag(sig.paramTypes, tag: ValueTypeTag.function) + countParamsWithTag(sig.paramTypes, tag: ValueTypeTag.interfaceRef)
@@ -3116,7 +3100,7 @@ type MaxonToStdLowering
 	end 'instanceConstraintWitnessLabel'
 
 	// ⭐⭐ **PROVE THE IMPL NEVER READS THE NULL DICTIONARY — the premise the base-keyed conformer name rests
-	// on, asked of the one impl that is about to be handed a null one (WASM3).**
+	// on, asked of the one impl that is about to be handed a null one.**
 	//
 	// The test is USE, not read-of-a-particular-kind: a hidden parameter that is dispatched through, forwarded
 	// to another dictionary-passing callee, or merely stored is equally a value the adapter cannot supply.
@@ -3129,7 +3113,7 @@ type MaxonToStdLowering
 	// remains past the slot's own arguments is exactly the descriptor, the fixed-element count and the
 	// witnesses.
 	//
-	// ⭐ **IT IS WIDTH-AGNOSTIC, WHICH IS WHY W190's NEW SLOT NEEDED NOTHING HERE — verified at review by
+	// ⭐ **IT IS WIDTH-AGNOSTIC, WHICH IS WHY A NEW HIDDEN SLOT NEEDS NOTHING HERE — verified by
 	// MEASUREMENT, not by reading.** An `extension Vector implements Sizer` whose `capacity()` reads
 	// `countof(Self)` is refused with this diagnostic, and so is one that merely CALLS a sibling that does
 	// (the forward is a USE of the slot like any other). So a `countof`-reading body cannot be reached
@@ -3161,7 +3145,7 @@ type MaxonToStdLowering
 		return referenced
 	end 'loweredValueUses'
 
-	// ⭐⭐ **SETTLE EVERY ZERO A PARAMETRIC CONSTRAINT ARGUMENT PASSED (BATCH43)** — drained after the function
+	// ⭐⭐ **SETTLE EVERY ZERO A PARAMETRIC CONSTRAINT ARGUMENT PASSED** — drained after the function
 	// walk, because the proof reads the CALLEE's lowered body and the caller may have been lowered first.
 	//
 	// It runs BEFORE `installWitnessSlotAdapters` rather than after, and that ordering is the reason the drain
@@ -3253,7 +3237,7 @@ type MaxonToStdLowering
 	// call site knowing which.
 	//
 	// ⚠⚠ **THE BINDING IS REDUCED TO ITS CONFORMER NAME FIRST, EXACTLY AS THIS PASS'S OTHER TWO
-	// `ensureWitnessTable` CALLERS DO (W58).** A conformance's `withArgs` are RENDERED names, so a binding to a
+	// `ensureWitnessTable` CALLERS DO.** A conformance's `withArgs` are RENDERED names, so a binding to a
 	// generic instance arrives as the canonical mint `UpCursor_Integer` — and a table is keyed by the CONFORMER
 	// (`materializeWitnessArg` uses `conformerTypeArgName`, `witnessForExistentialValue` uses
 	// `conformerNameOfType`; this was the one site reading the raw spelling). Under dictionary-passing that
@@ -3285,7 +3269,7 @@ type MaxonToStdLowering
 	// ⚠ **THE SYMBOL IS INSTALLED BECAUSE THIS RELOCATION EXISTS, NOT BECAUSE SOMETHING PREDICTED IT**:
 	// `MmRuntime.noteRelocatedFunctionUsage` roots every `.rdata` slot's callee after lowering, so the
 	// relocated set and the installed set are one list rather than two that agree. See there for what a
-	// pre-pipeline prediction cost when it was tried. It is ONE function rather than a spelling per word
+	// pre-pipeline prediction costs. It is ONE function rather than a spelling per word
 	// because the empty test IS the encoding, and a second copy of it is where one word would come to be
 	// stamped on a rule another had already stopped using.
 	//
@@ -3304,12 +3288,10 @@ type MaxonToStdLowering
 	end 'stampOwnershipWord'
 
 	// ⭐⭐ **THE SYMBOL A WITNESS SLOT POINTS AT IS THE MEMBER `checkConformance` ACCEPTED — NOT A SECOND JOIN
-	// OF THE SAME TWO NAMES (R10).** This site used to mint `qualifiedMethodName(typeName, method.name)` for
-	// itself, and it agreed with the conformance check only because BOTH were wrong the same way: the check
-	// resolved a requirement by that same bare key, so a type whose matching member was a LATER overload
-	// (registered `Type.method#Suffix` under D7) was rejected before it could get here. Fixing the check alone
-	// would have turned that loud false reject into a wrong `.text` address in the dictionary — no diagnostic,
-	// at runtime. So the decision is made ONCE, by the check, and read here.
+	// OF THE SAME TWO NAMES.** A `qualifiedMethodName(typeName, method.name)` minted here would be a bare key,
+	// and a type whose matching member is a LATER overload (registered `Type.method#Suffix`) does not answer to
+	// it — a wrong `.text` address in the dictionary, with no diagnostic, at runtime. So the decision is made
+	// ONCE, by the check, and read here.
 	//
 	// ⚠ **A MISS IS AN INTERNAL DISAGREEMENT AND PANICS — with ONE legitimate exception, and it is not a
 	// fallback.** A BUILTIN conformer (`int`/`float`/`bool`/`String`/`Character`) declares no `implements`, so
@@ -3344,12 +3326,12 @@ type MaxonToStdLowering
 		end 'discovered'
 	end 'witnessSlotImpl'
 
-	// Resolve an interface NAME when building a witness table (P1.7a slice 2a) — through `lookupInterface`,
-	// the ONE statement of "builtin first, then the merged registry" that R9 gave this reader and
-	// `ConformanceCheck` to share (the two used to spell that rule twice over the same store). What stays
+	// Resolve an interface NAME when building a witness table — through `lookupInterface`,
+	// the ONE statement of "builtin first, then the merged registry" this reader and
+	// `ConformanceCheck` share. What stays
 	// local is the MISS: a witness table is only built for a constraint whose interface the parser already
 	// resolved, so an unresolved name here is an internal invariant break, not a user error.
-	// ⚠ **"same-file" WAS the rule and R8 DELETED IT**: the parser now resolves a constraint's interface
+	// ⚠ **THE RULE IS WHOLE-PROGRAM, NOT SAME-FILE**: the parser resolves a constraint's interface
 	// against the whole-program declaration index (`lookupInterface` over `signatures.interfaceMap()`), so it
 	// resolves an interface declared below its use or in any other file. That widens what reaches here and does
 	// NOT weaken the invariant — this store (`project.interfaces`, merged after every file parses) is a superset
@@ -3361,8 +3343,8 @@ type MaxonToStdLowering
 		end 'resolved'
 	end 'resolveWitnessInterface'
 
-	// The layout-descriptor argument a layout-needing call must pass, from the RIGHT source (P1.6-B1 / P1.7
-	// slice 3b-i). An INSTANCE method reads it from its RECEIVER (`self` at slotted position 0 — the value of
+	// The layout-descriptor argument a layout-needing call must pass, from the RIGHT source. An INSTANCE
+	// method reads it from its RECEIVER (`self` at slotted position 0 — the value of
 	// the concrete generic instance). A receiverless STATIC constructor (`IntContainer.create(…)`) has no
 	// receiver — its first argument is an ordinary user value — but its RESULT is the concrete instance it
 	// builds, and the parser has already retyped that result to `genericInstance(gid)`, so the concrete gid is
@@ -3376,7 +3358,7 @@ type MaxonToStdLowering
 		end 'instanceMethod'
 
 		// ⭐ **A FIELD-DEFAULT HELPER IS THE ONE RECEIVERLESS LAYOUT-NEEDING CALLEE WHOSE DESCRIPTOR COMES
-		// FROM THE CALLER (W43b).** Its result is the FIELD's type (`Array with Key`), not the enclosing
+		// FROM THE CALLER.** Its result is the FIELD's type (`Array with Key`), not the enclosing
 		// instance, so there is nothing to read a descriptor off — but its only call site is a `Self{…}`
 		// inside the declaring type's own body (`requireConstructible`'s E3076), which is a method of that
 		// type and therefore holds the descriptor to forward. `Parser.scanDescriptorNeedsInto` gives that
@@ -3388,7 +3370,7 @@ type MaxonToStdLowering
 		return self.materializeStaticConstructorLayout(result, callee: callee, dstBlock: dstBlock)
 	end 'materializeLayoutArgFor'
 
-	// The descriptor address for a layout-needing STATIC generic constructor (P1.7 slice 3b-i) — the RIP-relative
+	// The descriptor address for a layout-needing STATIC generic constructor — the RIP-relative
 	// address of its RESULT instance's descriptor blob. The result was retyped to `genericInstance(gid)` by the
 	// parser (`retypeGenericAliasConstructorResult`), so the concrete gid — `Container with SmallInt` — is read
 	// off the result's name column, exactly as an instance-method receiver's is. A receiverless layout-needing
@@ -3406,11 +3388,10 @@ type MaxonToStdLowering
 		// IS this call's — the same reasoning `emitInstanceDescriptorAddr` uses for an instance over the
 		// enclosing body's own parameters, one tag over.
 		//
-		// ⛔⛔ **IT WAS A PANIC, AND THE COMPILER'S OWN SOURCE IS WHERE IT FIRED.** `BlockKeyedTable.forBlockCount`
-		// opens with `var table = Self.create()` — the ordinary way a generic's sized constructor reuses its
-		// empty one — and lowering it aborted the compile outright: *"layout-needing static callee
-		// 'BlockKeyedTable.create' returns a structRef, not a generic instance"*. The invariant the panic
-		// asserted was simply not the whole set of receiverless shapes.
+		// ⛔⛔ **A RECEIVERLESS SHAPE NEED NOT BE A CONCRETE INSTANCE, SO THIS FORWARDS RATHER THAN PANICS.**
+		// `BlockKeyedTable.forBlockCount` opens with `var table = Self.create()` — the ordinary way a generic's
+		// sized constructor reuses its empty one — and that result is a `structRef`, not a generic instance. A
+		// panic asserting otherwise aborts the compile on the compiler's own source.
 		if self.valueTagOf(result) != ValueTypeTag.genericInstance 'notAConcreteInstance'
 			return self.forwardCallerLayout(callee)
 		end 'notAConcreteInstance'
@@ -3420,7 +3401,7 @@ type MaxonToStdLowering
 
 	// The descriptor address for a generic-instance VALUE — the shared core of the two ways a layout-needing
 	// call finds its descriptor source, an instance-method RECEIVER and a static-constructor RESULT
-	// (P1.6-B1 / P1.7 slice 3b-i). One home so the gid read, the forward/mint decision and the address op
+	// One home so the gid read, the forward/mint decision and the address op
 	// cannot drift between the two.
 	//
 	// ⭐⭐ **A `genericInstance` IS NOT ALWAYS CONCRETE — AN INSTANCE OVER THE ENCLOSING BODY'S OWN
@@ -3432,13 +3413,12 @@ type MaxonToStdLowering
 	// `primitiveTypeByteSize` panics rather than guessing. The answer the callee needs is already in the
 	// caller's hand.
 	//
-	// ⭐⭐ **AND THE STATIC-CONSTRUCTOR RESULT TAKES THE SAME ARM, WHICH IS WHAT W161 CLOSED.** The forward
-	// used to live one door up, on the RECEIVER path alone, so `EChain.create()` inside `type Bag uses Element`
-	// — a `typealias EChain = Inner with Element`, a DECLARED generic over the enclosing type's own parameter —
-	// reached the mint through `materializeStaticConstructorLayout` and ABORTED THE COMPILER. Nothing about the
-	// argument-run reasoning is receiver-specific: both callers hold a value typed at the instance, and both
-	// need the caller's own blocks. Splitting the decision by the DOOR the value came through is what made one
-	// half work and the other panic.
+	// ⭐⭐ **AND THE STATIC-CONSTRUCTOR RESULT TAKES THE SAME ARM.** Nothing about the argument-run
+	// reasoning is receiver-specific: both callers hold a value typed at the instance, and both need the
+	// caller's own blocks. Split the decision by the DOOR the value came through and `EChain.create()`
+	// inside `type Bag uses Element` — a `typealias EChain = Inner with Element`, a DECLARED generic over
+	// the enclosing type's own parameter — reaches the mint through
+	// `materializeStaticConstructorLayout` and ABORTS THE COMPILER.
 	//
 	// ⚠ **IT FORWARDS A BLOCK ADDRESS, NOT ALWAYS THE DESCRIPTOR'S HEAD.** The callee reads ITS parameter `i`
 	// out of block `i` of whatever pointer it is handed, so the forward is sound exactly when the instance's
@@ -3460,7 +3440,7 @@ type MaxonToStdLowering
 	// (`typeParamOwnershipProtocol` answers `none` for a type-parameter argument) — INERT, and inert on BOTH
 	// sides, because the retain and the drop read the same zero words. Forwarding a real descriptor into half
 	// of such a chain would make the retains fire while the drops still read the mint, which trades an inert
-	// pair for an unbalanced one. W161's edge is drawn only from a call whose receiver RESOLVES to such an
+	// pair for an unbalanced one. The forwarding edge is drawn only from a call whose receiver RESOLVES to such an
 	// instance (`Parser.nestedInstanceCalleeAt`), and the emitted cursor calls `Map.map` makes resolve to
 	// nothing — so that chain keeps both of its inert ends.
 	function emitInstanceDescriptorAddr(instanceValue ValueId, dstBlock IrBlock) returns ValueId
@@ -3502,7 +3482,7 @@ type MaxonToStdLowering
 	end 'materializeLayoutArg'
 
 	// ⭐⭐ **THE ELEMENT COUNT A COUNT-NEEDING CALL PASSES — A COMPILE-TIME CONSTANT AT EVERY CALL SITE,
-	// WHICH IS THE WHOLE REASON THE COUNT IS A PARAMETER AND NOT A DESCRIPTOR WORD (W190).**
+	// WHICH IS THE WHOLE REASON THE COUNT IS A PARAMETER AND NOT A DESCRIPTOR WORD.**
 	// `materializeLayoutArgFor`'s twin, with the same two doors and the same authority: the CALLEE's own
 	// parameter list decides whether the count is read off the RECEIVER's instance or off the static's RESULT
 	// instance, so a static whose first argument happens to be a generic instance is unambiguous.
@@ -3511,8 +3491,8 @@ type MaxonToStdLowering
 	// caller's own blocks when the callee's instance is written over the caller's parameters, which is sound
 	// for every word the blob carries because every one of them is a fact about the type ARGUMENT. A COUNT is
 	// a fact about the INSTANCE: `Vector with 4 Element` states 4 whatever `Element` turns out to be, and the
-	// caller's own blob states `NoFixedSize`. **MEASURED before this was a parameter: a `Vector with 4 Element`
-	// field reached from inside `type Holder uses Element` answered 0.** Read here off the instance the call
+	// caller's own blob states `NoFixedSize`. **MEASURED without this parameter: a `Vector with 4 Element`
+	// field reached from inside `type Holder uses Element` answers 0.** Read here off the instance the call
 	// site actually holds, the same shape answers 4 — and it does so without asking that call site for a
 	// descriptor at all, which matters because a frame holding such a field is not guaranteed to have one.
 	function materializeFixedElementCountArgFor(argIds ValueIdArray, sig FuncSignature, result ValueId, callee ByteArray, dstBlock IrBlock) returns ValueId
@@ -3589,19 +3569,17 @@ type MaxonToStdLowering
 	// The `.rdata` label of `gid`'s descriptor blob, emitting it on first reference. The blob is PURE DATA —
 	// box size, alignment, the T-slot storage width, and the source-level `elementLogicalSize` that
 	// `sizeof(T)` reads. Every function-pointer slot is 0 on disk; when `gid` holds an opaque-`T` `Array` or
-	// bare field whose SUBSTITUTED argument owns a record (`Container with String`, P1.7 slice 3b-ii), a
+	// bare field whose SUBSTITUTED argument owns a record (`Container with String`), a
 	// `funcAbs64InRdata` relocation is recorded so the x64 writer patches `destroyFunc@40` with that
 	// argument's destructor `.text` VA — the value the shared opaque `__managed_create` reads back into its
 	// record's `element_destroy@40`. An argument owning NO record (a scalar, a ranged alias, a payload-free
 	// enum) records nothing and the slot stays 0, so its walk is skipped. Idempotent: a gid referenced at
 	// several call sites registers one blob and one reloc and shares the label.
 	//
-	// ⚠ **THE GATE IS THE ARGUMENT'S OWNERSHIP PROTOCOL, NOT ITS CONSUME CLASS, AND THIS COMMENT SAID
-	// "A TRIVIAL ARGUMENT RECORDS NOTHING" WHILE THE CODE MEANT SOMETHING NARROWER (W41-trivial).** An
-	// all-scalar STRUCT argument is trivial to CONSUME and is still a refcounted box: it now stamps both
-	// `destroyFunc@40` and `retainFunc@64`, which is what makes the reference a container takes releasable.
-	// See `ProgramSignatures.managedOpaqueArrayElementOf` for the wrong answer the two words' old, differing
-	// gates produced.
+	// ⚠ **THE GATE IS THE ARGUMENT'S OWNERSHIP PROTOCOL, NOT ITS CONSUME CLASS.** An all-scalar STRUCT
+	// argument is trivial to CONSUME and is still a refcounted box: it stamps both `destroyFunc@40` and
+	// `retainFunc@64`, which is what makes the reference a container takes releasable. See
+	// `ProgramSignatures.managedOpaqueArrayElementOf` for the wrong answer two differing gates produce.
 	function ensureLayoutDescriptor(gid GenericInstanceId) returns String
 		if self.layoutDescriptors.contains(gid) 'cached'
 			return self.layoutDescriptors.labelFor(gid)
@@ -3611,9 +3589,9 @@ type MaxonToStdLowering
 		// MULTI-PARAMETER ONE STILL NEEDS THE REST OF THE DESCRIPTOR.**
 		//
 		// The slot exists for `sizeof(T)` — one type parameter, one size. `Map with (Key, Value)` has two, so
-		// there is no single element to size, and asking used to PANIC (`genericInstanceSoleArgLogicalSize`).
-		// That panic made every two-parameter generic holding a container over one of its parameters
-		// uncompilable — `type Map uses Key, Value` with `var keys as Array with Key` is exactly that shape,
+		// there is no single element to size, so `genericInstanceSoleArgLogicalSize` has no answer for one.
+		// Panicking there would make every two-parameter generic holding a container over one of its
+		// parameters uncompilable — `type Map uses Key, Value` with `var keys as Array with Key` is exactly that shape,
 		// and it is why `stdlib/Map.maxon` could not be instantiated at all.
 		//
 		// ⚠ **THE OTHER THREE FIELDS ARE STILL MEANINGFUL AND STILL NEEDED**: the box size, the alignment and
@@ -3643,15 +3621,15 @@ type MaxonToStdLowering
 		// destructor's `.text` VA against.
 		//
 		// ⭐⭐ **EVERY WORD STAMPED BELOW IS DCE-ROOTED OFF THE RELOCATION THE STAMP ITSELF RECORDS** —
-		// `MmRuntime.noteRelocatedFunctionUsage`, which walks `pendingRdataRelocs` after lowering (W17-c). So the
+		// `MmRuntime.noteRelocatedFunctionUsage`, which walks `pendingRdataRelocs` after lowering. So the
 		// rooted set IS the relocated set rather than a prediction of it, and no word can name a `.text` VA that
 		// was never installed. Stated ONCE for all three words because it is one fact about the stamp and not
-		// three facts about the slots: the pre-pipeline walks that used to predict the drop and clone roots
-		// per-instance are deleted, and a predicate here is the sole gate on whether a word is written at all.
+		// three facts about the slots: nothing predicts the drop and clone roots per-instance ahead of the
+		// pipeline, and a predicate here is the sole gate on whether a word is written at all.
 		//
-		// ⭐ **THE `copyFunc@32` STAMP — the exact CLONE dual (P1.7 slice 3b-vi-b-β).** When the parameter's
+		// ⭐ **THE `copyFunc@32` STAMP — the exact CLONE dual.** When the parameter's
 		// managed opaque `Array` element is DIRECT-clonable (a String / struct / boxed-union / any container —
-		// a managed-element one through its own per-instance one-argument thunk since G18 — i.e. anything a
+		// a managed-element one through its own per-instance one-argument thunk — i.e. anything a
 		// single `(box) -> newBox` cloner can name), a second `funcAbs64InRdata` relocation fills `copyFunc@32`
 		// with the element CLONER's `.text` VA, the value the shared opaque-copy wrappers read back and
 		// `callIndirect` per element. A TRIVIAL element records nothing (its wrapper takes the byte-blit/COW
@@ -3662,10 +3640,10 @@ type MaxonToStdLowering
 			let blockBase = layoutBlockOffsetFor(position)
 
 			// ⭐⭐ **THE `destroyFunc@40` STAMP AND THE `retainFunc@64` STAMP ARE ONE PAIR OF LINES OVER ONE
-			// PREDICATE, AND SPLITTING THEM LEAKED (found at review).** Both are `stampOwnershipWord` over a
-			// per-argument callee that answers EMPTY when the argument owns no record, so the two words are
-			// non-zero together by construction — see `ProgramSignatures.typeParamDropCallee` for the measured
-			// exit-101 the old FIELD-shaped drop gate produced beside this ARGUMENT-shaped retain gate.
+			// PREDICATE, AND SPLITTING THEM LEAKS.** Both are `stampOwnershipWord` over a per-argument callee
+			// that answers EMPTY when the argument owns no record, so the two words are non-zero together by
+			// construction — see `ProgramSignatures.typeParamDropCallee` for the measured exit-101 a
+			// FIELD-shaped drop gate beside this ARGUMENT-shaped retain gate produces.
 			self.stampOwnershipWord(self.signatures.typeParamDropCallee(gid, position: position), label: label, offsetInLabel: (blockBase + LAYOUT_OFFSET_DESTROY_FUNC) as ByteOffset)
 
 			if self.signatures.genericInstanceOpaqueArrayElementIsCopyable(gid, position: position) 'copyableOpaqueElement'
@@ -3673,7 +3651,7 @@ type MaxonToStdLowering
 			end 'copyableOpaqueElement'
 
 			// ⭐⭐ **THE `retainFunc@64` STAMP — how a shared body takes the reference a record it BUILDS owes on
-			// a borrowed opaque `T` (W41-opaque).** Its GATE is the argument's own ownership, which the drop
+			// a borrowed opaque `T`.** Its GATE is the argument's own ownership, which the drop
 			// word above now shares; only `copyFunc@32` between them is a fact about the instance's opaque
 			// `Array` FIELD, because a clone is about that column and not about the argument.
 			// `typeParamRetainCallee` answers EMPTY for an argument owning no record and `stampOwnershipWord`
@@ -3684,7 +3662,7 @@ type MaxonToStdLowering
 		return label
 	end 'ensureLayoutDescriptor'
 
-	// Lower `sizeof(T)` (P1.6-B1) to a runtime read of `elementLogicalSize@56` from the CURRENT function's
+	// Lower `sizeof(T)` to a runtime read of `elementLogicalSize@56` from the CURRENT function's
 	// layout descriptor. The parser folds every CONCRETE sizeof to a literal, so this op only ever carries
 	// a typeParameter; and it reserved the descriptor parameter whenever a body reads sizeof(T), so reaching
 	// here without one is a pre-scan/op-scan divergence — a loud bug, not a silent wrong load.
@@ -3714,7 +3692,7 @@ type MaxonToStdLowering
 		// the reordering below would be the identity, and the registry lookup it needs first would panic
 		// on a callee no file declares. `SemanticCheck.validateCall` skips it for the same reason, keyed
 		// on the same predicate (`__print_string`/`__str_eq` are compiler-internal too, not just `__mm_`)
-		// — and that predicate asks the registry rather than the PREFIX, because since A1r a `__` callee
+		// — and that predicate asks the registry rather than the PREFIX, because a `__` callee
 		// may be a real declared function whose arguments the source labelled (`isSignaturelessCompilerCallee`).
 		if isSignaturelessCompilerCallee(callee, funcSignatures: self.funcSignatures) 'compilerOwnCall'
 			self.lowerRuntimeCall(result, callee: callee, args: args, argLabels: argLabels, dstBlock: dstBlock)
@@ -3907,7 +3885,7 @@ type MaxonToStdLowering
 	end 'allocTagFromResultType'
 
 	// ⭐⭐ **A DIRECT CALL WHOSE CALLEE RETURNS AN INTERFACE DEFINES TWO VALUES, SO IT IS A `tryCall`
-	// (P1.7a slice 2, the return ABI).** The callee wrote the witness half into the secondary return register
+	// (the return ABI).** The callee wrote the witness half into the secondary return register
 	// (`functionUsesSecondaryReturnSlot` — the callee's own view of this same fact), and `StdOp.tryCall` is
 	// the op that captures that register. No new Std op and no new backend arm: the secondary register
 	// — normally the error flag — carries the witness-table address instead, same register convention
@@ -3943,7 +3921,7 @@ type MaxonToStdLowering
 	function lowerRuntimeCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, dstBlock IrBlock)
 		requireRuntimeCallPositional(callee, argLabels: argLabels)
 
-		// ⭐ **A1x's TOTAL REMAINDER IS EXPANDED HERE — the non-throwing twin of `lowerTryCall`'s checked-division
+		// ⭐ **THE TOTAL REMAINDER IS EXPANDED HERE — the non-throwing twin of `lowerTryCall`'s checked-division
 		// arm, and for the identical reason: there is no `__guarded_mod` function to call.** It is the only
 		// division kind that can reach a plain `call`, because it is the only one that does not throw; the two
 		// `__checked_*` names arrive through `lowerTryCall` and are refused below if they somehow do not.
@@ -3969,8 +3947,8 @@ type MaxonToStdLowering
 	// whole-program view can supply (a layout descriptor, an allocation tag), or a marker that folds to a
 	// constant rather than being called at all.
 	function appendRuntimeCall(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
-		// An OPAQUE-`T` container create arrives SHORT ONE ARGUMENT — a `__managed_create` (P1.7 slice 3b-i)
-		// with only element_size, a `__list_create` (W134) with none at all; its element destructor is not
+		// An OPAQUE-`T` container create arrives SHORT ONE ARGUMENT — a `__managed_create`
+		// with only element_size, a `__list_create` with none at all; its element destructor is not
 		// known statically, so it is READ from the enclosing instance's threaded layout descriptor
 		// (`destroyFunc@40`) HERE — the tier that owns the descriptor's ValueId — and appended as the LAST
 		// argument, mirroring how `sizeof(T)` reads `elementLogicalSize@56`.
@@ -3979,11 +3957,11 @@ type MaxonToStdLowering
 			return
 		end 'opaqueContainerCreate'
 
-		// A `__drop_type_param` (P1.7 slice 3b-v) arrives with ONE argument (the opaque owned value); its
+		// A `__drop_type_param` arrives with ONE argument (the opaque owned value); its
 		// element destructor is not known statically, so the enclosing instance's layout descriptor is
 		// PREPENDED as the first argument (`__drop_type_param(descriptor, value)`) — the drop twin of
 		// `appendOpaqueContainerCreate`'s destructor read, off the SAME `implicitLayoutValueId`.
-		// A `__drop_type_param` (P1.7 slice 3b-v) and its co-ownership twin `__retain_type_param` (W41-opaque)
+		// A `__drop_type_param` and its co-ownership twin `__retain_type_param`
 		// each arrive with ONE argument (the opaque value) and take the descriptor in front of it. ONE arm
 		// because the prepend is one act: the block is chosen off the VALUE's own type parameter either way,
 		// and two arms is where the drop's block and the retain's would come to be read differently.
@@ -4020,7 +3998,7 @@ type MaxonToStdLowering
 			return
 		end 'typeParamOwnership'
 
-		// ⭐⭐ **A DICTIONARY DESTRUCTOR TAKES THE WHOLE DESCRIPTOR, NOT A BLOCK (BATCH41).** The arm above
+		// ⭐⭐ **A DICTIONARY DESTRUCTOR TAKES THE WHOLE DESCRIPTOR, NOT A BLOCK.** The arm above
 		// hands `__drop_type_param` the block of the ONE parameter its value is typed at; a dictionary
 		// destructor releases several fields standing at several parameters, so it indexes its own blocks —
 		// off the `uses`-list positions its fields substitute to, which are positions in the SAME list this
@@ -4036,8 +4014,8 @@ type MaxonToStdLowering
 		// compiler-owned runtime call that PROBES a hash table it does not hold got the key's `Hashable`/
 		// `Equatable` witness-table addresses appended as hidden trailing arguments — the dictionary-passing
 		// twin of `appendWitnessArgs`. `__set_*`/`__map_*` read their key type off a RECEIVER and went with the
-		// synthesized hash table (W105); `__cs_contains` named its `Character` key outright and went with the
-		// `__cs_*` runtime (W129). Every corpus replacement is a declared generic method, so its witnesses are
+		// synthesized hash table; `__cs_contains` named its `Character` key outright and went with the
+		// `__cs_*` runtime. Every corpus replacement is a declared generic method, so its witnesses are
 		// ordinary dictionary PARAMETERS filled by `appendWitnessArgs`.
 		// ⇒ **No compiler-owned runtime callee threads a witness table today**, and a new one would rebuild the
 		// arm here — see `materializeWitnessTableAddr`, which holds what such an arm must not get wrong.
@@ -4050,7 +4028,7 @@ type MaxonToStdLowering
 	end 'appendRuntimeCall'
 
 	// ⭐⭐ **WRITE DOWN WHAT THIS TIER KNOWS ABOUT THIS CALL'S CONTAINER ELEMENT: ITS `element_size@24`
-	// STAMP (EC15) AND WHETHER IT OWES A DROP** — the two facts `inlineManagedPrimitives` needs to emit ONE
+	// STAMP AND WHETHER IT OWES A DROP** — the two facts `inlineManagedPrimitives` needs to emit ONE
 	// of `emitStrideDispatch`'s arms instead of forking on a stride that is fixed by the element type, and to
 	// omit the `element_destroy@40` guard where the element type fixes that too. `Array with Integer` is 8
 	// bytes and owes nothing in every program that ever runs, and the pass was loading both fields and
@@ -4069,7 +4047,7 @@ type MaxonToStdLowering
 	// also settles the `__ManagedMemory` half for free: `Array with T` and `__ManagedMemory with T` are ONE
 	// `GenericInstanceId` (`isArrayBaseName`), so `arr.memory.set(…)` records the same facts `arr.get(…)` does.
 	//
-	// ⚠⚠ **AN OPAQUE ELEMENT IS REFUSED, AND THAT IS THE W57 TRAP RATHER THAN A CONSERVATISM.** A shared
+	// ⚠⚠ **AN OPAQUE ELEMENT IS REFUSED, AND THAT IS CORRECTNESS RATHER THAN CONSERVATISM.** A shared
 	// generic body over `Array with T` is compiled ONCE for every instantiation, so it has no single stride —
 	// and `arrayElementSize` would answer for it anyway, off `trivialElementSlot` of a type parameter. Recording
 	// that answer would specialize `Array with Byte`'s body onto an 8-byte access. The ownership fact is
@@ -4122,24 +4100,17 @@ type MaxonToStdLowering
 		end 'trivialElement'
 	end 'recordStaticElementFacts'
 
-	// The `rdataAddr` of the `__witness_<conformerType>.<interface>` table (P1.7b slice A) — the address of one
+	// The `rdataAddr` of the `__witness_<conformerType>.<interface>` table — the address of one
 	// of a conformer's protocol witnesses. `ensureWitnessTable` registers the blob and its `funcAbs64` slot
 	// reloc (to the synthesized `int.hash`/`int.equals`) on first reference, idempotent by label, so many
 	// operations on one conformer build ONE table per interface.
 	//
-	// ⚠ It was `materializeKeyWitness` while a hash-table KEY was the only conformer threaded this way, and an
-	// `Array`'s ELEMENT was briefly the second; nothing here was ever about a key.
-	//
-	// ⚠⚠ **ITS SECOND CALLER WAS `withWitnessTableArgs` — the loop that appended one of these per constraint
-	// into a COMPILER-OWNED runtime callee — and that whole family is retired (W105, then W129).** The rule it
-	// enforced outlives it and is the one a rebuilt arm must not get wrong, because the cost of missing it was a
-	// MEASURED access violation rather than a tidiness point: every witness-carrying callee before `__map_get`
-	// was non-throwing, so "append the witnesses" and "lower a throwing call" had never had to meet, and
-	// `lowerTryCall`'s compiler-owned arm never asked. Lowered without them, `__map_get(map, key)` left the two
-	// witness PARAMETERS reading whatever the ABI registers happened to hold, and the fused `witnessCall` inside
-	// the probe's `hash()` jumped through it — `create` + `upsert` + `contains` all correct and the first
-	// `try m.get(k)` faulting with 0xC0000005. ⇒ **A compiler-owned callee that takes witness parameters must
-	// have EVERY lowering path that emits it reach one appender**, never two that agree by hand.
+	// ⚠⚠ **A COMPILER-OWNED CALLEE THAT TAKES WITNESS PARAMETERS MUST HAVE EVERY LOWERING PATH THAT EMITS IT
+	// REACH ONE APPENDER**, never two that agree by hand. MEASURED as an access violation rather than a
+	// tidiness point: lowered without them, `__map_get(map, key)` leaves the two witness PARAMETERS reading
+	// whatever the ABI registers happen to hold, and the fused `witnessCall` inside the probe's `hash()` jumps
+	// through it — `create` + `upsert` + `contains` all correct and the first `try m.get(k)` faulting with
+	// 0xC0000005.
 	function materializeWitnessTableAddr(conformerType ByteArray, instance WitnessTableInstance, interfaceName ByteArray, dstBlock IrBlock) returns ValueId
 		let label = self.ensureWitnessTable(conformerType, instance: instance, interfaceName: interfaceName)
 		let addrId = self.mintStdValueId()
@@ -4147,8 +4118,8 @@ type MaxonToStdLowering
 		return addrId
 	end 'materializeWitnessTableAddr'
 
-	// Append the enclosing instance's layout DESCRIPTOR to an OPAQUE-`T` array-copy call's arguments (P1.7 slice
-	// 3b-vi-b-β) — the LAST argument the `__managed_{slice,clone,append}_opaque` wrappers read `copyFunc@32` from,
+	// Append the enclosing instance's layout DESCRIPTOR to an OPAQUE-`T` array-copy call's arguments — the
+	// LAST argument the `__managed_{slice,clone,append}_opaque` wrappers read `copyFunc@32` from,
 	// exactly as `appendOpaqueContainerCreate` appends the `destroyFunc@40` read for an opaque `__managed_create`. A
 	// non-opaque-copy callee passes through UNCHANGED, so this is a safe wrapper over every runtime call's args.
 	// Shared by the non-throwing (`lowerRuntimeCall`) and throwing (`lowerTryCall`, the throwing `slice`) paths so
@@ -4165,7 +4136,7 @@ type MaxonToStdLowering
 			panic("opaqueCopyArgsWithDescriptor: opaque array copy '{String.from(callee)}' in '{String.from(self.currentFuncName)}' but the function carries no layout descriptor parameter — the parser's copy-descriptor-need seed and this lowering disagree")
 		end 'noLayout'
 
-		// The COPIED array's own type parameter decides the block (W43b) — its `copyFunc@32` is that column's
+		// The COPIED array's own type parameter decides the block — its `copyFunc@32` is that column's
 		// cloner and no other's, the exact dual of `appendOpaqueContainerCreate`'s destructor read.
 		let source = try args.get(0) otherwise panic("opaqueCopyArgsWithDescriptor: opaque array copy '{String.from(callee)}' has no receiver argument — its first parameter is the array record")
 		var fullArgs = ValueIdArray.create()
@@ -4174,8 +4145,8 @@ type MaxonToStdLowering
 		return fullArgs
 	end 'opaqueCopyArgsWithDescriptor'
 
-	// Emit `__drop_type_param(descriptor, value)` (P1.7 slice 3b-v) / `__retain_type_param(descriptor, value)`
-	// (W41-opaque): prepend the CURRENT function's layout descriptor to the single `value` argument the parser
+	// Emit `__drop_type_param(descriptor, value)` / `__retain_type_param(descriptor, value)`:
+	// prepend the CURRENT function's layout descriptor to the single `value` argument the parser
 	// emitted. The descriptor parameter is guaranteed by the parser's descriptor-need seed (a method that drops
 	// an opaque feed binding, or STORES a borrowed opaque value into a record, needs it exactly as a
 	// `sizeof(T)` / opaque `X.create()` method does), so its absence here is a parser/lowering divergence — a
@@ -4187,7 +4158,7 @@ type MaxonToStdLowering
 			panic("appendTypeParamDescriptor: `{String.from(callee)}` in '{String.from(self.currentFuncName)}' but the function carries no layout descriptor parameter — the parser's descriptor-need seed and this lowering disagree")
 		end 'noLayout'
 
-		// The value's own type parameter decides the block (W43b): both entries read their word off whatever
+		// The value's own type parameter decides the block: both entries read their word off whatever
 		// descriptor they are handed, so a two-parameter generic acting on its SECOND parameter's value must be
 		// handed that parameter's block and not the first's.
 		let value = try args.get(0) otherwise panic("appendTypeParamDescriptor: `{String.from(callee)}` has no value argument")
@@ -4226,8 +4197,8 @@ type MaxonToStdLowering
 		return layoutBlockOffsetFor(self.signatures.opaqueTypeParamPosition(MaxonType.typeParameter(token as TypeParamId)))
 	end 'typeParamValueBlockOffset'
 
-	// Is this runtime call an OPAQUE-`T` container `create()` — an `__managed_create` (P1.7 slice 3b-i) or a
-	// `__list_create` (W134) whose result instance's element is a type parameter? The parser emits such a create
+	// Is this runtime call an OPAQUE-`T` container `create()` — an `__managed_create` or a
+	// `__list_create` whose result instance's element is a type parameter? The parser emits such a create
 	// SHORT its element-destructor argument, which `appendOpaqueContainerCreate` supplies. A CONCRETE create (its
 	// element known) already carries every argument and takes the plain path.
 	//
@@ -4259,7 +4230,7 @@ type MaxonToStdLowering
 			panic("appendOpaqueContainerCreate: an opaque container `create()` (`{String.from(callee)}` — an `Array with <type parameter>`, a `Vector with <N> <type parameter>` since S2u, or a chain since W134; see `ProgramSignatures.opaqueInstanceCreateReadsTheDescriptor`) in '{String.from(self.currentFuncName)}' but the function carries no layout descriptor parameter — the parser's descriptor-need seed and this lowering disagree")
 		end 'noLayout'
 
-		// ⭐ **WHICH type parameter's dictionary — the block for the ELEMENT's OWN parameter (W43b).** A
+		// ⭐ **WHICH type parameter's dictionary — the block for the ELEMENT's OWN parameter.** A
 		// two-parameter generic creates one opaque container per column from ONE shared body, and reading a fixed
 		// `destroyFunc@40` gave both columns the FIRST column's destructor: measured, an `Array with Value`
 		// over `Integer` was stamped `__str_decref` and freed its ints as Strings at teardown.
@@ -4271,7 +4242,7 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: fullArgs))
 	end 'appendOpaqueContainerCreate'
 
-	// ⭐ **THE DESCRIPTOR BLOCK an OPAQUE CONTAINER VALUE's dictionary lives in (W43b)** — the block for the type
+	// ⭐ **THE DESCRIPTOR BLOCK an OPAQUE CONTAINER VALUE's dictionary lives in** — the block for the type
 	// parameter its ELEMENT names. Read off the container instance's own element type, which is the same
 	// `typeParameter` token `managedOpaqueArrayElementOf` matched positions against when it stamped the slot,
 	// so the write side and this read side name one block by construction. A concrete-element container never
@@ -4281,14 +4252,13 @@ type MaxonToStdLowering
 		return layoutBlockOffsetFor(self.signatures.opaqueTypeParamPosition(self.signatures.containerElementType(gid as GenericInstanceId)))
 	end 'opaqueContainerBlockOffset'
 
-	// ⭐ **THE ADDRESS OF ONE TYPE PARAMETER'S DICTIONARY BLOCK inside the current function's descriptor
-	// (W43b)** — what a runtime graph that takes a descriptor POINTER and reads a FIXED field offset from it
+	// ⭐ **THE ADDRESS OF ONE TYPE PARAMETER'S DICTIONARY BLOCK inside the current function's descriptor** —
+	// what a runtime graph that takes a descriptor POINTER and reads a FIXED field offset from it
 	// (`__drop_type_param`'s `destroyFunc@40`, the `__managed_*_opaque` wrappers' `copyFunc@32`) must be handed,
 	// so that those graphs need no second offset argument and no signature change: the caller knows the
 	// parameter statically and the callee keeps reading field 0 of whatever block it was given.
 	//
-	// Parameter 0's block IS the descriptor, so a single-parameter instance emits no arithmetic at all and
-	// its code is byte-identical to what it emitted before the descriptor grew a block per parameter.
+	// Parameter 0's block IS the descriptor, so a single-parameter instance emits no arithmetic at all.
 	function descriptorBlockAddr(blockOffset ByteOffset, dstBlock IrBlock) returns ValueId
 		if blockOffset == 0 'theFirstBlockIsTheDescriptor'
 			return self.implicitLayoutValueId
@@ -4301,10 +4271,10 @@ type MaxonToStdLowering
 		return addrId
 	end 'descriptorBlockAddr'
 
-	// Lower a Maxon `indirectCall` to `StdOp.callIndirect` (P1.5-A1). There is NO signature to SLOT
+	// Lower a Maxon `indirectCall` to `StdOp.callIndirect`. There is NO signature to SLOT
 	// against — a function TYPE has no parameter names, so the arguments are already in call order (the
 	// parser parsed them positionally, and the op carries no labels). But the Std op DOES carry the
-	// function value's register-file signature (`resultType`/`argFloatMask`, P1.5 #78) so a float result is
+	// function value's register-file signature (`resultType`/`argFloatMask`) so a float result is
 	// captured from the float return register and a float arg travels in a float argument register: both
 	// are read straight off the already-typed result and arg VALUES (`stdTypeOf`, via `appendCallIndirect`),
 	// with no callee name to look them up under. The callee value passes through as
@@ -4331,21 +4301,19 @@ type MaxonToStdLowering
 	end 'lowerIndirectCall'
 
 	// Build the Std `callIndirect`, recovering the function value's register-file signature from the
-	// already-typed result and arg VALUES (P1.5 #78): `resultType` is the result value's Std type (a float
+	// already-typed result and arg VALUES: `resultType` is the result value's Std type (a float
 	// result is captured from the float return register), and `argFloatMask` has bit k set iff argument k is
 	// a float — a float argument travels in a float argument register, everything else (incl. the trailing
 	// uniform-ABI companion env pointer, `Parser.emitClosureEnvArg`, an i64) in a GPR. Both come from
 	// `stdTypeOf`, the per-value type the parser recorded.
 	//
-	// ⚠⚠ **AND `stdTypeOf` ALONE IS NOT ENOUGH, WHICH IS WHY THE WIDENING RUNS FIRST.** This comment used to
-	// claim the placement "matches the callee's declared parameter types BY CONSTRUCTION (a well-typed
-	// argument shares its callee parameter's type)". That holds only when every argument is already a value
-	// of its own declared type, and an UNTYPED INT LITERAL is not: `f(2)` at a `float` parameter is a
-	// well-typed program the language widens implicitly, and reading the literal's own type made the mask
-	// say GPR where the callee reads XMM. `v * 2.0` then multiplied whatever was in the register — a silent
-	// wrong answer, and one the mask made CONSISTENTLY wrong end to end, so nothing downstream could catch
-	// it. A comment was doing a check's job. The widening below makes the old sentence true by making the
-	// argument a float BEFORE the mask is taken, which is exactly the order the DIRECT call path uses.
+	// ⚠⚠ **AND `stdTypeOf` ALONE IS NOT ENOUGH, WHICH IS WHY THE WIDENING RUNS FIRST.** An argument does
+	// NOT always share its callee parameter's type: an UNTYPED INT LITERAL does not. `f(2)` at a `float`
+	// parameter is a well-typed program the language widens implicitly, and reading the literal's own type
+	// makes the mask say GPR where the callee reads XMM. `v * 2.0` then multiplies whatever was in the
+	// register — a silent wrong answer, and one the mask makes CONSISTENTLY wrong end to end, so nothing
+	// downstream can catch it. The widening below makes the argument a float BEFORE the mask is taken,
+	// which is exactly the order the DIRECT call path uses.
 	// A helper because `lowerIndirectCall`'s arm must hand `args` to a function and touch it no other way.
 	function appendCallIndirect(dstBlock IrBlock, result ValueId, callee ValueId, args ValueIdArray)
 		let declaredParams = self.indirectCalleeParamTypes(callee)
@@ -4357,7 +4325,7 @@ type MaxonToStdLowering
 	// here the callee is a VALUE, and its declared type is whatever governs it: the FUNCTION it refers to (a
 	// `functionRef` or a lifted closure) or the function TYPEALIAS the place it came from was written with.
 	// `declaredFunctionShapeOf` is the one lookup that answers for all three, and it is the SAME one
-	// `SemanticCheck.checkIndirectCall` used to prove the arity and the argument types — so the check and
+	// `SemanticCheck.checkIndirectCall` proves the arity and the argument types through — so the check and
 	// the lowering cannot come to disagree about which signature this call binds against.
 	function indirectCalleeParamTypes(callee ValueId) returns MaxonTypeArray
 		// The SAME `requireFunctionShapeOf` SemanticCheck asked of this same call — one door, so the check
@@ -4453,9 +4421,9 @@ type MaxonToStdLowering
 	// IDENTIFIER and identifiers can spell builtins: `float`/`bool`/`int` are keywords a `uses` list cannot
 	// hold (E2010), but `ExitCode` and `String` are not. `interface Taker uses ExitCode` is a legal program
 	// whose `ExitCode` is a TYPE PARAMETER denoting whatever each conformer binds — and asking
-	// `builtinTypeNameTag` first read it as the u32 builtin and declared the argument an i32 against an i64
-	// callee. MEASURED: x64 answered 31 and wasm TRAPPED, on a program that was green before this order
-	// existed. `builtinTypeNameTag`'s own header states the rule that violated — it is valid only at a door
+	// `builtinTypeNameTag` first reads it as the u32 builtin and declares the argument an i32 against an i64
+	// callee. MEASURED with the tests in the other order: x64 answers 31 and wasm TRAPS.
+	// `builtinTypeNameTag`'s own header states the rule that breaks — it is valid only at a door
 	// holding a RENDERED type name, never at one asking what a `named` reference DENOTES.
 	//
 	// ⭐⭐ **THE ASSOCIATED TYPE IS RESOLVED AGAINST THE DISPATCHED INTERFACE, NOT THE DECLARING ONE.** Under
@@ -4485,7 +4453,7 @@ type MaxonToStdLowering
 	end 'witnessFormalType'
 
 	// ⭐⭐ **THE RESOLVED TYPE OF AN ASSOCIATED FORMAL — THE RECEIVER'S OWN CLAIM FIRST, THE WHOLE-PROGRAM FOLD
-	// ONLY WHERE THE RECEIVER MAKES NONE (W59).** An associated binding is a property of the USE SITE, so a
+	// ONLY WHERE THE RECEIVER MAKES NONE.** An associated binding is a property of the USE SITE, so a
 	// receiver declared `Taker with Integer` fixes `Element` for every dispatch on it whatever some other
 	// conformer binds — and `SemanticCheck.checkExistentialSiteClaimAtArgument` (E3127) is what makes only
 	// conformers binding `Integer` reach it.
@@ -4495,8 +4463,7 @@ type MaxonToStdLowering
 	// name `SemanticCheck.existentialSiteClaimAgainst` compares a conformer's binding against, so the check
 	// that admits a widening and the ABI this emits for it cannot come to read the string two ways.
 	//
-	// ⚠⚠ **`disagreed` IS UNREACHABLE, AND NOT FOR THE REASON IT USED TO BE.** It was sound because E3119
-	// refused every disagreement whole-program; W59 narrowed that refusal to exactly the positions no dispatch
+	// ⚠⚠ **`disagreed` IS UNREACHABLE.** E3119 refuses a disagreement at exactly the positions no dispatch
 	// site fixes — `ConformanceCheck.dispatchedAssociatedNamesOf` walks the same receivers this function reads
 	// and gates on the same `valueExistentialInstances` column. So a `disagreed` here means a site fixed
 	// nothing AND that gate let it through, which is the two doors disagreeing about one receiver.
@@ -4525,7 +4492,7 @@ type MaxonToStdLowering
 	// RESULT out of the same column — one receiver, one instance, one position, so a call's result type and its
 	// argument ABI are decided by the same fact rather than by two readings of it.
 	//
-	// ⭐ **A CONSTRAINED TYPE PARAMETER CLAIMS THROUGH ITS `where` CLAUSE INSTEAD (G19)**, which is the same
+	// ⭐ **A CONSTRAINED TYPE PARAMETER CLAIMS THROUGH ITS `where` CLAUSE INSTEAD**, which is the same
 	// arrangement one tier up: `ConformanceCheck.receiverClaimedPositions` reads the two stores in this order
 	// and for this reason, so the refusal that admits the dispatch and the ABI this emits for it cannot come to
 	// disagree about what the site fixed.
@@ -4618,7 +4585,7 @@ type MaxonToStdLowering
 		return slots
 	end 'witnessSlotsOf'
 
-	// ⭐ **LOWER A CONSTRAINED-TYPE-PARAMETER DISPATCH TO THE FUSED `StdOp.witnessCall` (P1.7a slice 2a).** The
+	// ⭐ **LOWER A CONSTRAINED-TYPE-PARAMETER DISPATCH TO THE FUSED `StdOp.witnessCall`.** The
 	// witness ADDRESS is the enclosing (generic) function's own threaded witness parameter for this constraint
 	// — FORWARDED, exactly as `forwardCallerLayout` forwards the layout descriptor: a `witnessDispatch` is only
 	// ever emitted inside a generic body, whose `T` witness arrived as a hidden parameter (the concrete
@@ -4632,8 +4599,8 @@ type MaxonToStdLowering
 		end 'w'
 	end 'lowerWitnessDispatch'
 
-	// ⭐ **LOWER A THROWING CONSTRAINED-TYPE-PARAMETER DISPATCH TO THE FUSED `StdOp.witnessTryCall` (P1.7a
-	// slice 2b-v).** `witnessTryDispatch : witnessDispatch :: tryCall : call`, so this is the non-throwing
+	// ⭐ **LOWER A THROWING CONSTRAINED-TYPE-PARAMETER DISPATCH TO THE FUSED `StdOp.witnessTryCall`.**
+	// `witnessTryDispatch : witnessDispatch :: tryCall : call`, so this is the non-throwing
 	// lowering plus the one thing a throwing call adds — the second `errorFlag` result captured from the
 	// dual-register error ABI. Re-matched in a SMALL match so `args` is bound in a single-call arm, never in
 	// `lowerOp`'s big one (the tail-slot-`Array` decref corruption `lowerIndirectCall` documents).
@@ -4649,12 +4616,10 @@ type MaxonToStdLowering
 	// is `void`). A helper because `lowerWitnessDispatch`'s arm must hand `args` to a function and touch it no
 	// other way (see there and `lowerIndirectCall`).
 	//
-	// ⭐ **THE WITNESS ARRIVES AS A VALUE AND THIS LOWERING RESOLVES NOTHING (P1.7a-existentials slice 1).**
-	// It used to take a `constraintIndex` and turn it into the enclosing function's hidden witness parameter,
-	// which meant re-deriving whole-program a count the PARSER had already reserved — and left an existential
-	// receiver, whose witness is the fat pointer's own second half, with no index to name. The parser resolves
-	// its own reservation now (`Parser.witnessParamValueId`), so both receiver kinds arrive here already
-	// pointing at a value and this is the single Std emission for them.
+	// ⭐ **THE WITNESS ARRIVES AS A VALUE AND THIS LOWERING RESOLVES NOTHING.** The parser resolves its own
+	// reservation (`Parser.witnessParamValueId`), so a constrained type parameter and an existential
+	// receiver — whose witness is the fat pointer's own second half — both arrive here already pointing at a
+	// value, and this is the single Std emission for them.
 	function appendWitnessCall(dstBlock IrBlock, result ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, isVoid bool)
 		let resultType = self.witnessCallResultType(result, isVoid: isVoid)
 		let declaredParams = self.witnessFormalTypes(methodIndex, interfaceDeclIndex: interfaceDeclIndex, receiver: witnessDispatchReceiver(args))
@@ -4676,13 +4641,12 @@ type MaxonToStdLowering
 	// non-throwing forms cannot drift on how a result is typed.
 	//
 	// ⚠ **IT READS THE VALUE COLUMN WHERE `witnessFormalTypes` MAY NOT, AND THE ASYMMETRY IS EARNED — BUT
-	// ONLY BECAUSE THE ONE CASE IT COULD NOT COVER IS NOW REFUSED.** A witness call's ARGUMENT widths cannot
+	// ONLY BECAUSE THE ONE CASE IT CANNOT COVER IS REFUSED.** A witness call's ARGUMENT widths cannot
 	// come from `stdTypeOf`: the parser tags an `ExitCode` ANNOTATION as a bare `named` and that collapses to
 	// the wrong width (see there). The RESULT is the opposite case for a requirement whose return type the
 	// interface SPELLS — `Parser.interfaceReturnMaxonType` asks `TypeResolution.builtinTypeNameTag` about that
 	// spelling, so the tag on the value IS the interface's own answer already, the formals rule arriving by a
-	// shorter road rather than a second source. That is the W1 fix, and
-	// `where-clauses.witness-exitcode-return-high` pins it.
+	// shorter road rather than a second source. `where-clauses.witness-exitcode-return-high` pins it.
 	//
 	// ⚠ The road does NOT reach a return the interface leaves to a conformer. An ASSOCIATED return type
 	// spells only the `uses` name, so that door answers `named` → `int` while the impl returns whatever was
@@ -4695,7 +4659,7 @@ type MaxonToStdLowering
 	end 'witnessCallResultType'
 
 	// The Std type an indirect call CAPTURES its result in — normally the result value's own type. But a
-	// VOID function value (`let cb = doIt; cb()` at statement position, P1.5 #68) has NO result to capture:
+	// VOID function value (`let cb = doIt; cb()` at statement position) has NO result to capture:
 	// like a void DIRECT call, whose return register holds a garbage integer nobody reads
 	// (StdLoweringShared.calleeResultClass), its result is captured as a garbage i64. `stdTypeOf`/
 	// `valueTagToStdType` deliberately PANIC on a void tag — a void value can never be an OPERAND — but a
@@ -4707,7 +4671,7 @@ type MaxonToStdLowering
 		return StdType.i64 if tag == ValueTypeTag.void else valueTagToStdType(tag)
 	end 'indirectResultType'
 
-	// ⭐ **`async f(args…)` → SPAWN A GREEN THREAD** (P1.5-B1a). The arguments are slotted to parameter order
+	// ⭐ **`async f(args…)` → SPAWN A GREEN THREAD**. The arguments are slotted to parameter order
 	// (`slotCallArgs`, exactly as `lowerCall`), then spilled into the GT struct's INLINE arg region — one
 	// `storeIndirect` per argument, the trampoline reading them back into the ABI argument registers. The
 	// callee's DIRECT `.text` address (`funcAddr`, NOT a `__fnref_` thunk: the trampoline calls it with user
@@ -4736,18 +4700,15 @@ type MaxonToStdLowering
 		// GtArgSlotBytes`. A callee with more arguments than that would store PAST the region — a silent struct
 		// overrun the trampoline then mis-loads — so this stays as the STRUCTURAL BACKSTOP.
 		//
-		// ⚠ It is a backstop and no longer the only guard: `Parser.emitAsyncCall` refuses the same program with
-		// a positioned diagnostic naming `MaxAsyncArgs`. It used to be the only one, under a comment claiming it
-		// "cannot fire today" because MaxAsyncArgs equalled the parser's six-register parameter cap — which
-		// stopped being true the moment ordinary calls gained stack arguments and the cap went. Reaching here
-		// now means the parser's gate was bypassed (a synthesized spawn, a new async lowering path), which is a
-		// compiler bug and belongs in a panic.
+		// ⚠ It is a backstop and not the only guard: `Parser.emitAsyncCall` refuses the same program with a
+		// positioned diagnostic naming `MaxAsyncArgs`. Reaching here means the parser's gate was bypassed (a
+		// synthesized spawn, a new async lowering path), which is a compiler bug and belongs in a panic.
 		if argIds.count() > MaxAsyncArgs 'overflow'
 			panic("emitAsyncSpawn: async callee '{String.from(callee)}' has {argIds.count()} arguments but the inline arg region holds only MaxAsyncArgs ({MaxAsyncArgs}) slots — `Parser.emitAsyncCall` refuses a source-level spawn past that, so this spawn reached lowering without passing it")
 		end 'overflow'
 
 		// funcPtr = &callee ; result = __gt_spawn(funcPtr) — the Promise handle (the GT struct pointer). The arg
-		// region is now INLINE in the struct (P1.5-B1c #87), so there is no separate slab buffer to allocate.
+		// region is INLINE in the struct, so there is no separate slab buffer to allocate.
 		let funcPtr = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(funcPtr, funcName: callee))
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: GtSpawnName, args: argsOf(funcPtr)))
@@ -4757,12 +4718,11 @@ type MaxonToStdLowering
 		// unfilled slots at 0 (harmlessly loaded into unread argument registers).
 		//
 		// ⚠⚠ **THE GT IS NOT DISCOVERABLE UNTIL `__gt_ready` BELOW, AND THAT ORDER IS THE WHOLE OF THIS
-		// SEQUENCE'S CORRECTNESS.** These stores used to run AFTER `__gt_spawn` had already enqueued the thread,
-		// under a comment reading *"SAFE to fill AFTER the spawn: a spawned GT is only ENQUEUED, not run, until
-		// awaited (single-M)"*. A worker M falsifies that premise, and it was MEASURED doing so: at
-		// `MAXON_MAX_PROCS=12`, 600 threads each reading one integer argument summed to a DIFFERENT wrong total
-		// on every run, because a worker dequeued and ran them while this loop was still writing. Publishing
-		// last removes the premise rather than restating it — see `GtRuntime.GtReadyName`.
+		// SEQUENCE'S CORRECTNESS.** Run these stores AFTER `__gt_spawn` has enqueued the thread and a worker M
+		// dequeues and runs it while the loop is still writing: MEASURED at `MAXON_MAX_PROCS=12`, 600 threads
+		// each reading one integer argument summed to a DIFFERENT wrong total on every run. Publishing last
+		// removes the premise that a spawned GT is only enqueued, never run, until awaited — see
+		// `GtRuntime.GtReadyName`.
 		for k in 0 upto argIds.count() 'eachArg'
 			let argId = try argIds.get(k) otherwise panic("emitAsyncSpawn: argIds.get OOB at {k}")
 			self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(result, offset: (GtOffArgInline + k * GtArgSlotBytes) as ByteOffset, valueId: argId, valueType: StdType.i64))
@@ -4797,7 +4757,7 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(gt, offset: GtOffReleaser as ByteOffset, valueId: releaserPtr, valueType: StdType.i64))
 	end 'emitAsyncReleaserStore'
 
-	// ⭐⭐ **`spawn <T>.<factory>(…)` → `__svc_spawn(&<T>.__loop, state, &<T>.request's drop)` (SV1 wave 3).**
+	// ⭐⭐ **`spawn <T>.<factory>(…)` → `__svc_spawn(&<T>.__loop, state, &<T>.request's drop)`.**
 	// The op carries the TYPE and the state; the two ADDRESSES are derived here, from that one name, because
 	// deriving them at the parse would put the loop's symbol in a second place and the abandon callee in a
 	// third — and a `funcAddr` naming a symbol nothing built is a link failure with no line on it.
@@ -4833,7 +4793,7 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: SvcSpawnName, args: threeArgs(loopPtr, second: state, third: abandonPtr)))
 	end 'emitServiceSpawn'
 
-	// ⭐ **`h.m(…)` → `__mbox_send(mailbox, request)` (SV1 wave 3).** Everything else about a send happened at
+	// ⭐ **`h.m(…)` → `__mbox_send(mailbox, request)`.** Everything else about a send happened at
 	// the parse: the arguments were MOVED into the request box, the box was built and tagged, and the mailbox
 	// was loaded out of the handle. The op's `callee` is carried for `UnusedExportCheck` and `StdlibSource`,
 	// which read it as a reference to the message — neither is a lowering question, so nothing here reads it.
@@ -4886,7 +4846,7 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: GtTryAwaitName, args: argsOf(promise)))
 	end 'lowerTryAwait'
 
-	// Materialize a function value's `.text` address (P1.5-A2b-2). Under the uniform `(userargs, env) -> R`
+	// Materialize a function value's `.text` address. Under the uniform `(userargs, env) -> R`
 	// ABI every USER function value is called through the SAME indirect signature, so the address must name a
 	// function of that shape. A LIFTED CLOSURE already is one (its trailing `__env` parameter). A PLAIN named
 	// function is not, and its direct calls must stay unchurned — so its value use materializes the address of
@@ -4896,13 +4856,13 @@ type MaxonToStdLowering
 	// Whether a bridge is needed at all is NOT decided here: it is `FnRefThunk.functionValueNeedsEnvThunk`, the
 	// one place that rule lives, because `collectFnRefThunkTargets` must reach the SAME verdict and a
 	// disagreement between the two is a compile error at neither — see that predicate's header, and the
-	// `wasm trap: indirect call type mismatch` the A1r review measured when the rule was written out twice.
+	// `wasm trap: indirect call type mismatch` measured when that rule is written out twice.
 	function lowerFunctionRef(result ValueId, funcName ByteArray, dstBlock IrBlock)
 		let target = fnRefThunkName(funcName) if functionValueNeedsEnvThunk(funcName, funcSignatures: self.funcSignatures) else funcName
 		self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(result, funcName: target))
 	end 'lowerFunctionRef'
 
-	// ⭐ **int→float ARGUMENT WIDENING (F3a)** — the CALL-SITE dual of the `return`/assignment float
+	// ⭐ **int→float ARGUMENT WIDENING** — the CALL-SITE dual of the `return`/assignment float
 	// coercions the parser already owns, and it lives HERE because this is the first tier that holds a
 	// callee's ALIAS-RESOLVED parameter types (`funcSignatures` re-synced by TypeResolution, and
 	// `functionAliasShapes` built by it) beside the one `slotCallArgs` the check and the lowering share.
@@ -4948,11 +4908,11 @@ type MaxonToStdLowering
 		// `ValueIdArray` built, no op emitted. Without it every lowered call allocates a fresh array it
 		// never changes (measured: a linear per-call allocation delta across the scale ladder).
 		//
-		// ⚠ **THE SCAN ASKS THE EXACT PER-ARGUMENT QUESTION, NOT A CHEAPER APPROXIMATION OF IT.** It used to
-		// ask only whether the SIGNATURE had a float parameter, which the opaque-word direction cannot be
-		// expressed in — a `T` parameter is an i64 — so widening the approximation to "float or type
-		// parameter" would have allocated at every `push`, `set` and `get` of every generic container. Asked
-		// exactly, the scan allocates nothing and answers for both directions at once.
+		// ⚠ **THE SCAN ASKS THE EXACT PER-ARGUMENT QUESTION, NOT A CHEAPER APPROXIMATION OF IT.** Asking only
+		// whether the SIGNATURE has a float parameter cannot express the opaque-word direction — a `T`
+		// parameter is an i64 — and widening that approximation to "float or type parameter" would allocate at
+		// every `push`, `set` and `get` of every generic container. Asked exactly, the scan allocates nothing
+		// and answers for both directions at once.
 		if not self.anyArgCrossesTheFloatDomain(argIds, paramTypes: paramTypes) 'everyArgAlreadyInItsDomain'
 			return argIds
 		end 'everyArgAlreadyInItsDomain'
@@ -5015,7 +4975,7 @@ type MaxonToStdLowering
 	// ⭐⭐ **DOES THIS ARGUMENT HAVE TO CHANGE REGISTER FILES TO REACH ITS PARAMETER?** Two directions, and
 	// they are one question because they are one boundary:
 	//
-	//   • **INTO a float parameter** (F3a) — the argument is an integer, and a non-float argument bound for a
+	//   • **INTO a float parameter** — the argument is an integer, and a non-float argument bound for a
 	//     float parameter is ALWAYS one: `SemanticCheck` has already rejected every other type (E3005).
 	//   • **INTO A TYPE PARAMETER'S OPAQUE WORD** — the argument is a float and the parameter is a `T`. The compiler
 	//     DICTIONARY-PASSES, so `push(value Element)` is compiled ONCE for every instantiation at once and
@@ -5038,7 +4998,7 @@ type MaxonToStdLowering
 	// them, and every conversion this picks genuinely crosses the domain — which is what keeps
 	// `assertConversionCrossesDomain` satisfied in both directions.
 	//
-	// ⭐⭐ **WHICH CONVERSION IS NOT THE SAME QUESTION AS WHETHER (A4o).** An ordinary integer WIDENS
+	// ⭐⭐ **WHICH CONVERSION IS NOT THE SAME QUESTION AS WHETHER.** An ordinary integer WIDENS
 	// (`promoteToFloat` → `siToFp`); a FLOAT-BACKED ENUM's i64 is already the double's IEEE-754 encoding and
 	// is REINTERPRETED (`bitsToFloat` → `bitcastI64ToF64`). MEASURED with only the widening here:
 	// `takesFloat(Weight.light)` for `light = 2.5` printed **4612811918334231000.0**.
@@ -5088,7 +5048,7 @@ type MaxonToStdLowering
 		return self.signatures.enumIsFloatBacked(name)
 	end 'argIsFloatBackedEnum'
 
-	// ⭐ **APPEND THE COMPANION ENVIRONMENT ARGUMENT FOR EACH FUNCTION-TYPED PARAMETER (P1.5-A2b-2).** The
+	// ⭐ **APPEND THE COMPANION ENVIRONMENT ARGUMENT FOR EACH FUNCTION-TYPED PARAMETER.** The
 	// uniform ABI splits a function value into (fn ptr, env): the slotted `argIds` carry the fn-ptr half at
 	// each function-typed parameter's position, and this appends the env half — the argument value's OWN
 	// environment (a capturing closure's block, else a null for a plain function reference or a non-capturing
@@ -5098,8 +5058,8 @@ type MaxonToStdLowering
 	// this tier because it needs the callee's ALIAS-RESOLVED parameter types (a `function` parameter may be
 	// declared in another file), which the parser does not have.
 	// The two call-argument transforms a slotted call needs, composed in one place so `lowerCall` and
-	// `lowerTryCall` cannot apply them in different orders: an int→float widening at a float parameter (F3a),
-	// then a companion environment appended per function parameter (P1.5-A2b-2). They are independent (a
+	// `lowerTryCall` cannot apply them in different orders: an int→float widening at a float parameter,
+	// then a companion environment appended per function parameter. They are independent (a
 	// parameter is float, function, or neither), and widening preserves the arg count, so the env append's
 	// per-position scan stays aligned with the signature.
 	function finalizeCallArgs(argIds ValueIdArray, sig FuncSignature, callee ByteArray, dstBlock IrBlock) returns ValueIdArray
@@ -5276,13 +5236,13 @@ type MaxonToStdLowering
 	//
 	// ⭐⭐ **AND IT IS AN EXPANSION RATHER THAN A NEW `StdUnaryOpcode`, ON A MEASURABILITY ARGUMENT.** Every
 	// target has a single instruction for this — x64 `movsx`/`movsxd`, arm64 `sxtb`/`sxth`/`sxtw`, wasm
-	// `i64.extend8_s`/`16_s`/`32_s` — so a Std opcode with three per-target lowerings is the better CODE and
-	// was the first design. What stopped it is that those are three new hand-written ENCODINGS in three
+	// `i64.extend8_s`/`16_s`/`32_s` — so a Std opcode with three per-target lowerings would be the better
+	// CODE. What rules it out is that those are three new hand-written ENCODINGS in three
 	// backends, and this tree can execute exactly one of them: arm64 needs the Mac and the wasm lane is the
 	// cross-target sweep's. A wrong bit in an encoder is a silently wrong NUMBER, so three unrunnable
 	// encodings would be three unverifiable claims. `shl`/`shr` are already emitted by every program in the
 	// corpus on all three targets, so this expansion is correct on each of them by the same evidence that
-	// says a shift is. ⇒ the native instruction is a codegen rung with a cross-target gate, not this one.
+	// says a shift is. ⇒ the native instruction belongs to a codegen change with a cross-target gate, not here.
 	//
 	// The count is `(8 - slotBytes) * 8`, a `const` the Std-tier `foldConstOperands` then folds into both
 	// shifts' immediate forms, so the emitted code is two shift-immediates and no register for the count.
@@ -5366,8 +5326,8 @@ type MaxonToStdLowering
 	// ⚠ **IT TAKES THE TERMINATOR SLOT AND THE BLOCK'S ID, NOT THE BLOCK.** Its caller walks the Maxon
 	// blocks while WRITING the lowering's own storage, so it may not hold a block record read out of
 	// `maxonModule.blocks` (E3070) — and the slot is a scalar-payload union it copied out before the walk
-	// began. The id replaces the label the panic used to quote for the same reason, and names the block
-	// more exactly (a label is not an identity).
+	// began. The id rather than a label for the same reason, and it names the block more exactly (a label is
+	// not an identity).
 	function carryOplessTerminator(srcTerminator Terminator, srcBlockId BlockId, dstBlock IrBlock)
 		match srcTerminator 'carry'
 			unset then break 'carry'
@@ -5448,10 +5408,9 @@ type MaxonToStdLowering
 	function lowerThrowError(errValue ValueId, errIsBoxed bool, dstBlock IrBlock)
 		// A BOXED error's `errValue` is already the flag (the box pointer) — no `const`/`add`, so the primary
 		// default is the only op. A SCALAR error emits `bias`, `flag = errValue + bias`, then the primary
-		// default, in that order so its ValueId numbering and op sequence stay what they were before boxed
-		// errors existed: `emitZeroConstOfReturnType` mints exactly one id like the plain zero it replaced,
-		// so the scalar goldens do not move — only a FLOAT return (which previously PANICKED the backend, so
-		// has no prior golden) now emits an XMM zero here instead of a GPR one.
+		// default, in that order: `emitZeroConstOfReturnType` mints exactly one id, as a bare zero does, so a
+		// scalar return's op sequence is the plain-zero one. A FLOAT return emits an XMM zero here rather than
+		// a GPR one.
 		if errIsBoxed 'boxed'
 			let boxedDefault = self.emitZeroConstOfReturnType(dstBlock)
 			self.stdModule.setTerminator(dstBlock, op: StdOp.errorReturn(boxedDefault, errorFlagId: errValue))
@@ -5517,21 +5476,21 @@ type MaxonToStdLowering
 	// ⭐ **A COMPILER-EMITTED THROWING CALLEE (`__managed_get`/`__managed_set`/`__managed_first`/…) HAS NO SIGNATURE TO
 	// SLOT AGAINST** — the parser wrote its arguments positionally (`emitRuntimeCall`), so they pass verbatim,
 	// exactly as `lowerCall` routes a non-throwing runtime call through `lowerRuntimeCall`. The array
-	// accessors are the first throwing builtins (P1.7 slice 1); before them no builtin threw, which is why
+	// accessors are the first throwing builtins; before them no builtin threw, which is why
 	// this path is new. The label guard is `lowerRuntimeCall`'s: a runtime call is positional by
 	// construction, so a label would silently mis-slot.
 	//
-	// ⚠ A source-written `try __int_fromString(s)` from `stdlib/Builtins.maxon` (A1r) is NOT that: it names a
+	// ⚠ A source-written `try __int_fromString(s)` from `stdlib/Builtins.maxon` is NOT that: it names a
 	// DECLARED throwing function, so it takes `appendThrowingCall`'s slotting path like every other `try f(…)`. The
 	// discriminator is `isSignaturelessCompilerCallee`, `lowerCall`'s exactly — this is the throwing twin of
 	// that site and the two must part company on the same fact.
 	function lowerTryCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argDefaultSlots ParamCountArray, dstBlock IrBlock)
-		// ⭐ **A CHECKED DIVIDE IS EXPANDED, NOT CALLED (A1).** Asked FIRST, and exhaustively, so a checked
+		// ⭐ **A CHECKED DIVIDE IS EXPANDED, NOT CALLED.** Asked FIRST, and exhaustively, so a checked
 		// division callee can never fall through to the `StdOp.tryCall` `appendThrowingCall` emits — there is no `__checked_div`
 		// function for such a call to reach, and the linker's "call to unknown function" would be the failure.
 		// `CheckedDivisionRuntime`'s header explains why this family has no body to call.
 		//
-		// ⚠ **A1x's `guardedRemainder` MUST NOT ARRIVE HERE**, and the arm says so rather than sharing the
+		// ⚠ **THE TOTAL `guardedRemainder` MUST NOT ARRIVE HERE**, and the arm says so rather than sharing the
 		// expansion's door: it is TOTAL, so it is not a `try` target at all — the parser refuses a `try` over it
 		// (E3055) and reaches the expansion through `lowerRuntimeCall` instead. Answering it here would mean a
 		// `tryCall` whose error flag nothing ever sets.
@@ -5555,12 +5514,10 @@ type MaxonToStdLowering
 		if isSignaturelessCompilerCallee(callee, funcSignatures: self.funcSignatures) 'compilerOwnTryCall'
 			requireRuntimeCallPositional(callee, argLabels: argLabels)
 
-			// ⚠ **A WITNESS-CARRYING `tryCall` ARM STOOD HERE FOR `__map_get`, AND WENT WITH IT (W105).**
-			// `__map_get` was the only compiler-owned callee that both THREADED witness tables and THREW, and
-			// forgetting it cost a measured 0xC0000005 — see `materializeWitnessTableAddr`, which now holds that
-			// measurement and the one-door rule it proves. The rule outlives the arm: NO compiler-owned runtime
-			// callee threads a witness table at all since W129, so one added later — throwing or not — builds its
-			// appender once and reaches it from here as well as from `lowerRuntimeCall`.
+			// ⚠ **NO COMPILER-OWNED RUNTIME CALLEE THREADS A WITNESS TABLE**, so no arm here appends one. One
+			// added later — throwing or not — builds its appender ONCE and reaches it from here as well as from
+			// `lowerRuntimeCall`; forgetting that costs a measured 0xC0000005, which
+			// `materializeWitnessTableAddr` holds with the one-door rule it proves.
 			// The throwing OPAQUE-`T` `slice` (`__managed_slice_opaque`) takes the enclosing instance's descriptor as
 			// its last argument, appended here exactly as the non-throwing clone/append do in `lowerRuntimeCall`.
 			// The element facts are `appendRuntimeCall`'s, asked here for the THREE throwing element primitives
@@ -5582,12 +5539,12 @@ type MaxonToStdLowering
 		end 'slot'
 	end 'appendThrowingCall'
 
-	// ⭐⭐ **EXPAND `__checked_div` / `__checked_mod` / `__guarded_mod` IN PLACE — AND BRANCHLESSLY (A1, A1x).**
+	// ⭐⭐ **EXPAND `__checked_div` / `__checked_mod` / `__guarded_mod` IN PLACE — AND BRANCHLESSLY.**
 	// The whole body is a divisor test, and for the zero hazard the test IS the error flag:
 	//
 	//   INTEGER `/`:   `flag = (divisor == 0)` · `safe = divisor or flag` · `result = dividend / safe`
 	//   FLOAT   `/`:   `flag = (divisor == 0.0)` · `result = dividend / divisor`
-	//   INTEGER `mod`: the same, over a dividend the overflow guard has already masked (A1x, below)
+	//   INTEGER `mod`: the same, over a dividend the overflow guard below has already masked
 	//
 	// ⭐ **THE COMPARE'S OWN 0/1 IS THE ERROR FLAG, WITH NO `select` AND NO SECOND CONSTANT.**
 	// `__DivisionByZeroError` has one case at ordinal 0, so its flag encoding is `0 + ErrorFlagOrdinalBias` = 1
@@ -5615,7 +5572,7 @@ type MaxonToStdLowering
 	// Values ride BLOCK ARGS rather than memory temps, so a store/reload pair has no counterpart and
 	// the branchless form has no phi to merge either. On the zero path the discarded result is
 	// `dividend / 1`.
-	// ⭐⭐ **THE `mod` OVERFLOW GUARD (A1x), AND WHY IT MASKS THE DIVIDEND RATHER THAN FIXING THE DIVISOR.**
+	// ⭐⭐ **THE `mod` OVERFLOW GUARD, AND WHY IT MASKS THE DIVIDEND RATHER THAN FIXING THE DIVISOR.**
 	// `idiv` raises `#DE` on `i64.min / -1` as well as on a zero divisor, and a `mod` inherits that fault from
 	// a quotient it does not even read. The remainder's own answer at that divisor is not merely
 	// representable, it is CONSTANT: **`a mod -1` is `0` for every `a`** (truncated division gives
@@ -5625,7 +5582,7 @@ type MaxonToStdLowering
 	//   `negOne = -1` · `isNegOne = (divisor == negOne)` · `mask = isNegOne + negOne` · `safe = dividend and mask`
 	//
 	// `isNegOne` is 0 or 1, so `mask` is `-1` (all ones — `dividend` passes through untouched) for every other
-	// divisor and `0` exactly at `-1`. **Four instructions, no branch**, composing with A1's zero guard rather
+	// divisor and `0` exactly at `-1`. **Four instructions, no branch**, composing with the zero guard rather
 	// than forking around it.
 	//
 	// ⭐ **THE ONE `-1` CONSTANT IS BOTH THE COMPARAND AND THE DECREMENT**, which is why the third op is an
@@ -5676,7 +5633,7 @@ type MaxonToStdLowering
 		return safeDividend
 	end 'emitRemainderOverflowSafeDividend'
 
-	// A1's zero test and the error flag it materializes, in one place because they are one derivation — see
+	// The zero test and the error flag it materializes, in one place because they are one derivation — see
 	// this expansion's header for why the compare's own `0`/`1` IS the encoded error and needs no `select`.
 	function emitDivisorZeroFlag(errorFlag ValueId, divisor ValueId, operandType StdType, dstBlock IrBlock)
 		if DivisionByZeroFlag != BoolTrueValue 'flagIsNotTheCompare'
@@ -5712,23 +5669,21 @@ type MaxonToStdLowering
 			checkedQuotient(errorFlag) then self.emitDivisorZeroFlag(errorFlag, divisor: divisor, operandType: operandType, dstBlock: dstBlock)
 			checkedRemainder(errorFlag) then self.emitDivisorZeroFlag(errorFlag, divisor: divisor, operandType: operandType, dstBlock: dstBlock)
 
-			// A1x's total remainder has no error channel at all — its divisor is PROVEN non-zero, so a flag
+			// The total remainder has no error channel at all — its divisor is PROVEN non-zero, so a flag
 			// register would be one nobody reads and a compare nobody branches on.
 			guardedRemainder then break 'zeroTest'
 		end 'zeroTest'
 
 		// ⭐⭐ **THE DIVIDE ITSELF GOES THROUGH `lowerBinOp`, WHICH IS ALREADY THE ONE PLACE THAT DECIDES WHAT
 		// A `/` OR A `mod` BECOMES.** This expansion's job is the GUARD — which operands the divide reads —
-		// and not the OPCODE. Written out here instead, it was a second copy of `lowerDivision`'s float/int
-		// choice and of `lowerBinOp`'s `mod` arm, with nothing making the two agree. It also re-derives
+		// and not the OPCODE. Written out here instead, it would be a second copy of `lowerDivision`'s
+		// float/int choice and of `lowerBinOp`'s `mod` arm, with nothing making the two agree. It also re-derives
 		// `appendStdBinOp`'s purity guard for free rather than sitting beside it.
 		//
-		// ⭐ **THAT WARNING NAMED THE EXACT SHAPE X10 THEN LANDED, AND ROUTING THROUGH `lowerBinOp` IS WHY IT
-		// COST NOTHING.** It read: *"add an UNSIGNED divide for an unsigned operand type in `lowerDivision`
-		// and a checked unsigned divide would go on emitting the signed `idiv`, silently, for every divisor
-		// the compiler cannot prove non-zero."* The unsigned divide exists now, and the expansion picks its
-		// opcode from the SAME `divisionOpcodeFor` the bare route does — so the silent divergence the comment
-		// predicted never had a place to occur.
+		// ⭐ **AND THAT IS WHY AN UNSIGNED DIVIDE COSTS THIS EXPANSION NOTHING.** An expansion writing its own
+		// opcode would go on emitting the signed `idiv` for an unsigned operand type, silently, for every
+		// divisor the compiler cannot prove non-zero. It picks from the SAME `divisionOpcodeFor` the bare route
+		// does, so that divergence has no place to occur.
 		//
 		// ⚠ The FLOAT arm hands it the RAW operands and the integer arm the guarded ones, and that asymmetry is
 		// the ISA's, stated once in this function's header: `divsd` cannot fault, so a float divide needs the
@@ -5752,7 +5707,7 @@ type MaxonToStdLowering
 			return
 		end 'floatDivide'
 
-		// A1x — asked of the KIND rather than of the channel, because both remainders need it: a possibly-zero
+		// THE REMAINDER OVERFLOW GUARD — asked of the KIND rather than of the channel, because both remainders need it: a possibly-zero
 		// divisor is a possibly-`-1` divisor too (`emitDivOrMod`'s proof rules out neither), and the quotient
 		// needs it never.
 		var safeDividend = dividend
@@ -5761,7 +5716,7 @@ type MaxonToStdLowering
 			safeDividend = self.emitRemainderOverflowSafeDividend(dividend, divisor: divisor, operandType: operandType, dstBlock: dstBlock)
 		end 'remainderOverflow'
 
-		// A1 — `divisor or flag` is `divisor` whenever the divisor is non-zero and `1` when it is zero, so the
+		// THE ZERO GUARD — `divisor or flag` is `divisor` whenever the divisor is non-zero and `1` when it is zero, so the
 		// divide always runs on a safe operand. A total division's divisor needs no repair: nothing proved it
 		// zero, so nothing has to be OR'd out of it.
 		var safeDivisor = divisor
@@ -5778,7 +5733,7 @@ type MaxonToStdLowering
 		self.lowerBinOp(result, lhs: safeDividend, rhs: safeDivisor, op: divisionOpcodeFor(divisionOperatorForKind(kind), unsigned: signedness == IntegerSignedness.unsigned), dstBlock: dstBlock)
 	end 'lowerDivisionExpansion'
 
-	// A1's zero guard: the divisor the `idiv` actually reads. See `lowerDivisionExpansion`'s header for why
+	// The zero guard: the divisor the `idiv` actually reads. See `lowerDivisionExpansion`'s header for why
 	// an `or` with the error flag is the whole of it.
 	function emitOrredSafeDivisor(divisor ValueId, errorFlag ValueId, operandType StdType, dstBlock IrBlock) returns ValueId
 		let safeDivisor = self.mintStdValueId()
@@ -5790,11 +5745,8 @@ type MaxonToStdLowering
 	// message the parser already baked. The parser emitted a dead return terminator after this op, so the
 	// block stays well-formed though control never reaches it.
 	//
-	// ⭐ **THIS DOOR WAS THE ONLY THING MISSING.** It used to materialize `RuntimeAbort.userPanic` (134) and
-	// `osExit`, dropping the message on the floor — while `InsertRangeChecks`, one tier along, was already
-	// interning a `panic at <file>:<line>: …` blob and calling a runtime that prints it, walks the stack and
-	// exits 1. Two panics, one runtime, and a user's was wired to neither the printer nor the exit code the
-	// language promises. The mechanism needed no work; the wire did.
+	// The runtime prints the message, walks the stack and exits 1 — the same treatment
+	// `InsertRangeChecks`' own `panic at <file>:<line>: …` blob gets, one tier along.
 	//
 	// The blob is registered through `registerStringBlob` — the same immortal, NUL-terminated, DEDUPED BY
 	// BYTES `.rdata` path a String literal's payload takes. Deduping by bytes is what makes two panics with
@@ -5826,10 +5778,9 @@ type MaxonToStdLowering
 	// `const 0`, which `buildFunctionValueClasses` classes XMM from its Std type (the f64 bits of 0.0 are 0).
 	// It mints EXACTLY ONE ValueId whatever the return type, so the id numbering is unchanged.
 	//
-	// ⚠ **THE TYPE IS `stdDefaultPrimaryReturnType`'S AND NOT THIS FUNCTION'S (X6 review)** — the same
-	// answer `InsertRangeChecks.emitDeadReturn` mints its dead primary from, which used to be a second and
-	// STRICTER rule spelled in that pass. See that function for the divergence and why the declared type
-	// is the right single answer.
+	// ⚠ **THE TYPE IS `stdDefaultPrimaryReturnType`'S AND NOT THIS FUNCTION'S** — the same
+	// answer `InsertRangeChecks.emitDeadReturn` mints its dead primary from. See that function for why the
+	// declared type is the right single answer.
 	function emitZeroConstOfReturnType(dstBlock IrBlock) returns ValueId
 		let zero = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.const(zero, value: 0, valueType: stdDefaultPrimaryReturnType(self.currentReturnType)))

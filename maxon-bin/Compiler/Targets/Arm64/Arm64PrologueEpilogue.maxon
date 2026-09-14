@@ -38,7 +38,7 @@ typealias Arm64RegNumArray = Array with RegNum
 // registers starting at `firstVector + 8`). x29/x30 are the frame record (saved by the STP directly),
 // x16/x17 scratch and x18 the untouchable platform register are never colored, so none appear here.
 //
-// ⭐ **EXPORTED FOR THE GREEN-THREAD CONTEXT SWITCH (MAC3), WHICH MUST SAVE EXACTLY THIS SET.** A
+// ⭐ **EXPORTED FOR THE GREEN-THREAD CONTEXT SWITCH, WHICH MUST SAVE EXACTLY THIS SET.** A
 // `bl __gt_context_switch` is an ordinary call from a suspending function's view, so the switch has to
 // preserve precisely what the prologue above preserves — and it runs ANOTHER green thread's arbitrary code
 // before control returns, so a register the colorer believes survives a call must be saved there by hand.
@@ -269,12 +269,12 @@ function resolveArm64IncomingArgs(module TargetModule, func IrFunction, frameSiz
 				// displacement depends on the frame this pass has just sized.
 				leaRegSlot then break 'o'
 
-				// F1b: a fill ladder names no frame fact at all — its two operands are already in fixed physical
+				// A fill ladder names no frame fact at all — its two operands are already in fixed physical
 				// registers and its only field is a constant byte, so there is nothing for this pass to resolve.
 				x64MemFill or
 					arm64MemFill then break 'o'
 
-				// F2: an atomic names no frame fact — its operands are ordinary coloured registers and its scratch is
+				// An atomic names no frame fact — its operands are ordinary coloured registers and its scratch is
 				// the encoder's, so there is nothing for this pass to resolve.
 				x64LockCmpxchg or
 					x64LockXadd or
@@ -285,25 +285,25 @@ function resolveArm64IncomingArgs(module TargetModule, func IrFunction, frameSiz
 					arm64AtomicRmw or
 					arm64ThreadPointer then break 'o'
 
-				// EC16: a scaled-index address or access names no frame fact — its base, index and value are
+				// A scaled-index address or access names no frame fact — its base, index and value are
 				// ordinary coloured registers and its scale/displacement are immediates.
 				leaRegBaseIndexScale or
 					loadRegBaseIndexScale or
 					storeBaseIndexScaleReg or
 					arm64AddLsl then break 'o'
 
-				// EC18: the high multiply names no frame fact either — one coloured register operand and an
+				// The high multiply names no frame fact either — one coloured register operand and an
 				// implicit RAX/RDX pair. (x64-only; it cannot appear in an arm64 program at all.)
 				imulHighReg then break 'o'
 
 				// `fneg` names no frame fact — two coloured FP registers.
 				arm64Fneg then break 'o'
 
-				// G3: an ordered access names no frame fact — a coloured base, a coloured value, no displacement.
+				// An ordered access names no frame fact — a coloured base, a coloured value, no displacement.
 				arm64LoadAcquire or
 					arm64StoreRelease then break 'o'
 
-				// EC18: the arm64 high multiply names no frame fact — three ordinary coloured registers.
+				// The arm64 high multiply names no frame fact — three ordinary coloured registers.
 				arm64Smulh then break 'o'
 
 				// A coverage counter names no operand and no coloured register: it reaches its address through
@@ -333,7 +333,7 @@ function resolveOneArm64IncomingArg(module TargetModule, opIdx OpIndex, at Block
 	// ONCE and both take it. `arm64DispHasScaledForm` is the SAME door the isel asks of a data access, and
 	// it derives the scale from this very value (`arm64AccessScale`) — so the predicate and the encoder that
 	// later asserts on it cannot come to disagree. Asked instead with a hard-coded scale of 8, the two would
-	// agree only for as long as `arm64LoadIncomingArg` has no width field, and P1.9's narrow integer widths
+	// agree only for as long as `arm64LoadIncomingArg` has no width field, and narrow integer widths
 	// are precisely where that stops being true: a `byte`-width argument's field counts BYTES, reaching 4095
 	// rather than 32760, and the predicate would then admit exactly what the encoder panics on.
 	let width = X64AccessWidth.word64
@@ -460,7 +460,7 @@ function arm64OpPhysicalRegs(op TargetOp, buf OperandList) returns RegMask
 			imulRegRegImm32 or
 			cmpRegImm32 gives arm64MaskFromOperands(op, buf: buf)
 
-		// The tail range extends past `arm64Syscall` to the x64-only ops (P1.5-A1 `leaRegFunc`/`callReg`,
+		// The tail range extends past `arm64Syscall` to the x64-only ops (`leaRegFunc`/`callReg`,
 		// x64-linux `x64Syscall`): like every other op here they are read through the shared operand model
 		// (their operands are declared in `targetOpOperands`), so no per-op register list is respelled.
 		// They never appear on a colored arm64 program, but the arm keeps the match exhaustive over `TargetOp`.
@@ -585,13 +585,13 @@ function arm64OpPhysicalRegs(op TargetOp, buf OperandList) returns RegMask
 		// real-miscompile trap every other register-naming arm here documents.
 		leaRegSlot gives arm64MaskFromOperands(op, buf: buf)
 
-		// F1b: a fill ladder has NO operands (see `targetOpOperands`), so the shared operand model correctly
+		// A fill ladder has NO operands (see `targetOpOperands`), so the shared operand model correctly
 		// reports an empty mask. Its four fixed registers are x0..x3, all caller-saved, so the prologue owes
 		// them nothing — and reading them through the same door keeps that a derivation rather than a claim.
 		x64MemFill or
 			arm64MemFill gives arm64MaskFromOperands(op, buf: buf)
 
-		// F2: every atomic operand can be coloured into a callee-saved register, so all of them MUST be counted —
+		// Every atomic operand can be coloured into a callee-saved register, so all of them MUST be counted —
 		// read through the shared operand model like every other arm here, which is what keeps the answer a
 		// derivation rather than a second hand-written operand list. The x16/x17 encoder scratch is deliberately
 		// absent: it is outside the allocatable pool and callee-saved of nothing.
@@ -604,7 +604,7 @@ function arm64OpPhysicalRegs(op TargetOp, buf OperandList) returns RegMask
 			arm64AtomicRmw or
 			arm64ThreadPointer gives arm64MaskFromOperands(op, buf: buf)
 
-		// EC16: `arm64AddLsl`'s three operands can each be coloured into a callee-saved register, so all
+		// `arm64AddLsl`'s three operands can each be coloured into a callee-saved register, so all
 		// MUST be counted — read through the shared operand model like every other arm here. The x64
 		// forms never reach an arm64 program and answer through the same derivation rather than a second
 		// hand-written list.
@@ -613,7 +613,7 @@ function arm64OpPhysicalRegs(op TargetOp, buf OperandList) returns RegMask
 			storeBaseIndexScaleReg or
 			arm64AddLsl gives arm64MaskFromOperands(op, buf: buf)
 
-		// EC18: x64-only, and answered through the same shared derivation as the other x64 forms rather
+		// x64-only, and answered through the same shared derivation as the other x64 forms rather
 		// than a second hand-written list.
 		imulHighReg gives arm64MaskFromOperands(op, buf: buf)
 
@@ -622,7 +622,7 @@ function arm64OpPhysicalRegs(op TargetOp, buf OperandList) returns RegMask
 		arm64LoadAcquire or
 			arm64StoreRelease gives arm64MaskFromOperands(op, buf: buf)
 
-		// EC18: `SMULH`'s three operands can each be coloured into a callee-saved register, so all three
+		// `SMULH`'s three operands can each be coloured into a callee-saved register, so all three
 		// MUST be counted — through the shared derivation like every other arm here.
 		arm64Smulh gives arm64MaskFromOperands(op, buf: buf)
 
@@ -746,7 +746,7 @@ function blockEndsWithArm64Return(module TargetModule, block IrBlock) returns bo
 			negF64RegReg gives false
 		arm64Ret gives true
 
-		// Extended past `arm64Syscall` to the x64-only ops (P1.5-A1 `leaRegFunc`/`callReg`, x64-linux
+		// Extended past `arm64Syscall` to the x64-only ops (`leaRegFunc`/`callReg`, x64-linux
 		// `x64Syscall`): none is `arm64Ret`, so the block does not end in an arm64 return (and none ever
 		// appears on arm64 at all).
 		arm64Branch or
@@ -822,11 +822,11 @@ function blockEndsWithArm64Return(module TargetModule, block IrBlock) returns bo
 		// A frame address is a body op, never an `arm64Ret`.
 		leaRegSlot gives false
 
-		// F1b: a fill ladder is a body op, never an `arm64Ret` — its branches are internal to its own encoding.
+		// A fill ladder is a body op, never an `arm64Ret` — its branches are internal to its own encoding.
 		x64MemFill or
 			arm64MemFill gives false
 
-		// F2: every atomic is a body op, never an `arm64Ret`.
+		// Every atomic is a body op, never an `arm64Ret`.
 		x64LockCmpxchg or
 			x64LockXadd or
 			x64LockAdd or
@@ -836,23 +836,23 @@ function blockEndsWithArm64Return(module TargetModule, block IrBlock) returns bo
 			arm64AtomicRmw or
 			arm64ThreadPointer gives false
 
-		// EC16: an address computation and a memory access are body ops, never an `arm64Ret`.
+		// An address computation and a memory access are body ops, never an `arm64Ret`.
 		leaRegBaseIndexScale or
 			loadRegBaseIndexScale or
 			storeBaseIndexScaleReg or
 			arm64AddLsl gives false
 
-		// EC18: the high multiply is a body op, never an `arm64Ret`.
+		// The x64 high multiply is a body op, never an `arm64Ret`.
 		imulHighReg gives false
 
 		// `fneg` is a body op, never an `arm64Ret`.
 		arm64Fneg gives false
 
-		// G3: an ordered access is a body op, never an `arm64Ret`.
+		// An ordered access is a body op, never an `arm64Ret`.
 		arm64LoadAcquire or
 			arm64StoreRelease gives false
 
-		// EC18: the high multiply is a body op, never an `arm64Ret`.
+		// The arm64 high multiply is a body op, never an `arm64Ret`.
 		arm64Smulh gives false
 
 		// A coverage counter is a body op, never an `arm64Ret`.

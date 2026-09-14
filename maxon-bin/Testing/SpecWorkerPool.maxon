@@ -18,9 +18,9 @@
 // ============================================================================================
 //
 // Four notes below lean on there being ONE OS thread running this file's Maxon — `JobKillGraceMs`,
-// `drainResultsThunk`, the `spokeAt` slot array's declaration and `silenceMs` — and all four used to say
-// so by citing a scheduler that no longer exists. The default processor count is the machine's since the
-// `DefaultMaxProcs` flip, and a green-thread program really does run on several Ms.
+// `drainResultsThunk`, the `spokeAt` slot array's declaration and `silenceMs`. ⛔ NOT because the
+// scheduler is single-M: the default processor count is the machine's, and a green-thread program
+// really does run on several Ms.
 //
 // What holds instead holds at EVERY `MAXON_MAX_PROCS`: a green thread and its coroutines form a STRAND,
 // and one machine runs one member of a strand at a time. **This harness spawns no service.** Its only
@@ -119,8 +119,8 @@
 // lines above are the only ones it can write and all four are non-empty — so an empty line back
 // from `readStdoutLine()` is unambiguously EOF, i.e. the worker died. Keeping stdout clean takes
 // no effort here: the compiled test programs a worker spawns run under `Subprocess.run` with
-// COLLECTED output, so their streams are captured, never inherited — and the COMPILES no longer
-// spawn anything at all, they run inside the worker (G20).
+// COLLECTED output, so their streams are captured, never inherited — and the COMPILES spawn
+// nothing at all, they run inside the worker.
 //
 // ============================================================================================
 // THE WORKER IS THE COMPILER, AND THAT IS WHAT THESE THREE GUARDS EXIST FOR
@@ -255,28 +255,26 @@ export let MillisPerSecond = 1000
 let TenthsPerSecond = 10
 
 // ============================================================================================
-// THE PROGRESS BOUND — the bound that came back with the in-process compile (G20)
+// THE PROGRESS BOUND — what bounds a compile that hangs inside the worker
 // ============================================================================================
 //
-// ⭐⭐ **WHAT IT REPLACES, AND WHY NOTHING ELSE COULD.** A compiler infinite loop used to be bounded
-// by `SpecSpawnTimeoutMs`: the compile was a SPAWN, the spawn carried a deadline, and a hang surfaced
-// as `TestOutcome.fail("compiler spawn failed: timed out after …")` — one named FAIL naming the test.
-// With the compile in process there is no spawn and therefore no such bound: a hung compile parks the
-// worker for ever, silently, and an unattended gate never returns. So the bound moves to the PARENT,
-// which is the only party still able to end it.
+// ⭐⭐ **WHY NOTHING ELSE CAN BOUND ONE.** `SpecSpawnTimeoutMs` bounds a SPAWN, and a compile is not
+// one: it runs in this process, so a compiler infinite loop parks the worker for ever, silently, and an
+// unattended gate never returns. The bound therefore sits in the PARENT,
+// which is the only party able to end it.
 //
-// ⛔⛔ **IT USED TO BOUND THE WHOLE JOB AND SCALE WITH THE SPEC — `SpecSpawnTimeoutMs + tests x 5 s` —
-// AND THAT NUMBER WAS AN ESTIMATE OF A COST NOBODY MEASURED PER SPEC.** Its argument was that a flat
+// ⛔⛔ **IT MAY NOT BE AN ESTIMATE THAT SCALES WITH THE SPEC — `SpecSpawnTimeoutMs + tests x 5 s` IS A
+// COST NOBODY MEASURED PER SPEC.** The argument for such a bound is that a flat
 // number cannot serve both `abs` (3 tests) and `managed-memory-methods` (161), which is true, and its
-// calibration was a spec's AVERAGE test: 161 tests running alone in 44.1 s against a 925 s deadline,
+// calibration is a spec's AVERAGE test: 161 tests running alone in 44.1 s against a 925 s deadline,
 // ~21x. **A spec of FEW HUGE tests inverts that ratio, and one in this corpus does.**
 //
-// MEASURED 2026-08-26 on this host, against the tree as it stood: `wide-spill-frames` has THREE cases,
+// MEASURED 2026-08-26: `wide-spill-frames` has THREE cases,
 // two of which hold 4111 values live at one program point. Compiled one at a time, alone:
 // **64.7 s**, **70.0 s** and 2.2 s — **136.9 s of compiling** against a job deadline of 120 + 3x5 =
-// **135 s**. The spec therefore FAILED ALL THREE OF ITS CASES through the dead-worker path on a run of
-// its own (159 s wall, exit 1), and did so intermittently on the full suite — two of four runs that
-// day — which is the worst shape a harness bug can take: a red that names the tests it terminated and
+// **135 s**. Under such a bound the spec FAILS ALL THREE OF ITS CASES through the dead-worker path on a
+// run of its own (159 s wall, exit 1), and does so intermittently on the full suite — two of four
+// runs — which is the worst shape a harness bug can take: a red that names the tests it terminated and
 // blames the compiler for a deadline the harness chose.
 //
 // ⭐⭐ **SO THE BOUND IS KEYED OFF PROGRESS INSTEAD OF OFF AN ESTIMATE.** The worker already announces
@@ -326,18 +324,16 @@ let TestProgressDeadlineMs = SpecSpawnTimeoutMs + SlowCompileGraceMs
 // one act.
 //
 // It is SHORT because the call BLOCKS the one OS thread this process runs Maxon on (see the one-M
-// section at the top of this file for why there is exactly one, which is no longer "the compiler is single-M")
+// section at the top of this file for why there is exactly one — ⛔ not because the compiler is single-M)
 // — and a worker that has gone silent for its whole progress bound is not about to answer in the next
 // 50 ms. It is not zero because zero means "wait for ever" to `waitWithTimeout`.
 let JobKillGraceMs = 50
 
 // The headroom the pool's idleness bound keeps over the interval it is actually measuring.
 //
-// ⛔ **ITS ARGUMENT CHANGED WHEN THE BOUND ABOVE CAME BACK (G20), AND THE OLD ONE IS RECORDED BECAUSE
-// IT WAS RIGHT UNTIL THEN.** It used to read: *"it has to cover the rest of one job after a spawn of
-// that job has already burned the worker's full deadline"* — i.e. `WedgeWatchdogMs` had to outlast a
-// whole job, because nothing else bounded one. Now something does, and the two guards are made
-// explicitly disjoint instead: a busy slot still INSIDE its progress bound resets the idleness clock
+// ⛔ **THE TWO GUARDS ARE EXPLICITLY DISJOINT, WHICH IS WHAT KEEPS THIS GRACE SMALL.** `WedgeWatchdogMs`
+// does not have to outlast a whole job — the progress bound above bounds one — so
+// a busy slot still INSIDE its progress bound resets the idleness clock
 // (see the dispatch loop), so what this grace covers is only the interval AFTER every outstanding job
 // has been given up on — an EOF propagating back through the runtime, and a drain completing. That is
 // milliseconds. Three minutes is left as it stands because the number is also quoted at an operator by
@@ -1024,8 +1020,8 @@ end 'sliceAfterPrefix'
 // ============================================================================================
 
 // One decoded result record — the two axes and the names they are about. A TYPE rather than a union:
-// there are no longer several KINDS of record, only one shape whose two token fields each name an arm
-// of a union `SpecTestRunner` already owns. That is what stopped the kinds multiplying (see the
+// there is ONE shape rather than several KINDS of record, and its two token fields each name an arm
+// of a union `SpecTestRunner` already owns. That is what keeps the kinds from multiplying (see the
 // protocol note above), and it is also why the dispatcher's name check below reads two plain fields
 // instead of a match per accessor.
 type WorkerRecord
@@ -1229,9 +1225,9 @@ end 'resultsFromLines'
 // It names BOTH types the drain can come back with: the records on success, and the
 // SubprocessError on failure. Naming the error is what lets the dispatcher bind it below — and
 // what makes its payload get RELEASED. A `Promise with StringArray` names the result only, so
-// boxing a drain into one used to erase `SubprocessError`; the box kept a single bit saying
-// whether the error was a heap pointer, that bit read `false` for a union, and every dead
-// worker leaked the String inside its error. A green suite never showed it: the drain only
+// boxing a drain into one ERASES `SubprocessError`: the box keeps a single bit saying
+// whether the error is a heap pointer, that bit reads `false` for a union, and every dead
+// worker leaks the String inside its error. A green suite never shows it: the drain only
 // throws when a worker dies.
 typealias DrainPromise = Promise with (StringArray, SubprocessError)
 typealias DrainPromiseArray = Array with DrainPromise
@@ -1255,18 +1251,18 @@ typealias SlotInstantArray = Array with InstantMs
 // which is what a worker that DIED mid-job leaves behind.
 //
 // ⭐⭐ **DEATH COMES BACK AS AN ANSWER, NOT AS A THROW, AND THE TERMINATOR IS WHAT DISTINGUISHES THEM.**
-// It used to `throw SubprocessError.ioFailed` on EOF, which took the whole run down through
-// `abortOnDeadWorker` — correct while a compiler panic could only kill a GRANDCHILD, and a usability
-// regression the moment the compile moved into the worker (G20). The parent now FAILS that job's tests
+// A `throw SubprocessError.ioFailed` on EOF would take the whole run down through
+// `abortOnDeadWorker`, and a compiler panic kills the WORKER itself rather than a grandchild — so that
+// is a usability regression, not a fault report. The parent instead FAILS that job's tests
 // and carries on, and to do that it needs two things this hands back: whether the job finished, and
-// the last `WORKER_STEP:` breadcrumb. Both ride in the lines — the READY line is no longer swallowed,
+// the last `WORKER_STEP:` breadcrumb. Both ride in the lines — the READY line is not swallowed,
 // and the breadcrumbs are ordinary lines the parent strips.
 //
-// ⚠ **`DrainPromise`'s TWO TYPE ARGUMENTS ARE LEFT EXACTLY AS THEY WERE, ON PURPOSE.** Widening the
+// ⚠ **`DrainPromise`'s TWO TYPE ARGUMENTS STAY AS THEY ARE, ON PURPOSE.** Widening the
 // RESULT type to carry the death bit (a union, a struct) would mint a new generic instantiation on the
-// one path whose last bug was a boxed payload nobody released — `Promise with StringArray` erased
-// `SubprocessError` and leaked the String inside it, once per dead worker, invisibly, because the drain
-// only threw when a worker died. The terminator is a LINE because everything else on this wire is one.
+// one path whose known failure mode is a boxed payload nobody releases — `Promise with StringArray`
+// erases `SubprocessError` and leaks the String inside it, once per dead worker, invisibly, because the
+// drain only throws when a worker dies. The terminator is a LINE because everything else on this wire is one.
 //
 // It still THROWS, and the declaration is not vestigial: `readStdoutLine` is declared `throws`, so a
 // future read that does signal an error rather than answering EOF reaches the dispatcher's own
@@ -1423,14 +1419,11 @@ type PersistentWorkerHandle
 	// hellos, so every worker's process creation and runtime init OVERLAP under a single readiness
 	// barrier instead of each one queueing behind the previous worker's hello.
 	//
-	// ⛔ **THERE IS ONE EXECUTABLE AGAIN, AND THIS HEADER USED TO ARGUE THERE WERE TWO.** It read: *"TWO
-	// PATHS, AND THEY ARE NOT THE SAME FACT. `workerExe` is SPAWNED … `compilerExe` is FORWARDED — it is
-	// the compiler that worker will spawn to build each fragment."* That distinction was real and
-	// load-bearing for exactly as long as a worker BUILT each fragment in a subprocess whose executable
-	// it could choose. Since G20 a worker compiles in process, so "the compiler this run is about" is
+	// ⛔ **THERE IS ONE EXECUTABLE, NOT TWO.** A worker compiles in process rather than building each
+	// fragment in a subprocess whose executable it can choose, so "the compiler this run is about" is
 	// not a path a caller can name — it is this binary's own code — and `--compiler=<path>` was
 	// withdrawn rather than left as a flag that could only lie (⚖ user ruling 2026-08-22). `harnessExe`
-	// is therefore both facts at once, and there is nothing to forward.
+	// is both facts at once, and there is nothing to forward.
 	//
 	// `filter`, `updateRequired`, `includeNetwork` (`--network`) and the effective TARGET MUST be
 	// forwarded. A worker that selected a different set of tests than the parent counted would
@@ -1471,7 +1464,7 @@ type PersistentWorkerHandle
 	// Drain the startup hello. Pairs with `spawnNoWait`'s two-phase startup.
 	//
 	// EVERY failing path releases the handle before it throws — the unreadable-pipe path included,
-	// which used to propagate the read error with the handle still open. A worker that never says
+	// which would otherwise propagate the read error with the handle still open. A worker that never says
 	// hello is a worker nobody will hold a handle to again, and the caller's job is to report that,
 	// not to clean up after this one.
 	export function awaitReady() throws SubprocessError
@@ -1609,15 +1602,14 @@ end 'deadWorkerStderr'
 // dead worker crossed nothing, so the whole record is the parent's — which is exactly what makes
 // synthesizing it honest rather than a guess.
 //
-// ⚠ **EXACTLY ONE RECORD PER SELECTED TEST, NO MORE AND NO FEWER** — the accounting `X2` pinned and
+// ⚠ **EXACTLY ONE RECORD PER SELECTED TEST, NO MORE AND NO FEWER** — the accounting
 // `resultsFromLines` enforces for a job that DID answer. Nothing here is a pass, nothing is a skip and
 // nothing is a golden: the run is red, and every test of the spec says why in the same words.
 //
 // ⛔ **NOT A RETRY.** The job is FAILED, never re-dispatched. `abortOnDeadWorker`'s own reasoning is
 // the reason: rerouting a dead worker's job to a surviving one would turn a hard bug into an
 // intermittently green suite. Failing it keeps the bug loud AND keeps the other ~200 specs reporting,
-// which is what a compiler panic cost before this rung (one named FAIL) and what it must not start
-// costing now (the whole run).
+// which holds a compiler panic's cost at one named FAIL rather than the whole run.
 function deadJobResults(plan SpecPlan, reason String) returns SpecTestResultArray
 	var results = SpecTestResultArray.create()
 
@@ -2037,7 +2029,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filter String
 			let plan = try plans.get(job.planIndex) otherwise panic("runSpecPool: plans.get({job.planIndex}) is in bounds by construction")
 
 			// ⭐⭐ **DEAD-WORKER RECOVERY.** No WORKER_READY terminator means this worker died with the
-			// job unfinished — a compiler panic (its compiles are IN THIS WORKER since G20), or the job
+			// job unfinished — a compiler panic (its compiles are IN THIS WORKER), or the job
 			// deadline having terminated it. Every test the parent planned for this job is FAILED, the
 			// slot gets a FRESH worker, and the run continues. See `deadJobResults` for why failing is
 			// right and retrying is not.
@@ -2341,7 +2333,7 @@ end 'enforceProgressDeadlines'
 // THE ORDER OF THE SIX SLOT WRITES IS DELIBERATE, and `busy` goes LAST. `busy[slot]` is the guard
 // that tells the two scans below that `inFlight[slot]`, `drains[slot]`, `dispatchedAt[slot]`,
 // `spokeAt[slot]` and `expired[slot]` may be read, so it is set only once all five hold this job's
-// values. Setting it first — as this used to — leaves a window in which the slot claims to be busy
+// values. Setting it first leaves a window in which the slot claims to be busy
 // while its promise is still the PREVIOUS job's, and that window is safe today only because nothing
 // between the writes happens to yield to another green thread. That is a property of the current code,
 // not of the invariant, so it is not one to rest on.

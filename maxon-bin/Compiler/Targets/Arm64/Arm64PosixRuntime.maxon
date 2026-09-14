@@ -113,15 +113,15 @@ end 'arm64PosixEmitEnvValueCopy'
 // a wait that runs for a thousandth of its timeout.
 //
 // ⛔⛔⛔ **IT READS `ms` EXACTLY ONCE, IN ITS FIRST INSTRUCTION, AND EVERY LATER INSTRUCTION READS THE COPY —
-// BECAUSE `ms` IS ONE OF THE REGISTERS IT CLOBBERS AT HALF ITS CALL SITES.** The conversion used to open
-// `mov x1, #1000` and then read `ms` twice (the `udiv`'s dividend and the `msub`'s minuend), which is
-// correct for a caller that passes x0 and a WRONG ANSWER for one that passes x1: the divisor overwrote the
-// timeout, so `udiv x2, x1, x1` answered 1 second and `msub x3, x2, x1, x1` answered 0 nanoseconds, and
-// **every bounded wait on both POSIX lanes ran for exactly 1.000 s whatever it asked for**. MEASURED on
+// BECAUSE `ms` IS ONE OF THE REGISTERS IT CLOBBERS AT HALF ITS CALL SITES.** Opening with
+// `mov x1, #1000` and then reading `ms` twice (the `udiv`'s dividend and the `msub`'s minuend) is
+// correct for a caller that passes x0 and a WRONG ANSWER for one that passes x1: the divisor overwrites the
+// timeout, so `udiv x2, x1, x1` answers 1 second and `msub x3, x2, x1, x1` answers 0 nanoseconds, and
+// **every bounded wait on both POSIX lanes runs for exactly 1.000 s whatever it asked for**. MEASURED on
 // arm64-macOS: `sleep(10)` took 1.01 s, and `async-sleep.interleave` returned 12 rather than 21 because a
 // driver that slept through the 10 ms deadline found BOTH timers due on one pass and fired them in
 // insertion order. `mrt_host_wait_one`'s timed arm passes x1 on Darwin AND on Linux; `mrt_host_sleep_ms`
-// passes x0 on both, which is why the OS-thread park was right and only the event wait was wrong.
+// passes x0 on both, which is why only the event wait is exposed to it.
 //
 // ⇒ **The cure is the COPY, not a rule about which register a caller may use.** A convention that says
 // *"pass ms in x0"* is a fact written down at four call sites and checked at none; taking an owned copy
@@ -142,8 +142,7 @@ export function arm64PosixToTimespec(asm Arm64RuntimeAsm, amount Arm64Register, 
 end 'arm64PosixToTimespec'
 
 // ⭐⭐ **ZERO `slotCount` CONSECUTIVE FRAME SLOTS, STARTING AT `firstSlot`.** Three chunks across the two
-// lanes need a kernel-facing buffer to start empty, and each had been writing the same six-instruction loop
-// out longhand:
+// lanes need a kernel-facing buffer to start empty:
 //
 //   • Both find-next walks zero their `struct stat` before an `fstatat` whose verdict may be DISCARDED (a
 //     dangling symbolic link is a real directory entry that Win32 reports), so the PREVIOUS entry's size and
@@ -151,14 +150,11 @@ end 'arm64PosixToTimespec'
 //   • The Linux processor count zeroes its 128-byte `cpu_set_t` so the popcount may sweep the whole extent
 //     rather than only the prefix `sched_getaffinity` reports filling.
 //
-// ⚠ **IT CLOBBERS x1, x2 AND x3**, which is what all three call sites already used — the loop is instruction
-// for instruction what two of them held inline, and it is here because the third copy is the one that would
-// have drifted.
-// \u26d4\u26d4 **IT CLOBBERS x1, x2 AND x3 \u2014 SPILL AN ARGUMENT BEFORE CALLING IT, NOT AFTER.** The cursor is x1,
+// ⛔⛔ **IT CLOBBERS x1, x2 AND x3 — SPILL AN ARGUMENT BEFORE CALLING IT, NOT AFTER.** The cursor is x1,
 // which is also the SECOND argument register, so a chunk that zeroes its changelist and only then reads its
-// `fd` out of x1 writes the zeroing cursor \u2014 a stack address \u2014 where the descriptor should be. MEASURED: that
+// `fd` out of x1 writes the zeroing cursor — a stack address — where the descriptor should be. MEASURED: that
 // is what made arm64-macos refuse every `kevent` registration, and the chunk answered a bare `-1` so the
-// reason never surfaced. The two Darwin arm chunks now store x1 to a slot first and reload it here.
+// reason never surfaced. The two Darwin arm chunks store x1 to a slot first and reload it here.
 export function arm64EmitZeroSlots(asm Arm64RuntimeAsm, firstSlot StackSize, slotCount StackSize)
 	let step = asm.newLabel()
 	let zeroed = asm.newLabel()
@@ -464,7 +460,7 @@ function arm64PosixFillFindDataTime(asm Arm64RuntimeAsm, statSlot StackSize, fin
 end 'arm64PosixFillFindDataTime'
 
 // ==========================================================================
-// L5/MAC8 — the CHILD-PROCESS band, and why almost all of it is HERE
+// The CHILD-PROCESS band, and why almost all of it is HERE
 // ==========================================================================
 
 // ⭐⭐⭐ **THE SUBPROCESS FAMILY IS THE ONE HOST SURFACE WHOSE TWO LANES SHARE THE ALGORITHM AND NOT THE
@@ -544,9 +540,8 @@ end 'arm64PosixNarrowIntStatus'
 // timeout and a scheduler deadline cannot drift apart by being read off two different clocks.
 //
 // ⭐ **IT ASKS `mrt_host_monotonic_clock` RATHER THAN READING A CLOCK ITSELF, WHICH IS WHAT MAKES THAT
-// GUARANTEE STRUCTURAL.** The scheduler's deadlines come from that chunk; a second, independent read here —
-// which is what this used to be on the Darwin lane — is a second clock choice that can silently become a
-// different clock. The conversion is DERIVED from the frequency that chunk reports rather than assuming the
+// GUARANTEE STRUCTURAL.** The scheduler's deadlines come from that chunk; a second, independent read here
+// would be a second clock choice that can silently become a different clock. The conversion is DERIVED from the frequency that chunk reports rather than assuming the
 // 1e9 both lanes happen to answer today, so a lane that ever reports raw counter ticks needs no edit here.
 export function buildArm64PosixTickMsChunk() returns FunctionCodeChunk
 	let SlotTicks = 0 as StackSize

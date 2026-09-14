@@ -89,8 +89,7 @@ function grownCapacity(current ReportedCapacity, required ElementIndex) returns 
 	// An ask that outruns doubling — `reserve(n)` on an empty array, `append` of a longer one — is
 	// taken at face value. Geometric slack heaped on top of an already-large ask is pure waste.
 	//
-	// It hands back ZERO slack, though, where the old doubling policy always landed on `capacity·2ᵏ`
-	// and so gave an oversized ask up to a full double of headroom. A buffer that is `append`ed to and
+	// It hands back ZERO slack, though. A buffer that is `append`ed to and
 	// then PUSHED to therefore re-grows immediately, and that costs real bytes (measured at +2% of the
 	// whole compile; `phase:writeExe`, which is almost all appends, more than doubled its byte volume).
 	// Go has this same branch and does not pay for it, because `mallocgc` rounds the allocation up to a
@@ -217,11 +216,9 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 
 	/// Which of `ArrayError`'s two failures the element access at `index` just had.
 	///
-	/// They are NOT interchangeable, and every read here used to answer `indexOutOfBounds` for both
-	/// — so "you never filled this slot" arrived spelled "you asked past the end", and a caller that
-	/// repeated that sent its reader to check a bound which was never wrong. `emptySlot` sat in the
-	/// enum from the beginning with nothing ever throwing it. (Measured: a column of ints became a
-	/// column of structs and the first read died reporting an index that was perfectly in range.)
+	/// They are NOT interchangeable: "you never filled this slot" spelled "you asked past the end"
+	/// sends the reader to check a bound which was never wrong — a column of structs whose first read
+	/// finds an unfilled slot reports an index that is perfectly in range.
 	///
 	/// It is decided from the LIVE RANGE — the same `managed.length()` the builtin decided on, not a
 	/// second copy of its rule — because the two failures are complementary there: `managed.get`
@@ -329,11 +326,11 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 
 	/// Append all elements out of a raw `__ManagedMemory`, without wrapping it in an `Array` first.
 	///
-	/// This is the whole of `append` — the array half of `other` was never read. Since the envelope
-	/// collapse an `Array` IS its `__ManagedMemory`, so `Array.init(mem)` can no longer be free: it
-	/// must allocate a fresh record to view `mem` through. A caller that already holds the memory and
-	/// only wants its elements copied out was therefore paying a record per call for nothing —
-	/// `StringBuilder.appendBytes` paid one PER APPEND.
+	/// This is the whole of `append` — the array half of `other` is never read. An `Array` IS its
+	/// `__ManagedMemory`, so `Array.init(mem)` is not free: it must allocate a fresh record to view
+	/// `mem` through. Without this entry point a caller that already holds the memory and only wants
+	/// its elements copied out pays a record per call for nothing — `StringBuilder.appendBytes` one
+	/// PER APPEND.
 	public function appendMemory(source ElementMemory)
 		// Copy element-by-element through `push`. The `__ManagedMemory.append`
 		// builtin runs at ~300 KB/s (it bytes-copies through a slow path),
@@ -367,11 +364,11 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	public function insert(at ElementIndex, value Element)
 		let len = managed.length()
 
-		// Only the HIGH end clamps. There used to be a low clamp beside it, because `ElementIndex` was a
-		// FULL range and therefore unguarded, so a `-1` arrived intact: MEASURED then, `shiftRight(-1, len)`
-		// read the slot BEFORE the buffer and stored it at 0, turning `[10, 20, 30]` into `[0, 10, 20]`. The
-		// alias now stops at `i64.max`, so the door refuses a negative outright — foldable ⇒ E3005, laundered
-		// ⇒ a `Range check failed` panic — and `insert(-1)` is a REFUSAL rather than an append-to-front.
+		// Only the HIGH end clamps: `ElementIndex` stops at `i64.max`, so the door refuses a negative
+		// outright — foldable ⇒ E3005, laundered ⇒ a `Range check failed` panic — and `insert(-1)` is a
+		// REFUSAL rather than an append-to-front. A negative that got past it would reach
+		// `shiftRight(-1, len)`, which reads the slot BEFORE the buffer and stores it at 0 (measured:
+		// `[10, 20, 30]` became `[0, 10, 20]`).
 		var index = at
 
 		if index > len 'clampHigh'
@@ -538,7 +535,7 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	/// call and ANSWERS WHETHER IT DID: it applies to a trivial element and DECLINES for a managed
 	/// one, whose slot holds exactly one reference — taking and releasing that reference is emitted
 	/// by the compiler at each store, and a bulk runtime loop cannot respell it. The per-element
-	/// loop below is the arm it declined, and it is the whole of what these two used to do.
+	/// loop below is the arm it declined, and it is the whole of what these two do.
 	function fillPublished(start ElementIndex, count ElementIndex, value Element)
 		let applied = try managed.fill(start, count: count, value: value) otherwise 'fillErr'
 			panic("Array.fillPublished: fill OOB — the window is inside the length the caller just published")

@@ -1,6 +1,6 @@
-// Register allocator — the real M5 core (pure Design B: SSA chordal coloring + gap
+// Register allocator (pure Design B: SSA chordal coloring + gap
 // splitting + E5001; canonical design in ARCHITECTURE.md's register-allocator section). Spine:
-// cold-spill splitting → liveness → biased forward-sweep coloring → SSA destruction. M5.2 adopted
+// cold-spill splitting → liveness → biased forward-sweep coloring → SSA destruction. It adopts
 // the `Reuse` operand model to DELETE the pre-emitted two-address seed `mov`: ISel now
 // emits ONE reuse-def op (`sub`/`imul`/`neg`) and THIS pass materializes the copy only
 // when the reuse input outlives the op (`allocateReuseDef`). It REPLACES the M1
@@ -14,11 +14,10 @@
 //     pinned Target IR can see it. The goldens also reach where the run cannot — one execution
 //     takes ONE path, but the golden pins EVERY block of the function. `SpecTestRunner.
 //     checkTestFragment` compares them and FAILS on a mismatch; `--update-required` regenerates.
-// (M5 carried a symbolic AllocChecker as the third gate, back when the fragments were regenerated
-// outputs rather than compared goldens. Once they became gates it was verifying, at ~10% of every
-// compile, a property the two above already decide — so it was removed. Its one non-allocation
-// check, the CFG `condBranch`-index sweep, lives on in `TargetLiveness.checkCondBranchIndex`,
-// where it now runs on EVERY build rather than only under `spec-test`.)
+// (There is no third, symbolic gate: it would verify, at ~10% of every compile, a property the two
+// above already decide. The one non-allocation check worth keeping, the CFG `condBranch`-index sweep,
+// lives in `TargetLiveness.checkCondBranchIndex`, where it runs on EVERY build rather than only under
+// `spec-test`.)
 //
 // The pieces:
 //   • liveness/loops/pressure           — TargetLiveness.maxon
@@ -40,11 +39,11 @@
 //     as two. Hints come from block-arg/branch-arg pairs (collectPhiEdgeHints) and
 //     from reuse-def/input pairs (collectReuseHints).
 //
-// BUILT through M5.4: immediate operand forms + 3-operand lea + the `Reuse`-based
-// seed-`mov` deletion (M5.2); idiv/mod FIXED registers (M5.4) — RAX/RDX pinned via
-// implicit masks + `forbidOperandsFromImplicit` + the clobber→forbidden path.
+// The forms it is BUILT for: immediate operand forms + 3-operand lea + the `Reuse`-based
+// seed-`mov` deletion; idiv/mod FIXED registers — RAX/RDX pinned via implicit masks +
+// `forbidOperandsFromImplicit` + the clobber→forbidden path.
 //
-// The COLD-SPILL SPLITTER (M5.3, SplitLiveRanges) runs BEFORE this colorer and relieves
+// The COLD-SPILL SPLITTER (`SplitLiveRanges`) runs BEFORE this colorer and relieves
 // every over-pool program point — full-pool overflow at a normal op AND reduced-pool
 // overflow at a FIXED-REGISTER point. `maxPressure ≤ pool` alone is NECESSARY but NOT
 // SUFFICIENT at such a point: at an `idiv`, values live across it are forbidden {RAX,RDX}
@@ -53,14 +52,13 @@
 // reduced pool (`pool ∖ op.implicitDefs`) and splits values live across it, so by the time
 // this colorer runs no point — normal or fixed-register — overflows its pool.
 //
-// ⛔⛔ **THAT IS NOT "COLORING CANNOT FAIL", AND THIS HEADER SAID IT WAS.** Pointwise feasibility says a
+// ⛔⛔ **THAT IS NOT "COLORING CANNOT FAIL".** Pointwise feasibility says a
 // colouring EXISTS; it does not say the greedy will FIND one, and no static order does —
 // **`HallCondition.hallVerdictAt`'s header carries that argument and is the one place it is made.** So
 // the colorer CAN fail on a point that fits, and when it does the value is a CONFINEMENT, not pressure:
 // `reportExhaustion` runs the exact verdict to tell the two apart, records the value, and
-// `colorRepairingConfinements` relieves it before colouring again. What survives of the old claim is the
-// half that is true and is still asserted: reaching exhaustion with an OVERFLOW verdict is a splitter
-// bug.
+// `colorRepairingConfinements` relieves it before colouring again. The half that IS true is asserted:
+// reaching exhaustion with an OVERFLOW verdict is a splitter bug.
 //
 // A HOT overflow the splitter cannot relieve (a loop whose own working set does not fit) is
 // NOT a panic: it is the E5001 compile error, source-mapped via `ValueOrigin` and rendered by
@@ -70,9 +68,8 @@
 // `RegNum` holds that is not a register (see `RegNum`).
 let Uncolored = RegisterFileSize as RegNum
 
-// A per-function coloring: value id → physical register number (0..15), dense. With
-// no live-range splitting at M5.1 a value holds ONE register for its whole range, so
-// the column is a total function.
+// A per-function coloring: value id → physical register number (0..15), dense. A value holds ONE
+// register for its whole range, so the column is a total function.
 export type Allocation
 	export var color as RegNumColumn
 	export var valueCount as ValueId
@@ -453,7 +450,7 @@ module type RegAllocCounters
 	export var valuesColored as EventCount
 	export var registersUsed as RegMask
 
-	// Cold-spill splitter (M5.3) counters: values spilled to a slot, reloads emitted for
+	// Cold-spill splitter counters: values spilled to a slot, reloads emitted for
 	// them (one per use-block), and constants rematerialized instead of spilled.
 	export var valuesSplit as EventCount
 	export var reloadsInserted as EventCount
@@ -477,7 +474,7 @@ module type RegAllocCounters
 	//
 	// `repairedByEviction` IS EXPECTED TO READ ZERO, AND THAT IS WHAT IT IS FOR. Cure (a) runs first
 	// and handles everything the corpus produces, so a single merged counter could never tell a reader
-	// that `SplitDriver.repairByEvictingOccupant` has not executed since it was written. Split, the zero
+	// that `SplitDriver.repairByEvictingOccupant` has never executed. Split, the zero
 	// is legible: it is the standing evidence that the eviction path is UNEXERCISED by the suite, and the
 	// only thing that will tell a future rung so. Do not merge them back to tidy the report.
 	export var repairedByWidening as EventCount
@@ -507,7 +504,7 @@ module type RegAllocFacts
 end 'RegAllocFacts'
 
 // Per-run counters + timers, logged under LogCategory.codegen. Counters matter more
-// than the clock at M5.1's sub-millisecond functions (design §"Stats").
+// than the clock at sub-millisecond functions (design §"Stats").
 export type RegAllocStats
 	// Two scalar columns, not one Array with PhaseCost — see CompileTimings' note. These are
 	// the per-FUNCTION probes, so a boxed pair here is what cost the compiler thousands of
@@ -532,7 +529,7 @@ export type RegAllocStats
 	export var valuesColored as EventCount
 	export var registersUsed as RegMask
 
-	// Cold-spill splitter (M5.3) counters: values spilled to a slot, reloads emitted for
+	// Cold-spill splitter counters: values spilled to a slot, reloads emitted for
 	// them (one per use-block), and constants rematerialized instead of spilled.
 	export var valuesSplit as EventCount
 	export var reloadsInserted as EventCount
@@ -556,7 +553,7 @@ export type RegAllocStats
 	//
 	// ⚠ `repairedByEviction` IS EXPECTED TO READ ZERO, AND THAT IS WHAT IT IS FOR. Cure (a) runs first
 	// and handles everything the corpus produces, so a single merged counter could never tell a reader
-	// that `SplitDriver.repairByEvictingOccupant` has not executed since it was written. Split, the zero
+	// that `SplitDriver.repairByEvictingOccupant` has never executed. Split, the zero
 	// is legible: it is the standing evidence that the eviction path is UNEXERCISED by the suite, and the
 	// only thing that will tell a future rung so. Do not merge them back to tidy the report.
 	export var repairedByWidening as EventCount
@@ -633,8 +630,8 @@ export type RegAllocStats
 	end 'merge'
 end 'RegAllocStats'
 
-// The allocatable register pool for `target`. M5.6 GREW the pool to the full 14 GPRs
-// (every register except rsp/rbp, the frame): the 9 CALLER-saved {rax, rcx, rdx, rsi,
+// The allocatable register pool for `target` — the full 14 GPRs (every register except rsp/rbp, the
+// frame): the 9 CALLER-saved {rax, rcx, rdx, rsi,
 // rdi, r8, r9, r10, r11} PLUS the 5 CALLEE-saved {rbx, r12–r15}. The callee-saved half
 // is what makes calls colorable: a value live ACROSS a call is forbidden every caller-
 // saved register (`callDirect`'s `implicitDefs`), so its only home is a callee-saved
@@ -660,11 +657,10 @@ end 'allocatablePool'
 // The x64 pool: every register except rsp/rbp (the frame) — 9 caller-saved + 5 callee-saved GPRs,
 // and 6 caller-saved + 10 callee-saved XMMs.
 //
-// It is the UNION OF THE TWO HALVES AND NOTHING ELSE. Wave 1 OR-ed the whole XMM class mask in as a
-// third term, because with every XMM caller-saved the two halves already covered them and the term
-// was a redundant restatement — but it was also the XMM file written down a second time, and it is
-// exactly the term that would have silently kept an XMM allocatable had Wave 2 dropped one out of
-// both halves. `assertCalleeSavedListsMatchMasks` proves the two halves partition the file, which is
+// It is the UNION OF THE TWO HALVES AND NOTHING ELSE. OR-ing the whole XMM class mask in as a third
+// term is a redundant restatement while every XMM is caller-saved — and it is also the XMM file
+// written down a second time, exactly the term that would silently keep an XMM allocatable if one
+// were dropped out of both halves. `assertCalleeSavedListsMatchMasks` proves the two halves partition the file, which is
 // what makes this union the complete pool rather than merely a large one.
 // EXPORTED for the same reason `calleeSavedMask` is: `Testing/ScaleCorpus` derives its register-pressure
 // knob widths from the allocator's own masks rather than writing today's numbers down, so that the next
@@ -679,11 +675,11 @@ export function x64AllocatablePool() returns RegMask
 	return callerSavedMask() or calleeSavedMask()
 end 'x64AllocatablePool'
 
-// The arm64 pool (AAPCS64-derived, M1 notes): allocatable GPRs x0..x14 ∪ x19..x28, and the WHOLE
+// The arm64 pool (AAPCS64-derived): allocatable GPRs x0..x14 ∪ x19..x28, and the WHOLE
 // SIMD file d0..d31 (all 32 are allocatable — d0..d7/d16..d31 caller-saved, d8..d15 callee-saved).
 // x15 (the asynchronous-preemption resume register), x16/x17 (IP scratch), x18 (the untouchable Darwin
-// platform register), x29 (FP), x30 (LR) and sp are NOT in the pool. arm64 now runs the allocator (the M2
-// runtime floor), so this pool is LIVE; x16/x17 being out of it is what lets the `arm64ImportCall`
+// platform register), x29 (FP), x30 (LR) and sp are NOT in the pool. arm64 runs the allocator, so this
+// pool is LIVE; x16/x17 being out of it is what lets the `arm64ImportCall`
 // trampoline (`adrp/ldr/blr x16`) clobber x16 freely — no value is ever coloured there, so its omission
 // from the caller-saved mask is sound.
 function arm64AllocatablePool() returns RegMask
@@ -748,20 +744,20 @@ end 'classPoolSizeOf'
 // module, so the check is free.
 //
 // ⭐ **BOTH CALL OPS ARE CHECKED, AND `iatCall` IS WHY THIS LOOP EXISTS.** It carried
-// `implicitDefs: 0` while its own comment said "full call-barrier semantics" — inert for as long
-// as the only `iatCall` was `mrt_start`'s hand-built `ExitProcess`, and a miscompile the day
-// P1.0r put `VirtualAlloc` inside `__slab_alloc` with values live across it. Checking only the
-// op that happened to be right is what let the other be wrong for four milestones; a call is a
-// call, so every op that IS one answers to this.
+// `implicitDefs: 0` while its own comment says "full call-barrier semantics" — inert for as long
+// as the only `iatCall` is `mrt_start`'s hand-built `ExitProcess`, and a miscompile the moment one
+// wraps `VirtualAlloc` inside `__slab_alloc` with values live across it. Checking only the op that
+// happens to be right is what lets the other be wrong; a call is a call, so every op that IS one
+// answers to this.
 //
 // The ops are named one by one because `TargetOp` offers no way to enumerate its arms. The one
 // thing that can go wrong is a NEW call op landing without a line here — `isCall: true` is the
 // property to grep for when adding one. The payloads are throwaway: only the metadata is read.
 //
-// ⭐ IT TAKES THE MASK THE COLORER WILL USE, RATHER THAN RE-DERIVING ITS OWN — and that is A5c's
-// whole repair. Each arm used to source its own target's mask, so the check proved "arm64's call ops
-// agree with arm64's mask" while the colorer, one screen away, asked the X64 one unconditionally.
-// The two spellings it was written to hold together were never both under it. Sourced once in
+// ⭐ IT TAKES THE MASK THE COLORER WILL USE, RATHER THAN RE-DERIVING ITS OWN. An arm sourcing its own
+// target's mask proves "arm64's call ops agree with arm64's mask" while the colorer, one screen away,
+// asks the X64 one unconditionally — so the two spellings the check exists to hold together are never
+// both under it. Sourced once in
 // `lowerAndAllocateOnAWorkerPool` and passed in, the mask the ABI clobbers and the mask the colorer prefers are
 // ONE value, and a target that got the wrong one fails the build here instead of colouring quietly.
 //
@@ -789,7 +785,7 @@ function assertX64CallClobbers(pool RegMask)
 	assertOneCallClobber(TargetOp.callDirect(ByteArray.create()), name: "callDirect", pool: pool, calleeWitness: X64Register.rbx.rawValue, calleeName: "rbx")
 	assertOneCallClobber(TargetOp.iatCall(0), name: "iatCall", pool: pool, calleeWitness: X64Register.rbx.rawValue, calleeName: "rbx")
 
-	// P1.5-A1: the register-indirect call carries the SAME caller-saved clobber mask as `callDirect`
+	// The register-indirect call carries the SAME caller-saved clobber mask as `callDirect`
 	// (a call destroys the caller-saved set whether its target is a name or a register). Its callee
 	// register (rbx here is just the callee-saved WITNESS the assert checks is NOT clobbered) is an
 	// explicit USE, but the clobber assertion is about `implicitDefs`, which must equal the pool.
@@ -802,12 +798,10 @@ function assertX64CallClobbers(pool RegMask)
 	// arm64 twin holds `arm64Syscall` here for the identical reason (`assertArm64CallClobbers`).
 	assertOneCallClobber(TargetOp.x64Syscall(0), name: "x64Syscall", pool: pool, calleeWitness: X64Register.rbx.rawValue, calleeName: "rbx")
 
-	// The fused witness call's MEMORY-indirect form (P1.7a): a call destroys the caller-saved set
-	// whether its target is a name, a register or a memory operand. It was the one call op carrying
-	// the clobber literal and NOT answering here — while `TargetDialect.callMem`'s own header said it
-	// was "held equal to `callerSavedMask()` by `assertX64CallClobbers`" — so the guard four ops were
-	// covered by was a sentence for the fifth. Wave 2 then hand-edited that unguarded literal
-	// (0xFFFF0FC7 → 0x003F0FC7) while reading the sentence promising it could not drift.
+	// The fused witness call's MEMORY-indirect form: a call destroys the caller-saved set
+	// whether its target is a name, a register or a memory operand. Leaving it out makes the guard four
+	// ops are covered by a mere sentence for the fifth — and an unguarded clobber literal is exactly
+	// what gets hand-edited (0xFFFF0FC7 → 0x003F0FC7) while its header promises it cannot drift.
 	assertOneCallClobber(TargetOp.callMem(TargetVReg.virtual(0), disp: 0), name: "callMem", pool: pool, calleeWitness: X64Register.rbx.rawValue, calleeName: "rbx")
 end 'assertX64CallClobbers'
 
@@ -816,8 +810,8 @@ end 'assertX64CallClobbers'
 // It holds the same one-fact-one-place guard the x64 pair does: the `0x7FFF807F80007FFF` literal on
 // `arm64BranchLink`/`arm64BranchLinkReg`/`arm64ImportCall` must equal `arm64CallerSavedMask`, or a value
 // live across a call is mis-constrained. Both OS-call forms are calls and so answer here too —
-// `arm64ImportCall` (the macOS mmap/write GOT call) is the M2 case the x64 `iatCall` comment warns
-// about on the arm64 side, and `arm64Syscall` (its Linux `svc #0` sibling) crosses the same barrier:
+// `arm64ImportCall` (the macOS mmap/write GOT call) is the case the x64 `iatCall` comment warns about
+// on the arm64 side, and `arm64Syscall` (its Linux `svc #0` sibling) crosses the same barrier:
 // the kernel clobbers the caller-saved half exactly as a libSystem call does.
 function assertArm64CallClobbers(pool RegMask)
 	assertOneCallClobber(TargetOp.arm64BranchLink(b""), name: "arm64BranchLink", pool: pool, calleeWitness: 19, calleeName: "x19")
@@ -828,14 +822,14 @@ end 'assertArm64CallClobbers'
 
 // ⭐⭐ **EVERY MACRO-OP WHOSE ENCODER WRITES FIXED REGISTERS, AGAINST THE `implicitDefs` LITERAL THAT IS
 // WHAT KEEPS A LIVE VALUE OUT OF THEM.** Four families now answer here — the jump tables (r10/r11 on x64,
-// x16/x17 on arm64), the byte-fill ladders (rax/rcx/rdx/rdi, x0..x3), F2's arm64 LL/SC atomics
+// x16/x17 on arm64), the byte-fill ladders (rax/rcx/rdx/rdi, x0..x3), the arm64 LL/SC atomics
 // (x16/x17) and the x64 f64 negate's mask register (xmm5) — and they share ONE guard because they share
 // one hazard, stated once: the inline
 // `TargetOpMeta` literal is what `forbidOperandsFromImplicit` and the liveness clobber census read, the
 // ENCODER is what actually writes those registers, and a drift between the two is a silent miscompile — a
-// live value coloured onto a register the encoder then destroys. It was two byte-identical helpers and two
-// per-target dispatchers; the only thing that differed was the sentence in the panic, which is now a
-// parameter.
+// live value coloured onto a register the encoder then destroys. Two byte-identical helpers and two
+// per-target dispatchers would differ only in the sentence in the panic, which is a parameter here
+// instead.
 //
 // ⛔ **THE FILL LADDER's x64 HALF IS THE ONE THAT WOULD BITE.** rdi is an ARGUMENT register in this
 // ABI, so it is allocatable and a live
@@ -864,7 +858,7 @@ function assertArm64EncoderScratchMasks()
 	assertEncoderScratchMask(TargetOp.arm64JumpTable(TargetVReg.virtual(0), defaultTarget: 0, caseTargets: BlockIdArray.create(), tableLabel: b""), name: "arm64JumpTable", expected: ipPair, hazard: "the biased index could be colored onto a register the jump-table encoder clobbers")
 	assertEncoderScratchMask(TargetOp.arm64MemFill(0), name: "arm64MemFill", expected: arm64MemFillScratchMask(), hazard: "a value live across the fill could be colored onto a register the ladder clobbers")
 
-	// F2: both LL/SC loops keep their observed value in x16 and their store status in x17 — the SAME IP pair
+	// Both LL/SC loops keep their observed value in x16 and their store status in x17 — the SAME IP pair
 	// the jump table uses, which is why one `let` serves all three.
 	assertEncoderScratchMask(TargetOp.arm64AtomicCas(TargetVReg.virtual(0), addrReg: TargetVReg.virtual(0), expectedReg: TargetVReg.virtual(0), replacementReg: TargetVReg.virtual(0)), name: "arm64AtomicCas", expected: ipPair, hazard: "an operand of the retry loop could be colored onto a register the loop clobbers before its last read")
 	assertEncoderScratchMask(TargetOp.arm64AtomicRmw(TargetVReg.virtual(0), addrReg: TargetVReg.virtual(0), operandReg: TargetVReg.virtual(0), opcode: StdAtomicRmwOpcode.add), name: "arm64AtomicRmw", expected: ipPair, hazard: "an operand of the retry loop could be colored onto a register the loop clobbers before its last read")
@@ -943,7 +937,8 @@ end 'callerSavedMaskFor'
 //     to ∅, and `preferredVolatilityMask` then returns the whole class pool at every value: a
 //     preference that prefers nothing, and floats free to settle in registers the prologue must save.
 //
-// ⚠ IT IS NOT WHAT GUARDS A5c, AND SAYING SO WOULD BE A FALSE CLAIM. `assertCallClobberConsistent`
+// ⚠ IT IS NOT WHAT GUARDS THE PER-TARGET MASK, AND SAYING SO WOULD BE A FALSE CLAIM.
+// `assertCallClobberConsistent`
 // is: it pins the colorer's mask to the call ops' `implicitDefs` LITERAL, exactly, per target, so a
 // target handed the wrong ISA's mask fails there first and this can never see it. What this adds is
 // the pair that assert cannot see — `pool` against `callerSaved`. Change `allocatablePool` and leave
@@ -1010,33 +1005,31 @@ end 'arm64CallerSavedMask'
 // the clobber mask cannot drift (asserted equal by `assertCallClobberConsistent`). A
 // value live across a call is forbidden all of these.
 //
-// ⚠ **THIS IS X64'S, AND ITS NAME DOES NOT SAY SO — WHICH IS THE WHOLE OF A5c.** Ask
+// ⚠ **THIS IS X64'S, AND ITS NAME DOES NOT SAY SO.** Ask
 // `callerSavedMaskFor(target)`; this is one of its two arms, the twin of `x64AllocatablePool`. It is
 // file-private for that reason: a target-neutral NAME on a target-specific FACT is what the colorer
-// read as "the caller-saved mask" for two milestones, and nothing outside this file has any business
-// asking the question without naming a target.
+// would read as "the caller-saved mask", and nothing outside this file has any business asking the
+// question without naming a target.
 //
-// ⭐ SIX XMMs ARE CALLER-SAVED (xmm0–5), AND THE OTHER TEN ARE NOT (Wave 2). A float live across a
-// call is therefore confined to xmm6–15 — ten registers, not ∅ — exactly as an int live across a
-// call is confined to the five callee-saved GPRs. Wave 1 took all sixteen here, which forbade such a
-// float its ENTIRE file and force-spilled a store/reload bracket at EVERY call; that made
-// `regalloc:splitting` measurably quadratic in the number of cross-call floats (x4.24 per doubling),
-// which is the whole reason Wave 2 exists.
+// ⭐ SIX XMMs ARE CALLER-SAVED (xmm0–5), AND THE OTHER TEN ARE NOT. A float live across a call is
+// therefore confined to xmm6–15 — ten registers, not ∅ — exactly as an int live across a call is
+// confined to the five callee-saved GPRs. Taking all sixteen here forbids such a float its ENTIRE file
+// and force-spills a store/reload bracket at EVERY call, which MEASURED `regalloc:splitting` as
+// quadratic in the number of cross-call floats (x4.24 per doubling).
 //
-// ⚠ AN EMPTY ALLOWED SET IS STILL THE CASE `valueConfinedTo` GUARDS, and it is no longer reachable
+// ⚠ AN EMPTY ALLOWED SET IS THE CASE `valueConfinedTo` GUARDS, and it is not reachable
 // through a float across a call. See `SplitLiveRanges.noVictimAtPeak` for what can still reach it.
 //
 // ⭐⭐ SPELLED REGISTER BY REGISTER BECAUSE THE DERIVED FORM **ALLOCATED**, AND THAT IS MEASURED, NOT
-// STYLISTIC. This function WAS on the COLORER's per-value path (`preferredVolatilityMask`, up to
-// twice per `chooseRegister`) — A5c took it off, by sourcing the mask once per module and threading
-// it beside `pool`. **The ban below stands anyway**: nothing stops a future caller putting a
-// derivation back on a per-value path, and the number that follows is what that costs. Wave 1 built
-// the XMM half as
+// STYLISTIC. This function is kept OFF the COLORER's per-value path (`preferredVolatilityMask`, up to
+// twice per `chooseRegister`) by sourcing the mask once per module and threading it beside `pool`.
+// **The ban below stands anyway**: nothing stops a future caller putting a derivation back on a
+// per-value path, and the number that follows is what that costs. Building the XMM half as
 // `classRegisterMask(RegClass.xmm, file: x64RegisterFile())` — and **`x64RegisterFile()` CONSTRUCTS A
-// HEAP `RegisterFile`**, so every colouring decision allocated one. Fifteen shifts and fifteen ors
+// HEAP `RegisterFile`** — allocates one per colouring decision. Fifteen shifts and fifteen ors
 // allocate nothing.
 //
-// MEASURED (Wave 2's optimizer pass): a probe build of the BASE compiler changing only that one
+// MEASURED: a probe build of the BASE compiler changing only that one
 // expression to a literal reproduces −10,358…−294,501 allocations across the scale ladder with
 // `codeBytes` identical at all six rungs — **99.9% of the whole A/B delta, ~75% of this rung's entire
 // improvement.** The A/B attributes `regalloc:coloring` −10,369…−294,884 against `regalloc:splitting`
@@ -1079,15 +1072,15 @@ end 'callerSavedMask'
 // `calleeSavedXmmOrder`) are what the prologue and the GT context switch walk, and
 // `assertCalleeSavedListsMatchMasks` holds those lists and these two masks to one another.
 //
-// ⚠ **THIS IS X64'S, AND ITS NAME DOES NOT SAY SO EITHER** — the exact hazard A5c repaired in its
-// caller-saved twin, which is now file-private. This one cannot be: `Testing/ScaleCorpus`'s
+// ⚠ **THIS IS X64'S, AND ITS NAME DOES NOT SAY SO EITHER** — the exact hazard its caller-saved twin
+// avoids by being file-private. This one cannot be: `Testing/ScaleCorpus`'s
 // `floatsLivePerSpillLoop` reads it to size the float-spill knob, and that reader is x64-specific IN ITS
 // OWN TEXT (`classRegisterMask(RegClass.xmm, file: x64RegisterFile())` on the same line), so it names the
 // ISA it means. That is the bar for reaching this from outside, and the only caller that clears it.
 //
 // There is deliberately no `calleeSavedMaskFor(target)`: the callee-saved half is `pool ∖ callerSaved`
-// wherever the ALLOCATOR wants it (that is how `chooseRegister`'s confined-pool figure is computed since
-// A5c), and a second target dispatch would be a second place for an ISA to be assumed. A TARGET-NEUTRAL
+// wherever the ALLOCATOR wants it (that is how `chooseRegister`'s confined-pool figure is computed),
+// and a second target dispatch would be a second place for an ISA to be assumed. A TARGET-NEUTRAL
 // caller must never reach for this — that is precisely how the colorer came to ask x64's volatility on
 // every ISA.
 export function calleeSavedMask() returns RegMask
@@ -1119,8 +1112,8 @@ end 'calleeSavedMask'
 // no crash to find it by.
 //
 // It also asserts the two halves PARTITION the file: every x64 register except the frame (rsp/rbp)
-// is either caller- or callee-saved, and none is both. Wave 2 moved ten registers across that line,
-// and the failure mode of doing so by hand is a register that ends up on neither side — allocatable
+// is either caller- or callee-saved, and none is both. Moving a register across that line by hand can
+// leave it on neither side — allocatable
 // (the pool IS the union) yet clobbered by nothing and saved by nobody.
 function assertCalleeSavedListsMatchMasks()
 	var listed = 0 as RegMask
@@ -1263,13 +1256,13 @@ module function allocateFunctionCore(module TargetModule, func IrFunction, hasAu
 	// It hands back the REORDERED skeleton, which the splitter completes into its `FuncCfg`
 	// rather than re-deriving from the IR. Nothing runs between the two, and the splitter never
 	// adds or removes a block, so the skeleton stays exactly this function's for the whole of
-	// allocation. (`splitCriticalEdges` DID add blocks — which is why it runs before this, and
+	// allocation. (`splitCriticalEdges` DOES add blocks — which is why it runs before this, and
 	// why its own skeleton cannot be carried forward.)
 	let orderProbe = PhaseProbe.beginCounters()
 	let topo = reorderFuncBlocksRpo(module, func: func)
 	costs.record(RegAllocPhase.blockOrder.ordinal, probe: orderProbe)
 
-	// Cold-spill live-range splitting (M5.3): where register pressure exceeds the pool, split
+	// Cold-spill live-range splitting: where register pressure exceeds the pool, split
 	// idle values out (store in a cold, dominating spot and reload at their uses) or
 	// rematerialize constants, so the colorer below always finds `maxPressure ≤ pool`. HOT
 	// pressure a loop genuinely cannot fit is raised as E5001 from inside the splitter.
@@ -1320,7 +1313,7 @@ module function allocateFunctionCore(module TargetModule, func IrFunction, hasAu
 	// ⚠ THE PER-FUNCTION FIGURES ARE READ AFTER THE COLOURING, NOT BEFORE IT, AND THE REPAIR IS WHY. A
 	// repair is a SPLIT: it walks liveness (`livenessMarkSteps`) and it lowers a block's demand
 	// (`maxPressure`). Read before the loop above, the one counter that would show a repair's liveness
-	// cost dropped every one of them, and the pressure was the pre-repair figure. Loop depth is a
+	// cost would drop every one of them, and the pressure would be the pre-repair figure. Loop depth is a
 	// property of the CFG, which splitting cannot change, so it reads the same either side.
 	facts.livenessMarkSteps = liveness.livenessMarkSteps
 
@@ -1632,7 +1625,7 @@ type ColorHints
 		// element stride ONE against `filledColumn`'s EIGHT, so filling a `DenseColumn` and storing it here
 		// would hand every later read a stride the buffer was not written at. Nothing is narrowed:
 		// `NoFixedHint` is `RegisterFileSize as RegNum`, and every value `setFixedIfUnset` writes is a
-		// `RegNum` already, so the mismatch was the fill's hard-typed element and never the data.
+		// `RegNum` already, so the mismatch is the fill's hard-typed element and never the data.
 		//
 		// `copyHint` needs no such treatment: `ValueIdArray` and `DenseColumn` are both `Array with
 		// int(0 to u64.max)`, one instance under two alias spellings.
@@ -1710,8 +1703,8 @@ end 'computeHints'
 
 // A `movRegReg`/`movReg32Reg32` carries a coloring hint: a copy to a FIXED register
 // hints its virtual source to that register (the R8 return move → the return value
-// elides). (With the two-address seed `mov` retired, no virtual-to-virtual copy op
-// exists at coloring time; the two-address hint now comes from `collectReuseHints`.)
+// elides). (No virtual-to-virtual copy op exists at coloring time; the two-address
+// hint comes from `collectReuseHints`.)
 function collectOpHints(op TargetOp, hints ColorHints)
 	match op 'hint'
 		movRegReg(dst, src) then addCopyHint(dst, src: src, hints: hints)
@@ -1837,7 +1830,7 @@ function collectOpHints(op TargetOp, hints ColorHints)
 			arm64Syscall or
 			arm64Fcsel then break 'hint'
 
-		// The P1.5-A1 function-value band carries no COPY hint: `leaRegFunc` is a `lea` (like
+		// The function-value band carries no COPY hint: `leaRegFunc` is a `lea` (like
 		// `leaRegRdata`) and `callReg` is a call (like `callDirect`) — neither is a move, so no two of
 		// its operands want the same register. Its callee-address use rides `collectReuseHints`' scan
 		// of the operand model, which finds no reuse def and adds nothing. The Linux `x64Syscall` names
@@ -1866,11 +1859,11 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		// A frame address is not a copy — it has no source register to want the same colour as.
 		leaRegSlot then break 'hint'
 
-		// F1b: a fill ladder has no operands at all, so there is no pair of them to hint together.
+		// A fill ladder has no operands at all, so there is no pair of them to hint together.
 		x64MemFill or
 			arm64MemFill then break 'hint'
 
-		// F2: no atomic is a MOVE. `lock xadd`'s reuse-def is not a hint either — a reuse is a CONSTRAINT the
+		// No atomic is a MOVE. `lock xadd`'s reuse-def is not a hint either — a reuse is a CONSTRAINT the
 		// colorer honours through `allocateReuseDef`, and `collectReuseHints` reads it off the operand model;
 		// adding a copy hint here would be the same fact stated twice, in the weaker place.
 		x64LockCmpxchg or
@@ -1882,14 +1875,14 @@ function collectOpHints(op TargetOp, hints ColorHints)
 			arm64AtomicRmw or
 			arm64ThreadPointer then break 'hint'
 
-		// EC16: none of the scaled-index forms is a MOVE — each computes or accesses an address out of two
+		// None of the scaled-index forms is a MOVE — each computes or accesses an address out of two
 		// independent registers, so there is no pair to coalesce.
 		leaRegBaseIndexScale or
 			loadRegBaseIndexScale or
 			storeBaseIndexScaleReg or
 			arm64AddLsl then break 'hint'
 
-		// EC18: the high multiply is not a MOVE — `divideReg`'s answer, one band up, for the same reason.
+		// The high multiply is not a MOVE — `divideReg`'s answer, one band up, for the same reason.
 		// Its RAX/RDX constraints are IMPLICIT MASKS, which `forbidOperandsFromImplicit` enforces; a hint
 		// is a preference and would be the weaker statement of a fact the masks already make absolutely.
 		imulHighReg then break 'hint'
@@ -1897,11 +1890,11 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		// arm64 `fneg` is 3-address like the rest of its band: not a move, nothing to coalesce.
 		arm64Fneg then break 'hint'
 
-		// G3: an ordered access is not a move, so there is nothing to coalesce.
+		// An ordered access is not a move, so there is nothing to coalesce.
 		arm64LoadAcquire or
 			arm64StoreRelease then break 'hint'
 
-		// EC18: `SMULH` is a 3-address multiply, not a MOVE — nothing to coalesce, and unlike
+		// `SMULH` is a 3-address multiply, not a MOVE — nothing to coalesce, and unlike
 		// `imulHighReg` it constrains no physical register at all.
 		arm64Smulh then break 'hint'
 
@@ -2193,11 +2186,11 @@ end 'assertColouredInClass'
 // Two sequential loops containing calls were enough to hit it
 // (`while-loops.sequential-loops-across-a-call`).
 //
-// ⛔ SO THE VOLATILITY PREFERENCE IS A MITIGATION, NOT AN EXACTNESS RULE, AND THIS HEADER SAID
-// OTHERWISE. It used to end *"where greedy is exact only if the scarce callee-saved half is
-// protected"*, which reads as "protect it and greedy is exact"; A5g measured four programs where the
-// half IS protected and the greedy still loses. What protecting it buys is that the common shape stops
-// reaching `reportExhaustion`; what catches the rest is the repair.
+// ⛔ SO THE VOLATILITY PREFERENCE IS A MITIGATION, NOT AN EXACTNESS RULE. *"Greedy is exact only if
+// the scarce callee-saved half is protected"* reads as "protect it and greedy is exact", and that is
+// false: MEASURED on four programs where the half IS protected and the greedy still loses. What
+// protecting it buys is that the common shape stops reaching `reportExhaustion`; what catches the rest
+// is the repair.
 function chooseRegister(v ValueId, classPool RegMask, callerSaved RegMask, blocked RegMask, dyingRegs RegMask, hints ColorHints, alloc Allocation, liveness LivenessResult, counters RegAllocCounters) returns RegNum
 	// The volatility preference is the COPY GROUP's, not `v`'s alone — see `copyGroupBlocked`.
 	let groupBlocked = copyGroupBlocked(v, blocked: blocked, hints: hints, alloc: alloc, liveness: liveness)
@@ -2259,26 +2252,25 @@ end 'chooseRegister'
 // ⭐⭐ **THE COLORER RAN OUT OF REGISTERS FOR `v`. Decide WHOSE bug that is** — and, when it is the one
 // that is nobody's bug, record `v` so the driver can relieve it and the function be coloured again.
 //
-// ⚠⚠ WHICH PASS OWNS THIS IS MEASURED HERE, NOT ASSERTED — AND THE ASSERTION IT REPLACES WAS FALSE. The
-// message used to state outright that *"reaching this is a SPLITTER BUG, not a colorer limitation"*, and
-// sent every reader to `RegPoolCensus`/`HallCondition` on the strength of the two MASKS. The masks
+// ⚠⚠ WHICH PASS OWNS THIS IS MEASURED HERE, NOT ASSERTED. Stating outright that *"reaching this is a
+// SPLITTER BUG, not a colorer limitation"* would be FALSE, and would send every reader to
+// `RegPoolCensus`/`HallCondition` on the strength of the two MASKS. The masks
 // cannot carry that: a non-empty FORBIDDEN says the exhausted value is confined to a subset, which is
 // true of every value live across a call, and says NOTHING about whether the point over-subscribes that
-// subset. BATCH17 instrumented the four programs that reach this path and ran the exact verdict at each
-// failing point: all four came back FEASIBLE — a distinct allowed register existed for every value
-// holding a register there, and the GREEDY had simply not found it.
+// subset. MEASURED, on the four programs that reach this path, with the exact verdict run at each
+// failing point: all four come back FEASIBLE — a distinct allowed register exists for every value
+// holding a register there, and the GREEDY has simply not found it.
 //
 // It runs the same `hallVerdictAt` the splitter runs, over the point's own OCCUPANTS
 // (`Allocation.holderOf`) plus the value that could not be coloured — which is exactly the feasibility
 // question the splitter is supposed to have already answered "yes" to. One implementation, two callers,
 // so this cannot disagree with the pass it names.
 //
-// ⚠ A MESSAGE MUST NAME A CHECK THAT STILL EXISTS. It once blamed `analyzePressure`'s "reduced-pool
-// check, `pool ∖ op.implicitDefs`" — a check Hall's condition SUBSUMED and deleted (`HallCondition`'s
-// header), so it sent every reader to a pass that no longer had the code being blamed.
+// ⚠ A MESSAGE MUST NAME A CHECK THAT STILL EXISTS. Blaming `analyzePressure`'s "reduced-pool check,
+// `pool ∖ op.implicitDefs`" names a check Hall's condition SUBSUMED and deleted (`HallCondition`'s
+// header), and sends every reader to a pass that does not hold the code being blamed.
 //
-// The confined-pool figure is per CLASS, not the whole callee-saved set: since Wave 2 that set spans
-// both files (5 GPRs + 10 XMMs), and quoting 15 at a colorer that ran out of GPRs would name a number no
+// The confined-pool figure is per CLASS, not the whole callee-saved set: that set spans both files (5 GPRs + 10 XMMs), and quoting 15 at a colorer that ran out of GPRs would name a number no
 // value could ever have had.
 //
 // Returns `working` with a PROVISIONAL register added — see the bottom of the function.
@@ -2468,8 +2460,8 @@ end 'pinnedPartnerRegister'
 // on the loop-entry edge, and the ONE value `sum` holds TWO registers. Widening the const's blocked
 // mask by the phi's forbidden set makes it pick r12 directly, the edge copy self-elides, and the
 // pair costs one register. Nothing else changes: a partner with no forbidden registers (the common
-// case) widens nothing, and an ALREADY-colored partner is left to the hint path — which is what
-// keeps M5.12's scarce-class protection exactly as it was.
+// case) widens nothing, and an ALREADY-colored partner is left to the hint path — which is what keeps
+// the scarce-class protection intact.
 //
 // It cannot over-constrain: the widened mask is only a PREFERENCE (`chooseRegister` falls back to
 // `blocked` when the group's preferred volatility is full), never a legality claim.
@@ -2495,17 +2487,16 @@ end 'copyGroupBlocked'
 // This is `pickPreferredRegister`'s choice, named — so a HINT can be held to the same preference. The
 // two must agree, or the hint path quietly bypasses the very protection the fallback path provides.
 //
-// ⚠ "VOLATILITY", NOT "CLASS", AND THE RENAME IS THE POINT. This pair used to say "class" for the
-// caller/callee-saved split, which now collides head-on with a register's CLASS — the file it lives
-// in — and the collision is not cosmetic: both functions spelled "the whole pool" as
-// `fullRegisterMask()`, which was harmless while the file was 16 wide and the pool was every GPR, and
-// becomes "hand an int an XMM" the moment the file spans two classes. `classPool` is now the pool
-// argument and `fullRegisterMask()` appears here only as the complement base — the one honest
+// ⚠ "VOLATILITY", NOT "CLASS", AND THE WORD IS THE POINT. Saying "class" for the caller/callee-saved
+// split collides head-on with a register's CLASS — the file it lives in — and the collision is not
+// cosmetic: spelling "the whole pool" as `fullRegisterMask()` is harmless while the file is 16 wide and
+// the pool is every GPR, and becomes "hand an int an XMM" the moment the file spans two classes.
+// `classPool` is the pool argument, and `fullRegisterMask()` appears here only as the complement base — the one honest
 // whole-machine use, complementing a mask to block everything outside it.
 //
-// ⚠⚠ `callerSaved` IS AN ARGUMENT AND MUST STAY ONE (A5c). This line read `classPool and
-// callerSavedMask()` — a call to X64's mask, on every target, from the colorer's per-value path. Both
-// halves of the ISA disagreement showed: on arm64 GPRs the numbers land on x16..x21 rather than
+// ⚠⚠ `callerSaved` IS AN ARGUMENT AND MUST STAY ONE. Spelling it `classPool and callerSavedMask()`
+// is a call to X64's mask, on every target, from the colorer's per-value path. Both halves of the ISA
+// disagreement then show: on arm64 GPRs the numbers land on x16..x21 rather than
 // xmm0..xmm5, so x19/x20/x21 read as volatile and x3/x4/x5/x12..x15 did not; on arm64 SIMD the
 // intersection is EMPTY, so `anyVolatileFree` is false at every value and this returns the whole
 // class pool — a preference that prefers nothing. `chooseRegister` then died on programs that fit
@@ -2546,10 +2537,9 @@ end 'hintIsTakeable'
 // blocked and `lowestClearRegister` — which scans all 32 — cannot reach one.
 //
 // It ASKS `preferredVolatilityMask` rather than re-deriving the same preference, so the hint path and
-// this one cannot disagree about what a value should take. They used to spell the volatile probe
-// twice, which is what made "the two must agree" a comment instead of a property — and a second
-// spelling of a pool is exactly how `fullRegisterMask()` came to stand in for "the whole pool" in one
-// of them and not the other.
+// this one cannot disagree about what a value should take. Spelling the volatile probe twice makes
+// "the two must agree" a comment instead of a property — and a second spelling of a pool is exactly
+// how `fullRegisterMask()` comes to stand in for "the whole pool" in one of them and not the other.
 function pickPreferredRegister(blocked RegMask, classPool RegMask, callerSaved RegMask) returns RegNum
 	let preferred = preferredVolatilityMask(blocked, classPool: classPool, callerSaved: callerSaved)
 	let pick = lowestClearRegister(blocked or (fullRegisterMask() and not preferred))
@@ -2862,7 +2852,7 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		cvtsi2sdRegReg(dest, src) then return TargetOp.cvtsi2sdRegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		cvttsd2siRegReg(dest, src) then return TargetOp.cvttsd2siRegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 
-		// The MATH INTRINSICS (P1.0d.4-C) — two XMM operands each, colored like the converts. The
+		// The MATH INTRINSICS — two XMM operands each, colored like the converts. The
 		// rounding MODE is not a register, so it passes through, exactly as an immediate or a cond code
 		// does.
 		sqrtsdRegReg(dest, src) then return TargetOp.sqrtsdRegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
@@ -2883,7 +2873,7 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		// nothing here has to know the two will land in one register.
 		absF64RegReg(dest, src) then return TargetOp.absF64RegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 
-		// The `.rdata` address `lea` (P1.2 wave A) — colors its GPR dest, exactly like `leaRegGlobal`.
+		// The `.rdata` address `lea` — colors its GPR dest, exactly like `leaRegGlobal`.
 		leaRegRdata(dest, label) then return TargetOp.leaRegRdata(colorVRegWith(dest, alloc: alloc), label: label)
 
 		// `minsd`/`maxsd` color their three XMM operands like any other binary SSE op. That it is a REUSE def is
@@ -2958,7 +2948,7 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		// `max` — so the reconstruction names each in its own slot.
 		arm64Fcsel(dest, ifTrue, ifFalse, cond) then return TargetOp.arm64Fcsel(colorVRegWith(dest, alloc: alloc), ifTrue: colorVRegWith(ifTrue, alloc: alloc), ifFalse: colorVRegWith(ifFalse, alloc: alloc), cond: cond)
 
-		// --- P1.5-A1 function-value band (x64) ---
+		// --- The function-value band (x64) ---
 		// `leaRegFunc` colors its GPR dest exactly like `leaRegRdata`/`leaRegGlobal`. `callReg` colors
 		// its callee-address USE exactly like `arm64BranchLinkReg` — NOT a pass-through like
 		// `callDirect`/`iatCall`, which carry no explicit register operand at all.
@@ -2988,12 +2978,12 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		arm64FmovFpGpr(dest, src) then return TargetOp.arm64FmovFpGpr(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		leaRegSlot(destReg, slot) then return TargetOp.leaRegSlot(colorVRegWith(destReg, alloc: alloc), slot: slot)
 
-		// F1b: a fill ladder carries NO virtual register to colour — its operands arrived in fixed physical
+		// A fill ladder carries NO virtual register to colour — its operands arrived in fixed physical
 		// registers before it and its only field is a constant — so it is returned verbatim.
 		x64MemFill or
 			arm64MemFill then return op
 
-		// F2: every virtual operand of every atomic is coloured from its own value. The CAS's comparand is NOT
+		// Every virtual operand of every atomic is coloured from its own value. The CAS's comparand is NOT
 		// among them — x86 pins it to RAX, so it arrives in a `movRegReg` above and rides `implicitUses` here.
 		x64LockCmpxchg(addrReg, srcReg) then return TargetOp.x64LockCmpxchg(colorVRegWith(addrReg, alloc: alloc), srcReg: colorVRegWith(srcReg, alloc: alloc))
 		x64LockXadd(dest, src, addrReg) then return TargetOp.x64LockXadd(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc), addrReg: colorVRegWith(addrReg, alloc: alloc))
@@ -3004,14 +2994,14 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		arm64AtomicRmw(dest, addrReg, operandReg, opcode) then return TargetOp.arm64AtomicRmw(colorVRegWith(dest, alloc: alloc), addrReg: colorVRegWith(addrReg, alloc: alloc), operandReg: colorVRegWith(operandReg, alloc: alloc), opcode: opcode)
 		arm64ThreadPointer(dest, source) then return TargetOp.arm64ThreadPointer(colorVRegWith(dest, alloc: alloc), source: source)
 
-		// EC16 — the scaled-index band. The scale, displacement and width are IMMEDIATES and carry
+		// The scaled-index band. The scale, displacement and width are IMMEDIATES and carry
 		// through untouched; only the register operands are coloured.
 		leaRegBaseIndexScale(dest, base, index, scale) then return TargetOp.leaRegBaseIndexScale(colorVRegWith(dest, alloc: alloc), base: colorVRegWith(base, alloc: alloc), index: colorVRegWith(index, alloc: alloc), scale: scale)
 		loadRegBaseIndexScale(dest, base, index, scale, disp, width) then return TargetOp.loadRegBaseIndexScale(colorVRegWith(dest, alloc: alloc), base: colorVRegWith(base, alloc: alloc), index: colorVRegWith(index, alloc: alloc), scale: scale, disp: disp, width: width)
 		storeBaseIndexScaleReg(base, index, scale, disp, src, width) then return TargetOp.storeBaseIndexScaleReg(colorVRegWith(base, alloc: alloc), index: colorVRegWith(index, alloc: alloc), scale: scale, disp: disp, src: colorVRegWith(src, alloc: alloc), width: width)
 		arm64AddLsl(dest, base, index, scale) then return TargetOp.arm64AddLsl(colorVRegWith(dest, alloc: alloc), base: colorVRegWith(base, alloc: alloc), index: colorVRegWith(index, alloc: alloc), scale: scale)
 
-		// EC18 — one register operand to colour, exactly as `divideReg` has.
+		// One register operand to colour, exactly as `divideReg` has.
 		imulHighReg(src) then return TargetOp.imulHighReg(colorVRegWith(src, alloc: alloc))
 		arm64Fneg(dest, src) then return TargetOp.arm64Fneg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		arm64LoadAcquire(dest, base, width) then return TargetOp.arm64LoadAcquire(colorVRegWith(dest, alloc: alloc), base: colorVRegWith(base, alloc: alloc), width: width)

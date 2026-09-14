@@ -67,7 +67,7 @@ export enum OsImportSlot
 	// `lowerOsCpuCount` asks `arm64OsCallKind` before emitting a call through this slot.
 	sysconf
 
-	// --- MAC2: the `processInfo` facility's six libSystem entries ---
+	// --- The `processInfo` facility's six libSystem entries ---
 	//
 	// ⚠ **SIX SLOTS FOR THREE OPS, AND THE ARITHMETIC IS THE POINT.** Windows answers each of these
 	// questions with ONE import (`GetModuleFileNameA`, `GetCurrentProcessId`, `SetPriorityClass` +
@@ -94,7 +94,7 @@ export enum OsImportSlot
 	setpriority
 	getpriority
 
-	// --- MAC3: the green-thread floor's libSystem substrate ---
+	// --- The green-thread floor's libSystem substrate ---
 	//
 	// ⭐⭐ **FIFTEEN SLOTS BECAUSE WIN32 ANSWERS THIS FAMILY WITH KERNEL OBJECTS AND POSIX ANSWERS IT WITH
 	// STRUCTS THE CALLER OWNS.** `CreateEventA`/`SetEvent`/`WaitForSingleObject` are three imports over an
@@ -113,7 +113,7 @@ export enum OsImportSlot
 	// thread-pointer + indexed load with no call at all (`StdToArm64Conversion.lowerTlsSlotLoad`, which
 	// carries the measurement of Darwin's TSD layout). `pthread_create`/`pthread_join` are the worker M's
 	// birth and death. `getenv` answers `MAXON_MAX_PROCS`. `malloc` allocates a wait object, and `free` — five
-	// slots up, MAC2's — releases one.
+	// slots up — releases one.
 	//
 	// ⚠ **`pthread_cond_timedwait_relative_np` RATHER THAN `pthread_cond_timedwait`**, and the `_np` is the
 	// point: the portable call takes an ABSOLUTE deadline on the condvar's clock, so using it would mean
@@ -152,7 +152,7 @@ export enum OsImportSlot
 	pthreadMutexattrSettype
 	pthreadMutexattrDestroy
 
-	// --- MAC4/5/6/7: the filesystem, standard-input and argv substrate ---
+	// --- The filesystem, standard-input and argv substrate ---
 	//
 	// ⭐⭐ **`__error` IS THE WHOLE errno STORY, AND IT IS A FUNCTION RATHER THAN A LOCATION.** POSIX makes
 	// `errno` a per-thread lvalue; Darwin implements it as `*__error()`, so both READING the last failure and
@@ -201,7 +201,7 @@ export enum OsImportSlot
 	dirfd
 	fnmatch
 
-	// --- MAC8: the child-process substrate ---
+	// --- The child-process substrate ---
 	//
 	// ⭐⭐ **THIRTEEN SLOTS BECAUSE `CreateProcessA` IS ONE CALL AND `posix_spawn` IS A BUILDER.** Win32
 	// describes a child with two STRUCTS the caller fills (`STARTUPINFOA`, `SECURITY_ATTRIBUTES`) and one

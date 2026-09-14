@@ -104,9 +104,9 @@
 //
 // That is a correctness requirement, not a filing preference. `build <dir>` LISTS the directory it
 // is given, and every entry costs the compiler a `FilePath` and a `String`: a rung whose own output
-// sits beside its sources measures a different program than the same rung on a fresh checkout. It
-// used to, by exactly 26 allocations and 945 bytes per rung, and the "reproducible" memory numbers
-// were reproducible only on a machine that had run the suite before. See ScaleCorpus's header, and
+// sits beside its sources measures a different program than the same rung on a fresh checkout — by
+// exactly 26 allocations and 945 bytes per rung, which makes "reproducible" memory numbers
+// reproducible only on a machine that has already run the suite. See ScaleCorpus's header, and
 // `pruneRungDir`, which enforces the other half of the invariant.
 let RungMetricsSuffix = ".metrics.tsv"
 let RungOutputSuffix = ".out"
@@ -119,13 +119,12 @@ let RungOutputSuffix = ".out"
 // BYTES. A relative path is the same string on every machine. The subprocess inherits this process's
 // working directory, which is the repo root (see Main.resolveSpecDir, which relies on the same).
 //
-// ⚠ AND IT DOES NOT KEEP THE CHECKOUT OUT OF THE BYTE COLUMN, which this comment claimed until it was
-// measured. The COMPILER resolves each source path against `Directory.currentPath()` itself — per file,
-// per compile, in `Queries.fileProvenanceOf` — so the working directory's length lands in the byte
-// column whatever this side hands it. The reading that showed it is ScaleHistory's header, under (2),
-// and it is deliberately NOT copied here: the copy that lived on this line said "against exactly 0
-// allocations", which was the general rule an implementer then lost most of a session to, and a fourth
-// site is a fourth place to leave saying the old thing. Keeping this relative still removes the ARGV
+// ⚠ AND IT DOES NOT KEEP THE CHECKOUT OUT OF THE BYTE COLUMN. The COMPILER resolves each source path
+// against `Directory.currentPath()` itself — per file, per compile, in `Queries.fileProvenanceOf` — so
+// the working directory's length lands in the byte column whatever this side hands it. The reading that
+// shows it is ScaleHistory's header, under (2), and it is deliberately NOT copied here: a fourth copy
+// of a reading is a fourth site to correct, and the one left uncorrected costs an implementer most of a
+// session. Keeping this relative still removes the ARGV
 // copy of the path and is still right; the trend log's byte column is comparable across two runs only
 // when the working directory matches too, which is why `mintedAtCell` records both.
 let CorpusRelativeRoot = ".scale-tmp"
@@ -375,11 +374,10 @@ end 'runScaleTest'
 let ScaleTestUsage = "maxon scale-test [--rungs=<n>] [--repeat=<n>] [--note=<text>] [--emit-corpus=<dir>] [--result-json=<path>]"
 
 function measureScaleLadder(args MaxonArgs, corpusRoot FilePath) returns ExitCode
-	// `--update-required` is GONE from this command, and saying so is worth four lines. It rewrote
-	// committed memory goldens; there are no goldens. It is still a spec-test flag, and the driver
+	// `--update-required` is REFUSED by this command, and saying so is worth four lines. It rewrites
+	// committed memory goldens; this suite has none. It is still a spec-test flag, and the driver
 	// parses the command line before it knows which command is running — so without this it would be
-	// accepted here and silently do nothing, on a command line every document in this tree used to
-	// tell people to type.
+	// accepted here and silently do nothing.
 	if args.updateRequired 'noGoldens'
 		printError("scale-test: --update-required is gone. It rewrote the committed memory goldens, and there are none:\n")
 		printError("            this suite renders no verdict and has nothing to accept.\n")
@@ -472,8 +470,8 @@ function measureScaleLadder(args MaxonArgs, corpusRoot FilePath) returns ExitCod
 			// compared against.
 			//
 			// ⚠ THE HEADLINE SAYS "did not deliver a rung to measure" AND NOT "failed to compile", because
-			// since BATCH10 this arm has two causes and naming only the first was a lie about the second:
-			// a rung that compiles cleanly and then exits with a failed witness reported itself as a
+			// this arm has TWO causes and naming only the first lies about the second:
+			// a rung that compiles cleanly and then exits with a failed witness would report itself as a
 			// COMPILE failure, with an empty compiler stderr underneath it to prove it had not. The detail
 			// line is where the two are told apart, and it always names which happened.
 			return brokenRun("rung {rung.index} did not deliver a rung to measure", detail: scaleErrorText(error))
@@ -550,9 +548,9 @@ end 'brokenRun'
 //
 // `--note` IS AN INSTRUCTION, NOT A REQUEST. If it was given, the row is written — full stop.
 //
-// This used to decline when allocations and bytes both matched the last logged row, on the theory
-// that a row about nothing is noise. It is the wrong theory, and it fails SILENTLY, which is the
-// worse half: the operator who typed `--note` asking for the datapoint got a line of prose and no
+// Declining when allocations and bytes both match the last logged row — on the theory that a row
+// about nothing is noise — is the wrong theory, and it fails SILENTLY, which is the
+// worse half: the operator who typed `--note` asking for the datapoint gets a line of prose and no
 // row. A tool that second-guesses an explicit instruction from its operator, and then leaves the
 // history it was told to write simply absent, is worse than one that logs a dull row — and the
 // operator is the only party who knows why the run was made.
@@ -627,11 +625,10 @@ function compileRung(compilerExe FilePath, root FilePath, rung ScaleRung) return
 	return try parseRungMetrics(text, rung: rung)
 end 'compileRung'
 
-// ⭐⭐ **THE RUNG IS RUN, AND ITS EXIT CODE IS THE ONE THING THIS INSTRUMENT HAS EVER ASSERTED ABOUT
-// WHAT IT COMPILES.** Until BATCH10 `compileRung` wrote an executable and never opened it: `outputBase`
-// was passed to `-o` and never referenced again. So the ladder measured what compiling a program COST
-// and had no opinion whatever on whether that program was correct — and it wasn't. MEASURED on rung 0
-// before this: the accumulator wrapped i64 by the seventh driver, which turned `ownedSiteBlock`'s
+// ⭐⭐ **THE RUNG IS RUN, AND ITS EXIT CODE IS THE ONE THING THIS INSTRUMENT ASSERTS ABOUT WHAT IT
+// COMPILES.** A ladder that writes an executable and never opens it measures what compiling a program
+// COST and has no opinion whatever on whether that program is correct. MEASURED on rung 0 without this
+// run: the accumulator wrapped i64 by the seventh driver, which turned `ownedSiteBlock`'s
 // `if acc > 0` false and SKIPPED every heap-creating site in the corpus, and rung 1 did not terminate.
 // Neither could be seen from a metrics file.
 //
@@ -1082,8 +1079,8 @@ let TrendCountColumnWidth = 16 as ColumnWidth
 let TrendDeltaColumnWidth = 14 as ColumnWidth
 
 // `moved` is a PARAMETER, not a local: it is `anyMemoryMoved`'s answer, which the recording sentence also
-// reads. This function used to accumulate its own, which made "did the memory move" — including the rule
-// that a withheld column has not — a decision written twice in two files.
+// reads. Accumulating its own here would make "did the memory move" — including the rule that a
+// withheld column has not — a decision written twice in two files.
 function printMemoryDelta(results RungResultArray, date String, note String, loggedAllocs AllocCountArray, loggedBytes ByteCountArray, mintedAt String, bytes ByteDelta, moved bool)
 	print("  vs the last row of {OptimizationLogRelativePath} — {date}, \"{note}\"\n")
 	print("\n")
@@ -1211,16 +1208,16 @@ export typealias LadderIndex = int(0 to u64.max)
 // +12 allocations cannot turn that into "one stray directory" without already knowing this host's
 // per-directory cost — which is the bisect the number is supposed to replace. And that cost is neither
 // portable nor constant: measured at 12 allocations / 4,879 bytes per stray directory on arm64-macOS
-// against A2y's 14 / 829 on its own host, because `Directory.list` is `FindFirstFile` on Windows and
+// against 14 / 829 on an x64-windows host, because `Directory.list` is `FindFirstFile` on Windows and
 // `opendir`/`readdir` here, and because the byte column carries the path-length term
 // `printMintedElsewhereReason` already documents. The COUNT is the only signal that survives the move.
 //
 // ⭐⭐ **THE RULE THIS IS ONE HALF OF: AN A/B ACROSS TWO CHECKOUTS IS NOT SOUND BY DEFAULT.** Two known
-// ways it goes wrong are now named by this instrument, and BOTH produce a FLAT per-rung delta — which is
-// precisely the shape of a real per-compile cost, and is why each was read as one:
+// ways it goes wrong are named by this instrument, and BOTH produce a FLAT per-rung delta — which is
+// precisely the shape of a real per-compile cost, and is why each has been read as one:
 //
-//   - the TREE differs, because git cannot see ignored content (A2y, above — this census);
-//   - the PATH differs, because a compile allocates the path strings it works with (A3p — see
+//   - the TREE differs, because git cannot see ignored content (the census above);
+//   - the PATH differs, because a compile allocates the path strings it works with (see
 //     ScaleHistory's header for the readings, and `printMintedElsewhereReason` for what it prints).
 //
 // They are separate mechanisms with separate remedies, so they are detected separately; what they share

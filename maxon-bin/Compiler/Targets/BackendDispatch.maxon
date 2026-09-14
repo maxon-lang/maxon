@@ -24,12 +24,12 @@
 // stub's own `push rbp` moves it to ≡ 0, so an exact-multiple-of-16 reservation keeps
 // it aligned at each `call` and no odd 8 is needed.
 //
-// ⚠ This USED to be 0x28 (32 + 8) — the 8 was the alignment correction for a stub that
-// pushed nothing. The frame pointer's push now supplies that parity, so the same
+// ⚠ NOT 0x28 (32 + 8): that extra 8 is the alignment correction for a stub that pushes
+// nothing, and the frame pointer's push supplies the parity instead, so the same
 // arithmetic `computeFrameBytes` does for every other function (entry ≡ 8, one push ⇒ an
-// even reservation) gives 0x20 here. Keeping 0x28 would leave rsp ≡ 8 AT the call — a
-// misalignment nothing on this path reads today, and that would start corrupting the
-// moment anything below it spills an XMM register (P1.0d.4 floats).
+// even reservation) gives 0x20 here. 0x28 would leave rsp ≡ 8 AT the call — a
+// misalignment nothing on this path reads today, and one that starts corrupting the
+// moment anything below it spills an XMM register.
 let EntryStubFrameBytes = 0x20
 
 // The main thread's entry frame: the shadow space its callees may clobber plus one word of alignment. The
@@ -42,7 +42,7 @@ let MainThreadEntryFrameBytes = (ShadowSpaceBytes + StackWordBytes) as StackSize
 // `throws CompileError` because TWO backend stages can FAIL for a real reason the user must fix, both
 // reported onto `project.diagnostics`: register allocation raises E5001 when a loop needs more registers
 // than exist, and the reachability prune raises E4015 when a declaration collides with a symbol the
-// compiler emits (A1t — the first stage that can see BOTH, so the first that can tell them apart).
+// compiler emits (the first stage that can see BOTH, so the first that can tell them apart).
 // `project` also carries the `opRanges`/`valueOrigins` tables the allocator maps a Target ValueId back to
 // its source span through. Every other backend stage is infallible — a failure there is a compiler bug and
 // still panics.
@@ -66,15 +66,13 @@ let MainThreadEntryFrameBytes = (ShadowSpaceBytes + StackWordBytes) as StackSize
 // INSTALLATION, and installation is decided exactly once, before lowering, by `RuntimeUsage` — see
 // DeadFunctionElimination's header for the full split of duties.
 //
-// ⚠ They used to ask the MODULE instead ("does it contain `__mm_leak_check` / `__gt_spawn` /
-// `__gt_io_read`?"), on the argument that by this point the module IS the answer, so a threaded flag
-// would be the same fact written down twice and free to disagree. That argument rested on a premise
-// DEAD-FUNCTION ELIMINATION removes: that nothing takes an installed function back out. It does, and a
-// probe for one representative function is not a probe for the runtime it represents — a `sleep(1)`
-// program installs the whole GT scheduler and never calls `__gt_spawn`, so pruning that one function
-// (correctly) turned the chunk gate off and the link failed on `__gt_context_switch`, which nine
-// async/streaming specs caught at once. The fact is now written down ONCE, where it is decided, and
-// read here.
+// ⚠ **ASKING THE MODULE INSTEAD ("does it contain `__mm_leak_check` / `__gt_spawn` / `__gt_io_read`?")
+// IS NOT THE SAME QUESTION**, tempting as it is to read the module as the answer by this point.
+// DEAD-FUNCTION ELIMINATION takes installed functions back out, and a probe for one representative
+// function is not a probe for the runtime it represents — a `sleep(1)` program installs the whole GT
+// scheduler and never calls `__gt_spawn`, so pruning that one function (correctly) would turn the chunk
+// gate off and the link would fail on `__gt_context_switch`. The fact is written down ONCE, where it is
+// decided, and read here.
 export function buildBackend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage) returns CodeResult throws CompileError
 	let sugarProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.sugarGate)
 	assertNoSugarOps(stdModule)
@@ -94,7 +92,7 @@ export function buildBackend(stdModule StdModule, target Target, globalData Glob
 	// compiler ROOTS, in a program that installs nothing under it) — see `markCompilerOwnedRoot`.
 	let dfeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.deadFunctions)
 
-	// ⭐⭐ **THE ONE NAME INDEX EVERY BACKEND RESOLVES A CALLEE THROUGH (A2l).** It comes back from the
+	// ⭐⭐ **THE ONE NAME INDEX EVERY BACKEND RESOLVES A CALLEE THROUGH.** It comes back from the
 	// prune rather than being built here because the prune is what makes an earlier one stale, and it is
 	// built at all because NOTHING APPENDS A FUNCTION AFTER THIS LINE: every `install*Runtime` ran in
 	// `compileToCodeResult` above, the entry stub and the hand-assembled runtime chunks join at the TARGET
@@ -146,7 +144,8 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	var targetModule = try lowerAndAllocateOnAWorkerPool(stdModule, target: target, globalData: globalData, project: project, funcNames: funcNames, usesGt: usage.usesGt)
 	recordPhase(project, phase: CompilePhase.regalloc, probe: regAllocProbe)
 
-	// EC11, and it must run HERE — after the allocator's `applyAllocation` and before the frame pass.
+	// The Target-tier CFG cleanup must run HERE — after the allocator's `applyAllocation` and before the
+	// frame pass.
 	// A block whose only op is a `jmp` is genuinely empty only once SSA destruction has placed (or
 	// declined to place) its edge copies; before that it is an edge about to receive moves. The frame
 	// pass then sees the surviving blocks, so a callee-saved register or a `call` reachable only from
@@ -237,9 +236,9 @@ export typealias FuncLabelOffsetMap = Map with (ByteArray, CodeOffset)
 // chunks and `__symtable` have no position in `stdModule.functions`).
 module typealias ChunkLabelCount = int(0 to u64.max)
 
-// ⭐⭐ **LAY ONE CHUNK'S LABEL DOWN, AND REFUSE A SECOND CLAIM ON THAT NAME (A2l).**
+// ⭐⭐ **LAY ONE CHUNK'S LABEL DOWN, AND REFUSE A SECOND CLAIM ON THAT NAME.**
 //
-// ⚠ **THIS IS A REACHABLE, SILENT MISCOMPILE, AND IT WAS MEASURED — not a hygiene guard.** A `.text`
+// ⚠ **THIS IS A REACHABLE, SILENT MISCOMPILE, AND IT IS MEASURED — not a hygiene guard.** A `.text`
 // layout map is keyed by NAME and read by `resolveCallFixups`, so a bare last-wins `upsert` does not
 // degrade an answer, it BINDS EVERY CALL TO THE OTHER BODY. `function mrt_runtime_init() returns int`
 // in an ordinary user program compiled, linked and RAN: the user's body was laid out, the
@@ -253,8 +252,8 @@ module typealias ChunkLabelCount = int(0 to u64.max)
 // hand-assembled runtime chunks (`mrt_*`, `__gt_*`) PLUS `__symtable` and `__inlframes` — and the last three are minted at
 // the TARGET tier, after the last index any Std pass can build. Which of them exist depends on the target
 // and on `RuntimeUsage`, so the set cannot be PREDICTED upstream; it can only be NOTICED here, at the one
-// place that decides the layout. That is A1t's lesson (a collision is something to notice, never
-// something to predict) applied one tier down.
+// place that decides the layout — the same lesson one tier down: a collision is something to notice,
+// never something to predict.
 //
 // The count trick is `FunctionNameIndex.create`'s, for its reason: this is called with `laidOut` labels
 // already in the map, so the height IS `laidOut + 1` afterwards unless one insert collapsed two names —
@@ -301,8 +300,8 @@ end 'refuseDuplicateChunkName'
 // installed. A program with no allocator cannot leak, so it carries no gate.
 //
 // `initGlobals` is `RuntimeUsage.usesManagedGlobals` — whether the program declares a managed top-level
-// `var`, and so carries `__module_init`/`__maxon_global_cleanup` (P1.7 slice 2a). A program with none
-// carries neither call and its emitted stub is byte-identical to before that rung.
+// `var`, and so carries `__module_init`/`__maxon_global_cleanup`. A program with none carries neither
+// call.
 //
 // `drainGreenThreads` is `RuntimeUsage.usesGt` — whether the green-thread scheduler was installed, and so
 // whether `main` runs on a green thread (`__gt_run_main`, handed `MainThreadEntryName`) and
@@ -377,7 +376,7 @@ function prependEntryStub(module TargetModule, target Target, checkLeaks bool, i
 	appendProgramCall(module, block: block, initGlobals: initGlobals, greenThreads: drainGreenThreads, entryFunction: entryFunction)
 	appendGreenThreadDrainGate(module, block: block, drainGreenThreads: drainGreenThreads)
 
-	// ⭐ THE LEAK GATE (P1.0r) — the one seam on the exit path, and the reason `__mm_decref` has a
+	// ⭐ THE LEAK GATE — the one seam on the exit path, and the reason `__mm_decref` has a
 	// reason to be right at all. `main` has returned its ExitCode in R8; `__mm_leak_check` takes
 	// that code and gives back either the same code (nothing outstanding) or 101 (something was
 	// allocated and never freed). Every program that touches the heap therefore checks itself, and
@@ -445,7 +444,7 @@ function prependMainThreadEntry(module TargetModule, initGlobals bool, entryFunc
 	prependFunction(module, func: func)
 end 'prependMainThreadEntry'
 
-// ⭐ THE LEAK GATE (P1.0r) — the one seam on the exit path, shared by both entry stubs. `main` has
+// ⭐ THE LEAK GATE — the one seam on the exit path, shared by both entry stubs. `main` has
 // returned its ExitCode in R8; `__mm_leak_check` takes that code (arg 0 in RCX, custom Maxon ABI) and
 // gives back either the same code (nothing outstanding) or 101 (something was allocated and never
 // freed), in R8. The value flow r8 -> rcx -> (adjusted) r8 is identical on Windows and Linux — only the
@@ -507,7 +506,7 @@ function appendDebugStreamDetach(module TargetModule, block IrBlock, debugStream
 	end 'tracedBuild'
 end 'appendDebugStreamDetach'
 
-// ⭐ **FILL EVERY EAGER managed global's `.data` SLOT BEFORE `main`** (P1.7 slice 2a) — a `static`
+// ⭐ **FILL EVERY EAGER managed global's `.data` SLOT BEFORE `main`** — a `static`
 // member's is filled on first access instead (see `ModuleInit`) — as the first thing `appendMainCall` runs,
 // so a global is live for the whole of user code. `__module_init` takes no argument and returns nothing, and
 // nothing is live across it, so it is a bare call. Emitted only for a program that has one (`initGlobals`).
@@ -517,7 +516,7 @@ function appendModuleInitCall(module TargetModule, block IrBlock, initGlobals bo
 	end 'moduleInit'
 end 'appendModuleInitCall'
 
-// ⭐ **RELEASE EVERY MANAGED GLOBAL AFTER `main`, BEFORE THE LEAK GATE** (P1.7 slice 2a) — the last thing
+// ⭐ **RELEASE EVERY MANAGED GLOBAL AFTER `main`, BEFORE THE LEAK GATE** — the last thing
 // `appendMainCall` runs. The ORDER is the whole point: `__mm_leak_check` counts what is still allocated, so a global
 // released after it would read as a leak (exit 101) and one never released would read as one too. That is
 // exactly the property `static-variables.md`'s `top-level-var-string-mutate-cross-function` gates.
@@ -531,7 +530,7 @@ function appendGlobalCleanupGate(module TargetModule, block IrBlock, initGlobals
 	end 'globalCleanup'
 end 'appendGlobalCleanupGate'
 
-// ⭐⭐ **RUN THE SCHEDULER OUT AND JOIN ITS WORKER Ms, AFTER `main` AND BEFORE THE LEAK GATE (SV1)** —
+// ⭐⭐ **RUN THE SCHEDULER OUT AND JOIN ITS WORKER Ms, AFTER `main` AND BEFORE THE LEAK GATE** —
 // shared by both entry stubs. The ORDER is the whole point, twice over:
 //
 //   • **AFTER the global cleanup**, because a released managed global may be the last owner of a service

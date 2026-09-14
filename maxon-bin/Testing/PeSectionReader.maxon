@@ -124,8 +124,8 @@ export union TypedValueError implements Error
 			mixedPinForms gives "the block mixes `{Utf8TypeName}` lines with scalar/array lines, and the two cannot be combined — a `{Utf8TypeName}` line names ONE interned blob and is located independently, while scalar and array lines describe fields of a SINGLE payload compared from byte 0, so a mixed block does not say whether its lines are one payload or several. Write them as separate blocks"
 
 			// ⚠ **THE ROSTER IS BUILT FROM THE TABLE, NOT TRANSCRIBED BESIDE IT.** A spec author reading this
-			// message needs to know which names exist, and it said `i8/i16/i32/i64/f64` for as long as `u8`
-			// had been accepted — a stale list is worse than none, because it reads as an authority. So the
+			// message needs to know which names exist, and a transcribed list goes stale the moment a width
+			// joins the table — worse than none, because it reads as an authority. So the
 			// sentence is joined from `TypedValueTypes`, the same rows `typedValueByteCount` walks: add a
 			// width there and this message says so, which a second hand-kept list could not promise.
 			unknownType(typeName) gives "unknown type '{typeName}' (expected {typedValueTypeRoster()}, each also as an array: `u8[] 1, 2, 3`)"
@@ -192,13 +192,12 @@ end 'readPeSectionData'
 // compiled anyway. An unknown type THROWS (naming it), which is what keeps this honest — the failure of the
 // block this gate replaces was precisely that an unhandled thing passed silently.
 //
-// ⚠ **`u16`/`u32` ARRIVED WITH `enum-narrow-storage`, whose ladder writes them** (`u16[] 100, 1000, 10000`).
-// Before it, an unpinnable width was reported as a MALFORMED PIN rather than as a byte mismatch — which is
-// the right failure, and is why the two cases needing them failed differently from the four that did not.
+// ⚠ **AN UNPINNABLE WIDTH IS REPORTED AS A MALFORMED PIN, NOT AS A BYTE MISMATCH** — which is the
+// right failure: a case naming a width this table does not carry has said something the notation cannot
+// express, and telling it its bytes differ would send the author after the compiler instead.
 //
-// ⭐ `f64` ARRIVED WITH P1.0d.4, WHICH IS WHAT THIS COMMENT SAID IT WAS WAITING FOR. It was shelved
-// because a float global could not be compiled at all; it can now, and the two `data-section-f64-*`
-// cases that were parked behind it are the gate on the eight bytes `3.14` actually lays down.
+// `u16`/`u32` serve `enum-narrow-storage`'s ladder (`u16[] 100, 1000, 10000`); `f64` is the gate on the
+// eight bytes `3.14` actually lays down (`data-section-f64-*`).
 export function parseTypedSectionValues(block String) returns SectionPinExpectation throws TypedValueError
 	var out = ByteArray.create()
 	var payloads = ByteArrayArray.create()
@@ -224,12 +223,10 @@ export function parseTypedSectionValues(block String) returns SectionPinExpectat
 		// spelling so the element width, the value parse and the little-endian append are the SAME three
 		// functions a scalar line uses; the only thing an array adds is how many times they run.
 		//
-		// ⭐ **IT ARRIVED WITH `ranged-int-bit-packing`, WHICH IS WHAT THIS FILE'S HEADER SAID IT WAS
-		// WAITING FOR.** The reference parses `i64[]` and the compiler deliberately did not, on the recorded
-		// argument that an array global needed P1.7. A packed array literal's `.rdata` blob is now a RUN OF
-		// BYTES with no scalar spelling at all — `[0 as Q, 1 as Q, 2 as Q, 3 as Q]` at 2 bits is the single
-		// byte `0b11_10_01_00` — and pinning it byte-for-byte is the only way a spec can prove the bit
-		// ORDER and the `ceil(count·bits/8)` sizing rather than merely the values that read back out.
+		// ⭐ **A PACKED ARRAY LITERAL'S `.rdata` BLOB IS A RUN OF BYTES WITH NO SCALAR SPELLING AT ALL** —
+		// `[0 as Q, 1 as Q, 2 as Q, 3 as Q]` at 2 bits is the single byte `0b11_10_01_00` — so pinning it
+		// byte-for-byte is the only way a spec can prove the bit ORDER and the `ceil(count·bits/8)` sizing
+		// rather than merely the values that read back out.
 		// ⭐ **`utf8 "…"` IS A LINE OF TEXT, NOT A WIDTH** — the one spelling in the notation whose length
 		// comes from the VALUE rather than from the type name, which is why it branches ahead of the width
 		// lookup instead of taking a row in `typedValueTypes`. A string literal's `.rdata` blob is the bytes
@@ -461,28 +458,28 @@ let NulByte = 0 as Byte
 // the source writes `3.14`, so the bytes this expects have to be the bytes that literal MEANS.
 // Re-deriving them here — a second opinion about what `3.14` is, rounding and all — would let the
 // gate and the compiler agree on a wrong answer, or disagree on a right one. `int.fromString`
-// cannot read it at all, which is the reported reason these two cases sat disabled.
+// cannot read an `f64` at all.
 //
 // ⭐⭐ **IT REACHES THAT ONE PARSER THROUGH `float.fromString`, NOT THROUGH `__float_bitsFromText`
-// DIRECTLY, AND THE DIFFERENCE IS A NAMESPACE RULE RATHER THAN A CONVERSION (G17 defect 3).** The
+// DIRECTLY, AND THE DIFFERENCE IS A NAMESPACE RULE RATHER THAN A CONVERSION.** The
 // reader IS `__float_bitsFromText` either way: `stdlib/Builtins.maxon:276`'s `__float_fromString` is
 // nothing but that call plus a `__Builtins.bitsToFloat`, so `floatToBits(float.fromString(t))` is a
 // bitcast round trip around the identical bits — exact for a signed zero, a subnormal and a
 // 21-significant-digit literal alike, because a bitcast pair cannot round. What the direct spelling
 // costs is COMPILABILITY: the compiler's `requireCalleeIsNotReservedName` exempts the reserved `__` space only
 // for calls made from inside `Builtins.maxon` itself, so this file — user code as far as the compiler
-// is concerned — was refused with `E3004`, one of the eight defects between the compiler and its own harness.
+// is concerned — is refused with `E3004`.
 // `__Builtins.`-qualified callees short-circuit that check, which is why the second half stays direct.
 //
 // ⚠ **THE TWO FAILURE ARMS STILL COLLAPSE TO ONE THROW, AND THEY STILL HAVE TO.** `__FloatTextResult`
 // distinguishes `overflow` from `malformed`; `ParseError` — which `float.fromString` throws — has the
 // single `invalidFormat` arm and may not grow another (an error enum in `stdlib/` is language surface).
-// That loses nothing here for the reason the previous shape stated outright: a `RequiredData f64` line
-// whose text is not a number is a bad line however it is bad.
+// That loses nothing: a `RequiredData f64` line whose text is not a number is a bad line however it is
+// bad.
 //
-// ⚠ **AN ACCEPTED, STATED RISK: `float.fromString` SEGFAULTS ON arm64-macOS** (PLAN row `A5b`) while
+// ⚠ **AN ACCEPTED, STATED RISK: `float.fromString` SEGFAULTS ON arm64-macOS** while
 // answering correctly on every other lane. arm64 is a remote, opt-in, never-blocking lane, so this does
-// not gate the change — but the `RequiredData` gate now inherits that defect on that host, knowingly.
+// not gate the suite — but the `RequiredData` gate inherits that defect on that host, knowingly.
 function parseTypedValueBits(typeName String, text String) returns ParsedInt throws TypedValueError
 	if typeName == F64TypeName 'float'
 		let value = try float.fromString(text) otherwise throw TypedValueError.badNumber(typeName, text: text)
@@ -494,9 +491,9 @@ end 'parseTypedValueBits'
 
 // ⭐⭐ **THE TYPE ROSTER — ONE ROW PER SPELLING A `RequiredData`/`RequiredRdata` LINE MAY USE, AND THE ONLY
 // PLACE EITHER THE NAMES OR THE WIDTHS ARE WRITTEN DOWN.** Two readers walk it: `typedValueByteCount`, which
-// answers the width, and `typedValueTypeRoster`, which joins the names into the `unknownType` message. It
-// existed as two hand-kept lists for one tick and the message was already stale when it was written — it
-// promised `i8/i16/i32/i64/f64` while `u8` had been accepted for a rung — which is the shape a table removes.
+// answers the width, and `typedValueTypeRoster`, which joins the names into the `unknownType` message. Two
+// hand-kept lists drift — a message promising `i8/i16/i32/i64/f64` while `u8` is accepted — which is the
+// shape a table removes.
 //
 // ⭐ **THE SIGNED AND UNSIGNED SPELLINGS OF ONE WIDTH ARE TWO ROWS, because the width is all this answers.**
 // `appendLittleEndian` masks to `byteCount` either way, so `i8 -1` and `u8 255` lay down the same byte —
@@ -577,8 +574,8 @@ end 'appendLittleEndian'
 // 00 00 00, got 00 00 …" is a diff a reader can act on, where "the layout differs" is not.
 //
 // ⚠ **`hexByte`/`hexDigit` LIVE IN THE COMPILER, NOT HERE.** A chunk golden's hex dump
-// (`TargetPrinter.printChunkBytes`) is the same rendering one tier down, and this file used to carry
-// its own copy of it. The harness may call INTO the compiler and does (`targetToString`,
+// (`TargetPrinter.printChunkBytes`) is the same rendering one tier down.
+// The harness may call INTO the compiler and does (`targetToString`,
 // `emitsTargetIr`); the compiler may not call out here — so the one spelling sits on the lower side
 // and this reads it from there.
 

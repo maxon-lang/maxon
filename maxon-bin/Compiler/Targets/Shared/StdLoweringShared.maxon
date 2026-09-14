@@ -18,12 +18,12 @@
 // derivable from a Std type or a Std constant belongs in one place — but the reader set is three, not two.
 //
 // ⭐ WHY SHARED AND NOT FORKED: a value's class is what its type says, IDENTICALLY for x64 and arm64.
-// When this walk was forked, the two copies had already drifted — the x64 copy skips the target-only
-// blocks the float-equality split mints, the arm64 copy did not — and the day a new `StdOp` learned to
-// define a value, one target would have silently misclassified it (a float into a GPR) while the other
-// stayed correct. One walk, checked once by the compiler's exhaustiveness, cannot drift.
+// Two copies drift — one skipping the target-only blocks the float-equality split mints while the other
+// does not, and the day a new `StdOp` learns to define a value, one target silently misclassifies it (a
+// float into a GPR) while the other stays correct. One walk, checked once by the compiler's
+// exhaustiveness, cannot drift.
 
-// ⭐ **WHICH STANDARD STREAM — the ONLY thing `osWriteStdout` and `osWriteStderr` differ by (W35).**
+// ⭐ **WHICH STANDARD STREAM — the ONLY thing `osWriteStdout` and `osWriteStderr` differ by.**
 // The two ops carry the same operands, the same metadata and the same result; every backend therefore
 // lowers ONE graph and reads its own ABI's spelling of the stream off this — a `GetStdHandle` selector on
 // Windows, a POSIX descriptor on Linux and macOS, a `wasi:cli` accessor import on wasm. Stating it as one
@@ -40,24 +40,20 @@ export enum OsOutputStream
 	standardError
 end 'OsOutputStream'
 
-// ⭐ **THE TWO POSIX STANDARD DESCRIPTORS, IN ONE PLACE — which is the whole point of the pair (W35
-// review).** Each is a POSIX fact rather than a per-OS one: x64-linux's `write` syscall, arm64-linux's
+// ⭐ **THE TWO POSIX STANDARD DESCRIPTORS, IN ONE PLACE, WHICH IS THE WHOLE POINT OF THE PAIR.**
+// Each is a POSIX fact rather than a per-OS one: x64-linux's `write` syscall, arm64-linux's
 // `svc` and arm64-macOS's libSystem `_write` all name the same two numbers. Windows has no descriptor
 // for either — its writers ask `GetStdHandle` for a selector instead (`X64Runtime.StdErrorHandle`,
 // `StdToX64Conversion.StdOutputHandle`), which is why that family is spelled in the x64 files.
 //
-// ⚠ **THEY WERE IN TWO FILES, AND EACH OF THEM ALSO HAD A SECOND SPELLING SOMEWHERE ELSE.** `StderrFd`
-// lived in `BacktraceFormat.maxon` because the hand-assembled panic writer was once its only reader;
-// stdout was `X64LinuxRuntime.WriteStdoutFd`, read by the x64 isel alone. W35 gave the Std tier a
-// `printError` and a shared `posixStreamFd`, which made each of those a fact with two homes — so the
-// descriptors were brought together here and the x64-Linux copy was deleted. `printError`'s descriptor
-// and the panic writer's are the same number and must stay one declaration; that they belong to two
+// ⚠ **ONE DECLARATION EACH, HERE.** `printError`'s descriptor and the hand-assembled panic writer's
+// are the same number and must stay one declaration; that they belong to two
 // unrelated MECHANISMS (see `StdOp.osWriteStderr`) is a fact about the code that reads them, not about
 // the number.
-// ⚠ **STANDARD INPUT IS HERE TOO SINCE MAC6, EVEN THOUGH NO `write` NAMES IT.** `osStdHandle` maps Win32's
+// ⚠ **STANDARD INPUT IS HERE TOO, EVEN THOUGH NO `write` NAMES IT.** `osStdHandle` maps Win32's
 // three selectors onto these three descriptors, so the SET has to be complete for the mapping to be
 // checkable — `ConsoleRuntime.assertStdHandleSelectorsMapToPosixFds` reads all three. Keeping stdin out
-// would have left that check comparing two of three numbers.
+// would leave that check comparing two of three numbers.
 export let PosixStdinFd = 0x0  // fd = 0 (STDIN_FILENO)
 export let PosixStdoutFd = 0x1  // fd = 1 (STDOUT_FILENO)
 export let StderrFd = 0x2  // fd = 2 (STDERR_FILENO) — also the panic/backtrace writer's destination
@@ -103,7 +99,7 @@ let FillByteBroadcast = 0x0101010101010101 as MachineWord
 
 // ⭐ THE ONE DOOR from a Std type to a memory-access WIDTH. `i1`/`u8` are one byte, `i64`/`f64` the
 // full word; those are what the language can put behind a load/store today. Every other type panics
-// rather than picking a nearby width — a narrow integer needs the `as` cast (P1.9), and its SIGNEDNESS
+// rather than picking a nearby width — a narrow integer needs the `as` cast, and its SIGNEDNESS
 // then decides the sign/zero-extending load form. Reuses the neutral `X64AccessWidth` enum: the width
 // (HOW MANY BITS) is not ISA-specific; only the encoder that turns `byte`/`word64` into the concrete
 // instruction (`movzx`/`mov` vs `ldrb`/`ldr`) is. An `f64` access is 8 bytes; whether it moves through
@@ -131,7 +127,7 @@ end 'accessWidthFor'
 // `ByteOffset` is unsigned and unbounded; the `Imm32` field is signed 32-bit, so the narrowing is
 // CHECKED rather than cast away. This is the field's own encodable bound; each backend's ENCODER
 // enforces the tighter per-ISA reach (x64 disp32, arm64's scaled/unscaled forms) on top of it. Every
-// offset today is a global-slot offset (0); the bound starts mattering at P1.1's struct-field offsets.
+// offset today is a global-slot offset (0); the bound starts mattering at struct-field offsets.
 export function memoryDisplacement(offset ByteOffset) returns Imm32
 	if offset > i32.max 'tooFar'
 		panic("memoryDisplacement: byte offset {offset} does not fit the signed Imm32 displacement of a base+disp load/store — an addressing mode reaching that far from its base needs a materialized index register")
@@ -380,8 +376,8 @@ end 'unaryResultClass'
 // same reason `accessWidthFor` and `unaryResultClass` live in this file: it reads a Std OPCODE and
 // nothing else, so it is target-independent by construction, and BOTH native isels need it.
 //
-// ⚠⚠ IT WAS FORKED, AND THE FORK WAS THE DANGEROUS KIND. `StdToX64Conversion` and
-// `StdToArm64Conversion` each spelled the same three `opcode → FloatRoundMode` pairs into their own
+// ⚠⚠ FORKING IT IS THE DANGEROUS KIND OF DUPLICATION. `StdToX64Conversion` and
+// `StdToArm64Conversion` would each spell the same three `opcode → FloatRoundMode` pairs into their own
 // `match`, one ISA apart, with nothing making the copies agree. `FloatRoundMode` being a shared enum
 // does NOT make the MAPPING shared — it only makes both copies spell the same member names. Change
 // `ceil` to `towardNegative` in one isel and neither site reads as wrong: x64 would quietly compute
@@ -500,7 +496,7 @@ end 'setValueClass'
 // The `ArgFloatMask` for one parameter list: bit k set iff parameter k is an f64. EXPORTED because each
 // backend folds its OWN function's parameter types through it once per function and hands that single mask
 // to the placement rule for every `param` op — the callee-side mirror of `calleeArgFloatMask`, and the
-// reason the callee no longer re-walks its parameter types once per parameter.
+// reason the callee does not re-walk its parameter types once per parameter.
 export function floatParamMaskOf(paramTypes StdTypeArray) returns ArgFloatMask
 	var mask = 0 as ArgFloatMask
 
@@ -522,12 +518,12 @@ end 'floatParamMaskOf'
 // comes from — a callee NAME here, the op there — and never in how an argument is slotted onto its file or
 // emitted.
 //
-// ⚠ IT USED TO REBUILD THE MASK BIT BY BIT: `argCount` map lookups, each pulling one bit out through a
-// `RegClass` and ORing it back into the mask it had just read. That was the same fact derived twice — the
-// stored value IS the answer `floatParamMaskOf` computed — and each backend asks for it TWICE per direct
-// call op (once to size the outgoing region, once to emit the moves), so the reconstruction ran 2·argCount
-// times per call. A rebuild that ever disagreed with the stored mask would route a float through an integer
-// register with no compile error, which is the whole failure mode this file exists to make unspellable.
+// ⚠ IT IS READ WHOLE, NOT REBUILT BIT BY BIT. A rebuild — `argCount` map lookups, each pulling one bit
+// out through a `RegClass` and ORing it back into the mask it had just read — is the same fact derived
+// twice, because the stored value IS the answer `floatParamMaskOf` computed; and each backend asks for it
+// TWICE per direct call op (once to size the outgoing region, once to emit the moves), so it would run
+// 2·argCount times per call. A rebuild that disagreed with the stored mask would route a float through an
+// integer register with no compile error, which is the whole failure mode this file exists to make unspellable.
 //
 // The mask is returned WHOLE rather than truncated to `argCount` bits, and that is deliberate twice over:
 // every reader (`argMaskBit` / `abiFileSlotIndex` / `abiStackSlotsBefore`) is only ever asked about an index
@@ -543,8 +539,7 @@ end 'calleeArgFloatMask'
 
 // A callee with NO Std function in the merged module must be a `__`-prefixed HAND-ASSEMBLED runtime chunk —
 // the mrt_* panic runtime, or the GT `__gt_context_switch` that a builder-built `__gt_await` calls across
-// the Std→chunk boundary. Anything else is a genuine resolution bug and panics here: this narrows the old
-// unconditional panic rather than removing it.
+// the Std→chunk boundary. Anything else is a genuine resolution bug and panics here.
 //
 // ⭐ **EVERY CHUNK USES THE GPR-ONLY INTERNAL ABI** — i64 arguments, R8 result, by construction (see the
 // X64Runtime / X64GtRuntime headers). That ONE fact is what both fallbacks past this door return, and it is
@@ -585,11 +580,10 @@ end 'runtimeChunkArgFloatMask'
 // silent wrong answer, never a compile error. So the rule is stated here exactly once and both ends
 // consult it.
 //
-// ⚠ IT USED TO BE STATED TWICE: a recomputing `computeParamSlotIndex` on the callee side, and a
-// running-counter twin of it inside each backend's argument loop, held together by a comment that said
-// "the running twin of `computeParamSlotIndex`". That was survivable while every argument fit a register,
-// because two monotone counters over the same list cannot disagree. It stops being survivable the moment
-// an argument can OVERFLOW, because "which slot" then means two different things — an index within one
+// ⚠ STATING IT TWICE — a recomputing `computeParamSlotIndex` on the callee side and a running-counter
+// twin of it inside each backend's argument loop — is survivable only while every argument fits a
+// register, because two monotone counters over the same list cannot disagree. It stops being survivable
+// the moment an argument can OVERFLOW, because "which slot" then means two different things — an index within one
 // register FILE, and an index into the single merged outgoing STACK area — and a hand-written counter that
 // gets either one wrong is exactly the class of bug the corpus already pins twice (see
 // `specs/x64-stack-arg-disp32.md`).
@@ -744,7 +738,7 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, abi CalleeAbiTab
 
 		// The immediate forms are INTEGER by construction — no float op takes an immediate, so
 		// `foldConstOperands` cannot produce a float one. Their `operandType` is read for the
-		// WIDTH (X5) and never for the class, which is why it is `_` here and a GPR outright:
+		// WIDTH and never for the class, which is why it is `_` here and a GPR outright:
 		// answering `regClassForStdType(operandType)` would be the same answer by a route that
 		// stops being obviously true the day a float immediate exists.
 		binOpImm(resultId, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
@@ -757,7 +751,7 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, abi CalleeAbiTab
 		call(resultId, callee, _) then setValueClass(column, valueId: resultId, class: calleeResultClass(abi, callee: callee))
 
 		// A throwing call classes its primary result exactly as `call` does (the callee's return type);
-		// its error-flag second result is an i64, which the column's `gpr` default already covers (P1.4b).
+		// its error-flag second result is an i64, which the column's `gpr` default already covers.
 		tryCall(resultId, _, callee, _) then setValueClass(column, valueId: resultId, class: calleeResultClass(abi, callee: callee))
 
 		// An ADDRESS is an integer, whatever the global holds.
@@ -771,10 +765,10 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, abi CalleeAbiTab
 		rdataAddr(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 
 		// A `.text` function address is an integer, exactly like `globalAddr`/`rdataAddr` — never
-		// float-classed (P1.5-A1).
+		// float-classed.
 		funcAddr(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 
-		// A call THROUGH a function value classes its result by the `resultType` the op carries (P1.5 #78): a
+		// A call THROUGH a function value classes its result by the `resultType` the op carries: a
 		// float-returning function value is XMM-classed and captured from xmm0/d0, everything else GPR from
 		// R8/x0. There is no callee NAME to look a return type up against as `call`/`tryCall` do, so the front
 		// end's own type for the result value rides on the op (`LowerMaxonToStd.lowerIndirectCall`).
@@ -789,15 +783,15 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, abi CalleeAbiTab
 		retVoid then break 'result'
 		storeIndirect then break 'result'
 
-		// `errorReturn` (a terminator) and `osExit` define no value (P1.4b).
+		// `errorReturn` (a terminator) and `osExit` define no value.
 		errorReturn or
 			osExit then break 'result'
 
 		// The subprocess wait result is a GPR i64 (the `WaitForSingleObject` return code `proc_check` reads).
 		osWaitHandle(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 
-		// `osPanic` defines no value (P1.9) — it aborts. `osReadClock` defines none either: the clock read
-		// writes its results to caller-provided out-param buffers. The three result-less P1.5 subprocess ops
+		// `osPanic` defines no value — it aborts. `osReadClock` defines none either: the clock read
+		// writes its results to caller-provided out-param buffers. The three result-less subprocess ops
 		// (`osProcessSpawn`, `osProcessExitCode`, `osCloseHandle`) join the range — they consume their `BOOL`
 		// via memory or ignore it, so none defines a value (`osWaitHandle`, which does, is named just above).
 		osPanic or
@@ -806,7 +800,7 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, abi CalleeAbiTab
 			osProcessExitCode or
 			osCloseHandle then break 'result'
 
-		// `osFreePages` (P1.5-B1a′) defines no value — it releases a page region and returns nothing (its
+		// `osFreePages` defines no value — it releases a page region and returns nothing (its
 		// `VirtualFree` BOOL is ignored, like `osCloseHandle`'s). It sits past `osWaitHandle` in the union, so
 		// it takes its own break arm rather than joining the range above.
 		osFreePages then break 'result'
@@ -837,7 +831,7 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, abi CalleeAbiTab
 		osCancelIo then break 'result'
 		osGetPid(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 
-		// P1.5 dogfood slice 1b: osWriteFile defines the WriteFile BOOL (an integer, GPR); osPipeCreateOutbound defines nothing.
+		// osWriteFile defines the WriteFile BOOL (an integer, GPR); osPipeCreateOutbound defines nothing.
 		osPipeCreateOutbound then break 'result'
 		osWriteFile(resultId, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 
@@ -845,13 +839,13 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, abi CalleeAbiTab
 		// caller's out-param word, exactly as `osReadClock` does with its two.
 		osReadWallClock then break 'result'
 
-		// R4.1: the file OPEN defines the `CreateFileA` HANDLE — an integer, so a GPR.
+		// The file OPEN defines the `CreateFileA` HANDLE — an integer, so a GPR.
 		osFileOpenRead(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 
 		// The close defines no value, so there is no result class to record.
 		osFileClose then break 'result'
 
-		// R4.2: the five ops whose Win32 entry point answers in RAX define an integer (a BOOL verdict or a
+		// The five ops whose Win32 entry point answers in RAX define an integer (a BOOL verdict or a
 		// search HANDLE), so a GPR; the find-close defines nothing, exactly as the file close does.
 		osReadFile(resultId, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osFileOpenWrite(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
@@ -864,31 +858,30 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, abi CalleeAbiTab
 		osFileFindFirst(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osFileFindClose then break 'result'
 
-		// R4.3: all four directory primitives answer in RAX with an integer — a Win32 BOOL, a character
+		// All four directory primitives answer in RAX with an integer — a Win32 BOOL, a character
 		// count or a `dwFileAttributes` mask — so all four define a GPR result.
 		osFileFindNext(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osDirCreate(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osDirCurrentPath(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osFileAttributes(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 
-		// A3n: a rendered panic defines no value, exactly as `osPanic` defines none.
+		// A rendered panic defines no value, exactly as `osPanic` defines none.
 		osPanicValue then break 'result'
 		osCommandLine(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 
-		// W5: both answer in RAX with an integer — a kernel HANDLE and a character count — so both define a
+		// Both answer in RAX with an integer — a kernel HANDLE and a character count — so both define a
 		// GPR result.
 		osStdHandle(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osExecutablePath(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 
-		// W35: both stream writes define the OS's byte COUNT — an integer, so a GPR. `osWriteStdout` used to
-		// sit in the defines-nothing group above; it moved here when it acquired that result.
+		// Both stream writes define the OS's byte COUNT — an integer, so a GPR.
 		osWriteStdout(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osWriteStderr(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 
 		// A promoted record's address is a POINTER, so its result is a GPR — `globalAddr`'s class exactly.
 		stackRecordAddr(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 
-		// O3: a HANDLE, a mapped ADDRESS and a tick COUNT are all machine words.
+		// A HANDLE, a mapped ADDRESS and a tick COUNT are all machine words.
 		osOpenNamedSegment(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osMapNamedSegment(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osTickCountMs(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
@@ -926,26 +919,26 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, abi CalleeAbiTab
 		// is no result to class, exactly as there is none for the wall-clock read.
 		osThreadCpuTicks then break 'result'
 
-		// F1a: the decommit defines no value — it answers only a discarded BOOL — so, like the page release
+		// The decommit defines no value — it answers only a discarded BOOL — so, like the page release
 		// above, there is no result to class.
 		osDecommitPages then break 'result'
 
-		// F1b: a fill defines no value — it is a store — so there is no result to class.
+		// A fill defines no value — it is a store — so there is no result to class.
 		memFill then break 'result'
 
-		// F1c: a reservation's base and a commit's base are addresses, so both are integers — classed exactly as
+		// A reservation's base and a commit's base are addresses, so both are integers — classed exactly as
 		// `osAllocPages`'s page base is, and never float-classed.
 		osCommitPages(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osReservePages(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 
-		// F2: a CAS's success boolean, an RMW's prior word and a thread's identity token are all INTEGERS —
+		// A CAS's success boolean, an RMW's prior word and a thread's identity token are all INTEGERS —
 		// GPR-classed, never float-classed. An atomic reads and writes a 64-bit machine word by definition;
 		// there is no float atomic at this tier (see `StdOp.atomicRmw` on why there is no width field either).
 		atomicCas(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		atomicRmw(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		currentThreadToken(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 
-		// G1: the TLS slot index and the word read back out of the slot are both machine integers, so GPR; the
+		// The TLS slot index and the word read back out of the slot are both machine integers, so GPR; the
 		// two writing ops define nothing at all.
 		tlsAlloc(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		tlsSetValue then break 'result'
@@ -956,7 +949,7 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, abi CalleeAbiTab
 		// exactly as `osCpuCount` classes `GetActiveProcessorCount`'s.
 		osEnterBackgroundPriority(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 
-		// G3: an ordered access classes exactly as its plain twin does — by the type it reads — and the
+		// An ordered access classes exactly as its plain twin does — by the type it reads — and the
 		// ordered store defines nothing, exactly as `storeIndirect` defines nothing.
 		loadAcquire(resultId, _, _, valueType) then setValueClass(column, valueId: resultId, class: regClassForStdType(valueType))
 		storeRelease then break 'result'
@@ -1008,7 +1001,7 @@ export function calleeResultClass(abi CalleeAbiTable, callee ByteArray) returns 
 end 'calleeResultClass'
 
 // ==================================================================================================
-// EC16 — SCALED-INDEX ADDRESSING: which `base + index*scale` chains an addressing mode can carry
+// SCALED-INDEX ADDRESSING: which `base + index*scale` chains an addressing mode can carry
 // ==================================================================================================
 
 // ⭐ **WHAT THE TARGET'S OWN LOAD/STORE CAN CARRY IN ITS ADDRESS OPERAND — the per-ISA half of the
@@ -1032,11 +1025,11 @@ export enum IndexedMemoryForm
 end 'IndexedMemoryForm'
 
 // ⭐⭐ **THE ONE ANSWER TO "IS THIS ADDRESS A SCALED INDEX, AND IS IT THIS OP'S ALONE?", read by BOTH
-// native ISELs (docs/emitted-code-roadmap.md, EC16).**
+// native ISELs (docs/emitted-code-roadmap.md).**
 //
 // The shape it matches is what `ManagedMemoryRuntime.emitSlotAddr` emits for EVERY element access in
 // the language — `binOpImm(mul, index, stride)` feeding `binOp(add, buffer, offset)` feeding a
-// `loadIndirect`/`storeIndirect` — which `InlineManagedPrimitives` (EC1) then puts inline at every
+// `loadIndirect`/`storeIndirect` — which `InlineManagedPrimitives` then puts inline at every
 // array read and write. On x64 that is `imul` + `lea` + `mov`, three instructions for what
 // `mov rax, [rbx + r13*8]` does in one.
 //
@@ -1054,7 +1047,7 @@ end 'IndexedMemoryForm'
 //   2. **SAME BLOCK.** SSA would make a cross-block fold correct (the add's def dominates the memory
 //      op, so its own operands do too), but the LIVE RANGES of `base` and `index` would then stretch
 //      across a block boundary in place of a single value's — and the compiler REFUSES rather than spills
-//      (`RegisterPressureDiagnostic`, and EC13's measured E5001), so a lengthened range is a compile
+//      (`RegisterPressureDiagnostic`'s measured E5001), so a lengthened range is a compile
 //      error and not a slower program. Inside one block the extension is bounded by the window
 //      between the add and its reader, which for the shape above is empty. Cross-block is left open.
 //   3. **AN INTEGER MULTIPLY BY 1, 2, 4 OR 8.** `MemoryIndexScale` states that set once; a float
@@ -1096,7 +1089,7 @@ export type ScaledIndexFolds
 	// Every value the function reads, WITH MULTIPLICITY — condition 1 above.
 	var valueUses as StdValueUseSet
 
-	// ⭐ EC19 — WHICH BLOCK EACH ARITHMETIC RESULT IS DEFINED IN, and the set that says an entry was
+	// ⭐ WHICH BLOCK EACH ARITHMETIC RESULT IS DEFINED IN, and the set that says an entry was
 	// written at all (the `growFilled` zero is a real BlockRef, so the column alone can never read as
 	// absent — the rule every other column here states for itself).
 	//
@@ -1123,8 +1116,8 @@ export type ScaledIndexFolds
 	end 'create'
 
 	// ⭐ THE ENTRY POINT. Re-decide every fold for `func`, discarding the previous function's (ValueIds
-	// are function-local, so a leftover entry would answer for a DIFFERENT value — the cross-function
-	// table leak EC13's commit records as a miscompile).
+	// are function-local, so a leftover entry would answer for a DIFFERENT value, which is a
+	// cross-function table leak and a miscompile).
 	//
 	// ⚠ **THERE IS EXACTLY ONE `blockRefs` → `opRefs` DESCENT IN THIS TYPE, AND THAT IS DELIBERATE.**
 	// A first cut had a second one — a cheap pre-scan for the multiply that starts every chain, to skip
@@ -1166,7 +1159,7 @@ export type ScaledIndexFolds
 		return self.fusedAddrDefs.contains(valueId)
 	end 'fusesIntoMemoryOp'
 
-	// ⭐ THE USE CENSUS THIS TYPE ALREADY WALKS, ANSWERED FOR A SECOND READER (EC19). `valueUses` is
+	// ⭐ THE USE CENSUS THIS TYPE ALREADY WALKS, ANSWERED FOR A SECOND READER. `valueUses` is
 	// "every value this function reads, WITH MULTIPLICITY" — a fact about the Std function and not
 	// about addressing at all, which is why it is exported rather than kept private: the alternative
 	// is a SECOND `blockRefs` → `opRefs` descent over the same ops, which is exactly what
@@ -1182,7 +1175,7 @@ export type ScaledIndexFolds
 		return self.valueUses.containsRepeat(valueId)
 	end 'valueHasASecondReader'
 
-	// ⭐⭐ EXACT (EC19): `valueId`'s live range ENDS at the op that defines `readerId`. Three facts, and
+	// ⭐⭐ EXACT: `valueId`'s live range ENDS at the op that defines `readerId`. Three facts, and
 	// the middle one is the whole of it:
 	//   1. `valueId` is read exactly ONCE in the entire function (`containsRepeat` counts every operand
 	//      of every op, every terminator and every branch-edge argument), so `readerId`'s op is its
@@ -1272,7 +1265,7 @@ export type ScaledIndexFolds
 	function recordOp(op StdOp, blockRef BlockRef, memoryForm IndexedMemoryForm)
 		classifyArithOperands(op, operands: self.operands)
 
-		// EC19 — recorded BEFORE the early returns below, so the column covers every arithmetic result
+		// Recorded BEFORE the early returns below, so the column covers every arithmetic result
 		// of the function and not only the ones an addressing mode consumed.
 		if self.operands.isArithmetic() 'definesArithResult'
 			self.arithDefBlock.growFilled(((self.operands.resultId + 1) as ElementIndex), value: blockRef)
@@ -1479,7 +1472,7 @@ export type ScaledIndexFolds
 			osEnvBlock or
 				osEnvBlockFree then break 'mem'
 
-			// G3: the ordered pair addresses a STRUCT FIELD off a plain pointer, never a scaled element
+			// The ordered pair addresses a STRUCT FIELD off a plain pointer, never a scaled element
 			// address, so there is nothing for the indexed form to absorb. Declining to fuse is always safe:
 			// the address op then emits its own `lea` and the access reads it.
 			loadAcquire or
@@ -1891,7 +1884,7 @@ export type CompareFusionCensus
 					rdataAddr then break 'term'
 
 				// `funcAddr`/`callIndirect` are value-producing body ops, never a block terminator — a
-				// non-`condBranch` terminator fuses nothing, so like every other arm here it breaks (P1.5-A1).
+				// non-`condBranch` terminator fuses nothing, so like every other arm here it breaks.
 				tryCall or
 					errorReturn or
 					osExit or
@@ -1931,7 +1924,7 @@ export type CompareFusionCensus
 				// The wall-clock read is a void body op, never a terminator.
 				osReadWallClock then break 'term'
 
-				// R4.1 + R4.2: every file op is a value-producing or void body op, never a terminator.
+				// Every file op is a value-producing or void body op, never a terminator.
 				osFileOpenRead or
 					osFileClose or
 					osReadFile or
@@ -1952,11 +1945,11 @@ export type CompareFusionCensus
 				// A command-line read is a value-producing body op, never a terminator.
 				osCommandLine then break 'term'
 
-				// W5: a handle read and a path fill are value-producing body ops, never terminators.
+				// A handle read and a path fill are value-producing body ops, never terminators.
 				osStdHandle then break 'term'
 				osExecutablePath then break 'term'
 
-				// W35: a stream write is a value-producing body op, never a terminator.
+				// A stream write is a value-producing body op, never a terminator.
 				osWriteStderr then break 'term'
 
 				// A frame address is a value-producing body op, never a terminator.
@@ -1980,22 +1973,22 @@ export type CompareFusionCensus
 					osCpuCount or
 					osThreadCpuTicks then break 'term'
 
-				// F1a: a decommit is a body op, never a terminator — nothing to fuse.
+				// A decommit is a body op, never a terminator — nothing to fuse.
 				osDecommitPages then break 'term'
 
-				// F1b: a byte fill is a body op, never a terminator — nothing to fuse.
+				// A byte fill is a body op, never a terminator — nothing to fuse.
 				memFill then break 'term'
 
-				// F1c: a reserve and a commit are body ops, never terminators — nothing to fuse.
+				// A reserve and a commit are body ops, never terminators — nothing to fuse.
 				osCommitPages or
 					osReservePages then break 'term'
 
-				// F2: the two atomics and the thread token are value-producing body ops, never terminators.
+				// The two atomics and the thread token are value-producing body ops, never terminators.
 				atomicCas or
 					atomicRmw or
 					currentThreadToken then break 'term'
 
-				// G1: the TLS ops and the event signal are body ops, never terminators — nothing to fuse.
+				// The TLS ops and the event signal are body ops, never terminators — nothing to fuse.
 				tlsAlloc or
 					tlsSetValue or
 					tlsSlotLoad or

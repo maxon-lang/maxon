@@ -5,7 +5,7 @@
 // (its neutral `RegNum` operands resolved to an `Arm64Register`) to its 32-bit AArch64 encoding,
 // `concatArm64FunctionChunks` lays the chunks out into `.text` and resolves the intra-module `bl`
 // and code→data relocations, and `buildArm64Backend` drives the shared pipeline stages. The
-// ISA-specific traps the M1 notes list live HERE: the ADRP+ADD address-materialisation pair (never
+// The ISA-specific traps live HERE: the ADRP+ADD address-materialisation pair (never
 // a bare ADR), the STUR simm9 / scaled-STR spill threshold, the movz/movk immediate ladder, the
 // NaN-safe float compare's condition mapping, and the SP-vs-XZR MOV disambiguation.
 //
@@ -125,7 +125,7 @@ let Arm64OpLsrv = 0x9AC02400
 let Arm64OpMsub = 0x9B008000
 let Arm64MsubRaShift = 10
 
-// --- F2: the ARMv8.0 exclusive-access pair, and the Darwin thread pointer ---
+// --- The ARMv8.0 exclusive-access pair, and the Darwin thread pointer ---
 //
 // ⭐⭐ **LDAXR/STLXR ARE A RESERVATION, NOT A LOCK, WHICH IS WHY EVERY USE IS A RETRY LOOP.** `LDAXR`
 // loads and marks the address as exclusively reserved for this core; `STLXR` stores ONLY IF the
@@ -147,7 +147,7 @@ let Arm64OpLdaxr = 0xC85FFC00
 let Arm64OpStlxr = 0xC800FC00
 let Arm64StlxrRsShift = 16
 
-// ⭐⭐ **G3 — `LDAR` / `STLR`: THE SAME ORDERING WITHOUT THE RESERVATION.** They are the exclusive pair
+// ⭐⭐ **`LDAR` / `STLR`: THE SAME ORDERING WITHOUT THE RESERVATION.** They are the exclusive pair
 // above with the exclusive part removed: `o2` set (the acquire/release bit), `Rs` and `Rt2` fixed at the
 // 0b11111 an unexclusive form uses, and no status register — so there is nothing to retry and no loop.
 // A `STLR` orders every earlier access before itself and an `LDAR` every later one after itself, which is
@@ -173,7 +173,7 @@ let Arm64OrderedSize64 = 0xC0000000
 let Arm64OpMrsTpidrro = 0xD53BD060
 
 // ⭐⭐ **`MRS Xt, TPIDR_EL0` / `MSR TPIDR_EL0, Xt` — THE WRITABLE THREAD POINTER, AND arm64-LINUX OWNS IT
-// OUTRIGHT (L4).** The three words differ from the pair above only in `op2` (2 rather than 3) and, for the
+// OUTRIGHT.** The three words differ from the pair above only in `op2` (2 rather than 3) and, for the
 // write, in the L bit (0xD53 ⇒ 0xD51). ⚠ **NOTHING ELSE ON THAT LANE TOUCHES THE REGISTER, WHICH IS WHY
 // IT IS THE SCHEDULER'S**: a static image links no libc, so this is the one per-OS-thread word the
 // scheduler may define for itself, and `mrt_host_tls_alloc` does
@@ -295,11 +295,10 @@ export let Arm64NarrowResultShift = 32
 // which is what both readers below want: a mask to `and` against, and the threshold above which an
 // unsigned displacement denotes a negative one.
 //
-// ⛔ **IT WAS SPELLED `i64.min as MachineWord`, AND THAT IS THE ONE SPELLING THIS CONSTANT MAY NOT
-// HAVE.** `i64.min` denotes −9223372036854775808; `MachineWord` is `int(0 to u64.max)` and declares
-// `≥ 0`. The two share a bit pattern and nothing else, and the compile-time range check now says so
-// (E3005) — this was the ONE site in the whole tree the new refusal caught, and it was found by
-// the compiler's self-compile rather than by any suite. The hex literal is the honest spelling: a
+// ⛔ **`i64.min as MachineWord` IS THE ONE SPELLING THIS CONSTANT MAY NOT HAVE.** `i64.min` denotes
+// −9223372036854775808; `MachineWord` is `int(0 to u64.max)` and declares `≥ 0`. The two share a bit
+// pattern and nothing else, and the compile-time range check says so (E3005). The hex literal is the
+// honest spelling: a
 // NON-NEGATIVE number whose pattern happens to have bit 63 set, which is exactly what it is.
 let Arm64WordSignBit = 0x8000000000000000 as MachineWord
 
@@ -352,7 +351,7 @@ let Arm64OpBr = 0xD61F0000
 let Arm64OpLdrswRegLsl2 = 0xB8A07800
 
 // The SHIFT AMOUNT field (imm6, bits 15-10) of a DATA-PROCESSING SHIFTED-REGISTER form —
-// `ADD Xd, Xn, Xm, LSL #amount`, EC16's scaled-index address computation. It sits at the same bit
+// `ADD Xd, Xn, Xm, LSL #amount`, the scaled-index address computation. It sits at the same bit
 // position as `Arm64ImmShift` and is a DIFFERENT field of a DIFFERENT instruction (that one is the
 // imm12 of ADD/SUB-immediate), so it is named separately rather than shared: an encoding coincidence
 // is not a fact, and merging the two would make a change to either silently move the other.
@@ -416,7 +415,7 @@ let Arm64ByteAccessScale = 1
 
 // Unscaled signed-offset forms (STUR/LDUR, simm9 at bit 12, ±256). Below the 256-byte threshold a
 // spill/reload uses these; at or above it the scaled form is MANDATORY — STUR's 9-bit field silently
-// truncates any offset ≥ 256 and would spill to the wrong slot (M1 trap).
+// truncates any offset ≥ 256 and would spill to the wrong slot.
 //
 // ⚠ BITS 31:30 ARE THE SIZE FIELD, AND FOR THE FP PAIR THEY MUST BE `11` (64-bit D), NOT `10` (32-bit
 // S). The two spellings differ in ONE HEX DIGIT and BOTH ASSEMBLE, so the wrong one is not a crash —
@@ -444,7 +443,7 @@ let Arm64OpLdpPostX = 0xA8C00000
 let Arm64OpStpOffX = 0xA9000000
 let Arm64OpLdpOffX = 0xA9400000
 
-// ⭐ **THE SIMD&FP TWINS (MAC3), FOR THE GREEN-THREAD CONTEXT SWITCH.** Same instruction class, `V=1` and
+// ⭐ **THE SIMD&FP TWINS, FOR THE GREEN-THREAD CONTEXT SWITCH.** Same instruction class, `V=1` and
 // `opc=01` (the 64-bit D form): `STP Dt1, Dt2, [Xn, #imm]!` and `LDP Dt1, Dt2, [Xn], #imm`. The imm7 field
 // and its scale are IDENTICAL to the X forms above — a D register is 8 bytes too — which is why
 // `arm64EmitPairOffset` serves all four with no width parameter.
@@ -477,7 +476,7 @@ let Arm64OpScvtfD = 0x9E620000
 let Arm64OpFcvtzsD = 0x9E780000
 let Arm64OpFmovD = 0x1E604000
 
-// ⭐ `FMOV Xd, Dn` (P1.7a's last slice) — the GENERAL↔VECTOR 64-bit transfer, `float.hash`'s bit
+// ⭐ `FMOV Xd, Dn` — the GENERAL↔VECTOR 64-bit transfer, `float.hash`'s bit
 // reinterpretation. It is a DIFFERENT instruction from `Arm64OpFmovD` above, which is `FMOV Dd, Dn`,
 // an FP→FP copy: this one's `rmode=00, opcode=110` names the vector-to-general direction and its
 // `sf=1, ftype=01` the 64-bit width. Reusing the FP→FP word here would assemble a copy between two FP
@@ -491,7 +490,7 @@ let Arm64OpFmovGprFromFp = 0x9E660000
 // and a poked bit is exactly the kind of thing that reads as correct while pointing the wrong way.
 let Arm64OpFmovFpFromGpr = 0x9E670000
 
-// The MATH INTRINSICS (P1.0d.4-C). `FSQRT Dd, Dn` is its own opcode; the three roundings are ONE
+// The MATH INTRINSICS. `FSQRT Dd, Dn` is its own opcode; the three roundings are ONE
 // instruction, `FRINT<r> Dd, Dn`, whose rounding rides a 3-bit `rmode` field at [17:15] — so the
 // base opcode is written once and `arm64FrintOpcode` ORs in the mode. (Spelling the three as three
 // full constants would state the shared 29 bits three times, and the ROUNDING is the only thing
@@ -1149,8 +1148,8 @@ export function arm64SlotDisplacement(slot SpillSlot) returns MachineWord
 end 'arm64SlotDisplacement'
 
 // Access a frame slot at `[x29 + byteOffset]`. Below 256 bytes an unscaled STUR/LDUR encodes the
-// offset directly; at or above it the SCALED form is MANDATORY (the unscaled simm9 truncates ≥ 256 —
-// M1 trap). `unscaledOp` / `scaledOp` select the GPR (STUR·STR / LDUR·LDR X) or FP (·D) opcode pair —
+// offset directly; at or above it the SCALED form is MANDATORY (the unscaled simm9 truncates ≥ 256).
+// `unscaledOp` / `scaledOp` select the GPR (STUR·STR / LDUR·LDR X) or FP (·D) opcode pair —
 // the class-agnostic slot store and reload each pass their own.
 //
 // ⚠ THE SCALED FORM DOES NOT REACH THE WHOLE FRAME, AND THIS DOOR IS THE ONLY PLACE THAT CAN KNOW IT.
@@ -1205,27 +1204,25 @@ end 'arm64EmitWideFrameSlot'
 // place the two signed-offset memory forms below turn an `Imm32` into the immediate their encoding carries:
 // STUR/LDUR's simm9 (scale 1, 9 bits) and STP/LDP's imm7 (scale 8 — one transferred register — 7 bits).
 //
-// ⛔⛔ **THIS USED TO SAY THE OBVIOUS SPELLING "FAILS AT RUN TIME IN THIS FILE" AND "COULD NOT BE
-// REDUCED". THE PANIC WAS REAL AND BOTH EXPLANATIONS WERE WRONG** — replaced rather than deleted,
-// because the shape is still worth knowing. MEASURED, then: `byteOffset = -64` produced a quotient that
-// PRINTED as `-8` and was refused by the very next `Imm32` parameter bind, *"Range check failed"*. It was
-// about neither this file nor `imm32ToWord`: the BOOTSTRAP that compiles the compiler narrowed a `/` whose two
-// operand ranges both fit `i32` into a 32-bit `idiv`, and `idiv r/m32` defines only `EAX` — a 32-bit write
-// ZERO-extends, so a NEGATIVE quotient read as `4294967288` at 64 bits. The range check was merely the
-// first consumer to look; a consumer that sign-extended first (an interpolation does) saw `-8`, which is
-// how one value printed correctly and was rejected one line later. Fixed at the instruction that breaks
+// ⛔⛔ **THE OBVIOUS SPELLING PANICS, AND NEITHER "IT FAILS AT RUN TIME IN THIS FILE" NOR "IT COULD
+// NOT BE REDUCED" EXPLAINS IT.** MEASURED: `byteOffset = -64` produces a quotient that PRINTS as `-8`
+// and is refused by the very next `Imm32` parameter bind, *"Range check failed"*. It is about neither
+// this file nor `imm32ToWord`: the BOOTSTRAP that compiles the compiler narrows a `/` whose two operand
+// ranges both fit `i32` into a 32-bit `idiv`, and `idiv r/m32` defines only `EAX` — a 32-bit write
+// ZERO-extends, so a NEGATIVE quotient reads as `4294967288` at 64 bits. The range check is merely the
+// first consumer to look; a consumer that sign-extends first (an interpolation does) sees `-8`, which is
+// how one value prints correctly and is rejected one line later. Fixed at the instruction that breaks
 // the invariant (`RegisterManager.EmitIdivOperation32`) and pinned by `specs/ranged-typealias.md`.
 //
-// ⚠ **THE "COULD NOT BE REDUCED" HALF DID NOT HOLD EITHER, AND WHY THAT REDUCTION PASSED IS NOT
-// RECOVERABLE.** The shape it describes — an `Imm32` parameter, divided by a positive constant,
-// re-narrowed and handed to another `Imm32` parameter — IS `specs/ranged-typealias.md`'s case, and it
-// fails. What is measurable is which divisors license the narrowing, and that answer names this
-// signature: a literal, a module-level `let` and a local `let` all fold to a range fitting `i32` and take
-// the 32-bit `idiv`, while a `MachineWord` divisor — `int(0 to u64.max)`, which has no signed reading to
-// union with `Imm32` — keeps the divide at 64 bits. So the parameter below would not trip it today; the
-// failing draft must have divided by one of this file's folded scale constants.
+// ⚠ **NOR DOES "IT COULD NOT BE REDUCED".** The shape that phrase describes — an `Imm32` parameter,
+// divided by a positive constant, re-narrowed and handed to another `Imm32` parameter — IS
+// `specs/ranged-typealias.md`'s case, and it fails. What is measurable is which divisors license the
+// narrowing, and that answer names this signature: a literal, a module-level `let` and a local `let`
+// all fold to a range fitting `i32` and take the 32-bit `idiv`, while a `MachineWord` divisor —
+// `int(0 to u64.max)`, which has no signed reading to union with `Imm32` — keeps the divide at 64 bits.
+// So the parameter below does not trip it, and one of this file's folded scale constants would.
 //
-// ⭐ The magnitude spelling stays, now on its merits rather than as a route around that. It reuses
+// ⭐ The magnitude spelling stands on its merits rather than as a route around that. It reuses
 // `arm64AddSubImmMagnitude` — the idiom `arm64EmitCmpImm` already uses for a signed immediate, and the one
 // home of the magnitude rule — and it folds the sign through `modulus`, the number this field genuinely
 // wraps at. `imm32ToWord((byteOffset / scale) as Imm32) and (modulus - 1)` is correct too, but only while
@@ -1276,7 +1273,7 @@ end 'arm64EmitScaledMem'
 // assertion that it was asked (`arm64ScaledImm12`) both read it, so widening the reach — a narrow-width
 // access at scale 2 or 4, the unscaled signed form for a negative offset — moves both at once. Written
 // out at both doors instead, the predicate could come to admit exactly what the encoder then panics on,
-// which is the defect A5e exists to have removed rather than relocated. It is the pairing
+// which is the defect one door removes rather than relocates. It is the pairing
 // `arm64MagnitudeFitsOneImm12` gives the compare immediate one screen up.
 function arm64ByteOffsetFitsScaledImm12(byteOffset MachineWord, scale MachineWord) returns bool
 	let units = try (byteOffset / scale) otherwise panic("arm64ByteOffsetFitsScaledImm12: scale was 0 — an access width is 1, 2, 4 or 8")
@@ -1293,7 +1290,7 @@ end 'arm64ByteOffsetFitsScaledImm12'
 //
 // The cut at 4096 BYTES serves every access width, not just the 64-bit one: the residue is at most 4095
 // bytes and inherits the offset's alignment, so at scale 1 it is 4095 units and at any wider scale fewer —
-// inside the 12-bit field either way. A narrow-width frame access (P1.9) therefore needs no second split.
+// inside the 12-bit field either way. A narrow-width frame access therefore needs no second split.
 export function arm64WideFrameScratchBase(byteOffset MachineWord) returns MachineWord
 	return (byteOffset shr Arm64Imm12FieldBits) shl Arm64Imm12FieldBits
 end 'arm64WideFrameScratchBase'
@@ -1389,7 +1386,7 @@ function arm64EmitWord64Store(code ByteArray, base MachineWord, byteOffset Machi
 	end 'fp'
 end 'arm64EmitWord64Store'
 
-// ⭐ EC16's memory half on arm64: `<op> Rt, [Xn, Xm, LSL #k]`, the whole of a `base + index*scale`
+// ⭐ The scaled-index memory half on arm64: `<op> Rt, [Xn, Xm, LSL #k]`, the whole of a `base + index*scale`
 // element access in one instruction. Class-dispatched on the transferred register exactly as
 // `arm64EmitWord64Load` is — a `word64` element is `LDR Xt` in a GPR and `LDR Dt` in a SIMD register,
 // the same 64 bits either way.
@@ -1756,7 +1753,7 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffse
 		// inside a register-allocated function and one in the stub encode identically.
 		arm64Syscall(number) then arm64EmitSyscall(code, number: number)
 
-		// --- x64-only tail bands (P1.5-A1 function values, x64-linux syscall) ---
+		// --- x64-only tail bands (function values, x64-linux syscall) ---
 		// `leaRegFunc`/`callReg` are the x64 isel's function-value ops (`lea dest, [rip+func]` and
 		// `call reg`), and `x64Syscall` is the x64-linux raw syscall; reaching the arm64 encoder is the
 		// same target-dispatch bug the x64-only bands above panic on. arm64's own function-value ops are
@@ -1793,12 +1790,12 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffse
 		// `arm64SlotDisplacement` the spill/reload pair resolve their slots with.
 		leaRegSlot(destReg, slot) then arm64EmitSlotAddress(code, destReg: destReg, slot: slot)
 
-		// F1b: the byte-fill size ladder. The two operands are already in x0/x1 (the isel's pre-moves), so
+		// The byte-fill size ladder. The two operands are already in x0/x1 (the isel's pre-moves), so
 		// the op carries only the broadcast pattern — see `arm64EmitMemFill`.
 		arm64MemFill(fillByte) then arm64EmitMemFill(code, fillByte: fillByte)
 		x64MemFill then panic("emitArm64TargetOp: an x64 fill ladder reached the arm64 encoder — the x64 backend encodes `x64MemFill`")
 
-		// F2: the two LL/SC retry loops and the masked thread-pointer read. Each expands to a self-contained
+		// The two LL/SC retry loops and the masked thread-pointer read. Each expands to a self-contained
 		// instruction sequence with locally patched branches — see `arm64EmitAtomicCas`.
 		arm64AtomicCas(dest, addrReg, expectedReg, replacementReg) then arm64EmitAtomicCas(code, dest: arm64GprField(dest), addrReg: arm64GprField(addrReg), expectedReg: arm64GprField(expectedReg), replacementReg: arm64GprField(replacementReg))
 		arm64AtomicRmw(dest, addrReg, operandReg, opcode) then arm64EmitAtomicRmw(code, dest: arm64GprField(dest), addrReg: arm64GprField(addrReg), operandReg: arm64GprField(operandReg), opcode: opcode)
@@ -1811,7 +1808,7 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffse
 			x64TebSelfPointer or
 			x64GsLoadRegBase then panic("emitArm64TargetOp: an x64-only atomic or TEB read reached the arm64 encoder — arm64's atomics are `arm64AtomicCas`/`arm64AtomicRmw` and its thread token is `arm64ThreadPointer`")
 
-		// EC16 — the scaled-index band. The ADDRESS op is per-ISA (x64 spells `+` as a `lea`, arm64 as an
+		// The scaled-index band. The ADDRESS op is per-ISA (x64 spells `+` as a `lea`, arm64 as an
 		// `add`), so `leaRegBaseIndexScale` never reaches here; the two ACCESSES are SHARED, exactly as
 		// `loadRegBaseDisp`/`storeBaseDispReg` are, with each ISA's encoder covering the addresses its own
 		// form can hold (see `TargetDialect.loadRegBaseIndexScale`).
@@ -1824,11 +1821,11 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffse
 		// operand, so nothing about the register encoding changes.
 		arm64AddLsl(dest, base, index, scale) then emitArm64Rrr(code, opcode: ((Arm64OpAdd or (memoryIndexScaleShift(scale) shl Arm64ShiftedRegAmountShift)) as MachineWord), rd: arm64GprField(dest), rn: arm64GprField(base), rm: arm64GprField(index))
 
-		// EC18 — x64's one-operand `imul`, wired to the RAX/RDX pair. arm64's high multiply is
+		// x64's one-operand `imul`, wired to the RAX/RDX pair. arm64's high multiply is
 		// `arm64Smulh`, an op of its own, so `StdToArm64Conversion` never mints this one.
 		imulHighReg then panic("emitArm64TargetOp: an x64 one-operand `imul` reached the arm64 encoder — arm64 spells the high half of a signed product as `arm64Smulh`, a three-address form with no fixed-register pair")
 
-		// EC18 — `SMULH Xd, Xn, Xm`. The same three-register emitter as `MUL`, because on AArch64 the two
+		// `SMULH Xd, Xn, Xm`. The same three-register emitter as `MUL`, because on AArch64 the two
 		// differ only in an opcode-word field.
 		arm64Smulh(dest, lhs, rhs) then emitArm64Rrr(code, opcode: Arm64OpSmulh, rd: arm64GprField(dest), rn: arm64GprField(lhs), rm: arm64GprField(rhs))
 		covInc(pointId) then arm64EmitCovInc(code, rdataRelocs: rdataRelocs, covOffsets: covOffsets, pointId: pointId)
@@ -1855,7 +1852,7 @@ function arm64EmitJumpTable(code ByteArray, rdataRelocs RdataRelocationArray, br
 	jumpTables.push(JumpTablePending.create(String.from(tableLabel), caseTargets: caseTargets))
 end 'arm64EmitJumpTable'
 
-// --- F1b: the byte-fill SIZE LADDER (arm64) ---
+// --- The byte-fill SIZE LADDER (arm64) ---
 
 // The four FIXED registers `arm64EmitMemFill` owns — the first four AAPCS64 argument registers, which is
 // what the isel's pre-moves already use for a syscall's arguments. The isel puts the destination in the
@@ -2022,7 +2019,7 @@ function arm64EmitSlotAddress(code ByteArray, destReg TargetVReg, slot SpillSlot
 end 'arm64EmitSlotAddress'
 
 // ==========================================================================
-// F2: the LL/SC atomics, and the Darwin thread pointer
+// The LL/SC atomics, and the Darwin thread pointer
 // ==========================================================================
 //
 // ⭐⭐ **THE TWO SEQUENCES SHARE ONE SAFETY ARGUMENT, AND IT IS ABOUT WHEN `Xd` IS WRITTEN.** A late def
@@ -2082,7 +2079,7 @@ end 'arm64EmitStlxr'
 //
 // ⚠ **A RETRY RE-READS `Xexpected`, NOT x16.** The comparand must be the caller's value on every trip —
 // re-comparing against the last observation would make the loop succeed against whatever it just saw.
-// ⭐ **G3 — ONE `LDAR`/`STLR`, WIDTH-DISPATCHED.** The two opcodes differ only in the L bit, and the two
+// ⭐ **ONE `LDAR`/`STLR`, WIDTH-DISPATCHED.** The two opcodes differ only in the L bit, and the two
 // widths only in the `size` field, so ONE emitter carries both axes rather than four hand-written words
 // that could come to disagree about the fixed 0b11111 fields.
 //
@@ -2178,7 +2175,7 @@ function arm64EmitCovInc(code ByteArray, rdataRelocs RdataRelocationArray, covOf
 	arm64EmitPopPairGpr(code, rt1: Arm64CovAddr, rt2: Arm64CovAddrPartner)
 end 'arm64EmitCovInc'
 
-// ⭐⭐ **THIS OS THREAD'S PER-THREAD BASE — AND WHICH REGISTER HOLDS IT IS A PER-OS FACT (L4).**
+// ⭐⭐ **THIS OS THREAD'S PER-THREAD BASE — AND WHICH REGISTER HOLDS IT IS A PER-OS FACT.**
 // The two arms are not two spellings of one read; they name two different system registers, for two
 // reasons that do not generalise:
 //
@@ -2293,7 +2290,7 @@ export function arm64EmitBrk(code ByteArray)
 end 'arm64EmitBrk'
 
 // ==========================================================================
-// The primitives the hand-assembled GREEN-THREAD chunks need (MAC3)
+// The primitives the hand-assembled GREEN-THREAD chunks need
 // ==========================================================================
 //
 // ⭐ **EVERY ONE OF THESE NAMES SP OR A REGISTER PAIR, WHICH IS WHY IT IS HERE AND NOT A `TargetOp`.** The
@@ -2341,8 +2338,8 @@ export let Arm64GtPairBytes = 2 * SpillSlotBytes
 // `str`/`ldr Xt, [SP, #byteOffset]` — a hand-assembled chunk addressing its own frame off SP. The ONE pair
 // that names SP as a load/store base outside this file's own frame ops, and the reason it is here rather
 // than beside its caller: SP is encoding field 31 — the same value XZR takes in a data-processing
-// instruction — and a chunk restating that 31 would be the M1 trap this file's frame ops already document,
-// written down a second time.
+// instruction — and a chunk restating that 31 would be the trap this file's frame ops already
+// document, written down a second time.
 //
 // ⚠ Its one caller is `__gt_morestack`, the single runtime chunk with a frame and no frame RECORD: it
 // switches to the P's system stack itself, so there is no x29 for `arm64EmitStoreSlot` to address off.
@@ -2402,7 +2399,7 @@ export function arm64EmitCsel(code ByteArray, dest MachineWord, ifTrue MachineWo
 end 'arm64EmitCsel'
 
 // ADRP Rd, page(label) + ADD Rd, Rd, #pageoff(label) — the ±4 GiB PIE address-materialisation pair
-// the M1 traps mandate for ALL func/global/rdata addresses (NEVER a bare ADR, whose ±1 MiB reach
+// mandated for ALL func/global/rdata addresses (NEVER a bare ADR, whose ±1 MiB reach
 // silently truncates). The ADRP files the page reloc, the ADD the within-page reloc; the writer
 // patches both fields once section VAs are known (`patchArm64Adrp`/`patchArm64PageOff`).
 // `addend` is a byte offset INSIDE the named object, carried on BOTH halves because the two relocations are
@@ -2431,8 +2428,8 @@ end 'arm64EmitFpLoadRdata'
 // concat pass resolves the target's `.text` offset from the function-label map, and both arm64 writers
 // patch the pair against `.text`'s VMADDR (`patchArm64FuncAdrpRelocs`). The `.text`-function twin of
 // `arm64EmitAdrpAddPair`, which materialises `.rdata`/`.data` addresses — same instruction pair, a
-// function symbol rather than a data label, so a dedicated code→`.text` reloc channel (P1.5-A1 / OPEN
-// #67) rather than the section-targeting `rdataRelocs`.
+// function symbol rather than a data label, so a dedicated code→`.text` reloc channel rather than the
+// section-targeting `rdataRelocs`.
 export function arm64EmitLeaFuncAddr(code ByteArray, funcAdrpRelocs Arm64FuncAdrpRelocArray, dest MachineWord, funcName ByteArray)
 	funcAdrpRelocs.push(Arm64FuncAdrpReloc.create(code.count(), funcName: funcName))
 	emitArm64Insn(code, insn: Arm64OpAdrp or dest)
@@ -2451,7 +2448,7 @@ export let Arm64FrameRecordBytes = 16
 // Open the frame: STP x29, x30, [sp, #-N]! + MOV x29, sp for a frame within the pre-index reach, else
 // a SUB-sp split (the imm7 field cannot encode a large frame) with the record stored at the new sp.
 // The `mov x29, sp` is ADD x29, sp, #0 — a MOV involving SP MUST be the ADD alias, never the ORR/XZR
-// form (register 31 is SP here, not XZR — M1 trap).
+// form (register 31 is SP here, not XZR).
 //
 // ⭐ `recordOffset` is where the x29/x30 record sits within the frame — 0 unless this function makes a call
 // with OUTGOING STACK ARGUMENTS, which must occupy `[SP + 0 .. outgoing)` because that is where the callee's
@@ -2485,7 +2482,7 @@ export function arm64EmitEpilogue(code ByteArray, frameSize StackSize, recordOff
 end 'arm64EmitEpilogue'
 
 // `str <Xt|Dt>, [SP, #slot*8]` — one OUTGOING stack argument into the region at the bottom of this frame.
-// SP is base field 31 here (not XZR — the M1 trap this file's header names), which is exactly why the op
+// SP is base field 31 here (not XZR — the trap this file's header names), which is exactly why the op
 // exists rather than reusing `storeBaseDispReg`: SP has no `RegNum` and so cannot be a `TargetVReg`.
 // Class-dispatched on the SOURCE like every other 64-bit store, so a float argument stores through `STR Dt`.
 //
@@ -2735,7 +2732,7 @@ end 'arm64PrologueFrameBytes'
 // a module function already laid out first). Every other runtime family — the panic runtime, the fault
 // runtime, the host surface, the scheduler — is appended AFTER user code by `buildArm64Backend`.
 // `leakCheck` gates the entry stub's future MM leak bridge (false at the scalar core),
-// `initGlobals` its managed-global init/release bracket (P1.7 slice 2a — false for a program with no
+// `initGlobals` its managed-global init/release bracket (false for a program with no
 // managed top-level `var`), `debugStream` the DebugStream producer's attach/detach bracket, and
 // `os` picks the stub's exit route — a libSystem GOT call on macOS, a raw `svc #0` on Linux (see
 // `Arm64Runtime.arm64OsCallKind`).
@@ -3015,7 +3012,8 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	var targetModule = try lowerAndAllocateOnAWorkerPool(stdModule, target: target, globalData: globalData, project: project, funcNames: funcNames, usesGt: usage.usesGt)
 	recordPhase(project, phase: CompilePhase.regalloc, probe: regAllocProbe)
 
-	// EC11, and it must run HERE — after the allocator's `applyAllocation` and before the frame pass.
+	// The Target-tier CFG cleanup must run HERE — after the allocator's `applyAllocation` and before the
+	// frame pass.
 	// A block whose only op is an `arm64Branch` is genuinely empty only once SSA destruction has placed
 	// (or declined to place) its edge copies; before that it is an edge about to receive moves. The
 	// frame pass then sees the surviving blocks, so a callee-saved register or a `bl` reachable only

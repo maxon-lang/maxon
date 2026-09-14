@@ -7,8 +7,8 @@
 //                                       function order, rebases + resolves fixups,
 //                                       and CLOSES `.text` with `__symtable`)
 //
-// THIN for maxon M1: encodes exactly the TargetOps the `return 42` slice and
-// its `mrt_start` entry stub produce — prologue/epilogue (`sub`/`add rsp, N`),
+// THIN: it encodes exactly the TargetOps the lowering and the `mrt_start` entry
+// stub produce — prologue/epilogue (`sub`/`add rsp, N`),
 // ret, mov reg,imm (32- and 64-bit forms), 64- and 32-bit reg-reg moves,
 // `call rel32`, and `call [rip]` through the IAT. Later milestones GROW the
 // dispatch as the TargetOp union grows. arm64 is a separate backend at its own
@@ -104,7 +104,7 @@ let SibBaseDisp32Field = 5
 // there is no real displacement). R13 is x64's silent-lea-miscompile trap.
 let RbpR13Low3 = 5
 
-// ⭐ **THE SIB INDEX OF AN x64 MEMORY OPERAND — this register, or `X64SibNoIndex` for none (EC16).**
+// ⭐ **THE SIB INDEX OF AN x64 MEMORY OPERAND — this register, or `X64SibNoIndex` for none.**
 //
 // It is what lets `[base + disp]` and `[base + index*scale + disp]` be ONE address operand and
 // therefore ONE assembler (`emitBaseDispModRmBits`). Every `[base + disp]` LOAD/STORE encoder in this
@@ -121,8 +121,8 @@ let RbpR13Low3 = 5
 //
 // ⚠ **IT IS TWO SCALARS AND NOT A RECORD, AND THAT IS MEASURED.** A record-typed parameter with a
 // `none()` default is CONSTRUCTED at every call, and these encoders run once per emitted instruction:
-// the first cut of EC16 did exactly that and `scale-test` charged `phase:encode` **+47% allocations**
-// (372,734 → 548,168 at rung 5) for it, against a control taken the same session. `StdArithOperands`'
+// doing that here MEASURED `scale-test` charging `phase:encode` **+47% allocations**
+// (372,734 → 548,168 at rung 5), against a control taken the same session. `StdArithOperands`'
 // header records the same trap one tier up, for the same reason.
 // ⛔⛔ **`public`, NOT `export`, AND THAT IS A HOLE IN E3092 RATHER THAN AN API-SURFACE CLAIM.** A
 // DEFAULT ARGUMENT is evaluated in the CALLER's scope, so `X64GtRuntime` and `X64Runtime` — which call
@@ -220,7 +220,7 @@ export let OpcodeInt3 = 0xCC
 // ModR/M, no REX and no operands. The number goes in eax (loaded by the shared `encodeMovRegImm32`).
 let OpcodeSyscallSecondByte = 0x05
 
-// --- F2: atomics and the thread-identity read ---
+// --- Atomics and the thread-identity read ---
 //
 // `LOCK` (F0) is an instruction PREFIX, not an opcode: it makes the read-modify-write memory operation
 // that follows indivisible against every other core. Only a small set of instructions accept it, and all
@@ -419,16 +419,15 @@ enum SseMandatoryPrefix
 	// No mandatory prefix — every GPR instruction in this file.
 	none
 
-	// F2 — the SCALAR DOUBLE family: movsd, addsd, subsd, mulsd, divsd, and both converts.
+	// The SCALAR DOUBLE family: movsd, addsd, subsd, mulsd, divsd, and both converts.
 	scalarDouble
 
 	// 66 — every SSE form in this file whose mandatory prefix is NOT F2. This byte is ALSO the
 	// operand-size override prefix, which is exactly why no generic path may be left to guess at it.
 	//
-	// ⚠ NO ROSTER, DELIBERATELY. This comment used to name its two members and went stale TWICE
-	// without anything noticing — `roundsd` joined at P1.0d.4-C and `movq r/m64, xmm` at P1.7a's last
-	// slice, and a reader who trusted the list would have concluded the 66 path had no encoder to
-	// share. Each site states its own prefix at the call, which is the fact that cannot drift; grep
+	// ⚠ NO ROSTER, DELIBERATELY. A list of the members here goes stale silently as forms join it, and
+	// a reader who trusted the list would conclude the 66 path had no encoder to share. Each site states
+	// its own prefix at the call, which is the fact that cannot drift; grep
 	// `packedDouble` for the current set rather than reading one here.
 	packedDouble
 end 'SseMandatoryPrefix'
@@ -548,8 +547,8 @@ end 'regIsExtended'
 // ⭐ **ONE REX EMITTER, ALL FOUR BITS.** `indexIsExtended` is the SIB INDEX's extension bit (REX.X) —
 // the one field `regField`/`rmField` cannot express — and it defaults to `false`, which is the right
 // answer for every operand shape that has no index at all (register-direct, `[base + disp]`, RIP-
-// relative). It used to be a separate `emitRexRXB` differing in that one bit and in nothing else,
-// which is the same fact written down twice, one bit apart.
+// relative). A separate `emitRexRXB` differing in that one bit and in nothing else would be the same
+// fact written down twice, one bit apart.
 function emitRex(code ByteArray, wide bool, regField X64Register, rmField X64Register, force bool = false, indexIsExtended bool = false)
 	var rex = RexBase
 
@@ -778,7 +777,7 @@ function encodeSetccReg(code ByteArray, dest X64Register, cond X64CondCode)
 end 'encodeSetccReg'
 
 // ==========================================================================
-// The SSE band (P1.0d.4)
+// The SSE band
 // ==========================================================================
 
 // `<sse> dest, src` — the register-direct form of EVERY two-operand SSE instruction the compiler
@@ -932,13 +931,12 @@ end 'roundsdImm8'
 // ⚠ THE MEMORY FORM ZEROES BITS 64-127 of the destination, where the register-to-register form
 // MERGES them. Nothing in the compiler reads an XMM's upper half — every XMM value is a scalar f64 — so this
 // is the right instruction both for a value SPILL (whose slot is 8 bytes because an f64 is) AND for
-// preserving a CALLEE-SAVED xmm6-15 across a call, which Wave 2 does through the same 8-byte slot
-// ops. Win64 nominally asks a callee to preserve all 128 bits, but that obligation is owed to
+// preserving a CALLEE-SAVED xmm6-15 across a call, which goes through the same 8-byte slot ops. Win64 nominally asks a callee to preserve all 128 bits, but that obligation is owed to
 // EXTERNAL callers and the compiler has none; the full argument, and the condition that would invalidate it,
 // is stated once in `X64PrologueEpilogue`'s header.
 //
 // ⚠⚠ BOTH OPERANDS ARE CLASS-GATED, AND THE REASON IS THIS PAIR'S CALLERS, NOT DEFENSIVENESS. They were
-// EXPORTED at Wave 2 so the two hand-assembled GT chunks (X64GtRuntime's context switch and
+// EXPORTED so the two hand-assembled GT chunks (X64GtRuntime's context switch and
 // `__gt_morestack`) could preserve XMMs, and those hand off registers straight from an ordered LIST —
 // `calleeSavedXmmOrder`, `argFpRegisters` — with no allocator and no class column between the list and the
 // encoder. A GPR in either list assembles as the XMM sharing its low nibble (`rbx` → `xmm3`) and a GPR in
@@ -1097,7 +1095,7 @@ function encodeCqo(code ByteArray)
 	code.push(OpcodeCqo)
 end 'encodeCqo'
 
-// `lea dest, [base + index*scale]` — the 3-operand `+` at scale 1, and EC16's scaled-index address
+// `lea dest, [base + index*scale]` — the 3-operand `+` at scale 1, and the scaled-index address
 // computation at 2/4/8 (REX.W 8D /r + SIB). No flags, and — because dest/base/index are independent —
 // no copy. Both SIB traps belong to the SHARED assembler: an rsp index panics in `x64SibIndex`
 // and an rbp/r13 base is forced to mod=01 by `chooseDispMod`.
@@ -1184,7 +1182,7 @@ end 'chooseDispMod'
 // The SIB byte for `[base + disp]` with an rsp/r12 base (rm=100 forces a SIB): scale 1,
 // index field 100 (no index), base in its field.
 // THE SIB BYTE — scale in bits 6-7, index in 3-5, base in 0-2, and the ONE place those three fields
-// are packed. Four call sites spelled it out before EC16: the no-index form an rsp/r12 base forces,
+// are packed. Four call sites would otherwise spell it out: the no-index form an rsp/r12 base forces,
 // the two GS-absolute `[disp32]` forms, and the scaled-index form. Only the last of them ever varies
 // the scale, which is exactly why it is the one a future edit reaches for — and why the other three
 // must not be a separate spelling of the same byte.
@@ -1269,7 +1267,7 @@ end 'encodeMovzxRegByteBaseDisp'
 // A function's blocks are laid out contiguously inside its ONE FunctionCodeChunk, so
 // a `jmp`/`jcc` to another block never crosses a chunk boundary and is resolved here
 // — not by `concat` (which only rebases inter-FUNCTION `call`/IAT fixups). This is
-// the M4 analogue of `resolveCallFixups`, keyed by a label id within one chunk instead
+// the intra-chunk analogue of `resolveCallFixups`, keyed by a label id within one chunk instead
 // of by function name across chunks.
 //
 // Two DIFFERENT instruction shapes file fixups here, and they share this table because
@@ -1416,7 +1414,7 @@ export function x64JumpTableScratchMask() returns RegMask
 	return regMaskOf(JumpTableBaseReg) or regMaskOf(JumpTableEntryReg)
 end 'x64JumpTableScratchMask'
 
-// --- F1b: the byte-fill SIZE LADDER (x64) ---
+// --- The byte-fill SIZE LADDER (x64) ---
 
 // The four FIXED registers `encodeX64MemFill` owns. The ISEL pre-moves the destination into the cursor and
 // the byte count into the count register (`lowerMemFill`); the ladder then writes all four — it advances the
@@ -1637,7 +1635,7 @@ export function encodeLeaRegFuncAddr(code ByteArray, callFixups CallFixupArray, 
 	writeDword(code, value: 0)
 end 'encodeLeaRegFuncAddr'
 
-// `lea dest, [rip + <.data global>]` — the address of a top-level `var`'s slot (P1.0d.5b).
+// `lea dest, [rip + <.data global>]` — the address of a top-level `var`'s slot.
 // The THIRD consumer of `emitLeaRipRelPrefix`, and it files its fixup in a third table: an
 // `RdataRelocation` of kind `dataSectionRipRelDisp32`, which the PE writer resolves against
 // `.data`'s RVA once section layout is fixed.
@@ -1678,7 +1676,7 @@ function encodeCovInc(code ByteArray, rdataRelocs RdataRelocationArray, covOffse
 	writeDword(code, value: 0)
 end 'encodeCovInc'
 
-// `lea dest, [rip + <.rdata constant>]` — the address of a String literal's record (P1.2 wave A). The
+// `lea dest, [rip + <.rdata constant>]` — the address of a String literal's record. The
 // `.rdata` twin of `encodeLeaRegGlobal`: same instruction, same end-of-field convention, and it files
 // the SAME `RdataRelocation` — only the kind differs (`ripRelDisp32` for `.rdata` vs
 // `dataSectionRipRelDisp32` for `.data`), which is exactly what routes the PE writer to measure the
@@ -1789,11 +1787,10 @@ end 'encodeRspAdjust'
 // ⚠⚠ GPR-ONLY, AND THE CHECK IS NOT DEFENSIVE PADDING — **THERE IS NO `push xmm` IN x86-64.** This
 // encoder takes a register's low 3 bits and emits `push r64` unconditionally, so an XMM handed to it
 // assembles as the GPR sharing its low nibble: xmm3 and rbx both encode as 3, and the result is a
-// push of a register nobody named, with no error at any layer. That is precisely the mistake Wave 2
-// invited — the obvious way to make xmm6–15 callee-saved is to add them to `calleeSavedOrder`, which
-// this loop iterates. `requireClass` turns "there is no push xmm" from something a reader has to
-// remember into something the compiler states. (What Wave 2 does instead: frame slots, see
-// X64PrologueEpilogue.)
+// push of a register nobody named, with no error at any layer. That is precisely the mistake the
+// obvious way to make xmm6–15 callee-saved invites — adding them to `calleeSavedOrder`, which this
+// loop iterates. `requireClass` turns "there is no push xmm" from something a reader has to remember
+// into something the compiler states. (They take frame slots instead: see X64PrologueEpilogue.)
 export function encodePushReg(code ByteArray, reg X64Register)
 	let gpr = requireClass(reg, class: RegClass.gpr)
 	emitRex(code, wide: false, regField: X64Register.rax, rmField: gpr)
@@ -2031,7 +2028,7 @@ export function encodeX64Syscall(code ByteArray, number MachineWord)
 end 'encodeX64Syscall'
 
 // ==========================================================================
-// F2: the atomics, and the Windows per-thread identity word
+// The atomics, and the Windows per-thread identity word
 // ==========================================================================
 
 // `lock <op> [addrReg], srcReg` — the ONE byte shape all three x64 atomics share: the LOCK prefix, then
@@ -2149,7 +2146,7 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 		xchgRegReg(a, b) then emitRegRegSwap(code, a: resolvePhysical(a), b: resolvePhysical(b))
 		callDirect(targetName) then encodeCallDirect(code, callFixups: callFixups, targetName: targetName)
 
-		// In a GT-scheduler module every Win32 IAT call is wrapped in the system-stack shim (P1.5-B1a′): a GT
+		// In a GT-scheduler module every Win32 IAT call is wrapped in the system-stack shim: a GT
 		// stack is too small for the kernel's deep usage, so the call runs on the global system stack. The shim
 		// is a runtime no-op off a GT stack (`currentGt == 0 || stackBase == 0` → direct), so wrapping every call
 		// is correct; a non-GT module lays out no `__sched_tls_teb_offset` to reference, so it stays a bare `iatCall`.
@@ -2200,7 +2197,7 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 		loadRegBaseDisp(dest, base, disp, width) then emitDataLoad(code, dest: resolvePhysical(dest), base: resolveGpr(base), disp: disp, width: width)
 		storeBaseDispReg(base, disp, src, width) then emitDataStore(code, base: resolveGpr(base), disp: disp, src: resolvePhysical(src), width: width)
 
-		// --- The SSE band (P1.0d.4) ---
+		// --- The SSE band ---
 		//
 		// Every arm resolves through `resolveXmm`/`resolveGpr` rather than `resolvePhysical`: these
 		// are FIXED-CLASS encodings, and a bare register number is ambiguous at exactly this point
@@ -2223,7 +2220,7 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 		cvtsi2sdRegReg(dest, src) then encodeSseRegReg(code, prefix: SseMandatoryPrefix.scalarDouble, opcode: OpcodeCvtsi2sd, dest: resolveXmm(dest), src: resolveGpr(src), wide: true)
 		cvttsd2siRegReg(dest, src) then encodeSseRegReg(code, prefix: SseMandatoryPrefix.scalarDouble, opcode: OpcodeCvttsd2si, dest: resolveGpr(dest), src: resolveXmm(src), wide: true)
 
-		// The MATH INTRINSICS (P1.0d.4-C). `sqrtsd` is an ordinary two-byte SSE form and rides the
+		// The MATH INTRINSICS. `sqrtsd` is an ordinary two-byte SSE form and rides the
 		// shared `encodeSseRegReg` with only its opcode changed; `roundsd` is three-byte-plus-imm8
 		// and has its own encoder (see `encodeRoundsdRegReg`).
 		sqrtsdRegReg(dest, src) then encodeSseRegReg(code, prefix: SseMandatoryPrefix.scalarDouble, opcode: OpcodeSqrtsd, dest: resolveXmm(dest), src: resolveXmm(src), wide: false)
@@ -2251,7 +2248,7 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 		// coloring has already made `dest` and `src` one register).
 		negF64RegReg(dest, _) then encodeNegF64Reg(code, reg: resolveXmm(dest))
 
-		// The `.rdata` address `lea` (P1.2 wave A) — `leaRegGlobal`'s twin, GPR dest, its label filed
+		// The `.rdata` address `lea` — `leaRegGlobal`'s twin, GPR dest, its label filed
 		// as an `.rdata` relocation. See `encodeLeaRegRdata`.
 		leaRegRdata(dest, label) then encodeLeaRegRdata(code, rdataRelocs: rdataRelocs, dest: resolveGpr(dest), label: label)
 
@@ -2325,12 +2322,12 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 		x64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then encodeX64JumpTable(code, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, indexReg: resolveGpr(indexReg), defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel)
 		arm64JumpTable then panic("emitTargetOp: an arm64 jump table reached the x64 encoder — the arm64 backend encodes `arm64JumpTable`")
 
-		// F1b: the byte-fill size ladder. Its two operands are already in rdi/rcx (the isel's pre-moves), so
+		// The byte-fill size ladder. Its two operands are already in rdi/rcx (the isel's pre-moves), so
 		// the op carries only the broadcast pattern — see `encodeX64MemFill`.
 		x64MemFill(fillByte) then encodeX64MemFill(code, fillByte: fillByte)
 		arm64MemFill then panic("emitTargetOp: an arm64 fill ladder reached the x64 encoder — the arm64 backend encodes `arm64MemFill`")
 
-		// P1.5-A1: a function's address (`lea dest, [rip+disp32]` + a `.text` CallFixup — the existing
+		// A function's address (`lea dest, [rip+disp32]` + a `.text` CallFixup — the existing
 		// `encodeLeaRegFuncAddr`, until now called only by the runtime stubs), and a register-indirect
 		// call (`FF /2`, mod=11 — `call reg`). `encodeModRmExtDirect` emits `REX.W FF /2`; REX.W is IGNORED
 		// for a near call in long mode (the operand size is forced to 64-bit), so `48 FF D0` decodes as
@@ -2365,7 +2362,7 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 		// a spill can never disagree about where slot `k` is.
 		leaRegSlot(destReg, slot) then encodeLeaRegRegImm32(code, dest: resolveGpr(destReg), base: X64Register.rsp, disp: slotDisplacement(spillBaseDisp, slot: slot))
 
-		// F2 — the three locked memory forms and the TEB read. The CAS's comparand is NOT an operand here:
+		// The three locked memory forms and the TEB read. The CAS's comparand is NOT an operand here:
 		// x86 pins it to RAX, and the isel's `movRegReg rax, expected` put it there (see
 		// `TargetDialect.x64LockCmpxchg`'s implicit pair).
 		x64LockCmpxchg(addrReg, srcReg) then encodeLockedMemReg(code, twoByteEscape: true, opcode: OpcodeCmpxchgRmReg, addrReg: resolveGpr(addrReg), srcReg: resolveGpr(srcReg))
@@ -2387,7 +2384,7 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 			arm64AtomicRmw or
 			arm64ThreadPointer then panic("emitX64TargetOp: an arm64-only atomic or thread-pointer read reached the x64 encoder — x64's atomics are `x64LockCmpxchg`/`x64LockXadd`/`x64LockAdd` and its thread token is `x64TebSelfPointer`")
 
-		// --- EC16: the scaled-index band ---
+		// --- The scaled-index band ---
 		//
 		// ⭐ ALL THREE GO THROUGH THE ENCODERS THE `[base + disp]` BAND ALREADY USES, with the index
 		// riding in the `index`/`indexScale` pair every one of them already takes. So the width
@@ -2402,7 +2399,7 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 		storeBaseIndexScaleReg(base, index, scale, disp, src, width) then emitDataStore(code, base: resolveGpr(base), disp: disp, src: resolvePhysical(src), width: width, index: x64SibIndex(resolveGpr(index)), indexScale: scale)
 		arm64AddLsl then panic("emitX64TargetOp: an arm64 shifted-register `add` reached the x64 encoder — x64 spells a scaled-index address as `leaRegBaseIndexScale`")
 
-		// EC18 — the ONE-operand `imul r/m64` (`REX.W F7 /5`): RDX:RAX ⟸ RAX × src. The same group-3
+		// The ONE-operand `imul r/m64` (`REX.W F7 /5`): RDX:RAX ⟸ RAX × src. The same group-3
 		// encoder the two divides use, at a different extension, which is the whole difference between
 		// the four one-operand forms this family has.
 		imulHighReg(src) then encodeGrp3Reg(code, ext: Grp3ExtImul, reg: resolveGpr(src))
@@ -2763,7 +2760,7 @@ end 'emitUnit'
 
 // Emit one function into a FunctionCodeChunk with CHUNK-LOCAL fixup offsets. The
 // caller (concat) shifts every inter-function fixup (call/IAT) by the chunk's start
-// offset. Intra-function block branches (M4's `jmp`/`jcc`), by contrast, are resolved
+// offset. Intra-function block branches (`jmp`/`jcc`), by contrast, are resolved
 // HERE: a function's blocks are contiguous within its one chunk, so a block branch's
 // rel32 is chunk-local and independent of where concat places the chunk. Each block's
 // chunk-local start offset is recorded as it is emitted, then `resolveChunkRel32Fixups`
@@ -2796,12 +2793,12 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 	// `slot * SpillSlotBytes` to it. See spillSlotBaseDisp for the frame-layout rationale.
 	let spillBaseDisp = spillSlotBaseDisp(module, func: func)
 
-	// ⭐ THE GT STACK GUARD (P1.5-B1a′). Emitted at the very START of the entry block — before `push rbp` — for a
+	// ⭐ THE GT STACK GUARD. Emitted at the very START of the entry block — before `push rbp` — for a
 	// USER function of a GT module that reserves a frame, so a green thread whose stack would overflow grows +
 	// relocates it first. It is EXEMPT for the compiler's own SCAFFOLDING: the scheduler core must never trigger
-	// the grower, and their kernel calls are already shimmed onto the system stack (slice 1). ⚠ The exemption is
-	// asked of the FUNCTION's provenance, never of its NAME — a `__`-name test handed it to a user function
-	// declared in `stdlib/Builtins.maxon` and SEGFAULTED a green thread; see `isRuntimeFunction`'s header for the
+	// the grower, and their kernel calls are already shimmed onto the system stack. ⚠ The exemption is
+	// asked of the FUNCTION's provenance, never of its NAME — a `__`-name test hands it to a user function
+	// declared in `stdlib/Builtins.maxon` and SEGFAULTS a green thread; see `isRuntimeFunction`'s header for the
 	// measurement. ⛔ And the question is `skipsGreenThreadStackGuard`, NOT `isRuntimeFunction`: a synthesized
 	// function whose frame depth is the user's data graph (a `__destruct_<T>` cascade) satisfies the second
 	// and NEEDS the guard — see that predicate, which states why provenance and stack behaviour are
@@ -2892,8 +2889,8 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 
 	resolveChunkRel32Fixups(code, labelOffsets: chunkLabelOffsets, rel32Fixups: rel32Fixups)
 
-	// M1 registers no rdata constants (no float/mask islands) — those GROW in at
-	// M3 (floats) / M10 (strings).
+	// A chunk built here registers no rdata constants of its own: the float and mask islands and the
+	// String records are registered by the lowering, through the module's table.
 	var chunk = FunctionCodeChunk.createWith(func.name, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())
 	chunk.jumpTableRelocs = resolveJumpTableRelocs(jumpTables, blockOffsets: chunkLabelOffsets)
 
@@ -3218,11 +3215,9 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 	end 'entryNotFirst'
 
 	// symdata is still empty — the backtrace's own table already closes `.text` instead. `.rdata` is NOT:
-	// P1.0d.4 fills it with the f64 constant islands `lowerFloatConst` registered, and
-	// `rdataRelocations` carries the code -> .rdata references resolved above alongside the .data
-	// ones. (`.data` itself arrived at P1.0d.5b — see `dataPrelude`.) The IAT relocations remain
-	// for the PE writer to patch. P1.2's strings will register into this same table and need no
-	// new pipeline.
+	// it holds the f64 constant islands `lowerFloatConst` registered and the String literal records, and
+	// `rdataRelocations` carries the code -> .rdata references resolved above alongside the .data ones
+	// (`dataPrelude` lays `.data` itself down). The IAT relocations remain for the PE writer to patch.
 	var result = CodeResult.create(code, mainCallFixupOffset: entryOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, stdModule: stdModule, rdata: globalData.rdataImage(), rdataRelocations: rdataRelocations, symdata: globalData.symdataImage)
 	result.debugSymbols = debugSymbols
 	result.dataPrelude = globalData.dataSectionImage()

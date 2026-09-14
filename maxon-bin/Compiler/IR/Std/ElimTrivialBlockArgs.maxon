@@ -33,15 +33,14 @@
 // them, and once they outnumber the pool the compiler raises E5001 against a program that fits the
 // machine.
 //
-// The tell is that `let` and `var` compiled DIFFERENTLY. Fifteen idle `let`s across a loop are
-// ordinary values: the splitter spills them around it for free and the program builds. The same
-// fifteen written `var` — never reassigned, semantically identical — became fifteen phis, could
-// not be spilled, and were refused with E5001 on a loop whose real working set was two.
+// The tell is that `let` and `var` compile DIFFERENTLY. Fifteen idle `let`s across a loop are
+// ordinary values: the splitter spills them around it for free and the program builds. Without this
+// pass the same fifteen written `var` — never reassigned, semantically identical — become fifteen
+// phis, cannot be spilled, and are refused with E5001 on a loop whose real working set is two.
 //
-// The parser has always PROMISED this collapse ("phis for unmutated vars turn out trivial and
-// collapse in the Std-tier phi-elim pass"). That pass was M4b's `eliminatePhis`, retired at M5
-// when the register allocator took over SSA destruction. `pruneDeadBlockArgs` restored its DEAD
-// half; this is the TRIVIAL half, and with both of them the promise holds again.
+// The parser PROMISES this collapse ("phis for unmutated vars turn out trivial and
+// collapse in the Std-tier phi-elim pass"). `pruneDeadBlockArgs` answers the DEAD
+// half; this is the TRIVIAL half, and together they keep the promise.
 //
 // SELF-REFERENCES ARE IGNORED, AND THAT IS THE WHOLE TRICK. A loop-header phi's back edge passes
 // the phi to ITSELF, so its incoming set is `{v, phi}` and a naive "all incoming equal" test sees
@@ -65,13 +64,13 @@
 //   2. a MERGE THAT COLLAPSES — `p = φ(x, y)` with `x ≠ y` is a real merge and not trivial, until
 //      `x` folds to `y` and it becomes `φ(y, y)`.
 //
-// This pass used to answer both by RE-SWEEPING the whole function until a sweep changed nothing.
-// Each sweep is linear, but the SWEEP COUNT was never bounded, and on a chain it is the length of
-// the chain: `collectReadyArgs` deliberately deferred any phi whose fold TARGET was also folding
-// this sweep, so a sweep peeled exactly ONE link off the chain. N sweeps × O(function) each is
-// O(N × function) — QUADRATIC, and measured at x3.95 allocations / x4.85 bytes / x4.23 time per
-// DOUBLING on a function of N sequential loops holding one idle var. The pass folded a LINEAR
-// number of phis (2N of them) and did QUADRATIC work to find them, which is the tell.
+// RE-SWEEPING the whole function until a sweep changes nothing answers both, and is QUADRATIC.
+// Each sweep is linear, but the SWEEP COUNT is unbounded, and on a chain it is the length of
+// the chain: a sweep must defer any phi whose fold TARGET is also folding that sweep, so it peels
+// exactly ONE link off the chain. N sweeps × O(function) each is
+// O(N × function) — MEASURED at x3.95 allocations / x4.85 bytes / x4.23 time per
+// DOUBLING on a function of N sequential loops holding one idle var. A LINEAR
+// number of phis (2N of them) found by QUADRATIC work is the tell.
 //
 // A worklist answers both causes exactly and once. When a phi folds, the ONLY phis whose answer
 // can change are the ones that READ it, and `FeedTriggers` names them in O(1). So each phi is
@@ -81,9 +80,9 @@
 // CHAINS ARE RESOLVED BY UNION-FIND, WITH PATH COMPRESSION, so a chain of length N is flattened
 // the first time it is walked instead of once per sweep. Folding `a → b` where `b` later folds to
 // `v` needs no chain resolution and no deferral: `a`'s root simply BECOMES `v`, and the
-// substitution column handed to the rewrite is the fully-compressed forest. That is also why the
-// old "defer a phi whose target is also folding" rule is gone — it existed only to stop a
-// one-substitution-at-a-time rewrite from leaving a dangling reference to a slot it was about to
+// substitution column handed to the rewrite is the fully-compressed forest. That is also why no
+// "defer a phi whose target is also folding" rule is needed — such a rule exists only to stop a
+// one-substitution-at-a-time rewrite from leaving a dangling reference to a slot it is about to
 // delete, and a root is by construction not a slot that is about to be deleted.
 //
 // AND THE TRIGGER INDEX MUST MIGRATE WITH THE CHAIN, WHICH IS THE WHOLE SUBTLETY OF THE WORKLIST.
@@ -252,7 +251,7 @@ module function elimTrivialBlockArgsSummary(tally StdPassTally, funcCount FuncCo
 end 'elimTrivialBlockArgsSummary'
 
 // ⭐⭐ **EVERY WALK OF `module.functions` IN THIS TIER IS AN INDEX LOOP, NOT `for … in`, AND THE REASON IS
-// A ⚖ USER RULING (2026-08-26). THIS IS THE CANONICAL NOTE; THE OTHER SITES POINT HERE.** `for func in
+// A ⚖ USER RULING. THIS IS THE CANONICAL NOTE; THE OTHER SITES POINT HERE.** `for func in
 // module.functions` hands the body a BORROW of the element, and the E3070 SUBJECT of that borrow is the
 // whole `module` record — `Parser.iterationSubjectNameAt` names a chain's BASE, necessarily: a callee
 // handed `module` can reach every field of it. The loop element's borrow is LEXICAL, running to the
@@ -261,7 +260,7 @@ end 'elimTrivialBlockArgsSummary'
 //
 // ⚠ **THE REFUSAL IS THE RULING, NOT A DEFECT TO ROUTE AROUND.** The compiler does not retain on element
 // read, so a callee that cleared `module.functions` would leave that borrow pointing at freed memory —
-// measured at P1.8 as the `0x3F` free-poison byte. The runnable oracle COMPILES the `for … in` spelling,
+// MEASURED as the `0x3F` free-poison byte. The runnable oracle COMPILES the `for … in` spelling,
 // because it retains; the compiler refuses it, deliberately, and `specs/borrow-liveness.md` carries both
 // answers. Do not "fix" this by weakening E3070, the iteration lock or `iterationSubjectNameAt`.
 //

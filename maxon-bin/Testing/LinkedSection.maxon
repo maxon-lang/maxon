@@ -6,8 +6,8 @@
 // seam between that one question and those three readers, and it holds nothing else: every byte of
 // format knowledge lives in `PeSectionReader` / `MachoSectionReader` / `ElfSectionReader`.
 //
-// ⚠ IT DISPATCHES ON THE TARGET, NOT THE HOST. It used to key off `detectHostTarget()`, which was
-// true only while the runner exclusively inspected binaries built for its own host. A cross-native
+// ⚠ IT DISPATCHES ON THE TARGET, NOT THE HOST. Keying off `detectHostTarget()` holds only while the
+// runner inspects binaries built for its own host. A cross-native
 // run (`--target=arm64-linux` from an arm64-macOS host) breaks that assumption outright: the file on
 // disk is an ELF and the host is macOS, so a host-keyed dispatch would parse an ELF as a Mach-O and
 // report `notAMachoFile` for a perfectly good image. The FORMAT is a property of what was BUILT.
@@ -62,14 +62,14 @@ end 'DataSectionReadError'
 // offset, with no section header a reader could name. There is nothing to read and nothing to compare.
 //
 // ⚠ **IT IS READ AT SELECTION TIME (`SpecTestRunner.selectedTests`), AND THAT IS WHY THE `wasi` PANICS
-// BELOW ARE UNREACHABLE RATHER THAN MERELY UNLIKELY.** They used to be reachable, and the way in was a
-// spec author's memory: every ```RequiredData / ```RequiredRdata case in the corpus carried a
-// hand-written marker spelling out exactly this predicate, and the ONE file that did not —
-// `enum-narrow-storage.md`, ported without markers — ran under `--target=wasm32-wasi`, panicked in
+// BELOW ARE UNREACHABLE RATHER THAN MERELY UNLIKELY.** The way in is a spec author's memory: a
+// hand-written `<!-- unsupported-targets: … -->` marker on every ```RequiredData / ```RequiredRdata
+// case, spelling out exactly this predicate, and ONE file without it is fatal —
+// `enum-narrow-storage.md`, ported without markers, ran under `--target=wasm32-wasi`, panicked in
 // `linkedSectionName`, killed its worker and ABORTED THE WHOLE LANE, so the wasm gate reported nothing
-// at all (measured on `main`, 2026-08-10).
-// One fact written in twenty-odd places, and the copy that went missing took a suite down with it.
-// ⇒ the restriction is now DERIVED from the pin — the case declares that it pins a linked section by
+// at all (measured).
+// One fact written in twenty-odd places, and the copy that goes missing takes a suite down with it.
+// ⇒ the restriction is DERIVED from the pin — the case declares that it pins a linked section by
 // carrying the block, and this function decides which targets have one — so there is no marker to
 // forget. It also un-gates itself: the day a WASI component grows a readable equivalent, this gains an
 // arm and every pinned case starts running there with no edit to any spec.

@@ -28,15 +28,13 @@
 // stamped; a CONCRETE `Array with Person` is correct in the same program. Synthesizing is what `Array`,
 // `String`, `Set` and `Map` already do, and it is the only route with no wrong answer in it.
 //
-// ⭐⭐ **THAT DEFECT IS CLOSED, AND THIS PARAGRAPH IS KEPT AS THE MEASUREMENT IT IS RATHER THAN AS A LIVE
-// REASON — a blocker note ages faster than the code.** The `Array` half went at P1.7 slice 3b (an opaque
-// element's destructor is READ from the enclosing instance's layout descriptor at run time, not stamped
-// statically) and the CHAIN half at W134, which gave `__ManagedList with <type parameter>` the same treatment:
-// `specs/managed-list-opaque-element.md` runs one generic body over a `String` bag and an `int` bag in one
-// program, and MEASURED with the descriptor read replaced by the old static 0 stamp, both managed cases exit
-// **101** while the trivial one still passes.
+// ⭐⭐ **THE ERASURE ITSELF IS CURED: an opaque element's destructor is READ from the enclosing instance's
+// layout descriptor at run time rather than stamped statically**, for a chain (`__ManagedList with <type
+// parameter>`) exactly as for an array. `specs/managed-list-opaque-element.md` runs one generic body over a
+// `String` bag and an `int` bag in one program, and MEASURED with that descriptor read replaced by a static
+// 0 stamp, both managed cases exit **101** while the trivial one still passes.
 //
-// ⚠ **THE MODULE IS STILL NOT LISTED, AND WHAT REMAINS WAS MEASURED (2026-08-17, at W134's tip), NOT
+// ⚠ **THE MODULE IS STILL NOT LISTED, AND WHAT REMAINS WAS MEASURED (2026-08-17), NOT
 // ASSUMED.** `stdlib/List.maxon`'s first error is `E3086` at `:21:10` (`create`'s `return Self{}` against a
 // declared type with an uninitialized field); patch that and its twin at `:26` and the next is
 // **`E2015 __ManagedList method 'isEmpty'`** — the surface gap. Listing it is a chain of further rungs (that
@@ -104,11 +102,10 @@ let ListValueOffset = 16 as ByteOffset
 
 // ⭐⭐ **`element_drop@24` — THE NODE CARRIES ITS OWN ELEMENT DESTRUCTOR, AND IT IS THE ONE SITE THAT OWNS
 // THE ELEMENT DROP.** A refcounted node can outlive the chain that linked it, so *"the list's teardown
-// walk drops the element"* — which this file said for as long as nodes were one-owner — is no longer a
-// place that is guaranteed to run. The stamp is COPIED from the record's own `element_drop@24` at
-// `__list_node_alloc`, so there is still exactly one producer of the callee (`__list_create`'s argument),
-// and the opaque-element case needs nothing new: `W134` already made that argument the enclosing
-// instantiation's `destroyFunc@40` rather than a static `0`, and this propagates whatever it decided.
+// walk drops the element"* names no place that is guaranteed to run. The stamp is COPIED from the record's
+// own `element_drop@24` at `__list_node_alloc`, so there is exactly one producer of the callee
+// (`__list_create`'s argument, which for an opaque element is the enclosing instantiation's
+// `destroyFunc@40` rather than a static `0`), and this propagates whatever it decided.
 //
 // ⛔ **IT CANNOT RIDE THE ALLOCATION HEADER, AND THAT IS MEASURED RATHER THAN PREFERRED.** `__mm_alloc`
 // takes a destructor and stores it at `HeaderDestructorOffset` — and **nothing in the compiler ever calls it**:
@@ -152,9 +149,6 @@ export let ListNodeBytes = 40 as ParsedInt
 // element buffer's `0`, which is what `TrivialElementDestroy` names — a second local spelling of that same
 // zero would be one number with two homes.
 //
-// ⚠ **IT SAID "THREE SPANS" AND NAMED A NODE HANDLE'S RETAINED LIST AS THE THIRD.** That span was the
-// 16-byte handle box of `W138`'s first ruling; the second ruling deleted it, and a paragraph still counting
-// it would have a reader looking for an allocation site that is not here.
 
 // The runtime entry points. `__`-prefixed (`isCompilerInternalCallee` routes their calls past the
 // user-function checks — no file declares them) but NOT `__mm_`-prefixed, so `isListRuntimeCallee` carries
@@ -308,8 +302,7 @@ let ListNodeAllocName = b"__list_node_alloc"
 //
 // ⚠ **IT BOUNDS-CHECKS NOTHING AND CANNOT: it has no failure exit.** Every caller checks first (`get` and
 // `remove` through `emitIndexOutOfRange`, `insert` through `emitBoundaryPositionOutOfRange` plus its two
-// end arms), and that check IS the guarantee that `index` hops from a non-empty head land on real nodes —
-// the licence `buildListGet` used to state for the walk it held inline.
+// end arms), and that check IS the guarantee that `index` hops from a non-empty head land on real nodes.
 let ListNodeAtName = b"__list_node_at"
 
 // The `__list_` prefix identifying EVERY list runtime entry point — the one test `recordCallUsage` reads to
@@ -326,13 +319,10 @@ end 'isListRuntimeCallee'
 // is exactly what makes `try` REQUIRED on a call that cannot fail (E3055), so this must stay narrower than
 // `isListRuntimeCallee`.
 //
-// ⚠ **THE COMPLEMENT IS DESCRIBED AND NOT ENUMERATED, BECAUSE THE ENUMERATION WENT STALE.** This listed
-// eight names plus *"the three cursor primitives"*, and `W138` added three more entries the sentence never
-// mentioned — a roster written twice, which is this project's own signature bug and the reason
-// `installListRuntime`'s drift guard checks the predicate against the STAMPS rather than against prose.
-// ⭐ **THE MERGE OF `W138` AND spec-port `list` PROVED IT TWICE OVER.** That rung re-enumerated the
-// complement in the same sentence and added FOUR throwing entries of its own, so each branch shipped a
-// sentence that was stale about the other's. The drift guard was right about both; neither prose was.
+// ⚠ **THE COMPLEMENT IS DESCRIBED AND NOT ENUMERATED, BECAUSE AN ENUMERATION GOES STALE.** A roster written
+// twice is this project's own signature bug, and it is why `installListRuntime`'s drift guard checks the
+// predicate against the STAMPS rather than against prose — prose about which entries throw has been wrong
+// in both directions at once.
 export function isThrowingListRuntimeCallee(callee ByteArray) returns bool
 	return callee.equals(ListFirstName) or callee.equals(ListLastName) or callee.equals(ListGetName) or callee.equals(ListRemoveFirstName) or callee.equals(ListRemoveLastName) or callee.equals(ListRemoveAtName) or callee.equals(ListInsertName) or callee.equals(ListHeadCheckedName) or callee.equals(ListTailCheckedName) or callee.equals(ListNodeNextCheckedName) or callee.equals(ListNodePrevCheckedName)
 end 'isThrowingListRuntimeCallee'
@@ -511,13 +501,13 @@ end 'buildListCreate'
 // unlinked node indistinguishable from a chain end AND from a detached one.
 //
 // ⚠ **IT TAKES THE LIST ONLY TO READ THE STAMP, and copying it is what lets the node outlive the chain.**
-// `element_drop@24` on the RECORD stays the single producer (`__list_create`'s argument, which `W134` made
-// either a static callee or the instantiation's `destroyFunc@40`); the node holds a copy because the
-// record may be freed while a handle still owes its element a drop.
+// `element_drop@24` on the RECORD stays the single producer (`__list_create`'s argument, either a static
+// callee or the instantiation's `destroyFunc@40`); the node holds a copy because the record may be freed
+// while a handle still owes its element a drop.
 //
-// ⚠ **THE NODE ITSELF IS ALLOCATED WITH NO `__mm_alloc` DESTRUCTOR, and that is not the same statement it
-// used to be.** It has one now — `element_drop@24`, called by `__list_node_decref` — but the header slot
-// is inert in the compiler (nothing dispatches it), so passing it there would be a leak that compiles.
+// ⚠ **THE NODE ITSELF IS ALLOCATED WITH NO `__mm_alloc` DESTRUCTOR.** It has a drop — `element_drop@24`,
+// called by `__list_node_decref` — but the header slot is inert in the compiler (nothing dispatches it), so
+// passing it there would be a leak that compiles.
 function buildListNodeAlloc(module StdModule)
 	var func = IrFunction.createFromStd(ListNodeAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
@@ -705,7 +695,7 @@ end 'emitListClaimsNode'
 // the teardown walk.** The node is FREED only if no handle still holds it, which is the whole content of
 // the second ruling.
 //
-// ⚠ **IT ZEROED THE THREE LINK WORDS TOO UNTIL `BATCH37`, and the split is what a REINSERTION needs.** The
+// ⚠ **IT DOES NOT ZERO THE THREE LINK WORDS, and that split is what a REINSERTION needs.** The
 // structural unlink and the reference drop are two facts — `emitListClearsNodeLinks` is the first — and a
 // reinsertion does the first without the second, because the chain's reference does not die there, it moves
 // to the chain the node is joining.
@@ -932,13 +922,12 @@ function buildListInsert(module StdModule)
 	// the new one answers to `index` — which is what "insert at" means and what `insert.at-middle` reads back.
 	//
 	// ⛔⛔ **THIS ARM IS THE ONE PLACE A NODE IS LINKED WITHOUT `emitListLinkAtEnd`, SO IT OWES BY HAND THE
-	// TWO THINGS THAT HELPER DOES — AND SHIPPING IT WITHOUT EITHER WAS A WRONG ANSWER THE TWO BRANCHES THAT
-	// MET HERE COULD NOT SEE.** `__list_insert` was written against ONE-OWNER nodes, where a node carried no
-	// `owner@32` and no `element_drop@24` of its own; `W138` gave nodes both and put every other insertion
-	// through `emitListClaimsNode`. Composed, a middle-inserted node came out with `owner == 0` — so a later
-	// `remove(at:)` took `__list_remove_node`'s already-detached arm, handing the element out while leaving
-	// the chain linked through a node it no longer counts — and with `element_drop@24 == 0`, so its element
-	// LEAKED at the node's last owner. `__list_node_alloc` takes the list precisely to copy that stamp.
+	// TWO THINGS THAT HELPER DOES — AND A NODE MISSING EITHER IS A WRONG ANSWER NOTHING REPORTS.** A
+	// middle-inserted node left with `owner == 0` sends a later `remove(at:)` down
+	// `__list_remove_node`'s already-detached arm, handing the element out while leaving the chain linked
+	// through a node it no longer counts; left with `element_drop@24 == 0`, its element LEAKS at the node's
+	// last owner. `__list_node_alloc` takes the list precisely to copy that stamp, and every other insertion
+	// goes through `emitListClaimsNode`.
 	let displaced = ids.mint()
 	module.appendOp(interior, op: StdOp.call(displaced, callee: ListNodeAtName, args: twoArgs(list, second: index)))
 	let node = ids.mint()
@@ -1272,8 +1261,7 @@ end 'buildListNodePrevChecked'
 // surface offers, and — read one line down — the whole of what `__list_decref`'s last owner does before
 // freeing the record.
 //
-// ⛔ **IT DROPS NO ELEMENT, AND THIS PARAGRAPH USED TO SAY IT DROPPED THEM ALL.** Under the second `W138`
-// ruling the walk has no element code in it at all: each node's reference is released
+// ⛔ **IT DROPS NO ELEMENT.** The walk has no element code in it at all: each node's reference is released
 // (`emitListDropsItsNodeRef`) and a node whose LAST owner that was destroys its own element on the way out
 // (`buildListNodeDecref`). A node a handle still holds walks out of here ALIVE, still holding its value —
 // which is what a `clear()` followed by a read through a surviving handle asserts.
@@ -1441,21 +1429,19 @@ end 'buildListRemoveAt'
 // ⚠ **THE ELEMENT IS MOVED OUT, NOT DROPPED.** The caller becomes its sole owner (the parser marks the result
 // OWNED), which is the exact mirror of `__managed_pop` nulling the slot it hands out.
 //
-// ⛔⛔ **AND THE NODE IS RELEASED, NOT FREED — WHICH IS WHERE THE TWO BRANCHES THAT MET HERE DISAGREED.**
-// This shape was factored out of `__list_remove_first` while a node had EXACTLY ONE OWNER and a direct
-// `__mm_free` was correct; `W138` made a node refcounted, so a `__mm_free` here would (a) pull the span out
-// from under a handle that is still an owner and (b) bypass `__list_node_decref`, the one site that drops a
-// node's element. Both halves are `emitListDropsItsNodeRef`'s, which is why this arm calls it rather than
-// restating either.
+// ⛔⛔ **AND THE NODE IS RELEASED, NOT FREED.** A node is REFCOUNTED, so a `__mm_free` here would (a) pull
+// the span out from under a handle that is still an owner and (b) bypass `__list_node_decref`, the one site
+// that drops a node's element. Both halves are `emitListDropsItsNodeRef`'s, which is why this arm calls it
+// rather than restating either.
 //
 // ⚠⚠ **NO TEST COVERS THIS LINE TODAY, AND THAT IS MEASURED — DO NOT DELETE IT AS DEAD.** Sabotaged back to
 // `__mm_free` with the rest of the tree correct, the whole suite stayed green: **ZERO** cases moved.
 // Nothing can currently hold a second reference to a node these two entries unlink, because `List` and
 // `__ManagedList` are DISTINCT type instances with no coercion between them and the handle-minting surface
 // has no `removeFirst`/`removeLast` at all. ⇒ The line is INVARIANT-DRIVEN, not test-driven: *"every path
-// that ends a node's life goes through the refcounted teardown"*. `W137`'s `stdlib/List.maxon` is the
-// program that makes it live — that file's `List` holds a `__ManagedList` as its only field, so one chain
-// gets both surfaces at once and a handle reaches exactly these nodes.
+// that ends a node's life goes through the refcounted teardown"*. `stdlib/List.maxon` is the program that
+// makes it live — that file's `List` holds a `__ManagedList` as its only field, so one chain gets both
+// surfaces at once and a handle reaches exactly these nodes.
 //
 // ⚠ **IT IS NOT `__list_remove_node` WITH AN END PICKED OUT**, for that entry's own stated reason read
 // backwards: this one KNOWS its node is at `nearEnd` and writes that header field outright, where the

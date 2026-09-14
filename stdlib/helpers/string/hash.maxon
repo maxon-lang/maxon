@@ -10,15 +10,12 @@
 
 /// Hash a `String` using the djb2 algorithm. Returns a 32-bit hash value.
 ///
-/// Takes the `String`, not its `__ManagedMemory`, and that is the whole reason this rung exists.
+/// Takes the `String`, not its `__ManagedMemory`, deliberately.
 /// This is the hottest byte-walk in the stdlib — `Map with (String, V)` calls it on every insert and
 /// every lookup — so it is the site that decides whether Stage 4 is a win. Reaching the bytes
 /// through `managed` or `addressableBytes()` would MATERIALIZE a record for a small string once
 /// 4b-2 lands, i.e. one allocation per key hash, and the stage would be a net loss. Going through
 /// `String.byteAt` means 4b-2 changes that one intrinsic's lowering and this function never notices.
-///
-/// The `offset`/`len` window this used to carry (`hashManagedStringRange`) is gone: every caller
-/// hashed the whole string, so the range form was generality nobody had ever asked for.
 public function hashString(s String) returns HashValue
 	var h = 5381
 	let len = s.byteLength()

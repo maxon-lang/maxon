@@ -241,18 +241,18 @@ export enum ErrorCode
 	// evaluates to FALSE, letting a condition name a platform this
 	// compiler does not target without becoming a build failure.
 	// Names ONLY the unknown-name fault. A condition the grammar cannot READ at all -- a missing
-	// ')', an operator with no right-hand side, text trailing the condition -- is E2065; it used to
-	// share this code, and 'your predicate name is unknown' is the wrong advice for a missing paren.
+	// ')', an operator with no right-hand side, text trailing the condition -- is E2065, because
+	// 'your predicate name is unknown' is the wrong advice for a missing paren.
 	directiveUnknownPredicate = "E2064"
 
 	// A '#if' condition the directive grammar has no production for. Two shapes reach it: the
 	// condition itself does not parse (a missing ')', an 'and' with no right-hand side, a bare
 	// 'true' where a predicate call belongs, a condition that runs off the end of the file), or the
 	// condition parses but TEXT FOLLOWS IT on the same line.
-	// Split out of E2064, which names a different fault: there the condition reads fine and the
+	// Distinct from E2064, which names a different fault: there the condition reads fine and the
 	// function it calls does not exist, and the fix is to correct a NAME. Here there is nothing to
-	// look up. One code answering both told a reader with an unbalanced paren that their predicate
-	// name was unknown.
+	// look up, so one code answering both would tell a reader with an unbalanced paren that their
+	// predicate name is unknown.
 	// The trailing text is REFUSED rather than discarded. Accepting it is a wrong-answer generator:
 	// the tokens after the condition are emitted into the program as code,
 	// so '#if os(Windows) os(Linux)' is a hard error on Windows and silence on Linux, where the
@@ -304,15 +304,14 @@ export enum ErrorCode
 	// real, labellable parameters -- 'subpWriteLine(h, line: s)' already LABELS its second argument
 	// on purpose, written the way the eventual method call will be written.
 	// ⛔ DO NOT TRUST THAT LIST; READ 'Parser.parseCallNamed's CHAIN. This sentence is a PROSE COPY
-	// of a roster and it has been wrong twice: it said TWELVE and named the two UAX #29 classifiers
-	// after BATCH2 slice 6 retired them, and it went on naming 'print' after W35 retired that one
-	// onto 'stdlib/Print.maxon'. It carries no count now for exactly that reason. The set that DOES
+	// of a roster, and it carries NO COUNT: a count here goes stale the moment a builtin is retired
+	// onto a stdlib declaration, which takes it out of the chain entirely and hands it the ordinary
+	// declared-call rules. The set that DOES
 	// bind is stated in one place, 'Parser.calleeTakesPositionalArgsOnly'; everything else the chain
-	// recognizes is the complement of it, and a builtin RETIRED onto a stdlib declaration leaves the
-	// chain entirely and takes the ordinary declared-call rules with it.
-	// ⚠ AND THE SET THAT BINDS IS NO LONGER THAT ROSTER ALONE. Since the '__Builtins.' half joined,
+	// recognizes is the complement of it.
+	// ⚠ AND THAT ROSTER IS NOT THE WHOLE OF THE BINDING SET.
 	// 'Parser.argLabelRuleForCallee' is the one place to read; 'calleeTakesPositionalArgsOnly' is
-	// one of its two arms, not the whole answer. The '__Builtins.' arm is a QUALIFIER test and not a
+	// one of its two arms. The '__Builtins.' arm is a QUALIFIER test and not a
 	// roster, deliberately: the label regime is chosen while the argument list is still being parsed,
 	// so a '__Builtins.' name this compiler does not implement parses positionally and meets E3004,
 	// rather than a label complaint standing in front of the true diagnostic.
@@ -320,15 +319,12 @@ export enum ErrorCode
 
 	// A numeric literal's text is not a number -- two decimal points ('1.5.3'), or any byte the
 	// number grammar does not admit.
-	// IT REPLACES A PANIC, and the panic's premise is why this code exists. The parser used to
-	// assert a malformed literal was UNREACHABLE from source, on the ground that Lexer.scanNumber
-	// only ever hands over digits, '_', '.', 'e'/'E' and an exponent sign -- so a rejection could
-	// only mean the lexer and the number reader had diverged, a compiler defect rather than a
-	// program's. That premise was FALSE: the lexer's trailing-byte rule appended a SECOND '.' to a
-	// token that already carried a fraction, so '1.5.3' reached the reader as '1.5.' and CRASHED
-	// the compiler. A parser must be able to answer 'that literal is not well-formed' with a
-	// position, and a layer that cannot say no is a layer whose caller's leniency has nowhere to
-	// surface.
+	// IT IS A DIAGNOSTIC AND NOT A PANIC, because a malformed literal IS reachable from source: it is
+	// tempting to argue otherwise from Lexer.scanNumber handing over only digits, '_', '.', 'e'/'E'
+	// and an exponent sign, but the lexer's trailing-byte rule can append a SECOND '.' to a token
+	// that already carries a fraction, so '1.5.3' reaches the reader as '1.5.'. A parser must be able
+	// to answer 'that literal is not well-formed' with a position, and a layer that cannot say no is
+	// a layer whose caller's leniency has nowhere to surface.
 	parserMalformedNumericLiteral = "E2068"
 
 	// A 'Vector with ...' does not state a usable element COUNT before its element type:
@@ -401,8 +397,8 @@ export enum ErrorCode
 	// a `let` and a `var` share one storage key, so kind is irrelevant. The
 	// top-level twin of (a); (d) a TYPE name claimed by two declarations --
 	// `type` / `enum` / `union` / `interface` / `typealias` all file one name
-	// in one whole-program namespace, and a fixed resolution cascade used to
-	// pick the winner silently. Fires from `commitTypeNameDecls` in the compiler at the
+	// in one whole-program namespace, where a fixed resolution cascade would
+	// otherwise pick the winner silently. Fires from `commitTypeNameDecls` in the compiler at the
 	// merge. Kind-independent exactly as (c) is: what is refused is the SECOND
 	// declaration of the name, whichever keyword introduced either of them --
 	// UNLESS THE TWO DECLARATIONS CANNOT SEE EACH OTHER, which is the whole
@@ -843,15 +839,15 @@ export enum ErrorCode
 	// `Promise` is parameterised by BOTH what its thunk returns and what its thunk throws:
 	// `Promise with T` is a NON-throwing promise, `Promise with (T, E)` one that throws E.
 	// Storing a promise in the wrong one is refused here -- including, in particular, storing
-	// a THROWING promise in a `Promise with T`, which is what used to erase the error type.
-	// That erasure was the root of a family of bugs, all of which this refusal (plus the
+	// a THROWING promise in a `Promise with T`, which ERASES the error type.
+	// That erasure is the root of a family of bugs, all of which this refusal (plus the
 	// two-parameter form that makes it avoidable) turns into impossibilities:
-	// - `otherwise (e)` had no type to give `e`, and silently handed back the raw i64
+	// - `otherwise (e)` has no type to give `e`, and silently hands back the raw i64
 	// promise handle typed `int`;
-	// - an associated-value error's payload had no static type to mm_decref, so it LEAKED
-	// (only a runtime `errorIsHeapPtr` bit in the box approximated the answer);
-	// - propagation (a bare `try await p` inside a `throws` function) had no error type to
-	// check the enclosing function's `throws` against, so a thunk throwing A could be
+	// - an associated-value error's payload has no static type to mm_decref, so it LEAKS
+	// (only a runtime `errorIsHeapPtr` bit in the box approximates the answer);
+	// - propagation (a bare `try await p` inside a `throws` function) has no error type to
+	// check the enclosing function's `throws` against, so a thunk throwing A can be
 	// awaited inside a function throwing B and A's ordinals reinterpreted as B's tags.
 	// The fix a diagnostic can name is the point: it says which two-parameter type to write.
 	promiseErrorTypeMismatch = "E3098"
@@ -1075,8 +1071,8 @@ export enum ErrorCode
 	// off the DECLARED clause at the catch site while the throw site derives it from the value it
 	// actually throws. A clause naming anything with no declared cases -- an INTERFACE (`throws Error`),
 	// a struct, or a name that resolves to nothing at all -- leaves those two derivations free to
-	// disagree: `throws Error` throwing a payload-carrying union was decoded as an ordinal and the box
-	// was never released (exit 101, a leak, in BOTH compilers before this check existed).
+	// disagree: `throws Error` throwing a payload-carrying union decodes as an ordinal and the box is
+	// never released -- exit 101, a leak, in BOTH compilers.
 	// It is a rule about a FUNCTION's own clause, not about an interface REQUIREMENT's: a requirement
 	// whose `throws` names an interface is the abstract error channel `Error` exists for, is dispatched
 	// through the witness ABI, and is guarded separately by E3016.
@@ -1093,11 +1089,11 @@ export enum ErrorCode
 	// constraints -- `where T is Left and Right` where both `extends Root` -- is NOT this code: the
 	// accepted member is filed under (conformer, DECLARING interface, method name), so both routes
 	// stamp their slot from one filing and bind one address. Counting those two routes as two
-	// claimants was a false reject whose message named a requirement as its own rival.
+	// claimants would be a false reject whose message names a requirement as its own rival.
 	// A witness dispatch compiles ONE slot offset into the calling function, so there is nothing to
-	// choose by and nothing a later pass could repair. Taking the first candidate is what the search
-	// did before this code existed, and it is a silent wrong function pointer rather than a
-	// diagnostic -- which is why the ambiguity is refused rather than resolved by declaration order.
+	// choose by and nothing a later pass could repair. Taking the first candidate is a silent wrong
+	// function pointer rather than a diagnostic -- which is why the ambiguity is refused rather than
+	// resolved by declaration order.
 	// The message names BOTH claimants by their DECLARING interface, since that is the interface the
 	// author has to change; the cure is to rename one requirement or to drop one constraint.
 	semanticAmbiguousWitnessDispatch = "E3114"
@@ -1143,14 +1139,14 @@ export enum ErrorCode
 	// A raw byte is any of 256 values. An element declared `int(0 to 100)` promises every value of
 	// every `Array with Byte` in the program is at most 100, and a raw fill breaks that promise with
 	// no place to put a check: the fill is one runtime blit, not a run of stores the compiler can
-	// narrow one at a time. MEASURED before the rule existed: `takes("ss".toByteArray())` into
-	// `takes(b Array with Byte)` returned 195 out of an accessor declared `int(0 to 100)`. Silent.
-	// A THIRD construct reached this code at A4a and no longer does: the buffer surface's `setByte`,
-	// which addresses a byte OFFSET rather than an element and therefore asks E3118's slot question at
-	// every stride. "Admits every byte" is that question's ONE-BYTE instance and nothing more general,
-	// which is why the two are separate codes rather than one widened rule -- see E3118.
-	// It is a PER-TYPE rule and its A3r sibling is PER-VALUE, which is why the two are separate rules
-	// rather than one. E3005 checks each byte of a `b"..."` blob against the same bounds and must keep
+	// narrow one at a time. MEASURED without the rule: `takes("ss".toByteArray())` into
+	// `takes(b Array with Byte)` returns 195 out of an accessor declared `int(0 to 100)`. Silent.
+	// The buffer surface's `setByte` is NOT this code: it addresses a byte OFFSET rather than an
+	// element and therefore asks E3118's slot question at every stride. "Admits every byte" is that
+	// question's ONE-BYTE instance and nothing more general, which is why the two are separate codes
+	// rather than one widened rule -- see E3118.
+	// It is a PER-TYPE rule and its PER-VALUE sibling is E3005, which is why the two are separate
+	// rules rather than one. E3005 checks each byte of a `b"..."` blob against the same bounds and must keep
 	// accepting `b"abc"` under `int(0 to 100)`; there is nothing here to inspect, so the only honest
 	// question is about the element.
 	// Retyping the byte view onto the compiler's own `__ManagedByte` element instead was the obvious
@@ -1321,8 +1317,8 @@ export enum ErrorCode
 	// value test -- the then branch runs whenever the call did not throw -- so the result it produces is
 	// silently dropped and the form reads as though it were being tested. `if try json.getBool(node,
 	// key: "enabled")` reads as "if enabled" and means "if the key exists and is a bool", which is true
-	// when the value is `false`. MEASURED before this check existed: a throwing `answer(succeed bool)
-	// returns bool` whose SUCCESS path returns `false` still took the branch.
+	// when the value is `false`. MEASURED without this check: a throwing `answer(succeed bool)
+	// returns bool` whose SUCCESS path returns `false` still takes the branch.
 	// ONE law, not a type-keyed one: if the call produces a value you must say what happens to it, so
 	// `if try` is legal only when the callee returns nothing -- "run this, branch on whether it worked".
 	// An IMPURE callee's result may be discarded explicitly, `if let _ = try f()`. A PURE one's may not:
@@ -1396,24 +1392,23 @@ export enum ErrorCode
 	// holds a table address and a slot index, and the two conformers sharing the slot disagree about what
 	// the dictionary would even say. The adapter that adjusts the impl's arity for the slot
 	// (`LowerMaxonToStd.appendWitnessAdapterDictionary`) therefore passes a NULL dictionary, and this check
-	// is what makes that sound instead of a wild jump through a null table.
-	// Before the adapter existed the same parameters read whatever the ABI registers happened to hold --
-	// the identical unsoundness with no check, silent on x64 and a `wasm trap: indirect call type mismatch`
-	// on wasm.
-	// THE CURE IS A PER-INSTANCE WITNESS TABLE, AND THE COMPILER EMITS ONE (G19). Where a table is minted for a
+	// is what makes that sound instead of a wild jump through a null table. Without the adapter the same
+	// parameters read whatever the ABI registers happen to hold -- the identical unsoundness with no check,
+	// silent on x64 and a `wasm trap: indirect call type mismatch` on wasm.
+	// THE CURE IS A PER-INSTANCE WITNESS TABLE, AND THE COMPILER EMITS ONE. Where a table is minted for a
 	// CONCRETE instance of a conformer whose impls carry a dictionary, it is keyed by that instance
 	// (`__witness_Box_Leaf.Sized`) and its slots point at adapters holding the instance's own descriptor,
 	// element count and constraint witnesses; a conformer whose impls need none keeps the one shared table.
-	// What this code now refuses is the residue: a table demanded where there is NO concrete instance to
+	// What this code refuses is the residue: a table demanded where there is NO concrete instance to
 	// key it by -- a conformer with no instantiation in hand at all.
-	// THE PARAMETRIC ARGUMENT NO LONGER REACHES IT (BATCH43), and it used to be the shape the corpus hit.
-	// `stdlib/Array.maxon`'s `ArrayIterator with Element`, built by `Array.withIterator()` inside a body still
-	// generic in `Element`, was sent here because `witnessTableInstanceFor` reduces a non-concrete instance to
-	// the shared table and the shared table's adapter then hands the impl a null dictionary. That is the right
-	// refusal about the TABLE asked one mechanism away from the call the author wrote: the question a witness
-	// ARGUMENT poses is whether the CALLEE reads it. `LowerMaxonToStd.materializeWitnessArg` now passes a zero
-	// for such an argument and `requireCalleeIgnoresParametricWitness` proves nothing reads it, refusing with
-	// E3132 where something does.
+	// THE PARAMETRIC ARGUMENT DOES NOT REACH IT. `stdlib/Array.maxon`'s `ArrayIterator with Element`, built
+	// by `Array.withIterator()` inside a body still generic in `Element`, would arrive here because
+	// `witnessTableInstanceFor` reduces a non-concrete instance to the shared table and the shared table's
+	// adapter then hands the impl a null dictionary -- the right refusal about the TABLE, asked one mechanism
+	// away from the call the author wrote, since the question a witness ARGUMENT poses is whether the CALLEE
+	// reads it. `LowerMaxonToStd.materializeWitnessArg` passes a zero for such an argument and
+	// `requireCalleeIgnoresParametricWitness` proves nothing reads it, refusing with E3132 where something
+	// does.
 	semanticSharedConformanceReadsDictionary = "E3128"
 
 	// A match arm's payload bindings are not a one-to-one map between names and payload slots, or an
@@ -1483,8 +1478,8 @@ export enum ErrorCode
 	// was not written at -- the silent wrong answer `specs/bytearray-element-size.md` measures at
 	// length. Converting instead would mean allocating a second buffer and copying every element through a
 	// range check, which is a real operation and not something an `as` should perform in silence.
-	// The compiler used to ACCEPT this spelling and do nothing at all: the value kept its original type and the
-	// program failed later, at whatever use site first noticed, naming neither the cast nor its target.
+	// Accepting the spelling and doing nothing would leave the value at its original type and the program
+	// failing later, at whatever use site first noticed, naming neither the cast nor its target.
 	// Build the container with the element type you need, or convert it element by element.
 	castTargetIsAContainer = "E3131"
 
@@ -1941,7 +1936,7 @@ export enum ErrorCode
 	// directory walk that folded pdqsort first, the tuple element canonicalized to the unresolved
 	// `Array.SortIndex`, the element-name join refused the separator, and the method vanished -- reported as
 	// `E2015 ... `Array` member 'partition'` at the CALL, 138 lines below a declaration that was plainly
-	// there. This code is what that program says now: the member IS declared, at the position named, and the
+	// there. This code is what such a program says: the member IS declared, at the position named, and the
 	// index lost it.
 	// It is a COMPILER BUG wherever it fires. The position is the USE, because that is where the compile
 	// stops; the declaration's own file, line and column are named in the message, because that is what has

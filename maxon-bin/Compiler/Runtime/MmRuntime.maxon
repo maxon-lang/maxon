@@ -10,42 +10,35 @@
 // (`BackendDispatch.prependEntryStub`) already proves the builder path end-to-end at the Target
 // tier; this is the same idea one tier up.
 //
-// ⭐⭐ **WHAT IS NOT HERE ANY MORE: THE ALLOCATOR.** This file used to BE `__slab_alloc` — a bump
-// cursor over one 64 KiB arena, with no size classes, no spans and no free list, which is what a
-// program allocating one `Point` needs. S2 replaced it with the real thing in `SlabRuntime.maxon`
-// (Go's 68-class ladder, spans with a hybrid free list and virgin bump region, an mcache at full
-// shard width, an OS-direct tier) over `SlabArena.maxon`'s chunk arena. What remains here is the BOX
-// layer: the header, the refcount, the destructor cascade and the leak gate.
+// ⭐⭐ **THE ALLOCATOR IS NOT HERE.** It is `SlabRuntime.maxon` (Go's 68-class ladder, spans with a
+// hybrid free list and virgin bump region, an mcache at full shard width, an OS-direct tier) over
+// `SlabArena.maxon`'s chunk arena. What lives here is the BOX layer: the header, the refcount, the
+// destructor cascade and the leak gate.
 //
-// ⭐⭐ **AND SINCE S4 THERE IS EXACTLY ONE ALLOCATOR IN THE EMITTED RUNTIME.** Between S2 and S4 this
-// file carried a SECOND one — 16-byte-granular size-classed free lists in a 128 KB `.data`-rooted
-// table (`__mm_free_lists`), which served a repeat box out of its own buckets and asked `__slab_alloc`
-// only on a miss. It was a stopgap with a stated end: it existed because the allocator beneath it
-// reclaimed nothing, and the moment that stopped being true it was two size-class ladders, two reuse
-// policies and two places a box could be live. `__mm_alloc` now asks `__slab_alloc` for the WHOLE box
-// (header + payload) and `__mm_free` hands that same pointer to `__slab_free`; the span the slot came
-// from knows its class, so the box layer no longer computes one.
+// ⭐⭐ **AND THERE IS EXACTLY ONE ALLOCATOR IN THE EMITTED RUNTIME.** A second one in this file —
+// size-classed free lists in a `.data`-rooted table serving a repeat box out of their own buckets and
+// asking `__slab_alloc` only on a miss — would be two size-class ladders, two reuse policies and two
+// places a box can be live. `__mm_alloc` asks `__slab_alloc` for the WHOLE box (header + payload) and
+// `__mm_free` hands that same pointer to `__slab_free`; the span the slot came from knows its class, so
+// the box layer computes none.
 //
-// ⚠ **THE RECYCLING RANGE MOVED, AND THE MOVE IS GO'S BOUNDARY RATHER THAN A REGRESSION.** The buckets
-// recycled up to a 256 KB payload and dropped everything above it on the floor; the slab recycles up to
+// ⚠ **THE WHOLE SIZE DOMAIN IS RECLAIMED, WHICH IS GO'S BOUNDARY.** The slab recycles up to
 // `SlabMaxSmallSize` (32 KiB, the whole box) through spans and serves everything above it from its own
-// mapping — which `__slab_free` hands BACK to the OS, so the range that is reclaimed is now the whole
-// domain rather than a window inside it. `specs/slab-allocator.md`'s `an-os-direct-buffer-round-trips`
-// and `os-direct-mappings-coexist` are what stand behind that second half.
+// mapping — which `__slab_free` hands BACK to the OS. `specs/slab-allocator.md`'s
+// `an-os-direct-buffer-round-trips` and `os-direct-mappings-coexist` are what stand behind that second
+// half.
 //
-// ⚠ **A `--debugstream` BUILD RECYCLES TOO, AND ITS TRACE STAYS UNAMBIGUOUS.** The fork that kept a
-// traced build on a non-recycling shape is gone with the bump allocator it was written for. It was never
-// the identity argument it looked like: the packed id is stamped PER ALLOCATION, not per address (it
-// pre-increments `__ds_alloc_id`), and `__mm_free` emits its event BEFORE the reclaim — so a reused
-// address reads `free(id=7)` … `alloc(id=9)` in that order and no two live boxes ever share an id.
-// MEASURED at S4 on `multicore-stress/alloc-torture.maxon --small` under `MAXON_MAX_PROCS=1`: 840 allocations with
-// 840 DISTINCT ids, 840 frees naming exactly those ids, 0 events dropped — before the cutover and after.
+// ⚠ **A `--debugstream` BUILD RECYCLES TOO, AND ITS TRACE STAYS UNAMBIGUOUS**, so it needs no
+// non-recycling fork: the packed id is stamped PER ALLOCATION, not per address (it pre-increments
+// `__ds_alloc_id`), and `__mm_free` emits its event BEFORE the reclaim — so a reused address reads
+// `free(id=7)` … `alloc(id=9)` in that order and no two live boxes ever share an id. MEASURED on
+// `multicore-stress/alloc-torture.maxon --small` under `MAXON_MAX_PROCS=1`: 840 allocations with 840
+// DISTINCT ids, 840 frees naming exactly those ids, 0 events dropped.
 //
 // ⭐ **AND THE FILE OWNS BOTH HALVES OF A MANAGED VALUE'S LIFECYCLE: the per-type DESTRUCTOR cascade
-// (`__destruct_<T>`) and, since ARR6, its DEEP-CLONE dual (`__clone_<T>`).** The two walk the same field
-// graph in opposite directions, close over the same `CascadeWorklist`, and `noteRelocatedFunctionUsage`
-// re-enters both — so a change to what "a managed field" means is one file, not two. The clone half lived
-// in the array runtime only because a managed-element array copy was the first thing that needed one.
+// (`__destruct_<T>`) and its DEEP-CLONE dual (`__clone_<T>`).** The two walk the same field graph in
+// opposite directions, close over the same `CascadeWorklist`, and `noteRelocatedFunctionUsage` re-enters
+// both — so a change to what "a managed field" means is one file, not two.
 
 // The header sits IMMEDIATELY BEFORE the user pointer, so a managed pointer is usable as a plain
 // pointer: `p.x` is `[p+0]`, and nothing downstream needs to know a header exists. The layout is
@@ -839,11 +832,10 @@ export function installMmRuntime(module StdModule, usage RuntimeUsage)
 	// rather than by the managed-memory runtime: installing it twice would emit two copies of one function, and the
 	// home is what makes a SECOND caller one `or` rather than a second installation.
 	//
-	// ⚠ **IT WAS `usesManagedMemory or usesStrAppend` UNTIL W49 WAVE 8, AND THE TERM WENT ONLY BECAUSE THE PRODUCER
-	// DID.** `__str_append` retired whole with `String.append`; the corpus reaches this detach through
-	// `__managed_append` -> `__managed_reserve` -> `__managed_grow`, which is under `usesManagedMemory` already. Shedding a term
-	// whose producer still existed would leave a call unresolved in exactly the program that uses only that
-	// side, which is the failure this `or` was built to prevent.
+	// ⚠ **A TERM MAY LEAVE THIS CONDITION ONLY WHEN ITS PRODUCER GOES WITH IT.** The corpus reaches this
+	// detach through `__managed_append` -> `__managed_reserve` -> `__managed_grow`, which is under
+	// `usesManagedMemory` already. Shedding a term whose producer still exists leaves a call unresolved in
+	// exactly the program that uses only that side, which is the failure this condition prevents.
 	if usage.usesManagedMemory 'cowDetach'
 		buildMmCowDetach(module)
 	end 'cowDetach'
@@ -931,8 +923,8 @@ export function sixI64Params() returns StdTypeArray
 end 'sixI64Params'
 
 // ⭐ **FOURTEEN i64 PARAMETERS — `__gt_subp_attached_spawn`'s, and the contract's own arity.** It joins the
-// ladder rather than reviving the derived `i64Params(count)` the note below retired, because fourteen is a
-// SOURCE FACT here in exactly the sense that note requires: `stdlib/Subprocess.maxon`'s spawn call passes
+// ladder rather than a derived `i64Params(count)` — the shape the note below rejects — because fourteen is
+// a SOURCE FACT here in exactly the sense that note requires: `stdlib/Subprocess.maxon`'s spawn call passes
 // fourteen arguments because the contract has fourteen slots. The count and the list are one statement,
 // made once.
 export function fourteenI64Params() returns StdTypeArray
@@ -1009,10 +1001,9 @@ end 'emitStoreField'
 // spell those two ops out by hand (this file's refcount word, `SchedRuntime`'s P fields, `GtRuntime`'s
 // releaser slot), which is the same arithmetic written three times over three different structs.
 //
-// ⚠ **THE REFCOUNT WORD IS NO LONGER ONE OF THEM (EC10).** `emitAdjustRefcount` is a plain load/add/store
-// now, and `loadIndirect`/`storeIndirect` displace from the header base themselves — so it needs no address
-// and the helper that computed one for it is gone. What is left are words genuinely SHARED between OS
-// threads, which is the population this function was always for.
+// ⚠ **THE REFCOUNT WORD IS NOT ONE OF THEM.** `emitAdjustRefcount` is a plain load/add/store, and
+// `loadIndirect`/`storeIndirect` displace from the header base themselves, so it needs no address at all.
+// What this serves are words genuinely SHARED between OS threads.
 export function emitFieldAddr(module StdModule, block IrBlock, record ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
 	let displacement = emitConst(module, block: block, value: offset as ParsedInt, ids: ids)
 	return emitBin(module, block: block, a: record, b: displacement, opcode: StdBinOpcode.add, ids: ids)
@@ -1093,11 +1084,11 @@ end 'emitWordSlotStore'
 //
 // ⛔⛔ **THE GUARD IS THE WHOLE POINT, AND WITHOUT IT THIS IS A WILD WRITE INTO READ-ONLY MEMORY.** The
 // array's decref walk drops slots only when the record carries a per-element destructor
-// (`element_destroy@40 != 0`), so for a TRIVIAL element the null does no work — both call sites already
-// said so in a comment (*"a trivial int element is unaffected by the null"*) and stored anyway. That was
-// harmless only while every array reaching them was heap-allocated. It no longer is: an all-constant array
-// literal is now an owned record over an IMMORTAL `.rdata` blob (`LowerMaxonToStd.lowerConstArrayLiteral`),
-// and `Set from [1, 2, 3]` drained one straight into `.rdata` — **exit 0xC0000005, 13 cases**.
+// (`element_destroy@40 != 0`), so for a TRIVIAL element the null does no work — which makes storing it
+// unconditionally look harmless. It is harmless only while every array reaching the call sites is
+// heap-allocated, and an all-constant array literal is an owned record over an IMMORTAL `.rdata` blob
+// (`LowerMaxonToStd.lowerConstArrayLiteral`): `Set from [1, 2, 3]` drains one straight into `.rdata` —
+// **exit 0xC0000005, 13 cases**.
 //
 // ⭐ **AND THE TWO CONDITIONS COINCIDE EXACTLY, WHICH IS WHY THIS GUARD IS A CURE AND NOT A PATCH.** A
 // record may have an immortal buffer only if its element stores its own bytes
@@ -1153,8 +1144,8 @@ end 'emitUnary'
 //
 // ⭐⭐ **IT IS AN ATOMIC READ-MODIFY-WRITE WHEREVER A SECOND M CAN EXIST (G2, NARROWED BY EC8), AND THAT IS
 // WHAT MAKES A COUNTER A COUNTER ONCE MORE THAN ONE M RUNS.** A `.data` word is reachable from every OS
-// thread the process has, so the plain load/add/store this used to emit — the arm EC8 brought back for the
-// programs that have exactly one — loses an update the moment two Ms credit the same column, and these
+// thread the process has, so a plain load/add/store — the arm below for the programs that have exactly
+// one M — loses an update the moment two Ms credit the same column, and these
 // columns are not decoration: `__mm_alloc_count` is what the LEAK GATE reads (exit 101) and
 // `__gt_live_count` is what the green-thread gate reads (exit 75), so a lost update is a leak reported that
 // did not happen, or one hidden that did. `MAXON_MAX_PROCS>1` gives a program two Ms today.
@@ -1383,28 +1374,23 @@ end 'emitVoidOkReturn'
 // Terminate `block` with `ret <constant>` — the shape EVERY runtime PREDICATE ends in, because there is no
 // `setcc` at this tier: a verdict is a constant-returning block off a fused compare, one block per answer.
 // A predicate therefore returns a CONSTANT from its own block rather than the compare's flag value directly
-// — the shape the deleted `HashTableRuntime.buildHtContains` had, and the one the backend has always been exercised on. (It
-// named `ManagedMemoryRuntime.buildManagedIsEmpty` until ARR4 retired `isEmpty` from the `Array` surface and
-// deleted that function with it; the shape is the tier's, not that one predicate's.)
+// — the shape the backend is exercised on, and the tier's shape rather than any one predicate's.
 //
-// ⚠ It was the deleted `HashTableRuntime`'s `emitHtReturnConst` while a hash table was its only caller; the `Array`
-// surface's `contains` is the second family to answer a bool this way, and a helper about the STD TIER's
-// lack of a `setcc` is not a hash table's property. It joins the single-op emit helpers here for
-// `emitErrorReturn`'s stated reason. `StringRuntime.emitPredicateReturn` was a byte-identical THIRD copy and
-// `CharacterSetRuntime` (retired) and `BuiltinConformanceRuntime` spelled the two statements out longhand — all folded here.
+// ⚠ It lives with the single-op emit helpers, for `emitErrorReturn`'s stated reason: a helper about the STD
+// TIER's lack of a `setcc` is the property of no one predicate family, and every family that answers a bool
+// this way reaches it here rather than spelling the two statements out.
 export function emitConstReturn(module StdModule, block IrBlock, value ParsedInt, ids ValueMinter)
 	let result = emitConst(module, block: block, value: value, ids: ids)
 	module.setTerminator(block, op: StdOp.ret(result))
 end 'emitConstReturn'
 
-// ⚠ **THE TWO BYTE LOADS AND `__str_copy` MOVED HERE FROM `StringRuntime` (W49 wave 9).** They joined the
-// single-op emit helpers above for `emitConstReturn`'s stated reason, one family further out: a `u8` LOAD
-// and a byte BLIT are properties of the Std tier, not of a String. Both emitters were already `export`ed
-// for `GraphemeRuntime`'s decoders and segmenter — which is the shape the header below said it existed to
-// prevent, TWO files each owning "the ONE spelling" — and `__str_copy`'s consumers had already outgrown
-// their name: `Parser`'s interpolation, `GtRuntime`'s subprocess buffers, `__mm_to_cstring`'s copy path
-// and every `emitBuildOwnedInlineString` blit. The callee KEEPS its `__str_copy` spelling, because a
-// runtime symbol's name is baked into goldens and into `RuntimeUsage`'s bit; only the source moved.
+// ⚠ **THE TWO BYTE LOADS AND `__str_copy` LIVE HERE, NOT IN `StringRuntime`.** They join the single-op
+// emit helpers above for `emitConstReturn`'s stated reason, one family further out: a `u8` LOAD and a byte
+// BLIT are properties of the Std tier, not of a String. `GraphemeRuntime`'s decoders and segmenter want
+// them, and so do `Parser`'s interpolation, `GtRuntime`'s subprocess buffers, `__mm_to_cstring`'s copy path
+// and every `emitBuildOwnedInlineString` blit — TWO files each owning "the ONE spelling" is what the header
+// below exists to prevent. The callee KEEPS its `__str_copy` spelling: a runtime symbol's name is baked
+// into goldens and into `RuntimeUsage`'s bit.
 
 // The blit's callee name. `__`-prefixed compiler-internal (no E3004, no signature slotting) and NOT
 // `__mm_`-prefixed, so `isRuntimeCallee` leaves it out of the heap decision — it allocates nothing, and a
@@ -1434,10 +1420,10 @@ end 'emitLoadByteIndexed'
 // `rep movsb`/memcpy op because there is no memory-move op in the Std tier (`system` holds only
 // `osAllocPages`/`osWriteStdout`), and a loop needs nothing the tier lacks.
 //
-// ⭐⭐ **ITS BODY IS `emitForwardCopy`, WHICH IS THE WHOLE FUNCTION** (EC3). It used to hand-build the same
-// header-guarded byte loop the two copy helpers in `ManagedMemoryRuntime` build — one shape written down
-// three times, in the three places a wider store would have to land at once. It is now the LOW-ADDRESS-FIRST
-// copy those helpers already are: a machine word per trip and a byte tail. MEASURED on this tree's own
+// ⭐⭐ **ITS BODY IS `emitForwardCopy`, WHICH IS THE WHOLE FUNCTION.** Hand-building the header-guarded
+// byte loop the two copy helpers in `ManagedMemoryRuntime` build would be one shape written down three
+// times, in the three places a wider store would have to land at once. It is the LOW-ADDRESS-FIRST copy
+// those helpers are: a machine word per trip and a byte tail. MEASURED on this tree's own
 // self-compile (`--emit-ir`, `callDirect __str_copy`): 23,745 call sites — every String interpolation part
 // and every String clone in the compiler — which makes it the most-called loop the language emits.
 //
@@ -1724,12 +1710,12 @@ end 'emitThreadAllocCredit'
 // ⭐⭐ **THE WHOLE BOX IS ONE SLAB REQUEST, AND THE BOX LAYER COMPUTES NO SIZE CLASS OF ITS OWN (S4).**
 // `header + payload` goes to `__slab_alloc`, which picks the class, hands back a slot of at least that many
 // bytes and REMEMBERS which span it came from; `__mm_free` gives that same pointer back and the span
-// answers the question the free lists used to answer by shifting a rounded size out of the header. So the
+// answers which class the slot belongs to, so nothing shifts a rounded size out of the header. The
 // header records what the CALLER asked for (see `HeaderSizeOffset`) and the slack between it and the end of
-// the slot is the allocator's business, exactly as the slack inside a size class always was.
+// the slot is the allocator's business, exactly as the slack inside a size class is.
 //
-// ⚠ **THERE IS NO `--debugstream` FORK HERE ANY MORE.** A traced build used to keep a separate
-// non-recycling shape; the file header carries the measurement that retired it.
+// ⚠ **THERE IS NO `--debugstream` FORK HERE**: a traced build recycles like any other, and the file header
+// carries the measurement that says its trace stays unambiguous.
 function buildMmAlloc(module StdModule, usage RuntimeUsage)
 	// ⚠ **THE ARITY IS THE FLAG'S, AND THAT IS WHY EVERY CALL SITE GOES THROUGH `emitMmAllocCall`.** A
 	// `--debugstream` build takes a THIRD argument — the allocation's tag index — because a tag cannot be
@@ -2248,10 +2234,9 @@ end 'emitLoadRefcount'
 // ⚠ **THE PRIOR VALUE IS STILL THE ANSWER, AND NOW IT IS THE ONLY WAY TO GET IT** — see
 // `emitRefcountCheckToLastOwner`, where "was I the last owner?" can only be decided from the value the
 // decrement displaced. Under the atomic that was one op's contract; here the STORE has already overwritten
-// the word, so a re-read would answer the new count. ⚠ The old note argued that DISCARDING it bought the
-// increfs a cheaper instruction (`lock add` rather than `lock xadd`; `lowerAtomicRmw` states that saving).
-// That trade is simply gone: the load's result feeds the add whether or not the caller wants it, so the two
-// increfs pay nothing for answering it on an untraced build.
+// the word, so a re-read would answer the new count. ⚠ DISCARDING it buys nothing: the load's result feeds
+// the add whether or not the caller wants it, so the two increfs pay nothing for answering it on an
+// untraced build.
 // ⛔ **THE CALLER MUST HAVE CLEARED `emitBoxIsImmortal` FIRST.** The store below is what makes an image
 // record's header fatal: it lives in `.rdata`, so this is a write into a read-only page — a fault on x64
 // and a SILENT corruption on wasm, which has no read-only section. Every one of this function's callers
@@ -2343,12 +2328,12 @@ end 'sharedAllocationGuardBox'
 // which the exit check reads as nonzero.
 //
 // ⭐⭐⭐ **IT DECREMENTS FIRST AND DECIDES FROM WHAT THE DECREMENT DISPLACED (G2), AND THAT ORDER OUTLIVED
-// THE `LOCK` PREFIX THAT ARRIVED WITH IT.** This used to READ the count, branch on it, and only then lower
-// it, which is a check-then-act: two Ms each holding one of a box's two references both observe `rc == 1`,
-// both conclude *"somebody else still holds it"*, both decrement, and the box is never freed. G2's note
-// said the order and not the prefix was what fixed that, and EC10 is the experiment: the prefix is gone
-// (`emitAdjustRefcount` — an `async` frame is a coroutine of its owning green thread, so a refcount has no
-// second party) and **the order stays, now for a nearer reason.** The step below STORES the new count, so
+// THE `LOCK` PREFIX.** READING the count, branching on it and only then lowering it is a check-then-act:
+// two Ms each holding one of a box's two references both observe `rc == 1`, both conclude *"somebody else
+// still holds it"*, both decrement, and the box is never freed. The ORDER and not the prefix is what
+// prevents that: no prefix is emitted (`emitAdjustRefcount` — an `async` frame is a coroutine of its
+// owning green thread, so a refcount has no second party) and **the order stays, for a nearer reason.**
+// The step below STORES the new count, so
 // after it the word no longer holds what this caller displaced; reading the word to pick the arm would ask
 // the question of the wrong number even on one thread. The arm is chosen from the value the decrement
 // replaced: a prior of 0 means this caller was the last owner. (`__mm_incref` above is the mirror half.)
@@ -2360,7 +2345,6 @@ end 'sharedAllocationGuardBox'
 // ⚠ **THE LAST OWNER LEAVES `-1` IN THE WORD, AND THAT IS SOUND BECAUSE NOTHING READS IT AGAIN.** The box is
 // dead the instant that arm is taken: `__mm_free` reads the destructor and the SIZE out of the header, never
 // the count, and the slot is poisoned and handed back to the slab before any other party can address it.
-// Under the old order the word was left at 0 instead; neither number is ever observed.
 // ⚠ **THE `mm_decref` EVENT IS EMITTED HERE, IN `entry`, BEFORE THE BRANCH — ONCE, NOT ONCE PER ARM.**
 // See `emitMmDecrefEvent` for the identity that makes one emission correct for both paths. Emitting it
 // before the branch also means the caller's `lastOwner` block is untouched by this function, which every
@@ -2812,12 +2796,11 @@ end 'installUnionDestructors'
 // a program that allocates nothing — the five `static-variables/data-section-*` pins, reading their `var` 24
 // bytes past its true offset.
 //
-// ⭐ **THE MEASURED SET REPLACES THE PREDICTED ONE, AND IT ALREADY EXISTED**: `noteRelocatedFunctionUsage`
-// roots every `.rdata` slot's callee off `pendingRdataRelocs` AFTER lowering — *"the rooted set is the
-// RELOCATED set, literally"* — and `ensureLayoutDescriptor`'s `destroyFunc@40` stamp is one of those slots
-// (`LowerMaxonToStd:1650`, the very `managedOpaqueArrayElementDropCallee` the prediction named). So the two
-// were one fact derived twice, one of them by guessing; the guess is what is deleted. Its clone twin
-// (`ManagedMemoryRuntime.rootManagedOpaqueArrayElementClones`) went with it for the identical reason.
+// ⭐ **THE ROOTED SET IS THE MEASURED ONE AND NOTHING PREDICTS IT**: `noteRelocatedFunctionUsage` roots
+// every `.rdata` slot's callee off `pendingRdataRelocs` AFTER lowering — *"the rooted set is the RELOCATED
+// set, literally"* — and `ensureLayoutDescriptor`'s `destroyFunc@40` stamp is one of those slots
+// (`LowerMaxonToStd:1650`). Naming the same callee by prediction as well is one fact derived twice, one of
+// them by guessing — and that holds for the clone side exactly as for the drop side.
 export function noteDestructorUsage(usage RuntimeUsage, project Project, signatures ProgramSignatures)
 	closeDestructorNeeds(usage, project: project, signatures: signatures)
 	declareDestructorCascadeNeeds(usage, project: project, signatures: signatures)
@@ -2886,8 +2869,8 @@ function declareDestructorCascadeNeeds(usage RuntimeUsage, project Project, sign
 	// a DIRECT substituted field is accounted for here.
 	// ⚠ The walk below must be safe to ask of ANY instance, builtin included — see
 	// `declareInstanceFieldDropNeeds`, which carries the no-layout guard. `neededDestructors` is keyed by
-	// SYMBOL NAME, and a declared `type Array_Foo` used to claim the very name `Array with Foo` mangles to;
-	// P1.7 mints that instance as `__Array_Foo` instead (`reservedIfDeclared`), so the two can no longer
+	// SYMBOL NAME, and a declared `type Array_Foo` would otherwise claim the very name `Array with Foo`
+	// mangles to; that instance is minted as `__Array_Foo` instead (`reservedIfDeclared`), so the two cannot
 	// meet. The guard is the walk's structural precondition regardless of which route reaches it.
 	for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
 		let mangled = signatures.mangleGenericInstance(id)
@@ -2969,11 +2952,10 @@ function declareInstanceFieldDropNeeds(usage RuntimeUsage, id GenericInstanceId,
 		return
 	end 'noSynthesizedCascade'
 
-	// ⭐ **IT READS `instanceFieldDropKind` RATHER THAN RESTATING IT (BATCH41 review).** This walk used to ask
-	// the classifier's three questions again in its own `if` chain — is the field managed, is it existential,
-	// what is its callee — which is the CONCRETE family doing what the DICTIONARY family beside it was
-	// deliberately built not to do: one field classified in two places, agreeing today, with nothing making
-	// them agree tomorrow. A field is now accounted for under exactly the callee the cascade drops it through.
+	// ⭐ **IT READS `instanceFieldDropKind` RATHER THAN RESTATING IT.** Asking the classifier's three
+	// questions again in an `if` chain here — is the field managed, is it existential, what is its callee —
+	// is one field classified in two places, agreeing today with nothing making them agree tomorrow. A field
+	// is accounted for under exactly the callee the cascade drops it through.
 	for i in 0 upto signatures.genericInstanceFieldCount(id) 'eachField'
 		if not signatures.genericInstanceFieldIsManaged(id, index: i) 'scalar'
 			continue
@@ -3037,18 +3019,18 @@ end 'declareDropKindNeeds'
 // separately — and costs one prefix test.
 //
 // ⭐⭐ **THE CLOSURE IS RE-ENTERED ONLY IF THIS WALK ACTUALLY PUT A NEW DESTRUCTOR SYMBOL IN THE SET, AND
-// UNGATED IT WAS THIS RUNG'S WHOLE SUPERLINEAR COST.** `noteDestructorUsage` has already run
+// UNGATED IT IS A SUPERLINEAR COST FOR NOTHING.** `noteDestructorUsage` has already run
 // `closeDestructorNeeds` to a FIXPOINT, and that closure derives from exactly one input: the seed set. So a
 // second run over an unchanged seed set re-expands the identical nodes, re-derives the identical symbols and
 // re-sets bits that are already set — the definition of a no-op, at the price of the whole closure.
 //
-// ⚠ **THE PRICE IS NOT LINEAR, WHICH IS WHY A REDUNDANT RUN MATTERED.** One expansion of the drain costs
+// ⚠ **THE PRICE IS NOT LINEAR, WHICH IS WHY A REDUNDANT RUN MATTERS.** One expansion of the drain costs
 // `genericInstanceCount()` allocations (MEASURED on the scale ladder, exactly: 23 / 59 / 203 / 395 per
 // expanded node at rungs 0 / 2 / 4 / 5, against instance registries of 23 / 59 / 203 / 395), so the closure
-// as a whole is O(referenced cascades x instances) — QUADRATIC in program size. Ungated, this line cost
-// +1,458 / +5,406 / +47,084 / +167,161 allocations at those rungs, which was 98% of everything the rung
-// added. The quadratic itself is OLDER than this call site and is reported as measured debt; what belongs
-// here is not paying it twice for nothing.
+// as a whole is O(referenced cascades x instances) — QUADRATIC in program size. Ungated, this line costs
+// +1,458 / +5,406 / +47,084 / +167,161 allocations at those rungs. The quadratic belongs to the closure
+// rather than to this call site and is reported as measured debt; what belongs here is not paying it twice
+// for nothing.
 //
 // The COUNT is the whole test because `neededDestructors` is insert-only: unchanged count ⟺ unchanged set.
 // A reloc that names a `__destruct_<T>` — the case this function exists for, a witness table's
@@ -3063,8 +3045,8 @@ export function noteRelocatedFunctionUsage(usage RuntimeUsage, project Project, 
 		recordCallUsage(reloc.funcName, usage: usage)
 	end 'eachRdataSlot'
 
-	// ⭐⭐ **BOTH CASCADES ARE RE-CLOSED, NOT JUST THE DROP ONE, AND THAT IS WHAT LETS THE TWO PRE-PIPELINE
-	// PREDICTIONS BE DELETED (W17-c).** A layout descriptor stamps `destroyFunc@40` AND `copyFunc@32`
+	// ⭐⭐ **BOTH CASCADES ARE RE-CLOSED, NOT JUST THE DROP ONE, AND THAT IS WHY NOTHING BEFORE THE PIPELINE
+	// HAS TO PREDICT EITHER.** A layout descriptor stamps `destroyFunc@40` AND `copyFunc@32`
 	// (`LowerMaxonToStd:1650`/`:1664`), so a reloc can be the FIRST mention of either a `__destruct_<T>` or a
 	// `__clone_<T>` — and a cascade left unclosed is an inner destructor/cloner nothing synthesizes, plus a
 	// `usesStrDecref`/`usesStrClone` nothing declares. Both closures are gated on their OWN set having grown,
@@ -3102,9 +3084,9 @@ end 'noteRelocatedFunctionUsage'
 //
 // ⭐ Driven by the SHARED `CascadeWorklist` (`CascadeNeeds.maxon`) — the same engine that closes the two
 // non-drop cascades (`noteCascadeUsage`, in this file). A closure per action is a `while changed` RE-SCAN of every declared type,
-// which is one quadratic written down twice: a cascade chain of depth D cost D passes over all T types and
-// re-minted every type's `__destruct_` symbol on each. Registration walks the node space ONCE, the drain
-// expands each referenced node exactly once, and the loop no longer needs a growth flag at all — the queue
+// which is one quadratic written down twice: a cascade chain of depth D costs D passes over all T types and
+// re-mints every type's `__destruct_` symbol on each. Registration walks the node space ONCE, the drain
+// expands each referenced node exactly once, and the loop needs no growth flag at all — the queue
 // IS the growth signal. See that file for why the graph is demand-driven rather than built up front.
 function closeDestructorNeeds(usage RuntimeUsage, project Project, signatures ProgramSignatures)
 	// A program that drops no managed type has an EMPTY needed set, and a monotone closure over an empty
@@ -3133,10 +3115,10 @@ function closeDestructorNeeds(usage RuntimeUsage, project Project, signatures Pr
 	end 'eachUnion'
 
 	// ⚠ A node is keyed by its SYMBOL, and whatever wins a key must be safe to EXPAND — see
-	// `addNestedInstanceDestructors`. A declared `type Array_Foo` used to register under the very name an
-	// `Array with Foo` instance mangles to, so the two competed for one key; P1.7's reserved-space
-	// disjointness (`reservedIfDeclared`) means a declaration and an instance can no longer produce one
-	// symbol, and only two INSTANCES can — which is E3006 and fails the build before this runs.
+	// `addNestedInstanceDestructors`. A declared `type Array_Foo` would otherwise register under the very
+	// name an `Array with Foo` instance mangles to and the two would compete for one key; the reserved-space
+	// disjointness (`reservedIfDeclared`) means a declaration and an instance cannot produce one symbol, and
+	// only two INSTANCES can — which is E3006 and fails the build before this runs.
 	for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
 		let mangled = signatures.mangleGenericInstance(id)
 		work.register(destructorSymbol(mangled), node: CascadeNode.genericInstance(id))
@@ -3895,8 +3877,8 @@ end 'emitManagedFieldDrops'
 //
 // ⭐ **`box` IS ANY BASE ADDRESS, NOT ONLY A MANAGED BOX**, which is why `Runtime/AsyncReleaser.maxon`'s
 // per-callee releaser emits its argument / result / error drops through here over a GT STRUCT: the shape it
-// needs — load at `base + offset`, drop it if non-null, continue — is this one exactly, and the second
-// emitter it used to keep was a copy nothing forced to agree with this one (a wild free or a leak, and a
+// needs — load at `base + offset`, drop it if non-null, continue — is this one exactly, and a second
+// emitter there would be a copy nothing forces to agree with this one (a wild free or a leak, and a
 // compile error at neither site).
 export function emitNullGuardedDrop(module StdModule, cur IrBlock, box ValueId, offset ByteOffset, kind FieldDropKind, ids ValueMinter, func IrFunction) returns IrBlock
 	let ptr = ids.mint()

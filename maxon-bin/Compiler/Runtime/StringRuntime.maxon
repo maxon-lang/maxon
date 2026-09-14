@@ -60,19 +60,18 @@ export let StringLengthOffset = ManagedRecordLengthOffset
 export let StringCapacityOffset = ManagedRecordCapacityOffset
 export let StringElementSizeOffset = ManagedRecordElementSizeOffset
 
-// ⭐⭐ **SLOT@48 IS `singleByteGraphemes` — *EVERY GRAPHEME IN THIS STRING IS EXACTLY ONE BYTE* — AND IT
-// USED TO BE THE STRICTLY WEAKER `isAscii`.** The corpus field this record IS
-// (`stdlib/String.maxon:86`'s `singleByteGraphemesFlag`) has always carried the stronger fact, and its own
-// declaration records the cost of the confusion: *"this field used to say only 'is ASCII', and ten methods
-// read THAT as 'one byte per character' … all ten split the cluster"*. **CR+LF is a SINGLE cluster under
-// UAX #29 GB3**, so an all-ASCII string is not necessarily one byte per grapheme.
+// ⭐⭐ **SLOT@48 IS `singleByteGraphemes` — *EVERY GRAPHEME IN THIS STRING IS EXACTLY ONE BYTE* — AND NOT
+// THE STRICTLY WEAKER `isAscii`.** The corpus field this record IS
+// (`stdlib/String.maxon`'s `singleByteGraphemesFlag`) carries the stronger fact, and a reader taking "is
+// ASCII" for "one byte per character" splits a cluster: **CR+LF is a SINGLE cluster under UAX #29 GB3**, so
+// an all-ASCII string is not necessarily one byte per grapheme.
 //
-// ⚠ **WHILE THE TWO MEANINGS DISAGREED, `String.hasSingleByteGraphemes()` HAD TO ANSWER A CONSERVATIVE
-// `false` OUTRIGHT** — serving `isAscii` there would have made the corpus's `countGraphemes` take the
-// shortcut and return the BYTE length, 2, for a CR+LF string where every other path says 1. That refusal cost SPEED on long ASCII strings (measured by the corpus at ×2.4 rising to ×6.5 on
-// `findFirst`/`findLast`/`slice-by-length`), and `Parser.dispatchStringMethod` named the cure exactly:
-// *"strengthening the record's flag to the corpus's meaning at its literal scan and at all nine of its
-// propagation sites"*. That is what this is.
+// ⚠ **THE TWO MEANINGS MAY NOT DIVERGE.** Serving `isAscii` from `String.hasSingleByteGraphemes()` makes
+// the corpus's `countGraphemes` take the shortcut and answer the BYTE length, 2, for a CR+LF string where
+// every other path says 1 — and a conservative `false` in its place costs SPEED on long ASCII strings
+// (measured by the corpus at ×2.4 rising to ×6.5 on `findFirst`/`findLast`/`slice-by-length`). So the
+// record's flag carries the corpus's meaning at its literal scan and at all nine of its propagation sites
+// (`Parser.dispatchStringMethod`).
 //
 // ⭐ **CR-FREE RATHER THAN CRLF-FREE, AND THAT IS WHAT MAKES IT COMPOSABLE** — *"no CR"* is a property of
 // each byte ON ITS OWN, so it survives both slicing and concatenation and a concatenation may simply AND the
@@ -82,19 +81,16 @@ export let StringElementSizeOffset = ManagedRecordElementSizeOffset
 // where a `__ManagedMemory` ENDS. Widen the buffer record and this follows; write `48` and it does not.
 export let StringSingleByteGraphemesOffset = ManagedRecordBytes as ByteOffset
 
-// A String record is a whole buffer record plus this one slot. ⚠ **IT ALIASED `ManagedRecordBytes`
-// OUTRIGHT UNTIL W157**, when the two records were the same six slots disagreeing about what `@40` held;
-// the alias is now an ADDITION, and that difference is the rung. It is still DERIVED rather than written
-// `56`, for the same reason: the number is "a buffer record, plus a flag".
+// A String record is a whole buffer record plus this one slot — an ADDITION to `ManagedRecordBytes`, not
+// an alias of it. DERIVED rather than written `56`, because the number is "a buffer record, plus a flag".
 export let StringRecordBytes = ManagedRecordBytes + ManagedRecordSlotBytes
 
-// ⚠ **`StringElementSize = 1` STOOD HERE AND IS GONE (W49 wave 9).** It said *"a String's elements are
-// bytes"*, which since the envelope collapse is `ManagedMemoryRuntime.ByteStringElementSize` in other words — a
-// String IS its `__ManagedMemory with Byte`, so the stride its four producers stamp at `element_size@24`
-// IS an `Array with Byte`'s. Two constants held one number and only the survivor carried a derivation:
+// ⚠ **A String's ELEMENT STRIDE IS `ManagedMemoryRuntime.ByteStringElementSize`, AND THIS FILE DECLARES NO
+// SECOND CONSTANT FOR IT.** A String IS its `__ManagedMemory with Byte`, so the stride its four producers
+// stamp at `element_size@24` IS an `Array with Byte`'s — and only the shared constant carries a derivation:
 // `ByteStringElementSize` is CHECKED against `ProgramSignatures.arrayElementSize`'s answer for that
-// instance, and is the number `byteStringBlobStrideMessage`'s gate compares against. This one was a bare
-// literal under a comment. The four readers moved onto the checked one.
+// instance, and is the number `byteStringBlobStrideMessage`'s gate compares against. A bare literal here
+// would be that number written twice.
 //
 // ⭐ **A LITERAL'S `capacity@16`/`parent@32` ARE THE SHARED BUFFER-OWNERSHIP ENCODING'S** (`BufferOwnership`),
 // not this file's invention and not the Array record's either: `ImmortalRecordCapacity` says the buffer is an
@@ -161,12 +157,11 @@ let SignMultiplierSpan = 2 as ParsedInt
 // "-9223372036854775808", 20 digits and a sign = 21 bytes, and no i64 is wider. `Parser.emitStringInterp`
 // allocates this, the converter fills `len ≤ 21` bytes, and the caller frees it after the copy.
 //
-// ⚠ **NOT `export`ED, AND W49 WAVE 9 IS WHY IT STOPPED BEING** — an orphan sweep found no cross-file
-// reader for either scratch budget, exactly the failure `buildStrSplit`'s grave warns about (*"an `export`
-// outlives its last cross-file caller silently — nothing in this language reports one"*). The one door is
-// `integerToStringScratchBytes(signedness)` below, and closing this one MAKES the argument in its header
-// true rather than merely urged: a second selection site can no longer name the wrong budget, because it
-// can no longer name a budget at all.
+// ⚠ **NOT `export`ED**: no other file reads either scratch budget, and an `export` outlives its last
+// cross-file caller silently — nothing in this language reports one. The one door is
+// `integerToStringScratchBytes(signedness)` below, and keeping this constant private MAKES the argument in
+// its header true rather than merely urged: a second selection site cannot name the wrong budget, because
+// it cannot name a budget at all.
 let IntToStringScratchBytes = 21 as ParsedInt
 
 // The scratch the UNSIGNED renderer reserves (X11): `u64.max` renders as "18446744073709551615", 20
@@ -174,15 +169,13 @@ let IntToStringScratchBytes = 21 as ParsedInt
 // reused, because the two are derived from two different worst cases and the byte the difference is
 // made of — the sign — is precisely the byte this renderer never writes. Pairing it with the wrong
 // name is what `integerToStringScratchBytes` exists to make impossible — see its twin above for why
-// neither is `export`ed any more.
+// neither is `export`ed.
 let UIntToStringScratchBytes = 20 as ParsedInt
 
 // `__bool_to_string` renders "true" (4) or "false" (5). The ASCII bytes of both, and the two lengths.
 //
-// ⚠ `AsciiLowerA` was `export`ed for a SECOND reader — the parser's `toLower`/`toUpper` arms, which handed
-// the gated range and the shift to `__str_map_case`. Those retired onto `stdlib/String.maxon` in W49 wave 2
-// and the five constants that served them went with them, leaving this the byte `a` of "false" and nothing
-// else. Non-exported again, so the file that owns the only reader owns the only name.
+// ⚠ None is `export`ed: `AsciiLowerA` here is the byte `a` of "false" and nothing else, and the file that
+// owns the only reader owns the only name.
 let AsciiLowerT = 116 as ParsedInt
 let AsciiLowerR = 114 as ParsedInt
 let AsciiLowerU = 117 as ParsedInt
@@ -289,56 +282,41 @@ end 'integerToStringScratchBytes'
 // growth policy would have restored the quadratic silently.
 export let StrDecrefName = b"__str_decref"
 
-// ⭐⭐ **THE P1.8 SLICE C BYTE/ASCII METHOD FAMILY IS GONE — ALL EIGHT ENTRY POINTS, ALL SEVEN MEMBERS**
-// (W49 waves 1, 2, 4 and 5). It was `__str_starts_with`/`__str_ends_with` (wave 1), `__str_map_case`,
-// `__str_replace` and `__str_replace_first` (wave 2), `__str_contains` (wave 4), and finally
-// `__str_split` — plus the two it was the last consumer of, `__str_find` and `__str_range_eq` — at wave 5.
-// Every one of the seven members is now an ordinary declared function in `stdlib/String.maxon`, reached
-// through `Parser.memberBelongsToTheCorpus`, and the corpus bodies these entry points had been transcribed
-// FROM are what serves them.
-//
-// ⚠ **`__str_find` AND `__str_range_eq` DID NOT GO HOME — THEY DIED, AND THAT IS A DIFFERENT FACT.** A
-// retired MEMBER hands its body back to the corpus; these two were never members, they were the search
-// underneath three of them. `contains` (wave 4) and `__strix_find` (wave 3) had already gone, which left
-// `__str_split` as `__str_find`'s only producer and `__str_find` as `__str_range_eq`'s only producer — so
-// with `split` retired, nothing in the compiler can emit either callee and no `RuntimeUsage` bit could ever
-// turn true. What replaces them is the corpus's own `findIn`/`bytesEqual` (`stdlib/String.maxon:994`,
-// `:976`), which these two were transcribed from in the first place. **THE ORDER MATTERS AND IS THE TRAP
-// THIS FAMILY KEEPS SETTING**: an entry point is deleted only once EVERY producer of its callee is gone,
-// never when merely its most visible one is (see `closeStringMethodNeeds`, whose clauses shed TERMS one at
-// a time for exactly this reason, and the paragraph `StdlibSource` keeps where its synthesized-runtime seed
-// stood, which states the same rule for a REACHABILITY term — that seed shed its last one at W129).
-//
-// ⚠ **THE COST MOVED WITH THE BODY, AND IT IS ACCEPTED** (user ruling, recorded at wave 2). The corpus
-// `findIn` asks `byteAt` — a THROWING, bounds-checked accessor — once per candidate position, where
-// `__str_find` walked the bytes with a raw load and a first-byte fast reject in one Std body; and the
-// corpus `sliceBytes` builds each segment through `managed.slice` + a `String{…}` literal, where
-// `__str_split` blitted it straight into a fused record. The compiler has no inliner, so both differences are real
-// calls per byte and per segment. Two candidate cures were MEASURED and both are regressions; do not
-// attempt a third here (the full argument is at `Parser.stringSurfaceMemberNames`).
-
-// ⚠ **`__str_map_case`, `__str_replace` AND `__str_replace_first` WERE HERE AND WENT WITH THEIR BUILDERS**
-// (W49 wave 2). `toLower`/`toUpper`/`replace`/`replaceFirst` are the CORPUS's now — struck from
-// `Parser.stringSurfaceMemberNames` — so nothing names any of the three and a constant for them could only
-// ever spell a callee no module emits. The corpus bodies behind them reach `byteAt`, `setByte`,
+// ⭐⭐ **THE BYTE/ASCII METHOD FAMILY HAS NO ENTRY POINT HERE.** `startsWith`, `endsWith`, `toLower`/
+// `toUpper`, `replace`, `replaceFirst`, `contains` and `split` are ordinary declared functions in
+// `stdlib/String.maxon`, reached through `Parser.memberBelongsToTheCorpus`, and so is the search underneath
+// three of them — the corpus's own `findIn`/`bytesEqual`. Their bodies reach `byteAt`, `setByte`,
 // `addressableBytes` and `__ManagedMemory.slice`, whose doors are all still the compiler's.
 //
+// **THE ORDER MATTERS AND IS THE TRAP THIS FAMILY KEEPS SETTING**: an entry point is deleted only once
+// EVERY producer of its callee is gone, never when merely its most visible one is — see
+// `closeStringMethodNeeds`, whose clauses shed TERMS one at a time for exactly this reason, and the
+// paragraph `StdlibSource` keeps where its synthesized-runtime seed stood, which states the same rule for a
+// REACHABILITY term.
+//
+// ⚠ **THE COST OF A CORPUS BODY IS ACCEPTED** (user ruling). The corpus `findIn` asks `byteAt` — a
+// THROWING, bounds-checked accessor — once per candidate position, where a Std-body search walks the bytes
+// with a raw load and a first-byte fast reject; and the corpus `sliceBytes` builds each segment through
+// `managed.slice` + a `String{…}` literal, where a fused-record blit does it in one. The compiler has no
+// inliner, so both differences are real calls per byte and per segment. Two candidate cures were MEASURED
+// and both are regressions; do not attempt a third here (the full argument is at
+// `Parser.stringSurfaceMemberNames`).
+
 // ⭐⭐ **`__str_from_bytes(arr) -> String` — `__str_of_buffer`'s TWIN, TAKEN WHEN THE FLAG MUST BE SCANNED
 // RATHER THAN SUPPLIED.** It is `__`-prefixed compiler-internal (no E3004, no signature slotting) and not
 // `__mm_`-prefixed, so it declares its own transitive floor in `closeStringMethodNeeds`.
 //
-// ⛔ **IT IS NO LONGER `String.from(bytes)`'S BODY, AND THIS HEADER SAID SO UNTIL W55 — WHICH IS EXACTLY
-// THE LIFETIME OF THE CLAIM.** W17 listed `stdlib/String.maxon`, so `from(bytes)` is the corpus's own
-// declaration and W55 retired the static roster that intercepted it. What reaches this graph now is
+// ⛔ **IT IS NOT `String.from(bytes)`'S BODY** — `from(bytes)` is the corpus's own declaration, and no
+// static roster intercepts it. What reaches this graph is
 // `Parser.emitFusedWrapperLiteral`'s no-flag arm — `Character{managed: X}`, whose declaration carries no
 // `singleByteGraphemesFlag` field for a caller to pass — so it is LIVE and load-bearing (`c.clone()` over a
 // `Character` emits `x64.callDirect __str_from_bytes`, measured), just not for the member it was built for.
 // The flag-carrying arm, which is every corpus `String{…}`, goes to `__str_of_buffer`.
 //
-// ⚠ **BOTH COPY, WHICH IS WHY RETIRING THE STATIC MOVED NO OWNERSHIP.** The ARGUMENT for copying is stated
-// once, at `StrOfBufferName` — the view is representable since the P1.7 COW slice and is declined on
-// failure-mode grounds, not on impossibility. Do not restate it here and do not restate its retracted
-// predecessor ("the compiler CANNOT share"), which is what this header used to point at.
+// ⚠ **BOTH COPY, SO NO OWNERSHIP MOVES BETWEEN THEM.** The ARGUMENT for copying is stated
+// once, at `StrOfBufferName` — the view is representable and is declined on failure-mode grounds, not on
+// impossibility. Do not restate it here, and do not revive the retracted claim that the compiler CANNOT
+// share.
 export let StrFromBytesName = b"__str_from_bytes"
 
 // ⭐⭐ **`__str_of_buffer(srcRecord, singleByteGraphemes) -> String` — THE ENVELOPE COLLAPSE'S CONSTRUCTOR:
@@ -391,13 +369,12 @@ export let StrOfBufferName = b"__str_of_buffer"
 // terminated in place. The record keeps it, the record frees it, and the caller's whole obligation is to
 // keep the receiver ALIVE and UNMUTATED for as long as it holds the pointer.
 //
-// ⛔⛔ **IT USED TO COPY INTO A FRESH `__mm_alloc` BLOCK ON THE SECOND PATH, AND THAT BLOCK WAS OWNED BY
-// NOBODY — exit 101 ON FIVE LINES OF ORDINARY MAXON.** `var s = ""` + `s.append("hello world")` +
+// ⛔⛔ **IT MUST NOT COPY INTO A FRESH `__mm_alloc` BLOCK ON THE SECOND PATH — SUCH A BLOCK IS OWNED BY
+// NOBODY, exit 101 ON FIVE LINES OF ORDINARY MAXON.** `var s = ""` + `s.append("hello world")` +
 // `s.cstr()` leaves `capacity == length`, which the terminator-slot router (rightly) refuses to probe, so
-// the receiver took the copy and leaked it. The old text argued the leak was the DECLARATION's to fix and
-// that nothing reached it anyway — *"`cstr()` has no caller, so dead-function elimination drops both"* —
-// and BOTH halves were false: `stdlib/String.maxon`'s `cstr()` is `public`, `stdlib/Subprocess.maxon` calls
-// it at seven sites, and an ordinary user program reaches it (`toCString()` is refused outside `stdlib/` by
+// the receiver takes the copy and leaks it. And the leak is REACHED: `stdlib/String.maxon`'s `cstr()` is
+// `public`, `stdlib/Subprocess.maxon` calls it at seven sites, and an ordinary user program reaches it
+// (`toCString()` is refused outside `stdlib/` by
 // `Parser.requireStdlibOnlyBufferMethod`, but `cstr()` is the corpus's own public forwarder, so that gate
 // is on the SPELLING and never was one on reachability).
 export let MmToCStringName = b"__mm_to_cstring"
@@ -416,8 +393,7 @@ export let MmToCStringName = b"__mm_to_cstring"
 //
 // ⚠ **THE WHOLE BODY IS `ManagedDirectoryRuntime.emitCStringToManaged`, WHICH ALREADY EXISTED FOR
 // `filename()` AND `currentPath()`.** This door is a THIRD caller of that builder, not a third copy of the
-// loop; what it adds is a Maxon-reachable name for a conversion the runtime had been doing for the OS
-// families only. See that builder for the strlen/copy shape and for why the record's `ValueId` is minted by
+// loop; what it adds is a Maxon-reachable name for a conversion the runtime does for the OS families. See that builder for the strlen/copy shape and for why the record's `ValueId` is minted by
 // the caller.
 export let MmFromCStringName = b"__mm_from_cstring"
 
@@ -427,28 +403,15 @@ export let MmFromCStringName = b"__mm_from_cstring"
 //     bytes: nothing is copied and the cost does not depend on the length. See `buildStrBytesView` for why
 //     it is a fresh record rather than the String pointer retagged.
 //
-// ⚠⚠ **ITS PRODUCER MOVED AT W49 WAVE 7 AND THE DOOR DID NOT DIE WITH IT.** `String.addressableBytes()` was a
-// synthesized arm minting this callee; the member retired onto `stdlib/String.maxon:181`, whose entire body
-// is `return managed` — and `Parser.emitFieldLoad`'s inline-managed arm lowers exactly that to exactly this.
-// So the corpus body IS the arm, one frame down, and the entry point has a live producer for the same reason
-// it always did. (The `addressableBytes` name no longer appears in this compiler at all, which is why this
-// header describes the LOWERING rather than the member.)
+// ⚠⚠ **ITS PRODUCER IS A LOWERING, NOT A MEMBER.** `stdlib/String.maxon`'s `addressableBytes()` is a corpus
+// function whose entire body is `return managed`, and `Parser.emitFieldLoad`'s inline-managed arm lowers
+// exactly that to exactly this callee — so the corpus body IS the producer, one frame down, and this header
+// describes the LOWERING rather than a member.
 //
-// ⛔⛔ **`__str_byte_at` AND `__str_byte_at_or_panic` STOOD HERE AND ARE GONE (W49 wave 7).** They were
-// `byteAt(index)` and `byteAtOrPanic(index)` — one bounds-checked read with two failure exits, built by one
-// `buildStrByteRead` — and both members retired onto the corpus (`stdlib/String.maxon:282`, `:299`), whose
-// bodies forward to `__ManagedMemory.byteAt`. With the two arms gone nothing in this compiler can emit
-// either callee, so `usesStrByteAt`/`usesStrByteAtOrPanic` could never turn true, `buildStrByteRead` could
-// never run, and `isThrowingStringRuntimeCallee` — whose ONE term was `__str_byte_at` — could never answer
-// `true`. All four went in one edit, which is the order this family's own rule demands: an entry point dies
-// only once EVERY producer of its callee is gone.
-//
-// ⭐ **AND ONE ABORT DISSOLVED WITH THEM RATHER THAN MOVING.** `RuntimeAbort.stringByteAtOutOfRange` existed
-// because the panicking read was a SYNTHESIZED function with *"no source line and no message to bake"*, so
-// it could not reach `osPanic` and reported a number instead. The corpus's `byteAtOrPanic` is
-// `try byteAt(index) otherwise panic("String.byteAtOrPanic: index out of bounds …")` — ordinary Maxon with a
-// real line and a real message — so that failure prints real text on every target. The
-// abort's whole justification was the absence this retirement removed.
+// ⛔⛔ **THERE IS NO `__str_byte_at` DOOR.** `byteAt`/`byteAtOrPanic` are corpus bodies forwarding to
+// `__ManagedMemory.byteAt`, so the bounds-checked read and its panic are ordinary Maxon with a real line
+// and a real message — which is why no `RuntimeAbort` code is owed for it. A synthesized read has neither,
+// and reports a number instead.
 //
 // `__str_bytes_view` is `__`-prefixed compiler-internal (no E3004, no signature slotting) and not
 // `__mm_`-prefixed, so it declares its own transitive floor in `closeStringMethodNeeds`.
@@ -546,12 +509,11 @@ end 'bytesAreSingleByteGraphemes'
 
 // The NUL-terminated blob for a literal's payload — the bytes, then one NUL.
 //
-// ⛔ **IT DOES NOT PAD, AND IT USED TO.** The pad to 8 lived here, and its comment claimed the
-// consequence for the WHOLE `.rdata` section — that a record registering right after a blob therefore
-// lands 8-aligned — which was true only for as long as no other producer registered an odd-length
-// payload. `installSlabRuntime`'s 129- and 249-byte class tables did exactly that (378 ≡ 2 mod 8), and
-// from that point every String record `installEnumLookupHelpers` registered was misaligned, which on
-// arm64-macOS is an unencodable dyld chained-fixup rebase delta and a compiler panic. Alignment is now
+// ⛔ **IT DOES NOT PAD.** A pad to 8 here claims a consequence for the WHOLE `.rdata` section — that a
+// record registering right after a blob lands 8-aligned — which holds only while no other producer
+// registers an odd-length payload, and `installSlabRuntime`'s 129- and 249-byte class tables are exactly
+// that (378 ≡ 2 mod 8): every String record `installEnumLookupHelpers` registers is then misaligned, which
+// on arm64-macOS is an unencodable dyld chained-fixup rebase delta and a compiler panic. Alignment is
 // `GlobalDataTable.RdataPayloadAlignment`, applied by `appendRdataPayload` to every payload of every
 // kind — the one writer of a slot's offset, which is the only place that can promise it.
 function stringBlobBytes(bytes ByteArray) returns ByteArray
@@ -1530,22 +1492,19 @@ function buildMmFromCString(module StdModule)
 	module.functions.push(func)
 end 'buildMmFromCString'
 
-// ⭐⭐ **`__str_bytes_view(str) -> arrRecord` — `addressableBytes()`, AND SINCE W157 IT IS THE RECEIVER'S
-// OWN RECORD, CO-OWNED.** The corpus's body is `return managed` (`stdlib/String.maxon:181-183`) — hand out
-// this String's own buffer, do not copy it — and that is now literally what this does: one `__mm_incref`
-// and the same pointer back. Nothing is allocated, nothing is copied, and the cost does not depend on the
-// length.
+// ⭐⭐ **`__str_bytes_view(str) -> arrRecord` — `addressableBytes()`, AND IT IS THE RECEIVER'S OWN RECORD,
+// CO-OWNED.** The corpus's body is `return managed` — hand out this String's own buffer, do not copy it —
+// and that is literally what this does: one `__mm_incref` and the same pointer back. Nothing is allocated,
+// nothing is copied, and the cost does not depend on the length.
 //
-// ⚠⚠ **IT USED TO MINT A 48-BYTE VIEW, AND ONE SLOT IS WHY.** A String record and an Array record agreed at
-// five of their six slots and DISAGREED at `@40`, where a String kept `singleByteGraphemes` and an Array
-// keeps `element_destroy`. Handing the String pointer to the array dispatch therefore made
-// `urlBytes.slice(0, colonPos)` build a view whose `element_destroy@40` was the source's ASCII FLAG, and
-// `__managed_decref` would `callIndirect` address 1 on every element of an all-ASCII slice — every corpus
-// call, since a URL is all-ASCII. **W157 removed the disagreement rather than the consequence**: a String
-// record carries a real `element_destroy@40` (always `TrivialElementDestroy`, which is the truth about a
-// buffer of `Byte`s) and its flag moved to `@48`, so the fresh record that used to STATE that fact is a
-// record that no longer needs stating. It cost one 48-byte allocation per `addressableBytes()` — i.e. per
-// `sb.append(...)`, per `print(...)`, per `File.exists(...)` — and it is gone.
+// ⚠⚠ **THAT RESTS ON THE TWO RECORDS AGREEING AT `@40`, AND A 48-BYTE VIEW IS WHAT DISAGREEMENT COSTS.** A
+// String keeping `singleByteGraphemes` where an Array keeps `element_destroy` makes
+// `urlBytes.slice(0, colonPos)` build a view whose `element_destroy@40` is the source's ASCII FLAG, and
+// `__managed_decref` then `callIndirect`s address 1 on every element of an all-ASCII slice — every corpus
+// call, since a URL is all-ASCII. A String record carries a real `element_destroy@40` (always
+// `TrivialElementDestroy`, which is the truth about a buffer of `Byte`s) and its flag sits at `@48`, so no
+// fresh record has to STATE that fact — which would be one 48-byte allocation per `addressableBytes()`,
+// i.e. per `sb.append(...)`, per `print(...)`, per `File.exists(...)`.
 //
 // ⚠⚠ **THE IMMORTAL ARM IS NOT AN OPTIMIZATION, IT IS THE ONE CASE THAT WOULD FAULT.** A String LITERAL's
 // record lives in `.rdata`, which the PE writer maps READ-ONLY (`SectionRdataFlags`), so `__mm_incref`'s
@@ -1593,31 +1552,14 @@ function buildStrBytesView(module StdModule)
 	module.functions.push(func)
 end 'buildStrBytesView'
 
-// ⚠⚠ **`buildStrByteRead` WAS HERE AND WENT WITH BOTH ITS CALLEES (W49 wave 7).** It was ONE bounds-checked
-// byte read serving `__str_byte_at` and `__str_byte_at_or_panic` — the same graph wearing two failure exits,
-// with the exit DERIVED from the name via `isThrowingStringRuntimeCallee` rather than passed beside it. That
-// derivation is worth remembering even though the function is gone: it replaced a `throwing bool` parameter
-// after the review MEASURED the divergent shape (stamp removed, predicate unchanged) leaving **all 13
-// `stdlib-loading` cases GREEN**, because no committed input reached an out-of-range index. **A `throws`
-// stamp that disagrees with the predicate deciding `try`-ness is invisible to a suite** — build the fact
-// once and derive the rest.
+// ⚠⚠ **A `throws` STAMP THAT DISAGREES WITH THE PREDICATE DECIDING `try`-NESS IS INVISIBLE TO A SUITE.**
+// Two spellings of one fact diverge only on an input that actually reaches the failing path, and no
+// committed input reaches an out-of-range byte index — a stamp removed with the predicate left alone leaves
+// **all 13 `stdlib-loading` cases GREEN**. Build the fact once and derive the rest, which is what
+// `isThrowingStringRuntimeCallee` is for.
 //
-// Both members are `stdlib/String.maxon:282` and `:299` now, and their bodies forward to
-// `__ManagedMemory.byteAt`, whose own `__managed_byte_at` carries the identical bound and the identical
-// `managedMemoryThrows()` clause. So the read did not lose its check; it moved to the one buffer entry point
-// that always had it.
-//
-// ⚠ **`buildStrSplit` WAS HERE TOO, WITH THE FOUR EMITTERS IT WAS THE LAST CALLER OF** (W49 wave 5):
-// `emitPushSliceSegment`, `emitSliceSegment`, `emitPushSegment` and `emitStrFindCall`. It filled a
-// caller-created `Array with String` whose element size and `element_destroy@40` stamp the PARSER decided
-// through `emitArrayCreateOp`; the corpus decides both through the ordinary generic-instance path and
-// stamps them identically (measured — `Parser.stringSurfaceMemberNames` carries the emitted-code diff).
-//
-// ⚠ **TWO OF THE FOUR WERE `export`ED FOR CONSUMERS THAT HAD ALREADY GONE**, which is why they are named
-// here rather than passed over: `emitSliceSegment`'s header claimed a THIRD consumer in `__strix_slice` and
-// `emitStrFindCall`'s claimed one in `__strix_find`, both deleted with `StringIndexRuntime.maxon` at wave 4.
-// An `export` outlives its last cross-file caller silently — nothing in this language reports one — so a
-// retirement has to go looking for them by name.
+// ⚠ **AN `export` OUTLIVES ITS LAST CROSS-FILE CALLER SILENTLY** — nothing in this language reports one —
+// so a retirement has to go looking for its readers by name.
 
 // Store one constant byte at `dest[offset]`. The shape a fixed-text renderer (`__bool_to_string`) writes
 // each of its bytes with — a `const` typed i64, stored as a `u8` (the store keeps the low byte).

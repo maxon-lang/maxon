@@ -185,23 +185,23 @@ end 'TestFileGroupLookup'
 // buys the COST and never the ANSWER: the fast path in `groupOrdinalFor` is what reads it, and behind that
 // path sits the full scan that is right either way.
 //
-// ⛔⛔ **ONE PASS, AND IT WAS TWO NESTED ONES — Θ(files × tests), MEASURED AT 10.7 SECONDS.** The first
-// version collected the distinct files, then walked EVERY test again for each of them. That is a
+// ⛔⛔ **ONE PASS. TWO NESTED ONES ARE Θ(files × tests), MEASURED AT 10.7 SECONDS.** Collecting the
+// distinct files and then walking EVERY test again for each of them is a
 // `FilePath.equals` per (file, test) pair, and on Windows `FilePath.equals` is not a byte compare: it is
-// `s.clone().toLower()` on BOTH sides (`stdlib/FilePath.maxon`), so every one of those pairs cost four
+// `s.clone().toLower()` on BOTH sides (`stdlib/FilePath.maxon`), so every one of those pairs costs four
 // String allocations. MEASURED with `maxon test --list` on generated projects, one binary, idle machine:
 //
 //   512 test files × 8 tests (4096 tests)                    —  11,357 ms
 //   511 ordinary files + 1 test file, the same 4096 tests  —     684 ms
 //
 // Same file count, same test count, same token volume; the only thing that differs is how many GROUPS the
-// roster partitions into, which is the one quantity the old shape multiplied by. Holding the test count at
+// roster partitions into, which is the one quantity the nested shape multiplies by. Holding the test count at
 // 2048 and doubling the file count doubled the time (F=256 ⇒ 3062 ms, F=512 ⇒ 6099 ms) — the product, read
 // straight off a doubling ladder.
 //
 // ⚠ **THE RESIDUAL IS Θ(files²) AND IT IS STATED RATHER THAN HIDDEN.** A file TRANSITION still scans the
-// groups built so far, so a run now pays one scan per test FILE where it paid one per TEST: 512 files cost
-// ~131k comparisons against the old shape's 4.2M. A map keyed on the path would remove even that, and is
+// groups built so far, so a run pays one scan per test FILE rather than one per TEST: 512 files cost
+// ~131k comparisons against the nested shape's 4.2M. A map keyed on the path would remove even that, and is
 // deliberately not used — the key would have to restate `FilePath.equals`'s own platform rule (exact bytes
 // on POSIX, case-folded on Windows) outside the stdlib that owns it, which is a second spelling of a
 // comparison this file has exactly one of.

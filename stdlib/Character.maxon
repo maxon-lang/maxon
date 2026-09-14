@@ -29,10 +29,8 @@ public type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 
 	// Default type for character literals - compiler discovers this via BuiltinCharLiteral interface.
 	//
-	// No longer exported. The `export` was there for exactly one caller — `grapheme.maxon`'s
-	// `makeCharacterFromManagedRange`, which built a Character from a slice of someone else's bytes —
-	// and Stage 4b-1b deleted it: a Character now comes from `String.makeCharFromBytes`, which the
-	// compiler lowers directly. Nothing outside this file names this function any more.
+	// NOT exported: a Character comes from `String.makeCharFromBytes`, which the compiler lowers
+	// directly, so nothing outside this file names this function.
 	static function init(managed ByteMemory) returns Character
 		return Character{managed: managed}
 	end 'init'
@@ -55,9 +53,9 @@ public type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 	// View methods - returns a lazy Iterable view into the underlying bytes.
 	// Views are cheap to construct (no throw); iterating an empty view yields zero elements.
 	//
-	// Through `toString()`, because a view holds a `String` since Stage 4b-1b — see views.maxon's
-	// header for why it must. That costs this grapheme one String record; `Character.bytes()` is a
-	// rare, cold call, and the alternative was to make every `for b in someString.bytes()` allocate.
+	// Through `toString()`, because a view holds a `String` — see views.maxon's header for why it
+	// must. That costs this grapheme one String record; `Character.bytes()` is a rare, cold call, and
+	// the alternative is to make every `for b in someString.bytes()` allocate.
 	public function bytes() returns ByteView
 		return ByteView.create(toString())
 	end 'bytes'

@@ -384,15 +384,15 @@ let StructGlobalFieldEditAfter = "var warmRebuildProbeStructGlobal = WarmRebuild
 
 // ⭐ **THE `static`-FLAG PROBE: the same interface requirement twice, differing ONLY in the KEYWORD.**
 //
-// Every probe above moves a NAME or a VALUE. An interface requirement's RECEIVER KIND is neither,
-// and it became a fact a PARSE reads at A2w: a witness dispatch on a constrained type parameter now
+// Every probe above moves a NAME or a VALUE. An interface requirement's RECEIVER KIND is neither, and
+// it is a fact a PARSE reads: a witness dispatch on a constrained type parameter
 // REFUSES a `static` requirement (E3116) and the comparison operators refuse one as `Equatable`
 // (E3005). So `function origin()` becoming `static function origin()` in one file changes whether
 // ANOTHER file compiles at all, while moving neither that file's bytes nor any name in the program —
 // which is exactly the rule `recordInterfaceDeclaration` states and exactly what its hash must carry.
 //
-// Measured, not argued (2026-08-01, in A2w's review): with `recordInterfaceDeclaration`'s
-// `ReceiverShapeAbsent`/`ReceiverShapePresent` mix absent — which is how A2w shipped — this probe reported
+// Measured, not argued (2026-08-01): with `recordInterfaceDeclaration`'s
+// `ReceiverShapeAbsent`/`ReceiverShapePresent` mix absent, this probe reports
 // **1** re-parse (the edited file's own bytes) where the property demands `fileCount`, measured at **8**,
 // while the spec suite reported 3091/0 and every other probe here still passed. None of them can see it:
 // every edit above moves a NAME or a VALUE, and a key that mixes those moves on all of them. Only an
@@ -441,7 +441,7 @@ let MinFilesForInvalidation = 2 as QueryCount
 //       is the one declaration whose VALUE is copied into its readers, so `let X = 7` → `8` must
 //       move the key while no name in the program moves at all. See `ConstantValueEditBefore`.
 //   (d) EDIT AN INTERFACE REQUIREMENT'S `static` FLAG ⇒ EVERY file's parse must be invalidated. Not a
-//       special case of (a) or (c): no name moves and no value moves — a KEYWORD does, and since A2w a
+//       special case of (a) or (c): no name moves and no value moves — a KEYWORD does, and a
 //       parse in another file accepts or REFUSES on it. See `ReceiverKindEditBefore`.
 //   (e) EDIT AN **IMAGED** RECORD CONSTANT'S CONTENT ⇒ EVERY file's parse must be invalidated, AND the
 //       same edit on a STORED one may invalidate only the edited file. (c)'s pair at the shapes whose
@@ -460,9 +460,8 @@ let MinFilesForInvalidation = 2 as QueryCount
 // imaged half expect `fileCount` re-parses while (b) and (e)'s stored half expect 1, and those are the
 // same number — so a key that tracks only the file's own bytes, which is EXACTLY the bug this property
 // exists to catch, sails through every one of them.
-// This file used to say so in a comment and print PASS anyway, which is the worst of both: a gate
-// that knows it is vacuous and reports green. **A gate you cannot see fail is not a gate.**
-// It now FAILS, and says what to point it at.
+// **A gate you cannot see fail is not a gate**, so this one FAILS on a single-file input rather than
+// reporting green, and says what to point it at.
 function verifyInvalidation(inputPath FilePath, target Target) returns bool throws CompileError
 	var project = try loadProject([inputPath], target: target)
 	let fileCount = project.db.sourcePaths.count()

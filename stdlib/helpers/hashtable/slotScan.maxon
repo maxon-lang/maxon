@@ -1,14 +1,12 @@
 /// The open-addressing SLOT VOCABULARY that `Map` and `Set` share — one enum, one scan.
 /// @category Collections
 ///
-/// ⭐⭐ **`Map` AND `Set` HELD BYTE-IDENTICAL COPIES OF BOTH, AND THE HAZARD WAS ASYMMETRIC (W93).**
-/// `Map.maxon` declared `enum SlotState { Empty, Occupied, Deleted }` and a `findNextOccupied`;
-/// `Set.maxon` declared `enum SetSlotState` with the same three cases and a `findNextOccupiedSet` whose
-/// body matched it word for word. Two enums over one three-state space is the project's signature bug —
-/// ONE FACT WRITTEN TWICE — and here it did NOT fail loudly: adding a state to one enum is a compile error
-/// at THAT file's `match`es and **SILENCE at the other's**, so the container that was not edited goes on
-/// compiling and answers wrongly. One enum makes every `match` over a slot state, in both files, refuse
-/// the new case at once.
+/// ⭐⭐ **ONE ENUM AND ONE SCAN, BECAUSE TWO COPIES OF A THREE-STATE SPACE FAIL ASYMMETRICALLY.** A
+/// private `SetSlotState` beside this `SlotState`, or a `findNextOccupiedSet` beside
+/// `findNextOccupied`, is ONE FACT WRITTEN TWICE — and it does NOT fail loudly: adding a state to one
+/// enum is a compile error at THAT file's `match`es and **SILENCE at the other's**, so the container
+/// that was not edited goes on compiling and answers wrongly. One enum makes every `match` over a
+/// slot state, in both files, refuse the new case at once.
 ///
 /// ⚠ **THE COMBINING PREDICATES ARE DELIBERATELY *NOT* HERE, and that is a measurement rather than an
 /// oversight.** Each file's probe (`findSlot`, `contains`, `remove`, `grow`) tests a slot inline with a
@@ -20,9 +18,8 @@
 /// One slot's state in an open-addressed table. `Deleted` is a TOMBSTONE: the slot is vacant for an
 /// insert but must not stop a probe, because a later key may have been placed past it.
 ///
-/// ⚠ **THE ORDER IS NOT LOAD-BEARING TO ANY COMPILER-SIDE CLAIM** — no runtime transcribes these ordinals
-/// (the `__set_*`/`__map_*` runtime that once did was deleted at W105). It is the declaration order both
-/// containers already used, kept so the change is a MOVE and not a renumber.
+/// ⚠ **THE ORDER IS NOT LOAD-BEARING TO ANY COMPILER-SIDE CLAIM** — no runtime transcribes these
+/// ordinals. It is the declaration order both containers use.
 public enum SlotState
 	Empty
 	Occupied

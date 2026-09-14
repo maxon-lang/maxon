@@ -3,13 +3,13 @@
 // standard-input, CLOCK, executable-path, processor-count and GREEN-THREAD ops on a raw static image with no
 // libc. The Linux twin of `Arm64DarwinRuntime`, and the arm64 twin of `X64LinuxRuntime`.
 //
-// ⭐⭐ **L4 ADDED THE SCHEDULER'S HOST OBJECTS, AND THEY SHARE NO PRIMITIVE WITH THE DARWIN TWIN'S.** That
+// ⭐⭐ **THE SCHEDULER'S HOST OBJECTS SHARE NO PRIMITIVE WITH THE DARWIN TWIN'S.** That
 // file builds a wake event out of a `pthread_mutex_t` and a `pthread_cond_t`, a lock out of a recursive
 // pthread mutex, and a per-thread slot out of a pthread key. None of the three exists here; all three are
-// `futex` and `TPIDR_EL0` instead, which is a SMALLER surface rather than a harder one — see the L4 banner
-// below for why one kernel primitive replaces three library ones.
+// `futex` and `TPIDR_EL0` instead, which is a SMALLER surface rather than a harder one — see the
+// green-thread floor's banner below for why one kernel primitive replaces three library ones.
 //
-// ⭐ **L3 ADDED FOUR CHUNKS THAT ARE NOT FILESYSTEM WORK AT ALL** — the wall clock, the per-thread CPU clock,
+// ⭐ **FOUR CHUNKS HERE ARE NOT FILESYSTEM WORK AT ALL** — the wall clock, the per-thread CPU clock,
 // `/proc/self/exe` and the processor count — and they sit under their own banners below. Each is here for
 // the SAME structural reason the filesystem chunks are (a caller's out-param pointer, or a buffer, that must
 // outlive a call), and none of them touches the errno word: nothing consumes an `osLastError` after any of
@@ -49,31 +49,27 @@
 // The AArch64 table, NOT x86-64's: `write` is 64 here and 1 there, `mmap` 222 and 9. Named because
 // a bare 64 at a call site is unreadable and the number IS the primitive's identity.
 //
-// ⚠⚠ **THE `Arm64` PREFIX IS LOAD-BEARING, NOT DECORATION — IT WAS THE BUG** (found by A1y's review).
-// These three were spelled `LinuxSyscallWrite`/`LinuxSyscallMmap`/`LinuxSyscallExitGroup`, and
-// `Targets/X64/X64LinuxRuntime` exported THE SAME THREE NAMES over the x86-64 numbers. Maxon's top-level
-// name space is FLAT: a declaration's directory grants it nothing, `export` publishes to the whole
-// program, and two exported globals of one name are resolved SILENTLY BY FILE ORDER with no diagnostic
-// (the reader's own directory is irrelevant, and the winner follows POSITION, not value). x64's file
-// came last, so every CROSS-FILE read lost, including this backend's.
+// ⛔⛔ **THE `Arm64` PREFIX IS LOAD-BEARING, NOT DECORATION.** Maxon's top-level name space is FLAT: a
+// declaration's directory grants it nothing, `export` publishes to the whole program, and two exported
+// globals of one name are resolved SILENTLY BY FILE ORDER with no diagnostic (the reader's own directory
+// is irrelevant, and the winner follows POSITION, not value). Bare `LinuxSyscallWrite`/`LinuxSyscallMmap`/
+// `LinuxSyscallExitGroup` collide with `Targets/X64/X64LinuxRuntime`'s spellings of the x86-64 numbers,
+// and file order is a property of the CHECKOUT — so a collision makes the emitted code depend on which
+// box compiled the compiler, and the two hosts need not even lose the same declaration.
 //
-// MEASURED on arm64-linux, by disassembling every `svc #0` in a cross-compiled binary:
+// ⚠ **A COLLISION HERE FAILS SILENTLY, WHICH IS WHY THE CURE IS A NAME AND NOT A COMMENT.** MEASURED on
+// arm64-linux under one, by disassembling every `svc #0` in a cross-compiled binary:
 // `StdToArm64Conversion.lowerOsExit`/`lowerPanic` emitted **231**, `lowerOsWrite` **1** and
 // `lowerOsMmap` **9** — the x86-64 numbers. On AArch64 those are `munlockall`, `io_destroy` and
 // `lgetxattr`: none exits, writes or maps, and none fails loudly, so a violated range guard did not
-// abort at all — it fell through to `mov x0, xzr; ret` and the program carried on with a zero. The ONE
-// use that was right is the entry stub's below, because a file's own declaration shadows the import.
+// abort at all — it fell through to `mov x0, xzr; ret` and the program carried on with a zero. Only a
+// file's own declaration shadows the import, so the entry stub's use below is the one a collision leaves
+// right. The paragraph two above says "NOT x86-64's" and says nothing to the resolver, which is the
+// project's cure ladder (DERIVE > CHECK > COMMENT) failing at its bottom rung: a comment cannot make a
+// name resolve. One name per fact can.
 //
 // ⭐ The committed `specs/fragments/arm64-linux/**` goldens record `arm64.syscall 94` at all 97
-// sites, so this restores agreement with them rather than moving them — and their disagreement with what
-// this compiler emitted was the tell. ⚠ THOSE GOLDENS WERE PRODUCED ON THE arm64 HOST, AFTER the
-// collision existed, which means the losing declaration was not even the SAME one on both machines: file
-// order is a property of the CHECKOUT, so a name collision makes the emitted code depend on which box
-// compiled the compiler. That is the strongest reason the cure is a name and not a comment, and it is why
-// this must never be "left for the lane that can run it" — nothing about it is arm64-specific but the
-// numbers. The comment two paragraphs up said "NOT x86-64's" the whole time,
-// which is the project's cure ladder (DERIVE > CHECK > COMMENT) failing at its bottom rung: a comment
-// cannot make a name resolve. One name per fact can.
+// sites, which is what a collision disagrees with.
 //
 // ⚠ `exit_group` (94), NOT `exit` (93). `exit` terminates the calling THREAD; `exit_group` terminates
 // the whole thread group, which is what a C `_exit` actually invokes and what `main` returning means.
@@ -84,7 +80,7 @@ export let Arm64LinuxSyscallWrite = 64
 export let Arm64LinuxSyscallMmap = 222
 export let Arm64LinuxSyscallExitGroup = 94
 
-// F1a — the page-LIFECYCLE half of the mapping ABI: `munmap` releases a mapping, `madvise` drops its physical
+// The page-LIFECYCLE half of the mapping ABI: `munmap` releases a mapping, `madvise` drops its physical
 // backing while keeping the mapping. AArch64's numbers, NOT x86-64's (11 and 28 there — see the twin block in
 // `Targets/X64/X64LinuxRuntime.maxon`), which is the whole reason this table carries an arch prefix. There is
 // deliberately no recommit number: a `MADV_DONTNEED`ed page refaults on the next touch, so re-backing one is a
@@ -92,7 +88,7 @@ export let Arm64LinuxSyscallExitGroup = 94
 export let Arm64LinuxSyscallMunmap = 215
 export let Arm64LinuxSyscallMadvise = 233
 
-// F2 — the per-thread identity word. `gettid` answers the calling thread's kernel thread id: per-thread
+// The per-thread identity word. `gettid` answers the calling thread's kernel thread id: per-thread
 // stable and never 0, which is exactly `StdOp.currentThreadToken`'s contract. It is asked instead of reading
 // `TPIDR_EL0` because the compiler's Linux lane is a raw static binary with no libc, so nothing has written that
 // register and it reads 0 — the op's own header carries the full argument. 178 on AArch64, 186 on x86-64
@@ -124,12 +120,12 @@ export let Arm64LinuxUcontextOffLr = 424 as MachineWord
 export let Arm64LinuxUcontextOffSp = 432 as MachineWord
 export let Arm64LinuxUcontextOffPc = 440 as MachineWord
 
-// --- The rest of the table: the FILESYSTEM syscalls (MAC4/5/6's Linux twins) ---
+// --- The rest of the table: the FILESYSTEM syscalls ---
 //
 // ⭐ **THE `*at` FAMILY IS THE ONLY SPELLING AArch64 HAS.** There is no plain `open`, `stat`, `unlink`,
 // `rename` or `mkdir` on this architecture — the kernel exposes only the directory-relative forms, so every
 // path operation below prepends `AT_FDCWD` and means "relative to the working directory".
-// L3 — the four the two non-scheduler clocks, the process's identity and the machine query reach the kernel
+// The four the two non-scheduler clocks, the process's identity and the machine query reach the kernel
 // through. ⚠ **MEASURED ON THIS LANE, not transcribed**: each was invoked by number through `syscall(2)` on
 // an aarch64 Ubuntu 26.04 guest and checked against the libc call it is supposed to be — `getpid` against
 // `os.getpid()`, `readlinkat` against the path it answered, both `clock_gettime` clock ids against a real
@@ -167,14 +163,14 @@ let Arm64LinuxSyscallNewfstatat = 79
 let Arm64LinuxSyscallFstat = 80
 let Arm64LinuxSyscallFsync = 82
 
-// --- L4: the GREEN-THREAD FLOOR's syscalls ---
+// --- The GREEN-THREAD FLOOR's syscalls ---
 //
 // ⚠ **MEASURED ON THIS LANE, not transcribed** — each was invoked by number through `syscall(2)` on an
 // aarch64 Ubuntu guest and checked against the libc call it is supposed to be, which is the discipline
 // `Arm64LinuxOpenDirectoryFlags` above exists to enforce.
 //
-// ⭐⭐ **`clone` NOW SERVES TWO DIFFERENT REQUESTS UNDER ONE NUMBER, AND THE FLAG WORD IS THE WHOLE
-// DIFFERENCE.** L5's `clone(SIGCHLD)` (below, with the child-process band) shares NOTHING and is exactly
+// ⭐⭐ **`clone` SERVES TWO DIFFERENT REQUESTS UNDER ONE NUMBER, AND THE FLAG WORD IS THE WHOLE
+// DIFFERENCE.** The child-process band's `clone(SIGCHLD)` (below) shares NOTHING and is exactly
 // `fork`; the worker M's `clone(LinuxCloneWorkerFlags)` shares the address space, the descriptors, the
 // filesystem context and the thread group, and is exactly `pthread_create`. They are one syscall with two
 // argument shapes, so the number stays with the band that first needed it and the FLAGS carry the meaning.
@@ -201,7 +197,7 @@ let Arm64LinuxSyscallMprotect = 226
 export let Arm64LinuxSyscallSetPriority = 140
 export let Arm64LinuxSyscallGetPriority = 141
 
-// --- L5: the CHILD-PROCESS band's syscalls ---
+// --- The CHILD-PROCESS band's syscalls ---
 //
 // ⚠ **MEASURED ON THIS LANE, not transcribed** — each was invoked by number through `syscall(2)` on an
 // aarch64 Ubuntu guest and checked against the behaviour it is supposed to have: `pipe2` against a real
@@ -291,10 +287,8 @@ export let Arm64LinuxSyscallGetsockname = 204
 // ⚠ **`mmap` RATHER THAN A `malloc` THIS LANE DOES NOT HAVE**, and rather than the slab, for the Darwin
 // twin's reason: the slab is Std-tier and reachable only through a `bl` the Std reachability walk cannot
 // see. A whole page for two words is the mapping granularity, not a choice, and these objects are
-// process-lifetime — one per P. ⛔ That last clause used to read *"one per P, and `DefaultMaxProcs` is
-// 1"*; there is no such constant any more and the count is the machine's processors, so the waste is a
-// page per processor decided once at bring-up rather than the single page it was — still a fixed set,
-// still not a per-operation cost.
+// process-lifetime — one per P, and the P count is the machine's processors, so the waste is a page per
+// processor decided once at bring-up: a fixed set, not a per-operation cost.
 //
 // ⚠ **THE PAGE COMES BACK ZERO-FILLED**, which `MAP_ANONYMOUS` guarantees, so the signal word needs no
 // explicit store — unlike Darwin's, whose `malloc` does not zero and which therefore writes every field.
@@ -383,7 +377,7 @@ function arm64LinuxStatLayout() returns PosixStatLayout
 end 'arm64LinuxStatLayout'
 
 // ==========================================================================
-// L3 — the `timespec` this assembler's clock chunks read into
+// The `timespec` this assembler's clock chunks read into
 // ==========================================================================
 
 // The clock IDS are `Targets/Shared/LinuxRuntime`'s: no architecture overrides them, so they are one fact
@@ -499,7 +493,7 @@ function arm64LinuxEmitFstatat(asm Arm64RuntimeAsm, dirFd Arm64Register, pathReg
 end 'arm64LinuxEmitFstatat'
 
 // ==========================================================================
-// L3 — the two non-scheduler CLOCKS
+// The two non-scheduler CLOCKS
 // ==========================================================================
 
 // `clock_gettime(clockId, &ts)` with the `timespec` in this chunk's own frame — the one call both clock
@@ -1526,7 +1520,7 @@ function buildArm64LinuxDirFindCloseChunk() returns FunctionCodeChunk
 end 'buildArm64LinuxDirFindCloseChunk'
 
 // ==========================================================================
-// L4 — THE GREEN-THREAD FLOOR'S HOST OBJECTS
+// THE GREEN-THREAD FLOOR'S HOST OBJECTS
 // ==========================================================================
 //
 // ⭐⭐⭐ **WHAT THIS LANE HAS THAT DARWIN'S DOES NOT: ONE PRIMITIVE INSTEAD OF THREE.** The Darwin surface
@@ -1657,9 +1651,8 @@ end 'buildArm64LinuxSleepChunk'
 
 // Allocate and initialise one wait object. See `PosixWaitOffKind` for the layout and why it is one page.
 //
-// ⭐ **ALL THREE KINDS REACH THIS LANE NOW, AND THE THIRD IS WHAT THE WORKER-M `clone` ADDED.** An EVENT is
-// a P's wake word, a PROCESS is a spawned child (L5) and a THREAD is a worker M — the kind this chunk
-// refused for exactly as long as `osThreadCreate` was a runtime abort here. The kind is still CHECKED rather
+// ⭐ **ALL THREE KINDS REACH THIS LANE.** An EVENT is a P's wake word, a PROCESS is a spawned child and
+// a THREAD is a worker M. The kind is CHECKED rather
 // than stored blind: a value that is none of the three means the Std tier reached this op with something
 // this backend never mints, and a silently-initialised object of an unknown kind surfaces later as a wait
 // that never completes.
@@ -1730,11 +1723,9 @@ end 'arm64LinuxEmitMapAnon'
 // hand: its stack, its guard page, its per-OS-thread slot block, the word its joiner will sleep on, and the
 // two-word seed that is the only channel the child has to learn what to run.
 //
-// ⛔⛔ **THIS CHUNK REPLACES A RUNTIME ABORT, AND THE ABORT WAS RIGHT WHEN IT WAS WRITTEN.** L4 refused to
-// write a `clone` here on the measurement that nothing reached the op — `SchedRuntime.buildSchedWakeOrSpawn`'s
-// worker M had no producer. That expired: `spawn` publishes a GREEN THREAD, the publish doors'
-// green arms call `__sched_wake_or_spawn`, and the default processor count is the machine's. The abort is
-// what announced it, by name, on the first `spawn` program built for this lane.
+// ⛔⛔ **A WORKER M HAS A REAL PRODUCER ON THIS LANE.** `spawn` publishes a GREEN THREAD, the publish
+// doors' green arms call `__sched_wake_or_spawn`, and the default processor count is the machine's, so an
+// ordinary `spawn` program reaches this chunk.
 //
 // ⛔ **`clone`'s CHILD DOES NOT RETURN LIKE A CALL.** It resumes at the instruction after the `svc` with x0 =
 // 0, on the stack this chunk chose, with NO return address and with x29 still pointing into the PARENT's
@@ -1745,7 +1736,7 @@ end 'arm64LinuxEmitMapAnon'
 //
 // ⛔⛔ **`exit` (93), NEVER `exit_group` (94).** They are one number apart in the table and a whole process
 // apart in meaning — `exit_group` ends every thread — and `CLONE_THREAD` is precisely what makes the wrong
-// one lethal here. The L5 child path states the same trap for the same pair of numbers.
+// one lethal here. The child path states the same trap for the same pair of numbers.
 //
 // ⚠ **THE JOIN WORD IS PUBLISHED BEFORE THE `clone` AND CLEARED BY THE KERNEL.** `CLONE_CHILD_CLEARTID`
 // zeroes `PosixWaitOffThread` and wakes it when the thread ends; `mrt_host_wait_one`'s THREAD arm is the
@@ -1824,8 +1815,9 @@ function buildArm64LinuxThreadCreateChunk(globalData GlobalDataTable) returns Fu
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: 0)
 
 	// `clone(flags, stack, ptid, tls, ctid)` — AArch64's argument order, which is NOT x86-64's (that one
-	// swaps the last two). Both were NULL at L5, so the disagreement could not bite there; here they are both
-	// live and getting them the wrong way round would set the thread pointer to the join word's address.
+	// swaps the last two). The child-process `clone` passes NULL for both, so the disagreement cannot bite
+	// there; here they are both live and getting them the wrong way round would set the thread pointer to
+	// the join word's address.
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: LinuxCloneWorkerFlags)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotStack)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: LinuxCloneNoParentTidOut)
@@ -1908,7 +1900,7 @@ end 'buildArm64LinuxEventSetChunk'
 // half of the contract, and clears the word, which is the "auto" half. The Darwin twin gets both from
 // holding a mutex across the test and the store; here the atomicity is the instruction's.
 //
-// ⭐ **A CHILD PROCESS TAKES THE THIRD ARM, WHICH IS ONE `bl` (L5).** `mrt_host_proc_await` honours all three
+// ⭐ **A CHILD PROCESS TAKES THE THIRD ARM, WHICH IS ONE `bl`.** `mrt_host_proc_await` honours all three
 // timeouts, and it is `Arm64PosixRuntime`'s single body — the two lanes disagree about what an EVENT is and
 // agree exactly about what a reaped child is.
 //
@@ -2072,7 +2064,7 @@ function buildArm64LinuxWaitCloseChunk() returns FunctionCodeChunk
 	// The only caller that closes one is `mrt_host_thread_create`'s own clone-failure arm, where no thread was
 	// ever started and that arm unmaps both itself.
 	//
-	// ⚠ **A CHILD IS REAPED FIRST (L5).** Without a non-blocking `wait4` an exited child that nobody waited on
+	// ⚠ **A CHILD IS REAPED FIRST.** Without a non-blocking `wait4` an exited child that nobody waited on
 	// stays a zombie for the parent's whole life, which a spawn/release loop turns into one per iteration. A
 	// child still RUNNING cannot be reaped and stays a zombie until this process exits and `init` inherits it;
 	// that is the one case POSIX gives no way to close, and it is what `runDetached` asks for by name.
@@ -2388,7 +2380,7 @@ function buildArm64LinuxEnvReadChunk() returns FunctionCodeChunk
 end 'buildArm64LinuxEnvReadChunk'
 
 // ==========================================================================
-// L5 — mrt_host_spawn(x0 = argv, x1 = cwd, x2 = creationFlags, x3 = startupInfo, x4 = processInformation,
+// mrt_host_spawn(x0 = argv, x1 = cwd, x2 = creationFlags, x3 = startupInfo, x4 = processInformation,
 //                     x5 = lpEnvironment)
 // ==========================================================================
 
@@ -2413,12 +2405,10 @@ end 'buildArm64LinuxEnvReadChunk'
 // read and the infinite child await already have on both POSIX lanes, and it is bounded by an `execve` rather
 // than by anything a program can make slow.
 //
-// ⚠ **A SECOND SPAWN CAN NOW INTERLEAVE WITH THIS ONE, AND `O_CLOEXEC` IS WHAT MAKES THAT HARMLESS.** This
-// paragraph used to rest on *"this lane runs a single active M (`osThreadCreate` is a runtime abort)"*, and
-// the worker-M `clone` falsified it — two Ms can be inside this chunk at once. The guard it already named as
-// the fallback is the one that carries it: BOTH ends of the status pipe are `O_CLOEXEC`, so a concurrent
-// child's own `execve` drops its inherited copy and the reading parent still sees EOF. A runtime chunk still
-// parks no green thread, so neither M's sequence is interrupted midway.
+// ⚠ **A SECOND SPAWN CAN INTERLEAVE WITH THIS ONE, AND `O_CLOEXEC` IS WHAT MAKES THAT HARMLESS.** The
+// worker-M `clone` puts two Ms inside this chunk at once: BOTH ends of the status pipe are `O_CLOEXEC`, so
+// a concurrent child's own `execve` drops its inherited copy and the reading parent still sees EOF. A
+// runtime chunk parks no green thread, so neither M's sequence is interrupted midway.
 //
 // ⚠ **PATH RESOLUTION IS THE Std TIER's AND IS NOT REDONE HERE.** `execve` takes a path where
 // `posix_spawnp` searches `PATH`, and that search already happened one tier up: `Executable.name(n)` goes
@@ -2816,7 +2806,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 
 	let usesFilesystem = usage.usesManagedFile or usage.usesManagedDirectory
 
-	// ⭐ **L3 — FOUR CHUNKS ON FOUR INDEPENDENT BITS, EACH THE Std TIER'S OWN.** `usesWallClock` says the
+	// ⭐ **FOUR CHUNKS ON FOUR INDEPENDENT BITS, EACH THE Std TIER'S OWN.** `usesWallClock` says the
 	// program reads the calendar, which is what keeps `runtime/Clock.maxon`'s `__clock_now_unix_s` alive;
 	// `installClockRuntime` builds `__thread_cpu_ticks` under `usesThreadCpuTicks`;
 	// `installProcessRuntime` builds `__proc_exe_path` under `usesExecutablePath`; `usesCpuCount` keeps
@@ -2837,11 +2827,10 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		chunks.push(buildArm64LinuxExePathChunk(globalData))
 	end 'executablePath'
 
-	// ⭐⭐ **THE PROCESSOR COUNT RIDES A UNION, AND THE OLD NOTE ABOVE PREDICTED EXACTLY WHY.** It said the
-	// compiler-inserted `osCpuCount` in `SchedRuntime.emitResolveMaxProcs` "cannot reach this lane behind
-	// `usesCpuCount`'s back … Were that to change, the failure is the LOUD one". L4 changed it and the failure
-	// WAS the loud one, on the first green-thread program built for this target: `arm64ResolveCallFixups: bl
-	// to unknown function 'mrt_host_cpu_count'`. Every green-thread program reads `MAXON_MAX_PROCS` and clamps
+	// ⭐⭐ **THE PROCESSOR COUNT RIDES A UNION, AND A NARROWER GATE IS A LINK FAILURE RATHER THAN A
+	// DIAGNOSTIC** (`arm64ResolveCallFixups: bl to unknown function 'mrt_host_cpu_count'`). The
+	// compiler-inserted `osCpuCount` in `SchedRuntime.emitResolveMaxProcs` reaches this lane behind
+	// `usesCpuCount`'s back: every green-thread program reads `MAXON_MAX_PROCS` and clamps
 	// it against the machine, so `usesGt` is a second producer of this op — the same shape the read chunk's
 	// union below has, and for the same reason.
 	if usage.usesCpuCount or usage.usesGt 'cpuCount'
@@ -2887,7 +2876,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		chunks.push(buildArm64LinuxTlsAllocChunk(globalData))
 		chunks.push(buildArm64LinuxTlsSetChunk(globalData))
 
-		// ⭐⭐ **L5's CHILD-PROCESS CORE RIDES `usesGt`, NOT A SUBPROCESS BIT, BECAUSE `installGtRuntime` BUILDS
+		// ⭐⭐ **THE CHILD-PROCESS CORE RIDES `usesGt`, NOT A SUBPROCESS BIT, BECAUSE `installGtRuntime` BUILDS
 		// `__gt_process_run` UNCONDITIONALLY.** Every green-thread program statically contains a spawn, a
 		// bounded await and an exit-code read — a program that never runs a child simply never reaches them —
 		// so a narrower gate here is a `bl` to a symbol nothing laid out, which is a link failure rather than a
@@ -2936,7 +2925,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		chunks.push(buildArm64LinuxShmUnlinkChunk())
 	end 'namedSection'
 
-	// ⚠ **`GetLastError` HAS A PRODUCER OUTSIDE THE FILESYSTEM AS OF L5** — `__gt_subp_yield_read` classifies
+	// ⚠ **`GetLastError` HAS A PRODUCER OUTSIDE THE FILESYSTEM** — `__gt_subp_yield_read` classifies
 	// a failed read with it and every spawn failure publishes through it — and that widening lives inside
 	// `linuxUsesHostSurface`, beside the `.data` word the same bodies stash into.
 	if linuxUsesHostSurface(usage) 'lastError'
@@ -2954,7 +2943,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		chunks.push(buildArm64LinuxDirFindCloseChunk())
 	end 'filesystem'
 
-	// ⚠ **THE OPEN HAS A SECOND PRODUCER AS OF L5, AND ITS TWIN ON THE OTHER LANE HAS NO CHUNK TO GATE.**
+	// ⚠ **THE OPEN HAS A SECOND PRODUCER, AND ITS TWIN ON THE OTHER LANE HAS NO CHUNK TO GATE.**
 	// `GtRuntime`'s file-backed stdio arm emits `osFileOpenRead`/`osFileOpenWrite` for a stream redirected to
 	// a path, so a subprocess program that touches no `File` still branches here. The Darwin lane needs no
 	// such widening because an `open` lowers INLINE there (`lowerOsFileOpenDarwin` carries the vararg reason)
@@ -2969,7 +2958,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		chunks.push(buildArm64LinuxFileRenameChunk())
 	end 'managedFile'
 
-	// ⚠ L5: `__gt_subp_write_all` and the collect loop's stdin push emit `StdOp.osWriteFile` on the child's
+	// ⚠ `__gt_subp_write_all` and the collect loop's stdin push emit `StdOp.osWriteFile` on the child's
 	// stdin pipe, so the write half rides the same union its read twin does.
 	if usage.usesManagedFile or usage.usesChildPipes 'managedFileWrite'
 		chunks.push(buildArm64LinuxTransferChunk(HostWriteFileName, syscallNumber: Arm64LinuxSyscallWrite))
@@ -2990,13 +2979,12 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 	end 'managedDirectory'
 
 	// The mode→attribute-mask decoder is called by BOTH `mrt_host_fill_find_data` (the cluster above) and
-	// `mrt_host_file_attributes` (below), so its gate is the union of theirs — which is what lifted it out of
-	// the cluster it used to sit inside.
+	// `mrt_host_file_attributes` (below), so its gate is the union of theirs rather than either cluster's.
 	if usesFilesystem or usage.usesChildPipes 'attrsFromMode'
 		chunks.push(buildArm64PosixAttrsFromModeChunk(arm64LinuxStatLayout()))
 	end 'attrsFromMode'
 
-	// ⚠ **`GetFileAttributesA` HAS A SECOND PRODUCER AS OF L5, AND IT IS NOT A DIRECTORY OP.**
+	// ⚠ **`GetFileAttributesA` HAS A SECOND PRODUCER, AND IT IS NOT A DIRECTORY OP.**
 	// `__gt_subp_resolve_path` walks `PATH` testing each candidate with `StdOp.osFileAttributes`, so the
 	// executable lookup needs this chunk with no `Directory` call anywhere in the program.
 	if usage.usesManagedDirectory or usage.usesChildPipes 'fileAttributes'

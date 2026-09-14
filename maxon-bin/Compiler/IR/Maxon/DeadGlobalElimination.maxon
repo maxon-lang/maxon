@@ -1,9 +1,9 @@
-// DeadGlobalElimination — WHICH TOP-LEVEL GLOBALS THE PROGRAM CAN STILL NAME (P1.7 slice 3).
+// DeadGlobalElimination — WHICH TOP-LEVEL GLOBALS THE PROGRAM CAN STILL NAME.
 //
 // A top-level binding with storage costs three separate things, and a binding nothing reads or writes
 // pays all three for nothing: an 8-byte `.data` slot, the ops in `__module_init` that build its record
-// and store it, and the drop in `__maxon_global_cleanup` that releases it. MEASURED on the base of this
-// slice: `var UNUSED = [1, 2, 3]` in a program that never mentions it emitted **3,676 bytes** of code
+// and store it, and the drop in `__maxon_global_cleanup` that releases it. MEASURED without this
+// derivation: `var UNUSED = [1, 2, 3]` in a program that never mentions it emits **3,676 bytes** of code
 // against **1,512** for the same program with no global at all — the managed-memory runtime, the two synthesized
 // functions and the entry stub's two calls, all of it reachable by nothing.
 //
@@ -18,8 +18,8 @@
 // they know; The compiler knows first.
 //
 // ⭐⭐ **THE EVIDENCE IS THE EMITTED `globalAddr` LABEL — NOT A PREDICATE OVER NAMES.** A use of a global
-// resolves local → capture → top-level, and that order has now produced a silent wrong answer in three
-// consecutive slices every time something re-derived it. So nothing here re-derives it: liveness is read
+// resolves local → capture → top-level, and a second site that re-derives that order answers silently
+// wrong the day the two drift. So nothing here re-derives it: liveness is read
 // off the ops the resolution ALREADY PRODUCED. `Parser.emitGlobalAddr` is the only emitter of a
 // `globalAddr` in user code, and it is reached only from `emitGlobalLoad`/`emitGlobalStore` — so the set
 // below is built from the very ops that would reference the slot, and the dangerous direction ("an op
@@ -29,11 +29,11 @@
 // ⭐ **AND IF THIS FILE IS EVER WRONG ANYWAY, IT FAILS LOUD — ON EVERY TARGET.** The argument above is an
 // argument; this is the mechanism behind it. All three backends resolve a `globalAddr`'s label through the
 // ONE lookup `GlobalDataTable.dataSectionOffsetOf`, which PANICS by name on a label the layout does not
-// hold (x64 `X64Backend:1804`, arm64 `Arm64Backend:1344-1345`, wasm `StdToWasm:1697`). So an under-walk
-// here — a block source this loop cannot see, a `globalAddr` emitted by something new after it runs — is a
-// COMPILE-TIME abort naming the global, never a miscompile. MEASURED (P1.7 slice 3 review) by forcing the
-// walk to answer "nothing is live" and compiling a program that reads one global: all three targets died
-// with `no .data slot is labelled '__data_G'`. That is what makes this pass safe to extend.
+// hold, at each backend's `.data` relocation arm. So an under-walk here — a block source this loop cannot
+// see, a `globalAddr` emitted by something new after it runs — is a COMPILE-TIME abort naming the global,
+// never a miscompile. MEASURED by forcing the walk to answer "nothing is live" and compiling a program that
+// reads one global: all three targets die with `no .data slot is labelled '__data_G'`. That is what makes
+// this pass safe to extend.
 //
 // ⭐ **BIDIRECTIONALITY IS FREE HERE, AND IT IS THE THREE-OP SPLIT THAT MAKES IT SO.** The spec requires
 // that a var only ever STORED to survives — "stores are observable through `globalLoad` or a debugger"
@@ -57,32 +57,28 @@
 // file goes on dropping the slot.
 //
 // ⭐⭐ **ONE REACHABILITY TERM, AND IT IS SCOPED TO STDLIB SOURCE FOR THE SAME REASON EVERY OTHER
-// PRE-ELIMINATION PASS SCOPES IT THERE (S2h).** The spec says "never read or written by any REACHABLE
+// PRE-ELIMINATION PASS SCOPES IT THERE.** The spec says "never read or written by any REACHABLE
 // function". A USER function is still credited whether or not anything calls it — that keeps strictly MORE
 // globals and is only ever a missed prune — but a stdlib function `LibraryFacts.unreachable` names is
-// skipped, and that is not an approximation of anything: `lowerMaxonToStd` lowers NO BODY for it
-// (`LowerMaxonToStd:741`), so the `globalAddr` this walk would have read reaches no back end at all. A
-// slot kept for it is a slot kept for code that provably is not in the output.
+// skipped, and that is not an approximation of anything: `lowerMaxonToStd` lowers NO BODY for it, so the
+// `globalAddr` this walk would have read reaches no back end at all. A slot kept for it is a slot kept for
+// code that provably is not in the output.
 //
-// ⚠ **IT IS THE SAME DECIDER AT ONE MORE CONSUMER, NEVER A SECOND ONE.** That distinction is what the
-// paragraph this replaces was protecting, and it is worth keeping stated. The set is derived ONCE, by
-// `StdlibSource.deriveLibraryFacts`, and already gates `lowerMaxonToStd`, `InsertRangeChecks:202`,
-// `scanRuntimeUsage` and `DeadFunctionElimination:130` — where
-// `requireUnreachableLibraryStayedDead` PANICS BY NAME if it ever disagrees with the Std-tier walk that
-// actually prunes. What may still NOT be done is widening that walk to decide a USER function's slot: it
+// ⚠ **IT IS THE SAME DECIDER AT ONE MORE CONSUMER, NEVER A SECOND ONE.** The set is derived ONCE, by
+// `StdlibSource.deriveLibraryFacts`, and already gates `lowerMaxonToStd`, `InsertRangeChecks`,
+// `scanRuntimeUsage` and `DeadFunctionElimination` — where `requireUnreachableLibraryStayedDead` PANICS BY
+// NAME if it ever disagrees with the Std-tier walk that actually prunes. What may still NOT be done is widening that walk to decide a USER function's slot: it
 // models `call`/`tryCall`/`functionRef`/`asyncCall` edges only, so a function reached through a witness
-// table or an `.rdata` slot looks unreachable to it, and its own header records that it is exact "at this
-// rung" for stdlib source and not in general.
+// table or an `.rdata` slot looks unreachable to it, and its own header records that it is exact for
+// stdlib source and not in general.
 //
 // ⭐ MEASURED, and it is the whole reason the term exists: with `stdlib/Log.maxon` listed — the module
 // whose `var capturing` / `var captured` this pass's own spec was written for — `function main() returns
-// ExitCode / return 7` emitted **2,978 bytes of code against 1,592** without the entry, an **+87%** tax on
+// ExitCode / return 7` emits **2,978 bytes of code against 1,592** without the term, an **+87%** tax on
 // a program that never mentions `Log`. Its globals are read only by `Log.trace`/`startCapture`/
 // `stopCapture`, every one of them unreachable, so the slots, the `__module_init` chain that builds the
-// array and the `__maxon_global_cleanup` drop were all built for nobody. With the term the two numbers are
-// equal. ⚠ The header paragraph this replaces predicted the case BY NAME and called it unreachable "in any
-// case", on two premises that both expired: a top-level initializer may CALL today, and listing the module
-// is a live board row. A stale reason left in place is how this survived.
+// array and the `__maxon_global_cleanup` drop are all built for nobody. With the term the two numbers are
+// equal — and every further listed module with unreachable top-level state is the same tax again.
 
 // The `.data` labels live code can still name. Keyed by `ByteArray` because that is what both sides
 // already hold — the `globalAddr` op's `label` and `TopLevelDecl.dataLabel` are the same bytes, minted
@@ -100,17 +96,15 @@ export typealias LiveGlobalLabelSet = Set with ByteArray
 //
 // COST: ONE O(ops) walk, allocation-free but for the labels it keeps.
 //
-// ⚠⚠ **THE `storedGlobals == 0` GUARD BELOW NO LONGER FIRES FOR ANY PROGRAM, AND IT STOPPED IN THE SAME
-// COMMIT AS THE REACHABILITY TERM (S2g).** It used to skip this walk entirely for a program declaring no
-// stored global — *"the whole existing corpus and the entire scale ladder"* — on the argument that an
-// unconditional second full-module walk is a per-compile TIME cost that allocates nothing, and a cost that
-// allocates nothing is one `scale-test` is structurally blind to. That argument is unchanged and still the
-// reason the guard is written; what changed is that it can no longer be TAKEN. `storedGlobalCount` is a
-// count over the WHOLE arena, stdlib included (`assignDataLabels`), and `stdlib/Log.maxon` — listed by
-// S2g — declares `var capturing` and `var captured`. So every compile now has a stored global whether the
-// user wrote one or not, and the guard is kept as the statement of the empty case rather than as a path
-// anything takes. **The next listed module with top-level state does not make this worse; the FIRST one
-// already spent it.**
+// ⚠⚠ **THE `storedGlobals == 0` GUARD BELOW FIRES FOR NO PROGRAM.** It skips this walk entirely for a
+// program declaring no stored global, on the argument that an unconditional second full-module walk is a
+// per-compile TIME cost that allocates nothing, and a cost that allocates nothing is one `scale-test` is
+// structurally blind to. That argument is why the guard is written — but it cannot be TAKEN:
+// `storedGlobalCount` counts the WHOLE arena, stdlib included (`assignDataLabels`), and the listed
+// `stdlib/Log.maxon` declares `var capturing` and `var captured`. So every compile has a stored global
+// whether the user wrote one or not, and the guard stands as the statement of the empty case rather than
+// as a path anything takes. **The next listed module with top-level state does not make this worse; the
+// FIRST one already spent it.**
 //
 // ⭐ What bounds the walk in its place is the reachability skip in the loop: for a program that touches no
 // stdlib, every stdlib function is in `unreachableStdlib` and the walk visits the user's own bodies alone —
@@ -159,20 +153,19 @@ end 'liveGlobalLabels'
 // the op for `markMaxonCalleeEdge`'s stated reason: an under-approximation at a second site is not a compile
 // error, it is a body that is never lowered and then reached.
 //
-// ⭐⭐ **A SCALAR PREDICATE PLUS A NAME GETTER, NOT A UNION — AND THAT IS `maxonOpCalleeKind`'S MEASURED
-// CORRECTION APPLIED A SECOND TIME (W115 optimizer pass).** W115 wrote this as
-// `union MaxonOpGlobalLabel{none, label(ByteArray)}`, whose header claimed *"payload-free `none` keeps the
-// common answer a scalar"*. It does not: a union with ANY payload variant is boxed, so every ask allocated
-// one box — the identical defect `MaxonDialect.maxonOpCalleeKind`'s header records BATCH2 slice 3 measuring
-// and removing, in the identical shape (op classifier, `ByteArray` payload, asked per op). It cost more here
-// because there are three ask sites and two of them are inside walks `queryAllModule`'s stdlib body-demand
-// fixpoint repeats once per round. MEASURED A/B on one tree at one path, allocations exact:
-// `phase:deriveRuntimeNeeds` read **72,145 / 119,171 / 213,225 / 401,334 / 777,543 / 1,529,902** across the
-// six rungs with the union — x1.96 per doubling, DEAD LINEAR IN THE USER'S PROGRAM — and
-// **19,764 / 21,523 / 25,040 / 32,072 / 46,118 / 74,166** with this pair, which is back to the merge base's
-// 72,854 at rung 5. The demand fixpoint's own copy of the cost is not billed to any phase at all (it runs
-// BETWEEN `foldEveryFileIntoAModule` calls, outside the `merge` probe) and was 2.76x larger again:
-// -4,023,436 unbracketed allocations at rung 5 beside this table's -1,455,736.
+// ⭐⭐ **A SCALAR PREDICATE PLUS A NAME GETTER, NOT A UNION — THE SAME CORRECTION
+// `MaxonDialect.maxonOpCalleeKind`'s header carries, in the identical shape (op classifier, `ByteArray`
+// payload, asked per op).** A union with ANY payload variant is boxed, so
+// `union MaxonOpGlobalLabel{none, label(ByteArray)}` allocates one box per ask — a payload-free `none`
+// does NOT keep the common answer a scalar. It costs more here than there because there are three ask
+// sites and two of them are inside walks `queryAllModule`'s stdlib body-demand fixpoint repeats once per
+// round. MEASURED A/B on one tree at one path, allocations exact: `phase:deriveRuntimeNeeds` reads
+// **72,145 / 119,171 / 213,225 / 401,334 / 777,543 / 1,529,902** across the six rungs with the union —
+// x1.96 per doubling, DEAD LINEAR IN THE USER'S PROGRAM — against
+// **19,764 / 21,523 / 25,040 / 32,072 / 46,118 / 74,166** with this pair. The demand fixpoint's own copy
+// of the cost is billed to no phase at all (it runs BETWEEN `foldEveryFileIntoAModule` calls, outside the
+// `merge` probe) and is 2.76x larger again: -4,023,436 unbracketed allocations at rung 5 beside this
+// table's -1,455,736.
 //
 // The arms NAME every variant of `MaxonOp`, so a variant added later FAILS TO COMPILE here rather than
 // being classified by omission — exactly as `StdlibSource.markMaxonCalleeEdge` and

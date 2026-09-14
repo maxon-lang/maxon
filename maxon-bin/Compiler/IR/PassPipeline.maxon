@@ -9,29 +9,19 @@
 //   Phase 3  Maxon → Std  : lowerMaxonToStd              (maxonModule → stdModule)
 //   Phase 7  Std → Target : handled directly by the backend (not pipeline passes)
 //
-// PHI RESOLUTION moved OUT of the pipeline at M5: the register allocator consumes
+// PHI RESOLUTION IS NOT A PIPELINE PASS: the register allocator consumes
 // `blockArgs`/`branchEdges` DIRECTLY and does SSA destruction after coloring, so
-// the M4b `eliminatePhis` Std pass is retired (it eagerly inserted edge copies and
-// cleared the phi model before the backend, which the biased colorer needs intact).
+// no Std pass may insert edge copies or clear the phi model ahead of the backend —
+// the biased colorer needs it intact.
 //
 // There is NO MIR tier — see StdDialect's header. Instruction scheduling,
 // coalescing and the desugaring `lowerToMachineForm` performs are Std-tier
 // passes scheduled here.
-//
-// THIN for maxon M1: only the passes the `return 42` slice needs are
-// scheduled, and only `lowerMaxonToStd` does real work. resolveTypes /
-// semanticCheck are SCHEDULED PLACEHOLDERS whose bodies are a Chunk C deliverable
-// (TypeResolution + SemanticCheck) — present now so the pipeline SHAPE is stable
-// and Chunk C fills in bodies rather than rewiring the pipeline. The Std-tier
-// optimization passes (mem2reg/canonicalize/cse/…), the Own-tier passes, and
-// `lowerToMachineForm` GROW in at their milestones (M3+ / M6). Error gating
-// (`hasErrors` → throw) and per-pass IR-compaction/dump grow in with the Project +
-// diagnostics (Chunk C).
 
 // One arm per scheduled pass. Payload-free today; kept a `union` (not an enum)
 // to leave room for passes that carry configuration payloads.
 union PassKind
-	// Phase 2: Maxon-level. Chunk C bodies (placeholders in M1).
+	// Phase 2: Maxon-level.
 	resolveTypes
 	semanticCheck
 
@@ -43,7 +33,7 @@ union PassKind
 	// Phase 3: Maxon → Std.
 	lowerMaxonToStd
 
-	// Phase 3.4: Std → Std ranged-typealias narrowing guards (P1.9). Turns the parser's recorded
+	// Phase 3.4: Std → Std ranged-typealias narrowing guards. Turns the parser's recorded
 	// range-check sites into compile-time E3005s and runtime panic guards. It runs right after the
 	// lowering (value ids are freshest and unrenumbered) and BEFORE `foldConstOperands`, which then
 	// folds each guard's bound `const` into the `cmp`'s immediate. Appended after `lowerMaxonToStd` so
@@ -52,7 +42,7 @@ union PassKind
 	insertRangeChecks
 
 	// Phase 3.44: Std → Std expansion of the `__ManagedMemory` element primitives' FAST PATHS at their
-	// call sites (EC1), leaving the call itself — verbatim — as the slow arm every other case takes.
+	// call sites, leaving the call itself — verbatim — as the slow arm every other case takes.
 	//
 	// ⚠ **IT RUNS AFTER `insertRangeChecks`, AND THAT IS FORCED RATHER THAN CHOSEN.** A range-check site is
 	// recorded as `(blockId, stdOpPos)` in the coordinate space `lowerMaxonToStd` left the block in
@@ -61,21 +51,22 @@ union PassKind
 	// own `pastTheBlock` panic. Running after leaves that coordinate space untouched and costs nothing:
 	// the guards this pass emits are ordinary loads and compares, of no interest to a narrowing check.
 	//
-	// ⭐⭐ **AND SINCE EC17 IT RUNS BEFORE `inlineLeaves`, WHICH IS THE WHOLE OF THAT ROW.** `__managed_count`
+	// ⭐⭐ **AND IT RUNS BEFORE `inlineLeaves`, WHICH IS THE WHOLE OF THAT ROW.** `__managed_count`
 	// is the one primitive this pass rewrites IN PLACE — into a single `loadIndirect` — and every accessor
 	// whose body is that one call (`Array.isEmpty`, `Parser.advance`, `String.byteLength`) is therefore NOT
-	// a leaf until it has run. Ordered the other way the leaf inliner met a body holding a call and refused
-	// it, one pass before the call stopped existing: MEASURED on the self-compile, `Array.isEmpty` kept
+	// a leaf until it has run. Ordered the other way the leaf inliner meets a body holding a call and refuses
+	// it, one pass before the call stops existing: MEASURED on the self-compile, `Array.isEmpty` keeps
 	// **209** call sites, `Parser.advance` **106** and `String.byteLength` **92**.
 	//
-	// ⭐ **THE REORDER CANNOT COST `inlineLeaves` A SINGLE CALLEE, AND THAT IS A PROOF RATHER THAN A
+	// ⭐ **THIS ORDER CANNOT COST `inlineLeaves` A SINGLE CALLEE, AND THAT IS A PROOF RATHER THAN A
 	// MEASUREMENT.** This pass rewrites only bodies holding a `__managed_*` CALL, and a leaf holds no call
 	// BY RULE (`InlineLeaves.InlineOpRole.calling` refuses the callee outright) — so no body this pass can
 	// touch is one the leaf inliner would have accepted, and the eligible set can only grow. MEASURED
-	// anyway, because a proof about two passes is worth checking: on the self-compile the leaf inliner's
-	// eligible callees go **469 → 530** and its sites **4,138 → 4,921**, while THIS pass's own expansion
-	// count is unchanged to the digit at **6,032 across 9,494 functions** — leaf splicing never duplicated
-	// a managed primitive, in either order, and nothing the leaf inliner used to reach became unreachable.
+	// anyway, because a proof about two passes is worth checking: against the opposite order, on the
+	// self-compile the leaf inliner's eligible callees go **469 → 530** and its sites **4,138 → 4,921**,
+	// while THIS pass's own expansion count is unchanged to the digit at **6,032 across 9,494
+	// functions** — leaf splicing duplicates no managed primitive in either order, and this order
+	// leaves nothing unreachable.
 	//
 	// It runs BEFORE `foldConstOperands`, which IS chosen: every bound and stride it emits is a `const`,
 	// and the fold is what turns them into `cmpImm`/`binOpImm` operands so they never occupy a register in
@@ -84,7 +75,7 @@ union PassKind
 	inlineManagedPrimitives
 
 	// Phase 3.45: Std → Std splicing of callees into their direct call sites — every function called
-	// exactly once, then every TINY LEAF at every site (EC5) — copying panic blocks with their inline site so
+	// exactly once, then every TINY LEAF at every site — copying panic blocks with their inline site so
 	// a panic still prints the callee's frame (`InlineLeaves`' header, `BacktraceFormat`'s `__inlframes`).
 	//
 	// ⚠ **IT RUNS AFTER `insertRangeChecks` FOR THAT PASS'S OWN REASON, RESTATED HERE ONLY AS A
@@ -93,16 +84,16 @@ union PassKind
 	// to already EXIST — a copy made before `insertRangeChecks` would carry no entry guard, which would
 	// then be emitted into the callee alone.
 	//
-	// ⭐⭐ **AND SINCE EC17 IT RUNS AFTER `inlineManagedPrimitives`, WHICH IS WHAT MAKES THE
+	// ⭐⭐ **AND IT RUNS AFTER `inlineManagedPrimitives`, WHICH IS WHAT MAKES THE
 	// COUNT-BACKED ACCESSORS LEAVES AT ALL** — see that pass's entry above for the measurement, and for
-	// why the move cannot cost this one a callee.
+	// why that order cannot cost this one a callee.
 	//
-	// ⛔ **A SECOND ROUND WAS THE OTHER SHAPE EC17 WEIGHED, AND IT IS NOT WHAT LANDED.** Running the leaf
-	// rule again after the managed rewrite buys the same callees AND a cascade the row did not ask for:
+	// ⛔ **A SECOND ROUND IS NOT HOW THAT IS DONE.** Running the leaf
+	// rule again after the managed rewrite buys the same callees AND a cascade nothing asked for:
 	// eligibility recomputed on an already-spliced module admits a caller that became call-free BY being
 	// inlined into, which `LeafPlan`'s header refuses on purpose and which
 	// `inline-leaves.a-leaf-called-from-a-leaf-is-not-cascaded` pins. That would need suppressing
-	// machinery; the reorder needs none, and one round stays one round.
+	// machinery; the ordering above needs none, and one round stays one round.
 	//
 	// `promoteStackRecords` runs last, so no `stackRecordAddr` exists here (which is what its
 	// `isUnsupportedInInlineBody` would otherwise refuse a callee for).
@@ -123,7 +114,7 @@ union PassKind
 	// loop that shadows an outer var of the same name reads as an assignment to the outer one.
 	// They are not dead (something reads them), so `pruneDeadBlockArgs` leaves
 	// them; but a PHI is exactly what the cold-spill splitter may not spill, so an idle `var`
-	// across a loop was pinned in a register where an idle `let` was spilled for free — and
+	// across a loop would be pinned in a register where an idle `let` is spilled for free — and
 	// past the pool, a FALSE E5001. It runs after the prune (which is cheaper and removes the
 	// self-sustaining dead phis first) and before `foldConstOperands`, whose const DCE can then
 	// drop a `const` whose only reader was a folded phi's edge. Both are scheduled AGAIN after
@@ -159,7 +150,7 @@ union PassKind
 	// materializes a `setcc` for it, so a compare this pass deletes must not first become one CSE has made
 	// canonical.
 	//
-	// `commonSubexpressionElimination` (EC13) replaces a PURE computation whose operator and operands a
+	// `commonSubexpressionElimination` replaces a PURE computation whose operator and operands a
 	// block has already evaluated with a read of that earlier result — `x * 31 + y` written three times
 	// becomes one `imul`/`lea` pair instead of three into three simultaneously-live registers. It runs
 	// LAST of the arithmetic passes, and ⭐ **after `foldConstOperands` is load-bearing rather than
@@ -169,7 +160,7 @@ union PassKind
 	// comparison can call them equal. It also benefits from that pass's move 1, which puts a
 	// commutative op's constant on the rhs.
 	//
-	// `loopInvariantCodeMotion` (EC14) moves a computation whose answer cannot change across a loop's
+	// `loopInvariantCodeMotion` moves a computation whose answer cannot change across a loop's
 	// iterations into the block that runs once before it — the array length and buffer base the anchor
 	// loop reloaded per element. It runs AFTER CSE: CSE has already collapsed a repeated invariant
 	// expression to ONE op, so this pass moves one instruction and
@@ -177,7 +168,7 @@ union PassKind
 	// safety rules that licence that (the loop writes no memory; the load was going to execute anyway)
 	// are the whole content of its header.
 	//
-	// `strengthReduceDivision` (EC18) replaces `x / K` and `x mod K`, for a constant `K`, with a
+	// `strengthReduceDivision` replaces `x / K` and `x mod K`, for a constant `K`, with a
 	// multiply-and-shift sequence — an `idiv` is 20–40 cycles and the sequence is five or six ALU ops.
 	// ⭐ **ITS POSITION IS DECIDED BY THE THREE PASSES AFTER IT, EACH OF WHICH READS THE SEQUENCE AS
 	// ARITHMETIC IT CAN IMPROVE, AND BY THE ONE BEFORE IT.** After `foldConstants`, which is what MAKES
@@ -481,8 +472,8 @@ end 'passBanner'
 //     Maxon-module walk then panics on `blockRef … not in module.blocks`, which is exactly what a scan
 //     placed below the whole pipeline did, on seven cases.
 //
-// The Std-tier passes GROW into the SECOND stage, appended after `lowerMaxonToStd`: the optimizations
-// (mem2reg/canonicalize/cse/… at M3+), the Own-tier refcount passes (M6), and `lowerToMachineForm` (M6).
+// The Std-tier passes belong to the SECOND stage, appended after `lowerMaxonToStd`: the optimizations,
+// the Own-tier refcount passes, and `lowerToMachineForm`.
 // Phase 7 (target lowering /
 // regalloc / prologue-epilogue) stays backend-direct: it produces a CodeResult, which is not an IR module
 // and so does not fit the module-field dispatch model.
@@ -562,14 +553,14 @@ end 'buildLoweringPasses'
 // vestigial-tier residue the `mirModule` field was.
 export type PassPipeline
 	// The project owns the shared state the Maxon-tier passes read/write
-	// (interner, registries, diagnostics). resolveTypes/semanticCheck need it, and since P1.6-B1 the
+	// (interner, registries, diagnostics). resolveTypes/semanticCheck need it, and the
 	// lowering does too — it materialises a `sizeof(T)` receiver's layout descriptor from the project's
 	// struct/generic-instance registries; every pass dispatches uniformly through `self` regardless.
 	export var project as Project
 	export var maxonModule as MaxonModule
 	export var stdModule as StdModule
 
-	// The whole-program declaration index. `semanticCheck` reads its ENUM registry (E3113, A1s-throwsbox):
+	// The whole-program declaration index. `semanticCheck` reads its ENUM registry (E3113):
 	// `Parser.throwsTypeIsBoxedUnion` — the catch-site DECODE that decides whether an error flag is an ordinal
 	// or a box pointer — resolves a `throws` clause through `ProgramSignatures.enumOf`, so the check that a
 	// clause names something classifiable has to ask THAT registry and not the `Project.enumTypes` authority
@@ -583,7 +574,7 @@ export type PassPipeline
 	export var signatures as ProgramSignatures
 
 	// ⭐ **THE CHECKED NAME INDEX, BUILT ONCE FOR BOTH STAGES.** It is a FIELD rather than a `run`-local
-	// because the pipeline is now RUN TWICE — the Maxon-tier stage, then the lowering stage, with the
+	// because the pipeline is RUN TWICE — the Maxon-tier stage, then the lowering stage, with the
 	// runtime-needs derivation in the seam (`buildMaxonTierPasses`) — and one index is exactly what its own
 	// header claims: the Maxon function array is frozen across the whole pipeline, so a second build would
 	// re-derive an identical answer and re-run its duplicate refusal at a point nothing can have changed.
@@ -613,11 +604,11 @@ export type PassPipeline
 	// The index is built ahead of `resolveTypes`, which is the first pass to report anything, so nothing
 	// is refused later than the first diagnostic.
 	export static function create(project Project, maxonModule MaxonModule, signatures ProgramSignatures) returns PassPipeline throws CompileError
-		// ⭐⭐ **ONE CHECKED NAME INDEX FOR THE WHOLE PIPELINE (A2l).** Three passes derive a name-keyed map
+		// ⭐⭐ **ONE CHECKED NAME INDEX FOR THE WHOLE PIPELINE.** Three passes derive a name-keyed map
 		// from this module's function array — `semanticCheck`'s throws map and escape summary, and
-		// `lowerMaxonToStd`'s layout-descriptor set — and each used to hand-roll its own bare `upsert` loop.
-		// Two of them ran BEFORE the pass that built the checking index, so they were right by ORDERING and
-		// could not say so; the third had no index in front of it at all.
+		// `lowerMaxonToStd`'s layout-descriptor set. A hand-rolled bare `upsert` loop at each would leave two
+		// of them right by ORDERING alone and unable to say so, and the third with no index in front of it at
+		// all.
 		//
 		// It is built HERE, and once, because the Maxon function array is FROZEN across this pipeline: every
 		// synthesizer that appends to it (`installManagedGlobalInit` is the last) has run in
@@ -626,14 +617,9 @@ export type PassPipeline
 		// produces. So one index describes the array every pass below will walk — which is what lets each of
 		// them take the index instead of the module, and stop resting on a guarantee none of them stated.
 		//
-		// It replaces `buildParamMutationSummary`'s build rather than adding one, so the duplicate refusal
-		// simply moves EARLIER — ahead of `resolveTypes` instead of the middle of `semanticCheck`.
-		//
-		// ⚠ **IT USED TO BE BILLED TO `phase:semanticCheck`, AND THEN TO NOTHING AT ALL.** Its SIZE is no
-		// longer written down here, because it is now a row: `phase:pipelineNameIndex` in `--metrics`, read
-		// off the compile being asked about instead of remembered from one. What is worth keeping is the
-		// SHAPE, which a single row cannot show — MEASURED at A2l's review (2026-07-31, by temporarily
-		// billing this statement to the always-empty `emitIr` slot and reading the scale corpus): rung 0 at
+		// ⚠ **ITS SIZE IS NOT WRITTEN DOWN HERE — it is a row**: `phase:pipelineNameIndex` in `--metrics`,
+		// read off the compile being asked about instead of remembered from one. What a single row cannot
+		// show is the SHAPE — MEASURED across the scale corpus: rung 0 at
 		// 47 allocations, rung 5 at 79, i.e. **×1.68 across a 32× ladder**. That is the MAP's geometric
 		// buffer growth rather than a per-entry cost, which is why it does not track the program.
 		//
@@ -644,9 +630,9 @@ export type PassPipeline
 		// ⭐ **AND THE PHASE IS NAMED `pipelineNameIndex`, NOT `nameIndex`, BECAUSE A ROW MUST NOT CLAIM MORE
 		// THAN IT BRACKETS.** There are THREE Maxon-tier `FunctionNameIndex.create` calls; this is one of
 		// them, and a row spelled `nameIndex` would under-report the mechanism threefold. That objection is
-		// what kept this statement unbracketed until A2n, and it is answered by the NAME rather than by
+		// answered by the NAME rather than by
 		// leaving the cost in a remainder that `ScaleTestRunner` reads and discards. The other two —
-		// `ConformanceCheck.checkConformance`'s and `deriveLibraryFacts`' — are now inside
+		// `ConformanceCheck.checkConformance`'s and `deriveLibraryFacts`' — sit inside
 		// `CompilePhase.checkDeclarations` and `CompilePhase.deriveRuntimeNeeds`, billed to the passes whose
 		// own cost they are.
 		let nameIndexProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.pipelineNameIndex)

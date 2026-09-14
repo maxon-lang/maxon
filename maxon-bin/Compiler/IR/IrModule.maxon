@@ -441,7 +441,7 @@ export type IrModule uses Op
 		// result releases the op's +1, freeing its managed payload — String /
 		// ValueId-array operands). A bare `setLength`/`resize` would NOT free those
 		// payloads (it only rewrites the length word), so the orphans would leak
-		// what the whole-array teardown used to reclaim. Popping the LAST element
+		// what the whole-array teardown reclaims. Popping the LAST element
 		// is O(1) (no tail shift), so the loop is O(orphan count).
 		for _ in plan.liveCount upto oldCount 'dropOrphan'
 			_ = try self.ops.pop() otherwise panic("compactOps: ops.pop on non-empty tail failed")
@@ -464,7 +464,7 @@ export type IrModule uses Op
 	// block storage during the long backend phase of a large compile (the
 	// compiler compiling itself). This compactor drops them.
 	//
-	// ⚠ NOTHING CALLS IT YET, and nor does `compactOps`. Both are ported ahead of
+	// ⚠ NOTHING CALLS IT YET, and nor does `compactOps`. Both stand ahead of
 	// the pass that will want them; dead-function elimination deliberately does
 	// NOT, because an O(ops) walk plus two ops-sized arrays to release memory the
 	// module frees milliseconds later at the end of the compile is a bad trade

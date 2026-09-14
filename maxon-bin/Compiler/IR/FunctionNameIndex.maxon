@@ -2,12 +2,11 @@
 //
 // ⭐⭐ **THE POLICY, IN ONE PLACE: AN INDEX OVER A MODULE'S FUNCTIONS HAS NO TIE-BREAK, BECAUSE IT REFUSES
 // A TIE.** Several passes need to resolve a function NAME to the function it names, and every one of them
-// rests on the same fact — a merged module holds no two functions of one name. Before A1w each carried its
-// own copy of the index and its own answer to "what if it does": last-wins at three of them, FIRST-wins at
-// the fourth, and a check at exactly one. That is one fact with four readers, and the reader that had
-// learned it (A1t) was the only one that could say so. So the tie-break is gone rather than made uniform:
-// a duplicate is DETECTED where the index is built — the collision was never something to predict, only
-// something to notice (A1t) — and the compile is refused. Nothing downstream needs a policy for a state
+// rests on the same fact — a merged module holds no two functions of one name. A per-reader tie-break is a
+// policy each would have to get right on its own, and the one that learned the fact would be the only one
+// that could say so. So there is no tie-break at all:
+// a duplicate is DETECTED where the index is built — the collision is never something to predict, only
+// something to notice — and the compile is refused. Nothing downstream needs a policy for a state
 // that cannot exist.
 //
 // ⭐ **WHY DETECTION IS FREE, AND WHY IT IS NOT A `contains` PROBE.** The loop inserts index `i` on
@@ -20,7 +19,7 @@
 // ⭐ **WHAT EACH CALLER CAN ACTUALLY SEE IS DIFFERENT, AND THAT IS WHY THE CHECK BELONGS HERE RATHER THAN
 // AT ONE CHOKE POINT.** The sites sit at successive points of one compile, and a module GAINS functions
 // between them, so the set of duplicates each can meet grows monotonically. There is no single moment that
-// covers all of them (MEASURED, A1w):
+// covers all of them (MEASURED):
 //
 //   * `ConformanceCheck.checkConformance` — Maxon tier, before `installManagedGlobalInit` and before the
 //     pipeline. **It can see NONE.** Its only available cause is two parsed declarations, which is E3006 at
@@ -28,25 +27,25 @@
 //     index; no synthesizer has appended to the module yet. It is the one site that is not in this class —
 //     and it builds its index HERE anyway, because another spelling of the same loop costs more than the
 //     one integer compare does.
-//   * `StdlibSource.reachableMaxonFunctionNames` — Maxon tier, and since S2h it too runs BEFORE
-//     `installManagedGlobalInit`, so **it can see NONE** for the reason above. ⚠ It used to be the earliest
-//     site that could meet a `stdlib/Builtins.maxon` declaration of `__module_init` /
-//     `__maxon_global_cleanup` against the compiler's own, and moving it did not lose that refusal: the next
-//     site sees the identical pair, and `DeadFunctionElimination.markCompilerOwnedRoot` catches the case with
-//     no pair to count. **That is exactly why this list must be read before an index site is moved** — what
-//     a site can see is a property of its POSITION, and the position is now `Compiler.compileToCodeResult`'s
-//     ordering decision rather than this walk's.
+//   * `StdlibSource.reachableMaxonFunctionNames` — Maxon tier, and it too runs BEFORE
+//     `installManagedGlobalInit`, so **it can see NONE** for the reason above. A `stdlib/Builtins.maxon`
+//     declaration of `__module_init` / `__maxon_global_cleanup` against the compiler's own is refused at the
+//     next site, which sees the identical pair, and `DeadFunctionElimination.markCompilerOwnedRoot` catches
+//     the case with no pair to count. **That is exactly why this list must be read before an index site is
+//     moved** — what a site can see is a property of its POSITION, and the position is
+//     `Compiler.compileToCodeResult`'s ordering decision rather than this walk's.
 //   * `IR/PassPipeline.run` — Maxon tier, ONCE for the whole pipeline, over the array `resolveTypes`,
-//     `semanticCheck` and `lowerMaxonToStd` all walk (A2l), and the FIRST site downstream of
+//     `semanticCheck` and `lowerMaxonToStd` all walk, and the FIRST site downstream of
 //     `installManagedGlobalInit`. It can see a declaration of `__module_init` / `__maxon_global_cleanup`
-//     against the compiler's own. It replaced a build inside
-//     `SemanticCheck.buildParamMutationSummary`, which sat AFTER two other name-keyed maps that pass builds —
-//     so those two were right by ORDERING and could not say so; they now take this index as an argument.
+//     against the compiler's own. `SemanticCheck.buildParamMutationSummary` and the two other name-keyed
+//     maps that pass builds take this index as an argument rather than building their own, which would make
+//     them right by ORDERING alone and unable to say so.
 //   * `IR/Std/DeadFunctionElimination` — Std tier, after every `install*Runtime`, and TWICE: once over the
 //     array it prunes (the walk resolves its call-graph edges through it) and once over the array it leaves
 //     behind, which is the one every backend then resolves a callee through. It can see the above plus a
 //     declaration of any symbol a runtime installs (`__print_string`, `__str_eq`, `__mm_*`, a `__destruct_<T>`
-//     cascade …), which is the pair A1t was written for and the only one no earlier site can reach.
+//     cascade …), which is the pair the classifier below is written for and the only one no earlier site
+//     can reach.
 //
 // ⚠ **AND ONE CLASS OF COLLISION IS STILL BELOW ALL OF THEM.** The entry stub, the hand-assembled runtime
 // chunks and `__symtable` are laid into `.text` under names that are in NO module, so no index here can see
@@ -62,13 +61,13 @@
 // hold, which is that same array.
 //
 // ⭐⭐ **EVERY NAME-KEYED MAP DERIVED FROM A FUNCTION ARRAY IS BUILT FROM ONE OF THESE, AND THAT IS WHY
-// `functions` IS EXPORTED (A2l).** Ten sites used to hand-roll their own `Map with (ByteArray, …)` over a
-// module's function array — the wasm function-index map, the two ABI class maps the native backends thread
-// through every call site, the throws map, the escape summary, the layout-descriptor set — each with a bare
-// last-wins `upsert` and no check, and every one of them resting on this file's guarantee without standing
-// behind it. Ordering made most of them right, and ordering is not something the next reader can see.
+// `functions` IS EXPORTED.** Ten sites derive such a map from a module's function array — the wasm
+// function-index map, the two ABI class maps the native backends thread through every call site, the throws
+// map, the escape summary, the layout-descriptor set. A hand-rolled `Map with (ByteArray, …)` at each, with
+// a bare last-wins `upsert` and no check, would rest on this file's guarantee without standing behind it:
+// right by ORDERING, which is not something the next reader can see.
 //
-// So the guarantee is now carried by a TYPE rather than by a comment: a builder that walks `index.functions`
+// So the guarantee is carried by a TYPE rather than by a comment: a builder that walks `index.functions`
 // cannot be called without an index existing, and an index cannot exist without `create` having refused a
 // duplicate over THAT ARRAY. Exposing the array is what makes the two halves inseparable — a builder handed
 // the module instead could walk a different (or later) array than the one that was checked, which is the
@@ -97,7 +96,7 @@ end 'FunctionNameIndexBuild'
 export type FunctionNameIndex
 	// The array the indices index, carried WITH the map for the reason the header's last paragraph gives.
 	// EXPORTED so a derived per-callee map is built by walking the very array the duplicate check ran over —
-	// see the header's A2l paragraph.
+	// see the header's paragraph on derived name-keyed maps.
 	export let functions as IrFunctionArray
 	export let byName as FuncIndexByName
 
@@ -153,14 +152,14 @@ export type FunctionNameIndex
 	end 'funcNamed'
 end 'FunctionNameIndex'
 
-// ⭐⭐ **THREE CAUSES SHARE ONE SYMPTOM, AND PROVENANCE IS WHAT TELLS THEM APART (A1t).** Two of them are
+// ⭐⭐ **THREE CAUSES SHARE ONE SYMPTOM, AND PROVENANCE IS WHAT TELLS THEM APART.** Two of them are
 // compiler bugs and must stay a panic; the third is an AUTHOR's mistake and gets a diagnostic:
 //
 //   * **one side parsed, one side synthesized** — a declaration took a name the compiler owns. E4015,
-//     positioned at the declaration. D6 is what opened the door — it let `stdlib/Builtins.maxon` DECLARE
-//     reserved `__` names — and what creates the PAIR is whatever makes the compiler install its own copy,
-//     which differs by runtime. ⚠ **NOT always a call:** a usage-gated symbol needs one (A1r opened that
-//     door, and `__print_string` is installed by `print`/an explicit call), but
+//     positioned at the declaration. The door is `stdlib/Builtins.maxon` being allowed to DECLARE reserved
+//     `__` names, and what creates the PAIR is whatever makes the compiler install its own copy,
+//     which differs by runtime. ⚠ **NOT always a call:** a usage-gated symbol needs one
+//     (`__print_string` is installed by `print`/an explicit call), but
 //     `__module_init`/`__maxon_global_cleanup` are installed on `globals.count() != 0` alone (`ModuleInit`),
 //     so declaring one of THOSE collides with no call anywhere in the program. MEASURED both ways. The check
 //     runs before any reachability walk, so an uncalled declaration is diagnosed rather than quietly pruned.
@@ -179,10 +178,10 @@ end 'FunctionNameIndex'
 // copies nothing at all — `lowerMaxonToStd` pushes the SAME `IrFunction` object, rewriting only its type
 // fields. That is the SAME fact `TargetPrinter.isRuntimeFunction` reads, and it is read the same way for the
 // same reason: a NAME test cannot do this job, because the one file that can reach this error is the one
-// file whose declarations wear the compiler's own prefix (the A1r review measured a SIGSEGV on exactly that
+// file whose declarations wear the compiler's own prefix (MEASURED: a SIGSEGV on exactly that
 // confusion).
 //
-// ⚠ **REFUSE, NEVER REDIRECT.** The A1r review established that steering the CALL to the surviving
+// ⚠ **REFUSE, NEVER REDIRECT.** Steering the CALL to the surviving
 // definition trades this refusal for a silent miscompile — `print("x")` would bind to the author's
 // declaration instead of the runtime's `__print_string`, which knows the String record's layout. So the
 // compile is refused at the duplicate and no binary is produced.
@@ -204,9 +203,9 @@ function refuseDuplicateFunctionName(functions IrFunctionArray, project Project,
 	end 'bothSynthesized'
 
 	// ⭐ **BOTH PARSED, AND WHETHER THAT IS A COMPILER BUG IS NOT A PROPERTY OF THE DUPLICATE — IT IS
-	// WHETHER ANYTHING HAS ALREADY SAID SO.** Two declarations of one name is a USER error, and A1t could
-	// argue the panic below because its one caller ran at the BACK END, downstream of the pipeline's error
-	// gate; most callers now run upstream of that gate, so the argument has to be read off the
+	// WHETHER ANYTHING HAS ALREADY SAID SO.** Two declarations of one name is a USER error. A caller at the
+	// BACK END, downstream of the pipeline's error gate, could argue the panic below; most callers run
+	// UPSTREAM of that gate, so the argument has to be read off the
 	// project instead of inherited from a call site. A program already carrying a diagnostic is already
 	// refused: stop, and let the caller's own gate print what was accumulated. Resolving the tie would be
 	// the silent half of the very behaviour this file removes.
@@ -216,7 +215,7 @@ function refuseDuplicateFunctionName(functions IrFunctionArray, project Project,
 
 	// Both positions are printed rather than one cause asserted: two declarations E3006 missed entirely and
 	// ONE declaration merged (or lowered) twice both land here, and only the two positions tell them apart.
-	// A1t exists because a panic named two causes that were both false for the case in front of it.
+	// A panic that asserts a cause instead can name two that are both false for the case in front of it.
 	panic("refuseDuplicateFunctionName: two PARSED functions are named '{name}', at {earlier.sourceFilePath.toString()}:{earlier.nameLine} and {later.sourceFilePath.toString()}:{later.nameLine}, and no diagnostic has been reported — two DISTINCT positions mean `commitFuncSignatures`' whole-program E3006 did not see one of them; the SAME position twice means one declaration was merged or lowered into the module twice")
 end 'refuseDuplicateFunctionName'
 

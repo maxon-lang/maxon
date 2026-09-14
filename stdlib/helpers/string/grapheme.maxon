@@ -8,10 +8,8 @@
 // one to be MATERIALIZED per call. These are the per-codepoint scans behind `count`, `charAt`,
 // `trim` and `for c in s`, so that would be an allocation per character. See `String.byteAt`'s doc.
 //
-// The `offset`/`len` window these used to carry is GONE. It was never used: all eight call sites
-// passed `offset: 0` and `len` = the source's full byte length, so the window was generality nobody
-// had asked for — and with a `String` source it is meaningless, since a String IS its own window.
-// (Stage 4b-1 removed the identical dead window from `hashManagedStringRange`.)
+// None of them takes an `offset`/`len` window: with a `String` source a window is meaningless, since
+// a String IS its own window.
 
 typealias BreakProperty = int(0 to 13)
 
@@ -28,8 +26,8 @@ let AsciiLimit = 128 as Utf8Byte
 
 // U+000D and U+000A. GB3 joins CR to a following LF, which makes `<CR><LF>` the ONE grapheme cluster
 // that spans two ASCII bytes — the whole reason `String.singleByteGraphemesFlag` has to be stronger
-// than "is ASCII", and the reason ten methods that read the old `isAsciiFlag` as "one byte per
-// character" split the cluster.
+// than "is ASCII": a method that reads a bare is-ASCII answer as "one byte per character" splits
+// this cluster.
 //
 // ⚠ `String.CarriageReturnByte` states this byte a second time, because its classifier tests every
 // byte of every string at construction and a cross-file call per byte is not affordable (a second
@@ -387,9 +385,6 @@ end 'findGraphemeStart'
 // `findGraphemeEnd` measured +1.3%, inside noise, next to the Character it allocates per step.
 
 /// Count the total number of grapheme clusters in a String.
-///
-/// The private `countGraphemesManagedRange` this used to forward to is gone with the window: its
-/// only caller was this function, passing the whole string.
 public function countGraphemes(s String) returns GraphemeIndex
 	let len = s.byteLength()
 
@@ -737,7 +732,6 @@ end 'isGraphemeBreak'
 //
 // BOTH fields reset unless this codepoint extends them: the count survives only across an unbroken run of
 // Regional Indicators, and the emoji flag only while an Extended_Pictographic base is still being extended.
-// That reset is why the old object could never be reused in place and had to be re-minted per codepoint.
 function graphemeStateUpdate(state GraphemeStateBits, gbp BreakProperty, cp Codepoint) returns GraphemeStateBits
 	// Track Regional Indicator sequences (gbp == 6)
 	var riCount = 0 as RegionalIndicatorCount

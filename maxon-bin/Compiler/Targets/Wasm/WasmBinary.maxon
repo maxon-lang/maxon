@@ -19,9 +19,8 @@
 //     `i64Const(0)` BELOW the operand, then `i64Sub()`;
 //     `bitNot` as operand then `i64Const(-1)` then `i64Xor()` (xor is commutative, so operand
 //     order is free); `logicalNot` as `i32Const(1)` then `i32Xor()` — a BIT FLIP, matching the
-//     native backends' `eor #1` / `xor reg, 1`, not the `i32Eqz()` this line used to name (X5
-//     review; the two agree only over a 0/1 operand, so it was a wrong description rather than a
-//     wrong answer). Every primitive that composition needs is
+//     native backends' `eor #1` / `xor reg, 1`, rather than an `i32Eqz()`, which agrees with it only
+//     over a 0/1 operand. Every primitive that composition needs is
 //     already in the API, so no dedicated helper is warranted.
 //
 // DETERMINISM: everything here iterates ordered arrays (insertion order) and index ranges —
@@ -184,9 +183,8 @@ let opI64GtS = 0x55
 let opI64LeS = 0x57
 let opI64GeS = 0x59
 
-// The UNSIGNED four. `ge_u` predates the others by a rung — the jump table's bounds check reached for it
-// alone — and the ordering-comparison rule needs the whole family, so the comment it carried now sits at
-// its emitter with the others rather than on the constant. They are contiguous in the encoding with their
+// The UNSIGNED four. The ordering-comparison rule needs the whole family, so the reasoning sits at their
+// emitter rather than on the constants. They are contiguous in the encoding with their
 // signed twins (`lt_s` 0x53 / `lt_u` 0x54, and so on), which is the encoding's own statement that a
 // comparison's signedness is a property of the INSTRUCTION here rather than of the operands.
 let opI64LtU = 0x54
@@ -195,11 +193,11 @@ let opI64LeU = 0x58
 let opI64GeU = 0x5A
 
 // ⚠ NO `i32.div_s`/`i32.rem_s`, and no i32 multiply, bitwise-and/or or shift either — the absence is
-// DELIBERATE (X5 and its review). `div`/`mod` are the two Std ops with no operand type, and the rest
+// DELIBERATE. `div`/`mod` are the two Std ops with no operand type, and the rest
 // were selected by an operand type whose narrowness describes STORAGE, not arithmetic; this backend
 // computes every integer op at MACHINE WIDTH (`StdToWasm.wasmMachineValTypeOf`), so no 32-bit arithmetic
-// is ever emitted. The file's rule is that an opcode is here because the slice needs it; these
-// stopped being needed when the width stopped being guessed. What is left is address arithmetic
+// is ever emitted. The file's rule is that an opcode is here because the slice needs it, and no 32-bit
+// arithmetic op is. What is left is address arithmetic
 // (`add`/`sub` over an i32 linear-memory address) and `logicalNot`'s bit flip (`xor`).
 let opI32Add = 0x6A
 let opI32Sub = 0x6B
@@ -255,8 +253,8 @@ let opF64Div = 0xA3
 let opI64TruncF64S = 0xB0
 let opF64ConvertI64S = 0xB9
 
-// The MATH INTRINSICS (P1.0d.4-C, `abs` with `specs/abs.md`), f64 → f64 — the whole rung, on wasm, is
-// these five opcodes: wasm has each as a NATIVE instruction, so there is nothing to synthesize and no
+// The MATH INTRINSICS (`abs` with `specs/abs.md`), f64 → f64 — on wasm the whole family is these five
+// opcodes: wasm has each as a NATIVE instruction, so there is nothing to synthesize and no
 // `.rdata` constant (the native backends need an SSE4.1 `roundsd` and an AArch64 `frint`; wasm needs
 // one byte each).
 //
@@ -277,7 +275,7 @@ let opF64Floor = 0x9C
 let opF64Nearest = 0x9E
 let opF64Sqrt = 0x9F
 
-// The BIT REINTERPRETATION (P1.7a's last slice), f64 → i64 — `float.hash`'s foundation. Unlike
+// The BIT REINTERPRETATION, f64 → i64 — `float.hash`'s foundation. Unlike
 // `i64.trunc_f64_s` above it converts NOTHING: the same 64 bits arrive on the i64 side, which is
 // exactly what a hash of a float's IEEE-754 pattern needs. wasm gives it natively in one byte where
 // the native backends need a cross-register-file transfer (`movq` / `FMOV Xd, Dn`).
@@ -295,7 +293,7 @@ let opF64ReinterpretI64 = 0xBF
 // `align` ULEB then an `offset` ULEB. The WORD forms below (an `int`/pointer is i64, a `float` is f64)
 // serve globals and heap-record fields; the BYTE forms that follow serve a heap String's per-byte
 // access. StdToWasm's `wasmMemAccessType` is the one door mapping a Std type to the width — and to the
-// P1.9 `as`-cast for the narrow integers still beyond the backend.
+// `as`-cast for the narrow integers still beyond the backend.
 let opI64Load = 0x29
 let opF64Load = 0x2B
 let opI64Store = 0x37
@@ -307,7 +305,7 @@ let opF64Store = 0x39
 // i32 local), and `i32.store8` writes the LOW byte of the i32 operand. Only the `u8`/`i1` byte forms
 // join the word forms above, because the shared native `accessWidthFor` door lowers only BYTE
 // (`i1`/`u8`) and WORD (`i64`/`f64`) accesses today — a wider narrow integer needs the `as` cast
-// (P1.9), which the wasm backend refuses identically (StdToWasm's `wasmMemAccessType`). The narrower
+// which the wasm backend refuses identically (StdToWasm's `wasmMemAccessType`). The narrower
 // forms grow the file when that cast lands.
 let opI32Load8U = 0x2D
 let opI32Store8 = 0x3A
@@ -320,7 +318,7 @@ let opI32Store8 = 0x3A
 let opMemoryGrow = 0x40
 let wasmMemoryGrowMemZero = 0x00
 
-// The BULK-MEMORY band (F1b). These ride a `0xFC` prefix followed by a ULEB sub-opcode, which is why they
+// The BULK-MEMORY band. These ride a `0xFC` prefix followed by a ULEB sub-opcode, which is why they
 // are not simply two more single-byte opcodes above.
 //
 // ⚠ The operand shapes in this family DIFFER: `memory.copy` (sub-opcode 10) carries TWO memory indices
@@ -338,7 +336,7 @@ let wasmBulkMemoryMemZero = 0x00
 let wasmMemAlignByte = 0
 let wasmMemAlignWord64 = 3
 
-// The function-value funcref table (P1.5-A1). `call_indirect` dispatches through a single table of
+// The function-value funcref table. `call_indirect` dispatches through a single table of
 // `funcref` at table index 0; `wasmRefTypeFuncref` (0x70) is the table's reference type. Declared here,
 // before WasmBody, so `WasmBody.callIndirect` can name the table index without a forward reference — the
 // table/element SECTIONS themselves are emitted by WasmModuleBuilder below. `wasmElemSegmentActiveFuncref`
@@ -366,7 +364,7 @@ export type WasmBody
 
 	// Structured control flow. block/loop/if open a void-typed region; `beginIf` consumes an
 	// i32 condition from the stack; `elseClause` splits an if; `endOp` closes the innermost
-	// region (the wasm `end` opcode, renamed off the keyword — see the file header).
+	// region (the wasm `end` opcode, spelled `endOp` because `end` is a Maxon keyword — see the file header).
 	export function beginBlock()
 		self.buf.push(opBlock)
 		self.buf.push(wasmBlockTypeEmpty)
@@ -438,7 +436,7 @@ export type WasmBody
 		writeUleb128(self.buf, value: funcIdx)
 	end 'call'
 
-	// `call_indirect (type typeIdx) (table 0)` — a call THROUGH a funcref table entry (P1.5-A1). It pops
+	// `call_indirect (type typeIdx) (table 0)` — a call THROUGH a funcref table entry. It pops
 	// the i32 table index from the top of the stack, then the arguments below it, and CHECKS the referenced
 	// function's type against `typeIdx` at runtime (a mismatch traps). The immediate is `(type_index,
 	// table_index)`, both ULEB128; the table index is always 0 — the module declares a single funcref table.
@@ -583,12 +581,11 @@ export type WasmBody
 		self.buf.push(opI64GeU)
 	end 'i64GeU'
 
-	// ⚠ NO `i64.eqz` EITHER, and it is the SAME rule as the i32 ALU note above — swept one encoder wider
-	// (X5 review). It was here claiming "for logicalNot and cond materialization on i64 values", and it had
-	// NEITHER consumer: `logicalNot` is an `i32.xor 1` (`StdToWasm.emitLogicalNotExpr`) and a wide condition
-	// reaches `if` through the one coercion door (`pushOperandAt` → `i32.wrap_i64`). An unemittable encoder
-	// whose comment names a caller that does not exist is worse than an absent one — the next reader takes
-	// it for the lowering that is actually used.
+	// ⚠ NO `i64.eqz` EITHER, and it is the SAME rule as the i32 ALU note above, one encoder wider. It
+	// would have NEITHER consumer: `logicalNot` is an `i32.xor 1` (`StdToWasm.emitLogicalNotExpr`) and a
+	// wide condition reaches `if` through the one coercion door (`pushOperandAt` → `i32.wrap_i64`). An
+	// unemittable encoder whose comment names a caller that does not exist is worse than an absent one —
+	// the next reader takes it for the lowering that is actually used.
 
 	// Width conversions inserted only where wasm's type discipline forces an i64↔i32 boundary
 	// (notably the `$run` entry's `i32.wrap_i64` of main's result).
@@ -605,7 +602,7 @@ export type WasmBody
 	end 'i64ExtendI32U'
 
 	// ⚠ **THE i32 SET IS NOT THE i64 SET'S TWIN — it is only what LINEAR-MEMORY ADDRESS arithmetic and
-	// the 0/1 bool need** (X5 review). An integer OPERATION is emitted at the machine word whatever its
+	// the 0/1 bool need**. An integer OPERATION is emitted at the machine word whatever its
 	// Std operand type says (`StdToWasm.wasmMachineValTypeOf`), so there is no width to pick between: the
 	// i32 ALU that remains is `add`/`sub` for an address computed from a base, `xor` for `logicalNot`'s
 	// bit flip, and `eqz`. The multiply, the bitwise pair, the three shifts and the six compares were
@@ -799,12 +796,12 @@ end 'WasmBody'
 // --- Section IDs (canonical order) ---
 // A wasm module's sections MUST appear in ascending id order; finish() emits exactly this
 // subset in this order. Ids 6 (global) and 8 (start) stay unused by this slice; ids 4 (table)
-// and 9 (element) carry the function-value funcref table (P1.5-A1); id 11 (data) carries the
+// and 9 (element) carry the function-value funcref table; id 11 (data) carries the
 // top-level-`var` `.data` image.
 //
 // Id 0 is the CUSTOM section, and it is the one exception to the ordering rule: a custom section
 // may appear between any two others, and any number of times. `finish` emits the ONE this backend
-// produces — the "name" section (W3) — last, past the data section, which is where every other
+// produces — the "name" section — last, past the data section, which is where every other
 // producer puts it and where a reader that stops at the last known id will not trip over it.
 let wasmSectionCustom = 0
 let wasmSectionType = 1
@@ -817,7 +814,7 @@ let wasmSectionElement = 9
 let wasmSectionCode = 10
 let wasmSectionData = 11
 
-// --- The "name" custom section (W3) ---
+// --- The "name" custom section ---
 //
 // ⭐ **IT IS WHAT MAKES A PANIC BACKTRACE READABLE ON THIS TARGET, AND IT IS THE ONLY THING THAT CAN
 // BE.** wasm has no frame-pointer chain, so the panic runtime cannot walk one (see `StdToWasm`'s
@@ -919,7 +916,7 @@ end 'writeI32ConstOffsetExpr'
 
 // Encode one functype: form byte, ULEB128 param count + param valtype bytes, then the same
 // for results. Exported so `StdToWasm.buildIndirectCallTypeIdxMap`/`emitCallIndirect` can key an indirect
-// call's pre-interned functype by the SAME encoded bytes `internFuncType` dedups on (P1.5 #78) — one
+// call's pre-interned functype by the SAME encoded bytes `internFuncType` dedups on — one
 // encoder, so the intern-time key and the emit-time lookup key cannot disagree.
 export function encodeFuncType(params WasmValTypeArray, results WasmValTypeArray) returns ByteArray
 	var enc = ByteArray.create()
@@ -1067,7 +1064,7 @@ export type WasmModuleBuilder
 	// memory (`exportMemory`'s `minPages`) to cover the highest `base + bytes.count()`.
 	var dataSegments as WasmDataSegmentArray
 
-	// Whether the module declares the function-value funcref table + element segment (P1.5-A1). Set by
+	// Whether the module declares the function-value funcref table + element segment. Set by
 	// `enableFuncrefTable` when the Std module contains an indirect call; the table then covers EVERY
 	// function so a function's table index equals its wasm funcIdx. False keeps a program with no function
 	// value byte-identical — no table (id 4) and no element (id 9) section at all.
@@ -1158,10 +1155,10 @@ export type WasmModuleBuilder
 		self.dataSegments.push(WasmDataSegment.create(base, bytes: bytes))
 	end 'addDataSegment'
 
-	// Declare that the module needs the function-value funcref table + element segment (P1.5-A1). Called once
+	// Declare that the module needs the function-value funcref table + element segment. Called once
 	// by `buildWasmCoreModule` when the Std module contains an indirect call OR a `.rdata` slot naming a
 	// function — a witness-table method slot or a layout descriptor's `destroyFunc@40`/`copyFunc@32`, which
-	// hold a TABLE INDEX on this target (`StdToWasm.bakeFuncTableIndexRelocs`, P1.7a slice 2b-iv-B) and so need
+	// hold a TABLE INDEX on this target (`StdToWasm.bakeFuncTableIndexRelocs`) and so need
 	// the table to exist even when no op in the module is itself an indirect call. The table is sized to
 	// hold every function and the element segment lists them in index order (`emitTableSection` /
 	// `emitElementSection`), so table[i] == function i and a function's table index equals its wasm funcIdx.

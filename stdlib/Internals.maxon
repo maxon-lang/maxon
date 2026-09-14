@@ -129,7 +129,7 @@ typealias ProcIdOrAbsent = int(-1 to i64.max)
 //     a caller's unvalidated index, a sub-byte-packed bit width, a refcount the trap must see go
 //     below zero, and the flag a non-owned buffer answers instead of a capacity.
 //   • `maxon-bin/Compiler/Targets/Shared/BinaryHelpers.maxon`'s `NonZeroWord` — outside `stdlib/`
-//     entirely. (Its `MachineWord` twin now AGREES with this file's and is no longer a split.)
+//     entirely. (Its `MachineWord` twin AGREES with this file's.)
 // A range that must admit a sentinel is honest only by admitting it; the rule is not "narrow
 // everything", it is "say what the value can be".
 
@@ -160,11 +160,11 @@ end '__mm_incref'
 // degrades to `== 0` and a corrupt negative comes back as a huge positive — the double-free trap
 // stops firing, silently, over a green suite. The three call sites pass a LOCAL, which carries no
 // declared range and so already refuses the unsigned reading; routing them all through one door
-// that DECLARES the domain means the trap can no longer be broken by a retype anywhere, and states
-// the requirement instead of leaving it resting on an absence.
+// that DECLARES the domain means the trap cannot be broken by a retype anywhere, and states the
+// requirement instead of leaving it resting on an absence.
 //
 // A one-line body the stdlib inliner folds into each caller, so this costs no call on the decref
-// hot path — and it replaces three copies of the same comparison.
+// hot path — and the comparison is spelled once rather than at each of the three call sites.
 function __mm_is_over_release(prior RefCountDelta) returns bool
 	return prior <= 0
 end '__mm_is_over_release'
@@ -291,14 +291,14 @@ end '__mm_drop'
 //     already zero, so they cost NOTHING to hand out.
 //
 // The bump cursor is what makes the second case possible at all, and it is the
-// reason `__slab_build_freelist` no longer exists:
+// reason no free list is threaded through a fresh span up front:
 //
 //   >>> Threading an intrusive free list through a fresh span writes a next-pointer
 //   >>> into slot[0] of EVERY slot, which DIRTIES every one of them. A dirty slot
 //   >>> must be memzeroed before it can be handed out. So building the list up front
-//   >>> was not merely wasted work — it was the thing that would FORCE a memzero on
-//   >>> every first-ever allocation. Leaving the region pristine is the precondition
-//   >>> for any zero-elision at all.
+//   >>> is not merely wasted work — it FORCES a memzero on every first-ever
+//   >>> allocation. Leaving the region pristine is the precondition for any
+//   >>> zero-elision at all.
 //
 // This is FINER-GRAINED than Go, whose `needzero` is per-span: Go re-zeroes even
 // never-used slots in a span that has seen a single free. Our cursor is per-slot,
@@ -329,7 +329,7 @@ let MSPAN_META_SLOT_SIZE = 0x60
 // SIZE LADDER (straight-line overlapping stores when small, a store loop when
 // medium, `rep stosq` only once the region is big enough to amortise its ~20-40
 // cycle startup) — which is what makes it viable to zero an 8-byte slab slot on
-// the allocator's hot path. This used to be a byte-at-a-time loop.
+// the allocator's hot path.
 function __slab_memzero(ptr MachineWord, size MachineWord)
 	__Internals.memzero(ptr, size: size)
 end '__slab_memzero'
@@ -666,8 +666,8 @@ function __slab_meta_alloc() returns MachineWord
 	end 'popFree'
 
 	// Bump path. The gate compares two ADDRESSES, both `MachineWord`-derived and so read
-	// UNSIGNED — which is the correct reading for an address and the reason the pair no longer
-	// needs the old "both are well below the high bit" argument to be safe.
+	// UNSIGNED — which is the correct reading for an address, so the pair needs no "both are well
+	// below the high bit" argument to be safe.
 	let bumpPtr = __Internals.loadIndirect(__Internals.slabMetaBumpPtrAddr())
 	let advanced = bumpPtr + MSPAN_META_SLOT_SIZE
 	let bumpEnd = __Internals.loadIndirect(__Internals.slabMetaBumpEndAddr())
@@ -821,10 +821,10 @@ end '__slab_shard_for_tag'
 // rather than throwing is deliberate — "there is no P" is the NORMAL answer on a raw OS thread and
 // on every program that never starts a scheduler, and every caller already handles it.
 //
-// ⚠ The tag gate also closes a wild deref the old `id < 0` gate did not: it caught -1 but NOT the
-// 0xFFFFFFFF parked sentinel, which a raw-thread free of a parked span would have used to index
-// `__sched_procs` four billion entries out. It now routes to the same fallback-local push a missing
-// P does.
+// ⚠ The TAG gate, not a sign test, is what closes a wild deref: `id < 0` catches -1 but NOT the
+// 0xFFFFFFFF parked sentinel, which a raw-thread free of a parked span would use to index
+// `__sched_procs` four billion entries out. The tag routes it to the same fallback-local push a
+// missing P takes.
 function __slab_proc_at(tag MachineWord) returns MachineWord
 	if not __slab_tag_is_real_p(tag) 'none'
 		return 0
@@ -916,11 +916,11 @@ end '__slab_drain_remote_frees'
 // the base, every slot available. The caller must guarantee the pages are already
 // zero (fresh from the arena, or explicitly memzeroed).
 //
-// This REPLACES the old __slab_build_freelist, which threaded a next-pointer through
-// slot[0] of all N slots. That loop was not just expensive (up to 1024 dependent
-// stores touching a whole 8 KiB span); it DIRTIED every slot, and a dirty slot has
-// to be memzeroed before it can be handed out. Deleting it is what lets
-// __slab_alloc_class hand out a never-used slot for free.
+// No free list is threaded through the slots: a next-pointer written into slot[0] of
+// all N is not just expensive (up to 1024 dependent stores touching a whole 8 KiB
+// span), it DIRTIES every slot, and a dirty slot has to be memzeroed before it can be
+// handed out. Leaving them pristine is what lets __slab_alloc_class hand out a
+// never-used slot for free.
 function __slab_reset_span_to_virgin(span MachineWord, base MachineWord, totalSlots MachineWord)
 	__Internals.storeIndirect(span + 0x10, value: 0)
 	__Internals.storeIndirect(span + 0x18, value: totalSlots)
@@ -2102,12 +2102,12 @@ end '__slab_free'
 			return
 		end 'noFrame'
 
-		// ⚠ Bound `ra` against the .text ADDRESS RANGE, not `ra - textBase` against 0. The old form
-		// leant on the subtraction going NEGATIVE below `textBase` — a signed reading of a value
-		// derived from an address, which is exactly the conflation this file's `MachineWord` split
-		// removed. Comparing the two addresses directly says the same thing and says it in the
-		// reading an address actually has. (The symbol table is emitted immediately after the code
-		// region, so its address is .text's exclusive upper bound.)
+		// ⚠ Bound `ra` against the .text ADDRESS RANGE, not `ra - textBase` against 0. Testing the
+		// subtraction leans on it going NEGATIVE below `textBase` — a signed reading of a value
+		// derived from an address, which is exactly the conflation `MachineWord` refuses. Comparing
+		// the two addresses directly says the same thing in the reading an address actually has.
+		// (The symbol table is emitted immediately after the code region, so its address is .text's
+		// exclusive upper bound.)
 		let textBase = __Internals.mrtStartAddr()
 		let textEnd = __Internals.symtableAddr()
 
@@ -3127,8 +3127,8 @@ function __mm_alloc_needzero(size MachineWord, destructor MachineWord, needzero 
 	// destructor / size / refcount offsets stay at their historical
 	// `user_ptr - 24 / -16 / -8`. Under `--rc-sanitize` it instead carries this
 	// object's refcount-op history ring block (0 on arena exhaustion); nothing
-	// else reads this word, and a default build stores 0 here exactly as before,
-	// so the emitted bytes are identical when the sanitizer is off.
+	// else reads this word, and a default build stores 0 here, so the emitted bytes
+	// differ only under the sanitizer.
 	#if rcSanitize(true)
 		__Internals.storeIndirect(slotBase, value: __rc_ledger_attach())
 	#else
@@ -3139,9 +3139,9 @@ function __mm_alloc_needzero(size MachineWord, destructor MachineWord, needzero 
 	__Internals.storeIndirect(slotBase + 16, value: clampedSize)
 
 	// Refcount-insertion (Step 2): a fresh allocation owns NO reference — the
-	// refcount header starts at 0 (alloc-at-0). With lowering no longer emitting
-	// any incref, the binding/field store that takes ownership is the first +1,
-	// supplied by the late SSA insert-refcounts pass. (See the header layout
+	// refcount header starts at 0 (alloc-at-0). Lowering emits no incref, so the
+	// binding/field store that takes ownership is the first +1, supplied by the
+	// late SSA insert-refcounts pass. (See the header layout
 	// comment above and the __mm_decref rc-guard.)
 	__Internals.storeIndirect(slotBase + 24, value: 0)
 	return slotBase + 32
@@ -3297,9 +3297,8 @@ function __managed_mem_alloc_buffer(byteLen MachineWord) returns MachineWord
 	let buf = __mm_alloc(byteLen, destructor: 0)
 	__mm_incref(buf)
 
-	// The buffer arrives ZEROED — `__mm_alloc` guarantees it, so this function no
-	// longer zeroes it itself (it used to, with a byte-at-a-time loop, on every
-	// Array/Map/Set buffer).
+	// The buffer arrives ZEROED — `__mm_alloc` guarantees it, so this function does
+	// not zero it itself.
 	//
 	// That guarantee is load-bearing, not a nicety: a container that fills its
 	// buffer SPARSELY — a Map/Set hash table writes keys at hashed positions and
@@ -3509,9 +3508,9 @@ function __managed_mem_vacate_range(self MachineWord, start BufferCoordinate, en
 end '__managed_mem_vacate_range'
 
 // clear(self) — drop every live managed element, erase the slots, then truncate
-// to empty (length=0). `Array.clear()` formerly lowered to a bare `length = 0`,
-// which leaked every managed element (the slots' +1 refs were orphaned with no
-// walk). Vacate-then-truncate frees them AND leaves [0, capacity) zeroed, so a
+// to empty (length=0). A bare `length = 0` would leak every managed element (the
+// slots' +1 refs orphaned with no walk). Vacate-then-truncate frees them AND
+// leaves [0, capacity) zeroed, so a
 // following `resize` back over the same slots re-exposes zeros rather than the
 // pointers clear just released. The backing buffer + capacity are retained for
 // reuse. Returns 0 (the void result the lowering binds).
@@ -3869,7 +3868,7 @@ end '__managed_mem_set'
 // must NOT go through get+set — `__managed_mem_set` decrefs the displaced
 // occupant (correct for an OVERWRITE, where the old value is discarded), which
 // during a swap would free a box that is merely being relocated to the other
-// slot → use-after-free / corrupted elements (the sort-of-managed-elements bug).
+// slot → use-after-free / corrupted elements.
 // COW-aware: a slice/rdata-backed buffer (capacity < 0) is materialized private
 // first so the swap never mutates shared storage. Bounds: i,j ∈ [0, length).
 // Throws indexOutOfBounds (wire 1) on OOB.
@@ -4013,8 +4012,8 @@ function __managed_mem_cow_check(self MachineWord) returns MachineWord
 
 	// Promote the record to ROOT now that it owns a private heap buffer.
 	// `__destruct___ManagedMemory` keys teardown on parent_ptr (NOT capacity), so
-	// without this the record kept its pre-COW parent — RDATA (-2: "nothing to
-	// free", so the new owned buffer leaked — the append/grow-from-literal leak),
+	// without this the record keeps its pre-COW parent — RDATA (-2: "nothing to
+	// free", so the new owned buffer leaks),
 	// INLINE (-3: a non-pointer marker, never a heap ref to decref), or a slice
 	// parent (whose ref we must now drop, since we no longer alias its buffer). Set
 	// ROOT, then release ONLY a real slice parent (a heap pointer, i.e. not one of
@@ -4555,8 +4554,7 @@ function __managed_mem_create_managed(count BufferCoordinate, elemSize ElementSt
 		let inlineBuf = rec + MANAGED_MEM_RECORD_SIZE
 
 		// The inline element region lives INSIDE this record's own slab slot, which
-		// `__mm_alloc` already handed back zeroed — so there is no zero loop here any
-		// more (there used to be, byte-at-a-time, on every small array).
+		// `__mm_alloc` already handed back zeroed — so there is no zero loop here.
 		//
 		// The guarantee matters for the same reason it does in
 		// `__managed_mem_alloc_buffer`: a sparsely-filled managed-element record would

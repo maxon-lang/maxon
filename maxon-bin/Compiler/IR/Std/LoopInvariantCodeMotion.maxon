@@ -6,7 +6,7 @@
 // Over both of them sits ONE bound that is neither — **Rule 3**, which is about REGISTERS rather than
 // about correctness, and which is the single largest restriction in the pass.
 //
-//   • **PURE COMPUTATION** (`docs/emitted-code-roadmap.md`, `EC14` phase 1). An arithmetic op the
+//   • **PURE COMPUTATION** (`docs/emitted-code-roadmap.md`, phase 1). An arithmetic op the
 //     dialect declares `isPure` may be "duplicated, reordered, or dropped" — those are `StdOpMeta`'s
 //     own words — so moving one to a point that DOMINATES it needs no further argument. It cannot
 //     fault (`div`/`mod` trap and are `isPure: false`, so the arithmetic roster answers `neither` for
@@ -29,8 +29,8 @@
 // it moves.
 //
 // ⭐ This is DELIBERATELY not an alias analysis, and it is not an approximation of one — it is a
-// different rule that happens to be sufficient for the shape this rung exists for. `EC15` made the
-// anchor loop CALL-FREE (it removed the stride fork and the `__managed_get_unchecked` it protected), so
+// different rule that happens to be sufficient for the shape this pass exists for. The anchor loop is
+// CALL-FREE — no stride fork, no `__managed_get_unchecked` — so
 // the rule wins that loop outright. A loop that stores is left alone entirely rather than reasoned
 // about, and `loadIndirect`'s own variant comment names the program that would break under a weaker
 // rule: `specs/short-circuit-evaluation.md`'s `short-circuit-in-while-condition` reads AND WRITES one
@@ -45,9 +45,9 @@
 //
 // ⚠ The frontend proves something adjacent and it is NOT what this rule rests on. A `for … in`
 // element is a LEXICAL BORROW of the subject, and the borrow checker refuses a call taking that subject
-// mutably while the loop is live (`Parser.maxon`, the ⚖ 2026-08-26 `EC3` ruling; round-trip cases in
+// mutably while the loop is live (`Parser.maxon`, a ⚖ USER RULING; round-trip cases in
 // `specs/borrow-liveness.md`). That is a real fact and it is cited here so a later reader does not
-// think it was missed — but it says nothing about a `while` loop, about a global, or about a container
+// take it for the rule — but it says nothing about a `while` loop, about a global, or about a container
 // the loop does not iterate, and Rule 1 needs none of it.
 //
 // ══ RULE 2 — WHEN A LOAD MAY BE SPECULATED: IT WAS GOING TO RUN ANYWAY ══
@@ -92,18 +92,19 @@
 // Rules 1 and 2 are correctness. **Rule 3 is a BOUND**, it applies to BOTH phases — arithmetic as well
 // as loads — and it is the largest thing this pass declines to do. A hoisted value is live across the
 // WHOLE loop by construction, and a live range crossing a CALL is confined to the five callee-saved
-// registers x64-windows leaves. `EC13` measured one end of that: The compiler REFUSES rather than spills, and a
-// SINGLE reused expression across a call took `witness-dispatch-inside-a-pressured-loop` red with
-// `E5001`. This rung measured the other end — what happens when the allocator does NOT refuse: with the
-// bound off, 48 `map` fragments gained **+96 `loadRegSlot` and +48 `storeSlotReg`** and every one of
-// their frames grew, because the hoisted value was COLD-SPILLED and reloaded. In `Map.grow` the whole
-// trade was one `leaRegRegImm32` replaced by one `loadRegSlot`: an ALU op for a memory op, which is not
+// registers x64-windows leaves. One end of that is MEASURED by CSE: the compiler REFUSES rather than
+// spills, and a SINGLE reused expression across a call takes
+// `witness-dispatch-inside-a-pressured-loop` red with
+// `E5001`. The other end is what happens when the allocator does NOT refuse — MEASURED with the
+// bound off: 48 `map` fragments gain **+96 `loadRegSlot` and +48 `storeSlotReg`** and every one of
+// their frames grows, because the hoisted value is COLD-SPILLED and reloaded. In `Map.grow` the whole
+// trade is one `leaRegRegImm32` replaced by one `loadRegSlot`: an ALU op for a memory op, which is not
 // a win at any instruction count.
 //
 // ⇒ It is a structural rule and not a budget with a number in it. And it costs the anchor NOTHING,
-// which is what makes it affordable: `EC15` made that loop call-free, and `regalloc/many-call-crossing`
-// — where nine invariant computations DO leave a loop — holds no call either. Both were checked before
-// the rule was adopted, and the second is the committed fragment that would move if it were dropped.
+// which is what makes it affordable: that loop is call-free, and `regalloc/many-call-crossing`
+// — where nine invariant computations DO leave a loop — holds no call either. The second is the
+// committed fragment that would move if the rule were dropped.
 //
 // ⚠ **IT MAKES RULE 1's `isCall` TERM DEAD AT ITS ONLY READER**, and that is deliberate rather than
 // overlooked: `hoistIntoPreheader` returns on Rule 3 before Rule 1 is ever asked, so by then
@@ -113,8 +114,8 @@
 //
 // ⚠ **IT SEES MEMBER BLOCKS ONLY.** A call on a loop-EXIT path is not counted, so a hoisted value read
 // after the loop can still have a range crossing one. That is a gap in the heuristic and not in the
-// safety argument; a stricter version needs a per-block call summary this rung does not have, exactly as
-// `EC13`'s own barrier note records.
+// safety argument; a stricter version needs a per-block call summary this pass does not have, exactly as
+// the CSE call barrier's own note records.
 //
 // ⚠ **NO SPEC CASE GOES RED IF RULE 3 IS DELETED**, and the spec says so. Its only pin is the minted
 // `map` and `url` fragments — a fragment pin, which by this project's own standard is the weaker kind.
@@ -123,22 +124,22 @@
 // ══ WHAT IS DELIBERATELY NOT HOISTED ══
 //
 // - **`const`.** `classifyArithOperands` answers `neither` for it, so it never reaches the admission at
-//   all — and that is the right answer for the same reason `EC13` gives: rematerializing a constant is
+//   all — and that is the right answer for the same reason CSE gives: rematerializing a constant is
 //   cheaper than a live range that spans the loop, and a hoisted canonical constant conflicts with
 //   ABI-constrained uses.
 // - **The three pure ADDRESS ops** (`globalAddr`, `rdataAddr`, `funcAddr`) and `stackRecordAddr`. They
 //   are `isPure: true` and ALWAYS invariant (they read no value at all), so they need no analysis — and
 //   hoisting them is therefore a pure register-pressure trade with no instruction-count argument behind
-//   it. `EC13` left the same three open for the same reason; this rung does not take them either.
+//   it. CSE leaves the same three open for the same reason; this pass does not take them either.
 // - **`div`/`mod`.** They TRAP, the dialect says so with `isPure: false`, and the flag is honoured
-//   rather than reasoned around — `EC12` and `EC13` both declined them and this makes three.
+//   rather than reasoned around — constant folding and CSE decline them too, and this makes three.
 // - **A loop with no preheader**, and **a loop whose preheader can reach the header without entering
 //   it**. See `soleLoopEntry`.
 //
 // ══ MECHANISM REUSED RATHER THAN BUILT ══
 //
 // `IR/NaturalLoops.maxon` finds the back edges and the member sets — the SAME finder the Target tier's
-// loop depth and `E5001` region use, moved there by this rung rather than written a second time.
+// loop depth and `E5001` region use, stated once rather than written a second time.
 // `StdDominatorTree` answers dominance and hands back the CFG adjacency it already built.
 // `classifyArithOperands` / `classifyLoadOperands` / `stdOpDefinedValue` are the dialect's three
 // answers to what an op computes, reads and defines. Nothing here matches `StdOp` itself.
@@ -270,8 +271,8 @@ end 'LoopPreheader'
 // live shape and not a hypothetical one.
 //
 // ⚠ **NO PREHEADER IS CREATED WHEN THERE IS NONE.** Splitting an edge to manufacture one means minting a
-// block and re-pointing branch-edge argument lists — a CFG change this rung does not make, and one whose
-// interaction with `branchEdges` (the phi model the register allocator still consumes) is a rung of its
+// block and re-pointing branch-edge argument lists — a CFG change this pass does not make, and one whose
+// interaction with `branchEdges` (the phi model the register allocator consumes) is a change of its
 // own. A loop entered from two places, or through a conditional branch, is skipped whole.
 module function soleLoopEntry(tree StdDominatorTree, members LoopMembership, header BlockRefIndex) returns LoopPreheader
 	var found = LoopPreheader.none
@@ -386,19 +387,17 @@ end 'LoopEffects'
 // Fill `scratch.effects` from every op of the loop, asking the DIALECT's own metadata rather than a list
 // of op names inside this pass.
 //
-// ⭐ **RULE 1 — `isStore or isCall` IS EXACTLY "CAN CHANGE A LOCATION".** MEASURED against the union
-// 2026-08-28: **20 of the 99 variants declare neither flag**, and every one of them is either pure
+// ⭐ **RULE 1 — `isStore or isCall` IS EXACTLY "CAN CHANGE A LOCATION".** MEASURED against the union:
+// **20 of the 99 variants declare neither flag**, and every one of them is either pure
 // arithmetic (`const`, `binOp`, `unaryOp`, `cmp`, the two `Imm` forms), a pure ADDRESS (`globalAddr`,
 // `rdataAddr`, `funcAddr`, `stackRecordAddr`), a branch (`branch`, `condBranch`, `switch`), a RETURN
 // (`ret`, `retVoid`, `errorReturn`), a trapping division (`div`, `mod`) or a READ (`loadIndirect`,
 // `tlsSlotLoad`). None writes anything, so the test admits precisely the loops in which no location can
 // change.
 //
-// ⛔ **AN EARLIER SPELLING OF THIS CENSUS NAMED SEVEN AND WAS WRONG** — it listed the IMPURE seven and
-// called them "the only variants", which omitted the thirteen pure ones and, worse, told a reader that a
-// loop containing a `return` was refused here. It is not, and the reason it is still safe is the
-// paragraph below. The same wrong census had a second copy in `docs/emitted-code-roadmap.md`; both were
-// corrected together, because one fact written down twice is this project's signature bug.
+// ⛔ **A CENSUS THAT NAMES ONLY THE IMPURE SEVEN IS WRONG** — it omits the thirteen pure variants and,
+// worse, tells a reader that a loop containing a `return` is refused here. It is not, and the reason it
+// is safe anyway is the paragraph below.
 //
 // ⭐⭐ **A `return` INSIDE THE LOOP IS SAFE, AND NOT BECAUSE THIS SCAN REFUSES IT.** A block ending in
 // `ret`/`retVoid`/`errorReturn` has NO CFG successors, so it cannot be on a path to a latch, so
@@ -408,19 +407,19 @@ end 'LoopEffects'
 // Rule 2a refuses it. The return path is covered by the speculation rule, not by the effects scan.
 //
 // ⭐⭐ **RULE 3 — A LOOP HOLDING A CALL HOISTS NOTHING AT ALL, AND THAT BOUND IS MEASURED RATHER THAN
-// CAUTIOUS.** `EC13` established the mechanism: a live range crossing a call is confined to the five
-// callee-saved registers x64-windows leaves, and the compiler REFUSES rather than spills — one reused expression
-// took `witness-dispatch-inside-a-pressured-loop` red with `E5001`. LICM's ranges span the WHOLE loop,
-// which is strictly worse. What this rung MEASURED is the other half, in the case where the allocator
-// does not refuse: with the barrier off, 48 `map` fragments gained **+96 `loadRegSlot` and +48
-// `storeSlotReg`** and every one of their frames grew, because the hoisted value was COLD-SPILLED and
+// CAUTIOUS.** The mechanism is CSE's: a live range crossing a call is confined to the five
+// callee-saved registers x64-windows leaves, and the compiler REFUSES rather than spills — one reused
+// expression takes `witness-dispatch-inside-a-pressured-loop` red with `E5001`. LICM's ranges span the
+// WHOLE loop, which is strictly worse. The other half is MEASURED in the case where the allocator
+// does not refuse: with the barrier off, 48 `map` fragments gain **+96 `loadRegSlot` and +48
+// `storeSlotReg`** and every one of their frames grows, because the hoisted value is COLD-SPILLED and
 // reloaded. In `Map.grow` that trade is a `leaRegRegImm32` replaced by a `loadRegSlot` — an ALU op for a
 // memory op, which is not a win at any count. ⇒ the bound is not a budget with a number in it; it is the
 // structural rule that the ranges which cost most are the ones crossing a call.
 //
-// ⚠ It costs the anchor NOTHING, which is what makes it affordable: `EC15` made that loop call-free, and
+// ⚠ It costs the anchor NOTHING, which is what makes it affordable: that loop is call-free, and
 // `regalloc/many-call-crossing`'s own loop — where nine invariant computations DO leave — holds no call
-// either. Both were checked before the rule was adopted.
+// either.
 //
 // The TERMINATOR is scanned too, not only the body, and ⚠ **that arm is currently DEAD — kept anyway,
 // with the reason written down rather than the arm deleted.** The only terminator declaring either flag
@@ -504,7 +503,7 @@ end 'analyzeLoopBlock'
 // ⚠ **IT IS NOT `removeOpsDefining` WITH A DIFFERENT ARGUMENT, and the difference is asymptotic rather
 // than stylistic.** That function keys on a doomed-VALUE predicate and walks every block of the whole
 // FUNCTION to find them, which is right for a pass that removes once per function and is exactly the
-// Θ(loops × blocks) this pass spent a measurement removing. This keys on POSITIONS the classification
+// Θ(loops × blocks) this pass exists to stay clear of. This keys on POSITIONS the classification
 // walk has already recorded in order, so it touches only the one block it was handed.
 //
 // ⚠ One asymmetry with that function, stated because it is safe only for a reason: `removeOpsDefining`

@@ -1,7 +1,7 @@
 // StdDominatorTree — the DOMINANCE facts about ONE Std function: which blocks the entry can reach, in
 // what order, and which block is each one's immediate dominator.
 //
-// ⭐⭐ **WHY IT HAD TO EXIST BEFORE `EC13` COULD LEAVE ONE BLOCK.** "Is this value available here?" is
+// ⭐⭐ **WHY CODE MOTION ACROSS BLOCKS NEEDS IT.** "Is this value available here?" is
 // the question every code-motion pass asks, and at the Std tier nothing could answer it: `func.blockRefs`
 // is neither dominance order nor even layout order — it records WHEN A BLOCK WAS MINTED, which is why a
 // range check emitted before inlining is walked before the constant the inlining created
@@ -47,12 +47,12 @@ export type StdDominatorTree
 	// dominator is `p`. The entry's self-edge is deliberately NOT in it — a tree walk that re-entered
 	// the entry would not terminate.
 	//
-	// The member `EC13`'s dominator WALK reads: a consumer walks the tree from `StdEntryBlockPosition`
+	// The member a dominator WALK reads: a consumer walks the tree from `StdEntryBlockPosition`
 	// down this adjacency, which visits exactly the reachable blocks in dominator order.
 	export var children as CsrGraph
 
 	// ⭐ **THE CFG ITSELF, KEPT RATHER THAN REBUILT — the two adjacencies the dominator solve already
-	// needed.** `EC14`'s LICM asks the SAME function three more graph questions (where the back edges
+	// needed.** LICM asks the SAME function three more graph questions (where the back edges
 	// are, which blocks a natural loop holds, which of a header's predecessors is the preheader), and
 	// every one of them is a walk of these. Handing them back costs nothing — they are built above
 	// either way, and this record is per-function scratch that dies with the pass — where rebuilding
@@ -61,7 +61,7 @@ export type StdDominatorTree
 	export var succ as CsrGraph
 	export var pred as CsrGraph
 
-	// The reachable blocks in reverse postorder. Kept for the same reason: `EC14` analyses a loop's
+	// The reachable blocks in reverse postorder. Kept for the same reason: LICM analyses a loop's
 	// blocks in an order where every value's DEF is visited before its uses, which is exactly this one
 	// (dominance implies reverse-postorder precedence), and the solve above has already computed it.
 	export var reverseOrder as BlockPositionColumn
@@ -75,7 +75,7 @@ export type StdDominatorTree
 
 	// The same tree, from a successor graph the CALLER already has.
 	//
-	// ⭐ **IT EXISTS BECAUSE THE SUCCESSOR GRAPH ANSWERS A QUESTION THAT COMES FIRST.** `EC14` asks "does
+	// ⭐ **IT EXISTS BECAUSE THE SUCCESSOR GRAPH ANSWERS A QUESTION THAT COMES FIRST.** LICM asks "does
 	// this function contain a back edge at all?", which is a DFS of the successors and nothing else, and
 	// the answer is NO for most functions. Building the tree first would pay for the predecessor graph,
 	// the reverse postorder, the Cooper–Harvey–Kennedy solve and the child adjacency of every loopless
@@ -110,7 +110,7 @@ export type StdDominatorTree
 	//
 	// ⭐ **THE PRIMITIVE, NOT A `dominates(a, b)` PREDICATE, and the difference is asymptotic.** A
 	// predicate answers ONE pair in O(the dominator depth), so a caller asking it of every block of a
-	// loop against every exit of that loop is cubic in the worst case. `EC14`'s question is not one pair:
+	// loop against every exit of that loop is cubic in the worst case. LICM's question is not one pair:
 	// it is "which blocks dominate ALL of these", which one climb per named block answers in
 	// O(named × depth) by counting how many climbs visited each block. Handing back the step is what lets
 	// the caller phrase it that way; a predicate would have hidden the shape and cost more.

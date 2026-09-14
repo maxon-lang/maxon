@@ -95,7 +95,7 @@ export type Arm64RuntimeAsm
 		}
 	end 'openFrame'
 
-	// ⭐⭐ **OPEN A FUNCTION WITH NO FRAME AT ALL (MAC3) — the shape the GREEN-THREAD chunks need, and the
+	// ⭐⭐ **OPEN A FUNCTION WITH NO FRAME AT ALL — the shape the GREEN-THREAD chunks need, and the
 	// one `beginFunction` above structurally cannot give them.**
 	//
 	// `__gt_context_switch` MOVES SP between two green threads' stacks and `__gt_trampoline` is entered by a
@@ -231,7 +231,7 @@ export function arm64EmitStoreWord64At(asm Arm64RuntimeAsm, src Arm64Register, b
 	arm64EmitScaledMem(asm.code, opcode: Arm64OpStrX, rt: arm64RuntimeReg(src), baseReg: arm64RuntimeReg(base), byteOffset: byteOffset, scale: SpillSlotBytes)
 end 'arm64EmitStoreWord64At'
 
-// ⭐⭐⭐ **THE STORE-RELEASE TWIN — `add scratch, Xn, #byteOffset` then `stlr Xt, [scratch]` (G3).** A plain
+// ⭐⭐⭐ **THE STORE-RELEASE TWIN — `add scratch, Xn, #byteOffset` then `stlr Xt, [scratch]`.** A plain
 // `str` announces nothing: on this ISA the stores before it may still be invisible to another core when it
 // lands. `STLR` orders every earlier memory access before itself, which is what a hand-assembled runtime
 // needs at the exact moment it publishes a word another OS thread polls.
@@ -432,9 +432,8 @@ end 'arm64EmitStoreWord64Unaligned'
 // ⭐ **`dest = strlen(src)`** — a C string carries no length and none of the APIs that hand one over here
 // answers one either.
 //
-// ⚠ **IT WAS WRITTEN OUT TWICE BEFORE MAC4** (`mrt_host_exe_path` and `mrt_host_env_read` each had a
-// copy) and MAC4 would have made it four. Both of those call this, which is why the fragment takes its
-// registers as parameters rather than fixing them: the two callers had already chosen different ones.
+// ⚠ **IT TAKES ITS REGISTERS AS PARAMETERS RATHER THAN FIXING THEM**, because `mrt_host_exe_path` and
+// `mrt_host_env_read` — two of its callers — have each already chosen different ones.
 export function arm64EmitCStringLength(asm Arm64RuntimeAsm, src Arm64Register, dest Arm64Register, cursor Arm64Register, scratch Arm64Register)
 	let walk = asm.newLabel()
 	let atNul = asm.newLabel()

@@ -46,8 +46,8 @@
 //     gets the `$1` disambiguating suffix — both assigned by the order the files were encountered. So
 //     the emitted byte image is a function of the filesystem's order today. That is real and it is NOT
 //     repaired by sorting the input, which would only hide it: the repair belongs at the point of
-//     emission, deriving the order from something stable like the declaration name. Reported, not
-//     papered over — see PLAN.md.
+//     emission, deriving the order from something stable like the declaration name. Reported here
+//     rather than papered over.
 //
 // ⚠ **THERE IS NO SEPARATE PARSED-STDLIB CACHE.** These files are registered as ordinary sources,
 // so the query spine's content-hash memo already covers them and a second cache would be the same
@@ -76,16 +76,15 @@
 //      and gained 24 `.data` slots. `LibraryFacts.unreachable` is what closes it, and it is stated as
 //      reachability rather than as membership precisely because the fix outlives this file.
 //
-// ⛔⛔ **THE INVARIANT IS ABOUT CODE, AND IT CANNOT BE ABOUT DECLARED NAMES — MEASURED WHEN `File.maxon`
-// FIRST BECAME LOADABLE (R4.7 / N2).** Both mechanisms above prune what a program does not CALL. Neither
-// can prune what a program does not SPELL, because a name is resolved before there is any code to
-// eliminate: a `typealias` in a stdlib module is nameable from every program the moment the FILE lands,
-// and SO IS ITS RANGE. `stdlib/File.maxon:45` writes `export typealias Byte = int(0 to u8.max)` and was
-// the first stdlib module loaded to declare `Byte` at all (checked at the source against the nine
-// modules loaded before it — `helpers/url/urlHelpers.maxon`'s is `ByteValue`, a different name). A `b"…"` literal's element is
-// that same user-visible `Byte` BY DESIGN (`SignatureIndex.isByteElementName`'s roster), so on that day a
-// byte literal's element acquired declared BOUNDS for the first time and `a.set(0, value: n)` gained the
-// narrowing check it had been missing — moving ONE committed golden,
+// ⛔⛔ **THE INVARIANT IS ABOUT CODE, AND IT CANNOT BE ABOUT DECLARED NAMES.** Both mechanisms above
+// prune what a program does not CALL. Neither can prune what a program does not SPELL, because a name is
+// resolved before there is any code to eliminate: a `typealias` in a stdlib module is nameable from every
+// program the moment the FILE lands, and SO IS ITS RANGE. MEASURED: `stdlib/File.maxon:45` writes
+// `export typealias Byte = int(0 to u8.max)` and is the only stdlib module that declares `Byte` at all
+// (checked at the source — `helpers/url/urlHelpers.maxon`'s is `ByteValue`, a different name). A `b"…"`
+// literal's element is that same user-visible `Byte` BY DESIGN (`SignatureIndex.isByteElementName`'s
+// roster), so a byte literal's element carries declared BOUNDS and `a.set(0, value: n)` carries the
+// narrowing check they imply — which moves ONE committed golden,
 // `byte-string-literal.detached-literal-drops-clean`, in a program that never mentions `File`. The move
 // is a PURE INSERTION and the program's meaning is unchanged (its `n` is 0…4 against `0 to 255`, so the
 // guard cannot fire; same stdout, same exit code) — but the emitted bytes DID move, and the sentence
@@ -93,8 +92,8 @@
 //
 // ⇒ **READ IT AS: adding a module changes nothing for a program that does not use it, EXCEPT through the
 // names it DECLARES — and a declared name is not something a program opts into.** That is not a loophole
-// to route around; it is the same door that supplies `ByteArray` to `byte-string-literal.top-level-let`,
-// which this rung deliberately used. A module may not be weighed on its FUNCTIONS alone: weigh every
+// to route around; it is the same door that supplies `ByteArray` to
+// `byte-string-literal.top-level-let`. A module may not be weighed on its FUNCTIONS alone: weigh every
 // DECLARATION it carries, and expect a golden to move when one of them is a name the COMPILER ITSELF
 // mints instances of.
 //
@@ -118,20 +117,20 @@
 // with no list to edit. A stdlib module must declare no name a user program declares and no builtin
 // type/name.
 //   • FREE-FUNCTION-name collisions split by WHOSE they are, and this bullet said E3006 for both.
-//     ⚠ **A USER `function sleep` AGAINST `Sleep.maxon`'S IS NOT A COLLISION — THE USER WINS**, because N1
-//     files a contested free function under its module DIRECTORY and `stdlib/` is not the user's root. See
+//     ⚠ **A USER `function sleep` AGAINST `Sleep.maxon`'S IS NOT A COLLISION — THE USER WINS**, because
+//     a contested free function is filed under its module DIRECTORY and `stdlib/` is not the user's root. See
 //     the measured sentence far below, and `stdlib-loading.md` for the pinned pair. Two stdlib modules in
 //     the SAME directory are still the ordinary duplicate (E3006, `commitFuncSignatures` in ParseStaging),
 //     because one directory is one namespace; two in DIFFERENT stdlib directories contest instead, and a
 //     bare call to the name from a user file is then E3095. Either way it is a maintainer's bug in `stdlib/`.
-//   • ⚠⚠ **TYPE-name collisions against a USER program ARE NO LONGER COLLISIONS — THE USER WINS AND THE
-//     STDLIB DECLARATION MOVES (A1s wave 2).** A user `type`/`enum`/`union`/`interface`/ranged-`typealias`
+//   • ⚠⚠ **TYPE-name collisions against a USER program ARE NOT COLLISIONS — THE USER WINS AND THE
+//     STDLIB DECLARATION MOVES.** A user `type`/`enum`/`union`/`interface`/ranged-`typealias`
 //     spelled like a stdlib module's NOMINAL declaration shadows it: the stdlib one is renamed into the
 //     reserved `__` space and the user keeps the bare name, so both live at once and each side's own code
-//     sees its own. `specs/stdlib-user-shadows.md` is the rule, the measurement and the pins. ⇒ The
-//     old warning here — "a stdlib module RESERVES its type names program-wide, so weigh a module whose
-//     names are ordinary English words" — IS RETIRED, and that is the point of the wave: `Clock`,
-//     `ParseError` and `Promise` cost a user program nothing. A METHOD of a shadowed type moves with it
+//     sees its own. `specs/stdlib-user-shadows.md` is the rule, the measurement and the pins. ⇒ A stdlib
+//     module does NOT reserve its type names program-wide, so a module whose names are ordinary English
+//     words needs no special weighing: `Clock`, `ParseError` and `Promise` cost a user program nothing.
+//     A METHOD of a shadowed type moves with it
 //     (`Clock.nowMs` becomes `__Clock.nowMs`), which is why the bullet above is about FREE functions.
 //     ⚠ What DOES still refuse the program is a stdlib module using a contested spelling as a MEMBER
 //     name — a field, a method or an argument label — because user code can reach a member and its tokens
@@ -163,16 +162,16 @@
 //     and rung 5 of the scale ladder, and the emitted code of a program that never sleeps is
 //     byte-identical (`codeBytes` equal at all six rungs — DFE prunes the module it does not reach).
 //     ⇒ THE RULE: do not put a module whose function name a bare builtin claims under `stdlib/`. Retire the
-//     builtin first. ⭐ **APPLIED A SECOND TIME AT BATCH2 slice 6**, to `graphemeBreakProperty` and
+//     builtin first. ⭐ **AND APPLIED A SECOND TIME**, to `graphemeBreakProperty` and
 //     `isExtendedPictographic` — the same shape with the same wrong answer (`p=0` where `p=164` is
 //     correct), and the module it unblocked is `helpers/string/grapheme.maxon`.
-//     ⚠⚠ **AND WHAT A STDLIB MODULE THEN OWNS, IT DOES *NOT* OWN AGAINST THE USER — the sentence here and in
-//     `specs/stdlib-loading.md` said `E3006` and NEITHER WAS EVER RUN.** MEASURED at slice 6: a user
+//     ⚠⚠ **AND WHAT A STDLIB MODULE THEN OWNS, IT DOES *NOT* OWN AGAINST THE USER — THIS IS NOT
+//     `E3006`.** MEASURED: a user
 //     program declaring its own `function sleep(milliseconds Ms)` compiles clean and ITS body is
-//     what runs. N1's namespaces made the user's declaration outrank the
-//     stdlib's, and the E3006 claim — written when they did not exist — simply aged out. It is now a CASE
+//     what runs, because namespaces make the user's declaration outrank the
+//     stdlib's. It is pinned as a CASE
 //     rather than a sentence (`stdlib-loading.a-user-free-function-outranks-the-stdlib-modules`), because a
-//     refusal nothing runs is a claim. ⇒ the bare-builtin rule above is unchanged and is the one that bites:
+//     refusal nothing runs is a claim. ⇒ the bare-builtin rule above is the one that bites:
 //     a NAME the chain claims is reached by no declaration at all, user's or stdlib's.
 //     ⛔⛔ **AND THAT FIRST CASE WAS A POSITIVE CONTROL, WHICH ON ITS OWN PINNED NOTHING.** Its user `sleep`
 //     returns nothing and so does `Sleep.maxon`'s, so it could not tell "the call reached the user's
@@ -187,26 +186,26 @@
 //     which the two declarations DIFFER**; one where they agree is a control that agrees with the bug.
 //     ⚠ **AND CHECK THE ROSTER AT ITS SOURCE — `parseCallNamed`'s bare-name `if` chain — NEVER against a
 //     list written here or in a spec.** This bullet is deliberately not one: nothing makes a prose roster
-//     agree with the chain, and both prose copies of it were already wrong. They named four of the FIFTEEN
-//     names standing after `sleep` left, omitting `spawnReadLine` and all seven `subp*` — so a maintainer
-//     checking a module against the list rather than the chain would have been told a claimed name was
-//     free, and got back exactly the silent shadow this rule exists to prevent.
+//     agree with the chain, and every prose copy written so far was wrong. A copy naming four of the
+//     chain's FIFTEEN names — omitting `spawnReadLine` and all seven `subp*` — tells a maintainer
+//     checking a module against the list rather than the chain that a claimed name is free, and hands
+//     back exactly the silent shadow this rule exists to prevent.
 //   • ⚠ **AND THE FREE-FUNCTION CHECK HAS A SECOND SURFACE THE BULLET ABOVE DOES NOT REACH: `stdlib/`'s
-//     OWN FREE FUNCTIONS** (W5 review). That bullet asks one question — *does a BARE BUILTIN claim this
+//     OWN FREE FUNCTIONS.** That bullet asks one question — *does a BARE BUILTIN claim this
 //     name?* — against `parseCallNamed`'s chain, and the type-name bullet asks the stdlib-vs-stdlib question
 //     for TYPES ("two stdlib modules declaring one type name is a maintainer's bug in `stdlib/`"). Nobody
 //     asked it for free FUNCTIONS, and `export` is not read at the folds that matter, so a file-private one
 //     counts. ⇒ **ask BOTH: against the chain, and against every free function the other stdlib modules
 //     declare.**
-//     ✅ **THE ONE THAT WAS WAITING IS NO LONGER A COLLISION, AND THE RULE ABOVE STILL STANDS.**
+//     ✅ **THE ONE PAIR THE CHECK FINDS IS NOT A COLLISION.**
 //     `stdlib/Console.maxon:178` and `stdlib/Subprocess.maxon:782` — both at `stdlib/`'s top level, so one
 //     directory — both declare
 //     `stripTrailingCR` — over a `ByteArray` and a `String` respectively. Two files of one directory
-//     declaring one free-function name are now an OVERLOAD SET (`specs/cross-file-overload-set.md`),
+//     declaring one free-function name are an OVERLOAD SET (`specs/cross-file-overload-set.md`),
 //     and these two differ in their parameter spelling, so each registers under its own and each file's
-//     calls reach its own. ⚠ **What is still a collision is the SAME spelling in two files**, which is
-//     E3006 by construction — so the question this bullet asks is unchanged; only its answer for a pair that
-//     DIFFERS has moved from "duplicate" to "overload".
+//     calls reach its own. ⚠ **What IS a collision is the SAME spelling in two files**, which is
+//     E3006 by construction — so ask the question of every pair; only a pair that DIFFERS is an overload
+//     rather than a duplicate.
 //   • ⚠⚠ **A STDLIB MODULE'S OWN BODY MUST NOT BE TYPE-PARAMETERIZED BY A USER DECLARATION — and this clause
 //     is here because the four above did NOT cover it, twice.** Every bullet so far is about a NAME the
 //     module DECLARES colliding with one the user declares. This one is about a TYPE the module's body
@@ -215,14 +214,14 @@
 //     `__ManagedMemory` around stops compiling in any program that writes `typealias Byte = int(0 to 1000)`,
 //     WITHOUT NAMING ANYTHING THE MODULE DOES. The module is parsed by every program, so the blast radius is
 //     every program, and the diagnostic points at a stdlib line the author never opened.
-//     ⚠ MEASURED TWICE, three rungs apart, with the same two `specs/bytearray-element-size.md` cases
-//     and the same sentence — `E3005 argument type mismatch for 'managed': expected '__ManagedMemory', got
-//     'Array_Byte'` — first inside `stdlib/URL.maxon` (BATCH2 slice 1), then inside `stdlib/CommandLine.maxon`
-//     at `String.init(managed)` (the command-line rung).
+//     ⚠ MEASURED TWICE, in two unrelated modules, with the same two `specs/bytearray-element-size.md`
+//     cases and the same sentence — `E3005 argument type mismatch for 'managed': expected
+//     '__ManagedMemory', got 'Array_Byte'` — inside `stdlib/URL.maxon`, and inside
+//     `stdlib/CommandLine.maxon` at `String.init(managed)`. It recurs, which is why this is a rule.
 //     ⇒ THE RULE: a value a stdlib module receives from the COMPILER (an intrinsic's result, a synthesized
 //     view) must carry a compiler-owned type, not one spelled out of user-declarable names.
 //     `SignatureIndex.SynthesizedByteElementName` is that answer for bytes and carries the whole argument.
-//     ⚠ **THE SHADOWING MECHANISM DOES NOT REACH THIS AND MUST NOT BE REACHED FOR.** A1s wave 2 rewrites the
+//     ⚠ **THE SHADOWING MECHANISM DOES NOT REACH THIS AND MUST NOT BE REACHED FOR.** It rewrites the
 //     identifier TOKENS of a stdlib module, which cures a name the module WRITES; `stdlib/CommandLine.maxon`
 //     never writes `Byte` at all. The fix belongs where the type is MINTED, not where it is spelled.
 //     ⇒ CHECKING IT is a build, not a reading: compile a program that declares its own `Byte` as a wide
@@ -385,9 +384,9 @@ end 'loadLibraryRoot'
 // the path TEXT (case-insensitively on Windows) rather than resolving it — so a relative
 // `stdlib/Clock.maxon` and this loader's absolute spelling of the SAME FILE are two identities,
 // `fileChanged` dedups neither against the other, and the file is parsed twice: every function in it
-// then collides with ITSELF. MEASURED before this guard: FIVE `E3006 duplicate definition of function
-// 'Clock.nowMs'`, each pointing at Clock's own lines. The ABSOLUTE spelling of the same command was
-// already clean, which is what identifies the fault as the spelling and not the double load.
+// then collides with ITSELF. MEASURED with the guard removed: FIVE `E3006 duplicate definition of
+// function 'Clock.nowMs'`, each pointing at Clock's own lines, while the ABSOLUTE spelling of the same
+// command is clean — which identifies the fault as the spelling and not the double load.
 //
 // ⚠ **ASKED ONCE PER COMPILE, OF THE ROOT** — every source the project loaded lies under it, so two
 // `isInside` calls settle it for the whole compile and an ordinary project pays nothing per file and

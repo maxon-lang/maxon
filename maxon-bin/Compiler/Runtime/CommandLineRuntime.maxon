@@ -3,16 +3,14 @@
 // ⭐ **WHAT IT SERVES.** `stdlib/CommandLine.maxon`'s `args()` bottoms out in two `__Builtins` intrinsics —
 // `commandLineCount()` and `commandLineArg(i)` — and nothing else in the language reaches these entry
 //
-// ⭐⭐ **TWO LANES AS OF MAC7, AND THEY RUN DIFFERENT Std GRAPHS — the only family in this compiler that
-// does.** This paragraph used to read "HOST-ONLY BY THE R4 RULING (2026-07-30), AND FOR A REASON OF ITS OWN
-// ON TOP", and that reason of its own is exactly why the fork exists rather than a lowering. A target that
+// ⭐⭐ **TWO LANES, AND THEY RUN DIFFERENT Std GRAPHS — the only family in this compiler that does**, for a
+// reason of its own that is exactly why the fork is a fork rather than a lowering. A target that
 // provides neither still refuses at the call site with the EXISTING `E3104 targetUnsupportedConstruct`,
 // which matches on the `__cl_` PREFIX — so an entry point added later is gated by construction rather than
 // by memory.
 //
-// ⭐⭐ **arm64-macOS SERVES IT AS OF MAC7, AND THE PARAGRAPH BELOW IS WHY THAT TOOK A RUNG RATHER THAN A
-// LOWERING.** It ends *"serving them honestly means a per-target capture plus a target-neutral surface over
-// it — a rung, not a lowering"*, and that is exactly what landed: the ENTRY STUB captures `argc`/`argv`
+// ⭐⭐ **arm64-macOS SERVES IT, AND THE PARAGRAPH BELOW IS WHY THAT TAKES A PER-TARGET CAPTURE PLUS A
+// TARGET-NEUTRAL SURFACE OVER IT RATHER THAN A LOWERING:** the ENTRY STUB captures `argc`/`argv`
 // into two `.data` words, and this file builds ONE of TWO Std graphs over them depending on which shape the
 // target's process start-up has. Neither graph contains a target test; `commandLineShape` asks once, at
 // install.
@@ -141,9 +139,7 @@ let CommandLineScanOneName = b"__cl_scan_one"
 
 // `__cl_scan_one`'s "there is no argument here" answer, and a NEGATIVE position rather than a flag: a byte
 // position is non-negative by construction, so -1 is outside the answer domain rather than inside it, and
-// both callers test `>= 0`. (`__str_find`'s `StrFindNotFound` was the other constant carrying this
-// argument; it retired with the P1.8 Slice C searches at W49 wave 5, which is why the reasoning is spelled
-// out here rather than cross-referenced.)
+// both callers test `>= 0`.
 let NoMoreArguments = -1 as ParsedInt
 
 // The two bytes that separate arguments outside quotes, and the quote and escape that do the rest. Named

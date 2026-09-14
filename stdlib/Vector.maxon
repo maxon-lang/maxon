@@ -33,15 +33,15 @@ public type Vector uses Element implements BuiltinArrayLiteral, Iterable with (E
 	/// a `Vector with 3 Int` is a different type from a `Vector with 4 Int` — so `countof(Self)` is
 	/// the number itself, folded to a literal by both compilers, and no load happens at all.
 	///
-	/// ⛔ `managed.length()` is NOT the same question, and it is what this used to read. It answers
+	/// ⛔ `managed.length()` is NOT the same question. It answers
 	/// out of the RECORD, by a route that can disagree with the type: the buffer under a vector is
 	/// grown through the array's policy, whose minimum is 4, so a three-element vector's record has
 	/// a fourth slot the type has not got. A fixed size that can disagree with its own type is not
-	/// a fixed size. The two agree today for every vector `create()` builds, which is exactly why
-	/// the difference had to be closed by construction rather than left to a test to notice.
+	/// a fixed size. The two agree for every vector `create()` builds, which is exactly why the
+	/// difference is closed by construction rather than left to a test to notice.
 	///
 	/// ⚠⚠ THE OTHER TWO READERS ANSWER OUT OF THE RECORD, SO THE INVARIANT BETWEEN THEM IS ESTABLISHED
-	/// BY CONSTRUCTION AND DEFENDED BY A REFUSAL (found by probing at review of W190; closed by W192).
+	/// BY CONSTRUCTION AND DEFENDED BY A REFUSAL.
 	/// `get` forwards to `managed.get`, which is LENGTH-bounded, and `createIterator` hands the raw
 	/// buffer to a cursor that walks the same length — so all three agree exactly while
 	/// `managed.length() == countof(Self)`, which every route into the record does establish:
@@ -49,9 +49,9 @@ public type Vector uses Element implements BuiltinArrayLiteral, Iterable with (E
 	/// instance at the literal's own element count. `init(managed)` is not exported, so no program
 	/// can hand this type a buffer of its own choosing.
 	///
-	/// ⛔ WHAT WAS NOT DEFENDED UNTIL W192 WAS THE BUFFER BEING REACHED PAST THE SURFACE. `managed` is
-	/// visible to an `extension Vector`, and the buffer surface served the length-changing members, so
-	/// a program could move the record out from under the type. MEASURED on both compilers,
+	/// ⛔ THE BUFFER MUST NOT BE REACHED PAST THE SURFACE. `managed` is visible to an
+	/// `extension Vector`, so without the refusals below a program can move the record out from under
+	/// the type. MEASURED on both compilers,
 	/// byte-identical output, over an `extension Vector` whose `bust()` called `managed.clear()` and
 	/// whose `walk()` ran `for e in self`, called on a `Vec3.create()`:
 	///     before=3 w0=3 after=3 walked=0 g0=-1
@@ -60,9 +60,8 @@ public type Vector uses Element implements BuiltinArrayLiteral, Iterable with (E
 	/// `count=3 walked=64 g40=0 refusedSet=1`: `set` held its bound (it is the guard below), `get`
 	/// and the walk did not. NOT a memory-safety hole -- `setLength` is refused past the capacity
 	/// (measured: `cap=4 len=3 count=3 refusedSetLength=1`), so every slot walked was a slot the
-	/// buffer really owns -- but it WAS an answer disagreeing with itself. The measurement is kept
-	/// because it is the record of what the defect was; every one of those programs is now a
-	/// diagnostic.
+	/// buffer really owns -- but an answer disagreeing with itself. Every one of those programs is a
+	/// diagnostic today.
 	///
 	/// ⭐ NEITHER `get` NOR THE WALK IS GUARDED HERE, AND THAT IS A DECISION RATHER THAN AN OVERSIGHT.
 	/// A guard on `get` would cost a compare on every vector read in every program to defend against
@@ -71,7 +70,7 @@ public type Vector uses Element implements BuiltinArrayLiteral, Iterable with (E
 	/// the BUFFER's setter is CAPACITY-bounded. The seam closes by construction one level up instead,
 	/// the way `push` is already refused there.
 	///
-	/// ⭐⭐ WHAT DEFENDS IT NOW (W192): TWO refusals, and it takes both, because there are two ways to
+	/// ⭐⭐ WHAT DEFENDS IT: TWO refusals, and it takes both, because there are two ways to
 	/// break the invariant and they need two different sentences.
 	///
 	/// (1) THE LENGTH WRITERS ARE REFUSED ON A SIZED CONTAINER'S BUFFER -- `setLength`, `append`,
@@ -83,7 +82,7 @@ public type Vector uses Element implements BuiltinArrayLiteral, Iterable with (E
 	/// (2) THE RECORD MAY NOT LEAVE THE DECLARATION -- it may not be RETURNED, passed to ANY call, or
 	/// stored into a container, a tuple or a field. That second rule is not belt-and-braces: the read
 	/// that produces `managed` is RETYPED to `Array with Element` (which is what makes
-	/// `createIterator`'s `VectorIter.create(managed)` type-check at all, W189), so past any door
+	/// `createIterator`'s `VectorIter.create(managed)` type-check at all), so past any door
 	/// where the compiler's per-value mark cannot follow, the vector's storage is indistinguishable
 	/// from an ordinary growable array and `stdlib/Array.maxon`'s own `clear()` answers on it. Hand
 	/// out `managed.slice(...)` instead: a view's length is its own and can contradict nothing.

@@ -32,7 +32,7 @@
 // CONSTRAINED-TYPE-PARAMETER DISPATCH: a `.rdata` slot naming a function (a witness-table method, a layout
 // descriptor's `destroyFunc@40`/`copyFunc@32`) is baked with the callee's funcref-TABLE INDEX rather than the
 // `.text` VA the x64 writers bake, and the fused witness call reads it back and `call_indirect`s through it
-// (`bakeFuncTableIndexRelocs` / `emitWitnessCall`) — and, since W3, a PANIC RUNTIME: `appendPanicRuntime`
+// (`bakeFuncTableIndexRelocs` / `emitWitnessCall`) — and a PANIC RUNTIME: `appendPanicRuntime`
 // writes the message to WASI stderr and traps, which is the whole of what a target with no walkable frame
 // chain can do in-program (read its header for what the host supplies and why nothing else can).
 // The allocator/refcount/String builders themselves are Std-IR runtime functions emitted through the
@@ -72,13 +72,13 @@ typealias PhiValTypeSet = Set with WasmValType
 typealias CalleeParamTypesMap = Map with (ByteArray, WasmValTypeArray)
 
 // An indirect call's ENCODED FUNCTYPE (its `encodeFuncType` bytes) → the interned wasm functype index for
-// that signature. Keyed by the SIGNATURE, not the arg count, because a function value now carries floats
-// (P1.5 #78): `(f64) -> f64` and `(i64) -> i64` are distinct functypes of the same arity, and
+// that signature. Keyed by the SIGNATURE, not the arg count, because a function value carries floats:
+// `(f64) -> f64` and `(i64) -> i64` are distinct functypes of the same arity, and
 // `call_indirect` runtime-checks the funcref against exactly the declared type. Each call's signature comes
 // from the `resultType`/`argFloatMask` the Std op carries (`indirectCallArgValType` reads the one
 // per-argument bit; the trailing uniform-ABI env pointer is a plain i64), plus the trailing i64
 // error flag for a THROWING one. THREE ops
-// populate it: `callIndirect`, and the two fused witness calls (P1.7a slice 2b-iv-B), whose callee is a
+// populate it: `callIndirect`, and the two fused witness calls, whose callee is a
 // table index loaded out of a witness-table method slot. Built once per module — pre-interned into the
 // WasmModuleBuilder before body emission — and read by each emitter, which recovers the index by the SAME
 // key without mutating the shared builder mid-emit.
@@ -107,7 +107,7 @@ let BlockingWriteFlushImportFuncIdx = 2 as Wasm32Index
 let GetStderrImportFuncIdx = 3 as Wasm32Index
 
 // ⭐ The wasm half of `StdLoweringShared.posixStreamFd` — which `wasi:cli` accessor hands over the
-// output-stream a write targets (W35). Exhaustive over `OsOutputStream` for that door's reason: a third
+// output-stream a write targets. Exhaustive over `OsOutputStream` for that door's reason: a third
 // stream must fail to compile here rather than silently take one of these two.
 function wasmStreamAccessorImportFuncIdx(stream OsOutputStream) returns Wasm32Index
 	return match stream 's'
@@ -145,13 +145,13 @@ let WasmPageSizeMask = 0xFFFF as BytePos
 // traps.
 let WasmMemoryGrowOom = -1 as ParsedInt
 
-// F2 — the atomic word's memarg offset. An atomic names the address it operates on and nothing else:
+// The atomic word's memarg offset. An atomic names the address it operates on and nothing else:
 // unlike `loadIndirect`/`storeIndirect`, whose Std op carries a field displacement, `StdOp.atomicCas` and
 // `StdOp.atomicRmw` have no offset field at all, so the memarg is always zero. Named rather than a bare 0
 // so the reason it can never be anything else is stated where the instruction is written.
 let WasmAtomicWordOffset = 0 as Wasm32Index
 
-// F2 — the token `currentThreadToken` answers on a lane with exactly one thread. It is `1` because the op's
+// The token `currentThreadToken` answers on a lane with exactly one thread. It is `1` because the op's
 // contract is "per-OS-thread stable and NON-ZERO"; the value is otherwise arbitrary, and that is precisely
 // why it is named rather than spelled as a bare literal at the emitter.
 let WasmSingleThreadToken = 1 as ParsedInt
@@ -176,7 +176,7 @@ let WasiExitFieldName = b"exit-with-code"
 let WasiRunExportName = b"wasi:cli/run@0.2.6#run"
 let WasmMemoryExportName = b"memory"
 
-// The Preview2 stdout-write imports (P1.2 wave A — `print`). `osWriteStdout` gets the stdout
+// The Preview2 stdout-write imports (`print`). `osWriteStdout` gets the stdout
 // output-stream handle via `wasi:cli/stdout` `get-stdout`, then writes+flushes via
 // `wasi:io/streams` `[method]output-stream.blocking-write-and-flush`. The versioned interface
 // ids and the `[method]…` field spelling are what `wasm-tools component new` matches against the
@@ -186,7 +186,7 @@ let WasiGetStdoutFieldName = b"get-stdout"
 let WasiStreamsModuleName = b"wasi:io/streams@0.2.6"
 let WasiBlockingWriteFlushFieldName = b"[method]output-stream.blocking-write-and-flush"
 
-// The Preview2 STDERR accessor (W3 — the panic runtime). Its stream is written through the SAME
+// The Preview2 STDERR accessor for the panic runtime. Its stream is written through the SAME
 // `blocking-write-and-flush` method above: a `wasi:io/streams` output-stream is one type whichever
 // `wasi:cli` accessor handed it over, so the panic path needs a new accessor and no new writer.
 // `wasi:cli/stderr@0.2.6` is already in the WIT world the component is built against
@@ -267,7 +267,7 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 
 	// Defined functions in the order `wasmFuncIdxOf` assumes — walked off the INDEX'S OWN ARRAY rather than
 	// the module's, so the order the func indices are DERIVED from and the order they are EMITTED in are the
-	// same array rather than two that must be kept in step (A2l).
+	// same array rather than two that must be kept in step.
 	for func in funcNames.functions 'eachFunc'
 		var emitter = WasmFuncEmitter.create(module, func: func, globalData: globalData, dataBase: WasmDataBaseOffset, rdataBase: rdataBase, funcNames: funcNames, calleeParamTypes: calleeParamTypes, indirectCallTypeIdx: indirectCallTypeIdx)
 		emitter.emit()
@@ -346,7 +346,7 @@ function applyRdataAbsRelocs(rdataImage ByteArray, globalData GlobalDataTable, r
 	end 'each'
 end 'applyRdataAbsRelocs'
 
-// ⭐ **BAKE EVERY `.rdata` SLOT THAT NAMES A FUNCTION — AS A WASM TABLE INDEX** (P1.7a slice 2b-iv-B). The
+// ⭐ **BAKE EVERY `.rdata` SLOT THAT NAMES A FUNCTION — AS A WASM TABLE INDEX**. The
 // wasm twin of `bakeFuncAbs64Relocs`, and the whole of what makes witness tables and managed-opaque-`T`
 // `Array` descriptors work on this target: **the blob LAYOUT is target-agnostic and only the VALUE in the
 // slot differs.** The x64 PE/ELF writers bake the target's absolute `.text` VA, because their reader
@@ -509,15 +509,14 @@ function appendRunEntry(builder WasmModuleBuilder, module StdModule, funcNames F
 	// takes an i32, so the resulting code — i64 after the gate, else main's own return width — is
 	// wrapped last. `main` returns `ExitCode` (i64 in the corpus); a narrower ExitCode is already i32.
 	// ⚠ Through `coerceOnStack` rather than a hand-rolled `i32WrapI64`, because "how does this backend
-	// change a value's width?" is ONE fact and this used to be a third spelling of it. The two answers
-	// happened to agree; nothing made them, and the hand-rolled one was the weaker of the two — it
-	// passed an f64 through UNTOUCHED where the shared door panics naming the lowering bug.
+	// change a value's width?" is ONE fact, and a hand-rolled spelling is the weaker one: it passes an
+	// f64 through UNTOUCHED where the shared door panics naming the lowering bug.
 	let exitCodeVt = appendLeakGate(runBody, exitCodeValType: afterCleanupVt, funcNames: funcNames, checkLeaks: checkLeaks)
 	coerceOnStack(runBody, from: exitCodeVt, to: WasmValType.i32)
 	runBody.call(ExitImportFuncIdx)
 	runBody.i32Const(RunOkResult)
 
-	// ⭐ **ITS DEBUG NAME IS `mrt_start`, AND THAT IS A DESCRIPTION, NOT A DISGUISE (W3).** Its EXPORT
+	// ⭐ **ITS DEBUG NAME IS `mrt_start`, AND THAT IS A DESCRIPTION, NOT A DISGUISE.** Its EXPORT
 	// name is and stays `wasi:cli/run@0.2.6#run` — the component contract, checked by the host. The name
 	// section names a different thing: what the function IS, for a human reading a backtrace. And what
 	// this function is, is the entry stub — the direct sibling of `BackendDispatch.prependEntryStub`,
@@ -532,7 +531,7 @@ function appendRunEntry(builder WasmModuleBuilder, module StdModule, funcNames F
 	return builder.addFunction(runTypeIdx, localTypes: WasmValTypeArray.create(), body: runBody.bytes(), debugName: EntryPointName)
 end 'appendRunEntry'
 
-// ⭐ **FILL EVERY EAGER managed global's `.data` SLOT BEFORE `main` (P1.7 slice 2a)** — a `static`
+// ⭐ **FILL EVERY EAGER managed global's `.data` SLOT BEFORE `main`** — a `static`
 // member's is filled on first access instead (see `ModuleInit`) — the sibling of the
 // native stubs' `appendModuleInitCall`. `__module_init` takes no argument and returns nothing, so it
 // leaves the operand stack exactly as it found it (empty). `initGlobals` is
@@ -547,7 +546,7 @@ function appendModuleInitCall(runBody WasmBody, funcNames FunctionNameIndex, ini
 	runBody.call(try wasmFuncIdxOf(funcNames, callee: ModuleInitName) otherwise panic("appendModuleInitCall: `RuntimeUsage.usesManagedGlobals` says this program declares a managed top-level `var`, so `__module_init` must be in this module — its absence means the ROOT was pruned (see DeadFunctionElimination's root set), which would leave every managed global's slot null"))
 end 'appendModuleInitCall'
 
-// ⭐ **THE GLOBAL-CLEANUP GATE on the wasm exit path (P1.7 slice 2a)** — the sibling of the native stubs'
+// ⭐ **THE GLOBAL-CLEANUP GATE on the wasm exit path** — the sibling of the native stubs'
 // `appendGlobalCleanupGate`, and the leak gate's exact twin one step earlier on the same path.
 //
 // It runs AFTER `main` and BEFORE the leak gate, and the order is the property, not a preference: the leak
@@ -572,7 +571,7 @@ function appendGlobalCleanupGate(runBody WasmBody, exitCodeValType WasmValType, 
 	return WasmValType.i64
 end 'appendGlobalCleanupGate'
 
-// THE LEAK GATE on the wasm exit path (P1.0r), ported from the native `prependEntryStub`
+// THE LEAK GATE on the wasm exit path, ported from the native `prependEntryStub`
 // (BackendDispatch:205). When the MM runtime installed `__mm_leak_check`, the exit code (on the
 // stack) is routed through it: it returns the code UNCHANGED, or LeakExitCode (101) when any
 // allocation outlived the program — so a leaking heap program FAILS with 101 rather than passing
@@ -582,16 +581,15 @@ end 'appendGlobalCleanupGate'
 //
 // ⚠ **`checkLeaks` IS `RuntimeUsage.usesHeap` — THE SAME BIT THE NATIVE GATES READ, AND IT IS NOT
 // OPTIONAL HERE.** Whether a gate belongs and which func index to call are two different questions, and
-// this used to answer BOTH from a func-index lookup of `__mm_leak_check`: a miss silently meant "no heap, no
-// gate". That is safe only while nothing can take an installed `__mm_leak_check` back out — the premise
-// dead-function elimination removed. Because nothing CALLS the leak check, it survives DFE only by being
-// an explicit root; had that root ever been narrowed, x64 and arm64 would have failed LOUD at their
-// entry-stub `call`/`bl` fixup while wasm alone silently emitted no gate, turning every exit-101 leak
-// test green on this target only. So installation is read from the one place it is decided, and a
+// answering BOTH from a func-index lookup of `__mm_leak_check` makes a miss silently mean "no heap, no
+// gate". That is safe only while nothing can take an installed `__mm_leak_check` back out, and
+// dead-function elimination can. Because nothing CALLS the leak check, it survives DFE only by being an
+// explicit root; narrow that root and x64 and arm64 fail LOUD at their entry-stub `call`/`bl` fixup while
+// wasm alone silently emits no gate, turning every exit-101 leak test green on this target only. So installation is read from the one place it is decided, and a
 // missing function under `usesHeap` is an impossible state that PANICS.
 //
 // ⚠ The code it is handed is `main`'s only when the program has no managed global: the global-cleanup
-// gate runs FIRST and passes the code through (P1.7 slice 2a), so this reads whatever that left.
+// gate runs FIRST and passes the code through, so this reads whatever that left.
 //
 // Returns the valtype now on the stack: i64 after the gate, else the code's own valtype.
 function appendLeakGate(runBody WasmBody, exitCodeValType WasmValType, funcNames FunctionNameIndex, checkLeaks bool) returns WasmValType
@@ -631,11 +629,10 @@ end 'mainReturnValueType'
 // in `module.functions` order, so the index a `call` needs IS the position `FunctionNameIndex` already
 // resolves, plus a constant.
 //
-// It used to be a map of its own — `buildCalleeFuncIdxMap`, a bare last-wins `upsert` over the same array,
-// resting on the uniqueness guarantee `FunctionNameIndex` states without saying so. That is the most
-// dangerous of the ten sites that did: the VALUE is a POSITION, so a silent last-wins does not degrade an
-// answer, it binds every `call` to the WRONG FUNCTION. The map is gone; the offset is one addition, and the
-// key set is now provably the one the duplicate check ran over.
+// A map of its own — a bare last-wins `upsert` over the same array, resting on the uniqueness guarantee
+// `FunctionNameIndex` states without saying so — is the most dangerous form this can take: the VALUE is a
+// POSITION, so a silent last-wins does not degrade an answer, it binds every `call` to the WRONG FUNCTION.
+// The offset is one addition, and the key set is provably the one the duplicate check ran over.
 function wasmFuncIdxOf(funcNames FunctionNameIndex, callee ByteArray) returns Wasm32Index throws MapError
 	return (WasmImportCount + (try funcNames.byName.get(callee))) as Wasm32Index
 end 'wasmFuncIdxOf'
@@ -724,7 +721,7 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		// The jump table makes no indirect call — it branches on an integer index.
 		switch then break 'k'
 
-		// ⭐ A witness call IS an indirect call on wasm (P1.7a slice 2b-iv-B): its callee is a funcref-table
+		// ⭐ A witness call IS an indirect call on wasm: its callee is a funcref-table
 		// index loaded out of a witness-table slot, so it needs a pre-interned functype exactly as
 		// `callIndirect` does — through the SAME door, so the interned type and the call-site immediate cannot
 		// disagree. The THROWING form differs in ONE respect: its callee's wasm signature carries the trailing
@@ -777,7 +774,7 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		osStdHandle then break 'k'
 		osExecutablePath then break 'k'
 
-		// W35: a stream write makes no INDIRECT call — it calls two IMPORTS by index.
+		// A stream write makes no INDIRECT call — it calls two IMPORTS by index.
 		osWriteStderr then break 'k'
 
 		// A frame address makes no call of any kind.
@@ -804,25 +801,25 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 			osCpuCount or
 			osThreadCpuTicks then break 'k'
 
-		// F1a: the decommit makes no call of ANY kind on this lane — it emits nothing at all (see `emitBodyOp`),
+		// The decommit makes no call of ANY kind on this lane — it emits nothing at all (see `emitBodyOp`),
 		// so there is no signature to intern.
 		osDecommitPages then break 'k'
 
-		// F1b: a byte fill is ONE `memory.fill` instruction — no call, so no signature to intern.
+		// A byte fill is ONE `memory.fill` instruction — no call, so no signature to intern.
 		memFill then break 'k'
 
-		// F1c: the reserve is `memory.grow` and the commit is a local copy — instructions, not calls, so neither
+		// The reserve is `memory.grow` and the commit is a local copy — instructions, not calls, so neither
 		// has a signature to intern either.
 		osCommitPages or
 			osReservePages then break 'k'
 
-		// F2: the two atomics and the thread token are plain instruction sequences on this lane — no call, so no
+		// The two atomics and the thread token are plain instruction sequences on this lane — no call, so no
 		// signature to intern.
 		atomicCas or
 			atomicRmw or
 			currentThreadToken then break 'k'
 
-		// G1: the multi-M substrate names no wasm function and needs no import table entry — it is REFUSED at
+		// The multi-M substrate names no wasm function and needs no import table entry — it is REFUSED at
 		// emission (below), so it contributes nothing to collect here.
 		tlsAlloc or
 			tlsSetValue or
@@ -850,7 +847,7 @@ end 'internIndirectCallTypeFor'
 // under the encoded-functype key. `internFuncType` dedups by the encoded bytes, so a repeated signature
 // re-derives the SAME index (and a signature that equals a real function's own type — e.g. a `__fnref_`
 // thunk's — shares one type-section entry). The single door that builds an indirect call's wasm signature,
-// so the pre-interned type and the call-site `call_indirect` immediate cannot disagree (P1.5 #78). The result
+// so the pre-interned type and the call-site `call_indirect` immediate cannot disagree. The result
 // list comes from `funcResultValTypes`, the SAME void|value(StdType) → valtypes mapping a whole function's
 // signature uses: a VOID indirect callee (a raw element destructor) interns ZERO results, a value one its
 // single valtype. `emitCallIndirect` rebuilds the sig key through the same helper, so intern and call-site
@@ -862,7 +859,7 @@ function internIndirectCallType(map IndirectCallTypeIdxMap, builder WasmModuleBu
 	map.upsert(encodeFuncType(params, results: results), value: typeIdx)
 end 'internIndirectCallType'
 
-// The wasm parameter valtypes of an indirect call, one per argument in order (P1.5 #78).
+// The wasm parameter valtypes of an indirect call, one per argument in order.
 function indirectCallParamValTypes(argFloatMask ArgFloatMask, argCount ParamCount) returns WasmValTypeArray
 	var params = WasmValTypeArray.create()
 
@@ -896,19 +893,18 @@ end 'indirectCallParamValTypes'
 // wasm ABI is the machine word: `f64` for a float, `i64` for everything else, for every param, result and
 // local declared.
 //
-// ⚠ **THE REFUSAL THE WIDTH BIT REPLACED IS STILL GONE, AND MUST STAY GONE.**
-// `requireIndirectlyReachableParamsAreMachineWords` used to reject any program with a `bool`/`ExitCode`
-// parameter reachable through a `.rdata` function slot. It covered less than it looked like it did — a lifted
+// ⚠ **THERE IS NO REFUSAL HERE, AND THERE MUST NOT BE ONE.** Rejecting a program with a `bool`/`ExitCode`
+// parameter reachable through a `.rdata` function slot covers less than it looks like it does — a lifted
 // CLOSURE's address is a `.text` `funcAddr` in no `.rdata` slot, so `function(loud bool) gives …` called
-// through a `function(bool) returns int` typealias walked straight past it and trapped anyway — and the
-// machine-word ABI closes both halves at once, because now NO function's wasm signature carries a narrow
+// through a `function(bool) returns int` typealias walks straight past it and traps anyway. The
+// machine-word ABI closes both halves at once, because NO function's wasm signature carries a narrow
 // integer for a caller to disagree with.
 //
 // ⚠ **IT STATES NO valtype TABLE OF ITS OWN, AND THAT IS THE POINT.** The bit becomes the ABI class's
 // canonical `StdType` (`stdTypeOfAbiClass`) and that goes through `wasmMachineValTypeOf` — the SAME door the
-// CALLEE's own functype comes through (`funcParamValTypes`). It used to answer with a second float → valtype
-// table written out here: the two agreed for every `StdType` and nothing made them, so an edit to either would
-// have diverged silently into a run-time `indirect call type mismatch` — the one failure mode neither end of a
+// CALLEE's own functype comes through (`funcParamValTypes`). A second float → valtype table written out
+// here would agree with it for every `StdType` with nothing making them, so an edit to either would
+// diverge silently into a run-time `indirect call type mismatch` — the one failure mode neither end of a
 // `call_indirect` can report at compile time.
 function indirectCallArgValType(argFloatMask ArgFloatMask, argIndex ParamCount) returns WasmValType
 	return wasmMachineValTypeOf(stdTypeOfAbiClass(argMaskBit(argFloatMask, argIndex: argIndex)))
@@ -940,7 +936,7 @@ function wasmValTypeOf(t StdType) returns WasmValType
 end 'wasmValTypeOf'
 
 // True when a value of type `t` OCCUPIES a full machine word rather than an i32 local. A STORAGE
-// question, and no longer an arithmetic one: which instruction family an integer OPERATION selects is
+// question, not an arithmetic one: which instruction family an integer OPERATION selects is
 // `wasmMachineValTypeOf`'s answer and is always i64. The two callers left are the ones genuinely asking
 // about storage — a `const`'s encoded width, and `bitcastI64ToF64`'s refusal of a source that has no
 // top half to reinterpret. A float `t` reaching here is a lowering bug, so it panics naming `what`.
@@ -953,13 +949,13 @@ function isWideInt(t StdType, what String) returns bool
 	end 'w'
 end 'isWideInt'
 
-// ⭐⭐ **AN INTEGER OPERATION IS COMPUTED AT THE MACHINE WORD, WHATEVER ITS OPERANDS' Std TYPE SAYS
-// (X5 review).** The Std `operandType` is the operands' DECLARED type; it is not the width the
+// ⭐⭐ **AN INTEGER OPERATION IS COMPUTED AT THE MACHINE WORD, WHATEVER ITS OPERANDS' Std TYPE
+// SAYS.** The Std `operandType` is the operands' DECLARED type; it is not the width the
 // language performs the arithmetic at. The native backends make that distinction invisible — every
 // integer op is a 64-bit register form whatever the Std type says — so `ExitCode * 2` answers
 // 8,000,000,000 there and nothing narrows. wasm's typed stack made the same field select the i32
-// family, and every operation over a `u32` came out at 32 bits: MEASURED against x64 through a
-// function-typealias call (the entrance W1 opened, which mints a genuinely `exitCode`-tagged value),
+// family, and every operation over a `u32` comes out at 32 bits: MEASURED against x64 through a
+// function-typealias call (which mints a genuinely `exitCode`-tagged value),
 // `v * 2` answered 3,705,032,704 for 8,000,000,000, `not v` 294,967,295 for -4,000,000,001, `v shl 1`
 // 3,705,032,704 for 8,000,000,000 and `v > 100` **le** for **gt**.
 //
@@ -968,9 +964,8 @@ end 'isWideInt'
 // (`coerceOnStack`'s header, which is also where the LIMIT of that claim is recorded: it is exact for
 // every value INSIDE its declared type's range, and nothing enforces that range) — applied to the ops
 // that HAVE an operand type instead of only to the two that do not.
-// X5 gave `binOpImm`/`cmpImm` their `operandType` so the width would stop being GUESSED
-// from `lhs`; this is the other half, that the width so obtained is a STORAGE class and not an
-// arithmetic one. `wasmValTypeOf` still answers where a value LIVES; this answers where it is COMPUTED.
+// `binOpImm`/`cmpImm` carry their `operandType` so the width is not GUESSED from `lhs`; the other
+// half is that the width so obtained is a STORAGE class and not an arithmetic one. `wasmValTypeOf` still answers where a value LIVES; this answers where it is COMPUTED.
 //
 // ⭐ ONE DOOR FOR BOTH HALVES OF THE ANSWER: the valtype an ALU op COMPUTES in is also the valtype of
 // the local it DEFINES, so `recordDefValtype` and the emitters ask the same function and cannot
@@ -991,7 +986,7 @@ end 'isWideInt'
 // `indirectCallArgValType` for the shared generic body that declared one width while its callee's own
 // declaration gave another, and for why `ArgNarrowMask` was deleted rather than repaired.
 //
-// ⛔⛔ **AND IT TAKES AN INSTRUMENT WITH IT: a Std-tier WIDTH disagreement is now invisible on every target.**
+// ⛔⛔ **AND IT TAKES AN INSTRUMENT WITH IT: a Std-tier WIDTH disagreement is invisible on every target.**
 // Several fixes in this tree were FOUND because a wrong `StdType` on one end of a call surfaced as
 // `wasm trap: indirect call type mismatch` while x64 went on answering correctly — `witnessCallResultType`
 // reading an unresolved `named` as `i64` against a `u32` impl, `buildStrEq` declaring an `i64` result into an
@@ -1005,8 +1000,7 @@ end 'wasmMachineValTypeOf'
 
 // Refuse a FLOAT operand type reaching an INTEGER-op emitter — a lowering bug (the float emitters are
 // dispatched before this point, or, for the immediate forms, `foldConstOperands` never builds one),
-// not an out-of-slice case. The twin of `requireF64` for the other domain, and what `isWideInt` used
-// to say on the side while it was also being asked for a width the integer emitters no longer want.
+// not an out-of-slice case. The twin of `requireF64` for the other domain.
 function requireIntegerOperand(t StdType, what String)
 	if stdTypeIsFloat(t) 'float'
 		panic("wasm: {what} on {t.name} — this integer-op emitter should have taken the float path first; no float value reaches the integer ALU")
@@ -1063,16 +1057,15 @@ end 'funcResultValTypes'
 // through the identical helper, so the two derivations cannot drift apart.
 //
 // ⚠ **THE RESULT HALF NEEDS NO WIDTH MASK BECAUSE THE TWO ENDS AGREE — AND THAT AGREEMENT IS A CONVENTION
-// FOUR SITES KEEP, NOT A MECHANISM ONE SITE ENFORCES (corrected at W1).** This IS the one door both ends come
-// through, but what it is HANDED is a `resultType` the FRONT END derived, and that derivation used to be
-// credited to `Parser.interfaceReturnMaxonType` alone. There were three more doors. A function typealias
-// stores its return interner-free as a `(tag, NAME)` pair and rebuilt `ExitCode` as a width-free `named` — so
-// a `call_indirect` declared `() -> i64` against a `__fnref_` thunk typed `() -> i32` and trapped at run time,
-// which is the defect W1 fixed and which the paragraph asserting the result half was safe is why nobody looked
-// for. All four doors now ask one table (`TypeResolution.builtinTypeNameTag`); a FIFTH interner-free store of
+// FOUR SITES KEEP, NOT A MECHANISM ONE SITE ENFORCES.** This IS the one door both ends come through, but
+// what it is HANDED is a `resultType` the FRONT END derived, and FOUR sites derive one — not
+// `Parser.interfaceReturnMaxonType` alone. A function typealias stores its return interner-free as a
+// `(tag, NAME)` pair, and rebuilding `ExitCode` there as a width-free `named` declares a `call_indirect`
+// `() -> i64` against a `__fnref_` thunk typed `() -> i32`, which traps at run time. All four doors ask one
+// table (`TypeResolution.builtinTypeNameTag`); a FIFTH interner-free store of
 // a declared type would re-open it, and the only thing standing between that and a run-time trap is asking the
 // same table. The PARAMETER half reached the same place by a different route — see `indirectCallArgValType`.
-// ⚠ The parameter is `usesSecondarySlot` and NOT `isThrowing`, because since P1.7a slice 2 the two are
+// ⚠ The parameter is `usesSecondarySlot` and NOT `isThrowing`, because the two are
 // different facts: an interface-returning function declares the second result to carry its WITNESS half, and
 // a throwing one to carry the error flag. The three indirect shapes still answer with `throws` alone — a
 // requirement's and a function type's interface return are both refused at their declaration — while a
@@ -1091,7 +1084,7 @@ end 'indirectCallResultValTypes'
 // `funcResultValTypes` alone still names the PRIMARY result the body's `errorReturn`/`ret` coerce to (see
 // `emitErrorReturn`/`emitRet`); this is the signature-only view.
 //
-// ⭐ **THE SECOND RESULT IS NOT "THE ERROR FLAG", IT IS "THE SECONDARY RETURN SLOT" (P1.7a slice 2).** An
+// ⭐ **THE SECOND RESULT IS NOT "THE ERROR FLAG", IT IS "THE SECONDARY RETURN SLOT".** An
 // interface-returning function writes the witness half into exactly the register/result a throwing one
 // spends on the flag, and a small VALUE TUPLE's second half rides the same slot again — so the question
 // this signature must answer is `irFunctionUsesSecondaryReturnSlot`'s and not `throwsClauseIsThrowing`'s.
@@ -1122,31 +1115,30 @@ end 'singletonValTypes'
 // IS handled here), so an int<->float pair reaching this point is a lowering bug, and the panic
 // names it as one.
 //
-// ⭐⭐ **THE WIDEN IS UNSIGNED, AND THAT IS THE WHOLE OF `ExitCode`'S VALUE ABOVE 2^31 (W1 review).** Every
+// ⭐⭐ **THE WIDEN IS UNSIGNED, AND THAT IS THE WHOLE OF `ExitCode`'S VALUE ABOVE 2^31.** Every
 // narrow int the compiler puts in a VALUE is UNSIGNED — `valueTagToStdType` produces exactly `i1`, `u32`, `i64` and
 // `f64`, and the heap's byte band is `u8`; NOTHING in the tree constructs a `StdType.i8`/`i16`/`i32`. So the
 // i32 a narrow value sits in holds a ZERO-extended number, and re-widening it with `i64.extend_i32_s` reads
 // its top bit as a SIGN. MEASURED, on a `returns ExitCode` of 4,000,000,000: the host printed 4000000000 and
 // wasm printed **-294967296** — a silent wrong answer, not a trap, through all three doors that widen a
-// narrow call result (a DIRECT call, a witness dispatch, and — since W1 recovered the alias's width — a
-// function typealias). All three are pinned: the direct and alias readings together in
+// narrow call result (a DIRECT call, a witness dispatch, and a function typealias). All three are pinned: the direct and alias readings together in
 // `first-class-function.exitcode-return-through-alias-high`, the witness one in
 // `where-clauses.witness-exitcode-return-high`. Each reads the number BACK with `print` rather than returning
 // it as a process status, because the OS truncates an exit code and an `exitcode` assertion could not see this.
 //
 // ⚠ It is unsigned because there is no SIGNED narrow type to be wrong about, not because a sign is never
 // wanted: `emitOsAllocPages` widens `memory.grow`'s -1 OOM sentinel and calls `i64ExtendI32S` DIRECTLY for
-// exactly that reason. If P1.9 (narrow int widths) ever gives a VALUE a signed sub-64 Std type, this
+// exactly that reason. If narrow int widths ever give a VALUE a signed sub-64 Std type, this
 // function's `(from, to)` valtype pair stops carrying enough to decide — the source's signedness has to
 // reach it, and `getValtype`'s table (WasmValType, not StdType) is where that information is dropped today.
 //
-// ⚠ **THE TWO CASES NAMED ABOVE ARE A WINDOWS-LANE READING SINCE BATCH27**, because 4,000,000,000 is no
-// longer a legal `ExitCode` anywhere else — the range is `int(0 to 255)` on Linux, macOS and WASI. ⇒ **on
-// the POSIX lanes THIS WIDEN IS NOW UNREACHABLE, and that is a closure by construction rather than a gap.**
+// ⚠ **THE TWO CASES NAMED ABOVE ARE A WINDOWS-LANE READING**, because 4,000,000,000 is not a legal
+// `ExitCode` anywhere else — the range is `int(0 to 255)` on Linux, macOS and WASI. ⇒ **on
+// the POSIX lanes THIS WIDEN IS UNREACHABLE, and that is a closure by construction rather than a gap.**
 //
-// ⛔ **A `u32`-RANGED ARRAY ELEMENT DOES NOT RE-PIN IT, AND THE COORDINATOR'S FIRST MEASUREMENT SAYING IT
-// DID WAS MEASURING A DIFFERENT PROPERTY.** That probe showed a 4-byte STORAGE slot and a correct
-// round-trip of 4000000000 on both lanes — but a round-trip is a POSITIVE CONTROL: it passes whether or
+// ⛔ **A `u32`-RANGED ARRAY ELEMENT DOES NOT RE-PIN IT, AND A MEASUREMENT SAYING IT DOES IS MEASURING A
+// DIFFERENT PROPERTY.** Such a probe shows a 4-byte STORAGE slot and a correct round-trip of 4000000000 on
+// both lanes — but a round-trip is a POSITIVE CONTROL: it passes whether or
 // not this function is wrong. MEASURED by disassembly (`wasm-tools print`): `__managed_get` is
 // `(param i64 i64) (result i64 i64)`, so a loaded element NEVER occupies an `i32` local, `coerceOnStack`
 // is never asked, and the module's only `i64.extend_i32_s` is `emitOsAllocPages`' `memory.grow` sentinel.
@@ -1156,48 +1148,44 @@ end 'singletonValTypes'
 // `exitCode` — to `StdType.u32`** (`IR/Maxon/LowerMaxonToStd.maxon:119`); a user `typealias U32 =
 // int(0 to u32.max)` is a `named` tag and lowers to `StdType.i64`. So only `ExitCode` mints a narrow
 // VALUE, and on POSIX its range stops at 255 while a signed and an unsigned widening first disagree at
-// 2^31. **Two independent premises, both required.** ⇒ what would REOPEN it: P1.9 giving a user type a
-// narrow Std type, or widening `ExitCode`'s POSIX range past 2^31 — either one, and this widen needs a
+// 2^31. **Two independent premises, both required.** ⇒ what would REOPEN it: a user type given a
+// narrow Std type, or `ExitCode`'s POSIX range widened past 2^31 — either one, and this widen needs a
 // pin on the wasm lane again.
 //
 // ⛔⛔ **AND THE INVARIANT ABOVE IS ABOUT THE TYPE, NOT ABOUT THE VALUE — SO THE ZERO-EXTENSION IS EXACT
-// ONLY INSIDE `[0, u32.max]`, WHICH IS THE SLOT'S DOMAIN AND NOT AUTOMATICALLY THE VALUE'S (X5 review,
-// MEASURED).** No narrow Std type is SIGNED, which is what the paragraph above establishes; it does not
-// establish that the number sitting in a `u32` slot is inside a `u32`. That second half is a RANGE
-// obligation and was never this file's to discharge — and while nothing discharged it, six lines
-// reproduced the divergence with no alias, no loop and no phi:
+// ONLY INSIDE `[0, u32.max]`, WHICH IS THE SLOT'S DOMAIN AND NOT AUTOMATICALLY THE VALUE'S (MEASURED).**
+// No narrow Std type is SIGNED, which is what the paragraph above establishes; it does not establish that
+// the number sitting in a `u32` slot is inside a `u32`. That second half is a RANGE obligation and is not
+// this file's to discharge — undischarged, six lines reproduce the divergence with no alias, no loop and
+// no phi:
 //
 //     function negOne() returns ExitCode
 //     	return -1
 //     end 'negOne'
 //     let v = negOne()   ⇒ host printed v=-1, plus10=9;   wasm printed v=4294967295, plus10=4294967305
 //
-// That reading was PRE-EXISTING and was measured on the pre-X5 binary too, so it was never the width
-// work's — the widen has always read whatever bit pattern reached it.
+// The widen reads whatever bit pattern reaches it.
 //
-// ⭐ **IT IS CLOSED, AND BY THE CURE THIS BLOCK NAMED: `InsertRangeChecks`, not a line in `wasmValTypeOf`.**
-// X6 gave the builtin `ExitCode` a range the guards can read, so `return -1` is E3005 at the `return` on
-// every target; BATCH27 made that range the compile TARGET's (`int(0 to u32.max)` on Windows,
-// `int(0 to 255)` on Linux, macOS and WASI — `Project.exitCodeAliasHigh`, mirroring `stdlib/Process.maxon`),
-// which is what closed the values between 256 and `u32.max` that the OS was silently masking on this lane.
-// ⚠ **This block asserted the open defect in the PRESENT TENSE from X5 until BATCH27; it was already stale
-// at X6, and the range work found it rather than caused it.**
+// ⭐ **IT IS CLOSED BY `InsertRangeChecks`, not by a line in `wasmValTypeOf`.** The builtin `ExitCode`
+// carries a range the guards can read, so `return -1` is E3005 at the `return` on every target, and that
+// range is the compile TARGET's (`int(0 to u32.max)` on Windows, `int(0 to 255)` on Linux, macOS and WASI
+// — `Project.exitCodeAliasHigh`, mirroring `stdlib/Process.maxon`), which closes the values between 256
+// and `u32.max` the OS would otherwise silently mask on this lane.
 //
-// ⇒ What this function relies on is unchanged, and now has a guard standing behind it rather than a hope:
+// ⇒ What this function relies on has a guard standing behind it rather than a hope:
 // `wasmMachineValTypeOf`'s and `emitDivMod`'s "computing at i64 is EXACT" is exact for every value inside the
 // SLOT's domain — verified across `[0, u32.max]` including 2^31 and u32.max, host and wasm byte-identical
 // on 14 readings — and the range checks are what stop a value outside it from ever arriving here.
 //
-// ⛔ **THE SLOT STAYS `u32` ON EVERY TARGET, AND THE NARROWED RANGE IS EXACTLY WHY IT MUST.** BATCH27
-// narrowed the RANGE and deliberately not the width: the runtime half of the call-argument door is a guard
+// ⛔ **THE SLOT STAYS `u32` ON EVERY TARGET, AND THE NARROWED RANGE IS EXACTLY WHY IT MUST.** It is the
+// RANGE that is narrowed and deliberately not the width: the runtime half of the call-argument door is a guard
 // at the CALLEE'S ENTRY, which reads the value out of the slot AFTER the ABI narrowed it, so it can only
 // see a truncation while the slot is WIDER than the range. Give `ExitCode` a `u8` slot here and
 // `takes(opaque(0) - 5)` arrives as 251, inside `int(0 to 255)`, and the guard passes — the wrong answer
 // back, wearing a check. `Project.maxon`'s `ExitCode` seed states the argument in full.
 //
-// ⚠ Do not read the pre-X5 compiler as better here: its 32-bit arithmetic made a few of these readings
-// AGREE with the host by coincidence (`v + 10` was `9` both ways), which is a wrapped answer that happened
-// to land, not a property.
+// ⚠ 32-bit arithmetic makes a few of these readings AGREE with the host by coincidence (`v + 10` is `9`
+// both ways), which is a wrapped answer that happens to land, not a property.
 function coerceOnStack(body WasmBody, from WasmValType, to WasmValType)
 	if from == to 'same'
 		return
@@ -1249,7 +1237,7 @@ function unaryResultValType(opcode StdUnaryOpcode, operandType StdType) returns 
 		// leading range would demote this to a ≤4-compare chain. Compile-time only, wasm-lowering only.
 		//
 		// ⚠ `logicalNot` PARTS COMPANY WITH THE OTHER TWO, and asking `wasmValTypeOf(operandType)` for
-		// it was a latent trap rather than a shorter spelling: `emitLogicalNotExpr` emits an `i32.xor`
+		// it would be a latent trap rather than a shorter spelling: `emitLogicalNotExpr` emits an `i32.xor`
 		// and so ALWAYS defines an i32, while its `operandType` is the bool's — and a bool-returning
 		// function lowers to an i64 return in this tier, so an `operandType` that is not `i1` would
 		// declare the local i64 and fail wasm validation. `neg`/`bitNot` compute what they consume, at
@@ -1300,14 +1288,14 @@ end 'callResultValType'
 // longer any value whose width is copied from an operand, which is what makes a single pass in
 // arbitrary block/op order enough.
 //
-// ⭐⭐ **THAT WAS THE X5 DEFECT, AND IT COST THREE OPS THEIR WIDTH.** `binOpImm`/`cmpImm` derived
-// theirs from `lhs`, and `div`/`mod` were recorded DEPENDENT on `lhs` and resolved by a second walk.
-// Both are the same mistake: **an operand's storage width is not the operation's width.** A Std value
-// keeps the width its DEFINING op gave it while a consumer may treat it as a machine word — an
-// int→int promotion emits no conversion op — so a `u32` `ExitCode` feeding a divide, or an `i1`
-// compare result feeding the `mod` overflow guard's `add`, made the operation narrow. The two
-// immediate forms now CARRY `operandType` (see StdDialect), and every integer op — `div`/`mod`
-// included, which have no operand type at all — is computed at MACHINE WIDTH, which is what the
+// ⭐⭐ **DERIVING A WIDTH FROM AN OPERAND COSTS THREE OPS THEIR WIDTH.** `binOpImm`/`cmpImm` would take
+// theirs from `lhs`, and `div`/`mod` would be DEPENDENT on `lhs` and need a second walk. Both are the
+// same mistake: **an operand's storage width is not the operation's width.** A Std value keeps the width
+// its DEFINING op gave it while a consumer may treat it as a machine word — an int→int promotion emits
+// no conversion op — so a `u32` `ExitCode` feeding a divide, or an `i1` compare result feeding the `mod`
+// overflow guard's `add`, would make the operation narrow. The two immediate forms CARRY `operandType`
+// (see StdDialect), and every integer op — `div`/`mod` included, which have no operand type at all — is
+// computed at MACHINE WIDTH, which is what the
 // native backends do with their 64-bit registers and what `wasmMachineValTypeOf` states in full.
 function buildValtypeTable(module StdModule, func IrFunction, funcNames FunctionNameIndex) returns WasmValTypeArray
 	var valtypes = WasmValTypeArray.create()
@@ -1350,7 +1338,7 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		unaryOp(resultId, _, opcode, operandType) then setValtype(valtypes, v: resultId, vt: unaryResultValType(opcode, operandType: operandType))
 		cmp(resultId, _, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i32)
 
-		// ⭐ The immediate forms carry their own width (X5), so a fold cannot change a value's
+		// ⭐ The immediate forms carry their own width, so a fold cannot change a value's
 		// class: `binOpImm`'s result is `wasmMachineValTypeOf(operandType)`, exactly as `binOp`'s is, and
 		// it is NOT dependent on `lhs` — which a fold does not promise agrees (see `emitBinOpImm`).
 		binOpImm(resultId, _, _, _, operandType) then setValtype(valtypes, v: resultId, vt: wasmMachineValTypeOf(operandType))
@@ -1378,13 +1366,13 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		loadIndirect(resultId, _, _, valueType) then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(valueType))
 		storeIndirect then break 'def'
 
-		// G3: the ordered pair reads and writes exactly what its plain twin does, so the result local has
+		// The ordered pair reads and writes exactly what its plain twin does, so the result local has
 		// the same valtype and the store defines none.
 		loadAcquire(resultId, _, _, valueType) then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(valueType))
 		storeRelease then break 'def'
 		osAllocPages(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 
-		// W35: a stream write defines the BYTE COUNT — an i64 like every other Std-tier integer, so the
+		// A stream write defines the BYTE COUNT — an i64 like every other Std-tier integer, so the
 		// emitter widens the i32 length it wrote back to the machine width (see `emitOsWriteStream`).
 		osWriteStdout(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 
@@ -1399,12 +1387,12 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		errorReturn then break 'def'
 		osExit then break 'def'
 
-		// P1.5-A1 non-capturing function values. A function value itself is a machine word (its Std type
+		// Non-capturing function values. A function value itself is a machine word (its Std type
 		// collapses to i64 — valueTagToStdType), so a `funcAddr` (the callee's table index) is i64; it is
 		// narrowed to the i32 `call_indirect` table-index operand only at the call itself
 		// (`emitFuncAddr`/`emitCallIndirect`), so it FLOWS as i64 unlike a `globalAddr`/`rdataAddr` (an i32
 		// address consumed in place). A `callIndirect` RESULT takes the function value's own return width
-		// (P1.5 #78): f64 for a float-returning function value, else i64 — the `resultType` the op carries,
+		// f64 for a float-returning function value, else i64 — the `resultType` the op carries,
 		// which is also the valtype the `call_indirect` functype declares as its result.
 		funcAddr(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 
@@ -1474,7 +1462,7 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		osStdHandle then break 'def'
 		osExecutablePath then break 'def'
 
-		// W35: the stderr write defines the byte count at the Std tier width, exactly as its stdout twin does.
+		// The stderr write defines the byte count at the Std tier width, exactly as its stdout twin does.
 		osWriteStderr(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 
 		// Unreachable on this lane — stack promotion is gated OFF for wasm32-wasi
@@ -1484,7 +1472,7 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		// would be.
 		stackRecordAddr(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 
-		// O3: a HANDLE, a mapped ADDRESS and a tick COUNT are all machine words — typed here even though
+		// A HANDLE, a mapped ADDRESS and a tick COUNT are all machine words — typed here even though
 		// `emitBodyOp` refuses them, because this column is built before any lowering decides anything.
 		osOpenNamedSegment(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		osMapNamedSegment(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
@@ -1520,24 +1508,24 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		// the wall-clock read's does, so there is no value to class.
 		osThreadCpuTicks then break 'def'
 
-		// F1a: the decommit defines no value on any target, so there is never a valtype to record.
+		// The decommit defines no value on any target, so there is never a valtype to record.
 		osDecommitPages then break 'def'
 
-		// F1b: a fill defines no value either — it is a store.
+		// A fill defines no value either — it is a store.
 		memFill then break 'def'
 
-		// F1c: both define a page BASE — an i64, exactly as `osAllocPages` does, because the Std tier carries every
+		// Both define a page BASE — an i64, exactly as `osAllocPages` does, because the Std tier carries every
 		// address at the machine width and this lane narrows to i32 only where an instruction demands one.
 		osCommitPages(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		osReservePages(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 
-		// F2: a CAS's success boolean, an RMW's prior word and a thread token are all i64 — the width every
+		// A CAS's success boolean, an RMW's prior word and a thread token are all i64 — the width every
 		// machine word carries at the Std tier, narrowed to i32 only where an instruction demands one.
 		atomicCas(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		atomicRmw(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		currentThreadToken(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 
-		// G1: the two value-defining TLS ops would answer i64 like every other machine word; the two void ones
+		// The two value-defining TLS ops would answer i64 like every other machine word; the two void ones
 		// declare nothing. They are refused at emission, so this only keeps the local map total.
 		tlsAlloc(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		tlsSetValue then break 'def'
@@ -1606,7 +1594,7 @@ type WasmFuncEmitter
 	var dataBase as Wasm32Index
 	var rdataBase as Wasm32Index
 
-	// The module's CHECKED name index (`FunctionNameIndex`, A2l), threaded down from `buildBackend`. It
+	// The module's CHECKED name index (`FunctionNameIndex`), threaded down from `buildBackend`. It
 	// answers both questions a direct `call` asks about its callee — which wasm function index to emit
 	// (`wasmFuncIdxOf`) and whether the callee returns a value at all — in place of the two maps that used
 	// to copy those facts out of the same function array without stating what made their keys unique.
@@ -1783,7 +1771,7 @@ type WasmFuncEmitter
 			osExit then panic("emitStraightLineTerminator: an `osExit` is a body op followed by a dead return, never a terminator")
 
 			// A `funcAddr`/`callIndirect` is a value-producing body op, never a terminator — the exact
-			// mirror of the `call`/`tryCall` arms above (P1.5-A1).
+			// mirror of the `call`/`tryCall` arms above.
 			funcAddr then panic("emitStraightLineTerminator: a `funcAddr` is a value-producing body op, never a terminator")
 			callIndirect then panic("emitStraightLineTerminator: a `callIndirect` is a value-producing body op, never a terminator")
 			osPanic or
@@ -1958,7 +1946,7 @@ type WasmFuncEmitter
 			osExit then panic("emitDispatcherTerminator: an `osExit` is a body op followed by a dead return, never a terminator")
 
 			// A `funcAddr`/`callIndirect` is a value-producing body op, never a terminator — the exact
-			// mirror of the `call`/`tryCall` arms above (P1.5-A1).
+			// mirror of the `call`/`tryCall` arms above.
 			funcAddr then panic("emitDispatcherTerminator: a `funcAddr` is a value-producing body op, never a terminator")
 			callIndirect then panic("emitDispatcherTerminator: a `callIndirect` is a value-producing body op, never a terminator")
 			osPanic or
@@ -2077,7 +2065,7 @@ type WasmFuncEmitter
 			loadIndirect(resultId, addrId, offset, valueType) then self.emitLoadIndirect(resultId, addrId: addrId, offset: offset, valueType: valueType)
 			storeIndirect(addrId, offset, valueId, valueType) then self.emitStoreIndirect(addrId, offset: offset, valueId: valueId, valueType: valueType)
 
-			// ⭐⭐ **G3 — THE ORDERED PAIR IS THE PLAIN PAIR ON THIS LANE, AND THE ARGUMENT IS THE COMPONENT
+			// ⭐⭐ **THE ORDERED PAIR IS THE PLAIN PAIR ON THIS LANE, AND THE ARGUMENT IS THE COMPONENT
 			// MODEL RATHER THAN THE INSTRUCTION SET.** A release/acquire orders one thread's writes against
 			// ANOTHER THREAD's reads, and a WASI Preview2 component has exactly one thread: The compiler emits no
 			// `thread.spawn`, declares no `shared` memory, and imports nothing that starts a thread — the
@@ -2103,7 +2091,7 @@ type WasmFuncEmitter
 			errorReturn(retValId, errorFlagId) then self.emitErrorReturn(retValId, errorFlagId: errorFlagId)
 			osExit(codeId) then self.emitOsExit(codeId)
 
-			// P1.5-A1 non-capturing function values: materialize a function's table index (`funcAddr`) and
+			// Non-capturing function values: materialize a function's table index (`funcAddr`) and
 			// call THROUGH one (`callIndirect`). See the two emitters for the funcref-table lowering.
 			funcAddr(resultId, funcName) then self.emitFuncAddr(resultId, funcName: funcName)
 			callIndirect(resultId, calleeReg, resultType, argFloatMask, args) then self.emitCallIndirect(resultId, calleeReg: calleeReg, args: args, resultType: resultType, argFloatMask: argFloatMask)
@@ -2119,7 +2107,7 @@ type WasmFuncEmitter
 				osCloseHandle or
 				osWaitHandle then panic("emitBodyOp: the subprocess ops have no wasm32-wasi lowering — WASI has no process-spawn primitive, and the call is refused at its own span (E3104)")
 
-			// ⭐⭐ **F1a: THE THREE PAGE-LIFECYCLE OPS ARE PERMANENTLY INERT HERE — CORRECT NO-OPS, NOT STUBS AND NOT
+			// ⭐⭐ **THE THREE PAGE-LIFECYCLE OPS ARE PERMANENTLY INERT HERE — CORRECT NO-OPS, NOT STUBS AND NOT
 			// GATES.** wasm linear memory only ever GROWS: `memory.grow` is the whole instruction set for it, there
 			// is no shrink, no decommit and nothing to re-back. So "give this region back" translates to the EMPTY
 			// instruction sequence, which is the honest lowering of a request the ISA cannot represent, and a
@@ -2138,10 +2126,10 @@ type WasmFuncEmitter
 			osFreePages then break 'body'
 			osDecommitPages then break 'body'
 
-			// F1b: the byte fill — ONE `memory.fill`, and this lane's whole size ladder. See `emitMemFill`.
+			// The byte fill — ONE `memory.fill`, and this lane's whole size ladder. See `emitMemFill`.
 			memFill(destId, byteCountId, value) then self.emitMemFill(destId, byteCountId: byteCountId, value: value)
 
-			// ⭐⭐ **F1c: THERE IS NO RESERVATION ON THIS LANE, SO A RESERVE *IS* AN ALLOCATION AND A COMMIT IS A
+			// ⭐⭐ **THERE IS NO RESERVATION ON THIS LANE, SO A RESERVE *IS* AN ALLOCATION AND A COMMIT IS A
 			// COPY — AND BOTH ARE THE HONEST TRANSLATION RATHER THAN A STUB.** Linear memory is one contiguous
 			// region whose only instruction is `memory.grow`, which takes the address range AND backs it in the
 			// same step: there is no state between "not there" and "there" for a reservation to occupy. So
@@ -2159,7 +2147,7 @@ type WasmFuncEmitter
 			// The dense-match jump table is ALWAYS a block terminator, never a body op.
 			switch then panic("emitBodyOp: a `switch` op appeared as a body op (lowering bug — the jump table is always a block terminator)")
 
-			// P1.7a slice 2b-iv-B: constrained-type-parameter dispatch. The witness table's method slot holds a
+			// Constrained-type-parameter dispatch. The witness table's method slot holds a
 			// funcref-TABLE INDEX on wasm (`bakeFuncTableIndexRelocs`) where the x64 writers bake a `.text` VA, so
 			// the fused call is a `call_indirect` through a loaded slot. See `emitWitnessCall`.
 			witnessCall(resultId, witnessAddr, methodIndex, resultType, argFloatMask, args) then self.emitWitnessCall(resultId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask)
@@ -2221,7 +2209,7 @@ type WasmFuncEmitter
 			// lowering would be vocabulary with no reachable consumer.
 			osCommandLine then panic("emitBodyOp: `osCommandLine` has no wasm32-wasi lowering, and SemanticCheck refuses such a program at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
 
-			// ⚠ W5. THE TWO ARE REFUSED FOR DIFFERENT REASONS, and copying argv's sentence onto both would
+			// ⚠ THE TWO ARE REFUSED FOR DIFFERENT REASONS, and copying argv's sentence onto both would
 			// hide the one that is permanent.
 			//   • `osStdHandle`: WASI DOES have a standard input — `wasi:cli/stdin` plus a `read` on the
 			//     input stream — so this is argv's case exactly. There is no HANDLE to fetch (the stream
@@ -2233,8 +2221,8 @@ type WasmFuncEmitter
 			osStdHandle then panic("emitBodyOp: `osStdHandle` has no wasm32-wasi lowering, and SemanticCheck refuses such a program at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
 			osExecutablePath then panic("emitBodyOp: `osExecutablePath` has no wasm32-wasi lowering — WASI has no executable-path primitive at all — and SemanticCheck refuses such a program at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
 
-			// W35: the same emitter as the stdout write, one `wasi:cli` accessor over. Unlike its two W5
-			// neighbours above this one LOWERS here — Preview2 exports `get-stderr` beside `get-stdout` and
+			// The same emitter as the stdout write, one `wasi:cli` accessor over. Unlike its two
+			// neighbours above, this one LOWERS here — Preview2 exports `get-stderr` beside `get-stdout` and
 			// the writer is the same method, so `printError` runs on this lane.
 			osWriteStderr(resultId, bufId, lenId) then self.emitOsWriteStream(resultId, bufId: bufId, lenId: lenId, stream: OsOutputStream.standardError)
 
@@ -2282,12 +2270,12 @@ type WasmFuncEmitter
 			osCpuCount then panic("emitBodyOp: `osCpuCount` has no wasm32-wasi lowering — WASI reports no processor count, and SemanticCheck refuses such a program at its own source span (E3104)")
 			osThreadCpuTicks then panic("emitBodyOp: `osThreadCpuTicks` has no wasm32-wasi lowering — WASI exposes no per-thread CPU clock, and SemanticCheck refuses such a program at its own source span (E3104)")
 
-			// F2: the atomics and the per-thread identity word — all three lower, and NONE is a stub.
+			// The atomics and the per-thread identity word — all three lower, and NONE is a stub.
 			atomicCas(resultId, addrId, expectedId, replacementId) then self.emitAtomicCas(resultId, addrId: addrId, expectedId: expectedId, replacementId: replacementId)
 			atomicRmw(resultId, addrId, operandId, opcode) then self.emitAtomicRmw(resultId, addrId: addrId, operandId: operandId, opcode: opcode)
 			currentThreadToken(resultId) then self.emitCurrentThreadToken(resultId)
 
-			// G1: a WASI component has ONE thread by construction, so per-OS-thread storage answers a question the
+			// A WASI component has ONE thread by construction, so per-OS-thread storage answers a question the
 			// lane cannot ask, and there is no event object to signal. That is the same reason `currentThreadToken`
 			// answers a constant here rather than reading anything — but a constant is the RIGHT answer for an
 			// identity and a WRONG one for storage, which would silently hand every reader the same slot.
@@ -2324,7 +2312,7 @@ type WasmFuncEmitter
 	end 'emitBodyOp'
 
 	// ----------------------------------------------------------------------
-	// F2: the atomics and the thread token, on a lane with exactly ONE thread
+	// The atomics and the thread token, on a lane with exactly ONE thread
 	// ----------------------------------------------------------------------
 	//
 	// ⭐⭐ **A PLAIN LOAD/COMPARE/STORE IS THE CORRECT LOWERING HERE, NOT A STUB, AND THE REASON IS
@@ -2476,7 +2464,7 @@ type WasmFuncEmitter
 			min or
 				max then self.emitFloatMinMax(lhs, rhs: rhs, kind: floatMinMaxKindFor(opcode))
 
-			// EC18's high multiply is INTEGER-ONLY, so it is the one opcode this dispatch cannot route
+			// The high multiply is INTEGER-ONLY, so it is the one opcode this dispatch cannot route
 			// into `emitFloatAluOp`'s "everything else" arm — there is no float 128-bit product.
 			mulHighSigned then panic("wasm: `mulHighSigned` is INTEGER-ONLY — it is the high half of a 128-bit integer product and no float form of it exists")
 		end 'op'
@@ -2539,15 +2527,14 @@ type WasmFuncEmitter
 		end 'op'
 	end 'emitFloatAluOp'
 
-	// ⭐⭐ **THE WIDTH IS NEITHER `lhs`'s NOR THE OPERAND TYPE'S — IT IS THE MACHINE WORD (X5, and its
-	// review).** It used to be `lhs`'s, on the reading that a folded `binOp` computes at the width of
-	// the value it reads. That is what the fold DELETED rather than what it meant: `mod`'s overflow
-	// mask is `add`ed onto an **i1** compare result at i64 width, so re-deriving gave a 32-bit `add`,
-	// a mask recorded i32, and — through `coerceOnStack`'s zero-extend — an `and` that cleared the top
-	// half of every dividend. X5 made the op CARRY `operandType` so the width would stop being guessed;
-	// the review found the other half, that a narrow `operandType` is a STORAGE class and not an
-	// arithmetic one, and `wasmMachineValTypeOf` is where that is now decided. `lhs` is COERCED like any
-	// other binary operand, which is exactly what the unfolded `binOp` next door already did.
+	// ⭐⭐ **THE WIDTH IS NEITHER `lhs`'s NOR THE OPERAND TYPE'S — IT IS THE MACHINE WORD.** Taking
+	// `lhs`'s, on the reading that a folded `binOp` computes at the width of the value it reads, reads
+	// what the fold DELETED rather than what it meant: `mod`'s overflow mask is `add`ed onto an **i1**
+	// compare result at i64 width, so re-deriving gives a 32-bit `add`, a mask recorded i32, and —
+	// through `coerceOnStack`'s zero-extend — an `and` that clears the top half of every dividend. A
+	// narrow `operandType` is a STORAGE class and not an arithmetic one, and `wasmMachineValTypeOf` is
+	// where that is decided. `lhs` is COERCED like any other binary operand, exactly as the unfolded
+	// `binOp` next door is.
 	function emitBinOpImm(resultId ValueId, lhs ValueId, imm Imm32, opcode StdBinOpcode, operandType StdType)
 		// The immediate is pushed as a same-width const so wasm's typed ALU op is balanced
 		// (`i64.shl` pops two i64s). A float `binOpImm` cannot exist — no SSE form takes an immediate,
@@ -2579,7 +2566,7 @@ type WasmFuncEmitter
 				min or
 				max then panic("wasm: `binOp({opcode.name})` is FLOAT-ONLY (`stdBinOpcodeIsFloatOnly`) and cannot reach the integer ALU; integer division is `StdOp.div` and there is no integer `min`/`max`")
 
-			// ⭐⭐ **EC18 — WASM HAS NO 64x64 -> 128 MULTIPLY AT ALL, AND THAT IS WHY THE REDUCTION IS
+			// ⭐⭐ **WASM HAS NO 64x64 -> 128 MULTIPLY AT ALL, AND THAT IS WHY THE REDUCTION IS
 			// TARGET-GATED RATHER THAN UNIVERSAL.** There is no `i64.mul_high_s`; the only way to spell
 			// it here is four 32x32 products with carries, twenty-odd instructions against the ONE
 			// `i64.div_s` the reduction would be replacing. So `StrengthReduceDivision` asks
@@ -2775,9 +2762,9 @@ type WasmFuncEmitter
 
 	// The compare is at the MACHINE WORD, for `emitBinOpImm`'s reason and with its own worst case: a
 	// `u32` value (an `ExitCode`) above `i32.max` sits in an i32 with its top bit set, so a compare at
-	// 32 bits reads it as NEGATIVE — `e > 100` answered `le` here while x64 answered `gt`. X5 read that
-	// width off `lhs`, its review off `operandType`; BOTH say 32 for an `ExitCode`, and the native
-	// backends' 64-bit `cmp` over the same zero-extended register says `gt`. Widening `lhs` first is
+	// 32 bits reads it as NEGATIVE — `e > 100` answers `le` here while x64 answers `gt`. Neither `lhs`
+	// nor `operandType` helps: BOTH say 32 for an `ExitCode`, and the native backends' 64-bit `cmp` over
+	// the same zero-extended register says `gt`. Widening `lhs` first is
 	// what makes the three targets answer one question.
 	function emitCmpImm(resultId ValueId, lhs ValueId, imm Imm32, pred StdCmpPred, operandType StdType)
 		requireIntegerOperand(operandType, what: "cmpImm")
@@ -2832,13 +2819,12 @@ type WasmFuncEmitter
 	// non-zero divisors (CONTRACT §4.7). `i64.div_u`/`i64.rem_u` have no overflow trap at all, which
 	// is the same asymmetry x64's zeroed RDX gives and arm64's `udiv` gives.
 	//
-	// ⭐⭐ **THE ONE OP PAIR WITH NO WIDTH OF ITS OWN, AND THE WIDTH IS NOT `lhs`'s (X5).** It was:
-	// `div`/`mod` carry no `operandType` (x64's `idiv` needs none — every GPR is 64-bit), so the
-	// width and the result's were copied from the left operand. That reads a value's STORAGE class
-	// as if it were the operation's type, and the two part company exactly where an int→int
-	// promotion does — which emits NO conversion op, so a `u32` `ExitCode` divided as a machine word
-	// still SITS in an i32. `4000000000 / 7` was computed by `i32.div_s` over a bit pattern whose top
-	// bit is set: `4252829111` here against x64's `571428571`. See `specs/division.md`
+	// ⭐⭐ **THE ONE OP PAIR WITH NO WIDTH OF ITS OWN, AND THE WIDTH IS NOT `lhs`'s.** `div`/`mod` carry
+	// no `operandType` (x64's `idiv` needs none — every GPR is 64-bit), so copying the width and the
+	// result's from the left operand reads a value's STORAGE class as if it were the operation's type,
+	// and the two part company exactly where an int→int promotion does — which emits NO conversion op,
+	// so a `u32` `ExitCode` divided as a machine word still SITS in an i32. `4000000000 / 7` computed by
+	// `i32.div_s` over a bit pattern whose top bit is set answers `4252829111` against x64's `571428571`. See `specs/division.md`
 	// `divide-a-value-whose-declared-type-is-narrower-than-a-machine-word`.
 	//
 	// ⭐ Computing at i64 is EXACT rather than merely wider, and that rests on a property this
@@ -2850,9 +2836,9 @@ type WasmFuncEmitter
 	// two registers — the three targets agree by construction instead of by coincidence. A narrow
 	// CONSUMER of the quotient wraps it back at its own operand push, as any other i64 value would be.
 	//
-	// ⭐ THAT ARGUMENT IS NO LONGER THIS PAIR'S ALONE (X5 review): it is `wasmMachineValTypeOf`, and every
-	// integer op obeys it. `div`/`mod` were merely the two that could not have done otherwise, having
-	// no operand type to be misled by — the ops that HAVE one were being misled by it.
+	// ⭐ THAT ARGUMENT IS NOT THIS PAIR'S ALONE: it is `wasmMachineValTypeOf`, and every integer op
+	// obeys it. `div`/`mod` are merely the two that could not do otherwise, having no operand type to be
+	// misled by — the ops that HAVE one can be misled by it.
 	function emitDivMod(resultId ValueId, lhs ValueId, rhs ValueId, isRemainder bool, signedness IntegerSignedness)
 		self.pushBinaryOperands(lhs, rhs: rhs, opVt: WasmValType.i64)
 		let unsigned = signedness == IntegerSignedness.unsigned
@@ -2914,8 +2900,8 @@ type WasmFuncEmitter
 		end 'hasResult'
 	end 'emitCall'
 
-	// A call to a callee that uses the SECONDARY RETURN SLOT — `resultId = try callee(args…)`, or since
-	// P1.7a slice 2 an interface-returning `resultId = callee(args…)` whose second word is the WITNESS half.
+	// A call to a callee that uses the SECONDARY RETURN SLOT — `resultId = try callee(args…)`, or an
+	// interface-returning `resultId = callee(args…)` whose second word is the WITNESS half.
 	// Marshal + call exactly as `emitCall`, then capture the callee's MULTI-VALUE return. Such a callee's
 	// wasm signature is `(params) -> (resultVt, i64)` (value-returning) or `(params) -> (i64)` (void), so its
 	// results sit on the stack with the i64 SECOND WORD on TOP. `local.set` pops top-first, so that word is
@@ -2937,7 +2923,7 @@ type WasmFuncEmitter
 		end 'hasResult'
 	end 'emitTryCall'
 
-	// A function VALUE (`funcAddr`, P1.5-A1): its wasm value is the callee's TABLE INDEX. The module builds
+	// A function VALUE (`funcAddr`): its wasm value is the callee's TABLE INDEX. The module builds
 	// one funcref table with table[i] == function i, so a function's table index equals its wasm funcIdx —
 	// exactly what `wasmFuncIdxOf` derives. Materialized as an i64: a function value's Std type is a
 	// machine word, so it flows through params/fields/returns/block-args as i64 like every other value, and
@@ -2950,7 +2936,7 @@ type WasmFuncEmitter
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitFuncAddr'
 
-	// A call THROUGH a function value (`callIndirect`, P1.5-A1): `resultId = calleeReg(args…)`. Marshal each
+	// A call THROUGH a function value (`callIndirect`): `resultId = calleeReg(args…)`. Marshal each
 	// argument coerced to ITS wasm valtype (`indirectCallArgValType`, off the op's two per-argument ABI bits),
 	// push the table index (the function value, wrapped from its i64 flow-width down to the i32
 	// `call_indirect` operand), then `call_indirect (type $sig) (table 0)`. `$sig` is the pre-interned
@@ -2958,8 +2944,8 @@ type WasmFuncEmitter
 	// funcref's OWN type — and since the callee thunk / lifted closure declares the same param/return
 	// valtypes, the two match. The result takes the function value's own return width.
 	//
-	// ⭐ WHY the signature reaches the wasm tier ON THE OP (P1.5 #78). A function value now carries floats,
-	// so the old "every function value is `(i64^n) -> i64`" fact no longer holds: `(f64) -> f64` and
+	// ⭐ WHY the signature reaches the wasm tier ON THE OP. A function value carries floats, so "every
+	// function value is `(i64^n) -> i64`" does not hold: `(f64) -> f64` and
 	// `(i64) -> i64` are distinct wasm functypes of the same arity, and pushing a float arg as i64 or
 	// declaring the result i64 would mismatch the funcref's real type at the `call_indirect` type check. The
 	// Std `callIndirect` therefore carries `resultType`/`argFloatMask`, the SAME facts x64/arm64 use to pick
@@ -3007,7 +2993,7 @@ type WasmFuncEmitter
 		end 'hasResult'
 	end 'captureIndirectResult'
 
-	// ⭐ **THE FUSED `witnessCall` (P1.7a slice 2b-iv-B) — a `call_indirect` whose table index is LOADED FROM
+	// ⭐ **THE FUSED `witnessCall` — a `call_indirect` whose table index is LOADED FROM
 	// MEMORY.** The x64 lowering is a memory-indirect `call qword [witnessAddr + 24 + 8*i]`, where the loaded
 	// function pointer is dereferenced by the call itself and never occupies a register; wasm's `call_indirect`
 	// takes its callee off the operand stack, so the same shape is: push the args, then push the slot's
@@ -3116,20 +3102,18 @@ type WasmFuncEmitter
 		self.body.unreachable()
 	end 'emitOsExit'
 
-	// `osPanic(label)` — a panic whose whole line was baked into `.rdata` at compile time (a P1.9
+	// `osPanic(label)` — a panic whose whole line was baked into `.rdata` at compile time (a
 	// range-check violation, or a `panic("literal")`). The label's address is a compile-time i32 on
 	// this fixed-base target, exactly as in `emitRdataAddr`, so the site is two instructions.
 	//
-	// ⚠ **THIS EMITTED A BARE `exit-with-code` AND PRINTED NOTHING UNTIL W3**, and the comment that
-	// stood here said so — correctly, at the time: *"the real reason wasm exits bare is that nobody has
-	// written a wasm `mrt_panic`."* Somebody now has (`appendPanicRuntime`), and both spellings of a
-	// panic route to it, so this lane says as much as the other four.
+	// ⚠ Both spellings of a panic route to the wasm `mrt_panic` (`appendPanicRuntime`) rather than to a
+	// bare `exit-with-code`, so this lane says as much as the other four.
 	function emitPanicLabel(label ByteArray)
 		self.body.i32Const(self.rdataLabelAddress(label))
 		self.emitPanicCall()
 	end 'emitPanicLabel'
 
-	// `osPanicValue(messagePtr)` — the RENDERED twin (A3n): an interpolation assembled the whole line at
+	// `osPanicValue(messagePtr)` — the RENDERED twin: an interpolation assembled the whole line at
 	// run time and this is its ADDRESS. The pointer is an i64 in the Std IR (a machine word on the
 	// register backends) and an address is an i32 here, so `pushOperandAt` wraps it — the sole difference
 	// from the baked form, mirroring x64's and arm64's `lowerPanicValue`, which likewise differ from
@@ -3318,8 +3302,8 @@ type WasmFuncEmitter
 	// acceptable: both streams are process-lived and the host reclaims them on exit.
 	//
 	// ⭐ ONE EMITTER FOR BOTH STREAMS: the accessor import is the whole difference — a `wasi:io/streams`
-	// output-stream is one type whichever `wasi:cli` accessor produced it, which is why W3's `get-stderr`
-	// needed no second writer and why this one needs no second emitter either.
+	// output-stream is one type whichever `wasi:cli` accessor produced it, which is why `get-stderr`
+	// needs no second writer and why this one needs no second emitter either.
 	//
 	// ⚠⚠ **THE BYTE COUNT IS `lenId`, AND ON THIS LANE THAT IS THE ABI'S ANSWER RATHER THAN A STAND-IN.**
 	// The other three lanes read a count the OS reports (`WriteFile`'s out-param, `write`'s return);
@@ -3354,10 +3338,9 @@ type WasmFuncEmitter
 	// index, then `br` back to the loop after the `if`/`end`.
 	function emitDispatchCondBranch(condId ValueId, thenBlockId BlockId, elseBlockId BlockId, currentBlock IrBlock, loopDepth Wasm32Index)
 		// `if` consumes an i32; a bool is already i32, but a condition widened to i64 must be narrowed
-		// first — and BOTH of those are `pushOperandAt`'s answer, not a second one. This read the valtype
-		// table for itself and wrapped by hand; the copy agreed with the door but nothing made it, and it
-		// was the weaker one (an f64 condition passed through UNTOUCHED where `coerceOnStack` panics
-		// naming the lowering bug). A condition CAN legitimately be i64 — an integer `binOp` over `i1`
+		// first — and BOTH of those are `pushOperandAt`'s answer, not a second one. Reading the valtype
+		// table here and wrapping by hand is the weaker spelling: an f64 condition passes through UNTOUCHED
+		// where `coerceOnStack` panics naming the lowering bug. A condition CAN legitimately be i64 — an integer `binOp` over `i1`
 		// operands is computed at the machine word like every other integer op (`wasmMachineValTypeOf`).
 		self.pushOperandAt(condId, targetVt: WasmValType.i32)
 		self.body.beginIf()
@@ -3403,10 +3386,10 @@ type WasmFuncEmitter
 		end 'openLandings'
 
 		// ⭐ "DOES THIS SUBJECT HAVE A TOP HALF?" IS ASKED ONCE — because only ONE of the two emitters below
-		// needs to ask it at all. It used to be read twice with opposite polarity, then hoisted to here and
-		// handed to both; hoisting keeps two askers in step, but the INDEX does not need an answer — pushing
-		// the subject at i32 IS the question, and `pushOperandAt` already answers it. So the guard reads the
-		// table for itself and is the only reader; there is no second copy left to disagree with.
+		// needs to ask it at all. Hoisting it and handing it to both keeps two askers in step, but the INDEX
+		// does not need an answer — pushing the subject at i32 IS the question, and `pushOperandAt` already
+		// answers it. So the guard reads the table for itself and is the only reader; there is no second
+		// copy to disagree with.
 		//
 		// The 64-bit UNSIGNED bounds check: a value outside `[0, span)` (a wrapped-negative index included)
 		// branches to the default landing (innermost, depth 0). Only reached with an i64 subject — a bias
@@ -3656,10 +3639,10 @@ end 'narrowToImm32'
 // `i32.store8` forms — everything ≤ 32 bits is an i32 local) and a word returns i64/f64. The
 // returned valtype is UNAMBIGUOUS about width because the only i32-backed types admitted are
 // byte-width: an i32 return ⟺ a byte access. Every other width panics rather than picking a nearby
-// one — a narrow integer needs the `as` cast (P1.9), whose SIGNEDNESS then decides the
+// one — a narrow integer needs the `as` cast, whose SIGNEDNESS then decides the
 // sign/zero-extending load — exactly the line `accessWidthFor` draws for the native backends. An f32
 // cannot occur (Maxon's `float` is f64). A `bool`/`u8` byte zero-extends, which is why the one byte
-// load form (`i32.load8_u`) is unsigned; a signed byte (`i8`) is P1.9-gated below.
+// load form (`i32.load8_u`) is unsigned; a signed byte (`i8`) is gated below.
 function wasmMemAccessType(valueType StdType, what String) returns WasmValType
 	match valueType 'w'
 		i1 then return WasmValType.i32
@@ -3692,8 +3675,7 @@ function wasmLinearAddress(base Wasm32Index, byteOffset ByteOffset) returns Imm3
 end 'wasmLinearAddress'
 
 // A memory-band byte offset as the ULEB `offset` a wasm memarg carries (a u32). Every offset in
-// this slice is 0 (a plain global's load/store); the bound starts mattering at P1.1's struct
-// fields. A value past u32.max is an invariant break — no single 64 KiB memory reaches that far.
+// this slice is 0 (a plain global's load/store); the bound starts mattering at struct fields. A value past u32.max is an invariant break — no single 64 KiB memory reaches that far.
 function wasmMemOffset(offset ByteOffset) returns Wasm32Index
 	if offset > u32.max 'tooFar'
 		panic("wasmMemOffset: memarg offset {offset} exceeds the u32 a wasm memarg encodes — an access reaching that far past its base is outside a single linear memory")
@@ -3754,7 +3736,7 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		osExit then panic("decideDispatcher: an `osExit` is a body op followed by a dead return, never a terminator")
 
 		// A `funcAddr`/`callIndirect` is a value-producing body op, never a terminator — the same
-		// invariant `tryCall`/`osExit` assert (P1.5-A1).
+		// invariant `tryCall`/`osExit` assert.
 		funcAddr then panic("decideDispatcher: a `funcAddr` is a value-producing body op, never a terminator")
 		callIndirect then panic("decideDispatcher: a `callIndirect` is a value-producing body op, never a terminator")
 		osPanic or

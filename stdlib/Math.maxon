@@ -9,11 +9,11 @@ typealias SeriesTermLimit = int(2 to 64)
 
 // ⭐ EVERY mathematical constant this module uses is declared HERE, exactly once.
 //
-// This is not tidiness. Two spellings of ln 2 used to live in `log` (0.693147180559945) and `log2`
-// (0.6931471805599453), nothing forced them to agree, and they had already drifted: the first is
-// ~2.7 ULP low, and `log` MULTIPLIES it by the binary exponent — up to about a thousand — so the
-// error was amplified straight into the answer. One definition is what makes that impossible
-// rather than merely unlikely.
+// This is not tidiness. A constant spelled once per call site drifts, and nothing forces the
+// spellings to agree: 0.693147180559945 is ~2.7 ULP low against 0.6931471805599453, and `log`
+// MULTIPLIES ln 2 by the binary exponent — up to about a thousand — so that error is amplified
+// straight into the answer. One definition is what makes that impossible rather than merely
+// unlikely.
 //
 // All are written to 17 significant digits, which is exactly what IEEE 754 double precision
 // resolves: more digits are silently dropped, fewer can leave the nearest double unreached.
@@ -355,8 +355,8 @@ public type Math
 	/// Calculate natural logarithm (ln) of x
 	/// Uses Taylor series approximation around x=1
 	public static function log(x Real) returns Real
-		// ⭐ These used to be the sentinel 0.0, which `log(1.0)` also returns — so a caller could not
-		// tell a valid answer from an invalid argument. IEEE 754's answers collide with nothing.
+		// ⭐ NOT a sentinel 0.0, which `log(1.0)` also returns — a caller could then not tell a valid
+		// answer from an invalid argument. IEEE 754's answers collide with nothing.
 		if x <= 0.0 'nonPositive'
 			return Math.nonPositiveLogResult(x)
 		end 'nonPositive'
@@ -414,10 +414,10 @@ public type Math
 		// ⭐ NO non-positive guard, deliberately: this function is `log` divided by a finite non-zero
 		// constant, and IEEE 754 division carries both of `log`'s special answers through unchanged
 		// (-inf/ln10 is -inf, NaN/ln10 is NaN, +inf/ln10 is +inf). A guard here would be a second,
-		// independently maintained statement of a rule `log` already owns — which is exactly how the
-		// two ln 2 literals at the top of this file came to disagree. That applies to the ORDINARY
-		// cases too: an `x == 1.0` shortcut used to sit here, and it was the same duplication in
-		// miniature — `log(1.0)` is exactly 0.0 and 0.0/ln10 is exactly 0.0, so it decided nothing.
+		// independently maintained statement of a rule `log` already owns — which is exactly what the
+		// single ln 2 declaration at the top of this file exists to prevent. That applies to the
+		// ORDINARY cases too: an `x == 1.0` shortcut here would be the same duplication in miniature
+		// and would decide nothing — `log(1.0)` is exactly 0.0 and 0.0/ln10 is exactly 0.0.
 		// log10(x) = ln(x) / ln(10)
 		let ln_x = Math.log(x)
 		return ln_x / mathLn10
@@ -444,7 +444,7 @@ public type Math
 
 		// Decompose: log2(x) = n + log2(y) where y in [1.0, 2.0)
 		// Powers of 2 normalize to y=1.0 exactly, giving exact integer results. That is also why the
-		// `x == 1.0` shortcut that used to sit here is gone: y stays 1.0, z is 0, the series is 0 and
+		// there is no `x == 1.0` shortcut here: y stays 1.0, z is 0, the series is 0 and
 		// `n` is 0, so the general path already answers exactly 0.0.
 		var n = 0
 		var y = x
@@ -633,10 +633,9 @@ public type Math
 				return Math.quietNaN()
 			end 'nonIntegerExponent'
 
-			// ⭐ At an INTEGER exponent it is an ordinary computation, and this used to answer the
-			// sentinel `0.0`: `pow(-2.0, exponent: 3.0)` returned 0.0 where the answer is -8.0. Not a
-			// rejected input dressed as a value — a WRONG ANSWER to a valid question, which is why it
-			// outranked the other sentinels.
+			// ⭐ At an INTEGER exponent it is an ordinary computation, and a sentinel `0.0` here would
+			// not be a rejected input dressed as a value but a WRONG ANSWER to a valid question:
+			// `pow(-2.0, exponent: 3.0)` is -8.0.
 			//
 			// Recursing on the magnitude runs the ONE numerical implementation below rather than a
 			// second copy of it, and the sign is the single parity rule. `-base` is finite and

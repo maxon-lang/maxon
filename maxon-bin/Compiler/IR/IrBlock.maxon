@@ -15,8 +15,8 @@
 //   Std phase — `lowerMaxonToStd` carries them across, then `pruneDeadBlockArgs` DROPS
 //     the phis nothing reads, rebuilding both lists in lockstep.
 //   Target phase — `StdToX64Conversion.prepareSkeleton` carries them across, and the
-//     register allocator consumes them DIRECTLY (it does SSA destruction after
-//     coloring; M5 retired the EliminatePhis pass that used to clear them beforehand).
+//     register allocator consumes them DIRECTLY, doing SSA destruction after coloring —
+//     nothing clears them beforehand.
 //     They ARE rewritten here: the live-range splitter repoints edge args at reloads
 //     (`rewriteEdgeArgsIn`), critical-edge splitting moves edges onto new blocks, and
 //     `clearPhiModel` finally empties the model once the edge moves are committed.
@@ -396,15 +396,15 @@ export typealias IrBlockArray = Array with IrBlock
 // This exists because `Array.insert` CLAMPS an out-of-range index to the tail, and every
 // caller here computes `at` from a live-range position or an op's index within the block
 // — so a position past the end is a bug in the caller, not a request to append. Clamping
-// would put a spill store or a reload at the wrong place and miscompile silently; the
-// `List` this used to be threw instead, and that guard is worth keeping.
+// would put a spill store or a reload at the wrong place and miscompile silently, so an
+// out-of-range `at` panics here rather than reaching `Array.insert`.
 //
 // ⚠ IT SHIFTS A SUFFIX OF `opRefs`, SO IT IS FOR ONE OP AND NOT FOR K OF THEM. A caller
 // placing several ops into one block must use `spliceOpRefs` below — a loop here costs
 // Θ(K × block) and it also forces each iteration to re-derive its position in coordinates
 // the previous iteration has already moved. That is not a style preference: it is the
-// quadratic the register allocator's splitter was measured paying, and the reason its
-// positions can now be read out of an index instead of searched for.
+// quadratic the register allocator's splitter is MEASURED paying, and the reason its
+// positions are read out of an index instead of searched for.
 export function insertOpRef(block IrBlock, at BlockOpPos, opIdx OpIndex)
 	if at > block.opRefs.count() 'oob'
 		panic("insertOpRef: position {at} is past the end of block '{String.from(block.label)}' (opRefs count={block.opRefs.count()})")

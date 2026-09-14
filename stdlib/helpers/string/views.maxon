@@ -6,15 +6,15 @@
 // All iterators maintain the Iterator invariant: current() is infallible;
 // advance() throws IterationError.exhausted at end.
 //
-// A view and its iterator hold the `String`, not its `__ManagedMemory`, and this is the whole
-// reason they were touched in Stage 4b-1b. A record reference here ESCAPES THE FRAME — the view
+// A view and its iterator hold the `String`, not its `__ManagedMemory`, and that is deliberate.
+// A record reference here ESCAPES THE FRAME — the view
 // outlives the `s.bytes()` call that made it — so under 4b-2, where a small `String` is a 16-byte
 // VALUE with no record, the field would have to be MATERIALIZED to be stored, and the caller-frame
 // spill that makes `byteAt` work cannot reach a field that outlives the frame. A `String` field is
 // the value itself: 16 bytes, copied, nothing allocated. Same reasoning as `StringIterator`.
 //
 // The cost lands on `Character.bytes()` / `Character.codepoints()`, whose source is a Character —
-// a record forever, unaffected by 4b-2 — and which now pay a `toString()` to be iterated. That is
+// a record forever, unaffected by 4b-2 — and which pay a `toString()` to be iterated. That is
 // the right side to charge: a Character holds one grapheme and is rarely iterated byte-wise, while
 // String iteration is everywhere and is exactly what SSO exists to make free.
 

@@ -114,11 +114,9 @@ public type Promise uses Element, ErrorType
 	// `try await`, and `.cancel()`. Written by the compiler's promise-boxing path
 	// and read by the await unbox path.
 	//
-	// It is the ONLY field. The box used to carry two more — a `throws_` bit and an
-	// `errorIsHeapPtr` bit — that existed solely because the type had nowhere to keep
-	// the error. `throws_` was write-only for its whole life (nothing ever read it);
-	// `errorIsHeapPtr` drove a runtime-branched decref that a static type does
-	// straight-line. Both are gone: `ErrorType` answers what they approximated.
+	// It is the ONLY field: `ErrorType` states statically what a `throws_` or
+	// `errorIsHeapPtr` bit beside it could only approximate, and a static type
+	// decrefs straight-line where such a bit forces a runtime branch.
 	//
 	// `inner` is exported (read-only via `let`) so non-blocking pollers like the spec
 	// test dispatcher can peek at the underlying GT's status. Don't mutate; the field
@@ -136,7 +134,7 @@ public enum ParseError implements Error
 	invalidFormat
 end 'ParseError'
 
-// ServiceError - what a call on a service HANDLE can fail with, whatever the message itself declares (SV1).
+// ServiceError - what a call on a service HANDLE can fail with, whatever the message itself declares.
 //
 // A service is a green thread with a mailbox, and it can be gone: `shutdown()` enqueues a poison pill behind
 // everything already queued, and dropping the last handle does the same, so a message sent to a stopped
@@ -144,7 +142,7 @@ end 'ParseError'
 // awaiter. That is a LIVENESS obligation of the runtime and it is why the case exists at declaration time,
 // before anything throws it: an awaitable message's error type is the two-member union
 // `{ServiceError, <what the message itself throws>}`, so this enum is half of a TYPE the compiler
-// synthesizes rather than a value some runtime path happens to produce. Literally half, since SV4 — the
+// synthesizes rather than a value some runtime path happens to produce. Literally half: the
 // compiler mints `<Service>.<method>.errors` for every throwing message, whose first cases are this enum's
 // at this enum's own tags, and a message that throws NOTHING has a reply error type that IS this enum.
 //
@@ -295,20 +293,15 @@ end '__int_fromString'
 
 typealias ParsedFloat = float(f64.min to f64.max)
 
-// ⭐⭐ **`float.fromString` AND A FLOAT LITERAL ARE NOW THE SAME CONVERSION — ONE READER, NOT TWO.**
+// ⭐⭐ **`float.fromString` AND A FLOAT LITERAL ARE THE SAME CONVERSION — ONE READER, NOT TWO.**
 //
-// This function used to accumulate `intPart + Σ digit/10^k` in a loop of its own, and that made the
-// tree carry TWO decimal→binary64 readers that disagreed by construction:
+// A second decimal→binary64 reader disagrees with this one by construction: a loop accumulating
+// `intPart + Σ digit/10^k` WRAPS a 20-digit integer part in its i64 multiply-add and rounds once per
+// digit, so its answer drifts from the exact rational arithmetic `__float_bitsFromText` does. This
+// function delegates rather than respelling it; `__Builtins.bitsToFloat` is what turns the BITS that
+// answers with back into an f64.
 //
-//   • no EXPONENT at all — `float.fromString("1.5e2")` threw, while the literal `1.5e2` compiled;
-//   • `intPart` was an i64 multiply-add, so a 20-digit integer part WRAPPED silently;
-//   • and it was not correctly rounded — a running `fracPart + digit/10^k` rounds once per digit, so
-//     the answer drifts from the one `__float_bitsFromText` (exact rational arithmetic) computes.
-//
-// It could not delegate before, for one reason and no other: `__float_bitsFromText` answers BITS, and
-// there was no way to turn bits back into an f64. `__Builtins.bitsToFloat` is that way.
-//
-// ⇒ **The tree now holds exactly ONE decimal↔binary64 conversion in each direction, and they are
+// ⇒ **The tree holds exactly ONE decimal↔binary64 conversion in each direction, and they are
 // inverses**: `__float_bitsFromText` reads text into a double, `__float_toString` writes a double back
 // out as the shortest text that reads back to it. What `float.fromString` accepts is therefore what a
 // float LITERAL accepts, to the byte — including the sign, the exponent and the `_` separators.
@@ -624,10 +617,9 @@ function __float_magnitudeBitsFromText(text String, startAt ParsedInt) returns _
 	// Whether any MANTISSA digit was seen, zero or not. `hasNonZeroDigit` cannot serve: `0.0` has no
 	// non-zero digit and is still a number, while `""` and `"abc"` are not numbers at all.
 	//
-	// ⚠ **MANTISSA, NOT "ANY" — AND THE DISTINCTION IS THE WHOLE OF `"e5"`.** An exponent digit used to
-	// set this too, which made `"e5"` pass the no-digits gate below, fall through to the zero shortcut
-	// and answer **+0.0** — while the comment on that gate named `"e5"` as one of the inputs it
-	// rejected. A number needs digits to scale; a scale with nothing to scale is not a number.
+	// ⚠ **MANTISSA, NOT "ANY" — AND THE DISTINCTION IS THE WHOLE OF `"e5"`.** An exponent digit must
+	// not set this: `"e5"` would then pass the no-digits gate below, fall through to the zero shortcut
+	// and answer **+0.0**. A number needs digits to scale; a scale with nothing to scale is not a number.
 	var sawMantissaDigit = false
 	var sigDigits = 0
 
@@ -649,8 +641,8 @@ function __float_magnitudeBitsFromText(text String, startAt ParsedInt) returns _
 		end 'startExp'
 
 		if b == '.' 'isDot'
-			// A SECOND decimal point is not a number. Ignoring it — which this branch used to do by
-			// unconditionally re-setting `pastDot` — makes `1.2.3` read as `1.23`: every byte is one the
+			// A SECOND decimal point is not a number. Ignoring it — by re-setting `pastDot`
+			// unconditionally — makes `1.2.3` read as `1.23`: every byte is one the
 			// grammar admits, so the `notADigit` guard below never sees it. From the lexer this cannot
 			// arrive (`Lexer.scanNumber` takes at most one `.` — its fraction loop breaks on the second),
 			// so this guards the two callers no lexer stands in front of: `float.fromString` and
@@ -815,12 +807,10 @@ end '__float_magnitudeBitsFromText'
 // ⭐⭐ **THE CONVERSION ITSELF — `digits × 10^totalExp` CORRECTLY ROUNDED TO A binary64 — SPLIT OUT OF
 // THE SCAN ABOVE BECAUSE IT HAS A SECOND CALLER.** `__shortestRoundTrip` has to ask "does this candidate
 // read back as the double I started from?", and that is this question with the digits already in hand.
-// It used to ask it by WRITING the candidate as `0.<digits>e<scale>` and handing the text to the scanner,
-// which was the same conversion reached through a String and a re-parse — slower, and it made the
-// scanner's loop part of every emitted program that prints a float, back when that loop could not be
-// allocated at all (E5001 — see `__float_magnitudeBitsFromText`'s header for what that was and how the
-// two-phase split cured it). The split is not what makes this function right; taking the DIGITS rather
-// than text is, and it would be right if registers were free.
+// Asking it by WRITING the candidate as `0.<digits>e<scale>` and handing the text to the scanner reaches
+// the same conversion through a String and a re-parse — slower, and it drags the scanner's loop into
+// every emitted program that prints a float. The split is not what makes this function right; taking the
+// DIGITS rather than text is, and it would be right if registers were free.
 //
 // `droppedNonZeroDigit` is the STICKY BIT: true iff a non-zero digit was dropped past
 // `__SignificantDigitBudget`. The round-trip caller passes false — its candidate is at most 17 digits and
@@ -981,9 +971,9 @@ end '__float_bitsFromDecimal'
 //
 // `__float_bitsFromText` is exact rational arithmetic, and that only works if the two cells can actually
 // hold `intPart * 10^±exp`. An i64 cannot: `10^k` carries the factor `2^k`, so in 64 bits `10^19`
-// already wraps, `10^63` lands on `i64.min` — NEGATIVE, which used to send the normalization loop
-// doubling a negative value forever and HANG the compiler on a literal as ordinary as `1.0e63` — and
-// `10^64` is exactly zero. Every literal past |exponent| ≈ 19 was silently wrong.
+// already wraps, `10^63` lands on `i64.min` — NEGATIVE, which sends the normalization loop doubling a
+// negative value forever and HANGS the compiler on a literal as ordinary as `1.0e63` — and `10^64` is
+// exactly zero. Every literal past |exponent| ≈ 19 would be silently wrong.
 //
 // So a magnitude is an array of base-2^32 limbs, little-endian, with NO leading zero limb: an EMPTY
 // array is zero, which makes `isEmpty()` the zero test and keeps every operation's cost proportional
@@ -1088,9 +1078,9 @@ end '__requireLimbBudget'
 
 // Flush a pending carry out the top of `limbs` as new high limbs. THE one place a magnitude gets
 // wider at the top: `__bigAddSmall`, `__bigMulSmall`, `__bigShiftLeft` and `__bigFromScalar` all
-// finish this way, and each used to spell "push the masked carry, shift it down, check the budget"
-// for itself. Nothing made those agree — one of them dropping the mask, or the budget check, would be
-// a silently corrupt high limb rather than a compile error.
+// finish this way rather than each spelling "push the masked carry, shift it down, check the budget"
+// for itself. Nothing would make four copies agree — one of them dropping the mask, or the budget
+// check, is a silently corrupt high limb rather than a compile error.
 function __bigPushCarry(limbs ParsedIntArray, carry ParsedInt)
 	var remaining = carry
 
@@ -1196,9 +1186,10 @@ end '__bigDivModSmall'
 // Restore the no-leading-zero-limb invariant: drop every zero limb off the TOP, so a magnitude that
 // reached zero becomes the empty one. THE one place a magnitude gets narrower, for the reason
 // `__bigPushCarry` is the one place it gets wider — the two operations that SHRINK a magnitude
-// (`__bigDivModSmall` and `__bigSubtract`) each used to spell this loop for itself, and nothing made
-// the two agree. A copy that stopped one limb early leaves a magnitude that compares WIDER than an
-// equal one, which `__bigCompare` decides on width alone: a wrong ordering, not a compile error.
+// (`__bigDivModSmall` and `__bigSubtract`) both call it rather than spelling this loop for themselves,
+// since nothing would make two copies agree. A copy that stopped one limb early leaves a magnitude
+// that compares WIDER than an equal one, which `__bigCompare` decides on width alone: a wrong
+// ordering, not a compile error.
 function __bigTrimLeadingZeroLimbs(limbs ParsedIntArray)
 	var used = limbs.count()
 
@@ -1880,8 +1871,8 @@ public function __float_toString(value ParsedFloat) returns String
 	// ⭐ **THE ZERO-WIDE FIELD IS NOT CEREMONY — IT IS HOW THE SIGN MEETS THE MAGNITUDE EXACTLY ONCE.**
 	// `__numericFieldText` is the one place that decides a sign goes in FRONT of the digits; spelling the
 	// join here as well would be a second copy of that decision, free to disagree with it the next time
-	// the padded spelling moves. Which is this rung's own bug one level down: `"{x}"` and `"{x:0}"`
-	// answering from two renderers is exactly what printed one double two different ways.
+	// the padded spelling moves: `"{x}"` and `"{x:0}"` answering from two renderers is exactly what
+	// prints one double two different ways.
 	return __numericFieldText(__floatSignText(bits), magnitude: __floatMagnitudeText(bits and __FloatMagnitudeMask), width: __NoFieldWidth, zeroFill: false)
 end '__float_toString'
 

@@ -30,11 +30,10 @@
 // included: `i64.max + 1` folds to `i64.min`, which is what `add` produces. That argument covers
 // ARITHMETIC completely, because add/sub/mul/and/or/xor are bit-identical under both readings.
 //
-// ⛔ **IT DOES NOT COVER COMPARISONS, AND THIS HEADER ONCE CLAIMED IT DID.** It used to say every
-// integer comparison is SIGNED at 64 bits on all three targets, so `foldIntCompare` was the whole
-// answer. X11 made signedness a real distinction carried on the op (`stdTypeIsUnsigned`), and the two
-// readings of one bit pattern disagree: `u64.max` rides as the wrapped `-1`. An unsigned comparison is
-// therefore DECLINED — see `evaluateIntCompare`, which carries the measurement.
+// ⛔ **IT DOES NOT COVER COMPARISONS.** "Every integer comparison is SIGNED at 64 bits on all three
+// targets" is false: signedness is a real distinction carried on the op (`stdTypeIsUnsigned`), and the
+// two readings of one bit pattern disagree — `u64.max` rides as the wrapped `-1`. An unsigned comparison
+// is therefore DECLINED — see `evaluateIntCompare`, which carries the measurement.
 //
 // FIVE THINGS ARE DELIBERATELY NOT FOLDED, each for its own reason:
 //
@@ -43,10 +42,10 @@
 //     `i64.min / -1`. `classifyArithOperands` therefore never offers one as a subject, and the prune
 //     below (`dceRetiredDefs`) retires only `const`s, so neither can be dropped for being unread either.
 //     ⚠ Note that `foldIntDivision` is nonetheless RIGHT about the pair a division can and cannot answer
-//     — `i64.min / -1` has no representable quotient and declines, `i64.min mod -1` is `0` and folds —
-//     which is the A1x finding, and this pass rests on it rather than restating it.
+//     — `i64.min / -1` has no representable quotient and declines, `i64.min mod -1` is `0` and folds.
+//     This pass rests on that rather than restating it.
 //   • **A FLOAT ANSWER THE HOST AND THE TARGET COULD SPELL DIFFERENTLY** — see the float band below,
-//     which is three named declines rather than a blanket one. Floats DO fold as of 2026-08-30.
+//     which is three named declines rather than a blanket one. Floats DO fold.
 //   • **SHIFT COUNTS OUTSIDE THE UNGUARDED WINDOW** (`TypeRules.shiftCountIsUnguarded`, 0..63). See
 //     `evaluateIntBinOp` — the window is asked, not restated.
 //   • **AN UNSIGNED COMPARISON** — `stdTypeIsUnsigned(operandType)`. See `evaluateIntCompare`: one bit
@@ -55,9 +54,9 @@
 //   • **THE SIGN-EXTENSION FAMILY** — the only unary opcodes left that never fold, and there is nothing
 //     to fold: `Parser.emitSignExtendFromSlot` is the sole emit site and its operand is the result of a
 //     runtime element-load CALL, which this pass never holds a constant for. Every OTHER unary shape
-//     folds as of 2026-08-31 — `neg`/`bitNot`/`logicalNot`, the two conversions, the six f64→f64
-//     intrinsics and both reinterpretations (`evaluateUnaryOp` and its two domain arms). The look that
-//     `neg` fold once owed `InsertRangeChecks.recordConstNeg` has been taken: that pass runs FIRST
+//     folds — `neg`/`bitNot`/`logicalNot`, the two conversions, the six f64→f64
+//     intrinsics and both reinterpretations (`evaluateUnaryOp` and its two domain arms).
+//     `InsertRangeChecks.recordConstNeg` runs FIRST
 //     (`PassPipeline`), folding a `neg` for its own constant domain while the op is still an op, so the
 //     two never see each other's work — and both spell the same `-x`.
 //
@@ -70,12 +69,12 @@
 // conversions and reinterpretations, it does: IEEE-754 fixes each to ONE answer and the compiler emits that one
 // answer on all three targets. The evaluators are `TypeRules`' own, exactly as the integer ones are.
 //
-// **THE THREE ORIGINAL DEFERRAL REASONS, ANSWERED:** *signed zero* — the host produces the instruction's
+// **THE THREE REASONS TO DOUBT THAT, ANSWERED:** *signed zero* — the host produces the instruction's
 // zero because it runs the instruction (`-0.0 + 0.0` is `+0.0` on the folder and on `addsd` alike), and
 // the sign operations are bit work rather than arithmetic (`NumberParsing.negatedFloatBits`); *NaN
 // payloads* — declined outright, below; *shortest-round-trip printing* — a folded constant IS the bits
-// the instruction would have produced, so a program prints the same text either way. That last one was
-// never a reason to refuse the fold; it was a reason to require the first two.
+// the instruction would have produced, so a program prints the same text either way. That last one is
+// not a reason to refuse the fold; it is a reason to require the first two.
 //
 // **THREE DECLINES, EACH ITS OWN:**
 //
@@ -96,11 +95,9 @@
 // constant on every path into a phi is not constant to this pass, and nothing here looks through memory
 // (`classifyFoldableDef`'s memory band states why a load's result is not its global's initializer).
 //
-// ⭐ **WHY THE OLD REASON FOR NOT HAVING THIS PASS IS GONE.** `FoldConstOperands`' header, `DEVLOG.md`
-// and `Parser.recordBinOpFold` all said the same thing: folding every constant expression to a single
-// `mov` would erase the codegen the spec fragments exist to show. Goldens became REFERENCE rather than a
-// gate on 2026-08-27 (user ruling), so that argument no longer holds — and the specs whose
-// SUBJECT is the emitted arithmetic were rewritten to take a runtime input, which is strictly better
+// ⭐ **WHY FOLDING DOES NOT COST THE SPEC FRAGMENTS THEIR CODEGEN.** Goldens are REFERENCE rather than
+// a gate (⚖ USER RULING), and the specs whose
+// SUBJECT is the emitted arithmetic take a runtime input, which is strictly better
 // testing than a literal a correct compiler is entitled to fold.
 
 // The pass's headline, printed before its per-function lines.
@@ -137,8 +134,8 @@ end 'foldConstantsHeadline'
 // it converges (8 rounds, forced) against ONE round, on the committed `scripts/emitted-code-count.py`
 // corpus: **12,189 emitted ops against 12,191** — two ops, both in `probe.maxon`, and byte-identical
 // everywhere else. The exact cure is a def-before-use order (reverse postorder of the Std CFG) or a
-// sparse def-use worklist, either of which is a mechanism of its own; `EC13`'s CSE needs the first one
-// anyway, and that is the rung to build it in. Iterating this walk instead would trade a LINEAR pass for
+// sparse def-use worklist, either of which is a mechanism of its own; the CSE pass builds the first.
+// Iterating this walk instead would trade a LINEAR pass for
 // one whose worst case is O(blocks x ops), for two ops.
 // Fold one function, in place. `branch` is the caller's terminator record, refilled per block.
 module function foldConstantsInFunc(module StdModule, func IrFunction, branch StdBranchOperands, log PassLog)
@@ -225,13 +222,13 @@ end 'tryEvaluate'
 // and the unary fold ask exactly the same two questions of an operand and would have answered them in
 // three places, which is the duplication this file is otherwise at pains to avoid.
 //
-// ⚠ **THE FLOAT REFUSAL STAYS EVEN THOUGH FLOATS NOW FOLD, AND IT IS NOT REDUNDANT.** Each evaluator
+// ⚠ **THE FLOAT REFUSAL IS NOT REDUNDANT WITH FLOATS FOLDING.** Each evaluator
 // DISPATCHES on `stdTypeIsFloat(operandType)` and routes a float to its own admission rule and its own
 // evaluator, so nothing reaches here with a float in the ordinary course. What this refusal is, is the
 // backstop for the one mistake that cannot be seen in a test: a float operand arriving at the INTEGER
 // folder, which would combine two IEEE-754 bit patterns as if they were numbers and write the answer
 // back as an integer `const`. That is not a wrong number, it is a value in the wrong register file —
-// `x64 emitter: rax is in the gpr register file where the xmm file is required` (MEASURED 2026-08-28).
+// `x64 emitter: rax is in the gpr register file where the xmm file is required` (MEASURED).
 function operandIsFoldableInteger(constMap ConstValueMap, operand ValueId, operandType StdType) returns bool
 	if stdTypeIsFloat(operandType) 'float'
 		return false
@@ -282,7 +279,7 @@ end 'operandsAreFoldableFloats'
 // nothing, so there is no machine choice to fear, and `siToFp` cannot produce a NaN from an integer.
 //
 // ⛔ **NO SPEC CASE CAN MEASURE THIS GUARD, AND THAT IS A PROPERTY OF THE THING RATHER THAN A GAP IN
-// THE SUITE.** MEASURED 2026-08-30 with the decline removed: the whole suite stays green on x64 AND on
+// THE SUITE.** MEASURED with the decline removed: the whole suite stays green on x64 AND on
 // wasm. The divergence is between two MACHINES' choices of payload, so staging it needs the compiler
 // and the running program on DIFFERENT machines; and the one assertion a program can make about a NaN
 // — `y != y` — is true of every payload. What sees it is `a-computed-nan-keeps-its-instruction`'s
@@ -321,15 +318,14 @@ end 'evaluateBinOp'
 // `binOpcodeIsCommutative: false`, and for `min`/`max` the reason is the definition itself: a strict
 // comparison is false on unordered input, so a swap changes the answer on a NaN.
 //
-// ⚠ **AN INTEGRAL OPCODE WITH A FLOAT `operandType` PANICS HERE RATHER THAN DECLINING, AND THAT IS A
-// CHANGE OF DISPOSITION WORTH NAMING.** It used to be refused by the blanket float guard and left alone;
-// now it reaches `foldFloatBinOp`, which panics because `mod`, the bit ops and the shifts have no float
+// ⚠ **AN INTEGRAL OPCODE WITH A FLOAT `operandType` PANICS HERE RATHER THAN DECLINING.** It reaches
+// `foldFloatBinOp`, which panics because `mod`, the bit ops and the shifts have no float
 // reading. That op is ILLEGAL IR and the panic is right — but note where the invariant actually lives:
 // `requireBinOpOperands` gives E3005 for a float `mod`/bit-op/shift in the FRONT END, and
 // `appendStdBinOp` guards only the other direction (a float-only opcode over an integer type). Nothing
 // in the op constructor refuses this one, so the front end is the whole of the guarantee.
 //
-// EC18's `mulHighSigned` cannot arrive here either, and for a different reason: it is INTEGER-ONLY —
+// `mulHighSigned` cannot arrive here either, and for a different reason: it is INTEGER-ONLY —
 // `stdBinOpcodeIsFloatOnly` answers `false` for it, which is a claim about float-onlyness and not about
 // integer-onlyness, so the fact worth citing is its own header ("there is no float 128-bit product").
 // The guard that declines it is `evaluateIntBinOp`'s, on the path it can reach.
@@ -417,8 +413,8 @@ end 'evaluateFloatCmp'
 //
 // ⭐ **WHY THE INTEGER ARM EXISTS AT ALL:** `-K` over a top-level or inlined constant is a `neg` of a
 // `const`, where the same value spelled `0 - K` is a `sub` of two — and the binary shape folded to one
-// `mov` while the unary kept its instruction. The `0 - x` → `-x` sweep of 2026-08-30 made every such
-// site the unary shape, and `top-level-let/unary-minus-in-constant`'s golden showed the cost in one line.
+// `mov` while the unary keeps its instruction. Every such site IS the unary shape (`0 - x` lowers to
+// `-x`), and `top-level-let/unary-minus-in-constant`'s golden shows the cost in one line.
 function evaluateUnaryOp(op StdOp, resultId ValueId, operand ValueId, opcode StdUnaryOpcode, operandType StdType, constMap ConstValueMap) returns StdOp
 	if stdUnaryOperandIsFloat(opcode) 'floatSource'
 		return evaluateFloatUnaryOp(op, resultId: resultId, operand: operand, opcode: opcode, operandType: operandType, constMap: constMap)
@@ -454,10 +450,10 @@ end 'evaluateUnaryOp'
 //     with `notOperatorFor` is answered by which arm this `match` takes.
 //     ⇒ Routing `logicalNot` to the integer folder was a MISSED FOLD — and this pass is what makes it
 //     reachable, because nothing else in the compiler folds a COMPARISON, so `not (2 > 1)` had a
-//     constant operand only once `evaluateCmp` had made one. MEASURED 2026-08-31: that program now
+//     constant operand only once `evaluateCmp` has made one. MEASURED: that program
 //     compiles to NO INSTRUCTIONS AT ALL (the `not` folds, then `foldConstantBranches` takes the arm and
-//     `dropUnreachableBlocks` removes the other); before, it kept an `xor`, a `cmp` and a `jcc` on a
-//     condition known at compile time. Found in review.
+//     `dropUnreachableBlocks` removes the other); routed to the integer folder it keeps an `xor`, a
+//     `cmp` and a `jcc` on a condition known at compile time.
 //     ⚠ It is NOT what leaves the `xor`/`cmp` pairs in `a-comparison-on-float-constants-folds`' own
 //     fragment: those `not`s read a leaf call's result, which arrives as a BLOCK ARG of `__il_cont`, and
 //     this pass is deliberately not a constant propagator. Two different boundaries, one symptom.
@@ -548,7 +544,7 @@ let FoldedComparisonType = StdType.i1
 //
 // ⛔ **NEVER MINT A FLOAT ANSWER AT `FoldedArithType`, AND THE COST IS NOT A WRONG NUMBER.** The value
 // lands in the wrong register file: `x64 emitter: rax is in the gpr register file where the xmm file is
-// required` (MEASURED 2026-08-28), and on wasm an i64 local that every `f64.*` consumer fails validation
+// required` (MEASURED), and on wasm an i64 local that every `f64.*` consumer fails validation
 // against. That is the sabotage `specs/fold-constants.md`'s float control pins.
 let FoldedFloatType = StdType.f64
 
@@ -564,9 +560,9 @@ let FoldedFloatType = StdType.f64
 //
 // ⭐⭐ **A COUNT OUTSIDE THE WINDOW IS LEFT ALONE, AND A NEGATIVE ONE IS WHY — SABOTAGE-MEASURED, NOT
 // ASSUMED.** The parser refuses a NEGATIVE literal count (E2054) and rewrites an out-of-range one, so
-// before EC5 no such constant could exist at all. `inlineLeaves` makes one: it substitutes a caller's
-// literal into a callee whose count was a PARAMETER, and for a parameter the parser emitted
-// `emitGuardedShift`'s saturation cascade rather than a diagnostic. **MEASURED 2026-08-28** with this
+// no such constant reaches this pass from source. `inlineLeaves` makes one: it substitutes a caller's
+// literal into a callee whose count was a PARAMETER, and for a parameter the parser emits
+// `emitGuardedShift`'s saturation cascade rather than a diagnostic. **MEASURED** with this
 // gate removed and `shiftLeft(1, n: -1)` compiled through such a leaf:
 //
 //     panic at TypeRules.maxon:1929: evalShift: negative count -1 — a negative count is E2054 and must
@@ -583,7 +579,7 @@ let FoldedFloatType = StdType.f64
 // test that would have to be kept in step. Declining costs one unfolded shift inside a cascade that is
 // already six ops.
 function evaluateIntBinOp(opcode StdBinOpcode, lhs ParsedInt, rhs ParsedInt) returns FoldedInt
-	// ⚠ **EC18's HIGH MULTIPLY IS DECLINED BEFORE THE BRIDGE, NOT INSIDE IT.** Two independent facts
+	// ⚠ **THE HIGH MULTIPLY IS DECLINED BEFORE THE BRIDGE, NOT INSIDE IT.** Two independent facts
 	// say no and it needs only the first: its answer is bits 64..127 of a 128-bit product, which a
 	// 64-bit `ParsedInt` cannot hold, so this pass has no arithmetic for it; and it has no `MaxonBinOp`
 	// twin at all, so `maxonBinOpOfStdOpcode` PANICS rather than answering. The guard is therefore ahead
@@ -762,7 +758,7 @@ end 'edgesWithoutTarget'
 // which is the only thing that repairs the merge block's phi — nothing downstream can, because by the
 // time the allocator sees the function that edge looks exactly like a real one.
 //
-// It still composes with `EC11` rather than duplicating it: that pass drops what the TARGET tier
+// It composes with the TARGET tier's own block drop rather than duplicating it: that pass drops what it
 // orphans — its own jump threading, and any block only unreachable once physical branches are elided —
 // which is a different set, discovered at a different time. This one is the Std tier's, and it runs only
 // on a function where a branch actually folded — here, and in `threadConstantBranches`, which orphans a

@@ -2173,11 +2173,11 @@ function tlsSlotArrayBase(target Target) returns ParsedInt
 	end 'os'
 end 'tlsSlotArrayBase'
 
-// The refusal for the one target with no per-OS-thread slot at all. ⚠ **IT WAS SHARED WITH LINUX UNTIL L4**,
-// on the argument that *"the Linux images are raw static binaries with no libc to write a thread pointer"* —
-// which was true and was the reason arm64-linux could WRITE ONE FOR ITSELF: nothing else on that lane reads
-// or writes `TPIDR_EL0`, so `mrt_host_tls_alloc` claims it (`Arm64LinuxRuntime`). WASI is different in kind
-// and not in schedule: a component has no OS-thread concept for a slot to be per.
+// The refusal for the one target with no per-OS-thread slot at all. ⚠ **LINUX IS NOT ONE OF THEM**, though
+// its images are raw static binaries with no libc to write a thread pointer: that is exactly why each Linux
+// lane WRITES ONE FOR ITSELF — nothing else there reads or writes `TPIDR_EL0`, so `mrt_host_tls_alloc`
+// claims it (`Arm64LinuxRuntime`). WASI is different in kind: a component has no OS-thread concept for a
+// slot to be per.
 //
 // ⭐ **BOTH LINUX LANES ARE SERVED BY THE ONE `linux` ARM, AND EACH PUBLISHES THE POINTER ITSELF.** The base
 // is 0 on both because each backend CHOSE its thread pointer to be its slot block's base; what differs is

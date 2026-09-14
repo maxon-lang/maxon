@@ -62,25 +62,17 @@ typealias Byte = int(0 to u8.max)
 // Stdin discriminator passed across the builtin boundary. Raw values match
 // the runtime contract (see X86/ARM64 emitters and the parent plan).
 //
-// ⭐ `hold` IS THE FIFTH VALUE AND IT WAS ALREADY IN ONE RUNTIME BEFORE IT HAD A SURFACE SPELLING:
-// The compiler built it for `StreamingSubprocess`, which wants a stdin pipe with NO payload queued. `bytes`
-// cannot say that — its arm always carries one — so an empty `bytes` payload is NOT the same request.
-// The number is 4 because that is the value the compiler's runtime already decodes; that runtime's constant
-// is `SubpStdinHold` (`maxon-bin/Compiler/Runtime/GtRuntime.maxon`), renamed from `SubpStdinPipe`
-// when this surface spelling arrived, because a value the language can spell should not answer to a
-// second name inside one compiler.
+// ⭐ `hold` IS A STDIN PIPE WITH NO PAYLOAD QUEUED — what `StreamingSubprocess` wants. `bytes` cannot
+// say that: its arm always carries a payload, so an empty `bytes` payload is NOT the same request.
+// The number is 4 because that is the value the compiler's runtime decodes; its constant is
+// `SubpStdinHold` (`maxon-bin/Compiler/Runtime/GtRuntime.maxon`), and a value the language can spell
+// must not answer to a second name inside one compiler.
 //
-// ⚠ `delayed` IS THE ONE VALUE NO RUNTIME HAD BEFORE THIS SURFACE SPELLING. **ALL THREE EMITTERS
-// DECODE BOTH VALUES NOW** — the bootstrap's x64 and arm64 emitters and the compiler's `emitSubpStdinSetup`.
-// ⛔ **THIS PARAGRAPH USED TO SAY THE OPPOSITE — that the compiler tested for `bytes` and `pipe`, sent
-// everything else down its non-pipe arm, and therefore handed a `delayed` spawn the null device and an
-// instant EOF — and that it was left unclosed "because closing it means editing the compiler's runtime".** It
-// WAS closed, in the same change that added these two values: `emitSubpStdinKindWantsPipe` is now the
-// one place the pipe question is asked, and `SubpSlotStdinFeedAt` carries the not-before time. The
-// stale sentence is recorded rather than deleted because a comment that names a defect the code no
-// longer has is worse than no comment: it sends the next reader looking for a divergence to work
-// around. ⇒ **the divergence to watch for now is a NEW kind added to this enum and to fewer than
-// three emitters**, which is what the two `…WantingPipe` sets exist to make a one-line change.
+// ⚠ ALL THREE EMITTERS DECODE `hold` AND `delayed` — the bootstrap's x64 and arm64 emitters and the
+// compiler's `emitSubpStdinSetup`. `emitSubpStdinKindWantsPipe` is the ONE place the pipe question is
+// asked, and `SubpSlotStdinFeedAt` carries the not-before time. ⇒ **the divergence to watch for is a
+// NEW kind added to this enum and to fewer than three emitters**, which is what the two
+// `…WantingPipe` sets exist to make a one-line change.
 enum StdinKind
 	none = 0
 	inherit = 1
@@ -144,10 +136,9 @@ public union Executable
 	///
 	/// ⚠ THIS IS NOT A PATH LOOKUP AND CANNOT BE USED AS AN EXISTENCE CHECK.
 	/// The `subprocessResolveOnPath` helper is called by `resolveByName`
-	/// during `runConfiguration`, not here. This comment previously claimed
-	/// the opposite, and a caller believed it: it built "is this tool
-	/// installed?" on top of `resolve()` and got a confident `notFound` for a
-	/// tool that was plainly on PATH. To probe for a tool, SPAWN it.
+	/// during `runConfiguration`, not here. "Is this tool installed?" built on
+	/// `resolve()` answers a confident `notFound` for a tool that is plainly on
+	/// PATH. To probe for a tool, SPAWN it.
 	public function resolve() returns FilePath throws ExecutableError
 		return match self 'r'
 			name(n) gives try FilePath.from(n) otherwise throw ExecutableError.notFound

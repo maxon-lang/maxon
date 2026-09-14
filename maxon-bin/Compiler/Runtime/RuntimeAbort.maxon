@@ -21,29 +21,21 @@
 // ⭐ **HOW TO PICK THE NEXT ONE: take the next free number ABOVE 70.** The band below is not ours —
 // 0-69 are ordinary program exit codes (a Maxon `main` returns one), and the subprocess specs' children
 // already use 1/2/3/4/5/25/45/123 — so an abort down there is indistinguishable from a program that
-// simply returned. (`runProcess`'s two failures used to break that rule with aborts 1 and 70; since
-// P1.5 #93 they THROW `RunProcessError` and the caller catches them, so no abort sits below 71 any more.)
+// simply returned. (`runProcess`'s two failures THROW `RunProcessError` for that reason, and no abort sits
+// below 71.)
 // 101 is the one code the compiler already spends outside this band and it is declared here so the
 // enum's own duplicate check covers it.
 //
-// ⚠ **134 IS NOT HERE, AND ITS ABSENCE IS DELIBERATE.** It was `userPanic`, the code a user `panic("…")`
-// exited with while the message was going unprinted; the panic statement now routes to the SAME
-// `mrt_panic` runtime the range-check guard uses (`StdOp.osPanic`), which exits `PanicExitCode` — so
-// nothing emits 134 any longer. A case nothing emits is a DEAD CLAIM, the same rot as a code that
-// reports another abort's number, so it was deleted rather than kept as a number this space defends
-// against a claimant that no longer exists.
+// ⚠ **134 IS NOT HERE, AND ITS ABSENCE IS DELIBERATE.** A user `panic("…")` routes to the SAME `mrt_panic`
+// runtime the range-check guard uses (`StdOp.osPanic`), which exits `PanicExitCode`, so nothing emits 134.
+// A case nothing emits is a DEAD CLAIM, the same rot as a code that reports another abort's number — hence
+// no entry rather than a number this space defends against a claimant that does not exist.
 //
-// ⚠⚠ **80 IS NOT HERE EITHER, FOR THAT SAME RULE APPLIED ONCE MORE (W49 wave 7)**, and the case it was
-// retired alongside — `stringSliceInvalidRange`, a dead claim since W49 wave 4 deleted
-// `Runtime/StringIndexRuntime.maxon` — held the number 77, which a LATER abort has since taken:
-// `managedListNodeNotInThisChain` is declared at 77 below. So 77 is LIVE and only 76, 80 and 108 are vacant.
-//   • **80 was `stringByteAtOutOfRange`**, an out-of-range `__str_byte_at_or_panic`. It got a NUMBER
-//     rather than a message for exactly one recorded reason: The compiler answered that failure from a
-//     SYNTHESIZED runtime function *"which has no source line and no message to bake"*, so it could not
-//     reach `osPanic`. Wave 7 retired `String.byteAtOrPanic` onto `stdlib/String.maxon:296`, whose body
-//     IS `try byteAt(index) otherwise panic("String.byteAtOrPanic: index out of bounds — …")` — ordinary
-//     Maxon with a real line and a real message. ⇒ The abort's whole justification dissolved: that
-//     failure now reaches `osPanic` with an ordinary message and a real source line.
+// ⚠⚠ **80 IS NOT HERE EITHER, FOR THAT SAME RULE.** The code it would name — an out-of-range byte read —
+// is answered by `stdlib/String.maxon`'s `byteAtOrPanic`, whose body IS
+// `try byteAt(index) otherwise panic("String.byteAtOrPanic: index out of bounds — …")`: ordinary Maxon
+// reaching `osPanic` with a real line and a real message. Only a SYNTHESIZED runtime function, which has no
+// source line and no message to bake, needs a number instead.
 // ⇒ **THE NEXT ENTRY TAKES THE NEXT FREE NUMBER ABOVE 70, WHICH IS 109.** 76, 80 and 108 are vacant and stay so:
 // reserving a vacated number would be this space defending against a claimant that no longer exists — the
 // very thing the paragraph above rejects.
@@ -93,10 +85,10 @@ export enum RuntimeAbort
 	managedFileStatIndexOutOfRange = 79
 
 	// `__list_remove_node` / `__list_detach_node`: the node handed in is linked into a DIFFERENT chain than
-	// the receiver. `owner@32` names the chain a node belongs to, and the unlink used to gate on it merely
-	// being non-zero — so `b.remove(nodeOfA)` repaired `b`'s `head`/`tail`/`count` from `a`'s links, MEASURED
-	// as a live chain reading `count = -1` and then **exit 139** on a `String` element (and a silent wrong
-	// answer on an `int` one). Nothing in the type system can catch it: two chains of one element type share
+	// the receiver. `owner@32` names the chain a node belongs to, and an unlink gating on it merely being
+	// non-zero lets `b.remove(nodeOfA)` repair `b`'s `head`/`tail`/`count` from `a`'s links — MEASURED as a
+	// live chain reading `count = -1` and then **exit 139** on a `String` element (and a silent wrong answer
+	// on an `int` one). Nothing in the type system can catch it: two chains of one element type share
 	// a `__ManagedListNode` type, so the handle checks out at the call.
 	//
 	// ⚠ **IT ABORTS BY NUMBER RATHER THAN THROUGH `osPanic`, FOR THIS FILE'S OWN RECORDED REASON** — a
@@ -419,12 +411,12 @@ export enum RuntimeAbort
 	// can end.
 	netpollAdoptIndexIsNotASource = 113
 
-	// ⚠ **108 IS RETIRED, NOT REUSABLE.** It was `netpollReleaseWithWaiter` — `__np_pd_open` / `__np_pd_release`
-	// finding a green thread still PUBLISHED on a direction word of the record they were about to reset. It was
-	// admitted on the argument that no two green threads could name one socket box, which was never true of a
-	// co-owning `async` argument: a parked coroutine and a running owner hold one socket, and `client.close()`
-	// under a parked `recv` reached it. The release READIES such a waiter instead (`NetpollRuntime`'s
-	// `emitNetpollPdClear`), so nothing emits the code and a live registry may not go on claiming the number.
+	// ⚠ **108 IS VACANT, NOT REUSABLE.** The fault it would name — `__np_pd_open` / `__np_pd_release` finding
+	// a green thread still PUBLISHED on a direction word of the record they are about to reset — is not a
+	// fault: it rests on the false claim that no two green threads can name one socket box, where a co-owning
+	// `async` argument gives a parked coroutine and a running owner one socket, and `client.close()` under a
+	// parked `recv` reaches exactly that. The release READIES such a waiter instead (`NetpollRuntime`'s
+	// `emitNetpollPdClear`), so nothing emits the code and a live registry may not claim the number.
 	// It is left VACANT for this registry's founding reason: an exit code is read by a debugger against
 	// whatever the tree said at the time, and a recycled number makes two different faults indistinguishable
 	// in an old log.

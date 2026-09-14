@@ -1,6 +1,6 @@
 // StrengthReduceDivision — a Std→Std pass that replaces `x / K` and `x mod K`, for a COMPILE-TIME
 // constant `K`, with a multiply-and-shift sequence that computes the same answer without a divide
-// (EC18, docs/emitted-code-roadmap.md).
+// (docs/emitted-code-roadmap.md).
 //
 // ⭐⭐ **WHY THIS ROW EXISTS AT ALL: `idiv` IS THE MOST EXPENSIVE INSTRUCTION THE COMPILER EMITS.** A 64-bit
 // x64 `idiv` is 20–40 cycles and is not pipelined; the sequence below is one `imul` (3 cycles) and
@@ -11,7 +11,7 @@
 // `temp/codegen-probe/fmt.maxon` rather than nbody or fannkuch.
 //
 // ⭐⭐ **IT IS A Std PASS AND NOT AN INSTRUCTION SELECTION, AND THAT IS FORCED RATHER THAN CHOSEN.**
-// `EC16` and `EC19` both put their transform at x64 isel because the CONSTRAINT was x64's. This one
+// A transform whose CONSTRAINT is x64's belongs at x64 isel. This one
 // cannot go there: the sequence needs four or five INTERMEDIATE VALUES, and **the isel cannot mint a
 // vreg** — every `TargetVReg.virtual(id)` names a Std `ValueId`, the parser owns that value space
 // (`IrFunction.valueTags` is dense by ValueId) and the class column is derived from the Std module
@@ -26,7 +26,7 @@
 //     the same block, which no isel-tier rewrite could ever reach: two `idiv`s can never be CSE'd,
 //     because they are `isPure: false`. ⚠ **MEASURED, AND IT HOLDS FOR ONE OF THE TWO SHAPES ONLY.**
 //     `(n / 8) + (n mod 8)` emits the four-op quotient chain ONCE and the remainder reuses it; the same
-//     program over `10` emits the chain TWICE. The reason is `EC13`'s filed one — there is no constant
+//     program over `10` emits the chain TWICE. The reason is CSE's filed one — there is no constant
 //     interning, so the two sites mint two `const` ops for one 64-bit magic, the two `mulHighSigned`s
 //     read different value ids and no expression comparison can call them equal. A power-of-two chain
 //     has no such constant left after `foldConstOperands` (every operand is an immediate), which is
@@ -57,7 +57,7 @@
 //     Refusing the whole magnitude keeps one rule where two would need to agree.
 //   • **`K == i64.min`.** The derivation works in `|K|`, which is not representable.
 //   • **UNSIGNED by a non-power-of-two.** The unsigned magic sequence needs a 65-BIT multiplier and an
-//     "add indicator" fixup, which this rung did not build. The unsigned POWER-of-two cases are taken
+//     "add indicator" fixup, which this pass does not implement. The unsigned POWER-of-two cases are taken
 //     and are the cheapest reductions here (one `shr`, one `and`); MEASURED on `fmt.maxon`, all five
 //     of its unsigned divides are by 2 or 32.
 //   • **UNSIGNED by a divisor at or above `2^63`** — i.e. one whose `ParsedInt` is NEGATIVE. This is
@@ -411,7 +411,7 @@ function classifyDivision(divisor ParsedInt, signedness IntegerSignedness, isRem
 	// types and a negative `ParsedInt` here.
 	//
 	// ⇒ Refused outright. Every such divisor is at least `2^63`, so `x /u K` is `0` or `1` and
-	// `x modu K` is `x` or `x - K` — three shapes worth their own rung if one ever pays, and none of
+	// `x modu K` is `x` or `x - K` — three shapes worth their own pass if one ever pays, and none of
 	// them is what the sequences below compute. `specs/strength-reduction.md`'s
 	// `an-unsigned-divisor-above-the-signed-range-is-refused` is the pin.
 	if unsigned and divisor < 0 'unsignedDivisorAboveTheSignedRange'
@@ -435,8 +435,8 @@ function classifyDivision(divisor ParsedInt, signedness IntegerSignedness, isRem
 		return
 	end 'shiftSequence'
 
-	// The unsigned magic sequence is the header's fourth refusal — a 65-bit multiplier this rung did
-	// not build. ⚠ An unsigned divisor read as a SIGNED magnitude here would be a WRONG ANSWER rather
+	// The unsigned magic sequence is the header's fourth refusal — a 65-bit multiplier this pass does
+	// not implement. ⚠ An unsigned divisor read as a SIGNED magnitude here would be a WRONG ANSWER rather
 	// than merely a missed one: `x /u 3` is not `x /s 3` for a dividend at or above `2^63`.
 	if unsigned 'noUnsignedMagic'
 		return
@@ -481,7 +481,7 @@ export function strengthReduceDivision(project Project, module StdModule, firstF
 	var def = StdFoldableDef.create()
 
 	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
-	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
+	// recorded as writing that same storage. ⚖ USER RULING — canonical note at
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for fnIndex in firstFuncIndex upto module.functions.count() 'eachFunc'
 		reduceDivisionsInFunc(module, func: try module.functions.get(fnIndex) otherwise panic("strengthReduceDivision: fnIndex {fnIndex} is below module.functions.count()"), reduction: reduction, magic: magic, def: def)
@@ -498,8 +498,8 @@ module function strengthReduceDivisionHeadline(reduces bool, firstFuncIndex Func
 	return "strengthReduceDivision: function {firstFuncIndex} onward of {funcCount}"
 end 'strengthReduceDivisionHeadline'
 
-// ⚠ **THE PRE-SCAN IS A SECOND DESCENT AND IT IS SAFE FOR A STATED REASON**, which `EC16`'s header
-// demands of any pass that walks its ops twice: it asks a STRICTLY WEAKER question than the rewrite —
+// ⚠ **THE PRE-SCAN IS A SECOND DESCENT AND IT IS SAFE FOR A STATED REASON**, which any pass that
+// walks its ops twice owes: it asks a STRICTLY WEAKER question than the rewrite —
 // "is there a `div` or a `mod` here at all?" against "is this one reducible?" — so the only
 // disagreement it can have is to admit a function the rewrite then changes nothing in, which costs one
 // walk. It CANNOT skip a site the rewrite would have taken, because the reducible sites are a subset of
@@ -998,12 +998,12 @@ end 'appendReducedSequenceOp'
 // IS WHAT MAKES IT EXACT.** A divisor `const` may be read by two divisions this pass reduced, by one
 // it reduced and one it refused, or by something else entirely; a per-site counter would have to model
 // all three. Asking `collectFunctionValueUses` — StdDialect's one answer to "every value this function
-// reads" — of the function as it now stands answers all three at once, and is the same walk
+// reads" — of the function as it stands after the rewrite answers all three at once, and is the same walk
 // `foldConstOperands`' own prune makes.
 //
 // It retires ONLY the consts this pass detached, which is `foldConstOperands`' narrow rule verbatim: a
-// general dead-value DCE is `EC23`'s row, and that pass's header states at length why it must not grow
-// into one here.
+// general dead-value DCE is its own pass, and `foldConstOperands`' header states at length why this
+// must not grow into one.
 function retireDetachedDivisors(module StdModule, func IrFunction, detached ValueIdArray)
 	if detached.count() == 0 'nothingDetached'
 		return

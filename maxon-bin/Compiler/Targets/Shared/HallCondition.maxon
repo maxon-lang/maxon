@@ -8,9 +8,9 @@
 // the same point can therefore be shopping in two different, differently sized register sets, and
 // counting them against one number cannot decide whether they fit.
 //
-// THE CASE THE OLD TEST COULD NOT SEE. The splitter used to test each op two ways: `effective >
-// |pool|` (the full pool) and `raw > popcount(pool ∖ op.implicitDefs)` (the op's own reduced pool).
-// The second only ever fires AT A CLOBBER OP, so it is blind to exactly this:
+// THE CASE A TWO-WAY TEST CANNOT SEE. Testing each op as `effective > |pool|` (the full pool) and
+// `raw > popcount(pool ∖ op.implicitDefs)` (the op's own reduced pool) leaves the second firing only AT A
+// CLOBBER OP, so the pair is blind to exactly this:
 //
 //     several values are each confined to the callee-saved subset — but by DIFFERENT calls — and
 //     are simultaneously live at a point that is NOT ITSELF A CALL.
@@ -61,9 +61,8 @@
 // the prefix scan — bounded by `maxClassPoolSize`, ONE file's pool — behind a zero-constrained-
 // values gate.
 //
-// ⚠ THE BOUNDS ARE NAMED, NOT SPELLED. They read `16 values × 16 registers` while the file was
-// GPR-only, and P1.0d.4 doubled `RegisterFileSize` to 32 without moving them — a bare literal in a
-// comment goes stale in exactly the silence this file's own `FirstXmmRegisterNumber` exists to
+// ⚠ THE BOUNDS ARE NAMED, NOT SPELLED. A bare `16 values × 16 registers` goes stale the moment
+// `RegisterFileSize` changes, in exactly the silence this file's own `FirstXmmRegisterNumber` exists to
 // prevent ("`regClassOf` and both class masks would otherwise each spell a bare 16").
 //
 // THAT BOUND IS ON ONE CALL, AND IT SAYS NOTHING ABOUT HOW OFTEN THE CALL HAPPENS — which is where
@@ -72,17 +71,16 @@
 // EVERY op of that loop. So for N = 8 the screen's O(1) early-out (`constrained <= smallestPool`, i.e.
 // `8 <= 5`) does NOT fire, the prefix scan reports `C(5) = 8 > 5`, and the exact matching runs at
 // every op of the loop — on every one of the splitter's iterations. The search being small does not
-// make it free when it is entered thousands of times, and the matching used to HEAP-ALLOCATE its five
-// working columns on every entry (two of them PER VALUE, inside `augmentValue`). `HallScratch` is
-// those five buffers, allocated once per function and reused — the discipline ARCHITECTURE.md states
-// for the whole allocator ("scratch buffers: allocated once, reused across functions") and that this
-// file was the last place not to follow.
+// make it free when it is entered thousands of times, and heap-allocating the matching's five working
+// columns on every entry (two of them PER VALUE, inside `augmentValue`) is what that costs.
+// `HallScratch` is those five buffers, allocated once per function and reused — the discipline
+// ARCHITECTURE.md states for the whole allocator ("scratch buffers: allocated once, reused across
+// functions").
 
 // A value's position in ONE PROGRAM POINT's live-value list — the "values" side of the bipartite
 // matching below, and the key its two inverse maps are stated in. It is NOT a ValueId (the matching
-// renumbers the point's live values 0..live.count()) and NOT a CfgIndex, which is what it used to be
-// typed as: a block index and a live-set position are unrelated spaces that happened to share a
-// representation. `live.count()` is its "no value" sentinel.
+// renumbers the point's live values 0..live.count()) and NOT a CfgIndex: a block index and a live-set
+// position are unrelated spaces that merely share a representation. `live.count()` is its "no value" sentinel.
 typealias LiveIndex = int(0 to u64.max)
 typealias LiveIndexColumn = Array with LiveIndex
 
@@ -134,14 +132,14 @@ end 'maxClassPoolSize'
 // always the one that must be relieved. An f64 live across a call is exactly this — Wave 1 makes
 // every XMM caller-saved, so the call forbids all sixteen.
 //
-// ⚠ IT USED TO ANSWER `false` HERE, AND THAT WAS A REAL BUG — the force-spill path could not run at
-// all. The reasoning was sound about a hazard that is real: `witness` is a bag of bits that does not
+// ⚠ ANSWERING `false` HERE STOPS THE FORCE-SPILL PATH RUNNING AT ALL, and the hazard that would
+// motivate it is real: `witness` is a bag of bits that does not
 // know which file it names, so ∅ would also test CONFINED to a callee-saved GPR witness from an
 // int-only overflow, and `chooseVictim` would spill a FLOAT to relieve a GPR peak — freeing an XMM
 // no int can use, so the peak survives, the potential Φ never falls, and the driver re-picks
-// forever. But answering `false` bought that at the price of the case it was reasoning about: the
-// float could then never be chosen for its OWN peak either, so `chooseVictim` refused every
-// candidate and `noVictimAtPeak` panicked on the first float that crossed a call.
+// forever. But `false` buys that at the price of the case it reasons about: the float could then never
+// be chosen for its OWN peak either, so `chooseVictim` refuses every candidate and `noVictimAtPeak`
+// panics on the first float that crosses a call.
 //
 // ⇒ THE CROSS-FILE HAZARD IS THE WITNESS CLASS'S JOB, AND IT ALREADY DOES IT. `chooseVictim` gates
 // on `liveness.classOf(v) != peak.witnessClass` before it ever asks this, and its comment gives
@@ -150,10 +148,10 @@ end 'maxClassPoolSize'
 // reaching here already shares the witness's file, so ∅ can only be confined to a witness of its
 // OWN class — which is the true answer.
 //
-// It also settles a DISAGREEMENT, which is how it surfaced: `analyzePressure` counts a value with
-// no legal register as confined (that is what finds the overflow — the panic said "1 values
-// confined to the 0 registers of witness 0"), and this said it was not. One fact, two places,
-// opposite answers; the peak existed and nothing was allowed to relieve it.
+// It also settles a DISAGREEMENT: `analyzePressure` counts a value with no legal register as confined
+// (that is what finds the overflow — the panic reads "1 values confined to the 0 registers of witness
+// 0"), and a `false` here says it is not. One fact, two places, opposite answers; the peak exists and
+// nothing is allowed to relieve it.
 export function valueConfinedTo(liveness LivenessResult, valueId ValueId, pool RegMask, witness RegMask) returns bool
 	return (allowedRegistersOf(liveness, valueId: valueId, pool: pool) and not witness) == 0
 end 'valueConfinedTo'
@@ -478,8 +476,8 @@ end 'valueIdListContains'
 
 // The exact confirmation's five working columns, allocated ONCE and reused at every point it runs at.
 //
-// They used to be allocated PER CALL — and `parentOfReg` + `queue` PER VALUE, inside `augmentValue` —
-// so one verdict over `L` live values cost `2L + 4` heap arrays. See the file header for why the call
+// Allocated PER CALL — and `parentOfReg` + `queue` PER VALUE, inside `augmentValue` — one verdict over
+// `L` live values costs `2L + 4` heap arrays. See the file header for why the call
 // count is the problem: a confined value is confined at every op it is live at, so on the shape that
 // spills (accumulators across a call in a loop) this runs at EVERY op of the loop, on EVERY splitter
 // iteration.
@@ -491,21 +489,18 @@ end 'valueIdListContains'
 // walks because they never overlap — `tightRegisterSet` runs only after the last `augmentValue`
 // returns.
 //
-// `regOfValue` HOLDS REGISTER NUMBERS AND IS FINALLY TYPED AS ONE, and the story of why it was not is
-// worth keeping. `RegNum` is `int(0 to 16)`, a NARROW range, and a narrow range is a narrow ELEMENT:
-// `sizeof(int(0 to 16)) == 1` against `sizeof(int(0 to u64.max)) == 8`. This column used to be refilled
-// through `refillColumn`, a FREE function whose parameter was a `DenseColumn` — an 8-byte element — and
-// the type checker of the day accepted the substitution silently, because a `typealias` over a narrower
-// range unified with the wider one. Declaring this field `RegNumColumn` therefore handed a
-// 1-byte-per-element array to code that addressed it 8 bytes per element, and the result was memory
-// corruption whose SYMPTOM was a false `E5001` on a program that fits the machine — and whose failure
-// set MOVED when unrelated allocations elsewhere changed the heap layout. It cost a day. So the field
-// was widened to `DenseColumn` and a comment told you not to fix the name.
+// `regOfValue` HOLDS REGISTER NUMBERS AND IS TYPED AS ONE, and the width is the reason that matters.
+// `RegNum` is `int(0 to 16)`, a NARROW range, and a narrow range is a narrow ELEMENT:
+// `sizeof(int(0 to 16)) == 1` against `sizeof(int(0 to u64.max)) == 8`. Refilling this column through a
+// FREE function whose parameter is a `DenseColumn` — an 8-byte element — would hand a 1-byte-per-element
+// array to code that addresses it 8 bytes per element: memory corruption whose SYMPTOM is a false
+// `E5001` on a program that fits the machine, and whose failure set MOVES when unrelated allocations
+// elsewhere change the heap layout.
 //
-// BOTH halves of that are now gone. A generic's ranged element type is part of its type,
-// so the silent substitution is a compile error (E3005) rather than corruption; and the refill is now
-// `Array.refill`, a METHOD, which is generic over the element type and cannot be handed the wrong
-// width at all. Every value that goes in is a `RegNum` — a register `0..RegisterFileSize-1` (GPRs
+// Two things stop it. A generic's ranged element type is part of its type, so the substitution is a
+// compile error (E3005) rather than corruption; and the refill is `Array.refill`, a METHOD, which is
+// generic over the element type and cannot be handed the wrong width at all. Every value that goes in
+// is a `RegNum` — a register `0..RegisterFileSize-1` (GPRs
 // 0-15, XMMs 16-31), or the `noRegister` sentinel, which is `RegisterFileSize` itself and exactly
 // why `RegNum`'s bound is inclusive of it.
 export type HallScratch
@@ -568,11 +563,10 @@ end 'HallVerdict'
 // path where E5001 was about to be raised, i.e. once per refused peak, never per op.
 //
 // It answers FEASIBILITY, not the colorer's CHOICE — and ⛔⛔ **FEASIBLE DOES NOT MEAN THE COLORER
-// WILL FIND IT.** This paragraph used to end *"a point this call declares feasible is one the colorer
-// can colour"*, on the strength of `preferredVolatilityMask` (an unconstrained value never takes a
-// callee-saved register while a caller-saved one is free) plus the matching gate on the copy-hint
-// path (M5.12). **That is a LOCAL rule and the claim it was made to support is FALSE.** MEASURED,
-// BATCH17, on four programs that reach `chooseRegister`'s exhaustion panic: the exact verdict at
+// WILL FIND IT.** `preferredVolatilityMask` (an unconstrained value never takes a callee-saved register
+// while a caller-saved one is free) plus the matching gate on the copy-hint path is a LOCAL rule, and
+// *"a point this call declares feasible is one the colorer can colour"* does NOT follow from it.
+// MEASURED, on four programs that reach `chooseRegister`'s exhaustion panic: the exact verdict at
 // every one of their failing points is FEASIBLE.
 //
 // The counterexample is two ops long once the shape is named. A value `n` is live while the
@@ -585,9 +579,9 @@ end 'HallVerdict'
 // exist yet. Greedy is exact for the UNCONSTRAINED chordal problem; forbidden sets make this LIST
 // colouring, where it is not.
 //
-// ⛔⛔ **AND NO STATIC COLOURING ORDER FIXES IT EITHER.** This paragraph used to end *"colouring the
-// confined values FIRST and the rest afterwards succeeds whenever every point is pointwise feasible"*,
-// which is a stated FACT and is FALSE for this compiler's forbid family. It is true only of a TWO-TIER
+// ⛔⛔ **AND NO STATIC COLOURING ORDER FIXES IT EITHER.** *"Colouring the confined values FIRST and the
+// rest afterwards succeeds whenever every point is pointwise feasible"* is FALSE for this compiler's
+// forbid family. It is true only of a TWO-TIER
 // family `{callee-saved, full pool}`, where the confined sets are nested. **What this actually is, is
 // LIST COLOURING of a chordal graph, which is NP-hard** — so there is no order at all, static or
 // otherwise, that is exact and cheap.

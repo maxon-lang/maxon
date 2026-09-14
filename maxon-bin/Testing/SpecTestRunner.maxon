@@ -1,21 +1,20 @@
 // Testing/SpecTestRunner.maxon — run every active test in a specs directory
 // through the compiler and collect PASS/FAIL results.
 //
-// ⭐⭐ **EVERY TEST IS COMPILED IN THIS PROCESS (G20), THROUGH THE COMPILER'S ONE PIPELINE DRIVER
+// ⭐⭐ **EVERY TEST IS COMPILED IN THIS PROCESS, THROUGH THE COMPILER'S ONE PIPELINE DRIVER
 // (`Compiler.compileToProduct`) — NOT BY SPAWNING `<compilerExe> build …`.**
 //
-// The spawn was deliberate once, and the argument it rested on was CONTAINMENT: a compiler panic
-// killed a grandchild rather than the runner, so it surfaced as one named FAIL. What it cost was a
-// process per test — **≈6,600 process creations per lane** — and on Windows that is not merely
-// latency. `G16` censused a landing that read **787 failures** on one lane whose single cause was
-// exit `0xC0000142`: the OS declining to create the process. A re-run of the same binary read
-// `4357 passed, 0 failed`. A harness whose verdicts depend on how many processes the box will start
-// is not measuring the compiler.
+// A spawn per test buys CONTAINMENT — a compiler panic kills a grandchild rather than the runner, so
+// it surfaces as one named FAIL — and it costs a process per test, **≈6,600 process creations per
+// lane**, which on Windows is not merely latency. MEASURED: a landing read **787 failures** on one
+// lane whose single cause was exit `0xC0000142`, the OS declining to create the process; a re-run of
+// the same binary read `4357 passed, 0 failed`. A harness whose verdicts depend on how many processes
+// the box will start is not measuring the compiler.
 //
-// ⇒ The containment the spawn bought is re-bought where it belongs, in the POOL: a compiler panic now
+// ⇒ The containment is bought where it belongs, in the POOL: a compiler panic
 // kills the WORKER, and `SpecWorkerPool` turns that into one named FAIL per unreported test of that
 // job, respawns, and carries on (see `emitWorkerStep` and the pool's dead-worker recovery). The
-// `build` command path — arg parsing, output-path derivation — is no longer exercised per test; it is
+// `build` command path — arg parsing, output-path derivation — is not exercised per test; it is
 // exercised by every real `maxon build`, including the one that builds this compiler.
 //
 // What is here: the committed `.test` goldens (`checkTestFragment`), `--update-required` to
@@ -89,9 +88,9 @@ let DraftStatus = "draft"
 // contributes NOTHING to the failed count and NOTHING to the exit code. `--update-required`
 // regenerates them, and that diff is still the review.
 //
-// ⛔ **IT WAS A GATE, AND THE GATE HID A REAL DEFECT.** A cross-target red was filed as *"10 stale
-// golden mismatches + 9 others"*; the 9 were nine float programs exiting 1 on x64-linux (PLAN row
-// `X5`), and they sat inside that filing for a day because a wall of `FAIL … codegen changed` around
+// ⛔ **A GATE HERE HIDES REAL DEFECTS.** MEASURED: a cross-target red filed as *"10 stale
+// golden mismatches + 9 others"* — where the 9 were nine float programs exiting 1 on x64-linux — sat
+// unread for a day because a wall of `FAIL … codegen changed` around
 // them read as bookkeeping. A suite goes red for a WRONG ANSWER — a wrong exit code, wrong stdout, a
 // failed compile, a leak — and for nothing else, so that a red can only ever mean "something is
 // broken" and never "something moved".
@@ -281,14 +280,14 @@ let ReferenceFragmentDir = "specs/fragments"
 
 // --- The cross-compile-and-run path ---
 //
-// ⭐ TWO INDEPENDENT QUESTIONS, AND THEY USED TO BE ONE BOOLEAN. `isCrossTarget` answered "is this
-// not one of the two native targets?" and its answer was used to mean THREE different things —
-// needs an external runner, emits no Target IR, is not the host. For wasm32-wasi, the only
-// non-native target there had ever been, all three coincided, so nothing forced them apart.
+// ⭐ TWO INDEPENDENT QUESTIONS, AND ONE BOOLEAN CANNOT ANSWER BOTH. "Is this
+// not one of the two native targets?" gets read as THREE different things —
+// needs an external runner, emits no Target IR, is not the host. For wasm32-wasi
+// all three coincide, so nothing there forces them apart.
 //
-// arm64-linux is the first target that splits them: an ELF cannot be spawned on macOS (so it NEEDS
+// arm64-linux splits them: an ELF cannot be spawned on macOS (so it NEEDS
 // an external runner) but it goes through the whole register backend (so it DOES emit Target IR and
-// MUST be pinned by a golden). Under one boolean it would have silently lost its golden gate. The
+// MUST be pinned by a golden). Under one boolean it would silently lose its golden gate. The
 // two predicates below — `needsExternalRunner` and `emitsTargetIr` — are that split, each derived
 // from the one fact it actually asks about rather than from a list of target names.
 let VendorDirName = "vendor"
@@ -310,7 +309,7 @@ let WasmtimeRunSubcommand = "run"
 let WasmtimeSettingFlag = "-S"
 let WasmtimeExitWithCodeSetting = "cli-exit-with-code=y"
 
-// --- The shape of wasmtime's TRAP report (W3) ---
+// --- The shape of wasmtime's TRAP report ---
 //
 // When the guest traps rather than exiting, wasmtime writes its own report to the SAME stderr the
 // guest was writing to, and ends the process with its own status. `wasmPanicReport` recognizes that
@@ -474,9 +473,9 @@ end 'wslProbeScript'
 //
 // ⭐ **THE UNIT IS THE SPEC BECAUSE THE SCRATCH DIRECTORY ALREADY IS** (`specTempDirFor`): one worker
 // owns a spec for its whole duration, every binary that spec built sits in that one directory, and
-// that directory is exactly what the per-test command used to hand `--cd`. So the batch gives each
-// program the SAME working directory the per-test path gave it, test for test — which is the only
-// reason this is a speed change and not a behaviour change.
+// that directory is exactly what a per-test command would hand `--cd`. So the batch gives each
+// program the SAME working directory a per-test path would, test for test — which is the only
+// reason batching is a speed change and not a behaviour change.
 //
 // ⭐ **THE RESULTS COME BACK THROUGH FILES, NOT A DELIMITED STDOUT STREAM.** A stream needs framing and
 // escaping, and a test program emits arbitrary bytes — the worker wire protocol already had to escape
@@ -660,10 +659,10 @@ end 'TestOutcome'
 // entirely when behaviour already failed, because a failing test's IR is noise, and when nothing was
 // emitted. Everything else carries `notPinned`.
 //
-// ⭐⭐ **THE THREE "NO COMPARISON HAPPENED" ANSWERS ARE SEPARATE ARMS, AND THAT IS THIS RUNG'S POINT.**
-// They used to be one `none`, which read as "nothing to report" and was reported as nothing — so a run
-// that MINTED sixteen hundred first-time goldens and a run that COMPARED sixteen hundred committed ones
-// printed the identical trailer. Minting is not verification; a golden this host was not allowed to
+// ⭐⭐ **THE THREE "NO COMPARISON HAPPENED" ANSWERS ARE SEPARATE ARMS.**
+// Folded into one `none` they read as "nothing to report" and are reported as nothing — so a run
+// that MINTS sixteen hundred first-time goldens and a run that COMPARES sixteen hundred committed ones
+// print the identical trailer. Minting is not verification; a golden this host was not allowed to
 // write is not verification either; and only `matched` is. A reader has to be able to tell the three
 // apart, so the type does.
 export union GoldenDrift
@@ -725,8 +724,8 @@ export typealias SpecTestResultArray = Array with SpecTestResult
 // spawn/capture choke point every spawn this harness performs goes through, so there is exactly one
 // place that talks to `Subprocess`.
 //
-// ⚠ **THE COMPILE STEP IS NO LONGER ONE OF THEM (G20)** — it compiles in this process and answers
-// with a `CompileAnswer` below. What still comes back through here is the RUN step, the git probe,
+// ⚠ **THE COMPILE STEP IS NOT ONE OF THEM** — it compiles in this process and answers
+// with a `CompileAnswer` below. What comes back through here is the RUN step, the git probe,
 // the harness fixture sub-runs, the two `--target` runner probes and the scale runner's own rung
 // compiles.
 //
@@ -748,18 +747,18 @@ end 'ProcessCapture'
 //
 // ⛔ **NOTHING SYNTHESIZES A `1` HERE, DELIBERATELY.** A fabricated exit code would be a second
 // spelling of the driver's own mapping (`Main.compileAndReport`), free to disagree with it — and the
-// one number that mattered on this path is one it could never honestly produce. `targetRefusalIn`
-// used to insist on EXACTLY 1 rather than "non-zero", because a compiler that LEAKED exited 101
-// having printed the very same E3104 lines, and folding that into a skip would have deleted the leak
-// gate. What that check was really asking is *"did this compile fail by REPORTING DIAGNOSTICS?"* —
+// one number that matters on this path is one it could never honestly produce. `targetRefusalIn`
+// insisting on EXACTLY 1 rather than "non-zero" would be no better: a compiler that LEAKS exits 101
+// having printed the very same E3104 lines, and folding that into a skip deletes the leak
+// gate. The question actually being asked is *"did this compile fail by REPORTING DIAGNOSTICS?"* —
 // which is a state, not a number, and it is named below.
 //
-// ⚠⚠ **THE PER-COMPILE LEAK SIGNAL IS THE ONE THING THIS RUNG TOOK AWAY, AND IT IS WRITTEN DOWN HERE
+// ⚠⚠ **THERE IS NO PER-COMPILE LEAK SIGNAL, AND THAT IS WRITTEN DOWN HERE
 // RATHER THAN LEFT TO BE REDISCOVERED.** A leak-gated Maxon program reports its leak by EXITING 101,
-// and an in-process compile never exits: a leaking compile now accumulates inside the WORKER, whose
-// own exit code is still gated (`SpecWorkerPool.shutdownPool` fails the suite on 101, and
-// `Main.runSpecSuite` refuses to call that green). So the suite still goes red for a leaking compile
-// — it can no longer say WHICH of the several hundred compiles that worker ran was the leaker.
+// and an in-process compile never exits: a leaking compile accumulates inside the WORKER, whose
+// own exit code IS gated (`SpecWorkerPool.shutdownPool` fails the suite on 101, and
+// `Main.runSpecSuite` refuses to call that green). So the suite goes red for a leaking compile
+// — but it cannot say WHICH of the several hundred compiles that worker ran was the leaker.
 // ⇒ Per-test attribution for a leak is recovered by re-running the suspect spec under `--filter`,
 // which puts one spec's compiles in one worker.
 enum CompileVerdict
@@ -842,12 +841,11 @@ end 'CompileAnswer'
 // literal; see `SpecWorkerPool.progressDeadlineMs`, which derives the batched lane's allowance from
 // `batchDeadlineMs` for exactly this reason.
 //
-// ⛔ **IT NO LONGER BOUNDS A COMPILE, AND THAT IS THE GAP `TestProgressDeadlineMs` EXISTS TO FILL
-// (G20).** Every selected test used to be built by a `build` SUBPROCESS carrying this deadline, so a
-// compiler infinite loop surfaced as one named FAIL. The compile happens in process now and this
+// ⛔ **IT DOES NOT BOUND A COMPILE, AND THAT IS THE GAP `TestProgressDeadlineMs` EXISTS TO FILL.** A
+// compile runs in this process rather than in a `build` SUBPROCESS carrying this deadline, so this
 // bounds only the RUN — the pool's progress bound is what ends a hung compile, one level up.
 //
-// ⚠ **IT IS THE DEADLINE FOR ONE EXECUTION, WHICH IS NO LONGER THE SAME THING AS ONE SPAWN.** The
+// ⚠ **IT IS THE DEADLINE FOR ONE EXECUTION, WHICH IS NOT THE SAME THING AS ONE SPAWN.** The
 // batched WSL run performs a whole spec's executions inside a SINGLE `wsl` process (`runWslBatch`):
 // each one is bounded by this value from inside the guest, by coreutils `timeout`, and the spawn
 // carrying them all is bounded by their SUM (`batchDeadlineMs`). Two units, one number — the guest's
@@ -904,18 +902,15 @@ end 'runProcess'
 // brackets each phase unconditionally — so summing the whole-compile total across a run buys a single
 // number that answers "did compiling this corpus get dramatically dearer?".
 //
-// ⛔ **IT USED TO COST "ONE FLAG, ONE SMALL FILE PER TEST AND ONE READ", AND NOW IT COSTS NOTHING AT
-// ALL.** Each test was compiled by a `build` SUBPROCESS told to write a `--metrics` TSV, and this read
-// the `total` row back off disk. The compile happens in process now (G20) and hands the same number
-// back on `CompileProduct.totalCpuTicks` — the same whole-compile probe, the same tick count, with no
-// flag, no file and no read. ⚠ **THE NUMBER ITSELF IS NOT COMPARABLE ACROSS THAT CHANGE**: it never
-// included process startup (the probe opens inside `main`), but the thread it is measured on now
-// carries a whole worker's history of compiles rather than one, so caches and allocator state differ.
-// Read a post-G20 run against a post-G20 run.
+// ⛔ **IT COSTS NOTHING AT ALL** — no flag, no file per test and no read. The compile happens in this
+// process and hands the number back on `CompileProduct.totalCpuTicks`: the whole-compile probe's own
+// tick count. ⚠ **IT EXCLUDES PROCESS STARTUP** (the probe opens inside `main`), and the thread it is
+// measured on carries a whole worker's history of compiles rather than one, so caches and allocator
+// state differ from a one-compile process — compare only runs of this same shape.
 //
 // ⚠ IT IS AN INDICATOR, NOT A GATE. Nothing passes or fails on it, there is no budget, no golden and
-// no verdict, and none may be added: `scale-test` carried exactly that apparatus and it was deleted,
-// because a verdict over a noisy number teaches people to edit the instrument rather than explain the
+// no verdict, and none may be added — nor does `scale-test` carry such apparatus:
+// a verdict over a noisy number teaches people to edit the instrument rather than explain the
 // reading (see .claude/CLAUDE.md).
 //
 // ⚠ IT IS NOT WORKER-COUNT INVARIANT, AND THAT WAS MEASURED RATHER THAN ASSUMED — the first draft of
@@ -1258,9 +1253,8 @@ export function selectedTests(specFile SpecFile, specName String, filter String,
 	// WRITES is not asked here and structurally cannot be: that is a property of the case's SOURCE,
 	// which only the compiler reads. It is answered where the compiler answers it — see
 	// `targetRefusalIn` — and the answer arrives as a SKIPPED result rather than as an absent one, so
-	// it is counted and reported instead of vanishing out of the plan. This used to carry a second gate
-	// that guessed at it from the `<!-- Args: -->` marker, and the guess was measurably wrong (PLAN row
-	// `X2`).
+	// it is counted and reported instead of vanishing out of the plan. ⛔ A second gate here that guessed
+	// at it from the `<!-- Args: -->` marker was measurably wrong; there is none.
 	//
 	// ⚠ **THE TWO REPORTED GATES ARE ASKED LAST, AND THE ORDER IS WHAT MAKES THE CENSUS TRUE.** A case the
 	// filter never chose, or one this target cannot express, was not left out because of the internet or
@@ -1455,7 +1449,7 @@ end 'TargetRefusal'
 //
 // ⭐ **WHY THE COMPILER AND NOT THE HARNESS.** The harness's previous answer guessed from the `<!--
 // Args: … -->` marker a case carries — argv is the only host-only substrate the corpus reaches often —
-// and the guess was MEASURED WRONG (PLAN row `X2`, filed by `X1`'s reviewer): `/specs` holds 52
+// and that guess is MEASURED WRONG: `/specs` holds 52
 // argv-reading code blocks against 51 markers. `command-line-args.args-length-no-extra` reads
 // `CommandLine.args()` with NO marker at all, because the property it pins is precisely that argv[0]
 // arrives ALONE — a marker would destroy the test — and `command-line-args.executable-path` is the same
@@ -1491,14 +1485,13 @@ end 'TargetRefusal'
 //     feature". That is stricter than "no OTHER diagnostic", deliberately: the failure mode being
 //     guarded against is a skip that swallows something real, so an unrecognised line must count
 //     AGAINST the skip rather than be walked past;
-//   * the compile must have failed by REPORTING DIAGNOSTICS, and by nothing else. This used to read
-//     "the exit code must be exactly the one a compile that REPORTED DIAGNOSTICS returns", because a
-//     compiler that LEAKED exited 101 having printed the very same lines and folding that into a skip
-//     would have deleted the leak gate. ⚠ **THE NUMBER IS GONE AND THE RULE IS NOT.** An in-process
+//   * the compile must have failed by REPORTING DIAGNOSTICS, and by nothing else — a STATE, never an
+//     exit code. ⚠ **AN EXIT CODE CANNOT SAY IT**: a compiler that LEAKS exits 101 having printed the
+//     very same lines, and folding that into a skip deletes the leak gate. An in-process
 //     compile has no exit code and reaches no 101 at this level (see `CompileVerdict`, which owns
-//     where the leak signal went); what the number stood for was the STATE, and the state is
+//     where the leak signal goes); the state that carries the rule is
 //     `reportedDiagnostics`. A build that died on a missing file or an unlocatable `stdlib/` is
-//     `driverFailed` and is refused here exactly as a 101 was — its text is not `Diagnostic.render()`
+//     `driverFailed` and is refused here exactly as a 101 would be — its text is not `Diagnostic.render()`
 //     output at all, so reading a construct out of it would be reading a sentence about the harness.
 function targetRefusalIn(compile CompileAnswer) returns TargetRefusal
 	let diagnosticsWereReported = match compile.verdict 'v'
@@ -2060,14 +2053,14 @@ typealias FragmentPathMappingArray = Array with FragmentPathMapping
 //     merged fragment before anything is compared or committed.
 type StagedTest
 	// ⭐⭐ **WHAT THE COMPILE IS POINTED AT — a LIST, because the ORDER is part of what a multi-file case
-	// SAYS (A3m).** One entry for a single-file test: the fragment. For a multi-file test, one entry
+	// SAYS.** One entry for a single-file test: the fragment. For a multi-file test, one entry
 	// per `// --- file:` section in DECLARATION order, followed by the test's source directory. It is
 	// `compileToProduct`'s `inputPaths`, which is the same list `maxon build <file>… <dir>` builds
 	// from its positionals — the harness hands it over directly rather than spelling a command line.
 	//
 	// ⚠ **THE TRAILING DIRECTORY IS WHAT ROOTS THE PROJECT, AND IT IS NOT REDUNDANT.**
 	// `Compiler.commonAncestorOf` derives `Project.rootPath` from the paths it is handed, and
-	// `Queries.namespaceAnchorFor` measures every file's NAMESPACE from that root (N1). A case whose
+	// `Queries.namespaceAnchorFor` measures every file's NAMESPACE from that root. A case whose
 	// every `// --- file:` sits under one subdirectory — `app/main.maxon`, `app/helper.maxon` — has
 	// `<testDir>/app` as its files' common ancestor, so naming only the files would silently re-anchor
 	// both into the root module and change what the case MEANS. Naming the directory last pins the
@@ -2126,16 +2119,16 @@ end 'StagingResult'
 // ⭐ EVERYTHING ONE COMPILED TEST LEFT BEHIND — what the compile said, what it cost, and the artifacts
 // it wrote — carried from the compile pass to the verdict pass.
 //
-// ⭐⭐ **`irText` IS THE RENDERED BYTES AND NOTHING ON DISK PRODUCES THEM — WHICH DELETED A WHOLE
-// COLLISION CLASS RATHER THAN MERELY SURVIVING IT (G20).** `<name>.ir` and `<name>.metrics` were
-// `changeExtension`'d from the output path, which cuts at the LAST DOT — so on any target whose
+// ⭐⭐ **`irText` IS THE RENDERED BYTES AND NOTHING ON DISK PRODUCES THEM — WHICH DELETES A WHOLE
+// COLLISION CLASS RATHER THAN MERELY SURVIVING IT.** A `<name>.ir` or `<name>.metrics` sidecar
+// `changeExtension`'d from the output path cuts at the LAST DOT — so on any target whose
 // `executableExtension` is empty (linux, macos) two tests whose names differ only after their last dot
-// landed on ONE sidecar path: `async-linearity.error.double-await` and `…double-await-in-loop` were
-// both `async-linearity.error.ir`, and 1,701 of the suite's 4,677 test names contain a dot (RE-MEASURED
-// 2026-08-06). That was survivable only because the bytes were taken at the ONE moment they
-// unambiguously belonged to this test — immediately after the compile that wrote them. An in-process
+// land on ONE sidecar path: `async-linearity.error.double-await` and `…double-await-in-loop` are
+// both `async-linearity.error.ir`, and 1,701 of the suite's 4,677 test names contain a dot (MEASURED
+// 2026-08-06). Surviving that takes reading the bytes at the ONE moment they
+// unambiguously belong to this test — immediately after the compile that wrote them. An in-process
 // compile hands the IR back as a VALUE (`CompileProduct.irText`) and the CPU total with it, so neither
-// file is written at all and the ordering rule is no longer load-bearing for them.
+// file is written at all and the ordering rule is not load-bearing for them.
 //
 // ⚠ **THE EXE IS STILL A PATH, AND ITS REMAINING INVARIANT IS A PROPERTY OF THE CORPUS RATHER THAN OF
 // THIS FILE.** Every binary a spec builds survives from its own compile until the run pass, so a LATER
@@ -2148,7 +2141,7 @@ end 'StagingResult'
 // guarantee and it dates from outside the compiler.
 //
 // ⚠ `Compiler.discardPreviousOutput` still deletes `<exeBase>.ir` ahead of every compile, and must:
-// this harness no longer writes one, but a sidecar left behind by an ordinary `build --emit-ir` beside
+// this harness writes none, but a sidecar left behind by an ordinary `build --emit-ir` beside
 // the same output name would otherwise outlive the run that made it.
 type CompiledTest
 	export let test as SpecTest
@@ -2254,7 +2247,7 @@ end 'compileStagedTest'
 //
 // EXPORTED because the third site is `Main.reportResults`' printed verdict line, in another file: the
 // label a reader retypes into `--filter` must be the label the verdict printed, and this is the one
-// function that spells it (folded in at W214's landing — it was the last hand-built copy).
+// function that spells it.
 export function testLabel(specName String, testName String) returns String
 	return "{specName}/{testName}"
 end 'testLabel'
@@ -2296,9 +2289,8 @@ function compileOneTest(test SpecTest, staged StagedTest, exeBase FilePath, exeP
 		return CompiledTest.create(test, staged: staged, compile: CompileAnswer.create(compileVerdictOf(e), diagnostics: endDiagnosticCapture()), cpu: CompileCpu.unreported, irText: MissingIrPlaceholder, exePath: exePath)
 	end 'compileFailed'
 
-	// EMPTY IR is the placeholder, and that reproduces exactly what reading a missing sidecar used to
-	// give: a target that emits no Target IR (`pinnable` false) renders none, and a fragment is never
-	// written for it anyway (`recordFragmentAndCleanup`).
+	// EMPTY IR is the placeholder: a target that emits no Target IR (`pinnable` false) renders none, and
+	// a fragment is never written for it anyway (`recordFragmentAndCleanup`).
 	let irText = MissingIrPlaceholder if product.irText.isEmpty() else product.irText
 	return CompiledTest.create(test, staged: staged, compile: CompileAnswer.create(CompileVerdict.built, diagnostics: endDiagnosticCapture()), cpu: CompileCpu.reported(product.totalCpuTicks), irText: irText, exePath: exePath)
 end 'compileOneTest'
@@ -2924,13 +2916,13 @@ end 'missingRuntimeReason'
 // One under a `.maxonignore` is staged but NOT named, because naming it would compile it; see
 // `compilationUnitsAmong`.
 //
-// ⭐⭐ **THE DECLARED ORDER IS THE COMPILED ORDER (A3m), AND NOTHING NEW SAYS SO.** The `// --- file:`
-// sections were already ordered and already staged in that order; the only thing missing was a way to
-// TELL the compiler, which the ORDERED `inputPaths` list now is. Five `-either-order` spec pairs exist to pin
-// a program's answer in BOTH sibling-file orders and could pin neither: `build` took one path, the
-// loader walked raw `Directory.list`, and the order was therefore a property of the staging directory's
-// on-disk state rather than of the case. Both halves of every such pair got whichever order the host
-// served — two tickets in one lottery. See `StagedTest.buildTargets` for why the directory still rides
+// ⭐⭐ **THE DECLARED ORDER IS THE COMPILED ORDER, AND THE ORDERED `inputPaths` LIST IS WHAT SAYS SO.**
+// The `// --- file:` sections are ordered and staged in that order, and the list is what TELLS the
+// compiler. Five `-either-order` spec pairs exist to pin
+// a program's answer in BOTH sibling-file orders, and can pin neither if `build` takes one path and the
+// loader walks raw `Directory.list`: the order is then a property of the staging directory's
+// on-disk state rather than of the case, and both halves of every such pair get whichever order the host
+// serves — two tickets in one lottery. See `StagedTest.buildTargets` for why the directory still rides
 // along at the end.
 //
 // The directory is RECONSTRUCTED, never inherited. A `.maxon` left behind by an earlier version of
@@ -3109,10 +3101,10 @@ typealias UnloadedPathSet = Set with String
 // `stdlib/` TO READ.** The staged tree is this test's own, so the checkout's `stdlib/` is never written
 // to and nothing outside this directory can observe the overlay.
 //
-// ⛔ **IT USED TO COPY THE COMPILER BINARY — 15 MB PER CASE — AND THAT IS GONE (G20).** The old lever
-// was `StdlibSource.locateStdlibDir`'s walk-up: a COPY of the compiler placed in a directory holding
-// its own `stdlib/` would load that one, with no flag and no change to the compiler. It worked, and it
-// only ever worked because the compile was a SUBPROCESS whose executable the harness could choose. An
+// ⛔ **NOTHING COPIES THE COMPILER BINARY — 15 MB PER CASE.** Driving the overlay off
+// `StdlibSource.locateStdlibDir`'s walk-up — a COPY of the compiler placed in a directory holding its
+// own `stdlib/` loads that one, with no flag and no change to the compiler — works only while the
+// compile is a SUBPROCESS whose executable the harness can choose. An
 // in-process compile has exactly one executable — this one — so the directory has to be an ARGUMENT,
 // which is both cheaper and the honest way to say it. The eleven `// --- stdlib-overlay:` cases
 // (`print-error-function` x2, `reserved-double-underscore` x9) are the sharpest test that the argument
@@ -3409,17 +3401,15 @@ end 'FragmentCheck'
 // `--filter` cannot move a byte of any fragment it does not exclude, and a FILTERED
 // `--update-required` regenerates exactly what an unfiltered one would.
 //
-// ⚠ This paragraph used to name `scripts/remote-mac.sh` as the invariant's consumer — it carried an
-// arm64 run's `specs/fragments` home from a filtered run, and could only do so because of this.
-// That script was deleted 2026-09-01 and the arm64 lanes have no runner. **The invariant is
-// unchanged and still load-bearing** (every filtered `--update-required` in the tree depends on it);
-// what is gone is the one caller that made it visible. Contrast the C# suite, which batches a spec's
+// ⚠ **THE INVARIANT IS LOAD-BEARING AND NOTHING DEMONSTRATES IT** — every filtered
+// `--update-required` in the tree depends on it, and no caller makes it visible, so it can rot
+// unobserved. Contrast the C# suite, which batches a spec's
 // tests into one module and therefore does NOT have this property.
 //
-// ⚠⚠ **SINCE G20 THAT INDEPENDENCE IS A PROPERTY OF THE COMPILER'S PER-COMPILE STATE, NOT OF PROCESS
-// ISOLATION, AND THE CHANGE IS WORTH STATING RATHER THAN ASSUMING.** Every test used to be compiled by
-// its own `build` SUBPROCESS, which made the claim free: a fresh process shares nothing by
-// construction. Now hundreds of compiles run in one worker, so what carries it is that each one builds
+// ⚠⚠ **THAT INDEPENDENCE IS A PROPERTY OF THE COMPILER'S PER-COMPILE STATE, NOT OF PROCESS
+// ISOLATION, AND IS WORTH STATING RATHER THAN ASSUMING.** A `build` SUBPROCESS per test would make the
+// claim free — a fresh process shares nothing by construction — but hundreds of compiles run in one
+// worker, so what carries it is that each one builds
 // a fresh `Project` (`Compiler.loadProject`) and every memo, interner and counter the pipeline uses
 // hangs off THAT — nothing in the compile pipeline is module-level mutable state that outlives it.
 // MEASURED 2026-08-23 rather than asserted: `--update-required --filter=<spec>` and
@@ -3663,16 +3653,16 @@ union ExternalRunner
 	wsl
 
 	// ⭐⭐ **THERE IS NO PROGRAM ON THIS MACHINE THAT CAN RUN THAT BINARY — AND THAT IS AN ANSWER, NOT AN
-	// ABORT.** Every arm below used to be a `panic`, which answered the question this table is asked
-	// ("which program spawns a Mach-O here?" — none) correctly, and was then used to answer a DIFFERENT
-	// one one level up: "is any of this suite checkable here?". It is not the same question and the
+	// ABORT.** A `panic` per arm answers the question this table is asked ("which program spawns a
+	// Mach-O here?" — none) correctly, and is then read one level up as an answer to a DIFFERENT
+	// question: "is any of this suite checkable here?". It is not the same question and the
 	// answer is not the same either. A `--target=arm64-macos` run on Windows can COMPILE every case,
 	// decide every `compilerError` case in full, and compare every emitted module against its committed
-	// golden; only the executions are missing. Killing the run at the preflight threw all of that away —
-	// and it threw it away for ~28 rungs, on the one lane that could have caught a wrong answer.
+	// golden; only the executions are missing. Killing the run at the preflight throws all of that away,
+	// on the one lane that could have caught a wrong answer.
 	//
-	// `reason` is the sentence those panics carried, unchanged, now delivered per case (as
-	// `TestOutcome.notRunHere`) and once in the trailer instead of once as a stack trace.
+	// `reason` is that sentence, delivered per case (as `TestOutcome.notRunHere`) and once in the
+	// trailer rather than once as a stack trace.
 	unspawnable(reason String)
 end 'ExternalRunner'
 
@@ -4083,7 +4073,7 @@ end 'reportGuestUnavailable'
 // never needed an execution, so the verdict pass can index observations by the same position it indexes
 // everything else by (see `runOneSpec`).
 //
-// `failed` is the run-step twin of what a spawn failure used to return inline: a reason, for that test
+// `failed` carries a reason, for that test
 // and no other. It is what a batch must produce for every test it could not account for, because the
 // pool's accounting is one record per test and an absence would be a missing record rather than a
 // failure anyone could read.
@@ -4298,10 +4288,10 @@ end 'BatchLaunch'
 // motivates it and for why the capture is files rather than a stream.
 //
 // The entry is `wsl --cd <spec scratch dir> -e /bin/sh .batch/run.sh`, which is the per-test command's
-// own shape with the script where the binary used to be: `--cd` takes the directory as a RAW Windows
+// own shape with the script in the binary's place: `--cd` takes the directory as a RAW Windows
 // path and WSL translates it, so nothing here maps a Windows path to a guest one and nothing here
 // assumes an automount root. Every binary that spec built is IN that directory, so each execution
-// inherits exactly the working directory the per-test `--cd` gave it.
+// inherits exactly the working directory a per-test `--cd` would give it.
 function runWslBatch(prepared PreparedTestArray, specName String, tempDir FilePath, runWorkingDir FilePath) returns RunObservationArray
 	let batchSubdir = batchSubdirPath()
 	let batchDir = tempDir.join(batchSubdir)
@@ -4419,7 +4409,7 @@ end 'launchBatch'
 // inside its own deadline" from "`wsl` has stopped responding", so a deadline short enough to catch the
 // second kills a batch that is merely doing what the first one legitimately does — and every test after
 // the one that was slow would then fail for a reason that is not about it. The inner `timeout` is what
-// actually bounds a wedged PROGRAM, per test, at exactly the value one spawn used to be bounded by; this
+// actually bounds a wedged PROGRAM, per test, at exactly the value one spawn is bounded by; this
 // bounds only a `wsl` that never returns at all, which the pool's own wedge watchdog would report
 // anyway.
 export function batchDeadlineMs(executions TestTally) returns DurationMs
@@ -4692,19 +4682,19 @@ end 'shQuoted'
 // actually ASK, because it is checking two things PATH cannot answer on its own: that OrbStack is
 // installed, and that the machine the run names exists and can execute something.
 //
-// ⛔ **A TARGET WITH NO RUNNER AT ALL IS NOT A REFUSAL HERE, AND THAT IS THIS RUNG.** This function
-// used to carry a second job — classifying the target and PANICKING when nothing on this machine could
-// spawn it — and that refusal killed a run in which every compile, every `compilerError` verdict and
-// every golden comparison was perfectly checkable. `unspawnable` is now an ANSWER the run carries
-// through to a per-case `TestOutcome.notRunHere` (see `runStrategyFor`), so there is nothing to probe
-// and nothing to refuse: a runner that does not exist cannot be missing from PATH.
+// ⛔ **A TARGET WITH NO RUNNER AT ALL IS NOT A REFUSAL HERE.** Classifying the target here and
+// PANICKING when nothing on this machine can spawn it kills a run in which every compile, every
+// `compilerError` verdict and every golden comparison is perfectly checkable. `unspawnable` is an
+// ANSWER the run carries through to a per-case `TestOutcome.notRunHere` (see `runStrategyFor`), so
+// there is nothing to probe and nothing to refuse: a runner that does not exist cannot be missing
+// from PATH.
 //
-// ⚠ **AND THE WORKERS NO LONGER ASK.** They used to, with a `probeInstalled: false` parameter whose
-// entire purpose was to reach this refusal from inside a worker — because a worker is a second door
+// ⚠ **AND THE WORKERS DO NOT ASK.** A `probeInstalled: false` parameter reaching this refusal from
+// inside a worker would guard the wrong thing — a worker is a second door
 // onto the golden writer and a `maxoncstderr` case reaches it without launching anything. That door is
-// now guarded where the writing happens instead of by refusing the run: `recordFragmentAndCleanup` mints
+// guarded where the writing happens instead of by refusing the run: `recordFragmentAndCleanup` mints
 // only for a verdict that was established in full on this host (`TestOutcome.pinsEmittedCode` and the
-// `mayMint` argument beside it). The guard moved to the thing it guards, and the parameter went with it.
+// `mayMint` argument beside it). The guard sits on the thing it guards.
 export function requireRunnerAvailable(effectiveTarget Target)
 	if not needsExternalRunner(effectiveTarget) 'hostSpawn'
 		return
@@ -4991,9 +4981,9 @@ end 'runAssertions'
 
 // ⭐ **THE SECTION GATES — a linked binary's own bytes, for every section the case pinned.**
 //
-// ⚠ A ```RequiredData block was SILENTLY IGNORED before P1.0d.5b (see `SpecParser.RequiredDataFence`):
-// six `specs/static-variables.md` cases carried one, the parser dropped it, and each would have
-// passed on its exit code alone while claiming to check its layout. A gate that cannot see its own
+// ⚠ A ```RequiredData block the parser DROPS is silently ignored (see `SpecParser.RequiredDataFence`):
+// six `specs/static-variables.md` cases carry one, and each would
+// pass on its exit code alone while claiming to check its layout. A gate that cannot see its own
 // property must not report PASS.
 //
 // **IT READS THE IMAGE, NOT THE COMPILER'S OPINION OF IT**, and that is the whole value. The IR
@@ -5045,7 +5035,7 @@ end 'compareLinkedSection'
 // (green-thread scheduler state, say) after the user data. `.data` holds only user globals TODAY,
 // so a prefix check
 // and an equality check agree on every current case — but the runtime that grows into this
-// section (P1.5's scheduler) would break equality on every one of these six specs at once,
+// section (the green-thread scheduler) would break equality on every one of these six specs at once,
 // for a change that says nothing about the property they pin.
 //
 // ⚠ **A PREFIX PINS THE FIRST PAYLOAD REGISTERED, WHICH IS A REAL CONSTRAINT ON THE PROGRAMS THAT MAY USE
@@ -5056,18 +5046,17 @@ end 'compareLinkedSection'
 // everything the COMPILER composes (panic messages, String records, layout descriptors, witness tables,
 // float islands); and each pinning case is written with one program literal.
 //
-// ⛔⛔ **THIS BLOCK USED TO PRESCRIBE A LABEL-ANCHORED READ. THAT ROUTE WAS MEASURED AND IT IS NOT THE
-// ANSWER — do not spend a day on it.** Two findings killed it:
-//   • **it cannot express what the failing case needed.** `codegen-internals`'
+// ⛔⛔ **A LABEL-ANCHORED READ IS NOT THE ANSWER, AND IT HAS BEEN MEASURED — do not spend a day on
+// it.** Two findings rule it out:
+//   • **it cannot express what the hardest case needs.** `codegen-internals`'
 //     `managed-string-reassignment-handles-old-value` pins TWO blobs that the compiler places at 0 and 80 with a
-//     String record and some padding between them (measured at 48 + 3 before W157 widened the record to
-//     56). An anchor names one offset; the pin needed
+//     String record and some padding between them. An anchor names one offset; the pin needs
 //     two payloads found independently, which is a different mechanism.
 //   • **segregating `.rdata` into a blob region and a record region — the other candidate — BREAKS
 //     `rdata-section`.** Measured: that spec's own image is its `__layout_Sizer_bool` descriptor (72 bytes)
 //     followed by a range-check panic BLOB (80). Blob-region-first puts the panic text at offset 0 and the
-//     descriptor at 80, so its committed pin would have had to change its expected bytes.
-// ⇒ **What was adopted instead** (user ruling) is the per-form split above: `utf8` lines are LOCATED
+//     descriptor at 80, so its committed pin would have to change its expected bytes.
+// ⇒ **The rule instead** (user ruling) is the per-form split above: `utf8` lines are LOCATED
 // independently and in order; scalar and array lines keep this prefix rule exactly. `specs/
 // rdata-section.md` states the rule and carries the case that defends it.
 function compareSectionPrefix(expected ByteArray, actual ByteArray, sectionName String) returns TestOutcome
@@ -5180,7 +5169,7 @@ function firstToken(line String) returns String
 	return line.slice(line.startIndex(), endIndex: space)
 end 'firstToken'
 
-// The stdout half of a run expectation (P1.2 wave A — `print`) — `checkRunStderr`'s exact twin, minus
+// The stdout half of a run expectation — `checkRunStderr`'s exact twin, minus
 // the fault-rip stripping (that tail is a stderr panic artifact; stdout carries none), so it shares
 // the same `checkStreamSilent`/`checkStreamMatches` rather than a second copy of them.
 //
@@ -5193,7 +5182,7 @@ end 'firstToken'
 // `checkRunStderr` already applies to a panic message.
 //
 // The `unpinned` arm is NOT "ignore stdout": it asserts the program printed NOTHING, which is what a
-// non-`print` program does. Every pre-P1.2 program printed nothing to stdout, so this holds the whole
+// non-`print` program does, so this holds the whole
 // suite to it — an accidental stray write becomes a FAILURE rather than an invisible one.
 // The exit-code half of a run expectation. `unpinned` passes without looking — see `runAssertions`'s note on
 // why that is not the same rule the stdout half follows.

@@ -35,10 +35,9 @@
 //     no surplus at all (ARCHITECTURE, "Known limits" #1). A 0 says "look at the IR", not "a pass
 //     over-produced".
 //
-// The parser has always PROMISED this pruning ("phis for unmutated vars turn out trivial and
-// collapse in the Std-tier phi-elim pass"), but that pass was M4b's `eliminatePhis`, RETIRED
-// at M5 when the register allocator took over SSA destruction — and nothing replaced its
-// pruning half. This is that half, restored as its own pass, which is where it belongs: the
+// The parser PROMISES this pruning ("phis for unmutated vars turn out trivial and
+// collapse in the Std-tier phi-elim pass"), and this pass is the pruning half of that promise
+// — `elimTrivialBlockArgs` is the other. It belongs here rather than in the register allocator: the
 // allocator must not be the thing that discovers the front end over-produced.
 //
 // USEFULNESS IS A LEAST FIXPOINT, NOT A USE COUNT. A block-arg is useful iff
@@ -161,7 +160,7 @@ end 'flagOf'
 //   • `elimTrivialBlockArgs` reads that AND incoming → arg ("which phis must I re-examine now that
 //     THIS value has changed?"), which is what makes its worklist linear.
 // A CSR in either direction is one `buildCsr` call away from these columns, so the two passes share
-// the WALK and not the index. They used to share neither: each had written its own copy of it, and a
+// the WALK and not the index. Sharing neither would give each its own copy, and a
 // second copy of "how the edge slots line up with the block-args" is a second chance to mis-pair a
 // phi with someone else's value — the one mistake the positional model cannot survive.
 export type PhiOperandPairs

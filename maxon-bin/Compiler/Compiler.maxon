@@ -122,8 +122,8 @@ export function compileToProduct(inputPaths MaxonSourcePathArray, target Target,
 	// ⚠ `setTraceUnit` writes a PROCESS-WIDE latch (`Logger.currentTraceUnit`), so it is last-writer-
 	// wins across compiles. That is EXACT rather than merely tolerated, for the reason the capture
 	// latch in Diagnostics.maxon states about itself: a compile is SERIAL, so there is no second
-	// compile running whose events this could misattribute. ⛔ That serialness is NO LONGER "the
-	// scheduler is single-M" — read the argument there before leaning on it again.
+	// compile running whose events this could misattribute. ⛔ That serialness does NOT rest on "the
+	// scheduler is single-M" — read the argument there before leaning on it.
 	let unit = traceUnitOf(try commonAncestorOf(inputPaths))
 	setTraceUnit(unit)
 
@@ -134,12 +134,11 @@ export function compileToProduct(inputPaths MaxonSourcePathArray, target Target,
 	// written once per site, forgotten by the next throwing exit exactly as it was by the last two (see
 	// `PhaseProbe.openPhaseSpans`).
 	//
-	// ⚠⚠ **IT SITS ON THIS FUNCTION RATHER THAN ON `compile`, BECAUSE A CALLER NOW SURVIVES A FAILED
-	// COMPILE AND THEN DOES THOUSANDS MORE (G20).** `openPhaseSpans` is process-wide, so a compile that
-	// threw with spans open leaves every later compile in that process reading as nested inside a phase
-	// that had already finished. The justification this drain used to be able to lean on — *"a throw out
-	// of it ends the process"* — is exactly what stopped being true when `spec-test` began compiling in
-	// process, so the drain sits at the entry EVERY whole build goes through.
+	// ⚠⚠ **IT SITS ON THIS FUNCTION RATHER THAN ON `compile`, BECAUSE A CALLER SURVIVES A FAILED COMPILE
+	// AND THEN DOES THOUSANDS MORE.** `openPhaseSpans` is process-wide, so a compile that threw with spans
+	// open leaves every later compile in that process reading as nested inside a phase that had already
+	// finished. `spec-test` compiles IN PROCESS, so the drain cannot lean on *"a throw out of it ends the
+	// process"* and sits at the entry EVERY whole build goes through.
 	//
 	// The error is RE-THROWN unchanged, never flattened: `Main` distinguishes the file/IO cases
 	// (`fileNotFound`/`noSourceFiles`/`readError`) from a reported `compileError` and prints a different
@@ -491,8 +490,8 @@ end 'ensureOutputDirectory'
 //
 // `discardPreviousOutput` emptied this path before the compile started, so this is not a heuristic —
 // it is an exact reading of whether the writer produced a file. It exists because the four backend
-// writers report a failed `File.writeBinary` by LOGGING it and returning, which left `compile` free
-// to announce "Wrote N bytes" and exit 0 while nothing had been written. Measured: with the output
+// writers report a failed `File.writeBinary` by LOGGING it and returning, which leaves `compile` free
+// to announce "Wrote N bytes" and exit 0 while nothing has been written. Measured: with the output
 // made read-only, a build printed `[BIN] ERROR: Failed to write PE file`, then `Wrote 1512 bytes of
 // code`, then `Compiled -> …`, and exited 0 over the previous build's binary.
 function requireOutputWritten(project Project, outputPath FilePath) throws CompileError
@@ -757,26 +756,20 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// ⭐⭐ **THE BUILTIN-ERROR ORDINAL CLAIMS — ALL OF THEM, HERE, AND NOT SCATTERED ACROSS THE
 	// RUNTIME INSTALLERS THAT TRANSCRIBE THEM (A1s).**
 	//
-	// ⛔⛔ **THERE IS NO COUNT IN THIS HEADER, AND THAT IS THE THIRD TIME OF ASKING.** It read *"SEVEN
-	// FAMILIES, SIX CALLS"*, and its own next sentence recorded the previous correction — *"this line said
-	// SIX while the two comments below already numbered `StringError` the sixth and `MapError` the seventh —
-	// the count and the ordinals in one block, disagreeing."* Both numbers were stale AGAIN by the time the
-	// enum-lookup family arrived: W49 wave 3 retired `StringError`'s claim (the note below survives), leaving
-	// **five** calls over **six** families, and neither figure was decremented. A count of the lines directly
-	// beneath it is a fact written twice, which is this project's signature bug wearing a tally's clothes.
+	// ⛔⛔ **THERE IS NO COUNT IN THIS HEADER.** A count of the calls directly beneath it is a fact written
+	// twice, and it goes stale the moment a family is added or retired.
 	//
 	// ⇒ **THE RULE, WHICH DOES NOT ROT:** one call per family that TRANSCRIBES its enum's ordinals as
 	// literals, except that a family whose runtime shares another's claims through it (`ArrayError` and
 	// `__ManagedMemoryError` are both `verifyManagedMemoryRuntimeOrdinals`' — see its header) is one call for two.
-	// A family that stops transcribing loses its call and keeps a note saying why, as `StringError` did.
+	// A family that stops transcribing loses its call and keeps a note saying why (`StringError` carries one).
 	//
 	// Each family's runtime transcribes its enum's ordinals as literals, and each holds them to the
 	// declaration on every compile (`Project.BuiltinErrorOrdinalCheck` — drift silently reroutes every
-	// handler arm). They used to run from four `install*Runtime` heads plus one free function; three of them
-	// now read a PARSED declaration out of `stdlib/Builtins.maxon` and so need the `Project`, and the
-	// installs run AFTER the pipeline where a diagnostic would have no gate left to fail against. Here they
-	// have both: `queryAllModule` has merged every declaration, and the pipeline's error gate below turns an
-	// E4016 into a failed build with no binary written.
+	// handler arm). Three of them read a PARSED declaration out of `stdlib/Builtins.maxon` and so need the
+	// `Project`, and the `install*Runtime` heads run AFTER the pipeline where a diagnostic would have no gate
+	// left to fail against. Here they have both: `queryAllModule` has merged every declaration, and the
+	// pipeline's error gate below turns an E4016 into a failed build with no binary written.
 	//
 	// ⚠ **NOT ON A PROGRAM THAT IS ALREADY FAILING (A1s wave 2).** A file whose parse failed merged none of
 	// its declarations, so `stdlib/Builtins.maxon` failing to parse leaves the three DECLARED families
@@ -793,33 +786,30 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 		verifyManagedMemoryRuntimeOrdinals(project)
 		verifyDivisionByZeroOrdinals(project)
 
-		// ⚠ **`StringError` WAS THE SIXTH AND IS NO LONGER CHECKED, BECAUSE NOTHING TRANSCRIBES ITS ORDINALS
-		// ANY MORE (W49 wave 3).** A check here holds a runtime's LITERAL error flag against the enum's case
-		// ORDER; `StringIndexRuntime` spelled `notFound` as 0 and `invalidIndex` as 1 to build the failure
-		// edges of `__strix_first`/`__strix_last`/`__strix_after`. All three members are `stdlib/String.maxon`'s
-		// now, so the corpus `throw StringError.notFound` resolves its ordinal from the declaration itself and
-		// there is no second half to drift from. Re-adding a throwing `__strix_` graph brings the claim back
-		// with it.
-		// ⚠ **`MapError` WAS A SEVENTH AND WENT THE WAY `StringError` DID (W105).** `MapRuntime` transcribed
-		// `keyNotFound`'s and `keyAlreadyExists`'s ordinals as literals to build `__map_get`'s and
-		// `__map_insert`'s failure edges; both entry points are deleted with the synthesized hash table, so the
-		// corpus `throw MapError.keyNotFound` resolves its ordinal from `stdlib/Map.maxon`'s own declaration and
-		// there is no second half to drift from. Re-adding a throwing `__map_` graph brings the claim back with it.
+		// ⚠ **`StringError` IS NOT CHECKED HERE, BECAUSE NOTHING TRANSCRIBES ITS ORDINALS.** A check here
+		// holds a runtime's LITERAL error flag against the enum's case ORDER, and
+		// `__strix_first`/`__strix_last`/`__strix_after` are all `stdlib/String.maxon`'s, so the corpus
+		// `throw StringError.notFound` resolves its ordinal from the declaration itself and there is no
+		// second half to drift from. Adding a throwing `__strix_` graph brings the claim back with it.
+		// ⚠ **`MapError` IS NOT CHECKED HERE FOR THE SAME REASON.** No `__map_` graph transcribes
+		// `keyNotFound`'s or `keyAlreadyExists`'s ordinal as a literal, so the corpus
+		// `throw MapError.keyNotFound` resolves its ordinal from `stdlib/Map.maxon`'s own declaration and
+		// there is no second half to drift from. Adding a throwing `__map_` graph brings the claim back with it.
 		// `__EnumLookupError` is here for `__DivisionByZeroError`'s reason exactly: `EnumLookupRuntime`
 		// transcribes `noSuchRawValue`'s and `noSuchCaseName`'s ordinals as the literal error flags
 		// `__enum_from_raw_<Enum>` and `__enum_from_name_<Enum>` return on a miss, while
 		// `Project.builtinEnumLookupErrorEnum` declares both by POSITION — see `verifyEnumLookupErrorOrdinals`.
 		verifyEnumLookupErrorOrdinals(project)
 
-		// ⛔ **`CharacterError` WAS THE ONE FAMILY THIS ROSTER'S OWN CRITERION SELECTS AND THIS ROSTER DID NOT
-		// LIST (W135 review).** The two paragraphs above retire `StringError` and `MapError` on a stated test —
-		// a family belongs here exactly while a throwing runtime graph transcribes its ordinals, and leaves when
-		// the corpus becomes the only producer. `__char_ascii` is such a graph and has never stopped being one
-		// (`GraphemeRuntime.buildCharAscii` returns `CharacterNotAsciiFlag` on its failure edge), while
-		// `stdlib/Character.maxon` declares the case order that flag encodes. MEASURED: a case inserted ahead of
-		// `notAscii` moved the declared ordinal to 1, `buildCharAscii` went on emitting 0, and the compile
-		// exited 0 with no diagnostic. Nothing could read the drift yet — `match e` over this enum is E2015 —
-		// which made it a wire format waiting for a reader rather than a family that needed no guard.
+		// ⛔ **`CharacterError` MEETS THIS ROSTER'S OWN CRITERION AND IS THE EASY ONE TO LEAVE OFF IT.** The
+		// two paragraphs above exclude `StringError` and `MapError` on a stated test — a family belongs here
+		// exactly while a throwing runtime graph transcribes its ordinals, and leaves when the corpus is the
+		// only producer. `__char_ascii` is such a graph (`GraphemeRuntime.buildCharAscii` returns
+		// `CharacterNotAsciiFlag` on its failure edge), while `stdlib/Character.maxon` declares the case order
+		// that flag encodes. MEASURED: a case inserted ahead of `notAscii` moves the declared ordinal to 1,
+		// `buildCharAscii` goes on emitting 0, and the compile exits 0 with no diagnostic. Nothing can read
+		// the drift yet — `match e` over this enum is E2015 — which makes it a wire format waiting for a
+		// reader rather than a family that needs no guard.
 		verifyCharacterErrorOrdinals(project)
 	end 'wellFormedSoFar'
 
@@ -852,15 +842,15 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// leave `compileToCodeResult` having passed both gates below, and the diagnostic would never be printed:
 	// exit 1 with nothing said.
 	//
-	// ⚠⚠ **IT USED TO SIT ELEVEN LINES LOWER, AND MOVING IT ABOVE THE TWO STATEMENTS BELOW IS THIS RUNG
-	// (S2h).** `liveGlobalLabels` must not credit a stdlib body no back end will receive, so it needs
+	// ⚠⚠ **IT SITS ABOVE THE TWO STATEMENTS BELOW, AND THE THREE CONSTRAINTS ARE A CYCLE CUT HERE.**
+	// `liveGlobalLabels` must not credit a stdlib body no back end will receive, so it needs
 	// `unreachable`; `liveGlobalLabels` must precede `installManagedGlobalInit` (see below); and
-	// `installManagedGlobalInit` consumed the answer this derivation needed. What tied the derivation to the
-	// LOWER position was a single duplicate-name refusal — its `FunctionNameIndex` was then the earliest
-	// index that could meet a `stdlib/Builtins.maxon` declaration of `__module_init` against the compiler's
-	// own — and that refusal is made by `PassPipeline.run`'s index one screen below over the SAME pair, and
-	// again by `DeadFunctionElimination.markCompilerOwnedRoot` for the case with no pair to count. So the
-	// cycle was cut where it was thinnest: nothing is refused later than before, and one derivation feeds
+	// `installManagedGlobalInit` consumes the answer this derivation needs. The only thing that would tie
+	// the derivation to a LOWER position is a duplicate-name refusal — its `FunctionNameIndex` being the
+	// earliest index that can meet a `stdlib/Builtins.maxon` declaration of `__module_init` against the
+	// compiler's own — and that refusal is made by `PassPipeline.run`'s index one screen below over the SAME
+	// pair, and again by `DeadFunctionElimination.markCompilerOwnedRoot` for the case with no pair to count.
+	// So nothing is refused later, and one derivation feeds
 	// both readers instead of one reader re-deriving it. See `FunctionNameIndex`, which records what each
 	// index site can actually see.
 	project.libraryFacts = try deriveLibraryFacts(project, module: module, signatures: signatures) otherwise 'libraryFactsRefused'
@@ -889,7 +879,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// of whichever one it skipped.
 	//
 	// It answers whether the program has any managed global at all, which is the single bit the entry stubs
-	// gate their two calls on. A program with none builds nothing and is byte-identical to before this rung.
+	// gate their two calls on. A program with none builds nothing here.
 	//
 	// ⭐⭐ **THE ORDER THE INITIALIZERS RUN IN IS SETTLED FIRST, AND A CYCLE IS REFUSED THERE** (see
 	// `GlobalInitOrder`). That walk must sit between `liveGlobalLabels` and the synthesis for the reason
@@ -909,7 +899,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// that lowers the program that spawned it. That last property is what deletes the whole
 	// `declareAsyncReleaserNeeds`-shaped obligation a Std-tier synthesis would have owed.
 	//
-	// A program that spawns nothing builds nothing here and is byte-identical to before this rung.
+	// A program that spawns nothing builds nothing here.
 	installServiceLoops(module, project: project, signatures: signatures)
 
 	recordPhase(project, phase: CompilePhase.deriveRuntimeNeeds, probe: needsProbe)
@@ -930,11 +920,10 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 
 	let scanProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.deriveRuntimeNeeds)
 
-	// ⭐ THE HEAP IS CARRIED ONLY BY PROGRAMS THAT REACH IT (P1.0r). A `return 42` program
-	// allocates nothing, so it gets no allocator, no `.data` slots and no leak check — and its
-	// committed golden is byte-for-byte what it was before this rung existed. That is not an
-	// optimization, it is what BackendDispatch's header already promised: the runtime floor GROWS
-	// with the program's needs rather than being unconditional.
+	// ⭐ THE HEAP IS CARRIED ONLY BY PROGRAMS THAT REACH IT. A `return 42` program allocates nothing,
+	// so it gets no allocator, no `.data` slots and no leak check. That is not an optimization, it is
+	// what BackendDispatch's header already promised: the runtime floor GROWS with the program's needs
+	// rather than being unconditional.
 	//
 	// ONE walk of the Maxon module answers all three "which runtime does this program carry?" questions
 	// (heap / print / string-`==`). The HEAP answer alone drives `.data` layout — the `.data` slots must
@@ -955,13 +944,12 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// ⭐ A TRACED build carries what `__gt_trace_emit` calls, and the scan cannot see any of it: the trace is
 	// emitted BELOW the Maxon tier (into the synthesized `__gt_*` runtime), so no Maxon call site exists for
 	// `scanRuntimeUsage` to walk. Declared here for the same reason the streaming-subprocess family declares
-	// its transitive bits by hand. It is EXACTLY TWO bits, and the third one this used to declare was read
-	// off a design that no longer exists:
+	// its transitive bits by hand. It is EXACTLY TWO bits:
 	//   • `__int_to_string` — the id's digits. `__gt_trace_emit` calls it directly.
 	//   • the heap — `__gt_init`'s `__slab_alloc` of the shared 24-byte digit scratch (`GtTraceDigitsLabel`),
 	//     which only a traced build makes.
 	// NOT `__str_decref`: `__int_to_string` fills that caller-owned scratch and returns a LENGTH, so no String
-	// is created and none is released — see `buildGtTraceEmit`, whose header once claimed the opposite.
+	// is created and none is released — see `buildGtTraceEmit`.
 	if project.asyncTrace 'traceRuntimeNeeds'
 		usage.usesIntToString = true
 		usage.usesHeap = true
@@ -1374,10 +1362,9 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// EVERY INSTALLER POINTS HERE RATHER THAN RESTATING IT.** No PIPELINE pass sees the band — `pipeline.run`
 	// has finished before the first install below, so `inlineManagedPrimitives`, the two block-arg passes and
 	// `promoteStackRecords` are all behind it — and `foldConstOperands` ALONE runs a second time over it,
-	// below the last append. The installers used to carry a copy of that fact apiece, phrased as *"appended
-	// after the pipeline so it is never re-optimized"*; EC3-H falsified all fourteen at once and corrected
-	// only this one, which is this project's own signature bug (ONE FACT WRITTEN DOWN FOURTEEN TIMES) at
-	// comment level. A pointer at the owner cannot go stale, so they are pointers now.
+	// below the last append. A copy of that fact at each installer is ONE FACT WRITTEN DOWN FOURTEEN TIMES,
+	// and all fourteen go wrong together the day the band's treatment changes. A pointer at the owner cannot
+	// go stale, so the installers point here.
 	if usage.usesHeap 'installMm'
 		installMmRuntime(pipeline.stdModule, usage: usage)
 	end 'installMm'
@@ -1567,10 +1554,10 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	//
 	// ⚠ **WHICH impls those are is deliberately NOT LISTED HERE, and the omission is the point.** The roster
 	// is one (type, protocol) pair per impl in `IrInterface.isIntrinsicBuiltinConformance`, and
-	// `installBuiltinConformanceRuntime` is its only reader. This comment used to carry a copy of that list,
-	// and the copy went stale in each of the two rungs that added a conformer — because a roster at a CALL
-	// SITE has no test between it and the original: nothing fails when it drifts, it simply starts lying to
-	// the next reader. A pointer at the owner cannot go stale, so this is one.
+	// `installBuiltinConformanceRuntime` is its only reader. A copy of that list here goes stale the next
+	// time a conformer is added, because a roster at a CALL SITE has no test between it and the original:
+	// nothing fails when it drifts, it simply starts lying to the next reader. A pointer at the owner cannot
+	// go stale, so this is one.
 	installBuiltinConformanceRuntime(pipeline.stdModule, globalData: project.globalData, ordering: orderingEnum, arrayConformerName: signatures.arrayRecordDeclaredName())
 
 	recordPhase(project, phase: CompilePhase.installRuntime, probe: runtimeInstallProbe)
@@ -1926,7 +1913,7 @@ end 'loadSourceDirectory'
 // in `into`, and the parents of those files are NOT the same set: an EMPTY directory is walked, costs
 // a `Directory.list`, and contributes no path anybody outside can see. `scale-test` reports both
 // numbers so that a GITIGNORED directory — invisible to git, visible here, and not the same thing as a
-// `.maxonignore`d one, which this walk no longer lists at all — cannot go on being an unattributed
+// `.maxonignore`d one, which this walk does not list at all — cannot go on being an unattributed
 // constant in the trend log (see `printLibraryWalkCensus`), and the count is returned from
 // the recursion rather than re-derived by a second traversal because a second traversal would be free
 // to disagree the moment this one grows an exclusion.
@@ -2146,18 +2133,15 @@ export let IgnoreMarkerName = ".maxonignore"
 // produces and what `Project.librarySourcePaths` keeps. The ORDER is the fact this name carries and
 // `FilePathArray` does not, which is why it is its own alias and not a second spelling of that one.
 //
-// ⛔ **IT USED TO GIVE A SECOND REASON AND THAT REASON IS MEASURED FALSE (G17)**: *"whose name
-// collides with a member typealias inside stdlib's `type Directory` and so does not resolve from every
-// compiler file"*. There was no collision to have. A nested `typealias` was keyed
-// `Directory.FilePathArray` and under nothing else, so it could not contest a bare name at all — and the
+// ⛔ **IT IS NOT *"a name that collides with a member typealias inside stdlib's `type Directory`"*, AND
+// THAT READING IS MEASURED FALSE.** There is no collision to have: a nested `typealias` is keyed
+// `Directory.FilePathArray` and under nothing else, so it cannot contest a bare name at all — and the
 // shape the claim describes (one file exporting `typealias FilePathArray = Array with FilePath`, a
 // second naming it bare, a third calling `Directory.list`) COMPILES AND RUNS. `flat-namespace check`
 // reads the two as OK for the same reason: they are
-// declared in different projects, and only one of them is top-level.
-//
-// What WAS true is the thing that claim was mistaken for, and it is now fixed: `Directory`'s member had
-// no FILE-SCOPE spelling of any kind, so `FilePathArray` resolved only where `QueryDatabase`'s own
-// export was in the program — which is every compiler file and no other program, including the
+// declared in different projects, and only one of them is top-level. What a member DOES need is a
+// FILE-SCOPE spelling — without one, `FilePathArray` resolves only where `QueryDatabase`'s own
+// export is in the program, which is every compiler file and no other, including the
 // extracted spec harness. `Parser.publishNestedGenericAlias` gives such a member its bare key; the name
 // here stays for the ordering fact above.
 export typealias MaxonSourcePathArray = Array with FilePath
@@ -2171,9 +2155,9 @@ export typealias MaxonSourcePathArray = Array with FilePath
 // ⛔⛔ **THE NAMES ARE HERE BECAUSE A STAGED FILE IS HALF THE AUTHOR'S BYTES.** `maxon test` appends
 // its dispatcher to a COPY of the author's own `*.test.maxon`, so "this compiler wrote this file" is
 // true of the file and false of most of its lines. A per-FILE exemption on the DECLARATION door
-// therefore hands the author the reserved space: MEASURED before this list existed, an author's
-// `function __sneaky()` in a `*.test.maxon` compiled clean under `maxon test` while `maxon build`
-// refused the identical file with E2051. The stager knows exactly which names it minted; nothing
+// therefore hands the author the reserved space: MEASURED without this list, an author's
+// `function __sneaky()` in a `*.test.maxon` compiles clean under `maxon test` while `maxon build`
+// refuses the identical file with E2051. The stager knows exactly which names it minted; nothing
 // else may claim them.
 //
 // ⛔ **IT IS KEYED ON THE NAME AND NOT ON A LINE THRESHOLD.** "Everything below the author's last

@@ -27,10 +27,9 @@
 // build. A conformance-free program short-circuits before building the function index — the same
 // allocation-free gate `checkLinearAwait`/`buildEscapeSummary` use.
 //
-// ⚠ This used to say *"a conformance-free program (the whole scale corpus)"*, and the parenthesis was
-// STALE: the generated corpus carries `y_iface_0.maxon` and `y_ifdisp.maxon`, four `implements` clauses each,
-// so this check runs on every rung of the ladder (measured while attributing A1w's +3 allocations, one of
-// which lands here). Do not use it as an example of the gate being taken.
+// ⚠ THE SCALE CORPUS IS NOT AN EXAMPLE OF THAT GATE BEING TAKEN: the generated corpus carries
+// `y_iface_0.maxon` and `y_ifdisp.maxon`, four `implements` clauses each, so this check runs on every
+// rung of the ladder.
 // ⚠ **THE FAST PATH ASKS ABOUT ENUMS TOO SINCE enum-hashable**, because the granted-conformance walk below
 // shares this function's index: a program that declares no `implements` at all may still declare an `enum`
 // whose `hash`/`equals` E3130 must hold to its requirement. It costs nothing in practice — any program
@@ -661,11 +660,11 @@ end 'checkAssociatedReturnIsUnmanagedMachineWord'
 // instance are not. Asking it rather than re-listing the forms is what stops this from becoming the fifth
 // cascade over those registries that function exists to have collapsed.
 //
-// ⚠ **A NAME NO REGISTRY DECLARES IS NOT AUTOMATICALLY SAFE, AND THIS PARAGRAPH USED TO SAY IT WAS.** The
-// claim was that an undeclared type in a conformance is E3011 long before here. A GENERIC INSTANCE
-// falsifies it: the binding is rendered as the compiler's OWN canonical name (`Box_Integer`), which no
-// registry is keyed by and which no diagnostic ever fires on — measured, it reached here, answered
-// "unmanaged", and the program leaked (exit 101). `declaredNameIsManaged` answers for that rendering now.
+// ⚠ **A NAME NO REGISTRY DECLARES IS NOT AUTOMATICALLY SAFE.** *"An undeclared type in a conformance is
+// E3011 long before here"* is falsified by a GENERIC INSTANCE: the binding is rendered as the compiler's
+// OWN canonical name (`Box_Integer`), which no
+// registry is keyed by and which no diagnostic ever fires on — MEASURED, it reaches here, answers
+// "unmanaged", and the program leaks (exit 101). `declaredNameIsManaged` answers for that rendering.
 function bindingIsUnmanagedMachineWord(signatures ProgramSignatures, binding ByteArray) returns bool
 	let tag = builtinTypeNameTag(binding)
 
@@ -1474,8 +1473,7 @@ end 'copyDeclaredInterfaces'
 // `IrInterface.declaredInterfacesReach` — the ONE list-level home, shared with
 // `ProgramSignatures.conformersOf`, which decides the same question for interface EXTENSIONS. What is left
 // here is the only thing this door adds: the INDEX lookup, and the rule that a type with no row in it
-// declares nothing. The two used to spell the direct-hit-then-walk orchestration separately and had already
-// drifted on cost; see that function for the measurement.
+// declares nothing. `declaredInterfacesReach` carries the measurement.
 //
 // ⭐ Exported for `conformersOf`, which reaches it with `ProgramSignatures.sweptConformanceIndex()` — the
 // same `type -> declared interfaces` relation this is handed, built from `StructLayout.conformsTo`.
@@ -1588,15 +1586,14 @@ end 'checkOneInterfaceConformance'
 // `extends`-inherited), each with a matching signature. Reports E3016 with the MISSING methods, else with
 // the WRONG-SIGNATURE ones — missing first and mutually exclusive.
 //
-// ⭐⭐ **A `static` REQUIREMENT IS A REQUIREMENT (R9), AND SKIPPING IT WAS A REACHABLE COMPILER PANIC.**
-// This loop used to `continue` on `method.isStatic`, so a conformer that supplied nothing for
-// `static function tag()` was accepted — while `ensureWitnessTable` still reserved that method's slot and
-// stamped a `funcAbs64InRdata` relocation naming `Point.tag`, a symbol no function installs. Two components
-// disagreeing about whether the requirement exists, and the disagreement surfaced as
-// `bakeFuncAbs64Relocs: … references .text function 'Point.tag', which is in no debug symbol`. The witness
-// slot is the reason the skip cannot simply be narrowed to "only when a table is built": whether a table
-// HAPPENS to be built must not decide whether a type conforms, so the check is unconditional and a program
-// with no generic instantiation is now rejected too.
+// ⭐⭐ **A `static` REQUIREMENT IS A REQUIREMENT, AND SKIPPING ONE IS A REACHABLE COMPILER PANIC.**
+// `ensureWitnessTable` reserves a slot for every interface method, statics included, and stamps a
+// `funcAbs64InRdata` relocation naming e.g. `Point.tag`; accepting a conformer that supplies nothing for
+// `static function tag()` leaves that symbol installed by no function — two components disagreeing about
+// whether the requirement exists, surfacing as `bakeFuncAbs64Relocs: … references .text function
+// 'Point.tag', which is in no debug symbol`. The witness slot is also why the check cannot be narrowed to
+// "only when a table is built": whether a table HAPPENS to be built must not decide whether a type
+// conforms, so the check is unconditional and a program with no generic instantiation is rejected too.
 //
 // ⚠ A PRESENT static's SIGNATURE is checked too. Dictionary-passing gives the table one slot per
 // interface method, statics included, so a static whose shape disagrees with the requirement is an ABI
@@ -1627,11 +1624,11 @@ end 'checkInterfaceMethods'
 // The interface's requirements, transitively through `extends`, each SUBSTITUTED under what this
 // conformance bound the associated types of the interface that DECLARED it.
 //
-// ⭐⭐ **THE WALK ITSELF IS `IrInterface.interfaceWitnessSlots` AND IS NO LONGER WRITTEN HERE (R10c).** It
+// ⭐⭐ **THE WALK ITSELF IS `IrInterface.interfaceWitnessSlots` AND IS NOT WRITTEN HERE.** It
 // answers "which requirement is slot `i` of this interface?", and the witness-table BUILDER and the
 // dispatch RESOLVER ask the identical question — so the requirement list a conformance is checked against
-// and the slot list a table is laid out by are ONE answer. They were not: this walk had the `extends` chain
-// and the other two did not, which is the whole of R10c. Order, the diamond rule and the cyclic-chain guard
+// and the slot list a table is laid out by are ONE answer. A copy here holding the `extends` chain that
+// the other two lack is exactly how the three part. Order, the diamond rule and the cyclic-chain guard
 // are stated there, once.
 //
 // ⭐⭐ **WHAT STAYS HERE IS THE SUBSTITUTION, AND IT IS THE ONLY PLACE ASSOCIATED TYPES ARE SUBSTITUTED (R5).** A

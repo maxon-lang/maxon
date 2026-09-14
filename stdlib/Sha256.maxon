@@ -11,12 +11,9 @@ typealias Sha256Words = Array with Word32
 // — the state is eight words for the whole of this file's life and no code here can grow or shrink
 // it, because the surface has no operation that could.
 //
-// ⚠ THE SENTENCE THAT STOOD HERE CLAIMED THE ACCESSES CARRY NO BOUNDS CHECK. That was true of one
-// compiler for one rung (a constant index took an elided runtime entry) and it was never true of the
-// call site below that matters: `sha256AddIntoState` takes `slot` as a PARAMETER, which no compiler
-// folds. W190 retired the elision with the members — `get`/`set` are declared methods now — so every
-// access here is checked, and what the fixed size buys is the guarantee about the LENGTH rather than
-// the absence of a test.
+// ⚠ EVERY ACCESS HERE IS BOUNDS-CHECKED: `get`/`set` are declared methods, and the call site that
+// matters takes its index as a PARAMETER — `sha256AddIntoState`'s `slot`, which no compiler folds.
+// What the fixed size buys is the guarantee about the LENGTH, not the absence of a test.
 typealias Sha256State = Vector with 8 Word32
 
 // SHA-256 round constants (FIPS 180-4 section 4.2.2)

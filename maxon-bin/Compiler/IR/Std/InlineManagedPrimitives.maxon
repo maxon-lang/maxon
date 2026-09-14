@@ -11,13 +11,13 @@
 //
 // ⛔⛔ **THE PASS RE-DERIVES NOTHING. EVERY TEST IT EMITS IS THE RUNTIME'S OWN EXPORTED EMITTER** —
 // `emitIndexOutOfRange`, `emitElementIsManaged`, `emitBufferNotOwned`, `emitIsSharedAllocation`,
-// `emitSlotAddr`, `emitLoadField`, `emitCmp`, `emitConst`. ⚠ **`emitElementIsManaged` JOINED THAT LIST IN
-// REVIEW AND WAS THE ONE GAP IN IT**: the ownership gate — the single predicate whose answer licenses both
-// fast arms to skip the runtime — was the one test this file spelled out of primitives instead, in two
-// copies, against three more in the runtime. A hand-copied arm is the drifting checklist
-// `buildManagedCowDetach`'s header rejects, and it has already been measured wrong once in this exact
-// family: R4.4's hand-written `capacity < 0` stood in for `__managed_cow_detach`'s TWO arms, so a
-// `setByte` through the owner of a VIEWED buffer wrote straight through the sharing — **198 where the
+// `emitSlotAddr`, `emitLoadField`, `emitCmp`, `emitConst`. ⚠ **`emitElementIsManaged` IS THE EASIEST ONE
+// TO LEAVE OFF THAT LIST**: the ownership gate — the single predicate whose answer licenses both fast arms
+// to skip the runtime — spelled out of primitives here instead would be two copies against three more in
+// the runtime. A hand-copied arm is the drifting checklist
+// `buildManagedCowDetach`'s header rejects, and it is MEASURED wrong in this exact
+// family: a hand-written `capacity < 0` standing in for `__managed_cow_detach`'s TWO arms lets a
+// `setByte` through the owner of a VIEWED buffer write straight through the sharing — **198 where the
 // answer is 110**
 // (`managed-memory-methods.set-byte-through-a-viewed-owner-detaches-first`). What this pass adds is the
 // ROUTING, never a predicate.
@@ -39,33 +39,28 @@
 // ⭐⭐ **SO THE ORDER IS SPENT ON THE ONE THING IT CAN BUY: THE MOST DISCRIMINATING TEST FIRST.** A fast
 // arm that ends up taking the call has paid for every guard ahead of the one that refused, ON TOP of the
 // call it was always going to make — so a family this pass cannot serve must be shown the door early or
-// this rung makes it SLOWER. The stride fork goes first and is the only test that refuses a whole element
+// this pass makes it SLOWER. The stride fork goes first and is the only test that refuses a whole element
 // type outright: `element_size@24` is neither a machine word nor a single byte for a 2- or 4-byte element,
 // an unset stride and every sub-byte-packed width, and each of those leaves in at most two compares. On the
 // STORE path `element_destroy@40 != 0` refuses every managed-element array next, whose occupant is the
 // runtime's to destroy — asked at run time only where the lowering could not answer it (see the ownership
 // stamp below). The bound and the three copy-on-write arms, which refuse rarely, follow.
 //
-// ⚠ **EC1 MEASURED THAT DOOR ON `ByteArray`, AND EC3 MOVED `ByteArray` TO THE OTHER SIDE OF IT.** The
-// number this paragraph used to carry — a `ByteArray` element access paying 4 instructions before reaching
-// its call rather than 13 — was about the arm that now SERVES it. What still pays it is the narrower set
-// above.
-//
-// ⚠ **WHERE IT IS SCHEDULED, AND WHY IT IS NOT WHERE IT WAS FIRST PLANNED (EC1-b).** It runs AFTER
+// ⚠ **WHERE IT IS SCHEDULED, AND WHY.** It runs AFTER
 // `insertRangeChecks` and before `pruneDeadBlockArgs`/`foldConstOperands`. Before the range checks it
 // CANNOT go: a range-check site is recorded as `(blockId, stdOpPos)` in the coordinate space
 // `lowerMaxonToStd` left the block in (`RangeCheckSite.stdOpPos`, `Project.maxon`), and this pass SPLITS
 // blocks and removes an op from one — so every site recorded past a split point would either land in a
 // block that no longer holds it or trip `guardSiteAt`'s own `pastTheBlock` panic. Running after costs
-// nothing and keeps that coordinate space untouched. Before `foldConstOperands` it must go, and that half
-// of the plan stands: every bound and stride this pass emits is a `const`, and the fold is what turns them
+// nothing and keeps that coordinate space untouched. Before `foldConstOperands` it must go: every bound
+// and stride this pass emits is a `const`, and the fold is what turns them
 // into `cmpImm`/`binOpImm` operands so they never occupy a register in the loops this pass makes hotter.
 //
 // ⚠ **REGISTER PRESSURE IS THE COST, AND IT IS PAID IN THE LOOPS THE ALLOCATOR REFUSES TO SPILL.** Each
 // fast arm holds a handful of values live across its guard chain. They are kept to the minimum that is
 // still one spelling: the stride constant is re-minted in the block that uses it rather than carried from
 // the block that compared against it (the fold deletes both), and `element_size@24` dies at its own test.
-// The values that genuinely span the region are the call's own arguments, which were live across the call
+// The values that genuinely span the region are the call's own arguments, which are live across the call
 // this replaces.
 
 // ⭐⭐ **THE TWO STRIDES THESE FAST ARMS ARE THE WHOLE OF: ONE MACHINE WORD, AND ONE BYTE.**
@@ -75,21 +70,21 @@
 // Every other stride (2, 4, the unset 0, and every packed one) goes to the runtime, whose
 // `emitLoadElemAt`/`emitStoreElemAt` own that arithmetic and its zero-extension rules.
 //
-// ⭐ **THE BYTE ARM JOINED IN EC3, AND IT IS NOT A GENERALIZATION — IT IS A MEASURED FAMILY.** Every
-// `ByteArray` access and every 1-byte enum slot (`enum-narrow-storage`) MISSED the word arm and paid the
+// ⭐ **THE BYTE ARM IS NOT A GENERALIZATION — IT IS A MEASURED FAMILY.** Without it every
+// `ByteArray` access and every 1-byte enum slot (`enum-narrow-storage`) misses the word arm and pays the
 // whole runtime call: `__managed_get`'s slow arm reached from `Map.findSlot` alone is 2% of a stage-2
 // self-compile, and the body it lands in walks an eight-trip byte loop to move one byte.
 //
-// ⚠ **NEITHER WIDTH IS SPELLED IN THIS FILE, AND THAT IS THE POINT** (found in review of EC3-F3). Each
+// ⚠ **NEITHER WIDTH IS SPELLED IN THIS FILE, AND THAT IS THE POINT.** Each
 // arm below names a `ManagedMemoryRuntime.SingleOpStride`, which carries the `element_size@24` stamp AND
 // the Std memory type an access at that stamp uses as ONE fact — see its header for the wrong answers a
-// site able to name the two separately can produce. This file briefly carried its own `WordElementStride`
-// derived from `MachineWordBytes`, a second derivation of a width the runtime already derives, paired by
+// site able to name the two separately can produce. A `WordElementStride` derived here from
+// `MachineWordBytes` would be a second derivation of a width the runtime already derives, paired by
 // hand with `StdType.i64` at each of three call sites and with `StdType.u8` at three more.
 
 // ⭐⭐ **THE FORK IS NOT EMITTED WHERE THE COMPILER ALREADY KNOWS THE ANSWER.** `Array with
-// Integer` stamps `element_size@24` with 8 in every program that ever runs, and this pass was emitting a
-// `loadIndirect` of that field, two compares and two branches AT EVERY ELEMENT ACCESS IN EVERY PROGRAM —
+// Integer` stamps `element_size@24` with 8 in every program that ever runs, so emitting a
+// `loadIndirect` of that field, two compares and two branches AT EVERY ELEMENT ACCESS IN EVERY PROGRAM is
 // a runtime dispatch on a compile-time constant. `LowerMaxonToStd.recordStaticElementFacts` writes the
 // stamp down against the Std op index of the call it is appending (`Project.stdOpElementStrides`), and
 // `stridePlanFor` reads it back here. What follows from the answer:
@@ -98,12 +93,12 @@
 //     no second arm, and no branch into the arm either, because with one successor the arm IS the block.
 //   • **`noFastArm`** — a 2- or 4-byte element, an unset stride, or a sub-byte PACKED one. Every fast arm
 //     is dead, so nothing is expanded at all and the runtime call stands exactly as the lowering wrote it.
-//     That is strictly better than expanding: such a site used to pay the load and both compares to reach
-//     the very call it was always going to make.
-//   • **`runtimeFork`** — an opaque `T` element in a shared generic body (W57: `Array with T` and
+//     That is strictly better than expanding: expanding makes such a site pay the load and both compares
+//     to reach the very call it was always going to make.
+//   • **`runtimeFork`** — an opaque `T` element in a shared generic body (`Array with T` and
 //     `__ManagedMemory with T` are ONE `GenericInstanceId`, and one body serves every width), an array
-//     reached through an interface or an existential, AND every BYTE-stamped site. Unchanged:
-//     `emitStrideDispatch` as before.
+//     reached through an interface or an existential, AND every BYTE-stamped site. `emitStrideDispatch`
+//     emits the fork.
 //
 // ⛔⛔ **THAT LAST CLAUSE IS THE ROW'S ONE MEASURED WRONG ANSWER, AND IT IS NOT THIS FILE'S TO DECIDE.**
 // A byte-stamped record may still be word-strided — a container declared over a type parameter is created
@@ -115,7 +110,7 @@
 // same door records, in `Project.stdOpTrivialElementSites`, every site whose element the lowering knows owes
 // no drop, and the two checked expanders read it back: such a site's store arm omits the `element_destroy@40`
 // load, compare and branch, and its checked-get tail omits them and the `__im_empty` block with them. The
-// W57 caveat does not apply because every writer of `element_destroy@40` stamps the element type of the
+// opaque-`T` caveat does not apply because every writer of `element_destroy@40` stamps the element type of the
 // record's OWN instance — a concrete creation from `containerElementOwesDrop`, a creation inside a shared
 // generic body from the threaded descriptor's `destroyFunc@40` (0 for a trivial instantiation), an
 // image-data record from `columnDestroyStamp`, and a view or clone from its source's slot. The slot WIDTH
@@ -124,7 +119,7 @@
 // its site keeps both guards.
 //
 // ⭐ **AND FOR `__managed_get_unchecked` A KNOWN STRIDE REMOVES THE SLOW ARM WITH THE FORK**, because the
-// fork was that expansion's ONLY precondition — see `expandUncheckedGetUnguarded`. The loop body of a
+// fork is that expansion's ONLY precondition — see `expandUncheckedGetUnguarded`. The loop body of a
 // `for v in a` over a concrete array is then genuinely CALL-FREE, which is what a later hoisting pass needs
 // (a live range crossing a call is confined to the callee-saved registers, and this compiler refuses rather
 // than spills).
@@ -133,14 +128,14 @@
 // `__im_` (inline-managed, disjoint from `InsertRangeChecks`' `__rc_`), and each names WHAT THE BLOCK IT
 // LABELS DOES rather than which guard sent control there.
 //
-// ⛔⛔ **THE FIRST TWO WERE NAMED `InlineContLabel` / `InlineSlowLabel` AND `InlineLeaves` DECLARES FILE-LEVEL
-// `let`s OF THE SAME TWO NAMES — SO THIS PASS WAS EMITTING `__il_cont` AND `__il_slow` (EC15).** MEASURED on
-// `temp/codegen-probe/arr.maxon`, whose log reads `inlineLeaves: 0 site(s) inlined` while its `@sum` carries
-// an `__il_cont` and an `__il_slow` around blocks only this pass mints. Every other label here is uniquely
-// named and came out right, which is exactly why nothing noticed: the two that collided are the two both
-// inliners happen to need. The prefix now says which pass wrote the block, as this comment always claimed.
-// ⚠ The underlying defect is the compiler's, not this file's, and is NOT fixed here: The compiler resolves two
-// same-named non-`export` file-level `let`s in different files to ONE of them, silently.
+// ⛔⛔ **THE NAMES MUST BE UNIQUE ACROSS BOTH INLINERS, BECAUSE THE COMPILER CANNOT KEEP THEM APART.**
+// `InlineLeaves` declares file-level `let`s of its own, and the compiler resolves two same-named
+// non-`export` file-level `let`s in different files to ONE of them, silently. MEASURED: spelled
+// `InlineContLabel` / `InlineSlowLabel` here, this pass emits `__il_cont` and `__il_slow` — on
+// `temp/codegen-probe/arr.maxon` the log reads `inlineLeaves: 0 site(s) inlined` while its `@sum` carries
+// an `__il_cont` and an `__il_slow` around blocks only this pass mints. Nothing else catches it: the two
+// that collide are the two both inliners happen to need.
+// ⚠ The underlying defect is the compiler's, not this file's, and is NOT fixed here.
 let ManagedContLabel = b"__im_cont"
 let ManagedSlowLabel = b"__im_slow"
 let InlineBoundsLabel = b"__im_bounds"
@@ -178,7 +173,7 @@ end 'ManagedCallFlag'
 
 // What a carve leaves behind: the block holding everything that followed the call, and the ref naming it.
 //
-// ⭐ **IT IS ITS OWN TYPE BECAUSE ONE EXPANSION HAS NO SLOW ARM (EC15).** A `__managed_get_unchecked` whose
+// ⭐ **IT IS ITS OWN TYPE BECAUSE ONE EXPANSION HAS NO SLOW ARM.** A `__managed_get_unchecked` whose
 // stride the compiler knows has no precondition left to fail, so there is nothing for a slow arm to serve
 // and minting one would leave a dead block holding a live call. Every other expansion pairs this with one.
 type InlineCarve
@@ -273,7 +268,7 @@ type PrimitiveInliner
 	var module as StdModule
 	var func as IrFunction
 
-	// ⭐ **THE COMPILE-TIME `element_size@24` STAMP OF EVERY CALL SITE THAT HAS ONE (EC15)**, keyed by the
+	// ⭐ **THE COMPILE-TIME `element_size@24` STAMP OF EVERY CALL SITE THAT HAS ONE**, keyed by the
 	// call's own index in `module.ops` and written by `LowerMaxonToStd` — the tier that still holds the
 	// container's TYPE, which this one deliberately does not. Read through `stridePlanFor` and nowhere else;
 	// see `Project.stdOpElementStrides` for why the key survives `insertRangeChecks`, the only pass between
@@ -391,12 +386,12 @@ type PrimitiveInliner
 	//
 	// ⛔⛔ **AND THAT IS AN ALLOCATION DECISION, MEASURED.** This routine is called once per op in the whole
 	// module, and a PAYLOAD-BEARING union heap-boxes EVERY case, payload-free ones included (`Parser`'s
-	// `enumOf` note). The classification and the outcome used to be two such unions — a
+	// `enumOf` note). The classification and the outcome as two such unions — a
 	// `ManagedCallSite.notInlinable` and a `BlockExpansion.noSite` minted and dropped at every op that is
-	// neither — which cost **2 allocations and 64 bytes per Std op in the program**: on a straight-line
-	// ladder holding ZERO expandable sites the phase read 594 / 1,106 / 2,130 / 4,178 allocations across a
+	// neither — cost **2 allocations and 64 bytes per Std op in the program**: on a straight-line
+	// ladder holding ZERO expandable sites the phase reads 594 / 1,106 / 2,130 / 4,178 allocations across a
 	// doubling program, which is the boxes and nothing else. `BlockRef` is an `int`, so this answer is a
-	// register. — MEASURED 2026-08-25, `tests/ladders/genmanagedsites.sh nosites`.
+	// register. — MEASURED with `tests/ladders/genmanagedsites.sh nosites`.
 	//
 	// ⚠ The `StdOp` match is EXHAUSTIVE: the two call variants are named and so is every other variant, so
 	// a variant added later fails to compile here until it is consciously placed.
@@ -428,8 +423,8 @@ type PrimitiveInliner
 				rdataAddr then break 'op'
 			tryCall(resultId, errorFlagId, callee, args) then return self.expandFiled(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: ManagedCallFlag.flag(errorFlagId))
 
-			// ⚠ Extended past `osThreadCpuTicks` when the allocator rung appended seven ops (memFill, the
-			// reserve/commit/decommit family, and the atomics). None is a CALL, so none can be a managed
+			// ⚠ This range reaches past `osThreadCpuTicks` to cover `memFill`, the reserve/commit/decommit
+			// family and the atomics. None is a CALL, so none can be a managed
 			// primitive to expand — this pass dispatches on a callee NAME and they have none. Placed
 			// consciously.
 			errorReturn or
@@ -568,8 +563,8 @@ type PrimitiveInliner
 	//
 	// ⭐ `set` and `mem_set` differ in exactly ONE thing — the record field their index is bounded against —
 	// so they share an expander and the difference is this dispatch's `limitOffset` argument and nothing else.
-	// `guardIndexInRange` is where that field's two answers are stated; ⚖ the capacity bound is the user
-	// ruling of 2026-07-30, carried by `ManagedMemSetName`.
+	// `guardIndexInRange` is where that field's two answers are stated; ⚖ the capacity bound is a USER
+	// RULING, carried by `ManagedMemSetName`.
 	function expandThrowingCall(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId) returns BlockRef
 		if callee.equals(ManagedGetName) 'checkedGet'
 			return self.expandCheckedGet(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
@@ -614,7 +609,7 @@ type PrimitiveInliner
 		let index = argAt(args, index: 1, callee: callee)
 
 		// ⭐⭐ **THE STRIDE FORK IS THIS EXPANSION'S ONLY PRECONDITION, SO THE PLAN DECIDES MORE HERE THAN IT
-		// DOES ANYWHERE ELSE (EC15)** — not merely which arm to emit, but whether a SLOW ARM exists at all and
+		// DOES ANYWHERE ELSE** — not merely which arm to emit, but whether a SLOW ARM exists at all and
 		// whether to expand. The other two expanders keep the bound and the ownership gates under every plan,
 		// so they always carve a frame and always have somewhere for a refusal to go.
 		let plan = self.stridePlanFor(self.opIndexAt(blockRef, pos: pos))
@@ -635,7 +630,7 @@ type PrimitiveInliner
 	end 'expandUncheckedGet'
 
 	// ⭐⭐ **`__managed_get_unchecked` AT A STRIDE THE COMPILER KNOWS: A SLOT ADDRESS AND ONE LOAD, IN THE
-	// SITE'S OWN BLOCK, WITH NO GUARD, NO FORK, NO SECOND ARM AND NO CALL (EC15).** Everything the guarded
+	// SITE'S OWN BLOCK, WITH NO GUARD, NO FORK, NO SECOND ARM AND NO CALL.** Everything the guarded
 	// expansion carries is here to serve a precondition that can fail, and this site has none — the stride
 	// fork was the whole of it, and the stamp has already answered it.
 	//
@@ -696,7 +691,7 @@ type PrimitiveInliner
 		let frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, slowHeat: self.slowArmHeat(plan, fastArmServesEveryElement: true))
 		let arms = self.openStrideArms(blockRef, arr: arr, slow: frame.slow.id, plan: plan)
 
-		// ⭐ **ONE ARM NEEDS NO JOIN, AND THE JOIN IS THE ONLY REASON THE TAIL IS NOT WRITTEN IN PLACE (EC15).**
+		// ⭐ **ONE ARM NEEDS NO JOIN, AND THE JOIN IS THE ONLY REASON THE TAIL IS NOT WRITTEN IN PLACE.**
 		// With two widths the tail reads a value TWO blocks produced, so the arms rejoin at `loaded` and carry
 		// it as a block arg; with one there is exactly one producer and the tail simply follows it — one block
 		// and one branch fewer, on every element read whose stride the compiler knows.
@@ -711,11 +706,11 @@ type PrimitiveInliner
 		let value = self.valueIds().mint()
 
 		// ⚠ **THE `loaded` JOIN'S ARG IS AN ELEMENT AND NOT A CALL RESULT, AND IT IS i64 FOR A DIFFERENT
-		// REASON FROM THE ONE BELOW (EC3).** The byte arm reaches it with a `u8` load, which is a
+		// REASON FROM THE ONE BELOW.** The byte arm reaches it with a `u8` load, which is a
 		// ZERO-EXTENDED byte in a general register — the same register file and the same machine word, so
 		// i64 is its class too. The only backend that distinguishes them is wasm, where a byte access is
 		// i32-backed and the phi copy COERCES at the edge (`StdToWasm.emitLocalCopy`) — which is exactly
-		// what the runtime's own `emitLoadElemAt` has relied on for its byte arm since EC1.
+		// what the runtime's own `emitLoadElemAt` relies on for its byte arm.
 		attachBlockArgs(loaded, valueIds: argsOf(value), argType: StdType.i64)
 
 		for arm in arms 'eachArm'
@@ -805,7 +800,7 @@ type PrimitiveInliner
 	// (`emitElementStoreAndOkReturn`), and the throwing path DESTROYS the element it refused to store
 	// (`emitDestroyRejectedElement`). Both are the runtime's, both are gated on this field, and a fast arm
 	// that stored over an occupant would be a leak — measured at exit 101 when that call was missing from
-	// `__managed_set` itself (R4.6).
+	// `__managed_set` itself.
 	function expandElementStore(blockRef BlockRef, pos BlockOpPos, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId, limitOffset ByteOffset) returns BlockRef
 		let arr = argAt(args, index: 0, callee: callee)
 		let index = argAt(args, index: 1, callee: callee)
@@ -851,7 +846,7 @@ type PrimitiveInliner
 			at = self.guard(at, refused: managed, slow: frame.slow, next: InlineOwnedLabel)
 		end 'ownershipNotKnownStatically'
 
-		// ⛔⛔ **OWNERSHIP IS ASKED BEFORE THE BOUND, AND THAT ORDER IS THE BOUND'S PRECONDITION (A2).** The
+		// ⛔⛔ **OWNERSHIP IS ASKED BEFORE THE BOUND, AND THAT ORDER IS THE BOUND'S PRECONDITION.** The
 		// `mem_set` limit is `capacity@16`, the ONE field that carries `BufferOwnership`'s negative sentinels,
 		// and `emitIndexOutOfRange` is a single UNSIGNED compare — which reads a negative limit as enormous and
 		// would ADMIT every index rather than refuse it. This guard refuses every negative capacity outright, so
@@ -883,14 +878,14 @@ type PrimitiveInliner
 
 	// --- the shared pieces every carved expansion is built from ---
 
-	// ⭐⭐ **WHAT THIS SITE KNOWS ABOUT ITS ELEMENT STRIDE (EC15)** — the recorded `element_size@24` stamp, read
+	// ⭐⭐ **WHAT THIS SITE KNOWS ABOUT ITS ELEMENT STRIDE** — the recorded `element_size@24` stamp, read
 	// back through `strideDispatchPlanForStamp` so that *which arm a stamp selects* is answered in ONE place,
 	// beside the runtime compares it is the compile-time twin of.
 	//
 	// ⚠ **AN ABSENT ENTRY IS "NOT KNOWN", WHICH IS THE ONLY SAFE DIRECTION AND THE COMMON ONE.** Nothing is
-	// recorded for an opaque `T` element in a shared generic body (W57 — one body serves every width), for an
+	// recorded for an opaque `T` element in a shared generic body (one body serves every width), for an
 	// array reached through an interface or an existential, or for any call the lowering could not type. Those
-	// sites keep `emitStrideDispatch` exactly as they had it.
+	// sites keep `emitStrideDispatch`.
 	//
 	// ⚠ The key is the call's op index, which is the block's to give only until the carve moves the call —
 	// every expander reads its site facts (this plan and `trivialElements`) before it carves.
@@ -902,7 +897,7 @@ type PrimitiveInliner
 		return strideDispatchPlanForStamp(stamp)
 	end 'stridePlanFor'
 
-	// ⭐⭐ **THE ARMS THIS SITE'S FAST PATH NEEDS, WITH THE HEAD ALREADY WIRED TO THEM (EC15).** One list,
+	// ⭐⭐ **THE ARMS THIS SITE'S FAST PATH NEEDS, WITH THE HEAD ALREADY WIRED TO THEM.** One list,
 	// walked by all three expanders, so "how many widths does this site serve" is asked once rather than at
 	// each of them.
 	//
@@ -951,7 +946,7 @@ type PrimitiveInliner
 		emitStrideDispatch(self.module, func: self.func, cur: cur, es: elementSize, wordArm: wordArm, byteArm: byteArm, otherArm: slow, ids: self.valueIds(), checkByteLabel: InlineStrideLabel)
 	end 'dispatchOnStride'
 
-	// The index bound, through `emitIndexOutOfRange` — the ONE home of "reject this index", which since A2 is
+	// The index bound, through `emitIndexOutOfRange` — the ONE home of "reject this index", which is
 	// a single UNSIGNED compare and carries the NEGATIVE half in it (a negative index reinterpreted as
 	// unsigned is above any non-negative length). The three entries differ only in the record field the
 	// limit is read from: `length@8` for the `Array` surface's `get`/`set`, `capacity@16` for the buffer's
@@ -967,13 +962,13 @@ type PrimitiveInliner
 	// predicate is identical — a disjunction of the same two compares over the same two words — and asking
 	// it once here is the composition that already exists rather than a fourth spelling of it.
 	//
-	// ⚠ **A NON-OWNED RECORD NOW LEAVES FOR THE SLOW ARM AT `emitBufferNotOwned`, ONE GUARD EARLIER, ON BOTH
-	// BOUNDS.** It used to leave HERE on the `mem_set` bound, because a signed `index >= capacity` is TRUE for
-	// every non-negative index against a negative sentinel — an accident of the encoding that EC1's review
-	// already had to correct this comment about once. A2 made this test unsigned, which INVERTS that accident
-	// (a sentinel capacity reads as enormous and admits everything), so the ownership question is now asked
-	// first and answered by the one test that means to ask it. The `set` bound is `length@8`, which a view
-	// carries honestly, so THERE the refusal was always `emitBufferNotOwned`'s.
+	// ⚠ **A NON-OWNED RECORD LEAVES FOR THE SLOW ARM AT `emitBufferNotOwned`, ONE GUARD EARLIER, ON BOTH
+	// BOUNDS.** This test is UNSIGNED, so a sentinel capacity reads as ENORMOUS and admits everything — it
+	// cannot be the one that refuses a non-owned record, and the ownership question is therefore asked first
+	// and answered by the one test that means to ask it. (A SIGNED `index >= capacity` would refuse here
+	// instead, by accident of the encoding: it is TRUE for every non-negative index against a negative
+	// sentinel.) The `set` bound is `length@8`, which a view carries honestly, so THERE the refusal is
+	// `emitBufferNotOwned`'s in any case.
 	function guardIndexInRange(cur IrBlock, arr ValueId, index ValueId, limitOffset ByteOffset, slow IrBlock, next ByteArray) returns IrBlock
 		let limit = emitLoadField(self.module, block: cur, record: arr, offset: limitOffset, ids: self.valueIds())
 		let outOfRange = emitIndexOutOfRange(self.module, block: cur, index: index, length: limit, ids: self.valueIds())
@@ -1011,8 +1006,8 @@ type PrimitiveInliner
 
 	// Carve the call out of its block and build the frame around it: `head` keeps everything BEFORE the
 	// call and loses its exit, the CONTINUATION takes everything after it plus that exit, and the call is
-	// re-emitted verbatim into a SLOW block — with FRESH result ids, because the ids it used to define are
-	// now the continuation's block args, and a value may be defined once.
+	// re-emitted verbatim into a SLOW block — with FRESH result ids, because its original ids are now the
+	// continuation's block args and a value may be defined once.
 	//
 	// ⚠ The original op is left behind as an ORPHAN in `module.ops`. That is the tier's own model
 	// (`IrModule.ops` is append-only and retains what block-rebuilding passes replace), and it is why every
@@ -1070,7 +1065,7 @@ type PrimitiveInliner
 	// `carveFrame` without the slow arm — the whole carve for an expansion that has no precondition left to
 	// fail (`expandUncheckedGetUnguarded`), and the first half of it for every other.
 	function carveContinuation(blockRef BlockRef, pos BlockOpPos) returns InlineCarve
-		// ⛔⛔ **THE MINTER IS SEEDED HERE, BEFORE THE CARVE, AND THAT ORDER IS LOAD-BEARING (EC1 review).**
+		// ⛔⛔ **THE MINTER IS SEEDED HERE, BEFORE THE CARVE, AND THAT ORDER IS LOAD-BEARING.**
 		// `nextFreeValueId` derives its floor from the function's LIVE ops (`IrModule.liveOpIndices`) and its
 		// block args — and the carve on the next line makes the call an ORPHAN, out of every `opRefs`, while
 		// the ids it defines do not become block args until `closeFrame` several lines later. For that whole

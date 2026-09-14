@@ -7,7 +7,7 @@
 //
 // ⭐ TWO FILES, TWO MECHANISMS, AND THE SPLIT IS FORCED BY THE ISA. A callee-saved GPR is
 // preserved with `push`/`pop`; a callee-saved XMM cannot be, because **there is no `push xmm`
-// in x86-64**. So xmm6–15 (Wave 2) get their own ordered list (`calleeSavedXmmOrder`) and a
+// in x86-64**. So xmm6–15 get their own ordered list (`calleeSavedXmmOrder`) and a
 // dedicated frame SLOT each, saved and restored with the SAME `storeSlotReg`/`loadRegSlot` ops
 // the spiller already uses for float values — which is exactly how arm64 preserves d8–d15
 // (`Arm64PrologueEpilogue`, "THE CALLEE-SAVED REGISTERS ARE SPILLED TO FRAME SLOTS"). Reusing
@@ -43,7 +43,7 @@
 // so the frames of a live thread form a linked list that can be WALKED. Two things need
 // exactly that list, and neither can be served by anything cheaper:
 //
-//   1. The PANIC BACKTRACE (P1.0d.3, here). `mrt_panic_walk_frames` follows the chain to
+//   1. The PANIC BACKTRACE (here). `mrt_panic_walk_frames` follows the chain to
 //      symbolize the callers of a fault or a panic. Frame 0 comes from the faulting RIP,
 //      but every frame above it comes from the chain.
 //   2. GROWABLE GREEN-THREAD STACKS. A Go-style `morestack` allocates a larger stack,
@@ -58,17 +58,12 @@
 // LEAVES ARE INCLUDED, and that is the point rather than an oversight: a frameless leaf
 // cannot be unwound OUT of, so it terminates any walk that reaches it — and the faulting
 // `main` of `specs/safety.md` IS a frameless leaf. A chain with a hole in it is not a
-// chain. There is therefore no `needsFrame` test any more: the frame POINTER is
+// chain. There is therefore no `needsFrame` test: the frame POINTER is
 // unconditional, while the frame RESERVATION (`sub rsp, N`) is still elided when there is
 // nothing to reserve.
 //
-// It costs NO register. `allocatablePool` already excludes rsp/rbp ("the frame") and
-// always has, so the compiler was paying a frame pointer's full price — 14 allocatable GPRs, not
-// 15 — while leaving rbp holding whatever the loader put there. The pool is unchanged;
-// this is the same 14 registers, now with the benefit collected.
-//
-// (This REPLACES the frame-pointer-omitted design this file used to describe. That choice
-// predated the morestack requirement above; see ARCHITECTURE.md's backend section.)
+// It costs NO register. `allocatablePool` excludes rsp/rbp ("the frame"), so a frame pointer's
+// full price — 14 allocatable GPRs, not 15 — is paid whether or not rbp holds a chain.
 //
 // The runtime entry stub `mrt_start` builds its own frame directly in
 // `augmentWithRuntime` (which runs AFTER this pass), so this pass never sees it — it
@@ -117,7 +112,7 @@ export let X64RedZoneBytes = 0 as StackSize
 // across a switch.
 export let calleeSavedOrder = [X64Register.rbx, X64Register.r12, X64Register.r13, X64Register.r14, X64Register.r15]
 
-// The custom-ABI callee-saved XMMs (Wave 2), in SAVE order. Unlike the GPRs these are not a stack —
+// The custom-ABI callee-saved XMMs, in SAVE order. Unlike the GPRs these are not a stack —
 // each takes its own frame slot — so the restore order is the same, not the reverse. xmm6–15 mirror
 // `RegisterAllocator.calleeSavedMask`'s XMM half, held to it by `assertCalleeSavedListsMatchMasks`.
 //
@@ -136,12 +131,10 @@ export let calleeSavedXmmOrder = [X64Register.xmm6, X64Register.xmm7, X64Registe
 // SPILLED f64: the prologue preserves one with the spiller's own `storeSlotReg`/`loadRegSlot` ops, so
 // its slot rides the spiller's grid and its width cannot be anything else.
 //
-// ⚠ IT USED TO BE TWO NUMBERS — `SpillSlotBytes` in the prologue's reservation and `GtArgSlotBytes`
-// (the ASYNC ARGUMENT-BUFFER stride, a different fact that happens to be 8) in the GT half — under a
-// comment promising that `assertGtFrameConsistent` made forgetting one a compile-time panic. It could
-// not: it read only the GT spelling. Now both halves read this, so widening it to 16 moves
-// `assertGtFrameConsistent`'s derived frame off `GtInitialFrameBytes` and the next async compile
-// panics, which is what that comment always claimed.
+// ⚠ BOTH HALVES READ THIS ONE NAME. A separate GT spelling (the ASYNC ARGUMENT-BUFFER stride, a
+// different fact that happens to be 8) would leave `assertGtFrameConsistent` reading only one of them,
+// so forgetting the other would be silent. Read from here, widening it to 16 moves that assert's
+// derived frame off `GtInitialFrameBytes` and the next async compile panics.
 export let XmmSaveSlotBytes = SpillSlotBytes
 
 module typealias X64RegisterArray = Array with X64Register
@@ -249,7 +242,7 @@ end 'x64CallStackBytes'
 // rsp at its calls, which is not a compile error but a fault inside kernel32's SSE.
 //
 // ⚠ A LEAF SAVES CALLEE-SAVED XMMs TOO, and its branch must reserve them: "leaf" means "makes no
-// call", not "is not a callee". Since Wave 2, `preferredVolatilityMask` puts a float into xmm6–15
+// call", not "is not a callee". `preferredVolatilityMask` puts a float into xmm6–15
 // under plain register pressure in a function that calls nothing, and that register still belongs to
 // this function's caller.
 function computeFrameBytes(func IrFunction, makesCall bool, pushCount RegCount, xmmSaveCount RegCount) returns StackSize
@@ -404,12 +397,10 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		loadRegBaseDisp(d, b, _, _) gives physRegBit(d) or physRegBit(b)
 		storeBaseDispReg(b, _, s, _) gives physRegBit(b) or physRegBit(s)
 
-		// ⚠ The SSE band MUST be counted, and since Wave 2 this is a REAL-MISCOMPILE arm exactly like
-		// the data-section one above: xmm6-15 are callee-saved, so a float coloured into one and missing
-		// from this mask is never saved by the prologue and the function silently clobbers its CALLER's
-		// register. Wave 1 answered honestly here while the intersection with the callee-saved set was
-		// still empty, which is why Wave 2 needed no hunt for places that had short-circuited on
-		// "floats never need saving" — there were none.
+		// ⚠ The SSE band MUST be counted, and this is a REAL-MISCOMPILE arm exactly like the
+		// data-section one above: xmm6-15 are callee-saved, so a float coloured into one and missing from
+		// this mask is never saved by the prologue and the function silently clobbers its CALLER's
+		// register.
 		addsdRegReg(d, l, r) gives physRegBit(d) or physRegBit(l) or physRegBit(r)
 		subsdRegReg(d, l, r) gives physRegBit(d) or physRegBit(l) or physRegBit(r)
 		mulsdRegReg(d, l, r) gives physRegBit(d) or physRegBit(l) or physRegBit(r)
@@ -441,7 +432,7 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		// the direction changes nothing about this arm and everything about why it must exist.
 		movqXmmGpr(d, s) gives physRegBit(d) or physRegBit(s)
 
-		// The `.rdata` address `lea` (P1.2 wave A) — its GPR dest can be colored into a callee-saved
+		// The `.rdata` address `lea` — its GPR dest can be colored into a callee-saved
 		// register, so it MUST be counted here, exactly like `leaRegGlobal` above.
 		leaRegRdata(d, _) gives physRegBit(d)
 
@@ -509,7 +500,7 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 			arm64Syscall or
 			arm64Fcsel gives 0
 
-		// ⚠ The P1.5-A1 function-value band MUST be counted, and this is another arm where a miss is a
+		// ⚠ The function-value band MUST be counted, and this is another arm where a miss is a
 		// real miscompile, not a missed optimization: BOTH name a GPR the coloring can place in a
 		// callee-saved register (rbx/r12-r15) — `leaRegFunc`'s dest and `callReg`'s callee-address use —
 		// so if either is absent from this mask the prologue never saves that register and the function
@@ -547,12 +538,12 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		// register and the function would silently clobber its CALLER's.
 		leaRegSlot(d, _) gives physRegBit(d)
 
-		// F1b: a fill ladder names no virtual register, and its four fixed ones (rax/rcx/rdx/rdi) are all
+		// A fill ladder names no virtual register, and its four fixed ones (rax/rcx/rdx/rdi) are all
 		// CALLER-saved, so the prologue owes them nothing — an empty mask is the right answer, not a gap.
 		x64MemFill or
 			arm64MemFill gives 0
 
-		// F2: every x64 atomic operand is an ORDINARY coloured register that CAN land in a callee-saved one, so
+		// Every x64 atomic operand is an ORDINARY coloured register that CAN land in a callee-saved one, so
 		// each must be counted — the same real-miscompile trap `leaRegSlot` documents one line up. The CAS's
 		// implicit RAX is deliberately absent: rax is caller-saved, so the prologue owes it nothing.
 		x64LockCmpxchg(a, s) gives physRegBit(a) or physRegBit(s)
@@ -567,7 +558,7 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 			arm64AtomicRmw or
 			arm64ThreadPointer gives 0
 
-		// ⚠ EC16's scaled-index band MUST be counted, and this is a REAL-MISCOMPILE arm for the reason the
+		// ⚠ The scaled-index band MUST be counted, and this is a REAL-MISCOMPILE arm for the reason the
 		// `loadRegBaseDisp`/`storeBaseDispReg` arms above give: every operand here is an ordinary coloured
 		// register that can land in rbx/r12-r15, and a register missing from this mask is one the prologue
 		// never pushes and the function silently clobbers for its CALLER.
@@ -578,7 +569,7 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		// arm64-only, 0 for the reason every other arm64 arm above gives.
 		arm64AddLsl gives 0
 
-		// ⚠ EC18 — `divideReg`'s arm, and it counts the SAME ONE operand for the same reason: RAX and RDX
+		// ⚠ `divideReg`'s arm, and it counts the SAME ONE operand for the same reason: RAX and RDX
 		// are caller-saved and are not part of this scan (which is about callee-saved registers the
 		// coloring used), while `src` is an ordinary coloured register that can land in rbx/r12-r15.
 		imulHighReg(src) gives physRegBit(src)
@@ -586,11 +577,11 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		// arm64-only, 0 for the reason every other arm64 arm above gives.
 		arm64Fneg gives 0
 
-		// G3: arm64-only, 0 for the reason every other arm64 arm above gives.
+		// arm64-only, 0 for the reason every other arm64 arm above gives.
 		arm64LoadAcquire or
 			arm64StoreRelease gives 0
 
-		// EC18's arm64 high multiply: arm64-only, 0 for the same reason.
+		// The arm64 high multiply: arm64-only, 0 for the same reason.
 		arm64Smulh gives 0
 
 		// A coverage counter names no register on either lane: `lock inc [rip+d32]` on x64, and arm64's
@@ -847,7 +838,7 @@ function blockEndsWithReturn(module TargetModule, block IrBlock) returns bool
 			arm64Syscall or
 			arm64Fcsel gives false
 
-		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are body ops, never a `ret`.
+		// `leaRegFunc`/`callReg` and the Linux `x64Syscall` are body ops, never a `ret`.
 		leaRegFunc or
 			callReg or
 			x64Syscall gives false
@@ -870,11 +861,11 @@ function blockEndsWithReturn(module TargetModule, block IrBlock) returns bool
 		// A frame address is a body op, never a `ret`.
 		leaRegSlot gives false
 
-		// F1b: a fill ladder is a body op, never a `ret` — its branches are internal to its own encoding.
+		// A fill ladder is a body op, never a `ret` — its branches are internal to its own encoding.
 		x64MemFill or
 			arm64MemFill gives false
 
-		// F2: every atomic is a body op, never a `ret`.
+		// Every atomic is a body op, never a `ret`.
 		x64LockCmpxchg or
 			x64LockXadd or
 			x64LockAdd or
@@ -884,23 +875,23 @@ function blockEndsWithReturn(module TargetModule, block IrBlock) returns bool
 			arm64AtomicRmw or
 			arm64ThreadPointer gives false
 
-		// EC16: every scaled-index form is a body op, never a `ret`.
+		// Every scaled-index form is a body op, never a `ret`.
 		leaRegBaseIndexScale or
 			loadRegBaseIndexScale or
 			storeBaseIndexScaleReg or
 			arm64AddLsl gives false
 
-		// EC18: the high multiply is a body op, never a `ret`.
+		// The high multiply is a body op, never a `ret`.
 		imulHighReg gives false
 
 		// arm64 `fneg` is a body op, never a `ret`.
 		arm64Fneg gives false
 
-		// G3: an ordered access is a body op, never a `ret`.
+		// An ordered access is a body op, never a `ret`.
 		arm64LoadAcquire or
 			arm64StoreRelease gives false
 
-		// EC18: the arm64 high multiply is a body op, never a `ret`.
+		// The arm64 high multiply is a body op, never a `ret`.
 		arm64Smulh gives false
 
 		// A coverage counter is a body op, never a `ret`.

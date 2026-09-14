@@ -44,7 +44,7 @@ export function arm64OsCallKind(os Os) returns Arm64OsCallKind
 	end 'os'
 end 'arm64OsCallKind'
 
-// ⭐⭐ **WHICH SYSTEM REGISTER HOLDS THIS OS THREAD'S PER-THREAD BASE (L4).** The second per-OS question this
+// ⭐⭐ **WHICH SYSTEM REGISTER HOLDS THIS OS THREAD'S PER-THREAD BASE.** The second per-OS question this
 // backend asks, and it is DELIBERATELY NOT `arm64OsCallKind` re-read: that one answers *how this backend
 // reaches the kernel*, this one answers *which register the kernel left the thread pointer in*. The two
 // happen to split the same two OSes today, and fusing them is how a hypothetical third lane would inherit
@@ -120,7 +120,7 @@ end 'arm64ThreadPointerSource'
 //
 // `leakCheck` gates the future MM leak bridge exactly as the x64 stub does; it is `false` for the
 // scalar core, which has no allocator and cannot leak. `initGlobals` gates the managed-global
-// initialization and release the same way (P1.7 slice 2a) — `false` for a program with no managed
+// initialization and release the same way — `false` for a program with no managed
 // top-level `var`, which is every program in the scalar corpus.
 export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, captureEnvp bool, debugStream bool, dumpCoverage bool, runsRuntimeInit bool, os Os, entryFunction ByteArray) returns FunctionCodeChunk
 	var code = ByteArray.create()
@@ -129,14 +129,14 @@ export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drain
 	var rdataRelocs = RdataRelocationArray.create()
 	var funcAdrpRelocs = Arm64FuncAdrpRelocArray.create()
 
-	// The argument vector into the two `.data` words `__cl_count`/`__cl_arg` read (MAC7). It rides
+	// The argument vector into the two `.data` words `__cl_count`/`__cl_arg` read. It rides
 	// `usesCommandLine`, so a program that never asks for its arguments carries neither the capture nor
 	// the words — the one-bit-two-tiers arrangement every other runtime family here uses.
 	if captureArgv 'argv'
 		emitArm64ArgvCapture(code, rdataRelocs: rdataRelocs, os: os)
 	end 'argv'
 
-	// ⭐⭐ **THE ENVIRONMENT VECTOR, AND ONLY arm64-LINUX NEEDS IT CAPTURED AT ALL (L4).** Every other lane
+	// ⭐⭐ **THE ENVIRONMENT VECTOR, AND ONLY arm64-LINUX NEEDS IT CAPTURED AT ALL.** Every other lane
 	// asks the platform for a variable — `GetEnvironmentVariableA` on Windows, `getenv` through libSystem on
 	// macOS — and a raw static image has neither, so the one moment the vector is reachable is HERE, where
 	// the kernel left it on the stack. It rides `LinuxRuntime.linuxReadsEnvironment` — the scheduler's
@@ -176,9 +176,9 @@ export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drain
 		arm64EmitMainCall(code, callFixups: callFixups, initGlobals: initGlobals, entryFunction: entryFunction)
 	end 'mainOnTheOsStack'
 
-	// ⭐⭐ **RUN THE SCHEDULER OUT AND JOIN ITS WORKER Ms, AFTER `main` AND BEFORE THE LEAK GATE (MAC3).**
-	// The ORDER is the whole point and it is `BackendDispatch.appendGreenThreadDrainGate`'s argument, which
-	// this stub had no arm for until the scheduler reached this lane: AFTER the global cleanup, because a
+	// ⭐⭐ **RUN THE SCHEDULER OUT AND JOIN ITS WORKER Ms, AFTER `main` AND BEFORE THE LEAK GATE.**
+	// The ORDER is the whole point and it is `BackendDispatch.appendGreenThreadDrainGate`'s argument:
+	// AFTER the global cleanup, because a
 	// released managed global may be the last owner of a handle whose drop lets a green thread finish; and
 	// BEFORE `__mm_leak_check`, because a worker M's `__gt_reclaim` steps the very counters that gate reads,
 	// so an un-joined scheduler makes a clean program report 101 intermittently.
@@ -252,7 +252,7 @@ end 'buildArm64EntryStubChunk'
 // `[bl __module_init]`, `bl main`, `[bl __maxon_global_cleanup]` — the program, wherever it runs: the entry
 // stub of a program without green threads, and the main thread's entry of a program with them.
 //
-// The managed globals are filled BEFORE user code (P1.7 slice 2a) — a `static` member's is filled on first
+// The managed globals are filled BEFORE user code — a `static` member's is filled on first
 // access instead (see `ModuleInit`) — and released AFTER it, before the leak gate, where a global still held
 // would count as a leak (exit 101). `__maxon_global_cleanup` takes the ExitCode in x0 and hands it back in
 // x0, the same pass-through shape `__mm_leak_check` has, so on AAPCS64 the value flows through with no move.

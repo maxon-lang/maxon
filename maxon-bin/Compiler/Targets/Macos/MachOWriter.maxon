@@ -14,7 +14,7 @@
 // into rdata. A `--coverage` build's counters are ordinary `__data` bytes — a reserved run
 // like any other global — so no section of their own is needed or emitted.
 //
-// ⭐ THE rdata REBASES (M2b for String buffers; P1.7a slice 2b-iv-C for function pointers).
+// ⭐ THE rdata REBASES (String buffers, and function pointers).
 // Unlike PeWriter's fixed-base image (`patchRdataAbsRelocs` bakes `ImageBase + rdataRva
 // + blobOffset`), macOS arm64 is always ASLR/PIE: there is no fixed base to bake. So an
 // absolute pointer in rdata becomes a dyld rebase — the slot stores the target's OFFSET
@@ -173,7 +173,7 @@ let DylinkerCommandSize = 32
 let DylibCommandSize = 56
 let MachHeaderSize = 32
 
-// M1 always emits: __PAGEZERO, __TEXT, __DATA, __LINKEDIT, LC_SYMTAB, LC_DYSYMTAB,
+// Always emitted: __PAGEZERO, __TEXT, __DATA, __LINKEDIT, LC_SYMTAB, LC_DYSYMTAB,
 // LC_LOAD_DYLINKER, LC_MAIN, LC_UUID, LC_LOAD_DYLIB, LC_BUILD_VERSION,
 // LC_DYLD_CHAINED_FIXUPS, LC_DYLD_EXPORTS_TRIE, LC_CODE_SIGNATURE.
 let MachoNumCommands = 15
@@ -182,10 +182,9 @@ let MachoNumCommands = 15
 let PlatformMacos = 1
 let MinOsMacos13 = 0x000D0000
 
-// __heap-free at M1: the runtime allocator mmaps its own arenas, so __DATA holds
-// only globals + the GOT. Segment vmsize == filesize (no zerofill tail needed).
+// __heap-free: the runtime allocator mmaps its own arenas, so __DATA holds only globals + the GOT. Segment vmsize == filesize (no zerofill tail needed).
 
-// The libSystem imports M1 needs, one GOT slot each. The SLOT SET itself is OS-neutral and
+// The libSystem imports this lane needs, one GOT slot each. The SLOT SET itself is OS-neutral and
 // lives in `Targets/Shared/OsImportSlot.maxon` (it is PE's `IatSlot` shape, and arm64-linux
 // needs the same three primitives with no import table at all); what stays here is the one
 // genuinely Mach-O fact — how a slot's symbol is SPELLED. The GOT + the chained-fixup import
@@ -216,7 +215,7 @@ function machoImportSymbol(slot OsImportSlot) returns String
 		setpriority gives "_setpriority"
 		getpriority gives "_getpriority"
 
-		// MAC3's green-thread substrate. Every one is an ordinary C name plus the Mach-O ABI's leading
+		// The green-thread substrate. Every one is an ordinary C name plus the Mach-O ABI's leading
 		// underscore; `_np` is part of `pthread_cond_timedwait_relative_np`'s own name (Darwin's
 		// non-portable relative-timeout wait), not a suffix this map adds.
 		malloc gives "_malloc"
@@ -238,7 +237,7 @@ function machoImportSymbol(slot OsImportSlot) returns String
 		pthreadMutexattrSettype gives "_pthread_mutexattr_settype"
 		pthreadMutexattrDestroy gives "_pthread_mutexattr_destroy"
 
-		// MAC4/5/6/7's filesystem and argv substrate. ⚠ **`__error` BECOMES `___error` — THREE underscores in
+		// The filesystem and argv substrate. ⚠ **`__error` BECOMES `___error` — THREE underscores in
 		// total, and it is not a typo**, for `_NSGetExecutablePath`'s reason one screen up: the C name already
 		// begins with two, and the Mach-O ABI adds its own.
 		//
@@ -266,7 +265,7 @@ function machoImportSymbol(slot OsImportSlot) returns String
 		dirfd gives "_dirfd"
 		fnmatch gives "_fnmatch"
 
-		// MAC8's child-process substrate. ⚠ **`__NSGetEnviron` TAKES A DOUBLE UNDERSCORE** for
+		// The child-process substrate. ⚠ **`__NSGetEnviron` TAKES A DOUBLE UNDERSCORE** for
 		// `_NSGetExecutablePath`'s reason two screens up: the C name already begins with one.
 		pipe gives "_pipe"
 		poll gives "_poll"

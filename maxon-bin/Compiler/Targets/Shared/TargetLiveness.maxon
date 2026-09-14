@@ -9,8 +9,8 @@
 // is exactly "the CFG paths running backward from each use up to the def" — walk them and stop.
 // Nothing iterates, nothing converges. See `solveLivenessSsa`, which also explains why a back edge
 // needs no special case and why a phi is where the walk stops (and a phi ARG is where one starts).
-// The old iterative fixpoint re-swept every block's FULL value-space row every round and was the
-// last superlinear term in register allocation.
+// An iterative fixpoint re-sweeps every block's FULL value-space row every round, which is the last
+// superlinear term register allocation can carry.
 
 // ==========================================================================
 // THE ALLOCATOR'S INDEX SPACES
@@ -67,7 +67,7 @@ export typealias OpSeqArray = Array with OpSeq
 // A dense counter numbers ops 0,1,2,… straight through the function, so INSERTING one op (which is
 // what a split does) renumbers every op after it, in every later block. Every `useSeq` in the
 // function goes stale at once, and the only repair is to rebuild the whole index — which is the
-// O(function × splits) the splitter's driver used to pay. With a stride, an insert into block `b`
+// O(function × splits) the splitter's driver would pay. With a stride, an insert into block `b`
 // shifts positions only WITHIN `b`: every other block's numbers are exactly what they were.
 //
 // Nothing reads a sequence number as an INDEX; every consumer only ORDERS by it (Belady's next-use
@@ -139,8 +139,8 @@ typealias VersionStampColumn = Array with VersionStamp
 export typealias RegNumColumn = Array with RegNum
 
 // A dense column of REGISTER COUNTS (a pressure, an effective-pool size, a dead-phi tally), indexed
-// by value id, by block, or by pool size. Its entries are quantities of REGISTERS — it was a
-// `CfgIndexArray`, which said "block index" about numbers that are nothing of the sort.
+// by value id, by block, or by pool size. Its entries are quantities of REGISTERS, which is why it is
+// not a `CfgIndexArray`: that name says "block index" about numbers that are nothing of the sort.
 export typealias RegCountColumn = Array with RegCount
 
 // (A dense per-value register-class column is `ValueClassColumn`, and it is declared with `RegClass`
@@ -152,7 +152,7 @@ export typealias RegCountColumn = Array with RegCount
 // ==========================================================================
 //
 // TWO FILES, ONE SWEEP. Every figure the allocator compares against a pool — a live population, an
-// op's pressure, a block's demand, a function's peak — is now a ROW with one entry per register
+// op's pressure, a block's demand, a function's peak — is a ROW with one entry per register
 // class, because the files are independent: 15 live ints do not fit 14 GPRs however many XMMs are
 // idle. One MIXED figure against one MIXED pool (30) cannot see that, and it does not fail quietly —
 // it panicked the colorer on 19 pressure tests the moment the pool was widened.
@@ -175,7 +175,7 @@ export typealias RegCountColumn = Array with RegCount
 // this constant, once per module, so it and the enum cannot drift.
 //
 // ⚠ `RegNum`'s bound is the one respelled number NO assert reaches — a typealias range bound is
-// readable by no expression — so it is not in this discipline and this comment used to claim it was.
+// readable by no expression — so it is not in this discipline.
 // It moves by hand; see `RegisterFileSize`.
 export let RegClassCount = 2
 
@@ -260,8 +260,8 @@ end 'classRowTotal'
 // `operandIsVirtual` before asking (`recordDefLiveAfter`, `addOpTransientPressure` and its
 // `anyVirtualUseDiesAt` — the census tracks only value ids, never physical registers), so a PHYSICAL
 // operand is a bug, not the "classify
-// a register number" case this used to also handle. It did so against the x64 boundary
-// unconditionally (`regClassOf(operandRegister(o).rawValue)`), which would misclassify an arm64 GPR in
+// a register number" case. Handling that here means the x64 boundary unconditionally
+// (`regClassOf(operandRegister(o).rawValue)`), which would misclassify an arm64 GPR in
 // x19..x28 and panic on an arm64 SIMD number (>31) that `X64Register.fromRawValue` cannot name — a
 // latent per-ISA hazard on a branch nothing reaches. A physical register's class is the ENCODER's
 // concern (`regClassIn` on the target file), not the pressure census's; here it panics loudly.
@@ -447,7 +447,7 @@ end 'emptyListColumn'
 //
 // It stays a free function because it is not generic over anything it needs to be: every list it is
 // used on IS a `DenseColumn`. Handing it a narrower column is a compile error (E3005), not the silent
-// width corruption the old `refillColumn` could be tricked into — see `HallScratch.regOfValue`.
+// width corruption a type-erased `refillColumn` can be tricked into — see `HallScratch.regOfValue`.
 function removeFromDenseList(list ValueIdArray, value ValueId)
 	for i in 0 upto list.count() 'each'
 		let entry = try list.get(i) otherwise panic("removeFromDenseList: list.get({i}) OOB")
@@ -541,8 +541,8 @@ end 'FuncCfg'
 // **Sparse is the point.** A dense `blocks × ceil(values/64)` bitset matrix is proportional to the
 // value space, not to the information: a function with 19,200 blocks and 12,800 values allocates
 // and zeroes 61 MB of live sets EVEN WHEN ONLY ONE VALUE IS EVER LIVE, and every consumer then
-// scans 200 words per block to find the handful of live values in it. That was the last superlinear
-// term in register allocation. These lists are proportional to the liveness that actually exists —
+// scans 200 words per block to find the handful of live values in it — the last superlinear term
+// register allocation can carry. These lists are proportional to the liveness that actually exists —
 // which is what the SSA path exploration computes directly, so nothing is thrown away to build them.
 //
 // **EDITABLE is the other point, and it is why these are lists and not CSR.** Compressed sparse row
@@ -652,7 +652,7 @@ export type LivenessResult
 	// not the call's first — so the fresh value is DEFINED between two pre-moves, live across neither,
 	// forbidden neither, and free to take an argument register an EARLIER pre-move already loaded.
 	//
-	// (MEASURED before this column existed: on arm64-macOS every `float.fromString` SIGSEGV'd —
+	// (MEASURED without this column: on arm64-macOS every `float.fromString` SIGSEGV'd —
 	// `__float_magnitudeBitsFromText` reloaded a `bool` into x0 between the pre-moves of a four-
 	// argument call and handed the callee that `false` in place of the array it had already put there
 	// for argument 0. The x64 half of the same hole is recorded at `markRunStarts`, which stopped the
@@ -1279,9 +1279,9 @@ export function buildFuncTopology(module TargetModule, func IrFunction) returns 
 	var edgeFrom = CsrColumn.create()
 	var edgeTo = CsrColumn.create()
 
-	// Scratch reused across every block. Created per block, this was one heap allocation per
+	// Scratch reused across every block. Created per block, it would be one heap allocation per
 	// block of every function — and the skeleton is built twice per function (the critical-edge
-	// split, then the RPO reorder), so it was two per block per compile for a buffer that never
+	// split, then the RPO reorder), so two per block per compile for a buffer that never
 	// outlives its iteration. Same hoist-and-clear the pressure sweep's `ordered` uses.
 	var succIds = BlockIdArray.create()
 
@@ -1510,7 +1510,7 @@ function opIsCondBranch(op TargetOp) returns bool
 			arm64Syscall or
 			arm64Fcsel gives false
 
-		// `leaRegFunc`/`callReg` (P1.5-A1) are a `lea` and a call, and the Linux `x64Syscall` a call —
+		// `leaRegFunc`/`callReg` are a `lea` and a call, and the Linux `x64Syscall` a call —
 		// none is a conditional branch.
 		leaRegFunc or
 			callReg or
@@ -1535,11 +1535,11 @@ function opIsCondBranch(op TargetOp) returns bool
 		// A frame address is a body op, not a branch.
 		leaRegSlot gives false
 
-		// F1b: a fill ladder is a body op, not a branch — its branches are internal to its own encoding.
+		// A fill ladder is a body op, not a branch — its branches are internal to its own encoding.
 		x64MemFill or
 			arm64MemFill gives false
 
-		// F2: every atomic is a body op, not a branch — the arm64 retry loop's branches are internal to its own
+		// Every atomic is a body op, not a branch — the arm64 retry loop's branches are internal to its own
 		// encoding, exactly as the fill ladder's are.
 		x64LockCmpxchg or
 			x64LockXadd or
@@ -1550,23 +1550,23 @@ function opIsCondBranch(op TargetOp) returns bool
 			arm64AtomicRmw or
 			arm64ThreadPointer gives false
 
-		// EC16: every scaled-index form is a body op, not a branch.
+		// Every scaled-index form is a body op, not a branch.
 		leaRegBaseIndexScale or
 			loadRegBaseIndexScale or
 			storeBaseIndexScaleReg or
 			arm64AddLsl gives false
 
-		// EC18: the high multiply is a body op, not a branch.
+		// The high multiply is a body op, not a branch.
 		imulHighReg gives false
 
 		// arm64 `fneg` is a body op, not a branch.
 		arm64Fneg gives false
 
-		// G3: an ordered access is a body op, not a branch.
+		// An ordered access is a body op, not a branch.
 		arm64LoadAcquire or
 			arm64StoreRelease gives false
 
-		// EC18: the arm64 high multiply is a body op, not a branch.
+		// The arm64 high multiply is a body op, not a branch.
 		arm64Smulh gives false
 
 		// A coverage counter is a body op, not a branch.
@@ -1706,7 +1706,7 @@ export function unconditionalBranchTargetOf(module TargetModule, block IrBlock) 
 			arm64Syscall or
 			arm64Fcsel gives UnconditionalBranchTarget.none
 
-		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are value-producing body ops,
+		// `leaRegFunc`/`callReg` and the Linux `x64Syscall` are value-producing body ops,
 		// never a terminator — so never the ISA's unconditional branch.
 		leaRegFunc or
 			callReg or
@@ -1732,11 +1732,11 @@ export function unconditionalBranchTargetOf(module TargetModule, block IrBlock) 
 		// A frame address is a body op, not a branch.
 		leaRegSlot gives UnconditionalBranchTarget.none
 
-		// F1b: a fill ladder is a body op, not a branch — its branches are internal to its own encoding.
+		// A fill ladder is a body op, not a branch — its branches are internal to its own encoding.
 		x64MemFill or
 			arm64MemFill gives UnconditionalBranchTarget.none
 
-		// F2: every atomic is a body op, not a branch.
+		// Every atomic is a body op, not a branch.
 		x64LockCmpxchg or
 			x64LockXadd or
 			x64LockAdd or
@@ -1746,13 +1746,13 @@ export function unconditionalBranchTargetOf(module TargetModule, block IrBlock) 
 			arm64AtomicRmw or
 			arm64ThreadPointer gives UnconditionalBranchTarget.none
 
-		// EC16: every scaled-index form is a body op, not a branch.
+		// Every scaled-index form is a body op, not a branch.
 		leaRegBaseIndexScale or
 			loadRegBaseIndexScale or
 			storeBaseIndexScaleReg or
 			arm64AddLsl gives UnconditionalBranchTarget.none
 
-		// EC18: the high multiply is a body op, not a branch.
+		// The high multiply is a body op, not a branch.
 		imulHighReg gives UnconditionalBranchTarget.none
 		arm64Fneg gives UnconditionalBranchTarget.none
 		arm64LoadAcquire or
@@ -1781,10 +1781,10 @@ end 'terminatorIsUnconditionalBranch'
 // WHERE its two control ops are (`condBranch`, `terminator`), never what they target, so an
 // in-place retarget cannot leave a stale successor behind.
 //
-// That is the whole point: this used to find the `jcc` by SCANNING EVERY OP OF THE BLOCK,
-// so building the CFG skeleton was a full pass over every op of the function — and the
-// allocator builds one twice per function (the critical-edge split, then the RPO reorder).
-// It is now O(1) per block, making a topology build O(blocks + edges).
+// That is the whole point: finding the `jcc` by SCANNING EVERY OP OF THE BLOCK makes building
+// the CFG skeleton a full pass over every op of the function — and the allocator builds one
+// twice per function (the critical-edge split, then the RPO reorder). Indexed, it is O(1) per
+// block, making a topology build O(blocks + edges).
 // `checkCondBranchIndex` (above) asserts, against the ops, that the two indices name every
 // branch the block actually has.
 function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockIdArray)
@@ -1915,7 +1915,7 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 				arm64Syscall or
 				arm64Fcsel then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator arm64 op as its terminator")
 
-			// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are value-producing x64 body
+			// `leaRegFunc`/`callReg` and the Linux `x64Syscall` are value-producing x64 body
 			// ops, never a terminator — the same non-terminator panic the x64 ALU/data bands above raise.
 			leaRegFunc or
 				callReg or
@@ -2123,9 +2123,9 @@ end 'enclosingLoopBlocks'
 //
 // This REPLACES the classic iterative dataflow fixpoint (`liveIn = use ∪ (liveOut ∖ def)`, swept to
 // convergence over `blocks × values` bitsets). The fixpoint is the wrong algorithm for an SSA
-// program, and it was the last superlinear term in register allocation: it re-swept every block's
-// FULL value-space row every round, so a function with 9,600 blocks and 6,400 values touched 100
-// words per block per round — even when only ONE value was ever live. It cost ~60% of allocation.
+// program and is superlinear: it re-sweeps every block's FULL value-space row every round, so a
+// function with 9,600 blocks and 6,400 values touches 100 words per block per round — even when only
+// ONE value is ever live. MEASURED at ~60% of allocation.
 //
 // **In strict SSA the def DOMINATES every use, so liveness needs no iteration at all.** A value is
 // live exactly on the CFG paths running backward from each of its uses up to its (single) def. Cost is
@@ -2136,8 +2136,8 @@ end 'enclosingLoopBlocks'
 // SPLITTER runs to move one value's range after a split, because there is exactly one implementation
 // and it is the same one.
 //
-// It returns the number of block-marking steps — the honest cost counter, replacing the fixpoint's
-// iteration count (which no longer exists).
+// It returns the number of block-marking steps — the honest cost counter, where a fixpoint would
+// report an iteration count.
 
 // What reads a value at a use site.
 //
@@ -2165,8 +2165,8 @@ end 'UseKind'
 //
 // Every value in a function is one or the other, so `none` means it is not defined here at all.
 //
-// ⚠ AN ENUM, AND IT USED TO BE A PAYLOAD-CARRYING UNION — the same change `OpSlotRole` made against the
-// same cost, for the same reason. Maxon heap-boxes EVERY value of a payload-carrying union, `none`
+// ⚠ AN ENUM, NOT A PAYLOAD-CARRYING UNION — the same choice `OpSlotRole` makes against the same cost,
+// for the same reason. Maxon heap-boxes EVERY value of a payload-carrying union, `none`
 // included, and this is asked of EVERY VALUE CROSSING THE PEAK, at EVERY SPLIT: `isRematerializable`,
 // `hasStoreAnchor` and `storeFitsPool` each ask it once per candidate, so a block holding Θ(N) live
 // values across Θ(N) splits paid Θ(N²) HEAP ALLOCATIONS to read a three-way tag. MEASURED on
@@ -2201,9 +2201,9 @@ end 'ValueSpillSlot'
 //  • the cold-spill splitter, which asks all of that plus the op and the layout SEQUENCE of each
 //    use, and the handful of per-value flags its victim-eligibility gates test.
 //
-// It is ONE index because those are one traversal of the function. The splitter previously answered
-// every one of its questions with its own walk — per candidate value, per split — which made it
-// O(candidates × blocks × ops) per split and 61% of register allocation whenever it ran.
+// It is ONE index because those are one traversal of the function. Answering each of its questions
+// with its own walk — per candidate value, per split — is O(candidates × blocks × ops) per split, and
+// MEASURED at 61% of register allocation whenever the splitter ran.
 //
 // It is EDITABLE, which is the other half of that. A split changes almost nothing about a function —
 // one value's live range shrinks, a few reload ids appear, a few ops are inserted into a few blocks —
@@ -2223,7 +2223,7 @@ export type UseIndex
 
 	// Layout-ordered op count: body ops + terminators, over all blocks. A COUNT, not a bound on the
 	// sequence space — sequence numbers are block-relative and sparse (see `seqAt`), so the two are
-	// no longer the same number. This one bounds the splitter's runaway check; `seqLimit` is what
+	// not the same number. This one bounds the splitter's runaway check; `seqLimit` is what
 	// Belady's "no later use" sentinel needs.
 	export var opCount as OpSeq
 
@@ -2484,14 +2484,14 @@ export type UseIndex
 	// is exactly the shape a COLD spill needs: the store after its def and every reload before an
 	// after-peak use then cost no loop's hot path an instruction.
 	//
-	// ⚠ **THE EDGE HALF USED TO BE MISSING HERE AND MADE UP FOR BY A BLANKET BAR**, and that bar was a
-	// FALSE E5001 generator. `isColdSpillable` refused every edge-passed value outright — the only safe
-	// reading available while this column saw op operands only — so a value merely handed across a
+	// ⚠ **THE EDGE HALF IS HERE, AND A BLANKET BAR IN ITS PLACE IS A FALSE E5001 GENERATOR.** With this
+	// column seeing op operands only, the sole safe reading is `isColdSpillable` refusing every
+	// edge-passed value outright — so a value merely handed across a
 	// depth-0 `if` join (which is what EVERY `var` assigned in one arm of a branch is) counted as part
 	// of the working set of an unrelated loop it never touched. MEASURED on `stdlib/URL.maxon`'s
 	// `URL.parse`: 23 values "must be held in registers at once inside this loop", NINETEEN of them
 	// used ZERO times in it. The fact a cold spill actually needs is a DEPTH, and a depth is what this
-	// column now holds for both kinds of use.
+	// column holds for both kinds of use.
 	export function defAndUsesOffTheHotPath(valueId ValueId) returns bool
 		return not (try self.touchesHotLoop.get(valueId) otherwise panic("UseIndex.defAndUsesOffTheHotPath: value {valueId} out of range"))
 	end 'defAndUsesOffTheHotPath'
@@ -2918,8 +2918,8 @@ function indexOneOpFacts(module TargetModule, cfg FuncCfg, index UseIndex, block
 	let op = try module.ops.get(opIdx) otherwise panic("indexOneOpFacts: opIdx not in module.ops")
 	targetOpOperands(op, buf: buf)
 
-	// ONE question now, where there used to be two: the wider "is the value resident in a slot after
-	// this op?" and the narrower "did this op STORE it there?" are two readings of one role.
+	// ONE question, not two: the wider "is the value resident in a slot after this op?" and the
+	// narrower "did this op STORE it there?" are two readings of one role.
 	let slotRole = opFacts.slotRoleOf(op)
 
 	for k in 0 upto buf.count() 'eachOperand'
@@ -3028,8 +3028,8 @@ end 'buildUseIndex'
 // can change.
 //
 // ⭐ THE CANDIDATE OPS ARE KNOWN, AND THERE ARE O(uses of ONE value) OF THEM. Re-reading whole blocks
-// was the third of the four O(block)-per-split walks, and on a function that is one basic block that is
-// the whole function once per split. The set is exactly:
+// is one of the O(block)-per-split walks, and on a function that is one basic block that is the whole
+// function once per split. The set is exactly:
 //
 //  • every op that named the VICTIM before the split. Those are its use records — which are still on
 //    its thread at this point, with their sequence numbers already repaired by `SplitEdits.commit` —
@@ -3262,9 +3262,9 @@ end 'BlockSet'
 //
 // VERSION STAMPS, not bitsets: clearing a `numBlocks` memo between walks would be O(blocks) per value,
 // i.e. the very O(blocks × values) term the path exploration exists to remove. The stamp is a
-// GENERATION, bumped once per walk. It used to be `v + 1`, which needs no clearing between VALUES —
-// and that is exactly what will not do here, because a split walks the SAME value TWICE (once to unmark
-// its old live range, once to mark its new one) and a `v + 1` stamp would make the second walk believe
+// GENERATION, bumped once per walk, and NOT `v + 1`: that needs no clearing between VALUES, which is
+// exactly what will not do here, because a split walks the SAME value TWICE (once to unmark its old
+// live range, once to mark its new one) and a `v + 1` stamp would make the second walk believe
 // it had already run.
 //
 // The live-out stamp also DEDUPES: a block that is a predecessor of several blocks in which `v` is live
@@ -3563,9 +3563,9 @@ end 'sweepEstablishedRegisters'
 // carrying the reuse-copy transient, plus its dead-phi reservations). `maxPressure` is the max of
 // these over the function — the χ = ω the feasibility decision needs.
 //
-// ⚠ IT IS THE WHOLE-FUNCTION BUILD'S ONLY. It used to be per block because the SPLITTER re-ran it per
-// dirty block — and on a function that is one basic block that is a walk of the whole function, once
-// per split. All three of its outputs are now restated against what a split actually moved:
+// ⚠ IT IS THE WHOLE-FUNCTION BUILD'S ONLY. Per-block would mean the SPLITTER re-running it per dirty
+// block — and on a function that is one basic block that is a walk of the whole function, once per
+// split. All three of its outputs are restated against what a split actually moved:
 // `forbidden` from `PressureIndex.clobberOr` (a range OR per block of the value's range),
 // the dead-phi count only for the one block a block-arg's liveness can move in, and the demand off the
 // positional index in O(1). See `rebuildForbiddenOf`, `refreshDeadPhisFor` and `refreshBlockDemands`.
@@ -3582,14 +3582,14 @@ end 'sweepEstablishedRegisters'
 // count — stay sound. The count is RECORDED per block, not just folded into the max: the splitter's
 // peak-finder needs the same number at every op of the block.
 //
-// ⚠ THIS PARAGRAPH USED TO NAME A *"coloring cannot fail when maxPressure <= pool"* INVARIANT, AND NO
-// SUCH INVARIANT EXISTS (A5g, 2026-08-04). `maxPressure <= pool` is NECESSARY and not SUFFICIENT: a
+// ⚠ THERE IS NO *"coloring cannot fail when maxPressure <= pool"* INVARIANT. `maxPressure <= pool` is
+// NECESSARY and not SUFFICIENT: a
 // forbidden set shrinks a value's pool, so the colorer can run out with pressure comfortably under the
 // pool — measured on four programs whose failing points Hall's exact verdict calls FEASIBLE. What this
 // number underwrites is the PIGEONHOLE half only. The confined half is `HallCondition`'s, and the
 // residue neither can prevent — greedy is not exact for list colouring — is repaired by
-// `SplitDriver.repairAtExhaustion` / `repairByEvictingOccupant`. Keeping the old sentence here would be
-// the same one-fact-written-twice this rung corrected in `HallCondition.hallVerdictAt`'s own header.
+// `SplitDriver.repairAtExhaustion` / `repairByEvictingOccupant`. Restating that argument here would be
+// the same one-fact-written-twice `HallCondition.hallVerdictAt`'s own header warns about.
 function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal CfgIndex, runs ColdBlockRuns, live LiveSets, forbidden RegMaskColumn, classes ValueClassColumn, deadPhis RegCountColumn, wordsPerRow BitWordCount, scratch PressureSweepScratch, demandOut RegCountColumn, opFacts OpVariantFacts)
 	let block = blockAt(module, topo: topo, local: blockLocal)
 	var liveRow = scratch.liveRow
@@ -3832,7 +3832,7 @@ function collectEntryParamCaptures(module TargetModule, topo FuncTopology, param
 				arm64Syscall or
 				arm64Fcsel then break 'capture'
 
-			// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are not a `movRegReg`, so none
+			// `leaRegFunc`/`callReg` and the Linux `x64Syscall` are not a `movRegReg`, so none
 			// is an entry param capture — skipped exactly like every other non-`movRegReg` op here.
 			leaRegFunc or
 				callReg or
@@ -3859,11 +3859,11 @@ function collectEntryParamCaptures(module TargetModule, topo FuncTopology, param
 			// Not a `movRegReg`, so never an entry param capture.
 			leaRegSlot then break 'capture'
 
-			// F1b: not a `movRegReg`, so never an entry param capture.
+			// Not a `movRegReg`, so never an entry param capture.
 			x64MemFill or
 				arm64MemFill then break 'capture'
 
-			// F2: not a `movRegReg`, so never an entry param capture.
+			// Not a `movRegReg`, so never an entry param capture.
 			x64LockCmpxchg or
 				x64LockXadd or
 				x64LockAdd or
@@ -3873,23 +3873,23 @@ function collectEntryParamCaptures(module TargetModule, topo FuncTopology, param
 				arm64AtomicRmw or
 				arm64ThreadPointer then break 'capture'
 
-			// EC16: not a `movRegReg`, so never an entry param capture.
+			// Not a `movRegReg`, so never an entry param capture.
 			leaRegBaseIndexScale or
 				loadRegBaseIndexScale or
 				storeBaseIndexScaleReg or
 				arm64AddLsl then break 'capture'
 
-			// EC18: not a `movRegReg`, so never an entry param capture.
+			// Not a `movRegReg`, so never an entry param capture.
 			imulHighReg then break 'capture'
 
 			// arm64 `fneg` is not a `movRegReg`, so never an entry param capture.
 			arm64Fneg then break 'capture'
 
-			// G3: an ordered access is not a `movRegReg`, so never an entry param capture.
+			// An ordered access is not a `movRegReg`, so never an entry param capture.
 			arm64LoadAcquire or
 				arm64StoreRelease then break 'capture'
 
-			// EC18: `SMULH` is not a `movRegReg`, so never an entry param capture.
+			// `SMULH` is not a `movRegReg`, so never an entry param capture.
 			arm64Smulh then break 'capture'
 
 			// A coverage counter is not a `movRegReg`, so never an entry param capture.
@@ -4563,12 +4563,13 @@ end 'addOpTransientPressure'
 
 // ⭐⭐ **THE OP'S ONE TRANSIENT-HOLDING DEF, SELECTED IN EXACTLY ONE PLACE.** Both transient questions
 // — the FULL-POOL one above and the CONFINED one below — begin by finding the same operand under the
-// same rule, and each used to walk `buf` for it with its own copy of that rule.
+// same rule, and walking `buf` for it in each with its own copy of that rule is one fact written
+// twice, in the file whose most reliable bug signature it is.
 //
-// ⛔ That was one fact written twice, in the file whose most reliable bug signature it is. The premise
-// *"no `TargetOp` defines more than one value, so the FIRST virtual def decides the whole answer"* lived
-// in two loops; `refreshTransientAt` PANICS when a second virtual def appears (it counts them), while
-// the second copy would silently have taken the first and answered for an op it does not describe. A
+// ⛔ The premise *"no `TargetOp` defines more than one value, so the FIRST virtual def decides the
+// whole answer"* would then live in two loops; `refreshTransientAt` PANICS when a second virtual def
+// appears (it counts them), while a second copy would silently take the first and answer for an op it
+// does not describe. A
 // clause added to one walk and not the other is a wrong pressure figure — a colorer panic or an
 // unrelieved point — never a compile error.
 //
@@ -4598,11 +4599,10 @@ end 'opTransientDefOf'
 // callee-saved registers, while the `widened` it reuses crosses no call and was very likely coloured
 // into a caller-saved one — so the def must find a SIXTH callee-saved register, and there are five.
 //
-// ⛔ The confined census used to see none of this, on the premise recorded at `analyzeBlockPressure`
-// that *"a transient is not a value, so it is not CONFINED by anything"*. A reuse def IS a value. The
-// result was a point that overflowed the callee-saved subset invisibly: the splitter relieved
-// nothing, and the colorer died with `forbidden` covering the caller-saved half and the held set
-// covering the rest (`specs/register-pressure.md`'s `reuse-def-confined-by-a-later-call`).
+// ⛔ A confined census resting on `analyzeBlockPressure`'s premise that *"a transient is not a value,
+// so it is not CONFINED by anything"* sees none of this, because a reuse def IS a value. What it misses
+// is a point that overflows the callee-saved subset invisibly: the splitter relieves nothing, and the
+// colorer dies with `forbidden` covering the caller-saved half and the held set covering the rest (`specs/register-pressure.md`'s `reuse-def-confined-by-a-later-call`).
 //
 // The inheritance test is a MASK CONTAINMENT and therefore exact without knowing any colour yet:
 // the def can be guaranteed the input's register only when EVERY register the input may hold is one
@@ -4623,11 +4623,10 @@ export function opConfinedTransient(buf OperandList, liveRow BitWordArray, liven
 		// ⛔⛔ **A PLAIN DEF THAT IS LIVE NOWHERE IS THE OTHER HALF OF THIS HOLE, AND IT IS NOT COVERED
 		// BY BEING "its own live range's demand".** A def the census sees at every op of its range needs
 		// nothing here; a def with NO range is seen at no op, while its register is as real as any
-		// other — which is the sentence `chooseRegister`'s exhaustion panic already carried about the
-		// FULL pool ("a reuse copy and a DEAD DEF are the two"). The full-pool half of it was closed
-		// when `addReuseTransientPressure` became `addOpTransientPressure`; this is the confined half,
-		// which was left behind because the premise this arm used to state — *"its confined demand is
-		// its own live range's"* — is vacuously true of a value that has no live range.
+		// other — which is the sentence `chooseRegister`'s exhaustion panic carries about the FULL pool
+		// ("a reuse copy and a DEAD DEF are the two"). `addOpTransientPressure` closes the full-pool half;
+		// this is the confined half, and *"its confined demand is its own live range's"* does not cover it,
+		// being vacuously true of a value that has no live range.
 		//
 		// The mask is what makes it a CONFINED competitor rather than merely a full-pool one: a dead
 		// def admissible everywhere competes for the machine and `addOpTransientPressure` bills it, but
@@ -4745,10 +4744,9 @@ end 'stepRowBackwardOverOperands'
 // For each value LIVE ACROSS this op (in `liveRow`, and not one of the op's own defs), add
 // `clobberMask` to its forbidden registers.
 //
-// ⚠ IT IS THE WHOLE-FUNCTION BUILD'S ONLY, and it used to take a SCOPE so a split could re-derive just
-// the handful of masks it invalidated by re-walking every op of every dirty block. That is what the
-// splitter now reads off `PressureIndex.clobberOr` — one RANGE OR per block of the value's live range
-// instead of a walk of each — so the narrow scope has no caller left and the parameter went with it.
+// ⚠ IT IS THE WHOLE-FUNCTION BUILD'S ONLY, and takes no SCOPE. A split re-deriving just the handful of
+// masks it invalidated would re-walk every op of every dirty block; it reads `PressureIndex.clobberOr`
+// instead — one RANGE OR per block of the value's live range — so a narrow scope has no caller.
 //
 // It walks the SET BITS of the live row, not the value space: this runs at every CLOBBER op, so testing
 // each value id would be O(clobber-ops × values). `liveBuf` is scratch reused across ops.
@@ -4817,7 +4815,7 @@ end 'operandImplicitTouchOf'
 // a call's `implicitDefs` clobber AFTER its args are consumed, so an arg (an EARLY use)
 // may legally sit in a caller-saved (clobbered) arg register.
 //
-// M5.6 SIDESTEPS this rather than making the helper position-aware: the call (`callDirect`)
+// THE CALL SHAPE SIDESTEPS this rather than the helper being position-aware: `callDirect`
 // carries NO explicit register operands — its arguments are PRE-MOVED into their physical
 // ABI registers by separate `mov argReg[k], arg_k` ops (see StdToX64Conversion.lowerCall),
 // so `targetOpOperands(callDirect)` is empty and this helper iterates nothing on a call.
@@ -4851,7 +4849,7 @@ end 'forbidOperandsFromImplicit'
 //    lowers to `mm_alloc` + `mm_incref`). `indexBlockFacts` asked both questions of every op of every
 //    DIRTY block of every split, so the two `none`s were TWO HEAP ALLOCATIONS PER OP PER SPLIT, for the
 //    ~98% of ops that touch no slot at all. An enum allocates nothing, and the SLOT — the only part
-//    that needs the op's payload — is now read only where there is one (`slotOfSlotOp`).
+//    that needs the op's payload — is read only where there is one (`slotOfSlotOp`).
 //  • IT IS A FUNCTION OF THE VARIANT ALONE, so it memoizes (see `OpVariantFacts`).
 export enum OpSlotRole
 	// Neither writes a value into a spill slot nor reads one out of one. Every op but the two below.
@@ -5148,7 +5146,7 @@ function deriveSlotRole(op TargetOp) returns OpSlotRole
 			arm64Syscall or
 			arm64Fcsel gives OpSlotRole.touchesNoSlot
 
-		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` write no stack slot — a `lea`, a
+		// `leaRegFunc`/`callReg` and the Linux `x64Syscall` write no stack slot — a `lea`, a
 		// call and a syscall are not spill stores, exactly like the `.data` store above.
 		leaRegFunc or
 			callReg or
@@ -5181,11 +5179,11 @@ function deriveSlotRole(op TargetOp) returns OpSlotRole
 		// that a value lives there and let a later reload read a record as if it were that value.
 		leaRegSlot gives OpSlotRole.touchesNoSlot
 
-		// F1b: a fill ladder touches no stack SLOT — it writes a heap region through a register the isel loaded.
+		// A fill ladder touches no stack SLOT — it writes a heap region through a register the isel loaded.
 		x64MemFill or
 			arm64MemFill gives OpSlotRole.touchesNoSlot
 
-		// F2: an atomic touches no stack SLOT — it reads and writes the word its address operand names, which is
+		// An atomic touches no stack SLOT — it reads and writes the word its address operand names, which is
 		// a heap or global address the isel handed it, and the two thread-token reads touch no memory the
 		// residency model tracks at all.
 		x64LockCmpxchg or
@@ -5197,25 +5195,25 @@ function deriveSlotRole(op TargetOp) returns OpSlotRole
 			arm64AtomicRmw or
 			arm64ThreadPointer gives OpSlotRole.touchesNoSlot
 
-		// EC16: a scaled-index access touches no stack SLOT — it addresses the heap or global region its
+		// A scaled-index access touches no stack SLOT — it addresses the heap or global region its
 		// base register names, exactly as `loadRegBaseDisp`/`storeBaseDispReg` do.
 		leaRegBaseIndexScale or
 			loadRegBaseIndexScale or
 			storeBaseIndexScaleReg or
 			arm64AddLsl gives OpSlotRole.touchesNoSlot
 
-		// EC18: the high multiply touches no memory at all — its operands and its whole product are registers.
+		// The high multiply touches no memory at all — its operands and its whole product are registers.
 		imulHighReg gives OpSlotRole.touchesNoSlot
 
 		// arm64 `fneg` touches registers only.
 		arm64Fneg gives OpSlotRole.touchesNoSlot
 
-		// G3: an ordered access addresses the heap through its base register, never a stack SLOT —
+		// An ordered access addresses the heap through its base register, never a stack SLOT —
 		// `loadRegBaseDisp`/`storeBaseDispReg`'s answer exactly.
 		arm64LoadAcquire or
 			arm64StoreRelease gives OpSlotRole.touchesNoSlot
 
-		// EC18: `SMULH` touches no memory at all — its operands and its result are registers.
+		// `SMULH` touches no memory at all — its operands and its result are registers.
 		arm64Smulh gives OpSlotRole.touchesNoSlot
 
 		// A coverage counter touches no SLOT — its address is a link-time constant, not a frame offset.

@@ -317,7 +317,7 @@ function buildGtTrampolineChunk() returns FunctionCodeChunk
 	encodeStoreBaseDispReg(code, base: GtTrampGtReg, disp: GtOffThrew as Imm32, srcReg: X64Register.r10)
 	encodeMovRegImm32(code, dest: X64Register.rax, value: GtStatusCompleted)
 
-	// ⭐⭐ **THIS `mov` IS THE PUBLICATION, AND ON x64 IT IS ALREADY A STORE-RELEASE (G3).** A reader on
+	// ⭐⭐ **THIS `mov` IS THE PUBLICATION, AND ON x64 IT IS ALREADY A STORE-RELEASE.** A reader on
 	// another M — an awaiter's registration, `__gt_is_complete` — tests `gt.status == completed` and then reads
 	// the two words stored just above, so the flag must not become visible before them. x86-64 is TOTAL STORE
 	// ORDER — stores are never reordered with other stores — so an ordinary `mov` gives exactly that, and
@@ -337,7 +337,7 @@ function buildGtTrampolineChunk() returns FunctionCodeChunk
 	return FunctionCodeChunk.createWith(GtTrampolineName, code: code, callFixups: callFixups, rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create(), rdataConstants: GlobalDataTable.create())
 end 'buildGtTrampolineChunk'
 
-// --- The Win32 syscall shim (P1.5-B1a′ slice 1) ---
+// --- The Win32 syscall shim ---
 //
 // A green thread's kernel call runs on its M's 64 KB SYSTEM stack, not the GT's own small stack: heavy
 // Win32 calls (CreateProcessA, WriteFile) use deep stack and probe the Windows TIB, and would overrun a
@@ -537,7 +537,7 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		CreateThread gives CreateThreadStackArgWords
 		ReadFile gives ReadFileStackArgWords
 
-		// O3. FIVE arguments, so one word on the stack — derived from the same constant
+		// FIVE arguments, so one word on the stack — derived from the same constant
 		// `stdOpOutgoingArgBytes` reserves the frame with, never restated here.
 		MapViewOfFile gives MapViewOfFileStackArgWords
 
@@ -583,7 +583,7 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		WriteConsoleW gives WriteConsoleStackArgWords  // 5: hConsoleOutput, lpBuffer, nNumberOfCharsToWrite, lpNumberOfCharsWritten, lpReserved
 		MultiByteToWideChar gives MultiByteToWideCharStackArgWords  // 6: CodePage, dwFlags, lpMultiByteStr, cbMultiByte, lpWideCharStr, cchWideChar
 
-		// O3. Its fourth sibling `MapViewOfFile` takes five and is stated with the other non-zero counts above.
+		// Its fourth sibling `MapViewOfFile` takes five and is stated with the other non-zero counts above.
 		GetEnvironmentVariableA gives 0  // 3: lpName, lpBuffer, nSize
 		OpenFileMappingA gives 0  // 3: dwDesiredAccess, bInheritHandle, lpName
 		GetTickCount64 gives 0  // 0
@@ -628,7 +628,7 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		// stack slot besides, so the switch cannot move the buffer under it either.
 		QueryThreadCycleTime gives 0  // 2: ThreadHandle, CycleTime
 
-		// G1: both TLS imports are register-only. ⚠ **NEITHER IS EVER SHIMMED IN PRACTICE** — `TlsAlloc` runs
+		// Both TLS imports are register-only. ⚠ **NEITHER IS EVER SHIMMED IN PRACTICE** — `TlsAlloc` runs
 		// once in `__gt_init` and `TlsSetValue` at each M's adoption, and every one of those sites executes on
 		// an OS thread whose current GT has `stackBase == 0`, which is exactly the shim's direct-call guard. The
 		// count is stated anyway because this match is TOTAL: an import with no arm is a compile error, which is
@@ -690,7 +690,7 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 end 'gtShimStackArgWordsOf'
 
 // ==========================================================================
-// ⭐⭐⭐ THE SYSCALL BRACKET (W213-C3) — WHICH IMPORTS MAY COST THIS MACHINE ITS PROCESSOR
+// ⭐⭐⭐ THE SYSCALL BRACKET — WHICH IMPORTS MAY COST THIS MACHINE ITS PROCESSOR
 // ==========================================================================
 
 // ⛔⛔ **THE CLASSIFICATION IS MANDATORY, AND HERE IS THE CASE THAT PROVES IT RATHER THAN THE PRINCIPLE THAT
@@ -1163,7 +1163,7 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 	// before the call, which clobbers the caller-saved rax anyway).
 	emitRepointTibToSystemStack(code, topReg: X64Register.rax)
 
-	// ⭐⭐ **THE SYSCALL BRACKET'S NEAR SIDE (W213-C3), FOR A `blocking` IMPORT ONLY.** It is emitted HERE —
+	// ⭐⭐ **THE SYSCALL BRACKET'S NEAR SIDE, FOR A `blocking` IMPORT ONLY.** It is emitted HERE —
 	// after the TIB repoint and immediately before the call — because rax and r11 are dead at exactly this
 	// point and nowhere earlier: rax carried the M through the guard and the system-stack top through the
 	// switch, and r11 was the stack-arg copy shuttle. See `emitGtEnterSyscall`.
@@ -1178,9 +1178,9 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 	// after the shim — survives. The restore IS a TIB-from-GT load, the same operation the context switch does
 	// on switch-in. It cannot bail; see `emitLoadCurrentMOrBailless`.
 	//
-	// ⭐ **THIS IS THE READ W213 WOULD HAVE BROKEN (C1).** It happens AFTER a kernel call that may have
+	// ⭐ **THIS READ MUST GO THROUGH THE M, NOT THE P.** It happens AFTER a kernel call that may have
 	// blocked for an arbitrarily long time — precisely the window a handoff takes a P in — so answering it
-	// through the P would have handed this M whatever green thread the P's NEW M had since published. Through
+	// through the P would hand this M whatever green thread the P's NEW M had since published. Through
 	// the M it is this thread's own answer by construction.
 	emitLoadCurrentMOrBailless(code, rdataRelocs: rdataRelocs, dest: ShimGtReg, os: Os.windows)
 	encodeLoadRegBaseDisp(code, destReg: ShimGtReg, base: ShimGtReg, disp: MOffCurrentGt as Imm32, wide: true)
@@ -1192,7 +1192,7 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rsp, src: ShimGtRspReg, wide: true)
 	encodePopReg(code, reg: ShimGtRspReg)  // restore the caller's r10
 
-	// ⭐⭐ **THE SYSCALL BRACKET'S FAR SIDE (W213-C3), ON THE GT STACK.** It is the LAST thing the shimmed road
+	// ⭐⭐ **THE SYSCALL BRACKET'S FAR SIDE, ON THE GT STACK.** It is the LAST thing the shimmed road
 	// does — `emitGtExitSyscall` carries why it may not run one instruction earlier, on the system stack — and
 	// its own not-stolen arm branches straight to `done`, so the `jmp` below serves only the slow path.
 	if bracketed 'collectTheHandoff'

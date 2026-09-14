@@ -152,9 +152,9 @@ let BuiltinProtocolSoleMethodIndex = 0 as WitnessMethodIndex
 // operands are bitcast back and the mask is DERIVED from the very formals that decided the bitcast —
 // `floatParamMaskOf`, never a written-out `3` — so the two halves of one fact cannot disagree.
 //
-// ⚠ The retired `CharacterSet` member probe passed `false` and that was not an omission: its key was `Character` by
-// construction, and a float never reaches a hash table's probe at all — a float type ARGUMENT is E2062 one
-// gate earlier, because a type parameter is an opaque general-purpose slot a float has no way through.
+// ⚠ A hash table's probe passes `false` here, and that is not an omission: a float never reaches one — a
+// float type ARGUMENT is E2062 one gate earlier, because a type parameter is an opaque general-purpose slot
+// a float has no way through.
 function emitEquatableWitnessEquals(module StdModule, block IrBlock, eqWitness ValueId, a ValueId, b ValueId, operandsAreFloat bool, ids ValueMinter) returns ValueId
 	let formals = twoF64Params() if operandsAreFloat else twoI64Params()
 	var lhs = a
@@ -325,13 +325,11 @@ end 'candidateImplName'
 // ⚠ **"NAMES BUT DOES NOT DEFINE" — AND THE SECOND HALF IS NOT PEDANTRY, IT IS A MEASURED WRONG ANSWER.**
 // A synthesized impl exists to SUPPLY a symbol nothing else provides; a symbol the module already defines
 // needs none, and installing one anyway appends a SECOND function under that name, which the by-name link
-// then resolves to whichever it likes. **This paragraph used to except `int.*` — *"`int` is a keyword, so no
-// user method can wear that qualifier"* — and W133 ended that**: an `extension int implements Hashable`
-// declares a real `int.hash`, so all three primitives now collide exactly as `String.*` always could. The
-// narrowing below was already the right shape and needed no change; what needed changing is the reason
-// written beside it, because a premise that has quietly expired is how the next reader talks themselves out
-// of the guard. `String.*` was the first: a user `type String` with its own `hash()` mints exactly the
-// symbol `String.hash`. MEASURED — crediting that call site made `String.create(7).hash()` return **5381**,
+// then resolves to whichever it likes. **`int.*` IS NO EXCEPTION**, though `int` is a keyword no user
+// method can wear as a qualifier: an `extension int implements Hashable` declares a real `int.hash`, so all
+// three primitives collide exactly as `String.*` does. `String.*` is the plainest case: a user
+// `type String` with its own `hash()` mints exactly the symbol `String.hash`. MEASURED — crediting that
+// call site made `String.create(7).hash()` return **5381**,
 // djb2's seed read off the user's box, instead of `7`. So the candidates are narrowed to the UNDEFINED ones
 // before a single reference is credited.
 //
@@ -364,11 +362,9 @@ end 'referencedBuiltinImpls'
 // The candidate impls no function in the module already defines — see `referencedBuiltinImpls`' second
 // warning for the wrong answer this exists to prevent.
 //
-// ⭐ **ONE WALK OF `module.functions`, NOT ONE PER CANDIDATE (A2l/2).** It used to ask a
-// `moduleDefinesFunction` helper per impl, and each of those rescanned the WHOLE array — O(impls ×
-// functions), which with a constant eleven candidates meant ELEVEN full walks of every compile's function
-// array. (The comment here claimed the array was "walked once"; it was not. That is the shape this batch
-// exists to remove, in its cost form rather than its correctness form.)
+// ⭐ **ONE WALK OF `module.functions`, NOT ONE PER CANDIDATE.** A `moduleDefinesFunction` helper asked per
+// impl rescans the WHOLE array each time — O(impls × functions), which with a constant eleven candidates is
+// ELEVEN full walks of every compile's function array.
 //
 // The eleven questions are the same question asked of one array, so it is asked once per FUNCTION instead:
 // the outer walk reads each `IrFunction` record exactly once — the expensive half — and the inner test is
@@ -1081,10 +1077,9 @@ end 'buildStrHash'
 // ⚠ **IT OWNS THE TAIL RATHER THAN HANDING THE ACCUMULATOR BACK, AND THAT IS A CODEGEN FACT RATHER THAN A
 // STYLE ONE.** Block creation ORDER is emission order, which decides layout and therefore register
 // assignment. Returning `(done, h)` for the caller to finish would make the caller mint `done` — before the
-// loop's own two blocks, inverting the order `buildStrHash` had before this emitter was extracted. MEASURED:
-// that inversion alone moved `String.hash`'s register allocation in **42 committed fragments**, for a body
-// computing the identical djb2. Owning the tail costs nothing, because BOTH callers' tails were already the
-// same line.
+// loop's own two blocks, inverting the order `buildStrHash` emits in. MEASURED: that inversion alone moved
+// `String.hash`'s register allocation in **42 committed fragments**, for a body computing the identical
+// djb2. Owning the tail costs nothing, because BOTH callers' tails are the same line.
 //
 // ⚠ **SHARED FOR `emitByteRangeCompareLoop`'s REASON, one protocol over.** `String.hash`, `Character.hash`
 // and `Array.hash` all fold raw bytes with djb2, and the algorithm is a CONTRACT between them and every

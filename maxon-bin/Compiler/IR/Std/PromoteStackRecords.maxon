@@ -132,7 +132,7 @@
 // `__stack_pointer`, no shadow stack, and no frame for a slot to index (`StdToWasm`'s header: *"the call
 // stack is the ENGINE's, not addressable memory"*). x64 and arm64 both already own the mechanism this pass
 // needs — a reserved region on the spiller's own slot grid, addressed by `TargetOp.leaRegSlot` — and wasm
-// owns none of it. Giving wasm one is a shadow-stack rung (a mutable global plus a bump on entry and a
+// owns none of it. Giving wasm one is a shadow-stack change (a mutable global plus a bump on entry and a
 // restore at every return, which interacts with asyncify), not an extension of anything here. Until then
 // this pass does nothing on that lane and `StdToWasm`'s arms panic rather than guess.
 
@@ -272,7 +272,7 @@ let MmDecrefArgCount = 1 as ParamCount
 export function promoteStackRecords(project Project, module StdModule, usesGreenThreads bool)
 	if project.target.cpu == CpuArch.wasm32 'noFrameToPromoteInto'
 		// See this file's header. Not a refusal of the program — the records simply stay on the heap, which
-		// is where every target had them before this pass existed.
+		// is where every target puts them without this pass.
 		return
 	end 'noFrameToPromoteInto'
 
@@ -655,7 +655,7 @@ type ConstructorScan
 			osEnvBlock or
 				osEnvBlockFree gives false
 
-			// G3: an ordered access to a stack record would be a publication nothing can read — a promoted
+			// An ordered access to a stack record would be a publication nothing can read — a promoted
 			// record is frame-local. Refusing admission leaves the record on the heap, which is correct.
 			loadAcquire or
 				storeRelease gives false
@@ -1727,7 +1727,7 @@ function opDropsAPromotedRecord(module StdModule, opIdx OpIndex, promoted BoolAr
 		osEnvBlock or
 			osEnvBlockFree gives false
 
-		// G3: an ordered access to a stack record would be a publication nothing can read — a promoted
+		// An ordered access to a stack record would be a publication nothing can read — a promoted
 		// record is frame-local. Refusing admission leaves the record on the heap, which is correct.
 		loadAcquire or
 			storeRelease gives false
