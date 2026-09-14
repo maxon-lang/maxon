@@ -55,7 +55,7 @@
 // under a quarter of its stack is moved onto one half the size (`__gt_stack_shrink`, Go's `shrinkstack`). So deep
 // recursion inside an `async` body just works, and a thread that once recursed deep does not keep that stack for
 // life. The GT record comes from the scheduler's record arena and its stack from `osAllocPages`, both INVISIBLE to
-// the `__mm_alloc_count` leak gate (`GtLiveCountLabel` is the gate for them), and a finished GT's stack is
+// the heap leak gate's tracked live column (`GtLiveCountLabel` is the gate for them), and a finished GT's stack is
 // RELEASED on completion (`__gt_runner_done` → `osFreePages`).
 
 // --- GreenThread struct offsets ---
@@ -314,9 +314,9 @@ export let GtOffParkArg = GtOffParkKind + PointerFieldBytes
 export let GtOffParkGen = GtOffParkArg + PointerFieldBytes
 
 // ⭐⭐⭐ **WHAT THIS GREEN THREAD HAS ALLOCATED AND FREED — the memory columns a POOL can be measured with,
-// and the process-wide ones structurally cannot.** `__mm_alloc_total` and its five siblings are one set of
-// words for the whole process, so a bracket opened inside one worker counts every other worker's traffic
-// too: MEASURED, `regalloc:splitting` reported 1,207,232,853 allocations at sixteen processors against
+// and the process-wide ones structurally cannot.** `__mm_counter_alloc_total` and its five siblings sum every
+// row, so a bracket opened inside one worker counts every other worker's traffic too: MEASURED,
+// `regalloc:splitting` reported 1,207,232,853 allocations at sixteen processors against
 // 77,890,562 at one, for the identical compile. The `phase regalloc` row and the run total stayed right,
 // because those brackets are the main thread's and the main thread is the only one open at the time — only
 // the sub-phase rows lied, silently, into `--metrics`, `--log=compiler:debug`, `scale-test` and
@@ -1531,13 +1531,14 @@ let GtRunQueueTailLabel = b"__gt_run_queue_tail"
 // struct goes back only when both the runner and the consumer are finished (`GtOffTeardown`).
 
 // ⭐ **THE GREEN-THREAD LIVE COUNT — the leak gate for GT records and stacks.** A GT record comes from the
-// scheduler's record arena and its seed stack from `osAllocPages`, both INVISIBLE to `__mm_alloc_count`,
-// so a spawned-but-never-reclaimed green thread leaks past the `__mm` gate silently. `__gt_spawn`
-// increments this — not `main`'s thread, which has no promise and which `__gt_run_main` reclaims before the
-// count is read, nor an M's inline scheduler context, which is never spawned; every reclaim decrements it
-// — the `__gt_await`/`__gt_try_await` tail (an awaited GT) AND `__gt_promise_drop` (an un-awaited, dropped
-// GT). At program exit the leak gate (`MmRuntime.buildMmLeakCheck`, the ONE OS-exit check) asserts it is
-// zero: a non-zero count means a green thread was neither awaited nor dropped — a leak (or, negative, an
+// scheduler's record arena and its seed stack from `osAllocPages`, and neither is a box, so both are
+// INVISIBLE to the tracked live column and a spawned-but-never-reclaimed green thread leaks past the `__mm`
+// gate silently. `__gt_spawn` increments this — not `main`'s thread, which has no promise and which
+// `__gt_run_main` reclaims before the count is read, nor an M's inline scheduler context, which is never
+// spawned; every reclaim decrements it — the `__gt_await`/`__gt_try_await` tail (an awaited GT) AND
+// `__gt_promise_drop` (an un-awaited, dropped GT). At program exit the leak gate
+// (`MmRuntime.buildMmLeakCheck`, the ONE OS-exit check) asserts it is zero: a non-zero count means a green
+// thread was neither awaited nor dropped — a leak (or, negative, an
 // over-reclaim). EXPORTED because that gate lives in `MmRuntime` and reads this slot directly. Its zero
 // image is the initial state — no GT spawned yet.
 export let GtLiveCountLabel = b"__gt_live_count"
@@ -2094,7 +2095,7 @@ export function requireQuotableSharedSpellings(spelling ByteArray, alsoSpelled B
 end 'requireQuotableSharedSpellings'
 
 // The GT runtime's `.data` slots, appended to the user's globals before `layOut` orders them — ordinary
-// i64 slots in every respect, exactly like MmRuntime's `runtimeGlobals()`. Every one is read only by Std
+// i64 slots in every respect, exactly like `SlabRuntime.slabRuntimeGlobals`. Every one is read only by Std
 // bodies, so each is laid out exactly where a surviving body names it (`DataReach.walked`).
 //
 // Empty on a target with no green-thread stack: the seed of `GtSeedBytesLabel` is that stack's size,
@@ -2178,7 +2179,7 @@ export function ioCompletionShape(target Target) returns IoCompletionShape
 	end 'os'
 end 'ioCompletionShape'
 
-export function installGtRuntime(module StdModule, globalData GlobalDataTable, asyncTrace bool, usesChildPipes bool, usesStreaming bool, rawFree ByteArray, target Target, streamState EnumLayout)
+export function installGtRuntime(module StdModule, globalData GlobalDataTable, asyncTrace bool, usesChildPipes bool, usesStreaming bool, target Target, streamState EnumLayout)
 	// The first function index this install owns — the range `assertCompletedPublicationIsOrdered` checks at
 	// the end. Taken from the module rather than assumed to be zero: the runtime installs run after the whole
 	// user program is already lowered into this module.
@@ -2200,7 +2201,7 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 
 	// ⭐ The P/M half — the processor structure, the TLS door, the scheduler loop and the wake. FIRST in the
 	// list because `__gt_init` calls `__sched_init_procs` before it does anything else.
-	installSchedRuntime(module, target: target, rawFree: rawFree)
+	installSchedRuntime(module, target: target)
 	buildGtInit(module)
 
 	// ⭐ ALL THREE spawn doors, from one body. Whether a program can REACH one is `DeadFunctionElimination`'s
@@ -2223,7 +2224,7 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtSeedAdapt(module, target: target)
 	buildGtPark(module)
 	buildGtNowNs(module)
-	buildGtTimerAdd(module, rawFree: rawFree)
+	buildGtTimerAdd(module)
 	buildGtTimerCheck(module)
 	buildGtAnyCompleted(module)
 	buildGtAwaitAny(module)
@@ -2253,7 +2254,7 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtResched(module)
 	buildGtPreempt(module, target: target)
 	buildGtIoPark(module)
-	buildGtProcessRun(module, rawFree: rawFree, commandShape: subprocessCommandShape(target))
+	buildGtProcessRun(module, commandShape: subprocessCommandShape(target))
 
 	// The shell wrapper `__gt_process_run` and the one-shot read probe take a command LINE through, on a lane
 	// whose spawn primitive takes a vector. Beside its callers, for the reason its own header carries.
@@ -2261,7 +2262,7 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 
 	if usesChildPipes 'io'
 		buildSubpYieldRead(module, target: target)
-		buildGtIoRead(module, rawFree: rawFree, commandShape: subprocessCommandShape(target))
+		buildGtIoRead(module, commandShape: subprocessCommandShape(target))
 	end 'io'
 
 	// The streaming subprocess API rides the same pipe substrate (`usesStreaming` implies `usesChildPipes`), so
@@ -2274,8 +2275,8 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	// program that wants one without the other.** `__svc_spawn` calls `__gt_spawn_green` and every mailbox
 	// wake goes through `__gt_ready_locked`; a program that never spawns a service loses every mailbox
 	// function to `DeadFunctionElimination`, whose only edge into them is the `funcAddr`/`call` pair
-	// `LowerMaxonToStd.lowerServiceSpawn` emits. `rawFree` is passed for `installMailboxRuntime`'s reason.
-	installMailboxRuntime(module, rawFree: rawFree)
+	// `LowerMaxonToStd.lowerServiceSpawn` emits.
+	installMailboxRuntime(module)
 
 	assertCompletedPublicationIsOrdered(module, firstFuncIndex: firstFuncIndex as FuncIndex)
 end 'installGtRuntime'
@@ -3232,7 +3233,7 @@ end 'emitTimerSiftDown'
 // back. The free is AFTER the copy, and nothing else holds a pointer into the store: every walk re-reads
 // `__gt_timer_heap_base` under the lock, which is what makes the base a `.data` word rather than a value
 // anybody caches.
-function buildGtTimerAdd(module StdModule, rawFree ByteArray)
+function buildGtTimerAdd(module StdModule)
 	var func = IrFunction.createFromStd(GtTimerAddName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(3)
 
@@ -3247,7 +3248,7 @@ function buildGtTimerAdd(module StdModule, rawFree ByteArray)
 
 	// ⛔⛔ **THE WHOLE INSERT RUNS UNDER THE RUN-QUEUE LOCK, AND THE GROW IS WHY IT MUST BE THE WHOLE OF
 	// IT RATHER THAN THE COUNT ALONE.** The store is five `.data` words plus a heap region, and a full store
-	// REPUBLISHES the base and `rawFree`s the old region — so a second M scanning it (`__gt_timer_check`,
+	// REPUBLISHES the base and frees the old region — so a second M scanning it (`__gt_timer_check`,
 	// `__gt_promise_drop`'s unlink) would be walking freed memory, and two Ms inserting
 	// would both write slot `count` and lose one entry. An atomic per word cannot express any of that: what is
 	// indivisible here is the transaction, not a word. `__sched_lock` is the scheduler's one lock and the store
@@ -3295,7 +3296,7 @@ function buildGtTimerAdd(module StdModule, rawFree ByteArray)
 	// The republished base is what every reader consults, so the old region is unreachable the instant the
 	// store above lands — and on the FIRST grow `oldBase` is a real `__gt_init` region, never null, because the
 	// store is allocated eagerly there rather than lazily here.
-	module.appendOp(copied, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(oldBase)))
+	module.appendOp(copied, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(oldBase)))
 	module.setTerminator(copied, op: StdOp.branch(doAdd.id))
 
 	let heapBase = emitLoadGlobalWord(module, block: doAdd, label: GtTimerHeapBaseLabel, ids: ids)
@@ -6209,7 +6210,7 @@ end 'buildGtPreempt'
 // accessor uses. Every exit is an `errorReturn`: the reap path returns `(code, NoErrorFlag)`, a
 // `CreateProcessA` failure returns `(0, RunProcessSpawnFailedFlag)`. The front end recognizes `__gt_process_run` as a
 // throwing runtime callee (`isThrowingGtRuntimeCallee`), so a `runProcess` call must be a `tryCall`.
-function buildGtProcessRun(module StdModule, rawFree ByteArray, commandShape SubprocessCommandShape)
+function buildGtProcessRun(module StdModule, commandShape SubprocessCommandShape)
 	var func = IrFunction.createFromStd(GtProcessRunName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: ThrowsClause.throwing(RunProcessErrorTypeName))
 	var ids = ValueMinter.create(1)
 
@@ -6286,9 +6287,9 @@ function buildGtProcessRun(module StdModule, rawFree ByteArray, commandShape Sub
 	// park alike. Freeing once, before the branch, is what keeps both arms from needing their own copy of it,
 	// and `hThread` is read here for the same reason (on the failure path it is the slot's zero, which that arm
 	// never looks at).
-	module.appendOp(afterCopy, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(cmBuf)))
-	module.appendOp(afterCopy, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(startupPtr)))
-	module.appendOp(afterCopy, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(procInfoPtr)))
+	module.appendOp(afterCopy, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(cmBuf)))
+	module.appendOp(afterCopy, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(startupPtr)))
+	module.appendOp(afterCopy, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(procInfoPtr)))
 	let spawnZeroConst = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.const(spawnZeroConst, value: 0, valueType: StdType.i64))
 	let spawnFailedCmp = ids.mint()
@@ -6342,7 +6343,7 @@ function buildGtProcessRun(module StdModule, rawFree ByteArray, commandShape Sub
 	module.appendOp(reapExit, op: StdOp.osProcessExitCode(hProcess, codePtrId: codePtr))
 	let code = ids.mint()
 	module.appendOp(reapExit, op: StdOp.loadIndirect(code, addrId: codePtr, offset: 0, valueType: StdType.i64))
-	module.appendOp(reapExit, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(codePtr)))
+	module.appendOp(reapExit, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(codePtr)))
 	module.appendOp(reapExit, op: StdOp.osCloseHandle(hProcess))
 
 	// A THROWING function's successful exit still writes BOTH registers — the child's exit code in the
@@ -6509,7 +6510,7 @@ end 'buildPipeName'
 //   • ONE survives the park — the read scratch, which the kernel is writing into while the green thread is
 //     suspended. It rides this frame and is freed after the yielding read returns, on the dropped road as
 //     well: a dropped reader is renounced rather than abandoned, so it comes back here to free it.
-function buildGtIoRead(module StdModule, rawFree ByteArray, commandShape SubprocessCommandShape)
+function buildGtIoRead(module StdModule, commandShape SubprocessCommandShape)
 	var func = IrFunction.createFromStd(IoReadName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
@@ -6549,9 +6550,9 @@ function buildGtIoRead(module StdModule, rawFree ByteArray, commandShape Subproc
 	// The pipe exists and both ends are in registers, so the three regions that described it are dead: the
 	// name has been resolved to a kernel object, the SECURITY_ATTRIBUTES was read by the create, and the
 	// out-param block has been emptied.
-	module.appendOp(afterName, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(namePtr)))
-	module.appendOp(afterName, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(saPtr)))
-	module.appendOp(afterName, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(scratch)))
+	module.appendOp(afterName, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(namePtr)))
+	module.appendOp(afterName, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(saPtr)))
+	module.appendOp(afterName, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(scratch)))
 
 	// The mutable NUL-terminated cmdline copy (CreateProcessA may write to lpCommandLine; the .rdata String blob is
 	// neither writable nor NUL-terminated).
@@ -6607,9 +6608,9 @@ function buildGtIoRead(module StdModule, rawFree ByteArray, commandShape Subproc
 	// all three are dead on BOTH arms below — released once, before the branch, exactly as
 	// `__gt_process_run` does it. On the failure path `hThread` is the fresh slot's zero, which that arm never
 	// reads.
-	module.appendOp(afterCopy, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(cmBuf)))
-	module.appendOp(afterCopy, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(startupPtr)))
-	module.appendOp(afterCopy, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(procInfoPtr)))
+	module.appendOp(afterCopy, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(cmBuf)))
+	module.appendOp(afterCopy, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(startupPtr)))
+	module.appendOp(afterCopy, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(procInfoPtr)))
 	let spawnFailed = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.cmp(spawnFailed, lhs: hProcess, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
 	module.setTerminator(afterCopy, op: StdOp.condBranch(spawnFailed, thenBlockId: spawnFail.id, elseBlockId: spawnOk.id))
@@ -6655,7 +6656,7 @@ function buildGtIoRead(module StdModule, rawFree ByteArray, commandShape Subproc
 	module.appendOp(spawnOk, op: StdOp.osCloseHandle(readEnd))
 
 	// The read is over — the pipe is closed and the kernel is done with the buffer, so it goes back.
-	module.appendOp(spawnOk, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(scratch)))
+	module.appendOp(spawnOk, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(scratch)))
 
 	// ⭐ **THE PROBE ANSWERS A COUNT, SO A FAILED READ IS 0 HERE.** `spawnReadLine(cmd)`'s whole contract is
 	// *"an environment error reads as EOF"*, and it has nowhere to carry the difference; the STREAMING API

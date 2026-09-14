@@ -247,9 +247,9 @@ bound is now alloc+free churn rather than a recycle. Without either, every spawn
 commit — invisible to the `__mm` leak gate — and exhaust commit on a bounded-pagefile machine.) Since
 P1.5-B1c (#87) this loop is also a LEAK GATE on the GT struct + its inline arg buffer: each completed thread's
 struct is recycled onto the free-list and the completion-based `__gt_live_count` is balanced to zero, so a
-clean exit (0) proves nothing leaked. Before that fix each iteration bump-leaked its ~224-byte struct and its
-48-byte arg buffer (slab allocations invisible to `__mm_alloc_count`), and — once the counter existed but the
-free-list did not — this same program exited 101.
+clean exit (0) proves nothing leaked. Before that fix each iteration bump-leaked its ~224-byte struct and
+its 48-byte arg buffer — slab allocations that are not boxes, so the heap leak gate's tracked live column
+never sees them — and, once the counter existed but the free-list did not, this same program exited 101.
 ```maxon
 
 function noop() returns Integer

@@ -120,7 +120,8 @@ The real #88 leak shape: a loop that spawns a promise every iteration and never 
 promise is dropped at the loop body's scope exit — renounced in its strand's queue (so it is reclaimed rather
 than run when the queue reaches it) and its struct recycled onto the free-list, which the next spawn reuses.
 Memory stays bounded across 1000 iterations and the live count balances to zero (exit 0). Before #88 each
-iteration bump-leaked its struct and seed stack, invisible to `__mm_alloc_count`.
+iteration bump-leaked its struct and seed stack — neither of them a box, so both are invisible to the heap
+leak gate's tracked live column, and `__gt_live_count` is the gate that catches them.
 ```maxon
 
 function trivial() returns Integer

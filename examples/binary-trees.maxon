@@ -1,0 +1,138 @@
+// Binary-trees benchmark from the Computer Language Benchmarks Game
+// https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/binarytrees.html#binarytrees
+//
+// Allocation-bound: a stretch tree one deeper than n, a long-lived tree of depth n, then for every
+// even depth from 4 to n a batch of trees built and checked one after another, each freed before
+// the next is built. A check is the node count of a tree, so every line's number is a function of
+// the depth alone. n is argv[1]; without one it runs n=16, a run of a few seconds.
+//
+// Maxon refuses a type that contains itself (E4014), so a node cannot hold its children by
+// reference. Each tree is an arena — one `Array with Node` — and a node is a union case that names
+// its children by index. Every node is still ONE managed record, allocated when it is pushed and
+// freed by the arena's drop cascade, so a tree costs the allocator exactly what its node count says.
+//
+// Expected output for n=10:
+// stretch tree of depth 11	 check: 4095
+// 1024	 trees of depth 4	 check: 31744
+// 256	 trees of depth 6	 check: 32512
+// 64	 trees of depth 8	 check: 32704
+// 16	 trees of depth 10	 check: 32752
+// long lived tree of depth 10	 check: 2047
+//
+// Expected output for n=16 (the default):
+// stretch tree of depth 17	 check: 262143
+// 65536	 trees of depth 4	 check: 2031616
+// 16384	 trees of depth 6	 check: 2080768
+// 4096	 trees of depth 8	 check: 2093056
+// 1024	 trees of depth 10	 check: 2096128
+// 256	 trees of depth 12	 check: 2096896
+// 64	 trees of depth 14	 check: 2097088
+// 16	 trees of depth 16	 check: 2097136
+// long lived tree of depth 16	 check: 131071
+
+// The stretch tree is one deeper than the largest n, and a tree of depth d holds 2^(d+1) - 1 nodes.
+typealias Depth = int(0 to 22)
+typealias NodeIndex = int(0 to 8388606)
+typealias NodeCount = int(0 to i64.max)
+typealias TreeCount = int(1 to 2097152)
+typealias Arena = Array with Node
+
+// A node is a leaf or a branch naming two earlier nodes of the same arena. bottomUp pushes a
+// branch's children before the branch, so a child index is always live.
+union Node
+	leaf
+	branch(left NodeIndex, right NodeIndex)
+end 'Node'
+
+let defaultN = 16
+
+// The benchmark's smallest depth is where the per-depth batches start; the largest is the
+// benchmark's own size, and NodeIndex spans its stretch tree.
+let smallestDepth = 4
+let largestN = 21
+let usageExit = 2
+
+// argv[1], or defaultN when there is none. A malformed or out-of-range argument is refused so a
+// typo cannot read as a check.
+function problemSize() returns Depth throws ParseError
+	let args = CommandLine.args()
+
+	if args.count() < 2 'noArgument'
+		return defaultN
+	end 'noArgument'
+
+	let raw = try args.get(1) otherwise panic("problemSize: count() >= 2, so index 1 is live")
+	let n = try int.fromString(raw)
+
+	if n < smallestDepth or n > largestN 'outOfRange'
+		throw ParseError.invalidFormat
+	end 'outOfRange'
+
+	return n
+end 'problemSize'
+
+// Builds a complete tree of the given depth into the arena and returns its root's index.
+function bottomUp(arena Arena, depth Depth) returns NodeIndex
+	if depth == 0 'leaf'
+		arena.push(Node.leaf)
+		return arena.count() - 1
+	end 'leaf'
+
+	let left = bottomUp(arena, depth: depth - 1)
+	let right = bottomUp(arena, depth: depth - 1)
+	arena.push(Node.branch(left, right: right))
+
+	return arena.count() - 1
+end 'bottomUp'
+
+function check(arena Arena, index NodeIndex) returns NodeCount
+	let node = try arena.get(index) otherwise panic("check: every index is one bottomUp returned")
+
+	let total = match node 'kind'
+		leaf gives 1
+		branch(left, right) gives 1 + check(arena, index: left) + check(arena, index: right)
+	end 'kind'
+
+	return total
+end 'check'
+
+// One tree, built and checked, freed when the arena goes out of scope here.
+function checkTree(depth Depth) returns NodeCount
+	var arena = Arena.create()
+	let root = bottomUp(arena, depth: depth)
+
+	return check(arena, index: root)
+end 'checkTree'
+
+function main() returns ExitCode
+	let maxDepth = try problemSize() otherwise 'badArgument'
+		printError("usage: binary-trees [n]  with {smallestDepth} <= n <= {largestN}\n")
+		return usageExit
+	end 'badArgument'
+
+	let stretchDepth = maxDepth + 1
+	print("stretch tree of depth {stretchDepth}\t check: {checkTree(stretchDepth)}\n")
+
+	// The long-lived tree is held across every batch below, exactly as the benchmark prescribes.
+	var longLived = Arena.create()
+	let longLivedRoot = bottomUp(longLived, depth: maxDepth)
+
+	var depth = smallestDepth
+
+	while depth <= maxDepth 'batches'
+		// Shallower trees are built more often: the count halves as the depth grows by one.
+		let iterations = (1 shl (maxDepth - depth + smallestDepth)) as TreeCount
+		var checksum = 0
+
+		for _ in 0 upto iterations 'trees'
+			checksum = checksum + checkTree(depth)
+		end 'trees'
+
+		print("{iterations}\t trees of depth {depth}\t check: {checksum}\n")
+		depth = depth + 2
+	end 'batches'
+
+	print("long lived tree of depth {maxDepth}\t check: {check(longLived, index: longLivedRoot)}\n")
+
+	return 0
+end 'main'

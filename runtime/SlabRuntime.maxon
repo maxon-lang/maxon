@@ -4,29 +4,27 @@
 // are the allocator's STATE — the lazily committed region every shared structure lives in, and the metadata
 // slab's two cursors, which hand mspan headers out and take them back.
 //
-// ⛔⛔ **THE REST OF `Compiler/Runtime/SlabRuntime.maxon` IS NOT MISSING — IT CANNOT BE SOURCE YET, AND THE
-// BLOCKER IS A BUILD-TIME ARGUMENT RATHER THAN A CALL.** Nine of that file's fourteen entry points are
-// emitted DIFFERENTLY depending on `sharded` (`RuntimeUsage.usesGt`) or `countRaw` — the lock enter/leave,
-// the TLS read that answers *"which P am I"*, and the counted allocation door are present or absent per
-// PROGRAM. Tier source is compiled once and has no such knob. Two more are blocked for a different reason,
-// and it is the one `runtime/SlabArena.maxon`'s ninth entry gives: `__slab_drain_remote` calls
-// `__slab_arena_map_get`, whose walk `__slab_free` splices INLINE, and `__slab_rounded_size` shares
-// `SlabRuntime.emitSlabClassIndex` with `__slab_alloc` — so porting either alone would be a SECOND SPELLING
-// of one walk.
+// ⛔⛔ **THE REST OF `Compiler/Runtime/SlabRuntime.maxon` IS NOT MISSING — IT CANNOT BE SOURCE, AND THE
+// BLOCKER IS THE TARGET.** The allocation doors, the free door and the lock pair read the target's
+// `MachineModel`: on wasm the walk to *"which processor am I"* is a constant because the backend has no
+// `tlsSlotLoad`, and on every other lane it is a TLS read. Tier source is compiled once and has no such
+// knob. Two more are blocked for a different reason, and it is the one `runtime/SlabArena.maxon`'s ninth
+// entry gives: `__slab_drain_remote` calls `__slab_arena_map_get`, whose walk `__slab_free` splices INLINE,
+// and `__slab_rounded_size` shares `SlabRuntime.emitSlabClassIndex` with `__slab_alloc` — so porting either
+// alone would be a SECOND SPELLING of one walk.
 //
 // ⛔ **AND `__slab_span_destroy` IS EXCLUDED ON THAT SAME RULE, WHICH IS NOT WHERE ITS BLOCKER WAS EXPECTED.**
-// It reads no usage record at all and every callee it names is here, so the build-time argument above does
-// not touch it; what stops it is that it and `__slab_refill` compute a span's chunk run from the same packed
+// It reads no usage record at all and every callee it names is here, so the machine model above does not
+// touch it; what stops it is that it and `__slab_refill` compute a span's chunk run from the same packed
 // class geometry, and the refill stays. `SlabRuntime.emitSpanChunkCount` states why that must be ONE
 // spelling: the CUT and the DESTRUCTION have to agree to the chunk, or a span is released one chunk short
 // and a chunk stays claimed forever.
 //
-// ⭐⭐ **THE ZEROING IS NOT WHAT BLOCKS THE ALLOCATION DOORS, AND IT NEVER WAS.** `zeroed` never reaches
-// `RuntimeUsage`: `SlabRuntime.installSlabRuntime` passes a LITERAL to each of the three doors —
-// `__slab_alloc` zeroes, `__slab_alloc_raw` does not, `__slab_alloc_box` zeroes — and a build-time argument
-// that is a literal per entry point is one tier source simply spells. What it costs is one Maxon helper
-// taking a `bool` parameter where the builder has three emissions of one emitter, which is a cost and not a
-// blocker. `sharded` and `countRaw` are the blockers there.
+// ⭐⭐ **THE ZEROING IS NOT WHAT BLOCKS THE ALLOCATION DOORS.** `zeroed` never reaches `RuntimeUsage`:
+// `SlabRuntime.installSlabRuntime` passes a LITERAL to each of the two doors — `__slab_alloc` zeroes,
+// `__slab_alloc_raw` does not — and a build-time argument that is a literal per entry point is one tier
+// source simply spells. What it costs is one Maxon helper taking a `bool` parameter where the builder has
+// two emissions of one emitter, which is a cost and not a blocker.
 //
 // ⛔⛔ **THE CONSTANTS BELOW ARE RESTATED FROM `Compiler/Runtime/SlabRuntime.maxon` BECAUSE NO NAME CROSSES
 // THE TIER BOUNDARY**, the rule `runtime/SlabArena.maxon` states in full for its own geometry. Each names
@@ -117,25 +115,31 @@ end '__slab_os_direct_free'
 // The stride of the region's head words and of both arrays past the lock.
 let SlabWordBytes = 8
 
-// The head: the metadata slab's bump cursor, its limit, and the free list of dead mspan headers. Chained so
-// that inserting a head word moves the lock and both arrays after it.
+// The head: the metadata slab's bump cursor, its limit, the free list of dead mspan headers, the
+// scheduler word (`SlabRuntime.SlabStateSchedulerOffset`) and the lock-depth sink
+// (`SlabRuntime.SlabStateLockDepthSinkOffset`). Chained so that inserting a head word moves the lock and
+// the arrays after it. This file reads the first three and never the last two.
 let SlabStateMetaBumpOffset = 0
 let SlabStateMetaEndOffset = SlabStateMetaBumpOffset + SlabWordBytes
 let SlabStateMetaFreeOffset = SlabStateMetaEndOffset + SlabWordBytes
+let SlabStateSchedulerOffset = SlabStateMetaFreeOffset + SlabWordBytes
+let SlabStateLockDepthSinkOffset = SlabStateSchedulerOffset + SlabWordBytes
 
 // ⭐ **THE SLOW-PATH LOCK SITS IN THE REGION RATHER THAN IN A `.data` WORD**, because a new `.data` label
 // shifts every label after it and re-mints every heap program's golden. `MmRuntime.OsLockBytes` is the other
 // copy of the width, and it is the MAXIMUM over the five lanes (a Darwin `pthread_mutex_t`) rather than any
 // one lane's — which is what makes this offset one number instead of five.
-let SlabStateLockOffset = SlabStateMetaFreeOffset + SlabWordBytes
+let SlabStateLockOffset = SlabStateLockDepthSinkOffset + SlabWordBytes
 let OsLockBytes = 64
 
-// The two arrays past the lock: one mcentral head per class, then one mcache row per shard.
-// `SlabClasses.slabClassCount()` and `SlabRuntime.SlabMaxShards` are the other copies.
+// The three arrays past the lock: one mcentral head per class, one mcache row per shard, then one row of
+// traffic columns per shard. `SlabClasses.slabClassCount()`, `SlabRuntime.SlabMaxShards` and
+// `SlabRuntime.SlabTrafficColumn` are the other copies.
 let SlabClassCount = 68
 let SlabMaxShards = 256
+let SlabTrafficColumns = 6
 
-let SlabStateBytes = SlabStateLockOffset + OsLockBytes + SlabClassCount * SlabWordBytes + SlabMaxShards * SlabClassCount * SlabWordBytes
+let SlabStateBytes = SlabStateLockOffset + OsLockBytes + SlabClassCount * SlabWordBytes + SlabMaxShards * SlabClassCount * SlabWordBytes + SlabMaxShards * SlabTrafficColumns * SlabWordBytes
 let SlabStateChunks = (SlabStateBytes + SlabPageMask) / SlabPageBytes
 
 // ⭐ **ZERO IS THE STATE THE `.data` IMAGE ALREADY EXPRESSES, so there is nothing to initialise and nothing

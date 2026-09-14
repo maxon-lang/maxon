@@ -1086,6 +1086,28 @@ module function targetEmitsInlineFrameRecords(target Target) returns bool
 	end 'cpu'
 end 'targetEmitsInlineFrameRecords'
 
+// How many OS threads a target can run inside one process, which is what the allocator's sharding
+// reads: on `singleMachine` there is no thread-local slot to read and no second thread to serialise
+// against, so the "which processor am I" walk is a constant and every lock and atomic guards nothing.
+module enum MachineModel
+	singleMachine
+	multiMachine
+end 'MachineModel'
+
+// ⚠ Keyed on the whole target and enumerated, so a lane that gains threads must say so here before
+// its allocator reads a TLS slot the backend refuses (`StdToWasm` panics on `tlsSlotLoad`).
+module function machineModel(target Target) returns MachineModel
+	if target.cpu == CpuArch.wasm32 and target.os == Os.wasi 'wasi'
+		return MachineModel.singleMachine
+	end 'wasi'
+
+	if target.os == Os.windows or target.os == Os.linux or target.os == Os.macos 'threaded'
+		return MachineModel.multiMachine
+	end 'threaded'
+
+	panic("machineModel: no machine model is stated for target {targetToString(target)}")
+end 'machineModel'
+
 export function targetProvidesEveryFacility(target Target) returns bool
 	for facility in HostFacility.allCases 'each'
 		if not targetProvidesFacility(target, facility: facility) 'missing'

@@ -124,6 +124,36 @@ end 'main'
 __str_bytes_view
 ```
 
+<!-- test: allocator-shape-is-one-in-a-program-with-no-scheduler -->
+**THE ALLOCATOR HAS ONE SHAPE, AND A PROGRAM WITH NO SCHEDULER CARRIES ALL OF IT.** This program builds
+one array, pushes one element and returns; it spawns nothing and reads no counter. The four bodies
+rendered here are what every heap program carries: `__slab_alloc` and `__slab_free` read the scheduler
+word out of the slab's state head and take the raw row as its sole writer when it is 0, step that row's
+raw traffic columns with a plain add, and probe the cached span's owner; `__mm_alloc` and `__mm_free`
+step the tracked columns the same way. The serialised arm — the TLS read, the atomic steps and the lock —
+is rendered beside them, reached only once `__sched_init_procs` has published the word. A golden that
+lost the scheduler-word probe, the owner probe or a column step would be a compiler that had grown a
+second shape for programs without a scheduler.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var buf = ByteArray.create()
+	buf.push(1)
+	return buf.count() as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+```RequiredRuntime
+__mm_alloc
+__mm_free
+__slab_alloc
+__slab_free
+```
+
 <!-- test: error-ordinal-in-an-emitted-body -->
 An emitted body transcribes an error enum's ORDINAL as a literal — `__managed_set`'s `rejcont` block
 returns ordinal 0 with the error flag set, which is the wire format an `otherwise` arm decodes. The

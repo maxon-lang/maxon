@@ -1532,30 +1532,63 @@ type PersistentWorkerHandle
 		return try child.waitWithTimeout(WorkerShutdownTimeoutMs)
 	end 'requestExitAndWait'
 
-	// ⭐⭐ **MAKE SURE THIS WORKER'S PROCESS IS GONE — the only termination this harness has.**
+	// ⭐⭐ **MAKE SURE THIS WORKER'S PROCESS IS GONE — the only termination this harness has — AND ANSWER
+	// WITH THE STATUS IT LEFT.**
 	//
 	// `waitWithTimeout` IS the kill: *"throws `SubprocessError.timeout` if the timeout fires (the
 	// runtime forcibly terminates the child in that case)"*. An already-exited child answers with its
-	// exit code before the grace elapses and nothing is terminated; a live one is. Both outcomes are
-	// the same instruction to this caller — the process is gone — so the exit code is discarded and the
-	// timeout is not an error here. (`__Builtins.subprocessKill` is deliberately not among the compiler's
-	// intrinsics; see `JobKillGraceMs`.)
+	// exit code before the grace elapses and nothing is terminated; a live one is. (`__Builtins.subprocessKill`
+	// is deliberately not among the compiler's intrinsics; see `JobKillGraceMs`.)
+	//
+	// ⚠ **THE ANSWER IS THE WORKER'S OWN ONLY WHERE THE WAIT DID NOT HAVE TO KILL IT.** A grace that
+	// expires terminates the child, and the code such a child then reports is the one the KILL named —
+	// so that path answers `unavailable` rather than putting this parent's number into a sentence that
+	// says the worker chose it. The same reasoning one level up is `exitAfterDeath`.
+	//
+	// ⚠ **IT IS REPEATABLE, WHICH `releaseAfterDeath` LEANS ON**: Win32 keeps a handle's exit code
+	// readable after the child is gone, and the POSIX reap caches the consumed wait status
+	// (`PosixWaitOffChildStatus`), so asking twice gives one answer twice.
 	//
 	// ⚠ IT DOES NOT RELEASE. The parent still has to read this worker's stderr — the panic message and
 	// stack trace live there — and a released handle addresses whatever process next takes the slot.
 	// Killing DOES close the worker's stdout, which is what makes its drain complete.
-	export function terminate()
-		_ = try child.waitWithTimeout(JobKillGraceMs) otherwise 0
-	end 'terminate'
+	export function terminateAndReap() returns WorkerExit
+		let code = try child.waitWithTimeout(JobKillGraceMs) otherwise (e) 'notReaped'
+			return WorkerExit.unavailable(e.displayReason())
+		end 'notReaped'
+
+		// `waitWithTimeout` reports both of its own failures as THROWS, so every VALUE that reaches here
+		// is a status some host produced — and every supported host produces one inside the 32-bit band.
+		// A number outside it is the runtime answering something no OS could, which is worth saying
+		// rather than rendering as though it meant something.
+		if code < 0 or code > (u32.max as ExitInt) 'outsideTheBand'
+			return WorkerExit.unavailable("the wait answered {code}, which no host's exit status can be")
+		end 'outsideTheBand'
+
+		return WorkerExit.exited(code as WorkerExitCode)
+	end 'terminateAndReap'
+
+	// ⛔⛔ **THE STATUS TO REPORT FOR A WORKER THAT DIED WITH A JOB IN HAND — AND ONE OF THE TWO DEATHS
+	// HAS NO SUCH STATUS.** A worker the progress bound gave up on was killed BY THIS PARENT, and the
+	// kill NAMES the code the handle must then report (`SubpKilledExitCode`), so reaping it would put
+	// the parent's own number into a sentence that says the worker chose it.
+	export function exitAfterDeath(killedByDeadline bool) returns WorkerExit
+		if killedByDeadline 'theParentEndedIt'
+			return WorkerExit.terminatedByParent
+		end 'theParentEndedIt'
+
+		return terminateAndReap()
+	end 'exitAfterDeath'
 
 	// The end of a worker that will serve no more jobs: make sure it is gone, then free the handle.
 	// Called ONCE per death, after the parent has read everything the corpse had to say — a leaked
 	// handle is a leaked OS process slot, in a parent that is itself leak-gated.
 	//
 	// It terminates again rather than assuming: EOF on stdout is not the same fact as an exited
-	// process, and the wait costs nothing on a child that has already gone.
+	// process, and the wait costs nothing on a child that has already gone. The status is discarded
+	// here because the report already holds it — `exitAfterDeath` asked, one line earlier.
 	export function releaseAfterDeath()
-		terminate()
+		_ = terminateAndReap()
 		child.release()
 	end 'releaseAfterDeath'
 end 'PersistentWorkerHandle'
@@ -1627,27 +1660,287 @@ end 'deadJobResults'
 // It names the step the breadcrumb named because that is the whole point of the breadcrumb, and says
 // plainly that the OTHER tests are failed by association rather than on their own merits: a reader who
 // sees 160 identical FAILs must be able to tell them from 160 real ones.
-function deadJobReason(workerId WorkerId, specName String, lastStep LastStep, killedByDeadline bool) returns String
+function deadJobReason(workerId WorkerId, specName String, lastStep LastStep, exit WorkerExit) returns String
 	return match lastStep 'breadcrumb'
 		// NOT "while running", which `stepVerb` now spells for a step of its own kind: this arm is the one
 		// that could name no step at all, and borrowing the RUN phase's word for "was working on" is how a
 		// reader comes to believe a breadcrumb said something it never said.
-		none gives "spec worker {workerId} {deathCause(killedByDeadline)} while working on '{specName}', before it reported any test and before it printed a {WorkerStepMarker} breadcrumb naming what it was doing — every test of this spec is failed because none of them was answered"
-		started(step, label) gives "spec worker {workerId} {deathCause(killedByDeadline)} while {stepVerb(step)} '{label}' — every test of '{specName}' is failed because the worker never reported any of them"
+		none gives "spec worker {workerId} {deathCause(exit)} while working on '{specName}', before it reported any test and before it printed a {WorkerStepMarker} breadcrumb naming what it was doing — every test of this spec is failed because none of them was answered"
+		started(step, label) gives "spec worker {workerId} {deathCause(exit)} while {stepVerb(step)} '{label}' — every test of '{specName}' is failed because the worker never reported any of them"
 	end 'breadcrumb'
 end 'deadJobReason'
 
-// HOW a worker stopped: the parent gave up on it and terminated it, or it went away on its own. One
-// spelling, because the per-test reason and the once-per-death report must not describe the same event
-// two ways.
-function deathCause(killedByDeadline bool) returns String
-	return "was TERMINATED after saying nothing for longer than one step may take" if killedByDeadline else "DIED"
+// ============================================================================================
+// WHAT KILLED A WORKER — the exit status, and what it means
+// ============================================================================================
+//
+// ⭐⭐ **A DEAD WORKER'S EXIT STATUS IS USUALLY THE ONLY EVIDENCE THAT SURVIVES IT.** A process the OS
+// ends on a fault runs no handler, so it writes nothing to stderr: the whole post-mortem is one report,
+// a breadcrumb, and a spec's worth of identical FAILs. MEASURED — two deaths in one session, 58 and 35
+// cases failed, neither reproducible — and nothing printed could tell an out-of-memory kill (which is
+// the pool's SIZE, and retries green) from a stack overflow or an access violation (which are compiler
+// bugs, and do not). ⇒ **the number is the diagnosis, and it is decoded here rather than left to a
+// reader who would have to guess which host's convention to read it under.**
+
+// ⭐ **A WORKER'S EXIT STATUS AS THE PARENT CAN HONESTLY ESTABLISH IT.** Three arms because there are
+// three facts and a bare number could carry only one: the worker chose a code, the PARENT chose it, or
+// the OS would not say. ⛔ `terminatedByParent` is the one that must never be a number — see
+// `PersistentWorkerHandle.exitAfterDeath`.
+union WorkerExit
+	exited(code WorkerExitCode)
+	terminatedByParent
+	unavailable(reason String)
+end 'WorkerExit'
+
+// A process exit status as every supported host reports one: a Win32 DWORD, or a POSIX `128 + signal`.
+// Narrower than `ExitInt` because `waitWithTimeout` answers its two failures as THROWS rather than as
+// negative values, so nothing outside this band is a status any host produced.
+typealias WorkerExitCode = int(0 to u32.max)
+
+// ⭐ **WHAT A CODE MEANS, WHERE THIS HARNESS RECOGNISES IT.** A union rather than a String that may be
+// empty: "this number has no name here" is a real answer, and an empty string would be a second thing
+// an unnamed code could be.
+union ExitCodeName
+	named(name String)
+	unrecognised
+end 'ExitCodeName'
+
+// ⭐ **THE WINDOWS STATUSES A CRASHING WORKER REPORTS AS ITS EXIT CODE — AND IT CHOOSES NONE OF THEM.**
+// The OS ends a faulting process with the exception's own NTSTATUS and `GetExitCodeProcess` hands that
+// number straight back, which is why these four are worth naming and an ordinary `1` is not.
+let WindowsStatusAccessViolation = 0xC0000005
+let WindowsStatusNoMemory = 0xC0000017
+let WindowsStatusStackOverflow = 0xC00000FD
+let WindowsStatusControlC = 0xC000013A
+
+// A POSIX signal NUMBER, which is what `128 + signal` carries. The band covers the standard signals and
+// the real-time ones above them on every lane this harness can host a worker on.
+typealias PosixSignal = int(1 to 64)
+
+// ⭐ **THE POSIX SIGNALS A WORKER DEATH ARRIVES AS.** A signal-killed child reports `128 + signal` —
+// the shell's convention, and what this runtime's reap hands back (`PosixSignalExitCodeBase`).
+//
+// ⚠ **SIGBUS IS THE ONE OF THE FOUR WHOSE NUMBER IS NOT SHARED** — 7 on Linux, 10 on Darwin — which is
+// why the decode is keyed on the HOST rather than on "POSIX". `PosixSigKill` is the runtime's own
+// constant, read rather than spelled a second time here.
+let PosixSigAbort = 6 as PosixSignal
+let LinuxSigBus = 7 as PosixSignal
+let DarwinSigBus = 10 as PosixSignal
+let PosixSigSegv = 11 as PosixSignal
+
+// How many bytes `hexOf` renders: the full width of `WorkerExitCode`'s band, so the render can never
+// truncate a code into a number the process did not exit with.
+let ExitCodeHexBytes = 4
+
+// ⭐⭐ **THE ONE SPELLING OF AN EXIT CODE, SHARED BY THE ONCE-PER-DEATH REPORT AND EVERY PER-TEST FAIL
+// LINE.** A filtered re-run may show only the FAIL lines, so both have to carry the diagnosis — and
+// written twice they would be two decodes free to disagree about the same number.
+//
+// ⚠ **THE HOST IS A PARAMETER RATHER THAN A QUESTION IT ASKS**, so `requireWorkerExitDecodeHolds` can
+// read every band on any machine. A decode only its own host can exercise is three quarters untested
+// wherever it runs.
+function describeExitCode(code WorkerExitCode, host Os) returns String
+	return match host 'host'
+		// HEX, because an NTSTATUS is documented, reported and searched for in no other radix.
+		windows gives renderExitCode(code, name: windowsStatusName(code), inItsOwnBand: hexOf(code))
+
+		// DECIMAL, because `128 + signal` is arithmetic a reader does in base ten.
+		linux or
+			macos gives renderExitCode(code, name: posixSignalName(code, host: host), inItsOwnBand: "{code}")
+
+		wasi panic("SpecWorkerPool: 'wasi' is not a host OS — `detectHostTarget` never returns it, so no worker process ever exited there")
+	end 'host'
+end 'describeExitCode'
+
+// ⛔ **AN UNRECOGNISED CODE IS PRINTED IN BOTH RADICES AND NEVER SWALLOWED.** Which one a reader needs
+// depends on what they are about to look the number up in, and this harness cannot know that — while a
+// code it dropped would be a death with no evidence at all, which is what this whole block exists to end.
+function renderExitCode(code WorkerExitCode, name ExitCodeName, inItsOwnBand String) returns String
+	return match name 'decoded'
+		named(text) gives "{inItsOwnBand} ({text})"
+		unrecognised gives "{code} ({hexOf(code)})"
+	end 'decoded'
+end 'renderExitCode'
+
+function windowsStatusName(code WorkerExitCode) returns ExitCodeName
+	if code == WindowsStatusAccessViolation 'accessViolation'
+		return ExitCodeName.named("access violation")
+	end 'accessViolation'
+
+	if code == WindowsStatusNoMemory 'noMemory'
+		return ExitCodeName.named("out of memory")
+	end 'noMemory'
+
+	if code == WindowsStatusStackOverflow 'stackOverflow'
+		return ExitCodeName.named("stack overflow")
+	end 'stackOverflow'
+
+	if code == WindowsStatusControlC 'controlC'
+		return ExitCodeName.named("Ctrl+C")
+	end 'controlC'
+
+	return ExitCodeName.unrecognised
+end 'windowsStatusName'
+
+// ⚠ IT COMPARES THE CODE RATHER THAN SUBTRACTING THE BASE OUT OF IT. `WorkerExitCode` starts at 0, so
+// `code - PosixSignalExitCodeBase` on an ordinary small exit code leaves that range — a panic taken
+// inside the one function whose whole job is explaining a death.
+function posixSignalName(code WorkerExitCode, host Os) returns ExitCodeName
+	if code == signalExitCode(PosixSigAbort) 'aborted'
+		return ExitCodeName.named("SIGABRT")
+	end 'aborted'
+
+	if code == signalExitCode(posixSigBusOn(host)) 'busError'
+		return ExitCodeName.named("SIGBUS")
+	end 'busError'
+
+	if code == signalExitCode(PosixSigKill as PosixSignal) 'killed'
+		return ExitCodeName.named("SIGKILL")
+	end 'killed'
+
+	if code == signalExitCode(PosixSigSegv) 'segfault'
+		return ExitCodeName.named("SIGSEGV")
+	end 'segfault'
+
+	return ExitCodeName.unrecognised
+end 'posixSignalName'
+
+// The exit code a child the kernel killed reports: `128 + signal`. One spelling of the convention, so
+// the four rows above compare numbers rather than each restating the arithmetic.
+function signalExitCode(signal PosixSignal) returns WorkerExitCode
+	return (PosixSignalExitCodeBase + signal) as WorkerExitCode
+end 'signalExitCode'
+
+function posixSigBusOn(host Os) returns PosixSignal
+	return match host 'host'
+		linux gives LinuxSigBus
+		macos gives DarwinSigBus
+		windows panic("SpecWorkerPool: a Windows host's exit status is an NTSTATUS and carries no signal — `describeExitCode` routes it to `windowsStatusName` instead")
+		wasi panic("SpecWorkerPool: 'wasi' is not a host OS — `detectHostTarget` never returns it, so no worker process ever exited there")
+	end 'host'
+end 'posixSigBusOn'
+
+// An exit code as `0x` and four bytes. Built out of `hexByte` — the compiler tier's one spelling of a
+// byte in hex — rather than a second nibble table, and at the FULL width of the code's own type, which
+// is what makes a fixed-width render honest here where `hexOffset` has to grow instead.
+function hexOf(code WorkerExitCode) returns String
+	var out = StringBuilder.create()
+
+	for i in 0 upto ExitCodeHexBytes 'eachByte'
+		out.append(hexByte((code shr (((ExitCodeHexBytes - 1 - i) * BitsPerByte) as ShiftCount)) as MachineWord))
+	end 'eachByte'
+
+	return "0x{out.build()}"
+end 'hexOf'
+
+// HOW a worker stopped, and — where it chose the answer itself — WHAT WITH. One spelling, because the
+// per-test reason and the once-per-death report must not describe the same event two ways.
+function deathCause(exit WorkerExit) returns String
+	return match exit 'how'
+		terminatedByParent gives "was TERMINATED after saying nothing for longer than one step may take"
+		exited(code) gives "DIED, exiting {describeExitCode(code, host: detectHostTarget().os)}"
+		unavailable(reason) gives "DIED with an exit status the OS would not report ({reason})"
+	end 'how'
 end 'deathCause'
+
+// ⭐⭐ **THE DECODE'S OWN GATE, ASKED ONCE PER RUN BY THE PARENT** — the only channel there is. A worker
+// death is not reproducible on demand (neither of the two measured ones reproduced), so a staged crash
+// could not gate this: what can be asked of every run is that the mapping from a status to its name
+// still holds, for every band and every host, on whichever host happens to be running.
+//
+// ⛔ **EVERY ROW SPELLS ITS NUMBER AS A LITERAL.** A row that fed `WindowsStatusStackOverflow` back to
+// the function that reads it would agree with whatever that constant says, a typo included — it would
+// pin the FORMAT and nothing about the mapping. The literal IS the pin.
+//
+// It reports every failing row rather than the first, for `SpecVerdictSelfTest`'s reason: one careless
+// edit breaks several, and a report naming one sends the reader back for another sweep per row.
+function requireWorkerExitDecodeHolds()
+	var broken = StringArray.create()
+
+	checkExitDecode(broken, code: 0xC0000005, host: Os.windows, expected: "0xc0000005 (access violation)")
+	checkExitDecode(broken, code: 0xC0000017, host: Os.windows, expected: "0xc0000017 (out of memory)")
+	checkExitDecode(broken, code: 0xC00000FD, host: Os.windows, expected: "0xc00000fd (stack overflow)")
+	checkExitDecode(broken, code: 0xC000013A, host: Os.windows, expected: "0xc000013a (Ctrl+C)")
+
+	checkExitDecode(broken, code: 134, host: Os.linux, expected: "134 (SIGABRT)")
+	checkExitDecode(broken, code: 135, host: Os.linux, expected: "135 (SIGBUS)")
+	checkExitDecode(broken, code: 137, host: Os.linux, expected: "137 (SIGKILL)")
+	checkExitDecode(broken, code: 139, host: Os.linux, expected: "139 (SIGSEGV)")
+	checkExitDecode(broken, code: 138, host: Os.macos, expected: "138 (SIGBUS)")
+
+	// ⛔ THE THREE ROWS THAT PIN WHAT THE DECODE MUST **NOT** SAY. A band belongs to one host: read the
+	// other's numbers through it and the report names a cause that never happened, which is worse than
+	// naming none. 135 is SIGBUS on Linux and nothing on Darwin; a signal-shaped number on Windows and
+	// an NTSTATUS on POSIX are both just numbers.
+	checkExitDecode(broken, code: 135, host: Os.macos, expected: "135 (0x00000087)")
+	checkExitDecode(broken, code: 139, host: Os.windows, expected: "139 (0x0000008b)")
+	checkExitDecode(broken, code: 0xC00000FD, host: Os.linux, expected: "3221225725 (0xc00000fd)")
+
+	// ⛔ AND THAT AN UNRECOGNISED CODE SURVIVES AT ALL, in both radices.
+	checkExitDecode(broken, code: 3, host: Os.windows, expected: "3 (0x00000003)")
+	checkExitDecode(broken, code: 3, host: Os.linux, expected: "3 (0x00000003)")
+
+	checkParentKillReportsNoCode(broken)
+	checkDeadJobReasonCarriesTheCode(broken)
+
+	if broken.isEmpty() 'everyRowHeld'
+		return
+	end 'everyRowHeld'
+
+	// ⚠ `panic` takes a STRING LITERAL — a `let`-bound String is rejected outright — so the list is built
+	// as text and INTERPOLATED. Same constraint `SpecVerdictSelfTest` and `LadderIndex` document.
+	let report = indentedList(broken, indent: BrokenExitRowIndent)
+	panic("SpecWorkerPool: {broken.count()} row(s) of the worker exit-status decode no longer hold. A worker that dies leaves its exit code and nothing else, so a decode that has stopped agreeing with the OS turns every death into the same unattributable wall of FAILs.{report}")
+end 'requireWorkerExitDecodeHolds'
+
+// How deep one failing row sits under the sentence that introduces it — `SpecVerdictSelfTest`'s depth,
+// for its reason: a reader takes the panics as one shape.
+let BrokenExitRowIndent = "\n  "
+
+function checkExitDecode(broken StringArray, code WorkerExitCode, host Os, expected String)
+	let actual = describeExitCode(code, host: host)
+
+	if actual == expected 'holds'
+		return
+	end 'holds'
+
+	broken.push("on a {String.from(osCanonicalName(host))} host, exit status {code} renders as '{actual}' and not '{expected}'.\n")
+end 'checkExitDecode'
+
+// ⛔ **THE ROW THAT IS NOT ABOUT A NUMBER: a worker THIS PARENT killed must be reported with no exit
+// code at all.** `terminateAndReap` can read one — `TerminateProcess`/`kill` leaves the child reporting
+// `SubpKilledExitCode` — and printing it would attribute the parent's own choice to the worker, which
+// is a lie about who ended the run and points the reader at the compiler.
+function checkParentKillReportsNoCode(broken StringArray)
+	let sentence = deathCause(WorkerExit.terminatedByParent)
+
+	if not sentence.contains("exit") 'saysNothingAboutACode'
+		return
+	end 'saysNothingAboutACode'
+
+	broken.push("a worker the parent TERMINATED is reported as '{sentence}', which speaks of an exit. The only code such a worker carries is the one this parent's own kill named.\n")
+end 'checkParentKillReportsNoCode'
+
+// ⭐⭐ **AND THAT THE PER-TEST FAIL LINE CARRIES THE CODE TOO.** A filtered re-run prints those lines and
+// nothing else, and on a full run the once-per-death report is thousands of lines away — so a reason
+// that named the spec but not the cause would leave the commonest reading of a death with no evidence
+// at all, which is the whole defect. What it asks is that the two reports share ONE decode: the rows
+// above are what pin the decode itself, so this one may read it rather than restate it.
+function checkDeadJobReasonCarriesTheCode(broken StringArray)
+	let code = 0xC00000FD as WorkerExitCode
+	let reason = deadJobReason(0, specName: "a-spec", lastStep: LastStep.started(WorkerStep.compile, label: "a-spec/a-case"), exit: WorkerExit.exited(code))
+
+	if reason.contains(describeExitCode(code, host: detectHostTarget().os)) 'carriesIt'
+		return
+	end 'carriesIt'
+
+	broken.push("the per-test FAIL reason for a worker that died reads '{reason}', which does not carry its exit status. A filtered re-run shows only these lines.\n")
+end 'checkDeadJobReasonCarriesTheCode'
 
 // Report a dead worker ONCE: which job, what it was in the middle of, and everything the worker
 // managed to say. The per-test FAIL reasons are one line each; this is where the stack trace is.
-function reportDeadWorker(handle PersistentWorkerHandle, specName String, lastStep LastStep, killedByDeadline bool)
-	printError("\n=== spec worker {handle.workerId} {deathCause(killedByDeadline)} on '{specName}' — failing that spec and continuing ===\n")
+function reportDeadWorker(handle PersistentWorkerHandle, specName String, lastStep LastStep, exit WorkerExit)
+	printError("\n=== spec worker {handle.workerId} {deathCause(exit)} on '{specName}' — failing that spec and continuing ===\n")
 
 	// BOTH ARMS SPEAK, for `deadWorkerStderr`'s reason one line down: "it never said what it was doing"
 	// and "nobody asked" read identically as an absent line, and only one of them is true.
@@ -1831,6 +2124,12 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filter String
 	// third gate in this slot that spawns nothing, and asked here for the reason directly above: a spec
 	// case cannot reach `IrFunction`. See `IrFunctionSelfTest` for what a shared one costs.
 	requireWorkerFunctionPlaceholdersAreFresh()
+
+	// ⭐ **AND THAT A DEAD WORKER'S EXIT STATUS STILL DECODES TO WHAT THE OS MEANT BY IT.** The fourth
+	// gate in this slot that spawns nothing, and asked here for the reason directly above: a worker
+	// death is not reproducible on demand, so the mapping is what can be gated and the crash is not.
+	// See `requireWorkerExitDecodeHolds` for what an undecoded code costs a reader.
+	requireWorkerExitDecodeHolds()
 
 	// ⭐ **AND THE HARNESS'S OWN REFUSALS, BEFORE THE HARNESS IS TRUSTED TO JUDGE ANYTHING ELSE.** It
 	// runs here rather than in `Main` because this is the one function only the PARENT of a pool reaches
@@ -2036,9 +2335,14 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filter String
 			if not endedWithReady(lines) 'workerDiedMidJob'
 				let killedByDeadline = try expired.get(readySlot) otherwise panic("runSpecPool: expired.get({readySlot}) is in bounds by construction")
 				let lastStep = lastStepIn(lines)
-				reportDeadWorker(handle, specName: job.specName, lastStep: lastStep, killedByDeadline: killedByDeadline)
 
-				try buckets.set(job.planIndex, value: deadJobResults(plan, reason: deadJobReason(handle.workerId, specName: job.specName, lastStep: lastStep, killedByDeadline: killedByDeadline))) otherwise panic("runSpecPool: buckets.set({job.planIndex}) is in bounds by construction")
+				// ⭐ REAPED BEFORE ANYTHING IS PRINTED, because both reports carry it and the handle is
+				// released at the bottom of this block. See `PersistentWorkerHandle.exitAfterDeath` for
+				// why the deadline's own kill answers no code.
+				let workerExit = handle.exitAfterDeath(killedByDeadline)
+				reportDeadWorker(handle, specName: job.specName, lastStep: lastStep, exit: workerExit)
+
+				try buckets.set(job.planIndex, value: deadJobResults(plan, reason: deadJobReason(handle.workerId, specName: job.specName, lastStep: lastStep, exit: workerExit))) otherwise panic("runSpecPool: buckets.set({job.planIndex}) is in bounds by construction")
 
 				// ⚠ THE CPU TALLY MUST COVER THESE TESTS TOO. `runSpecPool`'s own cross-check requires
 				// exactly one reading per reported test, and a job that printed no WORKER_JOB_CPU record
@@ -2314,7 +2618,10 @@ function enforceProgressDeadlines(workers PersistentWorkerHandleArray, busy Bool
 		// TERMINATE, do NOT release: the dispatch loop's dead-worker path still has to read this
 		// worker's stderr, and it is the ONE place a handle is freed. Killing here closes the worker's
 		// stdout, which is what makes its drain complete and hands the slot to that path.
-		handle.terminate()
+		//
+		// ⛔ THE STATUS IS DISCARDED BECAUSE THIS KILL CHOSE IT. `expired` is what the dead-worker path
+		// reads instead, and `exitAfterDeath` turns it into the one arm that reports no code at all.
+		_ = handle.terminateAndReap()
 		try expired.set(slot, value: true) otherwise panic("enforceProgressDeadlines: expired.set({slot}) is in bounds by construction")
 	end 'eachSlot'
 

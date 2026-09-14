@@ -144,7 +144,7 @@ export let NetpollPollName = b"__np_poll"
 // `__np_break()` — Go's `netpollBreak`: end the blocking poller's wait early, once however many ask.
 export let NetpollBreakName = b"__np_break"
 
-export function installNetpollRuntime(module StdModule, target Target, rawFree ByteArray)
+export function installNetpollRuntime(module StdModule, target Target)
 	buildNetpollInit(module, target: target)
 	buildNetpollPoll(module, target: target)
 	buildNetpollBreak(module, target: target)
@@ -152,7 +152,7 @@ export function installNetpollRuntime(module StdModule, target Target, rawFree B
 	// The poll-descriptor band. It is built on every lane because the park kind it serves is dispatched by
 	// `__gt_register_park` and `__gt_timer_check`, which every green-thread program contains.
 	buildNetpollPdSlot(module)
-	buildNetpollPdAdopt(module, rawFree: rawFree)
+	buildNetpollPdAdopt(module)
 	buildNetpollGroupUnhook(module)
 	buildNetpollPdWaitAny(module)
 	buildNetpollPdRelease(module)
@@ -940,7 +940,7 @@ function buildNetpollPdSlot(module StdModule)
 end 'buildNetpollPdSlot'
 
 // `__np_pd_adopt(source)` — see `NetpollPdAdoptName`.
-function buildNetpollPdAdopt(module StdModule, rawFree ByteArray)
+function buildNetpollPdAdopt(module StdModule)
 	var func = IrFunction.createFromStd(NetpollPdAdoptName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
@@ -1011,7 +1011,7 @@ function buildNetpollPdAdopt(module StdModule, rawFree ByteArray)
 	// program that opens no socket must not pay for one.
 	let hadRegion = emitCmp(module, block: freeCheck, a: oldBase, b: emitConst(module, block: freeCheck, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(freeCheck, op: StdOp.condBranch(hadRegion, thenBlockId: freeOld.id, elseBlockId: haveSlot.id))
-	module.appendOp(freeOld, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(oldBase)))
+	module.appendOp(freeOld, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(oldBase)))
 	module.setTerminator(freeOld, op: StdOp.branch(haveSlot.id))
 
 	let slotAddr = emitNetpollPdSlotAddr(module, block: haveSlot, fd: fd, ids: ids)

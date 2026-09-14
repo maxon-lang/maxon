@@ -1734,8 +1734,8 @@ An unbound interpolation result (`print("{i}")`) is an owned heap String owned b
 produced it. In a loop body each iteration allocates a fresh one, and the statement-scoped drop must free
 it inside the body, every iteration — not once at scope exit. A single scope-exit drop would leak every
 iteration but the last; a wrong drop of an already-freed value would be worse. This authored regression
-runs the loop long enough that any per-iteration leak drives `__mm_alloc_count` above zero and the leak
-gate reports exit 101 instead of 0.
+runs the loop long enough that any per-iteration leak leaves the allocator's tracked live column above zero
+and the leak gate reports exit 101 instead of 0.
 
 <!-- test: interp-temporary-dropped-per-loop-iteration -->
 ```maxon

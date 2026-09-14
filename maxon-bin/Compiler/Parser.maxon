@@ -6105,13 +6105,15 @@ let SchedProcessorCountArity = 0 as ParamCount
 // `scale-test` bottoms out here. All six take no arguments and answer an `int`.
 //
 // ⭐ **TWO LAYERS × (cumulative, live) PLUS TWO BYTE VOLUMES, AND `frees` IS NOT AMONG THEM** because it is
-// DERIVED: `freed = Δtotal − Δlive`, which needs a cumulative AND a live counter in each layer. What the two
-// layers ARE differs between the compilers — see `MmRuntime.MmAllocTotalLabel`, which owns that difference —
-// but the SURFACE is identical, and a caller sums them (`PhaseProbe.totalAllocs`).
+// DERIVED: `freed = Δtotal − Δlive`, which needs a cumulative AND a live counter in each layer. The layers
+// NEST in the allocator — every box is also a slab request — and the raw three are reported disjoint by
+// subtracting the tracked three at READ time (`MmRuntime.buildMmCounterAccessors`), which is what lets a
+// caller sum all six (`PhaseProbe.totalAllocs`).
 //
-// ⚠ They are refused NOWHERE: each lowers to a `.data` load, which every target the compiler emits can do. That is
-// the acceptance half of the target pair whose refusal half is `threadCpuTicks` just below — without it, a
-// compiler that had stopped serving this whole family on wasm would look exactly like a live gate.
+// ⚠ They are refused NOWHERE: each sums a column of the allocator's own state region, which reaches no OS and
+// which every target the compiler emits can do. That is the acceptance half of the target pair whose refusal
+// half is `threadCpuTicks` just below — without it, a compiler that had stopped serving this whole family on
+// wasm would look exactly like a live gate.
 let BuiltinsMmAllocTotalName = b"__Builtins.mmAllocTotal"
 let BuiltinsMmAllocLiveName = b"__Builtins.mmAllocLive"
 let BuiltinsMmAllocBytesName = b"__Builtins.mmAllocBytes"

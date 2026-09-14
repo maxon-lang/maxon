@@ -11,10 +11,10 @@ category: system
 
 The green-thread scheduler, the one-shot read probe and the subprocess runner all need small
 regions the language cannot name: a GT record, a mutable command line, a `STARTUPINFOA`, a
-`PROCESS_INFORMATION`, an overlapped read buffer. They carry no box header and no refcount, so
-`__mm_alloc_count` cannot see them. The per-call scratch comes from `__slab_alloc` directly; a GT record
-comes from the scheduler's own record arena, carved from `osAllocPages` chunks like a green thread's
-stack, so it moves no raw column either.
+`PROCESS_INFORMATION`, an overlapped read buffer. They carry no box header and no refcount, so the
+allocator's TRACKED live column — the one the leak gate reads — cannot see them. The per-call scratch
+comes from `__slab_alloc` directly; a GT record comes from the scheduler's own record arena, carved from
+`osAllocPages` chunks like a green thread's stack, so it moves no raw column either.
 
 ⭐⭐ **THE PER-CALL SCRATCH GOES BACK TO THE ALLOCATOR; THE GT STRUCT DOES NOT.** The subprocess
 runner's command line, `STARTUPINFOA` and `PROCESS_INFORMATION`, and the read probe's ~4.2 KB, each

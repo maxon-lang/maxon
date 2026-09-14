@@ -16,7 +16,7 @@ program, which is what the cases below drive:
 
 | Mechanism | What it decides |
 |---|---|
-| **the shard row** | the P read (`emitSlabCurrentP`, emitted inline into `__slab_alloc`/`__slab_free` since EC8) answers the running P; its clamped `id` is the mcache row, and an OS thread that owns NO P gets the dedicated RAW row (255), never row 0 |
+| **the shard row** | the P read (`emitSlabResolveShard`, emitted inline into `__slab_alloc`/`__slab_free`) walks the scheduler word to the running M and to the P it holds; that P's clamped `id` is the mcache row, and a thread that holds NO P gets the dedicated RAW row (255), never row 0 |
 | **the ownership stamp** | every span carries the P that owns it; a cached span owned by somebody else is a MISS, not something to pop |
 | **the remote-free queue** | a free by a P that does not own the slot's span CAS-pushes it onto the OWNER's Treiber stack, and the owner replays the chain on its next allocation slow path |
 
@@ -66,14 +66,15 @@ non-zero reading is `multicore-stress`'s and not this file's** — see the last 
 What this file pins is the counter's other edge: at one processor it must be exactly **0**, because a
 counter that answers non-zero where no free can cross is counting the wrong frees.
 
-⚠ **EVERY CASE HERE CARRIES An `unsupported-targets:` MARKER, AND THAT IS A PROPERTY OF THE SUBJECT RATHER THAN A
-CONVENIENCE.** All are green-thread programs, because sharding is only compiled into a program that has a
-scheduler (`usesGt`) — and a P exists only where one has been built. ⛔ This paragraph said *"on exactly one
-lane"* and named the tier below as agreeing: *"`StdToWasm` REFUSES `tlsSlotLoad` and the lock trio at
-emission, and `StdToArm64Conversion` has no case for either"*. The second half stopped being true when the
-arm64-macOS scheduler landed: that isel now lowers `tlsSlotLoad` as a thread-pointer read with no call at
-all, and the lock trio as `pthread_mutex_*`. wasm still refuses all four, and both Linux lanes have no libc
-to build any of it on. `sched-processor.md` carries the identical restriction for the identical reason.
+⚠ **THE SHARDING IS COMPILED INTO EVERY HEAP PROGRAM, AND THE CASES HERE ARE STILL GREEN-THREAD PROGRAMS.**
+A program with no scheduler runs the same allocator: the scheduler word in the slab's state head reads 0,
+every thread takes the raw row as its sole writer, and no lock is taken — `emitted-runtime-body.md`'s
+`allocator-shape-is-one-in-a-program-with-no-scheduler` renders that path. What a P-owned row, a parked
+span's re-owning and a remote free need is a P, and a P exists only where a scheduler has been built, so
+every case below spawns one. ⚠ **NO CASE CARRIES AN `unsupported-targets:` MARKER, AND NONE MAY:** on wasm a
+green-thread program is refused at its own span with E3104, which the harness counts as a SKIP naming the
+case; a marker would make the same fact invisible (`maxon-bin/CLAUDE.md`, *do not mark a case the compiler
+already refuses*). `sched-processor.md` carries the identical restriction for the identical reason.
 
 ## Tests
 
@@ -244,11 +245,12 @@ sentinel would be a double free of a span already fully returned, and `__slab_fr
 than pushing onto it — so a refill that forgot to re-stamp the owner cannot pass this case by accident.
 A refill that stamped the WRONG owner is caught by the survivors instead.
 
-⚠⚠ **THE `async` IS LOAD-BEARING AND IS NOT DECORATION — WITHOUT IT THIS CASE TESTS NOTHING IT CLAIMS
-TO.** Sharding is a BUILD-TIME argument keyed on `usesGt` (`SlabRuntime`'s header), so a program with no
-green thread carries the UNSHARDED allocator, which never reads `owning_p` at all. MEASURED: written
-without the `async`, this case passed against a compiler whose refill had been stripped of its owner
-stamp entirely; with it, the same sabotage makes it exit 89.
+⚠⚠ **THE `async` IS LOAD-BEARING AND IS NOT DECORATION — WITHOUT IT THIS CASE READS A DIFFERENT ARM OF
+`__slab_free`.** The allocator is one shape in every heap program, but WHICH arm a free takes is decided by
+the span's owner, and a program with no scheduler allocates with no P: every span it cuts is stamped
+`MspanOwningPNone`, so every free of one goes down the raw arm, which compares no owner and never reads the
+parked sentinel. A real P is what stamps a span with a real owner, and the parked/mine/remote routing this
+case is about begins there.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -391,10 +393,10 @@ the identical amount.
 bring-up allocates. Measuring from after it is what makes `first == second` an equality rather than an
 inequality with a fudge factor.
 
-⚠⚠ **WHAT THIS DOES NOT PIN, BECAUSE THE HARNESS CANNOT: THE `lock` PREFIX.** `emitGlobalAccumulate`
-emits an `atomicRmw` when the program has green threads and a plain load/add/store when it does not, and
-telling those two apart needs a second M crediting the same column at the same instant — which needs
-more than one processor. ⛔ This used to add *"which a spec case cannot set"*, and that expired when the
+⚠⚠ **WHAT THIS DOES NOT PIN, BECAUSE THE HARNESS CANNOT: THE `lock` PREFIX.** The traffic columns are
+per-row: a P steps its own row plainly and the shared raw row is stepped with an `atomicRmw` once a
+scheduler exists (`SlabRuntime.emitSlabTrafficCredit`), and telling a plain step from an atomic one needs
+a second P-less thread crediting the raw row at the same instant — which needs more than one processor. ⛔ This used to add *"which a spec case cannot set"*, and that expired when the
 per-case processor marker landed: a case CAN ask for four now, and the case at the end of this file does.
 At one processor the plain form
 is exact too, so this case passes either way and does not claim otherwise. That half is measured with
@@ -407,8 +409,10 @@ reached a second M by spawning `async` tasks the scheduler handed to worker Ms; 
 coroutine of its calling green thread its tasks never leave that one green thread, which runs on one M at a
 time — a preemption can move it to another, but never runs it on two — and a run as short as this one's
 reads `workers=1` at every `MAXON_MAX_PROCS`. It still proves determinism and leak-freedom; it no longer
-discriminates the `lock` prefix, because no column is ever credited by two machines at once. ⚠ **This does NOT mean the counters went plain** — `emitGlobalAccumulate`
-keeps its `multiM` arm, and a `.data` word is reachable from the system monitor whatever `async` does. It means the ORACLE for that arm is waiting on `spawn`, which is where a second M comes back.
+discriminates the `lock` prefix, because no column is ever credited by two machines at once. ⚠ **This does
+NOT mean the raw row went plain** — its step is atomic wherever the scheduler word is non-zero, and the
+system monitor steps it whatever `async` does. It means the ORACLE for that arm is waiting on
+`spawn`, which is where a second M comes back.
 
 ⚠⚠ **`spawn` HAS LANDED, AND THIS DEBT IS THEREFORE DISCHARGEABLE AND NOT DISCHARGED — SAID PLAINLY SO IT
 IS NOT READ AS PAID.** The condition the paragraph above names as missing is available today: a spawned

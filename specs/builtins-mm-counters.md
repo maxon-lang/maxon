@@ -75,48 +75,44 @@ reading the contract.** `bytes-scale-with-the-request` below is written on the s
 reason, and it is not a stylistic choice: WHERE a payload lands is the allocator's private business,
 and only the sum is stable across a change to it.
 
-### The layers must be DISJOINT, and in the compiler that took work
+### The layers NEST in the allocator and are made DISJOINT at the reader
 
-`PhaseProbe` SUMS them, and in the compiler `__mm_alloc` is itself a `__slab_alloc` caller. Counted
-naively, every box would be credited to both columns and `totalAllocs()` would read exactly double.
-`MmRuntime.buildSlabAlloc` therefore emits an UNCOUNTED twin (`__slab_alloc_box`) for `__mm_alloc`
-to call in a build that reads the counters. `the-two-layers-are-disjoint` below is what says so.
+`PhaseProbe` SUMS them, and `__mm_alloc` is itself a `__slab_alloc` caller, so the slab's RAW columns
+count every box as well as every scratch buffer. The public raw readers therefore answer **raw −
+tracked**: `mmRawAllocTotal()` is the slab's request count less the box count, `mmRawAllocLive()` the
+same for live, and `mmRawAllocBytes()` the slab's byte volume less the tracked payload volume less the box
+header per box (`MmRuntime.buildMmCounterAccessors`). Counted naively — a reader that forgot the
+subtraction — every box would be reported in both columns and `totalAllocs()` would read exactly double,
+which is what `the-two-layers-are-disjoint` below catches. Its opposite,
+`raw-total-is-never-below-tracked-total-after-boxes`, catches the two ways the subtraction goes too far:
+answering NEGATIVE, and standing on a raw column nothing credits.
 
 ⭐ **The layer split is a runtime's private business; the SUM is the number `PhaseProbe` reads.**
 
 ### `mmRawAllocLive` and `mmRawAllocTotal` are TWO numbers
 
-They read two `.data` words. `mmRawAllocTotal` is cumulative and only ever rises; `mmRawAllocLive`
-rises with each credited allocation and FALLS when a counted `__slab_alloc` caller hands its region
-back through the counted free door, `__mm_raw_free`. Several callers do: the subprocess runner's and
-the read probe's per-call scratch, and a service's mailbox envelopes, each freed the moment its
-message is delivered. A green-thread record is never credited at all: it comes from the scheduler's
-record arena, not the slab, and is recycled through the scheduler's own free lists
-(`runtime-scratch-reclaim.md`'s `spawn-await-loop-is-bounded`).
-`__mm_alloc`'s boxes move neither column: they come from the UNCOUNTED twin `__slab_alloc_box` and
-are reported by the tracked layer instead, because the two layers must stay disjoint (see *The
-layers must be DISJOINT* above). `raw-live-falls-below-raw-total` below pins the two-number shape.
+They read two columns. `mmRawAllocTotal` is cumulative and only ever rises; `mmRawAllocLive` rises with
+each slab request and FALLS at `__slab_free`. A `__slab_alloc` caller that frees its region moves the
+live column back: the subprocess runner's and the read probe's per-call scratch, and a service's mailbox
+envelopes, each freed the moment its message is delivered. A green-thread record is never credited at
+all: it comes from the scheduler's record arena, not the slab, and is recycled through the scheduler's
+own free lists (`runtime-scratch-reclaim.md`'s `spawn-await-loop-is-bounded`). `__mm_alloc`'s boxes move
+both raw columns and both tracked columns by the same amount, so the reader's subtraction leaves the
+public raw figures untouched by them. `raw-live-falls-below-raw-total` below pins the two-number shape.
 
-### They are maintained only in a build that READS them
+### They are maintained in EVERY heap program, per row
 
-Their maintenance is not a `.data` word — it is loads, adds and stores on the path EVERY allocation
-in the language takes. The bootstrap pays that price unconditionally and had to shard the counters
-per-P to afford it (a shared locked add measured +3%, and a first cut that also touched the free
-path +9%). The compiler gates it on `RuntimeUsage.usesMmCounters` instead, so a program that never asks how
-much it allocated carries no counter word, no `.data` slot and not one extra instruction on the
-allocation path. That is the same rule `--debugstream`'s box prefix follows: an instrument may not
-tax a program that is not being measured.
-
-MEASURED against a control built from the parent commit — an ordinary heap program that reads no
-counter: the SAME 13,163-byte image, an identical `.data` image, an identical import table, and 35
-differing bytes, all of them one `mov eax, 1` moved ahead of a `lea` inside `__mm_alloc` and
-`__mm_free`. Those are the rung's DE-DUPLICATION of the counter-update sequence rather than the
-counters, they are behaviour-identical, and no golden renders either body.
+The columns live in the slab's state region, one row of six per mcache row
+(`SlabRuntime.SlabTrafficColumn`). A P steps its own row with a plain add; every P-less thread and every
+clamped P steps the shared raw row with an atomic add once a scheduler exists, and the lone main thread
+steps it plainly before one does. No `.data` word carries a counter, so a heap program's `data {` table
+does not change with what it reads, and no shared word is stepped by every allocation in the language. A
+reader sums the rows, which is why the readers are cold and the writers are not.
 
 ### They are refused NOWHERE
 
-Each lowers to a `.data` load, which every target the compiler emits can do, and the allocator whose state
-they read runs on all of them. That is the ACCEPTANCE half of the target pair whose refusal half is
+Each sums one column over the rows of the allocator's own state region, which reaches no OS and which every
+target the compiler emits can do, and the allocator whose state they read runs on all of them. That is the ACCEPTANCE half of the target pair whose refusal half is
 `builtins-clock.md`'s `thread-cpu-ticks-rejected-on-wasm`: without a case proving these six run on
 wasm, that refusal would pass just as happily against a compiler that had stopped serving the whole
 instrumentation family there.
@@ -131,7 +127,7 @@ columns, a DELTA across a known allocation, and a return to a floor across a sco
 
 <!-- test: builtins-mm-counters.total-is-monotonic-and-moves -->
 The cumulative counter never decreases, and a real allocation moves it. The second half is what a
-lowering that read the wrong `.data` word — or answered a constant — fails first.
+lowering that summed the wrong column — or answered a constant — fails first.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -269,15 +265,15 @@ end 'main'
 **THE CASE THAT PROVES `PhaseProbe`'s SUM DOES NOT DOUBLE-COUNT.** the compiler's `__mm_alloc` obtains its
 box from `__slab_alloc`, so the obvious implementation credits every allocation to BOTH columns and
 `totalAllocs()` reads exactly double. Here a program allocates 512 array elements and nothing else:
-the TRACKED column moves and the RAW column does not, because `__mm_alloc` goes through the
-uncounted `__slab_alloc_box` twin.
+the TRACKED column moves and the RAW column does not, because the raw reader subtracts the boxes the
+slab counted on `__mm_alloc`'s behalf.
 
-✅ **SABOTAGE-VERIFIED, and it is the only case in this file that catches it.** With `__mm_alloc`
-pointed back at the COUNTED `__slab_alloc`, this case went RED (exit **2** against the pinned 7 —
-the `tracked > 0` half held and `raw == 0` did not) while all twelve other cases in this file stayed
-GREEN, `total-is-monotonic-and-moves`, `live-returns-to-its-floor`, `bytes-scale-with-the-request`
-and `total-is-never-below-live` among them. A suite without this case would have reported a
-compiler whose `totalAllocs()` reads exactly double as fully passing.
+✅ **SABOTAGE-VERIFIED, and it is the only case in this file that catches it.** With the raw readers
+answering the raw column without the tracked subtraction, this case goes RED (exit **2** against the
+pinned 7 — the `tracked > 0` half holds and `raw == 0` does not) while `total-is-monotonic-and-moves`,
+`live-returns-to-its-floor`, `bytes-scale-with-the-request` and `total-is-never-below-live` stay
+GREEN. A suite without this case would report a compiler whose `totalAllocs()` reads exactly double as
+fully passing.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -303,13 +299,57 @@ end 'main'
 7
 ```
 
+<!-- test: builtins-mm-counters.raw-total-is-never-below-tracked-total-after-boxes -->
+**THE NESTING INVARIANT, READ ACROSS A WINDOW, WHERE A RAW COLUMN NOTHING CREDITS WOULD SHOW.** Every box
+is one slab request, so `raw + boxes` is the slab's OWN request count whatever the reader's subtraction
+does, and a window that boxes N times must move it by at least N. The two halves that carry the case fail
+for opposite reasons and neither is implied by the other: a reader that subtracted the tracked column from
+a raw one nothing credited answers NEGATIVE, and an allocator that stopped crediting the raw column on the
+box path moves the sum by 0 while the box column moves by N. ⚠ A bare `raw + boxes >= boxes` would be
+neither — for the signed `int` these intrinsics answer it is `raw >= 0` rewritten, so the two halves could
+not disagree.
+
+⭐ The window is what makes it a claim about THIS program rather than about the process: the readings
+bracket the loop, so the pre-`main` scaffolding of a lane that has a scheduler cancels out of both deltas.
+`the-two-layers-are-disjoint` pins the other edge, `raw == 0`, for a whole program.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	let rawBefore = __Builtins.mmRawAllocTotal()
+	let boxesBefore = __Builtins.mmAllocTotal()
+	var buf = ByteArray.create()
+	for _ in 0 upto 256 'push'
+		buf.push(3)
+	end 'push'
+	let raw = __Builtins.mmRawAllocTotal()
+	let boxes = __Builtins.mmAllocTotal()
+	var score = 0
+	if boxes > boxesBefore 'theWindowBoxedSomething'
+		score = score + 1
+	end 'theWindowBoxedSomething'
+	if raw >= 0 'theSubtractionStaysPositive'
+		score = score + 2
+	end 'theSubtractionStaysPositive'
+	if raw + boxes - rawBefore - boxesBefore >= boxes - boxesBefore 'everyBoxIsASlabRequest'
+		score = score + 4
+	end 'everyBoxIsASlabRequest'
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
 <!-- test: builtins-mm-counters.raw-columns-count-the-scheduler-scaffolding -->
 **THE CASE THAT SAYS THE RAW COLUMNS ARE MAINTAINED AT ALL**, which is the hazard a column reading
 a plausible `0` hides. `__gt_init` takes the scheduler's tables from `__slab_alloc` before `main` runs, and
 `main` itself runs on a green thread, so by its first line the columns already count that scaffolding and
 are not 0. The window then spawns a service and awaits one message: `__svc_spawn` takes the service's
-MAILBOX (64 bytes) and `__mbox_send` takes the message's ENVELOPE (16 bytes), both from the counted
-`__slab_alloc` (`MailboxRuntime.maxon`), so the columns rise. The third assertion separates the byte column
+MAILBOX (64 bytes) and `__mbox_send` takes the message's ENVELOPE (16 bytes), both straight from
+`__slab_alloc` (`MailboxRuntime.maxon`) with no box header, so the raw columns rise and the tracked ones
+do not. The third assertion separates the byte column
 from the count column: every region the window takes is many bytes wide, so the two deltas cannot be equal
 unless one of the two intrinsics is wired to the other's slot.
 
@@ -317,10 +357,10 @@ unless one of the two intrinsics is wired to the other's slot.
 record comes from the scheduler's record arena and its stack from `osAllocPages` (see *The two LAYERS*
 above). An `async` spawn and await in this window would read `after == before`.
 
-✅ **SABOTAGE-VERIFIED.** With the raw columns' process-wide maintenance removed from `__slab_alloc`, this
-case exits **2** against 8 — both delta halves go RED, and so does the first, because a column nothing
-maintains reads 0 at `main`'s first line — and `raw-live-falls-below-raw-total` exits **6** against 7,
-while every tracked-layer case stays GREEN.
+✅ **SABOTAGE-VERIFIED.** With the raw columns' maintenance removed from `__slab_alloc`, this case exits
+**2** against 8 — both delta halves go RED, and so does the first, because a column nothing maintains
+reads 0 at `main`'s first line — and `raw-live-falls-below-raw-total` exits **6** against 7, while every
+tracked-layer case stays GREEN.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -364,24 +404,22 @@ end 'main'
 
 <!-- test: builtins-mm-counters.raw-live-falls-below-raw-total -->
 **THE CASE THAT PINS THE RAW COLUMNS AS TWO NUMBERS: A COUNTED CALLER FREES, SO `live` FALLS BELOW
-`total`.** The caller is a service's MAILBOX. `__mbox_send` cuts one envelope per message from the
-counted `__slab_alloc`, and `__mbox_recv` hands it back through `__mm_raw_free` the moment it pops the
-message, before the handler runs — so once the reply has been awaited, the one envelope this program
-sent is credited to `total` and debited from `live`. Every other raw region the program touches — the
-scheduler's tables, the P and M structs, the mailbox itself — is still held when the
-counters are read, so the envelope is the only debit, and a runtime whose envelope did not come back
-through the counted door would read `live == total`. Mailboxes run on every lane with green threads,
+`total`.** The caller is a service's MAILBOX. `__mbox_send` cuts one envelope per message from
+`__slab_alloc`, and `__mbox_recv` hands it back through `__slab_free` the moment it pops the message,
+before the handler runs — so once the reply has been awaited, the one envelope this program sent is
+credited to `total` and debited from `live`. Every other raw region the program touches — the
+scheduler's tables, the P and M structs, the mailbox itself — is still held when the counters are read,
+so the envelope is the only debit, and a runtime whose free door did not debit the live column would read
+`live == total`. Mailboxes run on every lane with green threads,
 so the case needs no Windows-only scratch.
 
 It is asserted only where there is something to compare — after the send, so the count is non-zero —
 because `0 < 0` is false and `0 == 0` was true, and neither says anything about a runtime that
 maintains no raw counter at all.
 
-✅ **RED BEFORE GREEN, MEASURED.** With the envelope freed through the plain `__slab_free` — a door the
-raw columns never see — this program reads `live == total` (30 and 30 at a 16-processor default)
-and answers **3**. Through
-`__mm_raw_free` it reads `live == total - 1` at one, two and four processors and at the machine's
-count. ⚠ Under the sabotage that removes the raw columns' maintenance entirely, the `total > 0` half
+✅ **RED BEFORE GREEN, MEASURED.** With `__slab_free` not debiting the live column this program reads
+`live == total` (30 and 30 at a 16-processor default) and answers **3**; with the debit it reads
+`live == total - 1` at one, two and four processors and at the machine's count. ⚠ Under the sabotage that removes the raw columns' maintenance entirely, the `total > 0` half
 fails instead, so the two halves fail for opposite reasons and neither can carry the case alone.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -421,14 +459,16 @@ end 'main'
 
 <!-- test: builtins-mm-counters.all-six-run-on-wasm -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-**THE ACCEPTANCE HALF OF THE TARGET PAIR.** The six counters reach no OS — each is a `.data` load —
-so they lower on every target the compiler emits and are refused nowhere. Pinned on the lane that REFUSES
+**THE ACCEPTANCE HALF OF THE TARGET PAIR.** The six counters reach no OS — each sums a column of the
+allocator's own state region — so they lower on every target the compiler emits and are refused nowhere. Pinned on the lane that REFUSES
 `__Builtins.threadCpuTicks()` (`builtins-clock.md`'s `thread-cpu-ticks-rejected-on-wasm`), because
 that refusal alone cannot tell a narrow gate from a compiler that has stopped serving the whole
 instrumentation family there.
 
 It is also the one case that names all six in one program, and so the only place `mmRawAllocBytes`
-is exercised outside the x64-windows scheduler cases.
+is exercised outside the scheduler cases. The three raw readers must answer exactly 0: every slab request
+this program makes is a box, and the reader subtracts the tracked column — the byte column less the box
+header per box — from the raw one.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -464,8 +504,9 @@ end 'main'
 
 <!-- test: builtins-mm-counters.a-thread-is-billed-only-its-own-allocations -->
 ⭐⭐⭐ **THE CASE THE POOL NEEDS, AND THE ONE THE SIX ABOVE STRUCTURALLY CANNOT BE.** Every column above is
-a process-wide `.data` word, which is exact while ONE thread allocates and worthless the moment several do:
-a bracket opened inside a worker counts every other worker's traffic for the whole of its span. MEASURED on
+summed over every row, so each answers for the whole PROCESS — exact while ONE thread allocates and
+worthless the moment several do: a bracket opened inside a worker counts every other worker's traffic for
+the whole of its span. MEASURED on
 a stage-2 self-compile, `regalloc:splitting` reported **1,207,232,853** allocations at sixteen processors
 against **77,890,562** at one — the identical compile, and the sub-phase rows went into `--metrics`,
 `--log=compiler:debug`, `scale-test` and `docs/optimization-log.md` saying so.

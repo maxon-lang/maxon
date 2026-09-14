@@ -4,7 +4,7 @@
 // pointer behind a 24-byte MM header, the caller owns it, and a scope-exit `__mm_decref` releases it. This
 // pass finds the records a frame provably cannot let escape and gives them FRAME STORAGE instead — a
 // reserved slot region addressed by `StdOp.stackRecordAddr` — deleting the allocation, the header, the
-// `__mm_alloc_count` entry and the drop together.
+// entry in the tracked traffic columns and the drop together.
 //
 // ⭐⭐⭐ **THE CRUX: THE ALLOCATION IS NEVER IN THE FRAME THAT OWNS THE RECORD, AND THE LANGUAGE IS WHY.**
 // `struct-construction-restriction` (E3076) forbids `Point{x: 1, y: 2}` anywhere but inside `Point`'s own
@@ -102,7 +102,8 @@
 // ⚠ **THE DROP MUST BE THERE TO DELETE.** A promotable record must have at least one `call __mm_decref(v)`
 // naming it. A record the caller never drops is one whose ownership this pass does not model, and refusing
 // it costs a promotion rather than risking a shape other than the one described here. The alloc's `+1` and
-// the free's `-1` on `__mm_alloc_count` then disappear together, so the leak gate (exit 101) still balances.
+// the free's `-1` on the tracked live column then disappear together, so the leak gate (exit 101) still
+// balances.
 //
 // ══════════════════════════════════════════════════════════════════════════════════════════════════════
 // ⛔ TWO WHOLE-COMPILE GATES, AND EACH IS A MEASUREMENT RATHER THAN AN OVERSIGHT

@@ -923,16 +923,14 @@ end 'drainReachableWorklist'
 // `isIntrinsicBuiltinConformance` says these two conform with no `implements` at all.
 //
 // ⛔⛔ **AN UNCONDITIONAL SEED BREAKS THE RUNTIME FLOOR FOR EVERY PROGRAM IN THE LANGUAGE.** With the cone
-// listed those five names ARE stdlib names, so a root list that always carries them makes
+// listed those five names ARE stdlib names, so a root list that seeds them unconditionally makes
 // `anyNameReachesStdlib` answer TRUE for a program whose whole text is `return 0 as ExitCode`: the
 // allocation-free short-circuit never fires, the precise walk runs on every compile, and it reaches
 // `Character.hash` — whose conformer key then credits `Character.clone`/`Character.init`, bodies that build
-// the managed record `Character{managed: …}`. `scanRuntimeUsage` turns the heap on,
-// `Compiler.compileToCodeResult` lays down `MmRuntime.runtimeGlobals()`, and five
-// `static-variables/data-section-*` pins read their `var` 24 bytes off its true offset. MEASURED, on that
-// program: `data { __slab_cursor@0  __slab_end@8  __mm_alloc_count@16 }` where the section must be EMPTY —
-// `compileToCodeResult`'s own invariant, *"a `return 42` program allocates nothing, so it gets no allocator,
-// no `.data` slots and no leak check"*.
+// the managed record `Character{managed: …}`. `scanRuntimeUsage` turns the heap on, the image is laid down
+// with the allocator's `.data` slots in it, and the `static-variables/data-section-*` pins then read their
+// `var` at a displaced offset — against `compileToCodeResult`'s own invariant, *"a `return 42` program
+// allocates nothing, so it gets no allocator, no `.data` slots and no leak check"*.
 //
 // ⭐⭐⭐ **SO THE SEED IS GATED ON THE QUESTION IT IS THE ANSWER TO: CAN THE REACHED CODE NAME A WITNESS
 // TABLE?** Every table in the emitted image is registered by `LowerMaxonToStd.ensureWitnessTable`, and it has

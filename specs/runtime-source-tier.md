@@ -68,13 +68,16 @@ and reads no usage record, so such a body would have to spell every arm uncondit
 different body, not a harder one.
 
 ⚠ **A LITERAL A BUILDER'S CALLER PASSES IS NOT SUCH AN ARGUMENT.** `zeroed` never reaches `RuntimeUsage`:
-`SlabRuntime.installSlabRuntime` passes a literal to each of the three allocation doors, and an argument
-that is fixed per ENTRY POINT is one tier source spells as a `bool` parameter on one helper. That is a cost;
-`sharded` (`usesGt`) and `countRaw` (`usesMmCounters`) are the blockers.
+`SlabRuntime.installSlabRuntime` passes a literal to each of the two allocation doors, and an argument
+that is fixed per ENTRY POINT is one tier source spells as a `bool` parameter on one helper. That is a cost.
+⚠ **AND A TARGET FACT IS THE SAME KIND OF BLOCKER.** The allocator reads no usage bit — its sharding and
+its traffic columns are in every heap program, gated at run time by the scheduler word in its state head —
+but the walk to "which processor am I" is a `tlsSlotLoad` on four lanes and a constant on wasm
+(`TargetFacilities.machineModel`), and tier source is compiled once for every lane.
 
 ⇒ **A FAMILY'S PARTITION IS DECIDED BY ITS BUILD-TIME ARGUMENTS BEFORE ITS CALL GRAPH IS EVEN CONSULTED, AND
 THE SECOND-SPELLING TEST IS ASKED AFTER BOTH.** Nine of the object layer's fourteen entry points are blocked
-by the argument; three more by the second-spelling rule (`__slab_drain_remote`, `__slab_rounded_size` and
+by the machine model; three more by the second-spelling rule (`__slab_drain_remote`, `__slab_rounded_size` and
 `__slab_span_destroy` each share a walk with a body that stays); and the five that move take neither.
 
 ## Tests

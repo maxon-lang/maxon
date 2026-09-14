@@ -453,22 +453,6 @@ export type RuntimeUsage
 	// surviving body names it (`SchedRuntime.schedRuntimeGlobals`).
 	export var usesCpuCount as bool
 
-	// ⭐⭐ **THE PROGRAM READS THE ALLOCATOR'S OWN TRAFFIC COUNTERS** (`__Builtins.mmAllocTotal` and its five
-	// siblings ⇒ the `__mm_counter_*` band). Its own bit, and here the discipline buys the most it ever has:
-	// the bit gates not just an entry point but the COUNTER MAINTENANCE ITSELF — the loads, adds and stores
-	// `__mm_alloc` and `__slab_alloc` make on every allocation in the language. A program that never asks how
-	// much it allocated carries no counter word and not one extra instruction on that path — MEASURED against a
-	// control built from the parent commit, and see `MmRuntime.MmAllocTotalLabel` for the 35 bytes that DO
-	// move and why they are not the counters. It is the same rule `--debugstream`'s box prefix follows and for
-	// the same reason: an instrument may not tax a program that is not being measured.
-	//
-	// ⚠ It declares `usesHeap`, and that is a STRUCTURAL dependency rather than a convenience: the counters
-	// ARE the allocator's state, and a reader without the allocator would read words nothing ever steps.
-	// The `__mm_` prefix already carries that declaration (`isRuntimeCallee`); this narrower band test is
-	// what adds the maintenance. The counter words themselves ride no bit: `MmRuntime.runtimeGlobals` lays
-	// each out where a surviving body names it.
-	export var usesMmCounters as bool
-
 	// The program asks how much CPU TIME its own thread has consumed (`__Builtins.threadCpuTicks` ⇒
 	// `__thread_cpu_ticks`). Its own bit rather than `usesWallClock`'s: the two share a file and a shape but
 	// reach different Win32 imports, so a program that reads the calendar must not import
@@ -570,7 +554,7 @@ export type RuntimeUsage
 	export var parksOnIo as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesChildPipes: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesManagedListener: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesBackgroundPriority: false, usesTerminalDetection: false, usesCpuCount: false, usesMmCounters: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSlabArena: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, parksOnIo: true}
+		return Self{usesHeap: false, usesGt: false, usesChildPipes: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesManagedListener: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesBackgroundPriority: false, usesTerminalDetection: false, usesCpuCount: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSlabArena: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, parksOnIo: true}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -982,15 +966,6 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if isSchedSubstrateQueryCallee(callee) 'schedStateQueries'
 		recordGtUsage(usage)
 	end 'schedStateQueries'
-
-	// ⭐ **THE ALLOCATOR'S TRAFFIC COUNTERS.** The `__mm_counter_` band is a STRICT SUBSET of the `__mm_` one
-	// the first arm of this function already matched, so `usesHeap` is set by the time this line runs — which
-	// is exactly the transitive declaration the counters need (see `usesMmCounters`) and the reason the band
-	// wears the heap prefix rather than one of its own. What this narrower test adds is the MAINTENANCE:
-	// without it the allocator keeps only the live count it has always kept.
-	if isMmCounterCallee(callee) 'mmCounters'
-		usage.usesMmCounters = true
-	end 'mmCounters'
 
 	// ⭐⭐ **THE SCAVENGER (S6) — THE ONE BUILTIN HERE THAT SETS A BIT AND OWNS NONE.** `__slab_scavenge` walks
 	// every mcentral list and every arena bitmap, so a program whose ONLY heap contact is

@@ -121,9 +121,11 @@ still spawning. A coroutine's queue is its strand's, and only the machine holdin
 machine running the dropper — so no processor count exposes it.
 `scripts/multicore-stress/drop-running-torture.maxon` measures the shape a `spawn` DOES expose.
 
-⚠ **EVERY CASE HERE CARRIES An `unsupported-targets:` MARKER, and that is a property of the subject.** They are all
-green-thread programs, and the green-thread substrate exists on exactly the lanes that have written it —
-x64-windows and, since the arm64-macOS scheduler landed, that one too. `async-scheduler.md`'s *Targets*
+⚠ **NO CASE HERE CARRIES AN `unsupported-targets:` MARKER, AND NONE MAY.** They are all green-thread
+programs, and the green-thread substrate exists on exactly the lanes that have written it — x64-windows and,
+since the arm64-macOS scheduler landed, that one too. A lane without it refuses the program at its own span,
+which the harness counts as a SKIP naming the case; a marker would make the same fact invisible
+(`maxon-bin/CLAUDE.md`, *do not mark a case the compiler already refuses*). `async-scheduler.md`'s *Targets*
 section is the one statement of that gate.
 
 ⚠ **FIVE CASES HERE NAME x64-windows ALONE, AND THE REASON IS NOT THE RUN QUEUE.** Each additionally starts

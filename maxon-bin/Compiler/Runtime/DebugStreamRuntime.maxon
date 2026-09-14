@@ -699,8 +699,8 @@ let DsEnvBufferBytes = 512
 
 // The `.data` slots the producer owns, each laid out where a surviving body names it (`DataReach.walked`)
 // — and only a build carrying the producer has such a body, so every other program's `.data` image is
-// unchanged. Ordinary i64 slots in every respect, exactly like MmRuntime's `runtimeGlobals()` and
-// GtRuntime's `gtRuntimeGlobals()`.
+// unchanged. Ordinary i64 slots in every respect, exactly like `SlabRuntime.slabRuntimeGlobals` and
+// `GtRuntime.gtRuntimeGlobals`.
 export function debugStreamRuntimeGlobals() returns DataSectionEntryArray
 	var out = DataSectionEntryArray.create()
 
@@ -747,7 +747,7 @@ end 'buildCarriesDebugStream'
 // which only scheduler bodies write. A producer that read them unconditionally would lay them into every
 // scalar program's image (a walked word follows its reader) and read a slot nothing ever initialised.
 // See `emitStoreLogIdentity`.
-export function installDebugStreamRuntime(module StdModule, globalData GlobalDataTable, usesGt bool, rawFree ByteArray)
+export function installDebugStreamRuntime(module StdModule, globalData GlobalDataTable, usesGt bool)
 	let envNameLabel = globalData.registerRdataConstant(DsEnvNameRdataPrefix, bytes: cStringBytes(DsActivationEnvVar), kind: RdataPayloadKind.envName)
 
 	// ⚠ **BOTH TABLES, END TO END, IN ONE IMAGE.** The monitor scans the section for each magic rather than
@@ -759,7 +759,7 @@ export function installDebugStreamRuntime(module StdModule, globalData GlobalDat
 	symdata.append(debugStreamNameBlob(DsStrBlobMagic, names: globalData.debugStreamNames.names))
 	globalData.symdataImage = symdata
 
-	buildDsInit(module, envNameLabel: envNameLabel.toByteArray(), rawFree: rawFree)
+	buildDsInit(module, envNameLabel: envNameLabel.toByteArray())
 	buildDsShutdown(module)
 	buildDsReserve(module)
 	buildDsCommit(module)
@@ -792,7 +792,7 @@ end 'installDebugStreamRuntime'
 // as readable, so writing v2 entries into it hands it our UNCOMMITTED payloads — reintroducing, silently,
 // the exact torn read the commit bit closes. An empty trace is a visibly missing instrument; a wrong one
 // is not.
-function buildDsInit(module StdModule, envNameLabel ByteArray, rawFree ByteArray)
+function buildDsInit(module StdModule, envNameLabel ByteArray)
 	var func = IrFunction.createFromStd(DsInitName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
@@ -830,7 +830,7 @@ function buildDsInit(module StdModule, envNameLabel ByteArray, rawFree ByteArray
 	// buffer is spent for the same reason — the open resolved it — and it is released here rather than on each
 	// of the four exits below, all of which pass through this block.
 	module.appendOp(entry, op: StdOp.osCloseHandle(handle))
-	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: rawFree, args: argsOf(envBuf)))
+	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(envBuf)))
 	let mapped = emitCmp(module, block: entry, a: base, b: emitConst(module, block: entry, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(mapped, thenBlockId: checkMagic.id, elseBlockId: dark.id))
 
@@ -897,8 +897,8 @@ end 'buildDsShutdown'
 
 // `[base + offset] += 1` — the two ring counters the monitor's closing summary reads (`total_events`,
 // `dropped_events`). Both increments happen under the ring lock, which is why a plain read-modify-write is
-// the whole of it: this is `MmRuntime`'s own argument for its unlocked `__mm_alloc_count`, one level
-// stronger, because here the mutual exclusion is explicit rather than a property of the rung.
+// the whole of it — the allocator's own argument for stepping a sole-writer traffic row plainly, one level
+// stronger, because here the mutual exclusion is explicit rather than a property of who is running.
 function emitBumpSegmentCounter(module StdModule, block IrBlock, base ValueId, offset ByteOffset, ids ValueMinter)
 	let current = emitLoadField(module, block: block, record: base, offset: offset, ids: ids)
 	let one = emitConst(module, block: block, value: 1, ids: ids)

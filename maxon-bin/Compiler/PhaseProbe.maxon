@@ -309,16 +309,28 @@ function allocsSoFar(source CounterSource) returns AllocCount
 	end 'which'
 end 'allocsSoFar'
 
-// ⭐ **THE CUMULATIVE FREE COUNT, AND THE TWO SOURCES REACH IT DIFFERENTLY.** The allocator's process-wide
-// columns are (cumulative, live) — a live count is what the leak gate needs — so `freed = total - live`,
-// which is exact at every instant by definition. A green thread keeps no live count (it does not own the
-// boxes it allocated), so its frees are counted directly.
+// ⭐ **THE CUMULATIVE FREE COUNT, AND THE TWO SOURCES REACH IT DIFFERENTLY.** The allocator reports a
+// process-wide (cumulative, live) pair — a live count is what the leak gate needs — so `freed = total -
+// live`. A green thread keeps no live count (it does not own the boxes it allocated), so its frees are
+// counted directly.
+//
+// ⛔ **THE SUBTRACTION IS GUARDED BECAUSE ITS TWO TERMS ARE FOUR SEPARATE READS.** Each reader walks the
+// allocator's rows on its own, so a thread allocating between two of the four walks can leave `live` above
+// `total` by the allocations in flight — and `AllocCount` is unsigned, so the difference would not read as
+// a small negative but as a range-check panic in whatever asked.
 function freesSoFar(source CounterSource) returns AllocCount
 	return match source 'which'
-		processWide gives processWideAllocs() - processWideLive()
+		processWide gives freedProcessWide()
 		callingThread gives callingThreadFrees()
 	end 'which'
 end 'freesSoFar'
+
+function freedProcessWide() returns AllocCount
+	let total = processWideAllocs()
+	let live = processWideLive()
+
+	return (total - live) if total >= live else 0 as AllocCount
+end 'freedProcessWide'
 
 function bytesSoFar(source CounterSource) returns HeapByteCount
 	return match source 'which'

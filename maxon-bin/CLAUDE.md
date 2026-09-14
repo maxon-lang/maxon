@@ -249,17 +249,20 @@ Four doors are still standing open rather than shut:
   portable, and its INSTRUMENTATION and SPECIALISATION are a function of the program and a builder's job
   forever.**
   ⛔ **`zeroed` IS NOT ON THAT LIST AND NEVER WAS — IT NEVER TOUCHES `RuntimeUsage`.**
-  `installSlabRuntime` passes a LITERAL to each of the three allocation doors (`__slab_alloc` zeroes,
-  `__slab_alloc_raw` does not, `__slab_alloc_box` zeroes), and a build-time argument that is a literal per
-  ENTRY POINT is one tier source simply spells — as one Maxon helper with a `bool` parameter, which is a cost
-  and not a blocker. The real blockers there are `sharded` (`usage.usesGt`) and `countRaw`
-  (`usage.usesMmCounters`).
+  `installSlabRuntime` passes a LITERAL to each of the two allocation doors (`__slab_alloc` zeroes,
+  `__slab_alloc_raw` does not), and a build-time argument that is a literal per ENTRY POINT is one tier
+  source simply spells — as one Maxon helper with a `bool` parameter, which is a cost and not a blocker.
+  ⭐ **THE ALLOCATOR READS NO USAGE BIT AT ALL.** Its sharding, its lock and its traffic columns are
+  compiled into every heap program, and whether a second thread exists is a RUN-TIME word in the slab's
+  state head (`SlabRuntime.SlabStateSchedulerOffset`). The one build-time fork is the TARGET's
+  `TargetFacilities.machineModel`: on wasm the walk to "which processor am I" is a constant because the
+  backend has no `tlsSlotLoad`. That fork is what still keeps the doors out of the tier.
 
   `runtime/SlabRuntime.maxon` holds FIVE of `SlabRuntime.maxon`'s fourteen entry points: the OS-direct pair
   `__slab_os_direct_alloc`/`__slab_os_direct_free`, the whole of the above-32 KiB road, plus
   `__slab_state_base` and the metadata slab's `__slab_meta_alloc`/`__slab_meta_free`. NINE of the rest are
-  emitted DIFFERENTLY per program off `sharded` or `countRaw` — the lock enter/leave and the TLS read that
-  answers *"which P am I"*. The other two are blocked the arena's way: `__slab_drain_remote` calls
+  emitted DIFFERENTLY per TARGET off the machine model — the TLS read that answers *"which P am I"* is a
+  constant on wasm. The other two are blocked the arena's way: `__slab_drain_remote` calls
   `__slab_arena_map_get`, and `__slab_rounded_size` shares `emitSlabClassIndex` with `__slab_alloc`, so
   porting either alone would be a second spelling of one walk.
   ⛔⛔ **AND `__slab_span_destroy` IS BLOCKED THAT SAME WAY, WHICH IS NOT WHERE ITS BLOCKER WAS PREDICTED.**
@@ -284,8 +287,7 @@ Four doors are still standing open rather than shut:
   UNCONDITIONALLY and every allocating program reaches it, so the row is now MEASURED through a reached tier
   body: `InitializeCriticalSection`, `mrt_host_lock_init`'s futex build on the two Linux lanes, a RECURSIVE
   `pthread_mutex_init` on arm64-macOS, and nothing at all on wasm32-wasi. `osLockEnter`/`osLockLeave` are
-  still spelled from tier source by no reached body — the BUILDERS emit them in a sharded build, which is a
-  different road — so their isel evidence is the scheduler's and not the tier's.
+  still spelled from tier source by no reached body — the BUILDERS emit them, which is a different road — so their isel evidence is the scheduler's and not the tier's.
   ⭐⭐ **AND THE ARENA'S TWO `.data` WORDS ARE ADDRESSED BY ROWS OF THEIR OWN** —
   `slabArenaListAddr` and `slabArenaMapL1Addr`, lowering to a `globalAddr` on
   `SlabArena.SlabArenaListLabel`/`SlabArenaMapL1Label`, and laid out as `DataReach.walked` words exactly

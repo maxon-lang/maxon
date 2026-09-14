@@ -72,7 +72,9 @@
 //      load/add/store by hand. ⚠ That door emits an `atomicRmw` only where a second OS thread can exist
 //      (`multiM`, which is `usage.usesGt`) — every counter named above is built only under `usesGt`, so all
 //      of them are always atomic; the box layer's counters in a one-thread program are plain, where there is
-//      no second writer to serialise against.
+//      no second writer to serialise against. The allocator's traffic columns are not `.data` words at all:
+//      they are per-row words in the slab's state region, single-writer on a P's row and atomic on the raw
+//      row (`SlabRuntime.emitSlabTrafficCredit`).
 //      ⚠ **THE WORD "EVERY" IS LOAD-BEARING**, and a counter stepped far from its declaration is the one
 //      that escapes it — `__sched_active_workers` is stepped at a worker's birth and exit, inside
 //      `buildSchedLoop`. A list of what obeys a rule is worth
@@ -138,14 +140,9 @@
 // tier up — *"a new variant cannot be added without declaring all of it"* — and it has that shape's property:
 // there is no state at which the fact is missing, so there is nothing to check.
 export enum MultiMSharing
-	// Every mutation is `StdOp.atomicRmw` or `StdOp.atomicCas` IN EVERY BUILD WHERE A SECOND M CAN EXIST.
-	// The counters (`MmRuntime.emitGlobalAccumulate`) and the claim words are here.
-	//
-	// ⚠ **THE QUALIFIER IS NOT A LOOPHOLE.** `emitGlobalAccumulate` emits a plain
-	// load/add/store when `usage.usesGt` is false — a program with no green threads has ONE OS thread, so
-	// there is no second writer for an atomic to serialise against and the `lock` prefix is paid on every
-	// allocation in the language to guard a race that cannot occur. The class states the discipline a slot
-	// owes WHEN THE HAZARD EXISTS; it never claimed a prefix is emitted where no thread can race.
+	// Every mutation is `StdOp.atomicRmw` or `StdOp.atomicCas`. The scheduler's counters
+	// (`MmRuntime.emitGlobalAccumulate`) and the claim words are here; every one of them is built only
+	// where a second M can exist.
 	atomicStep
 
 	// Every mutation, and every read WHOSE ANSWER IS USED, happens inside `__sched_lock`. A word whose
@@ -874,7 +871,7 @@ let POffRetakeCount = POffStealCount + (PointerSlotBytes as ByteOffset)
 // ⛔⛔ **IT IS CREDITED TO THE **TARGET** P — THE ONE WHOSE QUEUE RECEIVES THE SLOT — AND NOT TO THE FREEING
 // P. THE CHOICE IS FORCED, NOT A PREFERENCE.** The sum is over every P either way, so the total is the same
 // number whenever both parties have a P; what differs is the case where the FREEING side has none.
-// `SlabRuntime.emitSlabCurrentP` answers `MspanOwningPNone` for three real situations — before
+// `SlabRuntime.emitSlabResolveShard` answers `MspanOwningPNone` for three real situations — before
 // `__sched_init_procs` has run, on an OS thread holding no M,
 // and on an M holding no P — and every one of those can free a box whose span a live P owns. That IS a
 // cross-processor free and it takes this road; crediting the pusher would have to store through a sentinel,
@@ -1973,7 +1970,7 @@ end 'emitLoadCurrentM'
 // `bailValues` are the constants the bail edge carries, one per block arg of `bail` — minted fresh in
 // whichever block takes the arm, because a branch edge's arguments must be defined in the block that
 // branches. A `bail` with no block args (`__sched_runq_put`'s global queue) passes none.
-export function emitLoadCurrentMOrBail(module StdModule, cur IrBlock, haveOffset IrBlock, haveMachine IrBlock, bail IrBlock, bailValues ParsedIntArray, ids ValueMinter) returns ValueId
+function emitLoadCurrentMOrBail(module StdModule, cur IrBlock, haveOffset IrBlock, haveMachine IrBlock, bail IrBlock, bailValues ParsedIntArray, ids ValueMinter) returns ValueId
 	let tebOffset = emitLoadGlobalWord(module, block: cur, label: SchedTlsTebOffsetLabel, ids: ids)
 	emitBailIfZero(module, block: cur, tested: tebOffset, bail: bail, bailValues: bailValues, otherwise: haveOffset, ids: ids)
 
@@ -2309,7 +2306,7 @@ end 'schedRuntimeGlobals'
 
 // Install the P/M half of the scheduler. Called from `installGtRuntime`, so it rides `usesGt` exactly as the
 // green-thread half does — there is no program that wants one without the other.
-export function installSchedRuntime(module StdModule, target Target, rawFree ByteArray)
+export function installSchedRuntime(module StdModule, target Target)
 	buildSchedInitProcs(module, target: target)
 	buildSchedRunqPut(module)
 	buildSchedRunqNext(module)
@@ -2354,7 +2351,7 @@ export function installSchedRuntime(module StdModule, target Target, rawFree Byt
 	buildSchedWakeOrSpawn(module)
 
 	// The poller the idle tail blocks in, and the door a newly earliest deadline wakes it through.
-	installNetpollRuntime(module, target: target, rawFree: rawFree)
+	installNetpollRuntime(module, target: target)
 	buildSchedWakeNetpoller(module)
 	buildSchedWakePoller(module)
 
@@ -2433,14 +2430,19 @@ export function emitSchedLockLeave(module StdModule, block IrBlock, ids ValueMin
 	emitSchedStepLockDepth(module, block: block, delta: OneFewer, ids: ids)
 end 'emitSchedLockLeave'
 
-// ⭐⭐ **STEP THE CALLING MACHINE'S RUNTIME-LOCK DEPTH — `MOffLocks`, and the slab's lock pair steps it too.**
-// EXPORTED for that second pair: a thread holding the ALLOCATOR's slow-path lock is as unstoppable as one
-// holding `__sched_lock`, and two mechanisms writing one word through two spellings is the shape this file's
-// header refuses.
-export function emitSchedStepLockDepth(module StdModule, block IrBlock, delta ParsedInt, ids ValueMinter)
-	let addr = emitSchedLockDepthAddr(module, block: block, ids: ids)
-	module.appendOp(block, op: StdOp.atomicRmw(ids.mint(), addrId: addr, operandId: emitConst(module, block: block, value: delta, ids: ids), opcode: StdAtomicRmwOpcode.add))
+// ⭐⭐ **STEP THE CALLING MACHINE'S RUNTIME-LOCK DEPTH — `MOffLocks`.** The allocator's lock pair steps the
+// same word through `emitStepLockDepthAt`: a thread holding the ALLOCATOR's slow-path lock is as
+// unstoppable as one holding `__sched_lock`, and two mechanisms writing one word through two spellings is
+// the shape this file's header refuses.
+function emitSchedStepLockDepth(module StdModule, block IrBlock, delta ParsedInt, ids ValueMinter)
+	emitStepLockDepthAt(module, block: block, depthAddr: emitSchedLockDepthAddr(module, block: block, ids: ids), delta: delta, ids: ids)
 end 'emitSchedStepLockDepth'
+
+// The step itself, for a caller that resolved the depth word by its own walk — the allocator's, which has
+// no `.data` teb offset to read in a program without a scheduler (`SlabRuntime.emitSlabResolveShard`).
+export function emitStepLockDepthAt(module StdModule, block IrBlock, depthAddr ValueId, delta ParsedInt, ids ValueMinter)
+	module.appendOp(block, op: StdOp.atomicRmw(ids.mint(), addrId: depthAddr, operandId: emitConst(module, block: block, value: delta, ids: ids), opcode: StdAtomicRmwOpcode.add))
+end 'emitStepLockDepthAt'
 
 // ⭐⭐ **WHERE THE CALLING THREAD KEEPS ITS LOCK DEPTH: ITS OWN MACHINE'S WORD, OR THE SINK IF IT HAS NO
 // MACHINE.** The monitor thread takes `__sched_lock` and has no M (`buildSysmon`'s header), and it runs no
@@ -2835,7 +2837,12 @@ function buildSchedInitProcs(module StdModule, target Target)
 	let slotStride = emitConst(module, block: entry, value: PointerSlotBytes, ids: ids)
 	let slotBytes = emitBin(module, block: entry, a: tlsIndex, b: slotStride, opcode: StdBinOpcode.mul, ids: ids)
 	let tebBase = emitConst(module, block: entry, value: tlsSlotArrayBase(target), ids: ids)
-	emitStoreGlobalWord(module, block: entry, label: SchedTlsTebOffsetLabel, value: emitBin(module, block: entry, a: slotBytes, b: tebBase, opcode: StdBinOpcode.add, ids: ids), ids: ids)
+	let tebOffset = emitBin(module, block: entry, a: slotBytes, b: tebBase, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreGlobalWord(module, block: entry, label: SchedTlsTebOffsetLabel, value: tebOffset, ids: ids)
+
+	// The allocator reads the same offset out of its own state head, because this `.data` word is laid
+	// out only where a scheduler exists and every heap program's allocator asks the question.
+	emitSlabPublishScheduler(module, block: entry, tebOffset: tebOffset, ids: ids)
 
 	// How many Ps: the machine's processor count, unless `MAXON_MAX_PROCS` names another count within it.
 	// The answer arrives as `settled`'s block arg, because the decision is a five-way merge.
@@ -2926,7 +2933,7 @@ function buildSchedInitProcs(module StdModule, target Target)
 	// ⚠ **THE M IS BUILT BEFORE THE P IS TAKEN, AND THE ALLOCATIONS INSIDE IT RUN WITH NO M AT ALL.**
 	// `__sched_tls_teb_offset` is already published by `entry` above while this thread's TLS slot still reads
 	// 0, so the `__slab_alloc` for the M struct itself takes `SlabRawShardRow` under the lock — reaching it
-	// through `emitSlabCurrentP`'s **no-M** arm (`emitSchedBecomeM` publishes the slot LAST), not through the
+	// through `emitSlabResolveShard`'s **no-M** arm (`emitSchedBecomeM` publishes the slot LAST), not through the
 	// P-less-M one. ⛔ **Do not read that as coverage of a P-less M**: this thread has no M yet, which is a
 	// different zero from an M that holds no processor. A parked worker with `M->currentP == 0` running its
 	// timer poll is the second one, and it is not this.
@@ -2991,7 +2998,7 @@ end 'buildSchedInitProcs'
 //
 // ⚠ **A WORKER's M STRUCT COMES OUT OF THE CREATOR's OWN P SHARD.** `SlabRawShardRow` is exercised by other
 // callers: the poller, back from its wait holding no processor, runs `__gt_timer_check`
-// with `M->currentP == 0` (`wpolled`), which is `emitSlabCurrentP`'s **P-less-M** arm.
+// with `M->currentP == 0` (`wpolled`), which is `emitSlabResolveShard`'s **P-less-M** arm.
 
 // ⭐⭐ **ALLOCATE AND REGISTER AN M — the creator's half.** The struct, its park event, the processor it is
 // being given, and its place on the roster.
@@ -5402,7 +5409,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	// ⭐⭐ **THE POLLER GIVES THE ROLE BACK, FIRES WHAT IS DUE AND REAPS WHAT EXITED, THEN LOOKS AGAIN.** What it
 	// readies goes to the global queue (it holds no processor), and its wake debt is not paid: `wparkcheck` sees
 	// that queue next and takes a processor to run it, so a program with nothing else running does not start a
-	// machine for work this one is about to do. ⚠ **THIS IS THE PRODUCER FOR `emitSlabCurrentP`'s P-LESS-M
+	// machine for work this one is about to do. ⚠ **THIS IS THE PRODUCER FOR `emitSlabResolveShard`'s P-LESS-M
 	// ARM**: anything the two walks allocate is allocated with `M->currentP` at 0, so
 	// `SlabRuntime.emitSlabShardRow` routes it to the raw row under the slab's own lock. The walks take
 	// `__sched_lock` again, recursively.
@@ -6668,7 +6675,7 @@ end 'emitSchedSysmonStart'
 // ⭐ **IT IS NOT AN M AND MUST NOT BECOME ONE.** It never calls `emitSchedBecomeM`, so its TLS slot stays 0
 // for its whole life — which is what makes the syscall shim take its DIRECT arm on every kernel call this
 // thread makes (`emitLoadCurrentGtOrBail`'s first test), what routes every allocation `__sched_startm` makes
-// on its behalf to the allocator's raw shard (`SlabRuntime.emitSlabCurrentP`'s bail), and what keeps it off
+// on its behalf to the allocator's raw shard (`SlabRuntime.emitSlabResolveShard`'s bail), and what keeps it off
 // `__sched_allm` and `__sched_mcount` — so `__sched_checkdead` never counts it as a running machine and
 // `__sched_stop_workers` never tries to join it. **Those three are one property, stated once here rather than
 // arranged for three times.**
@@ -6977,7 +6984,7 @@ end 'buildSchedExitSyscall'
 //     road that is left **because of the order `__gt_drain_at_exit` fixes**: the scheduler has run out BEFORE
 //     the flag is set, so this machine enters no scheduler loop again and `__sched_find_runnable` is
 //     unreachable from here. The two doors the exit path does still use — an allocation
-//     (`SlabRuntime.emitSlabCurrentP`) and a publish (`__sched_runq_put`) — each test `M->currentP` on their
+//     (`SlabRuntime.emitSlabResolveShard`) and a publish (`__sched_runq_put`) — each test `M->currentP` on their
 //     own account and carry a P-less arm.
 //
 // Either arm leaves the waiters first, so a processor released afterwards reaches `__sched_pidle`.
