@@ -192,6 +192,22 @@ public enum __ManagedSocketError implements Error
 	closed  // operation on already-closed socket
 end '__ManagedSocketError'
 
+// __ManagedListenerError - errors for the SERVER side of `__ManagedSocket`: `bindListener`, `boundPort` and
+// `accept`.
+//
+// ⚠ **THE SERVER SIDE HAS ITS OWN ENUM RATHER THAN FOUR MORE `__ManagedSocketError` CASES, AND THE REASON IS
+// THE SEED.** `BuiltinErrorOrdinalCheck` is constructed per FAMILY by the runtime that transcribes it, so a
+// compiler which installs no listener runtime builds no check over this enum and never looks at it — where a
+// case APPENDED to a transcribed enum is refused by any compiler still running the TOTAL ordinal check.
+// `ManagedListenerRuntime.claimManagedListenerOrdinals` carries that argument in full.
+public enum __ManagedListenerError implements Error
+	resolveFailed  // the bind address did not resolve
+	bindFailed  // socket/bind/listen refused — a live port, a privileged one, or no socket at all
+	acceptFailed  // accept() failed, or the wait for a connection ended without one
+	addressFailed  // getsockname() would not report the bound address
+	closed  // operation on an already-closed listener
+end '__ManagedListenerError'
+
 // __ManagedFileError - errors for __ManagedFile builtin operations
 public enum __ManagedFileError implements Error
 	notFound  // path does not exist

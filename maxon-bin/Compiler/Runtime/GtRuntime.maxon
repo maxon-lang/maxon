@@ -1290,10 +1290,12 @@ let GtTraceImmediateSuffixText = b" [immediate]"
 let GtTraceNewlineText = b"
 "
 
-// The five I/O-operation suffixes, beside the rest of the wire format for that block's reason. Which one a
-// park prints is `GtIoOperation`'s question; these are the bytes it answers with.
+// The I/O-operation suffixes, beside the rest of the wire format for that block's reason. Which one a park
+// prints is `GtIoOperation`'s question; these are the bytes it answers with, one per case.
 let GtTraceFileExistsSuffixText = b" [file_exists]"
 let GtTraceNetConnectSuffixText = b" [net_connect]"
+let GtTraceNetListenSuffixText = b" [net_listen]"
+let GtTraceNetAcceptSuffixText = b" [net_accept]"
 let GtTraceNetSendSuffixText = b" [net_send]"
 let GtTraceNetRecvSuffixText = b" [net_recv]"
 let GtTraceNetCloseSuffixText = b" [net_close]"
@@ -1312,6 +1314,8 @@ let GtTraceNetCloseSuffixText = b" [net_close]"
 export enum GtIoOperation
 	fileExists
 	netConnect
+	netListen
+	netAccept
 	netSend
 	netRecv
 	netClose
@@ -1323,6 +1327,8 @@ function ioOperationSuffixText(operation GtIoOperation) returns ByteArray
 	return match operation 'operation'
 		fileExists gives GtTraceFileExistsSuffixText
 		netConnect gives GtTraceNetConnectSuffixText
+		netListen gives GtTraceNetListenSuffixText
+		netAccept gives GtTraceNetAcceptSuffixText
 		netSend gives GtTraceNetSendSuffixText
 		netRecv gives GtTraceNetRecvSuffixText
 		netClose gives GtTraceNetCloseSuffixText
@@ -1779,7 +1785,7 @@ end 'isThrowingGtRuntimeCallee'
 // belonged: `managedMemorySourceMethodName` names `__ManagedMemory.byteAt`, and after the retirement that
 // IS the construct the author wrote.
 export function isThrowingRuntimeCallee(callee ByteArray) returns bool
-	return isThrowingManagedMemoryRuntimeCallee(callee) or isThrowingGtRuntimeCallee(callee) or isThrowingManagedFileRuntimeCallee(callee) or isThrowingManagedDirectoryRuntimeCallee(callee) or isThrowingManagedSocketRuntimeCallee(callee) or isThrowingCharacterRuntimeCallee(callee) or isThrowingListRuntimeCallee(callee) or isThrowingDivisionRuntimeCallee(callee) or isEnumLookupRuntimeCallee(callee)
+	return isThrowingManagedMemoryRuntimeCallee(callee) or isThrowingGtRuntimeCallee(callee) or isThrowingManagedFileRuntimeCallee(callee) or isThrowingManagedDirectoryRuntimeCallee(callee) or isThrowingManagedSocketRuntimeCallee(callee) or isManagedListenerRuntimeCallee(callee) or isThrowingCharacterRuntimeCallee(callee) or isThrowingListRuntimeCallee(callee) or isThrowingDivisionRuntimeCallee(callee) or isEnumLookupRuntimeCallee(callee)
 end 'isThrowingRuntimeCallee'
 
 // ⭐ **THE ONE HOME OF "WHICH ERROR TYPE A COMPILER-INTERNAL RUNTIME CALLEE THROWS"** — the composer beside
@@ -1832,6 +1838,14 @@ export function runtimeThrowsClause(callee ByteArray) returns ThrowsClause
 	if isThrowingManagedSocketRuntimeCallee(callee) 'socketFamily'
 		return managedSocketThrows()
 	end 'socketFamily'
+
+	// THE LISTENER FAMILY. Every `__ml_` entry throws, so the band predicate answers the question the socket
+	// arm needs a narrower one for. `specs/netpoll-socket.md`'s `a-second-bind-of-a-live-port-is-refused`
+	// discriminates `bindFailed` through the stdlib wrapper, so this family's ordinals are a checked claim
+	// rather than an untested one.
+	if isManagedListenerRuntimeCallee(callee) 'listenerFamily'
+		return managedListenerThrows()
+	end 'listenerFamily'
 
 	if isManagedMemoryMemberCallee(callee) 'memoryFamily'
 		return managedMemoryThrows()
@@ -1998,6 +2012,11 @@ export function runtimeCalleeSourceMethod(callee ByteArray) returns RuntimeCalle
 	if isThrowingManagedSocketRuntimeCallee(callee) 'socketFamily'
 		return RuntimeCalleeSourceMethod.found(managedSocketSourceMethodName(callee))
 	end 'socketFamily'
+
+	// The listener family - three callees, three distinct spellings the author writes.
+	if isManagedListenerRuntimeCallee(callee) 'listenerFamily'
+		return RuntimeCalleeSourceMethod.found(managedListenerSourceMethodName(callee))
+	end 'listenerFamily'
 
 	// ⚠ The file family answers the union DIRECTLY where its three siblings answer a NAME the composer wraps,
 	// and the asymmetry is a fact about the families rather than a style drift: `__mf_open_write` is reached
@@ -4384,7 +4403,8 @@ function collectCompletedWordDefs(op StdOp, completedConsts ValueIdArray, plainS
 			covPoint or
 			osHostSample or
 			osNetpoll or
-			osSocketOverlapped then break 'k'
+			osSocketOverlapped or
+			osSocketServe then break 'k'
 	end 'k'
 end 'collectCompletedWordDefs'
 
@@ -4516,7 +4536,8 @@ function requireOrderedCompletedAccess(op StdOp, func IrFunction, completedConst
 			covPoint or
 			osHostSample or
 			osNetpoll or
-			osSocketOverlapped then break 'k'
+			osSocketOverlapped or
+			osSocketServe then break 'k'
 	end 'k'
 end 'requireOrderedCompletedAccess'
 
@@ -6017,6 +6038,8 @@ function buildGtIoPark(module StdModule)
 	var ids = ValueMinter.create(paramCount)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var yielding = module.addBlock(func, label: b"gtioyield", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"gtiodone", heat: BlockHeat.normal)
 
 	if traced 'readSuffixParams'
 		emitParams(module, block: entry, count: paramCount)
@@ -6025,15 +6048,40 @@ function buildGtIoPark(module StdModule)
 	let suffixAddr = 0 as ValueId
 	let suffixLen = 1 as ValueId
 
+	// ⛔⛔ **A YIELD NEEDS A GREEN THREAD TO YIELD *FROM*, AND THIS ENTRY IS REACHED WITHOUT ONE.** A dropped
+	// promise's managed ARGUMENTS are released by `__gt_release_<callee>` inside `__gt_reclaim`, which the
+	// strand runner reaches on the machine's own scheduler context — and a released argument may be a box
+	// whose destructor closes an OS handle, so `__ms_close`/`__mf_close`/`__md_close` all arrive here with no
+	// green thread current. `__gt_park` would then write its note onto the M's inline scheduler GT and switch
+	// to its `waiter`, which is 0. **MEASURED as a nil-pointer panic in `__gt_context_switch`** on a program
+	// that drops a promise whose coroutine co-owns a socket (`specs/netpoll-socket.md`'s two `drop-a-parked-*`
+	// cases), with the stack `__gt_context_switch ← __gt_io_park ← __ms_close ← __ms_destruct ←
+	// __destruct_TcpListener ← __gt_release_… ← __gt_reclaim ← __gt_runner_done`.
+	//
+	// ⭐ **SKIPPING THE PARK IS THE HONEST TRANSLATION AND NOT A SUPPRESSION.** The park exists to hand the
+	// processor to another green thread while this one waits; on a machine's scheduler context there is no
+	// green thread to hand it back to and no processor being held on one's behalf, which is exactly the
+	// answer `module.parksOnIo` gives at compile time for a lane with no scheduler at all. The kernel call
+	// the caller is about to make still happens.
+	//
+	// ⚠ **`stackBase == 0` IS THE SAME DISCRIMINATOR THE SYSCALL SHIM ALREADY USES** for *"am I on a green
+	// stack?"* (`X64GtRuntime.emitGtGatedIatCall`), asked here rather than answered a second way.
+	// ⚠ **AND THE GUARD IS THIS ENTRY'S ALONE.** `__gt_sleep` and `__mbox_recv` reach `__gt_park` from a
+	// program's own code, where no green thread current is a defect worth faulting on; this is the one park
+	// the runtime reaches from its OWN teardown path.
+	let stackBase = emitLoadField(module, block: entry, record: emitLoadCurrentGt(module, block: entry, ids: ids), offset: GtOffStackBase, ids: ids)
+	let onGreenStack = emitCmp(module, block: entry, a: stackBase, b: emitConst(module, block: entry, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(onGreenStack, thenBlockId: yielding.id, elseBlockId: doneBlock.id))
+
 	// The trace pair BRACKETS the park: the yield line is emitted on the way down, the resume line after the
 	// scheduler has switched back into us. Both read the id afresh — see `emitCurrentGtTraceId`.
-	let traceIdBefore = emitCurrentGtTraceId(module, block: entry, ids: ids)
+	let traceIdBefore = emitCurrentGtTraceId(module, block: yielding, ids: ids)
 
 	if traced 'yieldLine'
-		emitGtTraceLineOfSuffix(module, block: entry, tag: tags.ioYield, gtId: traceIdBefore, suffixAddr: suffixAddr, suffixLen: suffixLen, ids: ids)
+		emitGtTraceLineOfSuffix(module, block: yielding, tag: tags.ioYield, gtId: traceIdBefore, suffixAddr: suffixAddr, suffixLen: suffixLen, ids: ids)
 	end 'yieldLine'
 
-	var resumed = emitGtParkOnDeadline(module, func: func, cur: entry, deadline: emitGtNowNs(module, block: entry, ids: ids), ids: ids)
+	var resumed = emitGtParkOnDeadline(module, func: func, cur: yielding, deadline: emitGtNowNs(module, block: yielding, ids: ids), ids: ids)
 
 	let traceIdAfter = emitCurrentGtTraceId(module, block: resumed, ids: ids)
 
@@ -6041,7 +6089,8 @@ function buildGtIoPark(module StdModule)
 		emitGtTraceLineOfSuffix(module, block: resumed, tag: tags.ioResume, gtId: traceIdAfter, suffixAddr: suffixAddr, suffixLen: suffixLen, ids: ids)
 	end 'resumeLine'
 
-	module.setTerminator(resumed, op: StdOp.retVoid)
+	module.setTerminator(resumed, op: StdOp.branch(doneBlock.id))
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
 
 	module.functions.push(func)
 end 'buildGtIoPark'
@@ -6072,14 +6121,14 @@ end 'buildGtIoPark'
 // two trace cases still read ONE pair and are not in tension with this: they dial `192.0.2.1`, which
 // short-circuits on the TEST-NET-1 sentinel after the resolve and never attempts a connect.
 //
-// ⚠ **THE COUNT IS NINETEEN CALL SITES AND TWENTY-ONE EMITTED ENTRY POINTS, AND THOSE ARE DIFFERENT NUMBERS.**
-// MEASURED 2026-08-21: eight sites in `ManagedFileRuntime`, six in `ManagedDirectoryRuntime`, five in
+// ⚠ **THE COUNT IS TWENTY-ONE CALL SITES AND TWENTY-THREE EMITTED ENTRY POINTS, AND THOSE ARE DIFFERENT
+// NUMBERS.** Eight sites in `ManagedFileRuntime`, six in `ManagedDirectoryRuntime`, five in
 // `ManagedSocketRuntime` (two in connect, one each in send/recv/close — `__ms_destruct` parks through
-// `__ms_close` and has none of its own). Two of the filesystem builders are parameterised and each is invoked
-// twice (`buildManagedFileOpen` for read/write, `buildManagedFilePathOperation` for delete/rename), so the
-// emitted `__mf_*`/`__md_*` band is two larger than its fourteen sites. Say which noun is being counted
-// wherever either number is quoted. ⛔ This census read FOURTEEN SITES and named only the two FILESYSTEM files
-// until 2026-08-21: it was written before the socket family existed, and nothing made it follow.
+// `__ms_close` and has none of its own) and two in `ManagedListenerRuntime` (the bind's resolve and the
+// accept — its close and its drop are the socket band's). Two of the filesystem builders are parameterised
+// and each is invoked twice (`buildManagedFileOpen` for read/write, `buildManagedFilePathOperation` for
+// delete/rename), so the emitted `__mf_*`/`__md_*` band is two larger than its fourteen sites. Say which
+// noun is being counted wherever either number is quoted.
 //
 // A void call mints an unread result id.
 export function emitIoPark(module StdModule, block IrBlock, operation GtIoOperation, ids ValueMinter)

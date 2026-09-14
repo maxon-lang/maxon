@@ -250,6 +250,30 @@ export let Arm64LinuxSyscallConnect = 203
 export let Arm64LinuxSyscallSendto = 206
 export let Arm64LinuxSyscallRecvfrom = 207
 
+// --- The SERVER side of the socket band ---
+//
+// ⚠ **MEASURED ON THIS LANE, not transcribed, and END TO END**: a probe on an aarch64 Ubuntu guest called
+// these four BY NUMBER and nothing else — `bind` to `127.0.0.1:0` answered 0, `listen` answered 0,
+// `getsockname` read back `family=2` and a non-zero ephemeral port, a second socket `connect`ed to exactly
+// that port, and `accept4` answered a live descriptor carrying BOTH `O_NONBLOCK` and `FD_CLOEXEC` over which
+// five bytes then crossed.
+// ⛔⛔ **`bind` IS 200 AND NOT 235, AND 235 IS THE NUMBER A TRANSCRIPTION REACHES FOR.** The probe was run
+// first with 235 and the kernel answered **-38 (`ENOSYS`)** — 235 in the asm-generic table is `mbind`, which
+// this kernel does not carry. A table copied from the other arch's neighbourhood would have compiled and
+// linked and refused every bind at runtime.
+// ⛔ **NEGATIVE CONTROLS, one substitution at a time**: x86-64's whole set answered `-EFAULT` at the first
+// call; `bind` given 199 (`socketpair`) or 202 answered `-EINVAL`; `listen` given 200 (`bind`) answered
+// `-EINVAL`; `getsockname` given 205 (`getpeername`) answered `-ENOTCONN` with `family=0`.
+// ⛔⛔ **AND THE SHARPEST CONTROL IS `accept4` GIVEN 202, WHICH IS PLAIN `accept` AND SUCCEEDS.** It answers a
+// live descriptor and the bytes still cross — but with `O_NONBLOCK` and `FD_CLOEXEC` both CLEAR, because
+// plain `accept` ignores the fourth argument. ⇒ **a check of this number that reads only "did it answer a
+// descriptor" reads GREEN on the wrong call**; the accepted descriptor's FLAGS are what tell 242 from 202,
+// and a blocking descriptor is what holds a machine on its first `recv`.
+export let Arm64LinuxSyscallBind = 200
+export let Arm64LinuxSyscallListen = 201
+export let Arm64LinuxSyscallAccept4 = 242
+export let Arm64LinuxSyscallGetsockname = 204
+
 // ⭐⭐ **THE WAIT OBJECT ON THIS LANE — ONE `mmap`'d PAGE, AND `Arm64PosixRuntime` OWNS EVERY FIELD IN IT.**
 // Darwin's twin carries a `pthread_mutex_t` and a `pthread_cond_t` ABOVE the shared prefix, because a
 // condvar needs a mutex to be correct; a futex needs NEITHER — the compare-and-sleep is atomic inside the

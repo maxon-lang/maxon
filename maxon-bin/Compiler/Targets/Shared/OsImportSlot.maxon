@@ -345,6 +345,19 @@ export enum OsImportSlot
 	// none of that.
 	getsockopt
 	fcntl
+
+	// ⭐⭐ **THE SERVER SIDE's FOUR (`StdOp.osSocketServe`).** `bind`/`listen` make a socket a listener,
+	// `accept` takes a connection off its queue, and `getsockname` reports the address the kernel chose for a
+	// `bind` of port 0.
+	//
+	// ⛔ **`accept` HAS A LINUX TWIN THAT IS A DIFFERENT CALL, NOT A DIFFERENT SPELLING.** Darwin has no
+	// `accept4`, so the descriptor this slot answers is BLOCKING and inheritable, and the lowering runs it
+	// through `mrt_host_socket_birth` — the same two `fcntl`s a fresh `socket()` gets — before anybody sees
+	// it. The Linux lanes take both flags in `accept4`'s fourth argument and need no such step.
+	bind
+	listen
+	accept
+	getsockname
 end 'OsImportSlot'
 
 // The import slot index a call site records and the writer patches against. One accessor

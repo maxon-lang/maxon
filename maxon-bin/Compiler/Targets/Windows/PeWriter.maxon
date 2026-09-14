@@ -607,6 +607,15 @@ export enum IatSlot
 	WSAEventSelect = IatSlotMeta{dll: ImportDll.ws2_32}
 	getsockopt = IatSlotMeta{dll: ImportDll.ws2_32}
 
+	// ⭐ **THE SERVER SIDE's FOUR.** `bind`/`listen` make a socket a listener, `accept` takes a connection off
+	// its queue, and `getsockname` reports the address the kernel chose for a `bind` of port 0. They sit
+	// INSIDE the ws2_32 run for the overlapped pair's reason, and renumbering the slots below them costs
+	// nothing because no emitted artefact persists an ordinal.
+	bind = IatSlotMeta{dll: ImportDll.ws2_32}
+	listen = IatSlotMeta{dll: ImportDll.ws2_32}
+	accept = IatSlotMeta{dll: ImportDll.ws2_32}
+	getsockname = IatSlotMeta{dll: ImportDll.ws2_32}
+
 	// ⛔⛔ **THE ONE `ntdll.dll` IMPORT, AND IT CARRIES AN ACCEPTED RISK THAT IS WRITTEN DOWN HERE
 	// BECAUSE NOTHING ELSE CAN STATE IT.** `NtGetNextThread` is a STATIC PE import, so the Windows loader
 	// binds it before `main` runs: on a host whose ntdll does not export it, `maxon.exe` FAILS TO
@@ -807,7 +816,11 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 			WSARecv or
 			WSASend or
 			WSAEventSelect or
-			getsockopt gives false
+			getsockopt or
+			bind or
+			listen or
+			accept or
+			getsockname gives false
 
 		// ⚠ **THE ntdll SLOT ANSWERS `false` FOR THE SOCKET RUN'S REASON, AND THE FAILURE IT AVOIDS IS THE
 		// SHARPER ONE.** `dllIsEmitted` decides whether ntdll's run exists at all; this band decides

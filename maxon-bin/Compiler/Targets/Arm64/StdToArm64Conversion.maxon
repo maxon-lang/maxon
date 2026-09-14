@@ -730,6 +730,7 @@ export type StdToArm64Lowering
 				osSocketError or
 				osSocketRecv or
 				osSocketClose or
+				osSocketServe or
 				osCpuCount or
 				osThreadCpuTicks gives 0
 
@@ -1173,6 +1174,7 @@ export type StdToArm64Lowering
 			// A socket is a DESCRIPTOR on both lanes, so this is `lowerOsFileClose` one family over and reaches
 			// the same primitive — `closesocket` exists only because a Win32 `SOCKET` is not a file `HANDLE`.
 			osSocketClose(sockId) then self.lowerOsFileClose(sockId, dstRef: dstRef)
+			osSocketServe(resultId, verb, a0Id, a1Id, a2Id) then self.lowerOsSocketServe(resultId, verb: verb, operands: threeArgs(a0Id, second: a1Id, third: a2Id), dstRef: dstRef)
 
 			// ⭐ The MACHINE query: `GetActiveProcessorCount` on Windows, `sysconf(_SC_NPROCESSORS_ONLN)`
 			// here. Two APIs with two failure conventions and one question — see `lowerOsCpuCount`.
@@ -1333,7 +1335,8 @@ export type StdToArm64Lowering
 				osSocketSend or
 				osSocketError or
 				osSocketRecv or
-				osSocketClose then panic("StdToArm64Lowering: a socket host primitive appeared as a block terminator (lowering bug — every socket primitive is a body op, never a terminator)")
+				osSocketClose or
+				osSocketServe then panic("StdToArm64Lowering: a socket host primitive appeared as a block terminator (lowering bug — every socket primitive is a body op, never a terminator)")
 			osCpuCount then panic("StdToArm64Lowering: an `osCpuCount` op appeared as a block terminator (lowering bug — a machine query is a value-producing body op)")
 			osThreadCpuTicks then panic("StdToArm64Lowering: an `osThreadCpuTicks` op appeared as a block terminator (lowering bug — a thread-CPU read is a body op writing through an out-param)")
 
@@ -2680,22 +2683,14 @@ export type StdToArm64Lowering
 
 	// `socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)` — the three protocol arguments are the Std tier's
 	// (`ManagedSocketRuntime`'s protocol block owns them, because the `hints` it fills must agree with them),
-	// and all three values are portable.
-	// ⭐⭐ **THE DESCRIPTOR IS BORN NON-BLOCKING, AND THE TWO LANES BUY THAT DIFFERENTLY.** Linux takes
-	// `SOCK_NONBLOCK | SOCK_CLOEXEC` in the TYPE argument, so one call does it; Darwin has neither flag and
-	// pays a chunk that sets both with `fcntl` before it hands the descriptor back. Non-blocking is what lets a
-	// socket call answer `EAGAIN` instead of holding its machine, which is the whole of this band's contract
-	// with the poller.
+	// and all three values are portable. The TYPE argument also carries Linux's two birth flags, which is why
+	// it is asked for rather than spelled — see `emitSocketBornResult`.
 	function lowerOsSocketCreate(resultId ValueId, dstRef BlockRef)
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x0), value: AfInet as MachineWord))
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x1), value: self.socketCreateType()))
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x2), value: IpprotoTcp as MachineWord))
 		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.socket, syscallNumber: Arm64LinuxSyscallSocket)
-
-		match arm64OsCallKind(self.target.os) 'route'
-			importCall then self.emitDarwinSocketChunk(resultId, chunk: HostSocketBirthName, dstRef: dstRef)
-			syscall then self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
-		end 'route'
+		self.emitSocketBornResult(resultId, dstRef: dstRef)
 	end 'lowerOsSocketCreate'
 
 	function socketCreateType() returns MachineWord
@@ -2769,6 +2764,101 @@ export type StdToArm64Lowering
 			syscall gives LinuxMsgNoSignal
 		end 'route'
 	end 'socketTransferFlags'
+
+	// ⭐⭐ **THE SERVER SIDE — `StdOp.osSocketServe`'s four verbs.** Every one is four register arguments or
+	// fewer on both routes, so neither needs a frame.
+	//
+	// ⛔⛔ **THE ACCEPT IS THE ONE VERB WHOSE TWO ROUTES ARE DIFFERENT CALLS RATHER THAN TWO SPELLINGS OF ONE.**
+	// AArch64 Linux has `accept4` and takes `SOCK_NONBLOCK | SOCK_CLOEXEC` in its fourth argument; **Darwin has
+	// no `accept4` at all**, so its route calls plain `accept` and then hands the descriptor to
+	// `mrt_host_socket_birth` — the SAME chunk a fresh `socket()` goes through, which sets both flags with two
+	// `fcntl`s. Reusing that chunk is what keeps one statement of "how a descriptor is born non-blocking on
+	// Darwin" rather than two.
+	function lowerOsSocketServe(resultId ValueId, verb SocketServeVerb, operands ValueIdArray, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(socketServeOperand(operands, index: 0))))
+
+		match verb 'v'
+			// `bind(s, name, sizeof(sockaddr_in))` — the length is the Std tier's `SockaddrInBytes`, which is
+			// also the size of the block it allocated, exactly as `connect`'s is.
+			bind then self.emitArm64ArgPtrThenImm(socketServeOperand(operands, index: 1), third: SockaddrInBytes as MachineWord, dstRef: dstRef)
+
+			// `listen(s, backlog)`.
+			listen then self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(socketServeOperand(operands, index: 1))))
+
+			// `accept(s, NULL, NULL)` on Darwin, `accept4(s, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC)` on
+			// Linux. The flag word is passed on both routes: Darwin's `accept` takes three arguments and
+			// ignores a fourth register, and writing it unconditionally keeps the two argument setups one.
+			accept then self.emitArm64AcceptArgs(dstRef)
+
+			// `getsockname(s, name, namelen)`.
+			localName then self.emitArm64ArgPtrThenPtr(socketServeOperand(operands, index: 1), secondPtrId: socketServeOperand(operands, index: 2), dstRef: dstRef)
+		end 'v'
+
+		self.emitOsPrimitiveCall(dstRef, importSlot: socketServeImportSlot(verb), syscallNumber: socketServeSyscall(verb))
+		self.emitSocketServeResult(resultId, verb: verb, dstRef: dstRef)
+	end 'lowerOsSocketServe'
+
+	function emitArm64ArgPtrThenImm(ptrId ValueId, third MachineWord, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(ptrId)))
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x2), value: third))
+	end 'emitArm64ArgPtrThenImm'
+
+	function emitArm64ArgPtrThenPtr(ptrId ValueId, secondPtrId ValueId, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(ptrId)))
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x2), srcReg: TargetVReg.virtual(secondPtrId)))
+	end 'emitArm64ArgPtrThenPtr'
+
+	function emitArm64AcceptArgs(dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x1), value: LinuxSocketNoPeerAddress))
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x2), value: LinuxSocketNoPeerAddress))
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x3), value: (LinuxSockNonBlock + LinuxSockCloexec) as MachineWord))
+	end 'emitArm64AcceptArgs'
+
+	function socketServeImportSlot(verb SocketServeVerb) returns OsImportSlot
+		return match verb 'v'
+			bind gives OsImportSlot.bind
+			listen gives OsImportSlot.listen
+			accept gives OsImportSlot.accept
+			localName gives OsImportSlot.getsockname
+		end 'v'
+	end 'socketServeImportSlot'
+
+	// ⚠ **THE FOUR AArch64 SYSCALL NUMBERS ARE MEASURED ON THIS LANE, not transcribed** — see
+	// `Arm64LinuxRuntime`'s server-band block, which carries the probe, the refuted `bind` number and the
+	// negative controls.
+	function socketServeSyscall(verb SocketServeVerb) returns MachineWord
+		return match verb 'v'
+			bind gives Arm64LinuxSyscallBind
+			listen gives Arm64LinuxSyscallListen
+			accept gives Arm64LinuxSyscallAccept4
+			localName gives Arm64LinuxSyscallGetsockname
+		end 'v'
+	end 'socketServeSyscall'
+
+	// ⭐ **THE ACCEPT ANSWERS A DESCRIPTOR AND THE OTHER THREE ANSWER A STATUS, WHICH IS WHY THE RESULT FORKS
+	// ON THE VERB.** A status merely has to be widened and its errno fetched, which is `emitSocketIntResult`.
+	function emitSocketServeResult(resultId ValueId, verb SocketServeVerb, dstRef BlockRef)
+		match verb 'v'
+			bind or
+				listen or
+				localName then self.emitSocketIntResult(resultId, dstRef: dstRef)
+
+			accept then self.emitSocketBornResult(resultId, dstRef: dstRef)
+		end 'v'
+	end 'emitSocketServeResult'
+
+	// ⭐⭐ **A FRESH DESCRIPTOR IS BORN NON-BLOCKING AND CLOSE-ON-EXEC, AND THE TWO LANES BUY THAT
+	// DIFFERENTLY.** Linux carries both flags in the call itself — `socket`'s TYPE argument, `accept4`'s
+	// fourth — so the answer is already the descriptor; Darwin has neither flag and pays
+	// `mrt_host_socket_birth`, which sets them with two `fcntl`s before handing the descriptor on.
+	// Non-blocking is what lets a socket call answer `EAGAIN` instead of holding its machine, which is the
+	// whole of this band's contract with the poller.
+	function emitSocketBornResult(resultId ValueId, dstRef BlockRef)
+		match arm64OsCallKind(self.target.os) 'route'
+			importCall then self.emitDarwinSocketChunk(resultId, chunk: HostSocketBirthName, dstRef: dstRef)
+			syscall then self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
+		end 'route'
+	end 'emitSocketBornResult'
 
 	// ⭐⭐ **EVERY SOCKET CALL ANSWERS `-errno`, AND THE TWO LANES REACH THAT ANSWER DIFFERENTLY.** A raw `svc`
 	// already reports it; libSystem reports -1 in a 32-bit `int` and keeps the reason in `*__error()`, so the

@@ -7347,11 +7347,12 @@ export let ManagedSocketTypeName = b"__ManagedSocket"
 let ManagedSocketHandleFieldName = b"_handle"
 let ManagedSocketHandleFieldIndex = 0 as FieldIndex
 
-// The `__ManagedSocket` methods: one static and five instance methods. A name outside this set is refused by
-// name at its own span rather than mangled into a callee no file declares.
+// The `__ManagedSocket` methods a PEER connection uses: one static and six instance methods. A name outside
+// the whole set — these plus the server side's three below — is refused by name at its own span rather than
+// mangled into a callee no file declares.
 //
-// ⚠ `stdlib/TcpClient.maxon` calls every one of them and nothing else, so this set is the whole contract the
-// corpus needs.
+// ⚠ `stdlib/TcpClient.maxon` calls every one of them and nothing else, so this half is the whole contract
+// the client corpus needs.
 export let ManagedSocketTcpConnectMethod = b"tcpConnect"
 export let ManagedSocketSendFromMethod = b"sendFrom"
 export let ManagedSocketRecvMethod = b"recv"
@@ -7364,6 +7365,42 @@ export let ManagedSocketSetWriteDeadlineMethod = b"setWriteDeadline"
 // `NetworkError.timedOut`; the builtin enum keeps its seven committed cases. See
 // `ManagedSocketRuntime.claimManagedSocketOrdinals` for why that matters to a bootstrap.
 export let ManagedSocketTimedOutMethod = b"timedOut"
+
+// ⭐⭐ **THE SERVER SIDE's THREE, AND THEY HANG OFF THIS TYPE RATHER THAN OFF A `__ManagedListener` OF THEIR
+// OWN — WHICH IS A SEED CONSTRAINT AND NOT A PREFERENCE.** A stdlib file may CALL a surface the compiler in
+// the slot has never heard of (an unreached body is never parsed), but it may not ANNOTATE a TYPE that
+// compiler cannot resolve — a field or a parameter written `__ManagedListener` is E3011 in every compile,
+// including the one a released seed makes of this tree. MEASURED with the v0.1.0 seed against this checkout:
+// a stdlib type holding a `__ManagedListener` field refused hello-world, while the same file CALLING
+// `__ManagedListener.bind` compiled clean.
+//
+// ⇒ **THE DISTINCTION USERS SEE IS `stdlib/TcpListener.maxon` AGAINST `stdlib/TcpClient.maxon`**, which is
+// Go's `net.Listener` against `net.Conn` and is where it belongs: a `TcpListener` has no `send` and no
+// `recv`. What is shared is the BOX — one OS socket, closed on drop — and that really is one type.
+//
+// ⚠ **THEY THROW `__ManagedListenerError`, NOT `__ManagedSocketError`**, because the facts they report are
+// new ones and that enum's case list is fixed by every compiler that transcribes it. See
+// `ManagedListenerRuntime.claimManagedListenerOrdinals`.
+export let ManagedSocketBindListenerMethod = b"bindListener"
+export let ManagedSocketBoundPortMethod = b"boundPort"
+export let ManagedSocketAcceptMethod = b"accept"
+
+// ⭐ **THE ERROR EVERY THROWING SERVER-SIDE OPERATION THROWS.** DECLARED in `stdlib/Builtins.maxon` and read
+// from there, exactly as the four families above are; its case ORDER is load-bearing for
+// `Project.BuiltinErrorOrdinalCheck`'s reason.
+module let ManagedListenerErrorTypeName = b"__ManagedListenerError"
+
+// The five case names in the declaration's order — which IS their ordinal order, and therefore the error
+// flag the runtime returns. Not reorderable; the ordinal guard checks this list against the declaration.
+module let ManagedListenerResolveFailedCaseName = b"resolveFailed"
+
+module let ManagedListenerBindFailedCaseName = b"bindFailed"
+
+module let ManagedListenerAcceptFailedCaseName = b"acceptFailed"
+
+module let ManagedListenerAddressFailedCaseName = b"addressFailed"
+
+module let ManagedListenerClosedCaseName = b"closed"
 
 // ⭐ **THE ERROR EVERY THROWING `__ManagedSocket` OPERATION THROWS**, and the type a handler’s `match e`
 // discriminates. DECLARED at `stdlib/Builtins.maxon:164` and read from there (A1s), exactly as the file and

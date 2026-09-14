@@ -461,7 +461,10 @@ function calleeHostFacility(callee ByteArray) returns CalleeFacility
 		return CalleeFacility.needs(HostFacility.managedDirectory)
 	end 'directoryBand'
 
-	if isManagedSocketRuntimeCallee(callee) 'socketBand'
+	// ⚠ **THE LISTENER BAND NEEDS EXACTLY THE SOCKET SUBSTRATE AND NOTHING ELSE, SO IT SHARES THIS FACILITY
+	// RATHER THAN NAMING A SECOND ONE.** A facility is what a LANE provides; binding and accepting are served
+	// by every lane that serves connecting, and refused by the one that does not.
+	if isManagedSocketRuntimeCallee(callee) or isManagedListenerRuntimeCallee(callee) 'socketBand'
 		return CalleeFacility.needs(HostFacility.managedSocket)
 	end 'socketBand'
 

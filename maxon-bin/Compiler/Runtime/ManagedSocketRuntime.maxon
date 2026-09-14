@@ -56,10 +56,11 @@ export let ManagedSocketBoxBytes = 8 as ParsedInt
 // (`ManagedFileRuntime.emitLiveHandleOrClosedThrow`) is shared with two families where a descriptor of 0 is
 // ordinary, so the ENCODING has to be one encoding. A POSIX `socket(2)` answers the lowest free descriptor
 // exactly as `open(2)` does, so this is also the same latent defect one library over.
-let ManagedSocketClosedHandle = 0 as ParsedInt
+export let ManagedSocketClosedHandle = 0 as ParsedInt
 
-// ⭐⭐ **A POSIX LANE ANSWERS `-errno` WHERE WINSOCK ANSWERS EXACTLY -1, WHICH IS WHY EVERY TEST IN THIS FILE
-// IS `< 0`.** The fold that collapsed a raw syscall's `-ECONNREFUSED`/`-EAGAIN`/`-EINPROGRESS` to a single -1
+// ⭐⭐ **A POSIX LANE ANSWERS `-errno` WHERE WINSOCK ANSWERS EXACTLY -1, WHICH IS WHY A CALL THAT ANSWERS A
+// DESCRIPTOR OR A BYTE COUNT IS TESTED `< 0`.** The fold that collapsed a raw syscall's
+// `-ECONNREFUSED`/`-EAGAIN`/`-EINPROGRESS` to a single -1
 // is gone from the socket band: those three have to be TOLD APART here, because two of them are the descriptor
 // saying *"not yet"* and only the third is a failure. `< 0` is the one test that is right on both routes —
 // Winsock's -1 is negative too — and the MAGNITUDE is read only on the polled lanes, by
@@ -72,9 +73,26 @@ let ManagedSocketClosedHandle = 0 as ParsedInt
 // refusal all arrive as that one code, so reusing the stash would report the same word for *"not yet"* and
 // *"never"*. Un-folding the answer is not a second error channel: it is the SAME one the kernel already used,
 // with a lossy step taken off it.
-function emitSocketCallFailed(module StdModule, block IrBlock, answer ValueId, ids ValueMinter) returns ValueId
+export function emitSocketCallFailed(module StdModule, block IrBlock, answer ValueId, ids ValueMinter) returns ValueId
 	return emitCmp(module, block: block, a: answer, b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.lt, ids: ids)
 end 'emitSocketCallFailed'
+
+// ⭐⭐⭐ **A STATUS CALL FAILS WHEN IT DID NOT ANSWER 0, AND `< 0` IS THE WRONG TEST FOR ONE ON WINSOCK.**
+// `getsockopt`, `bind`, `listen` and `getsockname` answer `0` or a failure on every lane — `-errno` on the
+// three POSIX routes, `SOCKET_ERROR` (-1) on Winsock — so a test against 0 is right everywhere and a SIGN
+// test is right only where the answer is a full machine word.
+//
+// ⛔ **AND ON WINSOCK IT IS NOT ONE.** These return a 32-bit `int` in EAX, and `mov eax, -1` ZERO-EXTENDS, so
+// the -1 arrives in RAX as `0x00000000FFFFFFFF` — a POSITIVE 64-bit number. MEASURED: a second `bind` onto a
+// port this process was already listening on was refused by Winsock and read as SUCCESS under `< 0`, which is
+// `specs/netpoll-socket.md`'s `a-second-bind-of-a-live-port-is-refused` printing `refused=false`.
+//
+// ⚠ **THE TWO TESTS ARE ABOUT THE TWO WIDTHS OF ANSWER, NOT ABOUT TWO OPINIONS ON FAILURE** —
+// `emitSocketCallFailed` stays right for `socket()` and `accept()`, whose `INVALID_SOCKET` is a full-width
+// `SOCKET` of all ones.
+export function emitSocketStatusFailed(module StdModule, block IrBlock, answer ValueId, ids ValueMinter) returns ValueId
+	return emitCmp(module, block: block, a: answer, b: emitConst(module, block: block, value: WinsockCallOk, ids: ids), pred: StdCmpPred.ne, ids: ids)
+end 'emitSocketStatusFailed'
 
 // ⭐⭐ **THE IPv4/TCP PROTOCOL SELECTION — ONE HOME, TWO READERS, AND THE SECOND READER IS WHY IT MOVED HERE.**
 // These three values are `socket()`'s three arguments (spelled by `StdToX64Conversion.lowerOsSocketCreate`)
@@ -120,7 +138,7 @@ export let SendRecvNoFlags = 0
 // ⭐⭐⭐ **HOW A SOCKET CALL THAT CANNOT FINISH AT ONCE WAITS — the second fact this family forks its Std graph
 // on, and `SocketResolveShape`'s exact arrangement.** Each answer builds a COMPLETE graph, so nothing below
 // the fork asks which target it is compiling for.
-enum SocketWaitShape
+export enum SocketWaitShape
 	// Every POSIX lane: the descriptor is non-blocking from birth and registered with the scheduler's poller, so
 	// a call that answers `EAGAIN`/`EINPROGRESS` PARKS the green thread on that descriptor's record and retries
 	// when the poller says it is ready. The green thread holds no machine while it waits.
@@ -141,7 +159,7 @@ end 'SocketWaitShape'
 // ⚠ **IT IS THE POLLER'S SHAPE ASKED ONCE**, rather than a second list of targets: a lane whose poller is a
 // completion port reports an OPERATION where the other two report a READINESS, and `NetpollRuntime` answers
 // that question for the registration verb as well.
-function socketWaitShape(target Target) returns SocketWaitShape
+export function socketWaitShape(target Target) returns SocketWaitShape
 	return match netpollShape(target) 'poller'
 		completionPort gives SocketWaitShape.overlapped
 
@@ -197,7 +215,7 @@ export let SocketNoServiceName = 0
 // byte 1 zero, and connected again with byte 0 set to 30 (`AF_INET6`) — while ANY other value in byte 1 was
 // refused with `EAFNOSUPPORT`. So byte 1 is the load-bearing one and byte 0 is ignored, and the record the
 // Windows lane writes is right about neither.
-function sockaddrFamilyHalfword(target Target) returns ParsedInt
+export function sockaddrFamilyHalfword(target Target) returns ParsedInt
 	return match target.os 'os'
 		windows or
 			linux gives AfInet
@@ -214,6 +232,22 @@ let SockaddrFamilyByteScale = 256
 // `sizeof(WSADATA)` on Win64. `WSAStartup` fills it and nothing here reads it back — it is a scratch buffer
 // the API demands, freed the moment the call returns.
 let WsaDataBytes = 408 as ParsedInt
+
+// ⭐ **WINSOCK MUST BE INITIALIZED BEFORE ANY OTHER ws2_32 ENTRY POINT ANSWERS**, so every builder that opens
+// a socket opens with this. Terminates `block`: `ready` when the startup succeeded, `notReady` when it did
+// not, with the `WSADATA` already released on both edges.
+//
+// ⛔ **IT IS NOT A PARK SITE.** It is process-cached behind `__net_wsa_init` and returns without touching the
+// network on every call after the first, so a park here would report a blocking operation that does not
+// block — see `emitIoPark` for why the unit is the blocking operation and not the function.
+export function emitWinsockStartup(module StdModule, block IrBlock, ready IrBlock, notReady IrBlock, ids ValueMinter)
+	let wsaData = emitRawAlloc(module, block: block, byteCount: emitConst(module, block: block, value: WsaDataBytes, ids: ids), ids: ids)
+	let startupResult = ids.mint()
+	module.appendOp(block, op: StdOp.osSocketStartup(startupResult, wsaDataPtrId: wsaData))
+	emitRawFree(module, block: block, ptr: wsaData, ids: ids)
+	let winsockReady = emitCmp(module, block: block, a: startupResult, b: emitConst(module, block: block, value: WinsockCallOk, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(block, op: StdOp.condBranch(winsockReady, thenBlockId: ready.id, elseBlockId: notReady.id))
+end 'emitWinsockStartup'
 
 // ⭐ **`struct addrinfo` ON Win64 — the HINTS this file writes and the RESULT it reads.** 48 bytes:
 //
@@ -242,7 +276,7 @@ let SockaddrAddrOffset = 4 as ByteOffset
 
 // The single word `emitSockaddrInWord` packs `sin_family`, `sin_port` and `sin_addr` into — the whole of the
 // WRITE side of this struct, which is why there is one offset here and not three.
-let SockaddrFamilyPortAddrOffset = 0 as ByteOffset
+export let SockaddrFamilyPortAddrOffset = 0 as ByteOffset
 
 // ⭐⭐ **2^32 AND 2^16 AS SCALES, BECAUSE THIS TIER HAS NO NARROW STORE.** `accessWidthFor` carries `byte` and
 // `word64` and PANICS for everything between (deliberately — a narrow access needs the `as` cast so its
@@ -265,7 +299,7 @@ let TestNet1NetOrder = 0x010200C0 as ParsedInt
 
 // The three "the call succeeded" readings. `WSAStartup` and `getaddrinfo` answer a plain int where 0 is
 // success (`getaddrinfo` returns an EAI_* code otherwise), and `connect` answers 0 or `SOCKET_ERROR`.
-let WinsockCallOk = 0 as ParsedInt
+export let WinsockCallOk = 0 as ParsedInt
 
 // ⭐ **THE `__ManagedSocketError` ORDINALS, AS ERROR FLAGS (`ordinal + ErrorFlagOrdinalBias`)** — the
 // `ManagedFileRuntime`/`ManagedDirectoryRuntime` discipline, and the ordinals are positional facts about the
@@ -388,7 +422,7 @@ end 'emitLiveSocketOrThrow'
 //
 // ⚠ Both values are COMPILE-TIME here, so the packing is folded into a single `emitConst` rather than emitted
 // as a shift and an or.
-function emitStoreDwordPair(module StdModule, block IrBlock, record ValueId, offset ByteOffset, low ParsedInt, high ParsedInt, ids ValueMinter)
+export function emitStoreDwordPair(module StdModule, block IrBlock, record ValueId, offset ByteOffset, low ParsedInt, high ParsedInt, ids ValueMinter)
 	let packed = emitConst(module, block: block, value: low + (high * ByteFourScale), ids: ids)
 	emitStoreField(module, block: block, record: record, offset: offset, value: packed)
 end 'emitStoreDwordPair'
@@ -405,7 +439,7 @@ end 'emitStoreDwordPair'
 //
 // ⚠ The FAMILY half is the caller's, because it is the one field whose byte position is per-platform — see
 // `sockaddrFamilyHalfword`, which carries the measurement.
-function emitSockaddrInWord(module StdModule, block IrBlock, port ValueId, ip ValueId, familyHalfword ParsedInt, ids ValueMinter) returns ValueId
+export function emitSockaddrInWord(module StdModule, block IrBlock, port ValueId, ip ValueId, familyHalfword ParsedInt, ids ValueMinter) returns ValueId
 	// htons: `((port and 0xFF) shl 8) or ((port shrLogical 8) and 0xFF)`.
 	let lowMask = emitConst(module, block: block, value: 0xFF, ids: ids)
 	let byteBits = emitConst(module, block: block, value: 8, ids: ids)
@@ -439,7 +473,7 @@ end 'emitSockaddrInWord'
 // OUT of the ring: everything a re-issue reads — the descriptor, the buffer, the length — is computed in a
 // block that dominates it, so the trace still reports ONE yield/resume pair per blocking operation whatever
 // the descriptor makes the call do.
-function emitSocketAttempt(module StdModule, func IrFunction, attempt IrBlock, answer ValueId, pollKey ValueId, mode ParsedInt, ok IrBlock, failed IrBlock, timedOut IrBlock, target Target, ids ValueMinter)
+export function emitSocketAttempt(module StdModule, func IrFunction, attempt IrBlock, answer ValueId, pollKey ValueId, mode ParsedInt, ok IrBlock, failed IrBlock, timedOut IrBlock, target Target, ids ValueMinter)
 	let failedCall = emitSocketCallFailed(module, block: attempt, answer: answer, ids: ids)
 
 	// The retry is unconditional because the OVERLAPPED lane has no call that can reach here — its transfers go
@@ -512,7 +546,7 @@ end 'emitSocketMarkTimedOut'
 //
 // ⚠ **THE RECORD INDEX AND THE DESCRIPTOR ARE TWO ARGUMENTS BECAUSE THEY ARE NOT ALWAYS ONE NUMBER** — see
 // `NetpollRuntime.emitNetpollDescriptorIndex`, which carries why.
-function emitSocketPollerOpen(module StdModule, block IrBlock, pollKey ValueId, socket ValueId, ids ValueMinter)
+export function emitSocketPollerOpen(module StdModule, block IrBlock, pollKey ValueId, socket ValueId, ids ValueMinter)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: NetpollPdOpenName, args: twoArgs(pollKey, second: socket)))
 end 'emitSocketPollerOpen'
 
@@ -557,7 +591,7 @@ end 'SocketResolveShape'
 // addresses, so the shape really is that one; what that lane lacks is any lowering at all for the band, and
 // `targetProvidesFacility` is where that refusal lives. A shape function that lied about the shape to
 // express a capability would put the same fact in two places.
-function socketResolveShape(target Target) returns SocketResolveShape
+export function socketResolveShape(target Target) returns SocketResolveShape
 	return match target.os 'os'
 		windows gives SocketResolveShape.addrInfoList
 		linux gives SocketResolveShape.builtinResolver
@@ -571,7 +605,7 @@ end 'socketResolveShape'
 // there is simply in scope (the dominance argument `emitLiveHandleOrClosedThrow` makes for its own) — and
 // both RELEASE the host cstring on every edge they take, which is what keeps that scratch out of the
 // caller's four-allocation ledger.
-function emitResolveHostIp(module StdModule, resolve IrBlock, resolved IrBlock, resolveFailed IrBlock, host ValueId, shape SocketResolveShape, ids ValueMinter) returns ValueId
+export function emitResolveHostIp(module StdModule, resolve IrBlock, resolved IrBlock, resolveFailed IrBlock, host ValueId, shape SocketResolveShape, ids ValueMinter) returns ValueId
 	return match shape 'shape'
 		addrInfoList gives emitResolveThroughAddrInfo(module, resolve: resolve, resolved: resolved, resolveFailed: resolveFailed, host: host, ids: ids)
 		builtinResolver gives emitResolveThroughBuiltinResolver(module, resolve: resolve, resolved: resolved, resolveFailed: resolveFailed, host: host, ids: ids)
@@ -674,21 +708,9 @@ function buildManagedSocketTcpConnect(module StdModule, target Target)
 	// function's to release.
 	let host = emitPathToCString(module, func: func, cur: entry, join: init, pathRec: hostRec, ids: ids)
 
-	// Winsock must be initialized before any other ws2_32 entry point answers. The `WSADATA` is write-only to
-	// us: it is freed the moment the call returns.
-	let wsaData = emitRawAlloc(module, block: init, byteCount: emitConst(module, block: init, value: WsaDataBytes, ids: ids), ids: ids)
-	let startupResult = ids.mint()
-
-	// ⛔ **`WSAStartup` IS NOT A PARK SITE.** It is process-cached behind `__net_wsa_init` and returns
-	// without touching the network on every call after the first, so a park here would report a
-	// blocking operation that does not block. The two that DO are `getaddrinfo` and `connect()`, and each has
-	// its own park below — see `emitIoPark` for why the unit is the blocking operation rather than the
-	// function.
-	module.appendOp(init, op: StdOp.osSocketStartup(startupResult, wsaDataPtrId: wsaData))
-	emitRawFree(module, block: init, ptr: wsaData, ids: ids)
-	let startupOk = emitConst(module, block: init, value: WinsockCallOk, ids: ids)
-	let winsockReady = emitCmp(module, block: init, a: startupResult, b: startupOk, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(init, op: StdOp.condBranch(winsockReady, thenBlockId: resolve.id, elseBlockId: noWinsock.id))
+	// The two operations that genuinely block are `getaddrinfo` and `connect()`, and each has its own park
+	// below; the startup has none for `emitWinsockStartup`'s stated reason.
+	emitWinsockStartup(module, block: init, ready: resolve, notReady: noWinsock, ids: ids)
 
 	emitRawFree(module, block: noWinsock, ptr: host, ids: ids)
 	emitErrorReturn(module, block: noWinsock, flag: ManagedSocketConnectFailedFlag, ids: ids)
@@ -856,7 +878,7 @@ function emitSocketWatchedDial(module StdModule, func IrFunction, ids ValueMinte
 	module.appendOp(verify, op: StdOp.osSocketError(status, sockId: socket, valuePtrId: scratch, lenPtrId: lengthAt))
 	let handshake = emitLoadDword(module, block: verify, record: scratch, offset: SocketOptionValueOffset, ids: ids)
 	emitRawFree(module, block: verify, ptr: scratch, ids: ids)
-	let askFailed = emitSocketCallFailed(module, block: verify, answer: status, ids: ids)
+	let askFailed = emitSocketStatusFailed(module, block: verify, answer: status, ids: ids)
 	let refused = emitCmp(module, block: verify, a: handshake, b: emitConst(module, block: verify, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
 	let noConnection = emitBin(module, block: verify, a: askFailed, b: refused, opcode: StdBinOpcode.bitOr, ids: ids)
 	module.setTerminator(verify, op: StdOp.condBranch(noConnection, thenBlockId: dropEvent.id, elseBlockId: giveBack.id))
@@ -865,7 +887,7 @@ function emitSocketWatchedDial(module StdModule, func IrFunction, ids ValueMinte
 	// event recorded on it. Its answer is not read and there is nothing it could say worth acting on: the socket
 	// is open and usable either way, and the event about to be closed is this frame's alone.
 	let unusedGiveBack = emitConst(module, block: giveBack, value: 0, ids: ids)
-	module.appendOp(giveBack, op: StdOp.osSocketOverlapped(ids.mint(), verb: SocketOverlappedVerb.stopWatchingConnect, a0Id: socket, a1Id: unusedGiveBack, a2Id: unusedGiveBack, a3Id: unusedGiveBack))
+	module.appendOp(giveBack, op: StdOp.osSocketOverlapped(ids.mint(), verb: SocketOverlappedVerb.stopWatching, a0Id: socket, a1Id: unusedGiveBack, a2Id: unusedGiveBack, a3Id: unusedGiveBack))
 	module.appendOp(giveBack, op: StdOp.osCloseHandle(event))
 	module.setTerminator(giveBack, op: StdOp.branch(connected.id))
 
@@ -877,7 +899,7 @@ end 'emitSocketWatchedDial'
 
 // Winsock's answer for a non-blocking `connect` that is running — `WSAEWOULDBLOCK`, where a POSIX lane says
 // `EINPROGRESS`.
-let WinsockWouldBlock = 10035
+export let WinsockWouldBlock = 10035
 
 // ⭐⭐ **WHAT A `connect` THAT DID NOT FINISH AT ONCE DOES.** Terminates `cur`. On a BLOCKING lane the call is
 // over and a non-zero answer is a refusal. On a POLLED lane an `EINPROGRESS` (or an interrupted call) means the
@@ -1691,7 +1713,7 @@ function emitStoreConstByte(module StdModule, block IrBlock, base ValueId, offse
 end 'emitStoreConstByte'
 
 // Its dual — one byte at a CONSTANT offset, zero-extended.
-function emitLoadConstByte(module StdModule, block IrBlock, base ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
+export function emitLoadConstByte(module StdModule, block IrBlock, base ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
 	let loaded = ids.mint()
 	module.appendOp(block, op: StdOp.loadIndirect(loaded, addrId: base, offset: offset, valueType: StdType.u8))
 	return loaded

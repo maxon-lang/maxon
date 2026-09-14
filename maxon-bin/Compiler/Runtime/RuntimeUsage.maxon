@@ -420,6 +420,13 @@ export type RuntimeUsage
 	// is where the three families' bits are actually set, and it has always said so.
 	export var usesManagedSocket as bool
 
+	// ⭐ **THE SERVER HALF OF THE SOCKET BAND HAS ITS OWN BIT, AND IT IMPLIES THE PEER HALF'S.** A program
+	// that only binds and accepts still hands its caller a `__ManagedSocket`, whose transfers and whose
+	// destructor are that family's — so a listener call sets both. The reverse does not hold, which is why
+	// this is a bit rather than a reading of `usesManagedSocket`: a client-only program must not carry five
+	// listener graphs it can never reach.
+	export var usesManagedListener as bool
+
 	// The program reads its COMMAND LINE. Like the directory family it declares a transitive dependency on
 	// `usesHeap` (the scratch buffer is a raw alloc) AND on `usesManagedMemory`: `__cl_arg` builds its
 	// `__ManagedMemory` answer through `__managed_create`/`__managed_reserve` inside a Std body this Maxon-module
@@ -618,7 +625,7 @@ export type RuntimeUsage
 	export var parksOnIo as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesChildPipes: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesBackgroundPriority: false, usesTerminalDetection: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesSchedProcessorCount: false, usesMmCounters: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSlabArena: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, parksOnIo: true}
+		return Self{usesHeap: false, usesGt: false, usesChildPipes: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesManagedListener: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesBackgroundPriority: false, usesTerminalDetection: false, usesCpuCount: false, usesSchedMaxActiveWorkers: false, usesSchedProcessorCount: false, usesMmCounters: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSlabArena: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, parksOnIo: true}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -947,6 +954,17 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesHeap = true
 		recordIoParkUsage(usage)
 	end 'managedSocket'
+
+	// A `__ml_*` call. It carries the socket family's whole bit as well as its own — see
+	// `usesManagedListener` for why — plus the same two transitive bits for the same two reasons: the bind
+	// passes three raw allocations, and every listener entry that makes a kernel call opens with
+	// `__gt_io_park`.
+	if isManagedListenerRuntimeCallee(callee) 'managedListener'
+		usage.usesManagedListener = true
+		usage.usesManagedSocket = true
+		usage.usesHeap = true
+		recordIoParkUsage(usage)
+	end 'managedListener'
 
 	// A `__cl_*` call. Same two transitive bits as the directory family and for the same reasons: the scratch
 	// buffer is a raw alloc, and `__cl_arg` answers with an `Array` record it builds one tier down.

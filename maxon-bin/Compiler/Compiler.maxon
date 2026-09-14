@@ -789,6 +789,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 		verifyManagedFileOrdinals(project)
 		verifyManagedDirectoryOrdinals(project)
 		verifyManagedSocketOrdinals(project)
+		verifyManagedListenerOrdinals(project)
 		verifyManagedMemoryRuntimeOrdinals(project)
 		verifyDivisionByZeroOrdinals(project)
 
@@ -1456,6 +1457,12 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// guard and the refcounted teardown), and it needs no ordering against the Array install below for the
 	// reason stated there.
 	installManagedSocketRuntime(pipeline.stdModule, usage: usage, target: project.target)
+
+	// The listener runtime (`__ml_bind`/`__ml_accept`/…) — the socket band's SERVER half, on its own
+	// `usesManagedListener` bit. It is installed AFTER the socket runtime because it reuses that file's
+	// exported graph helpers, and it needs no ordering against the Array install below for the reason stated
+	// there.
+	installManagedListenerRuntime(pipeline.stdModule, usage: usage, target: project.target)
 
 	// The shared-memory runtime (`__shm_create`/`__shm_map`/…) — installed the same already-lowered way, on
 	// its own `usesSharedMemory` bit. It sits beside the three families above because it shares their helpers

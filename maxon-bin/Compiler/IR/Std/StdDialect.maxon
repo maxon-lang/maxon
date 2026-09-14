@@ -1003,11 +1003,56 @@ export enum SocketOverlappedVerb
 	// the green thread parks on the event instead of sitting in the kernel.
 	watchConnect
 
+	// ⭐⭐ `(socket, event, unused, unused) -> the host's raw answer`. `WSAEventSelect(s, event, FD_ACCEPT)` —
+	// the listening side's twin of `watchConnect`, and it buys the same two things at once: the event signals
+	// when a connection is waiting, and the call puts the listener into non-blocking mode so the `accept` that
+	// follows answers `WSAEWOULDBLOCK` rather than sitting in the kernel holding a machine.
+	watchAccept
+
 	// `(socket, unused, unused, unused) -> the host's raw answer`. `WSAEventSelect(s, NULL, 0)` — give the
-	// association back once the handshake has been read. The socket STAYS non-blocking, which costs the
-	// overlapped transfers nothing: an overlapped operation ignores the mode.
-	stopWatchingConnect
+	// association back once the event it was armed for has been read. The socket STAYS non-blocking, which
+	// costs the overlapped transfers nothing: an overlapped operation ignores the mode.
+	//
+	// ⭐ **IT IS ALSO WHAT DISINHERITS AN ACCEPTED SOCKET.** A socket `accept` hands back carries the
+	// LISTENER's association, so the accepted descriptor would go on naming an event the accepting frame is
+	// about to close — this is the call that takes it off, before the socket is opened as a poll descriptor.
+	stopWatching
 end 'SocketOverlappedVerb'
+
+// ⭐⭐ **WHICH SERVER-SIDE SOCKET ENTRY POINT ONE `osSocketServe` ASKS FOR, AND WHICH OPERANDS IT READS.** The
+// four calls that make a socket a LISTENER rather than a peer. Like `SocketOverlappedVerb` above, each verb is
+// one entry point with one argument list; the op carries three operands and a verb reads a prefix of them, so
+// the operands a verb does not name are passed zero.
+//
+// ⭐ **UNLIKE THAT ONE, THIS FAMILY IS SERVED ON EVERY NATIVE LANE** — an import on Windows and macOS, a raw
+// syscall on the two Linux lanes — because binding and accepting are readiness-driven everywhere. What differs
+// per lane is only how the accepted descriptor is born non-blocking; see `StdOp.osSocketServe`.
+export enum SocketServeVerb
+	// `(socket, addrPtr, unused)`. `bind(s, addrPtr, sizeof(sockaddr_in))` — the length is fixed for
+	// `osSocketConnect`'s reason: the caller always hands an IPv4 `sockaddr_in`.
+	bind
+
+	// `(socket, backlog, unused)`. `listen(s, backlog)`. The backlog is an operand rather than a constant of
+	// the lowering because how deep a pending-connection queue a program wants is the Std tier's question, not
+	// the instruction selector's.
+	listen
+
+	// ⭐⭐ `(socket, unused, unused)`. `accept(s, NULL, NULL)` — the peer's address is never asked for, because
+	// nothing above this op reads one.
+	//
+	// ⛔ **THE ACCEPTED DESCRIPTOR MUST BE BORN NON-BLOCKING AND CLOSE-ON-EXEC, AND NO LANE GIVES BOTH FOR
+	// FREE THE WAY THE SAME LANE'S `socket()` DOES.** Linux has `accept4` and takes the two flags in its fourth
+	// argument; Darwin has no `accept4` at all and its lowering runs the accepted descriptor through the same
+	// two `fcntl`s a fresh socket gets; Winsock inherits the listener's mode, which `SocketOverlappedVerb`'s
+	// `watchAccept` has already made non-blocking. A descriptor that arrived BLOCKING would hold its machine
+	// on the first `recv`.
+	accept
+
+	// `(socket, addrPtr, lenPtr)`. `getsockname(s, addrPtr, lenPtr)` — the address the kernel actually bound,
+	// which is the only way to learn the port a `bind` of 0 was given. `lenPtr` is an in-out `socklen_t` the
+	// caller seeds with the buffer's size, which is why it is an operand: the kernel READS it before it writes.
+	localName
+end 'SocketServeVerb'
 
 export union StdOp
 	// --- band: arith ---
@@ -2897,6 +2942,16 @@ export union StdOp
 	// is non-blocking and the poller says when a retry can be served — so there is no operation for a kernel to
 	// be still holding, and `ManagedSocketRuntime.socketWaitShape` emits none of this there.
 	osSocketOverlapped(resultId ValueId, verb SocketOverlappedVerb, a0Id ValueId, a1Id ValueId, a2Id ValueId, a3Id ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
+	// ⭐⭐ **THE SERVER SIDE OF A SOCKET, AS ONE FAMILY OP** — `osSocketServe(result, verb, a0…a2) -> the
+	// host's raw answer`, in the lane's own failure vocabulary (`osSocketCreate`'s: `-errno` on a POSIX lane,
+	// -1 on Winsock, and every reader tests `< 0`). It is `osSocketOverlapped`'s arrangement for that op's
+	// reason: four entry points of one shape would be four arms in fifty total matches.
+	//
+	// ⚠ **`isStore: true` IS LOAD-BEARING FOR TWO OF THE VERBS**: `accept` and `localName` have the kernel
+	// write through a pointer the caller owns, so a reordering that moved a load of that buffer above the call
+	// would read the block before it was filled.
+	osSocketServe(resultId ValueId, verb SocketServeVerb, a0Id ValueId, a1Id ValueId, a2Id ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -3056,6 +3111,15 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		// scheduler\"*, and a wait on our own callback is not that.
 		osNetpoll or
 			osSocketOverlapped gives SyscallClass.schedulerBound
+
+		// ⚠ **THE SERVER BAND IS `schedulerBound` INCLUDING ITS `accept`, AND THAT RESTS ON THE DESCRIPTOR
+		// BEING NON-BLOCKING BEFORE THE CALL IS MADE.** `bind`, `listen` and `getsockname` answer out of the
+		// socket object the kernel already holds. An `accept` on a non-blocking listener answers
+		// `EAGAIN`/`WSAEWOULDBLOCK` at once and the green thread parks on the poller, so there is no window
+		// for `__sysmon` to rescue a processor out of — which is exactly what
+		// `specs/netpoll-socket.md`'s `n-concurrent-reads-do-not-serialise` asserts by demanding ZERO retakes
+		// across a window that accepts four connections.
+		osSocketServe gives SyscallClass.schedulerBound
 
 		// The PAGE band: bounded, and every one of them is reachable under `__slab_lock`.
 		osAllocPages gives SyscallClass.schedulerBound
@@ -3569,7 +3633,8 @@ export function classifyArithOperands(op StdOp, operands StdArithOperands)
 			covPoint or
 			osHostSample or
 			osNetpoll or
-			osSocketOverlapped then operands.recordNeither()
+			osSocketOverlapped or
+			osSocketServe then operands.recordNeither()
 	end 'b'
 end 'classifyArithOperands'
 
@@ -3771,7 +3836,8 @@ export function classifyLoadOperands(op StdOp, load StdLoadOperands)
 			covPoint or
 			osHostSample or
 			osNetpoll or
-			osSocketOverlapped then load.recordNotALoad()
+			osSocketOverlapped or
+			osSocketServe then load.recordNotALoad()
 	end 'l'
 end 'classifyLoadOperands'
 
@@ -3928,7 +3994,8 @@ module function classifyStoreOperands(op StdOp, store StdStoreOperands)
 			covPoint or
 			osHostSample or
 			osNetpoll or
-			osSocketOverlapped then store.recordNotAStore()
+			osSocketOverlapped or
+			osSocketServe then store.recordNotAStore()
 	end 's'
 end 'classifyStoreOperands'
 
@@ -4119,7 +4186,8 @@ module function classifyCallOperands(op StdOp, call StdCallOperands)
 			covPoint or
 			osHostSample or
 			osNetpoll or
-			osSocketOverlapped then call.recordOther()
+			osSocketOverlapped or
+			osSocketServe then call.recordOther()
 	end 'c'
 end 'classifyCallOperands'
 
@@ -4620,6 +4688,7 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osHostSample(_, _, a0, a1, a2, a3, a4, a5) then insertUseSextet(referenced, a: a0, b: a1, c: a2, d: a3, e: a4, f: a5)
 		osNetpoll(_, _, a0, a1, a2, a3, a4) then insertUseQuint(referenced, a: a0, b: a1, c: a2, d: a3, e: a4)
 		osSocketOverlapped(_, _, a0, a1, a2, a3) then insertUseQuad(referenced, a: a0, b: a1, c: a2, d: a3)
+		osSocketServe(_, _, a0, a1, a2) then insertUseTriple(referenced, a: a0, b: a1, c: a2)
 		osFileSize(_, handle, sizeOutPtr) then insertUsePair(referenced, a: handle, b: sizeOutPtr)
 		osFileDelete(_, pathPtr) then referenced.insert(pathPtr)
 		osFileRename(_, oldPathPtr, newPathPtr) then insertUsePair(referenced, a: oldPathPtr, b: newPathPtr)
@@ -4939,6 +5008,7 @@ module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 		osHostSample(resultId, _, _, _, _, _, _, _) then def.recordOne(resultId)
 		osNetpoll(resultId, _, _, _, _, _, _) then def.recordOne(resultId)
 		osSocketOverlapped(resultId, _, _, _, _, _) then def.recordOne(resultId)
+		osSocketServe(resultId, _, _, _, _) then def.recordOne(resultId)
 		osFileSize(resultId, _, _) then def.recordOne(resultId)
 		osFileDelete(resultId, _) then def.recordOne(resultId)
 		osFileRename(resultId, _, _) then def.recordOne(resultId)
@@ -5231,6 +5301,7 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osHostSample(resultId, service, a0, a1, a2, a3, a4, a5) gives StdOp.osHostSample(resultId, service: service, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst), a3Id: remappedValue(a3, subst: subst), a4Id: remappedValue(a4, subst: subst), a5Id: remappedValue(a5, subst: subst))
 		osNetpoll(resultId, verb, a0, a1, a2, a3, a4) gives StdOp.osNetpoll(resultId, verb: verb, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst), a3Id: remappedValue(a3, subst: subst), a4Id: remappedValue(a4, subst: subst))
 		osSocketOverlapped(resultId, verb, a0, a1, a2, a3) gives StdOp.osSocketOverlapped(resultId, verb: verb, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst), a3Id: remappedValue(a3, subst: subst))
+		osSocketServe(resultId, verb, a0, a1, a2) gives StdOp.osSocketServe(resultId, verb: verb, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst))
 		osFileSize(resultId, handle, sizeOutPtr) gives StdOp.osFileSize(resultId, handleId: remappedValue(handle, subst: subst), sizeOutPtrId: remappedValue(sizeOutPtr, subst: subst))
 		osFileDelete(resultId, pathPtr) gives StdOp.osFileDelete(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
 		osFileRename(resultId, oldPathPtr, newPathPtr) gives StdOp.osFileRename(resultId, oldPathPtrId: remappedValue(oldPathPtr, subst: subst), newPathPtrId: remappedValue(newPathPtr, subst: subst))
@@ -5586,7 +5657,8 @@ function cloneStdOp(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray, 
 			covPoint or
 			osHostSample or
 			osNetpoll or
-			osSocketOverlapped gives refuseUnclonable(op)
+			osSocketOverlapped or
+			osSocketServe gives refuseUnclonable(op)
 	end 'r'
 end 'cloneStdOp'
 
@@ -6060,7 +6132,8 @@ module function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out
 			covPoint or
 			osHostSample or
 			osNetpoll or
-			osSocketOverlapped then break 'term'
+			osSocketOverlapped or
+			osSocketServe then break 'term'
 	end 'term'
 end 'collectStdBlockSuccessorIds'
 
@@ -6252,6 +6325,7 @@ module function classifyBranch(op StdOp, out StdBranchOperands)
 			covPoint or
 			osHostSample or
 			osNetpoll or
-			osSocketOverlapped then out.recordOther()
+			osSocketOverlapped or
+			osSocketServe then out.recordOther()
 	end 'term'
 end 'classifyBranch'

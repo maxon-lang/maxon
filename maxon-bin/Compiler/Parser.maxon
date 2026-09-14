@@ -66676,13 +66676,14 @@ export type Parser
 		throw ParseError.unsupported("`{String.from(ManagedDirectoryTypeName)}` method '{String.from(methodTok.value)}' — the type has exactly these three: `next()`, `filename()` and `close()`", line: methodTok.line, column: methodTok.column)
 	end 'dispatchManagedDirectoryMethod'
 
-	// ⭐ **THE ONE `__ManagedSocket` STATIC — `tcpConnect(host, port: p)`.** A name outside it is REFUSED BY
-	// NAME here rather than left to fall through, exactly as `parseManagedFileStaticCall` argues: falling
-	// through would mangle `__ManagedSocket.listen` into a callee no file declares and surface as E3004
-	// against a name the author did write.
+	// ⭐ **THE TWO `__ManagedSocket` STATICS — `tcpConnect(host, port: p)` and `bindListener(host, port: p)`.**
+	// A name outside them is REFUSED BY NAME here rather than left to fall through, exactly as
+	// `parseManagedFileStaticCall` argues: falling through would mangle `__ManagedSocket.dial` into a callee no
+	// file declares and surface as E3004 against a name the author did write.
 	//
-	// ⚠ **OWNERSHIP: it produces an OWNED box.** It goes through `emitOwnedRuntimeResult`, so it is tracked as
-	// an owned temporary whose drop is `__ms_destruct` — the RAII close (`SignatureIndex.managedNameDropCallee`).
+	// ⚠ **OWNERSHIP: each produces an OWNED box.** Both go through `emitOwnedRuntimeResult`, so each is tracked
+	// as an owned temporary whose drop is `__ms_destruct` — the RAII close
+	// (`SignatureIndex.managedNameDropCallee`).
 	//
 	// ⚠ Throwing-ness is NOT decided here — `isThrowingManagedSocketRuntimeCallee` names the callee and the
 	// composed `isThrowingRuntimeCallee` is read by the parser's E3055 accept and SemanticCheck's E3057
@@ -66693,19 +66694,21 @@ export type Parser
 		let range = SourceRange.between(typeTok, last: methodTok)
 
 		if methodTok.value.equals(ManagedSocketTcpConnectMethod) 'tcpConnect'
-			try self.consume(TokenKind.leftParen)
-			let host = try self.parseManagedMemoryArg(func, paramName: ManagedSocketHostParamName, methodTok: methodTok)
-			try self.consumeArrayArgLabel(ManagedSocketPortParamName, required: false)
-			let port = try self.parseBuiltinIntegerArg(func, paramName: ManagedSocketPortParamName, methodTok: methodTok)
-			try self.consume(TokenKind.rightParen)
-			return self.emitOwnedRuntimeResult(ManagedSocketTcpConnectName, args: pairArgs(host, second: port), resultTag: ValueTypeTag.structRef, resultNameId: self.managedSocketNameId(), range: range)
+			return try self.emitManagedSocketDialCall(func, methodTok: methodTok, callee: ManagedSocketTcpConnectName, range: range)
 		end 'tcpConnect'
 
-		throw ParseError.unsupported("`{String.from(ManagedSocketTypeName)}` static '{String.from(methodTok.value)}' — the type has exactly this one: `tcpConnect`", line: methodTok.line, column: methodTok.column)
+		// ⭐ **`bindListener(host, port: p)` — THE SERVER SIDE's ONLY STATIC.** It BINDS and LISTENS in one
+		// call and answers a socket that can do neither `sendFrom` nor `recv`; `stdlib/TcpListener.maxon` is
+		// the wrapper that states that in the type system, and its header carries why the box is this type.
+		if methodTok.value.equals(ManagedSocketBindListenerMethod) 'bindListener'
+			return try self.emitManagedSocketDialCall(func, methodTok: methodTok, callee: ManagedListenerBindName, range: range)
+		end 'bindListener'
+
+		throw ParseError.unsupported("`{String.from(ManagedSocketTypeName)}` static '{String.from(methodTok.value)}' — the type has exactly these two: `tcpConnect` and `bindListener`", line: methodTok.line, column: methodTok.column)
 	end 'parseManagedSocketStaticCall'
 
-	// ⭐ **THE THREE `__ManagedSocket` INSTANCE METHODS — `sendFrom`, `recv`, `close`.** The cursor sits on the
-	// method NAME (`dispatchMethodOnReceiver` consumed the `.`).
+	// ⭐ **THE `__ManagedSocket` INSTANCE METHODS — the transfers, the deadlines, the close, and the server
+	// side's two.** The cursor sits on the method NAME (`dispatchMethodOnReceiver` consumed the `.`).
 	//
 	// ⚠ The buffer is BORROWED by all three, not consumed: `__ms_send_from` reads out of it and `__ms_recv`
 	// writes into it, and neither takes ownership — which is what lets the caller keep using it afterwards,
@@ -66757,8 +66760,35 @@ export type Parser
 			return self.emitRuntimeCall(ManagedSocketTimedOutName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
 		end 'timedOut'
 
-		throw ParseError.unsupported("`{String.from(ManagedSocketTypeName)}` method '{String.from(methodTok.value)}' — the type has exactly these six: `sendFrom()`, `recv()`, `close()`, `setReadDeadline()`, `setWriteDeadline()` and `timedOut()`", line: methodTok.line, column: methodTok.column)
+		// ⭐ **THE SERVER SIDE's TWO.** `boundPort()` reports the port a `bindListener` of 0 was given, and
+		// `accept()` answers an OWNED socket of its own — the peer half, which CAN transfer. Both are refused
+		// at runtime on a socket that never listened, which is a state `stdlib/TcpListener.maxon` makes
+		// unwritable.
+		if methodTok.value.equals(ManagedSocketBoundPortMethod) 'boundPort'
+			try self.consumeEmptyArgList()
+			return self.emitRuntimeCall(ManagedListenerPortName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'boundPort'
+
+		if methodTok.value.equals(ManagedSocketAcceptMethod) 'accept'
+			try self.consumeEmptyArgList()
+			return self.emitOwnedRuntimeResult(ManagedListenerAcceptName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.structRef, resultNameId: self.managedSocketNameId(), range: range)
+		end 'accept'
+
+		throw ParseError.unsupported("`{String.from(ManagedSocketTypeName)}` method '{String.from(methodTok.value)}' — the type has exactly these eight: `sendFrom()`, `recv()`, `close()`, `setReadDeadline()`, `setWriteDeadline()`, `timedOut()`, `boundPort()` and `accept()`", line: methodTok.line, column: methodTok.column)
 	end 'dispatchManagedSocketMethod'
+
+	// One body for both `(host, port:)` statics: they differ only in the callee, and two copies of an argument
+	// list is how one of them would quietly acquire a different label rule. Both produce an OWNED box whose
+	// drop is `__ms_destruct` — the RAII close (`SignatureIndex.managedNameDropCallee`).
+	function emitManagedSocketDialCall(func IrFunction, methodTok Token, callee ByteArray, range SourceRange) returns ValueId throws ParseError
+		try self.consume(TokenKind.leftParen)
+		let host = try self.parseManagedMemoryArg(func, paramName: ManagedSocketHostParamName, methodTok: methodTok)
+		try self.consumeArrayArgLabel(ManagedSocketPortParamName, required: false)
+		let port = try self.parseBuiltinIntegerArg(func, paramName: ManagedSocketPortParamName, methodTok: methodTok)
+		try self.consume(TokenKind.rightParen)
+
+		return self.emitOwnedRuntimeResult(callee, args: pairArgs(host, second: port), resultTag: ValueTypeTag.structRef, resultNameId: self.managedSocketNameId(), range: range)
+	end 'emitManagedSocketDialCall'
 
 	// One body for both deadline setters: they differ only in the callee, and two copies of an argument list is
 	// how one of them would quietly acquire a different label rule.

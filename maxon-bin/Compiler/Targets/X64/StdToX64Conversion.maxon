@@ -414,10 +414,17 @@ let WsaCompletionRoutineSlot = 2
 export let SocketOptionStackArgWords = 1 as MachineWord  // arg 5: optlen
 let SocketOptionLengthSlot = 0
 
-// `WSAEventSelect`'s `lNetworkEvents`: the handshake's completion and nothing else, then none at all.
+// `WSAEventSelect`'s `lNetworkEvents`: the handshake's completion, a connection waiting to be accepted, and
+// then none at all. Each verb arms exactly the one event it waits for, so a socket watched for a connection
+// cannot be woken by anything else.
 let WsaFdConnect = 0x10
+let WsaFdAccept = 0x08
 let WsaNoNetworkEvents = 0
 let WsaNoEventObject = 0
+
+// `accept`'s two out-params, both declined: nothing above `StdOp.osSocketServe` reads the peer's address, and
+// Winsock takes a NULL `addrlen` with a NULL `addr`.
+let WinsockNoPeerAddress = 0
 
 // `getsockopt(SOL_SOCKET, SO_ERROR)` on Winsock. Its two Linux twins are different numbers and live with that
 // lane's lowering — a level and an option name are per-platform, not per-protocol.
@@ -1110,6 +1117,7 @@ export type StdToX64Lowering
 				osSocketSend or
 				osSocketRecv or
 				osSocketClose or
+				osSocketServe or
 				osCpuCount or
 				osThreadCpuTicks gives 0
 
@@ -1504,6 +1512,7 @@ export type StdToX64Lowering
 			osSocketSend(resultId, sockId, bufPtrId, lenId) then self.lowerOsSocketSend(resultId, sockId: sockId, bufPtrId: bufPtrId, lenId: lenId, dstBlock: dstBlock)
 			osSocketRecv(resultId, sockId, bufPtrId, lenId) then self.lowerOsSocketRecv(resultId, sockId: sockId, bufPtrId: bufPtrId, lenId: lenId, dstBlock: dstBlock)
 			osSocketClose(sockId) then self.lowerOsSocketClose(sockId, dstBlock: dstBlock)
+			osSocketServe(resultId, verb, a0Id, a1Id, a2Id) then self.lowerOsSocketServe(resultId, verb: verb, operands: threeArgs(a0Id, second: a1Id, third: a2Id), dstBlock: dstBlock)
 
 			// The MACHINE query behind `__Builtins.cpuCount()`; the clamp is builder-built Std, not here.
 			osCpuCount(resultId) then self.lowerOsCpuCount(resultId, dstBlock: dstBlock)
@@ -1676,7 +1685,8 @@ export type StdToX64Lowering
 				osSocketSend or
 				osSocketError or
 				osSocketRecv or
-				osSocketClose then panic("StdToX64Lowering: a socket host primitive appeared as a block terminator (lowering bug — every socket primitive is a body op, never a terminator)")
+				osSocketClose or
+				osSocketServe then panic("StdToX64Lowering: a socket host primitive appeared as a block terminator (lowering bug — every socket primitive is a body op, never a terminator)")
 			osFreePages then panic("StdToX64Lowering: an `osFreePages` op appeared as a block terminator (lowering bug — a page release is a body op)")
 			witnessCall then panic("StdToX64Lowering: a `witnessCall` op appeared as a block terminator (lowering bug — a witness call is a value-producing body op)")
 			witnessTryCall then panic("StdToX64Lowering: a `witnessTryCall` op appeared as a block terminator (lowering bug — a throwing witness call is a value-producing body op)")
@@ -3773,9 +3783,11 @@ export type StdToX64Lowering
 			receive or
 				transmit then self.lowerOsSocketTransferWin64(resultId, verb: verb, operands: operands, dstBlock: dstBlock)
 
-			// `WSAEventSelect(s, event, FD_CONNECT)` — three register arguments, no overlapped tail.
-			watchConnect then self.lowerOsSocketEventSelectWin64(resultId, socket: socketOverlappedOperand(operands, index: 0), event: socketOverlappedOperand(operands, index: 1), dstBlock: dstBlock)
-			stopWatchingConnect then self.lowerOsSocketStopEventSelectWin64(resultId, socket: socketOverlappedOperand(operands, index: 0), dstBlock: dstBlock)
+			// `WSAEventSelect(s, event, <mask>)` — three register arguments, no overlapped tail. The two
+			// arming verbs differ only in the mask, so they share one emitter.
+			watchConnect then self.lowerOsSocketEventSelectWin64(resultId, socket: socketOverlappedOperand(operands, index: 0), event: socketOverlappedOperand(operands, index: 1), networkEvents: WsaFdConnect, dstBlock: dstBlock)
+			watchAccept then self.lowerOsSocketEventSelectWin64(resultId, socket: socketOverlappedOperand(operands, index: 0), event: socketOverlappedOperand(operands, index: 1), networkEvents: WsaFdAccept, dstBlock: dstBlock)
+			stopWatching then self.lowerOsSocketStopEventSelectWin64(resultId, socket: socketOverlappedOperand(operands, index: 0), dstBlock: dstBlock)
 		end 'v'
 	end 'lowerOsSocketOverlappedWin64'
 
@@ -3785,7 +3797,8 @@ export type StdToX64Lowering
 			transmit then self.emitWin64StackArgImm(dstBlock, slot: WsaFlagsSlot, value: WsaSendNoFlags)
 
 			watchConnect or
-				stopWatchingConnect then panic("lowerOsSocketTransferWin64: the event-select pair is not an overlapped transfer — `lowerOsSocketOverlappedWin64` routes it to its own emitter")
+				watchAccept or
+				stopWatching then panic("lowerOsSocketTransferWin64: an event-select verb is not an overlapped transfer — `lowerOsSocketOverlappedWin64` routes it to its own emitter")
 		end 'v'
 
 		// The OVERLAPPED is operand 3 for a receive and operand 2 for a send — the one place the two shapes differ
@@ -3794,7 +3807,8 @@ export type StdToX64Lowering
 			receive gives socketOverlappedOperand(operands, index: 3)
 			transmit gives socketOverlappedOperand(operands, index: 2)
 			watchConnect or
-				stopWatchingConnect panic("lowerOsSocketTransferWin64: the event-select pair carries no OVERLAPPED — the arm above has already refused it")
+				watchAccept or
+				stopWatching panic("lowerOsSocketTransferWin64: an event-select verb carries no OVERLAPPED — the arm above has already refused it")
 		end 'ovl'
 
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(WsaOverlappedSlot), src: TargetVReg.virtual(overlapped), width: X64AccessWidth.word64))
@@ -3812,15 +3826,17 @@ export type StdToX64Lowering
 			receive gives IatSlot.WSARecv
 			transmit gives IatSlot.WSASend
 			watchConnect or
-				stopWatchingConnect panic("socketOverlappedSlot: the event-select pair never reaches the transfer's shared tail")
+				watchAccept or
+				stopWatching panic("socketOverlappedSlot: an event-select verb never reaches the transfer's shared tail")
 		end 'v'
 	end 'socketOverlappedSlot'
 
-	// `WSAEventSelect(s, event, FD_CONNECT)` — three register arguments.
-	function lowerOsSocketEventSelectWin64(resultId ValueId, socket ValueId, event ValueId, dstBlock IrBlock)
+	// `WSAEventSelect(s, event, networkEvents)` — three register arguments. The mask is the caller's because
+	// it is the only thing the two arming verbs disagree about.
+	function lowerOsSocketEventSelectWin64(resultId ValueId, socket ValueId, event ValueId, networkEvents MachineWord, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(socket)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(event)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: WsaFdConnect))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: networkEvents))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.WSAEventSelect)))
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsSocketEventSelectWin64'
@@ -3861,6 +3877,108 @@ export type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.getsockopt)))
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsSocketErrorWin64'
+
+	// ⭐⭐ **THE SERVER SIDE — `StdOp.osSocketServe`'s four verbs, ONE ROUTE FORK EACH.** Every one is three
+	// register arguments or fewer on both routes, so none reserves outgoing stack space.
+	function lowerOsSocketServe(resultId ValueId, verb SocketServeVerb, operands ValueIdArray, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsSocketServeWin64(resultId, verb: verb, operands: operands, dstBlock: dstBlock)
+			syscall then self.lowerOsSocketServeLinux(resultId, verb: verb, operands: operands, dstBlock: dstBlock)
+		end 'route'
+	end 'lowerOsSocketServe'
+
+	function lowerOsSocketServeWin64(resultId ValueId, verb SocketServeVerb, operands ValueIdArray, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(socketServeOperand(operands, index: 0))))
+
+		match verb 'v'
+			// `bind(s, name, sizeof(sockaddr_in))` — the length is the Std tier's `SockaddrInBytes`, which is
+			// also the size of the block it allocated, exactly as `connect`'s is.
+			bind then self.emitWin64ArgPtrThenImm(socketServeOperand(operands, index: 1), third: SockaddrInBytes, dstBlock: dstBlock)
+
+			// `listen(s, backlog)`.
+			listen then self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(socketServeOperand(operands, index: 1))))
+
+			// `accept(s, NULL, NULL)` — Winsock takes a NULL `addrlen` beside a NULL `addr`.
+			accept then self.emitWin64ArgImmThenImm(WinsockNoPeerAddress, third: WinsockNoPeerAddress, dstBlock: dstBlock)
+
+			// `getsockname(s, name, namelen)` — `namelen` is the in-out length, an operand for the reason
+			// `StdOp.osSocketServe` states.
+			localName then self.emitWin64ArgPtrThenPtr(socketServeOperand(operands, index: 1), secondPtrId: socketServeOperand(operands, index: 2), dstBlock: dstBlock)
+		end 'v'
+
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(socketServeSlot(verb))))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsSocketServeWin64'
+
+	function emitWin64ArgPtrThenImm(ptrId ValueId, third MachineWord, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(ptrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: third))
+	end 'emitWin64ArgPtrThenImm'
+
+	function emitWin64ArgImmThenImm(second MachineWord, third MachineWord, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: second))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: third))
+	end 'emitWin64ArgImmThenImm'
+
+	function emitWin64ArgPtrThenPtr(ptrId ValueId, secondPtrId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(ptrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(secondPtrId)))
+	end 'emitWin64ArgPtrThenPtr'
+
+	function socketServeSlot(verb SocketServeVerb) returns IatSlot
+		return match verb 'v'
+			bind gives IatSlot.bind
+			listen gives IatSlot.listen
+			accept gives IatSlot.accept
+			localName gives IatSlot.getsockname
+		end 'v'
+	end 'socketServeSlot'
+
+	// ⚠ **THE FOUR x86-64 SYSCALL NUMBERS ARE MEASURED ON THIS LANE, not transcribed** — see
+	// `X64LinuxRuntime`'s server-band block, which carries the probe and its negative controls.
+	function lowerOsSocketServeLinux(resultId ValueId, verb SocketServeVerb, operands ValueIdArray, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdi), srcReg: TargetVReg.virtual(socketServeOperand(operands, index: 0))))
+
+		match verb 'v'
+			bind then self.emitLinuxArgPtrThenImm(socketServeOperand(operands, index: 1), third: SockaddrInBytes as MachineWord, dstBlock: dstBlock)
+			listen then self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rsi), srcReg: TargetVReg.virtual(socketServeOperand(operands, index: 1))))
+
+			// ⭐ `accept4(s, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC)` — the two flags this lane's `socket()`
+			// also takes in one call, so the accepted descriptor is never momentarily blocking.
+			accept then self.emitLinuxAcceptFlags(dstBlock)
+
+			localName then self.emitLinuxArgPtrThenPtr(socketServeOperand(operands, index: 1), secondPtrId: socketServeOperand(operands, index: 2), dstBlock: dstBlock)
+		end 'v'
+
+		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(socketServeSyscall(verb)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsSocketServeLinux'
+
+	function emitLinuxArgPtrThenImm(ptrId ValueId, third MachineWord, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rsi), srcReg: TargetVReg.virtual(ptrId)))
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rdx), value: third))
+	end 'emitLinuxArgPtrThenImm'
+
+	function emitLinuxArgPtrThenPtr(ptrId ValueId, secondPtrId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rsi), srcReg: TargetVReg.virtual(ptrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(secondPtrId)))
+	end 'emitLinuxArgPtrThenPtr'
+
+	// The 4th syscall argument is r10, not rcx: rcx is clobbered by `syscall` in hardware.
+	function emitLinuxAcceptFlags(dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rsi), value: LinuxSocketNoPeerAddress))
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rdx), value: LinuxSocketNoPeerAddress))
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.r10), value: (LinuxSockNonBlock + LinuxSockCloexec) as MachineWord))
+	end 'emitLinuxAcceptFlags'
+
+	function socketServeSyscall(verb SocketServeVerb) returns MachineWord
+		return match verb 'v'
+			bind gives X64LinuxSyscallBind
+			listen gives X64LinuxSyscallListen
+			accept gives X64LinuxSyscallAccept4
+			localName gives X64LinuxSyscallGetsockname
+		end 'v'
+	end 'socketServeSyscall'
 
 	function lowerOsSocketErrorLinux(resultId ValueId, sockId ValueId, valuePtrId ValueId, lenPtrId ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdi), srcReg: TargetVReg.virtual(sockId)))
@@ -5336,7 +5454,8 @@ export type StdToX64Lowering
 				covPoint or
 				osHostSample or
 				osNetpoll or
-				osSocketOverlapped gives false
+				osSocketOverlapped or
+				osSocketServe gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -5558,7 +5677,8 @@ export type StdToX64Lowering
 				osSocketSend or
 				osSocketError or
 				osSocketRecv or
-				osSocketClose panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a socket host primitive, not a condBranch")
+				osSocketClose or
+				osSocketServe panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a socket host primitive, not a condBranch")
 			osCpuCount panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osCpuCount`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osThreadCpuTicks panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osThreadCpuTicks`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osDecommitPages panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osDecommitPages`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")

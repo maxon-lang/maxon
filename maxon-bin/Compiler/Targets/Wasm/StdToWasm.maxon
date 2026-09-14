@@ -841,7 +841,8 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 			covPoint or
 			osHostSample or
 			osNetpoll or
-			osSocketOverlapped then break 'k'
+			osSocketOverlapped or
+			osSocketServe then break 'k'
 	end 'k'
 end 'internIndirectCallTypeFor'
 
@@ -1556,7 +1557,8 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 			covPoint then break 'def'
 		osHostSample or
 			osNetpoll or
-			osSocketOverlapped then break 'def'
+			osSocketOverlapped or
+			osSocketServe then break 'def'
 	end 'def'
 end 'recordDefValtype'
 
@@ -1872,7 +1874,8 @@ type WasmFuncEmitter
 			covPoint then panic("emitStraightLineTerminator: a coverage counter is a body op, never a terminator")
 			osHostSample then panic("emitStraightLineTerminator: a host sample call is a body op, never a terminator")
 			osNetpoll then panic("emitStraightLineTerminator: a poller call is a body op, never a terminator")
-			osSocketOverlapped then panic("emitStraightLineTerminator: a socket transfer is a body op, never a terminator")
+			osSocketOverlapped or
+			osSocketServe then panic("emitStraightLineTerminator: a socket transfer or a server-side socket call is a body op, never a terminator")
 		end 'term'
 	end 'emitStraightLineTerminator'
 
@@ -2042,7 +2045,8 @@ type WasmFuncEmitter
 			covPoint then panic("emitDispatcherTerminator: a coverage counter is a body op, never a terminator")
 			osHostSample then panic("emitDispatcherTerminator: a host sample call is a body op, never a terminator")
 			osNetpoll then panic("emitDispatcherTerminator: a poller call is a body op, never a terminator")
-			osSocketOverlapped then panic("emitDispatcherTerminator: a socket transfer is a body op, never a terminator")
+			osSocketOverlapped or
+			osSocketServe then panic("emitDispatcherTerminator: a socket transfer or a server-side socket call is a body op, never a terminator")
 		end 'term'
 	end 'emitDispatcherTerminator'
 
@@ -2315,6 +2319,7 @@ type WasmFuncEmitter
 			osHostSample then panic("emitBodyOp: `osHostSample` has no wasm32-wasi spelling — process sampling is `HostFacility.processSampling`, which this lane does not provide, so SemanticCheck refuses such a program at its own source span (E3104) and this is the backstop for a compiler bug that got one past that gate")
 			osNetpoll then panic("emitBodyOp: `osNetpoll` has no wasm32-wasi spelling — a WASI component has one thread, so there is no second party to interrupt a wait and no poller to block in; the scheduler that emits it is `HostFacility.greenThreads`, which SemanticCheck refuses on this lane at its own source span (E3104), and this is the backstop for a compiler bug that got one past that gate")
 			osSocketOverlapped then panic("emitBodyOp: `osSocketOverlapped` has no wasm32-wasi spelling — `TargetFacilities.targetProvidesFacility` denies `managedSocket` on this lane, so a socket call is refused at its own source span (E3104), and this is the backstop for a compiler bug that got one past that gate")
+			osSocketServe then panic("emitBodyOp: `osSocketServe` has no wasm32-wasi spelling — binding, listening and accepting need `wasi:sockets`, which this lane does not use, so `TargetFacilities.targetProvidesFacility` denies `managedSocket` here and a listener call is refused at its own source span (E3104); this is the backstop for a compiler bug that got one past that gate")
 		end 'body'
 	end 'emitBodyOp'
 
@@ -3844,7 +3849,8 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		covPoint then panic("decideDispatcher: a coverage counter is a body op, never a terminator")
 		osHostSample then panic("decideDispatcher: a host sample call is a body op, never a terminator")
 		osNetpoll then panic("decideDispatcher: a poller call is a body op, never a terminator")
-		osSocketOverlapped then panic("decideDispatcher: a socket transfer is a body op, never a terminator")
+		osSocketOverlapped or
+			osSocketServe then panic("decideDispatcher: a socket transfer or a server-side socket call is a body op, never a terminator")
 	end 'k'
 
 	return false

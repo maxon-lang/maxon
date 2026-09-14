@@ -1,0 +1,54 @@
+/// TCP server networking with automatic resource cleanup.
+/// @category System
+/// TCP listening socket. Automatically closes when it goes out of scope.
+///
+/// A listener is not a connection: it has no `send` and no `recv`, and `accept()` is the only way to get
+/// something that does. That is Go's `net.Listener` against `net.Conn`, and this type is where the language
+/// states it — the box underneath is the same one a `TcpClient` holds, because an OS socket is an OS socket.
+public type TcpListener
+	var socket as __ManagedSocket
+
+	/// Bind to a host and port and begin listening.
+	/// `port: 0` takes whichever free port the kernel gives, which `port()` reports — and is how two
+	/// programs on one machine avoid choosing the same address.
+	/// The returned TcpListener auto-closes when it goes out of scope.
+	public static function bind(host String, port NetworkPort) returns TcpListener throws NetworkError
+		let bound = try __ManagedSocket.bindListener(host.addressableBytes(), port: port) otherwise (e) 'bindErr'
+			match e 'matchBind'
+				resolveFailed then throw NetworkError.resolveFailed
+				default throws NetworkError.bindFailed
+			end 'matchBind'
+		end 'bindErr'
+
+		return TcpListener{socket: bound}
+	end 'bind'
+
+	/// The port this listener is bound to — the one the kernel chose when `bind` was asked for `0`.
+	///
+	/// It asks the OS rather than remembering the answer, so it reports the listener's real state rather
+	/// than a copy of it that a close could leave stale.
+	public function port() returns NetworkPort
+		let bound = try socket.boundPort() otherwise 'noPort'
+			panic("TcpListener.port: this listener is closed, so it holds no bound port to report")
+		end 'noPort'
+
+		return bound as NetworkPort
+	end 'port'
+
+	/// Take the next connection, suspending this green thread on the network poller until one arrives.
+	/// The returned TcpClient owns its own socket and auto-closes when it goes out of scope.
+	public function accept() returns TcpClient throws NetworkError
+		let conn = try socket.accept() otherwise 'acceptErr'
+			throw NetworkError.acceptFailed
+		end 'acceptErr'
+
+		return TcpClient.adopt(conn)
+	end 'accept'
+
+	/// Explicitly stop listening and release the port.
+	/// Safe to call multiple times (idempotent).
+	/// Also called automatically when the last reference goes out of scope.
+	public function close()
+		socket.close()
+	end 'close'
+end 'TcpListener'

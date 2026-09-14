@@ -975,6 +975,7 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, abi CalleeAbiTab
 		osHostSample(resultId, _, _, _, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osNetpoll(resultId, _, _, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osSocketOverlapped(resultId, _, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osSocketServe(resultId, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 	end 'result'
 end 'recordOpResultClass'
 
@@ -1490,7 +1491,8 @@ export type ScaledIndexFolds
 				covPoint or
 				osHostSample or
 				osNetpoll or
-				osSocketOverlapped then break 'mem'
+				osSocketOverlapped or
+				osSocketServe then break 'mem'
 		end 'mem'
 	end 'recordMemoryFold'
 
@@ -2011,7 +2013,8 @@ export type CompareFusionCensus
 					covPoint or
 					osHostSample or
 					osNetpoll or
-					osSocketOverlapped then break 'term'
+					osSocketOverlapped or
+					osSocketServe then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -2130,6 +2133,11 @@ end 'netpollOperand'
 export function socketOverlappedOperand(operands ValueIdArray, index ParamCount) returns ValueId
 	return try operands.get(index) otherwise panic("socketOverlappedOperand: `osSocketOverlapped` carries four operands and {index} is not one of them")
 end 'socketOverlappedOperand'
+
+// Operand `index` of an `osSocketServe`, as the isels carry them: the op's three in order.
+export function socketServeOperand(operands ValueIdArray, index ParamCount) returns ValueId
+	return try operands.get(index) otherwise panic("socketServeOperand: `osSocketServe` carries three operands and {index} is not one of them")
+end 'socketServeOperand'
 
 // The operands a POSIX lane's `osNetpoll` chunk is called with — the prefix `posixNetpollOperandCount` names.
 export function posixNetpollChunkArgs(verb NetpollVerb, operands ValueIdArray) returns ValueIdArray

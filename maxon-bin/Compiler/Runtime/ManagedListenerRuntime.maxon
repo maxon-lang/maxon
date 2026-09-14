@@ -1,0 +1,511 @@
+// Runtime/ManagedListenerRuntime.maxon — the SERVER side of the socket band: bind, listen, accept, and the
+// port the kernel chose.
+//
+// ⭐⭐ **THE BOX IS A `__ManagedSocket` AND THE DISTINCTION LIVES IN THE STDLIB, WHICH IS A SEED CONSTRAINT
+// AND NOT A PREFERENCE.** A stdlib file may CALL a surface the compiler in the slot has never heard of — an
+// unreached body is never parsed — but it may not ANNOTATE a TYPE that compiler cannot resolve, which is
+// E3011 in every compile including the one a released seed makes of this tree. MEASURED with the v0.1.0 seed
+// against this checkout: a stdlib type holding a `__ManagedListener` field refused hello-world, while the same
+// file CALLING `__ManagedListener.bind` compiled clean. ⇒ **a NEW builtin TYPE NAME cannot enter `stdlib/`
+// until a release carries the compiler that resolves it**, and this rung would otherwise be four red lanes
+// with no fix available in-tree (`feedback_the_published_seed_is_a_gate`).
+//
+// ⭐ **WHAT USERS SEE IS UNCHANGED BY THAT**: `stdlib/TcpListener.maxon` has no `send` and no `recv`, so a
+// listening socket still cannot transfer — Go's `net.Listener` against `net.Conn`. What is shared is the BOX,
+// one OS socket closed on drop, and that really is one type: `__ms_close` and `__ms_destruct` serve both
+// halves, and the poll record a listener needs is the one a peer socket needs.
+//
+// ⭐ **IT REUSES `ManagedSocketRuntime` RATHER THAN RE-SPELLING IT.** The box shape, the poll-descriptor
+// doors, the resolve fork, the `EAGAIN` classifier, the retry-and-park loop and the `sockaddr_in` writer are
+// that file's and are exported from it. What lives here is the three graphs no peer socket has.
+//
+// ⭐⭐ **EVERY NATIVE LANE SERVES IT; `wasm32-wasi` REFUSES IT.** The refusal needs no new wiring: the
+// facility gate is keyed on a runtime callee's band, and this band asks for `HostFacility.managedSocket` — a
+// listener needs exactly the socket substrate and nothing else.
+//
+// ⚠ **ONE SURFACE, TWO WAIT SHAPES, AND THE FORK IS THE ACCEPT** (`SocketWaitShape`): a POSIX listener is a
+// non-blocking descriptor on the poller and its `accept` retries when the poller says a connection is
+// waiting, while x64-windows watches an event armed for `FD_ACCEPT` through the child-source band. Both park
+// the green thread and neither holds a machine.
+//
+// ⛔⛔ **THERE IS NO `AcceptEx` HERE AND THAT IS DELIBERATE.** Winsock's overlapped accept is not an export:
+// it is fetched with `WSAIoctl` and called through the pointer that comes back, and a foreign call through a
+// pointer is the one call this compiler cannot make from a green thread (`emitSocketWatchedDial`'s header
+// carries the whole argument). The event road the asynchronous CONNECT already uses answers the same
+// question with the imports every image already binds.
+//
+// ⛔ **`SO_REUSEADDR` IS NOT SET, AND ITS ABSENCE IS THE CONTRACT.** On Winsock that option lets a second
+// `bind` succeed onto a port a live listener already holds, which would split one backlog between two
+// listeners; `specs/netpoll-socket.md`'s `a-second-bind-of-a-live-port-is-refused` asserts the refusal. The
+// TIME_WAIT reason anyone would want the option does not arise here, because every caller that cannot name a
+// free port binds 0 and reads back.
+
+// ⭐ **HOW DEEP THE KERNEL MAY QUEUE CONNECTIONS THIS PROGRAM HAS NOT YET ACCEPTED.** It bounds only the
+// pending-handshake queue, never the number of live connections, and a caller that accepts in a loop drains
+// it as fast as a peer fills it. 128 is the conventional server figure; `SOMAXCONN` is deliberately not used,
+// because it is 0x7FFFFFFF on Winsock and a kernel-capped 4096 on Linux — one name for two very different
+// requests.
+let ListenBacklog = 128 as ParsedInt
+
+// ⭐ **THE SCRATCH `getsockname` FILLS, AND WHY IT IS BIGGER THAN THE ADDRESS.** The call writes a
+// `sockaddr_in` AND reads back an in-out `socklen_t`, so one block carries both: the address at 0, and the
+// length — seeded with the address's own size — one word past it. This tier has no narrow store, so the
+// 32-bit length is written as the low half of that word (`emitStoreDwordPair`).
+let ListenerNameAddressOffset = 0 as ByteOffset
+let ListenerNameLengthOffset = 16 as ByteOffset
+let ListenerNameScratchBytes = 24 as ParsedInt
+
+// ⭐⭐ **`sin_port` IS AT BYTE 2 ON EVERY PLATFORM THIS COMPILER TARGETS, AND IT IS BIG-ENDIAN THERE.** Linux
+// and Windows open the record with a 16-bit `sin_family`; the BSDs open it with a one-byte `sin_len` and put
+// `sin_family` in byte 1 (`ManagedSocketRuntime.sockaddrFamilyHalfword` carries that measurement) — and both
+// layouts put the port in bytes 2 and 3. So the READ side needs no per-platform fork at all, which is why
+// these are constants rather than a shape function.
+let SinPortHighOffset = 2 as ByteOffset
+let SinPortLowOffset = 3 as ByteOffset
+
+// A byte's worth of shift as a MULTIPLIER, so the big-endian halfword is composed rather than loaded: this
+// tier has no 16-bit load, and a bare 256 at a field position says nothing about which byte it places.
+let SinPortHighScale = 256 as ParsedInt
+
+// ⭐ **THE `__ManagedListenerError` ORDINALS, AS ERROR FLAGS (`ordinal + ErrorFlagOrdinalBias`)** — the
+// `ManagedSocketRuntime` discipline, and the ordinals are positional facts about the case order of the enum
+// DECLARED in `stdlib/Builtins.maxon`. `claimManagedListenerOrdinals` below is what holds these literals to
+// that declaration.
+let ManagedListenerResolveFailedOrdinal = 0 as ParsedInt
+let ManagedListenerBindFailedOrdinal = 1 as ParsedInt
+let ManagedListenerAcceptFailedOrdinal = 2 as ParsedInt
+let ManagedListenerAddressFailedOrdinal = 3 as ParsedInt
+let ManagedListenerClosedOrdinal = 4 as ParsedInt
+let ManagedListenerResolveFailedFlag = ManagedListenerResolveFailedOrdinal + ErrorFlagOrdinalBias
+let ManagedListenerBindFailedFlag = ManagedListenerBindFailedOrdinal + ErrorFlagOrdinalBias
+let ManagedListenerAcceptFailedFlag = ManagedListenerAcceptFailedOrdinal + ErrorFlagOrdinalBias
+let ManagedListenerAddressFailedFlag = ManagedListenerAddressFailedOrdinal + ErrorFlagOrdinalBias
+let ManagedListenerClosedFlag = ManagedListenerClosedOrdinal + ErrorFlagOrdinalBias
+
+// The `__ml_` prefix that identifies EVERY listener runtime entry point — the one test `scanRuntimeUsage`
+// reads to set `usesManagedListener`, and the one `TargetFacilities` reads for E3104. It is a band of its own
+// rather than three more `__ms_` names because the two bands throw DIFFERENT error types, and
+// `GtRuntime.runtimeThrowsClause` tells families apart by exactly this predicate.
+let ManagedListenerRuntimePrefix = b"__ml_"
+
+// ⭐ **THE THREE ENTRY POINTS, AND THERE IS NO FOURTH.** A listener's close and its drop are the socket
+// band's `__ms_close`/`__ms_destruct`: the box is that type, the descriptor is registered with the poller the
+// same way, and a second spelling of "close it once, idempotently" is the duplication this file exists
+// without.
+export let ManagedListenerBindName = b"__ml_bind"
+export let ManagedListenerPortName = b"__ml_port"
+export let ManagedListenerAcceptName = b"__ml_accept"
+
+// ⭐ **WHAT THE USER ACTUALLY WROTE, FOR THE DIAGNOSTICS THAT QUOTE A CALLEE BACK AT THEM** —
+// `managedSocketSourceMethodName`'s twin, and its header carries the argument: an author never writes
+// `__ml_accept`, so E3057 and E3059 must name the method they did write. It is asked only behind
+// `isManagedListenerRuntimeCallee`, so the panic states a case nothing can reach rather than answering it.
+export function managedListenerSourceMethodName(callee ByteArray) returns ByteArray
+	if callee.equals(ManagedListenerBindName) 'bind'
+		return ManagedSocketBindListenerMethod
+	end 'bind'
+
+	if callee.equals(ManagedListenerPortName) 'port'
+		return ManagedSocketBoundPortMethod
+	end 'port'
+
+	if callee.equals(ManagedListenerAcceptName) 'accept'
+		return ManagedSocketAcceptMethod
+	end 'accept'
+
+	panic("managedListenerSourceMethodName: no source-method arm for '{String.from(callee)}'. This map is asked ONLY behind `isManagedListenerRuntimeCallee`, so reaching it means the band gained an entry point and this map did not — add an arm answering the parser's own `ManagedSocket*Method` constant. `installManagedListenerRuntime`'s drift guard asks this for every `__ml_` builder it installs, so it fails at INSTALL and never in front of a user's missing `try`")
+end 'managedListenerSourceMethodName'
+
+// ⭐ **THE ERROR TYPE A LISTENER CALLEE THROWS — the WHAT to the predicate's THAT**, and the twin of
+// `managedSocketThrows`. `ProgramSignatures.throwsOf` answers with it for a callee no file declares, which is
+// what types an `otherwise (e)` binding and therefore what makes `match e` see an enum instead of a scalar.
+export function managedListenerThrows() returns ThrowsClause
+	return ThrowsClause.throwing(String.from(ManagedListenerErrorTypeName))
+end 'managedListenerThrows'
+
+// Every callee this file installs — what the drift guard iterates, what the usage scan and the facility gate
+// read, and what `GtRuntime` asks for a `throws` clause and a source spelling. A PREFIX test rather than a
+// three-way `or`: every entry point this file installs is `__ml_`-named by construction.
+//
+// ⚠ **THERE IS NO SEPARATE "which of these throw" TEST BECAUSE ALL OF THEM DO**, and the drift guard in
+// `installManagedListenerRuntime` fails the compile if a builder ever stops stamping a clause.
+export function isManagedListenerRuntimeCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: ManagedListenerRuntimePrefix)
+end 'isManagedListenerRuntimeCallee'
+
+// The live OS socket of a box, or this family's `closed` throw. It is `emitLiveSocketOrThrow` with ONE fact
+// changed — the flag names `__ManagedListenerError.closed` rather than the socket enum's, because the
+// FUNCTION's declared `throws` clause is what an ordinal indexes into.
+function emitLiveListenerOrThrow(module StdModule, func IrFunction, entry IrBlock, join IrBlock, box ValueId, ids ValueMinter) returns ValueId
+	return emitLiveHandleOrClosedThrow(module, func: func, entry: entry, join: join, record: box, handleOffset: ManagedSocketHandleOffset, closedSentinel: ManagedSocketClosedHandle, closedFlag: ManagedListenerClosedFlag, ids: ids)
+end 'emitLiveListenerOrThrow'
+
+// ⭐⭐ **`__ml_bind(hostRec, port) -> (box, flag)` — RESOLVE, CREATE, BIND, LISTEN, OR THROW.**
+//
+// The sequence:
+//
+//   WSAStartup(2.2)  →  resolve `host` to a network-order `sin_addr`  →  socket()
+//   →  build a `sockaddr_in`  →  bind()  →  listen(backlog)  →  join the poller  →  the box
+//
+// ⭐ **BINDING AND LISTENING ARE ONE CALL BECAUSE A BOUND SOCKET NOBODY LISTENS ON IS A STATE NO CALLER
+// WANTS.** Splitting them would let a program hold a box that owns a port and refuses every connection, and
+// there is no operation in this surface that such a box could serve.
+//
+// ⚠ **A `port` OF 0 ASKS THE KERNEL TO CHOOSE**, which is how two spec workers running at once cannot
+// collide. `__ml_port` is how the caller learns which port it was given.
+//
+// ⚠ **EVERY SCRATCH IS FREED ON EVERY EXIT, THE THROWING ONES INCLUDED** — the host cstring, the `WSADATA`
+// and the address block.
+function buildManagedListenerBind(module StdModule, target Target)
+	var func = IrFunction.createFromStd(ManagedListenerBindName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: managedListenerThrows())
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var init = module.addBlock(func, label: b"mlinit", heat: BlockHeat.normal)
+	var noWinsock = module.addBlock(func, label: b"mlnowsa", heat: BlockHeat.normal)
+	var resolve = module.addBlock(func, label: b"mlresolve", heat: BlockHeat.normal)
+	var resolveFailed = module.addBlock(func, label: b"mldnsfail", heat: BlockHeat.normal)
+	var resolved = module.addBlock(func, label: b"mladdr", heat: BlockHeat.normal)
+	var noSocket = module.addBlock(func, label: b"mlnosock", heat: BlockHeat.normal)
+	var doBind = module.addBlock(func, label: b"mlbind", heat: BlockHeat.normal)
+	var doListen = module.addBlock(func, label: b"mllisten", heat: BlockHeat.normal)
+	var closeAndFail = module.addBlock(func, label: b"mlbindfail", heat: BlockHeat.normal)
+	var bound = module.addBlock(func, label: b"mlbound", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 2)
+	let hostRec = 0 as ValueId
+	let port = 1 as ValueId
+
+	let host = emitPathToCString(module, func: func, cur: entry, join: init, pathRec: hostRec, ids: ids)
+
+	emitWinsockStartup(module, block: init, ready: resolve, notReady: noWinsock, ids: ids)
+
+	emitRawFree(module, block: noWinsock, ptr: host, ids: ids)
+	emitErrorReturn(module, block: noWinsock, flag: ManagedListenerBindFailedFlag, ids: ids)
+
+	// ⭐ **THE ONE PARK — THE RESOLVE.** It is this function's only genuinely blocking operation: on the two
+	// `getaddrinfo` lanes a name can take a network round trip. `socket`, `bind` and `listen` each allocate or
+	// rearrange a kernel object and return, which is not a wait — see `emitIoPark`'s
+	// once-per-blocking-operation invariant.
+	emitIoPark(module, block: resolve, operation: GtIoOperation.netListen, ids: ids)
+	let ip = emitResolveHostIp(module, resolve: resolve, resolved: resolved, resolveFailed: resolveFailed, host: host, shape: socketResolveShape(target), ids: ids)
+	emitErrorReturn(module, block: resolveFailed, flag: ManagedListenerResolveFailedFlag, ids: ids)
+
+	let socket = ids.mint()
+	module.appendOp(resolved, op: StdOp.osSocketCreate(socket))
+	let socketFailed = emitSocketCallFailed(module, block: resolved, answer: socket, ids: ids)
+	module.setTerminator(resolved, op: StdOp.condBranch(socketFailed, thenBlockId: noSocket.id, elseBlockId: doBind.id))
+
+	emitErrorReturn(module, block: noSocket, flag: ManagedListenerBindFailedFlag, ids: ids)
+
+	let addr = emitRawAlloc(module, block: doBind, byteCount: emitConst(module, block: doBind, value: SockaddrInBytes, ids: ids), ids: ids)
+	let addrWord = emitSockaddrInWord(module, block: doBind, port: port, ip: ip, familyHalfword: sockaddrFamilyHalfword(target), ids: ids)
+	emitStoreField(module, block: doBind, record: addr, offset: SockaddrFamilyPortAddrOffset, value: addrWord)
+	let bindResult = ids.mint()
+	module.appendOp(doBind, op: StdOp.osSocketServe(bindResult, verb: SocketServeVerb.bind, a0Id: socket, a1Id: addr, a2Id: emitConst(module, block: doBind, value: 0, ids: ids)))
+	emitRawFree(module, block: doBind, ptr: addr, ids: ids)
+	let bindRefused = emitSocketStatusFailed(module, block: doBind, answer: bindResult, ids: ids)
+	module.setTerminator(doBind, op: StdOp.condBranch(bindRefused, thenBlockId: closeAndFail.id, elseBlockId: doListen.id))
+
+	let listenResult = ids.mint()
+	let unusedListen = emitConst(module, block: doListen, value: 0, ids: ids)
+	module.appendOp(doListen, op: StdOp.osSocketServe(listenResult, verb: SocketServeVerb.listen, a0Id: socket, a1Id: emitConst(module, block: doListen, value: ListenBacklog, ids: ids), a2Id: unusedListen))
+	let listenRefused = emitSocketStatusFailed(module, block: doListen, answer: listenResult, ids: ids)
+	module.setTerminator(doListen, op: StdOp.condBranch(listenRefused, thenBlockId: closeAndFail.id, elseBlockId: bound.id))
+
+	// A refused bind or listen leaves an OPEN socket that no box will ever own, so it is closed here or it
+	// holds its descriptor for the process lifetime — invisibly to the exit-101 gate, because a socket is not
+	// memory. The poller has not been given this descriptor yet, so there is no record to release.
+	module.appendOp(closeAndFail, op: StdOp.osSocketClose(socket))
+	emitErrorReturn(module, block: closeAndFail, flag: ManagedListenerBindFailedFlag, ids: ids)
+
+	// ⭐ **THE DESCRIPTOR JOINS THE POLLER ONLY NOW, AND ON EVERY LANE.** Nothing could have waited on it
+	// before it was listening, and a record opened ahead of a bind that fails is one the failure road would
+	// have to release. It is opened on the completion-port lane too — where the accept parks on an event
+	// rather than on this record — because `__ms_close` is this box's close on every lane and it releases the
+	// record unconditionally; an open that forked would leave that release to reset a record nobody adopted.
+	emitSocketPollerOpen(module, block: bound, pollKey: emitNetpollDescriptorIndex(module, block: bound, target: target, fd: socket, ids: ids), socket: socket, ids: ids)
+	let box = emitRawAlloc(module, block: bound, byteCount: emitConst(module, block: bound, value: ManagedSocketBoxBytes, ids: ids), ids: ids)
+	emitStoreHandleSlot(module, block: bound, record: box, handleOffset: ManagedSocketHandleOffset, handle: socket, ids: ids)
+	emitOkReturn(module, block: bound, value: box, ids: ids)
+
+	module.functions.push(func)
+end 'buildManagedListenerBind'
+
+// ⭐⭐ **`__ml_port(box) -> (port, flag)` — THE PORT THE KERNEL ACTUALLY BOUND.** A caller that asked for 0
+// has no other way to learn it, and a caller that named a port gets the same number back.
+//
+// ⚠ **IT MAKES NO PARK, BECAUSE IT MAKES NO WAIT.** `getsockname` answers out of the socket object the
+// kernel is already holding.
+//
+// ⚠ **THE PORT IS BIG-ENDIAN IN THE RECORD AND IS COMPOSED FROM TWO BYTE LOADS**, which is also what makes
+// the read platform-neutral: Darwin's `sin_len` moves `sin_family` but not `sin_port`.
+function buildManagedListenerPort(module StdModule)
+	var func = IrFunction.createFromStd(ManagedListenerPortName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: managedListenerThrows())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var ask = module.addBlock(func, label: b"mlask", heat: BlockHeat.normal)
+	var refused = module.addBlock(func, label: b"mlnoname", heat: BlockHeat.normal)
+	var answered = module.addBlock(func, label: b"mlname", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let box = 0 as ValueId
+	let socket = emitLiveListenerOrThrow(module, func: func, entry: entry, join: ask, box: box, ids: ids)
+
+	let scratch = emitRawAlloc(module, block: ask, byteCount: emitConst(module, block: ask, value: ListenerNameScratchBytes, ids: ids), ids: ids)
+	emitStoreDwordPair(module, block: ask, record: scratch, offset: ListenerNameLengthOffset, low: SockaddrInBytes, high: 0, ids: ids)
+	let lengthAt = emitBin(module, block: ask, a: scratch, b: emitConst(module, block: ask, value: ListenerNameLengthOffset as ParsedInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let status = ids.mint()
+	module.appendOp(ask, op: StdOp.osSocketServe(status, verb: SocketServeVerb.localName, a0Id: socket, a1Id: scratch, a2Id: lengthAt))
+
+	// Both bytes are read BEFORE the block is freed, on the one edge that reads them at all.
+	let high = emitLoadConstByte(module, block: ask, base: scratch, offset: ListenerNameAddressOffset + SinPortHighOffset, ids: ids)
+	let low = emitLoadConstByte(module, block: ask, base: scratch, offset: ListenerNameAddressOffset + SinPortLowOffset, ids: ids)
+	let scaled = emitBin(module, block: ask, a: high, b: emitConst(module, block: ask, value: SinPortHighScale, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
+	let portValue = emitBin(module, block: ask, a: scaled, b: low, opcode: StdBinOpcode.bitOr, ids: ids)
+	emitRawFree(module, block: ask, ptr: scratch, ids: ids)
+	let askFailed = emitSocketStatusFailed(module, block: ask, answer: status, ids: ids)
+	module.setTerminator(ask, op: StdOp.condBranch(askFailed, thenBlockId: refused.id, elseBlockId: answered.id))
+	ask.branchEdges.push(BranchEdge.create(answered.id, argIds: argsOf(portValue)))
+
+	// A live descriptor `getsockname` refuses is not a listener this box can answer for, and there is no
+	// number it could return instead that would not be a lie.
+	emitErrorReturn(module, block: refused, flag: ManagedListenerAddressFailedFlag, ids: ids)
+
+	let answer = ids.mint()
+	answered.blockArgs.push(IrBlockArg.create(answer, argType: StdType.i64))
+	emitOkReturn(module, block: answered, value: answer, ids: ids)
+
+	module.functions.push(func)
+end 'buildManagedListenerPort'
+
+// ⭐⭐⭐ **`__ml_accept(box) -> (socketBox, flag)` — TAKE A CONNECTION, PARKING ON THE POLLER UNTIL ONE
+// ARRIVES.** The answer is an owned `__ManagedSocket` box of its own, with its own poll record and its own
+// destructor; the listener's box is untouched.
+//
+// ⚠ **THE WAIT COSTS NO MACHINE ON EITHER SHAPE**, which is what
+// `specs/netpoll-socket.md`'s `a-parked-accept-is-on-the-poller` reads off `schedNetpollBlockCount`.
+function buildManagedListenerAccept(module StdModule, target Target)
+	var func = IrFunction.createFromStd(ManagedListenerAcceptName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: managedListenerThrows())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var ready = module.addBlock(func, label: b"mlready", heat: BlockHeat.normal)
+	var attempt = module.addBlock(func, label: b"mlattempt", heat: BlockHeat.normal)
+	var accepted = module.addBlock(func, label: b"mlaccepted", heat: BlockHeat.normal)
+	var failed = module.addBlock(func, label: b"mlacceptfail", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let box = 0 as ValueId
+	let listener = emitLiveListenerOrThrow(module, func: func, entry: entry, join: ready, box: box, ids: ids)
+
+	emitIoPark(module, block: ready, operation: GtIoOperation.netAccept, ids: ids)
+	module.setTerminator(ready, op: StdOp.branch(attempt.id))
+
+	// ⭐⭐ **BOTH SHAPES WAIT ON THE LISTENER'S OWN POLL RECORD, AND THAT IS WHAT MAKES TWO ACCEPTORS ONE
+	// WAITER TOO MANY ON EVERY LANE.** A direction word holds one waiter, so an accept published there is
+	// refused a second publication by `__np_pd_wait` itself — `RuntimeAbort.netpollDoubleWait`, the stop two
+	// readers of one socket already get (`specs/netpoll-socket.md`'s two named-stop cases are one contract in
+	// two shapes). A watch on a source minted per accept would name a different word each time and strand the
+	// first acceptor instead.
+	let pollKey = emitNetpollDescriptorIndex(module, block: attempt, target: target, fd: listener, ids: ids)
+
+	match socketWaitShape(target) 'shape'
+		polled then emitListenerPolledAccept(module, func: func, ids: ids, attempt: attempt, listener: listener, pollKey: pollKey, accepted: accepted, failed: failed, target: target)
+		overlapped then emitListenerWatchedAccept(module, func: func, ids: ids, attempt: attempt, listener: listener, pollKey: pollKey, accepted: accepted, failed: failed)
+	end 'shape'
+
+	// ⛔ **A FAILED ACCEPT TOUCHES NEITHER DESCRIPTOR.** The listener is the caller's and stays open; there is
+	// no accepted socket on this edge to close. That is also what makes it safe on the `NetpollWaitStale`
+	// answer, where the fd number in hand may already name somebody else's socket.
+	emitErrorReturn(module, block: failed, flag: ManagedListenerAcceptFailedFlag, ids: ids)
+
+	let conn = ids.mint()
+	accepted.blockArgs.push(IrBlockArg.create(conn, argType: StdType.i64))
+	emitSocketPollerOpen(module, block: accepted, pollKey: emitNetpollDescriptorIndex(module, block: accepted, target: target, fd: conn, ids: ids), socket: conn, ids: ids)
+	let connBox = emitRawAlloc(module, block: accepted, byteCount: emitConst(module, block: accepted, value: ManagedSocketBoxBytes, ids: ids), ids: ids)
+	emitStoreHandleSlot(module, block: accepted, record: connBox, handleOffset: ManagedSocketHandleOffset, handle: conn, ids: ids)
+	emitOkReturn(module, block: accepted, value: connBox, ids: ids)
+
+	module.functions.push(func)
+end 'buildManagedListenerAccept'
+
+// The POLLED lanes' accept: issue the non-blocking `accept4` and let the socket band's own retry loop sort
+// what it said. `EAGAIN` parks the green thread on the listener's READ direction and comes back here.
+//
+// ⚠ **`timedOut` AND `stale` BOTH REACH `failed`, AND NEITHER IS A DEADLINE.** A listener has no deadline
+// API, so the only way this wait ends other than ready is a DROPPED promise — `__np_pd_drop` marks the wait
+// expired so the resumed thread issues no further syscall — or a record reset under it. Both mean *"this
+// accept will never complete"*, which is what `acceptFailed` says.
+function emitListenerPolledAccept(module StdModule, func IrFunction, ids ValueMinter, attempt IrBlock, listener ValueId, pollKey ValueId, accepted IrBlock, failed IrBlock, target Target)
+	let answer = ids.mint()
+	let unused = emitConst(module, block: attempt, value: 0, ids: ids)
+	module.appendOp(attempt, op: StdOp.osSocketServe(answer, verb: SocketServeVerb.accept, a0Id: listener, a1Id: unused, a2Id: unused))
+	emitSocketAttempt(module, func: func, attempt: attempt, answer: answer, pollKey: pollKey, mode: NetpollModeRead, ok: accepted, failed: failed, timedOut: failed, target: target, ids: ids)
+end 'emitListenerPolledAccept'
+
+// ⭐⭐⭐ **THE OVERLAPPED LANE'S ACCEPT — A CONNECTION WATCHED THROUGH AN EVENT, WHICH IS
+// `emitSocketWatchedDial`'S ROAD WITH `FD_ACCEPT` IN PLACE OF `FD_CONNECT`.**
+//
+// `WSAEventSelect(FD_ACCEPT)` signals the event when a connection is waiting AND makes the listener
+// non-blocking, so `accept` answers `WSAEWOULDBLOCK` without ever holding the machine; the event then rides
+// the poller through the same thread-pool wait a parked child does.
+//
+// ⛔⛔ **THE ACCEPTED SOCKET INHERITS THE LISTENER'S EVENT ASSOCIATION, AND IT IS TAKEN OFF BEFORE ANYBODY
+// SEES IT.** A socket `accept` hands back carries the listening socket's `WSAEventSelect` record, so it would
+// go on naming an event this frame is about to close — and it would be opened as a poll descriptor in that
+// state, with its `WSARecv`/`WSASend` road talking to a socket still in event mode. `stopWatching` on the
+// ACCEPTED descriptor is what disinherits it.
+//
+// ⭐⭐ **THE PARK IS ON THE LISTENER'S OWN POLL RECORD, NOT ON A SOURCE MINTED PER ACCEPT.** The event's
+// signal is posted under the listener's key, so this accept publishes itself in the very direction word a
+// POSIX accept publishes itself in — which is what gives both lanes ONE rule for a second acceptor
+// (`RuntimeAbort.netpollDoubleWait`) and what lets a close under a parked accept end that accept.
+function emitListenerWatchedAccept(module StdModule, func IrFunction, ids ValueMinter, attempt IrBlock, listener ValueId, pollKey ValueId, accepted IrBlock, failed IrBlock)
+	var noEvent = module.addBlock(func, label: b"mlnoevent", heat: BlockHeat.normal)
+	var armWatch = module.addBlock(func, label: b"mlwatch", heat: BlockHeat.normal)
+	var watchRefused = module.addBlock(func, label: b"mlwatchno", heat: BlockHeat.normal)
+	var issue = module.addBlock(func, label: b"mlissue", heat: BlockHeat.normal)
+	var pending = module.addBlock(func, label: b"mlpending", heat: BlockHeat.normal)
+	var armSignal = module.addBlock(func, label: b"mlarmsig", heat: BlockHeat.normal)
+	var watching = module.addBlock(func, label: b"mlwatching", heat: BlockHeat.normal)
+	var awaited = module.addBlock(func, label: b"mlawaited", heat: BlockHeat.normal)
+	var notSignalled = module.addBlock(func, label: b"mlnosignal", heat: BlockHeat.normal)
+	var staleRecord = module.addBlock(func, label: b"mlstale", heat: BlockHeat.normal)
+	var giveBack = module.addBlock(func, label: b"mlgiveback", heat: BlockHeat.normal)
+	var dropEvent = module.addBlock(func, label: b"mldropevent", heat: BlockHeat.normal)
+
+	let event = ids.mint()
+	module.appendOp(attempt, op: StdOp.osEventCreate(event))
+	let haveEvent = emitCmp(module, block: attempt, a: event, b: emitConst(module, block: attempt, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(attempt, op: StdOp.condBranch(haveEvent, thenBlockId: armWatch.id, elseBlockId: noEvent.id))
+
+	module.setTerminator(noEvent, op: StdOp.branch(failed.id))
+
+	let selected = ids.mint()
+	let unusedArm = emitConst(module, block: armWatch, value: 0, ids: ids)
+	module.appendOp(armWatch, op: StdOp.osSocketOverlapped(selected, verb: SocketOverlappedVerb.watchAccept, a0Id: listener, a1Id: event, a2Id: unusedArm, a3Id: unusedArm))
+	let selectOk = emitCmp(module, block: armWatch, a: selected, b: emitConst(module, block: armWatch, value: WinsockCallOk, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(armWatch, op: StdOp.condBranch(selectOk, thenBlockId: issue.id, elseBlockId: watchRefused.id))
+
+	module.setTerminator(watchRefused, op: StdOp.branch(dropEvent.id))
+
+	// ⚠ **`issue` IS A LOOP HEADER AND CARRIES NO BLOCK ARGUMENTS**, which is what keeps the caller's
+	// `__gt_io_park` out of the ring: everything a re-issue reads — the listener, the event — is computed in a
+	// block that dominates it, so the trace still reports ONE yield/resume pair for the whole accept however
+	// many times the event fires without a connection behind it.
+	let conn = ids.mint()
+	let unusedIssue = emitConst(module, block: issue, value: 0, ids: ids)
+	module.appendOp(issue, op: StdOp.osSocketServe(conn, verb: SocketServeVerb.accept, a0Id: listener, a1Id: unusedIssue, a2Id: unusedIssue))
+	let acceptRefused = emitSocketCallFailed(module, block: issue, answer: conn, ids: ids)
+	module.setTerminator(issue, op: StdOp.condBranch(acceptRefused, thenBlockId: pending.id, elseBlockId: giveBack.id))
+	issue.branchEdges.push(BranchEdge.create(giveBack.id, argIds: argsOf(conn)))
+
+	// ⚠ **`WSAEWOULDBLOCK` IS THE ONLY ANSWER THAT MEANS "no connection yet"**; every other code is a refusal
+	// this call already knows about.
+	let reason = ids.mint()
+	module.appendOp(pending, op: StdOp.osLastError(reason))
+	let empty = emitCmp(module, block: pending, a: reason, b: emitConst(module, block: pending, value: WinsockWouldBlock, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(pending, op: StdOp.condBranch(empty, thenBlockId: armSignal.id, elseBlockId: dropEvent.id))
+
+	// The registration is given back on the far side of the wait and the RECORD is not: it is the listener's,
+	// and the listener outlives this accept.
+	let token = emitNetpollWatchHandleOnRecord(module, func: func, ids: ids, cur: armSignal, source: pollKey, handle: event, cont: watching)
+	let verdict = ids.mint()
+	module.appendOp(watching, op: StdOp.call(verdict, callee: NetpollPdWaitName, args: twoArgs(pollKey, second: emitConst(module, block: watching, value: NetpollModeRead, ids: ids))))
+	emitNetpollUnwatchHandleOnPort(module, block: watching, token: token, ids: ids)
+	module.setTerminator(watching, op: StdOp.branch(awaited.id))
+
+	let signalled = emitCmp(module, block: awaited, a: verdict, b: emitConst(module, block: awaited, value: NetpollWaitReady, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(awaited, op: StdOp.condBranch(signalled, thenBlockId: issue.id, elseBlockId: notSignalled.id))
+
+	// ⚠ **A WAIT THAT DID NOT END IN THE EVENT ENDED IN A DROPPED PROMISE OR IN A LISTENER CLOSED UNDER IT**,
+	// and both mean this accept will never complete — which is what `failed` reports.
+	let gone = emitCmp(module, block: notSignalled, a: verdict, b: emitConst(module, block: notSignalled, value: NetpollWaitStale, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(notSignalled, op: StdOp.condBranch(gone, thenBlockId: staleRecord.id, elseBlockId: dropEvent.id))
+
+	// ⛔ **A STALE ANSWER MAY NOT NAME THE DESCRIPTOR.** The record has been reset and reopened, so that number
+	// can already be somebody else's socket; the event is this frame's own and is all there is to give back.
+	module.appendOp(staleRecord, op: StdOp.osCloseHandle(event))
+	module.setTerminator(staleRecord, op: StdOp.branch(failed.id))
+
+	// The accepted socket is disinherited first and the listener's own association given back second, so the
+	// event is closed with nothing left pointing at it. Neither answer is read: both sockets are usable either
+	// way, and the event about to be closed is this frame's alone.
+	let accepting = ids.mint()
+	giveBack.blockArgs.push(IrBlockArg.create(accepting, argType: StdType.i64))
+	let unusedGiveBack = emitConst(module, block: giveBack, value: 0, ids: ids)
+	module.appendOp(giveBack, op: StdOp.osSocketOverlapped(ids.mint(), verb: SocketOverlappedVerb.stopWatching, a0Id: accepting, a1Id: unusedGiveBack, a2Id: unusedGiveBack, a3Id: unusedGiveBack))
+	module.appendOp(giveBack, op: StdOp.osSocketOverlapped(ids.mint(), verb: SocketOverlappedVerb.stopWatching, a0Id: listener, a1Id: unusedGiveBack, a2Id: unusedGiveBack, a3Id: unusedGiveBack))
+	module.appendOp(giveBack, op: StdOp.osCloseHandle(event))
+	module.setTerminator(giveBack, op: StdOp.branch(accepted.id))
+	giveBack.branchEdges.push(BranchEdge.create(accepted.id, argIds: argsOf(accepting)))
+
+	// The failure road gives the LISTENER's association back too — it outlives this frame, and an association
+	// naming a closed event is a state the next arm would have to replace rather than one to leave behind.
+	let unusedDrop = emitConst(module, block: dropEvent, value: 0, ids: ids)
+	module.appendOp(dropEvent, op: StdOp.osSocketOverlapped(ids.mint(), verb: SocketOverlappedVerb.stopWatching, a0Id: listener, a1Id: unusedDrop, a2Id: unusedDrop, a3Id: unusedDrop))
+	module.appendOp(dropEvent, op: StdOp.osCloseHandle(event))
+	module.setTerminator(dropEvent, op: StdOp.branch(failed.id))
+end 'emitListenerWatchedAccept'
+
+// The name this family's ordinals are transcribed under, for `BuiltinErrorOrdinalCheck`'s diagnostic.
+let ManagedListenerOrdinalInstaller = b"the server side of the __ManagedSocket runtime"
+
+// ⭐ **THE ORDINAL DRIFT GUARD FOR `__ManagedListenerError`** — `verifyManagedSocketOrdinals`' twin: the case
+// ORDER is the wire format, the declaration it is verified against is `stdlib/Builtins.maxon`'s, and it is a
+// free function because it needs the `Project` and must run on every compile.
+export function verifyManagedListenerOrdinals(project Project)
+	match declaredBuiltinErrorEnum(project, typeName: ManagedListenerErrorTypeName, installer: ManagedListenerOrdinalInstaller) 'declaration'
+		notDeclared then return
+		found(declaration) then claimManagedListenerOrdinals(project, declaration: declaration)
+	end 'declaration'
+end 'verifyManagedListenerOrdinals'
+
+// ⭐⭐ **THIS ENUM IS NEW, WHICH IS WHY THE SERVER SIDE'S FACTS COULD BE WRITTEN AT ALL — read this before
+// appending a case to a DIFFERENT one.** `BuiltinErrorOrdinalCheck.requireTotal` is a check a runtime
+// CONSTRUCTS over the enum it transcribes, so a compiler that installs no listener runtime constructs none
+// over this enum and never looks at it: a declared-but-untranscribed public enum in `stdlib/Builtins.maxon` is
+// ordinary to every compiler that predates this family. A case APPENDED to an enum some older compiler already
+// transcribes is the opposite — `ManagedSocketRuntime.claimManagedSocketOrdinals` carries that argument, and
+// it is why `bindFailed` and `acceptFailed` are here instead of there.
+function claimManagedListenerOrdinals(project Project, declaration EnumLayout)
+	var listenerErrors = BuiltinErrorOrdinalCheck.overDeclared(project, declaration: declaration, installer: ManagedListenerOrdinalInstaller)
+	listenerErrors.claim(ManagedListenerResolveFailedCaseName, ordinal: ManagedListenerResolveFailedOrdinal)
+	listenerErrors.claim(ManagedListenerBindFailedCaseName, ordinal: ManagedListenerBindFailedOrdinal)
+	listenerErrors.claim(ManagedListenerAcceptFailedCaseName, ordinal: ManagedListenerAcceptFailedOrdinal)
+	listenerErrors.claim(ManagedListenerAddressFailedCaseName, ordinal: ManagedListenerAddressFailedOrdinal)
+	listenerErrors.claim(ManagedListenerClosedCaseName, ordinal: ManagedListenerClosedOrdinal)
+	listenerErrors.requireTotal()
+end 'claimManagedListenerOrdinals'
+
+// ⭐ **INSTALL + THE DRIFT GUARD**, copied from `installManagedSocketRuntime` for its stated reason: the
+// throwing predicate above and the `throws` clauses stamped by the builders are ONE fact in two places, and a
+// builder that lost a clause would be a `try` that silently stops being required. The source-method map is
+// asked for every callee in the same traversal.
+//
+// ⚠ **IT IS CHECKED IN ONE DIRECTION HERE WHERE THE SOCKET BAND CHECKS TWO**, and the asymmetry is a fact
+// about the bands: every `__ml_` entry throws, so the band predicate IS the throwing predicate and "named but
+// not stamped" is the only way the two can disagree.
+export function installManagedListenerRuntime(module StdModule, usage RuntimeUsage, target Target)
+	if not usage.usesManagedListener 'noManagedListener'
+		return
+	end 'noManagedListener'
+
+	buildManagedListenerBind(module, target: target)
+	buildManagedListenerPort(module)
+	buildManagedListenerAccept(module, target: target)
+
+	for func in module.functions 'eachFunc'
+		if not isManagedListenerRuntimeCallee(func.name) 'notOurs'
+			continue
+		end 'notOurs'
+
+		if not throwsClauseIsThrowing(func.throwsTypeName) 'namedNotStamped'
+			panic("installManagedListenerRuntime: isManagedListenerRuntimeCallee names '{String.from(func.name)}' as throwing — every `__ml_` entry point does — but its builder stamps NO `throws` clause, so a caller's `try` would stop being required")
+		end 'namedNotStamped'
+
+		requireQuotableSourceSpelling(managedListenerSourceMethodName(func.name), callee: func.name)
+	end 'eachFunc'
+end 'installManagedListenerRuntime'

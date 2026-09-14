@@ -336,6 +336,26 @@ export let X64LinuxSyscallConnect = 42
 export let X64LinuxSyscallSendto = 44
 export let X64LinuxSyscallRecvfrom = 45
 
+// --- The SERVER side of the socket band ---
+//
+// ⚠ **MEASURED ON THIS LANE, not transcribed, and END TO END**: a probe on the WSL x86_64 guest called these
+// four BY NUMBER and nothing else — `bind` to `127.0.0.1:0` answered 0, `listen` answered 0, `getsockname`
+// read back `family=2` and a non-zero ephemeral port, a second socket `connect`ed to exactly that port, and
+// `accept4` answered a live descriptor that carried BOTH `O_NONBLOCK` and `FD_CLOEXEC` and over which five
+// bytes then crossed.
+// ⛔ **NEGATIVE CONTROLS, one substitution at a time**: AArch64's whole set answered `-EFAULT` at the first
+// call; `listen` given 49 (`bind`) answered `-EINVAL`; `getsockname` given 52 (`getpeername`) answered
+// `-ENOTCONN` with `family=0`.
+// ⛔⛔ **AND THE SHARPEST CONTROL IS `accept4` GIVEN 43, WHICH IS PLAIN `accept` AND SUCCEEDS.** It answers a
+// live descriptor and the bytes still cross — but with `O_NONBLOCK` and `FD_CLOEXEC` both CLEAR, because
+// plain `accept` ignores the fourth argument. ⇒ **a check of this number that reads only "did it answer a
+// descriptor" reads GREEN on the wrong call**; the accepted descriptor's FLAGS are what tell 288 from 43, and
+// a blocking descriptor is what holds a machine on its first `recv`.
+export let X64LinuxSyscallBind = 49
+export let X64LinuxSyscallListen = 50
+export let X64LinuxSyscallGetsockname = 51
+export let X64LinuxSyscallAccept4 = 288
+
 // ⛔⛔ **`O_DIRECTORY` IS THE asm-generic `0o200000` HERE, NOT THE `0o40000` AArch64 USES.**
 // `arch/arm64/include/uapi/asm/fcntl.h` overrides four flags before including the generic header and
 // shifts them all down, so the two lanes disagree about this one bit pattern and about no other flag in

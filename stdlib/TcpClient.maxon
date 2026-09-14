@@ -1,6 +1,14 @@
 /// TCP client networking with automatic resource cleanup.
 /// @category System
-typealias NetworkPort = int(1 to 65535)
+/// A TCP port number.
+///
+/// `0` is in range because it is what a `TcpListener.bind` asks for when it wants whichever free port the
+/// kernel has; it is never the port of a live connection or of a bound listener, and `TcpClient.connect`
+/// refuses it at the OS. ONE alias serves the bind, the connect and `TcpListener.port()` because a named
+/// ranged alias is NOMINAL at a parameter (measured: an `int(1 to 65535)` argument is E3005 at an
+/// `int(0 to 65535)` parameter, narrower or not) — and `port()`'s answer is passed to BOTH doors, so a
+/// second, narrower alias would be a widening the language has no spelling for.
+public typealias NetworkPort = int(0 to 65535)
 
 // Bytes sent or received in one call. Each is a length into a `ByteArray` the caller owns, so the
 // backing `__ManagedMemory`'s signed machine-word length is the ceiling.
@@ -21,6 +29,8 @@ public enum NetworkError implements Error
 	recvFailed
 	connectionClosed
 	timedOut
+	bindFailed
+	acceptFailed
 end 'NetworkError'
 
 /// TCP client connection. Automatically closes when it goes out of scope.
@@ -40,6 +50,16 @@ public type TcpClient
 
 		return TcpClient{socket: sock}
 	end 'connect'
+
+	/// Adopt a socket that is already connected — the one `TcpListener.accept()` answers.
+	/// The returned TcpClient auto-closes when it goes out of scope, exactly as a dialled one does.
+	///
+	/// It exists because a struct literal is only writable inside its own type (E3076), so the listener
+	/// wrapper has no other way to hand back the peer type. The socket is the caller's to produce: the only
+	/// producers are `tcpConnect` and `accept`, so no program can forge one.
+	public static function adopt(socket __ManagedSocket) returns TcpClient
+		return TcpClient{socket: socket}
+	end 'adopt'
 
 	/// Send all bytes of a string over this connection.
 	/// Loops internally to handle partial sends.

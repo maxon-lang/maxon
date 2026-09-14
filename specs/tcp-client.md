@@ -13,7 +13,7 @@ TCP client networking with automatic resource cleanup via the managed memory sys
 **Types:**
 - `TcpClient` — TCP client connection that auto-closes when it goes out of scope
 - `NetworkError` — Error enum for network operations
-- `NetworkPort` — Typed range for valid port numbers (1 to 65535)
+- `NetworkPort` — Typed range for port numbers (0 to 65535; `0` is what `TcpListener.bind` asks for when it wants an ephemeral port)
 
 **NetworkError cases:**
 - `resolveFailed` — DNS resolution failed

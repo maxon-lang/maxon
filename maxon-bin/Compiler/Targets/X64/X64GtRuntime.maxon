@@ -614,6 +614,12 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		WSASend gives SocketOverlappedStackArgWords  // 7: s, lpBuffers, dwBufferCount, lpNumberOfBytesSent, dwFlags, lpOverlapped, lpCompletionRoutine
 		WSAEventSelect gives 0  // 3: s, hEventObject, lNetworkEvents
 		getsockopt gives SocketOptionStackArgWords  // 5: s, level, optname, optval, optlen
+
+		// The server side's four, every one register-only.
+		bind gives 0  // 3: s, name, namelen
+		listen gives 0  // 2: s, backlog
+		accept gives 0  // 3: s, addr, addrlen
+		getsockname gives 0  // 3: s, name, namelen
 		GetActiveProcessorCount gives 0  // 1: GroupNumber
 
 		// ⚠ **THE SHIM SWITCHES STACKS, NOT THREADS**, which is the one thing that could have made this
@@ -779,6 +785,16 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 		// answers out of the socket object the kernel is already holding.
 		WSAEventSelect gives SyscallClass.schedulerBound
 		getsockopt gives SyscallClass.schedulerBound
+
+		// ⭐ **THE SERVER SIDE's FOUR REACH NO NETWORK EITHER, `accept` INCLUDED.** Three of them answer out of
+		// the socket object the kernel is already holding. The fourth is issued only on a listener
+		// `WSAEventSelect(FD_ACCEPT)` has already put into non-blocking mode, so it takes a connection off the
+		// queue or answers `WSAEWOULDBLOCK` at once — the wait is the green thread's park on the event, which
+		// holds no processor.
+		bind gives SyscallClass.schedulerBound
+		listen gives SyscallClass.schedulerBound
+		accept gives SyscallClass.schedulerBound
+		getsockname gives SyscallClass.schedulerBound
 
 		// --- `schedulerBound`: the scheduler's own machinery, and the bounded-and-short remainder ---
 		//

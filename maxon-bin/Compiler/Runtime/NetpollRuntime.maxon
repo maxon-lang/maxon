@@ -2043,11 +2043,21 @@ end 'buildNetpollChildClose'
 // machine's walk finds a generation that no longer matches and drops it — see `NetpollKeyGenShift`, which is
 // why a poll of our own here would be neither necessary nor sufficient.
 function emitNetpollCloseChildOnPort(module StdModule, block IrBlock, source ValueId, token ValueId, cont IrBlock, ids ValueMinter)
-	_ = emitNetpoll(module, block: block, verb: NetpollVerb.closeChildSource, operands: argsOf(token), ids: ids)
+	emitNetpollUnwatchHandleOnPort(module, block: block, token: token, ids: ids)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: NetpollPdReleaseName, args: argsOf(source)))
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: NetpollSourceKeyReleaseName, args: argsOf(source)))
 	module.setTerminator(block, op: StdOp.branch(cont.id))
 end 'emitNetpollCloseChildOnPort'
+
+// ⭐ **GIVE A REGISTRATION BACK AND LEAVE THE RECORD IT READIES ALONE.** A watch armed on a DESCRIPTOR's own
+// record must not release that record: the descriptor outlives the watch and its close is what owns it. Only
+// a source minted for the watch is released, which `emitNetpollCloseChildOnPort` does around this call.
+//
+// ⚠ **THE COMPLETION-PORT LANE'S SPELLING**: `closeChildSource` takes the REGISTRATION TOKEN here where a
+// POSIX lane's takes the source, so this door serves that lane alone.
+export function emitNetpollUnwatchHandleOnPort(module StdModule, block IrBlock, token ValueId, ids ValueMinter)
+	_ = emitNetpoll(module, block: block, verb: NetpollVerb.closeChildSource, operands: argsOf(token), ids: ids)
+end 'emitNetpollUnwatchHandleOnPort'
 
 // What `emitNetpollAcquireChildSource` hands back: the source a wait names, and the token its close takes.
 export type NetpollChildSource
@@ -2078,21 +2088,35 @@ end 'NetpollChildSource'
 // different road.
 export function emitNetpollAcquireChildSource(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, hProcess ValueId, cont IrBlock, gone IrBlock) returns NetpollChildSource
 	var opened = module.addBlock(func, label: b"npchopened", heat: BlockHeat.normal)
-	var refused = module.addBlock(func, label: b"npchrefused", heat: BlockHeat.normal)
 
 	let source = ids.mint()
 	module.appendOp(cur, op: StdOp.call(source, callee: NetpollChildOpenName, args: argsOf(hProcess)))
 	let exited = emitCmp(module, block: cur, a: source, b: emitConst(module, block: cur, value: 0 - PosixErrnoNoSuchProcess, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(exited, thenBlockId: gone.id, elseBlockId: opened.id))
 
-	let token = ids.mint()
-	module.appendOp(opened, op: StdOp.call(token, callee: NetpollChildArmName, args: twoArgs(source, second: hProcess)))
-	let armed = emitCmp(module, block: opened, a: token, b: emitConst(module, block: opened, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(opened, op: StdOp.condBranch(armed, thenBlockId: cont.id, elseBlockId: refused.id))
-	emitNetpollFailWith(module, func: func, block: refused, verb: NetpollVerb.armChildSource, subject: hProcess, answer: token, ids: ids)
-
-	return NetpollChildSource.create(source, token: token)
+	return NetpollChildSource.create(source, token: emitNetpollWatchHandleOnRecord(module, func: func, ids: ids, cur: opened, source: source, handle: hProcess, cont: cont))
 end 'emitNetpollAcquireChildSource'
+
+// ⭐⭐ **ARM A HANDLE'S SIGNAL ONTO A RECORD THAT ALREADY EXISTS.** `cur` is terminated and `cont` reached
+// with the registration live, carrying the token its unregistration takes. What the signal then readies is
+// the READ direction of `source`, because a hand-posted packet carries no directions of its own
+// (`emitNetpollEntryReadiness`) — so a caller that hands its DESCRIPTOR's record here waits on that record
+// with `__np_pd_wait` and is subject to the one-waiter-per-direction rule like any other reader.
+//
+// ⛔ **IT IS THE ONE BODY THAT TESTS THE ARM'S ANSWER.** A registration the poller refused, answered with a
+// 0 the caller went on to wait behind, is a park nothing can end — so the refusal stops here, which is what a
+// socket the poller will not take already gets.
+export function emitNetpollWatchHandleOnRecord(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, source ValueId, handle ValueId, cont IrBlock) returns ValueId
+	var refused = module.addBlock(func, label: b"npchrefused", heat: BlockHeat.normal)
+
+	let token = ids.mint()
+	module.appendOp(cur, op: StdOp.call(token, callee: NetpollChildArmName, args: twoArgs(source, second: handle)))
+	let armed = emitCmp(module, block: cur, a: token, b: emitConst(module, block: cur, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(armed, thenBlockId: cont.id, elseBlockId: refused.id))
+	emitNetpollFailWith(module, func: func, block: refused, verb: NetpollVerb.armChildSource, subject: handle, answer: token, ids: ids)
+
+	return token
+end 'emitNetpollWatchHandleOnRecord'
 
 // The record is reset BEFORE the descriptor is closed — the socket band's order, for its reason: a number the
 // kernel hands to the next opener while this record is still live would leave two owners of one record.
