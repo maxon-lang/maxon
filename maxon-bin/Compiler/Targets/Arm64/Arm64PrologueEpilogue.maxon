@@ -353,7 +353,7 @@ function resolveOneArm64IncomingArg(module TargetModule, opIdx OpIndex, at Block
 	foldPositions.push(at)
 	let scratchOpIdx = module.ops.count()
 	foldOps.push(scratchOpIdx)
-	module.ops.push(TargetOp.arm64AddImm(arm64PhysVReg(Arm64Ip1RegNum), src: arm64PhysVReg(Arm64FramePointerRegNum), imm: scratchBase as Imm32))
+	module.ops.push(TargetOp.arm64AddImm(TargetVReg.physical(Arm64Ip1RegNum), src: TargetVReg.physical(Arm64FramePointerRegNum), imm: scratchBase as Imm32))
 	module.spans.pushNone(scratchOpIdx)
 	arm64SetIncomingArgLoad(module, opIdx: opIdx, dest: dest, base: Arm64Ip1RegNum, disp: residue, width: width)
 end 'resolveOneArm64IncomingArg'
@@ -361,7 +361,7 @@ end 'resolveOneArm64IncomingArg'
 // Overwrite `opIdx` with the resolved incoming-argument load. Both the direct and the folded arm land
 // here so the op's shape — a `[base + disp]` load at the caller's width — is spelled once.
 function arm64SetIncomingArgLoad(module TargetModule, opIdx OpIndex, dest TargetVReg, base RegNum, disp Imm32, width X64AccessWidth)
-	try module.ops.set(opIdx, value: TargetOp.loadRegBaseDisp(dest, base: arm64PhysVReg(base), disp: disp, width: width)) otherwise panic("resolveArm64IncomingArgs: ops.set OOB at {opIdx}")
+	try module.ops.set(opIdx, value: TargetOp.loadRegBaseDisp(dest, base: TargetVReg.physical(base), disp: disp, width: width)) otherwise panic("resolveArm64IncomingArgs: ops.set OOB at {opIdx}")
 end 'arm64SetIncomingArgLoad'
 
 // Prepend, to the entry block: the frame-open `arm64Prologue`, then a `storeSlotReg` saving each used
@@ -371,7 +371,7 @@ end 'arm64SetIncomingArgLoad'
 function insertArm64PrologueAtEntry(module TargetModule, block IrBlock, usedCallee Arm64RegNumArray, spillSlotCount SpillSlot, frameSize StackSize, recordOffset StackSize)
 	for i in 0 upto usedCallee.count() 'eachSave'
 		let reg = try usedCallee.get(i) otherwise panic("insertArm64PrologueAtEntry: usedCallee.get OOB")
-		arm64PrependOp(module, block: block, op: TargetOp.storeSlotReg(spillSlotCount + i, srcReg: arm64PhysVReg(reg)))
+		arm64PrependOp(module, block: block, op: TargetOp.storeSlotReg(spillSlotCount + i, srcReg: TargetVReg.physical(reg)))
 	end 'eachSave'
 
 	arm64PrependOp(module, block: block, op: TargetOp.arm64Prologue(frameSize, recordOffset: recordOffset))
@@ -383,7 +383,7 @@ end 'insertArm64PrologueAtEntry'
 function appendArm64EpilogueBeforeReturn(module TargetModule, block IrBlock, usedCallee Arm64RegNumArray, spillSlotCount SpillSlot, frameSize StackSize, recordOffset StackSize)
 	for i in 0 upto usedCallee.count() 'eachRestore'
 		let reg = try usedCallee.get(i) otherwise panic("appendArm64EpilogueBeforeReturn: usedCallee.get OOB")
-		module.appendOp(block, op: TargetOp.loadRegSlot(arm64PhysVReg(reg), slot: spillSlotCount + i))
+		module.appendOp(block, op: TargetOp.loadRegSlot(TargetVReg.physical(reg), slot: spillSlotCount + i))
 	end 'eachRestore'
 
 	module.appendOp(block, op: TargetOp.arm64Epilogue(frameSize, recordOffset: recordOffset))
@@ -394,7 +394,7 @@ end 'appendArm64EpilogueBeforeReturn'
 // pressure; each must be preserved. Scanned by unioning every op's physical registers and
 // intersecting with the callee-saved set.
 function arm64UsedCalleeSaved(module TargetModule, func IrFunction) returns Arm64RegNumArray
-	let mask = arm64ScanPhysicalRegs(module, func: func)
+	let mask = colouredPhysicalRegs(module, func: func)
 	let fpBase = Arm64FirstVectorRegister
 	var used = Arm64RegNumArray.create()
 
@@ -414,263 +414,6 @@ function arm64UsedCalleeSaved(module TargetModule, func IrFunction) returns Arm6
 
 	return used
 end 'arm64UsedCalleeSaved'
-
-// The union of every physical register the function's colored ops name — the mask
-// `arm64UsedCalleeSaved` filters. Runs on the fully-colored, post-SSA-destruction program, so
-// `xchgRegReg` may be present.
-function arm64ScanPhysicalRegs(module TargetModule, func IrFunction) returns RegMask
-	var mask = 0 as RegMask
-	var buf = OperandList.create()
-
-	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("arm64ScanPhysicalRegs: blockRef from func.blockRefs not in module.blocks")
-
-		for opIdx in block.opRefs 'eachOp'
-			mask = mask or arm64OpPhysicalRegs(try module.ops.get(opIdx) otherwise panic("arm64ScanPhysicalRegs: opIdx {opIdx} not in module.ops"), buf: buf)
-		end 'eachOp'
-
-		if block.hasTerminatorOp() 'hasTerm'
-			mask = mask or arm64OpPhysicalRegs(try module.ops.get(block.terminatorIndex()) otherwise panic("arm64ScanPhysicalRegs: terminator not in module.ops"), buf: buf)
-		end 'hasTerm'
-	end 'eachBlock'
-
-	return mask
-end 'arm64ScanPhysicalRegs'
-
-// Every physical register a colored arm64 `TargetOp` names, as a mask. `xchgRegReg` is a
-// POST-COLORING op the operand model rejects, so it is read directly; every other op arm64 emits is
-// read through the shared `targetOpOperands`, so this pass reuses the ONE operand model rather than
-// respelling a per-op register list (the trap x64's hand-written `opPhysicalRegs` still pays). The
-// two ranges flank `xchgRegReg` exactly — it is the sole op between `cmpRegImm32` and `callDirect` —
-// so the match stays exhaustive over `TargetOp` with no bare default.
-function arm64OpPhysicalRegs(op TargetOp, buf OperandList) returns RegMask
-	return match op 'p'
-		xchgRegReg(a, b) gives arm64VRegBit(a) or arm64VRegBit(b)
-		prologue or
-			epilogue or
-			ret or
-			jmp or
-			jcc or
-			movRegImm or
-			movRegImm32 or
-			movRegReg or
-			movReg32Reg32 or
-			subRegReg or
-			imulRegReg or
-			negReg or
-			cmpRegReg or
-			leaRegRegReg or
-			leaRegRegImm32 or
-			imulRegRegImm32 or
-			cmpRegImm32 gives arm64MaskFromOperands(op, buf: buf)
-
-		// The tail range extends past `arm64Syscall` to the x64-only ops (`leaRegFunc`/`callReg`,
-		// x64-linux `x64Syscall`): like every other op here they are read through the shared operand model
-		// (their operands are declared in `targetOpOperands`), so no per-op register list is respelled.
-		// They never appear on a colored arm64 program, but the arm keeps the match exhaustive over `TargetOp`.
-		callDirect or
-			iatCall or
-			cqo or
-			divideReg or
-			pushReg or
-			popReg or
-			storeSlotReg or
-			loadRegSlot or
-			andRegReg or
-			orRegReg or
-			xorRegReg or
-			notReg or
-			andRegImm32 or
-			orRegImm32 or
-			xorRegImm32 or
-			shlRegImm8 or
-			sarRegImm8 or
-			shrRegImm8 or
-			shlRegCl or
-			sarRegCl or
-			shrRegCl or
-			setccReg or
-			leaRegGlobal or
-			loadRegBaseDisp or
-			storeBaseDispReg or
-			addsdRegReg or
-			subsdRegReg or
-			mulsdRegReg or
-			divsdRegReg or
-			ucomisdRegReg or
-			movsdRegRip or
-			cvtsi2sdRegReg or
-			cvttsd2siRegReg or
-			sqrtsdRegReg or
-			roundsdRegReg or
-			movqGprXmm or
-			absF64RegReg or
-			leaRegRdata or
-			minMaxSdRegReg or
-			movqXmmGpr or
-			negF64RegReg or
-			arm64Ret or
-			arm64Branch or
-			arm64CondBranch or
-			arm64Cbz or
-			arm64Cbnz or
-			arm64MovImm or
-			arm64Prologue or
-			arm64Epilogue or
-			arm64Add or
-			arm64Sub or
-			arm64Mul or
-			arm64Sdiv or
-			arm64Udiv or
-			arm64Msub or
-			arm64And or
-			arm64Orr or
-			arm64Eor or
-			arm64Lslv or
-			arm64Asrv or
-			arm64Lsrv or
-			arm64Neg or
-			arm64Mvn or
-			arm64AddImm or
-			arm64SubImm or
-			arm64AndImm or
-			arm64OrrImm or
-			arm64EorImm or
-			arm64LslImm or
-			arm64AsrImm or
-			arm64LsrImm or
-			arm64Cmp or
-			arm64CmpImm or
-			arm64Cset or
-			arm64LeaFuncAddr or
-			arm64LeaRdata or
-			arm64LeaGlobal or
-			arm64BranchLink or
-			arm64BranchLinkReg or
-			arm64Fadd or
-			arm64Fsub or
-			arm64Fmul or
-			arm64Fdiv or
-			arm64Fcmp or
-			arm64Scvtf or
-			arm64Fcvtzs or
-			arm64Fsqrt or
-			arm64Frint or
-			arm64Fabs or
-			arm64FpLoadRdata or
-			arm64ImportCall or
-			arm64Syscall or
-			arm64Fcsel or
-			leaRegFunc or
-			callReg or
-			x64Syscall gives arm64MaskFromOperands(op, buf: buf)
-
-		// The jump tables are read through the shared operand model like every other op (`arm64JumpTable`
-		// names its biased index; `x64JumpTable` never appears on arm64). No per-op register list respelled.
-		x64JumpTable or
-			arm64JumpTable gives arm64MaskFromOperands(op, buf: buf)
-
-		// The x64-only `callMem` never runs the arm64 prologue pass; the arm keeps the match exhaustive.
-		callMem gives arm64MaskFromOperands(op, buf: buf)
-
-		// The stack-argument pair is read through the shared operand model like every other op — an outgoing
-		// store's source and an incoming load's destination can both be coloured into a callee-saved register,
-		// so both MUST be counted here or the prologue would not preserve it.
-		arm64StoreOutgoingArg or
-			arm64LoadIncomingArg gives arm64MaskFromOperands(op, buf: buf)
-
-		// Each bit reinterpretation names a GPR — the outbound one's DEST, the inbound one's SOURCE — and
-		// either can be coloured into a callee-saved register, so both MUST be counted. Read through the
-		// shared operand model like every other op.
-		arm64FmovGprFp or
-			arm64FmovFpGpr gives arm64MaskFromOperands(op, buf: buf)
-
-		// Its dest can be coloured into a callee-saved register, so it MUST be counted — the same
-		// real-miscompile trap every other register-naming arm here documents.
-		leaRegSlot gives arm64MaskFromOperands(op, buf: buf)
-
-		// A fill ladder has NO operands (see `targetOpOperands`), so the shared operand model correctly
-		// reports an empty mask. Its four fixed registers are x0..x3, all caller-saved, so the prologue owes
-		// them nothing — and reading them through the same door keeps that a derivation rather than a claim.
-		x64MemFill or
-			arm64MemFill gives arm64MaskFromOperands(op, buf: buf)
-
-		// Every atomic operand can be coloured into a callee-saved register, so all of them MUST be counted —
-		// read through the shared operand model like every other arm here, which is what keeps the answer a
-		// derivation rather than a second hand-written operand list. The x16/x17 encoder scratch is deliberately
-		// absent: it is outside the allocatable pool and callee-saved of nothing.
-		x64LockCmpxchg or
-			x64LockXadd or
-			x64LockAdd or
-			x64TebSelfPointer or
-			x64GsLoadRegBase or
-			arm64AtomicCas or
-			arm64AtomicRmw or
-			arm64ThreadPointer gives arm64MaskFromOperands(op, buf: buf)
-
-		// `arm64AddLsl`'s three operands can each be coloured into a callee-saved register, so all
-		// MUST be counted — read through the shared operand model like every other arm here. The x64
-		// forms never reach an arm64 program and answer through the same derivation rather than a second
-		// hand-written list.
-		leaRegBaseIndexScale or
-			loadRegBaseIndexScale or
-			storeBaseIndexScaleReg or
-			arm64AddLsl gives arm64MaskFromOperands(op, buf: buf)
-
-		// x64-only, and answered through the same shared derivation as the other x64 forms rather
-		// than a second hand-written list.
-		imulHighReg gives arm64MaskFromOperands(op, buf: buf)
-
-		// `fneg`'s two FP operands, through the same shared derivation as every other register op.
-		arm64Fneg gives arm64MaskFromOperands(op, buf: buf)
-		arm64LoadAcquire or
-			arm64StoreRelease gives arm64MaskFromOperands(op, buf: buf)
-
-		// `SMULH`'s three operands can each be coloured into a callee-saved register, so all three
-		// MUST be counted — through the shared derivation like every other arm here.
-		arm64Smulh gives arm64MaskFromOperands(op, buf: buf)
-
-		// A coverage counter names no operand, so the shared derivation answers 0 — the same route every
-		// arm here takes.
-		covInc gives arm64MaskFromOperands(op, buf: buf)
-
-		// x64-only, answered through the same derivation as the other x64 forms.
-		x64AluBaseDispReg or
-			x64AluBaseDispImm32 gives arm64MaskFromOperands(op, buf: buf)
-	end 'p'
-end 'arm64OpPhysicalRegs'
-
-// The physical registers of `op`'s explicit operands, via the shared operand model. Implicit
-// registers (a call's caller-saved clobbers, `arm64Ret`'s x0) are deliberately excluded: they are
-// caller-saved and need no preservation, exactly as x64's scan excludes them.
-function arm64MaskFromOperands(op TargetOp, buf OperandList) returns RegMask
-	targetOpOperands(op, buf: buf)
-	var mask = 0 as RegMask
-
-	for operand in buf 'each'
-		if not operandIsVirtual(operand) 'physical'
-			mask = regMaskAdd(mask, regNum: operandPayload(operand) as RegNum)
-		end 'physical'
-	end 'each'
-
-	return mask
-end 'arm64MaskFromOperands'
-
-// The single-register mask of a colored operand (for the post-coloring `xchgRegReg`, read outside the
-// operand model). Every operand is physical at this point; a virtual is an allocator bug.
-function arm64VRegBit(vreg TargetVReg) returns RegMask
-	match vreg 'v'
-		physical(reg) then return regMaskAdd(0, regNum: reg)
-		virtual(id) then panic("arm64OpPhysicalRegs: unresolved virtual register v{id} reached the prologue pass — register allocation must color every operand first")
-	end 'v'
-end 'arm64VRegBit'
-
-// A physical arm64 operand from a colored `RegNum`. `TargetVReg.physical` takes the neutral number
-// directly (the callee-saved registers this pass names are already `RegNum`s), so no enum round-trip
-// is needed.
-export function arm64PhysVReg(reg RegNum) returns TargetVReg
-	return TargetVReg.physical(reg)
-end 'arm64PhysVReg'
 
 // Prepend `op` at the front of `block`'s op list (a fresh `module.ops` slot). The arm64 twin of x64's
 // prologue-pass prepend; the block's saves and its `arm64Prologue` both use it.

@@ -1170,10 +1170,11 @@ export union TargetOp
 	arm64LeaGlobal(dest TargetVReg, label ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
 	// Direct / indirect call (`bl` / `blr`). Full call-barrier semantics: implicitDefs =
-	// 0x7FFF807F80007FFF — every CALLER-saved register of both files the AAPCS64-derived ABI
-	// clobbers: GPRs x0..x15 (bits 0..15 = 0xFFFF), SIMD d0..d7 (bits 31..38) and d16..d31 (bits
-	// 47..62); x19..x28 and d8..d15 are callee-saved and DELIBERATELY excluded. This equals
-	// `RegisterAllocator.callerSavedMask` for arm64 and `assertCallClobberConsistent` holds them
+	// 0x7FFF807F80007FFF — every CALLER-saved register the allocator can colour into: GPRs x0..x14
+	// (bits 0..14 = 0x7FFF), SIMD d0..d7 (bits 31..38) and d16..d31 (bits 47..62); x19..x28 and d8..d15
+	// are callee-saved and DELIBERATELY excluded. AAPCS64 also lets a callee clobber x15..x18, and they
+	// are absent because no value is ever coloured there (`RegisterAllocator.arm64AllocatablePool`).
+	// This equals `RegisterAllocator.arm64CallerSavedMask` and `assertCallClobberConsistent` holds them
 	// equal. A union-backing literal cannot reference a named `let`, so the mask is inline.
 	arm64BranchLink(targetName ByteArray) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0x7FFF807F80007FFF}
 	arm64BranchLinkReg(reg TargetVReg) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0x7FFF807F80007FFF}
@@ -1260,8 +1261,8 @@ export union TargetOp
 	// by the encoder, where the AArch64 Linux ABI wants it).
 	//
 	// The meta is `arm64BranchLink`'s, byte for byte, and that is what makes the above sound:
-	// `isCall: true` plus implicitDefs = 0x7FFF807F80007FFF (GPRs x0..x14, SIMD d0..d7 and
-	// d16..d31 — every AAPCS64 caller-saved register; x19..x28/d8..d15 excluded) confines any
+	// `isCall: true` plus implicitDefs = 0x7FFF807F80007FFF (GPRs x0..x14, SIMD d0..d7 and d16..d31 —
+	// every caller-saved register the allocator colours into; x19..x28/d8..d15 excluded) confines any
 	// value live ACROSS the syscall to the callee-saved half. x8 is inside that mask, so the
 	// encoder is free to clobber it. A union-backing literal cannot reference a named
 	// `let`, so the mask is inline (`assertArm64CallClobbers` holds it equal to

@@ -3541,7 +3541,7 @@ export function sweepEstablishedRegisters(module TargetModule, topo FuncTopology
 		try physLiveAfter.set(pos, value: live) otherwise panic("sweepEstablishedRegisters: physLiveAfter.set OOB at position {pos} — the column was just grown to {opCount}")
 		let op = try module.ops.get(try ordered.get(pos) otherwise panic("sweepEstablishedRegisters: ordered.get OOB at position {pos}")) otherwise panic("sweepEstablishedRegisters: an op of block {blockLocal} is not in module.ops")
 		targetOpOperands(op, buf: buf)
-		live = (live and not rawClobberMask(op, buf: buf, opFacts: opFacts)) or physicalOperandMask(buf, defs: false) or opFacts.implicitUsesOf(op)
+		live = (live and not rawClobberMask(op, buf: buf, opFacts: opFacts)) or physicalOperandMask(buf, census: OperandCensus.readByName) or opFacts.implicitUsesOf(op)
 	end 'eachOpBackward'
 
 	var pending = 0 as RegMask
@@ -3561,7 +3561,7 @@ export function sweepEstablishedRegisters(module TargetModule, topo FuncTopology
 		// This op's own physical defs join the pending set AFTER its defs are stated: a value defined by
 		// the very op that establishes a register is not clobbered by it (nothing else writes it in
 		// between), and today no op does both.
-		pending = (pending and not opFacts.implicitDefsOf(op)) or physicalOperandMask(buf, defs: true)
+		pending = (pending and not opFacts.implicitDefsOf(op)) or physicalOperandMask(buf, census: OperandCensus.writtenByName)
 	end 'eachOp'
 end 'sweepEstablishedRegisters'
 
@@ -4095,7 +4095,7 @@ end 'opClobberMask'
 // operands — whatever the heat: the fact a bracket saves against, where `opClobberMask` is the fact a
 // colouring is confined by. `buf` must already hold `op`'s operands.
 export function rawClobberMask(op TargetOp, buf OperandList, opFacts OpVariantFacts) returns RegMask
-	return opFacts.implicitDefsOf(op) or physicalOperandMask(buf, defs: true)
+	return opFacts.implicitDefsOf(op) or physicalOperandMask(buf, census: OperandCensus.writtenByName)
 end 'rawClobberMask'
 
 // The implicit defs of `op` that CONFINE a value live across it — its `implicitDefs`, except for a run
@@ -4467,29 +4467,46 @@ export type ColdRunSweep
 	end 'confineRunOp'
 end 'ColdRunSweep'
 
-// The registers `buf`'s PHYSICAL operands name — with `defs`, the ones written BY NAME rather than by
-// allocation (a call's `mov argReg[k], v` pre-move, the return move, an `idiv`'s `mov rax, dividend`);
-// without it, the ones READ by name (a store of a call's result straight from RAX). The def half is the
-// operand half of `opClobberMask`, split out because `sweepEstablishedRegisters` asks for it ALONE:
-// that sweep OPENS a pending window at a named write and CLOSES it at an implicit def, so the two
-// halves of a clobber mask arrive at opposite ends of the window and cannot be handed over as one
-// number. Asking `opClobberMask` there would open a window on every call — whose implicit-def mask is
-// the entire caller-saved half — for registers that call has just destroyed.
+// Which of an op's operands `physicalOperandMask` reads.
+module enum OperandCensus
+	// Physical defs: registers written BY NAME rather than by allocation (a call's `mov argReg[k], v`
+	// pre-move, the return move, an `idiv`'s `mov rax, dividend`). Virtual operands are skipped, because
+	// before colouring nearly every operand is one.
+	writtenByName
+
+	// Physical uses: registers READ by name (a store of a call's result straight from RAX). Virtual
+	// operands are skipped for the same reason.
+	readByName
+
+	// Every operand of a COLOURED op — the prologue's census — where a virtual operand is an allocator bug.
+	everyColoured
+end 'OperandCensus'
+
+// The registers `buf`'s physical operands of `census` name. The def half is the operand half of
+// `opClobberMask`, split out because `sweepEstablishedRegisters` asks for it ALONE: that sweep OPENS a
+// pending window at a named write and CLOSES it at an implicit def, so the two halves of a clobber mask
+// arrive at opposite ends of the window and cannot be handed over as one number. Asking `opClobberMask`
+// there would open a window on every call — whose implicit-def mask is the entire caller-saved half — for
+// registers that call has just destroyed.
 //
 // ⚠ IT DOES NOT FILL `buf`; `opClobberMask` does, and every other caller must (`targetOpOperands`).
-// The split is what makes that asymmetry possible, so it is stated rather than left to be discovered.
 //
 // A physical operand's register number is a target-neutral `RegNum`, NOT an `X64Register`: this SHARED
 // census sees arm64 SIMD arg registers (d1..d7 = 32..38) a multi-float-argument call emits, which lie
-// outside the x64 `operandRegister`/`X64Register.fromRawValue` door's range. `regMaskAdd` forms the
-// clobber bit from the `RegNum` directly (an `X64Register.rawValue` IS its `RegNum`).
-function physicalOperandMask(buf OperandList, defs bool) returns RegMask
+// outside the x64 `operandRegister`/`X64Register.fromRawValue` door's range.
+module function physicalOperandMask(buf OperandList, census OperandCensus) returns RegMask
+	let everyOperand = census == OperandCensus.everyColoured
+	let defs = census == OperandCensus.writtenByName
 	var mask = 0 as RegMask
 
 	for o in buf 'physOperands'
-		if operandIsDef(o) == defs and not operandIsVirtual(o) 'physOperand'
+		if operandIsVirtual(o) 'virtualOperand'
+			if everyOperand 'uncoloured'
+				panic("physicalOperandMask: value v{operandValueId(o)} is still virtual in a coloured op — register allocation must colour every operand first")
+			end 'uncoloured'
+		end 'virtualOperand' else if everyOperand or operandIsDef(o) == defs 'counted'
 			mask = regMaskAdd(mask, regNum: operandPhysicalRegNum(o))
-		end 'physOperand'
+		end 'counted'
 	end 'physOperands'
 
 	return mask

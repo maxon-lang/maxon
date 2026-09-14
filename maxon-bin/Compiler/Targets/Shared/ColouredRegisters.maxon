@@ -1,0 +1,190 @@
+// ColouredRegisters — every physical register a coloured function touches: the one census both prologue
+// passes filter down to the callee-saved registers they must preserve.
+
+// The union over `func`'s ops and terminators of `colouredOpPhysicalRegs`.
+export function colouredPhysicalRegs(module TargetModule, func IrFunction) returns RegMask
+	var mask = 0 as RegMask
+	var buf = OperandList.create()
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("colouredPhysicalRegs: blockRef from func.blockRefs not in module.blocks")
+
+		for opIdx in block.opRefs 'eachOp'
+			mask = mask or colouredOpPhysicalRegs(try module.ops.get(opIdx) otherwise panic("colouredPhysicalRegs: opIdx {opIdx} not in module.ops"), buf: buf)
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'hasTerm'
+			mask = mask or colouredOpPhysicalRegs(try module.ops.get(block.terminatorIndex()) otherwise panic("colouredPhysicalRegs: terminator not in module.ops"), buf: buf)
+		end 'hasTerm'
+	end 'eachBlock'
+
+	return mask
+end 'colouredPhysicalRegs'
+
+// An op's explicit operands plus the registers its `TargetOpMeta` names implicitly: a callee-saved
+// register an op writes without naming it still belongs to the caller. `xchgRegReg`, `pushReg` and
+// `popReg` are the post-colouring ops the operand model refuses, so their registers are read directly —
+// and the push and pop do reach here, because `x64PrologueFrameOf` rescans a function whose prologue is
+// already in.
+function colouredOpPhysicalRegs(op TargetOp, buf OperandList) returns RegMask
+	let explicit = match op 'explicit'
+		xchgRegReg(a, b) gives colouredRegBit(a) or colouredRegBit(b)
+		pushReg or
+			popReg(reg) gives regMaskOf(reg)
+		prologue or
+			epilogue or
+			ret or
+			jmp or
+			jcc or
+			movRegImm or
+			movRegImm32 or
+			movRegReg or
+			movReg32Reg32 or
+			subRegReg or
+			imulRegReg or
+			negReg or
+			cmpRegReg or
+			leaRegRegReg or
+			leaRegRegImm32 or
+			imulRegRegImm32 or
+			cmpRegImm32 or
+			callDirect or
+			iatCall or
+			cqo or
+			divideReg or
+			storeSlotReg or
+			loadRegSlot or
+			andRegReg or
+			orRegReg or
+			xorRegReg or
+			notReg or
+			andRegImm32 or
+			orRegImm32 or
+			xorRegImm32 or
+			shlRegImm8 or
+			sarRegImm8 or
+			shrRegImm8 or
+			shlRegCl or
+			sarRegCl or
+			shrRegCl or
+			setccReg or
+			leaRegGlobal or
+			loadRegBaseDisp or
+			storeBaseDispReg or
+			addsdRegReg or
+			subsdRegReg or
+			mulsdRegReg or
+			divsdRegReg or
+			ucomisdRegReg or
+			movsdRegRip or
+			cvtsi2sdRegReg or
+			cvttsd2siRegReg or
+			sqrtsdRegReg or
+			roundsdRegReg or
+			movqGprXmm or
+			absF64RegReg or
+			leaRegRdata or
+			minMaxSdRegReg or
+			movqXmmGpr or
+			negF64RegReg or
+			arm64Ret or
+			arm64Branch or
+			arm64CondBranch or
+			arm64Cbz or
+			arm64Cbnz or
+			arm64MovImm or
+			arm64Prologue or
+			arm64Epilogue or
+			arm64Add or
+			arm64Sub or
+			arm64Mul or
+			arm64Sdiv or
+			arm64Udiv or
+			arm64Msub or
+			arm64And or
+			arm64Orr or
+			arm64Eor or
+			arm64Lslv or
+			arm64Asrv or
+			arm64Lsrv or
+			arm64Neg or
+			arm64Mvn or
+			arm64AddImm or
+			arm64SubImm or
+			arm64AndImm or
+			arm64OrrImm or
+			arm64EorImm or
+			arm64LslImm or
+			arm64AsrImm or
+			arm64LsrImm or
+			arm64Cmp or
+			arm64CmpImm or
+			arm64Cset or
+			arm64LeaFuncAddr or
+			arm64LeaRdata or
+			arm64LeaGlobal or
+			arm64BranchLink or
+			arm64BranchLinkReg or
+			arm64Fadd or
+			arm64Fsub or
+			arm64Fmul or
+			arm64Fdiv or
+			arm64Fcmp or
+			arm64Scvtf or
+			arm64Fcvtzs or
+			arm64Fsqrt or
+			arm64Frint or
+			arm64Fabs or
+			arm64FpLoadRdata or
+			arm64ImportCall or
+			arm64Syscall or
+			arm64Fcsel or
+			leaRegFunc or
+			callReg or
+			x64Syscall or
+			x64JumpTable or
+			arm64JumpTable or
+			callMem or
+			arm64StoreOutgoingArg or
+			arm64LoadIncomingArg or
+			arm64FmovGprFp or
+			arm64FmovFpGpr or
+			leaRegSlot or
+			x64MemFill or
+			arm64MemFill or
+			x64LockCmpxchg or
+			x64LockXadd or
+			x64LockAdd or
+			x64TebSelfPointer or
+			x64GsLoadRegBase or
+			arm64AtomicCas or
+			arm64AtomicRmw or
+			arm64ThreadPointer or
+			leaRegBaseIndexScale or
+			loadRegBaseIndexScale or
+			storeBaseIndexScaleReg or
+			arm64AddLsl or
+			imulHighReg or
+			arm64Fneg or
+			arm64LoadAcquire or
+			arm64StoreRelease or
+			arm64Smulh or
+			covInc or
+			x64AluBaseDispReg or
+			x64AluBaseDispImm32 gives colouredOperandRegs(op, buf: buf)
+	end 'explicit'
+
+	return explicit or op.rawValue.implicitUses or op.rawValue.implicitDefs
+end 'colouredOpPhysicalRegs'
+
+function colouredOperandRegs(op TargetOp, buf OperandList) returns RegMask
+	targetOpOperands(op, buf: buf)
+	return physicalOperandMask(buf, census: OperandCensus.everyColoured)
+end 'colouredOperandRegs'
+
+function colouredRegBit(vreg TargetVReg) returns RegMask
+	match vreg 'v'
+		physical(reg) then return regMaskAdd(0, regNum: reg)
+		virtual(id) then panic("colouredRegBit: value v{id} reached the prologue pass uncoloured — register allocation must colour every operand first")
+	end 'v'
+end 'colouredRegBit'

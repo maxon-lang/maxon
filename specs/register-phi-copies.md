@@ -316,7 +316,7 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: swap-across-call-callee-saved -->
 The swapped pair is ALSO live across a CALL, so both values are forbidden the nine
 caller-saved registers and the `xchg` operates on CALLEE-SAVED ones. That makes the
-prologue's `usedCalleeSavedRegs` scan load-bearing over an `xchg`: the op has TWO register
+prologue's `colouredPhysicalRegs` scan load-bearing over an `xchg`: the op has TWO register
 operands and both must be counted, or the function pushes fewer registers than it
 clobbers and stomps its caller's state on return.
 `sink(1)` is `1`, so `i` advances by one and the loop runs three times; `a`/`b` are
