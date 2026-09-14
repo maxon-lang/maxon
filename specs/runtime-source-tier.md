@@ -430,6 +430,167 @@ end 'main'
 0
 ```
 
+<!-- test: runtime-file-may-read-its-machines-tls-slot -->
+**THE "WHICH MACHINE AM I" READ, AND IT IS THE ONE ROW WHOSE ABSENCE IS A PROPERTY OF THE LANE RATHER THAN
+OF THE RUNG.** `tlsSlotLoad` takes the TEB/TCB offset the scheduler published and answers the word stored
+there for THIS OS thread. Every allocation and every free begins with it, which is why it carries a host
+facility of its own: a lane with one thread has no per-thread storage to read, and a constant would hand
+every reader the same slot rather than answer the question.
+
+⚠ The probe is uncalled, so dead-function elimination drops the body before instruction selection and the
+case runs on every lane. What is under test is the TABLE: the row exists, the tier may spell it, its
+argument is an ordinary word and its result is a machine word. That a lane WITHOUT the facility refuses a
+program which reaches one is the pair of cases below.
+```maxon
+// --- runtime-file: Probe.maxon
+module function probeMachine(tebOffset MachineWord) returns MachineWord
+	return __Raw.tlsSlotLoad(tebOffset)
+end 'probeMachine'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-reached-tls-slot-read-compiles-where-the-lane-has-the-slot -->
+⭐⭐ **THE CONTROL ON THE REFUSAL BELOW, AND IT IS WHAT MAKES THAT REFUSAL EVIDENCE.** Without it the rule
+could be *"refuse every program that reaches a `__Raw` row"* and the wasm case would still be green. Here a
+lane that HAS per-thread storage compiles the same program and runs it.
+
+⭐ **IT IS ALSO THE ONLY WAY A SPEC CAN REACH A TIER BODY IT WROTE.** A `runtime/` file's unreserved
+declarations are module-scoped and its reserved ones may be called only from a file that may spell reserved
+names — so the crossing goes through a `stdlib/Builtins.maxon` overlay, which is such a file
+(`Parser.fileMayUseReservedNames`). `main` then calls an ordinary stdlib function, which is exactly the
+edge `LibraryFacts.substrateEntries` reports on.
+
+⚠ The op is behind a test `main` never satisfies, so no lane ever executes a TLS read against an offset the
+scheduler did not publish. What travels is the BODY, and the body is what the gate reads.
+
+⚠ It carries NO `unsupported-targets` marker on purpose: wasm32-wasi answers E3104, which the harness counts
+as a SKIP naming this case, and a marker would make that skip invisible.
+```maxon
+// --- runtime-file: Probe.maxon
+function __probe_tls_slot(tebOffset ExitCode) returns ExitCode
+	if tebOffset == 0 'neverAMachine'
+		return 0
+	end 'neverAMachine'
+
+	return __Raw.tlsSlotLoad(tebOffset as MachineWord) as ExitCode
+end '__probe_tls_slot'
+// --- stdlib-overlay: Builtins.maxon
+export function probeTlsSlot(tebOffset ExitCode) returns ExitCode
+	return __probe_tls_slot(tebOffset)
+end 'probeTlsSlot'
+// --- file: main.maxon
+function main() returns ExitCode
+	return probeTlsSlot(0)
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-tls-slot-read-is-refused-where-the-lane-has-no-thread-local -->
+<!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+⛔⛔ **A `__Raw` ROW'S HOST FACILITY NOW REACHES A REFUSABLE SITE, AND THE SITE IS THE CROSSING.** A
+`rawIntrinsic` op names no callee, so the door that meets a runtime entry BY NAME
+(`TargetFacilities.calleeHostFacility`) can never meet one — which left a lane missing the facility
+reaching instruction selection and panicking there. `StdlibSource.stdlibSubstrateEntries` seeds the
+fixpoint with the ROW itself, so a library body that reaches the op carries that need out to the first
+call from user code, exactly as a body reaching `__gt_now_ns` does.
+
+⚠ **THE SENTENCE NAMES NO RUNTIME ENTRY, AND THAT IS THE WHOLE OF WHAT `__Raw` IS.** There is no symbol
+between a raw row and the machine, so the ordinary E3104 wording — *"lowers to the runtime entry X"* —
+would send the reader looking for something that does not exist.
+
+⚠ A WASI component has ONE thread, so this refusal is of the permanent kind rather than the not-yet kind:
+per-OS-thread storage answers a question the lane cannot ask, and a constant would silently hand every
+reader the same slot.
+```maxon
+// --- runtime-file: Probe.maxon
+function __probe_tls_slot(tebOffset ExitCode) returns ExitCode
+	if tebOffset == 0 'neverAMachine'
+		return 0
+	end 'neverAMachine'
+
+	return __Raw.tlsSlotLoad(tebOffset as MachineWord) as ExitCode
+end '__probe_tls_slot'
+// --- stdlib-overlay: Builtins.maxon
+export function probeTlsSlot(tebOffset ExitCode) returns ExitCode
+	return __probe_tls_slot(tebOffset)
+end 'probeTlsSlot'
+// --- file: main.maxon
+function main() returns ExitCode
+	return probeTlsSlot(0)
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:16:9: 'probeTlsSlot' reaches '__Raw.tlsSlotLoad', a raw machine operation the wasm32-wasi lane does not provide
+```
+
+<!-- test: runtime-file-may-address-the-size-class-tables -->
+⭐ **THE ALLOCATOR'S THREE `.rdata` TABLES, EACH ADDRESSED BY ITS OWN ROW.** A size-class ladder is a pure
+function of the class index and is baked into the read-only image, so a tier body needs the table's ADDRESS
+and not its bytes — and an address is not something the tier can compute. The argument is
+`slabStateAddr`'s, unchanged: a label ARGUMENT would put every constant the emitted runtime registers
+within reach of a runtime file, so a row per readable table keeps the roster closed by construction.
+
+⚠ **WHAT KEEPS A SURVIVING BODY FROM NAMING A TABLE THE IMAGE OMITTED IS ONE BIT READ TWICE.**
+`SlabRuntime.installSlabRuntime` registers all three behind `usage.usesHeap`, and
+`LibraryFacts.withCompilerCalledTierUnreached` files every name of `runtime/SlabRuntime.maxon` unreached on
+that same bit — so a program with no allocator registers no table AND lowers no body that could name one.
+⇒ **A ROW ADDRESSING A BUILDER-REGISTERED CONSTANT OWES THAT COINCIDENCE OF GATES, stated where the row is.**
+
+⚠ The probe is uncalled, so dead-function elimination drops the body and the case runs on every lane. What
+is under test is the TABLE: the three rows exist, the tier may spell them, and each answers a machine word.
+```maxon
+// --- runtime-file: Probe.maxon
+module function probeClassTables() returns MachineWord
+	let small = __Raw.slabSizeToClass8Addr()
+	let large = __Raw.slabSizeToClass128Addr()
+	let geom = __Raw.slabClassGeomAddr()
+
+	return __Raw.loadByte(small, offset: 0) + __Raw.loadByte(large, offset: 0) + __Raw.loadWord(geom, offset: 0)
+end 'probeClassTables'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: runtime-file-may-address-the-debugstream-words -->
+⭐ **THE TWO WORDS AN ALLOCATION EVENT IS WRITTEN THROUGH — the ring's base and the allocation-id
+counter.** `__ds_base` is the run-time gate itself: zero means no monitor is attached, and every event site
+tests it before it computes anything. The counter is the id the monitor reads events back by.
+
+⚠ **BOTH ARE `DataReach.walked` IN AN UNCONDITIONAL ROSTER** (`DebugStreamRuntime.debugStreamRuntimeGlobals`,
+reached from `BackendDispatch.dataSectionRoster` with no usage argument), so each is laid out exactly where
+a SURVIVING function names it — in a traced build and in an untraced one alike. A tier body spelling either
+row therefore cannot address a word the image omitted, whichever way `#if debugstream(…)` resolved; and in
+an untraced build `__ds_init` never runs, so the base a body reads is its `.data` zero and the body's own
+gate bails. That is the same two-part contract `MmRuntime`'s four event emitters are written against.
+
+⚠ The probe is uncalled, so dead-function elimination drops the body and the case runs on every lane.
+```maxon
+// --- runtime-file: Probe.maxon
+module function probeDebugStreamWords() returns MachineWord
+	return __Raw.loadWord(__Raw.dsBaseAddr(), offset: 0) + __Raw.loadWord(__Raw.dsAllocIdAddr(), offset: 0)
+end 'probeDebugStreamWords'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: an-unreached-runtime-body-costs-the-program-nothing -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 ⚠ **THE PROPERTY IS TARGET-NEUTRAL AND THE CHANNEL IS NOT.** `RequiredData` is a PREFIX compare, so it can only catch a word inserted where something still TRAILS it — and the only globals laid out after a program's own are the x64-windows console probes. On a lane without them the pinned tail runs past the end of the section, and a shorter `.data` is all the gate can say. The reachability this measures is a target-neutral walk; what is missing elsewhere is an anchor, not the behaviour.

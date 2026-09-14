@@ -19,8 +19,11 @@ stands BEFORE any splice, and memoised:
   `witnessTryCall`) — which is also what makes ownership free here, because a retain, a release and a
   scope drop are all parser-emitted calls;
 - it contains **no op the dialect marks `isUnsupportedInInlineBody`** except the two PANIC ops, which
-  are copied like any other block (see `THE PANIC RULE` below) — so an `errorReturn` (a throwing body)
-  and every `os*` primitive refuse the callee;
+  are copied like any other block (see `THE PANIC RULE` below) — so an `errorReturn` (a throwing body),
+  a `stackRecordAddr`, a `covPoint` and every OS primitive refuse the callee. The OS band carries the
+  mark because it is `isCall: true` and `inlineOpRole` classifies it off the flag, where the only two
+  answers are "body op" and "refused": a system op that is NOT a call is a body op like any other, which
+  is what admits `memFill`, the two atomics and the per-OS-thread slot read;
 - it has **no more than 24 body ops** (over all its blocks, terminators counted, the `param` ops not).
   24 is measured rather than chosen: `regMaskContains` — the function this pass exists for — is 23 Std
   ops, because a shift whose count the compiler cannot fold carries the 6-op saturation `THE SHIFT RULE`
@@ -554,4 +557,53 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+<!-- test: a-runtime-leaf-reading-its-machines-tls-slot-is-spliced -->
+⭐⭐ **THE ADMISSION RULE READS `isUnsupportedInInlineBody`, AND THE `system` BAND IS NOT ONE ANSWER.**
+`__probe_tls_read` is a two-op leaf whose whole body is the per-OS-thread slot read every allocation and
+every current-GT read begins with. It is `isCall: false`, so the flag's tail files it a body op and both
+admission rules may carry it; the golden below is `__probe_tls_caller` with the read spliced in and no
+`callDirect` left. A compiler that refused the callee renders the call instead, which is the difference
+this case exists to hold.
+
+⚠ **SPLICING IS NOT HOISTING, AND ONLY THE SECOND WOULD BE WRONG.** A copy stays where it was written, so
+the M whose slot is read is the M the surrounding code is running on. What forbids the move is the pair of
+rosters `classifyArithOperands` and `classifyLoadOperands`, which answer `neither` and `notALoad` for this
+variant — so CSE, LICM and the unswitcher's invariance test each decline it before `isPure` is reached.
+
+⚠ **BOTH FUNCTIONS ARE TIER SOURCE, WHICH IS WHAT LETS THE SPLICE HAPPEN AT ALL.**
+`InlineLeaves.splicingWouldWidenTheSafePoint` refuses the compiler's own scaffolding spliced into code
+that is not, so a runtime callee reaches only a runtime caller — and the pair here is inside one
+`runtime/` file.
+
+⚠ It carries NO `unsupported-targets` marker: wasm32-wasi has no per-thread storage and answers E3104,
+which the harness counts as a SKIP naming this case.
+```maxon
+// --- runtime-file: Probe.maxon
+module function __probe_tls_read(tebOffset MachineWord) returns MachineWord
+	return __Raw.tlsSlotLoad(tebOffset)
+end '__probe_tls_read'
+
+function __probe_tls_caller(tebOffset ExitCode) returns ExitCode
+	if tebOffset == 0 'neverAMachine'
+		return 0
+	end 'neverAMachine'
+
+	return __probe_tls_read(tebOffset as MachineWord) as ExitCode
+end '__probe_tls_caller'
+// --- stdlib-overlay: Builtins.maxon
+export function probeTlsSlotRead(tebOffset ExitCode) returns ExitCode
+	return __probe_tls_caller(tebOffset)
+end 'probeTlsSlotRead'
+// --- file: main.maxon
+function main() returns ExitCode
+	return probeTlsSlotRead(0)
+end 'main'
+```
+```exitcode
+0
+```
+```RequiredRuntime
+__probe_tls_caller
 ```

@@ -455,39 +455,6 @@ end 'classifyDivision'
 // The pass
 // ==================================================================================================
 
-// Replace every reducible `div`/`mod` in `module`, in place, from `firstFuncIndex` onward.
-//
-// ⭐⭐ **IT HAS TWO CALLERS AND THE SECOND ONE IS WHERE THE COLDEST-LOOKING WIN ACTUALLY IS.** The
-// pipeline runs it over the whole module (`firstFuncIndex: 0`); `Compiler.compileToCodeResult` runs it a
-// second time over the APPENDED RUNTIME BAND, which no pipeline pass sees. That band holds
-// `__int_to_string`'s digit loop (`StringRuntime`, `div`/`mod` by `DecimalRadix` once per digit of every
-// integer any program prints) and `graphemeBreakProperty`'s Hangul decomposition (`GraphemeRuntime`,
-// `mod 28` once per grapheme of every String operation) — both hand-built out of `StdOp`s, both dividing
-// by a `const` the builder emits two lines above the divide, and neither reachable from the pipeline.
-// `foldConstOperands` is the only other pass that runs over that band, for the same reason and with the
-// same shape of argument (`Compiler.compileToCodeResult`'s install block is where that rule is stated).
-export function strengthReduceDivision(project Project, module StdModule, firstFuncIndex FuncIndex)
-	let reduces = targetLowersMulHighSigned(project.target.cpu)
-	logDebug(LogCategory.ir, message: function() gives strengthReduceDivisionHeadline(reduces, firstFuncIndex: firstFuncIndex, funcCount: module.funcCount()))
-
-	if not reduces 'targetCannotSpellTheMultiply'
-		return
-	end 'targetCannotSpellTheMultiply'
-
-	// ONE record of each kind for the whole module, refilled per site and never re-created — the
-	// allocation discipline `StdArithOperands` and `StdFoldableDef` both state.
-	var reduction = DivisionReduction.create()
-	var magic = SignedMagic.create()
-	var def = StdFoldableDef.create()
-
-	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
-	// recorded as writing that same storage. ⚖ USER RULING — canonical note at
-	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
-	for fnIndex in firstFuncIndex upto module.functions.count() 'eachFunc'
-		reduceDivisionsInFunc(module, func: try module.functions.get(fnIndex) otherwise panic("strengthReduceDivision: fnIndex {fnIndex} is below module.functions.count()"), reduction: reduction, magic: magic, def: def)
-	end 'eachFunc'
-end 'strengthReduceDivision'
-
 // The pass's headline: what it is about to do, or why it does nothing on this target. `reduces` is
 // `targetLowersMulHighSigned`'s answer for the compile's CPU.
 module function strengthReduceDivisionHeadline(reduces bool, firstFuncIndex FuncIndex, funcCount FuncCount) returns String

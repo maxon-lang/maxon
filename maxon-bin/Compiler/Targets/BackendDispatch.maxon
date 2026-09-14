@@ -104,6 +104,19 @@ export function buildBackend(stdModule StdModule, target Target, globalData Glob
 	let funcNames = survivors.funcNames
 	recordPhase(project, phase: CompilePhase.deadFunctions, probe: dfeProbe)
 
+	// ⛔⛔ **THE EMITTED-CALL ARITY GATE, HERE FOR `assertNoSugarOps`'S REASON AND ONE MORE.** It is
+	// target-neutral — a call's argument list is a property of the Std tier — so every backend inherits it
+	// instead of remembering to re-install it, and it sits in the fixed backend sequence rather than in a pass,
+	// so no optimization decides whether the question gets asked.
+	//
+	// ⭐ **AFTER THE PRUNE RATHER THAN BESIDE THE SUGAR GATE**, because the prune is what says which functions
+	// are EMITTED and hands back the very index the backends then resolve every callee through. A call in a body
+	// DFE removed is encoded nowhere, and checking it would need a second name index over an array that is about
+	// to be replaced.
+	let arityProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.callArityGate)
+	assertCallsMatchCalleeArity(stdModule, byName: funcNames)
+	recordPhase(project, phase: CompilePhase.callArityGate, probe: arityProbe)
+
 	// ⭐⭐ **THE `.data` SECTION IS LAID OUT HERE, AFTER THE PRUNE, BECAUSE THE PRUNE IS WHAT SAYS WHICH
 	// RUNTIME WORDS ARE READ.** Nothing between here and the encoders asks for an offset — the three
 	// `dataSectionOffsetOf` readers are all encode-stage — and nothing after `compileToCodeResult` registers

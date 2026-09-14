@@ -51,8 +51,8 @@ typealias CapturedLogArray = Array with PassLogArray
 // A position in the schedule the fan-out runs.
 typealias StepIndex = int(0 to u64.max)
 
-// The fan-out runs every member over the WHOLE module — the runtime band is appended below the pipeline
-// — where the two passes with a serial re-run over that band take a start index.
+// The pool runs every member from the first function of the module; `runStdPassesOverTheBand` runs the
+// same members from the index the appended band begins at.
 let WholeModuleFirstFunction = 0 as FuncIndex
 
 // ⭐ **THE SCHEDULE'S STEPS — the fan-out's members as the pipeline schedules them and a worker receives
@@ -202,37 +202,52 @@ module type StdPassWorker
 		end 'somethingLogged'
 	end 'runSteps'
 
-	// One step. The function is read through `getFunc` at every call rather than held across them, for
-	// the borrow rule `elimTrivialBlockArgs`' canonical note states: each pass writes the module it reads
-	// the function out of.
+	// One step, over the unit's one function.
 	function runStep(k StepIndex, unitModule StdModule, origins DerivedOrigins, answer VersioningAnswer)
 		var tally = try self.tallies.get(k) otherwise panic("StdPassWorker.runStep: tallies.get OOB at {k} — one tally per step, pushed together at create")
-
-		match try self.steps.get(k) otherwise panic("StdPassWorker.runStep: steps.get OOB at {k}") 'step'
-			blockArgPrune then tally.removedBlockArgs = tally.removedBlockArgs + (pruneDeadBlockArgsInFunc(unitModule, func: unitModule.getFunc(UnitFunctionIndex)) as TallyCount)
-			blockArgFold then tally.removedBlockArgs = tally.removedBlockArgs + (elimTrivialBlockArgsInFunc(unitModule, func: unitModule.getFunc(UnitFunctionIndex)) as TallyCount)
-			constants(branch) then foldConstantsInFunc(unitModule, func: unitModule.getFunc(UnitFunctionIndex), branch: branch, log: self.log)
-			division(reduction, magic, def) then reduceDivisionsIfLowered(unitModule, reduces: self.reducesDivision, reduction: reduction, magic: magic, def: def)
-			constOperands then foldConstOperandsInFunc(unitModule, func: unitModule.getFunc(UnitFunctionIndex))
-			threading(scratch) then threadConstantBranchesInFunc(unitModule, func: unitModule.getFunc(UnitFunctionIndex), origins: origins, scratch: scratch)
-			ranges(scratch) then refineValueRangesInFunc(unitModule, func: unitModule.getFunc(UnitFunctionIndex), scratch: scratch)
-			subexpressions(scratch) then eliminateInFunc(unitModule, func: unitModule.getFunc(UnitFunctionIndex), scratch: scratch)
-			invariants(scratch) then hoistInFunc(unitModule, func: unitModule.getFunc(UnitFunctionIndex), scratch: scratch)
-			unswitching(scratch) then answer = versioningAnswerOf(unswitchInFunc(unitModule, func: unitModule.getFunc(UnitFunctionIndex), origins: origins, budget: self.budget, scratch: scratch))
-			guards(scratch) then foldEstablishedGuardsInFunc(unitModule, func: unitModule.getFunc(UnitFunctionIndex), scratch: scratch)
-			versionedRanges(scratch) then refineVersionedRangesInFunc(unitModule, scratch: scratch, answer: answer)
-		end 'step'
+		answer = runFanOutStep(try self.steps.get(k) otherwise panic("StdPassWorker.runStep: steps.get OOB at {k}"), module: unitModule, funcIndex: UnitFunctionIndex, tally: tally, log: self.log, origins: origins, reducesDivision: self.reducesDivision, budget: self.budget, answer: answer)
 	end 'runStep'
 end 'StdPassWorker'
 
+// ⭐⭐ **ONE STEP OF THE SCHEDULE OVER ONE FUNCTION — THE ONE PLACE A STEP IS TIED TO THE PASS IT RUNS.**
+// Both drivers reach the passes through here: the pool's worker over a `StdUnit`'s single function, and
+// `runStdPassesOverTheBand` over a real index of the whole module. A second spelling of this match would be
+// two schedules free to drift.
+//
+// The function is read through `getFunc` at every call rather than held across them, for the borrow rule
+// `elimTrivialBlockArgs`' canonical note states: each pass writes the module it reads the function out of.
+//
+// It RETURNS the versioning answer because that is the one fact one step hands the next —
+// `refineVersionedRanges` visits exactly the functions `unswitchInvariantGuards` rewrote. A driver that
+// cannot carry the answer between two steps of one function hands `unasked` and earns the panic naming the
+// pairing, which is what keeps the band schedule from holding the pair.
+function runFanOutStep(workspace StepWorkspace, module StdModule, funcIndex FuncIndex, tally StdPassTally, log PassLog, origins DerivedOrigins, reducesDivision bool, budget HoistPressureBudget, answer VersioningAnswer) returns VersioningAnswer
+	match workspace 'step'
+		blockArgPrune then tally.removedBlockArgs = tally.removedBlockArgs + (pruneDeadBlockArgsInFunc(module, func: module.getFunc(funcIndex)) as TallyCount)
+		blockArgFold then tally.removedBlockArgs = tally.removedBlockArgs + (elimTrivialBlockArgsInFunc(module, func: module.getFunc(funcIndex)) as TallyCount)
+		constants(branch) then foldConstantsInFunc(module, func: module.getFunc(funcIndex), branch: branch, log: log)
+		division(reduction, magic, def) then reduceDivisionsIfLowered(module, funcIndex: funcIndex, reduces: reducesDivision, reduction: reduction, magic: magic, def: def)
+		constOperands then foldConstOperandsInFunc(module, func: module.getFunc(funcIndex))
+		threading(scratch) then threadConstantBranchesInFunc(module, func: module.getFunc(funcIndex), origins: origins, scratch: scratch)
+		ranges(scratch) then refineValueRangesInFunc(module, func: module.getFunc(funcIndex), scratch: scratch)
+		subexpressions(scratch) then eliminateInFunc(module, func: module.getFunc(funcIndex), scratch: scratch)
+		invariants(scratch) then hoistInFunc(module, func: module.getFunc(funcIndex), scratch: scratch)
+		unswitching(scratch) then return versioningAnswerOf(unswitchInFunc(module, func: module.getFunc(funcIndex), origins: origins, budget: budget, scratch: scratch))
+		guards(scratch) then foldEstablishedGuardsInFunc(module, func: module.getFunc(funcIndex), scratch: scratch)
+		versionedRanges(scratch) then refineVersionedRangesInFunc(module, funcIndex: funcIndex, scratch: scratch, answer: answer)
+	end 'step'
+
+	return answer
+end 'runFanOutStep'
+
 // The division reduction is a no-op on a target with no `mulHighSigned` lowering — the same gate the
 // serial entry asks of the compile's target, asked once at `spawn`.
-function reduceDivisionsIfLowered(unitModule StdModule, reduces bool, reduction DivisionReduction, magic SignedMagic, def StdFoldableDef)
+function reduceDivisionsIfLowered(module StdModule, funcIndex FuncIndex, reduces bool, reduction DivisionReduction, magic SignedMagic, def StdFoldableDef)
 	if not reduces 'targetCannotSpellTheMultiply'
 		return
 	end 'targetCannotSpellTheMultiply'
 
-	reduceDivisionsInFunc(unitModule, func: unitModule.getFunc(UnitFunctionIndex), reduction: reduction, magic: magic, def: def)
+	reduceDivisionsInFunc(module, func: module.getFunc(funcIndex), reduction: reduction, magic: magic, def: def)
 end 'reduceDivisionsIfLowered'
 
 function versioningAnswerOf(rewrote bool) returns VersioningAnswer
@@ -242,11 +257,11 @@ end 'versioningAnswerOf'
 // The second range refinement, over the shape the versioning made — for exactly the functions
 // `unswitchInFunc` answered it rewrote. A schedule that reaches this step before that one has no answer
 // to read, and says so rather than visiting nothing.
-function refineVersionedRangesInFunc(unitModule StdModule, scratch RangeScratch, answer VersioningAnswer)
+function refineVersionedRangesInFunc(module StdModule, funcIndex FuncIndex, scratch RangeScratch, answer VersioningAnswer)
 	match answer 'answer'
 		unasked then panic("refineVersionedRanges: the schedule reached the second range refinement before `unswitchInvariantGuards` answered which functions it rewrote — that pass scopes this one and must precede it")
 		leftAlone then return
-		rewrote then refineValueRangesInFunc(unitModule, func: unitModule.getFunc(UnitFunctionIndex), scratch: scratch)
+		rewrote then refineValueRangesInFunc(module, func: module.getFunc(funcIndex), scratch: scratch)
 	end 'answer'
 end 'refineVersionedRangesInFunc'
 
@@ -338,6 +353,127 @@ export function runStdPassesOnAWorkerPool(project Project, module StdModule, mem
 	replayFanOutLog(members, tallies: tallies, landedLogs: landedLogs, slots: slots, funcCount: funcCount, reducesDivision: reducesDivision)
 end 'runStdPassesOnAWorkerPool'
 
+// ⭐⭐ **THE SAME PER-FUNCTION PASSES OVER THE APPENDED RUNTIME BAND — `module.functions[firstFuncIndex …]`.**
+// `Compiler.compileToCodeResult`'s install block is where the two-run arrangement is stated and owned; this
+// is the driver it names.
+//
+// ⭐ **PASS-MAJOR AND SERIAL, WHERE THE PIPELINE'S RUN IS FUNCTION-MAJOR ON A POOL, AND THAT IS A COST
+// ARGUMENT RATHER THAN A DIFFERENT SEMANTICS.** A per-function pass reads one function's CFG and nothing
+// else, so the two orders produce the same module. The band is the runtime floor rather than the program —
+// hundreds of functions against the program's thousands — so a second pool would spend a service spawn per
+// processor, a mailbox and a unit round trip apiece to save a walk that is already short.
+//
+// ⛔ **IT CANNOT CARRY THE VERSIONING ANSWER, AND THE SCHEDULE THAT NEEDS IT SAYS SO ITSELF.** Pass-major
+// means step k finishes every function before step k+1 begins, so what `unswitchInvariantGuards` answered
+// about a function cannot reach `refineVersionedRanges` on it; that pass panics on `unasked` rather than
+// visiting nothing, which is what keeps the pair out of a band schedule instead of a comment doing it.
+export function runStdPassesOverTheBand(project Project, module StdModule, members StdFanOutStepArray, firstFuncIndex FuncIndex)
+	let funcCount = module.funcCount()
+
+	for step in members 'eachScheduledStep'
+		requireBandStepIsSound(step)
+	end 'eachScheduledStep'
+
+	let reducesDivision = targetLowersMulHighSigned(project.target.cpu)
+	let budget = hoistPressureBudgetFor(project.target)
+
+	// One log for the whole run, drained per function so the lines land in the order a reader expects — the
+	// pool's captured logs need a replay because they come home out of order; these do not.
+	var log = PassLog.create(effectiveLogLevelOf(LogCategory.ir))
+
+	for k in 0 upto members.count() 'eachStep'
+		let step = try members.get(k) otherwise panic("runStdPassesOverTheBand: members.get OOB at {k}")
+		let probe = PhaseProbe.beginPhase(project, phase: bandPhaseOfStep(step))
+		var tally = StdPassTally.create()
+		var workspace = workspaceFor(step, tally: tally, log: log)
+		logIr(passBanner(passKindOfFanOutStep(step)))
+		announceStep(step, firstFuncIndex: firstFuncIndex, funcCount: funcCount, reducesDivision: reducesDivision)
+
+		// An INDEX loop over a range this driver was handed, for the borrow rule `runFanOutStep` states.
+		for funcIndex in firstFuncIndex upto (funcCount as FuncIndex) 'eachFunc'
+			var origins = DerivedOrigins.create()
+			log.beginFunction()
+			log.beginStep()
+			var answer = VersioningAnswer.unasked
+			answer = runFanOutStep(workspace, module: module, funcIndex: funcIndex, tally: tally, log: log, origins: origins, reducesDivision: reducesDivision, budget: budget, answer: answer)
+			origins.foldInto(project.valueOrigins, funcIndex: funcIndex)
+			drainFunctionLog(log)
+		end 'eachFunc'
+
+		summarizeStep(step, tally: tally, funcCount: funcCount)
+		recordPhase(project, phase: bandPhaseOfStep(step), probe: probe)
+	end 'eachStep'
+end 'runStdPassesOverTheBand'
+
+// Hand one function's lines to the logger and leave the log ready for the next — `PassLog.beginFunction`
+// refuses a log still holding lines, which is what makes an undrained one a panic rather than a
+// misattribution.
+function drainFunctionLog(log PassLog)
+	if log.isEmpty() 'nothingRecorded'
+		return
+	end 'nothingRecorded'
+
+	let taken = PassLog.taking(log)
+	taken.replayStep(0, category: LogCategory.ir)
+end 'drainFunctionLog'
+
+// ⛔⛔ **THE THREE MEMBERS THAT MAY NOT RUN OVER THE BAND — REFUSED HERE RATHER THAN REMEMBERED IN A LIST
+// SOMEBODY MAINTAINS.** Checked before the first function, so a schedule that holds one never runs at all.
+//
+// ⛔ `loopInvariantCodeMotion` HOISTS LOADS out of a loop whose blocks hold no store and no call, and its
+// own header states the premise that licences that: *"another OS THREAD writing the location while this
+// loop spins … a spin-wait with no call in it would be hoisted into an infinite loop. Nothing in this
+// compiler's own sources or the stdlib spells one … and the runtime band is not run through this pipeline
+// at all."* The band IS that counterexample: a builder spells a poll on a word another thread writes as a
+// bare `loadIndirect` in a loop holding neither, so the premise's last clause is the whole of it. MEASURED
+// — with this member in the band schedule the compiler's own self-compile went from **40 s to over 900 s**,
+// one core saturated where twelve had been busy, because the scheduler's waits stopped observing the words
+// they wait on. ⇒ **A LOAD-MOVING PASS OWES AN ATOMIC/VOLATILE DISTINCTION IN THE DIALECT BEFORE IT MAY
+// SEE THIS BAND.** `commonSubexpressionElimination` is NOT in this class and runs: it replaces only what
+// the dialect calls PURE, and `loadIndirect` is `isPure: false`.
+//
+// ⛔ `unswitchInvariantGuards` is the one member that is not idempotent — it VERSIONS a loop — and
+// `refineVersionedRanges` visits exactly the functions it rewrote. `runStdPassesOverTheBand` is pass-major,
+// so it cannot carry that answer from one step to the next; the pair is refused as a pair.
+function requireBandStepIsSound(step StdFanOutStep)
+	match step 'sound'
+		loopInvariantCodeMotion then panic("runStdPassesOverTheBand: `loopInvariantCodeMotion` may not run over the appended runtime band — it hoists a load out of a loop that writes no memory, and a builder spells a wait on a word another thread writes as exactly that loop")
+		unswitchInvariantGuards or
+			refineVersionedRanges then panic("runStdPassesOverTheBand: a versioning step may not run over the appended runtime band — the versioning pass and the refinement that reads its answer are one step apart per FUNCTION, and this driver is pass-major")
+		pruneDeadBlockArgs or
+			elimTrivialBlockArgs or
+			foldConstants or
+			strengthReduceDivision or
+			foldConstOperands or
+			threadConstantBranches or
+			refineValueRanges or
+			commonSubexpressionElimination or
+			foldEstablishedGuards then break 'sound'
+	end 'sound'
+end 'requireBandStepIsSound'
+
+// ⭐ **WHAT A BAND STEP IS BILLED TO.** The two steps that ran over this band before the rest joined them
+// keep the rows they have always been read off — the `.metrics.tsv` ordinals are a wire format
+// (`CompilePhase`'s header) and a trend line over the runtime's divisions must stay the same trend line.
+// Everything else the band's schedule runs shares one row, because the question a reader has is what
+// OPTIMIZING the appended band cost, not which of ten walks did it.
+function bandPhaseOfStep(step StdFanOutStep) returns CompilePhase
+	return match step 'phase'
+		strengthReduceDivision gives CompilePhase.strengthReduceEmittedDivision
+		foldConstOperands gives CompilePhase.foldEmittedConstOperands
+		pruneDeadBlockArgs or
+			elimTrivialBlockArgs or
+			foldConstants or
+			threadConstantBranches or
+			refineValueRanges or
+			commonSubexpressionElimination or
+			loopInvariantCodeMotion or
+			unswitchInvariantGuards or
+			foldEstablishedGuards or
+			refineVersionedRanges gives CompilePhase.optimizeEmittedBand
+	end 'phase'
+end 'bandPhaseOfStep'
+
 function awaitedReport(reply StdPassReportReply, slot LandingSlot) returns StdPassWorkerReport
 	if let report = try await reply 'reported'
 		return report
@@ -422,7 +558,7 @@ function replayFanOutLog(members StdFanOutStepArray, tallies StdPassTallyArray, 
 	for k in 0 upto members.count() 'eachStep'
 		let step = try members.get(k) otherwise panic("replayFanOutLog: members.get OOB at {k}")
 		logIr(passBanner(passKindOfFanOutStep(step)))
-		announceStep(step, funcCount: funcCount, reducesDivision: reducesDivision)
+		announceStep(step, firstFuncIndex: WholeModuleFirstFunction, funcCount: funcCount, reducesDivision: reducesDivision)
 
 		for funcIndex in 0 upto funcCount 'eachFunctionInIndexOrder'
 			let captured = try landedLogs.get(slots.slotOf(funcIndex)) otherwise panic("replayFanOutLog: landedLogs.get OOB for function {funcIndex}")
@@ -441,11 +577,11 @@ function logIr(text String)
 end 'logIr'
 
 // The headline a pass prints before its per-function lines, where it prints one.
-function announceStep(step StdFanOutStep, funcCount FuncCount, reducesDivision bool)
+function announceStep(step StdFanOutStep, firstFuncIndex FuncIndex, funcCount FuncCount, reducesDivision bool)
 	match step 'headline'
 		foldConstants then logIr(foldConstantsHeadline(funcCount))
-		strengthReduceDivision then logIr(strengthReduceDivisionHeadline(reducesDivision, firstFuncIndex: WholeModuleFirstFunction, funcCount: funcCount))
-		foldConstOperands then logIr(foldConstOperandsHeadline(WholeModuleFirstFunction, funcCount: funcCount))
+		strengthReduceDivision then logIr(strengthReduceDivisionHeadline(reducesDivision, firstFuncIndex: firstFuncIndex, funcCount: funcCount))
+		foldConstOperands then logIr(foldConstOperandsHeadline(firstFuncIndex, funcCount: funcCount))
 		commonSubexpressionElimination then logIr(commonSubexpressionEliminationHeadline(funcCount))
 		loopInvariantCodeMotion then logIr(hoistLoopInvariantsHeadline(funcCount))
 		pruneDeadBlockArgs or

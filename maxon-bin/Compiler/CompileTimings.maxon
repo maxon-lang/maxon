@@ -339,8 +339,9 @@ export enum CompilePhase
 	// neighbour is a cost nobody can act on.
 	inlineManagedPrimitives
 
-	// `foldConstOperands` run a SECOND time, over the functions the two brackets above APPENDED (EC3-H).
-	// APPENDED HERE for this enum's own reason — the ordinals are the `.metrics.tsv` wire format.
+	// `foldConstOperands` run a SECOND time, over the functions the two brackets above APPENDED
+	// (`StdPassPool.runStdPassesOverTheBand`). APPENDED HERE for this enum's own reason — the ordinals are
+	// the `.metrics.tsv` wire format.
 	//
 	// Its OWN row rather than a slice of `installRuntime`/`synthesizeBodies`, because it answers a different
 	// question from either: those two ask what BUILDING the appended bodies cost, and this asks what
@@ -429,9 +430,9 @@ export enum CompilePhase
 	// billed into a neighbour the cost and the saving would net off inside one number.
 	strengthReduceDivision
 
-	// The SAME pass over the APPENDED RUNTIME BAND (`Compiler.compileToCodeResult`), which no pipeline
-	// pass sees — `foldEmittedConstOperands` is its exact precedent, one row up the same band. Its own
-	// row rather than a widening of `strengthReduceDivision` above, because the two measure different
+	// The SAME pass over the APPENDED RUNTIME BAND (`StdPassPool.runStdPassesOverTheBand`), which no
+	// pipeline pass sees — `foldEmittedConstOperands` is its exact precedent, one row up the same band. Its
+	// own row rather than a widening of `strengthReduceDivision` above, because the two measure different
 	// populations: one is the program's divisions and the other is the runtime's, and a program that
 	// prints one integer pays the second and almost none of the first.
 	strengthReduceEmittedDivision
@@ -494,6 +495,30 @@ export enum CompilePhase
 	// one (`Compiler.compileMeasured`), so the two are disjoint. It brackets the registration alone and
 	// absorbs no `lex`: the query spine tokenizes on demand, long after the load has returned.
 	loadRuntime
+
+	// `inlineLeaves` run a SECOND time, over the APPENDED RUNTIME BAND's callers
+	// (`InlineLeaves.SpliceRound`). APPENDED HERE for this enum's own reason — the ordinals are the
+	// `.metrics.tsv` wire format.
+	//
+	// Its OWN row rather than a widening of `inlineLeaves` above, because the two measure different
+	// populations: one is the program's call sites and the other is the runtime floor's, and the second is
+	// paid by a program that inlines nothing of its own.
+	inlineEmittedBand
+
+	// The rest of the band's per-function schedule (`StdPassPool.runStdPassesOverTheBand`). The two
+	// members that ran over this band before the others joined them keep their own rows above —
+	// `strengthReduceEmittedDivision` and `foldEmittedConstOperands` — so a trend line over the runtime's
+	// divisions stays the same trend line; everything else shares this one, because the question a reader
+	// has is what OPTIMIZING the appended band cost rather than which of ten walks did it.
+	optimizeEmittedBand
+
+	// The whole-module emitted-call arity gate (`assertCallsMatchCalleeArity`). APPENDED HERE for this
+	// enum's own reason — the ordinals are the `.metrics.tsv` wire format.
+	//
+	// Its OWN row rather than a slice of `deadFunctions`, which it runs immediately after: the prune's cost
+	// tracks the call GRAPH and this one's tracks every live op of every surviving function, so folded
+	// together a growth in either would be reported as the other's.
+	callArityGate
 end 'CompilePhase'
 
 // How a phase's row was measured. A pool row is a sum over worker brackets that ran inside `driver`'s

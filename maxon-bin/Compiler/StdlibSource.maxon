@@ -1999,10 +1999,28 @@ function noteSubstrateEdge(op MaxonOp, callerNode CsrIndex, nodeOf StdlibNodeByN
 		serviceReplyCell then break 'op'
 		immortalStructRecord or
 			immortalStringTable or
-			covPoint or
-			rawIntrinsic then break 'op'
+			covPoint then break 'op'
+
+		// ⭐⭐ **A `__Raw` OP IS A SEED WITH NO CALLEE TO NAME IT, AND IT IS THE ONLY KIND THERE IS.** Every
+		// other seed here is a CALL to a runtime entry, which the crossing can meet by name; a raw row has no
+		// symbol between it and the machine, so without this arm a lane missing the facility reached
+		// instruction selection with nothing said.
+		rawIntrinsic(_, intrinsic, _, _) then noteSubstrateRawIntrinsic(intrinsic, callerNode: callerNode, state: state)
 	end 'op'
 end 'noteSubstrateEdge'
+
+// A `__Raw` row a library body spells: it SEEDS the fixpoint with the row's own mangled spelling where the
+// row names a host facility, so the crossing into that body carries the need out to user code.
+//
+// ⚠ A row whose facility is `none` is pure code generation on every supported lane and seeds nothing — a
+// seed would make every crossing into every tier body carry an entry no target can lack, which is a whole
+// fixpoint's worth of work for a refusal that can never fire.
+function noteSubstrateRawIntrinsic(intrinsic RawIntrinsic, callerNode CsrIndex, state SubstrateFixpoint)
+	match rawHostFacilityOf(intrinsic) 'facility'
+		none then return
+		required then state.seed(callerNode, entry: rawIntrinsicCalleeName(intrinsic))
+	end 'facility'
+end 'noteSubstrateRawIntrinsic'
 
 // Classify ONE callee named by a stdlib body: a runtime entry that needs a HOST FACILITY SEEDS the
 // fixpoint, another stdlib function becomes a reverse edge, and anything else — a user callback, or a

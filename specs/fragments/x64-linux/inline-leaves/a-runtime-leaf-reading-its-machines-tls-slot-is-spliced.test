@@ -1,0 +1,83 @@
+// Test: a-runtime-leaf-reading-its-machines-tls-slot-is-spliced
+// --- runtime-file: Probe.maxon
+module function __probe_tls_read(tebOffset MachineWord) returns MachineWord
+	return __Raw.tlsSlotLoad(tebOffset)
+end '__probe_tls_read'
+
+function __probe_tls_caller(tebOffset ExitCode) returns ExitCode
+	if tebOffset == 0 'neverAMachine'
+		return 0
+	end 'neverAMachine'
+
+	return __probe_tls_read(tebOffset as MachineWord) as ExitCode
+end '__probe_tls_caller'
+// --- stdlib-overlay: Builtins.maxon
+export function probeTlsSlotRead(tebOffset ExitCode) returns ExitCode
+	return __probe_tls_caller(tebOffset)
+end 'probeTlsSlotRead'
+// --- file: main.maxon
+function main() returns ExitCode
+	return probeTlsSlotRead(0)
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+  __rc_ok:
+    x64.callDirect __probe_tls_caller
+  __il_cont:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @__probe_tls_caller {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic#4
+  __rc_chk#5:
+    x64.cmpRegImm32 rcx, 255
+    x64.jcc greater, __rc_panic#4
+  __rc_ok#3:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, __il_body
+  neverAMachine:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __il_body:
+    x64.mov r8, gs:[rcx]
+  __il_cont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#7
+  __rc_chk#8:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc greater, __rc_panic#7
+  __rc_ok#6:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#4:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at Probe.maxon:5: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#7:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at Probe.maxon:10: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

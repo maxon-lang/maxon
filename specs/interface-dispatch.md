@@ -2631,6 +2631,57 @@ end 'main'
 error E2015: specs/fragments/interface-dispatch/error.interface-typed-function-type-parameter.test:20:30: Unsupported: a function type's parameter declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a function value is called through the uniform `(userargs, env)` indirect ABI, which carries one machine word per argument and reserves no adjacent slot for the witness half. Declare the parameter at a concrete type, or pass the interface to a named function DIRECTLY, whose signature reserves the adjacent slot
 ```
 
+<!-- test: error.function-value-of-an-interface-taking-function -->
+⭐⭐ **THE SAME ABI FACT REACHED WITHOUT A FUNCTION TYPE ANYWHERE, WHICH IS WHY THE CASE ABOVE COULD NOT
+REFUSE IT.** `let f = measure` takes a function value off the NAME, so nothing declares a function type for
+`parseTypeReference` to catch — and `measure`'s own parameter list is legal, because a DIRECT call reserves
+the adjacent witness slot and fills it. What is unrepresentable is the VALUE USE, so that is where the
+refusal sits, and the remedy is to call `measure` directly.
+⚠ **MEASURED before this refusal existed: the program compiled and faulted inside `measure`, reached
+through `__fnref_measure`** — the thunk forwards one word per user parameter and the witness companion
+`Parser.bindExistentialWitnessParams` reserved went unwritten, so `c.area()` dispatched through whatever the
+register held.
+⚠ It is E3156 rather than E2015 because the answer needs RESOLVED parameter types: the interface arm of
+`parseTypeReference` is gated on `allFilesFolded`, so a parameter type the declaration sweep recorded still
+carries a bare `named`. A function value's RETURN type has no such problem — it crosses the signature index
+through `adoptReturnType` — which is why `error.function-value-of-an-interface-returning-function` above is
+the parser's and this one is not.
+⭐ Its FALSE-REJECT CONTROL is the whole of `first-class-functions.md`: a function value whose target takes
+a concrete parameter is untouched, and so is one whose target takes a FUNCTION parameter, whose own hidden
+companion IS suppliable — the thunk passes a null, the only environment a value handed across a
+`callIndirect` carries (`first-class-function.nested-function-type-agrees-by-alias-name`).
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Sq implements Shape
+	let s as Integer
+
+	function area() returns Integer
+		return self.s
+	end 'area'
+
+	static function create(s Integer) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Sq'
+
+function measure(c Shape) returns Integer
+	return c.area()
+end 'measure'
+
+function main() returns ExitCode
+	let f = measure
+	return f(Sq.create(42)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3156: <fragment>:25:10: cannot use 'measure' as a function value: its parameter 'c' is declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a function value is called through the uniform `(userargs, env)` indirect ABI, which carries one machine word per argument and reserves no adjacent slot for the witness half. Call 'measure' DIRECTLY, whose signature reserves that slot, or declare the parameter at a concrete type
+```
+
 <!-- test: interface-dispatch.function-values-over-concrete-types-still-compile -->
 The FALSE-REJECT CONTROL for the case above. A function type whose parameter is a CONCRETE type is
 untouched, and so is a function value stored in a struct FIELD and called back out of it — the two

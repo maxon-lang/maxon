@@ -1,0 +1,33 @@
+// Test: a-reached-tls-slot-read-compiles-where-the-lane-has-the-slot
+// --- runtime-file: Probe.maxon
+function __probe_tls_slot(tebOffset ExitCode) returns ExitCode
+	if tebOffset == 0 'neverAMachine'
+		return 0
+	end 'neverAMachine'
+
+	return __Raw.tlsSlotLoad(tebOffset as MachineWord) as ExitCode
+end '__probe_tls_slot'
+// --- stdlib-overlay: Builtins.maxon
+export function probeTlsSlot(tebOffset ExitCode) returns ExitCode
+	return __probe_tls_slot(tebOffset)
+end 'probeTlsSlot'
+// --- file: main.maxon
+function main() returns ExitCode
+	return probeTlsSlot(0)
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+  __rc_ok:
+    x64.callDirect __probe_tls_slot
+  __il_cont:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

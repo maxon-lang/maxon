@@ -18,9 +18,13 @@
 // function. That is what lets a panic block be COPIED like any other block: a panic raised inside a spliced
 // body prints `in <callee>` then `in <caller>`, at every nesting level, exactly as the call did.
 //
-// ONE ROUND: the called-once rule is applied to each callee once, in waves that splice a callee only after
-// every called-once callee inside it; the leaf rule then decides eligibility on the bodies as they stand and
-// splices every admitted site. Neither cascades further.
+// ONE ROUND PER PAIR: the called-once rule is applied to each callee once, in waves that splice a callee
+// only after every called-once callee inside it; the leaf rule then decides eligibility on the bodies as
+// they stand and splices every admitted site. Neither cascades further.
+//
+// ⭐⭐ **THE PASS RUNS TWICE OVER ONE MODULE AND THE TWO RUNS PARTITION THE PAIRS** — the pipeline's over
+// every caller, the band's over the callers `Compiler.compileToCodeResult` appended below the pipeline.
+// `SpliceRound` is that split and owns the argument for it.
 //
 // Three things a general Std-tier inliner needs and this one does not:
 //   • **an ownership side table** — refcounts are inserted at the MAXON tier, so a retain, a release
@@ -28,8 +32,12 @@
 //     thread.
 //   • **cross-module snapshots** — `stdlib/` is compiled into the same module. There is nothing to
 //     snapshot.
-//   • **a slot-op refusal** — `stackRecordAddr` is `isUnsupportedInInlineBody`, and
-//     `promoteStackRecords` runs AFTER this pass, so none exists yet either way.
+//
+// ⚠⚠ **AND THE SLOT-OP REFUSAL IS LIVE IN THE BAND'S RUN.** `promoteStackRecords` runs at the END of the
+// pipeline, so the band's run meets promoted frame slots where the pipeline's run met none: a
+// `stackRecordAddr` names a slot of the function that OWNS it, and a body carrying one spliced into a band
+// caller would address the caller's frame instead. `isUnsupportedInInlineBody` is what refuses such a
+// callee (`inlineOpRole`), and this is the reader that makes the flag load-bearing rather than declared.
 //
 // `BlockArgReturnRole` is declared and nothing reads it; wiring it here would be a producer with no
 // consumer.
@@ -96,6 +104,58 @@ let sharedUnseededLeafMinter = ValueMinter.create(0)
 let sharedEmptyDeclineColumn = BoolArray.create()
 let sharedEmptyForwardColumn = BlockIdArray.create()
 
+// ⭐⭐ **WHICH (caller, callee) PAIRS THIS RUN MAY SPLICE — the pass runs TWICE over one module and each
+// pair is offered to it exactly once.**
+//
+// The pipeline's run sees the lowered program. `Compiler.compileToCodeResult` then APPENDS the runtime
+// band — every installer's builder-emitted body and every synthesized cascade — and runs the pass again,
+// because a call from a band body into a tier body is a pair the first run structurally could not hold an
+// opinion about: the caller did not exist yet.
+//
+// ⛔ **THE SECOND RUN MUST NOT RE-DECIDE A PAIR THE FIRST ONE DECIDED**, which is what `ONE ROUND` in this
+// file's header means and what `inline-leaves.a-leaf-called-from-a-leaf-is-not-cascaded` pins: eligibility
+// recomputed on an already-spliced module admits a caller that became call-free BY being inlined into.
+// Scoping the second run to the band's own callers is what keeps one round one round — a band function has
+// had none, a pipeline function has had exactly one.
+export union SpliceRound
+	// The pipeline's run: every caller in the module.
+	everyCaller
+
+	// The band's run: only a caller at or above the index the appended band begins at.
+	bandCallersFrom(firstCallerIndex FuncIndex)
+end 'SpliceRound'
+
+// The first caller index this round considers — 0 for the whole module.
+function firstCallerOf(round SpliceRound) returns FuncIndex
+	return match round 'round'
+		everyCaller gives 0 as FuncIndex
+		bandCallersFrom(firstCallerIndex) gives firstCallerIndex
+	end 'round'
+end 'firstCallerOf'
+
+// ⭐⭐ **THE CALLEE HALF OF THE BAND ROUND'S ADMISSION, AND IT IS WHAT THE ROUND IS FOR.** The pair the
+// pipeline's run structurally could not hold an opinion about is a BUILDER-emitted caller calling a
+// `runtime/` TIER body: the tier body went through the pipeline, the caller did not exist yet, so a tier
+// entry whose only caller is a builder body could never be spliced at any size — where the builder that
+// used to emit the same credit emitted it inline. Every other pair the band could offer (builder into
+// builder, a synthesized cascade into another, the scheduler talking to itself) is code ONE builder wrote
+// against another and is not what this round exists to join.
+//
+// ⛔ **IT IS A NARROWING, NOT A SAFETY RULE** — the safety rules are `splicingWouldWidenTheSafePoint`, the
+// stack guard, `keepsItsOwnFrame` and `isUnsupportedInInlineBody`, and every one of them still runs. This
+// one is about COST: MEASURED, admitting the wider set spent ~2% on the allocation path of
+// `examples/binary-trees.maxon` for splices across a boundary that was never divided.
+//
+// The membership test is `LibraryFacts.runtimeTier`, the provenance fact four other predicates already read
+// — never `TargetPrinter.isRuntimeFunction`, which is deliberately wider (it answers for every
+// builder-emitted `__` body too) and would admit exactly the set this narrowing removes.
+function roundAdmitsCallee(round SpliceRound, callee IrFunction, runtimeTier FunctionNameSet) returns bool
+	return match round 'round'
+		everyCaller gives true
+		bandCallersFrom gives runtimeTier.contains(callee.name)
+	end 'round'
+end 'roundAdmitsCallee'
+
 // --- what ONE op of a candidate body means to the two rules ---
 enum InlineOpRole
 	// Copyable verbatim into the caller.
@@ -117,7 +177,7 @@ enum InlineOpRole
 	refusing
 end 'InlineOpRole'
 
-// ⭐⭐ **THE TWO METADATA BITS THIS PASS ASKS PER OP, MEMOIZED PER VARIANT.** `rawValue` constructs a
+// ⭐⭐ **THE THREE METADATA BITS THIS PASS ASKS PER OP, MEMOIZED PER VARIANT.** `rawValue` constructs a
 // variant's backing struct by one compare per VARIANT of the union — ninety-odd for `StdOp` — so read per
 // op it costs several times the jump-table `match` it sits behind; `ordinal` is the discriminant itself.
 // Each variant's metadata is read from `rawValue` the first time the variant is met and answered from a
@@ -128,10 +188,28 @@ type StdOpMetaMemo
 	var known as BoolArray
 	var roles as OpRoleColumn
 	var unsupported as BoolArray
+	var calls as BoolArray
 
 	static function create() returns StdOpMetaMemo
-		return Self{known: BoolArray.create(), roles: OpRoleColumn.create(), unsupported: BoolArray.create()}
+		return Self{known: BoolArray.create(), roles: OpRoleColumn.create(), unsupported: BoolArray.create(), calls: BoolArray.create()}
 	end 'create'
+
+	// ⛔⛔ **THE ANSWER `inlineOpRole`'s TAIL GIVES AN OP IT DID NOT NAME, AND THE ONE DISAGREEMENT THAT
+	// TAIL CAN HIDE.** The tail can say `body` or `refusing` and never `calling`, so a variant that is
+	// `isCall: true` and carries `isUnsupportedInInlineBody: false` is filed an ordinary body op — and the
+	// LEAF rule, whose whole rule is *"no call of any kind"*, then admits a callee holding it. The dialect
+	// states that invariant at the field; this is where it is enforced, once per variant's worth of column
+	// reads rather than by re-deriving the metadata per op.
+	function bodyRole(op StdOp) returns InlineOpRole
+		let variant = self.learned(op)
+		let isCall = try self.calls.get(variant) otherwise panic("StdOpMetaMemo.bodyRole: calls.get OOB at {variant} after learning it")
+
+		if isCall 'aCallWithNoRoleOfItsOwn'
+			panic("inlineOpRole: a variant in category {op.rawValue.category.name} is `isCall: true` and reaches the flag tail carrying `isUnsupportedInInlineBody: false` — the tail cannot answer `calling`, so the leaf rule would admit a callee holding a call")
+		end 'aCallWithNoRoleOfItsOwn'
+
+		return InlineOpRole.body
+	end 'bodyRole'
 
 	function hasRole(op StdOp, role OpRole) returns bool
 		let variant = self.learned(op)
@@ -159,8 +237,10 @@ type StdOpMetaMemo
 		// one field at a time, which is the only way the compiler serves it.
 		self.roles.growFilled(variant + 1, value: OpRole.plain)
 		self.unsupported.growFilled(variant + 1, value: false)
+		self.calls.growFilled(variant + 1, value: false)
 		try self.roles.set(variant, value: op.rawValue.role) otherwise panic("StdOpMetaMemo.learned: roles.set OOB at {variant}")
 		try self.unsupported.set(variant, value: op.rawValue.isUnsupportedInInlineBody) otherwise panic("StdOpMetaMemo.learned: unsupported.set OOB at {variant}")
+		try self.calls.set(variant, value: op.rawValue.isCall) otherwise panic("StdOpMetaMemo.learned: calls.set OOB at {variant}")
 		try self.known.set(variant, value: true) otherwise panic("StdOpMetaMemo.learned: known.set OOB at {variant}")
 		return variant
 	end 'learned'
@@ -176,7 +256,9 @@ end 'StdOpMetaMemo'
 // (`safety/integer-overflow-fault-from-int-min-over-minus-one` and `inline-called-once`'s hardware fault
 // case pin the two shapes). Those four are `framed`, the role a target without inline frame records
 // refuses. Everything else answers off the flag, which is what gives that field its first reader and
-// means an op added with it set is refused here without this file learning its name.
+// means an op added with it set is refused here without this file learning its name. ⛔ The tail has no
+// `calling` answer to give, so a CALL reaching it would be filed a body op — `StdOpMetaMemo.bodyRole` is
+// where that disagreement stops being silent.
 //
 // ⚠ Every other variant is NAMED, so a variant added later fails to compile here until it is
 // consciously placed.
@@ -248,8 +330,8 @@ function inlineOpRole(op StdOp, meta StdOpMetaMemo) returns InlineOpRole
 
 		// The allocator's page/fill/atomic band and the scheduler's thread/TLS band are placed
 		// here consciously: none is a call site, a terminator or a `param`, so each one's own
-		// `isUnsupportedInInlineBody` answers below — a fill and the two atomics are body ops a body may
-		// hold, the import calls refuse.
+		// `isUnsupportedInInlineBody` answers below — a fill, the two atomics and the TLS slot read are body
+		// ops a body may hold, the import calls refuse.
 		osCommandLine or
 			osStdHandle or
 			osExecutablePath or
@@ -301,7 +383,7 @@ function inlineOpRole(op StdOp, meta StdOpMetaMemo) returns InlineOpRole
 			osSocketServe then break 'kind'
 	end 'kind'
 
-	return InlineOpRole.refusing if meta.isUnsupportedInInlineBody(op) else InlineOpRole.body
+	return InlineOpRole.refusing if meta.isUnsupportedInInlineBody(op) else meta.bodyRole(op)
 end 'inlineOpRole'
 
 // --- the per-callee verdict ---
@@ -435,14 +517,16 @@ type LeafPlan
 	end 'blockCountOf'
 end 'LeafPlan'
 
-function buildLeafPlan(module StdModule, framesAreRecorded bool, namedByGolden BoolArray, meta StdOpMetaMemo) returns LeafPlan
+function buildLeafPlan(module StdModule, framesAreRecorded bool, namedByGolden BoolArray, meta StdOpMetaMemo, round SpliceRound, runtimeTier FunctionNameSet) returns LeafPlan
 	var plan = LeafPlan.create(module.funcCount() as FuncIndex)
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		let func = module.getFunc(funcIndex)
 
-		// Splicing every site of a golden-named leaf would drop the body the golden asks the printer for.
-		let scan = LeafBodyScan.create(LeafVerdict.notALeaf, opCount: 0) if isGoldenNamed(namedByGolden, funcIndex: funcIndex) else scanLeafBody(module, func: func, framesAreRecorded: framesAreRecorded, meta: meta)
+		// Splicing every site of a golden-named leaf would drop the body the golden asks the printer for; a
+		// callee this round does not admit is not a leaf here either (`roundAdmitsCallee`).
+		let declined = isGoldenNamed(namedByGolden, funcIndex: funcIndex) or not roundAdmitsCallee(round, callee: func, runtimeTier: runtimeTier)
+		let scan = LeafBodyScan.create(LeafVerdict.notALeaf, opCount: 0) if declined else scanLeafBody(module, func: func, framesAreRecorded: framesAreRecorded, meta: meta)
 		plan.record(funcIndex, scan: scan, module: module, func: func)
 	end 'eachFunc'
 
@@ -897,7 +981,7 @@ type SpliceBlocks
 end 'SpliceBlocks'
 
 // Expand every called-once call site, then every inlinable tiny-leaf call site, in the module.
-export function inlineLeaves(project Project, module StdModule)
+export function inlineLeaves(project Project, module StdModule, round SpliceRound)
 	// ⚠ **THE NON-REFUSING NAME INDEX, for `PromoteStackRecords`' reason exactly.** A duplicate function
 	// name is E4015's to report, and the site that owns that refusal runs LATER
 	// (`DeadFunctionElimination` is where a runtime-symbol collision becomes visible). Raising it here
@@ -905,17 +989,17 @@ export function inlineLeaves(project Project, module StdModule)
 	// reason instead: with two bodies of one name, an inline could splice the wrong one.
 	match FunctionNameIndex.build(module.functions) 'names'
 		duplicateAt then return
-		built(byName) then inlineWithNameIndex(project, module: module, byName: byName)
+		built(byName) then inlineWithNameIndex(project, module: module, byName: byName, round: round)
 	end 'names'
 end 'inlineLeaves'
 
-function inlineWithNameIndex(project Project, module StdModule, byName FunctionNameIndex)
+function inlineWithNameIndex(project Project, module StdModule, byName FunctionNameIndex, round SpliceRound)
 	var def = StdDefinedValues.create()
 	var cloner = StdOpCloner.create()
 	var meta = StdOpMetaMemo.create()
 	let namedByGolden = goldenRequestedFunctions(project, module: module, byName: byName)
-	spliceCalledOnceCallees(project, module: module, byName: byName, def: def, cloner: cloner, meta: meta, namedByGolden: namedByGolden)
-	spliceLeaves(project, module: module, byName: byName, def: def, cloner: cloner, meta: meta, namedByGolden: namedByGolden)
+	spliceCalledOnceCallees(project, module: module, byName: byName, def: def, cloner: cloner, meta: meta, namedByGolden: namedByGolden, round: round)
+	spliceLeaves(project, module: module, byName: byName, def: def, cloner: cloner, meta: meta, namedByGolden: namedByGolden, round: round)
 end 'inlineWithNameIndex'
 
 // ⭐ **A BODY A GOLDEN REQUEST NAMES IS A REFERENCE NEITHER RULE MAY SPLICE AWAY.** `--emit-ir-runtime=`
@@ -938,8 +1022,8 @@ end 'goldenRequestedFunctions'
 // The leaf rule
 // ══════════════════════════════════════════════════════════════════════════
 
-function spliceLeaves(project Project, module StdModule, byName FunctionNameIndex, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, namedByGolden BoolArray)
-	let plan = buildLeafPlan(module, framesAreRecorded: targetEmitsInlineFrameRecords(project.target), namedByGolden: namedByGolden, meta: meta)
+function spliceLeaves(project Project, module StdModule, byName FunctionNameIndex, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, namedByGolden BoolArray, round SpliceRound)
+	let plan = buildLeafPlan(module, framesAreRecorded: targetEmitsInlineFrameRecords(project.target), namedByGolden: namedByGolden, meta: meta, round: round, runtimeTier: project.libraryFacts.runtimeTier)
 
 	if plan.eligibleCount == 0 'nothingToInline'
 		logDebug(LogCategory.ir, message: function() gives "inlineLeaves: 0 site(s) inlined, 0 callee(s) eligible")
@@ -953,7 +1037,9 @@ function spliceLeaves(project Project, module StdModule, byName FunctionNameInde
 	var stats = InlineLeafStats.create()
 	let admission = SpliceAdmission.leaves(plan)
 
-	for funcIndex in 0 upto module.funcCount() 'eachFunc'
+	// ⭐ **THE ROUND'S CALLERS, NOT THE MODULE'S** — a pipeline function's sites were offered to the
+	// first run and are not offered again (`SpliceRound`).
+	for funcIndex in firstCallerOf(round) upto (module.funcCount() as FuncIndex) 'eachFunc'
 		let func = module.getFunc(funcIndex)
 
 		// ⭐ A STDLIB FUNCTION NO PATH FROM `main` REACHES IS SKIPPED — the same reachability fact
@@ -1017,6 +1103,13 @@ enum CalledOnceRefusal
 	// A ```RequiredRuntime golden asks the printer for this body after the pipeline; spliced away, it
 	// would be dropped and the golden would pin nothing.
 	namedByGoldenRequest
+
+	// Its one site lies below the caller range this round considers, so the other round decided it — see
+	// `SpliceRound`.
+	siteOutsideThisRound
+
+	// It is not the kind of callee this round joins a caller to — see `roundAdmitsCallee`.
+	calleeOutsideThisRound
 end 'CalledOnceRefusal'
 
 function calledOnceRefusalText(reason CalledOnceRefusal) returns String
@@ -1034,6 +1127,8 @@ function calledOnceRefusalText(reason CalledOnceRefusal) returns String
 		pressureBudgetExceeded gives "the caller's values live across the site plus the body's loop live-ins are over the register budget"
 		noInlineFrameRecords gives "the target emits no inline frame records to keep its frame in a trace"
 		namedByGoldenRequest gives "a golden request names its body"
+		siteOutsideThisRound gives "its one site lies outside the caller range this round considers"
+		calleeOutsideThisRound gives "it is not a runtime tier body, which is the only callee the band's round joins a builder caller to"
 	end 'r'
 end 'calledOnceRefusalText'
 
@@ -1672,7 +1767,7 @@ end 'collectBlockReads'
 // none left unprocessed is ready, and the ready candidates of one wave are spliced caller by caller in one
 // walk of each caller. A candidate never ready when the ready list drains lies on a cycle of candidates,
 // or calls into one: the cycle's members are refused and their callers counted down, and the waves go on.
-function spliceCalledOnceCallees(project Project, module StdModule, byName FunctionNameIndex, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, namedByGolden BoolArray)
+function spliceCalledOnceCallees(project Project, module StdModule, byName FunctionNameIndex, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, namedByGolden BoolArray, round SpliceRound)
 	let funcCount = module.funcCount() as FuncIndex
 	let census = CalledOnceCensus.take(project, module: module, byName: byName)
 	var refusals = OrdinalTally.create(CalledOnceRefusal.allCaseNames.count())
@@ -1692,6 +1787,16 @@ function spliceCalledOnceCallees(project Project, module StdModule, byName Funct
 		end 'notCalledOnce'
 
 		let func = module.getFunc(funcIndex)
+
+		if census.callerOfCallee(funcIndex) < firstCallerOf(round) 'siteBelongsToTheOtherRound'
+			noteCalledOnceRefusal(refusals, reason: CalledOnceRefusal.siteOutsideThisRound, func: func)
+			continue
+		end 'siteBelongsToTheOtherRound'
+
+		if not roundAdmitsCallee(round, callee: func, runtimeTier: project.libraryFacts.runtimeTier) 'notThePairThisRoundJoins'
+			noteCalledOnceRefusal(refusals, reason: CalledOnceRefusal.calleeOutsideThisRound, func: func)
+			continue
+		end 'notThePairThisRoundJoins'
 
 		if not framesAreRecorded 'noRecordsOnThisTarget'
 			noteCalledOnceRefusal(refusals, reason: CalledOnceRefusal.noInlineFrameRecords, func: func)

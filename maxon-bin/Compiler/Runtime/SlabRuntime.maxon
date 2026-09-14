@@ -239,9 +239,12 @@ let SlabRawShardRow = SlabMaxShards - 1
 let SlabClassGeomSlotShift = 32
 let SlabClassGeomSlotMask = 0xFFFFFFFF
 
-let SlabSizeToClass8Label = "__slab_size_to_class8"
-let SlabSizeToClass128Label = "__slab_size_to_class128"
-let SlabClassGeomLabel = "__slab_class_geom"
+// Exported because a `__Raw` address row names each of them at the lowering and nowhere else
+// (`LowerMaxonToStd.lowerRawIntrinsic`), so the label this file registers and the label a tier body reads
+// are one constant.
+export let SlabSizeToClass8Label = "__slab_size_to_class8"
+export let SlabSizeToClass128Label = "__slab_size_to_class128"
+export let SlabClassGeomLabel = "__slab_class_geom"
 
 // ⭐ **THE TWO REVERSE LOOKUPS' DIVISORS, AS SHIFTS.** `SlabClasses.maxon` states the divisors
 // (`SlabSmallSizeDiv` 8, `SlabLargeSizeDiv` 128); the emitted code divides by them, and a divide by a power
@@ -1338,11 +1341,14 @@ end 'emitSlabCreditBothArms'
 export union SlabTrafficFigure
 	// One column.
 	column(which SlabTrafficColumn)
+
 	// A layer's live count, its total less its frees.
 	live(layer SlabTrafficLayer)
+
 	// A raw column less the tracked column nested inside it, less `prefixPerBox` bytes for every tracked
 	// box — the byte reader's per-box prefix, and 0 for a count.
 	disjoint(raw SlabTrafficColumn, tracked SlabTrafficColumn, prefixPerBox ParsedInt)
+
 	// The raw layer's live count less the tracked layer's.
 	disjointLive
 end 'SlabTrafficFigure'

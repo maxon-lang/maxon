@@ -149,6 +149,18 @@ export enum HostFacility
 	// and this row must go back to `false` until it has them.
 	hostMutex
 
+	// ⭐⭐ **PER-OS-THREAD STORAGE, READ AT AN OFFSET THE PROGRAM PUBLISHED (`StdOp.tlsSlotLoad`).** Its own
+	// facility rather than a corner of `greenThreads`: the slot is a bare host primitive with no scheduler in
+	// it, and the ALLOCATOR is the widest consumer — every allocation and every free begins by asking which
+	// machine is running, which is one read of this slot.
+	//
+	// ⛔ **ITS ABSENCE IS PERMANENT WHERE THE MACHINE HAS ONE THREAD, AND A CONSTANT IS NOT AN ANSWER.** On
+	// wasm32-wasi there is no second thread for storage to be per-thread OF, so `StdToWasm.emitBodyOp` panics
+	// on the op rather than folding it — folding would silently hand every reader the same slot, which is
+	// `currentThreadToken`'s note one arm over: a constant is the RIGHT answer for an IDENTITY and a WRONG one
+	// for STORAGE.
+	threadLocalSlot
+
 	// Whether a standard stream is a TERMINAL (`__tty_*`). Its own facility rather than a corner of
 	// `consoleStdin`, on this enum's stated rule that a facility is named for what the HOST provides:
 	// reading standard input and asking the OS what KIND of object a handle is are two different questions
@@ -483,6 +495,18 @@ function calleeHostFacility(callee ByteArray) returns CalleeFacility
 		return CalleeFacility.needs(HostFacility.cpuCount)
 	end 'cpuCountBand'
 
+	// ⭐⭐ **A `__Raw` ROW ARRIVES HERE AS A SUBSTRATE ENTRY, NOT AS A CALLEE.** A `rawIntrinsic` op names no
+	// callee at all (`MaxonDialect.maxonOpCalleeKind` answers `noCallee`), so nothing can ever CALL one of
+	// these names — what reaches this door is the entry `StdlibSource.noteSubstrateRawIntrinsic` seeded a
+	// crossing with, which is the row's own mangled spelling. The facility is the TABLE's answer rather than a
+	// second copy of it, so the crossing and the op cannot disagree about what a lane owes.
+	if isRawIntrinsicCallee(callee) and rawIntrinsicIsListed(callee) 'theRawFloor'
+		return match rawHostFacilityOf(rawIntrinsicNamed(callee)) 'row'
+			none gives CalleeFacility.none
+			required(facility) gives CalleeFacility.needs(facility)
+		end 'row'
+	end 'theRawFloor'
+
 	return CalleeFacility.none
 end 'calleeHostFacility'
 
@@ -592,6 +616,11 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// including the allocator's. A gate narrower than that set is a `bl` to a symbol the image never laid
 			// out — a link failure rather than a diagnostic.
 			hostMutex gives true
+
+			// Darwin's thread-specific-data array hangs off the thread pointer, so the slot read is
+			// `TPIDRRO_EL0` plus one indexed load and no call at all
+			// (`StdToArm64Conversion.lowerTlsSlotLoad`).
+			threadLocalSlot gives true
 
 			// ⭐⭐ **THE GREEN-THREAD FLOOR AND EVERYTHING STANDING ON IT.** The hand-assembled chunks have their
 			// AAPCS64 twins in `Arm64GtRuntime.appendArm64GtRuntimeChunks`, the prologue stack guard and the
@@ -799,9 +828,11 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 
 			// The page ops are inline `mmap`s that need no chunk. The lock is a recursive futex mutex, so its
 			// three chunks are real bodies here where macOS needs one — all on `PosixRuntime.posixUsesHostLock`,
-			// which is what makes the second row `true`: that gate covers every producer of the three ops.
+			// which is what makes the second row `true`: that gate covers every producer of the three ops. The
+			// slot read is a bare load off the thread pointer, with no chunk and no call either.
 			pageMemory gives true
 			hostMutex gives true
+			threadLocalSlot gives true
 
 			// ⭐⭐⭐ **THE SOCKET BAND — INLINE `svc`s AND A RESOLVER WRITTEN IN Std IR, BECAUSE THERE IS NO
 			// `getaddrinfo` ON A LANE THAT LINKS NO LIBC.** The transfers are `sendto`/`recvfrom` with a NULL peer
@@ -908,9 +939,11 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 
 			// The page ops are inline `mmap`s that need no chunk. The lock is a recursive futex mutex, so its
 			// three chunks are real bodies here where macOS needs one — all on `PosixRuntime.posixUsesHostLock`,
-			// which is what makes the second row `true`: that gate covers every producer of the three ops.
+			// which is what makes the second row `true`: that gate covers every producer of the three ops. The
+			// slot read is a bare load off the thread pointer, with no chunk and no call either.
 			pageMemory gives true
 			hostMutex gives true
+			threadLocalSlot gives true
 
 			// ⛔⛔ **THESE FIVE ROWS ARE INDIVISIBLE: A LANE PROVIDES ALL OF THEM OR NONE, AND FLIPPING ONE
 			// ALONE MAKES A PROGRAM THAT PANICS IN THE ISEL.** Whoever next touches them is bound by it:
@@ -1008,7 +1041,8 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 
 			// ⛔ **THE REST ARE ABSENT, AND FOR TWO DIFFERENT KINDS OF REASON THIS COLUMN DOES NOT RECORD.**
 			// A WASI component has one thread and no process-spawn primitive, so the green-thread floor,
-			// the child-process band and the per-thread CPU clock are permanent refusals; the file, directory,
+			// the child-process band, the per-thread CPU clock and per-OS-thread STORAGE are permanent
+			// refusals; the file, directory,
 			// socket, argv, stdin, identity, priority, machine-query and named-section families are surfaces
 			// nobody has ported. `SemanticCheck.targetCanHostSubprocess` is where the permanent half of that
 			// distinction is written down, reading this table's SUBJECT rather than its answer.
@@ -1031,6 +1065,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 				processInfo or
 				processPriority or
 				cpuCount or
+				threadLocalSlot or
 				terminalDetection or
 				sharedMemory or
 				processSampling gives false

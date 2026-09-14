@@ -36,11 +36,16 @@
 // rule: `specs/short-circuit-evaluation.md`'s `short-circuit-in-while-condition` reads AND WRITES one
 // global every iteration, so its store is what refuses it.
 //
-// ⚠ **WHAT THE RULE DOES NOT COVER, STATED:** another OS THREAD writing the location while this loop
-// spins. A spin-wait with no call in it would be hoisted into an infinite loop. Nothing in this
-// compiler's own sources or the stdlib spells one — the green-thread substrate yields through a CALL
-// (`Runtime.yield`), and every real-thread handshake in the runtime band goes through `osWaitHandle` or
-// an atomic — and the runtime band is not run through this pipeline at all (see `hoistLoopInvariants`).
+// ⛔⛔ **WHAT THE RULE DOES NOT COVER, AND IT IS A REAL COUNTEREXAMPLE RATHER THAN A HYPOTHETICAL:**
+// another OS THREAD writing the location while this loop spins. A spin-wait with no call in it is hoisted
+// into an infinite loop. Nothing in this compiler's own sources or the stdlib spells one — the green-thread
+// substrate yields through a CALL (`Runtime.yield`) — but the APPENDED RUNTIME BAND does: a builder spells
+// a wait on a word another thread writes as a bare `loadIndirect` inside a loop holding no store and no
+// call, which is precisely the shape Rule 1 admits. MEASURED by running this pass over that band: the
+// compiler's own self-compile went from **40 s to over 900 s**, one core saturated where twelve had been
+// busy. `StdPassPool.requireBandStepIsSound` is what keeps the band away from this pass, and it is a
+// refusal rather than a schedule nobody edits. ⇒ **THIS PASS MAY SEE THE BAND ONLY ONCE THE DIALECT CAN
+// TELL AN ORDINARY LOAD FROM A READ OF A WORD ANOTHER THREAD WRITES.**
 // This is the one premise here that is about the whole program rather than about the loop.
 //
 // ⚠ The frontend proves something adjacent and it is NOT what this rule rests on. A `for … in`

@@ -451,10 +451,18 @@ function buildMboxHandleCloneBox(module StdModule)
 
 	// A FRESH box, on the same `__mm_alloc` contract every handle box is born through — a clone that answered
 	// the same box would make the drop of either free a record the other still names.
+	//
+	// ⛔⛔ **THROUGH `emitMmAllocCall`, BECAUSE `__mm_alloc`'s ARITY IS `--debugstream`'s.** A hand-written
+	// two-argument call here is a call one argument short of the callee a traced build defines, which is what
+	// that function's header predicts of any site that spells the call itself.
+	//
+	// ⭐ The tag is `Untagged` because THIS body has no type to name: one Std-tier entry serves every service,
+	// and the handle's companion struct is not reachable from it — the same answer, for the same reason, as
+	// `__mm_retain`'s box copy.
 	let boxBytes = emitConst(module, block: entry, value: ServiceHandleBoxSize, ids: ids)
 	let trivial = emitConst(module, block: entry, value: TrivialDestructor, ids: ids)
 	let cloned = ids.mint()
-	module.appendOp(entry, op: StdOp.call(cloned, callee: MmAllocName, args: twoArgs(boxBytes, second: trivial)))
+	emitMmAllocCall(module, block: entry, result: cloned, size: boxBytes, destructor: trivial, tag: mmTagIndex(MmTag.Untagged), ids: ids)
 	emitStoreField(module, block: entry, record: cloned, offset: ServiceHandleMailboxOffset, value: mbox)
 	module.setTerminator(entry, op: StdOp.ret(cloned))
 

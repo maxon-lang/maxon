@@ -2013,10 +2013,13 @@ type MaxonToStdLowering
 	// laid out by `Parser.reserveRawScratchSlot`, a byte offset for the four word and byte accessors, and the
 	// fill byte for `memFill`.
 	//
-	// ⚠ **AN ADDRESS ROW NAMES ITS `.data` LABEL HERE AND NOWHERE ELSE, so the label the emitted image lays
-	// out and the label a tier body reads are the SAME constant** (`SchedRuntime`). The slot is laid out
-	// where a body surviving dead-function elimination names it (`DataReach.walked`), so a surviving body
-	// cannot address a word the image omitted and a swept body lays out nothing.
+	// ⚠ **AN ADDRESS ROW NAMES ITS LABEL HERE AND NOWHERE ELSE, so the label the emitted image lays out and
+	// the label a tier body reads are the SAME constant** (`SchedRuntime`, `DebugStreamRuntime`). A `.data`
+	// slot is laid out where a body surviving dead-function elimination names it (`DataReach.walked`), so a
+	// surviving body cannot address a word the image omitted and a swept body lays out nothing. The three
+	// `.rdata` tables ride `usage.usesHeap` instead, at both ends: `SlabRuntime.installSlabRuntime` registers
+	// them behind it and `LibraryFacts.withCompilerCalledTierUnreached` sweeps every body that could name
+	// them on the same bit.
 	function lowerRawIntrinsic(result ValueId, intrinsic RawIntrinsic, args ValueIdArray, constant ParsedInt, dstBlock IrBlock)
 		match intrinsic 'row'
 			osTickCountMs then self.stdModule.appendOp(dstBlock, op: StdOp.osTickCountMs(result))
@@ -2032,6 +2035,12 @@ type MaxonToStdLowering
 			slabArenaListAddr then self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(result, label: SlabArenaListLabel))
 			slabArenaMapL1Addr then self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(result, label: SlabArenaMapL1Label))
 			slabStateAddr then self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(result, label: SlabStateLabel))
+			slabSizeToClass8Addr then self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: SlabSizeToClass8Label.toByteArray()))
+			slabSizeToClass128Addr then self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: SlabSizeToClass128Label.toByteArray()))
+			slabClassGeomAddr then self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: SlabClassGeomLabel.toByteArray()))
+			dsBaseAddr then self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(result, label: DsBaseLabel))
+			dsAllocIdAddr then self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(result, label: DsAllocIdLabel))
+			tlsSlotLoad then self.stdModule.appendOp(dstBlock, op: StdOp.tlsSlotLoad(result, tebOffsetId: rawWordOperand(args, index: 0, intrinsic: intrinsic)))
 			loadWord then self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(result, addrId: rawWordOperand(args, index: 0, intrinsic: intrinsic), offset: constant as ByteOffset, valueType: StdType.i64))
 			storeWord then self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(rawWordOperand(args, index: 0, intrinsic: intrinsic), offset: constant as ByteOffset, valueId: rawWordOperand(args, index: 1, intrinsic: intrinsic), valueType: StdType.i64))
 			loadByte then self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(result, addrId: rawWordOperand(args, index: 0, intrinsic: intrinsic), offset: constant as ByteOffset, valueType: StdType.u8))

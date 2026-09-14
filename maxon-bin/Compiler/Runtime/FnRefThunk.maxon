@@ -14,10 +14,14 @@
 // harmless, but ONE thunk keeps a single cross-target lowering. The thunk is synthesized once per
 // referenced plain function, not per reference.
 //
-// ⚠ HIGHER-ORDER FUNCTION VALUES ARE OUT OF SCOPE. Binding a function that ITSELF takes a function
-// parameter as a value (`let g = apply`) would need the thunk to forward `apply`'s hidden companion-env
-// parameters too — a fact this thunk does not have. No enabled case does this; `functionRef` of such a
-// function is not reached at this rung.
+// ⚠ **A TARGET'S HIDDEN COMPANION BLOCK IS THE THUNK'S TO FILL, AND ONLY ONE KIND OF IT CAN BE.** A
+// function that ITSELF takes a function parameter (`let g = runner`) carries one hidden environment
+// parameter per such parameter, and the thunk supplies a null for each — the whole of what a function
+// value handed across a `callIndirect` carries (see `appendNullCompanionEnvArgs`). An INTERFACE-typed
+// parameter's companion is a WITNESS, for which there is no null: the uniform ABI drops the witness half
+// at the call site, so no value reaches the thunk to forward. That target is refused where the address is
+// taken (`SemanticCheck.requireFunctionValueTargetTakesNoWitness`), which is why this file fills the env
+// block and no other.
 
 // A set of symbol names, for O(1) dedup while collecting thunk targets in source order.
 export typealias FnRefThunkSet = Set with ByteArray
@@ -211,8 +215,8 @@ end 'installFnRefThunks'
 
 // Emit `__fnref_<name>(userargs..., __env) -> R`:
 //
-//   entry: materialize each parameter (the trailing `__env` is discarded), `call <name>(userargs...)`,
-//          `ret` the result.
+//   entry: materialize each parameter (the trailing `__env` is discarded),
+//          `call <name>(userargs..., nulls for the target's companion env block)`, `ret` the result.
 //
 // ⭐ EACH USER PARAMETER TAKES THE TARGET'S REAL TYPE, the trailing `__env` an i64 (P1.5 #78). A FLOAT
 // parameter is an f64: the thunk must capture it from a float argument register and forward it to the
@@ -272,18 +276,51 @@ function synthesizeFnRefThunk(module StdModule, project Project, targetName Byte
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitTypedParams(module, block: entry, paramTypes: paramTypes)
 
+	var values = ValueMinter.create(thunkParamCount)
 	var forwardArgs = ValueIdArray.create()
 
 	for i in 0 upto userParamCount 'eachArg'
 		forwardArgs.push(valueIdAtParamPosition(i))
 	end 'eachArg'
 
-	let callResult = valueIdAtParamPosition(thunkParamCount)
+	appendNullCompanionEnvArgs(module, block: entry, sig: sig, values: values, forwardArgs: forwardArgs)
+
+	let callResult = values.mint()
 	module.appendOp(entry, op: StdOp.call(callResult, callee: targetName, args: forwardArgs))
-	emitFnRefThunkReturn(module, block: entry, targetReturn: targetReturn, callResult: callResult)
+	emitFnRefThunkReturn(module, block: entry, targetReturn: targetReturn, callResult: callResult, values: values)
 
 	module.functions.push(func)
 end 'synthesizeFnRefThunk'
+
+// ⭐⭐ **THE TARGET'S HIDDEN COMPANION ENVIRONMENT, ONE PER FUNCTION-TYPED PARAMETER, AND A NULL IS THE
+// ONLY VALUE THERE IS TO SUPPLY.** `Parser.bindClosureEnvParams` appends one env parameter per function-typed
+// user parameter, past the user block, and the target's body threads it as the environment of the indirect
+// call it makes THROUGH that parameter. A direct call site fills the block from the argument's own
+// environment (`LowerMaxonToStd.appendCalleeEnvArgs`); this thunk is entered from a `callIndirect`, which
+// carries one machine word per argument and so hands a function-typed argument across as a bare code
+// pointer. That pointer is a `__fnref_` thunk or a lifted closure — a capturing closure as an indirect
+// call's argument is refused (E3099) — and neither reads an environment, so the null is the whole of what
+// such an argument carries rather than a filler for a slot nobody looks at.
+//
+// ⚠ One `const 0` serves every companion: they are the same absence, and the backend copies the value into
+// each argument register.
+//
+// The count comes from `countParamsWithTag` because the parser's RESERVATION side does — a second body for
+// it would be two answers to one ABI question.
+function appendNullCompanionEnvArgs(module StdModule, block IrBlock, sig FuncSignature, values ValueMinter, forwardArgs ValueIdArray)
+	let companionCount = countParamsWithTag(sig.paramTypes, tag: ValueTypeTag.function)
+
+	if companionCount == 0 'targetTakesNoFunctionParameter'
+		return
+	end 'targetTakesNoFunctionParameter'
+
+	let nullEnv = values.mint()
+	module.appendOp(block, op: StdOp.const(nullEnv, value: 0, valueType: StdType.i64))
+
+	for _ in 0 upto companionCount 'eachCompanion'
+		forwardArgs.push(nullEnv)
+	end 'eachCompanion'
+end 'appendNullCompanionEnvArgs'
 
 // The thunk's OWN Std return type: a value-returning target's is forwarded unchanged; a VOID target's is
 // `value(i64)`, because the uniform indirect ABI presents exactly one result and `void` would present none
@@ -296,12 +333,12 @@ function fnRefThunkReturnType(targetReturn StdReturnType) returns StdReturnType
 end 'fnRefThunkReturnType'
 
 // Emit the thunk's terminator. A value-returning target returns the forwarded call's result; a VOID target
-// returns a garbage i64 the caller discards (see `emitVoidThunkReturn`). `callResult` is the highest id
-// minted so far, so `callResult + 1` is free for the void case's dummy.
-function emitFnRefThunkReturn(module StdModule, block IrBlock, targetReturn StdReturnType, callResult ValueId)
+// returns a garbage i64 the caller discards (see `emitVoidThunkReturn`), whose id comes from the same minter
+// every other value in the body does.
+function emitFnRefThunkReturn(module StdModule, block IrBlock, targetReturn StdReturnType, callResult ValueId, values ValueMinter)
 	match targetReturn 'r'
 		value then module.setTerminator(block, op: StdOp.ret(callResult))
-		void then emitVoidThunkReturn(module, block: block, dummy: (callResult + 1) as ValueId)
+		void then emitVoidThunkReturn(module, block: block, dummy: values.mint())
 	end 'r'
 end 'emitFnRefThunkReturn'
 

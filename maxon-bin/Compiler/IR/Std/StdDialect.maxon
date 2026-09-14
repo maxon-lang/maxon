@@ -724,9 +724,24 @@ export type StdOpMeta
 	// declares `isPure: false` and nothing else changes.
 	export let isPure as bool
 
-	// The op cannot appear inside a callee body that the multi-block splice is asked
-	// to inline — it escapes the inliner's static-callee model. ORTHOGONAL to `isPure`: purity says
-	// whether the op may be moved, this says whether it may be spliced at all.
+	// The op may not be COPIED into another function: `InlineLeaves.inlineOpRole` refuses a callee holding
+	// it, `UnswitchInvariantGuards.sizeFits` a loop holding it, and `cloneStdOp` panics on one that reaches
+	// it anyway.
+	//
+	// ⭐ **ORTHOGONAL TO `isPure`, AND THE DIFFERENCE IS MOVE-VERSUS-COPY.** A splice keeps an op's
+	// position relative to the code around it, so an op that merely must not be HOISTED needs nothing from
+	// this field — `tlsSlotLoad` is `isPure: false` and copies freely.
+	//
+	// ⛔⛔ **EVERY `isCall: true` VARIANT THAT REACHES `inlineOpRole`'s FLAG TAIL MUST CARRY `true`.** That
+	// tail answers `body` or `refusing` and has no way to say `calling`, so a call filed `body` is one the
+	// LEAF rule — whose whole rule is *"no call of any kind"* — admits. The six that carry `false` (`param`
+	// and the five call kinds) are each NAMED ahead of the tail and never reach it; the OS band reaches it,
+	// and that is what its `true` is for rather than any property of an import call's lowering — a
+	// `callIndirect` is an indirect call too and carries `false`. `StdOpMetaMemo.bodyRole` enforces it.
+	//
+	// Three variants escape for a reason of their own instead, each argued at its own line: a dual-register
+	// exit TERMINATOR (`errorReturn`), a per-function frame slot a copy cannot carry (`stackRecordAddr`),
+	// and an op whose identity IS its site, which a copy would duplicate (`covPoint`).
 	export let isUnsupportedInInlineBody as bool
 
 	// True for ops that access memory or have side effects the scheduler must
@@ -1277,8 +1292,10 @@ export union StdOp
 	//
 	// Full call-barrier metadata: it IS a call once lowered (an indirect call through the IAT), so
 	// it clobbers the caller-saved registers and may observe or modify arbitrary memory.
-	// `isUnsupportedInInlineBody: true`: this lowers to an indirect call, which escapes the
-	// inliner's static-callee model.
+	// `isUnsupportedInInlineBody: true` follows from that `isCall: true`: this variant is not named in
+	// `inlineOpRole` and so reaches its flag tail, where a `false` would file an OS call as an ordinary
+	// body op and the leaf rule would admit a callee holding one. The whole OS band carries it for that
+	// reason, stated once at the field.
 	osAllocPages(resultId ValueId, sizeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// Write `lenId` bytes starting at `bufId` to STDOUT (`print`). A `system`-band op for
@@ -1323,11 +1340,12 @@ export union StdOp
 
 	// The DUAL-REGISTER epilogue terminator: write `retValId` to the primary return register (R8 / x0)
 	// and `errorFlagId` to the error-flag register (R10 / x9), then the return terminator. This is the
-	// ONE place the second register is written, and `role: OpRole.errorReturn` names it.
+	// ONE place the second register is written, and `role: OpRole.errorReturn` is what names it.
 	// `isPure: true` mirrors `ret`.
-	// `isUnsupportedInInlineBody: true`: a dual-register exit terminator escapes the inliner's
-	// static-callee model. The flag has no reader yet, so this is a
-	// declaration awaiting one — but the value is the debugged one. APPENDED here, past `rdataAddr`.
+	// `isUnsupportedInInlineBody: true`: the splice rewrites a callee's `ret` into a branch carrying the
+	// value to the site's continuation, and a dual-register exit has a second register the continuation
+	// takes no argument for — so a throwing body is refused, which `terminatorRefusal` reports as
+	// `CalledOnceRefusal.throwing`.
 	errorReturn(retValId ValueId, errorFlagId ValueId) = StdOpMeta{category: StdOpCategory.call, role: OpRole.errorReturn, isPure: true, isUnsupportedInInlineBody: true, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
 
 	// Terminate the process with exit code `codeId` — the primitive a user `panic(...)` ends on (via the
@@ -2012,10 +2030,10 @@ export union StdOp
 	// `isPure: true` — it recomputes an address that cannot change, so it is freely rematerializable, exactly
 	// like `globalAddr`. `isMemory: false` — it computes an address; it does not touch memory.
 	//
-	// ⚠ `isUnsupportedInInlineBody: true` is the RIGHT value and it is enforced by NOTHING: the slot it names
-	// belongs to THIS function's frame, so splicing it into another body would silently address a different
-	// one — but that field has no reader anywhere in the compiler (see `StdOpMeta.isPure`'s note), so it is
-	// a declaration for whoever writes the first splice, not a guard that exists today.
+	// ⛔⛔ `isUnsupportedInInlineBody: true` IS LOAD-BEARING: the slot it names belongs to THIS function's
+	// frame, so a body carrying one spliced into another would silently address a different frame. The
+	// pipeline's `inlineLeaves` round runs BEFORE this pass and so meets none; the band's round
+	// (`InlineLeaves.SpliceRound`) runs after it and is the reader that refuses such a callee.
 	//
 	// ⛔ **wasm32-wasi CANNOT RECEIVE THIS OP, and the gate is in the pass, not here.** A wasm local has no
 	// address and the module emits no `__stack_pointer` global, so there is no frame for a slot to index
@@ -2582,7 +2600,12 @@ export union StdOp
 	//
 	// ⚠ **`isCall: false` AND `isPure: false`.** It reaches no OS and clobbers no argument register, so it
 	// is not a call; and it must not be hoisted, for `currentThreadToken`'s reason one step stronger — a
-	// green thread resumed on a DIFFERENT M would keep the old M's P for ever.
+	// green thread resumed on a DIFFERENT M would keep the old M's P for ever. What carries that is the
+	// two rosters every mover asks first: `classifyArithOperands` answers `neither` and
+	// `classifyLoadOperands` `notALoad`, so CSE, LICM and the unswitcher's invariance test each decline
+	// the read before purity is even reached. A COPY left where it was written is a different question,
+	// which is why this is the one row of the per-OS-thread band a splice may carry — the other two are
+	// `isCall: true`.
 	//
 	// ⚠ The encoding trap here is not representable. `mov r, gs:[base]` with
 	// `base` = rbp/r13 encodes as mod=00 rm=101, which is RIP-relative rather than `[rbp]`.
@@ -2596,7 +2619,7 @@ export union StdOp
 	// out — and `lowerTlsSlotLoad` spells that gate `cmp`/`cset`, which writes NZCV. Declared `false`,
 	// this op would sit INVISIBLY between an arm64 compare and its fused `b.cond` and the branch would
 	// read the gate's flags instead of the compare's.
-	tlsSlotLoad(resultId ValueId, tebOffsetId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: false, isCall: false, clobbersFlags: true, isCmp: false}
+	tlsSlotLoad(resultId ValueId, tebOffsetId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: false, isCall: false, clobbersFlags: true, isCmp: false}
 
 	// **`osSetEvent(handle)`** = `SetEvent(handle)` — signal an auto-reset event. The wake half of the
 	// worker park's Dekker pair, and the twin of the `osWaitHandle` a parked worker blocks in.
@@ -5578,12 +5601,14 @@ end 'remappedArgs'
 // shares no box with its source.
 //
 // ⭐ **IT COVERS THE OPS A COPIED BODY MAY HOLD, AND PANICS ON EVERY OTHER — which is not a gap but the
-// admission rule's backstop.** `InlineLeaves.inlineOpRole` refuses a callee holding any other
+// admission rule's backstop.** `InlineLeaves.inlineOpRole` refuses a callee holding an
 // `isUnsupportedInInlineBody` op and the unswitcher refuses a loop holding one, so the set that can reach
-// here is closed: the arith band, the two branches, `switch`, the two returns, the address ops, the
-// indirect accesses, every call kind and the two panic ops. Writing rewrites for the other seventy would
-// be unreachable generality — and a `panic` naming the op is what a disagreement between the two rules
-// looks like, instead of a silently mis-cloned body. Exhaustive with no bare `default`, so a variant
+// here is closed: every variant carrying `false` — the arith band, the two branches, `switch`, the two
+// returns, the address ops, the plain and ordered indirect accesses, `memFill`, the two atomics, the TLS
+// slot read and every call kind — plus the two panic ops, which `inlineOpRole` files `framed` rather than
+// `refusing` so a splice copies them, and minus `param`, which a splice maps to its argument instead.
+// Writing rewrites for the other seventy would be unreachable generality — and a `panic` naming the op is
+// what a disagreement between the two rules looks like, instead of a silently mis-cloned body. Exhaustive with no bare `default`, so a variant
 // appended to `StdOp` fails to compile here until it is consciously placed. A whole function copied for
 // a pool worker is not a splice and does not come through here: `StdUnit` deep-clones each op as it is.
 //
@@ -5739,9 +5764,9 @@ function cloneStdOp(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray, 
 		currentThreadToken or
 			tlsAlloc or
 			tlsSetValue or
-			tlsSlotLoad or
 			osSetEvent or
 			osEnterBackgroundPriority gives refuseUnclonable(op)
+		tlsSlotLoad(resultId, tebOffsetId) gives StdOp.tlsSlotLoad(clonedValue(resultId, subst: valueSubst), tebOffsetId: remappedValue(tebOffsetId, subst: valueSubst))
 		osFileOpenWriteExecutable gives refuseUnclonable(op)
 		osEnvBlock or
 			osEnvBlockFree gives refuseUnclonable(op)
@@ -6091,6 +6116,71 @@ export function assertNoSugarOps(module StdModule)
 		end 'eachOp'
 	end 'eachFunc'
 end 'assertNoSugarOps'
+
+// ⛔⛔ **EVERY DIRECT CALL THE FINISHED MODULE HOLDS, AGAINST THE PARAMETER COUNT OF THE FUNCTION IT
+// NAMES.** A call one argument short leaves the callee reading a register nothing wrote, and nothing
+// downstream notices: a backend resolves a callee by NAME and encodes whatever argument registers the op
+// carries, so the result is a box built from a garbage destructor word rather than a diagnostic. No user
+// program can spell one of these — every emitted call is the compiler's own — so a suite of Maxon
+// programs is not an instrument for it.
+//
+// ⭐⭐ **THE ARITY OF AN EMITTED CALLEE IS NOT A CONSTANT, WHICH IS WHY THIS IS A GATE RATHER THAN A
+// REVIEW HABIT.** `__mm_alloc` takes a third argument under `--debugstream` (`MmRuntime.buildMmAlloc`), so
+// a builder that spells its own `StdOp.call` is right in an untraced build and one argument short in a
+// traced one — green everywhere the flag is off, which is everywhere the suite looks.
+//
+// ⭐ **ASKED OF THE MODULE, NEVER OF A ROSTER OF RISKY CALLEES.** A cure at the sites someone listed
+// rots at the site nobody did. `InlineLeaves.SiteSplicer.splice` asks this same question and reaches only
+// the call sites that pass had already chosen to splice, so it is a detector the next narrowing of an
+// optimization takes away with it.
+//
+// ⚠ **AN INDIRECT CALL NAMES NO FUNCTION, SO THERE IS NOTHING HERE TO COMPARE IT AGAINST.**
+// `callIndirect`, `witnessCall` and `witnessTryCall` reach their callee through a register or an `.rdata`
+// witness slot; the module holds no parameter count for the body that will answer. What makes their arity
+// right is the interface method signature the Maxon tier checked and the descriptor the slot was baked
+// from. `classifyCallOperands` answers `other` for exactly those three, which is why this walk reads it
+// rather than the `isCall` flag beside it — and its `match` is exhaustive, so a new call variant must say
+// which side of that line it is on before it compiles.
+//
+// ⚠⚠ **A CALLEE THE MODULE DOES NOT CONTAIN IS PASSED, DELIBERATELY, AND A WRONG ARITY THERE COULD NOT
+// BE CAUGHT HERE ANYWAY.** Those are the hand-assembled Target-tier chunks — `__gt_context_switch`,
+// `__symtab_index` and their kin, bodies the backends lay into `.text` as BYTES under their own names
+// because they switch stacks or read a register file, which Std cannot express. There is no `IrFunction`
+// for one and therefore no parameter count anywhere in this tier to compare an argument list against; what
+// states their contract is the register-level ABI written in the chunk's own assembler. `TargetPrinter`'s
+// chunk pass divides the same set the same way — a requested name no FUNCTION answered is offered to
+// `codeChunks`.
+//
+// ⭐ **AND PASSING THEM IS NOT SILENCE.** A name that answers to neither a module function nor a chunk is
+// refused BY NAME at link (`X64Backend.resolveCallFixups`, `Arm64Backend.arm64ResolveCallFixups`, and
+// `StdToWasm`'s function-index resolution), so every call this arm lets through is one a later stage still
+// has to match to a real body. An admit-list of chunk names here would be a second roster of a set the
+// backends already hold — and one that goes stale the day a lane assembles a new chunk, refusing a legal
+// program.
+//
+// ⭐ The index is the CALLER's rather than one built here, and it is the index every backend resolves a
+// callee through (`BackendDispatch.buildBackend`), so "does the module contain this callee" is answered
+// here exactly as the encoder will answer it.
+export function assertCallsMatchCalleeArity(module StdModule, byName FunctionNameIndex)
+	var call = StdCallOperands.create()
+
+	for func in module.functions 'eachFunc'
+		for opIdx in module.liveOpIndices(func) 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("assertCallsMatchCalleeArity: live op index {opIdx} not in module.ops")
+			classifyCallOperands(op, call: call)
+
+			if not call.namesACallee() 'namesNoFunction'
+				continue
+			end 'namesNoFunction'
+
+			let calleeFunc = try byName.funcNamed(call.callee) otherwise continue
+
+			if call.argCount != calleeFunc.paramCount 'arity'
+				panic("assertCallsMatchCalleeArity: '{String.from(func.name)}' calls '{String.from(call.callee)}' with {call.argCount} argument(s) against {calleeFunc.paramCount} parameter(s) — every call the compiler emits fills every parameter slot of the callee it names, so the callee would read a register this call never wrote. A builder spelling its own `StdOp.call` for a callee whose arity depends on the build (`__mm_alloc` takes a tag under `--debugstream`) is the shape this catches: route it through the emitter that owns that callee's call")
+			end 'arity'
+		end 'eachOp'
+	end 'eachFunc'
+end 'assertCallsMatchCalleeArity'
 
 // The block ids control can transfer to from `block` — its terminator's targets, appended to `out`.
 //

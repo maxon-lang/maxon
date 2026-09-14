@@ -541,6 +541,82 @@ export function buildLoweringPasses() returns PassKindArray
 	return passes
 end 'buildLoweringPasses'
 
+// ⭐⭐ **THE THIRD SCHEDULE — the per-function members `Compiler.compileToCodeResult` runs over the
+// APPENDED RUNTIME BAND**, once, below the last thing that appends a function and below the band's own
+// `inlineLeaves` round. The install block's header owns the argument for running anything there at all;
+// this is the list, and every inclusion and exclusion below is a claim about the band's IR.
+//
+// ⛔ **THE THREE LOWERING-STAGE PASSES ABOVE THE FAN-OUT ARE NOT HERE, AND NONE OF THEM COULD BE.**
+// `lowerMaxonToStd` REPLACES the module and the band is already Std. `insertRangeChecks` replays
+// `Project`'s recorded `(blockId, stdOpPos)` sites, every one of them a coordinate in a function the
+// LOWERING produced — a second run would emit each of those guards a second time and reach no band
+// function at all. `inlineManagedPrimitives` expands a `__managed_*` call site against the element stride
+// and trivial-element facts the Maxon tier recorded FOR THAT SITE; a builder-emitted call carries no such
+// record, and the bodies it would expand INTO are the managed runtime's own.
+//
+// ⛔ **AND THE TWO WHOLE-MODULE PASSES BELOW IT ARE NOT HERE EITHER.** `promoteStackRecords` decides on a
+// record CONSTRUCTOR's shape, which the Maxon lowering mints and no builder emits — and it is whole-module,
+// so a second run would re-decide every promotion the first one made, on functions that already carry the
+// `stackRecordAddr` it produced. `valueTupleReturn` rewrites a callee's RETURN CONVENTION together with its
+// call sites, and a band body's convention is fixed by the builder that emitted it and by the entry stub and
+// hand-assembled chunks that call it — callers no Std walk can see, so changing one here is a link failure
+// rather than an optimization.
+//
+// ⚠ **THE VERSIONING TRIO IS EXCLUDED ON ITS PRODUCER.** `unswitchInvariantGuards` versions a loop on the
+// guard chain `inlineManagedPrimitives` puts before an element access, `foldEstablishedGuards` folds a guard
+// that chain has already proved, and `refineVersionedRanges` visits only what the versioning rewrote. That
+// producer does not run over the band, so all three would walk it to find nothing — and the first is the one
+// member that is NOT idempotent, so a band run of it would version a loop the pipeline had already versioned
+// if the two ever met. `runStdPassesOverTheBand` is pass-major and so cannot carry the answer the third one
+// needs, which is what refuses the pair structurally rather than by this paragraph.
+//
+// ⚠ `threadConstantBranches` is excluded on its input: it rewrites a join block whose whole body is one
+// `cmpImm` on a block arg, which is the shape a `try`'s continuation makes — minted by the Maxon lowering,
+// by no builder, and unreachable by splicing because the called-once rule refuses a `throwing` callee.
+export function buildEmittedBandPasses() returns StdFanOutStepArray
+	var members = StdFanOutStepArray.create()
+
+	// The block-arg cleanups FIRST, for the register-allocator invariant `buildLoweringPasses` states: the
+	// band's round of `inlineLeaves` has just spliced bodies in, and a splice is what mints a continuation
+	// block whose args may carry nothing or be read by nothing.
+	members.push(StdFanOutStep.pruneDeadBlockArgs)
+	members.push(StdFanOutStep.elimTrivialBlockArgs)
+
+	// ⭐⭐ **`foldConstants` IS THE ONE THIS RUNG IS FOR.** A builder hands a tier entry point a LITERAL —
+	// the allocator's zeroing flag is a `const` per entry point — and until the callee's body stands in the
+	// caller there is no constant here to propagate. It is the reason the pass is a Std pass rather than a
+	// parser one (`PassKind`), asked one boundary over.
+	members.push(StdFanOutStep.foldConstants)
+
+	// The division reduction before the operand fold, and the operand fold before CSE, for their own reasons
+	// in `PassKind`: the shift counts and the multiply-back become immediates, and an expression comparison
+	// cannot call two occurrences of one literal equal until each has moved INTO the op that reads it.
+	members.push(StdFanOutStep.strengthReduceDivision)
+	members.push(StdFanOutStep.foldConstOperands)
+
+	// The interval refinement, which is what DELETES a spliced tier body's entry guards once the band
+	// caller's own constants have decided them — the cross-boundary fold this schedule exists for, one pass
+	// over from the constant one.
+	members.push(StdFanOutStep.refineValueRanges)
+
+	// The cleanups and the folding pair again after the last branch fold, for `buildLoweringPasses`' reasons:
+	// a folded branch orphans an arm, a block left with one predecessor keeps its args as single-value phis,
+	// and a phi folded onto the `const` that fed it turns its readers into const-operand ops nothing after
+	// this point would evaluate.
+	members.push(StdFanOutStep.pruneDeadBlockArgs)
+	members.push(StdFanOutStep.elimTrivialBlockArgs)
+	members.push(StdFanOutStep.foldConstants)
+	members.push(StdFanOutStep.foldConstOperands)
+
+	// CSE last: the band is hand-built IR with no constant interning at all, so one expression a builder
+	// wrote three times is three ops until the operand fold has run — exactly the reason this pass sits
+	// where it does in the lowering schedule. It reaches only what the dialect calls PURE, and a load is
+	// `isPure: false`, so it cannot carry a read of a word another thread writes across an iteration —
+	// which is what separates it from the hoist `requireBandStepIsSound` refuses.
+	members.push(StdFanOutStep.commonSubexpressionElimination)
+	return members
+end 'buildEmittedBandPasses'
+
 // The pipeline owns the IR modules across their successive phases. It starts with
 // `maxonModule` populated by the parser (Chunk C); the lowering pass reads one
 // field and populates the next. Unpopulated fields hold empty modules so a read
@@ -698,7 +774,7 @@ export type PassPipeline
 			lowerMaxonToStd then self.stdModule = lowerMaxonToStd(self.maxonModule, project: self.project, funcNames: self.funcNames)
 			insertRangeChecks then insertRangeChecks(self.project, module: self.stdModule)
 			inlineManagedPrimitives then inlineManagedPrimitives(self.project, module: self.stdModule)
-			inlineLeaves then inlineLeaves(self.project, module: self.stdModule)
+			inlineLeaves then inlineLeaves(self.project, module: self.stdModule, round: SpliceRound.everyCaller)
 
 			// Over the whole module, which is everything that EXISTS at this point: the runtime band is
 			// appended below the pipeline, and `Compiler.compileToCodeResult` runs `strengthReduceDivision`

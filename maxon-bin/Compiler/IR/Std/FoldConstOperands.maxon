@@ -391,29 +391,9 @@ export function classifyFoldableDef(op StdOp, def StdFoldableDef)
 	end 'c'
 end 'classifyFoldableDef'
 
-// Fold constant operands in `module.functions[firstFuncIndex …]`, in place.
-//
-// ⭐⭐ **IT TAKES A START INDEX BECAUSE IT RUNS TWICE, OVER TWO DISJOINT HALVES OF ONE MODULE.**
-// The pipeline runs it over the whole module (`firstFuncIndex: 0`) — every function lowered from source.
-// `Compiler.compileToCodeResult` then runs it a SECOND time over just the functions the runtime installs
-// and the body synthesizers APPENDED after the pipeline, which the first run could not have seen because
-// they did not exist yet. A start index is what makes the second run cost only what it folds; re-walking
-// from 0 would re-collect a `ConstValueMap` for every user function to fold nothing in it.
-//
-// The two runs are disjoint by construction — the appended band starts exactly where the pipeline's module
-// ended — so no function is folded twice, and folding is not idempotent-by-luck: it is simply never asked.
-export function foldConstOperands(module StdModule, firstFuncIndex FuncIndex)
-	logDebug(LogCategory.ir, message: function() gives foldConstOperandsHeadline(firstFuncIndex, funcCount: module.funcCount()))
-
-	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
-	// recorded as writing that same storage. ⚖ USER RULING — canonical note at
-	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
-	for fnIndex in firstFuncIndex upto module.functions.count() 'eachFunc'
-		foldConstOperandsInFunc(module, func: try module.functions.get(fnIndex) otherwise panic("foldConstOperands: fnIndex {fnIndex} is below module.functions.count()"))
-	end 'eachFunc'
-end 'foldConstOperands'
-
-// The pass's headline: the function range it is about to fold.
+// The pass's headline: the function range its driver is about to fold. Both drivers print it — the pool
+// over the whole module, `runStdPassesOverTheBand` over the appended runtime band — so the range is the
+// argument rather than a constant here.
 module function foldConstOperandsHeadline(firstFuncIndex FuncIndex, funcCount FuncCount) returns String
 	return "foldConstOperands: functions [{firstFuncIndex}, {funcCount})"
 end 'foldConstOperandsHeadline'

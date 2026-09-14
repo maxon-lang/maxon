@@ -39,6 +39,12 @@ let RawSchedMaxActiveWorkersAddrName = b"__Raw.schedMaxActiveWorkersAddr"
 let RawSlabArenaListAddrName = b"__Raw.slabArenaListAddr"
 let RawSlabArenaMapL1AddrName = b"__Raw.slabArenaMapL1Addr"
 let RawSlabStateAddrName = b"__Raw.slabStateAddr"
+let RawSlabSizeToClass8AddrName = b"__Raw.slabSizeToClass8Addr"
+let RawSlabSizeToClass128AddrName = b"__Raw.slabSizeToClass128Addr"
+let RawSlabClassGeomAddrName = b"__Raw.slabClassGeomAddr"
+let RawDsBaseAddrName = b"__Raw.dsBaseAddr"
+let RawDsAllocIdAddrName = b"__Raw.dsAllocIdAddr"
+let RawTlsSlotLoadName = b"__Raw.tlsSlotLoad"
 let RawLoadWordName = b"__Raw.loadWord"
 let RawStoreWordName = b"__Raw.storeWord"
 let RawLoadByteName = b"__Raw.loadByte"
@@ -104,6 +110,32 @@ export enum RawIntrinsic
 	// IS the initial state rather than a default. `SlabRuntime.slabRuntimeGlobals` lays the slot out where
 	// that body survives — so a surviving body cannot address a word the image omitted.
 	slabStateAddr
+
+	// ⭐⭐ **THE ALLOCATOR'S THREE `.rdata` TABLES — the two reverse size lookups and the packed class
+	// geometry.** A ladder entry is a pure function of its index, so the tables are baked into the read-only
+	// image by `SlabRuntime.installSlabRuntime` and a body needs their ADDRESS rather than their bytes.
+	//
+	// ⚠ **A BUILDER REGISTERS THEM AND A BODY NAMES THEM, AND ONE BIT DECIDES BOTH.** The registration sits
+	// behind `usage.usesHeap`, and `LibraryFacts.withCompilerCalledTierUnreached` files every name of
+	// `runtime/SlabRuntime.maxon` unreached on that same bit — so a program with no allocator registers no
+	// table and lowers no body that could name one.
+	slabSizeToClass8Addr
+	slabSizeToClass128Addr
+	slabClassGeomAddr
+
+	// The DebugStream producer's two words — the ring BASE, whose zero IS "no monitor attached" and is what
+	// every event site tests before it computes anything, and the allocation-id counter the monitor reads
+	// events back by. `DebugStreamRuntime.debugStreamRuntimeGlobals` is in the data roster unconditionally
+	// with `DataReach.walked`, so each is laid out wherever a surviving body names it — a traced build and an
+	// untraced one alike.
+	dsBaseAddr
+	dsAllocIdAddr
+
+	// ⭐⭐ **WHICH MACHINE AM I — the read every allocation and every free begins with.** The scheduler
+	// publishes a TEB/TCB offset; this answers the word stored there for THIS OS thread. It is the one row in
+	// the addressing band that names a host facility, because a lane with one thread has no per-thread
+	// storage to read and a constant would hand every reader the same slot rather than answer the question.
+	tlsSlotLoad
 
 	loadWord
 	storeWord
@@ -251,6 +283,30 @@ function rawIntrinsicLookupOf(callee ByteArray) returns RawIntrinsicLookup
 		return RawIntrinsicLookup.found(RawIntrinsic.slabStateAddr)
 	end 'slabStateAddr'
 
+	if callee.equals(RawSlabSizeToClass8AddrName) 'slabSizeToClass8Addr'
+		return RawIntrinsicLookup.found(RawIntrinsic.slabSizeToClass8Addr)
+	end 'slabSizeToClass8Addr'
+
+	if callee.equals(RawSlabSizeToClass128AddrName) 'slabSizeToClass128Addr'
+		return RawIntrinsicLookup.found(RawIntrinsic.slabSizeToClass128Addr)
+	end 'slabSizeToClass128Addr'
+
+	if callee.equals(RawSlabClassGeomAddrName) 'slabClassGeomAddr'
+		return RawIntrinsicLookup.found(RawIntrinsic.slabClassGeomAddr)
+	end 'slabClassGeomAddr'
+
+	if callee.equals(RawDsBaseAddrName) 'dsBaseAddr'
+		return RawIntrinsicLookup.found(RawIntrinsic.dsBaseAddr)
+	end 'dsBaseAddr'
+
+	if callee.equals(RawDsAllocIdAddrName) 'dsAllocIdAddr'
+		return RawIntrinsicLookup.found(RawIntrinsic.dsAllocIdAddr)
+	end 'dsAllocIdAddr'
+
+	if callee.equals(RawTlsSlotLoadName) 'tlsSlotLoad'
+		return RawIntrinsicLookup.found(RawIntrinsic.tlsSlotLoad)
+	end 'tlsSlotLoad'
+
 	if callee.equals(RawLoadWordName) 'loadWord'
 		return RawIntrinsicLookup.found(RawIntrinsic.loadWord)
 	end 'loadWord'
@@ -354,6 +410,12 @@ export function rawIntrinsicCalleeName(intrinsic RawIntrinsic) returns ByteArray
 		slabArenaListAddr gives RawSlabArenaListAddrName
 		slabArenaMapL1Addr gives RawSlabArenaMapL1AddrName
 		slabStateAddr gives RawSlabStateAddrName
+		slabSizeToClass8Addr gives RawSlabSizeToClass8AddrName
+		slabSizeToClass128Addr gives RawSlabSizeToClass128AddrName
+		slabClassGeomAddr gives RawSlabClassGeomAddrName
+		dsBaseAddr gives RawDsBaseAddrName
+		dsAllocIdAddr gives RawDsAllocIdAddrName
+		tlsSlotLoad gives RawTlsSlotLoadName
 		loadWord gives RawLoadWordName
 		storeWord gives RawStoreWordName
 		loadByte gives RawLoadByteName
@@ -387,7 +449,13 @@ export function rawArgShapeOf(intrinsic RawIntrinsic) returns RawArgShape
 			schedMaxActiveWorkersAddr or
 			slabArenaListAddr or
 			slabArenaMapL1Addr or
-			slabStateAddr gives RawArgShape.nothing
+			slabStateAddr or
+			slabSizeToClass8Addr or
+			slabSizeToClass128Addr or
+			slabClassGeomAddr or
+			dsBaseAddr or
+			dsAllocIdAddr gives RawArgShape.nothing
+		tlsSlotLoad gives RawArgShape.oneWord
 		loadWord or
 			loadByte gives RawArgShape.wordThenConstant
 		storeWord or
@@ -422,6 +490,12 @@ export function rawResultKindOf(intrinsic RawIntrinsic) returns RawResultKind
 			slabArenaListAddr or
 			slabArenaMapL1Addr or
 			slabStateAddr or
+			slabSizeToClass8Addr or
+			slabSizeToClass128Addr or
+			slabClassGeomAddr or
+			dsBaseAddr or
+			dsAllocIdAddr or
+			tlsSlotLoad or
 			loadWord or
 			loadByte or
 			atomicAddWord or
@@ -477,34 +551,35 @@ end 'rawArgumentIsTheConstant'
 // for every runtime entry, asked of an op instead — every OS row names a facility that exists for exactly
 // these Std ops.
 //
-// ⛔ **NOTHING REPORTS OFF IT YET, AND THE SITE THAT WOULD IS `LibraryFacts.substrateEntries`.**
-// `SemanticCheck.requireTargetSupportsRawIntrinsic` is the reader, and it blames only a function that is
-// the AUTHOR'S — while a `__Raw` op can stand only in a runtime file, which is the library's. A runtime
-// entry's substrate need reaches the user through `substrateEntries`, at the call that CROSSES into the
-// library, and that table is built from CALLEES: an op names none, so a row's facility reaches no
-// user-refusable site. Until it does, a lane missing the facility reaches instruction selection.
+// ⭐⭐ **IT REPORTS AT THE CROSSING, BECAUSE AN OP HAS NO CALLEE FOR A GATE TO MEET BY NAME.**
+// `maxonOpCalleeKind` answers `noCallee`, so no door keyed on a callee can ever see one, and a gate placed
+// at the op itself could never fire: a `__Raw` op stands only in a `runtime/` file, which is library source,
+// and `SemanticCheck.blameTargetErrorsIn` is false there for the reason it is false for `stdlib/` — a
+// diagnostic in a file the user never opened. So `StdlibSource.noteSubstrateRawIntrinsic` SEEDS the
+// substrate fixpoint with the row's own mangled spelling, `TargetFacilities.calleeHostFacility` reads this
+// column when that entry comes back, and `SemanticCheck.requireTargetSupportsCallee` answers E3104 at the
+// first call from user code into the library body that reaches the op — in its own wording, naming the row
+// rather than a runtime entry that does not exist.
 //
-// ⚠ **FOUR ROWS NAME A FACILITY A SUPPORTED LANE DOES NOT PROVIDE, AND WHAT KEEPS THE GAP SHUT IS A
-// SECOND ROUTE OR DEAD-FUNCTION ELIMINATION RATHER THAN THIS ONE.** `osCpuCount`, `osGetPid` and
-// `osEnterBackgroundPriority` have no wasm lowering, and a program asking for one is refused at the call to
-// `__cpu_count`, `__proc_pid` or `__proc_bg_priority` by `TargetFacilities.calleeHostFacility`, which reads
-// the CALLEE name and band — not this column. `osThreadCpuTicks` is spelled by no REACHED tier body, so
-// dead-function elimination removes it before instruction selection and nothing exercises its route at all.
-// ⇒ **a reached tier body spelling one of the four reaches instruction selection with nothing said**, and
-// the substrate-entry row below is what closes it.
+// ⛔⛔ **ONE ROAD IS STILL UNREACHED BY THAT, AND ITS PROTECTION IS A BUILDER'S GATE RATHER THAN A
+// DIAGNOSTIC: A TIER BODY WHOSE ONLY CALLER IS AN INSTALLER-MINTED `StdOp.call`.** The slab allocator is
+// the family in that position — no Maxon call site crosses into it, so there is no crossing to report at.
+// What keeps a lane from meeting an op it cannot lower there is that the installer forks on
+// `TargetFacilities.machineModel` before it mints anything. ⇒ **A ROW SPELLED FROM SUCH A BODY OWES THAT
+// FORK, and the row's facility column is the statement of which lanes the fork must exclude.**
 //
-// ⭐ **THE THREE `osLock*` ROWS WERE IN THAT LIST AND ARE OUT OF IT: `HostFacility.hostMutex` IS NOW `true`
-// ON ALL FIVE LANES.** wasm lowers each to zero instructions (`StdToWasm.emitBodyOp`, one thread means
-// exclusion is already total) and the three POSIX lanes install their chunks on
-// `PosixRuntime.posixUsesHostLock`, a gate that covers every producer including
-// `runtime/SlabRuntime.maxon`'s — which is what a REACHED tier body spelling them required.
+// ⚠ **THREE ROWS NAME A FACILITY A SUPPORTED LANE DOES NOT PROVIDE AND ARE MET EARLIER BY A SECOND
+// ROUTE.** `osCpuCount`, `osGetPid` and `osEnterBackgroundPriority` have no wasm lowering, and a program
+// asking for one is refused at the call to `__cpu_count`, `__proc_pid` or `__proc_bg_priority` by
+// `calleeHostFacility`'s CALLEE bands, which rank above a raw seed (`SemanticCheck.substrateEntryRank`) so
+// the sharper sentence wins. `osThreadCpuTicks` is spelled by no REACHED tier body at all.
 //
-// ⚠ **`none` IS "NO HOST FACILITY", NOT "EVERY TARGET".** The word and address rows are pure code
-// generation on the lanes that have an addressable frame, and wasm is not one of them: a wasm local has no
-// address, so `StdOp.stackRecordAddr` cannot be selected there at all. That is a MISSING FACILITY ROW
-// rather than a missing answer here — no row of `HostFacility` names an addressable frame, because nothing
-// needed to ask until `__Raw.scratch` existed — and it is the next rung's to add, alongside the first
-// runtime body that spends it.
+// ⚠ **`none` IS "NO HOST FACILITY", NOT "EVERY TARGET", AND ONE ROW IS STILL OUTSIDE WHAT THIS COLUMN CAN
+// SAY.** The word and address rows are pure code generation on the lanes that have an addressable frame, and
+// wasm is not one of them: a wasm local has no address, so `StdOp.stackRecordAddr` cannot be selected there
+// at all. `__Raw.scratch` therefore answers `none` while a REACHED tier body spelling it would die in that
+// backend — a MISSING FACILITY ROW (no `HostFacility` case names an addressable frame) rather than a wrong
+// answer here.
 union RawHostFacility
 	none
 	required(facility HostFacility)
@@ -532,12 +607,18 @@ export function rawHostFacilityOf(intrinsic RawIntrinsic) returns RawHostFacilit
 		osLockInit or
 			osLockEnter or
 			osLockLeave gives RawHostFacility.required(HostFacility.hostMutex)
+		tlsSlotLoad gives RawHostFacility.required(HostFacility.threadLocalSlot)
 		scratch or
 			schedNumProcsAddr or
 			schedMaxActiveWorkersAddr or
 			slabArenaListAddr or
 			slabArenaMapL1Addr or
 			slabStateAddr or
+			slabSizeToClass8Addr or
+			slabSizeToClass128Addr or
+			slabClassGeomAddr or
+			dsBaseAddr or
+			dsAllocIdAddr or
 			loadWord or
 			storeWord or
 			loadByte or

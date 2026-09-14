@@ -612,3 +612,57 @@ mm_decref ArrayRecord #3 rc=0
 mm_free ArrayRecord #3
 mm_free Facts #1
 ```
+
+<!-- test: a-cloned-service-handle-box-carries-its-tag -->
+⭐⭐ **THE ONE `__mm_alloc` A Std-TIER BODY ASKS FOR WITH NO TYPE TO NAME, AND THE TAG IS WHAT SAYS THE
+TRACED CALL WAS SPELLED WHOLE.** `handle.clone()` mints a SECOND handle box through
+`__mbox_handle_clone_box` — one Std-tier entry serving every service, so it has no layout to name and its
+box is `Untagged`, which the monitor renders `tag=0`. Under `--debugstream` `__mm_alloc` takes a THIRD
+argument, the tag index; a caller that passes only two leaves the callee reading a register nothing wrote,
+and the garbage lands in this line's tag — a live box, a clean exit, and a trace that lies about what was
+allocated.
+
+⚠ **THIS IS THE ONLY CHANNEL A PROGRAM HAS ONTO THAT ARGUMENT.** The tag is written to the box's
+DebugStream prefix word and read back by every later event on it, so nothing an untraced build computes can
+see it, and no exit code or leak gate can either. **If `tag=0` here ever becomes a number, the clone's alloc
+call is short an argument.**
+<!-- MmTrace -->
+```maxon
+function main() returns ExitCode
+	let a = spawn Counter.create()
+	let b = a.clone()
+	b.tick()
+	return 0
+end 'main'
+
+type Counter
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function tick()
+		self.n = self.n + 1
+	end 'tick'
+end 'Counter'
+
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```mm-trace
+mm_alloc Counter #1 size=8
+mm_alloc Counter.handle #2 size=8
+mm_alloc tag=0 #3 size=8
+mm_alloc Counter.request #4 size=16
+mm_decref tag=0 #3 rc=0
+mm_free tag=0 #3
+mm_decref Counter.handle #2 rc=0
+mm_free Counter.handle #2
+mm_decref Counter.request #4 rc=0
+mm_free Counter.request #4
+mm_decref Counter #1 rc=0
+mm_free Counter #1
+```
