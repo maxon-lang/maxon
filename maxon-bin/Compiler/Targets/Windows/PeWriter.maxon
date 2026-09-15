@@ -1344,10 +1344,10 @@ end 'buildSectionList'
 
 // What goes into a produced binary's `VS_VERSIONINFO`.
 //
-// ⚠ **THE VERSION DESCRIBES THE PROGRAM BEING BUILT, NOT THE COMPILER THAT BUILT IT.** Those are
-// different facts and conflating them would tell every user's binary it was version 0.1.0 of
-// something. The compiler's own identity goes in `FileDescription`, where it is true of any output;
-// the version fields default to zero and are set by `--product-version`.
+// ⚠ **EVERY FIELD DESCRIBES THE PROGRAM BEING BUILT, EXCEPT `Comments`.** Windows presents
+// `FileDescription` as the program's NAME — Task Manager's process list, the "Open with" list, a UAC
+// or firewall prompt — so a compiler credit there renames every program this compiler builds.
+// `Comments` is the field for provenance, and it is the only one that names the compiler.
 type PeVersionInfo
 	export let major as VersionField
 	export let minor as VersionField
@@ -1355,21 +1355,19 @@ type PeVersionInfo
 	export let build as VersionField
 	export let product as String
 	export let originalFilename as String
-	export let company as String
-	export let description as String
-	export let tableName as String
+	export let comments as String
 
-	export static function create(major VersionField, minor VersionField, patch VersionField, build VersionField, product String, originalFilename String, company String, description String, tableName String) returns PeVersionInfo
-		return Self{major: major, minor: minor, patch: patch, build: build, product: product, originalFilename: originalFilename, company: company, description: description, tableName: tableName}
+	export static function create(major VersionField, minor VersionField, patch VersionField, build VersionField, product String, originalFilename String, comments String) returns PeVersionInfo
+		return Self{major: major, minor: minor, patch: patch, build: build, product: product, originalFilename: originalFilename, comments: comments}
 	end 'create'
 end 'PeVersionInfo'
 
 typealias VersionField = int(0 to 65535)
 
-// ⚠ A NON-ASCII STEM IS DROPPED RATHER THAN MANGLED. `verUtf16` widens bytes, which is only correct
-// for ASCII; a UTF-8 stem widened byte-by-byte would produce mojibake in Explorer. The resource is
-// still emitted — with the name omitted — because a binary with a version and no product name is
-// more useful than one with neither.
+// ⚠ A NON-ASCII VALUE IS DROPPED RATHER THAN MANGLED. `verUtf16` widens bytes, which is only correct
+// for ASCII; UTF-8 widened byte-by-byte is mojibake in Explorer. The resource is still emitted with
+// that field empty, because a binary with a version and no product name is more useful than one with
+// neither.
 function peAsciiOrEmpty(text String) returns String
 	for b in text.toByteArray() 'eachByte'
 		if b > 127 'nonAscii'
@@ -1380,12 +1378,6 @@ function peAsciiOrEmpty(text String) returns String
 	return text
 end 'peAsciiOrEmpty'
 
-// The version resource for one output.
-//
-// ⚠ **THE VERSION FIELDS ARE ZERO UNTIL SOMETHING SETS THEM, AND THAT IS THE HONEST DEFAULT.** The
-// compiler knows its OWN version and nothing about the version of the program it is compiling;
-// stamping the former onto the latter would tell every user's binary it was 0.1.0 of something. What
-// IS true of any output is which compiler produced it, and that goes in `FileDescription`.
 // One component of a dotted version, or 0. ⚠ A MALFORMED VERSION IS NOT A BUILD FAILURE: the string
 // comes from a manifest a person wrote, and refusing to build over it would be a compiler refusing to
 // compile correct code because its metadata was untidy. A component that is not a number reads 0, and
@@ -1409,15 +1401,20 @@ end 'versionComponent'
 
 typealias ProductVersionIndex = int(0 to 3)
 
+// The version resource for one output.
+//
+// ⚠ **THE VERSION FIELDS ARE ZERO UNTIL THE MANIFEST'S `version` SETS THEM.** The compiler knows its
+// OWN version and nothing about the program's; stamping the former onto the latter would tell every
+// user's binary it was 0.1.0 of something.
+//
+// ⚠ THE PRODUCT NAME IS THE OUTPUT'S STEM, not the manifest's `name`: that field is whatever SELECTED
+// the build — a target name, or the source path, which is `.` for a project built from its own
+// directory.
 function peVersionInfoFor(outputPath FilePath, productVersion String) returns PeVersionInfo
 	let stem = peAsciiOrEmpty(outputPath.stem())
 	let suffix = outputPath.fileExtension()
 
-	// ⚠ THE PRODUCT NAME IS THE OUTPUT'S STEM, not the manifest's `name`: that field is whatever
-	// SELECTED the build — a target name, or the source path, which is `.` for a project built from its
-	// own directory.
-	let product = stem
-	return PeVersionInfo.create(versionComponent(productVersion, index: 0), minor: versionComponent(productVersion, index: 1), patch: versionComponent(productVersion, index: 2), build: versionComponent(productVersion, index: 3), product: product, originalFilename: "{stem}{suffix}", company: "", description: "Built with Maxon {CompilerVersion}", tableName: "040904B0")
+	return PeVersionInfo.create(versionComponent(productVersion, index: 0), minor: versionComponent(productVersion, index: 1), patch: versionComponent(productVersion, index: 2), build: versionComponent(productVersion, index: 3), product: stem, originalFilename: "{stem}{suffix}", comments: peAsciiOrEmpty("Built with Maxon {CompilerVersion}"))
 end 'peVersionInfoFor'
 
 // --- VS_VERSIONINFO (RT_VERSION) ---
@@ -1449,12 +1446,16 @@ let VerCodePageUtf16 = 0x04B0
 let VerTypeBinary = 0
 let VerTypeText = 1
 
+// The multiplier that places a 16-bit field in the high half of a DWORD.
+let VerHighWord = 65536
+
 // The three words every structure in this format opens with.
 let VerHeaderBytes = 6
 
 // A `String` as UTF-16LE with its terminator. Every key and value here is ASCII by construction — the
-// keys are format constants, the values a file stem and a dotted version — so widening each byte IS
-// the conversion. `peVersionInfoFor` refuses a non-ASCII stem rather than letting it be mangled here.
+// keys are format constants, the values a file stem, a dotted version and the compiler's credit — so
+// widening each byte IS the conversion. `peVersionInfoFor` refuses a non-ASCII stem rather than letting
+// it be mangled here.
 function verUtf16(text String) returns ByteArray
 	var out = ByteArray.create()
 
@@ -1533,8 +1534,8 @@ end 'verContainer'
 // dotted string below is what a human sees; both come from the same four fields so they cannot
 // disagree.
 function verFixedFileInfo(version PeVersionInfo) returns ByteArray
-	let high = ((version.major * 65536) + version.minor) as MachineWord
-	let low = ((version.patch * 65536) + version.build) as MachineWord
+	let high = ((version.major * VerHighWord) + version.minor) as MachineWord
+	let low = ((version.patch * VerHighWord) + version.build) as MachineWord
 
 	var out = ByteArray.create()
 	writeDword(out, value: VerFixedFileInfoSignature)
@@ -1553,20 +1554,35 @@ function verFixedFileInfo(version PeVersionInfo) returns ByteArray
 	return out
 end 'verFixedFileInfo'
 
+// The string table's name: the language and the code page as one DWORD in hex, most significant digit
+// first. Prepending each little-endian byte is what puts them in that order.
+function verStringTableName() returns String
+	var bytes = ByteArray.create()
+	writeDword(bytes, value: (VerLangIdEnUs * VerHighWord) + VerCodePageUtf16)
+
+	var name = ""
+
+	for b in bytes 'eachByte'
+		name = "{hexByte(b as MachineWord)}{name}"
+	end 'eachByte'
+
+	return name
+end 'verStringTableName'
+
 // The whole `VS_VERSIONINFO` resource.
 function buildVersionResource(version PeVersionInfo) returns ByteArray
 	let dotted = "{version.major}.{version.minor}.{version.patch}.{version.build}"
 
 	var strings = ByteArray.create()
-	verAppendChild(strings, base: 0, child: verStringEntry("CompanyName", value: version.company))
-	verAppendChild(strings, base: 0, child: verStringEntry("FileDescription", value: version.description))
+	verAppendChild(strings, base: 0, child: verStringEntry("Comments", value: version.comments))
+	verAppendChild(strings, base: 0, child: verStringEntry("FileDescription", value: version.product))
 	verAppendChild(strings, base: 0, child: verStringEntry("FileVersion", value: dotted))
 	verAppendChild(strings, base: 0, child: verStringEntry("InternalName", value: version.product))
 	verAppendChild(strings, base: 0, child: verStringEntry("OriginalFilename", value: version.originalFilename))
 	verAppendChild(strings, base: 0, child: verStringEntry("ProductName", value: version.product))
 	verAppendChild(strings, base: 0, child: verStringEntry("ProductVersion", value: dotted))
 
-	let stringTable = verContainer(version.tableName, children: strings)
+	let stringTable = verContainer(verStringTableName(), children: strings)
 	let stringFileInfo = verContainer("StringFileInfo", children: stringTable)
 
 	// ⚠ `Translation` IS THE ONE BINARY VALUE HERE, and its two words are in the OPPOSITE order to
