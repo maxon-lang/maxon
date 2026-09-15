@@ -1,6 +1,10 @@
-# Install Maxon on Windows:
+# Install Maxon on Windows, from PowerShell:
 #
-#   powershell -c "irm maxon.dev/install.ps1|iex"
+#   irm https://maxon.dev/install.ps1 | iex
+#
+# From cmd.exe or another shell, which runs it in a PowerShell of its own:
+#
+#   powershell -c "irm https://maxon.dev/install.ps1 | iex"
 #
 # A specific release:
 #
@@ -8,9 +12,12 @@
 #
 # Downloads the x64 Windows release from GitHub, checks it against the release's SHA256SUMS, and
 # installs it into %USERPROFILE%\.maxon: the compiler in .maxon\bin, the standard library in
-# .maxon\stdlib and the language runtime in .maxon\runtime. Adds .maxon\bin to the user PATH; no
-# administrator rights are needed. Running it again installs the latest release, or says the install
-# is current.
+# .maxon\stdlib and the language runtime in .maxon\runtime. Adds .maxon\bin to the user PATH and to
+# the PATH of the session it runs in; no administrator rights are needed. Running it again installs the
+# latest release, or says the install is current.
+#
+# A PowerShell started for it cannot change the PATH of the shell that started it, so in that case this
+# prints the line that does, in that shell's own syntax.
 #
 # Parameters: -Version X.Y.Z, -Force (reinstall a current install), -NoPathUpdate.
 # Environment: MAXON_INSTALL (default %USERPROFILE%\.maxon), MAXON_DOWNLOAD_BASE (a mirror laid out
@@ -24,7 +31,7 @@
 #
 # ASCII ONLY: Windows PowerShell 5.1's `irm` decodes a response without a charset as ISO-8859-1.
 # NEVER `exit`: under `irm | iex` this runs in whatever session `iex` is in, and `exit` would close it.
-# So `powershell -c "irm ...|iex"` exits 0 whatever happened; a caller that needs the status runs
+# So `powershell -c "irm ... | iex"` exits 0 whatever happened; a caller that needs the status runs
 #   & ([scriptblock]::Create((irm https://maxon.dev/install.ps1))); exit $LASTEXITCODE
 
 param(
@@ -278,6 +285,34 @@ function Install-Maxon {
         return $true
     }
 
+    # The program that started this PowerShell, or $null when that cannot be told. A process ID is reused
+    # once its process exits, so a "parent" created after this process is an unrelated one.
+    function Get-ParentProcessName {
+        try {
+            $self = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $PID"
+            $parent = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $($self.ParentProcessId)"
+        } catch {
+            Write-Verbose "could not look up the process that started this one ($($_.Exception.Message))"
+            return $null
+        }
+        if ($null -eq $parent -or $parent.CreationDate -gt $self.CreationDate) {
+            return $null
+        }
+        return $parent.Name
+    }
+
+    # The line that appends $dir to PATH in the shell named, or $null for a program that is not a shell
+    # this script can spell one for, such as the terminal an `irm | iex` session runs in.
+    function Get-PathLine([string]$shell, [string]$dir) {
+        switch ($shell) {
+            'cmd.exe' { return "set ""PATH=%PATH%;$dir""" }
+            { $_ -in 'powershell.exe', 'pwsh.exe' } { return "`$env:Path += ';$($dir.Replace("'", "''"))'" }
+            # Git Bash, MSYS2 and Cygwin, whose PATH holds POSIX spellings of Windows directories.
+            { $_ -in 'bash.exe', 'sh.exe', 'zsh.exe' } { return "export PATH=""`$PATH:`$(cygpath -u '$($dir.Replace("'", "'\''"))')""" }
+        }
+        return $null
+    }
+
     if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
         throw 'this installer is for Windows; on macOS or Linux run: curl -fsSL https://maxon.dev/install.sh | sh'
     }
@@ -391,6 +426,14 @@ function Install-Maxon {
         if (-not $onSessionPath) {
             # Appended, not prepended: the same precedence a new terminal will give it.
             $env:Path = $env:Path.TrimEnd(';') + ';' + $bin
+
+            # This session inherited its PATH, so a shell that started it lacks the directory too, and
+            # outlives it: `powershell -c` from cmd.exe ends with this script.
+            $caller = Get-ParentProcessName
+            $line = if ($null -eq $caller) { $null } else { Get-PathLine $caller $bin }
+            if ($null -ne $line) {
+                Say "the $caller that started this PowerShell keeps its own PATH; to run ``maxon`` in it now:  $line"
+            }
         }
     } elseif (-not $onSessionPath) {
         Say "$bin is not on your PATH; add it to run ``maxon`` by name"

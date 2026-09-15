@@ -156,6 +156,42 @@ jobs:
           count="$(grep -c 'Added by the Maxon installer' "$profile")"
           [ "$count" = 1 ] || { echo "::error::$profile has $count installer lines"; exit 1; }
 
+      # `curl | sh` cannot reach its caller's PATH, so a personal bin directory the caller's PATH already
+      # holds is the only place `maxon` becomes runnable in that terminal at once. The compile goes
+      # through the link, because stdlib/ is found by walking up from the RESOLVED executable.
+      - name: With ~/.local/bin on PATH, `maxon` is linked there and runs at once
+        run: |
+          set -euo pipefail
+          home="$(mktemp -d)"
+          mkdir -p "$home/.local/bin"
+          caller_path="$home/.local/bin:$SYSTEM_PATH"
+          env HOME="$home" PATH="$caller_path" SHELL="$(command -v ${{ matrix.shell }})" sh < website/public/install.sh
+          [ "$(readlink "$home/.local/bin/maxon")" = "$home/.maxon/bin/maxon" ] || { echo "::error::no link to the install in ~/.local/bin"; exit 1; }
+          if grep -qs 'Added by the Maxon installer' "$home/.zshrc" "$home/.bashrc"; then
+            echo "::error::a shell profile was edited although the link already puts maxon on PATH"
+            exit 1
+          fi
+          found="$(env PATH="$caller_path" sh -c 'command -v maxon')"
+          [ "$found" = "$home/.local/bin/maxon" ] || { echo "::error::the caller's PATH finds '$found'"; exit 1; }
+          work="$(mktemp -d)"
+          cp "$home/.maxon/examples/hello.maxon" "$work/"
+          (cd "$work" && env PATH="$caller_path" maxon build hello.maxon -o hello)
+          [ "$("$work/hello")" = "Hello, world!" ]
+
+      - name: A `maxon` in ~/.local/bin that is not the install's is left alone
+        run: |
+          set -euo pipefail
+          home="$(mktemp -d)"
+          mkdir -p "$home/.local/bin"
+          printf '#!/bin/sh\necho foreign\n' > "$home/.local/bin/maxon"
+          chmod +x "$home/.local/bin/maxon"
+          env HOME="$home" PATH="$home/.local/bin:$SYSTEM_PATH" SHELL="$(command -v ${{ matrix.shell }})" sh < website/public/install.sh
+          if [ -L "$home/.local/bin/maxon" ] || ! grep -q foreign "$home/.local/bin/maxon"; then
+            echo "::error::the foreign maxon was replaced"
+            exit 1
+          fi
+          grep -qs 'Added by the Maxon installer' "$home/.zshrc" "$home/.bashrc" || { echo "::error::no shell profile line, so nothing puts the install on PATH"; exit 1; }
+
       # `maxon upgrade` runs the PUBLISHED script against its own install, so this is the contract between
       # every shipped compiler and whatever maxon.dev serves now. A release older than the command skips it.
       - name: maxon upgrade finds the install current
@@ -256,6 +292,8 @@ jobs:
           Get-Content -Raw website/public/install.ps1 | Invoke-Expression
           if ($LASTEXITCODE -ne 0) { throw "the install failed ($LASTEXITCODE)" }
           if (Get-Command Install-Maxon -ErrorAction SilentlyContinue) { throw 'the script left Install-Maxon defined in the session' }
+          $found = (Get-Command maxon -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+          if ($found -ine "$HOME\.maxon\bin\maxon.exe") { throw "the session that ran the install finds '$found', not the install" }
 
       - name: The installed compiler is the latest release
         run: |
@@ -324,17 +362,41 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $out -notmatch 'already installed') { throw 'a rerun did not report the install as current' }
           if ([Environment]::GetEnvironmentVariable('Path', 'User') -ne $before) { throw 'a rerun changed the user Path' }
 
-      # Windows PowerShell turns a redirected native stderr line into an error, which the runner's 'stop'
-      # preference makes fatal before the exit code can be read; every exit code here is checked instead.
-      # Exactly as the install page prints it: plain-http `maxon.dev`, redirected to https, run by a child
-      # Windows PowerShell. It is the published copy it fetches, not this checkout's.
+      # Exactly as the install page prints it, in the session it is typed into. It is the published copy it
+      # fetches, not this checkout's.
       - name: The published one-liner finds the install current
         run: |
-          $ErrorActionPreference = 'Continue'
-          $out = powershell -c "irm maxon.dev/install.ps1|iex" 2>&1 | Out-String
+          $out = & { irm https://maxon.dev/install.ps1 | iex } 6>&1 | Out-String
           $out
-          if ($out -notmatch 'already installed') { throw 'the published one-liner did not find the install current' }
-          $global:LASTEXITCODE = 0
+          if ($LASTEXITCODE -ne 0 -or $out -notmatch 'already installed') { throw 'the published one-liner did not find the install current' }
+
+      # ⭐ A POWERSHELL STARTED FOR THE SCRIPT CANNOT CHANGE ITS CALLER'S PATH, so it must print the line
+      # that does, in the caller's syntax — and running that line must be what makes `maxon` resolve.
+      # The step's own PATH never held the install, so the line cannot pass by finding it already there.
+      - name: Run from cmd.exe, it prints the line that puts `maxon` on cmd.exe's PATH
+        run: |
+          $script = (Resolve-Path website/public/install.ps1).Path
+          $install = Join-Path $env:RUNNER_TEMP 'install-from-cmd.cmd'
+          Set-Content -LiteralPath $install -Encoding ascii -Value @('@echo off', "powershell -NoProfile -Command ""Get-Content -Raw '$script' | Invoke-Expression""")
+          $out = & cmd.exe /d /c $install | Out-String
+          $out
+          $line = [regex]::Match($out, 'to run `maxon` in it now:  (set "PATH=.*")')
+          if (-not $line.Success) { throw 'no cmd.exe PATH line was printed' }
+          $use = Join-Path $env:RUNNER_TEMP 'use-from-cmd.cmd'
+          Set-Content -LiteralPath $use -Encoding ascii -Value @('@echo off', $line.Groups[1].Value, 'where maxon')
+          $found = @(& cmd.exe /d /c $use)[0]
+          if ($found -ine "$HOME\.maxon\bin\maxon.exe") { throw "cmd.exe finds '$found' after the printed line" }
+
+      - name: Run by a child PowerShell, it prints the line that puts `maxon` on its caller's PATH
+        run: |
+          $script = (Resolve-Path website/public/install.ps1).Path
+          $out = & powershell -NoProfile -Command "Get-Content -Raw '$script' | Invoke-Expression" | Out-String
+          $out
+          $line = [regex]::Match($out, 'to run `maxon` in it now:  (\$env:Path \+= .*)')
+          if (-not $line.Success) { throw 'no PowerShell PATH line was printed' }
+          Invoke-Expression $line.Groups[1].Value
+          $found = (Get-Command maxon -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+          if ($found -ine "$HOME\.maxon\bin\maxon.exe") { throw "the caller finds '$found' after the printed line" }
 
       - name: maxon upgrade finds the install current
         run: |

@@ -10,6 +10,10 @@
 # release, or says the install is current.
 # `usage` below lists the options.
 #
+# ⚠ A CHILD PROCESS CANNOT CHANGE ITS PARENT'S PATH, and `curl | sh` is one. So `maxon` is linked into
+# ~/.local/bin or ~/bin when the caller's PATH already holds one, which the calling shell searches at
+# once; only without either does this fall back to a shell-profile line, read by the next shell.
+#
 # ⛔ `maxon upgrade` RUNS THIS SCRIPT, SO ITS INTERFACE IS A CONTRACT WITH EVERY SHIPPED COMPILER:
 # it honours MAXON_INSTALL and --no-modify-path, and exits 0 when the install is current and non-zero
 # when it is not. Renaming or dropping any of those breaks `maxon upgrade` in every release that has it.
@@ -135,13 +139,15 @@ Install Maxon on macOS or Linux.
 Options:
   --version X.Y.Z     install that release instead of the latest
   --force             reinstall even when that release is already installed
-  --no-modify-path    do not add ~/.maxon/bin to PATH in your shell profile
+  --no-modify-path    do not put maxon on PATH: no link in ~/.local/bin or ~/bin,
+                      no line in your shell profile
 
 Environment:
   MAXON_INSTALL       where Maxon is installed (default ~/.maxon)
   MAXON_DOWNLOAD_BASE a mirror of the release assets, laid out as <base>/v<version>/<asset>
 
-Uninstall: rm -rf ~/.maxon, and delete the line this script added to your shell profile.
+Uninstall: rm -rf ~/.maxon, then remove what put it on PATH: the maxon link this
+script made in ~/.local/bin or ~/bin, or the line it added to your shell profile.
 USAGE
 }
 
@@ -242,7 +248,7 @@ detect_target() {
 			esac
 			;;
 		MINGW*|MSYS*|CYGWIN*)
-			fail "on Windows, install with: powershell -c \"irm maxon.dev/install.ps1|iex\""
+			fail "on Windows, install with: powershell -c \"irm https://maxon.dev/install.ps1 | iex\""
 			;;
 		*)
 			fail "there is no Maxon build for $os"
@@ -283,20 +289,59 @@ finish_path() {
 	dir="$1"
 	modify="$2"
 	case ":$PATH:" in
-		*":$dir:"*)
-			found="$(command -v maxon 2>/dev/null || true)"
-			if [ -n "$found" ] && [ "$found" != "$dir/maxon" ]; then
-				say "warning: $found comes before $dir on your PATH, so \`maxon\` runs that one$(owner_hint "$found")"
-			fi
-			;;
+		*":$dir:"*) ;;
 		*)
-			if [ "$modify" -eq 1 ]; then
-				add_to_path "$dir"
-			else
+			if [ "$modify" -eq 0 ]; then
 				say "$dir is not on your PATH; add it to run \`maxon\` by name"
+				return 0
+			fi
+			if ! link_into_path "$dir"; then
+				add_to_path "$dir"
+				return 0
 			fi
 			;;
 	esac
+
+	found="$(command -v maxon 2>/dev/null || true)"
+	if [ -n "$found" ] && ! runs_install "$found" "$dir"; then
+		say "warning: $found comes first on your PATH, so \`maxon\` runs that one$(owner_hint "$found")"
+	fi
+}
+
+# Whether the `maxon` at $1 is the one in $2, directly or through the link `link_into_path` makes.
+runs_install() {
+	[ "$1" = "$2/maxon" ] || { [ -L "$1" ] && [ "$(readlink "$1")" = "$2/maxon" ]; }
+}
+
+# Only ~/.local/bin and ~/bin, because any other directory under $HOME on PATH belongs to some other
+# tool. A `maxon` already there that is not this install's link is left alone.
+link_into_path() {
+	link_target="$1/maxon"
+	saved_ifs="$IFS"
+	IFS=:
+	set -f
+	linked=1
+	for entry in $PATH; do
+		entry="${entry%/}"
+		case "$entry" in
+			"$HOME/.local/bin"|"$HOME/bin") ;;
+			*) continue ;;
+		esac
+		[ -d "$entry" ] && [ -w "$entry" ] || continue
+
+		if runs_install "$entry/maxon" "$1"; then
+			linked=0
+			break
+		fi
+		if [ ! -e "$entry/maxon" ] && [ ! -L "$entry/maxon" ] && ln -s "$link_target" "$entry/maxon"; then
+			say "linked $entry/maxon to $link_target; this terminal's PATH already searches $entry"
+			linked=0
+			break
+		fi
+	done
+	set +f
+	IFS="$saved_ifs"
+	return "$linked"
 }
 
 owner_hint() {

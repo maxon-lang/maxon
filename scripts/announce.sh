@@ -82,7 +82,7 @@ $body
 
 \`\`\`
 curl -fsSL https://maxon.dev/install.sh | sh    # macOS and Linux
-powershell -c "irm maxon.dev/install.ps1|iex"   # Windows
+irm https://maxon.dev/install.ps1 | iex         # Windows, in PowerShell
 \`\`\`
 
 Elsewhere, take the archive for your platform from the
