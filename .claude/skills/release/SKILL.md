@@ -10,25 +10,23 @@ whole picture — the bootstrap chain, the double self-compile, the platform got
 scripts, the package managers, the verification afterwards. This file is the ORDER of operations
 and the checks, and it links out for every "why".
 
-⛔ **THE TAG IS THE STEP THAT PUBLISHES.** Everything before it is rehearsable. `release.yml`'s
-`guard` refuses a tag with no changelog entry or an unbumped extension before any runner starts, and
-every commit on the way here was already tested — so the protection is rehearsing, not re-checking.
+⛔ **THE TAG IS THE STEP THAT PUBLISHES.** `release.yml`'s `guard` refuses a tag with no changelog
+entry or an unbumped extension before any runner starts, and `publish` runs only after all four
+targets have built and natively suite-tested — so a failed target publishes nothing.
 
-## 0 · Rehearse first, unless the user says otherwise
+## 0 · No rehearsal unless the user asks for one
 
-A `release/X.Y.Z` branch lets the whole pipeline run at the real version with no tag at all:
-`guard` recognises the ref and sets `publish=no`, so all four targets build and natively suite-test
-and **nothing is published**.
+Go straight to the tag (user ruling): every commit on `main` was already tested by CI, and the tagged
+run builds and suite-tests the same four targets before `publish` starts. A failed target costs a
+re-tag at the next patch version, not a broken release.
 
-⚠ **PUSHING THE BRANCH DOES NOT START IT.** `release.yml` triggers on `v*` tags and
-`workflow_dispatch` only, so a rehearsal is dispatched by hand:
+When the user does ask, a `release/X.Y.Z` branch runs the whole pipeline at the real version with no
+tag: `guard` recognises the ref and sets `publish=no`. ⚠ **Pushing the branch does not start it** —
+`release.yml` triggers on `v*` tags and `workflow_dispatch` only:
 ```bash
 gh workflow run release.yml --ref release/X.Y.Z
 ```
-
-⚠ **Say plainly which gates have never fired in anger.** As of v0.1.0, the `publish` job has never
-run at all — v0.1.0 was published by hand — and `guard`'s changelog and extension checks run only on
-a tag, so no rehearsal reaches them.
+`guard`'s changelog and extension checks run only on a tag, so no rehearsal reaches them.
 
 ## 1 · Cut the branch
 
