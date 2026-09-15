@@ -29,16 +29,14 @@
 # 1. The build FAILS (non-zero exit) when the output cannot be replaced.
 # 2. It fails with E6002 specifically.
 # 3. The message names the LIKELY cause — a spec-test or build in this tree still running — and not
-#    only the mechanical one. "Locked or read-only" alone reads exactly like a broken compiler, which
-#    is how this cost two sessions their time before the message was fixed.
+#    only the mechanical one. "Locked or read-only" alone reads exactly like a broken compiler.
 # 4. The message quotes a WAIT-OR-KILL deadline in seconds (4a), AND says which of the holders it
 #    names that deadline does not cover (4b). It is interpolated from the spec pool's
 #    `WedgeWatchdogMs`, so the gate checks its SHAPE and never its value: asserting the number here
 #    would make this script a second copy of a constant whose entire point is having one copy.
 #    ⚠ 4b exists because the deadline is real for only ONE of the two holders — `WedgeWatchdogMs`
-#    bounds the spec pool's dispatch loop and nothing bounds a stalled `build`, whose measured
-#    incident on this very row ran ~30 minutes. A deadline stated over both errs toward WAIT, which
-#    is the expensive direction; 4b is what keeps the message from drifting back to it.
+#    bounds the spec pool's dispatch loop and nothing bounds a stalled `build`. A deadline stated over
+#    both errs toward WAIT, which is the expensive direction; 4b is what keeps the message from it.
 # 5. The message states that the previous binary SURVIVED — and CHECK 6 proves that claim true by
 #    hash. This is the one branch where a failed build leaves an output behind, which is exactly why a
 #    `;`-chained `build; suite` can report a false red or a FALSE GREEN off the stale binary, and why
@@ -47,13 +45,16 @@
 #    emits no E6002. Without it, a compiler that refused every build would score a perfect green here.
 #
 #   ⚠ CHECKS 3-5 MATCH ON WORDING, deliberately: the wording IS the property here, so a reword of
-#     `discardPreviousOutput`'s message is a change to what this gate certifies and must be made in
-#     both places. There is no way to assert "the message is useful" that does not read the message.
+#     the likely cause in `discardPreviousOutput`, or of the survival sentence every E6002 shares in
+#     `refuseUnreplaceableOutput`, is a change to what this gate certifies and must be made in both
+#     places. There is no way to assert "the message is useful" that does not read the message.
 #
-#   ⚠ VERIFIED TO GO RED: run against the binary built from the parent of the commit that added this
-#     script, CHECKS 3-5 fail (the old message stopped at "it is locked or read-only, so this build
-#     cannot replace it") while 1, 2, 6 and 7 pass. That split is the point — the failure mode this
-#     gate guards is a message that is TRUE and useless, not a build that succeeds when it should not.
+#   ⚠ A message that stops at the mechanical cause fails CHECKS 3-5 and passes 1, 2, 6 and 7. That
+#     split is the point — the failure mode this gate guards is a message that is TRUE and useless,
+#     not a build that succeeds when it should not.
+#
+#   ⚠ This covers the ORDINARY road only. A self-rebuild that cannot vacate its own image refuses
+#     from `vacateRunningImage` with its own likely cause, and this gate does not reach it.
 #
 # Usage:  scripts/output-lock-gate.sh
 # Exit:   0 = all checks pass · 1 = a check failed · 2 = the gate could not run (setup failure)
@@ -76,7 +77,7 @@ WORK="temp/output-lock-gate"
 # becomes uncreatable for the duration. With the logs inside it, `build > $WORK/build-locked.log` fails
 # in the SHELL, at the redirect, and the compiler never runs: CHECK 2a then reads the shell's own exit
 # 1 as "the build refused" (a pass for entirely the wrong reason) while CHECKS 2b-5 fail on a log that
-# does not exist. Measured under WSL. The source and the logs therefore stay in `$WORK`, which is never
+# does not exist. The source and the logs therefore stay in `$WORK`, which is never
 # locked, and only `$LOCK_DIR` is made unwritable.
 LOCK_DIR="$WORK/out"
 SRC="$WORK/prog.maxon"
@@ -127,7 +128,7 @@ fi
 # on POSIX a stranded `a-w` on `$LOCK_DIR` defeats `rm -rf` (unlink needs the parent's write bit), so
 # the NEXT run would exit 2 on setup until a human ran `chmod` by hand. Recovering the last run's lock
 # is a two-line idempotent no-op when there was none. (On Windows nothing is stranded to begin with:
-# `rm -rf` clears the read-only attribute itself — verified.)
+# `rm -rf` clears the read-only attribute itself.)
 unlock_output
 rm -rf "$WORK" || exit 2
 mkdir -p "$LOCK_DIR" || exit 2

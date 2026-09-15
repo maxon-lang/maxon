@@ -564,8 +564,8 @@ export async function activate(ctx: vscode.ExtensionContext) {
 	);
 	ctx.subscriptions.push(generateAsmCommand);
 
-	// ⛔ A REBUILT COMPILER RESTARTS THE SERVER. A rebuild renames the running image to `.previous` and the
-	// next rebuild must delete that file, which it cannot while a server is still running from it.
+	// ⛔ A REBUILT COMPILER RESTARTS THE SERVER. A server still running from the renamed-away `.previous`
+	// answers from the old compiler, and it keeps that file on disk until it exits.
 	const serverDir = path.dirname(compilerExecutable);
 	const serverFile = path.basename(compilerExecutable);
 	const watcher = vscode.workspace.createFileSystemWatcher(

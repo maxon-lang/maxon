@@ -226,6 +226,7 @@ The server is the compiler, so this is a process being asked to replace its own 
 - When `maxon build maxon-bin` is invoked, the compiler detects that the output is the running executable image.
 - A running executable cannot be deleted, but it can be renamed. The compiler renames the active binary to `maxon.previous` and writes the freshly compiled one in its place.
 - The MCP server process keeps running from the vacated image and answers subsequent requests without interruption.
+- A server started before an earlier rebuild is running the old `maxon.previous` itself. The next rebuild cannot delete that file, so it renames it aside to `maxon.retired-<stamp>` and deletes it on a later rebuild once the server has exited.
 
 ⚠ **The running server is still the compiler it was started as.** It serves from the image that was renamed away, so its answers come from the code you built *from*, not the code you just built. Restart the MCP server when you want the new compiler to answer.
 

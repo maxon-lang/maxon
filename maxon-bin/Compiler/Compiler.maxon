@@ -187,7 +187,7 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	let outputPath = try resolveOutputPath(project, outputOverride: outputOverride)
 	recordCoverageDataPath(project, outputPath: outputPath)
 	try ensureOutputDirectory(project, outputPath: outputPath)
-	vacateRunningImage(outputPath)
+	try vacateRunningImage(project, outputPath: outputPath)
 	try discardPreviousOutput(project, outputPath: outputPath)
 	recordPhase(project, phase: CompilePhase.prepareOutput, probe: outputProbe)
 
@@ -275,69 +275,52 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	return CompileProduct.create(outputPath, irText: irText, codeBytes: codeBytes, totalNanos: total.nanos, totalCpuTicks: total.cpuTicks)
 end 'compileMeasured'
 
-// ⭐ **EVERYTHING THIS BUILD WOULD PUBLISH IS REMOVED BEFORE THE FIRST STEP THAT CAN FAIL.**
+// `maxon.exe` -> `maxon<infix>.exe`; `maxon` -> `maxon<infix>`.
 //
-// Truncate-on-open does NOT cover this, and believing it does is the trap. `File.writeBinary` opens
-// `CREATE_ALWAYS`, which truncates — but only at the instant the WRITER runs, and the writer is the
-// LAST step of a SUCCESSFUL compile. A parse error, a semantic error, an E5001 register overflow or
-// an encoder fault never reaches it, so the previous build's bytes survive untouched and keep
-// answering. Anything that checks the BINARY rather than the build's exit code then gets a confident
-// wrong answer from stale code, which is the one thing this compiler must never hand anybody.
+// ⚠ THE INFIX GOES BEFORE THE EXTENSION. On Windows what makes a file runnable is its `.exe` suffix, and
+// the recovery a `.previous` exists for is "move it back and use it" — a `maxon.exe.previous` has to be
+// renamed before it can answer anything, which is a step to get wrong at the moment the tree has no
+// working compiler.
 //
-// The `.ir` sidecar goes UNCONDITIONALLY, not only under `--emit-ir`: a build that does not produce
-// one must not leave the previous one behind either, or dropping the flag silently preserves a stale
-// answer beside a fresh exe — a mismatched pair that reads as a matched one.
-//
-// ⚠ AN OUTPUT THAT SURVIVES THE DELETE IS A HARD FAILURE, and that is what makes
-// `requireOutputWritten` exact. On Windows a running (or read-only) executable cannot be removed,
-// and the write that follows would fail for the same reason — which `writePe`/`writeElf`/`writeMachO`
-// LOG AND SWALLOW, so the compile would go on to print "Wrote N bytes" and exit 0 over the stale
-// binary. Refusing here means that once this returns, NOTHING is at `outputPath`; so its presence
-// ⭐⭐ **A COMPILER REBUILDING ITSELF WRITES OVER THE IMAGE IT IS EXECUTING, AND NO OS ALLOWS THAT.**
-// `maxon build` at the root of this repo names an output that IS the running binary; without this the
-// build reaches `discardPreviousOutput`, cannot delete the file, and answers **E6002** — correctly, and
-// uselessly, since rebuilding the compiler is the single most ordinary thing anyone does here.
-//
-// ⭐ **THE RUNNING IMAGE IS RENAMED OUT OF THE WAY, NOT WRITTEN AROUND.** Windows refuses to DELETE a
-// running executable and permits RENAMING one, which is the whole opening this uses: move it to
-// `<output>.previous` and the slot is empty, so every step after this — the `discardPreviousOutput`
-// check, the writer, the "did anything actually appear" verification — runs exactly as it does for any
-// other program, over a path nothing holds open.
-//
-// ⛔ **THAT ORDER IS ALSO WHAT KEEPS "A FAILED BUILD LEAVES NOTHING AT THE OUTPUT PATH" TRUE HERE.**
-// The alternative — compile to `<output>.next` and rename it in afterwards — leaves the OLD binary in
-// the slot when the compile fails, which is a stale compiler answering as though it were current: the
-// exact failure every staleness refusal in this tree exists to prevent. Renaming first means a failed
-// build leaves the slot EMPTY and the last good binary at `.previous`, where a reader can put it back
-// deliberately rather than run it by accident.
-//
-// ⚠ Silent when the output is anything else, which is every other build: this asks one question about
-// `maxon.exe` -> `maxon.previous.exe`; `maxon` -> `maxon.previous`. See `vacateRunningImage`.
-function previousImageName(outputPath FilePath) returns String
-	let ext = outputPath.fileExtension()
+// Spelled from `stem()` + `fileExtension()` rather than through `changeExtension`, which inserts its own
+// separator. `fileExtension()` already carries the leading dot.
+function siblingImagePath(outputPath FilePath, infix String) returns FilePath
+	let name = "{outputPath.stem()}{infix}{outputPath.fileExtension()}"
 
-	if ext.isEmpty() 'noExtension'
-		return "{outputPath.toString()}{PreviousImageSuffix}"
-	end 'noExtension'
-
-	// ⚠ REBUILT FROM `parent()` + `stem()` rather than through `changeExtension`, whose separator
-	// handling is its own business and not this function's: asked for `""` it answered `maxon.`, and
-	// asked for `previous.exe` it answered `maxonprevious..exe`. Both measured. The two halves are
-	// exactly what is wanted here. ⚠ `fileExtension()` INCLUDES the leading dot, so nothing adds one —
-	// measured: writing `.{ext}` produced `maxon.previous..exe`.
 	let dir = try outputPath.parent() otherwise 'noParent'
-		return "{outputPath.stem()}{PreviousImageSuffix}{ext}"
+		return try FilePath.from(name) otherwise panic("siblingImagePath: a sibling of a valid path is valid")
 	end 'noParent'
 
-	return dir.join("{outputPath.stem()}{PreviousImageSuffix}{ext}").toString()
-end 'previousImageName'
+	return dir.join(name)
+end 'siblingImagePath'
 
-// one path and says nothing when the answer is no.
-function vacateRunningImage(outputPath FilePath)
+// ⭐⭐ **A COMPILER REBUILDING ITSELF WRITES OVER THE IMAGE IT IS EXECUTING, AND NO OS ALLOWS THAT.**
+// `maxon build` at the root of this repo names an output that IS the running binary, which
+// `discardPreviousOutput` cannot delete.
+//
+// ⭐ **THE RUNNING IMAGE IS RENAMED OUT OF THE WAY, NOT WRITTEN AROUND.** Windows refuses to DELETE a
+// running executable and permits RENAMING one. Moved to `<stem>.previous<ext>`, it leaves the slot empty,
+// so every step after this — the `discardPreviousOutput` check, the writer, the "did anything actually
+// appear" verification — runs exactly as it does for any other program, over a path nothing holds open.
+//
+// ⛔ **THAT ORDER IS ALSO WHAT KEEPS "A FAILED BUILD LEAVES NOTHING AT THE OUTPUT PATH" TRUE HERE.**
+// Compiling to `<output>.next` and renaming it in afterwards would leave the OLD binary in the slot when
+// the compile fails — a stale compiler answering as though it were current, the exact failure every
+// staleness refusal in this tree exists to prevent. Renaming first leaves the slot EMPTY and the last
+// good binary at `.previous`, where a reader can put it back deliberately rather than run it by accident.
+//
+// ⚠ **AN OLDER `.previous` MAY ITSELF BE RUNNING** — an `mcp-server` or `lsp-server` started before the
+// last rebuild — and then it cannot be deleted either. It is renamed aside to a unique
+// `<stem>.retired-<stamp><ext>` instead, and every self-rebuild first sweeps the retired images nothing
+// holds any longer.
+//
+// Silent when the output is anything else, which is every other build. When the output IS this image and
+// it cannot be vacated, the refusal is made HERE: `discardPreviousOutput`'s would blame a spec-test.
+function vacateRunningImage(project Project, outputPath FilePath) throws CompileError
 	let running = try Process.executablePath() otherwise 'noIntrospection'
 		// A host that will not say what it is running cannot be asked this question. Every other build
-		// is unaffected, and a self-rebuild on such a host still reports E6002 below — the honest
-		// answer, one step later.
+		// is unaffected, and a self-rebuild on such a host still reports E6002 from
+		// `discardPreviousOutput` — the honest answer, one step later.
 		return
 	end 'noIntrospection'
 
@@ -347,26 +330,18 @@ function vacateRunningImage(outputPath FilePath)
 		return
 	end 'notOurOwnImage'
 
-	// ⚠ `.previous` GOES BEFORE THE EXTENSION, not after it. On Windows what makes a file runnable is
-	// its `.exe` suffix, and the recovery this backup exists for is "move it back and use it" — a
-	// `maxon.exe.previous` has to be renamed before it can answer anything, which is a step to get wrong
-	// at the moment the tree has no working compiler.
-	let previous = try FilePath.from("{previousImageName(outputPath)}") otherwise 'unnameable'
-		return
-	end 'unnameable'
+	sweepRetiredImages(outputPath.resolve(here))
 
-	// An older `.previous` is this build's to replace. It is not deleted when the rename below fails,
-	// because then nothing has moved and the old one is still the last good binary.
+	let previous = siblingImagePath(outputPath, infix: PreviousImageSuffix)
+
 	if File.exists(previous) 'staleBackup'
 		try File.delete(previous) otherwise 'undeletableBackup'
-			return
+			try retireHeldImage(project, held: previous, outputPath: outputPath)
 		end 'undeletableBackup'
 	end 'staleBackup'
 
 	try File.rename(outputPath, to: previous) otherwise 'unmovable'
-		// Nothing moved, so the slot still holds the running image and `discardPreviousOutput` will
-		// report E6002 against it — which is the right diagnostic for "this file cannot be replaced".
-		return
+		try refuseUnvacatedImage(project, outputPath: outputPath, held: outputPath)
 	end 'unmovable'
 
 	moveDebugSidecar(outputPath, to: previous)
@@ -374,10 +349,58 @@ function vacateRunningImage(outputPath FilePath)
 	logInfo(LogCategory.compiler, message: function() gives "rebuilding this compiler: moved the running image to {previous.toString()}")
 end 'vacateRunningImage'
 
+// The stamp keeps two held backups apart, and it is digits only so `isRetiredImageName` can tell a retired
+// image from any other file that shares the stem.
+function retireHeldImage(project Project, held FilePath, outputPath FilePath) throws CompileError
+	let retired = siblingImagePath(outputPath, infix: "{RetiredImageInfix}{Clock.nowNanos()}")
+
+	try File.rename(held, to: retired) otherwise 'unmovable'
+		try refuseUnvacatedImage(project, outputPath: outputPath, held: held)
+	end 'unmovable'
+
+	moveDebugSidecar(held, to: retired)
+end 'retireHeldImage'
+
+// Best-effort and silent per entry: an image still running stays for a later sweep, and debris must never
+// fail a build.
+function sweepRetiredImages(outputPath FilePath)
+	let dir = try outputPath.parent() otherwise panic("sweepRetiredImages: a resolved image path has a parent")
+	let entries = try Directory.list(dir) otherwise return
+	let stem = outputPath.stem()
+	let ext = outputPath.fileExtension()
+
+	for entry in entries 'eachEntry'
+		if isRetiredImageName(entry.filename(), stem: stem, ext: ext) 'retired'
+			try File.delete(entry) otherwise ignore
+		end 'retired'
+	end 'eachEntry'
+end 'sweepRetiredImages'
+
+// `<stem>.retired-<digits><ext>` or its `.mxdbg` sidecar, and nothing else: the sweep deletes what this
+// answers yes to. The digits are ASCII because the stamp is; `decimalDigits()` would admit every Unicode Nd.
+function isRetiredImageName(name String, stem String, ext String) returns bool
+	let prefix = "{stem}{RetiredImageInfix}"
+
+	if not name.startsWith(prefix) 'otherFile'
+		return false
+	end 'otherFile'
+
+	let stampDigits = CharacterSet.from(CharSet from ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'])
+	let stamped = name.replaceFirst(prefix, with: "")
+	let tail = stamped.trimStart(stampDigits)
+
+	return tail.byteLength() < stamped.byteLength() and (tail == ext or tail == "{ext}{MxdbgSidecarExtension}")
+end 'isRetiredImageName'
+
+// A RENAME failed, and running an image never blocks one — that is what the retire relies on — so the
+// cause named is not the server that made the delete fail.
+function refuseUnvacatedImage(project Project, outputPath FilePath, held FilePath) throws CompileError
+	try refuseUnreplaceableOutput(project, outputPath: outputPath, reason: "it is this compiler's own running image, and {held} could not be renamed to clear the way", likelyCause: "A running executable can still be renamed, so something holds {held} open in a way that forbids it — a program reading, scanning or debugging the file — or its directory refuses the change. Close whatever holds it and build again.")
+end 'refuseUnvacatedImage'
+
 // ⛔ THE SIDECAR IS NAMED AFTER THE BINARY, SO IT HAS TO TRAVEL WITH IT. Leaving it behind pairs the
 // backup with whatever `.previous.mxdbg` an EARLIER build left — a mismatched pair that reads as a
-// matched one, because the only thing linking a `.mxdbg` to an executable is the name. MEASURED: a
-// self-rebuild left a 16:29 `maxon.previous.exe` beside a 14:52 `maxon.previous.exe.mxdbg`.
+// matched one, because the only thing linking a `.mxdbg` to an executable is the name.
 //
 // Every step is best-effort and silent. Debug info is an aid, not an output: a build that produced a
 // correct compiler must not be failed because a sidecar could not be moved, and the recovery this
@@ -409,6 +432,24 @@ function moveDebugSidecar(binary FilePath, to FilePath)
 	end 'unmovable'
 end 'moveDebugSidecar'
 
+// ⭐ **EVERYTHING THIS BUILD WOULD PUBLISH IS REMOVED BEFORE THE FIRST STEP THAT CAN FAIL.**
+//
+// Truncate-on-open does NOT cover this, and believing it does is the trap. `File.writeBinary` opens
+// `CREATE_ALWAYS`, which truncates — but only at the instant the WRITER runs, and the writer is the
+// LAST step of a SUCCESSFUL compile. A parse error, a semantic error, an E5001 register overflow or
+// an encoder fault never reaches it, so the previous build's bytes survive untouched and keep
+// answering. Anything that checks the BINARY rather than the build's exit code then gets a confident
+// wrong answer from stale code, which is the one thing this compiler must never hand anybody.
+//
+// The `.ir` sidecar goes UNCONDITIONALLY, not only under `--emit-ir`: a build that does not produce
+// one must not leave the previous one behind either, or dropping the flag silently preserves a stale
+// answer beside a fresh exe — a mismatched pair that reads as a matched one.
+//
+// ⚠ AN OUTPUT THAT SURVIVES THE DELETE IS A HARD FAILURE, and that is what makes
+// `requireOutputWritten` exact. On Windows a running (or read-only) executable cannot be removed,
+// and the write that follows would fail for the same reason — which `writePe`/`writeElf`/`writeMachO`
+// LOG AND SWALLOW, so the compile would go on to print "Wrote N bytes" and exit 0 over the stale
+// binary. Refusing here means that once this returns, NOTHING is at `outputPath`; so its presence
 // afterwards is proof the writer put it there, and its absence is proof the writer did not.
 function discardPreviousOutput(project Project, outputPath FilePath) throws CompileError
 	// Absence is the ordinary case (a first build), and `File.delete` signals it by throwing — so the
@@ -427,35 +468,27 @@ function discardPreviousOutput(project Project, outputPath FilePath) throws Comp
 
 	if File.exists(outputPath) 'undeletable'
 		// ⭐ **IT NAMES THE LIKELY CAUSE, BECAUSE THE MECHANICAL ONE IS NOT ACTIONABLE.** "Locked or
-		// read-only" is what the OS said and it is true; it is also indistinguishable, to whoever reads
-		// it, from a genuinely broken build. In this tree the cause is the same one every time — a
-		// `spec-test` or a `build` still running, holding its own image open — measured twice in one
-		// session, and both times the reader's first hypothesis was a compiler defect. The compiler
-		// cannot NAME the holder (that needs `RestartManager`/`NtQuerySystemInformation`, imported
-		// nowhere here), but it does not need to in order to say which way to look.
+		// read-only" is true and reads exactly like a broken build. In this tree the holder is a
+		// `spec-test` or a `build` still running its own image. The compiler cannot NAME it (that needs
+		// `RestartManager`/`NtQuerySystemInformation`, imported nowhere here), but it can say which way
+		// to look.
 		//
-		// ⚠ AND IT SAYS THE STALE BINARY SURVIVED, which is the one fact `File.exists` has just proved
-		// and the one the reader most needs: this function's whole contract is that a failed build
-		// leaves NOTHING at `outputPath`, and this is the single branch where that fails. A `;`-chained
-		// `build; suite` therefore runs the PREVIOUS binary and reports a false red — or a false green.
-		// Measured during A1: a false red of exactly four tests.
-		//
-		// The deadline is QUOTED from `WedgeWatchdogMs`, never re-spelled: a prose "~5 min" here would
-		// be a second copy of it, free to drift the moment the watchdog is retuned.
-		//
-		// ⚠⚠ AND IT IS ATTACHED TO THE ONE HOLDER IT ACTUALLY BOUNDS. `WedgeWatchdogMs` lives in the
-		// spec pool's dispatch loop and bounds exactly that loop; a plain `maxon build` runs under
-		// no deadline of any kind. This message names TWO possible holders, so a deadline stated over
-		// both of them is false for one — and falsely reassuring in the worse direction, because it
-		// tells the reader to WAIT. This row's own second incident is the counterexample: a stray
-		// `build --emit-ir` held the binary for ~30 minutes, a hundredfold past the number quoted here,
-		// and nothing was ever going to end it. So the two holders get two different sentences: the one
-		// that self-limits says so with the constant, and the one that does not says THAT.
+		// ⚠ The deadline is QUOTED from `WedgeWatchdogMs` so the message and the watchdog cannot
+		// disagree, and it is attached only to the holder it bounds: `WedgeWatchdogMs` bounds the spec
+		// pool's dispatch loop and nothing bounds a stalled `build`, so a deadline stated over both
+		// would tell the reader to wait for something that may never end.
 		let likelyCause = "The likeliest cause is that it is still running — a spec-test or an earlier build in this tree that has not exited. A spec-test that has stopped making progress aborts itself after {formatSeconds(WedgeWatchdogMs)} and releases the file; a stalled build is bounded by nothing and has to be ended by hand. If no process holds it, clear the read-only flag."
-		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.binaryOutputNotReplaceable, message: "could not remove the previous build output at {outputPath} — it is locked or read-only, so this build cannot replace it, and the PREVIOUS build's binary is still in place and will answer anything you run next. {likelyCause}"))
-		try refuseCompile(project)
+		try refuseUnreplaceableOutput(project, outputPath: outputPath, reason: "it is locked or read-only and could not be removed", likelyCause: likelyCause)
 	end 'undeletable'
 end 'discardPreviousOutput'
+
+// ⚠ EVERY E6002 SAYS THE STALE BINARY SURVIVED. A build refused here leaves the previous binary at
+// `outputPath` — the one exception to "a failed build leaves nothing there" — so a `;`-chained
+// `build; suite` runs it and reports a false red or a false green.
+function refuseUnreplaceableOutput(project Project, outputPath FilePath, reason String, likelyCause String) throws CompileError
+	reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.binaryOutputNotReplaceable, message: "could not replace the build output at {outputPath} — {reason}, so the PREVIOUS build's binary is still in place and will answer anything you run next. {likelyCause}"))
+	try refuseCompile(project)
+end 'refuseUnreplaceableOutput'
 
 // ⛔ THE BACKEND WRITES THE FILE AND DOES NOT CREATE THE PATH TO IT, so an output directory that does
 // not exist yet is the build's problem to solve and not the writer's to discover. Without this the
@@ -1926,6 +1959,11 @@ end 'loadOneSourceFile'
 
 // --- Output path resolution ---
 
+// Where a self-rebuild parks the image it is running from, and where it moves an older one another
+// process is still running. See `vacateRunningImage`.
+let PreviousImageSuffix = ".previous"
+let RetiredImageInfix = ".retired-"
+
 // The build manifest filename, the Maxon source extension, and the flag file that excludes a
 // directory. Named, not bare literals — all three are file-discovery contracts, so what a source file
 // is called, and what says a directory holds none, are stated once for the whole compiler. Every walk
@@ -1934,10 +1972,6 @@ end 'loadOneSourceFile'
 // is `maxon fmt`'s SEPARATE walk — it takes `*.test.maxon`, which a build does not, and prunes `.git`,
 // which a build must not, but it must leave the manifest alone and pick `.maxon` files by these same
 // two names, and a second spelling of either would be a file-discovery contract written down twice.
-
-// Where a self-rebuild parks the image it is running from. See `vacateRunningImage`.
-let PreviousImageSuffix = ".previous"
-
 module let BuildManifestName = "build.maxon"
 
 // ⭐ **`export` BECAUSE WHAT A MAXON SOURCE IS CALLED IS NOT ONLY A COMPILER'S QUESTION.**

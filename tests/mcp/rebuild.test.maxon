@@ -11,24 +11,11 @@
 // the OS's, not the build's: rename the image, write another in its place, and ask the process.
 
 let StagedDirName = "temp/mcp-rebuild"
-
-function stagedCopyOf(binary FilePath, name String) returns FilePath
-	let dir = try FilePath.from(StagedDirName) otherwise panic("`{StagedDirName}` is a valid path")
-	let resolved = dir.resolve(Directory.currentPath())
-
-	if not Directory.create(resolved) and not Directory.isDirectory(resolved) 'unusable'
-		panic("could not create {resolved.path}, where this case stages its compiler copy")
-	end 'unusable'
-
-	let target = try FilePath.from("{resolved.path}/{name}{executableSuffix()}") otherwise panic("staged path is valid")
-	let bytes = try File.readBinary(binary) otherwise panic("could not read {binary.path}")
-	try File.writeBinary(target, content: bytes, mode: FilePermission.executable) otherwise panic("could not write {target.path}")
-
-	return target
-end 'stagedCopyOf'
+let StagedCompilerName = "maxon-under-test"
 
 test 'mcp server keeps answering after its executable is replaced on disk'
-	let staged = stagedCopyOf(testedCompilerPath(), name: "maxon-under-test")
+	let dir = stagingDir(StagedDirName)
+	let staged = stagedCopyOf(testedCompilerPath(), dir: dir, name: StagedCompilerName)
 
 	var session = StreamingMcpSession.startFrom(staged, devMode: false)
 
@@ -43,7 +30,7 @@ test 'mcp server keeps answering after its executable is replaced on disk'
 	try File.delete(vacated) otherwise ignore
 	try File.rename(staged, to: vacated) otherwise panic("could not rename the running image out of the way")
 
-	let replacement = stagedCopyOf(testedCompilerPath(), name: "maxon-under-test")
+	let replacement = stagedCopyOf(testedCompilerPath(), dir: dir, name: StagedCompilerName)
 	try Expect.isTrue(File.exists(replacement), message: "a replacement image should now sit at the vacated path")
 
 	// The process was started from an image that no longer exists at that path.

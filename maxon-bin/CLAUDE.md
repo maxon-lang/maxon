@@ -404,14 +404,17 @@ Four doors are still standing open rather than shut:
 - Exit code **101** means a memory leak was detected.
 - There is **no `maxon clean`**.
 
-> ### ⭐ THE BUILD WRITES TO `.next` AND RENAMES INTO PLACE
+> ### ⭐ A SELF-REBUILD RENAMES ITS RUNNING IMAGE OUT OF THE SLOT, THEN WRITES INTO THE EMPTY SLOT
 >
 > A compiler cannot overwrite its own running image (**E6002**), and a half-written slot is a
 > compiler that answers as though it were whole. So a compiler rebuilding its own slot RENAMES its
 > running image to `maxon-bin/.maxon/maxon.previous` first — an OS will not let a running executable be
-> deleted, but will let one be renamed — and its `.mxdbg` travels with it. A FAILED build leaves the
-> slot **EMPTY** rather than reinstating anything, because a stale compiler reporting as current is the
-> failure every staleness refusal in this repo exists to prevent.
+> deleted, but will let one be renamed — and its `.mxdbg` travels with it. There is no `.next` staging
+> name: a FAILED build leaves the slot **EMPTY** rather than the old binary, because a stale compiler
+> reporting as current is the failure every staleness refusal in this repo exists to prevent. An older
+> `.previous` that another process is still running (an `mcp-server` or `lsp-server` started before the
+> last rebuild) is renamed aside to `maxon.retired-<stamp>`, and every self-rebuild deletes the retired
+> images nothing holds any longer.
 >
 >
 > ⛔ **A CHANGE UNDER `Compiler/Runtime/` NEEDS *TWO* SELF-COMPILES BEFORE THE COMPILER ITSELF BEHAVES

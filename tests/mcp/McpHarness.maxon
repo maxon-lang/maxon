@@ -26,6 +26,28 @@ export function testedCompilerPath() returns FilePath
 	return binary
 end 'testedCompilerPath'
 
+// Absolute, because paths inside it are handed to a child.
+export function stagingDir(spelled String) returns FilePath
+	let dir = try FilePath.from(spelled) otherwise panic("McpHarness: '{spelled}' is not a valid path")
+	let resolved = dir.resolve(Directory.currentPath())
+
+	if not Directory.create(resolved) and not Directory.isDirectory(resolved) 'unusable'
+		panic("McpHarness: could not create {resolved.path}, where a case stages its compiler copy")
+	end 'unusable'
+
+	return resolved
+end 'stagingDir'
+
+// A case that replaces a compiler image on disk replaces a COPY: doing it to the tree's own slot would
+// rebuild the checkout's compiler as a side effect, and a failed build leaves that slot empty.
+export function stagedCopyOf(binary FilePath, dir FilePath, name String) returns FilePath
+	let target = dir.join("{name}{executableSuffix()}")
+	let bytes = try File.readBinary(binary) otherwise panic("McpHarness: could not read {binary.path}")
+	try File.writeBinary(target, content: bytes, mode: FilePermission.executable) otherwise panic("McpHarness: could not write {target.path}")
+
+	return target
+end 'stagedCopyOf'
+
 export typealias JsonDocArray = Array with JsonDoc
 
 type McpRun
@@ -96,8 +118,8 @@ end 'runMcpSingle'
 export type StreamingMcpSession
 	export var server as StreamingSubprocess
 
-	// `binary` is a parameter because one case starts a server from a STAGED COPY and then replaces
-	// that copy on disk; it must not be the tree's own slot.
+	// `binary` is a parameter because a case starts a server from a STAGED COPY and then replaces or
+	// renames that copy on disk; it must not be the tree's own slot.
 	export static function startFrom(binary FilePath, devMode bool = false) returns StreamingMcpSession
 		var argv = StringArray.create()
 		argv.push("mcp-server")

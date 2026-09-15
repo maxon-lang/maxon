@@ -154,6 +154,7 @@ tests/
     standard.test.maxon                     standard user-facing MCP server tests (8 standard tools)
     dev.test.maxon                          contributor MCP server tests (11 tools + --dev)
     rebuild.test.maxon                      a running server survives its image being replaced on disk
+    rebuild-over-a-running-previous.test.maxon   a self-rebuild succeeds while a server runs its `.previous`
 ```
 
 ## The six rules, and the hazard each one answers
@@ -535,6 +536,11 @@ JSON-RPC messages, and inspecting structured responses.
   `from` arguments, checkout validation, and the `repoRoot` ECHO on both an answer and a refusal.
 - `rebuild.test.maxon` gates the half of a self-rebuild that a live server depends on: its image is
   renamed out from under it and another is written in its place, and it keeps answering.
+- `rebuild-over-a-running-previous.test.maxon` gates the other half: a compiler building over its own
+  image while a server runs the `.previous` that image would replace. On Windows a running image cannot
+  be deleted, so the build must move the held one aside and still succeed, and the next self-rebuild,
+  with nothing held, must leave no moved-aside image behind. A program source it builds is written into
+  `temp/` from a string, so no live `.maxon` sits under `tests/`.
 
 ⛔ **`rebuild.test.maxon` STAGES ITS OWN COPY OF THE COMPILER AND REPLACES THAT.** Driving a real
 `build maxon-bin` would rebuild the tree's compiler as a side effect of running the corpus — and a

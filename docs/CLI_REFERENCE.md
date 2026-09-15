@@ -1050,7 +1050,9 @@ compiler occupies, so `maxon build` there replaces the binary executing the comm
 
 That works. No operating system permits *deleting* a running executable, but they permit *renaming*
 one, so the compiler moves its running image to `maxon.previous.exe` first and the slot is then empty
-for the ordinary write path.
+for the ordinary write path. If an older `maxon.previous.exe` is itself still running (an
+`mcp-server` or `lsp-server` started before the last rebuild), it is renamed aside to
+`maxon.retired-<stamp>.exe`, and a later rebuild deletes it once nothing is running it.
 
 ⛔ A **failed** build therefore leaves the slot **empty** and the last good compiler at
 `maxon.previous.exe`. That is deliberate: the alternative — compiling to a temporary name and swapping

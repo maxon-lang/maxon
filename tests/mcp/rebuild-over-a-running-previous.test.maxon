@@ -1,0 +1,98 @@
+// A compiler rebuilding its own image succeeds while another process runs the `.previous` it would replace.
+//
+// A self-rebuild renames the running image to `<stem>.previous<ext>`, replacing any older one. An
+// `mcp-server` or `lsp-server` started before the last rebuild is RUNNING that older `.previous`, and on
+// Windows a running image can be renamed but not deleted — so the build has to move the held one aside,
+// and a later rebuild has to clear what it moved once nothing holds it.
+
+let StagedDirName = "temp/mcp-rebuild-over-a-running-previous"
+let CompilerStem = "maxon"
+let PreviousInfix = ".previous"
+let SidecarExtension = ".mxdbg"
+let ProgramFileName = "program.maxon"
+let KnownLine = "built over a running previous"
+
+let BuildCommandName = "build"
+let OutputOption = "-o"
+
+// Files only: a held file here would be a previous run's server still alive, which is a harness problem.
+function clearStagedFiles(dir FilePath)
+	let entries = try Directory.list(dir) otherwise panic("could not list {dir.path}")
+
+	for entry in entries 'eachEntry'
+		if Directory.isDirectory(entry) 'aDirectory'
+			clearStagedFiles(entry)
+			continue
+		end 'aDirectory'
+
+		try File.delete(entry) otherwise panic("could not clear {entry.path} from a previous run's staging")
+	end 'eachEntry'
+end 'clearStagedFiles'
+
+function programSource() returns String
+	return "function main() returns ExitCode\n\tprint(\"{KnownLine}\\n\")\n\treturn 0\nend 'main'\n"
+end 'programSource'
+
+function runIn(dir FilePath, binary FilePath, arguments StringArray) returns CollectedOutput
+	var config = Configuration.create(Executable.path(binary))
+	config.arguments = arguments
+	config.workingDirectory = dir
+
+	return try config.run() otherwise (e) 'spawnFailed'
+		panic("could not spawn {binary.path}: {e.displayReason()}")
+	end 'spawnFailed'
+end 'runIn'
+
+function rebuildOwnImage(dir FilePath, compiler FilePath, program FilePath) returns CollectedOutput
+	return runIn(dir, binary: compiler, arguments: [BuildCommandName, program.toString(), OutputOption, compiler.toString()])
+end 'rebuildOwnImage'
+
+test 'a self-rebuild succeeds while another process runs the previous image, and the next one clears what it moved aside'
+	let dir = stagingDir(StagedDirName)
+	clearStagedFiles(dir)
+
+	let imageName = "{CompilerStem}{executableSuffix()}"
+	let previousName = "{CompilerStem}{PreviousInfix}{executableSuffix()}"
+
+	let compiler = stagedCopyOf(testedCompilerPath(), dir: dir, name: CompilerStem)
+	let originalBytes = try File.readBinary(compiler) otherwise panic("could not read back {compiler.path}")
+	let previous = stagedCopyOf(testedCompilerPath(), dir: dir, name: "{CompilerStem}{PreviousInfix}")
+
+	var session = StreamingMcpSession.startFrom(previous, devMode: false)
+
+	try session.sendLine(initRequest(1))
+	let initDoc = try session.readResponseDoc()
+	try Expect.isTrue(hasChildKey(initDoc, parent: resultNode(initDoc), key: "serverInfo"), message: "initialize response missing serverInfo")
+	try session.sendLine(initializedNotification())
+
+	let program = dir.join(ProgramFileName)
+	try File.writeText(program, content: programSource()) otherwise panic("could not write {program.path}")
+
+	let first = rebuildOwnImage(dir, compiler: compiler, program: program)
+	try Expect.equal(first.exitCode() as AssertedInt, expected: 0, message: "`{BuildCommandName} {ProgramFileName} {OutputOption} {imageName}`, run by {imageName} itself while an mcp-server runs {previousName}, exited {first.exitCode()}. It must move the held {previousName} aside and vacate its own image. The compiler said: {first.stderr}")
+
+	let vacatedBytes = try File.readBinary(previous) otherwise panic("could not read {previous.path}")
+	try Expect.isTrue(vacatedBytes.equals(originalBytes), message: "{previousName} should hold the compiler image the build vacated ({originalBytes.count()} bytes); it holds {vacatedBytes.count()} bytes that differ.")
+
+	let built = runIn(dir, binary: compiler, arguments: StringArray.create())
+	try Expect.equal(built.stdout.trim(), expected: KnownLine, message: "{imageName} should now be the program the build wrote. It exited {built.exitCode()} and wrote to stderr: {built.stderr}")
+
+	let exitCode = try session.close()
+	try Expect.equal(exitCode as AssertedInt, expected: 0, message: "mcp-server should exit 0 on stdin EOF")
+
+	let fresh = stagedCopyOf(testedCompilerPath(), dir: dir, name: CompilerStem)
+	let second = rebuildOwnImage(dir, compiler: fresh, program: program)
+	try Expect.equal(second.exitCode() as AssertedInt, expected: 0, message: "the second self-rebuild, with nothing holding any image, exited {second.exitCode()}. The compiler said: {second.stderr}")
+
+	let allowed = [ProgramFileName, imageName, "{imageName}{SidecarExtension}", previousName, "{previousName}{SidecarExtension}"]
+	let entries = try Directory.list(dir) otherwise panic("could not list {dir.path}")
+	var leftovers = ""
+
+	for entry in entries 'eachEntry'
+		if not containsString(allowed, target: entry.filename()) 'notAllowed'
+			leftovers.append(" {entry.filename()}")
+		end 'notAllowed'
+	end 'eachEntry'
+
+	try Expect.isEmpty(leftovers, message: "after a self-rebuild with nothing held, {dir.path} may hold only {ProgramFileName}, {imageName}, {imageName}{SidecarExtension}, {previousName} and {previousName}{SidecarExtension}. A previous image an earlier build moved aside and nothing holds any longer is the rebuild's to delete; it left:{leftovers}")
+end 'a self-rebuild succeeds while another process runs the previous image, and the next one clears what it moved aside'

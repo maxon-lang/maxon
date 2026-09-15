@@ -1933,18 +1933,19 @@ export enum ErrorCode
 	// dropping either half.
 	codeEmitterCoverageNeedsDebugInfo = "E5003"
 
-	// The previous build output at this path could not be removed before the build began, so this
-	// build cannot replace it -- it is locked (on Windows a RUNNING executable cannot be deleted)
-	// or read-only. Refused up front rather than at the write, because the write is logged and
-	// swallowed: carrying on would print "Wrote N bytes" and exit 0 over an untouched STALE binary,
-	// which is the exact confident-wrong-answer this deletion exists to prevent.
-	// The message names the LIKELY cause as well as the mechanical one: in practice the holder is a
-	// spec-test or a build of this same tree that has not exited yet, and the compiler cannot
-	// identify it (that would need RestartManager/NtQuerySystemInformation, imported nowhere here).
-	// It also states that the previous binary SURVIVED -- this is the one branch where a failed build
-	// leaves an output behind, so a `;`-chained build-then-test runs the stale one. The wait-or-kill
-	// deadline it quotes is `WedgeWatchdogMs` (maxon-bin/Testing/SpecWorkerPool.maxon), read from
-	// the constant so the message and the watchdog cannot disagree.
+	// The previous build output at this path could not be cleared before the build began, so this
+	// build cannot replace it. Refused up front rather than at the write, because the write is logged
+	// and swallowed: carrying on would print "Wrote N bytes" and exit 0 over an untouched STALE binary.
+	// Every message states that the previous binary SURVIVED -- the one case where a failed build leaves
+	// an output behind, so a `;`-chained build-then-test runs the stale one. Two roads reach it, each
+	// naming its own likely cause, because the compiler cannot identify the holder (that would need
+	// RestartManager/NtQuerySystemInformation, imported nowhere here):
+	//   * An ordinary output that is locked (on Windows a RUNNING executable cannot be deleted) or
+	//     read-only. The holder is usually a spec-test or a build of this tree that has not exited; the
+	//     wait-or-kill deadline quoted is `WedgeWatchdogMs` (maxon-bin/Testing/SpecWorkerPool.maxon).
+	//   * A compiler rebuilding its OWN running image that could not RENAME it, or the older `.previous`
+	//     it could neither delete nor rename, out of the way. The message names that file; running it
+	//     does not block a rename, so the holder is something with the file open or a refusing directory.
 	binaryOutputNotReplaceable = "E6002"
 
 	// The backend reported no failure, yet nothing exists at the output path after the write. The
