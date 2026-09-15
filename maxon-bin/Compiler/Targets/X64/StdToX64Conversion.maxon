@@ -4155,7 +4155,7 @@ export type StdToX64Lowering
 			raiseBreak then self.lowerNetpollRaiseBreakWin64(resultId, port: netpollOperand(operands, index: 0), dstBlock: dstBlock)
 			drainBreak then panic("lowerOsNetpollWin64: `drainBreak` is the epoll shape's read of its eventfd, and x64-windows is `NetpollShape.completionPort`, whose break is consumed by receiving its packet — `NetpollRuntime` emits this verb only under `NetpollShape.epoll`")
 			armSource then self.lowerNetpollArmSourceWin64(resultId, poller: netpollOperand(operands, index: 0), fd: netpollOperand(operands, index: 1), dstBlock: dstBlock)
-			armPipeSource then panic("lowerOsNetpollWin64: `armPipeSource` makes a pipe end non-blocking and registers it for reading, and this lane's pipes are OVERLAPPED and were given to the port when they were created — `NetpollRuntime.__np_pipe_open` emits nothing here")
+			armPipeSource then panic("lowerOsNetpollWin64: `armPipeSource` makes a pipe end non-blocking, and this lane's pipes are OVERLAPPED and were given to the port when they were created — `NetpollRuntime.__np_pipe_open` emits nothing here")
 			openChildSource then panic("lowerOsNetpollWin64: `openChildSource` asks the HOST for a descriptor that reports a child's exit, and Windows has none — `NetpollRuntime.__np_child_open` allocates this lane's source key itself")
 			armChildSource then self.lowerNetpollArmChildWin64(resultId, child: netpollOperand(operands, index: 2), source: netpollOperand(operands, index: 1), callback: netpollOperand(operands, index: 3), dstBlock: dstBlock)
 			closeChildSource then self.lowerNetpollCloseChildWin64(resultId, registeredWait: netpollOperand(operands, index: 0), dstBlock: dstBlock)

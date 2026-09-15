@@ -1221,18 +1221,13 @@ function buildNetpollPdDeadline(module StdModule)
 	// `(thread, tag)`; a member's `pd.rd` is 0, so the disarm below would find nothing and this would add a
 	// SECOND entry under a pair that already has one. Nothing calls it this way today — `ManagedSocketRuntime`
 	// is the only caller — and a loud refusal is what keeps a future one from corrupting the heap quietly.
-	// The old entry goes whatever the new deadline is — and only if the OLD deadline put one there, which is
-	// why it is read before the store overwrites it. A new entry is added only when there IS a new one.
-	// ⛔⛔ **A MULTI-SOURCE WAIT OWNS ITS DEADLINE AND A MEMBER MAY NOT BE GIVEN ONE.** The group's deadline
-	// is the group's own word under the group's tag, and `__gt_timer_check` admits exactly one entry per
-	// `(thread, tag)`; a member's `pd.rd` is 0, so the disarm below would find nothing and this would add a
-	// SECOND entry under a pair that already has one. Nothing calls it this way today — `ManagedSocketRuntime`
-	// is the only caller — and a loud refusal is what keeps a future one from corrupting the heap quietly.
 	let waiterKind = emitLoadField(module, block: rearm, record: waiter, offset: GtOffParkKind, ids: ids)
 	let onAGroup = emitCmp(module, block: rearm, a: waiterKind, b: emitConst(module, block: rearm, value: GtParkKindNetpollAny, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(rearm, op: StdOp.condBranch(onAGroup, thenBlockId: groupMember.id, elseBlockId: rearmOne.id))
 	emitRuntimeAbort(module, func: func, block: groupMember, abort: RuntimeAbort.netpollGroupMemberDeadline, ids: ids)
 
+	// The old entry goes whatever the new deadline is — and only if the OLD deadline put one there, which is
+	// why it is read before the store overwrites it. A new entry is added only when there IS a new one.
 	let tag = emitTimerTagOfNetpollMode(module, block: rearmOne, mode: mode, ids: ids)
 	emitNetpollDisarmDeadline(module, func: func, ids: ids, startBlock: rearmOne, gt: waiter, deadline: previous, tag: tag, cont: disarmed)
 	let clearing = emitCmp(module, block: disarmed, a: value, b: emitConst(module, block: disarmed, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
@@ -1557,6 +1552,7 @@ function buildNetpollPdReadyOne(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var markReady = module.addBlock(func, label: b"nprmark", heat: BlockHeat.normal)
 	var wake = module.addBlock(func, label: b"nprwake", heat: BlockHeat.normal)
+	var oneSource = module.addBlock(func, label: b"nprone", heat: BlockHeat.normal)
 	var unhookRest = module.addBlock(func, label: b"nprunhook", heat: BlockHeat.normal)
 	var disarmTimer = module.addBlock(func, label: b"nprdisarm", heat: BlockHeat.normal)
 	var readied = module.addBlock(func, label: b"nprreadied", heat: BlockHeat.normal)
@@ -1575,7 +1571,6 @@ function buildNetpollPdReadyOne(module StdModule)
 	emitStoreField(module, block: markReady, record: gpp, offset: 0, value: emitConst(module, block: markReady, value: PdReady, ids: ids))
 	emitConstReturn(module, block: markReady, value: WakeDebtNone, ids: ids)
 
-	emitStoreField(module, block: wake, record: gpp, offset: 0, value: emitConst(module, block: wake, value: PdNil, ids: ids))
 	emitNetpollStepWaiters(module, block: wake, delta: -1, ids: ids)
 
 	// ⛔⛔ **A THREAD WAITING ON SEVERAL SOURCES IS TAKEN OFF ALL OF THEM HERE.** Left published on the
@@ -1588,9 +1583,16 @@ function buildNetpollPdReadyOne(module StdModule)
 	// watched for READING (`emitNetpollGroupSetMember`).
 	let tag = emitTimerTagOfNetpollMode(module, block: wake, mode: mode, ids: ids)
 	let ownDeadline = emitPdDeadline(module, block: wake, pd: pd, mode: mode, ids: ids)
-	emitNetpollBranchOnGroupPark(module, block: wake, gt: state, several: unhookRest, one: disarmTimer, ids: ids)
-	wake.branchEdges.push(BranchEdge.create(disarmTimer.id, argIds: argsOf(ownDeadline)))
+	emitNetpollBranchOnGroupPark(module, block: wake, gt: state, several: unhookRest, one: oneSource, ids: ids)
 
+	emitStoreField(module, block: oneSource, record: gpp, offset: 0, value: emitConst(module, block: oneSource, value: PdNil, ids: ids))
+	module.setTerminator(oneSource, op: StdOp.branch(disarmTimer.id))
+	oneSource.branchEdges.push(BranchEdge.create(disarmTimer.id, argIds: argsOf(ownDeadline)))
+
+	// ⭐ **THE MEMBER THAT FIRED KEEPS ITS READINESS**, which the resumed `__np_pd_wait_any` consumes and
+	// reports — the one account of which source ended the wait. It is written BEFORE the unhook, whose test is
+	// "does this word still name the thread", so the member's waiter count is not paid back twice.
+	emitStoreField(module, block: unhookRest, record: gpp, offset: 0, value: emitConst(module, block: unhookRest, value: PdReady, ids: ids))
 	module.appendOp(unhookRest, op: StdOp.call(ids.mint(), callee: NetpollGroupUnhookName, args: argsOf(state)))
 	let groupDeadline = emitNetpollGroupDeadline(module, block: unhookRest, gt: state, ids: ids)
 	module.setTerminator(unhookRest, op: StdOp.branch(disarmTimer.id))
@@ -2571,17 +2573,18 @@ end 'emitNetpollBranchOnPipe'
 //
 // ⭐⭐ **ONE THREAD IS PUBLISHED ON SEVERAL DIRECTION WORDS, AND THE FIRST READINESS TAKES IT OFF ALL OF
 // THEM.** Every party that moves a direction word already holds `__sched_lock` (this band's header states why),
-// so the take-and-unhook is one critical section and a second readiness landing behind it finds `PdNil` — which
-// is the ordinary "nobody is waiting" arm. Without the unhook the second event would ready a thread that is
-// already running, which is a run queue holding one thread twice.
+// so the take-and-unhook is one critical section, and a second readiness landing behind it finds no waiter and
+// latches `PdReady` like any readiness nobody waits for. Without the unhook the second event would ready a
+// thread that is already running, which is a run queue holding one thread twice.
+//
+// ⭐⭐⭐ **THE WAIT ANSWERS WHICH MEMBERS IT FOUND READY, BECAUSE A READINESS IT CONSUMES IS NEVER REPORTED
+// AGAIN.** The poller is edge-triggered, and a child source reports exactly one event in its life. A caller
+// that could not tell which member ended its wait would have to re-derive "the child exited" from the host —
+// and XNU can deliver `NOTE_EXIT` BEFORE `waitpid(WNOHANG)` is able to reap the child, so that re-derivation
+// answers "running" and the caller parks again on a source with nothing left to say, for ever.
 //
 // ⚠ **A GROUP'S DEADLINE IS THE GROUP'S OWN WORD AND NEVER A MEMBER'S `pd.rd`/`pd.wd`** — see
 // `GroupOffDeadline` for why one wait may hold only one timer entry.
-//
-// ⚠ **A GROUP'S RECORDS ARE NOT GENERATION-CHECKED, AND THEY DO NOT NEED TO BE.** Every member belongs to the
-// SUBPROCESS HANDLE this thread is draining: the pipes are the handle's and the child source is the one this
-// wait opened, so the recycling `PdOffGen` exists for — a descriptor closed and reopened onto the same record
-// while a thread is parked on it — has no second party to do the closing.
 
 // ⭐ **THE GROUP RECORD, WHICH THE CALLER OWNS.** `count` members follow, each the same `(fd, mode)` pair a
 // single-source park carries in `GtOffParkArg`.
@@ -2591,9 +2594,17 @@ end 'emitNetpollBranchOnPipe'
 // one timer entry per member for a wait that ends once — and `__gt_timer_check`'s entries are keyed by
 // (thread, tag), which admits exactly one. `0` is no deadline, in the absolute nanoseconds the timer store
 // keys on.
+//
+// `fired` is where a resumed wait gathers the members it found ready, one bit per member index; it is the
+// wait's own scratch, written and read inside one hold of `__sched_lock`.
 let GroupOffCount = 0 as ByteOffset
 let GroupOffDeadline = 8 as ByteOffset
-let GroupOffArgs = 16 as ByteOffset
+let GroupOffFired = 16 as ByteOffset
+let GroupOffArgs = 24 as ByteOffset
+
+// The most members a group may hold: `__np_pd_wait_any` answers one bit per member in a 64-bit word. EXPORTED
+// so a caller sizing its group can be held to it where the size is chosen.
+export let NetpollGroupMaxMembers = 64 as ParsedInt
 
 // ⭐⭐⭐ **A MEMBER IS A PAIR, AND THE SECOND HALF IS THE RECORD'S GENERATION AT MARK TIME.** A single-source
 // wait carries its generation in `GtOffParkGen` and `__np_pd_commit` compares it after the context switch;
@@ -2617,12 +2628,13 @@ function emitNetpollGroupDeadline(module StdModule, block IrBlock, gt ValueId, i
 	return emitLoadField(module, block: block, record: group, offset: GroupOffDeadline, ids: ids)
 end 'emitNetpollGroupDeadline'
 
-// `__np_pd_wait_any(group)` — suspend the running green thread until ANY member of `group` is ready in its
-// direction. EXPORTED for the collect drain, its one caller.
+// `__np_pd_wait_any(group) -> fired` — suspend the running green thread until ANY member of `group` is ready in
+// its direction, and answer which members it found ready: bit `i` for member `i`. EXPORTED for the collect
+// drain, its one caller.
 export let NetpollPdWaitAnyName = b"__np_pd_wait_any"
 
-// `__np_group_unhook(gt)` — take `gt` off every direction word of its group that still names it. Called by the
-// readiness that woke it, under `__sched_lock`.
+// `__np_group_unhook(gt)` — take `gt` off every direction word of its group that still names it. Called under
+// `__sched_lock` by whatever ends the wait: a member's readiness, the group's deadline, or a dropped promise.
 let NetpollGroupUnhookName = b"__np_group_unhook"
 
 // EXPORTED so the caller can SIZE the record it owns: its header plus one slot per member.
@@ -2723,12 +2735,13 @@ end 'emitNetpollGroupWalkEnd'
 // ready is CONSUMED and the wait never begins; otherwise every member is marked `PdWait` and the publication
 // happens after the context switch, in `__np_pd_commit`, exactly as it does for one source.
 //
-// ⚠ **IT ANSWERS NOTHING, AND A RENOUNCED WAIT IS WHY THAT IS RIGHT.** A dropped promise takes the thread off
-// every member and readies it (`__np_pd_drop`); the thread then goes round its caller's own loop and parks
-// again, which is exactly what a renounced `__gt_sleep` does. There is no verdict a caller could act on that
-// looping does not already express.
+// ⭐⭐ **IT ANSWERS EVERY MEMBER WHOSE READINESS IT CONSUMED, AND NOTHING ELSE** — the one found ready at the
+// look, or, after a park, the one that ended it plus any whose readiness landed before the thread resumed. A
+// consumed readiness is gone from the poller, so the answer is the caller's only record of it — this band's
+// header says what losing it costs. An expired or renounced wait can answer 0, and its caller goes round its
+// own loop as a renounced `__gt_sleep` does.
 function buildNetpollPdWaitAny(module StdModule)
-	var func = IrFunction.createFromStd(NetpollPdWaitAnyName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(NetpollPdWaitAnyName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2748,6 +2761,7 @@ function buildNetpollPdWaitAny(module StdModule)
 	var clearHdr = module.addBlock(func, label: b"npgaclearhdr", heat: BlockHeat.normal)
 	var clearBody = module.addBlock(func, label: b"npgaclearbody", heat: BlockHeat.normal)
 	var clearAct = module.addBlock(func, label: b"npgaclearact", heat: BlockHeat.normal)
+	var clearLive = module.addBlock(func, label: b"npgaclearlive", heat: BlockHeat.normal)
 	var clearOurs = module.addBlock(func, label: b"npgaclearours", heat: BlockHeat.normal)
 	var clearOther = module.addBlock(func, label: b"npgaclearother", heat: BlockHeat.normal)
 	var stranded = module.addBlock(func, label: b"npgastranded", heat: BlockHeat.normal)
@@ -2769,7 +2783,7 @@ function buildNetpollPdWaitAny(module StdModule)
 	// the caller goes round its own loop rather than suspending.
 	emitStoreField(module, block: takeReady, record: look.member.gpp, offset: 0, value: emitConst(module, block: takeReady, value: PdNil, ids: ids))
 	emitSchedLockLeave(module, block: takeReady, ids: ids)
-	module.setTerminator(takeReady, op: StdOp.retVoid)
+	module.setTerminator(takeReady, op: StdOp.ret(emitBin(module, block: takeReady, a: isReady, b: look.index, opcode: StdBinOpcode.shl, ids: ids)))
 
 	let isFree = emitCmp(module, block: notReady, a: state, b: emitConst(module, block: notReady, value: PdNil, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(notReady, op: StdOp.condBranch(isFree, thenBlockId: lookNext.id, elseBlockId: doubleWait.id))
@@ -2790,10 +2804,11 @@ function buildNetpollPdWaitAny(module StdModule)
 	emitSchedLockLeave(module, block: park, ids: ids)
 	emitGtPark(module, ids: ids, cur: park, kind: GtParkKindNetpollAny, arg: group, cont: resumed)
 
-	// The wait is over. Whichever member fired took this thread off ALL of them (`__np_group_unhook`), so the
-	// words are `PdNil` already — except on the road a RELEASE took, which leaves `PdReady` on a direction this
-	// thread was published in. A STATE word is cleared, and a word naming some OTHER thread is left alone: the
-	// record has been recycled and is no longer this group's to write.
+	// The wait is over, and every member word still in the life this wait marked is this group's to settle. A
+	// `PdReady` is a readiness consumed here — the member that fired (`__np_pd_ready_one` leaves it) or one that
+	// landed before the thread ran — so it is REPORTED as well as cleared. A `PdWait` is a mark the commit never
+	// published (its resume-now road) and is cleared. A word in another life belongs to that life's owner and is
+	// not touched: the release that recycled it readied this thread and reset the words itself.
 	//
 	// ⛔⛔ **A WORD STILL NAMING THIS THREAD IS THE ONE ANSWER THAT MUST NOT BE SWEPT UP.** Clearing it here
 	// would drop a PUBLISHED waiter without the `__np_waiters` debit its publication took, and that leak never
@@ -2801,26 +2816,37 @@ function buildNetpollPdWaitAny(module StdModule)
 	// this is a runtime bug, and it is named at the instruction that produced it rather than hidden by a store.
 	let waiter = emitLoadCurrentGt(module, block: resumed, ids: ids)
 	emitSchedLockEnter(module, block: resumed, ids: ids)
+	emitStoreField(module, block: resumed, record: group, offset: GroupOffFired, value: emitConst(module, block: resumed, value: 0, ids: ids))
 	let clear = emitNetpollGroupWalk(module, func: func, pre: resumed, hdr: clearHdr, body: clearBody, act: clearAct, exhausted: doneBlock, group: group, count: count, ids: ids)
-	let leftover = emitLoadField(module, block: clearAct, record: clear.member.gpp, offset: 0, ids: ids)
-	let isState = emitCmp(module, block: clearAct, a: leftover, b: emitConst(module, block: clearAct, value: PdWait, ids: ids), pred: StdCmpPred.le, ids: ids)
-	module.setTerminator(clearAct, op: StdOp.condBranch(isState, thenBlockId: clearOurs.id, elseBlockId: clearOther.id))
+	let markedGen = emitLoadField(module, block: clearAct, record: clear.member.slot, offset: GroupSlotGen, ids: ids)
+	let sameLife = emitCmp(module, block: clearAct, a: emitLoadField(module, block: clearAct, record: clear.member.pd, offset: PdOffGen, ids: ids), b: markedGen, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(clearAct, op: StdOp.condBranch(sameLife, thenBlockId: clearLive.id, elseBlockId: clearNext.id))
+
+	let leftover = emitLoadField(module, block: clearLive, record: clear.member.gpp, offset: 0, ids: ids)
+	let isState = emitCmp(module, block: clearLive, a: leftover, b: emitConst(module, block: clearLive, value: PdWait, ids: ids), pred: StdCmpPred.le, ids: ids)
+	module.setTerminator(clearLive, op: StdOp.condBranch(isState, thenBlockId: clearOurs.id, elseBlockId: clearOther.id))
 
 	let isSelf = emitCmp(module, block: clearOther, a: leftover, b: waiter, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(clearOther, op: StdOp.condBranch(isSelf, thenBlockId: stranded.id, elseBlockId: clearNext.id))
 	emitRuntimeAbort(module, func: func, block: stranded, abort: RuntimeAbort.netpollGroupUnhookMissed, ids: ids)
+
+	let wasReady = emitCmp(module, block: clearOurs, a: leftover, b: emitConst(module, block: clearOurs, value: PdReady, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let reported = emitBin(module, block: clearOurs, a: wasReady, b: clear.index, opcode: StdBinOpcode.shl, ids: ids)
+	let firedSoFar = emitLoadField(module, block: clearOurs, record: group, offset: GroupOffFired, ids: ids)
+	emitStoreField(module, block: clearOurs, record: group, offset: GroupOffFired, value: emitBin(module, block: clearOurs, a: firedSoFar, b: reported, opcode: StdBinOpcode.bitOr, ids: ids))
 	emitStoreField(module, block: clearOurs, record: clear.member.gpp, offset: 0, value: emitConst(module, block: clearOurs, value: PdNil, ids: ids))
 	module.setTerminator(clearOurs, op: StdOp.branch(clearNext.id))
 	emitNetpollGroupWalkEnd(module, next: clearNext, hdr: clearHdr, index: clear.index, ids: ids)
 
+	let fired = emitLoadField(module, block: doneBlock, record: group, offset: GroupOffFired, ids: ids)
 	emitSchedLockLeave(module, block: doneBlock, ids: ids)
-	module.setTerminator(doneBlock, op: StdOp.retVoid)
+	module.setTerminator(doneBlock, op: StdOp.ret(fired))
 
 	module.functions.push(func)
 end 'buildNetpollPdWaitAny'
 
-// `__np_group_unhook(gt)` — see `NetpollGroupUnhookName`. The member that fired has already been set to
-// `PdNil` by its own ready, so it simply fails this test with the rest.
+// `__np_group_unhook(gt)` — see `NetpollGroupUnhookName`. A member whose readiness ended the wait already
+// holds `PdReady`, so the walk passes over it (`__np_pd_ready_one` says why it must).
 function buildNetpollGroupUnhook(module StdModule)
 	var func = IrFunction.createFromStd(NetpollGroupUnhookName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)

@@ -54,11 +54,12 @@ any shape you like; the 566/107/108/95 row is what that looks like.
 
 ⇒ **EIGHT CHILDREN AT ONE PROCESSOR DO *NOT* COST EIGHT TIMES ONE CHILD, AND THE MECHANISM IS NAMED RATHER
 THAN GUESSED AT — BECAUSE "NO EFFECT HERE" OTHERWISE READS AS "THE EFFECT IS NOT REAL".**
-`__gt_subp_wait_collect` (`SubprocessRuntime.maxon:1158`) **IS A POLL LOOP AND NEVER MAKES AN UNBOUNDED
-KERNEL CALL.** Each pass asks the child's handle whether it has exited with a **ZERO-timeout**
-`WaitForSingleObject`, peeks each pipe before committing to any read, and — on the one path where a pass
-moved no bytes and the child is still running — sleeps **GREEN**, through `__gt_sleep(SubpPollMs)`. That
-function's own header states it: *"it sleeps GREEN, so the whole scheduler runs while it waits"*.
+`__gt_subp_wait_collect` (`SubprocessRuntime.buildSubpWaitCollect`) **IS A POLL LOOP ON THIS WINDOWS LANE AND
+NEVER MAKES AN UNBOUNDED KERNEL CALL.** Each pass asks the child's handle whether it has exited with a
+**ZERO-timeout** `WaitForSingleObject`, peeks each pipe before committing to any read, and — on the one path
+where a pass moved no bytes and the child is still running — sleeps **GREEN**, through
+`__gt_sleep(SubpPollMs)`. That function's own header states it: *"it waits GREEN — a `__gt_sleep` on the
+completion-port lane … — so the whole scheduler runs meanwhile"*.
 
 ⇒ **the wait PARKS the green thread and GIVES THE M BACK, so this program never occupied an M to begin
 with.** The flat 61–62 ms is therefore **the correct answer for a program that does not exhibit the effect**,

@@ -1,0 +1,23 @@
+// Test: returned-alias-of-a-let-union-payload
+union M
+	silent
+	text(body String)
+end 'M'
+
+function grab(m M) returns String
+	return match m 'k'
+		silent gives "a fallback literal long enough to be a real heap string"
+		text(s) gives s
+	end 'k'
+end 'grab'
+
+function main() returns ExitCode
+	let m = M.text("original payload, long enough to be a real heap allocation")
+	var escaped = grab(m)
+	escaped.append(" MUTATED")
+	print(grab(m))
+	return 0
+end 'main'
+---
+CompilerError:
+error E3078: <fragment>:16:6: cannot assign the result of 'grab', which may share storage with immutable variable 'm', to mutable binding 'escaped'; use 'let' instead of 'var', or use clone()

@@ -2542,9 +2542,9 @@ function buildArm64DarwinNetpollArmChildChunk() returns FunctionCodeChunk
 	return asm.finishFunction(HostNetpollArmChildName)
 end 'buildArm64DarwinNetpollArmChildChunk'
 
-// ⭐⭐ **`mrt_host_netpoll_arm_pipe(x0 = kq, x1 = fd) -> x0 = 0, or negative`.** One `fcntl` and then exactly
-// the child source's registration, because a pipe end and a child's kqueue are the same thing to the poller.
-// `fcntl` is VARIADIC, whose third argument this ABI passes on the STACK, which is why this is a frame and not
+// ⭐⭐ **`mrt_host_netpoll_arm_pipe(x0 = kq, x1 = fd) -> x0 = 0, or negative`.** One `fcntl` setting
+// `O_NONBLOCK` on `fd`, and nothing else: `kq` is unread, because the registration is a separate
+// `armChildSource` (`NetpollRuntime.emitNetpollArmPipe`). `fcntl` is VARIADIC, whose third argument this ABI passes on the STACK, which is why this is a frame and not
 // an isel sequence — `buildArm64DarwinSocketBirthChunk` carries the same note.
 function buildArm64DarwinNetpollArmPipeChunk() returns FunctionCodeChunk
 	let SlotQueue = 0 as StackSize

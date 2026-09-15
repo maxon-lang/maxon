@@ -733,14 +733,11 @@ end 'SpecTestResult'
 
 export typealias SpecTestResultArray = Array with SpecTestResult
 
-// Captured result of one spawned process: exit code + both streams. The single
-// spawn/capture choke point every spawn this harness performs goes through, so there is exactly one
-// place that talks to `Subprocess`.
+// Captured result of one spawned process: exit code + both streams. The one choke point every CAPTURED
+// spawn goes through; a spawn whose output streams instead (the guest suite, the pool's workers) does not.
 //
-// ⚠ **THE COMPILE STEP IS NOT ONE OF THEM** — it compiles in this process and answers
-// with a `CompileAnswer` below. What comes back through here is the RUN step, the git probe,
-// the harness fixture sub-runs, the two `--target` runner probes and the scale runner's own rung
-// compiles.
+// ⚠ **THE COMPILE STEP IS NOT A SPAWN AT ALL** — it compiles in this process and answers
+// with a `CompileAnswer` below.
 //
 // Exported because the scale-test runner spawns compiles too (one per rung) and must go through
 // the SAME choke point. A second, private copy of "spawn and capture" is how the two runners would

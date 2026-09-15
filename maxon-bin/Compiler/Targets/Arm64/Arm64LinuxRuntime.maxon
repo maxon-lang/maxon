@@ -3079,9 +3079,9 @@ function buildArm64LinuxNetpollChildOpenChunk() returns FunctionCodeChunk
 	return asm.finishFunction(HostNetpollChildOpenName)
 end 'buildArm64LinuxNetpollChildOpenChunk'
 
-// ⭐⭐ **`mrt_host_netpoll_arm_pipe(x0 = epfd, x1 = fd) -> x0 = 0, or -errno`.** One `fcntl` and then exactly
-// the child source's registration, because a pipe end and a `pidfd` are the same thing to the poller.
-// `F_SETFL` replaces the whole status word, which is right for a descriptor this call has just created: its
+// ⭐⭐ **`mrt_host_netpoll_arm_pipe(x0 = epfd, x1 = fd) -> x0 = 0, or -errno`.** One `fcntl` setting
+// `O_NONBLOCK` on `fd`, and nothing else: `epfd` is unread, because the registration is a separate
+// `armChildSource` (`NetpollRuntime.emitNetpollArmPipe`). `F_SETFL` replaces the whole status word, which is right for a descriptor this call has just created: its
 // only other status bit is the access mode, which `F_SETFL` ignores.
 function buildArm64LinuxNetpollArmPipeChunk() returns FunctionCodeChunk
 	let SlotPoller = 0 as StackSize

@@ -327,6 +327,81 @@ end 'main'
 timerpolls=true onpoller=true outLen=3 matches=true
 ```
 
+<!-- test: subprocess-builtins.posix-a-reported-exit-is-reaped-rather-than-polled -->
+<!-- unsupported-targets: x64-windows -->
+⭐⭐ **A CHILD'S EXIT REACHES THE POLLER ONCE, SO THE COLLECT MUST REAP ON IT RATHER THAN ASK AGAIN.** The
+collect's idle pass parks on the child's poll source, and that source reports the exit exactly once. XNU can
+deliver `NOTE_EXIT` before `waitpid(WNOHANG)` is able to reap the child, so a drain that consumed the report and
+then re-asked the host with a non-blocking poll heard "running", went idle, and parked again on a source with
+nothing left to say — for ever, with the child a zombie. The wait now answers which of its members fired, and a
+child whose exit was reported goes straight to the blocking reap.
+
+⚠ **THE CHILD ON arm64-macOS IS `/usr/bin/git --version`, BECAUSE THE WINDOW IS A PROPERTY OF THE CHILD.**
+MEASURED with a C observer polling the kernel queue: `NOTE_EXIT` arrived ahead of the reap for 74 of 300 of
+these (an Xcode tool reached through its `/usr/bin` shim), for none of 300 each of `/bin/echo`, `/bin/sh` and a
+plain C program, and for none of 200 of a Maxon green-thread program — so a loop of the simple children would
+pass on the defect. The host needs the Command Line Tools: without them the shim prints an install prompt and
+exits non-zero, and the case reads `collected=0` for a reason that is not this one.
+Before the fix this program never finished on arm64-macOS — the harness killed it at its 120 s deadline with a
+`git` zombie beneath it. The other POSIX lanes report a child's exit only once it is reapable, so they have no
+such child; there any child serves, and the case holds that the same road collects every one of them.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias Laps = int(0 to 200)
+
+let laps = 200 as Laps
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+// One attached run, collected: whether the child exited 0 having written a line.
+function collectOne() returns bool
+	var argv = ByteArray.create()
+	#if os(Macos)
+	appendToken(argv, token: "/usr/bin/git")
+	appendToken(argv, token: "--version")
+	#else
+	appendToken(argv, token: "/bin/echo")
+	appendToken(argv, token: "hello")
+	#endif
+	let empty = ""
+	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
+	let h = __Builtins.subprocessSpawn(argv, 2, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
+	let r = __Builtins.subprocessWaitCollect(h, 0)
+	let out = String.init(__Builtins.subprocessResultStdout(r))
+	let exitedZero = __Builtins.subprocessResultStatusKind(r) == 0 and __Builtins.subprocessResultStatusCode(r) == 0
+	__Builtins.subprocessResultRelease(r)
+	__Builtins.subprocessReleaseHandle(h)
+	return exitedZero and out.byteLength() > 0
+end 'collectOne'
+
+function main() returns ExitCode
+	var collected = 0 as Laps
+
+	for _ in 0 upto laps 'collect'
+		if collectOne() 'answered'
+			collected = collected + 1
+		end 'answered'
+	end 'collect'
+
+	print("laps={laps} collected={collected}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+laps=200 collected=200
+```
+
 <!-- test: subprocess-builtins.posix-argv-reaches-the-child-verbatim -->
 <!-- unsupported-targets: x64-windows -->
 ⭐ **THE CASE THAT PROVES THERE IS NO SHELL ON THE ARGV PATH — `argv-quoting`'s subject, inverted.** The

@@ -1,0 +1,32 @@
+// Test: returned-alias-through-an-interface-call
+
+interface Named
+	function name() returns String
+end 'Named'
+
+type Tag implements Named
+	export let label as String
+
+	static function create(label String) returns Self
+		return Self{label: label}
+	end 'create'
+
+	export function name() returns String
+		return self.label
+	end 'name'
+end 'Tag'
+
+function nameOf(n Named) returns String
+	return n.name()
+end 'nameOf'
+
+function main() returns ExitCode
+	let t = Tag.create("tag")
+	var y = nameOf(t)
+	y.append(" more")
+	print("{y} {t.label}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3078: <fragment>:25:6: cannot assign the result of 'nameOf', which may share storage with immutable variable 't', to mutable binding 'y'; use 'let' instead of 'var', or use clone()
