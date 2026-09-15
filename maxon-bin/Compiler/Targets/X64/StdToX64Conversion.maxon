@@ -79,10 +79,6 @@ export let argRegisters = [X64Register.rcx, X64Register.rdx, X64Register.rax, X6
 // nothing had loaded and its BOOL verdict was still true.
 let hostChunkArgRegisters = [X64Register.rcx, X64Register.rdx, X64Register.r8, X64Register.r9]
 
-// ⭐ The message `osCancelIo` aborts with on the syscall route — see `lowerRuntimeAbort` for why a RUNTIME
-// abort is the honest answer where a compile-time panic would refuse a program that only contains the arm.
-let X64LinuxNoCancelIoMessage = b"panic: CancelIoEx was reached on x64-linux, where every pipe read completes in its caller: no read is ever in flight across a park, so the renounced arm of `__gt_subp_yield_read` that cancels one is unreachable and a build that runs it has a parked reader this lane cannot have created\n"
-
 // The physical register a host-surface chunk takes argument slot `index` in. Past the file is a
 // compiler-invariant break: no chunk in either runtime file takes a fifth argument, and one that did would
 // need an outgoing stack slot the callers here do not reserve.
@@ -4902,10 +4898,11 @@ export type StdToX64Lowering
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsWin64Call2(IatSlot.CancelIoEx, arg0: handleId, arg1: ovlId, dstBlock: dstBlock)
 
-			// A RUNTIME abort naming an op that is statically reachable and dynamically unreachable: a read on
-			// this lane completes in its caller, so the renounced arm that cancels an in-flight one cannot
-			// fire. A compile-time panic here would refuse every program that merely CONTAINS the arm.
-			syscall then self.lowerRuntimeAbort(dstBlock, message: X64LinuxNoCancelIoMessage)
+			// A RUNTIME abort, because the op is statically reachable and dynamically unreachable:
+			// `__gt_promise_drop`'s cancelling arm is built into every lane and gated on `io_source`, a word
+			// this lane never writes. A compile-time panic here would refuse every program that merely
+			// CONTAINS the arm.
+			syscall then self.lowerRuntimeAbort(dstBlock, message: PosixNoCancelIoMessage)
 		end 'route'
 	end 'lowerOsCancelIo'
 

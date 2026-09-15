@@ -951,10 +951,10 @@ export enum NetpollVerb
 	// POSIX kernels make a child readable themselves and need nobody to forward it.
 	postChildExit
 
-	// ⭐⭐ **`(poller, fd) -> the host's raw answer`. MAKE A PIPE'S READ END NON-BLOCKING.** No lane reads
-	// `poller`. A descriptor a green thread parks on must never hold its machine inside `read(2)`, and the
-	// `armChildSource` that follows this verb is what gives an `EAGAIN` somewhere to park — two syscalls, so two
-	// verbs, each answering for its own (`NetpollRuntime.emitNetpollArmPipe`).
+	// ⭐⭐ **`(fd) -> the host's raw answer`. MAKE A PIPE'S READ END NON-BLOCKING.** A descriptor a green
+	// thread parks on must never hold its machine inside `read(2)`, and the `armChildSource` that follows this
+	// verb is what gives an `EAGAIN` somewhere to park — two syscalls, so two verbs, each answering for its own
+	// (`NetpollRuntime.emitNetpollArmPipe`).
 	//
 	// ⛔ **ONLY THE END THE PARENT READS IS FLAGGED, AND THAT IS WHY THIS IS PER-DESCRIPTOR RATHER THAN A PIPE
 	// FLAG.** `pipe2(O_NONBLOCK)` sets the flag on BOTH file descriptions, and the child holds the write end as

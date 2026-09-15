@@ -484,3 +484,86 @@ func @main {
     x64.popReg rbp
     x64.ret
 }
+
+func @__np_pd_mark_timed_out {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.leaRegGlobal rax, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegGlobal rcx, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.mov rcx, gs:[rcx]
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg notEqual, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg notEqual, rdx
+    x64.andRegReg rax, rax, rdx
+    x64.movRegImm32 rdx, 0
+    x64.subRegReg rdx, rdx, rax
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.leaRegRegImm32 rcx, rcx, 536
+    x64.leaRegGlobal rsi, __sched_lock_depth_sink
+    x64.andRegReg rcx, rcx, rdx
+    x64.andRegReg rsi, rsi, rax
+    x64.orRegReg rcx, rcx, rsi
+    x64.movRegImm32 rax, 1
+    x64.lock add [rcx], rax
+    x64.leaRegGlobal rax, __sched_lock
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.callDirect mrt_linux_lock_enter
+    x64.movRegReg rcx, rbx
+    x64.callDirect __np_pd_slot
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, npnopd
+  npmtknown:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 48]
+    x64.cmpRegReg rax, r12
+    x64.jcc notEqual, npmtdone
+  npmtstore:
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r8 + 40], rax
+  npmtdone:
+    x64.leaRegGlobal rax, __sched_lock
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.callDirect mrt_linux_lock_leave
+    x64.leaRegGlobal rax, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegGlobal rcx, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.mov rcx, gs:[rcx]
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg notEqual, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg notEqual, rdx
+    x64.andRegReg rax, rax, rdx
+    x64.movRegImm32 rdx, 0
+    x64.subRegReg rdx, rdx, rax
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.leaRegRegImm32 rcx, rcx, 536
+    x64.leaRegGlobal rsi, __sched_lock_depth_sink
+    x64.andRegReg rcx, rcx, rdx
+    x64.andRegReg rsi, rsi, rax
+    x64.orRegReg rcx, rcx, rsi
+    x64.movRegImm rax, 18446744073709551615
+    x64.lock add [rcx], rax
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  npnopd:
+    x64.movRegImm32 rdi, 104
+    x64.movReg32Reg32 rdi, rdi
+    x64.x64Syscall 231
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

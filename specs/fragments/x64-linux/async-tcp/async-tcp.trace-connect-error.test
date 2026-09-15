@@ -1,11 +1,15 @@
 // Test: async-tcp.trace-connect-error
-function connect() returns ExitCode throws NetworkError
-	_ = try TcpClient.connect("192.0.2.1", port: 1)
+function connect(port NetworkPort) returns ExitCode throws NetworkError
+	_ = try TcpClient.connect("localhost", port: port)
 	return 0
 end 'connect'
 
 function main() returns ExitCode
-	let p = async connect()
+	let listener = try TcpListener.bind("localhost", port: 0) otherwise return 1
+	let port = listener.port()
+	listener.close()
+
+	let p = async connect(port)
 	let result = try await p otherwise 99
 	return result
 end 'main'
@@ -73,6 +77,7 @@ data {
   __slab_arena_list@456 = i64 0
   __slab_arena_map_l1@464 = i64 0
   __slab_state@472 = i64 0
+  __ms_wsa_started@480 = i64 0
 }
 
 func @connect {
@@ -80,8 +85,15 @@ func @connect {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "192.0.2.1"
-    x64.movRegImm32 rdx, 1
+    x64.movRegReg rax, rcx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rax, 65535
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "localhost"
+    x64.movRegReg rdx, rax
     x64.callDirect TcpClient.connect
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
@@ -98,6 +110,14 @@ func @connect {
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at async-tcp.trace-connect-error.test:2: Range check failed: value outside typealias 'NetworkPort'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }
 
 func @main {
@@ -105,20 +125,81 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
     x64.prologue 40
+    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "localhost"
+    x64.movRegImm32 rdx, 0
+    x64.callDirect TcpListener.bind
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __il_body#8
+  tryerr#2:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __il_body#8:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect __ml_port
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#9
+  tryerr#10:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at TcpListener.maxon:32: TcpListener.port: this listener is closed, so it holds no bound port to report\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#9:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r12, 65535
+    x64.jcc greater, __rc_panic
+  __il_body#14:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect __ms_close
+  __il_cont:
     x64.leaRegFunc rcx, [rip + connect]
     x64.callDirect __gt_spawn
-    x64.movRegReg rbx, r8
-    x64.movRegReg rcx, rbx
+    x64.movRegReg r13, r8
+    x64.storeBaseDispReg.word64 [r13 + 200], r12
+    x64.movRegReg rcx, r13
     x64.callDirect __gt_ready
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, trycont
-  tryerr:
-    x64.movRegImm32 r8, 99
+    x64.jcc equal, tryok#3
+  tryerr#4:
+    x64.movRegImm32 r12, 99
+    x64.jmp trycont
+  tryok#3:
+    x64.movRegReg r12, r8
   trycont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_TcpListener
+    x64.movRegReg r8, r12
     x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at TcpListener.maxon:35: Range check failed: value outside typealias 'NetworkPort'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret

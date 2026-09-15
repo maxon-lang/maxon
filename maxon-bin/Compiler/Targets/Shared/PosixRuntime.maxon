@@ -694,6 +694,12 @@ export let HostNetpollArmPipeName = b"mrt_host_netpoll_arm_pipe"
 // What `openTimer` answers where a sleep needs no object; `sleepOnTimer` never reads it on these lanes.
 export let PosixNoTimerObject = 0
 
+// What `osCancelIo` aborts with on every POSIX lane. Nothing here writes a thread's `io_source` — only the
+// completion-port shape's `__np_op_open` and `__np_op_aim` do — so the arm of `__gt_promise_drop` that cancels
+// an in-flight read is gated on a word that is always 0 and a build that runs it dropped a promise whose thread
+// claims a request this lane cannot have issued.
+export let PosixNoCancelIoMessage = b"panic: osCancelIo was reached on a POSIX lane, where no overlapped request is ever in flight across a park: nothing on this lane writes a thread's io_source, so the arm of `__gt_promise_drop` that cancels an in-flight read is unreachable, and a build that runs it dropped a promise whose thread claims a request this lane cannot have issued\n"
+
 // `epoll_create1`'s and `eventfd2`'s close-on-exec flag, and the eventfd's non-blocking one: a child must not
 // inherit the scheduler's descriptors, and a drain must never block the one machine polling.
 export let LinuxEpollCloexec = 0x80000
@@ -875,12 +881,12 @@ export function posixNetpollOperandCount(verb NetpollVerb) returns ParamCount
 			shortSleep gives 1
 		armSource gives 2
 		openChildSource or
-			closeChildSource gives 1
+			closeChildSource or
+			armPipeSource gives 1
 
 		// The child handle is the third operand and only Windows reads it: these lanes register the SOURCE the
 		// open already answered.
-		armChildSource or
-			armPipeSource gives 2
+		armChildSource gives 2
 		openTimer panic("posixNetpollOperandCount: `openTimer` has no chunk on a POSIX lane — see `posixNetpollChunk`")
 		postChildExit panic("posixNetpollOperandCount: `postChildExit` has no chunk on a POSIX lane — see `posixNetpollChunk`")
 	end 'v'

@@ -6310,7 +6310,8 @@ function buildGtProcessRun(module StdModule, commandShape SubprocessCommandShape
 	// port, a key) this call owns for exactly as long as the wait — which is why the close is appended AFTER
 	// the branch is set and still runs BEFORE it: a block's body ops all run ahead of its terminator, so one
 	// copy serves both roads out.
-	emitGtWaitReadable(module, cur: waitChild, source: child.source, ready: reapExit, renounced: renounced, ids: ids)
+	let childGen = emitNetpollPdOpBegin(module, block: waitChild, source: child.source, ids: ids)
+	emitGtWaitReadable(module, cur: waitChild, source: child.source, gen: childGen, ready: reapExit, renounced: renounced, ids: ids)
 	module.appendOp(waitChild, op: StdOp.call(ids.mint(), callee: NetpollChildCloseName, args: twoArgs(child.source, second: child.token)))
 
 	// ⭐⭐ **A WAIT THAT ENDED ANY OTHER WAY WAS RENOUNCED, AND THE CHILD IS ABANDONED RATHER THAN KILLED.**
@@ -7056,6 +7057,10 @@ function buildSubpYieldRead(module StdModule, target Target)
 		inlineCompletion then break 'source'
 	end 'source'
 
+	// The read begins on the source's record here, ahead of the retry ring, so the life its wait carries is the
+	// one the read was issued in: a pipe end closed and reopened under a parked read ends the read rather than
+	// publishing it into the next owner's word.
+	let gen = emitNetpollPdOpBegin(module, block: entry, source: source, ids: ids)
 	module.setTerminator(entry, op: StdOp.branch(attempt.id))
 
 	let readResult = ids.mint()
@@ -7079,12 +7084,13 @@ function buildSubpYieldRead(module StdModule, target Target)
 	module.setTerminator(checkErr, op: StdOp.condBranch(isPending, thenBlockId: pending.id, elseBlockId: classifyErr.id))
 
 	match ioCompletionShape(target) 'wait'
-		completionPort then emitSubpAwaitCompletion(module, func: func, ids: ids, cur: pending, source: source, selfGt: selfGt, answer: answer, cleanEof: cleanEof, readFailed: readFailed)
+		completionPort then emitSubpAwaitCompletion(module, func: func, ids: ids, cur: pending, source: source, gen: gen, selfGt: selfGt, answer: answer, cleanEof: cleanEof, readFailed: readFailed)
 
 		// The descriptor is merely empty. Suspend on its poll record and read again once it is readable; a wait
-		// that ended any other way was RENOUNCED by a dropped promise, and the caller's own unwinding is what
-		// follows, so it answers a failed read rather than re-issuing on a descriptor nobody wants.
-		inlineCompletion then emitGtWaitReadable(module, cur: pending, source: source, ready: attempt, renounced: readFailed, ids: ids)
+		// that ended any other way was RENOUNCED by a dropped promise or found the record in another life, and
+		// the caller's own unwinding is what follows, so it answers a failed read rather than re-issuing on a
+		// descriptor nobody wants.
+		inlineCompletion then emitGtWaitReadable(module, cur: pending, source: source, gen: gen, ready: attempt, renounced: readFailed, ids: ids)
 	end 'wait'
 
 	// ⭐ **A BROKEN PIPE IS THE END OF THE STREAM; ANYTHING ELSE IS A FAILED READ.** A child that exited and
@@ -7135,13 +7141,13 @@ end 'emitSubpOpenReadSource'
 // park exactly where it is — it cancels the read so the packet comes at once (`__gt_promise_drop`). So
 // `NetpollWaitTimedOut` and `NetpollWaitStale` are both impossible, and answering a count for either would hand
 // the caller bytes out of a buffer the kernel may still be writing into.
-function emitSubpAwaitCompletion(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, source ValueId, selfGt ValueId, answer IrBlock, cleanEof IrBlock, readFailed IrBlock)
+function emitSubpAwaitCompletion(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, source ValueId, gen ValueId, selfGt ValueId, answer IrBlock, cleanEof IrBlock, readFailed IrBlock)
 	var completed = module.addBlock(func, label: b"completed", heat: BlockHeat.normal)
 	var completedOk = module.addBlock(func, label: b"completedok", heat: BlockHeat.normal)
 	var completedErr = module.addBlock(func, label: b"completederr", heat: BlockHeat.normal)
 	var renounced = module.addBlock(func, label: b"readrenounced", heat: BlockHeat.normal)
 
-	emitGtWaitReadable(module, cur: cur, source: source, ready: completed, renounced: renounced, ids: ids)
+	emitGtWaitReadable(module, cur: cur, source: source, gen: gen, ready: completed, renounced: renounced, ids: ids)
 	emitRuntimeAbort(module, func: func, block: renounced, abort: RuntimeAbort.netpollOverlappedWaitNotACompletion, ids: ids)
 
 	let status = emitLoadField(module, block: completed, record: selfGt, offset: GtOffIoStatus, ids: ids)
@@ -7163,12 +7169,11 @@ function emitSubpAwaitCompletion(module StdModule, func IrFunction, ids ValueMin
 end 'emitSubpAwaitCompletion'
 
 // ⭐ **SUSPEND ON A SOURCE'S READ DIRECTION AND SORT THE TWO WAYS THE WAIT CAN END.** Readiness reaches
-// `ready`; anything else reaches `renounced`, which for a child or a pipe end can only be a DROPPED PROMISE,
-// neither of them arming a deadline. The child wait and the pipe read are the same three ops for the same
-// reason, so they are one.
-function emitGtWaitReadable(module StdModule, cur IrBlock, source ValueId, ready IrBlock, renounced IrBlock, ids ValueMinter)
-	let verdict = ids.mint()
-	module.appendOp(cur, op: StdOp.call(verdict, callee: NetpollPdWaitName, args: twoArgs(source, second: emitConst(module, block: cur, value: NetpollModeRead, ids: ids))))
+// `ready`; anything else reaches `renounced` — a DROPPED PROMISE, neither a child nor a pipe end arming a
+// deadline, or a record that left the life `gen` names (`__np_pd_op_begin`). The child wait and the pipe read
+// are the same three ops for the same reason, so they are one.
+function emitGtWaitReadable(module StdModule, cur IrBlock, source ValueId, gen ValueId, ready IrBlock, renounced IrBlock, ids ValueMinter)
+	let verdict = emitNetpollPdWait(module, block: cur, source: source, mode: NetpollModeRead, gen: gen, ids: ids)
 	let readable = emitCmp(module, block: cur, a: verdict, b: emitConst(module, block: cur, value: NetpollWaitReady, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(readable, thenBlockId: ready.id, elseBlockId: renounced.id))
 end 'emitGtWaitReadable'

@@ -298,20 +298,24 @@ function buildManagedListenerAccept(module StdModule, target Target)
 	let box = 0 as ValueId
 	let listener = emitLiveListenerOrThrow(module, func: func, entry: entry, join: ready, box: box, ids: ids)
 
-	emitIoPark(module, block: ready, operation: GtIoOperation.netAccept, ids: ids)
-	module.setTerminator(ready, op: StdOp.branch(attempt.id))
-
 	// ⭐⭐ **BOTH SHAPES WAIT ON THE LISTENER'S OWN POLL RECORD, AND THAT IS WHAT MAKES TWO ACCEPTORS ONE
 	// WAITER TOO MANY ON EVERY LANE.** A direction word holds one waiter, so an accept published there is
 	// refused a second publication by `__np_pd_wait` itself — `RuntimeAbort.netpollDoubleWait`, the stop two
 	// readers of one socket already get (`specs/netpoll-socket.md`'s two named-stop cases are one contract in
 	// two shapes). A watch on a source minted per accept would name a different word each time and strand the
 	// first acceptor instead.
-	let pollKey = emitNetpollDescriptorIndex(module, block: attempt, target: target, fd: listener, ids: ids)
+	//
+	// The accept begins on the record here, ahead of the retry ring: the generation its waits carry is the
+	// listener's life at this point, so a listener closed and reopened under a parked accept ends the accept
+	// rather than publishing it into the next owner's word.
+	emitIoPark(module, block: ready, operation: GtIoOperation.netAccept, ids: ids)
+	let pollKey = emitNetpollDescriptorIndex(module, block: ready, target: target, fd: listener, ids: ids)
+	let gen = emitNetpollPdOpBegin(module, block: ready, source: pollKey, ids: ids)
+	module.setTerminator(ready, op: StdOp.branch(attempt.id))
 
 	match socketWaitShape(target) 'shape'
-		polled then emitListenerPolledAccept(module, func: func, ids: ids, attempt: attempt, listener: listener, pollKey: pollKey, accepted: accepted, failed: failed, target: target)
-		overlapped then emitListenerWatchedAccept(module, func: func, ids: ids, attempt: attempt, listener: listener, pollKey: pollKey, accepted: accepted, failed: failed)
+		polled then emitListenerPolledAccept(module, func: func, ids: ids, attempt: attempt, listener: listener, pollKey: pollKey, gen: gen, accepted: accepted, failed: failed, target: target)
+		overlapped then emitListenerWatchedAccept(module, func: func, ids: ids, attempt: attempt, listener: listener, pollKey: pollKey, gen: gen, accepted: accepted, failed: failed)
 	end 'shape'
 
 	// ⛔ **A FAILED ACCEPT TOUCHES NEITHER DESCRIPTOR.** The listener is the caller's and stays open; there is
@@ -336,11 +340,11 @@ end 'buildManagedListenerAccept'
 // API, so the only way this wait ends other than ready is a DROPPED promise — `__np_pd_drop` marks the wait
 // expired so the resumed thread issues no further syscall — or a record reset under it. Both mean *"this
 // accept will never complete"*, which is what `acceptFailed` says.
-function emitListenerPolledAccept(module StdModule, func IrFunction, ids ValueMinter, attempt IrBlock, listener ValueId, pollKey ValueId, accepted IrBlock, failed IrBlock, target Target)
+function emitListenerPolledAccept(module StdModule, func IrFunction, ids ValueMinter, attempt IrBlock, listener ValueId, pollKey ValueId, gen ValueId, accepted IrBlock, failed IrBlock, target Target)
 	let answer = ids.mint()
 	let unused = emitConst(module, block: attempt, value: 0, ids: ids)
 	module.appendOp(attempt, op: StdOp.osSocketServe(answer, verb: SocketServeVerb.accept, a0Id: listener, a1Id: unused, a2Id: unused))
-	emitSocketAttempt(module, func: func, attempt: attempt, answer: answer, pollKey: pollKey, mode: NetpollModeRead, ok: accepted, failed: failed, timedOut: failed, target: target, ids: ids)
+	emitSocketAttempt(module, func: func, attempt: attempt, answer: answer, pollKey: pollKey, gen: gen, mode: NetpollModeRead, ok: accepted, failed: failed, timedOut: failed, target: target, ids: ids)
 end 'emitListenerPolledAccept'
 
 // ⭐⭐⭐ **THE OVERLAPPED LANE'S ACCEPT — A CONNECTION WATCHED THROUGH AN EVENT, WHICH IS
@@ -360,7 +364,7 @@ end 'emitListenerPolledAccept'
 // signal is posted under the listener's key, so this accept publishes itself in the very direction word a
 // POSIX accept publishes itself in — which is what gives both lanes ONE rule for a second acceptor
 // (`RuntimeAbort.netpollDoubleWait`) and what lets a close under a parked accept end that accept.
-function emitListenerWatchedAccept(module StdModule, func IrFunction, ids ValueMinter, attempt IrBlock, listener ValueId, pollKey ValueId, accepted IrBlock, failed IrBlock)
+function emitListenerWatchedAccept(module StdModule, func IrFunction, ids ValueMinter, attempt IrBlock, listener ValueId, pollKey ValueId, gen ValueId, accepted IrBlock, failed IrBlock)
 	var noEvent = module.addBlock(func, label: b"mlnoevent", heat: BlockHeat.normal)
 	var armWatch = module.addBlock(func, label: b"mlwatch", heat: BlockHeat.normal)
 	var watchRefused = module.addBlock(func, label: b"mlwatchno", heat: BlockHeat.normal)
@@ -410,8 +414,7 @@ function emitListenerWatchedAccept(module StdModule, func IrFunction, ids ValueM
 	// The registration is given back on the far side of the wait and the RECORD is not: it is the listener's,
 	// and the listener outlives this accept.
 	let token = emitNetpollWatchHandleOnRecord(module, func: func, ids: ids, cur: armSignal, source: pollKey, handle: event, cont: watching)
-	let verdict = ids.mint()
-	module.appendOp(watching, op: StdOp.call(verdict, callee: NetpollPdWaitName, args: twoArgs(pollKey, second: emitConst(module, block: watching, value: NetpollModeRead, ids: ids))))
+	let verdict = emitNetpollPdWait(module, block: watching, source: pollKey, mode: NetpollModeRead, gen: gen, ids: ids)
 	emitNetpollUnwatchHandleOnPort(module, block: watching, token: token, ids: ids)
 	module.setTerminator(watching, op: StdOp.branch(awaited.id))
 

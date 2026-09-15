@@ -4029,28 +4029,20 @@ function buildX64LinuxNetpollChildOpenChunk() returns FunctionCodeChunk
 	return asm.finishFunction(HostNetpollChildOpenName)
 end 'buildX64LinuxNetpollChildOpenChunk'
 
-// ⭐⭐ **`mrt_host_netpoll_arm_pipe(rcx = epfd, rdx = fd) -> rax = 0, or -errno`.** One `fcntl` setting
-// `O_NONBLOCK` on `fd`, and nothing else: `epfd` is unread, because the registration is a separate
-// `armChildSource` (`NetpollRuntime.emitNetpollArmPipe`). `F_SETFL` replaces the whole status word, which is right for a descriptor this call has just created: its
+// ⭐⭐ **`mrt_host_netpoll_arm_pipe(rcx = fd) -> rax = 0, or -errno`.** One `fcntl` setting `O_NONBLOCK` on
+// `fd`, and nothing else: the registration is a separate `armChildSource` (`NetpollRuntime.emitNetpollArmPipe`).
+// `F_SETFL` replaces the whole status word, which is right for a descriptor this call has just created: its
 // only other status bit is the access mode, which `F_SETFL` ignores.
 function buildX64LinuxNetpollArmPipeChunk() returns FunctionCodeChunk
-	let SlotPoller = 0 as StackSize
-	let SlotFd = 1 as StackSize
-	var asm = X64RuntimeAsm.beginFunction(2)
-
-	let flagged = asm.newLabel()
+	var asm = X64RuntimeAsm.beginFunction(0)
 	let answered = asm.newLabel()
 
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotPoller), srcReg: X64Register.rcx)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFd), srcReg: X64Register.rdx)
-	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rdx, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rcx, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: LinuxFcntlSetFlags)
 	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: LinuxONonBlock)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallFcntl)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: answered)
-
-	asm.placeLabel(flagged)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
 
 	asm.placeLabel(answered)

@@ -294,6 +294,13 @@ only happen after the deadline has already fired.
 
 ⚠ The `default` arm says *unreachable*, and it has to say so with `panic`: a `default throws` in a match
 whose error has nowhere to go is silently discarded, and with a payload-carrying error it leaks the box.
+
+⭐ **THE MARK THIS ASSERTS IS WRITTEN ONLY INTO THE LIFE OF THE RECORD THE READ BEGAN IN.** `timedOut=true` is
+`__np_pd_mark_timed_out(fd, gen)` storing into the poll record, and the late exit that stores it can run after a
+park of the thread's own; by the time it resumes, the descriptor may name another socket's life of the same
+record, whose owner would then read a deadline it never set. So the store is conditional on the record still
+carrying the generation the operation was handed by `__np_pd_op_begin`, and the pinned body below shows that
+compare ahead of the conditional store.
 ```maxon
 // Far above the 300 ms deadline and far below any kernel-side idle-read timeout: an elapsed reading under
 // this can only have come from the deadline itself.
@@ -346,6 +353,9 @@ timedOut=true prompt=true
 ```
 ```exitcode
 0
+```
+```RequiredRuntime
+__np_pd_mark_timed_out
 ```
 
 <!-- test: netpoll-socket.a-read-the-kernel-finished-keeps-its-bytes-past-its-deadline -->

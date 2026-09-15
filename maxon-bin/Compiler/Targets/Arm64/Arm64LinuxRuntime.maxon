@@ -3079,28 +3079,19 @@ function buildArm64LinuxNetpollChildOpenChunk() returns FunctionCodeChunk
 	return asm.finishFunction(HostNetpollChildOpenName)
 end 'buildArm64LinuxNetpollChildOpenChunk'
 
-// ⭐⭐ **`mrt_host_netpoll_arm_pipe(x0 = epfd, x1 = fd) -> x0 = 0, or -errno`.** One `fcntl` setting
-// `O_NONBLOCK` on `fd`, and nothing else: `epfd` is unread, because the registration is a separate
-// `armChildSource` (`NetpollRuntime.emitNetpollArmPipe`). `F_SETFL` replaces the whole status word, which is right for a descriptor this call has just created: its
+// ⭐⭐ **`mrt_host_netpoll_arm_pipe(x0 = fd) -> x0 = 0, or -errno`.** One `fcntl` setting `O_NONBLOCK` on
+// `fd`, and nothing else: the registration is a separate `armChildSource` (`NetpollRuntime.emitNetpollArmPipe`).
+// `F_SETFL` replaces the whole status word, which is right for a descriptor this call has just created: its
 // only other status bit is the access mode, which `F_SETFL` ignores.
 function buildArm64LinuxNetpollArmPipeChunk() returns FunctionCodeChunk
-	let SlotPoller = 0 as StackSize
-	let SlotFd = 1 as StackSize
-	var asm = Arm64RuntimeAsm.beginFunction(2)
-
-	let flagged = asm.newLabel()
+	var asm = Arm64RuntimeAsm.beginFunction(0)
 	let answered = asm.newLabel()
 
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotPoller)
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotFd)
-	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x0, src: Arm64Register.x1)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: LinuxFcntlSetFlags as MachineWord)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: LinuxONonBlock as MachineWord)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallFcntl)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: answered)
-
-	asm.placeLabel(flagged)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
 
 	asm.placeLabel(answered)

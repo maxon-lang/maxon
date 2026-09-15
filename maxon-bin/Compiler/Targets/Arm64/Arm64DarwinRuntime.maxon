@@ -2542,20 +2542,19 @@ function buildArm64DarwinNetpollArmChildChunk() returns FunctionCodeChunk
 	return asm.finishFunction(HostNetpollArmChildName)
 end 'buildArm64DarwinNetpollArmChildChunk'
 
-// ⭐⭐ **`mrt_host_netpoll_arm_pipe(x0 = kq, x1 = fd) -> x0 = 0, or negative`.** One `fcntl` setting
-// `O_NONBLOCK` on `fd`, and nothing else: `kq` is unread, because the registration is a separate
-// `armChildSource` (`NetpollRuntime.emitNetpollArmPipe`). `fcntl` is VARIADIC, whose third argument this ABI passes on the STACK, which is why this is a frame and not
-// an isel sequence — `buildArm64DarwinSocketBirthChunk` carries the same note.
+// ⭐⭐ **`mrt_host_netpoll_arm_pipe(x0 = fd) -> x0 = 0, or negative`.** One `fcntl` setting `O_NONBLOCK` on
+// `fd`, and nothing else: the registration is a separate `armChildSource` (`NetpollRuntime.emitNetpollArmPipe`).
+// `fcntl` is VARIADIC, whose third argument this ABI passes on the STACK, which is why this is a frame and not
+// an isel sequence — `buildArm64DarwinSocketBirthChunk` carries the same note. `fd` is slotted because
+// `arm64DarwinEmitFcntl` takes its descriptor from a slot.
 function buildArm64DarwinNetpollArmPipeChunk() returns FunctionCodeChunk
-	let SlotQueue = 0 as StackSize
-	let SlotFd = 1 as StackSize
-	var asm = Arm64RuntimeAsm.beginVariadicCallerFunction(2)
+	let SlotFd = 0 as StackSize
+	var asm = Arm64RuntimeAsm.beginVariadicCallerFunction(1)
 
 	let refused = asm.newLabel()
 	let answered = asm.newLabel()
 
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotQueue)
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotFd)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotFd)
 	arm64DarwinEmitFcntl(asm, fdSlot: SlotFd, command: DarwinFcntlSetFlags, value: DarwinONonBlock, failed: refused)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
 	arm64EmitBranchTo(asm, label: answered)

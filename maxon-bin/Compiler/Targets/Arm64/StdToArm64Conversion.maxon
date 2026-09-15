@@ -168,11 +168,6 @@ let Arm64Scratch = Arm64Register.x16
 // that compare would read as an ordinary zero rather than as the state it means.
 let TlsUninitialisedSlotOffset = 0 as Imm32
 
-// ⭐ The message `osCancelIo` aborts with — see `lowerRuntimeAbort` for why a runtime abort is the
-// honest lowering of an op that the Std tier builds unconditionally and this lane can never execute.
-//
-let Arm64NoCancelIoMessage = b"panic: CancelIoEx was reached on arm64-macos, where every pipe read completes in its caller: no read is ever in flight across a park, so the renounced arm of `__gt_subp_yield_read` that cancels one is unreachable and a build that runs it has a parked reader this lane cannot have created\n"
-
 // The bitmask the LOGICAL `not` flips: a bool lives in the 0/1 domain, so complementing it is
 // flipping bit 0 — `eor dest, src, #1` — not the 64-bit `mvn` (which would turn true into -2, still
 // truthy). The INTEGER `not` is a separate Std opcode (`bitNot` → `mvn`), so this can never reach one.
@@ -1006,11 +1001,11 @@ export type StdToArm64Lowering
 
 			// ⛔ **`osCancelIo` IS STATICALLY REACHABLE AND DYNAMICALLY UNREACHABLE HERE, so it is a RUNTIME
 			// abort rather than a compile-time one** — `osThreadCreate`'s shape on the Linux lane, and the same
-			// argument.
-			// The renounced arm of `__gt_subp_yield_read` is built whenever the pipe substrate is, but it runs
-			// only for a read still IN FLIGHT across a park, and a read on this lane completes in its caller.
-			// A silent no-op would turn "this promise was dropped mid-read" into a read nobody cancelled.
-			osCancelIo then self.lowerRuntimeAbort(dstRef, message: Arm64NoCancelIoMessage)
+			// argument. `__gt_promise_drop`'s cancelling arm is built into every lane and gated on `io_source`,
+			// a word these lanes never write; a compile-time panic would refuse every program that merely
+			// CONTAINS the arm, and a silent no-op would turn "this promise was dropped mid-request" into a
+			// request nobody cancelled.
+			osCancelIo then self.lowerRuntimeAbort(dstRef, message: PosixNoCancelIoMessage)
 
 			// ⭐ The PROCESS ID. It sits inside the IOCP band because the pipe-name uniquifier minted it
 			// (`GtRuntime.emitGtPipeNameUniquifier`), but the question it asks is the OS's and not the

@@ -501,18 +501,18 @@ end 'emitSockaddrInWord'
 // OUT of the ring: everything a re-issue reads — the descriptor, the buffer, the length — is computed in a
 // block that dominates it, so the trace still reports ONE yield/resume pair per blocking operation whatever
 // the descriptor makes the call do.
-export function emitSocketAttempt(module StdModule, func IrFunction, attempt IrBlock, answer ValueId, pollKey ValueId, mode ParsedInt, ok IrBlock, failed IrBlock, timedOut IrBlock, target Target, ids ValueMinter)
+export function emitSocketAttempt(module StdModule, func IrFunction, attempt IrBlock, answer ValueId, pollKey ValueId, gen ValueId, mode ParsedInt, ok IrBlock, failed IrBlock, timedOut IrBlock, target Target, ids ValueMinter)
 	let failedCall = emitSocketCallFailed(module, block: attempt, answer: answer, ids: ids)
 
 	// The retry is unconditional because the OVERLAPPED lane has no call that can reach here — its transfers go
 	// through `emitSocketOverlappedTransfer` and its dial through `emitSocketWatchedDial`. What states that is
 	// `socketErrnoWouldBlock`, which panics rather than answering for `windows`, so a lane that arrived here by
 	// mistake stops at the compile that emitted it.
-	emitSocketPolledRetry(module, func: func, attempt: attempt, failedCall: failedCall, answer: answer, pollKey: pollKey, mode: mode, ok: ok, failed: failed, timedOut: timedOut, target: target, ids: ids)
+	emitSocketPolledRetry(module, func: func, attempt: attempt, failedCall: failedCall, answer: answer, pollKey: pollKey, gen: gen, mode: mode, ok: ok, failed: failed, timedOut: timedOut, target: target, ids: ids)
 	attempt.branchEdges.push(BranchEdge.create(ok.id, argIds: argsOf(answer)))
 end 'emitSocketAttempt'
 
-function emitSocketPolledRetry(module StdModule, func IrFunction, attempt IrBlock, failedCall ValueId, answer ValueId, pollKey ValueId, mode ParsedInt, ok IrBlock, failed IrBlock, timedOut IrBlock, target Target, ids ValueMinter)
+function emitSocketPolledRetry(module StdModule, func IrFunction, attempt IrBlock, failedCall ValueId, answer ValueId, pollKey ValueId, gen ValueId, mode ParsedInt, ok IrBlock, failed IrBlock, timedOut IrBlock, target Target, ids ValueMinter)
 	var classify = module.addBlock(func, label: b"msclassify", heat: BlockHeat.normal)
 	var waitReady = module.addBlock(func, label: b"mswait", heat: BlockHeat.normal)
 
@@ -521,11 +521,12 @@ function emitSocketPolledRetry(module StdModule, func IrFunction, attempt IrBloc
 	let notReady = emitSocketWouldBlock(module, block: classify, answer: answer, target: target, ids: ids)
 	module.setTerminator(classify, op: StdOp.condBranch(notReady, thenBlockId: waitReady.id, elseBlockId: failed.id))
 
-	emitSocketWaitReady(module, func: func, block: waitReady, pollKey: pollKey, mode: mode, timedOut: timedOut, stale: failed, ready: attempt, ids: ids)
+	emitSocketWaitReady(module, func: func, block: waitReady, pollKey: pollKey, gen: gen, mode: mode, timedOut: timedOut, stale: failed, ready: attempt, ids: ids)
 end 'emitSocketPolledRetry'
 
 // Suspend on `socket`'s poll descriptor until `mode` is ready, then `ready`; `timedOut` when that direction's
-// deadline ended the wait first; `stale` when the wait ended on a record the descriptor no longer owns.
+// deadline ended the wait first; `stale` when the record has left the life the operation began in (`gen`,
+// answered by `__np_pd_op_begin`) — before the wait could mark it, or under the park.
 //
 // ⛔⛔ **`stale` MUST NOT RETRY, WHICH IS WHY IT IS A THIRD EXIT AND NOT A SECOND SPELLING OF `ready`.** The
 // descriptor in hand was decoded once at function entry (`emitLiveSocketOrThrow`), so it is a NUMBER rather
@@ -536,11 +537,10 @@ end 'emitSocketPolledRetry'
 // ⛔ **SO A CALLER WHOSE FAILURE EXIT TOUCHES THE DESCRIPTOR OWES A SEPARATE `stale` BLOCK.** Reusing
 // `failed` is right only where it is a bare `emitErrorReturn` — recv and send. The CONNECT path's closes the
 // socket, which on this answer would be somebody else's socket; it passes its own exit for that reason.
-function emitSocketWaitReady(module StdModule, func IrFunction, block IrBlock, pollKey ValueId, mode ParsedInt, timedOut IrBlock, stale IrBlock, ready IrBlock, ids ValueMinter)
+function emitSocketWaitReady(module StdModule, func IrFunction, block IrBlock, pollKey ValueId, gen ValueId, mode ParsedInt, timedOut IrBlock, stale IrBlock, ready IrBlock, ids ValueMinter)
 	var live = module.addBlock(func, label: b"mswaitlive", heat: BlockHeat.normal)
 
-	let outcome = ids.mint()
-	module.appendOp(block, op: StdOp.call(outcome, callee: NetpollPdWaitName, args: twoArgs(pollKey, second: emitConst(module, block: block, value: mode, ids: ids))))
+	let outcome = emitNetpollPdWait(module, block: block, source: pollKey, mode: mode, gen: gen, ids: ids)
 	let gone = emitCmp(module, block: block, a: outcome, b: emitConst(module, block: block, value: NetpollWaitStale, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(block, op: StdOp.condBranch(gone, thenBlockId: stale.id, elseBlockId: live.id))
 
@@ -553,17 +553,15 @@ end 'emitSocketWaitReady'
 // it — Go's `net.Error.Timeout()` shape. It is not a variant of `__ManagedSocketError`, which keeps the seven
 // cases its committed declaration has; `claimManagedSocketOrdinals` carries why that is not a free choice.
 //
-function emitSocketLateExit(module StdModule, func IrFunction, pollKey ValueId, failureFlag ParsedInt, ids ValueMinter) returns IrBlock
+// The mark is stored only into the life of the record the operation began in (`gen`): this block runs after a
+// park of the thread's own, and by then the descriptor may name another socket's life of the same record
+// (`NetpollRuntime.PdOffTimedOut`).
+function emitSocketLateExit(module StdModule, func IrFunction, pollKey ValueId, gen ValueId, failureFlag ParsedInt, ids ValueMinter) returns IrBlock
 	var late = module.addBlock(func, label: b"mslate", heat: BlockHeat.normal)
-	emitSocketMarkTimedOut(module, block: late, pollKey: pollKey, value: 1, ids: ids)
+	emitNetpollPdMarkTimedOut(module, block: late, source: pollKey, gen: gen, ids: ids)
 	emitErrorReturn(module, block: late, flag: failureFlag, ids: ids)
 	return late
 end 'emitSocketLateExit'
-
-// Write the descriptor's deadline mark.
-function emitSocketMarkTimedOut(module StdModule, block IrBlock, pollKey ValueId, value ParsedInt, ids ValueMinter)
-	module.appendOp(block, op: StdOp.call(ids.mint(), callee: NetpollPdSetTimeoutName, args: twoArgs(pollKey, second: emitConst(module, block: block, value: value, ids: ids))))
-end 'emitSocketMarkTimedOut'
 
 // ⭐ **THE POLL DESCRIPTOR's TWO DOORS.** `__np_pd_open` gives a freshly created descriptor a record and
 // registers the descriptor with the poller; `__np_pd_release` resets that record before the close, so the next
@@ -817,13 +815,16 @@ function buildManagedSocketTcpConnect(module StdModule, target Target)
 end 'buildManagedSocketTcpConnect'
 
 // The POLLED lane's dial: issue the non-blocking `connect` and let `emitSocketConnectWait` sort what it said.
+// The operation begins on the record here, ahead of the connect, so the wait carries the life the handshake
+// was issued in; the OVERLAPPED dial watches an event, not this record, and begins nothing on it.
 function emitSocketPolledDial(module StdModule, func IrFunction, ids ValueMinter, dial IrBlock, dialPending IrBlock, socket ValueId, pollKey ValueId, addr ValueId, connected IrBlock, failed IrBlock, target Target)
+	let gen = emitNetpollPdOpBegin(module, block: dial, source: pollKey, ids: ids)
 	let dialResult = ids.mint()
 	module.appendOp(dial, op: StdOp.osSocketConnect(dialResult, sockId: socket, addrPtrId: addr))
 	emitRawFree(module, block: dial, ptr: addr, ids: ids)
 	let didConnect = emitCmp(module, block: dial, a: dialResult, b: emitConst(module, block: dial, value: WinsockCallOk, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(dial, op: StdOp.condBranch(didConnect, thenBlockId: connected.id, elseBlockId: dialPending.id))
-	emitSocketConnectWait(module, func: func, cur: dialPending, answer: dialResult, socket: socket, pollKey: pollKey, connected: connected, failed: failed, shape: SocketWaitShape.polled, target: target, ids: ids)
+	emitSocketConnectWait(module, func: func, cur: dialPending, answer: dialResult, socket: socket, pollKey: pollKey, gen: gen, connected: connected, failed: failed, shape: SocketWaitShape.polled, target: target, ids: ids)
 end 'emitSocketPolledDial'
 
 // ⭐⭐⭐ **THE OVERLAPPED LANE'S DIAL — A HANDSHAKE WATCHED THROUGH AN EVENT, AND THE ONE SOCKET OPERATION
@@ -892,8 +893,8 @@ function emitSocketWatchedDial(module StdModule, func IrFunction, ids ValueMinte
 	// child that had already exited, which only a POSIX open can report; the completion-port open allocates a key
 	// and has no such answer.
 	let watch = emitNetpollAcquireChildSource(module, func: func, ids: ids, cur: openSource, hProcess: event, cont: watching, gone: dropEvent)
-	let verdict = ids.mint()
-	module.appendOp(watching, op: StdOp.call(verdict, callee: NetpollPdWaitName, args: twoArgs(watch.source, second: emitConst(module, block: watching, value: NetpollModeRead, ids: ids))))
+	let gen = emitNetpollPdOpBegin(module, block: watching, source: watch.source, ids: ids)
+	let verdict = emitNetpollPdWait(module, block: watching, source: watch.source, mode: NetpollModeRead, gen: gen, ids: ids)
 	module.appendOp(watching, op: StdOp.call(ids.mint(), callee: NetpollChildCloseName, args: twoArgs(watch.source, second: watch.token)))
 	module.setTerminator(watching, op: StdOp.branch(awaited.id))
 
@@ -942,14 +943,14 @@ export let WinsockWouldBlock = 10035
 // ⚠ **`getsockopt` IS THE ONLY CORRECT VERDICT HERE.** The descriptor becomes writable for BOTH outcomes, so
 // readiness alone says nothing; re-issuing `connect` is the folklore alternative and answers `EISCONN` on one
 // kernel, the error on another, and the error only once on a third.
-function emitSocketConnectWait(module StdModule, func IrFunction, cur IrBlock, answer ValueId, socket ValueId, pollKey ValueId, connected IrBlock, failed IrBlock, shape SocketWaitShape, target Target, ids ValueMinter)
+function emitSocketConnectWait(module StdModule, func IrFunction, cur IrBlock, answer ValueId, socket ValueId, pollKey ValueId, gen ValueId, connected IrBlock, failed IrBlock, shape SocketWaitShape, target Target, ids ValueMinter)
 	match shape 'shape'
 		overlapped then panic("emitSocketConnectWait: the overlapped lane watches its handshake through an event rather than through the descriptor's poll record — `emitSocketWatchedDial` is its whole connect, and the built-in resolver that shares this door is built on the two Linux lanes only")
-		polled then emitSocketConnectPolledWait(module, func: func, cur: cur, answer: answer, socket: socket, pollKey: pollKey, connected: connected, failed: failed, target: target, ids: ids)
+		polled then emitSocketConnectPolledWait(module, func: func, cur: cur, answer: answer, socket: socket, pollKey: pollKey, gen: gen, connected: connected, failed: failed, target: target, ids: ids)
 	end 'shape'
 end 'emitSocketConnectWait'
 
-function emitSocketConnectPolledWait(module StdModule, func IrFunction, cur IrBlock, answer ValueId, socket ValueId, pollKey ValueId, connected IrBlock, failed IrBlock, target Target, ids ValueMinter)
+function emitSocketConnectPolledWait(module StdModule, func IrFunction, cur IrBlock, answer ValueId, socket ValueId, pollKey ValueId, gen ValueId, connected IrBlock, failed IrBlock, target Target, ids ValueMinter)
 	var waitWritable = module.addBlock(func, label: b"msdialready", heat: BlockHeat.normal)
 	var verify = module.addBlock(func, label: b"msdialverify", heat: BlockHeat.normal)
 
@@ -966,7 +967,7 @@ function emitSocketConnectPolledWait(module StdModule, func IrFunction, cur IrBl
 
 	let pending = emitSocketWouldBlock(module, block: cur, answer: answer, target: target, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(pending, thenBlockId: waitWritable.id, elseBlockId: failed.id))
-	emitSocketWaitReady(module, func: func, block: waitWritable, pollKey: pollKey, mode: NetpollModeWrite, timedOut: failed, stale: staleExit, ready: verify, ids: ids)
+	emitSocketWaitReady(module, func: func, block: waitWritable, pollKey: pollKey, gen: gen, mode: NetpollModeWrite, timedOut: failed, stale: staleExit, ready: verify, ids: ids)
 
 	// `getsockopt` writes a 32-bit value and reads a 32-bit length back through the same scratch, so one
 	// 8-byte block carries both — the value at 0 and the length, seeded with its own size, at 4.
@@ -1082,12 +1083,12 @@ function buildManagedSocketSendFrom(module StdModule, target Target)
 	// re-issue is still ONE operation — so the park may not sit where a retry can reach it.
 	emitIoPark(module, block: doSend, operation: GtIoOperation.netSend, ids: ids)
 	let pollKey = emitNetpollDescriptorIndex(module, block: doSend, target: target, fd: socket, ids: ids)
-	emitSocketMarkTimedOut(module, block: doSend, pollKey: pollKey, value: 0, ids: ids)
+	let gen = emitNetpollPdOpBegin(module, block: doSend, source: pollKey, ids: ids)
 	let buffer = emitLoadField(module, block: doSend, record: arrRec, offset: ManagedRecordBufferOffset, ids: ids)
 	let sendStart = emitBin(module, block: doSend, a: buffer, b: offset, opcode: StdBinOpcode.add, ids: ids)
 	module.setTerminator(doSend, op: StdOp.branch(sendAttempt.id))
 
-	emitSocketTransfer(module, func: func, ids: ids, attempt: sendAttempt, socket: socket, pollKey: pollKey, buffer: sendStart, length: length, direction: SocketTransferDirection.sending, failureFlag: ManagedSocketSendFailedFlag, failed: failed, ok: ok, shape: socketWaitShape(target), target: target)
+	emitSocketTransfer(module, func: func, ids: ids, attempt: sendAttempt, socket: socket, pollKey: pollKey, gen: gen, buffer: sendStart, length: length, direction: SocketTransferDirection.sending, failureFlag: ManagedSocketSendFailedFlag, failed: failed, ok: ok, shape: socketWaitShape(target), target: target)
 
 	module.functions.push(func)
 end 'buildManagedSocketSendFrom'
@@ -1140,12 +1141,12 @@ function buildManagedSocketRecv(module StdModule, target Target)
 	// The park brackets the whole receive, retries included — see the send's note for why it is above the ring.
 	emitIoPark(module, block: doRecv, operation: GtIoOperation.netRecv, ids: ids)
 	let pollKey = emitNetpollDescriptorIndex(module, block: doRecv, target: target, fd: socket, ids: ids)
-	emitSocketMarkTimedOut(module, block: doRecv, pollKey: pollKey, value: 0, ids: ids)
+	let gen = emitNetpollPdOpBegin(module, block: doRecv, source: pollKey, ids: ids)
 	let buffer = emitLoadField(module, block: doRecv, record: arrRec, offset: ManagedRecordBufferOffset, ids: ids)
 	let byteCapacity = emitArrayByteExtent(module, block: doRecv, arrRec: arrRec, offset: ManagedRecordCapacityOffset, ids: ids)
 	module.setTerminator(doRecv, op: StdOp.branch(recvAttempt.id))
 
-	emitSocketTransfer(module, func: func, ids: ids, attempt: recvAttempt, socket: socket, pollKey: pollKey, buffer: buffer, length: byteCapacity, direction: SocketTransferDirection.receiving, failureFlag: ManagedSocketRecvFailedFlag, failed: failed, ok: ok, shape: socketWaitShape(target), target: target)
+	emitSocketTransfer(module, func: func, ids: ids, attempt: recvAttempt, socket: socket, pollKey: pollKey, gen: gen, buffer: buffer, length: byteCapacity, direction: SocketTransferDirection.receiving, failureFlag: ManagedSocketRecvFailedFlag, failed: failed, ok: ok, shape: socketWaitShape(target), target: target)
 
 	module.functions.push(func)
 end 'buildManagedSocketRecv'
@@ -1171,16 +1172,17 @@ end 'socketTransferMode'
 // the shape's.
 //
 // `failed` and `ok` arrive from the caller rather than being minted here so the function's block ORDER is
-// the caller's to state — it is what the emitted code's layout follows.
-function emitSocketTransfer(module StdModule, func IrFunction, ids ValueMinter, attempt IrBlock, socket ValueId, pollKey ValueId, buffer ValueId, length ValueId, direction SocketTransferDirection, failureFlag ParsedInt, failed IrBlock, ok IrBlock, shape SocketWaitShape, target Target)
+// the caller's to state — it is what the emitted code's layout follows. `gen` is the life of the record the
+// operation began in (`__np_pd_op_begin`), which every wait and the late exit carry.
+function emitSocketTransfer(module StdModule, func IrFunction, ids ValueMinter, attempt IrBlock, socket ValueId, pollKey ValueId, gen ValueId, buffer ValueId, length ValueId, direction SocketTransferDirection, failureFlag ParsedInt, failed IrBlock, ok IrBlock, shape SocketWaitShape, target Target)
 	let moved = ids.mint()
 	ok.blockArgs.push(IrBlockArg.create(moved, argType: StdType.i64))
 	let mode = socketTransferMode(direction)
-	let timedOut = emitSocketLateExit(module, func: func, pollKey: pollKey, failureFlag: failureFlag, ids: ids)
+	let timedOut = emitSocketLateExit(module, func: func, pollKey: pollKey, gen: gen, failureFlag: failureFlag, ids: ids)
 
 	match shape 'shape'
-		polled then emitSocketPolledTransfer(module, func: func, ids: ids, attempt: attempt, socket: socket, pollKey: pollKey, buffer: buffer, length: length, direction: direction, mode: mode, ok: ok, failed: failed, timedOut: timedOut, target: target)
-		overlapped then emitSocketOverlappedTransfer(module, func: func, ids: ids, attempt: attempt, socket: socket, pollKey: pollKey, buffer: buffer, length: length, direction: direction, mode: mode, ok: ok, failed: failed, timedOut: timedOut)
+		polled then emitSocketPolledTransfer(module, func: func, ids: ids, attempt: attempt, socket: socket, pollKey: pollKey, gen: gen, buffer: buffer, length: length, direction: direction, mode: mode, ok: ok, failed: failed, timedOut: timedOut, target: target)
+		overlapped then emitSocketOverlappedTransfer(module, func: func, ids: ids, attempt: attempt, socket: socket, pollKey: pollKey, gen: gen, buffer: buffer, length: length, direction: direction, mode: mode, ok: ok, failed: failed, timedOut: timedOut)
 	end 'shape'
 
 	emitErrorReturn(module, block: failed, flag: failureFlag, ids: ids)
@@ -1189,7 +1191,7 @@ end 'emitSocketTransfer'
 
 // ⚠ **THE ERRNO IS READ OFF THE ANSWER ITSELF**, which is what lets `EAGAIN` send the green thread to the
 // poller where a real failure reports this operation's variant.
-function emitSocketPolledTransfer(module StdModule, func IrFunction, ids ValueMinter, attempt IrBlock, socket ValueId, pollKey ValueId, buffer ValueId, length ValueId, direction SocketTransferDirection, mode ParsedInt, ok IrBlock, failed IrBlock, timedOut IrBlock, target Target)
+function emitSocketPolledTransfer(module StdModule, func IrFunction, ids ValueMinter, attempt IrBlock, socket ValueId, pollKey ValueId, gen ValueId, buffer ValueId, length ValueId, direction SocketTransferDirection, mode ParsedInt, ok IrBlock, failed IrBlock, timedOut IrBlock, target Target)
 	let transferred = ids.mint()
 
 	match direction 'd'
@@ -1197,7 +1199,7 @@ function emitSocketPolledTransfer(module StdModule, func IrFunction, ids ValueMi
 		sending then module.appendOp(attempt, op: StdOp.osSocketSend(transferred, sockId: socket, bufPtrId: buffer, lenId: length))
 	end 'd'
 
-	emitSocketAttempt(module, func: func, attempt: attempt, answer: transferred, pollKey: pollKey, mode: mode, ok: ok, failed: failed, timedOut: timedOut, target: target, ids: ids)
+	emitSocketAttempt(module, func: func, attempt: attempt, answer: transferred, pollKey: pollKey, gen: gen, mode: mode, ok: ok, failed: failed, timedOut: timedOut, target: target, ids: ids)
 end 'emitSocketPolledTransfer'
 
 // ⭐⭐⭐ **ONE OVERLAPPED TRANSFER, FROM THE ISSUE TO THE PACKET THAT ENDS IT.** The kernel is handed the
@@ -1213,7 +1215,7 @@ end 'emitSocketPolledTransfer'
 // ⚠ **THE `WSABUF` AND THE FLAGS WORD BELONG TO THE KERNEL FOR THE WHOLE OPERATION**, so they are a block of
 // this call's own, and every road out frees it exactly once — including the two that must first collect an
 // outstanding packet.
-function emitSocketOverlappedTransfer(module StdModule, func IrFunction, ids ValueMinter, attempt IrBlock, socket ValueId, pollKey ValueId, buffer ValueId, length ValueId, direction SocketTransferDirection, mode ParsedInt, ok IrBlock, failed IrBlock, timedOut IrBlock)
+function emitSocketOverlappedTransfer(module StdModule, func IrFunction, ids ValueMinter, attempt IrBlock, socket ValueId, pollKey ValueId, gen ValueId, buffer ValueId, length ValueId, direction SocketTransferDirection, mode ParsedInt, ok IrBlock, failed IrBlock, timedOut IrBlock)
 	var issueFailed = module.addBlock(func, label: b"msnostart", heat: BlockHeat.normal)
 	var waitHdr = module.addBlock(func, label: b"mswaitovl", heat: BlockHeat.normal)
 	var landed = module.addBlock(func, label: b"mslanded", heat: BlockHeat.normal)
@@ -1260,8 +1262,7 @@ function emitSocketOverlappedTransfer(module StdModule, func IrFunction, ids Val
 	emitRawFree(module, block: issueFailed, ptr: buffers, ids: ids)
 	module.setTerminator(issueFailed, op: StdOp.branch(failed.id))
 
-	let verdict = ids.mint()
-	module.appendOp(waitHdr, op: StdOp.call(verdict, callee: NetpollPdWaitName, args: twoArgs(pollKey, second: emitConst(module, block: waitHdr, value: mode, ids: ids))))
+	let verdict = emitNetpollPdWait(module, block: waitHdr, source: pollKey, mode: mode, gen: gen, ids: ids)
 	let woken = emitCmp(module, block: waitHdr, a: verdict, b: emitConst(module, block: waitHdr, value: NetpollWaitReady, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(waitHdr, op: StdOp.condBranch(woken, thenBlockId: landed.id, elseBlockId: notReady.id))
 
@@ -1319,8 +1320,8 @@ function emitSocketCollectOutstanding(module StdModule, func IrFunction, ids Val
 	let outstanding = emitCmp(module, block: cur, a: source, b: emitConst(module, block: cur, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(outstanding, thenBlockId: wait.id, elseBlockId: cont.id))
 
-	let verdict = ids.mint()
-	module.appendOp(wait, op: StdOp.call(verdict, callee: NetpollPdWaitName, args: twoArgs(source, second: emitConst(module, block: wait, value: mode, ids: ids))))
+	let gen = emitNetpollPdOpBegin(module, block: wait, source: source, ids: ids)
+	let verdict = emitNetpollPdWait(module, block: wait, source: source, mode: mode, gen: gen, ids: ids)
 	let woken = emitCmp(module, block: wait, a: verdict, b: emitConst(module, block: wait, value: NetpollWaitReady, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(wait, op: StdOp.condBranch(woken, thenBlockId: collected.id, elseBlockId: notACompletion.id))
 
@@ -2473,6 +2474,10 @@ function buildManagedSocketDns(module StdModule, target Target)
 	let pollKey = emitNetpollDescriptorIndex(module, block: connectStep, target: target, fd: socket, ids: ids)
 	emitSocketPollerOpen(module, block: connectStep, pollKey: pollKey, socket: socket, ids: ids)
 
+	// The resolver's socket is this frame's alone and closed only on its way out, so the whole exchange — the
+	// connect, the send and every read — is one operation in one life of the record.
+	let gen = emitNetpollPdOpBegin(module, block: connectStep, source: pollKey, ids: ids)
+
 	let address = emitRawAlloc(module, block: connectStep, byteCount: emitConst(module, block: connectStep, value: SockaddrInBytes, ids: ids), ids: ids)
 	let dnsPort = emitConst(module, block: connectStep, value: DnsPort, ids: ids)
 	let addressWord = emitSockaddrInWord(module, block: connectStep, port: dnsPort, ip: server, familyHalfword: sockaddrFamilyHalfword(target), ids: ids)
@@ -2483,14 +2488,14 @@ function buildManagedSocketDns(module StdModule, target Target)
 	let dialOk = emitConst(module, block: connectStep, value: WinsockCallOk, ids: ids)
 	let dialFailed = emitCmp(module, block: connectStep, a: dialResult, b: dialOk, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(connectStep, op: StdOp.condBranch(dialFailed, thenBlockId: connectWait.id, elseBlockId: sendStep.id))
-	emitSocketConnectWait(module, func: func, cur: connectWait, answer: dialResult, socket: socket, pollKey: pollKey, connected: sendStep, failed: closeFailed, shape: waitShape, target: target, ids: ids)
+	emitSocketConnectWait(module, func: func, cur: connectWait, answer: dialResult, socket: socket, pollKey: pollKey, gen: gen, connected: sendStep, failed: closeFailed, shape: waitShape, target: target, ids: ids)
 
 	// A short send is treated as a failure rather than looped over: the query is at most 273 bytes and a
 	// stream socket with an empty send buffer takes it whole, so a partial write here is a broken connection
 	// wearing a byte count.
 	let sent = ids.mint()
 	module.appendOp(sendStep, op: StdOp.osSocketSend(sent, sockId: socket, bufPtrId: message, lenId: sendLength))
-	emitSocketAttempt(module, func: func, attempt: sendStep, answer: sent, pollKey: pollKey, mode: NetpollModeWrite, ok: sentOk, failed: closeFailed, timedOut: closeFailed, target: target, ids: ids)
+	emitSocketAttempt(module, func: func, attempt: sendStep, answer: sent, pollKey: pollKey, gen: gen, mode: NetpollModeWrite, ok: sentOk, failed: closeFailed, timedOut: closeFailed, target: target, ids: ids)
 
 	let sentCount = ids.mint()
 	sentOk.blockArgs.push(IrBlockArg.create(sentCount, argType: StdType.i64))
@@ -2518,7 +2523,7 @@ function buildManagedSocketDns(module StdModule, target Target)
 	let readAt = emitBin(module, block: recvRead, a: message, b: received, opcode: StdBinOpcode.add, ids: ids)
 	let readCount = ids.mint()
 	module.appendOp(recvRead, op: StdOp.osSocketRecv(readCount, sockId: socket, bufPtrId: readAt, lenId: room))
-	emitSocketAttempt(module, func: func, attempt: recvRead, answer: readCount, pollKey: pollKey, mode: NetpollModeRead, ok: readOk, failed: closeFailed, timedOut: closeFailed, target: target, ids: ids)
+	emitSocketAttempt(module, func: func, attempt: recvRead, answer: readCount, pollKey: pollKey, gen: gen, mode: NetpollModeRead, ok: readOk, failed: closeFailed, timedOut: closeFailed, target: target, ids: ids)
 
 	// A zero is the peer closing, which ends the read loop; a negative answer never reaches here — it is
 	// either the descriptor saying "not yet", which parks, or a failure, which closes.
