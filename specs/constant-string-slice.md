@@ -67,9 +67,9 @@ would there silently succeed and corrupt every other use of those bytes.
 
 ### How these cases measure it
 
-The counters are `builtins-mm-counters.md`'s, read as the SUM of the tracked and raw layers — the
-number `PhaseProbe` reads. Each case
-brackets ONLY the slice, because `print` and interpolation allocate on their own account.
+The counters are `builtins-mm-counters.md`'s, read as the SUM of the tracked and raw layers — in a
+one-thread program, exactly the process-wide allocation total `PhaseProbe` brackets a phase with. Each
+case brackets ONLY the slice, because `print` and interpolation allocate on their own account.
 
 ## Tests
 

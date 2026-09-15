@@ -317,9 +317,10 @@ export let GtOffParkGen = GtOffParkArg + PointerFieldBytes
 // process-wide figure sums every row, so a bracket opened inside one worker would count every other worker's
 // traffic too.
 //
-// ⭐ **THEY SUM BOTH ALLOCATOR LAYERS**, stepped at the slab doors once per request, because `PhaseProbe`
-// reports no figure for one layer alone. Frees are a column of their own rather than a live count: a green
-// thread does not own the boxes it allocated, so a per-thread live count would mean nothing.
+// ⭐ **THEY SUM BOTH ALLOCATOR LAYERS**, stepped at the slab doors once per request, so each is this thread's
+// share of the process-wide total its count names (`MmRuntime.CombinedCount`), and a bracket on either
+// measures the same quantity. Frees are a column of their own rather than a live count: a green thread does not
+// own the boxes it allocated, so a per-thread live count would mean nothing.
 //
 // ⚠ **THEY ARE STEPPED WITHOUT A LOCK AND WITHOUT AN ATOMIC, and the ownership model is what makes that
 // sound**: a strand runs on at most one M at a time, and hands over between machines under `__sched_lock`,

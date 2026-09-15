@@ -281,9 +281,11 @@ export let MmCounterRawAllocBytesName = b"__mm_counter_raw_alloc_bytes"
 // every other worker's. `GtRuntime.GtOffThreadAllocs` carries the ownership argument that lets them be
 // stepped unlocked.
 //
-// ⚠ **THEY SUM BOTH LAYERS, where the six above are per-layer**, because `PhaseProbe` reports no figure for
-// one layer alone. They count frees rather than a live figure because a live count per green thread would
-// be meaningless: a thread does not own the boxes it allocated, and it may exit with them alive and in use.
+// ⚠ **THEY SUM BOTH LAYERS, where the six above are per-layer**, because each is one green thread's share of
+// a process-wide total below (`CombinedCount`): `PhaseProbe` brackets a pool worker with these and a
+// main-thread phase with those, and the two must be one unit. They count frees rather than a live figure
+// because a live count per green thread would be meaningless: a thread does not own the boxes it
+// allocated, and it may exit with them alive and in use.
 //
 // They wear the `__mm_counter_` prefix for their siblings' reason: it is what turns on the allocation-path
 // maintenance those columns oblige, and what makes a program that reads one carry the allocator it reads.

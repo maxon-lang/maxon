@@ -1,17 +1,15 @@
 // CompileMemory — allocation attribution for the WHOLE compile pipeline. The twin of
 // CompileTimings, phase for phase, and it exists for a reason that file cannot serve.
 //
-// WHY MEMORY AND NOT JUST TIME. `PLAN.md`'s Stage-5 self-compile gate is "≤30 s AND
-// ≤1.7 GB". The first half has had an instrument since CompileTimings; the second half
-// has had none at all, and a quadratic in ALLOCATIONS is what actually kills a
-// self-compile — it is invisible to a clock until it is fatal.
+// WHY MEMORY AND NOT JUST TIME. A quadratic in ALLOCATIONS is what actually kills a
+// self-compile, and it is invisible to a clock until it is fatal.
 //
 // AND WHY MEMORY IS THE STRONGER SIGNAL. Wall time is not reproducible: the same compile
 // on the same machine varies by several percent between runs, so nothing about it is worth
 // stating more precisely than a growth exponent. Allocation counts and byte volumes ARE
 // reproducible — bit for bit, on an idle machine or a loaded one, because the counters
-// behind them are monotonic and order-independent (see PhaseProbe, and
-// RuntimeEmitter.EmitMmGlobals for why they are exact rather than approximate). So a
+// behind them only rise and are order-independent (see PhaseProbe's `CounterSource`, and
+// `SlabRuntime`'s traffic columns for why they are exact rather than approximate). So a
 // per-rung memory number that MOVED, moved for a reason, every time — which is what makes
 // it the one column of the scale instrument's trend log worth explaining line by line.
 // That is the whole reason the scale suite leans on this table.
@@ -31,8 +29,7 @@
 // Column widths for the report table. Its own set: the memory table has four numeric
 // columns to the timing table's two, and its numbers are counts and byte volumes rather
 // than milliseconds. The widths differ; how a cell is PADDED and how a rule is DRAWN do not, so
-// `padRight`/`padLeft`/`horizontalRule` are CompileTimings' and shared (this file used to carry a
-// second, identical copy of all three, over an identically-ranged `MemColumnWidth`).
+// `padRight`/`padLeft`/`horizontalRule` are CompileTimings' and shared.
 let MemPhaseNameWidth = 22 as ColumnWidth
 let MemAllocsWidth = 12 as ColumnWidth
 let MemFreesWidth = 12 as ColumnWidth

@@ -31,11 +31,13 @@ counts every other worker's traffic:
 | `__Builtins.threadFreeTotal()` | cumulative frees by the calling green thread, both layers |
 | `__Builtins.threadAllocBytes()` | cumulative bytes handed to the calling green thread, both layers |
 
-They sum the two layers where the six are per-layer, because `PhaseProbe` reports no figure for one layer
-alone. They count frees rather than a live figure, because a live count per green thread would mean nothing
-— a thread does not own the boxes it allocated and may exit with them alive. A program with no green threads
-answers all three from the process-wide totals below, which is not a fallback but the same fact:
-single-threaded, *"what did this thread allocate"* and *"what did this process allocate"* are one question.
+They sum the two layers where the six are per-layer, because each is one green thread's share of a
+process-wide total below, and `PhaseProbe` brackets a pool worker with these and a main-thread phase with
+those — the two must be one unit. They count frees rather than a live figure, because a live count per green
+thread would mean nothing — a thread does not own the boxes it allocated and may exit with them alive. A
+program with no green threads answers all three from the process-wide totals below, which is not a fallback
+but the same fact: single-threaded, *"what did this thread allocate"* and *"what did this process allocate"*
+are one question.
 
 ⭐⭐ **AND THREE THAT ASK IT OF THE WHOLE PROCESS, AS TOTALS THAT ONLY RISE:**
 
@@ -53,8 +55,8 @@ bracket needs, because the difference of two readings is then never negative.
 ⚠ **THE SIX ABOVE CANNOT GIVE A BRACKET THAT PROPERTY.** Four of them are differences — a live figure is a
 total less its frees, and a raw figure is the raw column less the tracked one, which a box steps at two
 different instants. Read while another thread allocates, a sum or difference of them can stand below an
-earlier reading. MEASURED: `PhaseProbe` brackets a main-thread phase with the six, deriving its frees as
-*(total − live)* over four such walks, and a `spec-test --target=wasm32-wasi` worker died compiling
+earlier reading. MEASURED while `PhaseProbe` bracketed a main-thread phase with the six, deriving its frees
+as *(total − live)* over four such walks: a `spec-test --target=wasm32-wasi` worker died compiling
 `register-allocator/int-six-vars-alive` with `Range check failed: value outside typealias 'AllocCount'` in
 `PhaseProbe.elapsedInto` — the phase's closing reading stood below its opening one while other threads
 allocated — while the same file passed 60/60 alone.
@@ -65,9 +67,10 @@ so the process-wide and per-thread byte figures measure one quantity. The header
 raw layer first and subtracts its header back out at the tracked step, so a reading between the two stands
 above one taken after.
 
-All twelve take no arguments and answer an `int`. `maxon-bin/Compiler/PhaseProbe.maxon` sums the six
-per-layer figures for a main-thread phase and reads the three per-thread columns inside a pool worker — so
-`scale-test`, and every row of `docs/optimization-log.md`, bottoms out on those nine.
+All twelve take no arguments and answer an `int`. `maxon-bin/Compiler/PhaseProbe.maxon` reads the three
+process-wide totals for a main-thread phase and the three per-thread columns inside a pool worker — so
+`scale-test`, and the rows it appends to `docs/optimization-log.md`, bottom out on those six. Its byte
+column is therefore the slab's request volume, each box's header included, on both sources alike.
 
 ### Why the six carry a LIVE column
 
