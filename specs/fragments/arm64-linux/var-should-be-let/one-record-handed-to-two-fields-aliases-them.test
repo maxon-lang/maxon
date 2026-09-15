@@ -1,0 +1,31 @@
+// Test: one-record-handed-to-two-fields-aliases-them
+
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Point'
+
+type Pair
+	export var left as Point
+	export var right as Point
+
+	static function create(left Point, right Point) returns Self
+		return Self{left: left, right: right}
+	end 'create'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Point.create(1)
+	var pair = Pair.create(p, right: p)
+	let l = pair.left
+	pair.right.x = 9
+	return l.x
+end 'main'
+---
+CompilerError:
+error E3159: <fragment>:26:2: cannot write through 'pair.right', which may be the record of immutable variable 'l'; use clone()

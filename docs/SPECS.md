@@ -324,6 +324,8 @@ Optional per-test directives go between the test marker and the maxon block:
 | `<!-- MmTrace -->` | Enable mm-trace capture mode (see below). Equivalent to adding an ` ```mm-trace ` block |
 | `<!-- AsyncTrace -->` | Enable async-runtime trace output |
 | `<!-- IncludeStdlibIr -->` | Include reachable stdlib functions in the captured CompiledIR snapshot |
+| `<!-- procs: N -->` | Run the program with `MAXON_MAX_PROCS=N` in its environment, pinning the scheduler's processor count |
+| `<!-- preempt: off -->` | Run the program with `MAXON_PREEMPT=off` in its environment, so the monitor takes no processor from the thread holding it; `off` is the only value |
 
 ### mm-trace blocks
 

@@ -1,0 +1,19 @@
+// Test: returned-alias-to-a-mutating-parameter
+function grow(s String)
+	s.append("XY")
+end 'grow'
+
+function pass(s String) returns String
+	return s
+end 'pass'
+
+function main() returns ExitCode
+	let n = 7
+	let g = "hello{n}"
+	grow(pass(g))
+	print("{g}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3019: <fragment>:13:2: cannot pass 'g' to function that mutates parameter 's' (in main)

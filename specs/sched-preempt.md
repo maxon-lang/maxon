@@ -733,3 +733,196 @@ wrong=0 preempted=true
 ```exitcode
 0
 ```
+
+<!-- test: sched-preempt.the-switch-keeps-the-processor-with-main -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+**WITH `MAXON_PREEMPT=off` THE MONITOR TAKES NO PROCESSOR FROM THE THREAD HOLDING IT.** Neither the 10 ms
+yield request nor the syscall retake is issued, so `main` keeps the only processor across 30 ms of work and
+the service it spawned first runs only when `main` parks. The hold is a LOWER bound of wall time — a loop
+until 30 ms have elapsed, three monitor thresholds — and never a budget, so host load can only lengthen it.
+The witness rides the reply: `ping()` answers `__Builtins.schedPreemptCount()` as the service saw it, so a
+service that ran while `main` was off its processor answers the count that put it there, and `main`'s own
+reading after the hold pins that nothing was asked and nothing retaken. `held` is always `true`: it consumes
+the hold's accumulator so the loop's work is not dead.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+let holdMs = 30
+
+// Recursive, so it is never inlined and every iteration passes a function prologue.
+function step(acc Integer, depth Integer) returns Integer
+	if depth == 0 'leaf'
+		return (acc * 31 + 7) mod 1000003
+	end 'leaf'
+	return step((acc * 17 + depth) mod 1000003, depth: depth - 1)
+end 'step'
+
+type Echo
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function ping() returns Integer
+		return __Builtins.schedPreemptCount()
+	end 'ping'
+end 'Echo'
+
+function main() returns ExitCode
+	let e = spawn Echo.create()
+	let reply = e.ping()
+	let start = Clock.nowMs()
+	var acc = 0
+	while (Clock.elapsedMs(start) as Integer) < holdMs 'hold'
+		acc = step(acc, depth: 4)
+	end 'hold'
+	let p = try await reply otherwise 0 - 1
+	print("ping={p} held={acc mod 2 + 1 > 0} preempted={__Builtins.schedPreemptCount()} retaken={__Builtins.schedRetakeCount()}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+ping=0 held=true preempted=0 retaken=0
+```
+```exitcode
+0
+```
+
+<!-- test: sched-preempt.a-main-preempted-between-two-spawns-runs-the-earlier-one-first -->
+<!-- procs: 1 -->
+**A `main` PREEMPTED BETWEEN TWO `spawn`s SEES THE EARLIER SERVICE ANSWER FIRST.** This is the CI diff of
+`sched-runqueue.the-last-spawned-thread-runs-first-at-one-processor` made deterministic: that case pins
+`first=2` for this same program under `preempt: off`, and on a loaded runner the host held the process off a
+core for the monitor's 10 ms, so `main` was asked to yield between its second and third `spawn`. Here the
+hold between them ends at the FIRST honoured request, so the order it produces is the pin. A preempted thread
+goes to the GLOBAL queue's tail and the machine takes `runnext` next, so `b` runs, sends nothing, and parks on
+its empty mailbox; `a` runs from the ring and parks; `main` resumes from the global queue and spawns `c` into
+`runnext`; `a.rank()` readies `a` into `runnext`, displacing `c` to the ring, and `b.rank()` readies `b`,
+displacing `a`; `awaitAny` parks `main`, `b` replies first, and the index is 1. Exactly ONE preemption: one
+request, one park — `main`'s schedule tick moves when it resumes, so the next monitor lap re-notes it rather
+than asking again. `burstCap` is a hang guard, not a budget: a monitor that never asks prints `preempted=0`
+instead of timing out.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromiseArray = Array with ReplyPromise
+
+let burstCap = 100000
+
+// Recursive, so it is never inlined and every iteration passes a function prologue.
+function step(acc Integer, depth Integer) returns Integer
+	if depth == 0 'leaf'
+		return (acc * 31 + 7) mod 1000003
+	end 'leaf'
+	return step((acc * 17 + depth) mod 1000003, depth: depth - 1)
+end 'step'
+
+type Marker
+	var id as Integer
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
+
+	export function rank() returns Integer
+		return self.id
+	end 'rank'
+end 'Marker'
+
+function main() returns ExitCode
+	let a = spawn Marker.create(1)
+	let b = spawn Marker.create(2)
+	var acc = 0
+	var bursts = 0
+	while __Builtins.schedPreemptCount() == 0 and bursts < burstCap 'hold'
+		var i = 0
+		while i < 1000 'burst'
+			acc = step(acc, depth: 4)
+			i = i + 1
+		end 'burst'
+		bursts = bursts + 1
+	end 'hold'
+	let c = spawn Marker.create(3)
+	var replies = ReplyPromiseArray.create()
+	replies.push(a.rank())
+	replies.push(b.rank())
+	replies.push(c.rank())
+	let first = __Builtins.awaitAny(replies)
+	var sum = 0
+	for p in replies 'drainthemall'
+		sum = sum + (try await p otherwise 0)
+	end 'drainthemall'
+	print("first={first} sum={sum} preempted={__Builtins.schedPreemptCount()}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+first=1 sum=6 preempted=1
+```
+```exitcode
+0
+```
+
+<!-- test: sched-preempt.a-switch-value-that-is-neither-off-nor-on-is-refused-at-start -->
+<!-- unsupported-targets: wasm32-wasi -->
+**A VALUE THAT IS NEITHER `off` NOR `on` ABORTS THE PROGRAM AT START WITH `RuntimeAbort.schedulerPreemptSwitchUnreadable`, EXIT 116.**
+`MAXON_MAX_PROCS` has a numeric floor to fall under and falls through to the machine's count; this switch
+has none, and a value silently read as its default would run a program pinned to preemption-off under
+preemption-on, so the scheduler refuses it before `main`. The marker cannot express it — the harness admits
+`off` and nothing else — so the program re-executes itself with `MAXON_PREEMPT=maybe` in the child's
+environment and prints the child's exit code. The child spawns one service, so it carries the scheduler
+whose monitor start reads the switch on the main thread; it prints nothing, because the abort lands before
+its `main` runs. Not on `wasm32-wasi`, where the subprocess band is refused at compile
+time (`subprocess-unsupported.md`).
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias StringArray = Array with String
+
+type Echo
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function ping() returns Integer
+		return 1
+	end 'ping'
+end 'Echo'
+
+function child() returns ExitCode
+	let e = spawn Echo.create()
+	let p = try await e.ping() otherwise 0
+	if p != 1 'unanswered'
+		return 3
+	end 'unanswered'
+
+	return 0
+end 'child'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'iAmTheChild'
+		return child()
+	end 'iAmTheChild'
+
+	let me = try Process.executablePath() otherwise return 2
+	var argv = StringArray.create()
+	argv.push("child")
+
+	var config = Configuration.create(Executable.path(me))
+	config.arguments = argv
+	config.environment = Environment.inheritUpdating(["MAXON_PREEMPT": "maybe"])
+	let run = try Subprocess.runConfiguration(config) otherwise return 4
+
+	print("child exit={run.exitCode()}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+child exit=116
+```
+```exitcode
+0
+```

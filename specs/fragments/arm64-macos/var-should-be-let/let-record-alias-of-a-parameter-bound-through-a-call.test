@@ -1,0 +1,24 @@
+// Test: let-record-alias-of-a-parameter-bound-through-a-call
+
+function pass(s String) returns String
+	return s
+end 'pass'
+
+function tagIt(p String)
+	let q = p
+	var x = pass(q)
+	x.append("!")
+	print("{q}\n")
+end 'tagIt'
+
+function main() returns ExitCode
+	let n = 7
+	var a = "lit{n}"
+	tagIt(a)
+	a.append("?")
+	print("{a}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3078: <fragment>:9:6: cannot assign the result of 'pass', which may share storage with immutable variable 'q', to mutable binding 'x'; use 'let' instead of 'var', or use clone()

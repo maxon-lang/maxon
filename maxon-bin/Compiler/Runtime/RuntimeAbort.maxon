@@ -36,7 +36,7 @@
 // `try byteAt(index) otherwise panic("String.byteAtOrPanic: index out of bounds — …")`: ordinary Maxon
 // reaching `osPanic` with a real line and a real message. Only a SYNTHESIZED runtime function, which has no
 // source line and no message to bake, needs a number instead.
-// ⇒ **THE NEXT ENTRY TAKES THE NEXT FREE NUMBER ABOVE 70, WHICH IS 116.** 76, 80 and 108 are vacant and stay so:
+// ⇒ **THE NEXT ENTRY TAKES THE NEXT FREE NUMBER ABOVE 70, WHICH IS 117.** 76, 80 and 108 are vacant and stay so:
 // reserving a vacated number would be this space defending against a claimant that no longer exists — the
 // very thing the paragraph above rejects.
 export enum RuntimeAbort
@@ -422,6 +422,13 @@ export enum RuntimeAbort
 	// thread until it resumes and a second wait is refused meanwhile (`netpollDoubleWait`), so another party
 	// wrote a word only this thread may settle — and whatever it stood for would be lost if the resume cleared it.
 	netpollHoldLost = 115
+
+	// `__gt_run_main`, resolving `MAXON_PREEMPT` for the monitor it is about to start: the value is neither
+	// `off` nor `on` (a value that fills the buffer included). The opposite policy from `MAXON_MAX_PROCS`,
+	// whose malformed value falls through to the machine's count: a switch has no numeric floor to fall
+	// under, and a silently ignored `MAXON_PREEMPT=of` runs a program pinned to preemption-off under
+	// preemption-on — an order the case asserts, reported as honoured.
+	schedulerPreemptSwitchUnreadable = 116
 
 	// ⚠ **108 IS VACANT, NOT REUSABLE.** The fault it would name — `__np_pd_open` / `__np_pd_release` finding
 	// a green thread still PUBLISHED on a direction word of the record they are about to reset — is not a

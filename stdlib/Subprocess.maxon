@@ -159,7 +159,8 @@ end 'Executable'
 // Environment
 // =============================================================================
 
-typealias EnvMap = Map with String, String
+/// The variables an `Environment` arm names, keyed by variable name. Public so a caller can build one up.
+public typealias EnvMap = Map with String, String
 
 /// How the child process's environment is constructed.
 ///
@@ -601,24 +602,24 @@ end 'resolveExecutablePath'
 // DIRECTORY**, since `execve` reads a slash-less path relative to it — the one place POSIX never looks.
 function resolveByName(name String) returns String throws SubprocessError
 	#if os(Windows)
-	return String.init(__Builtins.subprocessResolveOnPath(name.cstr()))
+		return String.init(__Builtins.subprocessResolveOnPath(name.cstr()))
 	#else
-	let dirSeparator = "/"
-	if name.contains(dirSeparator) 'isAPath'
-		return name
-	end 'isAPath'
+		let dirSeparator = "/"
 
-	let resolved = String.init(__Builtins.subprocessResolveOnPath(name.cstr()))
+		if name.contains(dirSeparator) 'isAPath'
+			return name
+		end 'isAPath'
 
-	// The walk never answers the working directory on POSIX, so a hit always carries a directory.
-	if not resolved.contains(dirSeparator) 'notOnPath'
-		throw SubprocessError.executableNotFound(name)
-	end 'notOnPath'
+		let resolved = String.init(__Builtins.subprocessResolveOnPath(name.cstr()))
 
-	return resolved
+		// The walk never answers the working directory on POSIX, so a hit always carries a directory.
+		if not resolved.contains(dirSeparator) 'notOnPath'
+			throw SubprocessError.executableNotFound(name)
+		end 'notOnPath'
+
+		return resolved
 	#endif
 end 'resolveByName'
-
 
 /// Pack argc strings (executable name + argv) back-to-back into a single
 /// NUL-separated buffer. Each token contributes `utf-8 bytes + 0x00`. The

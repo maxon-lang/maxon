@@ -1,0 +1,21 @@
+// Test: returned-alias-through-two-calls
+
+function main() returns ExitCode
+	let n = 7
+	let a = "lit{n}"
+	var b = relay(a)
+	b.append("x")
+	print("{a} {b}\n")
+	return 0
+end 'main'
+
+function relay(s String) returns String
+	return pass(s)
+end 'relay'
+
+function pass(s String) returns String
+	return s
+end 'pass'
+---
+CompilerError:
+error E3078: <fragment>:6:6: cannot assign the result of 'relay', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()

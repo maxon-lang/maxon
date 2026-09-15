@@ -1,0 +1,26 @@
+// Test: let-record-assigned-through-a-call
+
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	let a = Point.create(1)
+	var b = Point.create(0)
+	b = relay(a)
+	b.x = 99
+	return a.x
+end 'main'
+
+function relay(p Point) returns Point
+	return p
+end 'relay'
+---
+CompilerError:
+error E3078: <fragment>:16:2: cannot assign the result of 'relay', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()

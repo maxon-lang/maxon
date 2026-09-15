@@ -2760,11 +2760,12 @@ let CandidateSlackBytes = 4 as ParsedInt
 // exactly that size is provably enough and a second failure would be the OS contradicting itself
 // (`__md_current_path`'s straight-line retry, and not `__proc_exe_path`'s doubling loop).
 //
-// ⚠ **THE SAME THREE-ANSWER CONTRACT IS DECODED A SECOND TIME IN `SchedRuntime.emitResolveMaxProcs`, WITH THE
-// OPPOSITE POLICY, AND THAT DIFFERENCE IS THE POINT.** A `PATH` legitimately overflows any guess, so this one
-// RETRIES; a processor count that overflows 32 bytes is not a processor count, so that one DECLINES. What the
-// two share is the decoding — 0 means unset, `>= size` means too small — and they name each other so a change
-// to that reading is made in both.
+// ⚠ **THE SAME THREE-ANSWER CONTRACT IS DECODED TWICE MORE IN `SchedRuntime`, EACH WITH A DIFFERENT POLICY,
+// AND THE DIFFERENCE IS THE POINT.** A `PATH` legitimately overflows any guess, so this one RETRIES; a
+// processor count that overflows 32 bytes is not a processor count, so `emitResolveMaxProcs` DECLINES to the
+// default; a preemption switch has no default a malformed value can safely fall to, so
+// `emitResolvePreemptSwitch` ABORTS. What the three share is the decoding — 0 means unset, `>= size` means too
+// small — and they name each other so a change to that reading is made in all of them.
 function emitSubpReadEnvInto(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, varName ByteArray, outOffset ByteOffset, fallback ByteArray) returns IrBlock
 	var retry = module.addBlock(func, label: b"rpenvretry", heat: BlockHeat.normal)
 	var useFallback = module.addBlock(func, label: b"rpenvnone", heat: BlockHeat.normal)

@@ -1,0 +1,26 @@
+// Test: let-record-laundered-through-an-array-literal
+
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Point'
+
+function launder(p Point) returns Point
+	let arr = [p]
+	return try arr.get(0) otherwise panic("the literal has one element")
+end 'launder'
+
+function main() returns ExitCode
+	let a = Point.create(1)
+	var b = launder(a)
+	b.x = 99
+	return a.x
+end 'main'
+---
+CompilerError:
+error E3078: <fragment>:20:6: cannot assign the result of 'launder', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()

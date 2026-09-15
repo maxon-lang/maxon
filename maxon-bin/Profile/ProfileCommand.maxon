@@ -105,16 +105,13 @@
 		export var timeoutSeconds as ProfileSeconds
 		export var targetArgs as StringArray
 
-		// ⚠ **THE OVERRIDES ARE TWO PARALLEL LISTS AND NOT A MAP**, which is forced rather than chosen:
-		// `Environment.inheritUpdating` takes stdlib's own file-private `EnvMap`, so the only shape this side
-		// can hand it is a map LITERAL, whose type the argument position supplies. A map built here would be a
-		// different alias of the same instantiation and is refused (E3005). The pair is turned into one
-		// literal at the spawn — see `profileChildEnvironment`.
-		export var targetEnvNames as StringArray
-		export var targetEnvValues as StringArray
+		// The `--target-env` overrides, in the map `Environment.inheritUpdating` takes. A repeated NAME keeps the
+		// LAST value — `recordProfileTargetEnv`'s in-order upsert — matching a shell assignment and the fact that
+		// an environment block holds one value per name.
+		export var targetEnv as EnvMap
 
 		static function create() returns ProfileRequest
-			return Self{json: false, folded: false, exePath: "", exeGiven: false, rateHz: DefaultRateHz, minPercent: DefaultMinPercent, timeoutSeconds: DefaultTimeoutSeconds, targetArgs: StringArray.create(), targetEnvNames: StringArray.create(), targetEnvValues: StringArray.create()}
+			return Self{json: false, folded: false, exePath: "", exeGiven: false, rateHz: DefaultRateHz, minPercent: DefaultMinPercent, timeoutSeconds: DefaultTimeoutSeconds, targetArgs: StringArray.create(), targetEnv: EnvMap.create()}
 		end 'create'
 	end 'ProfileRequest'
 
@@ -264,8 +261,7 @@
 			return false
 		end 'noName'
 
-		request.targetEnvNames.push(name)
-		request.targetEnvValues.push(profileEnvValueOf(halves))
+		request.targetEnv.upsert(name, value: profileEnvValueOf(halves))
 
 		return true
 	end 'recordProfileTargetEnv'
@@ -369,29 +365,13 @@
 	end 'launchAndSampleCalibrated'
 
 	// `--target-env` applied over the INHERITED environment, the same meaning `maxon debug --target-env=` has.
-	// A repeated NAME takes the LAST value, matching a shell assignment and the fact that an environment block
-	// holds one value per name — which is what the in-order upsert below gives.
 	function profileChildEnvironment(request ProfileRequest) returns Environment
-		if request.targetEnvNames.count() == 0 'nothingToSet'
+		if request.targetEnv.count() == 0 'nothingToSet'
 			return Environment.inherit
 		end 'nothingToSet'
 
-		var overrides = [profileEnvNameAt(request, position: 0): profileEnvValueAt(request, position: 0)]
-
-		for position in 1 upto request.targetEnvNames.count() 'eachOverride'
-			overrides.upsert(profileEnvNameAt(request, position: position), value: profileEnvValueAt(request, position: position))
-		end 'eachOverride'
-
-		return Environment.inheritUpdating(overrides)
+		return Environment.inheritUpdating(request.targetEnv)
 	end 'profileChildEnvironment'
-
-	function profileEnvNameAt(request ProfileRequest, position ElementIndex) returns String
-		return try request.targetEnvNames.get(position) otherwise panic("profileEnvNameAt: position {position} is inside a list of {request.targetEnvNames.count()} names")
-	end 'profileEnvNameAt'
-
-	function profileEnvValueAt(request ProfileRequest, position ElementIndex) returns String
-		return try request.targetEnvValues.get(position) otherwise panic("profileEnvValueAt: every name recorded pushes a value beside it")
-	end 'profileEnvValueAt'
 
 	// ⭐ Everything that can fail is asked HERE, before a single tick, so a refusal names the missing mechanism
 	// rather than a profile coming back mysteriously empty.

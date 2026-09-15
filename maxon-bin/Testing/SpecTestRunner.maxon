@@ -547,6 +547,17 @@ function batchProcsShellVar() returns String
 	return "${BatchProcsShellName}"
 end 'batchProcsShellVar'
 
+// ⭐ **THE CASE'S `<!-- preempt: off -->` VALUE, CARRIED INTO THE BATCH AS THE SECOND ARGUMENT OF EVERY CALL**,
+// for `BatchProcsShellName`'s reason and with its empty-means-absent rule: the batch lane must deliver every
+// per-child facility the direct spawn delivers, or a case pinned to preemption-off runs under preemption on
+// one lane only and reports its order as honoured.
+let BatchPreemptShellName = "q"
+
+// The `$`-reference to it — `batchKeyShellVar`'s twin, and a function for the same reason.
+function batchPreemptShellVar() returns String
+	return "${BatchPreemptShellName}"
+end 'batchPreemptShellVar'
+
 // coreutils' per-execution bound. NAMED here rather than spelled in the script, because
 // `requireWslAvailable` probes for exactly this command and the two must be the same word.
 let GuestTimeoutCommand = "timeout"
@@ -886,7 +897,8 @@ end 'inheritedWorkingDir'
 //
 // ⚠ `environment` DEFAULTS FOR EXACTLY THAT REASON AND NOT FOR `workingDirectory`'s: every spawn here but
 // ONE wants the parent's environment unchanged, and the one that differs is the RUN step, where a case's
-// `<!-- procs: N -->` marker names the processor count its program must start on (`runEnvironmentFor`).
+// `<!-- procs: N -->` marker names the processor count its program must start on and its
+// `<!-- preempt: off -->` marker withdraws the monitor's preemption (`runEnvironmentFor`).
 //
 // ⚠ `standardInput` DEFAULTS FOR THE SAME REASON AS `environment`, and its one differing caller is the
 // same one: every spawn this harness makes wants `Subprocess`'s own default (the null device, so a read
@@ -4228,36 +4240,49 @@ function spawnOneRun(pending PendingRun, specName String, runWorkingDir FilePath
 	// ⭐ A TEST BINARY'S WORKING DIRECTORY IS PART OF WHAT ITS SPEC ASSERTS — `directory.md` reaches
 	// `../bin` through it — so it is stated rather than inherited from whoever launched the suite. See
 	// `RunWorkingSubdirName`.
-	let spawned = try runProcess(runCommand.exe, argv: runCommand.argv, workingDirectory: runWorkingDir, environment: runEnvironmentFor(pending.compiled.test.procs), standardInput: runStdinFor(pending.compiled.test.stdin)) otherwise (e) 'runSpawnFailed'
+	let spawned = try runProcess(runCommand.exe, argv: runCommand.argv, workingDirectory: runWorkingDir, environment: runEnvironmentFor(pending.compiled.test.procs, preempt: pending.compiled.test.preempt), standardInput: runStdinFor(pending.compiled.test.stdin)) otherwise (e) 'runSpawnFailed'
 		return RunObservation.failed("program spawn failed: {e.displayReason()}")
 	end 'runSpawnFailed'
 
 	return RunObservation.completed(spawned)
 end 'spawnOneRun'
 
-// ⭐⭐ **WHAT A CASE'S `<!-- procs: N -->` MARKER MEANS AT THE SPAWN: one variable, in one child's
-// environment, and nothing else changed.**
+// ⭐⭐ **WHAT A CASE'S `<!-- procs: N -->` AND `<!-- preempt: off -->` MARKERS MEAN AT THE SPAWN: one variable
+// each, in one child's environment, and nothing else changed.**
 //
 // ⛔ **IT MAY NOT BE DONE BY SETTING THE VARIABLE IN THIS PROCESS AND LETTING THE CHILD INHERIT IT.** That
-// would make the count a property of the WORKER rather than of the CASE — every test the worker went on to
-// run would carry the last marked case's number until something overwrote it, and the correctness of the
+// would make the setting a property of the WORKER rather than of the CASE — every test the worker went on to
+// run would carry the last marked case's value until something overwrote it, and the correctness of the
 // whole scheme would rest on a claim nothing here checks (that a worker performs one run at a time, and that
 // no other spawn of this process ever races the assignment). `Environment.inheritUpdating` states the fact
 // where it is true: in the environment block of the one child that is about to be created.
 //
-// ⚠ The variable is spelled from `SchedRuntime.MaxProcsEnvName` — the same constant the emitted scheduler
-// reads it back through — because a marker set under one name and read under another is accepted, ignored
-// and silent.
+// ⚠ Each variable is spelled from the `SchedRuntime` constant the emitted scheduler reads it back through
+// (`MaxProcsEnvName`, `PreemptEnvName`/`PreemptEnvOffValue`), because a marker set under one name and read
+// under another is accepted, ignored and silent.
 //
-// ⚠ Nothing here forwards the variable across a launcher, because no lane puts one between this call and
+// ⚠ Nothing here forwards the variables across a launcher, because no lane puts one between this call and
 // the program. The one that would — `orb run`, which carries only the variables named in `ORBENV` —
 // spawns no test binary from this host: a Linux suite is answered by a compiler inside the machine,
 // which spawns its own children there and reaches this same block (`runSuiteInGuest`).
-function runEnvironmentFor(procs SpecProcs) returns Environment
-	return match procs 'p'
-		unset gives Environment.inherit
-		pinned(count) gives Environment.inheritUpdating([String.from(MaxProcsEnvName): "{count}"])
+function runEnvironmentFor(procs SpecProcs, preempt SpecPreempt) returns Environment
+	var overrides = EnvMap.create()
+
+	match procs 'p'
+		unset then break 'p'
+		pinned(count) then overrides.upsert(String.from(MaxProcsEnvName), value: "{count}")
 	end 'p'
+
+	match preempt 'q'
+		unset then break 'q'
+		off then overrides.upsert(String.from(PreemptEnvName), value: String.from(PreemptEnvOffValue))
+	end 'q'
+
+	if overrides.count() == 0 'unchanged'
+		return Environment.inherit
+	end 'unchanged'
+
+	return Environment.inheritUpdating(overrides)
 end 'runEnvironmentFor'
 
 // ⭐ **WHAT A `<!-- stdin: delayed -->` CASE'S PROGRAM READS.** One line, so a `readLine()` returns and
@@ -4565,14 +4590,16 @@ function batchScript(prepared PreparedTestArray, tempDir FilePath) returns Strin
 
 	out.append("{BatchRunFunctionName}() (\n")
 	out.append("\t{BatchProcsShellName}=$1\n")
-	out.append("\t{BatchKeyShellName}=$2\n")
-	out.append("\t{BatchStdinShellName}=$3\n")
-	out.append("\tshift 3\n")
+	out.append("\t{BatchPreemptShellName}=$2\n")
+	out.append("\t{BatchKeyShellName}=$3\n")
+	out.append("\t{BatchStdinShellName}=$4\n")
+	out.append("\tshift 4\n")
 
-	// ⭐ THE CASE'S OWN PROCESSOR COUNT, EXPORTED INTO THIS EXECUTION'S ENVIRONMENT AND NOWHERE ELSE. The
-	// function body is a SUBSHELL (see this function's header), so the export dies with the execution and
-	// the next test in the batch starts from the batch's own environment however this one ended.
+	// ⭐ THE CASE'S OWN PROCESSOR COUNT AND PREEMPTION SWITCH, EXPORTED INTO THIS EXECUTION'S ENVIRONMENT AND
+	// NOWHERE ELSE. The function body is a SUBSHELL (see this function's header), so the exports die with the
+	// execution and the next test in the batch starts from the batch's own environment however this one ended.
 	out.append("\t[ -z \"{batchProcsShellVar()}\" ] || export {String.from(MaxProcsEnvName)}=\"{batchProcsShellVar()}\"\n")
+	out.append("\t[ -z \"{batchPreemptShellVar()}\" ] || export {String.from(PreemptEnvName)}=\"{batchPreemptShellVar()}\"\n")
 	out.append("\tc=\"{guestCapturePath(scratch, extension: BatchStatusExtension)}\"\n")
 	out.append("\ta=\"{guestRootPath(scratch)}{PathSeparator}{batchKeyShellVar()}\"\n")
 	out.append("\to=\"{guestCapturePath(scratch, extension: BatchStdoutExtension)}\"\n")
@@ -4654,13 +4681,14 @@ function guestSpecTempPrefix(tempDir FilePath) returns String
 	return relative.toString().replace(WindowsPathSeparator, with: PathSeparator)
 end 'guestSpecTempPrefix'
 
-// One test's line: the function, the case's processor count, the binary's own filename, then the case's own
-// `Args:`.
+// One test's line: the function, the case's processor count, its preemption switch, the binary's own
+// filename, the stdin token, then the case's own `Args:`.
 //
 // ⭐ THE PROGRAM'S OWN ARGUMENTS GO LAST, exactly as they do behind every other runner
-// (`buildRunCommand`): the shell function forwards whatever follows the key straight to the binary, so
-// `Args:` reaches the same argv[1..] a direct spawn would have given it. The count goes FIRST because it is
-// the script's own business and never the program's — nothing after the `shift 2` can reach it.
+// (`buildRunCommand`): the shell function forwards whatever follows its own positionals straight to the
+// binary, so `Args:` reaches the same argv[1..] a direct spawn would have given it. The environment tokens go
+// FIRST, before the key, because they are the script's own business and never the program's — the shell
+// function shifts them off before anything reaches the binary.
 function batchCallLine(compiled CompiledTest) returns String
 	var line = StringBuilder.create()
 	line.append(BatchRunFunctionName)
@@ -4669,6 +4697,12 @@ function batchCallLine(compiled CompiledTest) returns String
 		unset gives ""
 		pinned(count) gives "{count}"
 	end 'procs'))
+
+	line.append(" ")
+	line.append(shQuoted(match compiled.test.preempt 'preempt'
+		unset gives ""
+		off gives String.from(PreemptEnvOffValue)
+	end 'preempt'))
 
 	line.append(" ")
 	line.append(shQuoted(batchKeyFor(compiled)))

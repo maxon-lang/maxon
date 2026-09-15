@@ -1,0 +1,43 @@
+// Test: let-record-laundered-through-a-setter
+
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Point'
+
+type Box
+	export var item as Point
+
+	static function create(item Point) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function set(p Point)
+		self.item = p
+	end 'set'
+
+	export function get() returns Point
+		return self.item
+	end 'get'
+end 'Box'
+
+function launder(p Point) returns Point
+	var box = Box.create(Point.create(0))
+	box.set(p)
+	return box.get()
+end 'launder'
+
+function main() returns ExitCode
+	let a = Point.create(1)
+	var b = launder(a)
+	b.x = 99
+	return a.x
+end 'main'
+---
+CompilerError:
+error E3078: <fragment>:37:6: cannot assign the result of 'launder', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()

@@ -1,0 +1,25 @@
+// Test: let-record-pushed-into-a-var-container
+
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Point'
+
+typealias PointArray = Array with Point
+
+function main() returns ExitCode
+	let a = Point.create(1)
+	var arr = PointArray.create()
+	arr.push(a)
+	var e = try arr.get(0) otherwise panic("an element was pushed")
+	e.x = 99
+	return a.x
+end 'main'
+---
+CompilerError:
+error E3078: <fragment>:19:6: cannot assign the result of 'get', which may share storage with immutable variable 'a', to mutable binding 'e'; use 'let' instead of 'var', or use clone()

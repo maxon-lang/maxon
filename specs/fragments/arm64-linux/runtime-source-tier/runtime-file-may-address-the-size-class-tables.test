@@ -1,0 +1,23 @@
+// Test: runtime-file-may-address-the-size-class-tables
+// --- runtime-file: Probe.maxon
+module function probeClassTables() returns MachineWord
+	let small = __Raw.slabSizeToClass8Addr()
+	let large = __Raw.slabSizeToClass128Addr()
+	let geom = __Raw.slabClassGeomAddr()
+
+	return __Raw.loadByte(small, offset: 0) + __Raw.loadByte(large, offset: 0) + __Raw.loadWord(geom, offset: 0)
+end 'probeClassTables'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

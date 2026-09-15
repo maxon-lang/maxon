@@ -1,0 +1,70 @@
+// Test: a-compare-branches-on-its-own-flags-across-a-counter-step
+var lo = 0
+var hi = 0
+var hits = 0
+
+function main() returns ExitCode
+	lo = 1
+	hi = 2
+	let next = hits + 1
+	let less = lo < hi
+	hits = next
+
+	if less 'less'
+		return 40 + hits
+	end 'less'
+
+	return 7
+end 'main'
+---
+ExitCode: 41
+---
+data {
+  __data_lo@0 = i64 0
+  __data_hi@8 = i64 0
+  __data_hits@16 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.leaGlobal x1, __data_lo
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.movImm x0, 2
+    arm64.leaGlobal x1, __data_hi
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.leaGlobal x0, __data_hits
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x0, x0, 1
+    arm64.leaGlobal x1, __data_lo
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.leaGlobal x2, __data_hi
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+    arm64.cmp x1, x2
+    arm64.leaGlobal x1, __data_hits
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.b.ge ifcont
+  less:
+    arm64.leaGlobal x0, __data_hits
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x0, x0, 40
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 7
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-compare-branches-on-its-own-flags-across-a-counter-step.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

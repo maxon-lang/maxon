@@ -1,0 +1,376 @@
+// Test: builtins-mm-counters.process-totals-agree-with-the-calling-thread-while-it-is-the-only-one
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+typealias Bytes = Array with Byte
+
+type Idle
+	var calls as Integer
+
+	static function create() returns Self
+		return Self{calls: 0}
+	end 'create'
+
+	export function ping(n Integer) returns Integer
+		self.calls = self.calls + 1
+
+		return n + 1
+	end 'ping'
+end 'Idle'
+
+function fillAndDrop()
+	var buf = Bytes.create()
+	for _ in 0 upto 4096 'push'
+		buf.push(1)
+	end 'push'
+end 'fillAndDrop'
+
+function main() returns ExitCode
+	let h = spawn Idle.create()
+
+	let threadAllocsBefore = __Builtins.threadAllocTotal()
+	let threadFreesBefore = __Builtins.threadFreeTotal()
+	let threadBytesBefore = __Builtins.threadAllocBytes()
+	let allocsBefore = __Builtins.processAllocTotal()
+	let freesBefore = __Builtins.processFreeTotal()
+	let bytesBefore = __Builtins.processAllocBytes()
+	fillAndDrop()
+	let allocs = __Builtins.processAllocTotal() - allocsBefore
+	let frees = __Builtins.processFreeTotal() - freesBefore
+	let bytes = __Builtins.processAllocBytes() - bytesBefore
+	let threadAllocs = __Builtins.threadAllocTotal() - threadAllocsBefore
+	let threadFrees = __Builtins.threadFreeTotal() - threadFreesBefore
+	let threadBytes = __Builtins.threadAllocBytes() - threadBytesBefore
+
+	var score = try await h.ping(0) otherwise 0
+	if allocs > 0 and allocs == threadAllocs 'allocsAgree'
+		score = score + 2
+	end 'allocsAgree'
+	if frees > 0 and frees == threadFrees 'freesAgree'
+		score = score + 4
+	end 'freesAgree'
+	if bytes > allocs and bytes == threadBytes 'bytesAgree'
+		score = score + 8
+	end 'bytesAgree'
+	return score as ExitCode
+end 'main'
+---
+ExitCode: 15
+---
+data {
+  __gt_run_queue_head@0 = i64 0
+  __gt_run_queue_tail@8 = i64 0
+  __gt_timer_count@16 = i64 0
+  __gt_timer_heap_base@24 = i64 0
+  __gt_timer_capacity@32 = i64 0
+  __gt_timer_seq@40 = i64 0
+  __gt_timer_when@48 = i64 9223372036854775807
+  __gt_trace_counter@56 = i64 0
+  __gt_live_count@64 = i64 0
+  __gt_seed_bytes@72 = i64 2048
+  __gt_stack_bytes_sum@80 = i64 0
+  __gt_stack_bytes_count@88 = i64 0
+  __gt_seed_sum_seen@96 = i64 0
+  __gt_seed_count_seen@104 = i64 0
+  __gt_keeps_cpu_clock@112 = i64 0
+  __sched_active_workers@120 = i64 1
+  __sched_max_active_workers@128 = i64 1
+  __sched_tls_index@136 = i64 0
+  __sched_tls_teb_offset@144 = i64 0
+  __sched_procs@152 = i64 0
+  __sched_allm@160 = i64 0
+  __sched_midle@168 = i64 0
+  __sched_pidle@176 = i64 0
+  __gt_gfree_head@184 = i64 0
+  __sched_arena_cursor@192 = i64 0
+  __sched_arena_limit@200 = i64 0
+  __gt_records_carved@208 = i64 0
+  __sched_npidle@216 = i64 0
+  __sched_runq_size@224 = i64 0
+  __sched_global_pushes@232 = i64 0
+  __sched_timer_scan_steps@240 = i64 0
+  __sched_mcount@248 = i64 0
+  __sched_nmidle@256 = i64 0
+  __sched_main_m@264 = i64 0
+  __sched_phase@272 = i64 0
+  __sched_lastpoll@280 = i64 0
+  __sched_poll_until@288 = i64 0
+  __sched_regain_head@296 = i64 0
+  __np_poller@304 = i64 0
+  __np_break@312 = i64 0
+  __np_wake_sig@320 = i64 0
+  __np_pd_table@328 = i64 0
+  __np_pd_cap@336 = i64 0
+  __np_waiters@344 = i64 0
+  __sched_num_procs@352 = i64 0
+  __sched_shutdown_flag@360 = i64 0
+  __sched_lock@368 = i64 0
+  __sched_lock_depth_sink@376 = i64 0
+  __sched_nmspinning@384 = i64 0
+  __sched_needspinning@392 = i64 0
+  __sched_sysmon_event@400 = i64 0
+  __sched_sysmon_wait@408 = i64 0
+  __sched_timer_starts@416 = i64 0
+  __mrt_errno@424 = i64 0
+  __mrt_envp@432 = i64 0
+  __mrt_tls_next_key@440 = i64 0
+  __slab_arena_list@448 = i64 0
+  __slab_arena_map_l1@456 = i64 0
+  __slab_state@464 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 96
+    arm64.storeSlotReg slot8, x27
+    arm64.storeSlotReg slot7, x26
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+  __il_body#21:
+    arm64.movImm x19, 0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+  __il_cont#20:
+    arm64.leaFuncAddr x0, Idle.__loop
+    arm64.leaFuncAddr x2, Idle.__abandon
+    arm64.bl __svc_spawn
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+    arm64.bl __mm_counter_thread_allocs
+    arm64.movRegReg x19, x0
+    arm64.bl __mm_counter_thread_frees
+    arm64.movRegReg x21, x0
+    arm64.bl __mm_counter_thread_alloc_bytes
+    arm64.movRegReg x22, x0
+    arm64.bl __mm_counter_process_allocs
+    arm64.movRegReg x23, x0
+    arm64.bl __mm_counter_process_frees
+    arm64.movRegReg x24, x0
+    arm64.bl __mm_counter_process_alloc_bytes
+    arm64.movRegReg x25, x0
+  __il_body#22:
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x26, x0
+    arm64.movImm x27, 0
+    arm64.b forhdr
+  push:
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x26
+    arm64.bl __managed_push
+  forstep:
+    arm64.add x27, x27, 1
+  forhdr:
+    arm64.cmp x27, 4096
+    arm64.b.lt push
+  forexit:
+    arm64.movRegReg x0, x26
+    arm64.bl __managed_decref
+  __il_cont#19:
+    arm64.bl __mm_counter_process_allocs
+    arm64.sub x23, x0, x23
+    arm64.bl __mm_counter_process_frees
+    arm64.sub x24, x0, x24
+    arm64.bl __mm_counter_process_alloc_bytes
+    arm64.sub x25, x0, x25
+    arm64.bl __mm_counter_thread_allocs
+    arm64.sub x19, x0, x19
+    arm64.bl __mm_counter_thread_frees
+    arm64.sub x21, x0, x21
+    arm64.bl __mm_counter_thread_alloc_bytes
+    arm64.sub x22, x0, x22
+    arm64.movImm x26, 0
+    arm64.movImm x0, 0
+    arm64.bl __gt_cell_alloc
+    arm64.movRegReg x27, x0
+    arm64.movImm x0, 24
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.storeBaseDispReg.word64 [x1 + 8], x26
+    arm64.storeBaseDispReg.word64 [x1 + 16], x27
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.bl __mbox_send
+    arm64.movRegReg x0, x27
+    arm64.bl __gt_try_await
+    arm64.cmp x9, 0
+    arm64.b.eq trycont
+  tryerr:
+    arm64.movImm x0, 0
+  trycont:
+    arm64.cmp x23, 0
+    arm64.movImm x1, 0
+    arm64.b.le scmerge#5
+  andrhs#4:
+    arm64.cmp x23, x19
+    arm64.cset x1, eq
+  scmerge#5:
+    arm64.cbz x1, ifcont#7
+  allocsAgree:
+    arm64.add x0, x0, 2
+  ifcont#7:
+    arm64.cmp x24, 0
+    arm64.movImm x1, 0
+    arm64.b.le scmerge#9
+  andrhs#8:
+    arm64.cmp x24, x21
+    arm64.cset x1, eq
+  scmerge#9:
+    arm64.cbz x1, ifcont#11
+  freesAgree:
+    arm64.add x0, x0, 4
+  ifcont#11:
+    arm64.cmp x25, x23
+    arm64.movImm x1, 0
+    arm64.b.le scmerge#13
+  andrhs#12:
+    arm64.cmp x25, x22
+    arm64.cset x1, eq
+  scmerge#13:
+    arm64.cbz x1, critsplit
+  bytesAgree:
+    arm64.add x19, x0, 8
+    arm64.b ifcont#15
+  critsplit:
+    arm64.movRegReg x19, x0
+  ifcont#15:
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_handle_drop_box
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at builtins-mm-counters.process-totals-agree-with-the-calling-thread-while-it-is-the-only-one.test:54: Range check failed: value outside typealias 'ExitCo"...
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+}
+
+func @Idle.__loop {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+  serve:
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_recv
+    arm64.cmp x0, 0
+    arm64.b.eq stopping
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=ping] @__jumptable_7
+  __shutdown:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.storeBaseDispReg.word64 [x20 + 56], x1
+    arm64.bl __mm_decref
+  stopping:
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_close
+  drain:
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_recv
+    arm64.movRegReg x1, x0
+    arm64.cmp x1, 0
+    arm64.b.ne abandon
+  finished:
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_service_exit
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  abandon:
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_abandon
+    arm64.b drain
+  ping:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 16]
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
+    arm64.add x2, x2, 1
+    arm64.storeBaseDispReg.word64 [x19 + 0], x2
+    arm64.add x22, x1, 1
+  __il_cont:
+    arm64.bl __mm_decref
+    arm64.movImm x2, 0
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x22
+    arm64.bl __gt_cell_complete
+    arm64.b serve
+}
+
+func @Idle.__abandon {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=ping] @__jumptable_8
+  __shutdown:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.movImm x1, 0
+    arm64.movImm x2, 1
+    arm64.bl __gt_cell_complete
+    arm64.b abandondrop
+  ping:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.movImm x1, 0
+    arm64.movImm x2, 1
+    arm64.bl __gt_cell_complete
+  abandondrop:
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

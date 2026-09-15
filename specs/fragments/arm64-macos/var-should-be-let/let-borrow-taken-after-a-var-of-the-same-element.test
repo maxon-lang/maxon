@@ -1,0 +1,25 @@
+// Test: let-borrow-taken-after-a-var-of-the-same-element
+
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Point'
+
+typealias PointArray = Array with Point
+
+function main() returns ExitCode
+	var arr = PointArray.create()
+	arr.push(Point.create(1))
+	var e = try arr.get(0) otherwise panic("an element was pushed")
+	let s = try arr.get(0) otherwise panic("an element was pushed")
+	e.x = 9
+	return s.x
+end 'main'
+---
+CompilerError:
+error E3159: <fragment>:20:2: cannot write through 'e', which may be the record of immutable variable 's'; use clone()

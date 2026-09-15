@@ -1,0 +1,85 @@
+// Test: a-body-that-asks-to-be-spliced-may-call-another-that-does
+// --- runtime-file: Probe.maxon
+module function __probe_inner(seed MachineWord) returns MachineWord
+	__Raw.splicedAtEverySite()
+
+	return seed + 1
+end '__probe_inner'
+
+module function __probe_outer(seed MachineWord) returns MachineWord
+	__Raw.splicedAtEverySite()
+
+	return __probe_inner(seed) + __probe_inner(seed + 1)
+end '__probe_outer'
+
+function __probe_chain_caller(seed ExitCode) returns ExitCode
+	let base = __probe_outer(seed as MachineWord)
+	let again = __probe_outer(base and 1)
+
+	return (base + again) as ExitCode
+end '__probe_chain_caller'
+// --- stdlib-overlay: Builtins.maxon
+export function probeSpliceChain(seed ExitCode) returns ExitCode
+	return __probe_chain_caller(seed)
+end 'probeSpliceChain'
+// --- file: main.maxon
+function main() returns ExitCode
+	return probeSpliceChain(0)
+end 'main'
+---
+ExitCode: 8
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+  __rc_ok:
+    arm64.bl __probe_chain_caller
+  __il_cont:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @__probe_chain_caller {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#2
+  __rc_chk#3:
+    arm64.cmp x0, 255
+    arm64.b.gt __rc_panic#2
+  __il_body#12:
+    arm64.add x0, x0, 1
+  __il_body#13:
+    arm64.add x1, x0, 1
+  __il_cont#10:
+    arm64.add x0, x0, x1
+  __il_cont#8:
+    arm64.and x1, x0, 1
+  __il_body#17:
+    arm64.add x1, x1, 1
+  __il_body#18:
+    arm64.add x2, x1, 1
+  __il_cont#15:
+    arm64.add x1, x1, x2
+  __il_cont#7:
+    arm64.add x0, x0, x1
+  __rc_chk#6:
+    arm64.cmp x0, 255
+    arm64.b.gt __rc_panic#5
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at Probe.maxon:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at Probe.maxon:17: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

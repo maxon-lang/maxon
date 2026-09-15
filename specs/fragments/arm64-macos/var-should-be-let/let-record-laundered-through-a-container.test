@@ -1,0 +1,29 @@
+// Test: let-record-laundered-through-a-container
+
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Point'
+
+typealias PointArray = Array with Point
+
+function launder(p Point) returns Point
+	var arr = PointArray.create()
+	arr.push(p)
+	return try arr.get(0) otherwise panic("an element was pushed")
+end 'launder'
+
+function main() returns ExitCode
+	let a = Point.create(1)
+	var b = launder(a)
+	b.x = 99
+	return a.x
+end 'main'
+---
+CompilerError:
+error E3078: <fragment>:23:6: cannot assign the result of 'launder', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()

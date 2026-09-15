@@ -310,10 +310,8 @@ end 'traceMarkerOf'
 // `SpecTestRunner.targetCanCheckSectionPins`). An unrecognized `<!-- … -->` comment line is skipped, so
 // a reader that does not know this marker keeps exactly the meaning the `.md` file already had.
 //
-// It is not a superstring or substring of any other marker ("<!-- network:" first differs from
-// "<!-- test:", "<!-- disabled-test:", "<!-- unsupported-targets:", "<!-- Args:", "<!-- AsyncTrace", "<!-- MmTrace",
-// "<!-- LogTrace" and "<!-- DebugInfo"
-// at the character after "<!-- "), so the marker checks stay independent and none can swallow another.
+// No marker token is a prefix of another — `markerOpeningAmong`'s rule, which keeps this check independent
+// of every other family's.
 export let NetworkMarker = "<!-- network:"
 
 // The ONE value `NetworkMarker` recognizes. Any other value is REFUSED rather than read as "no
@@ -337,11 +335,27 @@ export let NetworkLiveValue = "live"
 // at whatever the machine gave it and report the result as though the number had been honoured, which is
 // the silently-declined claim `AsyncTraceMarker` records having shipped.
 //
-// It is not a superstring or substring of any other marker ("<!-- procs:" first differs from "<!-- test:",
-// "<!-- disabled-test:", "<!-- unsupported-targets:", "<!-- Args:", "<!-- AsyncTrace", "<!-- MmTrace", "<!-- LogTrace",
-// "<!-- DebugInfo" and "<!-- network:" at the character after "<!-- "), so the marker checks stay
-// independent and none can swallow another.
+// No marker token is a prefix of another — `markerOpeningAmong`'s rule, which keeps this check independent
+// of every other family's (`PreemptMarker` shares `<!-- pr` with it, and that is not a prefix).
 let ProcsMarker = "<!-- procs:"
+
+// ⭐⭐ **WHETHER THE MONITOR MAY TAKE THE PROCESSOR FROM THE THREAD HOLDING IT — `<!-- preempt: off -->`, the
+// marker that makes a scheduling ORDER a property of the CASE rather than of the host's load.**
+//
+// `MAXON_PREEMPT` is read once, at process start, by the emitted scheduler
+// (`SchedRuntime.emitResolvePreemptSwitch`), and `off` withdraws the monitor's two processor-taking acts:
+// the 10 ms yield request and the syscall retake. A case pinning an order that assumes `main` keeps its
+// processor across its spawns — `specs/sched-runqueue.md`'s ring-order cases — holds only while nothing
+// takes that processor, and on a loaded runner the monitor's 10 ms of WALL time elapses between two
+// spawns; with the switch off the premise is true by construction.
+//
+// ⛔ **AN UNRECOGNIZED VALUE IS A PANIC, NOT A DEFAULT** — `parsePreemptValue`, which follows
+// `parseNetworkValue` exactly. And `off` is the ONLY value: the marker states a departure from the default,
+// and absence already says the default.
+//
+// No marker token is a prefix of another — `markerOpeningAmong`'s rule, which keeps this check independent
+// of every other family's.
+let PreemptMarker = "<!-- preempt:"
 
 // ⭐⭐ **WHETHER THIS CASE'S PROGRAM IS GIVEN A STDIN THAT BLOCKS — `<!-- stdin: hold -->` and
 // `<!-- stdin: delayed -->`, the markers that make a real KERNEL WAIT reachable from an ordinary spec
@@ -375,10 +389,8 @@ let ProcsMarker = "<!-- procs:"
 // the case an instant EOF and let it report PASS on a program that never blocked at all, which is the
 // silently-declined claim `AsyncTraceMarker` records having shipped.
 //
-// It is not a superstring or substring of any other marker ("<!-- stdin:" first differs from
-// "<!-- test:", "<!-- disabled-test:", "<!-- unsupported-targets:", "<!-- Args:", "<!-- AsyncTrace",
-// "<!-- MmTrace", "<!-- LogTrace", "<!-- DebugInfo", "<!-- network:" and "<!-- procs:" at the character
-// after "<!-- "), so the marker checks stay independent and none can swallow another.
+// No marker token is a prefix of another — `markerOpeningAmong`'s rule, which keeps this check independent
+// of every other family's.
 let StdinMarker = "<!-- stdin:"
 
 // The two values `StdinMarker` recognizes, for `NetworkLiveValue`'s reason.
@@ -857,6 +869,21 @@ export union SpecProcs
 	pinned(count ProcessorCount)
 end 'SpecProcs'
 
+// ⭐ **WHETHER A CASE WITHDRAWS THE MONITOR'S PREEMPTION — see `PreemptMarker` for why this is a per-case
+// fact.**
+//
+// A UNION rather than a bool, for `SpecNetwork`'s reason: the absence of the marker is a DIFFERENT claim from
+// `off` — it says the program inherits the environment, so a stray `MAXON_PREEMPT` in the suite's own
+// environment reaches it, exactly as a stray `MAXON_MAX_PROCS` reaches an unmarked `procs` case — and it
+// makes every consumer's `match` total.
+export union SpecPreempt
+	// No marker: the program is spawned with the parent's environment unchanged.
+	unset
+
+	// `<!-- preempt: off -->`: `MAXON_PREEMPT=off` is placed in the environment of this case's program alone.
+	off
+end 'SpecPreempt'
+
 // ⭐ **WHAT A CASE'S PROGRAM FINDS ON STDIN — see `StdinMarker` for why this is a per-case fact.**
 //
 // A UNION rather than a bool, for `SpecNetwork`'s reasons: the marker carries a VALUE, the third answer
@@ -962,6 +989,11 @@ export type SpecTest
 	// environment variable the child is given — not what the run must produce.
 	export let procs as SpecProcs
 
+	// Whether this case's program runs with the monitor's preemption withdrawn (a `<!-- preempt: off -->`
+	// marker). It rides HERE for `procs`' reason exactly and is the same kind of fact: one more environment
+	// variable the child is given.
+	export let preempt as SpecPreempt
+
 	// What this case's program finds on stdin (a `<!-- stdin: … -->` marker). It rides HERE for `procs`'
 	// reason exactly and is the same kind of fact: it changes one property of the spawn — which
 	// descriptor the child's fd 0 is — not what the run must produce.
@@ -969,9 +1001,9 @@ export type SpecTest
 
 	// The split is derived HERE, from the very source that will be compiled, so a test can never
 	// exist with a file list that disagrees with its text.
-	export static function create(name String, source String, expectation SpecExpectation, unsupportedTargets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool, debugInfo bool, traceCapture SpecTraceCapture, network SpecNetwork, procs SpecProcs, stdin SpecStdin) returns SpecTest
+	export static function create(name String, source String, expectation SpecExpectation, unsupportedTargets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool, debugInfo bool, traceCapture SpecTraceCapture, network SpecNetwork, procs SpecProcs, preempt SpecPreempt, stdin SpecStdin) returns SpecTest
 		let sections = splitSourceSections(name, source: source)
-		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, runtimeFiles: sections.runtimeFiles, unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, stdin: stdin}
+		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, runtimeFiles: sections.runtimeFiles, unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin}
 	end 'create'
 
 	// True when this test's block declares `// --- file:` sections — i.e. it compiles as a
@@ -1352,6 +1384,10 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 	// no count and takes the process default, not a default standing in for an unread marker.
 	var procs = SpecProcs.unset
 
+	// `unset` unless a `<!-- preempt: … -->` marker says otherwise — the literal answer for a case whose program
+	// inherits the environment, not a default standing in for an unread marker.
+	var preempt = SpecPreempt.unset
+
 	// `closed` unless a `<!-- stdin: … -->` marker says otherwise — the literal answer for a case whose
 	// program is handed the null device, not a default standing in for an unread marker.
 	var stdin = SpecStdin.closed
@@ -1373,7 +1409,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 		end 'sectionEnd'
 
 		// Computed ONCE and asked of every family below — see `markerOpeningsIn` for why that matters here
-		// in particular: this loop runs over every line of every case and asks nine questions of each.
+		// in particular: this loop runs over every line of every case and asks about every family on each.
 		let openings = markerOpeningsIn(line)
 
 		if openingsCarry(openings, marker: TestMarker) or openingsCarry(openings, marker: DisabledTestMarker) 'nextMarker'
@@ -1412,7 +1448,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 			continue
 		end 'argsMarker'
 
-		// The valueless flag marker. Consumed identically to the four above — including on a DISABLED case, so
+		// The valueless flag marker. Consumed identically to the markers above — including on a DISABLED case, so
 		// shelving a trace case does not leave its marker to fall through as unread prose.
 		if openingsCarry(openings, marker: AsyncTraceMarker) 'asyncTraceMarker'
 			asyncTrace = true
@@ -1443,7 +1479,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 			continue
 		end 'logTraceMarker'
 
-		// The network gate the author SPELLED, consumed identically to the five above — including on a
+		// The network gate the author SPELLED, consumed identically to the markers above — including on a
 		// DISABLED case, so shelving a live-network case does not leave its marker to fall through as
 		// unread prose. The VALUE is refused rather than defaulted; see `parseNetworkValue`.
 		if openingsCarry(openings, marker: NetworkMarker) 'networkMarker'
@@ -1452,7 +1488,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 			continue
 		end 'networkMarker'
 
-		// The processor count the author asked for, consumed identically to the six above — including on a
+		// The processor count the author asked for, consumed identically to the markers above — including on a
 		// DISABLED case, so shelving a multi-processor case does not leave its marker to fall through as
 		// unread prose. The VALUE is refused rather than defaulted; see `parseProcsValue`.
 		if openingsCarry(openings, marker: ProcsMarker) 'procsMarker'
@@ -1461,7 +1497,16 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 			continue
 		end 'procsMarker'
 
-		// The stdin the author asked for, consumed identically to the seven above — including on a DISABLED
+		// The preemption switch the author asked for, consumed identically to the markers above — including on a
+		// DISABLED case, so shelving such a case does not leave its marker to fall through as unread prose. The
+		// VALUE is refused rather than defaulted; see `parsePreemptValue`.
+		if openingsCarry(openings, marker: PreemptMarker) 'preemptMarker'
+			preempt = parsePreemptValue(line, specPath: specPath, testName: name)
+			i = i + 1
+			continue
+		end 'preemptMarker'
+
+		// The stdin the author asked for, consumed identically to the markers above — including on a DISABLED
 		// case, so shelving a blocking-stdin case does not leave its marker to fall through as unread prose.
 		// The VALUE is refused rather than defaulted; see `parseStdinValue`.
 		if openingsCarry(openings, marker: StdinMarker) 'stdinMarker'
@@ -1647,7 +1692,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 				pinned then panic("SpecParser: {specPath.toString()}: test '{name}' expects a COMPILE ERROR (a ```maxoncstderr block) and also carries a `{traceFenceOf(traceCaptureFamilyOf(traceCapture))}` block or `{traceMarkerOf(traceCaptureFamilyOf(traceCapture))} -->` marker. A case that never links produces no program to run under the monitor, so that block cannot fail and pins nothing. Drop it, or split the trace into a case that compiles")
 		end 'traceCaptureOnARejectedCase'
 
-		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(compilerError.resolved()), unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, stdin: stdin))
+		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(compilerError.resolved()), unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin))
 		return i
 	end 'rejected'
 
@@ -1662,7 +1707,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 		panic("SpecParser: {specPath.toString()}: test '{name}' has a ```maxon block but no result block — add an ```exitcode, ```stdout, ```stderr, ```maxoncstderr, ```RequiredData or ```RequiredRdata block, or shelve the case as `<!-- disabled-test: {name} -->`. A case with nothing to check is not a test, and running it would report PASS for a program nothing looked at. (A target-qualified block — `{TargetStdoutFencePrefix}<target>` and its two twins — counts only on the target it NAMES, so a case whose only result block names another target has none here)")
 	end 'pinsNothing'
 
-	tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: resolvedStderr, stdout: resolvedStdout, sectionPins: sectionPins), unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, stdin: stdin))
+	tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: resolvedStderr, stdout: resolvedStdout, sectionPins: sectionPins), unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin))
 
 	return i
 end 'scanTestFromMarker'
@@ -2048,9 +2093,8 @@ end 'markerValue'
 // ARE — so every question after this one is a plain `startsWith` against a constant, with no
 // whitespace rule of its own and nothing to allocate. NORMALIZING THE OPENING RATHER THAN TAKING EACH
 // MARKER CONSTANT APART is what makes the tolerance cost one allocation per LINE instead of one per
-// (line × marker family): there are NINE families, and `scanTestFromMarker` asks about all of them on
-// every line of every case (measured 2026-08-24: the per-family form cost ~0.5 s of fixed overhead on
-// a run that parses the corpus and exits).
+// (line × marker family): `scanTestFromMarker` asks about every family on every line of every case, and
+// the per-family form costs ~0.5 s of fixed overhead on a run that parses the corpus and exits.
 //
 // The three questions this file asks of a marker line — WHICH marker is it (`openingsCarry`), what is
 // its VALUE (`markerValue`), and is it CLOSED (`refuseUnterminatedTestMarker`) — all read this one
@@ -2110,6 +2154,11 @@ end 'openingsCarry'
 
 // WHICH opening carries `marker`, not merely whether one does — the refusal needs the opening itself,
 // because whether a marker is closed is a property of ITS `<!--`, never of the line it sits on.
+//
+// ⛔ **THE TEST IS `startsWith`, SO NO MARKER TOKEN MAY BE A PREFIX OF ANOTHER.** Two tokens may share any
+// leading run (`<!-- procs:` and `<!-- preempt:` share `<!-- pr`); what would let one family swallow another
+// is a whole token that begins another, and every token ends in `:` or in its whole word, which is what
+// rules that out.
 union MarkerOpening
 	at(text String)
 	absent
@@ -2128,7 +2177,7 @@ end 'markerOpeningAmong'
 // The one-shot door: does `line` carry `marker`? For callers that ask about a single family, where
 // computing the openings and asking are one act — `SpecTestRunner`'s two line walks, and the harness
 // self-test's fixture reader. The scanners in this file hoist the openings instead, because they ask
-// eight times per line.
+// once per family per line.
 export function carriesMarker(line String, marker String) returns bool
 	return openingsCarry(markerOpeningsIn(line), marker: marker)
 end 'carriesMarker'
@@ -2239,6 +2288,26 @@ function parseProcsValue(line String, specPath FilePath, testName String) return
 
 	return SpecProcs.pinned(count as ProcessorCount)
 end 'parseProcsValue'
+
+// What a `<!-- preempt: … -->` marker withdraws, read through the same `markerValue` every other valued marker
+// goes through. The one value is spelled from the constant the emitted scheduler reads it back through, for
+// `MaxProcsEnvName`'s reason: a value written under one spelling and read under another is accepted, aborted
+// on, and reported as the child's exit code.
+//
+// ⛔ **AN UNRECOGNIZED VALUE IS A PANIC, NOT AN `unset`**, for `parseNetworkValue`'s reason exactly: a
+// defaulted value would run a case whose pinned ORDER assumes `main` keeps its processor under a monitor
+// that takes it, and report the answer as though the switch had been honoured. The scheduler refuses a
+// malformed `MAXON_PREEMPT` too (`SchedRuntime.emitResolvePreemptSwitch`); this refusal comes first, at
+// parse, so the file's claim never reaches a child.
+function parsePreemptValue(line String, specPath FilePath, testName String) returns SpecPreempt
+	let value = markerValue(line)
+
+	if value == String.from(PreemptEnvOffValue) 'off'
+		return SpecPreempt.off
+	end 'off'
+
+	panic("SpecParser: {specPath.toString()}: test '{testName}' carries `{PreemptMarker} {value} -->`, and '{String.from(PreemptEnvOffValue)}' is the only value this marker takes. It becomes `{String.from(PreemptEnvName)}={String.from(PreemptEnvOffValue)}` in the environment of this case's program alone, so the monitor takes no processor from the thread holding it; absence already says the default, and an unrecognized value would quietly run the case under preemption and report its order as though the switch had been honoured")
+end 'parsePreemptValue'
 
 // What a `<!-- stdin: … -->` marker asks the child's fd 0 to be, read through the same `markerValue`
 // every other valued marker goes through.

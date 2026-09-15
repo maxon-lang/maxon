@@ -1,0 +1,24 @@
+// Test: returned-alias-of-a-let-string-field
+
+type Holder
+	export let path as String
+
+	static function create(path String) returns Self
+		return Self{path: path}
+	end 'create'
+end 'Holder'
+
+function pass(s String) returns String
+	return s
+end 'pass'
+
+function main() returns ExitCode
+	let h = Holder.create("base")
+	var x = pass(h.path)
+	x.append(" more")
+	print("{x} {h.path}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3078: <fragment>:17:6: cannot assign the result of 'pass', which may share storage with a field of an immutable variable, to mutable binding 'x'; use 'let' instead of 'var', or use clone()

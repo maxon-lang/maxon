@@ -1038,10 +1038,13 @@ let GtFairnessInterval = 61 as ParsedInt
 // thread ever ran.**
 //
 // ⇒ **Go needs no such bound because its backstop is ASYNCHRONOUS preemption, which signals a thread wherever
-// it is rather than waiting for it to ask.** This tree has only the cooperative half, so the local ring gets
-// the same guarantee the global queue already has, at the same interval and for the same reason: nothing waits
-// behind a pair that respawn each other for more than this many schedules. **L9 is where asynchronous
-// preemption arrives and where this bound is to be re-examined.**
+// it is rather than waiting for it to ask.** Every scheduler lane here has that backstop too
+// (`targetPreemptDelivery`), and the bound stays because neither channel reaches a frameless pair: the
+// cooperative request is read only by a frame-reserving prologue, and the asynchronous stop lands only at a
+// safe point inside a USER frame (`__gt_preempt_safe`), which a turn spent in runtime scaffolding and
+// frameless leaf methods never passes. `MAXON_PREEMPT=off` withdraws both channels outright. So the local
+// ring gets the same guarantee the global queue already has, at the same interval and for the same reason:
+// nothing waits behind a pair that respawn each other for more than this many schedules.
 let RunnextStreakLimit = GtFairnessInterval
 
 // ⭐ **FOUR ROUNDS OF STEALING BEFORE A P GIVES UP — Go's `stealTries` (`proc.go:3849`).** More than one
@@ -1427,11 +1430,10 @@ let PollerMaxWaitMs = 1000 * 1000 * 1000 as ParsedInt
 //
 // ⭐⭐ **THE KEY IS `HostFacility.greenThreads`, WHICH IS THE ONE ANSWER THAT CANNOT BE WRONG HERE.** The
 // bracket is emitted around blocking ops by the isel, and every op it wraps is a call into a scheduler that
-// only a lane providing that facility has: the lanes that answer `true` (x64-windows, arm64-macOS,
-// arm64-linux) are exactly the lanes `installSchedRuntime` runs on at all, and the lanes that answer `false`
-// (x64-linux, wasm32-wasi) never reach this installer. Keying on the OS instead would get an arm64-WINDOWS
-// lane wrong in the one direction that matters — `windows` would answer `true` before that lane had a P/M
-// substrate to hand a processor to.
+// only a lane providing that facility has: the lanes that answer `true` (the four native lanes) are exactly
+// the lanes `installSchedRuntime` runs on at all, and the lane that answers `false` (wasm32-wasi) never
+// reaches this installer. Keying on the OS instead would get an arm64-WINDOWS lane wrong in the one direction
+// that matters — `windows` would answer `true` before that lane had a P/M substrate to hand a processor to.
 //
 // ⭐ **IT ALSO KEEPS A LANE WITHOUT THE SUBSTRATE FREE OF THE MONITOR'S `.data` WORDS**, which would otherwise
 // put lines in the `data {` block of every green-thread golden.
@@ -1904,9 +1906,10 @@ end 'isSchedSubstrateQueryCallee'
 // take `__sched_lock` freely and why it must not touch TLS.
 let SchedHandoffPName = b"__sched_handoffp"
 
-// ⭐⭐ `__sched_retake(now) -> how many processors this pass took` — Go's `retake` (`proc.go:6682`): ask a strand
-// that has held its processor for `SchedForcePreemptNs` to yield (`__sched_preemptone`), and take a processor
-// from a machine inside a bracketed kernel call.
+// ⭐⭐ `__sched_retake(now, preemptOff) -> how many processors this pass took` — Go's `retake` (`proc.go:6682`):
+// ask a strand that has held its processor for `SchedForcePreemptNs` to yield (`__sched_preemptone`), and take
+// a processor from a machine inside a bracketed kernel call. With `preemptOff` non-zero (`MAXON_PREEMPT=off`,
+// resolved once at start) it does neither and answers 0.
 let SchedRetakeName = b"__sched_retake"
 
 // ⭐⭐ `__sched_preemptone(m)` — Go's `preemptone` (`proc.go:6918`): ask the green thread machine `m` is running to
@@ -2155,10 +2158,24 @@ end 'emitLoadCurrentGtAndProcIdOrZero'
 // report the answer as though the count had been honoured.
 export let MaxProcsEnvName = b"MAXON_MAX_PROCS"
 
-// The scratch a `GetEnvironmentVariableA` for a decimal count needs. Far more than any processor count
-// spells, so the "buffer too small" answer is unreachable for a well-formed value; a value that overflows it
-// is not a processor count, and the read DECLINES rather than retrying.
-let MaxProcsEnvBufBytes = 32 as ParsedInt
+// The environment variable that WITHDRAWS the monitor's preemption for a deliberate run: with `off` the
+// monitor takes no processor from the thread holding it — neither the `SchedForcePreemptNs` yield request
+// nor the syscall retake (`buildSchedRetake`'s entry gate). Unset, empty, or `on` is the ordinary monitor.
+//
+// ⛔ **ANY OTHER VALUE ABORTS AT START** (`RuntimeAbort.schedulerPreemptSwitchUnreadable`) — the opposite
+// policy from `MAXON_MAX_PROCS`, which has a numeric floor to fall under. A switch has none, and a value
+// silently read as its default would run a program pinned to preemption-off under preemption-on.
+//
+// Exported for `MaxProcsEnvName`'s reason: `<!-- preempt: off -->` puts this variable, with this value, into
+// the environment of one case's program (`SpecParser.PreemptMarker`, `SpecTestRunner.runEnvironmentFor`).
+export let PreemptEnvName = b"MAXON_PREEMPT"
+export let PreemptEnvOffValue = b"off"
+let PreemptEnvOnValue = b"on"
+
+// The scratch one `GetEnvironmentVariableA` of a scheduler setting gets. Far more than any processor count
+// or switch value spells, so a value that fills it is neither, and each reader refuses or declines rather
+// than retrying.
+let SchedEnvValueBufBytes = 32 as ParsedInt
 
 // ⭐⭐ **THE BASE OF THIS OS THREAD'S PER-THREAD SLOT ARRAY — the one number that turns `tlsAlloc`'s answer
 // into the byte offset `tlsSlotLoad` reads at.** `__sched_init_procs` computes `index * 8 + base` once and
@@ -3163,32 +3180,28 @@ function emitResolveMaxProcs(module StdModule, func IrFunction, cur IrBlock, set
 	// ⚠ **`cpuKnown` DOMINATES EVERY BLOCK BELOW, WHICH IS WHY `liveCpus` NEEDS NO SECOND BLOCK ARG.** The
 	// decimal walk's own blocks hang off `parseStart`, which this block reaches, so the four arms that answer
 	// *"the machine's count"* all name the one value this block settled.
-	let nameBuf = emitLiteralCString(module, block: cpuKnown, ids: ids, text: MaxProcsEnvName)
-	let bufBytes = emitConst(module, block: cpuKnown, value: MaxProcsEnvBufBytes, ids: ids)
-	let buf = ids.mint()
-	module.appendOp(cpuKnown, op: StdOp.call(buf, callee: SlabAllocName, args: argsOf(bufBytes)))
-	let written = ids.mint()
-	module.appendOp(cpuKnown, op: StdOp.osEnvRead(written, namePtrId: nameBuf, bufPtrId: buf, bufLenId: bufBytes))
+	let read = emitReadSchedEnvValue(module, block: cpuKnown, name: MaxProcsEnvName, ids: ids)
 
-	// ⚠ **`osEnvRead` HAS THREE ANSWERS AND THIS SITE DECODES THEM DIFFERENTLY FROM ITS SIBLING, ON PURPOSE.**
-	// `GetEnvironmentVariableA` returns 0 for unset, the CHARACTERS WRITTEN when the value fits, and the size it
-	// NEEDS when the buffer is too small — and `SubprocessRuntime.emitSubpReadEnvInto` retries at exactly that
-	// size, because a `PATH` legitimately overflows any guess. A processor count does not: a value longer than
-	// 32 bytes is not one, so declining is the right answer and a retry would be machinery for a case that
-	// cannot occur. The two are one API contract decoded twice, which is why they name each other here.
-	let tooLong = emitCmp(module, block: cpuKnown, a: written, b: bufBytes, pred: StdCmpPred.ge, ids: ids)
+	// ⚠ **`osEnvRead` HAS THREE ANSWERS AND THIS SITE DECODES THEM DIFFERENTLY FROM ITS TWO SIBLINGS, ON
+	// PURPOSE.** `GetEnvironmentVariableA` returns 0 for unset, the CHARACTERS WRITTEN when the value fits, and
+	// the size it NEEDS when the buffer is too small. `SubprocessRuntime.emitSubpReadEnvInto` retries at exactly
+	// that size, because a `PATH` legitimately overflows any guess; a processor count does not, so this site
+	// DECLINES to the machine's count; and `emitResolvePreemptSwitch` ABORTS, because a switch has no default a
+	// malformed value can safely fall to. Three policies over one API contract, which is why they name each
+	// other.
+	let tooLong = emitCmp(module, block: cpuKnown, a: read.written, b: read.capacity, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(cpuKnown, op: StdOp.condBranch(tooLong, thenBlockId: settled.id, elseBlockId: lengthOk.id))
 	cpuKnown.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(liveCpus)))
 
 	let zero = emitConst(module, block: lengthOk, value: 0, ids: ids)
-	let unset = emitCmp(module, block: lengthOk, a: written, b: zero, pred: StdCmpPred.eq, ids: ids)
+	let unset = emitCmp(module, block: lengthOk, a: read.written, b: zero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(lengthOk, op: StdOp.condBranch(unset, thenBlockId: settled.id, elseBlockId: parseStart.id))
 	lengthOk.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(liveCpus)))
 
 	// The decimal walk hands its accumulator to `parsed` as that block's arg.
 	let requested = ids.mint()
 	parsed.blockArgs.push(IrBlockArg.create(requested, argType: StdType.i64))
-	emitParseUnsignedDecimal(module, func: func, cur: parseStart, cstr: buf, parsed: parsed, ids: ids)
+	emitParseUnsignedDecimal(module, func: func, cur: parseStart, cstr: read.buf, parsed: parsed, ids: ids)
 
 	let requestFloor = emitConst(module, block: parsed, value: MinimumProcessorCount, ids: ids)
 	let belowFloorRequest = emitCmp(module, block: parsed, a: requested, b: requestFloor, pred: StdCmpPred.lt, ids: ids)
@@ -3204,6 +3217,91 @@ function emitResolveMaxProcs(module StdModule, func IrFunction, cur IrBlock, set
 	module.setTerminator(takeRequested, op: StdOp.branch(settled.id))
 	takeRequested.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(requested)))
 end 'emitResolveMaxProcs'
+
+// One `osEnvRead` of a scheduler setting: the byte count the OS answered, the zeroed buffer it wrote into,
+// and that buffer's size, so a reader compares the count against the size the read was actually given.
+type SchedEnvRead
+	export let written as ValueId
+	export let buf as ValueId
+	export let capacity as ValueId
+
+	static function create(written ValueId, buf ValueId, capacity ValueId) returns Self
+		return Self{written: written, buf: buf, capacity: capacity}
+	end 'create'
+end 'SchedEnvRead'
+
+// Read the environment variable `name` into a fresh zeroed slab buffer of `SchedEnvValueBufBytes`. The buffer
+// is zeroed (`__slab_alloc`, not the raw door), so a value that fits is NUL-terminated and a byte walk that
+// reads at most `capacity` bytes stays in bounds whatever the OS wrote.
+function emitReadSchedEnvValue(module StdModule, block IrBlock, name ByteArray, ids ValueMinter) returns SchedEnvRead
+	let nameBuf = emitLiteralCString(module, block: block, ids: ids, text: name)
+	let capacity = emitConst(module, block: block, value: SchedEnvValueBufBytes, ids: ids)
+	let buf = ids.mint()
+	module.appendOp(block, op: StdOp.call(buf, callee: SlabAllocName, args: argsOf(capacity)))
+	let written = ids.mint()
+	module.appendOp(block, op: StdOp.osEnvRead(written, namePtrId: nameBuf, bufPtrId: buf, bufLenId: capacity))
+	return SchedEnvRead.create(written, buf: buf, capacity: capacity)
+end 'emitReadSchedEnvValue'
+
+// 1 when the NUL-terminated bytes at `cstr` are exactly `literal`, else 0: one byte compare per literal byte
+// PLUS the terminator, so a longer value with `literal` as its prefix answers 0. Reads `literal.count() + 1`
+// bytes, which a caller keeps in bounds by handing it a buffer of at least that many.
+function emitCStringEqualsLiteral(module StdModule, block IrBlock, cstr ValueId, literal ByteArray, ids ValueMinter) returns ValueId
+	var equal = emitConst(module, block: block, value: 1, ids: ids)
+
+	for (iter, expected) in literal.withIterator() 'eachByte'
+		let same = emitByteAtEquals(module, block: block, cstr: cstr, index: iter.index() as ParsedInt, expected: expected as ParsedInt, ids: ids)
+		equal = emitBin(module, block: block, a: equal, b: same, opcode: StdBinOpcode.bitAnd, ids: ids)
+	end 'eachByte'
+
+	let terminated = emitByteAtEquals(module, block: block, cstr: cstr, index: literal.count() as ParsedInt, expected: 0, ids: ids)
+	return emitBin(module, block: block, a: equal, b: terminated, opcode: StdBinOpcode.bitAnd, ids: ids)
+end 'emitCStringEqualsLiteral'
+
+// 1 when the byte at `cstr[index]` is `expected`, else 0.
+function emitByteAtEquals(module StdModule, block IrBlock, cstr ValueId, index ParsedInt, expected ParsedInt, ids ValueMinter) returns ValueId
+	let indexConst = emitConst(module, block: block, value: index, ids: ids)
+	let actual = emitLoadByteIndexed(module, block: block, base: cstr, index: indexConst, ids: ids)
+	let expectedConst = emitConst(module, block: block, value: expected, ids: ids)
+	return emitCmp(module, block: block, a: actual, b: expectedConst, pred: StdCmpPred.eq, ids: ids)
+end 'emitByteAtEquals'
+
+// ⭐ **WHETHER THE MONITOR MAY TAKE A PROCESSOR: 1 when `MAXON_PREEMPT` is exactly `off`, else 0.** The answer
+// reaches `settled` as its single block arg; every arm below terminates in a branch that supplies it, or in
+// the abort.
+//
+// ⛔ **ONLY THE TWO SPELLED VALUES AND ABSENCE ARE ANSWERS.** Unset or empty is `on`; a value that fills the
+// buffer, or is any other string (`of`, `Off`, `offx`), aborts the process with
+// `RuntimeAbort.schedulerPreemptSwitchUnreadable` before `main` runs — `PreemptEnvName` carries why this is
+// the opposite policy from `emitResolveMaxProcs`. The two compares read the terminator as well, and the
+// buffer is zeroed and larger than either literal, so both stay in bounds.
+function emitResolvePreemptSwitch(module StdModule, func IrFunction, cur IrBlock, settled IrBlock, ids ValueMinter)
+	var lengthOk = module.addBlock(func, label: b"preemptlen", heat: BlockHeat.normal)
+	var isSet = module.addBlock(func, label: b"preemptset", heat: BlockHeat.normal)
+	var notOff = module.addBlock(func, label: b"preemptnotoff", heat: BlockHeat.normal)
+	var unreadable = module.addBlock(func, label: b"preemptunreadable", heat: BlockHeat.normal)
+
+	let read = emitReadSchedEnvValue(module, block: cur, name: PreemptEnvName, ids: ids)
+	let tooLong = emitCmp(module, block: cur, a: read.written, b: read.capacity, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(tooLong, thenBlockId: unreadable.id, elseBlockId: lengthOk.id))
+
+	let zero = emitConst(module, block: lengthOk, value: 0, ids: ids)
+	let unset = emitCmp(module, block: lengthOk, a: read.written, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(lengthOk, op: StdOp.condBranch(unset, thenBlockId: settled.id, elseBlockId: isSet.id))
+	lengthOk.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(zero)))
+
+	let isOff = emitCStringEqualsLiteral(module, block: isSet, cstr: read.buf, literal: PreemptEnvOffValue, ids: ids)
+	let off = emitConst(module, block: isSet, value: 1, ids: ids)
+	module.setTerminator(isSet, op: StdOp.condBranch(isOff, thenBlockId: settled.id, elseBlockId: notOff.id))
+	isSet.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(off)))
+
+	let isOn = emitCStringEqualsLiteral(module, block: notOff, cstr: read.buf, literal: PreemptEnvOnValue, ids: ids)
+	let on = emitConst(module, block: notOff, value: 0, ids: ids)
+	module.setTerminator(notOff, op: StdOp.condBranch(isOn, thenBlockId: settled.id, elseBlockId: unreadable.id))
+	notOff.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(on)))
+
+	emitRuntimeAbort(module, func: func, block: unreadable, abort: RuntimeAbort.schedulerPreemptSwitchUnreadable, ids: ids)
+end 'emitResolvePreemptSwitch'
 
 // The unsigned decimal value of the NUL-terminated bytes at `cstr`, delivered as `parsed`'s block arg.
 // The walk stops at the first non-digit (the
@@ -6190,11 +6288,16 @@ end 'buildSchedHandoffP'
 // reach the deadlock threshold. `__sched_checkdead` counts every machine off `__sched_midle` as running, and
 // the victim of a retake is on that list at no point: it is inside its kernel call, then waiting for a
 // processor in `__sched_syscall_regain`. ⇒ **the state Go's bracket exists to hide cannot be produced here.**
+//
+// ⛔ **THE SWITCH IS ASKED ONCE, AT ENTRY, AND GATES THE WHOLE WALK** — every path that takes a processor
+// runs inside it, so `MAXON_PREEMPT=off` withdraws both questions at one door rather than per processor.
+// The cost is the monitor's stated purpose: with it off, a CPU-bound strand starves `main` at one processor.
 function buildSchedRetake(module StdModule)
-	var func = IrFunction.createFromStd(SchedRetakeName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
-	var ids = ValueMinter.create(1)
+	var func = IrFunction.createFromStd(SchedRetakeName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var switchedOff = module.addBlock(func, label: b"rtoff", heat: BlockHeat.normal)
 	var loopHdr = module.addBlock(func, label: b"rthdr", heat: BlockHeat.normal)
 	var askProc = module.addBlock(func, label: b"rtask", heat: BlockHeat.normal)
 	var haveMachine = module.addBlock(func, label: b"rtmachine", heat: BlockHeat.normal)
@@ -6211,8 +6314,9 @@ function buildSchedRetake(module StdModule)
 	var nextProc = module.addBlock(func, label: b"rtnext", heat: BlockHeat.normal)
 	var doneBlock = module.addBlock(func, label: b"rtdone", heat: BlockHeat.normal)
 
-	emitParams(module, block: entry, count: 1)
+	emitParams(module, block: entry, count: 2)
 	let now = 0 as ValueId
+	let preemptOff = 1 as ValueId
 
 	// ⚠ Both words are read unlocked, which `sealedBeforeWorkers` allows only because the monitor cannot start
 	// during bring-up: `__sched_init_procs` publishes the count and builds the array inside `__gt_init`, and
@@ -6223,8 +6327,11 @@ function buildSchedRetake(module StdModule)
 	loopHdr.blockArgs.push(IrBlockArg.create(index, argType: StdType.i64))
 	loopHdr.blockArgs.push(IrBlockArg.create(taken, argType: StdType.i64))
 	let entryZero = emitConst(module, block: entry, value: 0, ids: ids)
-	module.setTerminator(entry, op: StdOp.branch(loopHdr.id))
+	let withdrawn = emitCmp(module, block: entry, a: preemptOff, b: entryZero, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(withdrawn, thenBlockId: switchedOff.id, elseBlockId: loopHdr.id))
 	entry.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: twoArgs(entryZero, second: entryZero)))
+
+	emitConstReturn(module, block: switchedOff, value: 0, ids: ids)
 
 	let walked = emitCmp(module, block: loopHdr, a: index, b: numProcs, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(loopHdr, op: StdOp.condBranch(walked, thenBlockId: doneBlock.id, elseBlockId: askProc.id))
@@ -6666,6 +6773,14 @@ end 'buildGtAsyncPreemptPark'
 // `async`-only program's coroutines included — so there is no later event that would make the monitor worth
 // starting, and no earlier one where it could run. Nothing ever joins it, so the handle is only tested.
 //
+// ⭐ **THE PREEMPTION SWITCH RIDES THE THREAD'S ARGUMENT.** `MAXON_PREEMPT` is resolved here, on the main
+// thread, once (`emitResolvePreemptSwitch`), and reaches `__sysmon` as its `lpParameter` rather than as a
+// `.data` word, which would shift every later word's offset in every green-thread golden. With it off the
+// monitor still reads the shutdown flag, sleeps deeply on an all-idle scheduler, takes the stale netpoll
+// look and starts a machine for an overdue timer on an idle processor; what it stops doing is taking a
+// processor from the thread holding it (`buildSchedRetake`) — so a CPU-bound strand then starves `main` at
+// one processor, which is the cost a case carrying `<!-- preempt: off -->` accepts.
+//
 // ⛔ **GATE SITE 2 OF 4 — see `targetBracketsBlockingSyscalls`.** On a lane with no bracket the monitor is not
 // built at all (gate site 1), so there is nothing to start: `cur` falls straight through to `cont`.
 export function emitSchedSysmonStart(module StdModule, func IrFunction, cur IrBlock, cont IrBlock, target Target, ids ValueMinter)
@@ -6674,14 +6789,19 @@ export function emitSchedSysmonStart(module StdModule, func IrFunction, cur IrBl
 		return
 	end 'noMonitorOnThisLane'
 
+	var switchKnown = module.addBlock(func, label: b"sysmonswitch", heat: BlockHeat.normal)
 	var unstarted = module.addBlock(func, label: b"sysmonunstarted", heat: BlockHeat.normal)
 
+	let preemptOff = ids.mint()
+	switchKnown.blockArgs.push(IrBlockArg.create(preemptOff, argType: StdType.i64))
+	emitResolvePreemptSwitch(module, func: func, cur: cur, settled: switchKnown, ids: ids)
+
 	let monitorEntry = ids.mint()
-	module.appendOp(cur, op: StdOp.funcAddr(monitorEntry, funcName: SchedSysmonName))
+	module.appendOp(switchKnown, op: StdOp.funcAddr(monitorEntry, funcName: SchedSysmonName))
 	let monitorHandle = ids.mint()
-	module.appendOp(cur, op: StdOp.osThreadCreate(monitorHandle, entryPtrId: monitorEntry, argId: emitConst(module, block: cur, value: 0, ids: ids)))
-	let refused = emitCmp(module, block: cur, a: monitorHandle, b: emitConst(module, block: cur, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(refused, thenBlockId: unstarted.id, elseBlockId: cont.id))
+	module.appendOp(switchKnown, op: StdOp.osThreadCreate(monitorHandle, entryPtrId: monitorEntry, argId: preemptOff))
+	let refused = emitCmp(module, block: switchKnown, a: monitorHandle, b: emitConst(module, block: switchKnown, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(switchKnown, op: StdOp.condBranch(refused, thenBlockId: unstarted.id, elseBlockId: cont.id))
 
 	emitRuntimeAbort(module, func: func, block: unstarted, abort: RuntimeAbort.schedulerMonitorUnstarted, ids: ids)
 end 'emitSchedSysmonStart'
@@ -6729,10 +6849,11 @@ function buildSysmon(module StdModule, target Target)
 	var keepPace = module.addBlock(func, label: b"smonkeep", heat: BlockHeat.normal)
 	var exitBlock = module.addBlock(func, label: b"smonexit", heat: BlockHeat.normal)
 
-	// The `lpParameter` `osThreadCreate` hands this thread carries nothing: the monitor's whole state is the
-	// block args below plus what it reads out of the roster. It is named rather than left unmentioned so the
-	// arity matches the one thread-entry shape the runtime has.
+	// The `lpParameter` `osThreadCreate` hands this thread is the resolved `MAXON_PREEMPT` switch
+	// (`emitSchedSysmonStart`): 1 for `off`. The rest of the monitor's state is the block args below plus what
+	// it reads out of the roster.
 	emitParams(module, block: entry, count: 1)
+	let preemptOff = 0 as ValueId
 
 	// Its sleep's timer and its deep sleep's event, both its own.
 	let timer = ids.mint()
@@ -6816,7 +6937,7 @@ function buildSysmon(module StdModule, target Target)
 	module.setTerminator(timerNoStart, op: StdOp.branch(retakeBlock.id))
 
 	let retakes = ids.mint()
-	module.appendOp(retakeBlock, op: StdOp.call(retakes, callee: SchedRetakeName, args: argsOf(now)))
+	module.appendOp(retakeBlock, op: StdOp.call(retakes, callee: SchedRetakeName, args: twoArgs(now, second: preemptOff)))
 	let tookNothing = emitCmp(module, block: retakeBlock, a: retakes, b: emitConst(module, block: retakeBlock, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(retakeBlock, op: StdOp.condBranch(tookNothing, thenBlockId: idled.id, elseBlockId: retook.id))
 

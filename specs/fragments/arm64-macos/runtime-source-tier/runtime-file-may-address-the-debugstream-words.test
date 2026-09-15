@@ -1,0 +1,19 @@
+// Test: runtime-file-may-address-the-debugstream-words
+// --- runtime-file: Probe.maxon
+module function probeDebugStreamWords() returns MachineWord
+	return __Raw.loadWord(__Raw.dsBaseAddr(), offset: 0) + __Raw.loadWord(__Raw.dsAllocIdAddr(), offset: 0)
+end 'probeDebugStreamWords'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

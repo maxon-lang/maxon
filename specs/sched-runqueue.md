@@ -115,6 +115,17 @@ fence on the ring publish are still out of reach from a case pinned to one P**; 
 `monitor=` reading is 0 — a second M comes to such a program only from the system monitor — and
 `workers >= 2, steals > 0` at N ≥ 2 of every SPAWN-driven one.
 
+⛔⛔ **`procs: 1` PINS THE PROCESSOR COUNT AND NOTHING ELSE; AN ORDER THAT ALSO ASSUMES `main` KEEPS THAT
+PROCESSOR ACROSS ITS SPAWNS CARRIES `<!-- preempt: off -->` AS WELL.** One processor does not mean `main`
+holds it: the system monitor asks any strand that has held its processor for 10 ms of WALL time to yield,
+and a preempted `main` goes to the GLOBAL queue's tail while its machine takes `runnext` — so a ring order
+written against "`main` spawns three services and then parks" is broken by the host holding the process
+off a core for 10 ms between two of the spawns (`specs/sched-preempt.md`'s
+`a-main-preempted-between-two-spawns-runs-the-earlier-one-first` pins what that produces). `preempt: off`
+(`MAXON_PREEMPT=off`, read once at start) withdraws the request and the syscall retake, so the premise holds
+by construction; the cases below whose pinned output is an ORDER carry it, and the ones pinning a count, a
+sum or a `steals=0` do not, because those hold whoever runs when.
+
 ⛔ **AND THE DROPPED-WHILE-EXECUTING SHAPE IS UNREACHABLE FOR A COROUTINE ALTOGETHER, WHATEVER ELSE THE
 PROGRAM SPAWNS.** It needs a second M popping the thread out of the dropper's queue while the dropper is
 still spawning. A coroutine's queue is its strand's, and only the machine holding the strand pops it — the
@@ -252,11 +263,21 @@ s=3 a1=1 a2=2 a3=3
 
 <!-- test: sched-runqueue.the-last-spawned-thread-runs-first-at-one-processor -->
 <!-- procs: 1 -->
+<!-- preempt: off -->
 **THE MOST RECENTLY READIED GREEN THREAD RUNS NEXT, AHEAD OF THE RING** — Go's `runnext`
 (`vendor/go/src/runtime/proc.go`, `runqput` with `next`). A `spawn` readies its service at once, so of three
 spawned in order the third holds the slot and the first two wait in the ring. Each service answers its
 message the moment it runs, so the index `awaitAny` names is the one that ran first: the third, then the
 ring in its own order. The slot is what keeps a reply beside the thread that woke it, where its data is.
+
+⚠ **THE ORDER ASSUMES `main` KEEPS THE PROCESSOR ACROSS ALL THREE `spawn`s, WHICH ONLY `preempt: off` MAKES
+TRUE.** The monitor asks a strand that has held its processor for 10 ms of WALL time to yield; a preempted
+`main` goes to the global tail and its machine takes `runnext`, so a `main` held off a core between the second
+and third spawn sees the FIRST service answer first. MEASURED on the arm64-macos runner at a5821384 and
+e7491909: `first=1 sum=6` against this pin. With the switch off nothing takes `main`'s processor until it
+parks in `awaitAny`; `specs/sched-preempt.md`'s
+`a-main-preempted-between-two-spawns-runs-the-earlier-one-first` is the same program with the preemption
+forced, pinning the other order.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias ReplyPromise = Promise with (Integer, ServiceError)
@@ -755,6 +776,7 @@ r=5 steals=0
 
 <!-- test: sched-runqueue.ring-overflow-runs-every-spawned-service -->
 <!-- procs: 1 -->
+<!-- preempt: off -->
 **THE OVERFLOW, AND THE PROOF THAT NOTHING IS LOST IN IT.** Three hundred `spawn`s run back to back with
 nothing between them that yields, so all 300 green threads are published before the first one runs. The ring
 fills to its 256 slots and the 257th push moves the OLDEST HALF plus the new thread to the global queue. The
@@ -934,6 +956,7 @@ sum=6000
 
 <!-- test: sched-runqueue.the-global-queue-is-consulted-within-sixty-one-slices -->
 <!-- procs: 1 -->
+<!-- preempt: off -->
 **THE FAIRNESS CHECK, AND THE ONE SHAPE THAT CAN SEE IT.** A ring overflow moves the OLDEST half of the
 ring to the global queue, so leaf #1 — the first published — ends up at the global head while the rest stay
 in the ring. The scheduler prefers its ring, so without the every-61st-slice global check leaf #1 would run
@@ -1071,6 +1094,7 @@ runCount=300 pushed=true within=true
 ```
 <!-- test: sched-runqueue.a-yield-goes-behind-the-global-queue -->
 <!-- procs: 1 -->
+<!-- preempt: off -->
 **THE BACK OF THE QUEUE, AND THE ONLY SHAPE AT ONE PROCESSOR THAT CAN SEE IT.** A drained yielder goes to
 the GLOBAL queue's tail; the scheduler consults its RING first, so anything pushed to the ring AFTER the
 yielder was drained still runs BEFORE the yielder resumes. That is Go's split exactly (`Gosched` →

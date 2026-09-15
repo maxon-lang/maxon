@@ -1089,23 +1089,28 @@ kept a1
 
 <!-- test: dropping-the-last-handle-shuts-the-service-down -->
 <!-- procs: 1 -->
-⚠ **THE `procs: 1` PIN IS THIS CASE'S OWN STATED PREMISE, WRITTEN DOWN WHERE THE RUNNER CAN READ IT.** The
-paragraph below says *"nothing runs on a service's green thread until the main thread stops running"*, which
-holds only under ONE proc: there is no `MAXON_MAX_PROCS=1` default — the count is the machine's. The ORDER `beep
-1` then `beep 2` follows from the premise and not from the feature: with a second M the two services run
-concurrently and either order is correct, MEASURED 2/5 red on arm64-macOS and 3/3 on arm64-linux. So the
-expectation stands and the CONDITION is pinned — the same pin five `sched-runqueue` cases carry.
+<!-- preempt: off -->
+⚠ **THE TWO PINS ARE THIS CASE'S OWN STATED PREMISE, WRITTEN DOWN WHERE THE RUNNER CAN READ THEM.** The
+paragraph below says *"nothing runs on a service's green thread until the main thread stops running"*, and
+that takes BOTH: one processor, because there is no `MAXON_MAX_PROCS=1` default — the count is the machine's,
+and with a second M the two services run concurrently and either order is correct (MEASURED 2/5 red on
+arm64-macOS and 3/3 on arm64-linux before the `procs` pin) — and a monitor that leaves `main` its processor,
+because the monitor asks any strand that has held one for 10 ms of WALL time to yield, a preempted `main`
+goes to the global tail and its machine takes `runnext`, so a `main` held off a core between its two spawns
+prints `beep 2` before `beep 1` (MEASURED on the x64-linux runner at 456ad242). The ORDER follows from the
+premise and not from the feature, so the expectation stands and both CONDITIONS are pinned — the same pair
+four `sched-runqueue` order cases carry.
 
 An ordinary program needs no shutdown boilerplate: the handle is an owned box, and its scope-exit drop is
 what closes the mailbox. `inner` is dropped at the end of the labelled block and `outer` at `main`'s return,
 and BOTH services' queued work runs — which is the property under test.
 
 ⚠⚠ **THE ORDER OF THE TWO LINES IS THE EXIT DRAIN'S AND NOT CAUSALITY, AND THIS CASE SAYS SO RATHER THAN
-IMPLYING OTHERWISE.** At one processor nothing runs on a service's green thread until the main thread stops
-running — an early handle drop closes the mailbox, but `main` never parks, so its machine takes nothing else
-off the ring — and both handlers run at the exit drain, in the order the drain's scheduler loop takes them:
-the processor's `runnext` slot first, so the service spawned LAST, then the ring in spawn order.
-MEASURED stable across five runs at N=1 and three at N=4.
+IMPLYING OTHERWISE.** At one processor with preemption off, nothing runs on a service's green thread until
+the main thread stops running — an early handle drop closes the mailbox, but `main` never parks and nothing
+takes its processor, so its machine takes nothing else off the ring — and both handlers run at the exit
+drain, in the order the drain's scheduler loop takes them: the processor's `runnext` slot first, so the
+service spawned LAST, then the ring in spawn order.
 `two-instances-are-independent` is the case whose order IS forced, by a handle transfer.
 
 ⚠⚠ **THE `stdout` BLOCK PINS THAT ORDER EXACTLY, SO THIS CASE IS A TRIPWIRE ON THE DRAIN AND NOT ONLY ON
