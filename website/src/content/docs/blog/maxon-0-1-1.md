@@ -9,7 +9,7 @@ excerpt: Maxon 0.1.1 is out. Here's what changed.
 ---
 
 **Maxon 0.1.1 is released.** Archives for every supported target are on the
-[GitHub releases page](https://github.com/maxon-lang/maxon/releases/tag/v0.1.1), alongside a Windows installer.
+[GitHub releases page](https://github.com/maxon-lang/maxon/releases/tag/v0.1.1).
 
 ## What changed
 
