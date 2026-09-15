@@ -1,0 +1,21 @@
+// Test: let-record-written-through-an-alias-in-the-callee
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function pass(s IntArray) returns IntArray
+	return s
+end 'pass'
+
+function tag(p IntArray)
+	var x = pass(p)
+	x.push(9)
+end 'tag'
+
+function main() returns ExitCode
+	let a = IntArray.create()
+	tag(a)
+	return a.count() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3019: <fragment>:16:2: cannot pass 'a' to function that mutates parameter 'p' (in main)

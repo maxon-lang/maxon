@@ -176,7 +176,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(2) otherwise return 2
 	var a = ByteArray.init(mm)
 	a.push(4)
@@ -358,7 +358,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(2, elementSize: 1) otherwise return 1
+	var mm = try __ManagedMemory.create(2, elementSize: 1) otherwise return 1
 	var a = ByteArray.init(mm)
 	var b = ByteArray.init(mm)
 	var i = 0

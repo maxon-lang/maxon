@@ -1177,23 +1177,28 @@ module function refuseForRegisterPressure(project Project, stdModule StdModule, 
 	var costs = PoolPhaseCosts.create(RegAllocPhase.allCases.count())
 	var iselCost = PhaseDelta.zero()
 	let lowered = lowerAndSplitUnit(unitLoweringFor(target, abi: abi, usesGt: usesGt), unitModule: body.unitModule, target: target, costs: costs, iselCost: iselCost)
+	try refuseLoweredUnit(project, lowered: lowered, authorFilePath: stdModule.getFunc(funcIndex).sourceFilePath, funcIndex: funcIndex, hasAuthor: body.hasAuthor, pool: pool, callerSaved: callerSaved, file: file, costs: costs)
+end 'refuseForRegisterPressure'
+
+// The re-run's allocation of the lowered unit, which rewrites the unit's module and function in place.
+function refuseLoweredUnit(project Project, lowered LoweredUnit, authorFilePath FilePath, funcIndex FuncIndex, hasAuthor bool, pool RegMask, callerSaved RegMask, file RegisterFile, costs PoolPhaseCosts) throws CompileError
 	var func = lowered.targetModule.getFunc(UnitFunctionIndex)
 
 	// The unit's function is synthesized and names no file; the diagnostic locates the loop in the
 	// author's, so the real function's path is put on the record the renderer reads.
-	func.sourceFilePath = stdModule.getFunc(funcIndex).sourceFilePath
+	func.sourceFilePath = authorFilePath
 	var opFacts = OpVariantFacts.create()
 	var refusal = RegAllocRefusalSite.create()
 	var counters = RegAllocCounters.create()
 	var facts = RegAllocFacts.create()
 
 	// It asks about no named value: the compile is failing, and a diagnostic run has no sidecar to fill.
-	try allocateFunctionCore(lowered.targetModule, func: func, hasAuthor: body.hasAuthor, pool: pool, callerSaved: callerSaved, file: file, valueClass: lowered.valueClass, opFacts: opFacts, counters: counters, costs: costs, facts: facts, refusal: refusal, debugValueIds: ValueIdArray.create(), debugLocations: DebugValueLocationArray.create()) otherwise 'refusedAgain'
+	try allocateFunctionCore(lowered.targetModule, func: func, hasAuthor: hasAuthor, pool: pool, callerSaved: callerSaved, file: file, valueClass: lowered.valueClass, opFacts: opFacts, counters: counters, costs: costs, facts: facts, refusal: refusal, debugValueIds: ValueIdArray.create(), debugLocations: DebugValueLocationArray.create()) otherwise 'refusedAgain'
 		try renderRegisterPressureRefusal(project, module: lowered.targetModule, func: func, funcIndex: funcIndex, pool: pool, refusal: refusal)
 	end 'refusedAgain'
 
 	panic("refuseForRegisterPressure: the core refused '{String.from(func.name)}' on a pool worker and then allocated it on this thread - the two runs saw the same input, so one refusing and the other not is a nondeterminism in the allocator, not a program the compiler can report on")
-end 'refuseForRegisterPressure'
+end 'refuseLoweredUnit'
 
 // Render the E5001 a refused core run recorded. The core throws without a `Project` and leaves the
 // analysis state in `refusal`; this is the only place that state is read.

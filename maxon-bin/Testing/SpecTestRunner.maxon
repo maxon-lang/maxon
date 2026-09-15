@@ -3000,31 +3000,31 @@ function stageSourceFiles(tempDir FilePath, test SpecTest) returns StagingResult
 	let checkoutStdlib = try locateStdlibDir() otherwise return StagingResult.failed(missingStdlibReason())
 	let checkoutRuntime = try runtimeDirBeside(checkoutStdlib) otherwise return StagingResult.failed(missingRuntimeReason())
 
-	// STRINGS from here on, because that is what they are FOR: they are handed to `compileToProduct` as
-	// `stdlibDirOverride` and `runtimeDirOverride` and read by `normalizeCompilerOutput` as the roots to
-	// rewrite out of a diagnostic, and all of those take the spelling rather than the path.
-	var stdlibDir = checkoutStdlib.toString()
-	var runtimeDir = checkoutRuntime.toString()
-
-	// ⭐ **EITHER MARKER STAGES BOTH TIERS.** The compiler reaches `runtime/` as `stdlib/`'s sibling, so
-	// a private copy of one tier without the other leaves the compile pointed at a root holding half of
-	// what it loads — a `stdlib-overlay:` case with no staged `runtime/` beside it has no runtime tier at
-	// all, and a `runtime-file:` case with no staged `stdlib/` has nothing to be a sibling OF.
-	if test.stdlibOverlays.count() > 0 or test.runtimeFiles.count() > 0 'stagesItsOwnTiers'
-		let tiers = try stageSourceTiers(tempDir, test: test, sourceStdlib: checkoutStdlib, sourceRuntime: checkoutRuntime, paths: paths, written: written) otherwise (e) 'tierStagingFailed'
-			return StagingResult.failed(tierStagingErrorText(e))
-		end 'tierStagingFailed'
-
-		stdlibDir = tiers.stdlibDir
-		runtimeDir = tiers.runtimeDir
-	end 'stagesItsOwnTiers'
+	let tiers = try sourceTiersFor(tempDir, test: test, checkoutStdlib: checkoutStdlib, checkoutRuntime: checkoutRuntime, paths: paths, written: written) otherwise (e) 'tierStagingFailed'
+		return StagingResult.failed(tierStagingErrorText(e))
+	end 'tierStagingFailed'
 
 	// LAST, so every file above is registered before the walk reaches it and the walk finds nothing
 	// new — the directory is here to fix the project ROOT, not to contribute a unit.
 	buildTargets.push(testDir)
 
-	return StagingResult.staged(StagedTest.create(buildTargets, stdlibDir: stdlibDir, runtimeDir: runtimeDir, paths: paths, writtenFiles: written))
+	return StagingResult.staged(StagedTest.create(buildTargets, stdlibDir: tiers.stdlibDir, runtimeDir: tiers.runtimeDir, paths: paths, writtenFiles: written))
 end 'stageSourceFiles'
+
+// The tiers a case compiles against: its private copies when it declares either marker, the checkout's
+// otherwise.
+//
+// ⭐ **EITHER MARKER STAGES BOTH TIERS.** The compiler reaches `runtime/` as `stdlib/`'s sibling, so
+// a private copy of one tier without the other leaves the compile pointed at a root holding half of
+// what it loads — a `stdlib-overlay:` case with no staged `runtime/` beside it has no runtime tier at
+// all, and a `runtime-file:` case with no staged `stdlib/` has nothing to be a sibling OF.
+function sourceTiersFor(tempDir FilePath, test SpecTest, checkoutStdlib FilePath, checkoutRuntime FilePath, paths FragmentPathMappingArray, written FilePathArray) returns StagedSourceTiers throws TierStagingError
+	if test.stdlibOverlays.count() > 0 or test.runtimeFiles.count() > 0 'stagesItsOwnTiers'
+		return try stageSourceTiers(tempDir, test: test, sourceStdlib: checkoutStdlib, sourceRuntime: checkoutRuntime, paths: paths, written: written)
+	end 'stagesItsOwnTiers'
+
+	return StagedSourceTiers.create(checkoutStdlib.toString(), runtimeDir: checkoutRuntime.toString())
+end 'sourceTiersFor'
 
 // ⭐⭐ **WHICH OF THE STAGED FILES BELONG TO THE PROGRAM — ASKED WITH THE COMPILER'S OWN PREDICATE,
 // NOT DECIDED HERE.** `staged` is every `// --- file:` section the case declared, on disk and in
@@ -3092,9 +3092,11 @@ function tierStagingErrorText(error TierStagingError) returns String
 	end 'e'
 end 'tierStagingErrorText'
 
-// Where a case's private `stdlib/` and `runtime/` were staged. A pair, because they are chosen together
-// and the compile is told both: returning one and re-deriving the other is how the two would come to
-// name different roots.
+// The `stdlib/` and `runtime/` roots a case compiles against, as the STRINGS the compile takes: they are
+// handed to `compileToProduct` as `stdlibDirOverride` and `runtimeDirOverride` and read by
+// `normalizeCompilerOutput` as the roots to rewrite out of a diagnostic, and all of those take the
+// spelling rather than the path. A pair, because they are chosen together and the compile is told both:
+// returning one and re-deriving the other is how the two would come to name different roots.
 type StagedSourceTiers
 	export let stdlibDir as String
 	export let runtimeDir as String
@@ -5554,13 +5556,8 @@ function rewriteDiagnosticPaths(text String, path String, lineOffset LineIndex, 
 
 	for line in text.split(LineSeparator) 'eachLine'
 		let rewritten = rewriteDiagnosticLine(line, path: path, lineOffset: lineOffset, token: token)
-
-		if first 'firstLine'
-			out = rewritten
-			first = false
-		end 'firstLine' else 'moreLines'
-			out = "{out}{LineSeparator}{rewritten}"
-		end 'moreLines'
+		out = rewritten if first else "{out}{LineSeparator}{rewritten}"
+		first = false
 	end 'eachLine'
 
 	return out

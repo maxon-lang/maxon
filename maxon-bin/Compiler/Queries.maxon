@@ -1674,8 +1674,34 @@ end 'reservedNameReason'
 // The E2015 sentence, written once for the two `ParseError` cases that carry it — see
 // `tupleElementRejected` for why there are two cases and only one sentence.
 function reportUnsupportedFeature(project Project, feature String, line LineNumber, column ColumnNumber, path FilePath)
-	reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: "Unsupported: {feature}", line: line, column: column, filePath: path)
+	reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: unsupportedFeatureMessage(feature), line: line, column: column, filePath: path)
 end 'reportUnsupportedFeature'
+
+// E3078's one wire format: the parser refuses a source it can name, `StorageProvenance` one it cannot.
+module function varFromImmutableMessage(subject String, binding String) returns String
+	return "cannot assign {subject} to mutable binding '{binding}'; use 'let' instead of 'var', or use clone()"
+end 'varFromImmutableMessage'
+
+// ⭐ **E3102's ONE WIRE FORMAT, for E3078's split.** The parser refuses a read after a move it made itself
+// (`Parser.requireBindingLive`); `StorageProvenance` one after a `var` took a `let` — whose verdict is a
+// whole-program fact.
+module function useOfMovedValueMessage(name String) returns String
+	return "use of moved value '{name}': its ownership moved to another binding at an earlier bind or assignment"
+end 'useOfMovedValueMessage'
+
+// E2015's sentence, by its detail.
+module function unsupportedFeatureMessage(feature String) returns String
+	return "Unsupported: {feature}"
+end 'unsupportedFeatureMessage'
+
+// ⭐ **WHY A MOVE MAY NOT CROSS OUT OF A LOOP — E2015's detail, for both of its deciders.** The parser refuses a
+// move it makes itself (`Parser.poisonOwningBinding`) and `StorageProvenance` one a mutable door makes of a `let`.
+module let LoopEscapingMoveDetail = "moving a value declared outside this loop from inside the loop body — its drop on the loop's other exit paths (the back edge would re-move it next iteration; a `break` leaves it live on the normal exit) needs path-sensitive elaboration across the loop boundary, which arrives with a later wave. Move the value into the loop body, or restructure so the move does not cross the loop boundary"
+
+// E3077's sentence.
+module function varShouldBeLetMessage(name String) returns String
+	return "variable '{name}' is never reassigned; use 'let' instead of 'var'"
+end 'varShouldBeLetMessage'
 
 function reportParseError(project Project, path FilePath, error ParseError)
 	match error 'kind'
@@ -1763,13 +1789,13 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		returnValueFromVoid(name, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "type mismatch: '{name}' declares no return type, so it cannot return a value", line: line, column: column, filePath: path)
 		returnWithoutValue(name, line, column) then reportPositioned(project, code: ErrorCode.missingReturn, message: "missing return value: '{name}' declares a return type, so every 'return' must carry a value", line: line, column: column, filePath: path)
 		assignToImmutable(name, line, column) then reportPositioned(project, code: ErrorCode.assignToImmutable, message: "cannot assign to immutable variable: '{name}'", line: line, column: column, filePath: path)
-		useAfterMove(name, line, column) then reportPositioned(project, code: ErrorCode.useAfterMove, message: "use of moved value '{name}': its ownership moved to another binding at an earlier bind or assignment", line: line, column: column, filePath: path)
+		useAfterMove(name, line, column) then reportPositioned(project, code: ErrorCode.useAfterMove, message: useOfMovedValueMessage(name), line: line, column: column, filePath: path)
 		promiseCannotBeBorrowed(door, cure, line, column) then reportPositioned(project, code: ErrorCode.semanticPromiseCannotBeBorrowed, message: "a promise cannot be borrowed through '{door}': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. {cure}", line: line, column: column, filePath: path)
 		promiseAlreadyConsumed(door, line, column) then reportPositioned(project, code: ErrorCode.semanticPromiseAlreadyConsumed, message: "this promise was already consumed by an earlier '{door}': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again", line: line, column: column, filePath: path)
 
 		// `subject` rather than a hardcoded name: a field-chain spelling has no single source name to
 		// blame. Pinned by `specs/var-should-be-let.md`.
-		varFromImmutable(subject, binding, line, column) then reportPositioned(project, code: ErrorCode.semanticVarFromImmutable, message: "cannot assign {subject} to mutable binding '{binding}'; use 'let' instead of 'var', or use clone()", line: line, column: column, filePath: path)
+		varFromImmutable(subject, binding, line, column) then reportPositioned(project, code: ErrorCode.semanticVarFromImmutable, message: varFromImmutableMessage(subject, binding: binding), line: line, column: column, filePath: path)
 
 		// `targets` rather than a hardcoded "loop": a `break` may also leave a MATCH statement.
 		controlOutsideLoop(keyword, targets, line, column) then reportPositioned(project, code: ErrorCode.controlOutsideLoop, message: "'{keyword}' can only be used inside a {targets}", line: line, column: column, filePath: path)

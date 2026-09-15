@@ -19,11 +19,16 @@ written when a receiver-writing container method is called on it (`dest.push(9)`
 assigned (`n = n + 1`, which writes parameter `self`), or when it is passed on to another function that
 writes the parameter it lands in. That last clause makes the summary a FIXPOINT — `f` calling `g` calling
 `h` mutates its parameter if `h` does — and it terminates for a recursive and a mutually recursive call
-graph alike.
+graph alike. It counts what is passed on BY VALUE, not by spelling: a value that may be the parameter's
+own record — the result of a call that hands it back — writes the parameter when it reaches a written
+position, so `var x = pass(p)` followed by `x.append(…)` or `x.push(…)` writes `p`.
 
 A `var` binding, a parameter, and a temporary may all be passed to a mutating parameter: each denotes
 storage the program is allowed to write. Only an immutable binding — a `let` local, a `let` alias of a
-parameter, or a top-level `let` — is refused, and only at the positions the callee actually writes.
+parameter, or a top-level `let` — is refused, and only at the positions the callee actually writes. The
+refusal follows the RECORD, not only the name: a value that may be the `let`'s own record — a call result
+that hands it back — is refused at a written position too, blaming the `let`, while that `let` is read
+afterwards (`specs/var-should-be-let.md`).
 
 ### A method writing its OWN receiver is not a parameter mutation
 
@@ -836,4 +841,57 @@ end 'main'
 ```
 ```maxoncstderr
 error E3019: specs/fragments/parameter-mutation/let-self-field-passed-to-mutating-param-error.test:17:3: cannot pass 'items' to function that mutates parameter 'd' (in Bag.add)
+```
+
+<!-- test: returned-alias-written-in-the-callee -->
+A write through a mutable name made from a call's result is a write to every parameter that result may
+share storage with, so `tag` writes `p`.
+
+```maxon
+function pass(s String) returns String
+	return s
+end 'pass'
+
+function tag(p String)
+	var x = pass(p)
+	x.append(" TAGGED")
+end 'tag'
+
+function main() returns ExitCode
+	let n = 7
+	let a = "lit{n}"
+	tag(a)
+	print("{a}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3019: specs/fragments/parameter-mutation/returned-alias-written-in-the-callee.test:14:2: cannot pass 'a' to function that mutates parameter 'p' (in main)
+```
+
+<!-- test: let-record-written-through-an-alias-in-the-callee -->
+A container method called through a mutable name made from a call's result writes every parameter
+that result may be, so `tag` writes `p`.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function pass(s IntArray) returns IntArray
+	return s
+end 'pass'
+
+function tag(p IntArray)
+	var x = pass(p)
+	x.push(9)
+end 'tag'
+
+function main() returns ExitCode
+	let a = IntArray.create()
+	tag(a)
+	return a.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3019: specs/fragments/parameter-mutation/let-record-written-through-an-alias-in-the-callee.test:16:2: cannot pass 'a' to function that mutates parameter 'p' (in main)
 ```

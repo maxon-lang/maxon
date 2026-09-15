@@ -79,9 +79,22 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// `StorageReachEdge`s, which say "the caller's parameter owns the ARRAY this call's receiver denotes".
 	// Built off the same walk's result rather than by a second one, and IDENTICAL to it (same object) for a
 	// program that recorded none. See `collectStorageReachEdges`.
-	let storageEdges = collectStorageReachEdges(callEdges, module: module, funcSignatures: project.funcSignatures, funcIndexByName: funcNames.byName)
-	let mutationSummary = buildParamMutationSummary(funcNames, edges: callEdges, byCallee: edgesByCallee, storageEdges: storageEdges)
-	checkCalls(project, module: module, signatures: signatures, funcNames: funcNames, throwsMap: throwsMap, escapeSummary: escapeSummary, mutationSummary: mutationSummary)
+	//
+	// ⭐ **AND ALL THREE COLUMNS CLOSE OVER THE ALIAS EDGES TOO** — an argument that may BE a parameter's record
+	// through a call's result, a retain or a merge (`ProvenanceTracer.collectProvenanceParamEdges`), which the
+	// storage-provenance summary is what can say.
+	var provenance = buildStorageProvenance(project, module: module, signatures: signatures, funcNames: funcNames)
+	let mutationEdges = provenance.collectProvenanceParamEdges(callEdges, funcNames: funcNames)
+	let mutationEdgesByCallee = edgesByCallee if mutationEdges is callEdges else mutationEdges.byCallee(funcNames.functions.count())
+
+	let storageEdges = collectStorageReachEdges(mutationEdges, module: module, funcSignatures: project.funcSignatures, funcIndexByName: funcNames.byName)
+	let mutationSummary = buildParamMutationSummary(funcNames, edges: mutationEdges, byCallee: mutationEdgesByCallee, storageEdges: storageEdges, provenanceWrites: provenance.receiverWriteSeeds)
+	checkCalls(project, module: module, signatures: signatures, funcNames: funcNames, throwsMap: throwsMap, escapeSummary: escapeSummary, mutationSummary: mutationSummary, provenance: provenance)
+
+	// The doors a value reaches a `let`'s storage through that the parser could not judge by name — E3019 at a
+	// receiver written through a `let`'s record, E3078 at a `var` — after `checkCalls`, so a program with a bad
+	// argument reports it first, in the order the reader meets them.
+	provenance.checkStorageDoors()
 
 	// The RETURN half of the interface-widening rule (P1.7a slice 2). After `checkCalls` so a program with
 	// both a bad argument and a bad return reports the argument first, in the order the reader meets them.
@@ -710,10 +723,10 @@ end 'bindOverloadChoiceArguments'
 // no such site files no entry at all (`Parser.commitRangeChecks`), which is the common case and costs one
 // lookup.
 function retargetArgRangeSites(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, member ByteArray, args ValueIdArray)
-	let checks = try project.rangeChecks.get(func.name) otherwise return
+	var checks = try project.rangeChecks.get(func.name) otherwise return
 
 	// Index-based, so `site` is a mutable binding: the retarget writes the record's own `callee` field, and a
-	// `for x in …` loop variable is immutable.
+	// `for x in …` loop variable is immutable. `checks` is a `var` for the same write, which lands in its sites.
 	for i in 0 upto checks.argSites.count() 'eachSite'
 		var site = try checks.argSites.get(i) otherwise panic("retargetArgRangeSites: argSites.get OOB at {i} inside its own count()")
 
@@ -1769,6 +1782,18 @@ export type ParamMutationSummary
 		return self.maskAt(self.recordWriteMasks, callee: callee)
 	end 'recordWriteMaskOf'
 
+	// Which parameters a call landing on any of `indices` writes, or writes the record of — `maskOf` and
+	// `recordWriteMaskOf` together, by function index.
+	export function writtenMaskAtAnyOf(indices FuncIndexArray) returns ParamPositionMask
+		var written = NoParamPositions
+
+		for index in indices 'eachBody'
+			written = written or (try self.masks.get(index) otherwise panic("ParamMutationSummary.writtenMaskAtAnyOf: function index {index} is outside the mask column")) or (try self.recordWriteMasks.get(index) otherwise panic("ParamMutationSummary.writtenMaskAtAnyOf: function index {index} is outside the record-write column"))
+		end 'eachBody'
+
+		return written
+	end 'writtenMaskAtAnyOf'
+
 	// The one indexed read both columns share. `NoParamPositions` for a name the module does not declare — a
 	// compiler-internal runtime entry, or an undeclared callee `validateCall` has already reported as E3004
 	// — the same "absence is the answer" `buildThrowsMap` uses, and the reason no caller needs a membership
@@ -1787,7 +1812,7 @@ end 'ParamMutationSummary'
 // Dense columns rather than an `Array with <a record>`: a `type` has reference semantics, so an array of
 // them is an array of POINTERS to heap-boxed records — one live allocation per edge, on a pass that runs
 // over every call in the program. The same discipline `SourceRangeTable` and `ValueOriginTable` state.
-type CallParamEdges
+module type CallParamEdges
 	export var calleeIndices as CsrColumn
 	export var callerIndices as FuncIndexArray
 	export var callerParams as ParamCountArray
@@ -1809,6 +1834,21 @@ type CallParamEdges
 		self.callerParams.push(callerParam)
 		self.calleeParams.push(calleeParam)
 	end 'record'
+
+	// A second list with the same rows, for a caller that widens the relation while the base keeps its own.
+	export function copy() returns CallParamEdges
+		var edges = CallParamEdges.create()
+
+		for k in 0 upto self.count() 'eachRow'
+			let callee = try self.calleeIndices.get(k) otherwise panic("CallParamEdges.copy: calleeIndices.get OOB at {k} inside count()")
+			let caller = try self.callerIndices.get(k) otherwise panic("CallParamEdges.copy: callerIndices.get OOB at {k} — the four columns are parallel by construction")
+			let callerParam = try self.callerParams.get(k) otherwise panic("CallParamEdges.copy: callerParams.get OOB at {k} — the four columns are parallel by construction")
+			let calleeParam = try self.calleeParams.get(k) otherwise panic("CallParamEdges.copy: calleeParams.get OOB at {k} — the four columns are parallel by construction")
+			edges.record(callee as FuncIndex, callerIndex: caller, callerParam: callerParam, calleeParam: calleeParam)
+		end 'eachRow'
+
+		return edges
+	end 'copy'
 
 	// The CSR over the callee key space: `graph.neighbour(calleeIndex, k)` is the k-th EDGE ROW reaching that
 	// callee. The `to` column is the row number itself, which is what makes the other three columns readable
@@ -1835,7 +1875,7 @@ end 'CallParamEdges'
 // backend emits code, so the tie-break could change which body was summarised but not what any program MEANT
 // — which is a fine argument for the answer being harmless and no argument at all for it being made
 // silently. `FunctionNameIndex` refuses the duplicate instead, so there is nothing left to break a tie over.
-function buildParamMutationSummary(funcNames FunctionNameIndex, edges CallParamEdges, byCallee CsrGraph, storageEdges CallParamEdges) returns ParamMutationSummary
+function buildParamMutationSummary(funcNames FunctionNameIndex, edges CallParamEdges, byCallee CsrGraph, storageEdges CallParamEdges, provenanceWrites ParamPositionMaskArray) returns ParamMutationSummary
 	let funcIndexByName = funcNames.byName
 
 	// ⭐⭐ **TWO SEEDS, ONE FIXPOINT RUN TWICE — and since W58 the graph serves a THIRD seed one caller up.**
@@ -1864,10 +1904,15 @@ function buildParamMutationSummary(funcNames FunctionNameIndex, edges CallParamE
 	var storageMasks = ParamPositionMaskArray.create()
 	var recordWriteMasks = ParamPositionMaskArray.create()
 
-	for func in funcNames.functions 'seed'
-		masks.push(func.writtenParamMask)
+	// ⭐ A receiver written through a value that may BE a parameter's record writes that parameter
+	// (`ProvenanceTracer.collectProvenanceParamEdges`): E3019's seed and W117's alike, since both ask whether the
+	// record is written.
+	for i in 0 upto funcNames.functions.count() 'seed'
+		let func = try funcNames.functions.get(i) otherwise panic("buildParamMutationSummary: functions.get OOB at {i} below its own count")
+		let writtenThroughAnAlias = try provenanceWrites.get(i) otherwise panic("buildParamMutationSummary: provenanceWrites.get OOB at {i} — the column is built over `funcNames.functions`")
+		masks.push(func.writtenParamMask or writtenThroughAnAlias)
 		storageMasks.push(func.storageWrittenParamMask)
-		recordWriteMasks.push(func.writesThroughParamMask)
+		recordWriteMasks.push(func.writesThroughParamMask or writtenThroughAnAlias)
 	end 'seed'
 
 	propagateParamMasks(masks, edges: edges, byCallee: byCallee)
@@ -1914,15 +1959,7 @@ function collectStorageReachEdges(base CallParamEdges, module MaxonModule, funcS
 		return base
 	end 'theTwoColumnsCloseOverOneRelation'
 
-	var edges = CallParamEdges.create()
-
-	for k in 0 upto base.count() 'copyTheSharedRows'
-		let callee = try base.calleeIndices.get(k) otherwise panic("collectStorageReachEdges: calleeIndices.get OOB at {k} inside count()")
-		let caller = try base.callerIndices.get(k) otherwise panic("collectStorageReachEdges: callerIndices.get OOB at {k} — the four columns are parallel by construction")
-		let callerParam = try base.callerParams.get(k) otherwise panic("collectStorageReachEdges: callerParams.get OOB at {k} — the four columns are parallel by construction")
-		let calleeParam = try base.calleeParams.get(k) otherwise panic("collectStorageReachEdges: calleeParams.get OOB at {k} — the four columns are parallel by construction")
-		edges.record(callee as FuncIndex, callerIndex: caller, callerParam: callerParam, calleeParam: calleeParam)
-	end 'copyTheSharedRows'
+	var edges = base.copy()
 
 	for i in 0 upto module.functions.count() 'eachFunc'
 		let func = try module.functions.get(i) otherwise panic("collectStorageReachEdges: functions.get OOB at {i}")
@@ -1966,11 +2003,12 @@ end 'addStorageReachEdges'
 // witness-dispatch arm below asks it once per DISPATCH OP, which is a different quantity entirely — memoized
 // here rather than inside that function so its callers keep the walk they were sized for and this one pays
 // for each interface once.
-typealias ConformersByInterface = Map with (ByteArray, ByteArrayArray)
+module typealias ConformersByInterface = Map with (ByteArray, ByteArrayArray)
 
 function collectCallParamEdges(project Project, signatures ProgramSignatures, module MaxonModule, funcIndexByName FuncIndexByName) returns CallParamEdges
 	var edges = CallParamEdges.create()
 	var conformers = ConformersByInterface.create()
+	var witnessSlots = WitnessSlotsByDeclIndex.create()
 
 	for i in 0 upto module.functions.count() 'eachFunc'
 		let func = try module.functions.get(i) otherwise panic("collectCallParamEdges: functions.get OOB at {i}")
@@ -1983,7 +2021,7 @@ function collectCallParamEdges(project Project, signatures ProgramSignatures, mo
 			let block = try module.blocks.get(blockRef) otherwise panic("collectCallParamEdges: blockRef from func.blockRefs not in module.blocks")
 
 			for opIdx in block.opRefs 'eachOp'
-				collectCallParamEdgesAt(project, signatures: signatures, op: try module.ops.get(opIdx) otherwise panic("collectCallParamEdges: opIdx {opIdx} not in module.ops"), func: func, callerIndex: i, funcIndexByName: funcIndexByName, edges: edges, conformers: conformers)
+				collectCallParamEdgesAt(project, signatures: signatures, op: try module.ops.get(opIdx) otherwise panic("collectCallParamEdges: opIdx {opIdx} not in module.ops"), func: func, callerIndex: i, funcIndexByName: funcIndexByName, edges: edges, conformers: conformers, witnessSlots: witnessSlots)
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
@@ -1996,7 +2034,7 @@ end 'collectCallParamEdges'
 // WITNESS DISPATCH is not that case: it names a REQUIREMENT, and the set of bodies it can land on is the
 // interface's conformers, which is a whole-program fact this pass already holds. The non-call bands range to
 // `break`, so a newly appended op fails to compile here rather than silently dropping out of the call graph.
-function collectCallParamEdgesAt(project Project, signatures ProgramSignatures, op MaxonOp, func IrFunction, callerIndex FuncIndex, funcIndexByName FuncIndexByName, edges CallParamEdges, conformers ConformersByInterface)
+function collectCallParamEdgesAt(project Project, signatures ProgramSignatures, op MaxonOp, func IrFunction, callerIndex FuncIndex, funcIndexByName FuncIndexByName, edges CallParamEdges, conformers ConformersByInterface, witnessSlots WitnessSlotsByDeclIndex)
 	match op 'op'
 		call(_, callee, args, argLabels, _, _, _, _) then addCallParamEdges(project, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges)
 		literal or
@@ -2028,8 +2066,8 @@ function collectCallParamEdgesAt(project Project, signatures ProgramSignatures, 
 		sizeofType then break 'op'
 		constArrayLiteral then break 'op'
 		switch then break 'op'
-		witnessDispatch(_, args, _, methodIndex, interfaceDeclIndex, _, _) then addWitnessParamEdges(project, signatures: signatures, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges, conformers: conformers)
-		witnessTryDispatch(_, _, args, _, methodIndex, interfaceDeclIndex, _) then addWitnessParamEdges(project, signatures: signatures, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges, conformers: conformers)
+		witnessDispatch(_, args, _, methodIndex, interfaceDeclIndex, _, _) then addWitnessParamEdges(project, signatures: signatures, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges, conformers: conformers, witnessSlots: witnessSlots)
+		witnessTryDispatch(_, _, args, _, methodIndex, interfaceDeclIndex, _) then addWitnessParamEdges(project, signatures: signatures, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges, conformers: conformers, witnessSlots: witnessSlots)
 
 		// A panic calls no user function, so it carries no mutation edge.
 		panicAbortValue then break 'op'
@@ -2103,23 +2141,55 @@ end 'addCallParamEdges'
 // `conformersOf`'s walk. Those impls are compiler-synthesized to the requirement's shape and write no
 // parameter, so no edge is lost — and if one ever could, `witnessSlotImpl`'s own gate is where that set is
 // decided, not here.
-function addWitnessParamEdges(project Project, signatures ProgramSignatures, args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, func IrFunction, callerIndex FuncIndex, funcIndexByName FuncIndexByName, edges CallParamEdges, conformers ConformersByInterface)
+function addWitnessParamEdges(project Project, signatures ProgramSignatures, args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, func IrFunction, callerIndex FuncIndex, funcIndexByName FuncIndexByName, edges CallParamEdges, conformers ConformersByInterface, witnessSlots WitnessSlotsByDeclIndex)
 	if func.paramCount == 0 'passesNothingOfItsOwn'
 		return
 	end 'passesNothingOfItsOwn'
 
-	let dispatched = dispatchedInterfaceAt(signatures, interfaceDeclIndex: interfaceDeclIndex)
-	let slots = interfaceWitnessSlots(signatures.interfaceMap(), iface: dispatched)
-	let slot = try slots.get(methodIndex) otherwise panic("addWitnessParamEdges: slot {methodIndex} is outside the {slots.count()} witness slots of interface '{String.from(dispatched.name)}' — the op's `(interfaceDeclIndex, methodIndex)` pair was numbered against a different slot list")
+	for calleeIndex in witnessDispatchImpls(project, signatures: signatures, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, funcIndexByName: funcIndexByName, conformers: conformers, witnessSlots: witnessSlots).impls 'eachImpl'
+		addWitnessConformerEdges(args, calleeIndex: calleeIndex, func: func, callerIndex: callerIndex, edges: edges)
+	end 'eachImpl'
+end 'addWitnessParamEdges'
+
+// The bodies a call that names no single callee can land on — and whether one it may land on is a body this
+// module declares none of, which no summary describes (`unresolved`): its result may be anything the operands
+// reach, and unless it is a compiler-synthesized witness it may also store any operand into any other
+// (`unresolvedMayStore`).
+module type CallLandingBodies
+	export var impls as FuncIndexArray
+	export var unresolved as bool
+	export var unresolvedMayStore as bool
+
+	export static function create() returns CallLandingBodies
+		return Self{impls: FuncIndexArray.create(), unresolved: false, unresolvedMayStore: false}
+	end 'create'
+end 'CallLandingBodies'
+
+// A witness dispatch lands on one body per conformer of the requirement's interface whose implementation this
+// module declares; a conformer's implementation it does not declare is compiler-synthesized. See
+// `addWitnessParamEdges` for why the union over them is the answer.
+module function witnessDispatchImpls(project Project, signatures ProgramSignatures, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, funcIndexByName FuncIndexByName, conformers ConformersByInterface, witnessSlots WitnessSlotsByDeclIndex) returns CallLandingBodies
+	let slot = witnessSlotAt(signatures, witnessSlots: witnessSlots, dispatched: dispatchedInterfaceAt(signatures, interfaceDeclIndex: interfaceDeclIndex), interfaceDeclIndex: interfaceDeclIndex, methodIndex: methodIndex)
 	let requirement = slot.method.name
 	let sourceInterface = slot.sourceInterfaceName
+	var found = CallLandingBodies.create()
 
 	for conformer in conformersOfMemoized(signatures, interfaceName: sourceInterface, memo: conformers) 'eachConformer'
-		let impl = try project.witnessSlotImpls.get(witnessSlotImplKey(conformer, interfaceName: sourceInterface, methodName: requirement)) otherwise continue
-		let calleeIndex = try funcIndexByName.get(impl) otherwise continue
-		addWitnessConformerEdges(args, calleeIndex: calleeIndex, func: func, callerIndex: callerIndex, edges: edges)
+		let impl = try project.witnessSlotImpls.get(witnessSlotImplKey(conformer, interfaceName: sourceInterface, methodName: requirement)) otherwise 'noDeclaredImpl'
+			found.unresolved = true
+			continue
+		end 'noDeclaredImpl'
+
+		let calleeIndex = try funcIndexByName.get(impl) otherwise 'notInThisModule'
+			found.unresolved = true
+			continue
+		end 'notInThisModule'
+
+		found.impls.push(calleeIndex)
 	end 'eachConformer'
-end 'addWitnessParamEdges'
+
+	return found
+end 'witnessDispatchImpls'
 
 // `conformersOf`, asked once per interface per compile — see `ConformersByInterface`.
 function conformersOfMemoized(signatures ProgramSignatures, interfaceName ByteArray, memo ConformersByInterface) returns ByteArrayArray
@@ -2534,7 +2604,7 @@ function reachableReawait(module MaxonModule, blockIndex BlockIndexById, func Ir
 
 	var visited = BlockIdSet.create()
 	var worklist = BlockIdArray.create()
-	collectAwaitSuccessors(module, block: startBlock, into: worklist)
+	collectMaxonBlockSuccessors(module, block: startBlock, into: worklist)
 
 	var head = 0 as BlockOpPos
 
@@ -2574,7 +2644,7 @@ function reachableReawait(module MaxonModule, blockIndex BlockIndexById, func Ir
 
 			// Re-armed here — do NOT follow this block's successors; the promise past this point is a new thread.
 			rearmed then break 'scan'
-			ranOff then collectAwaitSuccessors(module, block: block, into: worklist)
+			ranOff then collectMaxonBlockSuccessors(module, block: block, into: worklist)
 		end 'scan'
 	end 'bfs'
 
@@ -2595,7 +2665,7 @@ end 'blockRedefinesPromise'
 
 // Scan `block`'s body ops from position `from` for the tracked promise: a re-await (`foundSecond`), the
 // re-arming definition (`rearmed`), or neither (`ranOff`). Only BODY ops (`opRefs`) can be an `await`/`asyncCall`
-// — a terminator is a branch/return, handled by `collectAwaitSuccessors` — so this never inspects the terminator.
+// — a terminator is a branch/return, handled by `collectMaxonBlockSuccessors` — so this never inspects the terminator.
 function scanBlockForReawait(module MaxonModule, block IrBlock, from BlockOpPos, promise ValueId) returns AwaitScan
 	for pos in from upto block.opRefs.count() 'eachOp'
 		let opIdx = try block.opRefs.get(pos) otherwise panic("scanBlockForReawait: opRefs.get OOB at {pos}")
@@ -2746,12 +2816,12 @@ end 'roleIfEqual'
 // `branch` (one target) or a `condBranch` (two) — never from a body op; every other terminator (`ret`/`retVoid`
 // /`throwError`/`propagateError`/`panicAbort`) leaves the function and has no in-function successor. A block
 // with no terminator op (`dead`/`unset`) has none.
-function collectAwaitSuccessors(module MaxonModule, block IrBlock, into BlockIdArray)
+module function collectMaxonBlockSuccessors(module MaxonModule, block IrBlock, into BlockIdArray)
 	if not block.hasTerminatorOp() 'noTerminator'
 		return
 	end 'noTerminator'
 
-	match try module.ops.get(block.terminatorIndex()) otherwise panic("collectAwaitSuccessors: terminatorIndex not in module.ops") 'term'
+	match try module.ops.get(block.terminatorIndex()) otherwise panic("collectMaxonBlockSuccessors: terminatorIndex not in module.ops") 'term'
 		call or
 			literal or
 			ret or
@@ -2778,7 +2848,7 @@ function collectAwaitSuccessors(module MaxonModule, block IrBlock, into BlockIdA
 		constArrayLiteral then break 'term'
 
 		// A jump table's successors are its distinct case targets plus the default — enumerated for the
-		// await-CFG walk exactly as `collectBlockSuccessorIds` does at the Target tier (deduped: a range/`or`
+		// CFG walk exactly as `collectBlockSuccessorIds` does at the Target tier (deduped: a range/`or`
 		// arm fills several slots with one block, but the CFG has one edge to it).
 		switch(_, denseTargetBlockIds, defaultBlockId) then pushMaxonSwitchSuccessors(into, denseTargetBlockIds: denseTargetBlockIds, defaultBlockId: defaultBlockId)
 
@@ -2801,7 +2871,7 @@ function collectAwaitSuccessors(module MaxonModule, block IrBlock, into BlockIdA
 			covPoint or
 			rawIntrinsic then break 'term'
 	end 'term'
-end 'collectAwaitSuccessors'
+end 'collectMaxonBlockSuccessors'
 
 // Push a Maxon `switch`'s distinct successor block ids into `into`: the default plus each distinct case
 // target in first-appearance order, one edge per distinct successor (a dense table repeats a block across
@@ -2835,7 +2905,7 @@ function blameTargetErrorsIn(project Project, func IrFunction) returns bool
 	return not targetProvidesEveryFacility(project.target) and not isLibraryFunction(project, func: func)
 end 'blameTargetErrorsIn'
 
-function checkCalls(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, throwsMap FuncThrowsMap, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary)
+function checkCalls(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, throwsMap FuncThrowsMap, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary, provenance ProvenanceTracer)
 	// ⚠ **THE MEMO IS NOT AN OPTIMIZATION** — the note `LowerMaxonToStd.witnessSlotsOf` carries, one pass
 	// over. `interfaceWitnessSlots` walks the `extends` graph and builds a fresh array plus a visited set on
 	// every call; asked once per dispatch OP that is a quadratic in a program's dispatch count. The list is a
@@ -2844,7 +2914,10 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 	// per op and this must outlive every one of them.
 	var witnessSlots = WitnessSlotsByDeclIndex.create()
 
-	for func in module.functions 'eachFunc'
+	for funcIndex in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIndex) otherwise panic("checkCalls: functions.get OOB at {funcIndex} below its own count")
+		provenance.enterFunction(funcIndex)
+
 		// A STDLIB function no path from `main` reaches is code dead-function elimination will drop
 		// before the back end, so a check here would report a defect in code the program does not
 		// contain. The one that would fire is E3104 — Clock's body reaches
@@ -2880,7 +2953,7 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 					// A PLAIN call — its args are validated, and a call to a THROWING callee that is not
 					// under a `try` is E3057 (it is a `call`, not a `tryCall`, precisely because no `try`
 					// covered it).
-					call(result, callee, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) then validatePlainCall(project, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIdx, result: result, callee: callee, mint: mint, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, throwsMap: throwsMap, escapeSummary: escapeSummary, mutationSummary: mutationSummary, blameTargetErrorsHere: blameTargetErrorsHere)
+					call(result, callee, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) then validatePlainCall(project, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIdx, result: result, callee: callee, mint: mint, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, throwsMap: throwsMap, escapeSummary: escapeSummary, mutationSummary: mutationSummary, provenance: provenance, blameTargetErrorsHere: blameTargetErrorsHere)
 
 					// Extended past `branch` to take in the varAccess band and the `stringLiteral` op: a
 					// global's address/load/store and a string literal are not calls and have nothing for
@@ -2902,7 +2975,7 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 
 					// A `tryCall`'s args are validated exactly like a `call`'s (it IS a call plus a flag);
 					// its throws-compatibility (E3055) was checked by the parser at the `try` token.
-					tryCall(result, _, callee, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) then validateCall(project, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIdx, result: result, callee: callee, mint: mint, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, escapeSummary: escapeSummary, mutationSummary: mutationSummary, blameTargetErrorsHere: blameTargetErrorsHere)
+					tryCall(result, _, callee, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) then validateCall(project, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIdx, result: result, callee: callee, mint: mint, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, escapeSummary: escapeSummary, mutationSummary: mutationSummary, provenance: provenance, blameTargetErrorsHere: blameTargetErrorsHere)
 
 					// The error terminators and the panic op read no callee signature.
 					throwError or
@@ -2934,7 +3007,7 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 					// P1.5-B1a: an async spawn validates its arguments like a plain call AND requires the
 					// callee's PARAMETERS to be GPR scalars (the trampoline passes them through the integer
 					// arg registers); `await`'s operand is a runtime promise handle, not a callee to resolve.
-					asyncCall(result, callee, args, argLabels, argRanges, argImmutableNames, argDefaultSlots) then validateAsyncCall(project, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIdx, result: result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, escapeSummary: escapeSummary, mutationSummary: mutationSummary, blameTargetErrorsHere: blameTargetErrorsHere)
+					asyncCall(result, callee, args, argLabels, argRanges, argImmutableNames, argDefaultSlots) then validateAsyncCall(project, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIdx, result: result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, escapeSummary: escapeSummary, mutationSummary: mutationSummary, provenance: provenance, blameTargetErrorsHere: blameTargetErrorsHere)
 
 					// An `await`/`try await`'s operand is a runtime promise handle, not a callee to resolve; the
 					// awaited function was validated at its `async` spawn site. The `try await` throws-compatibility
@@ -3025,6 +3098,11 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 					// `TargetFacilities.machineModel` before it mints anything, not a diagnostic.
 					rawIntrinsic then break 'op'
 				end 'op'
+
+				// A witness dispatch or a call through a function value writes the arguments its landing bodies
+				// write, which a `var` handed one answers for (E3078); a named callee's are noted by
+				// `checkImmutableArgToMutatingParam`.
+				provenance.noteDispatchedArgumentsWritten(func, op: op, opIndex: opIdx, mutationSummary: mutationSummary)
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
@@ -3034,11 +3112,11 @@ end 'checkCalls'
 // PARAMETERS to be GPR scalars. The argument-VALUE and RESULT scalar checks are the parser's (it holds the
 // pre-resolution types and must type the promise safely); this is the one check the parser cannot make — a
 // callee declared in another file, whose param types only the whole-program `funcSignatures` registry has.
-function validateAsyncCall(project Project, func IrFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, opIndex OpIndex, result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argDefaultSlots ParamCountArray, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary, blameTargetErrorsHere bool)
+function validateAsyncCall(project Project, func IrFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, opIndex OpIndex, result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argDefaultSlots ParamCountArray, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, blameTargetErrorsHere bool)
 	// `notMinted`: `Parser.asyncSpawnCallee` admits only a name the author wrote — a free call's identifier or
 	// a `<Type>.<static>` mangle of two written tokens — and refuses a MINTED callee in words, because
 	// `MaxonOp.asyncCall` carries no `mint` field to tell the two apart.
-	validateCall(project, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIndex, result: result, callee: callee, mint: CalleeMint.notMinted, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, escapeSummary: escapeSummary, mutationSummary: mutationSummary, blameTargetErrorsHere: blameTargetErrorsHere)
+	validateCall(project, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIndex, result: result, callee: callee, mint: CalleeMint.notMinted, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, escapeSummary: escapeSummary, mutationSummary: mutationSummary, provenance: provenance, blameTargetErrorsHere: blameTargetErrorsHere)
 	requireAsyncScalarParams(project, func: func, signatures: signatures, opIndex: opIndex, callee: callee)
 end 'validateAsyncCall'
 
@@ -3117,7 +3195,7 @@ end 'requireTriedWitnessDispatch'
 
 // The witness slot list per dispatched interface, keyed by the declaration-order handle a `witnessDispatch`
 // op carries. See `checkCalls`, where the one instance is created, for why it exists.
-typealias WitnessSlotsByDeclIndex = Map with (InterfaceDeclIndex, CollectedInterfaceMethodArray)
+module typealias WitnessSlotsByDeclIndex = Map with (InterfaceDeclIndex, CollectedInterfaceMethodArray)
 
 // What an interface FORMAL denotes at the argument check. `opaque` is a real answer — see
 // `witnessFormalDeclaredType` for its four sources and for why each is a position where comparing would be
@@ -3161,8 +3239,7 @@ end 'checkWitnessDispatchOp'
 // rather than being absorbed.
 function checkWitnessArgTypes(project Project, func IrFunction, signatures ProgramSignatures, witnessSlots WitnessSlotsByDeclIndex, opIndex OpIndex, args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex)
 	let dispatched = dispatchedInterfaceAt(signatures, interfaceDeclIndex: interfaceDeclIndex)
-	let slots = witnessSlotsAt(signatures, witnessSlots: witnessSlots, dispatched: dispatched, interfaceDeclIndex: interfaceDeclIndex)
-	let requirement = (try slots.get(methodIndex) otherwise panic("checkWitnessArgTypes: slot {methodIndex} is outside the {slots.count()} witness slots of interface '{String.from(dispatched.name)}' — the op's `(interfaceDeclIndex, methodIndex)` pair was numbered against a different slot list")).method
+	let requirement = witnessSlotAt(signatures, witnessSlots: witnessSlots, dispatched: dispatched, interfaceDeclIndex: interfaceDeclIndex, methodIndex: methodIndex).method
 	let callRange = project.opRanges.get(opIndex)
 	let witnessReceiver = witnessDispatchReceiver(args)
 
@@ -3200,7 +3277,7 @@ end 'witnessFormalName'
 // `Parser.witnessSlotsOf` also walks). Reading the merged `project.interfaces` instead would be a second
 // writer of what must be one declaration, and `LowerMaxonToStd.interfaceAtDeclIndex` has to assert that seam
 // precisely because it reads the other store; asking the numbering's own store leaves nothing to assert.
-function dispatchedInterfaceAt(signatures ProgramSignatures, interfaceDeclIndex InterfaceDeclIndex) returns IrInterface
+module function dispatchedInterfaceAt(signatures ProgramSignatures, interfaceDeclIndex InterfaceDeclIndex) returns IrInterface
 	let name = signatures.interfaceNameAtDeclIndex(interfaceDeclIndex)
 
 	match lookupInterface(signatures.interfaceMap(), name: name) 'resolve'
@@ -3220,6 +3297,13 @@ function witnessSlotsAt(signatures ProgramSignatures, witnessSlots WitnessSlotsB
 	witnessSlots.upsert(interfaceDeclIndex, value: slots)
 	return slots
 end 'witnessSlotsAt'
+
+// The requirement a witness dispatch names: slot `methodIndex` of the one list every reader of the op's
+// `(interfaceDeclIndex, methodIndex)` pair numbers it against.
+module function witnessSlotAt(signatures ProgramSignatures, witnessSlots WitnessSlotsByDeclIndex, dispatched IrInterface, interfaceDeclIndex InterfaceDeclIndex, methodIndex WitnessMethodIndex) returns CollectedInterfaceMethod
+	let slots = witnessSlotsAt(signatures, witnessSlots: witnessSlots, dispatched: dispatched, interfaceDeclIndex: interfaceDeclIndex)
+	return try slots.get(methodIndex) otherwise panic("witnessSlotAt: slot {methodIndex} is outside the {slots.count()} witness slots of interface '{String.from(dispatched.name)}' — the op's `(interfaceDeclIndex, methodIndex)` pair was numbered against a different slot list")
+end 'witnessSlotAt'
 
 // ⭐⭐ **WHAT AN INTERFACE FORMAL DENOTES AT THE ARGUMENT CHECK, or that there is nothing here to compare
 // against.** An interface stores its formals as RENDERED SOURCE NAMES (`IrInterface`'s header), so this door
@@ -3355,7 +3439,7 @@ end 'erasedFormalIdentity'
 // became `… 'alpha.helper'` — a symbol the author never wrote, about a call they wrote as `helper()`, which
 // is D11c's defect class arriving in the pass that already refused it once. See
 // `diagnosticCalleeSpelling`'s own header for the line that does hold and for what is still owed.
-function callDiagnosticNoun(callee ByteArray, mint CalleeMint) returns ByteArray
+module function callDiagnosticNoun(callee ByteArray, mint CalleeMint) returns ByteArray
 	match mint 'm'
 		notMinted then return callee
 		primitiveStatic then return primitiveStaticSourceSpelling(callee)
@@ -3492,8 +3576,8 @@ end 'divisionRequiresTryMessage'
 
 // A plain call: validate its arguments, then — if it targets a THROWING callee — report E3057 (a throwing
 // call made without `try`). The `tryCall` path skips this: it IS the `try`.
-function validatePlainCall(project Project, func IrFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, opIndex OpIndex, result ValueId, callee ByteArray, mint CalleeMint, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argDefaultSlots ParamCountArray, throwsMap FuncThrowsMap, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary, blameTargetErrorsHere bool)
-	validateCall(project, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIndex, result: result, callee: callee, mint: mint, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, escapeSummary: escapeSummary, mutationSummary: mutationSummary, blameTargetErrorsHere: blameTargetErrorsHere)
+function validatePlainCall(project Project, func IrFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, opIndex OpIndex, result ValueId, callee ByteArray, mint CalleeMint, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argDefaultSlots ParamCountArray, throwsMap FuncThrowsMap, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, blameTargetErrorsHere bool)
+	validateCall(project, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIndex, result: result, callee: callee, mint: mint, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, escapeSummary: escapeSummary, mutationSummary: mutationSummary, provenance: provenance, blameTargetErrorsHere: blameTargetErrorsHere)
 
 	// A THROWING BUILTIN reaching here as a plain `call` — not a `tryCall` — was written WITHOUT a `try`, so its
 	// error flag would be silently dropped: a throwing array accessor (`__managed_get`/…) would return a dummy 0 on an
@@ -3536,7 +3620,7 @@ end 'validatePlainCall'
 // cleanly slotted call, the per-argument TYPES). The call site's own span
 // (`project.opRanges[opIndex]`) anchors the callee/arity/type errors; an argument's own span
 // (`argRanges[argIndex]`) anchors a per-argument label error.
-function validateCall(project Project, func IrFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, opIndex OpIndex, result ValueId, callee ByteArray, mint CalleeMint, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argDefaultSlots ParamCountArray, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary, blameTargetErrorsHere bool)
+function validateCall(project Project, func IrFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, opIndex OpIndex, result ValueId, callee ByteArray, mint CalleeMint, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argDefaultSlots ParamCountArray, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, blameTargetErrorsHere bool)
 	let callRange = project.opRanges.get(opIndex)
 	let filePath = func.sourceFilePath
 
@@ -3622,7 +3706,7 @@ function validateCall(project Project, func IrFunction, signatures ProgramSignat
 	let sig = try project.funcSignatures.get(callee) otherwise panic("validateCall: contains('{String.from(callee)}') true but get failed")
 
 	match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'slot'
-		ordered(argIds) then checkSlottedCall(project, func: func, result: result, callee: callee, sig: sig, args: args, argLabels: argLabels, argImmutableNames: argImmutableNames, argIds: argIds, argDefaultSlots: argDefaultSlots, escapeSummary: escapeSummary, mutationSummary: mutationSummary, callRange: callRange, filePath: filePath)
+		ordered(argIds) then checkSlottedCall(project, func: func, result: result, callee: callee, sig: sig, args: args, argLabels: argLabels, argImmutableNames: argImmutableNames, argIds: argIds, argDefaultSlots: argDefaultSlots, escapeSummary: escapeSummary, mutationSummary: mutationSummary, provenance: provenance, callRange: callRange, filePath: filePath)
 		arityMismatch(expected, got) then reportPositioned(project, code: ErrorCode.callArgCountMismatch, message: argArityMismatchMessage(String.from(noun), expected: expected, got: got), line: callRange.line, column: callRange.column, filePath: filePath)
 		unknownLabel(argIndex, label) then reportArgError(project, code: ErrorCode.callUnknownArgLabel, message: argUnknownLabelMessage(String.from(noun), label: label), argRanges: argRanges, argIndex: argIndex, filePath: filePath)
 		duplicateArg(argIndex, paramName) then reportArgError(project, code: ErrorCode.callDuplicateArg, message: argDuplicateMessage(String.from(noun), paramName: paramName), argRanges: argRanges, argIndex: argIndex, filePath: filePath)
@@ -4484,9 +4568,7 @@ type WitnessDispatchTargets
 	// The requirement's declared name, off the SAME slot list `checkWitnessArgTypes` reads — so the candidate
 	// set and the argument check cannot come to name different requirements for one op.
 	function requirementNameAt(methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex) returns ByteArray
-		let dispatched = dispatchedInterfaceAt(self.signatures, interfaceDeclIndex: interfaceDeclIndex)
-		let dispatchedSlots = witnessSlotsAt(self.signatures, witnessSlots: self.slots, dispatched: dispatched, interfaceDeclIndex: interfaceDeclIndex)
-		return (try dispatchedSlots.get(methodIndex) otherwise panic("requirementNameAt: slot {methodIndex} is outside the {dispatchedSlots.count()} witness slots of interface '{String.from(dispatched.name)}' — the op's `(interfaceDeclIndex, methodIndex)` pair was numbered against a different slot list")).method.name
+		return witnessSlotAt(self.signatures, witnessSlots: self.slots, dispatched: dispatchedInterfaceAt(self.signatures, interfaceDeclIndex: interfaceDeclIndex), interfaceDeclIndex: interfaceDeclIndex, methodIndex: methodIndex).method.name
 	end 'requirementNameAt'
 
 	// Every declared member wearing that name — the requirement's own spelling, which is what `create`
@@ -4886,7 +4968,7 @@ end 'functionShowsAnEffect'
 // cannot read (a restored intrinsic, an extern), and `bodyWasSkippedAsUnreached` is one empty block the
 // parser left behind after walking past a stdlib body no path from `main` demanded. The second reads as an
 // ordinary function that happens to do nothing, which is why it has to be asked for by name.
-function bodyIsUnreadable(func IrFunction) returns bool
+module function bodyIsUnreadable(func IrFunction) returns bool
 	return func.blockRefs.count() == 0 or func.bodyWasSkippedAsUnreached
 end 'bodyIsUnreadable'
 
@@ -5046,12 +5128,65 @@ function effectFreeRuntimeCallee(callee ByteArray) returns bool
 	return ownershipBookkeepingCallee(callee) or containerReadCallee(callee) or pureComputationCallee(callee)
 end 'effectFreeRuntimeCallee'
 
+// ⭐⭐ **WHERE A CALLEE NO SUMMARY DESCRIBES MAY STORE WHAT IT WAS HANDED** — `StorageProvenance`'s question of a
+// runtime entry, or of a declared callee whose body was not read. A container mutator puts its other operands
+// into the record its receiver names (a push, a set, a list node's value) and writes nothing it was handed as a
+// value, so an element that is itself a container is not read as receiving the container. An interior insertion
+// stores its value beside an ANCHOR node it only reads; an unlink or a clear takes records OUT, and an append
+// block-copies or deep-clones its source's elements (`Parser.parseArrayAppend`): none of those stores a record
+// it was handed.
+//
+// ⛔ **CLOSED, FOR `effectFreeRuntimeCallee`'s REASON AND IN ITS DIRECTION.** A callee named nowhere here may
+// store any operand into any other, so a new mutator is at worst over-refused until it is added.
+module enum RuntimeStoreShape
+	intoAnyOperand
+	intoTheReceiver
+	intoTheReceiverPastAnAnchor
+	nothing
+end 'RuntimeStoreShape'
+
+module function runtimeCalleeStoreShape(callee ByteArray) returns RuntimeStoreShape
+	if reservedCalleeReasonOf(callee) != ReservedCalleeReason.compilerInternalPrefix 'noRosterEntryWearsThisShape'
+		return RuntimeStoreShape.intoAnyOperand
+	end 'noRosterEntryWearsThisShape'
+
+	if effectFreeRuntimeCallee(callee) or takesRecordsOutCallee(callee) or copiesItsSourceCallee(callee) 'storesNothingItWasHanded'
+		return RuntimeStoreShape.nothing
+	end 'storesNothingItWasHanded'
+
+	if callee.equals(ListInsertAfterName) or callee.equals(ListInsertBeforeName) 'besideAnAnchor'
+		return RuntimeStoreShape.intoTheReceiverPastAnAnchor
+	end 'besideAnAnchor'
+
+	if containerMutatorCallee(callee) or listMutatorCallee(callee) 'aContainerMutator'
+		return RuntimeStoreShape.intoTheReceiver
+	end 'aContainerMutator'
+
+	return RuntimeStoreShape.intoAnyOperand
+end 'runtimeCalleeStoreShape'
+
+function takesRecordsOutCallee(callee ByteArray) returns bool
+	return callee.equals(ManagedRemoveName) or callee.equals(ManagedVacateName) or callee.equals(ManagedClearName) or callee.equals(ListRemoveNodeName) or callee.equals(ListDetachNodeName) or callee.equals(ListClearName)
+end 'takesRecordsOutCallee'
+
+function copiesItsSourceCallee(callee ByteArray) returns bool
+	return callee.equals(ManagedAppendName) or callee.equals(ManagedAppendManagedName) or callee.equals(ManagedAppendOpaqueName)
+end 'copiesItsSourceCallee'
+
+function containerMutatorCallee(callee ByteArray) returns bool
+	return callee.equals(ManagedPushName) or callee.equals(ManagedSetName) or callee.equals(ManagedResizeName) or callee.equals(ManagedSetLengthName) or callee.equals(ManagedSetByteName) or callee.equals(ManagedMemGrowName) or callee.equals(ManagedMemSwapName) or callee.equals(ManagedMemShiftRightName) or callee.equals(ManagedMemShiftLeftName) or callee.equals(ManagedMemSetName) or callee.equals(ManagedFillName) or callee.equals(ManagedCursorAdvanceName) or callee.equals(ManagedCursorRetreatName) or callee.equals(ManagedCursorSeekName)
+end 'containerMutatorCallee'
+
+function listMutatorCallee(callee ByteArray) returns bool
+	return callee.equals(ListAppendName) or callee.equals(ListPrependName) or callee.equals(ListReinsertFirstName) or callee.equals(ListReinsertLastName) or callee.equals(ListNodeSetValueName)
+end 'listMutatorCallee'
+
 // ⭐ **THE OWNERSHIP BOOKKEEPING THE SOURCE NEVER WROTE.** Allocation, retain, release, the copy-on-write
 // clone and the move's soleness walk are the compiler's own emissions — unobservable to the program, and
 // counting them would leave no function that builds or holds a value effect-free, `makePair` included.
 // `isRuntimeCallee` (the `__mm_` heap band) already draws exactly this line for exactly this reason; the
 // managed, String, List and type-parameter families are the same fact one prefix over.
-function ownershipBookkeepingCallee(callee ByteArray) returns bool
+module function ownershipBookkeepingCallee(callee ByteArray) returns bool
 	return isRuntimeCallee(callee) or callee.equals(StrRetainName) or callee.equals(StrDecrefName) or callee.equals(StrCloneName) or callee.equals(StrCopyName) or callee.equals(ManagedDecrefName) or callee.equals(ManagedCloneName) or callee.equals(ManagedCloneManagedName) or callee.equals(ManagedRetainName) or callee.equals(ManagedIncrefName) or callee.equals(ManagedSoleName) or callee.equals(ManagedSoleManagedName) or callee.equals(ManagedCursorDecrefName) or callee.equals(ListDecrefName) or callee.equals(ListNodeDecrefName) or callee.equals(ListCloneName) or callee.equals(ListCloneManagedName) or callee.equals(ListSoleName) or callee.equals(ListSoleManagedName) or callee.equals(RetainTypeParamName) or callee.equals(DropTypeParamName) or callee.equals(RetainExistentialName) or callee.equals(DropExistentialName)
 end 'ownershipBookkeepingCallee'
 
@@ -5447,12 +5582,12 @@ end 'targetCanHostSubprocess'
 // the callee PERSISTS (P1.5-A2b-2), then refuse any IMMUTABLE BINDING passed to a parameter the callee
 // WRITES (E3019). The first three read `argIds` in declaration order, so each pairs `argIds[i]` with
 // parameter `i` — the slotting is done once, by `slotCallArgs`, and none re-derives it.
-function checkSlottedCall(project Project, func IrFunction, result ValueId, callee ByteArray, sig FuncSignature, args ValueIdArray, argLabels ByteArrayArray, argImmutableNames ByteArrayArray, argIds ValueIdArray, argDefaultSlots ParamCountArray, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary, callRange SourceRange, filePath FilePath)
+function checkSlottedCall(project Project, func IrFunction, result ValueId, callee ByteArray, sig FuncSignature, args ValueIdArray, argLabels ByteArrayArray, argImmutableNames ByteArrayArray, argIds ValueIdArray, argDefaultSlots ParamCountArray, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, callRange SourceRange, filePath FilePath)
 	checkArgTypes(project, func: func, result: result, callee: callee, sig: sig, argIds: argIds, argDefaultSlots: argDefaultSlots, callRange: callRange, filePath: filePath)
 	checkTypeParameterArgs(project, func: func, result: result, sig: sig, argIds: argIds, callRange: callRange, filePath: filePath)
 	checkPerInstanceArgs(project, func: func, callee: callee, sig: sig, argIds: argIds, callRange: callRange, filePath: filePath)
 	checkCapturingClosureEscape(project, func: func, callee: callee, argIds: argIds, escapeSummary: escapeSummary, callRange: callRange, filePath: filePath)
-	checkImmutableArgToMutatingParam(project, func: func, callee: callee, sig: sig, args: args, argLabels: argLabels, argImmutableNames: argImmutableNames, mutationSummary: mutationSummary, callRange: callRange, filePath: filePath)
+	checkImmutableArgToMutatingParam(project, func: func, callee: callee, sig: sig, args: args, argLabels: argLabels, argImmutableNames: argImmutableNames, mutationSummary: mutationSummary, provenance: provenance, callRange: callRange, filePath: filePath)
 	checkResolvedExtensionConstraints(project, func: func, callee: callee, sig: sig, argIds: argIds, callRange: callRange, filePath: filePath)
 end 'checkSlottedCall'
 
@@ -5557,15 +5692,28 @@ end 'reportConditionalExtensionWithheld'
 // what "cannot be written through" means, free to drift from this one and to double-report the arguments they
 // both catch. The sentence is unchanged and stays true of both subjects: it names no immutability, only what
 // may not be passed where.
-function checkImmutableArgToMutatingParam(project Project, func IrFunction, callee ByteArray, sig FuncSignature, args ValueIdArray, argLabels ByteArrayArray, argImmutableNames ByteArrayArray, mutationSummary ParamMutationSummary, callRange SourceRange, filePath FilePath)
+function checkImmutableArgToMutatingParam(project Project, func IrFunction, callee ByteArray, sig FuncSignature, args ValueIdArray, argLabels ByteArrayArray, argImmutableNames ByteArrayArray, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, callRange SourceRange, filePath FilePath)
 	// ONE name resolution and one dense read — `maskOf` answers `NoParamPositions` for a callee the module
 	// does not declare, so the overwhelming majority of calls leave here after a single hash and an i64
 	// compare, with no membership probe in front of it.
 	let mask = mutationSummary.maskOf(callee)
 
-	// ⚡ The second read is taken only when this call could possibly need it: a function that marked no value
-	// is every function in nearly every program, and the set is the parser's shared empty one there.
-	let recordWriteMask = mutationSummary.recordWriteMaskOf(callee) if func.immutableGlobalAliasValues.count() > 0 else NoParamPositions
+	// `StorageProvenance` asks which arguments a call writes (`noteArgumentWritten`) only of a function with an
+	// immutable name to guard, since only its doors read them (`ProvenanceTracer.gatherWrittenTargets`).
+	let asksWrittenArguments = func.provenanceSites().immutableBindings.values.count() > 0
+
+	// Which parameters' records the call writes by any means (W117). E3019 reads it only for an argument that
+	// aliases an immutable global; `StorageProvenance` reads it for every argument, since a `var` whose record is
+	// written through a call is what its E3078 door asks about.
+	let recordWriteMask = mutationSummary.recordWriteMaskOf(callee) if asksWrittenArguments or func.immutableGlobalAliasValues.count() > 0 else NoParamPositions
+
+	// A library body nothing in the program reaches — called only from a function nothing calls — was never read,
+	// so its summary says nothing about what it writes: every argument is taken as written by the door that asks.
+	if asksWrittenArguments and project.libraryFacts.unreachable.contains(callee) 'anUnreadBody'
+		for argId in args 'eachArg'
+			provenance.noteArgumentWritten(argId, call: callRange, paramName: EmptySourceText)
+		end 'eachArg'
+	end 'anUnreadBody'
 
 	if mask == NoParamPositions and recordWriteMask == NoParamPositions 'writesNoParameter'
 		return
@@ -5574,18 +5722,29 @@ function checkImmutableArgToMutatingParam(project Project, func IrFunction, call
 	for i in 0 upto args.count() 'eachArg'
 		let argId = try args.get(i) otherwise panic("checkImmutableArgToMutatingParam: args.get OOB at {i} below its own count")
 		let aliasesAnImmutableGlobal = func.immutableGlobalAliasValues.contains(argId)
-		let blamed = immutableArgNameAt(argImmutableNames, index: i)
-
-		if blamed.isEmpty() and not aliasesAnImmutableGlobal 'writableArgument'
-			continue
-		end 'writableArgument'
-
 		let pos = argSlotPosition(sig.paramNames, argIndex: i, label: try argLabels.get(i) otherwise panic("checkImmutableArgToMutatingParam: argLabels.get OOB at {i} — a call's argument columns are parallel by construction"))
 		let effective = (mask or recordWriteMask) if aliasesAnImmutableGlobal else mask
+
+		if asksWrittenArguments and pos < sig.paramCount() and maskHasParam(mask or recordWriteMask, param: pos) 'itsRecordIsWritten'
+			provenance.noteArgumentWritten(argId, call: callRange, paramName: try sig.paramNames.get(pos) otherwise panic("checkImmutableArgToMutatingParam: paramNames.get OOB at {pos} inside paramCount()"))
+		end 'itsRecordIsWritten'
 
 		if pos >= sig.paramCount() or not maskHasParam(effective, param: pos) 'notAWrittenPosition'
 			continue
 		end 'notAWrittenPosition'
+
+		// ⭐ **AN ARGUMENT THE PARSER COULD NAME NO BINDING FOR IS ASKED OF ITS VALUE** — `grow(pass(g))` hands
+		// over `g`'s own record. Identity only: a field of a `let` is not the `let`, which is the top-level-base
+		// rule `specs/immutable-method-call.md` pins.
+		var blamed = immutableArgNameAt(argImmutableNames, index: i)
+
+		if blamed.isEmpty() and not aliasesAnImmutableGlobal 'noNamedBinding'
+			blamed = provenance.immutableIdentityOf(func, value: argId, call: callRange)
+		end 'noNamedBinding'
+
+		if blamed.isEmpty() and not aliasesAnImmutableGlobal 'writableArgument'
+			continue
+		end 'writableArgument'
 
 		let paramName = try sig.paramNames.get(pos) otherwise panic("checkImmutableArgToMutatingParam: paramNames.get OOB at {pos} inside paramCount()")
 
@@ -5594,6 +5753,12 @@ function checkImmutableArgToMutatingParam(project Project, func IrFunction, call
 		// `NoImmutableArgNames` wholesale. Naming the noun here rather than skipping the report keeps the
 		// diagnostic, and it is the SAME constant that fallback uses, so there is one wording and not two.
 		let subject = blamed if not blamed.isEmpty() else ImmutableGlobalAliasBlame
+
+		// Answered here, so the write-through door does not ask it again (`ProvenanceTracer.checkWrittenArguments`).
+		if asksWrittenArguments 'judgedHere'
+			provenance.noteLastArgumentJudged()
+		end 'judgedHere'
+
 		reportPositioned(project, code: ErrorCode.semanticImmutableRefToMutatingParam, message: immutableMutatingCallMessage(String.from(subject), paramName: displayParamName(paramName), functionName: String.from(func.name)), line: callRange.line, column: callRange.column, filePath: filePath)
 		return
 	end 'eachArg'

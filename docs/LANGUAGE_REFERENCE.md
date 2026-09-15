@@ -59,6 +59,7 @@ This reference provides complete syntax and semantics for the Maxon programming 
 16. [Build System](#build-system)
 17. [Memory Model](#memory-model)
     - [Reference-by-Default Assignment](#reference-by-default-assignment)
+    - [Immutable XOR Mutable](#immutable-xor-mutable)
     - [Explicit Cloning](#explicit-cloning)
     - [Cloneable Interface](#cloneable-interface)
     - [Auto-Equatable](#auto-equatable)
@@ -1996,14 +1997,16 @@ items2.push(1)           // OK — items2 is var
 - Type is always inferred from the initializer
 - Scope is block-scoped
 - Primitives are stack-allocated; structs with all-primitive fields that don't escape scope are stack-promoted automatically; `var` arrays use heap buffers (with automatic cleanup)
-- Variables declared with `var` that are never reassigned produce an error (E3077). Use `let` instead if the variable is not mutated.
-- For struct-typed variables, `var b = a` creates a reference (alias to the same object); use `var b = a.clone()` for an independent copy (see [Reference-by-Default Assignment](#reference-by-default-assignment))
-- Assigning an immutable (`let`) reference-type variable to a mutable (`var`) binding is an error (E3078). Value types (int, float, bool, byte) are always independent copies and are allowed. Use `let` instead of `var`, or call `.clone()` to create an independent mutable copy:
+- Variables declared with `var` that are never reassigned produce an error (E3077). Use `let` instead if the variable is not mutated. E3077 is withheld where a `let` in its place would not compile — where a mutable door would move or refuse it (see [Immutable XOR Mutable](#immutable-xor-mutable)).
+- For struct-typed variables, `var b = a` hands `b` the same object rather than a copy; use `var b = a.clone()` for an independent copy (see [Reference-by-Default Assignment](#reference-by-default-assignment))
+- A mutable name takes an immutable (`let`) name's record only by MOVING it (see [Immutable XOR Mutable](#immutable-xor-mutable)). A `let` bound to a fresh record and named by nothing else moves into a `var`, and reading it afterwards is E3102; any other `let` — an alias, an element or other borrow, a module-level `let` — is refused (E3078) while it is read after the binding, and a field of a `let` is refused always. Value types (int, float, bool, byte) are always independent copies and are allowed. Use `let` instead of `var`, or call `.clone()` to create an independent mutable copy:
   ```maxon
   let a = Point.create(1, y: 2)
-  // var b = a              // ERROR E3078: cannot assign immutable variable 'a' to mutable binding 'b'
-  let b = a                 // OK — b is immutable
-  var c = a.clone()         // OK — c is an independent mutable copy
+  var b = a                 // OK — a MOVES into b; reading a afterwards is E3102
+  let c = Point.create(3, y: 4)
+  let d = c                 // d aliases c: two immutable names
+  // var e = c              // ERROR E3078: cannot assign immutable variable 'c' to mutable binding 'e'
+  var f = c.clone()         // OK — f is an independent mutable copy
   ```
 - All variables must be used; unused variables cause a compile error (E3012). This applies to `let`/`var` declarations, function parameters, for-loop variables, match pattern bindings, and closure parameters.
 - The variable name `_` is a special discard identifier: it creates no binding and is exempt from unused variable checks. Only the exact name `_` is a discard -- names like `_x` are regular variables subject to normal unused checks. Multiple `_` discards are allowed in tuple destructuring (e.g., `for (_, _) in pairs`). In match patterns, `_` can discard individual bindings (e.g., `pair(_, second)`) but discarding all bindings is an error (E3081) — omit the parentheses instead: `pair then ...`.
@@ -5368,22 +5371,97 @@ type Point
 	end 'create'
 end 'Point'
 
+typealias PointArray = Array with Point
+
 var a = Point.create(1, y: 2)
-var b = a               // b is an alias for a -- both point to the same object
+var points = PointArray.create()
+points.push(a)          // the array holds a second reference to a's object
+var b = try points.get(0) otherwise panic("pushed")
 b.x = 99
 print("{a.x}")          // 99 -- a and b share the same object
 ```
 
-Field mutation through an alias affects the original, because both variables point to the same heap-allocated object. Reassignment, however, rebinds the variable to a new object without affecting the original:
+Field mutation through one holder affects every other, because they all point to the same heap-allocated object. Reassignment, however, rebinds the variable to a new object without affecting the others:
 
 ```maxon
-var a = Point.create(1, y: 2)
-var b = a               // alias
 b = Point.create(5, y: 6)  // rebinds b to a new object -- a is unaffected
-print("{a.x}")          // 1 -- a still points to the original
+print("{a.x}")          // 99 -- a still points to the object it shares with the array
 ```
 
+A bare `var b = a` MOVES `a` rather than sharing it — reading `a` afterwards is E3102 — and a mutable name takes an
+immutable one's object only that way (see [Immutable XOR Mutable](#immutable-xor-mutable)).
+
 All types in Maxon use reference semantics on assignment — the variable is rebound to a new value only when reassigned with an expression. The practical distinction is that struct field mutations are visible through aliases, whereas arithmetic on ranged integers and primitives always produces a new value and rebinds the variable, leaving the original unchanged.
+
+### Immutable XOR Mutable
+
+Every record is reference-counted and every value of a record type is a reference to it. A record is written
+through MUTABLE paths or read through IMMUTABLE names, never both at once. The immutable names are a `let` binding
+(including a `for` loop variable and an `if let`), a module-level `let`, and a parameter the function does not
+write. Mutable holders may share a record: a store into a field or a container, and an argument a callee keeps,
+take a reference of their own and CO-OWN what they are handed. So does an immutable name (`let u = t` aliases).
+
+What is checked is where a mutable name or a write could reach a record an immutable name still reads. A check
+of a value is by LIVENESS: an immutable name counts only when some path from the site reads it. A `let` is live to
+its last read, and to the end of a loop it was bound before and read inside — but a read on the other arm of an
+`if` the site is on one arm of is on no path from it (the arms of a `match` are not told apart this way). A
+module-level `let`, and a `let` a closure captured, are live everywhere: the closure reads it wherever it is
+called.
+
+Two different fields of one record are two places — a record read out of `pair.left` is no record read out of
+`pair.right`, however deep below them the two reads go — when the two fields hold two records. Where the record
+was made in the same function and every use of it is in view there, that is checked: a record stored into both
+fields, or handed twice to the call that made it (`Pair.create(p, right: p)`), makes them one place. **Where the
+fields were filled out of view — a parameter's record, module storage, or a record a callee filled beyond the
+arguments it was handed — two fields are taken to hold two records, and a program that put one record into both
+there is not refused.**
+
+- **A `var` binding or assignment** — `var q = p`, `q = p`. A `let` that is its record's sole reference (bound to a
+  fresh record, named by no other live name), spelled bare, MOVES: reading `p` afterwards is **E3102**, and moving a
+  `let` declared outside a loop from inside it is E2015. A bare `let` that is not its record's sole reference and is
+  read afterwards, and a field of an immutable name (`var i = o.inner`, refused whether or not `o` is read again),
+  is **E3078**. A value no name spells — a call result, an element, a merge — that may be, or lie within, the record
+  of an immutable name read afterwards, or that is read out of mutable storage a live `let` borrows (`let s = try
+  arr.get(0)` then `var e = try arr.get(0)` while `s` is still used), is **E3078** when the `var` WRITES that record
+  while it holds it: a field write through it, a method that writes its receiver, or passing it at a parameter the
+  callee writes — a named callee's, or that of any body a call through an interface or a function value may land
+  on. A `var` that is only rebound and read — a chain cursor, `var cur = try chain.head()` then `cur =
+  try cur.next()` — is a rebindable shared reference and mutates nothing.
+- **An argument at a parameter the callee writes** — **E3019** for an immutable name spelled as the argument,
+  whether or not it is read again (see [Parameter Passing](#parameter-passing)), and for a value — one a `var`
+  holds included — that may be the record of an immutable name read after the call (`grow(pass(a))`,
+  `pass(a).push(9)`), that a live `let` borrows out of the same mutable storage, or that may be the same record as
+  a live `let` by another road.
+- **A write** — a field write or a method that writes its receiver — is checked where it happens, against every
+  immutable name read after it, whichever of the two was declared first. Through a record such a name may be, or
+  that a live `let` borrows out of the same mutable storage (`var e = try arr.get(0)`, `let s = try arr.get(0)`,
+  `e.x = 9` while `s` is still read), or that may be the same record as a live `let` by another road — both the
+  record of a `let` that moved after it went into a container — it is **E3159** (a method writing a receiver that
+  may be the name's own record is the E3019 above). More: `let p = box.item` then `box.item.x = 99`, or
+  `let a = Point.create(1)`, `box.item = a`, `box.item.x = 99` while `a` is still read. `x.append(…)` on a `String`
+  is such a write. A write through a `var` whose binding was already refused (E3078) is not refused again. A field
+  read after the field was stored on every path since the `let` read it — with a value that cannot be the `let`'s record — is the new record, not the
+  `let`'s. A `let` is shallow: a write to a record lying within its record is refused only when the `let`'s own
+  record is an immutable one.
+
+A value that IS an immutable record — one whose type declares every field `let` — is written by nothing, so it
+meets none of these checks; what it holds is judged by its own type. A `String` or `Character` a name does not own
+is copied by a `var` binding and by a store, a `let` bound to a string literal names an immortal record every
+door copies, and a module-level `let` that is image data is copied by every store. `clone()` is the way to hand a
+mutable name an independent record.
+
+```maxon
+let a = Point.create(1, y: 2)
+var arr = PointArray.create()
+arr.push(a)                 // arr co-owns a's record
+var b = a                   // a moves into b
+// print("{a.x}")           // ERROR E3102: use of moved value 'a'
+let first = try arr.get(0) otherwise panic("pushed")
+// var e = try arr.get(0) otherwise panic("pushed")   // ERROR E3078: `first` is read below
+var e = (try arr.get(0) otherwise panic("pushed")).clone()   // OK — an independent record
+e.x = 9
+print("{first.x} {b.x}")
+```
 
 ### Stack Promotion
 
@@ -5722,7 +5800,16 @@ return x                // ERROR E3077: variable 'x' is never reassigned; use 'l
 **Var From Immutable**
 ```maxon
 let a = Point.create(1, y: 2)
-var b = a               // ERROR E3078: cannot assign immutable variable 'a' to mutable binding 'b'
+let b = a               // b aliases a, so neither is the record's sole reference
+var c = a               // ERROR E3078: cannot assign immutable variable 'a' to mutable binding 'c'
+print("{b.x}")
+```
+
+**Write Through an Immutable Name's Record**
+```maxon
+let p = box.item
+box.item.x = 99         // ERROR E3159: cannot write through 'box.item', which may be the record of immutable variable 'p'; use clone()
+print("{p.x}")
 ```
 
 **Useless Discard**

@@ -501,13 +501,10 @@ end 'main'
 a first payload string long enough to heap
 ```
 
-<!-- test: retained-payload-that-escapes-shares-the-owner-s-record -->
+<!-- test: returned-alias-of-a-let-union-payload -->
 The retain is an INCREF, not a copy, so a payload that escapes the borrow is a SECOND
-owner of the SAME record — and an in-place `append` through it is visible to the union
-that still holds it. It is pinned because it is the one place the incref-vs-copy choice is
-*observable* rather than internal: were the bind to copy the way `promoteBorrowedToOwned`
-copies a borrowed String for a `var`, this program would print the unmutated original and
-disagree with the reference.
+owner of the SAME record. A mutable name made from it would write the payload of `m`, which
+is `let`, so the binding is refused.
 
 ```maxon
 union M
@@ -530,11 +527,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-original payload, long enough to be a real heap allocation MUTATED
+```maxoncstderr
+error E3078: <fragment>:16:6: cannot assign the result of 'grab', which may share storage with immutable variable 'm', to mutable binding 'escaped'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: borrowed-struct-payload-bind-leak-free -->

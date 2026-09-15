@@ -556,13 +556,13 @@ end 'appendPromotionRuntimeCall'
 // ⭐⭐ **MINT A POST-PARSE SSA VALUE WITHOUT WRITING INTO THE PARSE MEMO.**
 //
 // `LowerMaxonToStd` reads a value's tag out of `IrFunction.valueTags` for every op it lowers and seeds its
-// own numbering from `valueTags.count()`, so a ValueId allocated without an entry in all four dense
-// columns would shift every later value's type by one — the invariant `Parser.mintValue` and
+// own numbering from `valueTags.count()`, so a ValueId allocated without an entry in every dense column
+// would shift every later value's type by one — the invariant `Parser.mintValue` and
 // `ModuleInit.SynthesizedFunction.mint` each keep for their own tier.
 //
-// ⚠ **AND THE FOUR COLUMNS ARE ALIASED WITH THE FILE'S PARSE ARTIFACT.** `IrFunction.shallowCopy` —
-// which `IrModule.merge` relocates every function through — carries `valueTags`, `valueNameIds`,
-// `valueClosureEnv` and `valueIsCapturingClosure` across BY REFERENCE, and the artifact is memoized:
+// ⚠ **AND THE DENSE COLUMNS ARE ALIASED WITH THE FILE'S PARSE ARTIFACT.** `IrFunction.shallowCopy` —
+// which `IrModule.merge` relocates every function through — carries them across BY REFERENCE, and the
+// artifact is memoized:
 // `queryAllModule` hands the same object back on a cache hit, and the stdlib body-demand fixpoint re-folds
 // artifacts within a single compile. Pushing onto the merged function's column would therefore lengthen
 // the ARTIFACT's column, and every later fold would inherit values no op defines. So the first mint
@@ -591,6 +591,7 @@ type PromotedValueMinter
 			self.func.valueTags = self.func.valueTags.clone()
 			self.func.valueNameIds = self.func.valueNameIds.clone()
 			self.func.valueBrandIds = self.func.valueBrandIds.clone()
+			self.func.valueMintedSole = self.func.valueMintedSole.clone()
 			self.func.valueClosureEnv = self.func.valueClosureEnv.clone()
 			self.func.valueIsCapturingClosure = self.func.valueIsCapturingClosure.clone()
 			self.deAliased = true
@@ -600,6 +601,7 @@ type PromotedValueMinter
 		self.func.valueTags.push(tag)
 		self.func.valueNameIds.push(UnnamedTypeId)
 		self.func.valueBrandIds.push(UnnamedTypeId)
+		self.func.valueMintedSole.push(false)
 		self.func.valueClosureEnv.push(0)
 		self.func.valueIsCapturingClosure.push(false)
 		return id

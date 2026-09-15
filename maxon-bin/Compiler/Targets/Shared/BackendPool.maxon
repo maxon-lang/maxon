@@ -282,7 +282,8 @@ export type BackendWorker
 	module function finish(body BackendUnitBody) returns FinishedUnit throws RegAllocRefusal
 		var costs = PoolPhaseCosts.create(RegAllocPhase.allCases.count())
 		var iselCost = PhaseDelta.zero()
-		let lowered = lowerAndSplitUnit(self.lowering(), unitModule: body.unitModule, target: self.target, costs: costs, iselCost: iselCost)
+		// A `var`: the allocator rewrites its module and function in place.
+		var lowered = lowerAndSplitUnit(self.lowering(), unitModule: body.unitModule, target: self.target, costs: costs, iselCost: iselCost)
 		var unitFunc = lowered.targetModule.getFunc(UnitFunctionIndex)
 		var counters = RegAllocCounters.create()
 		var facts = RegAllocFacts.create()

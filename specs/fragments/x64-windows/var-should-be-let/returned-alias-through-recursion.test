@@ -1,0 +1,23 @@
+// Test: returned-alias-through-recursion
+
+typealias Integer = int(i64.min to i64.max)
+
+function pick(s String, depth Integer) returns String
+	if depth == 0 'bottom'
+		return s
+	end 'bottom'
+
+	return pick(s, depth: depth - 1)
+end 'pick'
+
+function main() returns ExitCode
+	let n = 7
+	let a = "lit{n}"
+	var b = pick(a, depth: 3)
+	b.append("x")
+	print("{a} {b}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3078: <fragment>:16:6: cannot assign the result of 'pick', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()

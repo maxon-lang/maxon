@@ -593,6 +593,7 @@ export type SynthesizedFunction
 	var valueTags as ValueTypeTagArray
 	var valueNameIds as TypeNameIdArray
 	var valueBrandIds as TypeNameIdArray
+	var valueMintedSole as BoolArray
 	var valueClosureEnv as ValueIdArray
 	var valueIsCapturingClosure as BoolArray
 
@@ -603,6 +604,7 @@ export type SynthesizedFunction
 		var valueTags = ValueTypeTagArray.create()
 		var valueNameIds = TypeNameIdArray.create()
 		var valueBrandIds = TypeNameIdArray.create()
+		var valueMintedSole = BoolArray.create()
 		var valueClosureEnv = ValueIdArray.create()
 		var valueIsCapturingClosure = BoolArray.create()
 
@@ -610,6 +612,7 @@ export type SynthesizedFunction
 			valueTags.push(maxonTypeTag(paramType))
 			valueNameIds.push(typeNameIdOf(paramType))
 			valueBrandIds.push(UnnamedTypeId)
+			valueMintedSole.push(false)
 			valueClosureEnv.push(0)
 			valueIsCapturingClosure.push(false)
 		end 'eachParam'
@@ -620,11 +623,11 @@ export type SynthesizedFunction
 		// `DeadFunctionElimination.markCompilerOwnedRoot` (E4015 again, for a program that installs neither and
 		// so has no pair to count) and at `TargetPrinter.isRuntimeFunction`. Both functions run on `main`'s green
 		// thread in a program with green threads, so both carry its stack guard (`IrFunction.needsGreenThreadStackGuard`).
-		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramTypes.count(), maxonParamTypes: paramTypes, valueTags: valueTags, valueNameIds: valueNameIds, valueBrandIds: valueBrandIds, valueClosureEnv: valueClosureEnv, valueIsCapturingClosure: valueIsCapturingClosure, valueWitnessIds: ValueIdArray.create(), returnLine: 0, declaredAt: SourcePosition.synthesized(), needsGreenThreadStackGuard: true)
+		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramTypes.count(), maxonParamTypes: paramTypes, valueTags: valueTags, valueNameIds: valueNameIds, valueBrandIds: valueBrandIds, valueMintedSole: valueMintedSole, valueClosureEnv: valueClosureEnv, valueIsCapturingClosure: valueIsCapturingClosure, valueWitnessIds: ValueIdArray.create(), returnLine: 0, declaredAt: SourcePosition.synthesized(), needsGreenThreadStackGuard: true)
 		let funcIndex = module.funcCount() as FuncIndex
 		module.pushFunc(func)
 
-		return Self{module: module, project: project, funcIndex: funcIndex, func: func, block: module.addBlock(func, label: b"entry", heat: BlockHeat.normal), valueTags: valueTags, valueNameIds: valueNameIds, valueBrandIds: valueBrandIds, valueClosureEnv: valueClosureEnv, valueIsCapturingClosure: valueIsCapturingClosure}
+		return Self{module: module, project: project, funcIndex: funcIndex, func: func, block: module.addBlock(func, label: b"entry", heat: BlockHeat.normal), valueTags: valueTags, valueNameIds: valueNameIds, valueBrandIds: valueBrandIds, valueMintedSole: valueMintedSole, valueClosureEnv: valueClosureEnv, valueIsCapturingClosure: valueIsCapturingClosure}
 	end 'open'
 
 	// Allocate a fresh ValueId AND record its type, in lockstep — `Parser.mintValue`'s twin over the
@@ -639,6 +642,7 @@ export type SynthesizedFunction
 		self.valueTags.push(tag)
 		self.valueNameIds.push(self.projectScopedNameId(tag, nameId: nameId))
 		self.valueBrandIds.push(UnnamedTypeId)
+		self.valueMintedSole.push(false)
 		self.valueClosureEnv.push(0)
 		self.valueIsCapturingClosure.push(false)
 		return id

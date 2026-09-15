@@ -453,3 +453,84 @@ end 'main'
 ```maxoncstderr
 error E3019: <fragment>:16:21: cannot pass 'SharedFacts' to function that mutates parameter 'self' (in main)
 ```
+
+<!-- test: returned-alias-to-a-mutating-parameter -->
+### Passing a `let` String Through a Call That Returns It
+
+A call is a launder too when it may hand back its argument: `pass(g)` may be `g`'s own record, so `grow`
+would write it while `g` is still read.
+```maxon
+function grow(s String)
+	s.append("XY")
+end 'grow'
+
+function pass(s String) returns String
+	return s
+end 'pass'
+
+function main() returns ExitCode
+	let n = 7
+	let g = "hello{n}"
+	grow(pass(g))
+	print("{g}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3019: specs/fragments/immutable-method-call/returned-alias-to-a-mutating-parameter.test:13:2: cannot pass 'g' to function that mutates parameter 's' (in main)
+```
+
+<!-- test: let-record-written-through-a-returned-container -->
+### Writing a `let` Array Through a Call That Returns It
+
+The receiver door asks of a call's result what it asks of the name the result may be.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function pass(s IntArray) returns IntArray
+	return s
+end 'pass'
+
+function main() returns ExitCode
+	let a = IntArray.create()
+	pass(a).push(9)
+	return a.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3019: specs/fragments/immutable-method-call/let-record-written-through-a-returned-container.test:11:10: cannot pass 'a' to function that mutates parameter 'self' (in main)
+```
+
+<!-- test: let-record-alias-of-a-parameter-passed-through-a-call -->
+### A `let` Alias of a Parameter, Through a Call
+
+The alias is blamed through a call exactly as `push-on-let-alias-of-parameter-error` blames it by name;
+`q` is read after the call.
+```maxon
+function grow(s String)
+	s.append("XY")
+end 'grow'
+
+function pass(s String) returns String
+	return s
+end 'pass'
+
+function tagIt(p String)
+	let q = p
+	grow(pass(q))
+	print("{q}\n")
+end 'tagIt'
+
+function main() returns ExitCode
+	let n = 7
+	var a = "lit{n}"
+	tagIt(a)
+	a.append("?")
+	print("{a}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3019: specs/fragments/immutable-method-call/let-record-alias-of-a-parameter-passed-through-a-call.test:12:2: cannot pass 'q' to function that mutates parameter 's' (in tagIt)
+```

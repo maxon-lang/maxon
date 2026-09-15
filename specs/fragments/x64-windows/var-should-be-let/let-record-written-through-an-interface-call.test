@@ -1,0 +1,33 @@
+// Test: let-record-written-through-an-interface-call
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Bumpable
+	function bump()
+end 'Bumpable'
+
+type Point implements Bumpable
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+
+	export function bump()
+		self.x = self.x + 1
+	end 'bump'
+end 'Point'
+
+function relay(p Bumpable) returns Bumpable
+	return p
+end 'relay'
+
+function main() returns ExitCode
+	let a = Point.create(1)
+	var b = relay(a)
+	b.bump()
+	return a.x
+end 'main'
+---
+CompilerError:
+error E3078: <fragment>:27:6: cannot assign the result of 'relay', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()

@@ -1,0 +1,29 @@
+// Test: let-record-laundered-through-a-container
+
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Point'
+
+typealias PointArray = Array with Point
+
+function launder(p Point) returns Point
+	var arr = PointArray.create()
+	arr.push(p)
+	return try arr.get(0) otherwise panic("an element was pushed")
+end 'launder'
+
+function main() returns ExitCode
+	let a = Point.create(1)
+	var b = launder(a)
+	b.x = 99
+	return a.x
+end 'main'
+---
+CompilerError:
+error E3102: <fragment>:25:9: use of moved value 'a': its ownership moved to another binding through the earlier call to 'launder'

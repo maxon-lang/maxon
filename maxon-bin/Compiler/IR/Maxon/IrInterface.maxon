@@ -772,59 +772,43 @@ end 'AssociatedAbiBinding'
 // A binding is a RENDERED type name (`InterfaceConformance.withArgs`), and comparing those names IS the whole
 // test — no resolution, no class. `declaredType` is resolved only so the LOWERING has the formal's type;
 // `renderedTypeNameAbiType` is that reduction, and it is the caller's business rather than the comparison's.
-// The pre-first-match seed for the fold below. It is never READ — `sawOne` gates every use — and it exists
-// because a `var` must hold something before the walk finds its first conformer. `NoSourceLine`/`NoSourceColumn`
-// and the empty path say "this names nothing" rather than pointing at line 1 of some file.
-function unreadConformanceSeed() returns ConformanceDecl
-	return ConformanceDecl.create(EmptySourceText, interfaces: InterfaceConformanceArray.create(), nameLine: NoSourceLine, nameColumn: NoSourceColumn, filePath: CompilerOwnedDeclFilePath)
-end 'unreadConformanceSeed'
-
-// The position a synthesized declaration reports from — no line and no column, so a reader can tell it from
-// a real one rather than seeing a confident `1:1`.
-let NoSourceLine = 0 as LineNumber
-let NoSourceColumn = 0 as ColumnNumber
-
 export function associatedAbiBindingOf(conformances ConformanceDeclArray, signatures ProgramSignatures, interfaceName ByteArray, position ElementIndex) returns AssociatedAbiBinding
-	// The pre-first-match seed. It is never READ — `sawOne` gates every use — and it exists because a `var`
-	// must hold something before the walk finds the first conformer. `CompilerOwnedDeclFilePath` is the empty
-	// path the other synthesized declarations use, so the seed names no file rather than a wrong one.
-	var seenDecl = unreadConformanceSeed()
-	var seenBinding = EmptySourceText
-	var sawOne = false
-
 	for decl in conformances 'eachDeclaringType'
 		for entry in decl.interfaces 'eachInterface'
-			if not entry.interfaceName.equals(interfaceName) 'otherInterface'
+			if bindsAssociatedAt(entry, interfaceName: interfaceName, position: position) 'theFirstConformer'
+				return agreementWith(conformances, signatures: signatures, interfaceName: interfaceName, position: position, first: decl, firstBinding: try entry.withArgs.get(position) otherwise panic("associatedAbiBindingOf: withArgs.get OOB at {position}, which `bindsAssociatedAt` excludes"))
+			end 'theFirstConformer'
+		end 'eachInterface'
+	end 'eachDeclaringType'
+
+	return AssociatedAbiBinding.unconformed
+end 'associatedAbiBindingOf'
+
+// Every conformer's binding held against the first conformer's, in source order: the first that differs, or the
+// one they all share.
+function agreementWith(conformances ConformanceDeclArray, signatures ProgramSignatures, interfaceName ByteArray, position ElementIndex, first ConformanceDecl, firstBinding ByteArray) returns AssociatedAbiBinding
+	for decl in conformances 'eachDeclaringType'
+		for entry in decl.interfaces 'eachInterface'
+			if not bindsAssociatedAt(entry, interfaceName: interfaceName, position: position) 'bindsNothingHere'
 				continue
-			end 'otherInterface'
+			end 'bindsNothingHere'
 
-			// A conformance that bound FEWER arguments than the interface declares is already E3016's to
-			// report; it constrains nothing here and is passed over rather than read out of bounds.
-			if position >= entry.withArgs.count() 'boundNothingAtThisPosition'
-				continue
-			end 'boundNothingAtThisPosition'
+			let binding = try entry.withArgs.get(position) otherwise panic("agreementWith: withArgs.get OOB at {position}, which `bindsAssociatedAt` excludes")
 
-			let binding = try entry.withArgs.get(position) otherwise panic("associatedAbiBindingOf: withArgs.get OOB at {position}, which the guard above excludes")
-
-			if not sawOne 'firstConformer'
-				seenDecl = decl
-				seenBinding = binding
-				sawOne = true
-				continue
-			end 'firstConformer'
-
-			if not seenBinding.equals(binding) 'bindingsDisagree'
-				return AssociatedAbiBinding.disagreed(seenDecl, firstBinding: seenBinding, second: decl, secondBinding: binding)
+			if not firstBinding.equals(binding) 'bindingsDisagree'
+				return AssociatedAbiBinding.disagreed(first, firstBinding: firstBinding, second: decl, secondBinding: binding)
 			end 'bindingsDisagree'
 		end 'eachInterface'
 	end 'eachDeclaringType'
 
-	if not sawOne 'nothingConforms'
-		return AssociatedAbiBinding.unconformed
-	end 'nothingConforms'
+	return AssociatedAbiBinding.agreed(first, binding: firstBinding, declaredType: renderedTypeNameAbiType(firstBinding, signatures: signatures))
+end 'agreementWith'
 
-	return AssociatedAbiBinding.agreed(seenDecl, binding: seenBinding, declaredType: renderedTypeNameAbiType(seenBinding, signatures: signatures))
-end 'associatedAbiBindingOf'
+// Does `entry` conform to `interfaceName` and bind its associated type at `position`? A conformance that bound
+// FEWER arguments than the interface declares is already E3016's to report; it constrains nothing here.
+function bindsAssociatedAt(entry InterfaceConformance, interfaceName ByteArray, position ElementIndex) returns bool
+	return entry.interfaceName.equals(interfaceName) and position < entry.withArgs.count()
+end 'bindsAssociatedAt'
 
 // ⭐ **WHAT *ONE NAMED CONFORMER* BINDS `interfaceName`'s associated type at `position` to — the per-conformer
 // read the FOLD above deliberately cannot give.** `associatedAbiBindingOf` answers for the program, because

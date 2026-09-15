@@ -98,10 +98,16 @@ export type BlockKeyedTable uses Value
 	// column, and `place` never reallocates. `IrFunction.nextBlockId` IS that count.
 	export static function forBlockCount(blockCount BlockId) returns Self
 		var table = Self.create()
-		table.values.reserve(blockCount as ElementIndex)
-		table.present.growFilled(blockCount as ElementIndex, value: false)
+		table.resetForBlockCount(blockCount)
 		return table
 	end 'forBlockCount'
+
+	// Empty, and sized as `forBlockCount` sizes one, in the storage the table already holds.
+	export function resetForBlockCount(blockCount BlockId)
+		self.values.clear()
+		self.values.reserve(blockCount as ElementIndex)
+		self.present.refill(blockCount as ElementIndex, value: false)
+	end 'resetForBlockCount'
 
 	// Record `value` for block `id`.
 	//

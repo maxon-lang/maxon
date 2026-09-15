@@ -158,7 +158,7 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 
 		#if os(Windows)
 			// file:///C:/path produces path "/C:/path" — strip leading slash before drive letter
-			var filePath = url.path()
+			let filePath = url.path()
 			let pathLen = filePath.byteLength()
 
 			if pathLen >= 3 'checkDrive'
@@ -171,7 +171,7 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 					if filePath.byteAtOrPanic(2) == 58 'hasColon'
 						if (driveByte >= 65 and driveByte <= 90) or (driveByte >= 97 and driveByte <= 122) 'isDrive'
 							let trimmed = try urlPathBytes.slice(1, pathLen) otherwise panic("FilePath: drive-strip slice — pathLen >= 3 guaranteed")
-							filePath = String.init(trimmed)
+							return String.init(trimmed)
 						end 'isDrive'
 					end 'hasColon'
 				end 'leadingSlash'
@@ -193,18 +193,11 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		return path
 	end 'toString'
 
-	/// Returns a copy of `s` suitable for case-insensitive comparison
-	/// on the host filesystem. Windows: lower-cased clone (NTFS treats
+	/// `s` in the form the host filesystem compares paths in. Windows: lower-cased (NTFS treats
 	/// `C:\Foo` and `c:\foo` as the same path). POSIX: returned as-is.
-	///
-	/// `String.toLower` mutates its receiver's managed buffer in place,
-	/// so the clone is mandatory — otherwise this would silently lower-
-	/// case the caller's string (typically the FilePath's own `path`
-	/// field), and every later read of `.path` (subprocess spawn, file
-	/// I/O, error reporting) would see the lower-cased copy.
 	static function canonicalForCompare(s String) returns String
 		#if os(Windows)
-			return s.clone().toLower()
+			return s.toLower()
 		#else
 			return s
 		#endif

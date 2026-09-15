@@ -1,0 +1,16 @@
+// Test: returned-alias-in-an-unreached-function
+
+function helper() returns ExitCode
+	let fp = try FilePath.from("some/dir") otherwise panic("a relative path is valid")
+	var s = fp.toString()
+	s.append(" more")
+	print("{s}\n")
+	return 0
+end 'helper'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E3078: <fragment>:5:6: cannot assign the result of 'toString', which may share storage with immutable variable 'fp', to mutable binding 's'; use 'let' instead of 'var', or use clone()

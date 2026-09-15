@@ -320,15 +320,23 @@ export type IrModule uses Op
 	// quadratic before `spreadHash` and a 3x probe tax after it.
 	export function blockIndexById(func IrFunction) returns BlockIndexById
 		var byId = BlockIndexById.forBlockCount(func.nextBlockId)
+		self.placeBlockPositions(func, into: byId)
+		return byId
+	end 'blockIndexById'
 
+	// `blockIndexById` into a table the caller keeps, for one that indexes one function after another.
+	export function refillBlockIndexById(func IrFunction, into BlockIndexById)
+		into.resetForBlockCount(func.nextBlockId)
+		self.placeBlockPositions(func, into: into)
+	end 'refillBlockIndexById'
+
+	function placeBlockPositions(func IrFunction, into BlockIndexById)
 		for i in 0 upto func.blockRefs.count() 'eachBlock'
 			let blockRef = try func.blockRefs.get(i) otherwise panic("blockIndexById: blockRefs.get OOB at {i} despite the upto bound")
 			let block = try self.blocks.get(blockRef) otherwise panic("blockIndexById: blockRef {blockRef} from func.blockRefs not in blocks")
-			byId.place(block.id, value: i)
+			into.place(block.id, value: i)
 		end 'eachBlock'
-
-		return byId
-	end 'blockIndexById'
+	end 'placeBlockPositions'
 
 	// Refill `scratch` for a splice of `func`'s rebuilt body: its live op slots, and its `BlockId -> BlockRef`
 	// map as a dense column over its id space, with `absent` — a ref no block has — standing for an id the
@@ -937,7 +945,7 @@ end 'computeBlockCompaction'
 // truncate so the renumbered indices line up with the relocated blocks.
 function rewriteFuncBlockRefs(functions IrFunctionArray, plan OpCompactionPlan)
 	for funcIdx in 0 upto functions.count() 'rewriteFunc'
-		let func = try functions.get(funcIdx) otherwise panic("rewriteFuncBlockRefs: functions.get OOB at {funcIdx}")
+		var func = try functions.get(funcIdx) otherwise panic("rewriteFuncBlockRefs: functions.get OOB at {funcIdx}")
 
 		for pos in 0 upto func.blockRefs.count() 'eachRef'
 			let oldRef = try func.blockRefs.get(pos) otherwise panic("rewriteFuncBlockRefs: blockRefs.get OOB at {pos}")

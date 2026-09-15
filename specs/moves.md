@@ -40,34 +40,29 @@ drop the very box `u` still names. An immutable source cannot be rebound, so the
 and needs no refcount — the ONE drop stays with the owner, which structurally outlives every alias of
 it (an alias can only be declared later, in the owner's scope or one nested inside it).
 
-The mirror shape — a MUTABLE binding made from an immutable name (`var u = t`) — is refused outright
-as **E3078**, because it would reach the immutable name's storage through a writable one. See
-`specs/var-should-be-let.md`.
+The mirror shape — a MUTABLE name made from an immutable one (`var u = t`, or `u = t` into a `var`) —
+MOVES `t` when `t` is its record's sole owner, so no `let` is left reading what `u` writes. A `t` that is
+not sole — an alias, a field, a borrow of an element, a module-level `let` — cannot move, so the bind is
+refused as **E3078** while `t` is still read afterwards; so is a value that may be `t`'s record, such as a
+call that hands it back, when `u` goes on to write it. See `specs/var-should-be-let.md`.
 
 When a move does happen the source is left MOVED-FROM: reading it is a compile error
 (use-after-move), and its scope-exit drop is SKIPPED — the value drops once, through its new owner. A
 fresh owned temporary (`build()`, `"{x}"`) is owned by no binding, so binding it is a CONSUME, not a
 move — nothing is poisoned.
 
-⭐ **A DURABLE STORE IS NOT A MOVE, AND THAT IS THE BOUNDARY OF EVERYTHING ABOVE (⚖ user ruling,
-2026-08-12).** A CONSUMING hand-off — a call argument the callee keeps, a struct-literal or union-payload
-field, a container element, a write into a field, a global's slot, or a by-reference parameter's cell —
-hands the value to storage that owes a drop of its OWN. So the sink takes its own reference and the
-source binding stays LIVE, releasing the reference it always held at its own scope exit. Both sinks
-co-own; the refcount rises by one per sink and falls by one per owner. No name is poisoned, and an ALIAS
-of the source stays readable too.
+⭐ **A DURABLE STORE IS NOT A MOVE, WHATEVER THE SOURCE.** A CONSUMING hand-off — a call argument the
+callee keeps, a struct-literal or union-payload field, a container element, a write into a field, a
+global's slot, or a by-reference parameter's cell — hands the value to storage that owes a drop of its
+OWN. So the sink takes its own reference and the source stays LIVE, a `let` source included, releasing the
+reference it always held at its own scope exit; the refcount rises by one per sink and falls by one per
+owner (`specs/witness-managed-return.md`). What is refused instead is a later WRITE through the sink that
+may reach a record a `let` still reads (E3159, `specs/var-should-be-let.md`). Only a `var` NAME made from a
+sole `let` moves it.
 
-> This prose used to say the opposite — that a consuming hand-off *"moves the value out of whichever
-> binding owns it regardless of mutability, and poisons every live name that reads it"*. The
-> justification was that the compiler is move-only and has no `__mm_incref`. It does have one, and the rule was
-> retracted: a value stored into a long-lived field AND into a transient local array needs a reference
-> for each, and no rewriting of the source can supply that under a move
-> (`specs/witness-managed-return.md` is the program that forced it).
-
-⚠ **A second NAME is still not a sink.** `let u = t` / `s = t` over an ordinary local gives `u` no drop
-of its own — it inherits the one `t` owed — so it MOVES, and every use-after-move case below is
-unchanged. The one rebind that IS a durable store is a write to a by-reference parameter, whose cell is
-the CALLER's storage and outlives this frame.
+⚠ **A second NAME is not a sink.** `let u = t` from a `var`, or `s = t` into a `var`, gives the new name
+no drop of its own — it inherits the one `t` owed — so it MOVES. The one rebind that IS a durable store
+is a write to a by-reference parameter, whose cell is the CALLER's storage and outlives this frame.
 
 A WRITE to a moved-from `var` REVIVES it: the binding owns the new value and is usable again. A value
 moved on some-but-not-all paths of an `if`/`else`/`match` is DROPPED path-sensitively — its drop is
@@ -143,11 +138,10 @@ The box carries two references and is released twice: once by `held`'s destructo
 scope-exit drop.
 
 ⚠ **This is the ONE boundary of the move rule the rest of this file pins.** A move happens between
-BINDINGS (`let u = t`, `s = t`), where the new name owes the drop the old one owed; it does not happen
-into a durable sink, where the sink owes a drop of its OWN. Every use-after-move case below is a
+BINDINGS (`let u = t` from a `var`, `s = t`), where the new name owes the drop the old one owed; it does
+not happen into a durable sink, where the sink owes a drop of its OWN. Every use-after-move case below is a
 binding-to-binding move and is unaffected by that distinction; the two consuming-hand-off cases that are
-NOT (this one and `call-arg-consumed-at-two-positions`) both show the co-owning side. (This case used to
-be E3102, on the premise that the compiler has no `__mm_incref`.)
+NOT (this one and `call-arg-consumed-at-two-positions`) both show the co-owning side.
 
 <!-- test: consume-through-an-alias-keeps-both-live -->
 ```maxon
@@ -184,8 +178,8 @@ v1v1
 ### Use After Move-On-Bind
 
 `t` is a `var`, so `let u = t` MOVES it; the following `print(t)` reads the moved-from binding and is
-rejected at the use. (With `let t` the same two lines are an ALIAS and both names stay readable — see
-`immutable-rebind-aliases` below.)
+rejected at the use. With `let t` the same two lines are an ALIAS and both names stay readable
+(`immutable-rebind-aliases`, above).
 
 <!-- test: use-after-move-on-bind -->
 ```maxon
@@ -259,20 +253,12 @@ end 'main'
 error E3102: <fragment>:12:8: use of moved value 't': its ownership moved to another binding at an earlier bind or assignment
 ```
 
-### An Immutable Source Is Aliased at the Assignment Door Too — and the Second Name Takes Its Own Reference
+### An Immutable Source Moves at the Assignment Door Too
 
-`s = t` MOVES when `t` is a `var` (above) and ALIASES when `t` is a `let`. That is the same ownership
-ruling (2026-08-04) the DECLARATION door already applies at `immutable-rebind-aliases`: what makes two
-names for one value safe is MUTABILITY, not linearity, so an immutable source is never left moved-from
-and every name stays readable.
-
-⚠ **THE TWO DOORS AGREE ON THE RULE AND NOT ON WHAT IT COSTS.** A declaration's alias is free — the new
-name is declared INSIDE the source's scope, so the source outlives it and keeps the one drop, and no
-refcount is involved. An assignment's destination already exists, at a scope depth this door cannot
-bound, and already owes a drop of its own — so it must hold a REFERENCE of its own, or the two names
-would release one box twice. The store takes one (`__mm_retain` / `__str_retain`) and the source keeps
-the one it has always held: the same co-ownership the 2026-08-12 durable-store ruling gives a struct
-field, a container element and a by-reference parameter's cell.
+`s = t` MOVES `t` whether it is a `var` (above) or a sole `let`: the destination is a mutable name, so it
+inherits the drop `t` owed rather than leaving a `let` readable beside a mutable name for its record. So
+the second assignment below reads a moved value. A declaration `let u = t` aliases instead: both names are
+immutable.
 
 <!-- test: immutable-rebind-on-assign-aliases -->
 ```maxon
@@ -294,19 +280,16 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-v3v3v3
+```maxoncstderr
+error E3102: <fragment>:13:6: use of moved value 't': its ownership moved to another binding at an earlier bind or assignment
 ```
 
-### The Destination May Outlive the Source, Which Is Why the Reference Has To Be Real
+### The Destination May Outlive the Source, and the Move Is What Makes That Sound
 
-`kept` is declared OUTSIDE the block that declares `short`, so an alias that merely skipped the poison
-would leave `kept` naming a box the block exit had already freed — a use-after-free, and a second
-release at `kept`'s own scope exit that the leak gate reports as exit 101. The retain is what makes the
-two releases match the two references. The `print(short)` inside the block is the half a MOVE rejects.
+`kept` is declared OUTSIDE the block that declares `short`, so the record must outlive `short`'s scope. A
+move hands `kept` the drop `short` owed, so the block exit releases nothing and `kept` releases the record
+once, at its own scope exit. The price of the move is the `print(short)` inside the block, which reads a
+moved value.
 
 <!-- test: immutable-rebind-on-assign-outlives-its-source -->
 ```maxon
@@ -327,20 +310,14 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-v2v2
+```maxoncstderr
+error E3102: <fragment>:13:9: use of moved value 'short': its ownership moved to another binding at an earlier bind or assignment
 ```
 
-### The Harness's Own Shape: One Immutable Index, Two Outer Cursors
+### One Immutable Index, Two Outer Cursors
 
-The loop `SpecParser.parseProgramArgs` is built from — a per-iteration `let next` handed to two `var`s
-declared outside the loop, because the next segment's start and the next character's position ARE that
-one index. Under a move it was `E3102` on the second assignment, for a program whose three names only
-ever read. Each iteration takes two references and releases the two the previous iteration left, so the
-box count is flat across the loop.
+A per-iteration `let next` handed to two `var`s declared outside the loop: the first assignment moves
+`next`, so the second reads a moved value.
 
 <!-- test: immutable-rebind-on-assign-two-cursors-in-a-loop -->
 ```maxon
@@ -361,19 +338,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-abc
+```maxoncstderr
+error E3102: <fragment>:12:9: use of moved value 'next': its ownership moved to another binding at an earlier bind or assignment
 ```
 
-### An Immutable Source Declared Outside the Loop Is Assignable From Inside It
+### Moving an Immutable Source Declared Outside the Loop Is Refused, as a `var`'s Is
 
 The loop-escape refusal exists because a MOVE across a loop boundary has no reconciliation — the back
 edge would re-move the binding, and a `break` would leave it live on one exit while giving it away on
-the other. An immutable source is never moved, so there is nothing to reconcile: each iteration takes
-one reference and releases the one the previous iteration took, and the source's own drop is untouched.
+the other. A `let` assigned into a `var` moves, so it gets the answer a `var` source gets (E2015).
 
 <!-- test: immutable-rebind-on-assign-from-outside-a-loop -->
 ```maxon
@@ -397,21 +370,16 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-v9v9
+```maxoncstderr
+error E2015: <fragment>:14:3: Unsupported: moving a value declared outside this loop from inside the loop body — its drop on the loop's other exit paths (the back edge would re-move it next iteration; a `break` leaves it live on the normal exit) needs path-sensitive elaboration across the loop boundary, which arrives with a later wave. Move the value into the loop body, or restructure so the move does not cross the loop boundary
 ```
 
-### A `for` Element Is an Immutable Source That No BINDING Owns
+### A `for` Element Is Copied, Not Moved
 
-A loop variable is declared immutable (`declareLoopVariable`) and is enrolled in no owned set: for a
-managed element the per-trip value owns its record through the STATEMENT rather than through a name. So
-it satisfies the alias rule and has no second owner to keep alive — the destination adopts the `+1` it
-was handed and the statement-end drop is cancelled, exactly as a durable sink adopts an owned
-temporary. An incref/decref pair around a value nothing else releases would be pure churn, and this is
-the case that says which of the two arms a nameless owned value takes.
+A loop variable is declared immutable (`declareLoopVariable`) and owns nothing: its record is the
+container's element. It cannot move, and a `String` handed from it to a mutable name is COPIED at the
+door, so the destination owns a record of its own and the element is untouched. An aggregate element is
+not copied, so a mutable name shares the container's record.
 
 <!-- test: immutable-rebind-on-assign-from-a-loop-element -->
 ```maxon
@@ -441,18 +409,11 @@ end 'main'
 v2
 ```
 
-### The Second Name Is a Second NAME, Not a Copy
+### A Write Through the Moved Record Is the New Owner's, and the Old Name Is Gone
 
-The reference the destination takes is a reference to the SAME box, so a write through it shows on the
-source — reference semantics, exactly as `let q = p` has at the declaration door and exactly as a
-container element and a struct field already do for a value read out of an immutable `let`.
-
-⚠ **THE DECLARATION SPELLING OF THESE THREE LINES IS E3078** (`error.var-from-immutable-struct`), and
-that is not an inconsistency to be tidied away: E3078 is asked where a mutable NAME IS DECLARED for an
-immutable name's value — a rule about DECLARATIONS, not about assignments.
-the compiler's move model closed this door as a SIDE EFFECT of poisoning the source rather than by any rule,
-and closing it here while a container element and a struct field stay open would be another answer to
-one question rather than a guarantee.
+`q = p` hands `q` the record `p` owned alone, so `q.x = 99` writes a record no immutable name still reads —
+`p` is moved-from, and reading it is E3102. The declaration spelling, `var q = p`, is the same move
+(`var-from-sole-immutable-struct-moves`).
 
 <!-- test: immutable-rebind-on-assign-is-a-second-name -->
 ```maxon
@@ -474,18 +435,14 @@ function main() returns ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
-```exitcode
-0
-```
-```stdout
-99
+```maxoncstderr
+error E3102: <fragment>:15:10: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
 ```
 
-### A MUTABLE Source Assigned Away Still Moves, and a Write Through Its Old Name Is Still Refused
+### A MUTABLE Source Assigned Away Moves, and a Write Through Its Old Name Is Refused
 
-The assignment twin of `field-store-after-move`, and the boundary of the exemption above: what exempts
-a rebind is the SOURCE's `let`, never the assignment. `p` is a `var`, so `q = p` MOVES it and `p.x = 99`
-writes a box `p` no longer owns.
+The assignment twin of `field-store-after-move`: `q = p` MOVES the `var` `p`, and `p.x = 99` writes a box
+`p` no longer owns.
 
 <!-- test: field-store-after-move-on-assign -->
 ```maxon
@@ -543,7 +500,7 @@ v10v20
 ### Second Alias Of a Moved Value Is Use-After-Move
 
 `a` is a `var`, so `let b = a` MOVES it; `let c = a` then reads the moved-from `a` and is rejected at
-the use. A second alias of a value that is still OWNED is legal — that is `immutable-rebind-aliases`.
+the use. A second alias of a `let` is legal — that is `immutable-rebind-aliases`.
 
 <!-- test: multiple-alias -->
 ```maxon
@@ -658,7 +615,7 @@ v1
 
 `let u = (t)` moves the `var` `t` through redundant parentheses; the following `print(t)` reads the
 moved-from binding and is rejected at the use. The parens do not exempt the source from poisoning — the
-gate sees through them to the bare local reference underneath, and reads its mutability there.
+gate sees through them to the bare local reference underneath, and moves it there.
 
 <!-- test: paren-use-after-move -->
 ```maxon
@@ -927,18 +884,19 @@ owned managed box string long enough to require heap now
 owned managed box string long enough to require heap now
 ```
 
-### A Mutable Binding May Not Be Made From an Immutable Name
+### A Mutable Binding Takes a `let`'s Record Only by Move
 
-The mirror of the alias above. `let t = …` then `var u = t` would reach `t`'s storage through a
-writable name, so it is refused at the bind rather than tolerated — the remedies the message names are
-the two that keep single ownership intact: leave `u` immutable, or take an independent value with
-`clone()`. (A third fix lives at the DECLARATION: make `t` a `var` in the first place.)
+The mirror of the alias above. `let t = …` then `var u = t` MOVES `t` when `t` is its record's sole
+owner: `u` owns the record, and no `let` is left reading what `u` writes. A `let` that is not sole — an
+alias, a field of a `let` (below), a borrow of an element, a module-level `let` — cannot move, and a
+mutable binding made from it is **E3078**; the message names the two remedies: leave the new name
+immutable, or take an independent value with `clone()`.
 
-⚠ A **value**-typed source is unaffected — `int`/`float`/`bool`/`byte` copy, so there is no shared
-storage to reach. Only reference types (struct, union, function) are refused, and a PARAMETER is
-exempt: its storage is already the caller's copy, which is the line `E3019` draws too.
+⚠ A **value**-typed source is unaffected — `int`/`float`/`bool`/`byte` copy, and so does a function
+value, so there is no shared storage to reach. A parameter bound to a mutable name is not refused in the
+callee: a write through that name writes the parameter, and the caller's argument answers for it (E3019).
 
-<!-- test: error.var-from-immutable-struct -->
+<!-- test: var-from-sole-immutable-struct-moves -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -957,14 +915,14 @@ function main() returns ExitCode
 	return u.value
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:14:6: cannot assign immutable variable 't' to mutable binding 'u'; use 'let' instead of 'var', or use clone()
+```exitcode
+9
 ```
 
 ### The Refusal Follows the Chain, Parentheses and Tuple Positions Included
 
-`var u = t` and `var u = t.field` are one rule — *"whose storage would this writable name reach?"* — so the
-spellings that reach the same storage get the same answer. Redundant parentheses change nothing about what
+A FIELD of a `let` is not the `let`, so it cannot move: `var u = t.field` is refused, and the spellings that
+reach the same storage get the same answer. Redundant parentheses change nothing about what
 `(t).field` names, and a tuple's positional member `t.0` is its field `_0` under another spelling.
 
 <!-- test: error.var-from-immutable-through-parens -->

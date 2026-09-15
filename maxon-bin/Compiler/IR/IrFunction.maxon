@@ -189,6 +189,619 @@ end 'DebugValueLocation'
 
 export typealias DebugValueLocationArray = Array with DebugValueLocation
 
+// The immutable names of one function in declaration order: the `let` bindings the author wrote and the
+// module-level `let`s its body reads (`moduleLets`, image data among them in `images`). A value bound by two of
+// them appears twice; the first names it. `borrows` says a binding took no reference of its own — a field or
+// element read, a loop variable — so it borrows the record it names. `infos` is each local binding's `VarInfo`,
+// whose last use is final once the body is parsed and bounds how long the binding borrows what it names; a module
+// `let`'s is a record of its own that is never read for one.
+export type ImmutableBindings
+	export var values as ValueIdArray
+	export var names as ByteArrayArray
+	export var moduleLets as BoolArray
+	export var images as BoolArray
+	export var borrows as BoolArray
+	export var declTokens as TokenIndexArray
+	export var infos as VarInfoArray
+
+	export static function create() returns ImmutableBindings
+		return Self{values: ValueIdArray.create(), names: ByteArrayArray.create(), moduleLets: BoolArray.create(), images: BoolArray.create(), borrows: BoolArray.create(), declTokens: TokenIndexArray.create(), infos: VarInfoArray.create()}
+	end 'create'
+
+	export function record(value ValueId, name ByteArray, moduleLet bool, image bool, borrowsIt bool, declToken TokenIndex, info VarInfo)
+		self.values.push(value)
+		self.names.push(name)
+		self.moduleLets.push(moduleLet)
+		self.images.push(image)
+		self.borrows.push(borrowsIt)
+		self.declTokens.push(declToken)
+		self.infos.push(info)
+	end 'record'
+end 'ImmutableBindings'
+
+// A source position as one ordered key: the line in the high word, the column in the low one.
+export typealias PositionKey = int(0 to u64.max)
+
+let PositionLineShift = 32 as PositionKey
+
+export function positionKey(line LineNumber, column ColumnNumber) returns PositionKey
+	return ((line as PositionKey) shl PositionLineShift) or (column as PositionKey)
+end 'positionKey'
+
+// The token each call of a body ends at, by the call's position.
+export typealias TokenByPosition = Map with (PositionKey, TokenIndex)
+
+// ⭐ **A DOOR WHOSE VERDICT IS A WHOLE-PROGRAM QUESTION, SO THE SITE WAITS FOR `StorageProvenance`.** `name` is
+// what the author wrote there: the mutable binding a value was bound or assigned to, the mutable name that
+// outlives the call a value was bound to, or the record a write goes through. `token` is where the door happens,
+// which an immutable name's liveness is compared against.
+export type StorageSite
+	export let name as ByteArray
+	export let value as ValueId
+	export let line as LineNumber
+	export let column as ColumnNumber
+	export let token as TokenIndex
+
+	export static function create(name ByteArray, value ValueId, line LineNumber, column ColumnNumber, token TokenIndex) returns StorageSite
+		return Self{name: name, value: value, line: line, column: column, token: token}
+	end 'create'
+end 'StorageSite'
+
+export typealias StorageSiteArray = Array with StorageSite
+
+// A container method that writes its receiver, at the method's own token; `place` is the receiver as written.
+// `blameable` is false on the buffer surface, whose members are declared on a plain `self` and so write a
+// `let`-bound buffer legally.
+export type ReceiverWriteSite
+	export let receiver as ValueId
+	export let place as ByteArray
+	export let line as LineNumber
+	export let column as ColumnNumber
+	export let blameable as bool
+	export let token as TokenIndex
+
+	export static function create(receiver ValueId, place ByteArray, line LineNumber, column ColumnNumber, blameable bool, token TokenIndex) returns ReceiverWriteSite
+		return Self{receiver: receiver, place: place, line: line, column: column, blameable: blameable, token: token}
+	end 'create'
+end 'ReceiverWriteSite'
+
+export typealias ReceiverWriteSiteArray = Array with ReceiverWriteSite
+
+// ⭐ **A NAME BOUND OR ASSIGNED WHOLE TO A MUTABLE NAME, AND THE FIRST READ OF IT AFTER.** Filed where a `let` — or
+// a `var`, whose E3077 verdict needs the same fact — is bound or assigned to a mutable name (`destination`). Whether
+// the door moves the name, refuses it or does nothing is `StorageProvenance`'s to decide; the parser fills in the
+// first read of the name after the door on the door's own path (`Parser.requireBindingLive`), which is where a
+// move is observed.
+export type MoveSite
+	export let value as ValueId
+	export let source as ByteArray
+	export let sourceValue as ValueId
+	export let sourceIsMutable as bool
+	export let destination as ByteArray
+	export let line as LineNumber
+	export let column as ColumnNumber
+	export let token as TokenIndex
+	export let escapesLoop as bool
+	export var readAfter as bool = false
+	export var readLine as LineNumber = 0
+	export var readColumn as ColumnNumber = 0
+
+	export static function create(value ValueId, source ByteArray, sourceValue ValueId, sourceIsMutable bool, destination ByteArray, line LineNumber, column ColumnNumber, token TokenIndex, escapesLoop bool) returns MoveSite
+		return Self{value: value, source: source, sourceValue: sourceValue, sourceIsMutable: sourceIsMutable, destination: destination, line: line, column: column, token: token, escapesLoop: escapesLoop}
+	end 'create'
+
+	// The first read of the source after this door, and no later one.
+	export function noteRead(atLine LineNumber, atColumn ColumnNumber)
+		if self.readAfter 'alreadyRead'
+			return
+		end 'alreadyRead'
+
+		self.readAfter = true
+		self.readLine = atLine
+		self.readColumn = atColumn
+	end 'noteRead'
+end 'MoveSite'
+
+export typealias MoveSiteArray = Array with MoveSite
+
+// The `var`s of one function the author never reassigned — its E3077 candidates — in declaration order. E3077
+// is withheld where `let` would not compile (`ProvenanceTracer.varIsNeededMutable`), so every candidate waits
+// for that verdict; `reported` is the diagnostic the parser filed for the first of them, which is replaced when
+// that one is withheld.
+export type VarShouldBeLetCandidates
+	export var values as ValueIdArray
+	export var names as ByteArrayArray
+	export var ranges as SourceRangeArray
+	export var infos as VarInfoArray
+	export var declTokens as TokenIndexArray
+	export var reported as Diagnostic
+
+	export static function create(reported Diagnostic) returns VarShouldBeLetCandidates
+		return Self{values: ValueIdArray.create(), names: ByteArrayArray.create(), ranges: SourceRangeArray.create(), infos: VarInfoArray.create(), declTokens: TokenIndexArray.create(), reported: reported}
+	end 'create'
+
+	// None yet, and no diagnostic reported for them.
+	export static function unreported() returns VarShouldBeLetCandidates
+		return Self.create(Diagnostic.create(ErrorCode.semanticVarShouldBeLet, message: ""))
+	end 'unreported'
+end 'VarShouldBeLetCandidates'
+
+// Token spans of a body, each `[start, finish)`: its loops, from header to `end`, and the two arms of each `if`
+// with an `else`, recorded as consecutive spans.
+export type TokenSpans
+	export var starts as TokenIndexArray
+	export var ends as TokenIndexArray
+
+	export static function create() returns TokenSpans
+		return Self{starts: TokenIndexArray.create(), ends: TokenIndexArray.create()}
+	end 'create'
+
+	export function record(start TokenIndex, finish TokenIndex)
+		self.starts.push(start)
+		self.ends.push(finish)
+	end 'record'
+
+	export function clear()
+		self.starts.clear()
+		self.ends.clear()
+	end 'clear'
+end 'TokenSpans'
+
+export typealias PositionKeyArray = Array with PositionKey
+
+// Every read of an immutable name in a body — the name's value and the token the read ends at — so a door asks
+// whether a read can follow it on some path rather than only whether one follows it in the text.
+export type LetReads
+	export var values as ValueIdArray
+	export var tokens as TokenIndexArray
+
+	export static function create() returns LetReads
+		return Self{values: ValueIdArray.create(), tokens: TokenIndexArray.create()}
+	end 'create'
+
+	export function record(value ValueId, token TokenIndex)
+		self.values.push(value)
+		self.tokens.push(token)
+	end 'record'
+
+	export function clear()
+		self.values.clear()
+		self.tokens.clear()
+	end 'clear'
+end 'LetReads'
+
+// Where each call of a body ends (`Parser.noteCallToken`), in the order the calls were emitted, so a later call at
+// one position replaces an earlier one in `byPosition` exactly as the map it builds would have.
+export type CallTokenColumns
+	export var positions as PositionKeyArray
+	export var tokens as TokenIndexArray
+
+	export static function create() returns CallTokenColumns
+		return Self{positions: PositionKeyArray.create(), tokens: TokenIndexArray.create()}
+	end 'create'
+
+	export function record(position PositionKey, token TokenIndex)
+		self.positions.push(position)
+		self.tokens.push(token)
+	end 'record'
+
+	export function clear()
+		self.positions.clear()
+		self.tokens.clear()
+	end 'clear'
+
+	export function byPosition() returns TokenByPosition
+		var byPosition = TokenByPosition.create()
+
+		for i in 0 upto self.positions.count() 'eachCall'
+			byPosition.upsert(try self.positions.get(i) otherwise panic("CallTokenColumns.byPosition: positions.get OOB at {i}"), value: try self.tokens.get(i) otherwise panic("CallTokenColumns.byPosition: tokens.get OOB at {i} — the columns are pushed together"))
+		end 'eachCall'
+
+		return byPosition
+	end 'byPosition'
+end 'CallTokenColumns'
+
+// The module-level `let`s a body read (`Parser.recordModuleLetRoot`), filed as its immutable names at its `end`.
+export type ModuleLetReads
+	export var values as ValueIdArray
+	export var names as ByteArrayArray
+	export var images as BoolArray
+
+	export static function create() returns ModuleLetReads
+		return Self{values: ValueIdArray.create(), names: ByteArrayArray.create(), images: BoolArray.create()}
+	end 'create'
+
+	export function record(value ValueId, name ByteArray, image bool)
+		self.values.push(value)
+		self.names.push(name)
+		self.images.push(image)
+	end 'record'
+
+	export function clear()
+		self.values.clear()
+		self.names.clear()
+		self.images.clear()
+	end 'clear'
+end 'ModuleLetReads'
+
+// Writes through a record read out of a field (`Parser.noteWriteThroughAField`), each place kept as the tokens that
+// spell it, `[placeStart, placeEnd)`, and spelled only when it is filed.
+export type DeferredWriteThroughs
+	export var targets as ValueIdArray
+	export var placeStarts as TokenIndexArray
+	export var placeEnds as TokenIndexArray
+	export var lines as LineNumberArray
+	export var columns as ColumnNumberArray
+	export var tokens as TokenIndexArray
+
+	export static function create() returns DeferredWriteThroughs
+		return Self{targets: ValueIdArray.create(), placeStarts: TokenIndexArray.create(), placeEnds: TokenIndexArray.create(), lines: LineNumberArray.create(), columns: ColumnNumberArray.create(), tokens: TokenIndexArray.create()}
+	end 'create'
+
+	export function record(target ValueId, placeStart TokenIndex, placeEnd TokenIndex, line LineNumber, column ColumnNumber, token TokenIndex)
+		self.targets.push(target)
+		self.placeStarts.push(placeStart)
+		self.placeEnds.push(placeEnd)
+		self.lines.push(line)
+		self.columns.push(column)
+		self.tokens.push(token)
+	end 'record'
+
+	export function clear()
+		self.targets.clear()
+		self.placeStarts.clear()
+		self.placeEnds.clear()
+		self.lines.clear()
+		self.columns.clear()
+		self.tokens.clear()
+	end 'clear'
+end 'DeferredWriteThroughs'
+
+// Container methods that write their receiver (`Parser.noteReceiverWrite`), each by its method's token, from which
+// the place, the position and the token the call ends at are all read when it is filed.
+export type DeferredReceiverWrites
+	export var receivers as ValueIdArray
+	export var methodIndices as TokenIndexArray
+	export var blameable as BoolArray
+
+	export static function create() returns DeferredReceiverWrites
+		return Self{receivers: ValueIdArray.create(), methodIndices: TokenIndexArray.create(), blameable: BoolArray.create()}
+	end 'create'
+
+	export function record(receiver ValueId, methodIndex TokenIndex, blames bool)
+		self.receivers.push(receiver)
+		self.methodIndices.push(methodIndex)
+		self.blameable.push(blames)
+	end 'record'
+
+	export function clear()
+		self.receivers.clear()
+		self.methodIndices.clear()
+		self.blameable.clear()
+	end 'clear'
+end 'DeferredReceiverWrites'
+
+// ⭐ **WHAT A BODY FILES THAT IS ASKED ONLY OF A BODY WITH SOMETHING TO GUARD.** `StorageProvenance` reads these of
+// a function only once it holds an immutable name or an E3077 candidate — or, for `receiverWrites` and
+// `nameBindSites`, once a parameter of it may hold a record, whose summary is traced from them. The parser keeps
+// one of these for the body it is parsing, in storage it reuses from body to body, and files it at the body's
+// `end` (`IrFunction.fileTracedProvenance`, `fileGuardedProvenance`): a body neither is asked of allocates nothing
+// for any of it. `moduleLets` is the exception, filed whole as immutable names (`Parser.publishExistentialInstances`).
+// Every column starts as a shared empty and is replaced the first time it is written, and a column filed is handed
+// over whole, so the next body starts that one empty again.
+export type DeferredProvenance
+	export var calls as CallTokenColumns
+	export var moduleLets as ModuleLetReads
+	export var loops as TokenSpans
+	export var fieldWrites as ValueIdArray
+	export var writableValues as ValueIdArray
+	export var moveSites as MoveSiteArray
+	export var mutableBindingSites as StorageSiteArray
+	export var nameBindSites as StorageSiteArray
+	export var writeThroughs as DeferredWriteThroughs
+	export var receiverWrites as DeferredReceiverWrites
+	export var letReads as LetReads
+
+	// The immutable names a closure literal captured, at the literal: the closure reads each wherever it is called.
+	export var letCaptures as LetReads
+
+	// The two arms of each `if` with an `else`, as consecutive spans: the `then` arm, then the `else` arm.
+	export var exclusiveArms as TokenSpans
+
+	export static function create() returns DeferredProvenance
+		return Self{letReads: sharedNoLetReads, letCaptures: sharedNoLetReads, exclusiveArms: sharedNoTokenSpans, calls: sharedNoCallTokenColumns, moduleLets: sharedNoModuleLetReads, loops: sharedNoTokenSpans, fieldWrites: sharedNoProvenanceValues, writableValues: sharedNoProvenanceValues, moveSites: sharedNoMoveSites, mutableBindingSites: sharedNoStorageSites, nameBindSites: sharedNoStorageSites, writeThroughs: sharedNoDeferredWriteThroughs, receiverWrites: sharedNoDeferredReceiverWrites}
+	end 'create'
+
+	// Empty for the next body, keeping what each column this parser owns has grown to. A shared empty one is left
+	// untouched: it holds nothing, and nothing writes it.
+	export function clear()
+		if self.calls is not sharedNoCallTokenColumns 'ownsCalls'
+			self.calls.clear()
+		end 'ownsCalls'
+
+		if self.moduleLets is not sharedNoModuleLetReads 'ownsModuleLets'
+			self.moduleLets.clear()
+		end 'ownsModuleLets'
+
+		if self.loops is not sharedNoTokenSpans 'ownsLoops'
+			self.loops.clear()
+		end 'ownsLoops'
+
+		if self.fieldWrites is not sharedNoProvenanceValues 'ownsFieldWrites'
+			self.fieldWrites.clear()
+		end 'ownsFieldWrites'
+
+		if self.writableValues is not sharedNoProvenanceValues 'ownsWritableValues'
+			self.writableValues.clear()
+		end 'ownsWritableValues'
+
+		if self.moveSites is not sharedNoMoveSites 'ownsMoveSites'
+			self.moveSites.clear()
+		end 'ownsMoveSites'
+
+		if self.mutableBindingSites is not sharedNoStorageSites 'ownsMutableBindingSites'
+			self.mutableBindingSites.clear()
+		end 'ownsMutableBindingSites'
+
+		if self.nameBindSites is not sharedNoStorageSites 'ownsNameBindSites'
+			self.nameBindSites.clear()
+		end 'ownsNameBindSites'
+
+		if self.writeThroughs is not sharedNoDeferredWriteThroughs 'ownsWriteThroughs'
+			self.writeThroughs.clear()
+		end 'ownsWriteThroughs'
+
+		if self.receiverWrites is not sharedNoDeferredReceiverWrites 'ownsReceiverWrites'
+			self.receiverWrites.clear()
+		end 'ownsReceiverWrites'
+
+		if self.letReads is not sharedNoLetReads 'ownsLetReads'
+			self.letReads.clear()
+		end 'ownsLetReads'
+
+		if self.letCaptures is not sharedNoLetReads 'ownsLetCaptures'
+			self.letCaptures.clear()
+		end 'ownsLetCaptures'
+
+		if self.exclusiveArms is not sharedNoTokenSpans 'ownsArms'
+			self.exclusiveArms.clear()
+		end 'ownsArms'
+	end 'clear'
+
+	export function noteLetRead(value ValueId, token TokenIndex)
+		if self.letReads is sharedNoLetReads 'firstRead'
+			self.letReads = LetReads.create()
+		end 'firstRead'
+
+		self.letReads.record(value, token: token)
+	end 'noteLetRead'
+
+	export function noteLetCapture(value ValueId, token TokenIndex)
+		if self.letCaptures is sharedNoLetReads 'firstCapture'
+			self.letCaptures = LetReads.create()
+		end 'firstCapture'
+
+		self.letCaptures.record(value, token: token)
+	end 'noteLetCapture'
+
+	export function noteExclusiveArms(thenStart TokenIndex, thenEnd TokenIndex, elseStart TokenIndex, elseEnd TokenIndex)
+		if self.exclusiveArms is sharedNoTokenSpans 'firstArms'
+			self.exclusiveArms = TokenSpans.create()
+		end 'firstArms'
+
+		self.exclusiveArms.record(thenStart, finish: thenEnd)
+		self.exclusiveArms.record(elseStart, finish: elseEnd)
+	end 'noteExclusiveArms'
+
+	export function noteCall(position PositionKey, token TokenIndex)
+		if self.calls is sharedNoCallTokenColumns 'firstCall'
+			self.calls = CallTokenColumns.create()
+		end 'firstCall'
+
+		self.calls.record(position, token: token)
+	end 'noteCall'
+
+	export function noteModuleLetRead(value ValueId, name ByteArray, image bool)
+		if self.moduleLets is sharedNoModuleLetReads 'firstRead'
+			self.moduleLets = ModuleLetReads.create()
+		end 'firstRead'
+
+		self.moduleLets.record(value, name: name, image: image)
+	end 'noteModuleLetRead'
+
+	export function noteLoop(start TokenIndex, finish TokenIndex)
+		if self.loops is sharedNoTokenSpans 'firstLoop'
+			self.loops = TokenSpans.create()
+		end 'firstLoop'
+
+		self.loops.record(start, finish: finish)
+	end 'noteLoop'
+
+	// The record a field write writes — the box whose field is stored, however it was reached.
+	export function noteFieldWrite(target ValueId)
+		if self.fieldWrites is sharedNoProvenanceValues 'firstWrite'
+			self.fieldWrites = ValueIdArray.create()
+		end 'firstWrite'
+
+		self.fieldWrites.push(target)
+	end 'noteFieldWrite'
+
+	export function noteWritableValue(value ValueId)
+		if self.writableValues is sharedNoProvenanceValues 'firstValue'
+			self.writableValues = ValueIdArray.create()
+		end 'firstValue'
+
+		self.writableValues.push(value)
+	end 'noteWritableValue'
+
+	export function noteMoveSite(site MoveSite)
+		if self.moveSites is sharedNoMoveSites 'firstSite'
+			self.moveSites = MoveSiteArray.create()
+		end 'firstSite'
+
+		self.moveSites.push(site)
+	end 'noteMoveSite'
+
+	export function noteMutableBindingSite(site StorageSite)
+		if self.mutableBindingSites is sharedNoStorageSites 'firstSite'
+			self.mutableBindingSites = StorageSiteArray.create()
+		end 'firstSite'
+
+		self.mutableBindingSites.push(site)
+	end 'noteMutableBindingSite'
+
+	export function noteNameBindSite(site StorageSite)
+		if self.nameBindSites is sharedNoStorageSites 'firstSite'
+			self.nameBindSites = StorageSiteArray.create()
+		end 'firstSite'
+
+		self.nameBindSites.push(site)
+	end 'noteNameBindSite'
+
+	export function noteWriteThrough(target ValueId, placeStart TokenIndex, placeEnd TokenIndex, line LineNumber, column ColumnNumber, token TokenIndex)
+		if self.writeThroughs is sharedNoDeferredWriteThroughs 'firstWrite'
+			self.writeThroughs = DeferredWriteThroughs.create()
+		end 'firstWrite'
+
+		self.writeThroughs.record(target, placeStart: placeStart, placeEnd: placeEnd, line: line, column: column, token: token)
+	end 'noteWriteThrough'
+
+	export function noteReceiverWrite(receiver ValueId, methodIndex TokenIndex, blameable bool)
+		if self.receiverWrites is sharedNoDeferredReceiverWrites 'firstWrite'
+			self.receiverWrites = DeferredReceiverWrites.create()
+		end 'firstWrite'
+
+		self.receiverWrites.record(receiver, methodIndex: methodIndex, blames: blameable)
+	end 'noteReceiverWrite'
+
+	// What a summary is traced from, into `sites`: the receiver writes as the parser spelled them, and the name binds.
+	export function fileTracedInto(sites ProvenanceSites, spelledReceiverWrites ReceiverWriteSiteArray)
+		if spelledReceiverWrites.count() > 0 'someReceiverWrite'
+			sites.receiverWrites = spelledReceiverWrites
+		end 'someReceiverWrite'
+
+		if self.nameBindSites.count() > 0 'someNameBind'
+			sites.nameBindSites = self.nameBindSites
+			self.nameBindSites = sharedNoStorageSites
+		end 'someNameBind'
+	end 'fileTracedInto'
+
+	// Everything else but the write-throughs, which the parser spells, into the `sites` of a body with something to
+	// guard.
+	export function fileGuardedInto(sites ProvenanceSites)
+		if self.calls.positions.count() > 0 'someCall'
+			sites.calls = self.calls
+			self.calls = sharedNoCallTokenColumns
+		end 'someCall'
+
+		if self.loops.starts.count() > 0 'someLoop'
+			sites.loops = self.loops
+			self.loops = sharedNoTokenSpans
+		end 'someLoop'
+
+		if self.letReads.values.count() > 0 'someLetRead'
+			sites.letReads = self.letReads
+			self.letReads = sharedNoLetReads
+		end 'someLetRead'
+
+		if self.letCaptures.values.count() > 0 'someLetCapture'
+			sites.letCaptures = self.letCaptures
+			self.letCaptures = sharedNoLetReads
+		end 'someLetCapture'
+
+		if self.exclusiveArms.starts.count() > 0 'someArms'
+			sites.exclusiveArms = self.exclusiveArms
+			self.exclusiveArms = sharedNoTokenSpans
+		end 'someArms'
+
+		if self.fieldWrites.count() > 0 'someFieldWrite'
+			sites.fieldWrites = self.fieldWrites
+			self.fieldWrites = sharedNoProvenanceValues
+		end 'someFieldWrite'
+
+		if self.writableValues.count() > 0 'someWritableValue'
+			sites.writableValues = self.writableValues
+			self.writableValues = sharedNoProvenanceValues
+		end 'someWritableValue'
+
+		if self.moveSites.count() > 0 'someMoveSite'
+			sites.moveSites = self.moveSites
+			self.moveSites = sharedNoMoveSites
+		end 'someMoveSite'
+
+		if self.mutableBindingSites.count() > 0 'someMutableBinding'
+			sites.mutableBindingSites = self.mutableBindingSites
+			self.mutableBindingSites = sharedNoStorageSites
+		end 'someMutableBinding'
+	end 'fileGuardedInto'
+end 'DeferredProvenance'
+
+// What the parser saw of one body's storage that `StorageProvenance` judges once every body is parsed: the
+// immutable roots, the doors whose verdict needs a callee's summary, and the values `var` bindings hold — writable
+// storage, as a parameter's record is. Every field starts as a shared empty one and is replaced before it is first
+// written, so a body files only what it has.
+export type ProvenanceSites
+	export var immutableBindings as ImmutableBindings
+	export var mutableBindingSites as StorageSiteArray
+	export var nameBindSites as StorageSiteArray
+	export var writeThroughSites as StorageSiteArray
+	export var receiverWrites as ReceiverWriteSiteArray
+	export var fieldWrites as ValueIdArray
+	export var moveSites as MoveSiteArray
+	export var writableValues as ValueIdArray
+	export var loops as TokenSpans
+	export var calls as CallTokenColumns
+	export var letReads as LetReads
+	export var letCaptures as LetReads
+	export var exclusiveArms as TokenSpans
+	export var varCandidates as VarShouldBeLetCandidates
+	export var hasVarCandidates as bool
+
+	export static function create() returns ProvenanceSites
+		return Self{letReads: sharedNoLetReads, letCaptures: sharedNoLetReads, exclusiveArms: sharedNoTokenSpans, immutableBindings: sharedNoImmutableBindings, mutableBindingSites: sharedNoStorageSites, nameBindSites: sharedNoStorageSites, writeThroughSites: sharedNoStorageSites, receiverWrites: sharedNoReceiverWrites, fieldWrites: sharedNoProvenanceValues, moveSites: sharedNoMoveSites, writableValues: sharedNoProvenanceValues, loops: sharedNoTokenSpans, calls: sharedNoCallTokenColumns, varCandidates: sharedNoVarCandidates, hasVarCandidates: false}
+	end 'create'
+
+	export function recordImmutableName(value ValueId, name ByteArray, moduleLet bool, image bool, borrowsIt bool, declToken TokenIndex, info VarInfo)
+		if self.immutableBindings is sharedNoImmutableBindings 'firstName'
+			self.immutableBindings = ImmutableBindings.create()
+		end 'firstName'
+
+		self.immutableBindings.record(value, name: name, moduleLet: moduleLet, image: image, borrowsIt: borrowsIt, declToken: declToken, info: info)
+	end 'recordImmutableName'
+end 'ProvenanceSites'
+
+// ⭐ **WHAT THE PARSER FILED FOR `StorageProvenance`, OR NOTHING** — a union rather than a shared empty record, so
+// `createFromStd`, off the parser's thread, holds one small box of its own and reaches for no singleton.
+export union FiledProvenance
+	none
+	filed(sites ProvenanceSites)
+end 'FiledProvenance'
+
+// The empty columns a `ProvenanceSites` and a `DeferredProvenance` start from, and the answer of a function that
+// filed nothing. Shared for `sharedEmptyParamGuards`' reason and under its invariant: never mutated, because each
+// writer REPLACES the field first. `var`s for that anchor's reason too, and parser-side only, for `createFromStd`'s.
+var sharedNoImmutableBindings = ImmutableBindings.create()
+var sharedNoStorageSites = StorageSiteArray.create()
+var sharedNoReceiverWrites = ReceiverWriteSiteArray.create()
+var sharedNoProvenanceValues = ValueIdArray.create()
+var sharedNoMoveSites = MoveSiteArray.create()
+var sharedNoTokenSpans = TokenSpans.create()
+var sharedNoLetReads = LetReads.create()
+var sharedNoVarCandidates = VarShouldBeLetCandidates.unreported()
+var sharedNoCallTokenColumns = CallTokenColumns.create()
+var sharedNoModuleLetReads = ModuleLetReads.create()
+var sharedNoDeferredWriteThroughs = DeferredWriteThroughs.create()
+var sharedNoDeferredReceiverWrites = DeferredReceiverWrites.create()
+var sharedEmptyProvenanceSites = ProvenanceSites.create()
+var sharedNoFiledProvenance = FiledProvenance.none
+
+// The deferred facts of a parser that is parsing no body: nothing is recorded into it (`Parser.deferredProvenance`).
+export var sharedNoDeferredProvenance = DeferredProvenance.create()
+
+// The sole-owner column of a parsed function `StorageProvenance` does not trace (`IrFunction.valueMintedSole`).
+// Written only by a post-parse minter, which de-aliases it first (`LiteralArgPromotion.PromotedValueMinter`).
+export var sharedNoMintedSole = BoolArray.create()
+
 // The roster of a function nothing recorded a binding for, and the locations of one the allocator was
 // asked for none of. Shared for `sharedEmptyGlobalAliasValues`' reason and with its invariant: never
 // mutated, because the parser and the splice each REPLACE the field before anything is recorded.
@@ -372,6 +985,16 @@ export type IrFunction
 	// brand is compared only once two instance ids agree (`ProgramSignatures.aggregatesConflict`). Interner
 	// ids, remapped at merge exactly as `valueNameIds` is.
 	export var valueBrandIds as TypeNameIdArray
+
+	// ⭐ **WHETHER THE OP DEFINING A VALUE MINTED ITS RECORD (`Parser.valueMintedSole`), DENSE in the same
+	// lockstep** — the ownership model's own `sole` claim as its emitter made it, and `StorageProvenance`'s
+	// answer to "is this value fresh, or an alias of its operands?". False is the default every emitter gets
+	// without asking, so a door added later is read as an alias until it says otherwise. The parser files it
+	// only for a function that pass traces, and leaves every other one the shared empty column
+	// (`sharedNoMintedSole`), which nothing reads.
+	export var valueMintedSole as BoolArray
+
+	export var filedProvenance as FiledProvenance
 
 	// ⭐ **THE PER-VALUE CLOSURE-ENVIRONMENT COLUMN, DENSE by ValueId in lockstep with
 	// `valueTags`.** The environment a function VALUE carries, or 0 when it carries none. A real environment
@@ -786,7 +1409,7 @@ export type IrFunction
 	// error, and the stack-guard one is a MEASURED SIGSEGV. Passing the position in means a
 	// caller cannot forget it; it can only decide it, and `SourcePosition.synthesized` is how a synthesizing
 	// caller says so out loud.
-	export static function create(name ByteArray, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, valueTags ValueTypeTagArray, valueNameIds TypeNameIdArray, valueBrandIds TypeNameIdArray, valueClosureEnv ValueIdArray, valueIsCapturingClosure BoolArray, valueWitnessIds ValueIdArray, returnLine LineNumber, declaredAt SourcePosition, throwsTypeName ThrowsClause = ThrowsClause.none, needsGreenThreadStackGuard bool = false) returns IrFunction
+	export static function create(name ByteArray, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, valueTags ValueTypeTagArray, valueNameIds TypeNameIdArray, valueBrandIds TypeNameIdArray, valueMintedSole BoolArray, valueClosureEnv ValueIdArray, valueIsCapturingClosure BoolArray, valueWitnessIds ValueIdArray, returnLine LineNumber, declaredAt SourcePosition, throwsTypeName ThrowsClause = ThrowsClause.none, needsGreenThreadStackGuard bool = false) returns IrFunction
 		return Self{
 			name: name,
 			visibility: Visibility.file,
@@ -805,6 +1428,8 @@ export type IrFunction
 			valueTags: valueTags,
 			valueNameIds: valueNameIds,
 			valueBrandIds: valueBrandIds,
+			valueMintedSole: valueMintedSole,
+			filedProvenance: sharedNoFiledProvenance,
 			valueClosureEnv: valueClosureEnv,
 			valueIsCapturingClosure: valueIsCapturingClosure,
 			valueWitnessIds: valueWitnessIds,
@@ -849,13 +1474,13 @@ export type IrFunction
 	// whose frame and nesting the runtime itself bounds. The per-type CASCADES come through this same door and
 	// do not — see the field.
 	//
-	// ⛔⛔ **ITS SIX MANAGED PLACEHOLDERS ARE FRESH, WHERE `create`'s ARE THE SHARED SINGLETONS — AND THAT
+	// ⛔⛔ **ITS SEVEN MANAGED PLACEHOLDERS ARE FRESH, WHERE `create`'s ARE THE SHARED SINGLETONS — AND THAT
 	// IS A CONCURRENCY FACT, NOT AN OVERSIGHT.** This door is on the POOL WORKER path: `extractUnitModule`
 	// builds one function per message, and a worker runs on whichever green thread the scheduler picked.
 	// Storing a module-level record into a fresh one RETAINS it, and this language's reference counting is a
 	// plain load/add/store precisely because the language guarantees one green thread per box — so sixteen
 	// workers retaining and releasing ONE singleton is the lost update that guarantee exists to make
-	// impossible. Six small empties per call, on a door the parser never takes (`create` is the parser's,
+	// impossible. Seven small empties per call, on a door the parser never takes (`create` is the parser's,
 	// and it keeps the singletons for its thousands of functions).
 	export static function createFromStd(name ByteArray, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber, throwsTypeName ThrowsClause = ThrowsClause.none, needsGreenThreadStackGuard bool = false) returns IrFunction
 		let declaredAt = SourcePosition.synthesized()
@@ -877,6 +1502,8 @@ export type IrFunction
 			valueTags: ValueTypeTagArray.create(),
 			valueNameIds: TypeNameIdArray.create(),
 			valueBrandIds: TypeNameIdArray.create(),
+			valueMintedSole: BoolArray.create(),
+			filedProvenance: FiledProvenance.none,
 			valueClosureEnv: ValueIdArray.create(),
 			valueIsCapturingClosure: BoolArray.create(),
 			valueWitnessIds: ValueIdArray.create(),
@@ -938,6 +1565,8 @@ export type IrFunction
 			debugLocalLocations: src.debugLocalLocations,
 			valueNameIds: src.valueNameIds,
 			valueBrandIds: src.valueBrandIds,
+			valueMintedSole: src.valueMintedSole,
+			filedProvenance: src.filedProvenance,
 			valueClosureEnv: src.valueClosureEnv,
 			valueIsCapturingClosure: src.valueIsCapturingClosure,
 			valueWitnessIds: src.valueWitnessIds,
@@ -1015,6 +1644,70 @@ export type IrFunction
 		self.inlineSites.push(InlineSite.create(calleeName, parent: parent))
 		return InlineSiteRef.site(index)
 	end 'recordInlineSite'
+
+	export function recordImmutableBinding(value ValueId, bindingName ByteArray, borrows bool, info VarInfo, declToken TokenIndex)
+		var sites = self.provenanceSitesForWrite()
+		sites.recordImmutableName(value, name: bindingName, moduleLet: false, image: false, borrowsIt: borrows, declToken: declToken, info: info)
+	end 'recordImmutableBinding'
+
+	// A value the body read out of a module-level `let`, which is immutable storage wherever it is read. `image`: the
+	// `let` is image data, which a store copies rather than shares.
+	export function recordModuleLetRead(value ValueId, globalName ByteArray, image bool)
+		var sites = self.provenanceSitesForWrite()
+		sites.recordImmutableName(value, name: globalName, moduleLet: true, image: image, borrowsIt: false, declToken: 0, info: VarInfo.create(globalName, varType: MaxonType.unresolved, mutable: false, slot: 0))
+	end 'recordModuleLetRead'
+
+	// Every E3077 candidate of the body, the first of which the parser reported as `reported`.
+	export function recordVarShouldBeLetCandidates(candidates VarShouldBeLetCandidates)
+		var sites = self.provenanceSitesForWrite()
+		sites.varCandidates = candidates
+		sites.hasVarCandidates = true
+	end 'recordVarShouldBeLetCandidates'
+
+	// Did the parser file anything for this function — an immutable name, or an E3077 candidate?
+	export function holdsFiledProvenance() returns bool
+		return match self.filedProvenance 'filed'
+			none gives false
+			filed gives true
+		end 'filed'
+	end 'holdsFiledProvenance'
+
+	// What `StorageProvenance` reads of this function, or the shared empty answer of one that filed nothing.
+	export function provenanceSites() returns ProvenanceSites
+		return match self.filedProvenance 'filed'
+			none gives sharedEmptyProvenanceSites
+			filed(sites) gives sites
+		end 'filed'
+	end 'provenanceSites'
+
+	// The deferred facts a summary is traced from (`DeferredProvenance.fileTracedInto`).
+	export function fileTracedProvenance(deferred DeferredProvenance, receiverWrites ReceiverWriteSiteArray)
+		var sites = self.provenanceSitesForWrite()
+		deferred.fileTracedInto(sites, spelledReceiverWrites: receiverWrites)
+	end 'fileTracedProvenance'
+
+	// The rest of the deferred facts, for a function with something to guard (`DeferredProvenance.fileGuardedInto`).
+	export function fileGuardedProvenance(deferred DeferredProvenance)
+		var sites = self.provenanceSitesForWrite()
+		deferred.fileGuardedInto(sites)
+	end 'fileGuardedProvenance'
+
+	export function fileWriteThroughSites(writeThroughSites StorageSiteArray)
+		var sites = self.provenanceSitesForWrite()
+		sites.writeThroughSites = writeThroughSites
+	end 'fileWriteThroughSites'
+
+	// COPY-ON-WRITE off the shared empty, for `recordParamGuard`'s reason.
+	function provenanceSitesForWrite() returns ProvenanceSites
+		match self.filedProvenance 'filed'
+			filed(sites) then return sites
+			none then break 'filed'
+		end 'filed'
+
+		let sites = ProvenanceSites.create()
+		self.filedProvenance = FiledProvenance.filed(sites)
+		return sites
+	end 'provenanceSitesForWrite'
 
 	export function releaseScope()
 		self.scope.reset()

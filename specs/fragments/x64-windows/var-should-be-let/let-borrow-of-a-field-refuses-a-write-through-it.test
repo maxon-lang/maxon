@@ -1,0 +1,29 @@
+// Test: let-borrow-of-a-field-refuses-a-write-through-it
+
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Point'
+
+type Box
+	export var item as Point
+
+	static function create(item Point) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	var box = Box.create(Point.create(1))
+	let p = box.item
+	box.item.x = 99
+	return p.x
+end 'main'
+---
+CompilerError:
+error E3157: <fragment>:24:2: cannot write through 'box.item', which may be the record of immutable variable 'p'; use clone()

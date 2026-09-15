@@ -47,9 +47,9 @@
 // ⚠ **THE `*.test.maxon` CLAUSE IS STILL ASKED HERE, AND IT IS NOW A BELT ON TOP OF THE WALK'S BRACES —
 // BUT IT IS ASKED THROUGH `Compiler.isTestSourceName` RATHER THAN SPELLED AGAIN.** The walk excludes
 // those files today, so this arm cannot fire; what it must never become is a SECOND answer to "is this
-// a test file?", because the two would then be free to drift on the case rule the paragraph at
-// `caseFolded` records losing once already. One predicate, two readers — the shape the walk and the
-// parser's own E2058 already share.
+// a test file?", because the two would then be free to drift on the case rule stated at
+// `CompilerOutputDirName`. One predicate, two readers — the shape the walk and the parser's own E2058
+// already share.
 //
 // ⭐ **THE `.maxonignore` CLAUSE IS NOT APPLIED HERE.** The walk carries it (see
 // `Compiler.collectMaxonSources`), so a copy here could only ever be a second answer waiting to
@@ -87,7 +87,13 @@
 // It is also what a file the compiler WROTE lives under, at any depth, and such a file is not a
 // source to anybody — `collectMaxonSources` walks straight into it.
 //
-// Written in lower case because every comparison against it goes through `caseFolded`. See there.
+// Written in lower case because every comparison against it lower-cases the path component first.
+//
+// ⚠ **THE AUTHORITY FOLDS CASE ON EVERY PLATFORM, AND A MIRROR THAT DOES NOT IS A FALSE REFUSAL.**
+// A test-file name and an output directory are both matched case-insensitively — the first by
+// `Compiler.isTestSourceName`, the second here — so `Api.Test.maxon` is NOT in the binary. A byte-exact
+// comparison would call it a source of this binary, find it newer and REFUSE THE WHOLE SUITE over a file
+// the build never read, and a false refusal has no workaround.
 //
 // `module` because the guest-compiler delegation names the same directory when it decides where to put
 // the binary it builds (`SpecTestRunner.guestCompilerPath`) — the output directory is one fact, and a
@@ -148,7 +154,7 @@ end 'BinarySourceRoot'
 export function binarySourceRootOf(binary FilePath) returns BinarySourceRoot
 	let outputDir = try binary.parent() otherwise return BinarySourceRoot.elsewhere("{binary.toString()} has no parent directory")
 
-	if caseFolded(outputDir.filename()) != CompilerOutputDirName 'notBuiltInPlace'
+	if outputDir.filename().toLower() != CompilerOutputDirName 'notBuiltInPlace'
 		return BinarySourceRoot.elsewhere("{binary.toString()} was not built in place — `maxon build` writes a project's executable into its own {CompilerOutputDirName}/ directory, and this one is not in such a directory")
 	end 'notBuiltInPlace'
 
@@ -228,7 +234,7 @@ function isUnderCompilerOutputDirectory(source FilePath, sourceRoot FilePath) re
 	var dir = try source.parent() otherwise panic("CompilerFreshness: {source.toString()} has no parent directory, though a directory walk found it inside one")
 
 	while true 'upwards'
-		if caseFolded(dir.filename()) == CompilerOutputDirName 'compilerOutput'
+		if dir.filename().toLower() == CompilerOutputDirName 'compilerOutput'
 			return true
 		end 'compilerOutput'
 
@@ -246,26 +252,6 @@ function isUnderCompilerOutputDirectory(source FilePath, sourceRoot FilePath) re
 
 	return false
 end 'isUnderCompilerOutputDirectory'
-
-// One path component, lower-cased for comparison against `CompilerOutputDirName` — which is therefore
-// spelled in lower case.
-//
-// ⚠ **THE AUTHORITY FOLDS CASE ON EVERY PLATFORM, AND A MIRROR THAT DOES NOT IS A FALSE REFUSAL.**
-// A test-file name and an output directory are both matched case-insensitively, so `Api.Test.maxon`
-// is NOT in the binary. The test half of that lesson lives in `Compiler.isTestSourceName`, which
-// folds case for exactly this reason; what is left here is the output-directory half. A byte-exact
-// `endsWith` here would call `Api.Test.maxon` a source of this binary, find it newer and REFUSE THE
-// WHOLE SUITE over a file the build never read. That is the same shape as the `.maxon/` output
-// directory this file's header already records — a mirror one clause narrower than the rule it
-// mirrors — and it is the expensive direction, because a false refusal has no workaround.
-//
-// The `clone()` is load-bearing rather than defensive: `String.toLower` mutates its receiver's buffer
-// IN PLACE, and `FilePath.filename()` hands back the FilePath's OWN `path` string for a component
-// with no separator in it. Folding without cloning would lower-case somebody else's path — the same
-// trap, with the same answer, as `FilePath.canonicalForCompare`.
-function caseFolded(component String) returns String
-	return component.clone().toLower()
-end 'caseFolded'
 
 // A constant path COMPONENT as a FilePath. `join` is overloaded on String and FilePath and a bare
 // String constant matches both (E3007), so every component joined in this file is bound to a FilePath

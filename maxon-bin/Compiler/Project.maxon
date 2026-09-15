@@ -596,6 +596,11 @@ export type VarInfo
 	// Constructed 0, and left 0 for every binding kind no borrow can name, where nothing reads it.
 	export var lastUseToken as TokenIndex
 
+	// The last token at which the program itself reads this name — `lastUseToken` without the lexical extent a
+	// `for … in` element's borrow is seeded with. A mutable door asks whether an immutable name is READ after it
+	// (`StorageProvenance`), and the iteration reading the container is no read of the element's record.
+	export var lastReadToken as TokenIndex = 0
+
 	// ⭐ **DOES THIS NAME DENOTE MODULE STORAGE — a top-level `var` — RATHER THAN A BINDING OF THIS
 	// FRAME?** True only for the E3070 subject stand-in `Parser.topLevelBorrowSubjectOf` mints.
 	//
@@ -704,6 +709,14 @@ export type VarInfo
 	// The brand this binding was DECLARED under — its initial value's brand for a local, the spelled
 	// parameter type's for a parameter — which every rebind is checked against and every merge phi wears.
 	export var brandId as TypeNameId
+
+	// ⭐ **THE DOORS THIS BINDING WAS HANDED TO WHOLE ON THE CURRENT PATH AND NOT READ SINCE** (`MoveSite`), as the
+	// index of their list in the parser's `moveSiteLists` — `NoMoveSiteList` for none. Its next read is the first
+	// after each of them, which is where a door that turns out to have moved the binding is observed (E3102).
+	// Path-sensitive like `movedFrom`, and carried by `Parser.MoveMark` for the same reason: a door on one branch
+	// of an `if` is not before a read on the other. An index rather than the list, so a binding holds no record a
+	// parse worker would share.
+	export var awaitingMoveReads as MoveSiteListIndex = NoMoveSiteList
 
 	// ⭐⭐ **THE ONE PLACE A `VarInfo` LITERAL IS SPELLED.** Every constructor below names ONLY the fields
 	// its binding kind actually differs on; everything else — the whole inert tail, and every per-path bit
@@ -824,6 +837,10 @@ export type VarInfo
 end 'VarInfo'
 
 export typealias VarInfoMap = Map with (ByteArray, VarInfo)
+
+// A list of the doors a binding waits on, by its place in the parser's `moveSiteLists`; the first is the empty one.
+module typealias MoveSiteListIndex = int(0 to u64.max)
+module let NoMoveSiteList = 0 as MoveSiteListIndex
 
 // What E3073 needs about one `async <call>` spawn and cannot get anywhere else: the text to quote and the
 // place to point at. See `Project.asyncSpawnSites`.
@@ -1085,9 +1102,10 @@ export type UnusedBindingCandidate
 	export let binding as VarInfo
 	export let nameRange as SourceRange
 	export let kind as UnusedBindingKind
+	export let declToken as TokenIndex
 
-	export static function create(binding VarInfo, nameRange SourceRange, kind UnusedBindingKind) returns UnusedBindingCandidate
-		return Self{binding: binding, nameRange: nameRange, kind: kind}
+	export static function create(binding VarInfo, nameRange SourceRange, kind UnusedBindingKind, declToken TokenIndex) returns UnusedBindingCandidate
+		return Self{binding: binding, nameRange: nameRange, kind: kind, declToken: declToken}
 	end 'create'
 end 'UnusedBindingCandidate'
 

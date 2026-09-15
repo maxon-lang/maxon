@@ -6479,9 +6479,10 @@ end 'insertReloadFor'
 // semantics make a clone necessary FOR.
 //
 // Index-based over `branchEdges` because a `for edge in ...` binding is immutable, so it could
-// not host the `edge.argIds = ...` field assignment the copy needs.
+// not host the `edge.argIds = ...` field assignment the copy needs — and `block` is a `var` because that
+// assignment lands in its edges.
 function rewriteEdgeArgsIn(module TargetModule, topo FuncTopology, blockLocal CfgIndex, from ValueId, to ValueId)
-	let block = blockAt(module, topo: topo, local: blockLocal)
+	var block = blockAt(module, topo: topo, local: blockLocal)
 
 	for e in 0 upto block.branchEdges.count() 'eachEdge'
 		var edge = try block.branchEdges.get(e) otherwise panic("rewriteEdgeArgsIn: branchEdges.get OOB")

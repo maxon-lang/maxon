@@ -478,11 +478,13 @@ export enum ErrorCode
 	// A field access names a field the type does not have.
 	semanticUnknownField = "E3018"
 
-	// An immutable ('let') binding is passed to a parameter the callee mutates, or a mutating method is called on it.
-	// a mutating method (push/pop/set/append/...) or a parameter-mutating
-	// function is called on an immutable (`let`-bound) receiver/argument. The
-	// receiver's data would be modified through a binding the user declared
-	// immutable. Emitted by the Maxon-tier borrow/mutation check.
+	// An immutable binding's record reaches a parameter the callee writes, or the receiver of a container method that
+	// writes it (push/pop/set/append/...). A `let` local, a `let` alias of a parameter or a module-level `let` named at
+	// the call is refused wherever the callee writes that position. A value — one a `var` holds included — is refused
+	// while an immutable binding is read after the call whose record it may be (`grow(pass(a))`, `pass(a).push(9)`),
+	// that borrows it out of the same mutable storage, or that may be the same record by another road. Make the
+	// binding a `var`, or pass a `clone()`. Asked by name by the Maxon-tier mutation check and, of a value, by
+	// `StorageProvenance`.
 	semanticImmutableRefToMutatingParam = "E3019"
 
 	// An enum declares the same case name twice.
@@ -719,27 +721,24 @@ export enum ErrorCode
 	// type/extension, or a top-level alias). Emitted by `parseStructLiteral`.
 	semanticConstructorRestriction = "E3076"
 
-	// a local declared with `var` is never reassigned, so it should
-	// be a `let`. Detected after type resolution by
-	// `checkVarShouldBeLetForEntry` (a `var` whose name never appears in the
-	// per-function reassigned-var set). E3012 (unused variable) takes
-	// precedence -- an unused `var` reports as unused, not as should-be-let.
-	// It is decided at the declaring function's `end` (`reportVarShouldBeLet`)
-	// off the same candidate list E3012 walks, reading a per-function name set
-	// (`mutabilityExercisedNames`) that seven doors record into, and REPORTED
-	// past the backend so a body with any other diagnostic never also reports
-	// this one. A MOVE-OUT counts as a use of mutability: the keyword decides
-	// move-vs-alias, so advising `let` would silently turn a move into an alias.
+	// A local declared with `var` is never reassigned, so it should be a `let`. E3012 (unused variable) takes
+	// precedence: an unused `var` reports as unused, not as should-be-let. Decided at the declaring function's `end`
+	// (`Parser.reportVarShouldBeLet`) off the candidate list E3012 walks, reading the per-function name set
+	// (`mutabilityExercisedNames`) the mutable doors record into, and REPORTED past the backend so a body with any
+	// other diagnostic never also reports this one. A MOVE-OUT counts as a use of mutability: the keyword decides
+	// move-vs-alias, so advising `let` would silently turn a move into an alias. Withheld where a `let` in the
+	// `var`'s place would meet a mutable door that moves or refuses it (`StorageProvenance.settleVarShouldBeLet`).
 	semanticVarShouldBeLet = "E3077"
 
-	// `var b = a` (or `var b = a.field`) where the source `a` is an
-	// immutable (`let`) binding of a reference type (struct / enum /
-	// function). Copying an immutable reference-type binding into a mutable
-	// one would alias the same heap value through a writable name; the user
-	// must either keep `b` immutable (`let`) or take an independent copy via
-	// `clone()`. Value-typed sources (int/float/bool/byte) are independent
-	// copies and are allowed. Detected after type resolution by
-	// `checkVarFromImmutableForEntry`.
+	// A mutable name would reach a record an immutable name still reads. `var b = a` or `b = a` from a `let` that is
+	// not its record's sole reference — an alias, a borrow of an element, a module-level `let` — while `a` is read
+	// after it; `var b = a.field` always; and `var b = f(a)`, or any value no name spells that may be or lie within
+	// the record of an immutable name read afterwards — a `return` hands back a reference rather than a copy — when
+	// `b` goes on to write that record. A `let` that is its record's sole reference moves instead (E3102). Keep `b`
+	// immutable (`let`), or bind an independent copy made with `clone()`; a value type (int/float/bool/byte) and a
+	// function value are copies and are allowed. Asked of a source the parser can name
+	// (`Parser.requireMutableBindingSource`) and, once every body is parsed, of the rest
+	// (`StorageProvenance.checkMoveSites`, `checkMutableBindingSites`).
 	semanticVarFromImmutable = "E3078"
 
 	// A match arm binds a case's payload values and then never reads them. Drop the bindings, or use them.
@@ -918,10 +917,11 @@ export enum ErrorCode
 
 	// A binding is READ after its owned heap value was MOVED OUT of it. Under the compiler's static
 	// single-owner model an owned value (an owned String, a struct box) has exactly one owner; a
-	// `let u = t` / `s = t` whose RHS is a bare reference to an owned binding TRANSFERS ownership to
-	// the destination, and the source is left moved-from. A later read of the source is refused --
-	// it would read a value another binding now owns and will drop, and dropping it twice is a
-	// double-free. A WRITE to a moved-from `var` is legal (it revives the binding).
+	// `let u = t` / `s = t` whose RHS is a bare `var` TRANSFERS ownership to the destination, and so does
+	// `var u = t` / `s = t` from a `let` that is its record's sole reference (`StorageProvenance.checkMoveSites`);
+	// the source is left moved-from. A later read of the source is refused -- it would read a value another
+	// binding now owns and will drop, and dropping it twice is a double-free. A WRITE to a moved-from `var` is
+	// legal (it revives the binding).
 	useAfterMove = "E3102"
 
 	// A `/` or `mod` has a divisor the compiler holds as the constant 0 (`a / 0`, `a mod 0`, a
@@ -1869,6 +1869,16 @@ export enum ErrorCode
 	// offered is caught by the same sentence. Positioned at the body's own declaration, naming the reference
 	// that survived and the rule that refused.
 	alwaysSplicedBodyIsStillCalled = "E3158"
+
+	// A field write, or a method that writes its receiver, went through a record an immutable name read after it
+	// still reaches, whichever was declared first — a `let` whose record it may be, a `let` of an immutable record it
+	// may lie within, a live `let` that borrows it out of the same mutable storage, or one that may be the same
+	// record by another road: `let p = box.item` followed by `box.item.x = 99`, or `let a = …` stored into `box.item`
+	// and then `box.item.x = 99`. A method writing a receiver that may be the `let`'s own record is E3019 instead. A
+	// record is reachable through immutable names or through mutable paths, never both at once. Finish with the `let`
+	// first, or write an independent copy made with `clone()`. Decided by `StorageProvenance.checkWriteThroughSites`
+	// and `checkReceiverWrites`.
+	semanticWriteThroughImmutableRecord = "E3159"
 
 	// A field access could not be lowered: the base is not a struct, or the field has no slot.
 	invalidFieldAccess = "E4006"

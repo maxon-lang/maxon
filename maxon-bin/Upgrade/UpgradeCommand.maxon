@@ -207,11 +207,9 @@ type UpgradeStep
 		return Self{executable: executable, arguments: arguments}
 	end 'create'
 
-	// ⚠ **BUILT INTO A FRESH STRING.** `shellWord` may hand back the very String the executable's path holds,
-	// and appending to that would rewrite the path the run then spawns.
+	// A clone: `shellWord` may hand back the executable's own String, which the appends would rewrite.
 	export function rendered() returns String
-		var line = ""
-		line.append(shellWord(self.executable.displayName()))
+		var line = shellWord(self.executable.displayName()).clone()
 
 		for argument in self.arguments 'eachArgument'
 			line.append("{WordBreak}{shellWord(argument)}")

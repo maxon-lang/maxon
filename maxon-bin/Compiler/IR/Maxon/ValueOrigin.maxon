@@ -142,6 +142,78 @@ export function maxonOpResultValue(op MaxonOp) returns MaxonOpResult
 	end 'result'
 end 'maxonOpResultValue'
 
+// The SSA values an op READS, replacing `into`'s contents — `maxonOpResultValue`'s other half, and exhaustive
+// for its reason: an analysis that must not miss a use (`StorageProvenance`) asks here, so a new op fails to
+// compile until it is listed.
+export function maxonOpOperandValues(op MaxonOp, into ValueIdArray)
+	into.clear()
+
+	match op 'operands'
+		call(_, _, args, _, _, _, _, _) then appendValues(into, values: args)
+		tryCall(_, _, _, args, _, _, _, _, _) then appendValues(into, values: args)
+		asyncCall(_, _, args, _, _, _, _) then appendValues(into, values: args)
+		rawIntrinsic(_, _, args, _) then appendValues(into, values: args)
+		witnessDispatch(_, args, witness, _, _, _, _) then appendValuesAndOne(into, values: args, one: witness)
+		witnessTryDispatch(_, _, args, witness, _, _, _) then appendValuesAndOne(into, values: args, one: witness)
+
+		// Its `args` is the variant's TAIL field, so it is bound in a small match — see
+		// `LowerMaxonToStd.lowerIndirectCall`.
+		indirectCall then appendIndirectCallOperands(op, into: into)
+		ret(retVal) then into.push(retVal)
+		binOp(_, lhs, rhs, _) then appendPair(into, first: lhs, second: rhs)
+		compare(_, lhs, rhs, _, _) then appendPair(into, first: lhs, second: rhs)
+		storeIndirect(addr, _, value, _) then appendPair(into, first: addr, second: value)
+		serviceSend(_, _, handle, request) then appendPair(into, first: handle, second: request)
+		unaryOp(_, operand, _) then into.push(operand)
+		condBranch(cond, _, _) then into.push(cond)
+		loadIndirect(_, addr, _, _) then into.push(addr)
+		throwError(errorValue, _) then into.push(errorValue)
+		propagateError(errorFlag) then into.push(errorFlag)
+		await (_, promise) then into.push(promise)
+		tryAwait(_, _, promise) then into.push(promise)
+		switch(subject, _, _) then into.push(subject)
+		panicAbortValue(messagePtr) then into.push(messagePtr)
+		errorFlagEncode(_, errorValue, _) then into.push(errorValue)
+		serviceSpawn(_, _, state) then into.push(state)
+		literal or
+			retVoid or
+			branch or
+			globalAddr or
+			stringLiteral or
+			panicAbort or
+			functionRef or
+			sizeofType or
+			constArrayLiteral or
+			serviceReplyCell or
+			immortalStructRecord or
+			immortalStringTable or
+			covPoint then break 'operands'
+	end 'operands'
+end 'maxonOpOperandValues'
+
+function appendIndirectCallOperands(op MaxonOp, into ValueIdArray)
+	match op 'indirect'
+		indirectCall(_, callee, args) then appendValuesAndOne(into, values: args, one: callee)
+		default panic("appendIndirectCallOperands: handed an op that is not an indirect call")
+	end 'indirect'
+end 'appendIndirectCallOperands'
+
+function appendValues(into ValueIdArray, values ValueIdArray)
+	for value in values 'each'
+		into.push(value)
+	end 'each'
+end 'appendValues'
+
+function appendValuesAndOne(into ValueIdArray, values ValueIdArray, one ValueId)
+	appendValues(into, values: values)
+	into.push(one)
+end 'appendValuesAndOne'
+
+function appendPair(into ValueIdArray, first ValueId, second ValueId)
+	into.push(first)
+	into.push(second)
+end 'appendPair'
+
 // The outcome of an origin lookup: `found(opIndex)` for a value defined by a Maxon op,
 // `none` for a value with no op origin (a phi/block-arg, or a value not in this table).
 // A union rather than a sentinel op index — an out-of-range index would silently

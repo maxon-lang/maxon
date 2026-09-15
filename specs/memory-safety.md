@@ -223,7 +223,7 @@ function main() returns ExitCode
 	row.push(1)
 	a.push(row)
 
-	let b = a.clone()
+	var b = a.clone()
 	var clonedRow = try b.get(0) otherwise panic("no row")
 	clonedRow.push(2)
 
@@ -264,7 +264,7 @@ function main() returns ExitCode
 	a.push(Leaf.create("original label long enough for a heap record", value: 10))
 
 	let b = a.clone()
-	let c = b.clone()
+	var c = b.clone()
 	var cloned = try c.get(0) otherwise panic("no leaf")
 	cloned.label = "mutated"
 

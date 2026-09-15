@@ -1,0 +1,25 @@
+// Test: let-record-alias-of-a-parameter-passed-through-a-call
+function grow(s String)
+	s.append("XY")
+end 'grow'
+
+function pass(s String) returns String
+	return s
+end 'pass'
+
+function tagIt(p String)
+	let q = p
+	grow(pass(q))
+end 'tagIt'
+
+function main() returns ExitCode
+	let n = 7
+	var a = "lit{n}"
+	tagIt(a)
+	a.append("?")
+	print("{a}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3019: <fragment>:12:2: cannot pass 'q' to function that mutates parameter 's' (in tagIt)

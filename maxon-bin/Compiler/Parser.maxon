@@ -10100,6 +10100,76 @@ type BlockMark
 	end 'create'
 end 'BlockMark'
 
+// The door lists of a function no binding has waited on yet: the empty one, at `NoMoveSiteList`.
+function freshMoveSiteLists() returns MoveSiteLists
+	var lists = MoveSiteLists.create()
+	lists.push(MoveSiteArray.create())
+	return lists
+end 'freshMoveSiteLists'
+
+// What `Parser.valueIsBoxedUnion` found a `named` type to be.
+enum BoxedUnionAnswer
+	unasked
+	boxed
+	notBoxed
+end 'BoxedUnionAnswer'
+
+typealias BoxedUnionAnswerArray = Array with BoxedUnionAnswer
+
+// The answers of a parser that has asked none. Shared for `sharedEmptyIterationLocks`' reason and under its
+// invariant: never written, because `valueIsBoxedUnion` replaces it first. A `var` for that anchor's reason too.
+var noBoxedUnionAnswers = BoxedUnionAnswerArray.create()
+
+// ⭐ **IS A VALUE OF `tag` A SCALAR WHATEVER THE PROGRAM DECLARES?** The parse-time `no` to
+// `ProvenanceTracer.valueTagCarriesProvenance`, which asks the whole program about a `named` type.
+function tagIsAScalarWhateverIsDeclared(tag ValueTypeTag) returns bool
+	return match tag 'tag'
+		boolean or
+			integer or
+			float or
+			exitCode or
+			void or
+			cstring gives true
+
+		named or
+			unresolved or
+			structRef or
+			string or
+			function or
+			typeParameter or
+			genericInstance or
+			character or
+			interfaceRef gives false
+	end 'tag'
+end 'tagIsAScalarWhateverIsDeclared'
+
+// The door lists of every parser before a binding of its first waits on a door — not even the empty one, which
+// only `moveSiteListsForWrite` hands out. Shared for `sharedEmptyIterationLocks`' reason and under its invariant:
+// never written, because that door replaces it first. A `var` for that anchor's reason too.
+var sharedNoMoveSiteLists = MoveSiteLists.create()
+
+// The column of a mark whose owned bindings wait on no door, which reads `NoMoveSiteList` at every position — the
+// common case, which then costs a mark no column. Never written: `withAwaited` replaces it first.
+var noAwaitedMoveReads = MoveSiteListIndexArray.create()
+
+// `column` with the doors of the owned binding at `position` appended — the shared empty one kept while every
+// binding so far waits on none, and the first that does materializes it, `NoMoveSiteList` below it.
+function withAwaited(column MoveSiteListIndexArray, list MoveSiteListIndex, position ElementIndex) returns MoveSiteListIndexArray
+	if column is not noAwaitedMoveReads 'materialized'
+		column.push(list)
+		return column
+	end 'materialized'
+
+	if list == NoMoveSiteList 'stillNone'
+		return column
+	end 'stillNone'
+
+	var awaited = MoveSiteListIndexArray.create()
+	awaited.refill(position, value: NoMoveSiteList)
+	awaited.push(list)
+	return awaited
+end 'withAwaited'
+
 // A snapshot of the PATH-SENSITIVE move state of every owned binding in scope — the twin of
 // `snapshotBindings` (which snapshots `boundValue` for the merge phis), for the one bit that must be
 // reconciled at a control-flow join rather than accumulated monotonically.
@@ -10130,10 +10200,68 @@ type MoveMark
 	// and every alias of it at once and there is no symbol table to walk. See `PromiseConsumeRecord`.
 	export let consumes as PromiseConsumeRecordArray
 
-	export static function create(moved BoolArray, values ValueIdArray, consumes PromiseConsumeRecordArray) returns MoveMark
-		return Self{moved: moved, values: values, consumes: consumes}
+	// ⭐ **AND THE DOORS EACH OWNED BINDING WAITS ON A READ AFTER** (`VarInfo.awaitingMoveReads`) — positional like
+	// `moved`, and rewound and joined with it: a door on one branch is not before a read on the other, and past a
+	// join a door on any reaching path is.
+	export let awaiting as MoveSiteListIndexArray
+
+	export static function create(moved BoolArray, values ValueIdArray, consumes PromiseConsumeRecordArray, awaiting MoveSiteListIndexArray) returns MoveMark
+		return Self{moved: moved, values: values, consumes: consumes, awaiting: awaiting}
 	end 'create'
+
+	// The doors the owned binding at `position` waited on (`withAwaited`).
+	export function awaitingAt(position ElementIndex) returns MoveSiteListIndex
+		if self.awaiting is noAwaitedMoveReads 'waitsOnNone'
+			return NoMoveSiteList
+		end 'waitsOnNone'
+
+		return try self.awaiting.get(position) otherwise panic("MoveMark.awaitingAt: position {position} is past the {self.awaiting.count()} owned bindings the mark holds")
+	end 'awaitingAt'
 end 'MoveMark'
+
+typealias MoveSiteLists = Array with MoveSiteArray
+typealias MoveSiteListIndexArray = Array with MoveSiteListIndex
+
+// The doors on either of two paths, each once, as the index of their list in `lists` — a new one only when the
+// two differ and neither is empty.
+function unionMoveSiteLists(lists MoveSiteLists, a MoveSiteListIndex, b MoveSiteListIndex) returns MoveSiteListIndex
+	if a == b or a == NoMoveSiteList 'onlyB'
+		return b
+	end 'onlyB'
+
+	if b == NoMoveSiteList 'onlyA'
+		return a
+	end 'onlyA'
+
+	var joined = MoveSiteArray.create()
+
+	for site in moveSiteListAt(lists, index: a) 'eachOfA'
+		joined.push(site)
+	end 'eachOfA'
+
+	for site in moveSiteListAt(lists, index: b) 'eachOfB'
+		if not moveSiteListHolds(joined, site: site) 'new'
+			joined.push(site)
+		end 'new'
+	end 'eachOfB'
+
+	lists.push(joined)
+	return (lists.count() - 1) as MoveSiteListIndex
+end 'unionMoveSiteLists'
+
+function moveSiteListAt(lists MoveSiteLists, index MoveSiteListIndex) returns MoveSiteArray
+	return try lists.get(index) otherwise panic("moveSiteListAt: list {index} is past the {lists.count()} the parser holds — a binding's index outlived the function that minted it")
+end 'moveSiteListAt'
+
+function moveSiteListHolds(list MoveSiteArray, site MoveSite) returns bool
+	for held in list 'eachHeld'
+		if held is site 'same'
+			return true
+		end 'same'
+	end 'eachHeld'
+
+	return false
+end 'moveSiteListHolds'
 
 // ⭐⭐ **ONE CONSUME OF ONE GREEN THREAD — the fact E3142 is decided from, and the fact a branch rewinds.**
 //
@@ -10278,17 +10406,20 @@ end 'copyPromiseConsumes'
 // condition's. Every position the arm cannot have seen is `b`'s alone: the binding did not exist while
 // the arm ran, so the arm cannot have moved out of it. `a` LONGER than `b` is still a break — that would
 // mean an arm's own binding survived past its exit — and still panics.
-function orMoveMarks(a MoveMark, b MoveMark) returns MoveMark
+function orMoveMarks(a MoveMark, b MoveMark, lists MoveSiteLists) returns MoveMark
 	if a.moved.count() > b.moved.count() 'drifted'
 		panic("orMoveMarks: mark height {a.moved.count()} exceeds {b.moved.count()} — an arm's own owned bindings must be popped at its exit, so the earlier mark can only ever be a prefix of the later one")
 	end 'drifted'
 
 	var moved = BoolArray.create()
+	var awaiting = noAwaitedMoveReads
 
 	for i in 0 upto b.moved.count() 'each'
 		let bm = try b.moved.get(i) otherwise panic("orMoveMarks: b.moved.get OOB at {i}")
 		let am = (try a.moved.get(i) otherwise panic("orMoveMarks: a.moved.get OOB at {i}, below its own count")) if i < a.moved.count() else false
 		moved.push(am or bm)
+		let aw = a.awaitingAt(i) if i < a.moved.count() else NoMoveSiteList
+		awaiting = withAwaited(awaiting, list: unionMoveSiteLists(lists, a: aw, b: b.awaitingAt(i)), position: i)
 	end 'each'
 
 	// The consume half unions the same way, and PASSES `b`'s list THROUGH when the arm consumed nothing —
@@ -10301,7 +10432,7 @@ function orMoveMarks(a MoveMark, b MoveMark) returns MoveMark
 		unionPromiseConsumes(consumes, from: a.consumes)
 	end 'theArmConsumedAThread'
 
-	return MoveMark.create(moved, values: b.values, consumes: consumes)
+	return MoveMark.create(moved, values: b.values, consumes: consumes, awaiting: awaiting)
 end 'orMoveMarks'
 
 // The sub-mark over the FIRST `height` owned bindings — the ones that OUTLIVE a construct whose own
@@ -10321,17 +10452,19 @@ function moveMarkPrefix(mark MoveMark, height BindingMark) returns MoveMark
 
 	var moved = BoolArray.create()
 	var values = ValueIdArray.create()
+	var awaiting = noAwaitedMoveReads
 
 	for i in 0 upto height 'each'
 		moved.push(try mark.moved.get(i) otherwise panic("moveMarkPrefix: moved.get OOB at {i} after the height check"))
 		values.push(try mark.values.get(i) otherwise panic("moveMarkPrefix: values.get OOB at {i} after the height check"))
+		awaiting = withAwaited(awaiting, list: mark.awaitingAt(i), position: i)
 	end 'each'
 
 	// The consumes ride WHOLE, and by REFERENCE. `height` trims the owned-binding stack, and a consume is
 	// keyed on a VALUE, which sits in no such stack — the thread an arm reclaimed is reclaimed whether or
 	// not the binding that named it has been popped. Sharing the list with the mark it was trimmed from is
 	// safe for `captureMoveMark`'s reason: a mark is read-only.
-	return MoveMark.create(moved, values: values, consumes: mark.consumes)
+	return MoveMark.create(moved, values: values, consumes: mark.consumes, awaiting: awaiting)
 end 'moveMarkPrefix'
 
 // Do two marks record the SAME set of moved-from bindings? Only the `movedFrom` bits are compared — the
@@ -11074,7 +11207,7 @@ type TryBlockContext
 	export var conflictingMoveEdge as bool
 
 	export static function create(func IrFunction, tryTok Token, label ByteArray, errBlockId BlockId, flagPhi ValueId, phiVars LoopPhiVarArray, ownedFloor BindingMark) returns TryBlockContext
-		return Self{func: func, tryTok: tryTok, label: label, errBlockId: errBlockId, flagPhi: flagPhi, phiVars: phiVars, ownedFloor: ownedFloor, throwsClause: ThrowsClause.none, members: TryBlockErrorMemberArray.create(), routedEdges: RoutedErrorEdgeArray.create(), unfusableMember: "", edgeMoveMark: MoveMark.create(BoolArray.create(), values: ValueIdArray.create(), consumes: PromiseConsumeRecordArray.create()), conflictingMoveEdge: false}
+		return Self{func: func, tryTok: tryTok, label: label, errBlockId: errBlockId, flagPhi: flagPhi, phiVars: phiVars, ownedFloor: ownedFloor, throwsClause: ThrowsClause.none, members: TryBlockErrorMemberArray.create(), routedEdges: RoutedErrorEdgeArray.create(), unfusableMember: "", edgeMoveMark: MoveMark.create(BoolArray.create(), values: ValueIdArray.create(), consumes: PromiseConsumeRecordArray.create(), awaiting: noAwaitedMoveReads), conflictingMoveEdge: false}
 	end 'create'
 end 'TryBlockContext'
 
@@ -13831,6 +13964,20 @@ export type Parser
 	// retain path, which is one refcount pair rather than a stolen slot.
 	var valueOwnsHeapAlone as BoolArray
 
+	// ⭐ **AND WHETHER THE OP THAT DEFINED IT MINTED THE RECORD** — `valueOwnsHeapAlone` at the instant of the
+	// mint, which that column stops saying the moment a second owner is taken (`markValueCoOwnsHeap`). A
+	// downgrade makes a second name for the record, not an alias of what built it, so the question
+	// `StorageProvenance` asks — "is this value fresh, or one of its operands?" — needs the claim as it was
+	// made. Same lockstep, set only by `markValueOwnsHeap`'s `sole` arm, and filed as
+	// `IrFunction.valueMintedSole` for a function `StorageProvenance` traces (`fileDeferredProvenance`) — storage
+	// reused from one top-level body to the next, like `deferredProvenance`.
+	var valueMintedSole as BoolArray
+
+	// ⭐ **WHETHER EACH `named` TYPE IS A BOXED UNION, BY ITS INTERNED ID** (`valueIsBoxedUnion`) — asked of every
+	// `named` value a managed-value test meets, a ranged alias's included, and answered by `enumMatchFor` in a
+	// heap box per ask. The interner is this parser's file's, so the ids are dense and an answer is final.
+	var boxedUnionAnswers as BoxedUnionAnswerArray
+
 	// ⭐⭐ **AND WHETHER A CALL RESULT'S SOLE OWNERSHIP IS KNOWN ONE FRAME OUT (SV1)** — the column that says
 	// *"the callee that handed this back built the record in its own `return` statement, so this frame is its
 	// only owner"*, which `valueOwnsHeapAlone` structurally cannot say: that one means *"THIS frame executed the
@@ -14068,6 +14215,17 @@ export type Parser
 	// stayed flat at x1.99. It allocates almost nothing (the list's own geometric growth, +21 allocations at
 	// K = 16,000), so `scale-test` is structurally blind to it and it had to be found by reading.
 	var immutableGlobalReads as ValueMarkColumn
+
+	// ⭐ **WHAT THE BODY BEING PARSED FILES FOR `StorageProvenance` AT ITS `end`** (`DeferredProvenance`,
+	// `fileDeferredProvenance`) — the module-level `let`s it read among them, which `publishExistentialInstances`
+	// files. Reused from one top-level body to the next, and swapped across a closure body for
+	// `immutableGlobalReads`' reason; the shared empty one while no body is being parsed.
+	var deferredProvenance as DeferredProvenance
+
+	// Every list of doors a binding of the function being parsed has waited on (`VarInfo.awaitingMoveReads`), the
+	// first the empty one. Per top-level function, and kept across a closure body, whose reads of the enclosing
+	// function's bindings index it too. The shared one until a binding first waits on a door.
+	var moveSiteLists as MoveSiteLists
 
 	// ⭐⭐ **HAS THE FUNCTION BEING PARSED BEEN PUBLISHED AS ONE WHOSE RETURN MAY ALIAS AN IMMUTABLE GLOBAL
 	// (W117)?** Read at exactly one place — the `returned` door of `ownedFormOfBorrowedValue` — where it
@@ -15328,6 +15486,8 @@ export type Parser
 			valueConstDomains: ConstPayloadDomainArray.create(),
 			valueOwnsHeap: BoolArray.create(),
 			valueOwnsHeapAlone: BoolArray.create(),
+			valueMintedSole: BoolArray.create(),
+			boxedUnionAnswers: noBoxedUnionAnswers,
 			valueFromFreshReturn: BoolArray.create(),
 			valuePromiseMarks: BoolArray.create(),
 			nodeHandleMintedFrom: ValueIdArray.create(),
@@ -15346,6 +15506,8 @@ export type Parser
 			foldedIndexCallSites: noFoldedIndexCallSites,
 			singleByteGraphemeLiterals: noSingleByteGraphemeLiterals,
 			immutableGlobalReads: noValueMarks,
+			deferredProvenance: sharedNoDeferredProvenance,
+			moveSiteLists: sharedNoMoveSiteLists,
 			enclosingFunctionMayReturnAGlobalAlias: false,
 			capturedImmutableGlobalReads: noValueMarks,
 			mergeImmutableBlame: noMergeBlames,
@@ -15444,7 +15606,7 @@ export type Parser
 			arrayLiteralTargetTokenIndex: 0,
 			arrayLiteralTargetInstance: NoGenericInstance,
 			closureParamHint: ClosureParamTypeHint.none,
-			emptyMoveMark: MoveMark.create(BoolArray.create(), values: ValueIdArray.create(), consumes: PromiseConsumeRecordArray.create()),
+			emptyMoveMark: MoveMark.create(BoolArray.create(), values: ValueIdArray.create(), consumes: PromiseConsumeRecordArray.create(), awaiting: noAwaitedMoveReads),
 			isStdlibSource: isStdlibSource,
 			buildsBodies: buildsBodies,
 			isRuntimeSource: isRuntimeSource,
@@ -28399,6 +28561,7 @@ export type Parser
 		self.valueConstDomains = ConstPayloadDomainArray.create()
 		self.valueOwnsHeap = BoolArray.create()
 		self.valueOwnsHeapAlone = BoolArray.create()
+		self.valueMintedSole.clear()
 		self.valueFromFreshReturn = BoolArray.create()
 		self.valuePromiseMarks = BoolArray.create()
 		self.nodeHandleMintedFrom = ValueIdArray.create()
@@ -28431,6 +28594,7 @@ export type Parser
 		// function's SSA space, so a mark carried over would name an unrelated value in the next one.
 		self.immutableGlobalReads = noValueMarks
 		self.mergeImmutableBlame = noMergeBlames
+		self.beginDeferredProvenance()
 
 		// ⭐ **W117: WHAT THE SWEEP PUBLISHED ABOUT *THIS* DECLARATION**, read once here rather than at each
 		// `return` — the answer cannot change while one body is parsed, and the door that reads it sits on the
@@ -28492,7 +28656,7 @@ export type Parser
 		// own type columns — there is no second array and no copy-back at the end of the body. It is
 		// safe because both are re-created (not cleared) for the next function, so nothing aliases
 		// these afterwards. See IrFunction.valueTags / valueNameIds for what the columns are FOR.
-		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramCount, maxonParamTypes: paramTypes, valueTags: self.valueTags, valueNameIds: self.valueNameIds, valueBrandIds: self.valueBrandIds, valueClosureEnv: self.valueClosureEnv, valueIsCapturingClosure: self.valueIsCapturingClosure, valueWitnessIds: self.valueWitnessIds, returnLine: nameTok.line, declaredAt: SourcePosition.declaredAt(self.filePath, nameTok: nameTok), throwsTypeName: throwsClause)
+		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramCount, maxonParamTypes: paramTypes, valueTags: self.valueTags, valueNameIds: self.valueNameIds, valueBrandIds: self.valueBrandIds, valueMintedSole: sharedNoMintedSole, valueClosureEnv: self.valueClosureEnv, valueIsCapturingClosure: self.valueIsCapturingClosure, valueWitnessIds: self.valueWitnessIds, returnLine: nameTok.line, declaredAt: SourcePosition.declaredAt(self.filePath, nameTok: nameTok), throwsTypeName: throwsClause)
 		func.visibility = visibility
 
 		// ⭐ **THE FUNCTION IS PUSHED UP FRONT, NOT AT THE END, AND THAT IS WHAT MAKES ValueOrigin CORRECT
@@ -28661,7 +28825,7 @@ export type Parser
 			// E3012 first, E3077 only when it found nothing — the precedence, stated as the order of the two
 			// scans over one list. See `reportVarShouldBeLet`.
 			if not self.reportUnusedBindings(nameTok.value) 'nothingUnused'
-				self.reportVarShouldBeLet()
+				self.reportVarShouldBeLet(func)
 			end 'nothingUnused'
 		end 'bodyReached'
 
@@ -28679,6 +28843,7 @@ export type Parser
 		end 'anOptionalLabel'
 
 		self.publishExistentialInstances(func)
+		self.fileDeferredProvenance(func)
 		self.publishDebugLocals(func)
 		self.artifact.recordFuncReturnType(name, returnType: returnType, declaredSurface: declaredReturnSurface)
 		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: self.returnExistentialSitesOf(returnType, returnTypeStart: returnTypeStart), extensionConstraints: self.enclosingExtensionConstraints), nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.filePath, synthesized: false)
@@ -29223,29 +29388,50 @@ export type Parser
 	// precedence above.** The precedence covers one function reaching both rules; this covers the
 	// SECOND unused declaration, which E3012 deliberately did not report (one diagnostic per
 	// function). Reporting it here would say "use `let`" about a binding whose real fix is deletion.
-	function reportVarShouldBeLet()
-		// An INDEX loop, not `for … in`: the element is a BORROW of `unusedCandidates`, and the call below is
-		// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
-		// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+	function reportVarShouldBeLet(func IrFunction)
+		// An INDEX loop, not `for … in`: the element is a BORROW of `unusedCandidates`, and the calls below are
+		// recorded as writing that same storage (`IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`).
 		for candidateIndex in 0 upto self.unusedCandidates.count() 'eachCandidate'
-			let candidate = try self.unusedCandidates.get(candidateIndex) otherwise panic("reportVarShouldBeLet: candidateIndex {candidateIndex} is below self.unusedCandidates.count()")
-
-			if candidate.kind != UnusedBindingKind.mutableLocal 'notAVar'
-				continue
-			end 'notAVar'
-
-			if not self.bindingNameWasMentioned(candidate.binding) 'unusedIsE3012sToReport'
-				continue
-			end 'unusedIsE3012sToReport'
-
-			if candidate.binding.mutabilityExercised or self.nameIsListed(self.mutabilityExercisedNames, name: candidate.binding.name) 'neededTheMutability'
-				continue
-			end 'neededTheMutability'
-
-			self.recordBindingHygieneDiagnostic(ErrorCode.semanticVarShouldBeLet, message: "variable '{String.from((try self.unusedCandidates.get(candidateIndex) otherwise panic("reportVarShouldBeLet: candidateIndex {candidateIndex} is below self.unusedCandidates.count()")).binding.name)}' is never reassigned; use 'let' instead of 'var'", range: (try self.unusedCandidates.get(candidateIndex) otherwise panic("reportVarShouldBeLet: candidateIndex {candidateIndex} is below self.unusedCandidates.count()")).nameRange)
-			return
+			if self.isVarShouldBeLetCandidate(candidateIndex) 'theFirst'
+				func.recordVarShouldBeLetCandidates(self.varShouldBeLetCandidatesFrom(candidateIndex))
+				return
+			end 'theFirst'
 		end 'eachCandidate'
 	end 'reportVarShouldBeLet'
+
+	function isVarShouldBeLetCandidate(candidateIndex ElementIndex) returns bool
+		let candidate = try self.unusedCandidates.get(candidateIndex) otherwise panic("isVarShouldBeLetCandidate: candidateIndex {candidateIndex} is below self.unusedCandidates.count()")
+
+		if candidate.kind != UnusedBindingKind.mutableLocal or not self.bindingNameWasMentioned(candidate.binding) 'notAVarOrUnusedIsE3012sToReport'
+			return false
+		end 'notAVarOrUnusedIsE3012sToReport'
+
+		return not candidate.binding.mutabilityExercised and not self.nameIsListed(self.mutabilityExercisedNames, name: candidate.binding.name)
+	end 'isVarShouldBeLetCandidate'
+
+	// ⭐ **EVERY CANDIDATE WAITS FOR `StorageProvenance`**, which withholds E3077 where a `let` would meet a mutable
+	// door that moves or refuses it (`ProvenanceTracer.settleVarShouldBeLet`). The first, at `first`, is reported
+	// now, and replaced there when it is withheld.
+	function varShouldBeLetCandidatesFrom(first ElementIndex) returns VarShouldBeLetCandidates
+		var candidates = VarShouldBeLetCandidates.unreported()
+
+		for candidateIndex in first upto self.unusedCandidates.count() 'eachCandidate'
+			if not self.isVarShouldBeLetCandidate(candidateIndex) 'notACandidate'
+				continue
+			end 'notACandidate'
+
+			let candidate = try self.unusedCandidates.get(candidateIndex) otherwise panic("varShouldBeLetCandidatesFrom: candidateIndex {candidateIndex} is below self.unusedCandidates.count()")
+			candidates.values.push(candidate.binding.boundValue)
+			candidates.names.push(candidate.binding.name)
+			candidates.ranges.push(candidate.nameRange)
+			candidates.infos.push(candidate.binding)
+			candidates.declTokens.push(candidate.declToken)
+		end 'eachCandidate'
+
+		self.recordBindingHygieneDiagnostic(ErrorCode.semanticVarShouldBeLet, message: varShouldBeLetMessage(String.from(try candidates.names.get(0) otherwise panic("varShouldBeLetCandidatesFrom: the first candidate is missing"))), range: try candidates.ranges.get(0) otherwise panic("varShouldBeLetCandidatesFrom: the first candidate's range is missing"))
+		candidates.reported = try self.artifact.bindingHygieneDiagnostics.get(self.artifact.bindingHygieneDiagnostics.count() - 1) otherwise panic("varShouldBeLetCandidatesFrom: the diagnostic just recorded is missing")
+		return candidates
+	end 'varShouldBeLetCandidatesFrom'
 
 	// Was the NAME this binding declared mentioned anywhere in the function being parsed? The per-binding
 	// bit first, then the name-scoped half — see `referencedNames` for why the second question exists and
@@ -30062,6 +30248,7 @@ export type Parser
 		self.valueConstDomains = ConstPayloadDomainArray.create()
 		self.valueOwnsHeap = BoolArray.create()
 		self.valueOwnsHeapAlone = BoolArray.create()
+		self.valueMintedSole.clear()
 		self.valueFromFreshReturn = BoolArray.create()
 		self.valuePromiseMarks = BoolArray.create()
 		self.nodeHandleMintedFrom = ValueIdArray.create()
@@ -30111,6 +30298,7 @@ export type Parser
 		self.foldedIndexCallSites = noFoldedIndexCallSites
 		self.immutableGlobalReads = noValueMarks
 		self.mergeImmutableBlame = noMergeBlames
+		self.beginDeferredProvenance()
 
 		// ⭐⭐ **W117, ASKED OF THE HELPER'S OWN MINTED NAME — WHICH IS WHAT SEPARATES THE LANGUAGE'S TWO
 		// DEFAULT DOORS HERE, AND THE SEPARATION IS THE KEY RATHER THAN A CASE.** A PARAMETER default's helper
@@ -30165,7 +30353,7 @@ export type Parser
 		self.functionReturnBrand = EmptySourceText
 		self.rangeCheckParamSites = sharedEmptyParamSites
 
-		var helper = IrFunction.create(helperName, maxonReturnType: returnType, paramCount: helperParamCount, maxonParamTypes: MaxonTypeArray.create(), valueTags: self.valueTags, valueNameIds: self.valueNameIds, valueBrandIds: self.valueBrandIds, valueClosureEnv: self.valueClosureEnv, valueIsCapturingClosure: self.valueIsCapturingClosure, valueWitnessIds: self.valueWitnessIds, returnLine: anchor.line, declaredAt: SourcePosition.declaredAt(self.filePath, nameTok: anchor), throwsTypeName: ThrowsClause.none)
+		var helper = IrFunction.create(helperName, maxonReturnType: returnType, paramCount: helperParamCount, maxonParamTypes: MaxonTypeArray.create(), valueTags: self.valueTags, valueNameIds: self.valueNameIds, valueBrandIds: self.valueBrandIds, valueMintedSole: sharedNoMintedSole, valueClosureEnv: self.valueClosureEnv, valueIsCapturingClosure: self.valueIsCapturingClosure, valueWitnessIds: self.valueWitnessIds, returnLine: anchor.line, declaredAt: SourcePosition.declaredAt(self.filePath, nameTok: anchor), throwsTypeName: ThrowsClause.none)
 
 		// The tier the OWNER decided (`parseDefaultHelper`), which is the one fact about a helper that is not
 		// the same for both doors: a parameter's is reachable from every file, a field's from exactly one.
@@ -30230,6 +30418,7 @@ export type Parser
 		// parameterized existential cannot have a default: `E3121`/`E2010` aside, a default is an EXPRESSION and
 		// there is no literal of an interface type to write.
 		self.publishExistentialInstances(helper)
+		self.fileDeferredProvenance(helper)
 		self.publishDebugLocals(helper)
 		self.artifact.recordFuncSignature(helperName, signature: FuncSignature.create(ByteArrayArray.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: ByteArrayArray.create(), paramDeclaredNames: ByteArrayArray.create(), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: sharedEmptyParamExistentialSites, returnExistentialSites: sharedEmptyReturnExistentialSites, extensionConstraints: sharedEmptyWhereConstraints), nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.filePath, synthesized: true)
 		self.commitRangeChecks(helperName)
@@ -30419,7 +30608,7 @@ export type Parser
 			self.trackDebugLocal(binding)
 
 			if not paramName.equals(SelfParamName) and not paramName.equals(DiscardBindingName) 'checkedForUse'
-				self.unusedCandidates.push(UnusedBindingCandidate.create(binding, nameRange: paramRange, kind: UnusedBindingKind.parameter))
+				self.unusedCandidates.push(UnusedBindingCandidate.create(binding, nameRange: paramRange, kind: UnusedBindingKind.parameter, declToken: self.pos))
 			end 'checkedForUse'
 
 			// ⭐ **A PARAMETER THAT NAMED `__ManagedMemory` DENOTES THE BUFFER THERE (A2j / A2m)** — the spelling
@@ -32536,11 +32725,85 @@ export type Parser
 		// program. Asked here, the sentence can only ever name something the author can go and change.
 		// The ordering the rule needs is unaffected: this still runs before the borrowed-managed promotion
 		// that door performs, which is the aliasing being refused (see `requireMutableBindingSource`).
-		try self.requireMutableBindingSource(nameTok, value: value, sourceName: sourceName, sourceReadsAField: sourceReadsAField, mutable: mutable)
+		try self.requireMutableBindingSource(func, nameTok: nameTok, value: value, sourceName: sourceName, sourceReadsAField: sourceReadsAField, mutable: mutable)
 
+		let borrowsIt = self.valueIsABorrow(value)
 		try self.declareInitializedBinding(func, nameTok: nameTok, value: value, sourceName: sourceName, sourceReadsAField: sourceReadsAField, mutable: mutable)
 		self.noteBodyBindingDeclared(nameTok, mutable: mutable)
+		self.noteImmutableBinding(func, nameTok: nameTok, mutable: mutable, borrowsIt: borrowsIt)
 	end 'parseBinding'
+
+	// A `let` the author wrote is storage no writable name may reach, which `StorageProvenance` decides once
+	// every body is parsed. Asked at the doors E3078 is (see `declareInitializedBinding`), for their reason: the
+	// destructuring temp is a name the compiler minted.
+	function noteImmutableBinding(func IrFunction, nameTok Token, mutable bool, borrowsIt bool)
+		if mutable or nameTok.value.equals(DiscardBindingName) 'notAnImmutableBinding'
+			return
+		end 'notAnImmutableBinding'
+
+		var binding = self.scope.getInfo(nameTok.value)
+
+		// A function value stays: it is no root, but it names the closure a call through it is blamed by
+		// (`ProvenanceTracer.boundFunctionValueSubject`). An immutable record stays too: what it holds may be written.
+		if self.valueIsNoRecordAWriteReaches(binding.boundValue) and self.tagOf(binding.boundValue) != ValueTypeTag.function 'nothingToGuard'
+			return
+		end 'nothingToGuard'
+
+		func.recordImmutableBinding(binding.boundValue, bindingName: nameTok.value, borrows: borrowsIt, info: binding, declToken: self.pos)
+	end 'noteImmutableBinding'
+
+	// ⭐ **IS `value` NO RECORD A WRITE CAN REACH?** A scalar, a payload-free enum and a function value are no record,
+	// and a string literal is an immortal one every door copies before anything writes it. An opaque `T` may be a
+	// record.
+	function valueIsNoRecordAWriteReaches(value ValueId) returns bool
+		let mayBeARecord = self.valueIsManagedHeap(value) or self.tagOf(value) == ValueTypeTag.typeParameter
+		return not mayBeARecord or self.valueIsAMintedStringLiteral(value)
+	end 'valueIsNoRecordAWriteReaches'
+
+	// ⭐ **CAN NO MUTABLE DOOR ASK ABOUT `value`?** When it is no record a write reaches, or when it IS an immutable
+	// record (`ProgramSignatures.recordTypeIsImmutable`), which nothing writes. Handing either over moves nothing.
+	function recordNeverMeetsADoor(value ValueId) returns bool
+		return self.valueIsNoRecordAWriteReaches(value) or self.valueIsAnImmutableRecord(value)
+	end 'recordNeverMeetsADoor'
+
+	function valueIsAnImmutableRecord(value ValueId) returns bool
+		return tagIsStructRef(self.tagOf(value)) and self.signatures.recordTypeIsImmutable(self.internedName(self.valueNameId(value)))
+	end 'valueIsAnImmutableRecord'
+
+	// ⭐ **DOES A BINDING OF `value` BORROW THE RECORD RATHER THAN OWN IT?** A read that takes no reference — a
+	// field, an element, a parameter's record — borrows, and so does a read out of a rebindable slot the binding
+	// door retains only to outlive the slot's next store (W41): what the binding names is still that storage's
+	// record. A value its producer handed over counted — a call result, a list node's handle — is owned.
+	function valueIsABorrow(value ValueId) returns bool
+		return not self.valueIsOwnedHeap(value) or valueIsMarked(self.rebindableSlotReads, value: value)
+	end 'valueIsABorrow'
+
+	// A record a `var` holds is writable storage, as a parameter's is (`bindingStorageIsWritable`), so a `let`
+	// stored into it is no longer the only name that reaches it. A phi of the binding is not recorded — it
+	// merges values that are.
+	function noteWritableValue(func IrFunction, value ValueId)
+		if self.valueIsManagedHeap(value) 'holdsARecord'
+			var deferred = self.deferredProvenanceOf(func)
+			deferred.noteWritableValue(value)
+		end 'holdsARecord'
+	end 'noteWritableValue'
+
+	// A mutable name `place` bound or assigned `value` at `anchor`, a door asked of the value (`StorageSite`).
+	function noteMutableBindingSite(func IrFunction, place ByteArray, value ValueId, anchor Token)
+		var deferred = self.deferredProvenanceOf(func)
+		deferred.noteMutableBindingSite(StorageSite.create(place, value: value, line: anchor.line, column: anchor.column, token: self.pos))
+	end 'noteMutableBindingSite'
+
+	// `value` bound at `anchor` to `boundName`, a mutable name that outlives the call (`StorageSite`).
+	function noteNameBindSite(func IrFunction, boundName ByteArray, value ValueId, anchor Token)
+		var deferred = self.deferredProvenanceOf(func)
+		deferred.noteNameBindSite(StorageSite.create(boundName, value: value, line: anchor.line, column: anchor.column, token: self.pos))
+	end 'noteNameBindSite'
+
+	function noteLoopSpan(func IrFunction, start TokenIndex, finish TokenIndex)
+		var deferred = self.deferredProvenanceOf(func)
+		deferred.noteLoop(start, finish: finish)
+	end 'noteLoopSpan'
 
 	// ⭐ **E3077 / E3012 CANDIDATE: A BODY `var` THE AUTHOR WROTE.** Enrolled at the SAME two doors E3078 is
 	// asked at — this one and the destructuring ELEMENT — and for the same reason spelled there:
@@ -32568,7 +32831,7 @@ export type Parser
 		end 'notACandidateName'
 
 		let kind = UnusedBindingKind.mutableLocal if mutable else UnusedBindingKind.immutableLocal
-		self.unusedCandidates.push(UnusedBindingCandidate.create(self.scope.getInfo(nameTok.value), nameRange: SourceRange.ofToken(nameTok), kind: kind))
+		self.unusedCandidates.push(UnusedBindingCandidate.create(self.scope.getInfo(nameTok.value), nameRange: SourceRange.ofToken(nameTok), kind: kind, declToken: self.pos))
 	end 'noteBodyBindingDeclared'
 
 	// ⭐ **BIND ONE NAME TO ONE ALREADY-PARSED INITIALIZER — the whole declaration half of a `let`/`var`.**
@@ -32581,11 +32844,11 @@ export type Parser
 	//
 	// ⚠ **E3078 IS THE CALLER'S, AND IT MUST ALREADY HAVE BEEN ASKED.** The borrowed-managed promotion below
 	// IS the aliasing that rule refuses — it retains an immutable source's box and hands it to a writable
-	// name — so the refusal has to run BEFORE this door rather than inside it. It is asked at the two callers
-	// that hold a name the AUTHOR WROTE (`parseBinding`, and the destructuring ELEMENT) and at neither of the
-	// other two: the `if let` binding names no source at all, and the destructuring TEMP does name one but is
-	// a binding the compiler MINTED, which no diagnostic may tell an author to change. `sourceName` reaches
-	// this door for the MOVE poison, which is a different question. See `requireMutableBindingSource`.
+	// name — so the refusal has to run BEFORE this door rather than inside it. It is asked at the three callers
+	// that bind a name the AUTHOR WROTE (`parseBinding`, the destructuring ELEMENT, and the `if let`/`if var`
+	// binder, whose source has no name and is asked of its value) and not at the destructuring TEMP, a binding
+	// the compiler MINTED, which no diagnostic may tell an author to change. `sourceName` reaches this door for
+	// the MOVE poison, which is a different question. See `requireMutableBindingSource`.
 	function declareInitializedBinding(func IrFunction, nameTok Token, value ValueId, sourceName ByteArray, sourceReadsAField bool, mutable bool) throws ParseError
 		try self.requireNoManagedValueInRuntimeSource(nameTok.value, value: value, line: nameTok.line, column: nameTok.column)
 
@@ -32635,6 +32898,14 @@ export type Parser
 			boundBareLocal = false
 		end 'promoteBorrowedBinding'
 
+		// ⭐ **A MUTABLE NAME TAKING AN IMMUTABLE NAME'S RECORD HOLDS A REFERENCE OF ITS OWN.** Whether the door moved
+		// the source or refuses it is `StorageProvenance`'s to say (`requireMutableBindingSource` filed it); either
+		// way the source keeps the drop it owes and this name owns what it took from here.
+		if mutable and boundBareLocal and self.rebindSourceIsAnImmutableAlias(sourceName) and self.valueIsOwnedHeap(value) 'coOwnTheImmutableRecord'
+			boundValue = self.coOwnImmutableRebindSource(value, range: SourceRange.ofToken(nameTok))
+			boundBareLocal = false
+		end 'coOwnTheImmutableRecord'
+
 		// ⭐⭐ **A `var` ANOTHER FRAME MUST BE ABLE TO WRITE LIVES IN A CELL FROM ITS DECLARATION (PBR-2).**
 		// Taken here, before the ordinary value binding, because the cell has to dominate every read of the
 		// name — there is no later point at which the representation could be changed, since the reads
@@ -32647,6 +32918,10 @@ export type Parser
 			try self.declareCellLocal(func, nameTok: nameTok, boundValue: boundValue, rhsWasBareLocal: boundBareLocal)
 			return
 		end 'livesInACell'
+
+		if mutable 'writableStorage'
+			self.noteWritableValue(func, value: boundValue)
+		end 'writableStorage'
 
 		// A local taking the name of a field of the enclosing type is E3006, not a shadow — see
 		// `Scope.declareValueBinding`. Anchored on the LOCAL's name token: the field is fine, the
@@ -32764,11 +33039,16 @@ export type Parser
 	// `var q = <an immutable struct parameter>` would co-own the caller's box under a writable name. Asked
 	// first, that shape never reaches the retain.
 	//
-	// ⭐ **ITS TWO ASKERS ARE THE TWO DOORS THAT HOLD AN AUTHOR-WRITTEN NAME** — `parseBinding`, and the
-	// destructuring ELEMENT (`parseDestructuringBinding`), which asks it of a field of the same source. It is
-	// deliberately NOT asked inside `declareInitializedBinding`, whose third caller declares the destructuring
-	// TEMP: a name the compiler mints cannot be the subject of a sentence telling the author what to change,
-	// and the temp's mutability is inert anyway (see there).
+	// ⭐ **ITS ASKERS ARE THE DOORS THAT BIND AN AUTHOR-WRITTEN NAME** — `parseBinding`, the destructuring
+	// ELEMENT (`parseDestructuringBinding`), which asks it of a field of the same source, and the `if let`/
+	// `if var` binder (`parseBoundThenBody`). It is deliberately NOT asked inside `declareInitializedBinding`,
+	// whose other caller declares the destructuring TEMP: a name the compiler mints cannot be the subject of a
+	// sentence telling the author what to change, and the temp's mutability is inert anyway (see there).
+	//
+	// ⭐ **A SOURCE WITH NO NAME IS ASKED OF ITS VALUE, ONCE EVERY BODY IS PARSED.** A call, a merge or an
+	// element of either may hand back a `let`'s record — a `return` retains a borrow rather than copying it —
+	// and which one does is a whole-program fact (`StorageProvenance.checkMutableBindingSites`). A BORROWED
+	// byte record is exempt: `declareInitializedBinding` copies it, so the name owns a record of its own.
 	//
 	// ⚠ **A REFERENCE TYPE HERE IS A VALUE THAT NAMES STORAGE — asked of the VALUE, not of a type registry.**
 	// `valueIsManagedHeap` is the compiler's existing answer to "is there a record behind this?" (struct box,
@@ -32781,43 +33061,134 @@ export type Parser
 	// storage for a second name to reach — so the refusal would name a hazard the compiler does not
 	// have, and `var-should-be-let` pins no enum case. A union with a payload IS boxed and IS refused,
 	// through `valueIsManagedHeap`.
-	function requireMutableBindingSource(nameTok Token, value ValueId, sourceName ByteArray, sourceReadsAField bool, mutable bool) throws ParseError
-		if not mutable or sourceName.isEmpty() 'notAMutableBindOfANamedSource'
+	function requireMutableBindingSource(func IrFunction, nameTok Token, value ValueId, sourceName ByteArray, sourceReadsAField bool, mutable bool) throws ParseError
+		if not mutable 'notAMutableBinding'
 			return
-		end 'notAMutableBindOfANamedSource'
+		end 'notAMutableBinding'
 
-		// ⭐ **ASKED FIRST, AND THE ORDER IS E3077'S RATHER THAN E3078's.** A scalar copy is an independent
-		// value: neither the shape this refuses, nor a reason the SOURCE had to be writable. Both arms below
-		// merely `return`, so moving this above the writability test moves nothing observable for E3078 —
-		// what it buys is that the mark below fires only where a mutable name really did reach the source's
-		// storage, so `var y = x` over an `int` does not silently excuse `x`.
-		if not self.valueIsManagedHeap(value) and self.tagOf(value) != ValueTypeTag.function 'independentCopy'
+		// ⭐ **ASKED FIRST, AND THE ORDER IS E3077'S RATHER THAN E3078's.** A value with no record — a scalar, or a
+		// function value, which names no storage a write can reach — is an independent copy: neither the shape
+		// this refuses, nor a reason the SOURCE had to be writable, so the mark below fires only where a mutable
+		// name really did reach the source's storage.
+		if not self.valueIsManagedHeap(value) or self.recordNeverMeetsADoor(value) 'independentCopy'
 			return
 		end 'independentCopy'
 
-		// A source whose storage is already writable is not the shape this refuses. A `var` is the move
-		// model's own case — it gives the value up, so no second live name aliases it. A PARAMETER is a
-		// borrowed reference to the caller's record, which the callee may mutate; that exemption is
-		// `bindingStorageIsWritable`'s, shared with E3019, and MEASURED on the oracle.
+		// ⭐ **A DOOR THAT COPIES MOVES AND REFUSES NOTHING.** A byte record the binding does not own is copied into
+		// the name (`declareInitializedBinding`), so the name owns a record of its own and nothing reaches the source.
+		let bindingCopiesIt = tagIsByteRecord(self.tagOf(value)) and not self.valueIsOwnedHeap(value)
+
+		// ⭐ **A SOURCE WITH NO NAME IS ASKED OF ITS VALUE, ONCE EVERY BODY IS PARSED.** A call, a merge or an element
+		// of either may hand back an immutable name's record — a `return` retains a borrow rather than copying it —
+		// and which one does is a whole-program fact (`StorageProvenance.checkMutableBindingSites`).
+		if sourceName.isEmpty() 'noNamedSource'
+			if not bindingCopiesIt 'mayNameSharedStorage'
+				self.noteMutableBindingSite(func, place: nameTok.value, value: value, anchor: nameTok)
+			end 'mayNameSharedStorage'
+
+			return
+		end 'noNamedSource'
+
+		var source = self.scope.getInfo(sourceName)
+
+		// A self-field alias names a field of the receiver, a read out of a parameter's record: asked of its value.
+		if source.isSelfField 'aFieldOfTheReceiver'
+			if not bindingCopiesIt 'mayNameSharedStorage'
+				self.noteMutableBindingSite(func, place: nameTok.value, value: value, anchor: nameTok)
+			end 'mayNameSharedStorage'
+
+			return
+		end 'aFieldOfTheReceiver'
+
+		// A source whose storage is already writable is not the shape this refuses. A `var` is the move model's own
+		// case — it gives the value up, so no second live name aliases it. A PARAMETER is a borrowed reference to
+		// the caller's record, which the callee may mutate; that exemption is `bindingStorageIsWritable`'s, shared
+		// with E3019, and MEASURED on the oracle.
 		//
-		// ⭐⭐ **AND IT IS E3077's SEVENTH DOOR — the one that was missing, and whose absence left a correct
-		// program with NO LEGAL SPELLING.** `bindingStorageIsWritable`'s header states the invariant these
-		// two rules rest on and must not drift from; E3077's evidence was recorded on the E3019 side only,
-		// so `var i = o.inner` did not count as a use of `o`'s mutability. MEASURED, all four spellings of
-		// the canonical `var-from-immutable-struct-field` program, each following the previous diagnostic's
-		// own advice: `var o`/`var i` was **E3077** on `o`, `let o`/`var i` **E3078** on `i`, `let o`/`let i`
-		// **E2013** at the write, and the `clone()` E3078 advertises **E2015** on a struct-field read. Four
-		// refusals and no way through, for "take a mutable handle into a field of a local struct".
+		// ⭐⭐ **AND IT IS E3077's SEVENTH DOOR.** `bindingStorageIsWritable`'s header states the invariant these two
+		// rules rest on: `var i = o.inner` is a use of `o`'s mutability, and without the mark the canonical
+		// `var-from-immutable-struct-field` program had no legal spelling. Marked HERE because the exemption and the
+		// mark are the same fact: the source had to be writable for this binding to be legal.
 		//
-		// Marked HERE rather than at a second `markMutabilityExercised` call site, because the exemption and
-		// the mark are the same fact: the source had to be writable for this binding to be legal.
-		if self.bindingStorageIsWritable(self.scope.getInfo(sourceName)) 'sourceIsWritableToo'
+		// ⭐ **AND IT IS STILL A DOOR, FILED FOR THE WHOLE-PROGRAM QUESTIONS IT RAISES.** A parameter's record taken
+		// by a mutable name makes the parameter one a caller's argument meets a mutable door through, and a field of
+		// a `var` may be a record a live `let` borrows.
+		if self.bindingStorageIsWritable(source) 'sourceIsWritableToo'
 			self.markNameMutabilityExercised(sourceName)
+
+			if (source.isParameter or sourceReadsAField) and not bindingCopiesIt 'aDoorForTheSummary'
+				self.noteMutableBindingSite(func, place: nameTok.value, value: value, anchor: nameTok)
+			end 'aDoorForTheSummary'
+
 			return
 		end 'sourceIsWritableToo'
 
-		throw ParseError.varFromImmutable(self.immutableSourceSubject(sourceName, sourceReadsAField: sourceReadsAField), binding: String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
+		if bindingCopiesIt 'theDoorCopiesIt'
+			return
+		end 'theDoorCopiesIt'
+
+		// A FIELD of an immutable name is not the name, so it cannot move: the mutable binding would reach a record
+		// another name holds. The chain is blamed without a name — see `immutableSourceSubject`.
+		if sourceReadsAField 'aFieldCannotMove'
+			throw ParseError.varFromImmutable(self.immutableSourceSubject(sourceName, sourceReadsAField: true), binding: String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
+		end 'aFieldCannotMove'
+
+		// ⭐⭐ **AN IMMUTABLE NAME SPELLED BARE MOVES WHEN IT IS ITS RECORD'S SOLE REFERENCE, AND IS REFUSED
+		// OTHERWISE** — a `let` bound to a fresh record and named by nothing else live, which is a whole-program
+		// question (`StorageProvenance.checkMoveSites`). The binding co-owns the record meanwhile
+		// (`declareInitializedBinding`), which is sound either way.
+		self.noteMoveSite(func, value: value, binding: source, destination: nameTok.value, anchor: nameTok)
 	end 'requireMutableBindingSource'
+
+	// ⭐ **A NAME BOUND OR ASSIGNED WHOLE TO A MUTABLE NAME, FILED FOR `StorageProvenance` WITH THE READ THAT WOULD
+	// OBSERVE A MOVE.** `value` is what the mutable name took — the name's own value, or the reference taken of it. The
+	// binding's next read on this path is recorded on the site (`noteReadAfterDoors`), which is where E3102 points
+	// when the door turns out to have moved the name.
+	function noteMoveSite(func IrFunction, value ValueId, binding VarInfo, destination ByteArray, anchor Token)
+		if self.recordNeverMeetsADoor(binding.boundValue) 'nothingToMove'
+			return
+		end 'nothingToMove'
+
+		let escapesLoop = self.loops.count() > 0 and self.moveOfValueEscapesLoop(binding.boundValue)
+		var site = MoveSite.create(value, source: binding.name, sourceValue: binding.boundValue, sourceIsMutable: binding.mutable, destination: destination, line: anchor.line, column: anchor.column, token: self.pos, escapesLoop: escapesLoop)
+		var deferred = self.deferredProvenanceOf(func)
+		deferred.noteMoveSite(site)
+		self.awaitReadAfterDoor(binding, site: site)
+	end 'noteMoveSite'
+
+	// The binding's pending doors, with `site` among them. A fresh list, since a `MoveMark` may hold the one it
+	// replaces — of the same sites, which the function's own list shares, so the read that follows fills them in.
+	function awaitReadAfterDoor(binding VarInfo, site MoveSite)
+		var lists = self.moveSiteListsForWrite()
+		var awaiting = MoveSiteArray.create()
+
+		for pending in moveSiteListAt(lists, index: binding.awaitingMoveReads) 'eachPending'
+			awaiting.push(pending)
+		end 'eachPending'
+
+		awaiting.push(site)
+		lists.push(awaiting)
+		binding.awaitingMoveReads = (lists.count() - 1) as MoveSiteListIndex
+	end 'awaitReadAfterDoor'
+
+	// COPY-ON-WRITE off `sharedNoMoveSiteLists`, for `sharedEmptyIterationLocks`' reason.
+	function moveSiteListsForWrite() returns MoveSiteLists
+		if self.moveSiteLists is sharedNoMoveSiteLists 'stillShared'
+			self.moveSiteLists = freshMoveSiteLists()
+		end 'stillShared'
+
+		return self.moveSiteLists
+	end 'moveSiteListsForWrite'
+
+	// This read is the first after every door the binding is waiting on.
+	function noteReadAfterDoors(binding VarInfo, nameTok Token)
+		for i in 0 upto moveSiteListAt(self.moveSiteLists, index: binding.awaitingMoveReads).count() 'eachPending'
+			var pending = try moveSiteListAt(self.moveSiteLists, index: binding.awaitingMoveReads).get(i) otherwise panic("noteReadAfterDoors: the pending list is shorter than its own count at {i}")
+			pending.noteRead(nameTok.line, atColumn: nameTok.column)
+		end 'eachPending'
+
+		binding.awaitingMoveReads = NoMoveSiteList
+	end 'noteReadAfterDoors'
 
 	// The clause E3078's sentence blames the source with. A BARE source is blamed by name; a FIELD
 	// CHAIN (`var i = o.inner`) is not, because the value the mutable name would reach is the field's
@@ -32916,12 +33287,14 @@ export type Parser
 		// answer and that program's sentence, blaming the name the author wrote. A managed element would
 		// otherwise be promoted (retained) into a writable name and `p.x = 9` would show through `t`,
 		// which the longhand spelling already refuses.
-		try self.requireMutableBindingSource(nameTok, value: element, sourceName: sourceName, sourceReadsAField: true, mutable: mutable)
+		try self.requireMutableBindingSource(func, nameTok: nameTok, value: element, sourceName: sourceName, sourceReadsAField: true, mutable: mutable)
 
 		// No source name for the DECLARATION: a field load is a fresh borrowed value held by no binding,
 		// so there is nothing for the move poison to find.
+		let borrowsIt = self.valueIsABorrow(element)
 		try self.declareInitializedBinding(func, nameTok: nameTok, value: element, sourceName: EmptySourceText, sourceReadsAField: false, mutable: mutable)
 		self.noteBodyBindingDeclared(nameTok, mutable: mutable)
+		self.noteImmutableBinding(func, nameTok: nameTok, mutable: mutable, borrowsIt: borrowsIt)
 	end 'declareDestructuredElement'
 
 	// ⭐⭐ **`(x, let y) = makePair(10, b: 32)` — STATEMENT-LEVEL TUPLE ASSIGNMENT (`specs/tuple-assign.md`),
@@ -33851,6 +34224,7 @@ export type Parser
 		end 'aFreshValue'
 
 		let stored = self.shedAliasIntoUnnamedBinding(assigned, binding: binding, nameTok: nameTok)
+		self.noteAssignmentDoor(func, place: nameTok.value, value: stored, sourceName: rhsBareLocalName, anchor: nameTok)
 
 		// ⭐⭐ **A CELL-RESIDENT BINDING IS REBOUND BY STORING, NOT BY `Scope.setValue` (PBR-2).** It never
 		// reaches `reassignBindingValue`: that routine's whole job is to move a binding from one SSA value to
@@ -33858,7 +34232,7 @@ export type Parser
 		// contents live in memory, where a later read will find them. The release of the displaced occupant is
 		// the same obligation, discharged against the memory rather than against a value id.
 		if binding.isCellBinding 'livesInACell'
-			try self.reassignCellBinding(binding, nameTok: nameTok, value: stored, rhsBareLocalName: rhsBareLocalName)
+			try self.reassignCellBinding(func, binding: binding, nameTok: nameTok, value: stored, rhsBareLocalName: rhsBareLocalName)
 			return
 		end 'livesInACell'
 
@@ -33872,6 +34246,31 @@ export type Parser
 			try self.writeBackPayload(func, binding: binding, nameTok: nameTok)
 		end 'writeBackIntoTheBox'
 	end 'completeLocalRebind'
+
+	// ⭐ **AN ASSIGNMENT TO A `var` — A LOCAL OR A MODULE `var` — IS A MUTABLE DOOR, ASKED ON THE TERMS A `var`
+	// BINDING IS** (`requireMutableBindingSource`): a name spelled bare moves or is refused, and a value no local name
+	// spells — or the record of a parameter or of the receiver — is asked of what it may be derived from. A byte
+	// record the assignment does not own is copied into the slot, and reaches nothing. A `var` handed over is filed
+	// too, for E3077: a `let` in its place would have moved.
+	function noteAssignmentDoor(func IrFunction, place ByteArray, value ValueId, sourceName ByteArray, anchor Token)
+		if self.recordNeverMeetsADoor(value) or (tagIsByteRecord(self.tagOf(value)) and not self.valueIsOwnedHeap(value)) 'noSharedRecord'
+			return
+		end 'noSharedRecord'
+
+		if sourceName.isEmpty() or not self.scope.contains(sourceName) 'noNamedSource'
+			self.noteMutableBindingSite(func, place: place, value: value, anchor: anchor)
+			return
+		end 'noNamedSource'
+
+		var source = self.scope.getInfo(sourceName)
+
+		if source.isParameter or source.isSelfField 'aParametersRecord'
+			self.noteMutableBindingSite(func, place: place, value: value, anchor: anchor)
+			return
+		end 'aParametersRecord'
+
+		self.noteMoveSite(func, value: value, binding: source, destination: place, anchor: anchor)
+	end 'noteAssignmentDoor'
 
 	// ⭐⭐ **WRITE A MUTATED PAYLOAD BINDING BACK INTO THE SCRUTINEE'S BOX** — the exact inverse of
 	// `emitUnionPayloadLoad`, and the whole of `specs/mutable-enums.md`. It stores through
@@ -34085,6 +34484,7 @@ export type Parser
 		let range = SourceRange.ofToken(nameTok)
 		let declared = self.typeOf(boundValue)
 		let cell = try self.fillFreshCell(boundValue, declared: declared, rhsWasBareLocal: rhsWasBareLocal, range: range)
+		self.noteWritableValue(func, value: boundValue)
 		var binding = try self.scope.declareCellBinding(nameTok.value, varType: declared, mutable: true, cell: cell, isParameter: false, brandId: self.brandIdOf(boundValue)) otherwise throw ParseError.localShadowsSelfField(String.from(nameTok.value), typeName: String.from(self.enclosingType), line: nameTok.line, column: nameTok.column)
 		self.trackDebugLocal(binding)
 		self.attachPendingBorrows(func, borrower: binding, boundValue: boundValue, liveUntil: self.pos)
@@ -34144,7 +34544,7 @@ export type Parser
 	//
 	// ⚠ **A SCALAR CELL IS A BARE STORE.** No release is owed and none is emitted, so a by-reference `int`,
 	// `float`, `bool`, byte or enum parameter costs exactly one `storeIndirect` per rebind.
-	function reassignCellBinding(binding VarInfo, nameTok Token, value ValueId, rhsBareLocalName ByteArray) throws ParseError
+	function reassignCellBinding(func IrFunction, binding VarInfo, nameTok Token, value ValueId, rhsBareLocalName ByteArray) throws ParseError
 		let range = SourceRange.ofToken(nameTok)
 
 		if not self.signatures.typeIsManagedFor(binding.varType, from: self.artifact.typeNames, readerFilePath: self.filePath) 'scalarCell'
@@ -34167,6 +34567,13 @@ export type Parser
 		let owned = try self.moveManagedValueInto(value, argBareLocal: not rhsBareLocalName.isEmpty(), isString: tagIsByteRecord(maxonTypeTag(binding.varType)), range: range)
 		self.emitDecref(self.emitCellLoad(binding.varType, box: binding.boundValue, range: range), range: range)
 		self.emitCellStore(binding, value: owned, range: range)
+		self.noteWritableValue(func, value: owned)
+
+		// A by-reference PARAMETER's cell is the caller's mutable name, which outlives this frame: what is
+		// written here is bound to it (`StorageProvenance`'s parameter-to-name summary).
+		if binding.isParameter 'theCallersName'
+			self.noteNameBindSite(func, boundName: binding.name, value: owned, anchor: nameTok)
+		end 'theCallersName'
 	end 'reassignCellBinding'
 
 	function reassignBindingValue(func IrFunction, binding VarInfo, nameTok Token, value ValueId, rhsBareLocalName ByteArray) throws ParseError
@@ -34351,6 +34758,7 @@ export type Parser
 
 		self.recordDebugRebindByName(nameTok.value, value: newValue)
 		self.scope.setValue(nameTok.value, value: newValue)
+		self.noteWritableValue(func, value: newValue)
 
 		// A WRITE REVIVES the binding: it owns `newValue` now, so a later read of it is legal again. Both
 		// move states are cleared — `partiallyMoved` no less than `movedFrom`, because a reassignment gives
@@ -34537,6 +34945,8 @@ export type Parser
 
 		self.emitDecref(self.emitGlobalLoad(label, valueType: valueType, range: range, reader: ModuleSlotReader.notASharedAccess), range: range)
 		self.emitGlobalStore(label, valueType: valueType, value: owned, range: range)
+		self.noteNameBindSite(func, boundName: nameTok.value, value: owned, anchor: nameTok)
+		self.noteAssignmentDoor(func, place: nameTok.value, value: stored, sourceName: self.rhsBareLocalSourceName(valueStart), anchor: nameTok)
 	end 'emitCheckedGlobalStore'
 
 	// **THE MUTABILITY RULE FOR A LOCAL BINDING — TWO DOORS, BECAUSE THE TWO STATEMENTS THAT WRITE A
@@ -35361,7 +35771,131 @@ export type Parser
 			unwritten then break 'function'
 			entries(marked) then func.immutableGlobalAliasValues = marked as GlobalAliasValueSet
 		end 'function'
+
+		// The module-level `let` reads filed where no function was at hand — ids of this SSA space too.
+		let moduleLets = self.deferredProvenance.moduleLets
+
+		for i in 0 upto moduleLets.values.count() 'eachModuleLetRead'
+			func.recordModuleLetRead(try moduleLets.values.get(i) otherwise panic("publishExistentialInstances: moduleLets.values.get OOB at {i}"), globalName: try moduleLets.names.get(i) otherwise panic("publishExistentialInstances: moduleLets.names.get OOB at {i} — the columns are pushed together"), image: try moduleLets.images.get(i) otherwise panic("publishExistentialInstances: moduleLets.images.get OOB at {i} — the columns are pushed together"))
+		end 'eachModuleLetRead'
 	end 'publishExistentialInstances'
+
+	// A top-level body starts with nothing deferred, in the storage the last one used, and with the door lists that
+	// body's bindings waited on emptied — garbage past its `end`.
+	function beginDeferredProvenance()
+		if self.deferredProvenance is sharedNoDeferredProvenance 'firstBody'
+			self.deferredProvenance = DeferredProvenance.create()
+		end 'firstBody' else 'aLaterBody'
+			self.deferredProvenance.clear()
+		end 'aLaterBody'
+
+		if self.moveSiteLists is not sharedNoMoveSiteLists 'someBindingWaited'
+			self.moveSiteLists.truncate(1)
+		end 'someBindingWaited'
+	end 'beginDeferredProvenance'
+
+	// The deferred facts of `func`, which must be the body being parsed — the one whose value columns the parser is
+	// writing — or they would be filed with another function.
+	function deferredProvenanceOf(func IrFunction) returns DeferredProvenance
+		if func.valueTags is not self.valueTags or self.deferredProvenance is sharedNoDeferredProvenance 'notTheBodyBeingParsed'
+			panic("Parser.deferredProvenanceOf: '{String.from(func.name)}' is not the body being parsed")
+		end 'notTheBodyBeingParsed'
+
+		return self.deferredProvenance
+	end 'deferredProvenanceOf'
+
+	// Where the call just emitted at `span` ends: a `let` its argument may be matters to a parameter the callee
+	// writes (E3019) only while it is read after the call. A call outside any body — a constant's initializer —
+	// is in no function a door is asked of.
+	function noteCallToken(span SourceRange)
+		if self.deferredProvenance is sharedNoDeferredProvenance 'noBody'
+			return
+		end 'noBody'
+
+		self.deferredProvenance.noteCall(positionKey(span.line, column: span.column), token: self.pos)
+	end 'noteCallToken'
+
+	// ⭐ **FILE WHAT THE BODY DEFERRED WITH ITS FUNCTION, AT ITS `end`** (`DeferredProvenance`), once every immutable
+	// name and E3077 candidate of it is filed: all of it when it holds one of those, what its summary is traced from
+	// when a parameter of it may hold a record, and nothing otherwise — nothing asks.
+	function fileDeferredProvenance(func IrFunction)
+		var deferred = self.deferredProvenanceOf(func)
+		let guarded = func.holdsFiledProvenance()
+		let tracedFrom = deferred.receiverWrites.receivers.count() > 0 or deferred.nameBindSites.count() > 0
+
+		let traced = guarded or self.parameterMayHoldARecord(func)
+
+		if traced 'itsSummaryIsTraced'
+			func.valueMintedSole = self.mintedSoleColumn()
+		end 'itsSummaryIsTraced'
+
+		if tracedFrom and traced 'aSummaryIsTracedFromIt'
+			func.fileTracedProvenance(deferred, receiverWrites: self.spelledReceiverWrites(deferred.receiverWrites))
+		end 'aSummaryIsTracedFromIt'
+
+		if not guarded 'nothingAsksTheRest'
+			return
+		end 'nothingAsksTheRest'
+
+		func.fileGuardedProvenance(deferred)
+
+		if deferred.writeThroughs.targets.count() > 0 'someWriteThrough'
+			func.fileWriteThroughSites(self.spelledWriteThroughs(deferred.writeThroughs))
+		end 'someWriteThrough'
+	end 'fileDeferredProvenance'
+
+	// The body's sole-owner marks as a column of their own, sized to them, for the function that keeps them.
+	function mintedSoleColumn() returns BoolArray
+		var column = BoolArray.create()
+		column.reserve(self.valueMintedSole.count())
+
+		for minted in self.valueMintedSole 'eachValue'
+			column.push(minted)
+		end 'eachValue'
+
+		return column
+	end 'mintedSoleColumn'
+
+	// ⭐ **MAY A PARAMETER OF `func` HOLD A RECORD?** — `ProvenanceTracer.anyParameterHoldsARecord`, which decides
+	// whether a summary is traced for it, asked without the whole program, so it says yes wherever that one might.
+	//
+	// ⚠ **A `named` PARAMETER IS TAKEN AS ONE THAT MAY, WHATEVER THIS FILE RESOLVES IT TO.** The tracer asks the
+	// whole program by the bare name, which may be another file's record where this file reads a ranged alias
+	// (`specs/stdlib-user-shadows.md`), and a function it traces must carry its sole-owner marks.
+	function parameterMayHoldARecord(func IrFunction) returns bool
+		for p in 0 upto func.paramCount 'eachParam'
+			if not tagIsAScalarWhateverIsDeclared(self.tagOf(valueIdAtParamPosition(p))) 'mayBeARecord'
+				return true
+			end 'mayBeARecord'
+		end 'eachParam'
+
+		return false
+	end 'parameterMayHoldARecord'
+
+	// The receiver writes `writes` deferred, as `noteReceiverWrite` would have filed them.
+	function spelledReceiverWrites(writes DeferredReceiverWrites) returns ReceiverWriteSiteArray
+		var spelled = ReceiverWriteSiteArray.create()
+
+		for i in 0 upto writes.receivers.count() 'eachWrite'
+			let methodIndex = try writes.methodIndices.get(i) otherwise panic("spelledReceiverWrites: methodIndices.get OOB at {i} — the columns are pushed together")
+			let methodTok = self.tokenAt(methodIndex)
+			spelled.push(ReceiverWriteSite.create(try writes.receivers.get(i) otherwise panic("spelledReceiverWrites: receivers.get OOB at {i}"), place: self.receiverSpellingBefore(methodIndex), line: methodTok.line, column: methodTok.column, blameable: try writes.blameable.get(i) otherwise panic("spelledReceiverWrites: blameable.get OOB at {i} — the columns are pushed together"), token: self.callEndAfter(methodIndex)))
+		end 'eachWrite'
+
+		return spelled
+	end 'spelledReceiverWrites'
+
+	// The write-throughs `writes` deferred, each place spelled as `noteWriteThroughAField` would have.
+	function spelledWriteThroughs(writes DeferredWriteThroughs) returns StorageSiteArray
+		var spelled = StorageSiteArray.create()
+
+		for i in 0 upto writes.targets.count() 'eachWrite'
+			let place = self.tokenTextFrom(try writes.placeStarts.get(i) otherwise panic("spelledWriteThroughs: placeStarts.get OOB at {i} — the columns are pushed together"), endIndex: try writes.placeEnds.get(i) otherwise panic("spelledWriteThroughs: placeEnds.get OOB at {i} — the columns are pushed together")).toByteArray()
+			spelled.push(StorageSite.create(place, value: try writes.targets.get(i) otherwise panic("spelledWriteThroughs: targets.get OOB at {i}"), line: try writes.lines.get(i) otherwise panic("spelledWriteThroughs: lines.get OOB at {i} — the columns are pushed together"), column: try writes.columns.get(i) otherwise panic("spelledWriteThroughs: columns.get OOB at {i} — the columns are pushed together"), token: try writes.tokens.get(i) otherwise panic("spelledWriteThroughs: tokens.get OOB at {i} — the columns are pushed together")))
+		end 'eachWrite'
+
+		return spelled
+	end 'spelledWriteThroughs'
 
 	// ⭐⭐ **RECORD THE `with` ARGUMENTS AN EXISTENTIAL VALUE'S DECLARED TYPE NAMED (W57)** — see
 	// `ValueExistentialInstanceMap` for what the column is for and why the fact cannot ride on the type. Two
@@ -38643,7 +39177,7 @@ export type Parser
 		// did not, and the oracle refuses it at all three catching forms. The enrolment sits at this door
 		// rather than at those forms because this is the one site that is COMPLETE: a fourth catching form
 		// cannot acquire a binding without coming through here.
-		self.unusedCandidates.push(UnusedBindingCandidate.create(self.scope.getInfo(binder.name), nameRange: SourceRange.ofToken(binder.anchor), kind: UnusedBindingKind.caughtError))
+		self.unusedCandidates.push(UnusedBindingCandidate.create(self.scope.getInfo(binder.name), nameRange: SourceRange.ofToken(binder.anchor), kind: UnusedBindingKind.caughtError, declToken: self.pos))
 	end 'declareCaughtError'
 
 	// The three-way decode of a caught error into its binding — a synthesized error union's raw flag, a boxed
@@ -40187,13 +40721,15 @@ export type Parser
 	function captureMoveMark() returns MoveMark
 		var moved = BoolArray.create()
 		var values = ValueIdArray.create()
+		var awaiting = noAwaitedMoveReads
 
 		for binding in self.ownedBindings 'each'
+			awaiting = withAwaited(awaiting, list: binding.awaitingMoveReads, position: moved.count())
 			moved.push(binding.movedFrom)
 			values.push(binding.boundValue)
 		end 'each'
 
-		return MoveMark.create(moved, values: values, consumes: self.markedPromiseConsumes())
+		return MoveMark.create(moved, values: values, consumes: self.markedPromiseConsumes(), awaiting: awaiting)
 	end 'captureMoveMark'
 
 	// ⭐ **THE CONSUME LIST A MARK CARRIES.** The SHARED empty one when nothing has been consumed on this
@@ -40228,6 +40764,7 @@ export type Parser
 		while i < self.ownedBindings.count() 'each'
 			var binding = try self.ownedBindings.get(i) otherwise panic("restoreMoveMark: ownedBindings.get OOB at {i}")
 			binding.movedFrom = try mark.moved.get(i) otherwise panic("restoreMoveMark: mark.moved.get OOB at {i}")
+			binding.awaitingMoveReads = mark.awaitingAt(i)
 			i = i + 1
 		end 'each'
 
@@ -40310,6 +40847,13 @@ export type Parser
 
 			var binding = try self.ownedBindings.get(i) otherwise panic("reconcileMovesAtMerge: ownedBindings.get OOB at {i}")
 			binding.movedFrom = anyMoved
+			var awaiting = NoMoveSiteList
+
+			for edge in edges 'joinAwaiting'
+				awaiting = unionMoveSiteLists(self.moveSiteLists, a: awaiting, b: edge.mark.awaitingAt(i))
+			end 'joinAwaiting'
+
+			binding.awaitingMoveReads = awaiting
 			i = i + 1
 		end 'eachBinding'
 
@@ -40760,6 +41304,7 @@ export type Parser
 	// record still EXISTS is a leak. The caller's obligation is that the producing op is gone.
 	function releaseOwnedTemp(value ValueId)
 		try self.valueOwnsHeap.set(value, value: false) otherwise panic("releaseOwnedTemp: v{value} has no owned-heap slot — every SSA value must be minted through mintValue, which seeds the column")
+		try self.valueMintedSole.set(value, value: false) otherwise panic("releaseOwnedTemp: v{value}{SoleOwnershipSlotPanicTail}")
 
 		// The exclusivity claim goes with the ownership it qualified — see `markValueCoOwnsHeap`.
 		self.markValueCoOwnsHeap(value)
@@ -40782,10 +41327,15 @@ export type Parser
 		try self.valueOwnsHeap.set(value, value: true) otherwise panic("markValueOwnsHeap: v{value} has no owned-heap slot — every SSA value must be minted through mintValue, which seeds the column")
 
 		match exclusivity 'howMany'
-			sole then try self.valueOwnsHeapAlone.set(value, value: true) otherwise panic("markValueOwnsHeap: v{value}{SoleOwnershipSlotPanicTail}")
+			sole then self.markValueMintedSole(value)
 			coOwned then self.markValueCoOwnsHeap(value)
 		end 'howMany'
 	end 'markValueOwnsHeap'
+
+	function markValueMintedSole(value ValueId)
+		try self.valueOwnsHeapAlone.set(value, value: true) otherwise panic("markValueMintedSole: v{value}{SoleOwnershipSlotPanicTail}")
+		try self.valueMintedSole.set(value, value: true) otherwise panic("markValueMintedSole: v{value}{SoleOwnershipSlotPanicTail}")
+	end 'markValueMintedSole'
 
 	// ⭐⭐ **SOMETHING ELSE OWNS THIS ALLOCATION TOO — the one write of `false` into the exclusivity column**,
 	// shared by the three statements that mean it: an ownership RELEASED (`releaseOwnedTemp` — a value that owns
@@ -41691,7 +42241,7 @@ export type Parser
 		end 'noBindingOwnsIt'
 
 		if self.bindingIndexEscapesLoop(index) 'escapesLoop'
-			throw ParseError.unsupported("moving a value declared outside this loop from inside the loop body — its drop on the loop's other exit paths (the back edge would re-move it next iteration; a `break` leaves it live on the normal exit) needs path-sensitive elaboration across the loop boundary, which arrives with a later wave. Move the value into the loop body, or restructure so the move does not cross the loop boundary", line: anchor.line, column: anchor.column)
+			throw ParseError.unsupported(LoopEscapingMoveDetail, line: anchor.line, column: anchor.column)
 		end 'escapesLoop'
 
 		// A `var` bound from `.get(index)`, not a bare `for` element: a field write needs a mutable binding,
@@ -42991,7 +43541,9 @@ export type Parser
 			self.mintCovPoint(thenBlock, funcName: func.name, flags: MxdbgCovFlagArmThen, line: ifTok.line, col: ifTok.column, branchLine: ifTok.line, branchCol: ifTok.column)
 		end 'instrumentTheTrueArm'
 
+		let thenStart = self.pos
 		var thenEnd = try self.parseIfThenBody(func, thenBlock: thenBlock, label: thenLabel.value, cond: cond, binder: binder, anchor: thenLabel)
+		let thenStop = self.pos
 
 		// Snapshot the then-branch's exit values and move state, then rewind BOTH to the entry state so the
 		// else/false path is parsed against the pre-`if` values and pre-`if` ownership, not the then-branch's.
@@ -43027,7 +43579,10 @@ export type Parser
 
 		self.mintElseArmPoint(elseBlock, funcName: func.name, ifTok: ifTok, elseTok: elseTok, written: elseWrittenInSource)
 
+		let elseStart = self.pos
 		var elseEnd = try self.parseElseBody(func, elseBlock: elseBlock, cond: cond, ifTok: ifTok)
+		var deferred = self.deferredProvenanceOf(func)
+		deferred.noteExclusiveArms(thenStart, thenEnd: thenStop, elseStart: elseStart, elseEnd: self.pos)
 		let elseVals = self.snapshotBindings(assignedBindings)
 		let elseMoveMark = self.captureMoveMark()
 		let cont = self.finalizeIfElse(func, entry: entry, cond: ifConditionTest(cond), ifTok: ifTok, thenBlock: thenBlock, thenEnd: thenEnd, elseBlock: elseBlock, elseEnd: elseEnd, bindings: assignedBindings, thenVals: thenVals, elseVals: elseVals, thenMoveMark: thenMoveMark, elseMoveMark: elseMoveMark)
@@ -43600,10 +44155,13 @@ export type Parser
 		// ⭐ **THE SAME DECLARATION A STATEMENT-LEVEL `let`/`var` MAKES, THROUGH THE SAME DOOR.** That is what
 		// carries the success value's FULL type across — a function-typed result keeps its signature, so
 		// `if let g = try pick(true) 'ok' … g(4)` calls through a properly typed value — and it is the whole
-		// reason this is not a second, shorter binding path. No source name: the success value is a fresh
-		// call result held by no binding, so there is nothing to poison and no immutable source E3078 could
-		// blame; it is a CONSUME, exactly as `let x = f()` is.
+		// reason this is not a second, shorter binding path. No source name: the success value is a call
+		// result held by no binding, so there is nothing to poison; it is a CONSUME, exactly as `let x = f()`
+		// is, and asked of its value exactly as `var x = f()` is.
+		try self.requireMutableBindingSource(func, nameTok: nameTok, value: result, sourceName: EmptySourceText, sourceReadsAField: false, mutable: mutable)
+		let borrowsIt = self.valueIsABorrow(result)
 		try self.declareInitializedBinding(func, nameTok: nameTok, value: result, sourceName: EmptySourceText, sourceReadsAField: false, mutable: mutable)
+		self.noteImmutableBinding(func, nameTok: nameTok, mutable: mutable, borrowsIt: borrowsIt)
 
 		let thenEnd = try self.parseBlockBody(func, block: thenBlock, label: label)
 		self.dropArmScopedOwned(mark.ownedCount, exitBlock: thenEnd, anchor: nameTok)
@@ -43974,6 +44532,7 @@ export type Parser
 
 		// Guard the token scan against the parse it predicted — see `assertScanAligned`.
 		self.assertScanAligned("parseWhileStatement", predictedEnd: bodyEndIndex)
+		self.noteLoopSpan(func, start: whileIndex, finish: bodyEndIndex)
 
 		let ctx = try self.loops.pop() otherwise panic("parseWhileStatement: loop stack empty after body of '{String.from(loopLabelTok.value)}'")
 
@@ -44642,8 +45201,10 @@ export type Parser
 
 		// Guard the token scan against the parse it predicted — see `assertScanAligned`.
 		self.assertScanAligned("parseForStatement", predictedEnd: bodyEndIndex)
+		self.noteLoopSpan(func, start: forIndex, finish: bodyEndIndex)
 
-		let ctx = try self.loops.pop() otherwise panic("parseForStatement: loop stack empty after body of '{String.from(loopLabelTok.value)}'")
+		// A `var`: the step block rebinds its carried bindings through `ctx.phiVars`.
+		var ctx = try self.loops.pop() otherwise panic("parseForStatement: loop stack empty after body of '{String.from(loopLabelTok.value)}'")
 		self.releaseIterationSource(src.sourceLock)
 
 		// The step block, read off the context rather than spelled again — see `parseWhileStatement`'s
@@ -44985,9 +45546,16 @@ export type Parser
 			return
 		end 'discardsThisPosition'
 
-		let loopBinding = try self.scope.declareValueBinding(nameTok.value, varType: self.typeOf(value), mutable: false, value: value, brandId: self.brandIdOf(value)) otherwise throw ParseError.localShadowsSelfField(String.from(nameTok.value), typeName: String.from(self.enclosingType), line: nameTok.line, column: nameTok.column)
-		self.unusedCandidates.push(UnusedBindingCandidate.create(loopBinding, nameRange: SourceRange.ofToken(nameTok), kind: UnusedBindingKind.loopVariable))
+		var loopBinding = try self.scope.declareValueBinding(nameTok.value, varType: self.typeOf(value), mutable: false, value: value, brandId: self.brandIdOf(value)) otherwise throw ParseError.localShadowsSelfField(String.from(nameTok.value), typeName: String.from(self.enclosingType), line: nameTok.line, column: nameTok.column)
+		self.unusedCandidates.push(UnusedBindingCandidate.create(loopBinding, nameRange: SourceRange.ofToken(nameTok), kind: UnusedBindingKind.loopVariable, declToken: self.pos))
 		self.attachPendingBorrows(func, borrower: loopBinding, boundValue: value, liveUntil: bodyEndIndex)
+
+		// A loop variable is an immutable name for the element it borrows (`StorageProvenance`) — one a scalar is not.
+		if tagIsAScalarWhateverIsDeclared(self.tagOf(value)) 'noRecord'
+			return
+		end 'noRecord'
+
+		func.recordImmutableBinding(value, bindingName: nameTok.value, borrows: not self.valueIsOwnedHeap(value), info: loopBinding, declToken: self.pos)
 	end 'declareLoopVariable'
 
 	// ⭐ **ONE ZERO-ARGUMENT METHOD CALL ON A RECEIVER VALUE — the whole of the `for … in` protocol surface.**
@@ -48153,14 +48721,15 @@ export type Parser
 
 				if isErrorUnionMatch 'errorUnionPattern'
 					let arm = try self.collectErrorUnionPatternInterval(requireErrorUnionInfo(errorUnion), covered: enumCovered, bodyBlockId: bodyBlock.id, into: dispatchIntervals)
-					payloadBindings = arm.bindings
 					armPayloadEnum = DeclaredEnum.declared(arm.member.layout)
 					armOwnsMemberBox = arm.member.isBoxed
 					armMemberBoxType = self.tryErrorEnumType(arm.member.clause)
 
 					if prevFallthrough 'ftTargetBindsUnion'
-						try self.rejectFallthroughIntoBindingArm(payloadBindings, layout: arm.member.layout, patternTok: patternTok)
+						try self.rejectFallthroughIntoBindingArm(arm.bindings, layout: arm.member.layout, patternTok: patternTok)
 					end 'ftTargetBindsUnion'
+
+					payloadBindings = arm.bindings
 				end 'errorUnionPattern' else if isEnumMatch 'enumPattern'
 					let armLayout = requireEnumLayout(enumMatch)
 					payloadBindings = try self.collectEnumPatternIntervals(armLayout, covered: enumCovered, bodyBlockId: bodyBlock.id, into: dispatchIntervals, intervalMark: intervalMark)
@@ -48277,7 +48846,9 @@ export type Parser
 				if armBody.fellThrough 'fellThrough'
 					prevFallthrough = true
 					prevExitBlock = armBody.exitBlock
-					prevExitVals = armBody.exitVals
+
+					// A copy: what the arm body hands back may lie within `entryMoveMark`, which every later arm reads.
+					prevExitVals = armBody.exitVals.clone()
 				end 'fellThrough' else 'notFallThrough'
 					prevFallthrough = false
 
@@ -50125,13 +50696,26 @@ export type Parser
 			return false
 		end 'notNamed'
 
+		let nameId = self.valueNameId(value) as ElementIndex
+
+		if nameId < self.boxedUnionAnswers.count() 'mayHaveAsked'
+			match try self.boxedUnionAnswers.get(nameId) otherwise panic("valueIsBoxedUnion: boxedUnionAnswers.get OOB at {nameId} below its own count") 'answer'
+				boxed then return true
+				notBoxed then return false
+				unasked then break 'answer'
+			end 'answer'
+		end 'mayHaveAsked'
+
 		let decl = self.enumMatchFor(value)
+		let boxed = enumMatchIsDeclared(decl) and requireEnumLayout(decl).isBoxed()
 
-		if not enumMatchIsDeclared(decl) 'notEnum'
-			return false
-		end 'notEnum'
+		if self.boxedUnionAnswers is noBoxedUnionAnswers 'firstAnswer'
+			self.boxedUnionAnswers = BoxedUnionAnswerArray.create()
+		end 'firstAnswer'
 
-		return requireEnumLayout(decl).isBoxed()
+		self.boxedUnionAnswers.growFilled(nameId + 1, value: BoxedUnionAnswer.unasked)
+		try self.boxedUnionAnswers.set(nameId, value: BoxedUnionAnswer.boxed if boxed else BoxedUnionAnswer.notBoxed) otherwise panic("valueIsBoxedUnion: boxedUnionAnswers.set OOB at {nameId} after growing past it")
+		return boxed
 	end 'valueIsBoxedUnion'
 
 	// One arm's enum pattern, reduced to DISPATCH INTERVALS over the case tags (P1.1b + match-dispatch).
@@ -50908,7 +51492,7 @@ export type Parser
 			// ⭐ **E3012 — AN ARM THAT NAMES A PAYLOAD IT NEVER READS MEANT `_`.** The discard is the spelling
 			// for a payload the arm does not want, and it is already skipped above, so a NAME here is a claim
 			// the arm makes about needing the value.
-			self.unusedCandidates.push(UnusedBindingCandidate.create(bindingInfo, nameRange: range, kind: UnusedBindingKind.payloadBinding))
+			self.unusedCandidates.push(UnusedBindingCandidate.create(bindingInfo, nameRange: range, kind: UnusedBindingKind.payloadBinding, declToken: self.pos))
 
 			// ⭐⭐ **A GREEN-THREAD PAYLOAD IS MOVED OUT AT THE BIND, AND THERE IS NO BORROWED TWIN.** The
 			// managed arm below has two shapes — move out of a box this frame owns, or RETAIN out of one it
@@ -52096,6 +52680,7 @@ export type Parser
 		// And its exclusivity, seeded CO-OWNED — the safe direction, because an unclaimed value takes the
 		// retain path rather than a destructive move-out (see `OwnedHeapExclusivity`).
 		self.valueOwnsHeapAlone.push(false)
+		self.valueMintedSole.push(false)
 
 		// The fresh-return mark rides the same lockstep, seeded NOT-FRESH — the safe direction, because an
 		// unclaimed value is one a send refuses rather than one it moves (see the field header).
@@ -52255,6 +52840,7 @@ export type Parser
 		// (`coOwnBorrowedForConsume`), and which of the two it chose is not a fact this frame can read. So the
 		// seed here is also the final answer for every parameter.
 		self.valueOwnsHeapAlone.push(false)
+		self.valueMintedSole.push(false)
 
 		// A PARAMETER is the one arrival this fact is about the absence of: it crossed a frame boundary whose
 		// far side this compiler cannot read, which is exactly what `returnsFreshValue` answers for a RESULT and
@@ -52815,6 +53401,9 @@ export type Parser
 		// down, which is the same fact caught by the bookkeeping instead of by the register allocator).
 		let settledTrue = try self.finishArmExit(MatchGiveValue.value(trueValue), tempFloor: markTempCount, ownedFloor: markOwnedCount, exitBlock: armExit, anchor: ifTok)
 
+		// Which block the arm ended in, read before `startBlock` — which it may be — is rewritten below.
+		let armExitId = armExit.id
+
 		// ⭐ **THE CONDITION RUNS FIRST AT RUNTIME, THOUGH IT PARSES SECOND.** The true arm was parsed before
 		// the `if` revealed the form, so any binding it MOVED (an owned value into a struct field, say) is
 		// poisoned now — but the condition, which runs BEFORE the true arm, must see that binding LIVE
@@ -52878,7 +53467,7 @@ export type Parser
 		// that base PLUS the true arm's own moves (rewound above); the FALSE path is that base plus the false
 		// arm's, and it inherits `condBase` as the live state directly, since the false arm parses next.
 		let condBase = self.captureMoveMark()
-		let trueMoveMark = orMoveMarks(afterTrueArm, b: condBase)
+		let trueMoveMark = orMoveMarks(afterTrueArm, b: condBase, lists: self.moveSiteLists)
 
 		try self.consume(TokenKind.else)
 
@@ -52905,8 +53494,8 @@ export type Parser
 		// anyway — and the false arm's `parseExpression` between here and there mints plenty.
 		var trueExitId = trueBranch.id
 
-		if armExit.id != startBlock.id 'multiBlockArm'
-			trueExitId = armExit.id
+		if armExitId != startBlock.id 'multiBlockArm'
+			trueExitId = armExitId
 		end 'multiBlockArm'
 
 		// The false arm parses straight into its own block, so it never runs on the true path — from the
@@ -53462,6 +54051,7 @@ export type Parser
 		let seed = self.emitLiteralIn(entry, value: shortCircuitSeed(takesRhsWhenTrue), valueType: MaxonType.boolean, range: range)
 
 		let rhsBlock = self.newBlock(func, label: shortCircuitLabel(takesRhsWhenTrue), line: opTok.line)
+		let rhsId = rhsBlock.id
 		self.currentBlock = rhsBlock
 		let rhsTempFloor = self.pendingTempDrops.count()
 
@@ -53518,7 +54108,7 @@ export type Parser
 
 		self.recordBranchEdge(entry, targetId: merge.id, argIds: singletonArgs(seed))
 		self.recordBranchEdge(rhsEnd, targetId: merge.id, argIds: singletonArgs(rhsValue))
-		self.emitShortCircuitBranch(entry, cond: leftValue, rhsId: rhsBlock.id, mergeId: merge.id, takesRhsWhenTrue: takesRhsWhenTrue, range: range)
+		self.emitShortCircuitBranch(entry, cond: leftValue, rhsId: rhsId, mergeId: merge.id, takesRhsWhenTrue: takesRhsWhenTrue, range: range)
 		self.emitBranch(rhsEnd, targetId: merge.id)
 
 		self.currentBlock = merge
@@ -63276,8 +63866,8 @@ export type Parser
 		match self.managedReceiverBindingOf(tok) 'binding'
 			constant(bytes, kind) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: try self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(tok)), varType: self.signatures.managedConstValueType(kind, elementFilePath: self.filePath), mutable: false, resultUsed: resultUsed))
 			global(label, valueType, mutable) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(tok), reader: self.moduleSlotReaderOf(tok, mutable: mutable)), varType: valueType, mutable: mutable, resultUsed: resultUsed))
-			imageRecord(image) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: self.emitImageRecordRead(image, range: SourceRange.ofToken(tok)), varType: image.valueType, mutable: false, resultUsed: resultUsed))
-			imageBox(nodes, root, typeName, tag) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: self.emitImageBoxRead(nodes, root: root, typeName: typeName, tag: tag, range: SourceRange.ofToken(tok)), varType: self.imageBoxType(typeName, tag: tag), mutable: false, resultUsed: resultUsed))
+			imageRecord(image) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: self.recordModuleLetRoot(self.emitImageRecordRead(image, range: SourceRange.ofToken(tok)), name: tok.value, image: true), varType: image.valueType, mutable: false, resultUsed: resultUsed))
+			imageBox(nodes, root, typeName, tag) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: self.recordModuleLetRoot(self.emitImageBoxRead(nodes, root: root, typeName: typeName, tag: tag, range: SourceRange.ofToken(tok)), name: tok.value, image: true), varType: self.imageBoxType(typeName, tag: tag), mutable: false, resultUsed: resultUsed))
 			none then return ManagedTopLevelDispatch.notAManagedReceiver
 		end 'binding'
 	end 'dispatchOnManagedTopLevelReceiver'
@@ -69623,6 +70213,7 @@ export type Parser
 	// right thing in both directions: a handle whose last use IS the argument is dead at the write and the
 	// call is legal, and a handle read AGAIN afterwards is live at the write and the read is refused.
 	function dispatchManagedListMethod(func IrFunction, list ValueId, resultUsed bool, immutableReceiverName ByteArray, borrowSubjectName ByteArray, receiverOwner ParamPositionMask, receiverStorage ParamPositionMask) returns ValueId throws ParseError
+		let methodIndex = self.pos
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.ofToken(methodTok)
 		let giid = self.valueNameId(list)
@@ -69647,7 +70238,7 @@ export type Parser
 		// hands out ELEMENT borrows, which a removal still hands to a new owner and a `clear` still releases;
 		// its `noteBorrowSubjectWrite` stays exactly as W-BORROW landed it. An element borrow is not a node
 		// handle, and no ruling about node lifetime reaches one.
-		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: receiverStorage, methodTok: methodTok, mutatesReceiver: mutates)
+		try self.noteReceiverWrite(func, receiver: list, blameable: true, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: receiverStorage, methodTok: methodTok, methodIndex: methodIndex, mutatesReceiver: mutates)
 
 		if methodTok.value.equals(CountMethod) 'count'
 			return try self.emitChainReader(list, callee: ListCountName, resultTag: ValueTypeTag.integer, range: range)
@@ -69989,6 +70580,7 @@ export type Parser
 	// element now comes back owning a reference, so that exact program is correct; the same shape inside a
 	// SHARED GENERIC BODY still borrows, and the subject is still anonymous there.
 	function dispatchManagedListNodeMethod(func IrFunction, node ValueId, giid GenericInstanceId, resultUsed bool, immutableReceiverName ByteArray, receiverOwner ParamPositionMask, receiverStorage ParamPositionMask) returns ValueId throws ParseError
+		let methodIndex = self.pos
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.ofToken(methodTok)
 
@@ -69996,7 +70588,7 @@ export type Parser
 		// `let`-bound chain's `insertLast` is** — which is why this dispatcher takes a receiver where it took
 		// only a value before. `/specs/managed-list.md` writes `var node` for both `setValue` cases and `let`
 		// for every read-only one, so the canonical spec already spells the distinction.
-		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: receiverStorage, methodTok: methodTok, mutatesReceiver: managedListNodeMethodMutatesReceiver(methodTok.value))
+		try self.noteReceiverWrite(func, receiver: node, blameable: true, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: receiverStorage, methodTok: methodTok, methodIndex: methodIndex, mutatesReceiver: managedListNodeMethodMutatesReceiver(methodTok.value))
 
 		if methodTok.value.equals(ManagedListNodeValueMethod) 'value'
 			try self.consumeEmptyArgList()
@@ -70673,6 +71265,7 @@ export type Parser
 		self.lastWitnessDispatchName = target.methodName
 		self.lastWitnessDispatchThrows = target.throwsClause
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.witnessDispatch(result, args: placed, witness: target.witnessValue, methodIndex: target.methodIndex, interfaceDeclIndex: target.interfaceDeclIndex, isVoid: isVoid, isThrowing: throwsClauseIsThrowing(target.throwsClause)), range: range)
+		self.noteCallToken(range)
 	end 'emitWitnessDispatch'
 
 	// ⭐⭐ **WIDEN AN INTEGRAL ACTUAL SUPPLIED FOR A `float` INTERFACE FORMAL — the witness twin of
@@ -72189,6 +72782,7 @@ export type Parser
 	// unless the instantiation's element is a managed type this rung cannot single-function-clone, which
 	// `requireOpaqueArrayCopyable` rejects.
 	function dispatchArrayMethod(func IrFunction, arr ValueId, giid GenericInstanceId, resultUsed bool, immutableReceiverName ByteArray, borrowSubjectName ByteArray, receiverOwner ParamPositionMask, receiverStorage ParamPositionMask, viaManagedField bool) returns ValueId throws ParseError
+		let methodIndex = self.pos
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.ofToken(methodTok)
 
@@ -72273,7 +72867,7 @@ export type Parser
 		// temporary, meaning "no binding may be blamed for a write through this receiver" — rather than as a
 		// second `mutatesReceiver` value, because the write is REAL: E3070 and the storage-written mask below
 		// must still see it, and they read `mutatesReceiver`.
-		try self.noteReceiverWrite(func, immutableReceiverName: EmptySourceText if isManagedMemory else immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: receiverStorage, methodTok: methodTok, mutatesReceiver: mutatesReceiver)
+		try self.noteReceiverWrite(func, receiver: arr, blameable: not isManagedMemory, immutableReceiverName: EmptySourceText if isManagedMemory else immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: receiverStorage, methodTok: methodTok, methodIndex: methodIndex, mutatesReceiver: mutatesReceiver)
 
 		// ⭐ E3070's container door — the SAME `mutatesReceiver` answer, read once, asked of the SAME receiver at
 		// the same instant. The rule above refuses a write through an immutable binding; this one records the
@@ -72936,7 +73530,13 @@ export type Parser
 	// *"writes the receiver"* and *"invalidates an outstanding borrow"* answers DIFFER got one half and not
 	// the other. Both halves now live at `noteBorrowSubjectWrite`, which every caller of this function
 	// already calls with the E3070 answer; its header carries the measurement.
-	function noteReceiverWrite(func IrFunction, immutableReceiverName ByteArray, receiverOwner ParamPositionMask, receiverStorage ParamPositionMask, methodTok Token, mutatesReceiver bool) throws ParseError
+	//
+	// ⭐ **AND IT FILES THE WRITE FOR `StorageProvenance`, WHICH ASKS WHAT THIS DOOR CANNOT.** A receiver no
+	// binding names here — `pass(a).push(9)`, or a `var` made from a call — may still be a `let`'s record or a
+	// parameter's, and only the whole-program summary of what a call hands back can say which
+	// (`ProvenanceTracer.checkReceiverWrites`, `collectProvenanceParamEdges`). `blameable` carries the buffer
+	// surface's exemption below to that half too.
+	function noteReceiverWrite(func IrFunction, receiver ValueId, blameable bool, immutableReceiverName ByteArray, receiverOwner ParamPositionMask, receiverStorage ParamPositionMask, methodTok Token, methodIndex TokenIndex, mutatesReceiver bool) throws ParseError
 		if not mutatesReceiver 'readOnlyMethod'
 			return
 		end 'readOnlyMethod'
@@ -72944,6 +73544,9 @@ export type Parser
 		if not immutableReceiverName.isEmpty() 'immutableReceiver'
 			throw ParseError.immutableMutatingCall(String.from(immutableReceiverName), functionName: String.from(func.name), line: methodTok.line, column: methodTok.column)
 		end 'immutableReceiver'
+
+		var deferred = self.deferredProvenanceOf(func)
+		deferred.noteReceiverWrite(receiver, methodIndex: methodIndex, blameable: blameable)
 
 		func.writtenParamMask = func.writtenParamMask or receiverOwner
 
@@ -72956,6 +73559,52 @@ export type Parser
 		// exactly the question this column asks.
 		func.writesThroughParamMask = func.writesThroughParamMask or receiverOwner or receiverStorage
 	end 'noteReceiverWrite'
+
+	// The token past the call of the method at `methodIndex` — past its argument list's closing paren, which is when
+	// the write happens: an argument is read before it.
+	function callEndAfter(methodIndex TokenIndex) returns TokenIndex
+		var q = methodIndex + 1
+
+		if self.kindAt(q) != TokenKind.leftParen 'noArguments'
+			return q
+		end 'noArguments'
+
+		var depth = 0
+
+		while self.kindAt(q) != TokenKind.eof 'eachToken'
+			if self.kindAt(q) == TokenKind.leftParen 'opens'
+				depth = depth + 1
+			end 'opens'
+
+			if self.kindAt(q) == TokenKind.rightParen 'closes'
+				depth = depth - 1
+
+				if depth == 0 'theCallsOwn'
+					return q + 1
+				end 'theCallsOwn'
+			end 'closes'
+
+			q = q + 1
+		end 'eachToken'
+
+		return q
+	end 'callEndAfter'
+
+	// The receiver of the method at `methodIndex` as the author spelled it: the chain of names ending at the dot
+	// before the method, or the method's own name when what precedes the dot is no such chain.
+	function receiverSpellingBefore(methodIndex TokenIndex) returns ByteArray
+		if methodIndex < 2 or not tokenCanBeAName(self.tokenAt(methodIndex - 2)) 'notAChain'
+			return self.tokenAt(methodIndex).value
+		end 'notAChain'
+
+		var start = methodIndex - 2
+
+		while start >= 2 and self.kindAt(start - 1) == TokenKind.dot and tokenCanBeAName(self.tokenAt(start - 2)) 'eachHop'
+			start = start - 2
+		end 'eachHop'
+
+		return self.tokenTextFrom(start, endIndex: methodIndex - 1).toByteArray()
+	end 'receiverSpellingBefore'
 
 	// ⭐ **WHICH OF THE ENCLOSING FUNCTION'S PARAMETERS THIS RECEIVER'S RECORD BELONGS TO** — the bits
 	// `noteReceiverWrite` sets when the write goes ahead, and 0 for a receiver that denotes storage no
@@ -75358,8 +76007,8 @@ export type Parser
 				// choice, spelled at the QUALIFIED name because that is what this chain is rooted at.
 				constant then break 'binding'
 				global(label, valueType, mutable) then return try self.resolveGlobalFieldChain(nameTok, label: label, valueType: valueType, mutable: mutable)
-				imageBox(nodes, root, typeName, tag) then return try self.resolveValueFieldChain(nameTok, value: self.emitImageBoxRead(nodes, root: root, typeName: typeName, tag: tag, range: SourceRange.ofToken(nameTok)), valueType: self.imageBoxType(typeName, tag: tag), mutable: false)
-				imageRecord(image) then return try self.resolveValueFieldChain(nameTok, value: self.emitImageRecordRead(image, range: SourceRange.ofToken(nameTok)), valueType: image.valueType, mutable: false)
+				imageBox(nodes, root, typeName, tag) then return try self.resolveValueFieldChain(nameTok, value: self.recordModuleLetRoot(self.emitImageBoxRead(nodes, root: root, typeName: typeName, tag: tag, range: SourceRange.ofToken(nameTok)), name: nameTok.value, image: true), valueType: self.imageBoxType(typeName, tag: tag), mutable: false)
+				imageRecord(image) then return try self.resolveValueFieldChain(nameTok, value: self.recordModuleLetRoot(self.emitImageRecordRead(image, range: SourceRange.ofToken(nameTok)), name: nameTok.value, image: true), valueType: image.valueType, mutable: false)
 				none then break 'binding'
 			end 'binding'
 
@@ -75384,8 +76033,8 @@ export type Parser
 				// chain's own diagnostic rather than a claim that the base does not exist.
 				constant then break 'binding'
 				global(label, valueType, mutable) then return try self.resolveGlobalFieldChain(baseTok, label: label, valueType: valueType, mutable: mutable)
-				imageBox(nodes, root, typeName, tag) then return try self.resolveValueFieldChain(baseTok, value: self.emitImageBoxRead(nodes, root: root, typeName: typeName, tag: tag, range: SourceRange.ofToken(baseTok)), valueType: self.imageBoxType(typeName, tag: tag), mutable: false)
-				imageRecord(image) then return try self.resolveValueFieldChain(baseTok, value: self.emitImageRecordRead(image, range: SourceRange.ofToken(baseTok)), valueType: image.valueType, mutable: false)
+				imageBox(nodes, root, typeName, tag) then return try self.resolveValueFieldChain(baseTok, value: self.recordModuleLetRoot(self.emitImageBoxRead(nodes, root: root, typeName: typeName, tag: tag, range: SourceRange.ofToken(baseTok)), name: baseTok.value, image: true), valueType: self.imageBoxType(typeName, tag: tag), mutable: false)
+				imageRecord(image) then return try self.resolveValueFieldChain(baseTok, value: self.recordModuleLetRoot(self.emitImageRecordRead(image, range: SourceRange.ofToken(baseTok)), name: baseTok.value, image: true), valueType: image.valueType, mutable: false)
 				none then break 'binding'
 			end 'binding'
 		end 'managedTopLevelBase'
@@ -75965,6 +76614,9 @@ export type Parser
 		// intermediate struct field and leaving the cursor on the `=`. Its `requireStructBase` already
 		// enforced the base's live-binding guard.
 		let step = try self.resolveFieldChain()
+
+		// The place as written, and the record written: everything before the chain's last `. <field>`.
+		let lastDotIndex = (self.pos - 2) as TokenIndex
 		try self.consume(TokenKind.equals)
 		let index = try self.requireFieldIndex(step.layout, fieldTok: step.lastFieldTok)
 
@@ -76043,8 +76695,18 @@ export type Parser
 		// f64. Same door as the struct literal and the bare self-field spelling.
 		let value = try self.requireFieldType(step.layout, index: index, fieldType: self.storedFieldType(step.box, layout: step.layout, index: index), value: parsed, anchor: step.lastFieldTok)
 
+		self.noteWriteThroughAField(func, target: step.box, baseIndex: baseIndex, lastDotIndex: lastDotIndex, anchor: step.baseTok)
 		try self.emitFieldWrite(func, box: step.box, layout: step.layout, index: index, value: value, argBareLocal: self.rhsWasBareLocalReference(valueStart), anchor: step.lastFieldTok, range: SourceRange.between(step.baseTok, last: step.lastFieldTok))
 	end 'parseFieldAssignment'
+
+	// ⭐ **A FIELD WRITE WRITES THE RECORD BEFORE ITS LAST `.`** — `box.item.x = 9` writes the record `box.item`, and
+	// `e.x = 9` the record `e` holds, either of which a live `let` may still be reading, whichever of the two names
+	// was declared first (E3159, `StorageProvenance.checkWriteThroughSites`).
+	function noteWriteThroughAField(func IrFunction, target ValueId, baseIndex TokenIndex, lastDotIndex TokenIndex, anchor Token)
+		var deferred = self.deferredProvenanceOf(func)
+		deferred.noteFieldWrite(target)
+		deferred.noteWriteThrough(target, placeStart: baseIndex, placeEnd: lastDotIndex, line: anchor.line, column: anchor.column, token: self.pos)
+	end 'noteWriteThroughAField'
 
 	// ⭐ **WRITE A FIELD, DROPPING THE OLD MANAGED VALUE AND MOVING THE NEW ONE IN** — the
 	// assignment counterpart of the construct-time `emitStructLiteral` move. A SCALAR field is a plain store.
@@ -76609,6 +77271,14 @@ export type Parser
 			binding.lastUseToken = self.pos
 		end 'laterThanAnyUseSoFar'
 
+		binding.lastReadToken = self.pos
+
+		// Every read of an immutable name, for the doors that ask whether one can follow them (`LetReads`).
+		if not binding.mutable and self.deferredProvenance is not sharedNoDeferredProvenance 'anImmutableNamesRead'
+			var deferred = self.deferredProvenance
+			deferred.noteLetRead(binding.boundValue, token: self.pos)
+		end 'anImmutableNamesRead'
+
 		// ⭐ **E3012's EVIDENCE, WRITTEN AT THE SAME CHOKEPOINT AND FOR THE SAME REASON.** "Was this name
 		// read?" is the question this routine already exists to be the single home of; the unused check asks
 		// it of the whole function instead of of one moment. It is a SEPARATE bit from `lastUseToken` because
@@ -76616,6 +77286,12 @@ export type Parser
 		// Written before the early returns below for the reason the line above is: a self-field alias and a
 		// scalar binding are reads too, and the exclusions are about a MOVE.
 		self.markBindingReferenced(binding)
+
+		// ⭐ **THE READ A MOVE IS OBSERVED AT.** A door the binding was handed to whole may turn out to have moved it
+		// (`StorageProvenance.checkMoveSites`), and this is the first read after it on this path.
+		if binding.awaitingMoveReads != NoMoveSiteList 'readAfterADoor'
+			self.noteReadAfterDoors(binding, nameTok: nameTok)
+		end 'readAfterADoor'
 
 		if binding.isSelfField 'selfFieldAlias'
 			return
@@ -78062,8 +78738,19 @@ export type Parser
 
 	function recordImmutableConstantRead(tok Token, value ValueId) returns ValueId
 		self.publishBareBindingName(tok, immutable: true)
-		return value
+		return self.recordModuleLetRoot(value, name: tok.value, image: true)
 	end 'recordImmutableConstantRead'
+
+	// ⭐ **A MODULE-LEVEL `let` READ IS AN IMMUTABLE NAME'S RECORD** wherever it is read, and it can never move:
+	// filed for `StorageProvenance`, which refuses it at a mutable door. `image`: the `let` is image data, which
+	// every durable store copies (`coOwnConcreteRecordForSink`), so only a `var` door can reach its record.
+	function recordModuleLetRoot(value ValueId, name ByteArray, image bool) returns ValueId
+		if self.valueIsManagedHeap(value) and self.deferredProvenance is not sharedNoDeferredProvenance 'aRecordInABody'
+			self.deferredProvenance.noteModuleLetRead(value, name: name, image: image)
+		end 'aRecordInABody'
+
+		return value
+	end 'recordModuleLetRoot'
 
 	// ⭐ **A USE OF A TOP-LEVEL MANAGED CONSTANT MATERIALIZES ITS LITERAL** (P1.7a) — the managed twin of
 	// the `literal`-op inline directly above, and the same storage model: the declaration reserves
@@ -78245,7 +78932,7 @@ export type Parser
 		end 'writableSlot'
 
 		self.markImmutableGlobalRead(value)
-		return value
+		return self.recordModuleLetRoot(value, name: tok.value, image: false)
 	end 'recordGlobalReadValue'
 
 	// ⭐ **THE ONE WRITER OF `immutableGlobalReads`** — the read that mints a mark and the merge that
@@ -79044,6 +79731,7 @@ export type Parser
 		let savedValueConstDomains = self.valueConstDomains
 		let savedValueOwnsHeap = self.valueOwnsHeap
 		let savedValueOwnsHeapAlone = self.valueOwnsHeapAlone
+		let savedValueMintedSole = self.valueMintedSole
 		let savedValueFromFreshReturn = self.valueFromFreshReturn
 		let savedValuePromiseMarks = self.valuePromiseMarks
 		let savedNodeHandleMintedFrom = self.nodeHandleMintedFrom
@@ -79146,6 +79834,7 @@ export type Parser
 		// panic or a wrong answer on a user program, which is how three of them shipped at once.
 		let savedIterationLockedBindings = self.iterationLockedBindings
 		let savedImmutableGlobalReads = self.immutableGlobalReads
+		let savedDeferredProvenance = self.deferredProvenance
 		let savedMayReturnAGlobalAlias = self.enclosingFunctionMayReturnAGlobalAlias
 		let savedCapturedImmutableGlobalReads = self.capturedImmutableGlobalReads
 		let savedMergeImmutableBlame = self.mergeImmutableBlame
@@ -79290,6 +79979,7 @@ export type Parser
 		self.valueConstDomains = ConstPayloadDomainArray.create()
 		self.valueOwnsHeap = BoolArray.create()
 		self.valueOwnsHeapAlone = BoolArray.create()
+		self.valueMintedSole = BoolArray.create()
 		self.valueFromFreshReturn = BoolArray.create()
 		self.valuePromiseMarks = BoolArray.create()
 		self.nodeHandleMintedFrom = ValueIdArray.create()
@@ -79323,6 +80013,7 @@ export type Parser
 		self.foldedIndexCallSites = noFoldedIndexCallSites
 		self.immutableGlobalReads = noValueMarks
 		self.mergeImmutableBlame = noMergeBlames
+		self.deferredProvenance = DeferredProvenance.create()
 		self.enclosingFunctionMayReturnAGlobalAlias = false
 
 		// ⭐ **NOT CLEARED — HANDED THE SET THE BODY IS ABOUT TO CAPTURE OUT OF.** The line above and this one
@@ -79412,7 +80103,7 @@ export type Parser
 		// user parameters only). If the body captures, `paramCount`/`maxonParamTypes` are patched below to
 		// carry the trailing `__env`. File-private (a closure is never callable across files by name), and it
 		// NEVER throws (the closure grammar has no throws clause).
-		var lifted = IrFunction.create(closureName, maxonReturnType: MaxonReturnType.value(MaxonType.unresolved), paramCount: paramCount, maxonParamTypes: paramTypes, valueTags: self.valueTags, valueNameIds: self.valueNameIds, valueBrandIds: self.valueBrandIds, valueClosureEnv: self.valueClosureEnv, valueIsCapturingClosure: self.valueIsCapturingClosure, valueWitnessIds: self.valueWitnessIds, returnLine: givesTok.line, declaredAt: SourcePosition.declaredAt(self.filePath, nameTok: functionTok))
+		var lifted = IrFunction.create(closureName, maxonReturnType: MaxonReturnType.value(MaxonType.unresolved), paramCount: paramCount, maxonParamTypes: paramTypes, valueTags: self.valueTags, valueNameIds: self.valueNameIds, valueBrandIds: self.valueBrandIds, valueMintedSole: sharedNoMintedSole, valueClosureEnv: self.valueClosureEnv, valueIsCapturingClosure: self.valueIsCapturingClosure, valueWitnessIds: self.valueWitnessIds, returnLine: givesTok.line, declaredAt: SourcePosition.declaredAt(self.filePath, nameTok: functionTok))
 		lifted.visibility = Visibility.file
 
 		// Push up front — reserving the closure's index AFTER the enclosing function's (which was pushed at
@@ -79521,8 +80212,10 @@ export type Parser
 		// before the restore hands that list back. The two scans run in the same order they do at a declared
 		// function's `end`, which is the precedence between the rules.
 		if not self.reportUnusedBindings(closureName) 'nothingUnused'
-			self.reportVarShouldBeLet()
+			self.reportVarShouldBeLet(lifted)
 		end 'nothingUnused'
+
+		self.fileDeferredProvenance(lifted)
 
 		// --- Restore the enclosing function's parse context. ---
 		_ = try self.closureCaptureScopes.pop() otherwise panic("parseClosureExpression: closureCaptureScopes underflow — the enclosing scope pushed at entry is missing")
@@ -79549,6 +80242,7 @@ export type Parser
 		self.valueConstDomains = savedValueConstDomains
 		self.valueOwnsHeap = savedValueOwnsHeap
 		self.valueOwnsHeapAlone = savedValueOwnsHeapAlone
+		self.valueMintedSole = savedValueMintedSole
 		self.valueFromFreshReturn = savedValueFromFreshReturn
 		self.valuePromiseMarks = savedValuePromiseMarks
 		self.nodeHandleMintedFrom = savedNodeHandleMintedFrom
@@ -79601,6 +80295,7 @@ export type Parser
 		self.foldedIndexCallSites = savedFoldedIndexCallSites
 		self.iterationLockedBindings = savedIterationLockedBindings
 		self.immutableGlobalReads = savedImmutableGlobalReads
+		self.deferredProvenance = savedDeferredProvenance
 		self.enclosingFunctionMayReturnAGlobalAlias = savedMayReturnAGlobalAlias
 		self.capturedImmutableGlobalReads = savedCapturedImmutableGlobalReads
 		self.mergeImmutableBlame = savedMergeImmutableBlame
@@ -79676,6 +80371,13 @@ export type Parser
 			// `emitCaptureRead` reads the slot back through those same two — and `capType` is the
 			// SOURCE type it recorded, which for a ranged alias is `named` and has no width of its own.
 			self.emitIndirectStore(env, offset: envSlotOffset(i), value: capValue, storageType: self.wordSlotStorageType(capType), range: range)
+
+			// The closure reads what it captured wherever it is called, which this body cannot see
+			// (`ProvenanceTracer.rootReadAfter`).
+			if self.deferredProvenance is not sharedNoDeferredProvenance 'inABody'
+				var deferred = self.deferredProvenance
+				deferred.noteLetCapture(capValue, token: self.pos)
+			end 'inABody'
 
 			// ⭐⭐⭐ **AND THE CAPTURED VALUE IS NO LONGER THIS FRAME'S ALONE — THE ONE ROUTE TO A SECOND
 			// REFERENT THAT TAKES NO REFERENCE (SV1 wave 3).** Every other way a box gains one goes through an
@@ -85309,6 +86011,7 @@ export type Parser
 		self.recordOpaqueArgRangeChecks(callee, args: args, argLabels: argLabels, anchor: anchor, constructorInstance: constructed)
 		let opIdx = self.artifact.module.ops.count()
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(argImmutableNames), argDefaultSlots: argDefaultSlots, mint: mint), range: SourceRange.between(anchor, last: rparenTok))
+		self.noteCallToken(SourceRange.between(anchor, last: rparenTok))
 
 		// ⭐ **AND WHERE THAT OP LANDED, WHEN IT IS ONE A LATER FOLD MAY DROP.** Only the two index accessors
 		// over a known-bytes receiver answer true here — `recordConstStringIndexResult` above is the sole
@@ -88013,6 +88716,7 @@ export type Parser
 		// position is dictated only by `enrolOwnedCallTemp`'s "before the op is appended" half.
 		self.enrolOwnedCallTemp(result)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.indirectCall(result, callee: callee, args: args), range: SourceRange.between(anchor, last: rparenTok))
+		self.noteCallToken(SourceRange.between(anchor, last: rparenTok))
 		return result
 	end 'parseIndirectCall'
 

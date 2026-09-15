@@ -796,6 +796,8 @@ let DataLabelDisambiguator = "$"
 // of suffixed labels and its count IS the next free ordinal. Nothing else can have taken it.
 typealias DataLabelCountMap = Map with (ByteArray, MachineWord)
 
+module typealias GlobalDataLabelSet = Set with ByteArray
+
 // `name`'s `.data` label, and the bump of `minted` that reserves it. The FIRST global of a bare name
 // gets the bare label; the k-th gets `__data_<name>$<k-1>`.
 //
@@ -2700,6 +2702,30 @@ export union DeclaredEnum
 	declared(layout EnumLayout)
 	undeclared
 end 'DeclaredEnum'
+
+// ⭐ **THE KINDS OF RECORD THAT MAY LIE WITHIN A RECORD** (`ProgramSignatures.recordKindsWithinAggregate`). A kind
+// is a declared struct's or union's name, a generic instance's compiled name (`mangleGenericInstance`, which no
+// declaration shares), `HeldTupleKind` for every tuple, or `HeldByteRecordKind` for a `String` or a `Character`;
+// `anything` says an opaque slot — a type parameter, an existential, a function value's environment, a
+// compiler-owned aggregate — may hold any record.
+module type HeldRecordKinds
+	export var kinds as HeldRecordKindSet
+	export var anything as bool
+
+	export static function create() returns HeldRecordKinds
+		return Self{kinds: HeldRecordKindSet.create(), anything: false}
+	end 'create'
+
+	export function mayHold(kind ByteArray) returns bool
+		return self.anything or self.kinds.contains(kind)
+	end 'mayHold'
+end 'HeldRecordKinds'
+
+module typealias HeldRecordKindSet = Set with ByteArray
+
+// The sweep and the canonical pass spell one tuple differently, so every tuple is one kind.
+let HeldTupleKind = b"(tuple)"
+module let HeldByteRecordKind = b"(bytes)"
 
 // ⭐ **HOW A UNION PAYLOAD FIELD IS STORED AND DROPPED — P1.3 slice 2.** The ONE classifier the
 // construct (move-in), the match extract (move-out), the drop routing, and the synthesized
@@ -16629,6 +16655,22 @@ export type ProgramSignatures
 		return decl.dataLabel
 	end 'dataLabelOf'
 
+	// The `.data` labels of the `let`-declared globals that have a slot: module storage no write reaches, which
+	// `StorageProvenance` asks of a `globalAddr` — an op that names its slot by label alone.
+	export function immutableGlobalDataLabels() returns GlobalDataLabelSet
+		var labels = GlobalDataLabelSet.create()
+
+		for i in 0 upto self.decls.count() 'eachDecl'
+			let decl = self.declAt(i)
+
+			if decl.hasStorage and not decl.mutable 'anImmutableSlot'
+				labels.insert(self.dataLabelOf(decl))
+			end 'anImmutableSlot'
+		end 'eachDecl'
+
+		return labels
+	end 'immutableGlobalDataLabels'
+
 	// ⭐⭐ **DOES THIS DECLARATION STILL CONTRIBUTE STORAGE?** — the ONE filter both arena walks below
 	// apply, and the whole of what makes a dead global's THREE PIECES drop TOGETHER (P1.7 slice 3).
 	// The `.data` slot `declaredGlobals` reserves, the `__module_init` store `managedGlobals` causes and
@@ -23048,6 +23090,21 @@ export type ProgramSignatures
 	export function containerElementIsOpaque(id GenericInstanceId) returns bool
 		return self.slotTypeIsOpaque(self.containerElementType(id))
 	end 'containerElementIsOpaque'
+
+	// Can a record be stored into a value of this instance? Yes when a type argument is a record, or opaque and
+	// so possibly one — `StorageProvenance`'s question of a container a runtime entry writes, which an
+	// `Array with Byte` answers no to.
+	export function instanceArgsMayHoldARecord(id GenericInstanceId) returns bool
+		for position in 0 upto self.genericInstanceArgCount(id) 'eachArg'
+			let argument = self.substitutedInstanceArg(id, position: position)
+
+			if self.slotTypeIsOpaque(argument) or self.typeIsManaged(argument, from: self.typeNames) 'aRecord'
+				return true
+			end 'aRecord'
+		end 'eachArg'
+
+		return false
+	end 'instanceArgsMayHoldARecord'
 
 	// ⭐⭐ **AN OPAQUE ELEMENT ANSWERS `false` TO `containerElementIsManaged`, AND THE CLONE SIDE ACTED ON THAT
 	// ANSWER — SO THIS IS THE QUESTION IT SHOULD HAVE ASKED (W176).** `containerElementIsManaged` is
@@ -30917,6 +30974,33 @@ export type ProgramSignatures
 		return unionHasManagedField(self, typeNames: self.typeNames, layout: layout)
 	end 'unionHasManagedPayload'
 
+	// ⭐ **IS A RECORD OF DECLARED TYPE `name` IMMUTABLE?** A declared struct every field of which is a `let`: no
+	// statement writes such a record, so a value that IS one is never the target of a write and meets no mutable
+	// door. What it holds is judged by its own type. A union answers `false` — a `var` payload binding writes back
+	// into its box — and so do a compiler-owned record and a name no struct declares.
+	export function recordTypeIsImmutable(name ByteArray) returns bool
+		if not self.containsStructInAnyFile(name) 'notAStruct'
+			return false
+		end 'notAStruct'
+
+		match compilerOwnedAggregateOf(self, name: name) 'compilerOwned'
+			managedFile or
+				managedDirectory or
+				managedSocket or
+				serviceHandle then return false
+
+			userDeclared then break 'compilerOwned'
+		end 'compilerOwned'
+
+		for writable in self.structLayoutOf(name).fieldMutable 'eachField'
+			if writable 'aVarField'
+				return false
+			end 'aVarField'
+		end 'eachField'
+
+		return true
+	end 'recordTypeIsImmutable'
+
 	// ⭐ **CAN A MANAGED-ELEMENT `Array with T` BE DEEP-CLONED by this rung's mechanism (P1.7 slice 3b-vi-b)?**
 	// The FRONT-END gate for a managed `slice`/`clone`/`append`, and the exact envelope the cloner synthesis
 	// handles — the two agree so the synthesizer never meets an `unsupported` field on a program the front end
@@ -31290,6 +31374,186 @@ export type ProgramSignatures
 
 		return true
 	end 'unionPayloadsSupportDeepClone'
+
+	// ⭐ **THE KINDS OF RECORD THAT MAY LIE WITHIN A RECORD OF AGGREGATE `name`, OR OF INSTANCE `id`, AT ANY
+	// DEPTH** — `StorageProvenance`'s question of what may lie within a `let`'s record, which its root sets cannot
+	// type. Asked by NAME for `unionHasManagedPayload`'s reason: the ids in a parser artifact's interner are not
+	// this index's. The record's own kind is not among them unless it holds one of its own.
+	export function recordKindsWithinAggregate(name ByteArray) returns HeldRecordKinds
+		var within = HeldRecordKinds.create()
+		var denoted = self.denotedAggregateName(name)
+
+		if self.isGenericAliasInAnyFile(denoted) 'anInstanceByItsAlias'
+			self.addRecordKindsWithinGenericAlias(denoted, within: within, visited: ClonerSet.create())
+			return within
+		end 'anInstanceByItsAlias'
+
+		self.addRecordKindsWithinAggregate(denoted, within: within, visited: ClonerSet.create())
+		return within
+	end 'recordKindsWithinAggregate'
+
+	// The kind a record of declared type `name` is, as `HeldRecordKinds` names it. A superseded generic alias,
+	// which no value can have, throws.
+	export function heldRecordKindOfDeclaredName(name ByteArray) returns ByteArray throws MapError
+		let denoted = self.denotedAggregateName(name)
+
+		if self.isGenericAliasInAnyFile(denoted) 'anInstanceByItsAlias'
+			return self.mangleGenericInstance(try self.liveGenericAliasInstance(denoted))
+		end 'anInstanceByItsAlias'
+
+		return HeldTupleKind if isTupleTypeName(denoted) else denoted
+	end 'heldRecordKindOfDeclaredName'
+
+	export function recordKindsWithinInstance(id GenericInstanceId) returns HeldRecordKinds
+		var within = HeldRecordKinds.create()
+		self.addRecordKindsWithinInstance(id, within: within, visited: ClonerSet.create())
+		return within
+	end 'recordKindsWithinInstance'
+
+	// The kind of record a slot of `type` holds, and every kind within it.
+	function addRecordKindsOfType(type MaxonType, within HeldRecordKinds, visited ClonerSet)
+		let tag = maxonTypeTag(type)
+
+		if tag == ValueTypeTag.typeParameter or tag == ValueTypeTag.interfaceRef or tag == ValueTypeTag.function 'opaque'
+			within.anything = true
+			return
+		end 'opaque'
+
+		if tagIsByteRecord(tag) 'bytes'
+			within.kinds.insert(HeldByteRecordKind)
+			return
+		end 'bytes'
+
+		if tag == ValueTypeTag.genericInstance 'instance'
+			self.addRecordKindsOfInstance(genericInstanceIdOf(type), within: within, visited: visited)
+			return
+		end 'instance'
+
+		if not tagMayNameAggregate(tag) 'aScalar'
+			return
+		end 'aScalar'
+
+		var name = self.denotedSlotAggregateName(type)
+
+		let form = try self.declaredFormInAnyFile(name) otherwise 'undeclared'
+			within.anything = true
+			return
+		end 'undeclared'
+
+		match form 'form'
+			structType or
+				tupleAlias then self.addRecordKindsOfAggregate(name, within: within, visited: visited)
+
+			enumType or
+				unionType then self.addRecordKindsOfUnion(name, within: within, visited: visited)
+
+			// A ranged alias IS its primitive.
+			rangedAlias then return
+
+			// An existential may hold any conformer, and a function value's environment any capture.
+			interfaceType or
+				functionAlias then within.anything = true
+
+			genericAlias then self.addRecordKindsOfGenericAlias(name, within: within, visited: visited)
+		end 'form'
+	end 'addRecordKindsOfType'
+
+	function addRecordKindsOfAggregate(name ByteArray, within HeldRecordKinds, visited ClonerSet)
+		within.kinds.insert(HeldTupleKind if isTupleTypeName(name) else name)
+		self.addRecordKindsWithinAggregate(name, within: within, visited: visited)
+	end 'addRecordKindsOfAggregate'
+
+	// A payload-free enum's value is its tag; a boxed one is a record.
+	function addRecordKindsOfUnion(name ByteArray, within HeldRecordKinds, visited ClonerSet)
+		if self.declaredEnumIsBoxed(name) 'aRecord'
+			self.addRecordKindsOfAggregate(name, within: within, visited: visited)
+		end 'aRecord'
+	end 'addRecordKindsOfUnion'
+
+	// A superseded spelling no slot can name stands for any record.
+	function addRecordKindsOfGenericAlias(name ByteArray, within HeldRecordKinds, visited ClonerSet)
+		let live = try self.liveGenericAliasInstance(name) otherwise 'superseded'
+			within.anything = true
+			return
+		end 'superseded'
+
+		self.addRecordKindsOfInstance(live, within: within, visited: visited)
+	end 'addRecordKindsOfGenericAlias'
+
+	function addRecordKindsWithinGenericAlias(name ByteArray, within HeldRecordKinds, visited ClonerSet)
+		let live = try self.liveGenericAliasInstance(name) otherwise 'superseded'
+			within.anything = true
+			return
+		end 'superseded'
+
+		self.addRecordKindsWithinInstance(live, within: within, visited: visited)
+	end 'addRecordKindsWithinGenericAlias'
+
+	function addRecordKindsOfInstance(id GenericInstanceId, within HeldRecordKinds, visited ClonerSet)
+		within.kinds.insert(self.mangleGenericInstance(id))
+		self.addRecordKindsWithinInstance(id, within: within, visited: visited)
+	end 'addRecordKindsOfInstance'
+
+	function addRecordKindsWithinAggregate(name ByteArray, within HeldRecordKinds, visited ClonerSet)
+		if not self.cloneWalkMayDescendInto(name, visited: visited) 'alreadyWalked'
+			return
+		end 'alreadyWalked'
+
+		match compilerOwnedAggregateOf(self, name: name) 'compilerOwned'
+			managedFile or
+				managedDirectory or
+				managedSocket or
+				serviceHandle then within.anything = true
+
+			userDeclared then self.addRecordKindsWithinDeclaration(name, within: within, visited: visited)
+		end 'compilerOwned'
+	end 'addRecordKindsWithinAggregate'
+
+	function addRecordKindsWithinDeclaration(name ByteArray, within HeldRecordKinds, visited ClonerSet)
+		if self.containsStructInAnyFile(name) 'struct'
+			for fieldType in self.structLayoutOf(name).fieldTypes 'eachField'
+				self.addRecordKindsOfType(fieldType, within: within, visited: visited)
+			end 'eachField'
+
+			return
+		end 'struct'
+
+		match self.enumInAnyFile(name) 'union'
+			declared(layout) then self.addRecordKindsWithinPayloads(layout, within: within, visited: visited)
+			undeclared then within.anything = true
+		end 'union'
+	end 'addRecordKindsWithinDeclaration'
+
+	function addRecordKindsWithinPayloads(layout EnumLayout, within HeldRecordKinds, visited ClonerSet)
+		for ci in 0 upto layout.caseCount() 'eachCase'
+			for field in layout.payloadsAt(ci) 'eachField'
+				self.addRecordKindsOfType(field.declaredType, within: within, visited: visited)
+			end 'eachField'
+		end 'eachCase'
+	end 'addRecordKindsWithinPayloads'
+
+	// A container holds its type arguments, and a declared generic its fields; a green-thread handle's result
+	// waits in the scheduler, where any record may.
+	function addRecordKindsWithinInstance(id GenericInstanceId, within HeldRecordKinds, visited ClonerSet)
+		if self.instanceIsPromiseHandle(id) 'aHandle'
+			within.anything = true
+			return
+		end 'aHandle'
+
+		if not self.cloneWalkMayDescendInto(self.mangleGenericInstance(id), visited: visited) 'alreadyWalked'
+			return
+		end 'alreadyWalked'
+
+		for position in 0 upto self.genericInstanceArgCount(id) 'eachArgument'
+			self.addRecordKindsOfType(self.substitutedInstanceArg(id, position: position), within: within, visited: visited)
+		end 'eachArgument'
+
+		if self.genericInstanceHasBaseLayout(id) 'aDeclaredGeneric'
+			for i in 0 upto self.genericInstanceFieldCount(id) 'eachField'
+				self.addRecordKindsOfType(self.substituteInstanceFieldType(id, index: i), within: within, visited: visited)
+			end 'eachField'
+		end 'aDeclaredGeneric'
+	end 'addRecordKindsWithinInstance'
 
 	// The declared return type of `callee`, ADOPTED into `into` — the calling file's own artifact
 	// interner. THE one door out of this index (see the header): a `named` type crosses by NAME and

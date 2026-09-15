@@ -2001,7 +2001,7 @@ function buildSlabAllocEntry(module StdModule, name ByteArray, zeroed bool, mode
 	let state = ids.mint()
 	var stateReady = emitSlabStateBase(module, func: func, cur: classReady, stateId: state, ids: ids, label: b"state")
 
-	let arms = emitSlabResolveShard(module, func: func, cur: stateReady, state: state, model: model, need: SlabShardNeed.routed, traffic: ThreadTraffic.alloc(size), ids: ids, label: b"shard")
+	var arms = emitSlabResolveShard(module, func: func, cur: stateReady, state: state, model: model, need: SlabShardNeed.routed, traffic: ThreadTraffic.alloc(size), ids: ids, label: b"shard")
 	let soleRoute = slabShardRoute(arms.sole)
 	let serialRoute = slabShardRoute(arms.serial)
 
@@ -2511,7 +2511,7 @@ function buildSlabFree(module StdModule, model MachineModel)
 	var toSpan = module.addBlock(func, label: b"tospan", heat: BlockHeat.normal)
 
 	let state = emitSlabStateCommitted(module, block: toSpan, ids: ids)
-	let arms = emitSlabResolveShard(module, func: func, cur: toSpan, state: state, model: model, need: SlabShardNeed.holdsProc, traffic: ThreadTraffic.free, ids: ids, label: b"shard")
+	var arms = emitSlabResolveShard(module, func: func, cur: toSpan, state: state, model: model, need: SlabShardNeed.holdsProc, traffic: ThreadTraffic.free, ids: ids, label: b"shard")
 
 	var routed = module.addBlock(func, label: b"routed", heat: BlockHeat.normal)
 	let myP = ids.mint()
