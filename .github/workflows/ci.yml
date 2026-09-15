@@ -8,13 +8,18 @@
 # one, every job would fail on a condition no contributor can fix — so the seed step SKIPS the run and
 # writes a notice instead. It becomes real the moment a release is published, with no edit here.
 
-# ⚠ `website/` IS NOT THIS WORKFLOW'S BUSINESS. It is a Node project whose own build is
-# `website.yml`, and without the filter below a CSS change would seed, build and suite-test a compiler
-# on four architectures. `website.yml` carries the mirror-image `paths:` so exactly one of the two runs
-# for any given commit.
+# ⭐ A COMMIT THAT TOUCHES NOTHING THIS WORKFLOW READS DOES NOT RUN IT. The build reads `maxon-bin/`,
+# `stdlib/`, `runtime/`, `vendor/`, `build.maxon` and the scripts; the suite reads `specs/`. Everything
+# excluded below is read by neither — prose, editor and agent config, and projects with workflows of
+# their own. `tests/` and `examples/` are excluded for the same reason: nothing here runs them, so a
+# run on their change reports on code it never touched.
 #
-# ⛔ IF THIS EVER BECOMES A REQUIRED STATUS CHECK, `paths-ignore` STOPS IT REPORTING AT ALL on a
-# website-only pull request, which blocks the merge rather than passing it. This repository develops on
+# ⛔ THE LIST NAMES WHAT TO SKIP, NEVER WHAT TO RUN. A new directory therefore runs CI until someone
+# decides it need not, rather than being skipped silently until someone notices it should not be.
+# `*.md` matches the ROOT only — `*` stops at a `/`, and `specs/*.md` is the suite itself.
+#
+# ⛔ IF THIS EVER BECOMES A REQUIRED STATUS CHECK, a path filter STOPS IT REPORTING AT ALL on a
+# pull request it skips, which blocks the merge rather than passing it. This repository develops on
 # `main` and has no branch protection today; a future one needs a different shape, not a wider filter.
 
 name: ci
@@ -22,9 +27,29 @@ name: ci
 on:
   push:
     branches: [main]
-    paths-ignore: ['website/**']
+    paths: &ci-inputs
+      - '**'
+      - '!website/**'
+      - '!docs/**'
+      - '!*.md'
+      - '!**/CLAUDE.md'
+      - '!LICENSE-*'
+      - '!todo.md'
+      - '!.claude/**'
+      - '!.agents/**'
+      - '!.vscode/**'
+      - '!.mcp.json'
+      - '!.editorconfig'
+      - '!.gitignore'
+      - '!vscode-extension/**'
+      - '!installer/**'
+      - '!bench/**'
+      - '!tests/**'
+      - '!examples/**'
+      - '!.github/**'
+      - '.github/workflows/ci.yml'
   pull_request:
-    paths-ignore: ['website/**']
+    paths: *ci-inputs
   workflow_dispatch:
 
 # ⭐ A PULL REQUEST CANCELS ITS OWN OLDER RUNS; `main` NEVER CANCELS. Superseding is right on a
