@@ -6677,7 +6677,8 @@ end 'buildGtIoRead'
 // ============================================================================================
 //
 // Generalizes the one-shot `__gt_io_read` probe into a handle-table API. A `__subp_table` (.data) slot points at a
-// slab region of `SubpMaxHandles` fixed slots (0 until the first spawn lazily allocs it); a HANDLE is a slot index.
+// slab region of `SubpMaxHandles` fixed slots (0 until the first spawn lazily allocs it); a HANDLE packs a slot
+// index with the slot's generation (`SubpHandleSlotSpan`).
 // ⛔ **THE TABLE IS NOT MAIN-THREAD-ONLY.** A WORKER M runs green threads and a green thread is what spawns,
 // so two things need a discipline and have one: the lazy CREATION of the region takes `__sched_lock` (a
 // test-then-allocate-then-store that two Ms would both win, losing a whole table and every handle given out of
@@ -6701,6 +6702,14 @@ end 'buildGtIoRead'
 let SubpTableLabel = b"__subp_table"
 let SubpMaxHandles = 64
 let SubpSlotBytes = 192
+
+// A live handle is `generation * SubpHandleSlotSpan + slotIndex`: the index in the low bits, the slot's
+// `SubpSlotGeneration` above it. The generation is bumped before the handle is minted, so every live handle
+// carries a generation of at least 1 and is therefore at least `SubpHandleSlotSpan`; `-1` stays the failure
+// answer, and a handle kept past its release decodes to a generation the slot no longer holds. The span is a
+// power of two so the decode is a mask and a shift.
+let SubpHandleSlotSpan = SubpMaxHandles
+let SubpHandleSlotIndexMask = SubpHandleSlotSpan - 1
 
 // Slot fields (i64). The two stream sub-blocks are identical 5-word layouts (readEnd/bufPtr/bufCap/bufLen/eof), so
 // the reader takes a stream-base offset and indexes within. The persistent buffers (bufPtr/bytesOut/writeBuf)
@@ -6894,66 +6903,48 @@ export function emitSubpRecordLastError(module StdModule, block IrBlock, ids Val
 	emitStoreField(module, block: block, record: slotAddr, offset: 0, value: err)
 end 'emitSubpRecordLastError'
 
-// slot = __subp_table's region + handle * SubpSlotBytes. `table` is the already-loaded region base.
-function emitSubpSlotAddr(module StdModule, block IrBlock, ids ValueMinter, table ValueId, handle ValueId) returns ValueId
+// slot = __subp_table's region + slotIdx * SubpSlotBytes. `table` is the already-loaded region base; `slotIdx` is a
+// decoded index, never a caller's handle.
+function emitSubpSlotAddr(module StdModule, block IrBlock, ids ValueMinter, table ValueId, slotIdx ValueId) returns ValueId
 	let strideConst = emitConst(module, block: block, value: SubpSlotBytes as ParsedInt, ids: ids)
-	let off = emitBin(module, block: block, a: handle, b: strideConst, opcode: StdBinOpcode.mul, ids: ids)
+	let off = emitBin(module, block: block, a: slotIdx, b: strideConst, opcode: StdBinOpcode.mul, ids: ids)
 	return emitBin(module, block: block, a: table, b: off, opcode: StdBinOpcode.add, ids: ids)
 end 'emitSubpSlotAddr'
 
 // ⭐⭐ **THE HANDLE CHECK EVERY ENTRY THAT TAKES A CALLER'S HANDLE OWES, AND THE RULE THAT MAKES THE LIST OF
 // THEM COMPLETE.** `stdlib/Subprocess.maxon` hands these builtins whatever integer it was given, a spec can
-// hand them `-1` directly, and `emitSubpSlotAddr` is bare arithmetic: `table + handle * SubpSlotBytes`. A
-// `-1` therefore names the 184 bytes BEFORE the table — inside the slab — so an unguarded entry reads a
-// garbage `inUse` and, believing the slot live, closes three garbage words as HANDLEs and zeroes memory it
-// does not own. That is corruption, not a wrong answer, and one line of a program reaches it.
+// hand them `-1` directly, and `emitSubpSlotAddr` is bare arithmetic: `table + index * SubpSlotBytes`. An
+// unguarded entry given a bad handle reads a garbage `inUse` and, believing the slot live, closes garbage
+// words as HANDLEs and zeroes memory it does not own — corruption, not a wrong answer.
 //
-// ⛔ **APPLIED PER SITE, THE GUARD IS ONE A DOOR CAN BE ADDED WITHOUT**, and a door without it turns
-// `__Builtins.subprocessReleaseHandle(-1)` into an ACCESS VIOLATION in a program that compiled clean. A spec
-// case can only ever exercise the doors that have it.
+// ⭐ **THE RULE IS STRUCTURAL RATHER THAN REMEMBERED, AND IT IS GREPPABLE:**
 //
-// ⭐ **SO THE RULE IS STRUCTURAL RATHER THAN REMEMBERED, AND IT IS GREPPABLE:**
-//
-//   * `emitSubpSlotAddr` (below) is the RAW arithmetic and is file-private. Its only callers are the spawn
-//     CORE's own slot scan — where the index is a number this compiler just produced, not a caller's — and
-//     `emitSubpSlotOf`.
+//   * `emitSubpSlotAddr` (above) is the RAW arithmetic and is file-private. Its only callers are the spawn
+//     CORE, which passes a slot index it produced itself, and `emitSubpSlotOf`.
 //   * **`emitSubpSlotOf` is the ONE door from a CALLER'S HANDLE to a slot address**, and every FUNCTION that
-//     calls it either opens with this guard or is reached ONLY from one that does. That roster is derived
-//     rather than remembered: `grep -n 'emitSubpSlotOf('` over `Runtime/`, grouped by enclosing function, IS
-//     the list, and a new entry point that forgets the guard shows up in it with no `emitSubpRequireHandle`
-//     at its top.
-//     ⚠ **THE SECOND HALF OF THAT SENTENCE IS AN EXEMPTION, SO IT IS SPELLED OUT RATHER THAN LEFT IMPLICIT** —
-//     an unnamed exemption is how a roster rots. Exactly THREE functions take it, all of them interior steps
-//     of `__gt_subp_wait_collect`'s drain loop and all of them dominated by its guard:
-//     `emitSubpPushStdin`, `emitSubpDrainStream` and `emitSubpKeepWithinLimit`. Anything else in that grep
-//     without a guard at its top is a bug.
-//   * The guard is at the ENTRY POINT, never at a wrapper, which is what makes it complete with respect to
-//     CALL SITES: the seven bare-name streaming builtins and the `__Builtins.subprocess*` intrinsics
-//     reach these same entries, so neither family — nor a future third — has anything to remember.
+//     calls it either opens with this guard or is an interior step of `__gt_subp_wait_collect`'s loop,
+//     dominated by that entry's guard. The roster is `grep -n 'emitSubpSlotOf('` over `Runtime/`, grouped by
+//     enclosing function; anything in it that is neither is a bug.
+//   * The guard is at the ENTRY POINT, never at a wrapper, so the bare-name streaming builtins and the
+//     `__Builtins.subprocess*` intrinsics reach it through the same entries with nothing to remember.
 //
-// `0 <= handle < SubpMaxHandles` AND the slot is live; anything else takes `whenBad`.
-//
-// ⚠ **IT CHECKS "IN RANGE AND LIVE", AND DELIBERATELY NOT "STILL THE SAME CHILD".** The slot GENERATION
-// (`SubpSlotGeneration`) is not read here, so a handle whose slot was released and then re-spawned passes
-// this check and drives the NEW child. That is the int-handle model
-// `stdlib/Subprocess.maxon`'s `release()` documents as caller error (*"Calling any other method after
-// `release` is a bug — the handle slot is invalid and future calls would target whatever process happens to
-// be reusing the slot"*). The generation exists for a different question — a reader PARKED across a release,
-// which resumes and must write nothing back — and that one it does answer.
+// Three facts, all required: the table exists, the handle's slot is live, and the slot's `SubpSlotGeneration`
+// is the one the handle packs. Anything else takes `whenBad`. The generation compare is what makes a handle
+// kept past its release a dead handle forever: the release frees the slot, the next spawn on it bumps the
+// generation, and the old handle never matches again. A negative handle is refused ahead of the decode, so
+// the mask and shift only ever see a non-negative value; a generation of 0 (a literal such as `3`) can never
+// match a live slot, whose generation is at least 1. The one window this cannot cover is a reader PARKED
+// across a release, which `emitSubpTopUpStream` closes by re-reading the generation on resume.
 //
 // It terminates `cur` and returns the block where the handle is known good.
 export function emitSubpRequireHandle(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, handle ValueId, whenBad IrBlock) returns IrBlock
-	var inRange = module.addBlock(func, label: b"subphrange", heat: BlockHeat.normal)
 	var liveCheck = module.addBlock(func, label: b"subphlive", heat: BlockHeat.normal)
+	var sameGeneration = module.addBlock(func, label: b"subphgen", heat: BlockHeat.normal)
 	let good = module.addBlock(func, label: b"subphok", heat: BlockHeat.normal)
 
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
 	let negative = emitCmp(module, block: cur, a: handle, b: zero, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(negative, thenBlockId: whenBad.id, elseBlockId: inRange.id))
-
-	let maxConst = emitConst(module, block: inRange, value: SubpMaxHandles as ParsedInt, ids: ids)
-	let tooBig = emitCmp(module, block: inRange, a: handle, b: maxConst, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(inRange, op: StdOp.condBranch(tooBig, thenBlockId: whenBad.id, elseBlockId: liveCheck.id))
+	module.setTerminator(cur, op: StdOp.condBranch(negative, thenBlockId: whenBad.id, elseBlockId: liveCheck.id))
 
 	// The table itself may never have been allocated — a program whose first subprocess call is a `wait` on a
 	// handle it invented. A null table is "no handle is live", not a null dereference.
@@ -6969,7 +6960,12 @@ export function emitSubpRequireHandle(module StdModule, func IrFunction, ids Val
 	let inUse = emitLoadField(module, block: tableLive, record: slot, offset: SubpSlotInUse, ids: ids)
 	let zeroU = emitConst(module, block: tableLive, value: 0, ids: ids)
 	let dead = emitCmp(module, block: tableLive, a: inUse, b: zeroU, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(tableLive, op: StdOp.condBranch(dead, thenBlockId: whenBad.id, elseBlockId: good.id))
+	module.setTerminator(tableLive, op: StdOp.condBranch(dead, thenBlockId: whenBad.id, elseBlockId: sameGeneration.id))
+
+	let slotGeneration = emitLoadField(module, block: sameGeneration, record: slot, offset: SubpSlotGeneration, ids: ids)
+	let handleGeneration = emitSubpHandleGeneration(module, block: sameGeneration, ids: ids, handle: handle)
+	let stale = emitCmp(module, block: sameGeneration, a: slotGeneration, b: handleGeneration, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(sameGeneration, op: StdOp.condBranch(stale, thenBlockId: whenBad.id, elseBlockId: good.id))
 
 	return good
 end 'emitSubpRequireHandle'
@@ -7003,8 +6999,32 @@ export function emitSubpSlotOf(module StdModule, block IrBlock, ids ValueMinter,
 	let tableAddr = ids.mint()
 	module.appendOp(block, op: StdOp.globalAddr(tableAddr, label: SubpTableLabel))
 	let table = emitLoadField(module, block: block, record: tableAddr, offset: 0, ids: ids)
-	return emitSubpSlotAddr(module, block: block, ids: ids, table: table, handle: handle)
+	return emitSubpSlotAddr(module, block: block, ids: ids, table: table, slotIdx: emitSubpHandleSlotIndex(module, block: block, ids: ids, handle: handle))
 end 'emitSubpSlotOf'
+
+// The shift between a handle's slot index and its generation (`SubpHandleSlotSpan`), shared by the spawn's
+// encode and the entries' decode so the two cannot disagree.
+function emitSubpHandleGenerationShift(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+	return emitConst(module, block: block, value: log2OfPowerOfTwo(SubpHandleSlotSpan as ParsedInt) as ParsedInt, ids: ids)
+end 'emitSubpHandleGenerationShift'
+
+// The handle a slot claimed at generation `generation` names: `generation * SubpHandleSlotSpan + slotIdx`.
+function emitSubpPackHandle(module StdModule, block IrBlock, ids ValueMinter, slotIdx ValueId, generation ValueId) returns ValueId
+	let generationPart = emitBin(module, block: block, a: generation, b: emitSubpHandleGenerationShift(module, block: block, ids: ids), opcode: StdBinOpcode.shl, ids: ids)
+	return emitBin(module, block: block, a: generationPart, b: slotIdx, opcode: StdBinOpcode.add, ids: ids)
+end 'emitSubpPackHandle'
+
+// The slot index a handle packs. Always within `[0, SubpMaxHandles)`, so the address it yields is inside the
+// table for ANY integer — which is why the entry guard must still refuse a negative handle by sign.
+function emitSubpHandleSlotIndex(module StdModule, block IrBlock, ids ValueMinter, handle ValueId) returns ValueId
+	let mask = emitConst(module, block: block, value: SubpHandleSlotIndexMask as ParsedInt, ids: ids)
+	return emitBin(module, block: block, a: handle, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
+end 'emitSubpHandleSlotIndex'
+
+// The generation a handle packs; asked only of a handle already known non-negative.
+function emitSubpHandleGeneration(module StdModule, block IrBlock, ids ValueMinter, handle ValueId) returns ValueId
+	return emitBin(module, block: block, a: handle, b: emitSubpHandleGenerationShift(module, block: block, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
+end 'emitSubpHandleGeneration'
 
 // If `record[fieldOffset]` is 0 (a per-slot buffer never allocated on a FRESH slot), `__slab_alloc(size)` it and
 // store the pointer (and `size` into `capField`); else reuse the buffer persisted from a prior use. Returns the
@@ -7481,7 +7501,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	// `CAS(inUse, 0 -> claimed)` makes the SCAN the claim, so a loser simply walks on to the next index
 	// (`SchedRuntime.POffStatus`'s shape, one table over), and the one path out of here that produces no handle
 	// gives the claim back.
-	let probeSlot = emitSubpSlotAddr(module, block: slotCheck, ids: ids, table: table, handle: slotIdx)
+	let probeSlot = emitSubpSlotAddr(module, block: slotCheck, ids: ids, table: table, slotIdx: slotIdx)
 	let inUseAddr = emitFieldAddr(module, block: slotCheck, record: probeSlot, offset: SubpSlotInUse as ByteOffset, ids: ids)
 	let claimedValue = emitConst(module, block: slotCheck, value: SubpSlotClaimed, ids: ids)
 	let wonSlot = ids.mint()
@@ -7550,7 +7570,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	// spawnFail: publish the OS's reason, close every handle this attempt opened (reloaded from the slot + the
 	// owned-child scratch) — the slot stays free — and answer -1.
 	emitSubpRecordLastError(module, block: spawnFail, ids: ids)
-	let slotF = emitSubpSlotAddr(module, block: spawnFail, ids: ids, table: table, handle: slotIdx)
+	let slotF = emitSubpSlotAddr(module, block: spawnFail, ids: ids, table: table, slotIdx: slotIdx)
 	emitSubpCloseSlotHandles(module, block: spawnFail, ids: ids, slot: slotF, childScratch: childScratch)
 
 	// ⭐ **AND GIVE THE CLAIM BACK.** The scan's CAS took this slot before any of the stdio setup ran, so this
@@ -7573,7 +7593,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	let pidPair = emitLoadField(module, block: spawnOk, record: procInfoPtr, offset: ProcInfoDwProcessIdOffset, ids: ids)
 	let dwordMask = emitConst(module, block: spawnOk, value: DwordMask, ids: ids)
 	let pid = emitBin(module, block: spawnOk, a: pidPair, b: dwordMask, opcode: StdBinOpcode.bitAnd, ids: ids)
-	let slot = emitSubpSlotAddr(module, block: spawnOk, ids: ids, table: table, handle: slotIdx)
+	let slot = emitSubpSlotAddr(module, block: spawnOk, ids: ids, table: table, slotIdx: slotIdx)
 	emitStoreField(module, block: spawnOk, record: slot, offset: SubpSlotHProcess, value: hProcess)
 	emitStoreField(module, block: spawnOk, record: slot, offset: SubpSlotPid, value: pid)
 	let zeroB = emitConst(module, block: spawnOk, value: 0, ids: ids)
@@ -7598,30 +7618,32 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	// on resume and writes nothing back (see `SubpSlotGeneration`). This is the point the slot becomes a live
 	// HANDLE — the SLOT itself was taken at the scan, by the CAS on `inUse`, which is why nothing stores
 	// `inUse` here. A failed spawn releases that claim at `spawnfail`.
-	let slotC = emitSubpSlotAddr(module, block: afterBytesOut, ids: ids, table: table, handle: slotIdx)
+	let slotC = emitSubpSlotAddr(module, block: afterBytesOut, ids: ids, table: table, slotIdx: slotIdx)
 	let genPrev = emitLoadField(module, block: afterBytesOut, record: slotC, offset: SubpSlotGeneration, ids: ids)
 	let oneGen = emitConst(module, block: afterBytesOut, value: 1, ids: ids)
 	let genNext = emitBin(module, block: afterBytesOut, a: genPrev, b: oneGen, opcode: StdBinOpcode.add, ids: ids)
 	emitStoreField(module, block: afterBytesOut, record: slotC, offset: SubpSlotGeneration, value: genNext)
+	let handle = emitSubpPackHandle(module, block: afterBytesOut, ids: ids, slotIdx: slotIdx, generation: genNext)
 
 	// ⭐ A DETACHED spawn answers the child's PID and hands the slot straight back. The slot is claimed first and
 	// released here rather than skipped, because releasing is what CLOSES the process handle and the three pipe
 	// ends — a detached child the parent still holds a handle to is a leaked kernel object per spawn, and the
-	// release path already knows every handle a slot owns.
+	// release path already knows every handle a slot owns. The release is a guarded entry, so it is given the
+	// PACKED handle: a bare index decodes to generation 0, which the guard refuses, and the slot would stay live.
 	let detachAsked = emitLoadField(module, block: afterBytesOut, record: req, offset: SubpReqDetach, ids: ids)
 	let zeroD = emitConst(module, block: afterBytesOut, value: 0, ids: ids)
 	let isAttached = emitCmp(module, block: afterBytesOut, a: detachAsked, b: zeroD, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(afterBytesOut, op: StdOp.condBranch(isAttached, thenBlockId: attached.id, elseBlockId: detached.id))
 
-	module.setTerminator(attached, op: StdOp.ret(slotIdx))
+	module.setTerminator(attached, op: StdOp.ret(handle))
 
 	// ⚠ **THE PID IS READ BEFORE THE RELEASE, AND THE ORDER IS THE WHOLE POINT.** Reading it AFTER would work
 	// only while `buildSubpRelease` happens not to zero `SubpSlotPid` — a coupling neither end states, which
 	// the next field the release path decides to clear breaks silently. Reading first costs nothing.
-	let slotP = emitSubpSlotAddr(module, block: detached, ids: ids, table: table, handle: slotIdx)
+	let slotP = emitSubpSlotAddr(module, block: detached, ids: ids, table: table, slotIdx: slotIdx)
 	let detachedPid = emitLoadField(module, block: detached, record: slotP, offset: SubpSlotPid, ids: ids)
 	let releaseResult = ids.mint()
-	module.appendOp(detached, op: StdOp.call(releaseResult, callee: SubpReleaseName, args: argsOf(slotIdx)))
+	module.appendOp(detached, op: StdOp.call(releaseResult, callee: SubpReleaseName, args: argsOf(handle)))
 	module.setTerminator(detached, op: StdOp.ret(detachedPid))
 
 	module.functions.push(func)
@@ -7728,7 +7750,7 @@ function emitSubpStdinSetup(module StdModule, func IrFunction, ids ValueMinter, 
 
 	let kind = emitLoadField(module, block: cur, record: req, offset: SubpReqStdinKind, ids: ids)
 	let data = emitLoadField(module, block: cur, record: req, offset: SubpReqStdinData, ids: ids)
-	let slot = emitSubpSlotAddr(module, block: cur, ids: ids, table: table, handle: slotIdx)
+	let slot = emitSubpSlotAddr(module, block: cur, ids: ids, table: table, slotIdx: slotIdx)
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
 
 	// A non-pipe stdin leaves ALL THREE of these 0, which is what makes the drain loop's "is there a write
@@ -7746,7 +7768,7 @@ function emitSubpStdinSetup(module StdModule, func IrFunction, ids ValueMinter, 
 	let noPayload = emitCmp(module, block: queueTest, a: queuesPayload, b: queueZero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(queueTest, op: StdOp.condBranch(noPayload, thenBlockId: pipeArm.id, elseBlockId: queueArm.id))
 
-	let slotB = emitSubpSlotAddr(module, block: queueArm, ids: ids, table: table, handle: slotIdx)
+	let slotB = emitSubpSlotAddr(module, block: queueArm, ids: ids, table: table, slotIdx: slotIdx)
 	emitStoreField(module, block: queueArm, record: slotB, offset: SubpSlotStdinPend, value: data)
 	module.setTerminator(queueArm, op: StdOp.branch(delayTest.id))
 
@@ -7759,7 +7781,7 @@ function emitSubpStdinSetup(module StdModule, func IrFunction, ids ValueMinter, 
 	module.setTerminator(delayTest, op: StdOp.condBranch(feedNow, thenBlockId: pipeArm.id, elseBlockId: delayArm.id))
 
 	let unarmed = emitConst(module, block: delayArm, value: SubpStdinFeedUnarmed, ids: ids)
-	let slotD = emitSubpSlotAddr(module, block: delayArm, ids: ids, table: table, handle: slotIdx)
+	let slotD = emitSubpSlotAddr(module, block: delayArm, ids: ids, table: table, slotIdx: slotIdx)
 	emitStoreField(module, block: delayArm, record: slotD, offset: SubpSlotStdinFeedAt, value: unarmed)
 	module.setTerminator(delayArm, op: StdOp.branch(pipeArm.id))
 
@@ -7773,7 +7795,7 @@ function emitSubpStdinSetup(module StdModule, func IrFunction, ids ValueMinter, 
 	let scratchB = emitBin(module, block: pipeMake, a: scratch, b: eight, opcode: StdBinOpcode.add, ids: ids)
 	module.appendOp(pipeMake, op: StdOp.osPipeCreateOutbound(name, saPtrId: saPtr, childReadPtrId: scratch, parentWritePtrId: scratchB))
 	let parentWrite = emitLoadField(module, block: pipeMake, record: scratchB, offset: 0, ids: ids)
-	let slotP = emitSubpSlotAddr(module, block: pipeMake, ids: ids, table: table, handle: slotIdx)
+	let slotP = emitSubpSlotAddr(module, block: pipeMake, ids: ids, table: table, slotIdx: slotIdx)
 	emitStoreField(module, block: pipeMake, record: slotP, offset: SubpSlotStdinWrite, value: parentWrite)
 	let childRead = emitLoadField(module, block: pipeMake, record: scratch, offset: 0, ids: ids)
 	module.setTerminator(pipeMake, op: StdOp.branch(join.id))
@@ -7804,7 +7826,7 @@ function emitSubpOutputSetup(module StdModule, func IrFunction, ids ValueMinter,
 	let kind = emitLoadField(module, block: cur, record: req, offset: kindOffset, ids: ids)
 	let data = emitLoadField(module, block: cur, record: req, offset: dataOffset, ids: ids)
 	let limit = emitLoadField(module, block: cur, record: req, offset: limitOffset, ids: ids)
-	let slot = emitSubpSlotAddr(module, block: cur, ids: ids, table: table, handle: slotIdx)
+	let slot = emitSubpSlotAddr(module, block: cur, ids: ids, table: table, slotIdx: slotIdx)
 	emitStoreField(module, block: cur, record: slot, offset: slotLimitOffset, value: limit)
 	let streamBaseConst = emitConst(module, block: cur, value: streamBase as ParsedInt, ids: ids)
 	let stream = emitBin(module, block: cur, a: slot, b: streamBaseConst, opcode: StdBinOpcode.add, ids: ids)
@@ -7824,7 +7846,7 @@ function emitSubpOutputSetup(module StdModule, func IrFunction, ids ValueMinter,
 	module.appendOp(pipeMake, op: StdOp.call(scratch, callee: SlabAllocName, args: argsOf(scratchSizeConst)))
 	pipeMake = emitSubpCreateReadPipe(module, func: func, ids: ids, cur: pipeMake, namePtr: name, saPtr: saPtr, scratch: scratch)
 	let parentRead = emitLoadField(module, block: pipeMake, record: scratch, offset: 0, ids: ids)
-	let slotP = emitSubpSlotAddr(module, block: pipeMake, ids: ids, table: table, handle: slotIdx)
+	let slotP = emitSubpSlotAddr(module, block: pipeMake, ids: ids, table: table, slotIdx: slotIdx)
 	let streamBaseConstP = emitConst(module, block: pipeMake, value: streamBase as ParsedInt, ids: ids)
 	let streamP = emitBin(module, block: pipeMake, a: slotP, b: streamBaseConstP, opcode: StdBinOpcode.add, ids: ids)
 	emitStoreField(module, block: pipeMake, record: streamP, offset: SubpStreamReadEnd, value: parentRead)
@@ -8530,9 +8552,9 @@ function buildSubpRelease(module StdModule)
 	// ⭐ **THE HANDLE GUARD, AT THE ENTRY POINT.** See `emitSubpRequireHandle` for why it is here rather than
 	// at a wrapper, and for the grep that keeps the roster of these openings complete.
 	// ⭐ **THE GUARD SUBSUMES THIS ENTRY'S OWN `inUse` TEST**, which is what its documented IDEMPOTENCE is
-	// made of, and it runs BEFORE `table + handle * SubpSlotBytes` rather than after. A second release of a
-	// released handle reaches `done` and does nothing; so does a handle that was never live, instead of
-	// closing three garbage words as HANDLEs.
+	// made of, and it runs BEFORE the slot address is formed rather than after. A second release of a
+	// released handle reaches `done` and does nothing; so does a handle that was never live, or one whose
+	// slot has since gone to another child, instead of closing that child's HANDLEs.
 	var live = emitSubpRequireHandle(module, func: func, ids: ids, cur: entry, handle: handle, whenBad: done)
 	let slot = emitSubpSlotOf(module, block: live, ids: ids, handle: handle)
 	var owned = emitSubpRequireCollectorTaken(module, func: func, cur: live, slot: slot, replacement: SubpCollectorReleased, ids: ids)

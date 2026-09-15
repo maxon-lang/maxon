@@ -70,7 +70,8 @@ forgets the release exits **101**. The two buffer readers each answer a FRESH ow
 
 ### A bogus handle is a FAILURE, never a panic — and so is a bogus result pointer
 
-Every entry that takes a handle validates it — in range, and the slot is live — and answers `-1`
+Every entry that takes a handle validates it — non-negative, the table exists, the slot it packs is live,
+and the slot's generation is the one the handle packs — and answers `-1`
 (`-2` for `subprocessWaitExit`'s timeout, EOF for a reader, nothing for a void entry) otherwise. The
 six `subprocessResult*` readers validate their struct POINTER the same way and answer `0` / an empty
 buffer / nothing.
@@ -83,19 +84,24 @@ call to unknown function`.
 ⛔⛔ **AND IT WAS STILL HALF TRUE WHEN THIS FILE FIRST CLAIMED IT.** The guard was applied per SITE,
 by hand, and four doors had it while six did not — `__Builtins.subprocessReleaseHandle(-1)` was an
 ACCESS VIOLATION (0xC0000005) in a program that compiled clean, and the bare-name `subpRelease(-1)`
-with it. `emitSubpSlotAddr` is `table + handle * SubpSlotBytes`, so `-1` names the 184 bytes BEFORE
-the table — inside the slab — and a garbage `inUse` read as live had the release close three garbage
-words as HANDLEs and zero memory it did not own. The gate case that existed to prove the guard
-exercised **exactly the four doors that had it**. The six result readers were the same defect one
+with it. `emitSubpSlotAddr` was then `table + handle * SubpSlotBytes`, so `-1` named the `SubpSlotBytes`
+BEFORE the table — inside the slab — and a garbage `inUse` read as live had the release close
+three garbage words as HANDLEs and zero memory it did not own. The gate case that existed to prove the
+guard exercised **exactly the four doors that had it**. The six result readers were the same defect one
 door over; each guards with its own `nullValue`.
 
 ⭐ **SO THE RULE IS NOW STRUCTURAL, AND THE CASES BELOW COVER EVERY DOOR RATHER THAN A CHOSEN FOUR.**
 The guard sits at the ENTRY POINT, never at a wrapper, so both families — the twenty-two
 `__Builtins.subprocess*` intrinsics and the seven bare-name `subp*` streaming builtins — reach it
 without either having anything to remember. `emitSubpSlotOf` is the one door from a caller's handle
-to a slot address, and every function that calls it must open with `emitSubpRequireHandle`; that
-roster is a `grep`, not a list somebody maintains. `handle-guards` and
-`handle-guards-streaming` below exercise all of it.
+to a slot address — it decodes the slot index out of the packed handle, so the address it yields is
+inside the table for any integer, and the guard is what refuses the sign, the dead slot and the
+mismatched generation — and every function that calls it must open with `emitSubpRequireHandle`; that
+roster is a `grep`, not a list somebody maintains. A handle is `generation * 64 + slotIndex`
+(`streaming-subprocess.md`), so the literals below decode too: `3` is slot 3 at generation 0, which no
+live slot ever holds; `64` is slot 0 at generation 1 and `9999` slot 15 at generation 156, both refused
+here because no spawn ever allocated the table. `handle-guards` and `handle-guards-streaming` below
+exercise all of it.
 
 ### `subprocessResolveOnPath` never answers NULL
 
@@ -468,8 +474,10 @@ verbatim=true len=17 kind=0
 
 <!-- test: subprocess-builtins.handle-guards -->
 **EVERY** `__Builtins.subprocess*` entry that takes a handle, answering a failure for one that was
-never spawned — a negative index, an index past the table, and a live-looking index in an empty
-table. All eight, not the four that used to have the guard: the two VOID entries and the two READERS
+never spawned — a negative handle, one whose packed generation (`3` is generation 0) no live slot ever
+holds, and live-looking ones (`64`, `9999`) in a table no spawn allocated. ⚠ A guessed handle that
+happens to equal a live one is the live one; the guard names a child, it does not authenticate the
+caller. All eight, not the four that used to have the guard: the two VOID entries and the two READERS
 are here precisely because they were the ones that faulted, and reaching the final `print` at all is
 what proves they returned.
 ```maxon
@@ -1084,6 +1092,104 @@ end 'main'
 ```
 ```stdout
 positive=true
+
+```
+
+<!-- test: subprocess-builtins.a-detach-gives-its-slot-back -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
+`detach-answers-a-pid` asserts the pid; this asserts the OTHER half of its sentence, that the detach
+RELEASES the slot. The table holds 64 slots and a spawn with none free answers `-1`, so 65 detaches in
+a row each answering a real pid is the release working every time; a detach that kept its slot would
+run the table out on the 65th. The spawn core releases through the guarded `__gt_subp_release`, so it
+must hand that entry the PACKED handle the way a caller would — a bare slot index decodes to generation
+0, which the guard refuses as dead, and the slot stays live forever.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+function main() returns ExitCode
+	var argv = ByteArray.create()
+	appendToken(argv, token: "cmd")
+	appendToken(argv, token: "/c")
+	appendToken(argv, token: "exit")
+	let empty = ""
+	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
+	var spawned = 0
+	var firstFailure = -1
+	for i in 0 upto 65 'detachLoop'
+		let pid = __Builtins.subprocessDetach(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 4)
+		if pid > 0 'counted'
+			spawned = spawned + 1
+		end 'counted' else 'failed'
+			if firstFailure < 0 'firstOnly'
+				firstFailure = i
+			end 'firstOnly'
+		end 'failed'
+	end 'detachLoop'
+	print("spawned={spawned} firstFailure={firstFailure}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+spawned=65 firstFailure=-1
+
+```
+
+<!-- test: subprocess-builtins.posix-a-detach-gives-its-slot-back -->
+<!-- unsupported-targets: x64-windows -->
+`a-detach-gives-its-slot-back` on this lane: 65 detaches of `/usr/bin/true` into a 64-slot table each
+answer a real pid, which is only possible if every detach released its slot.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+function main() returns ExitCode
+	var argv = ByteArray.create()
+	appendToken(argv, token: "/usr/bin/true")
+	let empty = ""
+	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
+	var spawned = 0
+	var firstFailure = -1
+	for i in 0 upto 65 'detachLoop'
+		let pid = __Builtins.subprocessDetach(argv, 1, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 4)
+		if pid > 0 'counted'
+			spawned = spawned + 1
+		end 'counted' else 'failed'
+			if firstFailure < 0 'firstOnly'
+				firstFailure = i
+			end 'firstOnly'
+		end 'failed'
+	end 'detachLoop'
+	print("spawned={spawned} firstFailure={firstFailure}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+spawned=65 firstFailure=-1
 
 ```
 

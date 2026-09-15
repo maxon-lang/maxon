@@ -12,8 +12,11 @@ category: concurrency
 The streaming subprocess builtins expose a long-lived child whose stdin / stdout / stderr the caller
 drives by hand, one line at a time. They generalize the one-shot `spawnReadLine` probe (slice 1a) into a
 real handle-table API: a spawn creates THREE pipes — one outbound for stdin that the parent writes, two
-inbound that the parent reads — hands back a non-negative integer handle indexing a runtime table, and
-every later call names that handle.
+inbound that the parent reads — hands back a non-negative integer handle that packs a runtime table slot
+with the slot's GENERATION (the slot index in the low part, the generation above it; `-1` is the
+failure answer), and every later call names that handle. A handle therefore names a CHILD, not a slot:
+once released it answers as a released handle for all time, and the slot's next occupant is unreachable
+through it (`a-released-handle-never-reaches-the-slots-next-child`).
 
 ⚠ **WHICH LANES RUN THESE, AND HOW EACH PARKS A READER, IS THE *Targets* SECTION BELOW.** The mechanism
 differs — Windows hands the two inbound pipes to the scheduler's poller and parks the reader on the READ
@@ -39,12 +42,19 @@ is a measured property with cases pinning it, not an aside.
   memory-bounded rather than leaking a fresh buffer per iteration (slice 1a's measured debt).
 
 **Releasing a handle out from under a parked reader is SAFE.** Each table slot carries a GENERATION that
-`subpSpawn` bumps when it claims the slot, so a `(slot, generation)` pair names one handle for all time. A reader
-captures the generation at park time and re-reads it on resume: if a `subpRelease(h)` freed the slot and a later
-`subpSpawn` reused that index while the reader slept, the generations differ, so the stale reader returns its own
-empty/EOF result (correct — its handle is gone) and writes NO slot state back, leaving the new handle's stream
-untouched. Without it the resumed reader stamped its EOF into whatever handle now owned the slot, silently making
-the NEW handle read EOF — memory-safe, but a cross-handle wrong answer.
+`subpSpawn` bumps when it claims the slot, and the handle it returns packs that generation above the slot
+index, so a `(slot, generation)` pair names one handle for all time. Every entry that takes a handle
+checks "in range, live, AND the same generation" before touching the slot, which is what makes a handle
+kept past its `subpRelease` — or a second copy of one — answer exactly as a dead handle does (`-1` from
+the integer entries, an empty string from the readers, a void no-op from release and closeStdin) rather
+than reaching whatever child now owns the slot. The one window that check cannot cover is a park: a
+reader passes the entry check, sleeps, and the slot may be released and reused while it sleeps. So a
+reader also captures the generation at park time and re-reads it on resume: if a `subpRelease(h)` freed
+the slot and a later `subpSpawn` reused that index while the reader slept, the generations differ, so
+the stale reader returns its own empty/EOF result (correct — its handle is gone) and writes NO slot
+state back, leaving the new handle's stream untouched. Without it the resumed reader stamped its EOF
+into whatever handle now owned the slot, silently making the NEW handle read EOF — memory-safe, but a
+cross-handle wrong answer.
 
 The read line-buffers per handle: each stdout/stderr stream carries a growable byte buffer that a read
 appends into; the reader scans for `\n`, returns everything through the first one, and keeps the tail
@@ -626,6 +636,76 @@ end 'main'
 72
 ```
 
+
+<!-- test: streaming-subprocess.a-released-handle-never-reaches-the-slots-next-child -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
+⭐ **A HANDLE NAMES A CHILD, NOT A SLOT.** The `(slot, generation)` pair IS the handle from the spawn
+on — the generation sits above the index in the integer `subpSpawn` returns — so a released handle
+answers as a released handle for all time, and the slot's next occupant is unreachable through it. The
+runtime's per-entry check ("in range, live, AND the same generation") is what makes a copied-and-released
+handle safe; the per-copy `requireLive()` bool in the stdlib wrapper cannot be, because a second copy of
+the handle never sees the first copy's release.
+
+Child A (`echo first&exit 3`) is waited to completion — nothing is parked, so the parked reader's
+generation re-read never enters — and released; child B (`echo second&exit 7`) then takes the freed
+slot. The STALE `h1` is driven first: `subpWait(h1)` answers `-1` and `subpReadLine(h1)` an empty
+string, exactly the dead-handle answers `subprocess-builtins.handle-guards-streaming` pins. Only then
+does the fresh `h2` collect B's `second\r\n` (8 bytes) and its exit code 7 — read BEFORE the wait, as
+`spawn-release-loop` does. Before this change the handle was the bare slot index, so the stale wait
+reaped B and answered 7 and the stale read stole `second`, leaving the fresh handle with nothing.
+```maxon
+function main() returns ExitCode
+	let h1 = subpSpawn("cmd /c echo first&exit 3")
+	let firstLine = subpReadLine(h1)
+	let first = subpWait(h1)
+	subpRelease(h1)
+	let h2 = subpSpawn("cmd /c echo second&exit 7")
+	let stale = subpWait(h1)
+	let staleLine = subpReadLine(h1).byteLength()
+	let freshLine = subpReadLine(h2).byteLength()
+	let fresh = subpWait(h2)
+	subpRelease(h2)
+	print("first={first} firstLine={firstLine.byteLength()} stale={stale} staleLine={staleLine} fresh={fresh} freshLine={freshLine}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+first=3 firstLine=7 stale=-1 staleLine=0 fresh=7 freshLine=8
+```
+```exitcode
+0
+```
+
+<!-- test: streaming-subprocess.posix-a-released-handle-never-reaches-the-slots-next-child -->
+<!-- unsupported-targets: x64-windows -->
+`a-released-handle-never-reaches-the-slots-next-child` on this lane, where the command reaches
+`/bin/sh -c` and the lines end in a bare LF (`first\n` = 6 bytes, `second\n` = 7). The handle is the
+same packed `(slot, generation)` integer on every lane, so a released `h1` answers `-1` from the wait
+and an empty string from the read no matter that child B now owns its slot, and B's line and exit code
+7 reach only the fresh `h2`. Before this change the stale wait reaped B and answered 7 and the stale read
+stole `second`.
+```maxon
+function main() returns ExitCode
+	let h1 = subpSpawn("echo first; exit 3")
+	let firstLine = subpReadLine(h1)
+	let first = subpWait(h1)
+	subpRelease(h1)
+	let h2 = subpSpawn("echo second; exit 7")
+	let stale = subpWait(h1)
+	let staleLine = subpReadLine(h1).byteLength()
+	let freshLine = subpReadLine(h2).byteLength()
+	let fresh = subpWait(h2)
+	subpRelease(h2)
+	print("first={first} firstLine={firstLine.byteLength()} stale={stale} staleLine={staleLine} fresh={fresh} freshLine={freshLine}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+first=3 firstLine=6 stale=-1 staleLine=0 fresh=7 freshLine=7
+```
+```exitcode
+0
+```
 
 <!-- test: streaming-subprocess.windows-a-parked-line-read-is-on-the-poller -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->

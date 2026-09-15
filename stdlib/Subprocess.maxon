@@ -832,9 +832,10 @@ end 'lastErrorMessage'
 // StreamingSubprocess — long-lived child with caller-driven stdio
 // =============================================================================
 
-// Opaque runtime handle for a streaming child. The runtime hands out
-// non-negative integers as table indices; -1 is reserved by the spawn
-// builtin for "spawn failed" and is never stored in a live handle slot.
+// Opaque runtime handle for a streaming child: the runtime's table slot index in the low bits and the
+// slot's generation above it, so a handle names one child for all time and a released one never reaches
+// the slot's next occupant. -1 is the spawn builtin's "spawn failed" answer and never a live handle. The
+// generation grows by one per spawn on a slot, so the range holds 2^57 spawns of one slot.
 typealias StreamingHandle = int(0 to u64.max)
 
 /// A child process whose stdin / stdout / stderr the caller drives by hand.
