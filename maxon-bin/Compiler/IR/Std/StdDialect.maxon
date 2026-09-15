@@ -1677,11 +1677,11 @@ export union StdOp
 	// nothing to say passes.
 	osProcessSpawnInherit(cmdlinePtrId ValueId, cwdPtrId ValueId, creationFlagsId ValueId, startupPtrId ValueId, procInfoPtrId ValueId, envPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
 
-	// `osCancelIo(handle, ovl)` = `CancelIoEx(handle, ovl)` — cancel a specific pending overlapped read, the
-	// DROP path of a promise whose green thread is parked on one. Two VALUE operands (the pipe read handle and
-	// the OVERLAPPED whose operation to cancel), no result: the cancellation posts an ERROR_OPERATION_ABORTED
-	// packet to the poller at once, and that packet is what readies the dropped thread and proves the kernel
-	// has finished with its buffer. x64-windows only, like every overlapped-read op.
+	// `osCancelIo(handle, ovl)` = `CancelIoEx(handle, ovl)` — cancel the one overlapped request `ovl` names on
+	// `handle`: a pipe read whose promise was dropped, or a socket transfer whose deadline ended its wait. No
+	// result. A request the kernel had not finished completes at once with `STATUS_CANCELLED`, and one it had
+	// keeps its own status; either way its packet is what proves the kernel has finished with the buffer.
+	// x64-windows only, like every overlapped op.
 	osCancelIo(handleId ValueId, ovlId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
 
 	// `osGetPid()` = `GetCurrentProcessId()` on Windows, `getpid()` on arm64-macOS — the current process id,

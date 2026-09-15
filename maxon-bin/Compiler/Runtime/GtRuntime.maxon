@@ -1667,10 +1667,13 @@ export let StartupInfoHStdErrorOffset = 0x60
 export let ErrorIoPending = 997
 let ErrorBrokenPipe = 109
 
-// ⭐ **THE SAME TWO ENDS OF STREAM AS THE KERNEL REPORTS THEM.** A completion packet carries an NTSTATUS rather
-// than a Win32 error, so the parked read's fold is written in that vocabulary: the child's write end gone
-// (`STATUS_PIPE_BROKEN`) and the last byte already delivered (`STATUS_END_OF_FILE`) are 0 bytes, and every other
-// status is a failure.
+// ⭐ **THE NTSTATUS VALUES THE READERS OF A COMPLETION PACKET TELL APART** (`GtOffIoStatus`). A packet carries
+// an NTSTATUS rather than a Win32 error, so every fold is written in that vocabulary. The parked pipe read's
+// two ends of stream are the child's write end gone (`STATUS_PIPE_BROKEN`) and the last byte already delivered
+// (`STATUS_END_OF_FILE`); a socket transfer tells a request its cancel reached (`STATUS_CANCELLED`) from one the
+// kernel finished first.
+export let NtStatusSuccess = 0 as ParsedInt
+export let NtStatusCancelled = 0xC0000120 as ParsedInt
 let NtStatusPipeBroken = 0xC000014B as ParsedInt
 let NtStatusEndOfFile = 0xC0000011 as ParsedInt
 
@@ -4856,8 +4859,9 @@ function buildGtPromiseDrop(module StdModule)
 	// Dropping the lock between the re-read and `CancelIoEx` is the very race the re-read closes. It costs
 	// nothing to hold it: the call is `SyscallClass.schedulerBound`, so no handoff happens inside it, and
 	// `CancelIoEx` only MARKS the request — it never waits on the poller that is waiting on this lock.
-	// ⚠ **`emitSocketCollectOutstanding`'s cancel is outside the lock for a reason that does not apply here**:
-	// there a thread cancels its OWN in-flight request, so no second party can retire it underneath.
+	// ⚠ **`ManagedSocketRuntime.emitSocketOverlappedTransfer`'s cancel is outside the lock for a reason that does
+	// not apply here**: there a thread cancels its OWN in-flight request, so no second party can retire it
+	// underneath.
 	emitSchedLockEnter(module, block: readParked, ids: ids)
 	let readStatus = emitLoadField(module, block: readParked, record: gt, offset: GtOffStatus, ids: ids)
 	let stillReading = emitGtStatusEquals(module, block: readParked, status: readStatus, want: GtStatusWaiting, ids: ids)
@@ -7146,7 +7150,7 @@ function emitSubpAwaitCompletion(module StdModule, func IrFunction, ids ValueMin
 	emitRuntimeAbort(module, func: func, block: renounced, abort: RuntimeAbort.netpollOverlappedWaitNotACompletion, ids: ids)
 
 	let status = emitLoadField(module, block: completed, record: selfGt, offset: GtOffIoStatus, ids: ids)
-	let succeeded = emitCmp(module, block: completed, a: status, b: emitConst(module, block: completed, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let succeeded = emitCmp(module, block: completed, a: status, b: emitConst(module, block: completed, value: NtStatusSuccess, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(completed, op: StdOp.condBranch(succeeded, thenBlockId: completedOk.id, elseBlockId: completedErr.id))
 
 	let bytes = emitLoadField(module, block: completedOk, record: selfGt, offset: GtOffIoResult, ids: ids)

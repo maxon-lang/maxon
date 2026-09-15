@@ -4896,9 +4896,8 @@ export type StdToX64Lowering
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsLastErrorWin64'
 
-	// Lower `osCancelIo(handle, ovl)` to `CancelIoEx(handle, ovl)` — args rcx/rdx, result ignored. The
-	// A dropped reader cancels its own pending overlapped read so the kernel posts its ERROR_OPERATION_ABORTED
-	// packet at once, and waits for that packet before it unwinds.
+	// Lower `osCancelIo(handle, ovl)` to `CancelIoEx(handle, ovl)` — args rcx/rdx. The result is ignored because
+	// the request's packet is waited for either way: `ERROR_NOT_FOUND` only means the kernel finished first.
 	function lowerOsCancelIo(handleId ValueId, ovlId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsWin64Call2(IatSlot.CancelIoEx, arg0: handleId, arg1: ovlId, dstBlock: dstBlock)

@@ -267,6 +267,123 @@ timedOut=true prompt=true
 0
 ```
 
+<!-- test: netpoll-socket.a-read-the-kernel-finished-keeps-its-bytes-past-its-deadline -->
+<!-- procs: 1 -->
+**A RECEIVE THE KERNEL FINISHED IS ANSWERED WITH ITS BYTES, WHATEVER ITS DEADLINE SAYS.** On the
+completion-port lane a deadline that ends the wait while a receive is outstanding cancels the receive and
+collects its completion, and the completion decides the answer. Only a cancelled receive is `timedOut`. One that
+finished first has already taken its bytes out of the stream, so `timedOut` loses them: no later read can see
+them again.
+
+⭐ **THE RACE IS BUILT, NOT HOPED FOR.** The peer's bytes and its close are waiting in the socket, and the
+deadline has passed, before the read is issued. So on the completion-port lane the receive finishes the moment
+it is issued, and the wait that follows finds its deadline already expired. A polled lane reads the waiting
+bytes before it waits at all, and gives the same answer.
+
+⚠ **NOTHING ELSE IS PENDING WHEN THE READ IS ISSUED.** Both ends belong to `main` and the `sleep` is over, so no
+machine waits in the poller to decode the completion before the wait asks its deadline.
+
+⚠ **THE READER RETRIES A TIMEOUT WITH THE DEADLINE CLEARED**, as a program that reads `timedOut` as *"try
+again"* does. A lost read therefore shows up as `heard=` with one timeout counted, not as a hang.
+```maxon
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let dialing = async TcpClient.connect("127.0.0.1", port: listener.port())
+	let peer = try listener.accept() otherwise return 1
+	let client = try await dialing otherwise return 1
+
+	_ = try peer.send("abc") otherwise return 1
+	peer.close()
+	try client.setReadDeadline(1) otherwise return 1
+	sleep(100)
+
+	var heard = ""
+	var timeouts = 0
+	var open = true
+
+	while open 'reading'
+		if let chunk = try client.recv(1024) 'got'
+			heard = "{heard}{chunk}"
+		end 'got' else (e) 'failed'
+			match e 'why'
+				timedOut then timeouts = timeouts + 1
+				connectionClosed then open = false
+				default panic("unreachable: a read of a peer that sent and closed ends in its bytes, its close or its deadline")
+			end 'why'
+
+			try client.setReadDeadline(0) otherwise panic("unreachable: the reading side is still open")
+		end 'failed'
+	end 'reading'
+
+	print("heard={heard} timeouts={timeouts}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+heard=abc timeouts=0
+```
+```exitcode
+0
+```
+
+<!-- test: netpoll-socket.a-send-the-kernel-finished-is-not-sent-again-past-its-deadline -->
+<!-- procs: 1 -->
+**A SEND THE KERNEL FINISHED IS ANSWERED WITH ITS COUNT, WHATEVER ITS DEADLINE SAYS.** The write side of the
+rule above. A send that completed before its cancel has already put its bytes on the wire, so `timedOut` tells a
+program that retries a timeout to send them again, and the peer receives them twice.
+
+⭐ The race is built the same way: the deadline has passed and the send buffer has room before the send is
+issued, so the send completes the moment it is issued while its wait finds the deadline already expired.
+```maxon
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let dialing = async TcpClient.connect("127.0.0.1", port: listener.port())
+	let peer = try listener.accept() otherwise return 1
+	let client = try await dialing otherwise return 1
+
+	try client.setWriteDeadline(1) otherwise return 1
+	sleep(100)
+
+	var reported = 0
+	var timeouts = 0
+
+	while reported == 0 'sending'
+		if let sent = try client.send("xyz") 'sent'
+			reported = sent
+		end 'sent' else (e) 'failed'
+			match e 'why'
+				timedOut then timeouts = timeouts + 1
+				default panic("unreachable: a send with room in its buffer ends in its bytes or its deadline")
+			end 'why'
+
+			try client.setWriteDeadline(0) otherwise panic("unreachable: the sending side is still open")
+		end 'failed'
+	end 'sending'
+
+	client.close()
+
+	var heard = ""
+	var open = true
+
+	while open 'reading'
+		if let chunk = try peer.recv(1024) 'got'
+			heard = "{heard}{chunk}"
+		end 'got' else 'closed'
+			open = false
+		end 'closed'
+	end 'reading'
+
+	print("reported={reported} timeouts={timeouts} heard={heard}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+reported=3 timeouts=0 heard=xyz
+```
+```exitcode
+0
+```
+
 <!-- test: netpoll-socket.drop-a-parked-reader -->
 <!-- procs: 1 -->
 **A PROMISE DROPPED WHILE ITS COROUTINE IS PARKED IN `recv` DOES NOT HANG THE EXIT.** `main` spawns a reader

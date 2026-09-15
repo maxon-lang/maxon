@@ -1177,17 +1177,17 @@ end 'emitSocketPolledTransfer'
 // CLEARS is the exact test, so a wait that ends with a stamp still standing goes round again.
 //
 // ⚠ **THE `WSABUF` AND THE FLAGS WORD BELONG TO THE KERNEL FOR THE WHOLE OPERATION**, so they are a block of
-// this call's own and every road out frees exactly one of them — including the two that must first collect a
-// cancellation.
+// this call's own, and every road out frees it exactly once — including the two that must first collect an
+// outstanding packet.
 function emitSocketOverlappedTransfer(module StdModule, func IrFunction, ids ValueMinter, attempt IrBlock, socket ValueId, pollKey ValueId, buffer ValueId, length ValueId, direction SocketTransferDirection, mode ParsedInt, ok IrBlock, failed IrBlock, timedOut IrBlock)
 	var issueFailed = module.addBlock(func, label: b"msnostart", heat: BlockHeat.normal)
 	var waitHdr = module.addBlock(func, label: b"mswaitovl", heat: BlockHeat.normal)
 	var landed = module.addBlock(func, label: b"mslanded", heat: BlockHeat.normal)
 	var notReady = module.addBlock(func, label: b"msnotready", heat: BlockHeat.normal)
 	var lateCollect = module.addBlock(func, label: b"mslatecollect", heat: BlockHeat.normal)
+	var lateCollected = module.addBlock(func, label: b"mslatecollected", heat: BlockHeat.normal)
 	var lateFree = module.addBlock(func, label: b"mslatefree", heat: BlockHeat.normal)
 	var staleCollect = module.addBlock(func, label: b"msstalecollect", heat: BlockHeat.normal)
-	var staleFree = module.addBlock(func, label: b"msstalefree", heat: BlockHeat.normal)
 	var completed = module.addBlock(func, label: b"mscompleted", heat: BlockHeat.normal)
 
 	let gt = emitLoadCurrentGt(module, block: attempt, ids: ids)
@@ -1238,28 +1238,34 @@ function emitSocketOverlappedTransfer(module StdModule, func IrFunction, ids Val
 	let late = emitCmp(module, block: notReady, a: verdict, b: emitConst(module, block: notReady, value: NetpollWaitTimedOut, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(notReady, op: StdOp.condBranch(late, thenBlockId: lateCollect.id, elseBlockId: staleCollect.id))
 
-	// A deadline left the socket open and ours, so the request is still there to cancel and cancelling is what
-	// makes its packet come.
+	// A deadline left the socket open and ours, so the cancel may name it. A request the kernel already finished
+	// ignores the cancel, and its packet comes either way.
 	module.appendOp(lateCollect, op: StdOp.osCancelIo(socket, ovlId: overlapped))
-	emitSocketCollectOutstanding(module, func: func, ids: ids, cur: lateCollect, mode: mode, cont: lateFree)
+	emitSocketCollectOutstanding(module, func: func, ids: ids, cur: lateCollect, mode: mode, cont: lateCollected)
+
+	// ⛔⛔ **THE PACKET, NOT THE DEADLINE, SAYS WHAT HAPPENED.** A transfer the kernel finished before the cancel
+	// reached it has already moved its bytes, so only a cancelled status is `timedOut`; answering `timedOut` for
+	// anything else loses a receive's bytes and makes a retried send send them twice.
+	let lateStatus = emitLoadField(module, block: lateCollected, record: gt, offset: GtOffIoStatus, ids: ids)
+	let cancelled = emitCmp(module, block: lateCollected, a: lateStatus, b: emitConst(module, block: lateCollected, value: NtStatusCancelled, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(lateCollected, op: StdOp.condBranch(cancelled, thenBlockId: lateFree.id, elseBlockId: completed.id))
 	emitRawFree(module, block: lateFree, ptr: buffers, ids: ids)
 	module.setTerminator(lateFree, op: StdOp.branch(timedOut.id))
 
 	// ⛔ **THE STALE ROAD ISSUES NO CANCEL, BECAUSE IT MAY NOT NAME THE DESCRIPTOR** — `emitSocketWaitReady`'s
 	// rule: a record that moved on says this number may already be somebody else's socket. Nor does it need to:
 	// the only thing that resets the record is the close of THIS socket, and a close completes every request
-	// outstanding on the handle, so the packet is already on its way.
-	emitSocketCollectOutstanding(module, func: func, ids: ids, cur: staleCollect, mode: mode, cont: staleFree)
-	emitRawFree(module, block: staleFree, ptr: buffers, ids: ids)
-	module.setTerminator(staleFree, op: StdOp.branch(failed.id))
+	// outstanding on the handle, so the packet is already on its way. What it carries is the answer, for the
+	// late road's reason: a transfer the close did not abort has moved its bytes.
+	emitSocketCollectOutstanding(module, func: func, ids: ids, cur: staleCollect, mode: mode, cont: completed)
 
-	// A zero NTSTATUS is the transfer; anything else is this operation's failure, a peer that reset the
-	// connection and a cancelled request alike. A graceful close is a zero status with zero bytes, which the
-	// stdlib reads as `connectionClosed` — the same answer a blocking `recv` gave it.
+	// A zero NTSTATUS is the transfer; anything else is this operation's failure — a peer that reset the
+	// connection, and a request a dropped promise or a close cancelled. A graceful close is a zero status with
+	// zero bytes, which the stdlib reads as `connectionClosed` — the same answer a blocking `recv` gave it.
 	let status = emitLoadField(module, block: completed, record: gt, offset: GtOffIoStatus, ids: ids)
 	let moved = emitLoadField(module, block: completed, record: gt, offset: GtOffIoResult, ids: ids)
 	emitRawFree(module, block: completed, ptr: buffers, ids: ids)
-	let succeeded = emitCmp(module, block: completed, a: status, b: emitConst(module, block: completed, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let succeeded = emitCmp(module, block: completed, a: status, b: emitConst(module, block: completed, value: NtStatusSuccess, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(completed, op: StdOp.condBranch(succeeded, thenBlockId: ok.id, elseBlockId: failed.id))
 	completed.branchEdges.push(BranchEdge.create(ok.id, argIds: argsOf(moved)))
 end 'emitSocketOverlappedTransfer'

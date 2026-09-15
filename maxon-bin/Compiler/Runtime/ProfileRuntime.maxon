@@ -72,10 +72,6 @@ let ThreadQueryInformation = 0x0040
 let ThreadQueryLimitedInformation = 0x0800
 let ThreadSampleAccess = ThreadSuspendResume or ThreadGetContext or ThreadQueryInformation or ThreadQueryLimitedInformation
 
-// `NtGetNextThread` ends a walk with `STATUS_NO_MORE_ENTRIES`, so anything but success stops it — a genuine
-// failure and running out of threads are one answer to the caller.
-let NtStatusSuccess = 0
-
 // `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION`, the ordinary timer's empty flags, and the access a timer is created
 // with — the scheduler's monitor creates its sleep timer from the same three (`NetpollRuntime.emitNetpollOpenTimer`).
 //
@@ -198,6 +194,9 @@ function buildProfileNextThread(module StdModule)
 
 	let access = emitConst(module, block: entry, value: ThreadSampleAccess, ids: ids)
 	let status = emitHostSample(module, block: entry, service: ProfileHostCall.nextThread, a0: proc, a1: cursor, a2: access, a3: zero, a4: zero, a5: outPtr, ids: ids)
+
+	// `NtGetNextThread` ends a walk with `STATUS_NO_MORE_ENTRIES`, so anything but success stops it — a genuine
+	// failure and running out of threads are one answer to the caller.
 	let success = emitConst(module, block: entry, value: NtStatusSuccess, ids: ids)
 	let walkedOn = emitCmp(module, block: entry, a: status, b: success, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(walkedOn, thenBlockId: walked.id, elseBlockId: ended.id))
