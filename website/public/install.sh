@@ -291,12 +291,14 @@ finish_path() {
 	case ":$PATH:" in
 		*":$dir:"*) ;;
 		*)
-			if [ "$modify" -eq 0 ]; then
+			if [ "$modify" -eq 1 ]; then
+				if ! link_into_path "$dir"; then
+					add_to_path "$dir"
+					return 0
+				fi
+			# `maxon upgrade` passes --no-modify-path, and an install it upgrades may be on PATH by its link.
+			elif ! runs_install "$(command -v maxon 2>/dev/null || true)" "$dir"; then
 				say "$dir is not on your PATH; add it to run \`maxon\` by name"
-				return 0
-			fi
-			if ! link_into_path "$dir"; then
-				add_to_path "$dir"
 				return 0
 			fi
 			;;

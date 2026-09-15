@@ -80,6 +80,8 @@ jobs:
       # The install and the new shell get the system directories only, so `maxon` is found through the
       # profile line or not at all.
       SYSTEM_PATH: /usr/bin:/bin:/usr/sbin:/sbin
+      # The first release that has `maxon upgrade`, so the oldest install one can move forward.
+      FIRST_UPGRADE_RELEASE: 0.2.0
     steps:
       - uses: actions/checkout@v5
 
@@ -177,6 +179,12 @@ jobs:
           cp "$home/.maxon/examples/hello.maxon" "$work/"
           (cd "$work" && env PATH="$caller_path" maxon build hello.maxon -o hello)
           [ "$("$work/hello")" = "Hello, world!" ]
+          # `maxon upgrade`'s shape: --no-modify-path over an install the link already puts on PATH.
+          out="$(env HOME="$home" PATH="$caller_path" sh -s -- --no-modify-path < website/public/install.sh)"
+          echo "$out"
+          case "$out" in
+            *"not on your PATH"*) echo "::error::--no-modify-path calls a linked install not on PATH"; exit 1 ;;
+          esac
 
       - name: A `maxon` in ~/.local/bin that is not the install's is left alone
         run: |
@@ -209,6 +217,53 @@ jobs:
             *"already installed"*) ;;
             *) echo "::error::maxon upgrade did not find the install current"; exit 1 ;;
           esac
+
+      # ⭐ AN UPGRADE THAT MOVES THE INSTALL, run by name through the ~/.local/bin link: the compiler finds
+      # its install from the RESOLVED executable, so the link must not hide the root from it, and must
+      # still reach the new compiler once the old one has been replaced.
+      - name: maxon upgrade, run through the link, moves an older install to the latest release
+        run: |
+          set -euo pipefail
+          latest="$(gh release view --json tagName --jq .tagName)"
+          latest="${latest#v}"
+          if [ "$latest" = "$FIRST_UPGRADE_RELEASE" ]; then
+            echo "::notice::the latest release is the first with maxon upgrade, so there is nothing older to upgrade"
+            exit 0
+          fi
+          home="$(mktemp -d)"
+          mkdir -p "$home/.local/bin"
+          caller_path="$home/.local/bin:$SYSTEM_PATH"
+          env HOME="$home" PATH="$caller_path" SHELL="$(command -v ${{ matrix.shell }})" sh -s -- --version "$FIRST_UPGRADE_RELEASE" < website/public/install.sh
+          [ -L "$home/.local/bin/maxon" ] || { echo "::error::the install made no link to upgrade through"; exit 1; }
+          case "$(env PATH="$caller_path" maxon version)" in
+            "maxon $FIRST_UPGRADE_RELEASE "*) ;;
+            *) echo "::error::the older install does not report $FIRST_UPGRADE_RELEASE"; exit 1 ;;
+          esac
+
+          # The dry run names the physical root, which a symlinked temp directory (macOS's /var) resolves.
+          root="$(cd "$home/.maxon" && pwd -P)"
+          plan="$(env HOME="$home" PATH="$caller_path" maxon upgrade --dry-run)"
+          echo "$plan"
+          case "$plan" in
+            *"install root: $root"*) ;;
+            *) echo "::error::upgrade through the link does not name the install at $root"; exit 1 ;;
+          esac
+
+          env HOME="$home" PATH="$caller_path" maxon upgrade
+          reported="$(env PATH="$caller_path" maxon version)"
+          echo "$reported"
+          case "$reported" in
+            "maxon $latest "*) ;;
+            *) echo "::error::after maxon upgrade the link runs '$reported', not $latest"; exit 1 ;;
+          esac
+          out="$(env HOME="$home" PATH="$caller_path" maxon upgrade 2>&1)"
+          echo "$out"
+          case "$out" in
+            *"already installed"*) ;;
+            *) echo "::error::a second maxon upgrade did not find the install current"; exit 1 ;;
+          esac
+          leftovers="$(find "$home/.maxon" -mindepth 1 -maxdepth 1 -name '.*')"
+          [ -z "$leftovers" ] || { echo "::error::the upgrade left behind: $leftovers"; exit 1; }
 
       - name: A specific version installs, and --force reinstalls the latest over it
         run: |
@@ -274,6 +329,8 @@ jobs:
         shell: ${{ matrix.shell }}
     env:
       GH_TOKEN: ${{ github.token }}
+      # The first release that has `maxon upgrade`, so the oldest install one can move forward.
+      FIRST_UPGRADE_RELEASE: 0.2.0
     # ⚠ THE RUNNER'S SHELL WRAPPER EXITS WITH $LASTEXITCODE, so a step that expects the script to fail
     # resets it before it ends.
     steps:
@@ -413,6 +470,38 @@ jobs:
           $out = & $maxon upgrade 2>&1 | Out-String
           $out
           if ($LASTEXITCODE -ne 0 -or $out -notmatch 'already installed') { throw 'maxon upgrade did not find the install current' }
+
+      # ⭐ AN UPGRADE THAT MOVES THE INSTALL. The compiler that runs the script is the one it replaces, so
+      # this is also the rename-aside path, driven by `maxon upgrade` itself rather than by a test harness.
+      - name: maxon upgrade moves an older install to the latest release
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $latest = (gh release view --json tagName --jq .tagName).TrimStart('v')
+          if ($latest -eq $env:FIRST_UPGRADE_RELEASE) {
+            Write-Host '::notice::the latest release is the first with maxon upgrade, so there is nothing older to upgrade'
+            $global:LASTEXITCODE = 0
+            return
+          }
+          $install = [scriptblock]::Create((Get-Content -Raw website/public/install.ps1))
+          $env:MAXON_INSTALL = Join-Path $env:RUNNER_TEMP 'upgrade-from-older'
+          $maxon = "$env:MAXON_INSTALL\bin\maxon.exe"
+          & $install -Version $env:FIRST_UPGRADE_RELEASE -NoPathUpdate
+          if ($LASTEXITCODE -ne 0) { throw "installing $env:FIRST_UPGRADE_RELEASE failed" }
+          if ("$(& $maxon version)" -notlike "maxon $env:FIRST_UPGRADE_RELEASE *") { throw "the older install does not report $env:FIRST_UPGRADE_RELEASE" }
+
+          # The root comes from where the compiler is, so a caller's MAXON_INSTALL naming nothing must not matter.
+          $env:MAXON_INSTALL = Join-Path $env:RUNNER_TEMP 'upgrade-decoy'
+          $out = & $maxon upgrade 2>&1 | Out-String
+          $out
+          if ($LASTEXITCODE -ne 0) { throw "maxon upgrade failed ($LASTEXITCODE)" }
+          $reported = "$(& $maxon version)"
+          $reported
+          if ($reported -notlike "maxon $latest *") { throw "after maxon upgrade the install reports '$reported', not $latest" }
+          if (Test-Path -LiteralPath $env:MAXON_INSTALL) { throw 'maxon upgrade installed into the caller''s MAXON_INSTALL' }
+
+          $out = & $maxon upgrade 2>&1 | Out-String
+          $out
+          if ($LASTEXITCODE -ne 0 -or $out -notmatch 'already installed') { throw 'a second maxon upgrade did not find the install current' }
 
       - name: A specific version installs, and -Force reinstalls the latest over it
         run: |
