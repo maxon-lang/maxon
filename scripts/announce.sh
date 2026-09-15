@@ -72,7 +72,7 @@ excerpt: Maxon $version is out. Here's what changed.
 ---
 
 **Maxon $version is released.** Archives for every supported target are on the
-[GitHub releases page]($ReleasesUrl/tag/v$version), alongside a Windows installer.
+[GitHub releases page]($ReleasesUrl/tag/v$version).
 
 ## What changed
 

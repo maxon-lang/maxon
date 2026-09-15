@@ -12,6 +12,14 @@ Versions are `YEAR.MONTH.PATCH`, the month a release shipped, and are independen
 - The extension finds a compiler installed by the install script in `~/.maxon/bin` (or
   `$MAXON_INSTALL/bin`) even when VS Code was started without your shell's `PATH`.
 
+### Changed
+
+- The extension installs in editors built on VS Code 1.107 or later, Antigravity included.
+
+### Removed
+
+- The Maxon file icon theme. Maxon files carry the language's own icon in any theme.
+
 ### Fixed
 
 - Diagnostics, hover and completion work with an installed compiler. The language server is the
