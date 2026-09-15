@@ -550,6 +550,94 @@ end 'main'
 ```exitcode
 107
 ```
+
+<!-- test: netpoll-socket.a-reader-arriving-before-an-ended-reader-resumes-is-the-same-named-stop -->
+<!-- procs: 1 -->
+**A WAIT HOLDS ITS DIRECTION UNTIL ITS OWN THREAD RESUMES, SO A SECOND READER ARRIVING AFTER THE FIRST WAS
+ENDED BUT BEFORE IT RAN IS STILL TWO READERS, AND STOPS THE SAME WAY.** Whatever ends a wait — readiness, its
+deadline, a cancelled promise — readies the thread, but that thread has not answered yet: it resumes, settles
+the direction word and only then returns. A second wait on the same direction in that window meets the reader
+that still holds it — `RuntimeAbort.netpollDoubleWait`, exit **107** — exactly as it would a moment earlier,
+while the first was still published. A word that read *nothing waits* in the window would make the refusal a
+matter of timing: the second reader would publish itself there, and the first reader's resume would erase it —
+a thread nothing can wake, with `__np_waiters` still counting it, so the program hangs with the deadlock
+detector disarmed.
+
+⭐ **THE WINDOW IS BUILT, NOT HOPED FOR.** The first reader is parked on the socket's read direction, and the
+coroutine that started it keeps itself runnable. `main` announces its read through `phase` and issues it, and
+the read opens with a genuine suspension, during which the canceller is the one member the strand can run: it
+cancels the first reader, which ends that wait and queues the reader, and yields. A yield fires what is due
+before it places the yielder, so `main`'s own resumption is fired there — and a readied OWNER joins the front
+of its strand's queue where a coroutine joins the back. `main` therefore finds the socket empty and reaches its
+wait while the first reader's has ended and the reader has not yet run.
+
+⚠ **A MACHINE WAITING IN THE POLLER CAN FIRE `main`'s RESUMPTION BEFORE THE CANCELLER RUNS**, since registering
+it breaks that wait. `main` then meets the first reader still published and stops by the ordinary road — the
+same exit, which is the property: which of the two roads a run takes is the scheduler's business, and both end
+in the one named stop.
+
+⚠ **THE WAIT HAS TO END BY SOMETHING THE STRAND DOES ITSELF.** Every socket operation opens with that
+suspension, and it runs every readied member of the strand first. Readiness and a deadline are processed by
+whichever machine is polling, at a time the program does not choose, and one landing before the second reader's
+suspension is settled there, before its call is issued. A cancel is issued by the strand, at a point the program
+picks.
+
+⚠ **A RUNTIME THAT FREES THE WORD WHEN THE WAIT ENDS DOES NOT STOP.** `main` publishes itself on the word, the
+cancelled reader's resume erases it, and `main` waits for ever — the runner reports the case TIMED OUT.
+```maxon
+typealias ReadOutcome = int(0 to 3)
+
+// 0 until `main` is about to issue its own read.
+var phase = 0
+
+function readOutcome(client TcpClient) returns ReadOutcome
+	var code = 0
+
+	try client.recv(1024) otherwise (e) 'readErr'
+		match e 'which'
+			recvFailed then code = 1
+			connectionClosed then code = 2
+			timedOut then code = 3
+			default panic("unreachable: a read on a socket nothing writes to ends in one of the three above")
+		end 'which'
+	end 'readErr'
+
+	return code
+end 'readOutcome'
+
+// Yielding rather than sleeping keeps this coroutine runnable, so it is what runs while `main`'s read is
+// suspended.
+function cancelFirstReader(client TcpClient) returns ReadOutcome
+	let first = async readOutcome(client)
+
+	while phase == 0 'untilMainReads'
+		Runtime.yield()
+	end 'untilMainReads'
+
+	first.cancel()
+	Runtime.yield()
+	return 0
+end 'cancelFirstReader'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let client = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 1
+
+	let canceller = async cancelFirstReader(client)
+	sleep(200)
+
+	// The first reader's wait is ended under this read's own suspension, before the reader runs.
+	phase = 1
+	let second = readOutcome(client)
+	let unreachable = await canceller
+	print("second={second} canceller={unreachable}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```exitcode
+107
+```
+
 <!-- test: netpoll-socket.a-loopback-echo-service-accepts-and-answers -->
 <!-- procs: 1 -->
 **A LISTENER IN THIS PROCESS IS A PEER LIKE ANY OTHER: BIND, ACCEPT, ANSWER.** The service side of the poller
