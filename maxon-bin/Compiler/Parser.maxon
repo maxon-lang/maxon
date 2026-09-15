@@ -5996,6 +5996,17 @@ let BuiltinsSchedNetpollBlockCountName = b"__Builtins.schedNetpollBlockCount"
 // It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
 let SchedNetpollBlockCountArity = 0 as ParamCount
 
+// ⭐⭐ **`__Builtins.schedSyscallCount()` — how many BRACKETED kernel calls have been entered by a machine holding
+// a processor.** A bracketed call is one `__sysmon` may retake the processor out of, so a window asserting that
+// no retake can happen is a window this count must not move in; a retake count reads 0 whenever the monitor
+// happened not to look, and only this separates *"nothing could be retaken"* from *"nothing was"*. The surface is
+// invented here on the argumentless-integer shape the family already has; `SchedRuntime.SchedSyscallCountName`
+// owns what the count costs.
+let BuiltinsSchedSyscallCountName = b"__Builtins.schedSyscallCount"
+
+// It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
+let SchedSyscallCountArity = 0 as ParamCount
+
 // ⭐⭐ **`__Builtins.schedGlobalPushCount()` — how many green threads have ever been pushed onto the GLOBAL
 // run queue.** Every producer counts: a full ring's overflow batch, a yield, a preemption, and a publish by a
 // thread holding no processor. It is the WITNESS that a global-queue property was really under test — the
@@ -83864,6 +83875,12 @@ export type Parser
 			if callee.equals(BuiltinsSchedNetpollBlockCountName) 'schedNetpollBlockCount'
 				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSchedNetpollBlockCountName, runtimeName: SchedNetpollBlockCountName, arity: SchedNetpollBlockCountArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'schedNetpollBlockCount'
+
+			// The bracketed-call count: the same shape, and it sets `usesGt` for the same reason. See
+			// `SchedRuntime.SchedSyscallCountName`.
+			if callee.equals(BuiltinsSchedSyscallCountName) 'schedSyscallCount'
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSchedSyscallCountName, runtimeName: SchedSyscallCountName, arity: SchedSyscallCountArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
+			end 'schedSyscallCount'
 
 			// The global-queue push count: the same shape, and it sets `usesGt` for the same reason. See
 			// `SchedRuntime.SchedGlobalPushCountName`.

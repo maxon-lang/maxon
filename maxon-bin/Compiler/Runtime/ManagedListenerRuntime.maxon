@@ -144,7 +144,7 @@ end 'emitLiveListenerOrThrow'
 //
 // The sequence:
 //
-//   WSAStartup(2.2)  →  resolve `host` to a network-order `sin_addr`  →  socket()
+//   WSAStartup(2.2), once per process  →  resolve `host` to a network-order `sin_addr`  →  socket()
 //   →  build a `sockaddr_in`  →  bind()  →  listen(backlog)  →  join the poller  →  the box
 //
 // ⭐ **BINDING AND LISTENING ARE ONE CALL BECAUSE A BOUND SOCKET NOBODY LISTENS ON IS A STATE NO CALLER
@@ -178,7 +178,7 @@ function buildManagedListenerBind(module StdModule, target Target)
 
 	let host = emitPathToCString(module, func: func, cur: entry, join: init, pathRec: hostRec, ids: ids)
 
-	emitWinsockStartup(module, block: init, ready: resolve, notReady: noWinsock, ids: ids)
+	emitWinsockStartup(module, func: func, block: init, ready: resolve, notReady: noWinsock, ids: ids)
 
 	emitRawFree(module, block: noWinsock, ptr: host, ids: ids)
 	emitErrorReturn(module, block: noWinsock, flag: ManagedListenerBindFailedFlag, ids: ids)
@@ -188,7 +188,7 @@ function buildManagedListenerBind(module StdModule, target Target)
 	// rearrange a kernel object and return, which is not a wait — see `emitIoPark`'s
 	// once-per-blocking-operation invariant.
 	emitIoPark(module, block: resolve, operation: GtIoOperation.netListen, ids: ids)
-	let ip = emitResolveHostIp(module, resolve: resolve, resolved: resolved, resolveFailed: resolveFailed, host: host, shape: socketResolveShape(target), ids: ids)
+	let ip = emitResolveHostIp(module, func: func, resolve: resolve, resolved: resolved, resolveFailed: resolveFailed, host: host, shape: socketResolveShape(target), ids: ids)
 	emitErrorReturn(module, block: resolveFailed, flag: ManagedListenerResolveFailedFlag, ids: ids)
 
 	let socket = ids.mint()

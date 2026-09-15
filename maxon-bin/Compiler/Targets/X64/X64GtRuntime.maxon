@@ -765,15 +765,25 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 		CreateProcessA gives SyscallClass.blocking
 		PeekNamedPipe gives SyscallClass.blocking
 
-		// The socket family. `getaddrinfo` waits on DNS, `connect`/`send`/`recv` on a peer, `closesocket` on
-		// whatever `SO_LINGER` was set to, and `WSAStartup` loads and initialises the provider stack.
+		// The socket calls that can wait: `getaddrinfo` on a resolver (a literal address never reaches it —
+		// `ManagedSocketRuntime.emitResolveThroughAddrInfo`), and `WSAStartup`, which runs until one succeeds
+		// (`ManagedSocketRuntime.emitWinsockStartup`), on loading the provider stack.
 		WSAStartup gives SyscallClass.blocking
 		getaddrinfo gives SyscallClass.blocking
-		socket gives SyscallClass.blocking
-		connect gives SyscallClass.blocking
+
+		// ⚠ **REACHED BY NO EMITTER ON THIS LANE.** `osSocketSend`/`osSocketRecv` come only from the polled
+		// transfer and the built-in resolver, and this lane takes the overlapped transfer and `getaddrinfo`, so
+		// the slots are classed for the call they name: a blocking-mode transfer waits on its peer.
 		send gives SyscallClass.blocking
 		recv gives SyscallClass.blocking
-		closesocket gives SyscallClass.blocking
+
+		// ⭐ **THE DESCRIPTOR CALLS CANNOT WAIT, WHICH IS `StdDialect.stdOpSyscallClassOf`'s RULE ON EVERY OTHER
+		// LANE.** `socket` allocates a descriptor; `connect` is issued only after `WSAEventSelect` has made the
+		// socket non-blocking, so it answers `WSAEWOULDBLOCK` and the handshake is waited for on the poller; and
+		// `closesocket` returns at once because nothing here sets `SO_LINGER`.
+		socket gives SyscallClass.schedulerBound
+		connect gives SyscallClass.schedulerBound
+		closesocket gives SyscallClass.schedulerBound
 
 		// ⭐⭐ **THE OVERLAPPED PAIR IS NOT `blocking`, AND THAT IS THE WHOLE POINT OF THEM.** Each hands the
 		// kernel a buffer and returns at once — `WSA_IO_PENDING` — with the transfer reported later as a packet on
@@ -916,7 +926,7 @@ end 'gtShimSyscallClassOf'
 // ⛔ **IT CANNOT BE A CALL, AND THAT IS NOT A PERFORMANCE ARGUMENT.** In the pre-call window
 // rcx/rdx/r8/r9 hold live Win64 arguments and the stack arguments are already laid out at their exact
 // displacements; a `call` would need shadow space carved out of a frame whose shape the kernel is about to
-// read. Inline it is TWO instructions plus the three-instruction TLS walk, all of it in rax and r11 — the two
+// read. Inline it is FOUR instructions plus the three-instruction TLS walk, all of it in rax and r11 — the two
 // registers the shim already treats as dead here (rax has just been destroyed by the TIB repoint, and r11's
 // last use was the stack-arg copy shuttle).
 //
@@ -932,8 +942,15 @@ end 'gtShimSyscallClassOf'
 // ⚠ **THE M IS RELOADED FROM TLS RATHER THAN CARRIED**, because the guard's copy lived in rax and the TIB
 // repoint destroyed it. It cannot be null and it cannot bail: `emitLoadCurrentMOrBailless` carries the proof,
 // which is the shim's own guard three loads above.
+//
+// ⚠ **THE PROCESSOR'S COUNT IS STEPPED FIRST AND WITHOUT A NULL TEST**, unlike `__sched_enter_syscall`'s: the
+// switched road runs only on a green thread's own stack, and the one stretch of green-thread code whose machine
+// holds no processor — `__sched_syscall_regain` — makes no `blocking` import. `SchedRuntime.POffSyscallCount`
+// carries why the step must precede the `lock add`.
 function emitGtEnterSyscall(code ByteArray, rdataRelocs RdataRelocationArray)
 	emitLoadCurrentMOrBailless(code, rdataRelocs: rdataRelocs, dest: X64Register.rax, os: Os.windows)
+	encodeLoadRegBaseDisp(code, destReg: ShimGtReg, base: X64Register.rax, disp: MOffCurrentP as Imm32, wide: true)
+	encodeGrp1BaseDispImm32(code, ext: Grp1ExtAdd, base: ShimGtReg, disp: POffSyscallCount as Imm32, imm: OneMore as Imm32)
 	encodeMovRegImm32(code, dest: ShimGtReg, value: MSyscallEnterDelta as MachineWord)
 	encodeLockedRmwBaseDispReg(code, twoByteEscape: false, opcode: OpcodeAddRmReg, base: X64Register.rax, disp: MOffSyscallState as Imm32, reg: ShimGtReg)
 end 'emitGtEnterSyscall'

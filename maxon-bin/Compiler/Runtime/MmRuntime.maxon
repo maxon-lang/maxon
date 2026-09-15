@@ -1107,11 +1107,6 @@ end 'emitLiteralCString'
 // `isPure: true` and freely rematerializable, so a caller that does both around one word pays nothing for
 // asking twice; the readers that hoist the address across a load-then-store pair are deliberately left
 // alone, because there a hoist only widens a live range.
-//
-// ⚠ **THEY WERE `DebugStreamRuntime`'s PRIVATE PAIR AND ARE NOW SHARED (G1 review).** `SchedRuntime` wrote a
-// second private copy of the same two ops under different names, which is the one-fact-twice shape this
-// file's header exists to end — and the copies could not have disagreed usefully, which is exactly what makes
-// two of them pure cost.
 export function emitLoadGlobalWord(module StdModule, block IrBlock, label ByteArray, ids ValueMinter) returns ValueId
 	let addr = ids.mint()
 	module.appendOp(block, op: StdOp.globalAddr(addr, label: label))
@@ -1138,6 +1133,13 @@ export function emitStoreGlobalWord(module StdModule, block IrBlock, label ByteA
 	module.appendOp(block, op: StdOp.globalAddr(addr, label: label))
 	emitStoreField(module, block: block, record: addr, offset: 0, value: value)
 end 'emitStoreGlobalWord'
+
+// `emitStoreGlobalWord` with RELEASE ordering, the writer an `emitLoadAcquireGlobalWord` reader pairs with.
+export function emitStoreReleaseGlobalWord(module StdModule, block IrBlock, label ByteArray, value ValueId, ids ValueMinter)
+	let addr = ids.mint()
+	module.appendOp(block, op: StdOp.globalAddr(addr, label: label))
+	module.appendOp(block, op: StdOp.storeRelease(addr, offset: 0, valueId: value, valueType: StdType.i64))
+end 'emitStoreReleaseGlobalWord'
 
 // ⭐ **THE DECIMAL ALPHABET, ONE DECLARATION.** A radix and the ASCII codes that bound a digit — facts about
 // base ten and about ASCII, belonging to neither the String runtime that renders integers nor the scheduler

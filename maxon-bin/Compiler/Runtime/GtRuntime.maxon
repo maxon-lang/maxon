@@ -6089,24 +6089,20 @@ end 'buildGtIoPark'
 //
 // ⛔⛔ **ONE PARK PER BLOCKING OPERATION — NOT PER ENTRY POINT, AND NOT PER KERNEL CALL.** The park is what the
 // async trace reports as `io_yield`/`io_resume`, so the pair must count the things that make a green thread
-// WAIT. Both of the wrong readings of that have been in this tree and both were wrong for the same reason —
-// they counted something other than a wait:
+// WAIT:
 //
-//   • **FOUR was wrong**: `__ms_tcp_connect` parked around each of `WSAStartup`, `getaddrinfo`, `socket()`
-//     and `connect()`, i.e. once per KERNEL CALL. `WSAStartup` is process-cached behind `__net_wsa_init` and
-//     `socket()` allocates a descriptor; neither blocks, so two of those four pairs reported a wait that never
-//     happened.
-//   • **ONE was wrong too**, and it is the correction that over-corrected: the rule was restated as one park
-//     per FUNCTION and the connect collapsed to a single park at its entry join. That reads a `TcpClient.connect`
-//     to a hostname — a DNS round trip AND a TCP handshake, two independent waits either of which can be the
-//     slow one — as a single indivisible operation, and it makes the trace unable to say which of the two a
-//     hung connect is hung in. It also disagreed with `specs/http-client.md`'s
-//     `async-trace-interleave`, which pins TWO `[net_connect]` pairs for one `HttpClient.get`.
+//   • **A kernel call that cannot wait earns no park.** `WSAStartup` runs once per process
+//     (`ManagedSocketRuntime.emitWinsockStartup`) and `socket()` allocates a descriptor, so neither is one.
+//   • **A function that waits twice parks twice.** A `TcpClient.connect` to a hostname is a DNS round trip AND a
+//     TCP handshake, either of which can be the slow one, and one park for both would leave the trace unable to
+//     say which a hung connect is hung in.
 //
 // ⭐ A single-wait member therefore still parks exactly once, which is every filesystem site and
-// `send`/`recv`/`close`; `__ms_tcp_connect` parks twice because it waits twice. `specs/async-tcp.md`'s
-// two trace cases still read ONE pair and are not in tension with this: they dial `192.0.2.1`, which
-// short-circuits on the TEST-NET-1 sentinel after the resolve and never attempts a connect.
+// `send`/`recv`/`close`; `__ms_tcp_connect` parks twice because it waits twice. The trace cases in
+// `specs/async-tcp.md` and `specs/http-client.md` read ONE pair and are not in tension with this: they dial
+// `192.0.2.1`, which short-circuits on the TEST-NET-1 sentinel after the resolve and never attempts a connect.
+// ⚠ That resolve is of a LITERAL, which waits on nothing and parks anyway — `__ms_tcp_connect`'s first park
+// carries that exception.
 //
 // ⚠ **THE COUNT IS TWENTY-ONE CALL SITES AND TWENTY-THREE EMITTED ENTRY POINTS, AND THOSE ARE DIFFERENT
 // NUMBERS.** Eight sites in `ManagedFileRuntime`, six in `ManagedDirectoryRuntime`, five in

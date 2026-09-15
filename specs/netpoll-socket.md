@@ -17,7 +17,9 @@ writable, and never sits inside a kernel call holding the processor it was runni
 `__Builtins.schedNetpollBlockCount()` counts those parks — how many times a green thread has been
 suspended on the network poller waiting for a socket to become ready. It joins the scheduler-state roster
 beside `__Builtins.schedRetakeCount()` and `__Builtins.schedPreemptCount()`, which count the sysmon
-rescues a blocking socket call provokes instead.
+rescues a blocking socket call provokes instead, and `__Builtins.schedSyscallCount()`, which counts the
+bracketed kernel calls a rescue could be made out of — so it sees a blocking call whether or not the monitor
+looked during it.
 
 A parked socket read carries a DEADLINE: `setReadDeadline(milliseconds)` and
 `setWriteDeadline(milliseconds)` on `TcpClient` (and on `__ManagedSocket` beneath it) end the wait with
@@ -37,13 +39,13 @@ only machine there, so four round-trips cost four times one round-trip and sysmo
 the kernel call; a reader parked on the poller holds nothing, so the four overlap and nothing is retaken.
 
 ⚠⚠ **ONE ROUND-TRIP RUNS BEFORE THE WINDOW OPENS, BECAUSE THE WINDOW MUST HOLD THE SOCKET BAND AND NOTHING
-ELSE.** A retake is sysmon doing its job for a genuinely blocking call, and a lane's FIRST crossing carries
-work that is not this band: `getaddrinfo` is `SyscallClass.blocking` and may consult a hosts file however
-numeric the address, and Winsock's one-time startup sits behind the first socket of the process. Those are
-real blocking calls and sysmon is right to retake them — they simply say nothing about what a parked `recv`
-does to its processor. So the warm-up pays for all of it, and the four measured round-trips cross a window
-that holds socket reads alone. MEASURED: without it, 3 of 25 runs on x64-windows report a retake or a
-preemption; with it, 20 of 20 report neither.
+ELSE.** A retake is sysmon doing its job for a genuinely blocking call, and x64-windows' FIRST crossing
+carries one that is not this band: Winsock's once-per-process startup sits behind the first socket of the process.
+It is a real blocking call and sysmon is right to retake it — it simply says nothing about what a parked
+`recv` does to its processor. So the warm-up pays for it, and the four measured round-trips cross a window
+that holds only calls the scheduler waits for on the poller (`a-literal-address-round-trip-enters-no-kernel-bracket`
+counts that). MEASURED: without it, 3 of 25 runs on x64-windows report a retake or a preemption; with it, 20
+of 20 report neither.
 
 ⚠ **THE ASSERTION IS EXACTLY ZERO AND MUST STAY SO.** A tolerance would hide the regression this case exists
 to catch — the whole reading is *"the monitor never had to rescue a machine"*, and *"rarely had to"* is the
@@ -120,6 +122,85 @@ end 'main'
 ```
 ```stdout
 ok=4 stuck=false
+```
+```exitcode
+0
+```
+
+<!-- test: netpoll-socket.a-literal-address-round-trip-enters-no-kernel-bracket -->
+<!-- procs: 1 -->
+**A ROUND-TRIP TO A LITERAL ADDRESS ENTERS NO KERNEL BRACKET.** Every call it makes on a non-blocking socket —
+the connect, the send, the receive and both ends' close — either returns at once or is waited for on the
+poller, so none may hold the machine; a bracketed call is one `__sysmon` may retake the processor out of. This is the
+deterministic form of the premise `n-concurrent-reads-do-not-serialise`'s zero-retake assertion rests on: a
+retake needs the monitor to look during the call, and a bracket count needs only the call.
+
+The warm-up round-trip runs before the window for that case's reason, and the peer is awaited inside it so
+its last close is counted.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+// Four in flight at once plus the warm-up, and the peer is done when it has answered exactly that many.
+let rounds = 5
+
+function echoRounds(listener TcpListener) returns Tally
+	var served = 0
+
+	while served < rounds 'serving'
+		let conn = try listener.accept() otherwise return served
+		let heard = try conn.recv(1024) otherwise return served
+		_ = try conn.send(heard) otherwise return served
+		served = served + 1
+	end 'serving'
+
+	return served
+end 'echoRounds'
+
+function echoOnce(listener TcpListener, n Tally) returns Tally throws NetworkError
+	let client = try TcpClient.connect("127.0.0.1", port: listener.port())
+	let msg = "maxon line {n}\n"
+	_ = try client.send(msg)
+	let response = try client.recv(1024)
+
+	if response == msg 'echoed'
+		return 1
+	end 'echoed'
+
+	return 0
+end 'echoOnce'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+
+	let peer = async echoRounds(listener)
+	_ = try echoOnce(listener, n: 0) otherwise 0
+
+	let before = __Builtins.schedSyscallCount()
+
+	let p1 = async echoOnce(listener, n: 1)
+	let p2 = async echoOnce(listener, n: 2)
+	let p3 = async echoOnce(listener, n: 3)
+	let p4 = async echoOnce(listener, n: 4)
+
+	let r1 = try await p1 otherwise 0
+	let r2 = try await p2 otherwise 0
+	let r3 = try await p3 otherwise 0
+	let r4 = try await p4 otherwise 0
+	let ok = r1 + r2 + r3 + r4
+	let served = await peer
+
+	let brackets = __Builtins.schedSyscallCount() - before
+
+	if served != rounds 'peer'
+		panic("unreachable: every round-trip that returned was answered by this peer")
+	end 'peer'
+
+	print("ok={ok} brackets={brackets}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+ok=4 brackets=0
 ```
 ```exitcode
 0

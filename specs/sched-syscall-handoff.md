@@ -106,16 +106,24 @@ each of those is a **hang** here — which the harness reports as a clean per-te
 
 ### Targets
 
-Five of the six cases run on **`x64-windows, arm64-macos, arm64-linux`** — every lane that provides a
-green-thread substrate, and therefore every lane that has a processor to hand off. The three differ only in
-WHERE the bracket around a blocking call is emitted: x64-windows puts both steps inline inside its import
-shim, and the arm64 lanes call `__sched_enter_syscall` / `__sched_exit_syscall` from the instruction
-selector's one dispatch door. Neither placement is visible from a program, which is why the assertions below
-are written once and read the same on all three.
+Every case but one runs on every lane that provides a green-thread substrate, and therefore on every lane
+that has a processor to hand off. The lanes differ only in WHERE the bracket around a blocking call is
+emitted: x64-windows puts both steps inline inside its import shim, and every other lane calls
+`__sched_enter_syscall` / `__sched_exit_syscall` from the instruction selector's one dispatch door. Neither
+placement is visible from a program, which is why the assertions below are written once and read the same on
+every lane.
 
 `a-blocking-subprocess-wait-does-not-stall-a-sibling` is the exception and carries `x64-windows` alone. That
 is a property of its PROGRAM and not of the rule: it spawns `cmd /c exit 0`, which exists on no other lane.
-A POSIX twin of that program would run everywhere the other five do.
+A POSIX twin of that program would run everywhere the others do.
+
+### Counting the brackets
+
+`__Builtins.schedSyscallCount()` answers how many bracketed kernel calls have been entered by a machine
+holding a processor — exactly the calls a retake can take a processor out of. Every bracketing lane steps it
+where the bracket is entered, before the call is announced. It joins the scheduler-state roster beside
+`__Builtins.schedRetakeCount()`, which counts the retakes themselves: a retake count of 0 says the monitor took
+nothing, while a bracket count of 0 says there was nothing it could have taken.
 
 ## Tests
 
@@ -879,6 +887,30 @@ M: reading
 S: sentinel ran
 M: read returned
 done sibling=1 read=5 blocked=yes
+```
+```exitcode
+0
+```
+
+<!-- test: a-print-enters-a-kernel-bracket -->
+**THE CONTROL FOR EVERY ASSERTION THAT A WINDOW HOLDS NO BRACKET.** A write to standard output is
+`SyscallClass.blocking` on every lane that brackets — its far end may stop reading — so one `print` from `main`,
+a green thread, must move `schedSyscallCount()`. A zero there would make every `brackets=0` elsewhere a reading
+of a counter nothing steps. It is a `> 0` test because the first print of a process may bring other bracketed
+calls with it.
+```maxon
+function main() returns ExitCode
+	let before = __Builtins.schedSyscallCount()
+	print("writing\n")
+	let entered = __Builtins.schedSyscallCount() - before
+	print("entered={entered > 0}\n")
+
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+writing
+entered=true
 ```
 ```exitcode
 0

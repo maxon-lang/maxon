@@ -210,7 +210,8 @@ export enum MultiMSharing
 	// ONE aligned machine word, written whole and read whole, whose contract does not say WHICH writer's
 	// value a reader gets. No tearing is possible on any lane the compiler emits, so every observable value is
 	// a value somebody really wrote; what multi-M costs is precision, not safety. Each member argues its own
-	// site: `__subp_last_error`, `__sched_shutdown_flag`, `__sched_needspinning` and `__gt_seed_bytes`.
+	// site: `__subp_last_error`, `__sched_shutdown_flag`, `__sched_needspinning`, `__gt_seed_bytes` and
+	// `__ms_wsa_started`.
 	lastWriterWins
 
 	// ⛔ **THE ANSWER `pushRuntimeGlobal` REFUSES, and the reason it is a member rather than an omission is
@@ -963,6 +964,14 @@ let POffPreemptCount = POffSysmonWhen + (PointerSlotBytes as ByteOffset)
 // holding the processor, which is its only writer, and a per-P word for `POffStealCount`'s reason.
 let POffNetpollBlockCount = POffPreemptCount + (PointerSlotBytes as ByteOffset)
 
+// ⭐ **HOW MANY BRACKETED KERNEL CALLS MACHINES HOLDING THIS PROCESSOR HAVE ENTERED — the reading
+// `__Builtins.schedSyscallCount()` sums.** Stepped on every lane that brackets, immediately BEFORE the
+// `MOffSyscallState` step that announces the call: until then no retake can take the processor, so the machine
+// holding it is the word's only writer and a plain step is exact. After it the processor may already belong to
+// another machine. A per-P word for `POffStealCount`'s reason. EXPORTED because the x64-windows step is
+// hand-assembled in `X64GtRuntime.emitGtEnterSyscall`.
+export let POffSyscallCount = POffNetpollBlockCount + (PointerSlotBytes as ByteOffset)
+
 // ⭐⭐ **THE RING'S 256 SLOTS, AT THE P's TAIL.** Go's `runq [256]guintptr` (`runtime2.go:807`). FIXED
 // rather than grown: the overflow has somewhere to go (the global queue), so a full ring is a routing
 // decision and never an error, and a growable ring would need a lock on the one path this whole design
@@ -990,7 +999,7 @@ let RunqHalfSlots = RunqSlots shr 1
 //
 // ⚠ **IT IS NOT `POffSchedTick` AND CANNOT BE.** That counter is DELIBERATELY frozen for the whole of a slot
 // chain (`POffRunnext`), which is exactly the interval this one has to measure.
-let POffRunnextStreak = POffNetpollBlockCount + (PointerSlotBytes as ByteOffset)
+let POffRunnextStreak = POffSyscallCount + (PointerSlotBytes as ByteOffset)
 
 let POffRunqBase = POffRunnextStreak + (PointerSlotBytes as ByteOffset)
 
@@ -1756,6 +1765,12 @@ export let SchedPreemptCountName = b"__sched_preempt_count"
 // waiting for a socket to become ready. A `buildSchedPerProcSum` body, for `__sched_retake_count`'s reason.
 export let SchedNetpollBlockCountName = b"__sched_netpoll_block_count"
 
+// ⭐ `__sched_syscall_count() -> i64` — the sum of every P's `POffSyscallCount`, and the floor of
+// `__Builtins.schedSyscallCount()`: how many bracketed kernel calls a machine holding a processor has entered —
+// exactly the calls `__sysmon` could retake a processor out of. A `buildSchedPerProcSum` body, for
+// `__sched_retake_count`'s reason.
+export let SchedSyscallCountName = b"__sched_syscall_count"
+
 // ⭐⭐ `__sched_slice_count() -> i64` — the sum of every P's `POffSchedTick`, and the floor of
 // `__Builtins.schedSliceCount()`: how many schedules started a TIME SLICE OF THEIR OWN rather than inheriting
 // the running one from the `runnext` slot.
@@ -1860,7 +1875,7 @@ let SchedArenaCarveName = b"__sched_arena_carve"
 // member is a `__slab_` name, because the number it reports is the ALLOCATOR's (see
 // `SlabRuntime.SlabRemoteFreeCountName`).
 function isSchedPerProcSumCallee(callee ByteArray) returns bool
-	return callee.equals(SchedStealCountName) or callee.equals(SchedRetakeCountName) or callee.equals(SlabRemoteFreeCountName) or callee.equals(SchedGtRecycleCountName) or callee.equals(SchedPreemptCountName) or callee.equals(SchedSliceCountName) or callee.equals(SchedNetpollBlockCountName)
+	return callee.equals(SchedStealCountName) or callee.equals(SchedRetakeCountName) or callee.equals(SlabRemoteFreeCountName) or callee.equals(SchedGtRecycleCountName) or callee.equals(SchedPreemptCountName) or callee.equals(SchedSliceCountName) or callee.equals(SchedNetpollBlockCountName) or callee.equals(SchedSyscallCountName)
 end 'isSchedPerProcSumCallee'
 
 // ⭐⭐ **THE QUERIES ANSWERED FROM THE SCHEDULER'S OWN STATE — the roster that says "asking this question IS
@@ -2336,6 +2351,7 @@ export function installSchedRuntime(module StdModule, target Target)
 	buildSchedPerProcSum(module, name: SchedPreemptCountName, offset: POffPreemptCount)
 	buildSchedPerProcSum(module, name: SchedSliceCountName, offset: POffSchedTick)
 	buildSchedPerProcSum(module, name: SchedNetpollBlockCountName, offset: POffNetpollBlockCount)
+	buildSchedPerProcSum(module, name: SchedSyscallCountName, offset: POffSyscallCount)
 	buildSchedLockedCountQuery(module, name: SchedIdleProcessorCountName, label: SchedNpidleLabel)
 	buildSchedLockedCountQuery(module, name: SchedGtRecordsCarvedName, label: GtRecordsCarvedLabel)
 	buildSchedLockedCountQuery(module, name: SchedGlobalPushCountName, label: SchedGlobalPushesLabel)
@@ -4142,9 +4158,8 @@ function buildSchedFindRunnable(module StdModule)
 	module.setTerminator(victimTry, op: StdOp.condBranch(stealFailed, thenBlockId: victimNext.id, elseBlockId: stole.id))
 
 	// The counter `__Builtins.schedStealCount()` sums. A P counts its OWN steals and nothing else writes the
-	// word, so `multiM: false` — the plain arm. The prior value has no reader.
-	let stealStep = emitConst(module, block: stole, value: OneMore, ids: ids)
-	_ = emitFieldAccumulate(module, block: stole, record: p, offset: POffStealCount, delta: stealStep, multiM: false, ids: ids)
+	// word.
+	emitSchedProcCountOne(module, block: stole, p: p, offset: POffStealCount, ids: ids)
 	module.setTerminator(stole, op: StdOp.branch(candidate.id))
 	stole.branchEdges.push(BranchEdge.create(candidate.id, argIds: twoArgs(stolenGt, second: freshSlice)))
 
@@ -4467,8 +4482,7 @@ function buildGtFreeGet(module StdModule)
 	module.setTerminator(refilled, op: StdOp.branch(localPop.id))
 
 	let reused = emitGtFreeLocalPop(module, block: localPop, p: p, ids: ids)
-	let recycledOne = emitConst(module, block: localPop, value: OneMore, ids: ids)
-	_ = emitFieldAccumulate(module, block: localPop, record: p, offset: POffGtRecycleCount, delta: recycledOne, multiM: false, ids: ids)
+	emitSchedProcCountOne(module, block: localPop, p: p, offset: POffGtRecycleCount, ids: ids)
 	module.setTerminator(localPop, op: StdOp.branch(recycle.id))
 	localPop.branchEdges.push(BranchEdge.create(recycle.id, argIds: argsOf(reused)))
 
@@ -4614,17 +4628,21 @@ end 'buildSchedPerProcSum'
 // always holds a processor outside a bracketed call. EXPORTED because its one caller is in `GtRuntime` and the
 // processor's layout is this file's.
 export function emitSchedCountPreemption(module StdModule, block IrBlock, ids ValueMinter)
-	let p = emitLoadCurrentP(module, block: block, ids: ids)
-	_ = emitFieldAccumulate(module, block: block, record: p, offset: POffPreemptCount, delta: emitConst(module, block: block, value: OneMore, ids: ids), multiM: false, ids: ids)
+	emitSchedProcCountOne(module, block: block, p: emitLoadCurrentP(module, block: block, ids: ids), offset: POffPreemptCount, ids: ids)
 end 'emitSchedCountPreemption'
 
 // Step the current processor's `POffNetpollBlockCount` — `__np_pd_commit`'s count, from a green thread whose
 // machine holds a processor. EXPORTED because its one caller is in `NetpollRuntime` and the processor's layout
 // is this file's.
 export function emitSchedCountNetpollBlock(module StdModule, block IrBlock, ids ValueMinter)
-	let p = emitLoadCurrentP(module, block: block, ids: ids)
-	_ = emitFieldAccumulate(module, block: block, record: p, offset: POffNetpollBlockCount, delta: emitConst(module, block: block, value: OneMore, ids: ids), multiM: false, ids: ids)
+	emitSchedProcCountOne(module, block: block, p: emitLoadCurrentP(module, block: block, ids: ids), offset: POffNetpollBlockCount, ids: ids)
 end 'emitSchedCountNetpollBlock'
+
+// One more on processor `p`'s counter at `offset`, as a PLAIN step whose prior value has no reader — each
+// caller argues at its own site that it is the word's only writer.
+function emitSchedProcCountOne(module StdModule, block IrBlock, p ValueId, offset ByteOffset, ids ValueMinter)
+	_ = emitFieldAccumulate(module, block: block, record: p, offset: offset, delta: emitConst(module, block: block, value: OneMore, ids: ids), multiM: false, ids: ids)
+end 'emitSchedProcCountOne'
 
 // A query that answers one `underSchedLock` count with a plain load and no lock — `__sched_idle_processor_count`,
 // `__sched_gt_records_carved` and `__sched_timer_start_count`, all named among `MultiMSharing.underSchedLock`'s
@@ -6874,6 +6892,10 @@ let WordSignShift = 63 as ParsedInt
 // TEB offset is 0, and slot 0 of a thread's own storage is a real, NON-NULL pointer on the lanes this runs on
 // — so an unguarded read would treat it as an M and step a word inside somebody else's structure.
 // `emitLoadCurrentMOrBail` is that test, shared with the three other walks that need it.
+//
+// ⚠ **THE COUNT IS ASKED OF THE PROCESSOR AND SO TESTS FOR ONE**: the guard admits an M's scheduler context,
+// which may hold none, and such a call has no processor for a retake to take. `POffSyscallCount` carries why the
+// count must precede the announcement.
 function buildSchedEnterSyscall(module StdModule)
 	var func = IrFunction.createFromStd(SchedEnterSyscallName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
@@ -6881,13 +6903,21 @@ function buildSchedEnterSyscall(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var haveOffset = module.addBlock(func, label: b"esoff", heat: BlockHeat.normal)
 	var haveMachine = module.addBlock(func, label: b"esm", heat: BlockHeat.normal)
+	var haveProc = module.addBlock(func, label: b"esp", heat: BlockHeat.normal)
+	var announce = module.addBlock(func, label: b"esann", heat: BlockHeat.normal)
 	var noMachine = module.addBlock(func, label: b"esnone", heat: BlockHeat.normal)
 
 	let machine = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: noMachine, bailValues: ParsedIntArray.create(), ids: ids)
 
-	let delta = emitConst(module, block: haveMachine, value: MSyscallEnterDelta, ids: ids)
-	_ = emitFieldAccumulate(module, block: haveMachine, record: machine, offset: MOffSyscallState, delta: delta, multiM: true, ids: ids)
-	module.setTerminator(haveMachine, op: StdOp.retVoid)
+	let p = emitLoadField(module, block: haveMachine, record: machine, offset: MOffCurrentP, ids: ids)
+	emitBailIfZero(module, block: haveMachine, tested: p, bail: announce, bailValues: ParsedIntArray.create(), otherwise: haveProc, ids: ids)
+
+	emitSchedProcCountOne(module, block: haveProc, p: p, offset: POffSyscallCount, ids: ids)
+	module.setTerminator(haveProc, op: StdOp.branch(announce.id))
+
+	let delta = emitConst(module, block: announce, value: MSyscallEnterDelta, ids: ids)
+	_ = emitFieldAccumulate(module, block: announce, record: machine, offset: MOffSyscallState, delta: delta, multiM: true, ids: ids)
+	module.setTerminator(announce, op: StdOp.retVoid)
 
 	module.setTerminator(noMachine, op: StdOp.retVoid)
 

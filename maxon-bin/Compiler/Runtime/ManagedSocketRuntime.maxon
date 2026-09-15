@@ -233,20 +233,51 @@ let SockaddrFamilyByteScale = 256
 let WsaDataBytes = 408 as ParsedInt
 
 // ⭐ **WINSOCK MUST BE INITIALIZED BEFORE ANY OTHER ws2_32 ENTRY POINT ANSWERS**, so every builder that opens
-// a socket opens with this. Terminates `block`: `ready` when the startup succeeded, `notReady` when it did
-// not, with the `WSADATA` already released on both edges.
+// a socket opens with this. Terminates `block`: `ready` when Winsock is started, `notReady` when the startup
+// failed, with any `WSADATA` it allocated already released.
 //
-// ⛔ **IT IS NOT A PARK SITE.** It is process-cached behind `__net_wsa_init` and returns without touching the
-// network on every call after the first, so a park here would report a blocking operation that does not
-// block — see `emitIoPark` for why the unit is the blocking operation and not the function.
-export function emitWinsockStartup(module StdModule, block IrBlock, ready IrBlock, notReady IrBlock, ids ValueMinter)
-	let wsaData = emitRawAlloc(module, block: block, byteCount: emitConst(module, block: block, value: WsaDataBytes, ids: ids), ids: ids)
+// ⭐ **ONCE PER PROCESS: THE STARTUP RUNS ONLY UNTIL `__ms_wsa_started` SAYS IT HAS SUCCEEDED.** A failed
+// startup leaves the word clear, so the next socket operation tries again.
+//
+// ⭐ **THE RACE IS BENIGN AND THAT IS WHY THERE IS NO LOCK OR CAS.** Two machines that both find the word clear
+// both call `WSAStartup`, which is reference-counted and idempotent, and both store the same 1. The store is a
+// release and the read an acquire, so a machine that skips the call sees everything the startup published.
+//
+// ⛔ **IT IS NOT A PARK SITE.** It calls `WSAStartup` only until one succeeds and never touches the network, so
+// a park here would report a blocking operation that does not block — see `emitIoPark` for why the unit is the
+// blocking operation and not the function.
+export function emitWinsockStartup(module StdModule, func IrFunction, block IrBlock, ready IrBlock, notReady IrBlock, ids ValueMinter)
+	var startup = module.addBlock(func, label: b"mswsa", heat: BlockHeat.normal)
+	var markStarted = module.addBlock(func, label: b"mswsaok", heat: BlockHeat.normal)
+
+	let started = emitLoadAcquireGlobalWord(module, block: block, label: WinsockStartedLabel, ids: ids)
+	let alreadyStarted = emitCmp(module, block: block, a: started, b: emitConst(module, block: block, value: WinsockNotStarted, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(block, op: StdOp.condBranch(alreadyStarted, thenBlockId: ready.id, elseBlockId: startup.id))
+
+	let wsaData = emitRawAlloc(module, block: startup, byteCount: emitConst(module, block: startup, value: WsaDataBytes, ids: ids), ids: ids)
 	let startupResult = ids.mint()
-	module.appendOp(block, op: StdOp.osSocketStartup(startupResult, wsaDataPtrId: wsaData))
-	emitRawFree(module, block: block, ptr: wsaData, ids: ids)
-	let winsockReady = emitCmp(module, block: block, a: startupResult, b: emitConst(module, block: block, value: WinsockCallOk, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(block, op: StdOp.condBranch(winsockReady, thenBlockId: ready.id, elseBlockId: notReady.id))
+	module.appendOp(startup, op: StdOp.osSocketStartup(startupResult, wsaDataPtrId: wsaData))
+	emitRawFree(module, block: startup, ptr: wsaData, ids: ids)
+	let winsockReady = emitCmp(module, block: startup, a: startupResult, b: emitConst(module, block: startup, value: WinsockCallOk, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(startup, op: StdOp.condBranch(winsockReady, thenBlockId: markStarted.id, elseBlockId: notReady.id))
+
+	emitStoreReleaseGlobalWord(module, block: markStarted, label: WinsockStartedLabel, value: emitConst(module, block: markStarted, value: WinsockStarted, ids: ids), ids: ids)
+	module.setTerminator(markStarted, op: StdOp.branch(ready.id))
 end 'emitWinsockStartup'
+
+// The once-per-process startup's `.data` word: `WinsockNotStarted` in the image, `WinsockStarted` after the
+// first successful `WSAStartup`.
+let WinsockStartedLabel = b"__ms_wsa_started"
+let WinsockNotStarted = 0 as ParsedInt
+let WinsockStarted = 1 as ParsedInt
+
+// This family's one `.data` word, laid out where a surviving body names it (`DataReach.walked`).
+// `lastWriterWins`: every writer stores the same `WinsockStarted` — `emitWinsockStartup` argues the race.
+export function managedSocketRuntimeGlobals() returns DataSectionEntryArray
+	var out = DataSectionEntryArray.create()
+	pushRuntimeGlobal(out, label: WinsockStartedLabel, sharing: MultiMSharing.lastWriterWins, reach: DataReach.walked, seed: WinsockNotStarted)
+	return out
+end 'managedSocketRuntimeGlobals'
 
 // ⭐ **`struct addrinfo` ON Win64 — the HINTS this file writes and the RESULT it reads.** 48 bytes:
 //
@@ -599,52 +630,81 @@ export function socketResolveShape(target Target) returns SocketResolveShape
 	end 'os'
 end 'socketResolveShape'
 
-// ⭐ **RESOLVE `host` INTO A NETWORK-ORDER `sin_addr`, OR ROUTE TO `resolveFailed`.** Both shapes leave the
-// answer in a value the `resolved` block may read — `resolve` is the only edge into it, so a value defined
-// there is simply in scope (the dominance argument `emitLiveHandleOrClosedThrow` makes for its own) — and
-// both RELEASE the host cstring on every edge they take, which is what keeps that scratch out of the
-// caller's four-allocation ledger.
-export function emitResolveHostIp(module StdModule, resolve IrBlock, resolved IrBlock, resolveFailed IrBlock, host ValueId, shape SocketResolveShape, ids ValueMinter) returns ValueId
+// ⭐ **RESOLVE `host` INTO A NETWORK-ORDER `sin_addr`, OR ROUTE TO `resolveFailed`.** Both shapes answer a
+// value the `resolved` block may read, and both RELEASE the host cstring on every edge they take, which is
+// what keeps that scratch out of the caller's four-allocation ledger.
+export function emitResolveHostIp(module StdModule, func IrFunction, resolve IrBlock, resolved IrBlock, resolveFailed IrBlock, host ValueId, shape SocketResolveShape, ids ValueMinter) returns ValueId
 	return match shape 'shape'
-		addrInfoList gives emitResolveThroughAddrInfo(module, resolve: resolve, resolved: resolved, resolveFailed: resolveFailed, host: host, ids: ids)
+		addrInfoList gives emitResolveThroughAddrInfo(module, func: func, resolve: resolve, resolved: resolved, resolveFailed: resolveFailed, host: host, ids: ids)
 		builtinResolver gives emitResolveThroughBuiltinResolver(module, resolve: resolve, resolved: resolved, resolveFailed: resolveFailed, host: host, ids: ids)
 	end 'shape'
 end 'emitResolveHostIp'
 
-// `getaddrinfo(host, NULL, hints, out)`, then the first result's `sin_addr`.
+// ⭐ **A DOTTED-QUAD LITERAL IS ANSWERED BY `__ms_ipv4` AND NEVER REACHES `getaddrinfo`** — Go's rule, and the
+// one `__ms_resolve4` applies on the other shape. `getaddrinfo` is a `blocking` call whatever its argument, so
+// a literal handed to it would hold the machine for an answer the host string already carries.
 //
-// `hints` — 48 bytes, allocated ZEROED, so only the three fields `getaddrinfo` reads are written. They are
-// DWORDs at 4/8/12, two to a word (see `emitStoreDwordPair`): `ai_flags`+`ai_family` in the first,
-// `ai_socktype`+`ai_protocol` in the second.
-function emitResolveThroughAddrInfo(module StdModule, resolve IrBlock, resolved IrBlock, resolveFailed IrBlock, host ValueId, ids ValueMinter) returns ValueId
-	let hints = emitRawAlloc(module, block: resolve, byteCount: emitConst(module, block: resolve, value: AddrInfoBytes, ids: ids), ids: ids)
-	emitStoreDwordPair(module, block: resolve, record: hints, offset: AddrInfoFlagsFamilyOffset, low: 0, high: AfInet, ids: ids)
-	emitStoreDwordPair(module, block: resolve, record: hints, offset: AddrInfoSocktypeProtocolOffset, low: SockStream, high: IpprotoTcp, ids: ids)
+// Otherwise `getaddrinfo(host, NULL, hints, out)`, then the first result's `sin_addr`. `hints` — 48 bytes,
+// allocated ZEROED, so only the three fields `getaddrinfo` reads are written. They are DWORDs at 4/8/12, two
+// to a word (see `emitStoreDwordPair`): `ai_flags`+`ai_family` in the first, `ai_socktype`+`ai_protocol` in
+// the second.
+//
+// The two roads meet at `resolved` with the address as its block argument.
+function emitResolveThroughAddrInfo(module StdModule, func IrFunction, resolve IrBlock, resolved IrBlock, resolveFailed IrBlock, host ValueId, ids ValueMinter) returns ValueId
+	var literal = module.addBlock(func, label: b"msiplit", heat: BlockHeat.normal)
+	var lookup = module.addBlock(func, label: b"msgai", heat: BlockHeat.normal)
+	var looked = module.addBlock(func, label: b"msgaiok", heat: BlockHeat.normal)
+
+	let ip = ids.mint()
+	resolved.blockArgs.push(IrBlockArg.create(ip, argType: StdType.i64))
+
+	let numeric = emitBranchOnIpv4Literal(module, func: func, cur: resolve, host: host, hostLength: ids.mint(), literal: literal, name: lookup, ids: ids)
+
+	emitRawFree(module, block: literal, ptr: host, ids: ids)
+	module.setTerminator(literal, op: StdOp.branch(resolved.id))
+	literal.branchEdges.push(BranchEdge.create(resolved.id, argIds: argsOf(numeric)))
+
+	let hints = emitRawAlloc(module, block: lookup, byteCount: emitConst(module, block: lookup, value: AddrInfoBytes, ids: ids), ids: ids)
+	emitStoreDwordPair(module, block: lookup, record: hints, offset: AddrInfoFlagsFamilyOffset, low: 0, high: AfInet, ids: ids)
+	emitStoreDwordPair(module, block: lookup, record: hints, offset: AddrInfoSocktypeProtocolOffset, low: SockStream, high: IpprotoTcp, ids: ids)
 
 	// The out word holds the `addrinfo*` the OS allocates. Zeroed by `__mm_alloc`, so a failed resolve leaves
 	// a NULL nothing reads.
-	let out = emitWin32OutWord(module, block: resolve, ids: ids)
+	let out = emitWin32OutWord(module, block: lookup, ids: ids)
 	let resolveResult = ids.mint()
-	module.appendOp(resolve, op: StdOp.osSocketResolve(resolveResult, hostPtrId: host, hintsPtrId: hints, outPtrId: out))
-	emitRawFree(module, block: resolve, ptr: hints, ids: ids)
-	emitRawFree(module, block: resolve, ptr: host, ids: ids)
-	let resolveOk = emitConst(module, block: resolve, value: WinsockCallOk, ids: ids)
-	let didResolve = emitCmp(module, block: resolve, a: resolveResult, b: resolveOk, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(resolve, op: StdOp.condBranch(didResolve, thenBlockId: resolved.id, elseBlockId: resolveFailed.id))
+	module.appendOp(lookup, op: StdOp.osSocketResolve(resolveResult, hostPtrId: host, hintsPtrId: hints, outPtrId: out))
+	emitRawFree(module, block: lookup, ptr: hints, ids: ids)
+	emitRawFree(module, block: lookup, ptr: host, ids: ids)
+	let resolveOk = emitConst(module, block: lookup, value: WinsockCallOk, ids: ids)
+	let didResolve = emitCmp(module, block: lookup, a: resolveResult, b: resolveOk, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(lookup, op: StdOp.condBranch(didResolve, thenBlockId: looked.id, elseBlockId: resolveFailed.id))
 
 	emitRawFree(module, block: resolveFailed, ptr: out, ids: ids)
 
 	// The first result's address, then the list goes back to the OS. `sin_addr` is a DWORD, so it is read as
 	// the word containing it and masked — `emitLoadDword`'s reason, and the four bytes above it are `sin_zero`,
 	// inside the same 16-byte `sockaddr`.
-	let addrInfo = emitLoadField(module, block: resolved, record: out, offset: Win32OutWordAnswerOffset, ids: ids)
-	emitRawFree(module, block: resolved, ptr: out, ids: ids)
-	let sockaddr = emitLoadField(module, block: resolved, record: addrInfo, offset: AddrInfoAddrOffset, ids: ids)
-	let ip = emitLoadDword(module, block: resolved, record: sockaddr, offset: SockaddrAddrOffset, ids: ids)
-	module.appendOp(resolved, op: StdOp.osSocketFreeAddrInfo(addrInfo))
+	let addrInfo = emitLoadField(module, block: looked, record: out, offset: Win32OutWordAnswerOffset, ids: ids)
+	emitRawFree(module, block: looked, ptr: out, ids: ids)
+	let sockaddr = emitLoadField(module, block: looked, record: addrInfo, offset: AddrInfoAddrOffset, ids: ids)
+	let lookedUp = emitLoadDword(module, block: looked, record: sockaddr, offset: SockaddrAddrOffset, ids: ids)
+	module.appendOp(looked, op: StdOp.osSocketFreeAddrInfo(addrInfo))
+	module.setTerminator(looked, op: StdOp.branch(resolved.id))
+	looked.branchEdges.push(BranchEdge.create(resolved.id, argIds: argsOf(lookedUp)))
 
 	return ip
 end 'emitResolveThroughAddrInfo'
+
+// Measure `host` and branch to `literal` when it is a dotted-quad IPv4 literal, to `name` otherwise. Answers
+// `__ms_ipv4`'s reading, in scope in both; `hostLength` is minted by the caller and in scope in both too.
+function emitBranchOnIpv4Literal(module StdModule, func IrFunction, cur IrBlock, host ValueId, hostLength ValueId, literal IrBlock, name IrBlock, ids ValueMinter) returns ValueId
+	var measured = emitCStringLength(module, func: func, cur: cur, cstr: host, length: hostLength, ids: ids)
+	let numeric = emitResolverCall(module, block: measured, callee: ManagedSocketIpv4Name, args: twoArgs(host, second: hostLength), ids: ids)
+	let noAddress = emitConst(module, block: measured, value: ResolveNoAddress, ids: ids)
+	let isNumeric = emitCmp(module, block: measured, a: numeric, b: noAddress, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(measured, op: StdOp.condBranch(isNumeric, thenBlockId: literal.id, elseBlockId: name.id))
+	return numeric
+end 'emitBranchOnIpv4Literal'
 
 // `__ms_resolve4(host)` — one call, answering the address or `ResolveNoAddress`. The host cstring is
 // released on the caller's side of the branch because this shape has no OS-owned list to release and
@@ -664,8 +724,7 @@ end 'emitResolveThroughBuiltinResolver'
 //
 // The sequence:
 //
-//   WSAStartup(2.2)  →  fill a 48-byte `hints` for IPv4/TCP  →  getaddrinfo(host, NULL, hints, out)
-//   →  read `sin_addr` out of the first result's `ai_addr`  →  freeaddrinfo
+//   WSAStartup(2.2), once per process  →  resolve `host` to a network-order `sin_addr` (`emitResolveHostIp`)
 //   →  the TEST-NET-1 short circuit  →  socket()  →  build a `sockaddr_in`  →  connect()
 //
 // ⚠ **EVERY FAILURE IS `resolveFailed` OR `connectFailed`, AND THAT IS A CONTRACT THE SPEC PINS RATHER THAN
@@ -709,21 +768,25 @@ function buildManagedSocketTcpConnect(module StdModule, target Target)
 
 	// The two operations that genuinely block are `getaddrinfo` and `connect()`, and each has its own park
 	// below; the startup has none for `emitWinsockStartup`'s stated reason.
-	emitWinsockStartup(module, block: init, ready: resolve, notReady: noWinsock, ids: ids)
+	emitWinsockStartup(module, func: func, block: init, ready: resolve, notReady: noWinsock, ids: ids)
 
 	emitRawFree(module, block: noWinsock, ptr: host, ids: ids)
 	emitErrorReturn(module, block: noWinsock, flag: ManagedSocketConnectFailedFlag, ids: ids)
 
-	// ⭐ **PARK 1 OF 2 — THE DNS RESOLVE.** The resolve is the first of this function's two genuinely
+	// ⭐ **PARK 1 OF 2 — THE DNS RESOLVE.** Resolving a name is the first of this function's two genuinely
 	// blocking operations: it goes to a resolver over the network and can take longer than the connect that
 	// follows it. It gets a park of its own, reported under the `net_connect` operation name, so a resolve
 	// prints the same `[net_connect]` pair the connect does rather than a spelling of its own.
 	//
 	// ⚠ **THE PARK IS HERE AND NOT INSIDE EITHER SHAPE, BECAUSE IT IS ABOUT THE OPERATION AND NOT ABOUT THE
-	// MECHANISM.** Both shapes block the green thread for a network round trip; that is what a park reports,
-	// and `emitIoPark`'s once-per-entry-point invariant would be broken by a second one inside the resolver.
+	// MECHANISM.** Both shapes block the green thread for a network round trip on a name, and `emitIoPark`'s
+	// once-per-entry-point invariant would be broken by a second one inside the resolver.
+	//
+	// ⚠ **A LITERAL ADDRESS TAKES THIS PARK TOO, THOUGH `__ms_ipv4` ANSWERS IT WITHOUT WAITING** — the one road
+	// where `emitIoPark`'s one-park-per-blocking-operation rule is not met. `async-tcp.md`'s and
+	// `http-client.md`'s trace cases dial the literal `192.0.2.1` and pin this pair.
 	emitIoPark(module, block: resolve, operation: GtIoOperation.netConnect, ids: ids)
-	let ip = emitResolveHostIp(module, resolve: resolve, resolved: resolved, resolveFailed: resolveFailed, host: host, shape: socketResolveShape(target), ids: ids)
+	let ip = emitResolveHostIp(module, func: func, resolve: resolve, resolved: resolved, resolveFailed: resolveFailed, host: host, shape: socketResolveShape(target), ids: ids)
 	emitErrorReturn(module, block: resolveFailed, flag: ManagedSocketResolveFailedFlag, ids: ids)
 
 	let testNet = emitConst(module, block: resolved, value: TestNet1NetOrder, ids: ids)
@@ -752,10 +815,9 @@ function buildManagedSocketTcpConnect(module StdModule, target Target)
 	// function's two operations that suspend the green thread, and it gets the second park; `socket()` between
 	// the two does not, because it allocates a descriptor and returns.
 	//
-	// ⛔ **THE TEST-NET-1 EDGE NEVER REACHES HERE, AND THAT IS WHY `async-tcp.md`'s TWO TRACE CASES STILL PIN
-	// ONE PAIR.** `192.0.2.1` short-circuits at `resolved` (see `TestNet1NetOrder`), so those programs perform
-	// the resolve and no connect — one blocking operation, one pair. A host that RESOLVES and then connects
-	// prints two, which is what `specs/http-client.md` pins.
+	// ⛔ **THE TEST-NET-1 EDGE NEVER REACHES HERE, AND THAT IS WHY THE TRACE CASES PIN ONE PAIR.** `192.0.2.1`
+	// short-circuits at `resolved` (see `TestNet1NetOrder`), so `async-tcp.md`'s and `http-client.md`'s trace
+	// programs perform the resolve and no connect. A host that resolves and then connects prints two pairs.
 	emitIoPark(module, block: dial, operation: GtIoOperation.netConnect, ids: ids)
 	let addr = emitRawAlloc(module, block: dial, byteCount: emitConst(module, block: dial, value: SockaddrInBytes, ids: ids), ids: ids)
 	let addrWord = emitSockaddrInWord(module, block: dial, port: port, ip: ip, familyHalfword: sockaddrFamilyHalfword(target), ids: ids)
@@ -1522,6 +1584,9 @@ export function installManagedSocketRuntime(module StdModule, usage RuntimeUsage
 	buildManagedSocketSetDeadline(module, name: ManagedSocketSetWriteDeadlineName, mode: NetpollModeWrite, target: target)
 	buildManagedSocketTimedOut(module, target: target)
 
+	// Both shapes answer a dotted-quad literal through it (`emitBranchOnIpv4Literal`).
+	buildManagedSocketIpv4(module)
+
 	// ⚠ **THE RESOLVER IS INSTALLED ONLY WHERE ITS SHAPE IS CHOSEN**, exactly as
 	// `installCommandLineRuntime` installs one of two argv graphs: a lane with a `getaddrinfo` emits no call
 	// to `__ms_resolve4`, and laying it out anyway would be a dozen unreachable functions in every socket
@@ -1591,9 +1656,9 @@ end 'isManagedSocketRuntimeCallee'
 // target — so the sentinel costs no legal answer.
 let ResolveNoAddress = -1 as ParsedInt
 
-// The resolver's entry point, plus the eight helpers it is built out of. All are `__ms_`-prefixed, which is
-// what puts them inside `isManagedSocketRuntimeCallee` — the drift guard walks them, and no source line can
-// name one, so the E3104 roster is unaffected.
+// The resolver's entry point and the helpers it is built out of; `__ms_ipv4` alone serves the `getaddrinfo`
+// shape too. All are `__ms_`-prefixed, which is what puts them inside `isManagedSocketRuntimeCallee` — the
+// drift guard walks them, and no source line can name one, so the E3104 roster is unaffected.
 let ManagedSocketResolveName = b"__ms_resolve4"
 let ManagedSocketIpv4Name = b"__ms_ipv4"
 let ManagedSocketHostsName = b"__ms_hosts4"
@@ -1701,7 +1766,6 @@ function installManagedSocketResolver(module StdModule, target Target)
 	buildManagedSocketSpan(module, name: ManagedSocketBlanksName, skipBlanks: true)
 	buildManagedSocketSpan(module, name: ManagedSocketWordName, skipBlanks: false)
 	buildManagedSocketEol(module)
-	buildManagedSocketIpv4(module)
 	buildManagedSocketSlurp(module)
 	buildManagedSocketHosts(module)
 	buildManagedSocketNameserver(module)
@@ -2667,12 +2731,7 @@ function buildManagedSocketResolve(module StdModule)
 	let host = 0 as ValueId
 
 	let hostLength = ids.mint()
-	var measured = emitCStringLength(module, func: func, cur: entry, cstr: host, length: hostLength, ids: ids)
-
-	let numeric = emitResolverCall(module, block: measured, callee: ManagedSocketIpv4Name, args: twoArgs(host, second: hostLength), ids: ids)
-	let noAddress = emitConst(module, block: measured, value: ResolveNoAddress, ids: ids)
-	let isNumeric = emitCmp(module, block: measured, a: numeric, b: noAddress, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(measured, op: StdOp.condBranch(isNumeric, thenBlockId: numericHit.id, elseBlockId: hostsStep.id))
+	let numeric = emitBranchOnIpv4Literal(module, func: func, cur: entry, host: host, hostLength: hostLength, literal: numericHit, name: hostsStep, ids: ids)
 
 	module.setTerminator(numericHit, op: StdOp.ret(numeric))
 

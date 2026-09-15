@@ -2169,15 +2169,10 @@ export union StdOp
 	// own numbers for the same ops.
 
 	// `osSocketStartup(result, wsaDataPtr)` = `WSAStartup(0x0202, wsaDataPtr)`, the returned int in `result`
-	// (0 = success). Winsock REQUIRES this before any other ws2_32 call. This op is the raw call.
-	//
-	// ⚠ **THERE IS NO ONCE-ONLY GUARD ANYWHERE, AND THIS COMMENT USED TO SAY THE CALLER KEPT ONE.**
-	// `buildManagedSocketTcpConnect` calls it on EVERY connect and nothing ever calls `WSACleanup` — which is
-	// not the leak it looks like: Winsock reference-counts startups per process, an unmatched startup is
-	// reclaimed at process exit, and a repeat startup after the first is a refcount bump rather than a fresh
-	// initialization. So the cost is one cheap ws2_32 call per connect, paid on a path that is about to make
-	// a DNS query. ⛔ A guard would need a `.data` word and a compare-exchange; it is not written because
-	// nothing needs it, and that is different from it existing.
+	// (0 = success). Winsock REQUIRES this before any other ws2_32 call. This op is the raw call; the
+	// once-per-process guard is the caller's, `ManagedSocketRuntime.emitWinsockStartup`, which skips it once
+	// `__ms_wsa_started` is set. Nothing calls `WSACleanup`: Winsock reference-counts startups per process and
+	// reclaims an unmatched one at exit.
 	osSocketStartup(resultId ValueId, wsaDataPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// `osSocketResolve(result, hostPtr, hintsPtr, outPtr)` = `getaddrinfo(hostPtr, NULL, hintsPtr, outPtr)`,
@@ -3060,8 +3055,7 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		osPipeCreateOutbound gives SyscallClass.blocking
 		osPipePeek gives SyscallClass.blocking
 
-		// The two socket calls that really do wait on another party: resolution speaks to a resolver, and the
-		// startup loads and initialises the provider stack.
+		// The one socket call that really does wait on another party: resolution speaks to a resolver.
 		//
 		// ⚠ **THE FIVE DESCRIPTOR OPS ARE NOT HERE, AND THAT IS THIS TABLE'S ONE LANE-SHAPED ENTRY.** Every lane
 		// that reaches `StdLoweringShared.opTakesSyscallBracket` drives its sockets NON-BLOCKING
@@ -3069,7 +3063,6 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		// answer at once — `EAGAIN` rather than a wait — and the green thread suspends on the POLLER instead.
 		// x64-windows suspends on the poller too, one operation at a time rather than one descriptor at a time,
 		// and classifies its own imports through a table of its own (`X64GtRuntime.gtShimSyscallClassOf`).
-		osSocketStartup gives SyscallClass.blocking
 		osSocketResolve gives SyscallClass.blocking
 
 		// --- `schedulerBound`: the scheduler's own machinery, and the bounded-and-short remainder ---
@@ -3086,7 +3079,9 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		osSocketRecv gives SyscallClass.schedulerBound
 		osSocketClose gives SyscallClass.schedulerBound
 
-		//
+		// Every lane that consults this table lowers the startup to a constant and enters no kernel at all.
+		osSocketStartup gives SyscallClass.schedulerBound
+
 		// ⛔ The lock pair is the deadlock this header sets out. Do not move them.
 		osLockInit gives SyscallClass.schedulerBound
 		osLockEnter gives SyscallClass.schedulerBound
