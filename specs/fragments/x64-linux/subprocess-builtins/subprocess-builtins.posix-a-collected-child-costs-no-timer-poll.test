@@ -566,3 +566,435 @@ func @main {
     x64.popReg rbp
     x64.ret
 }
+
+func @__np_pd_wait_any {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 56
+    x64.movRegReg rbx, rcx
+    x64.leaRegGlobal rax, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegGlobal rcx, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.mov rcx, gs:[rcx]
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg notEqual, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg notEqual, rdx
+    x64.andRegReg rax, rax, rdx
+    x64.movRegImm32 rdx, 0
+    x64.subRegReg rdx, rdx, rax
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.leaRegRegImm32 rcx, rcx, 536
+    x64.leaRegGlobal rsi, __sched_lock_depth_sink
+    x64.andRegReg rcx, rcx, rdx
+    x64.andRegReg rsi, rsi, rax
+    x64.orRegReg rcx, rcx, rsi
+    x64.movRegImm32 rax, 1
+    x64.lock add [rcx], rax
+    x64.leaRegGlobal rax, __sched_lock
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.callDirect mrt_linux_lock_enter
+    x64.loadRegBaseDisp.word64 r12, [rbx + 0]
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegImm32 r13, 0
+  npgalifehdr:
+    x64.cmpRegReg r13, r12
+    x64.jcc less, npgalifebody
+  npgalookpre:
+    x64.movRegImm32 r13, 0
+  npgalookhdr:
+    x64.cmpRegReg r13, r12
+    x64.jcc less, npgalookbody
+  npgamarkpre:
+    x64.movRegImm32 r13, 0
+  npgamarkhdr:
+    x64.cmpRegReg r13, r12
+    x64.jcc less, npgamarkbody
+  npgapark:
+    x64.leaRegGlobal rax, __sched_lock
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.callDirect mrt_linux_lock_leave
+    x64.leaRegGlobal rax, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegGlobal rcx, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.mov rcx, gs:[rcx]
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg notEqual, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg notEqual, rdx
+    x64.andRegReg rax, rax, rdx
+    x64.movRegImm32 rdx, 0
+    x64.subRegReg rdx, rdx, rax
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.leaRegRegImm32 rcx, rcx, 536
+    x64.leaRegGlobal rsi, __sched_lock_depth_sink
+    x64.andRegReg rcx, rcx, rdx
+    x64.andRegReg rsi, rsi, rax
+    x64.orRegReg rcx, rcx, rsi
+    x64.movRegImm rax, 18446744073709551615
+    x64.lock add [rcx], rax
+    x64.movRegImm32 rcx, 10
+    x64.movRegReg rdx, rbx
+    x64.callDirect __gt_park
+  npgaresumed:
+    x64.leaRegGlobal rax, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegGlobal rcx, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.mov rcx, gs:[rcx]
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg notEqual, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg notEqual, rdx
+    x64.andRegReg rax, rax, rdx
+    x64.movRegImm32 rdx, 0
+    x64.subRegReg rdx, rdx, rax
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.leaRegRegImm32 rcx, rcx, 536
+    x64.leaRegGlobal rsi, __sched_lock_depth_sink
+    x64.andRegReg rcx, rcx, rdx
+    x64.andRegReg rsi, rsi, rax
+    x64.orRegReg rcx, rcx, rsi
+    x64.movRegImm32 rax, 1
+    x64.lock add [rcx], rax
+    x64.leaRegGlobal rax, __sched_lock
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.callDirect mrt_linux_lock_enter
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 r13, 0
+  npgaclearhdr:
+    x64.cmpRegReg r13, r12
+    x64.jcc less, npgaclearbody
+  npgadone:
+    x64.loadRegBaseDisp.word64 rbx, [rbx + 16]
+    x64.leaRegGlobal rax, __sched_lock
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.callDirect mrt_linux_lock_leave
+    x64.leaRegGlobal rax, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegGlobal rcx, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.mov rcx, gs:[rcx]
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg notEqual, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg notEqual, rdx
+    x64.andRegReg rax, rax, rdx
+    x64.movRegImm32 rdx, 0
+    x64.subRegReg rdx, rdx, rax
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.leaRegRegImm32 rcx, rcx, 536
+    x64.leaRegGlobal rsi, __sched_lock_depth_sink
+    x64.andRegReg rcx, rcx, rdx
+    x64.andRegReg rsi, rsi, rax
+    x64.orRegReg rcx, rcx, rsi
+    x64.movRegImm rax, 18446744073709551615
+    x64.lock add [rcx], rax
+    x64.movRegReg r8, rbx
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  npgaclearbody:
+    x64.imulRegRegImm32 rax, r13, 16
+    x64.leaRegRegImm32 rax, rax, 32
+    x64.leaRegRegReg r14, rbx, rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 0]
+    x64.movRegReg rcx, rax
+    x64.andRegImm32 rcx, rax, 1
+    x64.storeSlotReg slot0, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 1
+    x64.callDirect __np_pd_slot
+    x64.cmpRegImm32 r8, 0
+    x64.setccReg notEqual, rax
+    x64.loadRegSlot rcx, slot0
+    x64.imulRegRegImm32 rcx, rcx, 8
+    x64.leaRegRegImm32 rcx, rcx, 8
+    x64.leaRegRegReg rcx, r8, rcx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, npnopd#30
+  npgaclearact:
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.loadRegBaseDisp.word64 rdx, [r8 + 48]
+    x64.cmpRegReg rdx, rax
+    x64.jcc notEqual, npgaclearnext
+  npgaclearlive:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.movRegImm32 rdx, 0
+    x64.storeBaseDispReg.word64 [rcx + 0], rdx
+    x64.cmpRegImm32 rax, 3
+    x64.jcc notEqual, npholdnotwoken
+  npgaclearfired:
+    x64.movRegImm32 rax, 1
+    x64.movRegReg rcx, r13
+    x64.shlRegCl rax, rax
+    x64.aluBaseDispReg.bitOr [rbx + 16], rax
+    x64.jmp npgaclearnext
+  npholdnotwoken:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc equal, npgaclearnext
+  npholdnotended:
+    x64.leaRegGlobal rcx, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.mov rcx, gs:[rcx]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.cmpRegReg rax, rcx
+    x64.jcc notEqual, npholdlost
+  npholdpublished:
+    x64.movRegImm32 rdi, 109
+    x64.movReg32Reg32 rdi, rdi
+    x64.x64Syscall 231
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  npholdlost:
+    x64.movRegImm32 rdi, 115
+    x64.movReg32Reg32 rdi, rdi
+    x64.x64Syscall 231
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  npgaclearnext:
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.jmp npgaclearhdr
+  npnopd#30:
+    x64.movRegImm32 rdi, 104
+    x64.movReg32Reg32 rdi, rdi
+    x64.x64Syscall 231
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  npgamarkbody:
+    x64.imulRegRegImm32 rax, r13, 16
+    x64.leaRegRegImm32 rax, rax, 32
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegBaseDisp.word64 r14, [rax + 0]
+    x64.movRegReg r15, r14
+    x64.andRegImm32 r15, r14, 1
+    x64.movRegReg rcx, r14
+    x64.shrRegImm8 rcx, r14, 1
+    x64.callDirect __np_pd_slot
+    x64.cmpRegImm32 r8, 0
+    x64.setccReg notEqual, rax
+    x64.imulRegRegImm32 rcx, r15, 8
+    x64.leaRegRegImm32 rcx, rcx, 8
+    x64.leaRegRegReg rcx, r8, rcx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, npnopd#29
+  npgamarkact:
+    x64.movRegImm32 rax, 2
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.jmp npgamarkhdr
+  npnopd#29:
+    x64.movRegImm32 rdi, 104
+    x64.movReg32Reg32 rdi, rdi
+    x64.x64Syscall 231
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  npgalookbody:
+    x64.imulRegRegImm32 rax, r13, 16
+    x64.leaRegRegImm32 rax, rax, 32
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegBaseDisp.word64 r14, [rax + 0]
+    x64.movRegReg r15, r14
+    x64.andRegImm32 r15, r14, 1
+    x64.movRegReg rcx, r14
+    x64.shrRegImm8 rcx, r14, 1
+    x64.callDirect __np_pd_slot
+    x64.cmpRegImm32 r8, 0
+    x64.setccReg notEqual, rax
+    x64.imulRegRegImm32 rcx, r15, 8
+    x64.leaRegRegImm32 rcx, rcx, 8
+    x64.leaRegRegReg rcx, r8, rcx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, npnopd#26
+  npgalookact:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, npwsnotready
+  npgaready:
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.leaRegGlobal rax, __sched_lock
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.callDirect mrt_linux_lock_leave
+    x64.leaRegGlobal rax, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegGlobal rcx, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.mov rcx, gs:[rcx]
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg notEqual, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg notEqual, rdx
+    x64.andRegReg rax, rax, rdx
+    x64.movRegImm32 rdx, 0
+    x64.subRegReg rdx, rdx, rax
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.leaRegRegImm32 rcx, rcx, 536
+    x64.leaRegGlobal rsi, __sched_lock_depth_sink
+    x64.andRegReg rcx, rcx, rdx
+    x64.andRegReg rsi, rsi, rax
+    x64.orRegReg rcx, rcx, rsi
+    x64.movRegImm rax, 18446744073709551615
+    x64.lock add [rcx], rax
+    x64.movRegImm32 r8, 1
+    x64.movRegReg rcx, r13
+    x64.shlRegCl r8, r8
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  npwsnotready:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, npwsdouble
+  npgalooknext:
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.jmp npgalookhdr
+  npwsdouble:
+    x64.movRegImm32 rdi, 107
+    x64.movReg32Reg32 rdi, rdi
+    x64.x64Syscall 231
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  npnopd#26:
+    x64.movRegImm32 rdi, 104
+    x64.movReg32Reg32 rdi, rdi
+    x64.x64Syscall 231
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  npgalifebody:
+    x64.imulRegRegImm32 rax, r13, 16
+    x64.leaRegRegImm32 rax, rax, 32
+    x64.leaRegRegReg r14, rbx, rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 0]
+    x64.movRegReg rcx, rax
+    x64.andRegImm32 rcx, rax, 1
+    x64.storeSlotReg slot1, rcx
+    x64.movRegReg rcx, rax
+    x64.shrRegImm8 rcx, rax, 1
+    x64.callDirect __np_pd_slot
+    x64.cmpRegImm32 r8, 0
+    x64.setccReg notEqual, rax
+    x64.loadRegSlot rcx, slot1
+    x64.imulRegRegImm32 rcx, rcx, 8
+    x64.leaRegRegImm32 rcx, rcx, 8
+    x64.leaRegRegReg rcx, r8, rcx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, npnopd#25
+  npgalifeact:
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 48]
+    x64.cmpRegReg rcx, rax
+    x64.jcc notEqual, npgastale
+  npgalifenext:
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.jmp npgalifehdr
+  npgastale:
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.leaRegGlobal rax, __sched_lock
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.callDirect mrt_linux_lock_leave
+    x64.leaRegGlobal rax, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegGlobal rcx, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.mov rcx, gs:[rcx]
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg notEqual, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg notEqual, rdx
+    x64.andRegReg rax, rax, rdx
+    x64.movRegImm32 rdx, 0
+    x64.subRegReg rdx, rdx, rax
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.leaRegRegImm32 rcx, rcx, 536
+    x64.leaRegGlobal rsi, __sched_lock_depth_sink
+    x64.andRegReg rcx, rcx, rdx
+    x64.andRegReg rsi, rsi, rax
+    x64.orRegReg rcx, rcx, rsi
+    x64.movRegImm rax, 18446744073709551615
+    x64.lock add [rcx], rax
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  npnopd#25:
+    x64.movRegImm32 rdi, 104
+    x64.movReg32Reg32 rdi, rdi
+    x64.x64Syscall 231
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

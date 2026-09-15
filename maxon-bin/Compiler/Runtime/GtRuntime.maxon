@@ -6700,7 +6700,7 @@ end 'buildGtIoRead'
 // stream. stderr is read post-exit only in the harness, so it never multiplexes against a live stdout read.
 let SubpTableLabel = b"__subp_table"
 let SubpMaxHandles = 64
-let SubpSlotBytes = 184
+let SubpSlotBytes = 192
 
 // Slot fields (i64). The two stream sub-blocks are identical 5-word layouts (readEnd/bufPtr/bufCap/bufLen/eof), so
 // the reader takes a stream-base offset and indexes within. The persistent buffers (bufPtr/bytesOut/writeBuf)
@@ -6718,13 +6718,13 @@ export let SubpStderrBase = 72
 let SubpSlotWriteBuf = 112
 let SubpSlotWriteCap = 120
 
-// ⭐ **THE SLOT GENERATION — what makes a released handle's parked reader HARMLESS.** `subpSpawn` bumps it when it
-// CLAIMS a slot, so every (slot, generation) pair names one handle for all time. A reader captures the generation
-// at PARK time and re-reads it on resume: if they differ, the slot was released and re-spawned into a DIFFERENT
-// handle while the reader slept, so the reader returns its own empty/EOF result and writes NOTHING back — without
-// this, `subpRelease(h)` on a parked reader let it resume and stamp its EOF/bufLen into whatever handle now owns
-// the slot, silently making the NEW handle read EOF (memory-safe, but a wrong answer). Read and written ONLY by
-// GT-side code (spawn + the reader's resume), so no cross-thread state.
+// ⭐ **THE SLOT GENERATION — what tells a slot's current child from the one a parked reader began with.**
+// `subpSpawn` bumps it when it CLAIMS a slot, so every (slot, generation) pair names one handle for all time. A
+// streaming reader captures it at PARK time and re-reads it on resume: a difference means the slot was released
+// and re-spawned into a DIFFERENT handle while the reader slept, so it answers its own EOF and writes nothing
+// back into the new handle's buffers. Plain loads and stores under no lock: the spawn's bump and a reader's
+// compare on another processor are not ordered against each other, so the compare detects a claim that has
+// FINISHED and is no fence against one in flight — which is why a collect rides `SubpSlotCollector` instead.
 let SubpSlotGeneration = 128
 
 // ⭐ **THE FIVE FIELDS THE ATTACHED SPAWN ADDED.** The streaming half needed none of them: it never reports a
@@ -6758,10 +6758,23 @@ export let SubpSlotWaitStartMs = 168 as ByteOffset
 // pushes one chunk per pass between drains, and the loop's own idle wait — which never holds a machine — is
 // what makes the waiting free.
 //
-// ⚠ Negative is the unarmed spelling because `osTickCountMs` is non-negative on every lane, and 176 is the
-// last free word of `SubpSlotBytes` (184): a second word would move the handle table's stride.
+// ⚠ Negative is the unarmed spelling because `osTickCountMs` is non-negative on every lane.
 export let SubpSlotStdinFeedAt = 176 as ByteOffset
 let SubpStdinFeedUnarmed = -1 as ParsedInt
+
+// ⛔⛔ **THE COLLECT INTERLOCK — the one word a collect and a release contend for, and the last word of the
+// slot.** Nothing else serialises `__gt_subp_wait_collect` against `__gt_subp_release`: the release closes the
+// pipes, zeroes the handles and clears `inUse` under no lock, so a collect on another processor can pass any
+// test of those words and then read a zeroed handle into a wait, a kill or an exit read; and a re-spawn claims
+// `inUse` before it bumps `SubpSlotGeneration`, so no order of reading two unlocked words closes it. The word
+// is taken by CAS instead: a collect takes `free -> held` at entry and stores `free` at every exit, a release
+// takes `free -> released` for good, and either party finding the word taken stops at
+// `RuntimeAbort.subpCollectSlotReleased`. The spawn's claim stores `free`, so a reused slot is collectable
+// again.
+let SubpSlotCollector = 184 as ByteOffset
+let SubpCollectorFree = 0 as ParsedInt
+export let SubpCollectorHeld = 1 as ParsedInt
+let SubpCollectorReleased = 2 as ParsedInt
 export let SubpStreamReadEnd = 0
 let SubpStreamBufPtr = 8
 let SubpStreamBufCap = 16
@@ -6960,6 +6973,28 @@ export function emitSubpRequireHandle(module StdModule, func IrFunction, ids Val
 
 	return good
 end 'emitSubpRequireHandle'
+
+// Take `slot`'s collect interlock (`SubpSlotCollector`) from `free` to `replacement`, or stop: a taken word is a
+// collect still holding the slot or a release that already took it. EXPORTED for the collect, which takes
+// `held`; the release takes `released`. Terminates `cur` and answers the block where the word is this caller's.
+export function emitSubpRequireCollectorTaken(module StdModule, func IrFunction, cur IrBlock, slot ValueId, replacement ParsedInt, ids ValueMinter) returns IrBlock
+	let taken = module.addBlock(func, label: b"subpcolltaken", heat: BlockHeat.normal)
+	var contended = module.addBlock(func, label: b"subpcollheld", heat: BlockHeat.normal)
+
+	let wordAddr = emitFieldAddr(module, block: cur, record: slot, offset: SubpSlotCollector, ids: ids)
+	let won = ids.mint()
+	module.appendOp(cur, op: StdOp.atomicCas(won, addrId: wordAddr, expectedId: emitConst(module, block: cur, value: SubpCollectorFree, ids: ids), replacementId: emitConst(module, block: cur, value: replacement, ids: ids)))
+	let lost = emitCmp(module, block: cur, a: won, b: emitConst(module, block: cur, value: AtomicCasFailed, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(lost, thenBlockId: contended.id, elseBlockId: taken.id))
+	emitRuntimeAbort(module, func: func, block: contended, abort: RuntimeAbort.subpCollectSlotReleased, ids: ids)
+
+	return taken
+end 'emitSubpRequireCollectorTaken'
+
+// Leave `slot`'s collect interlock free: the collect's every exit, and the spawn's claim. EXPORTED for the former.
+export function emitSubpCollectorFree(module StdModule, block IrBlock, slot ValueId, ids ValueMinter)
+	emitStoreField(module, block: block, record: slot, offset: SubpSlotCollector, value: emitConst(module, block: block, value: SubpCollectorFree, ids: ids))
+end 'emitSubpCollectorFree'
 
 // ⭐ **THE ONE DOOR FROM A CALLER'S HANDLE TO A SLOT ADDRESS** — see the roster rule above. The address is
 // freshly recomputed in `block` rather than threaded, because a pointer threaded across a loop is a live
@@ -7462,8 +7497,10 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 
 	module.setTerminator(noSlot, op: StdOp.ret(negOne))
 
-	// gotSlot: the inheritable SECURITY_ATTRIBUTES every child-facing pipe end is created with, the scratch the
-	// six child-side handles are parked in, and the NUL device name the `none`/`discard` kinds open.
+	// gotSlot: the slot is this spawn's, so its collect interlock starts free; then the inheritable
+	// SECURITY_ATTRIBUTES every child-facing pipe end is created with, the scratch the six child-side handles
+	// are parked in, and the NUL device name the `none`/`discard` kinds open.
+	emitSubpCollectorFree(module, block: gotSlot, slot: probeSlot, ids: ids)
 	let saPtr = emitSubpSecurityAttributes(module, block: gotSlot, ids: ids)
 	let childScratchSizeConst = emitConst(module, block: gotSlot, value: SubpChildScratchBytes as ParsedInt, ids: ids)
 	let childScratch = ids.mint()
@@ -8498,7 +8535,8 @@ function buildSubpRelease(module StdModule)
 	// closing three garbage words as HANDLEs.
 	var live = emitSubpRequireHandle(module, func: func, ids: ids, cur: entry, handle: handle, whenBad: done)
 	let slot = emitSubpSlotOf(module, block: live, ids: ids, handle: handle)
-	module.setTerminator(live, op: StdOp.branch(doRelease.id))
+	var owned = emitSubpRequireCollectorTaken(module, func: func, cur: live, slot: slot, replacement: SubpCollectorReleased, ids: ids)
+	module.setTerminator(owned, op: StdOp.branch(doRelease.id))
 
 	// doRelease: close the stdin write end only if still open (closeStdin may have already closed it).
 	let stdinWrite = emitLoadField(module, block: doRelease, record: slot, offset: SubpSlotStdinWrite, ids: ids)

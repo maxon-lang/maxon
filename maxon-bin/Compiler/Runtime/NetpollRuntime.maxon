@@ -2697,24 +2697,33 @@ end 'emitNetpollBranchOnPipe'
 //
 // `fired` is where a resumed wait gathers the members it found ready, one bit per member index; it is the
 // wait's own scratch, written and read inside one hold of `__sched_lock`.
+//
+// `stale` is `__np_pd_wait_any`'s third answer: 1 when it refused the group because a member's record had left
+// the life the caller began its operation in (`GroupSlotGen`), 0 on every other road. It is the caller's to
+// read after a 0, which an expired or renounced wait also answers.
 let GroupOffCount = 0 as ByteOffset
 let GroupOffDeadline = 8 as ByteOffset
 let GroupOffFired = 16 as ByteOffset
-let GroupOffArgs = 24 as ByteOffset
+let GroupOffStale = 24 as ByteOffset
+let GroupOffArgs = 32 as ByteOffset
 
 // The most members a group may hold: `__np_pd_wait_any` answers one bit per member in a 64-bit word. EXPORTED
 // so a caller sizing its group can be held to it where the size is chosen.
 export let NetpollGroupMaxMembers = 64 as ParsedInt
 
-// ⭐⭐⭐ **A MEMBER IS A PAIR, AND THE SECOND HALF IS THE RECORD'S GENERATION AT MARK TIME.** A single-source
-// wait carries its generation in `GtOffParkGen` and `__np_pd_commit` compares it after the context switch;
-// several sources need one generation EACH, because the members are different records and any one of them can
-// be closed and reopened while this thread is switched out.
+// ⭐⭐⭐ **A MEMBER IS A PAIR, AND THE SECOND HALF IS THE RECORD'S GENERATION WHEN THE CALLER'S OPERATION
+// BEGAN.** It is written at the build, by `emitNetpollGroupSetMember` from the `__np_pd_op_begin` the caller
+// made on that source, and read by every walk: the life test at `__np_pd_wait_any`'s entry, the clear walk
+// after the park, and `__np_pd_commit`'s test after the context switch. A single-source wait carries the same
+// fact in `GtOffParkGen`; several sources need one EACH, because the members are different records and any one
+// of them can be closed and reopened between the build and the lock, or while this thread is switched out.
 //
-// ⛔⛔ **WITHOUT IT, THE COMMIT PUBLISHES INTO THE NEW OWNER'S DIRECTION WORD** — see `emitPdMarkStands`, whose
-// reasoning a group is not exempt from: `subpRelease` is a public builtin, `__np_pipe_close` reaches
-// `__np_pd_release`, and co-ownership of a handle under a parked operation is what the socket band already
-// documents as ordinary.
+// ⛔⛔ **A GENERATION TAKEN UNDER THE WAIT'S OWN LOCK WOULD BE THE NEXT OWNER'S.** The group is built without
+// `__sched_lock`, so a release that lands between the build and the lock resets the record and bumps its
+// generation, and a stamp read at the lock then agrees with the record it is about to mark — publishing this
+// thread into the new owner's direction word (`emitPdMarkStands`). `subpRelease` is a public builtin,
+// `__np_pipe_close` reaches `__np_pd_release`, and co-ownership of a handle under a parked operation is what the
+// socket band documents as ordinary, so the stamp must predate the gap.
 let GroupSlotArg = 0 as ByteOffset
 let GroupSlotGen = 8 as ByteOffset
 let GroupSlotBytes = 16 as ParsedInt
@@ -2747,12 +2756,21 @@ function emitNetpollGroupSlotAddr(module StdModule, block IrBlock, group ValueId
 	return emitBin(module, block: block, a: group, b: offset, opcode: StdBinOpcode.add, ids: ids)
 end 'emitNetpollGroupSlotAddr'
 
-// Write one member's `(fd, read)` pair into `group` at `index`. EXPORTED for the collect drain, which fills a
-// group from whichever of its sources are still live.
-export function emitNetpollGroupSetMember(module StdModule, block IrBlock, group ValueId, index ValueId, fd ValueId, ids ValueMinter)
+// Write one member into `group` at `index`: its `(fd, read)` pair and `gen`, the generation `__np_pd_op_begin`
+// answered for `fd` (see `GroupSlotGen`). EXPORTED for the collect drain, which fills a group from whichever of
+// its sources are still live.
+export function emitNetpollGroupSetMember(module StdModule, block IrBlock, group ValueId, index ValueId, fd ValueId, gen ValueId, ids ValueMinter)
 	let arg = emitNetpollParkArg(module, block: block, fd: fd, mode: emitConst(module, block: block, value: NetpollModeRead, ids: ids), ids: ids)
-	emitStoreField(module, block: block, record: emitNetpollGroupSlotAddr(module, block: block, group: group, index: index, ids: ids), offset: GroupSlotArg, value: arg)
+	let slot = emitNetpollGroupSlotAddr(module, block: block, group: group, index: index, ids: ids)
+	emitStoreField(module, block: block, record: slot, offset: GroupSlotArg, value: arg)
+	emitStoreField(module, block: block, record: slot, offset: GroupSlotGen, value: gen)
 end 'emitNetpollGroupSetMember'
+
+// Whether the last `__np_pd_wait_any` on `group` refused it for a member whose record left the caller's life —
+// see `GroupOffStale`. EXPORTED for the same caller.
+export function emitNetpollGroupStale(module StdModule, block IrBlock, group ValueId, ids ValueMinter) returns ValueId
+	return emitLoadField(module, block: block, record: group, offset: GroupOffStale, ids: ids)
+end 'emitNetpollGroupStale'
 
 // EXPORTED for the same caller: how many members the group holds, and when the wait gives up.
 export function emitNetpollGroupSetCount(module StdModule, block IrBlock, group ValueId, count ValueId)
@@ -2815,6 +2833,16 @@ function emitNetpollGroupWalk(module StdModule, func IrFunction, pre IrBlock, hd
 	return NetpollGroupWalk.create(index, member: NetpollGroupMember.create(slot, pd: pd, gpp: emitPdDirectionAddr(module, block: body, pd: pd, base: PdOffRg, mode: mode, ids: ids)))
 end 'emitNetpollGroupWalk'
 
+// The generation `member`'s record was in when the caller's operation began — see `GroupSlotGen`.
+function emitNetpollMemberBeganGen(module StdModule, block IrBlock, member NetpollGroupMember, ids ValueMinter) returns ValueId
+	return emitLoadField(module, block: block, record: member.slot, offset: GroupSlotGen, ids: ids)
+end 'emitNetpollMemberBeganGen'
+
+// Is `member`'s record still in the life the caller began in. `__sched_lock` held.
+function emitNetpollMemberInBeganLife(module StdModule, block IrBlock, member NetpollGroupMember, ids ValueMinter) returns ValueId
+	return emitPdSameLife(module, block: block, pd: member.pd, gen: emitNetpollMemberBeganGen(module, block: block, member: member, ids: ids), ids: ids)
+end 'emitNetpollMemberInBeganLife'
+
 // Member `index`'s bit in the answer `__np_pd_wait_any` gives.
 function emitNetpollGroupMemberBit(module StdModule, block IrBlock, index ValueId, ids ValueMinter) returns ValueId
 	return emitBin(module, block: block, a: emitConst(module, block: block, value: 1, ids: ids), b: index, opcode: StdBinOpcode.shl, ids: ids)
@@ -2833,16 +2861,26 @@ end 'emitNetpollGroupWalkEnd'
 // ready is CONSUMED and the wait never begins; otherwise every member is marked `PdWait` and the publication
 // happens after the context switch, in `__np_pd_commit`, exactly as it does for one source.
 //
-// ⭐⭐ **IT ANSWERS EVERY MEMBER WHOSE READINESS IT CONSUMED, AND NOTHING ELSE** — the one found ready at the
-// look, or, after a park, the one that ended it plus any whose readiness landed before the thread resumed. A
-// consumed readiness is gone from the poller, so the answer is the caller's only record of it — this band's
-// header says what losing it costs. An expired or renounced wait can answer 0, and its caller goes round its
-// own loop as a renounced `__gt_sleep` does.
+// ⭐⭐ **IT GIVES ONE OF THREE ANSWERS.** Every member whose readiness it consumed, and nothing else — the one
+// found ready at the look, or, after a park, the one that ended it plus any whose readiness landed before the
+// thread resumed; a consumed readiness is gone from the poller, so the answer is the caller's only record of
+// it, and this band's header says what losing it costs. 0 after an expired or renounced wait, whose caller goes
+// round its own loop as a renounced `__gt_sleep` does. And 0 with `GroupOffStale` set when a member's record
+// has left the life the caller began its operation in (`GroupSlotGen`): the life test runs over EVERY member
+// before any word is looked at or marked, under the one lock hold, so a refusal leaves no mark to undo and a
+// group that passes it is marked against records the stamps still name. `__np_pd_wait` makes the same refusal
+// of its one source; here the caller decides what a moved member means.
 function buildNetpollPdWaitAny(module StdModule)
 	var func = IrFunction.createFromStd(NetpollPdWaitAnyName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var lifeHdr = module.addBlock(func, label: b"npgalifehdr", heat: BlockHeat.normal)
+	var lifeBody = module.addBlock(func, label: b"npgalifebody", heat: BlockHeat.normal)
+	var lifeAct = module.addBlock(func, label: b"npgalifeact", heat: BlockHeat.normal)
+	var lifeNext = module.addBlock(func, label: b"npgalifenext", heat: BlockHeat.normal)
+	var refuse = module.addBlock(func, label: b"npgastale", heat: BlockHeat.normal)
+	var lookPre = module.addBlock(func, label: b"npgalookpre", heat: BlockHeat.normal)
 	var lookHdr = module.addBlock(func, label: b"npgalookhdr", heat: BlockHeat.normal)
 	var lookBody = module.addBlock(func, label: b"npgalookbody", heat: BlockHeat.normal)
 	var lookAct = module.addBlock(func, label: b"npgalookact", heat: BlockHeat.normal)
@@ -2867,8 +2905,18 @@ function buildNetpollPdWaitAny(module StdModule)
 
 	emitSchedLockEnter(module, block: entry, ids: ids)
 	let count = emitLoadField(module, block: entry, record: group, offset: GroupOffCount, ids: ids)
+	emitStoreField(module, block: entry, record: group, offset: GroupOffStale, value: emitConst(module, block: entry, value: 0, ids: ids))
 
-	let look = emitNetpollGroupWalk(module, func: func, pre: entry, hdr: lookHdr, body: lookBody, act: lookAct, exhausted: markPre, group: group, count: count, ids: ids)
+	// A member whose record left the caller's life refuses the whole group before any word is touched.
+	let life = emitNetpollGroupWalk(module, func: func, pre: entry, hdr: lifeHdr, body: lifeBody, act: lifeAct, exhausted: lookPre, group: group, count: count, ids: ids)
+	module.setTerminator(lifeAct, op: StdOp.condBranch(emitNetpollMemberInBeganLife(module, block: lifeAct, member: life.member, ids: ids), thenBlockId: lifeNext.id, elseBlockId: refuse.id))
+	emitNetpollGroupWalkEnd(module, next: lifeNext, hdr: lifeHdr, index: life.index, ids: ids)
+
+	emitStoreField(module, block: refuse, record: group, offset: GroupOffStale, value: emitConst(module, block: refuse, value: 1, ids: ids))
+	emitSchedLockLeave(module, block: refuse, ids: ids)
+	module.setTerminator(refuse, op: StdOp.ret(emitConst(module, block: refuse, value: 0, ids: ids)))
+
+	let look = emitNetpollGroupWalk(module, func: func, pre: lookPre, hdr: lookHdr, body: lookBody, act: lookAct, exhausted: markPre, group: group, count: count, ids: ids)
 	emitNetpollBranchOnWaitStart(module, func: func, cur: lookAct, gpp: look.member.gpp, ready: takeReady, free: lookNext, ids: ids)
 
 	// The caller goes round its own loop rather than suspending.
@@ -2876,27 +2924,26 @@ function buildNetpollPdWaitAny(module StdModule)
 	module.setTerminator(takeReady, op: StdOp.ret(emitNetpollGroupMemberBit(module, block: takeReady, index: look.index, ids: ids)))
 	emitNetpollGroupWalkEnd(module, next: lookNext, hdr: lookHdr, index: look.index, ids: ids)
 
-	// Nothing was ready: mark every member, STAMP THE GENERATION the mark was made against, and switch out.
-	// The single-source wait writes exactly this into `GtOffParkGen`; a group needs one per member, because the
-	// members are different records — see `GroupSlotGen`.
+	// Nothing was ready: mark every member and switch out. The stamp the commit and the clear walk compare
+	// against is the member's begin generation (`GroupSlotGen`), which the life test above found the record
+	// still in, and the lock has been held since.
 	let mark = emitNetpollGroupWalk(module, func: func, pre: markPre, hdr: markHdr, body: markBody, act: markAct, exhausted: park, group: group, count: count, ids: ids)
 	emitStoreField(module, block: markAct, record: mark.member.gpp, offset: 0, value: emitConst(module, block: markAct, value: PdWait, ids: ids))
-	emitStoreField(module, block: markAct, record: mark.member.slot, offset: GroupSlotGen, value: emitLoadField(module, block: markAct, record: mark.member.pd, offset: PdOffGen, ids: ids))
 	emitNetpollGroupWalkEnd(module, next: markAct, hdr: markHdr, index: mark.index, ids: ids)
 
 	emitSchedLockLeave(module, block: park, ids: ids)
 	emitGtPark(module, ids: ids, cur: park, kind: GtParkKindNetpollAny, arg: group, cont: resumed)
 
-	// The wait is over, and every member word still in the life this wait marked is held for this thread and is
-	// this group's to settle (`emitNetpollSettleHold`). A `PdWoken` is a readiness consumed here — the member that
-	// fired, one that landed before the thread ran, or one that landed before the commit — so it is REPORTED as
-	// well as cleared; a `PdWait` is a member nothing fired on. A word in another life belongs to that life's
-	// owner and is not touched: the release that recycled it readied this thread and reset the words itself.
+	// The wait is over, and every member word still in the life the caller began in — the life this wait
+	// marked, by the test above — is held for this thread and is this group's to settle
+	// (`emitNetpollSettleHold`). A `PdWoken` is a readiness consumed here — the member that fired, one that
+	// landed before the thread ran, or one that landed before the commit — so it is REPORTED as well as
+	// cleared; a `PdWait` is a member nothing fired on. A word in another life belongs to that life's owner
+	// and is not touched: the release that recycled it readied this thread and reset the words itself.
 	emitSchedLockEnter(module, block: resumed, ids: ids)
 	emitStoreField(module, block: resumed, record: group, offset: GroupOffFired, value: emitConst(module, block: resumed, value: 0, ids: ids))
 	let clear = emitNetpollGroupWalk(module, func: func, pre: resumed, hdr: clearHdr, body: clearBody, act: clearAct, exhausted: doneBlock, group: group, count: count, ids: ids)
-	let markedGen = emitLoadField(module, block: clearAct, record: clear.member.slot, offset: GroupSlotGen, ids: ids)
-	module.setTerminator(clearAct, op: StdOp.condBranch(emitPdSameLife(module, block: clearAct, pd: clear.member.pd, gen: markedGen, ids: ids), thenBlockId: clearLive.id, elseBlockId: clearNext.id))
+	module.setTerminator(clearAct, op: StdOp.condBranch(emitNetpollMemberInBeganLife(module, block: clearAct, member: clear.member, ids: ids), thenBlockId: clearLive.id, elseBlockId: clearNext.id))
 
 	emitNetpollSettleHold(module, func: func, cur: clearLive, gpp: clear.member.gpp, ended: PdWait, woken: clearFired, unwoken: clearNext, ids: ids)
 
@@ -2963,11 +3010,10 @@ function emitNetpollCommitGroup(module StdModule, func IrFunction, cur IrBlock, 
 	let group = emitLoadField(module, block: cur, record: gt, offset: GtOffParkArg, ids: ids)
 	let count = emitLoadField(module, block: cur, record: group, offset: GroupOffCount, ids: ids)
 
-	// Each member is asked against the stamp `markAct` took; one mark that no longer stands takes `resumeNow`,
-	// whose wake the caller already pays for.
+	// Each member is asked against its begin generation (`GroupSlotGen`); one mark that no longer stands takes
+	// `resumeNow`, whose wake the caller already pays for.
 	let test = emitNetpollGroupWalk(module, func: func, pre: cur, hdr: testHdr, body: testBody, act: testAct, exhausted: publishPre, group: group, count: count, ids: ids)
-	let markedGen = emitLoadField(module, block: testAct, record: test.member.slot, offset: GroupSlotGen, ids: ids)
-	let ourMark = emitPdMarkStands(module, block: testAct, gpp: test.member.gpp, pd: test.member.pd, markedGen: markedGen, ids: ids)
+	let ourMark = emitPdMarkStands(module, block: testAct, gpp: test.member.gpp, pd: test.member.pd, markedGen: emitNetpollMemberBeganGen(module, block: testAct, member: test.member, ids: ids), ids: ids)
 	module.setTerminator(testAct, op: StdOp.condBranch(ourMark, thenBlockId: testNext.id, elseBlockId: resumeNow.id))
 	emitNetpollGroupWalkEnd(module, next: testNext, hdr: testHdr, index: test.index, ids: ids)
 

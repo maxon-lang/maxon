@@ -1536,28 +1536,31 @@ function buildSubpWaitCollect(module StdModule, target Target)
 	let failure = emitConst(module, block: bad, value: SubpFailure, ids: ids)
 	module.setTerminator(bad, op: StdOp.ret(failure))
 
+	// ⛔ **THE SLOT IS TAKEN BEFORE ANY OF ITS HANDLES IS READ** (`GtRuntime.SubpSlotCollector`): a release or
+	// another collect that holds it is the stop, and `reap` — the one road out with a result — gives it back.
 	var good = emitSubpRequireHandle(module, func: func, ids: ids, cur: entry, handle: handle, whenBad: bad)
-	let state = emitSubpScratch(module, block: good, ids: ids, size: WcBytes)
-	emitStoreField(module, block: good, record: state, offset: WcHandle, value: handle)
-	let startMs = ids.mint()
-	module.appendOp(good, op: StdOp.osTickCountMs(startMs))
-	emitStoreField(module, block: good, record: state, offset: WcStartMs, value: startMs)
 	let slotS = emitSubpSlotOf(module, block: good, ids: ids, handle: handle)
-	emitStoreField(module, block: good, record: slotS, offset: SubpSlotWaitStartMs, value: startMs)
-	let initialCap = emitConst(module, block: good, value: SubpCollectInitialBytes, ids: ids)
-	let outBuf = emitRawAlloc(module, block: good, byteCount: initialCap, ids: ids)
-	emitStoreField(module, block: good, record: state, offset: WcOutBuf, value: outBuf)
-	emitStoreField(module, block: good, record: state, offset: WcOutCap, value: initialCap)
-	let errBuf = emitRawAlloc(module, block: good, byteCount: initialCap, ids: ids)
-	emitStoreField(module, block: good, record: state, offset: WcErrBuf, value: errBuf)
-	emitStoreField(module, block: good, record: state, offset: WcErrCap, value: initialCap)
-	let statusExited = emitConst(module, block: good, value: SubpStatusExited, ids: ids)
-	emitStoreField(module, block: good, record: state, offset: WcStatus, value: statusExited)
+	var held = emitSubpRequireCollectorTaken(module, func: func, cur: good, slot: slotS, replacement: SubpCollectorHeld, ids: ids)
+	let state = emitSubpScratch(module, block: held, ids: ids, size: WcBytes)
+	emitStoreField(module, block: held, record: state, offset: WcHandle, value: handle)
+	let startMs = ids.mint()
+	module.appendOp(held, op: StdOp.osTickCountMs(startMs))
+	emitStoreField(module, block: held, record: state, offset: WcStartMs, value: startMs)
+	emitStoreField(module, block: held, record: slotS, offset: SubpSlotWaitStartMs, value: startMs)
+	let initialCap = emitConst(module, block: held, value: SubpCollectInitialBytes, ids: ids)
+	let outBuf = emitRawAlloc(module, block: held, byteCount: initialCap, ids: ids)
+	emitStoreField(module, block: held, record: state, offset: WcOutBuf, value: outBuf)
+	emitStoreField(module, block: held, record: state, offset: WcOutCap, value: initialCap)
+	let errBuf = emitRawAlloc(module, block: held, byteCount: initialCap, ids: ids)
+	emitStoreField(module, block: held, record: state, offset: WcErrBuf, value: errBuf)
+	emitStoreField(module, block: held, record: state, offset: WcErrCap, value: initialCap)
+	let statusExited = emitConst(module, block: held, value: SubpStatusExited, ids: ids)
+	emitStoreField(module, block: held, record: state, offset: WcStatus, value: statusExited)
 
 	// ⭐⭐ **THE CHILD JOINS THE POLLER FOR THE LENGTH OF THIS WAIT**, so an idle pass has something to
 	// suspend on that is not a clock. On a lane whose pipes ride a completion port the drain still yields, so
 	// there is no source to open — `emitSubpOpenChildSource` emits nothing there.
-	var opened = emitSubpOpenChildSource(module, func: func, ids: ids, cur: good, target: target, state: state, handle: handle)
+	var opened = emitSubpOpenChildSource(module, func: func, ids: ids, cur: held, target: target, state: state, handle: handle)
 
 	let zeroD = emitConst(module, block: opened, value: 0, ids: ids)
 	let noDeadline = emitCmp(module, block: opened, a: timeoutMs, b: zeroD, pred: StdCmpPred.eq, ids: ids)
@@ -1669,6 +1672,7 @@ function buildSubpWaitCollect(module StdModule, target Target)
 	let errLenF = emitLoadField(module, block: reap, record: state, offset: WcErrLen, ids: ids)
 	emitStoreField(module, block: reap, record: result, offset: ResErrBuf, value: errBufF)
 	emitStoreField(module, block: reap, record: result, offset: ResErrLen, value: errLenF)
+	emitSubpCollectorFree(module, block: reap, slot: slotF, ids: ids)
 	module.setTerminator(reap, op: StdOp.ret(result))
 
 	module.functions.push(func)
@@ -1709,16 +1713,25 @@ function emitSubpWaitForAnySource(module StdModule, func IrFunction, ids ValueMi
 	module.setTerminator(waitBlock, op: StdOp.condBranch(haveOne, thenBlockId: parkOn.id, elseBlockId: noSource.id))
 	emitRuntimeAbort(module, func: func, block: noSource, abort: RuntimeAbort.subpCollectIdleWithNoSource, ids: ids)
 
-	// The child's readiness is consumed by this wait and never reported again, so its bit in the answer is
-	// recorded as the exit it is.
+	// The wait answers 0 for a group it refused as well as for one that expired, so the group is asked
+	// (`emitNetpollGroupStale`): a member whose record left the life this pass began in is a pipe the slot no
+	// longer owns, which the interlock makes a program error rather than a wait to go round again.
 	var bounded = emitSubpGroupDeadline(module, func: func, ids: ids, cur: parkOn, state: state, group: group)
 	let fired = ids.mint()
 	module.appendOp(bounded, op: StdOp.call(fired, callee: NetpollPdWaitAnyName, args: argsOf(group)))
-	let childFired = emitBin(module, block: bounded, a: fired, b: emitLoadField(module, block: bounded, record: state, offset: WcChildMemberBit, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
-	let exitLearned = emitCmp(module, block: bounded, a: childFired, b: emitConst(module, block: bounded, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	let knownBefore = emitLoadField(module, block: bounded, record: state, offset: WcChildExited, ids: ids)
-	emitStoreField(module, block: bounded, record: state, offset: WcChildExited, value: emitBin(module, block: bounded, a: knownBefore, b: exitLearned, opcode: StdBinOpcode.bitOr, ids: ids))
-	module.setTerminator(bounded, op: StdOp.branch(cont.id))
+	var consume = module.addBlock(func, label: b"wcwaitfired", heat: BlockHeat.normal)
+	var staleStop = module.addBlock(func, label: b"wcwaitstale", heat: BlockHeat.normal)
+	let stale = emitCmp(module, block: bounded, a: emitNetpollGroupStale(module, block: bounded, group: group, ids: ids), b: emitConst(module, block: bounded, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(bounded, op: StdOp.condBranch(stale, thenBlockId: staleStop.id, elseBlockId: consume.id))
+	emitRuntimeAbort(module, func: func, block: staleStop, abort: RuntimeAbort.subpCollectSlotReleased, ids: ids)
+
+	// The child's readiness is consumed by this wait and never reported again, so its bit in the answer is
+	// recorded as the exit it is.
+	let childFired = emitBin(module, block: consume, a: fired, b: emitLoadField(module, block: consume, record: state, offset: WcChildMemberBit, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	let exitLearned = emitCmp(module, block: consume, a: childFired, b: emitConst(module, block: consume, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	let knownBefore = emitLoadField(module, block: consume, record: state, offset: WcChildExited, ids: ids)
+	emitStoreField(module, block: consume, record: state, offset: WcChildExited, value: emitBin(module, block: consume, a: knownBefore, b: exitLearned, opcode: StdBinOpcode.bitOr, ids: ids))
+	module.setTerminator(consume, op: StdOp.branch(cont.id))
 end 'emitSubpWaitForAnySource'
 
 // ⛔⛔ **A WAIT WITH A DEADLINE MUST STILL END AT IT, AND THE SOURCES CANNOT PROMISE THAT.** A child that
@@ -1839,10 +1852,13 @@ function emitSubpGroupAddChild(module StdModule, func IrFunction, ids ValueMinte
 	return cont
 end 'emitSubpGroupAddChild'
 
-// Append `fd` to the group and answer the member index it took.
+// Append `fd` to the group and answer the member index it took. The member carries the generation its record
+// is in NOW, from `__np_pd_op_begin`, so a release between here and the wait's lock is a refusal there rather
+// than a mark in the next owner's record (`NetpollRuntime.GroupSlotGen`).
 function emitSubpGroupAdd(module StdModule, block IrBlock, ids ValueMinter, state ValueId, group ValueId, fd ValueId) returns ValueId
 	let index = emitLoadField(module, block: block, record: state, offset: WcGroupCount, ids: ids)
-	emitNetpollGroupSetMember(module, block: block, group: group, index: index, fd: fd, ids: ids)
+	let gen = emitNetpollPdOpBegin(module, block: block, source: fd, ids: ids)
+	emitNetpollGroupSetMember(module, block: block, group: group, index: index, fd: fd, gen: gen, ids: ids)
 	emitStoreField(module, block: block, record: state, offset: WcGroupCount, value: emitBin(module, block: block, a: index, b: emitConst(module, block: block, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids))
 	return index
 end 'emitSubpGroupAdd'

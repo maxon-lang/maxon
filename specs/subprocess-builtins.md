@@ -278,6 +278,12 @@ would therefore hold whatever the drain does.
 QUIET.** `outLen` and `matches` are what stop this case passing on an empty capture, exactly as
 `collect-echo`'s printed line stops that one passing on its exit code alone. `sh` ends the line with a bare
 LF, so `hi\n` is THREE bytes.
+
+⭐ **THE GROUP WAIT'S BODY IS PINNED HERE BECAUSE THIS IS THE COLLECT THAT PARKS IN IT.** The pinned
+`__np_pd_wait_any` marks a member only while its record is still in the life the collect began in — a compare
+of the generation the member carries from the build against the record's own before the `PdWait` store — so a
+member whose record was closed and reissued between the build and the lock is refused rather than stamped into
+the next owner's record.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -325,6 +331,9 @@ end 'main'
 ```
 ```stdout
 timerpolls=true onpoller=true outLen=3 matches=true
+```
+```RequiredRuntime
+__np_pd_wait_any
 ```
 
 <!-- test: subprocess-builtins.posix-a-reported-exit-is-reaped-rather-than-polled -->
@@ -853,6 +862,152 @@ end 'main'
 ```stdout
 kind=2 killedEarly=true
 
+```
+
+<!-- test: subprocess-builtins.a-release-under-a-parked-collect-is-a-named-stop -->
+<!-- unsupported-targets: wasm32-wasi -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+**RELEASING A HANDLE WHILE ANOTHER GREEN THREAD IS PARKED COLLECTING IT IS A PROGRAM ERROR, AND IT STOPS WITH A
+NAMED ABORT.** `__gt_subp_wait_collect` reads its slot's pipe ends and child source into a poller group before
+the group wait takes the scheduler lock, and `subpRelease` on another thread in that gap closes those pipes —
+bumping each poll record's generation — and zeroes the slot; if a descriptor is reissued meanwhile, a mark
+made against the record's CURRENT life would land in the NEXT owner's record, and a collect that went on
+would read a slot that holds no child (handles of 0 into the exit read). Neither has a defined answer, so
+the collect names the stop instead:
+every pass re-checks that its slot still holds the child it began with, and a group member carries the
+generation its collect began in and is refused by `__np_pd_wait_any` once its record's life has moved —
+`RuntimeAbort.subpCollectSlotReleased`, exit **117**, the same shape as two readers on one socket
+(`netpoll-socket.two-readers-on-one-socket-is-a-named-stop`, exit 107).
+
+⚠ **THE INTERLEAVING IS EXACT AT ONE PROCESSOR WITHOUT PREEMPTION.** The collector shares `main`'s strand and
+runs only when `main` parks, so `sleep(200)` is the handover: the collector reaches the collect, builds its
+group from a live slot and parks in the wait; `main` wakes, releases the slot from under it, and awaits a
+promise the abort ends before it is settled. The child sleeps two seconds so that no pass of the collect can
+finish before the release — a child that had already exited would be reaped, and the release would find no
+parked collector. `main` prints nothing: a print after the release would never run, and one before it would
+only pin the order the markers already fix.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias ChildHandle = int(i64.min to i64.max)
+
+// Long enough that the release lands while the collect is parked, well inside the collect's own deadline.
+let collectDeadlineMs = 10000
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+function collector(h ChildHandle) returns ExitCode
+	let r = __Builtins.subprocessWaitCollect(h, collectDeadlineMs)
+	__Builtins.subprocessResultRelease(r)
+	return 0
+end 'collector'
+
+function main() returns ExitCode
+	var argv = ByteArray.create()
+	#if os(Windows)
+	appendToken(argv, token: "cmd")
+	appendToken(argv, token: "/c")
+	appendToken(argv, token: "ping -n 3 127.0.0.1 > nul")
+	let argc = 3
+	#else
+	appendToken(argv, token: "/bin/sleep")
+	appendToken(argv, token: "2")
+	let argc = 2
+	#endif
+	let empty = ""
+	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
+	let h = __Builtins.subprocessSpawn(argv, argc, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
+
+	let collecting = async collector(h)
+	sleep(200)
+
+	// The collector is parked in the group wait on this slot's pipes and child, so this release is the refusal.
+	__Builtins.subprocessReleaseHandle(h)
+
+	let unreachable = await collecting
+	return unreachable
+end 'main'
+```
+```exitcode
+117
+```
+
+<!-- test: subprocess-builtins.a-second-collect-on-a-held-slot-is-a-named-stop -->
+<!-- unsupported-targets: wasm32-wasi -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+**A SECOND COLLECT ON A SLOT ONE COLLECT ALREADY HOLDS IS THE SAME PROGRAM ERROR, AND THE SAME STOP.** A collect
+takes its slot's interlock word (`SubpSlotCollector`) at entry and gives it back at every exit, and the release
+takes the same word for good; a collect that finds the word taken — by a collect still parked on the slot, or
+by a release — stops at `RuntimeAbort.subpCollectSlotReleased`, exit **117**, before it reads a handle or
+marks a pipe word. Without the interlock the second collect reaches the group wait and marks the pipe words
+the first already holds, which is the socket band's double wait (exit 107) reported for a different fault.
+
+The interleaving is the previous case's: at one processor without preemption the first collector runs only
+when `main` parks, so `sleep(200)` hands it the slot and parks it in the wait; the second collector runs at the
+next `sleep(200)`, finds the word taken and stops. The child sleeps two seconds so neither collect can finish
+first. `main` prints nothing.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias ChildHandle = int(i64.min to i64.max)
+
+// Long enough that the second collect lands while the first is parked, well inside the collect's own deadline.
+let collectDeadlineMs = 10000
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+function collector(h ChildHandle) returns ExitCode
+	let r = __Builtins.subprocessWaitCollect(h, collectDeadlineMs)
+	__Builtins.subprocessResultRelease(r)
+	return 0
+end 'collector'
+
+function main() returns ExitCode
+	var argv = ByteArray.create()
+	#if os(Windows)
+	appendToken(argv, token: "cmd")
+	appendToken(argv, token: "/c")
+	appendToken(argv, token: "ping -n 3 127.0.0.1 > nul")
+	let argc = 3
+	#else
+	appendToken(argv, token: "/bin/sleep")
+	appendToken(argv, token: "2")
+	let argc = 2
+	#endif
+	let empty = ""
+	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
+	let h = __Builtins.subprocessSpawn(argv, argc, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
+
+	let first = async collector(h)
+	sleep(200)
+
+	// The first collector holds the slot and is parked in its group wait, so this second collect is the refusal.
+	let second = async collector(h)
+	sleep(200)
+
+	let unreachableSecond = await second
+	let unreachableFirst = await first
+	return unreachableSecond + unreachableFirst
+end 'main'
+```
+```exitcode
+117
 ```
 
 <!-- test: subprocess-builtins.detach-answers-a-pid -->
