@@ -14,8 +14,10 @@ Versions are `YEAR.MONTH.PATCH`, the month a release shipped, and are independen
 
 ### Fixed
 
-- Diagnostics, hover and completion work with an installed compiler. The language server runs from a
-  copy of the compiler in the extension's storage, and that copy now finds the standard library.
+- Diagnostics, hover and completion work with an installed compiler. The language server is the
+  compiler itself (`maxon lsp-server`), so it reads the standard library the compiler does, and a
+  rebuilt compiler restarts it. The extension no longer keeps a `maxon-lsp` copy in its storage, and
+  removes one it finds there.
 
 ## 0.1.0
 

@@ -15,9 +15,7 @@ import { registerTestController } from './testController';
 
 interface ExtensionState {
 	client: LanguageClient;
-	context: vscode.ExtensionContext;
-	serverExecutable: string; // path to maxon-lsp (the copy we actually run)
-	sourceExecutable: string; // path to maxon (the original we watch for changes)
+	compilerExecutable: string;
 	clientOptions: LanguageClientOptions;
 }
 
@@ -27,7 +25,6 @@ let stateSubscription: vscode.Disposable | undefined;
 
 const isWindows = os.platform() === 'win32';
 const binaryName = isWindows ? 'maxon.exe' : 'maxon';
-const lspBinaryName = isWindows ? 'maxon-lsp.exe' : 'maxon-lsp';
 
 export function getClient(): LanguageClient | undefined {
 	return state?.client;
@@ -139,101 +136,52 @@ function subscribeToClientState(client: LanguageClient) {
 	});
 }
 
-function sleep(ms: number): Promise<void> {
-	return new Promise(resolve => setTimeout(resolve, ms));
-}
-
 /**
- * Copy the maxon binary to a separate maxon-lsp binary so the LSP
- * doesn't lock the main compiler executable during builds.
- * Retries a few times since the old LSP process may not have fully exited yet.
+ * Remove the server copy (`maxon-lsp`) and its `stdlib` link from global storage, where an install
+ * upgraded from an extension that ran the server from a copy still has them. Nothing reads either:
+ * the server is the compiler itself, which a rebuild or an install renames aside while it runs.
+ *
+ * ⛔ The link is removed only if it IS a link — unlinking it leaves the standard library it points at
+ * untouched, and anything else in that place is left alone and reported.
  */
-async function copyToLsp(maxonPath: string, storageDir: string): Promise<string> {
-	// ⛔ THE COPY GOES TO THE EXTENSION'S OWN STORAGE, NEVER BESIDE THE COMPILER. The compiler may live
-	// somewhere the user cannot write — a Homebrew prefix, a directory an administrator unpacked — and
-	// global storage is writable by definition. It keeps the reason the copy exists at all: not holding
-	// the compiler binary open while a build wants to replace it.
-	await fs.promises.mkdir(storageDir, { recursive: true });
-	await linkStdlib(maxonPath, storageDir);
-	const lspPath = path.join(storageDir, lspBinaryName);
-	for (let attempt = 0; attempt < 5; attempt++) {
-		try {
-			await fs.promises.copyFile(maxonPath, lspPath);
-			if (!isWindows) {
-				await fs.promises.chmod(lspPath, 0o755);
-			}
-			log(`Copied ${maxonPath} -> ${lspPath}`);
-			return lspPath;
-		} catch (error) {
-			if (attempt < 4) {
-				log(`Copy attempt ${attempt + 1} failed, retrying in 500ms...`);
-				await sleep(500);
-			} else {
-				log(`Failed to copy to LSP binary after 5 attempts: ${error}`);
-			}
+async function removeServerCopy(storageDir: string): Promise<void> {
+	const copy = path.join(storageDir, isWindows ? 'maxon-lsp.exe' : 'maxon-lsp');
+	const link = path.join(storageDir, 'stdlib');
+
+	try {
+		await fs.promises.unlink(copy);
+		log(`Removed ${copy}`);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+			log(`Could not remove ${copy}: ${error}`);
 		}
 	}
-	return lspPath;
-}
 
-/**
- * Give the LSP copy the standard library its original reads.
- *
- * ⛔ WITHOUT THIS THE LANGUAGE SERVER HAS NO STANDARD LIBRARY AND SAYS NOTHING. The compiler finds
- * `stdlib/` by walking up from its OWN executable, and the copy lives in global storage, where nothing
- * above it holds one — so every document is `unavailable` and no diagnostic is ever published. A
- * `stdlib` link beside the copy, pointing at the original's, is the first thing that walk finds.
- * A junction on Windows, which needs no privilege; a directory symlink elsewhere.
- */
-async function linkStdlib(maxonPath: string, storageDir: string): Promise<void> {
-	const target = await stdlibFor(maxonPath);
-	if (!target) {
-		log(`No stdlib/ above ${maxonPath}; the language server will report nothing`);
-		return;
-	}
-
-	const link = path.join(storageDir, 'stdlib');
-	let existing: fs.Stats | undefined;
+	let existing: fs.Stats;
 	try {
 		existing = await fs.promises.lstat(link);
 	} catch {
-		existing = undefined;
+		return;
 	}
 
-	if (existing) {
-		// ⛔ Only a link is ever replaced. Anything else in that place is left alone and reported.
-		if (!existing.isSymbolicLink()) {
-			log(`${link} exists and is not a link; leaving it`);
-			return;
-		}
-		if (path.resolve(storageDir, await fs.promises.readlink(link)) === path.resolve(target)) {
-			return;
-		}
+	if (!existing.isSymbolicLink()) {
+		log(`${link} exists and is not a link; leaving it`);
+		return;
+	}
+
+	try {
 		await fs.promises.unlink(link);
+		log(`Removed ${link}`);
+	} catch (error) {
+		log(`Could not remove ${link}: ${error}`);
 	}
-
-	await fs.promises.symlink(target, link, isWindows ? 'junction' : 'dir');
-	log(`Linked ${link} -> ${target}`);
 }
 
-/** The `stdlib/` the compiler at `exe` reads: the nearest one above it, found the way the compiler finds it. */
-async function stdlibFor(exe: string): Promise<string> {
-	let dir = path.dirname(await fs.promises.realpath(exe));
-	for (;;) {
-		const candidate = path.join(dir, 'stdlib');
-		try {
-			if ((await fs.promises.stat(candidate)).isDirectory()) {
-				return candidate;
-			}
-		} catch {
-			// Not here; keep walking up.
-		}
-		const parent = path.dirname(dir);
-		if (parent === dir) {
-			return '';
-		}
-		dir = parent;
-	}
+function serverOptionsFor(compilerExecutable: string): ServerOptions {
+	return {
+		command: compilerExecutable,
+		args: ['lsp-server']
+	};
 }
 
 /**
@@ -408,9 +356,6 @@ function runLogged(command: string, args: string[], stdin?: string): Promise<num
 	});
 }
 
-/**
- * Restart the LSP client. Copies the latest binary to the LSP copy first.
- */
 export async function restartClient(): Promise<void> {
 	if (!state) {
 		throw new Error('Extension not activated yet');
@@ -427,19 +372,10 @@ export async function restartClient(): Promise<void> {
 		log(`Error stopping client: ${error}`);
 	}
 
-	// Copy fresh binary to LSP copy
-	state.serverExecutable = await copyToLsp(state.sourceExecutable, state.context.globalStorageUri.fsPath);
-
-	// Create new client
-	const serverOptions: ServerOptions = {
-		command: state.serverExecutable,
-		args: ['lsp-server']
-	};
-
 	state.client = new LanguageClient(
 		'maxonLanguageServer',
 		'Maxon Language Server',
-		serverOptions,
+		serverOptionsFor(state.compilerExecutable),
 		state.clientOptions
 	);
 	subscribeToClientState(state.client);
@@ -469,30 +405,23 @@ export async function activate(ctx: vscode.ExtensionContext) {
 		log(`Failed to register test controller: ${error}`);
 	}
 
-	let sourceExecutable = await findCompiler(ctx);
+	await removeServerCopy(ctx.globalStorageUri.fsPath);
+
+	let compilerExecutable = await findCompiler(ctx);
 
 	// ⭐ NOT FOUND IS AN OFFER, NOT A DEAD END. Someone who installs this extension from the
 	// marketplace has, very often, no compiler at all — and an error message naming directories they
 	// have never heard of leaves them with nothing to do. See `offerToInstall`.
-	if (!sourceExecutable) {
-		sourceExecutable = await offerToInstall(ctx);
+	if (!compilerExecutable) {
+		compilerExecutable = await offerToInstall(ctx);
 	}
 
-	if (!sourceExecutable) {
+	if (!compilerExecutable) {
 		log('No Maxon compiler found and none installed');
 		return;
 	}
 
-	log(`Maxon compiler path: ${sourceExecutable}`);
-
-	// Copy maxon -> maxon-lsp so the LSP doesn't lock the main binary
-	const serverExecutable = await copyToLsp(sourceExecutable, ctx.globalStorageUri.fsPath);
-
-	// Server options - use the copied LSP binary
-	const serverOptions: ServerOptions = {
-		command: serverExecutable,
-		args: ['lsp-server']
-	};
+	log(`Maxon compiler path: ${compilerExecutable}`);
 
 	const clientOptions: LanguageClientOptions = {
 		documentSelector: [
@@ -535,16 +464,13 @@ export async function activate(ctx: vscode.ExtensionContext) {
 	const client = new LanguageClient(
 		'maxonLanguageServer',
 		'Maxon Language Server',
-		serverOptions,
+		serverOptionsFor(compilerExecutable),
 		clientOptions
 	);
 
-	// Populate the extension state
 	state = {
 		client,
-		context: ctx,
-		serverExecutable,
-		sourceExecutable,
+		compilerExecutable,
 		clientOptions
 	};
 
@@ -638,9 +564,10 @@ export async function activate(ctx: vscode.ExtensionContext) {
 	);
 	ctx.subscriptions.push(generateAsmCommand);
 
-	// Watch the maxon binary for changes — when it's rebuilt, restart the LSP with the new copy
-	const serverDir = path.dirname(sourceExecutable);
-	const serverFile = path.basename(sourceExecutable);
+	// ⛔ A REBUILT COMPILER RESTARTS THE SERVER. A rebuild renames the running image to `.previous` and the
+	// next rebuild must delete that file, which it cannot while a server is still running from it.
+	const serverDir = path.dirname(compilerExecutable);
+	const serverFile = path.basename(compilerExecutable);
 	const watcher = vscode.workspace.createFileSystemWatcher(
 		new vscode.RelativePattern(serverDir, serverFile)
 	);
@@ -649,7 +576,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
 		// Debounce: the build may produce multiple file events (rename old, copy new)
 		if (restartDebounce) clearTimeout(restartDebounce);
 		restartDebounce = setTimeout(async () => {
-			log(`${binaryName} changed (${uri.fsPath}), restarting LSP with new binary...`);
+			log(`${binaryName} changed (${uri.fsPath}), restarting the language server...`);
 			try {
 				await restartClient();
 				log('LSP auto-restarted after binary change');
