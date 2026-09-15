@@ -183,12 +183,10 @@ function buildManagedListenerBind(module StdModule, target Target)
 	emitRawFree(module, block: noWinsock, ptr: host, ids: ids)
 	emitErrorReturn(module, block: noWinsock, flag: ManagedListenerBindFailedFlag, ids: ids)
 
-	// ⭐ **THE ONE PARK — THE RESOLVE.** It is this function's only genuinely blocking operation: on the two
-	// `getaddrinfo` lanes a name can take a network round trip. `socket`, `bind` and `listen` each allocate or
-	// rearrange a kernel object and return, which is not a wait — see `emitIoPark`'s
-	// once-per-blocking-operation invariant.
-	emitIoPark(module, block: resolve, operation: GtIoOperation.netListen, ids: ids)
-	let ip = emitResolveHostIp(module, func: func, resolve: resolve, resolved: resolved, resolveFailed: resolveFailed, host: host, shape: socketResolveShape(target), ids: ids)
+	// ⭐ **A NAME'S RESOLVE IS THIS FUNCTION'S ONLY WAIT**, so it is the only road that parks, and
+	// `emitResolveHostIp` takes the park there. `socket`, `bind` and `listen` each allocate or rearrange a kernel
+	// object and return, which is not a wait — see `emitIoPark`'s once-per-blocking-operation invariant.
+	let ip = emitResolveHostIp(module, func: func, resolve: resolve, resolved: resolved, resolveFailed: resolveFailed, host: host, shape: socketResolveShape(target), park: GtIoOperation.netListen, ids: ids)
 	emitErrorReturn(module, block: resolveFailed, flag: ManagedListenerResolveFailedFlag, ids: ids)
 
 	let socket = ids.mint()

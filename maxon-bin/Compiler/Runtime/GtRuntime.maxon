@@ -1264,9 +1264,8 @@ let GtTraceIoResumeText = b"io_resume #"
 
 // ⭐⭐ **`sleep(ms)` HAS ITS OWN PAIR, AND IT IS NOT THE I/O PAIR.** A timer park and an I/O park take the same
 // exit (`emitGtParkOnDeadline`), so spelling both `io_yield` would make a trace unable to say whether a green
-// thread is waiting on the clock or on the disk — and `specs/http-client.md`'s `async-trace-interleave` reads
-// exactly that distinction, pinning `sleep_yield #0` from `main`'s own `sleep(100)` beside `io_yield #1
-// [net_connect]` from the fibre it spawned — so that case pins both spellings to the byte.
+// thread is waiting on the clock or on the disk. `specs/http-client.md`'s `async-trace-interleave` pins both
+// spellings to the byte: `main`'s own `sleep_yield #0` among the `[net_*]` pairs of the task it spawned.
 //
 // ⚠ **NO SUFFIX, WHERE AN I/O PARK HAS ONE.** `[net_connect]` answers "which operation" — a question a
 // sleep does not have, because a sleep IS the operation. So the sleep lines take `GtTraceTag.absent()`, the
@@ -6005,9 +6004,9 @@ end 'emitCurrentGtTraceLine'
 // promise, for why it parks rather than taking `__gt_resched`'s run-queue handoff, and for why the SUFFIX is a
 // pair of parameters in a traced build and no parameter at all in an untraced one.
 function buildGtIoPark(module StdModule)
-	// ⭐ The tags are asked of the MODULE rather than taken as a parameter, because the park's call sites —
-	// nineteen of them across three other files — have no way to be handed them and must ask the same
-	// question there (see `emitIoPark` and `GtTraceTags.tracesIoOperations`). One reader, one answer.
+	// ⭐ The tags are asked of the MODULE rather than taken as a parameter, because the park's call sites, in
+	// other files, have no way to be handed them and must ask the same question there (see `emitIoPark` and
+	// `GtTraceTags.tracesIoOperations`). One reader, one answer.
 	let tags = module.asyncTraceTags
 	let traced = tags.tracesIoOperations()
 
@@ -6093,25 +6092,24 @@ end 'buildGtIoPark'
 //
 //   • **A kernel call that cannot wait earns no park.** `WSAStartup` runs once per process
 //     (`ManagedSocketRuntime.emitWinsockStartup`) and `socket()` allocates a descriptor, so neither is one.
+//   • **A host that needs no resolver earns no resolve park.** A dotted-quad literal carries its own answer,
+//     so `ManagedSocketRuntime.emitResolveHostIp` parks only on the name road.
 //   • **A function that waits twice parks twice.** A `TcpClient.connect` to a hostname is a DNS round trip AND a
 //     TCP handshake, either of which can be the slow one, and one park for both would leave the trace unable to
 //     say which a hung connect is hung in.
 //
-// ⭐ A single-wait member therefore still parks exactly once, which is every filesystem site and
-// `send`/`recv`/`close`; `__ms_tcp_connect` parks twice because it waits twice. The trace cases in
-// `specs/async-tcp.md` and `specs/http-client.md` read ONE pair and are not in tension with this: they dial
-// `192.0.2.1`, which short-circuits on the TEST-NET-1 sentinel after the resolve and never attempts a connect.
-// ⚠ That resolve is of a LITERAL, which waits on nothing and parks anyway — `__ms_tcp_connect`'s first park
-// carries that exception.
+// ⭐ So every filesystem site and `send`/`recv`/`close` parks exactly once; `__ms_tcp_connect` parks twice
+// for a name and once for a literal; `__ml_bind` parks once for a name and not at all for a literal.
 //
-// ⚠ **THE COUNT IS TWENTY-ONE CALL SITES AND TWENTY-THREE EMITTED ENTRY POINTS, AND THOSE ARE DIFFERENT
+// ⚠ **THE COUNT IS TWENTY CALL SITES AND TWENTY-THREE EMITTED ENTRY POINTS, AND THOSE ARE DIFFERENT
 // NUMBERS.** Eight sites in `ManagedFileRuntime`, six in `ManagedDirectoryRuntime`, five in
-// `ManagedSocketRuntime` (two in connect, one each in send/recv/close — `__ms_destruct` parks through
-// `__ms_close` and has none of its own) and two in `ManagedListenerRuntime` (the bind's resolve and the
-// accept — its close and its drop are the socket band's). Two of the filesystem builders are parameterised
-// and each is invoked twice (`buildManagedFileOpen` for read/write, `buildManagedFilePathOperation` for
-// delete/rename), so the emitted `__mf_*`/`__md_*` band is two larger than its fourteen sites. Say which
-// noun is being counted wherever either number is quoted.
+// `ManagedSocketRuntime` (the name road's resolve, the dial, and one each in send/recv/close — `__ms_destruct`
+// parks through `__ms_close` and has none of its own) and one in `ManagedListenerRuntime` (the accept — its
+// close and its drop are the socket band's). The resolve site serves two entry points, `__ms_tcp_connect` and
+// `__ml_bind`. Two of the filesystem builders are parameterised (`buildManagedFileOpen` is invoked for
+// read/write/writeExecutable, `buildManagedFilePathOperation` for delete/rename), so the emitted
+// `__mf_*`/`__md_*` band is three larger than its fourteen sites. Say which noun is being counted wherever
+// either number is quoted.
 //
 // A void call mints an unread result id.
 export function emitIoPark(module StdModule, block IrBlock, operation GtIoOperation, ids ValueMinter)
@@ -6120,7 +6118,7 @@ export function emitIoPark(module StdModule, block IrBlock, operation GtIoOperat
 	// execution and nothing to yield to, so the call would be a `bl` into machinery nothing installed —
 	// `__gt_init`, the P/M tier, `__gt_now_ns`, the timer store. `RuntimeUsage.parksOnIo` reads the same
 	// answer and keeps that machinery out of the program; see `IrModule.parksOnIo` for why the question is
-	// asked of the module rather than threaded to nineteen builders.
+	// asked of the module rather than threaded to every builder.
 	if not module.parksOnIo 'noScheduler'
 		return
 	end 'noScheduler'

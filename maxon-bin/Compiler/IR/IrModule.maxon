@@ -169,10 +169,9 @@ export type IrModule uses Op
 
 	// ⭐⭐ **THE ASYNC-TRACE TAG TABLE (`--async-trace`), AND IT IS A FIELD FOR `debugStream`'s REASON, ONE
 	// SIGNATURE OVER.** `__gt_io_park` prints the OPERATION its caller is parked in — `[file_exists]`,
-	// `[net_connect]` — so in a traced build it takes that suffix as two parameters and every one of its
-	// eighteen call sites passes them. Those sites are runtime builders in three OTHER files
-	// (`ManagedFileRuntime`, `ManagedDirectoryRuntime`, `ManagedSocketRuntime`), none of which is handed the
-	// green-thread install's tags. Threaded as an argument, a builder that failed to pass it along would not
+	// `[net_connect]` — so in a traced build it takes that suffix as two parameters and every `emitIoPark`
+	// site passes them. Those sites are runtime builders in the file, directory, socket and listener
+	// families, none of which is handed the green-thread install's tags. Threaded as an argument, a builder that failed to pass it along would not
 	// be a compile error: it would be a call whose ARGUMENT COUNT disagrees with the park's arity. Asked of
 	// the module — by the sites AND by `buildGtIoPark` — there is one answer and nothing to forget.
 	//
@@ -185,9 +184,8 @@ export type IrModule uses Op
 	export var asyncTraceTags as GtTraceTags = GtTraceTags.none()
 
 	// ⭐⭐ **DOES A BLOCKING KERNEL CALL YIELD ON THIS TARGET?** True wherever `targetProvidesFacility` grants
-	// `greenThreads`; false on a lane that has no scheduler at all. `emitIoPark`'s nineteen call sites —
-	// runtime builders in three other files — ask it here for `asyncTraceTags`' reason one field up: none of
-	// them is handed the target, and threading it would make a builder that forgot to pass it emit a park
+	// `greenThreads`; false on a lane that has no scheduler at all. `emitIoPark`'s call sites ask it here for
+	// `asyncTraceTags`' reason one field up: none of them is handed the target, and threading it would make a builder that forgot to pass it emit a park
 	// into a program with nothing to park on.
 	//
 	// ⚠ **A FALSE HERE IS NOT AN OPTIMIZATION, IT IS THE ONLY CORRECT ANSWER ON SUCH A LANE.** The park exists

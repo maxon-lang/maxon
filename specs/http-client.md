@@ -185,32 +185,34 @@ end 'main'
 
 ### Async HTTP with Concurrent File I/O
 
-Verify that file I/O on fiber #2 interleaves with HTTP networking on fiber #1.
-With runnext scheduling, the later-spawned file I/O fiber (#2) runs first,
-completing file_exists before the HTTP fiber (#1) begins net_connect.
+Verify that a file probe and an HTTP connect, parked on different kinds of I/O at the same time, resume
+interleaved, and that the request's failure still reaches `try await`.
 
 <!-- test: http-client.async-trace-interleave -->
 <!-- AsyncTrace -->
-⭐⭐ **A TRACE CASE AND A LIVE HOST ARE INCOMPATIBLE, AND THIS FILE'S SIBLING ALREADY SAYS SO.** A trace
-pins an INTERLEAVING; a live host makes that interleaving a function of somebody else's latency. In
-`async-tcp.md` the two `AsyncTrace` cases carry no `network: live` and the `network: live` case carries no
-trace — the separation is the design, and this case was the only one trying to do both.
+⭐⭐ **A TRACE CASE AND A LIVE HOST ARE INCOMPATIBLE.** A trace pins an INTERLEAVING, and a live host makes
+that interleaving a function of somebody else's latency. So the peer is a listener this program binds on
+`127.0.0.1`, at a port the kernel picks, and the case needs no `--network`. `async-tcp.md` keeps the same
+separation: its `AsyncTrace` cases carry no `network: live`, and its `network: live` case carries no trace.
 
-⚠ **MEASURED: the previous pin was a LATENCY RACE that had already gone stale.** It expected a `sleep(100)`
-in `main` to expire mid-request — an early `sleep_resume #0`, and a `sleep_yield #1` retry inside the HTTP
-task. Against `httpbin.org` today the request finishes first, so the run ends `try_await #1 [immediate]`
-rather than `[yield]` and the trace is 20 lines against the 22 pinned. Three runs agreed with each other and
-none agreed with the file: **stable on the day, and a hostage to the link.**
+⚠ **THE LISTENER NEVER ACCEPTS, BECAUSE A PARKED ACCEPT RACES THE DIAL.** One loopback handshake readies
+both the accept and the connect, and the poller reports the two in either order. Unaccepted, the connection
+completes into the backlog, so the dial and the request's send still complete, and closing the listener
+resets it, which ends the request with an error.
 
-⇒ The address is `192.0.2.1` — TEST-NET-1, reserved by RFC 5737 and guaranteed unroutable — which is what
-`async-tcp.trace-mixed-io` already uses to trace a network path without one. The `sleep` is gone with it,
-because the timer was only there to force the second spawn to land mid-request. **The trace is stronger for
-it**: both tasks are now parked on DIFFERENT kinds of I/O at the same time and resume interleaved, where the
-live version had the HTTP task nearly finish before the file task was even spawned. Measured identical
-across 15 runs at ~35 ms each, and it needs no `--network`.
+⚠ **THE `sleep` IS THE HANDOVER, AND IT IS A MARGIN, NOT A SYNCHRONIZATION.** It parks `main` on a timer
+rather than requeueing it, so the HTTP task runs alone until it is waiting for a response. Nothing orders the
+close after the request's send except `settleMs`: an HTTP task stalled for longer than that would meet the
+reset before it waits for a response, and pin a different trace.
+
+Both addresses are literals, which wait on no resolver, so the bind does not park and the HTTP connect
+parks once, for the dial.
 ```maxon
-function doHttp() returns ExitCode throws HttpError
-	let response = try HttpClient.get("http://192.0.2.1/get")
+// Far longer than a loopback connect and send, which is all the HTTP task does before it waits.
+let settleMs = 200
+
+function doHttp(port NetworkPort) returns ExitCode throws HttpError
+	let response = try HttpClient.get("http://127.0.0.1:{port}/get")
 	if response.statusCode() == StatusCode.ok 'ok'
 		return 0
 	end 'ok'
@@ -226,9 +228,14 @@ function doFileIo() returns ExitCode
 end 'doFileIo'
 
 function main() returns ExitCode
-	let httpTask = async doHttp()
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
 	let fileTask = async doFileIo()
+	let httpTask = async doHttp(listener.port())
 	let fileResult = await fileTask
+
+	sleep(settleMs)
+	listener.close()
+
 	let httpResult = try await httpTask otherwise 99
 	return httpResult + fileResult
 end 'main'
@@ -239,12 +246,22 @@ end 'main'
 ```stderr
 spawn #1
 spawn #2
-io_yield #1 [net_connect]
-io_yield #2 [file_exists]
-io_resume #1 [net_connect]
-io_resume #2 [file_exists]
-await #2 [yield]
-try_await #1 [immediate]
+io_yield #1 [file_exists]
+io_yield #2 [net_connect]
+io_resume #1 [file_exists]
+await #1 [yield]
+sleep_yield #0
+io_resume #2 [net_connect]
+io_yield #2 [net_send]
+io_resume #2 [net_send]
+io_yield #2 [net_recv]
+io_resume #2 [net_recv]
+sleep_resume #0
+io_yield #0 [net_close]
+io_resume #0 [net_close]
+io_yield #2 [net_close]
+io_resume #2 [net_close]
+try_await #2 [yield]
 ```
 
 ### Response Headers

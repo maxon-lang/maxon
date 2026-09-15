@@ -67,15 +67,22 @@ end 'main'
 
 <!-- test: async-tcp.trace-connect-error -->
 <!-- AsyncTrace -->
-Verify that async network connect yields and resumes the green thread.
+Verify that a connect to a HOSTNAME parks twice, once to resolve the name and once to dial it, and that
+its failure still reaches `try await`. `localhost` is a name, so the listener's bind parks on the resolver
+too. That listener exists only to hand out a free port, and it is closed before the dial, so the dial is
+refused without a live host.
 ```maxon
-function connect() returns ExitCode throws NetworkError
-	_ = try TcpClient.connect("192.0.2.1", port: 1)
+function connect(port NetworkPort) returns ExitCode throws NetworkError
+	_ = try TcpClient.connect("localhost", port: port)
 	return 0
 end 'connect'
 
 function main() returns ExitCode
-	let p = async connect()
+	let listener = try TcpListener.bind("localhost", port: 0) otherwise return 1
+	let port = listener.port()
+	listener.close()
+
+	let p = async connect(port)
 	let result = try await p otherwise 99
 	return result
 end 'main'
@@ -84,50 +91,52 @@ end 'main'
 99
 ```
 ```stderr
+io_yield #0 [net_listen]
+io_resume #0 [net_listen]
+io_yield #0 [net_close]
+io_resume #0 [net_close]
 spawn #1
 io_yield #1 [net_connect]
-worker_start #1
+io_resume #1 [net_connect]
+io_yield #1 [net_connect]
 io_resume #1 [net_connect]
 try_await #1 [yield]
-worker_exit #1
-worker_start #2
-worker_exit #2
 ```
 
 <!-- test: async-tcp.trace-mixed-io -->
 <!-- AsyncTrace -->
-Verify that mixed file and network I/O shows distinct operation names in the trace.
+Verify that mixed file and network I/O shows distinct operation names in the trace. The peer is the
+program's own listener, which never accepts: the kernel completes the handshake into its backlog, so the
+dial parks and succeeds with no live host. Both addresses are literals, which wait on no resolver, so the
+bind does not park and the connect parks once, for the dial.
 ```maxon
-function mixedIo() returns ExitCode throws NetworkError
+function mixedIo(port NetworkPort) returns ExitCode throws NetworkError
 	_ = File.exists(FilePath from "nofile.txt")
-	_ = try TcpClient.connect("192.0.2.1", port: 1)
+	_ = try TcpClient.connect("127.0.0.1", port: port)
 	return 0
 end 'mixedIo'
 
 function main() returns ExitCode
-	let p = async mixedIo()
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let p = async mixedIo(listener.port())
 	let result = try await p otherwise 99
 	return result
 end 'main'
 ```
 ```exitcode
-99
+0
 ```
 ```stderr
-spawn #1 [M=0]
-io_yield #1 [file_exists] [M=0]
-worker_start #1 [M=1]
-worker_park #1 [M=1]
-worker_wake #1 [M=1]
-worker_park #1 [M=1]
-io_resume #1 [file_exists] [M=0]
-io_yield #1 [net_connect] [M=0]
-worker_wake #1 [M=1]
-worker_park #1 [M=1]
-io_resume #1 [net_connect] [M=0]
-try_await #1 [yield] [M=0]
-worker_wake #1 [M=1]
-worker_exit #1 [M=1]
+spawn #1
+io_yield #1 [file_exists]
+io_resume #1 [file_exists]
+io_yield #1 [net_connect]
+io_resume #1 [net_connect]
+io_yield #1 [net_close]
+io_resume #1 [net_close]
+try_await #1 [yield]
+io_yield #0 [net_close]
+io_resume #0 [net_close]
 ```
 
 <!-- test: async-tcp.echo -->
