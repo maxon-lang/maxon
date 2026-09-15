@@ -795,21 +795,35 @@ ping=0 held=true preempted=0 retaken=0
 **A `main` PREEMPTED BETWEEN TWO `spawn`s SEES THE EARLIER SERVICE ANSWER FIRST.** This is the CI diff of
 `sched-runqueue.the-last-spawned-thread-runs-first-at-one-processor` made deterministic: that case pins
 `first=2` for this same program under `preempt: off`, and on a loaded runner the host held the process off a
-core for the monitor's 10 ms, so `main` was asked to yield between its second and third `spawn`. Here the
-hold between them ends at the FIRST honoured request, so the order it produces is the pin. A preempted thread
-goes to the GLOBAL queue's tail and the machine takes `runnext` next, so `b` runs, sends nothing, and parks on
-its empty mailbox; `a` runs from the ring and parks; `main` resumes from the global queue and spawns `c` into
+core for the monitor's 10 ms, so `main` was asked to yield between its second and third `spawn`. The case
+runs WITH preemption on, so it cannot choose where the monitor's request lands: a slow runner spends the
+10 ms on process start and the first `spawn`, and a request that lands before the window gives `first=0`
+(CI read exactly that, `first=0` at f63b0f8e on arm64-macos), while one that lands after the hold gives
+`first=2`. So one ATTEMPT reads `schedPreemptCount` around its window and is discarded — its handles
+dropped, its services shut down unasked — whenever the count moved before the hold or moved twice by the
+end; `main` retries up to `attemptCap` times and prints only from an attempt whose single preemption fell
+inside the window, so the line is produced only by the trace it describes. A preempted thread goes to the
+GLOBAL queue's tail and the machine takes `runnext` next, so `b` runs, sends nothing, and parks on its
+empty mailbox; `a` runs from the ring and parks; `main` resumes from the global queue and spawns `c` into
 `runnext`; `a.rank()` readies `a` into `runnext`, displacing `c` to the ring, and `b.rank()` readies `b`,
-displacing `a`; `awaitAny` parks `main`, `b` replies first, and the index is 1. Exactly ONE preemption: one
-request, one park — `main`'s schedule tick moves when it resumes, so the next monitor lap re-notes it rather
-than asking again. `burstCap` is a hang guard, not a budget: a monitor that never asks prints `preempted=0`
-instead of timing out.
+displacing `a`; `awaitAny` parks `main`, `b` replies first, and the index is 1. Exactly ONE preemption per
+attempt: one request, one park — `main`'s schedule tick moves when it resumes, so the next monitor lap
+re-notes it rather than asking again. `burstCap` is a hang guard, not a budget: a monitor that never asks
+is not a disturbed attempt but its own printed line and exit 3, as is running out of attempts — each a
+distinct failure rather than a timeout.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias ReplyPromise = Promise with (Integer, ServiceError)
 typealias ReplyPromiseArray = Array with ReplyPromise
 
 let burstCap = 100000
+let attemptCap = 20
+
+enum Attempt implements Error
+	preemptedBeforeTheWindow
+	preemptedAfterTheWindow
+	neverAsked
+end 'Attempt'
 
 // Recursive, so it is never inlined and every iteration passes a function prologue.
 function step(acc Integer, depth Integer) returns Integer
@@ -831,12 +845,19 @@ type Marker
 	end 'rank'
 end 'Marker'
 
-function main() returns ExitCode
+// The monitor chooses when it asks, so an attempt is accepted only when its one preemption fell between
+// the second and third spawn; a throw drops the handles it spawned.
+function attempt() returns (Integer, Integer) throws Attempt
+	let c0 = __Builtins.schedPreemptCount()
 	let a = spawn Marker.create(1)
 	let b = spawn Marker.create(2)
+	if __Builtins.schedPreemptCount() != c0 'early'
+		throw Attempt.preemptedBeforeTheWindow
+	end 'early'
+
 	var acc = 0
 	var bursts = 0
-	while __Builtins.schedPreemptCount() == 0 and bursts < burstCap 'hold'
+	while __Builtins.schedPreemptCount() == c0 and bursts < burstCap 'hold'
 		var i = 0
 		while i < 1000 'burst'
 			acc = step(acc, depth: 4)
@@ -844,6 +865,10 @@ function main() returns ExitCode
 		end 'burst'
 		bursts = bursts + 1
 	end 'hold'
+	if __Builtins.schedPreemptCount() == c0 'silent'
+		throw Attempt.neverAsked
+	end 'silent'
+
 	let c = spawn Marker.create(3)
 	var replies = ReplyPromiseArray.create()
 	replies.push(a.rank())
@@ -854,12 +879,38 @@ function main() returns ExitCode
 	for p in replies 'drainthemall'
 		sum = sum + (try await p otherwise 0)
 	end 'drainthemall'
-	print("first={first} sum={sum} preempted={__Builtins.schedPreemptCount()}\n")
-	return 0 as ExitCode
+	if __Builtins.schedPreemptCount() != c0 + 1 'late'
+		throw Attempt.preemptedAfterTheWindow
+	end 'late'
+
+	return (first, sum)
+end 'attempt'
+
+function monitorNeverAsked() returns ExitCode
+	print("the monitor never asked in {burstCap} bursts\n")
+	return 3 as ExitCode
+end 'monitorNeverAsked'
+
+function main() returns ExitCode
+	var tries = 0
+	while tries < attemptCap 'attempts'
+		tries = tries + 1
+		let outcome = try attempt() otherwise (e) 'disturbed'
+			match e 'why'
+				neverAsked then return monitorNeverAsked()
+				preemptedBeforeTheWindow or
+					preemptedAfterTheWindow then continue
+			end 'why'
+		end 'disturbed'
+		print("first={outcome.0} sum={outcome.1}\n")
+		return 0 as ExitCode
+	end 'attempts'
+	print("no undisturbed attempt in {attemptCap}\n")
+	return 3 as ExitCode
 end 'main'
 ```
 ```stdout
-first=1 sum=6 preempted=1
+first=1 sum=6
 ```
 ```exitcode
 0
