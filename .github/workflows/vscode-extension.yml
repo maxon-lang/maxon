@@ -19,6 +19,13 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      # A release's tag is immutable, so publishing an extension its release did not is a dispatch from
+      # a later ref — where the newest release already contains the extension and the gate says `skip`.
+      since:
+        description: Release tag to compare the extension against (default the newest release before the ref)
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -47,7 +54,9 @@ jobs:
       - name: Does this release publish the extension?
         id: gate
         working-directory: .
-        run: echo "decision=$(./scripts/extension-release-gate.sh)" >> "$GITHUB_OUTPUT"
+        env:
+          SINCE: ${{ inputs.since }}
+        run: echo "decision=$(./scripts/extension-release-gate.sh $SINCE)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@v5
         with:

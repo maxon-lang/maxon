@@ -19,7 +19,7 @@
 # a leading zero, which the Marketplace refuses.
 #
 # Usage:
-#   scripts/extension-release-gate.sh            decide against the newest release tag
+#   scripts/extension-release-gate.sh            decide against the newest release before HEAD
 #   scripts/extension-release-gate.sh <tag>      decide against a given tag
 
 set -euo pipefail
@@ -33,7 +33,11 @@ ReleaseTagGlob='v[0-9]*'
 
 previous="${1:-}"
 if [ -z "$previous" ]; then
-	previous="$(git tag --list "$ReleaseTagGlob" --sort=-v:refname | head -n1)"
+	# ⛔ `--no-contains HEAD`, because the publish workflow runs AT the release's own tag: the newest tag
+	# there is the release being published, the range is empty, and the answer is a green `skip` for an
+	# extension that must ship. Excluding tags on or after HEAD gives the previous release from the tag
+	# and from an untagged commit alike.
+	previous="$(git tag --list "$ReleaseTagGlob" --no-contains HEAD --sort=-v:refname | head -n1)"
 fi
 
 # ⚠ NO PRIOR RELEASE MEANS EVERYTHING IS NEW, so there is nothing to compare a bump against and the
