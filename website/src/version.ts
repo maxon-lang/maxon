@@ -1,12 +1,9 @@
-// ⭐⭐ **THE RELEASED VERSION, IN ONE PLACE.** The download links, the hero and the nav badge all name
-// it, and they were three copies with a comment on one of them asking the reader to keep them in
-// step. A release is not a moment anyone wants to be grepping for version strings.
+// ⭐⭐ **THE RELEASED VERSION, IN ONE PLACE.** The installation page's download links, pinned-version
+// commands and Docker tags, and the marketing pages' nav badge, all name it.
 //
 // ⚠ **REWRITTEN BY `scripts/announce.sh` IN THE COMPILER REPOSITORY**, as part of publishing a
 // release. Edit it by hand only to correct a mistake — the next release overwrites it either way.
 //
-// ⛔ **THE DOCS PAGES DELIBERATELY DO NOT USE THIS.** A shell command inside a code fence cannot
-// interpolate a value, and a version pasted into one goes stale silently — so those commands are
-// written against a glob (`maxon-*-x64-linux.tar.gz`) instead, which is both correct for every
-// release and better for a reader who downloaded whichever one they downloaded.
+// ⛔ **A CODE FENCE CANNOT INTERPOLATE IT**, and a version typed into one goes stale at the next release.
+// A command that names the version is rendered with Starlight's `<Code>` from this constant instead.
 export const RELEASE_VERSION = '0.2.1';

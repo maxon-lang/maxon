@@ -17,7 +17,7 @@ Protocol (`maxon lsp-server`). This extension is its client.
 ## Requirements
 - Visual Studio Code 1.75.0 or later
 - The Maxon compiler. If the extension cannot find one it offers to install it, using the same
-  one-line installer as [maxon.dev/install](https://maxon.dev/install).
+  one-line installer as the [installation page](https://maxon.dev/docs/getting-started/installation/).
 
 ## Installation
 

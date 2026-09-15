@@ -1,0 +1,129 @@
+---
+// Commands as a terminal shows them, with a button that copies them.
+//
+// ⭐ WHAT IS COPIED IS BUILT FROM THE SAME `lines` THE BLOCK SHOWS, so the two cannot disagree. A line
+// starting with `#` is a comment and an empty line is a gap; neither is copied, and nor is the `$`
+// prompt or the `trailing` output. zsh does not read `#` as a comment at an interactive prompt, so a
+// copied comment would run as a command there.
+//
+// ⚠ THE BUTTON IS HIDDEN UNTIL THE SCRIPT RUNS. Without JavaScript nothing can copy, and a button that
+// did nothing would be worse than none; the commands can still be selected by hand.
+interface Props {
+  lines: string[];
+  /** Printed after the commands, unprefixed — the output they produce. */
+  trailing?: string;
+}
+
+const { lines, trailing = '' } = Astro.props;
+
+const CommentPrefix = '#';
+const isComment = (line: string) => line.startsWith(CommentPrefix);
+const isCommand = (line: string) => line !== '' && !isComment(line);
+const commands = lines.filter(isCommand);
+
+if (commands.length === 0) {
+  throw new Error(`CommandBlock: no command among ${JSON.stringify(lines)}, so there is nothing to copy`);
+}
+
+const label = commands.length === 1 ? 'Copy command' : 'Copy commands';
+---
+
+<div class="relative">
+  <pre class="overflow-x-auto p-4 pr-12 font-mono text-[0.86rem] leading-relaxed text-slate-300">{
+    lines.map((line) =>
+      isCommand(line) ? (
+        <><span class="text-slate-500">$</span>{` ${line}
+`}</>
+      ) : (
+        <><span class="text-slate-500">{line}</span>{`
+`}</>
+      ),
+    )
+  }{trailing}</pre>
+  <button
+    type="button"
+    data-copy-command={commands.join('\n')}
+    data-copy-label={label}
+    aria-label={label}
+    title={label}
+    hidden
+    class="absolute top-2.5 right-2.5 rounded-md border border-ink-700 bg-ink-900/90 p-1.5 text-slate-400 transition-colors hover:border-brand/50 hover:text-brand-300 focus-visible:outline-2 focus-visible:outline-brand data-[copy-state=copied]:text-brand-300 data-[copy-state=failed]:text-red-400"
+  >
+    <svg data-copy-icon="idle" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="9" y="9" width="12" height="12" rx="2"></rect>
+      <path d="M5 15V5a2 2 0 0 1 2-2h10"></path>
+    </svg>
+    <svg data-copy-icon="copied" class="hidden h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M20 6 9 17l-5-5"></path>
+    </svg>
+    <svg data-copy-icon="failed" class="hidden h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M18 6 6 18M6 6l12 12"></path>
+    </svg>
+  </button>
+</div>
+
+<script>
+  // How long a button shows the outcome of a copy before it reads "copy" again.
+  const OutcomeShownMs = 2000;
+
+  type CopyState = 'idle' | 'copied' | 'failed';
+
+  const Announcement: Record<CopyState, (label: string) => string> = {
+    idle: (label) => label,
+    copied: () => 'Copied to clipboard',
+    failed: () => 'Could not copy; select the command and copy it by hand',
+  };
+
+  // The Clipboard API needs a secure context and a user gesture; execCommand is the fallback for a
+  // browser or embed that refuses it.
+  async function writeClipboard(text: string): Promise<boolean> {
+    if (navigator.clipboard && window.isSecureContext) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch {
+        // Permission denied or document not focused: the fallback below may still work.
+      }
+    }
+
+    const scratch = document.createElement('textarea');
+    scratch.value = text;
+    scratch.setAttribute('readonly', '');
+    scratch.style.position = 'fixed';
+    scratch.style.opacity = '0';
+    document.body.appendChild(scratch);
+    scratch.select();
+
+    try {
+      return document.execCommand('copy');
+    } catch {
+      return false;
+    } finally {
+      scratch.remove();
+    }
+  }
+
+  function show(button: HTMLButtonElement, state: CopyState) {
+    button.dataset.copyState = state;
+    const text = Announcement[state](button.dataset.copyLabel ?? '');
+    button.setAttribute('aria-label', text);
+    button.title = text;
+
+    button.querySelectorAll<SVGElement>('[data-copy-icon]').forEach((icon) => {
+      icon.classList.toggle('hidden', icon.dataset.copyIcon !== state);
+    });
+  }
+
+  document.querySelectorAll<HTMLButtonElement>('[data-copy-command]').forEach((button) => {
+    let reset: number | undefined;
+
+    button.addEventListener('click', async () => {
+      const copied = await writeClipboard(button.dataset.copyCommand ?? '');
+      show(button, copied ? 'copied' : 'failed');
+      window.clearTimeout(reset);
+      reset = window.setTimeout(() => show(button, 'idle'), OutcomeShownMs);
+    });
+
+    button.hidden = false;
+  });
+</script>

@@ -100,7 +100,8 @@ walking up from its own executable and reaches `runtime/` beside it, so an archi
 the other installs a compiler that cannot compile anything.
 
 - ⛔ **A cross-built archive is not a tested one.** `--target=` cannot run the suite for a machine it
-  is not, and says so on stderr; `--publish` repeats it in the release notes. Use it for a target you
+  is not, and says so on stderr; it leaves a `<archive>.untested` marker beside the archive, and
+  `--publish` flags that archive in the release notes' asset list. Use it for a target you
   have no hardware for, never as a shortcut past a runner you do have.
 - `--skip-tests` exists for iterating on the packaging itself. It is not a release path.
 
@@ -114,6 +115,12 @@ scripts/release.sh --publish v0.1.0
 It writes `SHA256SUMS`, writes `dist/NOTES.md` if nobody else did, checks the tag against the
 binary, and creates the GitHub release. A `dist/NOTES.md` you wrote by hand wins — the generated one
 is a floor, not a template to fight.
+
+⭐ **The generated notes link to maxon.dev rather than copying it**: the release's announcement post,
+the changelog page, and the installation page, then the asset list and a line about `SHA256SUMS`. The
+changelog and the install instructions each live in one place, and notes published once cannot follow
+the installation page as it changes. `website.yml` deploys right after the release, so the links go
+live within minutes.
 
 ---
 
@@ -186,7 +193,7 @@ Each release gets a `## X.Y.Z — YYYY-MM-DD` heading and `### Added` / `### Cha
 `### Removed` beneath it.
 
 ⛔ **It states what changed and never how to do anything** — no commands, no install steps, no usage
-warnings. Those live in the release notes' Install section and each archive's `INSTALL.md`, which
+warnings. Those live on the website's installation page and in each archive's `INSTALL.md`, which
 already carry them; an instruction in a changelog is read months later and is either stale or
 duplicated. Write it at the cut, with the whole release in view, so related changes are
 described together rather than as one bullet each.
@@ -198,17 +205,16 @@ scripts/changelog.sh --commits-since
 lists what has landed since the last release. ⚠ **It is reference material, not a draft** — read it to
 write the entry; do not paste it into one.
 
-**One file, four renderings.** `release.sh` puts the matching section at the top of the GitHub release
-notes; `announce.sh` puts it in the maxon.dev post and in the site's `/docs/changelog/` page. The
-words therefore exist once and cannot come to disagree about what shipped.
+**One file, rendered on the site.** `announce.sh` puts the matching section in the maxon.dev post and in
+the site's `/docs/changelog/` page, and the GitHub release notes link to both. The words therefore
+exist once and cannot come to disagree about what shipped.
 
 ⛔ **A release with no entry does not ship.** `scripts/changelog.sh --section=<version>` refuses a
 version the file has no heading for. `release.yml`'s `guard` asks before any runner starts, and
 `release.sh --publish` asks again at the last moment — an authored file's failure mode is that nobody
 wrote it.
 
-⚠ **A hand-written `dist/NOTES.md` replaces the whole body**, "What's new" included — that rule is
-unchanged.
+⚠ **A hand-written `dist/NOTES.md` replaces the whole body**, the links to the site included.
 
 ⚠ **The VS Code extension keeps its own `vscode-extension/CHANGELOG.md`**, also hand-written, on its
 own version line. The marketplace renders it as a tab.
@@ -286,7 +292,7 @@ git push origin release/0.1.1 v0.1.1
 ```
 
 ⛔ **The tag goes on the finished branch tip.** Everything downstream reads the repository AT THE TAG:
-the release notes and the maxon.dev post take their text from `CHANGELOG.md` there, and `website.yml`
+the maxon.dev post and changelog page take their text from `CHANGELOG.md` there, and `website.yml`
 builds the site from there. A fix committed after the tag is a fix nothing ships.
 
 `release.yml` then fans out over `windows-latest`, `ubuntu-latest`, `macos-15` and

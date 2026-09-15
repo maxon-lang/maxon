@@ -43,16 +43,7 @@ excerpt: Maxon 0.1.1 is out. Here's what changed.
 - On Linux, a subprocess started by program name finds the program on `PATH`, and a file of that
   name in the working directory is never run in its place.
 
-## Download
+## Install
 
-```
-curl -fsSL https://maxon.dev/install.sh | sh    # macOS and Linux
-powershell -c "irm maxon.dev/install.ps1|iex"   # Windows
-```
-
-Elsewhere, take the archive for your platform from the
-[releases page](https://github.com/maxon-lang/maxon/releases/tag/v0.1.1) and follow the `INSTALL.md` inside it.
-
-⚠ Each archive holds the `maxon` compiler and `stdlib/` **as siblings**, and that layout is the
-contract: the compiler finds its standard library by walking up from its own executable, so moving the
-binary out on its own leaves it without one.
+To install Maxon or upgrade an existing install, see [Installation](/docs/getting-started/installation/), which also
+shows how to install a specific release.

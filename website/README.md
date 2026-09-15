@@ -25,12 +25,13 @@ src/
   pages/                 Bespoke marketing pages (Astro)
     index.astro          Landing — "Written by AI, for AI"
     examples.astro       Curated, highlighted example programs
-    install.astro        Per-OS build-from-source instructions
   layouts/
     MarketingLayout.astro  Shared shell (nav/footer) for the marketing pages
   components/
     MaxonCode.astro      Maxon-highlighted code block for marketing pages
     PlatformTabs.astro   Per-OS command block; shares its selection with the docs
+    CommandBlock.astro   Commands with a copy button, inside PlatformTabs
+    starlight/           Starlight component overrides (the docs' dark default)
   lib/
     og-card.ts           Draws the per-page Open Graph card (SVG → PNG via sharp)
   route-data.ts          Starlight route middleware — points each page at its OG card
@@ -110,7 +111,7 @@ Authors are defined once in `astro.config.mjs` under the `starlightBlog({ author
   `src/styles/global.css`, and the Starlight accent in `src/styles/theme.css`.
   Tailwind v4 is configured in CSS; there is no `tailwind.config.mjs`.
 - The logo/favicon reuse the diamond-"M" mark from the VS Code extension.
-- Marketing pages are dark, terminal-inspired; the docs follow the light/dark toggle.
+- Marketing pages are dark, terminal-inspired; the docs start dark and follow the light/dark toggle.
 
 ## Deployment
 

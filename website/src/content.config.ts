@@ -2,8 +2,8 @@ import { defineCollection } from 'astro:content';
 // Astro 7 deprecates the `z` re-export from `astro:content`; `astro/zod` is the
 // supported path and stays pinned to the Zod version Astro itself validates with.
 import { z } from 'astro/zod';
-import { docsLoader } from '@astrojs/starlight/loaders';
-import { docsSchema } from '@astrojs/starlight/schema';
+import { docsLoader, i18nLoader } from '@astrojs/starlight/loaders';
+import { docsSchema, i18nSchema } from '@astrojs/starlight/schema';
 import { blogSchema } from 'starlight-blog/schema';
 
 // Site-wide "early preview" announcement banner shown on every docs page.
@@ -26,4 +26,7 @@ export const collections = {
         }),
     }),
   }),
+  // Overrides of Starlight's UI strings, one JSON file per locale. Starlight reads this collection on
+  // every build, and Astro warns when it is undefined or empty.
+  i18n: defineCollection({ loader: i18nLoader(), schema: i18nSchema() }),
 };

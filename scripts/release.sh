@@ -30,6 +30,15 @@ cd "$repo_root"
 . scripts/lib/host-binaries.sh
 
 DIST="dist"
+
+# Beside a cross-built archive in `dist/`: its suite was not run on its own platform.
+UntestedMarkerSuffix=".untested"
+
+# Where the release notes send a reader. `announce.sh` writes each release's post as `maxon-X-Y-Z`.
+SiteUrl="https://maxon.dev"
+ChangelogUrl="$SiteUrl/docs/changelog/"
+InstallationUrl="$SiteUrl/docs/getting-started/installation/"
+
 mode=""
 target=""
 version=""
@@ -118,7 +127,15 @@ package_one() {
 
 	rm -rf "$stage"
 	echo "release.sh: wrote $archive"
-	[ "$native" -eq 1 ] || echo "release.sh: ⚠ $tgt was CROSS-BUILT and its suite was not run here" >&2
+
+	# The marker is how `--publish`, which may run elsewhere and later, learns that this archive's suite
+	# never ran; the release notes name every archive that carries one.
+	if [ "$native" -eq 1 ]; then
+		rm -f "$archive$UntestedMarkerSuffix"
+	else
+		: > "$archive$UntestedMarkerSuffix"
+		echo "release.sh: ⚠ $tgt was CROSS-BUILT and its suite was not run here" >&2
+	fi
 }
 
 # ⛔ THE EXECUTABLE BIT HAS TO BE PUT INTO THE ARCHIVE, NOT ASSUMED FROM THE FILE. A tar records the
@@ -238,7 +255,7 @@ all. Move the whole directory, or put it on your PATH as it is.
 
 ## Install
 
-The one-line installers do all of this for you — see https://maxon.dev/install:
+The one-line installers do all of this for you — see https://maxon.dev/docs/getting-started/installation/:
 
     curl -fsSL https://maxon.dev/install.sh | sh          # macOS and Linux
     irm https://maxon.dev/install.ps1 | iex               # Windows, in PowerShell
@@ -288,70 +305,40 @@ EOF
 	esac
 }
 
-# Release notes: what changed, how to install, and what each asset is for.
+# Release notes: where to read what changed and how to install, then what is attached.
+#
+# ⭐ **THE CHANGELOG AND THE INSTALL INSTRUCTIONS LIVE ON maxon.dev, AND THE NOTES LINK TO THEM.** A
+# copy here is a second place for either to be wrong: the installation page changes between releases,
+# and notes published once never do. The site deploys right after the release, so the links go live
+# within minutes of the notes.
 write_default_notes() {
 	local out="$1"
 
 	# ⛔ **WRITTEN ASIDE AND MOVED INTO PLACE, because a half-written file here is indistinguishable
-	# from a hand-written one.** The caller regenerates only when `NOTES.md` is ABSENT, so a run that
-	# died partway — `--section` refusing a changelog that was never regenerated is exactly that —
-	# leaves a stub the next run adopts, and the release ships notes reading `## What's new` and
-	# nothing else. MEASURED: 15 bytes, and the second run reported no regeneration at all.
-	#
-	# ⚠ THE STALE ONE IS CLEARED ON ENTRY RATHER THAN ON EXIT. Under `set -e` a failure inside the
-	# block below exits the whole script, so no `RETURN` trap runs — clearing here makes the state
-	# deterministic however the previous run died.
+	# from a hand-written one**, and the caller regenerates only when `NOTES.md` is absent. The stale
+	# partial is cleared on entry rather than by a trap, because under `set -e` a failure exits the whole
+	# script and no `RETURN` trap runs.
 	local partial="$out.partial"
 	rm -f "$partial"
 
 	{
-		# ⭐⭐ **WHAT CHANGED COMES FIRST, AND IT COMES OUT OF THE COMMITTED `CHANGELOG.md`.** Install
-		# instructions also live in every archive's `INSTALL.md` and on the website; what changed lives
-		# only here, and a page that opens with an install command buries the reason to upgrade.
-		#
-		# ⛔ **READ FROM THE FILE, NOT FROM HISTORY.** The publish job's checkout is shallow and
-		# tagless, and — more to the point — the notes that ship are then byte-for-byte the ones
-		# somebody reviewed before the tag. `--section` REFUSES a version the file has no heading for,
-		# so a release whose changelog was never regenerated cannot publish silently without notes.
-		echo "## What's new"
-		echo
-		scripts/changelog.sh --section="$version_from_binary"
-		echo
-		echo "## Install"
-		echo
-		echo "**macOS and Linux**"
-		echo
-		echo '```'
-		echo "curl -fsSL https://maxon.dev/install.sh | sh"
-		echo '```'
-		echo
-		echo "**Windows**, in PowerShell"
-		echo
-		echo '```'
-		echo 'irm https://maxon.dev/install.ps1 | iex'
-		echo '```'
-		echo
-		echo "Either script downloads the archive for your machine, checks it against \`SHA256SUMS\`, installs it"
-		echo "into \`~/.maxon\` and puts \`maxon\` on your PATH; \`maxon upgrade\` updates the install later. With Homebrew,"
-		echo "\`brew install maxon-lang/tap/maxon\`. If you download an archive by hand on macOS, run"
-		echo "\`xattr -d com.apple.quarantine ./maxon\` once."
-		echo
-
-		echo "⚠ **Keep \`maxon\`, \`stdlib/\` and \`runtime/\` together.** The compiler finds its standard library"
-		echo "and its runtime by walking up from its own executable, so moving the binary out on its own leaves"
-		echo "it unable to compile."
-		echo
-		echo "## Verify a download"
-		echo
-		echo "\`SHA256SUMS\` is published beside the archives. The archives themselves are not signed, so"
-		echo "the checksum is what tells you a file is the one that was built."
+		echo "- [What's new in Maxon $version_from_binary]($SiteUrl/blog/maxon-${version_from_binary//./-}/)"
+		echo "- [Changelog]($ChangelogUrl), every release"
+		echo "- [Installation]($InstallationUrl)"
 		echo
 		echo "## Assets"
 		echo
 		local f
 		for f in $(find "$DIST" -maxdepth 1 -type f \( -name '*.zip' -o -name '*.tar.gz' \) -printf '%f\n' | sort); do
-			echo "- \`$f\`"
+			if [ -f "$DIST/$f$UntestedMarkerSuffix" ]; then
+				echo "- \`$f\` ⚠ cross-built: the test suite was not run on its platform"
+			else
+				echo "- \`$f\`"
+			fi
 		done
+		echo
+		echo "\`SHA256SUMS\` is published beside the archives. The archives are not signed, so the checksum is what"
+		echo "tells you a file is the one that was built."
 	} > "$partial"
 
 	mv "$partial" "$out"
@@ -403,6 +390,11 @@ sed 's/^/  /' "$DIST/SHA256SUMS"
 # and the one thing a reader wants — which file is theirs, and what to do with it — is exactly what the
 # filenames do not say. A `dist/NOTES.md` placed by hand wins: this is a floor, not a template to
 # fight.
+# ⛔ A RELEASE WITH NO CHANGELOG ENTRY DOES NOT SHIP: the post and the changelog page the notes link to
+# are built from it. `release.yml`'s guard asks before any runner starts; this asks again at the last
+# moment, and `--section` refuses a version the file has no heading for.
+scripts/changelog.sh --section="$version_from_binary" > /dev/null
+
 if [ ! -f "$DIST/NOTES.md" ]; then
 	echo "release.sh: writing default notes to $DIST/NOTES.md"
 	write_default_notes "$DIST/NOTES.md"

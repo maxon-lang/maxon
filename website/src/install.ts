@@ -4,3 +4,7 @@ export const INSTALL_SCRIPT = 'curl -fsSL https://maxon.dev/install.sh | sh';
 // Typed into PowerShell, so the script runs in that session and the PATH it sets reaches the terminal it
 // was typed into. A `powershell -c` wrapper would run it in a child whose PATH dies with it.
 export const INSTALL_POWERSHELL = 'irm https://maxon.dev/install.ps1 | iex';
+
+// From cmd.exe the script needs a PowerShell of its own, and then prints the line that puts `maxon` on
+// cmd.exe's PATH.
+export const INSTALL_FROM_CMD = `powershell -c "${INSTALL_POWERSHELL}"`;

@@ -86,7 +86,7 @@ in this repo to fall back on — the published release is what seeds a build.
 
 ### Build and test
 
-[Install](https://maxon.dev/install) a release and copy its binary into `.bootstrap/` with
+[Install](https://maxon.dev/docs/getting-started/installation/) a release and copy its binary into `.bootstrap/` with
 `mkdir -p .bootstrap && cp "$(command -v maxon)" .bootstrap/` — the **binary alone**, not the release's
 directory, because the compiler resolves `stdlib/` and its sibling `runtime/` by walking up from its own
 executable and released ones left beside it would be compiled in place of this tree's.

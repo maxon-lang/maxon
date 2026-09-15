@@ -9,14 +9,14 @@
 # `release: published`, building from the tag. There is nothing here to get out of step with the
 # release, because it is part of it.
 #
-# ⭐ **THE CHANGES COME FROM `CHANGELOG.md`.** The post, the site's changelog page and the GitHub
-# release notes are three renderings of one hand-written source and cannot come to disagree about
-# what shipped.
+# ⭐ **THE CHANGES COME FROM `CHANGELOG.md`.** The post and the site's changelog page are two renderings
+# of one hand-written source and cannot come to disagree about what shipped; the GitHub release notes
+# link to both rather than carrying a third copy.
 #
 # ⚠ **THREE FILES, THREE DIFFERENT JOBS.** The post announces THIS release and is never touched
 # again; the changelog page carries EVERY release and is rewritten each time; `version.ts` is what
-# the download links are built from, so skipping it would leave every download button pointing at the
-# previous release's filenames.
+# the installation page's download links are built from, so skipping it would leave every one pointing
+# at the previous release's filenames.
 #
 # Usage:
 #   scripts/announce.sh <version> [--dry-run]
@@ -30,6 +30,11 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 
 ReleasesUrl="https://github.com/maxon-lang/maxon/releases"
+
+# ⚠ POSTS LINK TO THE INSTALLATION PAGE AND CARRY NO INSTRUCTIONS OF THEIR OWN. A post is never edited
+# once published, and the install commands change between releases; the page is kept current.
+InstallationPath="/docs/getting-started/installation/"
+
 WebsiteDir="website"
 BlogSubdir="$WebsiteDir/src/content/docs/blog"
 ChangelogPagePath="$WebsiteDir/src/content/docs/docs/changelog.md"
@@ -78,19 +83,10 @@ excerpt: Maxon $version is out. Here's what changed.
 
 $body
 
-## Download
+## Install
 
-\`\`\`
-curl -fsSL https://maxon.dev/install.sh | sh    # macOS and Linux
-irm https://maxon.dev/install.ps1 | iex         # Windows, in PowerShell
-\`\`\`
-
-Elsewhere, take the archive for your platform from the
-[releases page]($ReleasesUrl/tag/v$version) and follow the \`INSTALL.md\` inside it.
-
-⚠ Each archive holds the \`maxon\` compiler, \`stdlib/\` and \`runtime/\` **as siblings**, and that layout
-is the contract: the compiler finds its standard library and its runtime by walking up from its own
-executable, so moving the binary out on its own leaves it unable to compile.
+To install Maxon or upgrade an existing install, see [Installation]($InstallationPath), which also
+shows how to install a specific release.
 EOF
 }
 
@@ -116,7 +112,7 @@ Every released version, newest first.
 
 Downloads for each release are on the
 [GitHub releases page]($ReleasesUrl), and the install instructions are in
-[Installation](/docs/getting-started/installation/).
+[Installation]($InstallationPath).
 
 EOF
 	# From the first version heading to the end: the headings and bullets, without the contributor
@@ -137,8 +133,8 @@ fi
 
 # ⛔ **THE SITE NAMES THE RELEASED VERSION IN ITS DOWNLOAD LINKS, and a stale one is a 404 rather than
 # a cosmetic slip.** The asset filenames carry the version, so a release that updated the changelog and
-# not this leaves every download button pointing at the previous release's files. The site keeps it in
-# one module for exactly this reason; the docs pages name no version at all.
+# not this leaves every download link pointing at the previous release's files. The site keeps it in
+# one module for exactly this reason, and every page that names the version reads it from there.
 [ -f "$VersionModulePath" ] || { warn "'$VersionModulePath' does not exist"; exit 1; }
 grep -q "RELEASE_VERSION = '" "$VersionModulePath" || {
 	warn "'$VersionModulePath' does not declare RELEASE_VERSION in the expected shape"

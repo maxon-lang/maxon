@@ -53,7 +53,7 @@ about six of which mean anything to a reader. Write `## X.Y.Z — YYYY-MM-DD` wi
 meant rewriting seventeen lines of twenty-one.
 
 ⛔ **STATE WHAT CHANGED, NEVER HOW TO DO ANYTHING.** No commands, no install steps, no "click More
-info", no warnings about how to use it. Those belong in the release notes' own Install section and in
+info", no warnings about how to use it. Those belong on the website's installation page and in
 each archive's `INSTALL.md`, which already carry them — a changelog is read months later by someone
 asking "what is different", and an instruction in it is either stale or duplicated.
 
@@ -76,7 +76,8 @@ git push origin release/X.Y.Z vX.Y.Z
 ```
 
 ⛔ **THE TAG GOES ON THE FINISHED BRANCH TIP.** Everything downstream reads the repository AT THE TAG
-— the release notes and the maxon.dev post take their text from `CHANGELOG.md` there, and
+— the maxon.dev post and changelog page, which the release notes link to, take their text from
+`CHANGELOG.md` there, and
 `website.yml` builds the site from there. A fix committed after the tag is a fix nothing ships.
 
 ## 5 · Watch it

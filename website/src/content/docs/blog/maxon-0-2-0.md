@@ -55,16 +55,7 @@ excerpt: Maxon 0.2.0 is out. Here's what changed.
   Windows green thread printed its report twice.
 - `maxon run` failed in deeply nested directories on Windows.
 
-## Download
+## Install
 
-```
-curl -fsSL https://maxon.dev/install.sh | sh    # macOS and Linux
-powershell -c "irm maxon.dev/install.ps1|iex"   # Windows
-```
-
-Elsewhere, take the archive for your platform from the
-[releases page](https://github.com/maxon-lang/maxon/releases/tag/v0.2.0) and follow the `INSTALL.md` inside it.
-
-⚠ Each archive holds the `maxon` compiler, `stdlib/` and `runtime/` **as siblings**, and that layout
-is the contract: the compiler finds its standard library and its runtime by walking up from its own
-executable, so moving the binary out on its own leaves it unable to compile.
+To install Maxon or upgrade an existing install, see [Installation](/docs/getting-started/installation/), which also
+shows how to install a specific release.

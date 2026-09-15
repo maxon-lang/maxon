@@ -8,9 +8,10 @@
 # goldens, docs and release tooling. Generating the entry and then correcting it would have meant
 # rewriting seventeen of twenty-one lines, which is hand-writing with extra ceremony.
 #
-# ⭐ **WHAT THIS EXISTS FOR IS THAT ONE FILE FEEDS FOUR PLACES.** The GitHub release notes
-# (`release.sh`), the maxon.dev post and the site's changelog page (`announce.sh`) all read a section
-# out of it, so the words exist once and cannot come to disagree about what shipped.
+# ⭐ **WHAT THIS EXISTS FOR IS THAT ONE FILE FEEDS THE SITE.** The maxon.dev post and the site's
+# changelog page (`announce.sh`) both read a section out of it, and the GitHub release notes
+# (`release.sh`) link to those rather than copying it, so the words exist once and cannot come to
+# disagree about what shipped.
 #
 # Usage:
 #   scripts/changelog.sh --section=<X.Y.Z>        print that release's entry
@@ -49,8 +50,7 @@ case "$mode" in
 		[ -f "$ChangelogFile" ] || { echo "changelog.sh: $ChangelogFile does not exist" >&2; exit 1; }
 
 		# Everything under `## <version>` up to the next `## `. The heading itself is dropped: each
-		# caller frames it its own way — a `## What's new` in the release notes, a `## What changed`
-		# in the blog post.
+		# caller frames it its own way, such as a `## What changed` in the blog post.
 		body="$(awk -v want="## $section " '
 			index($0, want) == 1 { inside = 1; next }
 			inside && /^## / { exit }

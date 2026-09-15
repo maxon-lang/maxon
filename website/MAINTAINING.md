@@ -55,7 +55,7 @@ project layout; this doc covers running and evolving the site.
   `/llms.txt`, `/llms-small.txt` and `/llms-full.txt`), and `starlight-links-validator`.
 - **The build fails on a broken internal link.** That is the point of it — fix the link rather
   than reaching for the plugin's `exclude`. `exclude` is only for routes the validator genuinely
-  cannot see, which here means the bespoke marketing pages (`/install/`, `/examples/`, `/blog/`);
+  cannot see, which here means the bespoke marketing pages (`/examples/`, `/blog/`);
   they are real routes but they are not Starlight's, so it reports them as dead ends.
 - **`starlight-changelogs` is not usable yet.** Its `@ascorbic/loader-utils` dependency still
   peers on Astro 4/5, so npm satisfies it by installing a second, older Astro alongside ours —
@@ -65,12 +65,25 @@ project layout; this doc covers running and evolving the site.
   emits `twitter:card: summary_large_image` but no `og:image` of its own, so without this every
   shared docs link previews blank. Pages with no content entry (the blog index, tag and author
   listings, 404) fall back to the site-wide `public/og.png`.
-- **Platform tabs are shared between the docs and the marketing pages.** Starlight's
+- **There is one installation page, `/docs/getting-started/installation/`.** Link to it for anything
+  about installing; the marketing pages have no install page of their own.
+- **Platform tabs are shared between the docs and the home page.** Starlight's
   `<Tabs syncKey="os">` persists the chosen tab's *label* under `starlight-synced-tabs__os`, and
   `PlatformTabs.astro` reads and writes that same key. **The labels must match exactly** —
-  `macOS & Linux`, `Windows` — in `installation.mdx`, the tabs in `install.astro`, and
-  `quickstarts` in `index.astro`. Change one and the sync silently stops working. A tab's
+  `macOS & Linux`, `Windows` — in `installation.mdx` and `quickstarts` in `index.astro`. Change one
+  and the sync silently stops working. A tab's
   `platforms` lists the detected platforms it is preselected for, so one tab can serve two.
+- **The docs start in dark mode**, to match the marketing pages, which are dark only. Starlight would
+  follow the visitor's system scheme; `src/components/starlight/ThemeProvider.astro` stores `dark` as
+  the choice of a visitor who has never made one, before Starlight's own provider reads it. The picker
+  still offers light and auto, and a choice made there is kept.
+- **Every command shown has a copy button.** On the marketing pages that is `CommandBlock.astro`,
+  which `PlatformTabs` renders through: pass commands as `lines` (a `#` line is a
+  comment, an empty one a gap) and the button copies exactly the commands, never the prompt, the
+  comments or the output. Don't hand-write a command in a `<pre>`. In the docs, Expressive Code puts a
+  button on every fenced block and on `<Code>`; a command worth copying belongs in one, not inline in
+  prose. zsh does not treat `#` as a comment at an interactive prompt, so a block a reader is meant to
+  paste and run (installing, building from source) holds commands only; explain them in prose.
 - **Syntax highlighting:** the Maxon TextMate grammar (`src/grammars/maxon.tmLanguage.json`) is
   copied from the compiler repo's VS Code extension and registered with Shiki / Expressive
   Code. ` ```maxon ` fenced blocks highlight at build time, matching the editor exactly.
@@ -114,15 +127,19 @@ options each script's usage lists. The build-from-source steps are the repositor
 (`README.md`, `CONTRIBUTING.md`): seed `.bootstrap/` with an installed compiler, then
 `scripts/build-from-seed.sh`.
 
-When either changes, the pages to update are `src/install.ts` (the install commands),
-`install.astro`, `getting-started/installation.mdx`, `getting-started/first-program.md`,
-`contributing.md`, and the quickstart in `index.astro`.
+When either changes, the pages to update are `src/install.ts` (the install commands, which the home
+page and `installation.mdx` both render from), `getting-started/installation.mdx`,
+`getting-started/first-program.md`, `contributing.md`, and the quickstart in `index.astro`.
+
+⛔ **Release posts and GitHub release notes link to the installation page and carry no install
+commands.** Both are published once and never revised, and the commands change between releases.
+`scripts/announce.sh` and `scripts/release.sh` write them that way.
 
 ⚠ **The compiler prints the install commands too.** `maxon upgrade` gives this host's one-liner when it
 refuses an install it does not manage, and the pinned-release form when asked for `--version`, both from
 `maxon-bin/Upgrade/UpgradeCommand.maxon`. Change either on the site and change it there as well.
 `tests/cli/upgrade-refuses-an-unrecognised-layout.test.maxon` reads the one-liner out of `src/install.ts`
-and fails until the two agree; nothing compares the pinned-release form with `install.astro`'s.
+and fails until the two agree; nothing compares the pinned-release form with `installation.mdx`'s.
 
 ## Positioning & copy decisions (keep these consistent)
 

@@ -90,7 +90,7 @@ irm https://maxon.dev/install.ps1 | iex             # Windows, in PowerShell
 Both install into `~/.maxon` (`%USERPROFILE%\.maxon` on Windows) and put `maxon` on your PATH, in the
 terminal you ran them from as well as in new ones; `maxon upgrade` updates the install later. There is also `brew install maxon-lang/tap/maxon`, and an image,
 `ghcr.io/maxon-lang/maxon`. Archives, a specific version and uninstalling are on the
-[install page](https://maxon.dev/install).
+[installation page](https://maxon.dev/docs/getting-started/installation/).
 
 ## Building from source
 
@@ -133,7 +133,7 @@ current.
 byte-identical.
 
 See [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md) for every command and flag, or the
-[installation guide](https://maxon.dev/install) for a step-by-step walkthrough.
+[installation guide](https://maxon.dev/docs/getting-started/installation/) for a step-by-step walkthrough.
 
 ## Tests
 

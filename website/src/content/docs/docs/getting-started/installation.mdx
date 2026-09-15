@@ -5,7 +5,17 @@ sidebar:
   order: 2
 ---
 
-import { Tabs, TabItem } from '@astrojs/starlight/components';
+import { Code, Tabs, TabItem } from '@astrojs/starlight/components';
+import { INSTALL_FROM_CMD, INSTALL_POWERSHELL, INSTALL_SCRIPT } from '../../../../install';
+import { RELEASE_VERSION } from '../../../../version';
+
+{/*
+  ⚠ THE DOWNLOAD LINKS ARE VERSIONED, NOT `latest/download`. That shortcut resolves to the newest
+  release but still needs the exact asset filename, and ours carry the version, so a `latest/download`
+  link would 404 the day the next release ships.
+*/}
+export const releaseAsset = (target, extension) =>
+  `https://github.com/maxon-lang/maxon/releases/download/v${RELEASE_VERSION}/maxon-${RELEASE_VERSION}-${target}.${extension}`;
 
 Maxon ships as a single compiler and the standard library it reads. There is nothing else to install
 — no runtime, no toolchain, no SDK.
@@ -14,16 +24,14 @@ Maxon ships as a single compiler and the standard library it reads. There is not
 
 {/*
   `syncKey="os"` persists the choice in localStorage as `starlight-synced-tabs__os`, keyed by the
-  tab label. The marketing pages' own PlatformTabs component reads and writes the same key, so a
-  visitor who picks a platform on /install/ finds it already selected here, and the other way round.
-  Keep these labels identical to the ones in src/pages/install.astro and src/pages/index.astro.
+  tab label. The home page's PlatformTabs component reads and writes the same key, so a visitor who
+  picks a platform there finds it already selected here, and the other way round. Keep these labels
+  identical to the ones in src/pages/index.astro.
 */}
 <Tabs syncKey="os">
   <TabItem label="macOS & Linux">
 
-```bash
-curl -fsSL https://maxon.dev/install.sh | sh
-```
+<Code code={INSTALL_SCRIPT} lang="bash" />
 
 When `~/.local/bin` or `~/bin` is already on your PATH, the script links `maxon` there and it is ready
 at once. Otherwise it adds `~/.maxon/bin` to your shell profile: open a new terminal, or run the
@@ -32,13 +40,12 @@ at once. Otherwise it adds `~/.maxon/bin` to your shell profile: open a new term
   </TabItem>
   <TabItem label="Windows">
 
-```powershell
-irm https://maxon.dev/install.ps1 | iex
-```
+<Code code={INSTALL_POWERSHELL} lang="powershell" />
 
 Run it in PowerShell, and `maxon` is ready at once in that window and in every new terminal. From
-`cmd.exe`, run `powershell -c "irm https://maxon.dev/install.ps1 | iex"` instead, then the `set` line
-it prints.
+`cmd.exe`, run this instead, then the `set` line it prints:
+
+<Code code={INSTALL_FROM_CMD} lang="bat" />
 
   </TabItem>
 </Tabs>
@@ -83,6 +90,14 @@ Connect your AI coding assistant (Claude Desktop, Cursor, Antigravity, or VS Cod
 
 This gives your AI assistant tools to build, run, test, format, and check Maxon projects, as well as look up compiler error codes. See the [MCP Server Guide](/docs/cli/mcp-server/) for full details.
 
+## Set up your editor
+
+The **Maxon** extension for VS Code brings syntax highlighting, real-time diagnostics, completion and
+hover. Install it from the
+[Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=maxon-lang.maxon-lsp-client)
+or [Open VSX](https://open-vsx.org/extension/maxon-lang/maxon-lsp-client). It runs the language server
+from the compiler you installed.
+
 ## Upgrading
 
 ```bash
@@ -99,16 +114,12 @@ than touching them.
 <Tabs syncKey="os">
   <TabItem label="macOS & Linux">
 
-```bash
-curl -fsSL https://maxon.dev/install.sh | sh -s -- --version 0.1.0
-```
+<Code code={`${INSTALL_SCRIPT} -s -- --version ${RELEASE_VERSION}`} lang="bash" />
 
   </TabItem>
   <TabItem label="Windows">
 
-```powershell
-& ([scriptblock]::Create((irm https://maxon.dev/install.ps1))) -Version 0.1.0
-```
+<Code code={`& ([scriptblock]::Create((irm https://maxon.dev/install.ps1))) -Version ${RELEASE_VERSION}`} lang="powershell" />
 
   </TabItem>
 </Tabs>
@@ -132,16 +143,25 @@ product that happens to share the name. `brew upgrade` keeps it current.
 
 **Docker:** `ghcr.io/maxon-lang/maxon` is Debian slim with a shell, for CI jobs and devcontainers, and
 `ghcr.io/maxon-lang/maxon:distroless` is a few megabytes with no shell, running as an unprivileged
-user. Both are built for amd64 and arm64 and tagged by release (`:0.1.1`, `:0.1.1-distroless`):
+user. Both are built for amd64 and arm64 and tagged by release (<code>:{RELEASE_VERSION}</code>,{' '}
+<code>:{RELEASE_VERSION}-distroless</code>). A newer image is how an image upgrades: `docker pull`.
 
 ```bash
 docker run --rm -v "$PWD:/app" ghcr.io/maxon-lang/maxon maxon run hello.maxon
 ```
 
-**By hand:** download the archive for your platform from the
-[latest release](https://github.com/maxon-lang/maxon/releases/latest), extract it somewhere permanent,
-and add that directory to your PATH. On macOS a browser download is quarantined by Gatekeeper whatever
-is inside it, so clear that once:
+**By hand:** download the archive for your platform from release {RELEASE_VERSION}:
+
+| Platform | Archive |
+| --- | --- |
+| macOS, Apple silicon | <a href={releaseAsset('arm64-macos', 'tar.gz')}>{`maxon-${RELEASE_VERSION}-arm64-macos.tar.gz`}</a> |
+| Linux x64, static, no libc needed | <a href={releaseAsset('x64-linux', 'tar.gz')}>{`maxon-${RELEASE_VERSION}-x64-linux.tar.gz`}</a> |
+| Linux arm64, static, no libc needed | <a href={releaseAsset('arm64-linux', 'tar.gz')}>{`maxon-${RELEASE_VERSION}-arm64-linux.tar.gz`}</a> |
+| Windows 10/11, x64 | <a href={releaseAsset('x64-windows', 'zip')}>{`maxon-${RELEASE_VERSION}-x64-windows.zip`}</a> |
+
+Every release, older ones included, is on [GitHub](https://github.com/maxon-lang/maxon/releases).
+Extract the archive somewhere permanent and add that directory to your PATH. On macOS a browser
+download is quarantined by Gatekeeper whatever is inside it, so clear that once:
 
 ```bash
 tar -xzf maxon-*-arm64-macos.tar.gz
@@ -190,15 +210,15 @@ to fall back on.
 
 **Prerequisites:** Git, and Node.js 20+ only if you are building the VS Code extension.
 
-Install a release first, as above, then:
+Install a release first, as above, then clone the repository, put your installed compiler in
+`.bootstrap/` as the seed, build the compiler with it, and run the suite:
 
 ```bash
 git clone https://github.com/maxon-lang/maxon.git
 cd maxon
-
-mkdir -p .bootstrap && cp "$(command -v maxon)" .bootstrap/   # the seed
-scripts/build-from-seed.sh                                     # build the compiler with it, twice
-maxon-bin/.maxon/maxon spec-test                               # run the suite
+mkdir -p .bootstrap && cp "$(command -v maxon)" .bootstrap/
+scripts/build-from-seed.sh
+maxon-bin/.maxon/maxon spec-test
 ```
 
 The seed builds the compiler, and that compiler then rebuilds itself: the compiler emits its runtime

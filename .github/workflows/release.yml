@@ -62,10 +62,10 @@ jobs:
           fetch-depth: 0
 
       # ⭐⭐ **A RELEASE NOBODY WROTE AN ENTRY FOR MUST NOT SHIP.** `CHANGELOG.md` is written by hand,
-      # so its failure mode is not rot but absence — and the release notes, the maxon.dev post and the
-      # site's changelog page are all read out of it. Asking here means the answer arrives before four
-      # runners spend twenty minutes each, which is the same reason the ref check above is in this job.
-      # `release.sh --publish` asks again at the last moment.
+      # so its failure mode is not rot but absence — and the maxon.dev post and the site's changelog
+      # page, which the release notes link to, are read out of it. Asking here means the answer arrives
+      # before four runners spend twenty minutes each, which is the same reason the ref check above is in
+      # this job. `release.sh --publish` asks again at the last moment.
       - name: The changelog has an entry for this release
         if: steps.ref.outputs.publish == 'yes'
         run: ./scripts/changelog.sh --section="${GITHUB_REF_NAME#v}" >/dev/null
@@ -214,7 +214,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          find staged -type f \( -name '*.zip' -o -name '*.tar.gz' \) -exec cp {} dist/ \;
+          find staged -type f \( -name '*.zip' -o -name '*.tar.gz' -o -name '*.untested' \) -exec cp {} dist/ \;
           ls -la dist/
 
       # ⭐⭐ **THE VERSION IS READ OFF A COMPILER, SO THIS JOB HAS TO HAVE ONE.** `release.sh` asks the

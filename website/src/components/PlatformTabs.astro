@@ -1,5 +1,5 @@
 ---
-// A terminal-styled, per-platform command block with a tab strip.
+// A terminal-styled, per-platform command block with a tab strip; each panel has its own copy button.
 //
 // ⭐ EVERY PANEL IS RENDERED, so the block still says everything with JavaScript off — the panels
 // simply stack, each under its own heading. The tab strip is revealed only once the script runs and
@@ -12,6 +12,8 @@
 // 🔗 SHARES ITS SELECTION WITH STARLIGHT'S <Tabs syncKey="os">. Both read and write the same
 // localStorage key, keyed by tab label, so picking Windows here leaves Windows picked in the docs and
 // the other way round. Tab labels must therefore match the docs' TabItem labels exactly.
+import CommandBlock from './CommandBlock.astro';
+
 interface Tab {
   id: string;
   label: string;
@@ -70,12 +72,7 @@ const { tabs, ariaLabel = 'Choose your platform', trailing = '' } = Astro.props;
           >
             {tab.label}
           </div>
-          <pre class="overflow-x-auto p-4 font-mono text-[0.86rem] leading-relaxed text-slate-300">{
-            tab.lines.map((line) => (
-              <><span class="text-slate-500">$</span>{` ${line}
-`}</>
-            ))
-          }{trailing}</pre>
+          <CommandBlock lines={tab.lines} trailing={trailing} />
         </div>
       ))
     }
@@ -83,108 +80,113 @@ const { tabs, ariaLabel = 'Choose your platform', trailing = '' } = Astro.props;
 </div>
 
 {/*
-  ⚠ ONE SCRIPT FOR EVERY INSTANCE ON THE PAGE. The component may render more than once, and an
-  `is:inline` script renders with it — so the body guards on a flag and then walks EVERY root. Without
-  the guard a second instance would bind a second listener to every tab of the first.
+  ⚠ A PROCESSED SCRIPT, NOT `is:inline`. Astro bundles it once per page and runs it after the whole
+  document is parsed, so it sees every instance. An inline copy runs where the FIRST instance is, before
+  the later ones exist, and a once-per-page guard then leaves them never initialized.
 */}
-<script is:inline>
-  (function () {
-    if (window.__maxonPlatformTabs) return;
-    window.__maxonPlatformTabs = true;
+<script>
+  type Platform = 'windows' | 'macos' | 'linux';
 
-    function detect() {
-      // userAgentData is the non-deprecated source, but it is Chromium-only and absent over plain
-      // HTTP, so userAgent stays the fallback.
-      var p = (navigator.userAgentData && navigator.userAgentData.platform) || '';
-      var ua = navigator.userAgent || '';
-      var hay = (p + ' ' + ua).toLowerCase();
+  // Starlight persists its synced tabs as `starlight-synced-tabs__<syncKey>` holding the chosen tab's
+  // LABEL. Reading and writing that key is the whole of the integration.
+  const StorageKey = 'starlight-synced-tabs__os';
 
-      if (hay.indexOf('win') !== -1) return 'windows';
-      // iOS/iPadOS get the macOS tab: closest shell, and neither can run the compiler anyway. Check
-      // Android before Linux — Android UAs say "Linux".
-      if (hay.indexOf('android') !== -1) return 'linux';
-      if (/mac|iphone|ipad|ipod/.test(hay)) return 'macos';
-      if (hay.indexOf('linux') !== -1 || hay.indexOf('x11') !== -1) return 'linux';
+  function detect(): Platform | null {
+    // userAgentData is the non-deprecated source, but it is Chromium-only and absent over plain HTTP,
+    // so userAgent stays the fallback.
+    const hints = (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData;
+    const hay = `${hints?.platform ?? ''} ${navigator.userAgent}`.toLowerCase();
+
+    if (hay.includes('win')) return 'windows';
+    // iOS/iPadOS get the macOS tab: closest shell, and neither can run the compiler anyway. Android is
+    // asked before Linux because Android UAs say "Linux".
+    if (hay.includes('android')) return 'linux';
+    if (/mac|iphone|ipad|ipod/.test(hay)) return 'macos';
+    if (hay.includes('linux') || hay.includes('x11')) return 'linux';
+    return null;
+  }
+
+  function readStored(): string | null {
+    try {
+      return localStorage.getItem(StorageKey);
+    } catch {
+      // Storage can throw outright in a locked-down browser, not merely return null.
       return null;
     }
+  }
 
-    // Starlight persists its synced tabs as `starlight-synced-tabs__<syncKey>` holding the chosen
-    // tab's LABEL. Reading and writing that key is the whole of the integration.
-    var STORAGE_KEY = 'starlight-synced-tabs__os';
+  function writeStored(label: string) {
+    try {
+      localStorage.setItem(StorageKey, label);
+    } catch {
+      // A preference that cannot be persisted is not worth failing the page over.
+    }
+  }
 
-    function readStored() {
-      try {
-        return localStorage.getItem(STORAGE_KEY);
-      } catch (e) {
-        // Storage can throw outright in a locked-down browser, not merely return null.
-        return null;
-      }
+  const labelOf = (tab: HTMLElement) => (tab.textContent ?? '').trim();
+
+  interface Instance {
+    tabs: HTMLElement[];
+    select: (id: string) => void;
+  }
+
+  function initialize(root: HTMLElement): Instance {
+    const tabs = [...root.querySelectorAll<HTMLElement>('[data-platform-tab]')];
+    const panels = [...root.querySelectorAll<HTMLElement>('[data-platform-panel]')];
+
+    if (tabs.length === 0 || panels.length === 0) {
+      throw new Error('PlatformTabs: an instance rendered with no tabs or no panels');
     }
 
-    function writeStored(label) {
-      try {
-        localStorage.setItem(STORAGE_KEY, label);
-      } catch (e) {
-        /* A preference we cannot persist is not worth failing the page over. */
-      }
+    function select(id: string) {
+      panels.forEach((panel) => {
+        panel.hidden = panel.dataset.platformPanel !== id;
+      });
+      tabs.forEach((tab) => {
+        const on = tab.dataset.platformTab === id;
+        tab.setAttribute('aria-selected', on ? 'true' : 'false');
+        tab.tabIndex = on ? 0 : -1;
+      });
     }
 
-    var detected = detect();
-
-    Array.prototype.forEach.call(document.querySelectorAll('[data-platform-tabs]'), function (root) {
-      var tabs = Array.prototype.slice.call(root.querySelectorAll('[data-platform-tab]'));
-      var panels = Array.prototype.slice.call(root.querySelectorAll('[data-platform-panel]'));
-      if (!tabs.length || !panels.length) return;
-
-      function select(id, persist) {
-        panels.forEach(function (panel) {
-          panel.hidden = panel.getAttribute('data-platform-panel') !== id;
-        });
-        tabs.forEach(function (tab) {
-          var on = tab.getAttribute('data-platform-tab') === id;
-          tab.setAttribute('aria-selected', on ? 'true' : 'false');
-          tab.tabIndex = on ? 0 : -1;
-          // Only an actual choice is stored — never the detected default, which would
-          // freeze a guess in place as though the visitor had made it.
-          if (on && persist) writeStored((tab.textContent || '').trim());
-        });
-      }
-
-      tabs.forEach(function (tab, i) {
-        tab.addEventListener('click', function () {
-          select(tab.getAttribute('data-platform-tab'), true);
-        });
-        tab.addEventListener('keydown', function (event) {
-          var step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
-          if (!step) return;
-          event.preventDefault();
-          var next = tabs[(i + step + tabs.length) % tabs.length];
-          select(next.getAttribute('data-platform-tab'), true);
-          next.focus();
-        });
-      });
-
-      root.querySelectorAll('[data-platform-heading]').forEach(function (heading) {
-        heading.hidden = true;
-      });
-      root.querySelector('[data-platform-tabs-strip]').hidden = false;
-
-      // A stored choice was made deliberately, so it outranks a sniffed platform.
-      var stored = readStored();
-      var storedTab = stored
-        ? tabs.filter(function (tab) {
-            return (tab.textContent || '').trim() === stored;
-          })[0]
-        : null;
-
-      var initial = storedTab && storedTab.getAttribute('data-platform-tab');
-      if (!initial) {
-        var match = panels.filter(function (panel) {
-          return (panel.getAttribute('data-platform-for') || '').split(' ').indexOf(detected) !== -1;
-        })[0];
-        initial = (match || panels[0]).getAttribute('data-platform-panel');
-      }
-      select(initial, false);
+    root.querySelectorAll<HTMLElement>('[data-platform-heading]').forEach((heading) => {
+      heading.hidden = true;
     });
-  })();
+    root.querySelector<HTMLElement>('[data-platform-tabs-strip]')!.hidden = false;
+
+    // A stored choice was made deliberately, so it outranks a sniffed platform.
+    const stored = readStored();
+    const storedTab = tabs.find((tab) => labelOf(tab) === stored);
+    const detected = detect();
+    const matched = panels.find((panel) => (panel.dataset.platformFor ?? '').split(' ').includes(detected ?? ''));
+    select(storedTab?.dataset.platformTab ?? (matched ?? panels[0]).dataset.platformPanel!);
+
+    return { tabs, select };
+  }
+
+  const instances = [...document.querySelectorAll<HTMLElement>('[data-platform-tabs]')].map(initialize);
+
+  // A choice in one instance is made in every instance that has a tab of that label, and only an actual
+  // choice is stored — never the detected default, which would freeze a guess as though it were made.
+  function choose(label: string) {
+    writeStored(label);
+    instances.forEach(({ tabs, select }) => {
+      const tab = tabs.find((candidate) => labelOf(candidate) === label);
+      if (tab) select(tab.dataset.platformTab!);
+    });
+  }
+
+  instances.forEach(({ tabs }) => {
+    tabs.forEach((tab, i) => {
+      tab.addEventListener('click', () => choose(labelOf(tab)));
+      tab.addEventListener('keydown', (event) => {
+        const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
+        if (step === 0) return;
+        event.preventDefault();
+        const next = tabs[(i + step + tabs.length) % tabs.length];
+        choose(labelOf(next));
+        next.focus();
+      });
+    });
+  });
 </script>

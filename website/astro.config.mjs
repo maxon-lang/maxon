@@ -67,11 +67,15 @@ export default defineConfig({
           errorOnRelativeLinks: false,
           // The bespoke marketing pages are real routes, but they live outside Starlight
           // so the validator cannot see them and reports every link as a dead end.
-          exclude: ['/install/', '/examples/', '/blog/'],
+          exclude: ['/examples/', '/blog/'],
         }),
       ],
       // Per-page Open Graph cards. See src/route-data.ts.
       routeMiddleware: './src/route-data.ts',
+      // A visitor who has never chosen a theme starts dark, like the marketing pages.
+      components: {
+        ThemeProvider: './src/components/starlight/ThemeProvider.astro',
+      },
       customCss: ['./src/styles/theme.css'],
       expressiveCode: {
         themes: ['github-dark', 'github-light'],
