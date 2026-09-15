@@ -155,6 +155,7 @@ tests/
     dev.test.maxon                          contributor MCP server tests (11 tools + --dev)
     rebuild.test.maxon                      a running server survives its image being replaced on disk
     rebuild-over-a-running-previous.test.maxon   a self-rebuild succeeds while a server runs its `.previous`
+    rebuild-with-a-compile-error.test.maxon      a self-rebuild that fails to compile leaves the slot untouched
 ```
 
 ## The six rules, and the hazard each one answers
@@ -541,10 +542,11 @@ JSON-RPC messages, and inspecting structured responses.
   be deleted, so the build must move the held one aside and still succeed, and the next self-rebuild,
   with nothing held, must leave no moved-aside image behind. A program source it builds is written into
   `temp/` from a string, so no live `.maxon` sits under `tests/`.
+- `rebuild-with-a-compile-error.test.maxon` gates the failure half: a self-rebuild whose program does
+  not compile leaves the running image in the slot, byte for byte, and moves nothing to `.previous` —
+  and that image then builds a good program over itself.
 
-⛔ **`rebuild.test.maxon` STAGES ITS OWN COPY OF THE COMPILER AND REPLACES THAT.** Driving a real
-`build maxon-bin` would rebuild the tree's compiler as a side effect of running the corpus — and a
-FAILED build leaves the slot EMPTY, so a red test would take the checkout's compiler with it. The
-property is the OS's, not the build's, and testing it on a copy costs a file write rather than 25 s.
-The whole corpus therefore runs at the default deadline: `maxon test tests/mcp`.
+⛔ **EVERY REBUILD CASE STAGES ITS OWN COPY OF THE COMPILER AND REPLACES THAT.** Driving a real
+`build maxon-bin` would rebuild the tree's compiler as a side effect of running the corpus. Testing
+on a copy costs a file write rather than 25 s, and the whole corpus therefore runs at the default deadline: `maxon test tests/mcp`.
 

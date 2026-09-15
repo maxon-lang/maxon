@@ -408,10 +408,10 @@ Four doors are still standing open rather than shut:
 >
 > A compiler cannot overwrite its own running image (**E6002**), and a half-written slot is a
 > compiler that answers as though it were whole. So a compiler rebuilding its own slot RENAMES its
-> running image to `maxon-bin/.maxon/maxon.previous` first — an OS will not let a running executable be
-> deleted, but will let one be renamed — and its `.mxdbg` travels with it. There is no `.next` staging
-> name: a FAILED build leaves the slot **EMPTY** rather than the old binary, because a stale compiler
-> reporting as current is the failure every staleness refusal in this repo exists to prevent. An older
+> running image to `maxon-bin/.maxon/maxon.previous` — an OS will not let a running executable be
+> deleted, but will let one be renamed — and its `.mxdbg` travels with it. ⭐ **THE RENAME HAPPENS ONLY
+> AFTER THE COMPILE SUCCEEDS**, so a FAILED build (a compile error included) leaves the running compiler
+> in the slot, able to build the fix; a write that fails after the rename moves it back. An older
 > `.previous` that another process is still running (an `mcp-server` or `lsp-server` started before the
 > last rebuild) is renamed aside to `maxon.retired-<stamp>`, and every self-rebuild deletes the retired
 > images nothing holds any longer.

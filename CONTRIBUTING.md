@@ -104,9 +104,9 @@ succeeds and exits 0, having built a compiler from a library that is not this tr
 
 `build` with no path compiles [`build.maxon`](build.maxon) at the root and runs the build it
 describes — it is a program, not a config file, so a build can compute what it compiles. Rebuilding
-with the compiler in the slot works because it renames its own running image to `maxon.previous`
-first; a FAILED build then leaves the slot EMPTY rather than a stale compiler answering as though it
-were current. `scripts/fixpoint.sh` builds the compiler with itself twice and checks that the two
+with the compiler in the slot works because, once the compile succeeds, it renames its own running
+image to `maxon.previous` and writes the new one in its place; a FAILED build leaves the running
+compiler in the slot, so it can build the fix. `scripts/fixpoint.sh` builds the compiler with itself twice and checks that the two
 binaries are byte-identical.
 
 Run a program with the freshly built compiler:

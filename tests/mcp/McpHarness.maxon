@@ -39,7 +39,7 @@ export function stagingDir(spelled String) returns FilePath
 end 'stagingDir'
 
 // A case that replaces a compiler image on disk replaces a COPY: doing it to the tree's own slot would
-// rebuild the checkout's compiler as a side effect, and a failed build leaves that slot empty.
+// rebuild the checkout's compiler as a side effect.
 export function stagedCopyOf(binary FilePath, dir FilePath, name String) returns FilePath
 	let target = dir.join("{name}{executableSuffix()}")
 	let bytes = try File.readBinary(binary) otherwise panic("McpHarness: could not read {binary.path}")
@@ -47,6 +47,44 @@ export function stagedCopyOf(binary FilePath, dir FilePath, name String) returns
 
 	return target
 end 'stagedCopyOf'
+
+export let BuildCommandName = "build"
+export let OutputOption = "-o"
+
+// Files only: a held file here would be a previous run's server still alive, which is a harness problem.
+export function clearStagedFiles(dir FilePath)
+	let entries = try Directory.list(dir) otherwise panic("McpHarness: could not list {dir.path}")
+
+	for entry in entries 'eachEntry'
+		if Directory.isDirectory(entry) 'aDirectory'
+			clearStagedFiles(entry)
+			continue
+		end 'aDirectory'
+
+		try File.delete(entry) otherwise panic("McpHarness: could not clear {entry.path} from a previous run's staging")
+	end 'eachEntry'
+end 'clearStagedFiles'
+
+// A program that prints `line` and exits 0, written into `temp/` by a case so no live `.maxon` sits under
+// `tests/`.
+export function printingProgramSource(line String) returns String
+	return "function main() returns ExitCode\n\tprint(\"{line}\\n\")\n\treturn 0\nend 'main'\n"
+end 'printingProgramSource'
+
+export function runIn(dir FilePath, binary FilePath, arguments StringArray) returns CollectedOutput
+	var config = Configuration.create(Executable.path(binary))
+	config.arguments = arguments
+	config.workingDirectory = dir
+
+	return try config.run() otherwise (e) 'spawnFailed'
+		panic("McpHarness: could not spawn {binary.path}: {e.displayReason()}")
+	end 'spawnFailed'
+end 'runIn'
+
+// `compiler` builds `program` over its own image.
+export function rebuildOwnImage(dir FilePath, compiler FilePath, program FilePath) returns CollectedOutput
+	return runIn(dir, binary: compiler, arguments: [BuildCommandName, program.toString(), OutputOption, compiler.toString()])
+end 'rebuildOwnImage'
 
 export typealias JsonDocArray = Array with JsonDoc
 

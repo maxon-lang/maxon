@@ -770,20 +770,14 @@ export function runPersistentWorker(specDir FilePath, filter String, updateRequi
 end 'runPersistentWorker'
 
 // ⛔⛔ **A WORKER'S STDERR IS AN UNDRAINED PIPE, SO THE COMPILER'S LOG CHANNEL HAS TO BE OFF INSIDE
-// ONE — AND FORGETTING THAT DEADLOCKED THE POOL THE FIRST TIME THIS RUNG WAS RUN.**
+// ONE.**
 //
-// `Logger.globalLogLevel` defaults to INFO, so every successful build writes two lines to stderr on its
-// way out: `[BIN] INFO: Writing PE file …` and `[CMP] INFO: Wrote N bytes of code to …`. Under the old
-// design those went to the COMPILE SUBPROCESS's stderr, which `runProcess` collected and this harness
-// threw away — produced, and never seen. In process they go to the WORKER's stderr, which NOTHING
-// reads until that worker dies or the pool shuts down (`shutdownAndDrainStderr`; the synchronous drain
-// is itself deliberate — see this file's header).
-//
-// ⚠ MEASURED 2026-08-23, on the first full run of this rung: ~240 bytes per compile against a 64 KiB
-// pipe is about 270 compiles, and a worker in a full suite performs roughly 550. Workers blocked
-// INSIDE a stderr write part-way through the run; each held its spec until the pool gave up on it
-// and terminated it, and the suite became a wall of terminated specs. The pool's own guards caught
-// it — which is what they are for — but the cause is here.
+// `Logger.globalLogLevel` defaults to INFO, so every successful build writes
+// `[CMP] INFO: Wrote N bytes of code to …` to stderr on its way out. In process that is the WORKER's
+// stderr, which NOTHING reads until that worker dies or the pool shuts down (`shutdownAndDrainStderr`;
+// the synchronous drain is itself deliberate — see this file's header). A worker compiles several
+// hundred programs in a full suite, enough to fill a 64 KiB pipe, and a worker blocked inside a stderr
+// write holds its spec until the pool terminates it.
 //
 // ⇒ The channel is SILENCED rather than drained. Draining continuously leaks one allocation per
 // worker, and this output has no reader in a worker under any design — it is

@@ -179,19 +179,31 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 
 	// ⭐ RESOLVED BEFORE THE PIPELINE, AND THAT ORDER IS THE WHOLE POINT: the previous build's
 	// artifacts are removed HERE, ahead of every step that can fail. See `discardPreviousOutput`.
+	// A compiler rebuilding its own image is the one exception — see `vacateRunningImage`.
 	//
-	// Bracketed as its own phase rather than left in `load`'s: these two touch the OUTPUT, `load`
+	// Bracketed as its own phase rather than left in `load`'s: these touch the OUTPUT, `load`
 	// reads the SOURCES, and a phase that absorbs a neighbour's cost is the defect CompileTimings'
 	// header is about.
 	let outputProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.prepareOutput)
 	let outputPath = try resolveOutputPath(project, outputOverride: outputOverride)
 	recordCoverageDataPath(project, outputPath: outputPath)
 	try ensureOutputDirectory(project, outputPath: outputPath)
-	try vacateRunningImage(project, outputPath: outputPath)
-	try discardPreviousOutput(project, outputPath: outputPath)
+	let rebuildsItself = outputIsRunningImage(outputPath)
+
+	if not rebuildsItself 'discardAheadOfThePipeline'
+		try discardPreviousOutput(project, outputPath: outputPath)
+	end 'discardAheadOfThePipeline'
+
 	recordPhase(project, phase: CompilePhase.prepareOutput, probe: outputProbe)
 
 	let codeResult = try compileToCodeResult(project)
+
+	if rebuildsItself 'vacateForTheWrite'
+		let vacateProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.prepareOutput)
+		try vacateRunningImage(project, outputPath: outputPath)
+		try discardPreviousOutput(project, outputPath: outputPath)
+		recordPhase(project, phase: CompilePhase.prepareOutput, probe: vacateProbe)
+	end 'vacateForTheWrite'
 
 	let writeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.writeExe)
 	writeExecutable(codeResult, target: project.target, outputPath: outputPath, productVersion: project.productVersion)
@@ -212,7 +224,14 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	end 'stampTheCounterImage'
 
 	recordPhase(project, phase: CompilePhase.writeExe, probe: writeProbe)
-	try requireOutputWritten(project, outputPath: outputPath)
+
+	try requireOutputWritten(project, outputPath: outputPath) otherwise 'notWritten'
+		if rebuildsItself 'putTheCompilerBack'
+			restoreVacatedImage(outputPath)
+		end 'putTheCompilerBack'
+
+		throw CompileError.compileError
+	end 'notWritten'
 
 	// ⭐ **AFTER THE EXECUTABLE IS PROVEN WRITTEN, because the sidecar describes THAT file** — its
 	// build-id is the fold of the very bytes just published, and a driver recomputes it from the binary
@@ -271,7 +290,7 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 		writeMetrics(project, metricsPath: metricsPath, codeBytes: codeBytes)
 	end 'metrics'
 
-	logInfo(LogCategory.compiler, message: function() gives "Wrote {codeBytes} bytes of code to {outputPath}")
+	logInfo(LogCategory.compiler, message: function() gives "Wrote {codeBytes} bytes of code to {outputPath} (compiled in {formatSeconds((total.nanos / NanosPerMs) as DurationMs)})")
 	return CompileProduct.create(outputPath, irText: irText, codeBytes: codeBytes, totalNanos: total.nanos, totalCpuTicks: total.cpuTicks)
 end 'compileMeasured'
 
@@ -294,43 +313,37 @@ function siblingImagePath(outputPath FilePath, infix String) returns FilePath
 	return dir.join(name)
 end 'siblingImagePath'
 
+// `maxon build` at the root of this repo names an output that IS the running binary.
+function outputIsRunningImage(outputPath FilePath) returns bool
+	let running = try Process.executablePath() otherwise 'noIntrospection'
+		// A host that will not say what it is running cannot be asked this question. A self-rebuild on
+		// such a host is refused with E6002 by `discardPreviousOutput`, which cannot delete a running image.
+		return false
+	end 'noIntrospection'
+
+	return outputPath.resolve(Directory.currentPath()).normalize().equals(running.normalize())
+end 'outputIsRunningImage'
+
 // ⭐⭐ **A COMPILER REBUILDING ITSELF WRITES OVER THE IMAGE IT IS EXECUTING, AND NO OS ALLOWS THAT.**
-// `maxon build` at the root of this repo names an output that IS the running binary, which
-// `discardPreviousOutput` cannot delete.
+// Windows refuses to DELETE a running executable and permits RENAMING one, so the image is moved to
+// `<stem>.previous<ext>` and every step after this — the `discardPreviousOutput` check, the writer, the
+// "did anything actually appear" verification — runs exactly as it does for any other program, over a
+// path nothing holds open.
 //
-// ⭐ **THE RUNNING IMAGE IS RENAMED OUT OF THE WAY, NOT WRITTEN AROUND.** Windows refuses to DELETE a
-// running executable and permits RENAMING one. Moved to `<stem>.previous<ext>`, it leaves the slot empty,
-// so every step after this — the `discardPreviousOutput` check, the writer, the "did anything actually
-// appear" verification — runs exactly as it does for any other program, over a path nothing holds open.
-//
-// ⛔ **THAT ORDER IS ALSO WHAT KEEPS "A FAILED BUILD LEAVES NOTHING AT THE OUTPUT PATH" TRUE HERE.**
-// Compiling to `<output>.next` and renaming it in afterwards would leave the OLD binary in the slot when
-// the compile fails — a stale compiler answering as though it were current, the exact failure every
-// staleness refusal in this tree exists to prevent. Renaming first leaves the slot EMPTY and the last
-// good binary at `.previous`, where a reader can put it back deliberately rather than run it by accident.
+// ⛔ **IT RUNS ONLY ONCE THE COMPILE HAS SUCCEEDED, SO A FAILED SELF-REBUILD LEAVES THE RUNNING COMPILER
+// IN THE SLOT.** That compiler is the only thing that can build the fix; a slot emptied by a compile error
+// leaves the tree with nothing to compile it. Every other output is discarded ahead of the pipeline
+// instead, because a stale PROGRAM would answer a `;`-chained run as though it were current.
 //
 // ⚠ **AN OLDER `.previous` MAY ITSELF BE RUNNING** — an `mcp-server` or `lsp-server` started before the
 // last rebuild — and then it cannot be deleted either. It is renamed aside to a unique
 // `<stem>.retired-<stamp><ext>` instead, and every self-rebuild first sweeps the retired images nothing
 // holds any longer.
 //
-// Silent when the output is anything else, which is every other build. When the output IS this image and
-// it cannot be vacated, the refusal is made HERE: `discardPreviousOutput`'s would blame a spec-test.
+// When the image cannot be vacated the refusal is made HERE: `discardPreviousOutput`'s would blame a
+// spec-test.
 function vacateRunningImage(project Project, outputPath FilePath) throws CompileError
-	let running = try Process.executablePath() otherwise 'noIntrospection'
-		// A host that will not say what it is running cannot be asked this question. Every other build
-		// is unaffected, and a self-rebuild on such a host still reports E6002 from
-		// `discardPreviousOutput` — the honest answer, one step later.
-		return
-	end 'noIntrospection'
-
-	let here = Directory.currentPath()
-
-	if not outputPath.resolve(here).normalize().equals(running.normalize()) 'notOurOwnImage'
-		return
-	end 'notOurOwnImage'
-
-	sweepRetiredImages(outputPath.resolve(here))
+	sweepRetiredImages(outputPath.resolve(Directory.currentPath()))
 
 	let previous = siblingImagePath(outputPath, infix: PreviousImageSuffix)
 
@@ -348,6 +361,20 @@ function vacateRunningImage(project Project, outputPath FilePath) throws Compile
 
 	logInfo(LogCategory.compiler, message: function() gives "rebuilding this compiler: moved the running image to {previous.toString()}")
 end 'vacateRunningImage'
+
+// The write failed after `vacateRunningImage` emptied the slot; the image this process runs goes back, for
+// the reason a failed compile never vacates it.
+function restoreVacatedImage(outputPath FilePath)
+	let previous = siblingImagePath(outputPath, infix: PreviousImageSuffix)
+
+	try File.rename(previous, to: outputPath) otherwise 'unmovable'
+		logError(LogCategory.compiler, message: function() gives "could not move the running compiler back from {previous.toString()} to {outputPath.toString()}; move it back by hand")
+		return
+	end 'unmovable'
+
+	moveDebugSidecar(previous, to: outputPath)
+	logInfo(LogCategory.compiler, message: function() gives "the build failed: moved the running compiler back to {outputPath.toString()}")
+end 'restoreVacatedImage'
 
 // The stamp keeps two held backups apart, and it is digits only so `isRetiredImageName` can tell a retired
 // image from any other file that shares the stem.
@@ -483,8 +510,7 @@ function discardPreviousOutput(project Project, outputPath FilePath) throws Comp
 end 'discardPreviousOutput'
 
 // ⚠ EVERY E6002 SAYS THE STALE BINARY SURVIVED. A build refused here leaves the previous binary at
-// `outputPath` — the one exception to "a failed build leaves nothing there" — so a `;`-chained
-// `build; suite` runs it and reports a false red or a false green.
+// `outputPath`, so a `;`-chained `build; suite` runs it and reports a false red or a false green.
 function refuseUnreplaceableOutput(project Project, outputPath FilePath, reason String, likelyCause String) throws CompileError
 	reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.binaryOutputNotReplaceable, message: "could not replace the build output at {outputPath} — {reason}, so the PREVIOUS build's binary is still in place and will answer anything you run next. {likelyCause}"))
 	try refuseCompile(project)
@@ -520,12 +546,10 @@ end 'ensureOutputDirectory'
 
 // The backend claimed to have written the executable; check that something is actually there.
 //
-// `discardPreviousOutput` emptied this path before the compile started, so this is not a heuristic —
-// it is an exact reading of whether the writer produced a file. It exists because the four backend
-// writers report a failed `File.writeBinary` by LOGGING it and returning, which leaves `compile` free
-// to announce "Wrote N bytes" and exit 0 while nothing has been written. Measured: with the output
-// made read-only, a build printed `[BIN] ERROR: Failed to write PE file`, then `Wrote 1512 bytes of
-// code`, then `Compiled -> …`, and exited 0 over the previous build's binary.
+// `discardPreviousOutput` emptied this path before the write, so this is not a heuristic — it is an
+// exact reading of whether the writer produced a file. It exists because the four backend writers
+// report a failed `File.writeBinary` by LOGGING it and returning, which would otherwise leave `compile`
+// free to announce "Wrote N bytes" and exit 0 while nothing has been written.
 function requireOutputWritten(project Project, outputPath FilePath) throws CompileError
 	if File.exists(outputPath) 'written'
 		return

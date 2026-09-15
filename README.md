@@ -125,9 +125,9 @@ repository's sources against the RELEASE's standard library. Measured: it succee
 built a compiler from a library that is not this tree's.
 
 `build` with no path compiles [`build.maxon`](build.maxon) at the root and does what it says. The
-compiler in the slot can rebuild itself: it renames its own running image to `maxon.previous` first,
-so a failed build leaves the slot empty rather than a stale compiler answering as though it were
-current.
+compiler in the slot can rebuild itself: once the compile succeeds it renames its own running image to
+`maxon.previous` and writes the new one in its place, so a failed build leaves the working compiler
+where it was.
 
 `scripts/fixpoint.sh` builds the compiler with itself twice and checks the two binaries are
 byte-identical.

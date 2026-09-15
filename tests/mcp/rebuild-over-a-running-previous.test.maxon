@@ -12,41 +12,6 @@ let SidecarExtension = ".mxdbg"
 let ProgramFileName = "program.maxon"
 let KnownLine = "built over a running previous"
 
-let BuildCommandName = "build"
-let OutputOption = "-o"
-
-// Files only: a held file here would be a previous run's server still alive, which is a harness problem.
-function clearStagedFiles(dir FilePath)
-	let entries = try Directory.list(dir) otherwise panic("could not list {dir.path}")
-
-	for entry in entries 'eachEntry'
-		if Directory.isDirectory(entry) 'aDirectory'
-			clearStagedFiles(entry)
-			continue
-		end 'aDirectory'
-
-		try File.delete(entry) otherwise panic("could not clear {entry.path} from a previous run's staging")
-	end 'eachEntry'
-end 'clearStagedFiles'
-
-function programSource() returns String
-	return "function main() returns ExitCode\n\tprint(\"{KnownLine}\\n\")\n\treturn 0\nend 'main'\n"
-end 'programSource'
-
-function runIn(dir FilePath, binary FilePath, arguments StringArray) returns CollectedOutput
-	var config = Configuration.create(Executable.path(binary))
-	config.arguments = arguments
-	config.workingDirectory = dir
-
-	return try config.run() otherwise (e) 'spawnFailed'
-		panic("could not spawn {binary.path}: {e.displayReason()}")
-	end 'spawnFailed'
-end 'runIn'
-
-function rebuildOwnImage(dir FilePath, compiler FilePath, program FilePath) returns CollectedOutput
-	return runIn(dir, binary: compiler, arguments: [BuildCommandName, program.toString(), OutputOption, compiler.toString()])
-end 'rebuildOwnImage'
-
 test 'a self-rebuild succeeds while another process runs the previous image, and the next one clears what it moved aside'
 	let dir = stagingDir(StagedDirName)
 	clearStagedFiles(dir)
@@ -66,7 +31,7 @@ test 'a self-rebuild succeeds while another process runs the previous image, and
 	try session.sendLine(initializedNotification())
 
 	let program = dir.join(ProgramFileName)
-	try File.writeText(program, content: programSource()) otherwise panic("could not write {program.path}")
+	try File.writeText(program, content: printingProgramSource(KnownLine)) otherwise panic("could not write {program.path}")
 
 	let first = rebuildOwnImage(dir, compiler: compiler, program: program)
 	try Expect.equal(first.exitCode() as AssertedInt, expected: 0, message: "`{BuildCommandName} {ProgramFileName} {OutputOption} {imageName}`, run by {imageName} itself while an mcp-server runs {previousName}, exited {first.exitCode()}. It must move the held {previousName} aside and vacate its own image. The compiler said: {first.stderr}")

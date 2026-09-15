@@ -1933,11 +1933,10 @@ export enum ErrorCode
 	// dropping either half.
 	codeEmitterCoverageNeedsDebugInfo = "E5003"
 
-	// The previous build output at this path could not be cleared before the build began, so this
-	// build cannot replace it. Refused up front rather than at the write, because the write is logged
-	// and swallowed: carrying on would print "Wrote N bytes" and exit 0 over an untouched STALE binary.
-	// Every message states that the previous binary SURVIVED -- the one case where a failed build leaves
-	// an output behind, so a `;`-chained build-then-test runs the stale one. Two roads reach it, each
+	// The previous build output at this path could not be cleared, so this build cannot replace it.
+	// Refused ahead of the write, because the write is logged and swallowed: carrying on would print
+	// "Wrote N bytes" and exit 0 over an untouched STALE binary. Every message states that the previous
+	// binary SURVIVED, so a `;`-chained build-then-test runs the stale one. Two roads reach it, each
 	// naming its own likely cause, because the compiler cannot identify the holder (that would need
 	// RestartManager/NtQuerySystemInformation, imported nowhere here):
 	//   * An ordinary output that is locked (on Windows a RUNNING executable cannot be deleted) or
@@ -1949,7 +1948,7 @@ export enum ErrorCode
 	binaryOutputNotReplaceable = "E6002"
 
 	// The backend reported no failure, yet nothing exists at the output path after the write. The
-	// build removed that path before compiling, so its ABSENCE afterwards means the writer did not
+	// build removed that path before the write, so its ABSENCE afterwards means the writer did not
 	// produce it -- a swallowed IO failure. A build that cannot say where its output is must not
 	// report success.
 	binaryOutputNotWritten = "E6003"
