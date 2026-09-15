@@ -20,7 +20,7 @@
 // word>` answers for it. The roster is read off the binary, every time.
 //
 // ⚠ **AND A ROUND TRIP OVER AN EMPTY SET PASSES.** Two parses that both found nothing agree perfectly,
-// which is why `AnchorCommands` exists: three words that must appear, so a reading that silently stopped
+// which is why `anchorCommands` exists: three words that must appear, so a reading that silently stopped
 // working cannot report agreement. It is deliberately NOT a census — it is the proof that the census read
 // off the binary is non-empty.
 //
@@ -41,9 +41,18 @@ export let HelpCommandWord = "help"
 export let WithdrawnHelpFlag = "--help"
 export let WithdrawnHelpFlagShort = "-h"
 
+export let BuildCommandWord = "build"
+let VersionCommandWord = "version"
+export let OutputFlag = "-o"
+
+// What the header's second line says, beneath the version line.
+export let EarlyPreviewWords = "early preview"
+
 // ⭐ THREE WORDS THAT PROVE A READING IS NOT VACUOUS — see the header. Not a census: a command added to
 // the driver belongs in neither this list nor any other list in this corpus.
-let AnchorCommands = ["build", "version", "help"]
+function anchorCommands() returns ListedWordArray
+	return [BuildCommandWord, VersionCommandWord, HelpCommandWord]
+end 'anchorCommands'
 
 // ⭐ AND ONE THAT PROVES THE HIDING IS REAL. The short list leaves out the commands for working on the
 // compiler itself; a split that hid NOTHING would satisfy every subset assertion here perfectly, so one
@@ -150,6 +159,28 @@ export function runHelpFor(command String) returns CollectedOutput
 	return runDriver(arguments)
 end 'runHelpFor'
 
+// What `maxon version` prints: the line the header opens with.
+export function versionLine() returns String
+	let line = runOneArgument(VersionCommandWord).stdout.trim()
+
+	if line.isEmpty() 'noVersion'
+		panic("CliHarness: the gate could not run - `maxon {VersionCommandWord}` printed nothing to compare a header with.")
+	end 'noVersion'
+
+	return line
+end 'versionLine'
+
+// ⭐ **THE HEADER: THE FIRST TWO LINES OF STDOUT ARE THE VERSION, EXACTLY AS `maxon version` PRINTS IT,
+// AND THE EARLY-PREVIEW WARNING.** Asked of `build` and of `maxon` alone, which open with the same two lines.
+export function requireVersionHeader(stdout String, which String) throws TestFailure
+	let lines = stdout.split("\n")
+	let first = try lines.get(0) otherwise ""
+	let second = try lines.get(1) otherwise ""
+
+	try Expect.equal(first.trim(), expected: versionLine(), message: "{which} does not open with the version `maxon {VersionCommandWord}` prints. Its stdout was: {stdout}")
+	try Expect.contains(second, needle: EarlyPreviewWords, message: "{which} does not warn, on its second line, that Maxon is an early preview. Its stdout was: {stdout}")
+end 'requireVersionHeader'
+
 // The binary under test, absolute and with the suffix this host can actually spawn.
 function testedCompilerPath() returns FilePath
 	let spelled = "{TestedCompilerStem}{executableSuffix()}"
@@ -181,17 +212,11 @@ end 'executableSuffix'
 // own staging directory, which `CaseDirItself` names. The previous run's files go first, so a rerun stages
 // the same tree; the standard library cannot remove a directory, so only files are cleared.
 export function stageCompiler(caseDirName String, binaryIn String, stdlibIn String) returns FilePath
-	for component in [caseDirName, binaryIn, stdlibIn] 'eachSpelling'
-		if component.contains(ParentComponent) 'climbsOut'
-			panic("CliHarness: the gate could not run - '{component}' climbs out of {StagingRootDirName}, and a staging call clears files under what it names.")
-		end 'climbsOut'
+	for component in [binaryIn, stdlibIn] 'eachSpelling'
+		requireStaysInStaging(component)
 	end 'eachSpelling'
 
-	if caseDirName.isEmpty() or caseDirName.contains(PathSeparator) 'notOneDirectory'
-		panic("CliHarness: the gate could not run - '{caseDirName}' is not one directory name. Every case stages under a directory of its own, and this is the one whose files are cleared.")
-	end 'notOneDirectory'
-
-	clearStagedFiles(stagingDir(caseRelative(caseDirName, relative: CaseDirItself)))
+	_ = freshCaseDir(caseDirName)
 	_ = stagingDir("{caseRelative(caseDirName, relative: stdlibIn)}{PathSeparator}{StdlibDirName}")
 
 	let staged = stagingDir(caseRelative(caseDirName, relative: binaryIn)).join("{CompilerBaseName}{executableSuffix()}")
@@ -201,6 +226,26 @@ export function stageCompiler(caseDirName String, binaryIn String, stdlibIn Stri
 
 	return staged
 end 'stageCompiler'
+
+// A case's own staging directory, absolute, with the previous run's files cleared so a rerun starts from
+// the same tree.
+export function freshCaseDir(caseDirName String) returns FilePath
+	requireStaysInStaging(caseDirName)
+
+	if caseDirName.isEmpty() or caseDirName.contains(PathSeparator) 'notOneDirectory'
+		panic("CliHarness: the gate could not run - '{caseDirName}' is not one directory name. Every case stages under a directory of its own, and this is the one whose files are cleared.")
+	end 'notOneDirectory'
+
+	let dir = stagingDir(caseRelative(caseDirName, relative: CaseDirItself))
+	clearStagedFiles(dir)
+	return dir
+end 'freshCaseDir'
+
+function requireStaysInStaging(component String)
+	if component.contains(ParentComponent) 'climbsOut'
+		panic("CliHarness: the gate could not run - '{component}' climbs out of {StagingRootDirName}, and a staging call clears files under what it names.")
+	end 'climbsOut'
+end 'requireStaysInStaging'
 
 // A case's staging directory, or a directory under it, spelled from the checkout root.
 function caseRelative(caseDirName String, relative String) returns String
@@ -299,7 +344,7 @@ end 'labelsWhereOptionhoodIs'
 export function anchorsMissingFrom(words ListedWordArray) returns String
 	var missing = ""
 
-	for anchor in AnchorCommands 'eachAnchor'
+	for anchor in anchorCommands() 'eachAnchor'
 		if not words.contains(anchor) 'absent'
 			missing.append("{anchor} ")
 		end 'absent'

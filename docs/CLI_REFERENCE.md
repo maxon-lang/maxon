@@ -4,7 +4,8 @@ Everything the `maxon` compiler driver accepts: the commands, their options, and
 they read.
 
 `maxon help` prints the same command and option list from the driver itself, and `maxon help <command>`
-one command's part of it; `maxon` with no arguments prints the version and the command list alone. Where
+one command's part of it; `maxon` with no arguments prints the version, the early-preview warning and the
+command list alone. Where
 this document and that listing disagree, the listing is the compiler and this is a copy.
 
 ---
@@ -265,8 +266,10 @@ maxon build app.maxon --emit-ir
 maxon build app.maxon --target=wasm32-wasi
 ```
 
-On success it prints `Compiled -> <path>` and exits 0. A compile error prints its diagnostics and
-exits 1.
+Every build first prints two lines to stdout: the compiler's version, as `maxon version` prints it, and
+a warning that Maxon is an early preview whose language, standard library and tools may change
+incompatibly between releases. On success it then prints `Compiled -> <path>` and exits 0. A compile
+error prints its diagnostics to stderr and exits 1.
 
 ---
 
@@ -853,13 +856,14 @@ still carrying one is told what to write rather than that the driver never heard
 ### `maxon help`
 
 ```bash
-maxon                  # the version, and one line per command
+maxon                  # the version, the early-preview warning, and one line per command
 maxon help             # every command, with the options each one reads
 maxon help build       # one command's entry and its options
 ```
 
 `maxon` with **no arguments** answers the only question a caller with nothing to go on can ask: which
-binary this is, and what it does. One line per command, and exit **0** — nothing was typed wrong.
+binary this is, and what it does. It opens with the same two lines every `maxon build` does — the version
+and the early-preview warning — then one line per command, and exits **0**: nothing was typed wrong.
 
 It lists the commands for **using** the compiler and leaves out the four for **working on** it
 (`spec-test`, `scale-test`, `verify-recheck`, `verify-warm-rebuild`) — and its footer says so, because a

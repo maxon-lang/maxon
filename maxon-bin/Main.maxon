@@ -499,11 +499,6 @@ module function reportUnknownTarget(spec String) returns ExitCode
 	return 1
 end 'reportUnknownTarget'
 
-// ⭐⭐ **`build` TAKES A LIST, AND THE LIST'S ORDER IS PART OF WHAT IT SAYS (A3m).** Every positional is
-// compiled, in the order given; `Compiler.loadSourceFiles` registers them in exactly that order and
-// roots the project at their common ancestor. Before A3m the parser kept the FIRST positional and
-// dropped the rest in silence — MEASURED, `build alias.maxon main.maxon` reported `E3001: No 'main'
-// function found` and `build main.maxon alias.maxon` reported `E3011: Unknown type 'Int'`, each a
 // The build script a directory may carry. See `runBuildManifest`.
 let BuildManifestFileName = "build.maxon"
 
@@ -783,8 +778,10 @@ function manifestDefines(doc JsonDoc, build JsonNodeId) returns DefineArray
 	return defines
 end 'manifestDefines'
 
-// diagnostic about a program the caller never asked for.
+// The header goes to stdout, so a failing build's stderr is still exactly its diagnostics.
 function runBuild(args MaxonArgs) returns ExitCode
+	printVersionHeader()
+
 	if args.paths.count() == 0 'noPath'
 		match runBuildManifest(args, targetName: "") 'bareBuild'
 			ran(code) then return code
@@ -810,6 +807,10 @@ end 'runBuild'
 
 // Compile the positional paths — `build`'s meaning when no manifest target claimed them. Split out so
 // the fallback above is a RETURN rather than a match arm that does nothing.
+//
+// Every positional is compiled as one program, in the order given: `Compiler.loadSourceFiles` registers
+// them in that order and roots the project at their common ancestor, and an output name that is not
+// given is derived from the first of them.
 function runBuildPaths(args MaxonArgs) returns ExitCode
 	var inputPaths = MaxonSourcePathArray.create()
 
@@ -2069,14 +2070,22 @@ function printWrappedProse(text String, firstPrefix String, indent String)
 	end 'eachParagraph'
 end 'printWrappedProse'
 
-// ⭐ **WHAT `maxon` WITH NO ARGUMENTS SAYS**: which binary this is, and one line per command. It is the
-// answer to the only question a caller with nothing to go on can ask, so it is SHORT — the reference
-// itself is one of the commands listed, and the footer names it.
+// ⭐ **WHAT `maxon` WITH NO ARGUMENTS SAYS**: which binary this is, that it is a preview, and one line per
+// command. It is the answer to the only question a caller with nothing to go on can ask, so it is SHORT —
+// the reference itself is one of the commands listed, and the footer names it.
 function printOverview()
-	print("{versionLine()}\n")
+	printVersionHeader()
 	print("\n")
 	printCommandList()
 end 'printOverview'
+
+// ASCII only, because a Windows console renders stdout in its own code page.
+let EarlyPreviewNotice = "warning: Maxon is an early preview. The language, standard library and tools may change incompatibly between releases."
+
+// Which compiler this is, and that it is a preview: what `build` and `maxon` alone open with.
+function printVersionHeader()
+	print("{versionLine()}\n{EarlyPreviewNotice}\n")
+end 'printVersionHeader'
 
 // The list alone — what the overview prints under the version line, and what every refusal in `main`
 // prints under its error. A refusal owes the reader the way back, and the way back is what this binary
