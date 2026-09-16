@@ -9,7 +9,7 @@ Each language feature must have a spec file in the `specs/` directory that serve
 1. **YAML Frontmatter** - Metadata about the feature
 2. **Documentation** - User-facing prose and examples, read by people; nothing extracts it
 3. **Tests** - Test cases, generated into per-target fragment trees
-   (`specs/fragments-<target>/<spec>/<test>.test`, and `specs/fragments/<target>/...`)
+   (`specs/fragments/<target>/<spec>/<test>.test`)
 
 ## Spec File Structure
 
@@ -285,7 +285,7 @@ When no `// --- file:` markers are present, behavior is unchanged (single-file t
 
 2. **`maxon` blocks** must be followed by EITHER:
    - `` `exitcode `` + optional `` `stdout `` and/or `` `stderr `` (for successful execution)
-   - `` `mm-trace `` (memory-management trace assertion; see below)
+   - `` `mm-trace `` or `` `log-trace `` (debug-stream trace assertion; see below)
    - `` `maxoncstderr `` (for compile/parse errors)
 
 3. **In the Documentation section:** nothing is extracted and nothing is compiled. The runnable region
@@ -320,12 +320,23 @@ Optional per-test directives go between the test marker and the maxon block:
 
 | Directive | Effect |
 |-----------|--------|
-| `<!-- Args: ... -->` | Pass the listed arguments to the test executable |
-| `<!-- MmTrace -->` | Enable mm-trace capture mode (see below). Equivalent to adding an ` ```mm-trace ` block |
-| `<!-- AsyncTrace -->` | Enable async-runtime trace output |
-| `<!-- IncludeStdlibIr -->` | Include reachable stdlib functions in the captured CompiledIR snapshot |
-| `<!-- procs: N -->` | Run the program with `MAXON_MAX_PROCS=N` in its environment, pinning the scheduler's processor count |
+| `<!-- Args: ... -->` | The argv the compiled program is spawned with, space-separated; a double-quoted run is one argument and may be empty (`""`). Capital `A`, matched exactly |
+| `<!-- unsupported-targets: t1, t2 -->` | Exclude the case from the named targets (`x64-windows`, `wasm32-wasi`, …; comma-separated); it runs on every other target. A missing or blank marker excludes nothing; a key naming no supported target, or a list naming every one, is a parse failure |
+| `<!-- targets: ... -->` | Retired. The parser refuses it: nothing reads it, so a case carrying it would run everywhere. Spell the lanes that cannot serve the case with `unsupported-targets:` instead |
+| `<!-- MmTrace -->` | Enable mm-trace capture mode (see below): the program is built with `--debugstream`, run under `maxon monitor --filter=mm`, and its normalized trace compared to the ` ```mm-trace ` block. Equivalent to adding the block |
+| `<!-- LogTrace -->` | The same capture mode for the other family of the debug stream — the events the program writes through `__DebugStream` — compared to a ` ```log-trace ` block. A case selects one family, never both |
+| `<!-- AsyncTrace -->` | Compile with `--async-trace` and compare stderr after both sides are normalized for the green-thread trace |
+| `<!-- DebugInfo -->` | Compile this case with debug info on, the way `maxon build` does; every other case compiles with it off |
+| `<!-- network: live -->` | The case opens a socket to a real external host. It is left out of a default run and runs only under `--network`; `live` is the only value |
+| `<!-- procs: N -->` | Run the program with `MAXON_MAX_PROCS=N` in its environment, pinning the scheduler's processor count; `N` is a positive decimal |
 | `<!-- preempt: off -->` | Run the program with `MAXON_PREEMPT=off` in its environment, so the monitor takes no processor from the thread holding it; `off` is the only value |
+| `<!-- stdin: hold -->` / `<!-- stdin: delayed -->` | Give the program a stdin that blocks. `hold` is a pipe nobody ever writes to, so a read blocks for the program's whole life; `delayed` writes one line about a second after the program's first stdout byte and closes, so the read blocks and then completes. Without the marker stdin is the null device and every read answers at once with EOF |
+
+A valued marker refuses an unrecognized value rather than reading it as the default, and a `<!-- … -->`
+comment line inside a case that no directive above claims (a misspelling, or a marker newer than the
+parser) is a parse failure naming the line and this roster — a claim a spec file makes must be honoured
+or reported, never silently declined. The four valueless flags match by their whole body, so
+`<!-- DebugInfos -->` is refused rather than read as `DebugInfo`.
 
 ### mm-trace blocks
 
@@ -439,49 +450,37 @@ end 'main'
 
 ### Test Fragment Files
 
-Test fragment files are auto-generated from spec files by the test runner and stored under `specs/fragments-<target>/<spec-name>/<test-name>.test` (e.g. `specs/fragments-x64-windows/arithmetic/addition.test`). They are machine-maintained — edit the spec file, not the fragment — but agents reading them should understand the format so they don't confuse expected IR with captured IR.
+Test fragment files — the goldens — are written by the test runner and stored under `specs/fragments/<target>/<spec-name>/<test-name>.test` (e.g. `specs/fragments/x64-windows/arithmetic/addition.test`). The target is the run's effective target, never the host: a golden records the code that was generated. They are machine-maintained — edit the spec file, not the fragment — but agents reading them should understand the format so they don't confuse a golden with an expectation.
+
+A golden is reference, not a gate. A run mints one for a case that has none, on the host where that case passed, and never rewrites one that exists: a committed golden whose bytes differ from this run's compile is reported as drift, and the case keeps the verdict its assertions earned. Only `--update-required` (with a `--filter`) rewrites a committed golden. A golden for a target only another host can run is minted there; CI fails a lane that leaves untracked goldens and uploads them as an artifact to unpack at the repository root.
 
 #### Fragment Format
 
-A fragment has four parts separated by `---` lines:
+A fragment records the case's source, what the program was given, and what the compiler produced. A run case:
 
 ```
 // Test: <test-name>
 <maxon source>
 ---
-<expectations>
+Args: <argv, only when the case names any>
+ExitCode: <N, or `unpinned` when the case pins only a stream>
 ---
-// CompiledIR
-<raw IR captured from the compiler at fragment-generation time>
----
+<the Target IR the compiler generated>
 ```
 
-**Section 1 — source.** The test's Maxon source, with a `// Test: <name>` header.
+A compiler-error case has no IR; the diagnostic the compiler actually produced takes its place, with every compiled file's path rewritten to the stable `<fragment>` token:
 
-**Section 2 — expectations.** Any combination of these keys, in any order:
+```
+// Test: <test-name>
+<maxon source>
+---
+CompilerError:
+<normalized compiler stderr>
+```
 
-| Key | Meaning |
-|-----|---------|
-| `ExitCode: N` | Expected process exit code |
-| `Args: ...` | Command-line arguments to pass to the test executable |
-| `MmTrace: true` | Enable mm-trace capture mode (binary debug-stream + `monitor` decode) |
-| `AsyncTrace: true` | Enable async-runtime trace output |
-| `IncludeStdlibIr: true` | Include reachable stdlib functions in the captured CompiledIR snapshot |
-| `` Stdout: ``` `` / `` Stderr: ``` `` | Expected runtime stdout/stderr (fenced multiline block) |
-| `` MmTraceExpected: ``` `` | Expected normalized mm-trace (fenced multiline block); pairs with `MmTrace: true` |
-| `` RequiredIR: ``` `` | Expected compiler IR to verify, pinned (fenced multiline block) |
-| `` RequiredRdata: ``` `` / `` RequiredData: ``` `` | Expected .rdata / .data section contents |
-| `` MaxoncStderr: ``` `` | Expected compiler error output — used only for compiler-error tests |
+The `// Test:` header is exactly one line, and the source section is byte-for-byte the file the compiler was handed — so a `line:col` in the diagnostic reads directly against it. Pinned stdout/stderr and `RequiredIR` blocks are not in the fragment: they are test inputs, checked by the run, and a golden only tracks the code.
 
-**Section 3 — compiled IR snapshot.** When non-empty, section 3 **must** begin with the literal header line `// CompiledIR` on its own, followed by the raw IR captured from the compiler when the fragment was generated. This is a snapshot of the compiler's actual output at generation time, **not** an expectation — the test runner does not verify section 3 during runs. Its job is purely to make the compiler's output diff-reviewable in git.
-
-Section 3 can legitimately be empty (no `// CompiledIR` header, no content) in two cases:
-1. The expectation section sets `RequiredIR:` — the expected IR is already pinned in section 2, so the snapshot is redundant and skipped.
-2. The test is a compiler-error test (has `MaxoncStderr:`) — there is no IR to capture.
-
-The `// CompiledIR` header exists to make the asymmetry with `RequiredIR` visually obvious at a glance: `RequiredIR` is the test's **input** (a pinned assertion in section 2), while `CompiledIR` is the compiler's **output** (a captured snapshot in section 3). If you see unlabeled IR in a fragment, the fragment is in a stale format and must be regenerated — the parser will reject it.
-
-#### Example (success test with IR capture)
+#### Example (run case)
 
 ```
 // Test: addition
@@ -491,49 +490,38 @@ end 'main'
 ---
 ExitCode: 15
 ---
-// CompiledIR
-module {
-  func @main() -> u8 {
-  entry:
-    x64.mov r8d, 15
-    x64.ret
-  }
+data {
+  ...
 }
----
 ```
 
-#### Example (compiler-error test)
+#### Example (compiler-error case)
 
 ```
-// Test: invalid-syntax
+// Test: error.duplicate-typealias-same-file
+typealias Score = int(0 to 100)
+typealias Score = int(0 to 200)
+
 function main() returns ExitCode
-	return @@@
+	return 0
 end 'main'
 ---
-MaxoncStderr: ```
-error E1234: unexpected token '@'
+CompilerError:
+error E3061: <fragment>:3:11: Duplicate typealias 'Score'
 ```
----
----
-```
-
-Section 3 is empty — no header, no content — because there is no captured IR for a test that fails to compile.
 
 #### Commands
 
 ```bash
-# Run the whole suite (auto-regenerates stale fragments)
-./maxon-bin/.maxon/maxon.exe spec-test
-
-# Run only tests matching a pattern
+# Run only tests matching a pattern; a case with no golden mints one, a drifted golden is reported
 ./maxon-bin/.maxon/maxon.exe spec-test --filter=arithmetic
 
-# Force regeneration of fragments and RequiredIR blocks in spec files
-./maxon-bin/.maxon/maxon.exe spec-test --update-required
+# Rewrite the committed goldens and RequiredIR blocks of the matching cases
+./maxon-bin/.maxon/maxon.exe spec-test --update-required --filter=arithmetic
 ```
 
 #### Adding Tests
 
 1. Create or edit `specs/<feature-name>.md`.
-2. Run `spec-test` — fragments are auto-generated on the next run.
-3. Implement until tests pass. Never edit fragments directly; edit the spec file and let the runner regenerate.
+2. Run `spec-test --filter=<feature-name>` — a passing case with no golden mints one.
+3. Implement until tests pass. Never edit fragments directly; edit the spec file and let the runner mint or, under `--update-required`, rewrite.

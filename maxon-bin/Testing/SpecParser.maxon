@@ -210,12 +210,11 @@ let ArgsMarker = "<!-- Args:"
 //
 // ⚠ **IT CARRIES NO PAYLOAD, SO IT MUST NOT GO THROUGH `markerValue`.** That helper splits on
 // `MarkerNameSep` and answers "" for a bare marker — an empty answer being indistinguishable from a
-// missing one is exactly how a silently-ignored marker happens. Its arm is a pure `contains` flag set.
+// missing one is exactly how a silently-ignored marker happens. Its arm is a whole-body match
+// (`openingsCarryFlag`) that sets a flag.
 //
-// ⛔ **AND ONE WAS ALREADY BEING IGNORED.** `specs/async-await.md` has carried `<!-- AsyncTrace -->` since
-// the port, with no arm to claim it: an unrecognized comment line falls through this scanner's `i = i + 1` and
-// is DISCARDED without complaint, so the case ran as an ordinary stderr assertion and simply failed. A marker
-// nothing reads is not inert — it is a claim the file makes and the harness silently declines.
+// A marker nothing reads is not inert — it is a claim the file makes and the harness declines — which is
+// why a comment line no arm claims is refused at the foot of the scan rather than walked over.
 //
 // It is not a superstring or substring of any other marker ("<!-- AsyncTrace" first differs from "<!-- test:",
 // "<!-- disabled-test:", "<!-- unsupported-targets:" and "<!-- Args:" at the character after "<!-- "), so the marker checks
@@ -307,8 +306,7 @@ end 'traceMarkerOf'
 // ⛔ Do not write the COUNT down anywhere either.
 //
 // Stating the fact on the case itself is the same correction the section-pin markers got (see
-// `SpecTestRunner.targetCanCheckSectionPins`). An unrecognized `<!-- … -->` comment line is skipped, so
-// a reader that does not know this marker keeps exactly the meaning the `.md` file already had.
+// `SpecTestRunner.targetCanCheckSectionPins`).
 //
 // No marker token is a prefix of another — `markerOpeningAmong`'s rule, which keeps this check independent
 // of every other family's.
@@ -1417,31 +1415,26 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 		end 'nextMarker'
 
 		// The per-target gate — one of the comment lines that may sit between this test's marker and
-		// its first fence. It is neither a fence nor a next-test marker, so without this it would fall
-		// through to `i = i + 1` and be silently ignored (which is exactly how safety.md's four markers
-		// went unread until this rung). Parsed here so a disabled case consumes it identically to a live
-		// one; the disabled case then discards the whole test, exclusions and all.
+		// its first fence. Parsed here so a disabled case consumes it identically to a live one; the
+		// disabled case then discards the whole test, exclusions and all.
 		if openingsCarry(openings, marker: UnsupportedTargetsMarker) 'unsupportedTargetsMarker'
 			unsupportedTargets = parseUnsupportedTargetKeys(line, specPath: specPath, testName: name)
 			i = i + 1
 			continue
 		end 'unsupportedTargetsMarker'
 
-		// ⛔⛔ **THE RETIRED WHITELIST SPELLING IS REFUSED, NOT IGNORED.** `<!-- targets: … -->` named the
+		// ⛔⛔ **THE RETIRED WHITELIST SPELLING GETS ITS OWN REFUSAL.** `<!-- targets: … -->` named the
 		// lanes a case COULD run on — the exact inverse of what `UnsupportedTargetsMarker` names — so a
-		// line still carrying it does not merely fail to restrict: it asserts one set and delivers its
-		// complement. Unread, it falls through to `i = i + 1` and is DISCARDED without complaint, which
-		// is `AsyncTraceMarker`'s recorded failure with the damage pointed the other way. MEASURED: two
-		// spec files carrying the retired spelling let five cases silently run on every lane, with both
-		// gated lanes green over it.
+		// line still carrying it asserts one set and delivers its complement. The unread-comment refusal
+		// at the foot of the scan would catch it too, but only this arm can say what the line MEANT and
+		// which spelling replaces it.
 		if openingsCarry(openings, marker: RetiredTargetsMarker) 'retiredTargetsMarker'
 			panic("SpecParser: {specPath.toString()}: test '{name}' carries the retired `{RetiredTargetsMarker} … -->`, which named the targets a case runs ON. Nothing reads it, so the case runs EVERYWHERE — the complement of what the line says. Spell the lanes that cannot serve it: `{UnsupportedTargetsMarker} … -->`")
 		end 'retiredTargetsMarker'
 
 		// The runtime arguments — the other comment line that may sit between this test's marker and its
-		// first fence, read here for `UnsupportedTargetsMarker`'s reasons exactly: it is neither a fence nor a next-test
-		// marker, so without an arm it falls through to `i = i + 1` and is silently ignored, and a disabled
-		// case must consume it identically to a live one.
+		// first fence, read here for `UnsupportedTargetsMarker`'s reasons exactly: a disabled case must
+		// consume it identically to a live one.
 		if openingsCarry(openings, marker: ArgsMarker) 'argsMarker'
 			programArgs = parseProgramArgs(line)
 			i = i + 1
@@ -1449,39 +1442,39 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 		end 'argsMarker'
 
 		// The valueless flag marker. Consumed identically to the markers above — including on a DISABLED case, so
-		// shelving a trace case does not leave its marker to fall through as unread prose.
-		if openingsCarry(openings, marker: AsyncTraceMarker) 'asyncTraceMarker'
+		// shelving a trace case does not turn its marker into a refused line.
+		if openingsCarryFlag(openings, flag: AsyncTraceMarker) 'asyncTraceMarker'
 			asyncTrace = true
 			i = i + 1
 			continue
 		end 'asyncTraceMarker'
 
 		// The other valueless flag marker, consumed identically — including on a DISABLED case, so shelving
-		// a debug-info case does not leave its marker to fall through as unread prose.
-		if openingsCarry(openings, marker: DebugInfoMarker) 'debugInfoMarker'
+		// a debug-info case does not turn its marker into a refused line.
+		if openingsCarryFlag(openings, flag: DebugInfoMarker) 'debugInfoMarker'
 			debugInfo = true
 			i = i + 1
 			continue
 		end 'debugInfoMarker'
 
 		// The other two valueless flag markers, consumed identically — including on a DISABLED case, so
-		// shelving a capture case does not leave its marker to fall through as unread prose. Each only RAISES
+		// shelving a capture case does not turn its marker into a refused line. Each only RAISES
 		// the mode; see `raisedTraceCapture` for what that means when a block has already named a family.
-		if openingsCarry(openings, marker: MmTraceMarker) 'mmTraceMarker'
+		if openingsCarryFlag(openings, flag: MmTraceMarker) 'mmTraceMarker'
 			traceCapture = raisedTraceCapture(traceCapture, family: TraceFamily.mm)
 			i = i + 1
 			continue
 		end 'mmTraceMarker'
 
-		if openingsCarry(openings, marker: LogTraceMarker) 'logTraceMarker'
+		if openingsCarryFlag(openings, flag: LogTraceMarker) 'logTraceMarker'
 			traceCapture = raisedTraceCapture(traceCapture, family: TraceFamily.log)
 			i = i + 1
 			continue
 		end 'logTraceMarker'
 
 		// The network gate the author SPELLED, consumed identically to the markers above — including on a
-		// DISABLED case, so shelving a live-network case does not leave its marker to fall through as
-		// unread prose. The VALUE is refused rather than defaulted; see `parseNetworkValue`.
+		// DISABLED case, so shelving a live-network case does not turn its marker into a refused line. The
+		// VALUE is refused rather than defaulted; see `parseNetworkValue`.
 		if openingsCarry(openings, marker: NetworkMarker) 'networkMarker'
 			network = parseNetworkValue(line, specPath: specPath, testName: name)
 			i = i + 1
@@ -1489,8 +1482,8 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 		end 'networkMarker'
 
 		// The processor count the author asked for, consumed identically to the markers above — including on a
-		// DISABLED case, so shelving a multi-processor case does not leave its marker to fall through as
-		// unread prose. The VALUE is refused rather than defaulted; see `parseProcsValue`.
+		// DISABLED case, so shelving a multi-processor case does not turn its marker into a refused line. The
+		// VALUE is refused rather than defaulted; see `parseProcsValue`.
 		if openingsCarry(openings, marker: ProcsMarker) 'procsMarker'
 			procs = parseProcsValue(line, specPath: specPath, testName: name)
 			i = i + 1
@@ -1498,7 +1491,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 		end 'procsMarker'
 
 		// The preemption switch the author asked for, consumed identically to the markers above — including on a
-		// DISABLED case, so shelving such a case does not leave its marker to fall through as unread prose. The
+		// DISABLED case, so shelving such a case does not turn its marker into a refused line. The
 		// VALUE is refused rather than defaulted; see `parsePreemptValue`.
 		if openingsCarry(openings, marker: PreemptMarker) 'preemptMarker'
 			preempt = parsePreemptValue(line, specPath: specPath, testName: name)
@@ -1507,13 +1500,25 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 		end 'preemptMarker'
 
 		// The stdin the author asked for, consumed identically to the markers above — including on a DISABLED
-		// case, so shelving a blocking-stdin case does not leave its marker to fall through as unread prose.
+		// case, so shelving a blocking-stdin case does not turn its marker into a refused line.
 		// The VALUE is refused rather than defaulted; see `parseStdinValue`.
 		if openingsCarry(openings, marker: StdinMarker) 'stdinMarker'
 			stdin = parseStdinValue(line, specPath: specPath, testName: name)
 			i = i + 1
 			continue
 		end 'stdinMarker'
+
+		// ⛔⛔ **A COMMENT LINE NO ARM ABOVE CLAIMED IS REFUSED, NOT WALKED OVER.** Every comment line inside a
+		// case is a directive — the corpus carries no prose comment between a case's marker and the next —
+		// so one that reaches here is a marker the harness does not know: a misspelling
+		// (`<!-- unsupported-target: … -->`, `<!-- procs 1 -->`) or a marker newer than the parser. Falling
+		// through to `i = i + 1` would discard the line without a word and run the case UNPINNED. The
+		// predicate is "the line opens with `<!--` and no arm consumed it", not a roster lookup, so a marker
+		// added to `caseMarkerRoster` without an arm cannot pass through here as read.
+		if not openings.isEmpty() 'unreadComment'
+			let opening = try openings.first() otherwise panic("SpecParser.scanTestFromMarker: `openings` is non-empty by the guard above, so its first element cannot be absent")
+			panic("SpecParser: {specPath.toString()}:{i + 1}: test '{name}' carries a comment line no marker reads: '{markerBodyOf(opening).trim()} {MarkerEnd}'. A comment inside a case is a directive, and one the harness does not know would otherwise be discarded without a word, so the case runs as though the line were not there. The markers a case may carry: {caseMarkerRoster()}")
+		end 'unreadComment'
 
 		// ⛔⛔ **A PROSE SENTENCE THAT HAPPENS TO BEGIN WITH A FENCE PREFIX IS NOT A FENCE, AND EVERY ARM
 		// BELOW MATCHES BY PREFIX.** `` ```RequiredRuntime block, one name per line: `` — a real line in
@@ -2174,6 +2179,20 @@ function markerOpeningAmong(openings StringArray, marker String) returns MarkerO
 	return MarkerOpening.absent
 end 'markerOpeningAmong'
 
+// ⭐ **DOES ONE OF THESE OPENINGS CARRY THE VALUELESS FLAG `flag`, AND NOTHING ELSE?** A flag takes no
+// payload, so the whole body of its comment — everything before the `-->`, trimmed — must BE the
+// constant. The prefix test the valued markers use would claim `<!-- DebugInfos -->` as the flag; here
+// that spelling matches nothing and reaches the unread-comment refusal, where a misspelling belongs.
+function openingsCarryFlag(openings StringArray, flag String) returns bool
+	for opening in openings 'eachOpening'
+		if markerBodyOf(opening).trim() == flag 'thisOpeningIsIt'
+			return true
+		end 'thisOpeningIsIt'
+	end 'eachOpening'
+
+	return false
+end 'openingsCarryFlag'
+
 // The one-shot door: does `line` carry `marker`? For callers that ask about a single family, where
 // computing the openings and asking are one act — `SpecTestRunner`'s two line walks, and the harness
 // self-test's fixture reader. The scanners in this file hoist the openings instead, because they ask
@@ -2237,18 +2256,44 @@ end 'namesSupportedTarget'
 // The supported roster as a comma-separated list, for the two panics above to quote. A reader handed a
 // refused key needs the legal ones in the same breath, and neither panic may spell the roster itself.
 function supportedTargetKeyList() returns String
-	var listed = ""
+	var keys = StringArray.create()
 
 	for candidate in supportedTargets() 'each'
+		keys.push(targetToString(candidate))
+	end 'each'
+
+	return commaList(keys)
+end 'supportedTargetKeyList'
+
+// Every marker a case may carry — the two that open it and the directives that may sit between the
+// opener and its fences, in the order the scanner asks about them. Quoted by the unread-comment refusal
+// so a reader handed a refused line sees the legal spellings in the same breath; the scanner's arms
+// match the same constants, so the two cannot spell a marker differently. `RetiredTargetsMarker` is
+// left out on purpose: it is a spelling the scanner refuses, not one a case may carry.
+function caseMarkerRoster() returns String
+	var quoted = StringArray.create()
+
+	for marker in [TestMarker, DisabledTestMarker, UnsupportedTargetsMarker, ArgsMarker, AsyncTraceMarker, DebugInfoMarker, MmTraceMarker, LogTraceMarker, NetworkMarker, ProcsMarker, PreemptMarker, StdinMarker] 'each'
+		quoted.push("`{marker}`")
+	end 'each'
+
+	return commaList(quoted)
+end 'caseMarkerRoster'
+
+// `items` as one comma-separated line, for a refusal to quote a roster with.
+function commaList(items StringArray) returns String
+	var listed = ""
+
+	for item in items 'each'
 		if not listed.isEmpty() 'separator'
 			listed = "{listed}{TargetSeparator} "
 		end 'separator'
 
-		listed = "{listed}{targetToString(candidate)}"
+		listed = "{listed}{item}"
 	end 'each'
 
 	return listed
-end 'supportedTargetKeyList'
+end 'commaList'
 
 // What a `<!-- network: … -->` marker says this case needs, read through the same `markerValue` every
 // other valued marker goes through.

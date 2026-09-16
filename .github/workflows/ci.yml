@@ -139,3 +139,37 @@ jobs:
       - name: Fixpoint
         if: steps.seed.outputs.seeded == 'yes'
         run: ./scripts/fixpoint.sh
+
+      # ⛔ A GOLDEN THE SUITE MINTED HERE EXISTS NOWHERE ELSE. The harness writes a golden only where a
+      # case actually ran, so a case landed from an x64 host has none for the arm64 lanes, and this is
+      # the only run that can mint them — into a workspace that is discarded. Untracked files under
+      # `specs/fragments/` are therefore a red, and are uploaded, laid out as they sit in the tree, so
+      # the author can unpack them at the repository root and commit them without the host that minted
+      # them. A golden that DRIFTED is a reference, not a gate, and is not listed: only untracked paths
+      # count. Runs after a red suite too, since that is when the list is wanted.
+      - name: Goldens the suite minted
+        id: minted
+        if: always() && steps.seed.outputs.seeded == 'yes'
+        run: |
+          set -euo pipefail
+          minted="$(git status --porcelain --untracked-files=all specs/fragments | sed -n 's/^?? //p')"
+          if [ -z "$minted" ]; then
+            echo "minted=no" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "minted=yes" >> "$GITHUB_OUTPUT"
+          stage="$RUNNER_TEMP/minted-fragments"
+          printf '%s\n' "$minted" | while IFS= read -r path; do
+            mkdir -p "$stage/$(dirname "$path")"
+            cp "$path" "$stage/$path"
+            echo "::error file=$path::${{ matrix.target }} minted this golden; unpack the minted-fragments-${{ matrix.target }} artifact at the repository root and commit it"
+          done
+          exit 1
+
+      - name: Upload the minted goldens
+        if: always() && steps.minted.outputs.minted == 'yes'
+        uses: actions/upload-artifact@v6
+        with:
+          name: minted-fragments-${{ matrix.target }}
+          path: ${{ runner.temp }}/minted-fragments
+          if-no-files-found: error

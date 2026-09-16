@@ -935,10 +935,12 @@ end 'Configuration'
 ### `Environment`
 
 ```maxon
+typealias EnvMap = Map with String, String  // The variables an Environment arm names, keyed by name
+
 union Environment
 	inherit                                  // Child sees the parent's env unchanged
-	inheritUpdating(overrides Map with String, String)  // Inherit + overwrite specific keys
-	custom(vars Map with String, String)     // Child sees exactly these vars
+	inheritUpdating(overrides EnvMap)        // Inherit + overwrite specific keys
+	custom(vars EnvMap)                      // Child sees exactly these vars
 end 'Environment'
 ```
 
